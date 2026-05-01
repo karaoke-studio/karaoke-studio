@@ -728,6 +728,7 @@ class KrokHelperQtApp(QMainWindow):
         self._align_export_expected_outputs: list[Path] = []
         self._align_export_completed_outputs: list[Path] = []
         self.active_module = "lyrics"
+        self._loading_settings_into_ui = False
 
         self.output_name_mode_value = OUTPUT_NAME_MODE_FIXED
         self.on_name_template_value = DEFAULT_ON_NAME_TEMPLATE
@@ -1206,6 +1207,8 @@ class KrokHelperQtApp(QMainWindow):
         self.lyrics_source_combo.addItem("网易云音乐", ("ne",))
         self.lyrics_source_combo.addItem("LRCLIB", ("lrclib",))
         self.lyrics_source_combo.setFont(build_lyrics_ui_font(point_size=10.5))
+        self._install_single_click_combo_behavior(self.lyrics_source_combo)
+        self.lyrics_source_combo.currentIndexChanged.connect(self._persist_lyrics_preferences)
 
         self.lyrics_keyword_edit = QLineEdit()
         self.lyrics_keyword_edit.setPlaceholderText("例如：Recollect / Reweave / Redo / Realize")
@@ -1281,6 +1284,8 @@ class KrokHelperQtApp(QMainWindow):
         self.lyrics_preview_mode_combo.addItem("按行 LRC", LYRICS_PREVIEW_LINE)
         self.lyrics_preview_mode_combo.addItem("按字 LRC", LYRICS_PREVIEW_VERBATIM)
         self.lyrics_preview_mode_combo.currentIndexChanged.connect(lambda _: self._refresh_lyrics_preview())
+        self.lyrics_preview_mode_combo.currentIndexChanged.connect(self._persist_lyrics_preferences)
+        self._install_single_click_combo_behavior(self.lyrics_preview_mode_combo)
         preview_header.addWidget(self.lyrics_preview_mode_combo)
 
         self.lyrics_preview_title_label = QLabel("未选择歌曲")
@@ -2143,11 +2148,52 @@ class KrokHelperQtApp(QMainWindow):
         return scroll
 
     def _load_settings_into_ui(self) -> None:
+        self._loading_settings_into_ui = True
         self.set_ffmpeg_dir(Path(self.settings.ffmpeg_dir) if self.settings.ffmpeg_dir.strip() else Path())
         self.set_output_name_mode(self.settings.output_name_mode)
         self.set_output_name_templates(self.settings.on_name_template, self.settings.off_name_template)
         self.align_video_name_template_value = self.settings.align_video_name_template or DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
         self.align_audio_name_template_value = self.settings.align_audio_name_template or DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
+        self._restore_lyrics_preferences()
+        self._loading_settings_into_ui = False
+
+    def _restore_lyrics_preferences(self) -> None:
+        saved_source_ids = tuple(str(item) for item in (self.settings.lyrics_source_ids or DEFAULT_LYRICS_PROVIDER_IDS) if str(item))
+        if not saved_source_ids:
+            saved_source_ids = DEFAULT_LYRICS_PROVIDER_IDS
+        for index in range(self.lyrics_source_combo.count()):
+            item_data = self.lyrics_source_combo.itemData(index)
+            if isinstance(item_data, tuple) and item_data == saved_source_ids:
+                self.lyrics_source_combo.setCurrentIndex(index)
+                break
+
+        saved_preview_mode = str(self.settings.lyrics_preview_mode or LYRICS_PREVIEW_LINE)
+        preview_index = self.lyrics_preview_mode_combo.findData(saved_preview_mode)
+        if preview_index >= 0:
+            self.lyrics_preview_mode_combo.setCurrentIndex(preview_index)
+
+    def _install_single_click_combo_behavior(self, combo: QComboBox) -> None:
+        popup_view = combo.view()
+        popup_view.pressed.connect(lambda index, combo=combo: self._handle_combo_popup_pressed(combo, index.row()))
+
+    def _handle_combo_popup_pressed(self, combo: QComboBox, row: int) -> None:
+        if row < 0 or row >= combo.count():
+            return
+        combo.setCurrentIndex(row)
+        combo.hidePopup()
+
+    def _persist_lyrics_preferences(self, *_args) -> None:
+        if self._loading_settings_into_ui:
+            return
+        source_ids = self.lyrics_source_combo.currentData()
+        if not isinstance(source_ids, tuple):
+            source_ids = DEFAULT_LYRICS_PROVIDER_IDS
+        preview_mode = self.lyrics_preview_mode_combo.currentData()
+        if not isinstance(preview_mode, str):
+            preview_mode = LYRICS_PREVIEW_LINE
+        self.settings.lyrics_source_ids = tuple(source_ids)
+        self.settings.lyrics_preview_mode = preview_mode
+        save_app_settings(self.settings)
 
     def _sync_ffmpeg_labels(self) -> None:
         self.hires_ffmpeg_label.setText(self.ffmpeg_dir_text or FFMPEG_DIR_PLACEHOLDER)

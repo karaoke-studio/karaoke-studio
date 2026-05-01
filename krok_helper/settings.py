@@ -11,6 +11,7 @@ from krok_helper.audio_alignment import (
     DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE,
 )
 from krok_helper.pipeline import DEFAULT_OFF_NAME_TEMPLATE, DEFAULT_ON_NAME_TEMPLATE, OUTPUT_NAME_MODE_FIXED
+from krok_helper.lyrics import DEFAULT_LYRICS_PROVIDER_IDS, LYRICS_PREVIEW_LINE
 
 
 SETTINGS_FILE_NAME = "settings.json"
@@ -24,6 +25,8 @@ class AppSettings:
     align_video_name_template: str = DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
     align_audio_name_template: str = DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
     ffmpeg_dir: str = ""
+    lyrics_source_ids: list[str] | tuple[str, ...] = DEFAULT_LYRICS_PROVIDER_IDS
+    lyrics_preview_mode: str = LYRICS_PREVIEW_LINE
 
 
 def get_settings_path() -> Path:
@@ -62,6 +65,13 @@ def load_app_settings() -> AppSettings:
             payload.get("align_audio_name_template", DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE)
         ),
         ffmpeg_dir=str(payload.get("ffmpeg_dir", "")),
+        lyrics_source_ids=tuple(
+            str(item)
+            for item in payload.get("lyrics_source_ids", DEFAULT_LYRICS_PROVIDER_IDS)
+            if str(item).strip()
+        )
+        or DEFAULT_LYRICS_PROVIDER_IDS,
+        lyrics_preview_mode=str(payload.get("lyrics_preview_mode", LYRICS_PREVIEW_LINE)),
     )
 
 
