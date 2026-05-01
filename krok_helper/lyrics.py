@@ -30,6 +30,8 @@ PROVIDER_PAGE_SIZE = 25
 _TIMESTAMP_PATTERN = re.compile(r"\[(\d{1,3}):(\d{2})(?:[.:](\d{2,3}))?\]")
 _TOKEN_SPLIT_PATTERN = re.compile(r"[\s\-_/\\|,.;:!?()\[\]{}'\"`~]+")
 _LRC_METADATA_LINE_PATTERN = re.compile(r"^\[(?:ar|al|au|by|offset|ti|tool):.*\]$", re.IGNORECASE)
+_LRC_ANY_TIMESTAMP_PATTERN = re.compile(r"[\[<](\d{1,3}):(\d{2})(?:[.:](\d{2,3}))?[\]>]")
+_LRC_TIMESTAMP_TOKEN_PATTERN = re.compile(r"(?P<open>[\[<])(\d{1,3}):(\d{2})(?:[.:](\d{2,3}))?(?P<close>[\]>])")
 _LINE_DURATION_PATTERN = re.compile(r"^\[(\d+),(\d+)\](.*)$")
 _KRC_WORD_PATTERN = re.compile(r"<(?P<start>\d+),(?P<duration>\d+),\d+>(?P<content>[^<]*)")
 _YRC_WORD_PATTERN = re.compile(r"\((?P<start>\d+),(?P<duration>\d+),\d+\)(?P<content>[^()]*)")
@@ -742,10 +744,10 @@ def parse_lrc_lines(text: str) -> list[ParsedLrcLine]:
 
 
 def format_lrc_timestamp(milliseconds: int) -> str:
-    total_ms = max(0, milliseconds)
-    minutes = total_ms // 60_000
-    seconds = (total_ms % 60_000) // 1_000
-    hundredths = (total_ms % 1_000) // 10
+    total_cs = max(0, int(milliseconds) + 5) // 10
+    minutes = total_cs // 6_000
+    seconds = (total_cs % 6_000) // 100
+    hundredths = total_cs % 100
     return f"{minutes:02}:{seconds:02}.{hundredths:02}"
 
 
@@ -768,14 +770,13 @@ def _render_verbatim_line(start_ms: int, end_ms: int, text: str) -> str:
     span_ms = max(end_ms - start_ms, visible_count * 40)
     step_ms = max(span_ms // visible_count, 40)
     current_index = 0
-    parts = [f"[{format_lrc_timestamp(start_ms)}]"]
+    parts: list[str] = []
     for char in text:
         if char.isspace():
             parts.append(char)
             continue
         char_start = start_ms + min(current_index * step_ms, span_ms)
-        char_end = min(end_ms, char_start + step_ms)
-        parts.append(f"<{format_lrc_timestamp(char_start)}>{char}<{format_lrc_timestamp(char_end)}>")
+        parts.append(f"[{format_lrc_timestamp(char_start)}]{char}")
         current_index += 1
     return "".join(parts)
 
@@ -923,7 +924,19 @@ def _coerce_float(value: object) -> float | None:
 def _sanitize_lrc_text(text: str) -> str:
     if not text.strip():
         return ""
-    kept_lines = [line for line in text.splitlines() if not _LRC_METADATA_LINE_PATTERN.match(line.strip())]
+    raw_lines = [line.strip() for line in text.splitlines()]
+    has_timestamped_lines = any(_LRC_ANY_TIMESTAMP_PATTERN.search(line) for line in raw_lines)
+    kept_lines: list[str] = []
+    for raw_line in raw_lines:
+        if not raw_line or _LRC_METADATA_LINE_PATTERN.match(raw_line):
+            continue
+        if has_timestamped_lines and not _LRC_ANY_TIMESTAMP_PATTERN.search(raw_line):
+            continue
+        normalized_line = _normalize_lrc_timestamp_tokens(raw_line)
+        lyric_body = _LRC_TIMESTAMP_TOKEN_PATTERN.sub("", normalized_line).strip()
+        if not lyric_body:
+            continue
+        kept_lines.append(normalized_line)
     return "\n".join(kept_lines).strip()
 
 
@@ -935,8 +948,21 @@ def _strip_lrc_timestamps(text: str) -> str:
         line = raw_line.strip()
         if not line or _LRC_METADATA_LINE_PATTERN.match(line):
             continue
-        body_lines.append(re.sub(r"[\[<]\d{1,3}:\d{2}(?:[.:]\d{2,3})?[\]>]", "", line).strip())
+        body_lines.append(_LRC_TIMESTAMP_TOKEN_PATTERN.sub("", line).strip())
     return "\n".join([line for line in body_lines if line]).strip()
+
+
+def _normalize_lrc_timestamp_tokens(text: str) -> str:
+    def repl(match: re.Match[str]) -> str:
+        open_token = match.group("open")
+        close_token = match.group("close")
+        minutes = int(match.group(2))
+        seconds = int(match.group(3))
+        fraction = match.group(4) or "00"
+        timestamp_ms = minutes * 60_000 + seconds * 1_000 + int(fraction.ljust(3, "0")[:3])
+        return f"{open_token}{format_lrc_timestamp(timestamp_ms)}{close_token}"
+
+    return _LRC_TIMESTAMP_TOKEN_PATTERN.sub(repl, text)
 
 
 def _page_count(limit: int, page_size: int) -> int:
@@ -1024,24 +1050,21 @@ def _convert_krc_text(text: str) -> tuple[str, str, str]:
             continue
 
         text_parts: list[str] = []
-        verbatim_line = [f"[{format_lrc_timestamp(line_start)}]"]
+        verbatim_line: list[str] = []
         for word_match in words:
             word_text = word_match.group("content")
             if not word_text:
                 continue
             word_start = line_start + int(word_match.group("start"))
-            word_end = word_start + int(word_match.group("duration"))
             text_parts.append(word_text)
-            verbatim_line.append(
-                f"<{format_lrc_timestamp(word_start)}>{word_text}<{format_lrc_timestamp(word_end)}>"
-            )
+            verbatim_line.append(f"[{format_lrc_timestamp(word_start)}]{word_text}")
         merged_text = "".join(text_parts).strip()
         if merged_text:
             line_parts.append(f"[{format_lrc_timestamp(line_start)}]{merged_text}")
             verbatim_parts.append("".join(verbatim_line))
 
     line_lyrics = _sanitize_lrc_text("\n".join(line_parts))
-    verbatim_lyrics = "\n".join([part for part in verbatim_parts if part]).strip()
+    verbatim_lyrics = _sanitize_lrc_text("\n".join([part for part in verbatim_parts if part]))
     plain_lyrics = _strip_lrc_timestamps(line_lyrics) or _strip_lrc_timestamps(verbatim_lyrics)
     return line_lyrics, verbatim_lyrics, plain_lyrics
 
@@ -1065,23 +1088,20 @@ def _convert_yrc_text(text: str) -> tuple[str, str, str]:
             continue
 
         text_parts: list[str] = []
-        verbatim_line = [f"[{format_lrc_timestamp(line_start)}]"]
+        verbatim_line: list[str] = []
         for word_match in words:
             word_text = word_match.group("content")
             if not word_text:
                 continue
             word_start = int(word_match.group("start"))
-            word_end = word_start + int(word_match.group("duration"))
             text_parts.append(word_text)
-            verbatim_line.append(
-                f"<{format_lrc_timestamp(word_start)}>{word_text}<{format_lrc_timestamp(word_end)}>"
-            )
+            verbatim_line.append(f"[{format_lrc_timestamp(word_start)}]{word_text}")
         merged_text = "".join(text_parts).strip()
         if merged_text:
             line_parts.append(f"[{format_lrc_timestamp(line_start)}]{merged_text}")
             verbatim_parts.append("".join(verbatim_line))
 
     line_lyrics = _sanitize_lrc_text("\n".join(line_parts))
-    verbatim_lyrics = "\n".join([part for part in verbatim_parts if part]).strip()
+    verbatim_lyrics = _sanitize_lrc_text("\n".join([part for part in verbatim_parts if part]))
     plain_lyrics = _strip_lrc_timestamps(line_lyrics) or _strip_lrc_timestamps(verbatim_lyrics)
     return line_lyrics, verbatim_lyrics, plain_lyrics

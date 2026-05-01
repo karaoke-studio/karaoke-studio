@@ -1001,13 +1001,28 @@ class KrokHelperQtApp(QMainWindow):
                 width: 14px;
                 margin: 0;
             }
+            QScrollBar:horizontal {
+                background: #e2e8f0;
+                border-top: 1px solid #cbd5e1;
+                height: 14px;
+                margin: 0;
+            }
             QScrollBar::handle:vertical {
                 background: #94a3b8;
                 border-radius: 6px;
                 min-height: 48px;
                 margin: 2px;
             }
+            QScrollBar::handle:horizontal {
+                background: #94a3b8;
+                border-radius: 6px;
+                min-width: 48px;
+                margin: 2px;
+            }
             QScrollBar::handle:vertical:hover {
+                background: #64748b;
+            }
+            QScrollBar::handle:horizontal:hover {
                 background: #64748b;
             }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
@@ -1015,7 +1030,15 @@ class KrokHelperQtApp(QMainWindow):
                 background: transparent;
                 border: 0;
             }
+            QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+                width: 0;
+                background: transparent;
+                border: 0;
+            }
             QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+                background: transparent;
+            }
+            QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
                 background: transparent;
             }
             """
@@ -1279,6 +1302,8 @@ class KrokHelperQtApp(QMainWindow):
         self.lyrics_preview_edit.setReadOnly(True)
         self.lyrics_preview_edit.setObjectName("LyricsPreviewText")
         self.lyrics_preview_edit.setFont(build_lyrics_ui_font(point_size=11))
+        self.lyrics_preview_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.lyrics_preview_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.lyrics_preview_edit.setPlaceholderText("歌词会显示在这里。")
 
         preview_layout.addLayout(preview_header)
@@ -1309,6 +1334,8 @@ class KrokHelperQtApp(QMainWindow):
             provider_ids = DEFAULT_LYRICS_PROVIDER_IDS
         if load_more:
             self._lyrics_loading_more = True
+            selected_key = self.lyrics_selected_candidate.key if self.lyrics_selected_candidate is not None else ""
+            self._render_lyrics_results_table(selected_key=selected_key)
             self.lyrics_status_label.setText(f"已加载 {len(self.lyrics_search_results)} 条结果，正在加载更多…")
         else:
             self._lyrics_loading_more = False
@@ -1381,6 +1408,7 @@ class KrokHelperQtApp(QMainWindow):
             + (" 向下滚动可继续加载更多结果。" if self.lyrics_has_more_results else "")
         )
         self._lyrics_loading_more = False
+        self._render_lyrics_results_table(selected_key=selected_key if load_more else "")
 
     def _finish_lyrics_search_failure(self, message: str) -> None:
         self.lyrics_search_task = None
@@ -1388,6 +1416,9 @@ class KrokHelperQtApp(QMainWindow):
         self._lyrics_loading_more = False
         if not self.lyrics_search_results:
             self._clear_lyrics_results()
+        else:
+            selected_key = self.lyrics_selected_candidate.key if self.lyrics_selected_candidate is not None else ""
+            self._render_lyrics_results_table(selected_key=selected_key)
         self.lyrics_status_label.setText("歌词搜索失败。")
         QMessageBox.critical(self, APP_TITLE, message or "歌词搜索失败。")
 
@@ -1415,7 +1446,9 @@ class KrokHelperQtApp(QMainWindow):
         self.lyrics_results_table.setColumnWidth(4, source_width)
 
     def _render_lyrics_results_table(self, *, selected_key: str = "") -> None:
-        self.lyrics_results_table.setRowCount(len(self.lyrics_search_results))
+        row_count = len(self.lyrics_search_results) + (1 if self._lyrics_loading_more and self.lyrics_search_results else 0)
+        self.lyrics_results_table.clearSpans()
+        self.lyrics_results_table.setRowCount(row_count)
         self._resize_lyrics_results_columns()
         selected_row = -1
         for row, candidate in enumerate(self.lyrics_search_results):
@@ -1434,6 +1467,14 @@ class KrokHelperQtApp(QMainWindow):
                 self.lyrics_results_table.setItem(row, column, item)
             if selected_key and candidate.key == selected_key:
                 selected_row = row
+
+        if self._lyrics_loading_more and self.lyrics_search_results:
+            loading_row = len(self.lyrics_search_results)
+            loading_item = QTableWidgetItem("加载中...")
+            loading_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            loading_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
+            self.lyrics_results_table.setSpan(loading_row, 0, 1, self.lyrics_results_table.columnCount())
+            self.lyrics_results_table.setItem(loading_row, 0, loading_item)
 
         if selected_row < 0 and self.lyrics_search_results:
             selected_row = 0
