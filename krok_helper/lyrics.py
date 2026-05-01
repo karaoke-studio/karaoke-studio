@@ -32,6 +32,10 @@ _TOKEN_SPLIT_PATTERN = re.compile(r"[\s\-_/\\|,.;:!?()\[\]{}'\"`~]+")
 _LRC_METADATA_LINE_PATTERN = re.compile(r"^\[(?:ar|al|au|by|offset|ti|tool):.*\]$", re.IGNORECASE)
 _LRC_ANY_TIMESTAMP_PATTERN = re.compile(r"[\[<](\d{1,3}):(\d{2})(?:[.:](\d{2,3}))?[\]>]")
 _LRC_TIMESTAMP_TOKEN_PATTERN = re.compile(r"(?P<open>[\[<])(\d{1,3}):(\d{2})(?:[.:](\d{2,3}))?(?P<close>[\]>])")
+_INTRO_CREDIT_LINE_PATTERN = re.compile(
+    r"^(?:作词|作曲|编曲|制作人|作詞|作曲|編曲|詞|曲|編|词|曲|编|lyric(?:s|ist)?|composer|arranger|producer|prod|歌手|演唱|vocal|artist)\s*[:：]",
+    re.IGNORECASE,
+)
 _LINE_DURATION_PATTERN = re.compile(r"^\[(\d+),(\d+)\](.*)$")
 _KRC_WORD_PATTERN = re.compile(r"<(?P<start>\d+),(?P<duration>\d+),\d+>(?P<content>[^<]*)")
 _YRC_WORD_PATTERN = re.compile(r"\((?P<start>\d+),(?P<duration>\d+),\d+\)(?P<content>[^()]*)")
@@ -691,35 +695,64 @@ def build_default_providers() -> list[LyricsProvider]:
     ]
 
 
-def build_lyrics_preview(candidate: LyricsSearchCandidate, preview_mode: str) -> LyricsPreview:
+def build_lyrics_preview(
+    candidate: LyricsSearchCandidate,
+    preview_mode: str,
+    *,
+    strip_intro_lines: bool = True,
+) -> LyricsPreview:
+    if strip_intro_lines:
+        line_lyrics = _strip_leading_intro_lines(
+            candidate.line_lyrics,
+            title=candidate.title,
+            artist=candidate.artist,
+            album=candidate.album,
+        )
+        verbatim_lyrics = _strip_leading_intro_lines(
+            candidate.verbatim_lyrics,
+            title=candidate.title,
+            artist=candidate.artist,
+            album=candidate.album,
+        )
+        plain_lyrics = _strip_leading_intro_lines(
+            candidate.plain_lyrics,
+            title=candidate.title,
+            artist=candidate.artist,
+            album=candidate.album,
+        )
+    else:
+        line_lyrics = candidate.line_lyrics
+        verbatim_lyrics = candidate.verbatim_lyrics
+        plain_lyrics = candidate.plain_lyrics
+
     if preview_mode == LYRICS_PREVIEW_VERBATIM:
-        if candidate.verbatim_lyrics.strip():
+        if verbatim_lyrics.strip():
             return LyricsPreview(
-                text=candidate.verbatim_lyrics.strip(),
+                text=verbatim_lyrics.strip(),
                 used_synced_lyrics=True,
                 used_estimated_char_timing=False,
             )
-        if candidate.line_lyrics.strip():
+        if line_lyrics.strip():
             return LyricsPreview(
-                text=_build_estimated_verbatim_lrc(parse_lrc_lines(candidate.line_lyrics)),
+                text=_build_estimated_verbatim_lrc(parse_lrc_lines(line_lyrics)),
                 used_synced_lyrics=True,
                 used_estimated_char_timing=True,
             )
         return LyricsPreview(
-            text=candidate.plain_lyrics.strip(),
+            text=plain_lyrics.strip(),
             used_synced_lyrics=False,
             used_estimated_char_timing=False,
         )
 
-    if candidate.line_lyrics.strip():
+    if line_lyrics.strip():
         return LyricsPreview(
-            text=candidate.line_lyrics.strip(),
+            text=line_lyrics.strip(),
             used_synced_lyrics=True,
             used_estimated_char_timing=False,
         )
 
     return LyricsPreview(
-        text=candidate.plain_lyrics.strip(),
+        text=plain_lyrics.strip(),
         used_synced_lyrics=False,
         used_estimated_char_timing=False,
     )
@@ -924,7 +957,7 @@ def _coerce_float(value: object) -> float | None:
 def _sanitize_lrc_text(text: str) -> str:
     if not text.strip():
         return ""
-    raw_lines = [line.strip() for line in text.splitlines()]
+    raw_lines = [_normalize_lyric_spacing(line).strip() for line in text.splitlines()]
     has_timestamped_lines = any(_LRC_ANY_TIMESTAMP_PATTERN.search(line) for line in raw_lines)
     kept_lines: list[str] = []
     for raw_line in raw_lines:
@@ -933,6 +966,7 @@ def _sanitize_lrc_text(text: str) -> str:
         if has_timestamped_lines and not _LRC_ANY_TIMESTAMP_PATTERN.search(raw_line):
             continue
         normalized_line = _normalize_lrc_timestamp_tokens(raw_line)
+        normalized_line = _remove_spaces_after_timestamps(normalized_line)
         lyric_body = _LRC_TIMESTAMP_TOKEN_PATTERN.sub("", normalized_line).strip()
         if not lyric_body:
             continue
@@ -945,7 +979,7 @@ def _strip_lrc_timestamps(text: str) -> str:
         return ""
     body_lines: list[str] = []
     for raw_line in text.splitlines():
-        line = raw_line.strip()
+        line = _normalize_lyric_spacing(raw_line).strip()
         if not line or _LRC_METADATA_LINE_PATTERN.match(line):
             continue
         body_lines.append(_LRC_TIMESTAMP_TOKEN_PATTERN.sub("", line).strip())
@@ -963,6 +997,66 @@ def _normalize_lrc_timestamp_tokens(text: str) -> str:
         return f"{open_token}{format_lrc_timestamp(timestamp_ms)}{close_token}"
 
     return _LRC_TIMESTAMP_TOKEN_PATTERN.sub(repl, text)
+
+
+def _remove_spaces_after_timestamps(text: str) -> str:
+    return re.sub(r"(?<=[\]>])[ \t]+", "", text)
+
+
+def _normalize_lyric_spacing(text: str) -> str:
+    return str(text or "").replace("\u3000", " ")
+
+
+def _strip_leading_intro_lines(text: str, *, title: str = "", artist: str = "", album: str = "") -> str:
+    if not text.strip():
+        return ""
+
+    raw_lines = [line.strip() for line in text.splitlines() if line.strip()]
+    drop_count = 0
+    max_probe_lines = min(5, len(raw_lines))
+    for index in range(max_probe_lines):
+        content = _LRC_TIMESTAMP_TOKEN_PATTERN.sub("", raw_lines[index]).strip()
+        if _looks_like_intro_credit_line(content, title=title, artist=artist, album=album):
+            drop_count += 1
+            continue
+        break
+    return "\n".join(raw_lines[drop_count:]).strip()
+
+
+def _looks_like_intro_credit_line(text: str, *, title: str = "", artist: str = "", album: str = "") -> bool:
+    content = text.strip()
+    if not content:
+        return False
+    if _INTRO_CREDIT_LINE_PATTERN.match(content):
+        return True
+    separator_index = min((index for index in (content.find(":"), content.find("：")) if index >= 0), default=-1)
+    if 0 < separator_index <= 6 and len(content) <= 40:
+        return True
+
+    compact_content = _compact_compare_text(content)
+    compact_title = _compact_compare_text(title)
+    compact_artist = _compact_compare_text(artist)
+    compact_album = _compact_compare_text(album)
+
+    if compact_title and compact_artist and compact_title in compact_content and compact_artist in compact_content:
+        remainder = compact_content.replace(compact_title, "", 1).replace(compact_artist, "", 1)
+        if len(remainder) <= 4:
+            return True
+    if compact_title and compact_album and compact_title in compact_content and compact_album in compact_content:
+        remainder = compact_content.replace(compact_title, "", 1).replace(compact_album, "", 1)
+        if len(remainder) <= 4:
+            return True
+    normalized_content = _normalize_text(content)
+    normalized_title = _normalize_text(title)
+    if normalized_title and normalized_content.startswith(normalized_title) and len(content) <= 80:
+        tail = normalized_content[len(normalized_title):].strip()
+        if tail.startswith(("-", "–", "—", "/", "／")) or any(separator in content for separator in (" - ", " / ", "/", "／")):
+            return True
+    return False
+
+
+def _compact_compare_text(text: str) -> str:
+    return re.sub(r"[^0-9a-z\u3040-\u30ff\u3400-\u9fff]+", "", _normalize_text(text))
 
 
 def _page_count(limit: int, page_size: int) -> int:

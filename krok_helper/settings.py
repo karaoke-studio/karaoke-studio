@@ -27,6 +27,7 @@ class AppSettings:
     ffmpeg_dir: str = ""
     lyrics_source_ids: list[str] | tuple[str, ...] = DEFAULT_LYRICS_PROVIDER_IDS
     lyrics_preview_mode: str = LYRICS_PREVIEW_LINE
+    lyrics_strip_intro_lines: bool = True
 
 
 def get_settings_path() -> Path:
@@ -72,6 +73,7 @@ def load_app_settings() -> AppSettings:
         )
         or DEFAULT_LYRICS_PROVIDER_IDS,
         lyrics_preview_mode=str(payload.get("lyrics_preview_mode", LYRICS_PREVIEW_LINE)),
+        lyrics_strip_intro_lines=bool(payload.get("lyrics_strip_intro_lines", True)),
     )
 
 

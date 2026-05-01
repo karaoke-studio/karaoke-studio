@@ -1318,6 +1318,15 @@ class KrokHelperQtApp(QMainWindow):
         preview_title.setObjectName("PanelTitle")
         preview_header.addWidget(preview_title)
         preview_header.addStretch(1)
+        self.copy_lyrics_button = QPushButton("复制歌词")
+        self.copy_lyrics_button.clicked.connect(self._copy_current_lyrics_preview)
+        self.copy_lyrics_button.setMinimumHeight(34)
+        preview_header.addWidget(self.copy_lyrics_button)
+        self.lyrics_strip_intro_checkbox = QCheckBox("省略歌曲介绍")
+        self.lyrics_strip_intro_checkbox.setChecked(True)
+        self.lyrics_strip_intro_checkbox.toggled.connect(lambda _: self._refresh_lyrics_preview())
+        self.lyrics_strip_intro_checkbox.toggled.connect(self._persist_lyrics_preferences)
+        preview_header.addWidget(self.lyrics_strip_intro_checkbox)
         preview_header.addWidget(QLabel("显示格式"))
         self.lyrics_preview_mode_combo = QComboBox()
         self.lyrics_preview_mode_combo.addItem("按行 LRC", LYRICS_PREVIEW_LINE)
@@ -1622,7 +1631,11 @@ class KrokHelperQtApp(QMainWindow):
         preview_mode = self.lyrics_preview_mode_combo.currentData()
         if not isinstance(preview_mode, str):
             preview_mode = LYRICS_PREVIEW_LINE
-        preview = build_lyrics_preview(candidate, preview_mode)
+        preview = build_lyrics_preview(
+            candidate,
+            preview_mode,
+            strip_intro_lines=self.lyrics_strip_intro_checkbox.isChecked(),
+        )
         self.lyrics_preview_title_label.setText(f"{candidate.title or '未命名'}")
         self.lyrics_preview_meta_label.setText(
             f"歌手: {candidate.artist or '-'}    专辑: {candidate.album or '-'}    来源: {candidate.provider_name}"
@@ -1645,6 +1658,12 @@ class KrokHelperQtApp(QMainWindow):
         if preview.used_synced_lyrics:
             return f"{candidate.provider_name} 提供了同步歌词，当前优先显示这个来源的字幕。"
         return f"{candidate.provider_name} 当前只有纯文本歌词，暂时无法提供真实时间轴。"
+
+    def _copy_current_lyrics_preview(self) -> None:
+        clipboard = QApplication.clipboard()
+        if clipboard is None:
+            return
+        clipboard.setText(self.lyrics_preview_edit.toPlainText())
 
     def _ensure_selected_lyrics_loaded(self) -> None:
         candidate = self.lyrics_selected_candidate
@@ -2206,6 +2225,7 @@ class KrokHelperQtApp(QMainWindow):
         preview_index = self.lyrics_preview_mode_combo.findData(saved_preview_mode)
         if preview_index >= 0:
             self.lyrics_preview_mode_combo.setCurrentIndex(preview_index)
+        self.lyrics_strip_intro_checkbox.setChecked(bool(self.settings.lyrics_strip_intro_lines))
 
     def _install_single_click_combo_behavior(self, combo: QComboBox) -> None:
         popup_view = combo.view()
@@ -2228,6 +2248,7 @@ class KrokHelperQtApp(QMainWindow):
             preview_mode = LYRICS_PREVIEW_LINE
         self.settings.lyrics_source_ids = tuple(source_ids)
         self.settings.lyrics_preview_mode = preview_mode
+        self.settings.lyrics_strip_intro_lines = self.lyrics_strip_intro_checkbox.isChecked()
         save_app_settings(self.settings)
 
     def _sync_ffmpeg_labels(self) -> None:
