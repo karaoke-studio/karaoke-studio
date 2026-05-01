@@ -1168,20 +1168,29 @@ class KrokHelperQtApp(QMainWindow):
         search_layout.setHorizontalSpacing(10)
         search_layout.setVerticalSpacing(8)
 
+        self.lyrics_source_combo = QComboBox()
+        self.lyrics_source_combo.addItem("聚合", DEFAULT_LYRICS_PROVIDER_IDS)
+        self.lyrics_source_combo.addItem("QQ音乐", ("qm",))
+        self.lyrics_source_combo.addItem("酷狗音乐", ("kg",))
+        self.lyrics_source_combo.addItem("网易云音乐", ("ne",))
+        self.lyrics_source_combo.addItem("LRCLIB", ("lrclib",))
+        self.lyrics_source_combo.setFont(build_lyrics_ui_font(point_size=10.5))
+
         self.lyrics_keyword_edit = QLineEdit()
         self.lyrics_keyword_edit.setPlaceholderText("例如：Recollect / Reweave / Redo / Realize")
         self.lyrics_keyword_edit.returnPressed.connect(self._start_lyrics_search)
         self.lyrics_search_button = QPushButton("搜索歌曲")
         self.lyrics_search_button.clicked.connect(self._start_lyrics_search)
-        self.lyrics_status_label = QLabel("当前轻量版接入 LRCLIB，后续可以继续扩展更多歌词源。")
+        self.lyrics_status_label = QLabel("当前支持聚合搜索，也可以手动切换到 QQ音乐、酷狗音乐、网易云音乐或 LRCLIB 单源搜索。")
         self.lyrics_status_label.setWordWrap(True)
         self.lyrics_status_label.setStyleSheet('font-size: 9pt; color: #475569;')
         self.lyrics_status_label.setFont(build_lyrics_ui_font(point_size=9.5))
         search_layout.addWidget(QLabel("搜索关键词"), 0, 0)
-        search_layout.addWidget(self.lyrics_keyword_edit, 0, 1)
-        search_layout.addWidget(self.lyrics_search_button, 0, 2)
-        search_layout.addWidget(self.lyrics_status_label, 1, 1, 1, 2)
-        search_layout.setColumnStretch(1, 1)
+        search_layout.addWidget(self.lyrics_source_combo, 0, 1)
+        search_layout.addWidget(self.lyrics_keyword_edit, 0, 2)
+        search_layout.addWidget(self.lyrics_search_button, 0, 3)
+        search_layout.addWidget(self.lyrics_status_label, 1, 1, 1, 3)
+        search_layout.setColumnStretch(2, 1)
         shell.addWidget(search_panel)
 
         content = QHBoxLayout()
@@ -1286,10 +1295,13 @@ class KrokHelperQtApp(QMainWindow):
         self.lyrics_search_button.setEnabled(False)
         self.lyrics_status_label.setText("正在搜索歌词候选歌曲…")
         self._clear_lyrics_results()
+        provider_ids = self.lyrics_source_combo.currentData()
+        if not isinstance(provider_ids, tuple):
+            provider_ids = DEFAULT_LYRICS_PROVIDER_IDS
 
         def runner(logger: Callable[[str], None]) -> list[LyricsSearchCandidate]:
             _ = logger
-            return self.lyrics_search_service.search(keyword, provider_ids=DEFAULT_LYRICS_PROVIDER_IDS)
+            return self.lyrics_search_service.search(keyword, provider_ids=provider_ids)
 
         self.lyrics_search_task = BackgroundTask(runner)
         self.lyrics_search_task.task_succeeded.connect(self._finish_lyrics_search_success)
@@ -1305,9 +1317,13 @@ class KrokHelperQtApp(QMainWindow):
             self._clear_lyrics_results()
             return
 
-        self.lyrics_status_label.setText(
-            f"已找到 {len(self.lyrics_search_results)} 条候选结果，来源优先级：QQ > 酷狗 > 网易云 > LRCLIB。"
-        )
+        selected_source = self.lyrics_source_combo.currentText()
+        if selected_source == "聚合":
+            self.lyrics_status_label.setText(
+                f"已找到 {len(self.lyrics_search_results)} 条候选结果，来源优先级：QQ > 酷狗 > 网易云 > LRCLIB。"
+            )
+        else:
+            self.lyrics_status_label.setText(f"已找到 {len(self.lyrics_search_results)} 条候选结果，当前来源：{selected_source}。")
         self.lyrics_results_summary_label.setText("结果优先保留各来源原始搜索顺位，再按歌曲、艺术家、专辑匹配度修正；同一首歌会保留不同来源。")
         self.lyrics_results_table.setRowCount(len(self.lyrics_search_results))
         for row, candidate in enumerate(self.lyrics_search_results):
