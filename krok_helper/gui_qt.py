@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -1664,6 +1665,13 @@ class KrokHelperQtApp(QMainWindow):
         if clipboard is None:
             return
         clipboard.setText(self.lyrics_preview_edit.toPlainText())
+        QToolTip.showText(
+            self.copy_lyrics_button.mapToGlobal(self.copy_lyrics_button.rect().center()),
+            "歌词已复制到剪切板",
+            self.copy_lyrics_button,
+            self.copy_lyrics_button.rect(),
+            1600,
+        )
 
     def _ensure_selected_lyrics_loaded(self) -> None:
         candidate = self.lyrics_selected_candidate
