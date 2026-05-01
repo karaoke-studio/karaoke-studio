@@ -22,7 +22,7 @@ from krok_helper.config import APP_NAME, APP_VERSION
 
 LYRICS_PREVIEW_LINE = "line"
 LYRICS_PREVIEW_VERBATIM = "verbatim"
-DEFAULT_LYRICS_PROVIDER_IDS = ("ne", "qm", "kg", "lrclib")
+DEFAULT_LYRICS_PROVIDER_IDS = ("qm", "kg", "ne", "lrclib")
 DEFAULT_LYRICS_SEARCH_LIMIT = 40
 
 _TIMESTAMP_PATTERN = re.compile(r"\[(\d{1,3}):(\d{2})(?:[.:](\d{2,3}))?\]")
@@ -39,9 +39,9 @@ _PROVIDER_DISPLAY_NAMES = {
     "lrclib": "LRCLIB",
 }
 _PROVIDER_PRIORITIES = {
-    "ne": 40,
-    "qm": 30,
-    "kg": 20,
+    "qm": 40,
+    "kg": 30,
+    "ne": 20,
     "lrclib": 10,
 }
 _KUGOU_SEARCH_DOMAINS = (
@@ -74,8 +74,11 @@ class LyricsSearchCandidate:
     plain_lyrics: str = ""
     source_url: str | None = None
     source_priority: int = 0
+    provider_position: int = 10_000
+    query_variant_index: int = 0
     lyrics_loaded: bool = False
     load_error: str = ""
+    title_match_tier: int = 0
     title_score: float = 0.0
     artist_score: float = 0.0
     album_score: float = 0.0
@@ -157,6 +160,7 @@ class LrclibFallbackProvider:
                     verbatim_lyrics="",
                     plain_lyrics=plain_lyrics or _strip_lrc_timestamps(line_lyrics),
                     source_priority=self.source_priority,
+                    provider_position=len(items) + 1,
                     lyrics_loaded=bool(plain_lyrics or line_lyrics),
                 )
             )
@@ -229,6 +233,7 @@ class NeteaseLyricsProvider:
                             "id": str(song.get("id") or ""),
                         },
                         source_priority=self.source_priority,
+                        provider_position=len(items) + 1,
                     )
                 )
                 if len(items) >= limit:
@@ -363,6 +368,7 @@ class QqMusicLyricsProvider:
                             "mid": str(song.get("mid") or ""),
                         },
                         source_priority=self.source_priority,
+                        provider_position=len(items) + 1,
                     )
                 )
                 if len(items) >= limit:
@@ -470,6 +476,7 @@ class KugouLyricsProvider:
                             "duration_ms": int(_coerce_float(song.get("duration")) * 1000) if song.get("duration") else 0,
                         },
                         source_priority=self.source_priority,
+                        provider_position=len(items) + 1,
                     )
                 )
                 if len(items) >= limit:
@@ -599,13 +606,14 @@ class LyricsSearchService:
         ranked: dict[str, LyricsSearchCandidate] = {}
         errors: list[str] = []
         for provider in allowed_providers:
-            for query_variant in _build_query_variants(normalized_keyword):
+            for query_variant_index, query_variant in enumerate(_build_query_variants(normalized_keyword)):
                 try:
                     results = provider.search(query_variant, limit=limit)
                 except LyricsSearchError as exc:
                     errors.append(str(exc))
                     continue
                 for candidate in results:
+                    candidate.query_variant_index = query_variant_index
                     _rank_candidate(candidate, normalized_keyword)
                     existing = ranked.get(candidate.key)
                     if existing is None or _sort_key(candidate) > _sort_key(existing):
@@ -626,9 +634,9 @@ class LyricsSearchService:
 
 def build_default_providers() -> list[LyricsProvider]:
     return [
-        NeteaseLyricsProvider(),
         QqMusicLyricsProvider(),
         KugouLyricsProvider(),
+        NeteaseLyricsProvider(),
         LrclibFallbackProvider(),
     ]
 
@@ -753,6 +761,7 @@ def _build_query_variants(keyword: str) -> list[str]:
 
 
 def _rank_candidate(candidate: LyricsSearchCandidate, keyword: str) -> None:
+    candidate.title_match_tier = _title_match_tier(keyword, candidate.title)
     candidate.title_score = _score_text(keyword, candidate.title)
     candidate.artist_score = _score_text(keyword, candidate.artist)
     candidate.album_score = _score_text(keyword, candidate.album)
@@ -778,15 +787,37 @@ def _best_match_source(candidate: LyricsSearchCandidate) -> str:
     return max(field_scores.items(), key=lambda item: item[1])[0]
 
 
-def _sort_key(candidate: LyricsSearchCandidate) -> tuple[float, float, float, float, int, float]:
+def _sort_key(candidate: LyricsSearchCandidate) -> tuple[int, int, int, int, float, float, float, float, float]:
     return (
+        candidate.title_match_tier,
+        -candidate.query_variant_index,
+        -candidate.provider_position,
+        candidate.source_priority,
         candidate.title_score,
         candidate.artist_score,
         candidate.album_score,
         candidate.lyrics_score,
-        candidate.source_priority,
         candidate.display_score,
     )
+
+
+def _title_match_tier(keyword: str, title: str) -> int:
+    normalized_keyword = _normalize_text(keyword)
+    normalized_title = _normalize_text(title)
+    if not normalized_keyword or not normalized_title:
+        return 0
+    if normalized_keyword == normalized_title:
+        return 4
+
+    compact_keyword = re.sub(r"[^0-9a-z\u3040-\u30ff\u3400-\u9fff]+", "", normalized_keyword)
+    compact_title = re.sub(r"[^0-9a-z\u3040-\u30ff\u3400-\u9fff]+", "", normalized_title)
+    if compact_keyword and compact_keyword == compact_title:
+        return 4
+    if normalized_title.startswith(normalized_keyword) or compact_title.startswith(compact_keyword):
+        return 3
+    if normalized_keyword in normalized_title or (compact_keyword and compact_keyword in compact_title):
+        return 2
+    return 1 if _score_text(keyword, title) >= 80 else 0
 
 
 def _score_text(keyword: str, text: str) -> float:

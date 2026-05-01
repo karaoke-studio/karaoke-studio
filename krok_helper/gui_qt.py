@@ -1154,7 +1154,7 @@ class KrokHelperQtApp(QMainWindow):
         title = QLabel("轻量歌词检索")
         title.setStyleSheet('font-size: 20pt; font-weight: 700;')
         desc = QLabel(
-            "输入歌名、歌手、专辑或歌词片段后搜索歌曲；结果会按歌名 > 歌手 > 专辑 > 歌词片段的匹配优先级排序。"
+            "输入歌名、歌手、专辑或歌词片段后搜索歌曲；结果会优先保留各来源原始搜索顺位，再用歌名、歌手、专辑等匹配度修正。"
         )
         desc.setWordWrap(True)
         header.addWidget(title)
@@ -1306,9 +1306,9 @@ class KrokHelperQtApp(QMainWindow):
             return
 
         self.lyrics_status_label.setText(
-            f"已找到 {len(self.lyrics_search_results)} 条候选结果，来源优先级：网易云 > QQ > 酷狗 > LRCLIB。"
+            f"已找到 {len(self.lyrics_search_results)} 条候选结果，来源优先级：QQ > 酷狗 > 网易云 > LRCLIB。"
         )
-        self.lyrics_results_summary_label.setText("结果按 歌曲 > 艺术家 > 专辑 > 歌词片段 排序；同一首歌会保留不同来源。")
+        self.lyrics_results_summary_label.setText("结果优先保留各来源原始搜索顺位，再按歌曲、艺术家、专辑匹配度修正；同一首歌会保留不同来源。")
         self.lyrics_results_table.setRowCount(len(self.lyrics_search_results))
         for row, candidate in enumerate(self.lyrics_search_results):
             duration_text = format_media_duration(candidate.duration_seconds) if candidate.duration_seconds else "-"
