@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import base64
+import binascii
+import gzip
+import hashlib
 import json
+import random
 import re
+import time
 import unicodedata
+import zlib
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Protocol
@@ -15,15 +22,40 @@ from krok_helper.config import APP_NAME, APP_VERSION
 
 LYRICS_PREVIEW_LINE = "line"
 LYRICS_PREVIEW_VERBATIM = "verbatim"
-DEFAULT_LYRICS_PROVIDER_IDS = ("lrclib",)
-DEFAULT_LYRICS_SEARCH_LIMIT = 30
+DEFAULT_LYRICS_PROVIDER_IDS = ("ne", "qm", "kg", "lrclib")
+DEFAULT_LYRICS_SEARCH_LIMIT = 40
 
 _TIMESTAMP_PATTERN = re.compile(r"\[(\d{1,3}):(\d{2})(?:[.:](\d{2,3}))?\]")
 _TOKEN_SPLIT_PATTERN = re.compile(r"[\s\-_/\\|,.;:!?()\[\]{}'\"`~]+")
+_LRC_METADATA_LINE_PATTERN = re.compile(r"^\[(?:ar|al|au|by|offset|ti|tool):.*\]$", re.IGNORECASE)
+_LINE_DURATION_PATTERN = re.compile(r"^\[(\d+),(\d+)\](.*)$")
+_KRC_WORD_PATTERN = re.compile(r"<(?P<start>\d+),(?P<duration>\d+),\d+>(?P<content>[^<]*)")
+_YRC_WORD_PATTERN = re.compile(r"\((?P<start>\d+),(?P<duration>\d+),\d+\)(?P<content>[^()]*)")
+
+_PROVIDER_DISPLAY_NAMES = {
+    "ne": "网易云音乐",
+    "qm": "QQ音乐",
+    "kg": "酷狗音乐",
+    "lrclib": "LRCLIB",
+}
+_PROVIDER_PRIORITIES = {
+    "ne": 40,
+    "qm": 30,
+    "kg": 20,
+    "lrclib": 10,
+}
+_KUGOU_SEARCH_DOMAINS = (
+    "mobilecdnbj.kugou.com",
+    "msearch.kugou.com",
+    "mobiles.kugou.com",
+    "msearchcdn.kugou.com",
+)
+_KUGOU_SIGN_SALT = "LnT6xpN3khm36zse0QzvmgTZ3waWdRSA"
+_KUGOU_KRC_KEY = b"@Gaw^2tGQ61-\xce\xd2ni"
 
 
 class LyricsSearchError(RuntimeError):
-    """Raised when every configured lyrics provider fails."""
+    """Raised when lyrics searching or lyrics loading fails."""
 
 
 @dataclass(slots=True)
@@ -35,9 +67,15 @@ class LyricsSearchCandidate:
     artist: str
     album: str
     duration_seconds: float | None
-    plain_lyrics: str
-    synced_lyrics: str
+    provider_payload: object | None = None
+    lyrics_payload: object | None = None
+    line_lyrics: str = ""
+    verbatim_lyrics: str = ""
+    plain_lyrics: str = ""
     source_url: str | None = None
+    source_priority: int = 0
+    lyrics_loaded: bool = False
+    load_error: str = ""
     title_score: float = 0.0
     artist_score: float = 0.0
     album_score: float = 0.0
@@ -46,12 +84,16 @@ class LyricsSearchCandidate:
     match_source: str = ""
 
     @property
+    def key(self) -> str:
+        return f"{self.provider_id}:{self.track_id}"
+
+    @property
     def has_synced_lyrics(self) -> bool:
-        return bool(self.synced_lyrics.strip())
+        return bool(self.line_lyrics.strip() or self.verbatim_lyrics.strip())
 
     @property
     def best_available_lyrics(self) -> str:
-        return self.synced_lyrics.strip() or self.plain_lyrics.strip()
+        return self.verbatim_lyrics.strip() or self.line_lyrics.strip() or self.plain_lyrics.strip()
 
 
 @dataclass(slots=True, frozen=True)
@@ -61,23 +103,22 @@ class LyricsPreview:
     used_estimated_char_timing: bool
 
 
-@dataclass(slots=True, frozen=True)
-class ParsedLrcLine:
-    start_ms: int
-    text: str
-
-
 class LyricsProvider(Protocol):
     provider_id: str
     provider_name: str
+    source_priority: int
 
     def search(self, keyword: str, *, limit: int = DEFAULT_LYRICS_SEARCH_LIMIT) -> list[LyricsSearchCandidate]:
         ...
 
+    def fetch_lyrics(self, candidate: LyricsSearchCandidate) -> LyricsSearchCandidate:
+        ...
 
-class LrclibLyricsProvider:
+
+class LrclibFallbackProvider:
     provider_id = "lrclib"
-    provider_name = "LRCLIB"
+    provider_name = _PROVIDER_DISPLAY_NAMES["lrclib"]
+    source_priority = _PROVIDER_PRIORITIES["lrclib"]
 
     def search(self, keyword: str, *, limit: int = DEFAULT_LYRICS_SEARCH_LIMIT) -> list[LyricsSearchCandidate]:
         params = urlencode({"q": keyword})
@@ -89,24 +130,19 @@ class LrclibLyricsProvider:
             },
         )
         try:
-            with urlopen(request, timeout=20) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except HTTPError as exc:
-            raise LyricsSearchError(f"LRCLIB 请求失败: HTTP {exc.code}") from exc
-        except URLError as exc:
-            raise LyricsSearchError(f"LRCLIB 网络错误: {exc.reason}") from exc
-        except TimeoutError as exc:
-            raise LyricsSearchError("LRCLIB 请求超时") from exc
-        except json.JSONDecodeError as exc:
-            raise LyricsSearchError("LRCLIB 返回了无法解析的数据") from exc
+            payload = _load_json_from_request(request)
+        except LyricsSearchError as exc:
+            raise LyricsSearchError(f"LRCLIB 请求失败: {exc}") from exc
 
         if not isinstance(payload, list):
-            raise LyricsSearchError("LRCLIB 返回数据格式异常")
+            raise LyricsSearchError("LRCLIB 返回数据格式异常。")
 
         items: list[LyricsSearchCandidate] = []
         for entry in payload[:limit]:
             if not isinstance(entry, dict):
                 continue
+            plain_lyrics = str(entry.get("plainLyrics") or "").strip()
+            line_lyrics = _sanitize_lrc_text(str(entry.get("syncedLyrics") or "").strip())
             items.append(
                 LyricsSearchCandidate(
                     provider_id=self.provider_id,
@@ -116,16 +152,434 @@ class LrclibLyricsProvider:
                     artist=str(entry.get("artistName") or "").strip(),
                     album=str(entry.get("albumName") or "").strip(),
                     duration_seconds=_coerce_float(entry.get("duration")),
-                    plain_lyrics=str(entry.get("plainLyrics") or "").strip(),
-                    synced_lyrics=str(entry.get("syncedLyrics") or "").strip(),
+                    provider_payload=entry,
+                    line_lyrics=line_lyrics,
+                    verbatim_lyrics="",
+                    plain_lyrics=plain_lyrics or _strip_lrc_timestamps(line_lyrics),
+                    source_priority=self.source_priority,
+                    lyrics_loaded=bool(plain_lyrics or line_lyrics),
                 )
             )
         return items
 
+    def fetch_lyrics(self, candidate: LyricsSearchCandidate) -> LyricsSearchCandidate:
+        if candidate.lyrics_loaded:
+            return candidate
+        payload = candidate.provider_payload
+        if not isinstance(payload, dict):
+            raise LyricsSearchError("LRCLIB 候选数据无效，无法加载歌词。")
+        candidate.line_lyrics = _sanitize_lrc_text(str(payload.get("syncedLyrics") or "").strip())
+        candidate.verbatim_lyrics = ""
+        candidate.plain_lyrics = str(payload.get("plainLyrics") or "").strip() or _strip_lrc_timestamps(candidate.line_lyrics)
+        candidate.lyrics_loaded = bool(candidate.line_lyrics or candidate.plain_lyrics)
+        if not candidate.lyrics_loaded:
+            raise LyricsSearchError("LRCLIB 没有返回可用歌词。")
+        return candidate
+
+
+class NeteaseLyricsProvider:
+    provider_id = "ne"
+    provider_name = _PROVIDER_DISPLAY_NAMES["ne"]
+    source_priority = _PROVIDER_PRIORITIES["ne"]
+
+    def search(self, keyword: str, *, limit: int = DEFAULT_LYRICS_SEARCH_LIMIT) -> list[LyricsSearchCandidate]:
+        page_size = 20
+        items: list[LyricsSearchCandidate] = []
+        for page in range(1, _page_count(limit, page_size) + 1):
+            offset = (page - 1) * page_size
+            url = "https://music.163.com/api/cloudsearch/pc?" + urlencode(
+                {
+                    "s": keyword,
+                    "type": "1",
+                    "offset": str(offset),
+                    "limit": str(page_size),
+                }
+            )
+            request = Request(
+                url,
+                headers={
+                    "Referer": "https://music.163.com/",
+                    "User-Agent": "Mozilla/5.0",
+                },
+            )
+            try:
+                payload = _load_json_from_request(request)
+            except LyricsSearchError as exc:
+                raise LyricsSearchError(f"{self.provider_name} 搜索失败: {exc}") from exc
+
+            songs = payload.get("result", {}).get("songs", []) if isinstance(payload, dict) else []
+            if not isinstance(songs, list) or not songs:
+                break
+            for song in songs:
+                if not isinstance(song, dict):
+                    continue
+                artists = song.get("ar") or song.get("artists") or []
+                artist_names = [str(artist.get("name") or "").strip() for artist in artists if isinstance(artist, dict)]
+                album = song.get("al") or song.get("album") or {}
+                items.append(
+                    LyricsSearchCandidate(
+                        provider_id=self.provider_id,
+                        provider_name=self.provider_name,
+                        track_id=str(song.get("id") or ""),
+                        title=str(song.get("name") or "").strip(),
+                        artist=" / ".join([name for name in artist_names if name]),
+                        album=str(album.get("name") or "").strip() if isinstance(album, dict) else "",
+                        duration_seconds=_coerce_float(song.get("dt")) / 1000.0 if song.get("dt") else None,
+                        provider_payload={
+                            "id": str(song.get("id") or ""),
+                        },
+                        source_priority=self.source_priority,
+                    )
+                )
+                if len(items) >= limit:
+                    return items[:limit]
+            if len(songs) < page_size:
+                break
+        return items[:limit]
+
+    def fetch_lyrics(self, candidate: LyricsSearchCandidate) -> LyricsSearchCandidate:
+        if candidate.lyrics_loaded:
+            return candidate
+        track_id = candidate.track_id.strip()
+        if not track_id:
+            raise LyricsSearchError(f"{self.provider_name} 缺少歌曲 ID，无法加载歌词。")
+
+        url = "https://music.163.com/api/song/lyric?" + urlencode(
+            {
+                "id": track_id,
+                "lv": "-1",
+                "kv": "-1",
+                "tv": "-1",
+                "rv": "-1",
+                "yv": "1",
+            }
+        )
+        request = Request(
+            url,
+            headers={
+                "Referer": "https://music.163.com/",
+                "User-Agent": "Mozilla/5.0",
+            },
+        )
+        try:
+            payload = _load_json_from_request(request)
+        except LyricsSearchError as exc:
+            raise LyricsSearchError(f"{self.provider_name} 加载歌词失败: {exc}") from exc
+
+        line_lyrics = _extract_nested_lyric(payload, "lrc")
+        verbatim_lyrics = ""
+        yrc_lyrics = _extract_nested_lyric(payload, "yrc") or _extract_nested_lyric(payload, "klyric")
+        if yrc_lyrics:
+            converted_line, converted_verbatim, converted_plain = _convert_yrc_text(yrc_lyrics)
+            line_lyrics = converted_line or line_lyrics
+            verbatim_lyrics = converted_verbatim
+            candidate.plain_lyrics = converted_plain
+        plain_lyrics = candidate.plain_lyrics or _strip_lrc_timestamps(line_lyrics)
+        if not line_lyrics and not plain_lyrics:
+            raise LyricsSearchError(f"{self.provider_name} 没有返回可用歌词。")
+
+        candidate.lyrics_payload = payload
+        candidate.line_lyrics = line_lyrics
+        candidate.verbatim_lyrics = verbatim_lyrics
+        candidate.plain_lyrics = plain_lyrics
+        candidate.lyrics_loaded = True
+        return candidate
+
+
+class QqMusicLyricsProvider:
+    provider_id = "qm"
+    provider_name = _PROVIDER_DISPLAY_NAMES["qm"]
+    source_priority = _PROVIDER_PRIORITIES["qm"]
+
+    def search(self, keyword: str, *, limit: int = DEFAULT_LYRICS_SEARCH_LIMIT) -> list[LyricsSearchCandidate]:
+        page_size = 20
+        items: list[LyricsSearchCandidate] = []
+        for page in range(1, _page_count(limit, page_size) + 1):
+            payload = {
+                "comm": {
+                    "ct": 11,
+                    "cv": "1003006",
+                    "v": "1003006",
+                    "os_ver": "15",
+                    "phonetype": "24122RKC7C",
+                    "rom": "Redmi/miro/miro:15/AE3A.240806.005/OS2.0.105.0.VOMCNXM:user/release-keys",
+                    "tmeAppID": "qqmusiclight",
+                    "nettype": "NETWORK_WIFI",
+                    "udid": "0",
+                },
+                "request": {
+                    "method": "DoSearchForQQMusicLite",
+                    "module": "music.search.SearchCgiService",
+                    "param": {
+                        "search_id": str(random.randint(10**16, 10**17 - 1)),
+                        "remoteplace": "search.android.keyboard",
+                        "query": keyword,
+                        "search_type": 0,
+                        "num_per_page": page_size,
+                        "page_num": page,
+                        "highlight": 0,
+                        "nqc_flag": 0,
+                        "page_id": 1,
+                        "grp": 1,
+                    },
+                },
+            }
+            request = Request(
+                "https://u.y.qq.com/cgi-bin/musicu.fcg",
+                data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+                headers={
+                    "Accept-Encoding": "gzip",
+                    "Content-Type": "application/json",
+                    "Cookie": "tmeLoginType=-1;",
+                    "User-Agent": "okhttp/3.14.9",
+                },
+                method="POST",
+            )
+            try:
+                response = _load_json_from_request(request)
+            except LyricsSearchError as exc:
+                raise LyricsSearchError(f"{self.provider_name} 搜索失败: {exc}") from exc
+
+            songs = response.get("request", {}).get("data", {}).get("body", {}).get("item_song", [])
+            if not isinstance(songs, list) or not songs:
+                break
+            for song in songs:
+                if not isinstance(song, dict):
+                    continue
+                singers = song.get("singer") or []
+                singer_names = [str(singer.get("name") or "").strip() for singer in singers if isinstance(singer, dict)]
+                album = song.get("album") or {}
+                items.append(
+                    LyricsSearchCandidate(
+                        provider_id=self.provider_id,
+                        provider_name=self.provider_name,
+                        track_id=str(song.get("id") or ""),
+                        title=str(song.get("title") or "").strip(),
+                        artist=" / ".join([name for name in singer_names if name]),
+                        album=str(album.get("name") or "").strip() if isinstance(album, dict) else "",
+                        duration_seconds=_coerce_float(song.get("interval")),
+                        provider_payload={
+                            "id": str(song.get("id") or ""),
+                            "mid": str(song.get("mid") or ""),
+                        },
+                        source_priority=self.source_priority,
+                    )
+                )
+                if len(items) >= limit:
+                    return items[:limit]
+            if len(songs) < page_size:
+                break
+        return items[:limit]
+
+    def fetch_lyrics(self, candidate: LyricsSearchCandidate) -> LyricsSearchCandidate:
+        if candidate.lyrics_loaded:
+            return candidate
+        payload = candidate.provider_payload if isinstance(candidate.provider_payload, dict) else {}
+        song_mid = str(payload.get("mid") or "").strip()
+        if not song_mid:
+            raise LyricsSearchError(f"{self.provider_name} 缺少 songmid，无法加载歌词。")
+
+        url = "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?" + urlencode(
+            {
+                "songmid": song_mid,
+                "g_tk": "5381",
+                "loginUin": "0",
+                "hostUin": "0",
+                "format": "json",
+                "inCharset": "utf8",
+                "outCharset": "utf-8",
+                "notice": "0",
+                "platform": "yqq.json",
+                "needNewCode": "0",
+                "nobase64": "1",
+            }
+        )
+        request = Request(
+            url,
+            headers={
+                "Referer": "https://y.qq.com/",
+                "User-Agent": "Mozilla/5.0",
+            },
+        )
+        try:
+            response = _load_json_from_request(request)
+        except LyricsSearchError as exc:
+            raise LyricsSearchError(f"{self.provider_name} 加载歌词失败: {exc}") from exc
+
+        line_lyrics = _coerce_qq_lyric(response.get("lyric"))
+        plain_lyrics = _strip_lrc_timestamps(line_lyrics)
+        if not line_lyrics and not plain_lyrics:
+            raise LyricsSearchError(f"{self.provider_name} 没有返回可用歌词。")
+
+        candidate.lyrics_payload = response
+        candidate.line_lyrics = line_lyrics
+        candidate.verbatim_lyrics = ""
+        candidate.plain_lyrics = plain_lyrics
+        candidate.lyrics_loaded = True
+        return candidate
+
+
+class KugouLyricsProvider:
+    provider_id = "kg"
+    provider_name = _PROVIDER_DISPLAY_NAMES["kg"]
+    source_priority = _PROVIDER_PRIORITIES["kg"]
+
+    def search(self, keyword: str, *, limit: int = DEFAULT_LYRICS_SEARCH_LIMIT) -> list[LyricsSearchCandidate]:
+        page_size = 20
+        items: list[LyricsSearchCandidate] = []
+        for page in range(1, _page_count(limit, page_size) + 1):
+            url = "http://mobilecdnbj.kugou.com/api/v3/search/song?" + urlencode(
+                {
+                    "showtype": "14",
+                    "highlight": "",
+                    "pagesize": str(page_size),
+                    "tag_aggr": "1",
+                    "plat": "0",
+                    "sver": "5",
+                    "keyword": keyword,
+                    "correct": "1",
+                    "api_ver": "1",
+                    "version": "9108",
+                    "page": str(page),
+                }
+            )
+            request = Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            try:
+                payload = _load_json_from_request(request)
+            except LyricsSearchError as exc:
+                raise LyricsSearchError(f"{self.provider_name} 搜索失败: {exc}") from exc
+
+            songs = payload.get("data", {}).get("info", []) if isinstance(payload, dict) else []
+            if not isinstance(songs, list) or not songs:
+                break
+            for song in songs:
+                if not isinstance(song, dict):
+                    continue
+                items.append(
+                    LyricsSearchCandidate(
+                        provider_id=self.provider_id,
+                        provider_name=self.provider_name,
+                        track_id=str(song.get("album_audio_id") or song.get("audio_id") or song.get("hash") or ""),
+                        title=str(song.get("songname") or "").strip(),
+                        artist=str(song.get("singername") or "").replace("、", " / ").strip(),
+                        album=str(song.get("album_name") or "").strip(),
+                        duration_seconds=_coerce_float(song.get("duration")),
+                        provider_payload={
+                            "hash": str(song.get("hash") or ""),
+                            "album_audio_id": str(song.get("album_audio_id") or ""),
+                            "duration_ms": int(_coerce_float(song.get("duration")) * 1000) if song.get("duration") else 0,
+                        },
+                        source_priority=self.source_priority,
+                    )
+                )
+                if len(items) >= limit:
+                    return items[:limit]
+            if len(songs) < page_size:
+                break
+        return items[:limit]
+
+    def fetch_lyrics(self, candidate: LyricsSearchCandidate) -> LyricsSearchCandidate:
+        if candidate.lyrics_loaded:
+            return candidate
+        payload = candidate.provider_payload if isinstance(candidate.provider_payload, dict) else {}
+        song_hash = str(payload.get("hash") or "").strip()
+        album_audio_id = str(payload.get("album_audio_id") or candidate.track_id or "").strip()
+        duration_ms = int(payload.get("duration_ms") or round((candidate.duration_seconds or 0) * 1000))
+        if not song_hash or not album_audio_id or duration_ms <= 0:
+            raise LyricsSearchError(f"{self.provider_name} 缺少必要参数，无法加载歌词。")
+
+        search_params = {
+            "album_audio_id": album_audio_id,
+            "duration": str(duration_ms),
+            "hash": song_hash,
+            "keyword": f"{candidate.artist or ''} - {candidate.title or ''}".strip(" -"),
+            "lrctxt": "1",
+            "man": "no",
+        }
+        try:
+            search_response = self._request_lyric_api("https://lyrics.kugou.com/v1/search", search_params)
+        except LyricsSearchError as exc:
+            raise LyricsSearchError(f"{self.provider_name} 加载歌词失败: {exc}") from exc
+
+        lyric_candidates = search_response.get("candidates", []) if isinstance(search_response, dict) else []
+        if not isinstance(lyric_candidates, list) or not lyric_candidates:
+            raise LyricsSearchError(f"{self.provider_name} 没有找到歌词。")
+
+        lyric_info = lyric_candidates[0]
+        if not isinstance(lyric_info, dict):
+            raise LyricsSearchError(f"{self.provider_name} 返回了无效歌词数据。")
+
+        download_params = {
+            "accesskey": str(lyric_info.get("accesskey") or ""),
+            "charset": "utf8",
+            "client": "mobi",
+            "fmt": "krc",
+            "id": str(lyric_info.get("id") or ""),
+            "ver": "1",
+        }
+        try:
+            download_response = self._request_lyric_api("http://lyrics.kugou.com/download", download_params)
+        except LyricsSearchError as exc:
+            raise LyricsSearchError(f"{self.provider_name} 下载歌词失败: {exc}") from exc
+
+        content = str(download_response.get("content") or "")
+        if not content:
+            raise LyricsSearchError(f"{self.provider_name} 没有返回歌词内容。")
+
+        content_type = int(download_response.get("contenttype") or 0)
+        if content_type == 2:
+            plain_text = base64.b64decode(content).decode("utf-8", "replace").strip()
+            candidate.line_lyrics = _sanitize_lrc_text(plain_text) if "[" in plain_text and "]" in plain_text else ""
+            candidate.verbatim_lyrics = ""
+            candidate.plain_lyrics = plain_text if not candidate.line_lyrics else _strip_lrc_timestamps(candidate.line_lyrics)
+        else:
+            try:
+                raw_krc = _decrypt_kugou_krc(base64.b64decode(content))
+            except (ValueError, zlib.error, binascii.Error) as exc:
+                raise LyricsSearchError(f"{self.provider_name} 解密歌词失败: {exc}") from exc
+            line_lyrics, verbatim_lyrics, plain_lyrics = _convert_krc_text(raw_krc)
+            candidate.line_lyrics = line_lyrics
+            candidate.verbatim_lyrics = verbatim_lyrics
+            candidate.plain_lyrics = plain_lyrics
+
+        candidate.lyrics_payload = {"lyric_info": lyric_info, "download": download_response}
+        candidate.lyrics_loaded = bool(candidate.line_lyrics or candidate.verbatim_lyrics or candidate.plain_lyrics)
+        if not candidate.lyrics_loaded:
+            raise LyricsSearchError(f"{self.provider_name} 没有返回可显示的歌词。")
+        return candidate
+
+    def _request_lyric_api(self, url: str, params: dict[str, str]) -> dict:
+        base_params = {
+            "appid": "3116",
+            "clientver": "11070",
+            **params,
+        }
+        signature = _build_kugou_signature(base_params)
+        request_url = url + "?" + urlencode({**base_params, "signature": signature})
+        mid = hashlib.md5(str(int(time.time() * 1000)).encode("utf-8")).hexdigest()
+        request = Request(
+            request_url,
+            headers={
+                "Accept-Encoding": "gzip, deflate",
+                "Connection": "Keep-Alive",
+                "KG-CLIENTTIMEMS": str(int(time.time() * 1000)),
+                "KG-RC": "1",
+                "KG-Rec": "1",
+                "User-Agent": "Android14-1070-11070-201-0-Lyric-wifi",
+                "mid": mid,
+            },
+        )
+        payload = _load_json_from_request(request)
+        error_code = payload.get("error_code", payload.get("errcode", 0)) if isinstance(payload, dict) else 0
+        if error_code not in (0, 200):
+            raise LyricsSearchError(str(payload.get("error_msg") or payload.get("errmsg") or "接口返回错误"))
+        return payload
+
 
 class LyricsSearchService:
     def __init__(self, providers: list[LyricsProvider] | None = None) -> None:
-        self.providers = providers or [LrclibLyricsProvider()]
+        self.providers = providers or build_default_providers()
+        self.provider_map = {provider.provider_id: provider for provider in self.providers}
 
     def search(
         self,
@@ -142,63 +596,81 @@ class LyricsSearchService:
         if not allowed_providers:
             raise LyricsSearchError("没有可用的歌词来源。")
 
-        all_results: list[LyricsSearchCandidate] = []
+        ranked: dict[str, LyricsSearchCandidate] = {}
         errors: list[str] = []
         for provider in allowed_providers:
             for query_variant in _build_query_variants(normalized_keyword):
                 try:
-                    all_results.extend(provider.search(query_variant, limit=limit))
+                    results = provider.search(query_variant, limit=limit)
                 except LyricsSearchError as exc:
                     errors.append(str(exc))
+                    continue
+                for candidate in results:
+                    _rank_candidate(candidate, normalized_keyword)
+                    existing = ranked.get(candidate.key)
+                    if existing is None or _sort_key(candidate) > _sort_key(existing):
+                        ranked[candidate.key] = candidate
 
-        if not all_results and errors:
-            unique_errors = list(dict.fromkeys(errors))
-            raise LyricsSearchError("\n".join(unique_errors))
-
-        ranked: dict[tuple[str, str, str, int], LyricsSearchCandidate] = {}
-        for candidate in all_results:
-            _rank_candidate(candidate, normalized_keyword)
-            dedupe_key = (
-                _normalize_text(candidate.title),
-                _normalize_text(candidate.artist),
-                _normalize_text(candidate.album),
-                int(round(candidate.duration_seconds or 0.0)),
-            )
-            existing = ranked.get(dedupe_key)
-            if existing is None or _sort_key(candidate) > _sort_key(existing):
-                ranked[dedupe_key] = candidate
+        if not ranked and errors:
+            raise LyricsSearchError("\n".join(list(dict.fromkeys(errors))))
 
         ordered = sorted(ranked.values(), key=_sort_key, reverse=True)
         return ordered[:limit]
 
+    def fetch_lyrics(self, candidate: LyricsSearchCandidate) -> LyricsSearchCandidate:
+        provider = self.provider_map.get(candidate.provider_id)
+        if provider is None:
+            raise LyricsSearchError(f"未找到歌词来源适配器: {candidate.provider_name}")
+        return provider.fetch_lyrics(candidate)
+
+
+def build_default_providers() -> list[LyricsProvider]:
+    return [
+        NeteaseLyricsProvider(),
+        QqMusicLyricsProvider(),
+        KugouLyricsProvider(),
+        LrclibFallbackProvider(),
+    ]
+
 
 def build_lyrics_preview(candidate: LyricsSearchCandidate, preview_mode: str) -> LyricsPreview:
-    parsed_synced_lines = parse_lrc_lines(candidate.synced_lyrics)
     if preview_mode == LYRICS_PREVIEW_VERBATIM:
-        if parsed_synced_lines:
+        if candidate.verbatim_lyrics.strip():
             return LyricsPreview(
-                text=_build_estimated_verbatim_lrc(parsed_synced_lines),
+                text=candidate.verbatim_lyrics.strip(),
+                used_synced_lyrics=True,
+                used_estimated_char_timing=False,
+            )
+        if candidate.line_lyrics.strip():
+            return LyricsPreview(
+                text=_build_estimated_verbatim_lrc(parse_lrc_lines(candidate.line_lyrics)),
                 used_synced_lyrics=True,
                 used_estimated_char_timing=True,
             )
         return LyricsPreview(
-            text=candidate.plain_lyrics.strip() or candidate.synced_lyrics.strip(),
+            text=candidate.plain_lyrics.strip(),
             used_synced_lyrics=False,
             used_estimated_char_timing=False,
         )
 
-    if parsed_synced_lines:
+    if candidate.line_lyrics.strip():
         return LyricsPreview(
-            text="\n".join(f"[{format_lrc_timestamp(line.start_ms)}]{line.text}" for line in parsed_synced_lines),
+            text=candidate.line_lyrics.strip(),
             used_synced_lyrics=True,
             used_estimated_char_timing=False,
         )
 
     return LyricsPreview(
-        text=candidate.plain_lyrics.strip() or candidate.synced_lyrics.strip(),
+        text=candidate.plain_lyrics.strip(),
         used_synced_lyrics=False,
         used_estimated_char_timing=False,
     )
+
+
+@dataclass(slots=True, frozen=True)
+class ParsedLrcLine:
+    start_ms: int
+    text: str
 
 
 def parse_lrc_lines(text: str) -> list[ParsedLrcLine]:
@@ -269,7 +741,7 @@ def _build_query_variants(keyword: str) -> list[str]:
             variants.append(cleaned)
 
     add(keyword)
-    for separator in (" - ", " / ", "／", "|"):
+    for separator in (" - ", " / ", "、", "|"):
         if separator in keyword:
             parts = [part.strip() for part in keyword.split(separator) if part.strip()]
             if len(parts) >= 2:
@@ -284,13 +756,13 @@ def _rank_candidate(candidate: LyricsSearchCandidate, keyword: str) -> None:
     candidate.title_score = _score_text(keyword, candidate.title)
     candidate.artist_score = _score_text(keyword, candidate.artist)
     candidate.album_score = _score_text(keyword, candidate.album)
-    candidate.lyrics_score = _score_lyrics(keyword, candidate.plain_lyrics or candidate.synced_lyrics)
+    candidate.lyrics_score = _score_text(keyword, candidate.plain_lyrics or candidate.line_lyrics)
     candidate.display_score = round(
         candidate.title_score * 0.55
         + candidate.artist_score * 0.25
         + candidate.album_score * 0.12
         + candidate.lyrics_score * 0.08
-        + (2.5 if candidate.has_synced_lyrics else 0.0),
+        + (candidate.source_priority / 20.0),
         1,
     )
     candidate.match_source = _best_match_source(candidate)
@@ -312,27 +784,9 @@ def _sort_key(candidate: LyricsSearchCandidate) -> tuple[float, float, float, fl
         candidate.artist_score,
         candidate.album_score,
         candidate.lyrics_score,
-        1 if candidate.has_synced_lyrics else 0,
+        candidate.source_priority,
         candidate.display_score,
     )
-
-
-def _score_lyrics(keyword: str, lyrics_text: str) -> float:
-    normalized_keyword = _normalize_text(keyword)
-    normalized_lyrics = _normalize_text(lyrics_text)
-    if not normalized_keyword or not normalized_lyrics:
-        return 0.0
-    if normalized_keyword in normalized_lyrics:
-        return 100.0
-
-    best_score = 0.0
-    for line in lyrics_text.splitlines():
-        if not line.strip():
-            continue
-        best_score = max(best_score, _score_text(keyword, line))
-        if best_score >= 96:
-            break
-    return best_score
 
 
 def _score_text(keyword: str, text: str) -> float:
@@ -385,3 +839,170 @@ def _coerce_float(value: object) -> float | None:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _sanitize_lrc_text(text: str) -> str:
+    if not text.strip():
+        return ""
+    kept_lines = [line for line in text.splitlines() if not _LRC_METADATA_LINE_PATTERN.match(line.strip())]
+    return "\n".join(kept_lines).strip()
+
+
+def _strip_lrc_timestamps(text: str) -> str:
+    if not text.strip():
+        return ""
+    body_lines: list[str] = []
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        if not line or _LRC_METADATA_LINE_PATTERN.match(line):
+            continue
+        body_lines.append(re.sub(r"[\[<]\d{1,3}:\d{2}(?:[.:]\d{2,3})?[\]>]", "", line).strip())
+    return "\n".join([line for line in body_lines if line]).strip()
+
+
+def _page_count(limit: int, page_size: int) -> int:
+    return max(1, (max(limit, 1) + page_size - 1) // page_size)
+
+
+def _load_json_from_request(request: Request) -> dict | list:
+    try:
+        with urlopen(request, timeout=20) as response:
+            payload = response.read()
+            content_encoding = response.headers.get("Content-Encoding", "")
+    except HTTPError as exc:
+        raise LyricsSearchError(f"HTTP {exc.code}") from exc
+    except URLError as exc:
+        raise LyricsSearchError(f"网络错误: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise LyricsSearchError("请求超时") from exc
+
+    if "gzip" in content_encoding.lower() or payload[:2] == b"\x1f\x8b":
+        payload = gzip.decompress(payload)
+    try:
+        return json.loads(payload.decode("utf-8", "replace"))
+    except json.JSONDecodeError as exc:
+        raise LyricsSearchError("返回了无法解析的数据") from exc
+
+
+def _extract_nested_lyric(payload: object, key: str) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    value = payload.get(key)
+    if not isinstance(value, dict):
+        return ""
+    lyric = str(value.get("lyric") or "").strip()
+    if not lyric:
+        return ""
+    return _sanitize_lrc_text(lyric)
+
+
+def _coerce_qq_lyric(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    if "[" in text and "]" in text:
+        return _sanitize_lrc_text(text)
+    try:
+        decoded = base64.b64decode(text).decode("utf-8", "replace").strip()
+    except (binascii.Error, ValueError):
+        return _sanitize_lrc_text(text)
+    return _sanitize_lrc_text(decoded)
+
+
+def _build_kugou_signature(params: dict[str, str]) -> str:
+    joined = "".join(
+        f"{key}={json.dumps(value, ensure_ascii=False) if isinstance(value, dict) else value}"
+        for key, value in sorted(params.items())
+    )
+    raw = f"{_KUGOU_SIGN_SALT}{joined}{_KUGOU_SIGN_SALT}".encode("utf-8")
+    return hashlib.md5(raw).hexdigest()
+
+
+def _decrypt_kugou_krc(payload: bytes) -> str:
+    encrypted = payload[4:] if payload.startswith(b"krc1") else payload[4:]
+    decrypted = bytearray()
+    for index, item in enumerate(encrypted):
+        decrypted.append(item ^ _KUGOU_KRC_KEY[index % len(_KUGOU_KRC_KEY)])
+    return zlib.decompress(bytes(decrypted)).decode("utf-8", "replace").lstrip("\ufeff")
+
+
+def _convert_krc_text(text: str) -> tuple[str, str, str]:
+    line_parts: list[str] = []
+    verbatim_parts: list[str] = []
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        match = _LINE_DURATION_PATTERN.match(line)
+        if not match:
+            continue
+        line_start = int(match.group(1))
+        line_content = match.group(3)
+        words = list(_KRC_WORD_PATTERN.finditer(line_content))
+        if not words:
+            clean_text = line_content.strip()
+            if clean_text:
+                line_parts.append(f"[{format_lrc_timestamp(line_start)}]{clean_text}")
+            continue
+
+        text_parts: list[str] = []
+        verbatim_line = [f"[{format_lrc_timestamp(line_start)}]"]
+        for word_match in words:
+            word_text = word_match.group("content")
+            if not word_text:
+                continue
+            word_start = line_start + int(word_match.group("start"))
+            word_end = word_start + int(word_match.group("duration"))
+            text_parts.append(word_text)
+            verbatim_line.append(
+                f"<{format_lrc_timestamp(word_start)}>{word_text}<{format_lrc_timestamp(word_end)}>"
+            )
+        merged_text = "".join(text_parts).strip()
+        if merged_text:
+            line_parts.append(f"[{format_lrc_timestamp(line_start)}]{merged_text}")
+            verbatim_parts.append("".join(verbatim_line))
+
+    line_lyrics = _sanitize_lrc_text("\n".join(line_parts))
+    verbatim_lyrics = "\n".join([part for part in verbatim_parts if part]).strip()
+    plain_lyrics = _strip_lrc_timestamps(line_lyrics) or _strip_lrc_timestamps(verbatim_lyrics)
+    return line_lyrics, verbatim_lyrics, plain_lyrics
+
+
+def _convert_yrc_text(text: str) -> tuple[str, str, str]:
+    line_parts: list[str] = []
+    verbatim_parts: list[str] = []
+
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        match = _LINE_DURATION_PATTERN.match(line)
+        if not match:
+            continue
+        line_start = int(match.group(1))
+        line_content = match.group(3)
+        words = list(_YRC_WORD_PATTERN.finditer(line_content))
+        if not words:
+            clean_text = re.sub(r"\(\d+,\d+,\d+\)", "", line_content).strip()
+            if clean_text:
+                line_parts.append(f"[{format_lrc_timestamp(line_start)}]{clean_text}")
+            continue
+
+        text_parts: list[str] = []
+        verbatim_line = [f"[{format_lrc_timestamp(line_start)}]"]
+        for word_match in words:
+            word_text = word_match.group("content")
+            if not word_text:
+                continue
+            word_start = int(word_match.group("start"))
+            word_end = word_start + int(word_match.group("duration"))
+            text_parts.append(word_text)
+            verbatim_line.append(
+                f"<{format_lrc_timestamp(word_start)}>{word_text}<{format_lrc_timestamp(word_end)}>"
+            )
+        merged_text = "".join(text_parts).strip()
+        if merged_text:
+            line_parts.append(f"[{format_lrc_timestamp(line_start)}]{merged_text}")
+            verbatim_parts.append("".join(verbatim_line))
+
+    line_lyrics = _sanitize_lrc_text("\n".join(line_parts))
+    verbatim_lyrics = "\n".join([part for part in verbatim_parts if part]).strip()
+    plain_lyrics = _strip_lrc_timestamps(line_lyrics) or _strip_lrc_timestamps(verbatim_lyrics)
+    return line_lyrics, verbatim_lyrics, plain_lyrics
