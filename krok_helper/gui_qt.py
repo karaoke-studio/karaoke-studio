@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from string import Formatter
 from typing import Callable
+
+os.environ["QFLUENT_WIDGETS_NO_PROMOTION"] = "1"
 
 from PyQt6.QtCore import QEvent, QThread, QTimer, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPen, QShortcut
@@ -45,13 +48,13 @@ from qfluentwidgets import (
     RadioButton as QRadioButton,
     setTheme,
     setThemeColor,
-    SimpleCardWidget,
     Slider as QSlider,
     StrongBodyLabel,
     TableWidget as QTableWidget,
     Theme,
     ToolButton,
 )
+from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 
 from krok_helper.audio_alignment import (
     DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE,
@@ -120,9 +123,47 @@ WORKFLOW_LYRICS_SEARCH = "lyrics_search"
 WORKFLOW_LYRICS_TIMING = "lyrics_timing"
 WORKFLOW_SUBTITLE_RENDER = "subtitle_render"
 WORKFLOW_HIRES_MIX = "hires_mix"
+LYRICS_SOURCE_OPTIONS = [
+    ("聚合", DEFAULT_LYRICS_PROVIDER_IDS),
+    ("QQ音乐", ("qm",)),
+    ("酷狗音乐", ("kg",)),
+    ("网易云音乐", ("ne",)),
+    ("LRCLIB", ("lrclib",)),
+]
+LYRICS_SOURCE_MAP = {label: provider_ids for label, provider_ids in LYRICS_SOURCE_OPTIONS}
+LYRICS_PREVIEW_MODE_OPTIONS = [
+    ("按行 LRC", LYRICS_PREVIEW_LINE),
+    ("按字 LRC", LYRICS_PREVIEW_VERBATIM),
+]
+LYRICS_PREVIEW_MODE_MAP = {label: mode for label, mode in LYRICS_PREVIEW_MODE_OPTIONS}
 
 APP_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "logo" / "logo.jpg"
 TASKBAR_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "logo" / "logo2.png"
+COMBO_BOX_MENU_QSS = """
+background: white;
+border: 1px solid #EAEAEA;
+border-radius: 8px;
+"""
+COMBO_BOX_VIEW_QSS = """
+QAbstractItemView {
+    background-color: white;
+    border: 1px solid #EAEAEA;
+    border-radius: 8px;
+    padding: 4px;
+    outline: none;
+}
+
+QAbstractItemView::item {
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 6px;
+}
+
+QAbstractItemView::item:selected {
+    background-color: #FFF1F2;
+    color: black;
+}
+"""
 
 
 def open_in_explorer(path: Path) -> None:
@@ -185,6 +226,70 @@ def format_media_duration(seconds: float | None) -> str:
     return f"{seconds:.3f}s"
 
 
+class WhiteComboBoxMenu(ComboBoxMenu):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setStyleSheet(COMBO_BOX_MENU_QSS)
+        self.view.setStyleSheet(COMBO_BOX_VIEW_QSS)
+        self.view.window().setStyleSheet("background: white;")
+        self.hBoxLayout.setContentsMargins(4, 4, 4, 4)
+        self.setShadowEffect(blurRadius=0, offset=(0, 0), color=QColor(0, 0, 0, 0))
+
+
+class StyledComboBox(QComboBox):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+
+    def _createComboMenu(self):
+        return WhiteComboBoxMenu(self)
+
+
+class CardWidget(QFrame):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        radius: int = 10,
+        padding: tuple[int, int, int, int] = (14, 14, 14, 14),
+        spacing: int = 12,
+    ) -> None:
+        super().__init__(parent)
+        self.setProperty("cardWidget", True)
+        self.setProperty("cardRadius", radius)
+        self._default_padding = padding
+        self._default_spacing = spacing
+
+    def createVBoxLayout(self) -> QVBoxLayout:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(*self._default_padding)
+        layout.setSpacing(self._default_spacing)
+        return layout
+
+    def createHBoxLayout(self) -> QHBoxLayout:
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(*self._default_padding)
+        layout.setSpacing(self._default_spacing)
+        return layout
+
+    def createGridLayout(self) -> QGridLayout:
+        layout = QGridLayout(self)
+        layout.setContentsMargins(*self._default_padding)
+        layout.setHorizontalSpacing(self._default_spacing)
+        layout.setVerticalSpacing(self._default_spacing)
+        return layout
+
+
+class ControlBar(CardWidget):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent, radius=10, padding=(14, 12, 14, 12), spacing=10)
+
+    def apply_button_metrics(self, *buttons: QWidget) -> None:
+        for button in buttons:
+            if hasattr(button, "setMinimumHeight"):
+                button.setMinimumHeight(34)
+
+
 @dataclass(frozen=True)
 class WorkflowStepItem:
     module_id: str
@@ -204,7 +309,7 @@ WORKFLOW_STEPS = [
 ]
 
 
-class WorkflowStepButton(SimpleCardWidget):
+class WorkflowStepButton(QWidget):
     clicked = Signal(int)
 
     def __init__(self, step: WorkflowStepItem, index: int, parent: QWidget | None = None) -> None:
@@ -214,13 +319,18 @@ class WorkflowStepButton(SimpleCardWidget):
         self._active = False
         self._hovered = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setFixedHeight(58)
+        self.setFixedHeight(60)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover, True)
+        self.setObjectName("WorkflowStepItem")
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 8, 16, 8)
-        layout.setSpacing(12)
+        outer_layout = QVBoxLayout(self)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        layout = QHBoxLayout()
+        layout.setContentsMargins(18, 10, 18, 8)
+        layout.setSpacing(10)
 
         self.number_label = QLabel(str(step.number))
         self.number_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -235,12 +345,19 @@ class WorkflowStepButton(SimpleCardWidget):
         self.title_label.setObjectName("WorkflowStepTitle")
         self.desc_label = QLabel(step.description)
         self.desc_label.setObjectName("WorkflowStepDescription")
+        self.desc_label.setWordWrap(False)
+        self.bottom_line = QFrame(self)
+        self.bottom_line.setObjectName("WorkflowStepUnderline")
+        self.bottom_line.setFixedHeight(2)
+        self.bottom_line.hide()
 
         text_layout.addWidget(self.title_label)
         text_layout.addWidget(self.desc_label)
 
         layout.addWidget(self.number_label, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(text_layout, 1)
+        outer_layout.addLayout(layout)
+        outer_layout.addWidget(self.bottom_line)
         self._refresh_style()
 
     def setActive(self, active: bool) -> None:
@@ -268,41 +385,40 @@ class WorkflowStepButton(SimpleCardWidget):
 
     def _refresh_style(self) -> None:
         if self._active:
-            background = "#FFF0F2"
+            background = "#FFF1F2"
             title_color = "#F85D6A"
             desc_color = "#C95D6B"
             number_background = "#FF4D5E"
             number_color = "#FFFFFF"
-            underline = "#FF6B77"
+            number_border = "#FF4D5E"
         elif self._hovered:
-            background = "#F8F3F4"
+            background = "#F7F8FA"
             title_color = "#1F2937"
             desc_color = "#6B7280"
             number_background = "#FFFFFF"
             number_color = "#6B7280"
-            underline = "transparent"
+            number_border = "#D1D5DB"
         else:
             background = "transparent"
             title_color = "#1F2937"
             desc_color = "#6B7280"
             number_background = "#FFFFFF"
             number_color = "#6B7280"
-            underline = "transparent"
+            number_border = "#D1D5DB"
 
         self.setStyleSheet(
             f"""
-            WorkflowStepButton {{
+            QWidget#WorkflowStepItem {{
                 background: {background};
                 border: 0;
-                border-radius: 14px;
-                border-bottom: 2px solid {underline};
+                border-radius: 10px;
             }}
             QLabel#WorkflowStepNumber {{
                 background: {number_background};
-                border: 1px solid #E5E7EB;
+                border: 1px solid {number_border};
                 border-radius: 16px;
                 color: {number_color};
-                font-size: 12pt;
+                font-size: 12px;
                 font-weight: 700;
             }}
             QLabel#WorkflowStepTitle {{
@@ -314,8 +430,14 @@ class WorkflowStepButton(SimpleCardWidget):
                 color: {desc_color};
                 font-size: 11px;
             }}
+            QFrame#WorkflowStepUnderline {{
+                background: #FF4D5E;
+                border: 0;
+                border-radius: 1px;
+            }}
             """
         )
+        self.bottom_line.setVisible(self._active)
 
 
 class WorkflowStepper(QWidget):
@@ -331,7 +453,7 @@ class WorkflowStepper(QWidget):
 
         self._layout = QHBoxLayout(self)
         self._layout.setContentsMargins(0, 0, 0, 0)
-        self._layout.setSpacing(4)
+        self._layout.setSpacing(0)
 
         for index, _step in enumerate(steps):
             item = self.createStepItem(index)
@@ -341,7 +463,7 @@ class WorkflowStepper(QWidget):
                 separator = QLabel("›")
                 separator.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 separator.setStyleSheet("color: #D1D5DB; font-size: 18px; font-weight: 500;")
-                separator.setFixedWidth(16)
+                separator.setFixedWidth(24)
                 self._layout.addWidget(separator, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.updateStepStyles()
@@ -377,6 +499,9 @@ class WorkflowStepper(QWidget):
         for index, item in enumerate(self._items):
             item.setActive(index == self._current_index)
 
+    def updateStyles(self) -> None:
+        self.updateStepStyles()
+
     def _handleStepClicked(self, index: int) -> None:
         self.stepClicked.emit(index)
 
@@ -402,10 +527,8 @@ class PlaceholderPage(QWidget):
         header.addWidget(subtitle_label)
         shell.addLayout(header)
 
-        card = SimpleCardWidget()
-        card_layout = QVBoxLayout(card)
-        card_layout.setContentsMargins(32, 36, 32, 36)
-        card_layout.setSpacing(10)
+        card = CardWidget(radius=10, padding=(32, 36, 32, 36), spacing=10)
+        card_layout = card.createVBoxLayout()
 
         card_title = StrongBodyLabel(title)
         card_title.setStyleSheet("font-size: 18pt; font-weight: 700; color: #1f2937;")
@@ -427,7 +550,7 @@ class PlaceholderPage(QWidget):
         shell.addWidget(card, 1)
 
 
-class DropZoneCard(SimpleCardWidget):
+class DropZoneCard(CardWidget):
     pathChanged = Signal(Path)
     browseRequested = Signal()
 
@@ -452,7 +575,7 @@ class DropZoneCard(SimpleCardWidget):
         self.setAcceptDrops(True)
         self.setMinimumHeight(min_height)
 
-        layout = QVBoxLayout(self)
+        layout = self.createVBoxLayout()
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(8)
 
@@ -594,6 +717,7 @@ class DropZoneCard(SimpleCardWidget):
             QFrame#DropZoneCard {{
                 background: {background};
                 border: {border_width}px solid {border};
+                border-radius: 10px;
             }}
             QLabel#DropZoneTitle {{
                 background: transparent;
@@ -1019,6 +1143,7 @@ class KrokHelperQtApp(QMainWindow):
             self.setWindowIcon(app_icon)
         self.resize(WINDOW_WIDTH, WINDOW_HEIGHT)
         self.setMinimumSize(WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT)
+        self.setWindowState(self.windowState() | Qt.WindowState.WindowMaximized)
 
         self._apply_styles()
         self._build_ui()
@@ -1051,18 +1176,7 @@ class KrokHelperQtApp(QMainWindow):
         super().changeEvent(event)
 
     def _apply_startup_window_geometry(self) -> None:
-        screen = self.screen() or QApplication.primaryScreen()
-        if screen is None:
-            return
-        available = screen.availableGeometry()
-        target_width = min(
-            max(WINDOW_MIN_WIDTH, WINDOW_WIDTH),
-            max(WINDOW_MIN_WIDTH, available.width()),
-        )
-        target_height = min(WINDOW_MIN_HEIGHT, available.height())
-        left = available.x() + max(0, (available.width() - target_width) // 2)
-        top = available.y() + max(0, (available.height() - target_height) // 2)
-        self.setGeometry(left, top, target_width, target_height)
+        self.showMaximized()
 
     def _restore_windowed_geometry_centered(self) -> None:
         try:
@@ -1099,20 +1213,15 @@ class KrokHelperQtApp(QMainWindow):
             QWidget#AppRoot {
                 background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #FAF7F8, stop:1 #F7F8FA);
             }
-            SimpleCardWidget {
-                background: rgba(255, 255, 255, 0.98);
-                border: 1px solid rgba(229, 232, 240, 0.88);
-                border-radius: 20px;
-            }
-            SimpleCardWidget#WorkflowBar {
+            QFrame[cardWidget="true"] {
                 background: #FFFFFF;
                 border: 1px solid #E9E9E9;
-                border-radius: 22px;
+                border-radius: 8px;
             }
-            QFrame#WhitePanel, QFrame#ControlPanel {
-                background: rgba(255, 255, 255, 0.98);
-                border: 1px solid rgba(229, 232, 240, 0.88);
-                border-radius: 18px;
+            QFrame#WorkflowBar {
+                background: #FFFFFF;
+                border: 1px solid #E9E9E9;
+                border-radius: 8px;
             }
             QFrame#TrimRow {
                 background: transparent;
@@ -1124,8 +1233,8 @@ class KrokHelperQtApp(QMainWindow):
                 font-weight: 700;
             }
             QLabel#AppSubtitle {
-                color: #8a94a6;
-                font-size: 10pt;
+                color: #6B7280;
+                font-size: 10.5pt;
             }
             ToolButton#WorkflowSettingsButton {
                 background: #FFFFFF;
@@ -1223,6 +1332,9 @@ class KrokHelperQtApp(QMainWindow):
             QRadioButton:disabled, QCheckBox:disabled, QLabel:disabled {
                 color: #94a3b8;
             }
+            QCheckBox {
+                background: transparent;
+            }
             QLineEdit, QComboBox, QDoubleSpinBox {
                 background: #ffffff;
                 border: 1px solid #d9dee8;
@@ -1283,20 +1395,19 @@ class KrokHelperQtApp(QMainWindow):
         central.setObjectName("AppRoot")
         shell = QVBoxLayout(central)
         shell.setContentsMargins(24, 20, 24, 16)
-        shell.setSpacing(16)
+        shell.setSpacing(12)
 
-        top_bar = SimpleCardWidget()
-        top_bar.setObjectName("TopBarCard")
-        top_bar_layout = QHBoxLayout(top_bar)
-        top_bar_layout.setContentsMargins(22, 18, 22, 18)
-        top_bar_layout.setSpacing(14)
+        top_bar = QWidget()
+        top_bar_layout = QVBoxLayout(top_bar)
+        top_bar_layout.setContentsMargins(2, 0, 2, 0)
+        top_bar_layout.setSpacing(8)
 
         title_layout = QVBoxLayout()
         title_layout.setContentsMargins(0, 0, 0, 0)
-        title_layout.setSpacing(4)
+        title_layout.setSpacing(8)
         app_title = QLabel("卡拉OK工作台")
         app_title.setObjectName("AppTitle")
-        app_subtitle = QLabel("统一承载歌词检索、波形对齐与 Hi-Res 混流的桌面工作流")
+        app_subtitle = QLabel("地表最强的卡拉OK字幕制作一站式工作台")
         app_subtitle.setObjectName("AppSubtitle")
         title_layout.addWidget(app_title)
         title_layout.addWidget(app_subtitle)
@@ -1307,17 +1418,17 @@ class KrokHelperQtApp(QMainWindow):
         self.top_settings_button.clicked.connect(self._open_current_module_settings)
         self.top_settings_button.setFixedSize(40, 40)
 
-        top_bar_layout.addLayout(title_layout, 1)
+        top_bar_layout.addLayout(title_layout)
 
         self.workflow_stepper = WorkflowStepper(WORKFLOW_STEPS, self)
         self.workflow_stepper.stepClicked.connect(self._handle_workflow_step_clicked)
 
-        workflow_bar = SimpleCardWidget()
+        workflow_bar = CardWidget(radius=10, padding=(12, 8, 12, 8), spacing=0)
         workflow_bar.setObjectName("WorkflowBar")
-        workflow_bar.setFixedHeight(82)
-        workflow_bar_layout = QHBoxLayout(workflow_bar)
-        workflow_bar_layout.setContentsMargins(18, 10, 16, 10)
-        workflow_bar_layout.setSpacing(14)
+        workflow_bar.setFixedHeight(80)
+        workflow_bar_layout = workflow_bar.createHBoxLayout()
+        workflow_bar_layout.setContentsMargins(10, 8, 10, 8)
+        workflow_bar_layout.setSpacing(10)
         workflow_bar_layout.addWidget(self.workflow_stepper, 1)
         workflow_bar_layout.addWidget(self.top_settings_button, 0, Qt.AlignmentFlag.AlignVCenter)
 
@@ -1429,7 +1540,7 @@ class KrokHelperQtApp(QMainWindow):
         page = QWidget()
         shell = QVBoxLayout(page)
         shell.setContentsMargins(20, 20, 20, 20)
-        shell.setSpacing(16)
+        shell.setSpacing(12)
 
         header = QVBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -1445,18 +1556,13 @@ class KrokHelperQtApp(QMainWindow):
         header.addWidget(desc)
         shell.addLayout(header)
 
-        search_panel = SimpleCardWidget()
-        search_layout = QGridLayout(search_panel)
-        search_layout.setContentsMargins(18, 18, 18, 18)
+        search_panel = CardWidget(radius=10, padding=(16, 16, 16, 16), spacing=10)
+        search_layout = search_panel.createGridLayout()
         search_layout.setHorizontalSpacing(14)
         search_layout.setVerticalSpacing(10)
 
-        self.lyrics_source_combo = QComboBox()
-        self.lyrics_source_combo.addItem("聚合", DEFAULT_LYRICS_PROVIDER_IDS)
-        self.lyrics_source_combo.addItem("QQ音乐", ("qm",))
-        self.lyrics_source_combo.addItem("酷狗音乐", ("kg",))
-        self.lyrics_source_combo.addItem("网易云音乐", ("ne",))
-        self.lyrics_source_combo.addItem("LRCLIB", ("lrclib",))
+        self.lyrics_source_combo = StyledComboBox()
+        self.lyrics_source_combo.addItems([label for label, _provider_ids in LYRICS_SOURCE_OPTIONS])
         self.lyrics_source_combo.setFont(build_lyrics_ui_font(point_size=10.5))
         self._install_single_click_combo_behavior(self.lyrics_source_combo)
         self.lyrics_source_combo.currentIndexChanged.connect(self._persist_lyrics_preferences)
@@ -1485,12 +1591,10 @@ class KrokHelperQtApp(QMainWindow):
 
         content = QHBoxLayout()
         content.setContentsMargins(0, 0, 0, 0)
-        content.setSpacing(16)
+        content.setSpacing(12)
 
-        result_panel = SimpleCardWidget()
-        result_layout = QVBoxLayout(result_panel)
-        result_layout.setContentsMargins(18, 18, 18, 18)
-        result_layout.setSpacing(12)
+        result_panel = CardWidget(radius=10, padding=(16, 16, 16, 16), spacing=12)
+        result_layout = result_panel.createVBoxLayout()
         result_title = QLabel("匹配结果")
         result_title.setObjectName("PanelTitle")
         self.lyrics_results_summary_label = QLabel("还没有搜索结果。")
@@ -1531,12 +1635,11 @@ class KrokHelperQtApp(QMainWindow):
         QTimer.singleShot(0, self._resize_lyrics_results_columns)
         content.addWidget(result_panel, 7)
 
-        preview_panel = SimpleCardWidget()
-        preview_layout = QVBoxLayout(preview_panel)
-        preview_layout.setContentsMargins(18, 18, 18, 18)
-        preview_layout.setSpacing(12)
+        preview_panel = CardWidget(radius=10, padding=(16, 16, 16, 16), spacing=12)
+        preview_layout = preview_panel.createVBoxLayout()
         preview_header = QHBoxLayout()
         preview_header.setContentsMargins(0, 0, 0, 0)
+        preview_header.setSpacing(10)
         preview_title = QLabel("歌词预览")
         preview_title.setObjectName("PanelTitle")
         preview_header.addWidget(preview_title)
@@ -1544,20 +1647,23 @@ class KrokHelperQtApp(QMainWindow):
         self.copy_lyrics_button = QPushButton("复制歌词")
         self.copy_lyrics_button.clicked.connect(self._copy_current_lyrics_preview)
         self.copy_lyrics_button.setMinimumHeight(34)
-        preview_header.addWidget(self.copy_lyrics_button)
+        preview_header.addWidget(self.copy_lyrics_button, 0, Qt.AlignmentFlag.AlignVCenter)
         self.lyrics_strip_intro_checkbox = QCheckBox("省略歌曲介绍")
+        self.lyrics_strip_intro_checkbox.setMinimumHeight(34)
         self.lyrics_strip_intro_checkbox.setChecked(True)
         self.lyrics_strip_intro_checkbox.toggled.connect(lambda _: self._refresh_lyrics_preview())
         self.lyrics_strip_intro_checkbox.toggled.connect(self._persist_lyrics_preferences)
-        preview_header.addWidget(self.lyrics_strip_intro_checkbox)
-        preview_header.addWidget(QLabel("显示格式"))
-        self.lyrics_preview_mode_combo = QComboBox()
-        self.lyrics_preview_mode_combo.addItem("按行 LRC", LYRICS_PREVIEW_LINE)
-        self.lyrics_preview_mode_combo.addItem("按字 LRC", LYRICS_PREVIEW_VERBATIM)
+        preview_header.addSpacing(12)
+        preview_header.addWidget(self.lyrics_strip_intro_checkbox, 0, Qt.AlignmentFlag.AlignVCenter)
+        preview_header.addWidget(QLabel("显示格式"), 0, Qt.AlignmentFlag.AlignVCenter)
+        self.lyrics_preview_mode_combo = StyledComboBox()
+        self.lyrics_preview_mode_combo.addItems([label for label, _mode in LYRICS_PREVIEW_MODE_OPTIONS])
+        self.lyrics_preview_mode_combo.setFixedWidth(112)
+        self.lyrics_preview_mode_combo.setMinimumHeight(34)
         self.lyrics_preview_mode_combo.currentIndexChanged.connect(lambda _: self._refresh_lyrics_preview())
         self.lyrics_preview_mode_combo.currentIndexChanged.connect(self._persist_lyrics_preferences)
         self._install_single_click_combo_behavior(self.lyrics_preview_mode_combo)
-        preview_header.addWidget(self.lyrics_preview_mode_combo)
+        preview_header.addWidget(self.lyrics_preview_mode_combo, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.lyrics_preview_title_label = QLabel("未选择歌曲")
         self.lyrics_preview_title_label.setStyleSheet('font-size: 12pt; font-weight: 700;')
@@ -1605,9 +1711,7 @@ class KrokHelperQtApp(QMainWindow):
             return
 
         self.lyrics_search_button.setEnabled(False)
-        provider_ids = self.lyrics_search_provider_ids if load_more else self.lyrics_source_combo.currentData()
-        if not isinstance(provider_ids, tuple):
-            provider_ids = DEFAULT_LYRICS_PROVIDER_IDS
+        provider_ids = self.lyrics_search_provider_ids if load_more else self._current_lyrics_source_ids()
         if load_more:
             self._lyrics_loading_more = True
             selected_key = self.lyrics_selected_candidate.key if self.lyrics_selected_candidate is not None else ""
@@ -1851,9 +1955,7 @@ class KrokHelperQtApp(QMainWindow):
             self.lyrics_preview_edit.setPlainText("正在加载歌词…")
             return
 
-        preview_mode = self.lyrics_preview_mode_combo.currentData()
-        if not isinstance(preview_mode, str):
-            preview_mode = LYRICS_PREVIEW_LINE
+        preview_mode = self._current_lyrics_preview_mode()
         preview = build_lyrics_preview(
             candidate,
             preview_mode,
@@ -1959,7 +2061,7 @@ class KrokHelperQtApp(QMainWindow):
         page = QWidget()
         shell = QVBoxLayout(page)
         shell.setContentsMargins(20, 20, 20, 20)
-        shell.setSpacing(16)
+        shell.setSpacing(12)
 
         header = QVBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -1973,9 +2075,8 @@ class KrokHelperQtApp(QMainWindow):
         header.addWidget(desc)
         shell.addLayout(header)
 
-        settings_card = SimpleCardWidget()
-        settings_layout = QGridLayout(settings_card)
-        settings_layout.setContentsMargins(18, 18, 18, 18)
+        settings_card = CardWidget(radius=10, padding=(16, 16, 16, 16), spacing=10)
+        settings_layout = settings_card.createGridLayout()
         settings_layout.setHorizontalSpacing(14)
         settings_layout.setVerticalSpacing(10)
         output_label = QLabel("输出目录")
@@ -2002,7 +2103,7 @@ class KrokHelperQtApp(QMainWindow):
 
         card_row = QHBoxLayout()
         card_row.setContentsMargins(0, 0, 0, 0)
-        card_row.setSpacing(16)
+        card_row.setSpacing(12)
         self.video_zone = DropZoneCard(
             title="字幕视频",
             hint="支持 mkv / mp4 / mov / avi\n这里会决定输出文件名和输出目录。",
@@ -2035,9 +2136,8 @@ class KrokHelperQtApp(QMainWindow):
         card_row.addWidget(self.off_vocal_zone, 1)
         shell.addLayout(card_row)
 
-        log_panel = SimpleCardWidget()
-        log_layout = QGridLayout(log_panel)
-        log_layout.setContentsMargins(18, 18, 18, 18)
+        log_panel = CardWidget(radius=10, padding=(16, 16, 16, 16), spacing=12)
+        log_layout = log_panel.createGridLayout()
         log_layout.setVerticalSpacing(12)
         log_title = QLabel("处理日志")
         log_title.setObjectName("PanelTitle")
@@ -2049,7 +2149,8 @@ class KrokHelperQtApp(QMainWindow):
         log_layout.setRowStretch(1, 1)
         shell.addWidget(log_panel, 1)
 
-        controls = QHBoxLayout()
+        controls_bar = ControlBar()
+        controls = controls_bar.createHBoxLayout()
         self.hires_start_button = PrimaryPushButton("开始生成")
         self.hires_start_button.clicked.connect(self._start_hires)
         clear_button = QPushButton("清空已选文件")
@@ -2070,7 +2171,8 @@ class KrokHelperQtApp(QMainWindow):
         controls.addWidget(self.hires_progress)
         controls.addSpacing(12)
         controls.addWidget(self.hires_status_label)
-        shell.addLayout(controls)
+        controls_bar.apply_button_metrics(self.hires_start_button, clear_button, open_output_button)
+        shell.addWidget(controls_bar)
         return page
 
     def _build_alignment_page(self) -> QWidget:
@@ -2082,7 +2184,7 @@ class KrokHelperQtApp(QMainWindow):
         page = QWidget()
         shell = QVBoxLayout(page)
         shell.setContentsMargins(20, 20, 20, 20)
-        shell.setSpacing(16)
+        shell.setSpacing(12)
 
         self.waveform_view = WaveformView()
         self.waveform_view.playheadChanged.connect(self._handle_playhead_changed)
@@ -2108,9 +2210,8 @@ class KrokHelperQtApp(QMainWindow):
         header.setColumnStretch(0, 1)
         shell.addLayout(header)
 
-        drop_card = SimpleCardWidget()
-        drop_row = QGridLayout(drop_card)
-        drop_row.setContentsMargins(18, 18, 18, 18)
+        drop_card = CardWidget(radius=10, padding=(16, 16, 16, 16), spacing=10)
+        drop_row = drop_card.createGridLayout()
         drop_row.setHorizontalSpacing(16)
         drop_row.setVerticalSpacing(10)
         self.align_video_zone = DropZoneCard(
@@ -2143,10 +2244,8 @@ class KrokHelperQtApp(QMainWindow):
         drop_row.setColumnStretch(1, 1)
         shell.addWidget(drop_card)
 
-        action_card = SimpleCardWidget()
-        actions = QHBoxLayout(action_card)
-        actions.setContentsMargins(18, 16, 18, 16)
-        actions.setSpacing(10)
+        action_card = ControlBar()
+        actions = action_card.createHBoxLayout()
         self.align_analyze_button = PrimaryPushButton("生成波形")
         self.align_analyze_button.clicked.connect(self._start_alignment_analysis)
         self.align_auto_button = QPushButton("自动对齐")
@@ -2182,6 +2281,16 @@ class KrokHelperQtApp(QMainWindow):
             clear_button,
         ):
             actions.addWidget(button)
+        action_card.apply_button_metrics(
+            self.align_analyze_button,
+            self.align_auto_button,
+            self.align_preview_button,
+            self.align_stop_preview_button,
+            self.align_export_button,
+            self.align_stop_export_button,
+            open_output_button,
+            clear_button,
+        )
         self.align_open_output_button = open_output_button
         self.align_clear_button = clear_button
         actions.addStretch(1)
@@ -2190,10 +2299,9 @@ class KrokHelperQtApp(QMainWindow):
         actions.addWidget(self.align_status_label)
         shell.addWidget(action_card)
 
-        control_panel = SimpleCardWidget()
+        control_panel = CardWidget(radius=10, padding=(16, 16, 16, 16), spacing=12)
         self.align_control_panel = control_panel
-        control_layout = QGridLayout(control_panel)
-        control_layout.setContentsMargins(18, 18, 18, 18)
+        control_layout = control_panel.createGridLayout()
         control_layout.setHorizontalSpacing(14)
         control_layout.setVerticalSpacing(12)
 
@@ -2407,9 +2515,8 @@ class KrokHelperQtApp(QMainWindow):
         self.waveform_view.setFixedHeight(200)
         shell.addWidget(self.waveform_view)
 
-        log_panel = SimpleCardWidget()
-        log_layout = QGridLayout(log_panel)
-        log_layout.setContentsMargins(18, 18, 18, 18)
+        log_panel = CardWidget(radius=10, padding=(16, 16, 16, 16), spacing=8)
+        log_layout = log_panel.createGridLayout()
         log_layout.setVerticalSpacing(8)
         log_title = QLabel("对齐日志")
         log_title.setObjectName("PanelTitle")
@@ -2443,16 +2550,16 @@ class KrokHelperQtApp(QMainWindow):
         saved_source_ids = tuple(str(item) for item in (self.settings.lyrics_source_ids or DEFAULT_LYRICS_PROVIDER_IDS) if str(item))
         if not saved_source_ids:
             saved_source_ids = DEFAULT_LYRICS_PROVIDER_IDS
-        for index in range(self.lyrics_source_combo.count()):
-            item_data = self.lyrics_source_combo.itemData(index)
-            if isinstance(item_data, tuple) and item_data == saved_source_ids:
+        for index, (label, provider_ids) in enumerate(LYRICS_SOURCE_OPTIONS):
+            if provider_ids == saved_source_ids:
                 self.lyrics_source_combo.setCurrentIndex(index)
                 break
 
         saved_preview_mode = str(self.settings.lyrics_preview_mode or LYRICS_PREVIEW_LINE)
-        preview_index = self.lyrics_preview_mode_combo.findData(saved_preview_mode)
-        if preview_index >= 0:
-            self.lyrics_preview_mode_combo.setCurrentIndex(preview_index)
+        for index, (label, mode) in enumerate(LYRICS_PREVIEW_MODE_OPTIONS):
+            if mode == saved_preview_mode:
+                self.lyrics_preview_mode_combo.setCurrentIndex(index)
+                break
         self.lyrics_strip_intro_checkbox.setChecked(bool(self.settings.lyrics_strip_intro_lines))
 
     def _install_single_click_combo_behavior(self, combo: QComboBox) -> None:
@@ -2472,15 +2579,17 @@ class KrokHelperQtApp(QMainWindow):
         if callable(hide_popup):
             hide_popup()
 
+    def _current_lyrics_source_ids(self) -> tuple[str, ...]:
+        return LYRICS_SOURCE_MAP.get(self.lyrics_source_combo.currentText(), DEFAULT_LYRICS_PROVIDER_IDS)
+
+    def _current_lyrics_preview_mode(self) -> str:
+        return LYRICS_PREVIEW_MODE_MAP.get(self.lyrics_preview_mode_combo.currentText(), LYRICS_PREVIEW_LINE)
+
     def _persist_lyrics_preferences(self, *_args) -> None:
         if self._loading_settings_into_ui:
             return
-        source_ids = self.lyrics_source_combo.currentData()
-        if not isinstance(source_ids, tuple):
-            source_ids = DEFAULT_LYRICS_PROVIDER_IDS
-        preview_mode = self.lyrics_preview_mode_combo.currentData()
-        if not isinstance(preview_mode, str):
-            preview_mode = LYRICS_PREVIEW_LINE
+        source_ids = self._current_lyrics_source_ids()
+        preview_mode = self._current_lyrics_preview_mode()
         self.settings.lyrics_source_ids = tuple(source_ids)
         self.settings.lyrics_preview_mode = preview_mode
         self.settings.lyrics_strip_intro_lines = self.lyrics_strip_intro_checkbox.isChecked()
@@ -2617,7 +2726,8 @@ class KrokHelperQtApp(QMainWindow):
         ffmpeg_layout.setContentsMargins(14, 14, 14, 14)
         ffmpeg_title = QLabel("FFmpeg 目录")
         ffmpeg_title.setObjectName("PanelTitle")
-        ffmpeg_display = QLineEdit(self.ffmpeg_dir_text)
+        ffmpeg_display = QLineEdit(dialog)
+        ffmpeg_display.setText(self.ffmpeg_dir_text)
         ffmpeg_display.setPlaceholderText(FFMPEG_DIR_PLACEHOLDER)
         choose_button = QPushButton("选择目录")
         choose_button.clicked.connect(
@@ -2648,8 +2758,10 @@ class KrokHelperQtApp(QMainWindow):
             naming_layout.setContentsMargins(14, 14, 14, 14)
             naming_title = QLabel("对齐导出命名")
             naming_title.setObjectName("PanelTitle")
-            video_template_edit = QLineEdit(self.align_video_name_template_value)
-            audio_template_edit = QLineEdit(self.align_audio_name_template_value)
+            video_template_edit = QLineEdit(dialog)
+            video_template_edit.setText(self.align_video_name_template_value)
+            audio_template_edit = QLineEdit(dialog)
+            audio_template_edit.setText(self.align_audio_name_template_value)
             naming_help_1 = QLabel("默认: 对齐后视频 {video_name}_aligned.mp4；对齐后音频 {audio_name}_aligned.wav。")
             naming_help_1.setStyleSheet('font-family: "Microsoft YaHei UI"; font-size: 9pt; color: #6b7280;')
             naming_help_2 = QLabel("视频模板支持 {video_name}；音频模板支持 {audio_name} 和 {video_name}。不用写扩展名。")
@@ -2679,8 +2791,10 @@ class KrokHelperQtApp(QMainWindow):
                 template_radio.setChecked(True)
             else:
                 fixed_radio.setChecked(True)
-            on_template_edit = QLineEdit(self.on_name_template_value)
-            off_template_edit = QLineEdit(self.off_name_template_value)
+            on_template_edit = QLineEdit(dialog)
+            on_template_edit.setText(self.on_name_template_value)
+            off_template_edit = QLineEdit(dialog)
+            off_template_edit.setText(self.off_name_template_value)
 
             def sync_template_enabled() -> None:
                 enabled = template_radio.isChecked()
