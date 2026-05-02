@@ -2209,6 +2209,241 @@ class KrokHelperQtApp(QMainWindow):
         return page
 
     def _build_alignment_page(self) -> QWidget:
+        from PyQt6.QtCore import QSize
+
+        class AlignmentDropCard(CardWidget):
+            pathChanged = Signal(Path)
+            browseRequested = Signal()
+
+            def __init__(
+                self,
+                *,
+                title: str,
+                hint: str,
+                extensions: set[str],
+                icon: FIF,
+                parent: QWidget | None = None,
+            ) -> None:
+                super().__init__(parent, radius=12, padding=(18, 18, 18, 18), spacing=12)
+                self.extensions = {ext.lower() for ext in extensions}
+                self.path: Path | None = None
+                self._hovered = False
+                self._drag_state = "idle"
+                self._default_action_text = "点击选择文件，或直接拖拽进入区域"
+                self._empty_detail_text = "支持拖拽导入，载入后会显示时长信息"
+
+                self.setObjectName("AlignmentDropCard")
+                self.setCursor(Qt.CursorShape.PointingHandCursor)
+                self.setAcceptDrops(True)
+                self.setMinimumHeight(160)
+
+                layout = self.createVBoxLayout()
+                layout.setContentsMargins(18, 18, 18, 18)
+                layout.setSpacing(12)
+
+                header = QHBoxLayout()
+                header.setContentsMargins(0, 0, 0, 0)
+                header.setSpacing(14)
+
+                self.icon_button = ToolButton(self)
+                self.icon_button.setIcon(icon.icon())
+                self.icon_button.setIconSize(QSize(32, 32))
+                self.icon_button.setFixedSize(48, 48)
+                self.icon_button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                self.icon_button.setStyleSheet(
+                    "ToolButton { background: transparent; border: 0; padding: 0; }"
+                )
+
+                text_layout = QVBoxLayout()
+                text_layout.setContentsMargins(0, 0, 0, 0)
+                text_layout.setSpacing(4)
+
+                self.title_label = StrongBodyLabel(title)
+                self.title_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+                self.hint_label = BodyLabel(hint)
+                self.hint_label.setWordWrap(True)
+                self.hint_label.setStyleSheet("color: #667085;")
+                self.hint_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+                text_layout.addWidget(self.title_label)
+                text_layout.addWidget(self.hint_label)
+                header.addWidget(self.icon_button, 0, Qt.AlignmentFlag.AlignTop)
+                header.addLayout(text_layout, 1)
+                layout.addLayout(header)
+
+                self.file_name_label = BodyLabel("未选择文件")
+                self.file_name_label.setStyleSheet("color: #111827; font-weight: 600;")
+                self.file_name_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                layout.addWidget(self.file_name_label)
+
+                self.detail_label = BodyLabel(self._empty_detail_text)
+                self.detail_label.setStyleSheet("color: #667085;")
+                self.detail_label.setWordWrap(True)
+                self.detail_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                layout.addWidget(self.detail_label)
+
+                self.action_frame = QFrame(self)
+                self.action_frame.setObjectName("AlignmentDropAction")
+                self.action_frame.setCursor(Qt.CursorShape.PointingHandCursor)
+                action_layout = QHBoxLayout(self.action_frame)
+                action_layout.setContentsMargins(14, 12, 14, 12)
+                action_layout.setSpacing(8)
+
+                self.action_icon = ToolButton(self.action_frame)
+                self.action_icon.setIcon(FIF.UP.icon())
+                self.action_icon.setIconSize(QSize(18, 18))
+                self.action_icon.setFixedSize(24, 24)
+                self.action_icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+                self.action_icon.setStyleSheet(
+                    "ToolButton { background: transparent; border: 0; padding: 0; }"
+                )
+                action_layout.addStretch(1)
+                action_layout.addWidget(self.action_icon)
+
+                self.action_label = BodyLabel(self._default_action_text)
+                self.action_label.setCursor(Qt.CursorShape.PointingHandCursor)
+                self.action_label.setStyleSheet("font-weight: 700;")
+                self.action_label.mousePressEvent = lambda _event: self.browseRequested.emit()
+                action_layout.addWidget(self.action_label)
+                action_layout.addStretch(1)
+
+                layout.addWidget(self.action_frame)
+                self._refresh_style()
+
+            def accepts(self, path: Path) -> bool:
+                return path.is_file() and path.suffix.lower() in self.extensions
+
+            def set_path(self, path: Path) -> None:
+                self.path = path
+                self.file_name_label.setText(path.name)
+                self._drag_state = "idle"
+                self._refresh_style()
+
+            def clear_path(self) -> None:
+                self.path = None
+                self.file_name_label.setText("未选择文件")
+                self.detail_label.setText(self._empty_detail_text)
+                self._drag_state = "idle"
+                self._refresh_style()
+
+            def enterEvent(self, event) -> None:  # noqa: N802
+                self._hovered = True
+                self._refresh_style()
+                super().enterEvent(event)
+
+            def leaveEvent(self, event) -> None:  # noqa: N802
+                self._hovered = False
+                self._refresh_style()
+                super().leaveEvent(event)
+
+            def mousePressEvent(self, event) -> None:  # noqa: N802
+                if event.button() == Qt.MouseButton.LeftButton:
+                    self.browseRequested.emit()
+                    event.accept()
+                    return
+                super().mousePressEvent(event)
+
+            def dragEnterEvent(self, event) -> None:  # noqa: N802
+                urls = event.mimeData().urls()
+                if not urls:
+                    self._drag_state = "reject"
+                    self._refresh_style()
+                    event.ignore()
+                    return
+                path = Path(urls[0].toLocalFile()).expanduser()
+                if self.accepts(path):
+                    self._drag_state = "accept"
+                    self._refresh_style()
+                    event.acceptProposedAction()
+                    return
+                self._drag_state = "reject"
+                self._refresh_style()
+                event.ignore()
+
+            def dragLeaveEvent(self, event) -> None:  # noqa: N802
+                self._drag_state = "idle"
+                self._refresh_style()
+                super().dragLeaveEvent(event)
+
+            def dropEvent(self, event) -> None:  # noqa: N802
+                urls = event.mimeData().urls()
+                if not urls:
+                    self._drag_state = "idle"
+                    self._refresh_style()
+                    event.ignore()
+                    return
+                path = Path(urls[0].toLocalFile()).expanduser()
+                if not self.accepts(path):
+                    self._drag_state = "reject"
+                    self._refresh_style()
+                    event.ignore()
+                    return
+                self.set_path(path)
+                self.pathChanged.emit(path)
+                event.acceptProposedAction()
+
+            def _refresh_style(self) -> None:
+                if self._drag_state == "accept":
+                    background = "#f0fdf4"
+                    border = "#22c55e"
+                    accent = "#16a34a"
+                    border_width = 2
+                    action_text = "松开鼠标即可导入这个文件"
+                elif self._drag_state == "reject":
+                    background = "#fff1f2"
+                    border = "#ff4d5e"
+                    accent = "#ff4d5e"
+                    border_width = 2
+                    action_text = "文件类型不支持，请重新选择"
+                elif self.path is not None:
+                    background = "#ffffff"
+                    border = "#e7eaee"
+                    accent = "#ff4d5e"
+                    border_width = 1
+                    action_text = self._default_action_text
+                elif self._hovered:
+                    background = "#fffaf9"
+                    border = "#f7c6cd"
+                    accent = "#ff4d5e"
+                    border_width = 1
+                    action_text = self._default_action_text
+                else:
+                    background = "#ffffff"
+                    border = "#e7eaee"
+                    accent = "#ff4d5e"
+                    border_width = 1
+                    action_text = self._default_action_text
+
+                self.action_label.setText(action_text)
+                self.setStyleSheet(
+                    f"""
+                    QFrame#AlignmentDropCard {{
+                        background: {background};
+                        border: {border_width}px solid {border};
+                        border-radius: 12px;
+                    }}
+                    QFrame#AlignmentDropAction {{
+                        background: #fffafa;
+                        border: 1px solid #ffcdd5;
+                        border-radius: 10px;
+                    }}
+                    QFrame#AlignmentDropAction BodyLabel {{
+                        color: {accent};
+                    }}
+                    """
+                )
+
+        class AlignmentExportProxyButton(PrimaryPushButton):
+            def __init__(self, owner: "KrokHelperWindow") -> None:
+                super().__init__(owner)
+                self._owner = owner
+                self.hide()
+
+            def setEnabled(self, enabled: bool) -> None:
+                super().setEnabled(enabled)
+                self._owner._sync_alignment_export_buttons()
+
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -2217,12 +2452,22 @@ class KrokHelperQtApp(QMainWindow):
         page = QWidget()
         shell = QVBoxLayout(page)
         shell.setContentsMargins(20, 20, 20, 20)
-        shell.setSpacing(12)
+        shell.setSpacing(14)
 
         self.waveform_view = WaveformView()
         self.waveform_view.playheadChanged.connect(self._handle_playhead_changed)
         self.waveform_view.offsetChanged.connect(self._handle_waveform_offset_changed)
         self.waveform_view.trimChanged.connect(self._refresh_align_trim_status)
+        self.waveform_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.waveform_view.setMinimumHeight(180)
+        self.waveform_view.setFixedHeight(200)
+        self.wave_view = self.waveform_view
+
+        self.align_export_button = AlignmentExportProxyButton(self)
+        self.align_export_button.clicked.connect(self._start_aligned_export)
+        self.align_export_button.setEnabled(False)
+
+        self._align_nudge_step = 0.01
 
         header = QGridLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -2231,11 +2476,11 @@ class KrokHelperQtApp(QMainWindow):
         title_font = QFont("Microsoft YaHei UI", 20)
         title_font.setBold(True)
         apply_safe_label_metrics(title, title_font, top_padding=4, bottom_padding=3)
-        alignment_title_height = title.sizeHint().height()
         desc = QLabel("把字幕视频和原唱音源放进来，选择要修正的对象，手动对齐波形后导出对应文件。")
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #667085; font-size: 10.5pt;")
         settings_button = QPushButton("设置")
+        settings_button.setIcon(FIF.SETTING.icon())
         settings_button.clicked.connect(lambda: self._open_settings_window("align"))
         header.addWidget(title, 0, 0)
         header.addWidget(desc, 1, 0)
@@ -2243,144 +2488,216 @@ class KrokHelperQtApp(QMainWindow):
         header.setColumnStretch(0, 1)
         shell.addLayout(header)
 
-        drop_card = CardWidget(radius=10, padding=(16, 16, 16, 16), spacing=10)
-        drop_row = drop_card.createGridLayout()
-        drop_row.setHorizontalSpacing(16)
-        drop_row.setVerticalSpacing(10)
-        self.align_video_zone = DropZoneCard(
-            title="字幕视频",
-            hint="支持 mkv / mp4 / mov / avi\n用于读取原视频里的参考音轨。",
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(14)
+
+        self.align_video_zone = AlignmentDropCard(
+            title="选择字幕视频",
+            hint="支持 mkv / mp4 / mov / avi\n程序会读取视频中的参考音轨，并自动推断输出目录。",
             extensions=VIDEO_EXTENSIONS,
-            min_height=150,
+            icon=FIF.VIDEO,
         )
-        self.align_video_zone.setFixedHeight(150)
         self.align_video_zone.browseRequested.connect(self._choose_align_video)
         self.align_video_zone.pathChanged.connect(self.set_align_video_path)
+        self.align_video_info_label = self.align_video_zone.detail_label
 
-        self.align_audio_zone = DropZoneCard(
-            title="原唱音源",
-            hint="支持 flac / wav / mp3 / m4a / aac / ape / alac / mkv / mp4\n可拖入音频或带音轨的 mp4，作为固定参考或导出修正后的音频。",
+        self.align_audio_zone = AlignmentDropCard(
+            title="选择原唱音频",
+            hint="支持 flac / wav / mp3 / m4a / aac / ape / alac / mkv / mp4\n可单独导出为 Hi-Res 音频，也可和伴奏一起生成。",
             extensions=ALIGN_AUDIO_EXTENSIONS,
-            min_height=150,
+            icon=FIF.MUSIC,
         )
-        self.align_audio_zone.setFixedHeight(150)
         self.align_audio_zone.browseRequested.connect(self._choose_align_audio)
         self.align_audio_zone.pathChanged.connect(self.set_align_audio_path)
+        self.align_audio_info_label = self.align_audio_zone.detail_label
 
-        self.align_video_info_label = QLabel("字幕视频: 时长未知")
-        self.align_audio_info_label = QLabel("原唱音源: 时长未知")
-        drop_row.addWidget(self.align_video_zone, 0, 0)
-        drop_row.addWidget(self.align_audio_zone, 0, 1)
-        drop_row.addWidget(self.align_video_info_label, 1, 0)
-        drop_row.addWidget(self.align_audio_info_label, 1, 1)
-        drop_row.setColumnStretch(0, 1)
-        drop_row.setColumnStretch(1, 1)
-        shell.addWidget(drop_card)
+        top_row.addWidget(self.align_video_zone, 1)
+        top_row.addWidget(self.align_audio_zone, 1)
 
-        action_card = ControlBar()
-        actions = action_card.createHBoxLayout()
-        self.align_analyze_button = PrimaryPushButton("生成波形")
-        self.align_analyze_button.clicked.connect(self._start_alignment_analysis)
-        self.align_auto_button = QPushButton("自动对齐")
-        self.align_auto_button.clicked.connect(self._auto_align_waveforms)
-        self.align_preview_button = QPushButton("播放预览")
-        self.align_preview_button.clicked.connect(self._start_alignment_preview)
-        self.align_stop_preview_button = QPushButton("停止播放")
-        self.align_stop_preview_button.clicked.connect(self._stop_alignment_preview)
-        self.align_export_button = QPushButton("导出对齐视频")
-        self.align_export_button.clicked.connect(self._start_aligned_export)
+        side_action_card = CardWidget(radius=12, padding=(16, 18, 16, 18), spacing=12)
+        side_action_card.setFixedWidth(210)
+        side_action_layout = side_action_card.createVBoxLayout()
+        side_action_layout.setSpacing(12)
+
+        clear_button = QPushButton("清空已选文件")
+        clear_button.setIcon(FIF.DELETE.icon())
+        clear_button.clicked.connect(self._clear_alignment_inputs)
+        clear_button.setMinimumHeight(40)
+
         self.align_stop_export_button = QPushButton("停止导出")
+        self.align_stop_export_button.setIcon(FIF.CLOSE.icon())
         self.align_stop_export_button.clicked.connect(self._stop_alignment_export)
         self.align_stop_export_button.setEnabled(False)
+        self.align_stop_export_button.setMinimumHeight(40)
+
         open_output_button = QPushButton("打开输出目录")
         open_output_button.clicked.connect(self._open_align_output_dir)
-        clear_button = QPushButton("清空已选文件")
-        clear_button.clicked.connect(self._clear_alignment_inputs)
-        self.align_progress = QProgressBar()
-        self.align_progress.setRange(0, 1)
-        self.align_progress.setValue(0)
-        self.align_progress.setFixedWidth(170)
-        self.align_progress.setTextVisible(False)
-        self.align_status_label = QLabel("准备生成波形")
-        self.align_status_label.setStyleSheet('font-family: "Microsoft YaHei UI"; font-size: 10pt; font-weight: 700;')
-        for button in (
-            self.align_analyze_button,
-            self.align_auto_button,
-            self.align_preview_button,
-            self.align_stop_preview_button,
-            self.align_export_button,
-            self.align_stop_export_button,
-            open_output_button,
-            clear_button,
-        ):
-            actions.addWidget(button)
-        action_card.apply_button_metrics(
-            self.align_analyze_button,
-            self.align_auto_button,
-            self.align_preview_button,
-            self.align_stop_preview_button,
-            self.align_export_button,
-            self.align_stop_export_button,
-            open_output_button,
-            clear_button,
-        )
+        open_output_button.setMinimumHeight(40)
+
         self.align_open_output_button = open_output_button
         self.align_clear_button = clear_button
-        actions.addStretch(1)
-        actions.addWidget(self.align_progress)
-        actions.addSpacing(12)
-        actions.addWidget(self.align_status_label)
-        shell.addWidget(action_card)
+        side_action_layout.addWidget(clear_button)
+        side_action_layout.addWidget(self.align_stop_export_button)
+        side_action_layout.addWidget(open_output_button)
+        side_action_layout.addStretch(1)
+        top_row.addWidget(side_action_card, 0)
+        shell.addLayout(top_row)
 
-        control_panel = CardWidget(radius=10, padding=(16, 16, 16, 16), spacing=12)
-        self.align_control_panel = control_panel
-        control_layout = control_panel.createGridLayout()
-        control_layout.setHorizontalSpacing(14)
-        control_layout.setVerticalSpacing(12)
+        shell.addWidget(self._build_waveform_toolbar())
 
-        self.align_offset_label = QLabel("字幕视频偏移 +0.000s")
-        self.align_offset_label.setStyleSheet('font-family: "Microsoft YaHei UI"; font-size: 12pt; font-weight: 700;')
-        offset_title_font = QFont("Microsoft YaHei UI", 12)
-        offset_title_font.setBold(True)
-        apply_safe_label_metrics(self.align_offset_label, offset_title_font)
-        offset_font = QFont("Microsoft YaHei UI", 12)
-        offset_font.setBold(True)
-        offset_metrics = QFontMetrics(offset_font)
-        self.align_offset_label.setFixedWidth(
-            max(
-                offset_metrics.horizontalAdvance("字幕视频偏移 -99.999s"),
-                offset_metrics.horizontalAdvance("原唱音源偏移 -99.999s"),
-            )
-            + 12
-        )
-        control_layout.addWidget(self.align_offset_label, 0, 0)
+        main_row = QWidget()
+        self.align_control_panel = main_row
+        main_layout = QHBoxLayout(main_row)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(14)
 
-        target_row_widget = QFrame()
-        target_row_widget.setFrameShape(QFrame.Shape.NoFrame)
-        target_row_widget.setStyleSheet("background: transparent; border: 0;")
-        target_row = QHBoxLayout(target_row_widget)
-        target_row.setContentsMargins(0, 0, 0, 0)
+        left_panel = self._build_left_panel()
+        left_panel.setFixedWidth(264)
+        main_layout.addWidget(left_panel, 0)
+
+        center_panel = QWidget()
+        center_layout = QVBoxLayout(center_panel)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(14)
+
+        waveform_card = CardWidget(radius=12, padding=(12, 12, 12, 12), spacing=8)
+        waveform_layout = waveform_card.createVBoxLayout()
+        waveform_layout.addWidget(self.waveform_view)
+        center_layout.addWidget(waveform_card)
+        center_layout.addWidget(self._build_adjustment_panels())
+
+        main_layout.addWidget(center_panel, 1)
+        shell.addWidget(main_row)
+
+        log_panel = CardWidget(radius=12, padding=(16, 16, 16, 16), spacing=10)
+        log_layout = log_panel.createGridLayout()
+        log_layout.setVerticalSpacing(10)
+        log_title = QLabel("对齐日志")
+        log_title.setObjectName("PanelTitle")
+        clear_log_button = QPushButton("清空日志")
+        clear_log_button.setIcon(FIF.DELETE.icon())
+        self.align_log = QPlainTextEdit()
+        self.align_log.setObjectName("LogText")
+        self.align_log.setReadOnly(True)
+        self.align_log.setMinimumHeight(120)
+        self.log_text = self.align_log
+        clear_log_button.clicked.connect(self.align_log.clear)
+        log_layout.addWidget(log_title, 0, 0)
+        log_layout.addWidget(clear_log_button, 0, 1, alignment=Qt.AlignmentFlag.AlignRight)
+        log_layout.addWidget(self.align_log, 1, 0, 1, 2)
+        shell.addWidget(log_panel)
+        shell.addStretch(1)
+
+        self._refresh_align_target_ui()
+        self._on_alignment_target_changed()
+        self._refresh_alignment_preview_controls()
+        scroll.setWidget(page)
+        return scroll
+
+    def _build_left_panel(self) -> QWidget:
+        from PyQt6.QtCore import QSize
+
+        panel = QWidget()
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        target_card = CardWidget(radius=12, padding=(16, 16, 16, 16), spacing=10)
+        target_layout = target_card.createVBoxLayout()
+        target_layout.addWidget(StrongBodyLabel("对齐目标"))
+
         self.align_target_video_radio = QRadioButton("调整字幕视频")
         self.align_target_audio_radio = QRadioButton("调整原唱音源")
         self.align_target_video_radio.setChecked(True)
-        self.align_target_video_radio.toggled.connect(self._handle_align_target_changed)
         self.align_target_group = QButtonGroup(self)
         self.align_target_group.setExclusive(True)
         self.align_target_group.addButton(self.align_target_video_radio)
         self.align_target_group.addButton(self.align_target_audio_radio)
-        self.align_playhead_label = QLabel("播放位置 0.000s")
-        target_row.addWidget(QLabel("对齐目标"))
-        target_row.addWidget(self.align_target_video_radio)
-        target_row.addWidget(self.align_target_audio_radio)
-        target_row.addWidget(self.align_playhead_label)
-        target_row.addStretch(1)
-        control_layout.addWidget(target_row_widget, 0, 1)
+        self.align_target_video_radio.toggled.connect(self._on_alignment_target_changed)
+        self.align_target_audio_radio.toggled.connect(self._on_alignment_target_changed)
 
-        drag_row_widget = QFrame()
-        drag_row_widget.setFrameShape(QFrame.Shape.NoFrame)
-        drag_row_widget.setStyleSheet("background: transparent; border: 0;")
-        drag_row = QHBoxLayout(drag_row_widget)
-        drag_row.setContentsMargins(0, 0, 0, 0)
+        self.rb_adjust_subtitle = self.align_target_video_radio
+        self.rb_adjust_original = self.align_target_audio_radio
+
+        subtitle_hint = BodyLabel("将对齐原唱音频音轨")
+        subtitle_hint.setStyleSheet("color: #667085;")
+        original_hint = BodyLabel("将对齐字幕视频音轨")
+        original_hint.setStyleSheet("color: #667085;")
+
+        target_layout.addWidget(self.align_target_video_radio)
+        target_layout.addWidget(subtitle_hint)
+        target_layout.addSpacing(4)
+        target_layout.addWidget(self.align_target_audio_radio)
+        target_layout.addWidget(original_hint)
+        layout.addWidget(target_card)
+
+        offset_card = CardWidget(radius=12, padding=(16, 16, 16, 16), spacing=12)
+        offset_layout = offset_card.createVBoxLayout()
+        offset_layout.addWidget(StrongBodyLabel("时间偏移"))
+
+        self.align_offset_label = QLabel("字幕视频偏移 +0.000s")
+        self.align_offset_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.align_offset_label.setStyleSheet(
+            'color: #ff2947; font-family: "Microsoft YaHei UI"; font-size: 15pt; font-weight: 700;'
+        )
+        self.label_offset = self.align_offset_label
+        offset_layout.addWidget(self.align_offset_label)
+
+        control_row = QHBoxLayout()
+        control_row.setContentsMargins(0, 0, 0, 0)
+        control_row.setSpacing(8)
+
+        def add_seek_column(icon: QIcon, text: str, handler: Callable[[], None]) -> None:
+            column = QVBoxLayout()
+            column.setContentsMargins(0, 0, 0, 0)
+            column.setSpacing(6)
+            button = ToolButton(offset_card)
+            button.setIcon(icon)
+            button.setIconSize(QSize(18, 18))
+            button.setFixedSize(36, 36)
+            button.clicked.connect(handler)
+            caption = BodyLabel(text)
+            caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            caption.setStyleSheet("color: #475467; font-size: 9pt;")
+            column.addWidget(button, 0, Qt.AlignmentFlag.AlignCenter)
+            column.addWidget(caption)
+            control_row.addLayout(column)
+
+        add_seek_column(FIF.CARE_LEFT_SOLID.icon(), "-1.0s", lambda: self.waveform_view.nudge_offset(-1.0))
+        add_seek_column(FIF.LEFT_ARROW.icon(), "-0.1s", lambda: self.waveform_view.nudge_offset(-self._align_nudge_step))
+        add_seek_column(FIF.ROTATE.icon(), "归零", lambda: self.waveform_view.set_offset(0.0))
+        add_seek_column(FIF.CHEVRON_RIGHT.icon(), "+0.1s", lambda: self.waveform_view.nudge_offset(self._align_nudge_step))
+        add_seek_column(FIF.CARE_RIGHT_SOLID.icon(), "+1.0s", lambda: self.waveform_view.nudge_offset(1.0))
+        offset_layout.addLayout(control_row)
+
+        step_title = BodyLabel("微调步进")
+        step_title.setStyleSheet("color: #111827; font-weight: 600;")
+        offset_layout.addWidget(step_title)
+
+        step_row = QHBoxLayout()
+        step_row.setContentsMargins(0, 0, 0, 0)
+        step_row.setSpacing(8)
+        self.align_step_small_button = QPushButton("0.01s")
+        self.align_step_large_button = QPushButton("0.1s")
+        for button in (self.align_step_small_button, self.align_step_large_button):
+            button.setCheckable(True)
+            button.setMinimumHeight(34)
+            step_row.addWidget(button)
+        self.align_step_small_button.clicked.connect(lambda: self._set_alignment_nudge_step(0.01))
+        self.align_step_large_button.clicked.connect(lambda: self._set_alignment_nudge_step(0.1))
+        offset_layout.addLayout(step_row)
+        self._set_alignment_nudge_step(0.01)
+        layout.addWidget(offset_card)
+
+        helper_card = CardWidget(radius=12, padding=(16, 16, 16, 16), spacing=10)
+        helper_layout = helper_card.createVBoxLayout()
+        helper_layout.addWidget(StrongBodyLabel("快捷键提示"))
+
+        drag_title = BodyLabel("拖动模式")
+        drag_title.setStyleSheet("font-weight: 600;")
+        helper_layout.addWidget(drag_title)
+
         self.align_drag_offset_radio = QRadioButton("移动字幕视频")
         self.align_drag_pan_radio = QRadioButton("平移视图")
         self.align_drag_offset_radio.setChecked(True)
@@ -2391,108 +2708,229 @@ class KrokHelperQtApp(QMainWindow):
         self.align_drag_offset_radio.toggled.connect(
             lambda checked: self.waveform_view.set_drag_mode("offset" if checked else "pan")
         )
-        drag_row.addWidget(QLabel("拖动模式"))
-        drag_row.addWidget(self.align_drag_offset_radio)
-        drag_row.addWidget(self.align_drag_pan_radio)
-        drag_row.addStretch(1)
-        control_layout.addWidget(drag_row_widget, 1, 0, 1, 2)
+        helper_layout.addWidget(self.align_drag_offset_radio)
+        helper_layout.addWidget(self.align_drag_pan_radio)
 
-        nudge_row = QHBoxLayout()
-        nudge_row.setContentsMargins(0, 0, 0, 0)
-        nudge_row.setSpacing(6)
-        for text, delta in (("-0.100s", -0.1), ("-0.010s", -0.01), ("+0.010s", 0.01), ("+0.100s", 0.1)):
-            button = QPushButton(text)
-            button.setMinimumWidth(92)
-            button.setMinimumHeight(34)
-            button.setStyleSheet("color: #111827;")
-            button.clicked.connect(lambda checked=False, delta=delta: self.waveform_view.nudge_offset(delta))
-            nudge_row.addWidget(button)
-        reset_offset_button = QPushButton("归零")
-        reset_offset_button.setMinimumWidth(92)
-        reset_offset_button.setMinimumHeight(34)
-        reset_offset_button.setStyleSheet("color: #111827;")
-        reset_offset_button.clicked.connect(lambda: self.waveform_view.set_offset(0.0))
-        nudge_row.addWidget(reset_offset_button)
-        nudge_row.addStretch(1)
-        control_layout.addLayout(nudge_row, 2, 0, 1, 2)
+        for key_text, description in (
+            ("空格", "生成波形、播放、暂停"),
+            ("Alt + V", "切换拖动模式"),
+            ("Ctrl + D", "自动对齐"),
+            ("Ctrl + S", "导出当前对齐目标"),
+        ):
+            row = QHBoxLayout()
+            row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(10)
+            key_badge = QLabel(key_text)
+            key_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            key_badge.setMinimumWidth(64)
+            key_badge.setStyleSheet(
+                "background: #f8fafc; border: 1px solid #e4e7ec; border-radius: 8px; padding: 6px 10px;"
+            )
+            desc = BodyLabel(description)
+            desc.setStyleSheet("color: #475467;")
+            row.addWidget(key_badge, 0)
+            row.addWidget(desc, 1)
+            helper_layout.addLayout(row)
 
-        trim_widget = QFrame()
-        trim_widget.setObjectName("TrimRow")
-        trim_widget.setFrameShape(QFrame.Shape.NoFrame)
-        trim_widget.setMinimumHeight(40)
-        trim_layout = QGridLayout(trim_widget)
-        trim_layout.setContentsMargins(0, 0, 0, 0)
-        trim_layout.setHorizontalSpacing(8)
-        trim_layout.setVerticalSpacing(4)
-        trim_header = QHBoxLayout()
-        trim_header.setContentsMargins(0, 0, 0, 0)
-        trim_header.setSpacing(8)
-        trim_title_label = QLabel("视频尾裁")
-        self.align_trim_label = QLabel("未设置")
-        self.align_trim_label.setWordWrap(False)
-        self.align_trim_label.setMinimumHeight(22)
-        self.align_trim_mark_button = QPushButton("将当前播放头设为尾裁点")
-        self.align_trim_mark_button.setMinimumHeight(34)
-        self.align_trim_mark_button.clicked.connect(
-            lambda: self.waveform_view.set_trim_end(self.waveform_view.playhead_seconds)
-        )
-        self.align_trim_clear_button = QPushButton("清除尾裁点")
-        self.align_trim_clear_button.setMinimumHeight(34)
-        self.align_trim_clear_button.clicked.connect(self.waveform_view.clear_trim_end)
-        trim_header.addWidget(trim_title_label)
-        trim_header.addWidget(self.align_trim_label)
-        trim_header.addWidget(self.align_trim_mark_button)
-        trim_header.addWidget(self.align_trim_clear_button)
-        trim_header.addStretch(1)
-        trim_layout.addLayout(trim_header, 0, 0)
-        control_layout.addWidget(trim_widget, 3, 0, 1, 2)
-        control_layout.setRowMinimumHeight(3, 40)
+        layout.addWidget(helper_card)
+        layout.addStretch(1)
+        return panel
 
-        option_row_widget = QFrame()
-        option_row_widget.setFrameShape(QFrame.Shape.NoFrame)
-        option_row_widget.setStyleSheet("background: transparent; border: 0;")
-        option_row_widget.setMinimumHeight(24)
-        option_row = QHBoxLayout(option_row_widget)
-        option_row.setContentsMargins(0, 0, 0, 0)
-        option_row.setSpacing(12)
-        self.align_extra_wav_check = QCheckBox("额外导出一份原唱音源的wav文件")
-        self.align_force_1080p60_check = QCheckBox("导出视频时重编码为 1080p 60fps")
-        self.align_auto_trim_check = QCheckBox("导出视频时自动裁到音频末尾")
-        self.align_use_video_audio_check = QCheckBox("导出视频时选择保留裁剪后的源视频音轨")
-        self.align_auto_trim_check.toggled.connect(lambda _checked: self._refresh_align_trim_status(self.waveform_view.trim_end_seconds))
-        self.align_use_video_audio_check.toggled.connect(self._persist_alignment_preferences)
-        option_row.addWidget(self.align_extra_wav_check)
-        option_row.addWidget(self.align_force_1080p60_check)
-        option_row.addWidget(self.align_auto_trim_check)
-        option_row.addWidget(self.align_use_video_audio_check)
-        option_row.addStretch(1)
-        control_layout.addWidget(option_row_widget, 4, 0, 1, 2)
-        control_layout.setRowMinimumHeight(4, 24)
+    def _build_waveform_toolbar(self) -> QWidget:
+        from PyQt6.QtCore import QSize
+
+        toolbar_card = CardWidget(radius=12, padding=(14, 14, 14, 14), spacing=10)
+        layout = toolbar_card.createVBoxLayout()
+
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(0, 0, 0, 0)
+        top_row.setSpacing(10)
+
+        self.align_analyze_button = QPushButton("生成波形")
+        self.align_analyze_button.clicked.connect(self._start_alignment_analysis)
+        self.align_auto_button = PrimaryPushButton("自动对齐")
+        self.align_auto_button.setIcon(FIF.SYNC.icon())
+        self.align_auto_button.clicked.connect(self._auto_align_waveforms)
+        self.btn_auto_align = self.align_auto_button
+        self.align_preview_button = QPushButton("播放预览")
+        self.align_preview_button.setIcon(FIF.PLAY.icon())
+        self.align_preview_button.clicked.connect(self._start_alignment_preview)
+        self.align_stop_preview_button = QPushButton("停止预览")
+        self.align_stop_preview_button.setIcon(FIF.CLOSE.icon())
+        self.align_stop_preview_button.clicked.connect(self._stop_alignment_preview)
+
+        for button in (
+            self.align_analyze_button,
+            self.align_auto_button,
+            self.align_preview_button,
+            self.align_stop_preview_button,
+        ):
+            button.setMinimumHeight(36)
+            top_row.addWidget(button)
+
+        volume_button = ToolButton(toolbar_card)
+        volume_button.setIcon(FIF.VOLUME.icon())
+        volume_button.setIconSize(QSize(18, 18))
+        volume_button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        volume_button.setStyleSheet("ToolButton { background: transparent; border: 0; }")
+        top_row.addSpacing(6)
+        top_row.addWidget(volume_button)
+
+        self.align_volume_slider = QSlider(Qt.Orientation.Horizontal)
+        self.align_volume_slider.setRange(0, 100)
+        self.align_volume_slider.setValue(50)
+        self.align_volume_slider.setFixedWidth(140)
+        top_row.addWidget(self.align_volume_slider)
+
+        top_row.addStretch(1)
+
+        self.align_playhead_label = BodyLabel("播放位置 0.000s")
+        self.align_playhead_label.setStyleSheet("color: #475467; font-weight: 600;")
+        top_row.addWidget(self.align_playhead_label)
+
+        self.align_reset_view_button = QPushButton("回到开头")
+        self.align_reset_view_button.setIcon(FIF.PAGE_LEFT.icon())
+        self.align_reset_view_button.setMinimumHeight(36)
+        self.align_reset_view_button.clicked.connect(self.waveform_view.reset_view)
+        top_row.addWidget(self.align_reset_view_button)
+
+        self.align_jump_to_end_button = QPushButton("跳到末尾")
+        self.align_jump_to_end_button.setIcon(FIF.PAGE_RIGHT.icon())
+        self.align_jump_to_end_button.setMinimumHeight(36)
+        self.align_jump_to_end_button.clicked.connect(self.waveform_view.jump_to_end)
+        top_row.addWidget(self.align_jump_to_end_button)
+
+        layout.addLayout(top_row)
+
+        bottom_row = QHBoxLayout()
+        bottom_row.setContentsMargins(0, 0, 0, 0)
+        bottom_row.setSpacing(10)
+        zoom_label = BodyLabel("缩放视图")
+        zoom_label.setStyleSheet("color: #475467; font-weight: 600;")
+        bottom_row.addWidget(zoom_label)
+
+        self.align_zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.align_zoom_slider.setRange(20, 800)
+        self.align_zoom_slider.setValue(120)
+        self.align_zoom_slider.valueChanged.connect(lambda value: self.waveform_view.set_zoom(float(value)))
+        bottom_row.addWidget(self.align_zoom_slider, 1)
+
+        self.align_progress = QProgressBar()
+        self.align_progress.setRange(0, 1)
+        self.align_progress.setValue(0)
+        self.align_progress.setFixedWidth(160)
+        self.align_progress.setTextVisible(False)
+        bottom_row.addWidget(self.align_progress)
+
+        self.align_status_label = BodyLabel("准备生成波形")
+        self.align_status_label.setStyleSheet("color: #475467; font-weight: 600;")
+        bottom_row.addWidget(self.align_status_label)
+        layout.addLayout(bottom_row)
+        return toolbar_card
+
+    def _build_adjustment_panels(self) -> QWidget:
+        from PyQt6.QtWidgets import QAbstractSpinBox
+
+        wrapper = QWidget()
+        wrapper_layout = QHBoxLayout(wrapper)
+        wrapper_layout.setContentsMargins(0, 0, 0, 0)
+        wrapper_layout.setSpacing(14)
+
+        options_column = QVBoxLayout()
+        options_column.setContentsMargins(0, 0, 0, 0)
+        options_column.setSpacing(14)
+
+        self.SubtitleAdjust = CardWidget(radius=12, padding=(16, 16, 16, 16), spacing=12)
+        subtitle_layout = self.SubtitleAdjust.createVBoxLayout()
+        subtitle_layout.addWidget(StrongBodyLabel("调整字幕视频"))
+        subtitle_hint = BodyLabel("将对齐原唱音频音轨")
+        subtitle_hint.setStyleSheet("color: #ff4d5e;")
+        subtitle_layout.addWidget(subtitle_hint)
 
         self.align_lead_row_widget = QFrame()
         self.align_lead_row_widget.setFrameShape(QFrame.Shape.NoFrame)
-        self.align_lead_row_widget.setStyleSheet("background: transparent; border: 0;")
-        lead_row = QHBoxLayout(self.align_lead_row_widget)
-        lead_row.setContentsMargins(0, 0, 0, 0)
-        lead_row.addWidget(QLabel("视频前导画面"))
-        self.align_lead_fill_black_radio = QRadioButton("前黑（补黑屏）")
-        self.align_lead_fill_white_radio = QRadioButton("前白（补白屏）")
-        self.align_lead_fill_freeze_radio = QRadioButton("首帧定格（用首帧补）")
+        lead_layout = QVBoxLayout(self.align_lead_row_widget)
+        lead_layout.setContentsMargins(0, 0, 0, 0)
+        lead_layout.setSpacing(8)
+        lead_layout.addWidget(BodyLabel("开头处理"))
+
+        lead_radio_row = QHBoxLayout()
+        lead_radio_row.setContentsMargins(0, 0, 0, 0)
+        lead_radio_row.setSpacing(10)
+        self.align_lead_fill_black_radio = QRadioButton("补黑")
+        self.align_lead_fill_white_radio = QRadioButton("补白")
+        self.align_lead_fill_freeze_radio = QRadioButton("首帧定格")
         self.align_lead_fill_black_radio.setChecked(True)
         self.align_lead_fill_group = QButtonGroup(self)
         self.align_lead_fill_group.setExclusive(True)
         self.align_lead_fill_group.addButton(self.align_lead_fill_black_radio)
         self.align_lead_fill_group.addButton(self.align_lead_fill_white_radio)
         self.align_lead_fill_group.addButton(self.align_lead_fill_freeze_radio)
-        lead_row.addWidget(self.align_lead_fill_black_radio)
-        lead_row.addWidget(self.align_lead_fill_white_radio)
-        lead_row.addWidget(self.align_lead_fill_freeze_radio)
-        lead_row.addStretch(1)
-        control_layout.addWidget(self.align_lead_row_widget, 5, 0, 1, 2)
+        lead_radio_row.addWidget(self.align_lead_fill_black_radio)
+        lead_radio_row.addWidget(self.align_lead_fill_white_radio)
+        lead_radio_row.addWidget(self.align_lead_fill_freeze_radio)
+        lead_radio_row.addStretch(1)
+        lead_layout.addLayout(lead_radio_row)
+        subtitle_layout.addWidget(self.align_lead_row_widget)
 
-        encode_row = QHBoxLayout()
-        encode_row.setContentsMargins(0, 0, 0, 0)
-        encode_row.addWidget(QLabel("视频编码方式"))
+        trim_title = BodyLabel("尾部处理")
+        trim_title.setStyleSheet("font-weight: 600;")
+        subtitle_layout.addWidget(trim_title)
+
+        self.align_trim_label = QLabel("未设置")
+        self.align_trim_label.setWordWrap(True)
+        self.align_trim_label.setStyleSheet("color: #475467;")
+        subtitle_layout.addWidget(self.align_trim_label)
+
+        trim_value_row = QHBoxLayout()
+        trim_value_row.setContentsMargins(0, 0, 0, 0)
+        trim_value_row.setSpacing(8)
+        trim_value_row.addWidget(BodyLabel("尾裁点"))
+        self.align_trim_seconds_spin = QDoubleSpinBox()
+        self.align_trim_seconds_spin.setDecimals(3)
+        self.align_trim_seconds_spin.setRange(0.0, 99999.0)
+        self.align_trim_seconds_spin.setReadOnly(True)
+        self.align_trim_seconds_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.align_trim_seconds_spin.setSuffix(" 秒")
+        trim_value_row.addWidget(self.align_trim_seconds_spin, 1)
+        subtitle_layout.addLayout(trim_value_row)
+        self.waveform_view.trimChanged.connect(
+            lambda value: self.align_trim_seconds_spin.setValue(float(value) if isinstance(value, float) else 0.0)
+        )
+
+        trim_button_row = QHBoxLayout()
+        trim_button_row.setContentsMargins(0, 0, 0, 0)
+        trim_button_row.setSpacing(8)
+        self.align_trim_mark_button = QPushButton("将当前播放头设为尾裁点")
+        self.align_trim_mark_button.clicked.connect(
+            lambda: self.waveform_view.set_trim_end(self.waveform_view.playhead_seconds)
+        )
+        self.align_trim_clear_button = QPushButton("清除尾裁点")
+        self.align_trim_clear_button.clicked.connect(self.waveform_view.clear_trim_end)
+        trim_button_row.addWidget(self.align_trim_mark_button, 1)
+        trim_button_row.addWidget(self.align_trim_clear_button, 1)
+        subtitle_layout.addLayout(trim_button_row)
+
+        self.align_force_1080p60_check = QCheckBox("导出视频时重编码为 1080p 60fps")
+        self.align_auto_trim_check = QCheckBox("导出视频时自动裁到音频末尾")
+        self.align_use_video_audio_check = QCheckBox("导出视频时保留裁剪后的源视频音轨")
+        self.align_extra_wav_check = QCheckBox("额外导出一份原唱音源的 WAV")
+        self.align_auto_trim_check.toggled.connect(
+            lambda _checked: self._refresh_align_trim_status(self.waveform_view.trim_end_seconds)
+        )
+        self.align_use_video_audio_check.toggled.connect(self._persist_alignment_preferences)
+
+        subtitle_layout.addWidget(self.align_force_1080p60_check)
+        subtitle_layout.addWidget(self.align_auto_trim_check)
+        subtitle_layout.addWidget(self.align_use_video_audio_check)
+        subtitle_layout.addWidget(self.align_extra_wav_check)
+
+        self.align_encode_row_widget = QFrame()
+        self.align_encode_row_widget.setFrameShape(QFrame.Shape.NoFrame)
+        encode_layout = QHBoxLayout(self.align_encode_row_widget)
+        encode_layout.setContentsMargins(0, 0, 0, 0)
+        encode_layout.setSpacing(10)
+        encode_layout.addWidget(BodyLabel("视频编码"))
         self.align_encode_software_radio = QRadioButton("软编（CPU）")
         self.align_encode_hardware_radio = QRadioButton("硬编（GPU）")
         self.align_encode_software_radio.setChecked(True)
@@ -2500,73 +2938,129 @@ class KrokHelperQtApp(QMainWindow):
         self.align_encode_group.setExclusive(True)
         self.align_encode_group.addButton(self.align_encode_software_radio)
         self.align_encode_group.addButton(self.align_encode_hardware_radio)
-        encode_row.addWidget(self.align_encode_software_radio)
-        encode_row.addWidget(self.align_encode_hardware_radio)
-        encode_row.addStretch(1)
-        self.align_encode_row_widget = QFrame()
-        self.align_encode_row_widget.setFrameShape(QFrame.Shape.NoFrame)
-        self.align_encode_row_widget.setStyleSheet("background: transparent; border: 0;")
-        self.align_encode_row_widget.setLayout(encode_row)
-        control_layout.addWidget(self.align_encode_row_widget, 6, 0, 1, 2)
+        encode_layout.addWidget(self.align_encode_software_radio)
+        encode_layout.addWidget(self.align_encode_hardware_radio)
+        encode_layout.addStretch(1)
+        subtitle_layout.addWidget(self.align_encode_row_widget)
+        options_column.addWidget(self.SubtitleAdjust)
 
-        zoom_row = QHBoxLayout()
-        zoom_row.setContentsMargins(0, 0, 0, 0)
-        zoom_row.setSpacing(8)
-        zoom_row.addWidget(QLabel("缩放"))
-        self.align_zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.align_zoom_slider.setRange(20, 800)
-        self.align_zoom_slider.setValue(120)
-        self.align_zoom_slider.valueChanged.connect(lambda value: self.waveform_view.set_zoom(float(value)))
-        jump_to_end_button = QPushButton("跳到末尾")
-        jump_to_end_button.setMinimumHeight(42)
-        jump_to_end_button.setMinimumWidth(86)
-        jump_to_end_button.clicked.connect(self.waveform_view.jump_to_end)
-        self.align_jump_to_end_button = jump_to_end_button
-        reset_view_button = QPushButton("回到开头")
-        reset_view_button.setMinimumHeight(42)
-        reset_view_button.setMinimumWidth(86)
-        reset_view_button.clicked.connect(self.waveform_view.reset_view)
-        self.align_reset_view_button = reset_view_button
-        zoom_row.addWidget(self.align_zoom_slider, 1)
-        zoom_row.addSpacing(10)
-        zoom_row.addWidget(jump_to_end_button)
-        zoom_row.addWidget(reset_view_button)
-        control_layout.addLayout(zoom_row, 7, 0, 1, 2)
+        self.OriginalAdjust = CardWidget(radius=12, padding=(16, 16, 16, 16), spacing=12)
+        original_layout = self.OriginalAdjust.createVBoxLayout()
+        original_layout.addWidget(StrongBodyLabel("调整原唱音源"))
+        original_hint = BodyLabel("当前偏移会直接用于导出 WAV")
+        original_hint.setStyleSheet("color: #ff4d5e;")
+        original_layout.addWidget(original_hint)
 
-        shortcut_hint = QLabel(
-            "快捷键: 空格生成波形 / 播放 / 停止，Alt+V 切换拖动模式，Ctrl+D 自动对齐，Ctrl+S 导出当前对齐目标；自动对齐后请播放确认。"
-        )
-        shortcut_hint.setWordWrap(True)
-        shortcut_hint.setStyleSheet(
-            'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: #6b7280; '
-            'background: #f1f5f9; border-radius: 4px; padding: 4px 8px;'
-        )
-        control_layout.addWidget(shortcut_hint, 8, 0, 1, 2)
-        control_panel.setFixedHeight(max(260, control_panel.sizeHint().height()))
-        shell.addWidget(control_panel)
+        offset_value_row = QHBoxLayout()
+        offset_value_row.setContentsMargins(0, 0, 0, 0)
+        offset_value_row.setSpacing(8)
+        offset_value_row.addWidget(BodyLabel("当前偏移"))
+        self.align_offset_seconds_spin = QDoubleSpinBox()
+        self.align_offset_seconds_spin.setDecimals(3)
+        self.align_offset_seconds_spin.setRange(-99999.0, 99999.0)
+        self.align_offset_seconds_spin.setReadOnly(True)
+        self.align_offset_seconds_spin.setButtonSymbols(QAbstractSpinBox.ButtonSymbols.NoButtons)
+        self.align_offset_seconds_spin.setSuffix(" 秒")
+        offset_value_row.addWidget(self.align_offset_seconds_spin, 1)
+        original_layout.addLayout(offset_value_row)
+        self.waveform_view.offsetChanged.connect(self.align_offset_seconds_spin.setValue)
 
-        self.waveform_view.setFixedHeight(200)
-        shell.addWidget(self.waveform_view)
+        original_note_1 = BodyLabel("WAV 导出不会使用首帧补画面、尾部裁切或视频编码设置。")
+        original_note_1.setWordWrap(True)
+        original_note_1.setStyleSheet("color: #475467;")
+        original_note_2 = BodyLabel("如需更细的对齐，请使用左侧时间偏移按钮或直接拖动波形。")
+        original_note_2.setWordWrap(True)
+        original_note_2.setStyleSheet("color: #475467;")
+        original_layout.addWidget(original_note_1)
+        original_layout.addWidget(original_note_2)
+        original_layout.addStretch(1)
+        options_column.addWidget(self.OriginalAdjust)
 
-        log_panel = CardWidget(radius=10, padding=(16, 16, 16, 16), spacing=8)
-        log_layout = log_panel.createGridLayout()
-        log_layout.setVerticalSpacing(8)
-        log_title = QLabel("对齐日志")
-        log_title.setObjectName("PanelTitle")
-        self.align_log = QPlainTextEdit()
-        self.align_log.setObjectName("LogText")
-        self.align_log.setReadOnly(True)
-        self.align_log.setMinimumHeight(120)
-        log_layout.addWidget(log_title, 0, 0)
-        log_layout.addWidget(self.align_log, 1, 0)
-        log_panel.setFixedHeight(max(135, log_panel.sizeHint().height() - alignment_title_height))
-        shell.addWidget(log_panel)
-        shell.addStretch(1)
+        wrapper_layout.addLayout(options_column, 2)
 
+        export_column = QVBoxLayout()
+        export_column.setContentsMargins(0, 0, 0, 0)
+        export_column.setSpacing(14)
+
+        video_export_card = CardWidget(radius=12, padding=(16, 16, 16, 16), spacing=10)
+        video_export_layout = video_export_card.createVBoxLayout()
+        video_export_layout.addWidget(StrongBodyLabel("导出选项"))
+        video_export_desc = BodyLabel("将应用当前偏移、开头处理、尾部裁切和视频编码设置。")
+        video_export_desc.setWordWrap(True)
+        video_export_desc.setStyleSheet("color: #475467;")
+        video_export_layout.addWidget(video_export_desc)
+        self.ExportVideoBtn = PrimaryPushButton("导出对齐后视频")
+        self.ExportVideoBtn.setIcon(FIF.VIDEO.icon())
+        self.ExportVideoBtn.setMinimumHeight(40)
+        self.ExportVideoBtn.clicked.connect(lambda: self._trigger_alignment_export(ALIGN_TARGET_VIDEO))
+        video_export_layout.addStretch(1)
+        video_export_layout.addWidget(self.ExportVideoBtn)
+        export_column.addWidget(video_export_card)
+
+        wav_export_card = CardWidget(radius=12, padding=(16, 16, 16, 16), spacing=10)
+        wav_export_layout = wav_export_card.createVBoxLayout()
+        wav_export_layout.addWidget(StrongBodyLabel("导出选项"))
+        wav_export_desc = BodyLabel("会基于当前波形偏移导出修正后的高品质 WAV。")
+        wav_export_desc.setWordWrap(True)
+        wav_export_desc.setStyleSheet("color: #475467;")
+        wav_export_layout.addWidget(wav_export_desc)
+        self.ExportWAVBtn = PrimaryPushButton("导出对齐后的 WAV")
+        self.ExportWAVBtn.setIcon(FIF.MUSIC.icon())
+        self.ExportWAVBtn.setMinimumHeight(40)
+        self.ExportWAVBtn.clicked.connect(lambda: self._trigger_alignment_export(ALIGN_TARGET_AUDIO))
+        wav_export_layout.addStretch(1)
+        wav_export_layout.addWidget(self.ExportWAVBtn)
+        export_column.addWidget(wav_export_card)
+        export_column.addStretch(1)
+
+        wrapper_layout.addLayout(export_column, 1)
+        return wrapper
+
+    def _set_alignment_nudge_step(self, seconds: float) -> None:
+        self._align_nudge_step = seconds
+        button_map = {
+            self.align_step_small_button: seconds == 0.01,
+            self.align_step_large_button: seconds == 0.1,
+        }
+        for button, checked in button_map.items():
+            button.setChecked(checked)
+            button.setStyleSheet(
+                (
+                    "background: #fff1f2; border: 1px solid #ff4d5e; color: #ff2947; font-weight: 700;"
+                    if checked
+                    else "background: #ffffff; border: 1px solid #e4e7ec; color: #1f2937;"
+                )
+            )
+
+    def _trigger_alignment_export(self, target: str) -> None:
+        if target == ALIGN_TARGET_VIDEO:
+            self.align_target_video_radio.setChecked(True)
+        else:
+            self.align_target_audio_radio.setChecked(True)
+        if self.align_export_button.isEnabled():
+            self.align_export_button.click()
+
+    def _sync_alignment_export_buttons(self) -> None:
+        base_enabled = bool(getattr(self, "align_export_button", None) and self.align_export_button.isEnabled())
+        is_video_target = bool(getattr(self, "align_target_video_radio", None) and self.align_target_video_radio.isChecked())
+        if hasattr(self, "ExportVideoBtn"):
+            self.ExportVideoBtn.setEnabled(base_enabled and is_video_target)
+        if hasattr(self, "ExportWAVBtn"):
+            self.ExportWAVBtn.setEnabled(base_enabled and not is_video_target)
+
+    def _on_alignment_target_changed(self, *_args) -> None:
+        target_track = ALIGN_TARGET_VIDEO if self.align_target_video_radio.isChecked() else ALIGN_TARGET_AUDIO
+        if hasattr(self, "preview_timer"):
+            self._stop_alignment_preview(log_message=False)
+        self.waveform_view.set_target_track(target_track)
         self._refresh_align_target_ui()
-        self._refresh_alignment_preview_controls()
-        scroll.setWidget(page)
-        return scroll
+        self._set_panel_enabled(self.SubtitleAdjust, self.rb_adjust_subtitle.isChecked())
+        self._set_panel_enabled(self.OriginalAdjust, self.rb_adjust_original.isChecked())
+        self._sync_alignment_export_buttons()
+
+    def _set_panel_enabled(self, panel: QWidget, enabled: bool):
+        for w in panel.findChildren(QWidget):
+            w.setEnabled(enabled)
 
     def _load_settings_into_ui(self) -> None:
         self._loading_settings_into_ui = True
