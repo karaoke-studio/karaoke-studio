@@ -2736,12 +2736,13 @@ class KrokHelperQtApp(QMainWindow):
         panel = QWidget()
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
-        target_card = CardWidget(radius=12, padding=(16, 16, 16, 16), spacing=10)
-        target_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        target_card = CardWidget(radius=12, padding=(14, 14, 14, 14), spacing=8)
+        target_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         target_card.setStyleSheet("StrongBodyLabel { font-size: 15pt; font-weight: 700; color: #111827; }")
         target_layout = target_card.createVBoxLayout()
+        target_layout.setSpacing(6)
         target_layout.addWidget(StrongBodyLabel("对齐目标"))
 
         self.align_target_video_radio = QRadioButton("调整字幕视频")
@@ -2763,23 +2764,26 @@ class KrokHelperQtApp(QMainWindow):
         subtitle_hint.setStyleSheet("color: #667085;")
         original_hint = BodyLabel("将对齐字幕视频音轨")
         original_hint.setStyleSheet("color: #667085;")
+        subtitle_hint.setWordWrap(True)
+        original_hint.setWordWrap(True)
         target_layout.addWidget(self.align_target_video_radio)
         target_layout.addWidget(subtitle_hint)
-        target_layout.addSpacing(4)
+        target_layout.addSpacing(2)
         target_layout.addWidget(self.align_target_audio_radio)
         target_layout.addWidget(original_hint)
-        layout.addWidget(target_card, 1)
+        layout.addWidget(target_card, 0)
 
-        offset_card = CardWidget(radius=12, padding=(16, 16, 16, 16), spacing=12)
-        offset_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        offset_card = CardWidget(radius=12, padding=(14, 14, 14, 14), spacing=8)
+        offset_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         offset_card.setStyleSheet("StrongBodyLabel { font-size: 15pt; font-weight: 700; color: #111827; }")
         offset_layout = offset_card.createVBoxLayout()
+        offset_layout.setSpacing(8)
         offset_layout.addWidget(StrongBodyLabel("时间偏移"))
 
         self.align_offset_label = QLabel("字幕视频偏移 +0.000s")
-        self.align_offset_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.align_offset_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.align_offset_label.setStyleSheet(
-            'color: #ff2947; font-family: "Microsoft YaHei UI"; font-size: 15pt; font-weight: 700;'
+            'color: #ff2947; font-family: "Microsoft YaHei UI"; font-size: 14pt; font-weight: 700;'
         )
         self.label_offset = self.align_offset_label
         offset_title = offset_layout.itemAt(0).widget()
@@ -2789,7 +2793,7 @@ class KrokHelperQtApp(QMainWindow):
 
         control_row = QHBoxLayout()
         control_row.setContentsMargins(0, 0, 0, 0)
-        control_row.setSpacing(8)
+        control_row.setSpacing(6)
 
         def add_seek_column(icon: QIcon, text: str, handler: Callable[[], None]) -> None:
             column = QVBoxLayout()
@@ -2797,12 +2801,12 @@ class KrokHelperQtApp(QMainWindow):
             column.setSpacing(6)
             button = ToolButton(offset_card)
             button.setIcon(icon)
-            button.setIconSize(QSize(18, 18))
-            button.setFixedSize(36, 36)
+            button.setIconSize(QSize(16, 16))
+            button.setFixedSize(34, 34)
             button.clicked.connect(handler)
             caption = BodyLabel(text)
             caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            caption.setStyleSheet("color: #475467; font-size: 9pt;")
+            caption.setStyleSheet("color: #475467; font-size: 8.5pt;")
             column.addWidget(button, 0, Qt.AlignmentFlag.AlignCenter)
             column.addWidget(caption)
             control_row.addLayout(column)
@@ -2813,12 +2817,13 @@ class KrokHelperQtApp(QMainWindow):
         add_seek_column(FIF.CHEVRON_RIGHT.icon(), "+0.01s", lambda: self.waveform_view.nudge_offset(0.01))
         add_seek_column(FIF.CARE_RIGHT_SOLID.icon(), "+0.1s", lambda: self.waveform_view.nudge_offset(0.1))
         offset_layout.addLayout(control_row)
-        layout.addWidget(offset_card, 1)
+        layout.addWidget(offset_card, 0)
 
-        helper_card = CardWidget(radius=12, padding=(16, 16, 16, 16), spacing=10)
-        helper_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
+        helper_card = CardWidget(radius=12, padding=(14, 14, 14, 14), spacing=8)
+        helper_card.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         helper_card.setStyleSheet("StrongBodyLabel { font-size: 15pt; font-weight: 700; color: #111827; }")
         helper_layout = helper_card.createVBoxLayout()
+        helper_layout.setSpacing(8)
         helper_layout.addWidget(StrongBodyLabel("快捷键提示"))
 
         helper_title = helper_layout.itemAt(0).widget()
@@ -2833,20 +2838,22 @@ class KrokHelperQtApp(QMainWindow):
         ):
             row = QHBoxLayout()
             row.setContentsMargins(0, 0, 0, 0)
-            row.setSpacing(10)
+            row.setSpacing(8)
             key_badge = QLabel(key_text)
             key_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            key_badge.setMinimumWidth(64)
+            key_badge.setMinimumWidth(58)
             key_badge.setStyleSheet(
-                "background: #f8fafc; border: 1px solid #e4e7ec; border-radius: 8px; padding: 6px 10px;"
+                "background: #f8fafc; border: 1px solid #e4e7ec; border-radius: 8px; padding: 5px 8px;"
             )
             desc = BodyLabel(description)
             desc.setStyleSheet("color: #475467;")
+            desc.setWordWrap(True)
             row.addWidget(key_badge, 0)
             row.addWidget(desc, 1)
             helper_layout.addLayout(row)
 
-        layout.addWidget(helper_card, 1)
+        layout.addWidget(helper_card, 0)
+        layout.addStretch(1)
         return panel
 
     def _build_waveform_toolbar(self) -> QWidget:
