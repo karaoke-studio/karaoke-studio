@@ -2233,37 +2233,41 @@ class KrokHelperQtApp(QMainWindow):
                 *,
                 owner: "KrokHelperQtApp",
                 title: str,
+                media_label: str,
                 hint: str,
                 extensions: set[str],
                 icon: FIF,
+                theme: str,
                 parent: QWidget | None = None,
             ) -> None:
-                super().__init__(parent, radius=12, padding=(18, 18, 18, 18), spacing=12)
+                super().__init__(parent, radius=18, padding=(20, 20, 20, 20), spacing=14)
                 self._owner = owner
                 self.extensions = {ext.lower() for ext in extensions}
                 self.path: Path | None = None
                 self._hovered = False
                 self._drag_state = "idle"
+                self._theme = theme
                 self._default_action_text = "点击选择文件，或直接拖拽进入区域"
-                self._empty_detail_text = "时长未知"
+                self._empty_detail_text = f"{media_label}: 时长未知"
+                self._theme_palette = self._build_theme_palette(theme)
 
                 self.setObjectName("AlignmentDropCard")
                 self.setCursor(Qt.CursorShape.PointingHandCursor)
                 self.setAcceptDrops(True)
-                self.setMinimumHeight(160)
+                self.setMinimumHeight(188)
 
                 layout = self.createVBoxLayout()
-                layout.setContentsMargins(18, 18, 18, 18)
-                layout.setSpacing(12)
+                layout.setContentsMargins(20, 20, 20, 20)
+                layout.setSpacing(14)
 
                 header = QHBoxLayout()
                 header.setContentsMargins(0, 0, 0, 0)
-                header.setSpacing(14)
+                header.setSpacing(18)
 
                 self.icon_button = ToolButton(self)
                 self.icon_button.setIcon(icon.icon())
-                self.icon_button.setIconSize(QSize(32, 32))
-                self.icon_button.setFixedSize(48, 48)
+                self.icon_button.setIconSize(QSize(44, 44))
+                self.icon_button.setFixedSize(92, 92)
                 self.icon_button.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
                 self.icon_button.setStyleSheet("ToolButton { background: transparent; border: 0; padding: 0; }")
 
@@ -2305,13 +2309,13 @@ class KrokHelperQtApp(QMainWindow):
                 self.action_frame = QFrame(self)
                 self.action_frame.setObjectName("AlignmentDropAction")
                 action_layout = QHBoxLayout(self.action_frame)
-                action_layout.setContentsMargins(14, 12, 14, 12)
-                action_layout.setSpacing(8)
+                action_layout.setContentsMargins(18, 16, 18, 16)
+                action_layout.setSpacing(10)
 
                 self.action_icon = ToolButton(self.action_frame)
                 self.action_icon.setIcon(FIF.UP.icon())
-                self.action_icon.setIconSize(QSize(18, 18))
-                self.action_icon.setFixedSize(24, 24)
+                self.action_icon.setIconSize(QSize(20, 20))
+                self.action_icon.setFixedSize(28, 28)
                 self.action_icon.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
                 self.action_icon.setStyleSheet("ToolButton { background: transparent; border: 0; padding: 0; }")
 
@@ -2325,7 +2329,26 @@ class KrokHelperQtApp(QMainWindow):
                 action_layout.addWidget(self.action_label)
                 action_layout.addStretch(1)
                 layout.addWidget(self.action_frame)
+                self.file_name_label.setText("未选择文件")
+                self.detail_label.setText(self._empty_detail_text)
                 self._refresh_style()
+
+            def _build_theme_palette(self, theme: str) -> dict[str, str]:
+                if theme == "blue":
+                    return {
+                        "accent": "#4C8DFF",
+                        "accent_border": "#CFE0FF",
+                        "icon_background": "#EEF5FF",
+                        "action_background": "#F5F9FF",
+                        "hover_background": "#FAFCFF",
+                    }
+                return {
+                    "accent": "#FF5D72",
+                    "accent_border": "#FFD7DE",
+                    "icon_background": "#FFF0F3",
+                    "action_background": "#FFF7F8",
+                    "hover_background": "#FFFBFB",
+                }
 
             def accepts(self, path: Path) -> bool:
                 return path.is_file() and path.suffix.lower() in self.extensions
@@ -2400,59 +2423,103 @@ class KrokHelperQtApp(QMainWindow):
                 event.acceptProposedAction()
 
             def _refresh_style(self) -> None:
+                self._refresh_style_modern()
+                return
+
+            def _refresh_style_modern(self) -> None:
+                palette = self._theme_palette
+                is_selected = self.path is not None
+                if not is_selected:
+                    self.file_name_label.setText("未选择文件")
                 if self._drag_state == "accept":
-                    background = "#fefefe"
-                    border = "#ff4d5e"
-                    accent = "#ff4d5e"
+                    background = "#ffffff"
+                    border = palette["accent"]
+                    accent = palette["accent"]
                     border_width = 2
+                    action_background = palette["action_background"]
+                    action_border = palette["accent_border"]
                     action_text = "松开鼠标即可导入这个文件"
                 elif self._drag_state == "reject":
                     background = "#fff1f2"
                     border = "#ff4d5e"
                     accent = "#ff4d5e"
                     border_width = 2
+                    action_background = "#fff5f6"
+                    action_border = "#ffc7d0"
                     action_text = "文件类型不支持，请重新选择"
-                elif self.path is not None:
+                elif is_selected:
                     background = "#ffffff"
-                    border = "#ff4d5e"
-                    accent = "#ff4d5e"
-                    border_width = 2
+                    border = palette["accent_border"]
+                    accent = palette["accent"]
+                    border_width = 1
+                    action_background = palette["action_background"]
+                    action_border = palette["accent_border"]
                     action_text = self._default_action_text
                 elif self._hovered:
-                    background = "#fffaf9"
-                    border = "#f7c6cd"
-                    accent = "#ff4d5e"
+                    background = palette["hover_background"]
+                    border = palette["accent_border"]
+                    accent = palette["accent"]
                     border_width = 1
+                    action_background = palette["action_background"]
+                    action_border = palette["accent_border"]
                     action_text = self._default_action_text
                 else:
                     background = "#ffffff"
-                    border = "#e7eaee"
-                    accent = "#ff4d5e"
+                    border = "#E9EDF3"
+                    accent = palette["accent"]
                     border_width = 1
+                    action_background = palette["action_background"]
+                    action_border = "#E7EEF8" if self._theme == "blue" else "#F2E8EB"
                     action_text = self._default_action_text
 
-                is_selected = self.path is not None
-                self.hint_label.setVisible(not is_selected)
-                self.file_name_label.setVisible(is_selected)
-                self.detail_label.setVisible(is_selected)
+                self.hint_label.setVisible(True)
+                self.file_name_label.setVisible(True)
+                self.detail_label.setVisible(True)
+                self.detail_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
                 self.action_label.setText(action_text)
+                self.title_label.setStyleSheet("color: #182230; font-size: 16pt; font-weight: 700;")
+                self.hint_label.setStyleSheet("color: #667085; font-size: 11pt;")
+                self.file_name_label.setStyleSheet("color: #344054; font-size: 12pt; font-weight: 700;")
+                self.detail_label.setStyleSheet(
+                    'color: #98A2B3; font-family: "Microsoft YaHei UI"; font-size: 11pt; font-weight: 700;'
+                )
+                self.icon_button.setStyleSheet(
+                    f"""
+                    ToolButton {{
+                        background: {palette["icon_background"]};
+                        border: none;
+                        border-radius: 24px;
+                        padding: 0;
+                        color: {accent};
+                    }}
+                    """
+                )
+                self.action_icon.setStyleSheet(
+                    f"""
+                    ToolButton {{
+                        background: transparent;
+                        border: 0;
+                        padding: 0;
+                        color: {accent};
+                    }}
+                    """
+                )
+                self.action_label.setStyleSheet(f"color: {accent}; font-size: 12pt; font-weight: 700;")
                 self.setStyleSheet(
                     f"""
                     QFrame#AlignmentDropCard {{
                         background: {background};
                         border: {border_width}px solid {border};
-                        border-radius: 12px;
+                        border-radius: 18px;
                     }}
                     QFrame#AlignmentDropAction {{
-                        background: #fffafa;
-                        border: 1px solid #ffcdd5;
-                        border-radius: 10px;
-                    }}
-                    QFrame#AlignmentDropAction BodyLabel {{
-                        color: {accent};
+                        background: {action_background};
+                        border: 1px solid {action_border};
+                        border-radius: 14px;
                     }}
                     """
                 )
+                return
 
         class AlignmentExportProxyButton(PrimaryPushButton):
             def __init__(self, owner: "KrokHelperQtApp") -> None:
@@ -2524,7 +2591,8 @@ class KrokHelperQtApp(QMainWindow):
         header.addWidget(desc, 1, 0)
         header.addWidget(settings_button, 0, 1)
         header.setColumnStretch(0, 1)
-        shell.addLayout(header)
+        align_settings_button = settings_button
+        self.align_settings_button = align_settings_button
 
         top_row = QHBoxLayout()
         top_row.setContentsMargins(0, 0, 0, 0)
@@ -2532,55 +2600,54 @@ class KrokHelperQtApp(QMainWindow):
 
         self.align_video_zone = AlignmentDropCard(
             owner=self,
+            media_label="字幕视频",
             title="选择字幕视频",
-            hint="支持 mkv / mp4 / mov / avi\n程序会读取视频中的参考音轨，并自动推断输出目录。",
+            hint="支持 mkv / mp4 / mov / avi",
             extensions=VIDEO_EXTENSIONS,
             icon=FIF.VIDEO,
+            theme="red",
         )
         self.align_video_zone.browseRequested.connect(self._choose_align_video)
         self.align_video_zone.pathChanged.connect(self.set_align_video_path)
         self.align_video_info_label = self.align_video_zone.detail_label
+        self.align_video_zone.title_label.setText("字幕视频")
+        self.align_video_zone.hint_label.setText("支持 mkv / mp4 / mov / avi")
 
         self.align_audio_zone = AlignmentDropCard(
             owner=self,
+            media_label="原唱音源",
             title="选择原唱音频",
-            hint="支持 flac / wav / mp3 / m4a / aac / ape / alac / mkv / mp4\n可单独导出为 Hi-Res 音频，也可和伴奏一起生成。",
+            hint="支持 flac / wav / mp3 / m4a / aac / ape / alac / mkv / mp4",
             extensions=ALIGN_AUDIO_EXTENSIONS,
             icon=FIF.MUSIC,
+            theme="blue",
         )
         self.align_audio_zone.browseRequested.connect(self._choose_align_audio)
         self.align_audio_zone.pathChanged.connect(self.set_align_audio_path)
         self.align_audio_info_label = self.align_audio_zone.detail_label
+        self.align_audio_zone.title_label.setText("原唱音频")
+        self.align_audio_zone.hint_label.setText("支持 flac / wav / mp3 / m4a / aac / ape / alac / mkv / mp4")
 
         top_row.addWidget(self.align_video_zone, 1)
         top_row.addWidget(self.align_audio_zone, 1)
 
-        side_action_card = CardWidget(radius=12, padding=(16, 18, 16, 18), spacing=12)
-        side_action_card.setFixedWidth(210)
-        side_action_layout = side_action_card.createVBoxLayout()
-
         clear_button = QPushButton("清空已选文件")
         clear_button.setIcon(FIF.DELETE.icon())
         clear_button.clicked.connect(self._clear_alignment_inputs)
-        clear_button.setMinimumHeight(40)
+        clear_button.setMinimumHeight(36)
 
         self.align_stop_export_button = QPushButton("停止导出")
         self.align_stop_export_button.setIcon(FIF.CLOSE.icon())
         self.align_stop_export_button.clicked.connect(self._stop_alignment_export)
         self.align_stop_export_button.setEnabled(False)
-        self.align_stop_export_button.setMinimumHeight(40)
+        self.align_stop_export_button.setMinimumHeight(36)
 
         open_output_button = QPushButton("打开输出目录")
         open_output_button.clicked.connect(self._open_align_output_dir)
-        open_output_button.setMinimumHeight(40)
+        open_output_button.setMinimumHeight(36)
 
         self.align_open_output_button = open_output_button
         self.align_clear_button = clear_button
-        side_action_layout.addWidget(clear_button)
-        side_action_layout.addWidget(self.align_stop_export_button)
-        side_action_layout.addWidget(open_output_button)
-        side_action_layout.addStretch(1)
-        top_row.addWidget(side_action_card, 0)
         shell.addLayout(top_row)
 
         shell.addWidget(self._build_waveform_toolbar())
@@ -2833,6 +2900,17 @@ class KrokHelperQtApp(QMainWindow):
         self.align_jump_to_end_button.setMinimumHeight(36)
         self.align_jump_to_end_button.clicked.connect(self.waveform_view.jump_to_end)
         top_row.addWidget(self.align_jump_to_end_button)
+
+        for button in (
+            getattr(self, "align_clear_button", None),
+            getattr(self, "align_stop_export_button", None),
+            getattr(self, "align_open_output_button", None),
+            getattr(self, "align_settings_button", None),
+        ):
+            if button is None:
+                continue
+            button.setMinimumHeight(36)
+            top_row.addWidget(button)
         layout.addLayout(top_row)
 
         bottom_row = QHBoxLayout()
@@ -2898,8 +2976,14 @@ class KrokHelperQtApp(QMainWindow):
         def set_expanding(widget: QWidget) -> None:
             widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
 
-        def create_title_badge(text: str, *, background: str, foreground: str) -> QLabel:
-            badge = QLabel(text)
+        def create_title_badge(
+            text: str = "",
+            *,
+            background: str,
+            foreground: str,
+            icon: FIF | None = None,
+        ) -> QLabel:
+            badge = QLabel("" if icon is not None else text)
             badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
             badge.setFixedSize(34, 34)
             badge.setStyleSheet(
@@ -2913,23 +2997,33 @@ class KrokHelperQtApp(QMainWindow):
                 }}
                 """
             )
+            if icon is not None:
+                badge.setPixmap(icon.icon(color=QColor(foreground)).pixmap(QSize(18, 18)))
             return badge
 
-        def create_round_badge(text: str, *, background: str) -> QLabel:
-            badge = QLabel(text)
+        def create_round_badge(
+            text: str = "",
+            *,
+            background: str,
+            icon: FIF | None = None,
+            foreground: str = "white",
+        ) -> QLabel:
+            badge = QLabel("" if icon is not None else text)
             badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
             badge.setFixedSize(36, 36)
             badge.setStyleSheet(
                 f"""
                 QLabel {{
                     background: {background};
-                    color: white;
+                    color: {foreground};
                     border-radius: 18px;
                     font-size: 14pt;
                     font-weight: 700;
                 }}
                 """
             )
+            if icon is not None:
+                badge.setPixmap(icon.icon(color=QColor(foreground)).pixmap(QSize(18, 18)))
             return badge
 
         def create_group_card(
@@ -2939,6 +3033,7 @@ class KrokHelperQtApp(QMainWindow):
             icon_text: str,
             icon_background: str,
             icon_foreground: str,
+            icon: FIF | None = None,
         ) -> tuple[CardWidget, QVBoxLayout, QHBoxLayout]:
             card = CardWidget(radius=12, padding=(20, 20, 20, 20), spacing=12)
             set_expanding(card)
@@ -2952,6 +3047,7 @@ class KrokHelperQtApp(QMainWindow):
                     icon_text,
                     background=icon_background,
                     foreground=icon_foreground,
+                    icon=icon,
                 ),
                 0,
                 Qt.AlignmentFlag.AlignVCenter,
@@ -3000,11 +3096,16 @@ class KrokHelperQtApp(QMainWindow):
             icon_background: str,
             title: str,
             hint: str,
+            icon: FIF | None = None,
         ) -> None:
             title_row = QHBoxLayout()
             title_row.setContentsMargins(0, 0, 0, 0)
             title_row.setSpacing(12)
-            title_row.addWidget(create_round_badge(icon_text, background=icon_background), 0, Qt.AlignmentFlag.AlignTop)
+            title_row.addWidget(
+                create_round_badge(icon_text, background=icon_background, icon=icon),
+                0,
+                Qt.AlignmentFlag.AlignTop,
+            )
             title_label = StrongBodyLabel(title)
             title_label.setStyleSheet("font-size: 15pt; font-weight: 800; color: #111827;")
             title_row.addWidget(title_label, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -3062,8 +3163,9 @@ class KrokHelperQtApp(QMainWindow):
         lead_layout = lead_card.createVBoxLayout()
         add_subcard_header(
             lead_layout,
-            icon_text="?",
+            icon_text="",
             icon_background="#ff4d5e",
+            icon=FIF.SKIP_BACK,
             title="片头处理",
             hint="决定字幕视频开头如何补偿",
         )
@@ -3160,8 +3262,9 @@ class KrokHelperQtApp(QMainWindow):
         tail_layout = tail_card.createVBoxLayout()
         add_subcard_header(
             tail_layout,
-            icon_text="?",
+            icon_text="",
             icon_background="#ff4d5e",
+            icon=FIF.SKIP_FORWARD,
             title="片尾处理",
             hint="设置字幕视频尾裁",
         )
@@ -3229,9 +3332,10 @@ class KrokHelperQtApp(QMainWindow):
         original_group_card, original_group_layout, original_header = create_group_card(
             title="原唱音频处理",
             description="当目标是导出对齐音频时，可为原唱音源增加前置静音或裁掉开头片段。",
-            icon_text="?",
+            icon_text="",
             icon_background="#3b82f6",
             icon_foreground="white",
+            icon=FIF.MUSIC,
         )
         self.OriginalAdjust = original_group_card
         self.original_adjust_card = original_group_card
@@ -3256,8 +3360,9 @@ class KrokHelperQtApp(QMainWindow):
         positive_layout = positive_card.createVBoxLayout()
         add_subcard_header(
             positive_layout,
-            icon_text="?",
+            icon_text="",
             icon_background="#3b82f6",
+            icon=FIF.RIGHT_ARROW,
             title="向后偏移",
             hint="给原唱开头补充静音",
         )
@@ -3279,8 +3384,9 @@ class KrokHelperQtApp(QMainWindow):
         negative_layout = negative_card.createVBoxLayout()
         add_subcard_header(
             negative_layout,
-            icon_text="?",
+            icon_text="",
             icon_background="#3b82f6",
+            icon=FIF.LEFT_ARROW,
             title="向前偏移",
             hint="裁掉原唱开头片段",
         )
@@ -3323,6 +3429,7 @@ class KrokHelperQtApp(QMainWindow):
         video_export_options_layout.addWidget(self.align_use_video_audio_check)
 
         self.align_encode_row_widget = QWidget()
+        self.align_encode_row_widget.setStyleSheet("background: transparent;")
         encode_layout = QVBoxLayout(self.align_encode_row_widget)
         encode_layout.setContentsMargins(0, 0, 0, 0)
         encode_layout.setSpacing(6)
