@@ -326,7 +326,8 @@ dist/macos/Karaoke Helper.app
 - Python 3.10+
 - `ffmpeg`
 - `ffprobe`
-- PySide6
+- PyQt6
+- PyQt6-Fluent-Widgets
 
 ## 说明
 

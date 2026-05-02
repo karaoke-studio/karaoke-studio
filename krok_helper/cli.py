@@ -17,7 +17,7 @@ from krok_helper.pipeline import (
 from krok_helper.settings import load_app_settings
 from krok_helper.windows import enable_high_dpi_awareness, set_explicit_app_user_model_id
 
-from PySide6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication
 
 
 def parse_args() -> argparse.Namespace:
