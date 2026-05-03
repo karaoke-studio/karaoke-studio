@@ -2511,9 +2511,9 @@ class KrokHelperQtApp(QMainWindow):
                         "icon_background": "#EEF5FF",
                         "action_background": "#F5F9FF",
                         "hover_background": "#FAFCFF",
-                        "selected_background": "#F7FBFF",
-                        "selected_icon_background": "#DCEBFF",
-                        "selected_action_background": "#EEF5FF",
+                        "selected_background": "#EEF5FF",
+                        "selected_icon_background": "#CFE3FF",
+                        "selected_action_background": "#E4EEFF",
                     }
                 return {
                     "accent": "#FF5D72",
@@ -2521,9 +2521,9 @@ class KrokHelperQtApp(QMainWindow):
                     "icon_background": "#FFF0F3",
                     "action_background": "#FFF7F8",
                     "hover_background": "#FFFBFB",
-                    "selected_background": "#FFF8FA",
-                    "selected_icon_background": "#FFE3E9",
-                    "selected_action_background": "#FFF1F4",
+                    "selected_background": "#FFF1F4",
+                    "selected_icon_background": "#FFD6DE",
+                    "selected_action_background": "#FFE8ED",
                 }
 
             def accepts(self, path: Path) -> bool:
