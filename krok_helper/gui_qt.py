@@ -1265,7 +1265,7 @@ class WaveformView(QWidget):
         self._drag_start_x = 0.0
         self._drag_start_offset = 0.0
         self._drag_start_view = 0.0
-        self.track_label_width = 188
+        self.track_label_width = 152
         self.setMinimumHeight(280)
         self.setMouseTracking(True)
 
@@ -1403,9 +1403,12 @@ class WaveformView(QWidget):
         painter.drawRect(outer_rect)
 
         ruler_rect = outer_rect.adjusted(label_width, 0, 0, -(outer_rect.height() - 24))
-        painter.fillRect(ruler_rect, QColor("#fafbfc"))
+        painter.setPen(QColor("#ffffff"))
+        painter.drawLine(ruler_rect.left() + 1, ruler_rect.top(), ruler_rect.right() - 1, ruler_rect.top())
         painter.setPen(QColor("#cfd7e2"))
-        painter.drawRect(ruler_rect)
+        painter.drawLine(ruler_rect.left(), ruler_rect.top() + 1, ruler_rect.left(), ruler_rect.bottom())
+        painter.drawLine(ruler_rect.right(), ruler_rect.top() + 1, ruler_rect.right(), ruler_rect.bottom())
+        painter.drawLine(ruler_rect.left(), ruler_rect.bottom(), ruler_rect.right(), ruler_rect.bottom())
 
         content_rect = outer_rect.adjusted(0, 24, 0, 0)
         track_gap = 0
@@ -1427,14 +1430,14 @@ class WaveformView(QWidget):
             painter,
             video_rect,
             self.video_waveform,
-            QColor("#2f6fed"),
+            QColor("#dc2626"),
             self.offset_seconds if self.target_track == ALIGN_TARGET_VIDEO else 0.0,
         )
         self._draw_track(
             painter,
             audio_rect,
             self.audio_waveform,
-            QColor("#177245"),
+            QColor("#2563eb"),
             self.offset_seconds if self.target_track == ALIGN_TARGET_AUDIO else 0.0,
         )
 
@@ -1493,19 +1496,35 @@ class WaveformView(QWidget):
         painter.fillRect(rect, QColor("#ffffff"))
         painter.setPen(QColor("#d5dce6"))
         painter.drawRect(rect)
-        text_rect = rect.adjusted(10, 10, -8, -8)
+        text_rect = rect.adjusted(8, 8, -8, -8)
         title_font = QFont("Microsoft YaHei UI", 10)
         title_font.setBold(True)
+        title_metrics = QFontMetrics(title_font)
+        subtitle_text = f"总时长 {duration_text}"
         painter.setFont(title_font)
         painter.setPen(QColor("#111827"))
-        painter.drawText(text_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap, title)
         subtitle_font = QFont("Microsoft YaHei UI", 9)
+        subtitle_metrics = QFontMetrics(subtitle_font)
+        line_gap = 6
+        content_height = title_metrics.height() + line_gap + subtitle_metrics.height()
+        start_y = text_rect.top() + max(0, (text_rect.height() - content_height) // 2)
+        painter.drawText(
+            text_rect.left(),
+            start_y,
+            text_rect.width(),
+            title_metrics.height(),
+            int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
+            title,
+        )
         painter.setFont(subtitle_font)
         painter.setPen(QColor("#6b7280"))
         painter.drawText(
-            text_rect.adjusted(0, 28, 0, 0),
-            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop | Qt.TextFlag.TextWordWrap,
-            f"总时长 {duration_text}",
+            text_rect.left(),
+            start_y + title_metrics.height() + line_gap,
+            text_rect.width(),
+            subtitle_metrics.height(),
+            int(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignVCenter),
+            subtitle_text,
         )
 
     def _draw_ruler(self, painter: QPainter, rect) -> None:
