@@ -12,6 +12,7 @@ from krok_helper.audio_alignment import (
 )
 from krok_helper.pipeline import DEFAULT_OFF_NAME_TEMPLATE, DEFAULT_ON_NAME_TEMPLATE, OUTPUT_NAME_MODE_FIXED
 from krok_helper.lyrics import DEFAULT_LYRICS_PROVIDER_IDS, LYRICS_PREVIEW_LINE
+from krok_helper.video_download.download_task import NAMING_RULE_TITLE, SOURCE_YOUTUBE
 
 
 SETTINGS_FILE_NAME = "settings.json"
@@ -29,6 +30,17 @@ class AppSettings:
     lyrics_source_ids: list[str] | tuple[str, ...] = DEFAULT_LYRICS_PROVIDER_IDS
     lyrics_preview_mode: str = LYRICS_PREVIEW_LINE
     lyrics_strip_intro_lines: bool = True
+    video_download_save_dir: str = ""
+    video_download_naming_rule: str = NAMING_RULE_TITLE
+    video_download_custom_template: str = "{title}"
+    video_download_merge_video_audio: bool = True
+    video_download_download_thumbnail: bool = True
+    video_download_download_subtitle: bool = False
+    video_download_concurrent_count: int = 3
+    video_download_timeout: int = 30
+    video_download_retry_count: int = 3
+    video_download_cookie_path: str = ""
+    video_download_source: str = SOURCE_YOUTUBE
 
 
 def get_settings_path() -> Path:
@@ -76,6 +88,17 @@ def load_app_settings() -> AppSettings:
         or DEFAULT_LYRICS_PROVIDER_IDS,
         lyrics_preview_mode=str(payload.get("lyrics_preview_mode", LYRICS_PREVIEW_LINE)),
         lyrics_strip_intro_lines=bool(payload.get("lyrics_strip_intro_lines", True)),
+        video_download_save_dir=str(payload.get("video_download_save_dir", "")),
+        video_download_naming_rule=str(payload.get("video_download_naming_rule", NAMING_RULE_TITLE)),
+        video_download_custom_template=str(payload.get("video_download_custom_template", "{title}")),
+        video_download_merge_video_audio=bool(payload.get("video_download_merge_video_audio", True)),
+        video_download_download_thumbnail=bool(payload.get("video_download_download_thumbnail", True)),
+        video_download_download_subtitle=bool(payload.get("video_download_download_subtitle", False)),
+        video_download_concurrent_count=max(1, min(5, int(payload.get("video_download_concurrent_count", 3) or 3))),
+        video_download_timeout=max(5, int(payload.get("video_download_timeout", 30) or 30)),
+        video_download_retry_count=max(0, int(payload.get("video_download_retry_count", 3) or 3)),
+        video_download_cookie_path=str(payload.get("video_download_cookie_path", "")),
+        video_download_source=str(payload.get("video_download_source", SOURCE_YOUTUBE)),
     )
 
 

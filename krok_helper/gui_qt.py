@@ -112,6 +112,7 @@ from krok_helper.pipeline import (
     validate_output_name_template,
 )
 from krok_helper.settings import load_app_settings, save_app_settings
+from krok_helper.video_download import VideoDownloadPage
 from krok_helper.windows import set_explicit_app_user_model_id
 
 
@@ -1910,10 +1911,7 @@ class KrokHelperQtApp(QMainWindow):
 
         self.page_stack = QStackedWidget()
         self.page_stack.setObjectName("PageStack")
-        self.video_download_page = PlaceholderPage(
-            title="视频下载",
-            description="下载在线视频文件，为后续波形对齐和字幕生成准备素材。",
-        )
+        self.video_download_page = VideoDownloadPage(self.settings, self._save_all_settings, self)
         self.align_page = self._build_alignment_page()
         self.lyrics_page = self._build_lyrics_page()
         self.lyrics_timing_page = PlaceholderPage(
@@ -1958,6 +1956,17 @@ class KrokHelperQtApp(QMainWindow):
 
     def _handle_workflow_step_clicked(self, index: int) -> None:
         self._show_module(self.workflow_stepper.moduleIdAt(index))
+
+    def _save_all_settings(self) -> Path:
+        self.settings.output_name_mode = self.output_name_mode_value
+        self.settings.on_name_template = self.on_name_template_value
+        self.settings.off_name_template = self.off_name_template_value
+        self.settings.align_video_name_template = self.align_video_name_template_value
+        self.settings.align_audio_name_template = self.align_audio_name_template_value
+        self.settings.ffmpeg_dir = self.ffmpeg_dir_text
+        if hasattr(self, "align_use_video_audio_check"):
+            self.settings.align_export_use_video_audio = self.align_use_video_audio_check.isChecked()
+        return save_app_settings(self.settings)
 
     def _open_current_module_settings(self) -> None:
         if self.active_module == WORKFLOW_WAVEFORM_ALIGN:

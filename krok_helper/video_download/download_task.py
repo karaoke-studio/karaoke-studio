@@ -1,0 +1,88 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+
+SOURCE_YOUTUBE = "YouTube"
+SOURCE_BILIBILI = "Bilibili"
+SOURCE_UNKNOWN = "未知"
+
+TASK_STATUS_WAITING = "等待中"
+TASK_STATUS_DOWNLOADING = "下载中"
+TASK_STATUS_COMPLETED = "已完成"
+TASK_STATUS_FAILED = "失败"
+TASK_STATUS_CANCELLED = "已取消"
+
+NAMING_RULE_TITLE = "使用标题"
+NAMING_RULE_TITLE_UPLOADER = "标题 + 作者"
+NAMING_RULE_CUSTOM = "自定义模板"
+
+
+@dataclass(slots=True)
+class FormatOption:
+    option_id: str
+    download_format: str
+    format_label: str
+    resolution: str
+    video_codec: str
+    audio_codec: str
+    filesize: int | None = None
+    ext: str = ""
+    note: str = ""
+    height: int = 0
+    width: int = 0
+    is_recommended: bool = False
+    requires_merge: bool = False
+
+
+@dataclass(slots=True)
+class VideoInfo:
+    url: str
+    source: str
+    title: str
+    uploader: str
+    duration: float | None
+    thumbnail_url: str = ""
+    thumbnail_bytes: bytes = b""
+    webpage_url: str = ""
+    width: int = 0
+    height: int = 0
+    filesize: int | None = None
+    formats: list[FormatOption] = field(default_factory=list)
+    recommended_option_id: str = ""
+    subtitles_available: bool = False
+
+
+@dataclass(slots=True)
+class DownloadTask:
+    task_id: str
+    url: str
+    title: str
+    source: str
+    selected_format: FormatOption | None = None
+    output_path: Path | None = None
+    status: str = TASK_STATUS_WAITING
+    progress: float = 0.0
+    speed_text: str = ""
+    filesize: int | None = None
+    downloaded_bytes: int = 0
+    error_message: str = ""
+    local_file: Path | None = None
+    cancel_requested: bool = False
+    info: VideoInfo | None = None
+    available_formats: list[FormatOption] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class DownloadOptions:
+    save_dir: str
+    naming_rule: str = NAMING_RULE_TITLE
+    custom_template: str = "{title}"
+    merge_video_audio: bool = True
+    download_thumbnail: bool = True
+    download_subtitle: bool = False
+    concurrent_count: int = 3
+    timeout: int = 30
+    retry_count: int = 3
+    cookie_file: str = ""
