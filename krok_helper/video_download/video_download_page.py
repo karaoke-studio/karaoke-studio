@@ -33,7 +33,6 @@ from qfluentwidgets import (
     PlainTextEdit,
     PrimaryPushButton,
     PushButton,
-    SpinBox,
     TableWidget,
     ToolButton,
 )
@@ -63,6 +62,9 @@ from .ytdlp_service import DownloadCancelledError, VideoDownloadError, YtDlpServ
 
 
 DEFAULT_CUSTOM_TEMPLATE = "{title}"
+CONCURRENT_COUNT_OPTIONS = ("1", "2", "3", "4", "5")
+TIMEOUT_OPTIONS = ("5", "10", "15")
+RETRY_COUNT_OPTIONS = ("1", "2", "3", "4", "5")
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWCP_DONOTROUND = 1
 DOWNLOAD_TABLE_FIXED_WIDTHS = {
@@ -158,6 +160,78 @@ class PanelCard(QFrame):
         layout.setHorizontalSpacing(self._spacing)
         layout.setVerticalSpacing(self._spacing)
         return layout
+
+
+class ClickableFrame(QFrame):
+    clicked = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setStyleSheet("QFrame { background: transparent; border: 0; }")
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class ExpandablePanelCard(PanelCard):
+    def __init__(
+        self,
+        title: str,
+        parent: QWidget | None = None,
+        *,
+        expanded: bool = True,
+        radius: int = 16,
+        padding: tuple[int, int, int, int] = (16, 16, 16, 16),
+        spacing: int = 12,
+    ) -> None:
+        super().__init__(parent, radius=radius, padding=padding, spacing=spacing)
+        self._expanded = expanded
+
+        outer_layout = self.create_vbox()
+        outer_layout.setSpacing(0)
+
+        self.header = ClickableFrame(self)
+        header_layout = QHBoxLayout(self.header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(8)
+
+        self.title_label = QLabel(title)
+        self.title_label.setProperty("panelTitle", True)
+        self.title_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        header_layout.addWidget(self.title_label, 1)
+
+        self.toggle_button = ToolButton(self.header)
+        self.toggle_button.setFixedSize(28, 28)
+        self.toggle_button.setStyleSheet("QToolButton { background: transparent; border: 0; }")
+        header_layout.addWidget(self.toggle_button, 0, Qt.AlignmentFlag.AlignRight)
+
+        self.content_widget = QWidget(self)
+        self.content_widget.setStyleSheet("background: transparent; border: 0;")
+        self.content_widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, False)
+        self.content_layout = QVBoxLayout(self.content_widget)
+        self.content_layout.setContentsMargins(0, 12, 0, 0)
+        self.content_layout.setSpacing(spacing)
+
+        outer_layout.addWidget(self.header)
+        outer_layout.addWidget(self.content_widget)
+
+        self.header.clicked.connect(self.toggle_expanded)
+        self.toggle_button.clicked.connect(self.toggle_expanded)
+        self.set_expanded(expanded)
+
+    def set_expanded(self, expanded: bool) -> None:
+        self._expanded = expanded
+        self.content_widget.setVisible(expanded)
+        icon = FIF.CHEVRON_DOWN_MED if expanded else FIF.CHEVRON_RIGHT_MED
+        self.toggle_button.setIcon(icon.icon())
+
+    def toggle_expanded(self) -> None:
+        self.set_expanded(not self._expanded)
 
 
 class WhiteComboBoxMenu(ComboBoxMenu):
@@ -468,6 +542,13 @@ class VideoDownloadPage(QWidget):
                 font-size: 13pt;
                 font-weight: 700;
             }
+            QLabel[sectionTitle="true"] {
+                background: transparent;
+                border: 0;
+                color: #111827;
+                font-size: 11pt;
+                font-weight: 700;
+            }
             QLabel[hint="true"] {
                 background: transparent;
                 border: 0;
@@ -520,9 +601,8 @@ class VideoDownloadPage(QWidget):
         panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         layout = panel.create_vbox()
 
-        settings_card = PanelCard(panel)
-        settings_layout = settings_card.create_vbox()
-        settings_layout.addWidget(self._create_panel_title("下载设置"))
+        settings_card = ExpandablePanelCard("下载设置", panel, expanded=True)
+        settings_layout = settings_card.content_layout
 
         settings_layout.addWidget(CaptionLabel("保存路径"))
         save_path_row = QHBoxLayout()
@@ -549,6 +629,30 @@ class VideoDownloadPage(QWidget):
         self.custom_template_edit.editingFinished.connect(self._persist_settings)
         settings_layout.addWidget(self.custom_template_edit)
 
+        settings_layout.addWidget(self._create_section_title("并发下载"))
+        self.concurrent_combo = StyledComboBox()
+        self.concurrent_combo.setMinimumHeight(40)
+        self.concurrent_combo.addItems(CONCURRENT_COUNT_OPTIONS)
+        self.concurrent_combo.currentTextChanged.connect(self._persist_settings)
+        self._install_single_click_combo_behavior(self.concurrent_combo)
+        settings_layout.addWidget(self.concurrent_combo)
+
+        settings_layout.addWidget(self._create_section_title("网络设置"))
+        settings_layout.addWidget(CaptionLabel("超时时间（秒）"))
+        self.timeout_combo = StyledComboBox()
+        self.timeout_combo.setMinimumHeight(40)
+        self.timeout_combo.addItems(TIMEOUT_OPTIONS)
+        self.timeout_combo.currentTextChanged.connect(self._persist_settings)
+        self._install_single_click_combo_behavior(self.timeout_combo)
+        settings_layout.addWidget(self.timeout_combo)
+        settings_layout.addWidget(CaptionLabel("重试次数"))
+        self.retry_combo = StyledComboBox()
+        self.retry_combo.setMinimumHeight(40)
+        self.retry_combo.addItems(RETRY_COUNT_OPTIONS)
+        self.retry_combo.currentTextChanged.connect(self._persist_settings)
+        self._install_single_click_combo_behavior(self.retry_combo)
+        settings_layout.addWidget(self.retry_combo)
+
         options_card = PanelCard(panel)
         options_layout = options_card.create_vbox()
         options_layout.addWidget(self._create_panel_title("选项"))
@@ -558,32 +662,8 @@ class VideoDownloadPage(QWidget):
             checkbox.stateChanged.connect(self._persist_settings)
             options_layout.addWidget(checkbox)
 
-        concurrent_card = PanelCard(panel)
-        concurrent_layout = concurrent_card.create_vbox()
-        concurrent_layout.addWidget(self._create_panel_title("并发下载"))
-        self.concurrent_spin = SpinBox()
-        self.concurrent_spin.setRange(1, 5)
-        self.concurrent_spin.valueChanged.connect(self._persist_settings)
-        concurrent_layout.addWidget(self.concurrent_spin)
-
-        network_card = PanelCard(panel)
-        network_layout = network_card.create_vbox()
-        network_layout.addWidget(self._create_panel_title("网络设置"))
-        network_layout.addWidget(CaptionLabel("超时时间（秒）"))
-        self.timeout_spin = SpinBox()
-        self.timeout_spin.setRange(5, 300)
-        self.timeout_spin.valueChanged.connect(self._persist_settings)
-        network_layout.addWidget(self.timeout_spin)
-        network_layout.addWidget(CaptionLabel("重试次数"))
-        self.retry_spin = SpinBox()
-        self.retry_spin.setRange(0, 10)
-        self.retry_spin.valueChanged.connect(self._persist_settings)
-        network_layout.addWidget(self.retry_spin)
-
         layout.addWidget(settings_card, 0)
         layout.addWidget(options_card, 0)
-        layout.addWidget(concurrent_card, 0)
-        layout.addWidget(network_card, 0)
         layout.addStretch(1)
 
         return panel
@@ -926,6 +1006,21 @@ class VideoDownloadPage(QWidget):
         label.setProperty("panelTitle", True)
         return label
 
+    def _create_section_title(self, text: str) -> QLabel:
+        label = QLabel(text)
+        label.setProperty("sectionTitle", True)
+        return label
+
+    def _set_combo_text_or_default(self, combo: ComboBox, value: str, fallback: str) -> None:
+        target = value if value in [combo.itemText(index) for index in range(combo.count())] else fallback
+        combo.setCurrentText(target)
+
+    def _combo_int_value(self, combo: ComboBox, fallback: int) -> int:
+        try:
+            return int(combo.currentText() or fallback)
+        except (TypeError, ValueError):
+            return fallback
+
     def _load_settings(self) -> None:
         save_dir = getattr(self.settings, "video_download_save_dir", "") or str(Path.home() / "Downloads")
         self.save_dir_edit.setText(save_dir)
@@ -935,9 +1030,21 @@ class VideoDownloadPage(QWidget):
         )
         self.merge_checkbox.setChecked(bool(getattr(self.settings, "video_download_merge_video_audio", True)))
         self.thumbnail_checkbox.setChecked(bool(getattr(self.settings, "video_download_download_thumbnail", True)))
-        self.concurrent_spin.setValue(int(getattr(self.settings, "video_download_concurrent_count", 3) or 3))
-        self.timeout_spin.setValue(int(getattr(self.settings, "video_download_timeout", 30) or 30))
-        self.retry_spin.setValue(int(getattr(self.settings, "video_download_retry_count", 3) or 3))
+        self._set_combo_text_or_default(
+            self.concurrent_combo,
+            str(int(getattr(self.settings, "video_download_concurrent_count", 3) or 3)),
+            "3",
+        )
+        self._set_combo_text_or_default(
+            self.timeout_combo,
+            str(int(getattr(self.settings, "video_download_timeout", 5) or 5)),
+            "5",
+        )
+        self._set_combo_text_or_default(
+            self.retry_combo,
+            str(int(getattr(self.settings, "video_download_retry_count", 3) or 3)),
+            "3",
+        )
         self._set_source(getattr(self.settings, "video_download_source", SOURCE_YOUTUBE))
         self._handle_naming_rule_changed(self.naming_rule_combo.currentText())
 
@@ -1107,9 +1214,9 @@ class VideoDownloadPage(QWidget):
         self.settings.video_download_merge_video_audio = self.merge_checkbox.isChecked()
         self.settings.video_download_download_thumbnail = self.thumbnail_checkbox.isChecked()
         self.settings.video_download_download_subtitle = False
-        self.settings.video_download_concurrent_count = self.concurrent_spin.value()
-        self.settings.video_download_timeout = self.timeout_spin.value()
-        self.settings.video_download_retry_count = self.retry_spin.value()
+        self.settings.video_download_concurrent_count = self._combo_int_value(self.concurrent_combo, 3)
+        self.settings.video_download_timeout = self._combo_int_value(self.timeout_combo, 5)
+        self.settings.video_download_retry_count = self._combo_int_value(self.retry_combo, 3)
         self.settings.video_download_cookie_path = ""
         if save:
             self._save_settings()
@@ -1581,9 +1688,9 @@ class VideoDownloadPage(QWidget):
             merge_video_audio=self.merge_checkbox.isChecked(),
             download_thumbnail=self.thumbnail_checkbox.isChecked(),
             download_subtitle=False,
-            concurrent_count=self.concurrent_spin.value(),
-            timeout=self.timeout_spin.value(),
-            retry_count=self.retry_spin.value(),
+            concurrent_count=self._combo_int_value(self.concurrent_combo, 3),
+            timeout=self._combo_int_value(self.timeout_combo, 5),
+            retry_count=self._combo_int_value(self.retry_combo, 3),
             cookie_file=self.cookie_manager.get_cookie_path() or str(self.cookie_manager.resolved_cookie_path()),
         )
 

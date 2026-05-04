@@ -37,7 +37,7 @@ class AppSettings:
     video_download_download_thumbnail: bool = True
     video_download_download_subtitle: bool = False
     video_download_concurrent_count: int = 3
-    video_download_timeout: int = 30
+    video_download_timeout: int = 5
     video_download_retry_count: int = 3
     video_download_cookie_path: str = ""
     video_download_source: str = SOURCE_YOUTUBE
@@ -94,9 +94,13 @@ def load_app_settings() -> AppSettings:
         video_download_merge_video_audio=bool(payload.get("video_download_merge_video_audio", True)),
         video_download_download_thumbnail=bool(payload.get("video_download_download_thumbnail", True)),
         video_download_download_subtitle=bool(payload.get("video_download_download_subtitle", False)),
-        video_download_concurrent_count=max(1, min(5, int(payload.get("video_download_concurrent_count", 3) or 3))),
-        video_download_timeout=max(5, int(payload.get("video_download_timeout", 30) or 30)),
-        video_download_retry_count=max(0, int(payload.get("video_download_retry_count", 3) or 3)),
+        video_download_concurrent_count=min(5, max(1, int(payload.get("video_download_concurrent_count", 3) or 3))),
+        video_download_timeout=(
+            int(payload.get("video_download_timeout", 5) or 5)
+            if int(payload.get("video_download_timeout", 5) or 5) in (5, 10, 15)
+            else 5
+        ),
+        video_download_retry_count=min(5, max(1, int(payload.get("video_download_retry_count", 3) or 3))),
         video_download_cookie_path=str(payload.get("video_download_cookie_path", "")),
         video_download_source=str(payload.get("video_download_source", SOURCE_YOUTUBE)),
     )
