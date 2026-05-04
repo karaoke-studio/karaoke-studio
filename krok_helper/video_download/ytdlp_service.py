@@ -71,7 +71,15 @@ class YtDlpService:
         save_dir.mkdir(parents=True, exist_ok=True)
         title = task.title or (task.info.title if task.info else "未命名视频")
         uploader = task.info.uploader if task.info else ""
-        output_stem = self._build_output_stem(title=title, uploader=uploader, options=options)
+        resolution = task.selected_format.resolution if task.selected_format else ""
+        if not resolution and task.info and task.info.height:
+            resolution = f"{task.info.height}p"
+        output_stem = self._build_output_stem(
+            title=title,
+            uploader=uploader,
+            resolution=resolution,
+            options=options,
+        )
         outtmpl = str(save_dir / f"{output_stem}.%(ext)s")
         selected_format = task.selected_format.download_format if task.selected_format else "best"
         extractor_args_hint = task.info.extractor_args_hint if task.info else ""
@@ -472,7 +480,7 @@ class YtDlpService:
         except Exception:
             return b""
 
-    def _build_output_stem(self, *, title: str, uploader: str, options: DownloadOptions) -> str:
+    def _build_output_stem(self, *, title: str, uploader: str, resolution: str, options: DownloadOptions) -> str:
         safe_title = self._sanitize_filename(title or "未命名视频")
         safe_uploader = self._sanitize_filename(uploader or "未知作者")
 
@@ -488,6 +496,12 @@ class YtDlpService:
             stem = safe_title
         else:
             stem = safe_title
+
+        safe_resolution = self._sanitize_filename(resolution or "")
+        if safe_resolution:
+            suffix = f"[{safe_resolution}]"
+            if not stem.endswith(suffix):
+                stem = f"{stem} {suffix}".strip()
 
         stem = self._sanitize_filename(stem.strip())
         return stem or "video"

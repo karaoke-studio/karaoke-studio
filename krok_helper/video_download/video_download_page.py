@@ -686,87 +686,71 @@ class VideoDownloadPage(QWidget):
         source_layout.addWidget(self.youtube_button)
         source_layout.addWidget(self.bilibili_button)
 
-        cookie_card = PanelCard(panel, padding=(16, 16, 16, 14))
-        cookie_layout = cookie_card.create_vbox()
-        cookie_layout.addWidget(self._create_panel_title("Bilibili 账号"))
+        settings_card = PanelCard(panel)
+        settings_layout = settings_card.create_vbox()
+        settings_layout.addWidget(self._create_panel_title("下载设置"))
 
-        self.qr_wrapper = QWidget(cookie_card)
-        self.qr_wrapper.setStyleSheet("background: transparent; border: 0;")
-        qr_layout = QVBoxLayout(self.qr_wrapper)
-        qr_layout.setContentsMargins(0, 6, 0, 0)
-        qr_layout.setSpacing(10)
-        self.qr_placeholder = QrPlaceholder()
-        qr_layout.addWidget(self.qr_placeholder, 0, Qt.AlignmentFlag.AlignHCenter)
-        cookie_layout.addWidget(self.qr_wrapper)
+        settings_layout.addWidget(CaptionLabel("保存路径"))
+        save_path_row = QHBoxLayout()
+        save_path_row.setContentsMargins(0, 0, 0, 0)
+        save_path_row.setSpacing(8)
+        self.save_dir_edit = LineEdit()
+        self.save_dir_edit.editingFinished.connect(self._persist_settings)
+        self.save_dir_browse_button = ToolButton(FIF.FOLDER)
+        self.save_dir_browse_button.setFixedSize(38, 38)
+        self.save_dir_browse_button.clicked.connect(self._choose_save_dir)
+        save_path_row.addWidget(self.save_dir_edit, 1)
+        save_path_row.addWidget(self.save_dir_browse_button, 0)
+        settings_layout.addLayout(save_path_row)
 
-        self.account_profile_widget = QWidget(cookie_card)
-        self.account_profile_widget.setObjectName("AccountProfileWidget")
-        self.account_profile_widget.setStyleSheet(
-            """
-            QWidget#AccountProfileWidget {
-                background: #f8fafc;
-                border: 1px solid #e2e8f0;
-                border-radius: 16px;
-            }
-            QWidget#AccountProfileWidget QLabel,
-            QWidget#AccountProfileWidget BodyLabel,
-            QWidget#AccountProfileWidget CaptionLabel {
-                background: transparent;
-                border: 0;
-            }
-            """
-        )
-        account_layout = QVBoxLayout(self.account_profile_widget)
-        account_layout.setContentsMargins(16, 16, 16, 16)
-        account_layout.setSpacing(8)
-        self.account_avatar_label = AvatarLabel()
-        self.account_name_label = BodyLabel("Bilibili 用户")
-        self.account_name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.account_name_label.setStyleSheet("color: #111827; font-size: 12pt; font-weight: 700;")
-        self.account_hint_label = CaptionLabel("当前已登录 Bilibili 账号")
-        self.account_hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.account_hint_label.setStyleSheet("color: #64748b;")
-        account_layout.addWidget(self.account_avatar_label, 0, Qt.AlignmentFlag.AlignHCenter)
-        account_layout.addWidget(self.account_name_label, 0, Qt.AlignmentFlag.AlignHCenter)
-        account_layout.addWidget(self.account_hint_label, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.account_profile_widget.hide()
-        cookie_layout.addWidget(self.account_profile_widget)
+        settings_layout.addWidget(CaptionLabel("文件命名"))
+        self.naming_rule_combo = StyledComboBox()
+        self.naming_rule_combo.addItems([NAMING_RULE_TITLE, NAMING_RULE_TITLE_UPLOADER, NAMING_RULE_CUSTOM])
+        self.naming_rule_combo.currentTextChanged.connect(self._handle_naming_rule_changed)
+        self._install_single_click_combo_behavior(self.naming_rule_combo)
+        settings_layout.addWidget(self.naming_rule_combo)
 
-        status_row = QWidget(cookie_card)
-        status_row.setStyleSheet("background: transparent; border: 0;")
-        status_row_layout = QHBoxLayout(status_row)
-        status_row_layout.setContentsMargins(0, 0, 0, 0)
-        status_row_layout.setSpacing(8)
-        status_row_layout.addStretch(1)
-        self.cookie_status_dot = QFrame(status_row)
-        self.cookie_status_dot.setFixedSize(10, 10)
-        self.cookie_status_dot.setStyleSheet("background: #dc2626; border-radius: 5px;")
-        status_row_layout.addWidget(self.cookie_status_dot, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.cookie_status_text_label = BodyLabel("未登录")
-        self.cookie_status_text_label.setStyleSheet("color: #dc2626; font-weight: 700;")
-        status_row_layout.addWidget(self.cookie_status_text_label, 0, Qt.AlignmentFlag.AlignVCenter)
-        status_row_layout.addStretch(1)
-        cookie_layout.addWidget(status_row)
+        self.custom_template_edit = LineEdit()
+        self.custom_template_edit.setPlaceholderText("自定义模板，例如：{title} - {uploader}")
+        self.custom_template_edit.editingFinished.connect(self._persist_settings)
+        settings_layout.addWidget(self.custom_template_edit)
 
-        cookie_button_row = QHBoxLayout()
-        cookie_button_row.setContentsMargins(0, 0, 0, 0)
-        cookie_button_row.setSpacing(8)
-        self.refresh_cookie_button = PushButton(FIF.SYNC, "刷新状态")
-        self.refresh_cookie_button.clicked.connect(self._handle_refresh_cookie_clicked)
-        cookie_button_row.addStretch(1)
-        cookie_button_row.addWidget(self.refresh_cookie_button, 0)
-        cookie_button_row.addStretch(1)
-        cookie_layout.addLayout(cookie_button_row)
+        options_card = PanelCard(panel)
+        options_layout = options_card.create_vbox()
+        options_layout.addWidget(self._create_panel_title("选项"))
+        self.merge_checkbox = CheckBox("自动合并音视频（推荐）")
+        self.thumbnail_checkbox = CheckBox("下载封面")
+        for checkbox in (self.merge_checkbox, self.thumbnail_checkbox):
+            checkbox.stateChanged.connect(self._persist_settings)
+            options_layout.addWidget(checkbox)
 
-        tip_label = CaptionLabel("提示：登录成功后，Cookie 将自动保存到本地，下次无需重新登录。")
-        tip_label.setWordWrap(True)
-        tip_label.setStyleSheet(
-            "background: #fff7f7; border: 1px solid #fde2e4; border-radius: 12px; padding: 10px; color: #7c6470;"
-        )
-        cookie_layout.addWidget(tip_label)
+        concurrent_card = PanelCard(panel)
+        concurrent_layout = concurrent_card.create_vbox()
+        concurrent_layout.addWidget(self._create_panel_title("并发下载"))
+        self.concurrent_spin = SpinBox()
+        self.concurrent_spin.setRange(1, 5)
+        self.concurrent_spin.valueChanged.connect(self._persist_settings)
+        concurrent_layout.addWidget(self.concurrent_spin)
+
+        network_card = PanelCard(panel)
+        network_layout = network_card.create_vbox()
+        network_layout.addWidget(self._create_panel_title("网络设置"))
+        network_layout.addWidget(CaptionLabel("超时时间（秒）"))
+        self.timeout_spin = SpinBox()
+        self.timeout_spin.setRange(5, 300)
+        self.timeout_spin.valueChanged.connect(self._persist_settings)
+        network_layout.addWidget(self.timeout_spin)
+        network_layout.addWidget(CaptionLabel("重试次数"))
+        self.retry_spin = SpinBox()
+        self.retry_spin.setRange(0, 10)
+        self.retry_spin.valueChanged.connect(self._persist_settings)
+        network_layout.addWidget(self.retry_spin)
 
         layout.addWidget(source_card, 0)
-        layout.addWidget(cookie_card, 0)
+        layout.addWidget(settings_card, 0)
+        layout.addWidget(options_card, 0)
+        layout.addWidget(concurrent_card, 0)
+        layout.addWidget(network_card, 0)
         layout.addStretch(1)
 
         return panel
@@ -1001,76 +985,90 @@ class VideoDownloadPage(QWidget):
         panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         layout = panel.create_vbox()
 
-        settings_card = PanelCard(panel)
-        settings_layout = settings_card.create_vbox()
-        settings_layout.addWidget(self._create_panel_title("下载设置"))
+        cookie_card = PanelCard(panel, padding=(16, 16, 16, 14))
+        cookie_layout = cookie_card.create_vbox()
+        cookie_layout.addWidget(self._create_panel_title("Bilibili 账号"))
 
-        settings_layout.addWidget(CaptionLabel("保存路径"))
-        save_path_row = QHBoxLayout()
-        save_path_row.setContentsMargins(0, 0, 0, 0)
-        save_path_row.setSpacing(8)
-        self.save_dir_edit = LineEdit()
-        self.save_dir_edit.editingFinished.connect(self._persist_settings)
-        self.save_dir_browse_button = ToolButton(FIF.FOLDER)
-        self.save_dir_browse_button.setFixedSize(38, 38)
-        self.save_dir_browse_button.clicked.connect(self._choose_save_dir)
-        save_path_row.addWidget(self.save_dir_edit, 1)
-        save_path_row.addWidget(self.save_dir_browse_button, 0)
-        settings_layout.addLayout(save_path_row)
+        self.qr_wrapper = QWidget(cookie_card)
+        self.qr_wrapper.setStyleSheet("background: transparent; border: 0;")
+        qr_layout = QVBoxLayout(self.qr_wrapper)
+        qr_layout.setContentsMargins(0, 6, 0, 0)
+        qr_layout.setSpacing(10)
+        self.qr_placeholder = QrPlaceholder()
+        qr_layout.addWidget(self.qr_placeholder, 0, Qt.AlignmentFlag.AlignHCenter)
+        cookie_layout.addWidget(self.qr_wrapper)
 
-        settings_layout.addWidget(CaptionLabel("文件命名"))
-        self.naming_rule_combo = StyledComboBox()
-        self.naming_rule_combo.addItems([NAMING_RULE_TITLE, NAMING_RULE_TITLE_UPLOADER, NAMING_RULE_CUSTOM])
-        self.naming_rule_combo.currentTextChanged.connect(self._handle_naming_rule_changed)
-        self._install_single_click_combo_behavior(self.naming_rule_combo)
-        settings_layout.addWidget(self.naming_rule_combo)
+        self.account_profile_widget = QWidget(cookie_card)
+        self.account_profile_widget.setObjectName("AccountProfileWidget")
+        self.account_profile_widget.setStyleSheet(
+            """
+            QWidget#AccountProfileWidget {
+                background: #f8fafc;
+                border: 1px solid #e2e8f0;
+                border-radius: 16px;
+            }
+            QWidget#AccountProfileWidget QLabel,
+            QWidget#AccountProfileWidget BodyLabel,
+            QWidget#AccountProfileWidget CaptionLabel {
+                background: transparent;
+                border: 0;
+            }
+            """
+        )
+        account_layout = QVBoxLayout(self.account_profile_widget)
+        account_layout.setContentsMargins(16, 16, 16, 16)
+        account_layout.setSpacing(8)
+        self.account_avatar_label = AvatarLabel()
+        self.account_name_label = BodyLabel("Bilibili 用户")
+        self.account_name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.account_name_label.setStyleSheet("color: #111827; font-size: 12pt; font-weight: 700;")
+        self.account_hint_label = CaptionLabel("当前已登录 Bilibili 账号")
+        self.account_hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.account_hint_label.setStyleSheet("color: #64748b;")
+        account_layout.addWidget(self.account_avatar_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        account_layout.addWidget(self.account_name_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        account_layout.addWidget(self.account_hint_label, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.account_profile_widget.hide()
+        cookie_layout.addWidget(self.account_profile_widget)
 
-        self.custom_template_edit = LineEdit()
-        self.custom_template_edit.setPlaceholderText("自定义模板，例如：{title} - {uploader}")
-        self.custom_template_edit.editingFinished.connect(self._persist_settings)
-        settings_layout.addWidget(self.custom_template_edit)
+        status_row = QWidget(cookie_card)
+        status_row.setStyleSheet("background: transparent; border: 0;")
+        status_row_layout = QHBoxLayout(status_row)
+        status_row_layout.setContentsMargins(0, 0, 0, 0)
+        status_row_layout.setSpacing(8)
+        status_row_layout.addStretch(1)
+        self.cookie_status_dot = QFrame(status_row)
+        self.cookie_status_dot.setFixedSize(10, 10)
+        self.cookie_status_dot.setStyleSheet("background: #dc2626; border-radius: 5px;")
+        status_row_layout.addWidget(self.cookie_status_dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.cookie_status_text_label = BodyLabel("未登录")
+        self.cookie_status_text_label.setStyleSheet("color: #dc2626; font-weight: 700;")
+        status_row_layout.addWidget(self.cookie_status_text_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        status_row_layout.addStretch(1)
+        cookie_layout.addWidget(status_row)
 
-        options_card = PanelCard(panel)
-        options_layout = options_card.create_vbox()
-        options_layout.addWidget(self._create_panel_title("选项"))
-        self.merge_checkbox = CheckBox("自动合并音视频（推荐）")
-        self.thumbnail_checkbox = CheckBox("下载封面")
-        for checkbox in (self.merge_checkbox, self.thumbnail_checkbox):
-            checkbox.stateChanged.connect(self._persist_settings)
-            options_layout.addWidget(checkbox)
+        cookie_button_row = QHBoxLayout()
+        cookie_button_row.setContentsMargins(0, 0, 0, 0)
+        cookie_button_row.setSpacing(8)
+        self.refresh_cookie_button = PushButton(FIF.SYNC, "刷新状态")
+        self.logout_cookie_button = PushButton("退出登录")
+        self.refresh_cookie_button.clicked.connect(self._handle_refresh_cookie_clicked)
+        self.logout_cookie_button.clicked.connect(self._handle_logout_cookie_clicked)
+        cookie_button_row.addStretch(1)
+        cookie_button_row.addWidget(self.refresh_cookie_button, 0)
+        cookie_button_row.addWidget(self.logout_cookie_button, 0)
+        cookie_button_row.addStretch(1)
+        cookie_layout.addLayout(cookie_button_row)
 
-        concurrent_card = PanelCard(panel)
-        concurrent_layout = concurrent_card.create_vbox()
-        concurrent_layout.addWidget(self._create_panel_title("并发下载"))
-        self.concurrent_spin = SpinBox()
-        self.concurrent_spin.setRange(1, 5)
-        self.concurrent_spin.valueChanged.connect(self._persist_settings)
-        concurrent_layout.addWidget(self.concurrent_spin)
+        tip_label = CaptionLabel("提示：登录成功后，Cookie 将自动保存到本地，下次无需重新登录。")
+        tip_label.setWordWrap(True)
+        tip_label.setStyleSheet(
+            "background: #fff7f7; border: 1px solid #fde2e4; border-radius: 12px; padding: 10px; color: #7c6470;"
+        )
+        cookie_layout.addWidget(tip_label)
 
-        network_card = PanelCard(panel)
-        network_layout = network_card.create_vbox()
-        network_layout.addWidget(self._create_panel_title("网络设置"))
-        network_layout.addWidget(CaptionLabel("超时时间（秒）"))
-        self.timeout_spin = SpinBox()
-        self.timeout_spin.setRange(5, 300)
-        self.timeout_spin.valueChanged.connect(self._persist_settings)
-        network_layout.addWidget(self.timeout_spin)
-        network_layout.addWidget(CaptionLabel("重试次数"))
-        self.retry_spin = SpinBox()
-        self.retry_spin.setRange(0, 10)
-        self.retry_spin.valueChanged.connect(self._persist_settings)
-        network_layout.addWidget(self.retry_spin)
-
-        self.start_download_button = PrimaryPushButton(FIF.DOWNLOAD, "开始下载")
-        self.start_download_button.setMinimumHeight(44)
-        self.start_download_button.clicked.connect(self._start_all_downloads)
-
-        layout.addWidget(settings_card, 0)
-        layout.addWidget(options_card, 0)
-        layout.addWidget(concurrent_card, 0)
-        layout.addWidget(network_card, 0)
+        layout.addWidget(cookie_card, 0)
         layout.addStretch(1)
-        layout.addWidget(self.start_download_button, 0)
         return panel
 
     def _install_single_click_combo_behavior(self, combo: ComboBox) -> None:
@@ -1129,23 +1127,38 @@ class VideoDownloadPage(QWidget):
         if profile is None:
             self.account_profile_widget.hide()
             self.qr_wrapper.show()
+            self.logout_cookie_button.setEnabled(False)
             return
 
         self.account_avatar_label.set_avatar(profile.avatar_bytes, profile.nickname)
         self.account_name_label.setText(profile.nickname or "Bilibili 用户")
         self.account_profile_widget.show()
         self.qr_wrapper.hide()
+        self.logout_cookie_button.setEnabled(True)
 
     def _clear_account_profile(self) -> None:
         self.account_avatar_label.set_avatar(b"", "B")
         self.account_name_label.setText("Bilibili 用户")
         self.account_profile_widget.hide()
         self.qr_wrapper.show()
+        self.logout_cookie_button.setEnabled(False)
 
     def _handle_refresh_cookie_clicked(self) -> None:
         self._refresh_cookie_status()
         if not self.cookie_manager.check_login_status():
             self._ensure_qr_login(force_restart=True)
+
+    def _handle_logout_cookie_clicked(self) -> None:
+        if self._qr_login_worker is not None and self._qr_login_worker.isRunning():
+            self._qr_login_worker.stop()
+            self._qr_login_worker.wait(2000)
+        self.cookie_manager.clear_cookie()
+        self._recent_bilibili_login_deadline = 0.0
+        self._clear_account_profile()
+        self._set_cookie_status_display("未登录", "#dc2626")
+        self.qr_placeholder.set_message("已退出登录，正在生成新的二维码…")
+        self.parse_status_label.setText("已退出 Bilibili 登录，并清空本地 Cookie。")
+        self._ensure_qr_login(force_restart=True)
 
     def _ensure_qr_login(self, force_restart: bool = False) -> None:
         profile = self.cookie_manager.get_account_profile()
@@ -1297,31 +1310,30 @@ class VideoDownloadPage(QWidget):
         parsed_count = 0
         first_new_task_id = ""
         for info in batch.infos:
-            existing = next((task for task in self._tasks if task.url == info.url), None)
+            existing = next(
+                (
+                    task
+                    for task in self._tasks
+                    if task.url == info.url and task.status != TASK_STATUS_COMPLETED
+                ),
+                None,
+            )
             if existing is not None:
+                previous_option_id = existing.selected_format.option_id if existing.selected_format else ""
                 existing.info = info
                 existing.title = info.title
                 existing.source = info.source
                 existing.available_formats = list(info.formats)
-                existing.selected_format = self._select_default_format(info.formats)
-                existing.filesize = existing.selected_format.filesize if existing.selected_format else info.filesize
+                existing.selected_format = self._find_matching_format(existing.available_formats, previous_option_id)
+                if existing.selected_format is None:
+                    existing.selected_format = self._select_default_format(info.formats)
+                existing.filesize = self._preferred_task_filesize(existing)
                 if not self._current_task_id:
                     self._current_task_id = existing.task_id
                 parsed_count += 1
                 continue
 
-            task = DownloadTask(
-                task_id=uuid.uuid4().hex,
-                url=info.url,
-                title=info.title,
-                source=info.source,
-                selected_format=self._select_default_format(info.formats),
-                filesize=info.filesize,
-                info=info,
-                available_formats=list(info.formats),
-            )
-            if task.selected_format is not None:
-                task.filesize = task.selected_format.filesize or task.filesize
+            task = self._create_download_task(info)
             self._tasks.append(task)
             self._task_index[task.task_id] = task
             parsed_count += 1
@@ -1361,6 +1373,50 @@ class VideoDownloadPage(QWidget):
                 return option
         return formats[0] if formats else None
 
+    def _find_matching_format(self, formats: list[FormatOption], option_id: str) -> FormatOption | None:
+        if not option_id:
+            return None
+        for option in formats:
+            if option.option_id == option_id:
+                return option
+        return None
+
+    def _preferred_task_filesize(self, task: DownloadTask) -> int | None:
+        if task.selected_format and task.selected_format.filesize:
+            return task.selected_format.filesize
+        if task.info and task.info.filesize:
+            return task.info.filesize
+        return task.filesize
+
+    def _create_download_task(self, info: VideoInfo, selected_option_id: str = "") -> DownloadTask:
+        available_formats = list(info.formats)
+        selected_format = self._find_matching_format(available_formats, selected_option_id)
+        if selected_format is None:
+            selected_format = self._select_default_format(available_formats)
+        task = DownloadTask(
+            task_id=uuid.uuid4().hex,
+            url=info.url,
+            title=info.title,
+            source=info.source,
+            selected_format=selected_format,
+            filesize=info.filesize,
+            info=info,
+            available_formats=available_formats,
+        )
+        task.filesize = self._preferred_task_filesize(task)
+        return task
+
+    def _duplicate_completed_task_for_format(self, task: DownloadTask, option: FormatOption) -> DownloadTask | None:
+        if task.info is None:
+            return None
+        duplicated = self._create_download_task(task.info, selected_option_id=option.option_id)
+        duplicated.source = task.source
+        duplicated.title = task.title
+        self._tasks.append(duplicated)
+        self._task_index[duplicated.task_id] = duplicated
+        self._current_task_id = duplicated.task_id
+        return duplicated
+
     def _refresh_preview(self) -> None:
         task = self._current_task()
         if task is None or task.info is None:
@@ -1390,7 +1446,7 @@ class VideoDownloadPage(QWidget):
 
         selected_format = task.selected_format
         resolution = selected_format.resolution if selected_format else (f"{info.height}p" if info.height else "-")
-        size_text = format_bytes(selected_format.filesize if selected_format else info.filesize)
+        size_text = format_bytes(self._preferred_task_filesize(task))
         self.info_value_labels["title"].setText(info.title or "-")
         self.info_value_labels["uploader"].setText(info.uploader or "-")
         self.info_value_labels["duration"].setText(format_duration(info.duration))
@@ -1513,6 +1569,17 @@ class VideoDownloadPage(QWidget):
         if task is None:
             return
 
+        option = self._format_options[index]
+        if task.selected_format and task.selected_format.option_id == option.option_id:
+            return
+        if task.status == TASK_STATUS_COMPLETED:
+            duplicated = self._duplicate_completed_task_for_format(task, option)
+            if duplicated is not None:
+                self.parse_status_label.setText(f"已基于 {task.title} 新建一个下载任务，可继续选择清晰度后开始下载。")
+                self._refresh_preview()
+                self._refresh_download_table()
+            return
+
         self._format_table_updating = True
         for row in range(len(self._format_options)):
             row_item = self.format_table.item(row, 0)
@@ -1521,9 +1588,8 @@ class VideoDownloadPage(QWidget):
             row_item.setCheckState(Qt.CheckState.Checked if row == index else Qt.CheckState.Unchecked)
         self._format_table_updating = False
 
-        option = self._format_options[index]
         task.selected_format = option
-        task.filesize = option.filesize or (task.info.filesize if task.info else None)
+        task.filesize = self._preferred_task_filesize(task)
         self._set_format_summary(option)
         self._refresh_preview()
         self._refresh_download_table()
@@ -1626,6 +1692,7 @@ class VideoDownloadPage(QWidget):
         task.progress = 0.0
         task.speed_text = ""
         task.downloaded_bytes = 0
+        task.filesize = self._preferred_task_filesize(task)
         task.progress_total_phases = 2 if task.selected_format and task.selected_format.requires_merge else 1
         task.progress_phase_index = 0
         task.progress_phase_bytes = 0
@@ -1750,12 +1817,15 @@ class VideoDownloadPage(QWidget):
         self._update_task_download_phase(task, payload)
         task.downloaded_bytes = downloaded_bytes
         phase_progress = 0.0
+        preferred_filesize = self._preferred_task_filesize(task)
         if total_bytes > 0:
             phase_progress = downloaded_bytes * 100 / total_bytes
-            task.filesize = total_bytes
+            if preferred_filesize is None:
+                task.filesize = total_bytes
         elif estimated_bytes > 0 and downloaded_bytes > 0:
             phase_progress = downloaded_bytes * 100 / estimated_bytes
-            task.filesize = estimated_bytes
+            if preferred_filesize is None:
+                task.filesize = estimated_bytes
         elif fragment_count > 0 and fragment_index > 0:
             phase_progress = fragment_index * 100 / fragment_count
         elif downloaded_bytes > 0:
@@ -1781,6 +1851,11 @@ class VideoDownloadPage(QWidget):
         task.status = TASK_STATUS_COMPLETED
         task.progress = 100.0
         task.speed_text = ""
+        if task.local_file and task.local_file.exists():
+            try:
+                task.filesize = task.local_file.stat().st_size
+            except OSError:
+                task.filesize = self._preferred_task_filesize(task)
         self.parse_status_label.setText(f"下载完成：{task.title}")
         self._refresh_download_table()
         self._start_pending_downloads()
