@@ -3139,8 +3139,9 @@ class KrokHelperQtApp(QMainWindow):
                 if not is_chip:
                     self.title_label.setText(self._media_label)
                 self.title_label.setStyleSheet(
-                    f"color: {palette['accent']}; font-size: {'11.5pt' if is_chip else '16pt'}; font-weight: 700; background: transparent; border: 0;"
+                    f"color: {palette['accent']}; font-size: {'11.5pt' if is_chip else '16pt'}; background: transparent; border: 0;"
                 )
+                self.title_label.setFont(build_app_ui_font(point_size=11.5 if is_chip else 16, bold=True))
                 self.hint_label.setStyleSheet("color: #667085; font-size: 11pt; background: transparent; border: 0;")
                 self.file_name_label.setStyleSheet(
                     f"color: {'#182230' if is_selected else '#344054'}; font-size: {'10.5pt' if is_chip else '12pt'}; font-weight: 400; background: transparent; border: 0;"
@@ -3154,10 +3155,10 @@ class KrokHelperQtApp(QMainWindow):
                         border-radius: 10px;
                         padding: 3px 10px;
                         font-size: 9.5pt;
-                        font-weight: 700;
                     }}
                     """
                 )
+                self.file_state_badge.setFont(build_app_ui_font(point_size=9.5, bold=True))
                 self.ready_duration_label.setStyleSheet(
                     'color: #667085; font-family: "Microsoft YaHei UI"; font-size: 11pt; font-weight: 400; background: transparent; border: 0;'
                 )
@@ -3351,8 +3352,9 @@ class KrokHelperQtApp(QMainWindow):
         self.align_material_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.align_material_status_label.setStyleSheet(
             "background: #FFF1F2; color: #F04452; border: 1px solid #FFD1D8; "
-            "border-radius: 7px; padding: 4px 10px; font-weight: 700;"
+            "border-radius: 7px; padding: 4px 10px;"
         )
+        self.align_material_status_label.setFont(build_app_ui_font(point_size=10.5, bold=True))
         material_header.addWidget(material_title)
         material_header.addWidget(self.align_material_status_label)
         material_header.addStretch(1)
@@ -3883,8 +3885,9 @@ class KrokHelperQtApp(QMainWindow):
         self.align_offset_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.align_offset_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.align_offset_label.setStyleSheet(
-            'color: #2F6BFF; font-family: "Microsoft YaHei UI"; font-size: 24pt; font-weight: 700; background: transparent; border: 0;'
+            'color: #2F6BFF; font-family: "Microsoft YaHei UI"; font-size: 24pt; background: transparent; border: 0;'
         )
+        self.align_offset_label.setFont(build_app_ui_font(point_size=24, bold=True))
         audio_offset_layout.addStretch(1)
         audio_offset_layout.addWidget(audio_offset_title)
         audio_offset_layout.addWidget(self.align_offset_label)
@@ -3936,6 +3939,7 @@ class KrokHelperQtApp(QMainWindow):
         export_layout.addWidget(self.align_export_duration_label)
         export_layout.addWidget(self.align_export_origin_label)
         self.align_mode_export_button = PrimaryPushButton("导出对齐视频  Ctrl+S")
+        self.align_mode_export_button.setFont(build_app_ui_font(point_size=11, bold=True))
         self.align_mode_export_button.setMinimumHeight(46)
         self.align_mode_export_button.clicked.connect(
             lambda: self._trigger_alignment_export(
@@ -3986,7 +3990,6 @@ class KrokHelperQtApp(QMainWindow):
             " border: none;"
             " border-radius: 6px;"
             " padding: 6px 12px;"
-            " font-weight: 700;"
             "}"
         )
         unselected_style = (
@@ -3996,7 +3999,6 @@ class KrokHelperQtApp(QMainWindow):
             " border: 1px solid #e5e7eb;"
             " border-radius: 6px;"
             " padding: 6px 12px;"
-            " font-weight: 400;"
             "}"
             "QPushButton:hover {"
             " background: #fff1f2;"
@@ -4011,7 +4013,6 @@ class KrokHelperQtApp(QMainWindow):
             " border: 1px solid #e5e7eb;"
             " border-radius: 6px;"
             " padding: 6px 12px;"
-            " font-weight: 400;"
             "}"
         )
         for key, button in button_map.items():
@@ -4019,8 +4020,11 @@ class KrokHelperQtApp(QMainWindow):
                 continue
             if not button.isEnabled():
                 button.setStyleSheet(disabled_style)
+                button.setFont(build_app_ui_font(point_size=10.5, bold=False))
             else:
-                button.setStyleSheet(selected_style if selected_key and key == selected_key else unselected_style)
+                is_selected = bool(selected_key and key == selected_key)
+                button.setStyleSheet(selected_style if is_selected else unselected_style)
+                button.setFont(build_app_ui_font(point_size=10.5, bold=is_selected))
 
     def _on_offset_finalized(self, seconds: float) -> None:
         if not hasattr(self, "align_target_video_radio") or not self.align_target_video_radio.isChecked():
@@ -4085,9 +4089,10 @@ class KrokHelperQtApp(QMainWindow):
         }
         for button, checked in button_map.items():
             button.setChecked(checked)
+            button.setFont(build_app_ui_font(point_size=10.5, bold=checked))
             button.setStyleSheet(
                 (
-                    "background: #fff1f2; border: 1px solid #ff4d5e; color: #ff2947; font-weight: 700;"
+                    "background: #fff1f2; border: 1px solid #ff4d5e; color: #ff2947;"
                     if checked
                     else "background: #ffffff; border: 1px solid #e4e7ec; color: #1f2937;"
                 )
@@ -4177,13 +4182,11 @@ class KrokHelperQtApp(QMainWindow):
             border: 0;
             border-radius: 7px;
             padding: 8px 12px;
-            font-weight: 500;
         }}
         QPushButton:checked {{
             background: {accent};
             color: #FFFFFF;
             border: 0;
-            font-weight: 700;
         }}
         QPushButton:disabled {{
             background: transparent;
@@ -4196,6 +4199,12 @@ class KrokHelperQtApp(QMainWindow):
             self.align_target_audio_button.setChecked(self.align_target_audio_radio.isChecked())
             self.align_target_video_button.setStyleSheet(segment_button_style)
             self.align_target_audio_button.setStyleSheet(segment_button_style)
+            self.align_target_video_button.setFont(
+                build_app_ui_font(point_size=10.5, bold=self.align_target_video_button.isChecked())
+            )
+            self.align_target_audio_button.setFont(
+                build_app_ui_font(point_size=10.5, bold=self.align_target_audio_button.isChecked())
+            )
         button_style = f"""
         QPushButton {{
             background: {accent};
@@ -4203,7 +4212,6 @@ class KrokHelperQtApp(QMainWindow):
             border: 0;
             border-radius: 8px;
             padding: 7px 14px;
-            font-weight: 700;
             font-size: 11pt;
         }}
         QPushButton:disabled {{
@@ -4213,11 +4221,13 @@ class KrokHelperQtApp(QMainWindow):
         """
         if hasattr(self, "align_mode_export_button"):
             self.align_mode_export_button.setStyleSheet(button_style)
+            self.align_mode_export_button.setFont(build_app_ui_font(point_size=11, bold=True))
         if hasattr(self, "align_offset_label"):
             self.align_offset_label.setText(format_offset(self.waveform_view.offset_seconds))
             self.align_offset_label.setStyleSheet(
-                f'color: {accent}; font-family: "Microsoft YaHei UI"; font-size: 24pt; font-weight: 700; background: transparent; border: 0;'
+                f'color: {accent}; font-family: "Microsoft YaHei UI"; font-size: 24pt; background: transparent; border: 0;'
             )
+            self.align_offset_label.setFont(build_app_ui_font(point_size=24, bold=True))
         if hasattr(self, "align_nudge_panel"):
             self.align_nudge_panel.setStyleSheet(
                 f"""
@@ -4492,8 +4502,9 @@ class KrokHelperQtApp(QMainWindow):
             self.align_audio_zone.set_balanced_height(balanced_height)
         self.align_material_status_label.setText(status_text)
         self.align_material_status_label.setStyleSheet(
-            f"{status_style} border-radius: 7px; padding: 2px 10px; font-weight: 700;"
+            f"{status_style} border-radius: 7px; padding: 2px 10px;"
         )
+        self.align_material_status_label.setFont(build_app_ui_font(point_size=10.5, bold=True))
         if self.align_clear_button is not None:
             self.align_clear_button.setVisible(count >= 1)
         if hasattr(self, "align_waveform_placeholder"):
