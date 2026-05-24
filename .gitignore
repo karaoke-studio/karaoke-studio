@@ -32,3 +32,6 @@ tmp-test/
 *.log
 docs/Codex启动文档-.NET8-CSharp-WinUI3重构指南.md
 docs/功能文档-当前项目与WinUI3重构参考.md
+docs/波形对齐重构自测脚本.md
+docs/波形对齐操作流程图.png
+docs/波形对齐模块UI重构指导.md
