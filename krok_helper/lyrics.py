@@ -412,6 +412,7 @@ class QqMusicLyricsProvider:
             return candidate
         payload = candidate.provider_payload if isinstance(candidate.provider_payload, dict) else {}
         song_mid = str(payload.get("mid") or "").strip()
+        song_id = _coerce_int(payload.get("id") or candidate.track_id)
         if not song_mid:
             raise LyricsSearchError(f"{self.provider_name} 缺少 songmid，无法加载歌词。")
 
@@ -444,10 +445,32 @@ class QqMusicLyricsProvider:
 
         line_lyrics = _coerce_qq_lyric(response.get("lyric"))
         plain_lyrics = _strip_lrc_timestamps(line_lyrics)
-        translation_lyrics = _coerce_qq_lyric(response.get("trans"))
+        translation_lyrics = _strip_qq_translation_placeholders(_coerce_qq_lyric(response.get("trans")))
+        modern_payload: dict = {}
+        if not translation_lyrics:
+            try:
+                modern_payload = self._fetch_play_lyric_info(song_mid, song_id)
+            except LyricsSearchError:
+                modern_payload = {}
+            if modern_payload:
+                translation_lyrics = _strip_qq_translation_placeholders(
+                    _coerce_qq_lyric(
+                        modern_payload.get("trans")
+                        or modern_payload.get("transLyric")
+                        or modern_payload.get("translate")
+                        or modern_payload.get("translation")
+                        or modern_payload.get("lt_lyric")
+                    )
+                )
+                if not line_lyrics:
+                    line_lyrics = _coerce_qq_lyric(modern_payload.get("lyric"))
+                    plain_lyrics = _strip_lrc_timestamps(line_lyrics)
         if not line_lyrics and not plain_lyrics:
             raise LyricsSearchError(f"{self.provider_name} 没有返回可用歌词。")
 
+        if modern_payload:
+            response = dict(response)
+            response["modern"] = modern_payload
         candidate.lyrics_payload = response
         candidate.line_lyrics = line_lyrics
         candidate.verbatim_lyrics = ""
@@ -455,6 +478,44 @@ class QqMusicLyricsProvider:
         candidate.translation_lyrics = translation_lyrics
         candidate.lyrics_loaded = True
         return candidate
+
+    def _fetch_play_lyric_info(self, song_mid: str, song_id: int | None = None) -> dict:
+        payload = {
+            "comm": {
+                "ct": 11,
+                "cv": "1003006",
+                "v": "1003006",
+                "tmeAppID": "qqmusic",
+            },
+            "req": {
+                "module": "music.musichallSong.PlayLyricInfo",
+                "method": "GetPlayLyricInfo",
+                "param": {
+                    "songMID": song_mid,
+                    "songID": song_id or 0,
+                    "qrc": 0,
+                    "trans": 1,
+                    "roma": 0,
+                },
+            },
+        }
+        request = Request(
+            "https://u.y.qq.com/cgi-bin/musicu.fcg",
+            data=json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "Referer": "https://y.qq.com/",
+                "User-Agent": "Mozilla/5.0",
+            },
+        )
+        response = _load_json_from_request(request)
+        if not isinstance(response, dict):
+            return {}
+        data = response.get("req", {})
+        if not isinstance(data, dict):
+            return {}
+        lyric_data = data.get("data", {})
+        return lyric_data if isinstance(lyric_data, dict) else {}
 
 
 class KugouLyricsProvider:
@@ -577,10 +638,11 @@ class KugouLyricsProvider:
                 raw_krc = _decrypt_kugou_krc(base64.b64decode(content))
             except (ValueError, zlib.error, binascii.Error) as exc:
                 raise LyricsSearchError(f"{self.provider_name} 解密歌词失败: {exc}") from exc
-            line_lyrics, verbatim_lyrics, plain_lyrics = _convert_krc_text(raw_krc)
+            line_lyrics, verbatim_lyrics, plain_lyrics, translation_lyrics = _convert_krc_text(raw_krc)
             candidate.line_lyrics = line_lyrics
             candidate.verbatim_lyrics = verbatim_lyrics
             candidate.plain_lyrics = plain_lyrics
+            candidate.translation_lyrics = translation_lyrics
 
         candidate.lyrics_payload = {"lyric_info": lyric_info, "download": download_response}
         candidate.lyrics_loaded = bool(candidate.line_lyrics or candidate.verbatim_lyrics or candidate.plain_lyrics)
@@ -980,6 +1042,13 @@ def _coerce_float(value: object) -> float | None:
         return None
 
 
+def _coerce_int(value: object) -> int | None:
+    try:
+        return int(value) if value not in (None, "") else None
+    except (TypeError, ValueError):
+        return None
+
+
 def _sanitize_lrc_text(text: str) -> str:
     if not text.strip():
         return ""
@@ -1188,6 +1257,18 @@ def _coerce_qq_lyric(value: object) -> str:
     return _sanitize_lrc_text(decoded)
 
 
+def _strip_qq_translation_placeholders(text: str) -> str:
+    if not text.strip():
+        return ""
+    kept_lines: list[str] = []
+    for line in text.splitlines():
+        body = _LRC_TIMESTAMP_TOKEN_PATTERN.sub("", line).strip()
+        if body == "//":
+            continue
+        kept_lines.append(line)
+    return "\n".join(kept_lines).strip()
+
+
 def _build_kugou_signature(params: dict[str, str]) -> str:
     joined = "".join(
         f"{key}={json.dumps(value, ensure_ascii=False) if isinstance(value, dict) else value}"
@@ -1205,9 +1286,10 @@ def _decrypt_kugou_krc(payload: bytes) -> str:
     return zlib.decompress(bytes(decrypted)).decode("utf-8", "replace").lstrip("\ufeff")
 
 
-def _convert_krc_text(text: str) -> tuple[str, str, str]:
+def _convert_krc_text(text: str) -> tuple[str, str, str, str]:
     line_parts: list[str] = []
     verbatim_parts: list[str] = []
+    line_starts: list[int] = []
 
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -1215,6 +1297,7 @@ def _convert_krc_text(text: str) -> tuple[str, str, str]:
         if not match:
             continue
         line_start = int(match.group(1))
+        line_starts.append(line_start)
         line_content = match.group(3)
         words = list(_KRC_WORD_PATTERN.finditer(line_content))
         if not words:
@@ -1240,7 +1323,63 @@ def _convert_krc_text(text: str) -> tuple[str, str, str]:
     line_lyrics = _sanitize_lrc_text("\n".join(line_parts))
     verbatim_lyrics = _sanitize_lrc_text("\n".join([part for part in verbatim_parts if part]))
     plain_lyrics = _strip_lrc_timestamps(line_lyrics) or _strip_lrc_timestamps(verbatim_lyrics)
-    return line_lyrics, verbatim_lyrics, plain_lyrics
+    translation_lyrics = _extract_kugou_language_translation(text, line_starts)
+    return line_lyrics, verbatim_lyrics, plain_lyrics, translation_lyrics
+
+
+def _extract_kugou_language_translation(text: str, line_starts: list[int]) -> str:
+    translation_parts: list[str] = []
+    for raw_match in re.finditer(r"^\[language:([^\]]+)\]", text, flags=re.MULTILINE):
+        encoded = raw_match.group(1).strip()
+        if not encoded:
+            continue
+        try:
+            padding = "=" * (-len(encoded) % 4)
+            payload = json.loads(base64.b64decode(encoded + padding).decode("utf-8", "replace"))
+        except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError, ValueError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        for language_item in payload.get("content", []):
+            if not isinstance(language_item, dict):
+                continue
+            try:
+                item_type = int(language_item.get("type") or -1)
+            except (TypeError, ValueError):
+                continue
+            if item_type != 1:
+                continue
+            lyric_rows = language_item.get("lyricContent")
+            if not isinstance(lyric_rows, list):
+                continue
+            for index, row in enumerate(lyric_rows):
+                if index >= len(line_starts):
+                    break
+                translated_text = _flatten_kugou_language_row(row)
+                if not translated_text or _is_kugou_translation_credit(translated_text):
+                    continue
+                translation_parts.append(f"[{format_lrc_timestamp(line_starts[index])}]{translated_text}")
+    return _sanitize_lrc_text("\n".join(translation_parts))
+
+
+def _flatten_kugou_language_row(row: object) -> str:
+    if isinstance(row, list):
+        text = "".join(str(part or "") for part in row)
+    else:
+        text = str(row or "")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _is_kugou_translation_credit(text: str) -> bool:
+    normalized = _normalize_text(text)
+    return any(
+        marker in normalized
+        for marker in (
+            "以下歌词翻译由",
+            "歌词翻译由",
+            "文曲大模型提供",
+        )
+    )
 
 
 def _convert_yrc_text(text: str) -> tuple[str, str, str]:

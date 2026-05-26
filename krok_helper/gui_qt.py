@@ -236,15 +236,6 @@ def build_lyrics_ui_font(*, point_size: float = 10.5, bold: bool = False) -> QFo
     return build_app_ui_font(point_size=point_size, bold=bold)
 
 
-def build_lyrics_mono_font(*, point_size: float = 10.5) -> QFont:
-    font = QFont()
-    font.setFamilies(["Consolas", "Microsoft YaHei UI", "Meiryo UI"])
-    font.setPointSizeF(point_size)
-    font.setStyleStrategy(QFont.StyleStrategy.PreferDefault)
-    font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
-    return font
-
-
 def sync_fluent_ui_fonts() -> None:
     qconfig.set(qconfig.fontFamilies, DEFAULT_UI_FONT_FAMILIES, save=False)
 
@@ -1945,8 +1936,7 @@ class KrokHelperQtApp(QMainWindow):
                 border: 1px solid #DDE5EF;
                 border-radius: 8px;
                 color: #1E293B;
-                font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI";
-                font-size: 10.5pt;
+                font-size: 11pt;
                 padding: 12px 14px;
                 selection-background-color: #FAD7DE;
                 selection-color: #111827;
@@ -2437,7 +2427,7 @@ class KrokHelperQtApp(QMainWindow):
         self.lyrics_preview_edit = QPlainTextEdit()
         self.lyrics_preview_edit.setReadOnly(True)
         self.lyrics_preview_edit.setObjectName("LyricsPreviewText")
-        self.lyrics_preview_edit.setFont(build_lyrics_mono_font(point_size=10.5))
+        self.lyrics_preview_edit.setFont(build_lyrics_ui_font(point_size=11))
         self.lyrics_preview_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.lyrics_preview_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.lyrics_preview_edit.setPlaceholderText("歌词会显示在这里。")
