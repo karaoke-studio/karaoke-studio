@@ -71,6 +71,14 @@ VIDEO_DETAILS_CARD_HEIGHT = 398
 PLATFORM_STATUS_LOGGED_IN = "#22c55e"
 PLATFORM_STATUS_LOGGED_OUT = "#f43f5e"
 PLATFORM_STATUS_PENDING = "#b45309"
+SEGMENT_STYLE_NORMAL = (
+    "QFrame { background: transparent; border: 0; border-radius: 7px; }"
+)
+SEGMENT_STYLE_SELECTED = (
+    "QFrame { background: #FFF1F2; border: 1px solid #fda4af; border-radius: 7px; }"
+)
+SEGMENT_TITLE_COLOR_NORMAL = "#475467"
+SEGMENT_TITLE_COLOR_SELECTED = "#111827"
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWCP_DONOTROUND = 1
 DOWNLOAD_TABLE_FIXED_WIDTHS = {
@@ -1020,15 +1028,6 @@ class VideoDownloadPage(QWidget):
                 border: 1px solid #e5e7eb;
                 border-radius: 8px;
             }
-            QFrame[segment="true"] {
-                background: transparent;
-                border: 0;
-                border-radius: 7px;
-            }
-            QFrame[segment="true"][selected="true"] {
-                background: #FFF1F2;
-                border: 1px solid #fda4af;
-            }
             """
         )
         segment_layout = QHBoxLayout(self.account_segment_row)
@@ -1053,14 +1052,16 @@ class VideoDownloadPage(QWidget):
 
     def _create_account_segment(self, title: str) -> ClickableFrame:
         segment = ClickableFrame()
-        segment.setProperty("segment", True)
         segment.setFixedHeight(34)
+        segment.setStyleSheet(SEGMENT_STYLE_NORMAL)
         layout = QHBoxLayout(segment)
         layout.setContentsMargins(10, 0, 10, 0)
         layout.setSpacing(8)
         layout.addStretch(1)
         title_label = BodyLabel(title)
-        title_label.setStyleSheet("color: #111827; font-weight: 400;")
+        title_label.setStyleSheet(
+            f"background: transparent; border: 0; color: {SEGMENT_TITLE_COLOR_NORMAL}; font-weight: 400;"
+        )
         dot = QFrame(segment)
         dot.setFixedSize(10, 10)
         dot.setStyleSheet(f"background: {PLATFORM_STATUS_LOGGED_OUT}; border-radius: 5px;")
@@ -1068,6 +1069,7 @@ class VideoDownloadPage(QWidget):
         layout.addWidget(dot, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addStretch(1)
         segment.status_dot = dot  # type: ignore[attr-defined]
+        segment.title_label = title_label  # type: ignore[attr-defined]
         return segment
 
     def _build_bilibili_account_panel(self, parent: QWidget) -> QWidget:
@@ -1160,44 +1162,45 @@ class VideoDownloadPage(QWidget):
         self.youtube_qr_placeholder.set_message("设备码登录敬请期待")
         self.youtube_qr_placeholder.setToolTip("TODO: 后续接入 yt-dlp OAuth 设备码流程。")
         layout.addWidget(self.youtube_qr_placeholder, 0, Qt.AlignmentFlag.AlignHCenter)
-        oauth_hint = CaptionLabel("扫码 / 设备码登录")
-        oauth_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        oauth_hint.setStyleSheet("color: #64748b;")
-        layout.addWidget(oauth_hint)
 
-        import_title = BodyLabel("从浏览器导入 Cookie")
-        import_title.setStyleSheet("color: #111827; font-weight: 400;")
-        layout.addWidget(import_title)
-
-        import_row = QHBoxLayout()
-        import_row.setContentsMargins(0, 0, 0, 0)
-        import_row.setSpacing(8)
-        self.youtube_browser_combo = StyledComboBox()
-        self.youtube_browser_combo.addItems(["Chrome", "Edge", "Firefox"])
-        self._install_single_click_combo_behavior(self.youtube_browser_combo)
-        self.import_youtube_cookie_button = PushButton("导入")
-        self.import_youtube_cookie_button.clicked.connect(self._handle_import_youtube_cookie_clicked)
-        import_row.addWidget(self.youtube_browser_combo, 1)
-        import_row.addWidget(self.import_youtube_cookie_button, 0)
-        layout.addLayout(import_row)
-
-        status_row = QHBoxLayout()
-        status_row.setContentsMargins(0, 0, 0, 0)
-        status_row.setSpacing(8)
-        self.youtube_status_dot = QFrame(panel)
+        # Inline status row directly under the QR (replaces the previous
+        # "扫码 / 设备码登录" caption; surfaces the actually useful info).
+        inline_status_row = QWidget(panel)
+        inline_status_row.setStyleSheet("background: transparent; border: 0;")
+        inline_status_layout = QHBoxLayout(inline_status_row)
+        inline_status_layout.setContentsMargins(0, 0, 0, 0)
+        inline_status_layout.setSpacing(8)
+        inline_status_layout.addStretch(1)
+        self.youtube_status_dot = QFrame(inline_status_row)
         self.youtube_status_dot.setFixedSize(10, 10)
         self.youtube_status_dot.setStyleSheet(f"background: {PLATFORM_STATUS_LOGGED_OUT}; border-radius: 5px;")
         self.youtube_status_text_label = BodyLabel("未登录")
         self.youtube_status_text_label.setStyleSheet(f"color: {PLATFORM_STATUS_LOGGED_OUT}; font-weight: 400;")
+        inline_status_layout.addWidget(self.youtube_status_dot, 0, Qt.AlignmentFlag.AlignVCenter)
+        inline_status_layout.addWidget(self.youtube_status_text_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        inline_status_layout.addStretch(1)
+        layout.addWidget(inline_status_row)
+
+        self.import_youtube_cookie_button = PushButton(FIF.DOWNLOAD, "从 Firefox 导入 Cookie")
+        self.import_youtube_cookie_button.setToolTip(
+            "Chrome / Edge 等 Chromium 内核浏览器无法导出可用的 YouTube Cookie，目前仅支持 Firefox。"
+        )
+        self.import_youtube_cookie_button.clicked.connect(self._handle_import_youtube_cookie_clicked)
+        layout.addWidget(self.import_youtube_cookie_button)
+
+        # Bottom row: only refresh + logout buttons; status moved above.
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        button_row.setSpacing(8)
         self.refresh_youtube_cookie_button = PushButton(FIF.SYNC, "刷新状态")
         self.logout_youtube_cookie_button = PushButton("退出登录")
         self.refresh_youtube_cookie_button.clicked.connect(self._refresh_youtube_cookie_status)
         self.logout_youtube_cookie_button.clicked.connect(self._handle_logout_youtube_cookie_clicked)
-        status_row.addWidget(self.youtube_status_dot, 0, Qt.AlignmentFlag.AlignVCenter)
-        status_row.addWidget(self.youtube_status_text_label, 1, Qt.AlignmentFlag.AlignVCenter)
-        status_row.addWidget(self.refresh_youtube_cookie_button, 0)
-        status_row.addWidget(self.logout_youtube_cookie_button, 0)
-        layout.addLayout(status_row)
+        button_row.addStretch(1)
+        button_row.addWidget(self.refresh_youtube_cookie_button, 0)
+        button_row.addWidget(self.logout_youtube_cookie_button, 0)
+        button_row.addStretch(1)
+        layout.addLayout(button_row)
         return panel
 
     def _build_account_status_card(self, parent: QWidget) -> QWidget:
@@ -1321,9 +1324,14 @@ class VideoDownloadPage(QWidget):
             (self.bilibili_segment, platform == SOURCE_BILIBILI),
             (self.youtube_segment, platform == SOURCE_YOUTUBE),
         ):
-            segment.setProperty("selected", selected)
-            segment.style().unpolish(segment)
-            segment.style().polish(segment)
+            segment.setStyleSheet(SEGMENT_STYLE_SELECTED if selected else SEGMENT_STYLE_NORMAL)
+            color = SEGMENT_TITLE_COLOR_SELECTED if selected else SEGMENT_TITLE_COLOR_NORMAL
+            weight = 600 if selected else 400
+            title_label = getattr(segment, "title_label", None)
+            if title_label is not None:
+                title_label.setStyleSheet(
+                    f"background: transparent; border: 0; color: {color}; font-weight: {weight};"
+                )
 
     def _set_platform_dot(self, widget: QWidget, color: str) -> None:
         widget.setStyleSheet(f"background: {color}; border-radius: 5px;")
@@ -1335,7 +1343,7 @@ class VideoDownloadPage(QWidget):
             self._set_platform_dot(self.bilibili_segment.status_dot, bili_color)  # type: ignore[attr-defined]
             self._set_platform_dot(self.bilibili_status_row.status_dot, bili_color)  # type: ignore[attr-defined]
             self.bilibili_status_row.status_label.setText(  # type: ignore[attr-defined]
-                self._bilibili_profile.nickname if self._bilibili_profile else "未登录"
+                "已登录" if self._bilibili_profile else "未登录"
             )
             self.bilibili_status_row.status_label.setStyleSheet(  # type: ignore[attr-defined]
                 f"color: {bili_color}; font-weight: 400;"
@@ -1352,7 +1360,7 @@ class VideoDownloadPage(QWidget):
             self._set_platform_dot(self.youtube_segment.status_dot, yt_color)  # type: ignore[attr-defined]
             self._set_platform_dot(self.youtube_status_row.status_dot, yt_color)  # type: ignore[attr-defined]
             self.youtube_status_row.status_label.setText(  # type: ignore[attr-defined]
-                self._youtube_profile.nickname if self._youtube_profile else "未登录"
+                "已登录" if self._youtube_profile else "未登录"
             )
             self.youtube_status_row.status_label.setStyleSheet(  # type: ignore[attr-defined]
                 f"color: {yt_color}; font-weight: 400;"
@@ -1404,7 +1412,7 @@ class VideoDownloadPage(QWidget):
         self.cookie_manager.clear_cookie()
         self._recent_bilibili_login_deadline = 0.0
         self._clear_account_profile()
-        self._set_cookie_status_display("未登录", "#dc2626")
+        self._set_cookie_status_display("未登录", PLATFORM_STATUS_LOGGED_OUT)
         self.qr_placeholder.set_message("已退出登录，正在生成新的二维码…")
         self.parse_status_label.setText("已退出 Bilibili 登录，并清空本地 Cookie。")
         self._ensure_qr_login(force_restart=True)
@@ -1425,7 +1433,7 @@ class VideoDownloadPage(QWidget):
         if self._cookie_import_worker is not None and self._cookie_import_worker.isRunning():
             self.parse_status_label.setText("正在导入 YouTube Cookie，请稍候。")
             return
-        browser = self.youtube_browser_combo.currentText() or "Chrome"
+        browser = "Firefox"
         self.import_youtube_cookie_button.setEnabled(False)
         self.youtube_status_text_label.setText("正在导入…")
         self.youtube_status_text_label.setStyleSheet(f"color: {PLATFORM_STATUS_PENDING}; font-weight: 400;")
@@ -1492,28 +1500,28 @@ class VideoDownloadPage(QWidget):
             message = str(status_payload or "")
 
         if status_code == 86090 or "确认" in message:
-            self._set_cookie_status_display("等待确认", "#b45309")
+            self._set_cookie_status_display("等待确认", PLATFORM_STATUS_PENDING)
             return
         if status_code == 86038 or "过期" in message:
-            self._set_cookie_status_display("二维码已过期", "#b45309")
+            self._set_cookie_status_display("二维码已过期", PLATFORM_STATUS_PENDING)
             self.qr_placeholder.set_message("二维码已过期，点击刷新状态重新生成")
             return
         if status_code == 0 or "成功" in message:
-            self._set_cookie_status_display("已登录", "#15803d")
+            self._set_cookie_status_display("已登录", PLATFORM_STATUS_LOGGED_IN)
             self.qr_placeholder.set_message("登录成功，正在同步账号信息…")
             return
         if status_code == 86101:
-            self._set_cookie_status_display("待扫码", "#dc2626")
+            self._set_cookie_status_display("待扫码", PLATFORM_STATUS_LOGGED_OUT)
             return
         if message:
-            self._set_cookie_status_display(f"状态码 {status_code}", "#b45309")
+            self._set_cookie_status_display(f"状态码 {status_code}", PLATFORM_STATUS_PENDING)
             self.qr_placeholder.set_message(message)
             return
-        self._set_cookie_status_display("未登录", "#dc2626")
+        self._set_cookie_status_display("未登录", PLATFORM_STATUS_LOGGED_OUT)
 
     def _handle_qr_login_succeeded(self, cookie_path: str) -> None:
         self._recent_bilibili_login_deadline = time.monotonic() + 10.0
-        self._set_cookie_status_display("已登录", "#15803d")
+        self._set_cookie_status_display("已登录", PLATFORM_STATUS_LOGGED_IN)
         self.qr_placeholder.set_message("登录成功，正在同步账号信息…")
         self.parse_status_label.setText(f"扫码登录成功，Cookie 已保存到 {cookie_path or self.cookie_manager.resolved_cookie_path()}。")
         self._refresh_cookie_status_with_retry(remaining=6)
@@ -1530,21 +1538,21 @@ class VideoDownloadPage(QWidget):
         profile = self.cookie_manager.get_account_profile()
         if profile is not None:
             self._apply_account_profile(profile)
-            self._set_cookie_status_display("已登录", "#15803d")
+            self._set_cookie_status_display("已登录", PLATFORM_STATUS_LOGGED_IN)
             self._recent_bilibili_login_deadline = 0.0
             return
 
         if self.cookie_manager.has_cookie() and time.monotonic() < self._recent_bilibili_login_deadline:
             self._clear_account_profile()
             self.qr_placeholder.set_message("登录成功，正在同步账号信息…")
-            self._set_cookie_status_display("已登录", "#15803d")
+            self._set_cookie_status_display("已登录", PLATFORM_STATUS_LOGGED_IN)
             return
 
         self._clear_account_profile()
         if self.cookie_manager.has_cookie():
-            self._set_cookie_status_display("Cookie 无效", "#b45309")
+            self._set_cookie_status_display("Cookie 无效", PLATFORM_STATUS_PENDING)
             return
-        self._set_cookie_status_display("未登录", "#dc2626")
+        self._set_cookie_status_display("未登录", PLATFORM_STATUS_LOGGED_OUT)
 
     def _refresh_cookie_status_with_retry(self, remaining: int) -> None:
         self._refresh_cookie_status()

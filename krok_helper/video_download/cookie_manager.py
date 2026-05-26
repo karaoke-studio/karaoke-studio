@@ -121,7 +121,7 @@ class CookieManager:
         if platform == SOURCE_YOUTUBE:
             if not self.has_cookie(SOURCE_YOUTUBE):
                 return None
-            return BilibiliAccountProfile(nickname="已导入 Cookie")
+            return BilibiliAccountProfile(nickname="已登录")
 
         try:
             payload = self._fetch_nav_payload()
@@ -146,8 +146,10 @@ class CookieManager:
         if platform != SOURCE_YOUTUBE:
             raise ValueError("当前仅支持导入 YouTube 浏览器 Cookie。")
         browser_name = browser.strip().lower()
-        if browser_name not in {"chrome", "edge", "firefox"}:
-            raise ValueError(f"不支持的浏览器：{browser}")
+        if browser_name != "firefox":
+            raise ValueError(
+                "目前仅支持从 Firefox 导入 YouTube Cookie；Chrome / Edge 等内核浏览器无法导出可用的 YouTube Cookie。"
+            )
 
         path = self.resolved_cookie_path(SOURCE_YOUTUBE)
         path.parent.mkdir(parents=True, exist_ok=True)
