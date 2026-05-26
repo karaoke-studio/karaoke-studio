@@ -80,7 +80,7 @@ class DownloadTask:
     naming_rule: str = NAMING_RULE_TITLE
     custom_template: str = "{title}"
     merge_video_audio: bool = True
-    download_thumbnail: bool = True
+    download_thumbnail: bool = False
     settings_confirmed: bool = False
 
 
@@ -90,7 +90,7 @@ class DownloadOptions:
     naming_rule: str = NAMING_RULE_TITLE
     custom_template: str = "{title}"
     merge_video_audio: bool = True
-    download_thumbnail: bool = True
+    download_thumbnail: bool = False
     download_subtitle: bool = False
     concurrent_count: int = 3
     timeout: int = 30

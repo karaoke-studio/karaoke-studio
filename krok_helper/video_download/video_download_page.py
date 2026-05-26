@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QStackedWidget,
     QTableWidgetItem,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -67,7 +68,9 @@ DEFAULT_CUSTOM_TEMPLATE = "{title}"
 CONCURRENT_COUNT_OPTIONS = ("1", "2", "3", "4", "5")
 TIMEOUT_OPTIONS = ("5", "10", "15")
 RETRY_COUNT_OPTIONS = ("1", "2", "3", "4", "5")
-VIDEO_DETAILS_CARD_HEIGHT = 398
+VIDEO_DETAILS_CARD_HEIGHT = 340
+TASK_SWITCH_COMBO_WIDTH = 720
+TASK_SWITCH_TITLE_PIXELS = 610
 PLATFORM_STATUS_LOGGED_IN = "#22c55e"
 PLATFORM_STATUS_LOGGED_OUT = "#f43f5e"
 PLATFORM_STATUS_PENDING = "#b45309"
@@ -494,6 +497,13 @@ class MiniAvatarLabel(QLabel):
 class ParsedBatch:
     infos: list[VideoInfo]
     errors: list[str]
+    groups: list["ParsedVideoGroup"] | None = None
+
+
+@dataclass(slots=True)
+class ParsedVideoGroup:
+    source_url: str
+    infos: list[VideoInfo]
 
 
 class ParseLinksWorker(QThread):
@@ -512,17 +522,19 @@ class ParseLinksWorker(QThread):
 
     def run(self) -> None:  # noqa: D401
         infos: list[VideoInfo] = []
+        groups: list[ParsedVideoGroup] = []
         errors: list[str] = []
         for url in self._urls:
             try:
                 source = self._service.detect_source(url)
                 cookie_file = self._cookie_files_by_source.get(source, "")
-                info = self._service.extract_info(url, cookie_file)
+                parsed_infos = self._service.extract_infos(url, cookie_file)
             except Exception as exc:  # noqa: BLE001
                 errors.append(f"{url}：{exc}")
                 continue
-            infos.append(info)
-        self.batchFinished.emit(ParsedBatch(infos=infos, errors=errors))
+            infos.extend(parsed_infos)
+            groups.append(ParsedVideoGroup(source_url=url, infos=parsed_infos))
+        self.batchFinished.emit(ParsedBatch(infos=infos, errors=errors, groups=groups))
 
 
 class DownloadWorker(QThread):
@@ -573,6 +585,31 @@ class CookieImportWorker(QThread):
             self.importFailed.emit(str(exc))
             return
         self.importSucceeded.emit(str(path))
+
+
+class YtDlpUpdateWorker(QThread):
+    updateSucceeded = Signal(str, str)
+    updateFailed = Signal(str)
+
+    def run(self) -> None:  # noqa: D401
+        service = YtDlpService()
+        try:
+            before_version = service.get_ytdlp_version()
+            update_output = service.update_ytdlp()
+            after_version = service.get_ytdlp_version()
+            latest_version = service.get_latest_ytdlp_version()
+        except Exception as exc:  # noqa: BLE001
+            self.updateFailed.emit(str(exc))
+            return
+        if service.normalize_version(after_version) != service.normalize_version(latest_version):
+            self.updateFailed.emit(
+                "yt-dlp 更新命令已执行，但当前实际使用的版本仍不是最新版："
+                f"{after_version}，最新版 {latest_version}。\n"
+                "请检查 PATH 中的 yt-dlp 是否来自另一个 Python 环境。"
+            )
+            return
+        version_text = after_version if before_version == after_version else f"{before_version} → {after_version}"
+        self.updateSucceeded.emit(version_text, update_output)
 
 
 class BilibiliQrLoginWorker(QThread):
@@ -626,6 +663,7 @@ class VideoDownloadPage(QWidget):
         self.cookie_manager = CookieManager(getattr(settings, "video_download_cookie_path", ""))
         self._parse_worker: ParseLinksWorker | None = None
         self._cookie_import_worker: CookieImportWorker | None = None
+        self._ytdlp_update_worker: YtDlpUpdateWorker | None = None
         self._qr_login_worker: BilibiliQrLoginWorker | None = None
         self._running_workers: dict[str, DownloadWorker] = {}
         self._tasks: list[DownloadTask] = []
@@ -882,7 +920,7 @@ class VideoDownloadPage(QWidget):
         self.prev_task_button.setFixedSize(30, 30)
         self.prev_task_button.clicked.connect(lambda: self._move_task_selection(-1))
         self.task_switch_combo = StyledComboBox()
-        self.task_switch_combo.setMinimumWidth(280)
+        self.task_switch_combo.setFixedWidth(TASK_SWITCH_COMBO_WIDTH)
         self.task_switch_combo.setFixedHeight(32)
         self.task_switch_combo.currentIndexChanged.connect(self._handle_task_switch_combo_changed)
         self._install_single_click_combo_behavior(self.task_switch_combo)
@@ -931,41 +969,36 @@ class VideoDownloadPage(QWidget):
             label = QLabel(f"{title}：")
             label.setStyleSheet("color: #475467;")
             value = QLabel("-")
-            value.setWordWrap(True)
+            value.setWordWrap(False)
             value.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             value.setStyleSheet("color: #111827; font-weight: 400;")
+            value.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
+            value.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             meta_layout.addWidget(label, row, 0)
             meta_layout.addWidget(value, row, 1)
             self.info_value_labels[key] = value
         info_row.addWidget(meta_widget, 1, Qt.AlignmentFlag.AlignTop)
         layout.addLayout(info_row)
-
-        separator = QFrame(details)
-        separator.setFixedHeight(1)
-        separator.setStyleSheet("background: #e5e7eb; border: 0;")
-        layout.addWidget(separator)
-
-        per_video_title = CaptionLabel("下载设置（仅作用于此视频）")
-        per_video_title.setStyleSheet("color: #111827; font-weight: 700;")
-        layout.addWidget(per_video_title)
+        layout.addSpacing(12)
 
         settings_grid = QGridLayout()
         settings_grid.setContentsMargins(0, 0, 0, 0)
         settings_grid.setHorizontalSpacing(10)
         settings_grid.setVerticalSpacing(6)
         settings_grid.setColumnStretch(1, 1)
-        settings_grid.setColumnStretch(3, 1)
+        settings_grid.setColumnStretch(2, 1)
 
         settings_grid.addWidget(CaptionLabel("清晰度 / 格式"), 0, 0, Qt.AlignmentFlag.AlignVCenter)
         self.format_combo = StyledComboBox()
         self.format_combo.setMinimumHeight(34)
         self.format_combo.currentIndexChanged.connect(self._handle_format_combo_changed)
         self._install_single_click_combo_behavior(self.format_combo)
-        settings_grid.addWidget(self.format_combo, 0, 1, 1, 3)
+        settings_grid.addWidget(self.format_combo, 0, 1, 1, 4)
 
         settings_grid.addWidget(CaptionLabel("文件命名"), 1, 0, Qt.AlignmentFlag.AlignVCenter)
         self.naming_rule_combo = StyledComboBox()
         self.naming_rule_combo.setMinimumHeight(34)
+        self.naming_rule_combo.setFixedWidth(220)
         self.naming_rule_combo.addItems([NAMING_RULE_TITLE, NAMING_RULE_TITLE_UPLOADER, NAMING_RULE_CUSTOM])
         self._install_single_click_combo_behavior(self.naming_rule_combo)
         self.naming_rule_combo.currentTextChanged.connect(self._handle_per_video_settings_changed)
@@ -981,14 +1014,14 @@ class VideoDownloadPage(QWidget):
         self.custom_template_edit.setPlaceholderText("{title} - {uploader}")
         self.custom_template_edit.textChanged.connect(self._handle_per_video_settings_changed)
         custom_template_layout.addWidget(self.custom_template_edit)
-        settings_grid.addWidget(self.custom_template_container, 1, 2, 1, 2)
+        settings_grid.addWidget(self.custom_template_container, 1, 2)
 
         self.per_video_merge_checkbox = CheckBox("自动合并音视频（推荐）")
         self.per_video_thumbnail_checkbox = CheckBox("下载封面")
         self.per_video_merge_checkbox.stateChanged.connect(self._handle_per_video_settings_changed)
         self.per_video_thumbnail_checkbox.stateChanged.connect(self._handle_per_video_settings_changed)
-        settings_grid.addWidget(self.per_video_merge_checkbox, 2, 1)
-        settings_grid.addWidget(self.per_video_thumbnail_checkbox, 2, 2)
+        settings_grid.addWidget(self.per_video_merge_checkbox, 1, 3)
+        settings_grid.addWidget(self.per_video_thumbnail_checkbox, 1, 4)
         layout.addLayout(settings_grid)
 
         self.format_summary_widget = QWidget(details)
@@ -1156,15 +1189,23 @@ class VideoDownloadPage(QWidget):
         panel.setStyleSheet("background: transparent; border: 0;")
         layout = QVBoxLayout(panel)
         layout.setContentsMargins(0, 8, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(10)
 
-        self.youtube_qr_placeholder = QrPlaceholder()
-        self.youtube_qr_placeholder.set_message("设备码登录敬请期待")
-        self.youtube_qr_placeholder.setToolTip("TODO: 后续接入 yt-dlp OAuth 设备码流程。")
-        layout.addWidget(self.youtube_qr_placeholder, 0, Qt.AlignmentFlag.AlignHCenter)
+        title = BodyLabel("通过 Firefox 浏览器导入")
+        title.setStyleSheet("color: #111827; font-weight: 700;")
+        layout.addWidget(title, 0, Qt.AlignmentFlag.AlignLeft)
 
-        # Inline status row directly under the QR (replaces the previous
-        # "扫码 / 设备码登录" caption; surfaces the actually useful info).
+        steps = QWidget(panel)
+        steps.setStyleSheet("background: transparent; border: 0;")
+        steps_layout = QVBoxLayout(steps)
+        steps_layout.setContentsMargins(0, 0, 0, 0)
+        steps_layout.setSpacing(5)
+        for text in ("1. 在 Firefox 中登录 youtube.com", "2. 点击下方按钮导入 Cookie"):
+            step_label = CaptionLabel(text)
+            step_label.setStyleSheet("color: #64748b;")
+            steps_layout.addWidget(step_label)
+        layout.addWidget(steps)
+
         inline_status_row = QWidget(panel)
         inline_status_row.setStyleSheet("background: transparent; border: 0;")
         inline_status_layout = QHBoxLayout(inline_status_row)
@@ -1185,10 +1226,10 @@ class VideoDownloadPage(QWidget):
         self.import_youtube_cookie_button.setToolTip(
             "Chrome / Edge 等 Chromium 内核浏览器无法导出可用的 YouTube Cookie，目前仅支持 Firefox。"
         )
+        self.import_youtube_cookie_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.import_youtube_cookie_button.clicked.connect(self._handle_import_youtube_cookie_clicked)
         layout.addWidget(self.import_youtube_cookie_button)
 
-        # Bottom row: only refresh + logout buttons; status moved above.
         button_row = QHBoxLayout()
         button_row.setContentsMargins(0, 0, 0, 0)
         button_row.setSpacing(8)
@@ -1568,13 +1609,62 @@ class VideoDownloadPage(QWidget):
             return
         target.setText(directory)
 
+    def _current_ytdlp_version_text(self) -> str:
+        try:
+            return YtDlpService().get_ytdlp_version()
+        except Exception as exc:  # noqa: BLE001
+            return f"未检测到：{exc}"
+
+    def _safe_set_widget_enabled(self, widget: QWidget, enabled: bool) -> None:
+        try:
+            widget.setEnabled(enabled)
+        except RuntimeError:
+            pass
+
+    def _safe_set_label_text(self, label: QLabel, text: str) -> None:
+        try:
+            label.setText(text)
+        except RuntimeError:
+            pass
+
+    def _start_ytdlp_update(self, version_label: QLabel, update_button: PushButton) -> None:
+        if self._ytdlp_update_worker is not None and self._ytdlp_update_worker.isRunning():
+            self.parse_status_label.setText("yt-dlp 正在更新，请稍候。")
+            return
+
+        update_button.setEnabled(False)
+        version_label.setText("正在更新 yt-dlp…")
+        self.parse_status_label.setText("正在更新 yt-dlp，请稍候。")
+        worker = YtDlpUpdateWorker(self)
+        self._ytdlp_update_worker = worker
+        worker.updateSucceeded.connect(
+            lambda version, output: self._handle_ytdlp_update_succeeded(version_label, version, output)
+        )
+        worker.updateFailed.connect(lambda message: self._handle_ytdlp_update_failed(version_label, message))
+        worker.finished.connect(lambda: self._safe_set_widget_enabled(update_button, True))
+        worker.finished.connect(self._handle_ytdlp_update_worker_finished)
+        worker.start()
+
+    def _handle_ytdlp_update_succeeded(self, version_label: QLabel, version_text: str, output: str) -> None:
+        self._safe_set_label_text(version_label, version_text)
+        self.parse_status_label.setText("yt-dlp 更新完成。")
+        if output:
+            self.parse_status_label.setToolTip(output)
+
+    def _handle_ytdlp_update_failed(self, version_label: QLabel, message: str) -> None:
+        self._safe_set_label_text(version_label, self._current_ytdlp_version_text())
+        self.parse_status_label.setText(f"yt-dlp 更新失败：{message}")
+
+    def _handle_ytdlp_update_worker_finished(self) -> None:
+        self._ytdlp_update_worker = None
+
     def _sync_naming_rule_edit_visibility(self, naming_rule_combo: ComboBox, custom_template_edit: LineEdit) -> None:
         custom_template_edit.setVisible(naming_rule_combo.currentText() == NAMING_RULE_CUSTOM)
 
     def _open_download_settings_dialog(self) -> None:
         dialog = QDialog(self)
         dialog.setWindowTitle("下载设置")
-        dialog.resize(560, 360)
+        dialog.resize(560, 430)
 
         shell = QVBoxLayout(dialog)
         shell.setContentsMargins(16, 16, 16, 16)
@@ -1625,6 +1715,18 @@ class VideoDownloadPage(QWidget):
         self._install_single_click_combo_behavior(retry_combo)
         form_layout.addWidget(retry_combo)
 
+        form_layout.addWidget(self._create_section_title("yt-dlp"))
+        ytdlp_row = QHBoxLayout()
+        ytdlp_row.setContentsMargins(0, 0, 0, 0)
+        ytdlp_row.setSpacing(8)
+        ytdlp_version_label = CaptionLabel(self._current_ytdlp_version_text())
+        ytdlp_version_label.setStyleSheet("color: #64748b;")
+        ytdlp_update_button = PushButton(FIF.UPDATE, "更新 yt-dlp")
+        ytdlp_update_button.clicked.connect(lambda: self._start_ytdlp_update(ytdlp_version_label, ytdlp_update_button))
+        ytdlp_row.addWidget(ytdlp_version_label, 1, Qt.AlignmentFlag.AlignVCenter)
+        ytdlp_row.addWidget(ytdlp_update_button, 0)
+        form_layout.addLayout(ytdlp_row)
+
         shell.addWidget(form_card, 1)
 
         button_row = QHBoxLayout()
@@ -1655,7 +1757,7 @@ class VideoDownloadPage(QWidget):
         if not hasattr(self.settings, "video_download_merge_video_audio"):
             self.settings.video_download_merge_video_audio = True
         if not hasattr(self.settings, "video_download_download_thumbnail"):
-            self.settings.video_download_download_thumbnail = True
+            self.settings.video_download_download_thumbnail = False
         self.settings.video_download_download_subtitle = False
         if not getattr(self.settings, "video_download_save_dir", ""):
             self.settings.video_download_save_dir = str(Path.home() / "Downloads")
@@ -1697,28 +1799,27 @@ class VideoDownloadPage(QWidget):
     def _handle_parse_finished(self, batch: ParsedBatch) -> None:
         parsed_count = 0
         first_new_task_id = ""
-        for info in batch.infos:
-            existing = next(
-                (
-                    task
-                    for task in self._tasks
-                    if task.url == info.url and task.status != TASK_STATUS_COMPLETED
-                ),
-                None,
-            )
+        existing_count = 0
+        first_existing_task_id = ""
+        skipped_count = 0
+        selected_infos = self._select_infos_from_parsed_batch(batch)
+        for info in selected_infos:
+            existing = self._find_existing_task_for_info(info)
             if existing is not None:
-                previous_option_id = existing.selected_format.option_id if existing.selected_format else ""
-                existing.info = info
-                existing.title = info.title
-                existing.source = info.source
-                existing.available_formats = list(info.formats)
-                existing.selected_format = self._find_matching_format(existing.available_formats, previous_option_id)
-                if existing.selected_format is None:
-                    existing.selected_format = self._select_default_format(info.formats)
-                existing.filesize = self._preferred_task_filesize(existing)
-                if not self._current_task_id:
-                    self._current_task_id = existing.task_id
-                parsed_count += 1
+                if existing.status not in (TASK_STATUS_COMPLETED, TASK_STATUS_DOWNLOADING):
+                    previous_option_id = existing.selected_format.option_id if existing.selected_format else ""
+                    existing.url = info.url
+                    existing.info = info
+                    existing.title = info.title
+                    existing.source = info.source
+                    existing.available_formats = list(info.formats)
+                    existing.selected_format = self._find_matching_format(existing.available_formats, previous_option_id)
+                    if existing.selected_format is None:
+                        existing.selected_format = self._select_default_format(info.formats)
+                    existing.filesize = self._preferred_task_filesize(existing)
+                existing_count += 1
+                if not first_existing_task_id:
+                    first_existing_task_id = existing.task_id
                 continue
 
             task = self._create_download_task(info)
@@ -1730,17 +1831,24 @@ class VideoDownloadPage(QWidget):
 
         if first_new_task_id:
             self._current_task_id = first_new_task_id
-        elif batch.infos and not self._current_task_id:
+        elif first_existing_task_id:
+            self._current_task_id = first_existing_task_id
+        elif selected_infos and not self._current_task_id:
             self._current_task_id = self._tasks[0].task_id
 
-        if batch.infos:
-            first_source = batch.infos[0].source
+        if selected_infos:
+            first_source = selected_infos[0].source
             if first_source in (SOURCE_YOUTUBE, SOURCE_BILIBILI):
                 self._set_source(first_source)
 
         parts: list[str] = []
         if parsed_count:
             parts.append(f"成功解析 {parsed_count} 个链接")
+        if existing_count:
+            parts.append(f"{existing_count} 个视频已存在，未重复添加")
+        skipped_count = len(batch.infos) - len(selected_infos)
+        if skipped_count:
+            parts.append(f"{skipped_count} 个分 P 未添加")
         if batch.errors:
             parts.append(f"{len(batch.errors)} 个链接失败")
         self.parse_status_label.setText("，".join(parts) if parts else "没有可用的解析结果。")
@@ -1750,6 +1858,78 @@ class VideoDownloadPage(QWidget):
             self.parse_status_label.setToolTip("")
         self._refresh_preview()
         self._refresh_download_table()
+
+    def _select_infos_from_parsed_batch(self, batch: ParsedBatch) -> list[VideoInfo]:
+        groups = batch.groups or [ParsedVideoGroup(source_url="", infos=[info]) for info in batch.infos]
+        selected: list[VideoInfo] = []
+        for group in groups:
+            if len(group.infos) > 1 and group.infos[0].source == SOURCE_BILIBILI:
+                chosen = self._choose_bilibili_parts(group.infos)
+                selected.extend(chosen)
+                continue
+            selected.extend(group.infos)
+        return selected
+
+    def _choose_bilibili_parts(self, infos: list[VideoInfo]) -> list[VideoInfo]:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("选择要下载的分 P")
+        dialog.resize(620, 420)
+
+        shell = QVBoxLayout(dialog)
+        shell.setContentsMargins(16, 16, 16, 16)
+        shell.setSpacing(12)
+        shell.addWidget(self._create_section_title("选择要添加到下载列表的分 P"))
+
+        hint = CaptionLabel("检测到这是一个 Bilibili 多分 P 视频。勾选需要下载的分 P 后再添加到下载列表。")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color: #64748b;")
+        shell.addWidget(hint)
+
+        scroll_area = QScrollArea(dialog)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setStyleSheet("QScrollArea { background: transparent; border: 1px solid #e5e7eb; border-radius: 8px; }")
+        content = QWidget(scroll_area)
+        content.setStyleSheet("background: transparent; border: 0;")
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(10, 10, 10, 10)
+        content_layout.setSpacing(8)
+
+        checkboxes: list[CheckBox] = []
+        for index, info in enumerate(infos, start=1):
+            checkbox = CheckBox(f"P{index}. {info.title or '未命名视频'}")
+            checkbox.setChecked(index == 1)
+            checkbox.setToolTip(info.webpage_url or info.url)
+            content_layout.addWidget(checkbox)
+            checkboxes.append(checkbox)
+        content_layout.addStretch(1)
+        scroll_area.setWidget(content)
+        shell.addWidget(scroll_area, 1)
+
+        tool_row = QHBoxLayout()
+        tool_row.setContentsMargins(0, 0, 0, 0)
+        select_all_button = PushButton("全选")
+        clear_button = PushButton("全不选")
+        select_all_button.clicked.connect(lambda: [checkbox.setChecked(True) for checkbox in checkboxes])
+        clear_button.clicked.connect(lambda: [checkbox.setChecked(False) for checkbox in checkboxes])
+        tool_row.addWidget(select_all_button)
+        tool_row.addWidget(clear_button)
+        tool_row.addStretch(1)
+        shell.addLayout(tool_row)
+
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 0, 0, 0)
+        button_row.addStretch(1)
+        cancel_button = PushButton("取消")
+        add_button = PrimaryPushButton("添加选中分 P")
+        cancel_button.clicked.connect(dialog.reject)
+        add_button.clicked.connect(dialog.accept)
+        button_row.addWidget(cancel_button)
+        button_row.addWidget(add_button)
+        shell.addLayout(button_row)
+
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return []
+        return [info for info, checkbox in zip(infos, checkboxes, strict=False) if checkbox.isChecked()]
 
     def _handle_parse_worker_finished(self) -> None:
         self.parse_button.setEnabled(True)
@@ -1768,6 +1948,25 @@ class VideoDownloadPage(QWidget):
             if option.option_id == option_id:
                 return option
         return None
+
+    def _find_existing_task_for_info(self, info: VideoInfo) -> DownloadTask | None:
+        incoming_keys = self._video_identity_keys(info.url, info.webpage_url)
+        if not incoming_keys:
+            return None
+        for task in self._tasks:
+            task_webpage_url = task.info.webpage_url if task.info else ""
+            task_keys = self._video_identity_keys(task.url, task_webpage_url)
+            if incoming_keys & task_keys:
+                return task
+        return None
+
+    def _video_identity_keys(self, *urls: str) -> set[str]:
+        keys: set[str] = set()
+        for url in urls:
+            normalized = (url or "").strip().rstrip("/")
+            if normalized:
+                keys.add(normalized)
+        return keys
 
     def _preferred_task_filesize(self, task: DownloadTask) -> int | None:
         if task.selected_format and task.selected_format.filesize:
@@ -1799,7 +1998,7 @@ class VideoDownloadPage(QWidget):
                 or DEFAULT_CUSTOM_TEMPLATE
             ),
             merge_video_audio=bool(getattr(self.settings, "video_download_merge_video_audio", True)),
-            download_thumbnail=bool(getattr(self.settings, "video_download_download_thumbnail", True)),
+            download_thumbnail=False,
         )
         task.filesize = self._preferred_task_filesize(task)
         return task
@@ -1849,8 +2048,9 @@ class VideoDownloadPage(QWidget):
         self.task_switch_combo.clear()
         for row, task in enumerate(self._tasks):
             title = task.title or "未命名视频"
+            display_text = self._task_switcher_text(row, title)
             self.task_switch_combo.addItem(
-                f"第 {row + 1} 个：{title}",
+                display_text,
                 self._status_dot_icon(self._task_status_color(task)),
             )
         current_row = self._current_task_row()
@@ -1860,6 +2060,15 @@ class VideoDownloadPage(QWidget):
         self.prev_task_button.setEnabled(current_row > 0)
         self.next_task_button.setEnabled(0 <= current_row < len(self._tasks) - 1)
         self._selection_syncing = False
+
+    def _task_switcher_text(self, row: int, title: str) -> str:
+        prefix = f"第 {row + 1} 个："
+        elided_title = self.task_switch_combo.fontMetrics().elidedText(
+            title,
+            Qt.TextElideMode.ElideRight,
+            TASK_SWITCH_TITLE_PIXELS,
+        )
+        return f"{prefix}{elided_title}"
 
     def _move_task_selection(self, delta: int) -> None:
         current_row = self._current_task_row()
@@ -1881,7 +2090,7 @@ class VideoDownloadPage(QWidget):
             self._set_combo_text_or_default(self.naming_rule_combo, NAMING_RULE_TITLE, NAMING_RULE_TITLE)
             self.custom_template_edit.setText(DEFAULT_CUSTOM_TEMPLATE)
             self.per_video_merge_checkbox.setChecked(True)
-            self.per_video_thumbnail_checkbox.setChecked(True)
+            self.per_video_thumbnail_checkbox.setChecked(False)
         else:
             self._set_combo_text_or_default(self.naming_rule_combo, task.naming_rule or NAMING_RULE_TITLE, NAMING_RULE_TITLE)
             self.custom_template_edit.setText(task.custom_template or DEFAULT_CUSTOM_TEMPLATE)
@@ -1943,8 +2152,8 @@ class VideoDownloadPage(QWidget):
         selected_format = task.selected_format
         resolution = selected_format.resolution if selected_format else (f"{info.height}p" if info.height else "-")
         size_text = format_bytes(self._preferred_task_filesize(task))
-        self.info_value_labels["title"].setText(info.title or "-")
-        self.info_value_labels["uploader"].setText(info.uploader or "-")
+        self._set_info_value_text("title", info.title or "-")
+        self._set_info_value_text("uploader", info.uploader or "-")
         self.info_value_labels["duration"].setText(format_duration(info.duration))
         self.info_value_labels["resolution"].setText(resolution)
         self.info_value_labels["filesize"].setText(size_text)
@@ -1953,6 +2162,11 @@ class VideoDownloadPage(QWidget):
         self._refresh_format_table()
         self._sync_per_video_controls(task)
         self._refresh_task_switcher()
+
+    def _set_info_value_text(self, key: str, text: str) -> None:
+        label = self.info_value_labels[key]
+        label.setToolTip(text)
+        label.setText(label.fontMetrics().elidedText(text, Qt.TextElideMode.ElideRight, max(80, label.width())))
 
     def _refresh_format_table(self) -> None:
         self._format_table_updating = True
@@ -2270,7 +2484,7 @@ class VideoDownloadPage(QWidget):
             naming_rule=naming_rule,
             custom_template=(task.custom_template if task is not None else None) or DEFAULT_CUSTOM_TEMPLATE,
             merge_video_audio=bool(task.merge_video_audio if task is not None else True),
-            download_thumbnail=bool(task.download_thumbnail if task is not None else True),
+            download_thumbnail=bool(task.download_thumbnail if task is not None else False),
             download_subtitle=False,
             concurrent_count=self._settings_int_value("video_download_concurrent_count", 3),
             timeout=self._settings_int_value("video_download_timeout", 5),

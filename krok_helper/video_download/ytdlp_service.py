@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
+import sys
 import urllib.request
 from pathlib import Path
 from typing import Any, Callable
@@ -38,20 +40,126 @@ class YtDlpService:
     def __init__(self, format_parser: FormatParser | None = None) -> None:
         self._format_parser = format_parser or FormatParser()
 
+    def get_ytdlp_version(self) -> str:
+        try:
+            import yt_dlp
+        except ModuleNotFoundError:
+            cli = self._find_ytdlp_cli()
+            completed = subprocess.run(
+                [cli, "--version"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                check=False,
+                timeout=15,
+                creationflags=self._subprocess_creationflags(),
+            )
+            if completed.returncode != 0:
+                message = completed.stderr.strip() or completed.stdout.strip() or "无法读取 yt-dlp 版本。"
+                raise VideoDownloadError(message)
+            version = completed.stdout.strip() or "未知版本"
+            return f"命令行版 {version}"
+        return f"Python 包 {yt_dlp.version.__version__}"
+
+    def get_latest_ytdlp_version(self) -> str:
+        request = urllib.request.Request(
+            "https://pypi.org/pypi/yt-dlp/json",
+            headers={"User-Agent": "krok-helper"},
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                payload = json.load(response)
+        except Exception as exc:  # noqa: BLE001
+            raise VideoDownloadError(f"无法查询 yt-dlp 最新版本：{exc}") from exc
+        version = str((payload.get("info") or {}).get("version") or "").strip()
+        if not version:
+            raise VideoDownloadError("PyPI 未返回 yt-dlp 最新版本。")
+        return version
+
+    def update_ytdlp(self) -> str:
+        try:
+            import yt_dlp  # noqa: F401
+        except ModuleNotFoundError:
+            return self._update_ytdlp_cli()
+        return self._update_ytdlp_python_package()
+
     def extract_info(self, url: str, cookie_file: str | None = None) -> VideoInfo:
-        raw_info, extractor_args_hint = self._extract_info_with_best_backend(url, cookie_file)
-        info = self._unwrap_info(raw_info)
+        infos = self.extract_infos(url, cookie_file)
+        if not infos:
+            raise VideoDownloadError("没有可用的解析结果。")
+        return infos[0]
+
+    def extract_infos(self, url: str, cookie_file: str | None = None) -> list[VideoInfo]:
+        source = self.detect_source(url)
+        raw_info, extractor_args_hint = self._extract_info_with_best_backend(
+            url,
+            cookie_file,
+            allow_playlist=source == SOURCE_BILIBILI,
+        )
+        entries = self._unwrap_bilibili_entries(raw_info) if source == SOURCE_BILIBILI else []
+        if entries:
+            parent_title = str(raw_info.get("title") or "")
+            total = len(entries)
+            return [
+                self._build_video_info(
+                    self._hydrate_playlist_entry(entry, cookie_file),
+                    url,
+                    extractor_args_hint,
+                    parent_title=parent_title,
+                    part_index=index + 1,
+                    part_total=total,
+                )
+                for index, entry in enumerate(entries)
+            ]
+        return [self._build_video_info(self._unwrap_info(raw_info), url, extractor_args_hint)]
+
+    def _hydrate_playlist_entry(
+        self,
+        entry: dict[str, Any],
+        cookie_file: str | None,
+    ) -> dict[str, Any]:
+        if entry.get("formats"):
+            return entry
+        entry_url = self._coerce_webpage_url(entry, "")
+        if not entry_url:
+            return entry
+        try:
+            raw_entry, _hint = self._extract_info_with_best_backend(
+                entry_url,
+                cookie_file,
+                allow_playlist=False,
+            )
+        except Exception:
+            return entry
+        return self._unwrap_info(raw_entry)
+
+    def _build_video_info(
+        self,
+        info: dict[str, Any],
+        fallback_url: str,
+        extractor_args_hint: str,
+        *,
+        parent_title: str = "",
+        part_index: int = 0,
+        part_total: int = 0,
+    ) -> VideoInfo:
         formats = self._format_parser.parse_formats(info.get("formats"))
         thumbnail_url = str(info.get("thumbnail") or "")
+        webpage_url = self._coerce_webpage_url(info, fallback_url)
+        title = str(info.get("title") or "未命名视频")
+        if parent_title and title and title != parent_title:
+            prefix = f"P{part_index} " if part_total > 1 and part_index > 0 else ""
+            title = f"{parent_title} - {prefix}{title}".strip()
         return VideoInfo(
-            url=url,
-            source=self.detect_source(url, info.get("extractor_key")),
-            title=str(info.get("title") or "未命名视频"),
+            url=webpage_url,
+            source=self.detect_source(fallback_url, info.get("extractor_key")),
+            title=title,
             uploader=str(info.get("uploader") or info.get("channel") or info.get("owner") or "-"),
             duration=float(info["duration"]) if info.get("duration") else None,
             thumbnail_url=thumbnail_url,
             thumbnail_bytes=self._fetch_thumbnail_bytes(thumbnail_url),
-            webpage_url=str(info.get("webpage_url") or url),
+            webpage_url=webpage_url,
             width=int(info.get("width") or 0),
             height=int(info.get("height") or 0),
             filesize=self._pick_filesize(info),
@@ -110,20 +218,28 @@ class YtDlpService:
             extractor_args_hint=extractor_args_hint,
         )
 
-    def _extract_info_with_best_backend(self, url: str, cookie_file: str | None = None) -> tuple[dict[str, Any], str]:
+    def _extract_info_with_best_backend(
+        self,
+        url: str,
+        cookie_file: str | None = None,
+        *,
+        allow_playlist: bool = False,
+    ) -> tuple[dict[str, Any], str]:
         youtube_dl = self._import_ytdlp()
         if youtube_dl is not None:
-            return self._extract_info_with_python_retry(youtube_dl, url, cookie_file)
-        return self._extract_info_with_cli_retry(url, cookie_file)
+            return self._extract_info_with_python_retry(youtube_dl, url, cookie_file, allow_playlist=allow_playlist)
+        return self._extract_info_with_cli_retry(url, cookie_file, allow_playlist=allow_playlist)
 
     def _extract_info_with_python_retry(
         self,
         youtube_dl,
         url: str,
         cookie_file: str | None,
+        *,
+        allow_playlist: bool = False,
     ) -> tuple[dict[str, Any], str]:
         try:
-            return self._extract_info_with_python_api(youtube_dl, url, cookie_file), ""
+            return self._extract_info_with_python_api(youtube_dl, url, cookie_file, allow_playlist=allow_playlist), ""
         except VideoDownloadError as exc:
             if self._should_retry_youtube_with_fallback(url, str(exc)):
                 return (
@@ -132,6 +248,7 @@ class YtDlpService:
                         url,
                         cookie_file,
                         extractor_args_hint=YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
+                        allow_playlist=allow_playlist,
                     ),
                     YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
                 )
@@ -144,11 +261,12 @@ class YtDlpService:
         cookie_file: str | None,
         *,
         extractor_args_hint: str = "",
+        allow_playlist: bool = False,
     ) -> dict[str, Any]:
         ydl_opts: dict[str, Any] = {
             "quiet": True,
             "no_warnings": True,
-            "noplaylist": True,
+            "noplaylist": not allow_playlist,
             "skip_download": True,
         }
         if cookie_file and Path(cookie_file).is_file():
@@ -162,9 +280,15 @@ class YtDlpService:
         except Exception as exc:  # noqa: BLE001
             raise VideoDownloadError(self._normalize_error_message(exc)) from exc
 
-    def _extract_info_with_cli_retry(self, url: str, cookie_file: str | None) -> tuple[dict[str, Any], str]:
+    def _extract_info_with_cli_retry(
+        self,
+        url: str,
+        cookie_file: str | None,
+        *,
+        allow_playlist: bool = False,
+    ) -> tuple[dict[str, Any], str]:
         try:
-            return self._extract_info_with_cli(url, cookie_file), ""
+            return self._extract_info_with_cli(url, cookie_file, allow_playlist=allow_playlist), ""
         except VideoDownloadError as exc:
             if self._should_retry_youtube_with_fallback(url, str(exc)):
                 return (
@@ -172,6 +296,7 @@ class YtDlpService:
                         url,
                         cookie_file,
                         extractor_args_hint=YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
+                        allow_playlist=allow_playlist,
                     ),
                     YOUTUBE_FALLBACK_EXTRACTOR_ARGS,
                 )
@@ -183,12 +308,13 @@ class YtDlpService:
         cookie_file: str | None = None,
         *,
         extractor_args_hint: str = "",
+        allow_playlist: bool = False,
     ) -> dict[str, Any]:
         command = [
             self._find_ytdlp_cli(),
             "--dump-single-json",
             "--skip-download",
-            "--no-playlist",
+            "--yes-playlist" if allow_playlist else "--no-playlist",
             "--no-warnings",
             "--no-update",
             url,
@@ -281,6 +407,7 @@ class YtDlpService:
             "noplaylist": True,
             "outtmpl": outtmpl,
             "format": selected_format,
+            "overwrites": True,
             "retries": max(0, int(options.retry_count)),
             "socket_timeout": max(1, int(options.timeout)),
             "progress_hooks": [self._build_hook(task, progress_callback)],
@@ -362,6 +489,7 @@ class YtDlpService:
             "--no-warnings",
             "--no-update",
             "--no-playlist",
+            "--force-overwrites",
             "--output",
             outtmpl,
             "--format",
@@ -424,10 +552,28 @@ class YtDlpService:
             raise VideoDownloadError(self._normalize_error_message(exc)) from exc
 
         if return_code != 0:
-            message = next((line for line in reversed(output_lines) if line), "yt-dlp download failed")
+            resolved_file = self._resolve_output_file(save_dir, output_stem, {}, task, options)
+            if resolved_file is not None and resolved_file.is_file() and resolved_file.stat().st_size > 0:
+                task.local_file = resolved_file
+                return
+            message = self._pick_cli_error_message(output_lines, progress_marker)
             raise VideoDownloadError(self._normalize_error_message(RuntimeError(message)))
 
         task.local_file = self._resolve_output_file(save_dir, output_stem, {}, task, options)
+
+    def _pick_cli_error_message(self, output_lines: list[str], progress_marker: str) -> str:
+        meaningful_lines = [
+            line
+            for line in output_lines
+            if line and progress_marker not in line and not line.startswith("[download]")
+        ]
+        error_line = next((line for line in reversed(meaningful_lines) if "ERROR:" in line), "")
+        if error_line:
+            return error_line
+        warning_line = next((line for line in reversed(meaningful_lines) if "WARNING:" in line), "")
+        if warning_line:
+            return warning_line
+        return next(reversed(meaningful_lines), "yt-dlp download failed")
 
     def detect_source(self, url: str, extractor_key: str | None = None) -> str:
         normalized = url.lower()
@@ -451,12 +597,94 @@ class YtDlpService:
             return cli
         raise VideoDownloadError("未找到 yt-dlp。请安装 `yt-dlp` 命令或 Python 包。")
 
+    def _update_ytdlp_cli(self) -> str:
+        cli = self._find_ytdlp_cli()
+        try:
+            return self._run_update_command([cli, "-U"])
+        except VideoDownloadError as exc:
+            message = str(exc)
+            if self._should_fallback_to_pip_update(message):
+                python_executable = self._python_executable_for_cli(cli)
+                pip_output = self._update_ytdlp_python_package(python_executable)
+                return (
+                    "yt-dlp 命令行自更新不可用，已改用对应 Python 环境的 pip 更新 yt-dlp。\n"
+                    f"{pip_output}"
+                )
+            raise
+
+    def _update_ytdlp_python_package(self, python_executable: str | None = None) -> str:
+        python = python_executable or sys.executable
+        return self._run_update_command([python, "-m", "pip", "install", "-U", "yt-dlp"])
+
+    def _python_executable_for_cli(self, cli: str) -> str:
+        cli_path = Path(cli)
+        if os.name == "nt":
+            parent = cli_path.parent
+            if parent.name.lower() == "scripts":
+                candidate = parent.parent / "python.exe"
+                if candidate.is_file():
+                    return str(candidate)
+        return sys.executable
+
+    def normalize_version(self, version_text: str) -> str:
+        match = re.search(r"(\d{4})\.(\d{1,2})\.(\d{1,2})(?:\.(\d+))?", version_text)
+        if not match:
+            return version_text.strip()
+        year, month, day, suffix = match.groups()
+        normalized = f"{int(year):04d}.{int(month):02d}.{int(day):02d}"
+        if suffix is not None:
+            normalized = f"{normalized}.{suffix}"
+        return normalized
+
+    def _should_fallback_to_pip_update(self, message: str) -> bool:
+        lower = message.lower()
+        return (
+            "installed yt-dlp with pip" in lower
+            or "wheel from pypi" in lower
+            or "use that to update" in lower
+        )
+
+    def _run_update_command(self, command: list[str]) -> str:
+        try:
+            completed = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                check=False,
+                timeout=180,
+                creationflags=self._subprocess_creationflags(),
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise VideoDownloadError(self._normalize_error_message(exc)) from exc
+
+        output = "\n".join(part.strip() for part in (completed.stdout, completed.stderr) if part.strip())
+        if completed.returncode != 0:
+            raise VideoDownloadError(output or "yt-dlp 更新失败。")
+        return output or "yt-dlp 已更新。"
+
     def _unwrap_info(self, raw_info: dict[str, Any]) -> dict[str, Any]:
         if isinstance(raw_info, dict) and raw_info.get("entries"):
             entries = [entry for entry in raw_info.get("entries") or [] if isinstance(entry, dict)]
             if entries:
                 return entries[0]
         return raw_info
+
+    def _unwrap_bilibili_entries(self, raw_info: dict[str, Any]) -> list[dict[str, Any]]:
+        if not isinstance(raw_info, dict):
+            return []
+        entries = [entry for entry in raw_info.get("entries") or [] if isinstance(entry, dict)]
+        if len(entries) <= 1:
+            return []
+        return entries
+
+    def _coerce_webpage_url(self, info: dict[str, Any], fallback_url: str) -> str:
+        for key in ("webpage_url", "original_url", "url"):
+            value = str(info.get(key) or "").strip()
+            if value.startswith(("http://", "https://")):
+                return value
+        return fallback_url
 
     def _pick_filesize(self, info: dict[str, Any]) -> int | None:
         formats = info.get("formats") or []
@@ -618,6 +846,9 @@ class YtDlpService:
         return (
             "not a bot" in lower
             or "cookies-from-browser" in lower
+            or "downloaded file is empty" in lower
+            or "empty file" in lower
+            or "空文件" in message
             or "机器人校验" in message
         )
 
@@ -628,6 +859,11 @@ class YtDlpService:
             return "未找到 ffmpeg，无法合并音视频或处理封面。请先安装 ffmpeg 并加入 PATH。"
         if "requested format is not available" in lower:
             return "当前清晰度不可用，请重新解析后选择其他格式。"
+        if "downloaded file is empty" in lower or "empty file" in lower:
+            return (
+                "YouTube 返回了空文件，通常是当前清晰度/播放客户端不可用、Cookie 失效或 yt-dlp 版本偏旧。"
+                "已尝试兼容模式；如果仍失败，请刷新 Firefox Cookie、更新 yt-dlp，或换一个清晰度重试。"
+            )
         if "not a bot" in lower:
             return "YouTube 触发了机器人校验，已尝试兼容模式；如果仍失败，请稍后重试。"
         if "sign in to confirm your age" in lower or "login required" in lower:

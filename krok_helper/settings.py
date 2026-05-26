@@ -34,7 +34,7 @@ class AppSettings:
     video_download_naming_rule: str = NAMING_RULE_TITLE
     video_download_custom_template: str = "{title}"
     video_download_merge_video_audio: bool = True
-    video_download_download_thumbnail: bool = True
+    video_download_download_thumbnail: bool = False
     video_download_download_subtitle: bool = False
     video_download_concurrent_count: int = 3
     video_download_timeout: int = 5
@@ -92,7 +92,7 @@ def load_app_settings() -> AppSettings:
         video_download_naming_rule=str(payload.get("video_download_naming_rule", NAMING_RULE_TITLE)),
         video_download_custom_template=str(payload.get("video_download_custom_template", "{title}")),
         video_download_merge_video_audio=bool(payload.get("video_download_merge_video_audio", True)),
-        video_download_download_thumbnail=bool(payload.get("video_download_download_thumbnail", True)),
+        video_download_download_thumbnail=bool(payload.get("video_download_download_thumbnail", False)),
         video_download_download_subtitle=bool(payload.get("video_download_download_subtitle", False)),
         video_download_concurrent_count=min(5, max(1, int(payload.get("video_download_concurrent_count", 3) or 3))),
         video_download_timeout=(
