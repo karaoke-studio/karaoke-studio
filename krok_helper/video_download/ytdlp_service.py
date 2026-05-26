@@ -192,11 +192,29 @@ class YtDlpService:
         outtmpl = str(save_dir / f"{output_stem}.%(ext)s")
         selected_format = task.selected_format.download_format if task.selected_format else "best"
         extractor_args_hint = task.info.extractor_args_hint if task.info else ""
+        preexisting_outputs = self._snapshot_output_candidates(save_dir, output_stem)
 
         youtube_dl = self._import_ytdlp()
         if youtube_dl is not None:
-            self._download_with_python_retry(
-                youtube_dl,
+            try:
+                self._download_with_python_retry(
+                    youtube_dl,
+                    task,
+                    options,
+                    progress_callback,
+                    save_dir=save_dir,
+                    output_stem=output_stem,
+                    outtmpl=outtmpl,
+                    selected_format=selected_format,
+                    extractor_args_hint=extractor_args_hint,
+                )
+            except DownloadCancelledError:
+                self._cleanup_cancelled_outputs(save_dir, output_stem, preexisting_outputs)
+                raise
+            return
+
+        try:
+            self._download_with_cli_retry(
                 task,
                 options,
                 progress_callback,
@@ -206,18 +224,9 @@ class YtDlpService:
                 selected_format=selected_format,
                 extractor_args_hint=extractor_args_hint,
             )
-            return
-
-        self._download_with_cli_retry(
-            task,
-            options,
-            progress_callback,
-            save_dir=save_dir,
-            output_stem=output_stem,
-            outtmpl=outtmpl,
-            selected_format=selected_format,
-            extractor_args_hint=extractor_args_hint,
-        )
+        except DownloadCancelledError:
+            self._cleanup_cancelled_outputs(save_dir, output_stem, preexisting_outputs)
+            raise
 
     def _extract_info_with_best_backend(
         self,
@@ -856,6 +865,51 @@ class YtDlpService:
         if not ext:
             ext = str(info.get("ext") or (task.selected_format.ext if task.selected_format else "") or "mp4")
         return save_dir / f"{output_stem}.{ext}"
+
+    def _snapshot_output_candidates(self, save_dir: Path, output_stem: str) -> dict[Path, tuple[int, int]]:
+        snapshot: dict[Path, tuple[int, int]] = {}
+        for path in self._iter_output_candidates(save_dir, output_stem):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            snapshot[path] = (stat.st_size, stat.st_mtime_ns)
+        return snapshot
+
+    def _cleanup_cancelled_outputs(
+        self,
+        save_dir: Path,
+        output_stem: str,
+        preexisting_outputs: dict[Path, tuple[int, int]],
+    ) -> None:
+        for path in self._iter_output_candidates(save_dir, output_stem):
+            try:
+                stat = path.stat()
+            except OSError:
+                continue
+            previous = preexisting_outputs.get(path)
+            current = (stat.st_size, stat.st_mtime_ns)
+            if previous == current:
+                continue
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+    def _iter_output_candidates(self, save_dir: Path, output_stem: str):
+        try:
+            for path in save_dir.iterdir():
+                if path.is_file() and self._is_output_candidate(path, output_stem):
+                    yield path
+        except OSError:
+            return
+
+    def _is_output_candidate(self, path: Path, output_stem: str) -> bool:
+        name = path.name
+        if not name.startswith(output_stem):
+            return False
+        suffix = name[len(output_stem) :]
+        return not suffix or suffix.startswith((".", "-"))
 
     def _terminate_process(self, process: subprocess.Popen[str]) -> None:
         if process.poll() is not None:
