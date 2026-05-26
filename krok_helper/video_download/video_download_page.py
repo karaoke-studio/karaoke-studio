@@ -61,6 +61,13 @@ from .download_task import (
     VideoInfo,
 )
 from .format_parser import format_bytes
+from .video_logic import (
+    classify_existing_task,
+    find_existing_task_for_info,
+    find_matching_format,
+    select_default_format,
+    video_identity_keys,
+)
 from .ytdlp_service import DownloadCancelledError, VideoDownloadError, YtDlpService
 
 
@@ -1806,7 +1813,7 @@ class VideoDownloadPage(QWidget):
         for info in selected_infos:
             existing = self._find_existing_task_for_info(info)
             if existing is not None:
-                if existing.status not in (TASK_STATUS_COMPLETED, TASK_STATUS_DOWNLOADING):
+                if classify_existing_task(existing) == "update":
                     previous_option_id = existing.selected_format.option_id if existing.selected_format else ""
                     existing.url = info.url
                     existing.info = info
@@ -1936,37 +1943,16 @@ class VideoDownloadPage(QWidget):
         self._parse_worker = None
 
     def _select_default_format(self, formats: list[FormatOption]) -> FormatOption | None:
-        for option in formats:
-            if option.is_recommended:
-                return option
-        return formats[0] if formats else None
+        return select_default_format(formats)
 
     def _find_matching_format(self, formats: list[FormatOption], option_id: str) -> FormatOption | None:
-        if not option_id:
-            return None
-        for option in formats:
-            if option.option_id == option_id:
-                return option
-        return None
+        return find_matching_format(formats, option_id)
 
     def _find_existing_task_for_info(self, info: VideoInfo) -> DownloadTask | None:
-        incoming_keys = self._video_identity_keys(info.url, info.webpage_url)
-        if not incoming_keys:
-            return None
-        for task in self._tasks:
-            task_webpage_url = task.info.webpage_url if task.info else ""
-            task_keys = self._video_identity_keys(task.url, task_webpage_url)
-            if incoming_keys & task_keys:
-                return task
-        return None
+        return find_existing_task_for_info(self._tasks, info)
 
     def _video_identity_keys(self, *urls: str) -> set[str]:
-        keys: set[str] = set()
-        for url in urls:
-            normalized = (url or "").strip().rstrip("/")
-            if normalized:
-                keys.add(normalized)
-        return keys
+        return video_identity_keys(*urls)
 
     def _preferred_task_filesize(self, task: DownloadTask) -> int | None:
         if task.selected_format and task.selected_format.filesize:
