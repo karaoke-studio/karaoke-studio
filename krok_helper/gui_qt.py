@@ -15,10 +15,11 @@ DWMWCP_DONOTROUND = 1
 os.environ["QFLUENT_WIDGETS_NO_PROMOTION"] = "1"
 
 from PyQt6.QtCore import QEvent, QSize, QThread, QTimer, Qt, pyqtSignal as Signal
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPen, QShortcut
+from PyQt6.QtGui import QColor, QBrush, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPen, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
+    QBoxLayout,
     QButtonGroup,
     QDialog,
     QDoubleSpinBox,
@@ -33,6 +34,8 @@ from PyQt6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
+    QStyle,
+    QStyleOptionViewItem,
     QTableWidgetItem,
     QToolTip,
     QVBoxLayout,
@@ -61,6 +64,7 @@ from qfluentwidgets import (
 )
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 from qfluentwidgets.components.widgets.menu import MenuAnimationType
+from qfluentwidgets.components.widgets.table_view import TableItemDelegate
 
 from krok_helper.audio_alignment import (
     DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE,
@@ -94,6 +98,8 @@ from krok_helper.ffmpeg import _build_subprocess_kwargs, find_tool, probe_media,
 from krok_helper.lyrics import (
     DEFAULT_LYRICS_SEARCH_LIMIT,
     DEFAULT_LYRICS_PROVIDER_IDS,
+    LYRICS_LANGUAGE_ORIGINAL,
+    LYRICS_LANGUAGE_TRANSLATION,
     LYRICS_PREVIEW_LINE,
     LYRICS_PREVIEW_VERBATIM,
     LyricsPreview,
@@ -145,6 +151,11 @@ LYRICS_PREVIEW_MODE_OPTIONS = [
     ("按字 LRC", LYRICS_PREVIEW_VERBATIM),
 ]
 LYRICS_PREVIEW_MODE_MAP = {label: mode for label, mode in LYRICS_PREVIEW_MODE_OPTIONS}
+LYRICS_LANGUAGE_OPTIONS = [
+    ("原文", LYRICS_LANGUAGE_ORIGINAL),
+    ("中文译文", LYRICS_LANGUAGE_TRANSLATION),
+]
+LYRICS_LANGUAGE_MAP = {label: value for label, value in LYRICS_LANGUAGE_OPTIONS}
 
 APP_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "logo" / "logo.jpg"
 TASKBAR_LOGO_PATH = Path(__file__).resolve().parent / "assets" / "logo" / "logo2.png"
@@ -223,6 +234,15 @@ def build_app_ui_font(*, point_size: float = 10.5, bold: bool = False) -> QFont:
 
 def build_lyrics_ui_font(*, point_size: float = 10.5, bold: bool = False) -> QFont:
     return build_app_ui_font(point_size=point_size, bold=bold)
+
+
+def build_lyrics_mono_font(*, point_size: float = 10.5) -> QFont:
+    font = QFont()
+    font.setFamilies(["Consolas", "Microsoft YaHei UI", "Meiryo UI"])
+    font.setPointSizeF(point_size)
+    font.setStyleStrategy(QFont.StyleStrategy.PreferDefault)
+    font.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+    return font
 
 
 def sync_fluent_ui_fonts() -> None:
@@ -325,6 +345,34 @@ class CardWidget(QFrame):
         layout.setHorizontalSpacing(self._default_spacing)
         layout.setVerticalSpacing(self._default_spacing)
         return layout
+
+
+class LyricsResultsDelegate(TableItemDelegate):
+    def __init__(self, parent) -> None:
+        super().__init__(parent)
+        self.margin = 1
+        self.setCheckedColor("#D85C6C", "#D85C6C")
+
+    def paint(self, painter: QPainter, option: QStyleOptionViewItem, index) -> None:  # noqa: D401
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+
+        is_selected = index.row() in self.selectedRows
+        is_hovered = self.hoverRow == index.row() or bool(option.state & QStyle.StateFlag.State_MouseOver)
+        if is_selected:
+            painter.save()
+            painter.fillRect(option.rect, QColor("#FFF6F7"))
+            if index.column() == 0:
+                accent_rect = option.rect.adjusted(0, 6, -(option.rect.width() - 3), -6)
+                painter.fillRect(accent_rect, QColor("#D85C6C"))
+            painter.restore()
+            opt.state &= ~QStyle.StateFlag.State_Selected
+        elif is_hovered:
+            painter.save()
+            painter.fillRect(option.rect, QColor("#F8FAFC"))
+            painter.restore()
+
+        super().paint(painter, opt, index)
 
 
 class ControlBar(CardWidget):
@@ -871,26 +919,26 @@ class WorkflowStepButton(QWidget):
 
     def _refresh_style(self) -> None:
         if self._active:
-            background = "#FFF1F2"
-            title_color = "#F85D6A"
-            desc_color = "#C95D6B"
-            number_background = "#FF4D5E"
+            background = "#FFF6F7"
+            title_color = "#BC495A"
+            desc_color = "#8F5B64"
+            number_background = "#D85C6C"
             number_color = "#FFFFFF"
-            number_border = "#FF4D5E"
+            number_border = "#D85C6C"
         elif self._hovered:
-            background = "#F7F8FA"
+            background = "#F6F8FB"
             title_color = "#1F2937"
-            desc_color = "#6B7280"
+            desc_color = "#64748B"
             number_background = "#FFFFFF"
-            number_color = "#6B7280"
-            number_border = "#D1D5DB"
+            number_color = "#64748B"
+            number_border = "#CBD5E1"
         else:
             background = "transparent"
             title_color = "#1F2937"
-            desc_color = "#6B7280"
+            desc_color = "#64748B"
             number_background = "#FFFFFF"
-            number_color = "#6B7280"
-            number_border = "#D1D5DB"
+            number_color = "#64748B"
+            number_border = "#CBD5E1"
 
         self.setStyleSheet(
             f"""
@@ -917,7 +965,7 @@ class WorkflowStepButton(QWidget):
                 font-size: 11px;
             }}
             QFrame#WorkflowStepUnderline {{
-                background: #FF4D5E;
+                background: #D85C6C;
                 border: 0;
                 border-radius: 1px;
             }}
@@ -1751,6 +1799,25 @@ class KrokHelperQtApp(QMainWindow):
                 QTimer.singleShot(0, self._restore_windowed_geometry_centered)
         super().changeEvent(event)
 
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._refresh_lyrics_layout_direction()
+
+    def _refresh_lyrics_layout_direction(self) -> None:
+        layout = getattr(self, "lyrics_content_layout", None)
+        if layout is None:
+            return
+        narrow = self.width() < 1220
+        target_direction = QBoxLayout.Direction.TopToBottom if narrow else QBoxLayout.Direction.LeftToRight
+        if layout.direction() != target_direction:
+            layout.setDirection(target_direction)
+        if narrow:
+            layout.setStretch(0, 1)
+            layout.setStretch(1, 1)
+        else:
+            layout.setStretch(0, 7)
+            layout.setStretch(1, 6)
+
     def _apply_startup_window_geometry(self) -> None:
         self._restore_windowed_geometry_centered()
 
@@ -1779,7 +1846,7 @@ class KrokHelperQtApp(QMainWindow):
         self.setStyleSheet(
             """
             QMainWindow, QWidget {
-                background: #f7f3f5;
+                background: #F4F7FB;
                 color: #1f2937;
                 font-family: "Microsoft YaHei UI";
                 font-size: 10.5pt;
@@ -1795,17 +1862,25 @@ class KrokHelperQtApp(QMainWindow):
                 font-weight: 700;
             }
             QWidget#AppRoot {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #FAF7F8, stop:1 #F7F8FA);
+                background: #F4F7FB;
             }
             QFrame[cardWidget="true"] {
                 background: #FFFFFF;
-                border: 1px solid #E9E9E9;
+                border: 1px solid #E5EAF2;
                 border-radius: 8px;
             }
             QFrame#WorkflowBar {
-                background: #FFFFFF;
-                border: 1px solid #E9E9E9;
+                background: #FBFCFE;
+                border: 1px solid #E3E8F0;
                 border-radius: 8px;
+            }
+            QWidget#LyricsPage {
+                background: #F4F7FB;
+            }
+            QFrame#LyricsSearchPanel, QFrame#LyricsResultPanel, QFrame#LyricsPreviewPanel {
+                background: #FFFFFF;
+                border: 1px solid #E1E7F0;
+                border-radius: 10px;
             }
             QFrame#TrimRow {
                 background: transparent;
@@ -1832,13 +1907,30 @@ class KrokHelperQtApp(QMainWindow):
             }
             QLabel#PageTitle {
                 color: #1f2937;
-                font-size: 22pt;
+                font-size: 20pt;
                 font-weight: 700;
             }
             QLabel#PanelTitle {
                 background: transparent;
                 color: #111827;
-                font-size: 13pt;
+                font-size: 12.5pt;
+                font-weight: 700;
+            }
+            QLabel#LyricsPageDescription {
+                color: #667085;
+                font-size: 10pt;
+            }
+            QLabel#LyricsSecondaryText, QLabel#LyricsStatusText, QLabel#LyricsResultsSummary, QLabel#LyricsPreviewHint, QLabel#LyricsMatchSummary {
+                color: #64748B;
+                font-size: 9pt;
+            }
+            QLabel#LyricsPreviewMeta {
+                color: #64748B;
+                font-size: 9.5pt;
+            }
+            QLabel#LyricsPreviewTitle {
+                color: #0F172A;
+                font-size: 14pt;
                 font-weight: 700;
             }
             QPlainTextEdit#LogText {
@@ -1849,45 +1941,92 @@ class KrokHelperQtApp(QMainWindow):
                 font-size: 10pt;
             }
             QPlainTextEdit#LyricsPreviewText {
-                background: #ffffff;
-                border: 0;
-                color: #1f2937;
-                font-size: 11pt;
-                padding: 2px 0;
+                background: #F8FAFC;
+                border: 1px solid #DDE5EF;
+                border-radius: 8px;
+                color: #1E293B;
+                font-family: "Cascadia Mono", "Consolas", "Microsoft YaHei UI";
+                font-size: 10.5pt;
+                padding: 12px 14px;
+                selection-background-color: #FAD7DE;
+                selection-color: #111827;
+            }
+            QPlainTextEdit#LyricsPreviewText:focus {
+                border: 1px solid #D87886;
+                background: #FBFCFE;
             }
             QTableWidget#LyricsResultsTable {
-                background: #ffffff;
+                background: #FFFFFF;
                 alternate-background-color: #ffffff;
-                border: 1px solid rgba(203, 213, 225, 0.8);
+                border: 1px solid #DDE5EF;
                 gridline-color: transparent;
                 selection-background-color: transparent;
                 selection-color: #111827;
                 outline: 0;
-                border-radius: 16px;
+                border-radius: 8px;
             }
             QTableWidget#LyricsResultsTable::item {
-                padding: 9px 10px;
+                padding: 12px 12px;
                 border: 0;
-                border-bottom: 1px solid rgba(203, 213, 225, 0.45);
+                border-bottom: 1px solid rgba(226, 232, 240, 0.9);
             }
             QTableWidget#LyricsResultsTable::item:hover {
-                background: #eef2f7;
+                background: #F8FAFC;
             }
             QTableWidget#LyricsResultsTable::item:selected {
-                background: #dde3ea;
+                background: transparent;
                 color: #111827;
             }
             QTableWidget#LyricsResultsTable::item:selected:hover {
-                background: #d7dee7;
+                background: transparent;
             }
             QTableWidget#LyricsResultsTable QHeaderView::section {
-                background: #ffffff;
-                color: #111827;
+                background: #F8FAFC;
+                color: #64748B;
                 border: 0;
-                border-bottom: 1px solid rgba(203, 213, 225, 0.6);
-                border-right: 1px solid rgba(203, 213, 225, 0.45);
-                padding: 8px 8px 10px 8px;
+                border-bottom: 1px solid #DDE5EF;
+                padding: 9px 10px;
                 font-weight: 700;
+            }
+            QPushButton#LyricsSearchButton, PrimaryPushButton#LyricsSearchButton {
+                background: #D85C6C;
+                border: 1px solid #D85C6C;
+                border-radius: 8px;
+                color: #FFFFFF;
+                font-weight: 700;
+                padding: 8px 18px;
+            }
+            QPushButton#LyricsSearchButton:hover, PrimaryPushButton#LyricsSearchButton:hover {
+                background: #C94F60;
+                border-color: #C94F60;
+            }
+            QPushButton#LyricsSearchButton:pressed, PrimaryPushButton#LyricsSearchButton:pressed {
+                background: #B94455;
+                border-color: #B94455;
+            }
+            QPushButton#LyricsSearchButton:disabled, PrimaryPushButton#LyricsSearchButton:disabled {
+                background: #E8B5BD;
+                border-color: #E8B5BD;
+                color: #FFFFFF;
+            }
+            QPushButton#LyricsCopyButton {
+                background: #FFFFFF;
+                border: 1px solid #D7DEE9;
+                border-radius: 8px;
+                color: #334155;
+                padding: 7px 14px;
+                font-weight: 600;
+            }
+            QPushButton#LyricsCopyButton:hover {
+                background: #F8FAFC;
+                border-color: #C6D0DE;
+            }
+            QPushButton#LyricsCopyButton:pressed {
+                background: #EEF2F7;
+            }
+            QCheckBox#LyricsStripIntroCheck {
+                color: #475569;
+                spacing: 7px;
             }
             QHeaderView::section {
                 background: #eef2f7;
@@ -1924,6 +2063,22 @@ class KrokHelperQtApp(QMainWindow):
                 border: 1px solid #d9dee8;
                 padding: 8px 10px;
                 border-radius: 12px;
+            }
+            QLineEdit#LyricsKeywordEdit, QComboBox#LyricsSourceCombo, QComboBox#LyricsPreviewModeCombo {
+                background: #FFFFFF;
+                border: 1px solid #CBD5E1;
+                border-radius: 8px;
+                padding: 8px 12px;
+                min-height: 24px;
+                color: #111827;
+            }
+            QLineEdit#LyricsKeywordEdit:hover, QComboBox#LyricsSourceCombo:hover, QComboBox#LyricsPreviewModeCombo:hover {
+                border-color: #B6C2D2;
+                background: #FBFCFE;
+            }
+            QLineEdit#LyricsKeywordEdit:focus, QComboBox#LyricsSourceCombo:focus, QComboBox#LyricsPreviewModeCombo:focus {
+                border: 1px solid #D87886;
+                background: #FFFFFF;
             }
             QScrollBar:vertical {
                 background: transparent;
@@ -2117,9 +2272,10 @@ class KrokHelperQtApp(QMainWindow):
 
     def _build_lyrics_page(self) -> QWidget:
         page = QWidget()
+        page.setObjectName("LyricsPage")
         shell = QVBoxLayout(page)
-        shell.setContentsMargins(20, 20, 20, 20)
-        shell.setSpacing(12)
+        shell.setContentsMargins(18, 18, 18, 18)
+        shell.setSpacing(14)
 
         header = QVBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -2129,55 +2285,59 @@ class KrokHelperQtApp(QMainWindow):
         desc = QLabel(
             "输入歌名、歌手、专辑或歌词片段后搜索歌曲；结果会优先保留各来源原始搜索顺位，再用歌名、歌手、专辑等匹配度修正。"
         )
+        desc.setObjectName("LyricsPageDescription")
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: #667085; font-size: 10.5pt;")
         header.addWidget(title)
         header.addWidget(desc)
         shell.addLayout(header)
 
-        search_panel = CardWidget(radius=10, padding=(16, 16, 16, 16), spacing=10)
+        search_panel = CardWidget(radius=10, padding=(18, 18, 18, 16), spacing=10)
+        search_panel.setObjectName("LyricsSearchPanel")
         search_layout = search_panel.createGridLayout()
-        search_layout.setHorizontalSpacing(14)
-        search_layout.setVerticalSpacing(10)
+        search_layout.setHorizontalSpacing(10)
+        search_layout.setVerticalSpacing(8)
 
         self.lyrics_source_combo = StyledComboBox()
+        self.lyrics_source_combo.setObjectName("LyricsSourceCombo")
         self.lyrics_source_combo.addItems([label for label, _provider_ids in LYRICS_SOURCE_OPTIONS])
         self.lyrics_source_combo.setFont(build_lyrics_ui_font(point_size=10.5))
+        self.lyrics_source_combo.setFixedWidth(156)
+        self.lyrics_source_combo.setFixedHeight(42)
         self._install_single_click_combo_behavior(self.lyrics_source_combo)
         self.lyrics_source_combo.currentIndexChanged.connect(self._persist_lyrics_preferences)
 
         self.lyrics_keyword_edit = QLineEdit()
+        self.lyrics_keyword_edit.setObjectName("LyricsKeywordEdit")
         self.lyrics_keyword_edit.setPlaceholderText("例如：Recollect / Reweave / Redo / Realize")
+        self.lyrics_keyword_edit.setMinimumHeight(42)
         self.lyrics_keyword_edit.returnPressed.connect(self._start_lyrics_search)
         self.lyrics_search_button = PrimaryPushButton("搜索歌曲")
+        self.lyrics_search_button.setObjectName("LyricsSearchButton")
+        self.lyrics_search_button.setFixedSize(128, 42)
         self.lyrics_search_button.clicked.connect(self._start_lyrics_search)
         self.lyrics_status_label = QLabel("当前支持聚合搜索，也可以手动切换到 QQ音乐、酷狗音乐、网易云音乐或 LRCLIB 单源搜索。")
+        self.lyrics_status_label.setObjectName("LyricsStatusText")
         self.lyrics_status_label.setWordWrap(True)
-        self.lyrics_status_label.setStyleSheet('font-size: 9pt; color: #475569;')
         self.lyrics_status_label.setFont(build_lyrics_ui_font(point_size=9.5))
-        source_label = CaptionLabel("来源")
-        source_label.setStyleSheet("color: #667085;")
-        keyword_label = CaptionLabel("搜索关键词")
-        keyword_label.setStyleSheet("color: #667085;")
-        search_layout.addWidget(source_label, 0, 0)
-        search_layout.addWidget(keyword_label, 0, 1)
-        search_layout.addWidget(self.lyrics_source_combo, 1, 0)
-        search_layout.addWidget(self.lyrics_keyword_edit, 1, 1)
-        search_layout.addWidget(self.lyrics_search_button, 1, 2)
-        search_layout.addWidget(self.lyrics_status_label, 2, 0, 1, 3)
+        search_layout.addWidget(self.lyrics_source_combo, 0, 0)
+        search_layout.addWidget(self.lyrics_keyword_edit, 0, 1)
+        search_layout.addWidget(self.lyrics_search_button, 0, 2)
+        search_layout.addWidget(self.lyrics_status_label, 1, 0, 1, 3)
         search_layout.setColumnStretch(1, 1)
         shell.addWidget(search_panel)
 
-        content = QHBoxLayout()
+        content = QBoxLayout(QBoxLayout.Direction.LeftToRight)
         content.setContentsMargins(0, 0, 0, 0)
-        content.setSpacing(12)
+        content.setSpacing(14)
+        self.lyrics_content_layout = content
 
         result_panel = CardWidget(radius=10, padding=(16, 16, 16, 16), spacing=12)
+        result_panel.setObjectName("LyricsResultPanel")
         result_layout = result_panel.createVBoxLayout()
         result_title = QLabel("匹配结果")
         result_title.setObjectName("PanelTitle")
         self.lyrics_results_summary_label = QLabel("还没有搜索结果。")
-        self.lyrics_results_summary_label.setStyleSheet('font-size: 9pt; color: #475569;')
+        self.lyrics_results_summary_label.setObjectName("LyricsResultsSummary")
         self.lyrics_results_summary_label.setFont(build_lyrics_ui_font(point_size=9.5))
         self.lyrics_results_table = QTableWidget()
         self.lyrics_results_table.setRowCount(0)
@@ -2198,13 +2358,14 @@ class KrokHelperQtApp(QMainWindow):
         self.lyrics_results_table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.lyrics_results_table.setFont(build_lyrics_ui_font(point_size=10.5))
         self.lyrics_results_table.verticalHeader().setVisible(False)
-        self.lyrics_results_table.verticalHeader().setDefaultSectionSize(42)
+        self.lyrics_results_table.verticalHeader().setDefaultSectionSize(50)
         self.lyrics_results_table.horizontalHeader().setStretchLastSection(False)
         self.lyrics_results_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         self.lyrics_results_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         self.lyrics_results_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Fixed)
         self.lyrics_results_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeMode.Fixed)
         self.lyrics_results_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeMode.Fixed)
+        self.lyrics_results_table.setItemDelegate(LyricsResultsDelegate(self.lyrics_results_table))
         self.lyrics_results_table.installEventFilter(self)
         self.lyrics_results_table.currentCellChanged.connect(self._handle_lyrics_result_selected)
         self.lyrics_results_table.verticalScrollBar().valueChanged.connect(self._maybe_load_more_lyrics_results)
@@ -2215,57 +2376,72 @@ class KrokHelperQtApp(QMainWindow):
         content.addWidget(result_panel, 7)
 
         preview_panel = CardWidget(radius=10, padding=(16, 16, 16, 16), spacing=12)
+        preview_panel.setObjectName("LyricsPreviewPanel")
         preview_layout = preview_panel.createVBoxLayout()
         preview_header = QHBoxLayout()
         preview_header.setContentsMargins(0, 0, 0, 0)
-        preview_header.setSpacing(10)
+        preview_header.setSpacing(8)
         preview_title = QLabel("歌词预览")
         preview_title.setObjectName("PanelTitle")
         preview_header.addWidget(preview_title)
         preview_header.addStretch(1)
         self.copy_lyrics_button = QPushButton("复制歌词")
+        self.copy_lyrics_button.setObjectName("LyricsCopyButton")
         self.copy_lyrics_button.clicked.connect(self._copy_current_lyrics_preview)
-        self.copy_lyrics_button.setMinimumHeight(34)
+        self.copy_lyrics_button.setFixedHeight(36)
         preview_header.addWidget(self.copy_lyrics_button, 0, Qt.AlignmentFlag.AlignVCenter)
         self.lyrics_strip_intro_checkbox = QCheckBox("省略歌曲介绍")
-        self.lyrics_strip_intro_checkbox.setMinimumHeight(34)
+        self.lyrics_strip_intro_checkbox.setObjectName("LyricsStripIntroCheck")
+        self.lyrics_strip_intro_checkbox.setMinimumHeight(36)
         self.lyrics_strip_intro_checkbox.setChecked(True)
         self.lyrics_strip_intro_checkbox.toggled.connect(lambda _: self._refresh_lyrics_preview())
         self.lyrics_strip_intro_checkbox.toggled.connect(self._persist_lyrics_preferences)
         preview_header.addSpacing(12)
         preview_header.addWidget(self.lyrics_strip_intro_checkbox, 0, Qt.AlignmentFlag.AlignVCenter)
-        preview_header.addWidget(QLabel("显示格式"), 0, Qt.AlignmentFlag.AlignVCenter)
+        self.lyrics_language_combo = StyledComboBox()
+        self.lyrics_language_combo.setObjectName("LyricsLanguageCombo")
+        self.lyrics_language_combo.addItems([label for label, _value in LYRICS_LANGUAGE_OPTIONS])
+        self.lyrics_language_combo.setFixedWidth(112)
+        self.lyrics_language_combo.setFixedHeight(36)
+        self.lyrics_language_combo.setToolTip("切换原文 / 中文译文（无译文时禁用）")
+        self.lyrics_language_combo.currentIndexChanged.connect(lambda _: self._refresh_lyrics_preview())
+        self.lyrics_language_combo.currentIndexChanged.connect(self._persist_lyrics_preferences)
+        self._install_single_click_combo_behavior(self.lyrics_language_combo)
+        preview_header.addWidget(self.lyrics_language_combo, 0, Qt.AlignmentFlag.AlignVCenter)
         self.lyrics_preview_mode_combo = StyledComboBox()
+        self.lyrics_preview_mode_combo.setObjectName("LyricsPreviewModeCombo")
         self.lyrics_preview_mode_combo.addItems([label for label, _mode in LYRICS_PREVIEW_MODE_OPTIONS])
         self.lyrics_preview_mode_combo.setFixedWidth(112)
-        self.lyrics_preview_mode_combo.setMinimumHeight(34)
+        self.lyrics_preview_mode_combo.setFixedHeight(36)
         self.lyrics_preview_mode_combo.currentIndexChanged.connect(lambda _: self._refresh_lyrics_preview())
         self.lyrics_preview_mode_combo.currentIndexChanged.connect(self._persist_lyrics_preferences)
         self._install_single_click_combo_behavior(self.lyrics_preview_mode_combo)
         preview_header.addWidget(self.lyrics_preview_mode_combo, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.lyrics_preview_title_label = QLabel("未选择歌曲")
-        self.lyrics_preview_title_label.setStyleSheet('font-size: 12pt; font-weight: 700;')
+        self.lyrics_preview_title_label.setObjectName("LyricsPreviewTitle")
         self.lyrics_preview_title_label.setWordWrap(True)
-        self.lyrics_preview_title_label.setFont(build_lyrics_ui_font(point_size=12, bold=True))
+        self.lyrics_preview_title_label.setFont(build_lyrics_ui_font(point_size=14, bold=True))
         self.lyrics_preview_meta_label = QLabel("来源: -")
+        self.lyrics_preview_meta_label.setObjectName("LyricsPreviewMeta")
         self.lyrics_preview_meta_label.setWordWrap(True)
         self.lyrics_preview_meta_label.setFont(build_lyrics_ui_font(point_size=10.5))
         self.lyrics_match_summary_label = QLabel("匹配字段: -")
+        self.lyrics_match_summary_label.setObjectName("LyricsMatchSummary")
         self.lyrics_match_summary_label.setWordWrap(True)
-        self.lyrics_match_summary_label.setStyleSheet('font-size: 9pt; color: #475569;')
         self.lyrics_match_summary_label.setFont(build_lyrics_ui_font(point_size=9.5))
         self.lyrics_preview_hint_label = QLabel("搜索后选择一首歌，即可查看逐行或按字的 LRC 预览。")
+        self.lyrics_preview_hint_label.setObjectName("LyricsPreviewHint")
         self.lyrics_preview_hint_label.setWordWrap(True)
-        self.lyrics_preview_hint_label.setStyleSheet('font-size: 9pt; color: #475569;')
         self.lyrics_preview_hint_label.setFont(build_lyrics_ui_font(point_size=9.5))
         self.lyrics_preview_edit = QPlainTextEdit()
         self.lyrics_preview_edit.setReadOnly(True)
         self.lyrics_preview_edit.setObjectName("LyricsPreviewText")
-        self.lyrics_preview_edit.setFont(build_lyrics_ui_font(point_size=11))
+        self.lyrics_preview_edit.setFont(build_lyrics_mono_font(point_size=10.5))
         self.lyrics_preview_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.lyrics_preview_edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self.lyrics_preview_edit.setPlaceholderText("歌词会显示在这里。")
+        self.lyrics_preview_edit.setTabStopDistance(QFontMetrics(self.lyrics_preview_edit.font()).horizontalAdvance(" ") * 4)
 
         preview_layout.addLayout(preview_header)
         preview_layout.addWidget(self.lyrics_preview_title_label)
@@ -2276,6 +2452,7 @@ class KrokHelperQtApp(QMainWindow):
         content.addWidget(preview_panel, 6)
 
         shell.addLayout(content, 1)
+        self._refresh_lyrics_layout_direction()
         self._clear_lyrics_results()
         return page
 
@@ -2458,8 +2635,18 @@ class KrokHelperQtApp(QMainWindow):
             ]
             for column, item in enumerate(items):
                 item.setData(Qt.ItemDataRole.UserRole, row)
+                item.setFont(build_lyrics_ui_font(point_size=10.5, bold=(column == 0)))
+                if column in (1, 2):
+                    item.setForeground(QBrush(QColor("#64748B")))
                 if column == 3:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+                    item.setForeground(QBrush(QColor("#475569")))
+                elif column == 4:
                     item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+                    item.setFont(build_lyrics_ui_font(point_size=9.5, bold=True))
+                    item.setForeground(QBrush(QColor("#B94D5D")))
+                else:
+                    item.setTextAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
                 self.lyrics_results_table.setItem(row, column, item)
             if selected_key and candidate.key == selected_key:
                 selected_row = row
@@ -2468,6 +2655,8 @@ class KrokHelperQtApp(QMainWindow):
             loading_row = len(self.lyrics_search_results)
             loading_item = QTableWidgetItem("加载中...")
             loading_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            loading_item.setFont(build_lyrics_ui_font(point_size=9.5))
+            loading_item.setForeground(QBrush(QColor("#64748B")))
             loading_item.setFlags(Qt.ItemFlag.ItemIsEnabled)
             self.lyrics_results_table.setSpan(loading_row, 0, 1, self.lyrics_results_table.columnCount())
             self.lyrics_results_table.setItem(loading_row, 0, loading_item)
@@ -2539,6 +2728,7 @@ class KrokHelperQtApp(QMainWindow):
 
     def _refresh_lyrics_preview(self) -> None:
         candidate = self.lyrics_selected_candidate
+        self._update_lyrics_language_combo_state(candidate)
         if candidate is None:
             self.lyrics_preview_title_label.setText("未选择歌曲")
             self.lyrics_preview_meta_label.setText("来源: -")
@@ -2572,10 +2762,12 @@ class KrokHelperQtApp(QMainWindow):
             return
 
         preview_mode = self._current_lyrics_preview_mode()
+        language = self._current_lyrics_language()
         preview = build_lyrics_preview(
             candidate,
             preview_mode,
             strip_intro_lines=self.lyrics_strip_intro_checkbox.isChecked(),
+            language=language,
         )
         self.lyrics_preview_title_label.setText(f"{candidate.title or '未命名'}")
         self.lyrics_preview_meta_label.setText(
@@ -3267,7 +3459,7 @@ class KrokHelperQtApp(QMainWindow):
 
         page = QWidget()
         shell = QVBoxLayout(page)
-        shell.setContentsMargins(20, 20, 20, 20)
+        shell.setContentsMargins(0, 0, 0, 0)
         shell.setSpacing(14)
 
         self.waveform_view = WaveformView()
@@ -4347,6 +4539,11 @@ class KrokHelperQtApp(QMainWindow):
             if mode == saved_preview_mode:
                 self.lyrics_preview_mode_combo.setCurrentIndex(index)
                 break
+        saved_language = str(self.settings.lyrics_language or LYRICS_LANGUAGE_ORIGINAL)
+        for index, (label, value) in enumerate(LYRICS_LANGUAGE_OPTIONS):
+            if value == saved_language:
+                self.lyrics_language_combo.setCurrentIndex(index)
+                break
         self.lyrics_strip_intro_checkbox.setChecked(bool(self.settings.lyrics_strip_intro_lines))
 
     def _install_single_click_combo_behavior(self, combo: QComboBox) -> None:
@@ -4372,13 +4569,61 @@ class KrokHelperQtApp(QMainWindow):
     def _current_lyrics_preview_mode(self) -> str:
         return LYRICS_PREVIEW_MODE_MAP.get(self.lyrics_preview_mode_combo.currentText(), LYRICS_PREVIEW_LINE)
 
+    def _current_lyrics_language(self) -> str:
+        return LYRICS_LANGUAGE_MAP.get(self.lyrics_language_combo.currentText(), LYRICS_LANGUAGE_ORIGINAL)
+
+    def _update_lyrics_language_combo_state(self, candidate: LyricsSearchCandidate | None) -> None:
+        combo = getattr(self, "lyrics_language_combo", None)
+        if combo is None:
+            return
+        has_translation = bool(candidate is not None and candidate.has_translation)
+        translation_index = next(
+            (i for i, (_label, value) in enumerate(LYRICS_LANGUAGE_OPTIONS) if value == LYRICS_LANGUAGE_TRANSLATION),
+            -1,
+        )
+        if translation_index >= 0:
+            set_item_enabled = getattr(combo, "setItemEnabled", None)
+            if callable(set_item_enabled):
+                set_item_enabled(translation_index, has_translation)
+            else:
+                # Fallback for plain QComboBox / future swap.
+                model = combo.model() if hasattr(combo, "model") else None
+                item = model.item(translation_index) if model is not None and hasattr(model, "item") else None
+                if item is not None:
+                    flags = item.flags()
+                    if has_translation:
+                        item.setFlags(flags | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                    else:
+                        item.setFlags(flags & ~(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable))
+        # If user has selected translation but the currently loaded song doesn't
+        # have one, silently fall back to original *without* persisting, so the
+        # saved preference is preserved for the next song that does have a
+        # translation.
+        if (
+            candidate is not None
+            and candidate.lyrics_loaded
+            and not has_translation
+            and self._current_lyrics_language() == LYRICS_LANGUAGE_TRANSLATION
+        ):
+            previous = self._loading_settings_into_ui
+            self._loading_settings_into_ui = True
+            try:
+                for index, (_label, value) in enumerate(LYRICS_LANGUAGE_OPTIONS):
+                    if value == LYRICS_LANGUAGE_ORIGINAL:
+                        combo.setCurrentIndex(index)
+                        break
+            finally:
+                self._loading_settings_into_ui = previous
+
     def _persist_lyrics_preferences(self, *_args) -> None:
         if self._loading_settings_into_ui:
             return
         source_ids = self._current_lyrics_source_ids()
         preview_mode = self._current_lyrics_preview_mode()
+        language = self._current_lyrics_language()
         self.settings.lyrics_source_ids = tuple(source_ids)
         self.settings.lyrics_preview_mode = preview_mode
+        self.settings.lyrics_language = language
         self.settings.lyrics_strip_intro_lines = self.lyrics_strip_intro_checkbox.isChecked()
         save_app_settings(self.settings)
 

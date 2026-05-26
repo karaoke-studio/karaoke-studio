@@ -23,6 +23,8 @@ from krok_helper.config import APP_NAME, APP_VERSION
 
 LYRICS_PREVIEW_LINE = "line"
 LYRICS_PREVIEW_VERBATIM = "verbatim"
+LYRICS_LANGUAGE_ORIGINAL = "original"
+LYRICS_LANGUAGE_TRANSLATION = "translation"
 DEFAULT_LYRICS_PROVIDER_IDS = ("qm", "kg", "ne", "lrclib")
 DEFAULT_LYRICS_SEARCH_LIMIT = 25
 PROVIDER_PAGE_SIZE = 25
@@ -80,6 +82,7 @@ class LyricsSearchCandidate:
     line_lyrics: str = ""
     verbatim_lyrics: str = ""
     plain_lyrics: str = ""
+    translation_lyrics: str = ""
     source_url: str | None = None
     source_priority: int = 0
     provider_position: int = 10_000
@@ -105,6 +108,10 @@ class LyricsSearchCandidate:
     @property
     def best_available_lyrics(self) -> str:
         return self.verbatim_lyrics.strip() or self.line_lyrics.strip() or self.plain_lyrics.strip()
+
+    @property
+    def has_translation(self) -> bool:
+        return bool(self.translation_lyrics.strip())
 
 
 @dataclass(slots=True, frozen=True)
@@ -300,6 +307,7 @@ class NeteaseLyricsProvider:
             verbatim_lyrics = converted_verbatim
             candidate.plain_lyrics = converted_plain
         plain_lyrics = candidate.plain_lyrics or _strip_lrc_timestamps(line_lyrics)
+        translation_lyrics = _extract_nested_lyric(payload, "tlyric")
         if not line_lyrics and not plain_lyrics:
             raise LyricsSearchError(f"{self.provider_name} 没有返回可用歌词。")
 
@@ -307,6 +315,7 @@ class NeteaseLyricsProvider:
         candidate.line_lyrics = line_lyrics
         candidate.verbatim_lyrics = verbatim_lyrics
         candidate.plain_lyrics = plain_lyrics
+        candidate.translation_lyrics = translation_lyrics
         candidate.lyrics_loaded = True
         return candidate
 
@@ -435,6 +444,7 @@ class QqMusicLyricsProvider:
 
         line_lyrics = _coerce_qq_lyric(response.get("lyric"))
         plain_lyrics = _strip_lrc_timestamps(line_lyrics)
+        translation_lyrics = _coerce_qq_lyric(response.get("trans"))
         if not line_lyrics and not plain_lyrics:
             raise LyricsSearchError(f"{self.provider_name} 没有返回可用歌词。")
 
@@ -442,6 +452,7 @@ class QqMusicLyricsProvider:
         candidate.line_lyrics = line_lyrics
         candidate.verbatim_lyrics = ""
         candidate.plain_lyrics = plain_lyrics
+        candidate.translation_lyrics = translation_lyrics
         candidate.lyrics_loaded = True
         return candidate
 
@@ -700,6 +711,7 @@ def build_lyrics_preview(
     preview_mode: str,
     *,
     strip_intro_lines: bool = True,
+    language: str = LYRICS_LANGUAGE_ORIGINAL,
 ) -> LyricsPreview:
     if strip_intro_lines:
         line_lyrics = _strip_leading_intro_lines(
@@ -720,10 +732,24 @@ def build_lyrics_preview(
             artist=candidate.artist,
             album=candidate.album,
         )
+        translation_lyrics = _strip_leading_intro_lines(
+            candidate.translation_lyrics,
+            title=candidate.title,
+            artist=candidate.artist,
+            album=candidate.album,
+        )
     else:
         line_lyrics = candidate.line_lyrics
         verbatim_lyrics = candidate.verbatim_lyrics
         plain_lyrics = candidate.plain_lyrics
+        translation_lyrics = candidate.translation_lyrics
+
+    if language == LYRICS_LANGUAGE_TRANSLATION and translation_lyrics.strip():
+        return LyricsPreview(
+            text=translation_lyrics.strip(),
+            used_synced_lyrics=True,
+            used_estimated_char_timing=False,
+        )
 
     if preview_mode == LYRICS_PREVIEW_VERBATIM:
         if verbatim_lyrics.strip():

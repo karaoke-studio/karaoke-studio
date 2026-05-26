@@ -11,7 +11,7 @@ from krok_helper.audio_alignment import (
     DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE,
 )
 from krok_helper.pipeline import DEFAULT_OFF_NAME_TEMPLATE, DEFAULT_ON_NAME_TEMPLATE, OUTPUT_NAME_MODE_FIXED
-from krok_helper.lyrics import DEFAULT_LYRICS_PROVIDER_IDS, LYRICS_PREVIEW_LINE
+from krok_helper.lyrics import DEFAULT_LYRICS_PROVIDER_IDS, LYRICS_LANGUAGE_ORIGINAL, LYRICS_PREVIEW_LINE
 from krok_helper.video_download.download_task import NAMING_RULE_TITLE, SOURCE_YOUTUBE
 
 
@@ -29,6 +29,7 @@ class AppSettings:
     align_export_use_video_audio: bool = False
     lyrics_source_ids: list[str] | tuple[str, ...] = DEFAULT_LYRICS_PROVIDER_IDS
     lyrics_preview_mode: str = LYRICS_PREVIEW_LINE
+    lyrics_language: str = LYRICS_LANGUAGE_ORIGINAL
     lyrics_strip_intro_lines: bool = True
     video_download_save_dir: str = ""
     video_download_naming_rule: str = NAMING_RULE_TITLE
@@ -87,6 +88,7 @@ def load_app_settings() -> AppSettings:
         )
         or DEFAULT_LYRICS_PROVIDER_IDS,
         lyrics_preview_mode=str(payload.get("lyrics_preview_mode", LYRICS_PREVIEW_LINE)),
+        lyrics_language=str(payload.get("lyrics_language", LYRICS_LANGUAGE_ORIGINAL)),
         lyrics_strip_intro_lines=bool(payload.get("lyrics_strip_intro_lines", True)),
         video_download_save_dir=str(payload.get("video_download_save_dir", "")),
         video_download_naming_rule=str(payload.get("video_download_naming_rule", NAMING_RULE_TITLE)),
