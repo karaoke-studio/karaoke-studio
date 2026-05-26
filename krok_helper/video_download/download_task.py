@@ -77,6 +77,11 @@ class DownloadTask:
     progress_phase_index: int = 0
     progress_phase_bytes: int = 0
     progress_phase_name: str = ""
+    naming_rule: str = NAMING_RULE_TITLE
+    custom_template: str = "{title}"
+    merge_video_audio: bool = True
+    download_thumbnail: bool = True
+    settings_confirmed: bool = False
 
 
 @dataclass(slots=True)
