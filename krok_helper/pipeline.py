@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from string import Formatter
 from tempfile import TemporaryDirectory
+from typing import Callable
 
 from krok_helper.config import DURATION_WARNING_SECONDS, MIN_HIRES_SAMPLE_RATE
-from krok_helper.errors import ProcessingError
+from krok_helper.errors import ExportCancelled, ProcessingError
 from krok_helper.ffmpeg import describe_tool_source, find_tool, probe_media, run_command
 from krok_helper.models import MediaInfo
 from krok_helper.types import Logger
@@ -194,7 +196,12 @@ def normalize_audio(
     audio_info: MediaInfo,
     output_path: Path,
     label: str,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
+    on_process_started: Callable[[subprocess.Popen | None], None] | None = None,
 ) -> int:
+    if should_cancel is not None and should_cancel():
+        raise ExportCancelled("生成已取消。")
     target_sample_rate = max(audio_info.sample_rate or 0, MIN_HIRES_SAMPLE_RATE)
     logger(f"开始预处理 {label}: 统一为 Hi-Res FLAC 32bit / {target_sample_rate}Hz / 2ch")
 
@@ -205,10 +212,14 @@ def normalize_audio(
         sample_rate=target_sample_rate,
     )
     try:
-        run_command(command, logger)
+        run_command(command, logger, should_cancel=should_cancel, on_process_started=on_process_started)
+    except ExportCancelled:
+        raise
     except ProcessingError as exc:
         raise ProcessingError(f"{label} 预处理失败: {audio_info.path.name}\n{exc}") from exc
 
+    if should_cancel is not None and should_cancel():
+        raise ExportCancelled("生成已取消。")
     logger(f"{label} 预处理完成: {output_path.name}")
     return target_sample_rate
 
@@ -221,7 +232,12 @@ def mux_output(
     output_path: Path,
     label: str,
     sample_rate: int,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
+    on_process_started: Callable[[subprocess.Popen | None], None] | None = None,
 ) -> Path:
+    if should_cancel is not None and should_cancel():
+        raise ExportCancelled("生成已取消。")
     logger(f"开始封装 {label}: 写入标准化音频流")
 
     command = build_mux_command(
@@ -232,10 +248,14 @@ def mux_output(
         audio_title=DEFAULT_AUDIO_TITLE_TEMPLATE.format(sample_rate=sample_rate),
     )
     try:
-        run_command(command, logger)
+        run_command(command, logger, should_cancel=should_cancel, on_process_started=on_process_started)
+    except ExportCancelled:
+        raise
     except ProcessingError as exc:
         raise ProcessingError(f"{label} 封装失败: {output_path.name}\n{exc}") from exc
 
+    if should_cancel is not None and should_cancel():
+        raise ExportCancelled("生成已取消。")
     logger(f"生成完成: {output_path.name}")
     return output_path
 
@@ -248,6 +268,9 @@ def process_output(
     output_path: Path,
     temp_audio_path: Path,
     label: str,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
+    on_process_started: Callable[[subprocess.Popen | None], None] | None = None,
 ) -> Path:
     target_sample_rate = normalize_audio(
         ffmpeg_path=ffmpeg_path,
@@ -255,6 +278,8 @@ def process_output(
         audio_info=audio_info,
         output_path=temp_audio_path,
         label=label,
+        should_cancel=should_cancel,
+        on_process_started=on_process_started,
     )
     return mux_output(
         ffmpeg_path=ffmpeg_path,
@@ -264,6 +289,8 @@ def process_output(
         output_path=output_path,
         label=label,
         sample_rate=target_sample_rate,
+        should_cancel=should_cancel,
+        on_process_started=on_process_started,
     )
 
 
@@ -323,6 +350,8 @@ def run_pipeline(
     on_name_template: str | None,
     off_name_template: str | None,
     logger: Logger,
+    should_cancel: Callable[[], bool] | None = None,
+    on_process_started: Callable[[subprocess.Popen | None], None] | None = None,
 ) -> list[Path]:
     ffmpeg_path = find_tool("ffmpeg.exe", ffmpeg_dir)
     ffprobe_path = find_tool("ffprobe.exe", ffmpeg_dir)
@@ -331,6 +360,8 @@ def run_pipeline(
     logger(f"FFprobe: {ffprobe_path}")
     logger(describe_tool_source(ffmpeg_path, ffmpeg_dir))
     logger("正在分析输入文件...")
+    if should_cancel is not None and should_cancel():
+        raise ExportCancelled("生成已取消。")
 
     if on_vocal_path is None and off_vocal_path is None:
         raise ProcessingError("至少需要提供原唱音频或伴奏音频中的一个。")
@@ -357,6 +388,8 @@ def run_pipeline(
         warn_duration_mismatch(logger, video_info, on_vocal_info, "原唱无损")
     if off_vocal_info is not None:
         warn_duration_mismatch(logger, video_info, off_vocal_info, "伴奏无损")
+    if should_cancel is not None and should_cancel():
+        raise ExportCancelled("生成已取消。")
 
     output_dir = resolve_output_dir(video_path, output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -387,6 +420,8 @@ def run_pipeline(
                     on_output,
                     temp_dir / "on_vocal.normalized.flac",
                     "On Vocal",
+                    should_cancel=should_cancel,
+                    on_process_started=on_process_started,
                 )
             )
 
@@ -400,9 +435,13 @@ def run_pipeline(
                     off_output,
                     temp_dir / "off_vocal.normalized.flac",
                     "Off Vocal",
+                    should_cancel=should_cancel,
+                    on_process_started=on_process_started,
                 )
             )
 
+    if should_cancel is not None and should_cancel():
+        raise ExportCancelled("生成已取消。")
     logger(f"输出目录: {output_dir}")
     logger("全部处理完成。")
     return outputs

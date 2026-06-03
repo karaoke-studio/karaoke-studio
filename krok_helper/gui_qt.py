@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QFrame,
     QGridLayout,
+    QGraphicsDropShadowEffect,
     QHeaderView,
     QHBoxLayout,
     QLabel,
@@ -115,6 +116,7 @@ from krok_helper.pipeline import (
     OUTPUT_NAME_MODE_TEMPLATE,
     OUTPUT_NAME_MODE_VIDEO_NAME,
     resolve_output_dir,
+    resolve_output_paths,
     run_pipeline,
     validate_output_name_template,
 )
@@ -219,6 +221,15 @@ def apply_safe_label_metrics(
     margins = label.contentsMargins()
     label.setContentsMargins(margins.left(), top_padding, margins.right(), bottom_padding)
     label.setMinimumHeight(QFontMetrics(font).height() + top_padding + bottom_padding)
+
+
+def apply_card_shadow(widget: QWidget, *, alpha: int = 20) -> None:
+    shadow = QGraphicsDropShadowEffect(widget)
+    shadow.setBlurRadius(12)
+    shadow.setXOffset(0)
+    shadow.setYOffset(2)
+    shadow.setColor(QColor(16, 24, 40, alpha))
+    widget.setGraphicsEffect(shadow)
 
 
 def build_app_ui_font(*, point_size: float = 10.5, bold: bool = False) -> QFont:
@@ -1086,10 +1097,14 @@ class DropZoneCard(CardWidget):
         hint: str,
         extensions: set[str],
         min_height: int = 220,
+        icon_text: str = "",
+        placeholder_icon: str = "",
+        accent_bg: str = "#f6f8fb",
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.extensions = {ext.lower() for ext in extensions}
+        self.accent_bg = accent_bg
         self.path: Path | None = None
         self._hovered = False
         self._drag_state = "idle"
@@ -1104,17 +1119,34 @@ class DropZoneCard(CardWidget):
         layout.setContentsMargins(16, 14, 16, 14)
         layout.setSpacing(8)
 
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
+
+        self.icon_label = QLabel(icon_text)
+        self.icon_label.setObjectName("DropZoneIcon")
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.icon_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.icon_label.setVisible(bool(icon_text))
+
         self.title_label = QLabel(title)
         self.title_label.setObjectName("DropZoneTitle")
         self.title_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         title_font = QFont("Microsoft YaHei UI", 12)
         title_font.setBold(True)
         apply_safe_label_metrics(self.title_label, title_font)
+        title_row.addWidget(self.icon_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        title_row.addWidget(self.title_label, 1, Qt.AlignmentFlag.AlignVCenter)
 
         self.hint_label = QLabel(hint)
         self.hint_label.setObjectName("DropZoneHint")
         self.hint_label.setWordWrap(True)
         self.hint_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+        self.placeholder_label = QLabel(placeholder_icon)
+        self.placeholder_label.setObjectName("DropZonePlaceholder")
+        self.placeholder_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.placeholder_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
         self.path_label = QLabel("未选择文件")
         self.path_label.setObjectName("DropZonePath")
@@ -1127,9 +1159,10 @@ class DropZoneCard(CardWidget):
         self.action_label.setWordWrap(True)
         self.action_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
-        layout.addWidget(self.title_label)
+        layout.addLayout(title_row)
         layout.addWidget(self.hint_label)
         layout.addStretch(1)
+        layout.addWidget(self.placeholder_label, 0, Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.path_label)
         layout.addWidget(self.action_label)
         self._refresh_style()
@@ -1209,7 +1242,7 @@ class DropZoneCard(CardWidget):
         border_width = 1
         if self._drag_state == "accept":
             background = "#dbeafe"
-            border = "#2563eb"
+            border = "#2f6fed"
             accent = "#1d4ed8"
             border_width = 2
             action_text = "松开鼠标即可导入这个文件"
@@ -1220,22 +1253,24 @@ class DropZoneCard(CardWidget):
             border_width = 2
             action_text = "这个文件类型不支持，请换一个文件"
         elif self.path is not None:
-            background = "#ecfdf3"
+            background = "#ffffff"
             border = "#3aa76d"
             accent = "#177245"
             action_text = self._default_action_text
         elif self._hovered:
-            background = "#eef4ff"
-            border = "#8aa8f8"
+            background = self.accent_bg
+            border = "#2f6fed"
             accent = "#2f6fed"
+            border_width = 2
             action_text = self._default_action_text
         else:
-            background = "#f6f8fb"
-            border = "#d5dce6"
+            background = self.accent_bg
+            border = "#C2CAD8"
             accent = "#2f6fed"
             action_text = self._default_action_text
 
         self.action_label.setText(action_text)
+        self.placeholder_label.setVisible(self.path is None and bool(self.placeholder_label.text()))
 
         self.setStyleSheet(
             f"""
@@ -1243,6 +1278,11 @@ class DropZoneCard(CardWidget):
                 background: {background};
                 border: {border_width}px solid {border};
                 border-radius: 10px;
+            }}
+            QLabel#DropZoneIcon {{
+                background: transparent;
+                border: 0;
+                font-size: 16pt;
             }}
             QLabel#DropZoneTitle {{
                 background: transparent;
@@ -1258,6 +1298,13 @@ class DropZoneCard(CardWidget):
                 color: #5b6677;
                 font-family: "Microsoft YaHei UI";
                 font-size: 10pt;
+            }}
+            QLabel#DropZonePlaceholder {{
+                background: transparent;
+                border: 0;
+                color: #C2CAD8;
+                font-family: "Microsoft YaHei UI";
+                font-size: 48px;
             }}
             QLabel#DropZonePath {{
                 background: transparent;
@@ -1699,6 +1746,11 @@ class KrokHelperQtApp(QMainWindow):
         self.align_preview_process = None
         self.align_preview_started_at = 0.0
         self.align_preview_start_seconds = 0.0
+        self._hires_cancel_requested = False
+        self._hires_process: subprocess.Popen | None = None
+        self._hires_expected_outputs: list[Path] = []
+        self._hires_completed_outputs: list[Path] = []
+        self._hires_preexisting_outputs: set[Path] = set()
         self._align_export_cancel_requested = False
         self._align_export_process: subprocess.Popen | None = None
         self._align_export_expected_outputs: list[Path] = []
@@ -2841,7 +2893,7 @@ class KrokHelperQtApp(QMainWindow):
         page = QWidget()
         shell = QVBoxLayout(page)
         shell.setContentsMargins(20, 20, 20, 20)
-        shell.setSpacing(12)
+        shell.setSpacing(16)
 
         header = QVBoxLayout()
         header.setContentsMargins(0, 0, 0, 0)
@@ -2850,12 +2902,13 @@ class KrokHelperQtApp(QMainWindow):
         title.setObjectName("PageTitle")
         desc = QLabel("把字幕视频拖进下方卡片，再按需放入原唱音频和 / 或伴奏音频。至少提供一条音频就可以开始生成。")
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: #667085; font-size: 10.5pt;")
+        desc.setStyleSheet("color: #475467; font-size: 10.5pt;")
         header.addWidget(title)
         header.addWidget(desc)
         shell.addLayout(header)
 
         settings_card = CardWidget(radius=10, padding=(16, 16, 16, 16), spacing=10)
+        apply_card_shadow(settings_card)
         settings_layout = settings_card.createGridLayout()
         settings_layout.setHorizontalSpacing(14)
         settings_layout.setVerticalSpacing(10)
@@ -2863,21 +2916,34 @@ class KrokHelperQtApp(QMainWindow):
         output_label.setStyleSheet('font-size: 11pt; font-weight: 400; color: #475467;')
         self.output_dir_label = QLabel("跟随字幕视频所在目录")
         self.output_dir_label.setWordWrap(True)
-        ffmpeg_title = QLabel("FFmpeg 目录")
+        self.output_dir_label.setStyleSheet('font-size: 11pt; color: #1f2937; font-weight: 500;')
+        ffmpeg_title = QLabel("FFmpeg 目录 ⓘ")
+        ffmpeg_title.setToolTip('FFmpeg 目录、输出命名等偏好设置可在"设置"窗口中调整并保存到本地。')
         ffmpeg_title.setStyleSheet('font-size: 11pt; font-weight: 400; color: #475467;')
         self.hires_ffmpeg_label = QLabel(FFMPEG_DIR_PLACEHOLDER)
         self.hires_ffmpeg_label.setWordWrap(True)
-        settings_button = QPushButton("设置")
+        settings_button = QPushButton("⚙ 设置")
+        settings_button.setStyleSheet(
+            """
+            QPushButton {
+                background: transparent;
+                border: 1px solid #D5DCE6;
+                border-radius: 6px;
+                padding: 6px 14px;
+                color: #475467;
+                font-size: 10.5pt;
+            }
+            QPushButton:hover {
+                background: #F2F4F8;
+            }
+            """
+        )
         settings_button.clicked.connect(lambda: self._open_settings_window("hires"))
-        ffmpeg_hint = QLabel("提示: FFmpeg 目录、输出命名等偏好设置可在“设置”窗口中调整并保存到本地。")
-        ffmpeg_hint.setWordWrap(True)
-        ffmpeg_hint.setStyleSheet('font-size: 9pt; color: #6b7280;')
         settings_layout.addWidget(output_label, 0, 0)
         settings_layout.addWidget(self.output_dir_label, 0, 1)
         settings_layout.addWidget(ffmpeg_title, 1, 0)
         settings_layout.addWidget(self.hires_ffmpeg_label, 1, 1)
         settings_layout.addWidget(settings_button, 1, 2)
-        settings_layout.addWidget(ffmpeg_hint, 2, 1, 1, 2)
         settings_layout.setColumnStretch(1, 1)
         shell.addWidget(settings_card)
 
@@ -2889,6 +2955,9 @@ class KrokHelperQtApp(QMainWindow):
             hint="支持 mkv / mp4 / mov / avi\n这里会决定输出文件名和输出目录。",
             extensions=VIDEO_EXTENSIONS,
             min_height=190,
+            icon_text="🎬",
+            placeholder_icon="🎞",
+            accent_bg="#EEF4FF",
         )
         self.video_zone.browseRequested.connect(self._choose_video)
         self.video_zone.pathChanged.connect(self.set_video_path)
@@ -2898,6 +2967,9 @@ class KrokHelperQtApp(QMainWindow):
             hint="支持 flac / wav / mp3 / m4a / aac / ape / alac / mkv / mp4\n可单独生成原唱 Hi-Res 视频，也可和伴奏一起生成。",
             extensions=HIRES_AUDIO_EXTENSIONS,
             min_height=190,
+            icon_text="🎤",
+            placeholder_icon="🎙",
+            accent_bg="#F3EEFF",
         )
         self.on_vocal_zone.browseRequested.connect(self._choose_on_audio)
         self.on_vocal_zone.pathChanged.connect(self.set_on_vocal_path)
@@ -2907,9 +2979,14 @@ class KrokHelperQtApp(QMainWindow):
             hint="支持 flac / wav / mp3 / m4a / aac / ape / alac / mkv / mp4\n可单独生成伴奏 Hi-Res 视频，也可和原唱一起生成。",
             extensions=HIRES_AUDIO_EXTENSIONS,
             min_height=190,
+            icon_text="🎵",
+            placeholder_icon="♪",
+            accent_bg="#EAF7F4",
         )
         self.off_vocal_zone.browseRequested.connect(self._choose_off_audio)
         self.off_vocal_zone.pathChanged.connect(self.set_off_vocal_path)
+        for drop_zone in (self.video_zone, self.on_vocal_zone, self.off_vocal_zone):
+            apply_card_shadow(drop_zone)
 
         card_row.addWidget(self.video_zone, 1)
         card_row.addWidget(self.on_vocal_zone, 1)
@@ -2917,41 +2994,101 @@ class KrokHelperQtApp(QMainWindow):
         shell.addLayout(card_row)
 
         log_panel = CardWidget(radius=10, padding=(16, 16, 16, 16), spacing=12)
+        apply_card_shadow(log_panel)
         log_layout = log_panel.createGridLayout()
         log_layout.setVerticalSpacing(12)
         log_title = QLabel("处理日志")
         log_title.setObjectName("PanelTitle")
+        log_button_style = """
+            QPushButton {
+                background: transparent;
+                border: 0;
+                border-radius: 6px;
+                color: #475467;
+                font-size: 12pt;
+            }
+            QPushButton:hover {
+                background: #F2F4F8;
+            }
+        """
+        copy_log_btn = QPushButton("📋")
+        copy_log_btn.setFixedSize(28, 28)
+        copy_log_btn.setToolTip("复制全部日志")
+        copy_log_btn.setStyleSheet(log_button_style)
+        copy_log_btn.clicked.connect(self._copy_hires_log)
+        clear_log_btn = QPushButton("🗑")
+        clear_log_btn.setFixedSize(28, 28)
+        clear_log_btn.setToolTip("清空日志")
+        clear_log_btn.setStyleSheet(log_button_style)
         self.hires_log = QPlainTextEdit()
         self.hires_log.setObjectName("LogText")
         self.hires_log.setReadOnly(True)
+        clear_log_btn.clicked.connect(self.hires_log.clear)
+        self.hires_log.setPlaceholderText("运行后将在此显示 FFmpeg 输出与处理进度...")
+        self.hires_log.setStyleSheet(
+            """
+            QPlainTextEdit#LogText {
+                background: #FAFBFC;
+                border: 1px solid #E4E7EC;
+                border-radius: 8px;
+                color: #1f2937;
+                font-family: "Consolas", "JetBrains Mono", monospace;
+                font-size: 10pt;
+                padding: 10px;
+            }
+            """
+        )
         log_layout.addWidget(log_title, 0, 0)
-        log_layout.addWidget(self.hires_log, 1, 0)
+        log_layout.addWidget(copy_log_btn, 0, 1)
+        log_layout.addWidget(clear_log_btn, 0, 2)
+        log_layout.addWidget(self.hires_log, 1, 0, 1, 3)
+        log_layout.setColumnStretch(0, 1)
         log_layout.setRowStretch(1, 1)
         shell.addWidget(log_panel, 1)
 
         controls_bar = ControlBar()
         controls = controls_bar.createHBoxLayout()
-        self.hires_start_button = PrimaryPushButton("开始生成")
+        self.hires_start_button = PrimaryPushButton("▶  开始生成")
         self.hires_start_button.clicked.connect(self._start_hires)
-        clear_button = QPushButton("清空已选文件")
+        self.hires_cancel_button = QPushButton("■  取消生成")
+        self.hires_cancel_button.setEnabled(False)
+        self.hires_cancel_button.clicked.connect(self._stop_hires)
+        clear_button = QPushButton("✕  清空已选文件")
         clear_button.clicked.connect(self._clear_hires_inputs)
-        open_output_button = QPushButton("打开输出目录")
+        open_output_button = QPushButton("📁  打开输出目录")
         open_output_button.clicked.connect(self._open_hires_output_dir)
         self.hires_progress = QProgressBar()
         self.hires_progress.setRange(0, 1)
         self.hires_progress.setValue(0)
-        self.hires_progress.setFixedWidth(180)
-        self.hires_progress.setTextVisible(False)
+        self.hires_progress.setFixedWidth(220)
+        self.hires_progress.setFixedHeight(10)
+        self.hires_progress.setTextVisible(True)
+        self.hires_progress.setStyleSheet(
+            """
+            QProgressBar {
+                border: 0;
+                border-radius: 5px;
+                background: #E5E7EB;
+                text-align: center;
+                color: transparent;
+            }
+            QProgressBar::chunk {
+                background: #2f6fed;
+                border-radius: 5px;
+            }
+            """
+        )
         self.hires_status_label = QLabel("准备就绪")
-        self.hires_status_label.setStyleSheet('font-family: "Microsoft YaHei UI"; font-size: 10pt; font-weight: 400;')
+        self._set_hires_status_color("#475467")
         controls.addWidget(self.hires_start_button)
+        controls.addWidget(self.hires_cancel_button)
         controls.addWidget(clear_button)
         controls.addWidget(open_output_button)
         controls.addStretch(1)
         controls.addWidget(self.hires_progress)
         controls.addSpacing(12)
         controls.addWidget(self.hires_status_label)
-        controls_bar.apply_button_metrics(self.hires_start_button, clear_button, open_output_button)
+        controls_bar.apply_button_metrics(self.hires_start_button, self.hires_cancel_button, clear_button, open_output_button)
         shell.addWidget(controls_bar)
         return page
 
@@ -5095,8 +5232,53 @@ class KrokHelperQtApp(QMainWindow):
             off_template,
         )
 
+    def _set_hires_status_color(self, color: str) -> None:
+        self.hires_status_label.setStyleSheet(
+            f'font-family: "Microsoft YaHei UI"; font-size: 10pt; font-weight: 400; color: {color};'
+        )
+
+    def _copy_hires_log(self) -> None:
+        QApplication.clipboard().setText(self.hires_log.toPlainText())
+
+    def _is_hires_running(self) -> bool:
+        return self.hires_task is not None and self.hires_task.isRunning()
+
+    def _register_hires_process(self, process: subprocess.Popen | None) -> None:
+        self._hires_process = process
+
+    def _cleanup_incomplete_hires_outputs(self) -> None:
+        completed = set(self._hires_completed_outputs)
+        for path in self._hires_expected_outputs:
+            if path in completed or path in self._hires_preexisting_outputs or not path.exists():
+                continue
+            try:
+                path.unlink()
+                self._append_hires_log(f"已清理未完成的输出文件: {path}")
+            except OSError as exc:
+                self._append_hires_log(f"清理未完成的输出文件失败: {path} ({exc})")
+
+    def _reset_hires_cancel_state(self) -> None:
+        self._hires_cancel_requested = False
+        self._hires_process = None
+        self._hires_expected_outputs = []
+        self._hires_completed_outputs = []
+        self._hires_preexisting_outputs = set()
+
+    def _stop_hires(self) -> None:
+        if not self._is_hires_running():
+            return
+        if not self._hires_cancel_requested:
+            self._hires_cancel_requested = True
+            self.hires_cancel_button.setEnabled(False)
+            self.hires_status_label.setText("正在取消…")
+            self._set_hires_status_color("#475467")
+            self._append_hires_log("正在取消生成…")
+        process = self._hires_process
+        if process is not None:
+            terminate_process(process)
+
     def _start_hires(self) -> None:
-        if self.hires_task is not None and self.hires_task.isRunning():
+        if self._is_hires_running():
             QMessageBox.information(self, APP_TITLE, "当前任务还在处理中，请稍等。")
             return
 
@@ -5107,9 +5289,35 @@ class KrokHelperQtApp(QMainWindow):
             return
 
         self.hires_log.clear()
+        (
+            video_path,
+            on_vocal_path,
+            off_vocal_path,
+            output_dir,
+            _ffmpeg_dir,
+            output_name_mode,
+            on_template,
+            off_template,
+        ) = args
+        on_output, off_output = resolve_output_paths(
+            video_path,
+            output_dir,
+            output_name_mode,
+            on_name_template=on_template,
+            off_name_template=off_template,
+            include_on=on_vocal_path is not None,
+            include_off=off_vocal_path is not None,
+        )
+        self._hires_cancel_requested = False
+        self._hires_process = None
+        self._hires_expected_outputs = [path for path in (on_output, off_output) if path is not None]
+        self._hires_completed_outputs = []
+        self._hires_preexisting_outputs = {path for path in self._hires_expected_outputs if path.exists()}
         self.hires_start_button.setEnabled(False)
+        self.hires_cancel_button.setEnabled(True)
         self.hires_progress.setRange(0, 0)
         self.hires_status_label.setText("处理中…")
+        self._set_hires_status_color("#2f6fed")
 
         def runner(logger: Callable[[str], None]) -> list[Path]:
             (
@@ -5122,7 +5330,7 @@ class KrokHelperQtApp(QMainWindow):
                 on_template,
                 off_template,
             ) = args
-            return run_pipeline(
+            outputs = run_pipeline(
                 video_path=video_path,
                 on_vocal_path=on_vocal_path,
                 off_vocal_path=off_vocal_path,
@@ -5132,7 +5340,11 @@ class KrokHelperQtApp(QMainWindow):
                 on_name_template=on_template,
                 off_name_template=off_template,
                 logger=logger,
+                should_cancel=lambda: self._hires_cancel_requested,
+                on_process_started=self._register_hires_process,
             )
+            self._hires_completed_outputs.extend(outputs)
+            return outputs
 
         task = self._track_background_task("hires_task", BackgroundTask(runner))
         task.log_message.connect(self._append_hires_log)
@@ -5149,18 +5361,42 @@ class KrokHelperQtApp(QMainWindow):
         self.align_log.appendPlainText(f"[{timestamp}] {message}")
 
     def _finish_hires_success(self, outputs: object) -> None:
+        was_cancelled = self._hires_cancel_requested
+        self._hires_process = None
         self.hires_progress.setRange(0, 1)
-        self.hires_progress.setValue(1)
+        self.hires_progress.setValue(0 if was_cancelled else 1)
         self.hires_start_button.setEnabled(True)
+        self.hires_cancel_button.setEnabled(False)
+        if was_cancelled:
+            self._cleanup_incomplete_hires_outputs()
+            self.hires_status_label.setText("生成已取消")
+            self._set_hires_status_color("#475467")
+            self._append_hires_log("生成已取消，临时文件和未完成输出已清理。")
+            self._reset_hires_cancel_state()
+            return
         self.hires_status_label.setText("完成")
+        self._set_hires_status_color("#10B981")
+        self._reset_hires_cancel_state()
         lines = "\n".join(str(path) for path in outputs) if isinstance(outputs, list) else str(outputs)
         QMessageBox.information(self, APP_TITLE, f"输出完成:\n{lines}")
 
     def _finish_hires_failure(self, message: str) -> None:
+        was_cancelled = self._hires_cancel_requested
+        self._hires_process = None
         self.hires_progress.setRange(0, 1)
         self.hires_progress.setValue(0)
         self.hires_start_button.setEnabled(True)
+        self.hires_cancel_button.setEnabled(False)
+        if was_cancelled:
+            self._cleanup_incomplete_hires_outputs()
+            self.hires_status_label.setText("生成已取消")
+            self._set_hires_status_color("#475467")
+            self._append_hires_log("生成已取消，临时文件和未完成输出已清理。")
+            self._reset_hires_cancel_state()
+            return
         self.hires_status_label.setText("失败")
+        self._set_hires_status_color("#EF4444")
+        self._reset_hires_cancel_state()
         self._append_hires_log(f"处理失败: {message}")
         QMessageBox.critical(self, APP_TITLE, message)
 
@@ -5173,6 +5409,7 @@ class KrokHelperQtApp(QMainWindow):
         self.off_vocal_zone.clear_path()
         self.output_dir_label.setText("跟随字幕视频所在目录")
         self.hires_status_label.setText("已清空已选文件")
+        self._set_hires_status_color("#475467")
 
     def _open_hires_output_dir(self) -> None:
         video_path = self.video_zone.path
