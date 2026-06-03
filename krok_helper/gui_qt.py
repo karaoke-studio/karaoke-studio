@@ -3723,19 +3723,15 @@ class KrokHelperQtApp(QMainWindow):
         self.align_auto_button.clicked.connect(self._auto_align_waveforms)
         self.align_auto_button.setToolTip("自动对齐 (Ctrl+D)")
         self.btn_auto_align = self.align_auto_button
-        self.align_preview_button = QPushButton("预览")
+        self.align_preview_button = QPushButton("播放")
         self.align_preview_button.setIcon(FIF.PLAY.icon())
-        self.align_preview_button.clicked.connect(self._start_alignment_preview)
-        self.align_preview_button.setToolTip("播放预览 (空格)")
-        self.align_stop_preview_button = QPushButton("停止")
-        self.align_stop_preview_button.setIcon(FIF.PAUSE.icon())
-        self.align_stop_preview_button.clicked.connect(self._stop_alignment_preview)
+        self.align_preview_button.clicked.connect(self._toggle_alignment_preview)
+        self.align_preview_button.setToolTip("播放 (空格)")
 
         toolbar_button_specs = (
             (self.align_analyze_button, 108),
             (self.align_auto_button, 118),
             (self.align_preview_button, 86),
-            (self.align_stop_preview_button, 86),
         )
         for button, minimum_width in toolbar_button_specs:
             button.setMinimumHeight(36)
@@ -5455,6 +5451,12 @@ class KrokHelperQtApp(QMainWindow):
     def _restart_alignment_preview_from_playhead(self) -> None:
         self._start_alignment_preview()
 
+    def _toggle_alignment_preview(self) -> None:
+        if self.align_preview_process is not None and self.align_preview_process.is_running():
+            self._stop_alignment_preview()
+        else:
+            self._start_alignment_preview()
+
     def _refresh_align_trim_status(self, trim_seconds: object) -> None:
         if not self._is_align_video_target():
             self.align_trim_label.setText("仅在导出字幕视频时生效")
@@ -5517,8 +5519,15 @@ class KrokHelperQtApp(QMainWindow):
         )
         self.align_analyze_button.setEnabled(has_inputs and not is_playing and not is_busy)
         self.align_auto_button.setEnabled(has_waveforms and not is_playing and not is_busy)
-        self.align_preview_button.setEnabled(has_waveforms and not is_playing and not is_busy)
-        self.align_stop_preview_button.setEnabled(is_playing)
+        self.align_preview_button.setEnabled(is_playing or (has_waveforms and not is_busy))
+        if is_playing:
+            self.align_preview_button.setText("停止")
+            self.align_preview_button.setIcon(FIF.PAUSE.icon())
+            self.align_preview_button.setToolTip("停止 (空格)")
+        else:
+            self.align_preview_button.setText("播放")
+            self.align_preview_button.setIcon(FIF.PLAY.icon())
+            self.align_preview_button.setToolTip("播放 (空格)")
         self.align_export_button.setEnabled(has_waveforms and not is_playing and not is_busy)
         self.align_stop_export_button.setEnabled(is_exporting)
         if self.align_open_output_button is not None:
