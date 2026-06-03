@@ -4217,8 +4217,12 @@ class KrokHelperQtApp(QMainWindow):
         self.align_encode_group.setExclusive(True)
         self.align_encode_group.addButton(self.align_encode_software_radio)
         self.align_encode_group.addButton(self.align_encode_hardware_radio)
-        self.align_encode_software_radio.toggled.connect(self._persist_alignment_preferences)
-        self.align_encode_hardware_radio.toggled.connect(self._persist_alignment_preferences)
+        self.align_encode_software_radio.toggled.connect(
+            lambda checked: self._handle_alignment_encode_mode_toggled(ENCODE_MODE_SOFTWARE, checked)
+        )
+        self.align_encode_hardware_radio.toggled.connect(
+            lambda checked: self._handle_alignment_encode_mode_toggled(ENCODE_MODE_HARDWARE, checked)
+        )
         self.align_encode_row_widget = QWidget()
         self.align_encode_row_widget.setStyleSheet("background: transparent; border: 0;")
         encode_inner = QHBoxLayout(self.align_encode_row_widget)
@@ -4814,21 +4818,27 @@ class KrokHelperQtApp(QMainWindow):
         self._update_alignment_preferences_from_ui()
         save_app_settings(self.settings)
 
+    def _handle_alignment_encode_mode_toggled(self, encode_mode: str, checked: bool) -> None:
+        if not checked:
+            return
+        self._align_encode_selection = (
+            encode_mode if encode_mode in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE} else ENCODE_MODE_SOFTWARE
+        )
+        self._persist_alignment_preferences()
+
+    def _current_alignment_encode_mode(self) -> str:
+        return (
+            self._align_encode_selection
+            if self._align_encode_selection in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
+            else ENCODE_MODE_SOFTWARE
+        )
+
     def _update_alignment_preferences_from_ui(self) -> None:
         if hasattr(self, "align_target_video_radio"):
             self.settings.align_target = (
                 ALIGN_TARGET_VIDEO if self.align_target_video_radio.isChecked() else ALIGN_TARGET_AUDIO
             )
-        if hasattr(self, "align_encode_hardware_radio"):
-            if self.align_encode_hardware_radio.isChecked():
-                self._align_encode_selection = ENCODE_MODE_HARDWARE
-            elif self.align_encode_software_radio.isChecked():
-                self._align_encode_selection = ENCODE_MODE_SOFTWARE
-        self.settings.align_encode_mode = (
-            self._align_encode_selection
-            if self._align_encode_selection in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
-            else ENCODE_MODE_SOFTWARE
-        )
+        self.settings.align_encode_mode = self._current_alignment_encode_mode()
         if hasattr(self, "align_force_1080p60_check"):
             self.settings.align_force_1080p60 = self.align_force_1080p60_check.isChecked()
         if hasattr(self, "align_use_video_audio_check"):
@@ -5703,11 +5713,6 @@ class KrokHelperQtApp(QMainWindow):
                 self._align_lead_fill_selection = LEAD_FILL_FREEZE
             else:
                 self._align_lead_fill_selection = LEAD_FILL_BLACK
-            if self.align_encode_hardware_radio.isChecked():
-                self._align_encode_selection = ENCODE_MODE_HARDWARE
-            elif self.align_encode_software_radio.isChecked():
-                self._align_encode_selection = ENCODE_MODE_SOFTWARE
-
             self.align_lead_fill_group.setExclusive(False)
             self.align_lead_trim_radio.setChecked(False)
             self.align_lead_fill_black_radio.setChecked(False)
@@ -6082,7 +6087,7 @@ class KrokHelperQtApp(QMainWindow):
             return
         output_path = Path(output_path_text).expanduser()
         offset_seconds = self.waveform_view.offset_seconds
-        encode_mode = ENCODE_MODE_HARDWARE if self.align_encode_hardware_radio.isChecked() else ENCODE_MODE_SOFTWARE
+        encode_mode = self._current_alignment_encode_mode()
         if self.align_lead_fill_white_radio.isChecked():
             lead_fill_color = LEAD_FILL_WHITE
         elif self.align_lead_fill_freeze_radio.isChecked():

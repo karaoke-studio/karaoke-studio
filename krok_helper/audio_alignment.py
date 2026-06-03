@@ -256,10 +256,10 @@ def _channel_layout(audio_stream: dict) -> str:
 
 def _video_encoding_options(video_stream: dict, encode_mode: str = ENCODE_MODE_SOFTWARE) -> list[str]:
     video_codec = str(video_stream.get("codec_name") or "h264")
-    if encode_mode == ENCODE_MODE_HARDWARE and video_codec in NVENC_VIDEO_ENCODERS:
+    if encode_mode == ENCODE_MODE_HARDWARE:
         return [
             "-c:v",
-            NVENC_VIDEO_ENCODERS[video_codec],
+            NVENC_VIDEO_ENCODERS.get(video_codec, "h264_nvenc"),
             "-preset",
             "p1",
             "-rc",
