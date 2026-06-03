@@ -2266,6 +2266,14 @@ class KrokHelperQtApp(QMainWindow):
     def _show_module(self, module_id: str) -> None:
         if module_id not in self.module_pages:
             return
+        previous_module = self.active_module
+        if (
+            previous_module == WORKFLOW_WAVEFORM_ALIGN
+            and module_id != WORKFLOW_WAVEFORM_ALIGN
+            and getattr(self, "align_preview_process", None) is not None
+            and self.align_preview_process.is_running()
+        ):
+            self._stop_alignment_preview()
         self.active_module = module_id
         self.page_stack.setCurrentWidget(self.module_pages[module_id])
         self.workflow_stepper.setCurrentModule(module_id)
