@@ -12,42 +12,43 @@ SPEC_PATH="$PROJECT_ROOT/build/spec-macos"
 APP_DIST="$DIST_PATH/$APP_NAME.app"
 
 EXCLUDED_MODULES=(
-  PySide6.Qt3DAnimation
-  PySide6.Qt3DCore
-  PySide6.Qt3DExtras
-  PySide6.Qt3DInput
-  PySide6.Qt3DLogic
-  PySide6.Qt3DRender
-  PySide6.QtCharts
-  PySide6.QtDataVisualization
-  PySide6.QtDesigner
-  PySide6.QtGraphs
-  PySide6.QtMultimedia
-  PySide6.QtNetworkAuth
-  PySide6.QtPdf
-  PySide6.QtPdfWidgets
-  PySide6.QtPositioning
-  PySide6.QtQml
-  PySide6.QtQuick
-  PySide6.QtQuick3D
-  PySide6.QtQuickControls2
-  PySide6.QtQuickTest
-  PySide6.QtQuickWidgets
-  PySide6.QtRemoteObjects
-  PySide6.QtScxml
-  PySide6.QtSensors
-  PySide6.QtSql
-  PySide6.QtStateMachine
-  PySide6.QtTest
-  PySide6.QtTextToSpeech
-  PySide6.QtWebChannel
-  PySide6.QtWebEngineCore
-  PySide6.QtWebEngineQuick
-  PySide6.QtWebEngineWidgets
-  PySide6.QtWebSockets
-  PySide6.QtWebView
-  PySide6.QtXml
-  PySide6.QtXmlPatterns
+  PySide6
+  PyQt5
+  PyQt6.Qt3DAnimation
+  PyQt6.Qt3DCore
+  PyQt6.Qt3DExtras
+  PyQt6.Qt3DInput
+  PyQt6.Qt3DLogic
+  PyQt6.Qt3DRender
+  PyQt6.QtCharts
+  PyQt6.QtDataVisualization
+  PyQt6.QtDesigner
+  PyQt6.QtMultimedia
+  PyQt6.QtMultimediaWidgets
+  PyQt6.QtNetworkAuth
+  PyQt6.QtPdf
+  PyQt6.QtPdfWidgets
+  PyQt6.QtPositioning
+  PyQt6.QtQml
+  PyQt6.QtQuick
+  PyQt6.QtQuick3D
+  PyQt6.QtQuickControls2
+  PyQt6.QtQuickTest
+  PyQt6.QtQuickWidgets
+  PyQt6.QtRemoteObjects
+  PyQt6.QtScxml
+  PyQt6.QtSensors
+  PyQt6.QtSerialPort
+  PyQt6.QtSql
+  PyQt6.QtStateMachine
+  PyQt6.QtTest
+  PyQt6.QtTextToSpeech
+  PyQt6.QtWebChannel
+  PyQt6.QtWebEngineCore
+  PyQt6.QtWebEngineQuick
+  PyQt6.QtWebEngineWidgets
+  PyQt6.QtWebSockets
+  PyQt6.QtWebView
 )
 
 KEEP_TRANSLATIONS=(
@@ -65,7 +66,6 @@ REMOVE_PLUGIN_FILES=(
   "imageformats/libqgif.dylib"
   "imageformats/libqicns.dylib"
   "imageformats/libqpdf.dylib"
-  "imageformats/libqsvg.dylib"
   "imageformats/libqtga.dylib"
   "imageformats/libqtiff.dylib"
   "imageformats/libqwbmp.dylib"
@@ -80,16 +80,33 @@ REMOVE_PLUGIN_FILES=(
 
 REMOVE_PLUGIN_DIRS=(
   generic
-  iconengines
   networkinformation
   platforminputcontexts
 )
 
 REMOVE_QT_LIBS=(
   "QtPdf.framework"
-  "QtSvg.framework"
   "QtVirtualKeyboard.framework"
+  "QtMultimedia.framework"
+  "QtQml.framework"
+  "QtQuick.framework"
 )
+
+ensure_pkg() {
+  local module="$1"
+  local pip_name="$2"
+  echo "Checking $module..."
+  if ! "$PYTHON_BIN" -c "import $module" >/dev/null 2>&1; then
+    echo "$module not found, installing $pip_name..."
+    if ! "$PYTHON_BIN" -m pip install "$pip_name"; then
+      echo "Failed to install $pip_name."
+      if [ -z "${CI:-}" ]; then
+        read -r -p "Press Enter to close..."
+      fi
+      exit 1
+    fi
+  fi
+}
 
 echo "Checking Python..."
 if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
@@ -100,29 +117,10 @@ if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "Checking PyInstaller..."
-if ! "$PYTHON_BIN" -c "import PyInstaller" >/dev/null 2>&1; then
-  echo "PyInstaller not found, installing..."
-  if ! "$PYTHON_BIN" -m pip install pyinstaller; then
-    echo "Failed to install PyInstaller."
-    if [ -z "${CI:-}" ]; then
-      read -r -p "Press Enter to close..."
-    fi
-    exit 1
-  fi
-fi
-
-echo "Checking PySide6..."
-if ! "$PYTHON_BIN" -c "import PySide6" >/dev/null 2>&1; then
-  echo "PySide6 not found, installing..."
-  if ! "$PYTHON_BIN" -m pip install PySide6; then
-    echo "Failed to install PySide6."
-    if [ -z "${CI:-}" ]; then
-      read -r -p "Press Enter to close..."
-    fi
-    exit 1
-  fi
-fi
+ensure_pkg PyInstaller pyinstaller
+ensure_pkg PyQt6 PyQt6
+ensure_pkg qfluentwidgets "PyQt6-Fluent-Widgets"
+ensure_pkg yt_dlp yt-dlp
 
 mkdir -p "$DIST_PATH" "$WORK_PATH" "$SPEC_PATH"
 
@@ -135,7 +133,9 @@ PYINSTALLER_ARGS=(
   --distpath "$DIST_PATH"
   --workpath "$WORK_PATH"
   --specpath "$SPEC_PATH"
-  --add-data "$PROJECT_ROOT/krok_helper/assets/logo/logo.jpg:krok_helper/assets/logo"
+  --add-data "$PROJECT_ROOT/krok_helper/assets:krok_helper/assets"
+  --collect-all qfluentwidgets
+  --collect-all yt_dlp
 )
 
 for module in "${EXCLUDED_MODULES[@]}"; do
@@ -153,47 +153,42 @@ if ! "$PYTHON_BIN" -m PyInstaller "${PYINSTALLER_ARGS[@]}" app.py; then
 fi
 
 echo "Trimming macOS package..."
-PYSIDE_DIR="$(find "$APP_DIST" -type d -name PySide6 | head -n 1 || true)"
-if [ -z "$PYSIDE_DIR" ] || [ ! -d "$PYSIDE_DIR" ]; then
-  echo
-  echo "Package trimming failed: PySide6 directory not found."
-  if [ -z "${CI:-}" ]; then
-    read -r -p "Press Enter to close..."
+PYQT_DIR="$(find "$APP_DIST" -type d \( -name PyQt6 -o -name PySide6 \) -print -quit || true)"
+if [ -z "$PYQT_DIR" ] || [ ! -d "$PYQT_DIR" ]; then
+  echo "PyQt6 directory not found inside $APP_DIST, skipping trim."
+else
+  TRANSLATIONS_DIR="$(find "$PYQT_DIR" -type d -name translations -print -quit || true)"
+  if [ -n "$TRANSLATIONS_DIR" ] && [ -d "$TRANSLATIONS_DIR" ]; then
+    while IFS= read -r -d '' file; do
+      keep_file=0
+      for keep in "${KEEP_TRANSLATIONS[@]}"; do
+        if [ "$(basename "$file")" = "$keep" ]; then
+          keep_file=1
+          break
+        fi
+      done
+      if [ "$keep_file" -eq 0 ]; then
+        rm -f "$file"
+      fi
+    done < <(find "$TRANSLATIONS_DIR" -type f -print0)
   fi
-  exit 1
-fi
 
-TRANSLATIONS_DIR="$PYSIDE_DIR/translations"
-if [ -d "$TRANSLATIONS_DIR" ]; then
-  while IFS= read -r -d '' file; do
-    keep_file=0
-    for keep in "${KEEP_TRANSLATIONS[@]}"; do
-      if [ "$(basename "$file")" = "$keep" ]; then
-        keep_file=1
-        break
+  PLUGINS_DIR="$(find "$PYQT_DIR" -type d -name plugins -print -quit || true)"
+  if [ -n "$PLUGINS_DIR" ] && [ -d "$PLUGINS_DIR" ]; then
+    for rel in "${REMOVE_PLUGIN_FILES[@]}"; do
+      target="$PLUGINS_DIR/$rel"
+      if [ -e "$target" ]; then
+        rm -f "$target"
       fi
     done
-    if [ "$keep_file" -eq 0 ]; then
-      rm -f "$file"
-    fi
-  done < <(find "$TRANSLATIONS_DIR" -type f -print0)
-fi
 
-PLUGINS_DIR="$PYSIDE_DIR/plugins"
-if [ -d "$PLUGINS_DIR" ]; then
-  for rel in "${REMOVE_PLUGIN_FILES[@]}"; do
-    target="$PLUGINS_DIR/$rel"
-    if [ -e "$target" ]; then
-      rm -f "$target"
-    fi
-  done
-
-  for rel in "${REMOVE_PLUGIN_DIRS[@]}"; do
-    target="$PLUGINS_DIR/$rel"
-    if [ -d "$target" ] && [ -z "$(find "$target" -mindepth 1 -print -quit)" ]; then
-      rmdir "$target"
-    fi
-  done
+    for rel in "${REMOVE_PLUGIN_DIRS[@]}"; do
+      target="$PLUGINS_DIR/$rel"
+      if [ -d "$target" ] && [ -z "$(find "$target" -mindepth 1 -print -quit)" ]; then
+        rmdir "$target"
+      fi
+    done
+  fi
 fi
 
 for rel in "${REMOVE_QT_LIBS[@]}"; do
