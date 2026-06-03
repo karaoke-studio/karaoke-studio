@@ -15,7 +15,7 @@ DWMWCP_DONOTROUND = 1
 os.environ["QFLUENT_WIDGETS_NO_PROMOTION"] = "1"
 
 from PyQt6.QtCore import QEvent, QSize, QThread, QTimer, Qt, pyqtSignal as Signal
-from PyQt6.QtGui import QColor, QBrush, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPen, QShortcut
+from PyQt6.QtGui import QColor, QBrush, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPalette, QPen, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -1935,6 +1935,11 @@ class KrokHelperQtApp(QMainWindow):
             self._restoring_from_maximized = False
 
     def _apply_styles(self) -> None:
+        tooltip_palette = QPalette()
+        tooltip_palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#FFFFFF"))
+        tooltip_palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#1F2937"))
+        QToolTip.setPalette(tooltip_palette)
+        QToolTip.setFont(QFont("Microsoft YaHei UI", 9))
         self.setStyleSheet(
             """
             QMainWindow, QWidget {
@@ -1955,6 +1960,13 @@ class KrokHelperQtApp(QMainWindow):
             }
             QWidget#AppRoot {
                 background: #F4F7FB;
+            }
+            QToolTip {
+                background-color: #FFFFFF;
+                color: #1F2937;
+                border: 1px solid #D9E2EF;
+                border-radius: 6px;
+                padding: 6px 8px;
             }
             QFrame[cardWidget="true"] {
                 background: #FFFFFF;
