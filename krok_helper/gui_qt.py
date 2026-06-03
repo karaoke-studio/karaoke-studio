@@ -1159,6 +1159,25 @@ class DropZoneCard(CardWidget):
         self.action_label.setWordWrap(True)
         self.action_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
 
+        self._status_badge = QLabel("✓", self)
+        self._status_badge.setObjectName("DropZoneStatusBadge")
+        self._status_badge.setFixedSize(22, 22)
+        self._status_badge.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._status_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._status_badge.setStyleSheet(
+            """
+            QLabel#DropZoneStatusBadge {
+                background: #10B981;
+                color: white;
+                border-radius: 11px;
+                font-size: 13pt;
+                font-weight: 700;
+                qproperty-alignment: AlignCenter;
+            }
+            """
+        )
+        self._status_badge.hide()
+
         layout.addLayout(title_row)
         layout.addWidget(self.hint_label)
         layout.addStretch(1)
@@ -1191,6 +1210,10 @@ class DropZoneCard(CardWidget):
         self._hovered = False
         self._refresh_style()
         super().leaveEvent(event)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._position_status_badge()
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
@@ -1238,30 +1261,40 @@ class DropZoneCard(CardWidget):
         self.pathChanged.emit(path)
         event.acceptProposedAction()
 
+    def _position_status_badge(self) -> None:
+        self._status_badge.move(max(0, self.width() - 32), 10)
+        self._status_badge.raise_()
+
     def _refresh_style(self) -> None:
-        border_width = 1
+        selected = bool(getattr(self, "_path", None) or self.path)
+        border_width = "1.5"
+        border_style = "dashed"
         if self._drag_state == "accept":
             background = "#dbeafe"
             border = "#2f6fed"
             accent = "#1d4ed8"
-            border_width = 2
+            border_width = "2"
+            border_style = "solid"
             action_text = "松开鼠标即可导入这个文件"
         elif self._drag_state == "reject":
             background = "#fef2f2"
             border = "#ef4444"
             accent = "#b91c1c"
-            border_width = 2
+            border_width = "2"
+            border_style = "solid"
             action_text = "这个文件类型不支持，请换一个文件"
-        elif self.path is not None:
-            background = "#ffffff"
-            border = "#3aa76d"
-            accent = "#177245"
-            action_text = self._default_action_text
         elif self._hovered:
             background = self.accent_bg
             border = "#2f6fed"
             accent = "#2f6fed"
-            border_width = 2
+            border_width = "2"
+            border_style = "solid"
+            action_text = self._default_action_text
+        elif selected:
+            background = "#FFFFFF"
+            border = "#10B981"
+            accent = "#177245"
+            border_style = "solid"
             action_text = self._default_action_text
         else:
             background = self.accent_bg
@@ -1271,12 +1304,13 @@ class DropZoneCard(CardWidget):
 
         self.action_label.setText(action_text)
         self.placeholder_label.setVisible(self.path is None and bool(self.placeholder_label.text()))
+        self._status_badge.setVisible(selected)
 
         self.setStyleSheet(
             f"""
             QFrame#DropZoneCard {{
                 background: {background};
-                border: {border_width}px solid {border};
+                border: {border_width}px {border_style} {border};
                 border-radius: 10px;
             }}
             QLabel#DropZoneIcon {{
@@ -1323,6 +1357,7 @@ class DropZoneCard(CardWidget):
             }}
             """
         )
+        self._position_status_badge()
 
 
 class BackgroundTask(QThread):
