@@ -42,6 +42,24 @@ def test_save_includes_video_download_fields(tmp_path, monkeypatch) -> None:
     assert expected_keys <= payload.keys()
 
 
+def test_save_includes_waveform_alignment_choice_fields(tmp_path, monkeypatch) -> None:
+    settings_path = tmp_path / "settings.json"
+    monkeypatch.setattr("krok_helper.settings.get_settings_path", lambda: settings_path)
+
+    save_app_settings(
+        AppSettings(
+            align_target="audio",
+            align_encode_mode="hardware",
+            align_force_1080p60=True,
+        )
+    )
+
+    payload = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert payload["align_target"] == "audio"
+    assert payload["align_encode_mode"] == "hardware"
+    assert payload["align_force_1080p60"] is True
+
+
 def test_load_with_unknown_keys_doesnt_crash(tmp_path, monkeypatch) -> None:
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(
@@ -51,3 +69,18 @@ def test_load_with_unknown_keys_doesnt_crash(tmp_path, monkeypatch) -> None:
     monkeypatch.setattr("krok_helper.settings.get_settings_path", lambda: settings_path)
 
     assert load_app_settings().video_download_save_dir == "D:/Downloads"
+
+
+def test_load_invalid_waveform_alignment_choices_falls_back(tmp_path, monkeypatch) -> None:
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"align_target": "bad", "align_encode_mode": "bad", "align_force_1080p60": True}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("krok_helper.settings.get_settings_path", lambda: settings_path)
+
+    settings = load_app_settings()
+
+    assert settings.align_target == "video"
+    assert settings.align_encode_mode == "software"
+    assert settings.align_force_1080p60 is True

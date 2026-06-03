@@ -9,6 +9,8 @@ from krok_helper.config import APP_NAME
 from krok_helper.audio_alignment import (
     DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE,
     DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE,
+    ENCODE_MODE_HARDWARE,
+    ENCODE_MODE_SOFTWARE,
 )
 from krok_helper.pipeline import DEFAULT_OFF_NAME_TEMPLATE, DEFAULT_ON_NAME_TEMPLATE, OUTPUT_NAME_MODE_FIXED
 from krok_helper.lyrics import DEFAULT_LYRICS_PROVIDER_IDS, LYRICS_LANGUAGE_ORIGINAL, LYRICS_PREVIEW_LINE
@@ -16,6 +18,8 @@ from krok_helper.video_download.download_task import NAMING_RULE_TITLE, SOURCE_Y
 
 
 SETTINGS_FILE_NAME = "settings.json"
+ALIGN_TARGET_VIDEO = "video"
+ALIGN_TARGET_AUDIO = "audio"
 
 
 @dataclass
@@ -26,6 +30,9 @@ class AppSettings:
     align_video_name_template: str = DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
     align_audio_name_template: str = DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
     ffmpeg_dir: str = ""
+    align_target: str = ALIGN_TARGET_VIDEO
+    align_encode_mode: str = ENCODE_MODE_SOFTWARE
+    align_force_1080p60: bool = False
     align_export_use_video_audio: bool = False
     lyrics_source_ids: list[str] | tuple[str, ...] = DEFAULT_LYRICS_PROVIDER_IDS
     lyrics_preview_mode: str = LYRICS_PREVIEW_LINE
@@ -69,6 +76,13 @@ def load_app_settings() -> AppSettings:
     if not isinstance(payload, dict):
         return AppSettings()
 
+    align_target = str(payload.get("align_target", ALIGN_TARGET_VIDEO))
+    if align_target not in {ALIGN_TARGET_VIDEO, ALIGN_TARGET_AUDIO}:
+        align_target = ALIGN_TARGET_VIDEO
+    align_encode_mode = str(payload.get("align_encode_mode", ENCODE_MODE_SOFTWARE))
+    if align_encode_mode not in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}:
+        align_encode_mode = ENCODE_MODE_SOFTWARE
+
     return AppSettings(
         output_name_mode=str(payload.get("output_name_mode", OUTPUT_NAME_MODE_FIXED)),
         on_name_template=str(payload.get("on_name_template", DEFAULT_ON_NAME_TEMPLATE)),
@@ -80,6 +94,9 @@ def load_app_settings() -> AppSettings:
             payload.get("align_audio_name_template", DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE)
         ),
         ffmpeg_dir=str(payload.get("ffmpeg_dir", "")),
+        align_target=align_target,
+        align_encode_mode=align_encode_mode,
+        align_force_1080p60=bool(payload.get("align_force_1080p60", False)),
         align_export_use_video_audio=bool(payload.get("align_export_use_video_audio", False)),
         lyrics_source_ids=tuple(
             str(item)

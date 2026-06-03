@@ -1791,7 +1791,7 @@ class KrokHelperQtApp(QMainWindow):
         self._align_export_expected_outputs: list[Path] = []
         self._align_export_completed_outputs: list[Path] = []
         self.active_module = WORKFLOW_VIDEO_DOWNLOAD
-        self._loading_settings_into_ui = False
+        self._loading_settings_into_ui = True
 
         self.output_name_mode_value = OUTPUT_NAME_MODE_FIXED
         self.on_name_template_value = DEFAULT_ON_NAME_TEMPLATE
@@ -1800,7 +1800,11 @@ class KrokHelperQtApp(QMainWindow):
         self.align_audio_name_template_value = DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
         self.ffmpeg_dir_text = ""
         self._align_lead_fill_selection = LEAD_FILL_BLACK
-        self._align_encode_selection = ENCODE_MODE_SOFTWARE
+        self._align_encode_selection = (
+            self.settings.align_encode_mode
+            if self.settings.align_encode_mode in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
+            else ENCODE_MODE_SOFTWARE
+        )
         self._media_duration_cache: dict[Path, str] = {}
         self._suppress_preview_seek_restart = False
         self._restoring_from_maximized = False
@@ -2279,8 +2283,8 @@ class KrokHelperQtApp(QMainWindow):
         self.settings.align_video_name_template = self.align_video_name_template_value
         self.settings.align_audio_name_template = self.align_audio_name_template_value
         self.settings.ffmpeg_dir = self.ffmpeg_dir_text
-        if hasattr(self, "align_use_video_audio_check"):
-            self.settings.align_export_use_video_audio = self.align_use_video_audio_check.isChecked()
+        if not self._loading_settings_into_ui:
+            self._update_alignment_preferences_from_ui()
         return save_app_settings(self.settings)
 
     def _bind_shortcuts(self) -> None:
@@ -4205,6 +4209,8 @@ class KrokHelperQtApp(QMainWindow):
         self.align_encode_group.setExclusive(True)
         self.align_encode_group.addButton(self.align_encode_software_radio)
         self.align_encode_group.addButton(self.align_encode_hardware_radio)
+        self.align_encode_software_radio.toggled.connect(self._persist_alignment_preferences)
+        self.align_encode_hardware_radio.toggled.connect(self._persist_alignment_preferences)
         self.align_encode_row_widget = QWidget()
         self.align_encode_row_widget.setStyleSheet("background: transparent; border: 0;")
         encode_inner = QHBoxLayout(self.align_encode_row_widget)
@@ -4227,6 +4233,7 @@ class KrokHelperQtApp(QMainWindow):
         self.align_use_video_audio_card = self.align_use_video_audio_check
         self.align_encode_software_card = self.align_encode_software_radio
         self.align_encode_hardware_card = self.align_encode_hardware_radio
+        self.align_force_1080p60_check.toggled.connect(self._persist_alignment_preferences)
         self.align_use_video_audio_check.toggled.connect(self._persist_alignment_preferences)
         option_row.addWidget(self.align_force_1080p60_check)
         option_row.addWidget(self.align_use_video_audio_check)
@@ -4528,6 +4535,7 @@ class KrokHelperQtApp(QMainWindow):
         self._apply_alignment_mode_styles()
         self._sync_alignment_export_buttons()
         self._refresh_alignment_export_panels()
+        self._persist_alignment_preferences()
 
     def _set_panel_enabled(self, panel: QWidget, enabled: bool):
         for w in panel.findChildren(QWidget):
@@ -4672,6 +4680,20 @@ class KrokHelperQtApp(QMainWindow):
         self.set_output_name_templates(self.settings.on_name_template, self.settings.off_name_template)
         self.align_video_name_template_value = self.settings.align_video_name_template or DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
         self.align_audio_name_template_value = self.settings.align_audio_name_template or DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
+        if self.settings.align_target == ALIGN_TARGET_AUDIO:
+            self.align_target_audio_radio.setChecked(True)
+        else:
+            self.align_target_video_radio.setChecked(True)
+        self._align_encode_selection = (
+            self.settings.align_encode_mode
+            if self.settings.align_encode_mode in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
+            else ENCODE_MODE_SOFTWARE
+        )
+        if self._align_encode_selection == ENCODE_MODE_HARDWARE:
+            self.align_encode_hardware_radio.setChecked(True)
+        else:
+            self.align_encode_software_radio.setChecked(True)
+        self.align_force_1080p60_check.setChecked(bool(self.settings.align_force_1080p60))
         self.align_use_video_audio_check.setChecked(bool(self.settings.align_export_use_video_audio))
         self._restore_lyrics_preferences()
         self._loading_settings_into_ui = False
@@ -4781,8 +4803,28 @@ class KrokHelperQtApp(QMainWindow):
     def _persist_alignment_preferences(self, *_args) -> None:
         if self._loading_settings_into_ui:
             return
-        self.settings.align_export_use_video_audio = self.align_use_video_audio_check.isChecked()
+        self._update_alignment_preferences_from_ui()
         save_app_settings(self.settings)
+
+    def _update_alignment_preferences_from_ui(self) -> None:
+        if hasattr(self, "align_target_video_radio"):
+            self.settings.align_target = (
+                ALIGN_TARGET_VIDEO if self.align_target_video_radio.isChecked() else ALIGN_TARGET_AUDIO
+            )
+        if hasattr(self, "align_encode_hardware_radio"):
+            if self.align_encode_hardware_radio.isChecked():
+                self._align_encode_selection = ENCODE_MODE_HARDWARE
+            elif self.align_encode_software_radio.isChecked():
+                self._align_encode_selection = ENCODE_MODE_SOFTWARE
+        self.settings.align_encode_mode = (
+            self._align_encode_selection
+            if self._align_encode_selection in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}
+            else ENCODE_MODE_SOFTWARE
+        )
+        if hasattr(self, "align_force_1080p60_check"):
+            self.settings.align_force_1080p60 = self.align_force_1080p60_check.isChecked()
+        if hasattr(self, "align_use_video_audio_check"):
+            self.settings.align_export_use_video_audio = self.align_use_video_audio_check.isChecked()
 
     def _sync_ffmpeg_labels(self) -> None:
         self.hires_ffmpeg_label.setText(self.ffmpeg_dir_text or FFMPEG_DIR_PLACEHOLDER)
@@ -5156,7 +5198,7 @@ class KrokHelperQtApp(QMainWindow):
         self.settings.align_video_name_template = self.align_video_name_template_value
         self.settings.align_audio_name_template = self.align_audio_name_template_value
         self.settings.ffmpeg_dir = self.ffmpeg_dir_text
-        self.settings.align_export_use_video_audio = self.align_use_video_audio_check.isChecked()
+        self._update_alignment_preferences_from_ui()
         return save_app_settings(self.settings)
 
     def _resolve_output_name_mode(self) -> str:
@@ -5655,7 +5697,7 @@ class KrokHelperQtApp(QMainWindow):
                 self._align_lead_fill_selection = LEAD_FILL_BLACK
             if self.align_encode_hardware_radio.isChecked():
                 self._align_encode_selection = ENCODE_MODE_HARDWARE
-            else:
+            elif self.align_encode_software_radio.isChecked():
                 self._align_encode_selection = ENCODE_MODE_SOFTWARE
 
             self.align_lead_fill_group.setExclusive(False)
@@ -6159,6 +6201,10 @@ class KrokHelperQtApp(QMainWindow):
             event.ignore()
             return
         self._stop_alignment_preview(log_message=False)
+        try:
+            self._save_all_settings()
+        except Exception:
+            pass
         super().closeEvent(event)
 
 
