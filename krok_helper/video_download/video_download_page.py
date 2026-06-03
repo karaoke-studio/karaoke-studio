@@ -810,12 +810,12 @@ class VideoDownloadPage(QWidget):
         info_title_row.setContentsMargins(0, 0, 0, 0)
         info_title_row.setSpacing(8)
         info_title_row.addWidget(self._create_panel_title("视频信息与下载设置"), 1)
-        self.delete_current_task_button = ToolButton(FIF.DELETE)
+        self.delete_current_task_button = PushButton(FIF.DELETE, "")
         self.delete_current_task_button.setFixedSize(30, 30)
         self.delete_current_task_button.setToolTip("从列表删除当前视频")
         self.delete_current_task_button.setStyleSheet(
-            "QToolButton { background: transparent; border: 1px solid #e5e7eb; border-radius: 8px; }"
-            "QToolButton:hover { background: #fff1f2; border-color: #fda4af; }"
+            "QPushButton { background: transparent; border: 1px solid #e5e7eb; border-radius: 8px; padding: 0; }"
+            "QPushButton:hover { background: #fff1f2; border-color: #fda4af; }"
         )
         self.delete_current_task_button.clicked.connect(self._delete_current_task)
         info_title_row.addWidget(self.delete_current_task_button, 0)
@@ -2427,12 +2427,12 @@ class VideoDownloadPage(QWidget):
             button.clicked.connect(lambda: self._retry_task(task.task_id))
         layout.addWidget(button, 0, Qt.AlignmentFlag.AlignCenter)
 
-        delete_button = ToolButton(FIF.DELETE)
+        delete_button = PushButton(FIF.DELETE, "")
         delete_button.setFixedSize(30, 30)
         delete_button.setToolTip("从列表删除此视频")
         delete_button.setStyleSheet(
-            "QToolButton { background: transparent; border: 1px solid #e5e7eb; border-radius: 8px; }"
-            "QToolButton:hover { background: #fff1f2; border-color: #fda4af; }"
+            "QPushButton { background: transparent; border: 1px solid #e5e7eb; border-radius: 8px; padding: 0; }"
+            "QPushButton:hover { background: #fff1f2; border-color: #fda4af; }"
         )
         delete_button.clicked.connect(lambda: self._delete_task(task.task_id))
         layout.addWidget(delete_button, 0, Qt.AlignmentFlag.AlignCenter)

@@ -15,7 +15,7 @@ DWMWCP_DONOTROUND = 1
 os.environ["QFLUENT_WIDGETS_NO_PROMOTION"] = "1"
 
 from PyQt6.QtCore import QEvent, QSize, QThread, QTimer, Qt, pyqtSignal as Signal
-from PyQt6.QtGui import QColor, QBrush, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPalette, QPen, QShortcut
+from PyQt6.QtGui import QColor, QBrush, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPen, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -133,15 +133,6 @@ HIRES_AUDIO_EXTENSIONS = AUDIO_EXTENSIONS | {".mp4"}
 ALIGN_AUDIO_EXTENSIONS = AUDIO_EXTENSIONS | {".mp4"}
 WINDOWS_INVALID_FILENAME_CHARS = '<>:"/\\|?*'
 ALIGNMENT_TEMPLATE_FORMATTER = Formatter()
-TOOLTIP_QSS = """
-QToolTip, QTipLabel {
-    background-color: #FFFFFF;
-    color: #1F2937;
-    border: 1px solid #D9E2EF;
-    border-radius: 6px;
-    padding: 6px 8px;
-}
-"""
 FFMPEG_DIR_PLACEHOLDER = "未设置，将优先使用系统 PATH 中的 ffmpeg"
 WORKFLOW_VIDEO_DOWNLOAD = "video_download"
 WORKFLOW_WAVEFORM_ALIGN = "waveform_align"
@@ -1943,22 +1934,7 @@ class KrokHelperQtApp(QMainWindow):
         finally:
             self._restoring_from_maximized = False
 
-    def _apply_tooltip_style(self) -> None:
-        tooltip_palette = QPalette()
-        tooltip_palette.setColor(QPalette.ColorRole.ToolTipBase, QColor("#FFFFFF"))
-        tooltip_palette.setColor(QPalette.ColorRole.ToolTipText, QColor("#1F2937"))
-        QToolTip.setPalette(tooltip_palette)
-        QToolTip.setFont(QFont("Microsoft YaHei UI", 9))
-
-        app = QApplication.instance()
-        if app is None:
-            return
-        stylesheet = app.styleSheet()
-        if TOOLTIP_QSS not in stylesheet:
-            app.setStyleSheet(f"{stylesheet}\n{TOOLTIP_QSS}" if stylesheet else TOOLTIP_QSS)
-
     def _apply_styles(self) -> None:
-        self._apply_tooltip_style()
         self.setStyleSheet(
             """
             QMainWindow, QWidget {
