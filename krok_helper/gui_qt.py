@@ -1909,17 +1909,27 @@ class KrokHelperQtApp(QMainWindow):
             if screen is None:
                 return
             available = screen.availableGeometry()
-            safe_rect = available.adjusted(24, 24, -24, -48)
+            safe_rect = available.adjusted(48, 72, -48, -88)
+            if safe_rect.width() <= 0 or safe_rect.height() <= 0:
+                safe_rect = available.adjusted(24, 24, -24, -48)
+
+            min_width = min(WINDOW_MIN_WIDTH, safe_rect.width())
+            min_height = min(WINDOW_MIN_HEIGHT, safe_rect.height())
+            if min_width > 0 and min_height > 0:
+                self.setMinimumSize(min_width, min_height)
+
             target_width = min(
-                max(WINDOW_MIN_WIDTH, WINDOW_WIDTH),
-                max(WINDOW_MIN_WIDTH, safe_rect.width()),
+                WINDOW_WIDTH,
+                safe_rect.width(),
             )
             target_height = min(
-                max(WINDOW_MIN_HEIGHT, WINDOW_HEIGHT),
-                max(WINDOW_MIN_HEIGHT, safe_rect.height()),
+                WINDOW_HEIGHT,
+                safe_rect.height(),
             )
-            left = available.x() + max(0, (available.width() - target_width) // 2)
-            top = available.y() + max(0, (available.height() - target_height) // 2)
+            target_width = max(min_width, target_width)
+            target_height = max(min_height, target_height)
+            left = safe_rect.x() + max(0, (safe_rect.width() - target_width) // 2)
+            top = safe_rect.y() + max(0, (safe_rect.height() - target_height) // 2)
             self.setGeometry(left, top, target_width, target_height)
         finally:
             self._restoring_from_maximized = False
