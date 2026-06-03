@@ -1886,15 +1886,15 @@ class KrokHelperQtApp(QMainWindow):
                 color: #6B7280;
                 font-size: 10.5pt;
             }
-            ToolButton#WorkflowSettingsButton {
-                background: #FFFFFF;
-                border: 1px solid #E9E9E9;
-                border-radius: 12px;
-                padding: 8px;
+            ToolButton#AlignMaterialSettingsButton {
+                background: transparent;
+                border: 1px solid transparent;
+                border-radius: 8px;
+                padding: 2px;
             }
-            ToolButton#WorkflowSettingsButton:hover {
-                background: #FFF5F6;
-                border-color: #F3CDD2;
+            ToolButton#AlignMaterialSettingsButton:hover {
+                background: #F3F4F6;
+                border-color: #E5E7EB;
             }
             QLabel#PageTitle {
                 color: #1f2937;
@@ -2126,12 +2126,6 @@ class KrokHelperQtApp(QMainWindow):
         shell.setContentsMargins(24, 20, 24, 16)
         shell.setSpacing(12)
 
-        self.top_settings_button = ToolButton(FIF.SETTING)
-        self.top_settings_button.setObjectName("WorkflowSettingsButton")
-        self.top_settings_button.setToolTip("设置")
-        self.top_settings_button.clicked.connect(self._open_current_module_settings)
-        self.top_settings_button.setFixedSize(40, 40)
-
         self.workflow_stepper = WorkflowStepper(WORKFLOW_STEPS, self)
         self.workflow_stepper.stepClicked.connect(self._handle_workflow_step_clicked)
 
@@ -2142,7 +2136,6 @@ class KrokHelperQtApp(QMainWindow):
         workflow_bar_layout.setContentsMargins(10, 8, 10, 8)
         workflow_bar_layout.setSpacing(10)
         workflow_bar_layout.addWidget(self.workflow_stepper, 1)
-        workflow_bar_layout.addWidget(self.top_settings_button, 0, Qt.AlignmentFlag.AlignVCenter)
 
         self.page_stack = QStackedWidget()
         self.page_stack.setObjectName("PageStack")
@@ -2202,15 +2195,6 @@ class KrokHelperQtApp(QMainWindow):
         if hasattr(self, "align_use_video_audio_check"):
             self.settings.align_export_use_video_audio = self.align_use_video_audio_check.isChecked()
         return save_app_settings(self.settings)
-
-    def _open_current_module_settings(self) -> None:
-        if self.active_module == WORKFLOW_WAVEFORM_ALIGN:
-            self._open_settings_window("align")
-            return
-        if self.active_module == WORKFLOW_HIRES_MIX:
-            self._open_settings_window("hires")
-            return
-        QMessageBox.information(self, APP_TITLE, "当前模块没有可调整的独立设置。")
 
     def _bind_shortcuts(self) -> None:
         self.shortcut_space = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
@@ -3560,10 +3544,19 @@ class KrokHelperQtApp(QMainWindow):
             "border-radius: 7px; padding: 4px 10px;"
         )
         self.align_material_status_label.setFont(build_app_ui_font(point_size=10.5, bold=True))
+        self.align_material_settings_button = ToolButton(FIF.SETTING)
+        self.align_material_settings_button.setObjectName("AlignMaterialSettingsButton")
+        self.align_material_settings_button.setToolTip("波形对齐设置")
+        self.align_material_settings_button.setFixedSize(30, 30)
+        self.align_material_settings_button.setIconSize(QSize(16, 16))
+        self.align_material_settings_button.clicked.connect(lambda: self._open_settings_window("align"))
+
         material_header.addWidget(material_title)
         material_header.addWidget(self.align_material_status_label)
         material_header.addStretch(1)
         material_header.addWidget(self.align_clear_button)
+        material_header.addSpacing(2)
+        material_header.addWidget(self.align_material_settings_button, 0, Qt.AlignmentFlag.AlignVCenter)
         material_layout.addLayout(material_header)
 
         self.align_material_body = QWidget()
