@@ -38,6 +38,9 @@ from qfluentwidgets import (
     PushButton,
     TableWidget,
     ToolButton,
+    ToolTip,
+    ToolTipFilter,
+    ToolTipPosition,
 )
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 from qfluentwidgets.components.widgets.menu import MenuAnimationType
@@ -69,6 +72,30 @@ from .video_logic import (
     video_identity_keys,
 )
 from .ytdlp_service import DownloadCancelledError, VideoDownloadError, YtDlpService
+
+
+class _LightToolTipFilter(ToolTipFilter):
+    # Use qfluent's themed ToolTip instead of Qt's native QTipLabel (renders dark
+    # for buttons inside qfluent's TableWidget). Parentless on purpose: qfluent
+    # parents the tip to the main window, whose `QWidget { background: #F4F7FB }`
+    # then cascades onto the tip's outer frame as a gray border.
+    def _createToolTip(self):
+        return ToolTip(self.parent().toolTip())
+
+
+DELETE_BUTTON_QSS = (
+    "QPushButton { background: transparent; border: 1px solid #e5e7eb; border-radius: 8px; padding: 0; }"
+    "QPushButton:hover { background: #fff1f2; border-color: #fda4af; }"
+)
+
+
+def _create_delete_button(tooltip: str) -> PushButton:
+    button = PushButton(FIF.DELETE, "")
+    button.setFixedSize(30, 30)
+    button.setToolTip(tooltip)
+    button.installEventFilter(_LightToolTipFilter(button, 300, ToolTipPosition.TOP))
+    button.setStyleSheet(DELETE_BUTTON_QSS)
+    return button
 
 
 DEFAULT_CUSTOM_TEMPLATE = "{title}"
@@ -810,13 +837,7 @@ class VideoDownloadPage(QWidget):
         info_title_row.setContentsMargins(0, 0, 0, 0)
         info_title_row.setSpacing(8)
         info_title_row.addWidget(self._create_panel_title("视频信息与下载设置"), 1)
-        self.delete_current_task_button = PushButton(FIF.DELETE, "")
-        self.delete_current_task_button.setFixedSize(30, 30)
-        self.delete_current_task_button.setToolTip("从列表删除当前视频")
-        self.delete_current_task_button.setStyleSheet(
-            "QPushButton { background: transparent; border: 1px solid #e5e7eb; border-radius: 8px; padding: 0; }"
-            "QPushButton:hover { background: #fff1f2; border-color: #fda4af; }"
-        )
+        self.delete_current_task_button = _create_delete_button("从列表删除当前视频")
         self.delete_current_task_button.clicked.connect(self._delete_current_task)
         info_title_row.addWidget(self.delete_current_task_button, 0)
         info_layout.addLayout(info_title_row)
@@ -2427,13 +2448,7 @@ class VideoDownloadPage(QWidget):
             button.clicked.connect(lambda: self._retry_task(task.task_id))
         layout.addWidget(button, 0, Qt.AlignmentFlag.AlignCenter)
 
-        delete_button = PushButton(FIF.DELETE, "")
-        delete_button.setFixedSize(30, 30)
-        delete_button.setToolTip("从列表删除此视频")
-        delete_button.setStyleSheet(
-            "QPushButton { background: transparent; border: 1px solid #e5e7eb; border-radius: 8px; padding: 0; }"
-            "QPushButton:hover { background: #fff1f2; border-color: #fda4af; }"
-        )
+        delete_button = _create_delete_button("从列表删除此视频")
         delete_button.clicked.connect(lambda: self._delete_task(task.task_id))
         layout.addWidget(delete_button, 0, Qt.AlignmentFlag.AlignCenter)
         return container
