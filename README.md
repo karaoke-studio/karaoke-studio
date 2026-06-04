@@ -1,3 +1,13 @@
+> ## 📦 本仓库已迁移
+>
+> 本项目已与 [StrangeUtaGame](https://github.com/Xuan-cc/StrangeUtaGame) 合并，新仓库地址：
+>
+> **👉 https://github.com/karaoke-studio/karaoke-studio**
+>
+> 后续开发、issue、release 都请前往新仓库。此仓库已归档，仅作历史保留。
+
+---
+
 # Karaoke Helper（卡拉OK工作台）
 
 当前版本：`2.1.0`
