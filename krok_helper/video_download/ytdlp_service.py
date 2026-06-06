@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import http.cookiejar
 import json
 import os
 import re
@@ -292,8 +293,9 @@ class YtDlpService:
             "noplaylist": not allow_playlist,
             "skip_download": True,
         }
-        if cookie_file and Path(cookie_file).is_file():
-            ydl_opts["cookiefile"] = cookie_file
+        usable_cookie_file = self._usable_cookie_file(cookie_file)
+        if usable_cookie_file:
+            ydl_opts["cookiefile"] = usable_cookie_file
         if extractor_args_hint:
             ydl_opts["extractor_args"] = self._build_python_extractor_args(extractor_args_hint)
         proxy_url = proxy_url_for_app_settings(self._settings())
@@ -347,8 +349,9 @@ class YtDlpService:
         ]
         if extractor_args_hint:
             command[1:1] = ["--extractor-args", extractor_args_hint]
-        if cookie_file and Path(cookie_file).is_file():
-            command[1:1] = ["--cookies", cookie_file]
+        usable_cookie_file = self._usable_cookie_file(cookie_file)
+        if usable_cookie_file:
+            command[1:1] = ["--cookies", usable_cookie_file]
         proxy_args = proxy_cli_args_for_app_settings(self._settings())
         if proxy_args:
             command[1:1] = proxy_args
@@ -449,8 +452,9 @@ class YtDlpService:
             ydl_opts["extractor_args"] = self._build_python_extractor_args(extractor_args_hint)
         if options.merge_video_audio:
             ydl_opts["merge_output_format"] = "mp4"
-        if options.cookie_file and Path(options.cookie_file).is_file():
-            ydl_opts["cookiefile"] = options.cookie_file
+        usable_cookie_file = self._usable_cookie_file(options.cookie_file)
+        if usable_cookie_file:
+            ydl_opts["cookiefile"] = usable_cookie_file
         proxy_url = proxy_url_for_app_settings(self._settings())
         if proxy_url:
             ydl_opts["proxy"] = proxy_url
@@ -555,8 +559,9 @@ class YtDlpService:
             command.extend(["--write-subs", "--write-auto-subs"])
         if options.merge_video_audio:
             command.extend(["--merge-output-format", "mp4"])
-        if options.cookie_file and Path(options.cookie_file).is_file():
-            command.extend(["--cookies", options.cookie_file])
+        usable_cookie_file = self._usable_cookie_file(options.cookie_file)
+        if usable_cookie_file:
+            command.extend(["--cookies", usable_cookie_file])
         command.extend(proxy_cli_args_for_app_settings(self._settings()))
         command.append(task.url)
 
@@ -653,6 +658,21 @@ class YtDlpService:
         if cli:
             return cli
         raise VideoDownloadError("未找到 yt-dlp。请安装 `yt-dlp` 命令或 Python 包。")
+
+    def _usable_cookie_file(self, cookie_file: str | None) -> str:
+        if not cookie_file:
+            return ""
+        path = Path(cookie_file)
+        if not path.is_file() or path.stat().st_size <= 0:
+            return ""
+        jar = http.cookiejar.MozillaCookieJar(str(path))
+        try:
+            jar.load(ignore_discard=True, ignore_expires=True)
+        except Exception:
+            return ""
+        if not any(True for _cookie in jar):
+            return ""
+        return str(path)
 
     def _update_ytdlp_cli(self) -> str:
         cli = self._find_ytdlp_cli()

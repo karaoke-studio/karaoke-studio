@@ -54,3 +54,31 @@ def test_ytdlp_cli_extract_uses_global_proxy(monkeypatch) -> None:
     assert isinstance(env, dict)
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:7890"
 
+
+def test_ytdlp_cli_extract_ignores_invalid_cookie_file(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+    cookie_file = tmp_path / "youtube_cookies.txt"
+    cookie_file.write_text('{"not": "netscape"}', encoding="utf-8")
+    service = YtDlpService()
+    monkeypatch.setattr(service, "_find_ytdlp_cli", lambda: "yt-dlp")
+
+    def fake_run(command, **kwargs):
+        captured["command"] = command
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps({"title": "ok", "duration": 1, "formats": []}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    service._extract_info_with_cli(
+        "https://www.youtube.com/watch?v=ARj1adoUoEU&list=RDARj1adoUoEU&start_radio=1",
+        str(cookie_file),
+    )
+
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert "--cookies" not in command
+
