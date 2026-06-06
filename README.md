@@ -1,18 +1,8 @@
-> ## 📦 本仓库已迁移
->
-> 本项目已与 [StrangeUtaGame](https://github.com/Xuan-cc/StrangeUtaGame) 合并，新仓库地址：
->
-> **👉 https://github.com/karaoke-studio/karaoke-studio**
->
-> 后续开发、issue、release 都请前往新仓库。此仓库已归档，仅作历史保留。
+# Karaoke Studio（卡拉OK工作台）
 
----
+当前版本：`3.0.0`
 
-# Karaoke Helper（卡拉OK工作台）
-
-当前版本：`2.1.0`
-
-`Karaoke Helper` 是一个面向卡拉 OK / B 站投稿制作流程的 Windows 桌面工具。
+`Karaoke Studio` 是一个面向卡拉 OK / B 站投稿制作流程的 Windows 桌面工具。
 界面以一条「6 步工作流」串联整个制作链路，目前已经实现 4 个功能模块，另外 2 个为占位（规划中）。
 
 已实现模块：
@@ -24,7 +14,7 @@
 
 规划中（界面已占位，暂未实现）：
 
-- `歌词打轴`：逐句 / 逐字打轴
+- `歌词打轴`：逐句 / 逐字打轴 *（模块源码已合并自 [StrangeUtaGame](https://github.com/Xuan-cc/StrangeUtaGame)，位于 `krok_helper/lyrics_timing/`，UI 集成进行中）*
 - `字幕视频生成`：渲染字幕样式并输出字幕视频
 
 > 说明：本工具同时提供图形界面（默认）与命令行模式。命令行目前只覆盖 `Hi-Res 混流` 流程。
@@ -319,7 +309,7 @@ python -m krok_helper `
 Windows 默认保存在：
 
 ```text
-%APPDATA%\Karaoke Helper\settings.json
+%APPDATA%\Karaoke Studio\settings.json
 ```
 
 当前会保存：
@@ -333,7 +323,7 @@ Windows 默认保存在：
 Bilibili 登录 Cookie 默认保存在：
 
 ```text
-%APPDATA%\Karaoke Helper\video_download\bilibili_cookies.txt
+%APPDATA%\Karaoke Studio\video_download\bilibili_cookies.txt
 ```
 
 ## 打包
@@ -349,13 +339,13 @@ Bilibili 登录 Cookie 默认保存在：
 输出目录：
 
 ```text
-dist\windows\Karaoke Helper\
+dist\windows\Karaoke Studio\
 ```
 
 主程序：
 
 ```text
-dist\windows\Karaoke Helper\Karaoke Helper.exe
+dist\windows\Karaoke Studio\Karaoke Studio.exe
 ```
 
 ### macOS
@@ -375,7 +365,7 @@ chmod +x ./scripts/build_macos.command
 输出目录：
 
 ```text
-dist/macos/Karaoke Helper.app
+dist/macos/Karaoke Studio.app
 ```
 
 > 注意：当前打包脚本安装并裁剪的是 `PySide6`，而源码实际依赖 `PyQt6` + `PyQt6-Fluent-Widgets`，两者并不一致，打包前请先核对（见下文「已知问题」）。
@@ -402,4 +392,12 @@ dist/macos/Karaoke Helper.app
 - Hi-Res 流程会先标准化输入音频，再封装进最终 `mkv`
 - B 站是否最终显示 `Hi-Res`，上传时仍需要你在投稿页手动勾选对应选项
 - 各在线接口（歌词来源、yt-dlp 解析、B 站登录）依赖第三方服务，可能随对方变动而失效
+
+## 协议与署名
+
+本项目以 [GNU General Public License v3.0](./LICENSE) 协议发布。
+
+由 [Myosotis11037](https://github.com/Myosotis11037) 与 [Xuan-cc (Hoshiro)](https://github.com/Xuan-cc) 共同维护，详见 [`AUTHORS.md`](./AUTHORS.md)。
+
+本仓库由 `karaoke-helper` 与 [`StrangeUtaGame`](https://github.com/Xuan-cc/StrangeUtaGame) 合并而成，合并细节见 [`NOTICE`](./NOTICE)，版本变更见 [`CHANGELOG.md`](./CHANGELOG.md)。
 </content>

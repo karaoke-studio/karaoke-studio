@@ -1,0 +1,164 @@
+altgraph==0.17.5
+anaconda-anon-usage @ file:///opt/miniconda3/conda-bld/anaconda-anon-usage_1764636648062/work
+anaconda-auth @ file:///C:/miniconda3/conda-bld/anaconda-cloud-auth-split_1765839853030/work
+anaconda-cli-base @ file:///C:/miniconda3/conda-bld/anaconda-cli-base_1764888883727/work
+annotated-types @ file:///C:/miniconda3/conda-bld/annotated-types_1761745107361/work
+anyio==4.13.0
+archspec @ file:///home/task_175812491784513/conda-bld/archspec_1758124989039/work
+audioop-lts==0.2.2
+audiotsm==0.1.2
+av==17.0.1
+azure-ai-documentintelligence==1.0.2
+azure-core==1.39.0
+azure-identity==1.25.3
+beautifulsoup4==4.14.3
+black==26.3.1
+boltons @ file:///C:/b/abs_e2_iokhxbp/croot/boltons_1751383740243/work
+brotlicffi @ file:///C:/miniconda3/conda-bld/brotlicffi_1764961374486/work
+certifi @ file:///C:/miniconda3/conda-bld/certifi_1763135348719/work/certifi
+cffi @ file:///C:/miniconda3/conda-bld/cffi_1761832792955/work
+charset-normalizer @ file:///C:/miniconda3/conda-bld/charset-normalizer_1761744975868/work
+click @ file:///C:/miniconda3/conda-bld/click_1764332372183/work
+cobble==0.1.4
+colorama @ file:///C:/Users/dev-admin/perseverance-python-buildout/croot/colorama_1729036581634/work
+coloredlogs==15.0.1
+conda @ file:///C:/miniconda3/conda-bld/conda_1765567840841/work/conda-src
+conda-anaconda-telemetry @ file:///croot/conda-anaconda-telemetry_1755883788794/work
+conda-anaconda-tos @ file:///C:/b/abs_c9yejtsx9g/croot/conda-anaconda-tos_1755123332641/work
+conda-content-trust @ file:///C:/Users/dev-admin/perseverance-python-buildout/croot/conda-content-trust_1729088072778/work
+conda-libmamba-solver @ file:///C:/miniconda3/conda-bld/conda-libmamba-solver_1764245615235/work/src
+conda-package-handling @ file:///C:/miniconda3/conda-bld/conda-package-handling_1762366515145/work
+conda_package_streaming @ file:///C:/miniconda3/conda-bld/conda-package-streaming_1762361689679/work
+coverage==7.13.5
+cryptography @ file:///C:/miniconda3/conda-bld/cryptography-split_1761932023265/work
+darkdetect==0.8.0
+defusedxml==0.7.1
+Deprecated==1.3.1
+distro @ file:///C:/Users/dev-admin/perseverance-python-buildout/croot/distro_1729059153117/work
+et_xmlfile==2.0.0
+flatbuffers==25.12.19
+frozendict @ file:///C:/miniconda3/conda-bld/frozendict_1761750728192/work
+h11==0.16.0
+httpcore==1.0.9
+httpx==0.28.1
+humanfriendly==10.0
+idna @ file:///C:/miniconda3/conda-bld/idna_1761912043388/work
+iniconfig==2.3.0
+isodate==0.7.2
+jaconv==0.5.0
+jaraco.classes @ file:///C:/b/abs_6erueoob1v/croot/jaraco.classes_1755516340851/work
+jaraco.context @ file:///C:/Users/dev-admin/buildout/perseverance-python-buildout/croot/jaraco.context_1731721000658/work
+jaraco.functools @ file:///C:/b/abs_a1jv6v_pzp/croot/jaraco.functools_1740408129620/work
+jiter==0.14.0
+jsonpatch @ file:///C:/Users/dev-admin/perseverance-python-buildout/croot/jsonpatch_1729054776004/work
+jsonpointer @ file:///C:/b/abs_73u73l7pl9/croot/jsonpointer_1753788460913/work
+keyring @ file:///C:/miniconda3/conda-bld/keyring_1763637203252/work
+libmambapy @ file:///C:/miniconda3/conda-bld/mamba-split_1763111608356/work/libmambapy
+librt==0.9.0
+lxml==6.0.4
+magika==0.6.3
+mammoth==1.11.0
+markdown-it-py @ file:///C:/b/abs_3espcrdl35/croot/markdown-it-py_1756299213703/work
+markdownify==1.2.2
+-e git+https://github.com/microsoft/markitdown.git@a51f725d7ff4cdfe3bb6ad2ce2c04d98bf5f1f00#egg=markitdown&subdirectory=packages\markitdown
+markitdown-ocr==0.1.0
+mdurl @ file:///C:/miniconda3/conda-bld/mdurl_1758552277768/work
+menuinst @ file:///C:/miniconda3/conda-bld/menuinst_1765382397455/work
+more-itertools @ file:///C:/miniconda3/conda-bld/more-itertools_1761121564395/work
+mpmath==1.3.0
+msal==1.36.0
+msal-extensions==1.3.1
+msgpack @ file:///C:/b/abs_4b3t4uhz3r/croot/msgpack-python_1750958631084/work
+mypy==1.20.1
+mypy_extensions==1.1.0
+nodeenv==1.10.0
+numpy==2.4.4
+olefile==0.47
+onnxruntime==1.20.1
+openai==2.32.0
+openpyxl==3.1.5
+packaging @ file:///C:/miniconda3/conda-bld/packaging_1761049099114/work
+pandas==3.0.2
+pathspec==1.0.4
+pdfminer.six==20251230
+pdfplumber==0.11.9
+pedalboard==0.9.22
+pefile==2024.8.26
+pillow==12.2.0
+pkce @ file:///C:/Users/dev-admin/perseverance-python-buildout/croot/pkce_1729049216383/work
+platformdirs @ file:///C:/miniconda3/conda-bld/platformdirs_1762356623609/work
+pluggy @ file:///C:/b/abs_dfec_m79vo/croot/pluggy_1733170145382/work
+protobuf==7.34.1
+pycosat @ file:///C:/b/abs_18nblzzn70/croot/pycosat_1736868434419/work
+pycparser @ file:///C:/miniconda3/conda-bld/pycparser_1757496153123/work
+pydantic @ file:///C:/miniconda3/conda-bld/pydantic_1764083582233/work
+pydantic-settings @ file:///C:/miniconda3/conda-bld/pydantic-settings_1764165236385/work
+pydantic_core @ file:///C:/miniconda3/conda-bld/pydantic-core_1764009799098/work
+pydub==0.25.1
+Pygments @ file:///C:/miniconda3/conda-bld/pygments_1762431428918/work
+pyinstaller==6.19.0
+pyinstaller-hooks-contrib==2026.4
+PyJWT @ file:///C:/miniconda3/conda-bld/pyjwt_1764332257117/work
+pykakasi==2.3.0
+PyMuPDF==1.27.2.2
+pypdfium2==5.7.0
+PyQt5==5.15.11
+PyQt5-Frameless-Window==0.8.1
+PyQt5-Qt5==5.15.2
+PyQt5_sip==12.18.0
+PyQt6==6.11.0
+PyQt6-Fluent-Widgets==1.11.2
+PyQt6-Frameless-Window==0.8.1
+PyQt6-Qt6==6.11.0
+PyQt6_sip==13.11.1
+pyreadline3==3.5.4
+pyright==1.1.408
+PySocks @ file:///C:/miniconda3/conda-bld/pysocks_1761753030965/work
+pytest==9.0.3
+pytest-cov==7.1.0
+pytest-qt==4.5.0
+python-dateutil==2.9.0.post0
+python-docx==1.2.0
+python-dotenv @ file:///C:/b/abs_71cpoh9hpg/croot/python-dotenv_1745613639902/work
+python-pptx==1.0.2
+pytokens==0.4.1
+pywin32==311
+pywin32-ctypes @ file:///C:/Users/dev-admin/perseverance-python-buildout/croot/pywin32-ctypes_1729046491215/work
+readchar @ file:///C:/miniconda3/conda-bld/readchar_1760613474723/work
+requests @ file:///C:/miniconda3/conda-bld/requests_1762359611326/work
+rich @ file:///C:/miniconda3/conda-bld/rich_1760375661587/work
+ruamel.yaml @ file:///C:/miniconda3/conda-bld/ruamel.yaml_1762536064547/work
+ruamel.yaml.clib @ file:///C:/miniconda3/conda-bld/ruamel.yaml.clib_1762530094515/work
+ruff==0.15.10
+semver @ file:///C:/miniconda3/conda-bld/semver_1761903323755/work
+setuptools==80.9.0
+shellingham @ file:///C:/miniconda3/conda-bld/shellingham_1761912227081/work
+six==1.17.0
+sniffio==1.3.1
+sounddevice==0.5.5
+soundfile==0.13.1
+soupsieve==2.8.3
+SpeechRecognition==3.16.0
+standard-aifc==3.13.0
+standard-chunk==3.13.0
+-e git+https://github.com/Xuan-cc/StrangeUtaGame.git@e0f3846a50c71b7c8a79778d4866ae0ad2c381af#egg=strange_uta_game
+SudachiDict-core==20260116
+SudachiPy==0.6.11
+sympy==1.14.0
+tkinterdnd2==0.4.3
+tomli @ file:///C:/b/abs_88e598m6o8/croot/tomli_1753774604115/work
+tqdm @ file:///C:/miniconda3/conda-bld/tqdm_1762863407729/work
+truststore @ file:///C:/miniconda3/conda-bld/truststore_1762521027919/work
+typer==0.20.0
+typer-slim==0.20.0
+typing-inspection @ file:///C:/miniconda3/conda-bld/typing-inspection_1760614188477/work
+typing_extensions @ file:///C:/b/abs_ecq8gc0vbm/croot/typing_extensions_1756281142218/work
+tzdata==2026.1
+urllib3 @ file:///C:/miniconda3/conda-bld/urllib3_1765399243000/work
+wheel==0.45.1
+win_inet_pton @ file:///C:/miniconda3/conda-bld/win_inet_pton_1761746278300/work
+wrapt==2.1.2
+xlrd==2.0.2
+xlsxwriter==3.2.9
+youtube-transcript-api==1.0.3
+zstandard @ file:///C:/miniconda3/conda-bld/zstandard_1758189089298/work

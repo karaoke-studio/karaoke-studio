@@ -183,15 +183,19 @@ class PanelCard(QFrame):
         self._padding = padding
         self._spacing = spacing
         self.setObjectName("PanelCard")
-        self.setStyleSheet(
-            f"""
+        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
+
+        _wb_th(self, lambda: self._panel_qss(radius, _wb_pal()))
+
+    @staticmethod
+    def _panel_qss(radius: int, p) -> str:
+        return f"""
             QFrame#PanelCard {{
-                background: #ffffff;
-                border: 1px solid rgba(226, 232, 240, 0.95);
+                background: {p.panel_bg};
+                border: 1px solid {p.panel_border};
                 border-radius: {radius}px;
             }}
-            """
-        )
+        """
 
     def create_vbox(self) -> QVBoxLayout:
         layout = QVBoxLayout(self)
@@ -547,12 +551,13 @@ class ParseLinksWorker(QThread):
         self,
         urls: list[str],
         cookie_files_by_source: dict[str, str],
+        app_settings=None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._urls = urls
         self._cookie_files_by_source = cookie_files_by_source
-        self._service = YtDlpService()
+        self._service = YtDlpService(app_settings=app_settings)
 
     def run(self) -> None:  # noqa: D401
         infos: list[VideoInfo] = []
@@ -577,11 +582,11 @@ class DownloadWorker(QThread):
     taskFailed = Signal(str, str)
     taskCancelled = Signal(str)
 
-    def __init__(self, task: DownloadTask, options: DownloadOptions, parent: QWidget | None = None) -> None:
+    def __init__(self, task: DownloadTask, options: DownloadOptions, app_settings=None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._task = task
         self._options = options
-        self._service = YtDlpService()
+        self._service = YtDlpService(app_settings=app_settings)
 
     def run(self) -> None:  # noqa: D401
         if self._task.cancel_requested:
@@ -625,8 +630,12 @@ class YtDlpUpdateWorker(QThread):
     updateSucceeded = Signal(str, str)
     updateFailed = Signal(str)
 
+    def __init__(self, app_settings=None, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._app_settings = app_settings
+
     def run(self) -> None:  # noqa: D401
-        service = YtDlpService()
+        service = YtDlpService(app_settings=self._app_settings)
         try:
             before_version = service.get_ytdlp_version()
             update_output = service.update_ytdlp()
@@ -694,7 +703,7 @@ class VideoDownloadPage(QWidget):
         super().__init__(parent)
         self.settings = settings
         self._save_settings = save_settings
-        self.cookie_manager = CookieManager(getattr(settings, "video_download_cookie_path", ""))
+        self.cookie_manager = CookieManager(getattr(settings, "video_download_cookie_path", ""), app_settings=settings)
         self._parse_worker: ParseLinksWorker | None = None
         self._cookie_import_worker: CookieImportWorker | None = None
         self._ytdlp_update_worker: YtDlpUpdateWorker | None = None
@@ -720,55 +729,9 @@ class VideoDownloadPage(QWidget):
         self._refresh_download_table()
 
     def _build_ui(self) -> None:
-        self.setStyleSheet(
-            """
-            QLabel[panelTitle="true"] {
-                background: transparent;
-                border: 0;
-                color: #111827;
-                font-size: 13pt;
-                font-weight: 700;
-            }
-            QLabel[sectionTitle="true"] {
-                background: transparent;
-                border: 0;
-                color: #111827;
-                font-size: 11pt;
-                font-weight: 700;
-            }
-            QLabel[hint="true"] {
-                background: transparent;
-                border: 0;
-                color: #6b7280;
-                font-size: 10pt;
-            }
-            QLabel, CaptionLabel, BodyLabel {
-                background: transparent;
-                border: 0;
-                font-family: "Microsoft YaHei UI";
-                font-weight: 400;
-            }
-            TableWidget {
-                background: #ffffff;
-                border: 1px solid rgba(203, 213, 225, 0.9);
-                border-radius: 16px;
-                gridline-color: transparent;
-            }
-            TableWidget::item {
-                padding: 8px 10px;
-                border-bottom: 1px solid rgba(226, 232, 240, 0.85);
-            }
-            QHeaderView::section {
-                background: #f8fafc;
-                color: #111827;
-                border: 0;
-                border-right: 1px solid rgba(226, 232, 240, 0.8);
-                border-bottom: 1px solid rgba(226, 232, 240, 0.9);
-                padding: 8px;
-                font-weight: 700;
-            }
-            """
-        )
+        from krok_helper.theme_workbench import themed as _wb_th
+
+        _wb_th(self, self._page_qss)
 
         root = QHBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -781,6 +744,63 @@ class VideoDownloadPage(QWidget):
 
         root.addWidget(left_panel, 0)
         root.addWidget(center_panel, 1)
+
+    def _page_qss(self) -> str:
+        from krok_helper.theme_workbench import palette as _wb_pal
+
+        p = _wb_pal()
+        return f"""
+            QLabel[panelTitle="true"] {{
+                background: transparent;
+                border: 0;
+                color: {p.panel_title};
+                font-size: 13pt;
+                font-weight: 700;
+            }}
+            QLabel[sectionTitle="true"] {{
+                background: transparent;
+                border: 0;
+                color: {p.text_primary};
+                font-size: 11pt;
+                font-weight: 700;
+            }}
+            QLabel[hint="true"] {{
+                background: transparent;
+                border: 0;
+                color: {p.text_hint};
+                font-size: 10pt;
+            }}
+            QLabel, CaptionLabel, BodyLabel {{
+                background: transparent;
+                border: 0;
+                color: {p.text_primary};
+                font-family: "Microsoft YaHei UI";
+                font-weight: 400;
+            }}
+            TableWidget {{
+                background: {p.table_bg};
+                border: 1px solid {p.table_border};
+                border-radius: 16px;
+                gridline-color: transparent;
+                color: {p.text_primary};
+            }}
+            TableWidget::item {{
+                padding: 8px 10px;
+                border-bottom: 1px solid {p.table_row_border};
+            }}
+            TableWidget::item:hover {{
+                background: {p.table_row_hover};
+            }}
+            QHeaderView::section {{
+                background: {p.table_header_bg};
+                color: {p.table_header_text};
+                border: 0;
+                border-right: 1px solid {p.header_separator};
+                border-bottom: 1px solid {p.header_separator};
+                padding: 8px;
+                font-weight: 700;
+            }}
+        """
 
     def _build_left_panel(self) -> QWidget:
         panel = PanelCard(self, padding=(12, 12, 12, 12), spacing=12)
@@ -966,7 +986,8 @@ class VideoDownloadPage(QWidget):
         self.task_switch_combo.currentIndexChanged.connect(self._handle_task_switch_combo_changed)
         self._install_single_click_combo_behavior(self.task_switch_combo)
         self.task_total_label = CaptionLabel("/ 0")
-        self.task_total_label.setStyleSheet("color: #475467;")
+        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
+        _wb_th(self.task_total_label, lambda: f"color: {_wb_pal().text_secondary};")
         self.next_task_button = ToolButton(FIF.RIGHT_ARROW)
         self.next_task_button.setFixedSize(30, 30)
         self.next_task_button.clicked.connect(lambda: self._move_task_selection(1))
@@ -1008,11 +1029,13 @@ class VideoDownloadPage(QWidget):
             )
         ):
             label = QLabel(f"{title}：")
-            label.setStyleSheet("color: #475467;")
+            from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
+            _wb_th(label, lambda: f"color: {_wb_pal().text_secondary};")
             value = QLabel("-")
             value.setWordWrap(False)
             value.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            value.setStyleSheet("color: #111827; font-weight: 400;")
+            from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
+            _wb_th(value, lambda: f"color: {_wb_pal().text_primary}; font-weight: 400;")
             value.setTextInteractionFlags(Qt.TextInteractionFlag.NoTextInteraction)
             value.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
             meta_layout.addWidget(label, row, 0)
@@ -1095,15 +1118,9 @@ class VideoDownloadPage(QWidget):
 
         self.account_segment_row = QWidget(account_card)
         self.account_segment_row.setObjectName("AccountSegmentRow")
-        self.account_segment_row.setStyleSheet(
-            """
-            QWidget#AccountSegmentRow {
-                background: #ffffff;
-                border: 1px solid #e5e7eb;
-                border-radius: 8px;
-            }
-            """
-        )
+        from krok_helper.theme_workbench import palette as _wb_pal, schedule_theme_refresh, theme as _wb_theme, themed as _wb_th
+
+        _wb_th(self.account_segment_row, lambda: self._account_segment_row_qss(_wb_pal()))
         segment_layout = QHBoxLayout(self.account_segment_row)
         segment_layout.setContentsMargins(0, 0, 0, 0)
         segment_layout.setSpacing(0)
@@ -1121,21 +1138,62 @@ class VideoDownloadPage(QWidget):
         self.account_stack.addWidget(self._build_youtube_account_panel(account_card))
         account_layout.addWidget(self.account_stack)
         self._switch_account_platform(SOURCE_BILIBILI)
+        _wb_theme.changed.connect(
+            lambda: schedule_theme_refresh(
+                self,
+                self._refresh_account_theme,
+                timer_attr="_video_account_theme_refresh_timer",
+            )
+        )
 
         return account_card
 
+    @staticmethod
+    def _account_segment_row_qss(p) -> str:
+        return f"""
+            QWidget#AccountSegmentRow {{
+                background: {p.input_bg};
+                border: 1px solid {p.input_border};
+                border-radius: 8px;
+            }}
+        """
+
+    @staticmethod
+    def _segment_qss(selected: bool, p) -> str:
+        if not selected:
+            return "QFrame { background: transparent; border: 0; border-radius: 7px; }"
+        return f"""
+            QFrame {{
+                background: {p.global_settings_hover_bg};
+                border: 1px solid {p.global_settings_hover_border};
+                border-radius: 7px;
+            }}
+        """
+
+    @staticmethod
+    def _segment_title_qss(selected: bool, p) -> str:
+        color = p.panel_title if selected else p.text_secondary
+        weight = 600 if selected else 400
+        return f"background: transparent; border: 0; color: {color}; font-weight: {weight};"
+
+    def _refresh_account_theme(self) -> None:
+        if not hasattr(self, "account_stack"):
+            return
+        platform = SOURCE_YOUTUBE if self.account_stack.currentIndex() == 1 else SOURCE_BILIBILI
+        self._switch_account_platform(platform)
+
     def _create_account_segment(self, title: str) -> ClickableFrame:
+        from krok_helper.theme_workbench import palette as _wb_pal
+
         segment = ClickableFrame()
         segment.setFixedHeight(34)
-        segment.setStyleSheet(SEGMENT_STYLE_NORMAL)
+        segment.setStyleSheet(self._segment_qss(False, _wb_pal()))
         layout = QHBoxLayout(segment)
         layout.setContentsMargins(10, 0, 10, 0)
         layout.setSpacing(8)
         layout.addStretch(1)
         title_label = BodyLabel(title)
-        title_label.setStyleSheet(
-            f"background: transparent; border: 0; color: {SEGMENT_TITLE_COLOR_NORMAL}; font-weight: 400;"
-        )
+        title_label.setStyleSheet(self._segment_title_qss(False, _wb_pal()))
         dot = QFrame(segment)
         dot.setFixedSize(10, 10)
         dot.setStyleSheet(f"background: {PLATFORM_STATUS_LOGGED_OUT}; border-radius: 5px;")
@@ -1164,28 +1222,29 @@ class VideoDownloadPage(QWidget):
 
         self.account_profile_widget = QWidget(panel)
         self.account_profile_widget.setObjectName("AccountProfileWidget")
-        self.account_profile_widget.setStyleSheet(
-            """
-            QWidget#AccountProfileWidget {
-                background: #f8fafc;
-                border: 1px solid #e2e8f0;
+        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
+
+        _wb_th(self.account_profile_widget, lambda: f"""
+            QWidget#AccountProfileWidget {{
+                background: {_wb_pal().preview_bg};
+                border: 1px solid {_wb_pal().preview_border};
                 border-radius: 16px;
-            }
+            }}
             QWidget#AccountProfileWidget QLabel,
             QWidget#AccountProfileWidget BodyLabel,
-            QWidget#AccountProfileWidget CaptionLabel {
+            QWidget#AccountProfileWidget CaptionLabel {{
                 background: transparent;
                 border: 0;
-            }
-            """
-        )
+            }}
+        """)
         account_layout = QVBoxLayout(self.account_profile_widget)
         account_layout.setContentsMargins(16, 16, 16, 16)
         account_layout.setSpacing(8)
         self.account_avatar_label = AvatarLabel()
         self.account_name_label = BodyLabel("Bilibili 用户")
         self.account_name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.account_name_label.setStyleSheet("color: #111827; font-size: 12pt; font-weight: 400;")
+        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
+        _wb_th(self.account_name_label, lambda: f"color: {_wb_pal().text_primary}; font-size: 12pt; font-weight: 400;")
         self.account_hint_label = CaptionLabel("当前已登录 Bilibili 账号")
         self.account_hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.account_hint_label.setStyleSheet("color: #64748b;")
@@ -1233,7 +1292,8 @@ class VideoDownloadPage(QWidget):
         layout.setSpacing(10)
 
         title = BodyLabel("通过 Firefox 浏览器导入")
-        title.setStyleSheet("color: #111827; font-weight: 700;")
+        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
+        _wb_th(title, lambda: f"color: {_wb_pal().text_primary}; font-weight: 700;")
         layout.addWidget(title, 0, Qt.AlignmentFlag.AlignLeft)
 
         steps = QWidget(panel)
@@ -1292,26 +1352,26 @@ class VideoDownloadPage(QWidget):
 
         status_box = QFrame(card)
         status_box.setObjectName("AccountStatusBox")
-        status_box.setStyleSheet(
-            """
-            QFrame#AccountStatusBox {
-                background: #ffffff;
-                border: 1px solid #e5e7eb;
+        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
+
+        _wb_th(status_box, lambda: f"""
+            QFrame#AccountStatusBox {{
+                background: {_wb_pal().input_bg};
+                border: 1px solid {_wb_pal().input_border};
                 border-radius: 8px;
-            }
-            QFrame[accountRow="true"] {
+            }}
+            QFrame[accountRow="true"] {{
                 background: transparent;
                 border: 0;
-            }
-            """
-        )
+            }}
+        """)
         status_layout = QVBoxLayout(status_box)
         status_layout.setContentsMargins(0, 0, 0, 0)
         status_layout.setSpacing(0)
         self.bilibili_status_row = self._create_account_status_row("Bilibili", SOURCE_BILIBILI)
         divider = QFrame(status_box)
         divider.setFixedHeight(1)
-        divider.setStyleSheet("background: #e5e7eb; border: 0;")
+        _wb_th(divider, lambda: f"background: {_wb_pal().input_border}; border: 0;")
         self.youtube_status_row = self._create_account_status_row("YouTube", SOURCE_YOUTUBE)
         status_layout.addWidget(self.bilibili_status_row)
         status_layout.addWidget(divider)
@@ -1330,7 +1390,8 @@ class VideoDownloadPage(QWidget):
 
         icon = MiniAvatarLabel("B" if platform == SOURCE_BILIBILI else "▶", "#38bdf8" if platform == SOURCE_BILIBILI else "#ef4444")
         name_label = BodyLabel(title)
-        name_label.setStyleSheet("color: #111827;")
+        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
+        _wb_th(name_label, lambda: f"color: {_wb_pal().text_primary};")
         dot = QFrame(row)
         dot.setFixedSize(10, 10)
         dot.setStyleSheet(f"background: {PLATFORM_STATUS_LOGGED_OUT}; border-radius: 5px;")
@@ -1400,20 +1461,19 @@ class VideoDownloadPage(QWidget):
     def _switch_account_platform(self, platform: str) -> None:
         if not hasattr(self, "account_stack"):
             return
+        from krok_helper.theme_workbench import palette as _wb_pal
+
+        p = _wb_pal()
         index = 1 if platform == SOURCE_YOUTUBE else 0
         self.account_stack.setCurrentIndex(index)
         for segment, selected in (
             (self.bilibili_segment, platform == SOURCE_BILIBILI),
             (self.youtube_segment, platform == SOURCE_YOUTUBE),
         ):
-            segment.setStyleSheet(SEGMENT_STYLE_SELECTED if selected else SEGMENT_STYLE_NORMAL)
-            color = SEGMENT_TITLE_COLOR_SELECTED if selected else SEGMENT_TITLE_COLOR_NORMAL
-            weight = 600 if selected else 400
+            segment.setStyleSheet(self._segment_qss(selected, p))
             title_label = getattr(segment, "title_label", None)
             if title_label is not None:
-                title_label.setStyleSheet(
-                    f"background: transparent; border: 0; color: {color}; font-weight: {weight};"
-                )
+                title_label.setStyleSheet(self._segment_title_qss(selected, p))
 
     def _set_platform_dot(self, widget: QWidget, color: str) -> None:
         widget.setStyleSheet(f"background: {color}; border-radius: 5px;")
@@ -1659,7 +1719,7 @@ class VideoDownloadPage(QWidget):
 
     def _current_ytdlp_version_text(self) -> str:
         try:
-            return YtDlpService().get_ytdlp_version()
+            return YtDlpService(app_settings=self.settings).get_ytdlp_version()
         except Exception as exc:  # noqa: BLE001
             return f"未检测到：{exc}"
 
@@ -1683,7 +1743,7 @@ class VideoDownloadPage(QWidget):
         update_button.setEnabled(False)
         version_label.setText("正在更新 yt-dlp…")
         self.parse_status_label.setText("正在更新 yt-dlp，请稍候。")
-        worker = YtDlpUpdateWorker(self)
+        worker = YtDlpUpdateWorker(self.settings, self)
         self._ytdlp_update_worker = worker
         worker.updateSucceeded.connect(
             lambda version, output: self._handle_ytdlp_update_succeeded(version_label, version, output)
@@ -1839,7 +1899,7 @@ class VideoDownloadPage(QWidget):
         }
         self.parse_button.setEnabled(False)
         self.parse_status_label.setText(f"正在解析 {len(urls)} 个链接…")
-        self._parse_worker = ParseLinksWorker(urls, cookie_files_by_source, self)
+        self._parse_worker = ParseLinksWorker(urls, cookie_files_by_source, self.settings, self)
         self._parse_worker.batchFinished.connect(self._handle_parse_finished)
         self._parse_worker.finished.connect(self._handle_parse_worker_finished)
         self._parse_worker.start()
@@ -2692,7 +2752,7 @@ class VideoDownloadPage(QWidget):
             task.status = TASK_STATUS_DOWNLOADING
             self._reset_task_progress_tracking(task)
             options = self._build_download_options(task)
-            worker = DownloadWorker(task, options, self)
+            worker = DownloadWorker(task, options, self.settings, self)
             worker.progressChanged.connect(self._handle_download_progress)
             worker.taskSucceeded.connect(self._handle_download_success)
             worker.taskFailed.connect(self._handle_download_failed)

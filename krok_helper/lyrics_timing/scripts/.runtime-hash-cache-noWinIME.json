@@ -1,0 +1,38 @@
+{
+  "version": "1.1.1",
+  "content_hash": "f1e812be030d1dc0c37f54bd3bf4dc87a1f81044c9436e15b12e52397e666c8e",
+  "size": 121705737,
+  "requirements_hash": "38bd9adfccbba9ba77805f3bc80ed072d258d4549fecf53ffc739dd75f294aa5",
+  "req_lines": [
+    "PyQt6==6.11.0",
+    "PyQt6-Qt6==6.11.0",
+    "PyQt6_sip==13.11.1",
+    "PyQt6-Fluent-Widgets==1.11.2",
+    "sounddevice==0.5.5",
+    "soundfile==0.13.1",
+    "pedalboard==0.9.22",
+    "numpy==2.4.4",
+    "pykakasi==2.3.0",
+    "winrt-Windows.Globalization==3.2.1",
+    "winrt-Windows.Foundation==3.2.1",
+    "winrt-Windows.Foundation.Collections==3.2.1",
+    "jaconv==0.5.0",
+    "pyphen==0.17.2",
+    "requests==2.32.5",
+    "urllib3==2.6.1",
+    "charset-normalizer==3.4.4",
+    "certifi==2025.11.12",
+    "idna==3.11"
+  ],
+  "dist_packages": {
+    "cryptography": "46.0.3",
+    "numpy": "2.4.4",
+    "pedalboard": "0.9.22",
+    "pykakasi": "2.3.0",
+    "pyqt6-fluent-widgets": "1.11.2",
+    "pyreadline3": "3.5.4",
+    "sounddevice": "0.5.5",
+    "soundfile": "0.13.1",
+    "sudachipy": "0.6.11"
+  }
+}
