@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QTextBrowser,
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
@@ -233,6 +234,111 @@ class KrokHelperSettingsBridge:
                 cursor[key] = child
             cursor = child
         cursor[keys[-1]] = deepcopy(value)
+
+
+class WorkbenchUpdateDialog(QDialog):
+    """Update prompt that shows the GitHub Release body directly."""
+
+    def __init__(
+        self,
+        release,
+        *,
+        local_version: str,
+        source_label: str = "",
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.user_choice = "later"
+        self._release = release
+        self.setWindowTitle(APP_TITLE)
+        self.setModal(True)
+        self.setMinimumSize(720, 560)
+        self._build_ui(release, local_version, source_label)
+
+    def _build_ui(self, release, local_version: str, source_label: str) -> None:
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(28, 26, 28, 22)
+        layout.setSpacing(14)
+
+        title = QLabel("发现新版本")
+        title.setStyleSheet('font-family: "Microsoft YaHei UI"; font-size: 22pt; font-weight: 700; color: #111827;')
+        layout.addWidget(title)
+
+        version = QLabel(f"v{release.version}")
+        version.setStyleSheet('font-family: "Microsoft YaHei UI"; font-size: 15pt; font-weight: 700; color: #111827;')
+        layout.addWidget(version)
+
+        published_at = release.published_at[:10] if getattr(release, "published_at", "") else "未知日期"
+        meta_parts = [f"当前版本 v{local_version}", f"发布于 {published_at}"]
+        if source_label:
+            meta_parts.append(f"下载源：{source_label}")
+        meta = QLabel("  |  ".join(meta_parts))
+        meta.setStyleSheet('font-family: "Microsoft YaHei UI"; font-size: 10pt; color: #6b7280;')
+        meta.setWordWrap(True)
+        layout.addWidget(meta)
+
+        content_label = QLabel("更新内容：")
+        content_label.setStyleSheet('font-family: "Microsoft YaHei UI"; font-size: 10.5pt; color: #111827;')
+        layout.addWidget(content_label)
+
+        body_view = QTextBrowser()
+        body_view.setReadOnly(True)
+        body_view.setOpenExternalLinks(True)
+        body_view.setMinimumHeight(300)
+        body_view.setStyleSheet(
+            """
+            QTextBrowser {
+                background: #ffffff;
+                border: 1px solid #d9dfe8;
+                border-radius: 8px;
+                padding: 12px;
+                font-family: "Microsoft YaHei UI";
+                font-size: 10.5pt;
+                color: #111827;
+            }
+            """
+        )
+        body_text = (getattr(release, "body", "") or "").strip()
+        if body_text:
+            try:
+                body_view.setMarkdown(body_text)
+            except Exception:
+                body_view.setPlainText(body_text)
+        else:
+            body_view.setPlainText("本次 Release 没有填写发布说明。")
+        layout.addWidget(body_view, 1)
+
+        html_url = (getattr(release, "html_url", "") or "").strip()
+        if html_url:
+            open_release_button = QPushButton(FIF.LINK, "在浏览器中查看完整发布说明")
+            open_release_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(html_url)))
+            layout.addWidget(open_release_button, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        button_row = QHBoxLayout()
+        button_row.setSpacing(12)
+        skip_button = QPushButton("跳过此版本")
+        later_button = QPushButton("稍后再说")
+        update_button = PrimaryPushButton("立即更新")
+        skip_button.clicked.connect(self._choose_skip)
+        later_button.clicked.connect(self._choose_later)
+        update_button.clicked.connect(self._choose_update)
+        button_row.addWidget(skip_button)
+        button_row.addStretch(1)
+        button_row.addWidget(later_button)
+        button_row.addWidget(update_button)
+        layout.addLayout(button_row)
+
+    def _choose_update(self) -> None:
+        self.user_choice = "update"
+        self.accept()
+
+    def _choose_later(self) -> None:
+        self.user_choice = "later"
+        self.reject()
+
+    def _choose_skip(self) -> None:
+        self.user_choice = "skip"
+        self.accept()
 
 
 LYRICS_LANGUAGE_OPTIONS = [
@@ -6018,6 +6124,24 @@ class KrokHelperQtApp(QMainWindow):
     def _show_workbench_update_dialog(self, result: CheckResult, settings: UpdaterSettings) -> None:
         release = result.release
         if release is None:
+            return
+        source_label = SOURCE_LABELS.get(result.primary_source, result.primary_source)
+        dialog = WorkbenchUpdateDialog(
+            release,
+            local_version=APP_VERSION,
+            source_label=source_label,
+            parent=self,
+        )
+        dialog.exec()
+
+        if dialog.user_choice == "skip":
+            settings.skipped_version = release.version
+            settings.save(self.settings)
+            return
+        if dialog.user_choice == "later":
+            return
+        if dialog.user_choice == "update":
+            self._launch_workbench_updater(result)
             return
         message = QMessageBox(self)
         message.setWindowTitle(APP_TITLE)
