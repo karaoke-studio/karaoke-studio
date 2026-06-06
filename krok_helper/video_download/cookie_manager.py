@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import tempfile
 import time
 import urllib.request
 from dataclasses import dataclass
@@ -184,16 +185,22 @@ class CookieManager:
 
         path = self.resolved_cookie_path(SOURCE_YOUTUBE)
         path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = self._temporary_cookie_path(path)
 
         try:
             from yt_dlp import YoutubeDL
         except ModuleNotFoundError:
-            self._import_from_browser_with_cli(browser_name, path)
+            self._import_from_browser_with_cli(browser_name, temp_path)
         else:
-            self._import_from_browser_with_python(YoutubeDL, browser_name, path)
+            self._import_from_browser_with_python(YoutubeDL, browser_name, temp_path)
 
-        if not self.has_cookie(SOURCE_YOUTUBE):
+        if not self._is_valid_cookie_file(temp_path):
+            try:
+                temp_path.unlink()
+            except OSError:
+                pass
             raise RuntimeError("未能从浏览器导入有效 Cookie。请确认浏览器中已登录 YouTube。")
+        os.replace(temp_path, path)
         return path
 
     def _import_from_browser_with_python(self, youtube_dl, browser_name: str, path: Path) -> None:
@@ -202,7 +209,6 @@ class CookieManager:
             "no_warnings": True,
             "skip_download": True,
             "cookiesfrombrowser": (browser_name,),
-            "cookiefile": str(path),
         }
         proxy_url = proxy_url_for_app_settings(self._settings())
         if proxy_url:
@@ -246,6 +252,27 @@ class CookieManager:
         if completed.returncode != 0 and not path.exists():
             message = completed.stderr.strip() or completed.stdout.strip() or "yt-dlp 导入失败"
             raise RuntimeError(message)
+
+    def _temporary_cookie_path(self, final_path: Path) -> Path:
+        handle, name = tempfile.mkstemp(
+            prefix=f"{final_path.stem}.",
+            suffix=".tmp",
+            dir=str(final_path.parent),
+        )
+        os.close(handle)
+        temp_path = Path(name)
+        temp_path.unlink()
+        return temp_path
+
+    def _is_valid_cookie_file(self, path: Path) -> bool:
+        if not path.is_file() or path.stat().st_size <= 0:
+            return False
+        jar = http.cookiejar.MozillaCookieJar(str(path))
+        try:
+            jar.load(ignore_discard=True, ignore_expires=True)
+        except Exception:
+            return False
+        return any(True for _cookie in jar)
 
     def _has_valid_sessdata_locally(self) -> bool:
         path = self.resolved_cookie_path(SOURCE_BILIBILI)

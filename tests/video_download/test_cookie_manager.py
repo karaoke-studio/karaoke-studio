@@ -45,6 +45,20 @@ def test_import_from_browser_accepts_firefox_with_mock(isolated_cookie_manager, 
     assert isolated_cookie_manager.has_cookie(SOURCE_YOUTUBE) is True
 
 
+def test_import_from_browser_replaces_invalid_existing_cookie_file(isolated_cookie_manager, monkeypatch) -> None:
+    cookie_path = isolated_cookie_manager.resolved_cookie_path(SOURCE_YOUTUBE)
+    cookie_path.write_text('{"not": "netscape"}', encoding="utf-8")
+    captured_options = install_fake_ytdlp(
+        monkeypatch,
+        b"# Netscape HTTP Cookie File\n.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tvalue\n",
+    )
+
+    isolated_cookie_manager.import_from_browser(SOURCE_YOUTUBE, "Firefox")
+
+    assert "cookiefile" not in captured_options[0]
+    assert cookie_path.read_text(encoding="utf-8").startswith("# Netscape HTTP Cookie File")
+
+
 def test_get_profile_youtube_returns_logged_in_label(isolated_cookie_manager, cookie_writer) -> None:
     cookie_writer(isolated_cookie_manager, SOURCE_YOUTUBE, domain=".youtube.com")
 
@@ -65,8 +79,9 @@ def test_import_from_browser_raises_when_resulting_cookie_empty(isolated_cookie_
         isolated_cookie_manager.import_from_browser(SOURCE_YOUTUBE, "Firefox")
 
 
-def install_fake_ytdlp(monkeypatch, cookie_bytes: bytes) -> None:
+def install_fake_ytdlp(monkeypatch, cookie_bytes: bytes) -> list[dict]:
     module = types.ModuleType("yt_dlp")
+    captured_options = []
 
     class FakeCookieJar:
         def save(self, filename: str, ignore_discard: bool, ignore_expires: bool) -> None:
@@ -77,6 +92,7 @@ def install_fake_ytdlp(monkeypatch, cookie_bytes: bytes) -> None:
     class FakeYoutubeDL:
         def __init__(self, options: dict) -> None:
             self.options = options
+            captured_options.append(options)
             self.cookiejar = FakeCookieJar()
 
         def __enter__(self):
@@ -87,3 +103,4 @@ def install_fake_ytdlp(monkeypatch, cookie_bytes: bytes) -> None:
 
     module.YoutubeDL = FakeYoutubeDL
     monkeypatch.setitem(sys.modules, "yt_dlp", module)
+    return captured_options
