@@ -68,6 +68,7 @@ echo Building Windows package...
     --windowed ^
     --onedir ^
     --name "%BUILD_NAME%" ^
+    --icon "%CD%\krok_helper\assets\logo\logo.ico" ^
     --distpath "%DIST_PATH%" ^
     --workpath "%WORK_PATH%" ^
     --specpath "%SPEC_PATH%" ^
@@ -217,6 +218,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$internal = Join-Path $targetDir '_internal';" ^
     "$required = @(" ^
     "  'krok_helper\assets\logo\logo.jpg'," ^
+    "  'krok_helper\assets\logo\logo.ico'," ^
     "  'krok_helper\assets\platforms\youtube.svg'," ^
     "  'strange_uta_game\config\config.json'," ^
     "  'strange_uta_game\config\dictionary.json'," ^
