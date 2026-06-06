@@ -14,6 +14,22 @@
 
 ---
 
+## [3.0.2] — 2026-06-06
+
+### Fixed
+
+- 修复从 Firefox 导入 YouTube Cookie 后生成无效 Netscape cookie 文件的问题。
+- 修复部分 YouTube 播放列表链接解析失败的问题。
+- 修复歌词打轴模块嵌入工作台后，横向拖动窗口时可能误拖动内部内容宽度的问题。
+
+### Changed
+
+- 更新弹窗现在会展示 GitHub Release 发布说明，方便用户在更新前查看本次变更。
+- Windows 打包产物现在使用工作台 logo 作为 `Karaoke Studio.exe` 图标。
+- 更新 StrangeUtaGame 子模块，包含注音/用户词典稳定性修复与嵌入工作台相关调整。
+
+---
+
 ## [3.0.1] — 2026-06-06
 
 ### Changed
