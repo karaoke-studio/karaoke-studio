@@ -242,9 +242,30 @@ if errorlevel 1 (
     exit /b 1
 )
 
+echo Creating Windows update archive...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$distRoot = (Resolve-Path '%DIST_PATH%').Path;" ^
+    "$packageDir = (Resolve-Path '%APP_DIST%').Path;" ^
+    "$zipPath = Join-Path $distRoot 'KaraokeStudio-windows.zip';" ^
+    "$shaPath = $zipPath + '.sha256';" ^
+    "if (Test-Path $zipPath) { Remove-Item -LiteralPath $zipPath -Force };" ^
+    "if (Test-Path $shaPath) { Remove-Item -LiteralPath $shaPath -Force };" ^
+    "Compress-Archive -LiteralPath $packageDir -DestinationPath $zipPath -CompressionLevel Optimal;" ^
+    "$hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant();" ^
+    "Set-Content -LiteralPath $shaPath -Value ($hash + '  KaraokeStudio-windows.zip') -Encoding ascii;" ^
+    "Write-Host ('Update archive: ' + $zipPath);" ^
+    "Write-Host ('SHA-256:        ' + $shaPath)"
+if errorlevel 1 (
+    echo.
+    echo Failed to create update archive.
+    if not defined IS_CI pause
+    exit /b 1
+)
+
 echo.
 echo Build complete:
 echo %CD%\%APP_DIST%
+echo %CD%\%DIST_PATH%\KaraokeStudio-windows.zip
 if not defined IS_CI pause
 exit /b 0
 

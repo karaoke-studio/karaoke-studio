@@ -12,6 +12,7 @@ env/
 ENV/
 
 # Tooling caches
+.cache/
 .mypy_cache/
 .pytest_cache/
 .ruff_cache/
@@ -33,11 +34,15 @@ dist/
 *.egg-info/
 .eggs/
 pip-wheel-metadata/
+krok_helper/updater_app/*.spec
 
 # Runtime outputs
 output/
+%TEMP%/
+tmp-pycache/
 tmp-test/
 *.log
+docs/release-runbook.local.md
 docs/Codex启动文档-.NET8-CSharp-WinUI3重构指南.md
 docs/功能文档-当前项目与WinUI3重构参考.md
 docs/波形对齐重构自测脚本.md
