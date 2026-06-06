@@ -12,11 +12,21 @@
 
 ## [Unreleased]
 
+---
+
+## [3.0.1] — 2026-06-06
+
 ### Changed
 
 - 仓库迁移至 `github.com/karaoke-studio/karaoke-studio`，由 Myosotis11037 与 Xuan-cc 共同维护
 - 合并 `Myosotis11037/karaoke-helper` 与 `Xuan-cc/StrangeUtaGame` 为单一仓库；StrangeUtaGame 源码重定位至 `krok_helper/lyrics_timing/`，git history 完整保留
 - 仓库整体采用 GPL-3.0 协议（合并前 krok-helper 无 LICENSE，StrangeUtaGame 为 GPL-3.0）
+- 将 `krok_helper/lyrics_timing` 拆为 `karaoke-studio/StrangeUtaGame` submodule，保留 SUG 社交资产与独立历史
+- 增加工作台自动更新的 Windows release zip / SHA-256 生成流程
+
+### Added
+
+- 增加本地 updater 集成测试，覆盖全量 zip 下载、解压和安装目录替换
 
 ### 下一步计划
 
