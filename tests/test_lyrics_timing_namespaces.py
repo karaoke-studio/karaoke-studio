@@ -55,7 +55,7 @@ def test_migrate_strange_uta_game_settings_imports_list_namespaces(tmp_path):
 
 
 def test_strange_uta_game_provider_extra_namespaces_round_trip():
-    import krok_helper.lyrics_timing  # noqa: F401 - installs bundled src path
+    import krok_helper  # noqa: F401 - installs bundled src path
     from strange_uta_game.frontend.settings.app_settings import AppSettings
 
     class Provider:
@@ -111,7 +111,7 @@ def test_strange_uta_game_provider_extra_namespaces_round_trip():
 
 
 def test_strange_uta_game_provider_partial_save_preserves_newer_shortcuts():
-    import krok_helper.lyrics_timing  # noqa: F401 - installs bundled src path
+    import krok_helper  # noqa: F401 - installs bundled src path
     from strange_uta_game.frontend.settings.app_settings import AppSettings
 
     class Provider:

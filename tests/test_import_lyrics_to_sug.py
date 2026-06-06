@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-import krok_helper.lyrics_timing  # noqa: F401 - installs bundled SUG src path
+import krok_helper  # noqa: F401 - installs bundled SUG src path
 from krok_helper.gui_qt import KrokHelperQtApp, WORKFLOW_LYRICS_TIMING
 from krok_helper.lyrics import (
     LYRICS_LANGUAGE_TRANSLATION,

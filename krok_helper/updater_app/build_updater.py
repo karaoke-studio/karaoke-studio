@@ -7,6 +7,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 REPO_ROOT = PROJECT_ROOT.parents[1]
+SUG_ROOT = REPO_ROOT / "krok_helper" / "lyrics_timing"
 
 
 def main() -> int:
@@ -34,8 +35,10 @@ def main() -> int:
         str(PROJECT_ROOT),
         "--paths",
         str(REPO_ROOT),
+        "--paths",
+        str(SUG_ROOT),
         "--collect-submodules=requests",
-        "--hidden-import=krok_helper.lyrics_timing.updater_app.main",
+        "--hidden-import=updater_app.main",
         "--hidden-import=requests",
         "--hidden-import=urllib3",
         "--hidden-import=charset_normalizer",

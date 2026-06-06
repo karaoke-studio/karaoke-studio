@@ -10,6 +10,8 @@ from pathlib import Path
 from string import Formatter
 from typing import Callable
 
+from krok_helper import ensure_sug_src_path
+
 DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWCP_DONOTROUND = 1
 
@@ -2266,7 +2268,7 @@ class KrokHelperQtApp(QMainWindow):
         self.align_page = self._build_alignment_page()
         self.lyrics_page = self._build_lyrics_page()
         self._sync_lyrics_timing_host_paths()
-        import krok_helper.lyrics_timing  # noqa: F401 - installs bundled src path
+        ensure_sug_src_path()
         from strange_uta_game.frontend.main_window import MainWindow as LyricsTimingMainWindow
 
         lyrics_timing_settings = KrokHelperSettingsBridge(self.settings, self._save_all_settings)

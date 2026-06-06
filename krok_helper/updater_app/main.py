@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import sys
 
-from krok_helper.lyrics_timing.updater_app import main as updater_main
+from krok_helper import ensure_sug_root_path
+
+ensure_sug_root_path()
+from updater_app import main as updater_main
 
 
 def main(argv: list[str] | None = None) -> int:

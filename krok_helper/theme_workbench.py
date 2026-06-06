@@ -26,9 +26,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
-# SUG src 路径需先挂上 sys.path 才能 import ``strange_uta_game``；
-# ``krok_helper.lyrics_timing/__init__.py`` 的副作用做这件事。
-import krok_helper.lyrics_timing  # noqa: F401  (installs SUG src path)
+from krok_helper import ensure_sug_src_path
+
+# SUG src 路径需先挂上 sys.path 才能 import ``strange_uta_game``。
+ensure_sug_src_path()
 
 # SUG 的 theme 单例 + ThemeMode 透传给宿主代码。
 # 不抽到 shared 位置：那样会破坏 SUG ``EMBEDDING.md`` 里的"独立分发"红线。
