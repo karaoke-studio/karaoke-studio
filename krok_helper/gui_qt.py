@@ -130,6 +130,7 @@ from krok_helper.pipeline import (
 from krok_helper.settings import (
     AppSettings,
     get_settings_path,
+    import_legacy_sug_settings,
     load_app_settings,
     migrate_strange_uta_game_settings,
     save_app_settings,
@@ -5512,6 +5513,61 @@ class KrokHelperQtApp(QMainWindow):
         if path:
             target.setText(path)
 
+    def _import_legacy_sug_for_dialog(self, parent: QWidget) -> None:
+        path = QFileDialog.getExistingDirectory(
+            parent, "选择旧版 StrangeUtaGame 数据目录（含 config.json / dictionary.json 等）"
+        )
+        if not path:
+            return
+        src = Path(path)
+        # 二次确认（主 config 是覆盖，词典/演唱者是合并）
+        confirm = QMessageBox(parent)
+        confirm.setIcon(QMessageBox.Icon.Question)
+        confirm.setWindowTitle(APP_TITLE)
+        confirm.setText(
+            "将从该目录导入旧版 SUG 数据到工作台：\n\n"
+            f"  {src}\n\n"
+            "• 主配置：未知项会被忽略，缺失项使用默认值，整体覆盖现有配置\n"
+            "• 词典 / 演唱者：按名称合并，工作台已有的同名条目优先保留\n"
+            "• 网络词典缓存：整体覆盖\n\n"
+            "是否继续？"
+        )
+        confirm.addButton("导入", QMessageBox.ButtonRole.AcceptRole)
+        cancel_btn = confirm.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        confirm.exec()
+        if confirm.clickedButton() is cancel_btn:
+            return
+
+        try:
+            report = import_legacy_sug_settings(src, self.settings)
+            save_app_settings(self.settings)
+        except Exception as exc:
+            QMessageBox.critical(parent, APP_TITLE, f"导入失败：\n{exc}")
+            return
+
+        lines: list[str] = []
+        if report["imported"]:
+            lines.append("已导入：" + "、".join(report["imported"]))
+        if report["missing"]:
+            lines.append("未找到（已跳过）：" + "、".join(report["missing"]))
+        if report["added_dict_entries"]:
+            lines.append(f"词典新增条目：{report['added_dict_entries']}")
+        if report["added_singers"]:
+            lines.append(f"演唱者新增：{report['added_singers']}")
+        if report["skipped_unknown_keys"]:
+            sample = "、".join(report["skipped_unknown_keys"][:5])
+            extra = f"…（共 {len(report['skipped_unknown_keys'])} 个）" if len(report["skipped_unknown_keys"]) > 5 else ""
+            lines.append(f"主配置忽略未知项：{sample}{extra}")
+        if report["errors"]:
+            lines.append("以下文件解析失败：" + "、".join(name for name, _ in report["errors"]))
+        if not lines:
+            lines.append("该目录下未找到任何可导入的 SUG 数据文件。")
+        else:
+            lines.append("")
+            lines.append("请重启工作台让打轴模块重新加载新设置。")
+
+        QMessageBox.information(parent, APP_TITLE, "\n".join(lines))
+
     def _open_global_settings_window(self) -> None:
         updater_settings = ensure_updater_settings(self.settings)
         dialog = QDialog(self)
@@ -5676,6 +5732,33 @@ class KrokHelperQtApp(QMainWindow):
         ffmpeg_layout.addWidget(ffmpeg_hint_2, 2, 1, 1, 3)
         ffmpeg_layout.setColumnStretch(1, 1)
         tools_layout.addWidget(ffmpeg_panel)
+
+        import_panel = QFrame()
+        import_panel.setObjectName("WhitePanel")
+        import_layout = QGridLayout(import_panel)
+        import_layout.setContentsMargins(14, 14, 14, 14)
+        import_title = QLabel("打轴模块数据导入")
+        import_title.setObjectName("PanelTitle")
+        import_button = QPushButton("选择旧版 SUG 数据目录…")
+        import_button.clicked.connect(lambda: self._import_legacy_sug_for_dialog(dialog))
+        import_hint_1 = QLabel(
+            "导入旧版 StrangeUtaGame standalone 的设置、词典、演唱者和网络词典缓存。"
+        )
+        import_hint_1.setWordWrap(True)
+        _wb_th(import_hint_1, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
+        import_hint_2 = QLabel(
+            "主配置未知项会被忽略，缺失项使用默认值；词典 / 演唱者按名称去重合并，"
+            "工作台已有的同名条目优先保留。导入后请重启工作台让设置生效。"
+        )
+        import_hint_2.setWordWrap(True)
+        _wb_th(import_hint_2, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
+        import_layout.addWidget(import_title, 0, 0)
+        import_layout.addWidget(import_button, 0, 1)
+        import_layout.addWidget(import_hint_1, 1, 0, 1, 2)
+        import_layout.addWidget(import_hint_2, 2, 0, 1, 2)
+        import_layout.setColumnStretch(1, 1)
+        tools_layout.addWidget(import_panel)
+
         tools_layout.addStretch(1)
 
         proxy_panel = QFrame()

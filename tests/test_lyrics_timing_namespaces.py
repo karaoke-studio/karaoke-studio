@@ -4,6 +4,7 @@ import pytest
 
 from krok_helper.settings import (
     AppSettings as HostSettings,
+    import_legacy_sug_settings,
     load_app_settings,
     migrate_strange_uta_game_settings,
     save_app_settings,
@@ -162,6 +163,103 @@ def test_strange_uta_game_provider_partial_save_preserves_newer_shortcuts():
         assert reloaded.get("export.last_export_dir") == "D:/lyrics"
     finally:
         AppSettings.set_default_provider(None)
+
+
+def test_import_legacy_sug_settings_filters_unknown_keys_and_merges_lists(tmp_path):
+    legacy_dir = tmp_path / "sug"
+    legacy_dir.mkdir()
+    (legacy_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "audio": {"default_volume": 55, "totally_fake_setting": 999},
+                "an_unknown_top_level_namespace": {"x": 1},
+                "export": {"default_format": "Nicokara (带注音)"},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (legacy_dir / "dictionary.json").write_text(
+        json.dumps(
+            [
+                {"enabled": True, "word": "猫", "reading": "ねこ-legacy"},
+                {"enabled": True, "word": "犬", "reading": "いぬ"},
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (legacy_dir / "singers.json").write_text(
+        json.dumps(
+            [
+                {"name": "Vocal A", "color": "#111"},
+                {"name": "Vocal B", "color": "#222"},
+            ],
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (legacy_dir / "network_dictionary.json").write_text(
+        json.dumps({"src1": {"entries": [{"word": "青"}]}}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    settings = HostSettings(
+        lyrics_timing_dictionary=[{"enabled": True, "word": "猫", "reading": "ネコ-host"}],
+        lyrics_timing_singers=[{"name": "Vocal A", "color": "#999"}],
+    )
+    report = import_legacy_sug_settings(legacy_dir, settings)
+
+    # 主 config：已知 key 保留、未知 key 被过滤
+    assert settings.lyrics_timing["audio"]["default_volume"] == 55
+    assert "totally_fake_setting" not in settings.lyrics_timing["audio"]
+    assert "an_unknown_top_level_namespace" not in settings.lyrics_timing
+    assert settings.lyrics_timing["export"]["default_format"] == "Nicokara (带注音)"
+    assert "audio.totally_fake_setting" in report["skipped_unknown_keys"]
+    assert "an_unknown_top_level_namespace" in report["skipped_unknown_keys"]
+
+    # 列表合并：host 已有 word="猫" 不被旧版覆盖，犬 是新增
+    readings = {item["word"]: item["reading"] for item in settings.lyrics_timing_dictionary}
+    assert readings["猫"] == "ネコ-host"
+    assert readings["犬"] == "いぬ"
+    assert report["added_dict_entries"] == 1
+
+    # 演唱者合并：Vocal A 保留 host 的 color，Vocal B 新增
+    singers = {item["name"]: item["color"] for item in settings.lyrics_timing_singers}
+    assert singers["Vocal A"] == "#999"
+    assert singers["Vocal B"] == "#222"
+    assert report["added_singers"] == 1
+
+    # 网络词典整体覆盖
+    assert settings.lyrics_timing_network_dictionary == {"src1": {"entries": [{"word": "青"}]}}
+
+    assert sorted(report["imported"]) == [
+        "config.json",
+        "dictionary.json",
+        "network_dictionary.json",
+        "singers.json",
+    ]
+    assert report["missing"] == []
+    assert report["errors"] == []
+
+
+def test_import_legacy_sug_settings_handles_missing_and_corrupt_files(tmp_path):
+    legacy_dir = tmp_path / "sug"
+    legacy_dir.mkdir()
+    # dictionary.json 内容是非法 JSON
+    (legacy_dir / "dictionary.json").write_text("{not valid json", encoding="utf-8")
+    # 其它三个文件不存在
+
+    settings = HostSettings()
+    report = import_legacy_sug_settings(legacy_dir, settings)
+
+    assert report["imported"] == []
+    assert "dictionary.json" not in report["missing"]
+    assert set(report["missing"]) == {"config.json", "singers.json", "network_dictionary.json"}
+    assert any(name == "dictionary.json" for name, _ in report["errors"])
+    # settings 维持初始默认值
+    assert settings.lyrics_timing == {}
+    assert settings.lyrics_timing_dictionary == []
 
 
 def test_krok_helper_settings_bridge_partial_save_merges_lyrics_timing(monkeypatch, tmp_path):

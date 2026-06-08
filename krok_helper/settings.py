@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+from copy import deepcopy
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -275,3 +276,196 @@ def migrate_strange_uta_game_settings(
 
     settings.lyrics_timing_migrated_v1 = True
     return imported_any
+
+
+# ════════════════════════════════════════════════════════════════════
+# StrangeUtaGame 手动数据导入（用户在工作台「全局设置 → 工具」触发）
+# ════════════════════════════════════════════════════════════════════
+
+# 预期文件名 → 工作台 namespace 字段名
+_LEGACY_IMPORT_FILES: tuple[tuple[str, str], ...] = (
+    ("config.json", "lyrics_timing"),
+    ("dictionary.json", "lyrics_timing_dictionary"),
+    ("singers.json", "lyrics_timing_singers"),
+    ("network_dictionary.json", "lyrics_timing_network_dictionary"),
+)
+
+
+def import_legacy_sug_settings(src_dir: Path, settings: AppSettings) -> dict:
+    """从用户指定的旧版 SUG 目录读取四类持久化数据并合并进 ``settings``。
+
+    冲突策略：
+    - 主 config（``config.json`` → ``lyrics_timing``）：按 SUG
+      ``AppSettings.DEFAULT_SETTINGS`` 树过滤未知 key 后整体覆盖。缺失项不补
+      默认值，由 SUG 运行时 ``get()`` 自带的 fallback 处理。
+    - 词典（按 ``word`` 去重）、演唱者（按 ``name`` 去重）：合并到现有列表，
+      host 已有同 key 的条目优先保留——避免覆盖用户在工作台里改过的数据。
+    - 网络词典 cache：整体覆盖（cache 是 last_fetched + entries，无清晰的
+      合并语义）。
+
+    调用方负责事后 ``save_app_settings(settings)``。本函数只动内存对象。
+
+    Returns:
+        报告 dict，键见实现；GUI 用它生成结果对话框。
+    """
+    report: dict = {
+        "imported": [],
+        "missing": [],
+        "errors": [],
+        "skipped_unknown_keys": [],
+        "added_dict_entries": 0,
+        "added_singers": 0,
+    }
+    log = logging.getLogger(__name__)
+
+    for filename, _field in _LEGACY_IMPORT_FILES:
+        if not (src_dir / filename).is_file():
+            report["missing"].append(filename)
+
+    config_path = src_dir / "config.json"
+    if config_path.is_file():
+        try:
+            payload = json.loads(config_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                schema = _sug_default_settings_schema()
+                filtered, unknown = _filter_against_schema(payload, schema, prefix="")
+                settings.lyrics_timing = filtered
+                report["imported"].append("config.json")
+                report["skipped_unknown_keys"].extend(sorted(unknown))
+            else:
+                report["errors"].append(("config.json", "顶层不是 JSON 对象"))
+        except Exception as exc:
+            log.warning("legacy SUG config.json 导入失败", exc_info=True)
+            report["errors"].append(("config.json", str(exc)))
+
+    dict_path = src_dir / "dictionary.json"
+    if dict_path.is_file():
+        try:
+            payload = json.loads(dict_path.read_text(encoding="utf-8"))
+            if isinstance(payload, list):
+                added = _merge_list_by_key(
+                    existing=settings.lyrics_timing_dictionary,
+                    incoming=payload,
+                    key_field="word",
+                )
+                settings.lyrics_timing_dictionary = added["merged"]
+                report["added_dict_entries"] = added["added"]
+                report["imported"].append("dictionary.json")
+            else:
+                report["errors"].append(("dictionary.json", "顶层不是 JSON 数组"))
+        except Exception as exc:
+            log.warning("legacy SUG dictionary.json 导入失败", exc_info=True)
+            report["errors"].append(("dictionary.json", str(exc)))
+
+    singers_path = src_dir / "singers.json"
+    if singers_path.is_file():
+        try:
+            payload = json.loads(singers_path.read_text(encoding="utf-8"))
+            if isinstance(payload, list):
+                added = _merge_list_by_key(
+                    existing=settings.lyrics_timing_singers,
+                    incoming=payload,
+                    key_field="name",
+                )
+                settings.lyrics_timing_singers = added["merged"]
+                report["added_singers"] = added["added"]
+                report["imported"].append("singers.json")
+            else:
+                report["errors"].append(("singers.json", "顶层不是 JSON 数组"))
+        except Exception as exc:
+            log.warning("legacy SUG singers.json 导入失败", exc_info=True)
+            report["errors"].append(("singers.json", str(exc)))
+
+    network_path = src_dir / "network_dictionary.json"
+    if network_path.is_file():
+        try:
+            payload = json.loads(network_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                settings.lyrics_timing_network_dictionary = payload
+                report["imported"].append("network_dictionary.json")
+            else:
+                report["errors"].append(("network_dictionary.json", "顶层不是 JSON 对象"))
+        except Exception as exc:
+            log.warning("legacy SUG network_dictionary.json 导入失败", exc_info=True)
+            report["errors"].append(("network_dictionary.json", str(exc)))
+
+    return report
+
+
+def _sug_default_settings_schema() -> dict:
+    """读取 SUG ``AppSettings.DEFAULT_SETTINGS`` 作为「合法 key 清单」的事实来源。
+
+    懒加载——只在导入时才 import strange_uta_game，避免无谓启动开销。
+    导入失败（比如 submodule 没初始化）时返回空 dict —— 等价于「所有 key 都未知」，
+    保险起见整体放行（让后续 _filter_against_schema 直通），调用方仍能拿到字典。
+    """
+    try:
+        import krok_helper  # noqa: F401 — installs bundled SUG src on sys.path
+        from strange_uta_game.frontend.settings.app_settings import AppSettings as SugAppSettings
+        return SugAppSettings.DEFAULT_SETTINGS
+    except Exception:
+        logging.getLogger(__name__).warning(
+            "无法加载 SUG AppSettings.DEFAULT_SETTINGS，将跳过未知 key 过滤",
+            exc_info=True,
+        )
+        return {}
+
+
+def _filter_against_schema(
+    payload: dict,
+    schema: dict,
+    prefix: str,
+) -> tuple[dict, list[str]]:
+    """递归按 ``schema`` 过滤 ``payload`` 的未知 key；返回（保留下的 dict，被丢弃 key 列表）。
+
+    schema 为空 dict 视为「无 schema 信息」→ 整体放行（用于 submodule 加载失败兜底）。
+    schema 的非 dict 叶子表示「此处期望任意值」→ 整 subtree 直接放行。
+    """
+    if not schema:
+        return deepcopy(payload), []
+
+    kept: dict = {}
+    dropped: list[str] = []
+    for key, value in payload.items():
+        path = f"{prefix}.{key}" if prefix else key
+        if key not in schema:
+            dropped.append(path)
+            continue
+        schema_value = schema[key]
+        if isinstance(schema_value, dict) and isinstance(value, dict):
+            sub_kept, sub_dropped = _filter_against_schema(value, schema_value, path)
+            kept[key] = sub_kept
+            dropped.extend(sub_dropped)
+        else:
+            # 叶子或类型不一致 → 整值放行（SUG 自己运行时 get() 会做类型兜底）
+            kept[key] = deepcopy(value)
+    return kept, dropped
+
+
+def _merge_list_by_key(
+    existing: list,
+    incoming: list,
+    key_field: str,
+) -> dict:
+    """合并 ``incoming`` 到 ``existing``，按 ``key_field`` 去重，``existing`` 优先。
+
+    Returns:
+        ``{"merged": <合并后的新列表>, "added": <新增条目数>}``
+    """
+    merged = [deepcopy(item) for item in existing if isinstance(item, dict)]
+    seen = {
+        item[key_field]
+        for item in merged
+        if isinstance(item.get(key_field), (str, int))
+    }
+    added = 0
+    for item in incoming:
+        if not isinstance(item, dict):
+            continue
+        key = item.get(key_field)
+        if not isinstance(key, (str, int)) or key in seen:
+            continue
+        merged.append(deepcopy(item))
+        seen.add(key)
+        added += 1
+    return {"merged": merged, "added": added}
