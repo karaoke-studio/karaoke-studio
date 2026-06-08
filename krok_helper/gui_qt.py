@@ -7251,22 +7251,61 @@ class KrokHelperQtApp(QMainWindow):
             event.ignore()
             return
         self._stop_alignment_preview(log_message=False)
-        try:
-            lyrics_timing_page = getattr(self, "lyrics_timing_page", None)
-            if (
-                lyrics_timing_page is not None
-                and hasattr(lyrics_timing_page, "has_unsaved_changes")
-                and lyrics_timing_page.has_unsaved_changes()
-                and hasattr(lyrics_timing_page, "flush_unsaved")
-            ):
-                lyrics_timing_page.flush_unsaved()
-        except Exception:
-            pass
+        if not self._shutdown_lyrics_timing(event):
+            return
         try:
             self._save_all_settings()
         except Exception:
             pass
         super().closeEvent(event)
+
+    def _shutdown_lyrics_timing(self, event) -> bool:
+        # SUG embedded 模式自身的 closeEvent 不跑 standalone 的「未保存对话框 +
+        # 清理临时文件」流程（按 lyrics_timing/docs/EMBEDDING.md 由宿主接管），
+        # 否则 .cache/*.sug.temp 与 *.autosave 会残留到下次启动并触发「上次异常
+        # 退出」恢复提示。这里复刻 standalone 的语义。
+        # TODO: 等 SUG 暴露 discard_autosave() 公开 API 后改用之，移除对 _store 的直接访问。
+        page = getattr(self, "lyrics_timing_page", None)
+        if page is None:
+            return True
+
+        try:
+            has_unsaved = bool(
+                hasattr(page, "has_unsaved_changes") and page.has_unsaved_changes()
+            )
+        except Exception:
+            has_unsaved = False
+
+        if has_unsaved:
+            msg = QMessageBox(self)
+            msg.setIcon(QMessageBox.Icon.Question)
+            msg.setWindowTitle("未保存的更改")
+            msg.setText("打轴模块有未保存的更改，是否在退出前保存？")
+            save_btn = msg.addButton("保存", QMessageBox.ButtonRole.AcceptRole)
+            msg.addButton("放弃", QMessageBox.ButtonRole.DestructiveRole)
+            cancel_btn = msg.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+            msg.setDefaultButton(save_btn)
+            msg.exec()
+            clicked = msg.clickedButton()
+            if clicked is cancel_btn:
+                event.ignore()
+                return False
+            if clicked is save_btn:
+                try:
+                    if hasattr(page, "trigger_save"):
+                        page.trigger_save()
+                except Exception:
+                    pass
+            # save / discard 均落到下面清理 autosave/temp
+
+        store = getattr(page, "_store", None)
+        cleanup = getattr(store, "cleanup_temp_files", None) if store is not None else None
+        if cleanup is not None:
+            try:
+                cleanup()
+            except Exception:
+                pass
+        return True
 
 
 def launch_qt_app() -> int:
