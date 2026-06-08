@@ -115,6 +115,7 @@ from krok_helper.lyrics import (
     LyricsSearchCandidate,
     LyricsSearchService,
     build_lyrics_preview,
+    extract_lyrics_query_from_file,
 )
 from krok_helper.pipeline import (
     DEFAULT_OFF_NAME_TEMPLATE,
@@ -2078,6 +2079,61 @@ class WaveformView(QWidget):
         self.set_playhead(time_pos)
 
 
+class LyricsKeywordLineEdit(QLineEdit):
+    """QLineEdit that accepts a dropped lyrics file and fills in a search keyword.
+
+    QLineEdit 默认会把拖入的 file:// URL 当文本插入；我们拦下来改成「从文件提取
+    歌曲名 → 替换输入内容 → 选中文本，方便用户回车搜索或继续编辑」。
+    """
+
+    fileDropped = Signal(str)  # 文件内提取出的关键词
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setAcceptDrops(True)
+
+    @staticmethod
+    def _first_local_file(mime) -> Path | None:
+        if not mime.hasUrls():
+            return None
+        for url in mime.urls():
+            local = url.toLocalFile()
+            if not local:
+                continue
+            p = Path(local)
+            if p.is_file():
+                return p
+        return None
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if self._first_local_file(event.mimeData()) is not None:
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event) -> None:  # noqa: N802
+        if self._first_local_file(event.mimeData()) is not None:
+            event.acceptProposedAction()
+            return
+        super().dragMoveEvent(event)
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        path = self._first_local_file(event.mimeData())
+        if path is None:
+            super().dropEvent(event)
+            return
+        try:
+            query = extract_lyrics_query_from_file(path)
+        except Exception:
+            query = path.stem
+        if query:
+            self.setText(query)
+            self.selectAll()
+            self.setFocus()
+            self.fileDropped.emit(query)
+        event.acceptProposedAction()
+
+
 class KrokHelperQtApp(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -2552,9 +2608,11 @@ class KrokHelperQtApp(QMainWindow):
         self._install_single_click_combo_behavior(self.lyrics_source_combo)
         self.lyrics_source_combo.currentIndexChanged.connect(self._persist_lyrics_preferences)
 
-        self.lyrics_keyword_edit = QLineEdit()
+        self.lyrics_keyword_edit = LyricsKeywordLineEdit()
         self.lyrics_keyword_edit.setObjectName("LyricsKeywordEdit")
-        self.lyrics_keyword_edit.setPlaceholderText("例如：Recollect / Reweave / Redo / Realize")
+        self.lyrics_keyword_edit.setPlaceholderText(
+            "例如：Recollect / Reweave / Redo / Realize（也可以把歌词文件拖到这里自动提取歌名）"
+        )
         self.lyrics_keyword_edit.setMinimumHeight(42)
         self.lyrics_keyword_edit.returnPressed.connect(self._start_lyrics_search)
         self.lyrics_search_button = PrimaryPushButton("搜索歌曲")

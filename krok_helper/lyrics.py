@@ -1424,3 +1424,58 @@ def _convert_yrc_text(text: str) -> tuple[str, str, str]:
     verbatim_lyrics = _sanitize_lrc_text("\n".join([part for part in verbatim_parts if part]))
     plain_lyrics = _strip_lrc_timestamps(line_lyrics) or _strip_lrc_timestamps(verbatim_lyrics)
     return line_lyrics, verbatim_lyrics, plain_lyrics
+
+
+# 用于从拖入的歌词文件提取检索关键词。
+# 优先从 LRC 头部的 ``[ti:...]`` / ``[ar:...]`` 标签读取；缺失则回落到文件名（去后缀）。
+_LRC_TI_PATTERN = re.compile(r"^\[ti:\s*(.+?)\s*\]\s*$", re.IGNORECASE)
+_LRC_AR_PATTERN = re.compile(r"^\[ar:\s*(.+?)\s*\]\s*$", re.IGNORECASE)
+
+
+def extract_lyrics_query_from_file(path) -> str:
+    """从用户拖入的歌词文件里提取一个适合直接放进搜索框的关键词。
+
+    策略：
+    1. 若文件可按文本读取且头部含 LRC ``[ti:]`` 标签，返回 ``"title artist"``
+       （``[ar:]`` 缺失时只返回 title）。``[ti:]`` 优先于文件名是因为很多用户
+       的下载文件名是 ``track01.lrc`` 这种无意义命名，而 LRC 内部标签才是歌名。
+    2. 否则返回文件名 stem（去后缀）。
+
+    任何异常（编码失败、IO 错误等）都吞掉，最终至少返回 stem 兜底。
+    """
+    from pathlib import Path as _Path
+    p = _Path(path)
+    stem = p.stem.strip() or p.name
+
+    try:
+        # 大多数 LRC 标签都在前 20 行内；读全文件没必要。读不到也无所谓——
+        # stem 兜底已经足够。utf-8-sig 兼容 BOM；errors=replace 不抛。
+        text = p.read_text(encoding="utf-8-sig", errors="replace")
+    except Exception:
+        return stem
+
+    title = ""
+    artist = ""
+    for line in text.splitlines()[:40]:
+        line = line.strip()
+        if not line:
+            continue
+        if not title:
+            m = _LRC_TI_PATTERN.match(line)
+            if m:
+                title = m.group(1).strip()
+                if title and artist:
+                    break
+                continue
+        if not artist:
+            m = _LRC_AR_PATTERN.match(line)
+            if m:
+                artist = m.group(1).strip()
+                if title and artist:
+                    break
+
+    if title and artist:
+        return f"{title} {artist}".strip()
+    if title:
+        return title
+    return stem
