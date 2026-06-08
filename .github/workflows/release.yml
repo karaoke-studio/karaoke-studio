@@ -33,21 +33,17 @@ jobs:
 
       - name: Build Windows package
         shell: cmd
+        env:
+          CI: "1"
         run: scripts\build_windows.bat
-
-      - name: Archive Windows package
-        shell: powershell
-        run: |
-          Compress-Archive `
-            -Path "dist\windows\Karaoke Helper\*" `
-            -DestinationPath "KaraokeHelper-windows.zip" `
-            -Force
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KaraokeHelper-windows
-          path: KaraokeHelper-windows.zip
+          name: KaraokeStudio-windows
+          path: |
+            dist/windows/KaraokeStudio-windows.zip
+            dist/windows/KaraokeStudio-windows.zip.sha256
 
   build-macos:
     name: Build macOS
@@ -75,13 +71,13 @@ jobs:
       - name: Archive macOS package
         run: |
           cd dist/macos
-          ditto -c -k --sequesterRsrc --keepParent "Karaoke Helper.app" "../../KaraokeHelper-macos.zip"
+          ditto -c -k --sequesterRsrc --keepParent "Karaoke Studio.app" "../../KaraokeStudio-macos.zip"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KaraokeHelper-macos
-          path: KaraokeHelper-macos.zip
+          name: KaraokeStudio-macos
+          path: KaraokeStudio-macos.zip
 
   release:
     name: Publish Release
@@ -95,13 +91,13 @@ jobs:
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
-          name: KaraokeHelper-windows
+          name: KaraokeStudio-windows
           path: release-assets/windows
 
       - name: Download macOS artifact
         uses: actions/download-artifact@v4
         with:
-          name: KaraokeHelper-macos
+          name: KaraokeStudio-macos
           path: release-assets/macos
 
       - name: Publish GitHub Release
@@ -109,5 +105,6 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            release-assets/windows/KaraokeHelper-windows.zip
-            release-assets/macos/KaraokeHelper-macos.zip
+            release-assets/windows/KaraokeStudio-windows.zip
+            release-assets/windows/KaraokeStudio-windows.zip.sha256
+            release-assets/macos/KaraokeStudio-macos.zip
