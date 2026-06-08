@@ -129,9 +129,26 @@ git push origin vX.Y.Z
 
 触发 [`release.yml`](../.github/workflows/release.yml)，自动构建 Windows + macOS zip 并发布 GitHub Release。
 
-### 4.7 自动更新验收
+### 4.7 覆盖 release body 为中文
 
-从旧版安装目录启动应用，走完检查更新 → 弹窗展示 §4.4 写的中文 release notes → 立即更新 → 重启 → 关于页版本号变化。详见 [`release-runbook.local.md`](./release-runbook.local.md) §5。
+> Workflow 配的是 `generate_release_notes: true`，**默认生成的是英文 commit log**。主程序更新弹窗会直接展示 release body，所以 CI 跑完一定要立刻用 §4.4 写的中文 CHANGELOG 段覆盖一次。
+
+CI 上传完 zip / sha256 后：
+
+```powershell
+gh release view vX.Y.Z --json body   # 检查当前 body
+gh release edit vX.Y.Z --notes-file <(...)   # 或用 --notes "...中文内容..."
+```
+
+中文 body 结构对齐 v3.0.2 的格式：
+
+- 用 `### 新增` / `### 修复` / `### 其他更新` 这类中文小标题（不要直接用 Keep-a-Changelog 的英文标题）。
+- 第一段一句话说清楚本次发版的性质（如：「仅 submodule 同步，主程序代码无改动」）。
+- 内容与 [`CHANGELOG.md`](../CHANGELOG.md) 对应版本节保持一致。
+
+### 4.8 自动更新验收
+
+从旧版安装目录启动应用，走完检查更新 → 弹窗展示 §4.7 覆盖好的中文 release notes → 立即更新 → 重启 → 关于页版本号变化。详见 [`release-runbook.local.md`](./release-runbook.local.md) §5。
 
 ---
 
