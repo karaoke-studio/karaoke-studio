@@ -4,6 +4,8 @@ import base64
 import binascii
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import gzip
+import html
+from html.parser import HTMLParser
 import hashlib
 import json
 import random
@@ -15,7 +17,7 @@ from dataclasses import dataclass
 from difflib import SequenceMatcher
 from typing import Protocol
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from krok_helper.config import APP_NAME, APP_VERSION
@@ -47,13 +49,16 @@ _PROVIDER_DISPLAY_NAMES = {
     "qm": "QQ音乐",
     "kg": "酷狗音乐",
     "lrclib": "LRCLIB",
+    "utaten": "UtaTen",
 }
 _PROVIDER_PRIORITIES = {
     "qm": 40,
     "kg": 30,
     "ne": 20,
+    "utaten": 15,
     "lrclib": 10,
 }
+UTATEN_RUBY_MARKER = "[tool:utaten-ruby]"
 _KUGOU_SEARCH_DOMAINS = (
     "mobilecdnbj.kugou.com",
     "msearch.kugou.com",
@@ -317,6 +322,127 @@ class NeteaseLyricsProvider:
         candidate.plain_lyrics = plain_lyrics
         candidate.translation_lyrics = translation_lyrics
         candidate.lyrics_loaded = True
+        return candidate
+
+
+class UtatenLyricsProvider:
+    provider_id = "utaten"
+    provider_name = _PROVIDER_DISPLAY_NAMES["utaten"]
+    source_priority = _PROVIDER_PRIORITIES["utaten"]
+    base_url = "https://utaten.com"
+
+    def search(self, keyword: str, *, limit: int = DEFAULT_LYRICS_SEARCH_LIMIT, page: int = 1) -> list[LyricsSearchCandidate]:
+        try:
+            all_items = self._search_all_variants(keyword)
+        except LyricsSearchError as exc:
+            raise LyricsSearchError(f"{self.provider_name} 搜索失败: {exc}") from exc
+        page_size = max(1, limit)
+        start_index = max(0, (page - 1) * page_size)
+        items: list[LyricsSearchCandidate] = []
+        for index, entry in enumerate(all_items[start_index : start_index + page_size], start=start_index + 1):
+            source_url = entry["url"]
+            track_id = source_url.rstrip("/").rsplit("/", 1)[-1]
+            items.append(
+                LyricsSearchCandidate(
+                    provider_id=self.provider_id,
+                    provider_name=self.provider_name,
+                    track_id=track_id,
+                    title=entry["title"],
+                    artist=entry["artist"],
+                    album="",
+                    duration_seconds=None,
+                    provider_payload={"url": source_url},
+                    plain_lyrics=entry["snippet"],
+                    source_url=source_url,
+                    source_priority=self.source_priority,
+                    provider_position=index,
+                )
+            )
+        return items
+
+    def _search_all_variants(self, keyword: str) -> list[dict[str, str]]:
+        variants: list[tuple[str, str]] = [(keyword, "")]
+        tokens = [token for token in keyword.split() if token]
+        if len(tokens) >= 2:
+            variants.append((tokens[0], " ".join(tokens[1:])))
+            variants.append((" ".join(tokens[:-1]), tokens[-1]))
+
+        seen_variants: set[tuple[str, str]] = set()
+        seen_urls: set[str] = set()
+        merged: list[dict[str, str]] = []
+        last_error: LyricsSearchError | None = None
+        for title, artist in variants:
+            key = (title, artist)
+            if key in seen_variants:
+                continue
+            seen_variants.add(key)
+            try:
+                for entry in self._search_once(title=title, artist=artist):
+                    if entry["url"] in seen_urls:
+                        continue
+                    seen_urls.add(entry["url"])
+                    merged.append(entry)
+            except LyricsSearchError as exc:
+                last_error = exc
+        if not merged and last_error is not None:
+            raise last_error
+        return merged
+
+    def _search_once(self, *, title: str, artist: str) -> list[dict[str, str]]:
+        params = {
+            "sort": "popular_sort_asc",
+            "title": title,
+            "artist_name": artist,
+            "beginning": "",
+            "body": "",
+            "lyricist": "",
+            "composer": "",
+            "sub_title": "",
+            "tag": "",
+            "show_artists": "1",
+        }
+        request = Request(
+            f"{self.base_url}/search?{urlencode(params)}",
+            headers={
+                "Accept-Language": "ja,en;q=0.8",
+                "User-Agent": f"{APP_NAME}/{APP_VERSION} (lyrics search)",
+            },
+        )
+        return _parse_utaten_search_results(_load_text_from_request(request), base_url=self.base_url)
+
+    def fetch_lyrics(self, candidate: LyricsSearchCandidate) -> LyricsSearchCandidate:
+        url = ""
+        if isinstance(candidate.provider_payload, dict):
+            url = str(candidate.provider_payload.get("url") or "")
+        url = url or candidate.source_url or ""
+        if not url:
+            raise LyricsSearchError("UtaTen 候选数据无效，无法加载歌词。")
+
+        request = Request(
+            url,
+            headers={
+                "Accept-Language": "ja,en;q=0.8",
+                "User-Agent": f"{APP_NAME}/{APP_VERSION} (lyrics fetch)",
+            },
+        )
+        try:
+            html_text = _load_text_from_request(request)
+            plain_text, utaten_lrc = _parse_utaten_lyrics_page(
+                html_text,
+                title=candidate.title,
+                artist=candidate.artist,
+            )
+        except LyricsSearchError as exc:
+            raise LyricsSearchError(f"{self.provider_name} 加载歌词失败: {exc}") from exc
+
+        candidate.lyrics_payload = {"url": url}
+        candidate.line_lyrics = ""
+        candidate.verbatim_lyrics = ""
+        candidate.plain_lyrics = utaten_lrc
+        candidate.translation_lyrics = ""
+        candidate.lyrics_loaded = bool(plain_text.strip())
+        if not candidate.lyrics_loaded:
+            raise LyricsSearchError("UtaTen 没有返回可用歌词。")
         return candidate
 
 
@@ -759,11 +885,156 @@ class LyricsSearchService:
         return provider.fetch_lyrics(candidate)
 
 
+def _strip_html_tags(text: str) -> str:
+    text = re.sub(r"(?is)<script.*?</script>|<style.*?</style>", "", text or "")
+    text = re.sub(r"(?is)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?is)<[^>]+>", "", text)
+    return " ".join(html.unescape(text).split())
+
+
+def _parse_utaten_search_results(html_text: str, *, base_url: str) -> list[dict[str, str]]:
+    table_match = re.search(
+        r'<table[^>]*class="[^"]*\bsearchResult\b[^"]*"[^>]*>(?P<body>.*?)</table>',
+        html_text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not table_match:
+        return []
+
+    items: list[dict[str, str]] = []
+    for row_match in re.finditer(r"<tr\b[^>]*>(?P<row>.*?)</tr>", table_match.group("body"), re.IGNORECASE | re.DOTALL):
+        row = row_match.group("row")
+        title_match = re.search(
+            r'class="[^"]*\bsearchResult__title\b[^"]*"[^>]*>.*?<a\s+href="(?P<href>[^"]+)"[^>]*>(?P<title>.*?)</a>',
+            row,
+            re.IGNORECASE | re.DOTALL,
+        )
+        if not title_match:
+            continue
+        artist_match = re.search(
+            r'class="[^"]*\bsearchResult__artist\b[^"]*"[^>]*>.*?<p>\s*<a\s+href="[^"]+"[^>]*>(?P<artist>.*?)</a>',
+            row,
+            re.IGNORECASE | re.DOTALL,
+        )
+        snippet_match = re.search(
+            r'class="[^"]*\blyricList__beginning\b[^"]*"[^>]*>.*?<a\s+href="[^"]+"[^>]*>(?P<snippet>.*?)</a>',
+            row,
+            re.IGNORECASE | re.DOTALL,
+        )
+        title = _strip_html_tags(title_match.group("title"))
+        artist = _strip_html_tags(artist_match.group("artist")) if artist_match else ""
+        snippet = _strip_html_tags(snippet_match.group("snippet")) if snippet_match else ""
+        if not title:
+            continue
+        items.append(
+            {
+                "title": title,
+                "artist": artist,
+                "snippet": snippet,
+                "url": urljoin(base_url, html.unescape(title_match.group("href"))),
+            }
+        )
+    return items
+
+
+class _UtatenRubyLyricsParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._stack: list[str] = []
+        self._ruby_rb: list[str] = []
+        self._ruby_rt: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag.lower() == "br":
+            self.parts.append("\n")
+            return
+        if tag.lower() != "span":
+            self._stack.append("")
+            return
+        class_names = set(str(dict(attrs).get("class") or "").split())
+        if "ruby" in class_names:
+            self._stack.append("ruby")
+            self._ruby_rb = []
+            self._ruby_rt = []
+        elif "rb" in class_names:
+            self._stack.append("rb")
+        elif "rt" in class_names:
+            self._stack.append("rt")
+        else:
+            self._stack.append("")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() != "span" or not self._stack:
+            return
+        kind = self._stack.pop()
+        if kind == "ruby":
+            rb = _normalize_utaten_inline_text("".join(self._ruby_rb))
+            rt = _normalize_utaten_inline_text("".join(self._ruby_rt))
+            if rb and rt:
+                self.parts.append(f"{{{_escape_utaten_annotated_text(rb)}||{_escape_utaten_annotated_text(rt)}}}")
+            elif rb:
+                self.parts.append(rb)
+            self._ruby_rb = []
+            self._ruby_rt = []
+
+    def handle_data(self, data: str) -> None:
+        if not data:
+            return
+        current = self._stack[-1] if self._stack else ""
+        if current == "rb":
+            self._ruby_rb.append(data)
+        elif current == "rt":
+            self._ruby_rt.append(data)
+        elif "rt" not in self._stack:
+            self.parts.append(data)
+
+
+def _normalize_utaten_inline_text(text: str) -> str:
+    return re.sub(r"\s+", " ", html.unescape(text or "").replace("\u3000", " ")).strip()
+
+
+def _escape_utaten_annotated_text(text: str) -> str:
+    return (text or "").replace("{", "｛").replace("}", "｝")
+
+
+def _parse_utaten_lyrics_page(html_text: str, *, title: str = "", artist: str = "") -> tuple[str, str]:
+    body_match = re.search(
+        r'<div[^>]*class="[^"]*\blyricBody\b[^"]*"[^>]*>.*?<div[^>]*class="[^"]*\bhiragana\b[^"]*"[^>]*>(?P<body>.*?)</div>',
+        html_text,
+        re.IGNORECASE | re.DOTALL,
+    )
+    if not body_match:
+        raise LyricsSearchError("未找到 UtaTen 歌词正文。")
+
+    parser = _UtatenRubyLyricsParser()
+    parser.feed(body_match.group("body"))
+    raw_lines = [_normalize_utaten_inline_text(line) for line in "".join(parser.parts).splitlines()]
+    lines: list[str] = []
+    for line in raw_lines:
+        if not line:
+            continue
+        lines.append(line)
+
+    annotated = "\n".join(lines).strip()
+    if not annotated:
+        raise LyricsSearchError("UtaTen 歌词正文为空。")
+
+    metadata = [UTATEN_RUBY_MARKER]
+    if title.strip():
+        metadata.append(f"[ti:{title.strip()}]")
+    if artist.strip():
+        metadata.append(f"[ar:{artist.strip()}]")
+    plain_text = re.sub(r"\{([^{}|]+)\|\|([^{}]*)\}", r"\1", annotated)
+    return plain_text.strip(), "\n".join(metadata + [annotated]).strip()
+
+
 def build_default_providers() -> list[LyricsProvider]:
     return [
         QqMusicLyricsProvider(),
         KugouLyricsProvider(),
         NeteaseLyricsProvider(),
+        UtatenLyricsProvider(),
         LrclibFallbackProvider(),
     ]
 
@@ -1107,15 +1378,28 @@ def _strip_leading_intro_lines(text: str, *, title: str = "", artist: str = "", 
         return ""
 
     raw_lines = [line.strip() for line in text.splitlines() if line.strip()]
+
+    # UtaTen 标记 LRC 头部固定是 `[tool:utaten-ruby]` + 可选 `[ti:]`/`[ar:]`，这些行的
+    # 冒号位置和长度恰好命中 _looks_like_intro_credit_line_v2，会被当作 intro credit
+    # 删掉。但删掉头行 marker 后 SUG 就无法识别 utaten 格式、会重新分词+注音，
+    # 整条 ruby 链路失效。保留头部连续的 LRC 元数据行（含 utaten marker），
+    # 只对其后的内容行做 intro 探测。
+    header_end = 0
+    while header_end < len(raw_lines) and _LRC_METADATA_LINE_PATTERN.match(raw_lines[header_end]):
+        header_end += 1
+
+    header_lines = raw_lines[:header_end]
+    body_lines = raw_lines[header_end:]
+
     drop_count = 0
-    max_probe_lines = min(5, len(raw_lines))
+    max_probe_lines = min(5, len(body_lines))
     for index in range(max_probe_lines):
-        content = _LRC_TIMESTAMP_TOKEN_PATTERN.sub("", raw_lines[index]).strip()
+        content = _LRC_TIMESTAMP_TOKEN_PATTERN.sub("", body_lines[index]).strip()
         if _looks_like_intro_credit_line_v2(content, title=title, artist=artist, album=album):
             drop_count += 1
             continue
         break
-    return "\n".join(raw_lines[drop_count:]).strip()
+    return "\n".join(header_lines + body_lines[drop_count:]).strip()
 
 
 def _looks_like_intro_credit_line(text: str, *, title: str = "", artist: str = "", album: str = "") -> bool:
@@ -1236,6 +1520,32 @@ def _load_json_from_request(request: Request) -> dict | list:
         return json.loads(payload.decode("utf-8", "replace"))
     except json.JSONDecodeError as exc:
         raise LyricsSearchError("返回了无法解析的数据") from exc
+
+
+def _load_text_from_request(request: Request) -> str:
+    try:
+        try:
+            from krok_helper.network import build_urllib_opener_for_current_settings
+
+            open_request = build_urllib_opener_for_current_settings().open
+        except Exception:
+            open_request = urlopen
+        with open_request(request, timeout=20) as response:
+            payload = response.read()
+            content_encoding = response.headers.get("Content-Encoding", "")
+            content_type = response.headers.get("Content-Type", "")
+    except HTTPError as exc:
+        raise LyricsSearchError(f"HTTP {exc.code}") from exc
+    except URLError as exc:
+        raise LyricsSearchError(f"网络错误: {exc.reason}") from exc
+    except TimeoutError as exc:
+        raise LyricsSearchError("请求超时") from exc
+
+    if "gzip" in content_encoding.lower() or payload[:2] == b"\x1f\x8b":
+        payload = gzip.decompress(payload)
+    charset_match = re.search(r"charset=([\w.-]+)", content_type, re.IGNORECASE)
+    encoding = charset_match.group(1) if charset_match else "utf-8"
+    return payload.decode(encoding, "replace")
 
 
 def _extract_nested_lyric(payload: object, key: str) -> str:

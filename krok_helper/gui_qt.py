@@ -114,6 +114,7 @@ from krok_helper.lyrics import (
     LyricsSearchBatch,
     LyricsSearchCandidate,
     LyricsSearchService,
+    UTATEN_RUBY_MARKER,
     build_lyrics_preview,
     extract_lyrics_query_from_file,
 )
@@ -167,6 +168,8 @@ LYRICS_SOURCE_OPTIONS = [
     ("酷狗音乐", ("kg",)),
     ("网易云音乐", ("ne",)),
     ("LRCLIB", ("lrclib",)),
+    # UtaTen 走带注音的 LRC 专用通道，与上面几条通用歌词来源差别较大，故放最后单列。
+    ("UtaTen", ("utaten",)),
 ]
 LYRICS_SOURCE_MAP = {label: provider_ids for label, provider_ids in LYRICS_SOURCE_OPTIONS}
 LYRICS_PREVIEW_MODE_OPTIONS = [
@@ -2731,7 +2734,7 @@ class KrokHelperQtApp(QMainWindow):
         self.lyrics_search_button.setObjectName("LyricsSearchButton")
         self.lyrics_search_button.setFixedSize(128, 42)
         self.lyrics_search_button.clicked.connect(self._start_lyrics_search)
-        self.lyrics_status_label = QLabel("当前支持聚合搜索，也可以手动切换到 QQ音乐、酷狗音乐、网易云音乐或 LRCLIB 单源搜索。")
+        self.lyrics_status_label = QLabel("聚合模式覆盖 QQ音乐 / 酷狗音乐 / 网易云音乐 / LRCLIB；UtaTen 走带注音的日文专用通道，请单独选择。")
         self.lyrics_status_label.setObjectName("LyricsStatusText")
         self.lyrics_status_label.setWordWrap(True)
         self.lyrics_status_label.setFont(build_lyrics_ui_font(point_size=9.5))
@@ -3258,6 +3261,11 @@ class KrokHelperQtApp(QMainWindow):
         button.raise_()
 
     def _build_lyrics_preview_hint(self, candidate: LyricsSearchCandidate, preview: LyricsPreview) -> str:
+        if candidate.provider_id == "utaten" and UTATEN_RUBY_MARKER in (preview.text or ""):
+            return (
+                f"{candidate.provider_name} 提供带注音的无时间戳 LRC；"
+                "导入打轴后会按 ruby 块自动连词、不会重新注音。"
+            )
         if preview.used_synced_lyrics and preview.used_estimated_char_timing:
             return (
                 f"{candidate.provider_name} 提供了逐行同步歌词；当前“按字 LRC”是基于相邻行时间做的轻量估算，"
