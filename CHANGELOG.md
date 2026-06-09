@@ -14,6 +14,20 @@
 
 ---
 
+## [3.0.7] — 2026-06-09
+
+新增波形对齐导出目录选项；修复打包版点击「更新 yt-dlp」反而把 Karaoke Studio 自己的 usage 喷回状态栏的事故。
+
+### Added
+
+- 波形对齐模块的「命名设置」对话框新增「对齐导出位置」面板：可在「保存在字幕视频所在目录」（默认，与旧版一致）和「保存在指定目录」之间切换；选择后会持久化到 `settings.json`（`align_output_dir_mode` / `align_output_custom_dir`），波形对齐页面的「打开输出目录」按钮也会跟着跳到这里设置的目录。
+
+### Fixed
+
+- 修复打包版（PyInstaller exe）在视频下载模块点击「更新 yt-dlp」时，状态栏弹出 `yt-dlp 更新失败：... usage: Karaoke Studio.exe -h ...` 一整段乱码 + 主程序自己的 help 输出的问题。原因是 frozen bundle 里 `sys.executable` 是宿主 `Karaoke Studio.exe` 而不是 Python，旧逻辑直接拿它去跑 `-m pip install`，被主程序的 argparse 当成未知参数打回 usage。现在打包版会跳过 pip 路径，只尝试系统 PATH 上的独立 `yt-dlp` CLI；找不到时给出明确的中文提示，告知打包版无法热更新，请整体升级应用或单独安装独立 yt-dlp。
+
+---
+
 ## [3.0.6] — 2026-06-09
 
 新增顶部 6 步工作流栏的紧凑模式开关：打轴时嫌工作流栏占太高的用户，点一下就能把它折成一条窄行，6 步全部仍可点击切换，状态会持久化到 `settings.json`。
