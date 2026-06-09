@@ -93,6 +93,15 @@ class YtDlpService:
         return version
 
     def update_ytdlp(self) -> str:
+        # PyInstaller frozen 包里 ``sys.executable`` 是宿主 ``Karaoke Studio.exe``，
+        # 不是 python.exe；走 ``<app>.exe -m pip install -U yt-dlp`` 只会触发主程序的
+        # argparse 退路，把 Karaoke Studio 自己的 usage 当成 yt-dlp 的更新输出回填到
+        # 状态栏（v3.0.6 之前的真实事故）。而且 frozen bundle 里 yt_dlp 是只读烧进
+        # ``_internal/`` 的，pip 即便能跑也写不进去——所以打包版不应该尝试 pip 路径，
+        # 只去用户系统 PATH 上可能存在的独立 yt-dlp CLI；找不到就由 ``_update_ytdlp_cli``
+        # 抛清晰的中文错误。
+        if getattr(sys, "frozen", False):
+            return self._update_ytdlp_cli()
         try:
             import yt_dlp  # noqa: F401
         except ModuleNotFoundError:
@@ -657,6 +666,13 @@ class YtDlpService:
         cli = shutil.which("yt-dlp")
         if cli:
             return cli
+        # 打包版用户没装独立 yt-dlp 时给出更准确的引导——pip / Python 包对他们没用
+        if getattr(sys, "frozen", False):
+            raise VideoDownloadError(
+                "未在系统 PATH 上找到独立的 yt-dlp CLI。"
+                "打包版的 Karaoke Studio 内置 yt-dlp 是只读的，无法热更新；"
+                "请整体升级应用，或者单独安装 yt-dlp 到系统 PATH 后再点更新。"
+            )
         raise VideoDownloadError("未找到 yt-dlp。请安装 `yt-dlp` 命令或 Python 包。")
 
     def _usable_cookie_file(self, cookie_file: str | None) -> str:
@@ -701,6 +717,15 @@ class YtDlpService:
                 candidate = parent.parent / "python.exe"
                 if candidate.is_file():
                     return str(candidate)
+        # frozen 模式下不能回退到 sys.executable —— 那是宿主 .exe，不是 Python，
+        # 拿去跑 ``-m pip install`` 会复现 update_ytdlp 头部注释里那个 v3.0.6 之前
+        # 的事故。明确抛出让上层 fallback 链断在这里，由 ``_update_ytdlp_cli`` 把
+        # 原始 CLI 错误传给用户。
+        if getattr(sys, "frozen", False):
+            raise VideoDownloadError(
+                "打包版无法定位独立的 Python 解释器来跑 pip 更新 yt-dlp。"
+                "请整体升级 Karaoke Studio，或者单独安装 yt-dlp CLI 到系统 PATH 后再试。"
+            )
         return sys.executable
 
     def normalize_version(self, version_text: str) -> str:
