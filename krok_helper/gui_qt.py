@@ -130,6 +130,7 @@ from krok_helper.pipeline import (
 )
 from krok_helper.settings import (
     AppSettings,
+    consume_corruption_backup,
     get_settings_path,
     import_legacy_sug_settings,
     load_app_settings,
@@ -2138,6 +2139,10 @@ class KrokHelperQtApp(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.settings = load_app_settings()
+        # 取走「上次 load 是否检测到 settings.json 损坏」的状态。要在 super().__init__
+        # 之后、`self.show()` 之前留住；真正弹窗在主窗口显示后再触发，避免和 splash
+        # / 初始化对话框打架。
+        self._settings_corruption_backup: Path | None = consume_corruption_backup()
         lyrics_timing_migrated = self.settings.lyrics_timing_migrated_v1
         if migrate_strange_uta_game_settings(self.settings) or (
             self.settings.lyrics_timing_migrated_v1 != lyrics_timing_migrated
@@ -2221,6 +2226,7 @@ class KrokHelperQtApp(QMainWindow):
         self.preview_timer.setInterval(300)
         self.preview_timer.timeout.connect(self._poll_alignment_preview)
         QTimer.singleShot(800, self._check_lyrics_timing_crash_recovery)
+        QTimer.singleShot(1500, self._notify_settings_corruption_if_any)
         QTimer.singleShot(2500, self._check_for_workbench_update_on_startup)
 
     def _track_background_task(self, attr_name: str, task: BackgroundTask) -> BackgroundTask:
@@ -5246,6 +5252,29 @@ class KrokHelperQtApp(QMainWindow):
         self.ffmpeg_dir_text = str(path) if str(path).strip() else ""
         self._sync_ffmpeg_labels()
         self._sync_lyrics_timing_host_paths()
+
+    def _notify_settings_corruption_if_any(self) -> None:
+        """启动后若检测到上次 settings.json 损坏，弹一个红框告知用户。
+
+        ``load_app_settings`` 在解析失败时会把坏文件备份成 ``settings.json.corrupt-<ts>``
+        并把路径记到 :func:`consume_corruption_backup`；这里把它取出来展示，让
+        v3.0.x 那种「全空配置」事故不再被用户默默吃掉。
+        """
+        backup = getattr(self, "_settings_corruption_backup", None)
+        if backup is None:
+            return
+        self._settings_corruption_backup = None
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Icon.Warning)
+        msg.setWindowTitle(APP_TITLE)
+        msg.setText("检测到上次的配置文件 settings.json 损坏，已使用默认值重建。")
+        msg.setInformativeText(
+            f"原文件已备份到：\n{backup}\n\n"
+            "打轴模块的设置 / 词典 / 演唱者 / 网络词典缓存如丢失，可在「全局设置 → "
+            "工具 → 打轴模块数据导入」从原 StrangeUtaGame 目录或备份中恢复。"
+        )
+        msg.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg.exec()
 
     def _check_lyrics_timing_crash_recovery(self) -> None:
         """启动时让嵌入的歌词打轴模块检查闪退恢复文件。

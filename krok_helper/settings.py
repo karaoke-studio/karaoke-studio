@@ -3,8 +3,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 from krok_helper.config import APP_NAME
@@ -104,6 +106,38 @@ def get_legacy_settings_paths() -> list[Path]:
     return [_settings_path_for_app_name(name) for name in LEGACY_APP_NAMES]
 
 
+# settings.json 解析失败时，``load_app_settings`` 会把坏文件备份并把备份路径
+# 记到这里。GUI 在主窗口起来后调 :func:`consume_corruption_backup` 取走（同时清零）
+# 并向用户弹窗，避免坏文件被默默丢弃后用户毫不知情就发现配置「全空了」。
+_LAST_CORRUPTION_BACKUP: Path | None = None
+
+
+def consume_corruption_backup() -> Path | None:
+    """返回上次 load 的损坏备份路径并清零；调用方负责把它展示给用户。"""
+    global _LAST_CORRUPTION_BACKUP
+    backup = _LAST_CORRUPTION_BACKUP
+    _LAST_CORRUPTION_BACKUP = None
+    return backup
+
+
+def _backup_corrupt_settings(path: Path, reason: str) -> None:
+    """把损坏的 settings.json 复制成 ``<name>.corrupt-<ts>`` 备份。
+
+    备份失败本身只 warn 不抛——load_app_settings 总要返回，备份只是兜底。
+    """
+    global _LAST_CORRUPTION_BACKUP
+    log = logging.getLogger(__name__)
+    try:
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        backup = path.parent / f"{path.name}.corrupt-{ts}"
+        # copy2 保留 mtime 便于追溯出事时间
+        shutil.copy2(path, backup)
+        _LAST_CORRUPTION_BACKUP = backup
+        log.error("settings.json 解析失败（%s），已备份原文件到 %s", reason, backup)
+    except Exception:
+        log.error("settings.json 解析失败（%s），且备份失败", reason, exc_info=True)
+
+
 def load_app_settings() -> AppSettings:
     path = get_settings_path()
     if not path.is_file():
@@ -112,11 +146,19 @@ def load_app_settings() -> AppSettings:
         return AppSettings()
 
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        raw = path.read_text(encoding="utf-8")
     except Exception:
+        _backup_corrupt_settings(path, "读取失败")
+        return AppSettings()
+
+    try:
+        payload = json.loads(raw)
+    except Exception:
+        _backup_corrupt_settings(path, "JSON 解析失败")
         return AppSettings()
 
     if not isinstance(payload, dict):
+        _backup_corrupt_settings(path, "顶层不是 JSON 对象")
         return AppSettings()
 
     align_target = str(payload.get("align_target", ALIGN_TARGET_VIDEO))
@@ -182,12 +224,20 @@ def load_app_settings() -> AppSettings:
 
 
 def save_app_settings(settings: AppSettings) -> Path:
+    """原子写 settings.json。
+
+    实现：先写到 ``settings.json.tmp``，再 ``os.replace`` 替换。Windows 与 POSIX 上
+    ``os.replace`` 都是原子操作——进程被杀只会留下未完成的 ``.tmp``，本体仍是上一次
+    完整版本。**绝不能**退回到 ``path.write_text`` 直接覆盖：那条路径里
+    ``open(w)`` 先 truncate 再 write，崩在中间的话主文件就是空 / 半截，下次启动
+    会触发「全空配置」事故（v3.0.x 真实案例，v3.0.5 修复）。
+    """
     path = get_settings_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(asdict(settings), ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    tmp = path.parent / f"{path.name}.tmp"
+    payload = json.dumps(asdict(settings), ensure_ascii=False, indent=2)
+    tmp.write_text(payload, encoding="utf-8")
+    os.replace(tmp, path)
     return path
 
 
