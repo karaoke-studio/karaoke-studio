@@ -24,6 +24,8 @@ from krok_helper.video_download.download_task import NAMING_RULE_TITLE, SOURCE_Y
 SETTINGS_FILE_NAME = "settings.json"
 ALIGN_TARGET_VIDEO = "video"
 ALIGN_TARGET_AUDIO = "audio"
+ALIGN_OUTPUT_DIR_SOURCE_VIDEO = "source_video"
+ALIGN_OUTPUT_DIR_CUSTOM = "custom"
 LEGACY_APP_NAMES = ("Karaoke Helper",)
 
 # 工作台界面主题：跟随系统 / 强制浅色 / 强制深色。
@@ -50,6 +52,8 @@ class AppSettings:
     align_encode_mode: str = ENCODE_MODE_SOFTWARE
     align_force_1080p60: bool = False
     align_export_use_video_audio: bool = False
+    align_output_dir_mode: str = ALIGN_OUTPUT_DIR_SOURCE_VIDEO
+    align_output_custom_dir: str = ""
     lyrics_source_ids: list[str] | tuple[str, ...] = DEFAULT_LYRICS_PROVIDER_IDS
     lyrics_preview_mode: str = LYRICS_PREVIEW_LINE
     lyrics_language: str = LYRICS_LANGUAGE_ORIGINAL
@@ -172,6 +176,9 @@ def load_app_settings() -> AppSettings:
     align_encode_mode = str(payload.get("align_encode_mode", ENCODE_MODE_SOFTWARE))
     if align_encode_mode not in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}:
         align_encode_mode = ENCODE_MODE_SOFTWARE
+    align_output_dir_mode = str(payload.get("align_output_dir_mode", ALIGN_OUTPUT_DIR_SOURCE_VIDEO))
+    if align_output_dir_mode not in {ALIGN_OUTPUT_DIR_SOURCE_VIDEO, ALIGN_OUTPUT_DIR_CUSTOM}:
+        align_output_dir_mode = ALIGN_OUTPUT_DIR_SOURCE_VIDEO
     ui_theme_raw = str(payload.get("ui_theme", UI_THEME_AUTO))
     if ui_theme_raw not in UI_THEMES:
         logging.getLogger(__name__).warning(
@@ -194,6 +201,8 @@ def load_app_settings() -> AppSettings:
         align_encode_mode=align_encode_mode,
         align_force_1080p60=bool(payload.get("align_force_1080p60", False)),
         align_export_use_video_audio=bool(payload.get("align_export_use_video_audio", False)),
+        align_output_dir_mode=align_output_dir_mode,
+        align_output_custom_dir=str(payload.get("align_output_custom_dir", "")),
         lyrics_source_ids=tuple(
             str(item)
             for item in payload.get("lyrics_source_ids", DEFAULT_LYRICS_PROVIDER_IDS)

@@ -129,6 +129,8 @@ from krok_helper.pipeline import (
     validate_output_name_template,
 )
 from krok_helper.settings import (
+    ALIGN_OUTPUT_DIR_CUSTOM,
+    ALIGN_OUTPUT_DIR_SOURCE_VIDEO,
     AppSettings,
     consume_corruption_backup,
     get_settings_path,
@@ -2242,6 +2244,8 @@ class KrokHelperQtApp(QMainWindow):
         self.off_name_template_value = DEFAULT_OFF_NAME_TEMPLATE
         self.align_video_name_template_value = DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
         self.align_audio_name_template_value = DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
+        self.align_output_dir_mode_value = ALIGN_OUTPUT_DIR_SOURCE_VIDEO
+        self.align_output_custom_dir_text = ""
         self.ffmpeg_dir_text = ""
         self._align_lead_fill_selection = LEAD_FILL_BLACK
         self._align_encode_selection = (
@@ -5172,6 +5176,12 @@ class KrokHelperQtApp(QMainWindow):
         self.set_output_name_templates(self.settings.on_name_template, self.settings.off_name_template)
         self.align_video_name_template_value = self.settings.align_video_name_template or DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
         self.align_audio_name_template_value = self.settings.align_audio_name_template or DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
+        self.align_output_dir_mode_value = (
+            self.settings.align_output_dir_mode
+            if self.settings.align_output_dir_mode in {ALIGN_OUTPUT_DIR_SOURCE_VIDEO, ALIGN_OUTPUT_DIR_CUSTOM}
+            else ALIGN_OUTPUT_DIR_SOURCE_VIDEO
+        )
+        self.align_output_custom_dir_text = self.settings.align_output_custom_dir.strip()
         if self.settings.align_target == ALIGN_TARGET_AUDIO:
             self.align_target_audio_radio.setChecked(True)
         else:
@@ -5323,6 +5333,8 @@ class KrokHelperQtApp(QMainWindow):
             self.settings.align_force_1080p60 = self.align_force_1080p60_check.isChecked()
         if hasattr(self, "align_use_video_audio_check"):
             self.settings.align_export_use_video_audio = self.align_use_video_audio_check.isChecked()
+        self.settings.align_output_dir_mode = self.align_output_dir_mode_value
+        self.settings.align_output_custom_dir = self.align_output_custom_dir_text
 
     def _sync_ffmpeg_labels(self) -> None:
         self.hires_ffmpeg_label.setText(self.ffmpeg_dir_text or FFMPEG_DIR_PLACEHOLDER)
@@ -5434,6 +5446,12 @@ class KrokHelperQtApp(QMainWindow):
     def set_output_name_templates(self, on_template: str, off_template: str) -> None:
         self.on_name_template_value = on_template
         self.off_name_template_value = off_template
+
+    def set_alignment_output_dir_settings(self, mode: str, custom_dir: str) -> None:
+        if mode not in {ALIGN_OUTPUT_DIR_SOURCE_VIDEO, ALIGN_OUTPUT_DIR_CUSTOM}:
+            raise ProcessingError("对齐输出位置无效，请重新选择。")
+        self.align_output_dir_mode_value = mode
+        self.align_output_custom_dir_text = custom_dir.strip()
 
     def _choose_video(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "选择字幕视频", "", "视频文件 (*.mkv *.mp4 *.mov *.avi);;所有文件 (*.*)")
@@ -5605,6 +5623,69 @@ class KrokHelperQtApp(QMainWindow):
             naming_layout.addWidget(naming_help_2, 4, 1)
             naming_layout.setColumnStretch(1, 1)
             shell.addWidget(naming_panel)
+
+            output_panel = QFrame()
+            output_panel.setObjectName("WhitePanel")
+            output_layout = QGridLayout(output_panel)
+            output_layout.setContentsMargins(14, 14, 14, 14)
+            output_layout.setHorizontalSpacing(10)
+            output_layout.setVerticalSpacing(10)
+            output_title = QLabel("对齐导出位置")
+            output_title.setObjectName("PanelTitle")
+            output_mode_group = QButtonGroup(dialog)
+            output_source_radio = QRadioButton("保存在字幕视频所在目录")
+            output_custom_radio = QRadioButton("保存在指定目录")
+            output_mode_group.addButton(output_source_radio)
+            output_mode_group.addButton(output_custom_radio)
+            if self.align_output_dir_mode_value == ALIGN_OUTPUT_DIR_CUSTOM:
+                output_custom_radio.setChecked(True)
+            else:
+                output_source_radio.setChecked(True)
+            output_dir_edit = QLineEdit(dialog)
+            output_dir_edit.setReadOnly(True)
+            output_dir_edit.setPlaceholderText("点击选择保存文件夹")
+            output_dir_edit.setText(self.align_output_custom_dir_text)
+            output_dir_button = QPushButton("选择文件夹")
+
+            def choose_align_output_dir() -> None:
+                init_dir = output_dir_edit.text().strip()
+                if not init_dir and self.align_video_zone.path is not None:
+                    init_dir = str(self.align_video_zone.path.parent)
+                if not init_dir:
+                    init_dir = str(Path.home())
+                path = QFileDialog.getExistingDirectory(dialog, "选择对齐导出保存目录", init_dir)
+                if path:
+                    output_dir_edit.setText(path)
+                    output_custom_radio.setChecked(True)
+                    sync_align_output_dir_enabled()
+
+            def sync_align_output_dir_enabled() -> None:
+                enabled = output_custom_radio.isChecked()
+                output_dir_edit.setEnabled(enabled)
+                output_dir_button.setEnabled(enabled)
+
+            output_source_radio.toggled.connect(lambda _checked: sync_align_output_dir_enabled())
+            output_custom_radio.toggled.connect(lambda _checked: sync_align_output_dir_enabled())
+            output_dir_button.clicked.connect(choose_align_output_dir)
+            output_dir_edit.mousePressEvent = lambda event: choose_align_output_dir() if output_custom_radio.isChecked() else None
+            sync_align_output_dir_enabled()
+
+            output_help = QLabel("导出时会以这里作为另存为窗口的默认目录。")
+            from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
+            _wb_th(output_help, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
+            output_dir_row = QHBoxLayout()
+            output_dir_row.setContentsMargins(0, 0, 0, 0)
+            output_dir_row.setSpacing(8)
+            output_dir_row.addWidget(output_dir_edit, 1)
+            output_dir_row.addWidget(output_dir_button)
+            output_layout.addWidget(output_title, 0, 0)
+            output_layout.addWidget(output_source_radio, 1, 1)
+            output_layout.addWidget(output_custom_radio, 2, 1)
+            output_layout.addWidget(QLabel("指定目录"), 3, 0)
+            output_layout.addLayout(output_dir_row, 3, 1)
+            output_layout.addWidget(output_help, 4, 1)
+            output_layout.setColumnStretch(1, 1)
+            shell.addWidget(output_panel)
         else:
             naming_panel = QFrame()
             naming_panel.setObjectName("WhitePanel")
@@ -5668,9 +5749,17 @@ class KrokHelperQtApp(QMainWindow):
                 off_template = self.off_name_template_value
                 align_video_template = self.align_video_name_template_value
                 align_audio_template = self.align_audio_name_template_value
+                align_output_dir_mode = self.align_output_dir_mode_value
+                align_output_custom_dir = self.align_output_custom_dir_text
                 if context == "align":
                     align_video_template = video_template_edit.text().strip() or DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
                     align_audio_template = audio_template_edit.text().strip() or DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE
+                    align_output_dir_mode = (
+                        ALIGN_OUTPUT_DIR_CUSTOM
+                        if output_custom_radio.isChecked()
+                        else ALIGN_OUTPUT_DIR_SOURCE_VIDEO
+                    )
+                    align_output_custom_dir = output_dir_edit.text().strip()
                 else:
                     mode = OUTPUT_NAME_MODE_TEMPLATE if template_radio.isChecked() else OUTPUT_NAME_MODE_FIXED
                     on_template = on_template_edit.text().strip() or DEFAULT_ON_NAME_TEMPLATE
@@ -5682,6 +5771,8 @@ class KrokHelperQtApp(QMainWindow):
                     off_template=off_template,
                     align_video_template=align_video_template,
                     align_audio_template=align_audio_template,
+                    align_output_dir_mode=align_output_dir_mode,
+                    align_output_custom_dir=align_output_custom_dir,
                     ffmpeg_dir_text=self.ffmpeg_dir_text,
                 )
             except ProcessingError as exc:
@@ -6480,11 +6571,23 @@ class KrokHelperQtApp(QMainWindow):
         off_template: str,
         align_video_template: str,
         align_audio_template: str,
+        align_output_dir_mode: str,
+        align_output_custom_dir: str,
         ffmpeg_dir_text: str,
     ) -> Path:
         ffmpeg_dir = Path(ffmpeg_dir_text).expanduser() if ffmpeg_dir_text.strip() else None
         if ffmpeg_dir is not None and not ffmpeg_dir.is_dir():
             raise ProcessingError("所选 ffmpeg 目录无效，请重新选择。")
+        if align_output_dir_mode not in {ALIGN_OUTPUT_DIR_SOURCE_VIDEO, ALIGN_OUTPUT_DIR_CUSTOM}:
+            raise ProcessingError("对齐输出位置无效，请重新选择。")
+        align_output_dir = (
+            Path(align_output_custom_dir).expanduser() if align_output_custom_dir.strip() else None
+        )
+        if align_output_dir_mode == ALIGN_OUTPUT_DIR_CUSTOM:
+            if align_output_dir is None:
+                raise ProcessingError("请选择对齐导出的保存目录。")
+            if not align_output_dir.is_dir():
+                raise ProcessingError("所选对齐导出目录无效，请重新选择。")
 
         if output_name_mode not in {OUTPUT_NAME_MODE_FIXED, OUTPUT_NAME_MODE_TEMPLATE}:
             raise ProcessingError("输出命名模式无效，请重新选择。")
@@ -6510,6 +6613,10 @@ class KrokHelperQtApp(QMainWindow):
         self.off_name_template_value = off_template
         self.align_video_name_template_value = align_video_template
         self.align_audio_name_template_value = align_audio_template
+        self.set_alignment_output_dir_settings(
+            align_output_dir_mode,
+            str(align_output_dir) if align_output_dir is not None else "",
+        )
         self.ffmpeg_dir_text = str(ffmpeg_dir) if ffmpeg_dir else ""
         self._sync_ffmpeg_labels()
         self.settings.output_name_mode = self.output_name_mode_value
@@ -7333,6 +7440,17 @@ class KrokHelperQtApp(QMainWindow):
         self._append_align_log("播放预览结束")
         self._refresh_alignment_preview_controls()
 
+    def _resolve_alignment_output_dir(self, video_path: Path) -> Path:
+        if self.align_output_dir_mode_value == ALIGN_OUTPUT_DIR_CUSTOM:
+            custom_dir = self.align_output_custom_dir_text.strip()
+            if not custom_dir:
+                raise ProcessingError("请先在波形对齐设置中选择对齐导出的保存目录。")
+            output_dir = Path(custom_dir).expanduser()
+            if not output_dir.is_dir():
+                raise ProcessingError("波形对齐设置中的保存目录无效，请重新选择。")
+            return output_dir
+        return video_path.parent
+
     def _render_alignment_output_path(
         self,
         *,
@@ -7355,8 +7473,7 @@ class KrokHelperQtApp(QMainWindow):
         invalid_chars = sorted({char for char in stem if char in WINDOWS_INVALID_FILENAME_CHARS})
         if invalid_chars:
             raise ProcessingError(f"文件名包含非法字符: {' '.join(invalid_chars)}")
-        source_path = video_path if is_video_target else audio_path
-        return source_path.with_name(f"{stem}{extension}")
+        return self._resolve_alignment_output_dir(video_path) / f"{stem}{extension}"
 
     def _start_aligned_export(self) -> None:
         if self.align_export_task is not None and self.align_export_task.isRunning():
@@ -7509,11 +7626,16 @@ class KrokHelperQtApp(QMainWindow):
         self.align_status_label.setText("准备生成波形")
 
     def _open_align_output_dir(self) -> None:
-        source_path = self.align_audio_zone.path or self.align_video_zone.path
+        video_path = self.align_video_zone.path
+        source_path = video_path or self.align_audio_zone.path
         if source_path is None:
             QMessageBox.information(self, APP_TITLE, "请先选择文件。")
             return
-        output_dir = source_path.parent
+        try:
+            output_dir = self._resolve_alignment_output_dir(video_path) if video_path is not None else source_path.parent
+        except ProcessingError as exc:
+            QMessageBox.critical(self, APP_TITLE, str(exc))
+            return
         output_dir.mkdir(parents=True, exist_ok=True)
         open_in_explorer(output_dir)
 

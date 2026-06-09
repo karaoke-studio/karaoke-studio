@@ -51,6 +51,8 @@ def test_save_includes_waveform_alignment_choice_fields(tmp_path, monkeypatch) -
             align_target="audio",
             align_encode_mode="hardware",
             align_force_1080p60=True,
+            align_output_dir_mode="custom",
+            align_output_custom_dir="D:/Aligned",
         )
     )
 
@@ -58,6 +60,8 @@ def test_save_includes_waveform_alignment_choice_fields(tmp_path, monkeypatch) -
     assert payload["align_target"] == "audio"
     assert payload["align_encode_mode"] == "hardware"
     assert payload["align_force_1080p60"] is True
+    assert payload["align_output_dir_mode"] == "custom"
+    assert payload["align_output_custom_dir"] == "D:/Aligned"
 
 
 def test_load_with_unknown_keys_doesnt_crash(tmp_path, monkeypatch) -> None:
@@ -85,7 +89,14 @@ def test_load_falls_back_to_legacy_karaoke_helper_settings(tmp_path, monkeypatch
 def test_load_invalid_waveform_alignment_choices_falls_back(tmp_path, monkeypatch) -> None:
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(
-        json.dumps({"align_target": "bad", "align_encode_mode": "bad", "align_force_1080p60": True}),
+        json.dumps(
+            {
+                "align_target": "bad",
+                "align_encode_mode": "bad",
+                "align_force_1080p60": True,
+                "align_output_dir_mode": "bad",
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setattr("krok_helper.settings.get_settings_path", lambda: settings_path)
@@ -95,3 +106,4 @@ def test_load_invalid_waveform_alignment_choices_falls_back(tmp_path, monkeypatc
     assert settings.align_target == "video"
     assert settings.align_encode_mode == "software"
     assert settings.align_force_1080p60 is True
+    assert settings.align_output_dir_mode == "source_video"
