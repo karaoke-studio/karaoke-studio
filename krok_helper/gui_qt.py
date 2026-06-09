@@ -1083,6 +1083,7 @@ class WorkflowStepButton(QWidget):
         self.index = index
         self._active = False
         self._hovered = False
+        self._compact = False
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(60)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -1093,18 +1094,18 @@ class WorkflowStepButton(QWidget):
         outer_layout.setContentsMargins(0, 0, 0, 0)
         outer_layout.setSpacing(0)
 
-        layout = QHBoxLayout()
-        layout.setContentsMargins(18, 10, 18, 8)
-        layout.setSpacing(10)
+        self._content_layout = QHBoxLayout()
+        self._content_layout.setContentsMargins(18, 10, 18, 8)
+        self._content_layout.setSpacing(10)
 
         self.number_label = QLabel(str(step.number))
         self.number_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.number_label.setFixedSize(32, 32)
         self.number_label.setObjectName("WorkflowStepNumber")
 
-        text_layout = QVBoxLayout()
-        text_layout.setContentsMargins(0, 0, 0, 0)
-        text_layout.setSpacing(1)
+        self._text_layout = QVBoxLayout()
+        self._text_layout.setContentsMargins(0, 0, 0, 0)
+        self._text_layout.setSpacing(1)
 
         self.title_label = QLabel(step.title)
         self.title_label.setObjectName("WorkflowStepTitle")
@@ -1116,12 +1117,12 @@ class WorkflowStepButton(QWidget):
         self.bottom_line.setFixedHeight(2)
         self.bottom_line.hide()
 
-        text_layout.addWidget(self.title_label)
-        text_layout.addWidget(self.desc_label)
+        self._text_layout.addWidget(self.title_label)
+        self._text_layout.addWidget(self.desc_label)
 
-        layout.addWidget(self.number_label, 0, Qt.AlignmentFlag.AlignVCenter)
-        layout.addLayout(text_layout, 1)
-        outer_layout.addLayout(layout)
+        self._content_layout.addWidget(self.number_label, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._content_layout.addLayout(self._text_layout, 1)
+        outer_layout.addLayout(self._content_layout)
         outer_layout.addWidget(self.bottom_line)
         self._refresh_style()
         # 跟随主题切换重刷颜色 —— 延迟到下个 event loop iter 避免与 SUG
@@ -1141,6 +1142,29 @@ class WorkflowStepButton(QWidget):
             return
         self._active = active
         self._refresh_style()
+
+    def setCompact(self, compact: bool) -> None:
+        if self._compact == compact:
+            return
+        self._compact = compact
+        self._apply_compact_layout()
+        self._refresh_style()
+
+    def _apply_compact_layout(self) -> None:
+        # 紧凑模式：只藏副标题，编号 + 标题都保留 → 整条像 ①视频下载 ②波形对齐 …
+        if self._compact:
+            self.setFixedHeight(32)
+            self._content_layout.setContentsMargins(10, 2, 10, 2)
+            self._content_layout.setSpacing(6)
+            self.number_label.setFixedSize(22, 22)
+            self.desc_label.hide()
+        else:
+            self.setFixedHeight(60)
+            self._content_layout.setContentsMargins(18, 10, 18, 8)
+            self._content_layout.setSpacing(10)
+            self.number_label.setFixedSize(32, 32)
+            self.desc_label.show()
+        self.title_label.setVisible(True)
 
     def enterEvent(self, event) -> None:  # noqa: N802
         self._hovered = True
@@ -1208,6 +1232,11 @@ class WorkflowStepButton(QWidget):
             number_color = _num_text
             number_border = _num_border
 
+        # 紧凑模式下编号圆点缩到 22px（对应 radius 11、字号 11），同时把活跃步标题字号收一档
+        number_radius = 11 if self._compact else 16
+        number_font_size = 11 if self._compact else 12
+        title_font_size = 13 if self._compact else 14
+
         self.setStyleSheet(
             f"""
             QWidget#WorkflowStepItem {{
@@ -1218,14 +1247,14 @@ class WorkflowStepButton(QWidget):
             QLabel#WorkflowStepNumber {{
                 background: {number_background};
                 border: 1px solid {number_border};
-                border-radius: 16px;
+                border-radius: {number_radius}px;
                 color: {number_color};
-                font-size: 12px;
+                font-size: {number_font_size}px;
                 font-weight: 700;
             }}
             QLabel#WorkflowStepTitle {{
                 color: {title_color};
-                font-size: 14px;
+                font-size: {title_font_size}px;
                 font-weight: 700;
             }}
             QLabel#WorkflowStepDescription {{
@@ -1239,7 +1268,8 @@ class WorkflowStepButton(QWidget):
             }}
             """
         )
-        self.bottom_line.setVisible(self._active)
+        # 紧凑模式下不显示底部下划线，避免活跃步的下划线把窄行撑出 2px 错位
+        self.bottom_line.setVisible(self._active and not self._compact)
 
 
 class WorkflowStepper(QWidget):
@@ -1250,7 +1280,9 @@ class WorkflowStepper(QWidget):
         super().__init__(parent)
         self._steps = steps
         self._items: list[WorkflowStepButton] = []
+        self._separators: list[QLabel] = []
         self._current_index = 0
+        self._compact = False
         self.setObjectName("WorkflowStepper")
 
         self._layout = QHBoxLayout(self)
@@ -1265,9 +1297,15 @@ class WorkflowStepper(QWidget):
                 separator = QLabel("›")
                 separator.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 from krok_helper.theme_workbench import palette as _wb_palette, themed as _wb_themed
-                _wb_themed(separator, lambda: f"color: {_wb_palette().text_disabled}; font-size: 18px; font-weight: 500;")
+                # 用闭包 + self 引用，避免主题切换覆盖紧凑模式下缩小的字号
+                _wb_themed(
+                    separator,
+                    lambda _s=self: f"color: {_wb_palette().text_disabled}; "
+                    f"font-size: {12 if _s._compact else 18}px; font-weight: 500;",
+                )
                 separator.setFixedWidth(24)
                 self._layout.addWidget(separator, 0, Qt.AlignmentFlag.AlignVCenter)
+                self._separators.append(separator)
 
         self.updateStepStyles()
 
@@ -1304,6 +1342,25 @@ class WorkflowStepper(QWidget):
 
     def updateStyles(self) -> None:
         self.updateStepStyles()
+
+    def isCompact(self) -> bool:
+        return self._compact
+
+    def setCompact(self, compact: bool) -> None:
+        if self._compact == compact:
+            return
+        self._compact = compact
+        for item in self._items:
+            item.setCompact(compact)
+        # 分隔符 › 的字号在它的 themed 闭包里读 self._compact，这里只要重跑 QSS
+        from krok_helper.theme_workbench import palette as _wb_palette
+        sep_width = 12 if compact else 24
+        for sep in self._separators:
+            sep.setFixedWidth(sep_width)
+            sep.setStyleSheet(
+                f"color: {_wb_palette().text_disabled}; "
+                f"font-size: {12 if compact else 18}px; font-weight: 500;"
+            )
 
     def _handleStepClicked(self, index: int) -> None:
         self.stepClicked.emit(index)
@@ -2402,26 +2459,35 @@ class KrokHelperQtApp(QMainWindow):
         self.workflow_stepper = WorkflowStepper(WORKFLOW_STEPS, self)
         self.workflow_stepper.stepClicked.connect(self._handle_workflow_step_clicked)
 
-        workflow_bar = CardWidget(radius=10, padding=(12, 8, 12, 8), spacing=0)
-        workflow_bar.setObjectName("WorkflowBar")
-        workflow_bar.setFixedHeight(80)
-        workflow_bar_layout = workflow_bar.createHBoxLayout()
-        workflow_bar_layout.setContentsMargins(10, 8, 10, 8)
-        workflow_bar_layout.setSpacing(10)
-        workflow_bar_layout.addWidget(self.workflow_stepper, 1)
+        self.workflow_bar = CardWidget(radius=10, padding=(12, 8, 12, 8), spacing=0)
+        self.workflow_bar.setObjectName("WorkflowBar")
+        self.workflow_bar.setFixedHeight(80)
+        self._workflow_bar_layout = self.workflow_bar.createHBoxLayout()
+        self._workflow_bar_layout.setContentsMargins(10, 8, 10, 8)
+        self._workflow_bar_layout.setSpacing(10)
+        self._workflow_bar_layout.addWidget(self.workflow_stepper, 1)
+
+        # 折叠/展开按钮：紧凑模式 ↔ 完整模式的开关，状态持久化到 settings.workflow_compact
+        self.workflow_compact_button = ToolButton(FIF.UP)
+        self.workflow_compact_button.setObjectName("WorkflowCompactButton")
+        self.workflow_compact_button.setFixedSize(48, 48)
+        self.workflow_compact_button.setIconSize(QSize(16, 16))
+        self.workflow_compact_button.clicked.connect(self._toggle_workflow_compact)
+        self._workflow_bar_layout.addWidget(self.workflow_compact_button, 0, Qt.AlignmentFlag.AlignVCenter)
+
         self.global_settings_button = ToolButton(FIF.SETTING)
         self.global_settings_button.setObjectName("GlobalSettingsButton")
         self.global_settings_button.setToolTip("全局设置")
         self.global_settings_button.setFixedSize(48, 48)
         self.global_settings_button.setIconSize(QSize(20, 20))
         self.global_settings_button.clicked.connect(self._open_global_settings_window)
-        workflow_bar_layout.addWidget(self.global_settings_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        self._workflow_bar_layout.addWidget(self.global_settings_button, 0, Qt.AlignmentFlag.AlignVCenter)
 
         workflow_bar_container = QWidget()
         workflow_bar_shell = QVBoxLayout(workflow_bar_container)
         workflow_bar_shell.setContentsMargins(24, 20, 24, 0)
         workflow_bar_shell.setSpacing(0)
-        workflow_bar_shell.addWidget(workflow_bar)
+        workflow_bar_shell.addWidget(self.workflow_bar)
 
         self.page_stack = QStackedWidget()
         self.page_stack.setObjectName("PageStack")
@@ -2469,6 +2535,7 @@ class KrokHelperQtApp(QMainWindow):
         shell.addWidget(page_stack_container, 1)
         self.setCentralWidget(central)
         self.statusBar().hide()
+        self._apply_workflow_compact(bool(self.settings.workflow_compact))
         self._show_module(WORKFLOW_VIDEO_DOWNLOAD)
 
     def _show_module(self, module_id: str) -> None:
@@ -2501,6 +2568,41 @@ class KrokHelperQtApp(QMainWindow):
 
     def _handle_workflow_step_clicked(self, index: int) -> None:
         self._show_module(self.workflow_stepper.moduleIdAt(index))
+
+    def _toggle_workflow_compact(self) -> None:
+        new_state = not bool(self.settings.workflow_compact)
+        self._apply_workflow_compact(new_state)
+        self.settings.workflow_compact = new_state
+        try:
+            self._save_all_settings()
+        except Exception:
+            import logging
+            logging.getLogger(__name__).warning("保存 workflow_compact 失败", exc_info=True)
+
+    def _apply_workflow_compact(self, compact: bool) -> None:
+        # 紧凑模式：bar 高度 80 → 44；同时收紧 bar 内边距、缩小右上角两个 48px 工具按钮，
+        # 否则 48 高的按钮会撑爆 44 高的 bar。stepper 自己负责步条内部缩小。
+        if not hasattr(self, "workflow_stepper"):
+            return
+        self.workflow_stepper.setCompact(compact)
+        self.workflow_bar.setFixedHeight(44 if compact else 80)
+        if hasattr(self, "_workflow_bar_layout") and self._workflow_bar_layout is not None:
+            if compact:
+                self._workflow_bar_layout.setContentsMargins(8, 4, 8, 4)
+                self._workflow_bar_layout.setSpacing(6)
+            else:
+                self._workflow_bar_layout.setContentsMargins(10, 8, 10, 8)
+                self._workflow_bar_layout.setSpacing(10)
+        button_size = 32 if compact else 48
+        icon_size = QSize(14, 14) if compact else QSize(20, 20)
+        if hasattr(self, "global_settings_button"):
+            self.global_settings_button.setFixedSize(button_size, button_size)
+            self.global_settings_button.setIconSize(icon_size)
+        if hasattr(self, "workflow_compact_button"):
+            self.workflow_compact_button.setFixedSize(button_size, button_size)
+            self.workflow_compact_button.setIconSize(QSize(12, 12) if compact else QSize(16, 16))
+            self.workflow_compact_button.setIcon(FIF.DOWN if compact else FIF.UP)
+            self.workflow_compact_button.setToolTip("展开工作流栏" if compact else "折叠工作流栏")
 
     def _save_all_settings(self) -> Path:
         self.settings.output_name_mode = self.output_name_mode_value

@@ -73,6 +73,11 @@ class AppSettings:
     # ``load_app_settings`` 中 fallback 到 ``auto`` 并 warn。
     ui_theme: str = UI_THEME_AUTO
 
+    # ── 顶部工作流栏紧凑模式 ──
+    # True 时把 6 步切换条折叠成一条窄行（只剩编号 + 当前步骤名），所有步骤仍可点。
+    # 全局开关（不分页面），用户在工作流栏右上角的折叠按钮里手动切换并持久化。
+    workflow_compact: bool = False
+
     # ── 歌词打轴模块（StrangeUtaGame）的设置 namespace ──
     # 由 frontend/settings/app_settings.py 中 AppSettings 的 dotted-key 树
     # 序列化/反序列化得来，宿主直接以 dict 形式持久化；StrangeUtaGame
@@ -220,6 +225,7 @@ def load_app_settings() -> AppSettings:
         lyrics_timing_singers=_safe_list(payload.get("lyrics_timing_singers")),
         lyrics_timing_network_dictionary=_safe_dict(payload.get("lyrics_timing_network_dictionary")),
         lyrics_timing_migrated_v1=bool(payload.get(LYRICS_TIMING_MIGRATED_KEY, False)),
+        workflow_compact=bool(payload.get("workflow_compact", False)),
     )
 
 
