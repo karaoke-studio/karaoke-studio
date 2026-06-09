@@ -15,6 +15,20 @@ from krok_helper.lyrics import (
 from strange_uta_game.frontend.editor.timing.lyric_loader import detect_lyric_format, parse_lyric_content
 
 
+class _FakeSettings:
+    def __init__(self, entries: list[dict]):
+        self._entries = entries
+
+    def get_all(self) -> dict:
+        return {"auto_check": {}}
+
+    def get(self, _key: str, default=None):
+        return default
+
+    def load_effective_dictionary(self) -> list[dict]:
+        return self._entries
+
+
 def test_parse_utaten_search_results() -> None:
     html = """
     <table class="searchResult artistLyricList">
@@ -160,6 +174,49 @@ def test_sug_distributes_utaten_ruby_per_kanji_sekai_dict_split() -> None:
     assert chars[1].ruby is not None and chars[1].ruby.text == "かい"
     assert chars[0].linked_to_next is False
     assert chars[1].linked_to_next is False
+
+
+def test_sug_aligns_utaten_ruby_with_user_dictionary_kotoba() -> None:
+    # Utaten 的读音仍用「ことば」，但是否拆词/连词要复用正常 SUG 导入时的用户词典。
+    settings = _FakeSettings([{"enabled": True, "word": "言葉", "reading": "こと,ば"}])
+    content = "\n".join(
+        [
+            UTATEN_RUBY_MARKER,
+            "[ti:Frozen]",
+            "{言葉||ことば}にできず凍えたままで",
+        ]
+    )
+
+    sentences, *_ = parse_lyric_content(content, "singer-1", setting_iface=settings)
+    chars = sentences[0].characters
+    assert chars[0].ruby is not None and chars[0].ruby.text == "こと"
+    assert chars[1].ruby is not None and chars[1].ruby.text == "ば"
+    assert chars[0].check_count == 2
+    assert chars[1].check_count == 1
+    assert chars[0].linked_to_next is False
+    assert chars[1].linked_to_next is False
+
+
+def test_sug_aligns_utaten_ruby_with_user_dictionary_koburi() -> None:
+    settings = _FakeSettings([{"enabled": True, "word": "小降", "reading": "こ,ぶ"}])
+    content = "\n".join(
+        [
+            UTATEN_RUBY_MARKER,
+            "[ti:Rain]",
+            "きみの町じゃもう雨は{小降||こぶ}りになる",
+        ]
+    )
+
+    sentences, *_ = parse_lyric_content(content, "singer-1", setting_iface=settings)
+    chars = sentences[0].characters
+    text = "".join(ch.char for ch in chars)
+    start = text.index("小")
+    assert chars[start].ruby is not None and chars[start].ruby.text == "こ"
+    assert chars[start + 1].ruby is not None and chars[start + 1].ruby.text == "ぶ"
+    assert chars[start].check_count == 1
+    assert chars[start + 1].check_count == 1
+    assert chars[start].linked_to_next is False
+    assert chars[start + 1].linked_to_next is False
 
 
 def test_build_lyrics_preview_preserves_utaten_marker_with_strip_intro() -> None:
