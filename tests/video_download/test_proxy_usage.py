@@ -50,6 +50,7 @@ def test_ytdlp_cli_extract_uses_global_proxy(monkeypatch) -> None:
     command = captured["command"]
     assert isinstance(command, list)
     assert command[1:3] == ["--proxy", "http://127.0.0.1:7890"]
+    assert command[command.index("-f") + 1] == "best"
     env = captured["env"]
     assert isinstance(env, dict)
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:7890"
