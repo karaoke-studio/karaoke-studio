@@ -416,10 +416,20 @@ def _filter_against_schema(
     schema: dict,
     prefix: str,
 ) -> tuple[dict, list[str]]:
-    """递归按 ``schema`` 过滤 ``payload`` 的未知 key；返回（保留下的 dict，被丢弃 key 列表）。
+    """按 ``schema`` 的**顶层 namespace** 过滤 ``payload``；返回（保留的 dict，丢弃的 key 列表）。
 
-    schema 为空 dict 视为「无 schema 信息」→ 整体放行（用于 submodule 加载失败兜底）。
-    schema 的非 dict 叶子表示「此处期望任意值」→ 整 subtree 直接放行。
+    只比对顶层 key：``audio`` / ``ui`` / ``timing`` / ``export`` / ``shortcuts`` 这些
+    namespace 在 SUG 里是稳定的，``DEFAULT_SETTINGS`` 都有声明；但 namespace **内部**
+    的子键并不全部出现在 ``DEFAULT_SETTINGS`` 里——SUG 大量运行时通过
+    ``s.get("ui.current_line_font_size", 22)`` 这种「裸 key + 硬编码默认值」读取
+    未在 schema 中声明的合法值。递归过滤会把这些当作未知项丢掉，导致用户从老版本
+    standalone SUG 导入的字体大小、间距、行高系数等界面设置全部失效。
+
+    因此只在顶层做白名单：未知顶层 namespace（如老版本残留或写坏的 JSON）会被丢掉
+    并记入 report；已知 namespace 整个 subtree 透传，把判断子键是否合法的责任交回
+    SUG 运行时（不认识的 key 也只是不被 ``get()`` 读到而已）。
+
+    schema 为空 dict（submodule 加载失败兜底）→ 整体放行。
     """
     if not schema:
         return deepcopy(payload), []
@@ -427,18 +437,10 @@ def _filter_against_schema(
     kept: dict = {}
     dropped: list[str] = []
     for key, value in payload.items():
-        path = f"{prefix}.{key}" if prefix else key
-        if key not in schema:
-            dropped.append(path)
-            continue
-        schema_value = schema[key]
-        if isinstance(schema_value, dict) and isinstance(value, dict):
-            sub_kept, sub_dropped = _filter_against_schema(value, schema_value, path)
-            kept[key] = sub_kept
-            dropped.extend(sub_dropped)
-        else:
-            # 叶子或类型不一致 → 整值放行（SUG 自己运行时 get() 会做类型兜底）
+        if key in schema:
             kept[key] = deepcopy(value)
+        else:
+            dropped.append(f"{prefix}.{key}" if prefix else key)
     return kept, dropped
 
 

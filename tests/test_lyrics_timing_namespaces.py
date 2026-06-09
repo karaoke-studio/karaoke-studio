@@ -171,7 +171,14 @@ def test_import_legacy_sug_settings_filters_unknown_keys_and_merges_lists(tmp_pa
     (legacy_dir / "config.json").write_text(
         json.dumps(
             {
-                "audio": {"default_volume": 55, "totally_fake_setting": 999},
+                # ``current_line_font_size`` 等是 SUG 实际使用、但未在 DEFAULT_SETTINGS 中
+                # 声明的运行时 key——必须透传，否则用户从老版导入的 UI 字号/间距全失效。
+                "ui": {
+                    "current_line_font_size": 24,
+                    "ruby_size": 11,
+                    "line_height_factor": 0.9,
+                },
+                "audio": {"default_volume": 55},
                 "an_unknown_top_level_namespace": {"x": 1},
                 "export": {"default_format": "Nicokara (带注音)"},
             },
@@ -210,12 +217,14 @@ def test_import_legacy_sug_settings_filters_unknown_keys_and_merges_lists(tmp_pa
     )
     report = import_legacy_sug_settings(legacy_dir, settings)
 
-    # 主 config：已知 key 保留、未知 key 被过滤
+    # 主 config：已知顶层 namespace 整 subtree 透传（含未在 DEFAULT_SETTINGS 声明的子键），
+    # 未知顶层 namespace 被过滤
     assert settings.lyrics_timing["audio"]["default_volume"] == 55
-    assert "totally_fake_setting" not in settings.lyrics_timing["audio"]
+    assert settings.lyrics_timing["ui"]["current_line_font_size"] == 24
+    assert settings.lyrics_timing["ui"]["ruby_size"] == 11
+    assert settings.lyrics_timing["ui"]["line_height_factor"] == 0.9
     assert "an_unknown_top_level_namespace" not in settings.lyrics_timing
     assert settings.lyrics_timing["export"]["default_format"] == "Nicokara (带注音)"
-    assert "audio.totally_fake_setting" in report["skipped_unknown_keys"]
     assert "an_unknown_top_level_namespace" in report["skipped_unknown_keys"]
 
     # 列表合并：host 已有 word="猫" 不被旧版覆盖，犬 是新增
