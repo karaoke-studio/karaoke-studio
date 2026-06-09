@@ -56,6 +56,30 @@ def test_ytdlp_cli_extract_uses_global_proxy(monkeypatch) -> None:
     assert env["HTTPS_PROXY"] == "http://127.0.0.1:7890"
 
 
+def test_ytdlp_cli_extract_does_not_force_best_for_bilibili(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+    service = YtDlpService()
+    monkeypatch.setattr(service, "_find_ytdlp_cli", lambda: "yt-dlp")
+
+    def fake_run(command, **kwargs):
+        del kwargs
+        captured["command"] = command
+        return subprocess.CompletedProcess(
+            command,
+            0,
+            stdout=json.dumps({"title": "ok", "duration": 1, "formats": []}),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    service._extract_info_with_cli("https://www.bilibili.com/video/BV1abc")
+
+    command = captured["command"]
+    assert isinstance(command, list)
+    assert "-f" not in command
+
+
 def test_ytdlp_cli_extract_ignores_invalid_cookie_file(monkeypatch, tmp_path) -> None:
     captured: dict[str, object] = {}
     cookie_file = tmp_path / "youtube_cookies.txt"

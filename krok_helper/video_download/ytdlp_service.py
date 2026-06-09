@@ -346,9 +346,10 @@ class YtDlpService:
             "no_warnings": True,
             "noplaylist": not allow_playlist,
             "skip_download": True,
-            "format": "best",
             "logger": _QuietYtDlpLogger(),
         }
+        if self.detect_source(url) == SOURCE_YOUTUBE:
+            ydl_opts["format"] = "best"
         usable_cookie_file = "" if self._hint_disables_cookies(extractor_args_hint) else self._usable_cookie_file(cookie_file)
         if usable_cookie_file:
             ydl_opts["cookiefile"] = usable_cookie_file
@@ -425,13 +426,13 @@ class YtDlpService:
             self._find_ytdlp_cli(),
             "--dump-single-json",
             "--skip-download",
-            "-f",
-            "best",
             "--yes-playlist" if allow_playlist else "--no-playlist",
             "--no-warnings",
             "--no-update",
             url,
         ]
+        if self.detect_source(url) == SOURCE_YOUTUBE:
+            command[1:1] = ["-f", "best"]
         stripped_extractor_args_hint = self._strip_hint_flags(extractor_args_hint)
         if stripped_extractor_args_hint:
             command[1:1] = ["--extractor-args", stripped_extractor_args_hint]
