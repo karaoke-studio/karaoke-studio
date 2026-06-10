@@ -27,6 +27,8 @@ ALIGN_TARGET_AUDIO = "audio"
 ALIGN_OUTPUT_DIR_SOURCE_VIDEO = "source_video"
 ALIGN_OUTPUT_DIR_CUSTOM = "custom"
 LEGACY_APP_NAMES = ("Karaoke Helper",)
+SETTINGS_DIR_ENV = "KARAOKE_STUDIO_SETTINGS_DIR"
+SETTINGS_APP_NAME_ENV = "KARAOKE_STUDIO_SETTINGS_APP_NAME"
 
 # 工作台界面主题：跟随系统 / 强制浅色 / 强制深色。
 # 与 SUG ``frontend/theme.py::ThemeMode`` 对应。新值必须同步两边。
@@ -108,7 +110,12 @@ def _settings_path_for_app_name(app_name: str) -> Path:
 
 
 def get_settings_path() -> Path:
-    return _settings_path_for_app_name(APP_NAME)
+    settings_dir = os.getenv(SETTINGS_DIR_ENV)
+    if settings_dir:
+        return Path(settings_dir).expanduser() / SETTINGS_FILE_NAME
+
+    app_name = os.getenv(SETTINGS_APP_NAME_ENV, APP_NAME).strip() or APP_NAME
+    return _settings_path_for_app_name(app_name)
 
 
 def get_legacy_settings_paths() -> list[Path]:

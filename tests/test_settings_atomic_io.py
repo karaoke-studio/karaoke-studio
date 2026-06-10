@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -120,3 +121,38 @@ def test_load_does_not_emit_backup_for_missing_file(tmp_path: Path):
     backups = list((tmp_path / "Karaoke Studio").glob("settings.json.corrupt-*")) if (tmp_path / "Karaoke Studio").exists() else []
     assert backups == []
     assert consume_corruption_backup() is None
+
+
+def test_settings_app_name_env_uses_separate_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_APP_NAME", "Karaoke Studio Dev")
+
+    save_app_settings(AppSettings(ffmpeg_dir="D:/dev-ffmpeg"))
+
+    dev_settings = tmp_path / "Karaoke Studio Dev" / "settings.json"
+    release_settings = tmp_path / "Karaoke Studio" / "settings.json"
+    assert dev_settings.is_file()
+    assert not release_settings.exists()
+    assert load_app_settings().ffmpeg_dir == "D:/dev-ffmpeg"
+
+
+def test_settings_dir_env_overrides_app_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    custom_dir = tmp_path / "custom-settings"
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_APP_NAME", "Karaoke Studio Dev")
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(custom_dir))
+
+    save_app_settings(AppSettings(ffmpeg_dir="D:/custom-ffmpeg"))
+
+    assert (custom_dir / "settings.json").is_file()
+    assert not (tmp_path / "Karaoke Studio Dev" / "settings.json").exists()
+    assert load_app_settings().ffmpeg_dir == "D:/custom-ffmpeg"
+
+
+def test_source_debug_profile_defaults_to_dev_settings(monkeypatch: pytest.MonkeyPatch):
+    from krok_helper.runtime_profile import configure_source_debug_settings_profile
+
+    monkeypatch.delenv("KARAOKE_STUDIO_SETTINGS_APP_NAME", raising=False)
+    monkeypatch.delenv("KARAOKE_STUDIO_SETTINGS_DIR", raising=False)
+
+    configure_source_debug_settings_profile()
+
+    assert os.environ["KARAOKE_STUDIO_SETTINGS_APP_NAME"] == "Karaoke Studio Dev"
