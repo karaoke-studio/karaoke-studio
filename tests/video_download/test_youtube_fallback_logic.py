@@ -30,6 +30,13 @@ def test_returns_true_for_requested_format_unavailable_error() -> None:
     assert YtDlpService()._should_retry_youtube_with_fallback(YOUTUBE_URL, message) is True
 
 
+def test_youtube_fallback_uses_android_vr_for_full_format_list() -> None:
+    args = YtDlpService()._build_python_extractor_args(YOUTUBE_FALLBACK_EXTRACTOR_ARGS)
+
+    assert args == {"youtube": {"player_client": ["android_vr", "web"]}}
+    assert "tv" not in args["youtube"]["player_client"]
+
+
 def test_extract_retry_drops_cookie_when_cookie_breaks_youtube_formats(monkeypatch) -> None:
     service = YtDlpService()
     calls: list[tuple[str | None, str]] = []

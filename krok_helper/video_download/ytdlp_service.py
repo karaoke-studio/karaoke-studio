@@ -35,7 +35,7 @@ from .format_parser import FormatParser
 
 
 WINDOWS_INVALID_FILENAME_PATTERN = re.compile(r'[\\/:*?"<>|]+')
-YOUTUBE_FALLBACK_EXTRACTOR_ARGS = "youtube:player_client=tv,web_safari,mweb,android"
+YOUTUBE_FALLBACK_EXTRACTOR_ARGS = "youtube:player_client=android_vr,web"
 YOUTUBE_DISABLE_COOKIE_HINT = "no_cookie"
 YOUTUBE_HINT_SEPARATOR = "|"
 
@@ -348,8 +348,6 @@ class YtDlpService:
             "skip_download": True,
             "logger": _QuietYtDlpLogger(),
         }
-        if self.detect_source(url) == SOURCE_YOUTUBE:
-            ydl_opts["format"] = "best"
         usable_cookie_file = "" if self._hint_disables_cookies(extractor_args_hint) else self._usable_cookie_file(cookie_file)
         if usable_cookie_file:
             ydl_opts["cookiefile"] = usable_cookie_file
@@ -431,8 +429,6 @@ class YtDlpService:
             "--no-update",
             url,
         ]
-        if self.detect_source(url) == SOURCE_YOUTUBE:
-            command[1:1] = ["-f", "best"]
         stripped_extractor_args_hint = self._strip_hint_flags(extractor_args_hint)
         if stripped_extractor_args_hint:
             command[1:1] = ["--extractor-args", stripped_extractor_args_hint]
@@ -1141,7 +1137,7 @@ class YtDlpService:
 
     def _build_python_extractor_args(self, extractor_args_hint: str) -> dict[str, dict[str, list[str]]]:
         if self._strip_hint_flags(extractor_args_hint) == YOUTUBE_FALLBACK_EXTRACTOR_ARGS:
-            return {"youtube": {"player_client": ["tv", "web_safari", "mweb", "android"]}}
+            return {"youtube": {"player_client": ["android_vr", "web"]}}
         return {}
 
     def _strip_hint_flags(self, extractor_args_hint: str) -> str:
