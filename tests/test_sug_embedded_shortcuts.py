@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 from krok_helper.gui_qt import (
@@ -21,9 +22,13 @@ class _FakeShortcut:
 class _FakeTimingPage:
     def __init__(self) -> None:
         self.save_count = 0
+        self.opened_projects: list[str] = []
 
     def trigger_save(self) -> None:
         self.save_count += 1
+
+    def open_initial_project(self, project_path: str) -> None:
+        self.opened_projects.append(project_path)
 
 
 def _fake_app(module_id: str) -> SimpleNamespace:
@@ -79,3 +84,19 @@ def test_ctrl_s_routes_to_embedded_sug_save() -> None:
     KrokHelperQtApp._handle_export_or_save_shortcut(app)
 
     assert timing_page.save_count == 1
+
+
+def test_open_sug_project_switches_to_embedded_timing_page(tmp_path: Path) -> None:
+    project_path = tmp_path / "song.sug"
+    project_path.write_text("{}", encoding="utf-8")
+    timing_page = _FakeTimingPage()
+    shown_modules: list[str] = []
+    app = SimpleNamespace(
+        lyrics_timing_page=timing_page,
+        _show_module=shown_modules.append,
+    )
+
+    KrokHelperQtApp.open_lyrics_timing_project(app, project_path)
+
+    assert shown_modules == [WORKFLOW_LYRICS_TIMING]
+    assert timing_page.opened_projects == [str(project_path)]

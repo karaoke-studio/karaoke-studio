@@ -17,11 +17,13 @@ from krok_helper.pipeline import (
 from krok_helper.settings import load_app_settings
 from krok_helper.windows import enable_high_dpi_awareness, set_explicit_app_user_model_id
 
+from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="卡拉 OK 字幕视频一键 Hi-Res 生成工具")
+    parser.add_argument("project", nargs="?", type=Path, help="StrangeUtaGame .sug project file")
     parser.add_argument("--video", type=Path, help="字幕视频路径")
     parser.add_argument("--on-audio", type=Path, help="原唱无损音频路径")
     parser.add_argument("--off-audio", type=Path, help="伴奏无损音频路径")
@@ -39,7 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--on-name-template", help="原唱输出模板，支持 {video_name}，不需要写 .mkv")
     parser.add_argument("--off-name-template", help="伴奏输出模板，支持 {video_name}，不需要写 .mkv")
     parser.add_argument("--gui", action="store_true", help="强制启动图形界面")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def run_cli(args: argparse.Namespace) -> int:
@@ -106,6 +108,8 @@ def run_gui(args: argparse.Namespace) -> int:
             args.off_name_template or DEFAULT_OFF_NAME_TEMPLATE,
         )
     window.show()
+    if args.project:
+        QTimer.singleShot(0, lambda: window.open_lyrics_timing_project(args.project.expanduser()))
     return qt_app.exec()
 
 

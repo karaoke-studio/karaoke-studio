@@ -2562,6 +2562,23 @@ class KrokHelperQtApp(QMainWindow):
         self.workflow_stepper.setCurrentModule(module_id)
         self._sync_workflow_shortcut_scope()
 
+    def open_lyrics_timing_project(self, project_path: Path) -> None:
+        project_path = project_path.expanduser()
+        if project_path.suffix.lower() != ".sug":
+            QMessageBox.critical(self, APP_TITLE, f"不支持的项目文件:\n{project_path}")
+            return
+        if not project_path.is_file():
+            QMessageBox.critical(self, APP_TITLE, f"项目文件不存在:\n{project_path}")
+            return
+
+        lyrics_timing_page = getattr(self, "lyrics_timing_page", None)
+        if lyrics_timing_page is None or not hasattr(lyrics_timing_page, "open_initial_project"):
+            QMessageBox.critical(self, APP_TITLE, "打轴模块尚未准备好，无法打开 .sug 项目。")
+            return
+
+        self._show_module(WORKFLOW_LYRICS_TIMING)
+        lyrics_timing_page.open_initial_project(str(project_path))
+
     def _sync_page_stack_margins(self, module_id: str) -> None:
         layout = getattr(self, "_page_stack_container_layout", None)
         if layout is None:
