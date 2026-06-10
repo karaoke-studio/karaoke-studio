@@ -14,6 +14,25 @@
 
 ---
 
+## [3.1.3] — 2026-06-10
+
+修复源码调试配置隔离、波形对齐 MP4 无损音频兼容性、工作台打开 `.sug` 项目，以及 YouTube fallback 解析只能看到 360p 的问题。
+
+### Added
+
+- 工作台现在可以作为 `.sug` 文件的打开方式：双击 `.sug` 后会启动工作台、自动切到「歌词打轴」模块并打开项目文件。
+- 源码调试入口默认使用独立的 `Karaoke Studio Dev` 配置目录，避免直接运行 `app.py` / `python -m krok_helper` 时覆盖正式版设置；仍可通过 `KARAOKE_STUDIO_SETTINGS_DIR` / `KARAOKE_STUDIO_SETTINGS_APP_NAME` 显式指定配置位置。
+
+### Changed
+
+- 波形对齐导出视频时，MP4/MOV/M4V 中的 PCM / FLAC / ALAC 等无损音频会自动转为 ALAC，MKV 中转为 FLAC，避免把 PCM 音轨直接塞进 MP4 导致 Windows 播放器等无法播放，同时保持无损。
+
+### Fixed
+
+- 修复 YouTube 兼容 fallback 解析只剩 360p 的问题：解析阶段不再强制 `best`，fallback 客户端改用 `android_vr,web`，例如 `k5GQK_cOXcw` 可重新看到 2160p / 1440p 等分离视频流。
+
+---
+
 ## [3.1.2] — 2026-06-09
 
 修复 v3.1.1 引入的 Bilibili 视频解析回归。
