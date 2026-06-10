@@ -41,6 +41,7 @@ NVENC_VIDEO_ENCODERS = {
 }
 COMMON_AUDIO_ENCODERS = {
     "aac": "aac",
+    "alac": "alac",
     "flac": "flac",
     "mp3": "libmp3lame",
     "opus": "libopus",
@@ -48,6 +49,21 @@ COMMON_AUDIO_ENCODERS = {
     "pcm_s16le": "pcm_s16le",
     "pcm_s24le": "pcm_s24le",
     "pcm_s32le": "pcm_s32le",
+}
+MP4_COMPATIBLE_EXTENSIONS = {".mp4", ".m4v", ".mov"}
+MATROSKA_EXTENSIONS = {".mkv"}
+LOSSLESS_AUDIO_CODECS = {
+    "alac",
+    "ape",
+    "flac",
+    "ipcm",
+    "lpcm",
+    "mlp",
+    "s302m",
+    "tta",
+    "truehd",
+    "wavpack",
+    "wv",
 }
 
 
@@ -282,9 +298,29 @@ def _video_encoding_options(video_stream: dict, encode_mode: str = ENCODE_MODE_S
     return options
 
 
-def _audio_encoding_options(audio_stream: dict, stream_index: int | None = None) -> list[str]:
-    audio_codec = str(audio_stream.get("codec_name") or "aac")
-    audio_encoder = COMMON_AUDIO_ENCODERS.get(audio_codec, "aac")
+def _is_lossless_audio_codec(audio_codec: str) -> bool:
+    return audio_codec.startswith("pcm_") or audio_codec in LOSSLESS_AUDIO_CODECS
+
+
+def _select_audio_encoder(audio_stream: dict, output_path: Path | None = None) -> str:
+    audio_codec = str(audio_stream.get("codec_name") or "aac").lower()
+    output_suffix = output_path.suffix.lower() if output_path is not None else ""
+
+    if _is_lossless_audio_codec(audio_codec):
+        if output_suffix in MP4_COMPATIBLE_EXTENSIONS:
+            return "alac"
+        if output_suffix in MATROSKA_EXTENSIONS:
+            return "flac"
+
+    return COMMON_AUDIO_ENCODERS.get(audio_codec, "aac")
+
+
+def _audio_encoding_options(
+    audio_stream: dict,
+    stream_index: int | None = None,
+    output_path: Path | None = None,
+) -> list[str]:
+    audio_encoder = _select_audio_encoder(audio_stream, output_path)
     suffix = "" if stream_index is None else f":a:{stream_index}"
     options = [f"-c:a{suffix}", audio_encoder]
 
@@ -961,7 +997,7 @@ def build_aligned_video_command(
     )
     command.extend(_video_encoding_options(video_stream, encode_mode))
     command.extend(["-pix_fmt", pixel_format, "-r", target_frame_rate])
-    command.extend(_audio_encoding_options(first_audio_stream))
+    command.extend(_audio_encoding_options(first_audio_stream, output_path=output_path))
     command.extend(["-c:s", "copy", "-c:d", "copy", "-c:t", "copy", str(output_path)])
     return command
 
