@@ -9,6 +9,7 @@ import subprocess
 import sys
 import threading
 import urllib.request
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -38,6 +39,7 @@ WINDOWS_INVALID_FILENAME_PATTERN = re.compile(r'[\\/:*?"<>|]+')
 YOUTUBE_FALLBACK_EXTRACTOR_ARGS = "youtube:player_client=android_vr,web"
 YOUTUBE_DISABLE_COOKIE_HINT = "no_cookie"
 YOUTUBE_HINT_SEPARATOR = "|"
+YOUTUBE_RECOMMENDED_DOWNLOAD_FORMAT = "bv*[vcodec^=avc1]+ba[ext=m4a]/bv+ba[ext=m4a]/bv+ba/best"
 
 
 class VideoDownloadError(RuntimeError):
@@ -66,6 +68,8 @@ class YtDlpService:
     def __init__(self, format_parser: FormatParser | None = None, app_settings=None) -> None:
         self._format_parser = format_parser or FormatParser()
         self._app_settings = app_settings
+        self._cli_version_cache: dict[str, str] = {}
+        self._cli_path_cache = ""
 
     def _settings(self):
         return self._app_settings or load_current_app_settings()
@@ -184,7 +188,10 @@ class YtDlpService:
         part_index: int = 0,
         part_total: int = 0,
     ) -> VideoInfo:
-        formats = self._format_parser.parse_formats(info.get("formats"))
+        source = self.detect_source(fallback_url, info.get("extractor_key"))
+        preferred_audio_ext = "m4a" if source == SOURCE_YOUTUBE else ""
+        formats = self._format_parser.parse_formats(info.get("formats"), preferred_audio_ext=preferred_audio_ext)
+        formats = self._apply_source_format_overrides(source, formats)
         thumbnail_url = str(info.get("thumbnail") or "")
         webpage_url = self._coerce_webpage_url(info, fallback_url)
         title = str(info.get("title") or "未命名视频")
@@ -193,7 +200,7 @@ class YtDlpService:
             title = f"{parent_title} - {prefix}{title}".strip()
         return VideoInfo(
             url=webpage_url,
-            source=self.detect_source(fallback_url, info.get("extractor_key")),
+            source=source,
             title=title,
             uploader=str(info.get("uploader") or info.get("channel") or info.get("owner") or "-"),
             duration=float(info["duration"]) if info.get("duration") else None,
@@ -208,6 +215,16 @@ class YtDlpService:
             subtitles_available=bool(info.get("subtitles") or info.get("automatic_captions")),
             extractor_args_hint=extractor_args_hint,
         )
+
+    def _apply_source_format_overrides(self, source: str, formats: list) -> list:
+        if source != SOURCE_YOUTUBE or not formats:
+            return formats
+        return [
+            replace(option, download_format=YOUTUBE_RECOMMENDED_DOWNLOAD_FORMAT, requires_merge=True)
+            if option.is_recommended
+            else option
+            for option in formats
+        ]
 
     def download(
         self,
@@ -234,6 +251,23 @@ class YtDlpService:
         preexisting_outputs = self._snapshot_output_candidates(save_dir, output_stem)
 
         youtube_dl = self._import_ytdlp()
+        if self._should_prefer_cli_backend(task.url):
+            try:
+                self._download_with_cli_retry(
+                    task,
+                    options,
+                    progress_callback,
+                    save_dir=save_dir,
+                    output_stem=output_stem,
+                    outtmpl=outtmpl,
+                    selected_format=selected_format,
+                    extractor_args_hint=extractor_args_hint,
+                )
+            except DownloadCancelledError:
+                self._cleanup_cancelled_outputs(save_dir, output_stem, preexisting_outputs)
+                raise
+            return
+
         if youtube_dl is not None:
             try:
                 self._download_with_python_retry(
@@ -274,6 +308,8 @@ class YtDlpService:
         *,
         allow_playlist: bool = False,
     ) -> tuple[dict[str, Any], str]:
+        if self._should_prefer_cli_backend(url):
+            return self._extract_info_with_cli_retry(url, cookie_file, allow_playlist=allow_playlist)
         youtube_dl = self._import_ytdlp()
         if youtube_dl is not None:
             return self._extract_info_with_python_retry(youtube_dl, url, cookie_file, allow_playlist=allow_playlist)
@@ -737,8 +773,56 @@ class YtDlpService:
             return None
         return YoutubeDL
 
+    def _should_prefer_cli_backend(self, url: str) -> bool:
+        if self.detect_source(url) != SOURCE_YOUTUBE:
+            return False
+        cli = self._find_ytdlp_cli_or_none()
+        if not cli:
+            return False
+        python_version = self._python_ytdlp_version()
+        if not python_version:
+            return True
+        cli_version = self._read_ytdlp_cli_version(cli)
+        return self._version_key(cli_version) > self._version_key(python_version)
+
+    def _python_ytdlp_version(self) -> str:
+        try:
+            import yt_dlp
+        except ModuleNotFoundError:
+            return ""
+        return str(getattr(yt_dlp.version, "__version__", "") or "")
+
+    def _read_ytdlp_cli_version(self, cli: str) -> str:
+        if cli in self._cli_version_cache:
+            return self._cli_version_cache[cli]
+        try:
+            completed = subprocess.run(
+                [cli, "--version"],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                check=False,
+                timeout=15,
+                env=subprocess_env_for_app_settings(self._settings()),
+                creationflags=self._subprocess_creationflags(),
+            )
+        except Exception:
+            return ""
+        if completed.returncode != 0:
+            return ""
+        version = completed.stdout.strip()
+        self._cli_version_cache[cli] = version
+        return version
+
+    def _version_key(self, version: str) -> tuple[int, ...]:
+        match = re.search(r"(\d{4})\.(\d{1,2})\.(\d{1,2})(?:\.(\d+))?", version)
+        if not match:
+            return ()
+        return tuple(int(part) for part in match.groups(default="0"))
+
     def _find_ytdlp_cli(self) -> str:
-        cli = shutil.which("yt-dlp")
+        cli = self._find_ytdlp_cli_or_none()
         if cli:
             return cli
         # 打包版用户没装独立 yt-dlp 时给出更准确的引导——pip / Python 包对他们没用
@@ -749,6 +833,41 @@ class YtDlpService:
                 "请整体升级应用，或者单独安装 yt-dlp 到系统 PATH 后再点更新。"
             )
         raise VideoDownloadError("未找到 yt-dlp。请安装 `yt-dlp` 命令或 Python 包。")
+
+    def _find_ytdlp_cli_or_none(self) -> str:
+        if self._cli_path_cache:
+            return self._cli_path_cache
+        candidates: list[Path] = []
+        cli = shutil.which("yt-dlp")
+        if cli:
+            candidates.append(Path(cli))
+        names = ("yt-dlp.exe", "yt-dlp") if os.name == "nt" else ("yt-dlp",)
+        bases: list[Path] = []
+        try:
+            bases.append(Path(sys.executable).resolve().parent)
+        except OSError:
+            pass
+        try:
+            bases.append(Path.cwd().resolve())
+        except OSError:
+            pass
+        try:
+            bases.extend(Path(__file__).resolve().parents[:4])
+        except OSError:
+            pass
+        for base in dict.fromkeys(bases):
+            for name in names:
+                candidate = base / name
+                if candidate.is_file():
+                    candidates.append(candidate)
+        unique_candidates = [path for path in dict.fromkeys(str(path.resolve()) for path in candidates)]
+        if not unique_candidates:
+            return ""
+        self._cli_path_cache = max(
+            unique_candidates,
+            key=lambda path: self._version_key(self._read_ytdlp_cli_version(path)),
+        )
+        return self._cli_path_cache
 
     def _usable_cookie_file(self, cookie_file: str | None) -> str:
         if not cookie_file:

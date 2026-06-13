@@ -27,12 +27,17 @@ def format_bytes(size: int | None) -> str:
 
 
 class FormatParser:
-    def parse_formats(self, raw_formats: list[dict[str, Any]] | None) -> list[FormatOption]:
+    def parse_formats(
+        self,
+        raw_formats: list[dict[str, Any]] | None,
+        *,
+        preferred_audio_ext: str = "",
+    ) -> list[FormatOption]:
         formats = list(raw_formats or [])
         if not formats:
             return []
 
-        best_audio = self._pick_best_audio(formats)
+        best_audio = self._pick_best_audio(formats, preferred_ext=preferred_audio_ext)
         candidates: dict[str, tuple[tuple[float, float, int], FormatOption]] = {}
 
         for item in formats:
@@ -127,7 +132,7 @@ class FormatParser:
             is_recommended=True,
         )
 
-    def _pick_best_audio(self, formats: list[dict[str, Any]]) -> dict[str, Any] | None:
+    def _pick_best_audio(self, formats: list[dict[str, Any]], *, preferred_ext: str = "") -> dict[str, Any] | None:
         audio_only = [
             item
             for item in formats
@@ -135,6 +140,11 @@ class FormatParser:
         ]
         if not audio_only:
             return None
+        preferred_ext = preferred_ext.lower().strip()
+        if preferred_ext:
+            preferred_audio = [item for item in audio_only if str(item.get("ext") or "").lower() == preferred_ext]
+            if preferred_audio:
+                audio_only = preferred_audio
         return max(
             audio_only,
             key=lambda item: (
