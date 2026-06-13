@@ -5342,6 +5342,12 @@ class KrokHelperQtApp(QMainWindow):
         self._persist_alignment_preferences()
 
     def _current_alignment_encode_mode(self) -> str:
+        if hasattr(self, "align_encode_software_radio") and self.align_encode_software_radio.isChecked():
+            self._align_encode_selection = ENCODE_MODE_SOFTWARE
+            return ENCODE_MODE_SOFTWARE
+        if hasattr(self, "align_encode_hardware_radio") and self.align_encode_hardware_radio.isChecked():
+            self._align_encode_selection = ENCODE_MODE_HARDWARE
+            return ENCODE_MODE_HARDWARE
         return (
             self._align_encode_selection
             if self._align_encode_selection in {ENCODE_MODE_SOFTWARE, ENCODE_MODE_HARDWARE}

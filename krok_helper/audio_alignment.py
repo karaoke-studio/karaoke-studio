@@ -52,6 +52,7 @@ COMMON_AUDIO_ENCODERS = {
 }
 MP4_COMPATIBLE_EXTENSIONS = {".mp4", ".m4v", ".mov"}
 MATROSKA_EXTENSIONS = {".mkv"}
+AAC_BITRATE_FOR_LOSSLESS_MP4 = "320k"
 LOSSLESS_AUDIO_CODECS = {
     "alac",
     "ape",
@@ -308,7 +309,7 @@ def _select_audio_encoder(audio_stream: dict, output_path: Path | None = None) -
 
     if _is_lossless_audio_codec(audio_codec):
         if output_suffix in MP4_COMPATIBLE_EXTENSIONS:
-            return "alac"
+            return "aac"
         if output_suffix in MATROSKA_EXTENSIONS:
             return "flac"
 
@@ -323,6 +324,7 @@ def _audio_encoding_options(
     audio_encoder = _select_audio_encoder(audio_stream, output_path)
     suffix = "" if stream_index is None else f":a:{stream_index}"
     options = [f"-c:a{suffix}", audio_encoder]
+    source_audio_codec = str(audio_stream.get("codec_name") or "aac").lower()
 
     sample_rate = audio_stream.get("sample_rate")
     if sample_rate:
@@ -333,6 +335,13 @@ def _audio_encoding_options(
     bit_rate = audio_stream.get("bit_rate")
     if bit_rate and audio_encoder in {"aac", "libmp3lame", "libopus", "libvorbis"}:
         options.extend([f"-b:a{suffix}", str(bit_rate)])
+    elif (
+        audio_encoder == "aac"
+        and output_path is not None
+        and output_path.suffix.lower() in MP4_COMPATIBLE_EXTENSIONS
+        and _is_lossless_audio_codec(source_audio_codec)
+    ):
+        options.extend([f"-b:a{suffix}", AAC_BITRATE_FOR_LOSSLESS_MP4])
 
     return options
 

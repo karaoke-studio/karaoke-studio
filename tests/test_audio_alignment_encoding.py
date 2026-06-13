@@ -30,21 +30,21 @@ def test_software_encoding_keeps_cpu_encoder() -> None:
     assert options[:2] == ["-c:v", "libx264"]
 
 
-def test_mp4_output_transcodes_pcm_audio_to_alac() -> None:
+def test_mp4_output_transcodes_pcm_audio_to_aac() -> None:
     options = _audio_encoding_options(
         {"codec_name": "pcm_s24le", "sample_rate": "48000", "channels": 2},
         output_path=Path("aligned.mp4"),
     )
 
-    assert options[:2] == ["-c:a", "alac"]
+    assert options[:2] == ["-c:a", "aac"]
     assert "pcm_s24le" not in options
-    assert options[2:] == ["-ar:a", "48000", "-ac:a", "2"]
+    assert options[2:] == ["-ar:a", "48000", "-ac:a", "2", "-b:a", "320k"]
 
 
-def test_mp4_output_transcodes_flac_audio_to_alac() -> None:
+def test_mp4_output_transcodes_flac_audio_to_aac() -> None:
     options = _audio_encoding_options({"codec_name": "flac"}, output_path=Path("aligned.mp4"))
 
-    assert options[:2] == ["-c:a", "alac"]
+    assert options == ["-c:a", "aac", "-b:a", "320k"]
 
 
 def test_mkv_output_transcodes_lossless_audio_to_flac() -> None:
@@ -62,7 +62,7 @@ def test_lossy_audio_keeps_existing_encoder_choice() -> None:
     assert options == ["-c:a", "aac", "-b:a", "256000"]
 
 
-def test_aligned_mp4_command_uses_alac_for_pcm_replacement_audio() -> None:
+def test_aligned_mp4_command_uses_aac_for_pcm_replacement_audio() -> None:
     command = build_aligned_video_command(
         "ffmpeg",
         Path("subtitle.mp4"),
@@ -92,4 +92,12 @@ def test_aligned_mp4_command_uses_alac_for_pcm_replacement_audio() -> None:
     )
 
     audio_codec_index = command.index("-c:a")
-    assert command[audio_codec_index + 1] == "alac"
+    assert command[audio_codec_index + 1] == "aac"
+    assert command[audio_codec_index + 2 : audio_codec_index + 8] == [
+        "-ar:a",
+        "48000",
+        "-ac:a",
+        "2",
+        "-b:a",
+        "320k",
+    ]
