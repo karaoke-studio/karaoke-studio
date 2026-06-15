@@ -7780,7 +7780,43 @@ class KrokHelperQtApp(QMainWindow):
                 cleanup()
             except Exception:
                 pass
+        KrokHelperQtApp._release_lyrics_timing_resources(page)
         return True
+
+    @staticmethod
+    def _release_lyrics_timing_resources(page) -> None:
+        if getattr(page, "_krok_helper_resources_released", False):
+            return
+        try:
+            setattr(page, "_krok_helper_resources_released", True)
+        except Exception:
+            pass
+
+        editor = getattr(page, "editorInterface", None)
+        release_editor = getattr(editor, "release_resources", None) if editor is not None else None
+        if release_editor is not None:
+            try:
+                release_editor()
+                return
+            except Exception:
+                pass
+
+        timing_service = getattr(page, "_timing_service", None)
+        release_timing = getattr(timing_service, "release", None) if timing_service is not None else None
+        if release_timing is not None:
+            try:
+                release_timing()
+                return
+            except Exception:
+                pass
+
+        audio_engine = getattr(page, "_audio_engine", None)
+        release_engine = getattr(audio_engine, "release", None) if audio_engine is not None else None
+        if release_engine is not None:
+            try:
+                release_engine()
+            except Exception:
+                pass
 
 
 def launch_qt_app() -> int:
