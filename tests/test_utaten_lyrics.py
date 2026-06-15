@@ -13,7 +13,20 @@ from krok_helper.lyrics import (
     build_lyrics_preview,
 )
 from krok_helper.sug_compat import apply_sug_compat_patches
+from strange_uta_game.backend.domain.models import get_ruby_pause_char, pause_char_variants
 from strange_uta_game.frontend.editor.timing.lyric_loader import detect_lyric_format, parse_lyric_content
+
+
+def _ruby_text_without_pause(text: str) -> str:
+    pause_chars = pause_char_variants(get_ruby_pause_char())
+    return "".join(ch for ch in text if ch not in pause_chars)
+
+
+def _character_ruby_text_without_pause(character) -> str:
+    ruby = getattr(character, "ruby", None)
+    if ruby is None:
+        return ""
+    return _ruby_text_without_pause("".join(part.text for part in ruby.parts))
 
 
 class _FakeSettings:
@@ -152,7 +165,7 @@ def test_sug_distributes_utaten_ruby_per_kanji_ateji_even_split() -> None:
     assert "".join(ch.char for ch in chars) == "新時代を"
     assert chars[0].ruby is not None and chars[0].ruby.text == "はじ"
     assert chars[1].ruby is not None and chars[1].ruby.text == "ま"
-    assert chars[2].ruby is not None and chars[2].ruby.text == "り"
+    assert chars[2].ruby is not None and _character_ruby_text_without_pause(chars[2]) == "り"
     assert chars[0].linked_to_next is True
     assert chars[1].linked_to_next is True
     assert chars[2].linked_to_next is False
@@ -267,9 +280,9 @@ def test_embedded_sug_utaten_import_preserves_katakana_ruby() -> None:
     chars = sentences[0].characters
     assert "".join(ch.char for ch in chars) == "\u5149\u7206\u305c\u308b\u93ae\u9b42\u6b4c"
     start = 4
-    imported_reading = "".join(
+    imported_reading = _ruby_text_without_pause("".join(
         "".join(part.text for part in chars[index].ruby.parts)
         for index in range(start, start + 3)
         if chars[index].ruby is not None
-    )
+    ))
     assert imported_reading == "\u30eb\u30af\u30a4\u30a8\u30e0"
