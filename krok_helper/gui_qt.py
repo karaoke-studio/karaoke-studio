@@ -140,6 +140,7 @@ from krok_helper.settings import (
     migrate_strange_uta_game_settings,
     save_app_settings,
 )
+from krok_helper.sug_compat import apply_sug_compat_patches
 from krok_helper.updater import CheckResult, UpdateChecker, ensure_updater_settings
 from krok_helper.updater.settings import UpdaterSettings
 from krok_helper.updater.sources import SOURCE_IDS, SOURCE_LABELS, normalize_order
@@ -2511,6 +2512,7 @@ class KrokHelperQtApp(QMainWindow):
         self.lyrics_page = self._build_lyrics_page()
         self._sync_lyrics_timing_host_paths()
         ensure_sug_src_path()
+        apply_sug_compat_patches()
         from strange_uta_game.frontend.main_window import MainWindow as LyricsTimingMainWindow
 
         lyrics_timing_settings = KrokHelperSettingsBridge(self.settings, self._save_all_settings)

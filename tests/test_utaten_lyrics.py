@@ -12,6 +12,7 @@ from krok_helper.lyrics import (
     build_default_providers,
     build_lyrics_preview,
 )
+from krok_helper.sug_compat import apply_sug_compat_patches
 from strange_uta_game.frontend.editor.timing.lyric_loader import detect_lyric_format, parse_lyric_content
 
 
@@ -248,3 +249,27 @@ def test_build_lyrics_preview_preserves_utaten_marker_with_strip_intro() -> None
 
     assert preview.text.splitlines()[0] == UTATEN_RUBY_MARKER
     assert detect_lyric_format(preview.text) == "utaten"
+
+
+def test_embedded_sug_utaten_import_preserves_katakana_ruby() -> None:
+    apply_sug_compat_patches()
+    content = "\n".join(
+        [
+            UTATEN_RUBY_MARKER,
+            "[ti:RES\u221eNALIST]",
+            "{\u5149||\u3072\u304b\u308a}\u7206\u305c\u308b{\u93ae\u9b42\u6b4c||\u30eb\u30af\u30a4\u30a8\u30e0}",
+        ]
+    )
+
+    sentences, _is_nicokara, _new_singers, meta = parse_lyric_content(content, "singer-1")
+
+    assert meta["format"] == "utaten"
+    chars = sentences[0].characters
+    assert "".join(ch.char for ch in chars) == "\u5149\u7206\u305c\u308b\u93ae\u9b42\u6b4c"
+    start = 4
+    imported_reading = "".join(
+        "".join(part.text for part in chars[index].ruby.parts)
+        for index in range(start, start + 3)
+        if chars[index].ruby is not None
+    )
+    assert imported_reading == "\u30eb\u30af\u30a4\u30a8\u30e0"
