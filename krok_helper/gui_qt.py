@@ -2518,9 +2518,18 @@ class KrokHelperQtApp(QMainWindow):
             parent=self.page_stack,
             settings_provider=lyrics_timing_settings,
         )
-        self.subtitle_render_page = PlaceholderPage(
-            title="字幕视频生成",
-            description="将已完成时间轴和样式设置渲染为字幕视频输出。",
+        from krok_helper.subtitle_render import SubtitleRenderWindow
+        from krok_helper.subtitle_render.settings_bridge import (
+            KrokHelperSubtitleRenderSettingsBridge,
+        )
+
+        self.subtitle_render_settings_bridge = KrokHelperSubtitleRenderSettingsBridge(
+            self.settings, self._save_all_settings
+        )
+        self.subtitle_render_page = SubtitleRenderWindow.for_embedding(
+            parent=self.page_stack,
+            settings_provider=self.subtitle_render_settings_bridge,
+            workflow_context=None,
         )
         self.hires_page = self._build_hires_page()
         self.module_pages = {
