@@ -529,6 +529,48 @@ class StyledComboBox(QComboBox):
         return WhiteComboBoxMenu(self)
 
 
+class ElidedLabel(QLabel):
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._full_text = ""
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setWordWrap(False)
+        self.setText(text)
+
+    def setText(self, text: str) -> None:  # noqa: N802
+        self._full_text = str(text or "")
+        self.setToolTip(self._full_text)
+        self._sync_elided_text()
+
+    def setFont(self, font: QFont) -> None:  # noqa: N802
+        super().setFont(font)
+        self._sync_elided_text()
+
+    def setMaximumWidth(self, maxw: int) -> None:  # noqa: N802
+        super().setMaximumWidth(maxw)
+        self._sync_elided_text()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._sync_elided_text()
+
+    def _sync_elided_text(self) -> None:
+        width = max(0, self.width())
+        if width <= 0 and self.maximumWidth() < 16_777_215:
+            width = self.maximumWidth()
+        if width <= 0:
+            display = self._full_text
+        else:
+            display = self.fontMetrics().elidedText(
+                self._full_text,
+                Qt.TextElideMode.ElideRight,
+                width,
+            )
+        if super().text() != display:
+            super().setText(display)
+
+
 class CardWidget(QFrame):
     def __init__(
         self,
@@ -2873,9 +2915,8 @@ class KrokHelperQtApp(QMainWindow):
         self.import_lyrics_to_timing_button.raise_()
         preview_header.addLayout(preview_controls)
 
-        self.lyrics_preview_title_label = QLabel("未选择歌曲")
+        self.lyrics_preview_title_label = ElidedLabel("未选择歌曲")
         self.lyrics_preview_title_label.setObjectName("LyricsPreviewTitle")
-        self.lyrics_preview_title_label.setWordWrap(True)
         self.lyrics_preview_title_label.setFont(build_lyrics_ui_font(point_size=14, bold=True))
         self.lyrics_preview_meta_label = QLabel("来源: -")
         self.lyrics_preview_meta_label.setObjectName("LyricsPreviewMeta")
@@ -3276,8 +3317,15 @@ class KrokHelperQtApp(QMainWindow):
         y = combo_pos.y() + combo.height() + 8
         max_x = max(0, panel.width() - button.width() - 16)
         max_y = max(0, panel.height() - button.height() - 16)
-        button.move(min(max(x, 0), max_x), min(max(y, 0), max_y))
+        button_x = min(max(x, 0), max_x)
+        button.move(button_x, min(max(y, 0), max_y))
         button.raise_()
+
+        title_label = getattr(self, "lyrics_preview_title_label", None)
+        if title_label is not None:
+            title_pos = title_label.mapTo(panel, title_label.rect().topLeft())
+            available_width = button_x - title_pos.x() - 12
+            title_label.setMaximumWidth(max(120, available_width))
 
     def _build_lyrics_preview_hint(self, candidate: LyricsSearchCandidate, preview: LyricsPreview) -> str:
         if candidate.provider_id == "utaten" and UTATEN_RUBY_MARKER in (preview.text or ""):
