@@ -164,7 +164,7 @@ git submodule status
 ### 关键约束
 
 - **引擎选型已定**：QPainter 离屏 + ffmpeg rawvideo pipe（不要改成 ass + libass burn-in）。理由见 plan §E。
-- **不要改 SUG submodule 源码**——读 `Project` 对象或 NicokaraExporter 落盘的 `.ass`。
+- **不要改 SUG submodule 源码**——字幕源走 SUG `NicokaraExporter` 落盘的 Nicokara 逐字 LRC（`.lrc`，含 `@Ruby` / `@Offset` / `@Title` / 演唱者标签）。解析器在 `subtitle_render/subtitle_sources.py`（SUG 自己只有导出器没解析器，由本模块新写）。
 - **MVP 仅横书き**，縦書き 推迟到 P1（B9）。
 - **MVP 不内置样式预设包**，只实现 `.krstyle.json` 保存/加载能力。
 - **所有用户面向字符串中文**。
