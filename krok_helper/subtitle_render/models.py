@@ -125,9 +125,43 @@ class SubtitleSource:
     singer_filter: Optional[list[int]] = None
 
 
+LineYPosition = Literal["top", "center", "bottom"]
+
+
 @dataclass
 class Style:
-    """字幕样式占位。MVP 实装时填字段，见设计文档 D 节。"""
+    """字幕样式（A4 / A5 / A6 实装的纯色 + 横书き子集）。
+
+    字段默认值面向 1920×1080 输出，浏览器审美：白底 + 工作台主色填充 + 黑描边 +
+    淡阴影。后续 A5 / A6 / B3 等任务在此基础上扩字段（渐变 / 发光 / 注音 / 动画）。
+    """
+
+    # 字体
+    font_family: str = "Microsoft YaHei UI"
+    font_size_px: int = 64
+    font_weight: int = 700  # Qt 习惯 100-900；卡拉ok 字幕默认粗体
+    italic: bool = False
+
+    # 颜色（六位十六进制 #RRGGBB，含前缀 #）
+    base_color: str = "#FFFFFF"
+    """未唱状态填充色（底色）。"""
+
+    fill_color: str = "#FF5A6F"
+    """已唱状态填充色。默认取工作台主色。"""
+
+    stroke_color: str = "#222222"
+    stroke_width_px: int = 4
+
+    shadow_color: str = "#000000"
+    shadow_offset_x: int = 0
+    shadow_offset_y: int = 2
+
+    # 行位置（字幕区上下定位）
+    line_y_position: LineYPosition = "bottom"
+    """``"top"`` / ``"center"`` / ``"bottom"`` —— 简单 vertical-anchor。"""
+
+    line_y_margin_px: int = 80
+    """``line_y_position`` 为 ``"top"`` / ``"bottom"`` 时距离顶/底边的内边距。"""
 
 
 @dataclass

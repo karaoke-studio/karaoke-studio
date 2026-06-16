@@ -48,6 +48,7 @@ from krok_helper.errors import ProcessingError
 from krok_helper.ffmpeg import find_tool, probe_media
 from krok_helper.models import MediaInfo
 from krok_helper.settings import load_app_settings
+from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.frontend.lyrics_list import LyricsPanel
 from krok_helper.subtitle_render.frontend.preview_view import PreviewPanel, TransportBar
 from krok_helper.subtitle_render.frontend.property_panel import PropertyPanel
@@ -55,7 +56,7 @@ from krok_helper.subtitle_render.frontend.timeline_view import (
     TrackTimelineView,
     WaveformPanel,
 )
-from krok_helper.subtitle_render.models import TimingTrack
+from krok_helper.subtitle_render.models import Style, TimingTrack
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 from krok_helper.theme_workbench import palette, themed
 
@@ -90,6 +91,7 @@ class SubtitleRenderWindow(QWidget):
         self._video_info: Optional[MediaInfo] = None
         self._audio_path: Optional[Path] = None
         self._audio_info: Optional[MediaInfo] = None
+        self._style: Style = Style()
 
         themed(
             self,
@@ -155,10 +157,12 @@ class SubtitleRenderWindow(QWidget):
         center_layout.setContentsMargins(0, 0, 0, 0)
         center_layout.setSpacing(0)
         self._preview_panel = PreviewPanel()
+        self._preview_panel.set_style(self._style)
         self._preview_panel.pathDropped.connect(self.load_video)
         self._preview_panel.browseRequested.connect(self._browse_video)
         center_layout.addWidget(self._preview_panel, 1)
         self._transport_bar = TransportBar()
+        self._transport_bar.timeChanged.connect(self._preview_panel.set_time)
         center_layout.addWidget(self._transport_bar)
         top.addWidget(center)
 
@@ -251,6 +255,11 @@ class SubtitleRenderWindow(QWidget):
         self._timing_track = track
         self._subtitle_path = path
         self._lyrics_panel.set_track(track)
+        self._preview_panel.set_track(track)
+        duration = track_duration_ms(track)
+        if duration > 0:
+            self._transport_bar.set_duration(duration)
+        self._transport_bar.set_time(0)
         return track
 
     def load_video(self, path: Path) -> Optional[MediaInfo]:

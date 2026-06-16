@@ -40,6 +40,35 @@ def _make_window(qapp, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def test_load_subtitle_wires_preview_and_transport(qapp, monkeypatch, tmp_path):
+    """A4：加载字幕后预览面板 / 时间轴滑块都应该联动起来。"""
+    win = _make_window(qapp, monkeypatch)
+    assert not win._preview_panel.is_populated()
+
+    lrc = tmp_path / "demo.lrc"
+    lrc.write_bytes(
+        b"\xef\xbb\xbf"
+        + (
+            "[00:01:00]a[00:01:50]b[00:02:00]c[00:02:50]\r\n"
+            "\r\n"
+            "@Title=Foo\r\n"
+        ).encode("utf-8")
+    )
+    track = win.load_from_lrc(lrc)
+    assert track is not None
+
+    # 预览面板被切到 populated 状态，canvas 拿到了 track
+    assert win._preview_panel.is_populated()
+    assert win._preview_panel.canvas._track is track
+
+    # transport 滑块上限按 track 时长收敛（行末 2500ms）
+    assert win._transport_bar._slider.maximum() == 2500
+
+    # 滑块拖动 → preview canvas 同步时间
+    win._transport_bar.set_time(1700)
+    assert win._preview_panel.canvas.current_time_ms == 1700
+
+
 def test_load_subtitle_populates_lyrics_panel(qapp, monkeypatch, tmp_path):
     win = _make_window(qapp, monkeypatch)
     assert not win._lyrics_panel.is_populated()
