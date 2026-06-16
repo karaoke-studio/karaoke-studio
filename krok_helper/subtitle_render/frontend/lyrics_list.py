@@ -18,8 +18,26 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QListWidget,
     QListWidgetItem,
+    QStyle,
+    QStyledItemDelegate,
+    QStyleOptionViewItem,
     QWidget,
 )
+
+
+class _NoFocusDelegate(QStyledItemDelegate):
+    """Item delegate that suppresses the focus rectangle.
+
+    Qt 在选中行上会再画一层 ``State_HasFocus`` 焦点框（虚线/实线，Fusion
+    style 下尤其明显）。这层走的是 ``QCommonStyle.PE_FrameFocusRect``，
+    CSS ``outline:0`` 在部分平台样式下无法压住，所以在 delegate 层把
+    ``State_HasFocus`` flag 摘掉再交父类绘制。
+    """
+
+    def paint(self, painter, option, index):  # type: ignore[override]
+        opt = QStyleOptionViewItem(option)
+        opt.state &= ~QStyle.StateFlag.State_HasFocus
+        super().paint(painter, opt, index)
 
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
 from krok_helper.subtitle_render.models import TimingTrack
@@ -44,6 +62,7 @@ class LyricsPanel(DropPanel):
         self._list.setUniformItemSizes(False)
         self._list.setSpacing(0)
         self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._list.setItemDelegate(_NoFocusDelegate(self._list))
         themed(
             self._list,
             lambda: (
@@ -58,11 +77,19 @@ class LyricsPanel(DropPanel):
                 #LyricsList::item {{
                     padding: 6px 12px;
                     border: 0;
+                    outline: 0;
                 }}
                 #LyricsList::item:selected {{
                     background: {palette().preview_selection_bg};
                     color: {palette().preview_selection_text};
                     border-radius: 4px;
+                    outline: 0;
+                }}
+                #LyricsList::item:selected:focus {{
+                    background: {palette().preview_selection_bg};
+                    color: {palette().preview_selection_text};
+                    border-radius: 4px;
+                    outline: 0;
                 }}
                 #LyricsList::item:hover {{
                     background: {palette().table_row_hover};
