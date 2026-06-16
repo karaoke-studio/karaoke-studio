@@ -31,6 +31,38 @@ class _FakeTimingPage:
         self.opened_projects.append(project_path)
 
 
+class _FakeCloseEvent:
+    def __init__(self) -> None:
+        self.ignored = False
+
+    def ignore(self) -> None:
+        self.ignored = True
+
+
+class _FakeStore:
+    def __init__(self) -> None:
+        self.cleanup_count = 0
+
+    def cleanup_temp_files(self) -> None:
+        self.cleanup_count += 1
+
+
+class _FakeEditor:
+    def __init__(self) -> None:
+        self.release_count = 0
+
+    def release_resources(self) -> None:
+        self.release_count += 1
+
+
+class _FakeAudioEngine:
+    def __init__(self) -> None:
+        self.release_count = 0
+
+    def release(self) -> None:
+        self.release_count += 1
+
+
 def _fake_app(module_id: str) -> SimpleNamespace:
     return SimpleNamespace(
         active_module=module_id,
@@ -100,3 +132,31 @@ def test_open_sug_project_switches_to_embedded_timing_page(tmp_path: Path) -> No
 
     assert shown_modules == [WORKFLOW_LYRICS_TIMING]
     assert timing_page.opened_projects == [str(project_path)]
+
+
+def test_shutdown_embedded_sug_releases_editor_resources() -> None:
+    store = _FakeStore()
+    editor = _FakeEditor()
+    timing_page = SimpleNamespace(
+        _store=store,
+        editorInterface=editor,
+        has_unsaved_changes=lambda: False,
+    )
+    app = SimpleNamespace(lyrics_timing_page=timing_page)
+    event = _FakeCloseEvent()
+
+    assert KrokHelperQtApp._shutdown_lyrics_timing(app, event) is True
+
+    assert event.ignored is False
+    assert store.cleanup_count == 1
+    assert editor.release_count == 1
+
+
+def test_release_embedded_sug_resources_falls_back_to_audio_engine() -> None:
+    engine = _FakeAudioEngine()
+    timing_page = SimpleNamespace(_audio_engine=engine)
+
+    KrokHelperQtApp._release_lyrics_timing_resources(timing_page)
+    KrokHelperQtApp._release_lyrics_timing_resources(timing_page)
+
+    assert engine.release_count == 1

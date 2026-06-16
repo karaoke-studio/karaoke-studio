@@ -4,6 +4,11 @@ import argparse
 import sys
 from pathlib import Path
 
+from krok_helper.stdio import configure_utf8_stdio
+
+
+configure_utf8_stdio()
+
 from krok_helper.errors import ProcessingError
 from krok_helper.gui_qt import KrokHelperQtApp, load_taskbar_icon
 from krok_helper.pipeline import (
