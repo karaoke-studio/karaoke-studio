@@ -1,13 +1,12 @@
-"""SubtitleRenderWindow 的素材加载器测试（A2 / A3）。
+"""SubtitleRenderWindow 的素材加载器测试（A1 / A2 / A3 + Sayatoo 布局）。
 
-通过 monkeypatch ``probe_media`` 避免真实 ffprobe 调用；通过 ``QT_QPA_PLATFORM=offscreen``
-保证无显示器环境也能构造 Qt widget。
+通过 monkeypatch ``probe_media`` 避免真实 ffprobe 调用；通过
+``QT_QPA_PLATFORM=offscreen`` 保证无显示器环境也能构造 Qt widget。
 """
 
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import pytest
 
@@ -38,6 +37,70 @@ def _make_window(qapp, monkeypatch):
     return mw.SubtitleRenderWindow(embedded=False)
 
 
+# ---------------------------------------------------------------------------
+# A1 字幕：填充左侧歌词列表
+# ---------------------------------------------------------------------------
+
+
+def test_load_subtitle_populates_lyrics_list(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    lrc = tmp_path / "lyrics.lrc"
+    lrc.write_bytes(
+        b"\xef\xbb\xbf"
+        + (
+            "【ボーカル】[00:01:00]あ[00:01:50]\r\n"
+            "[00:02:00]い[00:02:50]う[00:03:00]\r\n"
+            "\r\n"
+            "[00:04:00]え[00:04:50]\r\n"
+            "\r\n"
+            "@Title=Demo\r\n"
+        ).encode("utf-8")
+    )
+
+    track = win.load_from_lrc(lrc)
+    assert track is not None
+
+    list_widget = win._lyrics_list
+    # body 共 4 行（含中间空行）
+    assert list_widget.rowCount() == 4
+
+    # 行 0：S 标记 + 角色名 "ボーカル" + 内容 "あ"
+    assert list_widget.item(0, list_widget.COL_SINGER_FLAG).text() == "S"
+    assert list_widget.item(0, list_widget.COL_SINGER_NAME).text() == "ボーカル"
+    assert list_widget.item(0, list_widget.COL_CONTENT).text() == "あ"
+
+    # 行 1：未切换演唱者，S 留空
+    assert list_widget.item(1, list_widget.COL_SINGER_FLAG).text() == ""
+    assert list_widget.item(1, list_widget.COL_CONTENT).text() == "いう"
+
+    # 行 2：空行
+    assert list_widget.item(2, list_widget.COL_CONTENT).text() == ""
+
+    # 行 3：有内容
+    assert list_widget.item(3, list_widget.COL_CONTENT).text() == "え"
+
+
+def test_load_subtitle_updates_status_label(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    lrc = tmp_path / "lyrics.lrc"
+    lrc.write_bytes(
+        b"\xef\xbb\xbf"
+        + (
+            "[00:01:00]a[00:01:50]b[00:02:00]\r\n\r\n@Title=Foo\r\n"
+        ).encode("utf-8")
+    )
+    win.load_from_lrc(lrc)
+    text = win._status_label.text()
+    assert "字幕：lyrics.lrc" in text
+    assert "1 行" in text
+    assert "2 字" in text
+
+
+# ---------------------------------------------------------------------------
+# A2 / A3 视频 / 音频加载
+# ---------------------------------------------------------------------------
+
+
 def test_load_video_stores_info_on_success(qapp, monkeypatch, tmp_path):
     win = _make_window(qapp, monkeypatch)
     fake_info = MediaInfo(
@@ -59,9 +122,8 @@ def test_load_video_stores_info_on_success(qapp, monkeypatch, tmp_path):
     assert result is fake_info
     assert win.video_info is fake_info
     assert win._video_path == tmp_path / "bg.mp4"
-    # 摘要应该至少含分辨率与 fps
-    assert "1920×1080" in win._summary_label.text()
-    assert "59.940" in win._summary_label.text() or "59.94" in win._summary_label.text()
+    # 顶栏状态条应反映分辨率
+    assert "1920×1080" in win._status_label.text()
 
 
 def test_load_video_rejects_audio_only_file(qapp, monkeypatch, tmp_path):
@@ -98,8 +160,7 @@ def test_load_audio_stores_info_on_success(qapp, monkeypatch, tmp_path):
     result = win.load_audio(tmp_path / "song.wav")
     assert result is fake_info
     assert win.audio_info is fake_info
-    assert "44100" in win._summary_label.text()
-    assert "2 声道" in win._summary_label.text()
+    assert "44100Hz" in win._status_label.text()
 
 
 def test_load_audio_rejects_video_with_no_audio(qapp, monkeypatch, tmp_path):
@@ -121,11 +182,10 @@ def test_load_audio_rejects_video_with_no_audio(qapp, monkeypatch, tmp_path):
     assert win.audio_info is None
 
 
-def test_subtitle_video_audio_can_coexist_in_summary(qapp, monkeypatch, tmp_path):
-    # 字幕 + 视频 + 音频三段同时加载，摘要三段都应出现
+def test_subtitle_video_audio_can_coexist_in_status(qapp, monkeypatch, tmp_path):
     win = _make_window(qapp, monkeypatch)
 
-    # 字幕：手写一行最小内容
+    # 字幕
     lrc = tmp_path / "lyrics.lrc"
     lrc.write_bytes(
         b"\xef\xbb\xbf"
@@ -162,7 +222,33 @@ def test_subtitle_video_audio_can_coexist_in_summary(qapp, monkeypatch, tmp_path
     monkeypatch.setattr(mw, "probe_media", lambda probe, path: audio_info)
     win.load_audio(tmp_path / "song.wav")
 
-    text = win._summary_label.text()
-    assert "【字幕】" in text and "Test" in text
-    assert "【背景视频】" in text and "1920×1080" in text
-    assert "【音频】" in text and "44100" in text
+    text = win._status_label.text()
+    assert "字幕：lyrics.lrc" in text
+    assert "视频：bg.mp4" in text and "1920×1080" in text
+    assert "音频：song.wav" in text and "44100" in text
+
+
+# ---------------------------------------------------------------------------
+# 布局完整性
+# ---------------------------------------------------------------------------
+
+
+def test_window_shell_components_present(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+
+    # 四区 widget 都已挂载
+    assert win._lyrics_list is not None
+    assert win._preview_view is not None
+    assert win._transport_bar is not None
+    assert win._property_panel is not None
+    assert win._waveform_view is not None
+    assert win._tracks_view is not None
+
+    # 属性面板 4 个 tab
+    assert win._property_panel.count() == 4
+    assert [win._property_panel.tabText(i) for i in range(4)] == [
+        "基本",
+        "字幕",
+        "特效",
+        "装饰",
+    ]
