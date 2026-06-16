@@ -114,6 +114,36 @@ def probe_media(ffprobe_path: str, media_path: Path) -> MediaInfo:
         sample_rate = int(sample_rate_raw) if sample_rate_raw not in (None, "N/A", "") else None
         channels = int(channels_raw) if channels_raw not in (None, "N/A", "") else None
 
+    video_width = None
+    video_height = None
+    video_fps = None
+    if video_streams:
+        first_video = video_streams[0]
+        width_raw = first_video.get("width")
+        height_raw = first_video.get("height")
+        if width_raw not in (None, "N/A", ""):
+            video_width = int(width_raw)
+        if height_raw not in (None, "N/A", ""):
+            video_height = int(height_raw)
+        # ffprobe 给出 "avg_frame_rate" / "r_frame_rate" 形如 "60000/1001"。
+        # 优先 avg（更贴近实际播放速率）；都失败时 fps 留 None。
+        for key in ("avg_frame_rate", "r_frame_rate"):
+            rate_raw = first_video.get(key)
+            if not rate_raw or rate_raw in ("0/0", "N/A"):
+                continue
+            try:
+                if "/" in rate_raw:
+                    num, denom = rate_raw.split("/", 1)
+                    denom_v = float(denom)
+                    if denom_v == 0:
+                        continue
+                    video_fps = float(num) / denom_v
+                else:
+                    video_fps = float(rate_raw)
+                break
+            except (TypeError, ValueError):
+                continue
+
     return MediaInfo(
         path=media_path,
         duration=duration,
@@ -122,6 +152,9 @@ def probe_media(ffprobe_path: str, media_path: Path) -> MediaInfo:
         subtitle_streams=len(subtitle_streams),
         sample_rate=sample_rate,
         channels=channels,
+        video_width=video_width,
+        video_height=video_height,
+        video_fps=video_fps,
     )
 
 

@@ -1,13 +1,17 @@
-"""字幕视频渲染主窗口（A1 阶段）。
+"""字幕视频渲染主窗口（A1-A3 阶段）。
 
 照搬 SUG（lyrics_timing/.../frontend/main_window.py）的双模式骨架：
 
 - ``SubtitleRenderWindow(embedded=False)`` — 默认 standalone
 - ``SubtitleRenderWindow.for_embedding(parent, settings_provider, workflow_context)`` — 嵌入工作台
 
-A1 阶段：开放"选择字幕文件"按钮，加载 Nicokara 逐字 LRC（SUG ``NicokaraExporter``
-产物，``.lrc``），展示加载摘要（行数 / 字数 / 注音数 / 元数据）。后续 P0 任务会扩出
-四分区 + 顶/底栏完整布局。
+当前阶段开放的素材入口：
+
+- **A1** 字幕源：Nicokara 逐字 LRC（``.lrc``，SUG ``NicokaraExporter`` 产物）
+- **A2** 背景视频：任意 ffprobe 支持的视频容器
+- **A3** 音轨：任意 ffprobe 支持的音频容器（含视频文件本身）
+
+后续 P0 会扩出四分区 + 顶/底栏完整布局；当前 UI 只展示加载摘要，便于早期回归。
 """
 
 from __future__ import annotations
@@ -26,10 +30,19 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from krok_helper.errors import ProcessingError
+from krok_helper.ffmpeg import find_tool, probe_media
+from krok_helper.models import MediaInfo
+from krok_helper.settings import load_app_settings
 from krok_helper.subtitle_render.models import TimingTrack
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 
 SUBTITLE_FILTER = "Nicokara 逐字 LRC (*.lrc);;所有文件 (*.*)"
+VIDEO_FILTER = "视频文件 (*.mp4 *.mkv *.mov *.webm *.avi *.flv);;所有文件 (*.*)"
+AUDIO_FILTER = (
+    "音频 / 视频文件 (*.wav *.flac *.mp3 *.m4a *.aac *.ogg *.opus *.mp4 *.mkv *.mov);;"
+    "所有文件 (*.*)"
+)
 
 
 class SubtitleRenderWindow(QWidget):
@@ -66,6 +79,10 @@ class SubtitleRenderWindow(QWidget):
 
         self._timing_track: Optional[TimingTrack] = None
         self._subtitle_path: Optional[Path] = None
+        self._video_path: Optional[Path] = None
+        self._video_info: Optional[MediaInfo] = None
+        self._audio_path: Optional[Path] = None
+        self._audio_info: Optional[MediaInfo] = None
 
         self._init_layout()
 
@@ -79,8 +96,8 @@ class SubtitleRenderWindow(QWidget):
         shell.addWidget(title)
 
         intro = QLabel(
-            "选择 SUG 导出的 Nicokara 逐字 LRC 文件作为字幕源。"
-            "后续步骤（背景视频 / 音轨 / 样式 / 渲染输出）将依次开放。"
+            "依次选择字幕（Nicokara 逐字 LRC）、背景视频、音轨；后续步骤"
+            "（样式 / 实时预览 / 渲染输出）将依次开放。"
         )
         intro.setWordWrap(True)
         intro.setStyleSheet("font-size: 10pt; color: #666;")
@@ -88,14 +105,25 @@ class SubtitleRenderWindow(QWidget):
 
         action_row = QHBoxLayout()
         action_row.setSpacing(10)
-        self._load_button = QPushButton("选择字幕文件…")
-        self._load_button.setMinimumHeight(36)
-        self._load_button.clicked.connect(self._on_load_subtitle_clicked)
-        action_row.addWidget(self._load_button)
+        self._load_subtitle_button = QPushButton("选择字幕文件…")
+        self._load_subtitle_button.setMinimumHeight(36)
+        self._load_subtitle_button.clicked.connect(self._on_load_subtitle_clicked)
+        action_row.addWidget(self._load_subtitle_button)
+
+        self._load_video_button = QPushButton("选择背景视频…")
+        self._load_video_button.setMinimumHeight(36)
+        self._load_video_button.clicked.connect(self._on_load_video_clicked)
+        action_row.addWidget(self._load_video_button)
+
+        self._load_audio_button = QPushButton("选择音频…")
+        self._load_audio_button.setMinimumHeight(36)
+        self._load_audio_button.clicked.connect(self._on_load_audio_clicked)
+        action_row.addWidget(self._load_audio_button)
+
         action_row.addStretch(1)
         shell.addLayout(action_row)
 
-        self._summary_label = QLabel("尚未加载字幕。")
+        self._summary_label = QLabel(self._format_summary())
         self._summary_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         self._summary_label.setWordWrap(True)
         self._summary_label.setTextInteractionFlags(
@@ -107,9 +135,7 @@ class SubtitleRenderWindow(QWidget):
     # ------------------------------------------------------------------ events
 
     def _on_load_subtitle_clicked(self) -> None:
-        start_dir = ""
-        if self._subtitle_path is not None:
-            start_dir = str(self._subtitle_path.parent)
+        start_dir = str(self._subtitle_path.parent) if self._subtitle_path else ""
         path_str, _ = QFileDialog.getOpenFileName(
             self,
             "选择 Nicokara 逐字 LRC 文件",
@@ -119,6 +145,30 @@ class SubtitleRenderWindow(QWidget):
         if not path_str:
             return
         self.load_from_lrc(Path(path_str))
+
+    def _on_load_video_clicked(self) -> None:
+        start_dir = str(self._video_path.parent) if self._video_path else ""
+        path_str, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择背景视频",
+            start_dir,
+            VIDEO_FILTER,
+        )
+        if not path_str:
+            return
+        self.load_video(Path(path_str))
+
+    def _on_load_audio_clicked(self) -> None:
+        start_dir = str(self._audio_path.parent) if self._audio_path else ""
+        path_str, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择音频",
+            start_dir,
+            AUDIO_FILTER,
+        )
+        if not path_str:
+            return
+        self.load_audio(Path(path_str))
 
     # ------------------------------------------------------------------ public
 
@@ -135,42 +185,140 @@ class SubtitleRenderWindow(QWidget):
             return None
         self._timing_track = track
         self._subtitle_path = path
-        self._summary_label.setText(self._format_summary(path, track))
+        self._refresh_summary()
         return track
+
+    def load_video(self, path: Path) -> Optional[MediaInfo]:
+        """加载背景视频，调用 ffprobe 读取分辨率 / 帧率 / 时长。"""
+        info = self._probe(path, "视频")
+        if info is None:
+            return None
+        if info.video_streams == 0:
+            QMessageBox.warning(
+                self,
+                "背景视频不可用",
+                f"该文件不含视频流：\n{path}",
+            )
+            return None
+        self._video_path = path
+        self._video_info = info
+        self._refresh_summary()
+        return info
+
+    def load_audio(self, path: Path) -> Optional[MediaInfo]:
+        """加载音轨，调用 ffprobe 读取时长 / 采样率。"""
+        info = self._probe(path, "音频")
+        if info is None:
+            return None
+        if info.audio_streams == 0:
+            QMessageBox.warning(
+                self,
+                "音频不可用",
+                f"该文件不含音频流：\n{path}",
+            )
+            return None
+        self._audio_path = path
+        self._audio_info = info
+        self._refresh_summary()
+        return info
 
     @property
     def timing_track(self) -> Optional[TimingTrack]:
         return self._timing_track
 
+    @property
+    def video_info(self) -> Optional[MediaInfo]:
+        return self._video_info
+
+    @property
+    def audio_info(self) -> Optional[MediaInfo]:
+        return self._audio_info
+
     # ------------------------------------------------------------------ helpers
 
-    @staticmethod
-    def _format_summary(path: Path, track: TimingTrack) -> str:
-        meta = track.meta
-        meta_lines = []
-        if meta.title:
-            meta_lines.append(f"  • 曲名：{meta.title}")
-        if meta.artist:
-            meta_lines.append(f"  • 艺术家：{meta.artist}")
-        if meta.album:
-            meta_lines.append(f"  • 专辑：{meta.album}")
-        if meta.tagging_by:
-            meta_lines.append(f"  • 打轴：{meta.tagging_by}")
-        if meta.offset_ms:
-            meta_lines.append(f"  • 全局偏移：{meta.offset_ms} ms")
-        if meta.silence_ms:
-            meta_lines.append(f"  • 曲首静音：{meta.silence_ms} ms")
-        meta_block = "\n".join(meta_lines) if meta_lines else "  （无元数据）"
+    def _probe(self, path: Path, label: str) -> Optional[MediaInfo]:
+        try:
+            ffprobe_path = self._resolve_ffprobe_path()
+            return probe_media(ffprobe_path, path)
+        except ProcessingError as exc:
+            QMessageBox.critical(self, f"加载{label}失败", str(exc))
+            return None
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(
+                self,
+                f"加载{label}失败",
+                f"无法读取媒体信息：\n{path}\n\n错误：{exc}",
+            )
+            return None
 
-        return (
-            f"已加载：{path}\n"
-            f"\n"
-            f"  • 行数（含空行）：{len(track.lines)}\n"
-            f"  • 非空行数：{track.non_blank_line_count}\n"
-            f"  • 字符数：{track.char_count}\n"
-            f"  • 注音条数：{len(track.rubies)}\n"
-            f"\n元数据：\n{meta_block}"
-        )
+    def _resolve_ffprobe_path(self) -> str:
+        # 优先用工作台设置里的 ffmpeg_dir；找不到再回退 PATH。
+        ffmpeg_dir: Optional[Path] = None
+        try:
+            settings = load_app_settings()
+            raw = (settings.ffmpeg_dir or "").strip()
+            if raw:
+                ffmpeg_dir = Path(raw)
+        except Exception:
+            ffmpeg_dir = None
+        return find_tool("ffprobe", ffmpeg_dir)
+
+    def _refresh_summary(self) -> None:
+        self._summary_label.setText(self._format_summary())
+
+    def _format_summary(self) -> str:
+        parts: list[str] = []
+
+        # 字幕
+        if self._timing_track is not None and self._subtitle_path is not None:
+            track = self._timing_track
+            meta = track.meta
+            meta_bits: list[str] = []
+            if meta.title:
+                meta_bits.append(f"曲名 {meta.title}")
+            if meta.artist:
+                meta_bits.append(f"艺术家 {meta.artist}")
+            if meta.offset_ms:
+                meta_bits.append(f"全局偏移 {meta.offset_ms} ms")
+            meta_str = "（" + " / ".join(meta_bits) + "）" if meta_bits else ""
+            parts.append(
+                "【字幕】" + str(self._subtitle_path) + "\n"
+                f"  • 非空行数 {track.non_blank_line_count} / "
+                f"字符数 {track.char_count} / "
+                f"注音条数 {len(track.rubies)} {meta_str}"
+            )
+        else:
+            parts.append("【字幕】尚未加载")
+
+        # 视频
+        if self._video_info is not None and self._video_path is not None:
+            v = self._video_info
+            dim = (
+                f"{v.video_width}×{v.video_height}"
+                if v.video_width and v.video_height
+                else "分辨率未知"
+            )
+            fps = f"{v.video_fps:.3f} fps" if v.video_fps else "帧率未知"
+            parts.append(
+                "【背景视频】" + str(self._video_path) + "\n"
+                f"  • {dim} / {fps} / 时长 {_format_duration(v.duration)}"
+            )
+        else:
+            parts.append("【背景视频】尚未加载")
+
+        # 音频
+        if self._audio_info is not None and self._audio_path is not None:
+            a = self._audio_info
+            sr = f"{a.sample_rate} Hz" if a.sample_rate else "采样率未知"
+            ch = f"{a.channels} 声道" if a.channels else "声道数未知"
+            parts.append(
+                "【音频】" + str(self._audio_path) + "\n"
+                f"  • {sr} / {ch} / 时长 {_format_duration(a.duration)}"
+            )
+        else:
+            parts.append("【音频】尚未加载")
+
+        return "\n\n".join(parts)
 
     # ------------------------------------------------------------------ embed
 
@@ -192,3 +340,14 @@ class SubtitleRenderWindow(QWidget):
     def flush_unsaved(self) -> None:
         """宿主销毁本 widget 前调用的兜底（占位）。"""
         return
+
+
+def _format_duration(seconds: float) -> str:
+    if seconds is None or seconds <= 0:
+        return "未知"
+    total = int(round(seconds))
+    h, rem = divmod(total, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f"{h}:{m:02d}:{s:02d}"
+    return f"{m}:{s:02d}"
