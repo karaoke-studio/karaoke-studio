@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from PyQt6.QtCore import Qt
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog,
     QLabel,
@@ -58,7 +59,7 @@ from krok_helper.subtitle_render.frontend.timeline_view import (
 )
 from krok_helper.subtitle_render.models import Style, TimingTrack
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
-from krok_helper.theme_workbench import palette, themed
+from krok_helper.subtitle_render.frontend.theme import palette, themed
 
 SUBTITLE_FILTER = "Nicokara 逐字 LRC (*.lrc);;所有文件 (*.*)"
 VIDEO_FILTER = "视频文件 (*.mp4 *.mkv *.mov *.webm *.avi *.flv);;所有文件 (*.*)"
@@ -99,6 +100,7 @@ class SubtitleRenderWindow(QWidget):
         )
 
         self._init_layout()
+        self._init_shortcuts()
 
     # ------------------------------------------------------------------ layout
 
@@ -163,6 +165,7 @@ class SubtitleRenderWindow(QWidget):
         center_layout.addWidget(self._preview_panel, 1)
         self._transport_bar = TransportBar()
         self._transport_bar.timeChanged.connect(self._preview_panel.set_time)
+        self._transport_bar.playbackStateChanged.connect(self._preview_panel.set_playing)
         center_layout.addWidget(self._transport_bar)
         top.addWidget(center)
 
@@ -191,6 +194,12 @@ class SubtitleRenderWindow(QWidget):
 
         outer.addWidget(body, 1)
         return page
+
+    def _init_shortcuts(self) -> None:
+        # 空格键播放 / 暂停（窗口范围内有效，避免误伤未来的文本输入）
+        self._space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
+        self._space_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._space_shortcut.activated.connect(self._transport_bar.toggle_play)
 
     def _make_export_tab(self) -> QWidget:
         page = QWidget()
@@ -256,9 +265,7 @@ class SubtitleRenderWindow(QWidget):
         self._subtitle_path = path
         self._lyrics_panel.set_track(track)
         self._preview_panel.set_track(track)
-        duration = track_duration_ms(track)
-        if duration > 0:
-            self._transport_bar.set_duration(duration)
+        self._refresh_transport_duration()
         self._transport_bar.set_time(0)
         return track
 
@@ -272,7 +279,8 @@ class SubtitleRenderWindow(QWidget):
             return None
         self._video_path = path
         self._video_info = info
-        self._preview_panel.set_populated(True)
+        self._preview_panel.set_video_source(path)
+        self._refresh_transport_duration()
         return info
 
     def load_audio(self, path: Path) -> Optional[MediaInfo]:
@@ -286,6 +294,8 @@ class SubtitleRenderWindow(QWidget):
         self._audio_path = path
         self._audio_info = info
         self._waveform_panel.set_populated(True)
+        self._transport_bar.set_audio_source(path)
+        self._refresh_transport_duration()
         return info
 
     @property
@@ -325,8 +335,20 @@ class SubtitleRenderWindow(QWidget):
             if raw:
                 ffmpeg_dir = Path(raw)
         except Exception:
-            ffmpeg_dir = None
+                ffmpeg_dir = None
         return find_tool("ffprobe", ffmpeg_dir)
+
+    def _refresh_transport_duration(self) -> None:
+        candidates: list[int] = []
+        if self._timing_track is not None:
+            candidates.append(track_duration_ms(self._timing_track))
+        if self._video_info is not None and self._video_info.duration > 0:
+            candidates.append(int(self._video_info.duration * 1000))
+        if self._audio_info is not None and self._audio_info.duration > 0:
+            candidates.append(int(self._audio_info.duration * 1000))
+        duration = max(candidates, default=0)
+        if duration > 0:
+            self._transport_bar.set_duration(duration)
 
     # ------------------------------------------------------------------ embed
 

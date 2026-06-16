@@ -126,6 +126,39 @@ def test_load_video_populates_preview_panel(qapp, monkeypatch, tmp_path):
     assert win.video_info is fake_info
     assert win._video_path == tmp_path / "bg.mp4"
     assert win._preview_panel.is_populated()
+    assert win._preview_panel.canvas.has_video_source
+
+
+def test_load_video_with_missing_test_file_does_not_start_video_player(qapp, monkeypatch, tmp_path):
+    """A7 稳定性：probe 已 mock 时，假路径不应启动 Qt Multimedia 后台线程。"""
+    win = _make_window(qapp, monkeypatch)
+    fake_info = MediaInfo(
+        path=tmp_path / "bg.mp4",
+        duration=10.0,
+        video_streams=1,
+        audio_streams=0,
+        subtitle_streams=0,
+        video_width=1280,
+        video_height=720,
+        video_fps=30.0,
+    )
+    monkeypatch.setattr(mw, "probe_media", lambda probe, path: fake_info)
+
+    result = win.load_video(tmp_path / "bg.mp4")
+
+    assert result is fake_info
+    assert win._preview_panel.canvas.has_video_source
+    assert win._preview_panel.canvas._video_player is None
+
+
+def test_transport_playback_state_syncs_to_preview_canvas(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+
+    win._transport_bar.play()
+    assert win._preview_panel.canvas._video_playing is True
+    win._transport_bar.pause()
+
+    assert win._preview_panel.canvas._video_playing is False
 
 
 def test_load_video_rejects_audio_only_file(qapp, monkeypatch, tmp_path):

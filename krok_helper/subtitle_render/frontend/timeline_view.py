@@ -15,7 +15,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
-from krok_helper.theme_workbench import palette, themed
+from krok_helper.subtitle_render.frontend.theme import palette, themed
 
 
 class WaveformPanel(DropPanel):

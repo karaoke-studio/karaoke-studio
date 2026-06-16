@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from krok_helper.theme_workbench import palette, themed
+from krok_helper.subtitle_render.frontend.theme import palette, themed
 
 
 class DropPanel(QFrame):
@@ -113,10 +113,7 @@ class DropPanel(QFrame):
         self._stack.addWidget(self._content_page)
         self._stack.setCurrentIndex(0)
 
-        self._apply_panel_style()
-        from krok_helper.theme_workbench import theme as _wb_theme
-
-        _wb_theme.changed.connect(self._apply_panel_style)
+        themed(self, self._panel_qss)
 
     # ------------------------------------------------------------------ public
 
@@ -190,6 +187,9 @@ class DropPanel(QFrame):
     # ------------------------------------------------------------------ style
 
     def _apply_panel_style(self) -> None:
+        self.setStyleSheet(self._panel_qss())
+
+    def _panel_qss(self) -> str:
         p = palette()
         if self._drag_state == "accept":
             border_color = p.accent_primary
@@ -207,7 +207,7 @@ class DropPanel(QFrame):
             border_color = p.card_border
             border_width = 1
             border_style = "solid"
-        self.setStyleSheet(
+        return (
             f"#DropPanel {{ background-color: {p.card_bg}; "
             f"border: {border_width}px {border_style} {border_color}; "
             f"border-radius: 8px; }}"

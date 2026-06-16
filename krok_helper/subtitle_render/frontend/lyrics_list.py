@@ -41,7 +41,7 @@ class _NoFocusDelegate(QStyledItemDelegate):
 
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
 from krok_helper.subtitle_render.models import TimingTrack
-from krok_helper.theme_workbench import palette, themed
+from krok_helper.subtitle_render.frontend.theme import palette, themed
 
 
 class LyricsPanel(DropPanel):

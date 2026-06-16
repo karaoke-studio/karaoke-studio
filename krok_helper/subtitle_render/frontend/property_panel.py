@@ -13,7 +13,7 @@ from typing import Optional
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
 
-from krok_helper.theme_workbench import palette, themed
+from krok_helper.subtitle_render.frontend.theme import palette, themed
 
 
 def _placeholder_page(text: str) -> QWidget:
