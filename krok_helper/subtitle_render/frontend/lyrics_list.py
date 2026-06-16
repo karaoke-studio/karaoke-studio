@@ -1,15 +1,12 @@
-"""左侧歌词列表（Sayatoo 风格）。
+"""左侧歌词面板（拖拽 + 单列简洁列表）。
 
-展示从 Nicokara LRC 解析出的 :class:`TimingTrack`，每行一记录，包含
-行号 / S（演唱者切换标志） / 角色（演唱者名） / 内容。
+UI 设计：
 
-后续会扩展：
+- **空态**：居中显示"拖入字幕文件 / 点击此处选择"，受 :class:`DropPanel` 接管
+- **载入后**：单列 ``QListWidget``，每行只显示歌词内容；不显示行号 / 演唱者标志 /
+  演唱者名，也不显示表头——按用户审美统一简化
 
-- 行高亮跟随预览 playhead
-- 点击行 / 字定位 playhead
-- 双击行编辑（？）/ 上下文菜单（按演唱者过滤）
-
-当前只做"加载即填充"。
+后续接入 playhead 高亮 / 点击跳转 / 右键演唱者过滤等交互。
 """
 
 from __future__ import annotations
@@ -17,78 +14,81 @@ from __future__ import annotations
 from typing import Optional
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QBrush, QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView,
-    QHeaderView,
-    QTableWidget,
-    QTableWidgetItem,
+    QListWidget,
+    QListWidgetItem,
+    QWidget,
 )
 
-from krok_helper.subtitle_render.models import TimingLine, TimingTrack
+from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
+from krok_helper.subtitle_render.models import TimingTrack
+from krok_helper.theme_workbench import palette, themed
 
 
-class LyricsListWidget(QTableWidget):
-    """歌词行列表，仿 Sayatoo 字幕表。"""
+class LyricsPanel(DropPanel):
+    """左侧歌词面板（含空态拖拽 + 已加载列表两态）。"""
 
-    COL_LINE_NO = 0
-    COL_SINGER_FLAG = 1
-    COL_SINGER_NAME = 2
-    COL_CONTENT = 3
-
-    def __init__(self, parent=None) -> None:
-        super().__init__(parent)
-        self._init_table()
-
-    def _init_table(self) -> None:
-        self.setColumnCount(4)
-        self.setHorizontalHeaderLabels(["行号", "S", "角色", "内容"])
-        self.verticalHeader().setVisible(False)
-        self.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.setAlternatingRowColors(True)
-
-        header = self.horizontalHeader()
-        header.setSectionResizeMode(self.COL_LINE_NO, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(self.COL_SINGER_FLAG, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(self.COL_SINGER_NAME, QHeaderView.ResizeMode.ResizeToContents)
-        header.setSectionResizeMode(self.COL_CONTENT, QHeaderView.ResizeMode.Stretch)
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(
+            extensions={".lrc"},
+            empty_title="拖入字幕文件",
+            empty_hint="拖入 SUG 导出的 Nicokara 逐字 LRC（.lrc）\n或点击此处选择",
+            empty_icon="📝",
+            parent=parent,
+        )
+        self._list = QListWidget()
+        self._list.setObjectName("LyricsList")
+        self._list.setFrameShape(QListWidget.Shape.NoFrame)
+        self._list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._list.setUniformItemSizes(False)
+        self._list.setSpacing(0)
+        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        themed(
+            self._list,
+            lambda: (
+                f"""
+                #LyricsList {{
+                    background: transparent;
+                    color: {palette().text_primary};
+                    font-family: "Microsoft YaHei UI";
+                    font-size: 10.5pt;
+                    padding: 8px 4px;
+                }}
+                #LyricsList::item {{
+                    padding: 6px 12px;
+                    border: 0;
+                }}
+                #LyricsList::item:selected {{
+                    background: {palette().preview_selection_bg};
+                    color: {palette().preview_selection_text};
+                    border-radius: 4px;
+                }}
+                #LyricsList::item:hover {{
+                    background: {palette().table_row_hover};
+                    border-radius: 4px;
+                }}
+                """
+            ),
+        )
+        self.set_content(self._list)
 
     # ------------------------------------------------------------------ public
 
     def set_track(self, track: Optional[TimingTrack]) -> None:
-        """填充歌词。``None`` / 空 track 时清空列表。"""
-        self.setRowCount(0)
+        """加载 / 清空字幕。``None`` / 无行时回到空态。"""
+        self._list.clear()
         if track is None or not track.lines:
+            self.set_populated(False)
             return
-        self.setRowCount(len(track.lines))
-        for row, line in enumerate(track.lines):
-            self._populate_row(row, line)
+        for line in track.lines:
+            text = "".join(c.text for c in line.chars)
+            item = QListWidgetItem(text if not line.is_blank else "")
+            if line.is_blank:
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+            self._list.addItem(item)
+        self.set_populated(True)
 
-    # ------------------------------------------------------------------ helpers
-
-    def _populate_row(self, row: int, line: TimingLine) -> None:
-        line_no = QTableWidgetItem(str(row + 1))
-        line_no.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        # S 列：NicokaraExporter 在演唱者切换处插入 【】 标签
-        # 故 line.singer_label 非空即代表"切换点"
-        flag_text = "S" if line.singer_label else ""
-        flag_item = QTableWidgetItem(flag_text)
-        flag_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-
-        singer_item = QTableWidgetItem(line.singer_label or "")
-
-        content_text = "".join(c.text for c in line.chars)
-        content_item = QTableWidgetItem(content_text)
-
-        # 空行视觉淡化
-        if line.is_blank:
-            gray = QBrush(QColor(150, 150, 150))
-            for item in (line_no, flag_item, singer_item, content_item):
-                item.setForeground(gray)
-
-        self.setItem(row, self.COL_LINE_NO, line_no)
-        self.setItem(row, self.COL_SINGER_FLAG, flag_item)
-        self.setItem(row, self.COL_SINGER_NAME, singer_item)
-        self.setItem(row, self.COL_CONTENT, content_item)
+    @property
+    def list_widget(self) -> QListWidget:
+        return self._list

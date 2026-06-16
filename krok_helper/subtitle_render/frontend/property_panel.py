@@ -1,36 +1,70 @@
-"""右侧属性面板（占位）。
+"""右侧属性面板。
 
 仿 Sayatoo 顶级 tab：基本 / 字幕 / 特效 / 装饰。
 
-每个 tab 内最终用 ``SettingCardGroup`` 折叠分组（详见设计文档 §C）。当前阶段
-仅显示标签页骨架，便于 A4 之后按字段陆续填入。
+每个 tab 内最终用 ``SettingCardGroup`` 折叠分组；当前阶段仅显示标签页骨架，
+便于 A4 之后按字段陆续填入。
 """
 
 from __future__ import annotations
 
+from typing import Optional
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QLabel, QTabWidget, QVBoxLayout, QWidget
+
+from krok_helper.theme_workbench import palette, themed
 
 
 def _placeholder_page(text: str) -> QWidget:
     page = QWidget()
     layout = QVBoxLayout(page)
-    layout.setContentsMargins(16, 16, 16, 16)
+    layout.setContentsMargins(20, 24, 20, 24)
     label = QLabel(text)
     label.setAlignment(Qt.AlignmentFlag.AlignCenter)
     label.setWordWrap(True)
-    label.setStyleSheet("color: #888;")
-    layout.addWidget(label)
+    themed(label, lambda: f"color: {palette().text_hint}; font-size: 10pt;")
     layout.addStretch(1)
+    layout.addWidget(label)
+    layout.addStretch(2)
     return page
 
 
 class PropertyPanel(QTabWidget):
     """字幕样式 / 特效 / 装饰属性面板。"""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setMinimumWidth(280)
+        self.setObjectName("PropertyPanel")
+        self.setMinimumWidth(260)
+        self.setDocumentMode(True)
+        self.setTabPosition(QTabWidget.TabPosition.North)
+        themed(
+            self,
+            lambda: (
+                f"""
+                #PropertyPanel {{ background: {palette().panel_bg}; }}
+                #PropertyPanel::pane {{
+                    border: 1px solid {palette().card_border};
+                    border-radius: 6px;
+                    background: {palette().panel_bg};
+                }}
+                #PropertyPanel QTabBar::tab {{
+                    padding: 6px 14px;
+                    color: {palette().text_secondary};
+                    background: transparent;
+                    border: none;
+                }}
+                #PropertyPanel QTabBar::tab:selected {{
+                    color: {palette().title_text};
+                    border-bottom: 2px solid {palette().accent_primary};
+                }}
+                #PropertyPanel QTabBar::tab:hover {{
+                    color: {palette().title_text};
+                }}
+                """
+            ),
+        )
         self.addTab(
             _placeholder_page(
                 "屏幕预设 / 像素纵横比 / 宽高 / 视图 / 布局 / 时间偏移……\n"

@@ -1,47 +1,83 @@
-"""中央预览区（占位）。
+"""中央预览区（拖拽视频 + 占位）。
 
-最终实装：``QGraphicsView`` + 自定义场景，背景层 ``QMediaPlayer.setVideoSink`` /
-``QGraphicsPixmapItem``（纯色 / 静态图），字幕层 ``QGraphicsPixmapItem``（QPainter
-离屏帧）。预览与渲染共享同一 ``paint_frame``。
+UI 设计：
 
-A4 阶段才把真实字符高亮渲染进来；当前 widget 只画一个空白占位提示。
+- **空态**：居中显示"拖入背景视频 / 点击此处选择"
+- **载入后**：嵌入预览画布（A4 之前先放一个深色占位 widget；A4 时换成
+  ``QGraphicsView`` + 字幕叠加 / ``QMediaPlayer.setVideoSink``）
+- 下方独立 :class:`TransportBar` 放播放控件占位
 """
 
 from __future__ import annotations
 
+from typing import Optional
+
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QPainter
-from PyQt6.QtWidgets import QFrame, QLabel, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
+
+from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
+from krok_helper.theme_workbench import palette, themed
 
 
-class PreviewView(QWidget):
-    """字幕视频预览区占位。"""
+class PreviewPanel(DropPanel):
+    """预览面板。空态拖拽 / 载入后显示视频画面。"""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setMinimumSize(480, 270)
-        self.setStyleSheet(
-            "PreviewView { background-color: #1a1a1a; border: 1px solid #333; }"
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(
+            extensions={".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv"},
+            empty_title="拖入背景视频",
+            empty_hint="支持 .mp4 / .mkv / .mov / .webm 等\n或点击此处选择",
+            empty_icon="🎬",
+            parent=parent,
         )
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        hint = QLabel("预览区（A4 实装后显示带卡拉ok高亮的字幕画面）")
+        # 载入后的预览画布占位（A4 实装时替换为 QGraphicsView + 字幕叠加）
+        canvas = QWidget()
+        canvas.setObjectName("PreviewCanvas")
+        canvas.setMinimumHeight(240)
+        themed(
+            canvas,
+            lambda: (
+                f"#PreviewCanvas {{ background: {palette().preview_bg}; "
+                f"border: 1px solid {palette().preview_border}; "
+                f"border-radius: 6px; }}"
+            ),
+        )
+        canvas_layout = QVBoxLayout(canvas)
+        canvas_layout.setContentsMargins(0, 0, 0, 0)
+        hint = QLabel("预览画面（A4 实装后显示带卡拉ok高亮的字幕叠加）")
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint.setStyleSheet("color: #888; font-size: 11pt;")
-        layout.addWidget(hint)
+        themed(hint, lambda: f"color: {palette().text_hint}; font-size: 10pt;")
+        canvas_layout.addWidget(hint)
+        self.set_content(canvas)
 
 
 class TransportBar(QWidget):
-    """播放控件占位（A4 接 QMediaPlayer 后实装）。"""
+    """播放控件 + 时间码（占位，A4 / A7 接 QMediaPlayer 后实装）。"""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setFixedHeight(36)
-        self.setStyleSheet(
-            "TransportBar { background-color: #2a2a2a; border-top: 1px solid #333; }"
+        self.setObjectName("TransportBar")
+        self.setFixedHeight(44)
+        themed(
+            self,
+            lambda: (
+                f"#TransportBar {{ background: transparent; "
+                f"border-top: 1px solid {palette().card_border}; }}"
+            ),
         )
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(8, 4, 8, 4)
-        hint = QLabel("⏵ ⏺ ⏵︎| ────────────────────── 1.0x  00:00.00")
-        hint.setStyleSheet("color: #aaa; font-family: monospace;")
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(12, 6, 12, 6)
+        layout.setSpacing(8)
+
+        hint = QLabel("⏵   ⏺   ⏵︎│      ────────────────────")
+        themed(hint, lambda: f"color: {palette().text_hint}; font-family: monospace;")
         layout.addWidget(hint)
+        layout.addStretch(1)
+
+        speed = QLabel("1.0×")
+        themed(speed, lambda: f"color: {palette().text_secondary};")
+        layout.addWidget(speed)
+
+        timecode = QLabel("00:00.00")
+        themed(timecode, lambda: f"color: {palette().text_primary}; font-family: monospace;")
+        layout.addWidget(timecode)

@@ -1,20 +1,30 @@
-"""字幕视频渲染主窗口（Sayatoo 风格四区布局）。
+"""字幕视频渲染主窗口（Sayatoo 风格 + Pivot tabs + 拖拽加载）。
 
 照搬 SUG（lyrics_timing/.../frontend/main_window.py）的双模式骨架：
 
 - ``SubtitleRenderWindow(embedded=False)`` — 默认 standalone
-- ``SubtitleRenderWindow.for_embedding(parent, settings_provider, workflow_context)`` — 嵌入工作台
+- ``SubtitleRenderWindow.for_embedding(parent, settings_provider, workflow_context)``
+  — 嵌入工作台
 
-布局参考 Sayatoo（详见设计文档 §C）：
+UI 顶层结构：
 
-  顶部工具栏（选字幕 / 选视频 / 选音频 + 状态）
-  ├─ 左·歌词列表 ┃ 中·预览 + transport ┃ 右·属性 tab
-  └─ 底·波形 + 字幕轨道（全宽）
+  ┌─ Pivot：预览 / 导出 ─────────────────────────────┐
+  ├─ QStackedWidget ────────────────────────────────┤
+  │                                                  │
+  │  ◆ 预览 Tab（当前唯一可用）                       │
+  │    ┌─────────┬──────────────┬──────────────┐    │
+  │    │ 左·歌词 │ 中·预览       │ 右·属性 tab │    │
+  │    │ (拖.lrc)│ + transport   │              │    │
+  │    ├─────────┴──────────────┴──────────────┤    │
+  │    │ 底·波形（拖音频）                       │    │
+  │    │ 底·字幕轨道                              │    │
+  │    └─────────────────────────────────────────┘   │
+  │                                                  │
+  │  ◆ 导出 Tab（A8 实装后开放）                      │
+  │                                                  │
+  └──────────────────────────────────────────────────┘
 
-当前阶段：
-- A1 字幕加载已接通，填充左侧歌词列表
-- A2 / A3 视频 / 音频加载已接通，顶栏状态文字反馈
-- 预览 / 属性 / 波形 / 轨道全是占位 widget，A4 之后陆续填充
+三个素材区均接受拖拽 + 点击浏览（详见 :mod:`drop_panel`）。
 """
 
 from __future__ import annotations
@@ -25,26 +35,29 @@ from typing import Any, Optional
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QFileDialog,
-    QFrame,
-    QHBoxLayout,
     QLabel,
     QMessageBox,
-    QPushButton,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
+from qfluentwidgets import Pivot
 
 from krok_helper.errors import ProcessingError
 from krok_helper.ffmpeg import find_tool, probe_media
 from krok_helper.models import MediaInfo
 from krok_helper.settings import load_app_settings
-from krok_helper.subtitle_render.frontend.lyrics_list import LyricsListWidget
-from krok_helper.subtitle_render.frontend.preview_view import PreviewView, TransportBar
+from krok_helper.subtitle_render.frontend.lyrics_list import LyricsPanel
+from krok_helper.subtitle_render.frontend.preview_view import PreviewPanel, TransportBar
 from krok_helper.subtitle_render.frontend.property_panel import PropertyPanel
-from krok_helper.subtitle_render.frontend.timeline_view import TrackTimelineView, WaveformView
+from krok_helper.subtitle_render.frontend.timeline_view import (
+    TrackTimelineView,
+    WaveformPanel,
+)
 from krok_helper.subtitle_render.models import TimingTrack
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
+from krok_helper.theme_workbench import palette, themed
 
 SUBTITLE_FILTER = "Nicokara 逐字 LRC (*.lrc);;所有文件 (*.*)"
 VIDEO_FILTER = "视频文件 (*.mp4 *.mkv *.mov *.webm *.avi *.flv);;所有文件 (*.*)"
@@ -78,74 +91,73 @@ class SubtitleRenderWindow(QWidget):
         self._audio_path: Optional[Path] = None
         self._audio_info: Optional[MediaInfo] = None
 
+        themed(
+            self,
+            lambda: f"SubtitleRenderWindow {{ background: {palette().shell_bg}; }}",
+        )
+
         self._init_layout()
 
     # ------------------------------------------------------------------ layout
 
     def _init_layout(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        root.setContentsMargins(16, 12, 16, 16)
+        root.setSpacing(8)
 
-        root.addWidget(self._make_toolbar())
-        root.addWidget(self._make_divider())
-        root.addWidget(self._make_body_splitter(), 1)
+        # 顶部：Pivot 大 tab（预览 / 导出）
+        self._pivot = Pivot(self)
+        self._pivot.setFixedHeight(40)
+        root.addWidget(self._pivot)
 
-    def _make_toolbar(self) -> QWidget:
-        bar = QWidget()
-        bar.setObjectName("SubtitleRenderToolbar")
-        bar.setStyleSheet(
-            "#SubtitleRenderToolbar { background-color: palette(window); }"
+        # 中间：QStackedWidget 承载 tab 内容
+        self._stack = QStackedWidget(self)
+        root.addWidget(self._stack, 1)
+
+        self._preview_tab = self._make_preview_tab()
+        self._export_tab = self._make_export_tab()
+        self._stack.addWidget(self._preview_tab)
+        self._stack.addWidget(self._export_tab)
+
+        self._pivot.addItem(
+            routeKey="preview",
+            text="预览",
+            onClick=lambda _checked=False: self._stack.setCurrentIndex(0),
         )
-        layout = QHBoxLayout(bar)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(8)
-
-        self._load_subtitle_button = QPushButton("选择字幕文件…")
-        self._load_subtitle_button.clicked.connect(self._on_load_subtitle_clicked)
-        layout.addWidget(self._load_subtitle_button)
-
-        self._load_video_button = QPushButton("选择背景视频…")
-        self._load_video_button.clicked.connect(self._on_load_video_clicked)
-        layout.addWidget(self._load_video_button)
-
-        self._load_audio_button = QPushButton("选择音频…")
-        self._load_audio_button.clicked.connect(self._on_load_audio_clicked)
-        layout.addWidget(self._load_audio_button)
-
-        layout.addSpacing(12)
-
-        self._status_label = QLabel("尚未加载素材")
-        self._status_label.setStyleSheet("color: #888;")
-        self._status_label.setTextInteractionFlags(
-            Qt.TextInteractionFlag.TextSelectableByMouse
+        self._pivot.addItem(
+            routeKey="export",
+            text="导出",
+            onClick=lambda _checked=False: self._stack.setCurrentIndex(1),
         )
-        layout.addWidget(self._status_label, 1)
+        self._pivot.setCurrentItem("preview")
+        self._stack.setCurrentIndex(0)
 
-        return bar
+    def _make_preview_tab(self) -> QWidget:
+        page = QWidget()
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(0, 8, 0, 0)
+        outer.setSpacing(8)
 
-    @staticmethod
-    def _make_divider() -> QFrame:
-        d = QFrame()
-        d.setFrameShape(QFrame.Shape.HLine)
-        d.setFrameShadow(QFrame.Shadow.Sunken)
-        d.setStyleSheet("color: #333;")
-        return d
-
-    def _make_body_splitter(self) -> QSplitter:
         body = QSplitter(Qt.Orientation.Vertical)
+        body.setChildrenCollapsible(False)
 
         # 上半部：左·歌词 ┃ 中·预览 ┃ 右·属性
         top = QSplitter(Qt.Orientation.Horizontal)
-        self._lyrics_list = LyricsListWidget()
-        top.addWidget(self._lyrics_list)
+        top.setChildrenCollapsible(False)
+
+        self._lyrics_panel = LyricsPanel()
+        self._lyrics_panel.pathDropped.connect(self.load_from_lrc)
+        self._lyrics_panel.browseRequested.connect(self._browse_subtitle)
+        top.addWidget(self._lyrics_panel)
 
         center = QWidget()
         center_layout = QVBoxLayout(center)
         center_layout.setContentsMargins(0, 0, 0, 0)
         center_layout.setSpacing(0)
-        self._preview_view = PreviewView()
-        center_layout.addWidget(self._preview_view, 1)
+        self._preview_panel = PreviewPanel()
+        self._preview_panel.pathDropped.connect(self.load_video)
+        self._preview_panel.browseRequested.connect(self._browse_video)
+        center_layout.addWidget(self._preview_panel, 1)
         self._transport_bar = TransportBar()
         center_layout.addWidget(self._transport_bar)
         top.addWidget(center)
@@ -157,12 +169,13 @@ class SubtitleRenderWindow(QWidget):
         top.setStretchFactor(1, 3)
         top.setStretchFactor(2, 1)
         top.setSizes([280, 760, 320])
-
         body.addWidget(top)
 
-        # 下半部：波形 + 字幕轨道
-        self._waveform_view = WaveformView()
-        body.addWidget(self._waveform_view)
+        # 底部：波形 + 字幕轨道
+        self._waveform_panel = WaveformPanel()
+        self._waveform_panel.pathDropped.connect(self.load_audio)
+        self._waveform_panel.browseRequested.connect(self._browse_audio)
+        body.addWidget(self._waveform_panel)
 
         self._tracks_view = TrackTimelineView()
         body.addWidget(self._tracks_view)
@@ -172,11 +185,35 @@ class SubtitleRenderWindow(QWidget):
         body.setStretchFactor(2, 2)
         body.setSizes([520, 80, 140])
 
-        return body
+        outer.addWidget(body, 1)
+        return page
 
-    # ------------------------------------------------------------------ events
+    def _make_export_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(48, 48, 48, 48)
+        layout.addStretch(1)
+        title = QLabel("导出尚未实装")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        themed(
+            title,
+            lambda: f"color: {palette().title_text}; font-size: 18pt; font-weight: 700;",
+        )
+        layout.addWidget(title)
+        hint = QLabel(
+            "A8 / A9 阶段开放：分辨率 / fps / 码率 / 硬编 / 输出路径 / "
+            "开始渲染 / 取消"
+        )
+        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hint.setWordWrap(True)
+        themed(hint, lambda: f"color: {palette().text_hint}; font-size: 10.5pt;")
+        layout.addWidget(hint)
+        layout.addStretch(2)
+        return page
 
-    def _on_load_subtitle_clicked(self) -> None:
+    # ------------------------------------------------------------------ browse fallback
+
+    def _browse_subtitle(self) -> None:
         start_dir = str(self._subtitle_path.parent) if self._subtitle_path else ""
         path_str, _ = QFileDialog.getOpenFileName(
             self, "选择 Nicokara 逐字 LRC 文件", start_dir, SUBTITLE_FILTER
@@ -184,7 +221,7 @@ class SubtitleRenderWindow(QWidget):
         if path_str:
             self.load_from_lrc(Path(path_str))
 
-    def _on_load_video_clicked(self) -> None:
+    def _browse_video(self) -> None:
         start_dir = str(self._video_path.parent) if self._video_path else ""
         path_str, _ = QFileDialog.getOpenFileName(
             self, "选择背景视频", start_dir, VIDEO_FILTER
@@ -192,7 +229,7 @@ class SubtitleRenderWindow(QWidget):
         if path_str:
             self.load_video(Path(path_str))
 
-    def _on_load_audio_clicked(self) -> None:
+    def _browse_audio(self) -> None:
         start_dir = str(self._audio_path.parent) if self._audio_path else ""
         path_str, _ = QFileDialog.getOpenFileName(
             self, "选择音频", start_dir, AUDIO_FILTER
@@ -213,8 +250,7 @@ class SubtitleRenderWindow(QWidget):
             return None
         self._timing_track = track
         self._subtitle_path = path
-        self._lyrics_list.set_track(track)
-        self._refresh_status()
+        self._lyrics_panel.set_track(track)
         return track
 
     def load_video(self, path: Path) -> Optional[MediaInfo]:
@@ -227,7 +263,7 @@ class SubtitleRenderWindow(QWidget):
             return None
         self._video_path = path
         self._video_info = info
-        self._refresh_status()
+        self._preview_panel.set_populated(True)
         return info
 
     def load_audio(self, path: Path) -> Optional[MediaInfo]:
@@ -240,7 +276,7 @@ class SubtitleRenderWindow(QWidget):
             return None
         self._audio_path = path
         self._audio_info = info
-        self._refresh_status()
+        self._waveform_panel.set_populated(True)
         return info
 
     @property
@@ -282,25 +318,6 @@ class SubtitleRenderWindow(QWidget):
         except Exception:
             ffmpeg_dir = None
         return find_tool("ffprobe", ffmpeg_dir)
-
-    def _refresh_status(self) -> None:
-        bits: list[str] = []
-        if self._timing_track is not None and self._subtitle_path is not None:
-            t = self._timing_track
-            bits.append(
-                f"字幕：{self._subtitle_path.name}"
-                f"（{t.non_blank_line_count} 行 / {t.char_count} 字 / {len(t.rubies)} 注音）"
-            )
-        if self._video_info is not None and self._video_path is not None:
-            v = self._video_info
-            dim = f"{v.video_width}×{v.video_height}" if v.video_width else "?"
-            fps = f"{v.video_fps:.2f}fps" if v.video_fps else "?fps"
-            bits.append(f"视频：{self._video_path.name}（{dim} / {fps}）")
-        if self._audio_info is not None and self._audio_path is not None:
-            a = self._audio_info
-            sr = f"{a.sample_rate}Hz" if a.sample_rate else "?Hz"
-            bits.append(f"音频：{self._audio_path.name}（{sr}）")
-        self._status_label.setText("    │    ".join(bits) if bits else "尚未加载素材")
 
     # ------------------------------------------------------------------ embed
 
