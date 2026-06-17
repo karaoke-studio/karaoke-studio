@@ -180,7 +180,11 @@ def test_load_video_rejects_audio_only_file(qapp, monkeypatch, tmp_path):
     assert not win._preview_panel.is_populated()
 
 
-def test_load_audio_populates_waveform_panel(qapp, monkeypatch, tmp_path):
+def test_load_audio_via_api_sets_audio_info(qapp, monkeypatch, tmp_path):
+    """load_audio 公开 API 仍可用——给将来高级用户 / A10 嵌入工作流喂独立音频。
+
+    UI 当前不暴露此入口（音频从视频自动取），但 API 必须保持 round-trip。
+    """
     win = _make_window(qapp, monkeypatch)
     fake_info = MediaInfo(
         path=tmp_path / "song.wav",
@@ -193,11 +197,10 @@ def test_load_audio_populates_waveform_panel(qapp, monkeypatch, tmp_path):
     )
     monkeypatch.setattr(mw, "probe_media", lambda probe, path: fake_info)
 
-    assert not win._waveform_panel.is_populated()
     result = win.load_audio(tmp_path / "song.wav")
     assert result is fake_info
     assert win.audio_info is fake_info
-    assert win._waveform_panel.is_populated()
+    assert win._audio_path == tmp_path / "song.wav"
 
 
 def test_load_audio_rejects_video_with_no_audio(qapp, monkeypatch, tmp_path):
@@ -217,10 +220,52 @@ def test_load_audio_rejects_video_with_no_audio(qapp, monkeypatch, tmp_path):
     result = win.load_audio(tmp_path / "silent.mp4")
     assert result is None
     assert win.audio_info is None
-    assert not win._waveform_panel.is_populated()
 
 
-def test_all_three_panels_can_coexist(qapp, monkeypatch, tmp_path):
+def test_load_video_auto_loads_audio_from_same_file(qapp, monkeypatch, tmp_path):
+    """新增 A7 后行为：视频含音频流时，load_video 自动把视频路径喂给 TransportBar。"""
+    win = _make_window(qapp, monkeypatch)
+    fake_info = MediaInfo(
+        path=tmp_path / "bg.mp4",
+        duration=60,
+        video_streams=1,
+        audio_streams=1,
+        subtitle_streams=0,
+        sample_rate=48000,
+        channels=2,
+        video_width=1920,
+        video_height=1080,
+        video_fps=60.0,
+    )
+    monkeypatch.setattr(mw, "probe_media", lambda probe, path: fake_info)
+
+    win.load_video(tmp_path / "bg.mp4")
+    # audio_path / audio_info 应该同步指向视频文件
+    assert win._audio_path == tmp_path / "bg.mp4"
+    assert win.audio_info is fake_info
+
+
+def test_load_video_without_audio_stream_keeps_audio_unset(qapp, monkeypatch, tmp_path):
+    """视频无音频流时不应错误地把视频路径设为 audio_source。"""
+    win = _make_window(qapp, monkeypatch)
+    fake_info = MediaInfo(
+        path=tmp_path / "silent.mp4",
+        duration=60,
+        video_streams=1,
+        audio_streams=0,
+        subtitle_streams=0,
+        video_width=1280,
+        video_height=720,
+        video_fps=30.0,
+    )
+    monkeypatch.setattr(mw, "probe_media", lambda probe, path: fake_info)
+
+    win.load_video(tmp_path / "silent.mp4")
+    assert win._audio_path is None
+    assert win.audio_info is None
+
+
+def test_subtitle_and_video_panels_can_coexist(qapp, monkeypatch, tmp_path):
     win = _make_window(qapp, monkeypatch)
 
     # 字幕
@@ -231,7 +276,7 @@ def test_all_three_panels_can_coexist(qapp, monkeypatch, tmp_path):
     )
     win.load_from_lrc(lrc)
 
-    # 视频
+    # 视频（带音频流）
     video_info = MediaInfo(
         path=tmp_path / "bg.mp4",
         duration=60,
@@ -247,22 +292,10 @@ def test_all_three_panels_can_coexist(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(mw, "probe_media", lambda probe, path: video_info)
     win.load_video(tmp_path / "bg.mp4")
 
-    # 音频
-    audio_info = MediaInfo(
-        path=tmp_path / "song.wav",
-        duration=60,
-        video_streams=0,
-        audio_streams=1,
-        subtitle_streams=0,
-        sample_rate=44100,
-        channels=2,
-    )
-    monkeypatch.setattr(mw, "probe_media", lambda probe, path: audio_info)
-    win.load_audio(tmp_path / "song.wav")
-
     assert win._lyrics_panel.is_populated()
     assert win._preview_panel.is_populated()
-    assert win._waveform_panel.is_populated()
+    # 音频自动来自视频
+    assert win.audio_info is video_info
 
 
 # ---------------------------------------------------------------------------
@@ -296,20 +329,19 @@ def test_window_shell_components_present(qapp, monkeypatch):
 
 
 def test_drop_panel_accepts_correct_extensions(qapp, monkeypatch, tmp_path):
+    """歌词 / 预览两个拖拽面板的扩展名校验。
+
+    波形面板被改成被动展示后已不再是 DropPanel，所以不出现在这里。
+    """
     win = _make_window(qapp, monkeypatch)
 
     lrc = tmp_path / "x.lrc"
     lrc.write_text("[00:00:00]a[00:00:50]", encoding="utf-8")
     mp4 = tmp_path / "x.mp4"
     mp4.write_bytes(b"\x00")
-    wav = tmp_path / "x.wav"
-    wav.write_bytes(b"\x00")
 
     assert win._lyrics_panel.accepts(lrc) is True
     assert win._lyrics_panel.accepts(mp4) is False
 
     assert win._preview_panel.accepts(mp4) is True
     assert win._preview_panel.accepts(lrc) is False
-
-    assert win._waveform_panel.accepts(wav) is True
-    assert win._waveform_panel.accepts(lrc) is False

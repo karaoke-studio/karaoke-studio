@@ -63,10 +63,6 @@ from krok_helper.subtitle_render.frontend.theme import palette, themed
 
 SUBTITLE_FILTER = "Nicokara 逐字 LRC (*.lrc);;所有文件 (*.*)"
 VIDEO_FILTER = "视频文件 (*.mp4 *.mkv *.mov *.webm *.avi *.flv);;所有文件 (*.*)"
-AUDIO_FILTER = (
-    "音频 / 视频文件 (*.wav *.flac *.mp3 *.m4a *.aac *.ogg *.opus *.mp4 *.mkv *.mov);;"
-    "所有文件 (*.*)"
-)
 
 
 class SubtitleRenderWindow(QWidget):
@@ -180,10 +176,8 @@ class SubtitleRenderWindow(QWidget):
         top.setSizes([280, 760, 320])
         body.addWidget(top)
 
-        # 底部：波形 + 字幕轨道
+        # 底部：波形 + 字幕轨道（波形被动展示，不收拖拽——音频从视频自动取）
         self._waveform_panel = WaveformPanel()
-        self._waveform_panel.pathDropped.connect(self.load_audio)
-        self._waveform_panel.browseRequested.connect(self._browse_audio)
         body.addWidget(self._waveform_panel)
 
         self._tracks_view = TrackTimelineView()
@@ -244,14 +238,6 @@ class SubtitleRenderWindow(QWidget):
         if path_str:
             self.load_video(Path(path_str))
 
-    def _browse_audio(self) -> None:
-        start_dir = str(self._audio_path.parent) if self._audio_path else ""
-        path_str, _ = QFileDialog.getOpenFileName(
-            self, "选择音频", start_dir, AUDIO_FILTER
-        )
-        if path_str:
-            self.load_audio(Path(path_str))
-
     # ------------------------------------------------------------------ public
 
     def load_from_lrc(self, path: Path) -> Optional[TimingTrack]:
@@ -272,7 +258,10 @@ class SubtitleRenderWindow(QWidget):
         return track
 
     def load_video(self, path: Path) -> Optional[MediaInfo]:
-        """加载背景视频，调用 ffprobe 读取分辨率 / 帧率 / 时长。"""
+        """加载背景视频，调用 ffprobe 读取分辨率 / 帧率 / 时长。
+
+        视频如果含音频流，会自动用作播放音轨——用户不需要再单独选音频。
+        """
         info = self._probe(path, "视频")
         if info is None:
             return None
@@ -282,11 +271,20 @@ class SubtitleRenderWindow(QWidget):
         self._video_path = path
         self._video_info = info
         self._preview_panel.set_video_source(path)
+        # 视频自带音频 → 喂给 TransportBar 走 QMediaPlayer 播放
+        if info.audio_streams > 0:
+            self._audio_path = path
+            self._audio_info = info
+            self._transport_bar.set_audio_source(path)
         self._refresh_transport_duration()
         return info
 
     def load_audio(self, path: Path) -> Optional[MediaInfo]:
-        """加载音轨，调用 ffprobe 读取时长 / 采样率。"""
+        """加载独立音轨（覆盖视频自带音频）。
+
+        当前 UI 不直接暴露此入口；保留为 API，便于将来高级用户 / 测试 /
+        嵌入工作流（A10）从外部喂独立音频。
+        """
         info = self._probe(path, "音频")
         if info is None:
             return None
@@ -295,7 +293,6 @@ class SubtitleRenderWindow(QWidget):
             return None
         self._audio_path = path
         self._audio_info = info
-        self._waveform_panel.set_populated(True)
         self._transport_bar.set_audio_source(path)
         self._refresh_transport_duration()
         return info

@@ -63,7 +63,14 @@ def paint_frame(
             | QPainter.RenderHint.TextAntialiasing
             | QPainter.RenderHint.SmoothPixmapTransform
         )
-        _paint_line(painter, image.width(), image.height(), line, t_ms, style)
+        # QImage 上 setDevicePixelRatio 后，QPainter 在该 image 上的坐标系
+        # 自动按 dpr 缩放——绘制坐标用"逻辑像素"，而 image.width()/height()
+        # 返回的是物理像素。这里取逻辑尺寸，让上层布局算居中等都按屏幕
+        # 实际可见尺寸来。
+        dpr = image.devicePixelRatioF() or 1.0
+        logical_w = max(int(round(image.width() / dpr)), 1)
+        logical_h = max(int(round(image.height() / dpr)), 1)
+        _paint_line(painter, logical_w, logical_h, line, t_ms, style)
     finally:
         painter.end()
     return image

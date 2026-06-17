@@ -231,7 +231,8 @@ class PropertyPanel(QTabWidget):
 
         self._italic_check = QCheckBox("斜体", group)
         self._italic_check.toggled.connect(lambda checked: self._update_style(italic=checked))
-        form.addRow("", self._italic_check)
+        # 单 widget 行：让 checkbox 自己占满，省掉空 label 列的视觉割裂
+        form.addRow(self._italic_check)
         return group
 
     def _make_color_group(self) -> QGroupBox:
@@ -239,40 +240,45 @@ class PropertyPanel(QTabWidget):
         form = _form_layout(group)
 
         self._base_color_btn = self._color_row(form, "底色", "base_color", self._style.base_color)
-        self._fill_color_btn = self._color_row(form, "填充", "fill_color", self._style.fill_color)
+        self._fill_color_btn = self._color_row(form, "填充色", "fill_color", self._style.fill_color)
+        self._stroke_color_btn = self._color_row(
+            form, "描边色", "stroke_color", self._style.stroke_color
+        )
 
-        stroke_row = QWidget(group)
-        stroke_layout = QHBoxLayout(stroke_row)
-        stroke_layout.setContentsMargins(0, 0, 0, 0)
-        stroke_layout.setSpacing(8)
-        self._stroke_color_btn = ColorButton(self._style.stroke_color, stroke_row)
+        # 描边宽度独立一行——和颜色解耦后行宽更舒展，spin 不再被挤
         self._stroke_width_spin = _spin(0, 24, suffix=" px")
-        self._stroke_color_btn.clicked.connect(lambda: self._choose_color("stroke_color"))
         self._stroke_width_spin.valueChanged.connect(
             lambda value: self._update_style(stroke_width_px=value)
         )
-        stroke_layout.addWidget(self._stroke_color_btn, 1)
-        stroke_layout.addWidget(self._stroke_width_spin)
-        form.addRow("描边", stroke_row)
+        form.addRow("描边宽度", self._stroke_width_spin)
 
-        shadow_row = QWidget(group)
-        shadow_layout = QHBoxLayout(shadow_row)
-        shadow_layout.setContentsMargins(0, 0, 0, 0)
-        shadow_layout.setSpacing(8)
-        self._shadow_color_btn = ColorButton(self._style.shadow_color, shadow_row)
-        self._shadow_x_spin = _spin(-40, 40, suffix=" x")
-        self._shadow_y_spin = _spin(-40, 40, suffix=" y")
-        self._shadow_color_btn.clicked.connect(lambda: self._choose_color("shadow_color"))
+        self._shadow_color_btn = self._color_row(
+            form, "阴影色", "shadow_color", self._style.shadow_color
+        )
+
+        # 阴影偏移：X / Y 同一行但带显式标签，避免之前 " x" / " y" 后缀混淆
+        offset_row = QWidget(group)
+        offset_layout = QHBoxLayout(offset_row)
+        offset_layout.setContentsMargins(0, 0, 0, 0)
+        offset_layout.setSpacing(6)
+        x_label = QLabel("X")
+        themed(x_label, lambda: f"color: {palette().text_secondary};")
+        self._shadow_x_spin = _spin(-40, 40, suffix=" px")
         self._shadow_x_spin.valueChanged.connect(
             lambda value: self._update_style(shadow_offset_x=value)
         )
+        y_label = QLabel("Y")
+        themed(y_label, lambda: f"color: {palette().text_secondary};")
+        self._shadow_y_spin = _spin(-40, 40, suffix=" px")
         self._shadow_y_spin.valueChanged.connect(
             lambda value: self._update_style(shadow_offset_y=value)
         )
-        shadow_layout.addWidget(self._shadow_color_btn, 1)
-        shadow_layout.addWidget(self._shadow_x_spin)
-        shadow_layout.addWidget(self._shadow_y_spin)
-        form.addRow("阴影", shadow_row)
+        offset_layout.addWidget(x_label)
+        offset_layout.addWidget(self._shadow_x_spin, 1)
+        offset_layout.addSpacing(4)
+        offset_layout.addWidget(y_label)
+        offset_layout.addWidget(self._shadow_y_spin, 1)
+        form.addRow("阴影偏移", offset_row)
         return group
 
     def _make_layout_group(self) -> QGroupBox:
@@ -373,21 +379,26 @@ def _styled_group(title: str) -> QGroupBox:
             QGroupBox {{
                 color: {palette().title_text};
                 border: 1px solid {palette().card_border};
-                border-radius: 6px;
-                margin-top: 10px;
+                border-radius: 8px;
+                margin-top: 12px;
                 font-weight: 700;
+                font-size: 10.5pt;
                 background: {palette().panel_bg};
             }}
             QGroupBox::title {{
                 subcontrol-origin: margin;
-                left: 10px;
-                padding: 0 4px;
+                left: 12px;
+                padding: 0 6px;
+                background: {palette().panel_bg};
             }}
             QLabel, QCheckBox {{
                 color: {palette().text_primary};
+                font-size: 9.5pt;
+                font-weight: normal;
             }}
-            QComboBox, QSpinBox {{
+            QComboBox, QSpinBox, QFontComboBox {{
                 min-height: 28px;
+                font-size: 9.5pt;
             }}
             """
         ),

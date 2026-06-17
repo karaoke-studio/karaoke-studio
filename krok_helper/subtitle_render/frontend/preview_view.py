@@ -45,8 +45,10 @@ from krok_helper.subtitle_render.models import Style, TimingTrack
 PREVIEW_BG = QColor("#101010")
 """画布默认深色背景（A7 接入视频后这里换成视频帧）。"""
 
-_TICK_INTERVAL_MS = 33
-"""无音频时的视觉 tick 间隔（约 30fps）。"""
+_TICK_INTERVAL_MS = 16
+"""tick / 位置轮询间隔（约 60fps），同时用于无音频视觉 tick 与有音频时的
+QMediaPlayer.position() 高频采样——QMediaPlayer.positionChanged 自身只有
+~100ms 粒度，文字填充会一卡一卡，所以在播放期开一个 16ms 轮询。"""
 
 _VIDEO_SEEK_TOLERANCE_MS = 80
 """视频预览播放器允许的轻微漂移，超过后按播放条时间校正。"""
@@ -144,10 +146,17 @@ class PreviewCanvas(QWidget):
     # ------------------------------------------------------------------ paint
 
     def paintEvent(self, event):  # noqa: N802 — Qt API
-        w = max(self.width(), 1)
-        h = max(self.height(), 1)
-        # 先离屏渲染到 QImage，再 blit 到 widget——保持渲染路径与导出管线一致
-        image = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+        # DPR-aware：QImage 实际像素 = 逻辑像素 × devicePixelRatio。
+        # QPainter 在 setDevicePixelRatio 过的 image 上自动按逻辑坐标系绘制，
+        # 但底层物理像素是高分屏的真实分辨率——这样文字 / 视频帧都按物理分辨率
+        # 渲染，blit 回 widget 时 1:1 对应物理像素，避免被 Qt 二次缩放糊化。
+        dpr = self.devicePixelRatioF() or 1.0
+        logical_w = max(self.width(), 1)
+        logical_h = max(self.height(), 1)
+        phys_w = max(int(round(logical_w * dpr)), 1)
+        phys_h = max(int(round(logical_h * dpr)), 1)
+        image = QImage(phys_w, phys_h, QImage.Format.Format_ARGB32_Premultiplied)
+        image.setDevicePixelRatio(dpr)
         image.fill(PREVIEW_BG)
         self._paint_background_video(image)
         paint_frame(image, self._track, self._t_ms, self._style)
@@ -190,13 +199,24 @@ class PreviewCanvas(QWidget):
     def _paint_background_video(self, target: QImage) -> None:
         if self._video_image is None or self._video_image.isNull():
             return
+        # target 是 DPR-aware QImage：物理尺寸 = 逻辑 × dpr。
+        # 直接按物理像素缩放视频帧 → 物理分辨率渲染 → 不糊；最后用物理坐标
+        # 绘制（painter.drawImage 在 dpr-aware image 上默认是逻辑坐标系，
+        # 这里把 frame 自身也 setDevicePixelRatio 同步，绘制时就按逻辑落点）。
+        dpr = target.devicePixelRatioF() or 1.0
         frame = self._video_image.scaled(
             QSize(target.width(), target.height()),
             Qt.AspectRatioMode.KeepAspectRatio,
             Qt.TransformationMode.SmoothTransformation,
         )
-        x = (target.width() - frame.width()) // 2
-        y = (target.height() - frame.height()) // 2
+        frame.setDevicePixelRatio(dpr)
+        # 居中：用逻辑坐标
+        logical_target_w = int(round(target.width() / dpr))
+        logical_target_h = int(round(target.height() / dpr))
+        logical_frame_w = int(round(frame.width() / dpr))
+        logical_frame_h = int(round(frame.height() / dpr))
+        x = (logical_target_w - logical_frame_w) // 2
+        y = (logical_target_h - logical_frame_h) // 2
         painter = QPainter(target)
         try:
             painter.drawImage(x, y, frame)
@@ -343,6 +363,11 @@ class TransportBar(QWidget):
         self._tick_anchor_ms: int = 0
         self._tick_anchor_real = QElapsedTimer()
 
+        # ── 有音频时的 60fps 位置轮询（QMediaPlayer.positionChanged 太粗） ──
+        self._position_poll_timer = QTimer(self)
+        self._position_poll_timer.setInterval(_TICK_INTERVAL_MS)
+        self._position_poll_timer.timeout.connect(self._poll_player_position)
+
         # 抑制 player ↔ slider 反馈环
         self._suppress_seek: bool = False
         self._playing_state: bool = False
@@ -390,6 +415,7 @@ class TransportBar(QWidget):
             player = self._ensure_audio_player()
             player.setPosition(self._slider.value())
             player.play()
+            self._position_poll_timer.start()
         else:
             self._tick_anchor_ms = self._slider.value()
             self._tick_anchor_real.start()
@@ -401,6 +427,7 @@ class TransportBar(QWidget):
         if self._has_audio and self._player is not None:
             self._player.pause()
         self._tick_timer.stop()
+        self._position_poll_timer.stop()
         self._update_play_button(False)
 
     def toggle_play(self) -> None:
@@ -443,8 +470,14 @@ class TransportBar(QWidget):
 
     def _on_player_state_changed(self, state) -> None:
         if state == QMediaPlayer.PlaybackState.StoppedState and self._has_audio:
-            # 音频自然结束 → 复位按钮
+            # 音频自然结束 → 停轮询 + 复位按钮
+            self._position_poll_timer.stop()
             self._update_play_button(False)
+
+    def _poll_player_position(self) -> None:
+        if self._player is None or not self._has_audio:
+            return
+        self._set_slider_silently(self._player.position())
 
     def _on_tick(self) -> None:
         elapsed = self._tick_anchor_real.elapsed()
