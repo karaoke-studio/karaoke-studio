@@ -129,9 +129,9 @@ def test_set_audio_source_activates_player_path(qapp, tmp_path):
     bar = _bar(qapp)
     assert not bar._has_audio
 
-    # 用任意 .wav 路径触发 setSource（不需要真实文件，QMediaPlayer 不会立刻读）
+    # 用非空 .wav 路径触发 setSource（不实际播放，避免依赖音频后端解码）
     fake = tmp_path / "song.wav"
-    fake.write_bytes(b"")
+    fake.write_bytes(b"placeholder")
     bar.set_audio_source(fake)
     assert bar._has_audio
 
@@ -139,7 +139,7 @@ def test_set_audio_source_activates_player_path(qapp, tmp_path):
 def test_set_audio_source_none_clears_player(qapp, tmp_path):
     bar = _bar(qapp)
     fake = tmp_path / "song.wav"
-    fake.write_bytes(b"")
+    fake.write_bytes(b"placeholder")
     bar.set_audio_source(fake)
     assert bar._has_audio
     bar.set_audio_source(None)
@@ -155,10 +155,11 @@ def test_player_position_callback_does_not_re_seek_player(qapp, tmp_path):
     """模拟 QMediaPlayer.positionChanged 触发 → 滑块更新 → 不应回写 player.setPosition。"""
     bar = _bar(qapp)
     fake = tmp_path / "song.wav"
-    fake.write_bytes(b"")
+    fake.write_bytes(b"placeholder")
     bar.set_audio_source(fake)
 
     calls: list[int] = []
+    assert bar._player is not None
     bar._player.setPosition = lambda ms, _calls=calls: _calls.append(ms)  # type: ignore[assignment]
 
     bar._on_player_position(5_000)

@@ -170,6 +170,8 @@ class SubtitleRenderWindow(QWidget):
         top.addWidget(center)
 
         self._property_panel = PropertyPanel()
+        self._property_panel.set_style(self._style)
+        self._property_panel.styleChanged.connect(self._apply_style)
         top.addWidget(self._property_panel)
 
         top.setStretchFactor(0, 1)
@@ -349,6 +351,10 @@ class SubtitleRenderWindow(QWidget):
         duration = max(candidates, default=0)
         if duration > 0:
             self._transport_bar.set_duration(duration)
+
+    def _apply_style(self, style: Style) -> None:
+        self._style = style
+        self._preview_panel.set_style(style)
 
     # ------------------------------------------------------------------ embed
 

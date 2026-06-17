@@ -331,13 +331,10 @@ class TransportBar(QWidget):
         layout.addWidget(self._slider, 1)
         layout.addWidget(self._timecode)
 
-        # ── 音频播放（QMediaPlayer） ────────────────────────────────
-        self._player = QMediaPlayer(self)
-        self._audio_out = QAudioOutput(self)
-        self._player.setAudioOutput(self._audio_out)
+        # ── 音频播放（QMediaPlayer，真实非空音频文件才懒创建） ────────
+        self._player: Optional[QMediaPlayer] = None
+        self._audio_out: Optional[QAudioOutput] = None
         self._has_audio = False
-        self._player.positionChanged.connect(self._on_player_position)
-        self._player.playbackStateChanged.connect(self._on_player_state_changed)
 
         # ── 无音频时的视觉 tick ─────────────────────────────────────
         self._tick_timer = QTimer(self)
@@ -370,21 +367,29 @@ class TransportBar(QWidget):
         was_playing = self.is_playing()
         self.pause()
         if path is None:
-            self._player.setSource(QUrl())
+            if self._player is not None:
+                self._player.setSource(QUrl())
             self._has_audio = False
             return
-        self._player.setSource(QUrl.fromLocalFile(str(path)))
+        if not _is_real_media_file(path):
+            if self._player is not None:
+                self._player.setSource(QUrl())
+            self._has_audio = False
+            return
+        player = self._ensure_audio_player()
+        player.setSource(QUrl.fromLocalFile(str(path)))
         self._has_audio = True
         # 切音源后回到 0 而不是续播旧位置
-        self._player.setPosition(0)
+        player.setPosition(0)
         if was_playing:
             self.play()
 
     def play(self) -> None:
         """开始播放。有音频用 ``QMediaPlayer``；无音频走视觉 tick。"""
         if self._has_audio:
-            self._player.setPosition(self._slider.value())
-            self._player.play()
+            player = self._ensure_audio_player()
+            player.setPosition(self._slider.value())
+            player.play()
         else:
             self._tick_anchor_ms = self._slider.value()
             self._tick_anchor_real.start()
@@ -393,7 +398,7 @@ class TransportBar(QWidget):
 
     def pause(self) -> None:
         """暂停。"""
-        if self._has_audio:
+        if self._has_audio and self._player is not None:
             self._player.pause()
         self._tick_timer.stop()
         self._update_play_button(False)
@@ -405,7 +410,7 @@ class TransportBar(QWidget):
             self.play()
 
     def is_playing(self) -> bool:
-        if self._has_audio:
+        if self._has_audio and self._player is not None:
             return (
                 self._player.playbackState()
                 == QMediaPlayer.PlaybackState.PlayingState
@@ -424,7 +429,7 @@ class TransportBar(QWidget):
         if self._suppress_seek:
             return
         # 用户拖动 / 外部 set_time → 同步给 player / tick 锚点
-        if self._has_audio:
+        if self._has_audio and self._player is not None:
             self._player.setPosition(value)
         if self._tick_timer.isActive():
             self._tick_anchor_ms = value
@@ -473,3 +478,20 @@ class TransportBar(QWidget):
             self._playing_state = playing
             self.playbackStateChanged.emit(playing)
         self._play_btn.setText("⏸" if playing else "▶")
+
+    def _ensure_audio_player(self) -> QMediaPlayer:
+        if self._player is not None:
+            return self._player
+        self._player = QMediaPlayer(self)
+        self._audio_out = QAudioOutput(self)
+        self._player.setAudioOutput(self._audio_out)
+        self._player.positionChanged.connect(self._on_player_position)
+        self._player.playbackStateChanged.connect(self._on_player_state_changed)
+        return self._player
+
+
+def _is_real_media_file(path: Path) -> bool:
+    try:
+        return path.is_file() and path.stat().st_size > 0
+    except OSError:
+        return False
