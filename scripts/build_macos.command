@@ -143,6 +143,7 @@ ensure_pkg pedalboard pedalboard
 ensure_pkg numpy numpy
 ensure_pkg pykakasi pykakasi
 ensure_pkg jaconv jaconv
+ensure_pkg pyphen pyphen
 ensure_pkg sudachipy sudachipy
 ensure_pkg sudachidict_small sudachidict_small
 
@@ -204,6 +205,7 @@ PYINSTALLER_ARGS=(
   --collect-all pedalboard
   --collect-all pykakasi
   --collect-all sudachipy
+  --collect-all pyphen
   --collect-data sudachidict_small
   --collect-binaries soundfile
   --collect-submodules strange_uta_game
