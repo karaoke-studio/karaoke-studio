@@ -277,6 +277,8 @@ def _parse_ruby_entry(payload: str) -> Optional[RubyAnnotation]:
     pos2_raw = parts[3]
 
     # 读音内 mora 时间戳：去掉它们得到 reading，单独收集毫秒
+    # SUG exports these timestamps relative to pos_start_ms, not the global
+    # song timeline. Keep them relative; the painter adds pos_start_ms.
     reading_part_ms: list[int] = []
     reading = _TS_RE.sub("", reading_raw)
     for m in _TS_RE.finditer(reading_raw):

@@ -156,6 +156,11 @@ class Style:
     shadow_offset_x: int = 0
     shadow_offset_y: int = 2
 
+    # ふりがな / ruby（B1）
+    ruby_font_size_px: int = 24
+    ruby_color: str = "#FF5A6F"
+    ruby_gap_px: int = 6
+
     # 行位置（字幕区上下定位）
     line_y_position: LineYPosition = "bottom"
     """``"top"`` / ``"center"`` / ``"bottom"`` —— 简单 vertical-anchor。"""

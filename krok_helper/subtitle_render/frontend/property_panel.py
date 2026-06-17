@@ -146,7 +146,7 @@ class PropertyPanel(QTabWidget):
         self.addTab(_placeholder_page("屏幕预设 / 宽高 / 时间偏移（A8 / A10 接入）"), "基本")
         self.addTab(self._make_subtitle_page(), "字幕")
         self.addTab(_placeholder_page("入场 / 退场动画、渐变填充、发光（P1 / P2）"), "特效")
-        self.addTab(_placeholder_page("标题字幕、时段图片、注音样式（B7 / P2）"), "装饰")
+        self.addTab(_placeholder_page("标题字幕、时段图片（B7 / P2）"), "装饰")
         self.set_style(self._style, emit=False)
 
     @property
@@ -174,6 +174,9 @@ class PropertyPanel(QTabWidget):
                 max(0, self._line_position_combo.findData(self._style.line_y_position))
             )
             self._line_margin_spin.setValue(self._style.line_y_margin_px)
+            self._ruby_font_size_spin.setValue(self._style.ruby_font_size_px)
+            self._ruby_color_btn.set_color(self._style.ruby_color)
+            self._ruby_gap_spin.setValue(self._style.ruby_gap_px)
         finally:
             self._syncing = False
         if emit:
@@ -193,6 +196,7 @@ class PropertyPanel(QTabWidget):
         layout.setContentsMargins(10, 10, 10, 12)
         layout.setSpacing(10)
         layout.addWidget(self._make_font_section())
+        layout.addWidget(self._make_ruby_section())
         layout.addWidget(self._make_color_section())
         layout.addWidget(self._make_position_section())
         layout.addStretch(1)
@@ -246,6 +250,35 @@ class PropertyPanel(QTabWidget):
         self._italic_check = QCheckBox("斜体", section)
         self._italic_check.toggled.connect(lambda checked: self._update_style(italic=checked))
         layout.addWidget(self._italic_check)
+        return section
+
+    def _make_ruby_section(self) -> QFrame:
+        section, layout = _section("注音")
+
+        row = QWidget(section)
+        row_layout = QGridLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setHorizontalSpacing(8)
+        row_layout.setVerticalSpacing(8)
+
+        self._ruby_font_size_spin = _spin(8, 96, suffix=" px")
+        self._ruby_font_size_spin.valueChanged.connect(
+            lambda value: self._update_style(ruby_font_size_px=value)
+        )
+        row_layout.addWidget(_field("字号", self._ruby_font_size_spin), 0, 0)
+
+        self._ruby_gap_spin = _spin(0, 40, suffix=" px")
+        self._ruby_gap_spin.valueChanged.connect(
+            lambda value: self._update_style(ruby_gap_px=value)
+        )
+        row_layout.addWidget(_field("间距", self._ruby_gap_spin), 0, 1)
+
+        self._ruby_color_btn = self._color_button("ruby_color", self._style.ruby_color)
+        row_layout.addWidget(_field("颜色", self._ruby_color_btn), 1, 0, 1, 2)
+
+        row_layout.setColumnStretch(0, 1)
+        row_layout.setColumnStretch(1, 1)
+        layout.addWidget(row)
         return section
 
     def _make_color_section(self) -> QFrame:
@@ -360,6 +393,8 @@ class PropertyPanel(QTabWidget):
                 self._stroke_color_btn.set_color(self._style.stroke_color)
             if "shadow_color" in changes:
                 self._shadow_color_btn.set_color(self._style.shadow_color)
+            if "ruby_color" in changes:
+                self._ruby_color_btn.set_color(self._style.ruby_color)
         finally:
             self._syncing = False
         self.styleChanged.emit(self._style)

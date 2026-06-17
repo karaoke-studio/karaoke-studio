@@ -65,6 +65,8 @@ class PreviewCanvas(QWidget):
         self._t_ms: int = 0
         self._video_path: Optional[Path] = None
         self._video_image: Optional[QImage] = None
+        self._scaled_video_image: Optional[QImage] = None
+        self._scaled_video_key: Optional[tuple[int, int, int, int]] = None
         self._video_playing: bool = False
         self._video_sink: Optional[QVideoSink] = None
         self._video_player: Optional[QMediaPlayer] = None
@@ -106,6 +108,8 @@ class PreviewCanvas(QWidget):
             self._video_player.pause()
         self._video_path = path
         self._video_image = None
+        self._scaled_video_image = None
+        self._scaled_video_key = None
         if path is None:
             if self._video_player is not None:
                 self._video_player.setSource(QUrl())
@@ -175,6 +179,8 @@ class PreviewCanvas(QWidget):
         if image.isNull():
             return
         self._video_image = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+        self._scaled_video_image = None
+        self._scaled_video_key = None
         self.update()
 
     def _sync_video_position(self, *, force: bool = False) -> None:
@@ -204,12 +210,23 @@ class PreviewCanvas(QWidget):
         # 绘制（painter.drawImage 在 dpr-aware image 上默认是逻辑坐标系，
         # 这里把 frame 自身也 setDevicePixelRatio 同步，绘制时就按逻辑落点）。
         dpr = target.devicePixelRatioF() or 1.0
-        frame = self._video_image.scaled(
-            QSize(target.width(), target.height()),
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
+        dpr_key = int(round(dpr * 1000))
+        cache_key = (
+            int(self._video_image.cacheKey()),
+            target.width(),
+            target.height(),
+            dpr_key,
         )
-        frame.setDevicePixelRatio(dpr)
+        frame = self._scaled_video_image
+        if frame is None or self._scaled_video_key != cache_key:
+            frame = self._video_image.scaled(
+                QSize(target.width(), target.height()),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+            frame.setDevicePixelRatio(dpr)
+            self._scaled_video_image = frame
+            self._scaled_video_key = cache_key
         # 居中：用逻辑坐标
         logical_target_w = int(round(target.width() / dpr))
         logical_target_h = int(round(target.height() / dpr))
@@ -358,6 +375,7 @@ class TransportBar(QWidget):
 
         # ── 无音频时的视觉 tick ─────────────────────────────────────
         self._tick_timer = QTimer(self)
+        self._tick_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._tick_timer.setInterval(_TICK_INTERVAL_MS)
         self._tick_timer.timeout.connect(self._on_tick)
         self._tick_anchor_ms: int = 0
@@ -368,6 +386,7 @@ class TransportBar(QWidget):
         # ms 甚至 100ms 粒度。字幕填色要稳定接近 60fps，所以播放期用
         # QElapsedTimer 推进 UI 时间，QMediaPlayer 只负责音频输出。
         self._position_poll_timer = QTimer(self)
+        self._position_poll_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._position_poll_timer.setInterval(_TICK_INTERVAL_MS)
         self._position_poll_timer.timeout.connect(self._on_audio_clock_tick)
 

@@ -41,6 +41,9 @@ def test_property_panel_set_style_populates_controls(qapp):
         shadow_offset_y=4,
         line_y_position="top",
         line_y_margin_px=120,
+        ruby_font_size_px=30,
+        ruby_color="#223344",
+        ruby_gap_px=9,
     )
 
     panel.set_style(style)
@@ -58,6 +61,9 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._shadow_y_spin.value() == 4
     assert panel._line_position_combo.currentData() == "top"
     assert panel._line_margin_spin.value() == 120
+    assert panel._ruby_font_size_spin.value() == 30
+    assert panel._ruby_color_btn.color == "#223344"
+    assert panel._ruby_gap_spin.value() == 9
 
 
 def test_property_panel_subtitle_page_has_no_horizontal_scroll(qapp):
@@ -97,6 +103,21 @@ def test_property_panel_color_controls_emit_normalized_style(qapp):
     assert panel._stroke_color_btn.color == "#222222"
 
 
+def test_property_panel_ruby_controls_emit_style(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._ruby_font_size_spin.setValue(34)
+    panel._ruby_gap_spin.setValue(11)
+    panel._set_color("ruby_color", "#00aa77")
+
+    assert emitted[-1].ruby_font_size_px == 34
+    assert emitted[-1].ruby_gap_px == 11
+    assert emitted[-1].ruby_color == "#00AA77"
+    assert panel._ruby_color_btn.color == "#00AA77"
+
+
 def test_color_button_updates_text_and_color(qapp):
     button = ColorButton("#abcdef")
     assert button.color == "#ABCDEF"
@@ -118,8 +139,11 @@ def test_main_window_style_panel_updates_preview(qapp, monkeypatch):
 
     win._property_panel._font_size_spin.setValue(96)
     win._property_panel._set_color("fill_color", "#00aaee")
+    win._property_panel._ruby_font_size_spin.setValue(28)
 
     assert win._style.font_size_px == 96
     assert win._style.fill_color == "#00AAEE"
+    assert win._style.ruby_font_size_px == 28
     assert win._preview_panel.canvas._style.font_size_px == 96
     assert win._preview_panel.canvas._style.fill_color == "#00AAEE"
+    assert win._preview_panel.canvas._style.ruby_font_size_px == 28

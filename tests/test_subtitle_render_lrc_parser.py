@@ -164,14 +164,14 @@ def test_ruby_with_mora_timestamps_in_reading():
     text = (
         "[00:03:00]漢[00:04:00]字[00:05:00]\n"
         "\n"
-        "@Ruby1=漢字,か[00:03:50]ん[00:04:50]じ,[00:03:00],[00:05:00]\n"
+        "@Ruby1=漢字,か[00:00:50]ん[00:01:50]じ,[00:03:00],[00:05:00]\n"
     )
     track = parse_nicokara_lrc(text)
     r = track.rubies[0]
     assert r.kanji == "漢字"
-    # 读音内部的 mora ts 被剥离，但毫秒序列保留
+    # 读音内部的 mora ts 被剥离，但毫秒序列按 ruby 组起点保留为相对时间
     assert r.reading == "かんじ"
-    assert r.reading_part_ms == [3500, 4500]
+    assert r.reading_part_ms == [500, 1500]
     assert r.pos_start_ms == 3000
     assert r.pos_end_ms == 5000
 

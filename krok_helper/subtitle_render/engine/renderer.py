@@ -160,7 +160,7 @@ def build_render_command(ffmpeg_path: str, job: RenderJob, *, duration_ms: int |
     ]
     if job.include_audio:
         command.extend(["-map", "1:a:0?"])
-    command.extend(["-t", f"{duration_seconds:.6f}"])
+    command.extend(["-t", f"{duration_seconds:.6f}", "-r", str(job.fps), "-fps_mode", "cfr"])
     command.extend(
         video_encoder_options(
             ffmpeg_path,

@@ -81,6 +81,8 @@ def test_build_render_command_contains_rawvideo_overlay_and_audio(tmp_path):
     assert command[command.index("-c:v") + 1] == "libx264"
     assert command[command.index("-preset") + 1] == "veryfast"
     assert command[command.index("-crf") + 1] == "18"
+    assert command.count("-r") == 2
+    assert command[command.index("-fps_mode") + 1] == "cfr"
 
 
 def test_build_render_command_can_skip_audio(tmp_path):

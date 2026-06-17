@@ -17,9 +17,14 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import Qt  # noqa: E402
+from PyQt6.QtGui import QColor, QImage  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from krok_helper.subtitle_render.frontend.preview_view import TransportBar  # noqa: E402
+from krok_helper.subtitle_render.frontend.preview_view import (  # noqa: E402
+    PreviewCanvas,
+    TransportBar,
+)
 
 
 @pytest.fixture(scope="module")
@@ -81,6 +86,12 @@ def test_play_without_audio_starts_tick_timer(qapp):
     assert not bar._tick_timer.isActive()
 
 
+def test_playback_timers_use_precise_timer(qapp):
+    bar = _bar(qapp)
+    assert bar._tick_timer.timerType() == Qt.TimerType.PreciseTimer
+    assert bar._position_poll_timer.timerType() == Qt.TimerType.PreciseTimer
+
+
 def test_toggle_play_alternates(qapp):
     bar = _bar(qapp)
     bar.toggle_play()
@@ -118,6 +129,24 @@ def test_tick_stops_at_max_duration(qapp, monkeypatch):
     bar._on_tick()
     assert bar.current_time_ms == 2_000
     assert not bar.is_playing()
+
+
+def test_preview_canvas_caches_scaled_video_frame(qapp):
+    canvas = PreviewCanvas()
+    canvas._video_image = QImage(64, 36, QImage.Format.Format_ARGB32_Premultiplied)
+    canvas._video_image.fill(QColor("#223344"))
+    target = QImage(320, 180, QImage.Format.Format_ARGB32_Premultiplied)
+    target.fill(QColor("#101010"))
+
+    canvas._paint_background_video(target)
+    cached = canvas._scaled_video_image
+    cache_key = canvas._scaled_video_key
+
+    canvas._paint_background_video(target)
+
+    assert cached is not None
+    assert canvas._scaled_video_image is cached
+    assert canvas._scaled_video_key == cache_key
 
 
 # ---------------------------------------------------------------------------

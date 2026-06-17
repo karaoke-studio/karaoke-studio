@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from krok_helper.subtitle_render.engine.painter import paint_frame  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
+    RubyAnnotation,
     Style,
     TimingChar,
     TimingLine,
@@ -58,6 +59,49 @@ def _track() -> TimingTrack:
     return TimingTrack(lines=[line])
 
 
+def _track_with_ruby() -> TimingTrack:
+    line = TimingLine(
+        chars=[
+            TimingChar(text="漢", start_ms=1000),
+            TimingChar(text="字", start_ms=1500),
+        ],
+        end_ms=2000,
+    )
+    return TimingTrack(
+        lines=[line],
+        rubies=[
+            RubyAnnotation(
+                kanji="漢字",
+                reading="かんじ",
+                pos_start_ms=1000,
+                pos_end_ms=2000,
+            )
+        ],
+    )
+
+
+def _track_with_timed_ruby() -> TimingTrack:
+    line = TimingLine(
+        chars=[
+            TimingChar(text="漢", start_ms=1000),
+            TimingChar(text="字", start_ms=1500),
+        ],
+        end_ms=2500,
+    )
+    return TimingTrack(
+        lines=[line],
+        rubies=[
+            RubyAnnotation(
+                kanji="漢字",
+                reading="かんじ",
+                reading_part_ms=[500, 1000],
+                pos_start_ms=1000,
+                pos_end_ms=2500,
+            )
+        ],
+    )
+
+
 def test_paint_frame_with_no_track_leaves_image_unchanged(qapp):
     img = _blank()
     baseline = _pixel_hash(img)
@@ -87,6 +131,35 @@ def test_paint_frame_progress_changes_between_timestamps(qapp):
     style = Style()
     paint_frame(img1, track, 1100, style)  # 第一字刚开始唱
     paint_frame(img2, track, 2400, style)  # 接近行尾，全部唱完
+    assert _pixel_hash(img1) != _pixel_hash(img2)
+
+
+def test_paint_frame_ruby_changes_rendered_frame(qapp):
+    img_plain = _blank()
+    img_ruby = _blank()
+    style = Style(
+        font_size_px=64,
+        ruby_font_size_px=30,
+        ruby_color="#00FF88",
+        line_y_position="center",
+    )
+
+    plain_track = TimingTrack(lines=[_track_with_ruby().lines[0]])
+    paint_frame(img_plain, plain_track, 1500, style)
+    paint_frame(img_ruby, _track_with_ruby(), 1500, style)
+
+    assert _pixel_hash(img_ruby) != _pixel_hash(img_plain)
+
+
+def test_paint_frame_ruby_k_timing_changes_between_timestamps(qapp):
+    img1 = _blank()
+    img2 = _blank()
+    style = Style(base_color="#FFFFFF", fill_color="#FFFFFF", line_y_position="center")
+    track = _track_with_timed_ruby()
+
+    paint_frame(img1, track, 1250, style)
+    paint_frame(img2, track, 2250, style)
+
     assert _pixel_hash(img1) != _pixel_hash(img2)
 
 
