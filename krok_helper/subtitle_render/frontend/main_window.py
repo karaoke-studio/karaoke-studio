@@ -51,8 +51,8 @@ from PyQt6.QtWidgets import (
 )
 from qfluentwidgets import Pivot
 
-from krok_helper.errors import ProcessingError
-from krok_helper.ffmpeg import find_tool, probe_media
+from krok_helper.errors import ExportCancelled, ProcessingError
+from krok_helper.ffmpeg import find_tool, probe_media, terminate_process
 from krok_helper.models import MediaInfo
 from krok_helper.settings import load_app_settings
 from krok_helper.subtitle_render.engine.renderer import RenderJob, render_subtitle_video
@@ -77,6 +77,7 @@ class _RenderWorker(QObject):
     progressChanged = Signal(int, int)
     logMessage = Signal(str)
     finished = Signal(Path)
+    cancelled = Signal(str)
     failed = Signal(str)
 
     def __init__(self, job: RenderJob, ffmpeg_dir: Optional[Path]) -> None:
@@ -84,6 +85,7 @@ class _RenderWorker(QObject):
         self._job = job
         self._ffmpeg_dir = ffmpeg_dir
         self._process: Optional[subprocess.Popen] = None
+        self._cancel_requested = False
 
     def run(self) -> None:
         try:
@@ -91,13 +93,26 @@ class _RenderWorker(QObject):
                 self._job,
                 ffmpeg_dir=self._ffmpeg_dir,
                 logger=self.logMessage.emit,
+                should_cancel=self.should_cancel,
                 on_progress=self.progressChanged.emit,
                 on_process_started=self._set_process,
             )
+        except ExportCancelled as exc:
+            self.cancelled.emit(str(exc))
+            return
         except Exception as exc:  # noqa: BLE001
             self.failed.emit(str(exc))
             return
         self.finished.emit(output)
+
+    def cancel(self) -> None:
+        self._cancel_requested = True
+        process = self._process
+        if process is not None:
+            terminate_process(process)
+
+    def should_cancel(self) -> bool:
+        return self._cancel_requested
 
     def _set_process(self, process: Optional[subprocess.Popen]) -> None:
         self._process = process
@@ -281,10 +296,19 @@ class SubtitleRenderWindow(QWidget):
         themed(self._export_status_label, lambda: f"color: {palette().text_hint}; font-size: 10pt;")
         layout.addWidget(self._export_status_label)
 
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setSpacing(8)
         self._export_start_button = QPushButton("开始导出")
         self._export_start_button.setMinimumHeight(38)
         self._export_start_button.clicked.connect(self._start_render_export)
-        layout.addWidget(self._export_start_button)
+        self._export_stop_button = QPushButton("停止导出")
+        self._export_stop_button.setMinimumHeight(38)
+        self._export_stop_button.setEnabled(False)
+        self._export_stop_button.clicked.connect(self._stop_render_export)
+        action_row.addWidget(self._export_start_button, 1)
+        action_row.addWidget(self._export_stop_button)
+        layout.addLayout(action_row)
 
         layout.addStretch(1)
         return page
@@ -434,7 +458,7 @@ class SubtitleRenderWindow(QWidget):
             if raw:
                 ffmpeg_dir = Path(raw)
         except Exception:
-                ffmpeg_dir = None
+            ffmpeg_dir = None
         return find_tool("ffprobe", ffmpeg_dir)
 
     def _refresh_transport_duration(self) -> None:
@@ -511,6 +535,7 @@ class SubtitleRenderWindow(QWidget):
             return
 
         self._export_start_button.setEnabled(False)
+        self._export_stop_button.setEnabled(True)
         self._export_progress.setRange(0, 0)
         self._export_status_label.setText("正在准备导出…")
 
@@ -520,8 +545,10 @@ class SubtitleRenderWindow(QWidget):
         worker.progressChanged.connect(self._on_render_progress)
         worker.logMessage.connect(self._on_render_log)
         worker.finished.connect(self._finish_render_success)
+        worker.cancelled.connect(self._finish_render_cancelled)
         worker.failed.connect(self._finish_render_failure)
         worker.finished.connect(thread.quit)
+        worker.cancelled.connect(thread.quit)
         worker.failed.connect(thread.quit)
         thread.finished.connect(worker.deleteLater)
         thread.finished.connect(self._clear_render_thread)
@@ -529,6 +556,13 @@ class SubtitleRenderWindow(QWidget):
         self._render_thread = thread
         self._render_worker = worker
         thread.start()
+
+    def _stop_render_export(self) -> None:
+        if self._render_worker is None or self._render_thread is None or not self._render_thread.isRunning():
+            return
+        self._export_stop_button.setEnabled(False)
+        self._export_status_label.setText("正在停止导出…")
+        self._render_worker.cancel()
 
     def _on_render_progress(self, done: int, total: int) -> None:
         self._export_progress.setRange(0, max(total, 1))
@@ -543,12 +577,21 @@ class SubtitleRenderWindow(QWidget):
         self._export_progress.setValue(1)
         self._export_status_label.setText(f"导出完成: {output_path}")
         self._export_start_button.setEnabled(True)
+        self._export_stop_button.setEnabled(False)
+
+    def _finish_render_cancelled(self, message: str) -> None:
+        self._export_progress.setRange(0, 1)
+        self._export_progress.setValue(0)
+        self._export_status_label.setText("导出已停止，未完成文件已清理。" if message else "导出已停止。")
+        self._export_start_button.setEnabled(True)
+        self._export_stop_button.setEnabled(False)
 
     def _finish_render_failure(self, message: str) -> None:
         self._export_progress.setRange(0, 1)
         self._export_progress.setValue(0)
         self._export_status_label.setText("导出失败")
         self._export_start_button.setEnabled(True)
+        self._export_stop_button.setEnabled(False)
         QMessageBox.critical(self, "导出失败", message)
 
     def _clear_render_thread(self) -> None:

@@ -11,12 +11,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from krok_helper.errors import ProcessingError  # noqa: E402
+from krok_helper.errors import ExportCancelled, ProcessingError  # noqa: E402
+from krok_helper.subtitle_render.engine import renderer  # noqa: E402
 from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402
     RenderJob,
     _frame_count,
     _render_overlay_frame,
     build_render_command,
+    render_subtitle_video,
 )
 from krok_helper.subtitle_render.models import (  # noqa: E402
     Style,
@@ -103,3 +105,47 @@ def test_render_job_validation_requires_subtitles(tmp_path):
     )
     with pytest.raises(ProcessingError):
         build_render_command("ffmpeg", job)
+
+
+def test_render_cancel_removes_incomplete_output(monkeypatch, tmp_path):
+    job = _job(tmp_path)
+    job.output_path.write_bytes(b"partial")
+
+    class FakeStdin:
+        def write(self, _data):
+            return None
+
+        def close(self):
+            return None
+
+    class FakeProcess:
+        def __init__(self):
+            self.stdin = FakeStdin()
+            self.stdout = []
+            self.returncode = None
+            self.terminated = False
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.terminated = True
+            self.returncode = -15
+
+        def kill(self):
+            self.returncode = -9
+
+        def wait(self, timeout=None):
+            if self.returncode is None:
+                self.returncode = 0
+            return self.returncode
+
+    fake_process = FakeProcess()
+    monkeypatch.setattr(renderer, "find_tool", lambda _name, _ffmpeg_dir=None: "ffmpeg")
+    monkeypatch.setattr(renderer.subprocess, "Popen", lambda *args, **kwargs: fake_process)
+
+    with pytest.raises(ExportCancelled):
+        render_subtitle_video(job, should_cancel=lambda: True)
+
+    assert fake_process.terminated is True
+    assert not job.output_path.exists()

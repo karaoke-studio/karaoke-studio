@@ -84,6 +84,16 @@ def render_subtitle_video(
         process.stdin.close()
         _drain_process_output(process, logger)
         return_code = process.wait()
+    except ExportCancelled:
+        terminate_process(process)
+        _remove_incomplete_output(job.output_path, logger)
+        raise
+    except (BrokenPipeError, OSError) as exc:
+        terminate_process(process)
+        _remove_incomplete_output(job.output_path, logger)
+        if should_cancel is not None and should_cancel():
+            raise ExportCancelled("已停止导出。") from exc
+        raise ProcessingError(f"ffmpeg 管道写入失败: {exc}") from exc
     finally:
         if on_process_started is not None:
             on_process_started(None)

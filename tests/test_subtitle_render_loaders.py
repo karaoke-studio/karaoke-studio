@@ -338,6 +338,32 @@ def test_export_tab_builds_render_job_from_loaded_media(qapp, monkeypatch, tmp_p
     assert job.include_audio is True
 
 
+def test_stop_render_export_requests_worker_cancel(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+
+    class FakeThread:
+        def isRunning(self):
+            return True
+
+    class FakeWorker:
+        def __init__(self):
+            self.cancel_called = False
+
+        def cancel(self):
+            self.cancel_called = True
+
+    worker = FakeWorker()
+    win._render_thread = FakeThread()
+    win._render_worker = worker
+    win._export_stop_button.setEnabled(True)
+
+    win._stop_render_export()
+
+    assert worker.cancel_called is True
+    assert win._export_stop_button.isEnabled() is False
+    assert "停止导出" in win._export_status_label.text()
+
+
 # ---------------------------------------------------------------------------
 # 布局完整性
 # ---------------------------------------------------------------------------
@@ -358,6 +384,8 @@ def test_window_shell_components_present(qapp, monkeypatch):
     assert win._waveform_panel is not None
     assert win._tracks_view is not None
     assert win._export_start_button is not None
+    assert win._export_stop_button is not None
+    assert win._export_stop_button.isEnabled() is False
 
     # 属性面板 4 个 tab
     assert win._property_panel.count() == 4
