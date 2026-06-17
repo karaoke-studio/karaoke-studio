@@ -298,6 +298,46 @@ def test_subtitle_and_video_panels_can_coexist(qapp, monkeypatch, tmp_path):
     assert win.audio_info is video_info
 
 
+def test_export_tab_builds_render_job_from_loaded_media(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+
+    lrc = tmp_path / "lyrics.lrc"
+    lrc.write_bytes(
+        b"\xef\xbb\xbf"
+        + "[00:01:00]a[00:01:50]b[00:02:00]\r\n\r\n@Title=Test\r\n".encode("utf-8")
+    )
+    win.load_from_lrc(lrc)
+
+    video_info = MediaInfo(
+        path=tmp_path / "bg.mp4",
+        duration=5.0,
+        video_streams=1,
+        audio_streams=1,
+        subtitle_streams=0,
+        video_width=1920,
+        video_height=1080,
+        video_fps=60.0,
+    )
+    monkeypatch.setattr(mw, "probe_media", lambda probe, path: video_info)
+    video = tmp_path / "bg.mp4"
+    win.load_video(video)
+
+    output = tmp_path / "custom.mp4"
+    win._export_output_edit.setText(str(output))
+    win._export_width_spin.setValue(1280)
+    win._export_height_spin.setValue(720)
+    win._export_fps_spin.setValue(60)
+    job = win._build_render_job()
+
+    assert job.background_video_path == video
+    assert job.output_path == output
+    assert job.width == 1280
+    assert job.height == 720
+    assert job.fps == 60
+    assert job.duration_ms == 5000
+    assert job.include_audio is True
+
+
 # ---------------------------------------------------------------------------
 # 布局完整性
 # ---------------------------------------------------------------------------
@@ -317,6 +357,7 @@ def test_window_shell_components_present(qapp, monkeypatch):
     assert win._property_panel is not None
     assert win._waveform_panel is not None
     assert win._tracks_view is not None
+    assert win._export_start_button is not None
 
     # 属性面板 4 个 tab
     assert win._property_panel.count() == 4

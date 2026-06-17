@@ -146,6 +146,39 @@ def test_set_audio_source_none_clears_player(qapp, tmp_path):
     assert not bar._has_audio
 
 
+def test_audio_playback_clock_uses_elapsed_timer(qapp, monkeypatch, tmp_path):
+    """有音频播放时 UI 时间用 60fps elapsed clock，不采样粗粒度 player.position。"""
+    bar = _bar(qapp)
+    fake = tmp_path / "song.wav"
+    fake.write_bytes(b"placeholder")
+    bar.set_audio_source(fake)
+    assert bar._player is not None
+
+    bar._player.position = lambda: 100  # type: ignore[assignment]
+    bar.set_time(1_000)
+    bar.play()
+    monkeypatch.setattr(bar._tick_anchor_real, "elapsed", lambda: 240)
+
+    bar._on_audio_clock_tick()
+
+    assert bar.current_time_ms == 1_240
+    bar.pause()
+
+
+def test_player_position_ignored_while_audio_clock_running(qapp, tmp_path):
+    bar = _bar(qapp)
+    fake = tmp_path / "song.wav"
+    fake.write_bytes(b"placeholder")
+    bar.set_audio_source(fake)
+    bar.set_time(1_000)
+    bar.play()
+
+    bar._on_player_position(5_000)
+
+    assert bar.current_time_ms == 1_000
+    bar.pause()
+
+
 # ---------------------------------------------------------------------------
 # 反馈环抑制
 # ---------------------------------------------------------------------------

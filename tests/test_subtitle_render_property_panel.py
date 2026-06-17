@@ -9,6 +9,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtCore import Qt  # noqa: E402
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
@@ -57,6 +58,15 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._shadow_y_spin.value() == 4
     assert panel._line_position_combo.currentData() == "top"
     assert panel._line_margin_spin.value() == 120
+
+
+def test_property_panel_subtitle_page_has_no_horizontal_scroll(qapp):
+    panel = PropertyPanel()
+    subtitle_page = panel.widget(1)
+
+    assert subtitle_page.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert panel._font_combo.minimumWidth() == 0
+    assert panel._font_size_spin.minimumWidth() == 0
 
 
 def test_property_panel_font_controls_emit_style(qapp):

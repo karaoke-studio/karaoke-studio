@@ -1,8 +1,8 @@
-"""右侧属性面板。
+"""右侧字幕属性面板。
 
-A5 / A6 先落地 MVP 横书き子集：字体、字号、字重、斜体，以及纯色底色 /
-填充色 / 描边 / 阴影。面板只维护并发出 :class:`Style`，主窗口负责把它同步给
-预览画布与后续项目模型。
+窄侧栏里不要使用横向表单布局：标签和输入框会互相挤压，尤其是
+``QFontComboBox``。这里采用工具软件常见的分组卡片 + 垂直字段，保证
+280-320px 宽度下没有横向溢出。
 """
 
 from __future__ import annotations
@@ -17,12 +17,13 @@ from PyQt6.QtWidgets import (
     QColorDialog,
     QComboBox,
     QFontComboBox,
-    QFormLayout,
-    QGroupBox,
+    QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -55,13 +56,14 @@ def _normalize_hex(value: str, fallback: str = "#000000") -> str:
 
 
 class ColorButton(QPushButton):
-    """Small color swatch button used by the style panel."""
+    """Compact color swatch button."""
 
     def __init__(self, color: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._color = _normalize_hex(color)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setMinimumHeight(30)
+        self.setFixedHeight(30)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self._apply()
 
@@ -86,8 +88,9 @@ class ColorButton(QPushButton):
                 color: {text_color};
                 border: 1px solid {palette().card_border};
                 border-radius: 6px;
-                padding: 4px 10px;
+                padding: 0 8px;
                 font-family: "Consolas", "Courier New", monospace;
+                font-size: 9pt;
             }}
             QPushButton:hover {{
                 border-color: {palette().accent_primary};
@@ -107,7 +110,7 @@ class PropertyPanel(QTabWidget):
         self._syncing = False
 
         self.setObjectName("PropertyPanel")
-        self.setMinimumWidth(280)
+        self.setMinimumWidth(260)
         self.setDocumentMode(True)
         self.setTabPosition(QTabWidget.TabPosition.North)
         themed(
@@ -119,12 +122,15 @@ class PropertyPanel(QTabWidget):
                     border: 1px solid {palette().card_border};
                     border-radius: 6px;
                     background: {palette().panel_bg};
+                    top: -1px;
                 }}
                 #PropertyPanel QTabBar::tab {{
-                    padding: 6px 14px;
+                    min-width: 44px;
+                    padding: 7px 10px;
                     color: {palette().text_secondary};
                     background: transparent;
                     border: none;
+                    font-size: 9.5pt;
                 }}
                 #PropertyPanel QTabBar::tab:selected {{
                     color: {palette().title_text};
@@ -143,14 +149,11 @@ class PropertyPanel(QTabWidget):
         self.addTab(_placeholder_page("标题字幕、时段图片、注音样式（B7 / P2）"), "装饰")
         self.set_style(self._style, emit=False)
 
-    # ------------------------------------------------------------------ public
-
     @property
     def style(self) -> Style:
         return self._style
 
     def set_style(self, style: Style, *, emit: bool = False) -> None:
-        """Replace the displayed style and optionally emit ``styleChanged``."""
         self._style = replace(style)
         self._syncing = True
         try:
@@ -182,37 +185,45 @@ class PropertyPanel(QTabWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
 
         page = QWidget()
+        page.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(14, 14, 14, 14)
-        layout.setSpacing(12)
-
-        layout.addWidget(self._make_font_group())
-        layout.addWidget(self._make_color_group())
-        layout.addWidget(self._make_layout_group())
+        layout.setContentsMargins(10, 10, 10, 12)
+        layout.setSpacing(10)
+        layout.addWidget(self._make_font_section())
+        layout.addWidget(self._make_color_section())
+        layout.addWidget(self._make_position_section())
         layout.addStretch(1)
 
         scroll.setWidget(page)
         return scroll
 
-    def _make_font_group(self) -> QGroupBox:
-        group = _styled_group("字体")
-        form = _form_layout(group)
+    def _make_font_section(self) -> QFrame:
+        section, layout = _section("字体")
 
-        self._font_combo = QFontComboBox(group)
+        self._font_combo = QFontComboBox(section)
+        _compact_control(self._font_combo)
         self._font_combo.currentFontChanged.connect(
             lambda font: self._update_style(font_family=font.family())
         )
-        form.addRow("字体", self._font_combo)
+        layout.addWidget(_field("字体", self._font_combo))
+
+        row = QWidget(section)
+        row_layout = QGridLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setHorizontalSpacing(8)
+        row_layout.setVerticalSpacing(0)
 
         self._font_size_spin = _spin(12, 180, suffix=" px")
         self._font_size_spin.valueChanged.connect(
             lambda value: self._update_style(font_size_px=value)
         )
-        form.addRow("字号", self._font_size_spin)
+        row_layout.addWidget(_field("字号", self._font_size_spin), 0, 0)
 
-        self._font_weight_combo = QComboBox(group)
+        self._font_weight_combo = QComboBox(section)
+        _compact_control(self._font_weight_combo)
         for label, value in [
             ("常规 400", 400),
             ("中等 500", 500),
@@ -227,65 +238,76 @@ class PropertyPanel(QTabWidget):
                 font_weight=int(self._font_weight_combo.currentData())
             )
         )
-        form.addRow("字重", self._font_weight_combo)
+        row_layout.addWidget(_field("字重", self._font_weight_combo), 0, 1)
+        row_layout.setColumnStretch(0, 1)
+        row_layout.setColumnStretch(1, 1)
+        layout.addWidget(row)
 
-        self._italic_check = QCheckBox("斜体", group)
+        self._italic_check = QCheckBox("斜体", section)
         self._italic_check.toggled.connect(lambda checked: self._update_style(italic=checked))
-        # 单 widget 行：让 checkbox 自己占满，省掉空 label 列的视觉割裂
-        form.addRow(self._italic_check)
-        return group
+        layout.addWidget(self._italic_check)
+        return section
 
-    def _make_color_group(self) -> QGroupBox:
-        group = _styled_group("颜色")
-        form = _form_layout(group)
+    def _make_color_section(self) -> QFrame:
+        section, layout = _section("颜色")
 
-        self._base_color_btn = self._color_row(form, "底色", "base_color", self._style.base_color)
-        self._fill_color_btn = self._color_row(form, "填充色", "fill_color", self._style.fill_color)
-        self._stroke_color_btn = self._color_row(
-            form, "描边色", "stroke_color", self._style.stroke_color
-        )
+        color_grid = QWidget(section)
+        grid = QGridLayout(color_grid)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
 
-        # 描边宽度独立一行——和颜色解耦后行宽更舒展，spin 不再被挤
+        self._base_color_btn = self._color_button("base_color", self._style.base_color)
+        self._fill_color_btn = self._color_button("fill_color", self._style.fill_color)
+        self._stroke_color_btn = self._color_button("stroke_color", self._style.stroke_color)
+        self._shadow_color_btn = self._color_button("shadow_color", self._style.shadow_color)
+
+        grid.addWidget(_field("底色", self._base_color_btn), 0, 0)
+        grid.addWidget(_field("填充", self._fill_color_btn), 0, 1)
+        grid.addWidget(_field("描边", self._stroke_color_btn), 1, 0)
+        grid.addWidget(_field("阴影", self._shadow_color_btn), 1, 1)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        layout.addWidget(color_grid)
+
+        detail_grid = QWidget(section)
+        detail_layout = QGridLayout(detail_grid)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        detail_layout.setHorizontalSpacing(8)
+        detail_layout.setVerticalSpacing(8)
+
         self._stroke_width_spin = _spin(0, 24, suffix=" px")
         self._stroke_width_spin.valueChanged.connect(
             lambda value: self._update_style(stroke_width_px=value)
         )
-        form.addRow("描边宽度", self._stroke_width_spin)
+        detail_layout.addWidget(_field("描边宽度", self._stroke_width_spin), 0, 0)
 
-        self._shadow_color_btn = self._color_row(
-            form, "阴影色", "shadow_color", self._style.shadow_color
-        )
-
-        # 阴影偏移：X / Y 同一行但带显式标签，避免之前 " x" / " y" 后缀混淆
-        offset_row = QWidget(group)
-        offset_layout = QHBoxLayout(offset_row)
-        offset_layout.setContentsMargins(0, 0, 0, 0)
-        offset_layout.setSpacing(6)
-        x_label = QLabel("X")
-        themed(x_label, lambda: f"color: {palette().text_secondary};")
         self._shadow_x_spin = _spin(-40, 40, suffix=" px")
         self._shadow_x_spin.valueChanged.connect(
             lambda value: self._update_style(shadow_offset_x=value)
         )
-        y_label = QLabel("Y")
-        themed(y_label, lambda: f"color: {palette().text_secondary};")
+        detail_layout.addWidget(_field("阴影 X", self._shadow_x_spin), 0, 1)
+
         self._shadow_y_spin = _spin(-40, 40, suffix=" px")
         self._shadow_y_spin.valueChanged.connect(
             lambda value: self._update_style(shadow_offset_y=value)
         )
-        offset_layout.addWidget(x_label)
-        offset_layout.addWidget(self._shadow_x_spin, 1)
-        offset_layout.addSpacing(4)
-        offset_layout.addWidget(y_label)
-        offset_layout.addWidget(self._shadow_y_spin, 1)
-        form.addRow("阴影偏移", offset_row)
-        return group
+        detail_layout.addWidget(_field("阴影 Y", self._shadow_y_spin), 1, 1)
+        detail_layout.setColumnStretch(0, 1)
+        detail_layout.setColumnStretch(1, 1)
+        layout.addWidget(detail_grid)
+        return section
 
-    def _make_layout_group(self) -> QGroupBox:
-        group = _styled_group("位置")
-        form = _form_layout(group)
+    def _make_position_section(self) -> QFrame:
+        section, layout = _section("位置")
 
-        self._line_position_combo = QComboBox(group)
+        row = QWidget(section)
+        row_layout = QGridLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setHorizontalSpacing(8)
+
+        self._line_position_combo = QComboBox(section)
+        _compact_control(self._line_position_combo)
         for label, value in [("底部", "bottom"), ("居中", "center"), ("顶部", "top")]:
             self._line_position_combo.addItem(label, value)
         self._line_position_combo.currentIndexChanged.connect(
@@ -293,25 +315,21 @@ class PropertyPanel(QTabWidget):
                 line_y_position=self._line_position_combo.currentData()
             )
         )
-        form.addRow("行位置", self._line_position_combo)
+        row_layout.addWidget(_field("行位置", self._line_position_combo), 0, 0)
 
         self._line_margin_spin = _spin(0, 400, suffix=" px")
         self._line_margin_spin.valueChanged.connect(
             lambda value: self._update_style(line_y_margin_px=value)
         )
-        form.addRow("边距", self._line_margin_spin)
-        return group
+        row_layout.addWidget(_field("边距", self._line_margin_spin), 0, 1)
+        row_layout.setColumnStretch(0, 1)
+        row_layout.setColumnStretch(1, 1)
+        layout.addWidget(row)
+        return section
 
-    def _color_row(
-        self,
-        form: QFormLayout,
-        label: str,
-        field_name: str,
-        color: str,
-    ) -> ColorButton:
+    def _color_button(self, field_name: str, color: str) -> ColorButton:
         button = ColorButton(color)
         button.clicked.connect(lambda _checked=False, field=field_name: self._choose_color(field))
-        form.addRow(label, button)
         return button
 
     # ------------------------------------------------------------------ update
@@ -358,49 +376,71 @@ def _spin(minimum: int, maximum: int, *, suffix: str = "") -> QSpinBox:
     spin.setRange(minimum, maximum)
     spin.setSuffix(suffix)
     spin.setButtonSymbols(QSpinBox.ButtonSymbols.UpDownArrows)
+    _compact_control(spin)
     return spin
 
 
-def _form_layout(parent: QWidget) -> QFormLayout:
-    form = QFormLayout(parent)
-    form.setContentsMargins(12, 12, 12, 12)
-    form.setSpacing(10)
-    form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-    form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
-    return form
+def _compact_control(widget: QWidget) -> None:
+    widget.setMinimumWidth(0)
+    widget.setFixedHeight(32)
+    widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
 
-def _styled_group(title: str) -> QGroupBox:
-    group = QGroupBox(title)
+def _field(label_text: str, control: QWidget) -> QWidget:
+    box = QWidget()
+    layout = QVBoxLayout(box)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(4)
+    label = QLabel(label_text)
+    themed(label, lambda: f"color: {palette().text_secondary}; font-size: 9pt;")
+    control.setParent(box)
+    layout.addWidget(label)
+    layout.addWidget(control)
+    return box
+
+
+def _section(title: str) -> tuple[QFrame, QVBoxLayout]:
+    section = QFrame()
+    section.setObjectName("SubtitlePropertySection")
     themed(
-        group,
+        section,
         lambda: (
             f"""
-            QGroupBox {{
-                color: {palette().title_text};
+            QFrame#SubtitlePropertySection {{
+                background: {palette().card_bg};
                 border: 1px solid {palette().card_border};
                 border-radius: 8px;
-                margin-top: 12px;
-                font-weight: 700;
-                font-size: 10.5pt;
-                background: {palette().panel_bg};
             }}
-            QGroupBox::title {{
-                subcontrol-origin: margin;
-                left: 12px;
-                padding: 0 6px;
+            QFrame#SubtitlePropertySection QComboBox,
+            QFrame#SubtitlePropertySection QFontComboBox,
+            QFrame#SubtitlePropertySection QSpinBox {{
                 background: {palette().panel_bg};
+                color: {palette().text_primary};
+                border: 1px solid {palette().card_border};
+                border-radius: 6px;
+                padding: 0 8px;
+                font-size: 9.5pt;
             }}
-            QLabel, QCheckBox {{
+            QFrame#SubtitlePropertySection QComboBox:hover,
+            QFrame#SubtitlePropertySection QFontComboBox:hover,
+            QFrame#SubtitlePropertySection QSpinBox:hover {{
+                border-color: {palette().accent_primary};
+            }}
+            QFrame#SubtitlePropertySection QCheckBox {{
                 color: {palette().text_primary};
                 font-size: 9.5pt;
-                font-weight: normal;
-            }}
-            QComboBox, QSpinBox, QFontComboBox {{
-                min-height: 28px;
-                font-size: 9.5pt;
+                background: transparent;
             }}
             """
         ),
     )
-    return group
+    layout = QVBoxLayout(section)
+    layout.setContentsMargins(12, 10, 12, 12)
+    layout.setSpacing(10)
+    title_label = QLabel(title)
+    themed(
+        title_label,
+        lambda: f"color: {palette().title_text}; font-size: 10.5pt; font-weight: 700;",
+    )
+    layout.addWidget(title_label)
+    return section, layout

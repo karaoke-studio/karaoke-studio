@@ -30,15 +30,21 @@ UI 顶层结构：
 from __future__ import annotations
 
 from pathlib import Path
+import subprocess
 from typing import Any, Optional
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QObject, QThread, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog,
+    QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMessageBox,
+    QProgressBar,
+    QPushButton,
     QSplitter,
+    QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -49,6 +55,7 @@ from krok_helper.errors import ProcessingError
 from krok_helper.ffmpeg import find_tool, probe_media
 from krok_helper.models import MediaInfo
 from krok_helper.settings import load_app_settings
+from krok_helper.subtitle_render.engine.renderer import RenderJob, render_subtitle_video
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.frontend.lyrics_list import LyricsPanel
 from krok_helper.subtitle_render.frontend.preview_view import PreviewPanel, TransportBar
@@ -63,6 +70,37 @@ from krok_helper.subtitle_render.frontend.theme import palette, themed
 
 SUBTITLE_FILTER = "Nicokara 逐字 LRC (*.lrc);;所有文件 (*.*)"
 VIDEO_FILTER = "视频文件 (*.mp4 *.mkv *.mov *.webm *.avi *.flv);;所有文件 (*.*)"
+OUTPUT_FILTER = "MP4 视频 (*.mp4);;所有文件 (*.*)"
+
+
+class _RenderWorker(QObject):
+    progressChanged = Signal(int, int)
+    logMessage = Signal(str)
+    finished = Signal(Path)
+    failed = Signal(str)
+
+    def __init__(self, job: RenderJob, ffmpeg_dir: Optional[Path]) -> None:
+        super().__init__()
+        self._job = job
+        self._ffmpeg_dir = ffmpeg_dir
+        self._process: Optional[subprocess.Popen] = None
+
+    def run(self) -> None:
+        try:
+            output = render_subtitle_video(
+                self._job,
+                ffmpeg_dir=self._ffmpeg_dir,
+                logger=self.logMessage.emit,
+                on_progress=self.progressChanged.emit,
+                on_process_started=self._set_process,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit(str(exc))
+            return
+        self.finished.emit(output)
+
+    def _set_process(self, process: Optional[subprocess.Popen]) -> None:
+        self._process = process
 
 
 class SubtitleRenderWindow(QWidget):
@@ -89,6 +127,8 @@ class SubtitleRenderWindow(QWidget):
         self._audio_path: Optional[Path] = None
         self._audio_info: Optional[MediaInfo] = None
         self._style: Style = Style()
+        self._render_thread: Optional[QThread] = None
+        self._render_worker: Optional[_RenderWorker] = None
 
         themed(
             self,
@@ -200,25 +240,74 @@ class SubtitleRenderWindow(QWidget):
     def _make_export_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(48, 48, 48, 48)
-        layout.addStretch(1)
-        title = QLabel("导出尚未实装")
-        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.setContentsMargins(32, 28, 32, 32)
+        layout.setSpacing(14)
+
+        title = QLabel("导出 MP4")
         themed(
             title,
-            lambda: f"color: {palette().title_text}; font-size: 18pt; font-weight: 700;",
+            lambda: f"color: {palette().title_text}; font-size: 16pt; font-weight: 700;",
         )
         layout.addWidget(title)
-        hint = QLabel(
-            "A8 / A9 阶段开放：分辨率 / fps / 码率 / 硬编 / 输出路径 / "
-            "开始渲染 / 取消"
-        )
-        hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint.setWordWrap(True)
-        themed(hint, lambda: f"color: {palette().text_hint}; font-size: 10.5pt;")
-        layout.addWidget(hint)
-        layout.addStretch(2)
+
+        output_row = QHBoxLayout()
+        output_row.setContentsMargins(0, 0, 0, 0)
+        output_row.setSpacing(8)
+        self._export_output_edit = QLineEdit()
+        self._export_output_edit.setPlaceholderText("选择输出 MP4 路径")
+        self._export_browse_button = QPushButton("浏览")
+        self._export_browse_button.clicked.connect(self._browse_export_output)
+        output_row.addWidget(self._export_output_edit, 1)
+        output_row.addWidget(self._export_browse_button)
+        layout.addLayout(output_row)
+
+        params_row = QHBoxLayout()
+        params_row.setContentsMargins(0, 0, 0, 0)
+        params_row.setSpacing(10)
+        self._export_width_spin = self._export_spin(160, 7680, 1920, " 宽")
+        self._export_height_spin = self._export_spin(90, 4320, 1080, " 高")
+        self._export_fps_spin = self._export_spin(1, 120, 60, " fps")
+        params_row.addWidget(self._labeled_export_control("宽度", self._export_width_spin))
+        params_row.addWidget(self._labeled_export_control("高度", self._export_height_spin))
+        params_row.addWidget(self._labeled_export_control("帧率", self._export_fps_spin))
+        layout.addLayout(params_row)
+
+        self._export_progress = QProgressBar()
+        self._export_progress.setRange(0, 1)
+        self._export_progress.setValue(0)
+        layout.addWidget(self._export_progress)
+
+        self._export_status_label = QLabel("加载字幕和背景视频后即可导出。")
+        themed(self._export_status_label, lambda: f"color: {palette().text_hint}; font-size: 10pt;")
+        layout.addWidget(self._export_status_label)
+
+        self._export_start_button = QPushButton("开始导出")
+        self._export_start_button.setMinimumHeight(38)
+        self._export_start_button.clicked.connect(self._start_render_export)
+        layout.addWidget(self._export_start_button)
+
+        layout.addStretch(1)
         return page
+
+    @staticmethod
+    def _export_spin(minimum: int, maximum: int, value: int, suffix: str) -> QSpinBox:
+        spin = QSpinBox()
+        spin.setRange(minimum, maximum)
+        spin.setValue(value)
+        spin.setSuffix(suffix)
+        spin.setMinimumHeight(32)
+        return spin
+
+    def _labeled_export_control(self, label_text: str, control: QWidget) -> QWidget:
+        box = QWidget()
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        label = QLabel(label_text)
+        themed(label, lambda: f"color: {palette().text_secondary}; font-size: 9.5pt;")
+        layout.addWidget(label)
+        layout.addWidget(control)
+        return box
 
     # ------------------------------------------------------------------ browse fallback
 
@@ -237,6 +326,15 @@ class SubtitleRenderWindow(QWidget):
         )
         if path_str:
             self.load_video(Path(path_str))
+
+    def _browse_export_output(self) -> None:
+        start = self._default_export_path()
+        path_str, _ = QFileDialog.getSaveFileName(self, "导出字幕视频", str(start), OUTPUT_FILTER)
+        if path_str:
+            path = Path(path_str)
+            if path.suffix.lower() != ".mp4":
+                path = path.with_suffix(".mp4")
+            self._export_output_edit.setText(str(path))
 
     # ------------------------------------------------------------------ public
 
@@ -271,6 +369,8 @@ class SubtitleRenderWindow(QWidget):
         self._video_path = path
         self._video_info = info
         self._preview_panel.set_video_source(path)
+        if not self._export_output_edit.text().strip():
+            self._export_output_edit.setText(str(self._default_export_path()))
         # 视频自带音频 → 喂给 TransportBar 走 QMediaPlayer 播放
         if info.audio_streams > 0:
             self._audio_path = path
@@ -352,6 +452,108 @@ class SubtitleRenderWindow(QWidget):
     def _apply_style(self, style: Style) -> None:
         self._style = style
         self._preview_panel.set_style(style)
+
+    def _default_export_path(self) -> Path:
+        base = self._video_path or self._subtitle_path
+        if base is None:
+            return Path.cwd() / "subtitle_render.mp4"
+        return base.with_name(f"{base.stem}_subtitle.mp4")
+
+    def _resolve_ffmpeg_dir(self) -> Optional[Path]:
+        try:
+            settings = load_app_settings()
+            raw = (settings.ffmpeg_dir or "").strip()
+            return Path(raw) if raw else None
+        except Exception:
+            return None
+
+    def _build_render_job(self) -> RenderJob:
+        if self._timing_track is None:
+            raise ProcessingError("请先加载字幕文件。")
+        if self._video_path is None:
+            raise ProcessingError("请先加载背景视频。")
+        output_text = self._export_output_edit.text().strip()
+        if not output_text:
+            raise ProcessingError("请先选择输出路径。")
+        output_path = Path(output_text).expanduser()
+        if output_path.suffix.lower() != ".mp4":
+            output_path = output_path.with_suffix(".mp4")
+            self._export_output_edit.setText(str(output_path))
+        duration_ms = self._current_export_duration_ms()
+        return RenderJob(
+            track=self._timing_track,
+            style=self._style,
+            background_video_path=self._video_path,
+            output_path=output_path,
+            width=self._export_width_spin.value(),
+            height=self._export_height_spin.value(),
+            fps=self._export_fps_spin.value(),
+            duration_ms=duration_ms,
+            include_audio=bool(self._video_info and self._video_info.audio_streams > 0),
+        )
+
+    def _current_export_duration_ms(self) -> int:
+        candidates: list[int] = []
+        if self._timing_track is not None:
+            candidates.append(track_duration_ms(self._timing_track))
+        if self._video_info is not None and self._video_info.duration > 0:
+            candidates.append(int(round(self._video_info.duration * 1000)))
+        return max(candidates, default=0)
+
+    def _start_render_export(self) -> None:
+        if self._render_thread is not None and self._render_thread.isRunning():
+            QMessageBox.information(self, "导出中", "当前导出任务还在处理中，请稍等。")
+            return
+        try:
+            job = self._build_render_job()
+        except ProcessingError as exc:
+            QMessageBox.critical(self, "无法导出", str(exc))
+            return
+
+        self._export_start_button.setEnabled(False)
+        self._export_progress.setRange(0, 0)
+        self._export_status_label.setText("正在准备导出…")
+
+        thread = QThread(self)
+        worker = _RenderWorker(job, self._resolve_ffmpeg_dir())
+        worker.moveToThread(thread)
+        worker.progressChanged.connect(self._on_render_progress)
+        worker.logMessage.connect(self._on_render_log)
+        worker.finished.connect(self._finish_render_success)
+        worker.failed.connect(self._finish_render_failure)
+        worker.finished.connect(thread.quit)
+        worker.failed.connect(thread.quit)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._clear_render_thread)
+        thread.started.connect(worker.run)
+        self._render_thread = thread
+        self._render_worker = worker
+        thread.start()
+
+    def _on_render_progress(self, done: int, total: int) -> None:
+        self._export_progress.setRange(0, max(total, 1))
+        self._export_progress.setValue(done)
+        self._export_status_label.setText(f"正在导出… {done}/{total} 帧")
+
+    def _on_render_log(self, message: str) -> None:
+        self._export_status_label.setText(message)
+
+    def _finish_render_success(self, output_path: Path) -> None:
+        self._export_progress.setRange(0, 1)
+        self._export_progress.setValue(1)
+        self._export_status_label.setText(f"导出完成: {output_path}")
+        self._export_start_button.setEnabled(True)
+
+    def _finish_render_failure(self, message: str) -> None:
+        self._export_progress.setRange(0, 1)
+        self._export_progress.setValue(0)
+        self._export_status_label.setText("导出失败")
+        self._export_start_button.setEnabled(True)
+        QMessageBox.critical(self, "导出失败", message)
+
+    def _clear_render_thread(self) -> None:
+        self._render_thread = None
+        self._render_worker = None
 
     # ------------------------------------------------------------------ embed
 

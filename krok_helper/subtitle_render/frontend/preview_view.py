@@ -363,10 +363,13 @@ class TransportBar(QWidget):
         self._tick_anchor_ms: int = 0
         self._tick_anchor_real = QElapsedTimer()
 
-        # ── 有音频时的 60fps 位置轮询（QMediaPlayer.positionChanged 太粗） ──
+        # ── 有音频时的 60fps 主时钟 ────────────────────────────────
+        # QMediaPlayer.position()/positionChanged 在 Windows 后端上经常只有几十
+        # ms 甚至 100ms 粒度。字幕填色要稳定接近 60fps，所以播放期用
+        # QElapsedTimer 推进 UI 时间，QMediaPlayer 只负责音频输出。
         self._position_poll_timer = QTimer(self)
         self._position_poll_timer.setInterval(_TICK_INTERVAL_MS)
-        self._position_poll_timer.timeout.connect(self._poll_player_position)
+        self._position_poll_timer.timeout.connect(self._on_audio_clock_tick)
 
         # 抑制 player ↔ slider 反馈环
         self._suppress_seek: bool = False
@@ -411,14 +414,14 @@ class TransportBar(QWidget):
 
     def play(self) -> None:
         """开始播放。有音频用 ``QMediaPlayer``；无音频走视觉 tick。"""
+        self._tick_anchor_ms = self._slider.value()
+        self._tick_anchor_real.start()
         if self._has_audio:
             player = self._ensure_audio_player()
-            player.setPosition(self._slider.value())
+            player.setPosition(self._tick_anchor_ms)
             player.play()
             self._position_poll_timer.start()
         else:
-            self._tick_anchor_ms = self._slider.value()
-            self._tick_anchor_real.start()
             self._tick_timer.start()
         self._update_play_button(True)
 
@@ -458,12 +461,14 @@ class TransportBar(QWidget):
         # 用户拖动 / 外部 set_time → 同步给 player / tick 锚点
         if self._has_audio and self._player is not None:
             self._player.setPosition(value)
-        if self._tick_timer.isActive():
+        if self._tick_timer.isActive() or self._position_poll_timer.isActive():
             self._tick_anchor_ms = value
             self._tick_anchor_real.restart()
 
     def _on_player_position(self, ms: int) -> None:
         if not self._has_audio:
+            return
+        if self._position_poll_timer.isActive():
             return
         # 反馈到滑块，但抑制下游回写 player（避免循环 seek）
         self._set_slider_silently(ms)
@@ -474,10 +479,17 @@ class TransportBar(QWidget):
             self._position_poll_timer.stop()
             self._update_play_button(False)
 
-    def _poll_player_position(self) -> None:
+    def _on_audio_clock_tick(self) -> None:
         if self._player is None or not self._has_audio:
             return
-        self._set_slider_silently(self._player.position())
+        elapsed = self._tick_anchor_real.elapsed()
+        target = self._tick_anchor_ms + int(elapsed)
+        if target >= self._slider.maximum():
+            target = self._slider.maximum()
+            self._set_slider_silently(target)
+            self.pause()
+            return
+        self._set_slider_silently(target)
 
     def _on_tick(self) -> None:
         elapsed = self._tick_anchor_real.elapsed()
