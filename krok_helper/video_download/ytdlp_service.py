@@ -9,7 +9,6 @@ import subprocess
 import sys
 import threading
 import urllib.request
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -39,7 +38,6 @@ WINDOWS_INVALID_FILENAME_PATTERN = re.compile(r'[\\/:*?"<>|]+')
 YOUTUBE_FALLBACK_EXTRACTOR_ARGS = "youtube:player_client=android_vr,web"
 YOUTUBE_DISABLE_COOKIE_HINT = "no_cookie"
 YOUTUBE_HINT_SEPARATOR = "|"
-YOUTUBE_RECOMMENDED_DOWNLOAD_FORMAT = "bv*[vcodec^=avc1]+ba[ext=m4a]/bv+ba[ext=m4a]/bv+ba/best"
 
 
 class VideoDownloadError(RuntimeError):
@@ -191,7 +189,6 @@ class YtDlpService:
         source = self.detect_source(fallback_url, info.get("extractor_key"))
         preferred_audio_ext = "m4a" if source == SOURCE_YOUTUBE else ""
         formats = self._format_parser.parse_formats(info.get("formats"), preferred_audio_ext=preferred_audio_ext)
-        formats = self._apply_source_format_overrides(source, formats)
         thumbnail_url = str(info.get("thumbnail") or "")
         webpage_url = self._coerce_webpage_url(info, fallback_url)
         title = str(info.get("title") or "未命名视频")
@@ -215,16 +212,6 @@ class YtDlpService:
             subtitles_available=bool(info.get("subtitles") or info.get("automatic_captions")),
             extractor_args_hint=extractor_args_hint,
         )
-
-    def _apply_source_format_overrides(self, source: str, formats: list) -> list:
-        if source != SOURCE_YOUTUBE or not formats:
-            return formats
-        return [
-            replace(option, download_format=YOUTUBE_RECOMMENDED_DOWNLOAD_FORMAT, requires_merge=True)
-            if option.is_recommended
-            else option
-            for option in formats
-        ]
 
     def download(
         self,

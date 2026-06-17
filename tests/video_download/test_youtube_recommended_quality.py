@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from krok_helper.video_download.download_task import SOURCE_YOUTUBE
-from krok_helper.video_download.ytdlp_service import YOUTUBE_RECOMMENDED_DOWNLOAD_FORMAT, YtDlpService
+from krok_helper.video_download.ytdlp_service import YtDlpService
 
 
-def test_youtube_recommended_prefers_h264_video_and_m4a_audio() -> None:
+def test_youtube_recommended_downloads_same_best_format_shown_in_ui() -> None:
     service = YtDlpService()
 
     info = service._build_video_info(
@@ -29,31 +29,47 @@ def test_youtube_recommended_prefers_h264_video_and_m4a_audio() -> None:
                     "acodec": "mp4a.40.2",
                     "abr": 129,
                     "tbr": 129,
-                    "filesize": 3_542_951,
+                    "filesize": 2_504_695,
                 },
                 {
-                    "format_id": "399",
+                    "format_id": "299",
                     "ext": "mp4",
                     "width": 1920,
-                    "height": 1080,
-                    "vcodec": "av01.0.08M.08",
+                    "height": 864,
+                    "fps": 60,
+                    "vcodec": "avc1.64002a",
                     "acodec": "none",
-                    "tbr": 563,
-                    "filesize": 15_403_745,
+                    "format_note": "1080p60",
+                    "tbr": 2787,
+                    "filesize": 53_885_235,
                 },
                 {
-                    "format_id": "137",
+                    "format_id": "401",
                     "ext": "mp4",
-                    "width": 1920,
-                    "height": 1080,
-                    "vcodec": "avc1.640028",
+                    "width": 3840,
+                    "height": 1728,
+                    "fps": 60,
+                    "vcodec": "av01.0.13M.08",
                     "acodec": "none",
-                    "tbr": 581,
-                    "filesize": 15_904_872,
+                    "format_note": "2160p60",
+                    "tbr": 7677,
+                    "filesize": 148_396_650,
+                },
+                {
+                    "format_id": "315",
+                    "ext": "webm",
+                    "width": 3840,
+                    "height": 1728,
+                    "fps": 60,
+                    "vcodec": "vp9",
+                    "acodec": "none",
+                    "format_note": "2160p60",
+                    "tbr": 17995,
+                    "filesize": 347_869_871,
                 },
             ],
         },
-        "https://www.youtube.com/watch?v=0wGvSmOMeNU",
+        "https://www.youtube.com/watch?v=YpajI_fnrsI",
         "",
     )
 
@@ -61,10 +77,11 @@ def test_youtube_recommended_prefers_h264_video_and_m4a_audio() -> None:
 
     assert info.source == SOURCE_YOUTUBE
     assert recommended.is_recommended is True
-    assert recommended.resolution == "1080p"
-    assert recommended.video_codec == "avc1"
+    assert recommended.resolution == "2160p"
+    assert recommended.video_codec == "vp9"
     assert recommended.audio_codec == "mp4a"
-    assert recommended.download_format == YOUTUBE_RECOMMENDED_DOWNLOAD_FORMAT
+    assert recommended.download_format == "315+140"
+    assert recommended.filesize == 350_374_566
     assert recommended.requires_merge is True
 
 
