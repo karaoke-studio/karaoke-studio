@@ -37,6 +37,7 @@ call :ensure_pkg pedalboard pedalboard || exit /b 1
 call :ensure_pkg numpy numpy || exit /b 1
 call :ensure_pkg pykakasi pykakasi || exit /b 1
 call :ensure_pkg jaconv jaconv || exit /b 1
+call :ensure_pkg pyphen pyphen || exit /b 1
 call :ensure_pkg winrt.windows.globalization winrt-Windows.Globalization || exit /b 1
 call :ensure_pkg winrt.windows.foundation winrt-Windows.Foundation || exit /b 1
 call :ensure_pkg winrt.windows.foundation.collections winrt-Windows.Foundation.Collections || exit /b 1
@@ -84,6 +85,7 @@ echo Building Windows package...
     --collect-all pedalboard ^
     --collect-all pykakasi ^
     --collect-all winrt ^
+    --collect-all pyphen ^
     --collect-binaries soundfile ^
     --collect-submodules strange_uta_game ^
     --hidden-import sounddevice ^
@@ -224,6 +226,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "  'strange_uta_game\config\dictionary.json'," ^
     "  'strange_uta_game\config\cmudict-0.7b'," ^
     "  'strange_uta_game\config\kanji_readings.json'," ^
+    "  'pyphen\dictionaries\hyph_en_US.dic'," ^
     "  'strange_uta_game\resource\icon.ico'," ^
     "  'strange_uta_game\resource\sounds\press.wav'," ^
     "  'strange_uta_game\bass\x64\bass.dll'," ^
