@@ -163,6 +163,27 @@ def test_paint_frame_ruby_k_timing_changes_between_timestamps(qapp):
     assert _pixel_hash(img1) != _pixel_hash(img2)
 
 
+def test_paint_frame_ruby_without_k_timing_wipes_over_span(qapp):
+    img1 = _blank()
+    img2 = _blank()
+    track = _track_with_ruby()
+    style = Style(
+        font_size_px=64,
+        base_color="#FFFFFF",
+        fill_color="#FFFFFF",
+        stroke_color="",
+        shadow_color="",
+        ruby_font_size_px=30,
+        ruby_color="#00FF88",
+        line_y_position="center",
+    )
+
+    paint_frame(img1, track, 1000, style)
+    paint_frame(img2, track, 1500, style)
+
+    assert _pixel_hash(img1) != _pixel_hash(img2)
+
+
 def test_paint_frame_after_line_still_renders_no_active(qapp):
     img = _blank()
     baseline = _pixel_hash(img)

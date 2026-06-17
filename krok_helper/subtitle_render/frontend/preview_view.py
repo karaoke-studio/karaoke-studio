@@ -36,7 +36,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from krok_helper.subtitle_render.engine.painter import paint_frame
+from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
 from krok_helper.subtitle_render.frontend.theme import palette, themed
 from krok_helper.subtitle_render.models import Style, TimingTrack
@@ -150,23 +150,21 @@ class PreviewCanvas(QWidget):
     # ------------------------------------------------------------------ paint
 
     def paintEvent(self, event):  # noqa: N802 — Qt API
-        # DPR-aware：QImage 实际像素 = 逻辑像素 × devicePixelRatio。
-        # QPainter 在 setDevicePixelRatio 过的 image 上自动按逻辑坐标系绘制，
-        # 但底层物理像素是高分屏的真实分辨率——这样文字 / 视频帧都按物理分辨率
-        # 渲染，blit 回 widget 时 1:1 对应物理像素，避免被 Qt 二次缩放糊化。
         dpr = self.devicePixelRatioF() or 1.0
         logical_w = max(self.width(), 1)
         logical_h = max(self.height(), 1)
-        phys_w = max(int(round(logical_w * dpr)), 1)
-        phys_h = max(int(round(logical_h * dpr)), 1)
-        image = QImage(phys_w, phys_h, QImage.Format.Format_ARGB32_Premultiplied)
-        image.setDevicePixelRatio(dpr)
-        image.fill(PREVIEW_BG)
-        self._paint_background_video(image)
-        paint_frame(image, self._track, self._t_ms, self._style)
         painter = QPainter(self)
         try:
-            painter.drawImage(0, 0, image)
+            painter.fillRect(self.rect(), PREVIEW_BG)
+            self._paint_background_video(painter, logical_w, logical_h, dpr)
+            paint_frame_to_painter(
+                painter,
+                logical_w,
+                logical_h,
+                self._track,
+                self._t_ms,
+                self._style,
+            )
         finally:
             painter.end()
 
@@ -202,43 +200,55 @@ class PreviewCanvas(QWidget):
         self._video_player.setAudioOutput(self._video_audio_out)
         return self._video_player
 
-    def _paint_background_video(self, target: QImage) -> None:
+    def _scaled_background_video(
+        self,
+        logical_w: int,
+        logical_h: int,
+        dpr: float,
+    ) -> Optional[QImage]:
         if self._video_image is None or self._video_image.isNull():
-            return
-        # target 是 DPR-aware QImage：物理尺寸 = 逻辑 × dpr。
+            return None
+        phys_w = max(int(round(logical_w * dpr)), 1)
+        phys_h = max(int(round(logical_h * dpr)), 1)
+        # 缓存 DPR-aware 视频帧：物理尺寸 = 逻辑 × dpr。
         # 直接按物理像素缩放视频帧 → 物理分辨率渲染 → 不糊；最后用物理坐标
         # 绘制（painter.drawImage 在 dpr-aware image 上默认是逻辑坐标系，
         # 这里把 frame 自身也 setDevicePixelRatio 同步，绘制时就按逻辑落点）。
-        dpr = target.devicePixelRatioF() or 1.0
         dpr_key = int(round(dpr * 1000))
         cache_key = (
             int(self._video_image.cacheKey()),
-            target.width(),
-            target.height(),
+            phys_w,
+            phys_h,
             dpr_key,
         )
         frame = self._scaled_video_image
         if frame is None or self._scaled_video_key != cache_key:
             frame = self._video_image.scaled(
-                QSize(target.width(), target.height()),
+                QSize(phys_w, phys_h),
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
             frame.setDevicePixelRatio(dpr)
             self._scaled_video_image = frame
             self._scaled_video_key = cache_key
+        return frame
+
+    def _paint_background_video(
+        self,
+        painter: QPainter,
+        logical_w: int,
+        logical_h: int,
+        dpr: float,
+    ) -> None:
+        frame = self._scaled_background_video(logical_w, logical_h, dpr)
+        if frame is None:
+            return
         # 居中：用逻辑坐标
-        logical_target_w = int(round(target.width() / dpr))
-        logical_target_h = int(round(target.height() / dpr))
         logical_frame_w = int(round(frame.width() / dpr))
         logical_frame_h = int(round(frame.height() / dpr))
-        x = (logical_target_w - logical_frame_w) // 2
-        y = (logical_target_h - logical_frame_h) // 2
-        painter = QPainter(target)
-        try:
-            painter.drawImage(x, y, frame)
-        finally:
-            painter.end()
+        x = (logical_w - logical_frame_w) // 2
+        y = (logical_h - logical_frame_h) // 2
+        painter.drawImage(x, y, frame)
 
 
 class PreviewPanel(DropPanel):

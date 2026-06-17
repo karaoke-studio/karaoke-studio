@@ -1,6 +1,8 @@
 """单帧 QPainter 绘制（A4 阶段）。
 
-入口 :func:`paint_frame` 把一行已唱 / 未唱字符渲染到给定 ``QImage`` 上。
+入口 :func:`paint_frame` 把一行已唱 / 未唱字符渲染到给定 ``QImage`` 上；
+预览路径可用 :func:`paint_frame_to_painter` 直接画到已有 ``QPainter``，避免每帧
+额外分配整张离屏图。
 
 绘制顺序（自底向上）：
 
@@ -51,19 +53,8 @@ def paint_frame(
 
     若无活跃行则不画任何字（image 不变）。返回同一个 image 以便链式调用。
     """
-    if track is None:
-        return image
-    line = find_active_line(track, t_ms)
-    if line is None or not line.chars:
-        return image
-
     painter = QPainter(image)
     try:
-        painter.setRenderHints(
-            QPainter.RenderHint.Antialiasing
-            | QPainter.RenderHint.TextAntialiasing
-            | QPainter.RenderHint.SmoothPixmapTransform
-        )
         # QImage 上 setDevicePixelRatio 后，QPainter 在该 image 上的坐标系
         # 自动按 dpr 缩放——绘制坐标用"逻辑像素"，而 image.width()/height()
         # 返回的是物理像素。这里取逻辑尺寸，让上层布局算居中等都按屏幕
@@ -71,10 +62,40 @@ def paint_frame(
         dpr = image.devicePixelRatioF() or 1.0
         logical_w = max(int(round(image.width() / dpr)), 1)
         logical_h = max(int(round(image.height() / dpr)), 1)
-        _paint_line(painter, logical_w, logical_h, track, line, t_ms, style)
+        paint_frame_to_painter(painter, logical_w, logical_h, track, t_ms, style)
     finally:
         painter.end()
     return image
+
+
+def paint_frame_to_painter(
+    painter: QPainter,
+    logical_w: int,
+    logical_h: int,
+    track: Optional[TimingTrack],
+    t_ms: int,
+    style: Style,
+) -> None:
+    """把当前字幕帧直接绘制到已打开的 ``QPainter``。
+
+    ``logical_w`` / ``logical_h`` 使用 Qt 逻辑像素；调用方负责先绘制背景。
+    """
+    if track is None:
+        return
+    line = find_active_line(track, t_ms)
+    if line is None or not line.chars:
+        return
+
+    painter.save()
+    try:
+        painter.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
+        )
+        _paint_line(painter, logical_w, logical_h, track, line, t_ms, style)
+    finally:
+        painter.restore()
 
 
 # ---------------------------------------------------------------------------
@@ -327,13 +348,29 @@ def _paint_ruby_text(
     t_ms: int,
     style: Style,
 ) -> None:
-    if not ruby.reading_part_ms:
-        painter.setPen(QColor(style.ruby_color))
-        painter.drawText(x, baseline_y, ruby.reading)
-        return
-
     painter.setPen(QColor(style.base_color))
     painter.drawText(x, baseline_y, ruby.reading)
+
+    if not ruby.reading_part_ms:
+        ratio = char_fill_ratio(ruby.pos_start_ms, ruby.pos_end_ms, t_ms)
+        if ratio <= 0.0:
+            return
+        painter.save()
+        try:
+            if ratio < 1.0:
+                painter.setClipRect(
+                    QRectF(
+                        float(x),
+                        float(baseline_y - ruby_metrics.ascent()),
+                        float(int(round(ruby_metrics.horizontalAdvance(ruby.reading) * ratio))),
+                        float(ruby_metrics.height()),
+                    )
+                )
+            painter.setPen(QColor(style.ruby_color))
+            painter.drawText(x, baseline_y, ruby.reading)
+        finally:
+            painter.restore()
+        return
 
     cursor_x = x
     intervals = _ruby_reading_intervals(ruby)

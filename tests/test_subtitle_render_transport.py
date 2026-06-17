@@ -135,14 +135,11 @@ def test_preview_canvas_caches_scaled_video_frame(qapp):
     canvas = PreviewCanvas()
     canvas._video_image = QImage(64, 36, QImage.Format.Format_ARGB32_Premultiplied)
     canvas._video_image.fill(QColor("#223344"))
-    target = QImage(320, 180, QImage.Format.Format_ARGB32_Premultiplied)
-    target.fill(QColor("#101010"))
-
-    canvas._paint_background_video(target)
+    canvas._scaled_background_video(320, 180, 1.0)
     cached = canvas._scaled_video_image
     cache_key = canvas._scaled_video_key
 
-    canvas._paint_background_video(target)
+    canvas._scaled_background_video(320, 180, 1.0)
 
     assert cached is not None
     assert canvas._scaled_video_image is cached
