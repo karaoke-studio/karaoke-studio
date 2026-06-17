@@ -327,6 +327,9 @@ def test_export_tab_builds_render_job_from_loaded_media(qapp, monkeypatch, tmp_p
     win._export_width_spin.setValue(1280)
     win._export_height_spin.setValue(720)
     win._export_fps_spin.setValue(60)
+    win._export_encoder_combo.setCurrentIndex(win._export_encoder_combo.findData("nvenc"))
+    win._export_preset_combo.setCurrentText("slow")
+    win._export_crf_spin.setValue(23)
     job = win._build_render_job()
 
     assert job.background_video_path == video
@@ -336,6 +339,9 @@ def test_export_tab_builds_render_job_from_loaded_media(qapp, monkeypatch, tmp_p
     assert job.fps == 60
     assert job.duration_ms == 5000
     assert job.include_audio is True
+    assert job.encoder_mode == "nvenc"
+    assert job.preset == "slow"
+    assert job.crf == 23
 
 
 def test_stop_render_export_requests_worker_cancel(qapp, monkeypatch):
@@ -386,6 +392,9 @@ def test_window_shell_components_present(qapp, monkeypatch):
     assert win._export_start_button is not None
     assert win._export_stop_button is not None
     assert win._export_stop_button.isEnabled() is False
+    assert win._export_encoder_combo is not None
+    assert win._export_preset_combo is not None
+    assert win._export_crf_spin.value() == 18
 
     # 属性面板 4 个 tab
     assert win._property_panel.count() == 4

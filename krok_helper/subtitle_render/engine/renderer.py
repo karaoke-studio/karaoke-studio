@@ -18,6 +18,12 @@ from PyQt6.QtGui import QColor, QImage
 
 from krok_helper.errors import ExportCancelled, ProcessingError
 from krok_helper.ffmpeg import _build_subprocess_kwargs, find_tool, terminate_process
+from krok_helper.subtitle_render.engine.encoder_select import (
+    CPU_PRESETS,
+    ENCODER_MODES,
+    resolved_encoder_label,
+    video_encoder_options,
+)
 from krok_helper.subtitle_render.engine.painter import paint_frame
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.models import Style, TimingTrack
@@ -35,6 +41,9 @@ class RenderJob:
     fps: int = 60
     duration_ms: int | None = None
     include_audio: bool = True
+    encoder_mode: str = "cpu"
+    crf: int = 18
+    preset: str = "veryfast"
 
 
 def render_subtitle_video(
@@ -57,7 +66,10 @@ def render_subtitle_video(
 
     job.output_path.parent.mkdir(parents=True, exist_ok=True)
     logger(f"导出字幕视频: {job.output_path.name}")
-    logger(f"输出参数: {job.width}x{job.height} / {job.fps}fps / {duration_ms / 1000:.3f}s")
+    logger(
+        f"输出参数: {job.width}x{job.height} / {job.fps}fps / "
+        f"{duration_ms / 1000:.3f}s / {resolved_encoder_label(ffmpeg_path, job.encoder_mode)} / CRF {job.crf}"
+    )
     logger("执行命令:")
     logger(" ".join(f'"{part}"' if " " in part else part for part in command))
 
@@ -113,6 +125,7 @@ def render_subtitle_video(
 
 def build_render_command(ffmpeg_path: str, job: RenderJob, *, duration_ms: int | None = None) -> list[str]:
     """Build the ffmpeg command used by :func:`render_subtitle_video`."""
+    _validate_job(job)
     duration = _resolve_duration_ms(job) if duration_ms is None else duration_ms
     duration_seconds = max(duration / 1000.0, 0.001)
     filter_graph = (
@@ -147,20 +160,16 @@ def build_render_command(ffmpeg_path: str, job: RenderJob, *, duration_ms: int |
     ]
     if job.include_audio:
         command.extend(["-map", "1:a:0?"])
+    command.extend(["-t", f"{duration_seconds:.6f}"])
     command.extend(
-        [
-            "-t",
-            f"{duration_seconds:.6f}",
-            "-c:v",
-            "libx264",
-            "-preset",
-            "veryfast",
-            "-crf",
-            "18",
-            "-pix_fmt",
-            "yuv420p",
-        ]
+        video_encoder_options(
+            ffmpeg_path,
+            job.encoder_mode,
+            crf=job.crf,
+            preset=job.preset,
+        )
     )
+    command.extend(["-pix_fmt", "yuv420p"])
     if job.include_audio:
         command.extend(["-c:a", "aac", "-b:a", "192k"])
     command.extend(["-movflags", "+faststart", str(job.output_path)])
@@ -176,6 +185,12 @@ def _validate_job(job: RenderJob) -> None:
         raise ProcessingError("输出分辨率无效。")
     if job.fps <= 0:
         raise ProcessingError("输出 fps 无效。")
+    if job.encoder_mode not in ENCODER_MODES:
+        raise ProcessingError(f"不支持的编码器: {job.encoder_mode}")
+    if not 0 <= job.crf <= 51:
+        raise ProcessingError("CRF 必须在 0 到 51 之间。")
+    if job.preset not in CPU_PRESETS:
+        raise ProcessingError(f"不支持的 CPU preset: {job.preset}")
     if not str(job.output_path).strip():
         raise ProcessingError("请先选择输出路径。")
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import os
 from pathlib import Path
 
@@ -77,12 +78,36 @@ def test_build_render_command_contains_rawvideo_overlay_and_audio(tmp_path):
     assert command[command.index("-map") + 1] == "[v]"
     assert "1:a:0?" in command
     assert str(job.output_path) == command[-1]
+    assert command[command.index("-c:v") + 1] == "libx264"
+    assert command[command.index("-preset") + 1] == "veryfast"
+    assert command[command.index("-crf") + 1] == "18"
 
 
 def test_build_render_command_can_skip_audio(tmp_path):
     command = build_render_command("ffmpeg", _job(tmp_path, include_audio=False))
     assert "1:a:0?" not in command
     assert "-c:a" not in command
+
+
+def test_build_render_command_honors_cpu_quality_settings(tmp_path):
+    job = replace(_job(tmp_path), crf=23, preset="slow")
+
+    command = build_render_command("ffmpeg", job)
+
+    assert command[command.index("-c:v") + 1] == "libx264"
+    assert command[command.index("-preset") + 1] == "slow"
+    assert command[command.index("-crf") + 1] == "23"
+
+
+def test_build_render_command_honors_nvenc_encoder(tmp_path):
+    job = replace(_job(tmp_path), encoder_mode="nvenc", crf=20)
+
+    command = build_render_command("ffmpeg", job)
+
+    assert command[command.index("-c:v") + 1] == "h264_nvenc"
+    assert command[command.index("-preset") + 1] == "p4"
+    assert command[command.index("-cq") + 1] == "20"
+    assert "-crf" not in command
 
 
 def test_overlay_frame_size_matches_rgba(qapp, tmp_path):
@@ -105,6 +130,15 @@ def test_render_job_validation_requires_subtitles(tmp_path):
     )
     with pytest.raises(ProcessingError):
         build_render_command("ffmpeg", job)
+
+
+def test_render_job_validation_rejects_bad_encoder_settings(tmp_path):
+    with pytest.raises(ProcessingError, match="CRF"):
+        build_render_command("ffmpeg", replace(_job(tmp_path), crf=99))
+    with pytest.raises(ProcessingError, match="编码器"):
+        build_render_command("ffmpeg", replace(_job(tmp_path), encoder_mode="bad"))
+    with pytest.raises(ProcessingError, match="preset"):
+        build_render_command("ffmpeg", replace(_job(tmp_path), preset="turbo"))
 
 
 def test_render_cancel_removes_incomplete_output(monkeypatch, tmp_path):

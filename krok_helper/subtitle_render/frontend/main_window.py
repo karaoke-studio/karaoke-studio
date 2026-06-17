@@ -37,6 +37,7 @@ from PyQt6.QtCore import QObject, QThread, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -55,6 +56,14 @@ from krok_helper.errors import ExportCancelled, ProcessingError
 from krok_helper.ffmpeg import find_tool, probe_media, terminate_process
 from krok_helper.models import MediaInfo
 from krok_helper.settings import load_app_settings
+from krok_helper.subtitle_render.engine.encoder_select import (
+    CPU_PRESETS,
+    ENCODER_AMF,
+    ENCODER_AUTO,
+    ENCODER_CPU,
+    ENCODER_NVENC,
+    ENCODER_QSV,
+)
 from krok_helper.subtitle_render.engine.renderer import RenderJob, render_subtitle_video
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.frontend.lyrics_list import LyricsPanel
@@ -287,6 +296,27 @@ class SubtitleRenderWindow(QWidget):
         params_row.addWidget(self._labeled_export_control("帧率", self._export_fps_spin))
         layout.addLayout(params_row)
 
+        encode_row = QHBoxLayout()
+        encode_row.setContentsMargins(0, 0, 0, 0)
+        encode_row.setSpacing(10)
+        self._export_encoder_combo = QComboBox()
+        self._export_encoder_combo.setMinimumHeight(32)
+        self._export_encoder_combo.addItem("CPU / libx264", ENCODER_CPU)
+        self._export_encoder_combo.addItem("自动硬编", ENCODER_AUTO)
+        self._export_encoder_combo.addItem("NVIDIA NVENC", ENCODER_NVENC)
+        self._export_encoder_combo.addItem("Intel QSV", ENCODER_QSV)
+        self._export_encoder_combo.addItem("AMD AMF", ENCODER_AMF)
+        self._export_preset_combo = QComboBox()
+        self._export_preset_combo.setMinimumHeight(32)
+        for preset in CPU_PRESETS:
+            self._export_preset_combo.addItem(preset, preset)
+        self._export_preset_combo.setCurrentText("veryfast")
+        self._export_crf_spin = self._export_spin(0, 51, 18, " CRF")
+        encode_row.addWidget(self._labeled_export_control("编码器", self._export_encoder_combo))
+        encode_row.addWidget(self._labeled_export_control("CPU preset", self._export_preset_combo))
+        encode_row.addWidget(self._labeled_export_control("质量", self._export_crf_spin))
+        layout.addLayout(encode_row)
+
         self._export_progress = QProgressBar()
         self._export_progress.setRange(0, 1)
         self._export_progress.setValue(0)
@@ -514,6 +544,9 @@ class SubtitleRenderWindow(QWidget):
             fps=self._export_fps_spin.value(),
             duration_ms=duration_ms,
             include_audio=bool(self._video_info and self._video_info.audio_streams > 0),
+            encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
+            crf=self._export_crf_spin.value(),
+            preset=str(self._export_preset_combo.currentData() or "veryfast"),
         )
 
     def _current_export_duration_ms(self) -> int:

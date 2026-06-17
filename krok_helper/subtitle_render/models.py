@@ -181,6 +181,9 @@ class OutputConfig:
     width: int = 1920
     height: int = 1080
     fps: int = 60
+    encoder_mode: str = "cpu"
+    crf: int = 18
+    preset: str = "veryfast"
     output_path: str = ""
 
 
