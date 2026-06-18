@@ -126,6 +126,7 @@ class SubtitleSource:
 
 
 LineYPosition = Literal["top", "center", "bottom"]
+LineHorizontalLayout = Literal["asymmetric", "center"]
 
 
 @dataclass
@@ -170,6 +171,9 @@ class Style:
 
     dual_line_layout: bool = True
     """默认上下双行显示：当前行在上，下一行在下。"""
+
+    line_horizontal_layout: LineHorizontalLayout = "asymmetric"
+    """双行水平布局：``asymmetric`` 为上左下右，``center`` 为两行居中。"""
 
     line_gap_px: int = 90
     """双行布局中两行主文字外框之间的间距，不包含 ruby 高度。"""

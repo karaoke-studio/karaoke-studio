@@ -231,6 +231,13 @@ def test_dual_line_x_positions_use_asymmetric_margins(qapp):
     assert _resolve_line_x(1920, 600, style, 1) == 1270
 
 
+def test_dual_line_x_positions_can_be_centered(qapp):
+    style = Style(line_horizontal_layout="center")
+
+    assert _resolve_line_x(1920, 600, style, 0) == 660
+    assert _resolve_line_x(1920, 600, style, 1) == 660
+
+
 def test_paint_frame_ruby_changes_rendered_frame(qapp):
     img_plain = _blank()
     img_ruby = _blank()

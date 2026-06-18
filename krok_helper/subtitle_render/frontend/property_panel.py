@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
 )
 
 from krok_helper.subtitle_render.frontend.theme import palette, themed
-from krok_helper.subtitle_render.models import LineYPosition, Style
+from krok_helper.subtitle_render.models import LineHorizontalLayout, LineYPosition, Style
 
 
 def _placeholder_page(text: str) -> QWidget:
@@ -97,6 +97,49 @@ class ColorButton(QPushButton):
             }}
             """
         )
+
+
+class _WheelFocusedSpinBox(QSpinBox):
+    """Only adjust by wheel after the control has explicit focus."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.lineEdit().setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):  # noqa: N802 - Qt API
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
+
+class _WheelFocusedComboBox(QComboBox):
+    """Avoid accidental option changes while scrolling the property panel."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):  # noqa: N802 - Qt API
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
+
+class _WheelFocusedFontComboBox(QFontComboBox):
+    """Font list variant of the focus-gated wheel behavior."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):  # noqa: N802 - Qt API
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
 
 
 class PropertyPanel(QTabWidget):
@@ -174,6 +217,22 @@ class PropertyPanel(QTabWidget):
                 max(0, self._line_position_combo.findData(self._style.line_y_position))
             )
             self._line_margin_spin.setValue(self._style.line_y_margin_px)
+            self._dual_line_check.setChecked(self._style.dual_line_layout)
+            self._horizontal_layout_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._horizontal_layout_combo.findData(
+                        self._style.line_horizontal_layout
+                    ),
+                )
+            )
+            self._line_gap_spin.setValue(self._style.line_gap_px)
+            self._upper_left_spin.setValue(self._style.upper_line_left_margin_px)
+            self._lower_right_spin.setValue(self._style.lower_line_right_margin_px)
+            self._line_lead_spin.setValue(self._style.line_lead_in_ms)
+            self._line_tail_spin.setValue(self._style.line_tail_ms)
+            self._line_lane_gap_spin.setValue(self._style.line_lane_gap_ms)
+            self._line_max_hold_spin.setValue(self._style.line_max_hold_ms)
             self._ruby_font_size_spin.setValue(self._style.ruby_font_size_px)
             self._ruby_color_btn.set_color(self._style.ruby_color)
             self._ruby_gap_spin.setValue(self._style.ruby_gap_px)
@@ -216,6 +275,7 @@ class PropertyPanel(QTabWidget):
         layout.addWidget(self._make_ruby_section())
         layout.addWidget(self._make_color_section())
         layout.addWidget(self._make_position_section())
+        layout.addWidget(self._make_timing_section())
         layout.addStretch(1)
 
         scroll.setWidget(page)
@@ -224,7 +284,7 @@ class PropertyPanel(QTabWidget):
     def _make_font_section(self) -> QFrame:
         section, layout = _section("字体")
 
-        self._font_combo = QFontComboBox(section)
+        self._font_combo = _WheelFocusedFontComboBox(section)
         _compact_control(self._font_combo)
         self._font_combo.currentFontChanged.connect(
             lambda font: self._update_style(font_family=font.family())
@@ -243,7 +303,7 @@ class PropertyPanel(QTabWidget):
         )
         row_layout.addWidget(_field("字号", self._font_size_spin), 0, 0)
 
-        self._font_weight_combo = QComboBox(section)
+        self._font_weight_combo = _WheelFocusedComboBox(section)
         _compact_control(self._font_weight_combo)
         for label, value in [
             ("常规 400", 400),
@@ -351,12 +411,18 @@ class PropertyPanel(QTabWidget):
     def _make_position_section(self) -> QFrame:
         section, layout = _section("位置")
 
+        self._dual_line_check = QCheckBox("双行显示", section)
+        self._dual_line_check.toggled.connect(
+            lambda checked: self._update_style(dual_line_layout=checked)
+        )
+        layout.addWidget(self._dual_line_check)
+
         row = QWidget(section)
         row_layout = QGridLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setHorizontalSpacing(8)
-
-        self._line_position_combo = QComboBox(section)
+        row_layout.setVerticalSpacing(8)
+        self._line_position_combo = _WheelFocusedComboBox(section)
         _compact_control(self._line_position_combo)
         for label, value in [("底部", "bottom"), ("居中", "center"), ("顶部", "top")]:
             self._line_position_combo.addItem(label, value)
@@ -371,7 +437,75 @@ class PropertyPanel(QTabWidget):
         self._line_margin_spin.valueChanged.connect(
             lambda value: self._update_style(line_y_margin_px=value)
         )
-        row_layout.addWidget(_field("边距", self._line_margin_spin), 0, 1)
+        row_layout.addWidget(_field("下行底边距", self._line_margin_spin), 0, 1)
+
+        self._horizontal_layout_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._horizontal_layout_combo)
+        for label, value in [("上左下右", "asymmetric"), ("居中", "center")]:
+            self._horizontal_layout_combo.addItem(label, value)
+        self._horizontal_layout_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                line_horizontal_layout=self._horizontal_layout_combo.currentData()
+            )
+        )
+        row_layout.addWidget(_field("水平布局", self._horizontal_layout_combo), 1, 0)
+
+        self._line_gap_spin = _spin(0, 400, suffix=" px")
+        self._line_gap_spin.valueChanged.connect(
+            lambda value: self._update_style(line_gap_px=value)
+        )
+        row_layout.addWidget(_field("两行间距", self._line_gap_spin), 1, 1)
+
+        self._upper_left_spin = _spin(0, 800, suffix=" px")
+        self._upper_left_spin.valueChanged.connect(
+            lambda value: self._update_style(upper_line_left_margin_px=value)
+        )
+        row_layout.addWidget(_field("上行左边距", self._upper_left_spin), 2, 0)
+
+        self._lower_right_spin = _spin(0, 800, suffix=" px")
+        self._lower_right_spin.valueChanged.connect(
+            lambda value: self._update_style(lower_line_right_margin_px=value)
+        )
+        row_layout.addWidget(_field("下行右边距", self._lower_right_spin), 2, 1)
+
+        row_layout.setColumnStretch(0, 1)
+        row_layout.setColumnStretch(1, 1)
+        layout.addWidget(row)
+        return section
+
+    def _make_timing_section(self) -> QFrame:
+        section, layout = _section("显示时间")
+
+        row = QWidget(section)
+        row_layout = QGridLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setHorizontalSpacing(8)
+        row_layout.setVerticalSpacing(8)
+
+        self._line_lead_spin = _spin(0, 10_000, suffix=" ms")
+        self._line_lead_spin.valueChanged.connect(
+            lambda value: self._update_style(line_lead_in_ms=value)
+        )
+        row_layout.addWidget(_field("提前显示", self._line_lead_spin), 0, 0)
+
+        self._line_tail_spin = _spin(0, 10_000, suffix=" ms")
+        self._line_tail_spin.valueChanged.connect(
+            lambda value: self._update_style(line_tail_ms=value)
+        )
+        row_layout.addWidget(_field("唱完保留", self._line_tail_spin), 0, 1)
+
+        self._line_lane_gap_spin = _spin(0, 5_000, suffix=" ms")
+        self._line_lane_gap_spin.valueChanged.connect(
+            lambda value: self._update_style(line_lane_gap_ms=value)
+        )
+        row_layout.addWidget(_field("同轨间隔", self._line_lane_gap_spin), 1, 0)
+
+        self._line_max_hold_spin = _spin(1_000, 60_000, suffix=" ms")
+        self._line_max_hold_spin.valueChanged.connect(
+            lambda value: self._update_style(line_max_hold_ms=value)
+        )
+        row_layout.addWidget(_field("最大挂屏", self._line_max_hold_spin), 1, 1)
+
         row_layout.setColumnStretch(0, 1)
         row_layout.setColumnStretch(1, 1)
         layout.addWidget(row)
@@ -399,6 +533,10 @@ class PropertyPanel(QTabWidget):
             return
         if "line_y_position" in changes:
             changes["line_y_position"] = _normalize_line_position(changes["line_y_position"])
+        if "line_horizontal_layout" in changes:
+            changes["line_horizontal_layout"] = _normalize_horizontal_layout(
+                changes["line_horizontal_layout"]
+            )
         self._style = replace(self._style, **changes)
         self._syncing = True
         try:
@@ -423,8 +561,14 @@ def _normalize_line_position(value: object) -> LineYPosition:
     return "bottom"
 
 
+def _normalize_horizontal_layout(value: object) -> LineHorizontalLayout:
+    if value in {"asymmetric", "center"}:
+        return value  # type: ignore[return-value]
+    return "asymmetric"
+
+
 def _spin(minimum: int, maximum: int, *, suffix: str = "") -> QSpinBox:
-    spin = QSpinBox()
+    spin = _WheelFocusedSpinBox()
     spin.setRange(minimum, maximum)
     spin.setSuffix(suffix)
     spin.setButtonSymbols(QSpinBox.ButtonSymbols.UpDownArrows)
@@ -435,6 +579,7 @@ def _spin(minimum: int, maximum: int, *, suffix: str = "") -> QSpinBox:
 def _compact_control(widget: QWidget) -> None:
     widget.setMinimumWidth(0)
     widget.setFixedHeight(32)
+    widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
     widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
 

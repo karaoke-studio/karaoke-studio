@@ -354,6 +354,8 @@ def _resolve_line_x(
     style: Style,
     lane: int | None,
 ) -> int:
+    if style.line_horizontal_layout == "center":
+        return (img_w - total_w) // 2
     if style.dual_line_layout and lane == 0:
         return max(style.upper_line_left_margin_px, 0)
     if style.dual_line_layout and lane == 1:
