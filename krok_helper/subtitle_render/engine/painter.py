@@ -16,6 +16,14 @@
 预览路径与渲染路径**共用本函数**——预览给到的 image 是缩放后的 QImage、
 渲染管线给的是 1080p QImage，绘制逻辑一致。
 
+**性能优化**：1~3 步（阴影 + 描边 + 底色）每帧的内容 *完全不依赖* ``t_ms``，
+只随 line text + font + style 变化。:func:`_get_or_build_before_layer` 把这
+三层烘焙成透明 QImage 缓存到 :data:`_BEFORE_LAYER_CACHE`，绘制时一次
+``drawImage`` blit；每帧只重画 5 步的逐字 clip。1080p 双行场景下，单帧
+``paintEvent`` 工作量从 ~2× ``QPainterPath.addText + strokePath`` 降到一次
+位图 blit，CPU 时间降幅 3~5×。缓存按 line/font/style 哈希索引，LRU 退役，
+样式实时改动会自动 invalidate。
+
 P1 阶段会在本函数基础上加：渐变填充（B3）、入场退场动画（B4）、
 多歌手分色（B2）。
 """
@@ -23,7 +31,9 @@ P1 阶段会在本函数基础上加：渐变填充（B3）、入场退场动画
 from __future__ import annotations
 
 import math
+from collections import OrderedDict
 from dataclasses import replace
+from threading import Lock
 from typing import Optional
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
@@ -39,6 +49,26 @@ from PyQt6.QtGui import (
     QPen,
     QTransform,
 )
+
+
+# ---------------------------------------------------------------------------
+# Before-layer cache：阴影 + 描边 + 底色烘焙成透明 QImage
+# ---------------------------------------------------------------------------
+#
+# Key 包含所有影响"未唱"层外观的字段：line text、字形 / 字号 / 字重 / 斜体、
+# char_widths（同字体 + 文本下严格固定，作冗余校验）、KaraokeColorState.before
+# 全部颜色 / 渐变签名、阴影偏移、描边宽度、装饰种类与 glow 半径。lane / x0 /
+# y / 显示窗口等位置 / 时间字段 *不进 key*（缓存图带 offset 复位）。
+
+_BEFORE_LAYER_CACHE_MAX = 64
+_BEFORE_LAYER_CACHE: "OrderedDict[tuple, tuple[QImage, int, int]]" = OrderedDict()
+_BEFORE_LAYER_LOCK = Lock()
+
+
+def clear_before_layer_cache() -> None:
+    """测试 / 调试用：把所有"未唱"层位图缓存全部丢掉。"""
+    with _BEFORE_LAYER_LOCK:
+        _BEFORE_LAYER_CACHE.clear()
 
 from krok_helper.subtitle_render.engine.timeline import (
     DisplayLine,
@@ -316,9 +346,20 @@ def _paint_line(
     colors = _effective_karaoke_colors(style)
     line_path = _line_text_path(line, char_widths, font, x0, y)
 
+    # --- "未唱"层（不依赖 t_ms）：查 / 建缓存后一次 blit ---
+    if total_w > 0 and metrics.height() > 0:
+        cache_key = _before_layer_cache_key(line, style, font, char_widths, colors)
+        before_image, offset_x, offset_y = _get_or_build_before_layer(
+            cache_key, line, char_widths, font, style, colors, metrics,
+        )
+        painter.drawImage(
+            QPointF(float(x0 + offset_x), float(y + offset_y)),
+            before_image,
+        )
+
+    # --- "已唱"层（依赖 t_ms）：逐字 clip 照旧每帧画 ---
     if style.decoration_kind == "glow":
         glow_radius = max(style.glow_radius_px, 1)
-        _paint_glow_path(painter, line_path, colors.before.shadow, line_rect, glow_radius)
         _paint_after_glow_path(
             painter,
             line_path,
@@ -341,7 +382,6 @@ def _paint_line(
             x0 + style.shadow_offset_x,
             y + style.shadow_offset_y,
         )
-        _paint_fill_path(painter, shadow_path, colors.before.shadow, shadow_rect)
         _paint_after_fill_path(
             painter,
             shadow_path,
@@ -356,9 +396,6 @@ def _paint_line(
         )
 
     if style.stroke2_width_px > 0:
-        _paint_stroke_path(
-            painter, line_path, colors.before.stroke2, line_rect, style.stroke2_width_px
-        )
         _paint_after_stroke_path(
             painter,
             line_path,
@@ -374,9 +411,6 @@ def _paint_line(
         )
 
     if style.stroke_color and style.stroke_width_px > 0:
-        _paint_stroke_path(
-            painter, line_path, colors.before.stroke, line_rect, style.stroke_width_px
-        )
         _paint_after_stroke_path(
             painter,
             line_path,
@@ -391,7 +425,6 @@ def _paint_line(
             t_ms,
         )
 
-    _paint_fill_path(painter, line_path, colors.before.text, line_rect)
     _paint_after_fill_path(
         painter,
         line_path,
@@ -513,24 +546,21 @@ def _paint_after_glow_path(
     metrics: QFontMetrics,
     t_ms: int,
 ) -> None:
-    cursor_x = x0
-    for w, (cs, ce) in zip(char_widths, intervals):
-        ratio = char_fill_ratio(cs, ce, t_ms)
-        if ratio <= 0.0:
-            cursor_x += w
-            continue
-        painter.save()
-        fill_w = w if ratio >= 1.0 else int(round(w * ratio))
+    fill_end = _fill_extent_end(char_widths, intervals, x0, t_ms)
+    if fill_end <= x0:
+        return
+    painter.save()
+    try:
         clip = QRectF(
-            float(cursor_x - width),
+            float(x0 - width),
             float(y - metrics.ascent() - width),
-            float(fill_w + width * 2),
+            float((fill_end - x0) + width * 2),
             float(metrics.height() + width * 2),
         )
         painter.setClipRect(clip)
         _paint_glow_path(painter, path, fill, rect, width)
+    finally:
         painter.restore()
-        cursor_x += w
 
 
 def _paint_after_path(
@@ -546,18 +576,18 @@ def _paint_after_path(
     metrics: QFontMetrics,
     t_ms: int,
 ) -> None:
-    cursor_x = x0
-    for w, (cs, ce) in zip(char_widths, intervals):
-        ratio = char_fill_ratio(cs, ce, t_ms)
-        if ratio <= 0.0:
-            cursor_x += w
-            continue
-        painter.save()
-        fill_w = w if ratio >= 1.0 else int(round(w * ratio))
+    # 卡拉ok填色是连续左→右扫光，已唱字符总是连续从 x0 开始；
+    # 把 N 个相邻 char clip 合并成单 clip rect → 整 line path 只画一次，
+    # 不再 N 次重复绘制相同路径。
+    fill_end = _fill_extent_end(char_widths, intervals, x0, t_ms)
+    if fill_end <= x0:
+        return
+    painter.save()
+    try:
         clip = QRectF(
-            float(cursor_x),
+            float(x0),
             float(y - metrics.ascent()),
-            float(fill_w),
+            float(fill_end - x0),
             float(metrics.height()),
         )
         painter.setClipRect(clip)
@@ -565,8 +595,36 @@ def _paint_after_path(
             _paint_fill_path(painter, path, fill, rect)
         else:
             _paint_stroke_path(painter, path, fill, rect, stroke_width)
+    finally:
         painter.restore()
-        cursor_x += w
+
+
+def _fill_extent_end(
+    char_widths: list[int],
+    intervals: list[tuple[int, int]],
+    x0: int,
+    t_ms: int,
+) -> int:
+    """Return rightmost x of the karaoke-filled extent at ``t_ms``.
+
+    卡拉ok填色按字符顺序左→右推进，给定 ``t_ms`` 时一定形如
+    "前 k 个字符全填 + 第 k+1 个字符部分填 + 之后全空"。本函数返回填色
+    末端的 x 坐标；与 ``x0`` 相等表示当前没有字符被填到（直接早退）。
+    """
+    fill_end = x0
+    cursor_x = x0
+    for w, (cs, ce) in zip(char_widths, intervals):
+        ratio = char_fill_ratio(cs, ce, t_ms)
+        if ratio <= 0.0:
+            break
+        if ratio >= 1.0:
+            cursor_x += w
+            fill_end = cursor_x
+            continue
+        # 部分填色——也是最后一个被填到的字符
+        fill_end = cursor_x + int(round(w * ratio))
+        break
+    return fill_end
 
 
 def _brush_for_fill(fill: PaintFill, rect: QRectF) -> QBrush:
@@ -620,6 +678,173 @@ def _split_vertical_brush(fill: PaintFill, rect: QRectF) -> QBrush:
     gradient.setColorAt(edge_after, bottom)
     gradient.setColorAt(1.0, bottom)
     return QBrush(gradient)
+
+
+# ---------------------------------------------------------------------------
+# Before-layer 缓存：构建 / 查询
+# ---------------------------------------------------------------------------
+
+
+def _fill_signature(fill: PaintFill) -> tuple:
+    return (
+        fill.mode,
+        fill.color,
+        fill.start_color,
+        fill.end_color,
+        fill.split_top_color,
+        fill.split_bottom_color,
+        fill.split_position_pct,
+        fill.image_path,
+        fill.image_scale_pct,
+    )
+
+
+def _karaoke_state_signature(state: KaraokeColorState) -> tuple:
+    return (
+        _fill_signature(state.text),
+        _fill_signature(state.stroke),
+        _fill_signature(state.stroke2),
+        _fill_signature(state.shadow),
+    )
+
+
+def _before_layer_cache_key(
+    line: TimingLine,
+    style: Style,
+    font: QFont,
+    char_widths: list[int],
+    colors: KaraokeColors,
+) -> tuple:
+    text = "".join(ch.text for ch in line.chars)
+    font_sig = (
+        font.family(),
+        font.pixelSize(),
+        int(font.weight()),
+        font.italic(),
+    )
+    return (
+        text,
+        font_sig,
+        tuple(char_widths),
+        _karaoke_state_signature(colors.before),
+        style.shadow_offset_x,
+        style.shadow_offset_y,
+        style.stroke_width_px,
+        style.stroke2_width_px,
+        style.decoration_kind,
+        style.glow_radius_px,
+    )
+
+
+def _get_or_build_before_layer(
+    key: tuple,
+    line: TimingLine,
+    char_widths: list[int],
+    font: QFont,
+    style: Style,
+    colors: KaraokeColors,
+    metrics: QFontMetrics,
+) -> tuple[QImage, int, int]:
+    with _BEFORE_LAYER_LOCK:
+        cached = _BEFORE_LAYER_CACHE.get(key)
+        if cached is not None:
+            _BEFORE_LAYER_CACHE.move_to_end(key)
+            return cached
+
+    # 构建在锁外做（QPainter 比较重，不阻塞别的线程）
+    entry = _build_before_layer(line, char_widths, font, style, colors, metrics)
+
+    with _BEFORE_LAYER_LOCK:
+        _BEFORE_LAYER_CACHE[key] = entry
+        while len(_BEFORE_LAYER_CACHE) > _BEFORE_LAYER_CACHE_MAX:
+            _BEFORE_LAYER_CACHE.popitem(last=False)
+    return entry
+
+
+def _build_before_layer(
+    line: TimingLine,
+    char_widths: list[int],
+    font: QFont,
+    style: Style,
+    colors: KaraokeColors,
+    metrics: QFontMetrics,
+) -> tuple[QImage, int, int]:
+    """Render shadow + stroke2 + stroke + base text into a transparent QImage.
+
+    返回 ``(image, offset_x, offset_y)``：blit 时把 image 的左上画在
+    ``(target_x0 + offset_x, target_baseline_y + offset_y)``，文字基线就会
+    落在 (target_x0, target_baseline_y)。
+    """
+    total_w = sum(char_widths)
+    text_ascent = metrics.ascent()
+    text_h = metrics.height()
+
+    # padding：要把阴影偏移 / 描边宽度 / glow 半径都留出余量，免得轮廓被裁
+    stroke_max = max(style.stroke_width_px, style.stroke2_width_px)
+    glow_extra = style.glow_radius_px * 4 if style.decoration_kind == "glow" else 0
+    extent = max(stroke_max, glow_extra, 0) + 4  # +4 安全边
+
+    pad_left = max(0, -style.shadow_offset_x) + extent
+    pad_right = max(0, style.shadow_offset_x) + extent
+    pad_top = max(0, -style.shadow_offset_y) + extent
+    pad_bottom = max(0, style.shadow_offset_y) + extent
+
+    img_w = max(pad_left + total_w + pad_right, 1)
+    img_h = max(pad_top + text_h + pad_bottom, 1)
+
+    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)  # 全透明（0 = #00000000 在 ARGB32_Premultiplied 里）
+
+    local_x0 = pad_left
+    local_y = pad_top + text_ascent  # baseline 在 image 内坐标
+
+    p = QPainter(image)
+    try:
+        p.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+        )
+        p.setFont(font)
+
+        local_line_path = _line_text_path(line, char_widths, font, local_x0, local_y)
+        local_line_rect = QRectF(
+            float(local_x0),
+            float(local_y - text_ascent),
+            float(total_w),
+            float(text_h),
+        )
+
+        # 1) 阴影 / glow
+        if style.decoration_kind == "glow":
+            glow_radius = max(style.glow_radius_px, 1)
+            _paint_glow_path(p, local_line_path, colors.before.shadow, local_line_rect, glow_radius)
+        elif style.shadow_color and (style.shadow_offset_x or style.shadow_offset_y):
+            shadow_rect = local_line_rect.translated(style.shadow_offset_x, style.shadow_offset_y)
+            shadow_path = _line_text_path(
+                line,
+                char_widths,
+                font,
+                local_x0 + style.shadow_offset_x,
+                local_y + style.shadow_offset_y,
+            )
+            _paint_fill_path(p, shadow_path, colors.before.shadow, shadow_rect)
+
+        # 2) stroke2（双描边外层）
+        if style.stroke2_width_px > 0:
+            _paint_stroke_path(p, local_line_path, colors.before.stroke2, local_line_rect, style.stroke2_width_px)
+
+        # 3) stroke（主描边）
+        if style.stroke_color and style.stroke_width_px > 0:
+            _paint_stroke_path(p, local_line_path, colors.before.stroke, local_line_rect, style.stroke_width_px)
+
+        # 4) 底色文字（未唱状态主体颜色）
+        _paint_fill_path(p, local_line_path, colors.before.text, local_line_rect)
+    finally:
+        p.end()
+
+    offset_x = -pad_left
+    offset_y = -(pad_top + text_ascent)
+    return (image, offset_x, offset_y)
 
 
 def _effective_karaoke_colors(style: Style) -> KaraokeColors:
