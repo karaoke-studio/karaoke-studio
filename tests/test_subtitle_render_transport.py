@@ -90,6 +90,8 @@ def test_playback_timers_use_precise_timer(qapp):
     bar = _bar(qapp)
     assert bar._tick_timer.timerType() == Qt.TimerType.PreciseTimer
     assert bar._position_poll_timer.timerType() == Qt.TimerType.PreciseTimer
+    assert bar._tick_timer.interval() == 8
+    assert bar._position_poll_timer.interval() == 8
 
 
 def test_toggle_play_alternates(qapp):
@@ -144,6 +146,14 @@ def test_preview_canvas_caches_scaled_video_frame(qapp):
     assert cached is not None
     assert canvas._scaled_video_image is cached
     assert canvas._scaled_video_key == cache_key
+
+
+def test_preview_canvas_fits_output_rect_to_widget(qapp):
+    canvas = PreviewCanvas()
+    canvas.set_output_size(1920, 1080)
+
+    assert canvas._fit_output_rect(960, 540) == (0, 0, 960, 540)
+    assert canvas._fit_output_rect(1000, 500) == (55, 0, 889, 500)
 
 
 # ---------------------------------------------------------------------------

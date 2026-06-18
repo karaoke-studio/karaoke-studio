@@ -20,6 +20,7 @@ from typing import Optional
 
 from PyQt6.QtCore import (
     QElapsedTimer,
+    QRectF,
     QSize,
     Qt,
     QTimer,
@@ -45,10 +46,10 @@ from krok_helper.subtitle_render.models import Style, TimingTrack
 PREVIEW_BG = QColor("#101010")
 """画布默认深色背景（A7 接入视频后这里换成视频帧）。"""
 
-_TICK_INTERVAL_MS = 16
-"""tick / 位置轮询间隔（约 60fps），同时用于无音频视觉 tick 与有音频时的
+_TICK_INTERVAL_MS = 8
+"""tick / 位置轮询间隔（约 120Hz 驱动，实际重绘由 Qt 合并到屏幕刷新），同时用于无音频视觉 tick 与有音频时的
 QMediaPlayer.position() 高频采样——QMediaPlayer.positionChanged 自身只有
-~100ms 粒度，文字填充会一卡一卡，所以在播放期开一个 16ms 轮询。"""
+~100ms 粒度，文字填充会一卡一卡，所以在播放期开一个高频轮询。"""
 
 _VIDEO_SEEK_TOLERANCE_MS = 80
 """视频预览播放器允许的轻微漂移，超过后按播放条时间校正。"""
@@ -71,6 +72,8 @@ class PreviewCanvas(QWidget):
         self._video_sink: Optional[QVideoSink] = None
         self._video_player: Optional[QMediaPlayer] = None
         self._video_audio_out: Optional[QAudioOutput] = None
+        self._output_width: int = 1920
+        self._output_height: int = 1080
 
         themed(
             self,
@@ -89,6 +92,11 @@ class PreviewCanvas(QWidget):
 
     def set_style(self, style: Style) -> None:
         self._style = style
+        self.update()
+
+    def set_output_size(self, width: int, height: int) -> None:
+        self._output_width = max(int(width), 1)
+        self._output_height = max(int(height), 1)
         self.update()
 
     def set_time(self, t_ms: int) -> None:
@@ -156,15 +164,28 @@ class PreviewCanvas(QWidget):
         painter = QPainter(self)
         try:
             painter.fillRect(self.rect(), PREVIEW_BG)
-            self._paint_background_video(painter, logical_w, logical_h, dpr)
-            paint_frame_to_painter(
-                painter,
-                logical_w,
-                logical_h,
-                self._track,
-                self._t_ms,
-                self._style,
-            )
+            target = self._paint_background_video(painter, logical_w, logical_h, dpr)
+            if target is None:
+                target = self._fit_output_rect(logical_w, logical_h)
+            x, y, target_w, target_h = target
+            painter.save()
+            try:
+                painter.setClipRect(QRectF(x, y, target_w, target_h))
+                painter.translate(x, y)
+                painter.scale(
+                    target_w / self._output_width,
+                    target_h / self._output_height,
+                )
+                paint_frame_to_painter(
+                    painter,
+                    self._output_width,
+                    self._output_height,
+                    self._track,
+                    self._t_ms,
+                    self._style,
+                )
+            finally:
+                painter.restore()
         finally:
             painter.end()
 
@@ -239,16 +260,30 @@ class PreviewCanvas(QWidget):
         logical_w: int,
         logical_h: int,
         dpr: float,
-    ) -> None:
+    ) -> Optional[tuple[int, int, int, int]]:
         frame = self._scaled_background_video(logical_w, logical_h, dpr)
         if frame is None:
-            return
+            return None
         # 居中：用逻辑坐标
         logical_frame_w = int(round(frame.width() / dpr))
         logical_frame_h = int(round(frame.height() / dpr))
         x = (logical_w - logical_frame_w) // 2
         y = (logical_h - logical_frame_h) // 2
         painter.drawImage(x, y, frame)
+        return (x, y, logical_frame_w, logical_frame_h)
+
+    def _fit_output_rect(self, logical_w: int, logical_h: int) -> tuple[int, int, int, int]:
+        output_aspect = self._output_width / self._output_height
+        widget_aspect = logical_w / logical_h
+        if widget_aspect >= output_aspect:
+            target_h = logical_h
+            target_w = int(round(target_h * output_aspect))
+        else:
+            target_w = logical_w
+            target_h = int(round(target_w / output_aspect))
+        x = (logical_w - target_w) // 2
+        y = (logical_h - target_h) // 2
+        return (x, y, max(target_w, 1), max(target_h, 1))
 
 
 class PreviewPanel(DropPanel):
@@ -278,6 +313,9 @@ class PreviewPanel(DropPanel):
 
     def set_style(self, style: Style) -> None:
         self._canvas.set_style(style)
+
+    def set_output_size(self, width: int, height: int) -> None:
+        self._canvas.set_output_size(width, height)
 
     def set_video_source(self, path: Optional[Path]) -> None:
         self._canvas.set_video_source(path)

@@ -18,7 +18,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtGui import QColor, QImage  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from krok_helper.subtitle_render.engine.painter import paint_frame  # noqa: E402
+from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
+    _resolve_display_baselines,
+    _resolve_line_x,
+    paint_frame,
+)
+from krok_helper.subtitle_render.engine.timeline import DisplayLine  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
     RubyAnnotation,
     Style,
@@ -34,7 +39,7 @@ def qapp():
     yield app
 
 
-def _blank(w=400, h=200) -> QImage:
+def _blank(w=800, h=450) -> QImage:
     img = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
     img.fill(QColor("#101010"))
     return img
@@ -57,6 +62,24 @@ def _track() -> TimingTrack:
         end_ms=2500,
     )
     return TimingTrack(lines=[line])
+
+
+def _two_line_track() -> TimingTrack:
+    line1 = TimingLine(
+        chars=[
+            TimingChar(text="あ", start_ms=1000),
+            TimingChar(text="い", start_ms=1500),
+        ],
+        end_ms=2000,
+    )
+    line2 = TimingLine(
+        chars=[
+            TimingChar(text="う", start_ms=3000),
+            TimingChar(text="え", start_ms=3500),
+        ],
+        end_ms=4000,
+    )
+    return TimingTrack(lines=[line1, line2])
 
 
 def _track_with_ruby() -> TimingTrack:
@@ -112,8 +135,15 @@ def test_paint_frame_with_no_track_leaves_image_unchanged(qapp):
 def test_paint_frame_outside_any_line_leaves_image_unchanged(qapp):
     img = _blank()
     baseline = _pixel_hash(img)
-    paint_frame(img, _track(), 500, Style())  # 早于行起点
+    paint_frame(img, _track(), 500, Style(line_lead_in_ms=0))  # 早于行起点
     assert _pixel_hash(img) == baseline
+
+
+def test_paint_frame_uses_default_line_lead_in(qapp):
+    img = _blank()
+    baseline = _pixel_hash(img)
+    paint_frame(img, _track(), 500, Style())  # 默认提前 1800ms 显示
+    assert _pixel_hash(img) != baseline
 
 
 def test_paint_frame_during_line_modifies_image(qapp):
@@ -132,6 +162,48 @@ def test_paint_frame_progress_changes_between_timestamps(qapp):
     paint_frame(img1, track, 1100, style)  # 第一字刚开始唱
     paint_frame(img2, track, 2400, style)  # 接近行尾，全部唱完
     assert _pixel_hash(img1) != _pixel_hash(img2)
+
+
+def test_paint_frame_default_dual_line_layout_renders_next_line(qapp):
+    img_single = _blank()
+    img_dual = _blank()
+    style_single = Style(dual_line_layout=False)
+    style_dual = Style()
+    track = _two_line_track()
+
+    paint_frame(img_single, track, 1500, style_single)
+    paint_frame(img_dual, track, 1500, style_dual)
+
+    assert _pixel_hash(img_single) != _pixel_hash(img_dual)
+
+
+def test_dual_line_baselines_stay_fixed_when_lower_line_disappears(qapp):
+    track = _two_line_track()
+    style = Style()
+    upper = DisplayLine(
+        line=track.lines[0],
+        lane=0,
+        display_start_ms=0,
+        display_end_ms=1000,
+    )
+    lower = DisplayLine(
+        line=track.lines[1],
+        lane=1,
+        display_start_ms=0,
+        display_end_ms=1000,
+    )
+
+    both = _resolve_display_baselines(720, track, [upper, lower], style)
+    upper_only = _resolve_display_baselines(720, track, [upper], style)
+
+    assert upper_only[0] == both[0]
+
+
+def test_dual_line_x_positions_use_asymmetric_margins(qapp):
+    style = Style()
+
+    assert _resolve_line_x(1920, 600, style, 0) == 50
+    assert _resolve_line_x(1920, 600, style, 1) == 1270
 
 
 def test_paint_frame_ruby_changes_rendered_frame(qapp):

@@ -36,6 +36,16 @@ def test_minutes_two_digit_timestamps():
     assert track.lines[0].end_ms == 755_000
 
 
+def test_multi_char_block_is_evenly_spread_until_next_timestamp():
+    text = "[00:38:05]どう[00:38:32]し[00:38:37]\n"
+    track = parse_nicokara_lrc(text)
+    line = track.lines[0]
+
+    assert [c.text for c in line.chars] == ["ど", "う", "し"]
+    assert [c.start_ms for c in line.chars] == [38_050, 38_185, 38_320]
+    assert line.end_ms == 38_370
+
+
 def test_blank_lines_preserved():
     text = "[00:01:00]あ[00:01:50]\n\n[00:02:00]い[00:02:50]\n"
     track = parse_nicokara_lrc(text)

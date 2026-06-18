@@ -36,9 +36,11 @@ from PyQt6.QtGui import (
 )
 
 from krok_helper.subtitle_render.engine.timeline import (
+    DisplayLine,
     char_fill_ratio,
     compute_char_intervals,
     find_active_line,
+    visible_display_lines,
 )
 from krok_helper.subtitle_render.models import RubyAnnotation, Style, TimingLine, TimingTrack
 
@@ -82,8 +84,8 @@ def paint_frame_to_painter(
     """
     if track is None:
         return
-    line = find_active_line(track, t_ms)
-    if line is None or not line.chars:
+    display_lines = _visible_lines_for_style(track, t_ms, style)
+    if not display_lines:
         return
 
     painter.save()
@@ -93,7 +95,19 @@ def paint_frame_to_painter(
             | QPainter.RenderHint.TextAntialiasing
             | QPainter.RenderHint.SmoothPixmapTransform
         )
-        _paint_line(painter, logical_w, logical_h, track, line, t_ms, style)
+        baselines = _resolve_display_baselines(logical_h, track, display_lines, style)
+        for display_line in display_lines:
+            _paint_line(
+                painter,
+                logical_w,
+                logical_h,
+                track,
+                display_line.line,
+                t_ms,
+                style,
+                baseline_y=baselines[display_line.lane],
+                lane=display_line.lane if style.dual_line_layout else None,
+            )
     finally:
         painter.restore()
 
@@ -110,6 +124,28 @@ def _build_font(style: Style) -> QFont:
     font.setWeight(_clamp_weight(style.font_weight))
     font.setItalic(style.italic)
     return font
+
+
+def _visible_lines_for_style(
+    track: TimingTrack,
+    t_ms: int,
+    style: Style,
+) -> list[DisplayLine]:
+    if style.dual_line_layout:
+        return visible_display_lines(
+            track,
+            t_ms,
+            lead_in_ms=style.line_lead_in_ms,
+            tail_ms=style.line_tail_ms,
+            lane_gap_ms=style.line_lane_gap_ms,
+            max_hold_ms=style.line_max_hold_ms,
+            continuity_snap_ms=style.line_continuity_snap_ms,
+            pair_second_delay_ms=style.line_pair_second_delay_ms,
+        )
+    line = find_active_line(track, t_ms, lead_in_ms=style.line_lead_in_ms)
+    if line is None:
+        return []
+    return [DisplayLine(line=line, lane=0, display_start_ms=0, display_end_ms=0)]
 
 
 def _build_ruby_font(style: Style) -> QFont:
@@ -160,6 +196,54 @@ def _resolve_baseline_y(
     return img_h - margin - metrics.descent()
 
 
+def _fixed_line_block_geometry(style: Style) -> tuple[int, int, int]:
+    font = _build_font(style)
+    metrics = QFontMetrics(font)
+    ruby_metrics = QFontMetrics(_build_ruby_font(style))
+    ruby_extra = max(style.ruby_gap_px, 0) + ruby_metrics.height()
+    block_h = metrics.height() + ruby_extra
+    baseline_offset = ruby_extra + metrics.ascent()
+    bottom_baseline_offset = metrics.descent()
+    return block_h, baseline_offset, bottom_baseline_offset
+
+
+def _resolve_display_baselines(
+    img_h: int,
+    track: TimingTrack,
+    display_lines: list[DisplayLine],
+    style: Style,
+) -> dict[int, int]:
+    if not style.dual_line_layout:
+        font = _build_font(style)
+        metrics = QFontMetrics(font)
+        line = display_lines[0].line if display_lines else None
+        ruby_metrics = (
+            QFontMetrics(_build_ruby_font(style))
+            if line is not None and _active_rubies_for_line(track.rubies, line)
+            else None
+        )
+        return {0: _resolve_baseline_y(metrics, img_h, style, ruby_metrics)}
+
+    block_h, baseline_offset, bottom_baseline_offset = _fixed_line_block_geometry(style)
+    gap = max(style.line_gap_px, 0)
+    margin = max(style.line_y_margin_px, 0)
+
+    if style.line_y_position == "top":
+        lower_top = margin + block_h + gap
+    elif style.line_y_position == "center":
+        total_h = block_h * 2 + gap
+        lower_top = (img_h - total_h) // 2 + block_h + gap
+    else:
+        lower_baseline = img_h - margin - bottom_baseline_offset
+        lower_top = lower_baseline - baseline_offset
+
+    upper_top = lower_top - block_h - gap
+    return {
+        0: upper_top + baseline_offset,
+        1: lower_top + baseline_offset,
+    }
+
+
 def _paint_line(
     painter: QPainter,
     img_w: int,
@@ -168,6 +252,9 @@ def _paint_line(
     line: TimingLine,
     t_ms: int,
     style: Style,
+    *,
+    baseline_y: int | None = None,
+    lane: int | None = None,
 ) -> None:
     font = _build_font(style)
     painter.setFont(font)
@@ -179,8 +266,12 @@ def _paint_line(
     # 整行宽度 → 水平居中起点
     char_widths = [metrics.horizontalAdvance(c.text) for c in line.chars]
     total_w = sum(char_widths)
-    x0 = (img_w - total_w) // 2
-    y = _resolve_baseline_y(metrics, img_h, style, ruby_metrics)
+    x0 = _resolve_line_x(img_w, total_w, style, lane)
+    y = (
+        baseline_y
+        if baseline_y is not None
+        else _resolve_baseline_y(metrics, img_h, style, ruby_metrics)
+    )
 
     intervals = compute_char_intervals(line)
     char_x_ranges: list[tuple[int, int]] = []
@@ -256,6 +347,19 @@ def _paint_line(
         painter.drawText(cursor_x, y, ch.text)
         painter.restore()
         cursor_x += w
+
+
+def _resolve_line_x(
+    img_w: int,
+    total_w: int,
+    style: Style,
+    lane: int | None,
+) -> int:
+    if style.dual_line_layout and lane == 0:
+        return max(style.upper_line_left_margin_px, 0)
+    if style.dual_line_layout and lane == 1:
+        return img_w - max(style.lower_line_right_margin_px, 0) - total_w
+    return (img_w - total_w) // 2
 
 
 def _active_rubies_for_line(

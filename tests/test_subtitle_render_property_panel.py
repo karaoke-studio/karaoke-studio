@@ -66,6 +66,28 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._ruby_gap_spin.value() == 9
 
 
+def test_style_defaults_match_nicokara_layout_baseline():
+    style = Style()
+
+    assert style.font_family == "UD Digi Kyokasho N-B"
+    assert style.font_size_px == 32
+    assert style.font_weight == 400
+    assert style.ruby_font_size_px == 13
+    assert style.ruby_gap_px == 1
+    assert style.line_y_position == "bottom"
+    assert style.line_y_margin_px == 90
+    assert style.dual_line_layout is True
+    assert style.line_gap_px == 90
+    assert style.upper_line_left_margin_px == 50
+    assert style.lower_line_right_margin_px == 50
+    assert style.line_lead_in_ms == 1800
+    assert style.line_tail_ms == 1000
+    assert style.line_lane_gap_ms == 300
+    assert style.line_continuity_snap_ms == 800
+    assert style.line_pair_second_delay_ms == 3000
+    assert style.line_max_hold_ms == 12_000
+
+
 def test_property_panel_subtitle_page_has_no_horizontal_scroll(qapp):
     panel = PropertyPanel()
     subtitle_page = panel.widget(1)

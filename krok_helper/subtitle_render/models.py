@@ -132,14 +132,14 @@ LineYPosition = Literal["top", "center", "bottom"]
 class Style:
     """字幕样式（A4 / A5 / A6 实装的纯色 + 横书き子集）。
 
-    字段默认值面向 1920×1080 输出，浏览器审美：白底 + 工作台主色填充 + 黑描边 +
-    淡阴影。后续 A5 / A6 / B3 等任务在此基础上扩字段（渐变 / 发光 / 注音 / 动画）。
+    字段默认值面向 NicoKaraMaker 风格：教科书体 + 小字号 + 双行底部布局。
+    后续 A5 / A6 / B3 等任务在此基础上扩字段（渐变 / 发光 / 注音 / 动画）。
     """
 
     # 字体
-    font_family: str = "Microsoft YaHei UI"
-    font_size_px: int = 64
-    font_weight: int = 700  # Qt 习惯 100-900；卡拉ok 字幕默认粗体
+    font_family: str = "UD Digi Kyokasho N-B"
+    font_size_px: int = 32
+    font_weight: int = 400  # Qt 习惯 100-900
     italic: bool = False
 
     # 颜色（六位十六进制 #RRGGBB，含前缀 #）
@@ -157,16 +157,46 @@ class Style:
     shadow_offset_y: int = 2
 
     # ふりがな / ruby（B1）
-    ruby_font_size_px: int = 24
+    ruby_font_size_px: int = 13
     ruby_color: str = "#FF5A6F"
-    ruby_gap_px: int = 6
+    ruby_gap_px: int = 1
 
     # 行位置（字幕区上下定位）
     line_y_position: LineYPosition = "bottom"
     """``"top"`` / ``"center"`` / ``"bottom"`` —— 简单 vertical-anchor。"""
 
-    line_y_margin_px: int = 80
+    line_y_margin_px: int = 90
     """``line_y_position`` 为 ``"top"`` / ``"bottom"`` 时距离顶/底边的内边距。"""
+
+    dual_line_layout: bool = True
+    """默认上下双行显示：当前行在上，下一行在下。"""
+
+    line_gap_px: int = 90
+    """双行布局中两行字幕块之间的间距。"""
+
+    upper_line_left_margin_px: int = 50
+    """双行布局中上排字幕距离左边的边距。"""
+
+    lower_line_right_margin_px: int = 50
+    """双行布局中下排字幕距离右边的边距。"""
+
+    line_lead_in_ms: int = 1800
+    """理想表示开始 = 歌唱开始前的毫秒数；填充仍从真实字符时间开始。"""
+
+    line_tail_ms: int = 1000
+    """表示结束至少延续到同组两行歌唱结束后的毫秒数。"""
+
+    line_lane_gap_ms: int = 300
+    """同一显示 lane 上相邻两句之间保留的时间间隔。"""
+
+    line_continuity_snap_ms: int = 800
+    """同 lane 间隔较短时，下一句可提前到上一句结束后立即显示的阈值。"""
+
+    line_pair_second_delay_ms: int = 3000
+    """双行组中下行相对上行表示开始的默认延迟。"""
+
+    line_max_hold_ms: int = 12_000
+    """单句显示窗口最长保留时间，避免长间奏时字幕过久挂屏。"""
 
 
 @dataclass

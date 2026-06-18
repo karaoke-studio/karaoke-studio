@@ -2,7 +2,9 @@
 
 字符级时间区间约定（与 :class:`paint_frame` 共用语义）：
 
-- 每个字符的 ``start_ms`` 是 ``[ts]<char>`` 中的前导时间戳
+- 每个字符的 ``start_ms`` 是 ``[ts]<char>`` 中的前导时间戳；如果同一个
+  ``[ts]`` 后面跟多个字符（如 ``[00:38:05]どう[00:38:32]``），解析器会把
+  这段文本均分到下一个时间戳前
 - 字符 i 的 ``end_ms`` = 字符 i+1 的 ``start_ms``（行内）；行末字符 = ``line.end_ms``
 - 如果某字符设了 ``pause_release_ms``（行内呼吸），它的 ``end_ms`` 仍按下一字
   起始；释放点会让填充提前到位，避免"呼吸期还在涨色"
@@ -12,18 +14,35 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Optional
 
 from krok_helper.subtitle_render.models import TimingChar, TimingLine, TimingTrack
 
 
-def find_active_line(track: TimingTrack, t_ms: int) -> Optional[TimingLine]:
+@dataclass(frozen=True)
+class DisplayLine:
+    """A line with its computed display window and two-line lane."""
+
+    line: TimingLine
+    lane: int
+    display_start_ms: int
+    display_end_ms: int
+
+
+def find_active_line(
+    track: TimingTrack,
+    t_ms: int,
+    *,
+    lead_in_ms: int = 0,
+) -> Optional[TimingLine]:
     """返回 ``t_ms`` 时刻正在演唱的行；无则返回 ``None``。
 
-    判定区间 = ``[line.chars[0].start_ms, line_end_ms]``，闭区间。``line_end_ms``
-    取 ``line.end_ms`` 或末字符 ``start_ms`` + 1000 ms 作为安全兜底。
+    判定区间 = ``[line.chars[0].start_ms - lead_in_ms, line_end_ms]``，闭区间。
+    ``line_end_ms`` 取 ``line.end_ms`` 或末字符 ``start_ms`` + 1000 ms 作为安全兜底。
+    ``lead_in_ms`` 只影响显示时机，不改变字符填充时间。
     """
-    best: Optional[TimingLine] = None
+    best_live: Optional[TimingLine] = None
     for line in track.lines:
         if line.is_blank or not line.chars:
             continue
@@ -31,9 +50,138 @@ def find_active_line(track: TimingTrack, t_ms: int) -> Optional[TimingLine]:
         end = _line_end_ms(line)
         if start <= t_ms <= end:
             # 多行重叠时取最靠后开始的（合唱叠唱场景，更贴近"刚发声"那条）
-            if best is None or start >= best.chars[0].start_ms:
+            if best_live is None or start >= best_live.chars[0].start_ms:
+                best_live = line
+    if best_live is not None:
+        return best_live
+
+    best: Optional[TimingLine] = None
+    lead = max(lead_in_ms, 0)
+    for line in track.lines:
+        if line.is_blank or not line.chars:
+            continue
+        start = line.chars[0].start_ms - lead
+        end = _line_end_ms(line)
+        if start <= t_ms <= end:
+            # 多行重叠时取最靠后开始的（合唱叠唱场景，更贴近"刚发声"那条）
+            if best is None or line.chars[0].start_ms >= best.chars[0].start_ms:
                 best = line
     return best
+
+
+def visible_display_lines(
+    track: TimingTrack,
+    t_ms: int,
+    *,
+    lead_in_ms: int,
+    tail_ms: int,
+    lane_gap_ms: int,
+    max_hold_ms: int,
+    continuity_snap_ms: int,
+    pair_second_delay_ms: int = 3000,
+) -> list[DisplayLine]:
+    """Return lines whose display window contains ``t_ms``.
+
+    The display window intentionally differs from singing time:
+
+    - Lines alternate between lane 0 (upper) and lane 1 (lower).
+    - Preferred display start is ``sing_start - lead_in_ms``.
+    - When the same lane becomes available shortly before the preferred start,
+      the next line snaps earlier to keep the lane visually continuous.
+    - Display end is the paired two-line singing end plus ``tail_ms``, capped by
+      the next same-lane display start minus ``lane_gap_ms``.
+    """
+    layouts = compute_display_lines(
+        track,
+        lead_in_ms=lead_in_ms,
+        tail_ms=tail_ms,
+        lane_gap_ms=lane_gap_ms,
+        max_hold_ms=max_hold_ms,
+        continuity_snap_ms=continuity_snap_ms,
+        pair_second_delay_ms=pair_second_delay_ms,
+    )
+    return [item for item in layouts if item.display_start_ms <= t_ms <= item.display_end_ms]
+
+
+def compute_display_lines(
+    track: TimingTrack,
+    *,
+    lead_in_ms: int,
+    tail_ms: int,
+    lane_gap_ms: int,
+    max_hold_ms: int,
+    continuity_snap_ms: int,
+    pair_second_delay_ms: int = 3000,
+) -> list[DisplayLine]:
+    """Compute NicoKara-style display windows for all renderable lines."""
+    render_lines = [line for line in track.lines if not line.is_blank and line.chars]
+    if not render_lines:
+        return []
+
+    lead = max(lead_in_ms, 0)
+    tail = max(tail_ms, 0)
+    lane_gap = max(lane_gap_ms, 0)
+    max_hold = max(max_hold_ms, 0)
+    snap = max(continuity_snap_ms, 0)
+    pair_second_delay = max(pair_second_delay_ms, 0)
+
+    starts: list[int] = []
+    natural_ends: list[int] = []
+    lanes: list[int] = []
+    prev_lane_natural_end: dict[int, int] = {}
+    prev_lane_sing_end: dict[int, int] = {}
+
+    for index, line in enumerate(render_lines):
+        lane = index % 2
+        lanes.append(lane)
+        preferred_start = max(line.chars[0].start_ms - lead, 0)
+        if index % 2 == 1 and starts:
+            preferred_start = min(
+                preferred_start,
+                starts[index - 1] + pair_second_delay,
+            )
+        pair_end = _pair_sing_end_ms(render_lines, index)
+        natural_end = pair_end + tail
+        if max_hold > 0:
+            natural_end = min(natural_end, preferred_start + max_hold)
+        natural_ends.append(natural_end)
+
+        previous_end = prev_lane_natural_end.get(lane)
+        previous_sing_end = prev_lane_sing_end.get(lane)
+        if previous_end is None:
+            display_start = preferred_start
+        else:
+            available_start = previous_end + lane_gap
+            if abs(preferred_start - available_start) <= snap:
+                display_start = available_start
+            else:
+                display_start = preferred_start
+        if previous_sing_end is not None:
+            display_start = max(display_start, previous_sing_end + lane_gap)
+        starts.append(display_start)
+        prev_lane_natural_end[lane] = natural_end
+        prev_lane_sing_end[lane] = _line_end_ms(line)
+
+    result: list[DisplayLine] = []
+    for index, line in enumerate(render_lines):
+        display_end = natural_ends[index]
+        next_same = _next_same_lane_index(lanes, index)
+        if next_same is not None:
+            display_end = min(display_end, starts[next_same] - lane_gap)
+        display_end = max(display_end, _line_end_ms(line))
+        if max_hold > 0:
+            display_end = min(display_end, starts[index] + max_hold)
+        if display_end < starts[index]:
+            display_end = starts[index]
+        result.append(
+            DisplayLine(
+                line=line,
+                lane=lanes[index],
+                display_start_ms=starts[index],
+                display_end_ms=display_end,
+            )
+        )
+    return result
 
 
 def find_upcoming_line(track: TimingTrack, t_ms: int) -> Optional[TimingLine]:
@@ -105,3 +253,17 @@ def _line_end_ms(line: TimingLine) -> int:
     if line.chars:
         return line.chars[-1].start_ms + 1000
     return 0
+
+
+def _pair_sing_end_ms(lines: list[TimingLine], index: int) -> int:
+    pair_start = (index // 2) * 2
+    pair = lines[pair_start : pair_start + 2]
+    return max(_line_end_ms(line) for line in pair)
+
+
+def _next_same_lane_index(lanes: list[int], index: int) -> Optional[int]:
+    lane = lanes[index]
+    for candidate in range(index + 1, len(lanes)):
+        if lanes[candidate] == lane:
+            return candidate
+    return None

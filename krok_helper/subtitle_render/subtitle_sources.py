@@ -152,7 +152,7 @@ def _parse_body_line(line: str) -> TimingLine:
     singer_label: Optional[str] = None
     pending_ts: Optional[int] = None
 
-    for ttype, tval in tokens:
+    for token_index, (ttype, tval) in enumerate(tokens):
         if ttype == "ts":
             ts = int(tval)  # type: ignore[arg-type]
             if pending_ts is not None and chars:
@@ -172,12 +172,13 @@ def _parse_body_line(line: str) -> TimingLine:
         if pending_ts is None:
             # text 前面没有时间戳：根据格式不该出现；忽略，避免崩
             continue
+        next_ts = _next_token_ts(tokens, token_index)
+        char_starts = _spread_text_starts(pending_ts, next_ts, len(text))
         for i, ch in enumerate(text):
             chars.append(
                 TimingChar(
                     text=ch,
-                    # 同一 [ts] 块内多字符共享起点（实测罕见，但兜底保留）
-                    start_ms=pending_ts if i == 0 else chars[-1].start_ms,
+                    start_ms=char_starts[i],
                 )
             )
         pending_ts = None
@@ -194,6 +195,36 @@ def _parse_body_line(line: str) -> TimingLine:
         singer_label=singer_label,
         is_blank=is_blank,
     )
+
+
+def _next_token_ts(tokens: list[tuple[str, object]], token_index: int) -> Optional[int]:
+    """Return the timestamp token immediately after a text token, if present."""
+    next_index = token_index + 1
+    if next_index >= len(tokens):
+        return None
+    next_type, next_value = tokens[next_index]
+    if next_type != "ts":
+        return None
+    return int(next_value)  # type: ignore[arg-type]
+
+
+def _spread_text_starts(
+    start_ms: int,
+    next_ts_ms: Optional[int],
+    char_count: int,
+) -> list[int]:
+    """Evenly distribute multiple chars in ``[start]text[next]``.
+
+    Nicokara can put a mora such as ``どう`` between two timestamps. In that
+    case the whole text block should wipe uniformly from start to next, so each
+    codepoint receives a synthetic start time inside the span.
+    """
+    if char_count <= 0:
+        return []
+    if char_count == 1 or next_ts_ms is None or next_ts_ms <= start_ms:
+        return [start_ms] * char_count
+    duration = next_ts_ms - start_ms
+    return [start_ms + (duration * i) // char_count for i in range(char_count)]
 
 
 # ---------------------------------------------------------------------------

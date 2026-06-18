@@ -182,6 +182,9 @@ class SubtitleRenderWindow(QWidget):
         self._export_tab = self._make_export_tab()
         self._stack.addWidget(self._preview_tab)
         self._stack.addWidget(self._export_tab)
+        self._sync_preview_output_size()
+        self._export_width_spin.valueChanged.connect(self._sync_preview_output_size)
+        self._export_height_spin.valueChanged.connect(self._sync_preview_output_size)
 
         self._pivot.addItem(
             routeKey="preview",
@@ -506,6 +509,12 @@ class SubtitleRenderWindow(QWidget):
     def _apply_style(self, style: Style) -> None:
         self._style = style
         self._preview_panel.set_style(style)
+
+    def _sync_preview_output_size(self) -> None:
+        self._preview_panel.set_output_size(
+            self._export_width_spin.value(),
+            self._export_height_spin.value(),
+        )
 
     def _default_export_path(self) -> Path:
         base = self._video_path or self._subtitle_path
