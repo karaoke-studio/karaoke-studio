@@ -20,6 +20,8 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _build_font,
+    _fill_extent_end,
+    _karaoke_fill_segments,
     _resolve_display_baselines,
     _resolve_line_x,
     paint_frame,
@@ -440,6 +442,35 @@ def test_paint_frame_ruby_without_k_timing_wipes_over_span(qapp):
     paint_frame(img2, track, 1500, style)
 
     assert _pixel_hash(img1) != _pixel_hash(img2)
+
+
+def test_ruby_timing_drives_main_text_fill_extent(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="A", start_ms=1000),
+            TimingChar(text="B", start_ms=2000),
+        ],
+        end_ms=3000,
+    )
+    ruby = RubyAnnotation(
+        kanji="B",
+        reading="abc",
+        reading_part_ms=[100, 900],
+        pos_start_ms=2000,
+        pos_end_ms=3000,
+    )
+    intervals = [(1000, 2000), (2000, 3000)]
+    char_x_ranges = [(0, 100), (100, 200)]
+
+    segments = _karaoke_fill_segments(
+        [100, 100],
+        intervals,
+        char_x_ranges,
+        [ruby],
+        line,
+    )
+
+    assert _fill_extent_end(segments, 2400) == 146
 
 
 def test_paint_frame_after_line_still_renders_no_active(qapp):

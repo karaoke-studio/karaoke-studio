@@ -168,9 +168,10 @@ def compute_display_lines(
         next_same = _next_same_lane_index(lanes, index)
         if next_same is not None:
             display_end = min(display_end, starts[next_same] - lane_gap)
-        display_end = max(display_end, _line_end_ms(line))
+        own_sing_end = _line_end_ms(line)
+        display_end = max(display_end, own_sing_end)
         if max_hold > 0:
-            display_end = min(display_end, starts[index] + max_hold)
+            display_end = max(own_sing_end, min(display_end, starts[index] + max_hold))
         if display_end < starts[index]:
             display_end = starts[index]
         result.append(

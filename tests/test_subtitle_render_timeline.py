@@ -212,6 +212,23 @@ def test_compute_display_lines_never_cuts_before_own_sing_end():
     assert layouts[2].display_start_ms >= line1.end_ms + 300
 
 
+def test_compute_display_lines_max_hold_does_not_cut_long_singing_line():
+    line1 = _make_line([("a", 24_060), ("b", 25_060)], end_ms=30_300)
+    line2 = _make_line([("c", 30_750)], end_ms=35_770)
+    track = _track(line1, line2)
+
+    layouts = compute_display_lines(
+        track,
+        lead_in_ms=1800,
+        tail_ms=1000,
+        lane_gap_ms=300,
+        max_hold_ms=5000,
+        continuity_snap_ms=800,
+    )
+
+    assert layouts[0].display_end_ms >= 30_300
+
+
 # ---------------------------------------------------------------------------
 # track_duration_ms
 # ---------------------------------------------------------------------------

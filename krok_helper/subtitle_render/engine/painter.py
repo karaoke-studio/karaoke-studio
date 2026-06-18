@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import math
 from collections import OrderedDict
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from threading import Lock
 from typing import Optional
 
@@ -63,6 +63,15 @@ from PyQt6.QtGui import (
 _BEFORE_LAYER_CACHE_MAX = 64
 _BEFORE_LAYER_CACHE: "OrderedDict[tuple, tuple[QImage, int, int]]" = OrderedDict()
 _BEFORE_LAYER_LOCK = Lock()
+
+
+@dataclass(frozen=True)
+class _FillSegment:
+    left: int
+    right: int
+    start_ms: int = 0
+    end_ms: int = 0
+    ruby: RubyAnnotation | None = None
 
 
 def clear_before_layer_cache() -> None:
@@ -322,6 +331,13 @@ def _paint_line(
     for w in char_widths:
         char_x_ranges.append((cursor_x, cursor_x + w))
         cursor_x += w
+    fill_segments = _karaoke_fill_segments(
+        char_widths,
+        intervals,
+        char_x_ranges,
+        active_rubies,
+        line,
+    )
 
     if active_rubies and ruby_metrics is not None:
         _paint_rubies(
@@ -366,9 +382,7 @@ def _paint_line(
             colors.after.shadow,
             line_rect,
             glow_radius,
-            char_widths,
-            intervals,
-            x0,
+            fill_segments,
             y,
             metrics,
             t_ms,
@@ -387,9 +401,7 @@ def _paint_line(
             shadow_path,
             colors.after.shadow,
             shadow_rect,
-            char_widths,
-            intervals,
-            x0 + style.shadow_offset_x,
+            _offset_fill_segments(fill_segments, style.shadow_offset_x),
             y + style.shadow_offset_y,
             metrics,
             t_ms,
@@ -402,9 +414,7 @@ def _paint_line(
             colors.after.stroke2,
             line_rect,
             style.stroke2_width_px,
-            char_widths,
-            intervals,
-            x0,
+            fill_segments,
             y,
             metrics,
             t_ms,
@@ -417,9 +427,7 @@ def _paint_line(
             colors.after.stroke,
             line_rect,
             style.stroke_width_px,
-            char_widths,
-            intervals,
-            x0,
+            fill_segments,
             y,
             metrics,
             t_ms,
@@ -430,9 +438,7 @@ def _paint_line(
         line_path,
         colors.after.text,
         line_rect,
-        char_widths,
-        intervals,
-        x0,
+        fill_segments,
         y,
         metrics,
         t_ms,
@@ -503,15 +509,13 @@ def _paint_after_fill_path(
     path: QPainterPath,
     fill: PaintFill,
     rect: QRectF,
-    char_widths: list[int],
-    intervals: list[tuple[int, int]],
-    x0: int,
+    fill_segments: list[_FillSegment],
     y: int,
     metrics: QFontMetrics,
     t_ms: int,
 ) -> None:
     _paint_after_path(
-        painter, path, fill, rect, None, char_widths, intervals, x0, y, metrics, t_ms
+        painter, path, fill, rect, None, fill_segments, y, metrics, t_ms
     )
 
 
@@ -521,15 +525,13 @@ def _paint_after_stroke_path(
     fill: PaintFill,
     rect: QRectF,
     width: int,
-    char_widths: list[int],
-    intervals: list[tuple[int, int]],
-    x0: int,
+    fill_segments: list[_FillSegment],
     y: int,
     metrics: QFontMetrics,
     t_ms: int,
 ) -> None:
     _paint_after_path(
-        painter, path, fill, rect, width, char_widths, intervals, x0, y, metrics, t_ms
+        painter, path, fill, rect, width, fill_segments, y, metrics, t_ms
     )
 
 
@@ -539,22 +541,23 @@ def _paint_after_glow_path(
     fill: PaintFill,
     rect: QRectF,
     width: int,
-    char_widths: list[int],
-    intervals: list[tuple[int, int]],
-    x0: int,
+    fill_segments: list[_FillSegment],
     y: int,
     metrics: QFontMetrics,
     t_ms: int,
 ) -> None:
-    fill_end = _fill_extent_end(char_widths, intervals, x0, t_ms)
-    if fill_end <= x0:
+    fill_start = _fill_extent_start(fill_segments)
+    fill_end = _fill_extent_end(fill_segments, t_ms)
+    if fill_start is None:
+        return
+    if fill_end <= fill_start:
         return
     painter.save()
     try:
         clip = QRectF(
-            float(x0 - width),
+            float(fill_start - width),
             float(y - metrics.ascent() - width),
-            float((fill_end - x0) + width * 2),
+            float((fill_end - fill_start) + width * 2),
             float(metrics.height() + width * 2),
         )
         painter.setClipRect(clip)
@@ -569,9 +572,7 @@ def _paint_after_path(
     fill: PaintFill,
     rect: QRectF,
     stroke_width: int | None,
-    char_widths: list[int],
-    intervals: list[tuple[int, int]],
-    x0: int,
+    fill_segments: list[_FillSegment],
     y: int,
     metrics: QFontMetrics,
     t_ms: int,
@@ -579,15 +580,18 @@ def _paint_after_path(
     # 卡拉ok填色是连续左→右扫光，已唱字符总是连续从 x0 开始；
     # 把 N 个相邻 char clip 合并成单 clip rect → 整 line path 只画一次，
     # 不再 N 次重复绘制相同路径。
-    fill_end = _fill_extent_end(char_widths, intervals, x0, t_ms)
-    if fill_end <= x0:
+    fill_start = _fill_extent_start(fill_segments)
+    fill_end = _fill_extent_end(fill_segments, t_ms)
+    if fill_start is None:
+        return
+    if fill_end <= fill_start:
         return
     painter.save()
     try:
         clip = QRectF(
-            float(x0),
+            float(fill_start),
             float(y - metrics.ascent()),
-            float(fill_end - x0),
+            float(fill_end - fill_start),
             float(metrics.height()),
         )
         painter.setClipRect(clip)
@@ -599,7 +603,7 @@ def _paint_after_path(
         painter.restore()
 
 
-def _fill_extent_end(
+def _legacy_fill_extent_end(
     char_widths: list[int],
     intervals: list[tuple[int, int]],
     x0: int,
@@ -623,6 +627,110 @@ def _fill_extent_end(
             continue
         # 部分填色——也是最后一个被填到的字符
         fill_end = cursor_x + int(round(w * ratio))
+        break
+    return fill_end
+
+
+def _karaoke_fill_segments(
+    char_widths: list[int],
+    intervals: list[tuple[int, int]],
+    char_x_ranges: list[tuple[int, int]],
+    active_rubies: list[RubyAnnotation],
+    line: TimingLine,
+) -> list[_FillSegment]:
+    segments: list[_FillSegment] = []
+    index = 0
+    while index < len(char_widths):
+        ruby = _ruby_for_char_index(active_rubies, line, intervals, index)
+        if ruby is None:
+            left, right = char_x_ranges[index]
+            start, end = intervals[index]
+            segments.append(_FillSegment(left=left, right=right, start_ms=start, end_ms=end))
+            index += 1
+            continue
+
+        indices = _ruby_target_indices(ruby, line, intervals)
+        indices = [i for i in indices if 0 <= i < len(char_x_ranges)]
+        if not indices:
+            left, right = char_x_ranges[index]
+            start, end = intervals[index]
+            segments.append(_FillSegment(left=left, right=right, start_ms=start, end_ms=end))
+            index += 1
+            continue
+
+        left = min(char_x_ranges[i][0] for i in indices)
+        right = max(char_x_ranges[i][1] for i in indices)
+        segments.append(_FillSegment(left=left, right=right, ruby=ruby))
+        index = max(indices) + 1
+    return segments
+
+
+def _ruby_for_char_index(
+    rubies: list[RubyAnnotation],
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+    index: int,
+) -> RubyAnnotation | None:
+    for ruby in rubies:
+        if index in _ruby_target_indices(ruby, line, intervals):
+            return ruby
+    return None
+
+
+def _ruby_target_indices(
+    ruby: RubyAnnotation,
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+) -> list[int]:
+    indices = [
+        index
+        for index, (start, end) in enumerate(intervals)
+        if start < ruby.pos_end_ms and end > ruby.pos_start_ms
+    ]
+    if not indices:
+        indices = _find_ruby_text_indices(ruby.kanji, line)
+    return indices
+
+
+def _offset_fill_segments(segments: list[_FillSegment], dx: int) -> list[_FillSegment]:
+    if dx == 0:
+        return segments
+    return [
+        _FillSegment(
+            left=segment.left + dx,
+            right=segment.right + dx,
+            start_ms=segment.start_ms,
+            end_ms=segment.end_ms,
+            ruby=segment.ruby,
+        )
+        for segment in segments
+    ]
+
+
+def _fill_extent_start(segments: list[_FillSegment]) -> int | None:
+    return segments[0].left if segments else None
+
+
+def _fill_extent_end(
+    segments: list[_FillSegment],
+    t_ms: int,
+) -> int:
+    """Return the current right edge of the continuous karaoke scan."""
+    if not segments:
+        return 0
+    fill_end = segments[0].left
+    for segment in segments:
+        ratio = (
+            _ruby_progress_ratio(segment.ruby, t_ms)
+            if segment.ruby is not None
+            else char_fill_ratio(segment.start_ms, segment.end_ms, t_ms)
+        )
+        if ratio <= 0.0:
+            break
+        if ratio >= 1.0:
+            fill_end = segment.right
+            continue
+        fill_end = segment.left + int(round((segment.right - segment.left) * ratio))
         break
     return fill_end
 
@@ -992,15 +1100,16 @@ def _paint_rubies(
             left, right = target
             reading_w = ruby_metrics.horizontalAdvance(ruby.reading)
             x = int(round((left + right - reading_w) / 2))
-            if style.stroke_color and style.stroke_width_px > 0:
-                path = QPainterPath()
-                path.addText(float(x), float(ruby_baseline_y), ruby_font, ruby.reading)
-                pen = QPen(QColor(style.stroke_color))
-                pen.setWidth(max(1, style.stroke_width_px // 2))
-                pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-                pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-                painter.strokePath(path, pen)
-            _paint_ruby_text(painter, ruby, ruby_metrics, x, ruby_baseline_y, t_ms, style)
+            _paint_ruby_text(
+                painter,
+                ruby,
+                ruby_font,
+                ruby_metrics,
+                x,
+                ruby_baseline_y,
+                t_ms,
+                style,
+            )
     finally:
         painter.restore()
 
@@ -1011,13 +1120,7 @@ def _ruby_target_x_range(
     intervals: list[tuple[int, int]],
     char_x_ranges: list[tuple[int, int]],
 ) -> tuple[int, int] | None:
-    indices = [
-        index
-        for index, (start, end) in enumerate(intervals)
-        if start < ruby.pos_end_ms and end > ruby.pos_start_ms
-    ]
-    if not indices:
-        indices = _find_ruby_text_indices(ruby.kanji, line)
+    indices = _ruby_target_indices(ruby, line, intervals)
     if not indices:
         return None
     left = min(char_x_ranges[index][0] for index in indices)
@@ -1038,58 +1141,171 @@ def _find_ruby_text_indices(kanji: str, line: TimingLine) -> list[int]:
 def _paint_ruby_text(
     painter: QPainter,
     ruby: RubyAnnotation,
+    ruby_font: QFont,
     ruby_metrics: QFontMetrics,
     x: int,
     baseline_y: int,
     t_ms: int,
     style: Style,
 ) -> None:
-    painter.setPen(QColor(style.base_color))
-    painter.drawText(x, baseline_y, ruby.reading)
+    path = QPainterPath()
+    path.addText(float(x), float(baseline_y), ruby_font, ruby.reading)
+    rect = QRectF(
+        float(x),
+        float(baseline_y - ruby_metrics.ascent()),
+        float(ruby_metrics.horizontalAdvance(ruby.reading)),
+        float(ruby_metrics.height()),
+    )
+    _paint_ruby_karaoke_path(
+        painter,
+        path,
+        rect,
+        ruby,
+        t_ms,
+        style,
+    )
 
-    if not ruby.reading_part_ms:
-        ratio = char_fill_ratio(ruby.pos_start_ms, ruby.pos_end_ms, t_ms)
-        if ratio <= 0.0:
-            return
-        painter.save()
-        try:
-            if ratio < 1.0:
-                painter.setClipRect(
-                    QRectF(
-                        float(x),
-                        float(baseline_y - ruby_metrics.ascent()),
-                        float(int(round(ruby_metrics.horizontalAdvance(ruby.reading) * ratio))),
-                        float(ruby_metrics.height()),
-                    )
-                )
-            painter.setPen(QColor(style.ruby_color))
-            painter.drawText(x, baseline_y, ruby.reading)
-        finally:
-            painter.restore()
+
+def _paint_ruby_karaoke_path(
+    painter: QPainter,
+    path: QPainterPath,
+    rect: QRectF,
+    ruby: RubyAnnotation,
+    t_ms: int,
+    style: Style,
+) -> None:
+    colors = _effective_ruby_karaoke_colors(style)
+    scale = _ruby_scale(style)
+    stroke_width = _scaled_px(style.stroke_width_px, scale)
+    stroke2_width = _scaled_px(style.stroke2_width_px, scale)
+    shadow_dx = _scaled_signed_px(style.shadow_offset_x, scale)
+    shadow_dy = _scaled_signed_px(style.shadow_offset_y, scale)
+    glow_radius = _scaled_px(style.glow_radius_px, scale)
+
+    _paint_text_layer_stack(
+        painter,
+        path,
+        rect,
+        colors.before,
+        style,
+        stroke_width=stroke_width,
+        stroke2_width=stroke2_width,
+        shadow_dx=shadow_dx,
+        shadow_dy=shadow_dy,
+        glow_radius=glow_radius,
+    )
+
+    ratio = _ruby_progress_ratio(ruby, t_ms)
+    if ratio <= 0.0:
         return
 
-    cursor_x = x
-    intervals = _ruby_reading_intervals(ruby)
-    painter.setPen(QColor(style.ruby_color))
-    for ch, (start, end) in zip(ruby.reading, intervals):
-        width = ruby_metrics.horizontalAdvance(ch)
-        ratio = char_fill_ratio(start, end, t_ms)
-        if ratio <= 0.0:
-            cursor_x += width
-            continue
-        painter.save()
-        if ratio < 1.0:
-            painter.setClipRect(
-                QRectF(
-                    float(cursor_x),
-                    float(baseline_y - ruby_metrics.ascent()),
-                    float(int(round(width * ratio))),
-                    float(ruby_metrics.height()),
-                )
+    pad = max(stroke_width, stroke2_width, glow_radius * 2, abs(shadow_dx), abs(shadow_dy), 2)
+    painter.save()
+    try:
+        painter.setClipRect(
+            QRectF(
+                rect.left() - pad,
+                rect.top() - pad,
+                rect.width() * min(ratio, 1.0) + pad * 2,
+                rect.height() + pad * 2,
             )
-        painter.drawText(cursor_x, baseline_y, ch)
+        )
+        _paint_text_layer_stack(
+            painter,
+            path,
+            rect,
+            colors.after,
+            style,
+            stroke_width=stroke_width,
+            stroke2_width=stroke2_width,
+            shadow_dx=shadow_dx,
+            shadow_dy=shadow_dy,
+            glow_radius=glow_radius,
+        )
+    finally:
         painter.restore()
-        cursor_x += width
+
+
+def _paint_text_layer_stack(
+    painter: QPainter,
+    path: QPainterPath,
+    rect: QRectF,
+    colors: KaraokeColorState,
+    style: Style,
+    *,
+    stroke_width: int,
+    stroke2_width: int,
+    shadow_dx: int,
+    shadow_dy: int,
+    glow_radius: int,
+) -> None:
+    if style.decoration_kind == "glow":
+        _paint_glow_path(painter, path, colors.shadow, rect, max(glow_radius, 1))
+    elif shadow_dx or shadow_dy:
+        shadow_path = QTransform().translate(shadow_dx, shadow_dy).map(path)
+        _paint_fill_path(
+            painter,
+            shadow_path,
+            colors.shadow,
+            rect.translated(shadow_dx, shadow_dy),
+        )
+
+    if stroke2_width > 0:
+        _paint_stroke_path(painter, path, colors.stroke2, rect, stroke2_width)
+    if stroke_width > 0:
+        _paint_stroke_path(painter, path, colors.stroke, rect, stroke_width)
+    _paint_fill_path(painter, path, colors.text, rect)
+
+
+def _effective_ruby_karaoke_colors(style: Style) -> KaraokeColors:
+    if style.karaoke_colors is not None:
+        return style.karaoke_colors
+    before = KaraokeColorState(
+        text=_solid_fill(style.base_color),
+        stroke=_solid_fill(style.stroke_color),
+        stroke2=_solid_fill("#000000"),
+        shadow=_solid_fill(style.shadow_color),
+    )
+    after = KaraokeColorState(
+        text=_solid_fill(style.ruby_color),
+        stroke=_solid_fill(style.stroke_color),
+        stroke2=_solid_fill("#000000"),
+        shadow=_solid_fill(style.shadow_color),
+    )
+    return KaraokeColors(before=before, after=after)
+
+
+def _ruby_scale(style: Style) -> float:
+    return max(style.ruby_font_size_px, 1) / max(style.font_size_px, 1)
+
+
+def _scaled_px(value: int, scale: float) -> int:
+    if value <= 0:
+        return 0
+    return max(1, int(round(value * scale)))
+
+
+def _scaled_signed_px(value: int, scale: float) -> int:
+    if value == 0:
+        return 0
+    sign = 1 if value > 0 else -1
+    return sign * max(1, int(round(abs(value) * scale)))
+
+
+def _ruby_progress_ratio(ruby: RubyAnnotation, t_ms: int) -> float:
+    if not ruby.reading:
+        return char_fill_ratio(ruby.pos_start_ms, ruby.pos_end_ms, t_ms)
+    if not ruby.reading_part_ms:
+        return char_fill_ratio(ruby.pos_start_ms, ruby.pos_end_ms, t_ms)
+
+    intervals = _ruby_reading_intervals(ruby)
+    total = max(len(intervals), 1)
+    for index, (start, end) in enumerate(intervals):
+        if t_ms < start:
+            return index / total
+        if t_ms < end:
+            return (index + char_fill_ratio(start, end, t_ms)) / total
+    return 1.0
 
 
 def _ruby_reading_intervals(ruby: RubyAnnotation) -> list[tuple[int, int]]:
