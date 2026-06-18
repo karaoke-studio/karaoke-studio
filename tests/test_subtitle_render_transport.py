@@ -90,8 +90,9 @@ def test_playback_timers_use_precise_timer(qapp):
     bar = _bar(qapp)
     assert bar._tick_timer.timerType() == Qt.TimerType.PreciseTimer
     assert bar._position_poll_timer.timerType() == Qt.TimerType.PreciseTimer
-    assert bar._tick_timer.interval() == 8
-    assert bar._position_poll_timer.interval() == 8
+    # 60Hz 对齐 vsync——见 preview_view._TICK_INTERVAL_MS 注释
+    assert bar._tick_timer.interval() == 16
+    assert bar._position_poll_timer.interval() == 16
 
 
 def test_toggle_play_alternates(qapp):

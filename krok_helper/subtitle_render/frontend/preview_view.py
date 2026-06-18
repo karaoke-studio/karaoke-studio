@@ -46,10 +46,22 @@ from krok_helper.subtitle_render.models import Style, TimingTrack
 PREVIEW_BG = QColor("#101010")
 """画布默认深色背景（A7 接入视频后这里换成视频帧）。"""
 
-_TICK_INTERVAL_MS = 8
-"""tick / 位置轮询间隔（约 120Hz 驱动，实际重绘由 Qt 合并到屏幕刷新），同时用于无音频视觉 tick 与有音频时的
-QMediaPlayer.position() 高频采样——QMediaPlayer.positionChanged 自身只有
-~100ms 粒度，文字填充会一卡一卡，所以在播放期开一个高频轮询。"""
+_TICK_INTERVAL_MS = 16
+"""tick / 位置轮询间隔（~60Hz，对齐主流显示器 vsync）。
+
+历史上这里曾是 8ms（120Hz）来追求"丝滑"，但实测：
+
+- Qt 的 ``QWidget.update()`` 会自动 coalesce 到下一次 paintEvent，超过 vsync
+  的额外 tick 全部被合并丢弃——重绘并不会变快
+- 但 Python 端 ``elapsed → setValue → valueChanged → timeChanged → set_time``
+  那条 signal-slot 链每次 tick 都要完整走一遍；125Hz 比 60Hz 多一倍纯
+  Python 开销，挤占了 paintEvent 自己的时间
+- 现在固定 16ms：保证 60Hz 时间精度（卡拉ok 填色单帧间隔），同时把时钟
+  路径的 Python 开销直接砍半
+
+无音频路径与有音频路径共用此常量。有音频路径下 QMediaPlayer 本身的
+``positionChanged`` 粒度约 100ms，所以仍然需要这一档高频轮询配 elapsed
+时钟做插值；只是不再过度采样。"""
 
 _VIDEO_SEEK_TOLERANCE_MS = 80
 """视频预览播放器允许的轻微漂移，超过后按播放条时间校正。"""
