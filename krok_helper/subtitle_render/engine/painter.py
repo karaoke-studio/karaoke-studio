@@ -22,18 +22,22 @@ P1 阶段会在本函数基础上加：渐变填充（B3）、入场退场动画
 
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 from typing import Optional
 
-from PyQt6.QtCore import QRectF, Qt
+from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import (
+    QBrush,
     QColor,
     QFont,
     QFontMetrics,
     QImage,
+    QLinearGradient,
     QPainter,
     QPainterPath,
     QPen,
+    QTransform,
 )
 
 from krok_helper.subtitle_render.engine.timeline import (
@@ -43,7 +47,15 @@ from krok_helper.subtitle_render.engine.timeline import (
     find_active_line,
     visible_display_lines,
 )
-from krok_helper.subtitle_render.models import RubyAnnotation, Style, TimingLine, TimingTrack
+from krok_helper.subtitle_render.models import (
+    KaraokeColors,
+    KaraokeColorState,
+    PaintFill,
+    RubyAnnotation,
+    Style,
+    TimingLine,
+    TimingTrack,
+)
 
 
 def paint_frame(
@@ -295,49 +307,253 @@ def _paint_line(
             style,
         )
 
-    # 1) 阴影（整行偏移一次画完）
-    if style.shadow_color and (style.shadow_offset_x or style.shadow_offset_y):
-        painter.setPen(QColor(style.shadow_color))
-        cursor_x = x0 + style.shadow_offset_x
-        sy = y + style.shadow_offset_y
-        for ch, w in zip(line.chars, char_widths):
-            painter.drawText(cursor_x, sy, ch.text)
-            cursor_x += w
+    line_rect = QRectF(
+        float(x0),
+        float(y - metrics.ascent()),
+        float(total_w),
+        float(metrics.height()),
+    )
+    colors = _effective_karaoke_colors(style)
+    line_path = _line_text_path(line, char_widths, font, x0, y)
 
-    # 2) 描边（QPainterPath + strokePath，比 drawText 偏移叠加更平滑）
+    if style.decoration_kind == "glow":
+        glow_radius = max(style.glow_radius_px, 1)
+        _paint_glow_path(painter, line_path, colors.before.shadow, line_rect, glow_radius)
+        _paint_after_glow_path(
+            painter,
+            line_path,
+            colors.after.shadow,
+            line_rect,
+            glow_radius,
+            char_widths,
+            intervals,
+            x0,
+            y,
+            metrics,
+            t_ms,
+        )
+    elif style.shadow_color and (style.shadow_offset_x or style.shadow_offset_y):
+        shadow_rect = line_rect.translated(style.shadow_offset_x, style.shadow_offset_y)
+        shadow_path = _line_text_path(
+            line,
+            char_widths,
+            font,
+            x0 + style.shadow_offset_x,
+            y + style.shadow_offset_y,
+        )
+        _paint_fill_path(painter, shadow_path, colors.before.shadow, shadow_rect)
+        _paint_after_fill_path(
+            painter,
+            shadow_path,
+            colors.after.shadow,
+            shadow_rect,
+            char_widths,
+            intervals,
+            x0 + style.shadow_offset_x,
+            y + style.shadow_offset_y,
+            metrics,
+            t_ms,
+        )
+
+    if style.stroke2_width_px > 0:
+        _paint_stroke_path(
+            painter, line_path, colors.before.stroke2, line_rect, style.stroke2_width_px
+        )
+        _paint_after_stroke_path(
+            painter,
+            line_path,
+            colors.after.stroke2,
+            line_rect,
+            style.stroke2_width_px,
+            char_widths,
+            intervals,
+            x0,
+            y,
+            metrics,
+            t_ms,
+        )
+
     if style.stroke_color and style.stroke_width_px > 0:
-        path = QPainterPath()
-        cursor_x = x0
-        for ch, w in zip(line.chars, char_widths):
-            path.addText(float(cursor_x), float(y), font, ch.text)
-            cursor_x += w
-        pen = QPen(QColor(style.stroke_color))
-        pen.setWidth(style.stroke_width_px)
+        _paint_stroke_path(
+            painter, line_path, colors.before.stroke, line_rect, style.stroke_width_px
+        )
+        _paint_after_stroke_path(
+            painter,
+            line_path,
+            colors.after.stroke,
+            line_rect,
+            style.stroke_width_px,
+            char_widths,
+            intervals,
+            x0,
+            y,
+            metrics,
+            t_ms,
+        )
+
+    _paint_fill_path(painter, line_path, colors.before.text, line_rect)
+    _paint_after_fill_path(
+        painter,
+        line_path,
+        colors.after.text,
+        line_rect,
+        char_widths,
+        intervals,
+        x0,
+        y,
+        metrics,
+        t_ms,
+    )
+
+
+def _line_text_path(
+    line: TimingLine,
+    char_widths: list[int],
+    font: QFont,
+    x: int,
+    y: int,
+) -> QPainterPath:
+    path = QPainterPath()
+    cursor_x = x
+    for ch, w in zip(line.chars, char_widths):
+        path.addText(float(cursor_x), float(y), font, ch.text)
+        cursor_x += w
+    return path
+
+
+def _paint_fill_path(
+    painter: QPainter,
+    path: QPainterPath,
+    fill: PaintFill,
+    rect: QRectF,
+) -> None:
+    painter.fillPath(path, _brush_for_fill(fill, rect))
+
+
+def _paint_stroke_path(
+    painter: QPainter,
+    path: QPainterPath,
+    fill: PaintFill,
+    rect: QRectF,
+    width: int,
+) -> None:
+    pen = QPen(_brush_for_fill(fill, rect), max(width, 1))
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    painter.strokePath(path, pen)
+
+
+def _paint_glow_path(
+    painter: QPainter,
+    path: QPainterPath,
+    fill: PaintFill,
+    rect: QRectF,
+    radius: int,
+) -> None:
+    brush = _brush_for_fill(fill, rect)
+    radius = max(radius, 1)
+    steps = max(4, min(8, radius))
+    alpha_step = 1.0 - (1.0 - 0.5) ** (1.0 / steps)
+    for index in range(steps, 0, -1):
+        width = max(1.0, radius * 2.0 * index / steps)
+        painter.save()
+        painter.setOpacity(alpha_step)
+        pen = QPen(brush, width)
         pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         pen.setCapStyle(Qt.PenCapStyle.RoundCap)
         painter.strokePath(path, pen)
+        painter.restore()
 
-    # 3) 底色（整行 base_color）
-    painter.setPen(QColor(style.base_color))
-    cursor_x = x0
-    for ch, w in zip(line.chars, char_widths):
-        painter.drawText(cursor_x, y, ch.text)
-        cursor_x += w
 
-    # 4) 填充层（按字符 fill_ratio 裁切到左侧）
-    painter.setPen(QColor(style.fill_color))
+def _paint_after_fill_path(
+    painter: QPainter,
+    path: QPainterPath,
+    fill: PaintFill,
+    rect: QRectF,
+    char_widths: list[int],
+    intervals: list[tuple[int, int]],
+    x0: int,
+    y: int,
+    metrics: QFontMetrics,
+    t_ms: int,
+) -> None:
+    _paint_after_path(
+        painter, path, fill, rect, None, char_widths, intervals, x0, y, metrics, t_ms
+    )
+
+
+def _paint_after_stroke_path(
+    painter: QPainter,
+    path: QPainterPath,
+    fill: PaintFill,
+    rect: QRectF,
+    width: int,
+    char_widths: list[int],
+    intervals: list[tuple[int, int]],
+    x0: int,
+    y: int,
+    metrics: QFontMetrics,
+    t_ms: int,
+) -> None:
+    _paint_after_path(
+        painter, path, fill, rect, width, char_widths, intervals, x0, y, metrics, t_ms
+    )
+
+
+def _paint_after_glow_path(
+    painter: QPainter,
+    path: QPainterPath,
+    fill: PaintFill,
+    rect: QRectF,
+    width: int,
+    char_widths: list[int],
+    intervals: list[tuple[int, int]],
+    x0: int,
+    y: int,
+    metrics: QFontMetrics,
+    t_ms: int,
+) -> None:
     cursor_x = x0
-    for ch, w, (cs, ce) in zip(line.chars, char_widths, intervals):
+    for w, (cs, ce) in zip(char_widths, intervals):
         ratio = char_fill_ratio(cs, ce, t_ms)
         if ratio <= 0.0:
             cursor_x += w
             continue
-        if ratio >= 1.0:
-            painter.drawText(cursor_x, y, ch.text)
+        painter.save()
+        fill_w = w if ratio >= 1.0 else int(round(w * ratio))
+        clip = QRectF(
+            float(cursor_x - width),
+            float(y - metrics.ascent() - width),
+            float(fill_w + width * 2),
+            float(metrics.height() + width * 2),
+        )
+        painter.setClipRect(clip)
+        _paint_glow_path(painter, path, fill, rect, width)
+        painter.restore()
+        cursor_x += w
+
+
+def _paint_after_path(
+    painter: QPainter,
+    path: QPainterPath,
+    fill: PaintFill,
+    rect: QRectF,
+    stroke_width: int | None,
+    char_widths: list[int],
+    intervals: list[tuple[int, int]],
+    x0: int,
+    y: int,
+    metrics: QFontMetrics,
+    t_ms: int,
+) -> None:
+    cursor_x = x0
+    for w, (cs, ce) in zip(char_widths, intervals):
+        ratio = char_fill_ratio(cs, ce, t_ms)
+        if ratio <= 0.0:
             cursor_x += w
             continue
         painter.save()
-        fill_w = int(round(w * ratio))
+        fill_w = w if ratio >= 1.0 else int(round(w * ratio))
         clip = QRectF(
             float(cursor_x),
             float(y - metrics.ascent()),
@@ -345,9 +561,118 @@ def _paint_line(
             float(metrics.height()),
         )
         painter.setClipRect(clip)
-        painter.drawText(cursor_x, y, ch.text)
+        if stroke_width is None:
+            _paint_fill_path(painter, path, fill, rect)
+        else:
+            _paint_stroke_path(painter, path, fill, rect, stroke_width)
         painter.restore()
         cursor_x += w
+
+
+def _brush_for_fill(fill: PaintFill, rect: QRectF) -> QBrush:
+    if fill.mode == "image" and fill.image_path:
+        image = QImage(fill.image_path)
+        if not image.isNull():
+            brush = QBrush(image)
+            scale = max(fill.image_scale_pct, 1) / 100.0
+            brush.setTransform(QTransform().scale(1.0 / scale, 1.0 / scale))
+            return brush
+
+    if fill.mode == "gradient_horizontal":
+        return _linear_gradient_brush(fill, rect, 0)
+    if fill.mode == "gradient_vertical":
+        return _linear_gradient_brush(fill, rect, 90)
+    if fill.mode == "split_vertical":
+        return _split_vertical_brush(fill, rect)
+    return QBrush(_valid_color(fill.color, "#FFFFFF"))
+
+
+def _linear_gradient_brush(fill: PaintFill, rect: QRectF, angle_deg: int) -> QBrush:
+    angle = math.radians(angle_deg % 360)
+    dx = math.cos(angle)
+    dy = math.sin(angle)
+    projection = abs(rect.width() * dx) + abs(rect.height() * dy)
+    if projection <= 0:
+        projection = max(rect.width(), rect.height(), 1.0)
+    half = projection / 2.0
+    center = rect.center()
+    start = QPointF(center.x() - dx * half, center.y() - dy * half)
+    end = QPointF(center.x() + dx * half, center.y() + dy * half)
+
+    gradient = QLinearGradient(start, end)
+    gradient.setColorAt(0.0, _valid_color(fill.start_color, fill.color))
+    gradient.setColorAt(1.0, _valid_color(fill.end_color, fill.color))
+    return QBrush(gradient)
+
+
+def _split_vertical_brush(fill: PaintFill, rect: QRectF) -> QBrush:
+    gradient = QLinearGradient(
+        QPointF(rect.left(), rect.top()),
+        QPointF(rect.left(), rect.bottom()),
+    )
+    position = max(0.0, min(1.0, fill.split_position_pct / 100.0))
+    top = _valid_color(fill.split_top_color, fill.color)
+    bottom = _valid_color(fill.split_bottom_color, fill.color)
+    edge_before = max(0.0, position - 0.001)
+    edge_after = min(1.0, position + 0.001)
+    gradient.setColorAt(0.0, top)
+    gradient.setColorAt(edge_before, top)
+    gradient.setColorAt(edge_after, bottom)
+    gradient.setColorAt(1.0, bottom)
+    return QBrush(gradient)
+
+
+def _effective_karaoke_colors(style: Style) -> KaraokeColors:
+    if style.karaoke_colors is not None:
+        return style.karaoke_colors
+
+    before = KaraokeColorState(
+        text=_solid_fill(style.base_color),
+        stroke=_solid_fill(style.stroke_color),
+        stroke2=_solid_fill("#000000"),
+        shadow=_solid_fill(style.shadow_color),
+    )
+    after_text = _legacy_after_text_fill(style)
+    after = KaraokeColorState(
+        text=after_text,
+        stroke=_solid_fill(style.stroke_color),
+        stroke2=_solid_fill("#000000"),
+        shadow=_solid_fill(style.shadow_color),
+    )
+    return KaraokeColors(before=before, after=after)
+
+
+def _legacy_after_text_fill(style: Style) -> PaintFill:
+    if not style.fill_gradient_enabled:
+        return _solid_fill(style.fill_color)
+    mode = "gradient_vertical" if style.fill_gradient_angle_deg in {90, 270} else "gradient_horizontal"
+    return PaintFill(
+        mode=mode,
+        color=style.fill_color,
+        start_color=style.fill_gradient_start_color,
+        end_color=style.fill_gradient_end_color,
+        split_top_color=style.fill_gradient_start_color,
+        split_bottom_color=style.fill_gradient_end_color,
+    )
+
+
+def _solid_fill(color: str) -> PaintFill:
+    return PaintFill(
+        mode="solid",
+        color=color,
+        start_color=color,
+        end_color=color,
+        split_top_color=color,
+        split_bottom_color=color,
+    )
+
+
+def _valid_color(value: str, fallback: str) -> QColor:
+    color = QColor(value)
+    if color.isValid():
+        return color
+    fallback_color = QColor(fallback)
+    return fallback_color if fallback_color.isValid() else QColor("#FF5A6F")
 
 
 def _resolve_line_x(
@@ -380,14 +705,22 @@ def _style_for_line(style: Style, line: TimingLine) -> Style:
             "italic": scheme.italic,
             "base_color": scheme.base_color,
             "fill_color": scheme.fill_color,
+            "fill_gradient_enabled": scheme.fill_gradient_enabled,
+            "fill_gradient_start_color": scheme.fill_gradient_start_color,
+            "fill_gradient_end_color": scheme.fill_gradient_end_color,
+            "fill_gradient_angle_deg": scheme.fill_gradient_angle_deg,
             "ruby_color": scheme.ruby_color,
             "stroke_color": scheme.stroke_color,
             "stroke_width_px": scheme.stroke_width_px,
+            "stroke2_width_px": scheme.stroke2_width_px,
+            "decoration_kind": scheme.decoration_kind,
+            "glow_radius_px": scheme.glow_radius_px,
             "shadow_color": scheme.shadow_color,
             "shadow_offset_x": scheme.shadow_offset_x,
             "shadow_offset_y": scheme.shadow_offset_y,
             "ruby_font_size_px": scheme.ruby_font_size_px,
             "ruby_gap_px": scheme.ruby_gap_px,
+            "karaoke_colors": scheme.karaoke_colors,
         }.items()
         if value is not None
     }

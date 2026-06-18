@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import replace
 from typing import Optional
 
@@ -16,16 +17,19 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QColorDialog,
     QComboBox,
+    QFileDialog,
     QFontComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QStackedWidget,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -33,8 +37,14 @@ from PyQt6.QtWidgets import (
 
 from krok_helper.subtitle_render.frontend.theme import palette, themed
 from krok_helper.subtitle_render.models import (
+    ColorLayerKey,
+    ColorStateKey,
+    DecorationKind,
+    KaraokeColors,
+    KaraokeColorState,
     LineHorizontalLayout,
     LineYPosition,
+    PaintFill,
     SubtitleStyleScheme,
     Style,
 )
@@ -46,14 +56,22 @@ _SCHEME_FIELDS = {
     "italic",
     "base_color",
     "fill_color",
+    "fill_gradient_enabled",
+    "fill_gradient_start_color",
+    "fill_gradient_end_color",
+    "fill_gradient_angle_deg",
     "stroke_color",
     "stroke_width_px",
+    "stroke2_width_px",
+    "decoration_kind",
+    "glow_radius_px",
     "shadow_color",
     "shadow_offset_x",
     "shadow_offset_y",
     "ruby_font_size_px",
     "ruby_color",
     "ruby_gap_px",
+    "karaoke_colors",
 }
 
 _SINGER_FILL_PALETTE = ["#FF5A6F", "#0055FF", "#FFAA00", "#00A878", "#9B5CFF"]
@@ -370,24 +388,72 @@ class PropertyPanel(QTabWidget):
     def _make_color_section(self) -> QFrame:
         section, layout = _section("颜色")
 
-        color_grid = QWidget(section)
-        grid = QGridLayout(color_grid)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(8)
+        target_grid = QWidget(section)
+        target_layout = QGridLayout(target_grid)
+        target_layout.setContentsMargins(0, 0, 0, 0)
+        target_layout.setHorizontalSpacing(8)
+        target_layout.setVerticalSpacing(8)
 
-        self._base_color_btn = self._color_button("base_color", self._style.base_color)
-        self._fill_color_btn = self._color_button("fill_color", self._style.fill_color)
-        self._stroke_color_btn = self._color_button("stroke_color", self._style.stroke_color)
-        self._shadow_color_btn = self._color_button("shadow_color", self._style.shadow_color)
+        self._color_state_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._color_state_combo)
+        self._color_state_combo.addItem("走字前", "before")
+        self._color_state_combo.addItem("走字后", "after")
+        self._color_state_combo.setCurrentIndex(1)
+        self._color_state_combo.currentIndexChanged.connect(
+            lambda _index: self._sync_color_fill_controls()
+        )
 
-        grid.addWidget(_field("底色", self._base_color_btn), 0, 0)
-        grid.addWidget(_field("填充", self._fill_color_btn), 0, 1)
-        grid.addWidget(_field("描边", self._stroke_color_btn), 1, 0)
-        grid.addWidget(_field("阴影", self._shadow_color_btn), 1, 1)
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
-        layout.addWidget(color_grid)
+        self._color_layer_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._color_layer_combo)
+        self._color_layer_combo.addItem("文字", "text")
+        self._color_layer_combo.addItem("描边", "stroke")
+        self._color_layer_combo.addItem("描边2", "stroke2")
+        self._color_layer_combo.addItem("装饰", "shadow")
+        self._color_layer_combo.currentIndexChanged.connect(
+            lambda _index: self._sync_color_fill_controls()
+        )
+
+        target_layout.addWidget(_field("状态", self._color_state_combo), 0, 0)
+        target_layout.addWidget(_field("图层", self._color_layer_combo), 0, 1)
+        target_layout.setColumnStretch(0, 1)
+        target_layout.setColumnStretch(1, 1)
+        layout.addWidget(target_grid)
+
+        self._fill_mode_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._fill_mode_combo)
+        for label, value in [
+            ("全色", "solid"),
+            ("横向渐变", "gradient_horizontal"),
+            ("纵向渐变", "gradient_vertical"),
+            ("纵向拼色", "split_vertical"),
+            ("图像", "image"),
+        ]:
+            self._fill_mode_combo.addItem(label, value)
+        self._fill_mode_combo.currentIndexChanged.connect(
+            lambda _index: self._update_current_fill(
+                mode=str(self._fill_mode_combo.currentData())
+            )
+        )
+        layout.addWidget(_field("填充方式", self._fill_mode_combo))
+
+        self._decoration_type_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._decoration_type_combo)
+        self._decoration_type_combo.addItem("阴影", "shadow")
+        self._decoration_type_combo.addItem("发光", "glow")
+        self._decoration_type_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                decoration_kind=str(self._decoration_type_combo.currentData())
+            )
+        )
+        self._decoration_type_field = _field("装饰类型", self._decoration_type_combo)
+        layout.addWidget(self._decoration_type_field)
+
+        self._fill_editor_stack = QStackedWidget(section)
+        self._fill_editor_stack.addWidget(self._make_solid_fill_page())
+        self._fill_editor_stack.addWidget(self._make_gradient_fill_page())
+        self._fill_editor_stack.addWidget(self._make_split_fill_page())
+        self._fill_editor_stack.addWidget(self._make_image_fill_page())
+        layout.addWidget(self._fill_editor_stack)
 
         detail_grid = QWidget(section)
         detail_layout = QGridLayout(detail_grid)
@@ -401,21 +467,117 @@ class PropertyPanel(QTabWidget):
         )
         detail_layout.addWidget(_field("描边宽度", self._stroke_width_spin), 0, 0)
 
+        self._stroke2_width_spin = _spin(0, 48, suffix=" px")
+        self._stroke2_width_spin.valueChanged.connect(
+            lambda value: self._update_style(stroke2_width_px=value)
+        )
+        detail_layout.addWidget(_field("描边2宽度", self._stroke2_width_spin), 0, 1)
+
         self._shadow_x_spin = _spin(-40, 40, suffix=" px")
         self._shadow_x_spin.valueChanged.connect(
             lambda value: self._update_style(shadow_offset_x=value)
         )
-        detail_layout.addWidget(_field("阴影 X", self._shadow_x_spin), 0, 1)
+        self._shadow_x_field = _field("阴影 X", self._shadow_x_spin)
+        detail_layout.addWidget(self._shadow_x_field, 1, 0)
 
         self._shadow_y_spin = _spin(-40, 40, suffix=" px")
         self._shadow_y_spin.valueChanged.connect(
             lambda value: self._update_style(shadow_offset_y=value)
         )
-        detail_layout.addWidget(_field("阴影 Y", self._shadow_y_spin), 1, 1)
+        self._shadow_y_field = _field("阴影 Y", self._shadow_y_spin)
+        detail_layout.addWidget(self._shadow_y_field, 1, 1)
+
+        self._glow_radius_spin = _spin(1, 120, suffix=" px")
+        self._glow_radius_spin.valueChanged.connect(
+            lambda value: self._update_style(glow_radius_px=value)
+        )
+        self._glow_radius_field = _field("发光半径", self._glow_radius_spin)
+        detail_layout.addWidget(self._glow_radius_field, 1, 0)
+
         detail_layout.setColumnStretch(0, 1)
         detail_layout.setColumnStretch(1, 1)
         layout.addWidget(detail_grid)
         return section
+
+    def _make_solid_fill_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._paint_solid_btn = self._paint_color_button("color", "#FFFFFF")
+        layout.addWidget(_field("颜色", self._paint_solid_btn))
+        return page
+
+    def _make_gradient_fill_page(self) -> QWidget:
+        page = QWidget()
+        layout = QGridLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
+        self._paint_gradient_start_btn = self._paint_color_button("start_color", "#FFFFFF")
+        self._paint_gradient_end_btn = self._paint_color_button("end_color", "#FF5A6F")
+        layout.addWidget(_field("起色", self._paint_gradient_start_btn), 0, 0)
+        layout.addWidget(_field("止色", self._paint_gradient_end_btn), 0, 1)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
+        return page
+
+    def _make_split_fill_page(self) -> QWidget:
+        page = QWidget()
+        layout = QGridLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
+        self._paint_split_top_btn = self._paint_color_button("split_top_color", "#FFFFFF")
+        self._paint_split_bottom_btn = self._paint_color_button(
+            "split_bottom_color", "#FF5A6F"
+        )
+        self._paint_split_position_spin = _spin(0, 100, suffix=" %")
+        self._paint_split_position_spin.valueChanged.connect(
+            lambda value: self._update_current_fill(split_position_pct=value)
+        )
+        layout.addWidget(_field("上色", self._paint_split_top_btn), 0, 0)
+        layout.addWidget(_field("下色", self._paint_split_bottom_btn), 0, 1)
+        layout.addWidget(_field("分割位置", self._paint_split_position_spin), 1, 0)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
+        return page
+
+    def _make_image_fill_page(self) -> QWidget:
+        page = QWidget()
+        layout = QGridLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
+        self._paint_image_path_edit = QLineEdit(page)
+        _compact_control(self._paint_image_path_edit)
+        self._paint_image_path_edit.editingFinished.connect(
+            lambda: self._update_current_fill(image_path=self._paint_image_path_edit.text())
+        )
+        self._paint_image_browse_btn = QPushButton("浏览...", page)
+        self._paint_image_browse_btn.setMinimumHeight(32)
+        self._paint_image_browse_btn.clicked.connect(self._choose_paint_image)
+        self._paint_image_scale_spin = _spin(10, 400, suffix=" %")
+        self._paint_image_scale_spin.valueChanged.connect(
+            lambda value: self._update_current_fill(image_scale_pct=value)
+        )
+        path_row = QWidget(page)
+        path_layout = QHBoxLayout(path_row)
+        path_layout.setContentsMargins(0, 0, 0, 0)
+        path_layout.setSpacing(4)
+        path_layout.addWidget(self._paint_image_path_edit, 1)
+        path_layout.addWidget(self._paint_image_browse_btn)
+        layout.addWidget(_field("图像文件", path_row), 0, 0, 1, 2)
+        layout.addWidget(_field("缩放", self._paint_image_scale_spin), 1, 0)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
+        return page
+
+    def _paint_color_button(self, field_name: str, color: str) -> ColorButton:
+        button = ColorButton(color)
+        button.clicked.connect(
+            lambda _checked=False, field=field_name: self._choose_paint_color(field)
+        )
+        return button
 
     def _make_scheme_section(self) -> QFrame:
         section, layout = _section("配色方案")
@@ -558,7 +720,106 @@ class PropertyPanel(QTabWidget):
 
     def _set_color(self, field_name: str, color: str) -> None:
         normalized = _normalize_hex(color, str(self._scheme_value(field_name)))
-        self._update_style(**{field_name: normalized})
+        changes = {field_name: normalized}
+        colors = _apply_legacy_color_to_matrix(
+            self._current_karaoke_colors(), field_name, normalized
+        )
+        if colors is not None:
+            changes["karaoke_colors"] = colors
+        self._update_style(**changes)
+
+    def _choose_paint_color(self, field_name: str) -> None:
+        fill = self._current_paint_fill()
+        current = QColor(getattr(fill, field_name))
+        color = QColorDialog.getColor(current, self, "选择颜色")
+        if color.isValid():
+            normalized = color.name(QColor.NameFormat.HexRgb).upper()
+            self._update_current_fill(**{field_name: normalized})
+
+    def _choose_paint_image(self) -> None:
+        path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "选择填充图像",
+            self._paint_image_path_edit.text(),
+            "图像文件 (*.png *.jpg *.jpeg *.bmp *.webp);;所有文件 (*.*)",
+        )
+        if path:
+            self._paint_image_path_edit.setText(path)
+            self._update_current_fill(image_path=path)
+
+    def _current_color_state_key(self) -> ColorStateKey:
+        data = self._color_state_combo.currentData()
+        return data if data in {"before", "after"} else "after"  # type: ignore[return-value]
+
+    def _current_color_layer_key(self) -> ColorLayerKey:
+        data = self._color_layer_combo.currentData()
+        if data in {"text", "stroke", "stroke2", "shadow"}:
+            return data  # type: ignore[return-value]
+        return "text"
+
+    def _current_karaoke_colors(self) -> KaraokeColors:
+        value = self._scheme_value("karaoke_colors")
+        if isinstance(value, KaraokeColors):
+            return deepcopy(value)
+        return _legacy_colors_from_panel(self)
+
+    def _current_paint_fill(self) -> PaintFill:
+        colors = self._current_karaoke_colors()
+        state = getattr(colors, self._current_color_state_key())
+        return deepcopy(getattr(state, self._current_color_layer_key()))
+
+    def _sync_color_fill_controls(self) -> None:
+        if not hasattr(self, "_fill_mode_combo"):
+            return
+        fill = self._current_paint_fill()
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            mode_index = max(0, self._fill_mode_combo.findData(fill.mode))
+            self._fill_mode_combo.setCurrentIndex(mode_index)
+            self._fill_editor_stack.setCurrentIndex(_fill_stack_index(fill.mode))
+            self._paint_solid_btn.set_color(fill.color)
+            self._paint_gradient_start_btn.set_color(fill.start_color)
+            self._paint_gradient_end_btn.set_color(fill.end_color)
+            self._paint_split_top_btn.set_color(fill.split_top_color)
+            self._paint_split_bottom_btn.set_color(fill.split_bottom_color)
+            self._paint_split_position_spin.setValue(fill.split_position_pct)
+            self._paint_image_path_edit.setText(fill.image_path)
+            self._paint_image_scale_spin.setValue(fill.image_scale_pct)
+            self._sync_decoration_visibility()
+        finally:
+            self._syncing = was_syncing
+
+    def _sync_decoration_visibility(self) -> None:
+        if not hasattr(self, "_decoration_type_field"):
+            return
+        is_decoration = self._current_color_layer_key() == "shadow"
+        is_shadow = str(self._scheme_value("decoration_kind")) == "shadow"
+        is_glow = str(self._scheme_value("decoration_kind")) == "glow"
+        self._decoration_type_field.setVisible(is_decoration)
+        self._shadow_x_field.setVisible(is_decoration and is_shadow)
+        self._shadow_y_field.setVisible(is_decoration and is_shadow)
+        self._glow_radius_field.setVisible(is_decoration and is_glow)
+
+    def _update_current_fill(self, **changes) -> None:
+        if self._syncing:
+            return
+        colors = self._current_karaoke_colors()
+        state_key = self._current_color_state_key()
+        layer_key = self._current_color_layer_key()
+        state = deepcopy(getattr(colors, state_key))
+        fill = replace(getattr(state, layer_key), **changes)
+        if "color" in changes:
+            fill = replace(
+                fill,
+                start_color=changes["color"],
+                end_color=changes["color"],
+                split_top_color=changes["color"],
+                split_bottom_color=changes["color"],
+            )
+        state = replace(state, **{layer_key: fill})
+        colors = replace(colors, **{state_key: state})
+        self._update_style(karaoke_colors=colors)
 
     def _refresh_scheme_combo(self, selected_key: Optional[str] = None) -> None:
         self._singer_combo.clear()
@@ -655,16 +916,23 @@ class PropertyPanel(QTabWidget):
                 max(0, self._font_weight_combo.findData(int(self._scheme_value("font_weight"))))
             )
             self._italic_check.setChecked(bool(self._scheme_value("italic")))
-            self._base_color_btn.set_color(str(self._scheme_value("base_color")))
-            self._fill_color_btn.set_color(str(self._scheme_value("fill_color")))
-            self._stroke_color_btn.set_color(str(self._scheme_value("stroke_color")))
             self._stroke_width_spin.setValue(int(self._scheme_value("stroke_width_px")))
-            self._shadow_color_btn.set_color(str(self._scheme_value("shadow_color")))
+            self._stroke2_width_spin.setValue(int(self._scheme_value("stroke2_width_px")))
+            self._decoration_type_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._decoration_type_combo.findData(
+                        str(self._scheme_value("decoration_kind"))
+                    ),
+                )
+            )
+            self._glow_radius_spin.setValue(int(self._scheme_value("glow_radius_px")))
             self._shadow_x_spin.setValue(int(self._scheme_value("shadow_offset_x")))
             self._shadow_y_spin.setValue(int(self._scheme_value("shadow_offset_y")))
             self._ruby_font_size_spin.setValue(int(self._scheme_value("ruby_font_size_px")))
             self._ruby_color_btn.set_color(str(self._scheme_value("ruby_color")))
             self._ruby_gap_spin.setValue(int(self._scheme_value("ruby_gap_px")))
+            self._sync_color_fill_controls()
         finally:
             self._syncing = was_syncing
 
@@ -691,6 +959,10 @@ class PropertyPanel(QTabWidget):
             changes["line_horizontal_layout"] = _normalize_horizontal_layout(
                 changes["line_horizontal_layout"]
             )
+        if "decoration_kind" in changes:
+            changes["decoration_kind"] = _normalize_decoration_kind(
+                changes["decoration_kind"]
+            )
         self._style = replace(self._style, **changes)
         self._syncing = True
         try:
@@ -715,9 +987,121 @@ def _normalize_horizontal_layout(value: object) -> LineHorizontalLayout:
     return "asymmetric"
 
 
+def _normalize_decoration_kind(value: object) -> DecorationKind:
+    if value in {"shadow", "glow"}:
+        return value  # type: ignore[return-value]
+    return "shadow"
+
+
+def _fill_stack_index(mode: str) -> int:
+    if mode in {"gradient_horizontal", "gradient_vertical"}:
+        return 1
+    if mode == "split_vertical":
+        return 2
+    if mode == "image":
+        return 3
+    return 0
+
+
+def _legacy_colors_from_panel(panel: PropertyPanel) -> KaraokeColors:
+    before = KaraokeColorState(
+        text=_solid_fill(str(panel._scheme_value("base_color"))),
+        stroke=_solid_fill(str(panel._scheme_value("stroke_color"))),
+        stroke2=_solid_fill("#000000"),
+        shadow=_solid_fill(str(panel._scheme_value("shadow_color"))),
+    )
+    after = KaraokeColorState(
+        text=_legacy_after_text_fill(panel),
+        stroke=_solid_fill(str(panel._scheme_value("stroke_color"))),
+        stroke2=_solid_fill("#000000"),
+        shadow=_solid_fill(str(panel._scheme_value("shadow_color"))),
+    )
+    return KaraokeColors(before=before, after=after)
+
+
+def _legacy_after_text_fill(panel: PropertyPanel) -> PaintFill:
+    fill_color = str(panel._scheme_value("fill_color"))
+    if not bool(panel._scheme_value("fill_gradient_enabled")):
+        return _solid_fill(fill_color)
+    mode = (
+        "gradient_vertical"
+        if int(panel._scheme_value("fill_gradient_angle_deg")) in {90, 270}
+        else "gradient_horizontal"
+    )
+    return PaintFill(
+        mode=mode,
+        color=fill_color,
+        start_color=str(panel._scheme_value("fill_gradient_start_color")),
+        end_color=str(panel._scheme_value("fill_gradient_end_color")),
+        split_top_color=str(panel._scheme_value("fill_gradient_start_color")),
+        split_bottom_color=str(panel._scheme_value("fill_gradient_end_color")),
+    )
+
+
+def _apply_legacy_color_to_matrix(
+    colors: KaraokeColors, field_name: str, color: str
+) -> Optional[KaraokeColors]:
+    colors = deepcopy(colors)
+    if field_name == "base_color":
+        colors.before.text = _solid_fill(color)
+        return colors
+    if field_name == "fill_color":
+        colors.after.text = replace(colors.after.text, color=color)
+        return colors
+    if field_name == "fill_gradient_start_color":
+        colors.after.text = replace(colors.after.text, start_color=color, split_top_color=color)
+        return colors
+    if field_name == "fill_gradient_end_color":
+        colors.after.text = replace(colors.after.text, end_color=color, split_bottom_color=color)
+        return colors
+    if field_name == "stroke_color":
+        colors.before.stroke = _solid_fill(color)
+        colors.after.stroke = _solid_fill(color)
+        return colors
+    if field_name == "shadow_color":
+        colors.before.shadow = _solid_fill(color)
+        colors.after.shadow = _solid_fill(color)
+        return colors
+    return None
+
+
+def _solid_fill(color: str) -> PaintFill:
+    return PaintFill(
+        mode="solid",
+        color=color,
+        start_color=color,
+        end_color=color,
+        split_top_color=color,
+        split_bottom_color=color,
+    )
+
+
 def _scheme_from_style(style: Style, singer_id: int) -> SubtitleStyleScheme:
     fill = _SINGER_FILL_PALETTE[singer_id % len(_SINGER_FILL_PALETTE)]
     ruby = _SINGER_RUBY_PALETTE[singer_id % len(_SINGER_RUBY_PALETTE)]
+    colors = deepcopy(style.karaoke_colors) if style.karaoke_colors is not None else None
+    if colors is None:
+        colors = KaraokeColors(
+            before=KaraokeColorState(
+                text=_solid_fill(style.base_color),
+                stroke=_solid_fill(style.stroke_color),
+                stroke2=_solid_fill("#000000"),
+                shadow=_solid_fill(style.shadow_color),
+            ),
+            after=KaraokeColorState(
+                text=_solid_fill(fill),
+                stroke=_solid_fill(style.stroke_color),
+                stroke2=_solid_fill("#000000"),
+                shadow=_solid_fill(style.shadow_color),
+            ),
+        )
+    else:
+        colors.after.text = replace(
+            colors.after.text,
+            color=fill,
+            start_color=fill,
+            split_top_color=fill,
+        )
     return SubtitleStyleScheme(
         font_family=style.font_family,
         font_size_px=style.font_size_px,
@@ -725,14 +1109,22 @@ def _scheme_from_style(style: Style, singer_id: int) -> SubtitleStyleScheme:
         italic=style.italic,
         base_color=style.base_color,
         fill_color=fill,
+        fill_gradient_enabled=style.fill_gradient_enabled,
+        fill_gradient_start_color=fill,
+        fill_gradient_end_color=style.fill_gradient_end_color,
+        fill_gradient_angle_deg=style.fill_gradient_angle_deg,
         stroke_color=style.stroke_color,
         stroke_width_px=style.stroke_width_px,
+        stroke2_width_px=style.stroke2_width_px,
+        decoration_kind=style.decoration_kind,
+        glow_radius_px=style.glow_radius_px,
         shadow_color=style.shadow_color,
         shadow_offset_x=style.shadow_offset_x,
         shadow_offset_y=style.shadow_offset_y,
         ruby_font_size_px=style.ruby_font_size_px,
         ruby_color=ruby,
         ruby_gap_px=style.ruby_gap_px,
+        karaoke_colors=colors,
     )
 
 
@@ -744,14 +1136,22 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         italic=bool(panel._scheme_value("italic")),
         base_color=str(panel._scheme_value("base_color")),
         fill_color=str(panel._scheme_value("fill_color")),
+        fill_gradient_enabled=bool(panel._scheme_value("fill_gradient_enabled")),
+        fill_gradient_start_color=str(panel._scheme_value("fill_gradient_start_color")),
+        fill_gradient_end_color=str(panel._scheme_value("fill_gradient_end_color")),
+        fill_gradient_angle_deg=int(panel._scheme_value("fill_gradient_angle_deg")),
         stroke_color=str(panel._scheme_value("stroke_color")),
         stroke_width_px=int(panel._scheme_value("stroke_width_px")),
+        stroke2_width_px=int(panel._scheme_value("stroke2_width_px")),
+        decoration_kind=_normalize_decoration_kind(panel._scheme_value("decoration_kind")),
+        glow_radius_px=int(panel._scheme_value("glow_radius_px")),
         shadow_color=str(panel._scheme_value("shadow_color")),
         shadow_offset_x=int(panel._scheme_value("shadow_offset_x")),
         shadow_offset_y=int(panel._scheme_value("shadow_offset_y")),
         ruby_font_size_px=int(panel._scheme_value("ruby_font_size_px")),
         ruby_color=str(panel._scheme_value("ruby_color")),
         ruby_gap_px=int(panel._scheme_value("ruby_gap_px")),
+        karaoke_colors=panel._current_karaoke_colors(),
     )
 
 

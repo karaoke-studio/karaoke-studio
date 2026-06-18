@@ -17,7 +17,13 @@ from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
     ColorButton,
     PropertyPanel,
 )
-from krok_helper.subtitle_render.models import SubtitleStyleScheme, Style  # noqa: E402
+from krok_helper.subtitle_render.models import (  # noqa: E402
+    KaraokeColors,
+    KaraokeColorState,
+    PaintFill,
+    SubtitleStyleScheme,
+    Style,
+)
 
 
 @pytest.fixture(scope="module")
@@ -35,6 +41,10 @@ def test_property_panel_set_style_populates_controls(qapp):
         italic=True,
         base_color="#102030",
         fill_color="#405060",
+        fill_gradient_enabled=True,
+        fill_gradient_start_color="#111111",
+        fill_gradient_end_color="#EEEEEE",
+        fill_gradient_angle_deg=45,
         stroke_color="#708090",
         stroke_width_px=8,
         shadow_color="#A0B0C0",
@@ -62,11 +72,14 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._font_size_spin.value() == 72
     assert panel._font_weight_combo.currentData() == 900
     assert panel._italic_check.isChecked()
-    assert panel._base_color_btn.color == "#102030"
-    assert panel._fill_color_btn.color == "#405060"
-    assert panel._stroke_color_btn.color == "#708090"
+    assert panel._color_state_combo.currentData() == "after"
+    assert panel._color_layer_combo.currentData() == "text"
+    assert panel._fill_mode_combo.currentData() == "gradient_horizontal"
+    assert panel._paint_gradient_start_btn.color == "#111111"
+    assert panel._paint_gradient_end_btn.color == "#EEEEEE"
+    panel._color_state_combo.setCurrentIndex(panel._color_state_combo.findData("before"))
+    assert panel._paint_solid_btn.color == "#102030"
     assert panel._stroke_width_spin.value() == 8
-    assert panel._shadow_color_btn.color == "#A0B0C0"
     assert panel._shadow_x_spin.value() == 3
     assert panel._shadow_y_spin.value() == 4
     assert panel._line_position_combo.currentData() == "top"
@@ -91,6 +104,10 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.font_family == "UD Digi Kyokasho N-B"
     assert style.font_size_px == 100
     assert style.font_weight == 400
+    assert style.fill_gradient_enabled is False
+    assert style.fill_gradient_start_color == "#FF5A6F"
+    assert style.fill_gradient_end_color == "#0055FF"
+    assert style.fill_gradient_angle_deg == 0
     assert style.ruby_font_size_px == 35
     assert style.ruby_gap_px == 4
     assert style.line_y_position == "bottom"
@@ -99,6 +116,9 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.line_horizontal_layout == "asymmetric"
     assert style.line_gap_px == 90
     assert style.stroke_width_px == 9
+    assert style.stroke2_width_px == 0
+    assert style.decoration_kind == "shadow"
+    assert style.glow_radius_px == 10
     assert style.shadow_offset_x == 0
     assert style.shadow_offset_y == 1
     assert style.upper_line_left_margin_px == 50
@@ -151,8 +171,87 @@ def test_property_panel_color_controls_emit_normalized_style(qapp):
 
     assert emitted[-1].fill_color == "#123ABC"
     assert emitted[-1].stroke_color == "#222222"
-    assert panel._fill_color_btn.color == "#123ABC"
-    assert panel._stroke_color_btn.color == "#222222"
+    assert emitted[-1].karaoke_colors.after.text.color == "#123ABC"
+    assert emitted[-1].karaoke_colors.after.stroke.color == "#222222"
+    assert panel._paint_solid_btn.color == "#123ABC"
+
+
+def test_property_panel_gradient_controls_emit_style(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._fill_mode_combo.setCurrentIndex(
+        panel._fill_mode_combo.findData("gradient_vertical")
+    )
+    panel._update_current_fill(start_color="#00AAEE")
+    panel._update_current_fill(end_color="#FFCC00")
+
+    fill = emitted[-1].karaoke_colors.after.text
+    assert fill.mode == "gradient_vertical"
+    assert fill.start_color == "#00AAEE"
+    assert fill.end_color == "#FFCC00"
+    assert panel._paint_gradient_start_btn.color == "#00AAEE"
+    assert panel._paint_gradient_end_btn.color == "#FFCC00"
+
+
+def test_property_panel_split_and_image_fill_controls_emit_style(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._fill_mode_combo.setCurrentIndex(panel._fill_mode_combo.findData("split_vertical"))
+    panel._update_current_fill(split_top_color="#111111")
+    panel._update_current_fill(split_bottom_color="#EEEEEE")
+    panel._paint_split_position_spin.setValue(42)
+
+    split = emitted[-1].karaoke_colors.after.text
+    assert split.mode == "split_vertical"
+    assert split.split_top_color == "#111111"
+    assert split.split_bottom_color == "#EEEEEE"
+    assert split.split_position_pct == 42
+
+    panel._fill_mode_combo.setCurrentIndex(panel._fill_mode_combo.findData("image"))
+    panel._paint_image_path_edit.setText(r"D:\cover.png")
+    panel._paint_image_path_edit.editingFinished.emit()
+    panel._paint_image_scale_spin.setValue(150)
+
+    image = emitted[-1].karaoke_colors.after.text
+    assert image.mode == "image"
+    assert image.image_path == r"D:\cover.png"
+    assert image.image_scale_pct == 150
+
+
+def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    assert panel._decoration_type_field.isHidden()
+
+    panel._color_layer_combo.setCurrentIndex(panel._color_layer_combo.findData("shadow"))
+    assert not panel._decoration_type_field.isHidden()
+    assert not panel._shadow_x_field.isHidden()
+    assert not panel._shadow_y_field.isHidden()
+
+    panel._decoration_type_combo.setCurrentIndex(
+        panel._decoration_type_combo.findData("glow")
+    )
+    assert emitted[-1].decoration_kind == "glow"
+    assert panel._shadow_x_field.isHidden()
+    assert panel._shadow_y_field.isHidden()
+    assert not panel._glow_radius_field.isHidden()
+
+    panel._glow_radius_spin.setValue(28)
+    assert emitted[-1].glow_radius_px == 28
+
+    panel._decoration_type_combo.setCurrentIndex(
+        panel._decoration_type_combo.findData("shadow")
+    )
+    assert emitted[-1].decoration_kind == "shadow"
+    assert not panel._shadow_x_field.isHidden()
+    assert not panel._shadow_y_field.isHidden()
+    assert panel._glow_radius_field.isHidden()
 
 
 def test_property_panel_ruby_controls_emit_style(qapp):
@@ -217,16 +316,24 @@ def test_property_panel_singer_scheme_controls_emit_style(qapp):
     panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("singer:1"))
     panel._font_size_spin.setValue(88)
     panel._set_color("fill_color", "#00aaee")
+    panel._fill_mode_combo.setCurrentIndex(
+        panel._fill_mode_combo.findData("gradient_horizontal")
+    )
+    panel._update_current_fill(start_color="#00AAEE")
+    panel._update_current_fill(end_color="#FFCC00")
     panel._set_color("base_color", "#112233")
     panel._ruby_gap_spin.setValue(8)
 
     scheme = emitted[-1].singer_style_overrides[1]
     assert scheme.font_size_px == 88
     assert scheme.fill_color == "#00AAEE"
+    assert scheme.karaoke_colors.after.text.mode == "gradient_horizontal"
+    assert scheme.karaoke_colors.after.text.start_color == "#00AAEE"
+    assert scheme.karaoke_colors.after.text.end_color == "#FFCC00"
     assert scheme.base_color == "#112233"
+    assert scheme.karaoke_colors.before.text.color == "#112233"
     assert scheme.ruby_gap_px == 8
-    assert panel._fill_color_btn.color == "#00AAEE"
-    assert panel._base_color_btn.color == "#112233"
+    assert panel._paint_gradient_start_btn.color == "#00AAEE"
 
 
 def test_property_panel_singer_scheme_switches_subtitle_controls(qapp):
@@ -238,6 +345,10 @@ def test_property_panel_singer_scheme_switches_subtitle_controls(qapp):
                 font_size_px=72,
                 font_weight=700,
                 fill_color="#0088ff",
+                fill_gradient_enabled=True,
+                fill_gradient_start_color="#0088ff",
+                fill_gradient_end_color="#ffcc00",
+                fill_gradient_angle_deg=270,
                 ruby_color="#00ff88",
                 ruby_gap_px=12,
             )
@@ -249,13 +360,15 @@ def test_property_panel_singer_scheme_switches_subtitle_controls(qapp):
 
     assert panel._font_size_spin.value() == 72
     assert panel._font_weight_combo.currentData() == 700
-    assert panel._fill_color_btn.color == "#0088FF"
+    assert panel._fill_mode_combo.currentData() == "gradient_vertical"
+    assert panel._paint_gradient_start_btn.color == "#0088FF"
+    assert panel._paint_gradient_end_btn.color == "#FFCC00"
     assert panel._ruby_color_btn.color == "#00FF88"
     assert panel._ruby_gap_spin.value() == 12
 
     panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("global"))
     assert panel._font_size_spin.value() == style.font_size_px
-    assert panel._fill_color_btn.color == style.fill_color
+    assert panel._paint_solid_btn.color == style.fill_color
 
 
 def test_property_panel_can_add_custom_scheme(qapp):

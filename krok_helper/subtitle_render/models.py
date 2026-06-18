@@ -142,6 +142,75 @@ class SubtitleSource:
 
 LineYPosition = Literal["top", "center", "bottom"]
 LineHorizontalLayout = Literal["asymmetric", "center"]
+ColorFillMode = Literal[
+    "solid",
+    "gradient_horizontal",
+    "gradient_vertical",
+    "split_vertical",
+    "image",
+]
+ColorStateKey = Literal["before", "after"]
+ColorLayerKey = Literal["text", "stroke", "stroke2", "shadow"]
+DecorationKind = Literal["shadow", "glow"]
+
+
+@dataclass
+class PaintFill:
+    """One fill definition shared by text, stroke, second stroke and shadow."""
+
+    mode: ColorFillMode = "solid"
+    color: str = "#FFFFFF"
+    start_color: str = "#FFFFFF"
+    end_color: str = "#FFFFFF"
+    split_top_color: str = "#FFFFFF"
+    split_bottom_color: str = "#FFFFFF"
+    split_position_pct: int = 50
+    image_path: str = ""
+    image_scale_pct: int = 100
+
+
+def _paint_fill(color: str, *, mode: ColorFillMode = "solid", end: Optional[str] = None) -> PaintFill:
+    end_color = end or color
+    return PaintFill(
+        mode=mode,
+        color=color,
+        start_color=color,
+        end_color=end_color,
+        split_top_color=color,
+        split_bottom_color=end_color,
+    )
+
+
+@dataclass
+class KaraokeColorState:
+    """Colors for one karaoke state: before singing or after singing."""
+
+    text: PaintFill = field(default_factory=lambda: _paint_fill("#FFFFFF"))
+    stroke: PaintFill = field(default_factory=lambda: _paint_fill("#222222"))
+    stroke2: PaintFill = field(default_factory=lambda: _paint_fill("#000000"))
+    shadow: PaintFill = field(default_factory=lambda: _paint_fill("#000000"))
+
+
+@dataclass
+class KaraokeColors:
+    """NicoKara-style color matrix: before/after x visual layers."""
+
+    before: KaraokeColorState = field(
+        default_factory=lambda: KaraokeColorState(
+            text=_paint_fill("#FFFFFF"),
+            stroke=_paint_fill("#222222"),
+            stroke2=_paint_fill("#000000"),
+            shadow=_paint_fill("#000000"),
+        )
+    )
+    after: KaraokeColorState = field(
+        default_factory=lambda: KaraokeColorState(
+            text=_paint_fill("#FF5A6F"),
+            stroke=_paint_fill("#222222"),
+            stroke2=_paint_fill("#000000"),
+            shadow=_paint_fill("#000000"),
+        )
+    )
 
 
 @dataclass
@@ -154,14 +223,22 @@ class SubtitleStyleScheme:
     italic: Optional[bool] = None
     base_color: Optional[str] = None
     fill_color: Optional[str] = None
+    fill_gradient_enabled: Optional[bool] = None
+    fill_gradient_start_color: Optional[str] = None
+    fill_gradient_end_color: Optional[str] = None
+    fill_gradient_angle_deg: Optional[int] = None
     stroke_color: Optional[str] = None
     stroke_width_px: Optional[int] = None
+    stroke2_width_px: Optional[int] = None
+    decoration_kind: Optional[DecorationKind] = None
+    glow_radius_px: Optional[int] = None
     shadow_color: Optional[str] = None
     shadow_offset_x: Optional[int] = None
     shadow_offset_y: Optional[int] = None
     ruby_font_size_px: Optional[int] = None
     ruby_color: Optional[str] = None
     ruby_gap_px: Optional[int] = None
+    karaoke_colors: Optional[KaraokeColors] = None
 
 
 @dataclass
@@ -183,14 +260,22 @@ class Style:
     """未唱状态填充色（底色）。"""
 
     fill_color: str = "#FF5A6F"
+    fill_gradient_enabled: bool = False
+    fill_gradient_start_color: str = "#FF5A6F"
+    fill_gradient_end_color: str = "#0055FF"
+    fill_gradient_angle_deg: int = 0
     """已唱状态填充色。默认取工作台主色。"""
 
     stroke_color: str = "#222222"
     stroke_width_px: int = 9
+    stroke2_width_px: int = 0
 
+    decoration_kind: DecorationKind = "shadow"
+    glow_radius_px: int = 10
     shadow_color: str = "#000000"
     shadow_offset_x: int = 0
     shadow_offset_y: int = 1
+    karaoke_colors: Optional[KaraokeColors] = None
 
     singer_style_overrides: dict[int, SubtitleStyleScheme] = field(default_factory=dict)
     """B2：按歌手自动套用的字幕 tab 方案。不覆盖位置、时间或布局。"""

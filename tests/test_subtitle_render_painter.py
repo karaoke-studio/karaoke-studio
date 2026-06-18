@@ -26,6 +26,9 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
 )
 from krok_helper.subtitle_render.engine.timeline import DisplayLine  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
+    KaraokeColors,
+    KaraokeColorState,
+    PaintFill,
     RubyAnnotation,
     SubtitleStyleScheme,
     Style,
@@ -166,6 +169,26 @@ def test_paint_frame_progress_changes_between_timestamps(qapp):
     assert _pixel_hash(img1) != _pixel_hash(img2)
 
 
+def test_paint_frame_fill_gradient_changes_rendered_frame(qapp):
+    img_solid = _blank()
+    img_gradient = _blank()
+    track = _track()
+    solid = Style(fill_color="#FF5A6F", line_y_position="center")
+    gradient = Style(
+        fill_color="#FF5A6F",
+        fill_gradient_enabled=True,
+        fill_gradient_start_color="#FF5A6F",
+        fill_gradient_end_color="#0055FF",
+        fill_gradient_angle_deg=0,
+        line_y_position="center",
+    )
+
+    paint_frame(img_solid, track, 2400, solid)
+    paint_frame(img_gradient, track, 2400, gradient)
+
+    assert _pixel_hash(img_solid) != _pixel_hash(img_gradient)
+
+
 def test_paint_frame_applies_singer_style_scheme(qapp):
     img_global = _blank()
     img_singer = _blank()
@@ -190,6 +213,110 @@ def test_paint_frame_applies_singer_style_scheme(qapp):
     paint_frame(img_singer, track, 1700, style_singer)
 
     assert _pixel_hash(img_global) != _pixel_hash(img_singer)
+
+
+def test_paint_frame_applies_singer_gradient_scheme(qapp):
+    img_global = _blank()
+    img_singer = _blank()
+    track = _track()
+    track.lines[0].singer_id = 1
+    style = Style(
+        fill_color="#FF5A6F",
+        line_y_position="center",
+        singer_style_overrides={
+            1: SubtitleStyleScheme(
+                fill_color="#FF5A6F",
+                fill_gradient_enabled=True,
+                fill_gradient_start_color="#FF5A6F",
+                fill_gradient_end_color="#0055FF",
+                fill_gradient_angle_deg=0,
+            )
+        },
+    )
+
+    paint_frame(img_global, track, 2400, Style(fill_color="#FF5A6F", line_y_position="center"))
+    paint_frame(img_singer, track, 2400, style)
+
+    assert _pixel_hash(img_global) != _pixel_hash(img_singer)
+
+
+def test_paint_frame_glow_decoration_changes_rendered_frame(qapp):
+    img_plain = _blank()
+    img_glow = _blank()
+    orange = PaintFill(
+        mode="solid",
+        color="#FF8A00",
+        start_color="#FF8A00",
+        end_color="#FF8A00",
+        split_top_color="#FF8A00",
+        split_bottom_color="#FF8A00",
+    )
+    colors = KaraokeColors(
+        before=KaraokeColorState(
+            text=PaintFill(color="#FFFFFF"),
+            stroke=PaintFill(color="#222222"),
+            shadow=orange,
+        ),
+        after=KaraokeColorState(
+            text=PaintFill(color="#FFFFFF"),
+            stroke=PaintFill(color="#222222"),
+            shadow=orange,
+        ),
+    )
+    plain = Style(
+        fill_color="#FFFFFF",
+        base_color="#FFFFFF",
+        stroke_color="#222222",
+        shadow_color="",
+        line_y_position="center",
+    )
+    glow = Style(
+        fill_color="#FFFFFF",
+        base_color="#FFFFFF",
+        stroke_color="#222222",
+        decoration_kind="glow",
+        karaoke_colors=colors,
+        line_y_position="center",
+    )
+
+    paint_frame(img_plain, _track(), 2400, plain)
+    paint_frame(img_glow, _track(), 2400, glow)
+
+    assert _pixel_hash(img_plain) != _pixel_hash(img_glow)
+
+
+def test_paint_frame_glow_radius_changes_rendered_frame(qapp):
+    img_small = _blank()
+    img_large = _blank()
+    orange = PaintFill(
+        mode="solid",
+        color="#FF8A00",
+        start_color="#FF8A00",
+        end_color="#FF8A00",
+        split_top_color="#FF8A00",
+        split_bottom_color="#FF8A00",
+    )
+    colors = KaraokeColors(
+        before=KaraokeColorState(shadow=orange),
+        after=KaraokeColorState(shadow=orange),
+    )
+    small = Style(
+        decoration_kind="glow",
+        glow_radius_px=4,
+        karaoke_colors=colors,
+        line_y_position="center",
+    )
+    large = Style(
+        decoration_kind="glow",
+        glow_radius_px=28,
+        karaoke_colors=colors,
+        line_y_position="center",
+    )
+
+    paint_frame(img_small, _track(), 2400, small)
+    paint_frame(img_large, _track(), 2400, large)
+
+    assert _pixel_hash(img_small) != _pixel_hash(img_large)
 
 
 def test_paint_frame_default_dual_line_layout_renders_next_line(qapp):
