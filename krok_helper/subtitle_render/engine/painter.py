@@ -63,6 +63,7 @@ from PyQt6.QtGui import (
 _BEFORE_LAYER_CACHE_MAX = 64
 _BEFORE_LAYER_CACHE: "OrderedDict[tuple, tuple[QImage, int, int]]" = OrderedDict()
 _BEFORE_LAYER_LOCK = Lock()
+_RUBY_COMBINING_CHARS = set("ぁぃぅぇぉゃゅょゎァィゥェォャュョヮ\u3099\u309A")
 
 
 @dataclass(frozen=True)
@@ -228,6 +229,22 @@ def _clamp_weight(w: int) -> QFont.Weight:
     return QFont.Weight.Black
 
 
+def _visual_text_padding(style: Style) -> int:
+    return _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px)
+
+
+def _visual_stroke_extent(stroke_width: int, stroke2_width: int) -> int:
+    return max(stroke_width, 0) + max(stroke2_width, 0)
+
+
+def _stroke_pen_width(stroke_width: int) -> int:
+    return max(stroke_width, 0) * 2
+
+
+def _stroke2_pen_width(stroke_width: int, stroke2_width: int) -> int:
+    return _visual_stroke_extent(stroke_width, stroke2_width) * 2
+
+
 def _resolve_baseline_y(
     metrics: QFontMetrics,
     img_h: int,
@@ -236,16 +253,17 @@ def _resolve_baseline_y(
 ) -> int:
     pos = style.line_y_position
     margin = max(style.line_y_margin_px, 0)
+    pad = _visual_text_padding(style)
     ruby_extra = 0
     if ruby_metrics is not None:
         ruby_extra = max(style.ruby_gap_px, 0) + ruby_metrics.height()
     if pos == "top":
-        return margin + ruby_extra + metrics.ascent()
+        return margin + ruby_extra + pad + metrics.ascent()
     if pos == "center":
-        block_h = metrics.height() + ruby_extra
-        return (img_h - block_h) // 2 + ruby_extra + metrics.ascent()
+        block_h = metrics.height() + ruby_extra + pad * 2
+        return (img_h - block_h) // 2 + ruby_extra + pad + metrics.ascent()
     # bottom（默认）
-    return img_h - margin - metrics.descent()
+    return img_h - margin - pad - metrics.descent()
 
 
 def _fixed_line_geometry(style: Style) -> tuple[int, int, int, int]:
@@ -253,8 +271,9 @@ def _fixed_line_geometry(style: Style) -> tuple[int, int, int, int]:
     metrics = QFontMetrics(font)
     ruby_metrics = QFontMetrics(_build_ruby_font(style))
     ruby_extra = max(style.ruby_gap_px, 0) + ruby_metrics.height()
-    main_h = metrics.ascent() + metrics.descent()
-    return main_h, metrics.ascent(), metrics.descent(), ruby_extra
+    pad = _visual_text_padding(style)
+    main_h = metrics.ascent() + metrics.descent() + pad * 2
+    return main_h, metrics.ascent() + pad, metrics.descent() + pad, ruby_extra
 
 
 def _resolve_display_baselines(
@@ -318,7 +337,8 @@ def _paint_line(
     # 整行宽度 → 水平居中起点
     char_widths = [metrics.horizontalAdvance(c.text) for c in line.chars]
     total_w = sum(char_widths)
-    x0 = _resolve_line_x(img_w, total_w, style, lane)
+    visual_pad = _visual_text_padding(style)
+    x0 = _resolve_line_x(img_w, total_w + visual_pad * 2, style, lane) + visual_pad
     y = (
         baseline_y
         if baseline_y is not None
@@ -413,7 +433,7 @@ def _paint_line(
             line_path,
             colors.after.stroke2,
             line_rect,
-            style.stroke2_width_px,
+            _stroke2_pen_width(style.stroke_width_px, style.stroke2_width_px),
             fill_segments,
             y,
             metrics,
@@ -426,7 +446,7 @@ def _paint_line(
             line_path,
             colors.after.stroke,
             line_rect,
-            style.stroke_width_px,
+            _stroke_pen_width(style.stroke_width_px),
             fill_segments,
             y,
             metrics,
@@ -557,7 +577,7 @@ def _paint_after_glow_path(
         clip = QRectF(
             float(fill_start - width),
             float(y - metrics.ascent() - width),
-            float((fill_end - fill_start) + width * 2),
+            float((fill_end - fill_start) + width),
             float(metrics.height() + width * 2),
         )
         painter.setClipRect(clip)
@@ -586,13 +606,14 @@ def _paint_after_path(
         return
     if fill_end <= fill_start:
         return
+    stroke_pad = 0 if stroke_width is None else math.ceil(stroke_width / 2)
     painter.save()
     try:
         clip = QRectF(
-            float(fill_start),
-            float(y - metrics.ascent()),
-            float(fill_end - fill_start),
-            float(metrics.height()),
+            float(fill_start - stroke_pad),
+            float(y - metrics.ascent() - stroke_pad),
+            float((fill_end - fill_start) + stroke_pad),
+            float(metrics.height() + stroke_pad * 2),
         )
         painter.setClipRect(clip)
         if stroke_width is None:
@@ -766,8 +787,8 @@ def _linear_gradient_brush(fill: PaintFill, rect: QRectF, angle_deg: int) -> QBr
     end = QPointF(center.x() + dx * half, center.y() + dy * half)
 
     gradient = QLinearGradient(start, end)
-    gradient.setColorAt(0.0, _valid_color(fill.start_color, fill.color))
-    gradient.setColorAt(1.0, _valid_color(fill.end_color, fill.color))
+    for position, color in _gradient_stops(fill):
+        gradient.setColorAt(position / 100.0, _valid_color(color, fill.color))
     return QBrush(gradient)
 
 
@@ -799,6 +820,7 @@ def _fill_signature(fill: PaintFill) -> tuple:
         fill.color,
         fill.start_color,
         fill.end_color,
+        tuple(_gradient_stops(fill)),
         fill.split_top_color,
         fill.split_bottom_color,
         fill.split_position_pct,
@@ -888,7 +910,8 @@ def _build_before_layer(
     text_h = metrics.height()
 
     # padding：要把阴影偏移 / 描边宽度 / glow 半径都留出余量，免得轮廓被裁
-    stroke_max = max(style.stroke_width_px, style.stroke2_width_px)
+    stroke_extent = _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px)
+    stroke_max = stroke_extent
     glow_extra = style.glow_radius_px * 4 if style.decoration_kind == "glow" else 0
     extent = max(stroke_max, glow_extra, 0) + 4  # +4 安全边
 
@@ -939,11 +962,23 @@ def _build_before_layer(
 
         # 2) stroke2（双描边外层）
         if style.stroke2_width_px > 0:
-            _paint_stroke_path(p, local_line_path, colors.before.stroke2, local_line_rect, style.stroke2_width_px)
+            _paint_stroke_path(
+                p,
+                local_line_path,
+                colors.before.stroke2,
+                local_line_rect,
+                _stroke2_pen_width(style.stroke_width_px, style.stroke2_width_px),
+            )
 
         # 3) stroke（主描边）
         if style.stroke_color and style.stroke_width_px > 0:
-            _paint_stroke_path(p, local_line_path, colors.before.stroke, local_line_rect, style.stroke_width_px)
+            _paint_stroke_path(
+                p,
+                local_line_path,
+                colors.before.stroke,
+                local_line_rect,
+                _stroke_pen_width(style.stroke_width_px),
+            )
 
         # 4) 底色文字（未唱状态主体颜色）
         _paint_fill_path(p, local_line_path, colors.before.text, local_line_rect)
@@ -984,6 +1019,10 @@ def _legacy_after_text_fill(style: Style) -> PaintFill:
         color=style.fill_color,
         start_color=style.fill_gradient_start_color,
         end_color=style.fill_gradient_end_color,
+        gradient_stops=[
+            (0, style.fill_gradient_start_color),
+            (100, style.fill_gradient_end_color),
+        ],
         split_top_color=style.fill_gradient_start_color,
         split_bottom_color=style.fill_gradient_end_color,
     )
@@ -995,9 +1034,23 @@ def _solid_fill(color: str) -> PaintFill:
         color=color,
         start_color=color,
         end_color=color,
+        gradient_stops=[(0, color), (100, color)],
         split_top_color=color,
         split_bottom_color=color,
     )
+
+
+def _gradient_stops(fill: PaintFill) -> list[tuple[int, str]]:
+    raw = fill.gradient_stops or [(0, fill.start_color), (100, fill.end_color)]
+    normalized: dict[int, str] = {}
+    for position, color in raw:
+        pos = max(0, min(100, int(position)))
+        normalized[pos] = color
+    if 0 not in normalized:
+        normalized[0] = fill.start_color
+    if 100 not in normalized:
+        normalized[100] = fill.end_color
+    return sorted(normalized.items())
 
 
 def _valid_color(value: str, fallback: str) -> QColor:
@@ -1199,14 +1252,15 @@ def _paint_ruby_karaoke_path(
     if ratio <= 0.0:
         return
 
-    pad = max(stroke_width, stroke2_width, glow_radius * 2, abs(shadow_dx), abs(shadow_dy), 2)
+    stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
+    pad = max(stroke_extent, glow_radius * 2, abs(shadow_dx), abs(shadow_dy), 2)
     painter.save()
     try:
         painter.setClipRect(
             QRectF(
                 rect.left() - pad,
                 rect.top() - pad,
-                rect.width() * min(ratio, 1.0) + pad * 2,
+                rect.width() * min(ratio, 1.0) + pad,
                 rect.height() + pad * 2,
             )
         )
@@ -1251,9 +1305,21 @@ def _paint_text_layer_stack(
         )
 
     if stroke2_width > 0:
-        _paint_stroke_path(painter, path, colors.stroke2, rect, stroke2_width)
+        _paint_stroke_path(
+            painter,
+            path,
+            colors.stroke2,
+            rect,
+            _stroke2_pen_width(stroke_width, stroke2_width),
+        )
     if stroke_width > 0:
-        _paint_stroke_path(painter, path, colors.stroke, rect, stroke_width)
+        _paint_stroke_path(
+            painter,
+            path,
+            colors.stroke,
+            rect,
+            _stroke_pen_width(stroke_width),
+        )
     _paint_fill_path(painter, path, colors.text, rect)
 
 
@@ -1309,26 +1375,40 @@ def _ruby_progress_ratio(ruby: RubyAnnotation, t_ms: int) -> float:
 
 
 def _ruby_reading_intervals(ruby: RubyAnnotation) -> list[tuple[int, int]]:
-    chars = list(ruby.reading)
+    units = _ruby_reading_units(ruby.reading)
     result: list[tuple[int, int]] = []
-    for index, _ch in enumerate(chars):
-        start = (
-            ruby.pos_start_ms
-            if index == 0
-            else ruby.pos_start_ms + _safe_ruby_part_ms(ruby, index - 1)
-        )
-        end = (
-            ruby.pos_start_ms + _safe_ruby_part_ms(ruby, index)
-            if index < len(ruby.reading_part_ms)
-            else ruby.pos_end_ms
-        )
+    boundaries = _ruby_reading_boundaries(ruby, len(units))
+    for index, _unit in enumerate(units):
+        start = boundaries[index]
+        end = boundaries[index + 1]
         if end < start:
             end = start
         result.append((start, end))
     return result
 
 
-def _safe_ruby_part_ms(ruby: RubyAnnotation, index: int) -> int:
-    if 0 <= index < len(ruby.reading_part_ms):
-        return ruby.reading_part_ms[index]
-    return ruby.pos_end_ms
+def _ruby_reading_units(reading: str) -> list[str]:
+    units: list[str] = []
+    for ch in reading:
+        if units and ch in _RUBY_COMBINING_CHARS:
+            units[-1] += ch
+        else:
+            units.append(ch)
+    return units
+
+
+def _ruby_reading_boundaries(ruby: RubyAnnotation, unit_count: int) -> list[int]:
+    if unit_count <= 0:
+        return [ruby.pos_start_ms, ruby.pos_end_ms]
+    boundaries = [ruby.pos_start_ms]
+    for rel_ms in ruby.reading_part_ms[: max(unit_count - 1, 0)]:
+        ts = ruby.pos_start_ms + rel_ms
+        ts = max(boundaries[-1], min(ruby.pos_end_ms, ts))
+        boundaries.append(ts)
+    if len(boundaries) < unit_count:
+        start = boundaries[-1]
+        remaining = unit_count - len(boundaries) + 1
+        for step in range(1, remaining):
+            boundaries.append(start + round((ruby.pos_end_ms - start) * step / remaining))
+    boundaries.append(max(boundaries[-1], ruby.pos_end_ms))
+    return boundaries

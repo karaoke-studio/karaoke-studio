@@ -11,8 +11,8 @@ from copy import deepcopy
 from dataclasses import replace
 from typing import Optional
 
-from PyQt6.QtCore import Qt, pyqtSignal as Signal
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal as Signal
+from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPolygonF
 from PyQt6.QtWidgets import (
     QCheckBox,
     QColorDialog,
@@ -146,6 +146,239 @@ class ColorButton(QPushButton):
         )
 
 
+class GradientStopsEditor(QWidget):
+    """Compact gradient stop editor for horizontal/vertical PaintFill gradients."""
+
+    stopsChanged = Signal(list)
+    selectedChanged = Signal(int)
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._stops: list[tuple[int, str]] = [(0, "#FFFFFF"), (100, "#FF5A6F")]
+        self._selected = 0
+        self._orientation = "horizontal"
+        self._dragging = False
+        self.setMinimumHeight(92)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        height = 198 if self._orientation == "vertical" else 94
+        return QSize(220, height)
+
+    @property
+    def selected_index(self) -> int:
+        return self._selected
+
+    @property
+    def selected_stop(self) -> tuple[int, str]:
+        return self._stops[self._selected]
+
+    def set_orientation(self, mode: str) -> None:
+        orientation = "vertical" if mode == "gradient_vertical" else "horizontal"
+        if orientation == self._orientation:
+            return
+        self._orientation = orientation
+        self.setMinimumHeight(190 if orientation == "vertical" else 92)
+        self.updateGeometry()
+        self.update()
+
+    def set_stops(self, stops: list[tuple[int, str]]) -> None:
+        selected_position = self._stops[self._selected][0] if self._stops else 0
+        self._stops = _normalize_gradient_stops(stops)
+        self._selected = min(
+            range(len(self._stops)),
+            key=lambda index: abs(self._stops[index][0] - selected_position),
+        )
+        self.update()
+        self.selectedChanged.emit(self._selected)
+
+    def set_selected_color(self, color: str) -> None:
+        position, old = self._stops[self._selected]
+        normalized = _normalize_hex(color, old)
+        self._stops[self._selected] = (position, normalized)
+        self._emit_stops_changed()
+
+    def set_selected_position(self, position: int) -> None:
+        self._move_selected_stop(position)
+
+    def add_stop(self, position: int, color: Optional[str] = None) -> None:
+        pos = max(0, min(100, int(position)))
+        color = _normalize_hex(color or self._interpolated_color(pos))
+        self._stops.append((pos, color))
+        self._stops = _normalize_gradient_stops(self._stops)
+        self._selected = self._index_for_position(pos)
+        self._emit_stops_changed()
+
+    def delete_selected_stop(self) -> None:
+        if len(self._stops) <= 2:
+            return
+        position, _color = self._stops[self._selected]
+        if position in {0, 100}:
+            return
+        del self._stops[self._selected]
+        self._selected = max(0, min(self._selected, len(self._stops) - 1))
+        self._emit_stops_changed()
+
+    def paintEvent(self, event) -> None:  # noqa: N802, ARG002
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            rect = self._bar_rect()
+            gradient = (
+                QLinearGradient(rect.left(), rect.top(), rect.right(), rect.top())
+                if self._orientation == "horizontal"
+                else QLinearGradient(rect.left(), rect.top(), rect.left(), rect.bottom())
+            )
+            for position, color in self._stops:
+                gradient.setColorAt(position / 100.0, QColor(color))
+            painter.setPen(QColor(palette().card_border))
+            painter.setBrush(gradient)
+            painter.drawRoundedRect(rect, 4, 4)
+
+            rail = self._rail_rect()
+            painter.setPen(QColor(palette().card_border))
+            painter.drawRoundedRect(rail, 3, 3)
+            for index, (position, color) in enumerate(self._stops):
+                center = self._marker_center(position)
+                selected = index == self._selected
+                painter.setBrush(QColor(color))
+                painter.setPen(QColor("#0B84FF" if selected else palette().card_bg))
+                points = [
+                    QPointF(center.x(), center.y() - 8),
+                    QPointF(center.x() + 8, center.y()),
+                    QPointF(center.x(), center.y() + 8),
+                    QPointF(center.x() - 8, center.y()),
+                ]
+                painter.drawPolygon(QPolygonF(points))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QColor("#0B84FF" if selected else palette().card_border))
+                painter.drawPolygon(QPolygonF(points))
+        finally:
+            painter.end()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        pos = self._position_from_point(event.position())
+        nearest = self._nearest_marker_index(event.position())
+        self._dragging = False
+        hit_rect = self._bar_rect().adjusted(-8, -8, 8, 8).united(
+            self._rail_rect().adjusted(-10, -10, 10, 10)
+        )
+        if nearest is not None:
+            self._selected = nearest
+            self.selectedChanged.emit(self._selected)
+            self.update()
+            self._dragging = True
+        elif hit_rect.contains(event.position()):
+            self.add_stop(pos)
+            self._dragging = True
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if not self._dragging:
+            return
+        self._move_selected_stop(self._position_from_point(event.position()))
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802, ARG002
+        self._dragging = False
+
+    def _bar_rect(self) -> QRectF:
+        if self._orientation == "horizontal":
+            return QRectF(8, 12, max(self.width() - 16, 1), 30)
+        return QRectF(12, 8, 72, max(self.height() - 16, 1))
+
+    def _rail_rect(self) -> QRectF:
+        if self._orientation == "horizontal":
+            return QRectF(8, 56, max(self.width() - 16, 1), 14)
+        return QRectF(102, 8, 14, max(self.height() - 16, 1))
+
+    def _marker_center(self, position: int) -> QPointF:
+        pos = max(0.0, min(1.0, position / 100.0))
+        if self._orientation == "horizontal":
+            rail = self._rail_rect()
+            return QPointF(rail.left() + rail.width() * pos, rail.center().y())
+        rail = self._rail_rect()
+        return QPointF(rail.center().x(), rail.top() + rail.height() * pos)
+
+    def _position_from_point(self, point: QPointF) -> int:
+        if self._orientation == "horizontal":
+            rect = self._bar_rect()
+            ratio = (point.x() - rect.left()) / max(rect.width(), 1.0)
+        else:
+            rect = self._bar_rect()
+            ratio = (point.y() - rect.top()) / max(rect.height(), 1.0)
+        return max(0, min(100, int(round(ratio * 100))))
+
+    def _nearest_stop_index(self, position: int) -> Optional[int]:
+        if not self._stops:
+            return None
+        return min(range(len(self._stops)), key=lambda index: abs(self._stops[index][0] - position))
+
+    def _nearest_marker_index(self, point: QPointF) -> Optional[int]:
+        if not self._stops:
+            return None
+        nearest = min(
+            range(len(self._stops)),
+            key=lambda index: (
+                self._marker_center(self._stops[index][0]).x() - point.x()
+            )
+            ** 2
+            + (
+                self._marker_center(self._stops[index][0]).y() - point.y()
+            )
+            ** 2,
+        )
+        center = self._marker_center(self._stops[nearest][0])
+        distance_sq = (center.x() - point.x()) ** 2 + (center.y() - point.y()) ** 2
+        return nearest if distance_sq <= 16**2 else None
+
+    def _index_for_position(self, position: int) -> int:
+        return min(range(len(self._stops)), key=lambda index: abs(self._stops[index][0] - position))
+
+    def _move_selected_stop(self, position: int) -> None:
+        old_position, color = self._stops[self._selected]
+        pos = max(0, min(100, int(position)))
+        if old_position in {0, 100}:
+            if pos == old_position:
+                return
+            self._stops.append((pos, color))
+        else:
+            self._stops[self._selected] = (pos, color)
+        self._stops = _normalize_gradient_stops(self._stops)
+        self._selected = self._index_for_position(pos)
+        self._emit_stops_changed()
+
+    def _interpolated_color(self, position: int) -> str:
+        stops = _normalize_gradient_stops(self._stops)
+        pos = max(0, min(100, int(position)))
+        left = stops[0]
+        right = stops[-1]
+        for index, stop in enumerate(stops):
+            if stop[0] <= pos:
+                left = stop
+            if stop[0] >= pos:
+                right = stop
+                break
+            if index == len(stops) - 1:
+                right = stop
+        if left[0] == right[0]:
+            return left[1]
+        ratio = (pos - left[0]) / max(right[0] - left[0], 1)
+        a = QColor(left[1])
+        b = QColor(right[1])
+        return QColor(
+            round(a.red() + (b.red() - a.red()) * ratio),
+            round(a.green() + (b.green() - a.green()) * ratio),
+            round(a.blue() + (b.blue() - a.blue()) * ratio),
+        ).name(QColor.NameFormat.HexRgb).upper()
+
+    def _emit_stops_changed(self) -> None:
+        self.update()
+        self.selectedChanged.emit(self._selected)
+        self.stopsChanged.emit(list(self._stops))
+
+
 class _WheelFocusedSpinBox(QSpinBox):
     """Only adjust by wheel after the control has explicit focus."""
 
@@ -187,6 +420,18 @@ class _WheelFocusedFontComboBox(QFontComboBox):
             event.ignore()
             return
         super().wheelEvent(event)
+
+
+class _DynamicStackedWidget(QStackedWidget):
+    """Use the current page height instead of the tallest page height."""
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        widget = self.currentWidget()
+        return widget.sizeHint() if widget is not None else super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        widget = self.currentWidget()
+        return widget.minimumSizeHint() if widget is not None else super().minimumSizeHint()
 
 
 class PropertyPanel(QTabWidget):
@@ -448,7 +693,7 @@ class PropertyPanel(QTabWidget):
         self._decoration_type_field = _field("装饰类型", self._decoration_type_combo)
         layout.addWidget(self._decoration_type_field)
 
-        self._fill_editor_stack = QStackedWidget(section)
+        self._fill_editor_stack = _DynamicStackedWidget(section)
         self._fill_editor_stack.addWidget(self._make_solid_fill_page())
         self._fill_editor_stack.addWidget(self._make_gradient_fill_page())
         self._fill_editor_stack.addWidget(self._make_split_fill_page())
@@ -515,8 +760,29 @@ class PropertyPanel(QTabWidget):
         layout.setVerticalSpacing(8)
         self._paint_gradient_start_btn = self._paint_color_button("start_color", "#FFFFFF")
         self._paint_gradient_end_btn = self._paint_color_button("end_color", "#FF5A6F")
-        layout.addWidget(_field("起色", self._paint_gradient_start_btn), 0, 0)
-        layout.addWidget(_field("止色", self._paint_gradient_end_btn), 0, 1)
+        self._paint_gradient_start_btn.hide()
+        self._paint_gradient_end_btn.hide()
+        self._gradient_editor = GradientStopsEditor(page)
+        self._gradient_editor.stopsChanged.connect(self._update_gradient_stops)
+        self._gradient_editor.selectedChanged.connect(
+            lambda _index: self._sync_gradient_stop_controls()
+        )
+        layout.addWidget(_field("渐变条", self._gradient_editor), 0, 0, 1, 2)
+
+        self._gradient_stop_color_btn = ColorButton("#FFFFFF", page)
+        self._gradient_stop_color_btn.clicked.connect(self._choose_gradient_stop_color)
+        self._gradient_stop_position_spin = _spin(0, 100, suffix=" %")
+        self._gradient_stop_position_spin.valueChanged.connect(
+            self._set_gradient_stop_position
+        )
+        self._gradient_stop_delete_btn = QPushButton("删除关键点", page)
+        self._gradient_stop_delete_btn.setMinimumHeight(30)
+        self._gradient_stop_delete_btn.clicked.connect(
+            self._gradient_editor.delete_selected_stop
+        )
+        layout.addWidget(_field("关键点颜色", self._gradient_stop_color_btn), 1, 0)
+        layout.addWidget(_field("关键点位置", self._gradient_stop_position_spin), 1, 1)
+        layout.addWidget(self._gradient_stop_delete_btn, 2, 0, 1, 2)
         layout.setColumnStretch(0, 1)
         layout.setColumnStretch(1, 1)
         return page
@@ -778,9 +1044,13 @@ class PropertyPanel(QTabWidget):
             mode_index = max(0, self._fill_mode_combo.findData(fill.mode))
             self._fill_mode_combo.setCurrentIndex(mode_index)
             self._fill_editor_stack.setCurrentIndex(_fill_stack_index(fill.mode))
+            self._fill_editor_stack.updateGeometry()
             self._paint_solid_btn.set_color(fill.color)
             self._paint_gradient_start_btn.set_color(fill.start_color)
             self._paint_gradient_end_btn.set_color(fill.end_color)
+            self._gradient_editor.set_orientation(fill.mode)
+            self._gradient_editor.set_stops(_gradient_stops(fill))
+            self._sync_gradient_stop_controls()
             self._paint_split_top_btn.set_color(fill.split_top_color)
             self._paint_split_bottom_btn.set_color(fill.split_bottom_color)
             self._paint_split_position_spin.setValue(fill.split_position_pct)
@@ -808,18 +1078,57 @@ class PropertyPanel(QTabWidget):
         state_key = self._current_color_state_key()
         layer_key = self._current_color_layer_key()
         state = deepcopy(getattr(colors, state_key))
-        fill = replace(getattr(state, layer_key), **changes)
+        fill = _replace_fill(getattr(state, layer_key), **changes)
         if "color" in changes:
-            fill = replace(
+            fill = _replace_fill(
                 fill,
                 start_color=changes["color"],
                 end_color=changes["color"],
+                gradient_stops=[(0, changes["color"]), (100, changes["color"])],
                 split_top_color=changes["color"],
                 split_bottom_color=changes["color"],
             )
         state = replace(state, **{layer_key: fill})
         colors = replace(colors, **{state_key: state})
         self._update_style(karaoke_colors=colors)
+
+    def _update_gradient_stops(self, stops: list[tuple[int, str]]) -> None:
+        if self._syncing:
+            return
+        normalized = _normalize_gradient_stops(stops)
+        self._update_current_fill(
+            gradient_stops=normalized,
+            start_color=normalized[0][1],
+            end_color=normalized[-1][1],
+        )
+
+    def _sync_gradient_stop_controls(self) -> None:
+        if not hasattr(self, "_gradient_stop_color_btn"):
+            return
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            position, color = self._gradient_editor.selected_stop
+            self._gradient_stop_color_btn.set_color(color)
+            self._gradient_stop_position_spin.setValue(position)
+            self._gradient_stop_delete_btn.setEnabled(
+                len(_gradient_stops(self._current_paint_fill())) > 2
+                and position not in {0, 100}
+            )
+        finally:
+            self._syncing = was_syncing
+
+    def _choose_gradient_stop_color(self) -> None:
+        current = QColor(self._gradient_editor.selected_stop[1])
+        color = QColorDialog.getColor(current, self, "Select gradient stop color")
+        if color.isValid():
+            normalized = color.name(QColor.NameFormat.HexRgb).upper()
+            self._gradient_editor.set_selected_color(normalized)
+
+    def _set_gradient_stop_position(self, value: int) -> None:
+        if self._syncing:
+            return
+        self._gradient_editor.set_selected_position(value)
 
     def _refresh_scheme_combo(self, selected_key: Optional[str] = None) -> None:
         self._singer_combo.clear()
@@ -1003,6 +1312,42 @@ def _fill_stack_index(mode: str) -> int:
     return 0
 
 
+def _normalize_gradient_stops(stops: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    normalized: dict[int, str] = {}
+    for position, color in stops:
+        pos = max(0, min(100, int(position)))
+        normalized[pos] = _normalize_hex(str(color), "#FFFFFF")
+    if 0 not in normalized:
+        first = next(iter(normalized.values()), "#FFFFFF")
+        normalized[0] = first
+    if 100 not in normalized:
+        last = next(reversed(normalized.values()), normalized[0])
+        normalized[100] = last
+    return sorted(normalized.items())
+
+
+def _gradient_stops(fill: PaintFill) -> list[tuple[int, str]]:
+    if fill.gradient_stops:
+        return _normalize_gradient_stops(fill.gradient_stops)
+    return _normalize_gradient_stops([(0, fill.start_color), (100, fill.end_color)])
+
+
+def _replace_fill(fill: PaintFill, **changes) -> PaintFill:
+    if "start_color" in changes or "end_color" in changes:
+        stops = _gradient_stops(fill)
+        if "start_color" in changes:
+            stops = [(0, changes["start_color"])] + [(p, c) for p, c in stops if p != 0]
+        if "end_color" in changes:
+            stops = [(p, c) for p, c in stops if p != 100] + [(100, changes["end_color"])]
+        changes.setdefault("gradient_stops", _normalize_gradient_stops(stops))
+    if "gradient_stops" in changes:
+        stops = _normalize_gradient_stops(changes["gradient_stops"])
+        changes["gradient_stops"] = stops
+        changes.setdefault("start_color", stops[0][1])
+        changes.setdefault("end_color", stops[-1][1])
+    return replace(fill, **changes)
+
+
 def _legacy_colors_from_panel(panel: PropertyPanel) -> KaraokeColors:
     before = KaraokeColorState(
         text=_solid_fill(str(panel._scheme_value("base_color"))),
@@ -1033,6 +1378,10 @@ def _legacy_after_text_fill(panel: PropertyPanel) -> PaintFill:
         color=fill_color,
         start_color=str(panel._scheme_value("fill_gradient_start_color")),
         end_color=str(panel._scheme_value("fill_gradient_end_color")),
+        gradient_stops=[
+            (0, str(panel._scheme_value("fill_gradient_start_color"))),
+            (100, str(panel._scheme_value("fill_gradient_end_color"))),
+        ],
         split_top_color=str(panel._scheme_value("fill_gradient_start_color")),
         split_bottom_color=str(panel._scheme_value("fill_gradient_end_color")),
     )
@@ -1046,13 +1395,21 @@ def _apply_legacy_color_to_matrix(
         colors.before.text = _solid_fill(color)
         return colors
     if field_name == "fill_color":
-        colors.after.text = replace(colors.after.text, color=color)
+        colors.after.text = _replace_fill(colors.after.text, color=color)
         return colors
     if field_name == "fill_gradient_start_color":
-        colors.after.text = replace(colors.after.text, start_color=color, split_top_color=color)
+        colors.after.text = _replace_fill(
+            colors.after.text,
+            start_color=color,
+            split_top_color=color,
+        )
         return colors
     if field_name == "fill_gradient_end_color":
-        colors.after.text = replace(colors.after.text, end_color=color, split_bottom_color=color)
+        colors.after.text = _replace_fill(
+            colors.after.text,
+            end_color=color,
+            split_bottom_color=color,
+        )
         return colors
     if field_name == "stroke_color":
         colors.before.stroke = _solid_fill(color)
@@ -1071,6 +1428,7 @@ def _solid_fill(color: str) -> PaintFill:
         color=color,
         start_color=color,
         end_color=color,
+        gradient_stops=[(0, color), (100, color)],
         split_top_color=color,
         split_bottom_color=color,
     )
@@ -1100,6 +1458,7 @@ def _scheme_from_style(style: Style, singer_id: int) -> SubtitleStyleScheme:
             colors.after.text,
             color=fill,
             start_color=fill,
+            gradient_stops=[(0, fill), (100, colors.after.text.end_color)],
             split_top_color=fill,
         )
     return SubtitleStyleScheme(

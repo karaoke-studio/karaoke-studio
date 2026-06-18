@@ -158,8 +158,7 @@ class PreviewGraphicsView(QGraphicsView):
     def set_time(self, t_ms: int) -> None:
         self._t_ms = t_ms
         self._subtitle_item.set_time(t_ms)
-        if not self._video_playing:
-            self._sync_video_position(force=True)
+        self._sync_video_position(force=not self._video_playing)
 
     def set_output_size(self, width: int, height: int) -> None:
         w = max(int(width), 1)

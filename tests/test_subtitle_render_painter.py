@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 import pytest
 
@@ -24,6 +25,8 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _karaoke_fill_segments,
     _resolve_display_baselines,
     _resolve_line_x,
+    _ruby_progress_ratio,
+    _ruby_reading_intervals,
     paint_frame,
 )
 from krok_helper.subtitle_render.engine.timeline import DisplayLine  # noqa: E402
@@ -57,6 +60,30 @@ def _pixel_hash(img: QImage) -> int:
     bits = img.constBits()
     bits.setsize(img.sizeInBytes())
     return hash(bytes(bits))
+
+
+def _ink_bounds(img: QImage, bg: QColor = QColor("#101010")) -> tuple[int, int, int, int]:
+    left = img.width()
+    top = img.height()
+    right = -1
+    bottom = -1
+    bg_rgb = bg.rgb()
+    for y in range(img.height()):
+        for x in range(img.width()):
+            if img.pixel(x, y) == bg_rgb:
+                continue
+            left = min(left, x)
+            top = min(top, y)
+            right = max(right, x)
+            bottom = max(bottom, y)
+    return left, top, right, bottom
+
+
+def _bounds_size(bounds: tuple[int, int, int, int]) -> tuple[int, int]:
+    left, top, right, bottom = bounds
+    if right < left or bottom < top:
+        return 0, 0
+    return right - left + 1, bottom - top + 1
 
 
 def _track() -> TimingTrack:
@@ -189,6 +216,33 @@ def test_paint_frame_fill_gradient_changes_rendered_frame(qapp):
     paint_frame(img_gradient, track, 2400, gradient)
 
     assert _pixel_hash(img_solid) != _pixel_hash(img_gradient)
+
+
+def test_paint_frame_gradient_stops_change_rendered_frame(qapp):
+    img_two_stops = _blank()
+    img_three_stops = _blank()
+    track = _track()
+    two_stops = PaintFill(
+        mode="gradient_horizontal",
+        color="#FF0000",
+        start_color="#FF0000",
+        end_color="#0000FF",
+        gradient_stops=[(0, "#FF0000"), (100, "#0000FF")],
+    )
+    three_stops = replace(two_stops, gradient_stops=[(0, "#FF0000"), (50, "#00FF00"), (100, "#0000FF")])
+    style_two = Style(
+        karaoke_colors=KaraokeColors(after=KaraokeColorState(text=two_stops)),
+        line_y_position="center",
+    )
+    style_three = Style(
+        karaoke_colors=KaraokeColors(after=KaraokeColorState(text=three_stops)),
+        line_y_position="center",
+    )
+
+    paint_frame(img_two_stops, track, 2400, style_two)
+    paint_frame(img_three_stops, track, 2400, style_three)
+
+    assert _pixel_hash(img_two_stops) != _pixel_hash(img_three_stops)
 
 
 def test_paint_frame_applies_singer_style_scheme(qapp):
@@ -374,10 +428,100 @@ def test_dual_line_gap_uses_main_text_bounds_not_ruby_block(qapp):
 
     baselines = _resolve_display_baselines(1080, track, [upper, lower], style)
     metrics = QFontMetrics(_build_font(style))
-    upper_main_bottom = baselines[0] + metrics.descent()
-    lower_main_top = baselines[1] - metrics.ascent()
+    visual_pad = style.stroke_width_px + style.stroke2_width_px
+    upper_main_bottom = baselines[0] + metrics.descent() + visual_pad
+    lower_main_top = baselines[1] - metrics.ascent() - visual_pad
 
     assert lower_main_top - upper_main_bottom == style.line_gap_px
+
+
+def test_double_stroke_width_expands_visual_bounds(qapp):
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar(text="A", start_ms=0)],
+                end_ms=1000,
+            )
+        ]
+    )
+    plain = _blank()
+    stroked = _blank()
+
+    paint_frame(
+        plain,
+        track,
+        500,
+        Style(
+            font_size_px=110,
+            line_y_position="center",
+            stroke_width_px=0,
+            stroke2_width_px=0,
+        ),
+    )
+    paint_frame(
+        stroked,
+        track,
+        500,
+        Style(
+            font_size_px=110,
+            line_y_position="center",
+            stroke_width_px=18,
+            stroke2_width_px=30,
+        ),
+    )
+
+    plain_w, plain_h = _bounds_size(_ink_bounds(plain))
+    stroked_w, stroked_h = _bounds_size(_ink_bounds(stroked))
+
+    assert stroked_w - plain_w >= 60
+    assert stroked_h - plain_h >= 60
+
+
+def test_after_stroke_clip_does_not_bleed_past_scanline(qapp):
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar(text="A", start_ms=0)],
+                end_ms=1000,
+            )
+        ]
+    )
+    after = KaraokeColorState(
+        text=PaintFill(color="#FF0000"),
+        stroke=PaintFill(color="#0055FF"),
+        stroke2=PaintFill(color="#00FF00"),
+        shadow=PaintFill(color="#000000"),
+    )
+    before = KaraokeColorState(
+        text=PaintFill(color="#202020"),
+        stroke=PaintFill(color="#202020"),
+        stroke2=PaintFill(color="#202020"),
+        shadow=PaintFill(color="#000000"),
+    )
+    style = Style(
+        font_size_px=110,
+        line_y_position="center",
+        stroke_width_px=18,
+        stroke2_width_px=30,
+        karaoke_colors=KaraokeColors(before=before, after=after),
+    )
+    img = _blank()
+
+    paint_frame(img, track, 500, style)
+
+    metrics = QFontMetrics(_build_font(style))
+    char_w = metrics.horizontalAdvance("A")
+    visual_pad = style.stroke_width_px + style.stroke2_width_px
+    x0 = _resolve_line_x(img.width(), char_w + visual_pad * 2, style, None) + visual_pad
+    scan_x = x0 + char_w // 2
+    bounds = _ink_bounds(img)
+    _left, top, _right, bottom = bounds
+    for y in range(top, bottom + 1):
+        for x in range(scan_x + 2, min(scan_x + 28, img.width())):
+            color = QColor(img.pixel(x, y))
+            has_after_blue = color.blue() > 180 and color.red() < 80
+            has_after_green = color.green() > 180 and color.red() < 80
+            assert not (has_after_blue or has_after_green)
 
 
 def test_dual_line_x_positions_use_asymmetric_margins(qapp):
@@ -471,6 +615,19 @@ def test_ruby_timing_drives_main_text_fill_extent(qapp):
     )
 
     assert _fill_extent_end(segments, 2400) == 146
+
+
+def test_ruby_small_kana_reading_uses_mora_units(qapp):
+    ruby = RubyAnnotation(
+        kanji="\u7d14",
+        reading="\u3058\u3085\u3093",
+        reading_part_ms=[350],
+        pos_start_ms=89_280,
+        pos_end_ms=89_860,
+    )
+
+    assert _ruby_reading_intervals(ruby) == [(89_280, 89_630), (89_630, 89_860)]
+    assert _ruby_progress_ratio(ruby, 89_950) == 1.0
 
 
 def test_paint_frame_after_line_still_renders_no_active(qapp):

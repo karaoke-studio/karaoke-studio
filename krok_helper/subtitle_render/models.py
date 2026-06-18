@@ -162,6 +162,7 @@ class PaintFill:
     color: str = "#FFFFFF"
     start_color: str = "#FFFFFF"
     end_color: str = "#FFFFFF"
+    gradient_stops: list[tuple[int, str]] = field(default_factory=list)
     split_top_color: str = "#FFFFFF"
     split_bottom_color: str = "#FFFFFF"
     split_position_pct: int = 50
@@ -176,6 +177,7 @@ def _paint_fill(color: str, *, mode: ColorFillMode = "solid", end: Optional[str]
         color=color,
         start_color=color,
         end_color=end_color,
+        gradient_stops=[(0, color), (100, end_color)],
         split_top_color=color,
         split_bottom_color=end_color,
     )

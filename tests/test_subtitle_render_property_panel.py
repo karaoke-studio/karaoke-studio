@@ -8,8 +8,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint, QPointF, Qt  # noqa: E402
-from PyQt6.QtGui import QWheelEvent  # noqa: E402
+from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
+from PyQt6.QtGui import QMouseEvent, QWheelEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QInputDialog  # noqa: E402
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
@@ -193,6 +193,123 @@ def test_property_panel_gradient_controls_emit_style(qapp):
     assert fill.end_color == "#FFCC00"
     assert panel._paint_gradient_start_btn.color == "#00AAEE"
     assert panel._paint_gradient_end_btn.color == "#FFCC00"
+
+
+def test_property_panel_gradient_stop_editor_emits_style(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._fill_mode_combo.setCurrentIndex(
+        panel._fill_mode_combo.findData("gradient_horizontal")
+    )
+    panel._gradient_editor.add_stop(50, "#808080")
+    panel._gradient_stop_position_spin.setValue(60)
+    panel._gradient_editor.set_selected_color("#336699")
+
+    fill = emitted[-1].karaoke_colors.after.text
+    assert fill.mode == "gradient_horizontal"
+    assert (60, "#336699") in fill.gradient_stops
+    assert fill.start_color == "#FF5A6F"
+    assert fill.end_color == "#FF5A6F"
+
+
+def test_property_panel_gradient_bar_click_adds_stop(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+    panel._fill_mode_combo.setCurrentIndex(
+        panel._fill_mode_combo.findData("gradient_horizontal")
+    )
+
+    editor = panel._gradient_editor
+    editor.resize(240, editor.sizeHint().height())
+    point = editor._bar_rect().center()  # noqa: SLF001
+    event = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        point,
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+    editor.mousePressEvent(event)
+
+    fill = emitted[-1].karaoke_colors.after.text
+    assert any(position == 50 for position, _color in fill.gradient_stops)
+
+
+def test_property_panel_gradient_endpoint_stops_cannot_be_deleted(qapp):
+    panel = PropertyPanel()
+    panel._fill_mode_combo.setCurrentIndex(
+        panel._fill_mode_combo.findData("gradient_horizontal")
+    )
+    editor = panel._gradient_editor
+
+    editor._selected = 0  # noqa: SLF001
+    editor.delete_selected_stop()
+    editor._selected = len(editor._stops) - 1  # noqa: SLF001
+    editor.delete_selected_stop()
+
+    assert editor._stops[0][0] == 0  # noqa: SLF001
+    assert editor._stops[-1][0] == 100  # noqa: SLF001
+
+
+def test_property_panel_dragging_endpoint_creates_mergeable_stop(qapp):
+    panel = PropertyPanel()
+    panel._fill_mode_combo.setCurrentIndex(
+        panel._fill_mode_combo.findData("gradient_horizontal")
+    )
+    editor = panel._gradient_editor
+    editor.resize(240, editor.sizeHint().height())
+
+    start = editor._marker_center(0)  # noqa: SLF001
+    middle = editor._bar_rect().center()  # noqa: SLF001
+    editor.mousePressEvent(
+        QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            start,
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+    )
+    editor.mouseMoveEvent(
+        QMouseEvent(
+            QEvent.Type.MouseMove,
+            middle,
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+    )
+
+    assert [position for position, _color in editor._stops] == [0, 50, 100]  # noqa: SLF001
+
+    editor.mouseMoveEvent(
+        QMouseEvent(
+            QEvent.Type.MouseMove,
+            start,
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+    )
+
+    assert [position for position, _color in editor._stops] == [0, 100]  # noqa: SLF001
+
+
+def test_property_panel_fill_editor_height_follows_current_page(qapp):
+    panel = PropertyPanel()
+
+    panel._fill_mode_combo.setCurrentIndex(
+        panel._fill_mode_combo.findData("gradient_vertical")
+    )
+    gradient_height = panel._fill_editor_stack.sizeHint().height()
+    panel._fill_mode_combo.setCurrentIndex(panel._fill_mode_combo.findData("solid"))
+    solid_height = panel._fill_editor_stack.sizeHint().height()
+
+    assert solid_height < gradient_height
 
 
 def test_property_panel_split_and_image_fill_controls_emit_style(qapp):
