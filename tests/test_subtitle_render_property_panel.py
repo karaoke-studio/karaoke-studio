@@ -70,14 +70,17 @@ def test_style_defaults_match_nicokara_layout_baseline():
     style = Style()
 
     assert style.font_family == "UD Digi Kyokasho N-B"
-    assert style.font_size_px == 32
+    assert style.font_size_px == 100
     assert style.font_weight == 400
-    assert style.ruby_font_size_px == 13
-    assert style.ruby_gap_px == 1
+    assert style.ruby_font_size_px == 35
+    assert style.ruby_gap_px == 4
     assert style.line_y_position == "bottom"
-    assert style.line_y_margin_px == 90
+    assert style.line_y_margin_px == 80
     assert style.dual_line_layout is True
     assert style.line_gap_px == 90
+    assert style.stroke_width_px == 9
+    assert style.shadow_offset_x == 0
+    assert style.shadow_offset_y == 1
     assert style.upper_line_left_margin_px == 50
     assert style.lower_line_right_margin_px == 50
     assert style.line_lead_in_ms == 1800

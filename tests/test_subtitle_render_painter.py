@@ -15,10 +15,11 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
+from PyQt6.QtGui import QColor, QFontMetrics, QImage  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
+    _build_font,
     _resolve_display_baselines,
     _resolve_line_x,
     paint_frame,
@@ -197,6 +198,30 @@ def test_dual_line_baselines_stay_fixed_when_lower_line_disappears(qapp):
     upper_only = _resolve_display_baselines(720, track, [upper], style)
 
     assert upper_only[0] == both[0]
+
+
+def test_dual_line_gap_uses_main_text_bounds_not_ruby_block(qapp):
+    track = _two_line_track()
+    style = Style(font_size_px=100, ruby_font_size_px=35, ruby_gap_px=24, line_gap_px=90)
+    upper = DisplayLine(
+        line=track.lines[0],
+        lane=0,
+        display_start_ms=0,
+        display_end_ms=1000,
+    )
+    lower = DisplayLine(
+        line=track.lines[1],
+        lane=1,
+        display_start_ms=0,
+        display_end_ms=1000,
+    )
+
+    baselines = _resolve_display_baselines(1080, track, [upper, lower], style)
+    metrics = QFontMetrics(_build_font(style))
+    upper_main_bottom = baselines[0] + metrics.descent()
+    lower_main_top = baselines[1] - metrics.ascent()
+
+    assert lower_main_top - upper_main_bottom == style.line_gap_px
 
 
 def test_dual_line_x_positions_use_asymmetric_margins(qapp):

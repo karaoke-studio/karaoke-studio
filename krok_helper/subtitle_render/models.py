@@ -138,7 +138,7 @@ class Style:
 
     # 字体
     font_family: str = "UD Digi Kyokasho N-B"
-    font_size_px: int = 32
+    font_size_px: int = 100
     font_weight: int = 400  # Qt 习惯 100-900
     italic: bool = False
 
@@ -150,29 +150,29 @@ class Style:
     """已唱状态填充色。默认取工作台主色。"""
 
     stroke_color: str = "#222222"
-    stroke_width_px: int = 4
+    stroke_width_px: int = 9
 
     shadow_color: str = "#000000"
     shadow_offset_x: int = 0
-    shadow_offset_y: int = 2
+    shadow_offset_y: int = 1
 
     # ふりがな / ruby（B1）
-    ruby_font_size_px: int = 13
+    ruby_font_size_px: int = 35
     ruby_color: str = "#FF5A6F"
-    ruby_gap_px: int = 1
+    ruby_gap_px: int = 4
 
     # 行位置（字幕区上下定位）
     line_y_position: LineYPosition = "bottom"
     """``"top"`` / ``"center"`` / ``"bottom"`` —— 简单 vertical-anchor。"""
 
-    line_y_margin_px: int = 90
+    line_y_margin_px: int = 80
     """``line_y_position`` 为 ``"top"`` / ``"bottom"`` 时距离顶/底边的内边距。"""
 
     dual_line_layout: bool = True
     """默认上下双行显示：当前行在上，下一行在下。"""
 
     line_gap_px: int = 90
-    """双行布局中两行字幕块之间的间距。"""
+    """双行布局中两行主文字外框之间的间距，不包含 ruby 高度。"""
 
     upper_line_left_margin_px: int = 50
     """双行布局中上排字幕距离左边的边距。"""

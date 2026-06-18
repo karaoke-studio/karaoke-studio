@@ -68,14 +68,18 @@ class LyricsPanel(DropPanel):
             lambda: (
                 f"""
                 #LyricsList {{
-                    background: transparent;
+                    background: {palette().card_bg};
                     color: {palette().text_primary};
                     font-family: "Microsoft YaHei UI";
                     font-size: 10.5pt;
-                    padding: 8px 4px;
+                    padding: 14px 12px;
+                    border: 0;
+                }}
+                #LyricsList QWidget {{
+                    background: {palette().card_bg};
                 }}
                 #LyricsList::item {{
-                    padding: 6px 12px;
+                    padding: 9px 10px;
                     border: 0;
                     outline: 0;
                 }}

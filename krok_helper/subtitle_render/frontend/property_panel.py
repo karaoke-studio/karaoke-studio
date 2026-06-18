@@ -186,12 +186,29 @@ class PropertyPanel(QTabWidget):
 
     def _make_subtitle_page(self) -> QWidget:
         scroll = QScrollArea()
+        scroll.setObjectName("SubtitlePropertyScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        themed(
+            scroll,
+            lambda: (
+                f"""
+                QScrollArea#SubtitlePropertyScroll {{
+                    background: transparent;
+                    border: 0;
+                }}
+                QScrollArea#SubtitlePropertyScroll > QWidget > QWidget {{
+                    background: transparent;
+                }}
+                """
+            ),
+        )
 
         page = QWidget()
+        page.setObjectName("SubtitlePropertyPage")
         page.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        themed(page, lambda: "#SubtitlePropertyPage { background: transparent; }")
         layout = QVBoxLayout(page)
         layout.setContentsMargins(10, 10, 10, 12)
         layout.setSpacing(10)
@@ -423,6 +440,8 @@ def _compact_control(widget: QWidget) -> None:
 
 def _field(label_text: str, control: QWidget) -> QWidget:
     box = QWidget()
+    box.setObjectName("SubtitlePropertyField")
+    themed(box, lambda: "#SubtitlePropertyField { background: transparent; }")
     layout = QVBoxLayout(box)
     layout.setContentsMargins(0, 0, 0, 0)
     layout.setSpacing(4)
@@ -446,10 +465,13 @@ def _section(title: str) -> tuple[QFrame, QVBoxLayout]:
                 border: 1px solid {palette().card_border};
                 border-radius: 8px;
             }}
+            QFrame#SubtitlePropertySection QWidget {{
+                background: transparent;
+            }}
             QFrame#SubtitlePropertySection QComboBox,
             QFrame#SubtitlePropertySection QFontComboBox,
             QFrame#SubtitlePropertySection QSpinBox {{
-                background: {palette().panel_bg};
+                background: {palette().card_bg};
                 color: {palette().text_primary};
                 border: 1px solid {palette().card_border};
                 border-radius: 6px;

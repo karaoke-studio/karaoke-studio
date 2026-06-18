@@ -196,15 +196,13 @@ def _resolve_baseline_y(
     return img_h - margin - metrics.descent()
 
 
-def _fixed_line_block_geometry(style: Style) -> tuple[int, int, int]:
+def _fixed_line_geometry(style: Style) -> tuple[int, int, int, int]:
     font = _build_font(style)
     metrics = QFontMetrics(font)
     ruby_metrics = QFontMetrics(_build_ruby_font(style))
     ruby_extra = max(style.ruby_gap_px, 0) + ruby_metrics.height()
-    block_h = metrics.height() + ruby_extra
-    baseline_offset = ruby_extra + metrics.ascent()
-    bottom_baseline_offset = metrics.descent()
-    return block_h, baseline_offset, bottom_baseline_offset
+    main_h = metrics.ascent() + metrics.descent()
+    return main_h, metrics.ascent(), metrics.descent(), ruby_extra
 
 
 def _resolve_display_baselines(
@@ -224,23 +222,24 @@ def _resolve_display_baselines(
         )
         return {0: _resolve_baseline_y(metrics, img_h, style, ruby_metrics)}
 
-    block_h, baseline_offset, bottom_baseline_offset = _fixed_line_block_geometry(style)
+    main_h, main_ascent, main_descent, ruby_extra = _fixed_line_geometry(style)
     gap = max(style.line_gap_px, 0)
     margin = max(style.line_y_margin_px, 0)
 
     if style.line_y_position == "top":
-        lower_top = margin + block_h + gap
+        upper_baseline = margin + ruby_extra + main_ascent
+        lower_baseline = upper_baseline + main_h + gap
     elif style.line_y_position == "center":
-        total_h = block_h * 2 + gap
-        lower_top = (img_h - total_h) // 2 + block_h + gap
+        total_h = main_h * 2 + gap
+        upper_main_top = (img_h - total_h) // 2
+        upper_baseline = upper_main_top + main_ascent
+        lower_baseline = upper_baseline + main_h + gap
     else:
-        lower_baseline = img_h - margin - bottom_baseline_offset
-        lower_top = lower_baseline - baseline_offset
-
-    upper_top = lower_top - block_h - gap
+        lower_baseline = img_h - margin - main_descent
+        upper_baseline = lower_baseline - main_h - gap
     return {
-        0: upper_top + baseline_offset,
-        1: lower_top + baseline_offset,
+        0: upper_baseline,
+        1: lower_baseline,
     }
 
 
