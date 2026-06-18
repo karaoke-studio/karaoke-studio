@@ -16,10 +16,14 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QRectF  # noqa: E402
 from PyQt6.QtGui import QColor, QFontMetrics, QImage  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
+    _IMAGE_BRUSH_CACHE,
+    _IMAGE_FILL_CACHE,
+    _brush_for_fill,
     _build_font,
     _fill_extent_end,
     _karaoke_fill_segments,
@@ -28,6 +32,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _ruby_progress_ratio,
     _ruby_reading_intervals,
     paint_frame,
+    clear_before_layer_cache,
 )
 from krok_helper.subtitle_render.engine.timeline import DisplayLine  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
@@ -643,3 +648,26 @@ def test_paint_frame_zero_size_image_does_not_crash(qapp):
     img.fill(QColor("#000000"))
     # 字体大小 64 在 1×1 上画啥也画不出来，但不应抛
     paint_frame(img, _track(), 1500, Style())
+
+
+def test_image_fill_brush_is_cached(qapp, tmp_path):
+    clear_before_layer_cache()
+    image_path = tmp_path / "fill.png"
+    source = QImage(16, 16, QImage.Format.Format_ARGB32_Premultiplied)
+    source.fill(QColor("#336699"))
+    assert source.save(str(image_path))
+
+    fill = PaintFill(mode="image", image_path=str(image_path), image_scale_pct=100)
+    rect = QRectF(0, 0, 100, 40)
+
+    first = _brush_for_fill(fill, rect)
+    second = _brush_for_fill(fill, rect)
+    scaled = _brush_for_fill(
+        PaintFill(mode="image", image_path=str(image_path), image_scale_pct=150),
+        rect,
+    )
+
+    assert first.style() == second.style()
+    assert scaled.style() == first.style()
+    assert len(_IMAGE_FILL_CACHE) == 1
+    assert len(_IMAGE_BRUSH_CACHE) == 2

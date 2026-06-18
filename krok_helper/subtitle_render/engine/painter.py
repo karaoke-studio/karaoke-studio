@@ -31,6 +31,7 @@ P1 阶段会在本函数基础上加：渐变填充（B3）、入场退场动画
 from __future__ import annotations
 
 import math
+import os
 from collections import OrderedDict
 from dataclasses import dataclass, replace
 from threading import Lock
@@ -63,6 +64,10 @@ from PyQt6.QtGui import (
 _BEFORE_LAYER_CACHE_MAX = 64
 _BEFORE_LAYER_CACHE: "OrderedDict[tuple, tuple[QImage, int, int]]" = OrderedDict()
 _BEFORE_LAYER_LOCK = Lock()
+_IMAGE_FILL_CACHE_MAX = 16
+_IMAGE_FILL_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
+_IMAGE_BRUSH_CACHE: "OrderedDict[tuple, QBrush]" = OrderedDict()
+_IMAGE_FILL_LOCK = Lock()
 _RUBY_COMBINING_CHARS = set("ぁぃぅぇぉゃゅょゎァィゥェォャュョヮ\u3099\u309A")
 
 
@@ -79,6 +84,9 @@ def clear_before_layer_cache() -> None:
     """测试 / 调试用：把所有"未唱"层位图缓存全部丢掉。"""
     with _BEFORE_LAYER_LOCK:
         _BEFORE_LAYER_CACHE.clear()
+    with _IMAGE_FILL_LOCK:
+        _IMAGE_FILL_CACHE.clear()
+        _IMAGE_BRUSH_CACHE.clear()
 
 from krok_helper.subtitle_render.engine.timeline import (
     DisplayLine,
@@ -758,11 +766,8 @@ def _fill_extent_end(
 
 def _brush_for_fill(fill: PaintFill, rect: QRectF) -> QBrush:
     if fill.mode == "image" and fill.image_path:
-        image = QImage(fill.image_path)
-        if not image.isNull():
-            brush = QBrush(image)
-            scale = max(fill.image_scale_pct, 1) / 100.0
-            brush.setTransform(QTransform().scale(1.0 / scale, 1.0 / scale))
+        brush = _cached_image_brush(fill.image_path, fill.image_scale_pct)
+        if brush is not None:
             return brush
 
     if fill.mode == "gradient_horizontal":
@@ -772,6 +777,57 @@ def _brush_for_fill(fill: PaintFill, rect: QRectF) -> QBrush:
     if fill.mode == "split_vertical":
         return _split_vertical_brush(fill, rect)
     return QBrush(_valid_color(fill.color, "#FFFFFF"))
+
+
+def _cached_image_brush(path: str, scale_pct: int) -> QBrush | None:
+    signature = _image_file_signature(path)
+    if signature is None:
+        return None
+    scale = max(scale_pct, 1)
+    brush_key = (*signature, scale)
+    with _IMAGE_FILL_LOCK:
+        brush = _IMAGE_BRUSH_CACHE.get(brush_key)
+        if brush is not None:
+            _IMAGE_BRUSH_CACHE.move_to_end(brush_key)
+            return QBrush(brush)
+
+    image = _cached_fill_image(signature)
+    if image is None or image.isNull():
+        return None
+    brush = QBrush(image)
+    brush_scale = scale / 100.0
+    brush.setTransform(QTransform().scale(1.0 / brush_scale, 1.0 / brush_scale))
+
+    with _IMAGE_FILL_LOCK:
+        _IMAGE_BRUSH_CACHE[brush_key] = brush
+        while len(_IMAGE_BRUSH_CACHE) > _IMAGE_FILL_CACHE_MAX:
+            _IMAGE_BRUSH_CACHE.popitem(last=False)
+    return QBrush(brush)
+
+
+def _cached_fill_image(signature: tuple[str, int, int]) -> QImage | None:
+    with _IMAGE_FILL_LOCK:
+        cached = _IMAGE_FILL_CACHE.get(signature)
+        if cached is not None:
+            _IMAGE_FILL_CACHE.move_to_end(signature)
+            return cached
+    image = QImage(signature[0])
+    if image.isNull():
+        return None
+    with _IMAGE_FILL_LOCK:
+        _IMAGE_FILL_CACHE[signature] = image
+        while len(_IMAGE_FILL_CACHE) > _IMAGE_FILL_CACHE_MAX:
+            _IMAGE_FILL_CACHE.popitem(last=False)
+    return image
+
+
+def _image_file_signature(path: str) -> tuple[str, int, int] | None:
+    try:
+        normalized = os.path.abspath(os.path.normpath(path))
+        stat = os.stat(normalized)
+    except OSError:
+        return None
+    return normalized, int(stat.st_mtime_ns), int(stat.st_size)
 
 
 def _linear_gradient_brush(fill: PaintFill, rect: QRectF, angle_deg: int) -> QBrush:
