@@ -15,6 +15,7 @@ A4 / A7：
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Optional
 
@@ -298,8 +299,20 @@ class PreviewCanvas(QWidget):
         return (x, y, max(target_w, 1), max(target_h, 1))
 
 
+def _use_graphics_preview() -> bool:
+    """默认走档2 ``QGraphicsView`` 路径——vsync 对齐 + 视频走 Qt 原生 GPU。
+
+    设环境变量 ``KROK_SUBTITLE_PREVIEW=raster`` 可强制回退到旧版手画式
+    :class:`PreviewCanvas`，便于 A/B 对比或回退。
+    """
+    return os.environ.get("KROK_SUBTITLE_PREVIEW", "graphics").lower() != "raster"
+
+
 class PreviewPanel(DropPanel):
-    """预览面板：空态拖入视频 / populated 后显示画布。"""
+    """预览面板：空态拖入视频 / populated 后显示画布。
+
+    内部 canvas 默认是 :class:`PreviewGraphicsView`（档2 QGraphicsView 路径）。
+    """
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(
@@ -309,7 +322,15 @@ class PreviewPanel(DropPanel):
             empty_icon="🎬",
             parent=parent,
         )
-        self._canvas = PreviewCanvas()
+        if _use_graphics_preview():
+            # 延迟 import：QGraphicsVideoItem 依赖 QtMultimediaWidgets，
+            # 测试 raster 路径时不需要加载。
+            from krok_helper.subtitle_render.frontend.preview_graphics import (
+                PreviewGraphicsView,
+            )
+            self._canvas = PreviewGraphicsView()
+        else:
+            self._canvas = PreviewCanvas()
         self.set_content(self._canvas)
 
     # ------------------------------------------------------------------ public
