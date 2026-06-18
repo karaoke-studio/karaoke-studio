@@ -65,7 +65,7 @@ def parse_nicokara_lrc(text: str) -> TimingTrack:
 
     body_lines, tail_lines = _split_body_tail(raw_lines)
 
-    timing_lines = [_parse_body_line(ln) for ln in body_lines]
+    timing_lines = _parse_body_lines(body_lines)
     meta, rubies = _parse_tail(tail_lines)
     return TimingTrack(meta=meta, lines=timing_lines, rubies=rubies)
 
@@ -138,6 +138,26 @@ def _tokenize_line(line: str) -> list[tuple[str, object]]:
             tokens.append(("text", text))
         pos = end
     return tokens
+
+
+def _parse_body_lines(lines: Iterable[str]) -> list[TimingLine]:
+    timing_lines: list[TimingLine] = []
+    current_singer_label: Optional[str] = None
+    singer_ids: dict[str, int] = {}
+
+    for raw_line in lines:
+        line = _parse_body_line(raw_line)
+        if line.singer_label is not None:
+            current_singer_label = line.singer_label
+        elif line.chars and current_singer_label is not None:
+            line.singer_label = current_singer_label
+
+        if line.singer_label is not None:
+            if line.singer_label not in singer_ids:
+                singer_ids[line.singer_label] = len(singer_ids)
+            line.singer_id = singer_ids[line.singer_label]
+        timing_lines.append(line)
+    return timing_lines
 
 
 def _parse_body_line(line: str) -> TimingLine:

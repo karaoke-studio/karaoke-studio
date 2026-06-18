@@ -56,6 +56,8 @@ class TimingLine:
     """行末 ``[MM:SS:CC]``（最后一个字符的演唱终点）。空行 / 仅有标签的行可能为 None。"""
     singer_label: Optional[str] = None
     """行首 ``【演唱者名】`` 标签。NicokaraExporter 在演唱者切换处插入。"""
+    singer_id: Optional[int] = None
+    """解析阶段分配的稳定歌手序号。仅用于配色覆盖，不参与布局。"""
     is_blank: bool = False
     """是否是用户主动留的空行（无任何字符 / 时间戳 / 标签）。"""
 
@@ -111,6 +113,19 @@ class TimingTrack:
     def non_blank_line_count(self) -> int:
         return sum(1 for line in self.lines if not line.is_blank)
 
+    @property
+    def singer_options(self) -> list[tuple[int, str]]:
+        seen: set[int] = set()
+        options: list[tuple[int, str]] = []
+        for line in self.lines:
+            if line.singer_id is None or line.singer_label is None:
+                continue
+            if line.singer_id in seen:
+                continue
+            seen.add(line.singer_id)
+            options.append((line.singer_id, line.singer_label))
+        return options
+
 
 # ---------------------------------------------------------------------------
 # 渲染项目持久化模型（``.krrender.json``）
@@ -127,6 +142,26 @@ class SubtitleSource:
 
 LineYPosition = Literal["top", "center", "bottom"]
 LineHorizontalLayout = Literal["asymmetric", "center"]
+
+
+@dataclass
+class SubtitleStyleScheme:
+    """字幕 tab 的完整视觉方案；不包含位置、布局和显示时间。"""
+
+    font_family: Optional[str] = None
+    font_size_px: Optional[int] = None
+    font_weight: Optional[int] = None
+    italic: Optional[bool] = None
+    base_color: Optional[str] = None
+    fill_color: Optional[str] = None
+    stroke_color: Optional[str] = None
+    stroke_width_px: Optional[int] = None
+    shadow_color: Optional[str] = None
+    shadow_offset_x: Optional[int] = None
+    shadow_offset_y: Optional[int] = None
+    ruby_font_size_px: Optional[int] = None
+    ruby_color: Optional[str] = None
+    ruby_gap_px: Optional[int] = None
 
 
 @dataclass
@@ -156,6 +191,12 @@ class Style:
     shadow_color: str = "#000000"
     shadow_offset_x: int = 0
     shadow_offset_y: int = 1
+
+    singer_style_overrides: dict[int, SubtitleStyleScheme] = field(default_factory=dict)
+    """B2：按歌手自动套用的字幕 tab 方案。不覆盖位置、时间或布局。"""
+
+    custom_style_schemes: dict[str, SubtitleStyleScheme] = field(default_factory=dict)
+    """用户自行添加的配色方案。当前用于编辑/复用，后续可接入方案分配。"""
 
     # ふりがな / ruby（B1）
     ruby_font_size_px: int = 35

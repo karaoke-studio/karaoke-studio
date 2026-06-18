@@ -10,14 +10,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, QPointF, Qt  # noqa: E402
 from PyQt6.QtGui import QWheelEvent  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QInputDialog  # noqa: E402
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
     ColorButton,
     PropertyPanel,
 )
-from krok_helper.subtitle_render.models import Style  # noqa: E402
+from krok_helper.subtitle_render.models import SubtitleStyleScheme, Style  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -113,11 +113,18 @@ def test_style_defaults_match_nicokara_layout_baseline():
 
 def test_property_panel_subtitle_page_has_no_horizontal_scroll(qapp):
     panel = PropertyPanel()
+    basic_page = panel.widget(0)
     subtitle_page = panel.widget(1)
 
+    assert basic_page.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     assert subtitle_page.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     assert panel._font_combo.minimumWidth() == 0
     assert panel._font_size_spin.minimumWidth() == 0
+    assert panel._line_margin_spin.parentWidget() is not panel._font_size_spin.parentWidget()
+    assert panel._singer_combo.parentWidget() is not panel._line_margin_spin.parentWidget()
+    subtitle_layout = subtitle_page.widget().layout()
+    first_section = subtitle_layout.itemAt(0).widget()
+    assert first_section.layout().itemAt(0).widget().text() == "配色方案"
 
 
 def test_property_panel_font_controls_emit_style(qapp):
@@ -201,6 +208,86 @@ def test_property_panel_timing_controls_emit_style(qapp):
     assert emitted[-1].line_max_hold_ms == 8000
 
 
+def test_property_panel_singer_scheme_controls_emit_style(qapp):
+    panel = PropertyPanel()
+    panel.set_singers([(0, "A"), (1, "B")])
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("singer:1"))
+    panel._font_size_spin.setValue(88)
+    panel._set_color("fill_color", "#00aaee")
+    panel._set_color("base_color", "#112233")
+    panel._ruby_gap_spin.setValue(8)
+
+    scheme = emitted[-1].singer_style_overrides[1]
+    assert scheme.font_size_px == 88
+    assert scheme.fill_color == "#00AAEE"
+    assert scheme.base_color == "#112233"
+    assert scheme.ruby_gap_px == 8
+    assert panel._fill_color_btn.color == "#00AAEE"
+    assert panel._base_color_btn.color == "#112233"
+
+
+def test_property_panel_singer_scheme_switches_subtitle_controls(qapp):
+    panel = PropertyPanel()
+    panel.set_singers([(0, "A")])
+    style = Style(
+        singer_style_overrides={
+            0: SubtitleStyleScheme(
+                font_size_px=72,
+                font_weight=700,
+                fill_color="#0088ff",
+                ruby_color="#00ff88",
+                ruby_gap_px=12,
+            )
+        }
+    )
+
+    panel.set_style(style)
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("singer:0"))
+
+    assert panel._font_size_spin.value() == 72
+    assert panel._font_weight_combo.currentData() == 700
+    assert panel._fill_color_btn.color == "#0088FF"
+    assert panel._ruby_color_btn.color == "#00FF88"
+    assert panel._ruby_gap_spin.value() == 12
+
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("global"))
+    assert panel._font_size_spin.value() == style.font_size_px
+    assert panel._fill_color_btn.color == style.fill_color
+
+
+def test_property_panel_can_add_custom_scheme(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._set_color("fill_color", "#123456")
+    panel._add_custom_scheme("蓝色方案")
+
+    assert "蓝色方案" in panel.style.custom_style_schemes
+    assert emitted[-1].custom_style_schemes["蓝色方案"].fill_color == "#123456"
+    assert panel._singer_combo.currentData() == "custom:蓝色方案"
+
+    panel._font_size_spin.setValue(77)
+    assert emitted[-1].custom_style_schemes["蓝色方案"].font_size_px == 77
+
+
+def test_property_panel_add_scheme_button_ignores_clicked_checked_arg(qapp, monkeypatch):
+    panel = PropertyPanel()
+    monkeypatch.setattr(
+        QInputDialog,
+        "getText",
+        lambda *args, **kwargs: ("按钮方案", True),
+    )
+
+    panel._add_scheme_button.clicked.emit(False)
+
+    assert "按钮方案" in panel.style.custom_style_schemes
+    assert panel._singer_combo.currentData() == "custom:按钮方案"
+
+
 def test_wheel_changes_spinbox_only_when_focused(qapp):
     panel = PropertyPanel()
     panel.show()
@@ -263,15 +350,22 @@ def test_main_window_style_panel_updates_preview(qapp, monkeypatch):
     win._property_panel._set_color("fill_color", "#00aaee")
     win._property_panel._ruby_font_size_spin.setValue(28)
     win._property_panel._line_gap_spin.setValue(77)
+    win._property_panel.set_singers([(0, "A")])
+    win._property_panel._singer_combo.setCurrentIndex(
+        win._property_panel._singer_combo.findData("singer:0")
+    )
+    win._property_panel._set_color("fill_color", "#ffcc00")
 
     assert win._style.font_size_px == 96
     assert win._style.fill_color == "#00AAEE"
     assert win._style.ruby_font_size_px == 28
     assert win._style.line_gap_px == 77
+    assert win._style.singer_style_overrides[0].fill_color == "#FFCC00"
     assert win._preview_panel.canvas._style.font_size_px == 96
     assert win._preview_panel.canvas._style.fill_color == "#00AAEE"
     assert win._preview_panel.canvas._style.ruby_font_size_px == 28
     assert win._preview_panel.canvas._style.line_gap_px == 77
+    assert win._preview_panel.canvas._style.singer_style_overrides[0].fill_color == "#FFCC00"
 
 
 def _wheel_event(widget, delta: int = 120) -> QWheelEvent:

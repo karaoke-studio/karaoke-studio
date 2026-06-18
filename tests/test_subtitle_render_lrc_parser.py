@@ -86,7 +86,26 @@ def test_singer_label_at_line_start():
     track = parse_nicokara_lrc(text)
     line = track.lines[0]
     assert line.singer_label == "ボーカル"
+    assert line.singer_id == 0
     assert [c.text for c in line.chars] == ["あ"]
+
+
+def test_singer_label_persists_until_next_label():
+    text = (
+        "【A】\n"
+        "[00:01:00]あ[00:01:50]\n"
+        "[00:02:00]い[00:02:50]\n"
+        "【B】[00:03:00]う[00:03:50]\n"
+    )
+    track = parse_nicokara_lrc(text)
+
+    assert track.lines[1].singer_label == "A"
+    assert track.lines[1].singer_id == 0
+    assert track.lines[2].singer_label == "A"
+    assert track.lines[2].singer_id == 0
+    assert track.lines[3].singer_label == "B"
+    assert track.lines[3].singer_id == 1
+    assert track.singer_options == [(0, "A"), (1, "B")]
 
 
 # ---------------------------------------------------------------------------

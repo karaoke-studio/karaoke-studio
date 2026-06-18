@@ -22,6 +22,7 @@ P1 阶段会在本函数基础上加：渐变填充（B3）、入场退场动画
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import Optional
 
 from PyQt6.QtCore import QRectF, Qt
@@ -255,6 +256,7 @@ def _paint_line(
     baseline_y: int | None = None,
     lane: int | None = None,
 ) -> None:
+    style = _style_for_line(style, line)
     font = _build_font(style)
     painter.setFont(font)
     metrics = QFontMetrics(font)
@@ -361,6 +363,37 @@ def _resolve_line_x(
     if style.dual_line_layout and lane == 1:
         return img_w - max(style.lower_line_right_margin_px, 0) - total_w
     return (img_w - total_w) // 2
+
+
+def _style_for_line(style: Style, line: TimingLine) -> Style:
+    if line.singer_id is None:
+        return style
+    scheme = style.singer_style_overrides.get(line.singer_id)
+    if scheme is None:
+        return style
+    changes = {
+        field: value
+        for field, value in {
+            "font_family": scheme.font_family,
+            "font_size_px": scheme.font_size_px,
+            "font_weight": scheme.font_weight,
+            "italic": scheme.italic,
+            "base_color": scheme.base_color,
+            "fill_color": scheme.fill_color,
+            "ruby_color": scheme.ruby_color,
+            "stroke_color": scheme.stroke_color,
+            "stroke_width_px": scheme.stroke_width_px,
+            "shadow_color": scheme.shadow_color,
+            "shadow_offset_x": scheme.shadow_offset_x,
+            "shadow_offset_y": scheme.shadow_offset_y,
+            "ruby_font_size_px": scheme.ruby_font_size_px,
+            "ruby_gap_px": scheme.ruby_gap_px,
+        }.items()
+        if value is not None
+    }
+    if not changes:
+        return style
+    return replace(style, **changes)
 
 
 def _active_rubies_for_line(

@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QPushButton,
     QScrollArea,
@@ -31,7 +32,35 @@ from PyQt6.QtWidgets import (
 )
 
 from krok_helper.subtitle_render.frontend.theme import palette, themed
-from krok_helper.subtitle_render.models import LineHorizontalLayout, LineYPosition, Style
+from krok_helper.subtitle_render.models import (
+    LineHorizontalLayout,
+    LineYPosition,
+    SubtitleStyleScheme,
+    Style,
+)
+
+_SCHEME_FIELDS = {
+    "font_family",
+    "font_size_px",
+    "font_weight",
+    "italic",
+    "base_color",
+    "fill_color",
+    "stroke_color",
+    "stroke_width_px",
+    "shadow_color",
+    "shadow_offset_x",
+    "shadow_offset_y",
+    "ruby_font_size_px",
+    "ruby_color",
+    "ruby_gap_px",
+}
+
+_SINGER_FILL_PALETTE = ["#FF5A6F", "#0055FF", "#FFAA00", "#00A878", "#9B5CFF"]
+_SINGER_RUBY_PALETTE = ["#FF5A6F", "#00AAFF", "#FFCC33", "#40D99A", "#C08CFF"]
+_GLOBAL_SCHEME_KEY = "global"
+_SINGER_SCHEME_PREFIX = "singer:"
+_CUSTOM_SCHEME_PREFIX = "custom:"
 
 
 def _placeholder_page(text: str) -> QWidget:
@@ -151,6 +180,7 @@ class PropertyPanel(QTabWidget):
         super().__init__(parent)
         self._style = Style()
         self._syncing = False
+        self._singer_options: list[tuple[int, str]] = []
 
         self.setObjectName("PropertyPanel")
         self.setMinimumWidth(260)
@@ -186,10 +216,11 @@ class PropertyPanel(QTabWidget):
             ),
         )
 
-        self.addTab(_placeholder_page("屏幕预设 / 宽高 / 时间偏移（A8 / A10 接入）"), "基本")
+        self.addTab(self._make_basic_page(), "基本")
         self.addTab(self._make_subtitle_page(), "字幕")
         self.addTab(_placeholder_page("入场 / 退场动画、渐变填充、发光（P1 / P2）"), "特效")
         self.addTab(_placeholder_page("标题字幕、时段图片（B7 / P2）"), "装饰")
+        self.set_singers([])
         self.set_style(self._style, emit=False)
 
     @property
@@ -198,21 +229,10 @@ class PropertyPanel(QTabWidget):
 
     def set_style(self, style: Style, *, emit: bool = False) -> None:
         self._style = replace(style)
+        current_key = self._current_scheme_key()
         self._syncing = True
         try:
-            self._font_combo.setCurrentFont(QFont(self._style.font_family))
-            self._font_size_spin.setValue(self._style.font_size_px)
-            self._font_weight_combo.setCurrentIndex(
-                max(0, self._font_weight_combo.findData(self._style.font_weight))
-            )
-            self._italic_check.setChecked(self._style.italic)
-            self._base_color_btn.set_color(self._style.base_color)
-            self._fill_color_btn.set_color(self._style.fill_color)
-            self._stroke_color_btn.set_color(self._style.stroke_color)
-            self._stroke_width_spin.setValue(self._style.stroke_width_px)
-            self._shadow_color_btn.set_color(self._style.shadow_color)
-            self._shadow_x_spin.setValue(self._style.shadow_offset_x)
-            self._shadow_y_spin.setValue(self._style.shadow_offset_y)
+            self._refresh_scheme_combo(current_key)
             self._line_position_combo.setCurrentIndex(
                 max(0, self._line_position_combo.findData(self._style.line_y_position))
             )
@@ -233,52 +253,41 @@ class PropertyPanel(QTabWidget):
             self._line_tail_spin.setValue(self._style.line_tail_ms)
             self._line_lane_gap_spin.setValue(self._style.line_lane_gap_ms)
             self._line_max_hold_spin.setValue(self._style.line_max_hold_ms)
-            self._ruby_font_size_spin.setValue(self._style.ruby_font_size_px)
-            self._ruby_color_btn.set_color(self._style.ruby_color)
-            self._ruby_gap_spin.setValue(self._style.ruby_gap_px)
+            self._sync_subtitle_scheme_controls()
         finally:
             self._syncing = False
         if emit:
             self.styleChanged.emit(self._style)
 
+    def set_singers(self, singers: list[tuple[int, str]]) -> None:
+        self._singer_options = list(singers)
+        current_key = self._current_scheme_key()
+        changed = self._ensure_singer_schemes()
+        self._syncing = True
+        try:
+            self._refresh_scheme_combo(current_key)
+        finally:
+            self._syncing = False
+        self._sync_subtitle_scheme_controls()
+        if changed:
+            self.styleChanged.emit(self._style)
+
     # ------------------------------------------------------------------ layout
 
-    def _make_subtitle_page(self) -> QWidget:
-        scroll = QScrollArea()
-        scroll.setObjectName("SubtitlePropertyScroll")
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        themed(
-            scroll,
-            lambda: (
-                f"""
-                QScrollArea#SubtitlePropertyScroll {{
-                    background: transparent;
-                    border: 0;
-                }}
-                QScrollArea#SubtitlePropertyScroll > QWidget > QWidget {{
-                    background: transparent;
-                }}
-                """
-            ),
-        )
-
-        page = QWidget()
-        page.setObjectName("SubtitlePropertyPage")
-        page.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
-        themed(page, lambda: "#SubtitlePropertyPage { background: transparent; }")
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(10, 10, 10, 12)
-        layout.setSpacing(10)
-        layout.addWidget(self._make_font_section())
-        layout.addWidget(self._make_ruby_section())
-        layout.addWidget(self._make_color_section())
+    def _make_basic_page(self) -> QWidget:
+        scroll, layout = _scroll_page()
         layout.addWidget(self._make_position_section())
         layout.addWidget(self._make_timing_section())
         layout.addStretch(1)
+        return scroll
 
-        scroll.setWidget(page)
+    def _make_subtitle_page(self) -> QWidget:
+        scroll, layout = _scroll_page()
+        layout.addWidget(self._make_scheme_section())
+        layout.addWidget(self._make_font_section())
+        layout.addWidget(self._make_ruby_section())
+        layout.addWidget(self._make_color_section())
+        layout.addStretch(1)
         return scroll
 
     def _make_font_section(self) -> QFrame:
@@ -408,6 +417,29 @@ class PropertyPanel(QTabWidget):
         layout.addWidget(detail_grid)
         return section
 
+    def _make_scheme_section(self) -> QFrame:
+        section, layout = _section("配色方案")
+
+        self._singer_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._singer_combo)
+        self._singer_combo.currentIndexChanged.connect(
+            lambda _index: self._sync_subtitle_scheme_controls()
+        )
+        self._add_scheme_button = QPushButton("添加方案", section)
+        self._add_scheme_button.setMinimumHeight(32)
+        self._add_scheme_button.clicked.connect(
+            lambda _checked=False: self._add_custom_scheme()
+        )
+
+        row = QWidget(section)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(8)
+        row_layout.addWidget(self._singer_combo, 1)
+        row_layout.addWidget(self._add_scheme_button)
+        layout.addWidget(_field("当前方案", row))
+        return section
+
     def _make_position_section(self) -> QFrame:
         section, layout = _section("位置")
 
@@ -519,18 +551,140 @@ class PropertyPanel(QTabWidget):
     # ------------------------------------------------------------------ update
 
     def _choose_color(self, field_name: str) -> None:
-        current = QColor(getattr(self._style, field_name))
+        current = QColor(self._scheme_value(field_name))
         color = QColorDialog.getColor(current, self, "选择颜色")
         if color.isValid():
             self._set_color(field_name, color.name(QColor.NameFormat.HexRgb))
 
     def _set_color(self, field_name: str, color: str) -> None:
-        normalized = _normalize_hex(color, getattr(self._style, field_name))
+        normalized = _normalize_hex(color, str(self._scheme_value(field_name)))
         self._update_style(**{field_name: normalized})
+
+    def _refresh_scheme_combo(self, selected_key: Optional[str] = None) -> None:
+        self._singer_combo.clear()
+        self._singer_combo.addItem("全局默认", _GLOBAL_SCHEME_KEY)
+        for singer_id, label in self._singer_options:
+            self._singer_combo.addItem(label, f"{_SINGER_SCHEME_PREFIX}{singer_id}")
+        for name in self._style.custom_style_schemes:
+            self._singer_combo.addItem(name, f"{_CUSTOM_SCHEME_PREFIX}{name}")
+        if selected_key is not None:
+            index = self._singer_combo.findData(selected_key)
+            if index >= 0:
+                self._singer_combo.setCurrentIndex(index)
+
+    def _add_custom_scheme(self, name: Optional[str] = None) -> None:
+        if name is None or isinstance(name, bool):
+            name, ok = QInputDialog.getText(self, "添加配色方案", "方案名称")
+            if not ok:
+                return
+        name = name.strip()
+        if not name:
+            return
+        schemes = dict(self._style.custom_style_schemes)
+        original = name
+        suffix = 2
+        while name in schemes:
+            name = f"{original} {suffix}"
+            suffix += 1
+        schemes[name] = _scheme_from_current(self)
+        self._update_style(custom_style_schemes=schemes)
+        self._syncing = True
+        try:
+            self._refresh_scheme_combo(f"{_CUSTOM_SCHEME_PREFIX}{name}")
+        finally:
+            self._syncing = False
+        self._sync_subtitle_scheme_controls()
+
+    def _current_scheme_key(self) -> Optional[str]:
+        if not hasattr(self, "_singer_combo"):
+            return None
+        data = self._singer_combo.currentData()
+        return str(data) if data is not None else _GLOBAL_SCHEME_KEY
+
+    def _current_singer_id(self) -> Optional[int]:
+        key = self._current_scheme_key()
+        if key is None or not key.startswith(_SINGER_SCHEME_PREFIX):
+            return None
+        try:
+            return int(key.removeprefix(_SINGER_SCHEME_PREFIX))
+        except ValueError:
+            return None
+
+    def _current_custom_scheme_name(self) -> Optional[str]:
+        key = self._current_scheme_key()
+        if key is None or not key.startswith(_CUSTOM_SCHEME_PREFIX):
+            return None
+        return key.removeprefix(_CUSTOM_SCHEME_PREFIX)
+
+    def _scheme_value(self, field_name: str):
+        custom_name = self._current_custom_scheme_name()
+        if custom_name is not None:
+            scheme = self._style.custom_style_schemes.get(custom_name)
+            value = getattr(scheme, field_name, None) if scheme is not None else None
+            if value is not None:
+                return value
+        singer_id = self._current_singer_id()
+        if singer_id is not None:
+            scheme = self._style.singer_style_overrides.get(singer_id)
+            value = getattr(scheme, field_name, None) if scheme is not None else None
+            if value is not None:
+                return value
+        return getattr(self._style, field_name)
+
+    def _ensure_singer_schemes(self) -> bool:
+        overrides = dict(self._style.singer_style_overrides)
+        changed = False
+        for singer_id, _label in self._singer_options:
+            if singer_id in overrides:
+                continue
+            overrides[singer_id] = _scheme_from_style(self._style, singer_id)
+            changed = True
+        if changed:
+            self._style = replace(self._style, singer_style_overrides=overrides)
+        return changed
+
+    def _sync_subtitle_scheme_controls(self) -> None:
+        if not hasattr(self, "_singer_combo"):
+            return
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            self._font_combo.setCurrentFont(QFont(str(self._scheme_value("font_family"))))
+            self._font_size_spin.setValue(int(self._scheme_value("font_size_px")))
+            self._font_weight_combo.setCurrentIndex(
+                max(0, self._font_weight_combo.findData(int(self._scheme_value("font_weight"))))
+            )
+            self._italic_check.setChecked(bool(self._scheme_value("italic")))
+            self._base_color_btn.set_color(str(self._scheme_value("base_color")))
+            self._fill_color_btn.set_color(str(self._scheme_value("fill_color")))
+            self._stroke_color_btn.set_color(str(self._scheme_value("stroke_color")))
+            self._stroke_width_spin.setValue(int(self._scheme_value("stroke_width_px")))
+            self._shadow_color_btn.set_color(str(self._scheme_value("shadow_color")))
+            self._shadow_x_spin.setValue(int(self._scheme_value("shadow_offset_x")))
+            self._shadow_y_spin.setValue(int(self._scheme_value("shadow_offset_y")))
+            self._ruby_font_size_spin.setValue(int(self._scheme_value("ruby_font_size_px")))
+            self._ruby_color_btn.set_color(str(self._scheme_value("ruby_color")))
+            self._ruby_gap_spin.setValue(int(self._scheme_value("ruby_gap_px")))
+        finally:
+            self._syncing = was_syncing
 
     def _update_style(self, **changes) -> None:
         if self._syncing:
             return
+        if changes and set(changes).issubset(_SCHEME_FIELDS):
+            custom_name = self._current_custom_scheme_name()
+            if custom_name is not None:
+                schemes = dict(self._style.custom_style_schemes)
+                scheme = schemes.get(custom_name) or _scheme_from_current(self)
+                schemes[custom_name] = replace(scheme, **changes)
+                changes = {"custom_style_schemes": schemes}
+            else:
+                singer_id = self._current_singer_id()
+                if singer_id is not None:
+                    overrides = dict(self._style.singer_style_overrides)
+                    scheme = overrides.get(singer_id) or _scheme_from_style(self._style, singer_id)
+                    overrides[singer_id] = replace(scheme, **changes)
+                    changes = {"singer_style_overrides": overrides}
         if "line_y_position" in changes:
             changes["line_y_position"] = _normalize_line_position(changes["line_y_position"])
         if "line_horizontal_layout" in changes:
@@ -540,16 +694,10 @@ class PropertyPanel(QTabWidget):
         self._style = replace(self._style, **changes)
         self._syncing = True
         try:
-            if "base_color" in changes:
-                self._base_color_btn.set_color(self._style.base_color)
-            if "fill_color" in changes:
-                self._fill_color_btn.set_color(self._style.fill_color)
-            if "stroke_color" in changes:
-                self._stroke_color_btn.set_color(self._style.stroke_color)
-            if "shadow_color" in changes:
-                self._shadow_color_btn.set_color(self._style.shadow_color)
-            if "ruby_color" in changes:
-                self._ruby_color_btn.set_color(self._style.ruby_color)
+            if set(changes).intersection(
+                _SCHEME_FIELDS | {"singer_style_overrides", "custom_style_schemes"}
+            ):
+                self._sync_subtitle_scheme_controls()
         finally:
             self._syncing = False
         self.styleChanged.emit(self._style)
@@ -567,6 +715,46 @@ def _normalize_horizontal_layout(value: object) -> LineHorizontalLayout:
     return "asymmetric"
 
 
+def _scheme_from_style(style: Style, singer_id: int) -> SubtitleStyleScheme:
+    fill = _SINGER_FILL_PALETTE[singer_id % len(_SINGER_FILL_PALETTE)]
+    ruby = _SINGER_RUBY_PALETTE[singer_id % len(_SINGER_RUBY_PALETTE)]
+    return SubtitleStyleScheme(
+        font_family=style.font_family,
+        font_size_px=style.font_size_px,
+        font_weight=style.font_weight,
+        italic=style.italic,
+        base_color=style.base_color,
+        fill_color=fill,
+        stroke_color=style.stroke_color,
+        stroke_width_px=style.stroke_width_px,
+        shadow_color=style.shadow_color,
+        shadow_offset_x=style.shadow_offset_x,
+        shadow_offset_y=style.shadow_offset_y,
+        ruby_font_size_px=style.ruby_font_size_px,
+        ruby_color=ruby,
+        ruby_gap_px=style.ruby_gap_px,
+    )
+
+
+def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
+    return SubtitleStyleScheme(
+        font_family=str(panel._scheme_value("font_family")),
+        font_size_px=int(panel._scheme_value("font_size_px")),
+        font_weight=int(panel._scheme_value("font_weight")),
+        italic=bool(panel._scheme_value("italic")),
+        base_color=str(panel._scheme_value("base_color")),
+        fill_color=str(panel._scheme_value("fill_color")),
+        stroke_color=str(panel._scheme_value("stroke_color")),
+        stroke_width_px=int(panel._scheme_value("stroke_width_px")),
+        shadow_color=str(panel._scheme_value("shadow_color")),
+        shadow_offset_x=int(panel._scheme_value("shadow_offset_x")),
+        shadow_offset_y=int(panel._scheme_value("shadow_offset_y")),
+        ruby_font_size_px=int(panel._scheme_value("ruby_font_size_px")),
+        ruby_color=str(panel._scheme_value("ruby_color")),
+        ruby_gap_px=int(panel._scheme_value("ruby_gap_px")),
+    )
+
+
 def _spin(minimum: int, maximum: int, *, suffix: str = "") -> QSpinBox:
     spin = _WheelFocusedSpinBox()
     spin.setRange(minimum, maximum)
@@ -581,6 +769,38 @@ def _compact_control(widget: QWidget) -> None:
     widget.setFixedHeight(32)
     widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
     widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+
+def _scroll_page() -> tuple[QScrollArea, QVBoxLayout]:
+    scroll = QScrollArea()
+    scroll.setObjectName("SubtitlePropertyScroll")
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    themed(
+        scroll,
+        lambda: (
+            """
+            QScrollArea#SubtitlePropertyScroll {
+                background: transparent;
+                border: 0;
+            }
+            QScrollArea#SubtitlePropertyScroll > QWidget > QWidget {
+                background: transparent;
+            }
+            """
+        ),
+    )
+
+    page = QWidget()
+    page.setObjectName("SubtitlePropertyPage")
+    page.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+    themed(page, lambda: "#SubtitlePropertyPage { background: transparent; }")
+    layout = QVBoxLayout(page)
+    layout.setContentsMargins(10, 10, 10, 12)
+    layout.setSpacing(10)
+    scroll.setWidget(page)
+    return scroll, layout
 
 
 def _field(label_text: str, control: QWidget) -> QWidget:

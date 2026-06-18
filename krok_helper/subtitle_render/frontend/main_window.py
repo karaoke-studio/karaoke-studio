@@ -407,6 +407,7 @@ class SubtitleRenderWindow(QWidget):
         self._timing_track = track
         self._subtitle_path = path
         self._lyrics_panel.set_track(track)
+        self._property_panel.set_singers(track.singer_options)
         self._preview_panel.set_track(track)
         self._refresh_transport_duration()
         self._transport_bar.set_time(0)

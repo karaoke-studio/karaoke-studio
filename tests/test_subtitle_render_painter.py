@@ -27,6 +27,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
 from krok_helper.subtitle_render.engine.timeline import DisplayLine  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
     RubyAnnotation,
+    SubtitleStyleScheme,
     Style,
     TimingChar,
     TimingLine,
@@ -163,6 +164,32 @@ def test_paint_frame_progress_changes_between_timestamps(qapp):
     paint_frame(img1, track, 1100, style)  # 第一字刚开始唱
     paint_frame(img2, track, 2400, style)  # 接近行尾，全部唱完
     assert _pixel_hash(img1) != _pixel_hash(img2)
+
+
+def test_paint_frame_applies_singer_style_scheme(qapp):
+    img_global = _blank()
+    img_singer = _blank()
+    track = _track()
+    track.lines[0].singer_id = 1
+    style_global = Style(fill_color="#FFFFFF", line_y_position="center")
+    style_singer = Style(
+        fill_color="#FFFFFF",
+        line_y_position="center",
+        singer_style_overrides={
+            1: SubtitleStyleScheme(
+                font_size_px=80,
+                fill_color="#00FF00",
+                ruby_color="#00FF00",
+                shadow_offset_x=5,
+                shadow_offset_y=4,
+            )
+        },
+    )
+
+    paint_frame(img_global, track, 1700, style_global)
+    paint_frame(img_singer, track, 1700, style_singer)
+
+    assert _pixel_hash(img_global) != _pixel_hash(img_singer)
 
 
 def test_paint_frame_default_dual_line_layout_renders_next_line(qapp):
