@@ -58,8 +58,8 @@ karaoke-studio/
 ## 3. 跑起来
 
 ```powershell
-# 用户的 venv 在仓库外
-..\karaoke-studio\.venv\Scripts\python.exe app.py
+# 带 PyQt6 的 Python 解释器
+C:\Python314\python.exe app.py
 ```
 
 CLI 选项见 [`krok_helper/cli.py`](krok_helper/cli.py)（`--video` / `--on-audio` / `--off-audio` / `--output-dir` / `--ffmpeg-dir` 等）。无参数则直接进 GUI。
@@ -67,14 +67,14 @@ CLI 选项见 [`krok_helper/cli.py`](krok_helper/cli.py)（`--video` / `--on-aud
 测试：
 
 ```powershell
-..\karaoke-studio\.venv\Scripts\python.exe -m pytest tests\
+C:\Python314\python.exe -m pytest tests\
 ```
 
 Qt 嵌入冒烟（无显示器环境）：
 
 ```powershell
 $env:QT_QPA_PLATFORM='offscreen'
-..\karaoke-studio\.venv\Scripts\python.exe -c "from PyQt6.QtWidgets import QApplication; app=QApplication([]); from krok_helper.gui_qt import KrokHelperQtApp; w=KrokHelperQtApp(); print(type(w.lyrics_timing_page).__name__)"
+C:\Python314\python.exe -c "from PyQt6.QtWidgets import QApplication; app=QApplication([]); from krok_helper.gui_qt import KrokHelperQtApp; w=KrokHelperQtApp(); print(type(w.lyrics_timing_page).__name__)"
 ```
 
 ---
