@@ -98,6 +98,9 @@ _UTOPIA_WIPE_OVER_RATIO = 1.15
 _UTOPIA_WIPE_OVER_TIME_RATIO = 0.25
 _UTOPIA_WIPE_OVER_TIME_LIMIT_MS = 100
 _UTOPIA_FADE_OUT_TIME_MS = 750
+_CHAR_FADE_INTRO_DELAY_MS = 350
+_CHAR_FADE_IN_TIME_MS = 250
+_CHAR_FADE_OUT_TIME_MS = 250
 
 
 def clear_before_layer_cache() -> None:
@@ -646,27 +649,26 @@ def _line_char_transition_context(
                 end_ms=end,
             )
 
-    exit_duration = max(style.exit_fade_ms, 0)
-    if style.exit_anim == "char_fade" and exit_duration > 0:
-        exit_start = max(_line_end_ms(line), end - exit_duration)
+    if style.exit_anim == "char_fade" and style.exit_fade_ms > 0:
+        exit_start = max(_line_end_ms(line), end - _CHAR_FADE_INTRO_DELAY_MS - _CHAR_FADE_OUT_TIME_MS)
         if t_ms >= exit_start:
             return _LineCharTransition(
                 phase="exit",
                 effect=style.exit_anim,
-                progress=_clamped_ratio(t_ms - exit_start, exit_duration),
+                progress=1.0,
                 start_ms=exit_start,
                 end_ms=end,
             )
 
-    entry_duration = max(style.entry_lead_ms, 0)
-    if style.entry_anim == "char_fade" and entry_duration > 0:
-        if t_ms <= start + entry_duration:
+    if style.entry_anim == "char_fade" and style.entry_lead_ms > 0:
+        entry_end = start + _CHAR_FADE_INTRO_DELAY_MS + _CHAR_FADE_IN_TIME_MS
+        if t_ms <= entry_end:
             return _LineCharTransition(
                 phase="entry",
                 effect=style.entry_anim,
-                progress=_clamped_ratio(t_ms - start, entry_duration),
+                progress=1.0,
                 start_ms=start,
-                end_ms=start + entry_duration,
+                end_ms=entry_end,
             )
     return None
 
@@ -867,6 +869,15 @@ def _transition_char_state(
         scale = _utopia_wipe_scale(t_ms, char_start_ms, char_end_ms)
         return 1.0, 0.0, 0.0, 0.0, scale, scale
 
+    if transition.effect == "char_fade":
+        opacity = _char_fade_opacity(
+            transition,
+            index,
+            count,
+            t_ms=t_ms,
+        )
+        return opacity, 0.0, 0.0, 0.0, 1.0, 1.0
+
     local = _staggered_char_progress(transition.progress, index, count)
     eased = 1.0 - (1.0 - local) * (1.0 - local)
     if transition.phase == "entry":
@@ -964,6 +975,34 @@ def _next_valid_char_index(line: TimingLine, start_index: int) -> int | None:
 
 def _utopia_tail_delay_ms(style: Style) -> int:
     return max(0, style.line_tail_ms - _UTOPIA_FADE_OUT_TIME_MS)
+
+
+def _char_fade_delay_step(count: int) -> int:
+    if count <= 1:
+        return 0
+    return _CHAR_FADE_INTRO_DELAY_MS // (count - 1)
+
+
+def _char_fade_opacity(
+    transition: _LineCharTransition,
+    index: int,
+    count: int,
+    *,
+    t_ms: int | None,
+) -> float:
+    if t_ms is None:
+        return transition.progress
+    if transition.phase == "entry":
+        start_ms = (transition.start_ms or 0) + _char_fade_delay_step(count) * index
+        return _clamped_ratio(t_ms - start_ms, _CHAR_FADE_IN_TIME_MS)
+    if transition.phase == "exit":
+        end_ms = (transition.end_ms or t_ms) - _char_fade_delay_step(count) * (count - index - 1)
+        if t_ms > end_ms:
+            return 0.0
+        if t_ms < end_ms - _CHAR_FADE_OUT_TIME_MS:
+            return 1.0
+        return _clamped_ratio(end_ms - t_ms, _CHAR_FADE_OUT_TIME_MS)
+    return 1.0
 
 
 def _paint_char_karaoke_stack(

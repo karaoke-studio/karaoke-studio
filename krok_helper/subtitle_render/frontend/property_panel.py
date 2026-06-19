@@ -899,7 +899,7 @@ class PropertyPanel(QTabWidget):
             ("淡入", "fade"),
             ("滑入", "slide_in"),
             ("上移", "rise"),
-            ("逐文字渐隐", "char_fade"),
+            ("逐文字渐显", "char_fade"),
             ("ユートピア", "utopia"),
         ]:
             self._entry_anim_combo.addItem(label, value)

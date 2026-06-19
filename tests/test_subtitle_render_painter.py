@@ -832,10 +832,44 @@ def test_paint_frame_char_fade_exit_starts_after_sentence_end(qapp):
         exit_fade_ms=1000,
     )
 
-    paint_frame(before_exit, track, 2400, style)
-    paint_frame(during_exit, track, 2800, style)
+    paint_frame(before_exit, track, 2800, style)
+    paint_frame(during_exit, track, 3000, style)
 
     assert _pixel_hash(before_exit) != _pixel_hash(during_exit)
+
+
+def test_char_fade_entry_matches_nkm3_linear_character_timing(qapp):
+    style = Style()
+    transition = _LineCharTransition(phase="entry", effect="char_fade", progress=1.0, start_ms=1000, end_ms=1600)
+
+    first_start = _transition_char_state(style, transition, 0, 3, t_ms=1000)
+    first_mid = _transition_char_state(style, transition, 0, 3, t_ms=1125)
+    first_done = _transition_char_state(style, transition, 0, 3, t_ms=1250)
+    second_before = _transition_char_state(style, transition, 1, 3, t_ms=1174)
+    second_mid = _transition_char_state(style, transition, 1, 3, t_ms=1300)
+
+    assert first_start[0] == pytest.approx(0.0)
+    assert first_mid[0] == pytest.approx(0.5)
+    assert first_done[0] == pytest.approx(1.0)
+    assert second_before[0] == pytest.approx(0.0)
+    assert second_mid[0] == pytest.approx(0.5)
+
+
+def test_char_fade_exit_matches_nkm3_reverse_whole_fade(qapp):
+    style = Style()
+    transition = _LineCharTransition(phase="exit", effect="char_fade", progress=1.0, start_ms=2900, end_ms=3500)
+
+    first_mid = _transition_char_state(style, transition, 0, 3, t_ms=3000)
+    first_gone = _transition_char_state(style, transition, 0, 3, t_ms=3250)
+    last_before = _transition_char_state(style, transition, 2, 3, t_ms=3249)
+    last_mid = _transition_char_state(style, transition, 2, 3, t_ms=3375)
+    last_gone = _transition_char_state(style, transition, 2, 3, t_ms=3501)
+
+    assert first_mid[0] == pytest.approx(0.6)
+    assert first_gone[0] == pytest.approx(0.0)
+    assert last_before[0] == pytest.approx(1.0)
+    assert last_mid[0] == pytest.approx(0.5)
+    assert last_gone[0] == pytest.approx(0.0)
 
 
 def test_paint_frame_utopia_exit_moves_characters_after_each_highlight(qapp):
