@@ -43,6 +43,8 @@ from krok_helper.subtitle_render.models import (
     DecorationKind,
     EntryAnimation,
     ExitAnimation,
+    HORIZONTAL_ALIGNS,
+    HorizontalAlign,
     KaraokeColors,
     KaraokeColorState,
     LineHorizontalLayout,
@@ -701,6 +703,17 @@ class PropertyPanel(QTabWidget):
             self._line_gap_spin.setValue(self._style.line_gap_px)
             self._upper_left_spin.setValue(self._style.upper_line_left_margin_px)
             self._lower_right_spin.setValue(self._style.lower_line_right_margin_px)
+            self._row1_align_combo.setCurrentIndex(
+                max(0, self._row1_align_combo.findData(self._style.row1_align))
+            )
+            self._row1_x_spin.setValue(self._style.row1_offset_x)
+            self._row1_y_spin.setValue(self._style.row1_offset_y)
+            self._row2_align_combo.setCurrentIndex(
+                max(0, self._row2_align_combo.findData(self._style.row2_align))
+            )
+            self._row2_x_spin.setValue(self._style.row2_offset_x)
+            self._row2_y_spin.setValue(self._style.row2_offset_y)
+            self._sync_per_row_enabled()
             self._line_lead_spin.setValue(self._style.line_lead_in_ms)
             self._line_tail_spin.setValue(self._style.line_tail_ms)
             self._line_offset_spin.setValue(self._style.timing_offset_ms)
@@ -1280,12 +1293,14 @@ class PropertyPanel(QTabWidget):
 
         self._horizontal_layout_combo = _WheelFocusedComboBox(section)
         _compact_control(self._horizontal_layout_combo)
-        for label, value in [("上左下右", "asymmetric"), ("居中", "center")]:
+        for label, value in [
+            ("上左下右", "asymmetric"),
+            ("居中", "center"),
+            ("逐行独立", "per_row"),
+        ]:
             self._horizontal_layout_combo.addItem(label, value)
         self._horizontal_layout_combo.currentIndexChanged.connect(
-            lambda _index: self._update_style(
-                line_horizontal_layout=self._horizontal_layout_combo.currentData()
-            )
+            lambda _index: self._on_horizontal_layout_changed()
         )
         row_layout.addWidget(_field("水平布局", self._horizontal_layout_combo), 1, 0)
 
@@ -1310,7 +1325,61 @@ class PropertyPanel(QTabWidget):
         row_layout.setColumnStretch(0, 1)
         row_layout.setColumnStretch(1, 1)
         layout.addWidget(row)
+
+        layout.addWidget(self._make_per_row_box(section))
         return section
+
+    def _make_per_row_box(self, parent: QWidget) -> QWidget:
+        """逐行独立布局控件（仅「水平布局 = 逐行独立」时启用）。"""
+        box = self._per_row_box = QWidget(parent)
+        grid = QGridLayout(box)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+
+        self._row1_align_combo = self._make_align_combo(box, "row1_align")
+        grid.addWidget(_field("一行对齐", self._row1_align_combo), 0, 0)
+        self._row1_x_spin = self._make_offset_spin("row1_offset_x")
+        grid.addWidget(_field("一行 X", self._row1_x_spin), 0, 1)
+        self._row1_y_spin = self._make_offset_spin("row1_offset_y")
+        grid.addWidget(_field("一行 Y", self._row1_y_spin), 0, 2)
+
+        self._row2_align_combo = self._make_align_combo(box, "row2_align")
+        grid.addWidget(_field("二行对齐", self._row2_align_combo), 1, 0)
+        self._row2_x_spin = self._make_offset_spin("row2_offset_x")
+        grid.addWidget(_field("二行 X", self._row2_x_spin), 1, 1)
+        self._row2_y_spin = self._make_offset_spin("row2_offset_y")
+        grid.addWidget(_field("二行 Y", self._row2_y_spin), 1, 2)
+
+        for col in range(3):
+            grid.setColumnStretch(col, 1)
+        return box
+
+    def _make_align_combo(self, parent: QWidget, field_name: str) -> "_WheelFocusedComboBox":
+        combo = _WheelFocusedComboBox(parent)
+        _compact_control(combo)
+        for label, value in [("左", "left"), ("中", "center"), ("右", "right")]:
+            combo.addItem(label, value)
+        combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(**{field_name: combo.currentData()})
+        )
+        return combo
+
+    def _make_offset_spin(self, field_name: str) -> QSpinBox:
+        spin = _spin(-4000, 4000, suffix=" px")
+        spin.valueChanged.connect(lambda value: self._update_style(**{field_name: value}))
+        return spin
+
+    def _on_horizontal_layout_changed(self) -> None:
+        self._update_style(
+            line_horizontal_layout=self._horizontal_layout_combo.currentData()
+        )
+        self._sync_per_row_enabled()
+
+    def _sync_per_row_enabled(self) -> None:
+        if not hasattr(self, "_per_row_box"):
+            return
+        self._per_row_box.setEnabled(self._style.line_horizontal_layout == "per_row")
 
     def _make_timing_section(self) -> QFrame:
         section, layout = _section("时间")
@@ -1694,6 +1763,9 @@ class PropertyPanel(QTabWidget):
             changes["line_horizontal_layout"] = _normalize_horizontal_layout(
                 changes["line_horizontal_layout"]
             )
+        for align_field in ("row1_align", "row2_align"):
+            if align_field in changes:
+                changes[align_field] = _normalize_horizontal_align(changes[align_field])
         if "viewport_align" in changes:
             changes["viewport_align"] = _normalize_viewport_align(changes["viewport_align"])
         if "decoration_kind" in changes:
@@ -1723,9 +1795,15 @@ def _normalize_line_position(value: object) -> LineYPosition:
 
 
 def _normalize_horizontal_layout(value: object) -> LineHorizontalLayout:
-    if value in {"asymmetric", "center"}:
+    if value in {"asymmetric", "center", "per_row"}:
         return value  # type: ignore[return-value]
     return "asymmetric"
+
+
+def _normalize_horizontal_align(value: object) -> HorizontalAlign:
+    if value in HORIZONTAL_ALIGNS:
+        return value  # type: ignore[return-value]
+    return "left"
 
 
 def _normalize_viewport_align(value: object) -> ViewportAlign:

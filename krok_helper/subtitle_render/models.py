@@ -141,7 +141,9 @@ class SubtitleSource:
 
 
 LineYPosition = Literal["top", "center", "bottom"]
-LineHorizontalLayout = Literal["asymmetric", "center"]
+LineHorizontalLayout = Literal["asymmetric", "center", "per_row"]
+HorizontalAlign = Literal["left", "center", "right"]
+HORIZONTAL_ALIGNS: tuple[HorizontalAlign, ...] = ("left", "center", "right")
 ViewportAlign = Literal[
     "top_left",
     "top_center",
@@ -341,16 +343,27 @@ class Style:
     """默认上下双行显示：当前行在上，下一行在下。"""
 
     line_horizontal_layout: LineHorizontalLayout = "asymmetric"
-    """双行水平布局：``asymmetric`` 为上左下右，``center`` 为两行居中。"""
+    """双行水平布局：``asymmetric`` 为上左下右，``center`` 为两行居中，
+    ``per_row`` 为逐行独立对齐 + X/Y（对标 Sayatoo「布局」第一行 / 第二行）。"""
 
     line_gap_px: int = 90
     """双行布局中两行主文字外框之间的间距，不包含 ruby 高度。"""
 
     upper_line_left_margin_px: int = 50
-    """双行布局中上排字幕距离左边的边距。"""
+    """双行布局中上排字幕距离左边的边距（仅 ``asymmetric`` 模式）。"""
 
     lower_line_right_margin_px: int = 50
-    """双行布局中下排字幕距离右边的边距。"""
+    """双行布局中下排字幕距离右边的边距（仅 ``asymmetric`` 模式）。"""
+
+    # 逐行独立布局（per_row 模式，对标 Sayatoo「布局」第一行 / 第二行）
+    # 对齐决定该行的水平锚点（left=贴左 / center=居中 / right=贴右），
+    # offset_x/y 为锚点之上的像素位移，正值向右 / 向下。
+    row1_align: HorizontalAlign = "left"
+    row1_offset_x: int = 50
+    row1_offset_y: int = 0
+    row2_align: HorizontalAlign = "right"
+    row2_offset_x: int = -50
+    row2_offset_y: int = 0
 
     line_lead_in_ms: int = 1800
     """理想表示开始 = 歌唱开始前的毫秒数；填充仍从真实字符时间开始。"""
@@ -482,6 +495,10 @@ def style_from_dict(payload: object) -> Style:
             "line_gap_px",
             "upper_line_left_margin_px",
             "lower_line_right_margin_px",
+            "row1_offset_x",
+            "row1_offset_y",
+            "row2_offset_x",
+            "row2_offset_y",
             "line_lead_in_ms",
             "line_tail_ms",
             "timing_offset_ms",
@@ -498,7 +515,9 @@ def style_from_dict(payload: object) -> Style:
         elif key == "line_y_position":
             changes[key] = value if value in {"top", "center", "bottom"} else defaults.line_y_position
         elif key == "line_horizontal_layout":
-            changes[key] = value if value in {"asymmetric", "center"} else defaults.line_horizontal_layout
+            changes[key] = value if value in {"asymmetric", "center", "per_row"} else defaults.line_horizontal_layout
+        elif key in {"row1_align", "row2_align"}:
+            changes[key] = value if value in HORIZONTAL_ALIGNS else getattr(defaults, key)
         elif key == "viewport_align":
             changes[key] = value if value in VIEWPORT_ALIGNS else defaults.viewport_align
         elif key == "decoration_kind":

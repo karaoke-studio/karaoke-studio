@@ -410,7 +410,10 @@ def _resolve_display_baselines(
             if line is not None and _active_rubies_for_line(track.rubies, line)
             else None
         )
-        return {0: _resolve_baseline_y(metrics, img_h, style, ruby_metrics)}
+        baseline = _resolve_baseline_y(metrics, img_h, style, ruby_metrics)
+        if style.line_horizontal_layout == "per_row":
+            baseline += style.row1_offset_y
+        return {0: baseline}
 
     main_h, main_ascent, main_descent, ruby_extra = _fixed_line_geometry(style)
     gap = max(style.line_gap_px, 0)
@@ -427,6 +430,9 @@ def _resolve_display_baselines(
     else:
         lower_baseline = img_h - margin - main_descent
         upper_baseline = lower_baseline - main_h - gap
+    if style.line_horizontal_layout == "per_row":
+        upper_baseline += style.row1_offset_y
+        lower_baseline += style.row2_offset_y
     return {
         0: upper_baseline,
         1: lower_baseline,
@@ -1859,6 +1865,9 @@ def _resolve_line_x(
     style: Style,
     lane: int | None,
 ) -> int:
+    if style.line_horizontal_layout == "per_row":
+        align, offset_x, _ = _row_layout_params(style, lane)
+        return _aligned_x0(img_w, total_w, align) + offset_x
     if style.line_horizontal_layout == "center":
         return (img_w - total_w) // 2
     if style.dual_line_layout and lane == 0:
@@ -1866,6 +1875,22 @@ def _resolve_line_x(
     if style.dual_line_layout and lane == 1:
         return img_w - max(style.lower_line_right_margin_px, 0) - total_w
     return (img_w - total_w) // 2
+
+
+def _aligned_x0(img_w: int, total_w: int, align: str) -> int:
+    """根据水平锚点返回行左边缘 x0：left=贴左，center=居中，right=贴右。"""
+    if align == "center":
+        return (img_w - total_w) // 2
+    if align == "right":
+        return img_w - total_w
+    return 0
+
+
+def _row_layout_params(style: Style, lane: int | None) -> tuple[str, int, int]:
+    """逐行布局参数 (对齐, offset_x, offset_y)。lane 1 取第二行，其余取第一行。"""
+    if lane == 1:
+        return style.row2_align, style.row2_offset_x, style.row2_offset_y
+    return style.row1_align, style.row1_offset_x, style.row1_offset_y
 
 
 def _line_start_ms(line: TimingLine) -> int:

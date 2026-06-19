@@ -261,6 +261,40 @@ def test_viewport_rotation_changes_render(qapp):
     assert _pixel_hash(base) != _pixel_hash(rotated)
 
 
+def test_resolve_line_x_per_row_aligns_each_row(qapp):
+    style = Style(
+        line_horizontal_layout="per_row",
+        row1_align="left",
+        row1_offset_x=40,
+        row2_align="right",
+        row2_offset_x=-30,
+    )
+    # 第一行：贴左 (0) + 40
+    assert _resolve_line_x(1000, 200, style, 0) == 40
+    # 第二行：贴右 (1000-200=800) + (-30)
+    assert _resolve_line_x(1000, 200, style, 1) == 770
+    # 居中锚点
+    centered = replace(style, row1_align="center", row1_offset_x=0)
+    assert _resolve_line_x(1000, 200, centered, 0) == (1000 - 200) // 2
+
+
+def test_per_row_offset_y_shifts_each_baseline(qapp):
+    track = _two_line_track()
+    display = [
+        DisplayLine(track.lines[0], 0, 0, 5000),
+        DisplayLine(track.lines[1], 1, 0, 5000),
+    ]
+    base = _resolve_display_baselines(1080, track, display, Style())
+    shifted = _resolve_display_baselines(
+        1080,
+        track,
+        display,
+        Style(line_horizontal_layout="per_row", row1_offset_y=-25, row2_offset_y=40),
+    )
+    assert shifted[0] == base[0] - 25
+    assert shifted[1] == base[1] + 40
+
+
 def test_paint_frame_during_line_modifies_image(qapp):
     img = _blank()
     baseline = _pixel_hash(img)

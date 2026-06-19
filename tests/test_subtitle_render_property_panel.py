@@ -61,10 +61,16 @@ def test_property_panel_set_style_populates_controls(qapp):
         line_y_position="top",
         line_y_margin_px=120,
         dual_line_layout=False,
-        line_horizontal_layout="center",
+        line_horizontal_layout="per_row",
         line_gap_px=66,
         upper_line_left_margin_px=77,
         lower_line_right_margin_px=88,
+        row1_align="center",
+        row1_offset_x=11,
+        row1_offset_y=-22,
+        row2_align="left",
+        row2_offset_x=33,
+        row2_offset_y=44,
         line_lead_in_ms=900,
         line_tail_ms=1100,
         timing_offset_ms=-120,
@@ -103,10 +109,17 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._line_position_combo.currentData() == "top"
     assert panel._line_margin_spin.value() == 120
     assert not panel._dual_line_check.isChecked()
-    assert panel._horizontal_layout_combo.currentData() == "center"
+    assert panel._horizontal_layout_combo.currentData() == "per_row"
     assert panel._line_gap_spin.value() == 66
     assert panel._upper_left_spin.value() == 77
     assert panel._lower_right_spin.value() == 88
+    assert panel._row1_align_combo.currentData() == "center"
+    assert panel._row1_x_spin.value() == 11
+    assert panel._row1_y_spin.value() == -22
+    assert panel._row2_align_combo.currentData() == "left"
+    assert panel._row2_x_spin.value() == 33
+    assert panel._row2_y_spin.value() == 44
+    assert panel._per_row_box.isEnabled()
     assert panel._line_lead_spin.value() == 900
     assert panel._line_tail_spin.value() == 1100
     assert panel._line_offset_spin.value() == -120
@@ -150,6 +163,12 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.line_y_margin_px == 80
     assert style.dual_line_layout is True
     assert style.line_horizontal_layout == "asymmetric"
+    assert style.row1_align == "left"
+    assert style.row1_offset_x == 50
+    assert style.row1_offset_y == 0
+    assert style.row2_align == "right"
+    assert style.row2_offset_x == -50
+    assert style.row2_offset_y == 0
     assert style.line_gap_px == 90
     assert style.stroke_width_px == 9
     assert style.stroke2_width_px == 0
@@ -529,6 +548,48 @@ def test_property_panel_layout_controls_emit_style(qapp):
     assert emitted[-1].line_gap_px == 70
     assert emitted[-1].upper_line_left_margin_px == 31
     assert emitted[-1].lower_line_right_margin_px == 42
+
+
+def test_property_panel_per_row_controls_emit_style(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._horizontal_layout_combo.setCurrentIndex(
+        panel._horizontal_layout_combo.findData("per_row")
+    )
+    assert panel._per_row_box.isEnabled()
+
+    panel._row1_align_combo.setCurrentIndex(
+        panel._row1_align_combo.findData("center")
+    )
+    panel._row1_x_spin.setValue(120)
+    panel._row1_y_spin.setValue(-15)
+    panel._row2_align_combo.setCurrentIndex(panel._row2_align_combo.findData("left"))
+    panel._row2_x_spin.setValue(-60)
+    panel._row2_y_spin.setValue(25)
+
+    assert emitted[-1].line_horizontal_layout == "per_row"
+    assert emitted[-1].row1_align == "center"
+    assert emitted[-1].row1_offset_x == 120
+    assert emitted[-1].row1_offset_y == -15
+    assert emitted[-1].row2_align == "left"
+    assert emitted[-1].row2_offset_x == -60
+    assert emitted[-1].row2_offset_y == 25
+
+
+def test_property_panel_per_row_box_disabled_for_other_layouts(qapp):
+    panel = PropertyPanel()
+    # 默认 asymmetric → 逐行控件禁用
+    assert not panel._per_row_box.isEnabled()
+    panel._horizontal_layout_combo.setCurrentIndex(
+        panel._horizontal_layout_combo.findData("per_row")
+    )
+    assert panel._per_row_box.isEnabled()
+    panel._horizontal_layout_combo.setCurrentIndex(
+        panel._horizontal_layout_combo.findData("center")
+    )
+    assert not panel._per_row_box.isEnabled()
 
 
 def test_property_panel_viewport_controls_emit_style(qapp):
