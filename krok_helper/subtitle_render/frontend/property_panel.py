@@ -1231,29 +1231,31 @@ class PropertyPanel(QTabWidget):
         row_layout.setHorizontalSpacing(8)
         row_layout.setVerticalSpacing(8)
 
-        self._viewport_x_spin = _spin(-4000, 4000, suffix=" px")
+        # 位置 X / Y 为 4 位数值框（含上下箭头），窄面板下两个并排会溢出，
+        # 各占整行；缩放 / 旋转较窄，可同行。
+        self._viewport_x_spin = _spin(-4000, 4000)
         self._viewport_x_spin.valueChanged.connect(
             lambda value: self._update_style(viewport_offset_x=value)
         )
-        row_layout.addWidget(_field("位置 X", self._viewport_x_spin), 0, 0)
+        row_layout.addWidget(_field("位置 X", self._viewport_x_spin), 0, 0, 1, 2)
 
-        self._viewport_y_spin = _spin(-4000, 4000, suffix=" px")
+        self._viewport_y_spin = _spin(-4000, 4000)
         self._viewport_y_spin.valueChanged.connect(
             lambda value: self._update_style(viewport_offset_y=value)
         )
-        row_layout.addWidget(_field("位置 Y", self._viewport_y_spin), 0, 1)
+        row_layout.addWidget(_field("位置 Y", self._viewport_y_spin), 1, 0, 1, 2)
 
         self._viewport_scale_spin = _spin(10, 400, suffix=" %")
         self._viewport_scale_spin.valueChanged.connect(
             lambda value: self._update_style(viewport_scale_pct=value)
         )
-        row_layout.addWidget(_field("缩放", self._viewport_scale_spin), 1, 0)
+        row_layout.addWidget(_field("缩放", self._viewport_scale_spin), 2, 0)
 
         self._viewport_rotation_spin = _spin(-180, 180, suffix=" °")
         self._viewport_rotation_spin.valueChanged.connect(
             lambda value: self._update_style(viewport_rotation_deg=value)
         )
-        row_layout.addWidget(_field("旋转", self._viewport_rotation_spin), 1, 1)
+        row_layout.addWidget(_field("旋转", self._viewport_rotation_spin), 2, 1)
 
         row_layout.setColumnStretch(0, 1)
         row_layout.setColumnStretch(1, 1)
@@ -1337,22 +1339,24 @@ class PropertyPanel(QTabWidget):
         grid.setHorizontalSpacing(8)
         grid.setVerticalSpacing(8)
 
+        # 窄面板（~260px）下两个数值框并排会横向溢出，所以每行最多放
+        # 「对齐(窄) + X」，Y 单独整行。对齐下拉很窄，与 X 同行可容纳。
         self._row1_align_combo = self._make_align_combo(box, "row1_align")
         grid.addWidget(_field("一行对齐", self._row1_align_combo), 0, 0)
         self._row1_x_spin = self._make_offset_spin("row1_offset_x")
         grid.addWidget(_field("一行 X", self._row1_x_spin), 0, 1)
         self._row1_y_spin = self._make_offset_spin("row1_offset_y")
-        grid.addWidget(_field("一行 Y", self._row1_y_spin), 0, 2)
+        grid.addWidget(_field("一行 Y", self._row1_y_spin), 1, 0, 1, 2)
 
         self._row2_align_combo = self._make_align_combo(box, "row2_align")
-        grid.addWidget(_field("二行对齐", self._row2_align_combo), 1, 0)
+        grid.addWidget(_field("二行对齐", self._row2_align_combo), 2, 0)
         self._row2_x_spin = self._make_offset_spin("row2_offset_x")
-        grid.addWidget(_field("二行 X", self._row2_x_spin), 1, 1)
+        grid.addWidget(_field("二行 X", self._row2_x_spin), 2, 1)
         self._row2_y_spin = self._make_offset_spin("row2_offset_y")
-        grid.addWidget(_field("二行 Y", self._row2_y_spin), 1, 2)
+        grid.addWidget(_field("二行 Y", self._row2_y_spin), 3, 0, 1, 2)
 
-        for col in range(3):
-            grid.setColumnStretch(col, 1)
+        grid.setColumnStretch(0, 0)
+        grid.setColumnStretch(1, 1)
         return box
 
     def _make_align_combo(self, parent: QWidget, field_name: str) -> "_WheelFocusedComboBox":
@@ -1366,7 +1370,8 @@ class PropertyPanel(QTabWidget):
         return combo
 
     def _make_offset_spin(self, field_name: str) -> QSpinBox:
-        spin = _spin(-4000, 4000, suffix=" px")
+        # 不加 " px" 后缀：窄面板下两列并排会横向溢出，单位由字段标签隐含。
+        spin = _spin(-4000, 4000)
         spin.valueChanged.connect(lambda value: self._update_style(**{field_name: value}))
         return spin
 
