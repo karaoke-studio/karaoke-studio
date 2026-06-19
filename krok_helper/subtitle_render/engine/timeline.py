@@ -153,7 +153,11 @@ def compute_display_lines(
         lane = index % 2
         lanes.append(lane)
         preferred_start = max(line.chars[0].start_ms - lead, 0)
-        if index % 2 == 1 and starts:
+        if (
+            index % 2 == 1
+            and starts
+            and section_ids[index] == section_ids[index - 1]
+        ):
             preferred_start = min(
                 preferred_start,
                 starts[index - 1] + pair_second_delay,

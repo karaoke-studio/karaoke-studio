@@ -291,6 +291,13 @@ def test_sync_ending_extends_earlier_lane_to_section_end():
     assert sync[1].display_end_ms == 3000
 
 
+def test_second_lane_pair_delay_does_not_cross_auto_section():
+    track = _sectioned_track()
+    layouts = _compute(track, section_ending_mode="hold")
+
+    assert layouts[3].display_start_ms == 9000
+
+
 def test_sections_disabled_keep_legacy_windows():
     track = _sectioned_track()
     legacy = compute_display_lines(
