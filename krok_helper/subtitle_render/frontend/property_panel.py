@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from krok_helper.subtitle_render.frontend.theme import palette, themed
+from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
 from krok_helper.subtitle_render.models import (
     ColorLayerKey,
     ColorStateKey,
@@ -1697,26 +1697,20 @@ def _section(title: str) -> tuple[QFrame, QVBoxLayout]:
             QFrame#SubtitlePropertySection QWidget {{
                 background: transparent;
             }}
-            QFrame#SubtitlePropertySection QComboBox,
-            QFrame#SubtitlePropertySection QFontComboBox,
-            QFrame#SubtitlePropertySection QSpinBox {{
-                background: {palette().card_bg};
-                color: {palette().text_primary};
-                border: 1px solid {palette().card_border};
-                border-radius: 6px;
-                padding: 0 8px;
-                font-size: 9.5pt;
-            }}
-            QFrame#SubtitlePropertySection QComboBox:hover,
-            QFrame#SubtitlePropertySection QFontComboBox:hover,
-            QFrame#SubtitlePropertySection QSpinBox:hover {{
-                border-color: {palette().accent_primary};
-            }}
             QFrame#SubtitlePropertySection QCheckBox {{
                 color: {palette().text_primary};
                 font-size: 9.5pt;
                 background: transparent;
             }}
+            QFrame#SubtitlePropertySection QComboBox QAbstractItemView,
+            QFrame#SubtitlePropertySection QFontComboBox QAbstractItemView {{
+                background: {palette().card_bg};
+                color: {palette().text_primary};
+                border: 1px solid {palette().card_border};
+                selection-background-color: {palette().preview_selection_bg};
+                selection-color: {palette().preview_selection_text};
+            }}
+            {control_qss("QFrame#SubtitlePropertySection")}
             """
         ),
     )

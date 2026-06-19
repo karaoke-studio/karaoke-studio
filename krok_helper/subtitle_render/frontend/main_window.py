@@ -75,7 +75,7 @@ from krok_helper.subtitle_render.frontend.timeline_view import (
 )
 from krok_helper.subtitle_render.models import Style, TimingTrack, style_from_dict, style_to_dict
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
-from krok_helper.subtitle_render.frontend.theme import palette, themed
+from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
 
 SUBTITLE_FILTER = "Nicokara 逐字 LRC (*.lrc);;所有文件 (*.*)"
 VIDEO_FILTER = "视频文件 (*.mp4 *.mkv *.mov *.webm *.avi *.flv);;所有文件 (*.*)"
@@ -270,6 +270,18 @@ class SubtitleRenderWindow(QWidget):
 
     def _make_export_tab(self) -> QWidget:
         page = QWidget()
+        page.setObjectName("SubtitleExportPage")
+        themed(
+            page,
+            lambda: (
+                f"""
+                #SubtitleExportPage {{
+                    background: transparent;
+                }}
+                {control_qss("#SubtitleExportPage")}
+                """
+            ),
+        )
         layout = QVBoxLayout(page)
         layout.setContentsMargins(32, 28, 32, 32)
         layout.setSpacing(14)

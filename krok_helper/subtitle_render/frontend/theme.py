@@ -20,9 +20,15 @@ class _FallbackPalette:
     text_primary: str = "#1f2937"
     text_secondary: str = "#667085"
     text_hint: str = "#64748B"
+    text_disabled: str = "#94A3B8"
     card_bg: str = "#FFFFFF"
     card_border: str = "#E5EAF2"
     panel_bg: str = "#FFFFFF"
+    input_bg: str = "#FFFFFF"
+    input_border: str = "#D9DEE8"
+    input_border_hover: str = "#B6C2D2"
+    input_border_focus: str = "#D87886"
+    input_hover_bg: str = "#FBFCFE"
     preview_bg: str = "#F8FAFC"
     preview_border: str = "#DDE5EF"
     preview_selection_bg: str = "#FAD7DE"
@@ -35,6 +41,9 @@ class _FallbackPalette:
     secondary_button_hover_bg: str = "#F8FAFC"
     secondary_button_hover_border: str = "#C6D0DE"
     secondary_button_pressed_bg: str = "#EEF2F7"
+    secondary_button_text: str = "#334155"
+    progress_bg: str = "#ECEFF5"
+    progress_chunk: str = "#FF5A6F"
 
 
 def _workbench_theme_module():
@@ -69,3 +78,75 @@ def themed(widget, qss_factory: Callable[[], str]) -> None:
         module.themed(widget, qss_factory)
     except RuntimeError:
         widget.setStyleSheet(qss_factory())
+
+
+def control_qss(scope: str = "") -> str:
+    """Theme-aware QSS for plain Qt inputs/buttons used by this module."""
+    p = palette()
+    prefix = f"{scope} " if scope else ""
+    return f"""
+        {prefix}QLineEdit,
+        {prefix}QComboBox,
+        {prefix}QFontComboBox,
+        {prefix}QSpinBox {{
+            background: {p.input_bg};
+            color: {p.text_primary};
+            border: 1px solid {p.input_border};
+            border-radius: 6px;
+            padding: 0 8px;
+            font-size: 9.5pt;
+        }}
+        {prefix}QLineEdit:hover,
+        {prefix}QComboBox:hover,
+        {prefix}QFontComboBox:hover,
+        {prefix}QSpinBox:hover {{
+            background: {p.input_hover_bg};
+            border-color: {p.input_border_hover};
+        }}
+        {prefix}QLineEdit:focus,
+        {prefix}QComboBox:focus,
+        {prefix}QFontComboBox:focus,
+        {prefix}QSpinBox:focus {{
+            border-color: {p.input_border_focus};
+        }}
+        {prefix}QLineEdit:disabled,
+        {prefix}QComboBox:disabled,
+        {prefix}QFontComboBox:disabled,
+        {prefix}QSpinBox:disabled {{
+            color: {p.text_disabled};
+            background: {p.secondary_button_pressed_bg};
+            border-color: {p.card_border};
+        }}
+        {prefix}QPushButton {{
+            background: {p.secondary_button_bg};
+            color: {p.secondary_button_text};
+            border: 1px solid {p.secondary_button_border};
+            border-radius: 6px;
+            padding: 0 12px;
+            font-size: 9.5pt;
+        }}
+        {prefix}QPushButton:hover {{
+            background: {p.secondary_button_hover_bg};
+            border-color: {p.secondary_button_hover_border};
+        }}
+        {prefix}QPushButton:pressed {{
+            background: {p.secondary_button_pressed_bg};
+        }}
+        {prefix}QPushButton:disabled {{
+            color: {p.text_disabled};
+            background: {p.secondary_button_pressed_bg};
+            border-color: {p.card_border};
+        }}
+        {prefix}QProgressBar {{
+            background: {p.progress_bg};
+            color: {p.text_primary};
+            border: 1px solid {p.card_border};
+            border-radius: 6px;
+            min-height: 12px;
+            text-align: center;
+        }}
+        {prefix}QProgressBar::chunk {{
+            background: {p.progress_chunk};
+            border-radius: 5px;
+        }}
+    """
