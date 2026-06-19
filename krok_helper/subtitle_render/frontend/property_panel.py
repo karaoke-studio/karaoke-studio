@@ -42,6 +42,7 @@ from krok_helper.subtitle_render.models import (
     DecorationKind,
     EntryAnimation,
     ExitAnimation,
+    KaraokeTransitionEffect,
     KaraokeColors,
     KaraokeColorState,
     LineHorizontalLayout,
@@ -527,6 +528,15 @@ class PropertyPanel(QTabWidget):
                 max(0, self._exit_anim_combo.findData(self._style.exit_anim))
             )
             self._exit_fade_spin.setValue(self._style.exit_fade_ms)
+            self._karaoke_transition_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._karaoke_transition_combo.findData(
+                        self._style.karaoke_transition_effect
+                    ),
+                )
+            )
+            self._karaoke_transition_spin.setValue(self._style.karaoke_transition_ms)
             self._sync_subtitle_scheme_controls()
         finally:
             self._syncing = False
@@ -935,6 +945,27 @@ class PropertyPanel(QTabWidget):
             lambda value: self._update_style(exit_fade_ms=value)
         )
         grid_layout.addWidget(_field("退场时长", self._exit_fade_spin), 1, 1)
+
+        self._karaoke_transition_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._karaoke_transition_combo)
+        for label, value in [
+            ("无", "none"),
+            ("逐文字渐隐", "fade_chars"),
+            ("上浮散开", "float_chars"),
+        ]:
+            self._karaoke_transition_combo.addItem(label, value)
+        self._karaoke_transition_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                karaoke_transition_effect=self._karaoke_transition_combo.currentData()
+            )
+        )
+        grid_layout.addWidget(_field("走字后", self._karaoke_transition_combo), 2, 0)
+
+        self._karaoke_transition_spin = _spin(0, 3000, suffix=" ms")
+        self._karaoke_transition_spin.valueChanged.connect(
+            lambda value: self._update_style(karaoke_transition_ms=value)
+        )
+        grid_layout.addWidget(_field("逐字时长", self._karaoke_transition_spin), 2, 1)
 
         grid_layout.setColumnStretch(0, 1)
         grid_layout.setColumnStretch(1, 1)
@@ -1365,6 +1396,10 @@ class PropertyPanel(QTabWidget):
             changes["entry_anim"] = _normalize_entry_animation(changes["entry_anim"])
         if "exit_anim" in changes:
             changes["exit_anim"] = _normalize_exit_animation(changes["exit_anim"])
+        if "karaoke_transition_effect" in changes:
+            changes["karaoke_transition_effect"] = _normalize_karaoke_transition_effect(
+                changes["karaoke_transition_effect"]
+            )
         self._style = replace(self._style, **changes)
         self._syncing = True
         try:
@@ -1403,6 +1438,12 @@ def _normalize_entry_animation(value: object) -> EntryAnimation:
 
 def _normalize_exit_animation(value: object) -> ExitAnimation:
     if value in {"none", "fade", "slide_out", "rise"}:
+        return value  # type: ignore[return-value]
+    return "none"
+
+
+def _normalize_karaoke_transition_effect(value: object) -> KaraokeTransitionEffect:
+    if value in {"none", "fade_chars", "float_chars"}:
         return value  # type: ignore[return-value]
     return "none"
 

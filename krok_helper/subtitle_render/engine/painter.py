@@ -466,6 +466,22 @@ def _paint_line_static(
     )
     colors = _effective_karaoke_colors(style)
     line_path = _line_text_path(line, char_widths, font, x0, y)
+    if style.karaoke_transition_effect != "none":
+        _paint_karaoke_transition_line(
+            painter,
+            line,
+            char_widths,
+            char_x_ranges,
+            intervals,
+            font,
+            y,
+            metrics,
+            style,
+            colors,
+            line_rect,
+            t_ms,
+        )
+        return
 
     # --- "未唱"层（不依赖 t_ms）：查 / 建缓存后一次 blit ---
     if total_w > 0 and metrics.height() > 0:
@@ -548,6 +564,129 @@ def _paint_line_static(
         metrics,
         t_ms,
     )
+
+
+def _paint_karaoke_transition_line(
+    painter: QPainter,
+    line: TimingLine,
+    char_widths: list[int],
+    char_x_ranges: list[tuple[int, int]],
+    intervals: list[tuple[int, int]],
+    font: QFont,
+    baseline_y: int,
+    metrics: QFontMetrics,
+    style: Style,
+    colors: KaraokeColors,
+    line_rect: QRectF,
+    t_ms: int,
+) -> None:
+    for index, (ch, width) in enumerate(zip(line.chars, char_widths)):
+        if index >= len(intervals) or index >= len(char_x_ranges):
+            continue
+        left, right = char_x_ranges[index]
+        start, end = intervals[index]
+        path = QPainterPath()
+        path.addText(float(left), float(baseline_y), font, ch.text)
+
+        ratio = char_fill_ratio(start, end, t_ms)
+        if ratio <= 0.0:
+            _paint_text_layer_stack(
+                painter,
+                path,
+                line_rect,
+                colors.before,
+                style,
+                stroke_width=style.stroke_width_px,
+                stroke2_width=style.stroke2_width_px,
+                shadow_dx=style.shadow_offset_x,
+                shadow_dy=style.shadow_offset_y,
+                glow_radius=style.glow_radius_px,
+            )
+            continue
+
+        if ratio < 1.0:
+            _paint_text_layer_stack(
+                painter,
+                path,
+                line_rect,
+                colors.before,
+                style,
+                stroke_width=style.stroke_width_px,
+                stroke2_width=style.stroke2_width_px,
+                shadow_dx=style.shadow_offset_x,
+                shadow_dy=style.shadow_offset_y,
+                glow_radius=style.glow_radius_px,
+            )
+            stroke_pad = _visual_stroke_extent(
+                style.stroke_width_px, style.stroke2_width_px
+            )
+            painter.save()
+            try:
+                painter.setClipRect(
+                    QRectF(
+                        float(left - stroke_pad),
+                        float(baseline_y - metrics.ascent() - stroke_pad),
+                        float(width * ratio + stroke_pad),
+                        float(metrics.height() + stroke_pad * 2),
+                    )
+                )
+                _paint_text_layer_stack(
+                    painter,
+                    path,
+                    line_rect,
+                    colors.after,
+                    style,
+                    stroke_width=style.stroke_width_px,
+                    stroke2_width=style.stroke2_width_px,
+                    shadow_dx=style.shadow_offset_x,
+                    shadow_dy=style.shadow_offset_y,
+                    glow_radius=style.glow_radius_px,
+                )
+            finally:
+                painter.restore()
+            continue
+
+        opacity, dx, dy = _karaoke_post_char_state(style, end, t_ms, index)
+        if opacity <= 0.0:
+            continue
+        painter.save()
+        try:
+            if opacity < 1.0:
+                painter.setOpacity(painter.opacity() * opacity)
+            if dx or dy:
+                painter.translate(dx, dy)
+            _paint_text_layer_stack(
+                painter,
+                path,
+                line_rect,
+                colors.after,
+                style,
+                stroke_width=style.stroke_width_px,
+                stroke2_width=style.stroke2_width_px,
+                shadow_dx=style.shadow_offset_x,
+                shadow_dy=style.shadow_offset_y,
+                glow_radius=style.glow_radius_px,
+            )
+        finally:
+            painter.restore()
+
+
+def _karaoke_post_char_state(
+    style: Style,
+    char_end_ms: int,
+    t_ms: int,
+    index: int,
+) -> tuple[float, float, float]:
+    duration = max(style.karaoke_transition_ms, 1)
+    progress = max(0.0, min(1.0, (t_ms - char_end_ms) / duration))
+    opacity = 1.0 - progress
+    if style.karaoke_transition_effect == "float_chars":
+        eased = 1.0 - (1.0 - progress) * (1.0 - progress)
+        drift = -0.18 if index % 2 == 0 else 0.08
+        dx = style.font_size_px * drift * eased
+        dy = -max(style.font_size_px * 0.55, 24.0) * eased
+        return opacity, dx, dy
+    return opacity, 0.0, 0.0
 
 
 def _line_text_path(

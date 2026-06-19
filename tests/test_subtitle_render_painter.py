@@ -728,3 +728,42 @@ def test_paint_frame_entry_and_exit_animation_change_rendered_frame(qapp):
 
     assert _pixel_hash(at_entry_static) != _pixel_hash(at_entry_animated)
     assert _pixel_hash(at_exit_static) != _pixel_hash(at_exit_animated)
+
+
+def test_paint_frame_per_character_fade_transition_changes_render(qapp):
+    track = _track()
+    normal = _blank()
+    faded = _blank()
+    style_normal = Style(line_y_position="center")
+    style_fade = Style(
+        line_y_position="center",
+        karaoke_transition_effect="fade_chars",
+        karaoke_transition_ms=650,
+    )
+
+    paint_frame(normal, track, 1700, style_normal)
+    paint_frame(faded, track, 1700, style_fade)
+
+    assert _pixel_hash(normal) != _pixel_hash(faded)
+
+
+def test_paint_frame_float_character_transition_moves_past_chars(qapp):
+    track = _track()
+    faded = _blank()
+    floated = _blank()
+    fade_style = Style(
+        line_y_position="center",
+        karaoke_transition_effect="fade_chars",
+        karaoke_transition_ms=900,
+    )
+    float_style = Style(
+        line_y_position="center",
+        karaoke_transition_effect="float_chars",
+        karaoke_transition_ms=900,
+    )
+
+    paint_frame(faded, track, 1700, fade_style)
+    paint_frame(floated, track, 1700, float_style)
+
+    assert _pixel_hash(faded) != _pixel_hash(floated)
+    assert _ink_bounds(floated)[1] <= _ink_bounds(faded)[1]
