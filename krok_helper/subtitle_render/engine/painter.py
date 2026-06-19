@@ -80,6 +80,13 @@ class _FillSegment:
     ruby: RubyAnnotation | None = None
 
 
+@dataclass(frozen=True)
+class _LineCharTransition:
+    phase: str
+    effect: str
+    progress: float
+
+
 def clear_before_layer_cache() -> None:
     """测试 / 调试用：把所有"未唱"层位图缓存全部丢掉。"""
     with _BEFORE_LAYER_LOCK:
@@ -395,6 +402,8 @@ def _paint_line(
             style,
             baseline_y=baseline_y,
             lane=lane,
+            display_start_ms=display_start_ms,
+            display_end_ms=display_end_ms,
         )
     finally:
         painter.restore()
@@ -411,6 +420,8 @@ def _paint_line_static(
     *,
     baseline_y: int | None = None,
     lane: int | None = None,
+    display_start_ms: int | None = None,
+    display_end_ms: int | None = None,
 ) -> None:
     font = _build_font(style)
     painter.setFont(font)
@@ -444,6 +455,22 @@ def _paint_line_static(
         line,
     )
 
+    line_rect = QRectF(
+        float(x0),
+        float(y - metrics.ascent()),
+        float(total_w),
+        float(metrics.height()),
+    )
+    colors = _effective_karaoke_colors(style)
+    line_path = _line_text_path(line, char_widths, font, x0, y)
+    transition = _line_char_transition_context(
+        style,
+        line,
+        t_ms,
+        display_start_ms,
+        display_end_ms,
+        len(line.chars),
+    )
     if active_rubies and ruby_metrics is not None:
         _paint_rubies(
             painter,
@@ -456,16 +483,26 @@ def _paint_line_static(
             t_ms,
             active_rubies,
             style,
+            transition,
         )
 
-    line_rect = QRectF(
-        float(x0),
-        float(y - metrics.ascent()),
-        float(total_w),
-        float(metrics.height()),
-    )
-    colors = _effective_karaoke_colors(style)
-    line_path = _line_text_path(line, char_widths, font, x0, y)
+    if transition is not None:
+        _paint_line_with_character_transition(
+            painter,
+            line,
+            char_widths,
+            char_x_ranges,
+            intervals,
+            font,
+            y,
+            metrics,
+            style,
+            colors,
+            line_rect,
+            t_ms,
+            transition,
+        )
+        return
 
     # --- "未唱"层（不依赖 t_ms）：查 / 建缓存后一次 blit ---
     if total_w > 0 and metrics.height() > 0:
@@ -563,6 +600,210 @@ def _line_text_path(
         path.addText(float(cursor_x), float(y), font, ch.text)
         cursor_x += w
     return path
+
+
+def _line_char_transition_context(
+    style: Style,
+    line: TimingLine,
+    t_ms: int,
+    display_start_ms: int | None,
+    display_end_ms: int | None,
+    char_count: int,
+) -> _LineCharTransition | None:
+    if char_count <= 0:
+        return None
+    start = display_start_ms if display_start_ms is not None else _line_start_ms(line)
+    end = display_end_ms if display_end_ms is not None else _line_end_ms(line)
+
+    exit_duration = max(style.exit_fade_ms, 0)
+    if style.exit_anim in {"char_fade", "utopia"} and exit_duration > 0:
+        exit_start = max(_line_end_ms(line), end - exit_duration)
+        if t_ms >= exit_start:
+            return _LineCharTransition(
+                phase="exit",
+                effect=style.exit_anim,
+                progress=_clamped_ratio(t_ms - exit_start, exit_duration),
+            )
+
+    entry_duration = max(style.entry_lead_ms, 0)
+    if style.entry_anim in {"char_fade", "utopia"} and entry_duration > 0:
+        if t_ms <= start + entry_duration:
+            return _LineCharTransition(
+                phase="entry",
+                effect=style.entry_anim,
+                progress=_clamped_ratio(t_ms - start, entry_duration),
+            )
+    return None
+
+
+def _paint_line_with_character_transition(
+    painter: QPainter,
+    line: TimingLine,
+    char_widths: list[int],
+    char_x_ranges: list[tuple[int, int]],
+    intervals: list[tuple[int, int]],
+    font: QFont,
+    baseline_y: int,
+    metrics: QFontMetrics,
+    style: Style,
+    colors: KaraokeColors,
+    line_rect: QRectF,
+    t_ms: int,
+    transition: _LineCharTransition,
+) -> None:
+    count = max(len(line.chars), 1)
+    for index, (ch, width) in enumerate(zip(line.chars, char_widths)):
+        if index >= len(intervals) or index >= len(char_x_ranges):
+            continue
+        left, _right = char_x_ranges[index]
+        char_start, char_end = intervals[index]
+        opacity, dx, dy = _transition_char_state(style, transition, index, count)
+        if opacity <= 0.0:
+            continue
+
+        path = QPainterPath()
+        path.addText(float(left), float(baseline_y), font, ch.text)
+        painter.save()
+        try:
+            painter.setOpacity(painter.opacity() * opacity)
+            if dx or dy:
+                painter.translate(dx, dy)
+            _paint_char_karaoke_stack(
+                painter,
+                path,
+                line_rect,
+                char_x=left,
+                char_width=width,
+                baseline_y=baseline_y,
+                metrics=metrics,
+                colors=colors,
+                style=style,
+                ratio=char_fill_ratio(char_start, char_end, t_ms),
+            )
+        finally:
+            painter.restore()
+
+
+def _transition_char_state(
+    style: Style,
+    transition: _LineCharTransition,
+    index: int,
+    count: int,
+) -> tuple[float, float, float]:
+    local = _staggered_char_progress(transition.progress, index, count)
+    eased = 1.0 - (1.0 - local) * (1.0 - local)
+    if transition.phase == "entry":
+        opacity = 0.22 + 0.78 * eased
+        if transition.effect == "utopia":
+            dx = -style.font_size_px * 0.75 * (1.0 - eased)
+            dy = -max(style.font_size_px * 0.45, 20.0) * (1.0 - eased)
+            return opacity, dx, dy
+        return opacity, 0.0, 0.0
+
+    opacity = 1.0 - eased
+    if transition.effect == "utopia":
+        drift = -0.22 if index % 2 == 0 else 0.12
+        dx = style.font_size_px * drift * eased
+        dy = -max(style.font_size_px * 0.65, 28.0) * eased
+        return opacity, dx, dy
+    return opacity, 0.0, 0.0
+
+
+def _paint_char_karaoke_stack(
+    painter: QPainter,
+    path: QPainterPath,
+    rect: QRectF,
+    *,
+    char_x: int,
+    char_width: int,
+    baseline_y: int,
+    metrics: QFontMetrics,
+    colors: KaraokeColors,
+    style: Style,
+    ratio: float,
+) -> None:
+    if ratio <= 0.0:
+        _paint_text_layer_stack(
+            painter,
+            path,
+            rect,
+            colors.before,
+            style,
+            stroke_width=style.stroke_width_px,
+            stroke2_width=style.stroke2_width_px,
+            shadow_dx=style.shadow_offset_x,
+            shadow_dy=style.shadow_offset_y,
+            glow_radius=style.glow_radius_px,
+        )
+        return
+
+    if ratio < 1.0:
+        _paint_text_layer_stack(
+            painter,
+            path,
+            rect,
+            colors.before,
+            style,
+            stroke_width=style.stroke_width_px,
+            stroke2_width=style.stroke2_width_px,
+            shadow_dx=style.shadow_offset_x,
+            shadow_dy=style.shadow_offset_y,
+            glow_radius=style.glow_radius_px,
+        )
+        stroke_pad = _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px)
+        painter.save()
+        try:
+            painter.setClipRect(
+                QRectF(
+                    float(char_x - stroke_pad),
+                    float(baseline_y - metrics.ascent() - stroke_pad),
+                    float(char_width * ratio + stroke_pad),
+                    float(metrics.height() + stroke_pad * 2),
+                )
+            )
+            _paint_text_layer_stack(
+                painter,
+                path,
+                rect,
+                colors.after,
+                style,
+                stroke_width=style.stroke_width_px,
+                stroke2_width=style.stroke2_width_px,
+                shadow_dx=style.shadow_offset_x,
+                shadow_dy=style.shadow_offset_y,
+                glow_radius=style.glow_radius_px,
+            )
+        finally:
+            painter.restore()
+        return
+
+    _paint_text_layer_stack(
+        painter,
+        path,
+        rect,
+        colors.after,
+        style,
+        stroke_width=style.stroke_width_px,
+        stroke2_width=style.stroke2_width_px,
+        shadow_dx=style.shadow_offset_x,
+        shadow_dy=style.shadow_offset_y,
+        glow_radius=style.glow_radius_px,
+    )
+
+
+def _staggered_char_progress(progress: float, index: int, count: int) -> float:
+    if count <= 1:
+        return progress
+    span = 0.68
+    window = 1.0 - span
+    offset = (index / max(count - 1, 1)) * span
+    return max(0.0, min(1.0, (progress - offset) / window))
+
+
+def _clamped_ratio(elapsed_ms: int, duration_ms: int) -> float:
+    if duration_ms <= 0:
+        return 1.0
+    return max(0.0, min(1.0, elapsed_ms / duration_ms))
 
 
 def _paint_fill_path(
@@ -1292,28 +1533,47 @@ def _paint_rubies(
     t_ms: int,
     rubies: list[RubyAnnotation],
     style: Style,
+    transition: _LineCharTransition | None = None,
 ) -> None:
     painter.save()
     try:
         painter.setFont(ruby_font)
         ruby_baseline_y = main_baseline_y - QFontMetrics(_build_font(style)).ascent() - max(style.ruby_gap_px, 0)
         for ruby in rubies:
-            target = _ruby_target_x_range(ruby, line, intervals, char_x_ranges)
-            if target is None:
+            indices = _ruby_target_indices(ruby, line, intervals)
+            if not indices:
                 continue
-            left, right = target
+            left = min(char_x_ranges[index][0] for index in indices)
+            right = max(char_x_ranges[index][1] for index in indices)
             reading_w = ruby_metrics.horizontalAdvance(ruby.reading)
             x = int(round((left + right - reading_w) / 2))
-            _paint_ruby_text(
-                painter,
-                ruby,
-                ruby_font,
-                ruby_metrics,
-                x,
-                ruby_baseline_y,
-                t_ms,
-                style,
-            )
+            opacity, dx, dy = 1.0, 0.0, 0.0
+            if transition is not None:
+                opacity, dx, dy = _transition_char_state(
+                    style,
+                    transition,
+                    min(indices),
+                    max(len(line.chars), 1),
+                )
+            if opacity <= 0.0:
+                continue
+            painter.save()
+            try:
+                painter.setOpacity(painter.opacity() * opacity)
+                if dx or dy:
+                    painter.translate(dx, dy)
+                _paint_ruby_text(
+                    painter,
+                    ruby,
+                    ruby_font,
+                    ruby_metrics,
+                    x,
+                    ruby_baseline_y,
+                    t_ms,
+                    style,
+                )
+            finally:
+                painter.restore()
     finally:
         painter.restore()
 

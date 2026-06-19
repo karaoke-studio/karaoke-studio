@@ -728,3 +728,72 @@ def test_paint_frame_entry_and_exit_animation_change_rendered_frame(qapp):
 
     assert _pixel_hash(at_entry_static) != _pixel_hash(at_entry_animated)
     assert _pixel_hash(at_exit_static) != _pixel_hash(at_exit_animated)
+
+
+def test_paint_frame_char_fade_entry_reveals_sentence_characters(qapp):
+    track = _track()
+    plain = _blank()
+    char_fade = _blank()
+
+    paint_frame(plain, track, 200, Style(line_y_position="center", entry_lead_ms=1000))
+    paint_frame(
+        char_fade,
+        track,
+        200,
+        Style(line_y_position="center", entry_anim="char_fade", entry_lead_ms=1000),
+    )
+
+    assert _pixel_hash(plain) != _pixel_hash(char_fade)
+
+
+def test_paint_frame_char_fade_exit_starts_after_sentence_end(qapp):
+    track = _track()
+    before_exit = _blank()
+    during_exit = _blank()
+    style = Style(
+        line_y_position="center",
+        line_tail_ms=1000,
+        exit_anim="char_fade",
+        exit_fade_ms=1000,
+    )
+
+    paint_frame(before_exit, track, 2400, style)
+    paint_frame(during_exit, track, 2800, style)
+
+    assert _pixel_hash(before_exit) != _pixel_hash(during_exit)
+
+
+def test_paint_frame_utopia_entry_and_exit_move_characters(qapp):
+    track = _track()
+    entry_char_fade = _blank()
+    entry_utopia = _blank()
+    exit_char_fade = _blank()
+    exit_utopia = _blank()
+
+    paint_frame(
+        entry_char_fade,
+        track,
+        200,
+        Style(line_y_position="center", entry_anim="char_fade", entry_lead_ms=1000),
+    )
+    paint_frame(
+        entry_utopia,
+        track,
+        200,
+        Style(line_y_position="center", entry_anim="utopia", entry_lead_ms=1000),
+    )
+    paint_frame(
+        exit_char_fade,
+        track,
+        2800,
+        Style(line_y_position="center", line_tail_ms=1000, exit_anim="char_fade", exit_fade_ms=1000),
+    )
+    paint_frame(
+        exit_utopia,
+        track,
+        2800,
+        Style(line_y_position="center", line_tail_ms=1000, exit_anim="utopia", exit_fade_ms=1000),
+    )
+
+    assert _pixel_hash(entry_char_fade) != _pixel_hash(entry_utopia)
+    assert _pixel_hash(exit_char_fade) != _pixel_hash(exit_utopia)

@@ -63,9 +63,9 @@ def test_property_panel_set_style_populates_controls(qapp):
         line_tail_ms=1100,
         line_lane_gap_ms=250,
         line_max_hold_ms=9000,
-        entry_anim="slide_in",
+        entry_anim="utopia",
         entry_lead_ms=450,
-        exit_anim="fade",
+        exit_anim="char_fade",
         exit_fade_ms=650,
         ruby_font_size_px=30,
         ruby_color="#223344",
@@ -99,9 +99,9 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._line_tail_spin.value() == 1100
     assert panel._line_lane_gap_spin.value() == 250
     assert panel._line_max_hold_spin.value() == 9000
-    assert panel._entry_anim_combo.currentData() == "slide_in"
+    assert panel._entry_anim_combo.currentData() == "utopia"
     assert panel._entry_lead_spin.value() == 450
-    assert panel._exit_anim_combo.currentData() == "fade"
+    assert panel._exit_anim_combo.currentData() == "char_fade"
     assert panel._exit_fade_spin.value() == 650
     assert panel._ruby_font_size_spin.value() == 30
     assert panel._ruby_color_btn.color == "#223344"
@@ -383,9 +383,9 @@ def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
         karaoke_colors=KaraokeColors(after=KaraokeColorState(text=fill)),
     )
     style = Style(
-        entry_anim="slide_in",
+        entry_anim="utopia",
         entry_lead_ms=500,
-        exit_anim="fade",
+        exit_anim="char_fade",
         exit_fade_ms=700,
         singer_style_overrides={2: scheme},
         custom_style_schemes={"图像方案": scheme},
@@ -393,8 +393,8 @@ def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
 
     restored = style_from_dict(style_to_dict(style))
 
-    assert restored.entry_anim == "slide_in"
-    assert restored.exit_anim == "fade"
+    assert restored.entry_anim == "utopia"
+    assert restored.exit_anim == "char_fade"
     assert restored.singer_style_overrides[2].karaoke_colors.after.text.image_path == image_path
     assert restored.singer_style_overrides[2].karaoke_colors.after.text.image_scale_pct == 175
     assert restored.custom_style_schemes["图像方案"].karaoke_colors.after.text.mode == "image"
@@ -491,15 +491,15 @@ def test_property_panel_animation_controls_emit_style(qapp):
     panel.styleChanged.connect(emitted.append)
 
     panel._entry_anim_combo.setCurrentIndex(
-        panel._entry_anim_combo.findData("slide_in")
+        panel._entry_anim_combo.findData("char_fade")
     )
     panel._entry_lead_spin.setValue(700)
-    panel._exit_anim_combo.setCurrentIndex(panel._exit_anim_combo.findData("rise"))
+    panel._exit_anim_combo.setCurrentIndex(panel._exit_anim_combo.findData("utopia"))
     panel._exit_fade_spin.setValue(900)
 
-    assert emitted[-1].entry_anim == "slide_in"
+    assert emitted[-1].entry_anim == "char_fade"
     assert emitted[-1].entry_lead_ms == 700
-    assert emitted[-1].exit_anim == "rise"
+    assert emitted[-1].exit_anim == "utopia"
     assert emitted[-1].exit_fade_ms == 900
 
 

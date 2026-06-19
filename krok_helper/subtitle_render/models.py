@@ -152,8 +152,8 @@ ColorFillMode = Literal[
 ColorStateKey = Literal["before", "after"]
 ColorLayerKey = Literal["text", "stroke", "stroke2", "shadow"]
 DecorationKind = Literal["shadow", "glow"]
-EntryAnimation = Literal["none", "fade", "slide_in", "rise"]
-ExitAnimation = Literal["none", "fade", "slide_out", "rise"]
+EntryAnimation = Literal["none", "fade", "slide_in", "rise", "char_fade", "utopia"]
+ExitAnimation = Literal["none", "fade", "slide_out", "rise", "char_fade", "utopia"]
 
 
 @dataclass
@@ -333,13 +333,13 @@ class Style:
     """单句显示窗口最长保留时间，避免长间奏时字幕过久挂屏。"""
 
     entry_anim: EntryAnimation = "none"
-    """入场动画：none / fade / slide_in / rise。"""
+    """入场动画：none / fade / slide_in / rise / char_fade / utopia。"""
 
     entry_lead_ms: int = 300
     """入场动画时长；不改变歌词填色时间，只影响显示窗口起点后的过渡。"""
 
     exit_anim: ExitAnimation = "none"
-    """退场动画：none / fade / slide_out / rise。"""
+    """退场动画：none / fade / slide_out / rise / char_fade / utopia。"""
 
     exit_fade_ms: int = 300
     """退场动画时长；在显示窗口结束前开始。"""
@@ -456,9 +456,17 @@ def style_from_dict(payload: object) -> Style:
         elif key == "decoration_kind":
             changes[key] = value if value in {"shadow", "glow"} else defaults.decoration_kind
         elif key == "entry_anim":
-            changes[key] = value if value in {"none", "fade", "slide_in", "rise"} else defaults.entry_anim
+            changes[key] = (
+                value
+                if value in {"none", "fade", "slide_in", "rise", "char_fade", "utopia"}
+                else defaults.entry_anim
+            )
         elif key == "exit_anim":
-            changes[key] = value if value in {"none", "fade", "slide_out", "rise"} else defaults.exit_anim
+            changes[key] = (
+                value
+                if value in {"none", "fade", "slide_out", "rise", "char_fade", "utopia"}
+                else defaults.exit_anim
+            )
         elif value is not None:
             changes[key] = str(value)
     return Style(**changes)
