@@ -669,6 +669,143 @@ def _paint_line_vertical(
         finally:
             painter.restore()
 
+    # 注音：排在基字列右侧、上→下扫光
+    active_rubies = _active_rubies_for_line(track.rubies, line)
+    if active_rubies:
+        ruby_font = _build_ruby_font(style)
+        _paint_rubies_vertical(
+            painter,
+            ruby_font,
+            QFontMetrics(ruby_font),
+            line,
+            intervals,
+            cells,
+            column_x,
+            cell_w,
+            t_ms,
+            active_rubies,
+            style,
+        )
+
+
+def _paint_rubies_vertical(
+    painter: QPainter,
+    ruby_font: QFont,
+    ruby_metrics: QFontMetrics,
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+    cells: list[tuple[int, int]],
+    base_column_x: int,
+    cell_w: int,
+    t_ms: int,
+    rubies: list[RubyAnnotation],
+    style: Style,
+) -> None:
+    """竖排注音：读音字形竖向堆叠在基字列右侧，覆盖基字纵向区间，上→下扫光。"""
+    if not cells:
+        return
+    scale = _ruby_scale(style)
+    stroke_width = _scaled_px(style.stroke_width_px, scale)
+    stroke2_width = _scaled_px(style.stroke2_width_px, scale)
+    shadow_dx = _scaled_signed_px(style.shadow_offset_x, scale)
+    shadow_dy = _scaled_signed_px(style.shadow_offset_y, scale)
+    glow_radius = _scaled_px(style.glow_radius_px, scale)
+    colors = _effective_ruby_karaoke_colors(style)
+    ruby_cell_w = _vertical_cell_width(ruby_metrics)
+    ruby_ascent = ruby_metrics.ascent()
+    ruby_x = int(
+        round(base_column_x + cell_w / 2 + max(style.ruby_gap_px, 0) + ruby_cell_w / 2)
+    )
+
+    painter.setFont(ruby_font)
+    for ruby in rubies:
+        indices = [
+            index
+            for index in _ruby_target_indices(ruby, line, intervals)
+            if 0 <= index < len(cells)
+        ]
+        if not indices:
+            continue
+        units = _ruby_utopia_visual_units(ruby.reading)
+        if not units:
+            continue
+        base_top = cells[min(indices)][0]
+        base_bottom = cells[max(indices)][1]
+        span_h = base_bottom - base_top
+        count = len(units)
+
+        ruby_path = QPainterPath()
+        for unit_index, unit in enumerate(units):
+            slot_top = base_top + span_h * unit_index / count
+            slot_h = span_h / count
+            ruby_path.addPath(
+                _vertical_glyph_path(
+                    unit,
+                    ruby_font,
+                    ruby_metrics,
+                    ruby_x,
+                    int(round(slot_top)),
+                    ruby_cell_w,
+                    max(int(round(slot_h)), 1),
+                    ruby_ascent,
+                )
+            )
+
+        ruby_rect = QRectF(
+            float(ruby_x - ruby_cell_w / 2),
+            float(base_top),
+            float(ruby_cell_w),
+            float(span_h),
+        )
+        _paint_text_layer_stack(
+            painter,
+            ruby_path,
+            ruby_rect,
+            colors.before,
+            style,
+            stroke_width=stroke_width,
+            stroke2_width=stroke2_width,
+            shadow_dx=shadow_dx,
+            shadow_dy=shadow_dy,
+            glow_radius=glow_radius,
+        )
+
+        ratio = _ruby_progress_ratio(ruby, t_ms)
+        if ratio <= 0.0:
+            continue
+        scan_y = base_top + span_h * min(ratio, 1.0)
+        pad = max(
+            _visual_stroke_extent(stroke_width, stroke2_width),
+            glow_radius * 2,
+            abs(shadow_dx),
+            abs(shadow_dy),
+            2,
+        )
+        painter.save()
+        try:
+            painter.setClipRect(
+                QRectF(
+                    float(ruby_x - ruby_cell_w / 2 - pad),
+                    float(base_top - pad),
+                    float(ruby_cell_w + pad * 2),
+                    float((scan_y - base_top) + pad),
+                )
+            )
+            _paint_text_layer_stack(
+                painter,
+                ruby_path,
+                ruby_rect,
+                colors.after,
+                style,
+                stroke_width=stroke_width,
+                stroke2_width=stroke2_width,
+                shadow_dx=shadow_dx,
+                shadow_dy=shadow_dy,
+                glow_radius=glow_radius,
+            )
+        finally:
+            painter.restore()
+
 
 def _vertical_fill_band(
     cells: list[tuple[int, int]],

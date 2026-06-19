@@ -442,6 +442,21 @@ def test_vertical_render_with_rotated_and_punct_chars(qapp):
     assert _pixel_hash(img) != baseline
 
 
+def test_vertical_ruby_renders_to_right_of_base(qapp):
+    track = _track_with_timed_ruby()  # 漢字 + ruby かんじ
+    style = Style(vertical=True, line_y_position="center")
+    img = _blank()
+    paint_frame(img, track, 1700, style)
+    cols = _resolve_vertical_columns(
+        img.width(), track, [DisplayLine(track.lines[0], 0, 0, 5000)], style
+    )
+    base_col_x = cols[0]
+    left, _, right, _ = _ink_bounds(img)
+    # 注音排在基字列右侧 → 墨迹右缘超出列中心；基字本身在列中心左侧
+    assert right > base_col_x
+    assert left < base_col_x
+
+
 def test_vertical_default_off_matches_plain(qapp):
     style = Style(line_y_position="center")
     img_a = _blank()
