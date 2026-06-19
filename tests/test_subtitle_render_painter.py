@@ -33,7 +33,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _character_fill_ratio,
     _fill_clip_band,
     _fill_extent_end,
-    _ruby_reading_units,
+    _ruby_utopia_visual_units,
     _karaoke_fill_segments,
     _paint_ruby_text,
     _paint_ruby_text_units_with_transition,
@@ -346,11 +346,13 @@ def test_rtl_changes_render_vs_ltr(qapp):
     assert abs(center_ltr - center_rtl) <= 4
 
 
-def test_ruby_reading_mora_reverse_keeps_small_kana():
-    # 按音节反转：小书き / 浊点跟随基字，不被拆开
-    assert "".join(reversed(_ruby_reading_units("おも"))) == "もお"
-    assert _ruby_reading_units("きゃ") == ["きゃ"]
-    assert "".join(reversed(_ruby_reading_units("しゃけ"))) == "けしゃ"
+def test_ruby_reading_rtl_reverse_flips_small_kana_keeps_dakuten():
+    # RTL 反转按可见字形：小书き假名也独立反转（純粋=じゅんすい → いすんゅじ）
+    assert "".join(reversed(_ruby_utopia_visual_units("じゅんすい"))) == "いすんゅじ"
+    assert "".join(reversed(_ruby_utopia_visual_units("おも"))) == "もお"
+    # 零宽浊点(゙)跟随基字、不被拆开
+    assert _ruby_utopia_visual_units("が") == ["が"]
+    assert "".join(reversed(_ruby_utopia_visual_units("がき"))) == "きが"
 
 
 def test_rtl_ruby_render_differs_from_ltr(qapp):

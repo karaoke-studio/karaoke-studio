@@ -2246,9 +2246,12 @@ def _paint_ruby_text(
     style: Style,
     rtl: bool = False,
 ) -> None:
-    # RTL：按音节（mora）单位反转读音顺序——首音节排到最右、扫光从右向左。
-    # 直接反转字符串会把小书き / 浊点拆错，所以以 _ruby_reading_units 为单位反转。
-    reading = "".join(reversed(_ruby_reading_units(ruby.reading))) if rtl else ruby.reading
+    # RTL：按可见字形反转读音——小书き假名(ゃゅょ等)是独立字形，也要反过来；
+    # 只有零宽浊点/半浊点(゙゚)留在基字后。直接 reading[::-1] 会让浊点
+    # 漂移，所以用 _ruby_utopia_visual_units 切分后反转。
+    reading = (
+        "".join(reversed(_ruby_utopia_visual_units(ruby.reading))) if rtl else ruby.reading
+    )
     path = QPainterPath()
     path.addText(float(x), float(baseline_y), ruby_font, reading)
     rect = QRectF(
