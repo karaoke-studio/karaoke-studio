@@ -365,6 +365,10 @@ class Style:
     row2_offset_x: int = -50
     row2_offset_y: int = 0
 
+    right_to_left: bool = False
+    """从右到左排版（对标 Sayatoo layout.right_to_left）：字符自右向左排布，
+    卡拉ok 扫光从右向左推进。注音定位随之反转；注音自身的逐字扫光方向暂仍左→右。"""
+
     line_lead_in_ms: int = 1800
     """理想表示开始 = 歌唱开始前的毫秒数；填充仍从真实字符时间开始。"""
 
@@ -510,7 +514,7 @@ def style_from_dict(payload: object) -> Style:
             "exit_fade_ms",
         }:
             changes[key] = _int_value(value, getattr(defaults, key))
-        elif key in {"italic", "dual_line_layout"}:
+        elif key in {"italic", "dual_line_layout", "right_to_left"}:
             changes[key] = bool(value)
         elif key == "line_y_position":
             changes[key] = value if value in {"top", "center", "bottom"} else defaults.line_y_position

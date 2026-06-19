@@ -519,11 +519,11 @@ def _paint_line_static(
     )
 
     intervals = compute_char_intervals(line)
-    char_x_ranges: list[tuple[int, int]] = []
-    cursor_x = x0
-    for w in char_widths:
-        char_x_ranges.append((cursor_x, cursor_x + w))
-        cursor_x += w
+    rtl = style.right_to_left
+    char_lefts = _char_left_positions(char_widths, x0, rtl)
+    char_x_ranges: list[tuple[int, int]] = [
+        (left, left + w) for left, w in zip(char_lefts, char_widths)
+    ]
     fill_segments = _karaoke_fill_segments(
         char_widths,
         intervals,
@@ -539,7 +539,7 @@ def _paint_line_static(
         float(metrics.height()),
     )
     colors = _effective_karaoke_colors(style)
-    line_path = _line_text_path(line, char_widths, font, x0, y)
+    line_path = _line_text_path(line, char_widths, font, x0, y, char_lefts)
     transition = _line_char_transition_context(
         style,
         line,
@@ -579,6 +579,7 @@ def _paint_line_static(
             line_rect,
             t_ms,
             transition,
+            rtl=rtl,
         )
         return
 
@@ -586,7 +587,7 @@ def _paint_line_static(
     if total_w > 0 and metrics.height() > 0:
         cache_key = _before_layer_cache_key(line, style, font, char_widths, colors)
         before_image, offset_x, offset_y = _get_or_build_before_layer(
-            cache_key, line, char_widths, font, style, colors, metrics,
+            cache_key, line, char_widths, font, style, colors, metrics, rtl,
         )
         painter.drawImage(
             QPointF(float(x0 + offset_x), float(y + offset_y)),
@@ -606,6 +607,7 @@ def _paint_line_static(
             y,
             metrics,
             t_ms,
+            rtl=rtl,
         )
     elif style.shadow_color and (style.shadow_offset_x or style.shadow_offset_y):
         shadow_rect = line_rect.translated(style.shadow_offset_x, style.shadow_offset_y)
@@ -615,6 +617,7 @@ def _paint_line_static(
             font,
             x0 + style.shadow_offset_x,
             y + style.shadow_offset_y,
+            [left + style.shadow_offset_x for left in char_lefts],
         )
         _paint_after_fill_path(
             painter,
@@ -625,6 +628,7 @@ def _paint_line_static(
             y + style.shadow_offset_y,
             metrics,
             t_ms,
+            rtl=rtl,
         )
 
     if style.stroke2_width_px > 0:
@@ -638,6 +642,7 @@ def _paint_line_static(
             y,
             metrics,
             t_ms,
+            rtl=rtl,
         )
 
     if style.stroke_color and style.stroke_width_px > 0:
@@ -651,6 +656,7 @@ def _paint_line_static(
             y,
             metrics,
             t_ms,
+            rtl=rtl,
         )
 
     _paint_after_fill_path(
@@ -662,7 +668,24 @@ def _paint_line_static(
         y,
         metrics,
         t_ms,
+        rtl=rtl,
     )
+
+
+def _char_left_positions(char_widths: list[int], base_x: int, rtl: bool) -> list[int]:
+    """每个字符左缘的 x 坐标。``rtl`` 时第一个字符排在最右、依次向左。"""
+    lefts: list[int] = []
+    if rtl:
+        cursor = base_x + sum(char_widths)
+        for w in char_widths:
+            cursor -= w
+            lefts.append(cursor)
+    else:
+        cursor = base_x
+        for w in char_widths:
+            lefts.append(cursor)
+            cursor += w
+    return lefts
 
 
 def _line_text_path(
@@ -671,12 +694,13 @@ def _line_text_path(
     font: QFont,
     x: int,
     y: int,
+    char_lefts: list[int] | None = None,
 ) -> QPainterPath:
     path = QPainterPath()
-    cursor_x = x
-    for ch, w in zip(line.chars, char_widths):
-        path.addText(float(cursor_x), float(y), font, ch.text)
-        cursor_x += w
+    if char_lefts is None:
+        char_lefts = _char_left_positions(char_widths, x, False)
+    for ch, left in zip(line.chars, char_lefts):
+        path.addText(float(left), float(y), font, ch.text)
     return path
 
 
@@ -750,6 +774,7 @@ def _paint_line_with_character_transition(
     line_rect: QRectF,
     t_ms: int,
     transition: _LineCharTransition,
+    rtl: bool = False,
 ) -> None:
     count = max(len(line.chars), 1)
     for index, (ch, width) in enumerate(zip(line.chars, char_widths)):
@@ -812,6 +837,7 @@ def _paint_line_with_character_transition(
                     index,
                     t_ms,
                 ),
+                rtl=rtl,
             )
         finally:
             painter.restore()
@@ -1105,6 +1131,7 @@ def _paint_char_karaoke_stack(
     colors: KaraokeColors,
     style: Style,
     ratio: float,
+    rtl: bool = False,
 ) -> None:
     if ratio <= 0.0:
         _paint_text_layer_stack(
@@ -1135,11 +1162,13 @@ def _paint_char_karaoke_stack(
             glow_radius=style.glow_radius_px,
         )
         stroke_pad = _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px)
+        # RTL：单字内扫光从右向左，已唱区贴字符右缘。
+        clip_x = char_x + (char_width * (1.0 - ratio) if rtl else 0.0)
         painter.save()
         try:
             painter.setClipRect(
                 QRectF(
-                    float(char_x - stroke_pad),
+                    float(clip_x - stroke_pad),
                     float(baseline_y - metrics.ascent() - stroke_pad),
                     float(char_width * ratio + stroke_pad),
                     float(metrics.height() + stroke_pad * 2),
@@ -1243,9 +1272,10 @@ def _paint_after_fill_path(
     y: int,
     metrics: QFontMetrics,
     t_ms: int,
+    rtl: bool = False,
 ) -> None:
     _paint_after_path(
-        painter, path, fill, rect, None, fill_segments, y, metrics, t_ms
+        painter, path, fill, rect, None, fill_segments, y, metrics, t_ms, rtl
     )
 
 
@@ -1259,9 +1289,10 @@ def _paint_after_stroke_path(
     y: int,
     metrics: QFontMetrics,
     t_ms: int,
+    rtl: bool = False,
 ) -> None:
     _paint_after_path(
-        painter, path, fill, rect, width, fill_segments, y, metrics, t_ms
+        painter, path, fill, rect, width, fill_segments, y, metrics, t_ms, rtl
     )
 
 
@@ -1275,13 +1306,12 @@ def _paint_after_glow_path(
     y: int,
     metrics: QFontMetrics,
     t_ms: int,
+    rtl: bool = False,
 ) -> None:
-    fill_start = _fill_extent_start(fill_segments)
-    fill_end = _fill_extent_end(fill_segments, t_ms)
-    if fill_start is None:
+    band = _fill_clip_band(fill_segments, t_ms, rtl)
+    if band is None:
         return
-    if fill_end <= fill_start:
-        return
+    fill_start, fill_end = band
     painter.save()
     try:
         clip = QRectF(
@@ -1306,16 +1336,14 @@ def _paint_after_path(
     y: int,
     metrics: QFontMetrics,
     t_ms: int,
+    rtl: bool = False,
 ) -> None:
-    # 卡拉ok填色是连续左→右扫光，已唱字符总是连续从 x0 开始；
-    # 把 N 个相邻 char clip 合并成单 clip rect → 整 line path 只画一次，
-    # 不再 N 次重复绘制相同路径。
-    fill_start = _fill_extent_start(fill_segments)
-    fill_end = _fill_extent_end(fill_segments, t_ms)
-    if fill_start is None:
+    # 卡拉ok填色是连续扫光，已唱字符总是连续从一侧开始；把 N 个相邻 char
+    # clip 合并成单 clip rect → 整 line path 只画一次，不再 N 次重复绘制。
+    band = _fill_clip_band(fill_segments, t_ms, rtl)
+    if band is None:
         return
-    if fill_end <= fill_start:
-        return
+    fill_start, fill_end = band
     stroke_pad = 0 if stroke_width is None else math.ceil(stroke_width / 2)
     painter.save()
     try:
@@ -1460,6 +1488,46 @@ def _fill_extent_end(
         fill_end = segment.left + int(round((segment.right - segment.left) * ratio))
         break
     return fill_end
+
+
+def _fill_extent_left(segments: list[_FillSegment], t_ms: int) -> int:
+    """RTL：返回已唱区的左缘 x（扫光从右向左推进时的移动边）。"""
+    if not segments:
+        return 0
+    scanline = segments[0].right
+    for segment in segments:
+        ratio = _segment_fill_ratio(segment, t_ms)
+        if ratio <= 0.0:
+            break
+        if ratio >= 1.0:
+            scanline = segment.left
+            continue
+        scanline = segment.right - int(round((segment.right - segment.left) * ratio))
+        break
+    return scanline
+
+
+def _fill_clip_band(
+    segments: list[_FillSegment],
+    t_ms: int,
+    rtl: bool,
+) -> tuple[int, int] | None:
+    """已唱区水平裁剪带 ``(left, right)``；空带返回 ``None``。
+
+    LTR：左缘固定在首字符左缘，右缘随扫光右移；
+    RTL：右缘固定在首字符（最右）右缘，左缘随扫光左移。
+    """
+    if not segments:
+        return None
+    if rtl:
+        left = _fill_extent_left(segments, t_ms)
+        right = max(segment.right for segment in segments)
+    else:
+        left = _fill_extent_start(segments)
+        right = _fill_extent_end(segments, t_ms)
+    if left is None or right is None or right <= left:
+        return None
+    return left, right
 
 
 def _segment_fill_ratio(segment: _FillSegment, t_ms: int) -> float:
@@ -1661,6 +1729,7 @@ def _before_layer_cache_key(
         style.stroke2_width_px,
         style.decoration_kind,
         style.glow_radius_px,
+        style.right_to_left,
     )
 
 
@@ -1672,6 +1741,7 @@ def _get_or_build_before_layer(
     style: Style,
     colors: KaraokeColors,
     metrics: QFontMetrics,
+    rtl: bool = False,
 ) -> tuple[QImage, int, int]:
     with _BEFORE_LAYER_LOCK:
         cached = _BEFORE_LAYER_CACHE.get(key)
@@ -1680,7 +1750,7 @@ def _get_or_build_before_layer(
             return cached
 
     # 构建在锁外做（QPainter 比较重，不阻塞别的线程）
-    entry = _build_before_layer(line, char_widths, font, style, colors, metrics)
+    entry = _build_before_layer(line, char_widths, font, style, colors, metrics, rtl)
 
     with _BEFORE_LAYER_LOCK:
         _BEFORE_LAYER_CACHE[key] = entry
@@ -1696,6 +1766,7 @@ def _build_before_layer(
     style: Style,
     colors: KaraokeColors,
     metrics: QFontMetrics,
+    rtl: bool = False,
 ) -> tuple[QImage, int, int]:
     """Render shadow + stroke2 + stroke + base text into a transparent QImage.
 
@@ -1735,7 +1806,10 @@ def _build_before_layer(
         )
         p.setFont(font)
 
-        local_line_path = _line_text_path(line, char_widths, font, local_x0, local_y)
+        local_lefts = _char_left_positions(char_widths, local_x0, rtl)
+        local_line_path = _line_text_path(
+            line, char_widths, font, local_x0, local_y, local_lefts
+        )
         local_line_rect = QRectF(
             float(local_x0),
             float(local_y - text_ascent),
@@ -1755,6 +1829,7 @@ def _build_before_layer(
                 font,
                 local_x0 + style.shadow_offset_x,
                 local_y + style.shadow_offset_y,
+                [left + style.shadow_offset_x for left in local_lefts],
             )
             _paint_fill_path(p, shadow_path, colors.before.shadow, shadow_rect)
 

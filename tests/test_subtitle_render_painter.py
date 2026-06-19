@@ -23,12 +23,15 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _IMAGE_BRUSH_CACHE,
     _IMAGE_FILL_CACHE,
+    _FillSegment,
     _LineCharTransition,
     _apply_character_transform,
     _brush_for_fill,
     _build_font,
     _build_ruby_font,
+    _char_left_positions,
     _character_fill_ratio,
+    _fill_clip_band,
     _fill_extent_end,
     _karaoke_fill_segments,
     _paint_ruby_text,
@@ -293,6 +296,62 @@ def test_per_row_offset_y_shifts_each_baseline(qapp):
     )
     assert shifted[0] == base[0] - 25
     assert shifted[1] == base[1] + 40
+
+
+def test_char_left_positions_rtl_reverses_order():
+    assert _char_left_positions([10, 20, 30], 100, rtl=False) == [100, 110, 130]
+    # rtl：首字符排最右，依次向左；总宽 60，base 100 → 区间 [100,160]
+    assert _char_left_positions([10, 20, 30], 100, rtl=True) == [150, 130, 100]
+
+
+def test_fill_clip_band_ltr_grows_from_left(qapp):
+    segments = [
+        _FillSegment(0, 100, 0, 1000),
+        _FillSegment(100, 200, 1000, 2000),
+    ]
+    # t=500：第一字填一半 → 带 [0, 50]
+    assert _fill_clip_band(segments, 500, rtl=False) == (0, 50)
+    # t=1500：第一字满 + 第二字一半 → 带 [0, 150]
+    assert _fill_clip_band(segments, 1500, rtl=False) == (0, 150)
+    # 起唱前无带
+    assert _fill_clip_band(segments, 0, rtl=False) is None
+
+
+def test_fill_clip_band_rtl_grows_from_right(qapp):
+    # rtl 下 segments 仍按演唱顺序，但位置反转：首字符在最右 [100,200]
+    segments = [
+        _FillSegment(100, 200, 0, 1000),
+        _FillSegment(0, 100, 1000, 2000),
+    ]
+    # t=500：首字符（右侧）填一半，从右缘向左 → 带 [150, 200]
+    assert _fill_clip_band(segments, 500, rtl=True) == (150, 200)
+    # t=1500：首字符满 + 第二字一半 → 左缘移到 50 → 带 [50, 200]
+    assert _fill_clip_band(segments, 1500, rtl=True) == (50, 200)
+    assert _fill_clip_band(segments, 0, rtl=True) is None
+
+
+def test_rtl_changes_render_vs_ltr(qapp):
+    style = Style(line_y_position="center", line_horizontal_layout="center")
+    img_ltr = _blank()
+    img_rtl = _blank()
+    paint_frame(img_ltr, _track(), 1700, style)
+    paint_frame(img_rtl, _track(), 1700, replace(style, right_to_left=True))
+    # 字序反转 → 像素不同；居中布局下整体横向 span 不变
+    assert _pixel_hash(img_ltr) != _pixel_hash(img_rtl)
+    ltr_l, _, ltr_r, _ = _ink_bounds(img_ltr)
+    rtl_l, _, rtl_r, _ = _ink_bounds(img_rtl)
+    center_ltr = (ltr_l + ltr_r) / 2
+    center_rtl = (rtl_l + rtl_r) / 2
+    assert abs(center_ltr - center_rtl) <= 4
+
+
+def test_rtl_default_off_matches_plain(qapp):
+    style = Style(line_y_position="center")
+    img_a = _blank()
+    img_b = _blank()
+    paint_frame(img_a, _track(), 1700, style)
+    paint_frame(img_b, _track(), 1700, replace(style, right_to_left=False))
+    assert _pixel_hash(img_a) == _pixel_hash(img_b)
 
 
 def test_paint_frame_during_line_modifies_image(qapp):
