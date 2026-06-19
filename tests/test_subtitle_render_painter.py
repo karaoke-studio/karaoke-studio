@@ -36,6 +36,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _resolve_vertical_columns,
     _ruby_utopia_visual_units,
     _vertical_fill_band,
+    _vertical_orientation,
     _karaoke_fill_segments,
     _paint_ruby_text,
     _paint_ruby_text_units_with_transition,
@@ -412,6 +413,33 @@ def test_vertical_render_is_taller_than_wide_and_differs(qapp):
     vl, vt, vr, vb = _ink_bounds(img_v)
     assert (hr - hl) > (hb - ht)  # 横排更宽
     assert (vb - vt) > (vr - vl)  # 竖排更高
+
+
+def test_vertical_orientation_classification():
+    # 直立：汉字、平假/片假名、数字
+    for ch in "永あアА1漢":
+        assert _vertical_orientation(ch) == "U"
+    # 旋转：长音、破折号、波浪、横向括号、横箭头
+    for ch in "ー—〜（）「」〈〉→←":
+        assert _vertical_orientation(ch) == "R"
+
+
+def test_vertical_render_with_rotated_and_punct_chars(qapp):
+    # 含长音/括号/标点的竖排行能正常渲染且改变画面
+    line = TimingLine(
+        chars=[
+            TimingChar(text="ス", start_ms=1000),
+            TimingChar(text="ー", start_ms=1300),
+            TimingChar(text="、", start_ms=1600),
+            TimingChar(text="ゃ", start_ms=1900),
+        ],
+        end_ms=2200,
+    )
+    track = TimingTrack(lines=[line])
+    img = _blank()
+    baseline = _pixel_hash(img)
+    paint_frame(img, track, 1700, Style(vertical=True, line_y_position="center"))
+    assert _pixel_hash(img) != baseline
 
 
 def test_vertical_default_off_matches_plain(qapp):

@@ -450,6 +450,73 @@ def _resolve_display_baselines(
 
 _VERTICAL_REFERENCE_CHAR = "永"  # 「永」全角参照字，估列宽
 
+# UTR#50：竖排时需旋转 90° 的字符（长音、破折号、波浪、横向括号、横箭头）。
+_VERTICAL_ROTATE_CHARS = set(
+    "ーｰ"  # ー ｰ 长音符
+    "—―‐‑‒–"  # — ― ‐ ‑ ‒ – 各种连字符/破折号
+    "〜～"  # 〜 ～ 波浪
+    "→←"  # → ← 横向箭头
+    "（）()"  # （ ） ( )
+    "「」『』"  # 「 」 『 』
+    "【】〔〕"  # 【 】 〔 〕
+    "［］｛｝"  # ［ ］ ｛ ｝
+    "〈〉《》"  # 〈 〉 《 》
+    "[]{}<>"  # [ ] { } < >
+)
+
+# 竖排时移到字格右上角的标点（直立、不旋转）。
+_VERTICAL_CORNER_PUNCT = set("、。，．")  # 、 。 ， ．
+
+# 竖排时向右上偏移的小书き假名（直立）。
+_VERTICAL_SMALL_KANA = set(
+    "ぁぃぅぇぉっゃゅょゎ"  # ぁぃぅぇぉっゃゅょゎ
+    "ァィゥェォッャュョヮ"  # ァィゥェォッャュョヮ
+    "ヵヶ"  # ヵヶ
+)
+
+
+def _vertical_orientation(ch: str) -> str:
+    """UTR#50 简化朝向：``"R"`` 需旋转 90°，``"U"`` 直立。"""
+    return "R" if ch in _VERTICAL_ROTATE_CHARS else "U"
+
+
+def _vertical_glyph_offset(ch: str, cell_w: int, cell_h: int) -> tuple[float, float]:
+    """直立字形在字格内的位移（标点/小假名靠右上）。"""
+    if ch in _VERTICAL_CORNER_PUNCT:
+        return (cell_w * 0.28, -cell_h * 0.28)
+    if ch in _VERTICAL_SMALL_KANA:
+        return (cell_w * 0.10, -cell_h * 0.10)
+    return (0.0, 0.0)
+
+
+def _vertical_glyph_path(
+    ch_text: str,
+    font: QFont,
+    metrics: QFontMetrics,
+    column_x: int,
+    cell_top: int,
+    cell_w: int,
+    cell_h: int,
+    ascent: int,
+) -> QPainterPath:
+    """单个竖排字形的 path：旋转类绕字格中心转 90°，其余直立（标点/小假名偏移）。"""
+    advance = metrics.horizontalAdvance(ch_text)
+    baseline = cell_top + ascent
+    glyph_x = column_x - advance / 2
+    path = QPainterPath()
+    if _vertical_orientation(ch_text) == "R":
+        path.addText(float(glyph_x), float(baseline), font, ch_text)
+        center_x = float(column_x)
+        center_y = float(cell_top + cell_h / 2)
+        transform = QTransform()
+        transform.translate(center_x, center_y)
+        transform.rotate(90)
+        transform.translate(-center_x, -center_y)
+        return transform.map(path)
+    dx, dy = _vertical_glyph_offset(ch_text, cell_w, cell_h)
+    path.addText(float(glyph_x + dx), float(baseline + dy), font, ch_text)
+    return path
+
 
 def _vertical_cell_width(metrics: QFontMetrics) -> int:
     """竖排列宽 = 一个全角字的步进（字形列内居中用）。"""
@@ -539,10 +606,11 @@ def _paint_line_vertical(
     for index, ch in enumerate(chars):
         cell_top = y_top + index * cell_h
         cells.append((cell_top, cell_top + cell_h))
-        advance = metrics.horizontalAdvance(ch.text)
-        glyph_x = column_x - advance / 2
-        glyph_baseline = cell_top + ascent
-        vline_path.addText(float(glyph_x), float(glyph_baseline), font, ch.text)
+        vline_path.addPath(
+            _vertical_glyph_path(
+                ch.text, font, metrics, column_x, cell_top, cell_w, cell_h, ascent
+            )
+        )
 
     line_rect = QRectF(
         float(column_x - cell_w / 2),
