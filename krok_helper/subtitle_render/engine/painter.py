@@ -649,7 +649,7 @@ def _line_char_transition_context(
                 end_ms=end,
             )
 
-    if style.exit_anim == "char_fade" and style.exit_fade_ms > 0:
+    if style.exit_anim in {"char_fade", "spin_flip"} and style.exit_fade_ms > 0:
         exit_start = max(_line_end_ms(line), end - _CHAR_FADE_INTRO_DELAY_MS - _CHAR_FADE_OUT_TIME_MS)
         if t_ms >= exit_start:
             return _LineCharTransition(
@@ -660,7 +660,7 @@ def _line_char_transition_context(
                 end_ms=end,
             )
 
-    if style.entry_anim == "char_fade" and style.entry_lead_ms > 0:
+    if style.entry_anim in {"char_fade", "spin_flip"} and style.entry_lead_ms > 0:
         entry_end = start + _CHAR_FADE_INTRO_DELAY_MS + _CHAR_FADE_IN_TIME_MS
         if t_ms <= entry_end:
             return _LineCharTransition(
@@ -699,7 +699,7 @@ def _paint_line_with_character_transition(
             if transition.effect == "utopia"
             else None
         )
-        opacity, dx, dy, rotation, scale_x, scale_y = _transition_char_state(
+        opacity, dx, dy, rotation, scale_x, scale_y, skew_y = _transition_char_state(
             style,
             transition,
             index,
@@ -727,6 +727,7 @@ def _paint_line_with_character_transition(
                 rotation=rotation,
                 scale_x=scale_x,
                 scale_y=scale_y,
+                skew_y=skew_y,
                 scale_origin_x=left if transition.effect == "utopia" else None,
                 scale_origin_y=baseline_y if transition.effect == "utopia" else None,
             )
@@ -757,7 +758,7 @@ def _transition_char_state(
     t_ms: int | None = None,
     frame_height: int | None = None,
     following_done_ms: int | None = None,
-) -> tuple[float, float, float, float, float, float]:
+) -> tuple[float, float, float, float, float, float, float]:
     if transition.effect == "utopia" and transition.phase == "utopia":
         if (
             style.entry_anim == "utopia"
@@ -819,17 +820,17 @@ def _transition_char_state(
                 frame_height=frame_height,
                 following_done_ms=following_done_ms,
             )
-        return 1.0, 0.0, 0.0, 0.0, 1.0, 1.0
+        return 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
 
     if transition.effect == "utopia" and transition.phase == "entry":
         if t_ms is None or transition.start_ms is None:
             local = _staggered_char_progress(transition.progress, index, count)
             opacity = min(max(local, 0.0), 1.0)
-            return opacity, 0.0, 0.0, 0.0, opacity, opacity
+            return opacity, 0.0, 0.0, 0.0, opacity, opacity, 0.0
         delay = _utopia_intro_delay_step(count) * index
         elapsed = t_ms - transition.start_ms - delay
         if elapsed < 0:
-            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
         opacity = min(elapsed / _UTOPIA_INTRO_ENLARGE_MS, 1.0)
         if elapsed < _UTOPIA_INTRO_ENLARGE_MS:
             scale = _UTOPIA_INTRO_OVER_RATIO * elapsed / _UTOPIA_INTRO_ENLARGE_MS
@@ -838,7 +839,7 @@ def _transition_char_state(
             scale = 1.0 + (_UTOPIA_INTRO_OVER_RATIO - 1.0) * remaining / _UTOPIA_INTRO_CONDENSE_MS
         else:
             scale = 1.0
-        return opacity, 0.0, 0.0, 0.0, scale, scale
+        return opacity, 0.0, 0.0, 0.0, scale, scale, 0.0
 
     if transition.phase == "exit" and transition.effect == "utopia":
         if t_ms is None:
@@ -861,33 +862,37 @@ def _transition_char_state(
         y_travel = math.sin(math.pi * local / 2.0) * amp
         x_flip = math.cos(math.pi * local)
         rotation = -180.0 * local
-        return opacity, -x_travel, y_travel, rotation, shrink * x_flip, shrink
+        return opacity, -x_travel, y_travel, rotation, shrink * x_flip, shrink, 0.0
 
     if transition.phase == "wipe" and transition.effect == "utopia":
         if char_start_ms is None or char_end_ms is None or t_ms is None:
-            return 1.0, 0.0, 0.0, 0.0, 1.0, 1.0
+            return 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
         scale = _utopia_wipe_scale(t_ms, char_start_ms, char_end_ms)
-        return 1.0, 0.0, 0.0, 0.0, scale, scale
+        return 1.0, 0.0, 0.0, 0.0, scale, scale, 0.0
 
-    if transition.effect == "char_fade":
+    if transition.effect in {"char_fade", "spin_flip"}:
         opacity = _char_fade_opacity(
             transition,
             index,
             count,
             t_ms=t_ms,
         )
-        return opacity, 0.0, 0.0, 0.0, 1.0, 1.0
+        if transition.effect == "spin_flip":
+            direction = 1.0 if transition.phase == "exit" else -1.0
+            skew_y = direction * _spin_flip_skew(opacity)
+            return opacity, 0.0, 0.0, 0.0, opacity, opacity, skew_y
+        return opacity, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
 
     local = _staggered_char_progress(transition.progress, index, count)
     eased = 1.0 - (1.0 - local) * (1.0 - local)
     if transition.phase == "entry":
         opacity = 0.22 + 0.78 * eased
-        return opacity, 0.0, 0.0, 0.0, 1.0, 1.0
+        return opacity, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
 
     opacity = 1.0 - eased
     if transition.effect == "utopia":
-        return 0.0, 0.0, 0.0, 0.0, 1.0, 1.0
-    return opacity, 0.0, 0.0, 0.0, 1.0, 1.0
+        return 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
+    return opacity, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
 
 
 def _apply_character_transform(
@@ -900,13 +905,16 @@ def _apply_character_transform(
     rotation: float,
     scale_x: float = 1.0,
     scale_y: float = 1.0,
+    skew_y: float = 0.0,
     scale_origin_x: float | None = None,
     scale_origin_y: float | None = None,
 ) -> None:
-    if not dx and not dy and not rotation and scale_x == 1.0 and scale_y == 1.0:
+    if not dx and not dy and not rotation and scale_x == 1.0 and scale_y == 1.0 and not skew_y:
         return
     if scale_origin_x is not None and scale_origin_y is not None:
         painter.translate(scale_origin_x + dx, scale_origin_y + dy)
+        if skew_y:
+            painter.shear(0.0, skew_y)
         if scale_x != 1.0 or scale_y != 1.0:
             painter.scale(scale_x, scale_y)
         painter.translate(center_x - scale_origin_x, center_y - scale_origin_y)
@@ -917,6 +925,8 @@ def _apply_character_transform(
     painter.translate(center_x + dx, center_y + dy)
     if rotation:
         painter.rotate(rotation)
+    if skew_y:
+        painter.shear(0.0, skew_y)
     if scale_x != 1.0 or scale_y != 1.0:
         painter.scale(scale_x, scale_y)
     painter.translate(-center_x, -center_y)
@@ -1003,6 +1013,14 @@ def _char_fade_opacity(
             return 1.0
         return _clamped_ratio(end_ms - t_ms, _CHAR_FADE_OUT_TIME_MS)
     return 1.0
+
+
+def _spin_flip_skew(opacity: float) -> float:
+    opacity = max(0.0, min(1.0, opacity))
+    if opacity <= 0.0:
+        return 0.0
+    angle = (math.pi / 2.0) * (1.0 - opacity)
+    return math.tan(min(angle, math.radians(89.0)))
 
 
 def _paint_char_karaoke_stack(
@@ -1843,7 +1861,7 @@ def _paint_rubies(
             right = max(char_x_ranges[index][1] for index in indices)
             reading_w = ruby_metrics.horizontalAdvance(ruby.reading)
             x = int(round((left + right - reading_w) / 2))
-            opacity, dx, dy, rotation, scale_x, scale_y = 1.0, 0.0, 0.0, 0.0, 1.0, 1.0
+            opacity, dx, dy, rotation, scale_x, scale_y, skew_y = 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
             if transition is not None:
                 first_index = min(indices)
                 last_index = max(indices)
@@ -1852,7 +1870,7 @@ def _paint_rubies(
                     if transition.effect == "utopia"
                     else None
                 )
-                opacity, dx, dy, rotation, scale_x, scale_y = _transition_char_state(
+                opacity, dx, dy, rotation, scale_x, scale_y, skew_y = _transition_char_state(
                     style,
                     transition,
                     first_index,
@@ -1894,6 +1912,7 @@ def _paint_rubies(
                         rotation=rotation,
                         scale_x=scale_x,
                         scale_y=scale_y,
+                        skew_y=skew_y,
                     )
                     _paint_ruby_text(
                         painter,
@@ -1968,7 +1987,7 @@ def _paint_ruby_text_units_with_transition(
     cursor_x = x
     for unit, (start_ms, end_ms) in zip(units, intervals):
         unit_width = ruby_metrics.horizontalAdvance(unit)
-        opacity, dx, dy, rotation, scale_x, scale_y = _transition_char_state(
+        opacity, dx, dy, rotation, scale_x, scale_y, skew_y = _transition_char_state(
             style,
             transition,
             char_index,
@@ -1992,6 +2011,7 @@ def _paint_ruby_text_units_with_transition(
                     rotation=rotation,
                     scale_x=scale_x,
                     scale_y=scale_y,
+                    skew_y=skew_y,
                     scale_origin_x=cursor_x,
                     scale_origin_y=baseline_y,
                 )

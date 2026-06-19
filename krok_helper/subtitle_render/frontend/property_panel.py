@@ -900,6 +900,7 @@ class PropertyPanel(QTabWidget):
             ("滑入", "slide_in"),
             ("上移", "rise"),
             ("逐文字渐显", "char_fade"),
+            ("旋转翻转", "spin_flip"),
             ("ユートピア", "utopia"),
         ]:
             self._entry_anim_combo.addItem(label, value)
@@ -924,6 +925,7 @@ class PropertyPanel(QTabWidget):
             ("滑出", "slide_out"),
             ("上移", "rise"),
             ("逐文字渐隐", "char_fade"),
+            ("旋转翻转", "spin_flip"),
             ("ユートピア", "utopia"),
         ]:
             self._exit_anim_combo.addItem(label, value)
@@ -1400,13 +1402,13 @@ def _normalize_decoration_kind(value: object) -> DecorationKind:
 
 
 def _normalize_entry_animation(value: object) -> EntryAnimation:
-    if value in {"none", "fade", "slide_in", "rise", "char_fade", "utopia"}:
+    if value in {"none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"}:
         return value  # type: ignore[return-value]
     return "none"
 
 
 def _normalize_exit_animation(value: object) -> ExitAnimation:
-    if value in {"none", "fade", "slide_out", "rise", "char_fade", "utopia"}:
+    if value in {"none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"}:
         return value  # type: ignore[return-value]
     return "none"
 

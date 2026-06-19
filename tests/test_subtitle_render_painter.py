@@ -872,6 +872,36 @@ def test_char_fade_exit_matches_nkm3_reverse_whole_fade(qapp):
     assert last_gone[0] == pytest.approx(0.0)
 
 
+def test_spin_flip_entry_uses_char_fade_timing_with_flip_transform(qapp):
+    style = Style(entry_anim="spin_flip")
+    transition = _LineCharTransition(phase="entry", effect="spin_flip", progress=1.0, start_ms=1000, end_ms=1600)
+
+    start = _transition_char_state(style, transition, 0, 3, t_ms=1000)
+    mid = _transition_char_state(style, transition, 0, 3, t_ms=1125)
+    done = _transition_char_state(style, transition, 0, 3, t_ms=1250)
+
+    assert start[0] == pytest.approx(0.0)
+    assert start[4] == pytest.approx(0.0)
+    assert start[6] == pytest.approx(0.0)
+    assert mid[0] == pytest.approx(0.5)
+    assert mid[4] == pytest.approx(0.5)
+    assert mid[5] == pytest.approx(0.5)
+    assert mid[6] == pytest.approx(-1.0)
+    assert done == (1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0)
+
+
+def test_spin_flip_exit_flips_in_opposite_direction(qapp):
+    style = Style(exit_anim="spin_flip")
+    transition = _LineCharTransition(phase="exit", effect="spin_flip", progress=1.0, start_ms=2900, end_ms=3500)
+
+    mid = _transition_char_state(style, transition, 2, 3, t_ms=3375)
+
+    assert mid[0] == pytest.approx(0.5)
+    assert mid[4] == pytest.approx(0.5)
+    assert mid[5] == pytest.approx(0.5)
+    assert mid[6] == pytest.approx(1.0)
+
+
 def test_paint_frame_utopia_exit_moves_characters_after_each_highlight(qapp):
     track = _track()
     exit_char_fade = _blank()
@@ -942,7 +972,7 @@ def test_utopia_exit_state_flies_character_down_left_after_highlight(qapp):
         frame_height=1080,
     )
 
-    assert at_end == (1.0, 0.0, 0.0, 0.0, 1.0, 1.0)
+    assert at_end == (1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0)
     assert mid[0] == pytest.approx(1.0 / 3.0)
     assert mid[1] == pytest.approx(-108.0, abs=1.0)
     assert mid[2] == pytest.approx(62.4, abs=1.0)
@@ -966,13 +996,13 @@ def test_utopia_entry_state_bounces_each_character_from_line_start(qapp):
     condensing = _transition_char_state(style, transition, 1, 3, t_ms=1550)
     settled = _transition_char_state(style, transition, 1, 3, t_ms=1600)
 
-    assert before_char == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    assert before_char == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     assert over[0] == pytest.approx(1.0)
     assert over[4] == pytest.approx(1.3)
     assert over[5] == pytest.approx(1.3)
     assert condensing[4] == pytest.approx(1.15)
     assert condensing[5] == pytest.approx(1.15)
-    assert settled == (1.0, 0.0, 0.0, 0.0, 1.0, 1.0)
+    assert settled == (1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0)
 
 
 def test_utopia_wipe_state_bounces_currently_sung_character(qapp):
@@ -987,7 +1017,7 @@ def test_utopia_wipe_state_bounces_currently_sung_character(qapp):
     assert rising[5] == pytest.approx(1.075)
     assert peak[4] == pytest.approx(1.15)
     assert peak[5] == pytest.approx(1.15)
-    assert released == (1.0, 0.0, 0.0, 0.0, 1.0, 1.0)
+    assert released == (1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0)
 
 
 def test_utopia_mixes_outro_and_later_wipe_per_character(qapp):
@@ -1019,7 +1049,7 @@ def test_utopia_mixes_outro_and_later_wipe_per_character(qapp):
 
     assert exiting_first[0] < 1.0
     assert exiting_first[1] < 0.0
-    assert wiping_third == (1.0, 0.0, 0.0, 0.0, 1.15, 1.15)
+    assert wiping_third == (1.0, 0.0, 0.0, 0.0, 1.15, 1.15, 0.0)
 
 
 def test_utopia_transform_scales_from_character_origin_for_extra_drift(qapp):
