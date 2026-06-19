@@ -67,8 +67,6 @@ def test_property_panel_set_style_populates_controls(qapp):
         entry_lead_ms=450,
         exit_anim="fade",
         exit_fade_ms=650,
-        karaoke_transition_effect="float_chars",
-        karaoke_transition_ms=720,
         ruby_font_size_px=30,
         ruby_color="#223344",
         ruby_gap_px=9,
@@ -105,8 +103,6 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._entry_lead_spin.value() == 450
     assert panel._exit_anim_combo.currentData() == "fade"
     assert panel._exit_fade_spin.value() == 650
-    assert panel._karaoke_transition_combo.currentData() == "float_chars"
-    assert panel._karaoke_transition_spin.value() == 720
     assert panel._ruby_font_size_spin.value() == 30
     assert panel._ruby_color_btn.color == "#223344"
     assert panel._ruby_gap_spin.value() == 9
@@ -157,8 +153,6 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.entry_lead_ms == 300
     assert style.exit_anim == "none"
     assert style.exit_fade_ms == 300
-    assert style.karaoke_transition_effect == "none"
-    assert style.karaoke_transition_ms == 650
 
 
 def test_property_panel_subtitle_page_has_no_horizontal_scroll(qapp):
@@ -393,8 +387,6 @@ def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
         entry_lead_ms=500,
         exit_anim="fade",
         exit_fade_ms=700,
-        karaoke_transition_effect="float_chars",
-        karaoke_transition_ms=800,
         singer_style_overrides={2: scheme},
         custom_style_schemes={"图像方案": scheme},
     )
@@ -403,8 +395,6 @@ def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
 
     assert restored.entry_anim == "slide_in"
     assert restored.exit_anim == "fade"
-    assert restored.karaoke_transition_effect == "float_chars"
-    assert restored.karaoke_transition_ms == 800
     assert restored.singer_style_overrides[2].karaoke_colors.after.text.image_path == image_path
     assert restored.singer_style_overrides[2].karaoke_colors.after.text.image_scale_pct == 175
     assert restored.custom_style_schemes["图像方案"].karaoke_colors.after.text.mode == "image"
@@ -506,17 +496,11 @@ def test_property_panel_animation_controls_emit_style(qapp):
     panel._entry_lead_spin.setValue(700)
     panel._exit_anim_combo.setCurrentIndex(panel._exit_anim_combo.findData("rise"))
     panel._exit_fade_spin.setValue(900)
-    panel._karaoke_transition_combo.setCurrentIndex(
-        panel._karaoke_transition_combo.findData("fade_chars")
-    )
-    panel._karaoke_transition_spin.setValue(850)
 
     assert emitted[-1].entry_anim == "slide_in"
     assert emitted[-1].entry_lead_ms == 700
     assert emitted[-1].exit_anim == "rise"
     assert emitted[-1].exit_fade_ms == 900
-    assert emitted[-1].karaoke_transition_effect == "fade_chars"
-    assert emitted[-1].karaoke_transition_ms == 850
 
 
 def test_property_panel_singer_scheme_controls_emit_style(qapp):

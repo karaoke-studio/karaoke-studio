@@ -154,7 +154,6 @@ ColorLayerKey = Literal["text", "stroke", "stroke2", "shadow"]
 DecorationKind = Literal["shadow", "glow"]
 EntryAnimation = Literal["none", "fade", "slide_in", "rise"]
 ExitAnimation = Literal["none", "fade", "slide_out", "rise"]
-KaraokeTransitionEffect = Literal["none", "fade_chars", "float_chars"]
 
 
 @dataclass
@@ -345,12 +344,6 @@ class Style:
     exit_fade_ms: int = 300
     """退场动画时长；在显示窗口结束前开始。"""
 
-    karaoke_transition_effect: KaraokeTransitionEffect = "none"
-    """逐字走字后的字符级退场：none / fade_chars / float_chars。"""
-
-    karaoke_transition_ms: int = 650
-    """每个字符唱完后淡出/上浮的持续时间。"""
-
 
 @dataclass
 class Background:
@@ -452,7 +445,6 @@ def style_from_dict(payload: object) -> Style:
             "line_max_hold_ms",
             "entry_lead_ms",
             "exit_fade_ms",
-            "karaoke_transition_ms",
         }:
             changes[key] = _int_value(value, getattr(defaults, key))
         elif key in {"italic", "dual_line_layout"}:
@@ -467,12 +459,6 @@ def style_from_dict(payload: object) -> Style:
             changes[key] = value if value in {"none", "fade", "slide_in", "rise"} else defaults.entry_anim
         elif key == "exit_anim":
             changes[key] = value if value in {"none", "fade", "slide_out", "rise"} else defaults.exit_anim
-        elif key == "karaoke_transition_effect":
-            changes[key] = (
-                value
-                if value in {"none", "fade_chars", "float_chars"}
-                else defaults.karaoke_transition_effect
-            )
         elif value is not None:
             changes[key] = str(value)
     return Style(**changes)
