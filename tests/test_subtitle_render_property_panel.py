@@ -171,6 +171,26 @@ def test_property_panel_subtitle_page_has_no_horizontal_scroll(qapp):
     assert first_section.layout().itemAt(0).widget().text() == "配色方案"
 
 
+def test_property_panel_sections_are_collapsible(qapp):
+    panel = PropertyPanel()
+    subtitle_page = panel.widget(1)
+    subtitle_layout = subtitle_page.widget().layout()
+    first_section = subtitle_layout.itemAt(0).widget()
+    header = first_section.layout().itemAt(0).widget()
+    content = first_section.layout().itemAt(1).widget()
+
+    assert header.text() == "配色方案"
+    assert not content.isHidden()
+
+    header.click()
+    assert content.isHidden()
+    assert header.arrowType() == Qt.ArrowType.RightArrow
+
+    header.click()
+    assert not content.isHidden()
+    assert header.arrowType() == Qt.ArrowType.DownArrow
+
+
 def test_property_panel_font_controls_emit_style(qapp):
     panel = PropertyPanel()
     emitted: list[Style] = []

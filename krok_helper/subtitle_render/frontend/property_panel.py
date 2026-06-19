@@ -31,6 +31,7 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QStackedWidget,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -146,6 +147,46 @@ class ColorButton(QPushButton):
             }}
             """
         )
+
+
+class CollapsibleSection(QFrame):
+    """A property card with a clickable header and collapsible content."""
+
+    def __init__(self, title: str, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("SubtitlePropertySection")
+        self._content = QWidget(self)
+        self._content.setObjectName("SubtitlePropertySectionContent")
+        self._header = QToolButton(self)
+        self._header.setObjectName("SubtitlePropertySectionHeader")
+        self._header.setText(title)
+        self._header.setCheckable(True)
+        self._header.setChecked(True)
+        self._header.setArrowType(Qt.ArrowType.DownArrow)
+        self._header.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._header.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._header.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._header.clicked.connect(self.set_expanded)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(self._header)
+        root.addWidget(self._content)
+
+        self.content_layout = QVBoxLayout(self._content)
+        self.content_layout.setContentsMargins(12, 0, 12, 12)
+        self.content_layout.setSpacing(10)
+
+    def set_expanded(self, expanded: bool) -> None:
+        self._header.setChecked(expanded)
+        self._header.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
+        self._content.setVisible(expanded)
+
+    def is_expanded(self) -> bool:
+        return self._content.isVisible()
 
 
 class GradientStopsEditor(QWidget):
@@ -1688,9 +1729,8 @@ def _field(label_text: str, control: QWidget) -> QWidget:
     return box
 
 
-def _section(title: str) -> tuple[QFrame, QVBoxLayout]:
-    section = QFrame()
-    section.setObjectName("SubtitlePropertySection")
+def _section(title: str) -> tuple[CollapsibleSection, QVBoxLayout]:
+    section = CollapsibleSection(title)
     themed(
         section,
         lambda: (
@@ -1699,6 +1739,17 @@ def _section(title: str) -> tuple[QFrame, QVBoxLayout]:
                 background: {palette().card_bg};
                 border: 1px solid {palette().card_border};
                 border-radius: 8px;
+            }}
+            QToolButton#SubtitlePropertySectionHeader {{
+                color: {palette().title_text};
+                border: 0;
+                padding: 10px 12px;
+                font-size: 10.5pt;
+                font-weight: 700;
+                text-align: left;
+            }}
+            QToolButton#SubtitlePropertySectionHeader:hover {{
+                color: {palette().accent_primary};
             }}
             QFrame#SubtitlePropertySection QWidget {{
                 background: transparent;
@@ -1720,13 +1771,4 @@ def _section(title: str) -> tuple[QFrame, QVBoxLayout]:
             """
         ),
     )
-    layout = QVBoxLayout(section)
-    layout.setContentsMargins(12, 10, 12, 12)
-    layout.setSpacing(10)
-    title_label = QLabel(title)
-    themed(
-        title_label,
-        lambda: f"color: {palette().title_text}; font-size: 10.5pt; font-weight: 700;",
-    )
-    layout.addWidget(title_label)
-    return section, layout
+    return section, section.content_layout

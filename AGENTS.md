@@ -149,6 +149,8 @@ git submodule status
 
 **接手前必读**：[`docs/字幕渲染模块-需求设计.md`](docs/字幕渲染模块-需求设计.md) —— 含完整需求清单（P0/P1/P2）、双模式数据流、UI 布局、数据模型、引擎选型、已确认的产品决策。
 
+**Sayatoo 参考实现专项**：模仿 Sayatoo「基本」页的任务已持久化到 [`docs/Sayatoo基本页逆向与实现计划.md`](docs/Sayatoo基本页逆向与实现计划.md)。本机 Sayatoo 路径：`C:\Program Files\Sayatoo Software\SubtitleMaker2\2.3.18.9487`。后续新会话如果要继续做「基本」页，先读该文档；里面标了每项实现优先级和难度。
+
 ### 骨架现状（提交 `d077b3e`）
 
 - 目录 `krok_helper/subtitle_render/` 已建：`__init__.py` / `__main__.py` / `models.py` / `settings_bridge.py` + `engine/` 与 `frontend/` 子包
