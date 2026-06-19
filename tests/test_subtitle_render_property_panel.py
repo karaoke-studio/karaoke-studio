@@ -62,6 +62,7 @@ def test_property_panel_set_style_populates_controls(qapp):
         lower_line_right_margin_px=88,
         line_lead_in_ms=900,
         line_tail_ms=1100,
+        timing_offset_ms=-120,
         line_lane_gap_ms=250,
         line_max_hold_ms=9000,
         entry_anim="utopia",
@@ -98,8 +99,7 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._lower_right_spin.value() == 88
     assert panel._line_lead_spin.value() == 900
     assert panel._line_tail_spin.value() == 1100
-    assert panel._line_lane_gap_spin.value() == 250
-    assert panel._line_max_hold_spin.value() == 9000
+    assert panel._line_offset_spin.value() == -120
     assert panel._entry_anim_combo.currentData() == "utopia"
     assert panel._entry_lead_spin.value() == 450
     assert panel._exit_anim_combo.currentData() == "char_fade"
@@ -146,6 +146,7 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.lower_line_right_margin_px == 50
     assert style.line_lead_in_ms == 1800
     assert style.line_tail_ms == 1000
+    assert style.timing_offset_ms == 0
     assert style.line_lane_gap_ms == 300
     assert style.line_continuity_snap_ms == 800
     assert style.line_pair_second_delay_ms == 3000
@@ -522,13 +523,11 @@ def test_property_panel_timing_controls_emit_style(qapp):
 
     panel._line_lead_spin.setValue(1500)
     panel._line_tail_spin.setValue(1200)
-    panel._line_lane_gap_spin.setValue(450)
-    panel._line_max_hold_spin.setValue(8000)
+    panel._line_offset_spin.setValue(-250)
 
     assert emitted[-1].line_lead_in_ms == 1500
     assert emitted[-1].line_tail_ms == 1200
-    assert emitted[-1].line_lane_gap_ms == 450
-    assert emitted[-1].line_max_hold_ms == 8000
+    assert emitted[-1].timing_offset_ms == -250
 
 
 def test_property_panel_animation_controls_emit_style(qapp):

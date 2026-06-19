@@ -694,8 +694,7 @@ class PropertyPanel(QTabWidget):
             self._lower_right_spin.setValue(self._style.lower_line_right_margin_px)
             self._line_lead_spin.setValue(self._style.line_lead_in_ms)
             self._line_tail_spin.setValue(self._style.line_tail_ms)
-            self._line_lane_gap_spin.setValue(self._style.line_lane_gap_ms)
-            self._line_max_hold_spin.setValue(self._style.line_max_hold_ms)
+            self._line_offset_spin.setValue(self._style.timing_offset_ms)
             self._entry_anim_combo.setCurrentIndex(
                 max(0, self._entry_anim_combo.findData(self._style.entry_anim))
             )
@@ -1245,7 +1244,7 @@ class PropertyPanel(QTabWidget):
         return section
 
     def _make_timing_section(self) -> QFrame:
-        section, layout = _section("显示时间")
+        section, layout = _section("时间")
 
         row = QWidget(section)
         row_layout = QGridLayout(row)
@@ -1257,25 +1256,19 @@ class PropertyPanel(QTabWidget):
         self._line_lead_spin.valueChanged.connect(
             lambda value: self._update_style(line_lead_in_ms=value)
         )
-        row_layout.addWidget(_field("提前显示", self._line_lead_spin), 0, 0)
+        row_layout.addWidget(_field("提前入场", self._line_lead_spin), 0, 0)
 
         self._line_tail_spin = _spin(0, 10_000, suffix=" ms")
         self._line_tail_spin.valueChanged.connect(
             lambda value: self._update_style(line_tail_ms=value)
         )
-        row_layout.addWidget(_field("唱完保留", self._line_tail_spin), 0, 1)
+        row_layout.addWidget(_field("延迟退场", self._line_tail_spin), 0, 1)
 
-        self._line_lane_gap_spin = _spin(0, 5_000, suffix=" ms")
-        self._line_lane_gap_spin.valueChanged.connect(
-            lambda value: self._update_style(line_lane_gap_ms=value)
+        self._line_offset_spin = _spin(-10_000, 10_000, suffix=" ms")
+        self._line_offset_spin.valueChanged.connect(
+            lambda value: self._update_style(timing_offset_ms=value)
         )
-        row_layout.addWidget(_field("同轨间隔", self._line_lane_gap_spin), 1, 0)
-
-        self._line_max_hold_spin = _spin(1_000, 60_000, suffix=" ms")
-        self._line_max_hold_spin.valueChanged.connect(
-            lambda value: self._update_style(line_max_hold_ms=value)
-        )
-        row_layout.addWidget(_field("最大挂屏", self._line_max_hold_spin), 1, 1)
+        row_layout.addWidget(_field("偏移", self._line_offset_spin), 1, 0)
 
         row_layout.setColumnStretch(0, 1)
         row_layout.setColumnStretch(1, 1)

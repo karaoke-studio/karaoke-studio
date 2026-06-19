@@ -320,6 +320,9 @@ class Style:
     line_tail_ms: int = 1000
     """表示结束至少延续到同组两行歌唱结束后的毫秒数。"""
 
+    timing_offset_ms: int = 0
+    """字幕整体时间偏移。正值延后显示，负值提前显示。"""
+
     line_lane_gap_ms: int = 300
     """同一显示 lane 上相邻两句之间保留的时间间隔。"""
 
@@ -439,6 +442,7 @@ def style_from_dict(payload: object) -> Style:
             "lower_line_right_margin_px",
             "line_lead_in_ms",
             "line_tail_ms",
+            "timing_offset_ms",
             "line_lane_gap_ms",
             "line_continuity_snap_ms",
             "line_pair_second_delay_ms",

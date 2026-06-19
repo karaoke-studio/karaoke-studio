@@ -28,6 +28,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _brush_for_fill,
     _build_font,
     _build_ruby_font,
+    _character_fill_ratio,
     _fill_extent_end,
     _karaoke_fill_segments,
     _paint_ruby_text,
@@ -52,6 +53,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     TimingChar,
     TimingLine,
     TimingTrack,
+    TimingTrackMeta,
 )
 
 
@@ -190,6 +192,26 @@ def test_paint_frame_uses_default_line_lead_in(qapp):
     baseline = _pixel_hash(img)
     paint_frame(img, _track(), 500, Style())  # 默认提前 1800ms 显示
     assert _pixel_hash(img) != baseline
+
+
+def test_paint_frame_applies_style_timing_offset(qapp):
+    img = _blank()
+    baseline = _pixel_hash(img)
+
+    paint_frame(img, _track(), 500, Style(timing_offset_ms=1000))
+
+    assert _pixel_hash(img) == baseline
+
+
+def test_paint_frame_applies_track_meta_offset(qapp):
+    img = _blank()
+    baseline = _pixel_hash(img)
+    track = _track()
+    track.meta = TimingTrackMeta(offset_ms=1000)
+
+    paint_frame(img, track, 500, Style())
+
+    assert _pixel_hash(img) == baseline
 
 
 def test_paint_frame_during_line_modifies_image(qapp):
@@ -627,6 +649,85 @@ def test_ruby_timing_drives_main_text_fill_extent(qapp):
     )
 
     assert _fill_extent_end(segments, 2400) == 146
+
+
+def test_ruby_timing_maps_to_main_text_group_scanline(qapp):
+    line = TimingLine(
+        chars=[TimingChar(text="星", start_ms=166_160)],
+        end_ms=169_580,
+    )
+    ruby = RubyAnnotation(
+        kanji="星",
+        reading="ほし",
+        reading_part_ms=[360],
+        pos_start_ms=166_160,
+        pos_end_ms=169_580,
+    )
+    segments = _karaoke_fill_segments(
+        [100],
+        [(166_160, 169_580)],
+        [(0, 100)],
+        [ruby],
+        line,
+    )
+
+    assert _fill_extent_end(segments, 166_530) == 50
+
+
+def test_utopia_main_text_uses_ruby_k_timing_for_scanline(qapp):
+    line = TimingLine(
+        chars=[TimingChar(text="星", start_ms=166_160)],
+        end_ms=169_580,
+    )
+    intervals = [(166_160, 169_580)]
+    ruby = RubyAnnotation(
+        kanji="星",
+        reading="ほし",
+        reading_part_ms=[360],
+        pos_start_ms=166_160,
+        pos_end_ms=169_580,
+    )
+
+    assert _character_fill_ratio(line, intervals, [(0, 100)], [ruby], 0, 166_530) == pytest.approx(
+        0.5,
+        abs=0.01,
+    )
+
+
+def test_utopia_ruby_group_scanline_spans_multiple_main_characters(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="明", start_ms=171_550),
+            TimingChar(text="日", start_ms=171_995),
+        ],
+        end_ms=172_440,
+    )
+    intervals = [(171_550, 171_995), (171_995, 172_440)]
+    ranges = [(0, 100), (100, 200)]
+    ruby = RubyAnnotation(
+        kanji="明日",
+        reading="あした",
+        reading_part_ms=[160, 500],
+        pos_start_ms=171_550,
+        pos_end_ms=172_440,
+    )
+
+    assert _character_fill_ratio(line, intervals, ranges, [ruby], 0, 171_810) == pytest.approx(
+        0.86,
+        abs=0.02,
+    )
+    assert _character_fill_ratio(line, intervals, ranges, [ruby], 1, 171_810) == pytest.approx(
+        0.0,
+        abs=0.01,
+    )
+    assert _character_fill_ratio(line, intervals, ranges, [ruby], 0, 172_100) == pytest.approx(
+        1.0,
+        abs=0.01,
+    )
+    assert _character_fill_ratio(line, intervals, ranges, [ruby], 1, 172_100) == pytest.approx(
+        0.42,
+        abs=0.02,
+    )
 
 
 def test_ruby_small_kana_reading_uses_mora_units(qapp):

@@ -168,7 +168,8 @@ def paint_frame_to_painter(
     """
     if track is None:
         return
-    display_lines = _visible_lines_for_style(track, t_ms, style)
+    track_t_ms = _effective_track_time_ms(track, t_ms, style)
+    display_lines = _visible_lines_for_style(track, track_t_ms, style)
     if not display_lines:
         return
 
@@ -187,7 +188,7 @@ def paint_frame_to_painter(
                 logical_h,
                 track,
                 display_line.line,
-                t_ms,
+                track_t_ms,
                 style,
                 baseline_y=baselines[display_line.lane],
                 lane=display_line.lane if style.dual_line_layout else None,
@@ -201,6 +202,15 @@ def paint_frame_to_painter(
 # ---------------------------------------------------------------------------
 # 内部
 # ---------------------------------------------------------------------------
+
+
+def _effective_track_time_ms(track: TimingTrack, t_ms: int, style: Style) -> int:
+    """Convert playback time to subtitle time after LRC and UI offsets.
+
+    Positive offsets delay subtitles: at playback ``t_ms`` the renderer samples an
+    earlier subtitle timestamp.
+    """
+    return t_ms - (track.meta.offset_ms + style.timing_offset_ms)
 
 
 def _build_font(style: Style) -> QFont:
@@ -509,6 +519,7 @@ def _paint_line_static(
             char_widths,
             char_x_ranges,
             intervals,
+            active_rubies,
             font,
             y,
             metrics,
@@ -679,6 +690,7 @@ def _paint_line_with_character_transition(
     char_widths: list[int],
     char_x_ranges: list[tuple[int, int]],
     intervals: list[tuple[int, int]],
+    active_rubies: list[RubyAnnotation],
     font: QFont,
     baseline_y: int,
     metrics: QFontMetrics,
@@ -741,7 +753,14 @@ def _paint_line_with_character_transition(
                 metrics=metrics,
                 colors=colors,
                 style=style,
-                ratio=char_fill_ratio(char_start, char_end, t_ms),
+                ratio=_character_fill_ratio(
+                    line,
+                    intervals,
+                    char_x_ranges,
+                    active_rubies,
+                    index,
+                    t_ms,
+                ),
             )
         finally:
             painter.restore()
@@ -1381,11 +1400,7 @@ def _fill_extent_end(
         return 0
     fill_end = segments[0].left
     for segment in segments:
-        ratio = (
-            _ruby_progress_ratio(segment.ruby, t_ms)
-            if segment.ruby is not None
-            else char_fill_ratio(segment.start_ms, segment.end_ms, t_ms)
-        )
+        ratio = _segment_fill_ratio(segment, t_ms)
         if ratio <= 0.0:
             break
         if ratio >= 1.0:
@@ -1394,6 +1409,42 @@ def _fill_extent_end(
         fill_end = segment.left + int(round((segment.right - segment.left) * ratio))
         break
     return fill_end
+
+
+def _segment_fill_ratio(segment: _FillSegment, t_ms: int) -> float:
+    if segment.ruby is None:
+        return char_fill_ratio(segment.start_ms, segment.end_ms, t_ms)
+    return _ruby_progress_ratio(segment.ruby, t_ms)
+
+
+def _character_fill_ratio(
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+    char_x_ranges: list[tuple[int, int]],
+    active_rubies: list[RubyAnnotation],
+    index: int,
+    t_ms: int,
+) -> float:
+    ruby = _ruby_for_char_index(active_rubies, line, intervals, index)
+    if ruby is not None:
+        indices = [
+            candidate
+            for candidate in _ruby_target_indices(ruby, line, intervals)
+            if 0 <= candidate < len(char_x_ranges)
+        ]
+        if indices:
+            group_left = min(char_x_ranges[candidate][0] for candidate in indices)
+            group_right = max(char_x_ranges[candidate][1] for candidate in indices)
+            fill_end = group_left + (group_right - group_left) * _ruby_progress_ratio(
+                ruby, t_ms
+            )
+            char_left, char_right = char_x_ranges[index]
+            width = max(char_right - char_left, 1)
+            return max(0.0, min(1.0, (fill_end - char_left) / width))
+    if index >= len(intervals):
+        return 0.0
+    start, end = intervals[index]
+    return char_fill_ratio(start, end, t_ms)
 
 
 def _brush_for_fill(fill: PaintFill, rect: QRectF) -> QBrush:
