@@ -85,6 +85,19 @@ class _LineCharTransition:
     phase: str
     effect: str
     progress: float
+    start_ms: int | None = None
+    end_ms: int | None = None
+
+
+_UTOPIA_INTRO_TIME_MS = 700
+_UTOPIA_INTRO_DELAY_MS = 200
+_UTOPIA_INTRO_ENLARGE_MS = 400
+_UTOPIA_INTRO_CONDENSE_MS = 100
+_UTOPIA_INTRO_OVER_RATIO = 1.3
+_UTOPIA_WIPE_OVER_RATIO = 1.15
+_UTOPIA_WIPE_OVER_TIME_RATIO = 0.25
+_UTOPIA_WIPE_OVER_TIME_LIMIT_MS = 100
+_UTOPIA_FADE_OUT_TIME_MS = 750
 
 
 def clear_before_layer_cache() -> None:
@@ -615,33 +628,45 @@ def _line_char_transition_context(
     start = display_start_ms if display_start_ms is not None else _line_start_ms(line)
     end = display_end_ms if display_end_ms is not None else _line_end_ms(line)
 
+    if style.entry_anim == "utopia" or style.exit_anim == "utopia":
+        intervals = compute_char_intervals(line)
+        in_intro = style.entry_anim == "utopia" and t_ms <= start + _UTOPIA_INTRO_TIME_MS
+        in_exit = (
+            style.exit_anim == "utopia"
+            and bool(intervals)
+            and _utopia_following_done_time(line, intervals, 0, style) <= t_ms <= end
+        )
+        in_wipe = any(_is_utopia_wiping(t_ms, char_start, char_end) for char_start, char_end in intervals)
+        if in_intro or in_exit or in_wipe:
+            return _LineCharTransition(
+                phase="utopia",
+                effect="utopia",
+                progress=1.0,
+                start_ms=start,
+                end_ms=end,
+            )
+
     exit_duration = max(style.exit_fade_ms, 0)
-    if style.exit_anim in {"char_fade", "utopia"} and exit_duration > 0:
-        if style.exit_anim == "utopia":
-            intervals = compute_char_intervals(line)
-            if intervals:
-                first_exit_start = intervals[0][1]
-                if first_exit_start <= t_ms <= end:
-                    return _LineCharTransition(
-                        phase="exit",
-                        effect=style.exit_anim,
-                        progress=1.0,
-                    )
+    if style.exit_anim == "char_fade" and exit_duration > 0:
         exit_start = max(_line_end_ms(line), end - exit_duration)
         if t_ms >= exit_start:
             return _LineCharTransition(
                 phase="exit",
                 effect=style.exit_anim,
                 progress=_clamped_ratio(t_ms - exit_start, exit_duration),
+                start_ms=exit_start,
+                end_ms=end,
             )
 
     entry_duration = max(style.entry_lead_ms, 0)
-    if style.entry_anim in {"char_fade", "utopia"} and entry_duration > 0:
+    if style.entry_anim == "char_fade" and entry_duration > 0:
         if t_ms <= start + entry_duration:
             return _LineCharTransition(
                 phase="entry",
                 effect=style.entry_anim,
                 progress=_clamped_ratio(t_ms - start, entry_duration),
+                start_ms=start,
+                end_ms=start + entry_duration,
             )
     return None
 
@@ -667,7 +692,12 @@ def _paint_line_with_character_transition(
             continue
         left, _right = char_x_ranges[index]
         char_start, char_end = intervals[index]
-        opacity, dx, dy, rotation = _transition_char_state(
+        following_done_ms = (
+            _utopia_following_done_time(line, intervals, index, style)
+            if transition.effect == "utopia"
+            else None
+        )
+        opacity, dx, dy, rotation, scale_x, scale_y = _transition_char_state(
             style,
             transition,
             index,
@@ -675,6 +705,8 @@ def _paint_line_with_character_transition(
             char_start_ms=char_start,
             char_end_ms=char_end,
             t_ms=t_ms,
+            frame_height=painter.device().height(),
+            following_done_ms=following_done_ms,
         )
         if opacity <= 0.0:
             continue
@@ -691,6 +723,10 @@ def _paint_line_with_character_transition(
                 dx=dx,
                 dy=dy,
                 rotation=rotation,
+                scale_x=scale_x,
+                scale_y=scale_y,
+                scale_origin_x=left if transition.effect == "utopia" else None,
+                scale_origin_y=baseline_y if transition.effect == "utopia" else None,
             )
             _paint_char_karaoke_stack(
                 painter,
@@ -717,30 +753,130 @@ def _transition_char_state(
     char_start_ms: int | None = None,
     char_end_ms: int | None = None,
     t_ms: int | None = None,
-) -> tuple[float, float, float, float]:
+    frame_height: int | None = None,
+    following_done_ms: int | None = None,
+) -> tuple[float, float, float, float, float, float]:
+    if transition.effect == "utopia" and transition.phase == "utopia":
+        if (
+            style.entry_anim == "utopia"
+            and t_ms is not None
+            and transition.start_ms is not None
+            and t_ms <= transition.start_ms + _UTOPIA_INTRO_TIME_MS
+        ):
+            intro_transition = _LineCharTransition(
+                phase="entry",
+                effect="utopia",
+                progress=_clamped_ratio(t_ms - transition.start_ms, _UTOPIA_INTRO_TIME_MS),
+                start_ms=transition.start_ms,
+                end_ms=transition.start_ms + _UTOPIA_INTRO_TIME_MS,
+            )
+            return _transition_char_state(
+                style,
+                intro_transition,
+                index,
+                count,
+                char_start_ms=char_start_ms,
+                char_end_ms=char_end_ms,
+                t_ms=t_ms,
+                frame_height=frame_height,
+                following_done_ms=following_done_ms,
+            )
+        if (
+            style.exit_anim == "utopia"
+            and t_ms is not None
+            and following_done_ms is not None
+            and t_ms > following_done_ms
+        ):
+            outro_transition = _LineCharTransition(phase="exit", effect="utopia", progress=1.0)
+            return _transition_char_state(
+                style,
+                outro_transition,
+                index,
+                count,
+                char_start_ms=char_start_ms,
+                char_end_ms=char_end_ms,
+                t_ms=t_ms,
+                frame_height=frame_height,
+                following_done_ms=following_done_ms,
+            )
+        if (
+            t_ms is not None
+            and char_start_ms is not None
+            and char_end_ms is not None
+            and _is_utopia_wiping(t_ms, char_start_ms, char_end_ms)
+        ):
+            wipe_transition = _LineCharTransition(phase="wipe", effect="utopia", progress=1.0)
+            return _transition_char_state(
+                style,
+                wipe_transition,
+                index,
+                count,
+                char_start_ms=char_start_ms,
+                char_end_ms=char_end_ms,
+                t_ms=t_ms,
+                frame_height=frame_height,
+                following_done_ms=following_done_ms,
+            )
+        return 1.0, 0.0, 0.0, 0.0, 1.0, 1.0
+
+    if transition.effect == "utopia" and transition.phase == "entry":
+        if t_ms is None or transition.start_ms is None:
+            local = _staggered_char_progress(transition.progress, index, count)
+            opacity = min(max(local, 0.0), 1.0)
+            return opacity, 0.0, 0.0, 0.0, opacity, opacity
+        delay = _utopia_intro_delay_step(count) * index
+        elapsed = t_ms - transition.start_ms - delay
+        if elapsed < 0:
+            return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        opacity = min(elapsed / _UTOPIA_INTRO_ENLARGE_MS, 1.0)
+        if elapsed < _UTOPIA_INTRO_ENLARGE_MS:
+            scale = _UTOPIA_INTRO_OVER_RATIO * elapsed / _UTOPIA_INTRO_ENLARGE_MS
+        elif elapsed < _UTOPIA_INTRO_ENLARGE_MS + _UTOPIA_INTRO_CONDENSE_MS:
+            remaining = _UTOPIA_INTRO_ENLARGE_MS + _UTOPIA_INTRO_CONDENSE_MS - elapsed
+            scale = 1.0 + (_UTOPIA_INTRO_OVER_RATIO - 1.0) * remaining / _UTOPIA_INTRO_CONDENSE_MS
+        else:
+            scale = 1.0
+        return opacity, 0.0, 0.0, 0.0, scale, scale
+
     if transition.phase == "exit" and transition.effect == "utopia":
-        if char_end_ms is None or t_ms is None:
+        if t_ms is None:
             local = transition.progress
         else:
-            local = _clamped_ratio(t_ms - char_end_ms, max(style.exit_fade_ms, 1))
-        horizontal = local**1.15
-        vertical = local**1.65
-        opacity = 1.0 if local < 0.72 else max(0.0, 1.0 - (local - 0.72) / 0.28)
-        dx = -style.font_size_px * 1.25 * horizontal
-        dy = max(style.font_size_px * 1.1, 48.0) * vertical
-        rotation = -48.0 * horizontal
-        return opacity, dx, dy, rotation
+            done_ms = following_done_ms if following_done_ms is not None else char_end_ms
+            if done_ms is None:
+                local = transition.progress
+            else:
+                local = (t_ms - done_ms) / _UTOPIA_FADE_OUT_TIME_MS
+        local = min(max(local, 0.0), 1.0)
+        opacity = max(0.0, 1.0 - local)
+        shrink = 1.0 - local
+        height = frame_height if frame_height and frame_height > 0 else 1080
+        amp = height / 15.0
+        if local <= 0.5:
+            x_travel = math.sin(math.pi * local) * amp
+        else:
+            x_travel = amp + math.sin((local - 0.5) * math.pi) * amp
+        y_travel = math.sin(math.pi * local / 2.0) * amp
+        x_flip = math.cos(math.pi * local)
+        rotation = -180.0 * local
+        return opacity, -x_travel, y_travel, rotation, shrink * x_flip, shrink
+
+    if transition.phase == "wipe" and transition.effect == "utopia":
+        if char_start_ms is None or char_end_ms is None or t_ms is None:
+            return 1.0, 0.0, 0.0, 0.0, 1.0, 1.0
+        scale = _utopia_wipe_scale(t_ms, char_start_ms, char_end_ms)
+        return 1.0, 0.0, 0.0, 0.0, scale, scale
 
     local = _staggered_char_progress(transition.progress, index, count)
     eased = 1.0 - (1.0 - local) * (1.0 - local)
     if transition.phase == "entry":
         opacity = 0.22 + 0.78 * eased
-        return opacity, 0.0, 0.0, 0.0
+        return opacity, 0.0, 0.0, 0.0, 1.0, 1.0
 
     opacity = 1.0 - eased
     if transition.effect == "utopia":
-        return 0.0, 0.0, 0.0, 0.0
-    return opacity, 0.0, 0.0, 0.0
+        return 0.0, 0.0, 0.0, 0.0, 1.0, 1.0
+    return opacity, 0.0, 0.0, 0.0, 1.0, 1.0
 
 
 def _apply_character_transform(
@@ -751,13 +887,83 @@ def _apply_character_transform(
     dx: float,
     dy: float,
     rotation: float,
+    scale_x: float = 1.0,
+    scale_y: float = 1.0,
+    scale_origin_x: float | None = None,
+    scale_origin_y: float | None = None,
 ) -> None:
-    if not dx and not dy and not rotation:
+    if not dx and not dy and not rotation and scale_x == 1.0 and scale_y == 1.0:
+        return
+    if scale_origin_x is not None and scale_origin_y is not None:
+        painter.translate(scale_origin_x + dx, scale_origin_y + dy)
+        if scale_x != 1.0 or scale_y != 1.0:
+            painter.scale(scale_x, scale_y)
+        painter.translate(center_x - scale_origin_x, center_y - scale_origin_y)
+        if rotation:
+            painter.rotate(rotation)
+        painter.translate(-center_x, -center_y)
         return
     painter.translate(center_x + dx, center_y + dy)
     if rotation:
         painter.rotate(rotation)
+    if scale_x != 1.0 or scale_y != 1.0:
+        painter.scale(scale_x, scale_y)
     painter.translate(-center_x, -center_y)
+
+
+def _utopia_intro_delay_step(count: int) -> int:
+    if count <= 1:
+        return 0
+    return _UTOPIA_INTRO_DELAY_MS // (count - 1)
+
+
+def _is_utopia_wiping(t_ms: int, char_start_ms: int, char_end_ms: int) -> bool:
+    return char_start_ms < t_ms < char_end_ms and char_start_ms != char_end_ms
+
+
+def _utopia_wipe_scale(t_ms: int, char_start_ms: int, char_end_ms: int) -> float:
+    if not _is_utopia_wiping(t_ms, char_start_ms, char_end_ms):
+        return 1.0
+    over_ms = min(int((char_end_ms - char_start_ms) * _UTOPIA_WIPE_OVER_TIME_RATIO), _UTOPIA_WIPE_OVER_TIME_LIMIT_MS)
+    if over_ms <= 0:
+        return 1.0
+    peak_ms = char_start_ms + over_ms
+    if t_ms <= peak_ms:
+        progress = (t_ms - char_start_ms) / over_ms
+    else:
+        release_ms = max(char_end_ms - peak_ms, 1)
+        progress = (char_end_ms - t_ms) / release_ms
+    return 1.0 + (_UTOPIA_WIPE_OVER_RATIO - 1.0) * min(max(progress, 0.0), 1.0)
+
+
+def _utopia_following_done_time(
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+    index: int,
+    style: Style,
+) -> int:
+    if not intervals:
+        return _line_end_ms(line)
+    index = min(max(index, 0), len(intervals) - 1)
+    current_end = intervals[index][1]
+    next_index = _next_valid_char_index(line, index + 1)
+    if next_index is not None and next_index < len(intervals):
+        next_end = intervals[next_index][1]
+        if current_end <= next_end:
+            return next_end
+    return current_end + _utopia_tail_delay_ms(style)
+
+
+def _next_valid_char_index(line: TimingLine, start_index: int) -> int | None:
+    for index in range(start_index, len(line.chars)):
+        text = line.chars[index].text
+        if text and not text.isspace():
+            return index
+    return None
+
+
+def _utopia_tail_delay_ms(style: Style) -> int:
+    return max(0, style.line_tail_ms - _UTOPIA_FADE_OUT_TIME_MS)
 
 
 def _paint_char_karaoke_stack(
@@ -1598,11 +1804,16 @@ def _paint_rubies(
             right = max(char_x_ranges[index][1] for index in indices)
             reading_w = ruby_metrics.horizontalAdvance(ruby.reading)
             x = int(round((left + right - reading_w) / 2))
-            opacity, dx, dy, rotation = 1.0, 0.0, 0.0, 0.0
+            opacity, dx, dy, rotation, scale_x, scale_y = 1.0, 0.0, 0.0, 0.0, 1.0, 1.0
             if transition is not None:
                 first_index = min(indices)
                 last_index = max(indices)
-                opacity, dx, dy, rotation = _transition_char_state(
+                following_done_ms = (
+                    _utopia_following_done_time(line, intervals, last_index, style)
+                    if transition.effect == "utopia"
+                    else None
+                )
+                opacity, dx, dy, rotation, scale_x, scale_y = _transition_char_state(
                     style,
                     transition,
                     first_index,
@@ -1610,30 +1821,51 @@ def _paint_rubies(
                     char_start_ms=intervals[first_index][0],
                     char_end_ms=intervals[last_index][1],
                     t_ms=t_ms,
+                    frame_height=painter.device().height(),
+                    following_done_ms=following_done_ms,
                 )
             if opacity <= 0.0:
                 continue
             painter.save()
             try:
                 painter.setOpacity(painter.opacity() * opacity)
-                _apply_character_transform(
-                    painter,
-                    center_x=x + reading_w / 2,
-                    center_y=ruby_baseline_y - ruby_metrics.ascent() + ruby_metrics.height() / 2,
-                    dx=dx,
-                    dy=dy,
-                    rotation=rotation,
-                )
-                _paint_ruby_text(
-                    painter,
-                    ruby,
-                    ruby_font,
-                    ruby_metrics,
-                    x,
-                    ruby_baseline_y,
-                    t_ms,
-                    style,
-                )
+                use_utopia_origin = transition is not None and transition.effect == "utopia"
+                if use_utopia_origin:
+                    _paint_ruby_text_units_with_transition(
+                        painter,
+                        ruby,
+                        ruby_font,
+                        ruby_metrics,
+                        x,
+                        ruby_baseline_y,
+                        t_ms,
+                        style,
+                        transition,
+                        first_index,
+                        max(len(line.chars), 1),
+                        following_done_ms,
+                    )
+                else:
+                    _apply_character_transform(
+                        painter,
+                        center_x=x + reading_w / 2,
+                        center_y=ruby_baseline_y - ruby_metrics.ascent() + ruby_metrics.height() / 2,
+                        dx=dx,
+                        dy=dy,
+                        rotation=rotation,
+                        scale_x=scale_x,
+                        scale_y=scale_y,
+                    )
+                    _paint_ruby_text(
+                        painter,
+                        ruby,
+                        ruby_font,
+                        ruby_metrics,
+                        x,
+                        ruby_baseline_y,
+                        t_ms,
+                        style,
+                    )
             finally:
                 painter.restore()
     finally:
@@ -1664,6 +1896,81 @@ def _find_ruby_text_indices(kanji: str, line: TimingLine) -> list[int]:
     return list(range(pos, min(pos + len(kanji), len(line.chars))))
 
 
+def _paint_ruby_text_units_with_transition(
+    painter: QPainter,
+    ruby: RubyAnnotation,
+    ruby_font: QFont,
+    ruby_metrics: QFontMetrics,
+    x: int,
+    baseline_y: int,
+    t_ms: int,
+    style: Style,
+    transition: _LineCharTransition,
+    char_index: int,
+    char_count: int,
+    following_done_ms: int | None,
+) -> None:
+    visual_units = _ruby_utopia_reading_units_and_intervals(ruby)
+    units = [unit for unit, _interval in visual_units]
+    intervals = [interval for _unit, interval in visual_units]
+    if not units or len(units) != len(intervals):
+        _paint_ruby_text(
+            painter,
+            ruby,
+            ruby_font,
+            ruby_metrics,
+            x,
+            baseline_y,
+            t_ms,
+            style,
+        )
+        return
+
+    cursor_x = x
+    for unit, (start_ms, end_ms) in zip(units, intervals):
+        unit_width = ruby_metrics.horizontalAdvance(unit)
+        opacity, dx, dy, rotation, scale_x, scale_y = _transition_char_state(
+            style,
+            transition,
+            char_index,
+            char_count,
+            char_start_ms=start_ms,
+            char_end_ms=end_ms,
+            t_ms=t_ms,
+            frame_height=painter.device().height(),
+            following_done_ms=following_done_ms,
+        )
+        if opacity > 0.0:
+            painter.save()
+            try:
+                painter.setOpacity(painter.opacity() * opacity)
+                _apply_character_transform(
+                    painter,
+                    center_x=cursor_x + unit_width / 2,
+                    center_y=baseline_y - ruby_metrics.ascent() + ruby_metrics.height() / 2,
+                    dx=dx,
+                    dy=dy,
+                    rotation=rotation,
+                    scale_x=scale_x,
+                    scale_y=scale_y,
+                    scale_origin_x=cursor_x,
+                    scale_origin_y=baseline_y,
+                )
+                _paint_ruby_text_fragment(
+                    painter,
+                    unit,
+                    ruby_font,
+                    ruby_metrics,
+                    cursor_x,
+                    baseline_y,
+                    char_fill_ratio(start_ms, end_ms, t_ms),
+                    style,
+                )
+            finally:
+                painter.restore()
+        cursor_x += unit_width
+
+
 def _paint_ruby_text(
     painter: QPainter,
     ruby: RubyAnnotation,
@@ -1692,12 +1999,50 @@ def _paint_ruby_text(
     )
 
 
+def _paint_ruby_text_fragment(
+    painter: QPainter,
+    text: str,
+    ruby_font: QFont,
+    ruby_metrics: QFontMetrics,
+    x: int,
+    baseline_y: int,
+    ratio: float,
+    style: Style,
+) -> None:
+    path = QPainterPath()
+    path.addText(float(x), float(baseline_y), ruby_font, text)
+    rect = QRectF(
+        float(x),
+        float(baseline_y - ruby_metrics.ascent()),
+        float(ruby_metrics.horizontalAdvance(text)),
+        float(ruby_metrics.height()),
+    )
+    _paint_ruby_karaoke_fragment(
+        painter,
+        path,
+        rect,
+        ratio,
+        style,
+    )
+
+
 def _paint_ruby_karaoke_path(
     painter: QPainter,
     path: QPainterPath,
     rect: QRectF,
     ruby: RubyAnnotation,
     t_ms: int,
+    style: Style,
+) -> None:
+    ratio = _ruby_progress_ratio(ruby, t_ms)
+    _paint_ruby_karaoke_fragment(painter, path, rect, ratio, style)
+
+
+def _paint_ruby_karaoke_fragment(
+    painter: QPainter,
+    path: QPainterPath,
+    rect: QRectF,
+    ratio: float,
     style: Style,
 ) -> None:
     colors = _effective_ruby_karaoke_colors(style)
@@ -1721,7 +2066,6 @@ def _paint_ruby_karaoke_path(
         glow_radius=glow_radius,
     )
 
-    ratio = _ruby_progress_ratio(ruby, t_ms)
     if ratio <= 0.0:
         return
 
@@ -1858,6 +2202,33 @@ def _ruby_reading_intervals(ruby: RubyAnnotation) -> list[tuple[int, int]]:
             end = start
         result.append((start, end))
     return result
+
+
+def _ruby_utopia_reading_units_and_intervals(ruby: RubyAnnotation) -> list[tuple[str, tuple[int, int]]]:
+    mora_units = _ruby_reading_units(ruby.reading)
+    mora_intervals = _ruby_reading_intervals(ruby)
+    result: list[tuple[str, tuple[int, int]]] = []
+    for mora, (start, end) in zip(mora_units, mora_intervals):
+        visual_units = _ruby_utopia_visual_units(mora)
+        if len(visual_units) <= 1:
+            result.append((mora, (start, end)))
+            continue
+        duration = max(end - start, 0)
+        for index, visual in enumerate(visual_units):
+            unit_start = start + round(duration * index / len(visual_units))
+            unit_end = start + round(duration * (index + 1) / len(visual_units))
+            result.append((visual, (unit_start, max(unit_start, unit_end))))
+    return result
+
+
+def _ruby_utopia_visual_units(text: str) -> list[str]:
+    units: list[str] = []
+    for ch in text:
+        if units and ch in {"\u3099", "\u309A"}:
+            units[-1] += ch
+        else:
+            units.append(ch)
+    return units
 
 
 def _ruby_reading_units(reading: str) -> list[str]:

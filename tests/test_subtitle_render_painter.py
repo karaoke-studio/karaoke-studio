@@ -17,21 +17,26 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QRectF  # noqa: E402
-from PyQt6.QtGui import QColor, QFontMetrics, QImage  # noqa: E402
+from PyQt6.QtGui import QColor, QFontMetrics, QImage, QPainter  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _IMAGE_BRUSH_CACHE,
     _IMAGE_FILL_CACHE,
     _LineCharTransition,
+    _apply_character_transform,
     _brush_for_fill,
     _build_font,
+    _build_ruby_font,
     _fill_extent_end,
     _karaoke_fill_segments,
+    _paint_ruby_text,
+    _paint_ruby_text_units_with_transition,
     _resolve_display_baselines,
     _resolve_line_x,
     _ruby_progress_ratio,
     _ruby_reading_intervals,
+    _ruby_utopia_reading_units_and_intervals,
     _transition_char_state,
     paint_frame,
     clear_before_layer_cache,
@@ -637,6 +642,74 @@ def test_ruby_small_kana_reading_uses_mora_units(qapp):
     assert _ruby_progress_ratio(ruby, 89_950) == 1.0
 
 
+def test_utopia_ruby_splits_small_kana_for_visual_bounce(qapp):
+    ruby = RubyAnnotation(
+        kanji="\u7d14",
+        reading="\u3058\u3085\u3093",
+        reading_part_ms=[350],
+        pos_start_ms=89_280,
+        pos_end_ms=89_860,
+    )
+
+    assert _ruby_utopia_reading_units_and_intervals(ruby) == [
+        ("\u3058", (89_280, 89_455)),
+        ("\u3085", (89_455, 89_630)),
+        ("\u3093", (89_630, 89_860)),
+    ]
+
+
+def test_utopia_ruby_later_reading_unit_bounces(qapp):
+    ruby = RubyAnnotation(
+        kanji="A",
+        reading="\u3058\u3085\u3093",
+        reading_part_ms=[350],
+        pos_start_ms=1000,
+        pos_end_ms=1580,
+    )
+    style = Style(
+        font_size_px=96,
+        ruby_font_size_px=48,
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        shadow_color="",
+        exit_anim="utopia",
+    )
+    ruby_font = _build_ruby_font(style)
+    ruby_metrics = QFontMetrics(ruby_font)
+    transition = _LineCharTransition(phase="utopia", effect="utopia", progress=1.0, start_ms=0, end_ms=2000)
+
+    plain = _blank(320, 180)
+    bounced = _blank(320, 180)
+    for img, with_transition in ((plain, False), (bounced, True)):
+        painter = QPainter(img)
+        try:
+            painter.setRenderHints(
+                QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing
+            )
+            if with_transition:
+                _paint_ruby_text_units_with_transition(
+                    painter,
+                    ruby,
+                    ruby_font,
+                    ruby_metrics,
+                    90,
+                    100,
+                    1190,
+                    style,
+                    transition,
+                    0,
+                    1,
+                    2000,
+                )
+            else:
+                _paint_ruby_text(painter, ruby, ruby_font, ruby_metrics, 90, 100, 1190, style)
+        finally:
+            painter.end()
+
+    assert _pixel_hash(plain) != _pixel_hash(bounced)
+    assert _bounds_size(_ink_bounds(bounced))[1] > _bounds_size(_ink_bounds(plain))[1]
+
+
 def test_paint_frame_after_line_still_renders_no_active(qapp):
     img = _blank()
     baseline = _pixel_hash(img)
@@ -773,13 +846,13 @@ def test_paint_frame_utopia_exit_moves_characters_after_each_highlight(qapp):
     paint_frame(
         exit_char_fade,
         track,
-        1700,
+        2200,
         Style(line_y_position="center", line_tail_ms=1000, exit_anim="char_fade", exit_fade_ms=1000),
     )
     paint_frame(
         exit_utopia,
         track,
-        1700,
+        2200,
         Style(line_y_position="center", line_tail_ms=1000, exit_anim="utopia", exit_fade_ms=1000),
     )
 
@@ -791,7 +864,7 @@ def test_paint_frame_utopia_exit_does_not_reappear_after_flying_out(qapp):
     blank = _blank()
     plain = _blank()
     utopia = _blank()
-    base = Style(line_y_position="center", line_tail_ms=3000, exit_fade_ms=1000)
+    base = Style(line_y_position="center", line_tail_ms=1100, exit_fade_ms=1000)
 
     paint_frame(plain, track, 3600, base)
     paint_frame(utopia, track, 3600, replace(base, exit_anim="utopia"))
@@ -812,6 +885,7 @@ def test_utopia_exit_state_flies_character_down_left_after_highlight(qapp):
         char_start_ms=1000,
         char_end_ms=1500,
         t_ms=1500,
+        frame_height=1080,
     )
     mid = _transition_char_state(
         style,
@@ -821,6 +895,7 @@ def test_utopia_exit_state_flies_character_down_left_after_highlight(qapp):
         char_start_ms=1000,
         char_end_ms=1500,
         t_ms=2000,
+        frame_height=1080,
     )
     final = _transition_char_state(
         style,
@@ -830,14 +905,120 @@ def test_utopia_exit_state_flies_character_down_left_after_highlight(qapp):
         char_start_ms=1000,
         char_end_ms=1500,
         t_ms=2500,
+        frame_height=1080,
     )
 
-    assert at_end == (1.0, 0.0, 0.0, 0.0)
-    assert mid[0] == pytest.approx(1.0)
-    assert mid[1] == pytest.approx(-40.6, abs=1.0)
-    assert mid[2] == pytest.approx(25.2, abs=1.0)
-    assert mid[3] == pytest.approx(-21.6, abs=1.0)
+    assert at_end == (1.0, 0.0, 0.0, 0.0, 1.0, 1.0)
+    assert mid[0] == pytest.approx(1.0 / 3.0)
+    assert mid[1] == pytest.approx(-108.0, abs=1.0)
+    assert mid[2] == pytest.approx(62.4, abs=1.0)
+    assert mid[3] == pytest.approx(-120.0, abs=1.0)
+    assert mid[4] == pytest.approx(-1.0 / 6.0, abs=0.01)
+    assert mid[5] == pytest.approx(1.0 / 3.0, abs=0.01)
     assert final[0] == pytest.approx(0.0)
-    assert final[1] == pytest.approx(-90.0)
-    assert final[2] == pytest.approx(79.2)
-    assert final[3] == pytest.approx(-48.0)
+    assert final[1] == pytest.approx(-144.0)
+    assert final[2] == pytest.approx(72.0)
+    assert final[3] == pytest.approx(-180.0)
+    assert final[4] == pytest.approx(0.0)
+    assert final[5] == pytest.approx(0.0)
+
+
+def test_utopia_entry_state_bounces_each_character_from_line_start(qapp):
+    style = Style(font_size_px=72)
+    transition = _LineCharTransition(phase="entry", effect="utopia", progress=0.0, start_ms=1000)
+
+    before_char = _transition_char_state(style, transition, 1, 3, t_ms=1050)
+    over = _transition_char_state(style, transition, 1, 3, t_ms=1500)
+    condensing = _transition_char_state(style, transition, 1, 3, t_ms=1550)
+    settled = _transition_char_state(style, transition, 1, 3, t_ms=1600)
+
+    assert before_char == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    assert over[0] == pytest.approx(1.0)
+    assert over[4] == pytest.approx(1.3)
+    assert over[5] == pytest.approx(1.3)
+    assert condensing[4] == pytest.approx(1.15)
+    assert condensing[5] == pytest.approx(1.15)
+    assert settled == (1.0, 0.0, 0.0, 0.0, 1.0, 1.0)
+
+
+def test_utopia_wipe_state_bounces_currently_sung_character(qapp):
+    style = Style(font_size_px=72)
+    transition = _LineCharTransition(phase="wipe", effect="utopia", progress=1.0)
+
+    rising = _transition_char_state(style, transition, 0, 1, char_start_ms=1000, char_end_ms=1500, t_ms=1050)
+    peak = _transition_char_state(style, transition, 0, 1, char_start_ms=1000, char_end_ms=1500, t_ms=1100)
+    released = _transition_char_state(style, transition, 0, 1, char_start_ms=1000, char_end_ms=1500, t_ms=1500)
+
+    assert rising[4] == pytest.approx(1.075)
+    assert rising[5] == pytest.approx(1.075)
+    assert peak[4] == pytest.approx(1.15)
+    assert peak[5] == pytest.approx(1.15)
+    assert released == (1.0, 0.0, 0.0, 0.0, 1.0, 1.0)
+
+
+def test_utopia_mixes_outro_and_later_wipe_per_character(qapp):
+    style = Style(font_size_px=72, line_tail_ms=1000, exit_anim="utopia")
+    transition = _LineCharTransition(phase="utopia", effect="utopia", progress=1.0, start_ms=0, end_ms=3500)
+
+    exiting_first = _transition_char_state(
+        style,
+        transition,
+        0,
+        3,
+        char_start_ms=1000,
+        char_end_ms=1500,
+        t_ms=2100,
+        frame_height=1080,
+        following_done_ms=2000,
+    )
+    wiping_third = _transition_char_state(
+        style,
+        transition,
+        2,
+        3,
+        char_start_ms=2000,
+        char_end_ms=2500,
+        t_ms=2100,
+        frame_height=1080,
+        following_done_ms=2750,
+    )
+
+    assert exiting_first[0] < 1.0
+    assert exiting_first[1] < 0.0
+    assert wiping_third == (1.0, 0.0, 0.0, 0.0, 1.15, 1.15)
+
+
+def test_utopia_transform_scales_from_character_origin_for_extra_drift(qapp):
+    center_img = _blank(160, 160)
+    origin_img = _blank(160, 160)
+
+    def draw_box(img: QImage, *, use_origin: bool) -> tuple[int, int, int, int]:
+        painter = QPainter(img)
+        try:
+            painter.fillRect(QRectF(80, 60, 20, 40), QColor("#FFFFFF"))
+            painter.save()
+            try:
+                _apply_character_transform(
+                    painter,
+                    center_x=90,
+                    center_y=80,
+                    dx=-20,
+                    dy=20,
+                    rotation=0,
+                    scale_x=0.5,
+                    scale_y=0.5,
+                    scale_origin_x=80 if use_origin else None,
+                    scale_origin_y=100 if use_origin else None,
+                )
+                painter.fillRect(QRectF(80, 60, 20, 40), QColor("#FF0000"))
+            finally:
+                painter.restore()
+        finally:
+            painter.end()
+        return _ink_bounds(img)
+
+    center_bounds = draw_box(center_img, use_origin=False)
+    origin_bounds = draw_box(origin_img, use_origin=True)
+
+    assert origin_bounds[0] < center_bounds[0]
+    assert origin_bounds[3] > center_bounds[3]
