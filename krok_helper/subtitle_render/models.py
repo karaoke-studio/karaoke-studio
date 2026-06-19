@@ -176,6 +176,7 @@ ColorFillMode = Literal[
 ColorStateKey = Literal["before", "after"]
 ColorLayerKey = Literal["text", "stroke", "stroke2", "shadow"]
 DecorationKind = Literal["shadow", "glow"]
+SectionEndingMode = Literal["hold", "clear"]
 EntryAnimation = Literal["none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"]
 ExitAnimation = Literal["none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"]
 
@@ -395,6 +396,18 @@ class Style:
     line_max_hold_ms: int = 12_000
     """单句显示窗口最长保留时间，避免长间奏时字幕过久挂屏。"""
 
+    # 段落 / 同步退场（对标 Sayatoo sync_ending / section_ending_mode）。
+    # Sayatoo 用手动信号划段落；LRC 无信号，这里改为按间奏间隔自动分段。
+    section_gap_ms: int = 4000
+    """自动分段阈值：相邻两句演唱空隙（间奏）超过此值即开新段落。"""
+
+    sync_ending: bool = False
+    """同步退场：开启后同段落内一组两行在段末同时退场，而非逐行先后消失。"""
+
+    section_ending_mode: SectionEndingMode = "hold"
+    """段落结束行为：``hold`` 维持现状（可挂屏到 max_hold）；``clear`` 段末即清屏，
+    字幕不拖进间奏。"""
+
     entry_anim: EntryAnimation = "none"
     """入场动画：none / fade / slide_in / rise / char_fade / spin_flip / utopia。"""
 
@@ -515,12 +528,15 @@ def style_from_dict(payload: object) -> Style:
             "line_continuity_snap_ms",
             "line_pair_second_delay_ms",
             "line_max_hold_ms",
+            "section_gap_ms",
             "entry_lead_ms",
             "exit_fade_ms",
         }:
             changes[key] = _int_value(value, getattr(defaults, key))
-        elif key in {"italic", "dual_line_layout", "right_to_left", "vertical"}:
+        elif key in {"italic", "dual_line_layout", "right_to_left", "vertical", "sync_ending"}:
             changes[key] = bool(value)
+        elif key == "section_ending_mode":
+            changes[key] = value if value in {"hold", "clear"} else defaults.section_ending_mode
         elif key == "line_y_position":
             changes[key] = value if value in {"top", "center", "bottom"} else defaults.line_y_position
         elif key == "line_horizontal_layout":

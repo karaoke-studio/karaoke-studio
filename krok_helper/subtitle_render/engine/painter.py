@@ -287,6 +287,9 @@ def _visible_lines_for_style(
             max_hold_ms=style.line_max_hold_ms,
             continuity_snap_ms=style.line_continuity_snap_ms,
             pair_second_delay_ms=style.line_pair_second_delay_ms,
+            section_gap_ms=style.section_gap_ms,
+            sync_ending=style.sync_ending,
+            section_ending_mode=style.section_ending_mode,
         )
     display_line = _single_visible_display_line(track, t_ms, style)
     if display_line is None:

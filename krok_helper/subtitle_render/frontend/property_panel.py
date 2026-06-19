@@ -719,6 +719,11 @@ class PropertyPanel(QTabWidget):
             self._line_lead_spin.setValue(self._style.line_lead_in_ms)
             self._line_tail_spin.setValue(self._style.line_tail_ms)
             self._line_offset_spin.setValue(self._style.timing_offset_ms)
+            self._section_gap_spin.setValue(self._style.section_gap_ms)
+            self._section_ending_combo.setCurrentIndex(
+                max(0, self._section_ending_combo.findData(self._style.section_ending_mode))
+            )
+            self._sync_ending_check.setChecked(self._style.sync_ending)
             self._entry_anim_combo.setCurrentIndex(
                 max(0, self._entry_anim_combo.findData(self._style.entry_anim))
             )
@@ -1427,9 +1432,32 @@ class PropertyPanel(QTabWidget):
         )
         row_layout.addWidget(_field("偏移", self._line_offset_spin), 1, 0)
 
+        self._section_gap_spin = _spin(0, 60_000, suffix=" ms")
+        self._section_gap_spin.valueChanged.connect(
+            lambda value: self._update_style(section_gap_ms=value)
+        )
+        row_layout.addWidget(_field("分段间隔", self._section_gap_spin), 1, 1)
+
+        self._section_ending_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._section_ending_combo)
+        for label, value in [("保持", "hold"), ("段末清屏", "clear")]:
+            self._section_ending_combo.addItem(label, value)
+        self._section_ending_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                section_ending_mode=self._section_ending_combo.currentData()
+            )
+        )
+        row_layout.addWidget(_field("段落结束", self._section_ending_combo), 2, 0)
+
         row_layout.setColumnStretch(0, 1)
         row_layout.setColumnStretch(1, 1)
         layout.addWidget(row)
+
+        self._sync_ending_check = QCheckBox("同步退场", section)
+        self._sync_ending_check.toggled.connect(
+            lambda checked: self._update_style(sync_ending=checked)
+        )
+        layout.addWidget(self._sync_ending_check)
         return section
 
     def _color_button(self, field_name: str, color: str) -> ColorButton:
@@ -1787,6 +1815,12 @@ class PropertyPanel(QTabWidget):
                 changes[align_field] = _normalize_horizontal_align(changes[align_field])
         if "viewport_align" in changes:
             changes["viewport_align"] = _normalize_viewport_align(changes["viewport_align"])
+        if "section_ending_mode" in changes:
+            changes["section_ending_mode"] = (
+                changes["section_ending_mode"]
+                if changes["section_ending_mode"] in {"hold", "clear"}
+                else "hold"
+            )
         if "decoration_kind" in changes:
             changes["decoration_kind"] = _normalize_decoration_kind(
                 changes["decoration_kind"]

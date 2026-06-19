@@ -79,6 +79,9 @@ def visible_display_lines(
     max_hold_ms: int,
     continuity_snap_ms: int,
     pair_second_delay_ms: int = 3000,
+    section_gap_ms: int = 0,
+    sync_ending: bool = False,
+    section_ending_mode: str = "hold",
 ) -> list[DisplayLine]:
     """Return lines whose display window contains ``t_ms``.
 
@@ -99,6 +102,9 @@ def visible_display_lines(
         max_hold_ms=max_hold_ms,
         continuity_snap_ms=continuity_snap_ms,
         pair_second_delay_ms=pair_second_delay_ms,
+        section_gap_ms=section_gap_ms,
+        sync_ending=sync_ending,
+        section_ending_mode=section_ending_mode,
     )
     return [item for item in layouts if item.display_start_ms <= t_ms <= item.display_end_ms]
 
@@ -112,8 +118,17 @@ def compute_display_lines(
     max_hold_ms: int,
     continuity_snap_ms: int,
     pair_second_delay_ms: int = 3000,
+    section_gap_ms: int = 0,
+    sync_ending: bool = False,
+    section_ending_mode: str = "hold",
 ) -> list[DisplayLine]:
-    """Compute NicoKara-style display windows for all renderable lines."""
+    """Compute NicoKara-style display windows for all renderable lines.
+
+    段落（section）按间奏间隔自动划分：相邻两句演唱空隙 > ``section_gap_ms`` 即开
+    新段落。``sync_ending`` 时同段落内每个 lane 的末行延到段末一起退场；
+    ``section_ending_mode == "clear"`` 时把每行结束钳到段末（不拖进间奏）。
+    两项默认关闭时输出与原行为一致。
+    """
     render_lines = [line for line in track.lines if not line.is_blank and line.chars]
     if not render_lines:
         return []
@@ -124,6 +139,9 @@ def compute_display_lines(
     max_hold = max(max_hold_ms, 0)
     snap = max(continuity_snap_ms, 0)
     pair_second_delay = max(pair_second_delay_ms, 0)
+    section_gap = max(section_gap_ms, 0)
+    section_ids = _compute_section_ids(render_lines, section_gap)
+    section_end = _compute_section_ends(render_lines, section_ids, tail)
 
     starts: list[int] = []
     natural_ends: list[int] = []
@@ -172,6 +190,12 @@ def compute_display_lines(
         display_end = max(display_end, own_sing_end)
         if max_hold > 0:
             display_end = max(own_sing_end, min(display_end, starts[index] + max_hold))
+        # 段落 / 同步退场
+        sid = section_ids[index]
+        if sync_ending and _is_last_in_lane_in_section(lanes, section_ids, index):
+            display_end = max(display_end, section_end[sid])
+        if section_ending_mode == "clear":
+            display_end = max(own_sing_end, min(display_end, section_end[sid]))
         if display_end < starts[index]:
             display_end = starts[index]
         result.append(
@@ -183,6 +207,49 @@ def compute_display_lines(
             )
         )
     return result
+
+
+def _compute_section_ids(render_lines: list[TimingLine], section_gap: int) -> list[int]:
+    """按间奏间隔给每行分配段落号（间隔 > section_gap 即开新段；阈值 0 = 单段）。"""
+    section_ids: list[int] = []
+    current = 0
+    for index, line in enumerate(render_lines):
+        if index > 0 and section_gap > 0:
+            gap = line.chars[0].start_ms - _line_end_ms(render_lines[index - 1])
+            if gap > section_gap:
+                current += 1
+        section_ids.append(current)
+    return section_ids
+
+
+def _compute_section_ends(
+    render_lines: list[TimingLine],
+    section_ids: list[int],
+    tail: int,
+) -> dict[int, int]:
+    """每段落的统一结束点 = 段内最晚演唱结束 + tail。"""
+    ends: dict[int, int] = {}
+    for index, line in enumerate(render_lines):
+        sid = section_ids[index]
+        end = _line_end_ms(line) + tail
+        ends[sid] = max(ends.get(sid, end), end)
+    return ends
+
+
+def _is_last_in_lane_in_section(
+    lanes: list[int],
+    section_ids: list[int],
+    index: int,
+) -> bool:
+    """该行是否是其所在段落、所在 lane 的最后一行。"""
+    lane = lanes[index]
+    sid = section_ids[index]
+    for candidate in range(index + 1, len(lanes)):
+        if section_ids[candidate] != sid:
+            break  # section_ids 单调不减，离开本段即可停
+        if lanes[candidate] == lane:
+            return False
+    return True
 
 
 def find_upcoming_line(track: TimingTrack, t_ms: int) -> Optional[TimingLine]:

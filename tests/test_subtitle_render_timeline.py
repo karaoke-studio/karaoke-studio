@@ -248,3 +248,54 @@ def test_track_duration_ms_empty_track():
 def test_track_duration_ms_no_end_ms_falls_back():
     line = _make_line([("a", 1000)], end_ms=None)
     assert track_duration_ms(_track(line)) == 2000  # 1000 + 1000 fallback
+
+
+# ---------------------------------------------------------------------------
+# 段落 / 同步退场（按间奏间隔自动分段）
+# ---------------------------------------------------------------------------
+
+
+def _sectioned_track():
+    # section0: L0,L1,L2（间隔均 0）；L3 与 L2 间隔 6000ms → section1
+    l0 = _make_line([("a", 0)], end_ms=1000)
+    l1 = _make_line([("b", 1000)], end_ms=2000)
+    l2 = _make_line([("c", 2000)], end_ms=3000)
+    l3 = _make_line([("d", 9000)], end_ms=10000)
+    return _track(l0, l1, l2, l3)
+
+
+def _compute(track, **kw):
+    base = dict(
+        lead_in_ms=0, tail_ms=0, lane_gap_ms=0, max_hold_ms=0,
+        continuity_snap_ms=0, section_gap_ms=4000,
+    )
+    base.update(kw)
+    return compute_display_lines(track, **base)
+
+
+def test_section_ending_clear_caps_cross_section_linger():
+    track = _sectioned_track()
+    hold = _compute(track, section_ending_mode="hold")
+    clear = _compute(track, section_ending_mode="clear")
+    # L2(lane0) 默认会因跨段配对挂屏到 section1（10000）；clear 把它钳到段末 3000
+    assert hold[2].display_end_ms > 3000
+    assert clear[2].display_end_ms == 3000
+
+
+def test_sync_ending_extends_earlier_lane_to_section_end():
+    track = _sectioned_track()
+    nosync = _compute(track, sync_ending=False)
+    sync = _compute(track, sync_ending=True)
+    # L1(lane1) 是 section0 内 lane1 的末行；同步退场把它延到段末 3000
+    assert nosync[1].display_end_ms == 2000
+    assert sync[1].display_end_ms == 3000
+
+
+def test_sections_disabled_keep_legacy_windows():
+    track = _sectioned_track()
+    legacy = compute_display_lines(
+        track, lead_in_ms=0, tail_ms=0, lane_gap_ms=0, max_hold_ms=0,
+        continuity_snap_ms=0,
+    )
+    sectioned_off = _compute(track, sync_ending=False, section_ending_mode="hold")
+    assert [d.display_end_ms for d in legacy] == [d.display_end_ms for d in sectioned_off]
