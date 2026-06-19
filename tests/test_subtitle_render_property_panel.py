@@ -74,7 +74,7 @@ def test_property_panel_set_style_populates_controls(qapp):
 
     panel.set_style(style)
 
-    assert panel.style == style
+    assert panel.subtitle_style == style
     assert panel._font_size_spin.value() == 72
     assert panel._font_weight_combo.currentData() == 900
     assert panel._italic_check.isChecked()
@@ -106,6 +106,16 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._ruby_font_size_spin.value() == 30
     assert panel._ruby_color_btn.color == "#223344"
     assert panel._ruby_gap_spin.value() == 9
+
+
+def test_property_panel_does_not_shadow_qwidget_style(qapp):
+    panel = PropertyPanel()
+
+    qt_style = panel.style()
+    qt_style.unpolish(panel)
+    qt_style.polish(panel)
+
+    assert panel.subtitle_style == panel._style
 
 
 def test_style_defaults_match_nicokara_layout_baseline():
@@ -565,7 +575,7 @@ def test_property_panel_can_add_custom_scheme(qapp):
     panel._set_color("fill_color", "#123456")
     panel._add_custom_scheme("蓝色方案")
 
-    assert "蓝色方案" in panel.style.custom_style_schemes
+    assert "蓝色方案" in panel.subtitle_style.custom_style_schemes
     assert emitted[-1].custom_style_schemes["蓝色方案"].fill_color == "#123456"
     assert panel._singer_combo.currentData() == "custom:蓝色方案"
 
@@ -595,7 +605,7 @@ def test_property_panel_add_scheme_button_ignores_clicked_checked_arg(qapp, monk
 
     panel._add_scheme_button.clicked.emit(False)
 
-    assert "按钮方案" in panel.style.custom_style_schemes
+    assert "按钮方案" in panel.subtitle_style.custom_style_schemes
     assert panel._singer_combo.currentData() == "custom:按钮方案"
 
 

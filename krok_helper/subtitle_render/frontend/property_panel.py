@@ -490,7 +490,7 @@ class PropertyPanel(QTabWidget):
         self.set_style(self._style, emit=False)
 
     @property
-    def style(self) -> Style:
+    def subtitle_style(self) -> Style:
         return self._style
 
     def set_style(self, style: Style, *, emit: bool = False) -> None:
