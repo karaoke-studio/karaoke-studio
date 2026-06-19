@@ -62,6 +62,7 @@ def test_property_panel_set_style_populates_controls(qapp):
         line_y_margin_px=120,
         dual_line_layout=False,
         right_to_left=True,
+        vertical=True,
         line_horizontal_layout="per_row",
         line_gap_px=66,
         upper_line_left_margin_px=77,
@@ -111,6 +112,7 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._line_margin_spin.value() == 120
     assert not panel._dual_line_check.isChecked()
     assert panel._rtl_check.isChecked()
+    assert panel._vertical_check.isChecked()
     assert panel._horizontal_layout_combo.currentData() == "per_row"
     assert panel._line_gap_spin.value() == 66
     assert panel._upper_left_spin.value() == 77
@@ -166,6 +168,7 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.dual_line_layout is True
     assert style.line_horizontal_layout == "asymmetric"
     assert style.right_to_left is False
+    assert style.vertical is False
     assert style.row1_align == "left"
     assert style.row1_offset_x == 50
     assert style.row1_offset_y == 0
@@ -546,9 +549,11 @@ def test_property_panel_layout_controls_emit_style(qapp):
     panel._lower_right_spin.setValue(42)
 
     panel._rtl_check.setChecked(True)
+    panel._vertical_check.setChecked(True)
 
     assert emitted[-1].dual_line_layout is False
     assert emitted[-1].right_to_left is True
+    assert emitted[-1].vertical is True
     assert emitted[-1].line_horizontal_layout == "center"
     assert emitted[-1].line_y_margin_px == 123
     assert emitted[-1].line_gap_px == 70

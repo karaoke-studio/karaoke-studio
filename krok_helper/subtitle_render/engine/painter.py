@@ -181,7 +181,12 @@ def paint_frame_to_painter(
             | QPainter.RenderHint.SmoothPixmapTransform
         )
         _apply_viewport_transform(painter, logical_w, logical_h, style)
-        baselines = _resolve_display_baselines(logical_h, track, display_lines, style)
+        # 竖排时 baselines 字典里存的是每 lane 的「列中心 x」，横排时存基线 y；
+        # 含义由 style.vertical 区分，_paint_line_static 据此走对应几何。
+        if style.vertical:
+            baselines = _resolve_vertical_columns(logical_w, track, display_lines, style)
+        else:
+            baselines = _resolve_display_baselines(logical_h, track, display_lines, style)
         for display_line in display_lines:
             _paint_line(
                 painter,
@@ -439,6 +444,188 @@ def _resolve_display_baselines(
     }
 
 
+# ---------------------------------------------------------------------------
+# 竖排（縦書き）
+# ---------------------------------------------------------------------------
+
+_VERTICAL_REFERENCE_CHAR = "永"  # 「永」全角参照字，估列宽
+
+
+def _vertical_cell_width(metrics: QFontMetrics) -> int:
+    """竖排列宽 = 一个全角字的步进（字形列内居中用）。"""
+    width = metrics.horizontalAdvance(_VERTICAL_REFERENCE_CHAR)
+    if width <= 0:
+        width = metrics.height()
+    return max(width, 1)
+
+
+def _resolve_vertical_columns(
+    img_w: int,
+    track: TimingTrack,
+    display_lines: list[DisplayLine],
+    style: Style,
+) -> dict[int, int]:
+    """每 lane 的列中心 x。lane 0 = 右列（当前句），lane 1 = 左列（下一句）。
+
+    竖排文字流向右→左：当前句在最右，列向左排。列宽用全角参照字估算，
+    列间距复用 ``line_gap_px``，右列距右边缘复用 ``line_y_margin_px``。
+    """
+    metrics = QFontMetrics(_build_font(style))
+    cell_w = _vertical_cell_width(metrics)
+    margin = max(style.line_y_margin_px, 0)
+    gap = max(style.line_gap_px, 0)
+    ruby_w = _vertical_ruby_allowance(track, style)
+    # 右列：列右侧留出 ruby 宽度（ruby 排在基字右边）。
+    right_center = img_w - margin - ruby_w - cell_w / 2
+    columns = {0: int(round(right_center))}
+    if style.dual_line_layout:
+        left_center = right_center - (cell_w + ruby_w + gap)
+        columns[1] = int(round(left_center))
+    return columns
+
+
+def _vertical_ruby_allowance(track: TimingTrack, style: Style) -> int:
+    """竖排时基字右侧为 ruby 预留的水平宽度（无 ruby 则 0）。"""
+    if not track.rubies:
+        return 0
+    ruby_metrics = QFontMetrics(_build_ruby_font(style))
+    return ruby_metrics.height() + max(style.ruby_gap_px, 0)
+
+
+def _resolve_vertical_top(img_h: int, block_h: int, style: Style) -> int:
+    """竖排列的纵向起点 y（列整体上/中/下锚定，复用 line_y_position）。"""
+    margin = max(style.line_y_margin_px, 0)
+    pos = style.line_y_position
+    if pos == "top":
+        return margin
+    if pos == "center":
+        return max((img_h - block_h) // 2, 0)
+    return img_h - margin - block_h  # bottom（默认）
+
+
+def _paint_line_vertical(
+    painter: QPainter,
+    img_w: int,
+    img_h: int,
+    track: TimingTrack,
+    line: TimingLine,
+    t_ms: int,
+    style: Style,
+    *,
+    column_x: int | None,
+    lane: int | None = None,
+) -> None:
+    """竖排单列渲染：字符上→下堆叠、卡拉ok 扫光上→下。"""
+    chars = line.chars
+    if not chars:
+        return
+    font = _build_font(style)
+    painter.setFont(font)
+    metrics = QFontMetrics(font)
+    cell_w = _vertical_cell_width(metrics)
+    cell_h = metrics.height()
+    ascent = metrics.ascent()
+
+    if column_x is None:
+        column_x = int(round(img_w - max(style.line_y_margin_px, 0) - cell_w / 2))
+
+    block_h = cell_h * len(chars)
+    y_top = _resolve_vertical_top(img_h, block_h, style)
+    intervals = compute_char_intervals(line)
+    colors = _effective_karaoke_colors(style)
+
+    vline_path = QPainterPath()
+    cells: list[tuple[int, int]] = []
+    for index, ch in enumerate(chars):
+        cell_top = y_top + index * cell_h
+        cells.append((cell_top, cell_top + cell_h))
+        advance = metrics.horizontalAdvance(ch.text)
+        glyph_x = column_x - advance / 2
+        glyph_baseline = cell_top + ascent
+        vline_path.addText(float(glyph_x), float(glyph_baseline), font, ch.text)
+
+    line_rect = QRectF(
+        float(column_x - cell_w / 2),
+        float(y_top),
+        float(cell_w),
+        float(block_h),
+    )
+
+    # 「未唱」层
+    _paint_text_layer_stack(
+        painter,
+        vline_path,
+        line_rect,
+        colors.before,
+        style,
+        stroke_width=style.stroke_width_px,
+        stroke2_width=style.stroke2_width_px,
+        shadow_dx=style.shadow_offset_x,
+        shadow_dy=style.shadow_offset_y,
+        glow_radius=style.glow_radius_px,
+    )
+
+    # 「已唱」层：纵向裁剪带 [y_top, scan]
+    band = _vertical_fill_band(cells, intervals, t_ms)
+    if band is not None:
+        y0, y_scan = band
+        pad = max(
+            _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px),
+            style.glow_radius_px * 2,
+            abs(style.shadow_offset_x),
+            abs(style.shadow_offset_y),
+            2,
+        )
+        painter.save()
+        try:
+            painter.setClipRect(
+                QRectF(
+                    float(column_x - cell_w / 2 - pad),
+                    float(y0 - pad),
+                    float(cell_w + pad * 2),
+                    float((y_scan - y0) + pad),
+                )
+            )
+            _paint_text_layer_stack(
+                painter,
+                vline_path,
+                line_rect,
+                colors.after,
+                style,
+                stroke_width=style.stroke_width_px,
+                stroke2_width=style.stroke2_width_px,
+                shadow_dx=style.shadow_offset_x,
+                shadow_dy=style.shadow_offset_y,
+                glow_radius=style.glow_radius_px,
+            )
+        finally:
+            painter.restore()
+
+
+def _vertical_fill_band(
+    cells: list[tuple[int, int]],
+    intervals: list[tuple[int, int]],
+    t_ms: int,
+) -> tuple[int, int] | None:
+    """竖排已唱区 ``(y_top, y_scan)``：扫光从首字符顶向下推进；空带返回 None。"""
+    if not cells:
+        return None
+    y_top = cells[0][0]
+    scan = float(y_top)
+    for (cell_top, cell_bottom), (start, end) in zip(cells, intervals):
+        ratio = char_fill_ratio(start, end, t_ms)
+        if ratio <= 0.0:
+            break
+        if ratio >= 1.0:
+            scan = cell_bottom
+            continue
+        scan = cell_top + (cell_bottom - cell_top) * ratio
+        break
+    if scan <= y_top:
+        return None
+    return y_top, int(round(scan))
+
+
 def _paint_line(
     painter: QPainter,
     img_w: int,
@@ -500,6 +687,19 @@ def _paint_line_static(
     display_start_ms: int | None = None,
     display_end_ms: int | None = None,
 ) -> None:
+    if style.vertical:
+        _paint_line_vertical(
+            painter,
+            img_w,
+            img_h,
+            track,
+            line,
+            t_ms,
+            style,
+            column_x=baseline_y,
+            lane=lane,
+        )
+        return
     font = _build_font(style)
     painter.setFont(font)
     metrics = QFontMetrics(font)

@@ -369,6 +369,11 @@ class Style:
     """从右到左排版（对标 Sayatoo layout.right_to_left）：字符自右向左排布，
     卡拉ok 扫光从右向左推进；注音定位、读音字形顺序（含小书き假名）与扫光方向均随之反转。"""
 
+    vertical: bool = False
+    """竖排（縦書き，对标 Sayatoo layout.vertical）：字符上→下堆叠成列、卡拉ok 扫光
+    上→下、注音排在右侧、双行变右→左双列；旋转类字形(ー/括号/箭头)按 Unicode UTR#50
+    旋转 90°，标点(、。)移到右上、小书き假名右上偏移。竖排时 ``right_to_left`` 被忽略。"""
+
     line_lead_in_ms: int = 1800
     """理想表示开始 = 歌唱开始前的毫秒数；填充仍从真实字符时间开始。"""
 
@@ -514,7 +519,7 @@ def style_from_dict(payload: object) -> Style:
             "exit_fade_ms",
         }:
             changes[key] = _int_value(value, getattr(defaults, key))
-        elif key in {"italic", "dual_line_layout", "right_to_left"}:
+        elif key in {"italic", "dual_line_layout", "right_to_left", "vertical"}:
             changes[key] = bool(value)
         elif key == "line_y_position":
             changes[key] = value if value in {"top", "center", "bottom"} else defaults.line_y_position

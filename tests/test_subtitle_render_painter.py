@@ -33,7 +33,9 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _character_fill_ratio,
     _fill_clip_band,
     _fill_extent_end,
+    _resolve_vertical_columns,
     _ruby_utopia_visual_units,
+    _vertical_fill_band,
     _karaoke_fill_segments,
     _paint_ruby_text,
     _paint_ruby_text_units_with_transition,
@@ -371,6 +373,53 @@ def test_rtl_default_off_matches_plain(qapp):
     img_b = _blank()
     paint_frame(img_a, _track(), 1700, style)
     paint_frame(img_b, _track(), 1700, replace(style, right_to_left=False))
+    assert _pixel_hash(img_a) == _pixel_hash(img_b)
+
+
+def test_resolve_vertical_columns_right_to_left(qapp):
+    track = _two_line_track()
+    display = [
+        DisplayLine(track.lines[0], 0, 0, 5000),
+        DisplayLine(track.lines[1], 1, 0, 5000),
+    ]
+    cols = _resolve_vertical_columns(1920, track, display, Style(line_gap_px=40))
+    # 当前句在右列、下一句在左列
+    assert cols[0] > cols[1]
+    # 右列靠近右边缘
+    assert cols[0] > 1920 * 0.7
+
+
+def test_vertical_fill_band_grows_downward(qapp):
+    cells = [(100, 200), (200, 300)]
+    intervals = [(0, 1000), (1000, 2000)]
+    # 起唱前无带
+    assert _vertical_fill_band(cells, intervals, 0) is None
+    # t=500：第一字填一半 → 扫到 150
+    assert _vertical_fill_band(cells, intervals, 500) == (100, 150)
+    # t=1500：第一字满 + 第二字一半 → 扫到 250
+    assert _vertical_fill_band(cells, intervals, 1500) == (100, 250)
+
+
+def test_vertical_render_is_taller_than_wide_and_differs(qapp):
+    style = Style(line_y_position="center", line_horizontal_layout="center")
+    img_h = _blank()
+    img_v = _blank()
+    paint_frame(img_h, _track(), 1700, style)
+    paint_frame(img_v, _track(), 1700, replace(style, vertical=True))
+    assert _pixel_hash(img_h) != _pixel_hash(img_v)
+    # 竖排：墨迹纵向分布（高 > 宽）；横排相反
+    hl, ht, hr, hb = _ink_bounds(img_h)
+    vl, vt, vr, vb = _ink_bounds(img_v)
+    assert (hr - hl) > (hb - ht)  # 横排更宽
+    assert (vb - vt) > (vr - vl)  # 竖排更高
+
+
+def test_vertical_default_off_matches_plain(qapp):
+    style = Style(line_y_position="center")
+    img_a = _blank()
+    img_b = _blank()
+    paint_frame(img_a, _track(), 1700, style)
+    paint_frame(img_b, _track(), 1700, replace(style, vertical=False))
     assert _pixel_hash(img_a) == _pixel_hash(img_b)
 
 

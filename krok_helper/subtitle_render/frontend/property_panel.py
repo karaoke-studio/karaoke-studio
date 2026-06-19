@@ -693,6 +693,7 @@ class PropertyPanel(QTabWidget):
             self._line_margin_spin.setValue(self._style.line_y_margin_px)
             self._dual_line_check.setChecked(self._style.dual_line_layout)
             self._rtl_check.setChecked(self._style.right_to_left)
+            self._vertical_check.setChecked(self._style.vertical)
             self._horizontal_layout_combo.setCurrentIndex(
                 max(
                     0,
@@ -1277,6 +1278,12 @@ class PropertyPanel(QTabWidget):
             lambda checked: self._update_style(right_to_left=checked)
         )
         layout.addWidget(self._rtl_check)
+
+        self._vertical_check = QCheckBox("竖排", section)
+        self._vertical_check.toggled.connect(
+            lambda checked: self._update_style(vertical=checked)
+        )
+        layout.addWidget(self._vertical_check)
 
         row = QWidget(section)
         row_layout = QGridLayout(row)
