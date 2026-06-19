@@ -16,6 +16,7 @@ from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
     ColorButton,
     PropertyPanel,
+    ScreenSettings,
 )
 from krok_helper.subtitle_render.models import (  # noqa: E402
     KaraokeColors,
@@ -189,6 +190,31 @@ def test_property_panel_sections_are_collapsible(qapp):
     header.click()
     assert not content.isHidden()
     assert header.arrowType() == Qt.ArrowType.DownArrow
+
+
+def test_property_panel_screen_preset_emits_settings(qapp):
+    panel = PropertyPanel()
+    emitted: list[ScreenSettings] = []
+    panel.screenChanged.connect(emitted.append)
+
+    panel._screen_preset_combo.setCurrentIndex(
+        panel._screen_preset_combo.findData("hdv_1080")
+    )
+
+    assert emitted[-1] == ScreenSettings(
+        preset_key="hdv_1080",
+        par="4:3",
+        width=1440,
+        height=1080,
+        fps=60,
+    )
+    assert panel._screen_par_combo.currentData() == "4:3"
+    assert panel._screen_width_spin.value() == 1440
+    assert panel._screen_height_spin.value() == 1080
+
+    panel._screen_width_spin.setValue(1500)
+    assert emitted[-1].preset_key == "custom"
+    assert emitted[-1].width == 1500
 
 
 def test_property_panel_font_controls_emit_style(qapp):
@@ -707,6 +733,54 @@ def test_main_window_style_panel_updates_preview(qapp, monkeypatch):
     assert win._preview_panel.canvas._style.ruby_font_size_px == 28
     assert win._preview_panel.canvas._style.line_gap_px == 77
     assert win._preview_panel.canvas._style.singer_style_overrides[0].fill_color == "#FFCC00"
+
+
+def test_main_window_screen_panel_updates_export_and_persists(qapp, monkeypatch):
+    monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
+    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+
+    class FakeSettingsProvider:
+        def __init__(self):
+            self.data = {}
+
+        def load(self):
+            return dict(self.data)
+
+        def save(self, data):
+            self.data = dict(data)
+
+    provider = FakeSettingsProvider()
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+
+    win._property_panel._screen_preset_combo.setCurrentIndex(
+        win._property_panel._screen_preset_combo.findData("uhd_4k")
+    )
+
+    assert win._export_width_spin.value() == 3840
+    assert win._export_height_spin.value() == 2160
+    assert win._export_fps_combo.currentData() == 60
+    assert win._preview_panel.canvas._output_width == 3840
+    assert win._preview_panel.canvas._output_height == 2160
+    assert provider.data["screen"] == {
+        "preset_key": "uhd_4k",
+        "par": "1:1",
+        "width": 3840,
+        "height": 2160,
+        "fps": 60,
+    }
+
+    win._export_width_spin.setValue(4000)
+    assert win._property_panel.screen_settings.preset_key == "custom"
+    assert win._property_panel._screen_width_spin.value() == 4000
+    assert provider.data["screen"]["preset_key"] == "custom"
+    assert provider.data["screen"]["width"] == 4000
+
+    win._export_fps_combo.setCurrentIndex(win._export_fps_combo.findData(120))
+    assert win._property_panel.screen_settings.fps == 120
+    assert win._property_panel._screen_fps_combo.currentData() == 120
+    assert win._transport_bar._tick_timer.interval() == 8
+    assert win._transport_bar._position_poll_timer.interval() == 8
+    assert provider.data["screen"]["fps"] == 120
 
 
 def test_main_window_persists_style_and_selected_scheme(qapp, monkeypatch):

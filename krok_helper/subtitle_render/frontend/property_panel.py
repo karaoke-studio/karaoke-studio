@@ -8,8 +8,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import replace
-from typing import Optional
+from dataclasses import dataclass, replace
+from typing import Any, Optional
 
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPolygonF
@@ -82,6 +82,116 @@ _SINGER_RUBY_PALETTE = ["#FF5A6F", "#00AAFF", "#FFCC33", "#40D99A", "#C08CFF"]
 _GLOBAL_SCHEME_KEY = "global"
 _SINGER_SCHEME_PREFIX = "singer:"
 _CUSTOM_SCHEME_PREFIX = "custom:"
+
+
+@dataclass(frozen=True)
+class ScreenPreset:
+    """Sayatoo-compatible screen preset metadata."""
+
+    key: str
+    label: str
+    width: int
+    height: int
+    par: str = "1:1"
+
+
+@dataclass(frozen=True)
+class ScreenSettings:
+    """Canvas/export screen settings shared by the property panel and exporter."""
+
+    preset_key: str = "hdtv_1080"
+    par: str = "1:1"
+    width: int = 1920
+    height: int = 1080
+    fps: int = 60
+
+
+SCREEN_FPS_OPTIONS = (60, 120)
+SCREEN_PRESETS: tuple[ScreenPreset, ...] = (
+    ScreenPreset("hd_540", "HD 540", 960, 540),
+    ScreenPreset("hdv_720", "HDV 720", 1280, 720),
+    ScreenPreset("hdtv_720", "HDTV 720", 1280, 720),
+    ScreenPreset("hdv_1080", "HDV 1080", 1440, 1080, "4:3"),
+    ScreenPreset("hdtv_1080", "HDTV 1080", 1920, 1080),
+    ScreenPreset("dvcprohd_720", "DVCPROHD 720", 960, 720, "4:3"),
+    ScreenPreset("dvcprohd_1080", "DVCPROHD 1080", 1280, 1080, "3:2"),
+    ScreenPreset("d1_dv_ntsc", "D1/DV NTSC", 720, 480, "10:11"),
+    ScreenPreset("d1_dv_ntsc_wide", "D1/DV NTSC 宽屏", 720, 480, "40:33"),
+    ScreenPreset("d1_dv_pal", "D1/DV PAL", 720, 576, "128:117"),
+    ScreenPreset("d1_dv_pal_wide", "D1/DV PAL 宽屏", 720, 576, "512:351"),
+    ScreenPreset("uhd_4k", "UHD 4K", 3840, 2160),
+    ScreenPreset("uhd_8k", "UHD 8K", 7680, 4320),
+    ScreenPreset("hd_540_vertical", "HD 540 竖屏", 540, 960),
+    ScreenPreset("hd_720_vertical", "HD 720 竖屏", 720, 1280),
+    ScreenPreset("hdtv_1080_vertical", "HDTV 1080 竖屏", 1080, 1920),
+)
+
+PAR_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("方形像素", "1:1"),
+    ("HDV 1080 / DVCPROHD 720（4:3）", "4:3"),
+    ("DVCPROHD 1080（3:2）", "3:2"),
+    ("D1/DV NTSC（10:11）", "10:11"),
+    ("D1/DV NTSC 宽屏（40:33）", "40:33"),
+    ("D1/DV PAL（128:117）", "128:117"),
+    ("D1/DV PAL 宽屏（512:351）", "512:351"),
+)
+
+_SCREEN_PRESET_BY_KEY = {preset.key: preset for preset in SCREEN_PRESETS}
+_PAR_VALUES = {value for _label, value in PAR_OPTIONS}
+
+
+def screen_settings_to_dict(settings: ScreenSettings) -> dict[str, Any]:
+    return {
+        "preset_key": settings.preset_key,
+        "par": settings.par,
+        "width": settings.width,
+        "height": settings.height,
+        "fps": settings.fps,
+    }
+
+
+def screen_settings_from_dict(payload: object) -> ScreenSettings:
+    if not isinstance(payload, dict):
+        return ScreenSettings()
+    width = _int_setting(payload.get("width"), 160, 7680, ScreenSettings.width)
+    height = _int_setting(payload.get("height"), 90, 4320, ScreenSettings.height)
+    fps = _normalize_screen_fps(payload.get("fps"))
+    par = str(payload.get("par") or ScreenSettings.par)
+    if par not in _PAR_VALUES:
+        par = ScreenSettings.par
+    preset_key = str(payload.get("preset_key") or "")
+    if preset_key not in _SCREEN_PRESET_BY_KEY and preset_key != "custom":
+        preset_key = match_screen_preset_key(width, height, par)
+    return ScreenSettings(
+        preset_key=preset_key,
+        par=par,
+        width=width,
+        height=height,
+        fps=fps,
+    )
+
+
+def _int_setting(value: object, minimum: int, maximum: int, fallback: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return min(max(number, minimum), maximum)
+
+
+def _normalize_screen_fps(value: object) -> int:
+    try:
+        fps = int(value)
+    except (TypeError, ValueError):
+        return ScreenSettings.fps
+    return fps if fps in SCREEN_FPS_OPTIONS else ScreenSettings.fps
+
+
+def match_screen_preset_key(width: int, height: int, par: str) -> str:
+    for preset in SCREEN_PRESETS:
+        if preset.width == width and preset.height == height and preset.par == par:
+            return preset.key
+    return "custom"
 
 
 def _placeholder_page(text: str) -> QWidget:
@@ -482,10 +592,12 @@ class PropertyPanel(QTabWidget):
 
     styleChanged = Signal(Style)
     schemeSelectionChanged = Signal(str)
+    screenChanged = Signal(object)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._style = Style()
+        self._screen = ScreenSettings()
         self._syncing = False
         self._singer_options: list[tuple[int, str]] = []
 
@@ -528,11 +640,35 @@ class PropertyPanel(QTabWidget):
         self.addTab(self._make_effects_page(), "特效")
         self.addTab(_placeholder_page("标题字幕、时段图片（B7 / P2）"), "装饰")
         self.set_singers([])
+        self.set_screen_settings(self._screen, emit=False)
         self.set_style(self._style, emit=False)
 
     @property
     def subtitle_style(self) -> Style:
         return self._style
+
+    @property
+    def screen_settings(self) -> ScreenSettings:
+        return self._screen
+
+    def set_screen_settings(self, settings: ScreenSettings, *, emit: bool = False) -> None:
+        self._screen = screen_settings_from_dict(screen_settings_to_dict(settings))
+        if not hasattr(self, "_screen_preset_combo"):
+            return
+        self._syncing = True
+        try:
+            preset_index = self._screen_preset_combo.findData(self._screen.preset_key)
+            self._screen_preset_combo.setCurrentIndex(max(0, preset_index))
+            par_index = self._screen_par_combo.findData(self._screen.par)
+            self._screen_par_combo.setCurrentIndex(max(0, par_index))
+            self._screen_width_spin.setValue(self._screen.width)
+            self._screen_height_spin.setValue(self._screen.height)
+            fps_index = self._screen_fps_combo.findData(self._screen.fps)
+            self._screen_fps_combo.setCurrentIndex(max(0, fps_index))
+        finally:
+            self._syncing = False
+        if emit:
+            self.screenChanged.emit(self._screen)
 
     def set_style(self, style: Style, *, emit: bool = False) -> None:
         self._style = replace(style)
@@ -591,10 +727,65 @@ class PropertyPanel(QTabWidget):
 
     def _make_basic_page(self) -> QWidget:
         scroll, layout = _scroll_page()
+        layout.addWidget(self._make_screen_section())
         layout.addWidget(self._make_position_section())
         layout.addWidget(self._make_timing_section())
         layout.addStretch(1)
         return scroll
+
+    def _make_screen_section(self) -> QFrame:
+        section, layout = _section("屏幕")
+
+        self._screen_preset_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._screen_preset_combo)
+        for preset in SCREEN_PRESETS:
+            self._screen_preset_combo.addItem(preset.label, preset.key)
+        self._screen_preset_combo.addItem("自定义", "custom")
+        self._screen_preset_combo.currentIndexChanged.connect(
+            lambda _index: self._on_screen_preset_changed()
+        )
+        layout.addWidget(_field("预设", self._screen_preset_combo))
+
+        self._screen_par_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._screen_par_combo)
+        for label, value in PAR_OPTIONS:
+            self._screen_par_combo.addItem(label, value)
+        self._screen_par_combo.currentIndexChanged.connect(
+            lambda _index: self._on_screen_controls_changed()
+        )
+        layout.addWidget(_field("像素纵横比", self._screen_par_combo))
+
+        row = QWidget(section)
+        row_layout = QGridLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setHorizontalSpacing(8)
+        row_layout.setVerticalSpacing(8)
+
+        self._screen_width_spin = _spin(160, 7680, suffix=" px")
+        self._screen_width_spin.valueChanged.connect(
+            lambda _value: self._on_screen_controls_changed()
+        )
+        row_layout.addWidget(_field("宽度", self._screen_width_spin), 0, 0)
+
+        self._screen_height_spin = _spin(90, 4320, suffix=" px")
+        self._screen_height_spin.valueChanged.connect(
+            lambda _value: self._on_screen_controls_changed()
+        )
+        row_layout.addWidget(_field("高度", self._screen_height_spin), 0, 1)
+
+        self._screen_fps_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._screen_fps_combo)
+        for fps in SCREEN_FPS_OPTIONS:
+            self._screen_fps_combo.addItem(f"{fps} fps", fps)
+        self._screen_fps_combo.currentIndexChanged.connect(
+            lambda _index: self._on_screen_controls_changed()
+        )
+        row_layout.addWidget(_field("帧率", self._screen_fps_combo), 1, 0)
+
+        row_layout.setColumnStretch(0, 1)
+        row_layout.setColumnStretch(1, 1)
+        layout.addWidget(row)
+        return section
 
     def _make_subtitle_page(self) -> QWidget:
         scroll, layout = _scroll_page()
@@ -1097,6 +1288,43 @@ class PropertyPanel(QTabWidget):
         return button
 
     # ------------------------------------------------------------------ update
+
+    def _on_screen_preset_changed(self) -> None:
+        if self._syncing:
+            return
+        key = str(self._screen_preset_combo.currentData() or "custom")
+        preset = _SCREEN_PRESET_BY_KEY.get(key)
+        if preset is None:
+            self.set_screen_settings(replace(self._screen, preset_key="custom"), emit=True)
+            return
+        self.set_screen_settings(
+            ScreenSettings(
+                preset_key=preset.key,
+                par=preset.par,
+                width=preset.width,
+                height=preset.height,
+                fps=self._screen.fps,
+            ),
+            emit=True,
+        )
+
+    def _on_screen_controls_changed(self) -> None:
+        if self._syncing:
+            return
+        par = str(self._screen_par_combo.currentData() or "1:1")
+        width = self._screen_width_spin.value()
+        height = self._screen_height_spin.value()
+        fps = int(self._screen_fps_combo.currentData() or 60)
+        self.set_screen_settings(
+            ScreenSettings(
+                preset_key=match_screen_preset_key(width, height, par),
+                par=par,
+                width=width,
+                height=height,
+                fps=fps,
+            ),
+            emit=True,
+        )
 
     def _choose_color(self, field_name: str) -> None:
         current = QColor(self._scheme_value(field_name))

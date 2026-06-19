@@ -94,6 +94,10 @@ def test_playback_timers_use_precise_timer(qapp):
     assert bar._tick_timer.interval() == 16
     assert bar._position_poll_timer.interval() == 16
 
+    bar.set_preview_fps(120)
+    assert bar._tick_timer.interval() == 8
+    assert bar._position_poll_timer.interval() == 8
+
 
 def test_toggle_play_alternates(qapp):
     bar = _bar(qapp)

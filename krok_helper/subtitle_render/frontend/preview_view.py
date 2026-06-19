@@ -47,8 +47,9 @@ from krok_helper.subtitle_render.models import Style, TimingTrack
 PREVIEW_BG = QColor("#101010")
 """画布默认深色背景（A7 接入视频后这里换成视频帧）。"""
 
-_TICK_INTERVAL_MS = 16
-"""tick / 位置轮询间隔（~60Hz，对齐主流显示器 vsync）。
+_DEFAULT_PREVIEW_FPS = 60
+_TICK_INTERVAL_MS = int(1000 / _DEFAULT_PREVIEW_FPS)
+"""默认 tick / 位置轮询间隔（~60Hz，对齐主流显示器 vsync）。
 
 历史上这里曾是 8ms（120Hz）来追求"丝滑"，但实测：
 
@@ -368,7 +369,7 @@ class TransportBar(QWidget):
 
     播放路径：
     - **有音频** → ``QMediaPlayer`` 推音频流，``positionChanged`` 反馈滑块位置
-    - **无音频** → 内部 ``QTimer`` 30fps tick，根据 ``QElapsedTimer`` 累加时间
+    - **无音频** → 内部 ``QTimer`` 视觉 tick，根据 ``QElapsedTimer`` 累加时间
 
     任意一条路径推进 → 同步刷新滑块 → emit :pyattr:`timeChanged`，画布订阅
     重绘。用户拖滑块也走同一条路径回写到 player / 重置 tick 锚点。
@@ -455,6 +456,7 @@ class TransportBar(QWidget):
         self._has_audio = False
 
         # ── 无音频时的视觉 tick ─────────────────────────────────────
+        self._preview_fps = _DEFAULT_PREVIEW_FPS
         self._tick_timer = QTimer(self)
         self._tick_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._tick_timer.setInterval(_TICK_INTERVAL_MS)
@@ -462,9 +464,9 @@ class TransportBar(QWidget):
         self._tick_anchor_ms: int = 0
         self._tick_anchor_real = QElapsedTimer()
 
-        # ── 有音频时的 60fps 主时钟 ────────────────────────────────
+        # ── 有音频时的预览主时钟 ─────────────────────────────────
         # QMediaPlayer.position()/positionChanged 在 Windows 后端上经常只有几十
-        # ms 甚至 100ms 粒度。字幕填色要稳定接近 60fps，所以播放期用
+        # ms 甚至 100ms 粒度。字幕填色要稳定接近预览帧率，所以播放期用
         # QElapsedTimer 推进 UI 时间，QMediaPlayer 只负责音频输出。
         self._position_poll_timer = QTimer(self)
         self._position_poll_timer.setTimerType(Qt.TimerType.PreciseTimer)
@@ -481,6 +483,14 @@ class TransportBar(QWidget):
         """设置时间轴总长（毫秒），决定滑块最大值。"""
         ms = max(ms, 1000)
         self._slider.setMaximum(ms)
+
+    def set_preview_fps(self, fps: int) -> None:
+        """设置预览播放时钟帧率；当前只允许 60 / 120fps。"""
+        normalized = 120 if int(fps) == 120 else 60
+        self._preview_fps = normalized
+        interval = max(1, int(1000 / normalized))
+        self._tick_timer.setInterval(interval)
+        self._position_poll_timer.setInterval(interval)
 
     def set_time(self, ms: int) -> None:
         """程序设置当前时间，会触发 :pyattr:`timeChanged`。"""

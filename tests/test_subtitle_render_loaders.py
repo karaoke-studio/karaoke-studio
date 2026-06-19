@@ -326,7 +326,7 @@ def test_export_tab_builds_render_job_from_loaded_media(qapp, monkeypatch, tmp_p
     win._export_output_edit.setText(str(output))
     win._export_width_spin.setValue(1280)
     win._export_height_spin.setValue(720)
-    win._export_fps_spin.setValue(60)
+    win._export_fps_combo.setCurrentIndex(win._export_fps_combo.findData(120))
     win._export_encoder_combo.setCurrentIndex(win._export_encoder_combo.findData("nvenc"))
     win._export_preset_combo.setCurrentText("slow")
     win._export_crf_spin.setValue(23)
@@ -336,7 +336,7 @@ def test_export_tab_builds_render_job_from_loaded_media(qapp, monkeypatch, tmp_p
     assert job.output_path == output
     assert job.width == 1280
     assert job.height == 720
-    assert job.fps == 60
+    assert job.fps == 120
     assert job.duration_ms == 5000
     assert job.include_audio is True
     assert job.encoder_mode == "nvenc"

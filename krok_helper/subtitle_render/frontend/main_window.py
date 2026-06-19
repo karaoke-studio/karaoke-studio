@@ -68,7 +68,14 @@ from krok_helper.subtitle_render.engine.renderer import RenderJob, render_subtit
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.frontend.lyrics_list import LyricsPanel
 from krok_helper.subtitle_render.frontend.preview_view import PreviewPanel, TransportBar
-from krok_helper.subtitle_render.frontend.property_panel import PropertyPanel
+from krok_helper.subtitle_render.frontend.property_panel import (
+    PropertyPanel,
+    ScreenSettings,
+    SCREEN_FPS_OPTIONS,
+    match_screen_preset_key,
+    screen_settings_from_dict,
+    screen_settings_to_dict,
+)
 from krok_helper.subtitle_render.frontend.timeline_view import (
     TrackTimelineView,
     WaveformPanel,
@@ -151,7 +158,9 @@ class SubtitleRenderWindow(QWidget):
         self._audio_path: Optional[Path] = None
         self._audio_info: Optional[MediaInfo] = None
         self._style: Style = Style()
+        self._screen_settings: ScreenSettings = ScreenSettings()
         self._selected_scheme_key = "global"
+        self._syncing_screen_controls = False
         self._render_thread: Optional[QThread] = None
         self._render_worker: Optional[_RenderWorker] = None
         self._load_persisted_state()
@@ -184,9 +193,13 @@ class SubtitleRenderWindow(QWidget):
         self._export_tab = self._make_export_tab()
         self._stack.addWidget(self._preview_tab)
         self._stack.addWidget(self._export_tab)
+        self._set_export_screen_controls(self._screen_settings)
         self._sync_preview_output_size()
         self._export_width_spin.valueChanged.connect(self._sync_preview_output_size)
         self._export_height_spin.valueChanged.connect(self._sync_preview_output_size)
+        self._export_width_spin.valueChanged.connect(self._on_export_screen_changed)
+        self._export_height_spin.valueChanged.connect(self._on_export_screen_changed)
+        self._export_fps_combo.currentIndexChanged.connect(self._on_export_screen_changed)
 
         self._pivot.addItem(
             routeKey="preview",
@@ -229,6 +242,7 @@ class SubtitleRenderWindow(QWidget):
         self._preview_panel.browseRequested.connect(self._browse_video)
         center_layout.addWidget(self._preview_panel, 1)
         self._transport_bar = TransportBar()
+        self._transport_bar.set_preview_fps(self._screen_settings.fps)
         self._transport_bar.timeChanged.connect(self._preview_panel.set_time)
         self._transport_bar.playbackStateChanged.connect(self._preview_panel.set_playing)
         center_layout.addWidget(self._transport_bar)
@@ -236,7 +250,9 @@ class SubtitleRenderWindow(QWidget):
 
         self._property_panel = PropertyPanel()
         self._property_panel.set_style(self._style)
+        self._property_panel.set_screen_settings(self._screen_settings)
         self._property_panel.styleChanged.connect(self._apply_style)
+        self._property_panel.screenChanged.connect(self._apply_screen_settings)
         self._property_panel.schemeSelectionChanged.connect(self._on_scheme_selection_changed)
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
         top.addWidget(self._property_panel)
@@ -309,10 +325,13 @@ class SubtitleRenderWindow(QWidget):
         params_row.setSpacing(10)
         self._export_width_spin = self._export_spin(160, 7680, 1920, " 宽")
         self._export_height_spin = self._export_spin(90, 4320, 1080, " 高")
-        self._export_fps_spin = self._export_spin(1, 120, 60, " fps")
+        self._export_fps_combo = QComboBox()
+        self._export_fps_combo.setMinimumHeight(32)
+        for fps in SCREEN_FPS_OPTIONS:
+            self._export_fps_combo.addItem(f"{fps} fps", fps)
         params_row.addWidget(self._labeled_export_control("宽度", self._export_width_spin))
         params_row.addWidget(self._labeled_export_control("高度", self._export_height_spin))
-        params_row.addWidget(self._labeled_export_control("帧率", self._export_fps_spin))
+        params_row.addWidget(self._labeled_export_control("帧率", self._export_fps_combo))
         layout.addLayout(params_row)
 
         encode_row = QHBoxLayout()
@@ -529,6 +548,59 @@ class SubtitleRenderWindow(QWidget):
         self._preview_panel.set_style(style)
         self._save_persisted_state()
 
+    def _apply_screen_settings(self, settings: object) -> None:
+        self._screen_settings = screen_settings_from_dict(
+            screen_settings_to_dict(settings)
+            if isinstance(settings, ScreenSettings)
+            else settings
+        )
+        self._set_export_screen_controls(self._screen_settings)
+        self._transport_bar.set_preview_fps(self._screen_settings.fps)
+        self._sync_preview_output_size()
+        self._save_persisted_state()
+
+    def _on_export_screen_changed(self) -> None:
+        if self._syncing_screen_controls:
+            return
+        self._screen_settings = ScreenSettings(
+            preset_key="custom",
+            par=self._screen_settings.par,
+            width=self._export_width_spin.value(),
+            height=self._export_height_spin.value(),
+            fps=self._export_fps_value(),
+        )
+        self._screen_settings = ScreenSettings(
+            preset_key=match_screen_preset_key(
+                self._screen_settings.width,
+                self._screen_settings.height,
+                self._screen_settings.par,
+            ),
+            par=self._screen_settings.par,
+            width=self._screen_settings.width,
+            height=self._screen_settings.height,
+            fps=self._screen_settings.fps,
+        )
+        self._property_panel.set_screen_settings(self._screen_settings)
+        self._transport_bar.set_preview_fps(self._screen_settings.fps)
+        self._save_persisted_state()
+
+    def _set_export_screen_controls(self, settings: ScreenSettings) -> None:
+        self._syncing_screen_controls = True
+        try:
+            self._export_width_spin.setValue(settings.width)
+            self._export_height_spin.setValue(settings.height)
+            self._set_export_fps_value(settings.fps)
+        finally:
+            self._syncing_screen_controls = False
+
+    def _export_fps_value(self) -> int:
+        data = self._export_fps_combo.currentData()
+        return int(data) if data in SCREEN_FPS_OPTIONS else 60
+
+    def _set_export_fps_value(self, fps: int) -> None:
+        index = self._export_fps_combo.findData(fps)
+        self._export_fps_combo.setCurrentIndex(index if index >= 0 else 0)
+
     def _on_scheme_selection_changed(self, key: str) -> None:
         self._selected_scheme_key = key
         self._save_persisted_state()
@@ -536,6 +608,7 @@ class SubtitleRenderWindow(QWidget):
     def _load_persisted_state(self) -> None:
         data = self._load_subtitle_settings()
         self._style = style_from_dict(data.get("style"))
+        self._screen_settings = screen_settings_from_dict(data.get("screen"))
         key = data.get("selected_scheme_key")
         if isinstance(key, str) and key:
             self._selected_scheme_key = key
@@ -543,6 +616,7 @@ class SubtitleRenderWindow(QWidget):
     def _save_persisted_state(self) -> None:
         data = self._load_subtitle_settings()
         data["style"] = style_to_dict(self._style)
+        data["screen"] = screen_settings_to_dict(self._screen_settings)
         data["selected_scheme_key"] = self._selected_scheme_key
         try:
             if self._settings_provider is not None and hasattr(self._settings_provider, "save"):
@@ -604,7 +678,7 @@ class SubtitleRenderWindow(QWidget):
             output_path=output_path,
             width=self._export_width_spin.value(),
             height=self._export_height_spin.value(),
-            fps=self._export_fps_spin.value(),
+            fps=self._export_fps_value(),
             duration_ms=duration_ms,
             include_audio=bool(self._video_info and self._video_info.audio_streams > 0),
             encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
