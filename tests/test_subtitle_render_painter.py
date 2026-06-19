@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _IMAGE_BRUSH_CACHE,
     _IMAGE_FILL_CACHE,
+    _LineCharTransition,
     _brush_for_fill,
     _build_font,
     _fill_extent_end,
@@ -31,6 +32,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _resolve_line_x,
     _ruby_progress_ratio,
     _ruby_reading_intervals,
+    _transition_char_state,
     paint_frame,
     clear_before_layer_cache,
 )
@@ -797,3 +799,46 @@ def test_paint_frame_utopia_entry_and_exit_move_characters(qapp):
 
     assert _pixel_hash(entry_char_fade) != _pixel_hash(entry_utopia)
     assert _pixel_hash(exit_char_fade) != _pixel_hash(exit_utopia)
+
+
+def test_utopia_entry_state_flies_character_down_left_after_highlight(qapp):
+    style = Style(font_size_px=72, entry_lead_ms=1000)
+    transition = _LineCharTransition(phase="entry", effect="utopia", progress=1.0)
+
+    at_end = _transition_char_state(
+        style,
+        transition,
+        0,
+        3,
+        char_start_ms=1000,
+        char_end_ms=1500,
+        t_ms=1500,
+    )
+    mid = _transition_char_state(
+        style,
+        transition,
+        0,
+        3,
+        char_start_ms=1000,
+        char_end_ms=1500,
+        t_ms=2000,
+    )
+    final = _transition_char_state(
+        style,
+        transition,
+        0,
+        3,
+        char_start_ms=1000,
+        char_end_ms=1500,
+        t_ms=2500,
+    )
+
+    assert at_end == (1.0, 0.0, 0.0, 0.0)
+    assert mid[0] == pytest.approx(1.0)
+    assert mid[1] == pytest.approx(-40.6, abs=1.0)
+    assert mid[2] == pytest.approx(25.2, abs=1.0)
+    assert mid[3] == pytest.approx(-21.6, abs=1.0)
+    assert final[0] == pytest.approx(0.0)
+    assert final[1] == pytest.approx(-90.0)
+    assert final[2] == pytest.approx(79.2)
+    assert final[3] == pytest.approx(-48.0)

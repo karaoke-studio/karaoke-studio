@@ -627,6 +627,15 @@ def _line_char_transition_context(
 
     entry_duration = max(style.entry_lead_ms, 0)
     if style.entry_anim in {"char_fade", "utopia"} and entry_duration > 0:
+        if style.entry_anim == "utopia":
+            line_start = _line_start_ms(line)
+            line_end = _line_end_ms(line)
+            if line_start <= t_ms <= line_end + entry_duration:
+                return _LineCharTransition(
+                    phase="entry",
+                    effect=style.entry_anim,
+                    progress=1.0,
+                )
         if t_ms <= start + entry_duration:
             return _LineCharTransition(
                 phase="entry",
@@ -657,7 +666,15 @@ def _paint_line_with_character_transition(
             continue
         left, _right = char_x_ranges[index]
         char_start, char_end = intervals[index]
-        opacity, dx, dy = _transition_char_state(style, transition, index, count)
+        opacity, dx, dy, rotation = _transition_char_state(
+            style,
+            transition,
+            index,
+            count,
+            char_start_ms=char_start,
+            char_end_ms=char_end,
+            t_ms=t_ms,
+        )
         if opacity <= 0.0:
             continue
 
@@ -666,8 +683,14 @@ def _paint_line_with_character_transition(
         painter.save()
         try:
             painter.setOpacity(painter.opacity() * opacity)
-            if dx or dy:
-                painter.translate(dx, dy)
+            _apply_character_transform(
+                painter,
+                center_x=left + width / 2,
+                center_y=baseline_y - metrics.ascent() + metrics.height() / 2,
+                dx=dx,
+                dy=dy,
+                rotation=rotation,
+            )
             _paint_char_karaoke_stack(
                 painter,
                 path,
@@ -689,24 +712,55 @@ def _transition_char_state(
     transition: _LineCharTransition,
     index: int,
     count: int,
-) -> tuple[float, float, float]:
+    *,
+    char_start_ms: int | None = None,
+    char_end_ms: int | None = None,
+    t_ms: int | None = None,
+) -> tuple[float, float, float, float]:
+    if transition.phase == "entry" and transition.effect == "utopia":
+        if char_end_ms is None or t_ms is None:
+            local = transition.progress
+        else:
+            local = _clamped_ratio(t_ms - char_end_ms, max(style.entry_lead_ms, 1))
+        horizontal = local**1.15
+        vertical = local**1.65
+        opacity = 1.0 if local < 0.82 else max(0.0, 1.0 - (local - 0.82) / 0.18)
+        dx = -style.font_size_px * 1.25 * horizontal
+        dy = max(style.font_size_px * 1.1, 48.0) * vertical
+        rotation = -48.0 * horizontal
+        return opacity, dx, dy, rotation
+
     local = _staggered_char_progress(transition.progress, index, count)
     eased = 1.0 - (1.0 - local) * (1.0 - local)
     if transition.phase == "entry":
         opacity = 0.22 + 0.78 * eased
-        if transition.effect == "utopia":
-            dx = -style.font_size_px * 0.75 * (1.0 - eased)
-            dy = -max(style.font_size_px * 0.45, 20.0) * (1.0 - eased)
-            return opacity, dx, dy
-        return opacity, 0.0, 0.0
+        return opacity, 0.0, 0.0, 0.0
 
     opacity = 1.0 - eased
     if transition.effect == "utopia":
         drift = -0.22 if index % 2 == 0 else 0.12
         dx = style.font_size_px * drift * eased
         dy = -max(style.font_size_px * 0.65, 28.0) * eased
-        return opacity, dx, dy
-    return opacity, 0.0, 0.0
+        rotation = -24.0 * eased
+        return opacity, dx, dy, rotation
+    return opacity, 0.0, 0.0, 0.0
+
+
+def _apply_character_transform(
+    painter: QPainter,
+    *,
+    center_x: float,
+    center_y: float,
+    dx: float,
+    dy: float,
+    rotation: float,
+) -> None:
+    if not dx and not dy and not rotation:
+        return
+    painter.translate(center_x + dx, center_y + dy)
+    if rotation:
+        painter.rotate(rotation)
+    painter.translate(-center_x, -center_y)
 
 
 def _paint_char_karaoke_stack(
@@ -1547,21 +1601,32 @@ def _paint_rubies(
             right = max(char_x_ranges[index][1] for index in indices)
             reading_w = ruby_metrics.horizontalAdvance(ruby.reading)
             x = int(round((left + right - reading_w) / 2))
-            opacity, dx, dy = 1.0, 0.0, 0.0
+            opacity, dx, dy, rotation = 1.0, 0.0, 0.0, 0.0
             if transition is not None:
-                opacity, dx, dy = _transition_char_state(
+                first_index = min(indices)
+                last_index = max(indices)
+                opacity, dx, dy, rotation = _transition_char_state(
                     style,
                     transition,
-                    min(indices),
+                    first_index,
                     max(len(line.chars), 1),
+                    char_start_ms=intervals[first_index][0],
+                    char_end_ms=intervals[last_index][1],
+                    t_ms=t_ms,
                 )
             if opacity <= 0.0:
                 continue
             painter.save()
             try:
                 painter.setOpacity(painter.opacity() * opacity)
-                if dx or dy:
-                    painter.translate(dx, dy)
+                _apply_character_transform(
+                    painter,
+                    center_x=x + reading_w / 2,
+                    center_y=ruby_baseline_y - ruby_metrics.ascent() + ruby_metrics.height() / 2,
+                    dx=dx,
+                    dy=dy,
+                    rotation=rotation,
+                )
                 _paint_ruby_text(
                     painter,
                     ruby,
