@@ -765,45 +765,44 @@ def test_paint_frame_char_fade_exit_starts_after_sentence_end(qapp):
     assert _pixel_hash(before_exit) != _pixel_hash(during_exit)
 
 
-def test_paint_frame_utopia_entry_and_exit_move_characters(qapp):
+def test_paint_frame_utopia_exit_moves_characters_after_each_highlight(qapp):
     track = _track()
-    entry_char_fade = _blank()
-    entry_utopia = _blank()
     exit_char_fade = _blank()
     exit_utopia = _blank()
 
     paint_frame(
-        entry_char_fade,
-        track,
-        200,
-        Style(line_y_position="center", entry_anim="char_fade", entry_lead_ms=1000),
-    )
-    paint_frame(
-        entry_utopia,
-        track,
-        200,
-        Style(line_y_position="center", entry_anim="utopia", entry_lead_ms=1000),
-    )
-    paint_frame(
         exit_char_fade,
         track,
-        2800,
+        1700,
         Style(line_y_position="center", line_tail_ms=1000, exit_anim="char_fade", exit_fade_ms=1000),
     )
     paint_frame(
         exit_utopia,
         track,
-        2800,
+        1700,
         Style(line_y_position="center", line_tail_ms=1000, exit_anim="utopia", exit_fade_ms=1000),
     )
 
-    assert _pixel_hash(entry_char_fade) != _pixel_hash(entry_utopia)
     assert _pixel_hash(exit_char_fade) != _pixel_hash(exit_utopia)
 
 
-def test_utopia_entry_state_flies_character_down_left_after_highlight(qapp):
-    style = Style(font_size_px=72, entry_lead_ms=1000)
-    transition = _LineCharTransition(phase="entry", effect="utopia", progress=1.0)
+def test_paint_frame_utopia_exit_does_not_reappear_after_flying_out(qapp):
+    track = _track()
+    blank = _blank()
+    plain = _blank()
+    utopia = _blank()
+    base = Style(line_y_position="center", line_tail_ms=3000, exit_fade_ms=1000)
+
+    paint_frame(plain, track, 3600, base)
+    paint_frame(utopia, track, 3600, replace(base, exit_anim="utopia"))
+
+    assert _pixel_hash(plain) != _pixel_hash(blank)
+    assert _pixel_hash(utopia) == _pixel_hash(blank)
+
+
+def test_utopia_exit_state_flies_character_down_left_after_highlight(qapp):
+    style = Style(font_size_px=72, exit_fade_ms=1000)
+    transition = _LineCharTransition(phase="exit", effect="utopia", progress=1.0)
 
     at_end = _transition_char_state(
         style,

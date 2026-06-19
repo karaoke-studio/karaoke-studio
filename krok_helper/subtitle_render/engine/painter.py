@@ -617,6 +617,16 @@ def _line_char_transition_context(
 
     exit_duration = max(style.exit_fade_ms, 0)
     if style.exit_anim in {"char_fade", "utopia"} and exit_duration > 0:
+        if style.exit_anim == "utopia":
+            intervals = compute_char_intervals(line)
+            if intervals:
+                first_exit_start = intervals[0][1]
+                if first_exit_start <= t_ms <= end:
+                    return _LineCharTransition(
+                        phase="exit",
+                        effect=style.exit_anim,
+                        progress=1.0,
+                    )
         exit_start = max(_line_end_ms(line), end - exit_duration)
         if t_ms >= exit_start:
             return _LineCharTransition(
@@ -627,15 +637,6 @@ def _line_char_transition_context(
 
     entry_duration = max(style.entry_lead_ms, 0)
     if style.entry_anim in {"char_fade", "utopia"} and entry_duration > 0:
-        if style.entry_anim == "utopia":
-            line_start = _line_start_ms(line)
-            line_end = _line_end_ms(line)
-            if line_start <= t_ms <= line_end + entry_duration:
-                return _LineCharTransition(
-                    phase="entry",
-                    effect=style.entry_anim,
-                    progress=1.0,
-                )
         if t_ms <= start + entry_duration:
             return _LineCharTransition(
                 phase="entry",
@@ -717,14 +718,14 @@ def _transition_char_state(
     char_end_ms: int | None = None,
     t_ms: int | None = None,
 ) -> tuple[float, float, float, float]:
-    if transition.phase == "entry" and transition.effect == "utopia":
+    if transition.phase == "exit" and transition.effect == "utopia":
         if char_end_ms is None or t_ms is None:
             local = transition.progress
         else:
-            local = _clamped_ratio(t_ms - char_end_ms, max(style.entry_lead_ms, 1))
+            local = _clamped_ratio(t_ms - char_end_ms, max(style.exit_fade_ms, 1))
         horizontal = local**1.15
         vertical = local**1.65
-        opacity = 1.0 if local < 0.82 else max(0.0, 1.0 - (local - 0.82) / 0.18)
+        opacity = 1.0 if local < 0.72 else max(0.0, 1.0 - (local - 0.72) / 0.28)
         dx = -style.font_size_px * 1.25 * horizontal
         dy = max(style.font_size_px * 1.1, 48.0) * vertical
         rotation = -48.0 * horizontal
@@ -738,11 +739,7 @@ def _transition_char_state(
 
     opacity = 1.0 - eased
     if transition.effect == "utopia":
-        drift = -0.22 if index % 2 == 0 else 0.12
-        dx = style.font_size_px * drift * eased
-        dy = -max(style.font_size_px * 0.65, 28.0) * eased
-        rotation = -24.0 * eased
-        return opacity, dx, dy, rotation
+        return 0.0, 0.0, 0.0, 0.0
     return opacity, 0.0, 0.0, 0.0
 
 
