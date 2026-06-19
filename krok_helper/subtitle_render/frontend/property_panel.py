@@ -50,6 +50,8 @@ from krok_helper.subtitle_render.models import (
     PaintFill,
     SubtitleStyleScheme,
     Style,
+    VIEWPORT_ALIGNS,
+    ViewportAlign,
 )
 
 _SCHEME_FIELDS = {
@@ -676,6 +678,13 @@ class PropertyPanel(QTabWidget):
         self._syncing = True
         try:
             self._refresh_scheme_combo(current_key)
+            self._viewport_align_combo.setCurrentIndex(
+                max(0, self._viewport_align_combo.findData(self._style.viewport_align))
+            )
+            self._viewport_x_spin.setValue(self._style.viewport_offset_x)
+            self._viewport_y_spin.setValue(self._style.viewport_offset_y)
+            self._viewport_scale_spin.setValue(self._style.viewport_scale_pct)
+            self._viewport_rotation_spin.setValue(self._style.viewport_rotation_deg)
             self._line_position_combo.setCurrentIndex(
                 max(0, self._line_position_combo.findData(self._style.line_y_position))
             )
@@ -727,6 +736,7 @@ class PropertyPanel(QTabWidget):
     def _make_basic_page(self) -> QWidget:
         scroll, layout = _scroll_page()
         layout.addWidget(self._make_screen_section())
+        layout.addWidget(self._make_viewport_section())
         layout.addWidget(self._make_position_section())
         layout.addWidget(self._make_timing_section())
         layout.addStretch(1)
@@ -1178,6 +1188,65 @@ class PropertyPanel(QTabWidget):
         layout.addWidget(grid)
         return section
 
+    def _make_viewport_section(self) -> QFrame:
+        section, layout = _section("视图")
+
+        self._viewport_align_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._viewport_align_combo)
+        for label, value in [
+            ("左上", "top_left"),
+            ("中上", "top_center"),
+            ("右上", "top_right"),
+            ("左中", "center_left"),
+            ("居中", "center"),
+            ("右中", "center_right"),
+            ("左下", "bottom_left"),
+            ("中下", "bottom_center"),
+            ("右下", "bottom_right"),
+        ]:
+            self._viewport_align_combo.addItem(label, value)
+        self._viewport_align_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                viewport_align=self._viewport_align_combo.currentData()
+            )
+        )
+        layout.addWidget(_field("对齐", self._viewport_align_combo))
+
+        row = QWidget(section)
+        row_layout = QGridLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setHorizontalSpacing(8)
+        row_layout.setVerticalSpacing(8)
+
+        self._viewport_x_spin = _spin(-4000, 4000, suffix=" px")
+        self._viewport_x_spin.valueChanged.connect(
+            lambda value: self._update_style(viewport_offset_x=value)
+        )
+        row_layout.addWidget(_field("位置 X", self._viewport_x_spin), 0, 0)
+
+        self._viewport_y_spin = _spin(-4000, 4000, suffix=" px")
+        self._viewport_y_spin.valueChanged.connect(
+            lambda value: self._update_style(viewport_offset_y=value)
+        )
+        row_layout.addWidget(_field("位置 Y", self._viewport_y_spin), 0, 1)
+
+        self._viewport_scale_spin = _spin(10, 400, suffix=" %")
+        self._viewport_scale_spin.valueChanged.connect(
+            lambda value: self._update_style(viewport_scale_pct=value)
+        )
+        row_layout.addWidget(_field("缩放", self._viewport_scale_spin), 1, 0)
+
+        self._viewport_rotation_spin = _spin(-180, 180, suffix=" °")
+        self._viewport_rotation_spin.valueChanged.connect(
+            lambda value: self._update_style(viewport_rotation_deg=value)
+        )
+        row_layout.addWidget(_field("旋转", self._viewport_rotation_spin), 1, 1)
+
+        row_layout.setColumnStretch(0, 1)
+        row_layout.setColumnStretch(1, 1)
+        layout.addWidget(row)
+        return section
+
     def _make_position_section(self) -> QFrame:
         section, layout = _section("位置")
 
@@ -1625,6 +1694,8 @@ class PropertyPanel(QTabWidget):
             changes["line_horizontal_layout"] = _normalize_horizontal_layout(
                 changes["line_horizontal_layout"]
             )
+        if "viewport_align" in changes:
+            changes["viewport_align"] = _normalize_viewport_align(changes["viewport_align"])
         if "decoration_kind" in changes:
             changes["decoration_kind"] = _normalize_decoration_kind(
                 changes["decoration_kind"]
@@ -1655,6 +1726,12 @@ def _normalize_horizontal_layout(value: object) -> LineHorizontalLayout:
     if value in {"asymmetric", "center"}:
         return value  # type: ignore[return-value]
     return "asymmetric"
+
+
+def _normalize_viewport_align(value: object) -> ViewportAlign:
+    if value in VIEWPORT_ALIGNS:
+        return value  # type: ignore[return-value]
+    return "center"
 
 
 def _normalize_decoration_kind(value: object) -> DecorationKind:

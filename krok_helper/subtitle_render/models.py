@@ -142,6 +142,28 @@ class SubtitleSource:
 
 LineYPosition = Literal["top", "center", "bottom"]
 LineHorizontalLayout = Literal["asymmetric", "center"]
+ViewportAlign = Literal[
+    "top_left",
+    "top_center",
+    "top_right",
+    "center_left",
+    "center",
+    "center_right",
+    "bottom_left",
+    "bottom_center",
+    "bottom_right",
+]
+VIEWPORT_ALIGNS: tuple[ViewportAlign, ...] = (
+    "top_left",
+    "top_center",
+    "top_right",
+    "center_left",
+    "center",
+    "center_right",
+    "bottom_left",
+    "bottom_center",
+    "bottom_right",
+)
 ColorFillMode = Literal[
     "solid",
     "gradient_horizontal",
@@ -292,6 +314,22 @@ class Style:
     ruby_color: str = "#FF5A6F"
     ruby_gap_px: int = 4
 
+    # 视图（整体字幕层 2D 变换，对标 Sayatoo「视图」组）
+    viewport_align: ViewportAlign = "center"
+    """缩放与旋转的锚点（九宫格）。仅在缩放≠100% 或旋转≠0 时影响画面。"""
+
+    viewport_offset_x: int = 0
+    """整体字幕层水平位移，正值向右。"""
+
+    viewport_offset_y: int = 0
+    """整体字幕层垂直位移，正值向下。"""
+
+    viewport_scale_pct: int = 100
+    """整体字幕层缩放百分比，围绕 ``viewport_align`` 锚点。"""
+
+    viewport_rotation_deg: int = 0
+    """整体字幕层 Z 轴旋转角度，围绕 ``viewport_align`` 锚点，顺时针为正。"""
+
     # 行位置（字幕区上下定位）
     line_y_position: LineYPosition = "bottom"
     """``"top"`` / ``"center"`` / ``"bottom"`` —— 简单 vertical-anchor。"""
@@ -436,6 +474,10 @@ def style_from_dict(payload: object) -> Style:
             "shadow_offset_y",
             "ruby_font_size_px",
             "ruby_gap_px",
+            "viewport_offset_x",
+            "viewport_offset_y",
+            "viewport_scale_pct",
+            "viewport_rotation_deg",
             "line_y_margin_px",
             "line_gap_px",
             "upper_line_left_margin_px",
@@ -457,6 +499,8 @@ def style_from_dict(payload: object) -> Style:
             changes[key] = value if value in {"top", "center", "bottom"} else defaults.line_y_position
         elif key == "line_horizontal_layout":
             changes[key] = value if value in {"asymmetric", "center"} else defaults.line_horizontal_layout
+        elif key == "viewport_align":
+            changes[key] = value if value in VIEWPORT_ALIGNS else defaults.viewport_align
         elif key == "decoration_kind":
             changes[key] = value if value in {"shadow", "glow"} else defaults.decoration_kind
         elif key == "entry_anim":

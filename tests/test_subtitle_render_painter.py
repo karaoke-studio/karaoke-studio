@@ -214,6 +214,53 @@ def test_paint_frame_applies_track_meta_offset(qapp):
     assert _pixel_hash(img) == baseline
 
 
+def test_viewport_align_alone_does_not_change_render(qapp):
+    """仅改对齐锚点（缩放 100%、旋转 0、无位移）不应改变画面。"""
+    base = _blank()
+    aligned = _blank()
+    paint_frame(base, _track(), 1700, Style())
+    paint_frame(aligned, _track(), 1700, Style(viewport_align="top_left"))
+    assert _pixel_hash(base) == _pixel_hash(aligned)
+
+
+def test_viewport_offset_translates_ink_bounds(qapp):
+    base = _blank()
+    shifted = _blank()
+    style = Style(line_y_position="center")
+    paint_frame(base, _track(), 1700, style)
+    paint_frame(shifted, _track(), 1700, replace(style, viewport_offset_x=90, viewport_offset_y=40))
+
+    base_bounds = _ink_bounds(base)
+    shifted_bounds = _ink_bounds(shifted)
+    assert shifted_bounds[:2] != base_bounds[:2]
+    # 纯平移：墨迹尺寸不变，左上角整体偏移。
+    assert _bounds_size(shifted_bounds) == _bounds_size(base_bounds)
+    assert shifted_bounds[0] == base_bounds[0] + 90
+    assert shifted_bounds[1] == base_bounds[1] + 40
+
+
+def test_viewport_scale_enlarges_ink_bounds(qapp):
+    base = _blank()
+    scaled = _blank()
+    style = Style(line_y_position="center")
+    paint_frame(base, _track(), 1700, style)
+    paint_frame(scaled, _track(), 1700, replace(style, viewport_scale_pct=150))
+
+    base_w, base_h = _bounds_size(_ink_bounds(base))
+    scaled_w, scaled_h = _bounds_size(_ink_bounds(scaled))
+    assert scaled_w > base_w
+    assert scaled_h > base_h
+
+
+def test_viewport_rotation_changes_render(qapp):
+    base = _blank()
+    rotated = _blank()
+    style = Style(line_y_position="center")
+    paint_frame(base, _track(), 1700, style)
+    paint_frame(rotated, _track(), 1700, replace(style, viewport_rotation_deg=30))
+    assert _pixel_hash(base) != _pixel_hash(rotated)
+
+
 def test_paint_frame_during_line_modifies_image(qapp):
     img = _blank()
     baseline = _pixel_hash(img)

@@ -180,6 +180,7 @@ def paint_frame_to_painter(
             | QPainter.RenderHint.TextAntialiasing
             | QPainter.RenderHint.SmoothPixmapTransform
         )
+        _apply_viewport_transform(painter, logical_w, logical_h, style)
         baselines = _resolve_display_baselines(logical_h, track, display_lines, style)
         for display_line in display_lines:
             _paint_line(
@@ -211,6 +212,50 @@ def _effective_track_time_ms(track: TimingTrack, t_ms: int, style: Style) -> int
     earlier subtitle timestamp.
     """
     return t_ms - (track.meta.offset_ms + style.timing_offset_ms)
+
+
+# 九宫格锚点在画布上的相对坐标（横向, 纵向），用于缩放 / 旋转的轴心。
+_VIEWPORT_PIVOT_FRACTIONS: dict[str, tuple[float, float]] = {
+    "top_left": (0.0, 0.0),
+    "top_center": (0.5, 0.0),
+    "top_right": (1.0, 0.0),
+    "center_left": (0.0, 0.5),
+    "center": (0.5, 0.5),
+    "center_right": (1.0, 0.5),
+    "bottom_left": (0.0, 1.0),
+    "bottom_center": (0.5, 1.0),
+    "bottom_right": (1.0, 1.0),
+}
+
+
+def _apply_viewport_transform(
+    painter: QPainter, logical_w: int, logical_h: int, style: Style
+) -> None:
+    """对整体字幕层套用 Sayatoo「视图」组的 2D 变换。
+
+    位移直接平移；缩放与旋转围绕 ``viewport_align`` 指定的九宫格锚点。
+    默认值（位移 0、缩放 100%、旋转 0）下不改动 painter 坐标系。
+    """
+    scale = max(style.viewport_scale_pct, 1) / 100.0
+    angle = style.viewport_rotation_deg
+    offset_x = style.viewport_offset_x
+    offset_y = style.viewport_offset_y
+    if offset_x == 0 and offset_y == 0 and scale == 1.0 and angle == 0:
+        return
+    frac_x, frac_y = _VIEWPORT_PIVOT_FRACTIONS.get(
+        style.viewport_align, _VIEWPORT_PIVOT_FRACTIONS["center"]
+    )
+    pivot_x = logical_w * frac_x
+    pivot_y = logical_h * frac_y
+    if offset_x or offset_y:
+        painter.translate(offset_x, offset_y)
+    if scale != 1.0 or angle:
+        painter.translate(pivot_x, pivot_y)
+        if angle:
+            painter.rotate(angle)
+        if scale != 1.0:
+            painter.scale(scale, scale)
+        painter.translate(-pivot_x, -pivot_y)
 
 
 def _build_font(style: Style) -> QFont:

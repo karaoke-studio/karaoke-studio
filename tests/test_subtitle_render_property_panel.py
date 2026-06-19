@@ -53,6 +53,11 @@ def test_property_panel_set_style_populates_controls(qapp):
         shadow_color="#A0B0C0",
         shadow_offset_x=3,
         shadow_offset_y=4,
+        viewport_align="bottom_right",
+        viewport_offset_x=-120,
+        viewport_offset_y=60,
+        viewport_scale_pct=150,
+        viewport_rotation_deg=-30,
         line_y_position="top",
         line_y_margin_px=120,
         dual_line_layout=False,
@@ -90,6 +95,11 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._stroke_width_spin.value() == 8
     assert panel._shadow_x_spin.value() == 3
     assert panel._shadow_y_spin.value() == 4
+    assert panel._viewport_align_combo.currentData() == "bottom_right"
+    assert panel._viewport_x_spin.value() == -120
+    assert panel._viewport_y_spin.value() == 60
+    assert panel._viewport_scale_spin.value() == 150
+    assert panel._viewport_rotation_spin.value() == -30
     assert panel._line_position_combo.currentData() == "top"
     assert panel._line_margin_spin.value() == 120
     assert not panel._dual_line_check.isChecked()
@@ -131,6 +141,11 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.fill_gradient_angle_deg == 0
     assert style.ruby_font_size_px == 35
     assert style.ruby_gap_px == 4
+    assert style.viewport_align == "center"
+    assert style.viewport_offset_x == 0
+    assert style.viewport_offset_y == 0
+    assert style.viewport_scale_pct == 100
+    assert style.viewport_rotation_deg == 0
     assert style.line_y_position == "bottom"
     assert style.line_y_margin_px == 80
     assert style.dual_line_layout is True
@@ -514,6 +529,26 @@ def test_property_panel_layout_controls_emit_style(qapp):
     assert emitted[-1].line_gap_px == 70
     assert emitted[-1].upper_line_left_margin_px == 31
     assert emitted[-1].lower_line_right_margin_px == 42
+
+
+def test_property_panel_viewport_controls_emit_style(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._viewport_align_combo.setCurrentIndex(
+        panel._viewport_align_combo.findData("top_left")
+    )
+    panel._viewport_x_spin.setValue(-80)
+    panel._viewport_y_spin.setValue(45)
+    panel._viewport_scale_spin.setValue(120)
+    panel._viewport_rotation_spin.setValue(15)
+
+    assert emitted[-1].viewport_align == "top_left"
+    assert emitted[-1].viewport_offset_x == -80
+    assert emitted[-1].viewport_offset_y == 45
+    assert emitted[-1].viewport_scale_pct == 120
+    assert emitted[-1].viewport_rotation_deg == 15
 
 
 def test_property_panel_timing_controls_emit_style(qapp):
