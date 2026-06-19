@@ -37,6 +37,7 @@ def line_animation_state(
             direction = -1.0 if lane in {None, 0} else 1.0
             dx += direction * (1.0 - progress) * _slide_distance(style)
         elif style.entry_anim == "rise":
+            opacity *= progress
             dy += (1.0 - progress) * _rise_distance(style)
 
     exit_duration = max(style.exit_fade_ms, 0)
@@ -49,6 +50,7 @@ def line_animation_state(
             direction = -1.0 if lane in {None, 0} else 1.0
             dx += direction * (1.0 - remaining) * _slide_distance(style)
         elif style.exit_anim == "rise":
+            opacity *= remaining
             dy -= (1.0 - remaining) * _rise_distance(style)
 
     return LineAnimationState(

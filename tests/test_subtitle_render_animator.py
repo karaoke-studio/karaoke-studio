@@ -72,3 +72,69 @@ def test_slide_out_fades_from_opaque_to_transparent():
     assert mid.dx < 0.0
     assert end.opacity == pytest.approx(0.0)
     assert end.dx < mid.dx
+
+
+def test_rise_entry_fades_from_transparent_to_opaque():
+    style = Style(font_size_px=100, entry_anim="rise", entry_lead_ms=1000)
+
+    start = line_animation_state(
+        style,
+        t_ms=0,
+        display_start_ms=0,
+        display_end_ms=3000,
+        lane=0,
+    )
+    mid = line_animation_state(
+        style,
+        t_ms=500,
+        display_start_ms=0,
+        display_end_ms=3000,
+        lane=0,
+    )
+    done = line_animation_state(
+        style,
+        t_ms=1000,
+        display_start_ms=0,
+        display_end_ms=3000,
+        lane=0,
+    )
+
+    assert start.opacity == pytest.approx(0.0)
+    assert start.dy > 0.0
+    assert mid.opacity == pytest.approx(0.75)
+    assert mid.dy > 0.0
+    assert done.opacity == pytest.approx(1.0)
+    assert done.dy == pytest.approx(0.0)
+
+
+def test_rise_exit_fades_from_opaque_to_transparent():
+    style = Style(font_size_px=100, exit_anim="rise", exit_fade_ms=1000)
+
+    before = line_animation_state(
+        style,
+        t_ms=2000,
+        display_start_ms=0,
+        display_end_ms=3000,
+        lane=0,
+    )
+    mid = line_animation_state(
+        style,
+        t_ms=2500,
+        display_start_ms=0,
+        display_end_ms=3000,
+        lane=0,
+    )
+    end = line_animation_state(
+        style,
+        t_ms=3000,
+        display_start_ms=0,
+        display_end_ms=3000,
+        lane=0,
+    )
+
+    assert before.opacity == pytest.approx(1.0)
+    assert before.dy == pytest.approx(0.0)
+    assert mid.opacity == pytest.approx(0.25)
+    assert mid.dy < 0.0
+    assert end.opacity == pytest.approx(0.0)
+    assert end.dy < mid.dy
