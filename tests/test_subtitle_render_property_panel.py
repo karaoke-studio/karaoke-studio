@@ -23,6 +23,8 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     PaintFill,
     SubtitleStyleScheme,
     Style,
+    style_from_dict,
+    style_to_dict,
 )
 
 
@@ -61,6 +63,10 @@ def test_property_panel_set_style_populates_controls(qapp):
         line_tail_ms=1100,
         line_lane_gap_ms=250,
         line_max_hold_ms=9000,
+        entry_anim="slide_in",
+        entry_lead_ms=450,
+        exit_anim="fade",
+        exit_fade_ms=650,
         ruby_font_size_px=30,
         ruby_color="#223344",
         ruby_gap_px=9,
@@ -93,6 +99,10 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._line_tail_spin.value() == 1100
     assert panel._line_lane_gap_spin.value() == 250
     assert panel._line_max_hold_spin.value() == 9000
+    assert panel._entry_anim_combo.currentData() == "slide_in"
+    assert panel._entry_lead_spin.value() == 450
+    assert panel._exit_anim_combo.currentData() == "fade"
+    assert panel._exit_fade_spin.value() == 650
     assert panel._ruby_font_size_spin.value() == 30
     assert panel._ruby_color_btn.color == "#223344"
     assert panel._ruby_gap_spin.value() == 9
@@ -129,6 +139,10 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.line_continuity_snap_ms == 800
     assert style.line_pair_second_delay_ms == 3000
     assert style.line_max_hold_ms == 12_000
+    assert style.entry_anim == "none"
+    assert style.entry_lead_ms == 300
+    assert style.exit_anim == "none"
+    assert style.exit_fade_ms == 300
 
 
 def test_property_panel_subtitle_page_has_no_horizontal_scroll(qapp):
@@ -339,6 +353,43 @@ def test_property_panel_split_and_image_fill_controls_emit_style(qapp):
     assert image.image_scale_pct == 150
 
 
+def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
+    image_path = str(tmp_path / "texture.png")
+    fill = PaintFill(
+        mode="image",
+        color="#112233",
+        start_color="#112233",
+        end_color="#445566",
+        gradient_stops=[(0, "#112233"), (40, "#778899"), (100, "#445566")],
+        split_top_color="#112233",
+        split_bottom_color="#445566",
+        split_position_pct=35,
+        image_path=image_path,
+        image_scale_pct=175,
+    )
+    scheme = SubtitleStyleScheme(
+        font_size_px=88,
+        fill_color="#112233",
+        karaoke_colors=KaraokeColors(after=KaraokeColorState(text=fill)),
+    )
+    style = Style(
+        entry_anim="slide_in",
+        entry_lead_ms=500,
+        exit_anim="fade",
+        exit_fade_ms=700,
+        singer_style_overrides={2: scheme},
+        custom_style_schemes={"图像方案": scheme},
+    )
+
+    restored = style_from_dict(style_to_dict(style))
+
+    assert restored.entry_anim == "slide_in"
+    assert restored.exit_anim == "fade"
+    assert restored.singer_style_overrides[2].karaoke_colors.after.text.image_path == image_path
+    assert restored.singer_style_overrides[2].karaoke_colors.after.text.image_scale_pct == 175
+    assert restored.custom_style_schemes["图像方案"].karaoke_colors.after.text.mode == "image"
+
+
 def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     panel = PropertyPanel()
     emitted: list[Style] = []
@@ -424,6 +475,24 @@ def test_property_panel_timing_controls_emit_style(qapp):
     assert emitted[-1].line_max_hold_ms == 8000
 
 
+def test_property_panel_animation_controls_emit_style(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._entry_anim_combo.setCurrentIndex(
+        panel._entry_anim_combo.findData("slide_in")
+    )
+    panel._entry_lead_spin.setValue(700)
+    panel._exit_anim_combo.setCurrentIndex(panel._exit_anim_combo.findData("rise"))
+    panel._exit_fade_spin.setValue(900)
+
+    assert emitted[-1].entry_anim == "slide_in"
+    assert emitted[-1].entry_lead_ms == 700
+    assert emitted[-1].exit_anim == "rise"
+    assert emitted[-1].exit_fade_ms == 900
+
+
 def test_property_panel_singer_scheme_controls_emit_style(qapp):
     panel = PropertyPanel()
     panel.set_singers([(0, "A"), (1, "B")])
@@ -502,6 +571,18 @@ def test_property_panel_can_add_custom_scheme(qapp):
 
     panel._font_size_spin.setValue(77)
     assert emitted[-1].custom_style_schemes["蓝色方案"].font_size_px == 77
+
+
+def test_property_panel_scheme_selection_emits_current_key(qapp):
+    panel = PropertyPanel()
+    panel._add_custom_scheme("图像方案")
+    emitted: list[str] = []
+    panel.schemeSelectionChanged.connect(emitted.append)
+
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("global"))
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:图像方案"))
+
+    assert emitted[-1] == "custom:图像方案"
 
 
 def test_property_panel_add_scheme_button_ignores_clicked_checked_arg(qapp, monkeypatch):
@@ -596,6 +677,52 @@ def test_main_window_style_panel_updates_preview(qapp, monkeypatch):
     assert win._preview_panel.canvas._style.ruby_font_size_px == 28
     assert win._preview_panel.canvas._style.line_gap_px == 77
     assert win._preview_panel.canvas._style.singer_style_overrides[0].fill_color == "#FFCC00"
+
+
+def test_main_window_persists_style_and_selected_scheme(qapp, monkeypatch):
+    monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
+    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+    initial_style = Style(
+        custom_style_schemes={
+            "图像方案": SubtitleStyleScheme(
+                karaoke_colors=KaraokeColors(
+                    after=KaraokeColorState(
+                        text=PaintFill(
+                            mode="image",
+                            image_path=r"D:\cover.png",
+                            image_scale_pct=150,
+                        )
+                    )
+                )
+            )
+        }
+    )
+
+    class FakeSettingsProvider:
+        def __init__(self):
+            self.data = {
+                "style": style_to_dict(initial_style),
+                "selected_scheme_key": "custom:图像方案",
+            }
+
+        def load(self):
+            return dict(self.data)
+
+        def save(self, data):
+            self.data = dict(data)
+
+    provider = FakeSettingsProvider()
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+
+    assert win._property_panel.current_scheme_key() == "custom:图像方案"
+    assert win._style.custom_style_schemes["图像方案"].karaoke_colors.after.text.image_path == r"D:\cover.png"
+
+    win._property_panel._paint_image_scale_spin.setValue(175)
+    win._property_panel.set_current_scheme_key("global")
+
+    saved_style = style_from_dict(provider.data["style"])
+    assert saved_style.custom_style_schemes["图像方案"].karaoke_colors.after.text.image_scale_pct == 175
+    assert provider.data["selected_scheme_key"] == "global"
 
 
 def _wheel_event(widget, delta: int = 120) -> QWheelEvent:

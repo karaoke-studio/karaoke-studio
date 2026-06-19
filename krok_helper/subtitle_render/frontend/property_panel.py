@@ -40,6 +40,8 @@ from krok_helper.subtitle_render.models import (
     ColorLayerKey,
     ColorStateKey,
     DecorationKind,
+    EntryAnimation,
+    ExitAnimation,
     KaraokeColors,
     KaraokeColorState,
     LineHorizontalLayout,
@@ -438,6 +440,7 @@ class PropertyPanel(QTabWidget):
     """字幕样式 / 特效 / 装饰属性面板。"""
 
     styleChanged = Signal(Style)
+    schemeSelectionChanged = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -481,7 +484,7 @@ class PropertyPanel(QTabWidget):
 
         self.addTab(self._make_basic_page(), "基本")
         self.addTab(self._make_subtitle_page(), "字幕")
-        self.addTab(_placeholder_page("入场 / 退场动画、渐变填充、发光（P1 / P2）"), "特效")
+        self.addTab(self._make_effects_page(), "特效")
         self.addTab(_placeholder_page("标题字幕、时段图片（B7 / P2）"), "装饰")
         self.set_singers([])
         self.set_style(self._style, emit=False)
@@ -516,6 +519,14 @@ class PropertyPanel(QTabWidget):
             self._line_tail_spin.setValue(self._style.line_tail_ms)
             self._line_lane_gap_spin.setValue(self._style.line_lane_gap_ms)
             self._line_max_hold_spin.setValue(self._style.line_max_hold_ms)
+            self._entry_anim_combo.setCurrentIndex(
+                max(0, self._entry_anim_combo.findData(self._style.entry_anim))
+            )
+            self._entry_lead_spin.setValue(self._style.entry_lead_ms)
+            self._exit_anim_combo.setCurrentIndex(
+                max(0, self._exit_anim_combo.findData(self._style.exit_anim))
+            )
+            self._exit_fade_spin.setValue(self._style.exit_fade_ms)
             self._sync_subtitle_scheme_controls()
         finally:
             self._syncing = False
@@ -850,9 +861,7 @@ class PropertyPanel(QTabWidget):
 
         self._singer_combo = _WheelFocusedComboBox(section)
         _compact_control(self._singer_combo)
-        self._singer_combo.currentIndexChanged.connect(
-            lambda _index: self._sync_subtitle_scheme_controls()
-        )
+        self._singer_combo.currentIndexChanged.connect(self._on_scheme_combo_changed)
         self._add_scheme_button = QPushButton("添加方案", section)
         self._add_scheme_button.setMinimumHeight(32)
         self._add_scheme_button.clicked.connect(
@@ -866,6 +875,70 @@ class PropertyPanel(QTabWidget):
         row_layout.addWidget(self._singer_combo, 1)
         row_layout.addWidget(self._add_scheme_button)
         layout.addWidget(_field("当前方案", row))
+        return section
+
+    def _make_effects_page(self) -> QWidget:
+        scroll, layout = _scroll_page()
+        layout.addWidget(self._make_animation_section())
+        layout.addStretch(1)
+        return scroll
+
+    def _make_animation_section(self) -> QFrame:
+        section, layout = _section("入退场动画")
+
+        grid = QWidget(section)
+        grid_layout = QGridLayout(grid)
+        grid_layout.setContentsMargins(0, 0, 0, 0)
+        grid_layout.setHorizontalSpacing(8)
+        grid_layout.setVerticalSpacing(8)
+
+        self._entry_anim_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._entry_anim_combo)
+        for label, value in [
+            ("无", "none"),
+            ("淡入", "fade"),
+            ("滑入", "slide_in"),
+            ("上移", "rise"),
+        ]:
+            self._entry_anim_combo.addItem(label, value)
+        self._entry_anim_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                entry_anim=self._entry_anim_combo.currentData()
+            )
+        )
+        grid_layout.addWidget(_field("入场", self._entry_anim_combo), 0, 0)
+
+        self._entry_lead_spin = _spin(0, 3000, suffix=" ms")
+        self._entry_lead_spin.valueChanged.connect(
+            lambda value: self._update_style(entry_lead_ms=value)
+        )
+        grid_layout.addWidget(_field("入场时长", self._entry_lead_spin), 0, 1)
+
+        self._exit_anim_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._exit_anim_combo)
+        for label, value in [
+            ("无", "none"),
+            ("淡出", "fade"),
+            ("滑出", "slide_out"),
+            ("上移", "rise"),
+        ]:
+            self._exit_anim_combo.addItem(label, value)
+        self._exit_anim_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                exit_anim=self._exit_anim_combo.currentData()
+            )
+        )
+        grid_layout.addWidget(_field("退场", self._exit_anim_combo), 1, 0)
+
+        self._exit_fade_spin = _spin(0, 3000, suffix=" ms")
+        self._exit_fade_spin.valueChanged.connect(
+            lambda value: self._update_style(exit_fade_ms=value)
+        )
+        grid_layout.addWidget(_field("退场时长", self._exit_fade_spin), 1, 1)
+
+        grid_layout.setColumnStretch(0, 1)
+        grid_layout.setColumnStretch(1, 1)
+        layout.addWidget(grid)
         return section
 
     def _make_position_section(self) -> QFrame:
@@ -1171,6 +1244,22 @@ class PropertyPanel(QTabWidget):
         data = self._singer_combo.currentData()
         return str(data) if data is not None else _GLOBAL_SCHEME_KEY
 
+    def current_scheme_key(self) -> str:
+        return self._current_scheme_key() or _GLOBAL_SCHEME_KEY
+
+    def set_current_scheme_key(self, key: str) -> None:
+        if not hasattr(self, "_singer_combo"):
+            return
+        index = self._singer_combo.findData(key)
+        if index < 0:
+            return
+        self._singer_combo.setCurrentIndex(index)
+
+    def _on_scheme_combo_changed(self, _index: int) -> None:
+        self._sync_subtitle_scheme_controls()
+        if not self._syncing:
+            self.schemeSelectionChanged.emit(self.current_scheme_key())
+
     def _current_singer_id(self) -> Optional[int]:
         key = self._current_scheme_key()
         if key is None or not key.startswith(_SINGER_SCHEME_PREFIX):
@@ -1272,6 +1361,10 @@ class PropertyPanel(QTabWidget):
             changes["decoration_kind"] = _normalize_decoration_kind(
                 changes["decoration_kind"]
             )
+        if "entry_anim" in changes:
+            changes["entry_anim"] = _normalize_entry_animation(changes["entry_anim"])
+        if "exit_anim" in changes:
+            changes["exit_anim"] = _normalize_exit_animation(changes["exit_anim"])
         self._style = replace(self._style, **changes)
         self._syncing = True
         try:
@@ -1300,6 +1393,18 @@ def _normalize_decoration_kind(value: object) -> DecorationKind:
     if value in {"shadow", "glow"}:
         return value  # type: ignore[return-value]
     return "shadow"
+
+
+def _normalize_entry_animation(value: object) -> EntryAnimation:
+    if value in {"none", "fade", "slide_in", "rise"}:
+        return value  # type: ignore[return-value]
+    return "none"
+
+
+def _normalize_exit_animation(value: object) -> ExitAnimation:
+    if value in {"none", "fade", "slide_out", "rise"}:
+        return value  # type: ignore[return-value]
+    return "none"
 
 
 def _fill_stack_index(mode: str) -> int:

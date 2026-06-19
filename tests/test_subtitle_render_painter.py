@@ -671,3 +671,60 @@ def test_image_fill_brush_is_cached(qapp, tmp_path):
     assert scaled.style() == first.style()
     assert len(_IMAGE_FILL_CACHE) == 1
     assert len(_IMAGE_BRUSH_CACHE) == 2
+
+
+def test_image_fill_before_and_after_layers_share_text_anchor(qapp, tmp_path):
+    clear_before_layer_cache()
+    image_path = tmp_path / "pattern.png"
+    source = QImage(12, 8, QImage.Format.Format_ARGB32_Premultiplied)
+    source.fill(QColor("#FFFFFF"))
+    for x in range(0, source.width(), 2):
+        for y in range(source.height()):
+            source.setPixelColor(x, y, QColor("#111111"))
+    assert source.save(str(image_path))
+
+    fill = PaintFill(mode="image", image_path=str(image_path), image_scale_pct=100)
+    colors = KaraokeColors(
+        before=KaraokeColorState(text=fill),
+        after=KaraokeColorState(text=fill),
+    )
+    style = Style(
+        font_size_px=96,
+        stroke_width_px=0,
+        shadow_color="",
+        line_y_position="center",
+        karaoke_colors=colors,
+    )
+    before_only = _blank()
+    fully_sung = _blank()
+    track = _track()
+
+    paint_frame(before_only, track, 500, style)
+    paint_frame(fully_sung, track, 2600, style)
+
+    assert _pixel_hash(before_only) == _pixel_hash(fully_sung)
+
+
+def test_paint_frame_entry_and_exit_animation_change_rendered_frame(qapp):
+    track = _track()
+    static = Style(line_y_position="center", line_tail_ms=0)
+    animated = Style(
+        line_y_position="center",
+        line_tail_ms=0,
+        entry_anim="fade",
+        entry_lead_ms=600,
+        exit_anim="rise",
+        exit_fade_ms=600,
+    )
+    at_entry_static = _blank()
+    at_entry_animated = _blank()
+    at_exit_static = _blank()
+    at_exit_animated = _blank()
+
+    paint_frame(at_entry_static, track, 500, static)
+    paint_frame(at_entry_animated, track, 500, animated)
+    paint_frame(at_exit_static, track, 2400, static)
+    paint_frame(at_exit_animated, track, 2400, animated)
+
+    assert _pixel_hash(at_entry_static) != _pixel_hash(at_entry_animated)
+    assert _pixel_hash(at_exit_static) != _pixel_hash(at_exit_animated)

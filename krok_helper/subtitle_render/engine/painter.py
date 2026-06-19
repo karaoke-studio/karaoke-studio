@@ -92,9 +92,9 @@ from krok_helper.subtitle_render.engine.timeline import (
     DisplayLine,
     char_fill_ratio,
     compute_char_intervals,
-    find_active_line,
     visible_display_lines,
 )
+from krok_helper.subtitle_render.engine.animator import line_animation_state
 from krok_helper.subtitle_render.models import (
     KaraokeColors,
     KaraokeColorState,
@@ -168,6 +168,8 @@ def paint_frame_to_painter(
                 style,
                 baseline_y=baselines[display_line.lane],
                 lane=display_line.lane if style.dual_line_layout else None,
+                display_start_ms=display_line.display_start_ms,
+                display_end_ms=display_line.display_end_ms,
             )
     finally:
         painter.restore()
@@ -203,10 +205,41 @@ def _visible_lines_for_style(
             continuity_snap_ms=style.line_continuity_snap_ms,
             pair_second_delay_ms=style.line_pair_second_delay_ms,
         )
-    line = find_active_line(track, t_ms, lead_in_ms=style.line_lead_in_ms)
-    if line is None:
+    display_line = _single_visible_display_line(track, t_ms, style)
+    if display_line is None:
         return []
-    return [DisplayLine(line=line, lane=0, display_start_ms=0, display_end_ms=0)]
+    return [display_line]
+
+
+def _single_visible_display_line(
+    track: TimingTrack,
+    t_ms: int,
+    style: Style,
+) -> DisplayLine | None:
+    best_live: DisplayLine | None = None
+    best_lead_or_tail: DisplayLine | None = None
+    lead = max(style.line_lead_in_ms, 0)
+    tail = max(style.line_tail_ms, 0)
+    for line in track.lines:
+        if line.is_blank or not line.chars:
+            continue
+        sing_start = _line_start_ms(line)
+        sing_end = _line_end_ms(line)
+        display_start = max(sing_start - lead, 0)
+        display_end = sing_end + tail
+        display_line = DisplayLine(
+            line=line,
+            lane=0,
+            display_start_ms=display_start,
+            display_end_ms=display_end,
+        )
+        if sing_start <= t_ms <= sing_end:
+            if best_live is None or sing_start >= _line_start_ms(best_live.line):
+                best_live = display_line
+        elif display_start <= t_ms <= display_end:
+            if best_lead_or_tail is None or sing_start >= _line_start_ms(best_lead_or_tail.line):
+                best_lead_or_tail = display_line
+    return best_live or best_lead_or_tail
 
 
 def _build_ruby_font(style: Style) -> QFont:
@@ -333,8 +366,52 @@ def _paint_line(
     *,
     baseline_y: int | None = None,
     lane: int | None = None,
+    display_start_ms: int | None = None,
+    display_end_ms: int | None = None,
 ) -> None:
     style = _style_for_line(style, line)
+    animation = line_animation_state(
+        style,
+        t_ms=t_ms,
+        display_start_ms=display_start_ms if display_start_ms is not None else _line_start_ms(line),
+        display_end_ms=display_end_ms if display_end_ms is not None else _line_end_ms(line),
+        lane=lane,
+    )
+    if animation.opacity <= 0.0:
+        return
+    painter.save()
+    try:
+        if animation.opacity < 1.0:
+            painter.setOpacity(painter.opacity() * animation.opacity)
+        if animation.dx or animation.dy:
+            painter.translate(animation.dx, animation.dy)
+        _paint_line_static(
+            painter,
+            img_w,
+            img_h,
+            track,
+            line,
+            t_ms,
+            style,
+            baseline_y=baseline_y,
+            lane=lane,
+        )
+    finally:
+        painter.restore()
+
+
+def _paint_line_static(
+    painter: QPainter,
+    img_w: int,
+    img_h: int,
+    track: TimingTrack,
+    line: TimingLine,
+    t_ms: int,
+    style: Style,
+    *,
+    baseline_y: int | None = None,
+    lane: int | None = None,
+) -> None:
     font = _build_font(style)
     painter.setFont(font)
     metrics = QFontMetrics(font)
@@ -766,7 +843,7 @@ def _fill_extent_end(
 
 def _brush_for_fill(fill: PaintFill, rect: QRectF) -> QBrush:
     if fill.mode == "image" and fill.image_path:
-        brush = _cached_image_brush(fill.image_path, fill.image_scale_pct)
+        brush = _cached_image_brush(fill.image_path, fill.image_scale_pct, rect)
         if brush is not None:
             return brush
 
@@ -779,7 +856,7 @@ def _brush_for_fill(fill: PaintFill, rect: QRectF) -> QBrush:
     return QBrush(_valid_color(fill.color, "#FFFFFF"))
 
 
-def _cached_image_brush(path: str, scale_pct: int) -> QBrush | None:
+def _cached_image_brush(path: str, scale_pct: int, rect: QRectF) -> QBrush | None:
     signature = _image_file_signature(path)
     if signature is None:
         return None
@@ -789,7 +866,7 @@ def _cached_image_brush(path: str, scale_pct: int) -> QBrush | None:
         brush = _IMAGE_BRUSH_CACHE.get(brush_key)
         if brush is not None:
             _IMAGE_BRUSH_CACHE.move_to_end(brush_key)
-            return QBrush(brush)
+            return _anchor_texture_brush(brush, rect)
 
     image = _cached_fill_image(signature)
     if image is None or image.isNull():
@@ -802,7 +879,15 @@ def _cached_image_brush(path: str, scale_pct: int) -> QBrush | None:
         _IMAGE_BRUSH_CACHE[brush_key] = brush
         while len(_IMAGE_BRUSH_CACHE) > _IMAGE_FILL_CACHE_MAX:
             _IMAGE_BRUSH_CACHE.popitem(last=False)
-    return QBrush(brush)
+    return _anchor_texture_brush(brush, rect)
+
+
+def _anchor_texture_brush(brush: QBrush, rect: QRectF) -> QBrush:
+    anchored = QBrush(brush)
+    transform = QTransform(anchored.transform())
+    transform.translate(rect.left(), rect.top())
+    anchored.setTransform(transform)
+    return anchored
 
 
 def _cached_fill_image(signature: tuple[str, int, int]) -> QImage | None:
@@ -1130,6 +1215,16 @@ def _resolve_line_x(
     if style.dual_line_layout and lane == 1:
         return img_w - max(style.lower_line_right_margin_px, 0) - total_w
     return (img_w - total_w) // 2
+
+
+def _line_start_ms(line: TimingLine) -> int:
+    return line.chars[0].start_ms if line.chars else 0
+
+
+def _line_end_ms(line: TimingLine) -> int:
+    if line.end_ms is not None:
+        return line.end_ms
+    return line.chars[-1].start_ms + 1000 if line.chars else 0
 
 
 def _style_for_line(style: Style, line: TimingLine) -> Style:

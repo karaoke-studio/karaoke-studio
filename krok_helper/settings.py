@@ -247,6 +247,7 @@ def load_app_settings() -> AppSettings:
         lyrics_timing_network_dictionary=_safe_dict(payload.get("lyrics_timing_network_dictionary")),
         lyrics_timing_migrated_v1=bool(payload.get(LYRICS_TIMING_MIGRATED_KEY, False)),
         workflow_compact=bool(payload.get("workflow_compact", False)),
+        subtitle_render=_safe_dict(payload.get("subtitle_render")),
     )
 
 

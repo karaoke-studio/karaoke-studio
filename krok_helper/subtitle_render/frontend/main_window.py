@@ -55,7 +55,7 @@ from qfluentwidgets import Pivot
 from krok_helper.errors import ExportCancelled, ProcessingError
 from krok_helper.ffmpeg import find_tool, probe_media, terminate_process
 from krok_helper.models import MediaInfo
-from krok_helper.settings import load_app_settings
+from krok_helper.settings import load_app_settings, save_app_settings
 from krok_helper.subtitle_render.engine.encoder_select import (
     CPU_PRESETS,
     ENCODER_AMF,
@@ -73,7 +73,7 @@ from krok_helper.subtitle_render.frontend.timeline_view import (
     TrackTimelineView,
     WaveformPanel,
 )
-from krok_helper.subtitle_render.models import Style, TimingTrack
+from krok_helper.subtitle_render.models import Style, TimingTrack, style_from_dict, style_to_dict
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 from krok_helper.subtitle_render.frontend.theme import palette, themed
 
@@ -151,8 +151,10 @@ class SubtitleRenderWindow(QWidget):
         self._audio_path: Optional[Path] = None
         self._audio_info: Optional[MediaInfo] = None
         self._style: Style = Style()
+        self._selected_scheme_key = "global"
         self._render_thread: Optional[QThread] = None
         self._render_worker: Optional[_RenderWorker] = None
+        self._load_persisted_state()
 
         themed(
             self,
@@ -235,6 +237,8 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel = PropertyPanel()
         self._property_panel.set_style(self._style)
         self._property_panel.styleChanged.connect(self._apply_style)
+        self._property_panel.schemeSelectionChanged.connect(self._on_scheme_selection_changed)
+        self._property_panel.set_current_scheme_key(self._selected_scheme_key)
         top.addWidget(self._property_panel)
 
         top.setStretchFactor(0, 1)
@@ -408,6 +412,7 @@ class SubtitleRenderWindow(QWidget):
         self._subtitle_path = path
         self._lyrics_panel.set_track(track)
         self._property_panel.set_singers(track.singer_options)
+        self._property_panel.set_current_scheme_key(self._selected_scheme_key)
         self._preview_panel.set_track(track)
         self._refresh_transport_duration()
         self._transport_bar.set_time(0)
@@ -510,6 +515,42 @@ class SubtitleRenderWindow(QWidget):
     def _apply_style(self, style: Style) -> None:
         self._style = style
         self._preview_panel.set_style(style)
+        self._save_persisted_state()
+
+    def _on_scheme_selection_changed(self, key: str) -> None:
+        self._selected_scheme_key = key
+        self._save_persisted_state()
+
+    def _load_persisted_state(self) -> None:
+        data = self._load_subtitle_settings()
+        self._style = style_from_dict(data.get("style"))
+        key = data.get("selected_scheme_key")
+        if isinstance(key, str) and key:
+            self._selected_scheme_key = key
+
+    def _save_persisted_state(self) -> None:
+        data = self._load_subtitle_settings()
+        data["style"] = style_to_dict(self._style)
+        data["selected_scheme_key"] = self._selected_scheme_key
+        try:
+            if self._settings_provider is not None and hasattr(self._settings_provider, "save"):
+                self._settings_provider.save(data)
+                return
+            settings = load_app_settings()
+            settings.subtitle_render = data
+            save_app_settings(settings)
+        except Exception:
+            return
+
+    def _load_subtitle_settings(self) -> dict:
+        try:
+            if self._settings_provider is not None and hasattr(self._settings_provider, "load"):
+                loaded = self._settings_provider.load()
+            else:
+                loaded = load_app_settings().subtitle_render
+            return dict(loaded) if isinstance(loaded, dict) else {}
+        except Exception:
+            return {}
 
     def _sync_preview_output_size(self) -> None:
         self._preview_panel.set_output_size(
