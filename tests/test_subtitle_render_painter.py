@@ -33,6 +33,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _character_fill_ratio,
     _fill_clip_band,
     _fill_extent_end,
+    _ruby_reading_units,
     _karaoke_fill_segments,
     _paint_ruby_text,
     _paint_ruby_text_units_with_transition,
@@ -343,6 +344,23 @@ def test_rtl_changes_render_vs_ltr(qapp):
     center_ltr = (ltr_l + ltr_r) / 2
     center_rtl = (rtl_l + rtl_r) / 2
     assert abs(center_ltr - center_rtl) <= 4
+
+
+def test_ruby_reading_mora_reverse_keeps_small_kana():
+    # 按音节反转：小书き / 浊点跟随基字，不被拆开
+    assert "".join(reversed(_ruby_reading_units("おも"))) == "もお"
+    assert _ruby_reading_units("きゃ") == ["きゃ"]
+    assert "".join(reversed(_ruby_reading_units("しゃけ"))) == "けしゃ"
+
+
+def test_rtl_ruby_render_differs_from_ltr(qapp):
+    track = _track_with_timed_ruby()  # 漢字 + ruby かんじ
+    style = Style(line_y_position="center", line_horizontal_layout="center")
+    img_ltr = _blank()
+    img_rtl = _blank()
+    paint_frame(img_ltr, track, 1700, style)
+    paint_frame(img_rtl, track, 1700, replace(style, right_to_left=True))
+    assert _pixel_hash(img_ltr) != _pixel_hash(img_rtl)
 
 
 def test_rtl_default_off_matches_plain(qapp):

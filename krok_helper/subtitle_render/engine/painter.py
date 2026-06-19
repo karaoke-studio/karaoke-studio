@@ -2045,6 +2045,7 @@ def _paint_rubies(
     style: Style,
     transition: _LineCharTransition | None = None,
 ) -> None:
+    rtl = style.right_to_left
     painter.save()
     try:
         painter.setFont(ruby_font)
@@ -2097,6 +2098,7 @@ def _paint_rubies(
                         first_index,
                         max(len(line.chars), 1),
                         following_done_ms,
+                        rtl,
                     )
                 else:
                     _apply_character_transform(
@@ -2119,6 +2121,7 @@ def _paint_rubies(
                         ruby_baseline_y,
                         t_ms,
                         style,
+                        rtl,
                     )
             finally:
                 painter.restore()
@@ -2163,8 +2166,12 @@ def _paint_ruby_text_units_with_transition(
     char_index: int,
     char_count: int,
     following_done_ms: int | None,
+    rtl: bool = False,
 ) -> None:
     visual_units = _ruby_utopia_reading_units_and_intervals(ruby)
+    # RTL：按音节反转排布顺序，使首音节落在最右；各音节计时不变。
+    if rtl:
+        visual_units = list(reversed(visual_units))
     units = [unit for unit, _interval in visual_units]
     intervals = [interval for _unit, interval in visual_units]
     if not units or len(units) != len(intervals):
@@ -2177,6 +2184,7 @@ def _paint_ruby_text_units_with_transition(
             baseline_y,
             t_ms,
             style,
+            rtl,
         )
         return
 
@@ -2220,6 +2228,7 @@ def _paint_ruby_text_units_with_transition(
                     baseline_y,
                     char_fill_ratio(start_ms, end_ms, t_ms),
                     style,
+                    rtl,
                 )
             finally:
                 painter.restore()
@@ -2235,13 +2244,17 @@ def _paint_ruby_text(
     baseline_y: int,
     t_ms: int,
     style: Style,
+    rtl: bool = False,
 ) -> None:
+    # RTL：按音节（mora）单位反转读音顺序——首音节排到最右、扫光从右向左。
+    # 直接反转字符串会把小书き / 浊点拆错，所以以 _ruby_reading_units 为单位反转。
+    reading = "".join(reversed(_ruby_reading_units(ruby.reading))) if rtl else ruby.reading
     path = QPainterPath()
-    path.addText(float(x), float(baseline_y), ruby_font, ruby.reading)
+    path.addText(float(x), float(baseline_y), ruby_font, reading)
     rect = QRectF(
         float(x),
         float(baseline_y - ruby_metrics.ascent()),
-        float(ruby_metrics.horizontalAdvance(ruby.reading)),
+        float(ruby_metrics.horizontalAdvance(reading)),
         float(ruby_metrics.height()),
     )
     _paint_ruby_karaoke_path(
@@ -2251,6 +2264,7 @@ def _paint_ruby_text(
         ruby,
         t_ms,
         style,
+        rtl,
     )
 
 
@@ -2263,6 +2277,7 @@ def _paint_ruby_text_fragment(
     baseline_y: int,
     ratio: float,
     style: Style,
+    rtl: bool = False,
 ) -> None:
     path = QPainterPath()
     path.addText(float(x), float(baseline_y), ruby_font, text)
@@ -2278,6 +2293,7 @@ def _paint_ruby_text_fragment(
         rect,
         ratio,
         style,
+        rtl,
     )
 
 
@@ -2288,9 +2304,10 @@ def _paint_ruby_karaoke_path(
     ruby: RubyAnnotation,
     t_ms: int,
     style: Style,
+    rtl: bool = False,
 ) -> None:
     ratio = _ruby_progress_ratio(ruby, t_ms)
-    _paint_ruby_karaoke_fragment(painter, path, rect, ratio, style)
+    _paint_ruby_karaoke_fragment(painter, path, rect, ratio, style, rtl)
 
 
 def _paint_ruby_karaoke_fragment(
@@ -2299,6 +2316,7 @@ def _paint_ruby_karaoke_fragment(
     rect: QRectF,
     ratio: float,
     style: Style,
+    rtl: bool = False,
 ) -> None:
     colors = _effective_ruby_karaoke_colors(style)
     scale = _ruby_scale(style)
@@ -2326,13 +2344,16 @@ def _paint_ruby_karaoke_fragment(
 
     stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
     pad = max(stroke_extent, glow_radius * 2, abs(shadow_dx), abs(shadow_dy), 2)
+    ratio_c = min(ratio, 1.0)
+    # RTL：已唱区贴读音右缘，左缘随进度左移。
+    clip_left = rect.left() + (rect.width() * (1.0 - ratio_c) if rtl else 0.0) - pad
     painter.save()
     try:
         painter.setClipRect(
             QRectF(
-                rect.left() - pad,
+                clip_left,
                 rect.top() - pad,
-                rect.width() * min(ratio, 1.0) + pad,
+                rect.width() * ratio_c + pad,
                 rect.height() + pad * 2,
             )
         )
