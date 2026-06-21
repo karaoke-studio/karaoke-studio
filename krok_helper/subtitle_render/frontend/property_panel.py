@@ -86,6 +86,47 @@ _SINGER_RUBY_PALETTE = ["#FF5A6F", "#00AAFF", "#FFCC33", "#40D99A", "#C08CFF"]
 _GLOBAL_SCHEME_KEY = "global"
 _SINGER_SCHEME_PREFIX = "singer:"
 _CUSTOM_SCHEME_PREFIX = "custom:"
+_LIT_FIELDS = {
+    "lit_enabled",
+    "lit_style",
+    "lit_number",
+    "lit_size",
+    "lit_offset_x",
+    "lit_offset_y",
+    "lit_tracking",
+    "lit_fill_color",
+    "lit1_fill_color",
+    "lit2_fill_color",
+    "lit3_fill_color",
+    "lit_stroke_color",
+    "lit_stroke_width",
+    "lit_stroke_soften",
+    "lit_opacity_pct",
+    "lit_edge_brightness_pct",
+    "lit_shadow",
+    "lit_time_offset_ms",
+    "lit_waiting_time_ms",
+    "lit_transition_mode",
+    "lit_transition_ratio_pct",
+    "lit_transition_angle_deg",
+    "lit_transition_distance",
+    "signals_duration_ms",
+    "volume_size",
+    "volume_offset_x",
+    "volume_offset_y",
+    "volume_column_width",
+    "volume_column_count",
+    "volume_column_spacing",
+    "volume_align",
+    "volume_ratio",
+    "volume_fill_color",
+    "volume_stroke_color",
+    "volume_overlay_fill_color",
+    "volume_overlay_stroke_color",
+    "volume_flash_times",
+    "volume_flash_duration_ratio",
+    "volume_transition_ratio_pct",
+}
 
 
 @dataclass(frozen=True)
@@ -732,6 +773,7 @@ class PropertyPanel(QTabWidget):
                 max(0, self._exit_anim_combo.findData(self._style.exit_anim))
             )
             self._exit_fade_spin.setValue(self._style.exit_fade_ms)
+            self._sync_lit_controls()
             self._sync_subtitle_scheme_controls()
         finally:
             self._syncing = False
@@ -1141,8 +1183,241 @@ class PropertyPanel(QTabWidget):
     def _make_effects_page(self) -> QWidget:
         scroll, layout = _scroll_page()
         layout.addWidget(self._make_animation_section())
+        layout.addWidget(self._make_lit_section())
         layout.addStretch(1)
         return scroll
+
+    def _make_lit_section(self) -> QFrame:
+        section, layout = _section("指示灯")
+
+        self._lit_enabled_check = QCheckBox("显示指示灯", section)
+        self._lit_enabled_check.toggled.connect(
+            lambda checked: self._update_style(lit_enabled=checked)
+        )
+        layout.addWidget(self._lit_enabled_check)
+
+        grid = QWidget(section)
+        grid_layout = QGridLayout(grid)
+        grid_layout.setContentsMargins(0, 0, 0, 0)
+        grid_layout.setHorizontalSpacing(8)
+        grid_layout.setVerticalSpacing(8)
+
+        self._lit_style_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._lit_style_combo)
+        for label, value in [
+            ("音量柱", "volume"),
+            ("圆形", "circle"),
+            ("方形", "square"),
+            ("圆角", "rounded"),
+        ]:
+            self._lit_style_combo.addItem(label, value)
+        self._lit_style_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(lit_style=self._lit_style_combo.currentData())
+        )
+        grid_layout.addWidget(_field("样式", self._lit_style_combo), 0, 0)
+
+        self._lit_number_spin = _spin(1, 8)
+        self._lit_number_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_number=value)
+        )
+        grid_layout.addWidget(_field("数量", self._lit_number_spin), 0, 1)
+
+        self._lit_size_spin = _spin(4, 160, suffix=" px")
+        self._lit_size_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_size=value)
+        )
+        grid_layout.addWidget(_field("大小", self._lit_size_spin), 1, 0)
+
+        self._lit_tracking_spin = _spin(0, 200, suffix=" px")
+        self._lit_tracking_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_tracking=value)
+        )
+        grid_layout.addWidget(_field("间距", self._lit_tracking_spin), 1, 1)
+
+        self._lit_x_spin = _spin(-4000, 4000)
+        self._lit_x_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_offset_x=value)
+        )
+        grid_layout.addWidget(_field("偏移 X", self._lit_x_spin), 2, 0)
+
+        self._lit_y_spin = _spin(-4000, 4000)
+        self._lit_y_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_offset_y=value)
+        )
+        grid_layout.addWidget(_field("偏移 Y", self._lit_y_spin), 2, 1)
+
+        self._lit_duration_spin = _spin(0, 60_000, suffix=" ms")
+        self._lit_duration_spin.valueChanged.connect(
+            lambda value: self._update_style(signals_duration_ms=value)
+        )
+        grid_layout.addWidget(_field("持续", self._lit_duration_spin), 3, 0)
+
+        self._lit_time_offset_spin = _spin(-10_000, 10_000, suffix=" ms")
+        self._lit_time_offset_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_time_offset_ms=value)
+        )
+        grid_layout.addWidget(_field("偏移", self._lit_time_offset_spin), 3, 1)
+
+        self._lit_stroke_width_spin = _spin(0, 40, suffix=" px")
+        self._lit_stroke_width_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_stroke_width=value)
+        )
+        grid_layout.addWidget(_field("描边宽度", self._lit_stroke_width_spin), 4, 0)
+
+        self._lit_fill_btn = self._color_button("lit_fill_color", self._style.lit_fill_color)
+        grid_layout.addWidget(_field("填充颜色", self._lit_fill_btn), 4, 1)
+
+        self._lit_stroke_btn = self._color_button("lit_stroke_color", self._style.lit_stroke_color)
+
+        grid_layout.addWidget(_field("描边颜色", self._lit_stroke_btn), 5, 0)
+
+        self._lit_opacity_spin = _spin(0, 100, suffix=" %")
+        self._lit_opacity_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_opacity_pct=value)
+        )
+        grid_layout.addWidget(_field("透明度", self._lit_opacity_spin), 5, 1)
+
+        self._lit_edge_brightness_spin = _spin(0, 100, suffix=" %")
+        self._lit_edge_brightness_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_edge_brightness_pct=value)
+        )
+        grid_layout.addWidget(_field("边缘亮度", self._lit_edge_brightness_spin), 6, 0)
+
+        self._lit_stroke_soften_spin = _spin(0, 40, suffix=" px")
+        self._lit_stroke_soften_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_stroke_soften=value)
+        )
+        grid_layout.addWidget(_field("描边柔化", self._lit_stroke_soften_spin), 6, 1)
+
+        self._lit_waiting_time_spin = _spin(0, 60_000, suffix=" ms")
+        self._lit_waiting_time_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_waiting_time_ms=value)
+        )
+        grid_layout.addWidget(_field("等待", self._lit_waiting_time_spin), 7, 0)
+
+        self._lit_transition_mode_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._lit_transition_mode_combo)
+        for label, value in [("无", "none"), ("淡入淡出", "fade"), ("滑动", "slide")]:
+            self._lit_transition_mode_combo.addItem(label, value)
+        self._lit_transition_mode_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                lit_transition_mode=self._lit_transition_mode_combo.currentData()
+            )
+        )
+        grid_layout.addWidget(_field("转场", self._lit_transition_mode_combo), 7, 1)
+
+        self._lit_transition_ratio_spin = _spin(0, 100, suffix=" %")
+        self._lit_transition_ratio_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_transition_ratio_pct=value)
+        )
+        grid_layout.addWidget(_field("转场比例", self._lit_transition_ratio_spin), 8, 0)
+
+        self._lit_transition_angle_spin = _spin(-360, 360, suffix=" °")
+        self._lit_transition_angle_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_transition_angle_deg=value)
+        )
+        grid_layout.addWidget(_field("转场角度", self._lit_transition_angle_spin), 8, 1)
+
+        self._lit_transition_distance_spin = _spin(0, 800, suffix=" px")
+        self._lit_transition_distance_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_transition_distance=value)
+        )
+        grid_layout.addWidget(_field("转场距离", self._lit_transition_distance_spin), 9, 0)
+
+        self._lit_shadow_check = QCheckBox("阴影", section)
+        self._lit_shadow_check.toggled.connect(
+            lambda checked: self._update_style(lit_shadow=checked)
+        )
+        grid_layout.addWidget(self._lit_shadow_check, 9, 1)
+
+        self._volume_size_spin = _spin(4, 240, suffix=" px")
+        self._volume_size_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_size=value)
+        )
+        grid_layout.addWidget(_field("音量柱大小", self._volume_size_spin), 10, 0)
+
+        self._volume_x_spin = _spin(-4000, 4000)
+        self._volume_x_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_offset_x=value)
+        )
+        grid_layout.addWidget(_field("音量柱 X", self._volume_x_spin), 10, 1)
+
+        self._volume_y_spin = _spin(-4000, 4000)
+        self._volume_y_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_offset_y=value)
+        )
+        grid_layout.addWidget(_field("音量柱 Y", self._volume_y_spin), 11, 0)
+
+        self._volume_column_width_spin = _spin(1, 120, suffix=" px")
+        self._volume_column_width_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_column_width=value)
+        )
+        grid_layout.addWidget(_field("柱条宽度", self._volume_column_width_spin), 11, 1)
+
+        self._volume_column_count_spin = _spin(1, 16)
+        self._volume_column_count_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_column_count=value)
+        )
+        grid_layout.addWidget(_field("柱条数量", self._volume_column_count_spin), 12, 0)
+
+        self._volume_column_spacing_spin = _spin(0, 120, suffix=" px")
+        self._volume_column_spacing_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_column_spacing=value)
+        )
+        grid_layout.addWidget(_field("柱条间距", self._volume_column_spacing_spin), 12, 1)
+
+        self._volume_ratio_spin = _spin(1, 20)
+        self._volume_ratio_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_ratio=float(value))
+        )
+        grid_layout.addWidget(_field("前后比率", self._volume_ratio_spin), 13, 0)
+
+        self._volume_align_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._volume_align_combo)
+        for label, value in [("顶部", 0), ("居中", 1), ("底部", 2)]:
+            self._volume_align_combo.addItem(label, value)
+        self._volume_align_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(volume_align=int(self._volume_align_combo.currentData()))
+        )
+        grid_layout.addWidget(_field("柱条对齐", self._volume_align_combo), 13, 1)
+
+        self._volume_flash_times_spin = _spin(1, 20)
+        self._volume_flash_times_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_flash_times=value)
+        )
+        grid_layout.addWidget(_field("闪烁次数", self._volume_flash_times_spin), 14, 0)
+
+        self._volume_flash_duration_spin = _spin(0, 100, suffix=" %")
+        self._volume_flash_duration_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_flash_duration_ratio=value / 100.0)
+        )
+        grid_layout.addWidget(_field("闪烁占比", self._volume_flash_duration_spin), 14, 1)
+
+        self._volume_transition_ratio_spin = _spin(0, 100, suffix=" %")
+        self._volume_transition_ratio_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_transition_ratio_pct=value)
+        )
+        grid_layout.addWidget(_field("覆盖过渡", self._volume_transition_ratio_spin), 15, 0)
+
+        self._volume_fill_btn = self._color_button("volume_fill_color", self._style.volume_fill_color)
+        self._volume_stroke_btn = self._color_button(
+            "volume_stroke_color", self._style.volume_stroke_color
+        )
+        self._volume_overlay_fill_btn = self._color_button(
+            "volume_overlay_fill_color", self._style.volume_overlay_fill_color
+        )
+        self._volume_overlay_stroke_btn = self._color_button(
+            "volume_overlay_stroke_color", self._style.volume_overlay_stroke_color
+        )
+        grid_layout.addWidget(_field("柱填充色", self._volume_fill_btn), 15, 1)
+        grid_layout.addWidget(_field("柱描边色", self._volume_stroke_btn), 16, 0)
+        grid_layout.addWidget(_field("覆盖填充色", self._volume_overlay_fill_btn), 16, 1)
+        grid_layout.addWidget(_field("覆盖描边色", self._volume_overlay_stroke_btn), 17, 0)
+
+        grid_layout.setColumnStretch(0, 1)
+        grid_layout.setColumnStretch(1, 1)
+        layout.addWidget(grid)
+        return section
 
     def _make_animation_section(self) -> QFrame:
         section, layout = _section("入退场动画")
@@ -1787,6 +2062,54 @@ class PropertyPanel(QTabWidget):
         finally:
             self._syncing = was_syncing
 
+    def _sync_lit_controls(self) -> None:
+        if not hasattr(self, "_lit_enabled_check"):
+            return
+        self._lit_enabled_check.setChecked(self._style.lit_enabled)
+        self._lit_style_combo.setCurrentIndex(
+            max(0, self._lit_style_combo.findData(self._style.lit_style))
+        )
+        self._lit_number_spin.setValue(self._style.lit_number)
+        self._lit_size_spin.setValue(self._style.lit_size)
+        self._lit_x_spin.setValue(self._style.lit_offset_x)
+        self._lit_y_spin.setValue(self._style.lit_offset_y)
+        self._lit_tracking_spin.setValue(self._style.lit_tracking)
+        self._lit_duration_spin.setValue(self._style.signals_duration_ms)
+        self._lit_time_offset_spin.setValue(self._style.lit_time_offset_ms)
+        self._lit_stroke_width_spin.setValue(self._style.lit_stroke_width)
+        self._lit_fill_btn.set_color(self._style.lit_fill_color)
+        self._lit_stroke_btn.set_color(self._style.lit_stroke_color)
+        self._lit_stroke_soften_spin.setValue(self._style.lit_stroke_soften)
+        self._lit_opacity_spin.setValue(self._style.lit_opacity_pct)
+        self._lit_edge_brightness_spin.setValue(self._style.lit_edge_brightness_pct)
+        self._lit_shadow_check.setChecked(self._style.lit_shadow)
+        self._lit_waiting_time_spin.setValue(self._style.lit_waiting_time_ms)
+        self._lit_transition_mode_combo.setCurrentIndex(
+            max(0, self._lit_transition_mode_combo.findData(self._style.lit_transition_mode))
+        )
+        self._lit_transition_ratio_spin.setValue(self._style.lit_transition_ratio_pct)
+        self._lit_transition_angle_spin.setValue(self._style.lit_transition_angle_deg)
+        self._lit_transition_distance_spin.setValue(self._style.lit_transition_distance)
+        self._volume_size_spin.setValue(self._style.volume_size)
+        self._volume_x_spin.setValue(self._style.volume_offset_x)
+        self._volume_y_spin.setValue(self._style.volume_offset_y)
+        self._volume_column_width_spin.setValue(self._style.volume_column_width)
+        self._volume_column_count_spin.setValue(self._style.volume_column_count)
+        self._volume_column_spacing_spin.setValue(self._style.volume_column_spacing)
+        self._volume_ratio_spin.setValue(int(round(self._style.volume_ratio)))
+        self._volume_align_combo.setCurrentIndex(
+            max(0, self._volume_align_combo.findData(self._style.volume_align))
+        )
+        self._volume_flash_times_spin.setValue(self._style.volume_flash_times)
+        self._volume_flash_duration_spin.setValue(
+            int(round(self._style.volume_flash_duration_ratio * 100))
+        )
+        self._volume_transition_ratio_spin.setValue(self._style.volume_transition_ratio_pct)
+        self._volume_fill_btn.set_color(self._style.volume_fill_color)
+        self._volume_stroke_btn.set_color(self._style.volume_stroke_color)
+        self._volume_overlay_fill_btn.set_color(self._style.volume_overlay_fill_color)
+        self._volume_overlay_stroke_btn.set_color(self._style.volume_overlay_stroke_color)
+
     def _update_style(self, **changes) -> None:
         if self._syncing:
             return
@@ -1829,6 +2152,12 @@ class PropertyPanel(QTabWidget):
             changes["entry_anim"] = _normalize_entry_animation(changes["entry_anim"])
         if "exit_anim" in changes:
             changes["exit_anim"] = _normalize_exit_animation(changes["exit_anim"])
+        if "lit_style" in changes:
+            changes["lit_style"] = _normalize_lit_style(changes["lit_style"])
+        if "lit_transition_mode" in changes:
+            changes["lit_transition_mode"] = _normalize_lit_transition_mode(
+                changes["lit_transition_mode"]
+            )
         self._style = replace(self._style, **changes)
         self._syncing = True
         try:
@@ -1836,6 +2165,8 @@ class PropertyPanel(QTabWidget):
                 _SCHEME_FIELDS | {"singer_style_overrides", "custom_style_schemes"}
             ):
                 self._sync_subtitle_scheme_controls()
+            if set(changes).intersection(_LIT_FIELDS):
+                self._sync_lit_controls()
         finally:
             self._syncing = False
         self.styleChanged.emit(self._style)
@@ -1881,6 +2212,18 @@ def _normalize_exit_animation(value: object) -> ExitAnimation:
     if value in {"none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"}:
         return value  # type: ignore[return-value]
     return "none"
+
+
+def _normalize_lit_style(value: object):
+    if value in {"volume", "circle", "square", "rounded"}:
+        return value
+    return "volume"
+
+
+def _normalize_lit_transition_mode(value: object) -> str:
+    if value in {"none", "fade", "slide"}:
+        return str(value)
+    return "fade"
 
 
 def _fill_stack_index(mode: str) -> int:

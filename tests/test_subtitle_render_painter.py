@@ -25,6 +25,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _IMAGE_FILL_CACHE,
     _FillSegment,
     _LineCharTransition,
+    _active_lit_indices,
     _apply_character_transform,
     _brush_for_fill,
     _build_font,
@@ -42,10 +43,21 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _paint_ruby_text_units_with_transition,
     _resolve_display_baselines,
     _resolve_line_x,
+    _resolve_sayatoo_line_layouts,
+    _signal_layout_metrics,
+    _signal_lit_groups,
+    _signal_lit_y,
+    _signal_local_x,
+    _signal_stroke_extent,
+    _volume_flash_alpha,
+    _volume_signal_column_rects,
+    _volume_signal_geometry,
     _ruby_progress_ratio,
     _ruby_reading_intervals,
     _ruby_utopia_reading_units_and_intervals,
     _transition_char_state,
+    _display_style_for_signal_window,
+    _visible_lines_for_style,
     paint_frame,
     clear_before_layer_cache,
 )
@@ -180,6 +192,46 @@ def _track_with_timed_ruby() -> TimingTrack:
     )
 
 
+def _singer_track(singer_id: int = 1) -> TimingTrack:
+    line = TimingLine(
+        chars=[TimingChar(text="A", start_ms=1000)],
+        end_ms=2000,
+        singer_label=f"S{singer_id}",
+        singer_id=singer_id,
+    )
+    return TimingTrack(lines=[line])
+
+
+def _sayatoo_layout_for(
+    track: TimingTrack,
+    style: Style,
+    t_ms: int,
+    *,
+    w: int = 160,
+    h: int = 90,
+):
+    display_style = _display_style_for_signal_window(style)
+    display_lines = _visible_lines_for_style(track, t_ms, display_style)
+    baselines = _resolve_display_baselines(h, track, display_lines, display_style)
+    return _resolve_sayatoo_line_layouts(
+        w,
+        h,
+        track,
+        display_lines,
+        baselines,
+        t_ms,
+        display_style,
+    )[0]
+
+
+def _default_text_x(track: TimingTrack, style: Style, w: int = 160) -> int:
+    line = track.lines[0]
+    metrics = QFontMetrics(_build_font(style))
+    text_w = sum(metrics.horizontalAdvance(c.text) for c in line.chars)
+    visual_pad = style.stroke_width_px + style.stroke2_width_px
+    return _resolve_line_x(w, text_w + visual_pad * 2, style, 0) + visual_pad
+
+
 def test_paint_frame_with_no_track_leaves_image_unchanged(qapp):
     img = _blank()
     baseline = _pixel_hash(img)
@@ -199,6 +251,409 @@ def test_paint_frame_uses_default_line_lead_in(qapp):
     baseline = _pixel_hash(img)
     paint_frame(img, _track(), 500, Style())  # 默认提前 1800ms 显示
     assert _pixel_hash(img) != baseline
+
+
+def test_signal_lits_default_off_leaves_early_frame_unchanged(qapp):
+    img = _blank(120, 80)
+    baseline = _pixel_hash(img)
+
+    paint_frame(img, _track(), 900, Style(line_lead_in_ms=0))
+
+    assert _pixel_hash(img) == baseline
+
+
+def test_signal_lits_render_during_signal_window(qapp):
+    img = _blank(120, 80)
+    style = Style(
+        font_size_px=20,
+        line_y_margin_px=10,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        lit_enabled=True,
+        lit_style="circle",
+        lit_size=10,
+        lit_offset_x=-35,
+        lit_offset_y=0,
+        lit_tracking=2,
+        lit_stroke_width=0,
+        lit_shadow=False,
+        lit_transition_mode="none",
+        signals_duration_ms=1000,
+    )
+
+    paint_frame(img, _singer_track(singer_id=0), 50, style)
+
+    layout = _sayatoo_layout_for(_singer_track(singer_id=0), style, 50, w=120, h=80)
+    bounds = _ink_bounds(img)
+    assert bounds[0] == int(layout.signal_x)
+    assert layout.text_x > layout.signal_x
+    assert QColor(img.pixel(int(layout.signal_x) + 2, 36)).name(QColor.NameFormat.HexRgb).upper() == "#0000FF"
+    assert QColor(img.pixel(layout.text_x, 56)).name(QColor.NameFormat.HexRgb).upper() == "#FFFFFF"
+
+
+def test_signal_lits_extend_the_lyric_text_window(qapp):
+    img = _blank(120, 80)
+    style = Style(
+        font_size_px=20,
+        line_y_margin_px=10,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        lit_enabled=True,
+        lit_style="circle",
+        lit_size=10,
+        lit_offset_x=-35,
+        lit_offset_y=0,
+        lit_tracking=2,
+        lit_stroke_width=0,
+        lit_shadow=False,
+        lit_transition_mode="none",
+        signals_duration_ms=1000,
+    )
+
+    paint_frame(img, _singer_track(singer_id=0), 50, style)
+
+    layout = _sayatoo_layout_for(_singer_track(singer_id=0), style, 50, w=120, h=80)
+    bounds = _ink_bounds(img)
+    assert bounds[0] == int(layout.signal_x)
+    assert bounds[2] >= layout.text_x
+    assert QColor(img.pixel(layout.text_x, 56)).name(QColor.NameFormat.HexRgb).upper() == "#FFFFFF"
+
+
+def test_signal_lits_are_line_countdown_not_singer_lamps(qapp):
+    img = _blank(120, 80)
+    style = Style(
+        font_size_px=20,
+        line_y_margin_px=10,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        lit_enabled=True,
+        lit_style="circle",
+        lit_size=10,
+        lit_offset_x=-35,
+        lit_offset_y=0,
+        lit_tracking=2,
+        lit_stroke_width=0,
+        lit_shadow=False,
+        lit_transition_mode="none",
+        signals_duration_ms=1000,
+    )
+
+    paint_frame(img, _singer_track(singer_id=1), 100, style)
+
+    layout = _sayatoo_layout_for(_singer_track(singer_id=1), style, 100, w=120, h=80)
+    assert QColor(img.pixel(int(layout.signal_x) + 2, 36)).name(QColor.NameFormat.HexRgb).upper() == "#0000FF"
+    assert layout.text_x > layout.signal_x
+
+
+def test_signal_volume_uses_sayatoo_default_shape_and_line_anchor(qapp):
+    img = _blank(160, 90)
+    style = Style(
+        font_size_px=20,
+        line_y_margin_px=10,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        lit_enabled=True,
+        lit_shadow=False,
+        signals_duration_ms=1000,
+    )
+
+    paint_frame(img, _singer_track(singer_id=0), 800, style)
+
+    assert style.lit_style == "volume"
+    assert style.volume_size == 48
+    assert style.volume_column_width == 12
+    assert style.volume_column_count == 4
+    bounds = _ink_bounds(img)
+    assert bounds is not None
+    layout = _sayatoo_layout_for(_singer_track(singer_id=0), style, 800)
+    geometry = _volume_signal_geometry(style)
+    first_column = _volume_signal_column_rects(layout.signal_x, 0.0, geometry)[0]
+    assert first_column.left() < float(layout.text_x)
+    assert float(layout.text_x) - first_column.left() == pytest.approx(
+        geometry.group_width - geometry.stroke_extent
+    )
+    assert layout.text_x > layout.signal_x
+    assert QColor(img.pixel(int(layout.signal_x) + 6, 65)).name(QColor.NameFormat.HexRgb).upper() == "#0000FF"
+    assert bounds[2] >= layout.text_x
+
+
+def test_signal_volume_local_bounds_match_sayatoo_offset_origin(qapp):
+    style = Style(
+        lit_enabled=True,
+        lit_shadow=False,
+        lit_stroke_width=2,
+        volume_offset_x=0,
+        volume_column_count=4,
+        volume_column_width=12,
+        volume_column_spacing=0,
+    )
+
+    geometry = _volume_signal_geometry(style)
+    metrics = _signal_layout_metrics(style)
+    rects = _volume_signal_column_rects(geometry.local_left, 0.0, geometry)
+
+    assert geometry.stroke_extent == 2.0
+    assert geometry.local_left == pytest.approx(-2.0)
+    assert _signal_local_x(metrics, style) == pytest.approx(-geometry.group_width)
+    assert rects[0].left() == pytest.approx(0.0)
+    assert rects[-1].left() == pytest.approx(48.0)
+    assert geometry.local_left + geometry.group_width == pytest.approx(62.0)
+
+
+def test_signal_volume_layout_does_not_jump_between_flash_and_fill(qapp):
+    track = _singer_track(singer_id=0)
+    style = Style(
+        font_size_px=20,
+        line_y_margin_px=10,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        lit_enabled=True,
+        lit_shadow=False,
+        signals_duration_ms=1000,
+        volume_flash_times=1,
+        volume_flash_duration_ratio=0.25,
+        volume_transition_ratio_pct=0,
+    )
+
+    flash_layout = _sayatoo_layout_for(track, style, 100)
+    fill_layout = _sayatoo_layout_for(track, style, 500)
+
+    assert flash_layout.signal_x == pytest.approx(fill_layout.signal_x)
+    assert flash_layout.text_x == fill_layout.text_x
+
+
+def test_signal_volume_widens_line_and_shifts_text(qapp):
+    track = _singer_track(singer_id=0)
+    style = Style(
+        font_size_px=20,
+        line_y_margin_px=10,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        lit_enabled=True,
+        lit_shadow=False,
+        signals_duration_ms=1000,
+    )
+
+    layout = _sayatoo_layout_for(track, style, 800)
+    geometry = _volume_signal_geometry(style)
+    rects = _volume_signal_column_rects(layout.signal_x, 0.0, geometry)
+
+    # Sayatoo aligns the union of the text box and the signal bounds, so under
+    # centre alignment the lyric text is pushed right to reserve room for the
+    # bars on its left (it no longer stays at the no-signal anchor).
+    assert layout.text_x > _default_text_x(track, style)
+    assert rects[0].left() < float(layout.text_x)
+    assert float(layout.text_x) - rects[0].left() == pytest.approx(
+        geometry.group_width - geometry.stroke_extent
+    )
+
+    # The union (bars' left edge .. text's right edge) stays centred on the frame.
+    metrics = QFontMetrics(_build_font(style))
+    text_w = sum(metrics.horizontalAdvance(c.text) for c in track.lines[0].chars)
+    visual_pad = style.stroke_width_px + style.stroke2_width_px
+    union_mid = (layout.signal_x + (layout.text_x + text_w + visual_pad)) / 2
+    assert union_mid == pytest.approx(160 / 2, abs=1.0)
+
+
+def test_signal_volume_union_alignment_left_vs_right(qapp):
+    track = _singer_track(singer_id=0)
+    common = dict(
+        font_size_px=20,
+        line_y_margin_px=10,
+        dual_line_layout=False,
+        line_lead_in_ms=2000,  # keep the line visible at t=800 with or without bars
+        lit_shadow=False,
+        signals_duration_ms=1000,
+        line_horizontal_layout="per_row",
+    )
+
+    # Left-aligned row (Sayatoo row1, align==0): the union's left edge sits at the
+    # row offset, so the bars take the anchor and the lyric text shifts right.
+    left_off = _sayatoo_layout_for(
+        track, Style(**common, row1_align="left", row1_offset_x=20, lit_enabled=False), 800
+    )
+    left_on = _sayatoo_layout_for(
+        track, Style(**common, row1_align="left", row1_offset_x=20, lit_enabled=True), 800
+    )
+    assert left_on.signal_x == pytest.approx(20.0)
+    assert left_on.text_x > left_off.text_x
+
+    # Right-aligned row (Sayatoo row2, align==2): the union's right edge is the
+    # text's right edge, so the text stays put and the bars extend further left.
+    right_off = _sayatoo_layout_for(
+        track, Style(**common, row1_align="right", row1_offset_x=0, lit_enabled=False), 800
+    )
+    right_on = _sayatoo_layout_for(
+        track, Style(**common, row1_align="right", row1_offset_x=0, lit_enabled=True), 800
+    )
+    assert right_on.text_x == right_off.text_x
+    assert right_on.signal_x is not None and right_on.signal_x < right_on.text_x
+
+
+def test_signal_volume_stays_visible_after_the_line_starts(qapp):
+    track = _singer_track(singer_id=0)
+    style = Style(
+        font_size_px=20,
+        line_y_margin_px=10,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        lit_enabled=True,
+        lit_shadow=False,
+        signals_duration_ms=1000,
+        volume_flash_times=1,
+        volume_flash_duration_ratio=0.25,
+        volume_transition_ratio_pct=0,
+    )
+
+    layout = _sayatoo_layout_for(track, style, 1200)
+    img = _blank(160, 90)
+    paint_frame(img, track, 1200, style)
+
+    assert layout.signal_x is not None
+    assert QColor(img.pixel(int(layout.signal_x) + 6, 65)).name(QColor.NameFormat.HexRgb).upper() == "#0000FF"
+
+
+def test_signal_shape_tracks_top_of_subtitle_line_box(qapp):
+    track = _track_with_ruby()
+    style = Style(
+        font_size_px=48,
+        ruby_font_size_px=16,
+        line_y_margin_px=20,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        lit_enabled=True,
+        lit_style="circle",
+        lit_size=16,
+        lit_offset_y=-24,
+        lit_stroke_width=0,
+        lit_shadow=False,
+        signals_duration_ms=1000,
+    )
+    display_lines = [DisplayLine(track.lines[0], lane=0, display_start_ms=0, display_end_ms=2000)]
+    baselines = _resolve_display_baselines(180, track, display_lines, style)
+    font = _build_font(style)
+    metrics = QFontMetrics(font)
+
+    groups = _signal_lit_groups(
+        track,
+        display_lines,
+        baselines,
+        320,
+        180,
+        500,
+        style,
+        4,
+        style.lit_size,
+        style.lit_size,
+        style.lit_tracking,
+    )
+
+    assert groups
+    main_text_top = baselines[0] - metrics.ascent()
+    assert groups[0].y + style.lit_size <= main_text_top
+
+
+def test_signal_volume_flash_off_phase_is_transparent(qapp):
+    style = Style(
+        font_size_px=20,
+        line_y_margin_px=10,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        lit_enabled=True,
+        lit_shadow=False,
+        signals_duration_ms=1000,
+        volume_flash_times=1,
+        volume_flash_duration_ratio=0.25,
+        volume_transition_ratio_pct=0,
+    )
+
+    assert _volume_flash_alpha(100, 200, style) == 0.0
+
+
+def test_signal_volume_flash_on_phase_keeps_all_columns_visible(qapp):
+    img = _blank(160, 90)
+    style = Style(
+        font_size_px=20,
+        line_y_margin_px=10,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        lit_enabled=True,
+        lit_shadow=False,
+        signals_duration_ms=1000,
+        volume_flash_times=1,
+        volume_flash_duration_ratio=0.25,
+        volume_transition_ratio_pct=0,
+    )
+
+    track = _singer_track(singer_id=0)
+    paint_frame(img, track, 50, style)
+
+    layout = _sayatoo_layout_for(track, style, 50)
+    metrics = QFontMetrics(_build_font(style))
+    base_y = _signal_lit_y(
+        layout.baseline_y, metrics, style.volume_size, style,
+        _signal_stroke_extent(style, is_volume=True),
+    )
+    rects = _volume_signal_column_rects(layout.signal_x, base_y, _volume_signal_geometry(style))
+    # Flash-on phase: every column is painted (white fill), first and last alike.
+    for rect in (rects[0], rects[-1]):
+        cx, cy = int(rect.center().x()), int(rect.center().y())
+        assert QColor(img.pixel(cx, cy)).name(QColor.NameFormat.HexRgb).upper() == "#FFFFFF"
+
+
+def test_signal_shape_fade_makes_the_whole_shape_transparent(qapp):
+    img = _blank(140, 90)
+    style = Style(
+        font_size_px=20,
+        line_y_margin_px=10,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        lit_enabled=True,
+        lit_style="circle",
+        lit_number=2,
+        lit_size=20,
+        lit_offset_x=-35,
+        lit_offset_y=0,
+        lit_tracking=0,
+        lit_stroke_width=4,
+        lit_shadow=False,
+        lit_transition_mode="fade",
+        lit_transition_ratio_pct=100,
+        signals_duration_ms=1000,
+    )
+
+    paint_frame(img, _singer_track(singer_id=0), 500, style)
+
+    layout = _sayatoo_layout_for(_singer_track(singer_id=0), style, 500, w=140, h=90)
+    assert QColor(img.pixel(int(layout.signal_x) + 10, 36)).name(QColor.NameFormat.HexRgb).upper() == "#0000FF"
+    assert QColor(img.pixel(int(layout.signal_x) + 40, 36)).name(QColor.NameFormat.HexRgb).upper() == "#101010"
+    assert QColor(img.pixel(int(layout.signal_x) + 50, 36)).name(QColor.NameFormat.HexRgb).upper() == "#101010"
+
+
+def test_shape_active_lit_indices_extinguish_from_right_to_left(qapp):
+    track = _singer_track(singer_id=2)
+    style = Style(lit_enabled=True, lit_style="circle", signals_duration_ms=300)
+    display_lines = [DisplayLine(track.lines[0], lane=0, display_start_ms=700, display_end_ms=2000)]
+
+    assert _active_lit_indices(track, display_lines, 699, style, 3) == set()
+    assert _active_lit_indices(track, display_lines, 700, style, 3) == {2}
+    assert _active_lit_indices(track, display_lines, 850, style, 3) == {1}
+    assert _active_lit_indices(track, display_lines, 975, style, 3) == {0}
+    assert _active_lit_indices(track, display_lines, 1000, style, 3) == set()
+    assert _active_lit_indices(track, display_lines, 1001, style, 3) == set()
+
+
+def test_volume_active_lit_indices_flash_then_count_up_to_the_line_start(qapp):
+    track = _singer_track(singer_id=2)
+    style = Style(lit_enabled=True, lit_style="volume", signals_duration_ms=300)
+    display_lines = [DisplayLine(track.lines[0], lane=0, display_start_ms=700, display_end_ms=2000)]
+
+    assert _active_lit_indices(track, display_lines, 699, style, 3) == set()
+    assert _active_lit_indices(track, display_lines, 700, style, 3) == set()
+    assert _active_lit_indices(track, display_lines, 890, style, 3) == set()
+    assert _active_lit_indices(track, display_lines, 940, style, 3) == {0}
+    assert _active_lit_indices(track, display_lines, 975, style, 3) == {2}
+    assert _active_lit_indices(track, display_lines, 1001, style, 3) == {2}
 
 
 def test_paint_frame_applies_style_timing_offset(qapp):

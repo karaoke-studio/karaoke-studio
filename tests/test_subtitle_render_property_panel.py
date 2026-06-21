@@ -85,6 +85,45 @@ def test_property_panel_set_style_populates_controls(qapp):
         entry_lead_ms=450,
         exit_anim="char_fade",
         exit_fade_ms=650,
+        lit_enabled=True,
+        lit_style="rounded",
+        lit_number=2,
+        lit_size=36,
+        lit_offset_x=90,
+        lit_offset_y=70,
+        lit_tracking=14,
+        lit_fill_color="#333333",
+        lit1_fill_color="#112233",
+        lit2_fill_color="#445566",
+        lit3_fill_color="#778899",
+        lit_stroke_color="#AABBCC",
+        lit_stroke_width=5,
+        lit_stroke_soften=3,
+        lit_opacity_pct=80,
+        lit_edge_brightness_pct=45,
+        lit_shadow=True,
+        lit_time_offset_ms=-300,
+        lit_waiting_time_ms=200,
+        lit_transition_mode="slide",
+        lit_transition_ratio_pct=30,
+        lit_transition_angle_deg=45,
+        lit_transition_distance=24,
+        signals_duration_ms=1800,
+        volume_size=64,
+        volume_offset_x=12,
+        volume_offset_y=-8,
+        volume_column_width=10,
+        volume_column_count=5,
+        volume_column_spacing=3,
+        volume_align=2,
+        volume_ratio=4.0,
+        volume_fill_color="#010203",
+        volume_stroke_color="#040506",
+        volume_overlay_fill_color="#070809",
+        volume_overlay_stroke_color="#0A0B0C",
+        volume_flash_times=6,
+        volume_flash_duration_ratio=0.75,
+        volume_transition_ratio_pct=55,
         ruby_font_size_px=30,
         ruby_color="#223344",
         ruby_gap_px=9,
@@ -137,6 +176,42 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._entry_lead_spin.value() == 450
     assert panel._exit_anim_combo.currentData() == "char_fade"
     assert panel._exit_fade_spin.value() == 650
+    assert panel._lit_enabled_check.isChecked()
+    assert panel._lit_style_combo.currentData() == "rounded"
+    assert panel._lit_number_spin.value() == 2
+    assert panel._lit_size_spin.value() == 36
+    assert panel._lit_x_spin.value() == 90
+    assert panel._lit_y_spin.value() == 70
+    assert panel._lit_tracking_spin.value() == 14
+    assert panel._lit_fill_btn.color == "#333333"
+    assert panel._lit_stroke_btn.color == "#AABBCC"
+    assert panel._lit_stroke_width_spin.value() == 5
+    assert panel._lit_stroke_soften_spin.value() == 3
+    assert panel._lit_opacity_spin.value() == 80
+    assert panel._lit_edge_brightness_spin.value() == 45
+    assert panel._lit_shadow_check.isChecked()
+    assert panel._lit_time_offset_spin.value() == -300
+    assert panel._lit_waiting_time_spin.value() == 200
+    assert panel._lit_transition_mode_combo.currentData() == "slide"
+    assert panel._lit_transition_ratio_spin.value() == 30
+    assert panel._lit_transition_angle_spin.value() == 45
+    assert panel._lit_transition_distance_spin.value() == 24
+    assert panel._lit_duration_spin.value() == 1800
+    assert panel._volume_size_spin.value() == 64
+    assert panel._volume_x_spin.value() == 12
+    assert panel._volume_y_spin.value() == -8
+    assert panel._volume_column_width_spin.value() == 10
+    assert panel._volume_column_count_spin.value() == 5
+    assert panel._volume_column_spacing_spin.value() == 3
+    assert panel._volume_ratio_spin.value() == 4
+    assert panel._volume_align_combo.currentData() == 2
+    assert panel._volume_flash_times_spin.value() == 6
+    assert panel._volume_flash_duration_spin.value() == 75
+    assert panel._volume_transition_ratio_spin.value() == 55
+    assert panel._volume_fill_btn.color == "#010203"
+    assert panel._volume_stroke_btn.color == "#040506"
+    assert panel._volume_overlay_fill_btn.color == "#070809"
+    assert panel._volume_overlay_stroke_btn.color == "#0A0B0C"
     assert panel._ruby_font_size_spin.value() == 30
     assert panel._ruby_color_btn.color == "#223344"
     assert panel._ruby_gap_spin.value() == 9
@@ -204,6 +279,45 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.entry_lead_ms == 300
     assert style.exit_anim == "none"
     assert style.exit_fade_ms == 300
+    assert style.lit_enabled is False
+    assert style.lit_style == "volume"
+    assert style.lit_number == 4
+    assert style.lit_size == 32
+    assert style.lit_offset_x == 0
+    assert style.lit_offset_y == -24
+    assert style.lit_tracking == 0
+    assert style.lit_fill_color == "#0000FF"
+    assert style.lit1_fill_color == "#FF0000"
+    assert style.lit2_fill_color == "#FFFF00"
+    assert style.lit3_fill_color == "#00FF00"
+    assert style.lit_stroke_color == "#FFFFFF"
+    assert style.lit_stroke_width == 2
+    assert style.lit_stroke_soften == 0
+    assert style.lit_opacity_pct == 100
+    assert style.lit_edge_brightness_pct == 60
+    assert style.lit_shadow is True
+    assert style.lit_time_offset_ms == 0
+    assert style.lit_waiting_time_ms == 0
+    assert style.lit_transition_mode == "fade"
+    assert style.lit_transition_ratio_pct == 67
+    assert style.lit_transition_angle_deg == 0
+    assert style.lit_transition_distance == 0
+    assert style.signals_duration_ms == 4000
+    assert style.volume_size == 48
+    assert style.volume_offset_x == 0
+    assert style.volume_offset_y == 0
+    assert style.volume_column_width == 12
+    assert style.volume_column_count == 4
+    assert style.volume_column_spacing == 0
+    assert style.volume_align == 1
+    assert style.volume_ratio == 3.0
+    assert style.volume_fill_color == "#FFFFFF"
+    assert style.volume_stroke_color == "#0000FF"
+    assert style.volume_overlay_fill_color == "#0000FF"
+    assert style.volume_overlay_stroke_color == "#FFFFFF"
+    assert style.volume_flash_times == 3
+    assert style.volume_flash_duration_ratio == 1.0
+    assert style.volume_transition_ratio_pct == 67
 
 
 def test_property_panel_subtitle_page_has_no_horizontal_scroll(qapp):
@@ -483,6 +597,45 @@ def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
         entry_lead_ms=500,
         exit_anim="char_fade",
         exit_fade_ms=700,
+        lit_enabled=True,
+        lit_style="square",
+        lit_number=2,
+        lit_size=40,
+        lit_offset_x=80,
+        lit_offset_y=70,
+        lit_tracking=12,
+        lit_fill_color="#222222",
+        lit1_fill_color="#FF0000",
+        lit2_fill_color="#00FF00",
+        lit3_fill_color="#0000FF",
+        lit_stroke_color="#FFFFFF",
+        lit_stroke_width=4,
+        lit_stroke_soften=2,
+        lit_opacity_pct=75,
+        lit_edge_brightness_pct=60,
+        lit_shadow=True,
+        lit_time_offset_ms=-250,
+        lit_waiting_time_ms=100,
+        lit_transition_mode="fade",
+        lit_transition_ratio_pct=25,
+        lit_transition_angle_deg=-30,
+        lit_transition_distance=16,
+        signals_duration_ms=1500,
+        volume_size=54,
+        volume_offset_x=8,
+        volume_offset_y=-6,
+        volume_column_width=9,
+        volume_column_count=6,
+        volume_column_spacing=2,
+        volume_align=2,
+        volume_ratio=5.0,
+        volume_fill_color="#101112",
+        volume_stroke_color="#131415",
+        volume_overlay_fill_color="#161718",
+        volume_overlay_stroke_color="#191A1B",
+        volume_flash_times=4,
+        volume_flash_duration_ratio=0.5,
+        volume_transition_ratio_pct=44,
         singer_style_overrides={2: scheme},
         custom_style_schemes={"图像方案": scheme},
     )
@@ -491,6 +644,45 @@ def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
 
     assert restored.entry_anim == "utopia"
     assert restored.exit_anim == "char_fade"
+    assert restored.lit_enabled is True
+    assert restored.lit_style == "square"
+    assert restored.lit_number == 2
+    assert restored.lit_size == 40
+    assert restored.lit_offset_x == 80
+    assert restored.lit_offset_y == 70
+    assert restored.lit_tracking == 12
+    assert restored.lit_fill_color == "#222222"
+    assert restored.lit1_fill_color == "#FF0000"
+    assert restored.lit2_fill_color == "#00FF00"
+    assert restored.lit3_fill_color == "#0000FF"
+    assert restored.lit_stroke_color == "#FFFFFF"
+    assert restored.lit_stroke_width == 4
+    assert restored.lit_stroke_soften == 2
+    assert restored.lit_opacity_pct == 75
+    assert restored.lit_edge_brightness_pct == 60
+    assert restored.lit_shadow is True
+    assert restored.lit_time_offset_ms == -250
+    assert restored.lit_waiting_time_ms == 100
+    assert restored.lit_transition_mode == "fade"
+    assert restored.lit_transition_ratio_pct == 25
+    assert restored.lit_transition_angle_deg == -30
+    assert restored.lit_transition_distance == 16
+    assert restored.signals_duration_ms == 1500
+    assert restored.volume_size == 54
+    assert restored.volume_offset_x == 8
+    assert restored.volume_offset_y == -6
+    assert restored.volume_column_width == 9
+    assert restored.volume_column_count == 6
+    assert restored.volume_column_spacing == 2
+    assert restored.volume_align == 2
+    assert restored.volume_ratio == 5.0
+    assert restored.volume_fill_color == "#101112"
+    assert restored.volume_stroke_color == "#131415"
+    assert restored.volume_overlay_fill_color == "#161718"
+    assert restored.volume_overlay_stroke_color == "#191A1B"
+    assert restored.volume_flash_times == 4
+    assert restored.volume_flash_duration_ratio == 0.5
+    assert restored.volume_transition_ratio_pct == 44
     assert restored.singer_style_overrides[2].karaoke_colors.after.text.image_path == image_path
     assert restored.singer_style_overrides[2].karaoke_colors.after.text.image_scale_pct == 175
     assert restored.custom_style_schemes["图像方案"].karaoke_colors.after.text.mode == "image"
@@ -670,6 +862,88 @@ def test_property_panel_animation_controls_emit_style(qapp):
     assert emitted[-1].entry_lead_ms == 700
     assert emitted[-1].exit_anim == "utopia"
     assert emitted[-1].exit_fade_ms == 900
+
+
+def test_property_panel_lit_controls_emit_style(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._lit_enabled_check.setChecked(True)
+    panel._lit_style_combo.setCurrentIndex(panel._lit_style_combo.findData("square"))
+    panel._lit_number_spin.setValue(2)
+    panel._lit_size_spin.setValue(44)
+    panel._lit_x_spin.setValue(120)
+    panel._lit_y_spin.setValue(64)
+    panel._lit_tracking_spin.setValue(18)
+    panel._lit_duration_spin.setValue(1700)
+    panel._lit_time_offset_spin.setValue(-400)
+    panel._lit_stroke_width_spin.setValue(6)
+    panel._lit_stroke_soften_spin.setValue(4)
+    panel._lit_opacity_spin.setValue(70)
+    panel._lit_edge_brightness_spin.setValue(50)
+    panel._lit_shadow_check.setChecked(True)
+    panel._lit_waiting_time_spin.setValue(250)
+    panel._lit_transition_mode_combo.setCurrentIndex(
+        panel._lit_transition_mode_combo.findData("fade")
+    )
+    panel._lit_transition_ratio_spin.setValue(20)
+    panel._lit_transition_angle_spin.setValue(90)
+    panel._lit_transition_distance_spin.setValue(30)
+    panel._volume_size_spin.setValue(72)
+    panel._volume_x_spin.setValue(24)
+    panel._volume_y_spin.setValue(-12)
+    panel._volume_column_width_spin.setValue(11)
+    panel._volume_column_count_spin.setValue(5)
+    panel._volume_column_spacing_spin.setValue(4)
+    panel._volume_ratio_spin.setValue(6)
+    panel._volume_align_combo.setCurrentIndex(panel._volume_align_combo.findData(2))
+    panel._volume_flash_times_spin.setValue(5)
+    panel._volume_flash_duration_spin.setValue(40)
+    panel._volume_transition_ratio_spin.setValue(58)
+    panel._set_color("lit_fill_color", "#111111")
+    panel._set_color("lit_stroke_color", "#eeeeee")
+    panel._set_color("volume_fill_color", "#112244")
+    panel._set_color("volume_stroke_color", "#223355")
+    panel._set_color("volume_overlay_fill_color", "#334466")
+    panel._set_color("volume_overlay_stroke_color", "#445577")
+
+    assert emitted[-1].lit_enabled is True
+    assert emitted[-1].lit_style == "square"
+    assert emitted[-1].lit_number == 2
+    assert emitted[-1].lit_size == 44
+    assert emitted[-1].lit_offset_x == 120
+    assert emitted[-1].lit_offset_y == 64
+    assert emitted[-1].lit_tracking == 18
+    assert emitted[-1].signals_duration_ms == 1700
+    assert emitted[-1].lit_time_offset_ms == -400
+    assert emitted[-1].lit_stroke_width == 6
+    assert emitted[-1].lit_stroke_soften == 4
+    assert emitted[-1].lit_opacity_pct == 70
+    assert emitted[-1].lit_edge_brightness_pct == 50
+    assert emitted[-1].lit_shadow is True
+    assert emitted[-1].lit_waiting_time_ms == 250
+    assert emitted[-1].lit_transition_mode == "fade"
+    assert emitted[-1].lit_transition_ratio_pct == 20
+    assert emitted[-1].lit_transition_angle_deg == 90
+    assert emitted[-1].lit_transition_distance == 30
+    assert emitted[-1].lit_fill_color == "#111111"
+    assert emitted[-1].lit_stroke_color == "#EEEEEE"
+    assert emitted[-1].volume_size == 72
+    assert emitted[-1].volume_offset_x == 24
+    assert emitted[-1].volume_offset_y == -12
+    assert emitted[-1].volume_column_width == 11
+    assert emitted[-1].volume_column_count == 5
+    assert emitted[-1].volume_column_spacing == 4
+    assert emitted[-1].volume_align == 2
+    assert emitted[-1].volume_ratio == 6.0
+    assert emitted[-1].volume_flash_times == 5
+    assert emitted[-1].volume_flash_duration_ratio == 0.4
+    assert emitted[-1].volume_transition_ratio_pct == 58
+    assert emitted[-1].volume_fill_color == "#112244"
+    assert emitted[-1].volume_stroke_color == "#223355"
+    assert emitted[-1].volume_overlay_fill_color == "#334466"
+    assert emitted[-1].volume_overlay_stroke_color == "#445577"
 
 
 def test_property_panel_singer_scheme_controls_emit_style(qapp):

@@ -27,6 +27,8 @@ htmlcov/
 .claude/
 .cursor/
 .aider*
+.reverse/
+.tools/
 
 # Build artifacts
 build/

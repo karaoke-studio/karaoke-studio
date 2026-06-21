@@ -179,6 +179,7 @@ DecorationKind = Literal["shadow", "glow"]
 SectionEndingMode = Literal["hold", "clear"]
 EntryAnimation = Literal["none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"]
 ExitAnimation = Literal["none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"]
+LitStyle = Literal["volume", "circle", "square", "rounded"]
 
 
 @dataclass
@@ -420,6 +421,47 @@ class Style:
     exit_fade_ms: int = 300
     """退场动画时长；在显示窗口结束前开始。"""
 
+    # 指示灯（Sayatoo SignalsLits.sx：lit.* / signals.duration）
+    lit_enabled: bool = False
+    lit_style: LitStyle = "volume"
+    lit_number: int = 4
+    lit_size: int = 32
+    lit_offset_x: int = 0
+    lit_offset_y: int = -24
+    lit_tracking: int = 0
+    lit_fill_color: str = "#0000FF"
+    lit1_fill_color: str = "#FF0000"
+    lit2_fill_color: str = "#FFFF00"
+    lit3_fill_color: str = "#00FF00"
+    lit_stroke_color: str = "#FFFFFF"
+    lit_stroke_width: int = 2
+    lit_stroke_soften: int = 0
+    lit_opacity_pct: int = 100
+    lit_edge_brightness_pct: int = 60
+    lit_shadow: bool = True
+    lit_time_offset_ms: int = 0
+    lit_waiting_time_ms: int = 0
+    lit_transition_mode: str = "fade"
+    lit_transition_ratio_pct: int = 67
+    lit_transition_angle_deg: int = 0
+    lit_transition_distance: int = 0
+    signals_duration_ms: int = 4000
+    volume_size: int = 48
+    volume_offset_x: int = 0
+    volume_offset_y: int = 0
+    volume_column_width: int = 12
+    volume_column_count: int = 4
+    volume_column_spacing: int = 0
+    volume_align: int = 1
+    volume_ratio: float = 3.0
+    volume_fill_color: str = "#FFFFFF"
+    volume_stroke_color: str = "#0000FF"
+    volume_overlay_fill_color: str = "#0000FF"
+    volume_overlay_stroke_color: str = "#FFFFFF"
+    volume_flash_times: int = 3
+    volume_flash_duration_ratio: float = 1.0
+    volume_transition_ratio_pct: int = 67
+
 
 @dataclass
 class Background:
@@ -531,10 +573,51 @@ def style_from_dict(payload: object) -> Style:
             "section_gap_ms",
             "entry_lead_ms",
             "exit_fade_ms",
+            "lit_number",
+            "lit_size",
+            "lit_offset_x",
+            "lit_offset_y",
+            "lit_tracking",
+            "lit_stroke_width",
+            "lit_stroke_soften",
+            "lit_opacity_pct",
+            "lit_edge_brightness_pct",
+            "lit_time_offset_ms",
+            "lit_waiting_time_ms",
+            "lit_transition_ratio_pct",
+            "lit_transition_angle_deg",
+            "lit_transition_distance",
+            "signals_duration_ms",
+            "volume_size",
+            "volume_offset_x",
+            "volume_offset_y",
+            "volume_column_width",
+            "volume_column_count",
+            "volume_column_spacing",
+            "volume_align",
+            "volume_flash_times",
+            "volume_transition_ratio_pct",
         }:
             changes[key] = _int_value(value, getattr(defaults, key))
-        elif key in {"italic", "dual_line_layout", "right_to_left", "vertical", "sync_ending"}:
+        elif key in {
+            "volume_ratio",
+            "volume_flash_duration_ratio",
+        }:
+            changes[key] = _float_value(value, getattr(defaults, key))
+        elif key in {
+            "italic",
+            "dual_line_layout",
+            "right_to_left",
+            "vertical",
+            "sync_ending",
+            "lit_enabled",
+            "lit_shadow",
+        }:
             changes[key] = bool(value)
+        elif key == "lit_style":
+            changes[key] = value if value in {"volume", "circle", "square", "rounded"} else defaults.lit_style
+        elif key == "lit_transition_mode":
+            changes[key] = value if value in {"none", "fade", "slide"} else defaults.lit_transition_mode
         elif key == "section_ending_mode":
             changes[key] = value if value in {"hold", "clear"} else defaults.section_ending_mode
         elif key == "line_y_position":
@@ -714,5 +797,12 @@ def _gradient_stops_from_payload(
 def _int_value(value: object, fallback: int) -> int:
     try:
         return int(value)
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _float_value(value: object, fallback: float) -> float:
+    try:
+        return float(value)
     except (TypeError, ValueError):
         return fallback
