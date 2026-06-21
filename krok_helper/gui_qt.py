@@ -4,6 +4,7 @@ import ctypes
 import math
 import os
 import subprocess
+import sys
 import time
 from copy import deepcopy
 from dataclasses import dataclass
@@ -6875,7 +6876,13 @@ class KrokHelperQtApp(QMainWindow):
             raise ProcessingError(f"{label}模板不能为空。")
         if "/" in normalized or "\\" in normalized:
             raise ProcessingError(f"{label}模板不能包含路径分隔符。")
-        for _, field_name, _, _ in ALIGNMENT_TEMPLATE_FORMATTER.parse(normalized):
+        # 不配对的大括号会让 parse 抛 ValueError；转成 ProcessingError，避免从只
+        # 捕获 ProcessingError 的调用处逃逸导致闪退。
+        try:
+            fields = list(ALIGNMENT_TEMPLATE_FORMATTER.parse(normalized))
+        except ValueError as exc:
+            raise ProcessingError(f"{label}模板的大括号不配对，请检查占位符是否写完整。") from exc
+        for _, field_name, _, _ in fields:
             if field_name and field_name not in allowed_fields:
                 supported = "、".join(f"{{{name}}}" for name in sorted(allowed_fields))
                 raise ProcessingError(f"{label}模板包含不支持的占位符 {field_name}。当前支持 {supported}。")
@@ -7008,15 +7015,21 @@ class KrokHelperQtApp(QMainWindow):
             on_template,
             off_template,
         ) = args
-        on_output, off_output = resolve_output_paths(
-            video_path,
-            output_dir,
-            output_name_mode,
-            on_name_template=on_template,
-            off_name_template=off_template,
-            include_on=on_vocal_path is not None,
-            include_off=off_vocal_path is not None,
-        )
+        # 这里才会用真实的视频文件名渲染模板，可能因文件名导致生成的输出名为空
+        # 等情况抛 ProcessingError；必须在主线程上兜住，否则异常会逃逸出 Qt 槽。
+        try:
+            on_output, off_output = resolve_output_paths(
+                video_path,
+                output_dir,
+                output_name_mode,
+                on_name_template=on_template,
+                off_name_template=off_template,
+                include_on=on_vocal_path is not None,
+                include_off=off_vocal_path is not None,
+            )
+        except ProcessingError as exc:
+            QMessageBox.critical(self, APP_TITLE, str(exc))
+            return
         self._hires_cancel_requested = False
         self._hires_process = None
         self._hires_expected_outputs = [path for path in (on_output, off_output) if path is not None]
@@ -7936,9 +7949,34 @@ class KrokHelperQtApp(QMainWindow):
                 pass
 
 
+def _install_global_excepthook() -> None:
+    """把 GUI 线程上未捕获的异常转成可见的错误弹窗，而不是让 PySide6 直接
+    abort 进程（表现为闪退）。Qt 槽函数里抛出的 Python 异常无法穿过 C++ 事件
+    循环，默认会终止程序；这里兜底成对话框 + 标准 excepthook 打印。"""
+    previous_hook = sys.excepthook
+
+    def hook(exc_type, exc_value, exc_tb):
+        try:
+            previous_hook(exc_type, exc_value, exc_tb)
+        except Exception:
+            pass
+        try:
+            if QApplication.instance() is not None:
+                QMessageBox.critical(
+                    None,
+                    APP_TITLE,
+                    f"发生未处理的错误，操作已中断：\n\n{exc_type.__name__}: {exc_value}",
+                )
+        except Exception:
+            pass
+
+    sys.excepthook = hook
+
+
 def launch_qt_app() -> int:
     set_explicit_app_user_model_id("KaraokeStudio.Desktop")
     sync_fluent_ui_fonts()
+    _install_global_excepthook()
     app = QApplication.instance() or QApplication([])
     app.setFont(build_app_ui_font())
     app_icon = load_taskbar_icon()
