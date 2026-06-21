@@ -248,6 +248,7 @@ class SubtitleStyleScheme:
     """字幕 tab 的完整视觉方案；不包含位置、布局和显示时间。"""
 
     font_family: Optional[str] = None
+    font_family_latin: Optional[str] = None
     font_size_px: Optional[int] = None
     font_weight: Optional[int] = None
     italic: Optional[bool] = None
@@ -281,6 +282,8 @@ class Style:
 
     # 字体
     font_family: str = "UD Digi Kyokasho N-B"
+    font_family_latin: Optional[str] = None
+    """英数（ASCII）字体；为空时英数与日文共用 ``font_family``。"""
     font_size_px: int = 100
     font_weight: int = 400  # Qt 习惯 100-900
     italic: bool = False
@@ -646,6 +649,8 @@ def style_from_dict(payload: object) -> Style:
                 if value in {"none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"}
                 else defaults.exit_anim
             )
+        elif key == "font_family_latin":
+            changes[key] = str(value) if value else None
         elif value is not None:
             changes[key] = str(value)
     return Style(**changes)

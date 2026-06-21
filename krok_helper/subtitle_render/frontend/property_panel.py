@@ -59,6 +59,7 @@ from krok_helper.subtitle_render.models import (
 
 _SCHEME_FIELDS = {
     "font_family",
+    "font_family_latin",
     "font_size_px",
     "font_weight",
     "italic",
@@ -1104,7 +1105,19 @@ class PropertyPanel(QTabWidget):
         self._font_combo.currentFontChanged.connect(
             lambda font: self._update_style(font_family=font.family())
         )
-        layout.addWidget(_field("字体", self._font_combo))
+        layout.addWidget(_field("日文字体", self._font_combo))
+
+        # 英数（ASCII）字体可单独指定；不勾选时与日文共用一套字体。
+        self._font_latin_check = QCheckBox("英数单独字体", section)
+        self._font_latin_check.toggled.connect(self._on_font_latin_toggled)
+        layout.addWidget(self._font_latin_check)
+
+        self._font_latin_combo = _WheelFocusedFontComboBox(section)
+        _compact_control(self._font_latin_combo)
+        self._font_latin_combo.setEnabled(False)
+        self._font_latin_combo.currentFontChanged.connect(self._on_font_latin_changed)
+        self._font_latin_field = _field("英数字体", self._font_latin_combo)
+        layout.addWidget(self._font_latin_field)
 
         row = QWidget(section)
         row_layout = QGridLayout(row)
@@ -1143,6 +1156,23 @@ class PropertyPanel(QTabWidget):
         self._italic_check.toggled.connect(lambda checked: self._update_style(italic=checked))
         layout.addWidget(self._italic_check)
         return section
+
+    def _on_font_latin_toggled(self, checked: bool) -> None:
+        self._font_latin_combo.setEnabled(checked)
+        if self._syncing:
+            return
+        if checked:
+            self._update_style(
+                font_family_latin=self._font_latin_combo.currentFont().family()
+            )
+        else:
+            self._update_style(font_family_latin=None)
+
+    def _on_font_latin_changed(self, font: QFont) -> None:
+        if self._syncing:
+            return
+        if self._font_latin_check.isChecked():
+            self._update_style(font_family_latin=font.family())
 
     def _make_ruby_section(self) -> QFrame:
         section, layout = _section("注音")
@@ -2322,6 +2352,11 @@ class PropertyPanel(QTabWidget):
         self._syncing = True
         try:
             self._font_combo.setCurrentFont(QFont(str(self._scheme_value("font_family"))))
+            latin_family = self._scheme_value("font_family_latin")
+            self._font_latin_check.setChecked(bool(latin_family))
+            self._font_latin_combo.setEnabled(bool(latin_family))
+            if latin_family:
+                self._font_latin_combo.setCurrentFont(QFont(str(latin_family)))
             self._font_size_spin.setValue(int(self._scheme_value("font_size_px")))
             self._font_weight_combo.setCurrentIndex(
                 max(0, self._font_weight_combo.findData(int(self._scheme_value("font_weight"))))
@@ -2672,6 +2707,7 @@ def _scheme_from_style(style: Style, singer_id: int) -> SubtitleStyleScheme:
         )
     return SubtitleStyleScheme(
         font_family=style.font_family,
+        font_family_latin=style.font_family_latin,
         font_size_px=style.font_size_px,
         font_weight=style.font_weight,
         italic=style.italic,
@@ -2699,6 +2735,7 @@ def _scheme_from_style(style: Style, singer_id: int) -> SubtitleStyleScheme:
 def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
     return SubtitleStyleScheme(
         font_family=str(panel._scheme_value("font_family")),
+        font_family_latin=panel._scheme_value("font_family_latin"),
         font_size_px=int(panel._scheme_value("font_size_px")),
         font_weight=int(panel._scheme_value("font_weight")),
         italic=bool(panel._scheme_value("italic")),

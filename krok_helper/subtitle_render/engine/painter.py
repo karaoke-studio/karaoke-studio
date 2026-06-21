@@ -368,9 +368,12 @@ def _resolve_sayatoo_line_layouts(
         line_style = _style_for_line(style, line)
         font = _build_font(line_style)
         metrics = QFontMetrics(font)
+        latin_font = _build_latin_font(line_style)
+        font_for = _make_font_for(line_style, font, latin_font)
+        latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
         active_rubies = _active_rubies_for_line(track.rubies, line)
         ruby_metrics = QFontMetrics(_build_ruby_font(line_style)) if active_rubies else None
-        char_widths = [metrics.horizontalAdvance(c.text) for c in line.chars]
+        char_widths = [_char_advance(c.text, metrics, latin_metrics, font_for) for c in line.chars]
         text_w = sum(char_widths)
         visual_pad = _visual_text_padding(line_style)
         text_line_w = max(int(round(text_w + visual_pad * 2)), 1)
@@ -668,9 +671,12 @@ def _signal_lit_groups(
         line_style = _style_for_line(style, line)
         font = _build_font(line_style)
         metrics = QFontMetrics(font)
+        latin_font = _build_latin_font(line_style)
+        font_for = _make_font_for(line_style, font, latin_font)
+        latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
         active_rubies = _active_rubies_for_line(track.rubies, line)
         ruby_metrics = QFontMetrics(_build_ruby_font(line_style)) if active_rubies else None
-        char_widths = [metrics.horizontalAdvance(c.text) for c in line.chars]
+        char_widths = [_char_advance(c.text, metrics, latin_metrics, font_for) for c in line.chars]
         total_w = sum(char_widths)
         if total_w <= 0:
             continue
@@ -992,6 +998,43 @@ def _build_font(style: Style) -> QFont:
     font.setWeight(_clamp_weight(style.font_weight))
     font.setItalic(style.italic)
     return font
+
+
+def _build_latin_font(style: Style) -> QFont:
+    """英数字体；未单独设置时退回日文字体（行为与单字体一致）。"""
+    family = style.font_family_latin or style.font_family
+    font = QFont(family, max(style.font_size_px, 1))
+    font.setPixelSize(max(style.font_size_px, 1))
+    font.setWeight(_clamp_weight(style.font_weight))
+    font.setItalic(style.italic)
+    return font
+
+
+def _make_font_for(style: Style, jp_font: QFont, latin_font: QFont):
+    """返回逐字符取字体的回调；无需分离时返回 ``None``（调用方走单字体老路径）。
+
+    ``QPainterPath.addText`` 不遵循 ``setFamilies`` 的回退顺序，所以必须显式按
+    字符挑字体：全 ASCII 的字符用英数字体，其余（假名/汉字/标点）用日文字体。
+    """
+    if not style.font_family_latin or latin_font.family() == jp_font.family():
+        return None
+
+    def font_for(ch_text: str) -> QFont:
+        return latin_font if (ch_text and ch_text.isascii()) else jp_font
+
+    return font_for
+
+
+def _char_advance(
+    ch_text: str,
+    metrics: QFontMetrics,
+    latin_metrics: QFontMetrics,
+    font_for,
+) -> int:
+    """单字符步进；英数字符用英数字体度量，其余用日文字体度量。"""
+    if font_for is not None and ch_text and ch_text.isascii():
+        return latin_metrics.horizontalAdvance(ch_text)
+    return metrics.horizontalAdvance(ch_text)
 
 
 def _visible_lines_for_style(
@@ -1359,6 +1402,9 @@ def _paint_line_vertical(
     font = _build_font(style)
     painter.setFont(font)
     metrics = QFontMetrics(font)
+    latin_font = _build_latin_font(style)
+    font_for = _make_font_for(style, font, latin_font)
+    latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
     cell_w = _vertical_cell_width(metrics)
     cell_h = metrics.height()
     ascent = metrics.ascent()
@@ -1376,9 +1422,15 @@ def _paint_line_vertical(
     for index, ch in enumerate(chars):
         cell_top = y_top + index * cell_h
         cells.append((cell_top, cell_top + cell_h))
+        glyph_font = font_for(ch.text) if font_for is not None else font
+        glyph_metrics = (
+            latin_metrics
+            if (font_for is not None and ch.text and ch.text.isascii())
+            else metrics
+        )
         vline_path.addPath(
             _vertical_glyph_path(
-                ch.text, font, metrics, column_x, cell_top, cell_w, cell_h, ascent
+                ch.text, glyph_font, glyph_metrics, column_x, cell_top, cell_w, cell_h, ascent
             )
         )
 
@@ -1681,12 +1733,15 @@ def _paint_line_static(
     font = _build_font(style)
     painter.setFont(font)
     metrics = QFontMetrics(font)
+    latin_font = _build_latin_font(style)
+    font_for = _make_font_for(style, font, latin_font)
+    latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
     active_rubies = _active_rubies_for_line(track.rubies, line)
     ruby_font = _build_ruby_font(style)
     ruby_metrics = QFontMetrics(ruby_font) if active_rubies else None
 
-    # 整行宽度 → 水平居中起点
-    char_widths = [metrics.horizontalAdvance(c.text) for c in line.chars]
+    # 整行宽度 → 水平居中起点（英数字符用英数字体的步进）
+    char_widths = [_char_advance(c.text, metrics, latin_metrics, font_for) for c in line.chars]
     total_w = sum(char_widths)
     visual_pad = _visual_text_padding(style)
     x0 = (
@@ -1721,7 +1776,7 @@ def _paint_line_static(
         float(metrics.height()),
     )
     colors = _effective_karaoke_colors(style)
-    line_path = _line_text_path(line, char_widths, font, x0, y, char_lefts)
+    line_path = _line_text_path(line, char_widths, font, x0, y, char_lefts, font_for)
     transition = _line_char_transition_context(
         style,
         line,
@@ -1762,14 +1817,17 @@ def _paint_line_static(
             t_ms,
             transition,
             rtl=rtl,
+            font_for=font_for,
         )
         return
 
     # --- "未唱"层（不依赖 t_ms）：查 / 建缓存后一次 blit ---
     if total_w > 0 and metrics.height() > 0:
-        cache_key = _before_layer_cache_key(line, style, font, char_widths, colors)
+        cache_key = _before_layer_cache_key(
+            line, style, font, char_widths, colors, latin_font, font_for
+        )
         before_image, offset_x, offset_y = _get_or_build_before_layer(
-            cache_key, line, char_widths, font, style, colors, metrics, rtl,
+            cache_key, line, char_widths, font, style, colors, metrics, rtl, font_for,
         )
         painter.drawImage(
             QPointF(float(x0 + offset_x), float(y + offset_y)),
@@ -1800,6 +1858,7 @@ def _paint_line_static(
             x0 + style.shadow_offset_x,
             y + style.shadow_offset_y,
             [left + style.shadow_offset_x for left in char_lefts],
+            font_for,
         )
         _paint_after_fill_path(
             painter,
@@ -1877,12 +1936,14 @@ def _line_text_path(
     x: int,
     y: int,
     char_lefts: list[int] | None = None,
+    font_for=None,
 ) -> QPainterPath:
     path = QPainterPath()
     if char_lefts is None:
         char_lefts = _char_left_positions(char_widths, x, False)
     for ch, left in zip(line.chars, char_lefts):
-        path.addText(float(left), float(y), font, ch.text)
+        glyph_font = font_for(ch.text) if font_for is not None else font
+        path.addText(float(left), float(y), glyph_font, ch.text)
     return path
 
 
@@ -1957,6 +2018,7 @@ def _paint_line_with_character_transition(
     t_ms: int,
     transition: _LineCharTransition,
     rtl: bool = False,
+    font_for=None,
 ) -> None:
     count = max(len(line.chars), 1)
     for index, (ch, width) in enumerate(zip(line.chars, char_widths)):
@@ -1984,7 +2046,8 @@ def _paint_line_with_character_transition(
             continue
 
         path = QPainterPath()
-        path.addText(float(left), float(baseline_y), font, ch.text)
+        glyph_font = font_for(ch.text) if font_for is not None else font
+        path.addText(float(left), float(baseline_y), glyph_font, ch.text)
         painter.save()
         try:
             painter.setOpacity(painter.opacity() * opacity)
@@ -2892,6 +2955,8 @@ def _before_layer_cache_key(
     font: QFont,
     char_widths: list[int],
     colors: KaraokeColors,
+    latin_font: QFont | None = None,
+    font_for=None,
 ) -> tuple:
     text = "".join(ch.text for ch in line.chars)
     font_sig = (
@@ -2900,9 +2965,11 @@ def _before_layer_cache_key(
         int(font.weight()),
         font.italic(),
     )
+    latin_sig = latin_font.family() if (font_for is not None and latin_font is not None) else None
     return (
         text,
         font_sig,
+        latin_sig,
         tuple(char_widths),
         _karaoke_state_signature(colors.before),
         style.shadow_offset_x,
@@ -2924,6 +2991,7 @@ def _get_or_build_before_layer(
     colors: KaraokeColors,
     metrics: QFontMetrics,
     rtl: bool = False,
+    font_for=None,
 ) -> tuple[QImage, int, int]:
     with _BEFORE_LAYER_LOCK:
         cached = _BEFORE_LAYER_CACHE.get(key)
@@ -2932,7 +3000,7 @@ def _get_or_build_before_layer(
             return cached
 
     # 构建在锁外做（QPainter 比较重，不阻塞别的线程）
-    entry = _build_before_layer(line, char_widths, font, style, colors, metrics, rtl)
+    entry = _build_before_layer(line, char_widths, font, style, colors, metrics, rtl, font_for)
 
     with _BEFORE_LAYER_LOCK:
         _BEFORE_LAYER_CACHE[key] = entry
@@ -2949,6 +3017,7 @@ def _build_before_layer(
     colors: KaraokeColors,
     metrics: QFontMetrics,
     rtl: bool = False,
+    font_for=None,
 ) -> tuple[QImage, int, int]:
     """Render shadow + stroke2 + stroke + base text into a transparent QImage.
 
@@ -2990,7 +3059,7 @@ def _build_before_layer(
 
         local_lefts = _char_left_positions(char_widths, local_x0, rtl)
         local_line_path = _line_text_path(
-            line, char_widths, font, local_x0, local_y, local_lefts
+            line, char_widths, font, local_x0, local_y, local_lefts, font_for
         )
         local_line_rect = QRectF(
             float(local_x0),
@@ -3012,6 +3081,7 @@ def _build_before_layer(
                 local_x0 + style.shadow_offset_x,
                 local_y + style.shadow_offset_y,
                 [left + style.shadow_offset_x for left in local_lefts],
+                font_for,
             )
             _paint_fill_path(p, shadow_path, colors.before.shadow, shadow_rect)
 
@@ -3170,6 +3240,7 @@ def _style_for_line(style: Style, line: TimingLine) -> Style:
         field: value
         for field, value in {
             "font_family": scheme.font_family,
+            "font_family_latin": scheme.font_family_latin,
             "font_size_px": scheme.font_size_px,
             "font_weight": scheme.font_weight,
             "italic": scheme.italic,
