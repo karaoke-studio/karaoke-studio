@@ -385,16 +385,20 @@ def _resolve_sayatoo_line_layouts(
             # the line: under left/centre alignment the signal takes the row
             # anchor and the lyric text shifts right by the group width; under
             # right alignment the text stays put and the signal extends left.
-            # ``signal_x`` relative to ``text_x`` is unchanged — only the absolute
-            # row anchor moves — so every downstream drawing path stays valid.
-            signal_left = _signal_local_x(signal_metrics, line_style)
-            signal_right = signal_left + signal_metrics.group_width
-            union_left = min(-float(visual_pad), signal_left)
-            union_right = max(float(text_w + visual_pad), signal_right)
+            #
+            # The union uses the indicator's *offset-free* span so that the
+            # volume/lit X offset nudges only the indicator, not the text layout:
+            # ``volume_offset_x`` therefore moves the bars (``signal_x``) while
+            # ``text_x`` stays put, which is what the offset control should do.
+            draw_left = _signal_local_x(signal_metrics, line_style)
+            natural_left = draw_left - _signal_offset_x(line_style)
+            natural_right = natural_left + signal_metrics.group_width
+            union_left = min(-float(visual_pad), natural_left)
+            union_right = max(float(text_w + visual_pad), natural_right)
             union_w = max(int(round(union_right - union_left)), 1)
             union_x = _resolve_line_x(img_w, union_w, line_style, display_line.lane)
             text_x = float(union_x) - union_left
-            signal_x = text_x + signal_left
+            signal_x = text_x + draw_left
         else:
             text_x = float(
                 _resolve_line_x(img_w, text_line_w, line_style, display_line.lane) + visual_pad
@@ -452,6 +456,11 @@ def _signal_local_x(metrics: _SignalLayoutMetrics, style: Style) -> float:
     if metrics.is_volume:
         return float(style.volume_offset_x) - metrics.group_width
     return float(style.lit_offset_x)
+
+
+def _signal_offset_x(style: Style) -> float:
+    """User X offset for the active indicator (moves only the indicator)."""
+    return float(style.volume_offset_x if style.lit_style == "volume" else style.lit_offset_x)
 
 
 def _volume_signal_geometry(style: Style) -> _VolumeSignalGeometry:

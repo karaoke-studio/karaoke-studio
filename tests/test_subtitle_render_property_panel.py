@@ -190,7 +190,6 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._lit_opacity_spin.value() == 80
     assert panel._lit_edge_brightness_spin.value() == 45
     assert panel._lit_shadow_check.isChecked()
-    assert panel._lit_time_offset_spin.value() == -300
     assert panel._lit_waiting_time_spin.value() == 200
     assert panel._lit_transition_mode_combo.currentData() == "slide"
     assert panel._lit_transition_ratio_spin.value() == 30
@@ -215,6 +214,26 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._ruby_font_size_spin.value() == 30
     assert panel._ruby_color_btn.color == "#223344"
     assert panel._ruby_gap_spin.value() == 9
+
+
+def test_lit_section_shows_only_active_style_controls(qapp):
+    panel = PropertyPanel()
+
+    # Volume style: the volume.* groups apply, the shape lit.* groups do not.
+    panel.set_style(Style(lit_enabled=True, lit_style="volume"))
+    assert all(not w.isHidden() for w in panel._lit_volume_groups)
+    assert all(w.isHidden() for w in panel._lit_shape_groups)
+
+    # Shape style: the opposite — shape groups apply, volume groups do not.
+    panel.set_style(Style(lit_enabled=True, lit_style="circle"))
+    assert all(not w.isHidden() for w in panel._lit_shape_groups)
+    assert all(w.isHidden() for w in panel._lit_volume_groups)
+
+    # Switching the style live (via the combo) flips visibility too.
+    panel._lit_style_combo.setCurrentIndex(panel._lit_style_combo.findData("volume"))
+    assert panel._style.lit_style == "volume"
+    assert all(not w.isHidden() for w in panel._lit_volume_groups)
+    assert all(w.isHidden() for w in panel._lit_shape_groups)
 
 
 def test_property_panel_does_not_shadow_qwidget_style(qapp):
@@ -877,7 +896,6 @@ def test_property_panel_lit_controls_emit_style(qapp):
     panel._lit_y_spin.setValue(64)
     panel._lit_tracking_spin.setValue(18)
     panel._lit_duration_spin.setValue(1700)
-    panel._lit_time_offset_spin.setValue(-400)
     panel._lit_stroke_width_spin.setValue(6)
     panel._lit_stroke_soften_spin.setValue(4)
     panel._lit_opacity_spin.setValue(70)
@@ -916,7 +934,6 @@ def test_property_panel_lit_controls_emit_style(qapp):
     assert emitted[-1].lit_offset_y == 64
     assert emitted[-1].lit_tracking == 18
     assert emitted[-1].signals_duration_ms == 1700
-    assert emitted[-1].lit_time_offset_ms == -400
     assert emitted[-1].lit_stroke_width == 6
     assert emitted[-1].lit_stroke_soften == 4
     assert emitted[-1].lit_opacity_pct == 70

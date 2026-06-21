@@ -272,7 +272,7 @@ def test_signal_lits_render_during_signal_window(qapp):
         lit_enabled=True,
         lit_style="circle",
         lit_size=10,
-        lit_offset_x=-35,
+        lit_offset_x=-20,
         lit_offset_y=0,
         lit_tracking=2,
         lit_stroke_width=0,
@@ -301,7 +301,7 @@ def test_signal_lits_extend_the_lyric_text_window(qapp):
         lit_enabled=True,
         lit_style="circle",
         lit_size=10,
-        lit_offset_x=-35,
+        lit_offset_x=-20,
         lit_offset_y=0,
         lit_tracking=2,
         lit_stroke_width=0,
@@ -329,7 +329,7 @@ def test_signal_lits_are_line_countdown_not_singer_lamps(qapp):
         lit_enabled=True,
         lit_style="circle",
         lit_size=10,
-        lit_offset_x=-35,
+        lit_offset_x=-20,
         lit_offset_y=0,
         lit_tracking=2,
         lit_stroke_width=0,
@@ -490,6 +490,32 @@ def test_signal_volume_union_alignment_left_vs_right(qapp):
     assert right_on.signal_x is not None and right_on.signal_x < right_on.text_x
 
 
+def test_signal_volume_offset_x_moves_bars_not_text(qapp):
+    track = _singer_track(singer_id=0)
+
+    def layout_for(offset_x: int):
+        style = Style(
+            font_size_px=20,
+            line_y_margin_px=10,
+            dual_line_layout=False,
+            line_lead_in_ms=0,
+            lit_enabled=True,
+            lit_shadow=False,
+            signals_duration_ms=1000,
+            line_horizontal_layout="per_row",
+            row1_align="left",
+            row1_offset_x=20,
+            volume_offset_x=offset_x,
+        )
+        return _sayatoo_layout_for(track, style, 800)
+
+    base = layout_for(0)
+    shifted = layout_for(-10)
+    # The X offset nudges only the bars; the lyric text layout is unchanged.
+    assert shifted.text_x == base.text_x
+    assert shifted.signal_x == pytest.approx(base.signal_x - 10)
+
+
 def test_signal_volume_stays_visible_after_the_line_starts(qapp):
     track = _singer_track(singer_id=0)
     style = Style(
@@ -612,7 +638,7 @@ def test_signal_shape_fade_makes_the_whole_shape_transparent(qapp):
         lit_style="circle",
         lit_number=2,
         lit_size=20,
-        lit_offset_x=-35,
+        lit_offset_x=-20,
         lit_offset_y=0,
         lit_tracking=0,
         lit_stroke_width=4,
