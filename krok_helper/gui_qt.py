@@ -5957,8 +5957,11 @@ class KrokHelperQtApp(QMainWindow):
                     align_output_custom_dir = output_dir_edit.text().strip()
                 else:
                     mode = OUTPUT_NAME_MODE_TEMPLATE if template_radio.isChecked() else OUTPUT_NAME_MODE_FIXED
-                    on_template = on_template_edit.text().strip() or DEFAULT_ON_NAME_TEMPLATE
-                    off_template = off_template_edit.text().strip() or DEFAULT_OFF_NAME_TEMPLATE
+                    # 仅在选择「自定义模板」时才采用对话框里填写的模板；保存为「默认命名」
+                    # 时保持既有的已校验模板值不变，避免未经路径合法性校验的输入被写入 settings。
+                    if mode == OUTPUT_NAME_MODE_TEMPLATE:
+                        on_template = on_template_edit.text().strip() or DEFAULT_ON_NAME_TEMPLATE
+                        off_template = off_template_edit.text().strip() or DEFAULT_OFF_NAME_TEMPLATE
 
                 saved_path = self._save_settings_payload(
                     output_name_mode=mode,
