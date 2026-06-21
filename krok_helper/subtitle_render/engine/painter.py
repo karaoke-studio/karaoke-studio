@@ -47,9 +47,11 @@ from PyQt6.QtGui import (
     QLinearGradient,
     QPainter,
     QPainterPath,
+    QPixmap,
     QPen,
     QTransform,
 )
+from PyQt6.QtWidgets import QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +70,11 @@ _IMAGE_FILL_CACHE_MAX = 16
 _IMAGE_FILL_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 _IMAGE_BRUSH_CACHE: "OrderedDict[tuple, QBrush]" = OrderedDict()
 _IMAGE_FILL_LOCK = Lock()
+# After-layer glow：把整行（未裁切）的模糊发光烘焙成透明 QImage 缓存，
+# 每帧只做一次 drawImage + setClipRect（扫光带），避免逐帧 QGraphicsBlurEffect。
+_AFTER_GLOW_CACHE_MAX = 64
+_AFTER_GLOW_CACHE: "OrderedDict[tuple, tuple[QImage, int, int]]" = OrderedDict()
+_AFTER_GLOW_LOCK = Lock()
 _RUBY_COMBINING_CHARS = set("ぁぃぅぇぉゃゅょゎァィゥェォャュョヮ\u3099\u309A")
 
 
@@ -159,6 +166,8 @@ def clear_before_layer_cache() -> None:
     with _IMAGE_FILL_LOCK:
         _IMAGE_FILL_CACHE.clear()
         _IMAGE_BRUSH_CACHE.clear()
+    with _AFTER_GLOW_LOCK:
+        _AFTER_GLOW_CACHE.clear()
 
 from krok_helper.subtitle_render.engine.timeline import (
     DisplayLine,
@@ -374,7 +383,7 @@ def _resolve_sayatoo_line_layouts(
         active_rubies = _active_rubies_for_line(track.rubies, line)
         ruby_metrics = QFontMetrics(_build_ruby_font(line_style)) if active_rubies else None
         char_widths = [_char_advance(c.text, metrics, latin_metrics, font_for) for c in line.chars]
-        text_w = sum(char_widths)
+        text_w = _line_text_width(char_widths, line_style)
         visual_pad = _visual_text_padding(line_style)
         text_line_w = max(int(round(text_w + visual_pad * 2)), 1)
         signal_x: float | None = None
@@ -677,7 +686,7 @@ def _signal_lit_groups(
         active_rubies = _active_rubies_for_line(track.rubies, line)
         ruby_metrics = QFontMetrics(_build_ruby_font(line_style)) if active_rubies else None
         char_widths = [_char_advance(c.text, metrics, latin_metrics, font_for) for c in line.chars]
-        total_w = sum(char_widths)
+        total_w = _line_text_width(char_widths, line_style)
         if total_w <= 0:
             continue
         line_layout = line_layouts.get(display_line.lane) if line_layouts is not None else None
@@ -1037,6 +1046,16 @@ def _char_advance(
     return metrics.horizontalAdvance(ch_text)
 
 
+def _letter_spacing(style: Style) -> int:
+    return int(style.letter_spacing_px)
+
+
+def _line_text_width(char_widths: list[int], style: Style) -> int:
+    if not char_widths:
+        return 0
+    return max(0, sum(char_widths) + _letter_spacing(style) * (len(char_widths) - 1))
+
+
 def _visible_lines_for_style(
     track: TimingTrack,
     t_ms: int,
@@ -1171,15 +1190,35 @@ def _visual_text_padding(style: Style) -> int:
 
 
 def _visual_stroke_extent(stroke_width: int, stroke2_width: int) -> int:
-    return max(stroke_width, 0) + max(stroke2_width, 0)
+    return math.ceil((max(stroke_width, 0) + max(stroke2_width, 0)) / 2)
 
 
 def _stroke_pen_width(stroke_width: int) -> int:
-    return max(stroke_width, 0) * 2
+    return max(stroke_width, 0)
 
 
 def _stroke2_pen_width(stroke_width: int, stroke2_width: int) -> int:
-    return _visual_stroke_extent(stroke_width, stroke2_width) * 2
+    return max(stroke_width, 0) + max(stroke2_width, 0)
+
+
+def _glow_pen_width(stroke_width: int, stroke2_width: int, glow_radius: int) -> int:
+    base_width = _stroke2_pen_width(stroke_width, stroke2_width) if stroke2_width > 0 else _stroke_pen_width(stroke_width)
+    return max(1, base_width + max(glow_radius, 1))
+
+
+def _glow_extent(stroke_width: int, stroke2_width: int, glow_radius: int) -> int:
+    return math.ceil(_glow_pen_width(stroke_width, stroke2_width, glow_radius) / 2 + max(glow_radius, 1) * 3)
+
+
+def _glow_radius(style: Style, *, after: bool) -> int:
+    value = style.glow_after_radius_px if after else style.glow_before_radius_px
+    if value == 10 and style.glow_radius_px != 10:
+        value = style.glow_radius_px
+    return max(int(value), 1)
+
+
+def _scaled_glow_radius(style: Style, scale: float, *, after: bool) -> int:
+    return _scaled_px(_glow_radius(style, after=after), scale)
 
 
 def _resolve_baseline_y(
@@ -1452,7 +1491,7 @@ def _paint_line_vertical(
         stroke2_width=style.stroke2_width_px,
         shadow_dx=style.shadow_offset_x,
         shadow_dy=style.shadow_offset_y,
-        glow_radius=style.glow_radius_px,
+        glow_radius=_glow_radius(style, after=False),
     )
 
     # 「已唱」层：纵向裁剪带 [y_top, scan]
@@ -1461,7 +1500,7 @@ def _paint_line_vertical(
         y0, y_scan = band
         pad = max(
             _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px),
-            style.glow_radius_px * 2,
+            _glow_extent(style.stroke_width_px, style.stroke2_width_px, _glow_radius(style, after=True)) if style.decoration_kind == "glow" else 0,
             abs(style.shadow_offset_x),
             abs(style.shadow_offset_y),
             2,
@@ -1486,7 +1525,7 @@ def _paint_line_vertical(
                 stroke2_width=style.stroke2_width_px,
                 shadow_dx=style.shadow_offset_x,
                 shadow_dy=style.shadow_offset_y,
-                glow_radius=style.glow_radius_px,
+                glow_radius=_glow_radius(style, after=True),
             )
         finally:
             painter.restore()
@@ -1531,7 +1570,8 @@ def _paint_rubies_vertical(
     stroke2_width = _scaled_px(style.stroke2_width_px, scale)
     shadow_dx = _scaled_signed_px(style.shadow_offset_x, scale)
     shadow_dy = _scaled_signed_px(style.shadow_offset_y, scale)
-    glow_radius = _scaled_px(style.glow_radius_px, scale)
+    before_glow_radius = _scaled_glow_radius(style, scale, after=False)
+    after_glow_radius = _scaled_glow_radius(style, scale, after=True)
     colors = _effective_ruby_karaoke_colors(style)
     ruby_cell_w = _vertical_cell_width(ruby_metrics)
     ruby_ascent = ruby_metrics.ascent()
@@ -1589,7 +1629,7 @@ def _paint_rubies_vertical(
             stroke2_width=stroke2_width,
             shadow_dx=shadow_dx,
             shadow_dy=shadow_dy,
-            glow_radius=glow_radius,
+            glow_radius=before_glow_radius,
         )
 
         ratio = _ruby_progress_ratio(ruby, t_ms)
@@ -1598,7 +1638,7 @@ def _paint_rubies_vertical(
         scan_y = base_top + span_h * min(ratio, 1.0)
         pad = max(
             _visual_stroke_extent(stroke_width, stroke2_width),
-            glow_radius * 2,
+            _glow_extent(stroke_width, stroke2_width, after_glow_radius) if style.decoration_kind == "glow" else 0,
             abs(shadow_dx),
             abs(shadow_dy),
             2,
@@ -1623,7 +1663,7 @@ def _paint_rubies_vertical(
                 stroke2_width=stroke2_width,
                 shadow_dx=shadow_dx,
                 shadow_dy=shadow_dy,
-                glow_radius=glow_radius,
+                glow_radius=after_glow_radius,
             )
         finally:
             painter.restore()
@@ -1742,7 +1782,7 @@ def _paint_line_static(
 
     # 整行宽度 → 水平居中起点（英数字符用英数字体的步进）
     char_widths = [_char_advance(c.text, metrics, latin_metrics, font_for) for c in line.chars]
-    total_w = sum(char_widths)
+    total_w = _line_text_width(char_widths, style)
     visual_pad = _visual_text_padding(style)
     x0 = (
         line_x
@@ -1757,7 +1797,7 @@ def _paint_line_static(
 
     intervals = compute_char_intervals(line)
     rtl = style.right_to_left
-    char_lefts = _char_left_positions(char_widths, x0, rtl)
+    char_lefts = _char_left_positions(char_widths, x0, rtl, _letter_spacing(style))
     char_x_ranges: list[tuple[int, int]] = [
         (left, left + w) for left, w in zip(char_lefts, char_widths)
     ]
@@ -1836,19 +1876,38 @@ def _paint_line_static(
 
     # --- "已唱"层（依赖 t_ms）：逐字 clip 照旧每帧画 ---
     if style.decoration_kind == "glow":
-        glow_radius = max(style.glow_radius_px, 1)
-        _paint_after_glow_path(
-            painter,
-            line_path,
-            colors.after.shadow,
-            line_rect,
-            glow_radius,
-            fill_segments,
-            y,
-            metrics,
-            t_ms,
-            rtl=rtl,
+        # 「未唱」层已把整行发光（before.shadow）烘焙在底下。仅当「已唱」发光与之
+        # 不同（颜色或半径）时，才需要在唱过区叠画 after 发光；否则同一发光会在扫光
+        # 处被叠两遍，交界出现一道亮度突变——看起来就像发光「被截断」。相同时直接
+        # 复用底层整行发光即可，连续无缝。
+        before_radius = _glow_radius(style, after=False)
+        after_radius = _glow_radius(style, after=True)
+        need_after_glow = (
+            _fill_signature(colors.before.shadow) != _fill_signature(colors.after.shadow)
+            or before_radius != after_radius
         )
+        band = _fill_clip_band(fill_segments, t_ms, rtl) if need_after_glow else None
+        if band is not None and total_w > 0 and metrics.height() > 0:
+            fill_start, fill_end = band
+            pad = _glow_extent(style.stroke_width_px, style.stroke2_width_px, after_radius)
+            glow_key = _after_glow_cache_key(
+                line, style, font, char_widths, colors, latin_font, font_for
+            )
+            glow_image, glow_dx, glow_dy = _get_or_build_after_glow(
+                glow_key, line, char_widths, font, style, colors, metrics, rtl, font_for,
+            )
+            # 缓存的是整行（未裁切）的模糊发光，每帧只 blit；扫光交界用渐变 alpha
+            # 羽化，避免硬裁切的「截断」感（羽化在独立图层做，不动主画布背景）。
+            _blit_feathered_glow(
+                painter,
+                glow_image,
+                QPointF(float(x0 + glow_dx), float(y + glow_dy)),
+                band_left=float(fill_start),
+                band_right=float(fill_end),
+                clip_top=float(y - metrics.ascent() - pad),
+                clip_height=float(metrics.height() + pad * 2),
+                feather=max(after_radius, 1),
+            )
     elif style.shadow_color and (style.shadow_offset_x or style.shadow_offset_y):
         shadow_rect = line_rect.translated(style.shadow_offset_x, style.shadow_offset_y)
         shadow_path = _line_text_path(
@@ -1913,19 +1972,26 @@ def _paint_line_static(
     )
 
 
-def _char_left_positions(char_widths: list[int], base_x: int, rtl: bool) -> list[int]:
+def _char_left_positions(
+    char_widths: list[int],
+    base_x: int,
+    rtl: bool,
+    letter_spacing_px: int = 0,
+) -> list[int]:
     """每个字符左缘的 x 坐标。``rtl`` 时第一个字符排在最右、依次向左。"""
     lefts: list[int] = []
+    total_w = sum(char_widths) + letter_spacing_px * max(len(char_widths) - 1, 0)
     if rtl:
-        cursor = base_x + sum(char_widths)
+        cursor = base_x + total_w
         for w in char_widths:
             cursor -= w
             lefts.append(cursor)
+            cursor -= letter_spacing_px
     else:
         cursor = base_x
         for w in char_widths:
             lefts.append(cursor)
-            cursor += w
+            cursor += w + letter_spacing_px
     return lefts
 
 
@@ -2082,25 +2148,47 @@ def _paint_line_with_character_transition(
         painter.save()
         try:
             painter.setOpacity(painter.opacity() * opacity)
-            _apply_character_transform(
-                painter,
-                center_x=left + width / 2,
-                center_y=baseline_y - metrics.ascent() + metrics.height() / 2,
-                dx=dx,
-                dy=dy,
-                rotation=rotation,
-                scale_x=scale_x,
-                scale_y=scale_y,
-                skew_y=skew_y,
-                scale_origin_x=left if transition.effect == "utopia" else None,
-                scale_origin_y=baseline_y if transition.effect == "utopia" else None,
-            )
+            paint_path = path
+            paint_rect = line_rect
+            paint_left = left
+            paint_width = width
+            paint_clip_rect: QRectF | None = None
+            if transition.effect == "utopia":
+                transform = _character_transform(
+                    center_x=left + width / 2,
+                    center_y=baseline_y - metrics.ascent() + metrics.height() / 2,
+                    dx=dx,
+                    dy=dy,
+                    rotation=rotation,
+                    scale_x=scale_x,
+                    scale_y=scale_y,
+                    skew_y=skew_y,
+                    scale_origin_x=left,
+                    scale_origin_y=baseline_y,
+                )
+                paint_path = transform.map(path)
+                paint_rect = paint_path.boundingRect()
+                paint_left = int(round(paint_rect.left()))
+                paint_width = max(int(round(paint_rect.width())), 1)
+                paint_clip_rect = paint_rect
+            else:
+                _apply_character_transform(
+                    painter,
+                    center_x=left + width / 2,
+                    center_y=baseline_y - metrics.ascent() + metrics.height() / 2,
+                    dx=dx,
+                    dy=dy,
+                    rotation=rotation,
+                    scale_x=scale_x,
+                    scale_y=scale_y,
+                    skew_y=skew_y,
+                )
             _paint_char_karaoke_stack(
                 painter,
-                path,
-                line_rect,
-                char_x=left,
-                char_width=width,
+                paint_path,
+                paint_rect,
+                char_x=paint_left,
+                char_width=paint_width,
                 baseline_y=baseline_y,
                 metrics=metrics,
                 colors=colors,
@@ -2118,6 +2206,7 @@ def _paint_line_with_character_transition(
                     )
                 ),
                 rtl=rtl,
+                clip_rect=paint_clip_rect,
             )
         finally:
             painter.restore()
@@ -2304,27 +2393,59 @@ def _apply_character_transform(
     scale_origin_x: float | None = None,
     scale_origin_y: float | None = None,
 ) -> None:
+    transform = _character_transform(
+        center_x=center_x,
+        center_y=center_y,
+        dx=dx,
+        dy=dy,
+        rotation=rotation,
+        scale_x=scale_x,
+        scale_y=scale_y,
+        skew_y=skew_y,
+        scale_origin_x=scale_origin_x,
+        scale_origin_y=scale_origin_y,
+    )
+    if transform.isIdentity():
+        return
+    painter.setTransform(transform, combine=True)
+
+
+def _character_transform(
+    *,
+    center_x: float,
+    center_y: float,
+    dx: float = 0.0,
+    dy: float = 0.0,
+    rotation: float = 0.0,
+    scale_x: float = 1.0,
+    scale_y: float = 1.0,
+    skew_y: float = 0.0,
+    scale_origin_x: float | None = None,
+    scale_origin_y: float | None = None,
+) -> QTransform:
+    transform = QTransform()
     if not dx and not dy and not rotation and scale_x == 1.0 and scale_y == 1.0 and not skew_y:
-        return
+        return transform
     if scale_origin_x is not None and scale_origin_y is not None:
-        painter.translate(scale_origin_x + dx, scale_origin_y + dy)
+        transform.translate(scale_origin_x + dx, scale_origin_y + dy)
         if skew_y:
-            painter.shear(0.0, skew_y)
+            transform.shear(0.0, skew_y)
         if scale_x != 1.0 or scale_y != 1.0:
-            painter.scale(scale_x, scale_y)
-        painter.translate(center_x - scale_origin_x, center_y - scale_origin_y)
+            transform.scale(scale_x, scale_y)
+        transform.translate(center_x - scale_origin_x, center_y - scale_origin_y)
         if rotation:
-            painter.rotate(rotation)
-        painter.translate(-center_x, -center_y)
-        return
-    painter.translate(center_x + dx, center_y + dy)
+            transform.rotate(rotation)
+        transform.translate(-center_x, -center_y)
+        return transform
+    transform.translate(center_x + dx, center_y + dy)
     if rotation:
-        painter.rotate(rotation)
+        transform.rotate(rotation)
     if skew_y:
-        painter.shear(0.0, skew_y)
+        transform.shear(0.0, skew_y)
     if scale_x != 1.0 or scale_y != 1.0:
-        painter.scale(scale_x, scale_y)
-    painter.translate(-center_x, -center_y)
+        transform.scale(scale_x, scale_y)
+    transform.translate(-center_x, -center_y)
+    return transform
 
 
 def _utopia_intro_delay_step(count: int) -> int:
@@ -2431,6 +2552,7 @@ def _paint_char_karaoke_stack(
     style: Style,
     ratio: float,
     rtl: bool = False,
+    clip_rect: QRectF | None = None,
 ) -> None:
     if ratio <= 0.0:
         _paint_text_layer_stack(
@@ -2443,7 +2565,7 @@ def _paint_char_karaoke_stack(
             stroke2_width=style.stroke2_width_px,
             shadow_dx=style.shadow_offset_x,
             shadow_dy=style.shadow_offset_y,
-            glow_radius=style.glow_radius_px,
+            glow_radius=_glow_radius(style, after=False),
         )
         return
 
@@ -2458,19 +2580,66 @@ def _paint_char_karaoke_stack(
             stroke2_width=style.stroke2_width_px,
             shadow_dx=style.shadow_offset_x,
             shadow_dy=style.shadow_offset_y,
-            glow_radius=style.glow_radius_px,
+            glow_radius=_glow_radius(style, after=False),
         )
-        stroke_pad = _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px)
+        stroke_pad = _visual_text_padding(style)
+        clip_bounds = clip_rect if clip_rect is not None else QRectF(
+            float(char_x),
+            float(baseline_y - metrics.ascent()),
+            float(char_width),
+            float(metrics.height()),
+        )
         # RTL：单字内扫光从右向左，已唱区贴字符右缘。
         clip_x = char_x + (char_width * (1.0 - ratio) if rtl else 0.0)
+        # 已唱发光：发光是软晕，halo 远比字框大。若和描边/填充一样按字框（仅 stroke_pad）
+        # 硬裁，密集字（如「疑」）的内部 halo 会糊成一整块、被裁成锐利方框。所以发光在
+        # 上/下/尾缘用「发光级」宽松裁切让外缘自然衰减；但**前缘（扫光线）必须停在扫光位
+        # 置本身**——若也往未唱侧外扩 glow_pad，会把字符未唱部分的笔画也染上已唱发光，
+        # 在扫光线前方露出一条亮边（扫描线 bug）。前缘对齐扫光线后，唯一的硬边就落在
+        # 扫光线上，与填充的颜色边一致。并且——
+        #   · 当已唱发光与未唱发光完全相同（颜色 + 半径）时，底下整字未唱发光已画满，
+        #     再叠一遍只会在已唱区叠出更亮的方块，直接跳过即可。
+        if style.decoration_kind == "glow":
+            before_glow = (_fill_signature(colors.before.shadow), _glow_radius(style, after=False))
+            after_glow = (_fill_signature(colors.after.shadow), _glow_radius(style, after=True))
+            if before_glow != after_glow:
+                glow_pad = _glow_extent(
+                    style.stroke_width_px, style.stroke2_width_px, _glow_radius(style, after=True)
+                )
+                # 尾缘 + 上下外扩 glow_pad，前缘（扫光线）不外扩：
+                # LTR 扫光线在右缘，RTL 在左缘（clip_x 即扫光线左侧）。
+                glow_left = clip_x if rtl else clip_x - glow_pad
+                glow_width = char_width * ratio + glow_pad
+                painter.save()
+                try:
+                    painter.setClipRect(
+                        QRectF(
+                            float(glow_left),
+                            float(clip_bounds.top() - glow_pad),
+                            float(glow_width),
+                            float(clip_bounds.height() + glow_pad * 2),
+                        )
+                    )
+                    _paint_glow_path(
+                        painter,
+                        path,
+                        colors.after.shadow,
+                        rect,
+                        _glow_radius(style, after=True),
+                        style.stroke_width_px,
+                        style.stroke2_width_px,
+                    )
+                finally:
+                    painter.restore()
+        # 已唱描边 + 填充：保持卡拉ok 走字的硬边（按字框紧裁），发光已单独画过。
         painter.save()
         try:
             painter.setClipRect(
                 QRectF(
                     float(clip_x - stroke_pad),
-                    float(baseline_y - metrics.ascent() - stroke_pad),
+                    float(clip_bounds.top() - stroke_pad),
                     float(char_width * ratio + stroke_pad),
-                    float(metrics.height() + stroke_pad * 2),
+                    float(clip_bounds.height() + stroke_pad * 2),
                 )
             )
             _paint_text_layer_stack(
@@ -2483,7 +2652,8 @@ def _paint_char_karaoke_stack(
                 stroke2_width=style.stroke2_width_px,
                 shadow_dx=style.shadow_offset_x,
                 shadow_dy=style.shadow_offset_y,
-                glow_radius=style.glow_radius_px,
+                glow_radius=_glow_radius(style, after=True),
+                draw_glow=False,
             )
         finally:
             painter.restore()
@@ -2499,7 +2669,7 @@ def _paint_char_karaoke_stack(
         stroke2_width=style.stroke2_width_px,
         shadow_dx=style.shadow_offset_x,
         shadow_dy=style.shadow_offset_y,
-        glow_radius=style.glow_radius_px,
+        glow_radius=_glow_radius(style, after=True),
     )
 
 
@@ -2546,20 +2716,60 @@ def _paint_glow_path(
     fill: PaintFill,
     rect: QRectF,
     radius: int,
+    stroke_width: int,
+    stroke2_width: int,
+    source_clip: QRectF | None = None,
 ) -> None:
-    brush = _brush_for_fill(fill, rect)
     radius = max(radius, 1)
-    steps = max(4, min(8, radius))
-    alpha_step = 1.0 - (1.0 - 0.5) ** (1.0 / steps)
-    for index in range(steps, 0, -1):
-        width = max(1.0, radius * 2.0 * index / steps)
-        painter.save()
-        painter.setOpacity(alpha_step)
-        pen = QPen(brush, width)
-        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.strokePath(path, pen)
-        painter.restore()
+    width = _glow_pen_width(stroke_width, stroke2_width, radius)
+    bounds = path.boundingRect()
+    if bounds.isEmpty():
+        return
+    pad = _glow_extent(stroke_width, stroke2_width, radius) + 2
+    layer_rect = bounds.adjusted(-pad, -pad, pad, pad)
+    image_w = max(1, math.ceil(layer_rect.width()))
+    image_h = max(1, math.ceil(layer_rect.height()))
+    source = QImage(image_w, image_h, QImage.Format.Format_ARGB32_Premultiplied)
+    source.fill(0)
+
+    local_path = QPainterPath(path)
+    local_path.translate(-layer_rect.left(), -layer_rect.top())
+    local_rect = rect.translated(-layer_rect.left(), -layer_rect.top())
+    p = QPainter(source)
+    try:
+        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
+        if source_clip is not None:
+            p.setClipRect(source_clip.translated(-layer_rect.left(), -layer_rect.top()))
+        _paint_stroke_path(p, local_path, fill, local_rect, width)
+    finally:
+        p.end()
+
+    painter.drawImage(QPointF(layer_rect.left(), layer_rect.top()), _blur_image(source, radius))
+
+
+def _blur_image(source: QImage, radius: int) -> QImage:
+    radius = max(int(radius), 1)
+    result = QImage(source.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    result.fill(0)
+    effect = QGraphicsBlurEffect()
+    effect.setBlurRadius(float(radius))
+    effect.setBlurHints(QGraphicsBlurEffect.BlurHint.QualityHint)
+    item = QGraphicsPixmapItem(QPixmap.fromImage(source))
+    item.setGraphicsEffect(effect)
+    scene = QGraphicsScene()
+    scene.setSceneRect(0.0, 0.0, float(source.width()), float(source.height()))
+    scene.addItem(item)
+    p = QPainter(result)
+    try:
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        scene.render(
+            p,
+            QRectF(0.0, 0.0, float(source.width()), float(source.height())),
+            QRectF(0.0, 0.0, float(source.width()), float(source.height())),
+        )
+    finally:
+        p.end()
+    return result
 
 
 def _paint_after_fill_path(
@@ -2593,36 +2803,6 @@ def _paint_after_stroke_path(
     _paint_after_path(
         painter, path, fill, rect, width, fill_segments, y, metrics, t_ms, rtl
     )
-
-
-def _paint_after_glow_path(
-    painter: QPainter,
-    path: QPainterPath,
-    fill: PaintFill,
-    rect: QRectF,
-    width: int,
-    fill_segments: list[_FillSegment],
-    y: int,
-    metrics: QFontMetrics,
-    t_ms: int,
-    rtl: bool = False,
-) -> None:
-    band = _fill_clip_band(fill_segments, t_ms, rtl)
-    if band is None:
-        return
-    fill_start, fill_end = band
-    painter.save()
-    try:
-        clip = QRectF(
-            float(fill_start - width),
-            float(y - metrics.ascent() - width),
-            float((fill_end - fill_start) + width),
-            float(metrics.height() + width * 2),
-        )
-        painter.setClipRect(clip)
-        _paint_glow_path(painter, path, fill, rect, width)
-    finally:
-        painter.restore()
 
 
 def _paint_after_path(
@@ -3067,13 +3247,16 @@ def _before_layer_cache_key(
         font_sig,
         latin_sig,
         tuple(char_widths),
+        style.letter_spacing_px,
         _karaoke_state_signature(colors.before),
         style.shadow_offset_x,
         style.shadow_offset_y,
         style.stroke_width_px,
         style.stroke2_width_px,
         style.decoration_kind,
-        style.glow_radius_px,
+        # 用「生效」半径而非原始字段：legacy ``glow_radius_px`` 会经 _glow_radius 映射，
+        # 两个不同的生效半径若都落在默认 10 上会撞 key、复用错误的发光位图。
+        _glow_radius(style, after=False),
         style.right_to_left,
     )
 
@@ -3121,14 +3304,18 @@ def _build_before_layer(
     ``(target_x0 + offset_x, target_baseline_y + offset_y)``，文字基线就会
     落在 (target_x0, target_baseline_y)。
     """
-    total_w = sum(char_widths)
+    total_w = _line_text_width(char_widths, style)
     text_ascent = metrics.ascent()
     text_h = metrics.height()
 
     # padding：要把阴影偏移 / 描边宽度 / glow 半径都留出余量，免得轮廓被裁
     stroke_extent = _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px)
     stroke_max = stroke_extent
-    glow_extra = style.glow_radius_px * 4 if style.decoration_kind == "glow" else 0
+    glow_extra = (
+        _glow_extent(style.stroke_width_px, style.stroke2_width_px, _glow_radius(style, after=False))
+        if style.decoration_kind == "glow"
+        else 0
+    )
     extent = max(stroke_max, glow_extra, 0) + 4  # +4 安全边
 
     pad_left = max(0, -style.shadow_offset_x) + extent
@@ -3153,7 +3340,7 @@ def _build_before_layer(
         )
         p.setFont(font)
 
-        local_lefts = _char_left_positions(char_widths, local_x0, rtl)
+        local_lefts = _char_left_positions(char_widths, local_x0, rtl, _letter_spacing(style))
         local_line_path = _line_text_path(
             line, char_widths, font, local_x0, local_y, local_lefts, font_for
         )
@@ -3166,8 +3353,16 @@ def _build_before_layer(
 
         # 1) 阴影 / glow
         if style.decoration_kind == "glow":
-            glow_radius = max(style.glow_radius_px, 1)
-            _paint_glow_path(p, local_line_path, colors.before.shadow, local_line_rect, glow_radius)
+            glow_radius = _glow_radius(style, after=False)
+            _paint_glow_path(
+                p,
+                local_line_path,
+                colors.before.shadow,
+                local_line_rect,
+                glow_radius,
+                style.stroke_width_px,
+                style.stroke2_width_px,
+            )
         elif style.shadow_color and (style.shadow_offset_x or style.shadow_offset_y):
             shadow_rect = local_line_rect.translated(style.shadow_offset_x, style.shadow_offset_y)
             shadow_path = _line_text_path(
@@ -3209,6 +3404,185 @@ def _build_before_layer(
     offset_x = -pad_left
     offset_y = -(pad_top + text_ascent)
     return (image, offset_x, offset_y)
+
+
+# ---------------------------------------------------------------------------
+# After-layer glow 缓存：构建 / 查询
+# ---------------------------------------------------------------------------
+
+
+def _after_glow_cache_key(
+    line: TimingLine,
+    style: Style,
+    font: QFont,
+    char_widths: list[int],
+    colors: KaraokeColors,
+    latin_font: QFont | None = None,
+    font_for=None,
+) -> tuple:
+    """Key for the baked "已唱" glow image.
+
+    只含影响整行模糊外观的字段——发光的形状来自字形轮廓 + 描边宽度，颜色来自
+    ``colors.after.shadow``，半径来自 ``glow_after_radius``。扫光带（t_ms）不进 key，
+    因为它在 blit 时用 setClipRect 处理。
+    """
+    text = "".join(ch.text for ch in line.chars)
+    font_sig = (
+        font.family(),
+        font.pixelSize(),
+        int(font.weight()),
+        font.italic(),
+    )
+    latin_sig = latin_font.family() if (font_for is not None and latin_font is not None) else None
+    return (
+        text,
+        font_sig,
+        latin_sig,
+        tuple(char_widths),
+        style.letter_spacing_px,
+        _fill_signature(colors.after.shadow),
+        style.stroke_width_px,
+        style.stroke2_width_px,
+        _glow_radius(style, after=True),
+        style.right_to_left,
+    )
+
+
+def _get_or_build_after_glow(
+    key: tuple,
+    line: TimingLine,
+    char_widths: list[int],
+    font: QFont,
+    style: Style,
+    colors: KaraokeColors,
+    metrics: QFontMetrics,
+    rtl: bool = False,
+    font_for=None,
+) -> tuple[QImage, int, int]:
+    with _AFTER_GLOW_LOCK:
+        cached = _AFTER_GLOW_CACHE.get(key)
+        if cached is not None:
+            _AFTER_GLOW_CACHE.move_to_end(key)
+            return cached
+
+    # 构建（含一次 QGraphicsBlurEffect）在锁外做，不阻塞别的线程。
+    entry = _build_after_glow(line, char_widths, font, style, colors, metrics, rtl, font_for)
+
+    with _AFTER_GLOW_LOCK:
+        _AFTER_GLOW_CACHE[key] = entry
+        while len(_AFTER_GLOW_CACHE) > _AFTER_GLOW_CACHE_MAX:
+            _AFTER_GLOW_CACHE.popitem(last=False)
+    return entry
+
+
+def _build_after_glow(
+    line: TimingLine,
+    char_widths: list[int],
+    font: QFont,
+    style: Style,
+    colors: KaraokeColors,
+    metrics: QFontMetrics,
+    rtl: bool = False,
+    font_for=None,
+) -> tuple[QImage, int, int]:
+    """Render the full (unclipped) "已唱" glow into a transparent QImage.
+
+    返回 ``(image, offset_x, offset_y)``：blit 时把 image 的左上画在
+    ``(target_x0 + offset_x, target_baseline_y + offset_y)``，发光就会与文字基线对齐。
+    """
+    total_w = _line_text_width(char_widths, style)
+    text_ascent = metrics.ascent()
+    text_h = metrics.height()
+    glow_radius = _glow_radius(style, after=True)
+
+    extent = _glow_extent(style.stroke_width_px, style.stroke2_width_px, glow_radius) + 4
+    img_w = max(extent + total_w + extent, 1)
+    img_h = max(extent + text_h + extent, 1)
+
+    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+
+    local_x0 = extent
+    local_y = extent + text_ascent
+    local_lefts = _char_left_positions(char_widths, local_x0, rtl, _letter_spacing(style))
+    local_line_path = _line_text_path(
+        line, char_widths, font, local_x0, local_y, local_lefts, font_for
+    )
+    local_line_rect = QRectF(
+        float(local_x0),
+        float(local_y - text_ascent),
+        float(total_w),
+        float(text_h),
+    )
+
+    p = QPainter(image)
+    try:
+        p.setRenderHints(
+            QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing
+        )
+        p.setFont(font)
+        _paint_glow_path(
+            p,
+            local_line_path,
+            colors.after.shadow,
+            local_line_rect,
+            glow_radius,
+            style.stroke_width_px,
+            style.stroke2_width_px,
+        )
+    finally:
+        p.end()
+
+    offset_x = -local_x0
+    offset_y = -(extent + text_ascent)
+    return (image, offset_x, offset_y)
+
+
+def _blit_feathered_glow(
+    painter: QPainter,
+    image: QImage,
+    top_left: QPointF,
+    *,
+    band_left: float,
+    band_right: float,
+    clip_top: float,
+    clip_height: float,
+    feather: int,
+) -> None:
+    """Blit the baked "已唱" glow, fading its left/right edges over ``feather`` px.
+
+    扫光带内（``[band_left, band_right]``）整张发光保留，左右各 ``feather`` 像素用渐变
+    alpha 羽化到 0，让发光在扫光交界平滑过渡，而不是被硬裁出一道「截断」边。
+
+    羽化用 ``CompositionMode_DestinationIn`` 实现，但必须在一张独立透明图层里做：
+    若直接画到主画布，DestinationIn 会把该区域内已绘制的背景 / 未唱层的 alpha 一并
+    乘掉，打出透明洞。图层合成完再整体 ``drawImage`` 回主画布（SourceOver）。
+    """
+    feather = max(int(feather), 1)
+    left = band_left - feather
+    width = (band_right - band_left) + feather * 2
+    if width <= 0 or clip_height <= 0:
+        return
+    layer_w = max(int(math.ceil(width)), 1)
+    layer_h = max(int(math.ceil(clip_height)), 1)
+    layer = QImage(layer_w, layer_h, QImage.Format.Format_ARGB32_Premultiplied)
+    layer.fill(0)
+    p = QPainter(layer)
+    try:
+        p.drawImage(QPointF(top_left.x() - left, top_left.y() - clip_top), image)
+        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
+        mask = QLinearGradient(QPointF(0.0, 0.0), QPointF(float(layer_w), 0.0))
+        frac = min(feather / width, 0.5)
+        opaque = QColor(0, 0, 0, 255)
+        clear = QColor(0, 0, 0, 0)
+        mask.setColorAt(0.0, clear)
+        mask.setColorAt(frac, opaque)
+        mask.setColorAt(1.0 - frac, opaque)
+        mask.setColorAt(1.0, clear)
+        p.fillRect(QRectF(0.0, 0.0, float(layer_w), float(layer_h)), QBrush(mask))
+    finally:
+        p.end()
+    painter.drawImage(QPointF(left, clip_top), layer)
 
 
 def _effective_karaoke_colors(style: Style) -> KaraokeColors:
@@ -3352,6 +3726,8 @@ def _style_for_line(style: Style, line: TimingLine) -> Style:
             "stroke2_width_px": scheme.stroke2_width_px,
             "decoration_kind": scheme.decoration_kind,
             "glow_radius_px": scheme.glow_radius_px,
+            "glow_before_radius_px": scheme.glow_before_radius_px,
+            "glow_after_radius_px": scheme.glow_after_radius_px,
             "shadow_color": scheme.shadow_color,
             "shadow_offset_x": scheme.shadow_offset_x,
             "shadow_offset_y": scheme.shadow_offset_y,
@@ -3445,8 +3821,7 @@ def _paint_rubies(
                         and t_ms > following_done_ms
                     )
                     if group_exiting:
-                        _apply_character_transform(
-                            painter,
+                        transform = _character_transform(
                             center_x=x + reading_w / 2,
                             center_y=ruby_baseline_y - ruby_metrics.ascent() + ruby_metrics.height() / 2,
                             dx=dx,
@@ -3458,17 +3833,28 @@ def _paint_rubies(
                             scale_origin_x=x,
                             scale_origin_y=ruby_baseline_y,
                         )
-                        _paint_ruby_text(
-                            painter,
-                            paint_ruby,
+                        reading = (
+                            "".join(reversed(_ruby_utopia_visual_units(paint_ruby.reading)))
+                            if rtl
+                            else paint_ruby.reading
+                        )
+                        ruby_path, ruby_rect = _ruby_text_path_and_rect(
+                            reading,
                             ruby_font,
                             ruby_metrics,
                             x,
                             ruby_baseline_y,
+                            target_width,
+                        )
+                        ruby_path = transform.map(ruby_path)
+                        _paint_ruby_karaoke_path(
+                            painter,
+                            ruby_path,
+                            ruby_path.boundingRect(),
+                            paint_ruby,
                             t_ms,
                             style,
                             rtl,
-                            target_width=target_width,
                         )
                     else:
                         _paint_ruby_text_units_with_transition(
@@ -3681,8 +4067,7 @@ def _paint_ruby_text_units_with_transition(
             painter.save()
             try:
                 painter.setOpacity(painter.opacity() * opacity)
-                _apply_character_transform(
-                    painter,
+                transform = _character_transform(
                     center_x=unit_x + unit_width / 2,
                     center_y=baseline_y - ruby_metrics.ascent() + ruby_metrics.height() / 2,
                     dx=dx,
@@ -3704,6 +4089,7 @@ def _paint_ruby_text_units_with_transition(
                     char_fill_ratio(start_ms, end_ms, t_ms),
                     style,
                     rtl,
+                    transform=transform,
                 )
             finally:
                 painter.restore()
@@ -3826,11 +4212,12 @@ def _paint_ruby_text_fragment(
     text: str,
     ruby_font: QFont,
     ruby_metrics: QFontMetrics,
-    x: int,
-    baseline_y: int,
+    x: int | float,
+    baseline_y: int | float,
     ratio: float,
     style: Style,
     rtl: bool = False,
+    transform: QTransform | None = None,
 ) -> None:
     path = QPainterPath()
     path.addText(float(x), float(baseline_y), ruby_font, text)
@@ -3840,6 +4227,9 @@ def _paint_ruby_text_fragment(
         float(ruby_metrics.horizontalAdvance(text)),
         float(ruby_metrics.height()),
     )
+    if transform is not None and not transform.isIdentity():
+        path = transform.map(path)
+        rect = path.boundingRect()
     _paint_ruby_karaoke_fragment(
         painter,
         path,
@@ -3877,7 +4267,8 @@ def _paint_ruby_karaoke_fragment(
     stroke2_width = _scaled_px(style.stroke2_width_px, scale)
     shadow_dx = _scaled_signed_px(style.shadow_offset_x, scale)
     shadow_dy = _scaled_signed_px(style.shadow_offset_y, scale)
-    glow_radius = _scaled_px(style.glow_radius_px, scale)
+    before_glow_radius = _scaled_glow_radius(style, scale, after=False)
+    after_glow_radius = _scaled_glow_radius(style, scale, after=True)
 
     _paint_text_layer_stack(
         painter,
@@ -3889,14 +4280,20 @@ def _paint_ruby_karaoke_fragment(
         stroke2_width=stroke2_width,
         shadow_dx=shadow_dx,
         shadow_dy=shadow_dy,
-        glow_radius=glow_radius,
+        glow_radius=before_glow_radius,
     )
 
     if ratio <= 0.0:
         return
 
     stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
-    pad = max(stroke_extent, glow_radius * 2, abs(shadow_dx), abs(shadow_dy), 2)
+    pad = max(
+        stroke_extent,
+        _glow_extent(stroke_width, stroke2_width, after_glow_radius) if style.decoration_kind == "glow" else 0,
+        abs(shadow_dx),
+        abs(shadow_dy),
+        2,
+    )
     ratio_c = min(ratio, 1.0)
     # RTL：已唱区贴读音右缘，左缘随进度左移。
     clip_left = rect.left() + (rect.width() * (1.0 - ratio_c) if rtl else 0.0) - pad
@@ -3920,7 +4317,7 @@ def _paint_ruby_karaoke_fragment(
             stroke2_width=stroke2_width,
             shadow_dx=shadow_dx,
             shadow_dy=shadow_dy,
-            glow_radius=glow_radius,
+            glow_radius=after_glow_radius,
         )
     finally:
         painter.restore()
@@ -3938,9 +4335,21 @@ def _paint_text_layer_stack(
     shadow_dx: int,
     shadow_dy: int,
     glow_radius: int,
+    draw_glow: bool = True,
 ) -> None:
     if style.decoration_kind == "glow":
-        _paint_glow_path(painter, path, colors.shadow, rect, max(glow_radius, 1))
+        # ``draw_glow=False`` 让调用方把发光单独按「发光级」宽松裁切处理（卡拉ok 走字
+        # 时发光软晕不能跟描边/填充一样按字框硬裁，否则会被裁成方框）。
+        if draw_glow:
+            _paint_glow_path(
+                painter,
+                path,
+                colors.shadow,
+                rect,
+                max(glow_radius, 1),
+                stroke_width,
+                stroke2_width,
+            )
     elif shadow_dx or shadow_dy:
         shadow_path = QTransform().translate(shadow_dx, shadow_dy).map(path)
         _paint_fill_path(
