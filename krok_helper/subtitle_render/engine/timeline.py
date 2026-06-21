@@ -82,6 +82,7 @@ def visible_display_lines(
     section_gap_ms: int = 0,
     sync_ending: bool = False,
     section_ending_mode: str = "hold",
+    protect_ms: int = 0,
 ) -> list[DisplayLine]:
     """Return lines whose display window contains ``t_ms``.
 
@@ -98,6 +99,7 @@ def visible_display_lines(
         track,
         lead_in_ms=lead_in_ms,
         tail_ms=tail_ms,
+        protect_ms=protect_ms,
         lane_gap_ms=lane_gap_ms,
         max_hold_ms=max_hold_ms,
         continuity_snap_ms=continuity_snap_ms,
@@ -121,6 +123,7 @@ def compute_display_lines(
     section_gap_ms: int = 0,
     sync_ending: bool = False,
     section_ending_mode: str = "hold",
+    protect_ms: int = 0,
 ) -> list[DisplayLine]:
     """Compute NicoKara-style display windows for all renderable lines.
 
@@ -135,6 +138,7 @@ def compute_display_lines(
 
     lead = max(lead_in_ms, 0)
     tail = max(tail_ms, 0)
+    protect = max(protect_ms, 0)
     lane_gap = max(lane_gap_ms, 0)
     max_hold = max(max_hold_ms, 0)
     snap = max(continuity_snap_ms, 0)
@@ -147,7 +151,6 @@ def compute_display_lines(
     natural_ends: list[int] = []
     lanes: list[int] = []
     prev_lane_natural_end: dict[int, int] = {}
-    prev_lane_sing_end: dict[int, int] = {}
 
     for index, line in enumerate(render_lines):
         lane = index % 2
@@ -169,7 +172,6 @@ def compute_display_lines(
         natural_ends.append(natural_end)
 
         previous_end = prev_lane_natural_end.get(lane)
-        previous_sing_end = prev_lane_sing_end.get(lane)
         if previous_end is None:
             display_start = preferred_start
         else:
@@ -178,28 +180,41 @@ def compute_display_lines(
                 display_start = available_start
             else:
                 display_start = preferred_start
-        if previous_sing_end is not None:
-            display_start = max(display_start, previous_sing_end + lane_gap)
         starts.append(display_start)
         prev_lane_natural_end[lane] = natural_end
-        prev_lane_sing_end[lane] = _line_end_ms(line)
+
+    display_ends: list[int] = []
+    for index, line in enumerate(render_lines):
+        own_sing_end = _line_end_ms(line)
+        floor_end = own_sing_end + protect
+        display_end = max(natural_ends[index], floor_end)
+        if max_hold > 0:
+            display_end = max(floor_end, min(display_end, starts[index] + max_hold))
+        display_ends.append(display_end)
+
+    _adjust_same_lane_display_windows(
+        render_lines,
+        starts,
+        display_ends,
+        lanes,
+        lead=lead,
+        protect=protect,
+        lane_gap=lane_gap,
+    )
 
     result: list[DisplayLine] = []
     for index, line in enumerate(render_lines):
-        display_end = natural_ends[index]
-        next_same = _next_same_lane_index(lanes, index)
-        if next_same is not None:
-            display_end = min(display_end, starts[next_same] - lane_gap)
         own_sing_end = _line_end_ms(line)
-        display_end = max(display_end, own_sing_end)
+        floor_end = own_sing_end + protect
+        display_end = max(display_ends[index], floor_end)
         if max_hold > 0:
-            display_end = max(own_sing_end, min(display_end, starts[index] + max_hold))
+            display_end = max(floor_end, min(display_end, starts[index] + max_hold))
         # 段落 / 同步退场
         sid = section_ids[index]
         if sync_ending and _is_last_in_lane_in_section(lanes, section_ids, index):
             display_end = max(display_end, section_end[sid])
         if section_ending_mode == "clear":
-            display_end = max(own_sing_end, min(display_end, section_end[sid]))
+            display_end = max(floor_end, min(display_end, section_end[sid]))
         if display_end < starts[index]:
             display_end = starts[index]
         result.append(
@@ -211,6 +226,59 @@ def compute_display_lines(
             )
         )
     return result
+
+
+def _adjust_same_lane_display_windows(
+    render_lines: list[TimingLine],
+    starts: list[int],
+    display_ends: list[int],
+    lanes: list[int],
+    *,
+    lead: int,
+    protect: int,
+    lane_gap: int,
+) -> None:
+    """Compress adjacent same-lane display windows while preserving protect floors."""
+    previous_by_lane: dict[int, int] = {}
+    for index, line in enumerate(render_lines):
+        lane = lanes[index]
+        previous = previous_by_lane.get(lane)
+        if previous is None:
+            previous_by_lane[lane] = index
+            continue
+
+        if display_ends[previous] + lane_gap <= starts[index]:
+            previous_by_lane[lane] = index
+            continue
+
+        previous_floor = _line_end_ms(render_lines[previous]) + protect
+        current_protect_start = max(_line_start_ms(line) - protect, 0)
+
+        # First give up the previous line's tail, but never below its protect floor.
+        display_ends[previous] = max(previous_floor, starts[index] - lane_gap)
+        if display_ends[previous] + lane_gap <= starts[index]:
+            previous_by_lane[lane] = index
+            continue
+
+        # Then shorten the new line's lead-in, stopping at its protect point.
+        target_start = display_ends[previous] + lane_gap
+        latest_start = max(current_protect_start, starts[index])
+        starts[index] = min(max(starts[index], target_start), latest_start)
+        if display_ends[previous] + lane_gap <= starts[index]:
+            previous_by_lane[lane] = index
+            continue
+
+        # If only the gap is missing, accept the shorter gap. When the protected
+        # windows themselves overlap, keep both protected windows rather than
+        # cutting the previous line's post-singing exit buffer.
+        if display_ends[previous] <= starts[index]:
+            previous_by_lane[lane] = index
+            continue
+
+        if display_ends[previous] <= current_protect_start:
+            starts[index] = display_ends[previous]
+
+        previous_by_lane[lane] = index
 
 
 def _compute_section_ids(render_lines: list[TimingLine], section_gap: int) -> list[int]:
@@ -327,15 +395,13 @@ def _line_end_ms(line: TimingLine) -> int:
     return 0
 
 
+def _line_start_ms(line: TimingLine) -> int:
+    if line.chars:
+        return line.chars[0].start_ms
+    return 0
+
+
 def _pair_sing_end_ms(lines: list[TimingLine], index: int) -> int:
     pair_start = (index // 2) * 2
     pair = lines[pair_start : pair_start + 2]
     return max(_line_end_ms(line) for line in pair)
-
-
-def _next_same_lane_index(lanes: list[int], index: int) -> Optional[int]:
-    lane = lanes[index]
-    for candidate in range(index + 1, len(lanes)):
-        if lanes[candidate] == lane:
-            return candidate
-    return None

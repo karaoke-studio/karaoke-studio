@@ -382,6 +382,9 @@ class Style:
     line_tail_ms: int = 1000
     """表示结束至少延续到同组两行歌唱结束后的毫秒数。"""
 
+    line_protect_ms: int = 0
+    """同 lane 冲突挤压时保留的显示时间；0 表示按 lead/tail 与退场动画自动计算。"""
+
     timing_offset_ms: int = 0
     """字幕整体时间偏移。正值延后显示，负值提前显示。"""
 
@@ -565,6 +568,7 @@ def style_from_dict(payload: object) -> Style:
             "row2_offset_y",
             "line_lead_in_ms",
             "line_tail_ms",
+            "line_protect_ms",
             "timing_offset_ms",
             "line_lane_gap_ms",
             "line_continuity_snap_ms",

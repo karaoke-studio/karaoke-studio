@@ -212,6 +212,46 @@ def test_compute_display_lines_never_cuts_before_own_sing_end():
     assert layouts[2].display_start_ms >= line1.end_ms + 300
 
 
+def test_compute_display_lines_preserves_protected_exit_tail():
+    line1 = _make_line([("a", 280)], end_ms=3420)
+    line2 = _make_line([("b", 1200)], end_ms=3000)
+    line3 = _make_line([("c", 5210)], end_ms=6600)
+    track = _track(line1, line2, line3)
+
+    layouts = compute_display_lines(
+        track,
+        lead_in_ms=1800,
+        tail_ms=1000,
+        lane_gap_ms=300,
+        max_hold_ms=12_000,
+        continuity_snap_ms=800,
+        protect_ms=500,
+    )
+
+    assert layouts[0].display_end_ms >= line1.end_ms + 500
+
+
+def test_compute_display_lines_keeps_next_line_protected_lead_in():
+    line1 = _make_line([("a", 1000)], end_ms=2000)
+    line2 = _make_line([("b", 9000)], end_ms=10_700)
+    line3 = _make_line([("c", 10_800)], end_ms=11_500)
+    line4 = _make_line([("d", 11_000)], end_ms=12_000)
+    track = _track(line1, line2, line3, line4)
+
+    layouts = compute_display_lines(
+        track,
+        lead_in_ms=1800,
+        tail_ms=1000,
+        lane_gap_ms=300,
+        max_hold_ms=12_000,
+        continuity_snap_ms=800,
+        protect_ms=500,
+    )
+
+    assert layouts[3].display_start_ms <= line4.chars[0].start_ms - 500
+    assert layouts[3].display_start_ms < line2.end_ms + 300
+
+
 def test_compute_display_lines_max_hold_does_not_cut_long_singing_line():
     line1 = _make_line([("a", 24_060), ("b", 25_060)], end_ms=30_300)
     line2 = _make_line([("c", 30_750)], end_ms=35_770)

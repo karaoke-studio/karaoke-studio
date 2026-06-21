@@ -1632,8 +1632,8 @@ def test_paint_frame_entry_and_exit_animation_change_rendered_frame(qapp):
 
     paint_frame(at_entry_static, track, 500, static)
     paint_frame(at_entry_animated, track, 500, animated)
-    paint_frame(at_exit_static, track, 2400, static)
-    paint_frame(at_exit_animated, track, 2400, animated)
+    paint_frame(at_exit_static, track, 2900, static)
+    paint_frame(at_exit_animated, track, 2900, animated)
 
     assert _pixel_hash(at_entry_static) != _pixel_hash(at_entry_animated)
     assert _pixel_hash(at_exit_static) != _pixel_hash(at_exit_animated)

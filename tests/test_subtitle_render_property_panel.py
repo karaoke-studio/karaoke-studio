@@ -616,6 +616,7 @@ def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
         entry_lead_ms=500,
         exit_anim="char_fade",
         exit_fade_ms=700,
+        line_protect_ms=450,
         lit_enabled=True,
         lit_style="square",
         lit_number=2,
@@ -663,6 +664,7 @@ def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
 
     assert restored.entry_anim == "utopia"
     assert restored.exit_anim == "char_fade"
+    assert restored.line_protect_ms == 450
     assert restored.lit_enabled is True
     assert restored.lit_style == "square"
     assert restored.lit_number == 2

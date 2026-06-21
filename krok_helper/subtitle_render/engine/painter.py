@@ -1012,6 +1012,7 @@ def _visible_lines_for_style(
             section_gap_ms=style.section_gap_ms,
             sync_ending=style.sync_ending,
             section_ending_mode=style.section_ending_mode,
+            protect_ms=_effective_line_protect_ms(style),
         )
     display_line = _single_visible_display_line(track, t_ms, style)
     if display_line is None:
@@ -1048,6 +1049,17 @@ def _single_visible_display_line(
             if best_lead_or_tail is None or sing_start >= _line_start_ms(best_lead_or_tail.line):
                 best_lead_or_tail = display_line
     return best_live or best_lead_or_tail
+
+
+def _effective_line_protect_ms(style: Style) -> int:
+    manual = max(int(style.line_protect_ms), 0)
+    if manual > 0:
+        base = manual
+    else:
+        lead = max(int(style.line_lead_in_ms), 0)
+        tail = max(int(style.line_tail_ms), 0)
+        base = min(lead, tail) // 2
+    return max(base, max(int(style.exit_fade_ms), 0))
 
 
 def _display_style_for_signal_window(style: Style) -> Style:
