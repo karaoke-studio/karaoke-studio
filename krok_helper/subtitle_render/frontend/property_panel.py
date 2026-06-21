@@ -474,6 +474,105 @@ class _SubGroup(QWidget):
         return not self._host.isVisible()
 
 
+class _ColorMatrixSelector(QWidget):
+    """NicoKara-style state×layer picker: columns 走字后/走字前, rows 文字/描边/描边2/装饰.
+
+    Replaces two dropdowns with a single clickable grid so the active cell is
+    visible at a glance and reachable in one click.
+    """
+
+    selectionChanged = Signal(str, str)  # state_key, layer_key
+
+    _STATES = (("after", "走字后"), ("before", "走字前"))
+    _LAYERS = (
+        ("text", "文字"),
+        ("stroke", "描边"),
+        ("stroke2", "描边2"),
+        ("shadow", "装饰"),
+    )
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._state = "after"
+        self._layer = "text"
+        self._buttons: dict[tuple[str, str], QPushButton] = {}
+
+        grid = QGridLayout(self)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
+
+        for col, (_state_key, state_label) in enumerate(self._STATES):
+            head = QLabel(state_label, self)
+            head.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            themed(head, lambda: f"color: {palette().text_secondary}; font-size: 9pt;")
+            grid.addWidget(head, 0, col)
+
+        for row, (layer_key, layer_label) in enumerate(self._LAYERS):
+            for col, (state_key, _state_label) in enumerate(self._STATES):
+                btn = QPushButton(layer_label, self)
+                btn.setObjectName("ColorMatrixCell")
+                btn.setCheckable(True)
+                btn.setMinimumHeight(30)
+                btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.clicked.connect(
+                    lambda _checked=False, s=state_key, lyr=layer_key: self._select(s, lyr)
+                )
+                self._buttons[(state_key, layer_key)] = btn
+                grid.addWidget(btn, row + 1, col)
+
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        themed(
+            self,
+            lambda: (
+                f"""
+                QPushButton#ColorMatrixCell {{
+                    background: {palette().secondary_button_bg};
+                    color: {palette().secondary_button_text};
+                    border: 1px solid {palette().secondary_button_border};
+                    border-radius: 6px;
+                    padding: 0 6px;
+                    font-size: 9.5pt;
+                }}
+                QPushButton#ColorMatrixCell:hover {{
+                    border-color: {palette().accent_primary};
+                }}
+                QPushButton#ColorMatrixCell:checked {{
+                    background: {palette().accent_primary};
+                    color: #FFFFFF;
+                    border-color: {palette().accent_primary};
+                    font-weight: 600;
+                }}
+                """
+            ),
+        )
+        self._refresh_checked()
+
+    def current(self) -> tuple[str, str]:
+        return self._state, self._layer
+
+    def set_selection(self, state: str, layer: str) -> None:
+        if (state, layer) == (self._state, self._layer):
+            return
+        self._state, self._layer = state, layer
+        self._refresh_checked()
+
+    def _select(self, state: str, layer: str) -> None:
+        if (state, layer) != (self._state, self._layer):
+            self._state, self._layer = state, layer
+            self._refresh_checked()
+            self.selectionChanged.emit(state, layer)
+        else:
+            self._refresh_checked()  # re-check if the user clicked the active cell
+
+    def _refresh_checked(self) -> None:
+        active = (self._state, self._layer)
+        for key, btn in self._buttons.items():
+            btn.setChecked(key == active)
+
+
 class GradientStopsEditor(QWidget):
     """Compact gradient stop editor for horizontal/vertical PaintFill gradients."""
 
@@ -1077,36 +1176,31 @@ class PropertyPanel(QTabWidget):
     def _make_color_section(self) -> QFrame:
         section, layout = _section("颜色")
 
-        target_grid = QWidget(section)
-        target_layout = QGridLayout(target_grid)
-        target_layout.setContentsMargins(0, 0, 0, 0)
-        target_layout.setHorizontalSpacing(8)
-        target_layout.setVerticalSpacing(8)
-
+        # 状态(走字前/后) × 图层(文字/描边/描边2/装饰) 用一个点选矩阵呈现（对标
+        # nicokara maker3）。两个 combo 仍作为隐藏的取值后端，矩阵与之双向同步，
+        # 这样依赖 currentData 的取值/同步逻辑与测试都无需改动。
         self._color_state_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._color_state_combo)
         self._color_state_combo.addItem("走字前", "before")
         self._color_state_combo.addItem("走字后", "after")
         self._color_state_combo.setCurrentIndex(1)
+        self._color_state_combo.hide()
         self._color_state_combo.currentIndexChanged.connect(
-            lambda _index: self._sync_color_fill_controls()
+            lambda _index: self._on_color_target_combo_changed()
         )
 
         self._color_layer_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._color_layer_combo)
         self._color_layer_combo.addItem("文字", "text")
         self._color_layer_combo.addItem("描边", "stroke")
         self._color_layer_combo.addItem("描边2", "stroke2")
         self._color_layer_combo.addItem("装饰", "shadow")
+        self._color_layer_combo.hide()
         self._color_layer_combo.currentIndexChanged.connect(
-            lambda _index: self._sync_color_fill_controls()
+            lambda _index: self._on_color_target_combo_changed()
         )
 
-        target_layout.addWidget(_field("状态", self._color_state_combo), 0, 0)
-        target_layout.addWidget(_field("图层", self._color_layer_combo), 0, 1)
-        target_layout.setColumnStretch(0, 1)
-        target_layout.setColumnStretch(1, 1)
-        layout.addWidget(target_grid)
+        self._color_matrix = _ColorMatrixSelector(section)
+        self._color_matrix.selectionChanged.connect(self._on_color_matrix_changed)
+        layout.addWidget(self._color_matrix)
 
         self._fill_mode_combo = _WheelFocusedComboBox(section)
         _compact_control(self._fill_mode_combo)
@@ -1982,6 +2076,28 @@ class PropertyPanel(QTabWidget):
         if path:
             self._paint_image_path_edit.setText(path)
             self._update_current_fill(image_path=path)
+
+    def _on_color_matrix_changed(self, state: str, layer: str) -> None:
+        self._color_state_combo.blockSignals(True)
+        self._color_layer_combo.blockSignals(True)
+        try:
+            self._color_state_combo.setCurrentIndex(
+                max(0, self._color_state_combo.findData(state))
+            )
+            self._color_layer_combo.setCurrentIndex(
+                max(0, self._color_layer_combo.findData(layer))
+            )
+        finally:
+            self._color_state_combo.blockSignals(False)
+            self._color_layer_combo.blockSignals(False)
+        self._sync_color_fill_controls()
+
+    def _on_color_target_combo_changed(self) -> None:
+        if hasattr(self, "_color_matrix"):
+            self._color_matrix.set_selection(
+                self._current_color_state_key(), self._current_color_layer_key()
+            )
+        self._sync_color_fill_controls()
 
     def _current_color_state_key(self) -> ColorStateKey:
         data = self._color_state_combo.currentData()
