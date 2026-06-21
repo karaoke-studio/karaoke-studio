@@ -1133,6 +1133,9 @@ class WorkflowStepButton(QWidget):
         self._active = False
         self._hovered = False
         self._compact = False
+        # 由宿主写入的瞬时状态文本（如打轴步骤的「当前 .sug 文件名 + 未保存」），
+        # None 时回退到步骤的默认描述。
+        self._status_text: str | None = None
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFixedHeight(60)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -1192,6 +1195,33 @@ class WorkflowStepButton(QWidget):
         self._active = active
         self._refresh_style()
 
+    def set_status_text(self, text: str | None) -> None:
+        """展示瞬时状态（如当前 .sug 文件名 / 未保存）。
+
+        ``None`` 或空串恢复步骤的默认描述。非紧凑模式显示在描述行；紧凑模式
+        描述行被隐藏，故并入标题行展示，保证收紧后状态依然可见。
+        """
+        self._status_text = text or None
+        self._render_text()
+
+    def _render_text(self) -> None:
+        """根据紧凑态 + 状态文本决定标题/描述两行的内容与可见性。
+
+        - 非紧凑：标题=步骤名；描述=状态文本（无则默认描述），可见。
+        - 紧凑：仅一行（编号+标题），描述行隐藏，状态并入标题行
+          （``步骤名 · 状态``），无状态时回到纯步骤名。
+        """
+        status = self._status_text
+        if self._compact:
+            self.desc_label.hide()
+            self.title_label.setText(
+                f"{self.step.title} · {status}" if status else self.step.title
+            )
+        else:
+            self.title_label.setText(self.step.title)
+            self.desc_label.setText(status or self.step.description)
+            self.desc_label.show()
+
     def setCompact(self, compact: bool) -> None:
         if self._compact == compact:
             return
@@ -1200,20 +1230,20 @@ class WorkflowStepButton(QWidget):
         self._refresh_style()
 
     def _apply_compact_layout(self) -> None:
-        # 紧凑模式：只藏副标题，编号 + 标题都保留 → 整条像 ①视频下载 ②波形对齐 …
+        # 紧凑模式：编号 + 标题保留 → 整条像 ①视频下载 ②波形对齐 …；副标题（含
+        # 状态）则由 _render_text 决定——非紧凑显示在描述行，紧凑并入标题行。
         if self._compact:
             self.setFixedHeight(32)
             self._content_layout.setContentsMargins(10, 2, 10, 2)
             self._content_layout.setSpacing(6)
             self.number_label.setFixedSize(22, 22)
-            self.desc_label.hide()
         else:
             self.setFixedHeight(60)
             self._content_layout.setContentsMargins(18, 10, 18, 8)
             self._content_layout.setSpacing(10)
             self.number_label.setFixedSize(32, 32)
-            self.desc_label.show()
         self.title_label.setVisible(True)
+        self._render_text()
 
     def enterEvent(self, event) -> None:  # noqa: N802
         self._hovered = True
@@ -1384,6 +1414,13 @@ class WorkflowStepper(QWidget):
 
     def moduleIdAt(self, index: int) -> str:
         return self._steps[index].module_id
+
+    def setStepStatus(self, module_id: str, text: str | None) -> None:
+        """把某一步的描述行替换为瞬时状态文本（None 恢复默认描述）。"""
+        for index, step in enumerate(self._steps):
+            if step.module_id == module_id:
+                self._items[index].set_status_text(text)
+                return
 
     def updateStepStyles(self) -> None:
         for index, item in enumerate(self._items):
@@ -2572,6 +2609,15 @@ class KrokHelperQtApp(QMainWindow):
                 timeline.set_zoom_enabled(True)
         except Exception:
             pass
+        # SUG 嵌入后标题栏被隐藏，但 _update_title() 仍在持续 setWindowTitle，
+        # 故监听 windowTitleChanged 把「当前 .sug 文件名 + 未保存」状态转贴到
+        # 「歌词打轴」步骤的描述行（见 _on_lyrics_timing_title_changed）。
+        try:
+            self.lyrics_timing_page.windowTitleChanged.connect(
+                self._on_lyrics_timing_title_changed
+            )
+        except Exception:
+            pass
         self.subtitle_render_page = PlaceholderPage(
             title="字幕视频生成",
             description="将已完成时间轴和样式设置渲染为字幕视频输出。",
@@ -2615,6 +2661,45 @@ class KrokHelperQtApp(QMainWindow):
         self.page_stack.setCurrentWidget(self.module_pages[module_id])
         self.workflow_stepper.setCurrentModule(module_id)
         self._sync_workflow_shortcut_scope()
+
+    def _on_lyrics_timing_title_changed(self, title: str) -> None:
+        """把 SUG 窗口标题里的项目状态镜像到「歌词打轴」步骤描述行。
+
+        SUG 在 embedded 模式下标题栏不可见，但仍持续 setWindowTitle，这里据此
+        把「当前 .sug 文件名 + 未保存」状态转贴到工作流步骤上（信息仅属于打轴
+        这一功能，故只更新该步骤而非全局）。
+        """
+        stepper = getattr(self, "workflow_stepper", None)
+        if stepper is None:
+            return
+        stepper.setStepStatus(
+            WORKFLOW_LYRICS_TIMING, self._parse_lyrics_timing_status(title)
+        )
+
+    @staticmethod
+    def _parse_lyrics_timing_status(title: str) -> "str | None":
+        """从 SUG 窗口标题解析「文件名 + 未保存」状态，无项目/格式不符时返回 None。
+
+        SUG 标题格式（strange_uta_game/frontend/main_window.py::_update_title）：
+          - 无项目: ``StrangeUtaGame - 歌词打轴工具 Bilibili@...``
+          - 有项目: ``StrangeUtaGame - {name}{[未保存]} //Bilibili@...``
+        这里耦合 SUG 的标题字面量，但解析容错：不匹配即返回 None，回退到步骤
+        默认描述，绝不抛错。SUG 若改标题格式，最坏只是状态不再显示。
+        """
+        if not title or " //Bilibili@" not in title:
+            return None
+        core = title.split(" //Bilibili@", 1)[0]
+        prefix = "StrangeUtaGame - "
+        if core.startswith(prefix):
+            core = core[len(prefix):]
+        core = core.strip()
+        dirty_mark = "[未保存]"
+        dirty = core.endswith(dirty_mark)
+        if dirty:
+            core = core[: -len(dirty_mark)].strip()
+        if not core:
+            return None
+        return f"{core} · 未保存" if dirty else core
 
     def open_lyrics_timing_project(self, project_path: Path) -> None:
         project_path = project_path.expanduser()
