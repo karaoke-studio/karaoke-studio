@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import math
 import os
 import subprocess
 import time
@@ -3107,10 +3108,29 @@ class KrokHelperQtApp(QMainWindow):
             global_pos = watched.mapToGlobal(local_pos)
         return waveform_view.rect().contains(waveform_view.mapFromGlobal(global_pos))
 
+    _ZOOM_SLIDER_MIN = 1
+    _ZOOM_SLIDER_MAX = 800
+    _ZOOM_MIN_PPS = 0.5
+    _ZOOM_MAX_PPS = 1200.0
+
+    def _slider_to_pps(self, slider_val: int) -> float:
+        """Map slider [1, 800] to pixels_per_second [0.5, 1200] on a log scale.
+        Each equal slider step produces an equal ratio change, so zoom feels
+        natural across the whole range."""
+        t = (slider_val - self._ZOOM_SLIDER_MIN) / (self._ZOOM_SLIDER_MAX - self._ZOOM_SLIDER_MIN)
+        return self._ZOOM_MIN_PPS * ((self._ZOOM_MAX_PPS / self._ZOOM_MIN_PPS) ** t)
+
+    def _pps_to_slider(self, pps: float) -> int:
+        pps = max(self._ZOOM_MIN_PPS, min(self._ZOOM_MAX_PPS, pps))
+        if pps <= self._ZOOM_MIN_PPS:
+            return self._ZOOM_SLIDER_MIN
+        t = math.log(pps / self._ZOOM_MIN_PPS) / math.log(self._ZOOM_MAX_PPS / self._ZOOM_MIN_PPS)
+        return self._ZOOM_SLIDER_MIN + int(round(t * (self._ZOOM_SLIDER_MAX - self._ZOOM_SLIDER_MIN)))
+
     def _sync_alignment_zoom_slider(self) -> None:
         if hasattr(self, "align_zoom_slider"):
             self.align_zoom_slider.blockSignals(True)
-            self.align_zoom_slider.setValue(int(round(self.waveform_view.pixels_per_second)))
+            self.align_zoom_slider.setValue(self._pps_to_slider(self.waveform_view.pixels_per_second))
             self.align_zoom_slider.blockSignals(False)
 
     def _resize_lyrics_results_columns(self) -> None:
@@ -4526,9 +4546,9 @@ class KrokHelperQtApp(QMainWindow):
         layout.addWidget(zoom_out)
 
         self.align_zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.align_zoom_slider.setRange(1, 800)
-        self.align_zoom_slider.setValue(120)
-        self.align_zoom_slider.valueChanged.connect(lambda value: self.waveform_view.set_zoom(float(value)))
+        self.align_zoom_slider.setRange(self._ZOOM_SLIDER_MIN, self._ZOOM_SLIDER_MAX)
+        self.align_zoom_slider.setValue(self._pps_to_slider(120.0))
+        self.align_zoom_slider.valueChanged.connect(lambda value: self.waveform_view.set_zoom(self._slider_to_pps(value)))
         self.align_zoom_slider.setMinimumWidth(36)
         self.align_zoom_slider.setMaximumWidth(110)
         self.align_zoom_slider.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
