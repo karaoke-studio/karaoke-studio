@@ -54,8 +54,12 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _volume_signal_geometry,
     _ruby_progress_ratio,
     _ruby_reading_intervals,
+    _ruby_layout_units,
+    _ruby_target_indices,
+    _ruby_target_x_range,
     _ruby_utopia_reading_units_and_intervals,
     _transition_char_state,
+    _utopia_main_group_for_index,
     _display_style_for_signal_window,
     _visible_lines_for_style,
     paint_frame,
@@ -1461,6 +1465,77 @@ def test_utopia_ruby_group_scanline_spans_multiple_main_characters(qapp):
         0.42,
         abs=0.02,
     )
+
+
+def test_ruby_target_x_range_uses_kanji_subspan_inside_timed_unit(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="寄", start_ms=35_890),
+            TimingChar(text="り", start_ms=36_100),
+            TimingChar(text="添", start_ms=36_310),
+            TimingChar(text="っ", start_ms=36_485),
+            TimingChar(text="て", start_ms=36_660),
+        ],
+        end_ms=36_850,
+    )
+    intervals = [(35_890, 36_100), (36_100, 36_310), (36_310, 36_485), (36_485, 36_660), (36_660, 36_850)]
+    ranges = [(0, 100), (100, 200), (200, 300), (300, 400), (400, 500)]
+    ruby = RubyAnnotation(
+        kanji="添",
+        reading="そ",
+        pos_start_ms=36_310,
+        pos_end_ms=36_660,
+    )
+
+    assert _ruby_target_x_range(ruby, line, intervals, ranges) == (200, 300)
+    assert _ruby_target_indices(ruby, line, intervals) == [2]
+    assert _utopia_main_group_for_index([ruby], line, intervals, 2) is None
+
+
+def test_utopia_groups_main_characters_that_share_one_ruby(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="躊", start_ms=103_250),
+            TimingChar(text="躇", start_ms=103_460),
+            TimingChar(text="う", start_ms=103_600),
+        ],
+        end_ms=103_780,
+    )
+    intervals = [(103_250, 103_460), (103_460, 103_600), (103_600, 103_780)]
+    ruby = RubyAnnotation(
+        kanji="躊躇",
+        reading="ためら",
+        reading_part_ms=[100, 210],
+        pos_start_ms=103_250,
+        pos_end_ms=103_600,
+    )
+
+    group = _utopia_main_group_for_index([ruby], line, intervals, 0)
+    assert group is not None
+    assert group[0] == [0, 1]
+    assert _utopia_main_group_for_index([ruby], line, intervals, 1) == group
+    assert _utopia_main_group_for_index([ruby], line, intervals, 2) is None
+
+
+def test_ruby_layout_spreads_reading_units_across_wide_target(qapp):
+    metrics = QFontMetrics(_build_ruby_font(Style(ruby_font_size_px=36)))
+    natural_positions = _ruby_layout_units(["か", "な", "た"], metrics, 100, None)
+    spread_positions = _ruby_layout_units(["か", "な", "た"], metrics, 100, 180)
+
+    natural_gap = natural_positions[1][1] - natural_positions[0][1]
+    spread_gap = spread_positions[1][1] - spread_positions[0][1]
+
+    assert spread_gap > natural_gap
+    assert spread_positions[0][1] >= 100
+    assert spread_positions[-1][1] + spread_positions[-1][2] <= 280
+
+
+def test_ruby_layout_centers_single_reading_unit_in_target(qapp):
+    metrics = QFontMetrics(_build_ruby_font(Style(ruby_font_size_px=36)))
+    unit, x, width = _ruby_layout_units(["そ"], metrics, 200, 100)[0]
+
+    assert unit == "そ"
+    assert x + width / 2 == pytest.approx(250)
 
 
 def test_ruby_small_kana_reading_uses_mora_units(qapp):

@@ -2021,20 +2021,39 @@ def _paint_line_with_character_transition(
     font_for=None,
 ) -> None:
     count = max(len(line.chars), 1)
+    handled_indices: set[int] = set()
     for index, (ch, width) in enumerate(zip(line.chars, char_widths)):
+        if index in handled_indices:
+            continue
         if index >= len(intervals) or index >= len(char_x_ranges):
             continue
-        left, _right = char_x_ranges[index]
-        char_start, char_end = intervals[index]
+        group = _utopia_main_group_for_index(active_rubies, line, intervals, index) if transition.effect == "utopia" else None
+        if group is not None:
+            group_indices, group_ruby = group
+            if index != group_indices[0]:
+                continue
+            indices = [i for i in group_indices if i < len(intervals) and i < len(char_x_ranges)]
+            handled_indices.update(indices[1:])
+        else:
+            indices = [index]
+            group_ruby = None
+
+        left = min(char_x_ranges[i][0] for i in indices)
+        right = max(char_x_ranges[i][1] for i in indices)
+        width = max(right - left, 1)
+        first_index = indices[0]
+        last_index = indices[-1]
+        char_start = intervals[first_index][0]
+        char_end = intervals[last_index][1]
         following_done_ms = (
-            _utopia_following_done_time(line, intervals, index, style)
+            _utopia_following_done_time(line, intervals, last_index, style)
             if transition.effect == "utopia"
             else None
         )
         opacity, dx, dy, rotation, scale_x, scale_y, skew_y = _transition_char_state(
             style,
             transition,
-            index,
+            first_index,
             count,
             char_start_ms=char_start,
             char_end_ms=char_end,
@@ -2046,8 +2065,10 @@ def _paint_line_with_character_transition(
             continue
 
         path = QPainterPath()
-        glyph_font = font_for(ch.text) if font_for is not None else font
-        path.addText(float(left), float(baseline_y), glyph_font, ch.text)
+        for char_index in indices:
+            glyph = line.chars[char_index]
+            glyph_font = font_for(glyph.text) if font_for is not None else font
+            path.addText(float(char_x_ranges[char_index][0]), float(baseline_y), glyph_font, glyph.text)
         painter.save()
         try:
             painter.setOpacity(painter.opacity() * opacity)
@@ -2074,18 +2095,41 @@ def _paint_line_with_character_transition(
                 metrics=metrics,
                 colors=colors,
                 style=style,
-                ratio=_character_fill_ratio(
-                    line,
-                    intervals,
-                    char_x_ranges,
-                    active_rubies,
-                    index,
-                    t_ms,
+                ratio=(
+                    _ruby_progress_ratio(group_ruby, t_ms)
+                    if group_ruby is not None
+                    else _character_fill_ratio(
+                        line,
+                        intervals,
+                        char_x_ranges,
+                        active_rubies,
+                        index,
+                        t_ms,
+                    )
                 ),
                 rtl=rtl,
             )
         finally:
             painter.restore()
+
+
+def _utopia_main_group_for_index(
+    rubies: list[RubyAnnotation],
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+    index: int,
+) -> tuple[list[int], RubyAnnotation] | None:
+    ruby = _ruby_for_char_index(rubies, line, intervals, index)
+    if ruby is None:
+        return None
+    indices = [
+        candidate
+        for candidate in _ruby_target_indices(ruby, line, intervals)
+        if 0 <= candidate < len(line.chars)
+    ]
+    if len(indices) <= 1:
+        return None
+    return indices, ruby
 
 
 def _transition_char_state(
@@ -2686,14 +2730,22 @@ def _ruby_target_indices(
     line: TimingLine,
     intervals: list[tuple[int, int]],
 ) -> list[int]:
-    indices = [
+    time_indices = _ruby_time_indices(ruby, intervals)
+    text_indices = _find_ruby_text_indices(ruby.kanji, line, preferred_indices=time_indices)
+    if text_indices:
+        return text_indices
+    return time_indices
+
+
+def _ruby_time_indices(
+    ruby: RubyAnnotation,
+    intervals: list[tuple[int, int]],
+) -> list[int]:
+    return [
         index
         for index, (start, end) in enumerate(intervals)
         if start < ruby.pos_end_ms and end > ruby.pos_start_ms
     ]
-    if not indices:
-        indices = _find_ruby_text_indices(ruby.kanji, line)
-    return indices
 
 
 def _offset_fill_segments(segments: list[_FillSegment], dx: int) -> list[_FillSegment]:
@@ -3308,10 +3360,13 @@ def _paint_rubies(
             indices = _ruby_target_indices(ruby, line, intervals)
             if not indices:
                 continue
-            left = min(char_x_ranges[index][0] for index in indices)
-            right = max(char_x_ranges[index][1] for index in indices)
-            reading_w = ruby_metrics.horizontalAdvance(ruby.reading)
-            x = int(round((left + right - reading_w) / 2))
+            target_range = _ruby_target_x_range(ruby, line, intervals, char_x_ranges)
+            if target_range is None:
+                continue
+            left, right = target_range
+            target_width = max(right - left, 1)
+            reading_w = _ruby_layout_width(ruby.reading, ruby_metrics, target_width)
+            x = left
             opacity, dx, dy, rotation, scale_x, scale_y, skew_y = 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
             if transition is not None:
                 first_index = min(indices)
@@ -3339,21 +3394,49 @@ def _paint_rubies(
                 painter.setOpacity(painter.opacity() * opacity)
                 use_utopia_origin = transition is not None and transition.effect == "utopia"
                 if use_utopia_origin:
-                    _paint_ruby_text_units_with_transition(
-                        painter,
-                        ruby,
-                        ruby_font,
-                        ruby_metrics,
-                        x,
-                        ruby_baseline_y,
-                        t_ms,
-                        style,
-                        transition,
-                        first_index,
-                        max(len(line.chars), 1),
-                        following_done_ms,
-                        rtl,
-                    )
+                    if len(indices) > 1:
+                        _apply_character_transform(
+                            painter,
+                            center_x=x + reading_w / 2,
+                            center_y=ruby_baseline_y - ruby_metrics.ascent() + ruby_metrics.height() / 2,
+                            dx=dx,
+                            dy=dy,
+                            rotation=rotation,
+                            scale_x=scale_x,
+                            scale_y=scale_y,
+                            skew_y=skew_y,
+                            scale_origin_x=x,
+                            scale_origin_y=ruby_baseline_y,
+                        )
+                        _paint_ruby_text(
+                            painter,
+                            ruby,
+                            ruby_font,
+                            ruby_metrics,
+                            x,
+                            ruby_baseline_y,
+                            t_ms,
+                            style,
+                            rtl,
+                            target_width=target_width,
+                        )
+                    else:
+                        _paint_ruby_text_units_with_transition(
+                            painter,
+                            ruby,
+                            ruby_font,
+                            ruby_metrics,
+                            x,
+                            ruby_baseline_y,
+                            t_ms,
+                            style,
+                            transition,
+                            first_index,
+                            max(len(line.chars), 1),
+                            following_done_ms,
+                            rtl,
+                            target_width=target_width,
+                        )
                 else:
                     _apply_character_transform(
                         painter,
@@ -3376,6 +3459,7 @@ def _paint_rubies(
                         t_ms,
                         style,
                         rtl,
+                        target_width=target_width,
                     )
             finally:
                 painter.restore()
@@ -3389,7 +3473,14 @@ def _ruby_target_x_range(
     intervals: list[tuple[int, int]],
     char_x_ranges: list[tuple[int, int]],
 ) -> tuple[int, int] | None:
-    indices = _ruby_target_indices(ruby, line, intervals)
+    time_indices = _ruby_time_indices(ruby, intervals)
+    text_span = _find_ruby_text_span(ruby.kanji, line, preferred_indices=time_indices)
+    if text_span is not None:
+        target = _ruby_text_span_x_range(text_span, line, char_x_ranges)
+        if target is not None:
+            return target
+
+    indices = time_indices
     if not indices:
         return None
     left = min(char_x_ranges[index][0] for index in indices)
@@ -3397,14 +3488,93 @@ def _ruby_target_x_range(
     return left, right
 
 
-def _find_ruby_text_indices(kanji: str, line: TimingLine) -> list[int]:
+def _ruby_text_span_x_range(
+    text_span: tuple[int, int],
+    line: TimingLine,
+    char_x_ranges: list[tuple[int, int]],
+) -> tuple[int, int] | None:
+    span_start, span_end = text_span
+    cursor = 0
+    left: int | None = None
+    right: int | None = None
+    for index, ch in enumerate(line.chars):
+        if index >= len(char_x_ranges):
+            break
+        text = ch.text
+        text_len = len(text)
+        unit_start = cursor
+        unit_end = cursor + text_len
+        cursor = unit_end
+        if text_len <= 0 or unit_end <= span_start or unit_start >= span_end:
+            continue
+        overlap_start = max(span_start, unit_start) - unit_start
+        overlap_end = min(span_end, unit_end) - unit_start
+        char_left, char_right = char_x_ranges[index]
+        width = char_right - char_left
+        segment_left = char_left + round(width * overlap_start / text_len)
+        segment_right = char_left + round(width * overlap_end / text_len)
+        left = segment_left if left is None else min(left, segment_left)
+        right = segment_right if right is None else max(right, segment_right)
+    if left is None or right is None or right <= left:
+        return None
+    return left, right
+
+
+def _find_ruby_text_span(
+    kanji: str,
+    line: TimingLine,
+    *,
+    preferred_indices: list[int] | None = None,
+) -> tuple[int, int] | None:
+    if not kanji:
+        return None
+    text = "".join(ch.text for ch in line.chars)
+    occurrences: list[tuple[int, int]] = []
+    pos = text.find(kanji)
+    while pos >= 0:
+        occurrences.append((pos, pos + len(kanji)))
+        pos = text.find(kanji, pos + 1)
+    if not occurrences:
+        return None
+    if not preferred_indices:
+        return occurrences[0]
+
+    preferred = set(preferred_indices)
+
+    def score(span: tuple[int, int]) -> tuple[int, int]:
+        indices = _text_span_indices(span, line)
+        overlap = len(preferred.intersection(indices))
+        distance = min((abs(index - candidate) for index in indices for candidate in preferred), default=0)
+        return overlap, -distance
+
+    return max(occurrences, key=score)
+
+
+def _find_ruby_text_indices(
+    kanji: str,
+    line: TimingLine,
+    *,
+    preferred_indices: list[int] | None = None,
+) -> list[int]:
     if not kanji:
         return []
-    text = "".join(ch.text for ch in line.chars)
-    pos = text.find(kanji)
-    if pos < 0:
+    span = _find_ruby_text_span(kanji, line, preferred_indices=preferred_indices)
+    if span is None:
         return []
-    return list(range(pos, min(pos + len(kanji), len(line.chars))))
+    return _text_span_indices(span, line)
+
+
+def _text_span_indices(text_span: tuple[int, int], line: TimingLine) -> list[int]:
+    span_start, span_end = text_span
+    indices: list[int] = []
+    cursor = 0
+    for index, ch in enumerate(line.chars):
+        unit_start = cursor
+        unit_end = cursor + len(ch.text)
+        cursor = unit_end
+        if unit_start < span_end and unit_end > span_start:
+            indices.append(index)
+    return indices
 
 
 def _paint_ruby_text_units_with_transition(
@@ -3421,6 +3591,7 @@ def _paint_ruby_text_units_with_transition(
     char_count: int,
     following_done_ms: int | None,
     rtl: bool = False,
+    target_width: int | float | None = None,
 ) -> None:
     visual_units = _ruby_utopia_reading_units_and_intervals(ruby)
     # RTL：按音节反转排布顺序，使首音节落在最右；各音节计时不变。
@@ -3439,12 +3610,12 @@ def _paint_ruby_text_units_with_transition(
             t_ms,
             style,
             rtl,
+            target_width=target_width,
         )
         return
 
-    cursor_x = x
-    for unit, (start_ms, end_ms) in zip(units, intervals):
-        unit_width = ruby_metrics.horizontalAdvance(unit)
+    layout_units = _ruby_layout_units(units, ruby_metrics, x, target_width)
+    for (unit, unit_x, unit_width), (start_ms, end_ms) in zip(layout_units, intervals):
         opacity, dx, dy, rotation, scale_x, scale_y, skew_y = _transition_char_state(
             style,
             transition,
@@ -3462,7 +3633,7 @@ def _paint_ruby_text_units_with_transition(
                 painter.setOpacity(painter.opacity() * opacity)
                 _apply_character_transform(
                     painter,
-                    center_x=cursor_x + unit_width / 2,
+                    center_x=unit_x + unit_width / 2,
                     center_y=baseline_y - ruby_metrics.ascent() + ruby_metrics.height() / 2,
                     dx=dx,
                     dy=dy,
@@ -3470,7 +3641,7 @@ def _paint_ruby_text_units_with_transition(
                     scale_x=scale_x,
                     scale_y=scale_y,
                     skew_y=skew_y,
-                    scale_origin_x=cursor_x,
+                    scale_origin_x=unit_x,
                     scale_origin_y=baseline_y,
                 )
                 _paint_ruby_text_fragment(
@@ -3478,7 +3649,7 @@ def _paint_ruby_text_units_with_transition(
                     unit,
                     ruby_font,
                     ruby_metrics,
-                    cursor_x,
+                    unit_x,
                     baseline_y,
                     char_fill_ratio(start_ms, end_ms, t_ms),
                     style,
@@ -3486,7 +3657,6 @@ def _paint_ruby_text_units_with_transition(
                 )
             finally:
                 painter.restore()
-        cursor_x += unit_width
 
 
 def _paint_ruby_text(
@@ -3499,6 +3669,7 @@ def _paint_ruby_text(
     t_ms: int,
     style: Style,
     rtl: bool = False,
+    target_width: int | float | None = None,
 ) -> None:
     # RTL：按可见字形反转读音——小书き假名(ゃゅょ等)是独立字形，也要反过来；
     # 只有零宽浊点/半浊点(゙゚)留在基字后。直接 reading[::-1] 会让浊点
@@ -3506,13 +3677,13 @@ def _paint_ruby_text(
     reading = (
         "".join(reversed(_ruby_utopia_visual_units(ruby.reading))) if rtl else ruby.reading
     )
-    path = QPainterPath()
-    path.addText(float(x), float(baseline_y), ruby_font, reading)
-    rect = QRectF(
-        float(x),
-        float(baseline_y - ruby_metrics.ascent()),
-        float(ruby_metrics.horizontalAdvance(reading)),
-        float(ruby_metrics.height()),
+    path, rect = _ruby_text_path_and_rect(
+        reading,
+        ruby_font,
+        ruby_metrics,
+        x,
+        baseline_y,
+        target_width,
     )
     _paint_ruby_karaoke_path(
         painter,
@@ -3523,6 +3694,81 @@ def _paint_ruby_text(
         style,
         rtl,
     )
+
+
+def _ruby_text_path_and_rect(
+    reading: str,
+    ruby_font: QFont,
+    ruby_metrics: QFontMetrics,
+    x: int | float,
+    baseline_y: int | float,
+    target_width: int | float | None,
+) -> tuple[QPainterPath, QRectF]:
+    path = QPainterPath()
+    if target_width is None:
+        path.addText(float(x), float(baseline_y), ruby_font, reading)
+        width = ruby_metrics.horizontalAdvance(reading)
+        return path, QRectF(
+            float(x),
+            float(baseline_y - ruby_metrics.ascent()),
+            float(width),
+            float(ruby_metrics.height()),
+        )
+
+    units = _ruby_reading_units(reading)
+    layout_units = _ruby_layout_units(units, ruby_metrics, x, target_width)
+    for unit, unit_x, _unit_width in layout_units:
+        path.addText(float(unit_x), float(baseline_y), ruby_font, unit)
+    layout_width = _ruby_layout_width(reading, ruby_metrics, target_width)
+    return path, QRectF(
+        float(x),
+        float(baseline_y - ruby_metrics.ascent()),
+        float(layout_width),
+        float(ruby_metrics.height()),
+    )
+
+
+def _ruby_layout_width(
+    reading: str,
+    ruby_metrics: QFontMetrics,
+    target_width: int | float | None,
+) -> float:
+    natural = float(ruby_metrics.horizontalAdvance(reading))
+    if target_width is None:
+        return natural
+    target = float(max(target_width, 0))
+    if target <= natural:
+        return natural
+    return target
+
+
+def _ruby_layout_units(
+    units: list[str],
+    ruby_metrics: QFontMetrics,
+    x: int | float,
+    target_width: int | float | None,
+) -> list[tuple[str, float, float]]:
+    widths = [float(ruby_metrics.horizontalAdvance(unit)) for unit in units]
+    if not units:
+        return []
+    natural = sum(widths)
+    if target_width is None or len(units) <= 1 or float(target_width) <= natural * 1.15:
+        cursor = float(x)
+        if target_width is not None:
+            cursor += max((float(target_width) - natural) / 2, 0.0)
+        result: list[tuple[str, float, float]] = []
+        for unit, width in zip(units, widths):
+            result.append((unit, cursor, width))
+            cursor += width
+        return result
+
+    target = float(target_width)
+    slot_width = target / len(units)
+    result = []
+    for index, (unit, width) in enumerate(zip(units, widths)):
+        unit_x = float(x) + slot_width * index + (slot_width - width) / 2
+        result.append((unit, unit_x, width))
+    return result
 
 
 def _paint_ruby_text_fragment(
