@@ -6,8 +6,8 @@
   ``[ts]`` 后面跟多个字符（如 ``[00:38:05]どう[00:38:32]``），解析器会把
   这段文本均分到下一个时间戳前
 - 字符 i 的 ``end_ms`` = 字符 i+1 的 ``start_ms``（行内）；行末字符 = ``line.end_ms``
-- 如果某字符设了 ``pause_release_ms``（行内呼吸），它的 ``end_ms`` 仍按下一字
-  起始；释放点会让填充提前到位，避免"呼吸期还在涨色"
+- 如果某字符设了 ``pause_release_ms``（行内呼吸），它的 ``end_ms`` 取释放点；
+  下一字起始前的空白段会保持填色不变，避免"呼吸期还在涨色"
 
 无活跃行的 ``find_active_line`` 返回 ``None``。无字符 / 空行不参与查找。
 """
@@ -353,9 +353,16 @@ def compute_char_intervals(line: TimingLine) -> list[tuple[int, int]]:
     result: list[tuple[int, int]] = []
     for i, ch in enumerate(chars):
         if i + 1 < n:
-            end = chars[i + 1].start_ms
+            next_start = chars[i + 1].start_ms
+            if ch.pause_release_ms is not None:
+                end = min(max(ch.pause_release_ms, ch.start_ms), next_start)
+            else:
+                end = next_start
         elif line.end_ms is not None:
-            end = line.end_ms
+            if ch.pause_release_ms is not None:
+                end = min(max(ch.pause_release_ms, ch.start_ms), line.end_ms)
+            else:
+                end = line.end_ms
         else:
             end = ch.start_ms + 500
         # 容错：end 不应早于 start

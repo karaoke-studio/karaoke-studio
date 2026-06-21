@@ -66,6 +66,21 @@ def test_compute_char_intervals_basic():
     ]
 
 
+def test_compute_char_intervals_uses_pause_release_as_char_end():
+    line = TimingLine(
+        chars=[
+            TimingChar(text="そ", start_ms=39_010, pause_release_ms=39_410),
+            TimingChar(text="れ", start_ms=39_910),
+        ],
+        end_ms=40_370,
+    )
+
+    assert compute_char_intervals(line) == [
+        (39_010, 39_410),
+        (39_910, 40_370),
+    ]
+
+
 def test_compute_char_intervals_no_line_end_falls_back():
     line = _make_line([("a", 1000)], end_ms=None)
     intervals = compute_char_intervals(line)

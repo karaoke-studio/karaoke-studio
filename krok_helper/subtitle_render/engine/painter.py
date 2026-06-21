@@ -2028,12 +2028,20 @@ def _paint_line_with_character_transition(
         if index >= len(intervals) or index >= len(char_x_ranges):
             continue
         group = _utopia_main_group_for_index(active_rubies, line, intervals, index) if transition.effect == "utopia" else None
+        group_done_ms: int | None = None
+        group_exiting = False
         if group is not None:
             group_indices, group_ruby = group
-            if index != group_indices[0]:
+            group_done_ms = _utopia_following_done_time(line, intervals, group_indices[-1], style)
+            group_exiting = t_ms > group_done_ms
+            if group_exiting and index != group_indices[0]:
                 continue
-            indices = [i for i in group_indices if i < len(intervals) and i < len(char_x_ranges)]
-            handled_indices.update(indices[1:])
+            if group_exiting:
+                indices = [i for i in group_indices if i < len(intervals) and i < len(char_x_ranges)]
+                handled_indices.update(indices[1:])
+            else:
+                indices = [index]
+                group_ruby = None
         else:
             indices = [index]
             group_ruby = None
@@ -2046,7 +2054,9 @@ def _paint_line_with_character_transition(
         char_start = intervals[first_index][0]
         char_end = intervals[last_index][1]
         following_done_ms = (
-            _utopia_following_done_time(line, intervals, last_index, style)
+            group_done_ms
+            if group_done_ms is not None
+            else _utopia_following_done_time(line, intervals, last_index, style)
             if transition.effect == "utopia"
             else None
         )
@@ -2708,7 +2718,13 @@ def _karaoke_fill_segments(
 
         left = min(char_x_ranges[i][0] for i in indices)
         right = max(char_x_ranges[i][1] for i in indices)
-        segments.append(_FillSegment(left=left, right=right, ruby=ruby))
+        segments.append(
+            _FillSegment(
+                left=left,
+                right=right,
+                ruby=_effective_ruby_for_target(ruby, indices, intervals),
+            )
+        )
         index = max(indices) + 1
     return segments
 
@@ -2746,6 +2762,33 @@ def _ruby_time_indices(
         for index, (start, end) in enumerate(intervals)
         if start < ruby.pos_end_ms and end > ruby.pos_start_ms
     ]
+
+
+def _effective_ruby_for_target(
+    ruby: RubyAnnotation,
+    indices: list[int],
+    intervals: list[tuple[int, int]],
+) -> RubyAnnotation:
+    if len(indices) != 1:
+        return ruby
+    index = indices[0]
+    if index < 0 or index >= len(intervals):
+        return ruby
+    start, end = intervals[index]
+    if start == ruby.pos_start_ms and end == ruby.pos_end_ms:
+        return ruby
+    source_duration = max(ruby.pos_end_ms - ruby.pos_start_ms, 1)
+    target_duration = max(end - start, 0)
+    reading_part_ms = [
+        max(0, min(target_duration, round(rel_ms * target_duration / source_duration)))
+        for rel_ms in ruby.reading_part_ms
+    ]
+    return replace(
+        ruby,
+        pos_start_ms=start,
+        pos_end_ms=end,
+        reading_part_ms=reading_part_ms,
+    )
 
 
 def _offset_fill_segments(segments: list[_FillSegment], dx: int) -> list[_FillSegment]:
@@ -2849,10 +2892,11 @@ def _character_fill_ratio(
             if 0 <= candidate < len(char_x_ranges)
         ]
         if indices:
+            effective_ruby = _effective_ruby_for_target(ruby, indices, intervals)
             group_left = min(char_x_ranges[candidate][0] for candidate in indices)
             group_right = max(char_x_ranges[candidate][1] for candidate in indices)
             fill_end = group_left + (group_right - group_left) * _ruby_progress_ratio(
-                ruby, t_ms
+                effective_ruby, t_ms
             )
             char_left, char_right = char_x_ranges[index]
             width = max(char_right - char_left, 1)
@@ -3360,12 +3404,13 @@ def _paint_rubies(
             indices = _ruby_target_indices(ruby, line, intervals)
             if not indices:
                 continue
+            paint_ruby = _effective_ruby_for_target(ruby, indices, intervals)
             target_range = _ruby_target_x_range(ruby, line, intervals, char_x_ranges)
             if target_range is None:
                 continue
             left, right = target_range
             target_width = max(right - left, 1)
-            reading_w = _ruby_layout_width(ruby.reading, ruby_metrics, target_width)
+            reading_w = _ruby_layout_width(paint_ruby.reading, ruby_metrics, target_width)
             x = left
             opacity, dx, dy, rotation, scale_x, scale_y, skew_y = 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
             if transition is not None:
@@ -3394,7 +3439,12 @@ def _paint_rubies(
                 painter.setOpacity(painter.opacity() * opacity)
                 use_utopia_origin = transition is not None and transition.effect == "utopia"
                 if use_utopia_origin:
-                    if len(indices) > 1:
+                    group_exiting = (
+                        len(indices) > 1
+                        and following_done_ms is not None
+                        and t_ms > following_done_ms
+                    )
+                    if group_exiting:
                         _apply_character_transform(
                             painter,
                             center_x=x + reading_w / 2,
@@ -3410,7 +3460,7 @@ def _paint_rubies(
                         )
                         _paint_ruby_text(
                             painter,
-                            ruby,
+                            paint_ruby,
                             ruby_font,
                             ruby_metrics,
                             x,
@@ -3423,7 +3473,7 @@ def _paint_rubies(
                     else:
                         _paint_ruby_text_units_with_transition(
                             painter,
-                            ruby,
+                            paint_ruby,
                             ruby_font,
                             ruby_metrics,
                             x,
@@ -3451,7 +3501,7 @@ def _paint_rubies(
                     )
                     _paint_ruby_text(
                         painter,
-                        ruby,
+                        paint_ruby,
                         ruby_font,
                         ruby_metrics,
                         x,
@@ -3974,6 +4024,8 @@ def _ruby_progress_ratio(ruby: RubyAnnotation, t_ms: int) -> float:
 
 def _ruby_reading_intervals(ruby: RubyAnnotation) -> list[tuple[int, int]]:
     units = _ruby_reading_units(ruby.reading)
+    if len(ruby.reading_part_ms) >= 2 * max(len(units) - 1, 0):
+        return _ruby_reading_intervals_with_pauses(ruby, len(units))
     result: list[tuple[int, int]] = []
     boundaries = _ruby_reading_boundaries(ruby, len(units))
     for index, _unit in enumerate(units):
@@ -3983,6 +4035,25 @@ def _ruby_reading_intervals(ruby: RubyAnnotation) -> list[tuple[int, int]]:
             end = start
         result.append((start, end))
     return result
+
+
+def _ruby_reading_intervals_with_pauses(
+    ruby: RubyAnnotation,
+    unit_count: int,
+) -> list[tuple[int, int]]:
+    if unit_count <= 0:
+        return []
+    intervals: list[tuple[int, int]] = []
+    current_start = ruby.pos_start_ms
+    for index in range(unit_count - 1):
+        release = ruby.pos_start_ms + ruby.reading_part_ms[index * 2]
+        next_start = ruby.pos_start_ms + ruby.reading_part_ms[index * 2 + 1]
+        release = max(current_start, min(release, ruby.pos_end_ms))
+        next_start = max(release, min(next_start, ruby.pos_end_ms))
+        intervals.append((current_start, release))
+        current_start = next_start
+    intervals.append((current_start, max(current_start, ruby.pos_end_ms)))
+    return intervals
 
 
 def _ruby_utopia_reading_units_and_intervals(ruby: RubyAnnotation) -> list[tuple[str, tuple[int, int]]]:

@@ -1492,6 +1492,30 @@ def test_ruby_target_x_range_uses_kanji_subspan_inside_timed_unit(qapp):
     assert _utopia_main_group_for_index([ruby], line, intervals, 2) is None
 
 
+def test_single_kanji_ruby_does_not_slow_following_small_tsu(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="添", start_ms=36_310),
+            TimingChar(text="っ", start_ms=36_485),
+            TimingChar(text="て", start_ms=36_660),
+        ],
+        end_ms=36_850,
+    )
+    intervals = [(36_310, 36_485), (36_485, 36_660), (36_660, 36_850)]
+    ranges = [(0, 100), (100, 200), (200, 300)]
+    ruby = RubyAnnotation(
+        kanji="添",
+        reading="そ",
+        pos_start_ms=36_310,
+        pos_end_ms=36_660,
+    )
+
+    segments = _karaoke_fill_segments([100, 100, 100], intervals, ranges, [ruby], line)
+
+    assert _character_fill_ratio(line, intervals, ranges, [ruby], 0, 36_570) == 1.0
+    assert 100 < _fill_extent_end(segments, 36_570) < 200
+
+
 def test_utopia_groups_main_characters_that_share_one_ruby(qapp):
     line = TimingLine(
         chars=[
@@ -1549,6 +1573,22 @@ def test_ruby_small_kana_reading_uses_mora_units(qapp):
 
     assert _ruby_reading_intervals(ruby) == [(89_280, 89_630), (89_630, 89_860)]
     assert _ruby_progress_ratio(ruby, 89_950) == 1.0
+
+
+def test_ruby_consecutive_timestamps_create_reading_pause(qapp):
+    ruby = RubyAnnotation(
+        kanji="共",
+        reading="とも",
+        reading_part_ms=[480, 940],
+        pos_start_ms=112_640,
+        pos_end_ms=113_950,
+    )
+
+    assert _ruby_reading_intervals(ruby) == [
+        (112_640, 113_120),
+        (113_580, 113_950),
+    ]
+    assert _ruby_progress_ratio(ruby, 113_350) == pytest.approx(0.5)
 
 
 def test_utopia_ruby_splits_small_kana_for_visual_bounce(qapp):
