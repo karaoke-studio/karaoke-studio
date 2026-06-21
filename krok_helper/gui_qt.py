@@ -2562,6 +2562,15 @@ class KrokHelperQtApp(QMainWindow):
             parent=self.page_stack,
             settings_provider=lyrics_timing_settings,
         )
+        # Re-enable timeline zoom that SUG disables in embedded mode;
+        # the host does not provide a replacement zoom control.
+        try:
+            editor = self.lyrics_timing_page.editorInterface
+            timeline = getattr(editor, "timeline", None)
+            if timeline is not None and hasattr(timeline, "set_zoom_enabled"):
+                timeline.set_zoom_enabled(True)
+        except Exception:
+            pass
         self.subtitle_render_page = PlaceholderPage(
             title="字幕视频生成",
             description="将已完成时间轴和样式设置渲染为字幕视频输出。",
