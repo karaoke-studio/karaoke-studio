@@ -81,6 +81,7 @@ _SCHEME_FIELDS = {
     "ruby_color",
     "ruby_gap_px",
     "karaoke_colors",
+    "ruby_karaoke_colors",
 }
 
 _SINGER_FILL_PALETTE = ["#FF5A6F", "#0055FF", "#FFAA00", "#00A878", "#9B5CFF"]
@@ -1201,7 +1202,27 @@ class PropertyPanel(QTabWidget):
         row_layout.setColumnStretch(0, 1)
         row_layout.setColumnStretch(1, 1)
         layout.addWidget(row)
+
+        # 一键把主文字配色矩阵（走字前后 × 文字/描边/装饰）复制给注音；颜色照搬，
+        # 描边宽度 / 阴影偏移在渲染时按注音字号比例自动缩放。
+        self._ruby_apply_main_btn = QPushButton("应用主文字配色", section)
+        self._ruby_apply_main_btn.setMinimumHeight(32)
+        self._ruby_apply_main_btn.clicked.connect(self._apply_main_colors_to_ruby)
+        layout.addWidget(self._ruby_apply_main_btn)
+
+        self._ruby_color_hint = QLabel("", section)
+        self._ruby_color_hint.setWordWrap(True)
+        themed(
+            self._ruby_color_hint,
+            lambda: f"color: {palette().text_hint}; font-size: 8.5pt;",
+        )
+        layout.addWidget(self._ruby_color_hint)
         return section
+
+    def _apply_main_colors_to_ruby(self) -> None:
+        if self._syncing:
+            return
+        self._update_style(ruby_karaoke_colors=deepcopy(self._current_karaoke_colors()))
 
     def _make_color_section(self) -> QFrame:
         section, layout = _section("颜色")
@@ -2081,11 +2102,15 @@ class PropertyPanel(QTabWidget):
     def _set_color(self, field_name: str, color: str) -> None:
         normalized = _normalize_hex(color, str(self._scheme_value(field_name)))
         changes = {field_name: normalized}
-        colors = _apply_legacy_color_to_matrix(
-            self._current_karaoke_colors(), field_name, normalized
-        )
-        if colors is not None:
-            changes["karaoke_colors"] = colors
+        if field_name == "ruby_color":
+            # 选了单色就退出"跟随主文字"模式，让单色重新生效。
+            changes["ruby_karaoke_colors"] = None
+        else:
+            colors = _apply_legacy_color_to_matrix(
+                self._current_karaoke_colors(), field_name, normalized
+            )
+            if colors is not None:
+                changes["karaoke_colors"] = colors
         self._update_style(**changes)
 
     def _choose_paint_color(self, field_name: str) -> None:
@@ -2378,6 +2403,12 @@ class PropertyPanel(QTabWidget):
             self._ruby_font_size_spin.setValue(int(self._scheme_value("ruby_font_size_px")))
             self._ruby_color_btn.set_color(str(self._scheme_value("ruby_color")))
             self._ruby_gap_spin.setValue(int(self._scheme_value("ruby_gap_px")))
+            ruby_follows_main = self._scheme_value("ruby_karaoke_colors") is not None
+            self._ruby_color_hint.setText(
+                "当前：注音跟随主文字配色（改上方颜色即可恢复单色）"
+                if ruby_follows_main
+                else "当前：注音使用上方单色"
+            )
             self._sync_color_fill_controls()
         finally:
             self._syncing = was_syncing
@@ -2729,6 +2760,7 @@ def _scheme_from_style(style: Style, singer_id: int) -> SubtitleStyleScheme:
         ruby_color=ruby,
         ruby_gap_px=style.ruby_gap_px,
         karaoke_colors=colors,
+        ruby_karaoke_colors=style.ruby_karaoke_colors,
     )
 
 
@@ -2757,6 +2789,7 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         ruby_color=str(panel._scheme_value("ruby_color")),
         ruby_gap_px=int(panel._scheme_value("ruby_gap_px")),
         karaoke_colors=panel._current_karaoke_colors(),
+        ruby_karaoke_colors=panel._scheme_value("ruby_karaoke_colors"),
     )
 
 

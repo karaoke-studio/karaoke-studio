@@ -270,6 +270,7 @@ class SubtitleStyleScheme:
     ruby_color: Optional[str] = None
     ruby_gap_px: Optional[int] = None
     karaoke_colors: Optional[KaraokeColors] = None
+    ruby_karaoke_colors: Optional[KaraokeColors] = None
 
 
 @dataclass
@@ -320,6 +321,9 @@ class Style:
     ruby_font_size_px: int = 35
     ruby_color: str = "#FF5A6F"
     ruby_gap_px: int = 4
+    ruby_karaoke_colors: Optional[KaraokeColors] = None
+    """注音独立配色矩阵；为空时退回 ``ruby_color`` / 主文字配色。可由「应用主文字
+    配色」一键从主文字矩阵复制（颜色照搬，描边宽度/阴影偏移在渲染时按注音字号比例缩放）。"""
 
     # 视图（整体字幕层 2D 变换，对标 Sayatoo「视图」组）
     viewport_align: ViewportAlign = "center"
@@ -514,7 +518,7 @@ def style_to_dict(style: Style) -> dict:
     data: dict = {}
     for item in fields(Style):
         value = getattr(style, item.name)
-        if item.name == "karaoke_colors":
+        if item.name in {"karaoke_colors", "ruby_karaoke_colors"}:
             data[item.name] = karaoke_colors_to_dict(value) if value is not None else None
         elif item.name == "singer_style_overrides":
             data[item.name] = {
@@ -541,7 +545,7 @@ def style_from_dict(payload: object) -> Style:
     for key, value in payload.items():
         if key not in style_fields:
             continue
-        if key == "karaoke_colors":
+        if key in {"karaoke_colors", "ruby_karaoke_colors"}:
             changes[key] = karaoke_colors_from_dict(value)
         elif key == "singer_style_overrides":
             changes[key] = _singer_overrides_from_dict(value)
@@ -660,7 +664,7 @@ def subtitle_style_scheme_to_dict(scheme: SubtitleStyleScheme) -> dict:
     data: dict = {}
     for item in fields(SubtitleStyleScheme):
         value = getattr(scheme, item.name)
-        if item.name == "karaoke_colors":
+        if item.name in {"karaoke_colors", "ruby_karaoke_colors"}:
             data[item.name] = karaoke_colors_to_dict(value) if value is not None else None
         else:
             data[item.name] = value
@@ -675,7 +679,7 @@ def subtitle_style_scheme_from_dict(payload: object) -> SubtitleStyleScheme:
     for key, value in payload.items():
         if key not in scheme_fields:
             continue
-        if key == "karaoke_colors":
+        if key in {"karaoke_colors", "ruby_karaoke_colors"}:
             changes[key] = karaoke_colors_from_dict(value)
         else:
             changes[key] = value

@@ -3262,6 +3262,7 @@ def _style_for_line(style: Style, line: TimingLine) -> Style:
             "ruby_font_size_px": scheme.ruby_font_size_px,
             "ruby_gap_px": scheme.ruby_gap_px,
             "karaoke_colors": scheme.karaoke_colors,
+            "ruby_karaoke_colors": scheme.ruby_karaoke_colors,
         }.items()
         if value is not None
     }
@@ -3673,6 +3674,8 @@ def _paint_text_layer_stack(
 
 
 def _effective_ruby_karaoke_colors(style: Style) -> KaraokeColors:
+    if style.ruby_karaoke_colors is not None:
+        return style.ruby_karaoke_colors
     if style.karaoke_colors is not None:
         return style.karaoke_colors
     before = KaraokeColorState(
