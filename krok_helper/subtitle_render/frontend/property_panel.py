@@ -14,6 +14,7 @@ from typing import Any, Optional
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPolygonF
 from PyQt6.QtWidgets import (
+    QAbstractButton,
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -304,10 +305,54 @@ class ColorButton(QPushButton):
         )
 
 
+class ToggleSwitch(QAbstractButton):
+    """A compact iOS-style on/off switch used in place of a checkbox."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._track_w = 38
+        self._track_h = 22
+        self.setFixedSize(self._track_w, self._track_h)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(self._track_w, self._track_h)
+
+    def paintEvent(self, event) -> None:  # noqa: N802, ARG002
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            p = palette()
+            checked = self.isChecked()
+            track = QColor(p.accent_primary if checked else p.input_border)
+            if not self.isEnabled():
+                track.setAlpha(90)
+            radius = self.height() / 2
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(track)
+            painter.drawRoundedRect(
+                QRectF(0, 0, self.width(), self.height()), radius, radius
+            )
+            knob = self.height() - 6
+            x = self.width() - knob - 3 if checked else 3
+            painter.setBrush(QColor("#FFFFFF"))
+            painter.drawEllipse(QRectF(x, 3, knob, knob))
+        finally:
+            painter.end()
+
+
 class CollapsibleSection(QFrame):
     """A property card with a clickable header and collapsible content."""
 
-    def __init__(self, title: str, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        title: str,
+        parent: Optional[QWidget] = None,
+        *,
+        switch: bool = False,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("SubtitlePropertySection")
         self._content = QWidget(self)
@@ -321,17 +366,38 @@ class CollapsibleSection(QFrame):
         self._header.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
         self._header.setCursor(Qt.CursorShape.PointingHandCursor)
         self._header.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._header.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
         self._header.clicked.connect(self.set_expanded)
+
+        header_row = QWidget(self)
+        header_row.setObjectName("SubtitlePropertySectionHeaderRow")
+        header_layout = QHBoxLayout(header_row)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(0)
+        header_layout.addWidget(self._header, 0)
+        header_layout.addStretch(1)
+
+        self.header_switch: Optional[ToggleSwitch] = None
+        if switch:
+            self.header_switch = ToggleSwitch(header_row)
+            header_layout.addWidget(
+                self.header_switch, 0, Qt.AlignmentFlag.AlignVCenter
+            )
+            header_layout.addSpacing(12)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
-        root.addWidget(self._header)
+        root.addWidget(header_row)
         root.addWidget(self._content)
 
         self.content_layout = QVBoxLayout(self._content)
         self.content_layout.setContentsMargins(12, 0, 12, 12)
         self.content_layout.setSpacing(10)
+
+    @property
+    def header(self) -> QToolButton:
+        return self._header
 
     def set_expanded(self, expanded: bool) -> None:
         self._header.setChecked(expanded)
@@ -342,6 +408,70 @@ class CollapsibleSection(QFrame):
 
     def is_expanded(self) -> bool:
         return self._content.isVisible()
+
+
+class _ClickableRow(QWidget):
+    """A bare row widget that emits ``clicked`` on a left mouse press."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class _SubGroup(QWidget):
+    """A collapsible sub-section inside a property card (accent-bar heading + grid)."""
+
+    def __init__(
+        self,
+        title: str,
+        *,
+        collapsed: bool = False,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 4, 0, 0)
+        root.setSpacing(6)
+
+        self._header = _ClickableRow(self)
+        self._header.setCursor(Qt.CursorShape.PointingHandCursor)
+        header_layout = QHBoxLayout(self._header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(6)
+        label = _subgroup_label(title)
+        label.setParent(self._header)
+        header_layout.addWidget(label, 0)
+        header_layout.addStretch(1)
+        self._chevron = QLabel(self._header)
+        themed(
+            self._chevron,
+            lambda: f"color: {palette().text_secondary}; font-size: 9pt;",
+        )
+        header_layout.addWidget(self._chevron, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self._host = QWidget(self)
+        self.grid = QGridLayout(self._host)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(8)
+        self.grid.setVerticalSpacing(8)
+        self.grid.setColumnStretch(0, 1)
+        self.grid.setColumnStretch(1, 1)
+
+        root.addWidget(self._header)
+        root.addWidget(self._host)
+
+        self._header.clicked.connect(lambda: self.set_collapsed(self._host.isVisible()))
+        self.set_collapsed(collapsed)
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        self._host.setVisible(not collapsed)
+        self._chevron.setText("▸" if collapsed else "▾")
+
+    def is_collapsed(self) -> bool:
+        return not self._host.isVisible()
 
 
 class GradientStopsEditor(QWidget):
@@ -1188,13 +1318,12 @@ class PropertyPanel(QTabWidget):
         return scroll
 
     def _make_lit_section(self) -> QFrame:
-        section, layout = _section("指示灯")
+        section, layout = _section("指示灯", switch=True)
 
-        self._lit_enabled_check = QCheckBox("显示指示灯", section)
-        self._lit_enabled_check.toggled.connect(
+        self._lit_enabled_switch = section.header_switch
+        self._lit_enabled_switch.toggled.connect(
             lambda checked: self._update_style(lit_enabled=checked)
         )
-        layout.addWidget(self._lit_enabled_check)
 
         # 形状灯（圆/方/圆角）与音量柱用的是两套互不相干的字段：形状灯读 lit.*，
         # 音量柱读 volume.*。控件按种类分组成小节，再按当前 lit_style 整组显隐，
@@ -1202,28 +1331,9 @@ class PropertyPanel(QTabWidget):
         self._lit_volume_groups: list[QWidget] = []
         self._lit_shape_groups: list[QWidget] = []
 
-        def group(title: str, category: str | None):
-            box = QWidget(section)
-            box_layout = QVBoxLayout(box)
-            box_layout.setContentsMargins(0, 0, 0, 0)
-            box_layout.setSpacing(6)
-            header = QLabel(title, box)
-            themed(
-                header,
-                lambda: (
-                    f"color: {palette().text_secondary}; font-size: 9pt; "
-                    "font-weight: 600;"
-                ),
-            )
-            box_layout.addWidget(header)
-            host = QWidget(box)
-            grid = QGridLayout(host)
-            grid.setContentsMargins(0, 0, 0, 0)
-            grid.setHorizontalSpacing(8)
-            grid.setVerticalSpacing(8)
-            grid.setColumnStretch(0, 1)
-            grid.setColumnStretch(1, 1)
-            box_layout.addWidget(host)
+        def group(title: str, category: str | None, *, collapsed: bool = False):
+            box = _SubGroup(title, collapsed=collapsed, parent=section)
+            grid = box.grid
             layout.addWidget(box)
             if category == "volume":
                 self._lit_volume_groups.append(box)
@@ -1324,7 +1434,7 @@ class PropertyPanel(QTabWidget):
         add("柱条对齐", self._volume_align_combo)
 
         # ---- 音量柱 · 位置 ------------------------------------------------------
-        add = group("音量柱 · 位置", "volume")
+        add = group("音量柱 · 位置", "volume", collapsed=True)
         self._volume_x_spin = _spin(-4000, 4000)
         self._volume_x_spin.valueChanged.connect(
             lambda value: self._update_style(volume_offset_x=value)
@@ -1338,7 +1448,7 @@ class PropertyPanel(QTabWidget):
         add("Y", self._volume_y_spin)
 
         # ---- 音量柱 · 闪烁 ------------------------------------------------------
-        add = group("音量柱 · 闪烁", "volume")
+        add = group("音量柱 · 闪烁", "volume", collapsed=True)
         self._volume_flash_times_spin = _spin(1, 20)
         self._volume_flash_times_spin.valueChanged.connect(
             lambda value: self._update_style(volume_flash_times=value)
@@ -1395,7 +1505,7 @@ class PropertyPanel(QTabWidget):
         add("间距", self._lit_tracking_spin)
 
         # ---- 形状灯 · 位置 ------------------------------------------------------
-        add = group("形状灯 · 位置", "shape")
+        add = group("形状灯 · 位置", "shape", collapsed=True)
         self._lit_x_spin = _spin(-4000, 4000)
         self._lit_x_spin.valueChanged.connect(
             lambda value: self._update_style(lit_offset_x=value)
@@ -1435,7 +1545,7 @@ class PropertyPanel(QTabWidget):
         add(None, self._lit_shadow_check)
 
         # ---- 形状灯 · 转场 ------------------------------------------------------
-        add = group("形状灯 · 转场", "shape")
+        add = group("形状灯 · 转场", "shape", collapsed=True)
         self._lit_transition_mode_combo = _WheelFocusedComboBox(section)
         _compact_control(self._lit_transition_mode_combo)
         for label, value in [("无", "none"), ("淡入淡出", "fade"), ("滑动", "slide")]:
@@ -2122,9 +2232,9 @@ class PropertyPanel(QTabWidget):
             self._syncing = was_syncing
 
     def _sync_lit_controls(self) -> None:
-        if not hasattr(self, "_lit_enabled_check"):
+        if not hasattr(self, "_lit_enabled_switch"):
             return
-        self._lit_enabled_check.setChecked(self._style.lit_enabled)
+        self._lit_enabled_switch.setChecked(self._style.lit_enabled)
         self._lit_style_combo.setCurrentIndex(
             max(0, self._lit_style_combo.findData(self._style.lit_style))
         )
@@ -2501,7 +2611,8 @@ def _spin(minimum: int, maximum: int, *, suffix: str = "") -> QSpinBox:
     spin = _WheelFocusedSpinBox()
     spin.setRange(minimum, maximum)
     spin.setSuffix(suffix)
-    spin.setButtonSymbols(QSpinBox.ButtonSymbols.UpDownArrows)
+    spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
+    spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     _compact_control(spin)
     return spin
 
@@ -2560,8 +2671,27 @@ def _field(label_text: str, control: QWidget) -> QWidget:
     return box
 
 
-def _section(title: str) -> tuple[CollapsibleSection, QVBoxLayout]:
-    section = CollapsibleSection(title)
+def _subgroup_label(text: str) -> QLabel:
+    """A sub-section heading: accent bar + bold dark text, distinct from field labels."""
+    label = QLabel(text)
+    label.setObjectName("SubtitlePropertySubheading")
+    themed(
+        label,
+        lambda: (
+            f"color: {palette().title_text};"
+            "font-size: 9.5pt;"
+            "font-weight: 700;"
+            f"border-left: 3px solid {palette().accent_primary};"
+            "padding: 0 0 0 8px;"
+        ),
+    )
+    return label
+
+
+def _section(
+    title: str, *, switch: bool = False
+) -> tuple[CollapsibleSection, QVBoxLayout]:
+    section = CollapsibleSection(title, switch=switch)
     themed(
         section,
         lambda: (

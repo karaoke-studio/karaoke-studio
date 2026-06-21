@@ -176,7 +176,7 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._entry_lead_spin.value() == 450
     assert panel._exit_anim_combo.currentData() == "char_fade"
     assert panel._exit_fade_spin.value() == 650
-    assert panel._lit_enabled_check.isChecked()
+    assert panel._lit_enabled_switch.isChecked()
     assert panel._lit_style_combo.currentData() == "rounded"
     assert panel._lit_number_spin.value() == 2
     assert panel._lit_size_spin.value() == 36
@@ -352,7 +352,7 @@ def test_property_panel_subtitle_page_has_no_horizontal_scroll(qapp):
     assert panel._singer_combo.parentWidget() is not panel._line_margin_spin.parentWidget()
     subtitle_layout = subtitle_page.widget().layout()
     first_section = subtitle_layout.itemAt(0).widget()
-    assert first_section.layout().itemAt(0).widget().text() == "配色方案"
+    assert first_section.header.text() == "配色方案"
 
 
 def test_property_panel_sections_are_collapsible(qapp):
@@ -360,7 +360,7 @@ def test_property_panel_sections_are_collapsible(qapp):
     subtitle_page = panel.widget(1)
     subtitle_layout = subtitle_page.widget().layout()
     first_section = subtitle_layout.itemAt(0).widget()
-    header = first_section.layout().itemAt(0).widget()
+    header = first_section.header
     content = first_section.layout().itemAt(1).widget()
 
     assert header.text() == "配色方案"
@@ -890,7 +890,7 @@ def test_property_panel_lit_controls_emit_style(qapp):
     emitted: list[Style] = []
     panel.styleChanged.connect(emitted.append)
 
-    panel._lit_enabled_check.setChecked(True)
+    panel._lit_enabled_switch.setChecked(True)
     panel._lit_style_combo.setCurrentIndex(panel._lit_style_combo.findData("square"))
     panel._lit_number_spin.setValue(2)
     panel._lit_size_spin.setValue(44)
