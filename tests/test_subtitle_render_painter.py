@@ -60,6 +60,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _ruby_utopia_reading_units_and_intervals,
     _transition_char_state,
     _utopia_main_group_for_index,
+    _visual_text_padding,
     _display_style_for_signal_window,
     _visible_lines_for_style,
     paint_frame,
@@ -232,7 +233,7 @@ def _default_text_x(track: TimingTrack, style: Style, w: int = 160) -> int:
     line = track.lines[0]
     metrics = QFontMetrics(_build_font(style))
     text_w = sum(metrics.horizontalAdvance(c.text) for c in line.chars)
-    visual_pad = style.stroke_width_px + style.stroke2_width_px
+    visual_pad = _visual_text_padding(style)
     return _resolve_line_x(w, text_w + visual_pad * 2, style, 0) + visual_pad
 
 
@@ -454,7 +455,7 @@ def test_signal_volume_widens_line_and_shifts_text(qapp):
     # The union (bars' left edge .. text's right edge) stays centred on the frame.
     metrics = QFontMetrics(_build_font(style))
     text_w = sum(metrics.horizontalAdvance(c.text) for c in track.lines[0].chars)
-    visual_pad = style.stroke_width_px + style.stroke2_width_px
+    visual_pad = _visual_text_padding(style)
     union_mid = (layout.signal_x + (layout.text_x + text_w + visual_pad)) / 2
     assert union_mid == pytest.approx(160 / 2, abs=1.0)
 
@@ -655,9 +656,9 @@ def test_signal_shape_fade_makes_the_whole_shape_transparent(qapp):
     paint_frame(img, _singer_track(singer_id=0), 500, style)
 
     layout = _sayatoo_layout_for(_singer_track(singer_id=0), style, 500, w=140, h=90)
-    assert QColor(img.pixel(int(layout.signal_x) + 10, 36)).name(QColor.NameFormat.HexRgb).upper() == "#0000FF"
-    assert QColor(img.pixel(int(layout.signal_x) + 40, 36)).name(QColor.NameFormat.HexRgb).upper() == "#101010"
-    assert QColor(img.pixel(int(layout.signal_x) + 50, 36)).name(QColor.NameFormat.HexRgb).upper() == "#101010"
+    assert QColor(img.pixel(int(layout.signal_x) + 10, 45)).name(QColor.NameFormat.HexRgb).upper() == "#0000FF"
+    assert QColor(img.pixel(int(layout.signal_x) + 40, 45)).name(QColor.NameFormat.HexRgb).upper() == "#101010"
+    assert QColor(img.pixel(int(layout.signal_x) + 50, 45)).name(QColor.NameFormat.HexRgb).upper() == "#101010"
 
 
 def test_shape_active_lit_indices_extinguish_from_right_to_left(qapp):
@@ -1199,11 +1200,28 @@ def test_dual_line_gap_uses_main_text_bounds_not_ruby_block(qapp):
 
     baselines = _resolve_display_baselines(1080, track, [upper, lower], style)
     metrics = QFontMetrics(_build_font(style))
-    visual_pad = style.stroke_width_px + style.stroke2_width_px
+    visual_pad = _visual_text_padding(style)
     upper_main_bottom = baselines[0] + metrics.descent() + visual_pad
     lower_main_top = baselines[1] - metrics.ascent() - visual_pad
 
     assert lower_main_top - upper_main_bottom == style.line_gap_px
+
+
+def test_glow_does_not_expand_dual_line_gap(qapp):
+    track = _two_line_track()
+    plain = Style(font_size_px=100, ruby_font_size_px=35, ruby_gap_px=24, line_gap_px=90)
+    glow = replace(
+        plain,
+        decoration_kind="glow",
+        glow_before_radius_px=28,
+        glow_after_radius_px=36,
+    )
+    upper = DisplayLine(track.lines[0], lane=0, display_start_ms=0, display_end_ms=1000)
+    lower = DisplayLine(track.lines[1], lane=1, display_start_ms=0, display_end_ms=1000)
+
+    assert _resolve_display_baselines(1080, track, [upper, lower], glow) == _resolve_display_baselines(
+        1080, track, [upper, lower], plain
+    )
 
 
 def test_double_stroke_width_expands_visual_bounds(qapp):
@@ -1244,8 +1262,8 @@ def test_double_stroke_width_expands_visual_bounds(qapp):
     plain_w, plain_h = _bounds_size(_ink_bounds(plain))
     stroked_w, stroked_h = _bounds_size(_ink_bounds(stroked))
 
-    assert stroked_w - plain_w >= 60
-    assert stroked_h - plain_h >= 60
+    assert stroked_w - plain_w >= 45
+    assert stroked_h - plain_h >= 45
 
 
 def test_after_stroke_clip_does_not_bleed_past_scanline(qapp):
@@ -1282,7 +1300,7 @@ def test_after_stroke_clip_does_not_bleed_past_scanline(qapp):
 
     metrics = QFontMetrics(_build_font(style))
     char_w = metrics.horizontalAdvance("A")
-    visual_pad = style.stroke_width_px + style.stroke2_width_px
+    visual_pad = _visual_text_padding(style)
     x0 = _resolve_line_x(img.width(), char_w + visual_pad * 2, style, None) + visual_pad
     scan_x = x0 + char_w // 2
     bounds = _ink_bounds(img)

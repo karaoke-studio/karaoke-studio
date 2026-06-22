@@ -40,6 +40,7 @@ def test_property_panel_set_style_populates_controls(qapp):
     style = Style(
         font_family="Microsoft YaHei UI",
         font_size_px=72,
+        letter_spacing_px=6,
         font_weight=900,
         italic=True,
         base_color="#102030",
@@ -133,6 +134,7 @@ def test_property_panel_set_style_populates_controls(qapp):
 
     assert panel.subtitle_style == style
     assert panel._font_size_spin.value() == 72
+    assert panel._letter_spacing_spin.value() == 6
     assert panel._font_weight_combo.currentData() == 900
     assert panel._italic_check.isChecked()
     assert panel._color_state_combo.currentData() == "after"
@@ -251,6 +253,7 @@ def test_style_defaults_match_nicokara_layout_baseline():
 
     assert style.font_family == "UD Digi Kyokasho N-B"
     assert style.font_size_px == 100
+    assert style.letter_spacing_px == 0
     assert style.font_weight == 400
     assert style.fill_gradient_enabled is False
     assert style.fill_gradient_start_color == "#FF5A6F"
@@ -406,10 +409,12 @@ def test_property_panel_font_controls_emit_style(qapp):
     panel.styleChanged.connect(emitted.append)
 
     panel._font_size_spin.setValue(88)
+    panel._letter_spacing_spin.setValue(7)
     panel._font_weight_combo.setCurrentIndex(panel._font_weight_combo.findData(500))
     panel._italic_check.setChecked(True)
 
     assert emitted[-1].font_size_px == 88
+    assert emitted[-1].letter_spacing_px == 7
     assert emitted[-1].font_weight == 500
     assert emitted[-1].italic is True
 
@@ -427,6 +432,18 @@ def test_property_panel_color_controls_emit_normalized_style(qapp):
     assert emitted[-1].karaoke_colors.after.text.color == "#123ABC"
     assert emitted[-1].karaoke_colors.after.stroke.color == "#222222"
     assert panel._paint_solid_btn.color == "#123ABC"
+
+
+def test_property_panel_color_controls_preserve_alpha(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._set_color("fill_color", "#80123abc")
+
+    assert emitted[-1].fill_color == "#80123ABC"
+    assert emitted[-1].karaoke_colors.after.text.color == "#80123ABC"
+    assert panel._paint_solid_btn.color == "#80123ABC"
 
 
 def test_property_panel_gradient_controls_emit_style(qapp):
@@ -608,10 +625,12 @@ def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
     )
     scheme = SubtitleStyleScheme(
         font_size_px=88,
+        letter_spacing_px=5,
         fill_color="#112233",
         karaoke_colors=KaraokeColors(after=KaraokeColorState(text=fill)),
     )
     style = Style(
+        letter_spacing_px=3,
         entry_anim="utopia",
         entry_lead_ms=500,
         exit_anim="char_fade",
@@ -662,6 +681,8 @@ def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
 
     restored = style_from_dict(style_to_dict(style))
 
+    assert restored.letter_spacing_px == 3
+    assert restored.singer_style_overrides[2].letter_spacing_px == 5
     assert restored.entry_anim == "utopia"
     assert restored.exit_anim == "char_fade"
     assert restored.line_protect_ms == 450
@@ -728,9 +749,14 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     assert panel._shadow_x_field.isHidden()
     assert panel._shadow_y_field.isHidden()
     assert not panel._glow_radius_field.isHidden()
+    assert not panel._glow_after_radius_field.isHidden()
 
     panel._glow_radius_spin.setValue(28)
     assert emitted[-1].glow_radius_px == 28
+    assert emitted[-1].glow_before_radius_px == 28
+
+    panel._glow_after_radius_spin.setValue(16)
+    assert emitted[-1].glow_after_radius_px == 16
 
     panel._decoration_type_combo.setCurrentIndex(
         panel._decoration_type_combo.findData("shadow")
@@ -739,6 +765,7 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     assert not panel._shadow_x_field.isHidden()
     assert not panel._shadow_y_field.isHidden()
     assert panel._glow_radius_field.isHidden()
+    assert panel._glow_after_radius_field.isHidden()
 
 
 def test_property_panel_ruby_controls_emit_style(qapp):
@@ -973,6 +1000,7 @@ def test_property_panel_singer_scheme_controls_emit_style(qapp):
 
     panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("singer:1"))
     panel._font_size_spin.setValue(88)
+    panel._letter_spacing_spin.setValue(9)
     panel._set_color("fill_color", "#00aaee")
     panel._fill_mode_combo.setCurrentIndex(
         panel._fill_mode_combo.findData("gradient_horizontal")
@@ -984,6 +1012,7 @@ def test_property_panel_singer_scheme_controls_emit_style(qapp):
 
     scheme = emitted[-1].singer_style_overrides[1]
     assert scheme.font_size_px == 88
+    assert scheme.letter_spacing_px == 9
     assert scheme.fill_color == "#00AAEE"
     assert scheme.karaoke_colors.after.text.mode == "gradient_horizontal"
     assert scheme.karaoke_colors.after.text.start_color == "#00AAEE"
@@ -1001,6 +1030,7 @@ def test_property_panel_singer_scheme_switches_subtitle_controls(qapp):
         singer_style_overrides={
             0: SubtitleStyleScheme(
                 font_size_px=72,
+                letter_spacing_px=11,
                 font_weight=700,
                 fill_color="#0088ff",
                 fill_gradient_enabled=True,
@@ -1017,6 +1047,7 @@ def test_property_panel_singer_scheme_switches_subtitle_controls(qapp):
     panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("singer:0"))
 
     assert panel._font_size_spin.value() == 72
+    assert panel._letter_spacing_spin.value() == 11
     assert panel._font_weight_combo.currentData() == 700
     assert panel._fill_mode_combo.currentData() == "gradient_vertical"
     assert panel._paint_gradient_start_btn.color == "#0088FF"
@@ -1026,6 +1057,7 @@ def test_property_panel_singer_scheme_switches_subtitle_controls(qapp):
 
     panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("global"))
     assert panel._font_size_spin.value() == style.font_size_px
+    assert panel._letter_spacing_spin.value() == style.letter_spacing_px
     assert panel._paint_solid_btn.color == style.fill_color
 
 

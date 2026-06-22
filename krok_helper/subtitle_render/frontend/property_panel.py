@@ -61,6 +61,7 @@ _SCHEME_FIELDS = {
     "font_family",
     "font_family_latin",
     "font_size_px",
+    "letter_spacing_px",
     "font_weight",
     "italic",
     "base_color",
@@ -74,6 +75,8 @@ _SCHEME_FIELDS = {
     "stroke2_width_px",
     "decoration_kind",
     "glow_radius_px",
+    "glow_before_radius_px",
+    "glow_after_radius_px",
     "shadow_color",
     "shadow_offset_x",
     "shadow_offset_y",
@@ -260,7 +263,12 @@ def _normalize_hex(value: str, fallback: str = "#000000") -> str:
     color = QColor(value)
     if not color.isValid():
         color = QColor(fallback)
-    return color.name(QColor.NameFormat.HexRgb).upper()
+    name_format = (
+        QColor.NameFormat.HexArgb
+        if color.alpha() < 255
+        else QColor.NameFormat.HexRgb
+    )
+    return color.name(name_format).upper()
 
 
 class ColorButton(QPushButton):
@@ -287,12 +295,14 @@ class ColorButton(QPushButton):
         self._apply()
 
     def _apply(self) -> None:
-        text_color = "#111827" if QColor(self._color).lightness() > 150 else "#FFFFFF"
+        color = QColor(self._color)
+        text_color = "#111827" if color.lightness() > 150 else "#FFFFFF"
         self.setText(self._color)
+        background = f"rgba({color.red()}, {color.green()}, {color.blue()}, {color.alpha()})"
         self.setStyleSheet(
             f"""
             QPushButton {{
-                background: {self._color};
+                background: {background};
                 color: {text_color};
                 border: 1px solid {palette().card_border};
                 border-radius: 6px;
@@ -800,7 +810,8 @@ class GradientStopsEditor(QWidget):
             round(a.red() + (b.red() - a.red()) * ratio),
             round(a.green() + (b.green() - a.green()) * ratio),
             round(a.blue() + (b.blue() - a.blue()) * ratio),
-        ).name(QColor.NameFormat.HexRgb).upper()
+            round(a.alpha() + (b.alpha() - a.alpha()) * ratio),
+        ).name(QColor.NameFormat.HexArgb).upper()
 
     def _emit_stops_changed(self) -> None:
         self.update()
@@ -1132,6 +1143,12 @@ class PropertyPanel(QTabWidget):
         )
         row_layout.addWidget(_field("字号", self._font_size_spin), 0, 0)
 
+        self._letter_spacing_spin = _spin(0, 120, suffix=" px")
+        self._letter_spacing_spin.valueChanged.connect(
+            lambda value: self._update_style(letter_spacing_px=value)
+        )
+        row_layout.addWidget(_field("字间距", self._letter_spacing_spin), 1, 0)
+
         self._font_weight_combo = _WheelFocusedComboBox(section)
         _compact_control(self._font_weight_combo)
         for label, value in [
@@ -1321,12 +1338,23 @@ class PropertyPanel(QTabWidget):
         self._shadow_y_field = _field("阴影 Y", self._shadow_y_spin)
         detail_layout.addWidget(self._shadow_y_field, 1, 1)
 
-        self._glow_radius_spin = _spin(1, 120, suffix=" px")
-        self._glow_radius_spin.valueChanged.connect(
-            lambda value: self._update_style(glow_radius_px=value)
+        self._glow_before_radius_spin = _spin(1, 120, suffix=" px")
+        self._glow_before_radius_spin.valueChanged.connect(
+            lambda value: self._update_style(
+                glow_radius_px=value,
+                glow_before_radius_px=value,
+            )
         )
-        self._glow_radius_field = _field("发光半径", self._glow_radius_spin)
+        self._glow_radius_spin = self._glow_before_radius_spin
+        self._glow_radius_field = _field("走字前发光", self._glow_before_radius_spin)
         detail_layout.addWidget(self._glow_radius_field, 1, 0)
+
+        self._glow_after_radius_spin = _spin(1, 120, suffix=" px")
+        self._glow_after_radius_spin.valueChanged.connect(
+            lambda value: self._update_style(glow_after_radius_px=value)
+        )
+        self._glow_after_radius_field = _field("走字后发光", self._glow_after_radius_spin)
+        detail_layout.addWidget(self._glow_after_radius_field, 1, 1)
 
         detail_layout.setColumnStretch(0, 1)
         detail_layout.setColumnStretch(1, 1)
@@ -2095,9 +2123,14 @@ class PropertyPanel(QTabWidget):
 
     def _choose_color(self, field_name: str) -> None:
         current = QColor(self._scheme_value(field_name))
-        color = QColorDialog.getColor(current, self, "选择颜色")
+        color = QColorDialog.getColor(
+            current,
+            self,
+            "选择颜色",
+            QColorDialog.ColorDialogOption.ShowAlphaChannel,
+        )
         if color.isValid():
-            self._set_color(field_name, color.name(QColor.NameFormat.HexRgb))
+            self._set_color(field_name, color.name(QColor.NameFormat.HexArgb))
 
     def _set_color(self, field_name: str, color: str) -> None:
         normalized = _normalize_hex(color, str(self._scheme_value(field_name)))
@@ -2116,9 +2149,14 @@ class PropertyPanel(QTabWidget):
     def _choose_paint_color(self, field_name: str) -> None:
         fill = self._current_paint_fill()
         current = QColor(getattr(fill, field_name))
-        color = QColorDialog.getColor(current, self, "选择颜色")
+        color = QColorDialog.getColor(
+            current,
+            self,
+            "选择颜色",
+            QColorDialog.ColorDialogOption.ShowAlphaChannel,
+        )
         if color.isValid():
-            normalized = color.name(QColor.NameFormat.HexRgb).upper()
+            normalized = _normalize_hex(color.name(QColor.NameFormat.HexArgb))
             self._update_current_fill(**{field_name: normalized})
 
     def _choose_paint_image(self) -> None:
@@ -2211,6 +2249,7 @@ class PropertyPanel(QTabWidget):
         self._shadow_x_field.setVisible(is_decoration and is_shadow)
         self._shadow_y_field.setVisible(is_decoration and is_shadow)
         self._glow_radius_field.setVisible(is_decoration and is_glow)
+        self._glow_after_radius_field.setVisible(is_decoration and is_glow)
 
     def _update_current_fill(self, **changes) -> None:
         if self._syncing:
@@ -2261,9 +2300,14 @@ class PropertyPanel(QTabWidget):
 
     def _choose_gradient_stop_color(self) -> None:
         current = QColor(self._gradient_editor.selected_stop[1])
-        color = QColorDialog.getColor(current, self, "Select gradient stop color")
+        color = QColorDialog.getColor(
+            current,
+            self,
+            "选择颜色",
+            QColorDialog.ColorDialogOption.ShowAlphaChannel,
+        )
         if color.isValid():
-            normalized = color.name(QColor.NameFormat.HexRgb).upper()
+            normalized = _normalize_hex(color.name(QColor.NameFormat.HexArgb))
             self._gradient_editor.set_selected_color(normalized)
 
     def _set_gradient_stop_position(self, value: int) -> None:
@@ -2383,6 +2427,7 @@ class PropertyPanel(QTabWidget):
             if latin_family:
                 self._font_latin_combo.setCurrentFont(QFont(str(latin_family)))
             self._font_size_spin.setValue(int(self._scheme_value("font_size_px")))
+            self._letter_spacing_spin.setValue(int(self._scheme_value("letter_spacing_px")))
             self._font_weight_combo.setCurrentIndex(
                 max(0, self._font_weight_combo.findData(int(self._scheme_value("font_weight"))))
             )
@@ -2397,7 +2442,16 @@ class PropertyPanel(QTabWidget):
                     ),
                 )
             )
-            self._glow_radius_spin.setValue(int(self._scheme_value("glow_radius_px")))
+            legacy_glow = int(self._scheme_value("glow_radius_px"))
+            before_glow = int(self._scheme_value("glow_before_radius_px"))
+            after_glow = int(self._scheme_value("glow_after_radius_px"))
+            if legacy_glow != 10:
+                if before_glow == 10:
+                    before_glow = legacy_glow
+                if after_glow == 10:
+                    after_glow = legacy_glow
+            self._glow_radius_spin.setValue(before_glow)
+            self._glow_after_radius_spin.setValue(after_glow)
             self._shadow_x_spin.setValue(int(self._scheme_value("shadow_offset_x")))
             self._shadow_y_spin.setValue(int(self._scheme_value("shadow_offset_y")))
             self._ruby_font_size_spin.setValue(int(self._scheme_value("ruby_font_size_px")))
@@ -2740,6 +2794,7 @@ def _scheme_from_style(style: Style, singer_id: int) -> SubtitleStyleScheme:
         font_family=style.font_family,
         font_family_latin=style.font_family_latin,
         font_size_px=style.font_size_px,
+        letter_spacing_px=style.letter_spacing_px,
         font_weight=style.font_weight,
         italic=style.italic,
         base_color=style.base_color,
@@ -2753,6 +2808,8 @@ def _scheme_from_style(style: Style, singer_id: int) -> SubtitleStyleScheme:
         stroke2_width_px=style.stroke2_width_px,
         decoration_kind=style.decoration_kind,
         glow_radius_px=style.glow_radius_px,
+        glow_before_radius_px=style.glow_before_radius_px,
+        glow_after_radius_px=style.glow_after_radius_px,
         shadow_color=style.shadow_color,
         shadow_offset_x=style.shadow_offset_x,
         shadow_offset_y=style.shadow_offset_y,
@@ -2769,6 +2826,7 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         font_family=str(panel._scheme_value("font_family")),
         font_family_latin=panel._scheme_value("font_family_latin"),
         font_size_px=int(panel._scheme_value("font_size_px")),
+        letter_spacing_px=int(panel._scheme_value("letter_spacing_px")),
         font_weight=int(panel._scheme_value("font_weight")),
         italic=bool(panel._scheme_value("italic")),
         base_color=str(panel._scheme_value("base_color")),
@@ -2781,7 +2839,9 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         stroke_width_px=int(panel._scheme_value("stroke_width_px")),
         stroke2_width_px=int(panel._scheme_value("stroke2_width_px")),
         decoration_kind=_normalize_decoration_kind(panel._scheme_value("decoration_kind")),
-        glow_radius_px=int(panel._scheme_value("glow_radius_px")),
+        glow_radius_px=int(panel._scheme_value("glow_before_radius_px")),
+        glow_before_radius_px=int(panel._scheme_value("glow_before_radius_px")),
+        glow_after_radius_px=int(panel._scheme_value("glow_after_radius_px")),
         shadow_color=str(panel._scheme_value("shadow_color")),
         shadow_offset_x=int(panel._scheme_value("shadow_offset_x")),
         shadow_offset_y=int(panel._scheme_value("shadow_offset_y")),

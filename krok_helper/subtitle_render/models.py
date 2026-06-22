@@ -250,6 +250,7 @@ class SubtitleStyleScheme:
     font_family: Optional[str] = None
     font_family_latin: Optional[str] = None
     font_size_px: Optional[int] = None
+    letter_spacing_px: Optional[int] = None
     font_weight: Optional[int] = None
     italic: Optional[bool] = None
     base_color: Optional[str] = None
@@ -263,6 +264,8 @@ class SubtitleStyleScheme:
     stroke2_width_px: Optional[int] = None
     decoration_kind: Optional[DecorationKind] = None
     glow_radius_px: Optional[int] = None
+    glow_before_radius_px: Optional[int] = None
+    glow_after_radius_px: Optional[int] = None
     shadow_color: Optional[str] = None
     shadow_offset_x: Optional[int] = None
     shadow_offset_y: Optional[int] = None
@@ -286,6 +289,7 @@ class Style:
     font_family_latin: Optional[str] = None
     """英数（ASCII）字体；为空时英数与日文共用 ``font_family``。"""
     font_size_px: int = 100
+    letter_spacing_px: int = 0
     font_weight: int = 400  # Qt 习惯 100-900
     italic: bool = False
 
@@ -306,6 +310,8 @@ class Style:
 
     decoration_kind: DecorationKind = "shadow"
     glow_radius_px: int = 10
+    glow_before_radius_px: int = 10
+    glow_after_radius_px: int = 10
     shadow_color: str = "#000000"
     shadow_offset_x: int = 0
     shadow_offset_y: int = 1
@@ -553,10 +559,13 @@ def style_from_dict(payload: object) -> Style:
             changes[key] = _custom_schemes_from_dict(value)
         elif key in {
             "font_size_px",
+            "letter_spacing_px",
             "font_weight",
             "stroke_width_px",
             "stroke2_width_px",
             "glow_radius_px",
+            "glow_before_radius_px",
+            "glow_after_radius_px",
             "shadow_offset_x",
             "shadow_offset_y",
             "ruby_font_size_px",
@@ -657,6 +666,11 @@ def style_from_dict(payload: object) -> Style:
             changes[key] = str(value) if value else None
         elif value is not None:
             changes[key] = str(value)
+    if "glow_radius_px" in changes:
+        if "glow_before_radius_px" not in changes:
+            changes["glow_before_radius_px"] = changes["glow_radius_px"]
+        if "glow_after_radius_px" not in changes:
+            changes["glow_after_radius_px"] = changes["glow_radius_px"]
     return Style(**changes)
 
 
