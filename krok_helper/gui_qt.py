@@ -6874,8 +6874,11 @@ class KrokHelperQtApp(QMainWindow):
                 break
         if not normalized:
             raise ProcessingError(f"{label}模板不能为空。")
-        if "/" in normalized or "\\" in normalized:
-            raise ProcessingError(f"{label}模板不能包含路径分隔符。")
+        # 覆盖 Windows 不允许的全部字符（\ / : * ? " < > |），而非只挡路径分隔符。
+        invalid_chars = sorted({char for char in normalized if char in WINDOWS_INVALID_FILENAME_CHARS})
+        if invalid_chars:
+            joined = " ".join(invalid_chars)
+            raise ProcessingError(f"{label}模板包含非法字符: {joined}")
         # 不配对的大括号会让 parse 抛 ValueError；转成 ProcessingError，避免从只
         # 捕获 ProcessingError 的调用处逃逸导致闪退。
         try:
