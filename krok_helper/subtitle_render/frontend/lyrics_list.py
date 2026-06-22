@@ -55,6 +55,8 @@ class LyricsPanel(DropPanel):
             empty_icon="📝",
             parent=parent,
         )
+        self.setObjectName("LyricsPanel")
+        themed(self, self._panel_qss)
         self._list = QListWidget()
         self._list.setObjectName("LyricsList")
         self._list.setFrameShape(QListWidget.Shape.NoFrame)
@@ -123,3 +125,27 @@ class LyricsPanel(DropPanel):
     @property
     def list_widget(self) -> QListWidget:
         return self._list
+
+    def _panel_qss(self) -> str:
+        p = palette()
+        if self._drag_state == "accept":
+            border_color = p.accent_primary
+            border_width = 2
+            border_style = "dashed"
+        elif self._drag_state == "reject":
+            border_color = "#E53935"
+            border_width = 2
+            border_style = "dashed"
+        elif not self._populated:
+            border_color = p.card_border
+            border_width = 1
+            border_style = "dashed"
+        else:
+            border_color = "transparent"
+            border_width = 0
+            border_style = "solid"
+        return (
+            f"#LyricsPanel {{ background-color: {p.card_bg}; "
+            f"border: {border_width}px {border_style} {border_color}; "
+            f"border-radius: 0; }}"
+        )

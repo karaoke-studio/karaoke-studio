@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
 from PyQt6.QtGui import QMouseEvent, QWheelEvent  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QInputDialog  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QInputDialog, QWidget  # noqa: E402
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
@@ -347,6 +347,7 @@ def test_property_panel_subtitle_page_has_no_horizontal_scroll(qapp):
     basic_page = panel.widget(0)
     subtitle_page = panel.widget(1)
 
+    assert panel.minimumWidth() == 436
     assert basic_page.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     assert subtitle_page.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     assert panel._font_combo.minimumWidth() == 0
@@ -376,6 +377,20 @@ def test_property_panel_sections_are_collapsible(qapp):
     header.click()
     assert not content.isHidden()
     assert header.arrowType() == Qt.ArrowType.DownArrow
+
+
+def test_subtitle_preview_frame_keeps_child_at_16_9(qapp):
+    child = QWidget()
+    frame = mw._AspectRatioBox(child)
+
+    frame.show()
+    frame.resize(1000, 700)
+    qapp.processEvents()
+
+    geometry = child.geometry()
+    assert geometry.width() == 1000
+    assert geometry.height() == pytest.approx(562, abs=1)
+    assert geometry.width() / geometry.height() == pytest.approx(16 / 9, rel=0.003)
 
 
 def test_property_panel_screen_preset_emits_settings(qapp):

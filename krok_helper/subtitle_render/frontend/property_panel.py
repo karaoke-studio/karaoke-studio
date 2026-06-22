@@ -925,7 +925,7 @@ class PropertyPanel(QTabWidget):
         self._singer_options: list[tuple[int, str]] = []
 
         self.setObjectName("PropertyPanel")
-        self.setMinimumWidth(260)
+        self.setMinimumWidth(436)
         self.setDocumentMode(True)
         self.setTabPosition(QTabWidget.TabPosition.North)
         themed(

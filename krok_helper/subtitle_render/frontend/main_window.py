@@ -28,7 +28,7 @@ from pathlib import Path
 import subprocess
 from typing import Any, Optional
 
-from PyQt6.QtCore import QObject, QThread, Qt, pyqtSignal as Signal
+from PyQt6.QtCore import QObject, QRect, QSize, QThread, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog,
@@ -39,6 +39,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSplitter,
     QSpinBox,
     QStackedWidget,
@@ -79,6 +80,43 @@ from krok_helper.subtitle_render.frontend.theme import control_qss, palette, the
 SUBTITLE_FILTER = "Nicokara 逐字 LRC (*.lrc);;所有文件 (*.*)"
 VIDEO_FILTER = "视频文件 (*.mp4 *.mkv *.mov *.webm *.avi *.flv);;所有文件 (*.*)"
 OUTPUT_FILTER = "MP4 视频 (*.mp4);;所有文件 (*.*)"
+
+
+class _AspectRatioBox(QWidget):
+    """Keep one child centered at a fixed aspect ratio."""
+
+    def __init__(
+        self,
+        child: QWidget,
+        *,
+        aspect_ratio: float = 16 / 9,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._child = child
+        self._aspect_ratio = max(float(aspect_ratio), 0.1)
+        self._child.setParent(self)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setMinimumSize(self.minimumSizeHint())
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(960, 540)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(426, 240)
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        w = max(self.width(), 1)
+        h = max(self.height(), 1)
+        target_w = w
+        target_h = int(round(target_w / self._aspect_ratio))
+        if target_h > h:
+            target_h = h
+            target_w = int(round(target_h * self._aspect_ratio))
+        x = (w - target_w) // 2
+        y = (h - target_h) // 2
+        self._child.setGeometry(QRect(x, y, max(target_w, 1), max(target_h, 1)))
 
 
 class _RenderWorker(QObject):
@@ -241,7 +279,8 @@ class SubtitleRenderWindow(QWidget):
         self._preview_panel.set_style(self._style)
         self._preview_panel.pathDropped.connect(self.load_video)
         self._preview_panel.browseRequested.connect(self._browse_video)
-        center_layout.addWidget(self._preview_panel, 1)
+        self._preview_frame = _AspectRatioBox(self._preview_panel)
+        center_layout.addWidget(self._preview_frame, 1)
         self._transport_bar = TransportBar()
         self._transport_bar.set_preview_fps(self._screen_settings.fps)
         self._transport_bar.timeChanged.connect(self._preview_panel.set_time)
@@ -261,7 +300,7 @@ class SubtitleRenderWindow(QWidget):
         top.setStretchFactor(0, 1)
         top.setStretchFactor(1, 3)
         top.setStretchFactor(2, 1)
-        top.setSizes([280, 760, 320])
+        top.setSizes([280, 760, 436])
         body.addWidget(top)
 
         # 底部：字幕轨道（波形已移除，不做波形图功能）

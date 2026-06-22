@@ -2733,9 +2733,10 @@ class KrokHelperQtApp(QMainWindow):
         layout = getattr(self, "_page_stack_container_layout", None)
         if layout is None:
             return
+        flush_modules = {WORKFLOW_LYRICS_TIMING, WORKFLOW_SUBTITLE_RENDER}
         margins = (
             self._page_stack_flush_margins
-            if module_id == WORKFLOW_LYRICS_TIMING
+            if module_id in flush_modules
             else self._page_stack_normal_margins
         )
         layout.setContentsMargins(*margins)
