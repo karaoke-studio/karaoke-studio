@@ -85,11 +85,6 @@ def stage_bg() -> str:
     return "#141414" if palette().is_dark else "#15171A"
 
 
-def stage_border() -> str:
-    """舞台边缘描边：贴着暗底的更暗一档细线。"""
-    return "#0D0E11" if palette().is_dark else "#23262B"
-
-
 def control_qss(scope: str = "") -> str:
     """Theme-aware QSS for plain Qt inputs/buttons used by this module."""
     p = palette()

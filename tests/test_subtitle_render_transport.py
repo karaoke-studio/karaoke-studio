@@ -39,6 +39,27 @@ def _bar(qapp) -> TransportBar:
     return bar
 
 
+def test_preview_surfaces_do_not_draw_frame_border(qapp):
+    canvas = PreviewCanvas()
+    try:
+        assert "border: 0" in canvas.styleSheet()
+    finally:
+        canvas.close()
+        canvas.deleteLater()
+
+    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+
+    graphics = PreviewGraphicsView()
+    try:
+        assert "border: 0" in graphics.styleSheet()
+        assert graphics._video_item.pos().x() < 0
+        assert graphics._video_item.size().width() > graphics._output_w
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
 # ---------------------------------------------------------------------------
 # 基础：set_time / timecode
 # ---------------------------------------------------------------------------

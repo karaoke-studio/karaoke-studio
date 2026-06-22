@@ -23,12 +23,15 @@ from PyQt6.QtWidgets import (
 )
 
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
-from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, stage_border, themed
+from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
 from krok_helper.subtitle_render.models import Style, TimingTrack
 
 
 _VIDEO_SEEK_TOLERANCE_MS = 80
 """Small playback drift allowed before forcing the preview video position."""
+
+_VIDEO_EDGE_OVERSCAN_PX = 4
+"""Small scene-space bleed to cover native video edge underdraw while playing."""
 
 
 class SubtitleGraphicsItem(QGraphicsItem):
@@ -103,29 +106,32 @@ class PreviewGraphicsView(QGraphicsView):
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
 
-        themed(
-            self,
-            lambda: (
-                f"#PreviewGraphicsView {{ background: {stage_bg()}; "
-                f"border: 1px solid {stage_border()}; "
-                f"border-radius: 6px; }}"
-            ),
-        )
-
         self._output_w = 1920
         self._output_h = 1080
 
         scene = QGraphicsScene(self)
         scene.setSceneRect(0, 0, self._output_w, self._output_h)
-        scene.setBackgroundBrush(QBrush(QColor("#101010")))
         self.setScene(scene)
         self._scene = scene
 
+        # 视图外框、视图背景、场景背景三者全部用同一个舞台底色——否则视频四周会露出
+        # 一圈深浅不一的细黑边（场景底色 #101010 与外框 stage_bg 撞色）。随主题刷新。
+        def _stage_style() -> str:
+            color = stage_bg()
+            scene.setBackgroundBrush(QBrush(QColor(color)))
+            self.setBackgroundBrush(QBrush(QColor(color)))
+            return (
+                f"#PreviewGraphicsView {{ background: {color}; "
+                "border: 0; border-radius: 0; }}"
+            )
+
+        themed(self, _stage_style)
+
         self._video_item = QGraphicsVideoItem()
-        self._video_item.setSize(QSizeF(self._output_w, self._output_h))
-        self._video_item.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatio)
+        self._video_item.setAspectRatioMode(Qt.AspectRatioMode.KeepAspectRatioByExpanding)
         self._video_item.setZValue(0)
         scene.addItem(self._video_item)
+        self._fit_video_item_to_scene()
 
         self._subtitle_item = SubtitleGraphicsItem(self._output_w, self._output_h)
         self._subtitle_item.setZValue(10)
@@ -141,11 +147,11 @@ class PreviewGraphicsView(QGraphicsView):
 
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
-        self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self._fit_scene_to_view()
 
     def showEvent(self, event):  # noqa: N802
         super().showEvent(event)
-        self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self._fit_scene_to_view()
 
     # ------------------------------------------------------------------ public
 
@@ -168,9 +174,25 @@ class PreviewGraphicsView(QGraphicsView):
         self._output_w = w
         self._output_h = h
         self._scene.setSceneRect(0, 0, w, h)
-        self._video_item.setSize(QSizeF(w, h))
+        self._fit_video_item_to_scene()
         self._subtitle_item.set_output_size(w, h)
-        self.fitInView(self._scene.sceneRect(), Qt.AspectRatioMode.KeepAspectRatio)
+        self._fit_scene_to_view()
+
+    def _fit_video_item_to_scene(self) -> None:
+        overscan = _VIDEO_EDGE_OVERSCAN_PX
+        self._video_item.setPos(-overscan, -overscan)
+        self._video_item.setSize(
+            QSizeF(
+                self._output_w + overscan * 2,
+                self._output_h + overscan * 2,
+            )
+        )
+
+    def _fit_scene_to_view(self) -> None:
+        self.fitInView(
+            self._scene.sceneRect(),
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+        )
 
     def set_video_source(self, path: Optional[Path]) -> None:
         if self._video_player is not None:
