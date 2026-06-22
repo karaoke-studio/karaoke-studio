@@ -347,9 +347,14 @@ def test_property_panel_subtitle_page_has_no_horizontal_scroll(qapp):
     basic_page = panel.widget(0)
     subtitle_page = panel.widget(1)
 
-    assert panel.minimumWidth() == 436
+    assert panel.minimumWidth() == 320
     assert basic_page.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     assert subtitle_page.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    panel.show()
+    panel.resize(320, 800)
+    qapp.processEvents()
+    assert basic_page.widget().width() <= basic_page.viewport().width()
+    assert panel._screen_width_spin.width() >= 120
     assert panel._font_combo.minimumWidth() == 0
     assert panel._font_size_spin.minimumWidth() == 0
     assert panel._line_margin_spin.parentWidget() is not panel._font_size_spin.parentWidget()
@@ -1196,6 +1201,18 @@ def test_main_window_style_panel_updates_preview(qapp, monkeypatch):
     assert win._preview_panel.canvas._style.ruby_font_size_px == 28
     assert win._preview_panel.canvas._style.line_gap_px == 77
     assert win._preview_panel.canvas._style.singer_style_overrides[0].fill_color == "#FFCC00"
+
+
+def test_main_window_preview_splitter_defaults_to_compact_property_panel(qapp):
+    win = mw.SubtitleRenderWindow(embedded=False)
+    win.resize(1600, 900)
+    win.show()
+    qapp.processEvents()
+
+    left_width, _center_width, right_width = win._preview_splitter.sizes()
+
+    assert right_width == win._property_panel.minimumWidth()
+    assert left_width >= 320
 
 
 def test_main_window_screen_panel_updates_export_and_persists(qapp, monkeypatch):

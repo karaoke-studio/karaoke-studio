@@ -925,7 +925,7 @@ class PropertyPanel(QTabWidget):
         self._singer_options: list[tuple[int, str]] = []
 
         self.setObjectName("PropertyPanel")
-        self.setMinimumWidth(436)
+        self.setMinimumWidth(320)
         self.setDocumentMode(True)
         self.setTabPosition(QTabWidget.TabPosition.North)
         themed(
@@ -3234,7 +3234,7 @@ def _compact_control(widget: QWidget) -> None:
     widget.setMinimumWidth(0)
     widget.setFixedHeight(32)
     widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-    widget.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+    widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
 
 
 def _scroll_page() -> tuple[QScrollArea, QVBoxLayout]:

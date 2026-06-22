@@ -265,6 +265,7 @@ class SubtitleRenderWindow(QWidget):
         # 上半部：左·歌词 ┃ 中·预览 ┃ 右·属性
         top = QSplitter(Qt.Orientation.Horizontal)
         top.setChildrenCollapsible(False)
+        self._preview_splitter = top
 
         self._lyrics_panel = LyricsPanel()
         self._lyrics_panel.pathDropped.connect(self.load_from_lrc)
@@ -298,9 +299,9 @@ class SubtitleRenderWindow(QWidget):
         top.addWidget(self._property_panel)
 
         top.setStretchFactor(0, 1)
-        top.setStretchFactor(1, 3)
-        top.setStretchFactor(2, 1)
-        top.setSizes([280, 760, 436])
+        top.setStretchFactor(1, 4)
+        top.setStretchFactor(2, 0)
+        top.setSizes([340, 900, self._property_panel.minimumWidth()])
         body.addWidget(top)
 
         # 底部：字幕轨道（波形已移除，不做波形图功能）
