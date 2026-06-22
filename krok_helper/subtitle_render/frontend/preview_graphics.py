@@ -23,7 +23,7 @@ from PyQt6.QtWidgets import (
 )
 
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
-from krok_helper.subtitle_render.frontend.theme import palette, themed
+from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, stage_border, themed
 from krok_helper.subtitle_render.models import Style, TimingTrack
 
 
@@ -106,8 +106,8 @@ class PreviewGraphicsView(QGraphicsView):
         themed(
             self,
             lambda: (
-                f"#PreviewGraphicsView {{ background: {palette().preview_bg}; "
-                f"border: 1px solid {palette().preview_border}; "
+                f"#PreviewGraphicsView {{ background: {stage_bg()}; "
+                f"border: 1px solid {stage_border()}; "
                 f"border-radius: 6px; }}"
             ),
         )

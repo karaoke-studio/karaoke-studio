@@ -1,4 +1,4 @@
-"""字幕视频渲染主窗口（Sayatoo 风格 + Pivot tabs + 拖拽加载）。
+"""字幕视频渲染主窗口（Sayatoo 风格 + 左侧纵向导航 + 拖拽加载）。
 
 照搬 SUG（lyrics_timing/.../frontend/main_window.py）的双模式骨架：
 
@@ -6,23 +6,18 @@
 - ``SubtitleRenderWindow.for_embedding(parent, settings_provider, workflow_context)``
   — 嵌入工作台
 
-UI 顶层结构：
+UI 顶层结构（左侧 ``NavigationBar`` 纵向导航，仿 SUG MSFluentWindow 样式）：
 
-  ┌─ Pivot：预览 / 导出 ─────────────────────────────┐
-  ├─ QStackedWidget ────────────────────────────────┤
-  │                                                  │
-  │  ◆ 预览 Tab（当前唯一可用）                       │
-  │    ┌─────────┬──────────────┬──────────────┐    │
-  │    │ 左·歌词 │ 中·预览       │ 右·属性 tab │    │
-  │    │ (拖.lrc)│ + transport   │              │    │
-  │    ├─────────┴──────────────┴──────────────┤    │
-  │    │ 底·波形（拖音频）                       │    │
-  │    │ 底·字幕轨道                              │    │
-  │    └─────────────────────────────────────────┘   │
-  │                                                  │
-  │  ◆ 导出 Tab（A8 实装后开放）                      │
-  │                                                  │
-  └──────────────────────────────────────────────────┘
+  ┌────┬──────────────────────────────────────────────┐
+  │ 预 │  ◆ 预览页（当前唯一可用）                       │
+  │ 览 │    ┌─────────┬──────────────┬──────────────┐  │
+  │    │    │ 左·歌词 │ 中·预览       │ 右·属性 tab │  │
+  │ 导 │    │ (拖.lrc)│ + transport   │              │  │
+  │ 出 │    ├─────────┴──────────────┴──────────────┤  │
+  │    │    │ 底·字幕轨道                            │  │
+  │    │    └─────────────────────────────────────────┘ │
+  │    │  ◆ 导出页                                       │
+  └────┴──────────────────────────────────────────────┘
 
 三个素材区均接受拖拽 + 点击浏览（详见 :mod:`drop_panel`）。
 """
@@ -50,7 +45,7 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from qfluentwidgets import Pivot
+from qfluentwidgets import FluentIcon as FIF, NavigationBar
 
 from krok_helper.errors import ExportCancelled, ProcessingError
 from krok_helper.ffmpeg import find_tool, probe_media, terminate_process
@@ -76,10 +71,7 @@ from krok_helper.subtitle_render.frontend.property_panel import (
     screen_settings_from_dict,
     screen_settings_to_dict,
 )
-from krok_helper.subtitle_render.frontend.timeline_view import (
-    TrackTimelineView,
-    WaveformPanel,
-)
+from krok_helper.subtitle_render.frontend.timeline_view import TrackTimelineView
 from krok_helper.subtitle_render.models import Style, TimingTrack, style_from_dict, style_to_dict
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
@@ -176,18 +168,23 @@ class SubtitleRenderWindow(QWidget):
     # ------------------------------------------------------------------ layout
 
     def _init_layout(self) -> None:
-        root = QVBoxLayout(self)
-        root.setContentsMargins(16, 12, 16, 16)
-        root.setSpacing(8)
+        # 左侧纵向导航栏（图标 + 文字，仿 SUG MSFluentWindow 的 NavigationBar）+ 右侧内容。
+        root = QHBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # 顶部：Pivot 大 tab（预览 / 导出）
-        self._pivot = Pivot(self)
-        self._pivot.setFixedHeight(40)
-        root.addWidget(self._pivot)
+        self._nav = NavigationBar(self)
+        root.addWidget(self._nav)
 
-        # 中间：QStackedWidget 承载 tab 内容
-        self._stack = QStackedWidget(self)
-        root.addWidget(self._stack, 1)
+        content = QWidget(self)
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(16, 12, 16, 16)
+        content_layout.setSpacing(8)
+        root.addWidget(content, 1)
+
+        # QStackedWidget 承载各页内容
+        self._stack = QStackedWidget(content)
+        content_layout.addWidget(self._stack, 1)
 
         self._preview_tab = self._make_preview_tab()
         self._export_tab = self._make_export_tab()
@@ -201,17 +198,21 @@ class SubtitleRenderWindow(QWidget):
         self._export_height_spin.valueChanged.connect(self._on_export_screen_changed)
         self._export_fps_combo.currentIndexChanged.connect(self._on_export_screen_changed)
 
-        self._pivot.addItem(
+        self._nav.addItem(
             routeKey="preview",
+            icon=FIF.VIEW,
             text="预览",
-            onClick=lambda _checked=False: self._stack.setCurrentIndex(0),
+            onClick=lambda: self._stack.setCurrentIndex(0),
+            selectable=True,
         )
-        self._pivot.addItem(
+        self._nav.addItem(
             routeKey="export",
+            icon=FIF.SHARE,
             text="导出",
-            onClick=lambda _checked=False: self._stack.setCurrentIndex(1),
+            onClick=lambda: self._stack.setCurrentIndex(1),
+            selectable=True,
         )
-        self._pivot.setCurrentItem("preview")
+        self._nav.setCurrentItem("preview")
         self._stack.setCurrentIndex(0)
 
     def _make_preview_tab(self) -> QWidget:
@@ -263,17 +264,13 @@ class SubtitleRenderWindow(QWidget):
         top.setSizes([280, 760, 320])
         body.addWidget(top)
 
-        # 底部：波形 + 字幕轨道（波形被动展示，不收拖拽——音频从视频自动取）
-        self._waveform_panel = WaveformPanel()
-        body.addWidget(self._waveform_panel)
-
+        # 底部：字幕轨道（波形已移除，不做波形图功能）
         self._tracks_view = TrackTimelineView()
         body.addWidget(self._tracks_view)
 
         body.setStretchFactor(0, 6)
-        body.setStretchFactor(1, 1)
-        body.setStretchFactor(2, 2)
-        body.setSizes([520, 80, 140])
+        body.setStretchFactor(1, 2)
+        body.setSizes([560, 160])
 
         outer.addWidget(body, 1)
         return page

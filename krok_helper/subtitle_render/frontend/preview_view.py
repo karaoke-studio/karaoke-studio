@@ -40,7 +40,7 @@ from PyQt6.QtWidgets import (
 
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
-from krok_helper.subtitle_render.frontend.theme import palette, themed
+from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, stage_border, themed
 from krok_helper.subtitle_render.models import Style, TimingTrack
 
 
@@ -92,8 +92,8 @@ class PreviewCanvas(QWidget):
         themed(
             self,
             lambda: (
-                f"PreviewCanvas {{ background: {palette().preview_bg}; "
-                f"border: 1px solid {palette().preview_border}; "
+                f"PreviewCanvas {{ background: {stage_bg()}; "
+                f"border: 1px solid {stage_border()}; "
                 f"border-radius: 6px; }}"
             ),
         )

@@ -378,8 +378,8 @@ def test_stop_render_export_requests_worker_cancel(qapp, monkeypatch):
 def test_window_shell_components_present(qapp, monkeypatch):
     win = _make_window(qapp, monkeypatch)
 
-    # Pivot + stack
-    assert win._pivot is not None
+    # 左侧纵向导航栏 + stack
+    assert win._nav is not None
     assert win._stack.count() == 2
 
     # 四区 widget 已挂载
@@ -387,7 +387,6 @@ def test_window_shell_components_present(qapp, monkeypatch):
     assert win._preview_panel is not None
     assert win._transport_bar is not None
     assert win._property_panel is not None
-    assert win._waveform_panel is not None
     assert win._tracks_view is not None
     assert win._export_start_button is not None
     assert win._export_stop_button is not None
@@ -408,10 +407,7 @@ def test_window_shell_components_present(qapp, monkeypatch):
 
 
 def test_drop_panel_accepts_correct_extensions(qapp, monkeypatch, tmp_path):
-    """歌词 / 预览两个拖拽面板的扩展名校验。
-
-    波形面板被改成被动展示后已不再是 DropPanel，所以不出现在这里。
-    """
+    """歌词 / 预览两个拖拽面板的扩展名校验。"""
     win = _make_window(qapp, monkeypatch)
 
     lrc = tmp_path / "x.lrc"

@@ -80,6 +80,16 @@ def themed(widget, qss_factory: Callable[[], str]) -> None:
         widget.setStyleSheet(qss_factory())
 
 
+def stage_bg() -> str:
+    """预览「监视器」舞台底色：两套主题都用暗色（视频在暗底上更突出），深色更深一档。"""
+    return "#141414" if palette().is_dark else "#15171A"
+
+
+def stage_border() -> str:
+    """舞台边缘描边：贴着暗底的更暗一档细线。"""
+    return "#0D0E11" if palette().is_dark else "#23262B"
+
+
 def control_qss(scope: str = "") -> str:
     """Theme-aware QSS for plain Qt inputs/buttons used by this module."""
     p = palette()
