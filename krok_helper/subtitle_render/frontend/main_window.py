@@ -423,6 +423,7 @@ class SubtitleRenderWindow(QWidget):
     def _new_project(self) -> None:
         if not self._confirm_discard_changes():
             return
+        self._clear_loaded_media()
         self._apply_project_data(
             {
                 "style": style_to_dict(Style()),
@@ -430,13 +431,33 @@ class SubtitleRenderWindow(QWidget):
                 "selected_scheme_key": "global",
             }
         )
-        self._subtitle_path = None
-        self._video_path = None
-        self._audio_path = None
-        self._timing_track = None
         self._project_path = None
         self._project_dirty = False
         self._refresh_project_title()
+
+    def _clear_loaded_media(self) -> None:
+        """清空已加载的字幕 / 视频 / 音频，把各面板复位到空态（新建项目用）。"""
+        self._loading_project = True
+        try:
+            self._timing_track = None
+            self._subtitle_path = None
+            self._video_path = None
+            self._video_info = None
+            self._audio_path = None
+            self._audio_info = None
+            # 歌词列表回空态
+            self._lyrics_panel.set_track(None)
+            # 预览回空态：清字幕 + 视频 + 取消 populated
+            self._preview_panel.set_track(None)
+            self._preview_panel.set_video_source(None)
+            self._preview_panel.set_populated(False)
+            self._property_panel.set_singers([])
+            # 播放条复位
+            self._transport_bar.set_audio_source(None)
+            self._transport_bar.set_time(0)
+            self._transport_bar.set_duration(0)
+        finally:
+            self._loading_project = False
 
     def _open_project(self) -> None:
         if not self._confirm_discard_changes():

@@ -100,3 +100,33 @@ def test_apply_project_data_does_not_mark_dirty(qapp, monkeypatch):
     win._apply_project_data({"style": {"font_size_px": 64}})
     assert win._project_dirty is False
     assert win._style.font_size_px == 64
+
+
+def test_new_project_clears_loaded_media(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    lrc = tmp_path / "demo.lrc"
+    lrc.write_bytes(
+        b"\xef\xbb\xbf" + "[00:01:00]a[00:01:50]b[00:02:00]\r\n\r\n@Title=Foo\r\n".encode("utf-8")
+    )
+    assert win.load_from_lrc(lrc) is not None
+    assert win._lyrics_panel.is_populated()
+    assert win._preview_panel.is_populated()
+
+    win._project_dirty = False  # 避开放弃确认弹窗
+    win._new_project()
+    assert win._timing_track is None
+    assert win._subtitle_path is None and win._video_path is None
+    assert not win._lyrics_panel.is_populated()
+    assert not win._preview_panel.is_populated()
+
+
+def test_preview_canvas_does_not_swallow_drops(qapp, monkeypatch):
+    # 预览画布（QGraphicsView）默认会吞拖拽；必须关掉它，让拖拽冒泡到 DropPanel，
+    # 这样预览被填充后仍能往播放区拖入新视频。
+    win = _make_window(qapp, monkeypatch)
+    canvas = win._preview_panel.canvas
+    assert canvas.acceptDrops() is False
+    if hasattr(canvas, "viewport"):
+        assert canvas.viewport().acceptDrops() is False
+    # 外层 DropPanel 仍接受拖拽
+    assert win._preview_panel.acceptDrops() is True

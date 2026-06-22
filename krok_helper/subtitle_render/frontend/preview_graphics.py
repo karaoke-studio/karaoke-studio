@@ -105,6 +105,10 @@ class PreviewGraphicsView(QGraphicsView):
         self.setFrameShape(QGraphicsView.Shape.NoFrame)
         self.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
         self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        # QGraphicsView 默认 acceptDrops=True，会吞掉拖拽事件，导致预览被填充后无法
+        # 再往播放区拖入新视频。关掉它（连同 viewport），让拖拽冒泡到外层 DropPanel。
+        self.setAcceptDrops(False)
+        self.viewport().setAcceptDrops(False)
 
         self._output_w = 1920
         self._output_h = 1080
