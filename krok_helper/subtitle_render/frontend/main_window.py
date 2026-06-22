@@ -46,7 +46,13 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
-from qfluentwidgets import FluentIcon as FIF, NavigationBar
+from qfluentwidgets import (
+    Action,
+    DropDownPushButton,
+    FluentIcon as FIF,
+    NavigationBar,
+    RoundMenu,
+)
 
 from krok_helper.errors import ExportCancelled, ProcessingError
 from krok_helper.ffmpeg import find_tool, probe_media, terminate_process
@@ -233,8 +239,8 @@ class SubtitleRenderWindow(QWidget):
 
         content = QWidget(self)
         content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(16, 12, 16, 16)
-        content_layout.setSpacing(8)
+        content_layout.setContentsMargins(16, 8, 16, 14)
+        content_layout.setSpacing(6)
         root.addWidget(content, 1)
 
         # 顶部项目命令栏（新建 / 打开 / 保存 / 另存为 + 当前项目名）。standalone 与嵌入
@@ -281,38 +287,29 @@ class SubtitleRenderWindow(QWidget):
     def _make_project_bar(self) -> QWidget:
         bar = QWidget()
         bar.setObjectName("SrProjectBar")
-        themed(
-            bar,
-            lambda: (
-                f"#SrProjectBar {{ background: transparent; }}"
-                f"{control_qss('#SrProjectBar')}"
-            ),
-        )
+        themed(bar, lambda: "#SrProjectBar { background: transparent; }")
         layout = QHBoxLayout(bar)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(8)
 
-        new_btn = QPushButton("新建")
-        new_btn.setFixedHeight(30)
-        new_btn.clicked.connect(self._new_project)
-        open_btn = QPushButton("打开")
-        open_btn.setFixedHeight(30)
-        open_btn.clicked.connect(self._open_project)
-        save_btn = QPushButton("保存")
-        save_btn.setFixedHeight(30)
-        save_btn.clicked.connect(self._save_project)
-        save_as_btn = QPushButton("另存为")
-        save_as_btn.setFixedHeight(30)
-        save_as_btn.clicked.connect(self._save_project_as)
-        for btn in (new_btn, open_btn, save_btn, save_as_btn):
-            layout.addWidget(btn)
+        # 「文件管理 ▾」单个下拉，菜单含 新建/打开/保存/另存为（仿 SUG，省横向空间）。
+        self._file_menu_btn = DropDownPushButton(FIF.FOLDER, "文件管理")
+        self._file_menu_btn.setFixedHeight(30)
+        menu = RoundMenu(parent=self._file_menu_btn)
+        menu.addAction(Action(FIF.ADD, "新建", triggered=self._new_project))
+        menu.addAction(Action(FIF.FOLDER, "打开", triggered=self._open_project))
+        menu.addAction(Action(FIF.SAVE, "保存", triggered=self._save_project))
+        menu.addAction(Action(FIF.SAVE_AS, "另存为", triggered=self._save_project_as))
+        self._file_menu_btn.setMenu(menu)
+        layout.addWidget(self._file_menu_btn)
 
+        # 项目名：超长用 … 截断（完整名放 tooltip）。
         self._project_name_label = QLabel("")
+        self._project_name_label.setMaximumWidth(260)
         themed(
             self._project_name_label,
             lambda: f"color: {palette().text_secondary}; font-size: 9.5pt;",
         )
-        layout.addSpacing(6)
         layout.addWidget(self._project_name_label)
         layout.addStretch(1)
         return bar
@@ -321,7 +318,13 @@ class SubtitleRenderWindow(QWidget):
         if not hasattr(self, "_project_name_label"):
             return
         name = self._project_path.name if self._project_path else "未命名项目"
-        self._project_name_label.setText(f"{'● ' if self._project_dirty else ''}{name}")
+        full = f"{'● ' if self._project_dirty else ''}{name}"
+        metrics = self._project_name_label.fontMetrics()
+        elided = metrics.elidedText(
+            full, Qt.TextElideMode.ElideRight, self._project_name_label.maximumWidth()
+        )
+        self._project_name_label.setText(elided)
+        self._project_name_label.setToolTip(full if elided != full else "")
 
     def _mark_project_dirty(self) -> None:
         if self._loading_project:
@@ -511,7 +514,7 @@ class SubtitleRenderWindow(QWidget):
     def _make_preview_tab(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(0, 8, 0, 0)
+        outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(8)
 
         body = QSplitter(Qt.Orientation.Vertical)
