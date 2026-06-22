@@ -63,6 +63,8 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _visual_text_padding,
     _display_style_for_signal_window,
     _visible_lines_for_style,
+    _resolve_title_text,
+    _title_overlay_opacity,
     paint_frame,
     clear_before_layer_cache,
 )
@@ -78,6 +80,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     TimingLine,
     TimingTrack,
     TimingTrackMeta,
+    TitleOverlay,
 )
 
 
@@ -2053,3 +2056,104 @@ def test_utopia_transform_scales_from_character_origin_for_extra_drift(qapp):
 
     assert origin_bounds[0] < center_bounds[0]
     assert origin_bounds[3] > center_bounds[3]
+
+
+# ---------------------------------------------------------------------------
+# 标题字幕 overlay（B7）
+# ---------------------------------------------------------------------------
+
+
+def _title_track() -> TimingTrack:
+    line = TimingLine(
+        chars=[TimingChar(text="あ", start_ms=2000), TimingChar(text="い", start_ms=2500)],
+        end_ms=30000,
+    )
+    return TimingTrack(meta=TimingTrackMeta(title="曲名", artist="歌手"), lines=[line])
+
+
+def test_title_overlay_renders_only_when_enabled(qapp):
+    track = _title_track()
+    base = Style(dual_line_layout=False)
+    off = _blank()
+    paint_frame(off, track, 500, base)
+
+    on_img = _blank()
+    title = TitleOverlay(enabled=True, anchor="top_left", font_size_px=48)
+    paint_frame(on_img, track, 500, replace(base, title_overlay=title))
+    # 标题在左上，会改变像素
+    assert _pixel_hash(off) != _pixel_hash(on_img)
+    # 关闭则与无标题一致
+    disabled = _blank()
+    paint_frame(disabled, track, 500, replace(base, title_overlay=replace(title, enabled=False)))
+    assert _pixel_hash(off) == _pixel_hash(disabled)
+
+
+def test_title_overlay_text_template_substitutes_metadata(qapp):
+    track = _title_track()
+    title = TitleOverlay(text_template="{title} / {artist}")
+    assert _resolve_title_text(title, track) == "曲名 / 歌手"
+    # 缺 artist 时清掉孤立分隔
+    track2 = TimingTrack(meta=TimingTrackMeta(title="曲名", artist=None), lines=track.lines)
+    assert _resolve_title_text(title, track2) == "曲名"
+
+
+def test_title_overlay_show_modes_and_fade(qapp):
+    track = _title_track()  # 时长 30000ms
+    whole = TitleOverlay(enabled=True, show_mode="whole", fade_in_ms=300, fade_out_ms=300)
+    assert _title_overlay_opacity(whole, track, 1500) == pytest.approx(1.0)
+    assert _title_overlay_opacity(whole, track, 100) == pytest.approx(100 / 300)
+    assert _title_overlay_opacity(None, track, 1500) == 0.0
+
+    head = TitleOverlay(enabled=True, show_mode="head", duration_ms=8000, fade_in_ms=0, fade_out_ms=0)
+    assert _title_overlay_opacity(head, track, 4000) == pytest.approx(1.0)
+    assert _title_overlay_opacity(head, track, 12000) == 0.0
+
+    tail = TitleOverlay(enabled=True, show_mode="tail", duration_ms=6000, fade_in_ms=0, fade_out_ms=0)
+    assert _title_overlay_opacity(tail, track, 1000) == 0.0
+    assert _title_overlay_opacity(tail, track, 27000) == pytest.approx(1.0)
+
+
+def test_title_overlay_anchor_moves_block(qapp):
+    track = _title_track()
+    base = Style(dual_line_layout=False)
+    title = TitleOverlay(enabled=True, font_size_px=40, align="left")
+
+    top_left = _blank()
+    paint_frame(top_left, track, 500, replace(base, title_overlay=replace(title, anchor="top_left")))
+    bottom_right = _blank()
+    paint_frame(
+        bottom_right, track, 500, replace(base, title_overlay=replace(title, anchor="bottom_right"))
+    )
+    # 标题文字是非背景像素；不同锚点 ink 重心明显不同
+    tl = _ink_bounds(top_left)
+    br = _ink_bounds(bottom_right)
+    assert tl[0] < br[0]  # 左 < 右
+    assert tl[1] < br[1]  # 上 < 下
+
+
+def test_title_overlay_defaults_match_nicokara(qapp):
+    # ニコカラ「標準配色」走字前外观（标题永不走字）
+    t = TitleOverlay()
+    assert t.font_family == "游明朝"
+    assert t.fill.color == "#FFEBEB"
+    assert t.stroke.color == "#000000" and t.stroke_width_px == 15
+    assert t.stroke2.color == "#FFFFFF" and t.stroke2_width_px == 5
+    assert t.decoration_kind == "glow" and t.glow_radius_px == 10
+    assert t.shadow.color == "#E19696"
+
+
+def test_title_overlay_latin_font_splits_ascii(qapp):
+    from krok_helper.subtitle_render.engine.painter import (
+        _make_title_font_for,
+        _build_title_font,
+        _build_title_latin_font,
+    )
+    # 单字体时不分离
+    single = TitleOverlay(font_family="Yu Mincho")
+    assert _make_title_font_for(single, _build_title_font(single), _build_title_latin_font(single)) is None
+    # JP + Latin 分开：ASCII 用英数字体，其余用日文字体
+    split = TitleOverlay(font_family="Yu Mincho", font_family_latin="Arial")
+    font_for = _make_title_font_for(split, _build_title_font(split), _build_title_latin_font(split))
+    assert font_for is not None
+    assert font_for("A").family() == "Arial"
+    assert font_for("あ").family() == "Yu Mincho"

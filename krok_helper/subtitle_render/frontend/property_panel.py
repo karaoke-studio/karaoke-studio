@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -53,6 +54,11 @@ from krok_helper.subtitle_render.models import (
     PaintFill,
     SubtitleStyleScheme,
     Style,
+    TITLE_ANCHORS,
+    TITLE_SHOW_MODES,
+    TitleAnchor,
+    TitleOverlay,
+    TitleShowMode,
     VIEWPORT_ALIGNS,
     ViewportAlign,
 )
@@ -862,6 +868,36 @@ class _WheelFocusedFontComboBox(QFontComboBox):
         super().wheelEvent(event)
 
 
+class _GrowingPlainTextEdit(QPlainTextEdit):
+    """多行文本框：随内容行数自动增高，背景卡片随之变高（回车即变高）。"""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.textChanged.connect(self._adjust_height)
+        self._adjust_height()
+
+    def _adjust_height(self) -> None:
+        # 按段落数（回车数 + 1）× 行高估算，不依赖控件是否可见 / 已布局。
+        blocks = max(1, self.document().blockCount())
+        line_height = self.fontMetrics().lineSpacing()
+        frame = int(self.frameWidth()) * 2
+        margins = self.contentsMargins()
+        doc_margin = int(self.document().documentMargin()) * 2
+        height = blocks * line_height + frame + margins.top() + margins.bottom() + doc_margin + 4
+        self.setFixedHeight(max(32, height))
+
+    def wheelEvent(self, event):  # noqa: N802 - Qt API
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
+
 class _DynamicStackedWidget(QStackedWidget):
     """Use the current page height instead of the tallest page height."""
 
@@ -925,7 +961,8 @@ class PropertyPanel(QTabWidget):
         self.addTab(self._make_basic_page(), "基本")
         self.addTab(self._make_subtitle_page(), "字幕")
         self.addTab(self._make_effects_page(), "特效")
-        self.addTab(_placeholder_page("标题字幕、时段图片（B7 / P2）"), "装饰")
+        self.addTab(_placeholder_page("时段图片（P2）"), "装饰")
+        self.addTab(self._make_title_page(), "标题")
         self.set_singers([])
         self.set_screen_settings(self._screen, emit=False)
         self.set_style(self._style, emit=False)
@@ -1017,6 +1054,7 @@ class PropertyPanel(QTabWidget):
             self._exit_fade_spin.setValue(self._style.exit_fade_ms)
             self._sync_lit_controls()
             self._sync_subtitle_scheme_controls()
+            self._sync_title_controls()
         finally:
             self._syncing = False
         if emit:
@@ -1489,6 +1527,335 @@ class PropertyPanel(QTabWidget):
         layout.addWidget(self._make_lit_section())
         layout.addStretch(1)
         return scroll
+
+    # ----------------------------------------------------------------- 标题（B7）
+
+    def _make_title_page(self) -> QWidget:
+        scroll, layout = _scroll_page()
+        layout.addWidget(self._make_title_text_section())
+        layout.addWidget(self._make_title_font_section())
+        layout.addWidget(self._make_title_color_section())
+        layout.addWidget(self._make_title_position_section())
+        layout.addWidget(self._make_title_time_section())
+        layout.addStretch(1)
+        return scroll
+
+    def _make_title_text_section(self) -> QFrame:
+        section, layout = _section("标题", switch=True)
+        self._title_enabled_switch = section.header_switch
+        self._title_enabled_switch.toggled.connect(self._on_title_enabled_toggled)
+
+        # 多行文本框：回车换行后自动增高（背景卡片随之变高）。
+        self._title_text_edit = _GrowingPlainTextEdit(section)
+        self._title_text_edit.setPlaceholderText("{title} / {artist}")
+        self._title_text_edit.textChanged.connect(
+            lambda: self._update_title(text_template=self._title_text_edit.toPlainText())
+        )
+        layout.addWidget(_field("文字（{title} / {artist} 取自字幕元数据，可换行）", self._title_text_edit))
+        return section
+
+    def _make_title_font_section(self) -> QFrame:
+        section, layout = _section("字体")
+
+        self._title_font_combo = _WheelFocusedFontComboBox(section)
+        _compact_control(self._title_font_combo)
+        self._title_font_combo.currentFontChanged.connect(
+            lambda font: self._update_title(font_family=font.family())
+        )
+        layout.addWidget(_field("日文字体", self._title_font_combo))
+
+        # 英数（ASCII）字体可单独指定；不勾选时与日文共用一套字体（同字幕字体处理）。
+        self._title_latin_check = QCheckBox("英数单独字体", section)
+        self._title_latin_check.toggled.connect(self._on_title_font_latin_toggled)
+        layout.addWidget(self._title_latin_check)
+
+        self._title_latin_combo = _WheelFocusedFontComboBox(section)
+        _compact_control(self._title_latin_combo)
+        self._title_latin_combo.setEnabled(False)
+        self._title_latin_combo.currentFontChanged.connect(self._on_title_font_latin_changed)
+        layout.addWidget(_field("英数字体", self._title_latin_combo))
+
+        box = _SubGroup("尺寸 / 间距", parent=section)
+        layout.addWidget(box)
+        add = _grid_adder(box.grid)
+
+        self._title_size_spin = _spin(8, 400, suffix=" px")
+        self._title_size_spin.valueChanged.connect(
+            lambda value: self._update_title(font_size_px=value)
+        )
+        add("字号", self._title_size_spin)
+
+        self._title_weight_spin = _spin(100, 900)
+        self._title_weight_spin.setSingleStep(100)
+        self._title_weight_spin.valueChanged.connect(
+            lambda value: self._update_title(font_weight=value)
+        )
+        add("字重", self._title_weight_spin)
+
+        self._title_letter_spin = _spin(-20, 200, suffix=" px")
+        self._title_letter_spin.valueChanged.connect(
+            lambda value: self._update_title(letter_spacing_px=value)
+        )
+        add("字间距", self._title_letter_spin)
+
+        self._title_line_gap_spin = _spin(0, 200, suffix=" px")
+        self._title_line_gap_spin.valueChanged.connect(
+            lambda value: self._update_title(line_gap_px=value)
+        )
+        add("行间距", self._title_line_gap_spin)
+
+        self._title_italic_check = QCheckBox("斜体", section)
+        self._title_italic_check.toggled.connect(
+            lambda checked: self._update_title(italic=checked)
+        )
+        layout.addWidget(self._title_italic_check)
+        return section
+
+    def _make_title_color_section(self) -> QFrame:
+        section, layout = _section("颜色")
+
+        self._title_fill_button = self._title_color_button("fill")
+        layout.addWidget(_field("填充", self._title_fill_button))
+
+        stroke_box = _SubGroup("描边", parent=section)
+        layout.addWidget(stroke_box)
+        add = _grid_adder(stroke_box.grid)
+        self._title_stroke_button = self._title_color_button("stroke")
+        add("颜色", self._title_stroke_button)
+        self._title_stroke_width_spin = _spin(0, 80, suffix=" px")
+        self._title_stroke_width_spin.valueChanged.connect(
+            lambda value: self._update_title(stroke_width_px=value)
+        )
+        add("宽度", self._title_stroke_width_spin)
+        self._title_stroke2_button = self._title_color_button("stroke2")
+        add("二重边色", self._title_stroke2_button)
+        self._title_stroke2_width_spin = _spin(0, 80, suffix=" px")
+        self._title_stroke2_width_spin.valueChanged.connect(
+            lambda value: self._update_title(stroke2_width_px=value)
+        )
+        add("二重边宽", self._title_stroke2_width_spin)
+
+        deco_box = _SubGroup("装饰", parent=section)
+        layout.addWidget(deco_box)
+        add = _grid_adder(deco_box.grid)
+        self._title_decoration_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._title_decoration_combo)
+        for label, value in [("阴影", "shadow"), ("发光", "glow")]:
+            self._title_decoration_combo.addItem(label, value)
+        self._title_decoration_combo.currentIndexChanged.connect(
+            lambda _i: self._update_title(decoration_kind=self._title_decoration_combo.currentData())
+        )
+        add("装饰类型", self._title_decoration_combo)
+        self._title_shadow_button = self._title_color_button("shadow")
+        add("装饰颜色", self._title_shadow_button)
+        self._title_glow_spin = _spin(1, 80, suffix=" px")
+        self._title_glow_spin.valueChanged.connect(
+            lambda value: self._update_title(glow_radius_px=value)
+        )
+        add("发光半径", self._title_glow_spin)
+        self._title_shadow_x_spin = _spin(-60, 60, suffix=" px")
+        self._title_shadow_x_spin.valueChanged.connect(
+            lambda value: self._update_title(shadow_offset_x=value)
+        )
+        add("阴影 X", self._title_shadow_x_spin)
+        self._title_shadow_y_spin = _spin(-60, 60, suffix=" px")
+        self._title_shadow_y_spin.valueChanged.connect(
+            lambda value: self._update_title(shadow_offset_y=value)
+        )
+        add("阴影 Y", self._title_shadow_y_spin)
+        return section
+
+    def _make_title_position_section(self) -> QFrame:
+        section, layout = _section("位置")
+        box = _SubGroup("锚点 / 偏移", parent=section)
+        layout.addWidget(box)
+        add = _grid_adder(box.grid)
+
+        self._title_anchor_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._title_anchor_combo)
+        for label, value in _TITLE_ANCHOR_OPTIONS:
+            self._title_anchor_combo.addItem(label, value)
+        self._title_anchor_combo.currentIndexChanged.connect(
+            lambda _i: self._update_title(anchor=self._title_anchor_combo.currentData())
+        )
+        add("锚点", self._title_anchor_combo)
+
+        self._title_align_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._title_align_combo)
+        for label, value in [("左对齐", "left"), ("居中", "center"), ("右对齐", "right")]:
+            self._title_align_combo.addItem(label, value)
+        self._title_align_combo.currentIndexChanged.connect(
+            lambda _i: self._update_title(align=self._title_align_combo.currentData())
+        )
+        add("多行对齐", self._title_align_combo)
+
+        self._title_offset_x_spin = _spin(-2000, 2000, suffix=" px")
+        self._title_offset_x_spin.valueChanged.connect(
+            lambda value: self._update_title(offset_x=value)
+        )
+        add("X 偏移", self._title_offset_x_spin)
+
+        self._title_offset_y_spin = _spin(-2000, 2000, suffix=" px")
+        self._title_offset_y_spin.valueChanged.connect(
+            lambda value: self._update_title(offset_y=value)
+        )
+        add("Y 偏移", self._title_offset_y_spin)
+        return section
+
+    def _make_title_time_section(self) -> QFrame:
+        section, layout = _section("显示时段")
+
+        self._title_mode_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._title_mode_combo)
+        for label, value in [
+            ("全程显示", "whole"),
+            ("仅开头", "head"),
+            ("仅片尾", "tail"),
+            ("开头+片尾", "head_tail"),
+        ]:
+            self._title_mode_combo.addItem(label, value)
+        self._title_mode_combo.currentIndexChanged.connect(
+            lambda _i: self._update_title(show_mode=self._title_mode_combo.currentData())
+        )
+        layout.addWidget(_field("显示模式", self._title_mode_combo))
+
+        box = _SubGroup("时间", parent=section)
+        layout.addWidget(box)
+        add = _grid_adder(box.grid)
+        self._title_head_spin = _spin(0, 600_000, suffix=" ms")
+        self._title_head_spin.valueChanged.connect(
+            lambda value: self._update_title(head_offset_ms=value)
+        )
+        add("开始偏移", self._title_head_spin)
+        self._title_duration_spin = _spin(0, 600_000, suffix=" ms")
+        self._title_duration_spin.valueChanged.connect(
+            lambda value: self._update_title(duration_ms=value)
+        )
+        add("显示时长", self._title_duration_spin)
+        self._title_tail_spin = _spin(0, 600_000, suffix=" ms")
+        self._title_tail_spin.valueChanged.connect(
+            lambda value: self._update_title(tail_offset_ms=value)
+        )
+        add("片尾偏移", self._title_tail_spin)
+        self._title_fade_in_spin = _spin(0, 10_000, suffix=" ms")
+        self._title_fade_in_spin.valueChanged.connect(
+            lambda value: self._update_title(fade_in_ms=value)
+        )
+        add("淡入", self._title_fade_in_spin)
+        self._title_fade_out_spin = _spin(0, 10_000, suffix=" ms")
+        self._title_fade_out_spin.valueChanged.connect(
+            lambda value: self._update_title(fade_out_ms=value)
+        )
+        add("淡出", self._title_fade_out_spin)
+        return section
+
+    def _title_color_button(self, attr: str) -> ColorButton:
+        fill = getattr(self._current_title(), attr)
+        button = ColorButton(fill.color)
+        button.clicked.connect(lambda _checked=False, a=attr: self._choose_title_color(a))
+        return button
+
+    def _current_title(self) -> TitleOverlay:
+        return self._style.title_overlay if self._style.title_overlay is not None else TitleOverlay()
+
+    def _choose_title_color(self, attr: str) -> None:
+        fill = getattr(self._current_title(), attr)
+        color = QColorDialog.getColor(
+            QColor(fill.color),
+            self,
+            "选择颜色",
+            QColorDialog.ColorDialogOption.ShowAlphaChannel,
+        )
+        if color.isValid():
+            normalized = _normalize_hex(color.name(QColor.NameFormat.HexArgb))
+            self._update_title(**{attr: _solid_paint_fill(normalized)})
+
+    def _on_title_enabled_toggled(self, checked: bool) -> None:
+        self._update_title(enabled=checked)
+
+    def _on_title_font_latin_toggled(self, checked: bool) -> None:
+        self._title_latin_combo.setEnabled(checked)
+        if self._syncing:
+            return
+        if checked:
+            self._update_title(font_family_latin=self._title_latin_combo.currentFont().family())
+        else:
+            self._update_title(font_family_latin=None)
+
+    def _on_title_font_latin_changed(self, font: QFont) -> None:
+        if self._syncing:
+            return
+        if self._title_latin_check.isChecked():
+            self._update_title(font_family_latin=font.family())
+
+    def _update_title(self, **changes) -> None:
+        if self._syncing:
+            return
+        title = self._current_title()
+        if "anchor" in changes and changes["anchor"] not in TITLE_ANCHORS:
+            changes["anchor"] = "top_left"
+        if "align" in changes and changes["align"] not in HORIZONTAL_ALIGNS:
+            changes["align"] = "left"
+        if "show_mode" in changes and changes["show_mode"] not in TITLE_SHOW_MODES:
+            changes["show_mode"] = "whole"
+        if "decoration_kind" in changes and changes["decoration_kind"] not in {"shadow", "glow"}:
+            changes["decoration_kind"] = "glow"
+        new_title = replace(title, **changes)
+        self._style = replace(self._style, title_overlay=new_title)
+        self._syncing = True
+        try:
+            self._sync_title_controls()
+        finally:
+            self._syncing = False
+        self.styleChanged.emit(self._style)
+
+    def _sync_title_controls(self) -> None:
+        if not hasattr(self, "_title_enabled_switch"):
+            return
+        title = self._current_title()
+        self._title_enabled_switch.setChecked(title.enabled)
+        # 仅在内容不同才回填，避免实时输入时把光标弹到末尾。
+        if self._title_text_edit.toPlainText() != title.text_template:
+            self._title_text_edit.setPlainText(title.text_template)
+        self._title_font_combo.setCurrentFont(QFont(title.font_family))
+        has_latin = bool(title.font_family_latin)
+        self._title_latin_check.setChecked(has_latin)
+        self._title_latin_combo.setEnabled(has_latin)
+        if has_latin:
+            self._title_latin_combo.setCurrentFont(QFont(title.font_family_latin))
+        self._title_size_spin.setValue(title.font_size_px)
+        self._title_weight_spin.setValue(title.font_weight)
+        self._title_letter_spin.setValue(title.letter_spacing_px)
+        self._title_line_gap_spin.setValue(title.line_gap_px)
+        self._title_italic_check.setChecked(title.italic)
+        self._title_fill_button.set_color(title.fill.color)
+        self._title_stroke_button.set_color(title.stroke.color)
+        self._title_stroke_width_spin.setValue(title.stroke_width_px)
+        self._title_stroke2_button.set_color(title.stroke2.color)
+        self._title_stroke2_width_spin.setValue(title.stroke2_width_px)
+        self._title_decoration_combo.setCurrentIndex(
+            max(0, self._title_decoration_combo.findData(title.decoration_kind))
+        )
+        self._title_shadow_button.set_color(title.shadow.color)
+        self._title_glow_spin.setValue(title.glow_radius_px)
+        self._title_shadow_x_spin.setValue(title.shadow_offset_x)
+        self._title_shadow_y_spin.setValue(title.shadow_offset_y)
+        self._title_anchor_combo.setCurrentIndex(
+            max(0, self._title_anchor_combo.findData(title.anchor))
+        )
+        self._title_align_combo.setCurrentIndex(
+            max(0, self._title_align_combo.findData(title.align))
+        )
+        self._title_offset_x_spin.setValue(title.offset_x)
+        self._title_offset_y_spin.setValue(title.offset_y)
+        self._title_mode_combo.setCurrentIndex(
+            max(0, self._title_mode_combo.findData(title.show_mode))
+        )
+        self._title_head_spin.setValue(title.head_offset_ms)
+        self._title_duration_spin.setValue(title.duration_ms)
+        self._title_tail_spin.setValue(title.tail_offset_ms)
+        self._title_fade_in_spin.setValue(title.fade_in_ms)
+        self._title_fade_out_spin.setValue(title.fade_out_ms)
 
     def _make_lit_section(self) -> QFrame:
         section, layout = _section("指示灯", switch=True)
@@ -2915,6 +3282,47 @@ def _field(label_text: str, control: QWidget) -> QWidget:
     layout.addWidget(label)
     layout.addWidget(control)
     return box
+
+
+def _grid_adder(grid: QGridLayout):
+    """Return an ``add(label, control)`` that fills a 2-column grid left→right."""
+    pos = [0, 0]
+
+    def add(label: Optional[str], control: QWidget) -> None:
+        widget = _field(label, control) if label is not None else control
+        grid.addWidget(widget, pos[0], pos[1])
+        pos[1] += 1
+        if pos[1] >= 2:
+            pos[0] += 1
+            pos[1] = 0
+
+    return add
+
+
+def _solid_paint_fill(color: str) -> PaintFill:
+    normalized = _normalize_hex(color)
+    return PaintFill(
+        mode="solid",
+        color=normalized,
+        start_color=normalized,
+        end_color=normalized,
+        gradient_stops=[(0, normalized), (100, normalized)],
+        split_top_color=normalized,
+        split_bottom_color=normalized,
+    )
+
+
+_TITLE_ANCHOR_OPTIONS: tuple[tuple[str, TitleAnchor], ...] = (
+    ("左上", "top_left"),
+    ("中上", "top_center"),
+    ("右上", "top_right"),
+    ("左中", "center_left"),
+    ("正中", "center"),
+    ("右中", "center_right"),
+    ("左下", "bottom_left"),
+    ("中下", "bottom_center"),
+    ("右下", "bottom_right"),
+)
 
 
 def _subgroup_label(text: str) -> QLabel:

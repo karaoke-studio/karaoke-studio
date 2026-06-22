@@ -396,13 +396,14 @@ def test_window_shell_components_present(qapp, monkeypatch):
     assert win._export_preset_combo is not None
     assert win._export_crf_spin.value() == 18
 
-    # 属性面板 4 个 tab
-    assert win._property_panel.count() == 4
-    assert [win._property_panel.tabText(i) for i in range(4)] == [
+    # 属性面板 5 个 tab
+    assert win._property_panel.count() == 5
+    assert [win._property_panel.tabText(i) for i in range(5)] == [
         "基本",
         "字幕",
         "特效",
         "装饰",
+        "标题",
     ]
 
 

@@ -173,6 +173,7 @@ from krok_helper.subtitle_render.engine.timeline import (
     DisplayLine,
     char_fill_ratio,
     compute_char_intervals,
+    track_duration_ms,
     visible_display_lines,
 )
 from krok_helper.subtitle_render.engine.animator import line_animation_state
@@ -184,6 +185,7 @@ from krok_helper.subtitle_render.models import (
     Style,
     TimingLine,
     TimingTrack,
+    TitleOverlay,
 )
 
 
@@ -230,7 +232,8 @@ def paint_frame_to_painter(
     display_style = _display_style_for_signal_window(style)
     display_lines = _visible_lines_for_style(track, track_t_ms, display_style)
     signal_lines = _signal_display_lines_for_style(track, track_t_ms, display_style)
-    if not display_lines and not signal_lines:
+    title_opacity = _title_overlay_opacity(style.title_overlay, track, track_t_ms)
+    if not display_lines and not signal_lines and title_opacity <= 0.0:
         return
 
     painter.save()
@@ -293,6 +296,239 @@ def paint_frame_to_painter(
             )
     finally:
         painter.restore()
+
+    # 标题字幕 overlay（B7）：静态文字，画在屏幕坐标系（不随「视图」变换 / 行布局），
+    # 在歌词之上独立绘制。
+    if title_opacity > 0.0 and style.title_overlay is not None:
+        _paint_title_overlay(
+            painter, logical_w, logical_h, track, style.title_overlay, title_opacity
+        )
+
+
+# ---------------------------------------------------------------------------
+# 标题字幕 overlay（B7）
+# ---------------------------------------------------------------------------
+
+
+_TITLE_SEPARATOR_CHARS = " \t/|・-–—~　"
+
+
+def _resolve_title_text(title: TitleOverlay, track: TimingTrack) -> str:
+    """模板 ``{title}`` / ``{artist}`` 用 ``@Title`` / ``@Artist`` 元数据替换。
+
+    模板里没有占位符时（用户填了纯自定义文字）原样返回；含占位符时，缺失的
+    title/artist 会让模板里的分隔符（``/`` 等）变孤立，按行清掉首尾分隔，整行只剩
+    分隔符则清空——避免「无元数据时显示一个孤零零的 /」。
+    """
+    template = title.text_template or ""
+    if "{title}" not in template and "{artist}" not in template:
+        return template.strip("\n")
+    meta_title = (track.meta.title or "").strip()
+    meta_artist = (track.meta.artist or "").strip()
+    text = template.replace("{title}", meta_title).replace("{artist}", meta_artist)
+    lines = [raw.strip().strip(_TITLE_SEPARATOR_CHARS).strip() for raw in text.split("\n")]
+    return "\n".join(lines).strip("\n")
+
+
+def _title_show_window(title: TitleOverlay, track: TimingTrack) -> list[tuple[int, int]]:
+    """返回标题可见的时间区间列表（毫秒，字幕时间轴）。"""
+    total = max(track_duration_ms(track), 0)
+    head_start = max(int(title.head_offset_ms), 0)
+    duration = max(int(title.duration_ms), 0)
+    tail_off = max(int(title.tail_offset_ms), 0)
+    if title.show_mode == "whole":
+        return [(head_start, max(total, head_start))]
+    if title.show_mode == "head":
+        return [(head_start, head_start + duration)]
+    if title.show_mode == "tail":
+        end = max(total - tail_off, 0)
+        return [(max(end - duration, 0), end)]
+    # head_tail：开头 + 片尾各一段
+    tail_end = max(total - tail_off, 0)
+    return [
+        (head_start, head_start + duration),
+        (max(tail_end - duration, 0), tail_end),
+    ]
+
+
+def _title_overlay_opacity(
+    title: Optional[TitleOverlay], track: TimingTrack, t_ms: int
+) -> float:
+    """标题在 ``t_ms`` 的不透明度（含淡入淡出）；不可见返回 0。"""
+    if title is None or not title.enabled:
+        return 0.0
+    fade_in = max(int(title.fade_in_ms), 0)
+    fade_out = max(int(title.fade_out_ms), 0)
+    best = 0.0
+    for begin, end in _title_show_window(title, track):
+        if end <= begin or t_ms < begin or t_ms > end:
+            continue
+        alpha = 1.0
+        if fade_in > 0 and t_ms < begin + fade_in:
+            alpha = min(alpha, (t_ms - begin) / fade_in)
+        if fade_out > 0 and t_ms > end - fade_out:
+            alpha = min(alpha, (end - t_ms) / fade_out)
+        best = max(best, max(0.0, min(1.0, alpha)))
+    return best
+
+
+def _build_title_font(title: TitleOverlay) -> QFont:
+    font = QFont(title.font_family, max(title.font_size_px, 1))
+    font.setPixelSize(max(title.font_size_px, 1))
+    font.setWeight(_clamp_weight(title.font_weight))
+    font.setItalic(title.italic)
+    return font
+
+
+def _build_title_latin_font(title: TitleOverlay) -> QFont:
+    family = title.font_family_latin or title.font_family
+    font = QFont(family, max(title.font_size_px, 1))
+    font.setPixelSize(max(title.font_size_px, 1))
+    font.setWeight(_clamp_weight(title.font_weight))
+    font.setItalic(title.italic)
+    return font
+
+
+def _title_block_origin(
+    img_w: int, img_h: int, block_w: float, block_h: float, title: TitleOverlay
+) -> tuple[float, float]:
+    """按锚点 9 宫格放置文字块，返回左上角 ``(x0, y_top)``。
+
+    ``offset_x`` / ``offset_y`` 对贴边锚点是内边距，对居中锚点是附加位移。
+    """
+    anchor = title.anchor
+    if anchor.endswith("left"):
+        x0 = float(title.offset_x)
+    elif anchor.endswith("right"):
+        x0 = img_w - block_w - title.offset_x
+    else:  # center 列
+        x0 = (img_w - block_w) / 2.0 + title.offset_x
+    if anchor.startswith("top"):
+        y_top = float(title.offset_y)
+    elif anchor.startswith("bottom"):
+        y_top = img_h - block_h - title.offset_y
+    else:  # center 行
+        y_top = (img_h - block_h) / 2.0 + title.offset_y
+    return x0, y_top
+
+
+def _paint_title_overlay(
+    painter: QPainter,
+    img_w: int,
+    img_h: int,
+    track: TimingTrack,
+    title: TitleOverlay,
+    opacity: float,
+) -> None:
+    text = _resolve_title_text(title, track)
+    lines = [line for line in text.split("\n")]
+    if not any(line.strip() for line in lines):
+        return
+    font = _build_title_font(title)
+    metrics = QFontMetrics(font)
+    latin_font = _build_title_latin_font(title)
+    font_for = _make_title_font_for(title, font, latin_font)
+    latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
+    spacing = int(title.letter_spacing_px)
+
+    def line_width(text_line: str) -> float:
+        if not text_line:
+            return 0.0
+        total = sum(_char_advance(ch, metrics, latin_metrics, font_for) for ch in text_line)
+        return total + spacing * max(len(text_line) - 1, 0)
+
+    widths = [line_width(line) for line in lines]
+    block_w = max(widths) if widths else 0.0
+    line_h = metrics.height()
+    gap = max(int(title.line_gap_px), 0)
+    block_h = line_h * len(lines) + gap * max(len(lines) - 1, 0)
+    if block_w <= 0 or block_h <= 0:
+        return
+
+    x0, y_top = _title_block_origin(img_w, img_h, block_w, block_h, title)
+
+    painter.save()
+    try:
+        painter.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
+        )
+        painter.setOpacity(painter.opacity() * max(0.0, min(1.0, opacity)))
+        painter.setFont(font)
+        baseline = y_top + metrics.ascent()
+        for line, width in zip(lines, widths):
+            if line.strip():
+                if title.align == "center":
+                    lx = x0 + (block_w - width) / 2.0
+                elif title.align == "right":
+                    lx = x0 + (block_w - width)
+                else:
+                    lx = x0
+                path = _title_line_path(line, font, lx, baseline, metrics, latin_metrics, font_for, spacing)
+                rect = QRectF(float(lx), float(baseline - metrics.ascent()), float(width), float(line_h))
+                _paint_title_text_stack(painter, path, rect, title)
+            baseline += line_h + gap
+    finally:
+        painter.restore()
+
+
+def _make_title_font_for(title: TitleOverlay, jp_font: QFont, latin_font: QFont):
+    if not title.font_family_latin or latin_font.family() == jp_font.family():
+        return None
+
+    def font_for(ch_text: str) -> QFont:
+        return latin_font if (ch_text and ch_text.isascii()) else jp_font
+
+    return font_for
+
+
+def _title_line_path(
+    line: str,
+    font: QFont,
+    x0: float,
+    baseline: float,
+    metrics: QFontMetrics,
+    latin_metrics: QFontMetrics,
+    font_for,
+    spacing: int,
+) -> QPainterPath:
+    path = QPainterPath()
+    cursor = float(x0)
+    for ch in line:
+        glyph_font = font_for(ch) if font_for is not None else font
+        path.addText(cursor, float(baseline), glyph_font, ch)
+        cursor += _char_advance(ch, metrics, latin_metrics, font_for) + spacing
+    return path
+
+
+def _paint_title_text_stack(
+    painter: QPainter, path: QPainterPath, rect: QRectF, title: TitleOverlay
+) -> None:
+    """静态标题文字的装饰 + 二重描边 + 描边 + 填充（单态，不走字）。"""
+    if title.decoration_kind == "glow":
+        _paint_glow_path(
+            painter,
+            path,
+            title.shadow,
+            rect,
+            max(int(title.glow_radius_px), 1),
+            title.stroke_width_px,
+            title.stroke2_width_px,
+        )
+    elif title.shadow_offset_x or title.shadow_offset_y:
+        shadow_path = QTransform().translate(title.shadow_offset_x, title.shadow_offset_y).map(path)
+        _paint_fill_path(
+            painter, shadow_path, title.shadow, rect.translated(title.shadow_offset_x, title.shadow_offset_y)
+        )
+    if title.stroke2_width_px > 0:
+        _paint_stroke_path(
+            painter, path, title.stroke2, rect,
+            _stroke2_pen_width(title.stroke_width_px, title.stroke2_width_px),
+        )
+    if title.stroke_width_px > 0:
+        _paint_stroke_path(painter, path, title.stroke, rect, _stroke_pen_width(title.stroke_width_px))
+    _paint_fill_path(painter, path, title.fill, rect)
 
 
 # ---------------------------------------------------------------------------

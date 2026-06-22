@@ -180,6 +180,33 @@ SectionEndingMode = Literal["hold", "clear"]
 EntryAnimation = Literal["none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"]
 ExitAnimation = Literal["none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"]
 LitStyle = Literal["volume", "circle", "square", "rounded"]
+# 标题字幕（B7）：静态叠加文字的锚点 / 对齐 / 显示时段模式。
+TitleAnchor = Literal[
+    "top_left",
+    "top_center",
+    "top_right",
+    "center_left",
+    "center",
+    "center_right",
+    "bottom_left",
+    "bottom_center",
+    "bottom_right",
+]
+TITLE_ANCHORS: tuple[TitleAnchor, ...] = (
+    "top_left",
+    "top_center",
+    "top_right",
+    "center_left",
+    "center",
+    "center_right",
+    "bottom_left",
+    "bottom_center",
+    "bottom_right",
+)
+# whole=整段显示（ニコカラ Head 默认，0→曲尾）；head=仅开头一段；
+# tail=仅片尾一段；head_tail=开头 + 片尾各一段。
+TitleShowMode = Literal["whole", "head", "tail", "head_tail"]
+TITLE_SHOW_MODES: tuple[TitleShowMode, ...] = ("whole", "head", "tail", "head_tail")
 
 
 @dataclass
@@ -241,6 +268,56 @@ class KaraokeColors:
             shadow=_paint_fill("#000000"),
         )
     )
+
+
+@dataclass
+class TitleOverlay:
+    """标题字幕叠加层（B7）。
+
+    静态文字（曲名 / 艺术家），不走字；默认参数逆向自 NicoKaraMaker3：
+    明朝体、白字黑边、左上、整段显示。文字模板 ``{title}`` / ``{artist}`` 由字幕源
+    ``@Title`` / ``@Artist`` 元数据替换；也可直接填任意自定义文字（含换行）。
+    """
+
+    enabled: bool = False
+    text_template: str = "{title} / {artist}"
+    """``{title}`` / ``{artist}`` 占位符按元数据替换；``\\n`` 分行。"""
+
+    # 字体（逆向 ニコカラ「標準配色」字体：明朝体、字号 100、描边 15/5）
+    font_family: str = "游明朝"
+    font_family_latin: Optional[str] = None
+    font_size_px: int = 100
+    font_weight: int = 400
+    italic: bool = False
+    letter_spacing_px: int = 0
+    line_gap_px: int = 15
+
+    # 颜色（单态：不走字）。逆向 ニコカラ「標準配色」的「走字前」外观（标题永不走字）：
+    # 填充 #FFEBEB、内描边黑、外二重边白、模糊发光 #E19696。
+    fill: PaintFill = field(default_factory=lambda: _paint_fill("#FFEBEB"))
+    stroke: PaintFill = field(default_factory=lambda: _paint_fill("#000000"))
+    stroke_width_px: int = 15
+    stroke2: PaintFill = field(default_factory=lambda: _paint_fill("#FFFFFF"))
+    stroke2_width_px: int = 5
+    decoration_kind: DecorationKind = "glow"
+    glow_radius_px: int = 10
+    shadow: PaintFill = field(default_factory=lambda: _paint_fill("#E19696"))
+    shadow_offset_x: int = 0
+    shadow_offset_y: int = 2
+
+    # 位置（锚点 9 宫格 + 内边距 / 偏移；逆向 ニコカラ「タイトル左上」）
+    anchor: TitleAnchor = "top_left"
+    align: HorizontalAlign = "left"
+    offset_x: int = 50
+    offset_y: int = 50
+
+    # 显示时段（逆向 ニコカラ TitleShowTime，默认 Head=整段显示）
+    show_mode: TitleShowMode = "whole"
+    head_offset_ms: int = 0
+    duration_ms: int = 10000
+    tail_offset_ms: int = 0
+    fade_in_ms: int = 300
+    fade_out_ms: int = 300
 
 
 @dataclass
@@ -478,6 +555,9 @@ class Style:
     volume_flash_duration_ratio: float = 1.0
     volume_transition_ratio_pct: int = 67
 
+    # 标题字幕 overlay（B7）。None = 用默认（关闭）。
+    title_overlay: Optional[TitleOverlay] = None
+
 
 @dataclass
 class Background:
@@ -526,6 +606,8 @@ def style_to_dict(style: Style) -> dict:
         value = getattr(style, item.name)
         if item.name in {"karaoke_colors", "ruby_karaoke_colors"}:
             data[item.name] = karaoke_colors_to_dict(value) if value is not None else None
+        elif item.name == "title_overlay":
+            data[item.name] = title_overlay_to_dict(value) if value is not None else None
         elif item.name == "singer_style_overrides":
             data[item.name] = {
                 str(key): subtitle_style_scheme_to_dict(scheme)
@@ -553,6 +635,8 @@ def style_from_dict(payload: object) -> Style:
             continue
         if key in {"karaoke_colors", "ruby_karaoke_colors"}:
             changes[key] = karaoke_colors_from_dict(value)
+        elif key == "title_overlay":
+            changes[key] = title_overlay_from_dict(value)
         elif key == "singer_style_overrides":
             changes[key] = _singer_overrides_from_dict(value)
         elif key == "custom_style_schemes":
@@ -698,6 +782,93 @@ def subtitle_style_scheme_from_dict(payload: object) -> SubtitleStyleScheme:
         else:
             changes[key] = value
     return SubtitleStyleScheme(**changes)
+
+
+def title_overlay_to_dict(title: TitleOverlay) -> dict:
+    return {
+        "enabled": title.enabled,
+        "text_template": title.text_template,
+        "font_family": title.font_family,
+        "font_family_latin": title.font_family_latin,
+        "font_size_px": title.font_size_px,
+        "font_weight": title.font_weight,
+        "italic": title.italic,
+        "letter_spacing_px": title.letter_spacing_px,
+        "line_gap_px": title.line_gap_px,
+        "fill": paint_fill_to_dict(title.fill),
+        "stroke": paint_fill_to_dict(title.stroke),
+        "stroke_width_px": title.stroke_width_px,
+        "stroke2": paint_fill_to_dict(title.stroke2),
+        "stroke2_width_px": title.stroke2_width_px,
+        "decoration_kind": title.decoration_kind,
+        "glow_radius_px": title.glow_radius_px,
+        "shadow": paint_fill_to_dict(title.shadow),
+        "shadow_offset_x": title.shadow_offset_x,
+        "shadow_offset_y": title.shadow_offset_y,
+        "anchor": title.anchor,
+        "align": title.align,
+        "offset_x": title.offset_x,
+        "offset_y": title.offset_y,
+        "show_mode": title.show_mode,
+        "head_offset_ms": title.head_offset_ms,
+        "duration_ms": title.duration_ms,
+        "tail_offset_ms": title.tail_offset_ms,
+        "fade_in_ms": title.fade_in_ms,
+        "fade_out_ms": title.fade_out_ms,
+    }
+
+
+def title_overlay_from_dict(payload: object) -> Optional[TitleOverlay]:
+    if not isinstance(payload, dict):
+        return None
+    defaults = TitleOverlay()
+    anchor = payload.get("anchor", defaults.anchor)
+    if anchor not in TITLE_ANCHORS:
+        anchor = defaults.anchor
+    align = payload.get("align", defaults.align)
+    if align not in HORIZONTAL_ALIGNS:
+        align = defaults.align
+    show_mode = payload.get("show_mode", defaults.show_mode)
+    if show_mode not in TITLE_SHOW_MODES:
+        show_mode = defaults.show_mode
+    decoration = payload.get("decoration_kind", defaults.decoration_kind)
+    if decoration not in {"shadow", "glow"}:
+        decoration = defaults.decoration_kind
+    return TitleOverlay(
+        enabled=bool(payload.get("enabled", defaults.enabled)),
+        text_template=str(payload.get("text_template", defaults.text_template)),
+        font_family=str(payload.get("font_family", defaults.font_family)),
+        font_family_latin=(
+            str(payload["font_family_latin"])
+            if payload.get("font_family_latin")
+            else None
+        ),
+        font_size_px=_int_value(payload.get("font_size_px"), defaults.font_size_px),
+        font_weight=_int_value(payload.get("font_weight"), defaults.font_weight),
+        italic=bool(payload.get("italic", defaults.italic)),
+        letter_spacing_px=_int_value(payload.get("letter_spacing_px"), defaults.letter_spacing_px),
+        line_gap_px=_int_value(payload.get("line_gap_px"), defaults.line_gap_px),
+        fill=paint_fill_from_dict(payload.get("fill"), fallback="#FFEBEB"),
+        stroke=paint_fill_from_dict(payload.get("stroke"), fallback="#000000"),
+        stroke_width_px=_int_value(payload.get("stroke_width_px"), defaults.stroke_width_px),
+        stroke2=paint_fill_from_dict(payload.get("stroke2"), fallback="#FFFFFF"),
+        stroke2_width_px=_int_value(payload.get("stroke2_width_px"), defaults.stroke2_width_px),
+        decoration_kind=decoration,  # type: ignore[arg-type]
+        glow_radius_px=_int_value(payload.get("glow_radius_px"), defaults.glow_radius_px),
+        shadow=paint_fill_from_dict(payload.get("shadow"), fallback="#E19696"),
+        shadow_offset_x=_int_value(payload.get("shadow_offset_x"), defaults.shadow_offset_x),
+        shadow_offset_y=_int_value(payload.get("shadow_offset_y"), defaults.shadow_offset_y),
+        anchor=anchor,  # type: ignore[arg-type]
+        align=align,  # type: ignore[arg-type]
+        offset_x=_int_value(payload.get("offset_x"), defaults.offset_x),
+        offset_y=_int_value(payload.get("offset_y"), defaults.offset_y),
+        show_mode=show_mode,  # type: ignore[arg-type]
+        head_offset_ms=_int_value(payload.get("head_offset_ms"), defaults.head_offset_ms),
+        duration_ms=_int_value(payload.get("duration_ms"), defaults.duration_ms),
+        tail_offset_ms=_int_value(payload.get("tail_offset_ms"), defaults.tail_offset_ms),
+        fade_in_ms=_int_value(payload.get("fade_in_ms"), defaults.fade_in_ms),
+        fade_out_ms=_int_value(payload.get("fade_out_ms"), defaults.fade_out_ms),
+    )
 
 
 def karaoke_colors_to_dict(colors: KaraokeColors) -> dict:
