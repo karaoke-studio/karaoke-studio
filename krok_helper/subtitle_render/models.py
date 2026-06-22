@@ -6,7 +6,7 @@
    每行可寻址到具体字符、字符的起始毫秒、行末与行内停顿释放时间戳、ふりがな 注音。
    解析器在 :mod:`subtitle_sources` 实现。
 
-2. **RenderProject** 及其下属 — 渲染项目的持久化模型（``.krrender.json``），含
+2. **RenderProject** 及其下属 — 渲染项目的持久化模型（``.yurika.json``），含
    字幕源引用、背景、样式、输出参数。MVP 阶段 :class:`Style` / 序列化等仍为占位，
    后续 P0 任务（A4/A6/A8 等）落地。
 
@@ -22,7 +22,7 @@ from dataclasses import dataclass, field, fields
 from typing import Literal, Optional
 
 SCHEMA_VERSION = 1
-PROJECT_FILE_SUFFIX = ".krrender.json"
+PROJECT_FILE_SUFFIX = ".yurika.json"
 STYLE_PRESET_FILE_SUFFIX = ".krstyle.json"
 SUBTITLE_SOURCE_SUFFIX = ".lrc"
 
@@ -128,7 +128,7 @@ class TimingTrack:
 
 
 # ---------------------------------------------------------------------------
-# 渲染项目持久化模型（``.krrender.json``）
+# 渲染项目持久化模型（``.yurika.json``）
 # ---------------------------------------------------------------------------
 
 
@@ -595,7 +595,7 @@ class RenderProject:
 
 
 # ---------------------------------------------------------------------------
-# 持久化辅助（settings.json / .krstyle.json / .krrender.json 共用）
+# 持久化辅助（settings.json / .krstyle.json / .yurika.json 共用）
 # ---------------------------------------------------------------------------
 
 

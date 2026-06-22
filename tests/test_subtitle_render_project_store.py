@@ -1,4 +1,4 @@
-"""A11 项目文件（.krrender.json）读写与 standalone 新建/保存/打开往返。"""
+"""A11 项目文件（.yurika.json）读写与 standalone 新建/保存/打开往返。"""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ def _make_window(qapp, monkeypatch):
 
 
 def test_save_render_project_round_trip(tmp_path):
-    path = tmp_path / "demo.krrender.json"
+    path = tmp_path / "demo.yurika.json"
     data = {"style": {"font_size_px": 80}, "selected_scheme_key": "global"}
     save_render_project(path, data)
     assert path.is_file()
@@ -45,7 +45,7 @@ def test_save_render_project_round_trip(tmp_path):
 
 
 def test_load_render_project_rejects_bad_json(tmp_path):
-    path = tmp_path / "bad.krrender.json"
+    path = tmp_path / "bad.yurika.json"
     path.write_text("not json {", encoding="utf-8")
     with pytest.raises(ValueError):
         load_render_project(path)
@@ -73,7 +73,7 @@ def test_window_save_new_open_round_trip(qapp, monkeypatch, tmp_path):
     assert win._project_dirty is True
 
     # 保存
-    path = tmp_path / "song.krrender.json"
+    path = tmp_path / "song.yurika.json"
     assert win._write_project(path) is True
     assert win._project_dirty is False
     assert win._project_path == path
