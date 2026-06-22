@@ -144,9 +144,11 @@ def _parse_body_lines(lines: Iterable[str]) -> list[TimingLine]:
     timing_lines: list[TimingLine] = []
     current_singer_label: Optional[str] = None
     singer_ids: dict[str, int] = {}
+    # 「角色 / 配色」标签跨行延续：上一行末尾生效的标签继续作用到下一行，直到下次切换。
+    active_role: Optional[str] = None
 
     for raw_line in lines:
-        line = _parse_body_line(raw_line)
+        line, active_role = _parse_body_line(raw_line, active_role)
         if line.singer_label is not None:
             current_singer_label = line.singer_label
         elif line.chars and current_singer_label is not None:
@@ -160,11 +162,15 @@ def _parse_body_lines(lines: Iterable[str]) -> list[TimingLine]:
     return timing_lines
 
 
-def _parse_body_line(line: str) -> TimingLine:
-    """解析一条 body 行。
+def _parse_body_line(
+    line: str, active_role: Optional[str] = None
+) -> tuple[TimingLine, Optional[str]]:
+    """解析一条 body 行。返回 ``(TimingLine, 行末生效的角色标签)``。
 
-    支持 ``[ts]字[ts]字...[ts_end]``、行首/行中 ``【演唱者】`` 标签、行内停顿释放。
-    完全没有时间戳和字符的行视为 ``is_blank``。
+    支持 ``[ts]字[ts]字...[ts_end]``、行首/行中 ``【N配色】`` 角色标签、行内停顿释放。
+    ``【...】`` 在一行内可多次出现，每次切换其后字符的 ``role_label``；``active_role``
+    由调用方跨行透传（标签会延续到下一次切换）。完全没有时间戳和字符的行视为
+    ``is_blank``。``line.singer_label`` 仍记该行第一个标签（向后兼容现有歌手机制）。
     """
     tokens = _tokenize_line(line)
 
@@ -184,9 +190,10 @@ def _parse_body_line(line: str) -> TimingLine:
         text = str(tval)
         sm = _SINGER_LABEL_RE.fullmatch(text)
         if sm:
-            # 【演唱者】标签：第一个出现的记作 line.singer_label；后续中段切换暂不区分
+            # 【N配色】角色标签：切换其后字符的角色；第一个还兼作 line.singer_label。
+            active_role = sm.group(1)
             if singer_label is None:
-                singer_label = sm.group(1)
+                singer_label = active_role
             continue
         # 普通字符：使用前面 pending 的 [ts] 作为起点
         if pending_ts is None:
@@ -199,6 +206,7 @@ def _parse_body_line(line: str) -> TimingLine:
                 TimingChar(
                     text=ch,
                     start_ms=char_starts[i],
+                    role_label=active_role,
                 )
             )
         pending_ts = None
@@ -209,11 +217,14 @@ def _parse_body_line(line: str) -> TimingLine:
     raw = line.strip()
     is_blank = not chars and end_ms is None and singer_label is None and raw == ""
 
-    return TimingLine(
-        chars=chars,
-        end_ms=end_ms,
-        singer_label=singer_label,
-        is_blank=is_blank,
+    return (
+        TimingLine(
+            chars=chars,
+            end_ms=end_ms,
+            singer_label=singer_label,
+            is_blank=is_blank,
+        ),
+        active_role,
     )
 
 

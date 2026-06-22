@@ -46,6 +46,10 @@ class TimingChar:
     """行内"呼吸/演唱停顿"释放点，仅当该字符后立即有一个 ``[MM:SS:CC]`` 且后面还有
     另一个起始 ``[MM:SS:CC]`` 时存在。语义对应导出器里的 ``ch.is_sentence_end``。"""
 
+    role_label: Optional[str] = None
+    """该字符所属「角色 / 配色」标签（来自行内 ``【N配色】`` 等标签）。同一行内可多次
+    切换，标签会跨行延续到下次切换为止。``None`` = 未指定（用全局/默认样式）。"""
+
 
 @dataclass
 class TimingLine:
@@ -124,6 +128,19 @@ class TimingTrack:
                 continue
             seen.add(line.singer_id)
             options.append((line.singer_id, line.singer_label))
+        return options
+
+    @property
+    def role_options(self) -> list[str]:
+        """字幕里出现过的「角色 / 配色」标签，按首次出现顺序去重。"""
+        seen: set[str] = set()
+        options: list[str] = []
+        for line in self.lines:
+            for ch in line.chars:
+                label = ch.role_label
+                if label and label not in seen:
+                    seen.add(label)
+                    options.append(label)
         return options
 
 

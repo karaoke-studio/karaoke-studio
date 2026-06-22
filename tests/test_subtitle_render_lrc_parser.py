@@ -277,3 +277,38 @@ def test_malformed_ruby_entry_silently_skipped():
     text = "[00:00:00]a[00:00:50]\n\n@Ruby1=incomplete\n"
     track = parse_nicokara_lrc(text)
     assert track.rubies == []
+
+
+# ---------------------------------------------------------------------------
+# 角色 / 配色 标签（行内 【N配色】，逐字 role_label）
+# ---------------------------------------------------------------------------
+
+
+def test_role_label_assigned_per_char_and_switches_midline():
+    # 一行内从 1配色 切到 2配色（标签前后都有 [ts]，与实际格式一致）
+    text = "【1配色】[00:01:00]あ[00:01:50]い[00:02:00]【2配色】[00:02:50]う[00:03:00]\n"
+    track = parse_nicokara_lrc(text)
+    line = track.lines[0]
+    assert [(c.text, c.role_label) for c in line.chars] == [
+        ("あ", "1配色"),
+        ("い", "1配色"),
+        ("う", "2配色"),
+    ]
+
+
+def test_role_label_carries_across_lines():
+    # 第二行没有标签，应继承第一行的 1配色
+    text = "【1配色】[00:01:00]あ[00:01:50]\n[00:02:00]い[00:02:50]\n"
+    track = parse_nicokara_lrc(text)
+    assert track.lines[0].chars[0].role_label == "1配色"
+    assert track.lines[1].chars[0].role_label == "1配色"
+
+
+def test_track_role_options_dedup_in_order():
+    text = (
+        "【1配色】[00:01:00]あ[00:01:50]\n"
+        "【2配色】[00:02:00]い[00:02:50]\n"
+        "【1配色】[00:03:00]う[00:03:50]\n"
+    )
+    track = parse_nicokara_lrc(text)
+    assert track.role_options == ["1配色", "2配色"]
