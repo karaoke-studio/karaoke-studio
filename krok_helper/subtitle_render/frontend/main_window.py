@@ -237,11 +237,10 @@ class SubtitleRenderWindow(QWidget):
         content_layout.setSpacing(8)
         root.addWidget(content, 1)
 
-        # 顶部项目命令栏（新建 / 打开 / 保存 + 当前项目名）。standalone 专属，嵌入模式
-        # 由工作流管理项目，整条隐藏。
+        # 顶部项目命令栏（新建 / 打开 / 保存 / 另存为 + 当前项目名）。standalone 与嵌入
+        # 模式都显示——嵌入工作台里也能把当前字幕样式工程存成 .yurika.json 复用。
         self._project_bar = self._make_project_bar()
         content_layout.addWidget(self._project_bar)
-        self._project_bar.setVisible(not self._embedded)
 
         # QStackedWidget 承载各页内容
         self._stack = QStackedWidget(content)
@@ -556,19 +555,19 @@ class SubtitleRenderWindow(QWidget):
         self._space_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self._space_shortcut.activated.connect(self._transport_bar.toggle_play)
 
-        # 项目文件快捷键（standalone 专属，嵌入模式由工作流管理项目，不注册）
-        if not self._embedded:
-            self._project_shortcuts = []
-            for seq, handler in (
-                (QKeySequence.StandardKey.New, self._new_project),
-                (QKeySequence.StandardKey.Open, self._open_project),
-                (QKeySequence.StandardKey.Save, self._save_project),
-                (QKeySequence.StandardKey.SaveAs, self._save_project_as),
-            ):
-                shortcut = QShortcut(QKeySequence(seq), self)
-                shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-                shortcut.activated.connect(handler)
-                self._project_shortcuts.append(shortcut)
+        # 项目文件快捷键。作用域限制在本模块内（WidgetWithChildrenShortcut），
+        # 嵌入工作台时不会和宿主的全局快捷键打架。
+        self._project_shortcuts = []
+        for seq, handler in (
+            (QKeySequence.StandardKey.New, self._new_project),
+            (QKeySequence.StandardKey.Open, self._open_project),
+            (QKeySequence.StandardKey.Save, self._save_project),
+            (QKeySequence.StandardKey.SaveAs, self._save_project_as),
+        ):
+            shortcut = QShortcut(QKeySequence(seq), self)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(handler)
+            self._project_shortcuts.append(shortcut)
 
     def _make_export_tab(self) -> QWidget:
         page = QWidget()

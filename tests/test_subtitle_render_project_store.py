@@ -51,15 +51,15 @@ def test_load_render_project_rejects_bad_json(tmp_path):
         load_render_project(path)
 
 
-def test_project_bar_standalone_only(qapp, monkeypatch):
+def test_project_bar_present_in_both_modes(qapp, monkeypatch):
+    # 项目命令栏与快捷键在 standalone 与嵌入模式下都提供。
     standalone = _make_window(qapp, monkeypatch)
-    assert not standalone._embedded
-    assert standalone._project_bar.isVisibleTo(standalone) or True  # 构造期不一定 show
+    assert standalone._project_bar is not None
     assert hasattr(standalone, "_project_shortcuts")
 
     embedded = mw.SubtitleRenderWindow(embedded=True)
-    assert not embedded._project_bar.isVisibleTo(embedded)
-    assert not hasattr(embedded, "_project_shortcuts")
+    assert embedded._project_bar is not None
+    assert hasattr(embedded, "_project_shortcuts")
 
 
 def test_window_save_new_open_round_trip(qapp, monkeypatch, tmp_path):
