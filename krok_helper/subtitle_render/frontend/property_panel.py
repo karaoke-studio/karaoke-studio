@@ -922,7 +922,7 @@ class PropertyPanel(QTabWidget):
         self._style = Style()
         self._screen = ScreenSettings()
         self._syncing = False
-        self._singer_options: list[tuple[int, str]] = []
+        self._role_names: list[str] = []
 
         self.setObjectName("PropertyPanel")
         self.setMinimumWidth(320)
@@ -963,7 +963,7 @@ class PropertyPanel(QTabWidget):
         self.addTab(self._make_effects_page(), "特效")
         self.addTab(_placeholder_page("时段图片（P2）"), "装饰")
         self.addTab(self._make_title_page(), "标题")
-        self.set_singers([])
+        self.set_roles([])
         self.set_screen_settings(self._screen, emit=False)
         self.set_style(self._style, emit=False)
 
@@ -1060,18 +1060,16 @@ class PropertyPanel(QTabWidget):
         if emit:
             self.styleChanged.emit(self._style)
 
-    def set_singers(self, singers: list[tuple[int, str]]) -> None:
-        self._singer_options = list(singers)
+    def set_roles(self, role_names: list[str]) -> None:
+        """喂入字幕里出现过的角色名（来自 ``track.role_options``），刷新角色下拉。"""
+        self._role_names = [str(n) for n in role_names if n]
         current_key = self._current_scheme_key()
-        changed = self._ensure_singer_schemes()
         self._syncing = True
         try:
             self._refresh_scheme_combo(current_key)
         finally:
             self._syncing = False
         self._sync_subtitle_scheme_controls()
-        if changed:
-            self.styleChanged.emit(self._style)
 
     # ------------------------------------------------------------------ layout
 
@@ -1501,24 +1499,30 @@ class PropertyPanel(QTabWidget):
         return button
 
     def _make_scheme_section(self) -> QFrame:
-        section, layout = _section("配色方案")
+        section, layout = _section("角色")
 
+        # 内部仍叫 _singer_combo（少改动），但现在装的是「角色」：全局默认 + 各角色名。
         self._singer_combo = _WheelFocusedComboBox(section)
         _compact_control(self._singer_combo)
         self._singer_combo.currentIndexChanged.connect(self._on_scheme_combo_changed)
-        self._add_scheme_button = QPushButton("添加方案", section)
-        self._add_scheme_button.setMinimumHeight(32)
-        self._add_scheme_button.clicked.connect(
-            lambda _checked=False: self._add_custom_scheme()
-        )
+        layout.addWidget(_field("当前角色", self._singer_combo))
 
-        row = QWidget(section)
-        row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(8)
-        row_layout.addWidget(self._singer_combo, 1)
-        row_layout.addWidget(self._add_scheme_button)
-        layout.addWidget(_field("当前方案", row))
+        btn_row = QWidget(section)
+        btn_layout = QHBoxLayout(btn_row)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+        btn_layout.setSpacing(6)
+        self._add_scheme_button = QPushButton("新建", section)
+        self._add_scheme_button.setMinimumHeight(30)
+        self._add_scheme_button.clicked.connect(lambda _checked=False: self._add_custom_scheme())
+        self._rename_role_button = QPushButton("重命名", section)
+        self._rename_role_button.setMinimumHeight(30)
+        self._rename_role_button.clicked.connect(lambda _checked=False: self._rename_current_role())
+        self._delete_role_button = QPushButton("删除", section)
+        self._delete_role_button.setMinimumHeight(30)
+        self._delete_role_button.clicked.connect(lambda _checked=False: self._delete_current_role())
+        for btn in (self._add_scheme_button, self._rename_role_button, self._delete_role_button):
+            btn_layout.addWidget(btn, 1)
+        layout.addWidget(btn_row)
         return section
 
     def _make_effects_page(self) -> QWidget:
@@ -2685,9 +2689,12 @@ class PropertyPanel(QTabWidget):
     def _refresh_scheme_combo(self, selected_key: Optional[str] = None) -> None:
         self._singer_combo.clear()
         self._singer_combo.addItem("全局默认", _GLOBAL_SCHEME_KEY)
-        for singer_id, label in self._singer_options:
-            self._singer_combo.addItem(label, f"{_SINGER_SCHEME_PREFIX}{singer_id}")
-        for name in self._style.custom_style_schemes:
+        # 角色名：字幕里出现过的（含行中标签）∪ 用户手动新建的，按名字去重。
+        seen: set[str] = set()
+        for name in list(self._role_names) + list(self._style.custom_style_schemes):
+            if name in seen:
+                continue
+            seen.add(name)
             self._singer_combo.addItem(name, f"{_CUSTOM_SCHEME_PREFIX}{name}")
         if selected_key is not None:
             index = self._singer_combo.findData(selected_key)
@@ -2696,7 +2703,7 @@ class PropertyPanel(QTabWidget):
 
     def _add_custom_scheme(self, name: Optional[str] = None) -> None:
         if name is None or isinstance(name, bool):
-            name, ok = QInputDialog.getText(self, "添加配色方案", "方案名称")
+            name, ok = QInputDialog.getText(self, "新建角色", "角色名称")
             if not ok:
                 return
         name = name.strip()
@@ -2739,15 +2746,6 @@ class PropertyPanel(QTabWidget):
         if not self._syncing:
             self.schemeSelectionChanged.emit(self.current_scheme_key())
 
-    def _current_singer_id(self) -> Optional[int]:
-        key = self._current_scheme_key()
-        if key is None or not key.startswith(_SINGER_SCHEME_PREFIX):
-            return None
-        try:
-            return int(key.removeprefix(_SINGER_SCHEME_PREFIX))
-        except ValueError:
-            return None
-
     def _current_custom_scheme_name(self) -> Optional[str]:
         key = self._current_scheme_key()
         if key is None or not key.startswith(_CUSTOM_SCHEME_PREFIX):
@@ -2755,31 +2753,55 @@ class PropertyPanel(QTabWidget):
         return key.removeprefix(_CUSTOM_SCHEME_PREFIX)
 
     def _scheme_value(self, field_name: str):
-        custom_name = self._current_custom_scheme_name()
-        if custom_name is not None:
-            scheme = self._style.custom_style_schemes.get(custom_name)
-            value = getattr(scheme, field_name, None) if scheme is not None else None
-            if value is not None:
-                return value
-        singer_id = self._current_singer_id()
-        if singer_id is not None:
-            scheme = self._style.singer_style_overrides.get(singer_id)
+        role_name = self._current_custom_scheme_name()
+        if role_name is not None:
+            scheme = self._style.custom_style_schemes.get(role_name)
             value = getattr(scheme, field_name, None) if scheme is not None else None
             if value is not None:
                 return value
         return getattr(self._style, field_name)
 
-    def _ensure_singer_schemes(self) -> bool:
-        overrides = dict(self._style.singer_style_overrides)
-        changed = False
-        for singer_id, _label in self._singer_options:
-            if singer_id in overrides:
-                continue
-            overrides[singer_id] = _scheme_from_style(self._style, singer_id)
-            changed = True
-        if changed:
-            self._style = replace(self._style, singer_style_overrides=overrides)
-        return changed
+    def _rename_current_role(self) -> None:
+        old = self._current_custom_scheme_name()
+        if old is None:
+            return  # 全局默认不能重命名
+        new, ok = QInputDialog.getText(self, "重命名角色", "角色名称", text=old)
+        if not ok:
+            return
+        new = new.strip()
+        if not new or new == old:
+            return
+        schemes = dict(self._style.custom_style_schemes)
+        scheme = schemes.get(old) or _scheme_from_current(self)
+        if old in schemes:
+            del schemes[old]
+        schemes[new] = scheme
+        # 角色名来自字幕标签（role_names）的，重命名后也从可选名单里替换掉旧名。
+        if old in self._role_names:
+            self._role_names = [new if n == old else n for n in self._role_names]
+        self._update_style(custom_style_schemes=schemes)
+        self._syncing = True
+        try:
+            self._refresh_scheme_combo(f"{_CUSTOM_SCHEME_PREFIX}{new}")
+        finally:
+            self._syncing = False
+        self._sync_subtitle_scheme_controls()
+
+    def _delete_current_role(self) -> None:
+        name = self._current_custom_scheme_name()
+        if name is None:
+            return  # 全局默认不能删
+        schemes = dict(self._style.custom_style_schemes)
+        schemes.pop(name, None)
+        if name in self._role_names:
+            self._role_names = [n for n in self._role_names if n != name]
+        self._update_style(custom_style_schemes=schemes)
+        self._syncing = True
+        try:
+            self._refresh_scheme_combo(_GLOBAL_SCHEME_KEY)
+        finally:
+            self._syncing = False
+        self._sync_subtitle_scheme_controls()
 
     def _sync_subtitle_scheme_controls(self) -> None:
         if not hasattr(self, "_singer_combo"):
@@ -2886,19 +2908,13 @@ class PropertyPanel(QTabWidget):
         if self._syncing:
             return
         if changes and set(changes).issubset(_SCHEME_FIELDS):
-            custom_name = self._current_custom_scheme_name()
-            if custom_name is not None:
+            role_name = self._current_custom_scheme_name()
+            if role_name is not None:
+                # 当前选中某个角色 → 编辑进该角色（按名字存进 custom_style_schemes）。
                 schemes = dict(self._style.custom_style_schemes)
-                scheme = schemes.get(custom_name) or _scheme_from_current(self)
-                schemes[custom_name] = replace(scheme, **changes)
+                scheme = schemes.get(role_name) or _scheme_from_current(self)
+                schemes[role_name] = replace(scheme, **changes)
                 changes = {"custom_style_schemes": schemes}
-            else:
-                singer_id = self._current_singer_id()
-                if singer_id is not None:
-                    overrides = dict(self._style.singer_style_overrides)
-                    scheme = overrides.get(singer_id) or _scheme_from_style(self._style, singer_id)
-                    overrides[singer_id] = replace(scheme, **changes)
-                    changes = {"singer_style_overrides": overrides}
         if "line_y_position" in changes:
             changes["line_y_position"] = _normalize_line_position(changes["line_y_position"])
         if "line_horizontal_layout" in changes:

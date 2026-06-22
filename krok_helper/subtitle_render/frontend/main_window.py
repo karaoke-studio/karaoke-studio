@@ -454,7 +454,7 @@ class SubtitleRenderWindow(QWidget):
             self._preview_panel.set_track(None)
             self._preview_panel.set_video_source(None)
             self._preview_panel.set_populated(False)
-            self._property_panel.set_singers([])
+            self._property_panel.set_roles([])
             # 播放条复位
             self._transport_bar.set_audio_source(None)
             self._transport_bar.set_time(0)
@@ -751,7 +751,7 @@ class SubtitleRenderWindow(QWidget):
         self._timing_track = track
         self._subtitle_path = path
         self._lyrics_panel.set_track(track)
-        self._property_panel.set_singers(track.singer_options)
+        self._property_panel.set_roles(track.role_options)
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
         self._preview_panel.set_track(track)
         self._refresh_transport_duration()

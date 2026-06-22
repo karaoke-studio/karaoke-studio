@@ -361,7 +361,7 @@ def test_property_panel_subtitle_page_has_no_horizontal_scroll(qapp):
     assert panel._singer_combo.parentWidget() is not panel._line_margin_spin.parentWidget()
     subtitle_layout = subtitle_page.widget().layout()
     first_section = subtitle_layout.itemAt(0).widget()
-    assert first_section.header.text() == "配色方案"
+    assert first_section.header.text() == "角色"
 
 
 def test_property_panel_sections_are_collapsible(qapp):
@@ -372,7 +372,7 @@ def test_property_panel_sections_are_collapsible(qapp):
     header = first_section.header
     content = first_section.layout().itemAt(1).widget()
 
-    assert header.text() == "配色方案"
+    assert header.text() == "角色"
     assert not content.isHidden()
 
     header.click()
@@ -1012,13 +1012,13 @@ def test_property_panel_lit_controls_emit_style(qapp):
     assert emitted[-1].volume_overlay_stroke_color == "#445577"
 
 
-def test_property_panel_singer_scheme_controls_emit_style(qapp):
+def test_property_panel_role_scheme_controls_emit_style(qapp):
     panel = PropertyPanel()
-    panel.set_singers([(0, "A"), (1, "B")])
+    panel.set_roles(["A", "B"])  # 角色名来自字幕标签
     emitted: list[Style] = []
     panel.styleChanged.connect(emitted.append)
 
-    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("singer:1"))
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:B"))
     panel._font_size_spin.setValue(88)
     panel._letter_spacing_spin.setValue(9)
     panel._set_color("fill_color", "#00aaee")
@@ -1030,7 +1030,8 @@ def test_property_panel_singer_scheme_controls_emit_style(qapp):
     panel._set_color("base_color", "#112233")
     panel._ruby_gap_spin.setValue(8)
 
-    scheme = emitted[-1].singer_style_overrides[1]
+    # 编辑进角色 B（按名字存进 custom_style_schemes）
+    scheme = emitted[-1].custom_style_schemes["B"]
     assert scheme.font_size_px == 88
     assert scheme.letter_spacing_px == 9
     assert scheme.fill_color == "#00AAEE"
@@ -1043,12 +1044,12 @@ def test_property_panel_singer_scheme_controls_emit_style(qapp):
     assert panel._paint_gradient_start_btn.color == "#00AAEE"
 
 
-def test_property_panel_singer_scheme_switches_subtitle_controls(qapp):
+def test_property_panel_role_scheme_switches_subtitle_controls(qapp):
     panel = PropertyPanel()
-    panel.set_singers([(0, "A")])
+    panel.set_roles(["A"])
     style = Style(
-        singer_style_overrides={
-            0: SubtitleStyleScheme(
+        custom_style_schemes={
+            "A": SubtitleStyleScheme(
                 font_size_px=72,
                 letter_spacing_px=11,
                 font_weight=700,
@@ -1064,7 +1065,7 @@ def test_property_panel_singer_scheme_switches_subtitle_controls(qapp):
     )
 
     panel.set_style(style)
-    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("singer:0"))
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:A"))
 
     assert panel._font_size_spin.value() == 72
     assert panel._letter_spacing_spin.value() == 11
@@ -1185,9 +1186,9 @@ def test_main_window_style_panel_updates_preview(qapp, monkeypatch):
     win._property_panel._set_color("fill_color", "#00aaee")
     win._property_panel._ruby_font_size_spin.setValue(28)
     win._property_panel._line_gap_spin.setValue(77)
-    win._property_panel.set_singers([(0, "A")])
+    win._property_panel.set_roles(["A"])
     win._property_panel._singer_combo.setCurrentIndex(
-        win._property_panel._singer_combo.findData("singer:0")
+        win._property_panel._singer_combo.findData("custom:A")
     )
     win._property_panel._set_color("fill_color", "#ffcc00")
 
@@ -1195,12 +1196,12 @@ def test_main_window_style_panel_updates_preview(qapp, monkeypatch):
     assert win._style.fill_color == "#00AAEE"
     assert win._style.ruby_font_size_px == 28
     assert win._style.line_gap_px == 77
-    assert win._style.singer_style_overrides[0].fill_color == "#FFCC00"
+    assert win._style.custom_style_schemes["A"].fill_color == "#FFCC00"
     assert win._preview_panel.canvas._style.font_size_px == 96
     assert win._preview_panel.canvas._style.fill_color == "#00AAEE"
     assert win._preview_panel.canvas._style.ruby_font_size_px == 28
     assert win._preview_panel.canvas._style.line_gap_px == 77
-    assert win._preview_panel.canvas._style.singer_style_overrides[0].fill_color == "#FFCC00"
+    assert win._preview_panel.canvas._style.custom_style_schemes["A"].fill_color == "#FFCC00"
 
 
 def test_main_window_preview_splitter_defaults_to_compact_property_panel(qapp):
