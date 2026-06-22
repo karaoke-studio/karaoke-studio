@@ -238,7 +238,7 @@ class SubtitleRenderWindow(QWidget):
         root.addWidget(content, 1)
 
         # 顶部项目命令栏（新建 / 打开 / 保存 / 另存为 + 当前项目名）。standalone 与嵌入
-        # 模式都显示——嵌入工作台里也能把当前字幕样式工程存成 .yurika.json 复用。
+        # 模式都显示——嵌入工作台里也能把当前字幕样式工程存成 .yurika 复用。
         self._project_bar = self._make_project_bar()
         content_layout.addWidget(self._project_bar)
 

@@ -1,4 +1,4 @@
-"""``.yurika.json`` 项目文件读写（A11，standalone 专用）。
+"""``.yurika`` 项目文件读写（A11，standalone 专用）。
 
 项目文件是一份带 ``schema_version`` 的 JSON 快照，存放当前 standalone 会话的
 全部可复现状态：字幕 / 背景视频 / 音频路径、全局样式、屏幕设置、配色方案选择、
@@ -35,7 +35,7 @@ def save_render_project(path: Path, data: dict) -> None:
 
 
 def load_render_project(path: Path) -> dict:
-    """读取并解析 ``.yurika.json``，返回项目快照 dict。
+    """读取并解析 ``.yurika``，返回项目快照 dict。
 
     解析失败（非法 JSON / 非 dict）抛 :class:`ValueError`，由调用方弹错处理。
     """
