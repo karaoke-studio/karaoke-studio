@@ -73,13 +73,27 @@ from krok_helper.subtitle_render.frontend.property_panel import (
     screen_settings_to_dict,
 )
 from krok_helper.subtitle_render.frontend.timeline_view import TrackTimelineView
-from krok_helper.subtitle_render.models import Style, TimingTrack, style_from_dict, style_to_dict
+from krok_helper.subtitle_render.models import (
+    PROJECT_FILE_SUFFIX,
+    Style,
+    TimingTrack,
+    style_from_dict,
+    style_to_dict,
+)
+from krok_helper.subtitle_render.project_store import (
+    load_render_project,
+    project_output_payload,
+    project_payload,
+    save_render_project,
+    split_project_paths,
+)
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
 
 SUBTITLE_FILTER = "Nicokara 逐字 LRC (*.lrc);;所有文件 (*.*)"
 VIDEO_FILTER = "视频文件 (*.mp4 *.mkv *.mov *.webm *.avi *.flv);;所有文件 (*.*)"
 OUTPUT_FILTER = "MP4 视频 (*.mp4);;所有文件 (*.*)"
+PROJECT_FILTER = f"字幕渲染项目 (*{PROJECT_FILE_SUFFIX});;所有文件 (*.*)"
 
 
 class _AspectRatioBox(QWidget):
@@ -190,6 +204,9 @@ class SubtitleRenderWindow(QWidget):
         self._style: Style = Style()
         self._screen_settings: ScreenSettings = ScreenSettings()
         self._selected_scheme_key = "global"
+        self._project_path: Optional[Path] = None
+        self._project_dirty = False
+        self._loading_project = False
         self._syncing_screen_controls = False
         self._render_thread: Optional[QThread] = None
         self._render_worker: Optional[_RenderWorker] = None
@@ -219,6 +236,12 @@ class SubtitleRenderWindow(QWidget):
         content_layout.setContentsMargins(16, 12, 16, 16)
         content_layout.setSpacing(8)
         root.addWidget(content, 1)
+
+        # 顶部项目命令栏（新建 / 打开 / 保存 + 当前项目名）。standalone 专属，嵌入模式
+        # 由工作流管理项目，整条隐藏。
+        self._project_bar = self._make_project_bar()
+        content_layout.addWidget(self._project_bar)
+        self._project_bar.setVisible(not self._embedded)
 
         # QStackedWidget 承载各页内容
         self._stack = QStackedWidget(content)
@@ -252,6 +275,218 @@ class SubtitleRenderWindow(QWidget):
         )
         self._nav.setCurrentItem("preview")
         self._stack.setCurrentIndex(0)
+        self._refresh_project_title()
+
+    # ----------------------------------------------------------- 项目文件（A11）
+
+    def _make_project_bar(self) -> QWidget:
+        bar = QWidget()
+        bar.setObjectName("SrProjectBar")
+        themed(
+            bar,
+            lambda: (
+                f"#SrProjectBar {{ background: transparent; }}"
+                f"{control_qss('#SrProjectBar')}"
+            ),
+        )
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        new_btn = QPushButton("新建")
+        new_btn.setFixedHeight(30)
+        new_btn.clicked.connect(self._new_project)
+        open_btn = QPushButton("打开")
+        open_btn.setFixedHeight(30)
+        open_btn.clicked.connect(self._open_project)
+        save_btn = QPushButton("保存")
+        save_btn.setFixedHeight(30)
+        save_btn.clicked.connect(self._save_project)
+        save_as_btn = QPushButton("另存为")
+        save_as_btn.setFixedHeight(30)
+        save_as_btn.clicked.connect(self._save_project_as)
+        for btn in (new_btn, open_btn, save_btn, save_as_btn):
+            layout.addWidget(btn)
+
+        self._project_name_label = QLabel("")
+        themed(
+            self._project_name_label,
+            lambda: f"color: {palette().text_secondary}; font-size: 9.5pt;",
+        )
+        layout.addSpacing(6)
+        layout.addWidget(self._project_name_label)
+        layout.addStretch(1)
+        return bar
+
+    def _refresh_project_title(self) -> None:
+        if not hasattr(self, "_project_name_label"):
+            return
+        name = self._project_path.name if self._project_path else "未命名项目"
+        self._project_name_label.setText(f"{'● ' if self._project_dirty else ''}{name}")
+
+    def _mark_project_dirty(self) -> None:
+        if self._loading_project:
+            return
+        if not self._project_dirty:
+            self._project_dirty = True
+            self._refresh_project_title()
+
+    def _current_project_data(self) -> dict:
+        independent_audio = (
+            self._audio_path
+            if self._audio_path is not None and self._audio_path != self._video_path
+            else None
+        )
+        return project_payload(
+            subtitle_path=self._subtitle_path,
+            video_path=self._video_path,
+            audio_path=independent_audio,
+            style=style_to_dict(self._style),
+            screen=screen_settings_to_dict(self._screen_settings),
+            selected_scheme_key=self._selected_scheme_key,
+            output=project_output_payload(
+                encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
+                crf=self._export_crf_spin.value(),
+                preset=str(self._export_preset_combo.currentData() or "veryfast"),
+                output_path=self._export_output_edit.text().strip(),
+            ),
+        )
+
+    def _apply_project_data(self, data: dict) -> None:
+        self._loading_project = True
+        try:
+            self._apply_project_data_inner(data)
+        finally:
+            self._loading_project = False
+
+    def _apply_project_data_inner(self, data: dict) -> None:
+        # 1) 样式 / 屏幕 / 配色方案
+        self._style = style_from_dict(data.get("style"))
+        self._screen_settings = screen_settings_from_dict(data.get("screen"))
+        key = data.get("selected_scheme_key")
+        if isinstance(key, str) and key:
+            self._selected_scheme_key = key
+        self._property_panel.set_style(self._style)
+        self._property_panel.set_screen_settings(self._screen_settings)
+        self._property_panel.set_current_scheme_key(self._selected_scheme_key)
+        self._preview_panel.set_style(self._style)
+        self._set_export_screen_controls(self._screen_settings)
+        self._sync_preview_output_size()
+        # 2) 导出参数
+        output = data.get("output") if isinstance(data.get("output"), dict) else {}
+        self._apply_output_settings(output)
+        # 3) 素材（存在才加载；缺失静默跳过，不阻塞打开）
+        paths = split_project_paths(data)
+        if paths["subtitle_path"] is not None and paths["subtitle_path"].is_file():
+            self.load_from_lrc(paths["subtitle_path"])
+        if paths["video_path"] is not None and paths["video_path"].is_file():
+            self.load_video(paths["video_path"])
+        audio = paths["audio_path"]
+        if audio is not None and audio.is_file() and audio != self._video_path:
+            self.load_audio(audio)
+
+    def _apply_output_settings(self, output: dict) -> None:
+        encoder = output.get("encoder_mode")
+        if encoder is not None:
+            idx = self._export_encoder_combo.findData(encoder)
+            if idx >= 0:
+                self._export_encoder_combo.setCurrentIndex(idx)
+        preset = output.get("preset")
+        if isinstance(preset, str):
+            p_idx = self._export_preset_combo.findData(preset)
+            if p_idx >= 0:
+                self._export_preset_combo.setCurrentIndex(p_idx)
+        crf = output.get("crf")
+        if isinstance(crf, int):
+            self._export_crf_spin.setValue(crf)
+        out_path = output.get("output_path")
+        if isinstance(out_path, str) and out_path.strip():
+            self._export_output_edit.setText(out_path.strip())
+
+    def _confirm_discard_changes(self) -> bool:
+        """有未保存改动时弹确认；返回 True 表示可以继续（已处理）。"""
+        if not self._project_dirty:
+            return True
+        choice = QMessageBox.question(
+            self,
+            "未保存的改动",
+            "当前项目有未保存的改动，是否先保存？",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+        )
+        if choice == QMessageBox.StandardButton.Cancel:
+            return False
+        if choice == QMessageBox.StandardButton.Save:
+            return self._save_project()
+        return True
+
+    def _new_project(self) -> None:
+        if not self._confirm_discard_changes():
+            return
+        self._apply_project_data(
+            {
+                "style": style_to_dict(Style()),
+                "screen": screen_settings_to_dict(ScreenSettings()),
+                "selected_scheme_key": "global",
+            }
+        )
+        self._subtitle_path = None
+        self._video_path = None
+        self._audio_path = None
+        self._timing_track = None
+        self._project_path = None
+        self._project_dirty = False
+        self._refresh_project_title()
+
+    def _open_project(self) -> None:
+        if not self._confirm_discard_changes():
+            return
+        start_dir = str(self._project_path.parent) if self._project_path else ""
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "打开字幕渲染项目", start_dir, PROJECT_FILTER
+        )
+        if not path_str:
+            return
+        try:
+            data = load_render_project(Path(path_str))
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(self, "打开项目失败", f"无法读取项目文件：\n{path_str}\n\n{exc}")
+            return
+        self._apply_project_data(data)
+        self._project_path = Path(path_str)
+        self._project_dirty = False
+        self._refresh_project_title()
+
+    def _save_project(self) -> bool:
+        if self._project_path is None:
+            return self._save_project_as()
+        return self._write_project(self._project_path)
+
+    def _save_project_as(self) -> bool:
+        start = str(self._project_path) if self._project_path else (
+            str((self._subtitle_path or self._video_path or Path.cwd()).with_suffix(""))
+            + PROJECT_FILE_SUFFIX
+        )
+        path_str, _ = QFileDialog.getSaveFileName(
+            self, "保存字幕渲染项目", start, PROJECT_FILTER
+        )
+        if not path_str:
+            return False
+        if not path_str.endswith(PROJECT_FILE_SUFFIX):
+            path_str += PROJECT_FILE_SUFFIX
+        return self._write_project(Path(path_str))
+
+    def _write_project(self, path: Path) -> bool:
+        try:
+            save_render_project(path, self._current_project_data())
+        except OSError as exc:
+            QMessageBox.critical(self, "保存项目失败", f"无法写入项目文件：\n{path}\n\n{exc}")
+            return False
+        self._project_path = path
+        self._project_dirty = False
+        self._refresh_project_title()
+        return True
 
     def _make_preview_tab(self) -> QWidget:
         page = QWidget()
@@ -320,6 +555,20 @@ class SubtitleRenderWindow(QWidget):
         self._space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
         self._space_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self._space_shortcut.activated.connect(self._transport_bar.toggle_play)
+
+        # 项目文件快捷键（standalone 专属，嵌入模式由工作流管理项目，不注册）
+        if not self._embedded:
+            self._project_shortcuts = []
+            for seq, handler in (
+                (QKeySequence.StandardKey.New, self._new_project),
+                (QKeySequence.StandardKey.Open, self._open_project),
+                (QKeySequence.StandardKey.Save, self._save_project),
+                (QKeySequence.StandardKey.SaveAs, self._save_project_as),
+            ):
+                shortcut = QShortcut(QKeySequence(seq), self)
+                shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+                shortcut.activated.connect(handler)
+                self._project_shortcuts.append(shortcut)
 
     def _make_export_tab(self) -> QWidget:
         page = QWidget()
@@ -484,6 +733,7 @@ class SubtitleRenderWindow(QWidget):
         self._preview_panel.set_track(track)
         self._refresh_transport_duration()
         self._transport_bar.set_time(0)
+        self._mark_project_dirty()
         return track
 
     def load_video(self, path: Path) -> Optional[MediaInfo]:
@@ -508,6 +758,7 @@ class SubtitleRenderWindow(QWidget):
             self._audio_info = info
             self._transport_bar.set_audio_source(path)
         self._refresh_transport_duration()
+        self._mark_project_dirty()
         return info
 
     def load_audio(self, path: Path) -> Optional[MediaInfo]:
@@ -526,6 +777,7 @@ class SubtitleRenderWindow(QWidget):
         self._audio_info = info
         self._transport_bar.set_audio_source(path)
         self._refresh_transport_duration()
+        self._mark_project_dirty()
         return info
 
     @property
@@ -584,6 +836,7 @@ class SubtitleRenderWindow(QWidget):
         self._style = style
         self._preview_panel.set_style(style)
         self._save_persisted_state()
+        self._mark_project_dirty()
 
     def _apply_screen_settings(self, settings: object) -> None:
         self._screen_settings = screen_settings_from_dict(
@@ -595,6 +848,7 @@ class SubtitleRenderWindow(QWidget):
         self._transport_bar.set_preview_fps(self._screen_settings.fps)
         self._sync_preview_output_size()
         self._save_persisted_state()
+        self._mark_project_dirty()
 
     def _on_export_screen_changed(self) -> None:
         if self._syncing_screen_controls:
@@ -641,6 +895,7 @@ class SubtitleRenderWindow(QWidget):
     def _on_scheme_selection_changed(self, key: str) -> None:
         self._selected_scheme_key = key
         self._save_persisted_state()
+        self._mark_project_dirty()
 
     def _load_persisted_state(self) -> None:
         data = self._load_subtitle_settings()
