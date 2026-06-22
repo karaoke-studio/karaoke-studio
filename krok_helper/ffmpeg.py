@@ -94,7 +94,15 @@ def probe_media(ffprobe_path: str, media_path: Path) -> MediaInfo:
     if result.returncode != 0:
         raise ProcessingError(f"无法读取媒体信息: {media_path.name}\n{result.stderr.strip()}")
 
-    payload = json.loads(result.stdout or "{}")
+    # ffprobe 正常情况下输出合法 UTF-8 JSON，但遇到异常构建 / 损坏文件 / 非常规
+    # 元数据时，stdout 可能是空、被截断或夹杂非 JSON 文本，json.loads 会抛
+    # JSONDecodeError。统一兜成 ProcessingError，避免裸异常逃逸出调用处。
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except (json.JSONDecodeError, ValueError) as exc:
+        raise ProcessingError(f"无法解析媒体信息: {media_path.name}") from exc
+    if not isinstance(payload, dict):
+        raise ProcessingError(f"无法解析媒体信息: {media_path.name}")
     streams = payload.get("streams", [])
     format_info = payload.get("format", {})
 
@@ -102,17 +110,24 @@ def probe_media(ffprobe_path: str, media_path: Path) -> MediaInfo:
     video_streams = [stream for stream in streams if stream.get("codec_type") == "video"]
     subtitle_streams = [stream for stream in streams if stream.get("codec_type") == "subtitle"]
 
+    def _to_int(value: object) -> int | None:
+        try:
+            return int(value) if value not in (None, "N/A", "") else None
+        except (TypeError, ValueError):
+            return None
+
     duration_raw = format_info.get("duration")
-    duration = float(duration_raw) if duration_raw not in (None, "N/A", "") else 0.0
+    try:
+        duration = float(duration_raw) if duration_raw not in (None, "N/A", "") else 0.0
+    except (TypeError, ValueError):
+        duration = 0.0
 
     sample_rate = None
     channels = None
     if audio_streams:
         first_audio = audio_streams[0]
-        sample_rate_raw = first_audio.get("sample_rate")
-        channels_raw = first_audio.get("channels")
-        sample_rate = int(sample_rate_raw) if sample_rate_raw not in (None, "N/A", "") else None
-        channels = int(channels_raw) if channels_raw not in (None, "N/A", "") else None
+        sample_rate = _to_int(first_audio.get("sample_rate"))
+        channels = _to_int(first_audio.get("channels"))
 
     video_width = None
     video_height = None

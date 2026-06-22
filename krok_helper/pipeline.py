@@ -86,10 +86,25 @@ def validate_output_name_template(template: str, label: str) -> str:
     if not normalized:
         raise ProcessingError(f"{label} 输出模板不能为空。")
 
-    if "/" in normalized or "\\" in normalized:
-        raise ProcessingError(f"{label} 输出模板不能包含路径分隔符。")
+    # 模板里的字面字符最终会进入文件名，必须覆盖 Windows 不允许的全部字符
+    # （\ / : * ? " < > |），而不仅仅是路径分隔符。占位符用的 {}/ 不在此列。
+    invalid_chars = sorted({char for char in normalized if char in WINDOWS_INVALID_FILENAME_CHARS})
+    if invalid_chars:
+        joined = " ".join(invalid_chars)
+        raise ProcessingError(f"{label} 输出模板包含非法字符: {joined}")
 
-    for _, field_name, _, _ in FORMATTER.parse(normalized):
+    # FORMATTER.parse 在遇到不配对的大括号（如 ``on{vocal``、``a}b``）时会抛
+    # ValueError。这类异常必须转成 ProcessingError，否则会从只捕获
+    # ProcessingError 的调用处（保存设置 / 开始生成）逃逸，进而在 Qt 槽函数里
+    # 触发未捕获异常导致程序闪退。
+    try:
+        fields = list(FORMATTER.parse(normalized))
+    except ValueError as exc:
+        raise ProcessingError(
+            f"{label} 输出模板的大括号不配对，请检查 {{video_name}} 是否写完整。"
+        ) from exc
+
+    for _, field_name, _, _ in fields:
         if field_name and field_name not in SUPPORTED_TEMPLATE_FIELDS:
             raise ProcessingError(
                 f"{label} 输出模板包含不支持的占位符: {field_name}。"
