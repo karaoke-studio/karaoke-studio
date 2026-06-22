@@ -188,27 +188,53 @@ def _parse_body_line(
             continue
         # text token
         text = str(tval)
-        sm = _SINGER_LABEL_RE.fullmatch(text)
-        if sm:
-            # 【N配色】角色标签：切换其后字符的角色；第一个还兼作 line.singer_label。
-            active_role = sm.group(1)
-            if singer_label is None:
-                singer_label = active_role
+        parts = _split_role_labels(text)
+        if not parts:
+            continue
+        if all(kind == "role" for kind, _value in parts):
+            for _kind, label in parts:
+                active_role = label
+                if singer_label is None:
+                    singer_label = active_role
             continue
         # 普通字符：使用前面 pending 的 [ts] 作为起点
         if pending_ts is None:
-            # text 前面没有时间戳：根据格式不该出现；忽略，避免崩
+            # text 前面没有时间戳：仍然吃掉其中的角色标签（行首标签常在第一个时间戳前），
+            # 其他无时值文本忽略，避免崩。
+            for kind, value in parts:
+                if kind != "role":
+                    continue
+                active_role = value
+                if singer_label is None:
+                    singer_label = active_role
             continue
         next_ts = _next_token_ts(tokens, token_index)
-        char_starts = _spread_text_starts(pending_ts, next_ts, len(text))
-        for i, ch in enumerate(text):
-            chars.append(
-                TimingChar(
-                    text=ch,
-                    start_ms=char_starts[i],
-                    role_label=active_role,
+        visible_count = sum(len(value) for kind, value in parts if kind == "text")
+        if visible_count <= 0:
+            for kind, value in parts:
+                if kind != "role":
+                    continue
+                active_role = value
+                if singer_label is None:
+                    singer_label = active_role
+            continue
+        char_starts = _spread_text_starts(pending_ts, next_ts, visible_count)
+        start_index = 0
+        for kind, value in parts:
+            if kind == "role":
+                active_role = value
+                if singer_label is None:
+                    singer_label = active_role
+                continue
+            for ch in value:
+                chars.append(
+                    TimingChar(
+                        text=ch,
+                        start_ms=char_starts[start_index],
+                        role_label=active_role,
+                    )
                 )
-            )
+                start_index += 1
         pending_ts = None
 
     # tokens 用完后仍剩 pending_ts → 是行末结束时间戳
@@ -226,6 +252,19 @@ def _parse_body_line(
         ),
         active_role,
     )
+
+
+def _split_role_labels(text: str) -> list[tuple[str, str]]:
+    parts: list[tuple[str, str]] = []
+    pos = 0
+    for match in _SINGER_LABEL_RE.finditer(text):
+        if match.start() > pos:
+            parts.append(("text", text[pos:match.start()]))
+        parts.append(("role", match.group(1)))
+        pos = match.end()
+    if pos < len(text):
+        parts.append(("text", text[pos:]))
+    return parts
 
 
 def _next_token_ts(tokens: list[tuple[str, object]], token_index: int) -> Optional[int]:
@@ -331,12 +370,12 @@ def _parse_ruby_entry(payload: str) -> Optional[RubyAnnotation]:
     - 漢字 / 読み 内一般不含逗号；按规范以逗号切分
     """
     parts = payload.split(",")
-    if len(parts) < 4:
+    if len(parts) < 2:
         return None
     kanji = parts[0]
     reading_raw = parts[1]
-    pos1_raw = parts[2]
-    pos2_raw = parts[3]
+    pos1_raw = parts[2] if len(parts) >= 3 else ""
+    pos2_raw = parts[3] if len(parts) >= 4 else ""
 
     # 读音内 mora 时间戳：去掉它们得到 reading，单独收集毫秒
     # SUG exports these timestamps relative to pos_start_ms, not the global

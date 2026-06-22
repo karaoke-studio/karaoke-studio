@@ -26,6 +26,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _FillSegment,
     _LineCharTransition,
     _active_lit_indices,
+    _active_rubies_for_line,
     _apply_character_transform,
     _brush_for_fill,
     _build_font,
@@ -62,6 +63,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _utopia_main_group_for_index,
     _visual_text_padding,
     _display_style_for_signal_window,
+    _effective_ruby_for_target,
     _visible_lines_for_style,
     _resolve_title_text,
     _title_overlay_opacity,
@@ -125,6 +127,47 @@ def _bounds_size(bounds: tuple[int, int, int, int]) -> tuple[int, int]:
     if right < left or bottom < top:
         return 0, 0
     return right - left + 1, bottom - top + 1
+
+
+def _solid_fill(color: str) -> PaintFill:
+    return PaintFill(
+        mode="solid",
+        color=color,
+        start_color=color,
+        end_color=color,
+        gradient_stops=[(0, color), (100, color)],
+        split_top_color=color,
+        split_bottom_color=color,
+    )
+
+
+def _dominant_bounds(
+    img: QImage,
+    *,
+    channel: str,
+    left: int = 0,
+    right: int | None = None,
+    margin: int = 25,
+) -> tuple[int, int, int, int]:
+    channel_index = {"red": 0, "green": 1, "blue": 2}[channel]
+    right = img.width() - 1 if right is None else right
+    bounds = [img.width(), img.height(), -1, -1]
+    for y in range(img.height()):
+        for x in range(max(left, 0), min(right, img.width() - 1) + 1):
+            color = QColor(img.pixel(x, y))
+            values = (color.red(), color.green(), color.blue())
+            value = values[channel_index]
+            if value < 80 or any(
+                value <= other + margin
+                for index, other in enumerate(values)
+                if index != channel_index
+            ):
+                continue
+            bounds[0] = min(bounds[0], x)
+            bounds[1] = min(bounds[1], y)
+            bounds[2] = max(bounds[2], x)
+            bounds[3] = max(bounds[3], y)
+    return tuple(bounds)  # type: ignore[return-value]
 
 
 def _track() -> TimingTrack:
@@ -1071,6 +1114,136 @@ def test_paint_frame_applies_singer_gradient_scheme(qapp):
     assert _pixel_hash(img_global) != _pixel_hash(img_singer)
 
 
+def test_paint_frame_applies_inline_role_styles_with_mixed_font_sizes(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="A", start_ms=1000, role_label="1配色"),
+            TimingChar(text="B", start_ms=2000, role_label="2配色"),
+        ],
+        end_ms=3000,
+    )
+    track = TimingTrack(lines=[line])
+    style = Style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=48,
+        line_y_position="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        custom_style_schemes={
+            "1配色": SubtitleStyleScheme(
+                font_size_px=96,
+                karaoke_colors=KaraokeColors(
+                    before=KaraokeColorState(text=_solid_fill("#00FF00")),
+                    after=KaraokeColorState(text=_solid_fill("#FF0000")),
+                ),
+            ),
+            "2配色": SubtitleStyleScheme(
+                font_size_px=48,
+                karaoke_colors=KaraokeColors(
+                    before=KaraokeColorState(text=_solid_fill("#0000FF")),
+                    after=KaraokeColorState(text=_solid_fill("#FFFF00")),
+                ),
+            ),
+        },
+    )
+
+    before = _blank(420, 220)
+    paint_frame(before, track, 500, style)
+    green_bounds = _dominant_bounds(before, channel="green")
+    blue_bounds = _dominant_bounds(before, channel="blue", left=green_bounds[2] + 1)
+
+    assert _bounds_size(green_bounds)[1] > _bounds_size(blue_bounds)[1] + 10
+    assert _bounds_size(green_bounds)[0] > 10
+    assert _bounds_size(blue_bounds)[0] > 10
+
+    during = _blank(420, 220)
+    paint_frame(during, track, 1750, style)
+    red_bounds = _dominant_bounds(during, channel="red")
+    blue_during_bounds = _dominant_bounds(during, channel="blue", left=red_bounds[2] + 1)
+
+    assert _bounds_size(red_bounds)[0] > 10
+    assert _bounds_size(blue_during_bounds)[0] > 10
+
+
+def test_inline_role_line_uses_character_transition_path(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="A", start_ms=1000, role_label="lead"),
+            TimingChar(text="B", start_ms=2000, role_label="back"),
+        ],
+        end_ms=3000,
+    )
+    track = TimingTrack(lines=[line])
+    base = Style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=72,
+        line_y_position="center",
+        stroke_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        custom_style_schemes={
+            "lead": SubtitleStyleScheme(karaoke_colors=KaraokeColors(after=KaraokeColorState(text=_solid_fill("#FF0000")))),
+            "back": SubtitleStyleScheme(karaoke_colors=KaraokeColors(after=KaraokeColorState(text=_solid_fill("#00FF00")))),
+        },
+    )
+    static = _blank(360, 180)
+    animated = _blank(360, 180)
+
+    paint_frame(static, track, 200, base)
+    paint_frame(animated, track, 200, replace(base, entry_anim="char_fade", entry_lead_ms=1000))
+
+    assert _pixel_hash(static) != _pixel_hash(animated)
+
+
+def test_inline_role_utopia_exit_handles_multi_kanji_ruby_group(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="A", start_ms=1000, role_label="lead"),
+            TimingChar(text="B", start_ms=1500, role_label="back"),
+            TimingChar(text="C", start_ms=2000, role_label="back"),
+        ],
+        end_ms=2500,
+    )
+    track = TimingTrack(
+        lines=[line],
+        rubies=[
+            RubyAnnotation(
+                kanji="AB",
+                reading="ab",
+                reading_part_ms=[300],
+                pos_start_ms=1000,
+                pos_end_ms=2000,
+            )
+        ],
+    )
+    base = Style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=72,
+        line_y_position="center",
+        line_tail_ms=1000,
+        exit_fade_ms=1000,
+        stroke_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        custom_style_schemes={
+            "lead": SubtitleStyleScheme(karaoke_colors=KaraokeColors(after=KaraokeColorState(text=_solid_fill("#FF0000")))),
+            "back": SubtitleStyleScheme(karaoke_colors=KaraokeColors(after=KaraokeColorState(text=_solid_fill("#00FF00")))),
+        },
+    )
+    char_fade = _blank(420, 220)
+    utopia = _blank(420, 220)
+
+    paint_frame(char_fade, track, 2300, replace(base, exit_anim="char_fade"))
+    paint_frame(utopia, track, 2300, replace(base, exit_anim="utopia"))
+
+    assert _pixel_hash(char_fade) != _pixel_hash(utopia)
+
+
 def test_paint_frame_glow_decoration_changes_rendered_frame(qapp):
     img_plain = _blank()
     img_glow = _blank()
@@ -1407,6 +1580,130 @@ def test_ruby_timing_drives_main_text_fill_extent(qapp):
     )
 
     assert _fill_extent_end(segments, 2400) == 146
+
+
+def test_ruby_with_unmatched_kanji_does_not_group_timed_characters(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="A", start_ms=1000),
+            TimingChar(text="B", start_ms=2000),
+        ],
+        end_ms=3000,
+    )
+    unrelated_ruby = RubyAnnotation(
+        kanji="Z",
+        reading="zed",
+        reading_part_ms=[100, 900],
+        pos_start_ms=0,
+        pos_end_ms=4000,
+    )
+    intervals = [(1000, 2000), (2000, 3000)]
+    char_x_ranges = [(0, 100), (100, 200)]
+
+    assert _ruby_target_indices(unrelated_ruby, line, intervals) == []
+    assert _ruby_target_x_range(unrelated_ruby, line, intervals, char_x_ranges) is None
+
+    segments = _karaoke_fill_segments(
+        [100, 100],
+        intervals,
+        char_x_ranges,
+        [unrelated_ruby],
+        line,
+    )
+
+    assert [segment.ruby for segment in segments] == [None, None]
+    assert _fill_extent_end(segments, 1500) == 50
+
+
+def test_global_ruby_uses_text_match_on_current_line(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="哀", start_ms=1000),
+            TimingChar(text="し", start_ms=2000),
+        ],
+        end_ms=3000,
+    )
+    track = TimingTrack(
+        lines=[line],
+        rubies=[
+            RubyAnnotation(kanji="哀", reading="かな", reading_part_ms=[290]),
+            RubyAnnotation(kanji="夢", reading="ゆめ", reading_part_ms=[330]),
+        ],
+    )
+    intervals = [(1000, 2000), (2000, 3000)]
+    active = _active_rubies_for_line(track.rubies, line)
+
+    assert active == track.rubies
+    assert _ruby_target_indices(track.rubies[0], line, intervals) == [0]
+    assert _ruby_target_indices(track.rubies[1], line, intervals) == []
+
+    segments = _karaoke_fill_segments(
+        [100, 100],
+        intervals,
+        [(0, 100), (100, 200)],
+        active,
+        line,
+    )
+
+    assert segments[0].ruby is not None
+    assert segments[0].ruby.kanji == "哀"
+    assert segments[0].ruby.reading_part_ms == [290]
+    assert segments[1].ruby is None
+
+
+def test_open_start_ruby_rebases_to_single_target_without_scaling_mora(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="夢", start_ms=18_790),
+            TimingChar(text="を", start_ms=19_610),
+        ],
+        end_ms=20_090,
+    )
+    intervals = [(18_790, 19_610), (19_610, 20_090)]
+    ruby = RubyAnnotation(
+        kanji="夢",
+        reading="ゆめ",
+        reading_part_ms=[330],
+        pos_start_ms=0,
+        pos_end_ms=114_130,
+    )
+
+    effective = _effective_ruby_for_target(ruby, _ruby_target_indices(ruby, line, intervals), intervals)
+
+    assert effective.pos_start_ms == 18_790
+    assert effective.pos_end_ms == 19_610
+    assert effective.reading_part_ms == [330]
+    assert _ruby_reading_intervals(effective) == [(18_790, 19_120), (19_120, 19_610)]
+
+
+def test_open_start_multi_kanji_ruby_rebases_to_text_group(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="彷", start_ms=62_880),
+            TimingChar(text="徨", start_ms=63_320),
+            TimingChar(text="い", start_ms=63_760),
+        ],
+        end_ms=64_200,
+    )
+    intervals = [(62_880, 63_320), (63_320, 63_760), (63_760, 64_200)]
+    ruby = RubyAnnotation(
+        kanji="彷徨",
+        reading="さまよ",
+        reading_part_ms=[130, 430],
+        pos_start_ms=0,
+        pos_end_ms=263_970,
+    )
+
+    effective = _effective_ruby_for_target(ruby, _ruby_target_indices(ruby, line, intervals), intervals)
+
+    assert effective.pos_start_ms == 62_880
+    assert effective.pos_end_ms == 63_760
+    assert effective.reading_part_ms == [130, 430]
+    assert _ruby_reading_intervals(effective) == [
+        (62_880, 63_010),
+        (63_010, 63_310),
+        (63_310, 63_760),
+    ]
 
 
 def test_ruby_timing_maps_to_main_text_group_scanline(qapp):

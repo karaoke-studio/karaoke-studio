@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
 )
 
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
+from krok_helper.subtitle_render.frontend.preview_media import qt_playback_source
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
 from krok_helper.subtitle_render.models import Style, TimingTrack
 
@@ -208,8 +209,9 @@ class PreviewGraphicsView(QGraphicsView):
             return
         if not path.is_file():
             return
+        playback_path = qt_playback_source(path)
         player = self._ensure_video_player()
-        player.setSource(QUrl.fromLocalFile(str(path)))
+        player.setSource(QUrl.fromLocalFile(str(playback_path)))
         player.setPosition(self._t_ms)
         if self._video_playing:
             player.play()

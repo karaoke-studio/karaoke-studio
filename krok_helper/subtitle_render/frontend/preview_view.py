@@ -40,6 +40,7 @@ from PyQt6.QtWidgets import (
 
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
+from krok_helper.subtitle_render.frontend.preview_media import qt_playback_source
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
 from krok_helper.subtitle_render.models import Style, TimingTrack
 
@@ -140,8 +141,9 @@ class PreviewCanvas(QWidget):
         if not path.is_file():
             self.update()
             return
+        playback_path = qt_playback_source(path)
         player = self._ensure_video_player()
-        player.setSource(QUrl.fromLocalFile(str(path)))
+        player.setSource(QUrl.fromLocalFile(str(playback_path)))
         player.setPosition(self._t_ms)
         if self._video_playing:
             player.play()
@@ -514,8 +516,9 @@ class TransportBar(QWidget):
                 self._player.setSource(QUrl())
             self._has_audio = False
             return
+        playback_path = qt_playback_source(path)
         player = self._ensure_audio_player()
-        player.setSource(QUrl.fromLocalFile(str(path)))
+        player.setSource(QUrl.fromLocalFile(str(playback_path)))
         self._has_audio = True
         # 切音源后回到 0 而不是续播旧位置
         player.setPosition(0)

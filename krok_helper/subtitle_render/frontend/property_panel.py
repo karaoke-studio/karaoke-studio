@@ -93,10 +93,7 @@ _SCHEME_FIELDS = {
     "ruby_karaoke_colors",
 }
 
-_SINGER_FILL_PALETTE = ["#FF5A6F", "#0055FF", "#FFAA00", "#00A878", "#9B5CFF"]
-_SINGER_RUBY_PALETTE = ["#FF5A6F", "#00AAFF", "#FFCC33", "#40D99A", "#C08CFF"]
 _GLOBAL_SCHEME_KEY = "global"
-_SINGER_SCHEME_PREFIX = "singer:"
 _CUSTOM_SCHEME_PREFIX = "custom:"
 _LIT_FIELDS = {
     "lit_enabled",
@@ -3143,64 +3140,6 @@ def _solid_fill(color: str) -> PaintFill:
         gradient_stops=[(0, color), (100, color)],
         split_top_color=color,
         split_bottom_color=color,
-    )
-
-
-def _scheme_from_style(style: Style, singer_id: int) -> SubtitleStyleScheme:
-    fill = _SINGER_FILL_PALETTE[singer_id % len(_SINGER_FILL_PALETTE)]
-    ruby = _SINGER_RUBY_PALETTE[singer_id % len(_SINGER_RUBY_PALETTE)]
-    colors = deepcopy(style.karaoke_colors) if style.karaoke_colors is not None else None
-    if colors is None:
-        colors = KaraokeColors(
-            before=KaraokeColorState(
-                text=_solid_fill(style.base_color),
-                stroke=_solid_fill(style.stroke_color),
-                stroke2=_solid_fill("#000000"),
-                shadow=_solid_fill(style.shadow_color),
-            ),
-            after=KaraokeColorState(
-                text=_solid_fill(fill),
-                stroke=_solid_fill(style.stroke_color),
-                stroke2=_solid_fill("#000000"),
-                shadow=_solid_fill(style.shadow_color),
-            ),
-        )
-    else:
-        colors.after.text = replace(
-            colors.after.text,
-            color=fill,
-            start_color=fill,
-            gradient_stops=[(0, fill), (100, colors.after.text.end_color)],
-            split_top_color=fill,
-        )
-    return SubtitleStyleScheme(
-        font_family=style.font_family,
-        font_family_latin=style.font_family_latin,
-        font_size_px=style.font_size_px,
-        letter_spacing_px=style.letter_spacing_px,
-        font_weight=style.font_weight,
-        italic=style.italic,
-        base_color=style.base_color,
-        fill_color=fill,
-        fill_gradient_enabled=style.fill_gradient_enabled,
-        fill_gradient_start_color=fill,
-        fill_gradient_end_color=style.fill_gradient_end_color,
-        fill_gradient_angle_deg=style.fill_gradient_angle_deg,
-        stroke_color=style.stroke_color,
-        stroke_width_px=style.stroke_width_px,
-        stroke2_width_px=style.stroke2_width_px,
-        decoration_kind=style.decoration_kind,
-        glow_radius_px=style.glow_radius_px,
-        glow_before_radius_px=style.glow_before_radius_px,
-        glow_after_radius_px=style.glow_after_radius_px,
-        shadow_color=style.shadow_color,
-        shadow_offset_x=style.shadow_offset_x,
-        shadow_offset_y=style.shadow_offset_y,
-        ruby_font_size_px=style.ruby_font_size_px,
-        ruby_color=ruby,
-        ruby_gap_px=style.ruby_gap_px,
-        karaoke_colors=colors,
-        ruby_karaoke_colors=style.ruby_karaoke_colors,
     )
 
 

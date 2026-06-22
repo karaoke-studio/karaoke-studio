@@ -205,6 +205,22 @@ def test_ruby_with_mora_timestamps_in_reading():
     assert r.pos_end_ms == 5000
 
 
+def test_ruby_entry_without_position_is_kept_as_global_annotation():
+    text = (
+        "[00:03:00]哀[00:04:00]\n"
+        "\n"
+        "@Ruby1=哀,か[00:00:29]な\n"
+    )
+    track = parse_nicokara_lrc(text)
+    assert len(track.rubies) == 1
+    r = track.rubies[0]
+    assert r.kanji == "哀"
+    assert r.reading == "かな"
+    assert r.reading_part_ms == [290]
+    assert r.pos_start_ms == 0
+    assert r.pos_end_ms == 0
+
+
 def test_multiple_ruby_entries():
     text = (
         "[00:00:00]a[00:00:50]\n"
@@ -294,6 +310,24 @@ def test_role_label_assigned_per_char_and_switches_midline():
         ("い", "1配色"),
         ("う", "2配色"),
     ]
+
+
+def test_role_label_embedded_after_space_is_not_rendered_as_text():
+    text = (
+        "【1配色】[01:23:66]今[01:24:61] 【3配色】[01:25:19]歩[01:25:94]き[01:26:58]\n"
+    )
+    track = parse_nicokara_lrc(text)
+    line = track.lines[0]
+
+    assert "".join(c.text for c in line.chars) == "今 歩き"
+    assert [(c.text, c.role_label) for c in line.chars] == [
+        ("今", "1配色"),
+        (" ", "1配色"),
+        ("歩", "3配色"),
+        ("き", "3配色"),
+    ]
+    assert line.chars[1].start_ms == 84_610
+    assert line.chars[2].start_ms == 85_190
 
 
 def test_role_label_carries_across_lines():

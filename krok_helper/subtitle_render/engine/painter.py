@@ -145,6 +145,28 @@ class _SayatooLineLayout:
     signal_x: float | None = None
 
 
+@dataclass(frozen=True)
+class _RoleGlyphLayout:
+    index: int
+    text: str
+    role_label: str | None
+    style: Style
+    font: QFont
+    metrics: QFontMetrics
+    left: int
+    width: int
+
+
+@dataclass(frozen=True)
+class _RoleTextLayout:
+    glyphs: list[_RoleGlyphLayout]
+    total_width: int
+    ascent: int
+    descent: int
+    height: int
+    line_rect: QRectF
+
+
 _UTOPIA_INTRO_TIME_MS = 700
 _UTOPIA_INTRO_DELAY_MS = 200
 _UTOPIA_INTRO_ENLARGE_MS = 400
@@ -183,6 +205,7 @@ from krok_helper.subtitle_render.models import (
     PaintFill,
     RubyAnnotation,
     Style,
+    SubtitleStyleScheme,
     TimingLine,
     TimingTrack,
     TitleOverlay,
@@ -266,6 +289,10 @@ def paint_frame_to_painter(
             )
         for display_line in display_lines:
             line_layout = line_layouts.get(display_line.lane)
+            has_role_labels = _line_has_role_labels(display_line.line)
+            line_x = None
+            if line_layout is not None and not has_role_labels:
+                line_x = line_layout.text_x
             _paint_line(
                 painter,
                 logical_w,
@@ -277,7 +304,7 @@ def paint_frame_to_painter(
                 baseline_y=(
                     line_layout.baseline_y if line_layout is not None else baselines[display_line.lane]
                 ),
-                line_x=line_layout.text_x if line_layout is not None else None,
+                line_x=line_x,
                 lane=display_line.lane if display_style.dual_line_layout else None,
                 display_start_ms=display_line.display_start_ms,
                 display_end_ms=display_line.display_end_ms,
@@ -2006,6 +2033,22 @@ def _paint_line_static(
             lane=lane,
         )
         return
+    if _line_has_role_labels(line):
+        _paint_role_line_static(
+            painter,
+            img_w,
+            img_h,
+            track,
+            line,
+            t_ms,
+            style,
+            baseline_y=baseline_y,
+            line_x=line_x,
+            lane=lane,
+            display_start_ms=display_start_ms,
+            display_end_ms=display_end_ms,
+        )
+        return
     font = _build_font(style)
     painter.setFont(font)
     metrics = QFontMetrics(font)
@@ -2229,6 +2272,704 @@ def _char_left_positions(
             lefts.append(cursor)
             cursor += w + letter_spacing_px
     return lefts
+
+
+_SUBTITLE_SCHEME_STYLE_FIELDS: tuple[str, ...] = (
+    "font_family",
+    "font_family_latin",
+    "font_size_px",
+    "letter_spacing_px",
+    "font_weight",
+    "italic",
+    "base_color",
+    "fill_color",
+    "fill_gradient_enabled",
+    "fill_gradient_start_color",
+    "fill_gradient_end_color",
+    "fill_gradient_angle_deg",
+    "stroke_color",
+    "stroke_width_px",
+    "stroke2_width_px",
+    "decoration_kind",
+    "glow_radius_px",
+    "glow_before_radius_px",
+    "glow_after_radius_px",
+    "shadow_color",
+    "shadow_offset_x",
+    "shadow_offset_y",
+    "ruby_font_size_px",
+    "ruby_color",
+    "ruby_gap_px",
+    "karaoke_colors",
+    "ruby_karaoke_colors",
+)
+
+
+def _style_scheme_changes(scheme: SubtitleStyleScheme) -> dict[str, object]:
+    return {
+        field: value
+        for field in _SUBTITLE_SCHEME_STYLE_FIELDS
+        if (value := getattr(scheme, field)) is not None
+    }
+
+
+def _style_for_role(style: Style, role_label: str | None) -> Style:
+    if not role_label:
+        return style
+    scheme = style.custom_style_schemes.get(role_label)
+    if scheme is None:
+        return style
+    changes = _style_scheme_changes(scheme)
+    if not changes:
+        return style
+    return replace(style, **changes)
+
+
+def _line_has_role_labels(line: TimingLine) -> bool:
+    return any(bool(ch.role_label) for ch in line.chars)
+
+
+def _build_role_text_layout(
+    line: TimingLine,
+    style: Style,
+    *,
+    x0: int,
+    baseline_y: int,
+) -> _RoleTextLayout:
+    rtl = style.right_to_left
+    measured: list[tuple[int, str, str | None, Style, QFont, QFontMetrics, int, int]] = []
+    total_w = 0
+    max_ascent = 0
+    max_descent = 0
+    for index, ch in enumerate(line.chars):
+        role_style = _style_for_role(style, ch.role_label)
+        font = _build_font(role_style)
+        metrics = QFontMetrics(font)
+        latin_font = _build_latin_font(role_style)
+        font_for = _make_font_for(role_style, font, latin_font)
+        latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
+        glyph_font = font_for(ch.text) if font_for is not None else font
+        glyph_metrics = latin_metrics if font_for is not None and ch.text.isascii() else metrics
+        width = _char_advance(ch.text, metrics, latin_metrics, font_for)
+        spacing_after = _letter_spacing(role_style) if index < len(line.chars) - 1 else 0
+        measured.append(
+            (
+                index,
+                ch.text,
+                ch.role_label,
+                role_style,
+                glyph_font,
+                glyph_metrics,
+                width,
+                spacing_after,
+            )
+        )
+        total_w += width + spacing_after
+        max_ascent = max(max_ascent, glyph_metrics.ascent())
+        max_descent = max(max_descent, glyph_metrics.descent())
+
+    glyphs: list[_RoleGlyphLayout] = []
+    if rtl:
+        cursor = x0 + total_w
+        for index, text, role_label, role_style, glyph_font, metrics, width, spacing_after in measured:
+            cursor -= width
+            glyphs.append(
+                _RoleGlyphLayout(
+                    index=index,
+                    text=text,
+                    role_label=role_label,
+                    style=role_style,
+                    font=glyph_font,
+                    metrics=metrics,
+                    left=cursor,
+                    width=width,
+                )
+            )
+            cursor -= spacing_after
+    else:
+        cursor = x0
+        for index, text, role_label, role_style, glyph_font, metrics, width, spacing_after in measured:
+            glyphs.append(
+                _RoleGlyphLayout(
+                    index=index,
+                    text=text,
+                    role_label=role_label,
+                    style=role_style,
+                    font=glyph_font,
+                    metrics=metrics,
+                    left=cursor,
+                    width=width,
+                )
+            )
+            cursor += width + spacing_after
+
+    height = max_ascent + max_descent
+    line_rect = QRectF(
+        float(x0),
+        float(baseline_y - max_ascent),
+        float(max(total_w, 0)),
+        float(max(height, 1)),
+    )
+    return _RoleTextLayout(
+        glyphs=glyphs,
+        total_width=max(total_w, 0),
+        ascent=max_ascent,
+        descent=max_descent,
+        height=max(height, 1),
+        line_rect=line_rect,
+    )
+
+
+def _role_visual_text_padding(layout: _RoleTextLayout) -> int:
+    if not layout.glyphs:
+        return 0
+    return max(_visual_text_padding(glyph.style) for glyph in layout.glyphs)
+
+
+def _resolve_role_baseline_y(
+    layout: _RoleTextLayout,
+    img_h: int,
+    style: Style,
+    ruby_metrics: QFontMetrics | None = None,
+) -> int:
+    pos = style.line_y_position
+    margin = max(style.line_y_margin_px, 0)
+    pad = _role_visual_text_padding(layout)
+    ruby_extra = 0
+    if ruby_metrics is not None:
+        ruby_extra = max(style.ruby_gap_px, 0) + ruby_metrics.height()
+    if pos == "top":
+        return margin + ruby_extra + pad + layout.ascent
+    if pos == "center":
+        block_h = layout.height + ruby_extra + pad * 2
+        return (img_h - block_h) // 2 + ruby_extra + pad + layout.ascent
+    return img_h - margin - pad - layout.descent
+
+
+def _clamp_role_baseline_y(
+    baseline_y: int,
+    layout: _RoleTextLayout,
+    img_h: int,
+    style: Style,
+    ruby_metrics: QFontMetrics | None = None,
+) -> int:
+    pad = _role_visual_text_padding(layout)
+    ruby_extra = 0
+    if ruby_metrics is not None:
+        ruby_extra = max(style.ruby_gap_px, 0) + ruby_metrics.height()
+    min_y = ruby_extra + pad + layout.ascent
+    max_y = img_h - pad - layout.descent
+    if max_y < min_y:
+        return min_y
+    return max(min_y, min(max_y, baseline_y))
+
+
+def _role_glyph_runs(layout: _RoleTextLayout) -> list[list[_RoleGlyphLayout]]:
+    runs: list[list[_RoleGlyphLayout]] = []
+    current: list[_RoleGlyphLayout] = []
+    current_role: str | None = None
+    for glyph in layout.glyphs:
+        if not current or glyph.role_label == current_role:
+            current.append(glyph)
+            current_role = glyph.role_label
+            continue
+        runs.append(current)
+        current = [glyph]
+        current_role = glyph.role_label
+    if current:
+        runs.append(current)
+    return runs
+
+
+def _role_run_path(glyphs: list[_RoleGlyphLayout], baseline_y: int) -> QPainterPath:
+    path = QPainterPath()
+    for glyph in glyphs:
+        path.addText(float(glyph.left), float(baseline_y), glyph.font, glyph.text)
+    return path
+
+
+def _role_run_rect(glyphs: list[_RoleGlyphLayout], baseline_y: int) -> QRectF:
+    left = min(glyph.left for glyph in glyphs)
+    right = max(glyph.left + glyph.width for glyph in glyphs)
+    ascent = max(glyph.metrics.ascent() for glyph in glyphs)
+    descent = max(glyph.metrics.descent() for glyph in glyphs)
+    return QRectF(
+        float(left),
+        float(baseline_y - ascent),
+        float(max(right - left, 1)),
+        float(max(ascent + descent, 1)),
+    )
+
+
+def _paint_role_line_static(
+    painter: QPainter,
+    img_w: int,
+    img_h: int,
+    track: TimingTrack,
+    line: TimingLine,
+    t_ms: int,
+    style: Style,
+    *,
+    baseline_y: int | None = None,
+    line_x: int | None = None,
+    lane: int | None = None,
+    display_start_ms: int | None = None,
+    display_end_ms: int | None = None,
+) -> None:
+    active_rubies = _active_rubies_for_line(track.rubies, line)
+    ruby_font = _build_ruby_font(style)
+    ruby_metrics = QFontMetrics(ruby_font) if active_rubies else None
+    measure_layout = _build_role_text_layout(line, style, x0=0, baseline_y=0)
+    if not measure_layout.glyphs:
+        return
+    visual_pad = _role_visual_text_padding(measure_layout)
+    x0 = (
+        line_x
+        if line_x is not None
+        else _resolve_line_x(
+            img_w,
+            measure_layout.total_width + visual_pad * 2,
+            style,
+            lane,
+        )
+        + visual_pad
+    )
+    y = (
+        baseline_y
+        if baseline_y is not None
+        else _resolve_role_baseline_y(measure_layout, img_h, style, ruby_metrics)
+    )
+    y = _clamp_role_baseline_y(y, measure_layout, img_h, style, ruby_metrics)
+    layout = _build_role_text_layout(line, style, x0=x0, baseline_y=y)
+    intervals = compute_char_intervals(line)
+    char_widths, char_x_ranges = _role_char_geometry_by_index(line, layout)
+    fill_segments = _karaoke_fill_segments(
+        char_widths,
+        intervals,
+        char_x_ranges,
+        active_rubies,
+        line,
+    )
+    transition = _line_char_transition_context(
+        style,
+        line,
+        t_ms,
+        display_start_ms,
+        display_end_ms,
+        len(line.chars),
+    )
+
+    if active_rubies and ruby_metrics is not None:
+        _paint_rubies(
+            painter,
+            ruby_font,
+            ruby_metrics,
+            line,
+            intervals,
+            char_x_ranges,
+            y,
+            t_ms,
+            active_rubies,
+            style,
+            transition,
+            main_ascent_px=layout.ascent,
+        )
+
+    if transition is not None:
+        _paint_role_line_with_character_transition(
+            painter,
+            line,
+            layout,
+            char_x_ranges,
+            intervals,
+            active_rubies,
+            y,
+            t_ms,
+            transition,
+            style,
+            rtl=style.right_to_left,
+        )
+        return
+
+    runs = _role_glyph_runs(layout)
+    for run in runs:
+        _paint_role_before_run(painter, run, y)
+
+    # Character-level entry/exit effects are still single-font in the old path.
+    # Role lines keep correct mixed-font layout and line-level animation in 3a.
+    rtl = style.right_to_left
+    for run in runs:
+        _paint_role_after_run(painter, run, y, fill_segments, t_ms, rtl)
+
+
+def _paint_role_before_run(
+    painter: QPainter,
+    glyphs: list[_RoleGlyphLayout],
+    baseline_y: int,
+) -> None:
+    if not glyphs:
+        return
+    role_style = glyphs[0].style
+    colors = _effective_karaoke_colors(role_style)
+    path = _role_run_path(glyphs, baseline_y)
+    rect = _role_run_rect(glyphs, baseline_y)
+    if role_style.decoration_kind == "glow":
+        _paint_glow_path(
+            painter,
+            path,
+            colors.before.shadow,
+            rect,
+            _glow_radius(role_style, after=False),
+            role_style.stroke_width_px,
+            role_style.stroke2_width_px,
+        )
+    elif role_style.shadow_color and (
+        role_style.shadow_offset_x or role_style.shadow_offset_y
+    ):
+        shadow_path = QPainterPath(path)
+        shadow_path.translate(role_style.shadow_offset_x, role_style.shadow_offset_y)
+        _paint_fill_path(
+            painter,
+            shadow_path,
+            colors.before.shadow,
+            rect.translated(role_style.shadow_offset_x, role_style.shadow_offset_y),
+        )
+    if role_style.stroke2_width_px > 0:
+        _paint_stroke_path(
+            painter,
+            path,
+            colors.before.stroke2,
+            rect,
+            _stroke2_pen_width(role_style.stroke_width_px, role_style.stroke2_width_px),
+        )
+    if role_style.stroke_color and role_style.stroke_width_px > 0:
+        _paint_stroke_path(
+            painter,
+            path,
+            colors.before.stroke,
+            rect,
+            _stroke_pen_width(role_style.stroke_width_px),
+        )
+    _paint_fill_path(painter, path, colors.before.text, rect)
+
+
+def _paint_role_after_run(
+    painter: QPainter,
+    glyphs: list[_RoleGlyphLayout],
+    baseline_y: int,
+    fill_segments: list[_FillSegment],
+    t_ms: int,
+    rtl: bool,
+) -> None:
+    if not glyphs:
+        return
+    role_style = glyphs[0].style
+    colors = _effective_karaoke_colors(role_style)
+    path = _role_run_path(glyphs, baseline_y)
+    rect = _role_run_rect(glyphs, baseline_y)
+    metrics = max(glyphs, key=lambda glyph: glyph.metrics.ascent() + glyph.metrics.descent()).metrics
+    if role_style.decoration_kind == "glow":
+        before_radius = _glow_radius(role_style, after=False)
+        after_radius = _glow_radius(role_style, after=True)
+        need_after_glow = (
+            _fill_signature(colors.before.shadow) != _fill_signature(colors.after.shadow)
+            or before_radius != after_radius
+        )
+        band = _fill_clip_band(fill_segments, t_ms, rtl) if need_after_glow else None
+        if band is not None:
+            fill_start, fill_end = band
+            pad = _glow_extent(
+                role_style.stroke_width_px,
+                role_style.stroke2_width_px,
+                after_radius,
+            )
+            painter.save()
+            try:
+                painter.setClipRect(
+                    QRectF(
+                        float(fill_start),
+                        rect.top() - pad,
+                        float(fill_end - fill_start),
+                        rect.height() + pad * 2,
+                    )
+                )
+                _paint_glow_path(
+                    painter,
+                    path,
+                    colors.after.shadow,
+                    rect,
+                    after_radius,
+                    role_style.stroke_width_px,
+                    role_style.stroke2_width_px,
+                )
+            finally:
+                painter.restore()
+    elif role_style.shadow_color and (
+        role_style.shadow_offset_x or role_style.shadow_offset_y
+    ):
+        shadow_path = QPainterPath(path)
+        shadow_path.translate(role_style.shadow_offset_x, role_style.shadow_offset_y)
+        _paint_after_fill_path(
+            painter,
+            shadow_path,
+            colors.after.shadow,
+            rect.translated(role_style.shadow_offset_x, role_style.shadow_offset_y),
+            _offset_fill_segments(fill_segments, role_style.shadow_offset_x),
+            baseline_y + role_style.shadow_offset_y,
+            metrics,
+            t_ms,
+            rtl=rtl,
+        )
+    if role_style.stroke2_width_px > 0:
+        _paint_after_stroke_path(
+            painter,
+            path,
+            colors.after.stroke2,
+            rect,
+            _stroke2_pen_width(role_style.stroke_width_px, role_style.stroke2_width_px),
+            fill_segments,
+            baseline_y,
+            metrics,
+            t_ms,
+            rtl=rtl,
+        )
+    if role_style.stroke_color and role_style.stroke_width_px > 0:
+        _paint_after_stroke_path(
+            painter,
+            path,
+            colors.after.stroke,
+            rect,
+            _stroke_pen_width(role_style.stroke_width_px),
+            fill_segments,
+            baseline_y,
+            metrics,
+            t_ms,
+            rtl=rtl,
+        )
+    _paint_after_fill_path(
+        painter,
+        path,
+        colors.after.text,
+        rect,
+        fill_segments,
+        baseline_y,
+        metrics,
+        t_ms,
+        rtl=rtl,
+    )
+
+
+def _paint_role_line_with_character_transition(
+    painter: QPainter,
+    line: TimingLine,
+    layout: _RoleTextLayout,
+    char_x_ranges: list[tuple[int, int]],
+    intervals: list[tuple[int, int]],
+    active_rubies: list[RubyAnnotation],
+    baseline_y: int,
+    t_ms: int,
+    transition: _LineCharTransition,
+    style: Style,
+    *,
+    rtl: bool = False,
+) -> None:
+    glyphs_by_index = _role_glyphs_by_index(line, layout)
+    count = max(len(line.chars), 1)
+    handled_indices: set[int] = set()
+    for index in range(len(line.chars)):
+        if index in handled_indices:
+            continue
+        if index >= len(intervals) or index >= len(char_x_ranges):
+            continue
+        if glyphs_by_index[index] is None:
+            continue
+
+        group = _utopia_main_group_for_index(active_rubies, line, intervals, index) if transition.effect == "utopia" else None
+        group_done_ms: int | None = None
+        group_exiting = False
+        if group is not None:
+            group_indices, group_ruby = group
+            group_done_ms = _utopia_following_done_time(line, intervals, group_indices[-1], style)
+            group_exiting = t_ms > group_done_ms
+            if group_exiting and index != group_indices[0]:
+                continue
+            if group_exiting:
+                indices = [
+                    i
+                    for i in group_indices
+                    if i < len(intervals)
+                    and i < len(char_x_ranges)
+                    and i < len(glyphs_by_index)
+                    and glyphs_by_index[i] is not None
+                ]
+                handled_indices.update(indices[1:])
+            else:
+                indices = [index]
+                group_ruby = None
+        else:
+            indices = [index]
+            group_ruby = None
+
+        if not indices:
+            continue
+        left = min(char_x_ranges[i][0] for i in indices)
+        right = max(char_x_ranges[i][1] for i in indices)
+        width = max(right - left, 1)
+        first_index = indices[0]
+        last_index = indices[-1]
+        char_start = intervals[first_index][0]
+        char_end = intervals[last_index][1]
+        following_done_ms = (
+            group_done_ms
+            if group_done_ms is not None
+            else _utopia_following_done_time(line, intervals, last_index, style)
+            if transition.effect == "utopia"
+            else None
+        )
+        opacity, dx, dy, rotation, scale_x, scale_y, skew_y = _transition_char_state(
+            style,
+            transition,
+            first_index,
+            count,
+            char_start_ms=char_start,
+            char_end_ms=char_end,
+            t_ms=t_ms,
+            frame_height=painter.device().height(),
+            following_done_ms=following_done_ms,
+        )
+        if opacity <= 0.0:
+            continue
+
+        group_glyphs = [glyphs_by_index[i] for i in indices if glyphs_by_index[i] is not None]
+        group_rect = _role_run_rect(group_glyphs, baseline_y)
+        group_center_x = left + width / 2
+        group_center_y = group_rect.top() + group_rect.height() / 2
+        group_transform = QTransform()
+        group_clip_rect: QRectF | None = None
+        paint_left = left
+        paint_width = width
+        if transition.effect == "utopia":
+            group_transform = _character_transform(
+                center_x=group_center_x,
+                center_y=group_center_y,
+                dx=dx,
+                dy=dy,
+                rotation=rotation,
+                scale_x=scale_x,
+                scale_y=scale_y,
+                skew_y=skew_y,
+                scale_origin_x=left,
+                scale_origin_y=baseline_y,
+            )
+            group_path = _role_run_path(group_glyphs, baseline_y)
+            transformed_group_path = group_transform.map(group_path)
+            group_clip_rect = transformed_group_path.boundingRect()
+            paint_left = int(round(group_clip_rect.left()))
+            paint_width = max(int(round(group_clip_rect.width())), 1)
+
+        ratio = (
+            _ruby_progress_ratio(group_ruby, t_ms)
+            if group_ruby is not None
+            else _character_fill_ratio(
+                line,
+                intervals,
+                char_x_ranges,
+                active_rubies,
+                index,
+                t_ms,
+            )
+        )
+        for run in _role_glyph_runs_for_indices(glyphs_by_index, indices):
+            role_style = run[0].style
+            colors = _effective_karaoke_colors(role_style)
+            run_path = _role_run_path(run, baseline_y)
+            run_rect = _role_run_rect(run, baseline_y)
+            run_metrics = max(run, key=lambda glyph: glyph.metrics.ascent() + glyph.metrics.descent()).metrics
+            painter.save()
+            try:
+                painter.setOpacity(painter.opacity() * opacity)
+                paint_path = run_path
+                paint_rect = run_rect
+                clip_rect = group_clip_rect
+                if transition.effect == "utopia":
+                    paint_path = group_transform.map(run_path)
+                    paint_rect = paint_path.boundingRect()
+                else:
+                    _apply_character_transform(
+                        painter,
+                        center_x=group_center_x,
+                        center_y=group_center_y,
+                        dx=dx,
+                        dy=dy,
+                        rotation=rotation,
+                        scale_x=scale_x,
+                        scale_y=scale_y,
+                        skew_y=skew_y,
+                    )
+                    clip_rect = None
+                _paint_char_karaoke_stack(
+                    painter,
+                    paint_path,
+                    paint_rect,
+                    char_x=paint_left,
+                    char_width=paint_width,
+                    baseline_y=baseline_y,
+                    metrics=run_metrics,
+                    colors=colors,
+                    style=role_style,
+                    ratio=ratio,
+                    rtl=rtl,
+                    clip_rect=clip_rect,
+                )
+            finally:
+                painter.restore()
+
+
+def _role_glyphs_by_index(
+    line: TimingLine,
+    layout: _RoleTextLayout,
+) -> list[_RoleGlyphLayout | None]:
+    glyphs: list[_RoleGlyphLayout | None] = [None for _ in line.chars]
+    for glyph in layout.glyphs:
+        if 0 <= glyph.index < len(glyphs):
+            glyphs[glyph.index] = glyph
+    return glyphs
+
+
+def _role_glyph_runs_for_indices(
+    glyphs_by_index: list[_RoleGlyphLayout | None],
+    indices: list[int],
+) -> list[list[_RoleGlyphLayout]]:
+    runs: list[list[_RoleGlyphLayout]] = []
+    current: list[_RoleGlyphLayout] = []
+    current_role: str | None = None
+    for index in indices:
+        if not (0 <= index < len(glyphs_by_index)):
+            continue
+        glyph = glyphs_by_index[index]
+        if glyph is None:
+            continue
+        if current and glyph.role_label != current_role:
+            runs.append(current)
+            current = []
+        current.append(glyph)
+        current_role = glyph.role_label
+    if current:
+        runs.append(current)
+    return runs
+
+
+def _role_char_geometry_by_index(
+    line: TimingLine,
+    layout: _RoleTextLayout,
+) -> tuple[list[int], list[tuple[int, int]]]:
+    widths = [0 for _ in line.chars]
+    ranges = [(0, 0) for _ in line.chars]
+    for glyph in layout.glyphs:
+        if 0 <= glyph.index < len(line.chars):
+            widths[glyph.index] = glyph.width
+            ranges[glyph.index] = (glyph.left, glyph.left + glyph.width)
+    return widths, ranges
 
 
 def _line_text_path(
@@ -3163,9 +3904,8 @@ def _ruby_target_indices(
     intervals: list[tuple[int, int]],
 ) -> list[int]:
     time_indices = _ruby_time_indices(ruby, intervals)
-    text_indices = _find_ruby_text_indices(ruby.kanji, line, preferred_indices=time_indices)
-    if text_indices:
-        return text_indices
+    if ruby.kanji:
+        return _find_ruby_text_indices(ruby.kanji, line, preferred_indices=time_indices)
     return time_indices
 
 
@@ -3185,20 +3925,15 @@ def _effective_ruby_for_target(
     indices: list[int],
     intervals: list[tuple[int, int]],
 ) -> RubyAnnotation:
-    if len(indices) != 1:
+    valid_indices = [index for index in indices if 0 <= index < len(intervals)]
+    if not valid_indices:
         return ruby
-    index = indices[0]
-    if index < 0 or index >= len(intervals):
-        return ruby
-    start, end = intervals[index]
+    start = min(intervals[index][0] for index in valid_indices)
+    end = max(intervals[index][1] for index in valid_indices)
     if start == ruby.pos_start_ms and end == ruby.pos_end_ms:
         return ruby
-    source_duration = max(ruby.pos_end_ms - ruby.pos_start_ms, 1)
     target_duration = max(end - start, 0)
-    reading_part_ms = [
-        max(0, min(target_duration, round(rel_ms * target_duration / source_duration)))
-        for rel_ms in ruby.reading_part_ms
-    ]
+    reading_part_ms = [max(0, min(target_duration, rel_ms)) for rel_ms in ruby.reading_part_ms]
     return replace(
         ruby,
         pos_start_ms=start,
@@ -3942,38 +4677,7 @@ def _style_for_line(style: Style, line: TimingLine) -> Style:
     scheme = style.singer_style_overrides.get(line.singer_id)
     if scheme is None:
         return style
-    changes = {
-        field: value
-        for field, value in {
-            "font_family": scheme.font_family,
-            "font_family_latin": scheme.font_family_latin,
-            "font_size_px": scheme.font_size_px,
-            "font_weight": scheme.font_weight,
-            "italic": scheme.italic,
-            "base_color": scheme.base_color,
-            "fill_color": scheme.fill_color,
-            "fill_gradient_enabled": scheme.fill_gradient_enabled,
-            "fill_gradient_start_color": scheme.fill_gradient_start_color,
-            "fill_gradient_end_color": scheme.fill_gradient_end_color,
-            "fill_gradient_angle_deg": scheme.fill_gradient_angle_deg,
-            "ruby_color": scheme.ruby_color,
-            "stroke_color": scheme.stroke_color,
-            "stroke_width_px": scheme.stroke_width_px,
-            "stroke2_width_px": scheme.stroke2_width_px,
-            "decoration_kind": scheme.decoration_kind,
-            "glow_radius_px": scheme.glow_radius_px,
-            "glow_before_radius_px": scheme.glow_before_radius_px,
-            "glow_after_radius_px": scheme.glow_after_radius_px,
-            "shadow_color": scheme.shadow_color,
-            "shadow_offset_x": scheme.shadow_offset_x,
-            "shadow_offset_y": scheme.shadow_offset_y,
-            "ruby_font_size_px": scheme.ruby_font_size_px,
-            "ruby_gap_px": scheme.ruby_gap_px,
-            "karaoke_colors": scheme.karaoke_colors,
-            "ruby_karaoke_colors": scheme.ruby_karaoke_colors,
-        }.items()
-        if value is not None
-    }
+    changes = _style_scheme_changes(scheme)
     if not changes:
         return style
     return replace(style, **changes)
@@ -3990,8 +4694,17 @@ def _active_rubies_for_line(
     return [
         ruby
         for ruby in rubies
-        if ruby.reading and ruby.pos_end_ms >= line_start and ruby.pos_start_ms <= line_end
+        if ruby.reading
+        and (
+            _ruby_has_global_position(ruby)
+            or ruby.pos_end_ms >= line_start
+            and ruby.pos_start_ms <= line_end
+        )
     ]
+
+
+def _ruby_has_global_position(ruby: RubyAnnotation) -> bool:
+    return ruby.pos_start_ms == 0 and ruby.pos_end_ms == 0
 
 
 def _paint_rubies(
@@ -4006,12 +4719,14 @@ def _paint_rubies(
     rubies: list[RubyAnnotation],
     style: Style,
     transition: _LineCharTransition | None = None,
+    main_ascent_px: int | None = None,
 ) -> None:
     rtl = style.right_to_left
     painter.save()
     try:
         painter.setFont(ruby_font)
-        ruby_baseline_y = main_baseline_y - QFontMetrics(_build_font(style)).ascent() - max(style.ruby_gap_px, 0)
+        main_ascent = main_ascent_px if main_ascent_px is not None else QFontMetrics(_build_font(style)).ascent()
+        ruby_baseline_y = main_baseline_y - main_ascent - max(style.ruby_gap_px, 0)
         for ruby in rubies:
             indices = _ruby_target_indices(ruby, line, intervals)
             if not indices:
@@ -4146,11 +4861,11 @@ def _ruby_target_x_range(
     char_x_ranges: list[tuple[int, int]],
 ) -> tuple[int, int] | None:
     time_indices = _ruby_time_indices(ruby, intervals)
-    text_span = _find_ruby_text_span(ruby.kanji, line, preferred_indices=time_indices)
-    if text_span is not None:
-        target = _ruby_text_span_x_range(text_span, line, char_x_ranges)
-        if target is not None:
-            return target
+    if ruby.kanji:
+        text_span = _find_ruby_text_span(ruby.kanji, line, preferred_indices=time_indices)
+        if text_span is None:
+            return None
+        return _ruby_text_span_x_range(text_span, line, char_x_ranges)
 
     indices = time_indices
     if not indices:

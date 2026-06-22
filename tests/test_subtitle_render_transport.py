@@ -12,6 +12,7 @@ QMediaPlayer 的真实音频播放在 CI 不稳定，所以这里聚焦：
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +22,7 @@ from PyQt6.QtCore import Qt  # noqa: E402
 from PyQt6.QtGui import QColor, QImage  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
+from krok_helper.subtitle_render.frontend import preview_view as pv  # noqa: E402
 from krok_helper.subtitle_render.frontend.preview_view import (  # noqa: E402
     PreviewCanvas,
     TransportBar,
@@ -54,6 +56,43 @@ def test_preview_surfaces_do_not_draw_frame_border(qapp):
         assert "border: 0" in graphics.styleSheet()
         assert graphics._video_item.pos().x() < 0
         assert graphics._video_item.size().width() > graphics._output_w
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
+def test_preview_graphics_video_source_uses_qt_playback_proxy(qapp, monkeypatch, tmp_path):
+    from krok_helper.subtitle_render.frontend import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+
+    graphics = PreviewGraphicsView()
+    source = tmp_path / "source.mp4"
+    proxy = tmp_path / "proxy.mp4"
+    source.write_bytes(b"placeholder")
+    proxy.write_bytes(b"proxy")
+    monkeypatch.setattr(pg, "qt_playback_source", lambda path: proxy)
+    seen = {}
+
+    class FakePlayer:
+        def pause(self):
+            seen["paused"] = True
+
+        def setSource(self, url):
+            seen["source"] = url.toLocalFile()
+
+        def setPosition(self, ms):
+            seen["position"] = ms
+
+        def play(self):
+            seen["played"] = True
+
+    try:
+        graphics._video_player = FakePlayer()
+        graphics.set_video_source(source)
+
+        assert Path(seen["source"]) == proxy
+        assert seen["position"] == 0
     finally:
         graphics.close()
         graphics.deleteLater()
@@ -182,6 +221,37 @@ def test_preview_canvas_fits_output_rect_to_widget(qapp):
     assert canvas._fit_output_rect(1000, 500) == (55, 0, 889, 500)
 
 
+def test_preview_canvas_video_source_uses_qt_playback_proxy(qapp, monkeypatch, tmp_path):
+    canvas = PreviewCanvas()
+    source = tmp_path / "source.mp4"
+    proxy = tmp_path / "proxy.mp4"
+    source.write_bytes(b"placeholder")
+    proxy.write_bytes(b"proxy")
+    monkeypatch.setattr(pv, "qt_playback_source", lambda path: proxy)
+    seen = {}
+
+    class FakePlayer:
+        def pause(self):
+            seen["paused"] = True
+
+        def setSource(self, url):
+            seen["source"] = url.toLocalFile()
+
+        def setPosition(self, ms):
+            seen["position"] = ms
+
+        def play(self):
+            seen["played"] = True
+
+    canvas._video_player = FakePlayer()
+
+    canvas.set_video_source(source)
+
+    assert canvas.has_video_source
+    assert Path(seen["source"]) == proxy
+    assert seen["position"] == 0
+
+
 # ---------------------------------------------------------------------------
 # 音频路径
 # ---------------------------------------------------------------------------
@@ -196,6 +266,31 @@ def test_set_audio_source_activates_player_path(qapp, tmp_path):
     fake.write_bytes(b"placeholder")
     bar.set_audio_source(fake)
     assert bar._has_audio
+
+
+def test_set_audio_source_uses_qt_playback_proxy(qapp, monkeypatch, tmp_path):
+    bar = _bar(qapp)
+    source = tmp_path / "song.mp4"
+    proxy = tmp_path / "proxy.mp4"
+    source.write_bytes(b"placeholder")
+    proxy.write_bytes(b"proxy")
+    monkeypatch.setattr(pv, "qt_playback_source", lambda path: proxy)
+    seen = {}
+
+    class FakePlayer:
+        def setSource(self, url):
+            seen["source"] = url.toLocalFile()
+
+        def setPosition(self, ms):
+            seen["position"] = ms
+
+    bar._player = FakePlayer()
+
+    bar.set_audio_source(source)
+
+    assert bar._has_audio
+    assert Path(seen["source"]) == proxy
+    assert seen["position"] == 0
 
 
 def test_set_audio_source_none_clears_player(qapp, tmp_path):
