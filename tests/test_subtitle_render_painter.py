@@ -2121,6 +2121,77 @@ def test_utopia_scope_layers_group_shared_ruby_main_text(qapp):
     assert main_boxes[0].rect.height() > 0
 
 
+def test_utopia_scope_ids_split_same_phrase_across_lines(qapp):
+    chars = [
+        TimingChar(text="A", start_ms=1000),
+        TimingChar(text="B", start_ms=1500),
+    ]
+    line1 = TimingLine(chars=chars, end_ms=2000)
+    line2 = TimingLine(
+        chars=[
+            TimingChar(text="A", start_ms=3000),
+            TimingChar(text="B", start_ms=3500),
+        ],
+        end_ms=4000,
+    )
+    track = TimingTrack(
+        lines=[line1, line2],
+        rubies=[
+            RubyAnnotation(
+                kanji="AB",
+                reading="ab",
+                pos_start_ms=1000,
+                pos_end_ms=2000,
+            ),
+            RubyAnnotation(
+                kanji="AB",
+                reading="ab",
+                pos_start_ms=3000,
+                pos_end_ms=4000,
+            ),
+        ],
+    )
+    style = Style(font_size_px=48, line_y_position="center", exit_anim="utopia")
+    transition1 = _LineCharTransition(
+        phase="utopia",
+        effect="utopia",
+        progress=1.0,
+        start_ms=1000,
+        end_ms=2500,
+    )
+    transition2 = _LineCharTransition(
+        phase="utopia",
+        effect="utopia",
+        progress=1.0,
+        start_ms=3000,
+        end_ms=4500,
+    )
+    layout1 = _layout_line(track, line1, style, 420, 260, baseline_y=100, lane=0)
+    layout2 = _layout_line(track, line2, style, 420, 260, baseline_y=180, lane=1)
+    assert layout1 is not None
+    assert layout2 is not None
+
+    layers = [
+        *_utopia_transition_scope_layers(layout1, line1, style, 1750, transition1, 260),
+        *_utopia_transition_scope_layers(layout2, line2, style, 3750, transition2, 260),
+    ]
+    boxes = LayerCompositor().scope_boxes(
+        LayerContext(t_ms=3750, logical_w=420, logical_h=260),
+        layers,
+    )
+    main_scope_ids = {
+        box.scope_id
+        for box in boxes
+        if box.scope == SCOPE_GROUP
+        and box.scope_id is not None
+        and box.scope_id[1] == "main"
+        and box.scope_id[4] == (0, 1)
+    }
+
+    assert len(main_scope_ids) == 2
+    assert {scope_id[2] for scope_id in main_scope_ids} == {1000, 3000}
+
+
 def test_frame_vertical_bounds_covers_utopia_transition_pixels(qapp):
     track = _track_with_ruby()
     style = Style(font_size_px=48, line_y_position="center", exit_anim="utopia")
