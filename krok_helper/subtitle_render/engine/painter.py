@@ -3217,6 +3217,15 @@ def _paint_line_static(
         )
 
     if transition is not None:
+        if transition.effect == "char_fade":
+            # A1（§9.7）：char_fade 逐字仅 opacity → 走 LayerCompositor 烘焙缓存，
+            # 不再每帧 _paint_char_karaoke_stack 重栅（含 glow 复用）。普通行/分色行同路。
+            _TEXT_RUN_COMPOSITOR.paint_ordered(
+                painter,
+                LayerContext(t_ms=t_ms, logical_w=0, logical_h=0),
+                _char_fade_layer_stack(layout, t_ms, transition, max(len(line.chars), 1)),
+            )
+            return
         if layout.has_inline_styles:
             _paint_role_line_with_character_transition(
                 painter, line, layout.text_layout, layout.char_x_ranges, layout.intervals,
@@ -3750,6 +3759,58 @@ def _line_layer_stack(layout: _LineLayout, t_ms: int) -> list:
     return before_layers + after_layers
 
 
+def _char_fade_layer_stack(
+    layout: _LineLayout,
+    t_ms: int,
+    transition: _LineCharTransition,
+    char_count: int,
+) -> list:
+    """A1（§9.7）：char_fade（逐字仅 opacity）走 LayerCompositor。
+
+    每个 glyph 复用静态路径的 ``_GlyphRunLayer`` / ``_GlyphRunAfterGlowLayer``
+    烘焙缓存（直立烘焙一次、跨帧复用），逐帧只补该字的淡入/淡出 opacity 残差；
+    glow 也因此并入烘焙缓存、不再每帧重算高斯。与旧逐帧
+    ``_paint_char_karaoke_stack`` 路径同口径：逐字独立栈、按 glyph 顺序交错绘制
+    （后字覆盖前字），扫光带取整行 ``fill_segments``（与静态路径同一来源）。
+    适用于普通行与分色行（per-glyph ``style`` 已携带角色样式）。
+    """
+    y = layout.baseline_y
+    rtl = layout.rtl
+    after_band = _fill_clip_band(layout.fill_segments, t_ms, rtl)
+    layers: list = []
+    z = 0
+    for glyph in layout.text_layout.glyphs:
+        opacity = _char_fade_opacity(transition, glyph.index, char_count, t_ms=t_ms)
+        if opacity <= 0.0:
+            continue
+        run = [glyph]
+        layers.append(
+            _GlyphRunLayer(
+                run, y, layout.fill_segments, t_ms, rtl,
+                after=False, z_index=z, fade_opacity=opacity,
+            )
+        )
+        z += 1
+        if after_band is None:
+            continue
+        if _glyph_run_needs_after_glow(run):
+            layers.append(
+                _GlyphRunAfterGlowLayer(
+                    run, y, layout.fill_segments, t_ms, rtl,
+                    clip_band=after_band, z_index=z, fade_opacity=opacity,
+                )
+            )
+            z += 1
+        layers.append(
+            _GlyphRunLayer(
+                run, y, layout.fill_segments, t_ms, rtl,
+                after=True, clip_band=after_band, z_index=z, fade_opacity=opacity,
+            )
+        )
+        z += 1
+    return layers
+
+
 @dataclass(frozen=True)
 class _GlyphRunLayer:
     """Layer wrapper for a horizontal text glyph run body."""
@@ -3763,6 +3824,7 @@ class _GlyphRunLayer:
     clip_band: tuple[int, int] | None = None
     z_index: int = 0
     scope: str = SCOPE_LINE
+    fade_opacity: float = 1.0
 
     def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
         return []
@@ -3801,6 +3863,7 @@ class _GlyphRunLayer:
         return LayerAnimation(
             top_left=QPointF(float(run_left), float(self.baseline_y)),
             clip_rect=clip_rect,
+            opacity=self.fade_opacity,
         )
 
     def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
@@ -3824,6 +3887,7 @@ class _GlyphRunAfterGlowLayer:
     clip_band: tuple[int, int] | None = None
     z_index: int = 0
     scope: str = SCOPE_LINE
+    fade_opacity: float = 1.0
 
     def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
         return []
@@ -3875,6 +3939,7 @@ class _GlyphRunAfterGlowLayer:
         return LayerAnimation(
             top_left=QPointF(float(run_left), float(self.baseline_y)),
             clip_rect=clip_rect,
+            opacity=self.fade_opacity,
         )
 
     def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:

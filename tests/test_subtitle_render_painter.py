@@ -27,12 +27,16 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _FillSegment,
     _LineCharTransition,
     _RubyTextLayer,
+    _GlyphRunLayer,
+    _GlyphRunAfterGlowLayer,
     _active_lit_indices,
     _active_rubies_for_line,
     _apply_character_transform,
     _brush_for_fill,
     _build_font,
     _build_ruby_font,
+    _char_fade_layer_stack,
+    _char_fade_opacity,
     _char_left_positions,
     _character_fill_ratio,
     _fill_clip_band,
@@ -2639,6 +2643,36 @@ def test_char_fade_exit_matches_nkm3_reverse_whole_fade(qapp):
     assert last_before[0] == pytest.approx(1.0)
     assert last_mid[0] == pytest.approx(0.5)
     assert last_gone[0] == pytest.approx(0.0)
+
+
+def test_char_fade_layer_stack_applies_staggered_per_char_opacity(qapp):
+    # A1（§9.7）：char_fade 走 LayerCompositor —— 每个 glyph 一个烘焙复用的 before 层，
+    # fade_opacity 取该字的 _char_fade_opacity；opacity<=0（尚未淡入）的字整字跳过。
+    track = _track()
+    line = track.lines[0]
+    style = Style(line_y_position="center", entry_anim="char_fade", entry_lead_ms=1000)
+    layout = _layout_line(track, line, style, 800, 450)
+    count = len(line.chars)  # 3
+    transition = _LineCharTransition(
+        phase="entry", effect="char_fade", progress=1.0, start_ms=1000, end_ms=1600,
+    )
+    t_ms = 1250  # char0 全淡入、char1 半透明、char2 尚不可见（见 nkm3 timing 测试）
+
+    layers = _char_fade_layer_stack(layout, t_ms, transition, count)
+    before_by_index = {
+        layer.glyphs[0].index: layer
+        for layer in layers
+        if isinstance(layer, _GlyphRunLayer) and not layer.after
+    }
+
+    assert before_by_index[0].fade_opacity == pytest.approx(1.0)
+    assert before_by_index[1].fade_opacity == pytest.approx(
+        _char_fade_opacity(transition, 1, count, t_ms=t_ms)
+    )
+    assert 0.0 < before_by_index[1].fade_opacity < 1.0
+    # 末字 opacity<=0 → 整字（含 before/after/glow 层）跳过。
+    assert _char_fade_opacity(transition, count - 1, count, t_ms=t_ms) <= 0.0
+    assert (count - 1) not in before_by_index
 
 
 def test_spin_flip_entry_uses_char_fade_timing_with_flip_transform(qapp):
