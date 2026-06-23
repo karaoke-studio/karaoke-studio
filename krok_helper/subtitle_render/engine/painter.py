@@ -159,7 +159,7 @@ class _SayatooLineLayout:
 
 
 @dataclass(frozen=True)
-class _RoleGlyphLayout:
+class _GlyphLayout:
     index: int
     text: str
     role_label: str | None
@@ -171,8 +171,8 @@ class _RoleGlyphLayout:
 
 
 @dataclass(frozen=True)
-class _RoleTextLayout:
-    glyphs: list[_RoleGlyphLayout]
+class _TextLayout:
+    glyphs: list[_GlyphLayout]
     total_width: int
     ascent: int
     descent: int
@@ -181,13 +181,14 @@ class _RoleTextLayout:
 
 
 @dataclass(frozen=True)
-class _PlainLineLayout:
-    """普通行的纯几何布局（**不依赖 t_ms**）+ 渲染所需字体资源。
+class _LineLayout:
+    """横排歌词行的纯几何布局（**不依赖 t_ms**）+ 渲染所需字体资源。
 
     P1.a 三段式（layout→animation→paint）的 layout 段产物：字符几何 / 基线 /
-    fill_segments（含时序但不含当前进度）都与帧无关、可缓存；逐帧只剩 transition
-    与扫光带（animation 段）+ bake/blit（paint 段，见 :func:`_paint_plain_line_layers`）。
+    fill_segments（含时序但不含当前进度）都与帧无关、可缓存。普通行与分色行都
+    表达为同一个 glyph-list 模型：普通行只是所有 glyph 使用同一 style 的特例。
     """
+    text_layout: _TextLayout
     font: QFont
     metrics: QFontMetrics
     latin_font: QFont
@@ -206,27 +207,7 @@ class _PlainLineLayout:
     line_rect: QRectF
     colors: KaraokeColors
     rtl: bool
-
-
-@dataclass(frozen=True)
-class _RoleLineLayout:
-    """分色行的纯几何布局（**不依赖 t_ms**）。a.2：与 :class:`_PlainLineLayout` 并列的
-    三段式 layout 段产物。
-
-    ``text_layout`` 是逐段多字体的 glyph 列表（每 glyph 带自身 font/style）；其余几何
-    字段与 ``_PlainLineLayout`` 同名同义。a.3 会把两者合并成单一 glyph-list 模型、统一
-    paint，并退役 :func:`_paint_role_line_static` 这条独立路径。
-    """
-    text_layout: _RoleTextLayout
-    active_rubies: list
-    ruby_font: QFont
-    ruby_metrics: QFontMetrics | None
-    char_widths: list[int]
-    char_x_ranges: list
-    intervals: list
-    fill_segments: list
-    baseline_y: int
-    rtl: bool
+    has_inline_styles: bool
 
 
 _UTOPIA_INTRO_TIME_MS = 700
@@ -2180,7 +2161,7 @@ def _layout_plain_line(
     baseline_y: int | None = None,
     line_x: int | None = None,
     lane: int | None = None,
-) -> _PlainLineLayout:
+) -> _LineLayout:
     """layout 段：算普通行的纯几何 + 字体资源（不依赖 t_ms，可缓存）。"""
     font = _build_font(style)
     metrics = QFontMetrics(font)
@@ -2218,13 +2199,16 @@ def _layout_plain_line(
     line_rect = QRectF(
         float(x0), float(y - metrics.ascent()), float(total_w), float(metrics.height()),
     )
+    text_layout = _build_text_layout(line, style, x0=x0, baseline_y=y, inline_styles=False)
     colors = _effective_karaoke_colors(style)
-    return _PlainLineLayout(
+    return _LineLayout(
+        text_layout=text_layout,
         font=font, metrics=metrics, latin_font=latin_font, font_for=font_for,
         active_rubies=active_rubies, ruby_font=ruby_font, ruby_metrics=ruby_metrics,
         char_widths=char_widths, total_w=total_w, x0=x0, baseline_y=y,
         intervals=intervals, char_lefts=char_lefts, char_x_ranges=char_x_ranges,
         fill_segments=fill_segments, line_rect=line_rect, colors=colors, rtl=rtl,
+        has_inline_styles=False,
     )
 
 
@@ -2232,10 +2216,10 @@ def _paint_plain_line_layers(
     painter: QPainter,
     line: TimingLine,
     style: Style,
-    layout: _PlainLineLayout,
+    layout: _LineLayout,
     t_ms: int,
 ) -> None:
-    """paint 段：消费 :class:`_PlainLineLayout`，blit 未唱层 + 已唱 glow/主体。"""
+    """paint 段：消费 :class:`_LineLayout`，blit 未唱层 + 已唱 glow/主体。"""
     font = layout.font
     metrics = layout.metrics
     latin_font = layout.latin_font
@@ -2393,20 +2377,22 @@ def _line_has_role_labels(line: TimingLine) -> bool:
     return any(bool(ch.role_label) for ch in line.chars)
 
 
-def _build_role_text_layout(
+def _build_text_layout(
     line: TimingLine,
     style: Style,
     *,
     x0: int,
     baseline_y: int,
-) -> _RoleTextLayout:
+    inline_styles: bool,
+) -> _TextLayout:
     rtl = style.right_to_left
     measured: list[tuple[int, str, str | None, Style, QFont, QFontMetrics, int, int]] = []
     total_w = 0
     max_ascent = 0
     max_descent = 0
     for index, ch in enumerate(line.chars):
-        role_style = _style_for_role(style, ch.role_label)
+        role_style = _style_for_role(style, ch.role_label) if inline_styles else style
+        role_label = ch.role_label if inline_styles else None
         font = _build_font(role_style)
         metrics = QFontMetrics(font)
         latin_font = _build_latin_font(role_style)
@@ -2420,7 +2406,7 @@ def _build_role_text_layout(
             (
                 index,
                 ch.text,
-                ch.role_label,
+                role_label,
                 role_style,
                 glyph_font,
                 glyph_metrics,
@@ -2432,13 +2418,13 @@ def _build_role_text_layout(
         max_ascent = max(max_ascent, glyph_metrics.ascent())
         max_descent = max(max_descent, glyph_metrics.descent())
 
-    glyphs: list[_RoleGlyphLayout] = []
+    glyphs: list[_GlyphLayout] = []
     if rtl:
         cursor = x0 + total_w
         for index, text, role_label, role_style, glyph_font, metrics, width, spacing_after in measured:
             cursor -= width
             glyphs.append(
-                _RoleGlyphLayout(
+                _GlyphLayout(
                     index=index,
                     text=text,
                     role_label=role_label,
@@ -2454,7 +2440,7 @@ def _build_role_text_layout(
         cursor = x0
         for index, text, role_label, role_style, glyph_font, metrics, width, spacing_after in measured:
             glyphs.append(
-                _RoleGlyphLayout(
+                _GlyphLayout(
                     index=index,
                     text=text,
                     role_label=role_label,
@@ -2474,7 +2460,7 @@ def _build_role_text_layout(
         float(max(total_w, 0)),
         float(max(height, 1)),
     )
-    return _RoleTextLayout(
+    return _TextLayout(
         glyphs=glyphs,
         total_width=max(total_w, 0),
         ascent=max_ascent,
@@ -2484,14 +2470,24 @@ def _build_role_text_layout(
     )
 
 
-def _role_visual_text_padding(layout: _RoleTextLayout) -> int:
+def _build_role_text_layout(
+    line: TimingLine,
+    style: Style,
+    *,
+    x0: int,
+    baseline_y: int,
+) -> _TextLayout:
+    return _build_text_layout(line, style, x0=x0, baseline_y=baseline_y, inline_styles=True)
+
+
+def _role_visual_text_padding(layout: _TextLayout) -> int:
     if not layout.glyphs:
         return 0
     return max(_visual_text_padding(glyph.style) for glyph in layout.glyphs)
 
 
 def _resolve_role_baseline_y(
-    layout: _RoleTextLayout,
+    layout: _TextLayout,
     img_h: int,
     style: Style,
     ruby_metrics: QFontMetrics | None = None,
@@ -2512,7 +2508,7 @@ def _resolve_role_baseline_y(
 
 def _clamp_role_baseline_y(
     baseline_y: int,
-    layout: _RoleTextLayout,
+    layout: _TextLayout,
     img_h: int,
     style: Style,
     ruby_metrics: QFontMetrics | None = None,
@@ -2528,9 +2524,9 @@ def _clamp_role_baseline_y(
     return max(min_y, min(max_y, baseline_y))
 
 
-def _role_glyph_runs(layout: _RoleTextLayout) -> list[list[_RoleGlyphLayout]]:
-    runs: list[list[_RoleGlyphLayout]] = []
-    current: list[_RoleGlyphLayout] = []
+def _role_glyph_runs(layout: _TextLayout) -> list[list[_GlyphLayout]]:
+    runs: list[list[_GlyphLayout]] = []
+    current: list[_GlyphLayout] = []
     current_role: str | None = None
     for glyph in layout.glyphs:
         if not current or glyph.role_label == current_role:
@@ -2545,14 +2541,14 @@ def _role_glyph_runs(layout: _RoleTextLayout) -> list[list[_RoleGlyphLayout]]:
     return runs
 
 
-def _role_run_path(glyphs: list[_RoleGlyphLayout], baseline_y: int) -> QPainterPath:
+def _role_run_path(glyphs: list[_GlyphLayout], baseline_y: int) -> QPainterPath:
     path = QPainterPath()
     for glyph in glyphs:
         path.addText(float(glyph.left), float(baseline_y), glyph.font, glyph.text)
     return path
 
 
-def _role_run_rect(glyphs: list[_RoleGlyphLayout], baseline_y: int) -> QRectF:
+def _role_run_rect(glyphs: list[_GlyphLayout], baseline_y: int) -> QRectF:
     left = min(glyph.left for glyph in glyphs)
     right = max(glyph.left + glyph.width for glyph in glyphs)
     ascent = max(glyph.metrics.ascent() for glyph in glyphs)
@@ -2622,7 +2618,7 @@ def _layout_role_line(
     baseline_y: int | None = None,
     line_x: int | None = None,
     lane: int | None = None,
-) -> _RoleLineLayout | None:
+) -> _LineLayout | None:
     """layout 段：算分色行的纯几何（逐段多字体）+ 基线 + fill_segments（不依赖 t_ms）。"""
     active_rubies = _active_rubies_for_line(track.rubies, line)
     ruby_font = _build_ruby_font(style)
@@ -2649,20 +2645,28 @@ def _layout_role_line(
     fill_segments = _karaoke_fill_segments(
         char_widths, intervals, char_x_ranges, active_rubies, line,
     )
-    return _RoleLineLayout(
+    return _LineLayout(
         text_layout=text_layout, active_rubies=active_rubies,
+        font=text_layout.glyphs[0].font, metrics=text_layout.glyphs[0].metrics,
+        latin_font=_build_latin_font(style), font_for=None,
         ruby_font=ruby_font, ruby_metrics=ruby_metrics,
-        char_widths=char_widths, char_x_ranges=char_x_ranges, intervals=intervals,
-        fill_segments=fill_segments, baseline_y=y, rtl=style.right_to_left,
+        char_widths=char_widths, total_w=text_layout.total_width,
+        x0=int(text_layout.line_rect.left()), baseline_y=y,
+        intervals=intervals,
+        char_lefts=[rng[0] for rng in char_x_ranges],
+        char_x_ranges=char_x_ranges,
+        fill_segments=fill_segments, line_rect=text_layout.line_rect,
+        colors=_effective_karaoke_colors(style), rtl=style.right_to_left,
+        has_inline_styles=True,
     )
 
 
 def _paint_role_line_layers(
     painter: QPainter,
-    layout: _RoleLineLayout,
+    layout: _LineLayout,
     t_ms: int,
 ) -> None:
-    """paint 段：消费 :class:`_RoleLineLayout`，逐 run blit 未唱层 + 已唱层。"""
+    """paint 段：消费 :class:`_LineLayout`，逐 run blit 未唱层 + 已唱层。"""
     runs = _role_glyph_runs(layout.text_layout)
     y = layout.baseline_y
     for run in runs:
@@ -2672,7 +2676,7 @@ def _paint_role_line_layers(
 
 
 def _role_run_layer_key(
-    glyphs: list[_RoleGlyphLayout],
+    glyphs: list[_GlyphLayout],
     role_style: Style,
     colors: KaraokeColors,
     *,
@@ -2711,7 +2715,7 @@ def _role_run_layer_key(
 
 def _get_or_build_role_run_layer(
     key: tuple,
-    glyphs: list[_RoleGlyphLayout],
+    glyphs: list[_GlyphLayout],
     role_style: Style,
     colors: KaraokeColors,
     *,
@@ -2733,7 +2737,7 @@ def _get_or_build_role_run_layer(
 
 
 def _build_role_run_layer(
-    glyphs: list[_RoleGlyphLayout],
+    glyphs: list[_GlyphLayout],
     role_style: Style,
     colors: KaraokeColors,
     *,
@@ -2846,7 +2850,7 @@ def _build_role_run_layer(
 
 def _paint_role_before_run(
     painter: QPainter,
-    glyphs: list[_RoleGlyphLayout],
+    glyphs: list[_GlyphLayout],
     baseline_y: int,
 ) -> None:
     if not glyphs:
@@ -2861,7 +2865,7 @@ def _paint_role_before_run(
 
 def _paint_role_after_run(
     painter: QPainter,
-    glyphs: list[_RoleGlyphLayout],
+    glyphs: list[_GlyphLayout],
     baseline_y: int,
     fill_segments: list[_FillSegment],
     t_ms: int,
@@ -2931,7 +2935,7 @@ def _paint_role_after_run(
 def _paint_role_line_with_character_transition(
     painter: QPainter,
     line: TimingLine,
-    layout: _RoleTextLayout,
+    layout: _TextLayout,
     char_x_ranges: list[tuple[int, int]],
     intervals: list[tuple[int, int]],
     active_rubies: list[RubyAnnotation],
@@ -3096,9 +3100,9 @@ def _paint_role_line_with_character_transition(
 
 def _role_glyphs_by_index(
     line: TimingLine,
-    layout: _RoleTextLayout,
-) -> list[_RoleGlyphLayout | None]:
-    glyphs: list[_RoleGlyphLayout | None] = [None for _ in line.chars]
+    layout: _TextLayout,
+) -> list[_GlyphLayout | None]:
+    glyphs: list[_GlyphLayout | None] = [None for _ in line.chars]
     for glyph in layout.glyphs:
         if 0 <= glyph.index < len(glyphs):
             glyphs[glyph.index] = glyph
@@ -3106,11 +3110,11 @@ def _role_glyphs_by_index(
 
 
 def _role_glyph_runs_for_indices(
-    glyphs_by_index: list[_RoleGlyphLayout | None],
+    glyphs_by_index: list[_GlyphLayout | None],
     indices: list[int],
-) -> list[list[_RoleGlyphLayout]]:
-    runs: list[list[_RoleGlyphLayout]] = []
-    current: list[_RoleGlyphLayout] = []
+) -> list[list[_GlyphLayout]]:
+    runs: list[list[_GlyphLayout]] = []
+    current: list[_GlyphLayout] = []
     current_role: str | None = None
     for index in indices:
         if not (0 <= index < len(glyphs_by_index)):
@@ -3130,7 +3134,7 @@ def _role_glyph_runs_for_indices(
 
 def _role_char_geometry_by_index(
     line: TimingLine,
-    layout: _RoleTextLayout,
+    layout: _TextLayout,
 ) -> tuple[list[int], list[tuple[int, int]]]:
     widths = [0 for _ in line.chars]
     ranges = [(0, 0) for _ in line.chars]
