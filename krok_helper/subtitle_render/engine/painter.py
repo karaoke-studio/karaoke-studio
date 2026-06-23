@@ -17,9 +17,8 @@
 渲染管线给的是 1080p QImage，绘制逻辑一致。
 
 **性能优化**：1~3 步（阴影 + 描边 + 底色）每帧的内容 *完全不依赖* ``t_ms``，
-只随 line text + font + style 变化。:func:`_get_or_build_before_layer` 把这
-三层烘焙成透明 QImage 缓存到 :data:`_BEFORE_LAYER_CACHE`，绘制时一次
-``drawImage`` blit；每帧只重画 5 步的逐字 clip。1080p 双行场景下，单帧
+只随 line text + font + style 变化。横排文本会按连续同 style 的 glyph run
+烘焙成透明 QImage 缓存，绘制时一次 ``drawImage`` blit；每帧只重画 5 步的逐字 clip。1080p 双行场景下，单帧
 ``paintEvent`` 工作量从 ~2× ``QPainterPath.addText + strokePath`` 降到一次
 位图 blit，CPU 时间降幅 3~5×。缓存按 line/font/style 哈希索引，LRU 退役，
 样式实时改动会自动 invalidate。
@@ -54,37 +53,13 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene
 
 
-# ---------------------------------------------------------------------------
-# Before-layer cache：阴影 + 描边 + 底色烘焙成透明 QImage
-# ---------------------------------------------------------------------------
-#
-# Key 包含所有影响"未唱"层外观的字段：line text、字形 / 字号 / 字重 / 斜体、
-# char_widths（同字体 + 文本下严格固定，作冗余校验）、KaraokeColorState.before
-# 全部颜色 / 渐变签名、阴影偏移、描边宽度、装饰种类与 glow 半径。lane / x0 /
-# y / 显示窗口等位置 / 时间字段 *不进 key*（缓存图带 offset 复位）。
-
-_BEFORE_LAYER_CACHE_MAX = 64
-_BEFORE_LAYER_CACHE: "OrderedDict[tuple, tuple[QImage, int, int]]" = OrderedDict()
-_BEFORE_LAYER_LOCK = Lock()
 _IMAGE_FILL_CACHE_MAX = 16
 _IMAGE_FILL_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 _IMAGE_BRUSH_CACHE: "OrderedDict[tuple, QBrush]" = OrderedDict()
 _IMAGE_FILL_LOCK = Lock()
-# After-layer glow：把整行（未裁切）的模糊发光烘焙成透明 QImage 缓存，
-# 每帧只做一次 drawImage + setClipRect（扫光带），避免逐帧 QGraphicsBlurEffect。
-_AFTER_GLOW_CACHE_MAX = 64
-_AFTER_GLOW_CACHE: "OrderedDict[tuple, tuple[QImage, int, int]]" = OrderedDict()
-_AFTER_GLOW_LOCK = Lock()
-# After-layer 主体（A1）：把"已唱"层的 阴影(非glow)+stroke2+stroke+底色文字 烘焙成
-# 透明 QImage 缓存，每帧只做一次 drawImage + 在扫光边界处做半平面 clip（揭示已唱侧），
-# 取代逐帧 addText + strokePath/fillPath（管线优化调研 §4 A1）。与 before-layer 同构。
-# glow 的"已唱"阴影仍由 _AFTER_GLOW_CACHE 单独处理；本缓存只在非 glow 时含阴影。
-_AFTER_LAYER_CACHE_MAX = 64
-_AFTER_LAYER_CACHE: "OrderedDict[tuple, tuple[QImage, int, int]]" = OrderedDict()
-_AFTER_LAYER_LOCK = Lock()
-# 分色(roles) 逐段(run) 层缓存（A1 扩到分色路径）：每个角色 run 的「未唱」层
-# （含 before-glow）与「已唱」主体层（无 glow 模糊）各烘焙一次。run 内字体/字号
-# 可不同但角色样式统一。已唱 glow 仍逐帧（与普通路径一致）。
+# 横排 glyph run 层缓存：普通行与分色行都按连续同 style 的 run 烘焙。
+# 每个 run 的「未唱」层（含 before-glow）与「已唱」主体层（无 glow 模糊）
+# 各烘焙一次；逐帧只按扫光半平面 clip blit。已唱 glow 仍逐帧绘制。
 _ROLE_RUN_LAYER_CACHE_MAX = 128
 _ROLE_RUN_LAYER_CACHE: "OrderedDict[tuple, tuple[QImage, int, int]]" = OrderedDict()
 _ROLE_RUN_LAYER_LOCK = Lock()
@@ -225,16 +200,10 @@ _CHAR_FADE_OUT_TIME_MS = 250
 
 
 def clear_before_layer_cache() -> None:
-    """测试 / 调试用：把所有"未唱"层位图缓存全部丢掉。"""
-    with _BEFORE_LAYER_LOCK:
-        _BEFORE_LAYER_CACHE.clear()
+    """测试 / 调试用：把字幕层位图缓存全部丢掉。"""
     with _IMAGE_FILL_LOCK:
         _IMAGE_FILL_CACHE.clear()
         _IMAGE_BRUSH_CACHE.clear()
-    with _AFTER_GLOW_LOCK:
-        _AFTER_GLOW_CACHE.clear()
-    with _AFTER_LAYER_LOCK:
-        _AFTER_LAYER_CACHE.clear()
     with _ROLE_RUN_LAYER_LOCK:
         _ROLE_RUN_LAYER_CACHE.clear()
 
@@ -2105,28 +2074,13 @@ def _paint_line_static(
             lane=lane,
         )
         return
-    if _line_has_role_labels(line):
-        _paint_role_line_static(
-            painter,
-            img_w,
-            img_h,
-            track,
-            line,
-            t_ms,
-            style,
-            baseline_y=baseline_y,
-            line_x=line_x,
-            lane=lane,
-            display_start_ms=display_start_ms,
-            display_end_ms=display_end_ms,
-        )
-        return
     # layout 段（纯几何，不依赖 t_ms）：算字符几何 / 基线 / fill_segments。
-    layout = _layout_plain_line(
+    layout = _layout_line(
         track, line, style, img_w, img_h,
         baseline_y=baseline_y, line_x=line_x, lane=lane,
     )
-    painter.setFont(layout.font)
+    if layout is None:
+        return
     # animation 段（依赖 t_ms）：逐字入退场上下文。
     transition = _line_char_transition_context(
         style, line, t_ms, display_start_ms, display_end_ms, len(line.chars),
@@ -2136,19 +2090,49 @@ def _paint_line_static(
             painter, layout.ruby_font, layout.ruby_metrics, line,
             layout.intervals, layout.char_x_ranges, layout.baseline_y,
             t_ms, layout.active_rubies, style, transition,
+            main_ascent_px=layout.text_layout.ascent if layout.has_inline_styles else None,
         )
 
     if transition is not None:
-        _paint_line_with_character_transition(
-            painter, line, layout.char_widths, layout.char_x_ranges, layout.intervals,
-            layout.active_rubies, layout.font, layout.baseline_y, layout.metrics,
-            style, layout.colors, layout.line_rect, t_ms, transition,
-            rtl=layout.rtl, font_for=layout.font_for,
-        )
+        if layout.has_inline_styles:
+            _paint_role_line_with_character_transition(
+                painter, line, layout.text_layout, layout.char_x_ranges, layout.intervals,
+                layout.active_rubies, layout.baseline_y, t_ms, transition, style,
+                rtl=layout.rtl,
+            )
+        else:
+            _paint_line_with_character_transition(
+                painter, line, layout.char_widths, layout.char_x_ranges, layout.intervals,
+                layout.active_rubies, layout.font, layout.baseline_y, layout.metrics,
+                style, layout.colors, layout.line_rect, t_ms, transition,
+                rtl=layout.rtl, font_for=layout.font_for,
+            )
         return
 
     # paint 段：消费 layout，blit 未唱层 + 已唱层（不再每帧重排版）。
-    _paint_plain_line_layers(painter, line, style, layout, t_ms)
+    _paint_line_layers(painter, layout, t_ms)
+
+
+def _layout_line(
+    track: TimingTrack,
+    line: TimingLine,
+    style: Style,
+    img_w: int,
+    img_h: int,
+    *,
+    baseline_y: int | None = None,
+    line_x: int | None = None,
+    lane: int | None = None,
+) -> _LineLayout | None:
+    if _line_has_role_labels(line):
+        return _layout_role_line(
+            track, line, style, img_w, img_h,
+            baseline_y=baseline_y, line_x=line_x, lane=lane,
+        )
+    return _layout_plain_line(
+        track, line, style, img_w, img_h,
+        baseline_y=baseline_y, line_x=line_x, lane=lane,
+    )
 
 
 def _layout_plain_line(
@@ -2210,93 +2194,6 @@ def _layout_plain_line(
         fill_segments=fill_segments, line_rect=line_rect, colors=colors, rtl=rtl,
         has_inline_styles=False,
     )
-
-
-def _paint_plain_line_layers(
-    painter: QPainter,
-    line: TimingLine,
-    style: Style,
-    layout: _LineLayout,
-    t_ms: int,
-) -> None:
-    """paint 段：消费 :class:`_LineLayout`，blit 未唱层 + 已唱 glow/主体。"""
-    font = layout.font
-    metrics = layout.metrics
-    latin_font = layout.latin_font
-    font_for = layout.font_for
-    char_widths = layout.char_widths
-    total_w = layout.total_w
-    x0 = layout.x0
-    y = layout.baseline_y
-    colors = layout.colors
-    fill_segments = layout.fill_segments
-    rtl = layout.rtl
-
-    # --- "未唱"层（不依赖 t_ms）：查 / 建缓存后一次 blit ---
-    if total_w > 0 and metrics.height() > 0:
-        cache_key = _before_layer_cache_key(
-            line, style, font, char_widths, colors, latin_font, font_for
-        )
-        before_image, offset_x, offset_y = _get_or_build_before_layer(
-            cache_key, line, char_widths, font, style, colors, metrics, rtl, font_for,
-        )
-        painter.drawImage(
-            QPointF(float(x0 + offset_x), float(y + offset_y)),
-            before_image,
-        )
-
-    # --- "已唱"层（依赖 t_ms）：glow 模糊单独 blit，主体走烘焙缓存 ---
-    if style.decoration_kind == "glow":
-        # 「未唱」层已把整行发光（before.shadow）烘焙在底下。仅当「已唱」发光与之
-        # 不同（颜色或半径）时，才需要在唱过区叠画 after 发光；否则同一发光会在扫光
-        # 处被叠两遍，交界出现一道亮度突变——看起来就像发光「被截断」。相同时直接
-        # 复用底层整行发光即可，连续无缝。
-        before_radius = _glow_radius(style, after=False)
-        after_radius = _glow_radius(style, after=True)
-        need_after_glow = (
-            _fill_signature(colors.before.shadow) != _fill_signature(colors.after.shadow)
-            or before_radius != after_radius
-        )
-        band = _fill_clip_band(fill_segments, t_ms, rtl) if need_after_glow else None
-        if band is not None and total_w > 0 and metrics.height() > 0:
-            fill_start, fill_end = band
-            pad = _glow_extent(style.stroke_width_px, style.stroke2_width_px, after_radius)
-            glow_key = _after_glow_cache_key(
-                line, style, font, char_widths, colors, latin_font, font_for
-            )
-            glow_image, glow_dx, glow_dy = _get_or_build_after_glow(
-                glow_key, line, char_widths, font, style, colors, metrics, rtl, font_for,
-            )
-            # 缓存的是整行（未裁切）的模糊发光，每帧只 blit；扫光交界用渐变 alpha
-            # 羽化，避免硬裁切的「截断」感（羽化在独立图层做，不动主画布背景）。
-            _blit_feathered_glow(
-                painter,
-                glow_image,
-                QPointF(float(x0 + glow_dx), float(y + glow_dy)),
-                band_left=float(fill_start),
-                band_right=float(fill_end),
-                clip_top=float(y - metrics.ascent() - pad),
-                clip_height=float(metrics.height() + pad * 2),
-                feather=max(after_radius, 1),
-            )
-    # 已唱主体（阴影(非glow)+stroke2+stroke+底色）：与未唱层同构，烘焙一次缓存，
-    # 逐帧只做一次 drawImage + 在扫光锋面做半平面 clip（取代逐帧 addText+strokePath）。
-    if total_w > 0 and metrics.height() > 0:
-        after_band = _fill_clip_band(fill_segments, t_ms, rtl)
-        if after_band is not None:
-            after_key = _after_layer_cache_key(
-                line, style, font, char_widths, colors, latin_font, font_for
-            )
-            after_image, after_dx, after_dy = _get_or_build_after_layer(
-                after_key, line, char_widths, font, style, colors, metrics, rtl, font_for,
-            )
-            _blit_after_layer(
-                painter,
-                after_image,
-                QPointF(float(x0 + after_dx), float(y + after_dy)),
-                band=after_band,
-                rtl=rtl,
-            )
 
 
 def _char_left_positions(
@@ -2390,16 +2287,52 @@ def _build_text_layout(
     total_w = 0
     max_ascent = 0
     max_descent = 0
+    plain_font = _build_font(style) if not inline_styles else None
+    plain_metrics = QFontMetrics(plain_font) if plain_font is not None else None
+    plain_latin_font = _build_latin_font(style) if not inline_styles else None
+    plain_font_for = (
+        _make_font_for(style, plain_font, plain_latin_font)
+        if plain_font is not None and plain_latin_font is not None
+        else None
+    )
+    plain_latin_metrics = (
+        QFontMetrics(plain_latin_font)
+        if plain_font_for is not None and plain_latin_font is not None
+        else plain_metrics
+    )
+    inline_resource_cache: dict[
+        str | None,
+        tuple[Style, str | None, QFont, QFontMetrics, object, QFontMetrics],
+    ] = {}
     for index, ch in enumerate(line.chars):
-        role_style = _style_for_role(style, ch.role_label) if inline_styles else style
-        role_label = ch.role_label if inline_styles else None
-        font = _build_font(role_style)
-        metrics = QFontMetrics(font)
-        latin_font = _build_latin_font(role_style)
-        font_for = _make_font_for(role_style, font, latin_font)
-        latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
+        if inline_styles:
+            cached = inline_resource_cache.get(ch.role_label)
+            if cached is None:
+                role_style = _style_for_role(style, ch.role_label)
+                role_label = ch.role_label
+                font = _build_font(role_style)
+                metrics = QFontMetrics(font)
+                latin_font = _build_latin_font(role_style)
+                font_for = _make_font_for(role_style, font, latin_font)
+                latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
+                cached = (role_style, role_label, font, metrics, font_for, latin_metrics)
+                inline_resource_cache[ch.role_label] = cached
+            role_style, role_label, font, metrics, font_for, latin_metrics = cached
+        else:
+            role_style = style
+            role_label = None
+            font = plain_font
+            metrics = plain_metrics
+            font_for = plain_font_for
+            latin_metrics = plain_latin_metrics
+            if font is None or metrics is None or latin_metrics is None:
+                continue
         glyph_font = font_for(ch.text) if font_for is not None else font
-        glyph_metrics = latin_metrics if font_for is not None and ch.text.isascii() else metrics
+        glyph_metrics = (
+            latin_metrics
+            if inline_styles and font_for is not None and ch.text.isascii()
+            else metrics
+        )
         width = _char_advance(ch.text, metrics, latin_metrics, font_for)
         spacing_after = _letter_spacing(role_style) if index < len(line.chars) - 1 else 0
         measured.append(
@@ -2524,31 +2457,52 @@ def _clamp_role_baseline_y(
     return max(min_y, min(max_y, baseline_y))
 
 
-def _role_glyph_runs(layout: _TextLayout) -> list[list[_GlyphLayout]]:
+def _glyph_run_signature(glyph: _GlyphLayout) -> tuple:
+    colors = _effective_karaoke_colors(glyph.style)
+    return (
+        _karaoke_state_signature(colors.before),
+        _karaoke_state_signature(colors.after),
+        glyph.style.shadow_offset_x,
+        glyph.style.shadow_offset_y,
+        glyph.style.stroke_width_px,
+        glyph.style.stroke2_width_px,
+        glyph.style.decoration_kind,
+        _glow_radius(glyph.style, after=False),
+        _glow_radius(glyph.style, after=True),
+    )
+
+
+def _glyph_runs(layout: _TextLayout) -> list[list[_GlyphLayout]]:
     runs: list[list[_GlyphLayout]] = []
     current: list[_GlyphLayout] = []
-    current_role: str | None = None
+    current_signature: tuple | None = None
+    signature_cache: dict[int, tuple] = {}
     for glyph in layout.glyphs:
-        if not current or glyph.role_label == current_role:
+        style_id = id(glyph.style)
+        signature = signature_cache.get(style_id)
+        if signature is None:
+            signature = _glyph_run_signature(glyph)
+            signature_cache[style_id] = signature
+        if not current or signature == current_signature:
             current.append(glyph)
-            current_role = glyph.role_label
+            current_signature = signature
             continue
         runs.append(current)
         current = [glyph]
-        current_role = glyph.role_label
+        current_signature = signature
     if current:
         runs.append(current)
     return runs
 
 
-def _role_run_path(glyphs: list[_GlyphLayout], baseline_y: int) -> QPainterPath:
+def _glyph_run_path(glyphs: list[_GlyphLayout], baseline_y: int) -> QPainterPath:
     path = QPainterPath()
     for glyph in glyphs:
         path.addText(float(glyph.left), float(baseline_y), glyph.font, glyph.text)
     return path
 
 
-def _role_run_rect(glyphs: list[_GlyphLayout], baseline_y: int) -> QRectF:
+def _glyph_run_rect(glyphs: list[_GlyphLayout], baseline_y: int) -> QRectF:
     left = min(glyph.left for glyph in glyphs)
     right = max(glyph.left + glyph.width for glyph in glyphs)
     ascent = max(glyph.metrics.ascent() for glyph in glyphs)
@@ -2559,53 +2513,6 @@ def _role_run_rect(glyphs: list[_GlyphLayout], baseline_y: int) -> QRectF:
         float(max(right - left, 1)),
         float(max(ascent + descent, 1)),
     )
-
-
-def _paint_role_line_static(
-    painter: QPainter,
-    img_w: int,
-    img_h: int,
-    track: TimingTrack,
-    line: TimingLine,
-    t_ms: int,
-    style: Style,
-    *,
-    baseline_y: int | None = None,
-    line_x: int | None = None,
-    lane: int | None = None,
-    display_start_ms: int | None = None,
-    display_end_ms: int | None = None,
-) -> None:
-    # layout 段（纯几何，不依赖 t_ms）：逐段多字体排版 + 基线 + fill_segments。
-    layout = _layout_role_line(
-        track, line, style, img_w, img_h,
-        baseline_y=baseline_y, line_x=line_x, lane=lane,
-    )
-    if layout is None:
-        return
-    # animation 段（依赖 t_ms）：逐字入退场上下文。
-    transition = _line_char_transition_context(
-        style, line, t_ms, display_start_ms, display_end_ms, len(line.chars),
-    )
-
-    if layout.active_rubies and layout.ruby_metrics is not None:
-        _paint_rubies(
-            painter, layout.ruby_font, layout.ruby_metrics, line,
-            layout.intervals, layout.char_x_ranges, layout.baseline_y,
-            t_ms, layout.active_rubies, style, transition,
-            main_ascent_px=layout.text_layout.ascent,
-        )
-
-    if transition is not None:
-        _paint_role_line_with_character_transition(
-            painter, line, layout.text_layout, layout.char_x_ranges, layout.intervals,
-            layout.active_rubies, layout.baseline_y, t_ms, transition, style,
-            rtl=layout.rtl,
-        )
-        return
-
-    # paint 段：消费 layout，逐 run blit 未唱/已唱。
-    _paint_role_line_layers(painter, layout, t_ms)
 
 
 def _layout_role_line(
@@ -2661,21 +2568,21 @@ def _layout_role_line(
     )
 
 
-def _paint_role_line_layers(
+def _paint_line_layers(
     painter: QPainter,
     layout: _LineLayout,
     t_ms: int,
 ) -> None:
     """paint 段：消费 :class:`_LineLayout`，逐 run blit 未唱层 + 已唱层。"""
-    runs = _role_glyph_runs(layout.text_layout)
+    runs = [layout.text_layout.glyphs] if not layout.has_inline_styles else _glyph_runs(layout.text_layout)
     y = layout.baseline_y
     for run in runs:
-        _paint_role_before_run(painter, run, y)
+        _paint_glyph_before_run(painter, run, y)
     for run in runs:
-        _paint_role_after_run(painter, run, y, layout.fill_segments, t_ms, layout.rtl)
+        _paint_glyph_after_run(painter, run, y, layout.fill_segments, t_ms, layout.rtl)
 
 
-def _role_run_layer_key(
+def _glyph_run_layer_key(
     glyphs: list[_GlyphLayout],
     role_style: Style,
     colors: KaraokeColors,
@@ -2713,7 +2620,7 @@ def _role_run_layer_key(
     )
 
 
-def _get_or_build_role_run_layer(
+def _get_or_build_glyph_run_layer(
     key: tuple,
     glyphs: list[_GlyphLayout],
     role_style: Style,
@@ -2727,7 +2634,7 @@ def _get_or_build_role_run_layer(
             _ROLE_RUN_LAYER_CACHE.move_to_end(key)
             return cached
 
-    entry = _build_role_run_layer(glyphs, role_style, colors, after=after)
+    entry = _build_glyph_run_layer(glyphs, role_style, colors, after=after)
 
     with _ROLE_RUN_LAYER_LOCK:
         _ROLE_RUN_LAYER_CACHE[key] = entry
@@ -2736,7 +2643,7 @@ def _get_or_build_role_run_layer(
     return entry
 
 
-def _build_role_run_layer(
+def _build_glyph_run_layer(
     glyphs: list[_GlyphLayout],
     role_style: Style,
     colors: KaraokeColors,
@@ -2747,10 +2654,9 @@ def _build_role_run_layer(
 
     ``after=False``（未唱层）：glow(before) 或 阴影(before) + stroke2 + stroke + 底色。
     ``after=True``（已唱主体）：阴影(after，仅非 glow) + stroke2 + stroke + 底色，
-    **不含 glow 模糊**（已唱 glow 仍逐帧，见 :func:`_paint_role_after_run`）。
+    **不含 glow 模糊**（已唱 glow 仍逐帧，见 :func:`_paint_glyph_after_run`）。
 
-    与 :func:`_build_before_layer` / :func:`_build_after_layer` 同构；区别在于 run 内
-    逐字形可有不同字体/字号，故按 glyph 各自的 ``font`` 排版。返回 ``(image, dx, dy)``，
+    run 内逐字形可有不同字体/字号，故按 glyph 各自的 ``font`` 排版。返回 ``(image, dx, dy)``，
     blit 时画在 ``(run_left + dx, baseline_y + dy)``。
     """
     state = colors.after if after else colors.before
@@ -2791,7 +2697,7 @@ def _build_role_run_layer(
 
     local_baseline = pad_top + run_ascent
     local_glyphs = [replace(glyph, left=glyph.left - run_left + pad_left) for glyph in glyphs]
-    path = _role_run_path(local_glyphs, local_baseline)
+    path = _glyph_run_path(local_glyphs, local_baseline)
     rect = QRectF(float(pad_left), float(local_baseline - run_ascent), float(run_w), float(run_h))
 
     p = QPainter(image)
@@ -2848,7 +2754,7 @@ def _build_role_run_layer(
     return (image, offset_x, offset_y)
 
 
-def _paint_role_before_run(
+def _paint_glyph_before_run(
     painter: QPainter,
     glyphs: list[_GlyphLayout],
     baseline_y: int,
@@ -2857,13 +2763,13 @@ def _paint_role_before_run(
         return
     role_style = glyphs[0].style
     colors = _effective_karaoke_colors(role_style)
-    key = _role_run_layer_key(glyphs, role_style, colors, after=False)
-    image, dx, dy = _get_or_build_role_run_layer(key, glyphs, role_style, colors, after=False)
+    key = _glyph_run_layer_key(glyphs, role_style, colors, after=False)
+    image, dx, dy = _get_or_build_glyph_run_layer(key, glyphs, role_style, colors, after=False)
     run_left = min(glyph.left for glyph in glyphs)
     painter.drawImage(QPointF(float(run_left + dx), float(baseline_y + dy)), image)
 
 
-def _paint_role_after_run(
+def _paint_glyph_after_run(
     painter: QPainter,
     glyphs: list[_GlyphLayout],
     baseline_y: int,
@@ -2886,8 +2792,8 @@ def _paint_role_after_run(
         band = _fill_clip_band(fill_segments, t_ms, rtl) if need_after_glow else None
         if band is not None:
             fill_start, fill_end = band
-            path = _role_run_path(glyphs, baseline_y)
-            rect = _role_run_rect(glyphs, baseline_y)
+            path = _glyph_run_path(glyphs, baseline_y)
+            rect = _glyph_run_rect(glyphs, baseline_y)
             pad = _glow_extent(
                 role_style.stroke_width_px,
                 role_style.stroke2_width_px,
@@ -2918,8 +2824,8 @@ def _paint_role_after_run(
     # glow 模糊已在上面逐帧处理（与普通路径一致）。
     band = _fill_clip_band(fill_segments, t_ms, rtl)
     if band is not None:
-        after_key = _role_run_layer_key(glyphs, role_style, colors, after=True)
-        after_image, after_dx, after_dy = _get_or_build_role_run_layer(
+        after_key = _glyph_run_layer_key(glyphs, role_style, colors, after=True)
+        after_image, after_dx, after_dy = _get_or_build_glyph_run_layer(
             after_key, glyphs, role_style, colors, after=True
         )
         run_left = min(glyph.left for glyph in glyphs)
@@ -3014,7 +2920,7 @@ def _paint_role_line_with_character_transition(
             continue
 
         group_glyphs = [glyphs_by_index[i] for i in indices if glyphs_by_index[i] is not None]
-        group_rect = _role_run_rect(group_glyphs, baseline_y)
+        group_rect = _glyph_run_rect(group_glyphs, baseline_y)
         group_center_x = left + width / 2
         group_center_y = group_rect.top() + group_rect.height() / 2
         group_transform = QTransform()
@@ -3034,7 +2940,7 @@ def _paint_role_line_with_character_transition(
                 scale_origin_x=left,
                 scale_origin_y=baseline_y,
             )
-            group_path = _role_run_path(group_glyphs, baseline_y)
+            group_path = _glyph_run_path(group_glyphs, baseline_y)
             transformed_group_path = group_transform.map(group_path)
             group_clip_rect = transformed_group_path.boundingRect()
             paint_left = int(round(group_clip_rect.left()))
@@ -3052,11 +2958,11 @@ def _paint_role_line_with_character_transition(
                 t_ms,
             )
         )
-        for run in _role_glyph_runs_for_indices(glyphs_by_index, indices):
+        for run in _glyph_runs_for_indices(glyphs_by_index, indices):
             role_style = run[0].style
             colors = _effective_karaoke_colors(role_style)
-            run_path = _role_run_path(run, baseline_y)
-            run_rect = _role_run_rect(run, baseline_y)
+            run_path = _glyph_run_path(run, baseline_y)
+            run_rect = _glyph_run_rect(run, baseline_y)
             run_metrics = max(run, key=lambda glyph: glyph.metrics.ascent() + glyph.metrics.descent()).metrics
             painter.save()
             try:
@@ -3109,24 +3015,30 @@ def _role_glyphs_by_index(
     return glyphs
 
 
-def _role_glyph_runs_for_indices(
+def _glyph_runs_for_indices(
     glyphs_by_index: list[_GlyphLayout | None],
     indices: list[int],
 ) -> list[list[_GlyphLayout]]:
     runs: list[list[_GlyphLayout]] = []
     current: list[_GlyphLayout] = []
-    current_role: str | None = None
+    current_signature: tuple | None = None
+    signature_cache: dict[int, tuple] = {}
     for index in indices:
         if not (0 <= index < len(glyphs_by_index)):
             continue
         glyph = glyphs_by_index[index]
         if glyph is None:
             continue
-        if current and glyph.role_label != current_role:
+        style_id = id(glyph.style)
+        signature = signature_cache.get(style_id)
+        if signature is None:
+            signature = _glyph_run_signature(glyph)
+            signature_cache[style_id] = signature
+        if current and signature != current_signature:
             runs.append(current)
             current = []
         current.append(glyph)
-        current_role = glyph.role_label
+        current_signature = signature
     if current:
         runs.append(current)
     return runs
@@ -4369,364 +4281,6 @@ def _karaoke_state_signature(state: KaraokeColorState) -> tuple:
     )
 
 
-def _before_layer_cache_key(
-    line: TimingLine,
-    style: Style,
-    font: QFont,
-    char_widths: list[int],
-    colors: KaraokeColors,
-    latin_font: QFont | None = None,
-    font_for=None,
-) -> tuple:
-    text = "".join(ch.text for ch in line.chars)
-    font_sig = (
-        font.family(),
-        font.pixelSize(),
-        int(font.weight()),
-        font.italic(),
-    )
-    latin_sig = latin_font.family() if (font_for is not None and latin_font is not None) else None
-    return (
-        text,
-        font_sig,
-        latin_sig,
-        tuple(char_widths),
-        style.letter_spacing_px,
-        _karaoke_state_signature(colors.before),
-        style.shadow_offset_x,
-        style.shadow_offset_y,
-        style.stroke_width_px,
-        style.stroke2_width_px,
-        style.decoration_kind,
-        # 用「生效」半径而非原始字段：legacy ``glow_radius_px`` 会经 _glow_radius 映射，
-        # 两个不同的生效半径若都落在默认 10 上会撞 key、复用错误的发光位图。
-        _glow_radius(style, after=False),
-        style.right_to_left,
-    )
-
-
-def _get_or_build_before_layer(
-    key: tuple,
-    line: TimingLine,
-    char_widths: list[int],
-    font: QFont,
-    style: Style,
-    colors: KaraokeColors,
-    metrics: QFontMetrics,
-    rtl: bool = False,
-    font_for=None,
-) -> tuple[QImage, int, int]:
-    with _BEFORE_LAYER_LOCK:
-        cached = _BEFORE_LAYER_CACHE.get(key)
-        if cached is not None:
-            _BEFORE_LAYER_CACHE.move_to_end(key)
-            return cached
-
-    # 构建在锁外做（QPainter 比较重，不阻塞别的线程）
-    entry = _build_before_layer(line, char_widths, font, style, colors, metrics, rtl, font_for)
-
-    with _BEFORE_LAYER_LOCK:
-        _BEFORE_LAYER_CACHE[key] = entry
-        while len(_BEFORE_LAYER_CACHE) > _BEFORE_LAYER_CACHE_MAX:
-            _BEFORE_LAYER_CACHE.popitem(last=False)
-    return entry
-
-
-def _build_before_layer(
-    line: TimingLine,
-    char_widths: list[int],
-    font: QFont,
-    style: Style,
-    colors: KaraokeColors,
-    metrics: QFontMetrics,
-    rtl: bool = False,
-    font_for=None,
-) -> tuple[QImage, int, int]:
-    """Render shadow + stroke2 + stroke + base text into a transparent QImage.
-
-    返回 ``(image, offset_x, offset_y)``：blit 时把 image 的左上画在
-    ``(target_x0 + offset_x, target_baseline_y + offset_y)``，文字基线就会
-    落在 (target_x0, target_baseline_y)。
-    """
-    total_w = _line_text_width(char_widths, style)
-    text_ascent = metrics.ascent()
-    text_h = metrics.height()
-
-    # padding：要把阴影偏移 / 描边宽度 / glow 半径都留出余量，免得轮廓被裁
-    stroke_extent = _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px)
-    stroke_max = stroke_extent
-    glow_extra = (
-        _glow_extent(style.stroke_width_px, style.stroke2_width_px, _glow_radius(style, after=False))
-        if style.decoration_kind == "glow"
-        else 0
-    )
-    extent = max(stroke_max, glow_extra, 0) + 4  # +4 安全边
-
-    pad_left = max(0, -style.shadow_offset_x) + extent
-    pad_right = max(0, style.shadow_offset_x) + extent
-    pad_top = max(0, -style.shadow_offset_y) + extent
-    pad_bottom = max(0, style.shadow_offset_y) + extent
-
-    img_w = max(pad_left + total_w + pad_right, 1)
-    img_h = max(pad_top + text_h + pad_bottom, 1)
-
-    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
-    image.fill(0)  # 全透明（0 = #00000000 在 ARGB32_Premultiplied 里）
-
-    local_x0 = pad_left
-    local_y = pad_top + text_ascent  # baseline 在 image 内坐标
-
-    p = QPainter(image)
-    try:
-        p.setRenderHints(
-            QPainter.RenderHint.Antialiasing
-            | QPainter.RenderHint.TextAntialiasing
-        )
-        p.setFont(font)
-
-        local_lefts = _char_left_positions(char_widths, local_x0, rtl, _letter_spacing(style))
-        local_line_path = _line_text_path(
-            line, char_widths, font, local_x0, local_y, local_lefts, font_for
-        )
-        local_line_rect = QRectF(
-            float(local_x0),
-            float(local_y - text_ascent),
-            float(total_w),
-            float(text_h),
-        )
-
-        # 1) 阴影 / glow
-        if style.decoration_kind == "glow":
-            glow_radius = _glow_radius(style, after=False)
-            _paint_glow_path(
-                p,
-                local_line_path,
-                colors.before.shadow,
-                local_line_rect,
-                glow_radius,
-                style.stroke_width_px,
-                style.stroke2_width_px,
-            )
-        elif style.shadow_color and (style.shadow_offset_x or style.shadow_offset_y):
-            shadow_rect = local_line_rect.translated(style.shadow_offset_x, style.shadow_offset_y)
-            shadow_path = _line_text_path(
-                line,
-                char_widths,
-                font,
-                local_x0 + style.shadow_offset_x,
-                local_y + style.shadow_offset_y,
-                [left + style.shadow_offset_x for left in local_lefts],
-                font_for,
-            )
-            _paint_fill_path(p, shadow_path, colors.before.shadow, shadow_rect)
-
-        # 2) stroke2（双描边外层）
-        if style.stroke2_width_px > 0:
-            _paint_stroke_path(
-                p,
-                local_line_path,
-                colors.before.stroke2,
-                local_line_rect,
-                _stroke2_pen_width(style.stroke_width_px, style.stroke2_width_px),
-            )
-
-        # 3) stroke（主描边）
-        if style.stroke_color and style.stroke_width_px > 0:
-            _paint_stroke_path(
-                p,
-                local_line_path,
-                colors.before.stroke,
-                local_line_rect,
-                _stroke_pen_width(style.stroke_width_px),
-            )
-
-        # 4) 底色文字（未唱状态主体颜色）
-        _paint_fill_path(p, local_line_path, colors.before.text, local_line_rect)
-    finally:
-        p.end()
-
-    offset_x = -pad_left
-    offset_y = -(pad_top + text_ascent)
-    return (image, offset_x, offset_y)
-
-
-# ---------------------------------------------------------------------------
-# After-layer 主体缓存（A1）：阴影(非glow)+stroke2+stroke+底色 烘焙 / 查询 / blit
-# ---------------------------------------------------------------------------
-
-
-def _after_layer_cache_key(
-    line: TimingLine,
-    style: Style,
-    font: QFont,
-    char_widths: list[int],
-    colors: KaraokeColors,
-    latin_font: QFont | None = None,
-    font_for=None,
-) -> tuple:
-    """Key for the baked "已唱" main layer（不含 glow 模糊；glow 的已唱阴影单独缓存）。
-
-    扫光带（t_ms）不进 key——它在 blit 时用半平面 clip 处理。``decoration_kind`` 进
-    key，因为它决定是否把阴影烘焙进本层（glow 时不烘焙阴影）。
-    """
-    text = "".join(ch.text for ch in line.chars)
-    font_sig = (
-        font.family(),
-        font.pixelSize(),
-        int(font.weight()),
-        font.italic(),
-    )
-    latin_sig = latin_font.family() if (font_for is not None and latin_font is not None) else None
-    return (
-        text,
-        font_sig,
-        latin_sig,
-        tuple(char_widths),
-        style.letter_spacing_px,
-        _karaoke_state_signature(colors.after),
-        style.shadow_offset_x,
-        style.shadow_offset_y,
-        style.stroke_width_px,
-        style.stroke2_width_px,
-        style.decoration_kind,
-        style.right_to_left,
-    )
-
-
-def _get_or_build_after_layer(
-    key: tuple,
-    line: TimingLine,
-    char_widths: list[int],
-    font: QFont,
-    style: Style,
-    colors: KaraokeColors,
-    metrics: QFontMetrics,
-    rtl: bool = False,
-    font_for=None,
-) -> tuple[QImage, int, int]:
-    with _AFTER_LAYER_LOCK:
-        cached = _AFTER_LAYER_CACHE.get(key)
-        if cached is not None:
-            _AFTER_LAYER_CACHE.move_to_end(key)
-            return cached
-
-    entry = _build_after_layer(line, char_widths, font, style, colors, metrics, rtl, font_for)
-
-    with _AFTER_LAYER_LOCK:
-        _AFTER_LAYER_CACHE[key] = entry
-        while len(_AFTER_LAYER_CACHE) > _AFTER_LAYER_CACHE_MAX:
-            _AFTER_LAYER_CACHE.popitem(last=False)
-    return entry
-
-
-def _build_after_layer(
-    line: TimingLine,
-    char_widths: list[int],
-    font: QFont,
-    style: Style,
-    colors: KaraokeColors,
-    metrics: QFontMetrics,
-    rtl: bool = False,
-    font_for=None,
-) -> tuple[QImage, int, int]:
-    """Render shadow(非glow) + stroke2 + stroke + base text（``colors.after``）到透明 QImage。
-
-    与 :func:`_build_before_layer` 同构，区别：用 ``colors.after``；``decoration_kind``
-    为 ``"glow"`` 时不烘焙阴影（已唱阴影由 :data:`_AFTER_GLOW_CACHE` 处理）。返回
-    ``(image, offset_x, offset_y)``，blit 含义同 before-layer。
-    """
-    total_w = _line_text_width(char_widths, style)
-    text_ascent = metrics.ascent()
-    text_h = metrics.height()
-
-    is_glow = style.decoration_kind == "glow"
-    has_shadow = (
-        (not is_glow)
-        and bool(style.shadow_color)
-        and bool(style.shadow_offset_x or style.shadow_offset_y)
-    )
-
-    # padding：strokes 的外扩 + 阴影偏移（仅非 glow 才有阴影）。glow 模糊不在本层。
-    extent = max(_visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px), 0) + 4
-    shadow_dx = style.shadow_offset_x if has_shadow else 0
-    shadow_dy = style.shadow_offset_y if has_shadow else 0
-    pad_left = max(0, -shadow_dx) + extent
-    pad_right = max(0, shadow_dx) + extent
-    pad_top = max(0, -shadow_dy) + extent
-    pad_bottom = max(0, shadow_dy) + extent
-
-    img_w = max(pad_left + total_w + pad_right, 1)
-    img_h = max(pad_top + text_h + pad_bottom, 1)
-
-    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
-    image.fill(0)
-
-    local_x0 = pad_left
-    local_y = pad_top + text_ascent  # baseline 在 image 内坐标
-
-    p = QPainter(image)
-    try:
-        p.setRenderHints(
-            QPainter.RenderHint.Antialiasing
-            | QPainter.RenderHint.TextAntialiasing
-        )
-        p.setFont(font)
-
-        local_lefts = _char_left_positions(char_widths, local_x0, rtl, _letter_spacing(style))
-        local_line_path = _line_text_path(
-            line, char_widths, font, local_x0, local_y, local_lefts, font_for
-        )
-        local_line_rect = QRectF(
-            float(local_x0),
-            float(local_y - text_ascent),
-            float(total_w),
-            float(text_h),
-        )
-
-        # 1) 阴影（仅非 glow）
-        if has_shadow:
-            shadow_rect = local_line_rect.translated(style.shadow_offset_x, style.shadow_offset_y)
-            shadow_path = _line_text_path(
-                line,
-                char_widths,
-                font,
-                local_x0 + style.shadow_offset_x,
-                local_y + style.shadow_offset_y,
-                [left + style.shadow_offset_x for left in local_lefts],
-                font_for,
-            )
-            _paint_fill_path(p, shadow_path, colors.after.shadow, shadow_rect)
-
-        # 2) stroke2（双描边外层）
-        if style.stroke2_width_px > 0:
-            _paint_stroke_path(
-                p,
-                local_line_path,
-                colors.after.stroke2,
-                local_line_rect,
-                _stroke2_pen_width(style.stroke_width_px, style.stroke2_width_px),
-            )
-
-        # 3) stroke（主描边）
-        if style.stroke_color and style.stroke_width_px > 0:
-            _paint_stroke_path(
-                p,
-                local_line_path,
-                colors.after.stroke,
-                local_line_rect,
-                _stroke_pen_width(style.stroke_width_px),
-            )
-
-        # 4) 底色文字（已唱填充色）
-        _paint_fill_path(p, local_line_path, colors.after.text, local_line_rect)
-    finally:
-        p.end()
-
-    offset_x = -pad_left
-    offset_y = -(pad_top + text_ascent)
-    return (image, offset_x, offset_y)
-
-
 def _blit_after_layer(
     painter: QPainter,
     after_image: QImage,
@@ -4762,185 +4316,6 @@ def _blit_after_layer(
         painter.drawImage(top_left, after_image)
     finally:
         painter.restore()
-
-
-# ---------------------------------------------------------------------------
-# After-layer glow 缓存：构建 / 查询
-# ---------------------------------------------------------------------------
-
-
-def _after_glow_cache_key(
-    line: TimingLine,
-    style: Style,
-    font: QFont,
-    char_widths: list[int],
-    colors: KaraokeColors,
-    latin_font: QFont | None = None,
-    font_for=None,
-) -> tuple:
-    """Key for the baked "已唱" glow image.
-
-    只含影响整行模糊外观的字段——发光的形状来自字形轮廓 + 描边宽度，颜色来自
-    ``colors.after.shadow``，半径来自 ``glow_after_radius``。扫光带（t_ms）不进 key，
-    因为它在 blit 时用 setClipRect 处理。
-    """
-    text = "".join(ch.text for ch in line.chars)
-    font_sig = (
-        font.family(),
-        font.pixelSize(),
-        int(font.weight()),
-        font.italic(),
-    )
-    latin_sig = latin_font.family() if (font_for is not None and latin_font is not None) else None
-    return (
-        text,
-        font_sig,
-        latin_sig,
-        tuple(char_widths),
-        style.letter_spacing_px,
-        _fill_signature(colors.after.shadow),
-        style.stroke_width_px,
-        style.stroke2_width_px,
-        _glow_radius(style, after=True),
-        style.right_to_left,
-    )
-
-
-def _get_or_build_after_glow(
-    key: tuple,
-    line: TimingLine,
-    char_widths: list[int],
-    font: QFont,
-    style: Style,
-    colors: KaraokeColors,
-    metrics: QFontMetrics,
-    rtl: bool = False,
-    font_for=None,
-) -> tuple[QImage, int, int]:
-    with _AFTER_GLOW_LOCK:
-        cached = _AFTER_GLOW_CACHE.get(key)
-        if cached is not None:
-            _AFTER_GLOW_CACHE.move_to_end(key)
-            return cached
-
-    # 构建（含一次 QGraphicsBlurEffect）在锁外做，不阻塞别的线程。
-    entry = _build_after_glow(line, char_widths, font, style, colors, metrics, rtl, font_for)
-
-    with _AFTER_GLOW_LOCK:
-        _AFTER_GLOW_CACHE[key] = entry
-        while len(_AFTER_GLOW_CACHE) > _AFTER_GLOW_CACHE_MAX:
-            _AFTER_GLOW_CACHE.popitem(last=False)
-    return entry
-
-
-def _build_after_glow(
-    line: TimingLine,
-    char_widths: list[int],
-    font: QFont,
-    style: Style,
-    colors: KaraokeColors,
-    metrics: QFontMetrics,
-    rtl: bool = False,
-    font_for=None,
-) -> tuple[QImage, int, int]:
-    """Render the full (unclipped) "已唱" glow into a transparent QImage.
-
-    返回 ``(image, offset_x, offset_y)``：blit 时把 image 的左上画在
-    ``(target_x0 + offset_x, target_baseline_y + offset_y)``，发光就会与文字基线对齐。
-    """
-    total_w = _line_text_width(char_widths, style)
-    text_ascent = metrics.ascent()
-    text_h = metrics.height()
-    glow_radius = _glow_radius(style, after=True)
-
-    extent = _glow_extent(style.stroke_width_px, style.stroke2_width_px, glow_radius) + 4
-    img_w = max(extent + total_w + extent, 1)
-    img_h = max(extent + text_h + extent, 1)
-
-    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
-    image.fill(0)
-
-    local_x0 = extent
-    local_y = extent + text_ascent
-    local_lefts = _char_left_positions(char_widths, local_x0, rtl, _letter_spacing(style))
-    local_line_path = _line_text_path(
-        line, char_widths, font, local_x0, local_y, local_lefts, font_for
-    )
-    local_line_rect = QRectF(
-        float(local_x0),
-        float(local_y - text_ascent),
-        float(total_w),
-        float(text_h),
-    )
-
-    p = QPainter(image)
-    try:
-        p.setRenderHints(
-            QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing
-        )
-        p.setFont(font)
-        _paint_glow_path(
-            p,
-            local_line_path,
-            colors.after.shadow,
-            local_line_rect,
-            glow_radius,
-            style.stroke_width_px,
-            style.stroke2_width_px,
-        )
-    finally:
-        p.end()
-
-    offset_x = -local_x0
-    offset_y = -(extent + text_ascent)
-    return (image, offset_x, offset_y)
-
-
-def _blit_feathered_glow(
-    painter: QPainter,
-    image: QImage,
-    top_left: QPointF,
-    *,
-    band_left: float,
-    band_right: float,
-    clip_top: float,
-    clip_height: float,
-    feather: int,
-) -> None:
-    """Blit the baked "已唱" glow, fading its left/right edges over ``feather`` px.
-
-    扫光带内（``[band_left, band_right]``）整张发光保留，左右各 ``feather`` 像素用渐变
-    alpha 羽化到 0，让发光在扫光交界平滑过渡，而不是被硬裁出一道「截断」边。
-
-    羽化用 ``CompositionMode_DestinationIn`` 实现，但必须在一张独立透明图层里做：
-    若直接画到主画布，DestinationIn 会把该区域内已绘制的背景 / 未唱层的 alpha 一并
-    乘掉，打出透明洞。图层合成完再整体 ``drawImage`` 回主画布（SourceOver）。
-    """
-    feather = max(int(feather), 1)
-    left = band_left - feather
-    width = (band_right - band_left) + feather * 2
-    if width <= 0 or clip_height <= 0:
-        return
-    layer_w = max(int(math.ceil(width)), 1)
-    layer_h = max(int(math.ceil(clip_height)), 1)
-    layer = QImage(layer_w, layer_h, QImage.Format.Format_ARGB32_Premultiplied)
-    layer.fill(0)
-    p = QPainter(layer)
-    try:
-        p.drawImage(QPointF(top_left.x() - left, top_left.y() - clip_top), image)
-        p.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationIn)
-        mask = QLinearGradient(QPointF(0.0, 0.0), QPointF(float(layer_w), 0.0))
-        frac = min(feather / width, 0.5)
-        opaque = QColor(0, 0, 0, 255)
-        clear = QColor(0, 0, 0, 0)
-        mask.setColorAt(0.0, clear)
-        mask.setColorAt(frac, opaque)
-        mask.setColorAt(1.0 - frac, opaque)
-        mask.setColorAt(1.0, clear)
-        p.fillRect(QRectF(0.0, 0.0, float(layer_w), float(layer_h)), QBrush(mask))
-    finally:
-        p.end()
-    painter.drawImage(QPointF(left, clip_top), layer)
 
 
 def _effective_karaoke_colors(style: Style) -> KaraokeColors:
