@@ -75,6 +75,13 @@ _IMAGE_FILL_LOCK = Lock()
 _AFTER_GLOW_CACHE_MAX = 64
 _AFTER_GLOW_CACHE: "OrderedDict[tuple, tuple[QImage, int, int]]" = OrderedDict()
 _AFTER_GLOW_LOCK = Lock()
+# After-layer 主体（A1）：把"已唱"层的 阴影(非glow)+stroke2+stroke+底色文字 烘焙成
+# 透明 QImage 缓存，每帧只做一次 drawImage + 在扫光边界处做半平面 clip（揭示已唱侧），
+# 取代逐帧 addText + strokePath/fillPath（管线优化调研 §4 A1）。与 before-layer 同构。
+# glow 的"已唱"阴影仍由 _AFTER_GLOW_CACHE 单独处理；本缓存只在非 glow 时含阴影。
+_AFTER_LAYER_CACHE_MAX = 64
+_AFTER_LAYER_CACHE: "OrderedDict[tuple, tuple[QImage, int, int]]" = OrderedDict()
+_AFTER_LAYER_LOCK = Lock()
 _RUBY_COMBINING_CHARS = set("ぁぃぅぇぉゃゅょゎァィゥェォャュョヮ\u3099\u309A")
 
 
@@ -190,6 +197,8 @@ def clear_before_layer_cache() -> None:
         _IMAGE_BRUSH_CACHE.clear()
     with _AFTER_GLOW_LOCK:
         _AFTER_GLOW_CACHE.clear()
+    with _AFTER_LAYER_LOCK:
+        _AFTER_LAYER_CACHE.clear()
 
 from krok_helper.subtitle_render.engine.timeline import (
     DisplayLine,
@@ -2095,7 +2104,6 @@ def _paint_line_static(
         float(metrics.height()),
     )
     colors = _effective_karaoke_colors(style)
-    line_path = _line_text_path(line, char_widths, font, x0, y, char_lefts, font_for)
     transition = _line_char_transition_context(
         style,
         line,
@@ -2153,7 +2161,7 @@ def _paint_line_static(
             before_image,
         )
 
-    # --- "已唱"层（依赖 t_ms）：逐字 clip 照旧每帧画 ---
+    # --- "已唱"层（依赖 t_ms）：glow 模糊单独 blit，主体走烘焙缓存 ---
     if style.decoration_kind == "glow":
         # 「未唱」层已把整行发光（before.shadow）烘焙在底下。仅当「已唱」发光与之
         # 不同（颜色或半径）时，才需要在唱过区叠画 after 发光；否则同一发光会在扫光
@@ -2187,68 +2195,24 @@ def _paint_line_static(
                 clip_height=float(metrics.height() + pad * 2),
                 feather=max(after_radius, 1),
             )
-    elif style.shadow_color and (style.shadow_offset_x or style.shadow_offset_y):
-        shadow_rect = line_rect.translated(style.shadow_offset_x, style.shadow_offset_y)
-        shadow_path = _line_text_path(
-            line,
-            char_widths,
-            font,
-            x0 + style.shadow_offset_x,
-            y + style.shadow_offset_y,
-            [left + style.shadow_offset_x for left in char_lefts],
-            font_for,
-        )
-        _paint_after_fill_path(
-            painter,
-            shadow_path,
-            colors.after.shadow,
-            shadow_rect,
-            _offset_fill_segments(fill_segments, style.shadow_offset_x),
-            y + style.shadow_offset_y,
-            metrics,
-            t_ms,
-            rtl=rtl,
-        )
-
-    if style.stroke2_width_px > 0:
-        _paint_after_stroke_path(
-            painter,
-            line_path,
-            colors.after.stroke2,
-            line_rect,
-            _stroke2_pen_width(style.stroke_width_px, style.stroke2_width_px),
-            fill_segments,
-            y,
-            metrics,
-            t_ms,
-            rtl=rtl,
-        )
-
-    if style.stroke_color and style.stroke_width_px > 0:
-        _paint_after_stroke_path(
-            painter,
-            line_path,
-            colors.after.stroke,
-            line_rect,
-            _stroke_pen_width(style.stroke_width_px),
-            fill_segments,
-            y,
-            metrics,
-            t_ms,
-            rtl=rtl,
-        )
-
-    _paint_after_fill_path(
-        painter,
-        line_path,
-        colors.after.text,
-        line_rect,
-        fill_segments,
-        y,
-        metrics,
-        t_ms,
-        rtl=rtl,
-    )
+    # 已唱主体（阴影(非glow)+stroke2+stroke+底色）：与未唱层同构，烘焙一次缓存，
+    # 逐帧只做一次 drawImage + 在扫光锋面做半平面 clip（取代逐帧 addText+strokePath）。
+    if total_w > 0 and metrics.height() > 0:
+        after_band = _fill_clip_band(fill_segments, t_ms, rtl)
+        if after_band is not None:
+            after_key = _after_layer_cache_key(
+                line, style, font, char_widths, colors, latin_font, font_for
+            )
+            after_image, after_dx, after_dy = _get_or_build_after_layer(
+                after_key, line, char_widths, font, style, colors, metrics, rtl, font_for,
+            )
+            _blit_after_layer(
+                painter,
+                after_image,
+                QPointF(float(x0 + after_dx), float(y + after_dy)),
+                band=after_band,
+                rtl=rtl,
+            )
 
 
 def _char_left_positions(
@@ -4375,6 +4339,220 @@ def _build_before_layer(
     offset_x = -pad_left
     offset_y = -(pad_top + text_ascent)
     return (image, offset_x, offset_y)
+
+
+# ---------------------------------------------------------------------------
+# After-layer 主体缓存（A1）：阴影(非glow)+stroke2+stroke+底色 烘焙 / 查询 / blit
+# ---------------------------------------------------------------------------
+
+
+def _after_layer_cache_key(
+    line: TimingLine,
+    style: Style,
+    font: QFont,
+    char_widths: list[int],
+    colors: KaraokeColors,
+    latin_font: QFont | None = None,
+    font_for=None,
+) -> tuple:
+    """Key for the baked "已唱" main layer（不含 glow 模糊；glow 的已唱阴影单独缓存）。
+
+    扫光带（t_ms）不进 key——它在 blit 时用半平面 clip 处理。``decoration_kind`` 进
+    key，因为它决定是否把阴影烘焙进本层（glow 时不烘焙阴影）。
+    """
+    text = "".join(ch.text for ch in line.chars)
+    font_sig = (
+        font.family(),
+        font.pixelSize(),
+        int(font.weight()),
+        font.italic(),
+    )
+    latin_sig = latin_font.family() if (font_for is not None and latin_font is not None) else None
+    return (
+        text,
+        font_sig,
+        latin_sig,
+        tuple(char_widths),
+        style.letter_spacing_px,
+        _karaoke_state_signature(colors.after),
+        style.shadow_offset_x,
+        style.shadow_offset_y,
+        style.stroke_width_px,
+        style.stroke2_width_px,
+        style.decoration_kind,
+        style.right_to_left,
+    )
+
+
+def _get_or_build_after_layer(
+    key: tuple,
+    line: TimingLine,
+    char_widths: list[int],
+    font: QFont,
+    style: Style,
+    colors: KaraokeColors,
+    metrics: QFontMetrics,
+    rtl: bool = False,
+    font_for=None,
+) -> tuple[QImage, int, int]:
+    with _AFTER_LAYER_LOCK:
+        cached = _AFTER_LAYER_CACHE.get(key)
+        if cached is not None:
+            _AFTER_LAYER_CACHE.move_to_end(key)
+            return cached
+
+    entry = _build_after_layer(line, char_widths, font, style, colors, metrics, rtl, font_for)
+
+    with _AFTER_LAYER_LOCK:
+        _AFTER_LAYER_CACHE[key] = entry
+        while len(_AFTER_LAYER_CACHE) > _AFTER_LAYER_CACHE_MAX:
+            _AFTER_LAYER_CACHE.popitem(last=False)
+    return entry
+
+
+def _build_after_layer(
+    line: TimingLine,
+    char_widths: list[int],
+    font: QFont,
+    style: Style,
+    colors: KaraokeColors,
+    metrics: QFontMetrics,
+    rtl: bool = False,
+    font_for=None,
+) -> tuple[QImage, int, int]:
+    """Render shadow(非glow) + stroke2 + stroke + base text（``colors.after``）到透明 QImage。
+
+    与 :func:`_build_before_layer` 同构，区别：用 ``colors.after``；``decoration_kind``
+    为 ``"glow"`` 时不烘焙阴影（已唱阴影由 :data:`_AFTER_GLOW_CACHE` 处理）。返回
+    ``(image, offset_x, offset_y)``，blit 含义同 before-layer。
+    """
+    total_w = _line_text_width(char_widths, style)
+    text_ascent = metrics.ascent()
+    text_h = metrics.height()
+
+    is_glow = style.decoration_kind == "glow"
+    has_shadow = (
+        (not is_glow)
+        and bool(style.shadow_color)
+        and bool(style.shadow_offset_x or style.shadow_offset_y)
+    )
+
+    # padding：strokes 的外扩 + 阴影偏移（仅非 glow 才有阴影）。glow 模糊不在本层。
+    extent = max(_visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px), 0) + 4
+    shadow_dx = style.shadow_offset_x if has_shadow else 0
+    shadow_dy = style.shadow_offset_y if has_shadow else 0
+    pad_left = max(0, -shadow_dx) + extent
+    pad_right = max(0, shadow_dx) + extent
+    pad_top = max(0, -shadow_dy) + extent
+    pad_bottom = max(0, shadow_dy) + extent
+
+    img_w = max(pad_left + total_w + pad_right, 1)
+    img_h = max(pad_top + text_h + pad_bottom, 1)
+
+    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+
+    local_x0 = pad_left
+    local_y = pad_top + text_ascent  # baseline 在 image 内坐标
+
+    p = QPainter(image)
+    try:
+        p.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+        )
+        p.setFont(font)
+
+        local_lefts = _char_left_positions(char_widths, local_x0, rtl, _letter_spacing(style))
+        local_line_path = _line_text_path(
+            line, char_widths, font, local_x0, local_y, local_lefts, font_for
+        )
+        local_line_rect = QRectF(
+            float(local_x0),
+            float(local_y - text_ascent),
+            float(total_w),
+            float(text_h),
+        )
+
+        # 1) 阴影（仅非 glow）
+        if has_shadow:
+            shadow_rect = local_line_rect.translated(style.shadow_offset_x, style.shadow_offset_y)
+            shadow_path = _line_text_path(
+                line,
+                char_widths,
+                font,
+                local_x0 + style.shadow_offset_x,
+                local_y + style.shadow_offset_y,
+                [left + style.shadow_offset_x for left in local_lefts],
+                font_for,
+            )
+            _paint_fill_path(p, shadow_path, colors.after.shadow, shadow_rect)
+
+        # 2) stroke2（双描边外层）
+        if style.stroke2_width_px > 0:
+            _paint_stroke_path(
+                p,
+                local_line_path,
+                colors.after.stroke2,
+                local_line_rect,
+                _stroke2_pen_width(style.stroke_width_px, style.stroke2_width_px),
+            )
+
+        # 3) stroke（主描边）
+        if style.stroke_color and style.stroke_width_px > 0:
+            _paint_stroke_path(
+                p,
+                local_line_path,
+                colors.after.stroke,
+                local_line_rect,
+                _stroke_pen_width(style.stroke_width_px),
+            )
+
+        # 4) 底色文字（已唱填充色）
+        _paint_fill_path(p, local_line_path, colors.after.text, local_line_rect)
+    finally:
+        p.end()
+
+    offset_x = -pad_left
+    offset_y = -(pad_top + text_ascent)
+    return (image, offset_x, offset_y)
+
+
+def _blit_after_layer(
+    painter: QPainter,
+    after_image: QImage,
+    top_left: QPointF,
+    *,
+    band: tuple[int, int],
+    rtl: bool,
+) -> None:
+    """把烘焙好的"已唱"层 blit 到画布，并在扫光边界做半平面 clip（只露已唱侧）。
+
+    ``band`` = ``_fill_clip_band`` 的 (left, right)。LTR 时右缘=扫光锋面(sharp)、
+    左/上/下放开到整张图；RTL 时左缘=扫光锋面、右/上/下放开。这样描边/阴影在已唱侧
+    的外扩完整呈现，未唱侧不漏，且锋面与逐帧老路径一致（右缘=fill_end）。
+    """
+    band_left, band_right = band
+    img_left = top_left.x()
+    img_top = top_left.y()
+    img_right = img_left + after_image.width()
+    img_bottom = img_top + after_image.height()
+    if rtl:
+        clip_left = float(band_left)
+        clip_right = img_right
+    else:
+        clip_left = img_left
+        clip_right = float(band_right)
+    if clip_right <= clip_left:
+        return
+    painter.save()
+    try:
+        painter.setClipRect(
+            QRectF(clip_left, img_top, clip_right - clip_left, img_bottom - img_top)
+        )
+        painter.drawImage(top_left, after_image)
+    finally:
+        painter.restore()
 
 
 # ---------------------------------------------------------------------------
