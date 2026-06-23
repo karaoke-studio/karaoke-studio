@@ -220,9 +220,7 @@ def main() -> None:
     transport.timeChanged.connect(view.set_time)
     transport.timeChanged.connect(lambda _v: tick_count.__setitem__("n", tick_count["n"] + 1))
     transport.playbackStateChanged.connect(view.set_playing)
-    transport.previewScaleChanged.connect(view.set_preview_scale)
     view.framePainted.connect(transport.note_preview_frame_painted)
-    view.set_preview_scale(transport.preview_scale)
 
     container = QWidget()
     container.setWindowTitle("preview profile")

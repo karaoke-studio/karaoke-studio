@@ -201,17 +201,6 @@ def test_play_button_text_reflects_state(qapp):
     assert bar._play_btn.text() == "▶"
 
 
-def test_preview_scale_combo_emits_ratio(qapp):
-    bar = _bar(qapp)
-    seen: list[float] = []
-    bar.previewScaleChanged.connect(seen.append)
-
-    bar._preview_scale_combo.setCurrentIndex(1)
-
-    assert bar.preview_scale == 0.5
-    assert seen == [0.5]
-
-
 def test_preview_fps_label_updates_from_painted_frames(qapp):
     bar = _bar(qapp)
 
@@ -280,14 +269,6 @@ def test_preview_canvas_fits_output_rect_to_widget(qapp):
 
     assert canvas._fit_output_rect(960, 540) == (0, 0, 960, 540)
     assert canvas._fit_output_rect(1000, 500) == (55, 0, 889, 500)
-
-
-def test_preview_canvas_accepts_preview_scale(qapp):
-    canvas = PreviewCanvas()
-    canvas.set_preview_scale(0.5)
-    assert canvas._preview_scale == 0.5
-    canvas.set_preview_scale(0.1)
-    assert canvas._preview_scale == 0.25
 
 
 def test_preview_canvas_video_source_uses_qt_playback_proxy(qapp, monkeypatch, tmp_path):

@@ -544,9 +544,7 @@ class SubtitleRenderWindow(QWidget):
         self._transport_bar.set_preview_fps(self._screen_settings.fps)
         self._transport_bar.timeChanged.connect(self._preview_panel.set_time)
         self._transport_bar.playbackStateChanged.connect(self._preview_panel.set_playing)
-        self._transport_bar.previewScaleChanged.connect(self._preview_panel.set_preview_scale)
         self._preview_panel.canvas.framePainted.connect(self._transport_bar.note_preview_frame_painted)
-        self._preview_panel.set_preview_scale(self._transport_bar.preview_scale)
         center_layout.addWidget(self._transport_bar)
         top.addWidget(center)
 
