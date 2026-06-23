@@ -82,6 +82,12 @@ _AFTER_GLOW_LOCK = Lock()
 _AFTER_LAYER_CACHE_MAX = 64
 _AFTER_LAYER_CACHE: "OrderedDict[tuple, tuple[QImage, int, int]]" = OrderedDict()
 _AFTER_LAYER_LOCK = Lock()
+# 分色(roles) 逐段(run) 层缓存（A1 扩到分色路径）：每个角色 run 的「未唱」层
+# （含 before-glow）与「已唱」主体层（无 glow 模糊）各烘焙一次。run 内字体/字号
+# 可不同但角色样式统一。已唱 glow 仍逐帧（与普通路径一致）。
+_ROLE_RUN_LAYER_CACHE_MAX = 128
+_ROLE_RUN_LAYER_CACHE: "OrderedDict[tuple, tuple[QImage, int, int]]" = OrderedDict()
+_ROLE_RUN_LAYER_LOCK = Lock()
 _RUBY_COMBINING_CHARS = set("ぁぃぅぇぉゃゅょゎァィゥェォャュョヮ\u3099\u309A")
 
 
@@ -199,6 +205,8 @@ def clear_before_layer_cache() -> None:
         _AFTER_GLOW_CACHE.clear()
     with _AFTER_LAYER_LOCK:
         _AFTER_LAYER_CACHE.clear()
+    with _ROLE_RUN_LAYER_LOCK:
+        _ROLE_RUN_LAYER_CACHE.clear()
 
 from krok_helper.subtitle_render.engine.timeline import (
     DisplayLine,
@@ -2566,6 +2574,179 @@ def _paint_role_line_static(
         _paint_role_after_run(painter, run, y, fill_segments, t_ms, rtl)
 
 
+def _role_run_layer_key(
+    glyphs: list[_RoleGlyphLayout],
+    role_style: Style,
+    colors: KaraokeColors,
+    *,
+    after: bool,
+) -> tuple:
+    """run 层缓存 key：run 内逐字形（文本/字体/相对 x/宽）+ 角色样式签名 + 状态。
+
+    扫光带不进 key（blit 时半平面 clip 处理）；run 绝对位置不进 key（blit offset 复位）。
+    """
+    run_left = min(glyph.left for glyph in glyphs)
+    glyph_sig = tuple(
+        (
+            glyph.text,
+            glyph.font.family(),
+            glyph.font.pixelSize(),
+            int(glyph.font.weight()),
+            glyph.font.italic(),
+            glyph.left - run_left,
+            glyph.width,
+        )
+        for glyph in glyphs
+    )
+    state = colors.after if after else colors.before
+    return (
+        glyph_sig,
+        _karaoke_state_signature(state),
+        role_style.shadow_offset_x,
+        role_style.shadow_offset_y,
+        role_style.stroke_width_px,
+        role_style.stroke2_width_px,
+        role_style.decoration_kind,
+        _glow_radius(role_style, after=False),
+        after,
+    )
+
+
+def _get_or_build_role_run_layer(
+    key: tuple,
+    glyphs: list[_RoleGlyphLayout],
+    role_style: Style,
+    colors: KaraokeColors,
+    *,
+    after: bool,
+) -> tuple[QImage, int, int]:
+    with _ROLE_RUN_LAYER_LOCK:
+        cached = _ROLE_RUN_LAYER_CACHE.get(key)
+        if cached is not None:
+            _ROLE_RUN_LAYER_CACHE.move_to_end(key)
+            return cached
+
+    entry = _build_role_run_layer(glyphs, role_style, colors, after=after)
+
+    with _ROLE_RUN_LAYER_LOCK:
+        _ROLE_RUN_LAYER_CACHE[key] = entry
+        while len(_ROLE_RUN_LAYER_CACHE) > _ROLE_RUN_LAYER_CACHE_MAX:
+            _ROLE_RUN_LAYER_CACHE.popitem(last=False)
+    return entry
+
+
+def _build_role_run_layer(
+    glyphs: list[_RoleGlyphLayout],
+    role_style: Style,
+    colors: KaraokeColors,
+    *,
+    after: bool,
+) -> tuple[QImage, int, int]:
+    """把一个角色 run 的某状态烘焙成透明 QImage。
+
+    ``after=False``（未唱层）：glow(before) 或 阴影(before) + stroke2 + stroke + 底色。
+    ``after=True``（已唱主体）：阴影(after，仅非 glow) + stroke2 + stroke + 底色，
+    **不含 glow 模糊**（已唱 glow 仍逐帧，见 :func:`_paint_role_after_run`）。
+
+    与 :func:`_build_before_layer` / :func:`_build_after_layer` 同构；区别在于 run 内
+    逐字形可有不同字体/字号，故按 glyph 各自的 ``font`` 排版。返回 ``(image, dx, dy)``，
+    blit 时画在 ``(run_left + dx, baseline_y + dy)``。
+    """
+    state = colors.after if after else colors.before
+    run_left = min(glyph.left for glyph in glyphs)
+    run_right = max(glyph.left + glyph.width for glyph in glyphs)
+    run_ascent = max(glyph.metrics.ascent() for glyph in glyphs)
+    run_descent = max(glyph.metrics.descent() for glyph in glyphs)
+    run_w = max(run_right - run_left, 1)
+    run_h = max(run_ascent + run_descent, 1)
+
+    is_glow = role_style.decoration_kind == "glow"
+    bake_glow = is_glow and not after
+    has_shadow = (
+        (not is_glow)
+        and bool(role_style.shadow_color)
+        and bool(role_style.shadow_offset_x or role_style.shadow_offset_y)
+    )
+
+    stroke_extent = _visual_stroke_extent(role_style.stroke_width_px, role_style.stroke2_width_px)
+    glow_extra = (
+        _glow_extent(role_style.stroke_width_px, role_style.stroke2_width_px, _glow_radius(role_style, after=False))
+        if bake_glow
+        else 0
+    )
+    extent = max(stroke_extent, glow_extra, 0) + 4
+    shadow_dx = role_style.shadow_offset_x if has_shadow else 0
+    shadow_dy = role_style.shadow_offset_y if has_shadow else 0
+    pad_left = max(0, -shadow_dx) + extent
+    pad_right = max(0, shadow_dx) + extent
+    pad_top = max(0, -shadow_dy) + extent
+    pad_bottom = max(0, shadow_dy) + extent
+
+    img_w = max(pad_left + run_w + pad_right, 1)
+    img_h = max(pad_top + run_h + pad_bottom, 1)
+
+    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+
+    local_baseline = pad_top + run_ascent
+    local_glyphs = [replace(glyph, left=glyph.left - run_left + pad_left) for glyph in glyphs]
+    path = _role_run_path(local_glyphs, local_baseline)
+    rect = QRectF(float(pad_left), float(local_baseline - run_ascent), float(run_w), float(run_h))
+
+    p = QPainter(image)
+    try:
+        p.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+        )
+        # 1) glow（仅未唱层）/ 阴影（仅非 glow）
+        if bake_glow:
+            _paint_glow_path(
+                p,
+                path,
+                state.shadow,
+                rect,
+                _glow_radius(role_style, after=False),
+                role_style.stroke_width_px,
+                role_style.stroke2_width_px,
+            )
+        elif has_shadow:
+            shadow_path = QPainterPath(path)
+            shadow_path.translate(role_style.shadow_offset_x, role_style.shadow_offset_y)
+            _paint_fill_path(
+                p,
+                shadow_path,
+                state.shadow,
+                rect.translated(role_style.shadow_offset_x, role_style.shadow_offset_y),
+            )
+        # 2) stroke2
+        if role_style.stroke2_width_px > 0:
+            _paint_stroke_path(
+                p,
+                path,
+                state.stroke2,
+                rect,
+                _stroke2_pen_width(role_style.stroke_width_px, role_style.stroke2_width_px),
+            )
+        # 3) stroke
+        if role_style.stroke_color and role_style.stroke_width_px > 0:
+            _paint_stroke_path(
+                p,
+                path,
+                state.stroke,
+                rect,
+                _stroke_pen_width(role_style.stroke_width_px),
+            )
+        # 4) 底色文字
+        _paint_fill_path(p, path, state.text, rect)
+    finally:
+        p.end()
+
+    offset_x = -pad_left
+    offset_y = -(pad_top + run_ascent)
+    return (image, offset_x, offset_y)
+
+
 def _paint_role_before_run(
     painter: QPainter,
     glyphs: list[_RoleGlyphLayout],
@@ -2575,46 +2756,10 @@ def _paint_role_before_run(
         return
     role_style = glyphs[0].style
     colors = _effective_karaoke_colors(role_style)
-    path = _role_run_path(glyphs, baseline_y)
-    rect = _role_run_rect(glyphs, baseline_y)
-    if role_style.decoration_kind == "glow":
-        _paint_glow_path(
-            painter,
-            path,
-            colors.before.shadow,
-            rect,
-            _glow_radius(role_style, after=False),
-            role_style.stroke_width_px,
-            role_style.stroke2_width_px,
-        )
-    elif role_style.shadow_color and (
-        role_style.shadow_offset_x or role_style.shadow_offset_y
-    ):
-        shadow_path = QPainterPath(path)
-        shadow_path.translate(role_style.shadow_offset_x, role_style.shadow_offset_y)
-        _paint_fill_path(
-            painter,
-            shadow_path,
-            colors.before.shadow,
-            rect.translated(role_style.shadow_offset_x, role_style.shadow_offset_y),
-        )
-    if role_style.stroke2_width_px > 0:
-        _paint_stroke_path(
-            painter,
-            path,
-            colors.before.stroke2,
-            rect,
-            _stroke2_pen_width(role_style.stroke_width_px, role_style.stroke2_width_px),
-        )
-    if role_style.stroke_color and role_style.stroke_width_px > 0:
-        _paint_stroke_path(
-            painter,
-            path,
-            colors.before.stroke,
-            rect,
-            _stroke_pen_width(role_style.stroke_width_px),
-        )
-    _paint_fill_path(painter, path, colors.before.text, rect)
+    key = _role_run_layer_key(glyphs, role_style, colors, after=False)
+    image, dx, dy = _get_or_build_role_run_layer(key, glyphs, role_style, colors, after=False)
+    run_left = min(glyph.left for glyph in glyphs)
+    painter.drawImage(QPointF(float(run_left + dx), float(baseline_y + dy)), image)
 
 
 def _paint_role_after_run(
@@ -2629,9 +2774,7 @@ def _paint_role_after_run(
         return
     role_style = glyphs[0].style
     colors = _effective_karaoke_colors(role_style)
-    path = _role_run_path(glyphs, baseline_y)
-    rect = _role_run_rect(glyphs, baseline_y)
-    metrics = max(glyphs, key=lambda glyph: glyph.metrics.ascent() + glyph.metrics.descent()).metrics
+    # 已唱 glow 模糊仍逐帧（与普通路径一致）：仅当已唱发光与未唱不同时，在唱过区叠画。
     if role_style.decoration_kind == "glow":
         before_radius = _glow_radius(role_style, after=False)
         after_radius = _glow_radius(role_style, after=True)
@@ -2642,6 +2785,8 @@ def _paint_role_after_run(
         band = _fill_clip_band(fill_segments, t_ms, rtl) if need_after_glow else None
         if band is not None:
             fill_start, fill_end = band
+            path = _role_run_path(glyphs, baseline_y)
+            rect = _role_run_rect(glyphs, baseline_y)
             pad = _glow_extent(
                 role_style.stroke_width_px,
                 role_style.stroke2_width_px,
@@ -2668,59 +2813,22 @@ def _paint_role_after_run(
                 )
             finally:
                 painter.restore()
-    elif role_style.shadow_color and (
-        role_style.shadow_offset_x or role_style.shadow_offset_y
-    ):
-        shadow_path = QPainterPath(path)
-        shadow_path.translate(role_style.shadow_offset_x, role_style.shadow_offset_y)
-        _paint_after_fill_path(
+    # 已唱主体（阴影(非glow)+stroke2+stroke+底色）：烘焙缓存，逐帧只 blit + 半平面 clip。
+    # glow 模糊已在上面逐帧处理（与普通路径一致）。
+    band = _fill_clip_band(fill_segments, t_ms, rtl)
+    if band is not None:
+        after_key = _role_run_layer_key(glyphs, role_style, colors, after=True)
+        after_image, after_dx, after_dy = _get_or_build_role_run_layer(
+            after_key, glyphs, role_style, colors, after=True
+        )
+        run_left = min(glyph.left for glyph in glyphs)
+        _blit_after_layer(
             painter,
-            shadow_path,
-            colors.after.shadow,
-            rect.translated(role_style.shadow_offset_x, role_style.shadow_offset_y),
-            _offset_fill_segments(fill_segments, role_style.shadow_offset_x),
-            baseline_y + role_style.shadow_offset_y,
-            metrics,
-            t_ms,
+            after_image,
+            QPointF(float(run_left + after_dx), float(baseline_y + after_dy)),
+            band=band,
             rtl=rtl,
         )
-    if role_style.stroke2_width_px > 0:
-        _paint_after_stroke_path(
-            painter,
-            path,
-            colors.after.stroke2,
-            rect,
-            _stroke2_pen_width(role_style.stroke_width_px, role_style.stroke2_width_px),
-            fill_segments,
-            baseline_y,
-            metrics,
-            t_ms,
-            rtl=rtl,
-        )
-    if role_style.stroke_color and role_style.stroke_width_px > 0:
-        _paint_after_stroke_path(
-            painter,
-            path,
-            colors.after.stroke,
-            rect,
-            _stroke_pen_width(role_style.stroke_width_px),
-            fill_segments,
-            baseline_y,
-            metrics,
-            t_ms,
-            rtl=rtl,
-        )
-    _paint_after_fill_path(
-        painter,
-        path,
-        colors.after.text,
-        rect,
-        fill_segments,
-        baseline_y,
-        metrics,
-        t_ms,
-        rtl=rtl,
-    )
 
 
 def _paint_role_line_with_character_transition(
