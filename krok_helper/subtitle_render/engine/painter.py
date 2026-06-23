@@ -4714,6 +4714,9 @@ def _paint_rubies(
             style,
             main_ascent_px=main_ascent_px,
         )
+        if transition is None:
+            _paint_ruby_layers(painter, layouts, ruby_font, ruby_metrics, t_ms, style, rtl)
+            return
         for layout in layouts:
             indices = layout.indices
             paint_ruby = layout.ruby
@@ -4878,6 +4881,268 @@ def _layout_rubies(
             )
         )
     return layouts
+
+
+def _paint_ruby_layers(
+    painter: QPainter,
+    layouts: list[_RubyLayout],
+    ruby_font: QFont,
+    ruby_metrics: QFontMetrics,
+    t_ms: int,
+    style: Style,
+    rtl: bool,
+) -> None:
+    layers = []
+    for index, layout in enumerate(layouts):
+        layers.append(
+            _RubyTextLayer(
+                layout,
+                ruby_font,
+                ruby_metrics,
+                t_ms,
+                style,
+                rtl,
+                after=False,
+                z_index=index * 2,
+            )
+        )
+        layers.append(
+            _RubyTextLayer(
+                layout,
+                ruby_font,
+                ruby_metrics,
+                t_ms,
+                style,
+                rtl,
+                after=True,
+                z_index=index * 2 + 1,
+            )
+        )
+    _TEXT_RUN_COMPOSITOR.paint_ordered(
+        painter,
+        LayerContext(t_ms=t_ms, logical_w=0, logical_h=0),
+        layers,
+    )
+
+
+@dataclass(frozen=True)
+class _RubyTextLayer:
+    """Layer wrapper for one horizontal ruby reading."""
+
+    ruby_layout: _RubyLayout
+    ruby_font: QFont
+    ruby_metrics: QFontMetrics
+    t_ms: int
+    style: Style
+    rtl: bool
+    after: bool
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "_RubyTextLayer":
+        return self
+
+    def static_key(self, ctx: LayerContext, layout: object) -> tuple | None:
+        if self.after and _ruby_progress_ratio(self.ruby_layout.ruby, self.t_ms) <= 0.0:
+            return None
+        return _ruby_text_layer_key(
+            self.ruby_layout,
+            self.ruby_font,
+            self.style,
+            self.rtl,
+            after=self.after,
+        )
+
+    def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
+        image, dx, dy = _build_ruby_text_layer(
+            self.ruby_layout,
+            self.ruby_font,
+            self.ruby_metrics,
+            self.style,
+            self.rtl,
+            after=self.after,
+        )
+        return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        clip_rect = None
+        if self.after:
+            ratio = _ruby_progress_ratio(self.ruby_layout.ruby, self.t_ms)
+            if ratio <= 0.0:
+                return LayerAnimation(opacity=0.0)
+            clip_rect = _ruby_after_clip_rect(
+                self.ruby_layout,
+                self.ruby_metrics,
+                self.style,
+                self.rtl,
+                ratio,
+            )
+        return LayerAnimation(
+            top_left=QPointF(
+                float(self.ruby_layout.x),
+                float(self.ruby_layout.baseline_y),
+            ),
+            clip_rect=clip_rect,
+        )
+
+    def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
+        return
+
+    def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
+        rect = _ruby_text_rect(self.ruby_layout, self.ruby_metrics)
+        return int(math.floor(rect.top())), int(math.ceil(rect.bottom()))
+
+
+def _ruby_text_layer_key(
+    layout: _RubyLayout,
+    ruby_font: QFont,
+    style: Style,
+    rtl: bool,
+    *,
+    after: bool,
+) -> tuple:
+    colors = _effective_ruby_karaoke_colors(style)
+    scale = _ruby_scale(style)
+    state = colors.after if after else colors.before
+    return (
+        layout.ruby.reading,
+        layout.target_width,
+        round(layout.reading_width, 3),
+        rtl,
+        ruby_font.family(),
+        ruby_font.pixelSize(),
+        int(ruby_font.weight()),
+        ruby_font.italic(),
+        _karaoke_state_signature(state),
+        _scaled_px(style.stroke_width_px, scale),
+        _scaled_px(style.stroke2_width_px, scale),
+        _scaled_signed_px(style.shadow_offset_x, scale),
+        _scaled_signed_px(style.shadow_offset_y, scale),
+        style.decoration_kind,
+        _scaled_glow_radius(style, scale, after=after),
+        after,
+    )
+
+
+def _build_ruby_text_layer(
+    layout: _RubyLayout,
+    ruby_font: QFont,
+    ruby_metrics: QFontMetrics,
+    style: Style,
+    rtl: bool,
+    *,
+    after: bool,
+) -> tuple[QImage, int, int]:
+    colors = _effective_ruby_karaoke_colors(style)
+    state = colors.after if after else colors.before
+    scale = _ruby_scale(style)
+    stroke_width = _scaled_px(style.stroke_width_px, scale)
+    stroke2_width = _scaled_px(style.stroke2_width_px, scale)
+    shadow_dx = _scaled_signed_px(style.shadow_offset_x, scale)
+    shadow_dy = _scaled_signed_px(style.shadow_offset_y, scale)
+    glow_radius = _scaled_glow_radius(style, scale, after=after)
+    stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
+    glow_extra = (
+        _glow_extent(stroke_width, stroke2_width, glow_radius)
+        if style.decoration_kind == "glow"
+        else 0
+    )
+    extent = max(stroke_extent, glow_extra, abs(shadow_dx), abs(shadow_dy), 2) + 4
+    pad_left = max(0, -shadow_dx) + extent
+    pad_right = max(0, shadow_dx) + extent
+    pad_top = max(0, -shadow_dy) + extent
+    pad_bottom = max(0, shadow_dy) + extent
+
+    ruby_w = max(int(math.ceil(layout.reading_width)), 1)
+    ruby_h = max(ruby_metrics.height(), 1)
+    img_w = max(pad_left + ruby_w + pad_right, 1)
+    img_h = max(pad_top + ruby_h + pad_bottom, 1)
+    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+
+    reading = (
+        "".join(reversed(_ruby_utopia_visual_units(layout.ruby.reading)))
+        if rtl
+        else layout.ruby.reading
+    )
+    local_baseline = pad_top + ruby_metrics.ascent()
+    path, rect = _ruby_text_path_and_rect(
+        reading,
+        ruby_font,
+        ruby_metrics,
+        pad_left,
+        local_baseline,
+        layout.target_width,
+    )
+
+    p = QPainter(image)
+    try:
+        p.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+        )
+        _paint_text_layer_stack(
+            p,
+            path,
+            rect,
+            state,
+            style,
+            stroke_width=stroke_width,
+            stroke2_width=stroke2_width,
+            shadow_dx=shadow_dx,
+            shadow_dy=shadow_dy,
+            glow_radius=glow_radius,
+        )
+    finally:
+        p.end()
+
+    return image, -pad_left, -(pad_top + ruby_metrics.ascent())
+
+
+def _ruby_text_rect(layout: _RubyLayout, ruby_metrics: QFontMetrics) -> QRectF:
+    return QRectF(
+        float(layout.x),
+        float(layout.baseline_y - ruby_metrics.ascent()),
+        float(layout.reading_width),
+        float(ruby_metrics.height()),
+    )
+
+
+def _ruby_after_clip_rect(
+    layout: _RubyLayout,
+    ruby_metrics: QFontMetrics,
+    style: Style,
+    rtl: bool,
+    ratio: float,
+) -> QRectF:
+    rect = _ruby_text_rect(layout, ruby_metrics)
+    scale = _ruby_scale(style)
+    stroke_width = _scaled_px(style.stroke_width_px, scale)
+    stroke2_width = _scaled_px(style.stroke2_width_px, scale)
+    shadow_dx = _scaled_signed_px(style.shadow_offset_x, scale)
+    shadow_dy = _scaled_signed_px(style.shadow_offset_y, scale)
+    after_glow_radius = _scaled_glow_radius(style, scale, after=True)
+    stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
+    pad = max(
+        stroke_extent,
+        _glow_extent(stroke_width, stroke2_width, after_glow_radius)
+        if style.decoration_kind == "glow"
+        else 0,
+        abs(shadow_dx),
+        abs(shadow_dy),
+        2,
+    )
+    ratio_c = min(ratio, 1.0)
+    clip_left = rect.left() + (rect.width() * (1.0 - ratio_c) if rtl else 0.0) - pad
+    return QRectF(
+        clip_left,
+        rect.top() - pad,
+        rect.width() * ratio_c + pad,
+        rect.height() + pad * 2,
+    )
 
 
 def _ruby_target_x_range(
