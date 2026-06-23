@@ -18,8 +18,9 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import Qt  # noqa: E402
+from PyQt6.QtCore import Qt, QUrl  # noqa: E402
 from PyQt6.QtGui import QColor, QImage  # noqa: E402
+from PyQt6.QtMultimedia import QMediaPlayer  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from krok_helper.subtitle_render.frontend import preview_view as pv  # noqa: E402
@@ -29,10 +30,34 @@ from krok_helper.subtitle_render.frontend.preview_view import (  # noqa: E402
 )
 
 
+def _release_media_objects(app: QApplication) -> None:
+    """确定性地销毁测试遗留的 QMediaPlayer/QAudioOutput（趁 QApplication 还活着）。
+
+    各测试懒创建的 ``QMediaPlayer`` + ``QAudioOutput`` 若一直泄漏到解释器退出，
+    Python GC 与 PyQt6 多媒体后端 C++ 析构的顺序竞争会段错误（Python 3.14 退出期尤甚）。
+    在 app 仍存活时显式 stop + 解绑 source/output + deleteLater，可避免该竞争。
+    """
+    for widget in list(app.topLevelWidgets()):
+        for attr in ("_player", "_video_player"):
+            player = getattr(widget, attr, None)
+            if isinstance(player, QMediaPlayer):
+                try:
+                    player.stop()
+                    player.setSource(QUrl())
+                    player.setAudioOutput(None)
+                    player.setVideoOutput(None)
+                except (RuntimeError, TypeError):
+                    pass
+        widget.close()
+        widget.deleteLater()
+    app.processEvents()
+
+
 @pytest.fixture(scope="module")
 def qapp():
     app = QApplication.instance() or QApplication([])
     yield app
+    _release_media_objects(app)
 
 
 def _bar(qapp) -> TransportBar:
