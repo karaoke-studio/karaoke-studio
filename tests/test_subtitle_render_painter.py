@@ -283,6 +283,29 @@ def _default_text_x(track: TimingTrack, style: Style, w: int = 160) -> int:
     return _resolve_line_x(w, text_w + visual_pad * 2, style, 0) + visual_pad
 
 
+def test_layout_plain_line_is_pure_t_independent_geometry(qapp):
+    # P1.a：layout 段是纯几何函数，不接收 t_ms；字符几何/基线/fill_segments 与帧无关。
+    from krok_helper.subtitle_render.engine.painter import _layout_plain_line
+
+    track = _track()
+    style = Style(line_y_position="center")
+    layout = _layout_plain_line(track, track.lines[0], style, 800, 450)
+
+    assert layout.total_w > 0
+    assert layout.baseline_y > 0
+    assert len(layout.char_x_ranges) == len(track.lines[0].chars)
+    assert len(layout.char_widths) == len(track.lines[0].chars)
+    assert len(layout.fill_segments) >= 1
+    # fill_segments 携带的是时序(start/end_ms) + x 范围，而非"当前帧已填多少"。
+    seg = layout.fill_segments[0]
+    assert hasattr(seg, "start_ms") and hasattr(seg, "end_ms")
+    assert hasattr(seg, "left") and hasattr(seg, "right")
+    # 同一行同样式两次 layout 的几何一致（可缓存的前提）。
+    again = _layout_plain_line(track, track.lines[0], style, 800, 450)
+    assert again.char_x_ranges == layout.char_x_ranges
+    assert again.baseline_y == layout.baseline_y
+
+
 def test_paint_frame_with_no_track_leaves_image_unchanged(qapp):
     img = _blank()
     baseline = _pixel_hash(img)

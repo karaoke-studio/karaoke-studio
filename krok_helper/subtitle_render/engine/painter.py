@@ -180,6 +180,34 @@ class _RoleTextLayout:
     line_rect: QRectF
 
 
+@dataclass(frozen=True)
+class _PlainLineLayout:
+    """普通行的纯几何布局（**不依赖 t_ms**）+ 渲染所需字体资源。
+
+    P1.a 三段式（layout→animation→paint）的 layout 段产物：字符几何 / 基线 /
+    fill_segments（含时序但不含当前进度）都与帧无关、可缓存；逐帧只剩 transition
+    与扫光带（animation 段）+ bake/blit（paint 段，见 :func:`_paint_plain_line_layers`）。
+    """
+    font: QFont
+    metrics: QFontMetrics
+    latin_font: QFont
+    font_for: object  # Callable[[str], QFont] | None
+    active_rubies: list
+    ruby_font: QFont
+    ruby_metrics: QFontMetrics | None
+    char_widths: list[int]
+    total_w: int
+    x0: int
+    baseline_y: int
+    intervals: list
+    char_lefts: list[int]
+    char_x_ranges: list
+    fill_segments: list
+    line_rect: QRectF
+    colors: KaraokeColors
+    rtl: bool
+
+
 _UTOPIA_INTRO_TIME_MS = 700
 _UTOPIA_INTRO_DELAY_MS = 200
 _UTOPIA_INTRO_ENLARGE_MS = 400
@@ -2091,8 +2119,49 @@ def _paint_line_static(
             display_end_ms=display_end_ms,
         )
         return
+    # layout 段（纯几何，不依赖 t_ms）：算字符几何 / 基线 / fill_segments。
+    layout = _layout_plain_line(
+        track, line, style, img_w, img_h,
+        baseline_y=baseline_y, line_x=line_x, lane=lane,
+    )
+    painter.setFont(layout.font)
+    # animation 段（依赖 t_ms）：逐字入退场上下文。
+    transition = _line_char_transition_context(
+        style, line, t_ms, display_start_ms, display_end_ms, len(line.chars),
+    )
+    if layout.active_rubies and layout.ruby_metrics is not None:
+        _paint_rubies(
+            painter, layout.ruby_font, layout.ruby_metrics, line,
+            layout.intervals, layout.char_x_ranges, layout.baseline_y,
+            t_ms, layout.active_rubies, style, transition,
+        )
+
+    if transition is not None:
+        _paint_line_with_character_transition(
+            painter, line, layout.char_widths, layout.char_x_ranges, layout.intervals,
+            layout.active_rubies, layout.font, layout.baseline_y, layout.metrics,
+            style, layout.colors, layout.line_rect, t_ms, transition,
+            rtl=layout.rtl, font_for=layout.font_for,
+        )
+        return
+
+    # paint 段：消费 layout，blit 未唱层 + 已唱层（不再每帧重排版）。
+    _paint_plain_line_layers(painter, line, style, layout, t_ms)
+
+
+def _layout_plain_line(
+    track: TimingTrack,
+    line: TimingLine,
+    style: Style,
+    img_w: int,
+    img_h: int,
+    *,
+    baseline_y: int | None = None,
+    line_x: int | None = None,
+    lane: int | None = None,
+) -> _PlainLineLayout:
+    """layout 段：算普通行的纯几何 + 字体资源（不依赖 t_ms，可缓存）。"""
     font = _build_font(style)
-    painter.setFont(font)
     metrics = QFontMetrics(font)
     latin_font = _build_latin_font(style)
     font_for = _make_font_for(style, font, latin_font)
@@ -2123,63 +2192,40 @@ def _paint_line_static(
         (left, left + w) for left, w in zip(char_lefts, char_widths)
     ]
     fill_segments = _karaoke_fill_segments(
-        char_widths,
-        intervals,
-        char_x_ranges,
-        active_rubies,
-        line,
+        char_widths, intervals, char_x_ranges, active_rubies, line,
     )
-
     line_rect = QRectF(
-        float(x0),
-        float(y - metrics.ascent()),
-        float(total_w),
-        float(metrics.height()),
+        float(x0), float(y - metrics.ascent()), float(total_w), float(metrics.height()),
     )
     colors = _effective_karaoke_colors(style)
-    transition = _line_char_transition_context(
-        style,
-        line,
-        t_ms,
-        display_start_ms,
-        display_end_ms,
-        len(line.chars),
+    return _PlainLineLayout(
+        font=font, metrics=metrics, latin_font=latin_font, font_for=font_for,
+        active_rubies=active_rubies, ruby_font=ruby_font, ruby_metrics=ruby_metrics,
+        char_widths=char_widths, total_w=total_w, x0=x0, baseline_y=y,
+        intervals=intervals, char_lefts=char_lefts, char_x_ranges=char_x_ranges,
+        fill_segments=fill_segments, line_rect=line_rect, colors=colors, rtl=rtl,
     )
-    if active_rubies and ruby_metrics is not None:
-        _paint_rubies(
-            painter,
-            ruby_font,
-            ruby_metrics,
-            line,
-            intervals,
-            char_x_ranges,
-            y,
-            t_ms,
-            active_rubies,
-            style,
-            transition,
-        )
 
-    if transition is not None:
-        _paint_line_with_character_transition(
-            painter,
-            line,
-            char_widths,
-            char_x_ranges,
-            intervals,
-            active_rubies,
-            font,
-            y,
-            metrics,
-            style,
-            colors,
-            line_rect,
-            t_ms,
-            transition,
-            rtl=rtl,
-            font_for=font_for,
-        )
-        return
+
+def _paint_plain_line_layers(
+    painter: QPainter,
+    line: TimingLine,
+    style: Style,
+    layout: _PlainLineLayout,
+    t_ms: int,
+) -> None:
+    """paint 段：消费 :class:`_PlainLineLayout`，blit 未唱层 + 已唱 glow/主体。"""
+    font = layout.font
+    metrics = layout.metrics
+    latin_font = layout.latin_font
+    font_for = layout.font_for
+    char_widths = layout.char_widths
+    total_w = layout.total_w
+    x0 = layout.x0
+    y = layout.baseline_y
+    colors = layout.colors
+    fill_segments = layout.fill_segments
+    rtl = layout.rtl
 
     # --- "未唱"层（不依赖 t_ms）：查 / 建缓存后一次 blit ---
     if total_w > 0 and metrics.height() > 0:
