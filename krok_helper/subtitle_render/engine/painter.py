@@ -2674,7 +2674,8 @@ def _paint_line_layers(
         _GlyphRunLayer(run, y, layout.fill_segments, t_ms, layout.rtl, after=False)
         for run in runs
     ]
-    _TEXT_RUN_COMPOSITOR.paint(painter, ctx, before_layers)
+    _TEXT_RUN_COMPOSITOR.paint_ordered(painter, ctx, before_layers)
+    after_band = _fill_clip_band(layout.fill_segments, t_ms, layout.rtl)
     after_layers = []
     for index, run in enumerate(runs):
         after_layers.append(
@@ -2687,7 +2688,6 @@ def _paint_line_layers(
                 z_index=index * 2,
             )
         )
-        after_band = _fill_clip_band(layout.fill_segments, t_ms, layout.rtl)
         if after_band is None:
             continue
         after_layers.append(
@@ -2698,10 +2698,11 @@ def _paint_line_layers(
                 t_ms,
                 layout.rtl,
                 after=True,
+                clip_band=after_band,
                 z_index=index * 2 + 1,
             )
         )
-    _TEXT_RUN_COMPOSITOR.paint(painter, ctx, after_layers)
+    _TEXT_RUN_COMPOSITOR.paint_ordered(painter, ctx, after_layers)
 
 
 @dataclass(frozen=True)
@@ -2714,6 +2715,7 @@ class _GlyphRunLayer:
     t_ms: int
     rtl: bool
     after: bool
+    clip_band: tuple[int, int] | None = None
     z_index: int = 0
     scope: str = SCOPE_LINE
 
@@ -2743,7 +2745,7 @@ class _GlyphRunLayer:
         run_left = min(glyph.left for glyph in self.glyphs)
         clip_rect = None
         if self.after:
-            band = _fill_clip_band(self.fill_segments, self.t_ms, self.rtl)
+            band = self.clip_band or _fill_clip_band(self.fill_segments, self.t_ms, self.rtl)
             if band is None:
                 return LayerAnimation(opacity=0.0)
             band_left, band_right = band

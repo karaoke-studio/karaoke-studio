@@ -115,7 +115,13 @@ class LayerCompositor:
         self.cache = cache if cache is not None else LayerCache()
 
     def paint(self, painter: QPainter, ctx: LayerContext, layers: list[SubtitleLayer]) -> None:
-        for layer in sorted(layers, key=lambda item: item.z_index):
+        self.paint_ordered(painter, ctx, sorted(layers, key=lambda item: item.z_index))
+
+    def paint_ordered(
+        self, painter: QPainter, ctx: LayerContext, layers: list[SubtitleLayer]
+    ) -> None:
+        """Paint layers that are already in desired z-order."""
+        for layer in layers:
             if not _is_layer_active(layer, ctx):
                 continue
             layout = layer.layout(ctx)

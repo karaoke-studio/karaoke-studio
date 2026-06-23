@@ -10,7 +10,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPointF, QRectF  # noqa: E402
 from PyQt6.QtGui import QColor, QImage, QPainter  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from krok_helper.subtitle_render.engine.layers import (  # noqa: E402
     BakedLayer,
@@ -80,7 +79,7 @@ def _pixel(image: QImage, x: int, y: int) -> str:
     return QColor(image.pixel(x, y)).name(QColor.NameFormat.HexRgb).upper()
 
 
-def test_layer_compositor_bakes_once_and_reuses_cache(qapp):
+def test_layer_compositor_bakes_once_and_reuses_cache():
     layer = _SolidLayer("#FF0000", QPointF(4.0, 5.0))
     compositor = LayerCompositor()
     ctx = LayerContext(t_ms=100, logical_w=32, logical_h=24)
@@ -98,7 +97,7 @@ def test_layer_compositor_bakes_once_and_reuses_cache(qapp):
     assert len(compositor.cache) == 1
 
 
-def test_layer_compositor_paints_in_z_order(qapp):
+def test_layer_compositor_paints_in_z_order():
     red = _SolidLayer("#FF0000", QPointF(4.0, 5.0), z_index=0, key="red")
     blue = _SolidLayer("#0000FF", QPointF(4.0, 5.0), z_index=1, key="blue")
     image = _blank()
@@ -115,7 +114,7 @@ def test_layer_compositor_paints_in_z_order(qapp):
     assert _pixel(image, 5, 6) == "#0000FF"
 
 
-def test_layer_compositor_respects_active_windows(qapp):
+def test_layer_compositor_respects_active_windows():
     layer = _WindowedLayer("#00FF00", QPointF(4.0, 5.0))
     compositor = LayerCompositor()
 
@@ -130,7 +129,7 @@ def test_layer_compositor_respects_active_windows(qapp):
     assert layer.bake_count == 0
 
 
-def test_layer_compositor_supports_dynamic_layers(qapp):
+def test_layer_compositor_supports_dynamic_layers():
     layer = _DynamicLayer("#00FF00", QPointF(4.0, 5.0))
     image = _blank()
     painter = QPainter(image)
@@ -147,7 +146,7 @@ def test_layer_compositor_supports_dynamic_layers(qapp):
     assert layer.bake_count == 0
 
 
-def test_layer_cache_evicts_least_recently_used_item(qapp):
+def test_layer_cache_evicts_least_recently_used_item():
     cache = LayerCache(max_items=1)
     compositor = LayerCompositor(cache)
     ctx = LayerContext(t_ms=100, logical_w=32, logical_h=24)
@@ -167,7 +166,7 @@ def test_layer_cache_evicts_least_recently_used_item(qapp):
     assert len(cache) == 1
 
 
-def test_layer_compositor_unions_vertical_bounds(qapp):
+def test_layer_compositor_unions_vertical_bounds():
     low = _SolidLayer("#FF0000", QPointF(0.0, 10.0))
     high = _SolidLayer("#0000FF", QPointF(0.0, 2.0))
 
