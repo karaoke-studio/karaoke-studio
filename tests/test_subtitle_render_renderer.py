@@ -20,15 +20,21 @@ from PyQt6.QtGui import QColor, QImage  # noqa: E402
 from krok_helper.subtitle_render.engine.painter import paint_frame  # noqa: E402
 from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402
     RenderJob,
+    _compute_content_bands,
     _compute_subtitle_strip,
     _frame_count,
     _image_bytes,
+    _merge_intervals,
+    _packed_offsets,
+    _paint_overlay_bands,
     _paint_overlay_strip,
     _render_overlay_frame,
     _resolve_chunk_size,
     _resolve_worker_count,
     _write_frames_multiprocess,
+    _write_frames_multiprocess_bands,
     _write_frames_single,
+    _write_frames_single_bands,
     build_render_command,
     render_subtitle_video,
 )
@@ -37,6 +43,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     TimingChar,
     TimingLine,
     TimingTrack,
+    TitleOverlay,
 )
 
 
@@ -330,3 +337,129 @@ def test_render_cancel_removes_incomplete_output(monkeypatch, tmp_path):
 
     assert fake_process.terminated is True
     assert not job.output_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# A2 方案 B：多条分离带
+# ---------------------------------------------------------------------------
+
+
+def _band_job(tmp_path: Path) -> RenderJob:
+    """顶部标题 + 底部歌词 的两块分离场景（中间大片空白 → 适合方案 B）。"""
+    background = tmp_path / "bg.mp4"
+    background.write_bytes(b"not-real-video")
+    style = Style(
+        font_size_px=48,
+        line_y_position="bottom",
+        title_overlay=TitleOverlay(
+            enabled=True,
+            text_template="标题",
+            anchor="top_center",
+            font_size_px=48,
+            offset_y=20,
+            show_mode="whole",
+        ),
+    )
+    return RenderJob(
+        track=_track(),
+        style=style,
+        background_video_path=background,
+        output_path=tmp_path / "out.mp4",
+        width=320,
+        height=720,
+        fps=60,
+        duration_ms=1000,
+    )
+
+
+def _img_rows(image: QImage) -> np.ndarray:
+    """QImage(RGBA8888) → (height, width*4) uint8 视图（按 bytesPerLine 切齐）。"""
+    h = image.height()
+    w = image.width()
+    bpl = image.bytesPerLine()
+    ptr = image.constBits()
+    ptr.setsize(image.sizeInBytes())
+    arr = np.frombuffer(ptr, dtype=np.uint8, count=bpl * h).reshape(h, bpl)
+    return arr[:, : w * 4].copy()
+
+
+def test_merge_intervals_groups_by_gap():
+    assert _merge_intervals([(0, 10), (12, 20), (200, 210)], 8) == [(0, 20), (200, 210)]
+    assert _merge_intervals([(0, 10), (200, 210)], 8) == [(0, 10), (200, 210)]
+    assert _merge_intervals([], 8) == []
+
+
+def test_build_render_command_bands_packs_split_crop_overlay(tmp_path):
+    job = _band_job(tmp_path)
+    command = build_render_command("ffmpeg", job, bands=[(0, 40), (600, 60)])
+    # 打包 pipe 高 = 各 band 高之和。
+    assert f"{job.width}x100" in command
+    fg = command[command.index("-filter_complex") + 1]
+    assert "split=2[p0][p1]" in fg
+    assert f"crop={job.width}:40:0:0[c0]" in fg
+    assert f"crop={job.width}:60:0:40[c1]" in fg  # 第二条打包偏移 = 第一条高 40
+    assert "[bg][c0]overlay=0:0" in fg
+    assert "[c1]overlay=0:600" in fg
+    assert fg.rstrip().endswith("[v]")
+
+
+def test_compute_content_bands_splits_title_and_lyrics(qapp, tmp_path):
+    bands = _compute_content_bands(_band_job(tmp_path), 1000)
+    assert bands is not None
+    assert len(bands) >= 2
+    # 第一条在顶部（标题），最后一条在底部（歌词），中间有明显空白。
+    tops = [top for top, _h in bands]
+    assert tops == sorted(tops)
+    first_top, first_h = bands[0]
+    last_top, _last_h = bands[-1]
+    assert first_top < 200
+    assert last_top > 400
+    assert last_top - (first_top + first_h) > renderer._BAND_MERGE_GAP_PX
+
+
+def test_packed_offsets_are_cumulative_heights():
+    assert _packed_offsets([(0, 40), (600, 60), (700, 10)]) == [0, 40, 100]
+
+
+def test_bands_render_is_pixel_identical_to_full_frame_regions(qapp, tmp_path):
+    job = _band_job(tmp_path)
+    bands = _compute_content_bands(job, 1000)
+    assert bands is not None and len(bands) >= 2
+    packed_h = sum(h for _t, h in bands)
+
+    t_ms = 600  # 歌词与标题同时可见
+    full = QImage(job.width, job.height, QImage.Format.Format_RGBA8888)
+    full.fill(QColor(0, 0, 0, 0))
+    paint_frame(full, job.track, t_ms, job.style)
+    full_rows = _img_rows(full)
+
+    buffer = QImage(job.width, packed_h, QImage.Format.Format_RGBA8888)
+    renderer._paint_overlay_bands(
+        buffer, job.track, job.style, t_ms,
+        logical_w=job.width, logical_h=job.height,
+        bands=bands, transparent=QColor(0, 0, 0, 0),
+    )
+    packed_rows = _img_rows(buffer)
+
+    offsets = _packed_offsets(bands)
+    for (top, h), off in zip(bands, offsets):
+        np.testing.assert_array_equal(
+            packed_rows[off : off + h], full_rows[top : top + h]
+        )
+
+
+def test_multiprocess_bands_is_byte_identical_to_single_process(qapp, tmp_path):
+    job = _band_job(tmp_path)
+    bands = _compute_content_bands(job, 1000)
+    assert bands is not None and len(bands) >= 2
+    packed_h = sum(h for _t, h in bands)
+    total = _frame_count(job.duration_ms, job.fps)
+
+    single = _CollectProcess()
+    _write_frames_single_bands(single, job, bands, packed_h, total, None, None)
+
+    multi = _CollectProcess()
+    _write_frames_multiprocess_bands(multi, job, bands, packed_h, total, 2, None, None)
+
+    assert len(single.stdin.data) == total * job.width * packed_h * 4
+    assert bytes(multi.stdin.data) == bytes(single.stdin.data)

@@ -318,19 +318,20 @@ def frame_has_content(track: Optional[TimingTrack], t_ms: int, style: Style) -> 
     return bool(display_lines or signal_lines or title_opacity > 0.0)
 
 
-def frame_vertical_bounds(
+def frame_content_intervals(
     logical_w: int,
     logical_h: int,
     track: Optional[TimingTrack],
     t_ms: int,
     style: Style,
-) -> tuple[int, int] | None:
-    """Return conservative vertical content bounds for the current subtitle frame.
+) -> list[tuple[int, int]] | None:
+    """Return per-source (lyric / title) vertical content intervals, **unmerged**.
 
-    This is the P1.b layer-bounds query used by export strip selection and
-    preview dirty updates.  It deliberately returns ``None`` for render paths
-    that have not migrated to layer bounds yet; callers should then fall back to
-    the existing pixel scan / full repaint path.
+    Each entry is a clamped ``(top, bottom)`` for one content group (the lyric +
+    signal group, and the title overlay group).  Disjoint groups stay separate so
+    the export pipeline can pack them into multiple strips (A2 方案 B).  Returns
+    ``None`` for paths not yet migrated to layer bounds (竖排 / viewport 旋转 /
+    逐字 transition)，调用方应回退到整帧 / alpha 扫描。
     """
     if track is None:
         return None
@@ -340,7 +341,7 @@ def frame_vertical_bounds(
     if not display_lines and not signal_lines and title_opacity <= 0.0:
         return None
 
-    bounds: list[tuple[int, int]] = []
+    intervals: list[tuple[int, int]] = []
     if display_lines:
         lyric_bounds = _subtitle_lines_vertical_bounds(
             logical_w,
@@ -353,7 +354,7 @@ def frame_vertical_bounds(
         )
         if lyric_bounds is None:
             return None
-        bounds.append(lyric_bounds)
+        intervals.append(lyric_bounds)
 
     if title_opacity > 0.0 and style.title_overlay is not None:
         title_layout = _layout_title_overlay(logical_w, logical_h, track, style.title_overlay)
@@ -363,12 +364,36 @@ def frame_vertical_bounds(
                 [_TitleOverlayLayer(title_layout, style.title_overlay, title_opacity)],
             )
             if title_bounds is not None:
-                bounds.append(title_bounds)
+                intervals.append(title_bounds)
 
-    if not bounds:
+    clamped: list[tuple[int, int]] = []
+    for top, bottom in intervals:
+        ct = max(0, top)
+        cb = min(logical_h - 1, bottom)
+        if cb >= ct:
+            clamped.append((ct, cb))
+    return clamped or None
+
+
+def frame_vertical_bounds(
+    logical_w: int,
+    logical_h: int,
+    track: Optional[TimingTrack],
+    t_ms: int,
+    style: Style,
+) -> tuple[int, int] | None:
+    """Return conservative vertical content bounds (union) for the current frame.
+
+    This is the P1.b layer-bounds query used by export strip selection and
+    preview dirty updates.  It deliberately returns ``None`` for render paths
+    that have not migrated to layer bounds yet; callers should then fall back to
+    the existing pixel scan / full repaint path.
+    """
+    intervals = frame_content_intervals(logical_w, logical_h, track, t_ms, style)
+    if not intervals:
         return None
-    top = max(0, min(item[0] for item in bounds))
-    bottom = min(logical_h - 1, max(item[1] for item in bounds))
+    top = min(item[0] for item in intervals)
+    bottom = max(item[1] for item in intervals)
     if bottom < top:
         return None
     return top, bottom

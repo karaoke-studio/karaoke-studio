@@ -26,6 +26,7 @@ from krok_helper.subtitle_render.engine.encoder_select import (
     video_encoder_options,
 )
 from krok_helper.subtitle_render.engine.painter import (
+    frame_content_intervals,
     frame_vertical_bounds,
     frame_has_content,
     paint_frame,
@@ -83,15 +84,26 @@ def render_subtitle_video(
     duration_ms = _resolve_duration_ms(job)
     total_frames = _frame_count(duration_ms, job.fps)
 
-    # A2：预扫字幕纵向并集，只渲染窄条（取消 / 关闭 / 无收益时退回整帧）。
+    # A2：预扫字幕纵向范围只渲染窄条（取消 / 关闭 / 无收益时退回整帧）。
+    # 优先方案 B（多条分离带），不适用时退回方案 A（单条并集）。
+    cancelled = should_cancel is not None and should_cancel()
     strip: tuple[int, int] | None = None
-    if _strip_enabled() and not (should_cancel is not None and should_cancel()):
-        strip = _compute_subtitle_strip(job, duration_ms, should_cancel=should_cancel)
-    strip_top, render_h = strip if strip is not None else (0, job.height)
-    if strip is not None:
-        logger(f"条带渲染: y={strip_top} 高={render_h}（全高 {job.height}）")
+    bands: list[tuple[int, int]] | None = None
+    if _strip_enabled() and not cancelled:
+        if _bands_enabled():
+            bands = _compute_content_bands(job, duration_ms, should_cancel=should_cancel)
+        if bands is None:
+            strip = _compute_subtitle_strip(job, duration_ms, should_cancel=should_cancel)
 
-    command = build_render_command(ffmpeg_path, job, duration_ms=duration_ms, strip=strip)
+    if bands is not None:
+        packed_h = sum(height for _top, height in bands)
+        logger(f"多带渲染: {len(bands)} 条 打包高={packed_h}（全高 {job.height}）{bands}")
+        command = build_render_command(ffmpeg_path, job, duration_ms=duration_ms, bands=bands)
+    else:
+        strip_top, render_h = strip if strip is not None else (0, job.height)
+        if strip is not None:
+            logger(f"条带渲染: y={strip_top} 高={render_h}（全高 {job.height}）")
+        command = build_render_command(ffmpeg_path, job, duration_ms=duration_ms, strip=strip)
 
     job.output_path.parent.mkdir(parents=True, exist_ok=True)
     logger(f"导出字幕视频: {job.output_path.name}")
@@ -115,13 +127,24 @@ def render_subtitle_video(
     try:
         assert process.stdin is not None
         # A3：帧数够多时多进程并行渲染（offscreen worker 池），主进程按序喂 ffmpeg；
-        # 否则走单进程。两条路径逐帧逻辑一致（A4 缓冲复用 + 空帧短路 + A2 条带）。
+        # 否则走单进程。两条路径逐帧逻辑一致（A4 缓冲复用 + 空帧短路 + A2 条带/多带）。
         worker_count = _resolve_worker_count(total_frames)
         if worker_count > 1:
             logger(f"多进程导出: {worker_count} 个 worker")
-            _write_frames_multiprocess(
-                process, job, strip_top, render_h, total_frames,
-                worker_count, should_cancel, on_progress,
+            if bands is not None:
+                _write_frames_multiprocess_bands(
+                    process, job, bands, packed_h, total_frames,
+                    worker_count, should_cancel, on_progress,
+                )
+            else:
+                _write_frames_multiprocess(
+                    process, job, strip_top, render_h, total_frames,
+                    worker_count, should_cancel, on_progress,
+                )
+        elif bands is not None:
+            _write_frames_single_bands(
+                process, job, bands, packed_h, total_frames,
+                should_cancel, on_progress,
             )
         else:
             _write_frames_single(
@@ -158,32 +181,63 @@ def render_subtitle_video(
     return job.output_path
 
 
+def _bands_filter_graph(job: RenderJob, duration_seconds: float, bands: list[tuple[int, int]]) -> str:
+    """方案 B 的 filter graph：打包输入 split → 各 band crop → 逐条 overlay 回原始 y。"""
+    offsets = _packed_offsets(bands)
+    n = len(bands)
+    bg = (
+        f"[1:v:0]scale={job.width}:{job.height}:force_original_aspect_ratio=decrease,"
+        f"pad={job.width}:{job.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
+        f"fps={job.fps},trim=duration={duration_seconds:.6f},setpts=PTS-STARTPTS[bg];"
+    )
+    ov = "[0:v:0]format=rgba,setpts=PTS-STARTPTS[ov];"
+    split = "[ov]split=" + str(n) + "".join(f"[p{i}]" for i in range(n)) + ";"
+    crops = "".join(
+        f"[p{i}]crop={job.width}:{height}:0:{off}[c{i}];"
+        for i, ((_top, height), off) in enumerate(zip(bands, offsets))
+    )
+    chain = ""
+    prev = "[bg]"
+    for i, (top, _height) in enumerate(bands):
+        out = "[v]" if i == n - 1 else f"[o{i}]"
+        chain += f"{prev}[c{i}]overlay=0:{top}:format=auto{out};"
+        prev = out
+    return (bg + ov + split + crops + chain).rstrip(";")
+
+
 def build_render_command(
     ffmpeg_path: str,
     job: RenderJob,
     *,
     duration_ms: int | None = None,
     strip: tuple[int, int] | None = None,
+    bands: list[tuple[int, int]] | None = None,
 ) -> list[str]:
     """Build the ffmpeg command used by :func:`render_subtitle_video`.
 
     ``strip`` = ``(y_top, height)``：仅把该窄条作为 rawvideo 输入，``overlay=0:y_top``
     贴回全幅背景；``None`` 时整帧输入、``overlay=0:0``（原行为）。
+    ``bands`` = 多条 ``(y_top, height)``（方案 B）：竖向打包成一条 pipe，split/crop/overlay
+    还原到各自原始 y；给定时优先于 ``strip``。
     """
     _validate_job(job)
     duration = _resolve_duration_ms(job) if duration_ms is None else duration_ms
     duration_seconds = max(duration / 1000.0, 0.001)
     overlay_y = 0
     pipe_w, pipe_h = job.width, job.height
-    if strip is not None:
-        overlay_y, pipe_h = strip
-    filter_graph = (
-        f"[1:v:0]scale={job.width}:{job.height}:force_original_aspect_ratio=decrease,"
-        f"pad={job.width}:{job.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
-        f"fps={job.fps},trim=duration={duration_seconds:.6f},setpts=PTS-STARTPTS[bg];"
-        "[0:v:0]format=rgba,setpts=PTS-STARTPTS[ov];"
-        f"[bg][ov]overlay=0:{overlay_y}:format=auto[v]"
-    )
+    if bands is not None:
+        pipe_h = sum(height for _top, height in bands)
+        filter_graph = _bands_filter_graph(job, duration_seconds, bands)
+    else:
+        if strip is not None:
+            overlay_y, pipe_h = strip
+        filter_graph = (
+            f"[1:v:0]scale={job.width}:{job.height}:force_original_aspect_ratio=decrease,"
+            f"pad={job.width}:{job.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
+            f"fps={job.fps},trim=duration={duration_seconds:.6f},setpts=PTS-STARTPTS[bg];"
+            "[0:v:0]format=rgba,setpts=PTS-STARTPTS[ov];"
+            f"[bg][ov]overlay=0:{overlay_y}:format=auto[v]"
+        )
     command = [
         ffmpeg_path,
         "-y",
@@ -385,6 +439,152 @@ def _compute_subtitle_strip(
 
 
 # ---------------------------------------------------------------------------
+# A2 方案 B：多条分离带（顶部标题 + 底部歌词等互不相交的内容块各开一条）
+# ---------------------------------------------------------------------------
+# 单条并集（方案 A）在内容劈成相隔很远的两块时会退化成近全高、不省。方案 B 把
+# 互不相交的内容块拆成多条，竖向打包进**同一条** rawvideo pipe（省去多输入/多
+# pipe 的复杂度），再用 ffmpeg split/crop/overlay 还原到各自原始 y。
+_BAND_MERGE_GAP_PX = 64  # 相邻内容块间隔 ≤ 此值则并成一条（拆开不值当）
+
+
+def _bands_enabled() -> bool:
+    return os.environ.get("KROK_SUBTITLE_RENDER_BANDS", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+
+
+def _merge_intervals(intervals: list[tuple[int, int]], gap: int) -> list[tuple[int, int]]:
+    """把 ``(top, bottom)`` 区间按间隔 ``gap`` 合并；返回排序后的不相交区间。"""
+    if not intervals:
+        return []
+    ordered = sorted(intervals)
+    merged = [ordered[0]]
+    for top, bottom in ordered[1:]:
+        last_top, last_bottom = merged[-1]
+        if top - last_bottom <= gap:
+            merged[-1] = (last_top, max(last_bottom, bottom))
+        else:
+            merged.append((top, bottom))
+    return merged
+
+
+def _packed_offsets(bands: list[tuple[int, int]]) -> list[int]:
+    """各 band 在打包缓冲里的纵向起点（高度累加）。"""
+    offsets: list[int] = []
+    cursor = 0
+    for _top, height in bands:
+        offsets.append(cursor)
+        cursor += height
+    return offsets
+
+
+def _compute_content_bands(
+    job: RenderJob,
+    duration_ms: int,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
+) -> list[tuple[int, int]] | None:
+    """预扫整段，求互不相交的内容块 → 多条 ``(y_top, height)``（方案 B）。
+
+    用 :func:`frame_content_intervals` 拿每帧的逐源（歌词+信号 / 标题）分段区间，
+    跨帧汇总后按 ``_BAND_MERGE_GAP_PX`` 合并成不相交带；任一帧落在未迁移路径
+    （竖排 / viewport 旋转 / 逐字 transition）→ 返回 ``None`` 让上层退回方案 A / 整帧。
+    少于 2 条或打包高度省不下来时也返回 ``None``（交给方案 A 单条）。
+    """
+    width, height = job.width, job.height
+    total_frames = _frame_count(duration_ms, job.fps)
+    times = _strip_sample_times(job.track, job.style, duration_ms, total_frames)
+    if not times:
+        return None
+
+    collected: list[tuple[int, int]] = []
+    for t_ms in times:
+        if should_cancel is not None and should_cancel():
+            return None
+        if not frame_has_content(job.track, t_ms, job.style):
+            continue
+        intervals = frame_content_intervals(width, height, job.track, t_ms, job.style)
+        if intervals is None:
+            return None  # 未迁移路径，方案 B 无法保证不漏像素
+        collected.extend(intervals)
+    if not collected:
+        return None
+
+    merged = _merge_intervals(collected, _BAND_MERGE_GAP_PX)
+    padded = [
+        (max(0, top - _STRIP_MARGIN_PX), min(height - 1, bottom + _STRIP_MARGIN_PX))
+        for top, bottom in merged
+    ]
+    remerged = _merge_intervals(padded, 0)  # 加边后可能首尾相接，再并一次
+    bands: list[tuple[int, int]] = []
+    for top, bottom in remerged:
+        top -= top % 2  # 下取偶
+        band_h = bottom - top + 1
+        if band_h % 2:
+            band_h += 1
+        band_h = min(band_h, height - top)
+        bands.append((top, band_h))
+
+    if len(bands) < 2:
+        return None  # 单块 → 方案 A 单条更简单
+    packed_h = sum(band_h for _top, band_h in bands)
+    if packed_h >= height * _STRIP_MIN_GAIN_RATIO:
+        return None  # 打包后省不了多少，退回方案 A / 整帧
+    return bands
+
+
+def _paint_overlay_bands(
+    buffer: QImage,
+    track: TimingTrack,
+    style: Style,
+    t_ms: int,
+    *,
+    logical_w: int,
+    logical_h: int,
+    bands: list[tuple[int, int]],
+    transparent: QColor,
+) -> None:
+    """把整帧字幕布局画进竖向打包的 ``buffer``（高 = 各 band 高之和）。
+
+    每条 band 占 buffer 里 ``[packed_off, packed_off + height)``，画笔裁到该槽位、
+    上移 ``band_top - packed_off``，于是只有该 band 的原始行落进对应槽位。
+    """
+    buffer.fill(transparent)
+    offsets = _packed_offsets(bands)
+    painter = QPainter(buffer)
+    try:
+        for (band_top, band_h), packed_off in zip(bands, offsets):
+            painter.save()
+            try:
+                painter.setClipRect(0, packed_off, logical_w, band_h)
+                painter.translate(0, packed_off - band_top)
+                paint_frame_to_painter(painter, logical_w, logical_h, track, t_ms, style)
+            finally:
+                painter.restore()
+    finally:
+        painter.end()
+
+
+def _frame_bytes_bands(
+    job: RenderJob,
+    t_ms: int,
+    bands: list[tuple[int, int]],
+    transparent: QColor,
+    buffer: QImage,
+    empty_frame: bytes,
+) -> bytes:
+    """渲染一帧为打包 RGBA 字节：有内容画进复用 ``buffer``，否则返回预存全透明帧。"""
+    if frame_has_content(job.track, t_ms, job.style):
+        _paint_overlay_bands(
+            buffer, job.track, job.style, t_ms,
+            logical_w=job.width, logical_h=job.height,
+            bands=bands, transparent=transparent,
+        )
+        return _image_bytes(buffer)
+    return empty_frame
+
+
+# ---------------------------------------------------------------------------
 # 帧写出：单进程 / 多进程（A3）
 # ---------------------------------------------------------------------------
 
@@ -523,6 +723,98 @@ def _write_frames_multiprocess(
                 on_progress(written, total_frames)
     finally:
         # 无论正常完成 / 取消 / 异常，都强制收掉 workers（imap 可能仍在后台渲染）。
+        pool.terminate()
+        pool.join()
+
+
+def _write_frames_single_bands(
+    process: subprocess.Popen,
+    job: RenderJob,
+    bands: list[tuple[int, int]],
+    packed_h: int,
+    total_frames: int,
+    should_cancel: Callable[[], bool] | None,
+    on_progress: Callable[[int, int], None] | None,
+) -> None:
+    """单进程逐帧渲染（方案 B 打包多带）并按序写入 ffmpeg stdin。"""
+    buffer = QImage(job.width, packed_h, QImage.Format.Format_RGBA8888)
+    transparent = QColor(0, 0, 0, 0)
+    empty_frame = bytes(job.width * packed_h * 4)
+    for index in range(total_frames):
+        if should_cancel is not None and should_cancel():
+            terminate_process(process)
+            raise ExportCancelled("已停止导出。")
+        t_ms = int(round(index * 1000 / job.fps))
+        process.stdin.write(
+            _frame_bytes_bands(job, t_ms, bands, transparent, buffer, empty_frame)
+        )
+        if on_progress is not None:
+            on_progress(index + 1, total_frames)
+
+
+# worker 进程内的多带渲染上下文（spawn 后由 _render_worker_init_bands 建立）。
+_WB_CTX: dict = {}
+
+
+def _render_worker_init_bands(
+    job: RenderJob, bands: list[tuple[int, int]], packed_h: int
+) -> None:
+    from PyQt6.QtWidgets import QApplication
+
+    _WB_CTX["app"] = QApplication.instance() or QApplication([])
+    _WB_CTX["job"] = job
+    _WB_CTX["bands"] = bands
+    _WB_CTX["buffer"] = QImage(job.width, packed_h, QImage.Format.Format_RGBA8888)
+    _WB_CTX["transparent"] = QColor(0, 0, 0, 0)
+    _WB_CTX["empty_frame"] = bytes(job.width * packed_h * 4)
+
+
+def _render_worker_chunk_bands(task: tuple[int, int]) -> bytes:
+    start, count = task
+    job = _WB_CTX["job"]
+    bands = _WB_CTX["bands"]
+    buffer = _WB_CTX["buffer"]
+    transparent = _WB_CTX["transparent"]
+    empty_frame = _WB_CTX["empty_frame"]
+    out = bytearray()
+    for index in range(start, start + count):
+        t_ms = int(round(index * 1000 / job.fps))
+        out += _frame_bytes_bands(job, t_ms, bands, transparent, buffer, empty_frame)
+    return bytes(out)
+
+
+def _write_frames_multiprocess_bands(
+    process: subprocess.Popen,
+    job: RenderJob,
+    bands: list[tuple[int, int]],
+    packed_h: int,
+    total_frames: int,
+    worker_count: int,
+    should_cancel: Callable[[], bool] | None,
+    on_progress: Callable[[int, int], None] | None,
+) -> None:
+    """多进程并行渲染（方案 B 打包多带），主进程用 imap 按序收回写入 ffmpeg stdin。"""
+    import multiprocessing as mp
+
+    chunk = _resolve_chunk_size(job, packed_h, total_frames, worker_count)
+    tasks = [(start, min(chunk, total_frames - start)) for start in range(0, total_frames, chunk)]
+    ctx = mp.get_context("spawn")
+    pool = ctx.Pool(
+        worker_count,
+        initializer=_render_worker_init_bands,
+        initargs=(job, bands, packed_h),
+    )
+    written = 0
+    try:
+        for (_start, count), blob in zip(tasks, pool.imap(_render_worker_chunk_bands, tasks)):
+            if should_cancel is not None and should_cancel():
+                terminate_process(process)
+                raise ExportCancelled("已停止导出。")
+            process.stdin.write(blob)
+            written += count
+            if on_progress is not None:
+                on_progress(written, total_frames)
+    finally:
         pool.terminate()
         pool.join()
 
