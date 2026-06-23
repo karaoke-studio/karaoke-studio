@@ -306,6 +306,38 @@ def test_layout_plain_line_is_pure_t_independent_geometry(qapp):
     assert again.baseline_y == layout.baseline_y
 
 
+def test_layout_role_line_is_pure_geometry_with_per_glyph_fonts(qapp):
+    # P1.a.2：分色行也走纯几何 layout 段，glyph 列表逐段带自身 font（句内混排的地基）。
+    from krok_helper.subtitle_render.engine.painter import _layout_role_line
+
+    line = TimingLine(
+        chars=[
+            TimingChar(text="A", start_ms=1000, role_label="大"),
+            TimingChar(text="B", start_ms=2000, role_label="小"),
+        ],
+        end_ms=3000,
+    )
+    track = TimingTrack(lines=[line])
+    style = Style(
+        font_family="Arial", font_family_latin="Arial", font_size_px=48,
+        line_y_position="center",
+        custom_style_schemes={
+            "大": SubtitleStyleScheme(font_size_px=72),
+            "小": SubtitleStyleScheme(font_size_px=36),
+        },
+    )
+    layout = _layout_role_line(track, line, style, 400, 220)
+
+    assert layout is not None
+    assert len(layout.text_layout.glyphs) == 2
+    # 逐段不同字号 → glyph 各自字体不同（普通行做不到的句内混排）
+    assert layout.text_layout.glyphs[0].font.pixelSize() != layout.text_layout.glyphs[1].font.pixelSize()
+    assert len(layout.fill_segments) >= 1
+    again = _layout_role_line(track, line, style, 400, 220)
+    assert again.char_x_ranges == layout.char_x_ranges
+    assert again.baseline_y == layout.baseline_y
+
+
 def test_paint_frame_with_no_track_leaves_image_unchanged(qapp):
     img = _blank()
     baseline = _pixel_hash(img)

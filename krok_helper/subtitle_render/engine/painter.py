@@ -208,6 +208,27 @@ class _PlainLineLayout:
     rtl: bool
 
 
+@dataclass(frozen=True)
+class _RoleLineLayout:
+    """分色行的纯几何布局（**不依赖 t_ms**）。a.2：与 :class:`_PlainLineLayout` 并列的
+    三段式 layout 段产物。
+
+    ``text_layout`` 是逐段多字体的 glyph 列表（每 glyph 带自身 font/style）；其余几何
+    字段与 ``_PlainLineLayout`` 同名同义。a.3 会把两者合并成单一 glyph-list 模型、统一
+    paint，并退役 :func:`_paint_role_line_static` 这条独立路径。
+    """
+    text_layout: _RoleTextLayout
+    active_rubies: list
+    ruby_font: QFont
+    ruby_metrics: QFontMetrics | None
+    char_widths: list[int]
+    char_x_ranges: list
+    intervals: list
+    fill_segments: list
+    baseline_y: int
+    rtl: bool
+
+
 _UTOPIA_INTRO_TIME_MS = 700
 _UTOPIA_INTRO_DELAY_MS = 200
 _UTOPIA_INTRO_ENLARGE_MS = 400
@@ -2559,22 +2580,61 @@ def _paint_role_line_static(
     display_start_ms: int | None = None,
     display_end_ms: int | None = None,
 ) -> None:
+    # layout 段（纯几何，不依赖 t_ms）：逐段多字体排版 + 基线 + fill_segments。
+    layout = _layout_role_line(
+        track, line, style, img_w, img_h,
+        baseline_y=baseline_y, line_x=line_x, lane=lane,
+    )
+    if layout is None:
+        return
+    # animation 段（依赖 t_ms）：逐字入退场上下文。
+    transition = _line_char_transition_context(
+        style, line, t_ms, display_start_ms, display_end_ms, len(line.chars),
+    )
+
+    if layout.active_rubies and layout.ruby_metrics is not None:
+        _paint_rubies(
+            painter, layout.ruby_font, layout.ruby_metrics, line,
+            layout.intervals, layout.char_x_ranges, layout.baseline_y,
+            t_ms, layout.active_rubies, style, transition,
+            main_ascent_px=layout.text_layout.ascent,
+        )
+
+    if transition is not None:
+        _paint_role_line_with_character_transition(
+            painter, line, layout.text_layout, layout.char_x_ranges, layout.intervals,
+            layout.active_rubies, layout.baseline_y, t_ms, transition, style,
+            rtl=layout.rtl,
+        )
+        return
+
+    # paint 段：消费 layout，逐 run blit 未唱/已唱。
+    _paint_role_line_layers(painter, layout, t_ms)
+
+
+def _layout_role_line(
+    track: TimingTrack,
+    line: TimingLine,
+    style: Style,
+    img_w: int,
+    img_h: int,
+    *,
+    baseline_y: int | None = None,
+    line_x: int | None = None,
+    lane: int | None = None,
+) -> _RoleLineLayout | None:
+    """layout 段：算分色行的纯几何（逐段多字体）+ 基线 + fill_segments（不依赖 t_ms）。"""
     active_rubies = _active_rubies_for_line(track.rubies, line)
     ruby_font = _build_ruby_font(style)
     ruby_metrics = QFontMetrics(ruby_font) if active_rubies else None
     measure_layout = _build_role_text_layout(line, style, x0=0, baseline_y=0)
     if not measure_layout.glyphs:
-        return
+        return None
     visual_pad = _role_visual_text_padding(measure_layout)
     x0 = (
         line_x
         if line_x is not None
-        else _resolve_line_x(
-            img_w,
-            measure_layout.total_width + visual_pad * 2,
-            style,
-            lane,
-        )
+        else _resolve_line_x(img_w, measure_layout.total_width + visual_pad * 2, style, lane)
         + visual_pad
     )
     y = (
@@ -2583,66 +2643,32 @@ def _paint_role_line_static(
         else _resolve_role_baseline_y(measure_layout, img_h, style, ruby_metrics)
     )
     y = _clamp_role_baseline_y(y, measure_layout, img_h, style, ruby_metrics)
-    layout = _build_role_text_layout(line, style, x0=x0, baseline_y=y)
+    text_layout = _build_role_text_layout(line, style, x0=x0, baseline_y=y)
     intervals = compute_char_intervals(line)
-    char_widths, char_x_ranges = _role_char_geometry_by_index(line, layout)
+    char_widths, char_x_ranges = _role_char_geometry_by_index(line, text_layout)
     fill_segments = _karaoke_fill_segments(
-        char_widths,
-        intervals,
-        char_x_ranges,
-        active_rubies,
-        line,
+        char_widths, intervals, char_x_ranges, active_rubies, line,
     )
-    transition = _line_char_transition_context(
-        style,
-        line,
-        t_ms,
-        display_start_ms,
-        display_end_ms,
-        len(line.chars),
+    return _RoleLineLayout(
+        text_layout=text_layout, active_rubies=active_rubies,
+        ruby_font=ruby_font, ruby_metrics=ruby_metrics,
+        char_widths=char_widths, char_x_ranges=char_x_ranges, intervals=intervals,
+        fill_segments=fill_segments, baseline_y=y, rtl=style.right_to_left,
     )
 
-    if active_rubies and ruby_metrics is not None:
-        _paint_rubies(
-            painter,
-            ruby_font,
-            ruby_metrics,
-            line,
-            intervals,
-            char_x_ranges,
-            y,
-            t_ms,
-            active_rubies,
-            style,
-            transition,
-            main_ascent_px=layout.ascent,
-        )
 
-    if transition is not None:
-        _paint_role_line_with_character_transition(
-            painter,
-            line,
-            layout,
-            char_x_ranges,
-            intervals,
-            active_rubies,
-            y,
-            t_ms,
-            transition,
-            style,
-            rtl=style.right_to_left,
-        )
-        return
-
-    runs = _role_glyph_runs(layout)
+def _paint_role_line_layers(
+    painter: QPainter,
+    layout: _RoleLineLayout,
+    t_ms: int,
+) -> None:
+    """paint 段：消费 :class:`_RoleLineLayout`，逐 run blit 未唱层 + 已唱层。"""
+    runs = _role_glyph_runs(layout.text_layout)
+    y = layout.baseline_y
     for run in runs:
         _paint_role_before_run(painter, run, y)
-
-    # Character-level entry/exit effects are still single-font in the old path.
-    # Role lines keep correct mixed-font layout and line-level animation in 3a.
-    rtl = style.right_to_left
     for run in runs:
-        _paint_role_after_run(painter, run, y, fill_segments, t_ms, rtl)
+        _paint_role_after_run(painter, run, y, layout.fill_segments, t_ms, layout.rtl)
 
 
 def _role_run_layer_key(
