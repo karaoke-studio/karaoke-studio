@@ -346,3 +346,50 @@ def test_track_role_options_dedup_in_order():
     )
     track = parse_nicokara_lrc(text)
     assert track.role_options == ["1配色", "2配色"]
+
+
+# ---------------------------------------------------------------------------
+# 真实 nicokara3 文件兼容（对照 SUG submodule NicokaraParser）
+# ---------------------------------------------------------------------------
+
+
+def test_dot_separated_timestamps_are_parsed():
+    # 标准 LRC 点号厘秒 [MM:SS.CC]——旧实现只认冒号，整篇匹配不到 ts → 正文全丢。
+    track = parse_nicokara_lrc("[00:01.00]あ[00:01.50]い[00:02.00]\n")
+    line = track.lines[0]
+    assert "".join(c.text for c in line.chars) == "あい"
+    assert line.chars[0].start_ms == 1_000
+    assert line.chars[1].start_ms == 1_500
+    assert line.end_ms == 2_000
+
+
+def test_millisecond_three_digit_timestamps():
+    # 点号 3 位 = 毫秒（原样），2 位 = 厘秒（×10）。
+    track = parse_nicokara_lrc("[00:01.250]あ[00:01.500]\n")
+    assert track.lines[0].chars[0].start_ms == 1_250
+    assert track.lines[0].end_ms == 1_500
+
+
+def test_leading_text_before_first_timestamp_is_kept():
+    # 行首在第一个 [ts] 之前的字符（连读 / 空格）不能被丢（正文漏字修复）。
+    track = parse_nicokara_lrc(" [00:00:50]あ[00:00:80]い[00:01:00]\n")
+    line = track.lines[0]
+    assert "".join(c.text for c in line.chars) == " あい"
+    assert line.chars[0].text == " "
+    assert line.chars[0].start_ms == 500  # 行首字符以第一个 ts 为起点
+
+
+def test_emoji_tag_not_parsed_as_body_and_kept_in_custom():
+    # @Emoji 行（歌手→图定义）应归入尾部元数据，不污染正文，并保留以便 round-trip。
+    text = (
+        "【sv1】[00:00:50]あ[00:01:00]\n"
+        "\n"
+        "@Emoji=【sv1】,sv1.png,,zoom=110\n"
+        "@Ruby1=亜,あ\n"
+    )
+    track = parse_nicokara_lrc(text)
+    # 正文只有 1 条有字符的行，没有把 @Emoji 当成正文
+    body_text = ["".join(c.text for c in ln.chars) for ln in track.lines if ln.chars]
+    assert body_text == ["あ"]
+    assert any("@Emoji=" in c for c in track.meta.custom)
+    assert len(track.rubies) == 1

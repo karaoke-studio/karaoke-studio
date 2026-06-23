@@ -3,8 +3,11 @@
 输入：SUG ``NicokaraExporter`` 产物（``.lrc``，UTF-8-BOM + CRLF + 含 ``@Ruby`` /
 ``@Offset`` / ``@Title`` 等元数据），输出 :class:`TimingTrack` 中间表示。
 
-SUG submodule 自身没有 Nicokara LRC 的解析器，本模块照 ``nicokara_exporter.py``
-的格式规范反向实现。规范要点（详见导出器源码）：
+本模块照 ``nicokara_exporter.py`` 的格式规范实现，并对齐 SUG submodule 既有的权威
+解析器 ``strange_uta_game.backend.infrastructure.parsers.lyric_parser.NicokaraParser``
+的关键语义（尤其"绝不丢字"：行首/连读等无独立时间戳的字符必须保留）。本模块保留
+本项目特有的"多字均分走字"增强（``_spread_text_starts``），故未直接复用 NicokaraParser。
+规范要点（详见导出器源码）：
 
 - 时间戳 ``[MM:SS:CC]`` 厘秒精度
 - 每个字符前有一个起始时间戳；行末附加结束时间戳
@@ -30,13 +33,17 @@ from krok_helper.subtitle_render.models import (
     TimingTrackMeta,
 )
 
-# ``[MM:SS:CC]`` —— 厘秒，分:秒:厘秒；M 可以是多位
-_TS_RE = re.compile(r"\[(\d+):(\d+):(\d+)\]")
+# 时间戳：``[MM:SS:CC]``（冒号厘秒，nicokara）/ ``[MM:SS.CC]``（点号厘秒，标准 LRC）/
+# ``[MM:SS.mmm]``（点号毫秒，3 位）。秒与子秒间允许 ``:`` 或 ``.``；子秒 2 位=厘秒、3 位=毫秒。
+# 对齐 submodule ``NicokaraParser.FLEXIBLE_TS_PATTERN``——旧实现只认冒号厘秒，导致点号
+# 格式文件整篇匹配不到时间戳、正文被整体丢弃（漏字主因）。
+_TS_RE = re.compile(r"\[(\d+):(\d+)[:.](\d{2,3})\]")
 _SINGER_LABEL_RE = re.compile(r"【([^】]+)】")
-_META_PATTERN = re.compile(
-    r"^\s*@(Title|Artist|Album|TaggingBy|SilencemSec|Offset|Ruby\d+)\b",
-    re.IGNORECASE,
-)
+# 尾部元数据边界：任意 ``@<key>=`` 行（@Title/@Artist/@Album/@TaggingBy/@SilencemSec/
+# @Offset/@RubyN/@Emoji/未知）都视为元数据起点。旧实现只认固定几个标签，导致 @Emoji
+# 等行被当成正文（幻影空行 + 丢失歌手定义）。正文行总以 ``【…】`` 或 ``[ts]`` 开头，
+# 不以 ``@`` 开头，故按 ``@key=`` 判定边界是安全的。
+_META_PATTERN = re.compile(r"^\s*@\w+\s*=", re.IGNORECASE)
 
 
 # ---------------------------------------------------------------------------
@@ -116,8 +123,10 @@ def _split_body_tail(lines: list[str]) -> Tuple[list[str], list[str]]:
 # ---------------------------------------------------------------------------
 
 
-def _ts_to_ms(minutes: str, seconds: str, centiseconds: str) -> int:
-    return (int(minutes) * 60 + int(seconds)) * 1000 + int(centiseconds) * 10
+def _ts_to_ms(minutes: str, seconds: str, sub: str) -> int:
+    # 子秒 2 位=厘秒（×10→ms），3 位=毫秒（原样）。与 submodule _parse_nicokara_timestamp 一致。
+    millis = int(sub) * 10 if len(sub) == 2 else int(sub)
+    return (int(minutes) * 60 + int(seconds)) * 1000 + millis
 
 
 def _tokenize_line(line: str) -> list[tuple[str, object]]:
@@ -177,6 +186,9 @@ def _parse_body_line(
     chars: list[TimingChar] = []
     singer_label: Optional[str] = None
     pending_ts: Optional[int] = None
+    # 行首（第一个 [ts] 之前）的可见字符缓存：连读字 / 行首空格等无独立起始时间戳的
+    # 字符，nicokara 规范里是"与后一字共享时间"，不能丢（旧实现直接忽略 → 正文漏字）。
+    leading_buffer: list[tuple[str, Optional[str]]] = []
 
     for token_index, (ttype, tval) in enumerate(tokens):
         if ttype == "ts":
@@ -199,14 +211,17 @@ def _parse_body_line(
             continue
         # 普通字符：使用前面 pending 的 [ts] 作为起点
         if pending_ts is None:
-            # text 前面没有时间戳：仍然吃掉其中的角色标签（行首标签常在第一个时间戳前），
-            # 其他无时值文本忽略，避免崩。
+            # text 在第一个 [ts] 之前：角色标签照常生效；可见字符**先缓存**（连读 / 行首
+            # 空格等无独立时间戳的字符），等第一个时间戳到来时以该 ts 作为起点补回，
+            # 不再直接丢弃（修复正文行首漏字，对齐 submodule NicokaraParser 的"绝不丢字"）。
             for kind, value in parts:
-                if kind != "role":
+                if kind == "role":
+                    active_role = value
+                    if singer_label is None:
+                        singer_label = active_role
                     continue
-                active_role = value
-                if singer_label is None:
-                    singer_label = active_role
+                for ch in value:
+                    leading_buffer.append((ch, active_role))
             continue
         next_ts = _next_token_ts(tokens, token_index)
         visible_count = sum(len(value) for kind, value in parts if kind == "text")
@@ -218,6 +233,11 @@ def _parse_body_line(
                 if singer_label is None:
                     singer_label = active_role
             continue
+        # 行首缓存字符补回：以本组的起点 ts 作为它们的起始（与本组首字共享时间）。
+        if leading_buffer:
+            for ch, role in leading_buffer:
+                chars.append(TimingChar(text=ch, start_ms=pending_ts, role_label=role))
+            leading_buffer.clear()
         char_starts = _spread_text_starts(pending_ts, next_ts, visible_count)
         start_index = 0
         for kind, value in parts:
@@ -239,6 +259,13 @@ def _parse_body_line(
 
     # tokens 用完后仍剩 pending_ts → 是行末结束时间戳
     end_ms = pending_ts
+
+    # 行内有时间戳、但行首缓存字符一直没机会补回（如 ` [ts]` 仅"行首文本 + 结束 ts"）：
+    # 用行末 ts 作为起点补回，仍不丢字。完全无时间戳的纯文本行保持空行语义（丢弃缓存）。
+    if leading_buffer and end_ms is not None:
+        for ch, role in leading_buffer:
+            chars.append(TimingChar(text=ch, start_ms=end_ms, role_label=role))
+        leading_buffer.clear()
 
     raw = line.strip()
     is_blank = not chars and end_ms is None and singer_label is None and raw == ""
