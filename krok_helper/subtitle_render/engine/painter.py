@@ -217,6 +217,18 @@ class _VerticalLineLayout:
     active_rubies: list[RubyAnnotation]
 
 
+@dataclass(frozen=True)
+class _RubyLayout:
+    """横排 ruby 的纯几何/目标布局（不依赖 t_ms）。"""
+
+    ruby: RubyAnnotation
+    indices: list[int]
+    x: int
+    baseline_y: int
+    target_width: int
+    reading_width: float
+
+
 _UTOPIA_INTRO_TIME_MS = 700
 _UTOPIA_INTRO_DELAY_MS = 200
 _UTOPIA_INTRO_ENLARGE_MS = 400
@@ -4692,20 +4704,23 @@ def _paint_rubies(
     painter.save()
     try:
         painter.setFont(ruby_font)
-        main_ascent = main_ascent_px if main_ascent_px is not None else QFontMetrics(_build_font(style)).ascent()
-        ruby_baseline_y = main_baseline_y - main_ascent - max(style.ruby_gap_px, 0)
-        for ruby in rubies:
-            indices = _ruby_target_indices(ruby, line, intervals)
-            if not indices:
-                continue
-            paint_ruby = _effective_ruby_for_target(ruby, indices, intervals)
-            target_range = _ruby_target_x_range(ruby, line, intervals, char_x_ranges)
-            if target_range is None:
-                continue
-            left, right = target_range
-            target_width = max(right - left, 1)
-            reading_w = _ruby_layout_width(paint_ruby.reading, ruby_metrics, target_width)
-            x = left
+        layouts = _layout_rubies(
+            ruby_metrics,
+            line,
+            intervals,
+            char_x_ranges,
+            main_baseline_y,
+            rubies,
+            style,
+            main_ascent_px=main_ascent_px,
+        )
+        for layout in layouts:
+            indices = layout.indices
+            paint_ruby = layout.ruby
+            x = layout.x
+            ruby_baseline_y = layout.baseline_y
+            target_width = layout.target_width
+            reading_w = layout.reading_width
             opacity, dx, dy, rotation, scale_x, scale_y, skew_y = 1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
             if transition is not None:
                 first_index = min(indices)
@@ -4819,6 +4834,50 @@ def _paint_rubies(
                 painter.restore()
     finally:
         painter.restore()
+
+
+def _layout_rubies(
+    ruby_metrics: QFontMetrics,
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+    char_x_ranges: list[tuple[int, int]],
+    main_baseline_y: int,
+    rubies: list[RubyAnnotation],
+    style: Style,
+    *,
+    main_ascent_px: int | None = None,
+) -> list[_RubyLayout]:
+    """layout 段：算横排 ruby 的目标字符范围、基线与排布宽度。"""
+    if not rubies:
+        return []
+    main_ascent = (
+        main_ascent_px
+        if main_ascent_px is not None
+        else QFontMetrics(_build_font(style)).ascent()
+    )
+    ruby_baseline_y = main_baseline_y - main_ascent - max(style.ruby_gap_px, 0)
+    layouts: list[_RubyLayout] = []
+    for ruby in rubies:
+        indices = _ruby_target_indices(ruby, line, intervals)
+        if not indices:
+            continue
+        paint_ruby = _effective_ruby_for_target(ruby, indices, intervals)
+        target_range = _ruby_target_x_range(ruby, line, intervals, char_x_ranges)
+        if target_range is None:
+            continue
+        left, right = target_range
+        target_width = max(right - left, 1)
+        layouts.append(
+            _RubyLayout(
+                ruby=paint_ruby,
+                indices=indices,
+                x=left,
+                baseline_y=ruby_baseline_y,
+                target_width=target_width,
+                reading_width=_ruby_layout_width(paint_ruby.reading, ruby_metrics, target_width),
+            )
+        )
+    return layouts
 
 
 def _ruby_target_x_range(

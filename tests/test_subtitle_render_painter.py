@@ -36,6 +36,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _fill_clip_band,
     _fill_extent_end,
     _layout_vertical_line,
+    _layout_rubies,
     _resolve_vertical_columns,
     _ruby_utopia_visual_units,
     _vertical_fill_band,
@@ -1604,6 +1605,51 @@ def test_paint_frame_ruby_changes_rendered_frame(qapp):
     paint_frame(img_ruby, _track_with_ruby(), 1500, style)
 
     assert _pixel_hash(img_ruby) != _pixel_hash(img_plain)
+
+
+def test_layout_rubies_is_pure_t_independent_geometry(qapp):
+    track = _track_with_ruby()
+    line = track.lines[0]
+    style = Style(font_size_px=64, ruby_font_size_px=30, line_y_position="center")
+    ruby_font = _build_ruby_font(style)
+    ruby_metrics = QFontMetrics(ruby_font)
+    main_metrics = QFontMetrics(_build_font(style))
+    intervals = [
+        (
+            ch.start_ms,
+            line.chars[index + 1].start_ms
+            if index + 1 < len(line.chars)
+            else line.end_ms,
+        )
+        for index, ch in enumerate(line.chars)
+    ]
+    widths = [main_metrics.horizontalAdvance(ch.text) for ch in line.chars]
+    lefts = _char_left_positions(widths, 100, False)
+    ranges = [(left, left + width) for left, width in zip(lefts, widths)]
+
+    layout = _layout_rubies(
+        ruby_metrics,
+        line,
+        intervals,
+        ranges,
+        300,
+        track.rubies,
+        style,
+    )
+    again = _layout_rubies(
+        ruby_metrics,
+        line,
+        intervals,
+        ranges,
+        300,
+        track.rubies,
+        style,
+    )
+
+    assert layout
+    assert layout == again
+    assert layout[0].target_width > 0
+    assert layout[0].reading_width > 0
 
 
 def test_paint_frame_ruby_k_timing_changes_between_timestamps(qapp):
