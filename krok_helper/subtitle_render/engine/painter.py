@@ -3297,8 +3297,14 @@ def _layout_plain_line(
     char_x_ranges: list[tuple[int, int]] = [
         (left, left + w) for left, w in zip(char_lefts, char_widths)
     ]
+    char_fonts = [
+        (font_for(c.text) if font_for is not None else font) for c in line.chars
+    ]
+    ink_x_ranges = _char_ink_x_ranges(
+        [c.text for c in line.chars], char_fonts, char_lefts,
+    )
     fill_segments = _karaoke_fill_segments(
-        char_widths, intervals, char_x_ranges, active_rubies, line,
+        char_widths, intervals, ink_x_ranges, active_rubies, line,
     )
     line_rect = QRectF(
         float(x0), float(y - metrics.ascent()), float(total_w), float(metrics.height()),
@@ -3669,8 +3675,9 @@ def _layout_role_line(
     text_layout = _build_role_text_layout(line, style, x0=x0, baseline_y=y)
     intervals = compute_char_intervals(line)
     char_widths, char_x_ranges = _role_char_geometry_by_index(line, text_layout)
+    ink_x_ranges = _role_char_ink_ranges_by_index(line, text_layout, char_x_ranges)
     fill_segments = _karaoke_fill_segments(
-        char_widths, intervals, char_x_ranges, active_rubies, line,
+        char_widths, intervals, ink_x_ranges, active_rubies, line,
     )
     return _LineLayout(
         text_layout=text_layout, active_rubies=active_rubies,
@@ -4711,6 +4718,35 @@ def _role_char_geometry_by_index(
             widths[glyph.index] = glyph.width
             ranges[glyph.index] = (glyph.left, glyph.left + glyph.width)
     return widths, ranges
+
+
+def _role_char_ink_ranges_by_index(
+    line: TimingLine,
+    layout: _TextLayout,
+    char_x_ranges: list[tuple[int, int]],
+) -> list[tuple[int, int]]:
+    """分色行各字符的墨水边界（逐 glyph 用各自字体），用于走字扫光。
+
+    缺失/空白字符回退为 advance 框左缘的零宽 ``(left, left)``，与
+    :func:`_char_ink_x_ranges` 同口径（见其 docstring）。
+    """
+    ranges: list[tuple[int, int]] = [(left, left) for left, _ in char_x_ranges]
+    for glyph in layout.glyphs:
+        if not (0 <= glyph.index < len(ranges)):
+            continue
+        text = glyph.text
+        left = glyph.left
+        if not text or text.isspace():
+            ranges[glyph.index] = (left, left)
+            continue
+        path = QPainterPath()
+        path.addText(float(left), 0.0, glyph.font, text)
+        br = path.boundingRect()
+        if br.isEmpty():
+            ranges[glyph.index] = (left, left)
+        else:
+            ranges[glyph.index] = (int(math.floor(br.left())), int(math.ceil(br.right())))
+    return ranges
 
 
 def _line_text_path(
@@ -5759,35 +5795,66 @@ def _legacy_fill_extent_end(
     return fill_end
 
 
+def _char_ink_x_ranges(
+    texts: list[str],
+    fonts: list[QFont],
+    char_lefts: list[int],
+) -> list[tuple[int, int]]:
+    """每个字符的墨水水平边界（绝对坐标 ``(ink_left, ink_right)``）。
+
+    走字（卡拉ok 扫光）严格按字形**墨水**推进，而非按 advance 框。advance 含字形
+    左右两侧的 side bearing 与字间空隙，纯按 advance 走会让扫光锋面与字形墨水错位
+    （字头偏慢——锋面停在左侧空白上墨水迟迟不染；字尾悬空——墨水早已染满而锋面还在
+    右侧空白里推进）。这里用 ``QPainterPath.addText`` 的矢量包围盒取墨水边界：与实际
+    ``fillPath`` 绘制同源、与 DPR/点阵 strike 无关。空白字符无墨水 → 零宽 ``(left, left)``。
+    与 SUG ``karaoke_preview.py`` 的 ``_ink_bounds``（``tightBoundingRect``）同口径。
+    """
+    ranges: list[tuple[int, int]] = []
+    for text, font, left in zip(texts, fonts, char_lefts):
+        if not text or text.isspace():
+            ranges.append((left, left))
+            continue
+        path = QPainterPath()
+        path.addText(float(left), 0.0, font, text)
+        br = path.boundingRect()
+        if br.isEmpty():
+            ranges.append((left, left))
+        else:
+            ranges.append((int(math.floor(br.left())), int(math.ceil(br.right()))))
+    return ranges
+
+
 def _karaoke_fill_segments(
     char_widths: list[int],
     intervals: list[tuple[int, int]],
-    char_x_ranges: list[tuple[int, int]],
+    ink_x_ranges: list[tuple[int, int]],
     active_rubies: list[RubyAnnotation],
     line: TimingLine,
 ) -> list[_FillSegment]:
+    """构造走字分段。``ink_x_ranges`` 为各字符的墨水边界（非 advance 框），
+    扫光锋面据此推进，确保不扫过字形两侧的透明空白（见 :func:`_char_ink_x_ranges`）。"""
     segments: list[_FillSegment] = []
     index = 0
     while index < len(char_widths):
         ruby = _ruby_for_char_index(active_rubies, line, intervals, index)
         if ruby is None:
-            left, right = char_x_ranges[index]
+            left, right = ink_x_ranges[index]
             start, end = intervals[index]
             segments.append(_FillSegment(left=left, right=right, start_ms=start, end_ms=end))
             index += 1
             continue
 
         indices = _ruby_target_indices(ruby, line, intervals)
-        indices = [i for i in indices if 0 <= i < len(char_x_ranges)]
+        indices = [i for i in indices if 0 <= i < len(ink_x_ranges)]
         if not indices:
-            left, right = char_x_ranges[index]
+            left, right = ink_x_ranges[index]
             start, end = intervals[index]
             segments.append(_FillSegment(left=left, right=right, start_ms=start, end_ms=end))
             index += 1
             continue
 
-        left = min(char_x_ranges[i][0] for i in indices)
-        right = max(char_x_ranges[i][1] for i in indices)
+        left = min(ink_x_ranges[i][0] for i in indices)
+        right = max(ink_x_ranges[i][1] for i in indices)
         segments.append(
             _FillSegment(
                 left=left,

@@ -1436,6 +1436,59 @@ def test_utopia_exit_keeps_full_fill_when_ruby_progress_lags(qapp):
     assert blue == 0, f"退场词不应残留未唱(蓝)底色，却有 {blue} 像素被裁出 before 层"
 
 
+def test_static_wipe_segments_use_ink_bounds_not_advance(qapp):
+    """走字（扫光）按字形墨水包围盒推进，而非 advance 框。
+
+    advance 含两侧 side bearing 与字间空隙，纯按 advance 走会让扫光锋面与字形墨水
+    错位（字头偏慢、字尾悬空）。与 SUG karaoke_preview.py 的 _ink_bounds 同口径。
+    回退到 advance 会使 fill_segment 等于 advance 框 → 本测试失败。
+    """
+    import math  # noqa: PLC0415
+
+    from PyQt6.QtGui import QPainterPath  # noqa: E402,PLC0415
+
+    line = TimingLine(
+        chars=[
+            TimingChar(text="W", start_ms=1000),
+            TimingChar(text="A", start_ms=1500),
+        ],
+        end_ms=2000,
+    )
+    track = TimingTrack(lines=[line])
+    style = Style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=96,
+        line_y_position="center",
+        letter_spacing_px=40,  # 显式字间距 → advance/排版框明显宽于墨水
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+    )
+    layout = _layout_line(track, line, style, 600, 240)
+    assert layout is not None
+    assert len(layout.fill_segments) == len(line.chars)
+
+    font = _build_font(style)
+    any_strictly_narrower = False
+    for idx, ch in enumerate(line.chars):
+        seg = layout.fill_segments[idx]
+        adv_left, adv_right = layout.char_x_ranges[idx]
+        # 墨水段必须落在 advance 框内
+        assert adv_left <= seg.left <= seg.right <= adv_right
+        # 且与该字形的矢量墨水包围盒（与 fillPath 同源）一致
+        path = QPainterPath()
+        path.addText(float(adv_left), 0.0, font, ch.text)
+        br = path.boundingRect()
+        assert seg.left == int(math.floor(br.left()))
+        assert seg.right == int(math.ceil(br.right()))
+        if (seg.left, seg.right) != (adv_left, adv_right):
+            any_strictly_narrower = True
+    # 至少一个字形墨水严格窄于 advance 框 → 证明确实按墨水而非 advance 走字
+    assert any_strictly_narrower
+
+
 def test_paint_frame_glow_decoration_changes_rendered_frame(qapp):
     img_plain = _blank()
     img_glow = _blank()
