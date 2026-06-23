@@ -38,6 +38,8 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _fill_extent_end,
     _layout_vertical_line,
     _layout_rubies,
+    _layout_line,
+    _ruby_layer_stack,
     _resolve_vertical_columns,
     _ruby_utopia_visual_units,
     _vertical_fill_band,
@@ -1733,6 +1735,17 @@ def test_ruby_text_layer_static_key_ignores_timing_progress(qapp):
     assert after_early.static_key(ctx, after_early) == after_late.static_key(
         ctx, after_late
     )
+
+
+def test_ruby_layer_stack_builds_from_line_layout(qapp):
+    track = _track_with_ruby()
+    line = track.lines[0]
+    style = Style(font_size_px=64, ruby_font_size_px=30, line_y_position="center")
+    layout = _layout_line(track, line, style, 640, 360)
+
+    layers = _ruby_layer_stack(layout, line, 1500, style)
+
+    assert len(layers) == 2
 
 
 def test_paint_frame_ruby_k_timing_changes_between_timestamps(qapp):

@@ -5524,13 +5524,12 @@ def _ruby_layer_stack(
     if layout.ruby_metrics is None:
         return []
     ruby_layouts = _layout_rubies(
+        layout.ruby_metrics,
         line,
         layout.intervals,
         layout.char_x_ranges,
-        layout.active_rubies,
-        layout.ruby_metrics,
         layout.baseline_y,
-        layout.rtl,
+        layout.active_rubies,
         style,
         main_ascent_px=layout.text_layout.ascent if layout.has_inline_styles else None,
     )
