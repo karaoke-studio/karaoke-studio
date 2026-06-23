@@ -66,6 +66,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _ruby_utopia_reading_units_and_intervals,
     _transition_char_state,
     _utopia_main_group_for_index,
+    _utopia_transition_scope_layers,
     _visual_text_padding,
     _display_style_for_signal_window,
     _effective_ruby_for_target,
@@ -76,7 +77,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     frame_vertical_bounds,
     clear_before_layer_cache,
 )
-from krok_helper.subtitle_render.engine.layers import LayerContext  # noqa: E402
+from krok_helper.subtitle_render.engine.layers import LayerCompositor, LayerContext, SCOPE_GROUP  # noqa: E402
 from krok_helper.subtitle_render.engine.timeline import DisplayLine  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
     KaraokeColors,
@@ -2085,6 +2086,54 @@ def test_utopia_groups_main_characters_that_share_one_ruby(qapp):
     assert group[0] == [0, 1]
     assert _utopia_main_group_for_index([ruby], line, intervals, 1) == group
     assert _utopia_main_group_for_index([ruby], line, intervals, 2) is None
+
+
+def test_utopia_scope_layers_group_shared_ruby_main_text(qapp):
+    track = _track_with_ruby()
+    line = track.lines[0]
+    style = Style(font_size_px=48, line_y_position="center", exit_anim="utopia")
+    layout = _layout_line(track, line, style, 420, 220)
+    assert layout is not None
+    transition = _LineCharTransition(
+        phase="utopia",
+        effect="utopia",
+        progress=1.0,
+        start_ms=1000,
+        end_ms=2500,
+    )
+
+    layers = _utopia_transition_scope_layers(layout, line, style, 1750, transition, 220)
+    boxes = LayerCompositor().scope_boxes(
+        LayerContext(t_ms=1750, logical_w=420, logical_h=220),
+        layers,
+    )
+    main_boxes = [
+        box
+        for box in boxes
+        if box.scope == SCOPE_GROUP
+        and box.scope_id is not None
+        and box.scope_id[1] == "main"
+        and box.scope_id[4] == (0, 1)
+    ]
+
+    assert len(main_boxes) == 1
+    assert main_boxes[0].layer_count == 2
+    assert main_boxes[0].rect.height() > 0
+
+
+def test_frame_vertical_bounds_covers_utopia_transition_pixels(qapp):
+    track = _track_with_ruby()
+    style = Style(font_size_px=48, line_y_position="center", exit_anim="utopia")
+    t_ms = 1750
+
+    bounds = frame_vertical_bounds(420, 220, track, t_ms, style)
+    assert bounds is not None
+    image = _blank(420, 220)
+    paint_frame(image, track, t_ms, style)
+    _left, top, _right, bottom = _ink_bounds(image)
+
+    assert bounds[0] <= top
+    assert bounds[1] >= bottom
 
 
 def test_ruby_layout_spreads_reading_units_across_wide_target(qapp):

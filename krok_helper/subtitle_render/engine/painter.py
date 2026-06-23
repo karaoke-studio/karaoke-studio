@@ -58,6 +58,7 @@ from krok_helper.subtitle_render.engine.layers import (
     LayerCache,
     LayerCompositor,
     LayerContext,
+    SCOPE_GROUP,
     SCOPE_LINE,
 )
 
@@ -1046,6 +1047,22 @@ def _display_line_vertical_bounds(
         len(line.chars),
     )
     if transition is not None:
+        if transition.effect == "utopia":
+            ctx = LayerContext(t_ms=track_t_ms, logical_w=logical_w, logical_h=logical_h)
+            line_bounds = _TEXT_RUN_COMPOSITOR.vertical_bounds(
+                ctx,
+                _utopia_transition_scope_layers(
+                    layout,
+                    line,
+                    line_style,
+                    track_t_ms,
+                    transition,
+                    logical_h,
+                ),
+            )
+            if line_bounds is not None:
+                dy = int(math.floor(animation.dy)) if animation.dy < 0 else int(math.ceil(animation.dy))
+                return line_bounds[0] + dy, line_bounds[1] + dy
         return None
 
     ctx = LayerContext(t_ms=track_t_ms, logical_w=logical_w, logical_h=logical_h)
@@ -3430,6 +3447,345 @@ class _GlyphRunAfterGlowLayer:
             _glow_radius(role_style, after=True),
         )
         return int(math.floor(rect.top() - pad)), int(math.ceil(rect.bottom() + pad))
+
+
+@dataclass(frozen=True)
+class _ScopeBoundsLayer:
+    """Bounds-only layer used while a dynamic effect is not yet fully layerized."""
+
+    rect: QRectF
+    scope_id: Hashable
+    z_index: int = 0
+    scope: str = SCOPE_GROUP
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "_ScopeBoundsLayer":
+        return self
+
+    def static_key(self, ctx: LayerContext, layout: object) -> Hashable | None:
+        return None
+
+    def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
+        raise AssertionError("bounds-only layers are never baked")
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        return LayerAnimation(clip_rect=self.rect)
+
+    def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
+        return
+
+    def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
+        return int(math.floor(self.rect.top())), int(math.ceil(self.rect.bottom()))
+
+
+def _utopia_transition_scope_layers(
+    layout: _LineLayout,
+    line: TimingLine,
+    style: Style,
+    t_ms: int,
+    transition: _LineCharTransition,
+    frame_height: int,
+) -> list[_ScopeBoundsLayer]:
+    """Return conservative group-scope bounds for the existing utopia dynamic path."""
+    if transition.effect != "utopia":
+        return []
+    layers = _utopia_main_scope_layers(layout, line, style, t_ms, transition, frame_height)
+    if layout.active_rubies and layout.ruby_metrics is not None:
+        layers.extend(
+            _utopia_ruby_scope_layers(layout, line, style, t_ms, transition, frame_height)
+        )
+    return layers
+
+
+def _utopia_main_scope_layers(
+    layout: _LineLayout,
+    line: TimingLine,
+    style: Style,
+    t_ms: int,
+    transition: _LineCharTransition,
+    frame_height: int,
+) -> list[_ScopeBoundsLayer]:
+    glyphs_by_index = _role_glyphs_by_index(line, layout.text_layout)
+    count = max(len(line.chars), 1)
+    layers: list[_ScopeBoundsLayer] = []
+    handled_indices: set[int] = set()
+    for index in range(len(line.chars)):
+        if index in handled_indices:
+            continue
+        if index >= len(layout.intervals) or index >= len(layout.char_x_ranges):
+            continue
+        if index >= len(glyphs_by_index) or glyphs_by_index[index] is None:
+            continue
+        group = _utopia_main_group_for_index(layout.active_rubies, line, layout.intervals, index)
+        group_ruby: RubyAnnotation | None = None
+        group_scope_indices: list[int] | None = None
+        group_done_ms: int | None = None
+        if group is not None:
+            group_scope_indices, group_ruby = group
+            group_done_ms = _utopia_following_done_time(
+                line, layout.intervals, group_scope_indices[-1], style
+            )
+            group_exiting = t_ms > group_done_ms
+            if group_exiting and index != group_scope_indices[0]:
+                continue
+            if group_exiting:
+                indices = [
+                    i
+                    for i in group_scope_indices
+                    if i < len(layout.intervals)
+                    and i < len(layout.char_x_ranges)
+                    and i < len(glyphs_by_index)
+                    and glyphs_by_index[i] is not None
+                ]
+                handled_indices.update(indices[1:])
+            else:
+                indices = [index]
+        else:
+            indices = [index]
+            group_scope_indices = indices
+
+        if not indices:
+            continue
+        first_index = indices[0]
+        last_index = indices[-1]
+        following_done_ms = (
+            group_done_ms
+            if group_done_ms is not None
+            else _utopia_following_done_time(line, layout.intervals, last_index, style)
+        )
+        opacity, dx, dy, rotation, scale_x, scale_y, skew_y = _transition_char_state(
+            style,
+            transition,
+            first_index,
+            count,
+            char_start_ms=layout.intervals[first_index][0],
+            char_end_ms=layout.intervals[last_index][1],
+            t_ms=t_ms,
+            frame_height=frame_height,
+            following_done_ms=following_done_ms,
+        )
+        if opacity <= 0.0:
+            continue
+        group_glyphs = [glyphs_by_index[i] for i in indices if glyphs_by_index[i] is not None]
+        if not group_glyphs:
+            continue
+        left = min(layout.char_x_ranges[i][0] for i in indices)
+        right = max(layout.char_x_ranges[i][1] for i in indices)
+        width = max(right - left, 1)
+        group_rect = _glyph_run_rect(group_glyphs, layout.baseline_y)
+        transform = _character_transform(
+            center_x=left + width / 2,
+            center_y=group_rect.top() + group_rect.height() / 2,
+            dx=dx,
+            dy=dy,
+            rotation=rotation,
+            scale_x=scale_x,
+            scale_y=scale_y,
+            skew_y=skew_y,
+            scale_origin_x=left,
+            scale_origin_y=layout.baseline_y,
+        )
+        rect = transform.map(_glyph_run_path(group_glyphs, layout.baseline_y)).boundingRect()
+        pad = max(
+            _text_visual_padding(glyph.style, after=False) for glyph in group_glyphs
+        )
+        pad = max(
+            pad,
+            max(_text_visual_padding(glyph.style, after=True) for glyph in group_glyphs),
+        )
+        layers.append(
+            _ScopeBoundsLayer(
+                _inflate_rect(rect, pad),
+                _utopia_scope_id(line, group_scope_indices, group_ruby, "main"),
+                z_index=index,
+            )
+        )
+    return layers
+
+
+def _utopia_ruby_scope_layers(
+    layout: _LineLayout,
+    line: TimingLine,
+    style: Style,
+    t_ms: int,
+    transition: _LineCharTransition,
+    frame_height: int,
+) -> list[_ScopeBoundsLayer]:
+    if layout.ruby_metrics is None:
+        return []
+    ruby_layouts = _layout_rubies(
+        layout.ruby_metrics,
+        line,
+        layout.intervals,
+        layout.char_x_ranges,
+        layout.baseline_y,
+        layout.active_rubies,
+        style,
+        main_ascent_px=layout.text_layout.ascent if layout.has_inline_styles else None,
+    )
+    layers: list[_ScopeBoundsLayer] = []
+    for index, ruby_layout in enumerate(ruby_layouts):
+        if not ruby_layout.indices:
+            continue
+        rect = _utopia_ruby_scope_rect(
+            ruby_layout,
+            layout.ruby_font,
+            layout.ruby_metrics,
+            line,
+            layout.intervals,
+            layout.rtl,
+            style,
+            t_ms,
+            transition,
+            frame_height,
+        )
+        if rect is None:
+            continue
+        pad = max(_ruby_visual_padding(style, after=False), _ruby_visual_padding(style, after=True))
+        layers.append(
+            _ScopeBoundsLayer(
+                _inflate_rect(rect, pad),
+                _utopia_scope_id(line, ruby_layout.indices, ruby_layout.ruby, "ruby"),
+                z_index=10_000 + index,
+            )
+        )
+    return layers
+
+
+def _utopia_ruby_scope_rect(
+    layout: _RubyLayout,
+    ruby_font: QFont,
+    ruby_metrics: QFontMetrics,
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+    rtl: bool,
+    style: Style,
+    t_ms: int,
+    transition: _LineCharTransition,
+    frame_height: int,
+) -> QRectF | None:
+    first_index = min(layout.indices)
+    last_index = max(layout.indices)
+    if first_index >= len(intervals) or last_index >= len(intervals):
+        return None
+    following_done_ms = _utopia_following_done_time(line, intervals, last_index, style)
+    opacity, dx, dy, rotation, scale_x, scale_y, skew_y = _transition_char_state(
+        style,
+        transition,
+        first_index,
+        max(len(line.chars), 1),
+        char_start_ms=intervals[first_index][0],
+        char_end_ms=intervals[last_index][1],
+        t_ms=t_ms,
+        frame_height=frame_height,
+        following_done_ms=following_done_ms,
+    )
+    if opacity <= 0.0:
+        return None
+    group_exiting = len(layout.indices) > 1 and t_ms > following_done_ms
+    if group_exiting:
+        reading = (
+            "".join(reversed(_ruby_utopia_visual_units(layout.ruby.reading)))
+            if rtl
+            else layout.ruby.reading
+        )
+        path, _ = _ruby_text_path_and_rect(
+            reading,
+            ruby_font,
+            ruby_metrics,
+            layout.x,
+            layout.baseline_y,
+            layout.target_width,
+        )
+        transform = _character_transform(
+            center_x=layout.x + layout.reading_width / 2,
+            center_y=layout.baseline_y - ruby_metrics.ascent() + ruby_metrics.height() / 2,
+            dx=dx,
+            dy=dy,
+            rotation=rotation,
+            scale_x=scale_x,
+            scale_y=scale_y,
+            skew_y=skew_y,
+            scale_origin_x=layout.x,
+            scale_origin_y=layout.baseline_y,
+        )
+        return transform.map(path).boundingRect()
+
+    visual_units = _ruby_utopia_reading_units_and_intervals(layout.ruby)
+    if rtl:
+        visual_units = list(reversed(visual_units))
+    units = [unit for unit, _interval in visual_units]
+    unit_intervals = [interval for _unit, interval in visual_units]
+    if not units or len(units) != len(unit_intervals):
+        path, _ = _ruby_text_path_and_rect(
+            layout.ruby.reading,
+            ruby_font,
+            ruby_metrics,
+            layout.x,
+            layout.baseline_y,
+            layout.target_width,
+        )
+        return path.boundingRect()
+
+    rect: QRectF | None = None
+    for (unit, unit_x, unit_width), (start_ms, end_ms) in zip(
+        _ruby_layout_units(units, ruby_metrics, layout.x, layout.target_width),
+        unit_intervals,
+    ):
+        opacity, dx, dy, rotation, scale_x, scale_y, skew_y = _transition_char_state(
+            style,
+            transition,
+            first_index,
+            max(len(line.chars), 1),
+            char_start_ms=start_ms,
+            char_end_ms=end_ms,
+            t_ms=t_ms,
+            frame_height=frame_height,
+            following_done_ms=following_done_ms,
+        )
+        if opacity <= 0.0:
+            continue
+        path = QPainterPath()
+        path.addText(float(unit_x), float(layout.baseline_y), ruby_font, unit)
+        transform = _character_transform(
+            center_x=unit_x + unit_width / 2,
+            center_y=layout.baseline_y - ruby_metrics.ascent() + ruby_metrics.height() / 2,
+            dx=dx,
+            dy=dy,
+            rotation=rotation,
+            scale_x=scale_x,
+            scale_y=scale_y,
+            skew_y=skew_y,
+            scale_origin_x=unit_x,
+            scale_origin_y=layout.baseline_y,
+        )
+        unit_rect = transform.map(path).boundingRect()
+        rect = unit_rect if rect is None else rect.united(unit_rect)
+    return rect
+
+
+def _utopia_scope_id(
+    line: TimingLine,
+    indices: list[int],
+    ruby: RubyAnnotation | None,
+    kind: str,
+) -> tuple:
+    return (
+        "utopia",
+        kind,
+        _line_start_ms(line),
+        _line_end_ms(line),
+        tuple(indices),
+        ruby.kanji if ruby is not None else "",
+        ruby.reading if ruby is not None else "",
+    )
+
+
+def _inflate_rect(rect: QRectF, pad: int | float) -> QRectF:
+    pad_f = float(max(pad, 0))
+    return rect.adjusted(-pad_f, -pad_f, pad_f, pad_f)
 
 
 def _glyph_run_layer_key(

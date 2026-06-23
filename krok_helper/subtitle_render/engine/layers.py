@@ -32,6 +32,21 @@ class LayerContext:
 
 
 @dataclass(frozen=True)
+class LayerScopeBox:
+    """Geometry aggregate for one effect scope.
+
+    P1.b' keeps this deliberately small: enough to group layers by
+    glyph/line/group/frame and query a conservative 2D box for later
+    cross-line effects such as utopia.
+    """
+
+    scope: LayerScope
+    rect: QRectF
+    scope_id: Hashable | None = None
+    layer_count: int = 1
+
+
+@dataclass(frozen=True)
 class BakedLayer:
     """A time-independent transparent bitmap produced by ``SubtitleLayer.bake``."""
 
@@ -140,22 +155,103 @@ class LayerCompositor:
     def vertical_bounds(
         self, ctx: LayerContext, layers: list[SubtitleLayer]
     ) -> tuple[int, int] | None:
-        bounds: list[tuple[int, int]] = []
+        bounds = [
+            (int(box.rect.top()), int(box.rect.bottom()))
+            for box in self.scope_boxes(ctx, layers)
+        ]
+        if not bounds:
+            return None
+        return min(top for top, _ in bounds), max(bottom for _, bottom in bounds)
+
+    def scope_boxes(
+        self, ctx: LayerContext, layers: list[SubtitleLayer]
+    ) -> list[LayerScopeBox]:
+        boxes: dict[tuple[LayerScope, Hashable | None], LayerScopeBox] = {}
         for layer in layers:
             if not _is_layer_active(layer, ctx):
                 continue
             layout = layer.layout(ctx)
-            layer_bounds = layer.vertical_bounds(ctx, layout)
-            if layer_bounds is not None:
-                bounds.append(layer_bounds)
-        if not bounds:
-            return None
-        return min(top for top, _ in bounds), max(bottom for _, bottom in bounds)
+            rect = _layer_scope_rect(layer, ctx, layout)
+            if rect is None:
+                continue
+            scope = getattr(layer, "scope", SCOPE_LINE)
+            scope_id = getattr(layer, "scope_id", None)
+            key = (scope, scope_id)
+            current = boxes.get(key)
+            if current is None:
+                boxes[key] = LayerScopeBox(
+                    scope=scope,
+                    rect=rect,
+                    scope_id=scope_id,
+                    layer_count=1,
+                )
+            else:
+                boxes[key] = LayerScopeBox(
+                    scope=scope,
+                    rect=current.rect.united(rect),
+                    scope_id=scope_id,
+                    layer_count=current.layer_count + 1,
+                )
+        return [boxes[key] for key in _ordered_scope_keys(boxes)]
+
+    def scope_rect(
+        self,
+        ctx: LayerContext,
+        layers: list[SubtitleLayer],
+        scope: LayerScope,
+        scope_id: Hashable | None = None,
+    ) -> QRectF | None:
+        for box in self.scope_boxes(ctx, layers):
+            if box.scope == scope and box.scope_id == scope_id:
+                return QRectF(box.rect)
+        return None
 
 
 def _is_layer_active(layer: SubtitleLayer, ctx: LayerContext) -> bool:
     windows = layer.active_window(ctx)
     return not windows or any(start <= ctx.t_ms <= end for start, end in windows)
+
+
+def _layer_scope_rect(
+    layer: SubtitleLayer,
+    ctx: LayerContext,
+    layout: object,
+) -> QRectF | None:
+    bounds = layer.vertical_bounds(ctx, layout)
+    if bounds is None:
+        return None
+    top, bottom = bounds
+    if bottom < top:
+        return None
+    scope = getattr(layer, "scope", SCOPE_LINE)
+    if scope == SCOPE_FRAME:
+        return QRectF(0.0, float(top), float(max(ctx.logical_w, 1)), float(bottom - top))
+    animation = layer.animate(ctx, layout)
+    clip = animation.clip_rect
+    if clip is not None and not clip.isNull():
+        left = clip.left()
+        right = clip.right()
+    else:
+        left = 0.0
+        right = float(max(ctx.logical_w, 1))
+    return QRectF(
+        float(left),
+        float(top),
+        float(max(right - left, 1.0)),
+        float(max(bottom - top, 1)),
+    )
+
+
+def _ordered_scope_keys(
+    boxes: dict[tuple[LayerScope, Hashable | None], LayerScopeBox]
+) -> list[tuple[LayerScope, Hashable | None]]:
+    order = [SCOPE_GLYPH, SCOPE_LINE, SCOPE_GROUP, SCOPE_FRAME]
+    scope_rank = {scope: index for index, scope in enumerate(order)}
+    known = [key for key in boxes if key[0] in scope_rank]
+    extra = [key for key in boxes if key[0] not in scope_rank]
+    known.sort(key=lambda key: (scope_rank[key[0]], "" if key[1] is None else repr(key[1])))
+    extra.sort(key=lambda key: (key[0], "" if key[1] is None else repr(key[1])))
+    return known + extra
 
 
 def _paint_baked_layer(

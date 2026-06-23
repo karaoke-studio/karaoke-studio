@@ -17,6 +17,7 @@ from krok_helper.subtitle_render.engine.layers import (  # noqa: E402
     LayerCache,
     LayerCompositor,
     LayerContext,
+    SCOPE_GROUP,
     SCOPE_LINE,
 )
 
@@ -28,6 +29,7 @@ class _SolidLayer:
     z_index: int = 0
     key: Hashable = "solid"
     scope: str = SCOPE_LINE
+    scope_id: Hashable | None = None
     bake_count: int = 0
 
     def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
@@ -174,3 +176,57 @@ def test_layer_compositor_unions_vertical_bounds():
         LayerContext(t_ms=100, logical_w=32, logical_h=24),
         [low, high],
     ) == (2, 18)
+
+
+def test_layer_compositor_groups_scope_boxes_by_scope():
+    line = _SolidLayer("#FF0000", QPointF(0.0, 10.0), scope=SCOPE_LINE)
+    group_a = _SolidLayer("#00FF00", QPointF(0.0, 2.0), scope=SCOPE_GROUP)
+    group_b = _SolidLayer("#0000FF", QPointF(0.0, 18.0), scope=SCOPE_GROUP)
+
+    boxes = LayerCompositor().scope_boxes(
+        LayerContext(t_ms=100, logical_w=32, logical_h=48),
+        [line, group_a, group_b],
+    )
+
+    assert [box.scope for box in boxes] == [SCOPE_LINE, SCOPE_GROUP]
+    assert boxes[0].layer_count == 1
+    assert boxes[1].layer_count == 2
+    assert int(boxes[1].rect.top()) == 2
+    assert int(boxes[1].rect.bottom()) == 26
+
+
+def test_layer_compositor_keeps_scope_ids_separate():
+    group_a_top = _SolidLayer(
+        "#FF0000", QPointF(0.0, 2.0), scope=SCOPE_GROUP, scope_id="phrase-a"
+    )
+    group_a_bottom = _SolidLayer(
+        "#00FF00", QPointF(0.0, 18.0), scope=SCOPE_GROUP, scope_id="phrase-a"
+    )
+    group_b = _SolidLayer(
+        "#0000FF", QPointF(0.0, 10.0), scope=SCOPE_GROUP, scope_id="phrase-b"
+    )
+    ctx = LayerContext(t_ms=100, logical_w=32, logical_h=48)
+    compositor = LayerCompositor()
+
+    boxes = compositor.scope_boxes(ctx, [group_b, group_a_bottom, group_a_top])
+
+    assert [(box.scope, box.scope_id) for box in boxes] == [
+        (SCOPE_GROUP, "phrase-a"),
+        (SCOPE_GROUP, "phrase-b"),
+    ]
+    assert boxes[0].layer_count == 2
+    assert int(boxes[0].rect.top()) == 2
+    assert int(boxes[0].rect.bottom()) == 26
+    rect = compositor.scope_rect(ctx, [group_a_top, group_a_bottom], SCOPE_GROUP, "phrase-a")
+    assert rect is not None
+    assert int(rect.top()) == 2
+    assert int(rect.bottom()) == 26
+
+
+def test_layer_compositor_ignores_inactive_scope_boxes():
+    layer = _WindowedLayer("#00FF00", QPointF(4.0, 5.0), scope=SCOPE_GROUP)
+
+    assert LayerCompositor().scope_boxes(
+        LayerContext(t_ms=50, logical_w=32, logical_h=24),
+        [layer],
+    ) == []
