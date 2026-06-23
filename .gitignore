@@ -11,6 +11,9 @@ venv/
 env/
 ENV/
 
+# Render benchmark artifacts (scripts/bench_render.py)
+.bench/
+
 # Tooling caches
 .cache/
 .mypy_cache/
