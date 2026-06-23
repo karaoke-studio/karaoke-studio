@@ -4577,10 +4577,20 @@ def _paint_role_line_with_character_transition(
             paint_left = int(round(group_clip_rect.left()))
             paint_width = max(int(round(group_clip_rect.width())), 1)
 
-        ratio = (
-            _ruby_progress_ratio(group_ruby, t_ms)
-            if group_ruby is not None
-            else _character_fill_ratio(
+        # utopia 退场阶段整词早已唱完：强制 ratio=1.0，避免对已旋转/翻转的字形再按设备空间
+        # 水平带裁切已唱层而把部分着色裁掉（详见 _paint_line_with_character_transition 同处注释）。
+        in_utopia_exit = (
+            transition.effect == "utopia"
+            and style.exit_anim == "utopia"
+            and following_done_ms is not None
+            and t_ms > following_done_ms
+        )
+        if in_utopia_exit:
+            ratio = 1.0
+        elif group_ruby is not None:
+            ratio = _ruby_progress_ratio(group_ruby, t_ms)
+        else:
+            ratio = _character_fill_ratio(
                 line,
                 intervals,
                 char_x_ranges,
@@ -4588,7 +4598,6 @@ def _paint_role_line_with_character_transition(
                 index,
                 t_ms,
             )
-        )
         for run in _glyph_runs_for_indices(glyphs_by_index, indices):
             role_style = run[0].style
             colors = _effective_karaoke_colors(role_style)
@@ -4849,6 +4858,25 @@ def _paint_line_with_character_transition(
         if opacity <= 0.0:
             continue
 
+        # utopia 退场阶段整词早已唱完：强制 fill_ratio=1.0。否则 _paint_char_karaoke_stack 会按
+        # 设备空间的水平带裁切「已唱(after)层」，而退场时字形已被旋转/翻转（rotation 最大 -180°、
+        # x_flip），水平带与字形朝向脱钩，会把部分笔画的着色裁掉（着色被褪掉一部分的 bug）。
+        # 退场时卡拉ok扫光本无意义，整词应作为「已唱」整体淡出/旋出。
+        in_utopia_exit = (
+            transition.effect == "utopia"
+            and style.exit_anim == "utopia"
+            and following_done_ms is not None
+            and t_ms > following_done_ms
+        )
+        if in_utopia_exit:
+            fill_ratio = 1.0
+        elif group_ruby is not None:
+            fill_ratio = _ruby_progress_ratio(group_ruby, t_ms)
+        else:
+            fill_ratio = _character_fill_ratio(
+                line, intervals, char_x_ranges, active_rubies, index, t_ms
+            )
+
         path = QPainterPath()
         for char_index in indices:
             glyph = line.chars[char_index]
@@ -4882,13 +4910,7 @@ def _paint_line_with_character_transition(
                 paint_clip_rect = paint_rect
                 if _utopia_bake_enabled():
                     # P1.c-1（opt-in）：bake+变换 替代逐帧光栅化（普通行 → 构造单 run glyph 列表）。
-                    ratio_value = (
-                        _ruby_progress_ratio(group_ruby, t_ms)
-                        if group_ruby is not None
-                        else _character_fill_ratio(
-                            line, intervals, char_x_ranges, active_rubies, index, t_ms
-                        )
-                    )
+                    ratio_value = fill_ratio
                     group_glyphs = [
                         _GlyphLayout(
                             index=ci,
@@ -4938,18 +4960,7 @@ def _paint_line_with_character_transition(
                 metrics=metrics,
                 colors=colors,
                 style=style,
-                ratio=(
-                    _ruby_progress_ratio(group_ruby, t_ms)
-                    if group_ruby is not None
-                    else _character_fill_ratio(
-                        line,
-                        intervals,
-                        char_x_ranges,
-                        active_rubies,
-                        index,
-                        t_ms,
-                    )
-                ),
+                ratio=fill_ratio,
                 rtl=rtl,
                 clip_rect=paint_clip_rect,
             )

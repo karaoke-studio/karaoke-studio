@@ -1367,6 +1367,75 @@ def test_inline_role_utopia_exit_handles_multi_kanji_ruby_group(qapp):
     assert _pixel_hash(char_fade) != _pixel_hash(utopia)
 
 
+def _solid_color_pixel_count(img: QImage, *, r: int, g: int, b: int) -> int:
+    """统计接近指定纯色（且不透明）的像素数，用于区分 before/after 着色层。"""
+    rgba = img.convertToFormat(QImage.Format.Format_RGBA8888)
+    bits = rgba.constBits()
+    bits.setsize(rgba.sizeInBytes())
+    arr = np.frombuffer(bytes(bits), dtype=np.uint8).reshape(rgba.height(), rgba.width(), 4)
+    mask = (
+        (np.abs(arr[:, :, 0].astype(int) - r) < 50)
+        & (np.abs(arr[:, :, 1].astype(int) - g) < 50)
+        & (np.abs(arr[:, :, 2].astype(int) - b) < 50)
+        & (arr[:, :, 3] > 180)
+    )
+    return int(np.count_nonzero(mask))
+
+
+def test_utopia_exit_keeps_full_fill_when_ruby_progress_lags(qapp):
+    """退场阶段整词应作为「已唱」整体淡出：不得因卡拉ok扫光 ratio<1 把部分着色裁掉。
+
+    复现 bug：ruby 读音时长比正文字符区间长，使退场起点处 _ruby_progress_ratio<1.0；
+    修复前 _paint_char_karaoke_stack 会对已被退场变换旋转的字形按设备空间水平带裁切
+    「已唱(after)层」，露出 before 底色 → 着色被褪掉一部分。修复后退场强制 ratio=1.0。
+    """
+    line = TimingLine(
+        chars=[
+            TimingChar(text="A", start_ms=1000),
+            TimingChar(text="B", start_ms=1500),
+        ],
+        end_ms=2000,
+    )
+    track = TimingTrack(
+        lines=[line],
+        rubies=[
+            RubyAnnotation(
+                kanji="AB",
+                reading="ab",
+                # 读音区间远长于正文（pos_end 远在未来）→ 退场起点处 ruby 进度仍 <1.0
+                pos_start_ms=1000,
+                pos_end_ms=6000,
+            )
+        ],
+    )
+    style = Style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=96,
+        line_y_position="center",
+        line_tail_ms=2000,  # tail_delay=2000-750=1250 → group_done=2000+1250=3250
+        exit_anim="utopia",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=_solid_fill("#0000FF")),  # 未唱=蓝
+            after=KaraokeColorState(text=_solid_fill("#FF0000")),  # 已唱=红
+        ),
+    )
+
+    # t=3300 处于退场窗口 (group_done=3250, display_end=line_end+tail=4000)，
+    # 此时 ruby 进度 = (3300-1000)/(6000-1000) ≈ 0.46（修复前会触发水平裁切）。
+    img = _blank(520, 260)
+    paint_frame(img, track, 3300, style)
+
+    red = _solid_color_pixel_count(img, r=255, g=0, b=0)
+    blue = _solid_color_pixel_count(img, r=0, g=0, b=255)
+    assert red > 0, "退场词应当被渲染（已唱红色）"
+    assert blue == 0, f"退场词不应残留未唱(蓝)底色，却有 {blue} 像素被裁出 before 层"
+
+
 def test_paint_frame_glow_decoration_changes_rendered_frame(qapp):
     img_plain = _blank()
     img_glow = _blank()
