@@ -12,6 +12,7 @@ from __future__ import annotations
 import os
 from dataclasses import replace
 
+import numpy as np
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -2878,3 +2879,53 @@ def test_utopia_bake_default_off_unchanged(qapp, monkeypatch):
     clear_before_layer_cache()
     paint_frame(_blank(), track, 1600, _utopia_style())
     assert len(_UTOPIA_BAKE_CACHE) == 0
+
+
+# ---------------------------------------------------------------------------
+# 竖排（縦書き）整条路径迁入 LayerCompositor（主文本 + ruby），与直绘像素一致
+# ---------------------------------------------------------------------------
+
+
+def _img_rows_rgba(image: QImage) -> np.ndarray:
+    img = image.convertToFormat(QImage.Format.Format_RGBA8888)
+    h, w = img.height(), img.width()
+    bpl = img.bytesPerLine()
+    ptr = img.constBits()
+    ptr.setsize(img.sizeInBytes())
+    arr = np.frombuffer(ptr, dtype=np.uint8, count=bpl * h).reshape(h, bpl)
+    return arr[:, : w * 4].copy()
+
+
+@pytest.mark.parametrize("t_ms", [800, 1200, 1700, 2100, 2600])
+def test_vertical_layer_path_matches_direct_within_rounding(qapp, monkeypatch, t_ms):
+    # 竖排迁入 LayerCompositor（bake 缓存）与逐帧直绘**几何完全一致**，仅 premultiplied-alpha
+    # 取整带来的 ≤1/255 单通道差异（与横排迁移同性质，肉眼不可见）。
+    track = _track_with_ruby()
+    style = Style(vertical=True, line_y_position="center", stroke_width_px=3, decoration_kind="glow")
+
+    monkeypatch.setenv("KROK_SUBTITLE_VERTICAL_LAYER", "0")
+    clear_before_layer_cache()
+    direct = _blank()
+    paint_frame(direct, track, t_ms, style)
+
+    monkeypatch.setenv("KROK_SUBTITLE_VERTICAL_LAYER", "1")
+    clear_before_layer_cache()
+    layers = _blank()
+    paint_frame(layers, track, t_ms, style)
+    clear_before_layer_cache()
+
+    diff = np.abs(_img_rows_rgba(direct).astype(int) - _img_rows_rgba(layers).astype(int))
+    assert diff.max() <= 1  # 几何精确，仅 LSB 取整差异
+
+
+def test_vertical_layer_populates_and_clears_cache(qapp, monkeypatch):
+    from krok_helper.subtitle_render.engine.painter import _TEXT_RUN_LAYER_CACHE
+
+    track = _track_with_ruby()
+    style = Style(vertical=True, line_y_position="center", stroke_width_px=3)
+    monkeypatch.setenv("KROK_SUBTITLE_VERTICAL_LAYER", "1")
+    clear_before_layer_cache()
+    paint_frame(_blank(), track, 1700, style)
+    assert len(_TEXT_RUN_LAYER_CACHE) > 0
+    clear_before_layer_cache()
+    assert len(_TEXT_RUN_LAYER_CACHE) == 0

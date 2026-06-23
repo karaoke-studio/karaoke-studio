@@ -86,6 +86,18 @@ def _utopia_bake_enabled() -> bool:
     return os.environ.get("KROK_SUBTITLE_UTOPIA_BAKE", "0").strip().lower() in (
         "1", "true", "yes", "on",
     )
+
+
+def _vertical_layer_enabled() -> bool:
+    """竖排（縦書き）整条路径（主文本 + ruby）走 LayerCompositor + bake 缓存。
+
+    默认开启：与横排一致地把 before/after/ruby 烘焙成位图缓存，逐帧只 blit + clip，
+    省掉每帧重光栅化。``KROK_SUBTITLE_VERTICAL_LAYER=0`` 回退到旧的逐帧直绘路径
+    （亦作像素一致性 A/B oracle）。
+    """
+    return os.environ.get("KROK_SUBTITLE_VERTICAL_LAYER", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
 _RUBY_COMBINING_CHARS = set("ぁぃぅぇぉゃゅょゎァィゥェォャュョヮ\u3099\u309A")
 
 
@@ -2417,6 +2429,127 @@ def _resolve_vertical_top(img_h: int, block_h: int, style: Style) -> int:
     return img_h - margin - block_h  # bottom（默认）
 
 
+def _build_baked_path_stack(
+    path: QPainterPath,
+    rect: QRectF,
+    state: KaraokeColorState,
+    style: Style,
+    *,
+    stroke_width: int,
+    stroke2_width: int,
+    shadow_dx: int,
+    shadow_dy: int,
+    glow_radius: int,
+) -> tuple[QImage, int, int] | None:
+    """把一次 :func:`_paint_text_layer_stack` 烘焙成透明 QImage（整数对齐 → 贴出像素一致）。
+
+    返回 ``(image, ox, oy)``：``ox/oy`` 为整数 blit 偏移，``drawImage(QPointF(ox,oy), image)``
+    时字形落回原坐标，与直绘逐像素一致（pad/偏移均取整、blit 偏移为整数 → 不重采样）。
+    """
+    is_glow = style.decoration_kind == "glow"
+    stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
+    glow_extra = _glow_extent(stroke_width, stroke2_width, glow_radius) if is_glow else 0
+    extent = max(stroke_extent, glow_extra, 0) + 4
+    pad_left = max(0, -shadow_dx) + extent
+    pad_right = max(0, shadow_dx) + extent
+    pad_top = max(0, -shadow_dy) + extent
+    pad_bottom = max(0, shadow_dy) + extent
+
+    pbr = path.boundingRect()
+    if pbr.isEmpty():
+        return None
+    left_i = math.floor(pbr.left())
+    top_i = math.floor(pbr.top())
+    right_i = math.ceil(pbr.right())
+    bottom_i = math.ceil(pbr.bottom())
+    img_w = max((right_i - left_i) + pad_left + pad_right, 1)
+    img_h = max((bottom_i - top_i) + pad_top + pad_bottom, 1)
+    ox = left_i - pad_left
+    oy = top_i - pad_top
+
+    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+    p = QPainter(image)
+    try:
+        p.setRenderHints(
+            QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing
+        )
+        p.translate(-ox, -oy)
+        _paint_text_layer_stack(
+            p, path, rect, state, style,
+            stroke_width=stroke_width, stroke2_width=stroke2_width,
+            shadow_dx=shadow_dx, shadow_dy=shadow_dy, glow_radius=glow_radius,
+        )
+    finally:
+        p.end()
+    return image, ox, oy
+
+
+@dataclass(frozen=True)
+class _BakedPathStackLayer:
+    """通用「烘焙 path 栈」层：把一次 ``_paint_text_layer_stack`` 烘焙成位图缓存，逐帧
+    只 blit + 可选 clip 带。竖排主文本 / 竖排 ruby 共用（其几何已是 QPainterPath + clip）。"""
+
+    path: QPainterPath
+    rect: QRectF
+    state: KaraokeColorState
+    style: Style
+    cache_key: tuple
+    stroke_width: int
+    stroke2_width: int
+    shadow_dx: int
+    shadow_dy: int
+    glow_radius: int
+    clip_rect: QRectF | None = None
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "_BakedPathStackLayer":
+        return self
+
+    def static_key(self, ctx: LayerContext, layout: object) -> tuple:
+        return self.cache_key
+
+    def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
+        built = _build_baked_path_stack(
+            self.path, self.rect, self.state, self.style,
+            stroke_width=self.stroke_width, stroke2_width=self.stroke2_width,
+            shadow_dx=self.shadow_dx, shadow_dy=self.shadow_dy, glow_radius=self.glow_radius,
+        )
+        if built is None:
+            return BakedLayer(image=QImage(), offset=QPointF())
+        image, ox, oy = built
+        return BakedLayer(image=image, offset=QPointF(float(ox), float(oy)))
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        return LayerAnimation(top_left=QPointF(0.0, 0.0), clip_rect=self.clip_rect)
+
+    def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
+        return
+
+    def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
+        pbr = self.path.boundingRect()
+        if pbr.isEmpty():
+            return None
+        is_glow = self.style.decoration_kind == "glow"
+        extent = max(
+            _visual_stroke_extent(self.stroke_width, self.stroke2_width),
+            _glow_extent(self.stroke_width, self.stroke2_width, self.glow_radius) if is_glow else 0,
+            abs(self.shadow_dy), 0,
+        ) + 4
+        top = int(math.floor(pbr.top())) - extent
+        bottom = int(math.ceil(pbr.bottom())) + extent
+        if self.clip_rect is not None:
+            top = max(top, int(math.floor(self.clip_rect.top())))
+            bottom = min(bottom, int(math.ceil(self.clip_rect.bottom())))
+        if bottom < top:
+            return None
+        return top, bottom
+
+
 def _paint_line_vertical(
     painter: QPainter,
     img_w: int,
@@ -2429,11 +2562,29 @@ def _paint_line_vertical(
     column_x: int | None,
     lane: int | None = None,
 ) -> None:
-    """竖排单列渲染：字符上→下堆叠、卡拉ok 扫光上→下。"""
+    """竖排单列渲染：字符上→下堆叠、卡拉ok 扫光上→下。
+
+    默认走 :func:`_paint_line_vertical_layers`（整条路径迁入 LayerCompositor + bake 缓存，
+    与横排一致）；``KROK_SUBTITLE_VERTICAL_LAYER=0`` 回退到 :func:`_paint_line_vertical_direct`
+    逐帧直绘（亦作像素一致性 oracle）。两条路径像素一致。
+    """
     layout = _layout_vertical_line(track, line, style, img_w, img_h, column_x=column_x)
     if layout is None:
         return
+    if _vertical_layer_enabled():
+        _paint_line_vertical_layers(painter, layout, line, t_ms, style)
+    else:
+        _paint_line_vertical_direct(painter, layout, line, t_ms, style)
 
+
+def _paint_line_vertical_direct(
+    painter: QPainter,
+    layout: _VerticalLineLayout,
+    line: TimingLine,
+    t_ms: int,
+    style: Style,
+) -> None:
+    """竖排逐帧直绘（旧路径，A/B oracle + env 回退）。"""
     # 「未唱」层
     _paint_text_layer_stack(
         painter,
@@ -2452,22 +2603,11 @@ def _paint_line_vertical(
     band = _vertical_fill_band(layout.cells, layout.intervals, t_ms)
     if band is not None:
         y0, y_scan = band
-        pad = max(
-            _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px),
-            _glow_extent(style.stroke_width_px, style.stroke2_width_px, _glow_radius(style, after=True)) if style.decoration_kind == "glow" else 0,
-            abs(style.shadow_offset_x),
-            abs(style.shadow_offset_y),
-            2,
-        )
+        pad = _vertical_after_clip_pad(style)
         painter.save()
         try:
             painter.setClipRect(
-                QRectF(
-                    float(layout.column_x - layout.cell_w / 2 - pad),
-                    float(y0 - pad),
-                    float(layout.cell_w + pad * 2),
-                    float((y_scan - y0) + pad),
-                )
+                _vertical_after_clip_rect(layout.column_x, layout.cell_w, y0, y_scan, pad)
             )
             _paint_text_layer_stack(
                 painter,
@@ -2500,6 +2640,257 @@ def _paint_line_vertical(
             layout.active_rubies,
             style,
         )
+
+
+def _vertical_after_clip_pad(style: Style) -> int:
+    return max(
+        _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px),
+        _glow_extent(style.stroke_width_px, style.stroke2_width_px, _glow_radius(style, after=True))
+        if style.decoration_kind == "glow"
+        else 0,
+        abs(style.shadow_offset_x),
+        abs(style.shadow_offset_y),
+        2,
+    )
+
+
+def _vertical_after_clip_rect(
+    column_x: int, cell_w: int, y0: int, y_scan: int, pad: int
+) -> QRectF:
+    return QRectF(
+        float(column_x - cell_w / 2 - pad),
+        float(y0 - pad),
+        float(cell_w + pad * 2),
+        float((y_scan - y0) + pad),
+    )
+
+
+def _paint_line_vertical_layers(
+    painter: QPainter,
+    layout: _VerticalLineLayout,
+    line: TimingLine,
+    t_ms: int,
+    style: Style,
+) -> None:
+    """竖排经 LayerCompositor 绘制：主文本/ruby 的 before/after 烘焙成位图缓存，逐帧
+    只 blit + 纵向扫光带 clip。与 :func:`_paint_line_vertical_direct` 像素一致。"""
+    layers = _vertical_layer_stack(layout, line, t_ms, style)
+    if not layers:
+        return
+    _TEXT_RUN_COMPOSITOR.paint_ordered(
+        painter, LayerContext(t_ms=t_ms, logical_w=0, logical_h=0), layers
+    )
+
+
+def _vertical_main_path_sig(line: TimingLine, style: Style, layout: _VerticalLineLayout) -> tuple:
+    return (
+        "vmain",
+        tuple(ch.text for ch in line.chars),
+        style.font_family,
+        style.font_family_latin,
+        style.font_size_px,
+        int(style.font_weight),
+        style.italic,
+        layout.column_x,
+        layout.y_top,
+        layout.cell_w,
+        layout.cell_h,
+        layout.ascent,
+    )
+
+
+def _baked_stack_key(
+    path_sig: tuple,
+    rect: QRectF,
+    state: KaraokeColorState,
+    style: Style,
+    *,
+    stroke_width: int,
+    stroke2_width: int,
+    shadow_dx: int,
+    shadow_dy: int,
+    glow_radius: int,
+    after: bool,
+) -> tuple:
+    return (
+        path_sig,
+        int(round(rect.left())),
+        int(round(rect.top())),
+        int(round(rect.width())),
+        int(round(rect.height())),
+        _karaoke_state_signature(state),
+        style.decoration_kind,
+        stroke_width,
+        stroke2_width,
+        shadow_dx,
+        shadow_dy,
+        glow_radius,
+        after,
+    )
+
+
+def _vertical_layer_stack(
+    layout: _VerticalLineLayout,
+    line: TimingLine,
+    t_ms: int,
+    style: Style,
+) -> list:
+    layers: list = []
+    main_sig = _vertical_main_path_sig(line, style, layout)
+    layers.append(
+        _BakedPathStackLayer(
+            path=layout.text_path,
+            rect=layout.line_rect,
+            state=layout.colors.before,
+            style=style,
+            cache_key=_baked_stack_key(
+                main_sig, layout.line_rect, layout.colors.before, style,
+                stroke_width=style.stroke_width_px, stroke2_width=style.stroke2_width_px,
+                shadow_dx=style.shadow_offset_x, shadow_dy=style.shadow_offset_y,
+                glow_radius=_glow_radius(style, after=False), after=False,
+            ),
+            stroke_width=style.stroke_width_px,
+            stroke2_width=style.stroke2_width_px,
+            shadow_dx=style.shadow_offset_x,
+            shadow_dy=style.shadow_offset_y,
+            glow_radius=_glow_radius(style, after=False),
+            clip_rect=None,
+            z_index=0,
+        )
+    )
+    band = _vertical_fill_band(layout.cells, layout.intervals, t_ms)
+    if band is not None:
+        y0, y_scan = band
+        pad = _vertical_after_clip_pad(style)
+        layers.append(
+            _BakedPathStackLayer(
+                path=layout.text_path,
+                rect=layout.line_rect,
+                state=layout.colors.after,
+                style=style,
+                cache_key=_baked_stack_key(
+                    main_sig, layout.line_rect, layout.colors.after, style,
+                    stroke_width=style.stroke_width_px, stroke2_width=style.stroke2_width_px,
+                    shadow_dx=style.shadow_offset_x, shadow_dy=style.shadow_offset_y,
+                    glow_radius=_glow_radius(style, after=True), after=True,
+                ),
+                stroke_width=style.stroke_width_px,
+                stroke2_width=style.stroke2_width_px,
+                shadow_dx=style.shadow_offset_x,
+                shadow_dy=style.shadow_offset_y,
+                glow_radius=_glow_radius(style, after=True),
+                clip_rect=_vertical_after_clip_rect(layout.column_x, layout.cell_w, y0, y_scan, pad),
+                z_index=1,
+            )
+        )
+    if layout.active_rubies:
+        layers.extend(_vertical_ruby_layers(layout, line, t_ms, style))
+    return layers
+
+
+def _vertical_ruby_layers(
+    layout: _VerticalLineLayout,
+    line: TimingLine,
+    t_ms: int,
+    style: Style,
+) -> list:
+    cells = layout.cells
+    if not cells:
+        return []
+    ruby_font = _build_ruby_font(style)
+    ruby_metrics = QFontMetrics(ruby_font)
+    scale = _ruby_scale(style)
+    stroke_width = _scaled_px(style.stroke_width_px, scale)
+    stroke2_width = _scaled_px(style.stroke2_width_px, scale)
+    shadow_dx = _scaled_signed_px(style.shadow_offset_x, scale)
+    shadow_dy = _scaled_signed_px(style.shadow_offset_y, scale)
+    before_glow_radius = _scaled_glow_radius(style, scale, after=False)
+    after_glow_radius = _scaled_glow_radius(style, scale, after=True)
+    colors = _effective_ruby_karaoke_colors(style)
+    ruby_cell_w = _vertical_cell_width(ruby_metrics)
+    ruby_ascent = ruby_metrics.ascent()
+    ruby_x = int(
+        round(layout.column_x + layout.cell_w / 2 + max(style.ruby_gap_px, 0) + ruby_cell_w / 2)
+    )
+    ruby_font_sig = (
+        ruby_font.family(), ruby_font.pixelSize(), int(ruby_font.weight()), ruby_font.italic(),
+    )
+
+    layers: list = []
+    z = 2
+    for ruby in layout.active_rubies:
+        indices = [i for i in _ruby_target_indices(ruby, line, layout.intervals) if 0 <= i < len(cells)]
+        if not indices:
+            continue
+        units = _ruby_utopia_visual_units(ruby.reading)
+        if not units:
+            continue
+        base_top = cells[min(indices)][0]
+        base_bottom = cells[max(indices)][1]
+        span_h = base_bottom - base_top
+        count = len(units)
+
+        ruby_path = QPainterPath()
+        for unit_index, unit in enumerate(units):
+            slot_top = base_top + span_h * unit_index / count
+            slot_h = span_h / count
+            ruby_path.addPath(
+                _vertical_glyph_path(
+                    unit, ruby_font, ruby_metrics, ruby_x,
+                    int(round(slot_top)), ruby_cell_w, max(int(round(slot_h)), 1), ruby_ascent,
+                )
+            )
+        ruby_rect = QRectF(
+            float(ruby_x - ruby_cell_w / 2), float(base_top), float(ruby_cell_w), float(span_h),
+        )
+        ruby_sig = (
+            "vruby", ruby.kanji, ruby.reading, tuple(units), ruby_font_sig,
+            ruby_x, base_top, span_h, count,
+        )
+        layers.append(
+            _BakedPathStackLayer(
+                path=ruby_path, rect=ruby_rect, state=colors.before, style=style,
+                cache_key=_baked_stack_key(
+                    ruby_sig, ruby_rect, colors.before, style,
+                    stroke_width=stroke_width, stroke2_width=stroke2_width,
+                    shadow_dx=shadow_dx, shadow_dy=shadow_dy,
+                    glow_radius=before_glow_radius, after=False,
+                ),
+                stroke_width=stroke_width, stroke2_width=stroke2_width,
+                shadow_dx=shadow_dx, shadow_dy=shadow_dy, glow_radius=before_glow_radius,
+                clip_rect=None, z_index=z,
+            )
+        )
+        z += 1
+        ratio = _ruby_progress_ratio(ruby, t_ms)
+        if ratio <= 0.0:
+            continue
+        scan_y = base_top + span_h * min(ratio, 1.0)
+        pad = max(
+            _visual_stroke_extent(stroke_width, stroke2_width),
+            _glow_extent(stroke_width, stroke2_width, after_glow_radius) if style.decoration_kind == "glow" else 0,
+            abs(shadow_dx), abs(shadow_dy), 2,
+        )
+        clip = QRectF(
+            float(ruby_x - ruby_cell_w / 2 - pad), float(base_top - pad),
+            float(ruby_cell_w + pad * 2), float((scan_y - base_top) + pad),
+        )
+        layers.append(
+            _BakedPathStackLayer(
+                path=ruby_path, rect=ruby_rect, state=colors.after, style=style,
+                cache_key=_baked_stack_key(
+                    ruby_sig, ruby_rect, colors.after, style,
+                    stroke_width=stroke_width, stroke2_width=stroke2_width,
+                    shadow_dx=shadow_dx, shadow_dy=shadow_dy,
+                    glow_radius=after_glow_radius, after=True,
+                ),
+                stroke_width=stroke_width, stroke2_width=stroke2_width,
+                shadow_dx=shadow_dx, shadow_dy=shadow_dy, glow_radius=after_glow_radius,
+                clip_rect=clip, z_index=z,
+            )
+        )
+        z += 1
+    return layers
 
 
 def _layout_vertical_line(
