@@ -35,6 +35,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _character_fill_ratio,
     _fill_clip_band,
     _fill_extent_end,
+    _layout_vertical_line,
     _resolve_vertical_columns,
     _ruby_utopia_visual_units,
     _vertical_fill_band,
@@ -996,6 +997,26 @@ def test_vertical_fill_band_grows_downward(qapp):
     assert _vertical_fill_band(cells, intervals, 500) == (100, 150)
     # t=1500：第一字满 + 第二字一半 → 扫到 250
     assert _vertical_fill_band(cells, intervals, 1500) == (100, 250)
+
+
+def test_layout_vertical_line_is_pure_t_independent_geometry(qapp):
+    track = _track()
+    style = Style(vertical=True, line_y_position="center")
+    line = track.lines[0]
+
+    layout = _layout_vertical_line(track, line, style, 320, 180, column_x=None)
+
+    assert layout is not None
+    assert layout.column_x > 0
+    assert layout.y_top >= 0
+    assert len(layout.cells) == len(line.chars)
+    assert len(layout.intervals) == len(line.chars)
+    assert not layout.text_path.isEmpty()
+    again = _layout_vertical_line(track, line, style, 320, 180, column_x=None)
+    assert again is not None
+    assert again.column_x == layout.column_x
+    assert again.cells == layout.cells
+    assert again.line_rect == layout.line_rect
 
 
 def test_vertical_render_is_taller_than_wide_and_differs(qapp):

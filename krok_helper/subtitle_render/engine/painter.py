@@ -189,6 +189,26 @@ class _LineLayout:
     has_inline_styles: bool
 
 
+@dataclass(frozen=True)
+class _VerticalLineLayout:
+    """竖排行的纯几何布局（不依赖 t_ms）。"""
+
+    font: QFont
+    metrics: QFontMetrics
+    cell_w: int
+    cell_h: int
+    ascent: int
+    column_x: int
+    y_top: int
+    block_h: int
+    intervals: list[tuple[int, int]]
+    cells: list[tuple[int, int]]
+    line_rect: QRectF
+    text_path: QPainterPath
+    colors: KaraokeColors
+    active_rubies: list[RubyAnnotation]
+
+
 _UTOPIA_INTRO_TIME_MS = 700
 _UTOPIA_INTRO_DELAY_MS = 200
 _UTOPIA_INTRO_ENLARGE_MS = 400
@@ -1767,57 +1787,16 @@ def _paint_line_vertical(
     lane: int | None = None,
 ) -> None:
     """竖排单列渲染：字符上→下堆叠、卡拉ok 扫光上→下。"""
-    chars = line.chars
-    if not chars:
+    layout = _layout_vertical_line(track, line, style, img_w, img_h, column_x=column_x)
+    if layout is None:
         return
-    font = _build_font(style)
-    painter.setFont(font)
-    metrics = QFontMetrics(font)
-    latin_font = _build_latin_font(style)
-    font_for = _make_font_for(style, font, latin_font)
-    latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
-    cell_w = _vertical_cell_width(metrics)
-    cell_h = metrics.height()
-    ascent = metrics.ascent()
-
-    if column_x is None:
-        column_x = int(round(img_w - max(style.line_y_margin_px, 0) - cell_w / 2))
-
-    block_h = cell_h * len(chars)
-    y_top = _resolve_vertical_top(img_h, block_h, style)
-    intervals = compute_char_intervals(line)
-    colors = _effective_karaoke_colors(style)
-
-    vline_path = QPainterPath()
-    cells: list[tuple[int, int]] = []
-    for index, ch in enumerate(chars):
-        cell_top = y_top + index * cell_h
-        cells.append((cell_top, cell_top + cell_h))
-        glyph_font = font_for(ch.text) if font_for is not None else font
-        glyph_metrics = (
-            latin_metrics
-            if (font_for is not None and ch.text and ch.text.isascii())
-            else metrics
-        )
-        vline_path.addPath(
-            _vertical_glyph_path(
-                ch.text, glyph_font, glyph_metrics, column_x, cell_top, cell_w, cell_h, ascent
-            )
-        )
-
-    line_rect = QRectF(
-        float(column_x - cell_w / 2),
-        float(y_top),
-        float(cell_w),
-        float(block_h),
-    )
 
     # 「未唱」层
     _paint_text_layer_stack(
         painter,
-        vline_path,
-        line_rect,
-        colors.before,
+        layout.text_path,
+        layout.line_rect,
+        layout.colors.before,
         style,
         stroke_width=style.stroke_width_px,
         stroke2_width=style.stroke2_width_px,
@@ -1827,7 +1806,7 @@ def _paint_line_vertical(
     )
 
     # 「已唱」层：纵向裁剪带 [y_top, scan]
-    band = _vertical_fill_band(cells, intervals, t_ms)
+    band = _vertical_fill_band(layout.cells, layout.intervals, t_ms)
     if band is not None:
         y0, y_scan = band
         pad = max(
@@ -1841,17 +1820,17 @@ def _paint_line_vertical(
         try:
             painter.setClipRect(
                 QRectF(
-                    float(column_x - cell_w / 2 - pad),
+                    float(layout.column_x - layout.cell_w / 2 - pad),
                     float(y0 - pad),
-                    float(cell_w + pad * 2),
+                    float(layout.cell_w + pad * 2),
                     float((y_scan - y0) + pad),
                 )
             )
             _paint_text_layer_stack(
                 painter,
-                vline_path,
-                line_rect,
-                colors.after,
+                layout.text_path,
+                layout.line_rect,
+                layout.colors.after,
                 style,
                 stroke_width=style.stroke_width_px,
                 stroke2_width=style.stroke2_width_px,
@@ -1863,22 +1842,101 @@ def _paint_line_vertical(
             painter.restore()
 
     # 注音：排在基字列右侧、上→下扫光
-    active_rubies = _active_rubies_for_line(track.rubies, line)
-    if active_rubies:
+    if layout.active_rubies:
         ruby_font = _build_ruby_font(style)
         _paint_rubies_vertical(
             painter,
             ruby_font,
             QFontMetrics(ruby_font),
             line,
-            intervals,
-            cells,
-            column_x,
-            cell_w,
+            layout.intervals,
+            layout.cells,
+            layout.column_x,
+            layout.cell_w,
             t_ms,
-            active_rubies,
+            layout.active_rubies,
             style,
         )
+
+
+def _layout_vertical_line(
+    track: TimingTrack,
+    line: TimingLine,
+    style: Style,
+    img_w: int,
+    img_h: int,
+    *,
+    column_x: int | None,
+) -> _VerticalLineLayout | None:
+    """layout 段：算竖排行的列几何 / 字符格 / 字形路径（不依赖 t_ms）。"""
+    chars = line.chars
+    if not chars:
+        return None
+    font = _build_font(style)
+    metrics = QFontMetrics(font)
+    latin_font = _build_latin_font(style)
+    font_for = _make_font_for(style, font, latin_font)
+    latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
+    cell_w = _vertical_cell_width(metrics)
+    cell_h = metrics.height()
+    ascent = metrics.ascent()
+
+    resolved_column_x = (
+        column_x
+        if column_x is not None
+        else int(round(img_w - max(style.line_y_margin_px, 0) - cell_w / 2))
+    )
+    block_h = cell_h * len(chars)
+    y_top = _resolve_vertical_top(img_h, block_h, style)
+    intervals = compute_char_intervals(line)
+    colors = _effective_karaoke_colors(style)
+
+    text_path = QPainterPath()
+    cells: list[tuple[int, int]] = []
+    for index, ch in enumerate(chars):
+        cell_top = y_top + index * cell_h
+        cells.append((cell_top, cell_top + cell_h))
+        glyph_font = font_for(ch.text) if font_for is not None else font
+        glyph_metrics = (
+            latin_metrics
+            if (font_for is not None and ch.text and ch.text.isascii())
+            else metrics
+        )
+        text_path.addPath(
+            _vertical_glyph_path(
+                ch.text,
+                glyph_font,
+                glyph_metrics,
+                resolved_column_x,
+                cell_top,
+                cell_w,
+                cell_h,
+                ascent,
+            )
+        )
+
+    line_rect = QRectF(
+        float(resolved_column_x - cell_w / 2),
+        float(y_top),
+        float(cell_w),
+        float(block_h),
+    )
+    return _VerticalLineLayout(
+        font=font,
+        metrics=metrics,
+        cell_w=cell_w,
+        cell_h=cell_h,
+        ascent=ascent,
+        column_x=resolved_column_x,
+        y_top=y_top,
+        block_h=block_h,
+        intervals=intervals,
+        cells=cells,
+        line_rect=line_rect,
+        text_path=text_path,
+        colors=colors,
+        active_rubies=_active_rubies_for_line(track.rubies, line),
+    )
 
 
 def _paint_rubies_vertical(
