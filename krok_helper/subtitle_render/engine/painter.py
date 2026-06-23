@@ -72,6 +72,20 @@ _IMAGE_FILL_LOCK = Lock()
 # 各烘焙一次；逐帧只按扫光半平面 clip blit。
 _TEXT_RUN_LAYER_CACHE = LayerCache(max_items=128)
 _TEXT_RUN_COMPOSITOR = LayerCompositor(_TEXT_RUN_LAYER_CACHE)
+# P1.c-1（默认关）：ユートピア 逐字仿射跳动改「bake 一次 + 逐帧变换」。实测 utopia 逐帧
+# 瓶颈是光栅化（strokePath/fillPath/glow），bake 后逐帧只 blit+QTransform，预计 ~4×。
+# 代价：bake 位图经变换缩放会引入极小边缘抗锯齿软化（超采样压到几乎不可见，但非零），
+# 属改变 flagship 观感，故**默认关**，env ``KROK_SUBTITLE_UTOPIA_BAKE=1`` 显式开启换提速。
+_UTOPIA_BAKE_SUPERSAMPLE = 2.0  # 覆盖入场 1.3× 过冲且始终降采样 → 锐利
+_UTOPIA_BAKE_CACHE_MAX = 64
+_UTOPIA_BAKE_CACHE: "OrderedDict[tuple, tuple[QImage, int, int]]" = OrderedDict()
+_UTOPIA_BAKE_LOCK = Lock()
+
+
+def _utopia_bake_enabled() -> bool:
+    return os.environ.get("KROK_SUBTITLE_UTOPIA_BAKE", "0").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 _RUBY_COMBINING_CHARS = set("ぁぃぅぇぉゃゅょゎァィゥェォャュョヮ\u3099\u309A")
 
 
@@ -268,6 +282,8 @@ def clear_before_layer_cache() -> None:
     with _IMAGE_FILL_LOCK:
         _IMAGE_FILL_CACHE.clear()
         _IMAGE_BRUSH_CACHE.clear()
+    with _UTOPIA_BAKE_LOCK:
+        _UTOPIA_BAKE_CACHE.clear()
     _TEXT_RUN_LAYER_CACHE.clear()
 
 from krok_helper.subtitle_render.engine.timeline import (
@@ -3899,6 +3915,7 @@ def _build_glyph_run_layer(
     colors: KaraokeColors,
     *,
     after: bool,
+    supersample: float = 1.0,
 ) -> tuple[QImage, int, int]:
     """把一个角色 run 的某状态烘焙成透明 QImage。
 
@@ -3942,7 +3959,14 @@ def _build_glyph_run_layer(
     img_w = max(pad_left + run_w + pad_right, 1)
     img_h = max(pad_top + run_h + pad_bottom, 1)
 
-    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
+    # supersample：把同一份「自然坐标」绘制逻辑渲染进 S× 分辨率位图（``p.scale(S,S)``），
+    # 调用方再以 1/S 缩放贴出 → utopia 入场放大相位不糊。offset 仍以自然坐标返回。
+    s = max(float(supersample), 1.0)
+    image = QImage(
+        max(int(round(img_w * s)), 1),
+        max(int(round(img_h * s)), 1),
+        QImage.Format.Format_ARGB32_Premultiplied,
+    )
     image.fill(0)
 
     local_baseline = pad_top + run_ascent
@@ -3952,6 +3976,8 @@ def _build_glyph_run_layer(
 
     p = QPainter(image)
     try:
+        if s != 1.0:
+            p.scale(s, s)
         p.setRenderHints(
             QPainter.RenderHint.Antialiasing
             | QPainter.RenderHint.TextAntialiasing
@@ -4181,6 +4207,22 @@ def _paint_role_line_with_character_transition(
             painter.save()
             try:
                 painter.setOpacity(painter.opacity() * opacity)
+                if transition.effect == "utopia" and _utopia_bake_enabled():
+                    # P1.c-1（opt-in）：bake+变换 替代逐帧光栅化。
+                    _paint_utopia_group_baked(
+                        painter,
+                        run,
+                        baseline_y,
+                        group_transform,
+                        role_style,
+                        colors,
+                        ratio=ratio,
+                        clip_rect=group_clip_rect,
+                        paint_left=paint_left,
+                        paint_width=paint_width,
+                        rtl=rtl,
+                    )
+                    continue
                 paint_path = run_path
                 paint_rect = run_rect
                 clip_rect = group_clip_rect
@@ -4447,6 +4489,42 @@ def _paint_line_with_character_transition(
                 paint_left = int(round(paint_rect.left()))
                 paint_width = max(int(round(paint_rect.width())), 1)
                 paint_clip_rect = paint_rect
+                if _utopia_bake_enabled():
+                    # P1.c-1（opt-in）：bake+变换 替代逐帧光栅化（普通行 → 构造单 run glyph 列表）。
+                    ratio_value = (
+                        _ruby_progress_ratio(group_ruby, t_ms)
+                        if group_ruby is not None
+                        else _character_fill_ratio(
+                            line, intervals, char_x_ranges, active_rubies, index, t_ms
+                        )
+                    )
+                    group_glyphs = [
+                        _GlyphLayout(
+                            index=ci,
+                            text=line.chars[ci].text,
+                            role_label=None,
+                            style=style,
+                            font=(font_for(line.chars[ci].text) if font_for is not None else font),
+                            metrics=metrics,
+                            left=char_x_ranges[ci][0],
+                            width=char_x_ranges[ci][1] - char_x_ranges[ci][0],
+                        )
+                        for ci in indices
+                    ]
+                    _paint_utopia_group_baked(
+                        painter,
+                        group_glyphs,
+                        baseline_y,
+                        transform,
+                        style,
+                        colors,
+                        ratio=ratio_value,
+                        clip_rect=paint_clip_rect,
+                        paint_left=paint_left,
+                        paint_width=paint_width,
+                        rtl=rtl,
+                    )
+                    continue
             else:
                 _apply_character_transform(
                     painter,
@@ -4813,6 +4891,140 @@ def _spin_flip_skew(opacity: float) -> float:
         return 0.0
     angle = (math.pi / 2.0) * (1.0 - opacity)
     return math.tan(min(angle, math.radians(89.0)))
+
+
+def _utopia_baked_run(
+    glyphs: list[_GlyphLayout],
+    role_style: Style,
+    colors: KaraokeColors,
+    *,
+    after: bool,
+    supersample: float,
+) -> tuple[QImage, int, int]:
+    """缓存的 utopia run 烘焙（未唱/已唱主体，超采样）。offset 为自然坐标。"""
+    key = (_glyph_run_layer_key(glyphs, role_style, colors, after=after), round(supersample, 4))
+    with _UTOPIA_BAKE_LOCK:
+        cached = _UTOPIA_BAKE_CACHE.get(key)
+        if cached is not None:
+            _UTOPIA_BAKE_CACHE.move_to_end(key)
+            return cached
+    entry = _build_glyph_run_layer(glyphs, role_style, colors, after=after, supersample=supersample)
+    with _UTOPIA_BAKE_LOCK:
+        _UTOPIA_BAKE_CACHE[key] = entry
+        while len(_UTOPIA_BAKE_CACHE) > _UTOPIA_BAKE_CACHE_MAX:
+            _UTOPIA_BAKE_CACHE.popitem(last=False)
+    return entry
+
+
+def _utopia_baked_glow(
+    glyphs: list[_GlyphLayout],
+    role_style: Style,
+    colors: KaraokeColors,
+) -> tuple[QImage, int, int]:
+    """缓存的 utopia run 已唱发光烘焙（自然分辨率，软晕缩放不糊）。"""
+    key = ("glow", _glyph_run_after_glow_key(glyphs, role_style, colors))
+    with _UTOPIA_BAKE_LOCK:
+        cached = _UTOPIA_BAKE_CACHE.get(key)
+        if cached is not None:
+            _UTOPIA_BAKE_CACHE.move_to_end(key)
+            return cached
+    entry = _build_glyph_run_after_glow_layer(glyphs, role_style, colors)
+    with _UTOPIA_BAKE_LOCK:
+        _UTOPIA_BAKE_CACHE[key] = entry
+        while len(_UTOPIA_BAKE_CACHE) > _UTOPIA_BAKE_CACHE_MAX:
+            _UTOPIA_BAKE_CACHE.popitem(last=False)
+    return entry
+
+
+def _draw_baked_transformed(
+    painter: QPainter,
+    image: QImage,
+    anchor_x: float,
+    anchor_y: float,
+    supersample: float,
+    transform: QTransform,
+) -> None:
+    """在 ``transform`` 下把（可能 S× 的）烘焙位图贴到自然坐标 ``anchor``（贴时缩 1/S）。"""
+    painter.save()
+    try:
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        painter.setTransform(transform, combine=True)
+        painter.translate(float(anchor_x), float(anchor_y))
+        if supersample != 1.0:
+            painter.scale(1.0 / supersample, 1.0 / supersample)
+        painter.drawImage(0, 0, image)
+    finally:
+        painter.restore()
+
+
+def _paint_utopia_group_baked(
+    painter: QPainter,
+    glyphs: list[_GlyphLayout],
+    baseline_y: int,
+    transform: QTransform,
+    role_style: Style,
+    colors: KaraokeColors,
+    *,
+    ratio: float,
+    clip_rect: QRectF,
+    paint_left: float,
+    paint_width: float,
+    rtl: bool,
+) -> None:
+    """bake+变换 版的 utopia run 卡拉ok 栈：复刻 :func:`_paint_char_karaoke_stack`
+    的 未唱→已唱发光→已唱描边/填充 分层与扫光带，但用烘焙位图 + ``transform`` 贴出，
+    省掉逐帧 strokePath/fillPath/glow 光栅化。扫光带在画笔进入坐标系（与原路径一致）。
+    """
+    s = _UTOPIA_BAKE_SUPERSAMPLE
+    run_left = min(glyph.left for glyph in glyphs)
+    before_img, bdx, bdy = _utopia_baked_run(glyphs, role_style, colors, after=False, supersample=s)
+    if ratio <= 0.0:
+        _draw_baked_transformed(painter, before_img, run_left + bdx, baseline_y + bdy, s, transform)
+        return
+    if ratio >= 1.0:
+        after_img, adx, ady = _utopia_baked_run(glyphs, role_style, colors, after=True, supersample=s)
+        _draw_baked_transformed(painter, after_img, run_left + adx, baseline_y + ady, s, transform)
+        return
+
+    _draw_baked_transformed(painter, before_img, run_left + bdx, baseline_y + bdy, s, transform)
+    stroke_pad = _visual_text_padding(role_style)
+    clip_x = paint_left + (paint_width * (1.0 - ratio) if rtl else 0.0)
+    top = clip_rect.top()
+    height = clip_rect.height()
+
+    if role_style.decoration_kind == "glow":
+        before_glow = (_fill_signature(colors.before.shadow), _glow_radius(role_style, after=False))
+        after_glow = (_fill_signature(colors.after.shadow), _glow_radius(role_style, after=True))
+        if before_glow != after_glow:
+            glow_pad = _glow_extent(
+                role_style.stroke_width_px, role_style.stroke2_width_px, _glow_radius(role_style, after=True)
+            )
+            glow_left = clip_x if rtl else clip_x - glow_pad
+            glow_width = paint_width * ratio + glow_pad
+            glow_img, gdx, gdy = _utopia_baked_glow(glyphs, role_style, colors)
+            painter.save()
+            try:
+                painter.setClipRect(
+                    QRectF(float(glow_left), float(top - glow_pad), float(glow_width), float(height + glow_pad * 2))
+                )
+                _draw_baked_transformed(painter, glow_img, run_left + gdx, baseline_y + gdy, 1.0, transform)
+            finally:
+                painter.restore()
+
+    after_img, adx, ady = _utopia_baked_run(glyphs, role_style, colors, after=True, supersample=s)
+    painter.save()
+    try:
+        painter.setClipRect(
+            QRectF(
+                float(clip_x - stroke_pad),
+                float(top - stroke_pad),
+                float(paint_width * ratio + stroke_pad),
+                float(height + stroke_pad * 2),
+            )
+        )
+        _draw_baked_transformed(painter, after_img, run_left + adx, baseline_y + ady, s, transform)
+    finally:
+        painter.restore()
 
 
 def _paint_char_karaoke_stack(
