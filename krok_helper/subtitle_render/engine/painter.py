@@ -67,8 +67,8 @@ _IMAGE_FILL_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 _IMAGE_BRUSH_CACHE: "OrderedDict[tuple, QBrush]" = OrderedDict()
 _IMAGE_FILL_LOCK = Lock()
 # 横排 glyph run 层缓存：普通行与分色行都按连续同 style 的 run 烘焙。
-# 每个 run 的「未唱」层（含 before-glow）与「已唱」主体层（无 glow 模糊）
-# 各烘焙一次；逐帧只按扫光半平面 clip blit。已唱 glow 仍逐帧绘制。
+# 每个 run 的「未唱」层（含 before-glow）、「已唱」主体层与 after-glow
+# 各烘焙一次；逐帧只按扫光半平面 clip blit。
 _TEXT_RUN_LAYER_CACHE = LayerCache(max_items=128)
 _TEXT_RUN_COMPOSITOR = LayerCompositor(_TEXT_RUN_LAYER_CACHE)
 _RUBY_COMBINING_CHARS = set("ぁぃぅぇぉゃゅょゎァィゥェォャュョヮ\u3099\u309A")
@@ -2678,16 +2678,18 @@ def _paint_line_layers(
     after_band = _fill_clip_band(layout.fill_segments, t_ms, layout.rtl)
     after_layers = []
     for index, run in enumerate(runs):
-        after_layers.append(
-            _GlyphRunAfterGlowLayer(
-                run,
-                y,
-                layout.fill_segments,
-                t_ms,
-                layout.rtl,
-                z_index=index * 2,
+        if after_band is not None and _glyph_run_needs_after_glow(run):
+            after_layers.append(
+                _GlyphRunAfterGlowLayer(
+                    run,
+                    y,
+                    layout.fill_segments,
+                    t_ms,
+                    layout.rtl,
+                    clip_band=after_band,
+                    z_index=index * 2,
+                )
             )
-        )
         if after_band is None:
             continue
         after_layers.append(
@@ -2768,13 +2770,14 @@ class _GlyphRunLayer:
 
 @dataclass(frozen=True)
 class _GlyphRunAfterGlowLayer:
-    """Dynamic layer wrapper for the existing per-run after glow path."""
+    """Layer wrapper for the after-glow bitmap of a horizontal glyph run."""
 
     glyphs: list[_GlyphLayout]
     baseline_y: int
     fill_segments: list[_FillSegment]
     t_ms: int
     rtl: bool
+    clip_band: tuple[int, int] | None = None
     z_index: int = 0
     scope: str = SCOPE_LINE
 
@@ -2784,24 +2787,54 @@ class _GlyphRunAfterGlowLayer:
     def layout(self, ctx: LayerContext) -> "_GlyphRunAfterGlowLayer":
         return self
 
-    def static_key(self, ctx: LayerContext, layout: object) -> None:
-        return None
+    def static_key(self, ctx: LayerContext, layout: object) -> tuple | None:
+        role_style = self.glyphs[0].style
+        colors = _effective_karaoke_colors(role_style)
+        if role_style.decoration_kind != "glow":
+            return None
+        before_radius = _glow_radius(role_style, after=False)
+        after_radius = _glow_radius(role_style, after=True)
+        need_after_glow = (
+            _fill_signature(colors.before.shadow) != _fill_signature(colors.after.shadow)
+            or before_radius != after_radius
+        )
+        band = self.clip_band or _fill_clip_band(self.fill_segments, self.t_ms, self.rtl)
+        if not need_after_glow or band is None:
+            return None
+        return _glyph_run_after_glow_key(self.glyphs, role_style, colors)
 
     def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
-        raise AssertionError("after glow is still dynamic in b.1")
+        role_style = self.glyphs[0].style
+        colors = _effective_karaoke_colors(role_style)
+        image, dx, dy = _build_glyph_run_after_glow_layer(self.glyphs, role_style, colors)
+        return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
 
     def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
-        return LayerAnimation()
+        run_left = min(glyph.left for glyph in self.glyphs)
+        band = self.clip_band or _fill_clip_band(self.fill_segments, self.t_ms, self.rtl)
+        if band is None:
+            return LayerAnimation(opacity=0.0)
+        band_left, band_right = band
+        rect = _glyph_run_rect(self.glyphs, self.baseline_y)
+        role_style = self.glyphs[0].style
+        pad = _glow_extent(
+            role_style.stroke_width_px,
+            role_style.stroke2_width_px,
+            _glow_radius(role_style, after=True),
+        )
+        clip_rect = QRectF(
+            float(band_left),
+            rect.top() - pad,
+            float(band_right - band_left),
+            rect.height() + pad * 2,
+        )
+        return LayerAnimation(
+            top_left=QPointF(float(run_left), float(self.baseline_y)),
+            clip_rect=clip_rect,
+        )
 
     def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
-        _paint_glyph_after_glow(
-            painter,
-            self.glyphs,
-            self.baseline_y,
-            self.fill_segments,
-            self.t_ms,
-            self.rtl,
-        )
+        return
 
     def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
         rect = _glyph_run_rect(self.glyphs, self.baseline_y)
@@ -2846,6 +2879,48 @@ def _glyph_run_layer_key(
     )
 
 
+def _glyph_run_after_glow_key(
+    glyphs: list[_GlyphLayout],
+    role_style: Style,
+    colors: KaraokeColors,
+) -> tuple:
+    run_left = min(glyph.left for glyph in glyphs)
+    glyph_sig = tuple(
+        (
+            glyph.text,
+            glyph.font.family(),
+            glyph.font.pixelSize(),
+            int(glyph.font.weight()),
+            glyph.font.italic(),
+            glyph.left - run_left,
+            glyph.width,
+        )
+        for glyph in glyphs
+    )
+    return (
+        "after_glow",
+        glyph_sig,
+        _fill_signature(colors.after.shadow),
+        role_style.stroke_width_px,
+        role_style.stroke2_width_px,
+        _glow_radius(role_style, after=True),
+        role_style.decoration_kind,
+    )
+
+
+def _glyph_run_needs_after_glow(glyphs: list[_GlyphLayout]) -> bool:
+    if not glyphs:
+        return False
+    role_style = glyphs[0].style
+    if role_style.decoration_kind != "glow":
+        return False
+    colors = _effective_karaoke_colors(role_style)
+    return (
+        _fill_signature(colors.before.shadow) != _fill_signature(colors.after.shadow)
+        or _glow_radius(role_style, after=False) != _glow_radius(role_style, after=True)
+    )
+
+
 def _build_glyph_run_layer(
     glyphs: list[_GlyphLayout],
     role_style: Style,
@@ -2857,7 +2932,7 @@ def _build_glyph_run_layer(
 
     ``after=False``（未唱层）：glow(before) 或 阴影(before) + stroke2 + stroke + 底色。
     ``after=True``（已唱主体）：阴影(after，仅非 glow) + stroke2 + stroke + 底色，
-    **不含 glow 模糊**（已唱 glow 仍逐帧，见 :func:`_paint_glyph_after_glow`）。
+    **不含 glow 模糊**（已唱 glow 由 :class:`_GlyphRunAfterGlowLayer` 单独烘焙）。
 
     run 内逐字形可有不同字体/字号，故按 glyph 各自的 ``font`` 排版。返回 ``(image, dx, dy)``，
     blit 时画在 ``(run_left + dx, baseline_y + dy)``。
@@ -2957,57 +3032,52 @@ def _build_glyph_run_layer(
     return (image, offset_x, offset_y)
 
 
-def _paint_glyph_after_glow(
-    painter: QPainter,
+def _build_glyph_run_after_glow_layer(
     glyphs: list[_GlyphLayout],
-    baseline_y: int,
-    fill_segments: list[_FillSegment],
-    t_ms: int,
-    rtl: bool,
-) -> None:
-    if not glyphs:
-        return
-    role_style = glyphs[0].style
-    colors = _effective_karaoke_colors(role_style)
-    # 已唱 glow 模糊仍逐帧（与普通路径一致）：仅当已唱发光与未唱不同时，在唱过区叠画。
-    if role_style.decoration_kind == "glow":
-        before_radius = _glow_radius(role_style, after=False)
-        after_radius = _glow_radius(role_style, after=True)
-        need_after_glow = (
-            _fill_signature(colors.before.shadow) != _fill_signature(colors.after.shadow)
-            or before_radius != after_radius
+    role_style: Style,
+    colors: KaraokeColors,
+) -> tuple[QImage, int, int]:
+    """Bake the full unclipped after-glow image for a glyph run."""
+    run_left = min(glyph.left for glyph in glyphs)
+    run_right = max(glyph.left + glyph.width for glyph in glyphs)
+    run_ascent = max(glyph.metrics.ascent() for glyph in glyphs)
+    run_descent = max(glyph.metrics.descent() for glyph in glyphs)
+    run_w = max(run_right - run_left, 1)
+    run_h = max(run_ascent + run_descent, 1)
+    after_radius = _glow_radius(role_style, after=True)
+    extent = _glow_extent(role_style.stroke_width_px, role_style.stroke2_width_px, after_radius) + 4
+
+    img_w = max(extent + run_w + extent, 1)
+    img_h = max(extent + run_h + extent, 1)
+    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+
+    local_baseline = extent + run_ascent
+    local_glyphs = [replace(glyph, left=glyph.left - run_left + extent) for glyph in glyphs]
+    path = _glyph_run_path(local_glyphs, local_baseline)
+    rect = QRectF(float(extent), float(local_baseline - run_ascent), float(run_w), float(run_h))
+
+    p = QPainter(image)
+    try:
+        p.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
         )
-        band = _fill_clip_band(fill_segments, t_ms, rtl) if need_after_glow else None
-        if band is not None:
-            fill_start, fill_end = band
-            path = _glyph_run_path(glyphs, baseline_y)
-            rect = _glyph_run_rect(glyphs, baseline_y)
-            pad = _glow_extent(
-                role_style.stroke_width_px,
-                role_style.stroke2_width_px,
-                after_radius,
-            )
-            painter.save()
-            try:
-                painter.setClipRect(
-                    QRectF(
-                        float(fill_start),
-                        rect.top() - pad,
-                        float(fill_end - fill_start),
-                        rect.height() + pad * 2,
-                    )
-                )
-                _paint_glow_path(
-                    painter,
-                    path,
-                    colors.after.shadow,
-                    rect,
-                    after_radius,
-                    role_style.stroke_width_px,
-                    role_style.stroke2_width_px,
-                )
-            finally:
-                painter.restore()
+        _paint_glow_path(
+            p,
+            path,
+            colors.after.shadow,
+            rect,
+            after_radius,
+            role_style.stroke_width_px,
+            role_style.stroke2_width_px,
+        )
+    finally:
+        p.end()
+
+    offset_x = -extent
+    offset_y = -(extent + run_ascent)
+    return (image, offset_x, offset_y)
 
 
 def _paint_role_line_with_character_transition(
