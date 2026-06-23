@@ -71,6 +71,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _resolve_title_text,
     _title_overlay_opacity,
     paint_frame,
+    frame_vertical_bounds,
     clear_before_layer_cache,
 )
 from krok_helper.subtitle_render.engine.layers import LayerContext  # noqa: E402
@@ -399,6 +400,35 @@ def test_signal_lits_render_during_signal_window(qapp):
     assert layout.text_x > layout.signal_x
     assert QColor(img.pixel(int(layout.signal_x) + 2, 36)).name(QColor.NameFormat.HexRgb).upper() == "#0000FF"
     assert QColor(img.pixel(layout.text_x, 56)).name(QColor.NameFormat.HexRgb).upper() == "#FFFFFF"
+
+
+def test_frame_vertical_bounds_cover_signal_only_window(qapp):
+    track = _singer_track(singer_id=0)
+    style = Style(
+        font_size_px=20,
+        line_y_margin_px=10,
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        lit_enabled=True,
+        lit_style="circle",
+        lit_size=10,
+        lit_offset_x=-20,
+        lit_offset_y=0,
+        lit_tracking=2,
+        lit_stroke_width=0,
+        lit_shadow=False,
+        lit_transition_mode="none",
+        signals_duration_ms=1000,
+    )
+    img = _blank(120, 80)
+    paint_frame(img, track, 50, style)
+    ink = _ink_bounds(img)
+    bounds = frame_vertical_bounds(120, 80, track, 50, style)
+
+    assert ink is not None
+    assert bounds is not None
+    assert bounds[0] <= ink[1]
+    assert bounds[1] >= ink[3]
 
 
 def test_signal_lits_extend_the_lyric_text_window(qapp):

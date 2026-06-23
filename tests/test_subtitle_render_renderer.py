@@ -148,6 +148,36 @@ def test_compute_subtitle_strip_returns_subband_for_centered_line(qapp, tmp_path
     assert top % 2 == 0 and height % 2 == 0  # yuv420p 友好
 
 
+def test_compute_subtitle_strip_uses_layer_bounds_without_alpha_scan(qapp, tmp_path, monkeypatch):
+    job = replace(_job(tmp_path), style=Style(font_size_px=24, line_y_position="center"))
+
+    def fail_paint_frame(*_args, **_kwargs):
+        raise AssertionError("layer-bound path should not paint a full scratch frame")
+
+    monkeypatch.setattr(renderer, "paint_frame", fail_paint_frame)
+    assert _compute_subtitle_strip(job, 1000) is not None
+
+
+def test_compute_subtitle_strip_uses_signal_layer_bounds_without_alpha_scan(qapp, tmp_path, monkeypatch):
+    style = Style(
+        font_size_px=24,
+        line_y_position="center",
+        lit_enabled=True,
+        lit_style="circle",
+        lit_size=12,
+        lit_stroke_width=0,
+        lit_shadow=False,
+        signals_duration_ms=500,
+    )
+    job = replace(_job(tmp_path), style=style)
+
+    def fail_paint_frame(*_args, **_kwargs):
+        raise AssertionError("signal layer-bound path should not paint a full scratch frame")
+
+    monkeypatch.setattr(renderer, "paint_frame", fail_paint_frame)
+    assert _compute_subtitle_strip(job, 1000) is not None
+
+
 def test_compute_subtitle_strip_falls_back_when_content_fills_height(qapp, tmp_path):
     # 矮帧 + 大字：内容纵向并集 ≥ 85% 全高 → 退回整帧（None）。
     job = replace(_job(tmp_path), style=Style(font_size_px=72, line_y_position="center"), height=80)

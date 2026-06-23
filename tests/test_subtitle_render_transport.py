@@ -176,6 +176,42 @@ def test_play_button_text_reflects_state(qapp):
     assert bar._play_btn.text() == "▶"
 
 
+def test_preview_scale_combo_emits_ratio(qapp):
+    bar = _bar(qapp)
+    seen: list[float] = []
+    bar.previewScaleChanged.connect(seen.append)
+
+    bar._preview_scale_combo.setCurrentIndex(1)
+
+    assert bar.preview_scale == 0.5
+    assert seen == [0.5]
+
+
+def test_preview_fps_label_updates_from_painted_frames(qapp):
+    bar = _bar(qapp)
+
+    class FakeTimer:
+        def __init__(self):
+            self.elapsed_value = 1000
+
+        def isValid(self):
+            return True
+
+        def start(self):
+            return None
+
+        def elapsed(self):
+            return self.elapsed_value
+
+        def restart(self):
+            self.elapsed_value = 0
+
+    bar._fps_timer = FakeTimer()
+    bar.note_preview_frame_painted()
+
+    assert bar._fps_label.text() == "FPS 01"
+
+
 def test_tick_advances_slider(qapp, monkeypatch):
     bar = _bar(qapp)
     bar.set_time(1_000)
@@ -219,6 +255,14 @@ def test_preview_canvas_fits_output_rect_to_widget(qapp):
 
     assert canvas._fit_output_rect(960, 540) == (0, 0, 960, 540)
     assert canvas._fit_output_rect(1000, 500) == (55, 0, 889, 500)
+
+
+def test_preview_canvas_accepts_preview_scale(qapp):
+    canvas = PreviewCanvas()
+    canvas.set_preview_scale(0.5)
+    assert canvas._preview_scale == 0.5
+    canvas.set_preview_scale(0.1)
+    assert canvas._preview_scale == 0.25
 
 
 def test_preview_canvas_video_source_uses_qt_playback_proxy(qapp, monkeypatch, tmp_path):

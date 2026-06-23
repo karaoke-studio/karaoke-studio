@@ -31,6 +31,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import QColor, QImage, QPainter
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PyQt6.QtWidgets import (
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QSlider,
@@ -73,6 +74,9 @@ _VIDEO_SEEK_TOLERANCE_MS = 80
 class PreviewCanvas(QWidget):
     """字幕预览画布：原地 ``paint_frame`` 重绘当前时刻活跃行。"""
 
+    framePainted = Signal()
+    """预览字幕层完成一次实际 paint，用于统计实时 FPS。"""
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setMinimumHeight(240)
@@ -89,6 +93,7 @@ class PreviewCanvas(QWidget):
         self._video_audio_out: Optional[QAudioOutput] = None
         self._output_width: int = 1920
         self._output_height: int = 1080
+        self._preview_scale: float = 1.0
 
         themed(
             self,
@@ -112,6 +117,10 @@ class PreviewCanvas(QWidget):
     def set_output_size(self, width: int, height: int) -> None:
         self._output_width = max(int(width), 1)
         self._output_height = max(int(height), 1)
+        self.update()
+
+    def set_preview_scale(self, scale: float) -> None:
+        self._preview_scale = _normalize_preview_scale(scale)
         self.update()
 
     def set_time(self, t_ms: int) -> None:
@@ -192,18 +201,42 @@ class PreviewCanvas(QWidget):
                     target_w / self._output_width,
                     target_h / self._output_height,
                 )
-                paint_frame_to_painter(
-                    painter,
-                    self._output_width,
-                    self._output_height,
-                    self._track,
-                    self._t_ms,
-                    self._style,
-                )
+                self._paint_subtitles(painter)
             finally:
                 painter.restore()
         finally:
             painter.end()
+        self.framePainted.emit()
+
+    def _paint_subtitles(self, painter: QPainter) -> None:
+        if self._preview_scale >= 0.999:
+            paint_frame_to_painter(
+                painter,
+                self._output_width,
+                self._output_height,
+                self._track,
+                self._t_ms,
+                self._style,
+            )
+            return
+        low_w = max(int(round(self._output_width * self._preview_scale)), 1)
+        low_h = max(int(round(self._output_height * self._preview_scale)), 1)
+        layer = QImage(low_w, low_h, QImage.Format.Format_ARGB32_Premultiplied)
+        layer.fill(QColor(0, 0, 0, 0))
+        layer_painter = QPainter(layer)
+        try:
+            layer_painter.scale(self._preview_scale, self._preview_scale)
+            paint_frame_to_painter(
+                layer_painter,
+                self._output_width,
+                self._output_height,
+                self._track,
+                self._t_ms,
+                self._style,
+            )
+        finally:
+            layer_painter.end()
+        painter.drawImage(QRectF(0, 0, self._output_width, self._output_height), layer)
 
     # ------------------------------------------------------------------ video
 
@@ -311,6 +344,18 @@ def _use_graphics_preview() -> bool:
     return os.environ.get("KROK_SUBTITLE_PREVIEW", "graphics").lower() != "raster"
 
 
+def _normalize_preview_scale(scale: float) -> float:
+    try:
+        value = float(scale)
+    except (TypeError, ValueError):
+        return 1.0
+    if value <= 0.30:
+        return 0.25
+    if value <= 0.75:
+        return 0.5
+    return 1.0
+
+
 class PreviewPanel(DropPanel):
     """预览面板：空态拖入视频 / populated 后显示画布。
 
@@ -353,6 +398,9 @@ class PreviewPanel(DropPanel):
     def set_output_size(self, width: int, height: int) -> None:
         self._canvas.set_output_size(width, height)
 
+    def set_preview_scale(self, scale: float) -> None:
+        self._canvas.set_preview_scale(scale)
+
     def set_video_source(self, path: Optional[Path]) -> None:
         self._canvas.set_video_source(path)
         if path is not None:
@@ -382,6 +430,9 @@ class TransportBar(QWidget):
 
     playbackStateChanged = Signal(bool)
     """播放 / 暂停状态变化时 emit，供视频预览层同步静音视频播放器。"""
+
+    previewScaleChanged = Signal(float)
+    """预览字幕层光栅化比例变化。"""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -444,6 +495,26 @@ class TransportBar(QWidget):
         self._timecode.setFixedWidth(80)
         self._timecode.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
+        self._fps_label = QLabel("FPS --", self)
+        themed(
+            self._fps_label,
+            lambda: (
+                f"color: {palette().text_secondary}; "
+                f'font-family: "Consolas", "Courier New", monospace; '
+                f"font-size: 9.5pt;"
+            ),
+        )
+        self._fps_label.setFixedWidth(58)
+        self._fps_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        self._preview_scale_combo = QComboBox(self)
+        self._preview_scale_combo.setToolTip("预览分辨率")
+        self._preview_scale_combo.setFixedWidth(72)
+        self._preview_scale_combo.setMinimumHeight(30)
+        for label, value in (("1/1", 1.0), ("1/2", 0.5), ("1/4", 0.25)):
+            self._preview_scale_combo.addItem(label, value)
+        self._preview_scale_combo.currentIndexChanged.connect(self._on_preview_scale_changed)
+
         # ── 布局 ───────────────────────────────────────────────────
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 6, 12, 6)
@@ -451,6 +522,8 @@ class TransportBar(QWidget):
         layout.addWidget(self._play_btn)
         layout.addWidget(self._slider, 1)
         layout.addWidget(self._timecode)
+        layout.addWidget(self._fps_label)
+        layout.addWidget(self._preview_scale_combo)
 
         # ── 音频播放（QMediaPlayer，真实非空音频文件才懒创建） ────────
         self._player: Optional[QMediaPlayer] = None
@@ -478,6 +551,9 @@ class TransportBar(QWidget):
         # 抑制 player ↔ slider 反馈环
         self._suppress_seek: bool = False
         self._playing_state: bool = False
+        self._fps_timer = QElapsedTimer()
+        self._fps_window_frames = 0
+        self._fps_timer.start()
 
     # ------------------------------------------------------------------ public API
 
@@ -564,6 +640,23 @@ class TransportBar(QWidget):
     def current_time_ms(self) -> int:
         return self._slider.value()
 
+    @property
+    def preview_scale(self) -> float:
+        return float(self._preview_scale_combo.currentData() or 1.0)
+
+    def note_preview_frame_painted(self) -> None:
+        """Record one real preview paint and refresh the displayed FPS."""
+        if not self._fps_timer.isValid():
+            self._fps_timer.start()
+        self._fps_window_frames += 1
+        elapsed = self._fps_timer.elapsed()
+        if elapsed < 500:
+            return
+        fps = self._fps_window_frames * 1000.0 / max(elapsed, 1)
+        self._fps_label.setText(f"FPS {fps:02.0f}")
+        self._fps_window_frames = 0
+        self._fps_timer.restart()
+
     # ------------------------------------------------------------------ events
 
     def _on_slider_changed(self, value: int) -> None:
@@ -613,6 +706,9 @@ class TransportBar(QWidget):
             self.pause()
             return
         self._set_slider_silently(target)
+
+    def _on_preview_scale_changed(self, _index: int) -> None:
+        self.previewScaleChanged.emit(self.preview_scale)
 
     # ------------------------------------------------------------------ helpers
 

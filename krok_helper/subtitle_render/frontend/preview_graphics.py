@@ -9,10 +9,11 @@ handled by ``QGraphicsVideoItem`` and the subtitles are painted by a transparent
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
-from PyQt6.QtCore import QRectF, QSizeF, Qt, QUrl
+from PyQt6.QtCore import QRectF, QSizeF, Qt, QUrl, pyqtSignal as Signal
 from PyQt6.QtGui import QBrush, QColor, QPainter
+from PyQt6.QtGui import QImage
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 from PyQt6.QtWidgets import (
@@ -22,7 +23,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
+from krok_helper.subtitle_render.engine.painter import frame_vertical_bounds, paint_frame_to_painter
 from krok_helper.subtitle_render.frontend.preview_media import qt_playback_source
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
 from krok_helper.subtitle_render.models import Style, TimingTrack
@@ -35,16 +36,36 @@ _VIDEO_EDGE_OVERSCAN_PX = 4
 """Small scene-space bleed to cover native video edge underdraw while playing."""
 
 
+def _normalize_preview_scale(scale: float) -> float:
+    try:
+        value = float(scale)
+    except (TypeError, ValueError):
+        return 1.0
+    if value <= 0.30:
+        return 0.25
+    if value <= 0.75:
+        return 0.5
+    return 1.0
+
+
 class SubtitleGraphicsItem(QGraphicsItem):
     """Transparent subtitle layer placed above the video item."""
 
-    def __init__(self, width: int, height: int, parent: Optional[QGraphicsItem] = None) -> None:
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        parent: Optional[QGraphicsItem] = None,
+        on_painted: Callable[[], None] | None = None,
+    ) -> None:
         super().__init__(parent)
         self._width = max(int(width), 1)
         self._height = max(int(height), 1)
         self._track: Optional[TimingTrack] = None
         self._style: Style = Style()
         self._t_ms: int = 0
+        self._preview_scale: float = 1.0
+        self._on_painted = on_painted
 
     # ------------------------------------------------------------------ Qt API
 
@@ -54,14 +75,9 @@ class SubtitleGraphicsItem(QGraphicsItem):
     def paint(self, painter: QPainter, option, widget: Optional[QWidget] = None) -> None:  # noqa: N802, ARG002
         if self._track is None:
             return
-        paint_frame_to_painter(
-            painter,
-            self._width,
-            self._height,
-            self._track,
-            self._t_ms,
-            self._style,
-        )
+        self._paint_subtitles(painter)
+        if self._on_painted is not None:
+            self._on_painted()
 
     # ------------------------------------------------------------------ public
 
@@ -76,8 +92,13 @@ class SubtitleGraphicsItem(QGraphicsItem):
     def set_time(self, t_ms: int) -> None:
         if t_ms == self._t_ms:
             return
+        old_dirty = self._dirty_rect_for_time(self._t_ms)
         self._t_ms = t_ms
-        self.update()
+        new_dirty = self._dirty_rect_for_time(self._t_ms)
+        if old_dirty is None or new_dirty is None:
+            self.update()
+        else:
+            self.update(old_dirty.united(new_dirty).adjusted(0, -2, 0, 2))
 
     def set_output_size(self, width: int, height: int) -> None:
         w = max(int(width), 1)
@@ -89,13 +110,58 @@ class SubtitleGraphicsItem(QGraphicsItem):
         self._height = h
         self.update()
 
+    def set_preview_scale(self, scale: float) -> None:
+        self._preview_scale = _normalize_preview_scale(scale)
+        self.update()
+
     @property
     def current_time_ms(self) -> int:
         return self._t_ms
 
+    def _dirty_rect_for_time(self, t_ms: int) -> QRectF | None:
+        bounds = frame_vertical_bounds(self._width, self._height, self._track, t_ms, self._style)
+        if bounds is None:
+            return None
+        top, bottom = bounds
+        top = max(0, min(top, self._height - 1))
+        bottom = max(top, min(bottom, self._height - 1))
+        return QRectF(0.0, float(top), float(self._width), float(bottom - top + 1))
+
+    def _paint_subtitles(self, painter: QPainter) -> None:
+        if self._preview_scale >= 0.999:
+            paint_frame_to_painter(
+                painter,
+                self._width,
+                self._height,
+                self._track,
+                self._t_ms,
+                self._style,
+            )
+            return
+        low_w = max(int(round(self._width * self._preview_scale)), 1)
+        low_h = max(int(round(self._height * self._preview_scale)), 1)
+        layer = QImage(low_w, low_h, QImage.Format.Format_ARGB32_Premultiplied)
+        layer.fill(QColor(0, 0, 0, 0))
+        layer_painter = QPainter(layer)
+        try:
+            layer_painter.scale(self._preview_scale, self._preview_scale)
+            paint_frame_to_painter(
+                layer_painter,
+                self._width,
+                self._height,
+                self._track,
+                self._t_ms,
+                self._style,
+            )
+        finally:
+            layer_painter.end()
+        painter.drawImage(QRectF(0, 0, self._width, self._height), layer)
+
 
 class PreviewGraphicsView(QGraphicsView):
     """Graphics View preview with native video plus a QPainter subtitle layer."""
+
+    framePainted = Signal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -138,7 +204,11 @@ class PreviewGraphicsView(QGraphicsView):
         scene.addItem(self._video_item)
         self._fit_video_item_to_scene()
 
-        self._subtitle_item = SubtitleGraphicsItem(self._output_w, self._output_h)
+        self._subtitle_item = SubtitleGraphicsItem(
+            self._output_w,
+            self._output_h,
+            on_painted=self.framePainted.emit,
+        )
         self._subtitle_item.setZValue(10)
         scene.addItem(self._subtitle_item)
 
@@ -182,6 +252,9 @@ class PreviewGraphicsView(QGraphicsView):
         self._fit_video_item_to_scene()
         self._subtitle_item.set_output_size(w, h)
         self._fit_scene_to_view()
+
+    def set_preview_scale(self, scale: float) -> None:
+        self._subtitle_item.set_preview_scale(scale)
 
     def _fit_video_item_to_scene(self) -> None:
         overscan = _VIDEO_EDGE_OVERSCAN_PX

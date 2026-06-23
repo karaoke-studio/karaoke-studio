@@ -26,6 +26,7 @@ from krok_helper.subtitle_render.engine.encoder_select import (
     video_encoder_options,
 )
 from krok_helper.subtitle_render.engine.painter import (
+    frame_vertical_bounds,
     frame_has_content,
     paint_frame,
     paint_frame_to_painter,
@@ -347,7 +348,7 @@ def _compute_subtitle_strip(
     if not times:
         return None
 
-    scratch = QImage(width, height, QImage.Format.Format_RGBA8888)
+    scratch: QImage | None = None
     transparent = QColor(0, 0, 0, 0)
     top = height
     bottom = -1
@@ -356,9 +357,13 @@ def _compute_subtitle_strip(
             return None
         if not frame_has_content(job.track, t_ms, job.style):
             continue
-        scratch.fill(transparent)
-        paint_frame(scratch, job.track, t_ms, job.style)
-        bounds = _content_row_bounds(scratch)
+        bounds = frame_vertical_bounds(width, height, job.track, t_ms, job.style)
+        if bounds is None:
+            if scratch is None:
+                scratch = QImage(width, height, QImage.Format.Format_RGBA8888)
+            scratch.fill(transparent)
+            paint_frame(scratch, job.track, t_ms, job.style)
+            bounds = _content_row_bounds(scratch)
         if bounds is None:
             continue
         top = min(top, bounds[0])

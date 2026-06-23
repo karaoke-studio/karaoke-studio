@@ -317,6 +317,62 @@ def frame_has_content(track: Optional[TimingTrack], t_ms: int, style: Style) -> 
     return bool(display_lines or signal_lines or title_opacity > 0.0)
 
 
+def frame_vertical_bounds(
+    logical_w: int,
+    logical_h: int,
+    track: Optional[TimingTrack],
+    t_ms: int,
+    style: Style,
+) -> tuple[int, int] | None:
+    """Return conservative vertical content bounds for the current subtitle frame.
+
+    This is the P1.b layer-bounds query used by export strip selection and
+    preview dirty updates.  It deliberately returns ``None`` for render paths
+    that have not migrated to layer bounds yet; callers should then fall back to
+    the existing pixel scan / full repaint path.
+    """
+    if track is None:
+        return None
+    track_t_ms, display_style, display_lines, signal_lines, title_opacity = (
+        _resolve_visible_content(track, t_ms, style)
+    )
+    if not display_lines and not signal_lines and title_opacity <= 0.0:
+        return None
+
+    bounds: list[tuple[int, int]] = []
+    if display_lines:
+        lyric_bounds = _subtitle_lines_vertical_bounds(
+            logical_w,
+            logical_h,
+            track,
+            track_t_ms,
+            display_style,
+            display_lines,
+            signal_lines,
+        )
+        if lyric_bounds is None:
+            return None
+        bounds.append(lyric_bounds)
+
+    if title_opacity > 0.0 and style.title_overlay is not None:
+        title_layout = _layout_title_overlay(logical_w, logical_h, track, style.title_overlay)
+        if title_layout is not None:
+            title_bounds = _TEXT_RUN_COMPOSITOR.vertical_bounds(
+                LayerContext(t_ms=track_t_ms, logical_w=logical_w, logical_h=logical_h),
+                [_TitleOverlayLayer(title_layout, style.title_overlay, title_opacity)],
+            )
+            if title_bounds is not None:
+                bounds.append(title_bounds)
+
+    if not bounds:
+        return None
+    top = max(0, min(item[0] for item in bounds))
+    bottom = min(logical_h - 1, max(item[1] for item in bounds))
+    if bottom < top:
+        return None
+    return top, bottom
+
+
 def paint_frame(
     image: QImage,
     track: Optional[TimingTrack],
@@ -642,9 +698,10 @@ class _TitleOverlayLayer:
         return
 
     def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
+        pad = _title_visual_padding(self.title)
         return (
-            int(math.floor(self.title_layout.y_top)),
-            int(math.ceil(self.title_layout.y_top + self.title_layout.block_h)),
+            int(math.floor(self.title_layout.y_top - pad)),
+            int(math.ceil(self.title_layout.y_top + self.title_layout.block_h + pad)),
         )
 
 
@@ -862,6 +919,163 @@ def _apply_viewport_transform(
         if scale != 1.0:
             painter.scale(scale, scale)
         painter.translate(-pivot_x, -pivot_y)
+
+
+def _subtitle_lines_vertical_bounds(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    track_t_ms: int,
+    style: Style,
+    display_lines: list[DisplayLine],
+    signal_lines: list[DisplayLine],
+) -> tuple[int, int] | None:
+    """Aggregate migrated layer bounds for the lyric layer.
+
+    ``None`` means the current frame uses a path whose visual extent still needs
+    the older pixel-scan fallback.
+    """
+    if style.vertical or style.viewport_rotation_deg:
+        return None
+
+    baselines = (
+        _resolve_display_baselines(logical_h, track, display_lines, style)
+        if display_lines
+        else {}
+    )
+    line_layouts = (
+        _resolve_sayatoo_line_layouts(
+            logical_w,
+            logical_h,
+            track,
+            display_lines,
+            baselines,
+            track_t_ms,
+            style,
+        )
+        if display_lines
+        else {}
+    )
+    bounds: list[tuple[int, int]] = []
+    for display_line in display_lines:
+        line_bounds = _display_line_vertical_bounds(
+            logical_w,
+            logical_h,
+            track,
+            track_t_ms,
+            style,
+            display_line,
+            baselines,
+            line_layouts,
+        )
+        if line_bounds is None:
+            return None
+        bounds.append(line_bounds)
+    if signal_lines:
+        signal_bounds = _TEXT_RUN_COMPOSITOR.vertical_bounds(
+            LayerContext(t_ms=track_t_ms, logical_w=logical_w, logical_h=logical_h),
+            _signal_layer_stack(
+                track,
+                signal_lines,
+                baselines,
+                logical_w,
+                logical_h,
+                track_t_ms,
+                style,
+                line_layouts=line_layouts,
+            ),
+        )
+        if signal_bounds is not None:
+            bounds.append(signal_bounds)
+    if not bounds:
+        return None
+
+    top = min(item[0] for item in bounds)
+    bottom = max(item[1] for item in bounds)
+    return _transform_vertical_bounds(top, bottom, logical_h, style)
+
+
+def _display_line_vertical_bounds(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    track_t_ms: int,
+    style: Style,
+    display_line: DisplayLine,
+    baselines: dict[int, int],
+    line_layouts: dict[int, _SayatooLineLayout],
+) -> tuple[int, int] | None:
+    line = display_line.line
+    line_style = _style_for_line(style, line)
+    animation = line_animation_state(
+        line_style,
+        t_ms=track_t_ms,
+        display_start_ms=display_line.display_start_ms
+        if display_line.display_start_ms is not None
+        else _line_start_ms(line),
+        display_end_ms=display_line.display_end_ms
+        if display_line.display_end_ms is not None
+        else _line_end_ms(line),
+        lane=display_line.lane if line_style.dual_line_layout else None,
+    )
+    if animation.opacity <= 0.0:
+        return None
+
+    line_layout = line_layouts.get(display_line.lane)
+    has_role_labels = _line_has_role_labels(line)
+    line_x = line_layout.text_x if line_layout is not None and not has_role_labels else None
+    layout = _layout_line(
+        track,
+        line,
+        line_style,
+        logical_w,
+        logical_h,
+        baseline_y=line_layout.baseline_y if line_layout is not None else baselines[display_line.lane],
+        line_x=line_x,
+        lane=display_line.lane if line_style.dual_line_layout else None,
+    )
+    if layout is None:
+        return None
+
+    transition = _line_char_transition_context(
+        line_style,
+        line,
+        track_t_ms,
+        display_line.display_start_ms,
+        display_line.display_end_ms,
+        len(line.chars),
+    )
+    if transition is not None:
+        return None
+
+    ctx = LayerContext(t_ms=track_t_ms, logical_w=logical_w, logical_h=logical_h)
+    layers = _line_layer_stack(layout, track_t_ms)
+    if layout.active_rubies and layout.ruby_metrics is not None:
+        layers.extend(_ruby_layer_stack(layout, line, track_t_ms, line_style))
+    line_bounds = _TEXT_RUN_COMPOSITOR.vertical_bounds(ctx, layers)
+    if line_bounds is None:
+        return None
+    dy = int(math.floor(animation.dy)) if animation.dy < 0 else int(math.ceil(animation.dy))
+    return line_bounds[0] + dy, line_bounds[1] + dy
+
+
+def _transform_vertical_bounds(
+    top: int,
+    bottom: int,
+    logical_h: int,
+    style: Style,
+) -> tuple[int, int]:
+    scale = max(style.viewport_scale_pct, 1) / 100.0
+    offset_y = style.viewport_offset_y
+    if scale == 1.0 and offset_y == 0:
+        return top, bottom
+    _frac_x, frac_y = _VIEWPORT_PIVOT_FRACTIONS.get(
+        style.viewport_align, _VIEWPORT_PIVOT_FRACTIONS["center"]
+    )
+    pivot_y = logical_h * frac_y
+    mapped_top = offset_y + pivot_y + (top - pivot_y) * scale
+    mapped_bottom = offset_y + pivot_y + (bottom - pivot_y) * scale
+    return int(math.floor(mapped_top)), int(math.ceil(mapped_bottom))
 
 
 def _resolve_sayatoo_line_layouts(
@@ -1090,8 +1304,38 @@ def _paint_signal_lits(
     displayed lyric line emits one countdown cue before its first sung character.
     The cue is anchored to the lyric line, not to the viewport.
     """
-    if not style.lit_enabled:
+    layers = _signal_layer_stack(
+        track,
+        display_lines,
+        baselines,
+        img_w,
+        img_h,
+        t_ms,
+        style,
+        line_layouts=line_layouts,
+    )
+    if not layers:
         return
+    _TEXT_RUN_COMPOSITOR.paint_ordered(
+        painter,
+        LayerContext(t_ms=t_ms, logical_w=img_w, logical_h=img_h),
+        layers,
+    )
+
+
+def _signal_layer_stack(
+    track: TimingTrack,
+    display_lines: list[DisplayLine],
+    baselines: dict[int, int],
+    img_w: int,
+    img_h: int,
+    t_ms: int,
+    style: Style,
+    *,
+    line_layouts: dict[int, _SayatooLineLayout] | None = None,
+) -> list:
+    if not style.lit_enabled:
+        return []
     is_volume = style.lit_style == "volume"
     count = (
         max(1, min(int(style.volume_column_count), 16))
@@ -1118,56 +1362,163 @@ def _paint_signal_lits(
         line_layouts=line_layouts,
     )
     if not groups:
-        return
+        return []
     fill = _valid_color(style.lit_fill_color, "#0000FF")
     stroke = _valid_color(style.lit_stroke_color, "#FFFFFF")
     stroke_width = max(int(style.lit_stroke_width), 0)
     soften = max(int(style.lit_stroke_soften), 0)
     group_opacity = max(0, min(int(style.lit_opacity_pct), 100)) / 100.0
     edge_brightness = max(0, min(int(style.lit_edge_brightness_pct), 100)) / 100.0
+    return [
+        _SignalLitsLayer(
+            group=group,
+            style=style,
+            count=count,
+            size=size,
+            tracking=tracking,
+            fill=fill,
+            stroke=stroke,
+            stroke_width=stroke_width,
+            soften=soften,
+            group_opacity=group_opacity,
+            edge_brightness=edge_brightness,
+            is_volume=is_volume,
+            z_index=index,
+        )
+        for index, group in enumerate(groups)
+    ]
 
-    painter.save()
-    try:
-        painter.setOpacity(painter.opacity() * group_opacity)
-        for group in groups:
+
+@dataclass(frozen=True)
+class _SignalLitsLayer:
+    """Layer wrapper for one Sayatoo SignalsLits group."""
+
+    group: _SignalLitGroup
+    style: Style
+    count: int
+    size: int
+    tracking: int
+    fill: QColor
+    stroke: QColor
+    stroke_width: int
+    soften: int
+    group_opacity: float
+    edge_brightness: float
+    is_volume: bool
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "_SignalLitsLayer":
+        return self
+
+    def static_key(self, ctx: LayerContext, layout: object) -> None:
+        return None
+
+    def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
+        raise AssertionError("Signal layers are dynamic in the QPainter backend")
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        return LayerAnimation()
+
+    def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
+        if self.group_opacity <= 0.0:
+            return
+        painter.save()
+        try:
+            painter.setOpacity(painter.opacity() * self.group_opacity)
+            group = self.group
             painter.save()
             try:
                 painter.setOpacity(painter.opacity() * group.opacity)
-                if is_volume:
-                    _draw_volume_lit_group(
-                        painter,
-                        group,
-                        style,
-                    )
+                if self.is_volume:
+                    _draw_volume_lit_group(painter, group, self.style)
                 else:
-                    for index in range(count):
-                        if group.active_index is None or index > group.active_index:
-                            continue
-                        is_active = index == group.active_index
-                        dx = group.dx if is_active else 0.0
-                        dy = group.dy if is_active else 0.0
-                        x = group.x + dx + index * (size * 1.5 + tracking)
-                        rect = QRectF(x, group.y + dy, float(size), float(size))
-                        painter.save()
-                        try:
-                            if is_active:
-                                painter.setOpacity(painter.opacity() * group.active_opacity)
-                            _draw_lit_shape(
-                                painter,
-                                rect,
-                                style,
-                                fill,
-                                stroke,
-                                stroke_width,
-                                soften,
-                                edge_brightness if is_active else 0.0,
-                            )
-                        finally:
-                            painter.restore()
+                    _paint_shape_signal_group(painter, self)
             finally:
                 painter.restore()
-    finally:
-        painter.restore()
+        finally:
+            painter.restore()
+
+    def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
+        if self.group_opacity <= 0.0 or self.group.opacity <= 0.0:
+            return None
+        if self.is_volume:
+            return _volume_signal_vertical_bounds(self.group, self.style)
+        return _shape_signal_vertical_bounds(self)
+
+
+def _paint_shape_signal_group(painter: QPainter, layer: _SignalLitsLayer) -> None:
+    group = layer.group
+    for index in range(layer.count):
+        if group.active_index is None or index > group.active_index:
+            continue
+        is_active = index == group.active_index
+        dx = group.dx if is_active else 0.0
+        dy = group.dy if is_active else 0.0
+        x = group.x + dx + index * (layer.size * 1.5 + layer.tracking)
+        rect = QRectF(x, group.y + dy, float(layer.size), float(layer.size))
+        painter.save()
+        try:
+            if is_active:
+                painter.setOpacity(painter.opacity() * group.active_opacity)
+            _draw_lit_shape(
+                painter,
+                rect,
+                layer.style,
+                layer.fill,
+                layer.stroke,
+                layer.stroke_width,
+                layer.soften,
+                layer.edge_brightness if is_active else 0.0,
+            )
+        finally:
+            painter.restore()
+
+
+def _volume_signal_vertical_bounds(
+    group: _SignalLitGroup,
+    style: Style,
+) -> tuple[int, int] | None:
+    geometry = _volume_signal_geometry(style)
+    rects = _volume_signal_column_rects(group.x, group.y, geometry)
+    if not rects:
+        return None
+    pad = max(int(style.lit_stroke_width), 0) + 2
+    top = min(rect.top() for rect in rects) - pad
+    bottom = max(rect.bottom() for rect in rects) + pad
+    return int(math.floor(top)), int(math.ceil(bottom))
+
+
+def _shape_signal_vertical_bounds(layer: _SignalLitsLayer) -> tuple[int, int] | None:
+    group = layer.group
+    if group.active_index is None or group.active_index < 0:
+        return None
+    rects: list[QRectF] = []
+    for index in range(layer.count):
+        if index > group.active_index:
+            continue
+        is_active = index == group.active_index
+        dx = group.dx if is_active else 0.0
+        dy = group.dy if is_active else 0.0
+        x = group.x + dx + index * (layer.size * 1.5 + layer.tracking)
+        rect = QRectF(x, group.y + dy, float(layer.size), float(layer.size))
+        rects.append(rect)
+        if layer.style.lit_shadow:
+            rects.append(
+                rect.translated(
+                    max(rect.width() * 0.08, 1.0),
+                    max(rect.height() * 0.08, 1.0),
+                )
+            )
+    if not rects:
+        return None
+    pad = _signal_stroke_extent(layer.style, is_volume=False) + 2
+    top = min(rect.top() for rect in rects) - pad
+    bottom = max(rect.bottom() for rect in rects) + pad
+    return int(math.floor(top)), int(math.ceil(bottom))
 
 
 def _signal_lit_groups(
@@ -1750,6 +2101,57 @@ def _glow_radius(style: Style, *, after: bool) -> int:
     if value == 10 and style.glow_radius_px != 10:
         value = style.glow_radius_px
     return max(int(value), 1)
+
+
+def _text_visual_padding(style: Style, *, after: bool) -> int:
+    pad = _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px)
+    if style.decoration_kind == "glow":
+        pad = max(
+            pad,
+            _glow_extent(
+                style.stroke_width_px,
+                style.stroke2_width_px,
+                _glow_radius(style, after=after),
+            ),
+        )
+    else:
+        pad = max(pad, abs(style.shadow_offset_y))
+    return max(pad, 2)
+
+
+def _ruby_visual_padding(style: Style, *, after: bool) -> int:
+    scale = _ruby_scale(style)
+    stroke_width = _scaled_px(style.stroke_width_px, scale)
+    stroke2_width = _scaled_px(style.stroke2_width_px, scale)
+    pad = _visual_stroke_extent(stroke_width, stroke2_width)
+    if style.decoration_kind == "glow":
+        pad = max(
+            pad,
+            _glow_extent(
+                stroke_width,
+                stroke2_width,
+                _scaled_glow_radius(style, scale, after=after),
+            ),
+        )
+    else:
+        pad = max(pad, abs(_scaled_signed_px(style.shadow_offset_y, scale)))
+    return max(pad, 2)
+
+
+def _title_visual_padding(title: TitleOverlay) -> int:
+    pad = _visual_stroke_extent(title.stroke_width_px, title.stroke2_width_px)
+    if title.decoration_kind == "glow":
+        pad = max(
+            pad,
+            _glow_extent(
+                title.stroke_width_px,
+                title.stroke2_width_px,
+                max(int(title.glow_radius_px), 1),
+            ),
+        )
+    else:
+        pad = max(pad, abs(title.shadow_offset_y))
+    return max(pad, 2)
 
 
 def _scaled_glow_radius(style: Style, scale: float, *, after: bool) -> int:
@@ -2843,14 +3245,20 @@ def _paint_line_layers(
     t_ms: int,
 ) -> None:
     """paint 段：消费 :class:`_LineLayout`，逐 run blit 未唱层 + 已唱层。"""
+    _TEXT_RUN_COMPOSITOR.paint_ordered(
+        painter,
+        LayerContext(t_ms=t_ms, logical_w=0, logical_h=0),
+        _line_layer_stack(layout, t_ms),
+    )
+
+
+def _line_layer_stack(layout: _LineLayout, t_ms: int) -> list:
     runs = [layout.text_layout.glyphs] if not layout.has_inline_styles else _glyph_runs(layout.text_layout)
     y = layout.baseline_y
-    ctx = LayerContext(t_ms=t_ms, logical_w=0, logical_h=0)
     before_layers = [
         _GlyphRunLayer(run, y, layout.fill_segments, t_ms, layout.rtl, after=False)
         for run in runs
     ]
-    _TEXT_RUN_COMPOSITOR.paint_ordered(painter, ctx, before_layers)
     after_band = _fill_clip_band(layout.fill_segments, t_ms, layout.rtl)
     after_layers = []
     for index, run in enumerate(runs):
@@ -2880,7 +3288,7 @@ def _paint_line_layers(
                 z_index=index * 2 + 1,
             )
         )
-    _TEXT_RUN_COMPOSITOR.paint_ordered(painter, ctx, after_layers)
+    return before_layers + after_layers
 
 
 @dataclass(frozen=True)
@@ -2941,7 +3349,8 @@ class _GlyphRunLayer:
 
     def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
         rect = _glyph_run_rect(self.glyphs, self.baseline_y)
-        return int(math.floor(rect.top())), int(math.ceil(rect.bottom()))
+        pad = _text_visual_padding(self.glyphs[0].style, after=self.after)
+        return int(math.floor(rect.top() - pad)), int(math.ceil(rect.bottom() + pad))
 
 
 @dataclass(frozen=True)
@@ -3014,7 +3423,13 @@ class _GlyphRunAfterGlowLayer:
 
     def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
         rect = _glyph_run_rect(self.glyphs, self.baseline_y)
-        return int(math.floor(rect.top())), int(math.ceil(rect.bottom()))
+        role_style = self.glyphs[0].style
+        pad = _glow_extent(
+            role_style.stroke_width_px,
+            role_style.stroke2_width_px,
+            _glow_radius(role_style, after=True),
+        )
+        return int(math.floor(rect.top() - pad)), int(math.ceil(rect.bottom() + pad))
 
 
 def _glyph_run_layer_key(
@@ -5056,6 +5471,21 @@ def _paint_ruby_layers(
     style: Style,
     rtl: bool,
 ) -> None:
+    _TEXT_RUN_COMPOSITOR.paint_ordered(
+        painter,
+        LayerContext(t_ms=t_ms, logical_w=0, logical_h=0),
+        _ruby_text_layers(layouts, ruby_font, ruby_metrics, t_ms, style, rtl),
+    )
+
+
+def _ruby_text_layers(
+    layouts: list[_RubyLayout],
+    ruby_font: QFont,
+    ruby_metrics: QFontMetrics,
+    t_ms: int,
+    style: Style,
+    rtl: bool,
+) -> list:
     layers = []
     for index, layout in enumerate(layouts):
         layers.append(
@@ -5082,10 +5512,35 @@ def _paint_ruby_layers(
                 z_index=index * 2 + 1,
             )
         )
-    _TEXT_RUN_COMPOSITOR.paint_ordered(
-        painter,
-        LayerContext(t_ms=t_ms, logical_w=0, logical_h=0),
-        layers,
+    return layers
+
+
+def _ruby_layer_stack(
+    layout: _LineLayout,
+    line: TimingLine,
+    t_ms: int,
+    style: Style,
+) -> list:
+    if layout.ruby_metrics is None:
+        return []
+    ruby_layouts = _layout_rubies(
+        line,
+        layout.intervals,
+        layout.char_x_ranges,
+        layout.active_rubies,
+        layout.ruby_metrics,
+        layout.baseline_y,
+        layout.rtl,
+        style,
+        main_ascent_px=layout.text_layout.ascent if layout.has_inline_styles else None,
+    )
+    return _ruby_text_layers(
+        ruby_layouts,
+        layout.ruby_font,
+        layout.ruby_metrics,
+        t_ms,
+        style,
+        layout.rtl,
     )
 
 
@@ -5157,7 +5612,8 @@ class _RubyTextLayer:
 
     def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
         rect = _ruby_text_rect(self.ruby_layout, self.ruby_metrics)
-        return int(math.floor(rect.top())), int(math.ceil(rect.bottom()))
+        pad = _ruby_visual_padding(self.style, after=self.after)
+        return int(math.floor(rect.top() - pad)), int(math.ceil(rect.bottom() + pad))
 
 
 def _ruby_text_layer_key(
