@@ -39,6 +39,13 @@ from krok_helper.subtitle_render.models import Style, TimingTrack
 _STRIP_MARGIN_PX = 8  # 安全边：采样可能漏掉单帧动画极值
 _STRIP_MIN_GAIN_RATIO = 0.85  # 并集 ≥ 全高的此比例则不值当，退回整帧
 _STRIP_MAX_SAMPLES = 200  # 纵向并集预扫的最大采样帧数
+
+# A3 多进程导出：offscreen worker 池并行渲帧，主进程按序喂 ffmpeg。
+# KROK_SUBTITLE_RENDER_WORKERS=N 指定进程数（1=关闭，走单进程）。worker 不强制
+# offscreen——继承父进程 QT_QPA_PLATFORM，保证字体与预览/单进程一致。
+_MULTIPROC_WORKER_CAP = 8  # 进程数上限（每个 worker 一份 QApplication）
+_MULTIPROC_MIN_FRAMES = 240  # 帧数低于此不值当 spawn，走单进程
+_CHUNK_TARGET_BYTES = 64 * 1024 * 1024  # 单个 chunk 目标字节（控内存 / IPC 粒度）
 from krok_helper.types import Logger
 
 
@@ -106,29 +113,20 @@ def render_subtitle_video(
 
     try:
         assert process.stdin is not None
-        # A4：复用单块 QImage（避免每帧分配 ~8MB）；空帧短路——无可见内容的帧直接写
-        # 预存的全透明字节，省去 fill + 光栅化 + constBits 拷贝。
-        # A2：buffer 只有条带高，paint 时整帧布局（logical_h=全高）但上移 strip_top，
-        # 只把窄条画进去。strip_top=0 / render_h=全高 时与整帧渲染等价。
-        frame_buffer = QImage(job.width, render_h, QImage.Format.Format_RGBA8888)
-        transparent = QColor(0, 0, 0, 0)
-        empty_frame = bytes(job.width * render_h * 4)
-        for index in range(total_frames):
-            if should_cancel is not None and should_cancel():
-                terminate_process(process)
-                raise ExportCancelled("已停止导出。")
-            t_ms = int(round(index * 1000 / job.fps))
-            if frame_has_content(job.track, t_ms, job.style):
-                _paint_overlay_strip(
-                    frame_buffer, job.track, job.style, t_ms,
-                    logical_w=job.width, logical_h=job.height,
-                    strip_top=strip_top, transparent=transparent,
-                )
-                process.stdin.write(_image_bytes(frame_buffer))
-            else:
-                process.stdin.write(empty_frame)
-            if on_progress is not None:
-                on_progress(index + 1, total_frames)
+        # A3：帧数够多时多进程并行渲染（offscreen worker 池），主进程按序喂 ffmpeg；
+        # 否则走单进程。两条路径逐帧逻辑一致（A4 缓冲复用 + 空帧短路 + A2 条带）。
+        worker_count = _resolve_worker_count(total_frames)
+        if worker_count > 1:
+            logger(f"多进程导出: {worker_count} 个 worker")
+            _write_frames_multiprocess(
+                process, job, strip_top, render_h, total_frames,
+                worker_count, should_cancel, on_progress,
+            )
+        else:
+            _write_frames_single(
+                process, job, strip_top, render_h, total_frames,
+                should_cancel, on_progress,
+            )
         process.stdin.close()
         _drain_process_output(process, logger)
         return_code = process.wait()
@@ -379,6 +377,149 @@ def _compute_subtitle_strip(
     if strip_h >= height * _STRIP_MIN_GAIN_RATIO:
         return None  # 并集太高，省不了多少，退回整帧
     return top, strip_h
+
+
+# ---------------------------------------------------------------------------
+# 帧写出：单进程 / 多进程（A3）
+# ---------------------------------------------------------------------------
+
+
+def _frame_bytes(
+    job: RenderJob,
+    t_ms: int,
+    strip_top: int,
+    transparent: QColor,
+    buffer: QImage,
+    empty_frame: bytes,
+) -> bytes:
+    """渲染一帧为 RGBA 字节：有内容则画进（复用的）``buffer``，否则返回预存全透明帧。"""
+    if frame_has_content(job.track, t_ms, job.style):
+        _paint_overlay_strip(
+            buffer, job.track, job.style, t_ms,
+            logical_w=job.width, logical_h=job.height,
+            strip_top=strip_top, transparent=transparent,
+        )
+        return _image_bytes(buffer)
+    return empty_frame
+
+
+def _write_frames_single(
+    process: subprocess.Popen,
+    job: RenderJob,
+    strip_top: int,
+    render_h: int,
+    total_frames: int,
+    should_cancel: Callable[[], bool] | None,
+    on_progress: Callable[[int, int], None] | None,
+) -> None:
+    """单进程逐帧渲染并按序写入 ffmpeg stdin。"""
+    buffer = QImage(job.width, render_h, QImage.Format.Format_RGBA8888)
+    transparent = QColor(0, 0, 0, 0)
+    empty_frame = bytes(job.width * render_h * 4)
+    for index in range(total_frames):
+        if should_cancel is not None and should_cancel():
+            terminate_process(process)
+            raise ExportCancelled("已停止导出。")
+        t_ms = int(round(index * 1000 / job.fps))
+        process.stdin.write(_frame_bytes(job, t_ms, strip_top, transparent, buffer, empty_frame))
+        if on_progress is not None:
+            on_progress(index + 1, total_frames)
+
+
+def _resolve_worker_count(total_frames: int) -> int:
+    """决定导出 worker 进程数：env 优先，否则 CPU 核数（封顶）；帧数太少退回单进程。"""
+    env = os.environ.get("KROK_SUBTITLE_RENDER_WORKERS")
+    if env is not None and env.strip():
+        try:
+            count = int(env)
+        except ValueError:
+            count = 1
+    else:
+        count = os.cpu_count() or 1
+    count = max(1, min(count, _MULTIPROC_WORKER_CAP))
+    if total_frames < _MULTIPROC_MIN_FRAMES:
+        return 1
+    return count
+
+
+def _resolve_chunk_size(job: RenderJob, render_h: int, total_frames: int, worker_count: int) -> int:
+    """每个 worker 任务的帧数：按目标字节封顶（控内存/IPC），且每 worker 至少几块以均衡。"""
+    frame_bytes = max(job.width * render_h * 4, 1)
+    by_bytes = max(1, _CHUNK_TARGET_BYTES // frame_bytes)
+    by_balance = max(1, total_frames // (worker_count * 4))
+    return max(1, min(by_bytes, by_balance))
+
+
+# worker 进程内的渲染上下文（spawn 后由 _render_worker_init 一次性建立）。
+_W_CTX: dict = {}
+
+
+def _render_worker_init(job: RenderJob, strip_top: int, render_h: int) -> None:
+    """worker 初始化：建本进程 QApplication（继承父 QT_QPA_PLATFORM，字体一致）+ 复用缓冲。"""
+    from PyQt6.QtWidgets import QApplication
+
+    _W_CTX["app"] = QApplication.instance() or QApplication([])
+    _W_CTX["job"] = job
+    _W_CTX["strip_top"] = strip_top
+    _W_CTX["buffer"] = QImage(job.width, render_h, QImage.Format.Format_RGBA8888)
+    _W_CTX["transparent"] = QColor(0, 0, 0, 0)
+    _W_CTX["empty_frame"] = bytes(job.width * render_h * 4)
+
+
+def _render_worker_chunk(task: tuple[int, int]) -> bytes:
+    """渲染连续一段帧 ``[start, start+count)`` 为拼接的 RGBA 字节。"""
+    start, count = task
+    job = _W_CTX["job"]
+    strip_top = _W_CTX["strip_top"]
+    buffer = _W_CTX["buffer"]
+    transparent = _W_CTX["transparent"]
+    empty_frame = _W_CTX["empty_frame"]
+    out = bytearray()
+    for index in range(start, start + count):
+        t_ms = int(round(index * 1000 / job.fps))
+        out += _frame_bytes(job, t_ms, strip_top, transparent, buffer, empty_frame)
+    return bytes(out)
+
+
+def _write_frames_multiprocess(
+    process: subprocess.Popen,
+    job: RenderJob,
+    strip_top: int,
+    render_h: int,
+    total_frames: int,
+    worker_count: int,
+    should_cancel: Callable[[], bool] | None,
+    on_progress: Callable[[int, int], None] | None,
+) -> None:
+    """多进程并行渲染：worker 池各渲一段，主进程用 imap 按序收回并写入 ffmpeg stdin。
+
+    imap 保序，慢块会让后续完成块在结果队列里短暂积压；chunk 按 _CHUNK_TARGET_BYTES
+    封顶以控内存。取消 / 异常时 terminate 整池。
+    """
+    import multiprocessing as mp
+
+    chunk = _resolve_chunk_size(job, render_h, total_frames, worker_count)
+    tasks = [(start, min(chunk, total_frames - start)) for start in range(0, total_frames, chunk)]
+    ctx = mp.get_context("spawn")
+    pool = ctx.Pool(
+        worker_count,
+        initializer=_render_worker_init,
+        initargs=(job, strip_top, render_h),
+    )
+    written = 0
+    try:
+        for (_start, count), blob in zip(tasks, pool.imap(_render_worker_chunk, tasks)):
+            if should_cancel is not None and should_cancel():
+                terminate_process(process)
+                raise ExportCancelled("已停止导出。")
+            process.stdin.write(blob)
+            written += count
+            if on_progress is not None:
+                on_progress(written, total_frames)
+    finally:
+        # 无论正常完成 / 取消 / 异常，都强制收掉 workers（imap 可能仍在后台渲染）。
+        pool.terminate()
+        pool.join()
 
 
 def _render_overlay_frame(

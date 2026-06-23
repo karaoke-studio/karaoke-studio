@@ -25,6 +25,10 @@ from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402
     _image_bytes,
     _paint_overlay_strip,
     _render_overlay_frame,
+    _resolve_chunk_size,
+    _resolve_worker_count,
+    _write_frames_multiprocess,
+    _write_frames_single,
     build_render_command,
     render_subtitle_video,
 )
@@ -177,6 +181,61 @@ def test_strip_render_is_pixel_identical_to_full_frame_region(qapp, tmp_path):
 def test_frame_count_ceil():
     assert _frame_count(1000, 60) == 60
     assert _frame_count(1001, 60) == 61
+
+
+def test_resolve_worker_count_respects_env_and_min_frames(monkeypatch):
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_WORKERS", "4")
+    assert _resolve_worker_count(10_000) == 4  # 帧数够多 → 用指定数
+    assert _resolve_worker_count(10) == 1       # 帧数太少 → 退回单进程
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_WORKERS", "1")
+    assert _resolve_worker_count(10_000) == 1   # 显式 1 = 关闭
+
+
+def test_resolve_chunk_size_is_positive_and_balanced(tmp_path):
+    job = replace(_job(tmp_path), width=1920, height=1080)
+    chunk = _resolve_chunk_size(job, 1080, total_frames=10_000, worker_count=4)
+    assert chunk >= 1
+    # 每 worker 至少几块以均衡（不会一块独吞）
+    assert chunk <= 10_000 // 4
+
+
+class _CollectStdin:
+    def __init__(self):
+        self.data = bytearray()
+
+    def write(self, payload):
+        self.data += payload
+
+    def close(self):
+        return None
+
+
+class _CollectProcess:
+    def __init__(self):
+        self.stdin = _CollectStdin()
+
+
+def test_multiprocess_output_is_byte_identical_to_single_process(qapp, tmp_path):
+    # 多进程并行渲染的拼接输出必须与单进程逐帧逐字节一致（含 worker 间字体一致性）。
+    job = replace(
+        _job(tmp_path),
+        style=Style(font_size_px=24, line_y_position="center"),
+        width=160,
+        height=90,
+        duration_ms=1000,
+    )
+    total = _frame_count(job.duration_ms, job.fps)
+    strip = _compute_subtitle_strip(job, job.duration_ms)
+    strip_top, render_h = strip if strip is not None else (0, job.height)
+
+    single = _CollectProcess()
+    _write_frames_single(single, job, strip_top, render_h, total, None, None)
+
+    multi = _CollectProcess()
+    _write_frames_multiprocess(multi, job, strip_top, render_h, total, 2, None, None)
+
+    assert len(single.stdin.data) == total * job.width * render_h * 4
+    assert bytes(multi.stdin.data) == bytes(single.stdin.data)
 
 
 def test_render_job_validation_requires_subtitles(tmp_path):
