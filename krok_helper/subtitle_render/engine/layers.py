@@ -56,21 +56,51 @@ class BakedLayer:
 
 @dataclass(frozen=True)
 class LayerAnimation:
-    """Time-dependent compositing state for a baked layer."""
+    """Time-dependent compositing state for a baked layer.
+
+    These are the cheap composite primitives (§9.6): ``opacity`` / ``top_left``
+    (translate) / ``clip_rect`` always reuse the *same* baked bitmap, while
+    ``transform`` carries the sub-quantum affine residual left over after the
+    bake itself was rasterised at the quantised transform (see ``static_key``).
+
+    ``transform_origin`` (scene coordinates, same space as ``top_left``) is the
+    pivot the ``transform`` rotates / scales / skews about.  When ``None`` the
+    transform is applied as-is about the painter origin (existing behaviour).
+    Effects such as utopia / spin_flip pivot about a glyph- or line-centre and
+    should set it so they don't have to fold ``translate(c)·M·translate(-c)``
+    into the matrix by hand.
+    """
 
     top_left: QPointF = field(default_factory=QPointF)
     opacity: float = 1.0
     clip_rect: QRectF | None = None
     transform: QTransform | None = None
+    transform_origin: QPointF | None = None
 
 
 class SubtitleLayer(Protocol):
-    """Effect layer contract for the P1.b compositor.
+    """Effect layer contract for the P1.b / §9 compositor.
 
-    ``layout`` must be pure geometry for the given context.  ``static_key`` being
-    non-None means the compositor may cache ``bake`` and then apply only the
-    per-frame ``animate`` state.  A None key marks the layer as dynamic and
-    routes it to ``paint_dynamic``.
+    ``layout`` must be pure geometry for the given context.
+
+    ``static_key`` is the unifying primitive for *all* effects, static or
+    animated (§9.3, §9.6).  It returns ``quantise(animation state)``:
+
+    * a value that is **time-independent** for static layers (one bake, reused
+      every frame), or
+    * a value that **quantises the per-frame animation state** for animated
+      layers — adjacent frames whose affine / blur / stroke fall in the same
+      quantisation bucket share one bake, and only crossing a bucket re-bakes.
+
+    The returned key is opaque to the compositor but is handed back to ``bake``,
+    so a layer encodes its quantised raster parameters (e.g. quantised
+    transform) in the key and ``bake`` rasterises **from vector at that
+    quantised state** (sharp, no bitmap-then-transform softening).  ``animate``
+    then supplies only the residual — opacity / translate / clip / the
+    sub-quantum affine remainder (see :class:`LayerAnimation`).
+
+    A ``None`` key marks the layer as fully dynamic and routes it to
+    ``paint_dynamic`` (no cache).
     """
 
     z_index: int
@@ -254,6 +284,20 @@ def _ordered_scope_keys(
     return known + extra
 
 
+def _pivoted_transform(transform: QTransform, origin: QPointF | None) -> QTransform:
+    """Return ``transform`` applied about ``origin`` (scene coords).
+
+    With Qt's row-vector convention (``p' = p * M``) a pivot about ``o`` is
+    ``T(-o) * M * T(o)`` so that ``o`` is a fixed point.  ``origin=None`` returns
+    the transform unchanged.
+    """
+    if origin is None:
+        return transform
+    to_origin = QTransform.fromTranslate(-origin.x(), -origin.y())
+    from_origin = QTransform.fromTranslate(origin.x(), origin.y())
+    return to_origin * transform * from_origin
+
+
 def _paint_baked_layer(
     painter: QPainter,
     baked: BakedLayer,
@@ -269,7 +313,10 @@ def _paint_baked_layer(
         if animation.clip_rect is not None:
             painter.setClipRect(animation.clip_rect)
         if animation.transform is not None:
-            painter.setTransform(animation.transform, combine=True)
+            painter.setTransform(
+                _pivoted_transform(animation.transform, animation.transform_origin),
+                combine=True,
+            )
         painter.drawImage(top_left, baked.image)
     finally:
         painter.restore()

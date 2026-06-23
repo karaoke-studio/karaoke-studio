@@ -9,7 +9,7 @@ from typing import Hashable
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPointF, QRectF  # noqa: E402
-from PyQt6.QtGui import QColor, QImage, QPainter  # noqa: E402
+from PyQt6.QtGui import QColor, QImage, QPainter, QTransform  # noqa: E402
 
 from krok_helper.subtitle_render.engine.layers import (  # noqa: E402
     BakedLayer,
@@ -19,6 +19,8 @@ from krok_helper.subtitle_render.engine.layers import (  # noqa: E402
     LayerContext,
     SCOPE_GROUP,
     SCOPE_LINE,
+    _paint_baked_layer,
+    _pivoted_transform,
 )
 
 
@@ -221,6 +223,49 @@ def test_layer_compositor_keeps_scope_ids_separate():
     assert rect is not None
     assert int(rect.top()) == 2
     assert int(rect.bottom()) == 26
+
+
+def test_pivoted_transform_keeps_origin_fixed():
+    origin = QPointF(4.0, 4.0)
+    pivoted = _pivoted_transform(QTransform().rotate(90.0), origin)
+
+    mapped = pivoted.map(origin)
+    assert round(mapped.x(), 6) == 4.0
+    assert round(mapped.y(), 6) == 4.0
+
+    moved = pivoted.map(QPointF(8.0, 4.0))  # offset from the pivot must move
+    assert (round(moved.x(), 6), round(moved.y(), 6)) != (8.0, 4.0)
+
+
+def test_pivoted_transform_none_origin_is_identity_passthrough():
+    transform = QTransform().rotate(30.0).scale(2.0, 1.5)
+    assert _pivoted_transform(transform, None) is transform
+
+
+def test_paint_baked_layer_pivots_transform_about_origin():
+    # Left half red, right half blue; 180° about the centre swaps the halves.
+    baked_image = QImage(8, 8, QImage.Format.Format_ARGB32_Premultiplied)
+    baked_image.fill(QColor("#0000FF"))
+    red = QPainter(baked_image)
+    try:
+        red.fillRect(QRectF(0.0, 0.0, 4.0, 8.0), QColor("#FF0000"))
+    finally:
+        red.end()
+
+    animation = LayerAnimation(
+        transform=QTransform().rotate(180.0),
+        transform_origin=QPointF(4.0, 4.0),
+    )
+
+    image = _blank()
+    painter = QPainter(image)
+    try:
+        _paint_baked_layer(painter, BakedLayer(baked_image), animation)
+    finally:
+        painter.end()
+
+    assert _pixel(image, 6, 4) == "#FF0000"  # right side now red
+    assert _pixel(image, 2, 4) == "#0000FF"  # left side now blue
 
 
 def test_layer_compositor_ignores_inactive_scope_boxes():
