@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from PyQt6.QtGui import QColor, QImage
+import numpy as np
+from PyQt6.QtGui import QColor, QImage, QPainter
 
 from krok_helper.errors import ExportCancelled, ProcessingError
 from krok_helper.ffmpeg import _build_subprocess_kwargs, find_tool, terminate_process
@@ -24,9 +25,20 @@ from krok_helper.subtitle_render.engine.encoder_select import (
     resolved_encoder_label,
     video_encoder_options,
 )
-from krok_helper.subtitle_render.engine.painter import frame_has_content, paint_frame
+from krok_helper.subtitle_render.engine.painter import (
+    frame_has_content,
+    paint_frame,
+    paint_frame_to_painter,
+)
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.models import Style, TimingTrack
+
+# A2 条带渲染：只把字幕所在窄条喂给 ffmpeg pipe，省每帧 8MB 拷贝 / pipe 带宽。
+# 条带 = 整段渲染里所有可见内容纵向范围的并集（单条覆盖，方案 A）。可用环境变量
+# KROK_SUBTITLE_RENDER_STRIP=0 关闭退回整帧。
+_STRIP_MARGIN_PX = 8  # 安全边：采样可能漏掉单帧动画极值
+_STRIP_MIN_GAIN_RATIO = 0.85  # 并集 ≥ 全高的此比例则不值当，退回整帧
+_STRIP_MAX_SAMPLES = 200  # 纵向并集预扫的最大采样帧数
 from krok_helper.types import Logger
 
 
@@ -62,7 +74,16 @@ def render_subtitle_video(
 
     duration_ms = _resolve_duration_ms(job)
     total_frames = _frame_count(duration_ms, job.fps)
-    command = build_render_command(ffmpeg_path, job, duration_ms=duration_ms)
+
+    # A2：预扫字幕纵向并集，只渲染窄条（取消 / 关闭 / 无收益时退回整帧）。
+    strip: tuple[int, int] | None = None
+    if _strip_enabled() and not (should_cancel is not None and should_cancel()):
+        strip = _compute_subtitle_strip(job, duration_ms, should_cancel=should_cancel)
+    strip_top, render_h = strip if strip is not None else (0, job.height)
+    if strip is not None:
+        logger(f"条带渲染: y={strip_top} 高={render_h}（全高 {job.height}）")
+
+    command = build_render_command(ffmpeg_path, job, duration_ms=duration_ms, strip=strip)
 
     job.output_path.parent.mkdir(parents=True, exist_ok=True)
     logger(f"导出字幕视频: {job.output_path.name}")
@@ -87,17 +108,22 @@ def render_subtitle_video(
         assert process.stdin is not None
         # A4：复用单块 QImage（避免每帧分配 ~8MB）；空帧短路——无可见内容的帧直接写
         # 预存的全透明字节，省去 fill + 光栅化 + constBits 拷贝。
-        frame_buffer = QImage(job.width, job.height, QImage.Format.Format_RGBA8888)
+        # A2：buffer 只有条带高，paint 时整帧布局（logical_h=全高）但上移 strip_top，
+        # 只把窄条画进去。strip_top=0 / render_h=全高 时与整帧渲染等价。
+        frame_buffer = QImage(job.width, render_h, QImage.Format.Format_RGBA8888)
         transparent = QColor(0, 0, 0, 0)
-        empty_frame = bytes(job.width * job.height * 4)
+        empty_frame = bytes(job.width * render_h * 4)
         for index in range(total_frames):
             if should_cancel is not None and should_cancel():
                 terminate_process(process)
                 raise ExportCancelled("已停止导出。")
             t_ms = int(round(index * 1000 / job.fps))
             if frame_has_content(job.track, t_ms, job.style):
-                frame_buffer.fill(transparent)
-                paint_frame(frame_buffer, job.track, t_ms, job.style)
+                _paint_overlay_strip(
+                    frame_buffer, job.track, job.style, t_ms,
+                    logical_w=job.width, logical_h=job.height,
+                    strip_top=strip_top, transparent=transparent,
+                )
                 process.stdin.write(_image_bytes(frame_buffer))
             else:
                 process.stdin.write(empty_frame)
@@ -133,17 +159,31 @@ def render_subtitle_video(
     return job.output_path
 
 
-def build_render_command(ffmpeg_path: str, job: RenderJob, *, duration_ms: int | None = None) -> list[str]:
-    """Build the ffmpeg command used by :func:`render_subtitle_video`."""
+def build_render_command(
+    ffmpeg_path: str,
+    job: RenderJob,
+    *,
+    duration_ms: int | None = None,
+    strip: tuple[int, int] | None = None,
+) -> list[str]:
+    """Build the ffmpeg command used by :func:`render_subtitle_video`.
+
+    ``strip`` = ``(y_top, height)``：仅把该窄条作为 rawvideo 输入，``overlay=0:y_top``
+    贴回全幅背景；``None`` 时整帧输入、``overlay=0:0``（原行为）。
+    """
     _validate_job(job)
     duration = _resolve_duration_ms(job) if duration_ms is None else duration_ms
     duration_seconds = max(duration / 1000.0, 0.001)
+    overlay_y = 0
+    pipe_w, pipe_h = job.width, job.height
+    if strip is not None:
+        overlay_y, pipe_h = strip
     filter_graph = (
         f"[1:v:0]scale={job.width}:{job.height}:force_original_aspect_ratio=decrease,"
         f"pad={job.width}:{job.height}:(ow-iw)/2:(oh-ih)/2:color=black,"
         f"fps={job.fps},trim=duration={duration_seconds:.6f},setpts=PTS-STARTPTS[bg];"
         "[0:v:0]format=rgba,setpts=PTS-STARTPTS[ov];"
-        "[bg][ov]overlay=0:0:format=auto[v]"
+        f"[bg][ov]overlay=0:{overlay_y}:format=auto[v]"
     )
     command = [
         ffmpeg_path,
@@ -156,7 +196,7 @@ def build_render_command(ffmpeg_path: str, job: RenderJob, *, duration_ms: int |
         "-pix_fmt",
         "rgba",
         "-s:v",
-        f"{job.width}x{job.height}",
+        f"{pipe_w}x{pipe_h}",
         "-r",
         str(job.fps),
         "-i",
@@ -223,6 +263,122 @@ def _image_bytes(image: QImage) -> bytes:
     bits = image.constBits()
     bits.setsize(image.sizeInBytes())
     return bytes(bits)
+
+
+def _strip_enabled() -> bool:
+    return os.environ.get("KROK_SUBTITLE_RENDER_STRIP", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+
+
+def _paint_overlay_strip(
+    buffer: QImage,
+    track: TimingTrack,
+    style: Style,
+    t_ms: int,
+    *,
+    logical_w: int,
+    logical_h: int,
+    strip_top: int,
+    transparent: QColor,
+) -> None:
+    """把整帧字幕布局画进只有条带高的 ``buffer``。
+
+    布局仍按整帧逻辑尺寸（``logical_h`` = 全高）计算，画笔整体上移 ``strip_top``，
+    于是只有 ``[strip_top, strip_top + buffer 高)`` 这条会落进 buffer。``strip_top=0``
+    且 buffer 高=全高时即等价于整帧渲染。
+    """
+    buffer.fill(transparent)
+    painter = QPainter(buffer)
+    try:
+        if strip_top:
+            painter.translate(0, -strip_top)
+        paint_frame_to_painter(painter, logical_w, logical_h, track, t_ms, style)
+    finally:
+        painter.end()
+
+
+def _strip_sample_times(track: TimingTrack, style: Style, duration_ms: int, total_frames: int) -> list[int]:
+    """纵向并集预扫的采样时刻：均匀网格 + 每行起止（含 lead-in/tail 动画极值）。"""
+    times: set[int] = set()
+    grid = min(total_frames, _STRIP_MAX_SAMPLES)
+    for i in range(grid):
+        times.add(int(round(i * duration_ms / max(grid - 1, 1))))
+    lead = max(getattr(style, "line_lead_in_ms", 0) or 0, 0)
+    tail = max(getattr(style, "line_tail_ms", 0) or 0, 0)
+    for line in track.lines:
+        if not line.chars:
+            continue
+        start = line.chars[0].start_ms
+        end = line.end_ms or start
+        for tt in (start - lead, start, end, end + tail):
+            times.add(tt)
+    return sorted(t for t in times if 0 <= t <= duration_ms)
+
+
+def _content_row_bounds(image: QImage) -> tuple[int, int] | None:
+    """返回 ``image`` 里 alpha>0 的最上 / 最下行；全透明返回 ``None``。"""
+    width = image.width()
+    height = image.height()
+    bpl = image.bytesPerLine()
+    ptr = image.constBits()
+    ptr.setsize(image.sizeInBytes())
+    arr = np.frombuffer(ptr, dtype=np.uint8, count=bpl * height).reshape(height, bpl)
+    alpha = arr[:, 3 : width * 4 : 4]  # Format_RGBA8888：每像素第 4 字节为 A
+    rows = np.nonzero(alpha.any(axis=1))[0]
+    if rows.size == 0:
+        return None
+    return int(rows[0]), int(rows[-1])
+
+
+def _compute_subtitle_strip(
+    job: RenderJob,
+    duration_ms: int,
+    *,
+    should_cancel: Callable[[], bool] | None = None,
+) -> tuple[int, int] | None:
+    """预扫整段，求所有可见字幕内容的纵向并集 ``(y_top, height)``。
+
+    单条覆盖（方案 A）：有几行 / 几个来源 / 带不带信号注音，都由实际渲染像素的并集
+    决定，不假设固定行数。并集 ≥ 全高 ``_STRIP_MIN_GAIN_RATIO`` 或全空时返回 ``None``
+    退回整帧。yuv420p 友好：top 下取偶、height 上取偶。
+    """
+    width, height = job.width, job.height
+    total_frames = _frame_count(duration_ms, job.fps)
+    times = _strip_sample_times(job.track, job.style, duration_ms, total_frames)
+    if not times:
+        return None
+
+    scratch = QImage(width, height, QImage.Format.Format_RGBA8888)
+    transparent = QColor(0, 0, 0, 0)
+    top = height
+    bottom = -1
+    for t_ms in times:
+        if should_cancel is not None and should_cancel():
+            return None
+        if not frame_has_content(job.track, t_ms, job.style):
+            continue
+        scratch.fill(transparent)
+        paint_frame(scratch, job.track, t_ms, job.style)
+        bounds = _content_row_bounds(scratch)
+        if bounds is None:
+            continue
+        top = min(top, bounds[0])
+        bottom = max(bottom, bounds[1])
+
+    if bottom < top:
+        return None  # 整段无可见内容
+
+    top = max(0, top - _STRIP_MARGIN_PX)
+    bottom = min(height - 1, bottom + _STRIP_MARGIN_PX)
+    top -= top % 2  # 下取偶
+    strip_h = bottom - top + 1
+    if strip_h % 2:
+        strip_h += 1
+    strip_h = min(strip_h, height - top)
+    if strip_h >= height * _STRIP_MIN_GAIN_RATIO:
+        return None  # 并集太高，省不了多少，退回整帧
+    return top, strip_h
 
 
 def _render_overlay_frame(

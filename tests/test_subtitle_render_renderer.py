@@ -14,9 +14,16 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from krok_helper.errors import ExportCancelled, ProcessingError  # noqa: E402
 from krok_helper.subtitle_render.engine import renderer  # noqa: E402
+import numpy as np  # noqa: E402
+from PyQt6.QtGui import QColor, QImage  # noqa: E402
+
+from krok_helper.subtitle_render.engine.painter import paint_frame  # noqa: E402
 from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402
     RenderJob,
+    _compute_subtitle_strip,
     _frame_count,
+    _image_bytes,
+    _paint_overlay_strip,
     _render_overlay_frame,
     build_render_command,
     render_subtitle_video,
@@ -116,6 +123,55 @@ def test_overlay_frame_size_matches_rgba(qapp, tmp_path):
     job = _job(tmp_path)
     raw = _render_overlay_frame(job.track, job.style, 500, job.width, job.height)
     assert len(raw) == job.width * job.height * 4
+
+
+def test_build_render_command_strip_offsets_overlay_and_pipe_size(tmp_path):
+    command = build_render_command("ffmpeg", _job(tmp_path), strip=(20, 40))
+    filter_graph = command[command.index("-filter_complex") + 1]
+    assert "overlay=0:20" in filter_graph
+    assert "scale=320:180" in filter_graph  # 背景仍全幅
+    assert command[command.index("-s:v") + 1] == "320x40"  # pipe 只喂窄条
+
+
+def test_compute_subtitle_strip_returns_subband_for_centered_line(qapp, tmp_path):
+    job = replace(_job(tmp_path), style=Style(font_size_px=24, line_y_position="center"))
+    strip = _compute_subtitle_strip(job, 1000)
+    assert strip is not None
+    top, height = strip
+    assert 0 <= top
+    assert top + height <= job.height
+    assert height < job.height  # 比全高矮
+    assert top % 2 == 0 and height % 2 == 0  # yuv420p 友好
+
+
+def test_compute_subtitle_strip_falls_back_when_content_fills_height(qapp, tmp_path):
+    # 矮帧 + 大字：内容纵向并集 ≥ 85% 全高 → 退回整帧（None）。
+    job = replace(_job(tmp_path), style=Style(font_size_px=72, line_y_position="center"), height=80)
+    assert _compute_subtitle_strip(job, 1000) is None
+
+
+def test_strip_render_is_pixel_identical_to_full_frame_region(qapp, tmp_path):
+    job = replace(_job(tmp_path), style=Style(font_size_px=24, line_y_position="center"))
+    t_ms = 800
+    strip = _compute_subtitle_strip(job, 1000)
+    assert strip is not None
+    top, height = strip
+
+    full = QImage(job.width, job.height, QImage.Format.Format_RGBA8888)
+    full.fill(QColor(0, 0, 0, 0))
+    paint_frame(full, job.track, t_ms, job.style)
+
+    buf = QImage(job.width, height, QImage.Format.Format_RGBA8888)
+    _paint_overlay_strip(
+        buf, job.track, job.style, t_ms,
+        logical_w=job.width, logical_h=job.height,
+        strip_top=top, transparent=QColor(0, 0, 0, 0),
+    )
+
+    full_arr = np.frombuffer(_image_bytes(full), dtype=np.uint8).reshape(job.height, job.width * 4)
+    buf_arr = np.frombuffer(_image_bytes(buf), dtype=np.uint8).reshape(height, job.width * 4)
+    # 条带就是整帧 [top, top+height) 行的精确切片
+    assert np.array_equal(full_arr[top : top + height], buf_arr)
 
 
 def test_frame_count_ceil():
