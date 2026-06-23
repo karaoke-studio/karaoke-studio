@@ -34,7 +34,7 @@ import os
 from collections import OrderedDict
 from dataclasses import dataclass, replace
 from threading import Lock
-from typing import Optional
+from typing import Hashable, Optional
 
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import (
@@ -52,6 +52,15 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene
 
+from krok_helper.subtitle_render.engine.layers import (
+    BakedLayer,
+    LayerAnimation,
+    LayerCache,
+    LayerCompositor,
+    LayerContext,
+    SCOPE_LINE,
+)
+
 
 _IMAGE_FILL_CACHE_MAX = 16
 _IMAGE_FILL_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
@@ -60,9 +69,8 @@ _IMAGE_FILL_LOCK = Lock()
 # 横排 glyph run 层缓存：普通行与分色行都按连续同 style 的 run 烘焙。
 # 每个 run 的「未唱」层（含 before-glow）与「已唱」主体层（无 glow 模糊）
 # 各烘焙一次；逐帧只按扫光半平面 clip blit。已唱 glow 仍逐帧绘制。
-_ROLE_RUN_LAYER_CACHE_MAX = 128
-_ROLE_RUN_LAYER_CACHE: "OrderedDict[tuple, tuple[QImage, int, int]]" = OrderedDict()
-_ROLE_RUN_LAYER_LOCK = Lock()
+_TEXT_RUN_LAYER_CACHE = LayerCache(max_items=128)
+_TEXT_RUN_COMPOSITOR = LayerCompositor(_TEXT_RUN_LAYER_CACHE)
 _RUBY_COMBINING_CHARS = set("ぁぃぅぇぉゃゅょゎァィゥェォャュョヮ\u3099\u309A")
 
 
@@ -228,8 +236,7 @@ def clear_before_layer_cache() -> None:
     with _IMAGE_FILL_LOCK:
         _IMAGE_FILL_CACHE.clear()
         _IMAGE_BRUSH_CACHE.clear()
-    with _ROLE_RUN_LAYER_LOCK:
-        _ROLE_RUN_LAYER_CACHE.clear()
+    _TEXT_RUN_LAYER_CACHE.clear()
 
 from krok_helper.subtitle_render.engine.timeline import (
     DisplayLine,
@@ -2662,10 +2669,141 @@ def _paint_line_layers(
     """paint 段：消费 :class:`_LineLayout`，逐 run blit 未唱层 + 已唱层。"""
     runs = [layout.text_layout.glyphs] if not layout.has_inline_styles else _glyph_runs(layout.text_layout)
     y = layout.baseline_y
-    for run in runs:
-        _paint_glyph_before_run(painter, run, y)
-    for run in runs:
-        _paint_glyph_after_run(painter, run, y, layout.fill_segments, t_ms, layout.rtl)
+    ctx = LayerContext(t_ms=t_ms, logical_w=0, logical_h=0)
+    before_layers = [
+        _GlyphRunLayer(run, y, layout.fill_segments, t_ms, layout.rtl, after=False)
+        for run in runs
+    ]
+    _TEXT_RUN_COMPOSITOR.paint(painter, ctx, before_layers)
+    after_layers = []
+    for index, run in enumerate(runs):
+        after_layers.append(
+            _GlyphRunAfterGlowLayer(
+                run,
+                y,
+                layout.fill_segments,
+                t_ms,
+                layout.rtl,
+                z_index=index * 2,
+            )
+        )
+        after_band = _fill_clip_band(layout.fill_segments, t_ms, layout.rtl)
+        if after_band is None:
+            continue
+        after_layers.append(
+            _GlyphRunLayer(
+                run,
+                y,
+                layout.fill_segments,
+                t_ms,
+                layout.rtl,
+                after=True,
+                z_index=index * 2 + 1,
+            )
+        )
+    _TEXT_RUN_COMPOSITOR.paint(painter, ctx, after_layers)
+
+
+@dataclass(frozen=True)
+class _GlyphRunLayer:
+    """Layer wrapper for a horizontal text glyph run body."""
+
+    glyphs: list[_GlyphLayout]
+    baseline_y: int
+    fill_segments: list[_FillSegment]
+    t_ms: int
+    rtl: bool
+    after: bool
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "_GlyphRunLayer":
+        return self
+
+    def static_key(self, ctx: LayerContext, layout: object) -> tuple:
+        role_style = self.glyphs[0].style
+        colors = _effective_karaoke_colors(role_style)
+        return _glyph_run_layer_key(self.glyphs, role_style, colors, after=self.after)
+
+    def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
+        role_style = self.glyphs[0].style
+        colors = _effective_karaoke_colors(role_style)
+        image, dx, dy = _build_glyph_run_layer(
+            self.glyphs,
+            role_style,
+            colors,
+            after=self.after,
+        )
+        return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        run_left = min(glyph.left for glyph in self.glyphs)
+        clip_rect = None
+        if self.after:
+            band = _fill_clip_band(self.fill_segments, self.t_ms, self.rtl)
+            if band is None:
+                return LayerAnimation(opacity=0.0)
+            band_left, band_right = band
+            if self.rtl:
+                clip_rect = QRectF(float(band_left), -1_000_000.0, 1_000_000.0, 2_000_000.0)
+            else:
+                clip_rect = QRectF(-1_000_000.0, -1_000_000.0, float(band_right) + 1_000_000.0, 2_000_000.0)
+        return LayerAnimation(
+            top_left=QPointF(float(run_left), float(self.baseline_y)),
+            clip_rect=clip_rect,
+        )
+
+    def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
+        return
+
+    def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
+        rect = _glyph_run_rect(self.glyphs, self.baseline_y)
+        return int(math.floor(rect.top())), int(math.ceil(rect.bottom()))
+
+
+@dataclass(frozen=True)
+class _GlyphRunAfterGlowLayer:
+    """Dynamic layer wrapper for the existing per-run after glow path."""
+
+    glyphs: list[_GlyphLayout]
+    baseline_y: int
+    fill_segments: list[_FillSegment]
+    t_ms: int
+    rtl: bool
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "_GlyphRunAfterGlowLayer":
+        return self
+
+    def static_key(self, ctx: LayerContext, layout: object) -> None:
+        return None
+
+    def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
+        raise AssertionError("after glow is still dynamic in b.1")
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        return LayerAnimation()
+
+    def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
+        _paint_glyph_after_glow(
+            painter,
+            self.glyphs,
+            self.baseline_y,
+            self.fill_segments,
+            self.t_ms,
+            self.rtl,
+        )
+
+    def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
+        rect = _glyph_run_rect(self.glyphs, self.baseline_y)
+        return int(math.floor(rect.top())), int(math.ceil(rect.bottom()))
 
 
 def _glyph_run_layer_key(
@@ -2706,29 +2844,6 @@ def _glyph_run_layer_key(
     )
 
 
-def _get_or_build_glyph_run_layer(
-    key: tuple,
-    glyphs: list[_GlyphLayout],
-    role_style: Style,
-    colors: KaraokeColors,
-    *,
-    after: bool,
-) -> tuple[QImage, int, int]:
-    with _ROLE_RUN_LAYER_LOCK:
-        cached = _ROLE_RUN_LAYER_CACHE.get(key)
-        if cached is not None:
-            _ROLE_RUN_LAYER_CACHE.move_to_end(key)
-            return cached
-
-    entry = _build_glyph_run_layer(glyphs, role_style, colors, after=after)
-
-    with _ROLE_RUN_LAYER_LOCK:
-        _ROLE_RUN_LAYER_CACHE[key] = entry
-        while len(_ROLE_RUN_LAYER_CACHE) > _ROLE_RUN_LAYER_CACHE_MAX:
-            _ROLE_RUN_LAYER_CACHE.popitem(last=False)
-    return entry
-
-
 def _build_glyph_run_layer(
     glyphs: list[_GlyphLayout],
     role_style: Style,
@@ -2740,7 +2855,7 @@ def _build_glyph_run_layer(
 
     ``after=False``（未唱层）：glow(before) 或 阴影(before) + stroke2 + stroke + 底色。
     ``after=True``（已唱主体）：阴影(after，仅非 glow) + stroke2 + stroke + 底色，
-    **不含 glow 模糊**（已唱 glow 仍逐帧，见 :func:`_paint_glyph_after_run`）。
+    **不含 glow 模糊**（已唱 glow 仍逐帧，见 :func:`_paint_glyph_after_glow`）。
 
     run 内逐字形可有不同字体/字号，故按 glyph 各自的 ``font`` 排版。返回 ``(image, dx, dy)``，
     blit 时画在 ``(run_left + dx, baseline_y + dy)``。
@@ -2840,22 +2955,7 @@ def _build_glyph_run_layer(
     return (image, offset_x, offset_y)
 
 
-def _paint_glyph_before_run(
-    painter: QPainter,
-    glyphs: list[_GlyphLayout],
-    baseline_y: int,
-) -> None:
-    if not glyphs:
-        return
-    role_style = glyphs[0].style
-    colors = _effective_karaoke_colors(role_style)
-    key = _glyph_run_layer_key(glyphs, role_style, colors, after=False)
-    image, dx, dy = _get_or_build_glyph_run_layer(key, glyphs, role_style, colors, after=False)
-    run_left = min(glyph.left for glyph in glyphs)
-    painter.drawImage(QPointF(float(run_left + dx), float(baseline_y + dy)), image)
-
-
-def _paint_glyph_after_run(
+def _paint_glyph_after_glow(
     painter: QPainter,
     glyphs: list[_GlyphLayout],
     baseline_y: int,
@@ -2906,22 +3006,6 @@ def _paint_glyph_after_run(
                 )
             finally:
                 painter.restore()
-    # 已唱主体（阴影(非glow)+stroke2+stroke+底色）：烘焙缓存，逐帧只 blit + 半平面 clip。
-    # glow 模糊已在上面逐帧处理（与普通路径一致）。
-    band = _fill_clip_band(fill_segments, t_ms, rtl)
-    if band is not None:
-        after_key = _glyph_run_layer_key(glyphs, role_style, colors, after=True)
-        after_image, after_dx, after_dy = _get_or_build_glyph_run_layer(
-            after_key, glyphs, role_style, colors, after=True
-        )
-        run_left = min(glyph.left for glyph in glyphs)
-        _blit_after_layer(
-            painter,
-            after_image,
-            QPointF(float(run_left + after_dx), float(baseline_y + after_dy)),
-            band=band,
-            rtl=rtl,
-        )
 
 
 def _paint_role_line_with_character_transition(
@@ -4365,43 +4449,6 @@ def _karaoke_state_signature(state: KaraokeColorState) -> tuple:
         _fill_signature(state.stroke2),
         _fill_signature(state.shadow),
     )
-
-
-def _blit_after_layer(
-    painter: QPainter,
-    after_image: QImage,
-    top_left: QPointF,
-    *,
-    band: tuple[int, int],
-    rtl: bool,
-) -> None:
-    """把烘焙好的"已唱"层 blit 到画布，并在扫光边界做半平面 clip（只露已唱侧）。
-
-    ``band`` = ``_fill_clip_band`` 的 (left, right)。LTR 时右缘=扫光锋面(sharp)、
-    左/上/下放开到整张图；RTL 时左缘=扫光锋面、右/上/下放开。这样描边/阴影在已唱侧
-    的外扩完整呈现，未唱侧不漏，且锋面与逐帧老路径一致（右缘=fill_end）。
-    """
-    band_left, band_right = band
-    img_left = top_left.x()
-    img_top = top_left.y()
-    img_right = img_left + after_image.width()
-    img_bottom = img_top + after_image.height()
-    if rtl:
-        clip_left = float(band_left)
-        clip_right = img_right
-    else:
-        clip_left = img_left
-        clip_right = float(band_right)
-    if clip_right <= clip_left:
-        return
-    painter.save()
-    try:
-        painter.setClipRect(
-            QRectF(clip_left, img_top, clip_right - clip_left, img_bottom - img_top)
-        )
-        painter.drawImage(top_left, after_image)
-    finally:
-        painter.restore()
 
 
 def _effective_karaoke_colors(style: Style) -> KaraokeColors:
