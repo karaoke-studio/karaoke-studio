@@ -229,6 +229,25 @@ class _RubyLayout:
     reading_width: float
 
 
+@dataclass(frozen=True)
+class _TitleOverlayLayout:
+    """标题 overlay 的纯几何/排版布局（不依赖 t_ms）。"""
+
+    lines: list[str]
+    widths: list[float]
+    block_w: float
+    block_h: float
+    line_h: int
+    gap: int
+    x0: float
+    y_top: float
+    font: QFont
+    metrics: QFontMetrics
+    latin_font: QFont
+    latin_metrics: QFontMetrics
+    font_for: object
+
+
 _UTOPIA_INTRO_TIME_MS = 700
 _UTOPIA_INTRO_DELAY_MS = 200
 _UTOPIA_INTRO_ENLARGE_MS = 400
@@ -531,10 +550,26 @@ def _paint_title_overlay(
     title: TitleOverlay,
     opacity: float,
 ) -> None:
+    layout = _layout_title_overlay(img_w, img_h, track, title)
+    if layout is None:
+        return
+    _TEXT_RUN_COMPOSITOR.paint_ordered(
+        painter,
+        LayerContext(t_ms=0, logical_w=img_w, logical_h=img_h),
+        [_TitleOverlayLayer(layout, title, opacity)],
+    )
+
+
+def _layout_title_overlay(
+    img_w: int,
+    img_h: int,
+    track: TimingTrack,
+    title: TitleOverlay,
+) -> _TitleOverlayLayout | None:
     text = _resolve_title_text(title, track)
     lines = [line for line in text.split("\n")]
     if not any(line.strip() for line in lines):
-        return
+        return None
     font = _build_title_font(title)
     metrics = QFontMetrics(font)
     latin_font = _build_title_latin_font(title)
@@ -554,34 +589,163 @@ def _paint_title_overlay(
     gap = max(int(title.line_gap_px), 0)
     block_h = line_h * len(lines) + gap * max(len(lines) - 1, 0)
     if block_w <= 0 or block_h <= 0:
-        return
+        return None
 
     x0, y_top = _title_block_origin(img_w, img_h, block_w, block_h, title)
+    return _TitleOverlayLayout(
+        lines=lines,
+        widths=widths,
+        block_w=block_w,
+        block_h=float(block_h),
+        line_h=line_h,
+        gap=gap,
+        x0=x0,
+        y_top=y_top,
+        font=font,
+        metrics=metrics,
+        latin_font=latin_font,
+        latin_metrics=latin_metrics,
+        font_for=font_for,
+    )
 
-    painter.save()
+
+@dataclass(frozen=True)
+class _TitleOverlayLayer:
+    """Layer wrapper for the static title overlay block."""
+
+    title_layout: _TitleOverlayLayout
+    title: TitleOverlay
+    opacity: float
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "_TitleOverlayLayer":
+        return self
+
+    def static_key(self, ctx: LayerContext, layout: object) -> tuple:
+        return _title_overlay_layer_key(self.title_layout, self.title)
+
+    def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
+        image, dx, dy = _build_title_overlay_layer(self.title_layout, self.title)
+        return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        return LayerAnimation(
+            top_left=QPointF(float(self.title_layout.x0), float(self.title_layout.y_top)),
+            opacity=max(0.0, min(1.0, self.opacity)),
+        )
+
+    def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
+        return
+
+    def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
+        return (
+            int(math.floor(self.title_layout.y_top)),
+            int(math.ceil(self.title_layout.y_top + self.title_layout.block_h)),
+        )
+
+
+def _title_overlay_layer_key(
+    layout: _TitleOverlayLayout,
+    title: TitleOverlay,
+) -> tuple:
+    return (
+        tuple(layout.lines),
+        tuple(round(width, 3) for width in layout.widths),
+        round(layout.block_w, 3),
+        round(layout.block_h, 3),
+        layout.line_h,
+        layout.gap,
+        title.align,
+        layout.font.family(),
+        layout.font.pixelSize(),
+        int(layout.font.weight()),
+        layout.font.italic(),
+        layout.latin_font.family(),
+        layout.latin_font.pixelSize(),
+        int(layout.latin_font.weight()),
+        layout.latin_font.italic(),
+        title.letter_spacing_px,
+        _fill_signature(title.fill),
+        _fill_signature(title.stroke),
+        title.stroke_width_px,
+        _fill_signature(title.stroke2),
+        title.stroke2_width_px,
+        title.decoration_kind,
+        title.glow_radius_px,
+        _fill_signature(title.shadow),
+        title.shadow_offset_x,
+        title.shadow_offset_y,
+    )
+
+
+def _build_title_overlay_layer(
+    layout: _TitleOverlayLayout,
+    title: TitleOverlay,
+) -> tuple[QImage, int, int]:
+    stroke_extent = _visual_stroke_extent(title.stroke_width_px, title.stroke2_width_px)
+    glow_extra = (
+        _glow_extent(title.stroke_width_px, title.stroke2_width_px, title.glow_radius_px)
+        if title.decoration_kind == "glow"
+        else 0
+    )
+    extent = max(
+        stroke_extent,
+        glow_extra,
+        abs(title.shadow_offset_x),
+        abs(title.shadow_offset_y),
+        2,
+    ) + 4
+    pad_left = max(0, -title.shadow_offset_x) + extent
+    pad_right = max(0, title.shadow_offset_x) + extent
+    pad_top = max(0, -title.shadow_offset_y) + extent
+    pad_bottom = max(0, title.shadow_offset_y) + extent
+    img_w = max(int(math.ceil(pad_left + layout.block_w + pad_right)), 1)
+    img_h = max(int(math.ceil(pad_top + layout.block_h + pad_bottom)), 1)
+    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+
+    p = QPainter(image)
     try:
-        painter.setRenderHints(
+        p.setRenderHints(
             QPainter.RenderHint.Antialiasing
             | QPainter.RenderHint.TextAntialiasing
             | QPainter.RenderHint.SmoothPixmapTransform
         )
-        painter.setOpacity(painter.opacity() * max(0.0, min(1.0, opacity)))
-        painter.setFont(font)
-        baseline = y_top + metrics.ascent()
-        for line, width in zip(lines, widths):
+        p.setFont(layout.font)
+        baseline = pad_top + layout.metrics.ascent()
+        for line, width in zip(layout.lines, layout.widths):
             if line.strip():
                 if title.align == "center":
-                    lx = x0 + (block_w - width) / 2.0
+                    lx = pad_left + (layout.block_w - width) / 2.0
                 elif title.align == "right":
-                    lx = x0 + (block_w - width)
+                    lx = pad_left + (layout.block_w - width)
                 else:
-                    lx = x0
-                path = _title_line_path(line, font, lx, baseline, metrics, latin_metrics, font_for, spacing)
-                rect = QRectF(float(lx), float(baseline - metrics.ascent()), float(width), float(line_h))
-                _paint_title_text_stack(painter, path, rect, title)
-            baseline += line_h + gap
+                    lx = float(pad_left)
+                path = _title_line_path(
+                    line,
+                    layout.font,
+                    lx,
+                    baseline,
+                    layout.metrics,
+                    layout.latin_metrics,
+                    layout.font_for,
+                    int(title.letter_spacing_px),
+                )
+                rect = QRectF(
+                    float(lx),
+                    float(baseline - layout.metrics.ascent()),
+                    float(width),
+                    float(layout.line_h),
+                )
+                _paint_title_text_stack(p, path, rect, title)
+            baseline += layout.line_h + layout.gap
     finally:
-        painter.restore()
+        p.end()
+    return image, -pad_left, -pad_top
 
 
 def _make_title_font_for(title: TitleOverlay, jp_font: QFont, latin_font: QFont):
