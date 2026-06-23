@@ -24,7 +24,7 @@ from krok_helper.subtitle_render.engine.encoder_select import (
     resolved_encoder_label,
     video_encoder_options,
 )
-from krok_helper.subtitle_render.engine.painter import paint_frame
+from krok_helper.subtitle_render.engine.painter import frame_has_content, paint_frame
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.models import Style, TimingTrack
 from krok_helper.types import Logger
@@ -85,12 +85,22 @@ def render_subtitle_video(
 
     try:
         assert process.stdin is not None
+        # A4：复用单块 QImage（避免每帧分配 ~8MB）；空帧短路——无可见内容的帧直接写
+        # 预存的全透明字节，省去 fill + 光栅化 + constBits 拷贝。
+        frame_buffer = QImage(job.width, job.height, QImage.Format.Format_RGBA8888)
+        transparent = QColor(0, 0, 0, 0)
+        empty_frame = bytes(job.width * job.height * 4)
         for index in range(total_frames):
             if should_cancel is not None and should_cancel():
                 terminate_process(process)
                 raise ExportCancelled("已停止导出。")
             t_ms = int(round(index * 1000 / job.fps))
-            process.stdin.write(_render_overlay_frame(job.track, job.style, t_ms, job.width, job.height))
+            if frame_has_content(job.track, t_ms, job.style):
+                frame_buffer.fill(transparent)
+                paint_frame(frame_buffer, job.track, t_ms, job.style)
+                process.stdin.write(_image_bytes(frame_buffer))
+            else:
+                process.stdin.write(empty_frame)
             if on_progress is not None:
                 on_progress(index + 1, total_frames)
         process.stdin.close()
@@ -208,6 +218,13 @@ def _frame_count(duration_ms: int, fps: int) -> int:
     return max(1, int(math.ceil(duration_ms * fps / 1000)))
 
 
+def _image_bytes(image: QImage) -> bytes:
+    """Copy ``image`` 的原始 RGBA 像素为 ``bytes``（喂给 ffmpeg pipe）。"""
+    bits = image.constBits()
+    bits.setsize(image.sizeInBytes())
+    return bytes(bits)
+
+
 def _render_overlay_frame(
     track: TimingTrack,
     style: Style,
@@ -218,9 +235,7 @@ def _render_overlay_frame(
     image = QImage(width, height, QImage.Format.Format_RGBA8888)
     image.fill(QColor(0, 0, 0, 0))
     paint_frame(image, track, t_ms, style)
-    bits = image.constBits()
-    bits.setsize(image.sizeInBytes())
-    return bytes(bits)
+    return _image_bytes(image)
 
 
 def _drain_process_output(process: subprocess.Popen, logger: Logger) -> None:

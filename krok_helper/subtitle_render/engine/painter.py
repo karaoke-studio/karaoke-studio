@@ -229,6 +229,33 @@ from krok_helper.subtitle_render.models import (
 )
 
 
+def _resolve_visible_content(track: TimingTrack, t_ms: int, style: Style):
+    """计算某帧的可见内容元组：``(track_t_ms, display_style, display_lines,
+    signal_lines, title_opacity)``。
+
+    :func:`paint_frame_to_painter` 的早退判断与 :func:`frame_has_content` 共用本函数，
+    保证"是否有可见内容"两处口径一致（A4 空帧短路用）。
+    """
+    track_t_ms = _effective_track_time_ms(track, t_ms, style)
+    display_style = _display_style_for_signal_window(style)
+    display_lines = _visible_lines_for_style(track, track_t_ms, display_style)
+    signal_lines = _signal_display_lines_for_style(track, track_t_ms, display_style)
+    title_opacity = _title_overlay_opacity(style.title_overlay, track, track_t_ms)
+    return track_t_ms, display_style, display_lines, signal_lines, title_opacity
+
+
+def frame_has_content(track: Optional[TimingTrack], t_ms: int, style: Style) -> bool:
+    """该帧是否会画出任何字幕内容（行 / 信号 / 标题）。
+
+    用于导出 / 预览的"空帧短路"：返回 ``False`` 时可直接写全透明帧，省去
+    ``fill`` + 光栅化 + 字节拷贝。与 :func:`paint_frame_to_painter` 的早退条件同源。
+    """
+    if track is None:
+        return False
+    _, _, display_lines, signal_lines, title_opacity = _resolve_visible_content(track, t_ms, style)
+    return bool(display_lines or signal_lines or title_opacity > 0.0)
+
+
 def paint_frame(
     image: QImage,
     track: Optional[TimingTrack],
@@ -268,11 +295,9 @@ def paint_frame_to_painter(
     """
     if track is None:
         return
-    track_t_ms = _effective_track_time_ms(track, t_ms, style)
-    display_style = _display_style_for_signal_window(style)
-    display_lines = _visible_lines_for_style(track, track_t_ms, display_style)
-    signal_lines = _signal_display_lines_for_style(track, track_t_ms, display_style)
-    title_opacity = _title_overlay_opacity(style.title_overlay, track, track_t_ms)
+    track_t_ms, display_style, display_lines, signal_lines, title_opacity = (
+        _resolve_visible_content(track, t_ms, style)
+    )
     if not display_lines and not signal_lines and title_opacity <= 0.0:
         return
 
