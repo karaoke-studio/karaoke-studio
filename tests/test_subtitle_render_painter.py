@@ -682,6 +682,16 @@ def test_signal_shape_tracks_top_of_subtitle_line_box(qapp):
 
     assert groups
     main_text_top = baselines[0] - metrics.ascent()
+    layout = _resolve_sayatoo_line_layouts(
+        320,
+        180,
+        track,
+        display_lines,
+        baselines,
+        500,
+        style,
+    )[0]
+    assert layout.signal_y == pytest.approx(groups[0].y)
     assert groups[0].y + style.lit_size <= main_text_top
 
 

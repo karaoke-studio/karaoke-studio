@@ -130,7 +130,11 @@ class _VolumeSignalGeometry:
 class _SayatooLineLayout:
     baseline_y: int
     text_x: int
+    line_style: Style
+    metrics: QFontMetrics
+    total_w: int
     signal_x: float | None = None
+    signal_y: float | None = None
 
 
 @dataclass(frozen=True)
@@ -725,7 +729,21 @@ def _resolve_sayatoo_line_layouts(
         layouts[display_line.lane] = _SayatooLineLayout(
             baseline_y=baseline_y,
             text_x=int(round(text_x)),
+            line_style=line_style,
+            metrics=metrics,
+            total_w=text_w,
             signal_x=signal_x,
+            signal_y=(
+                _signal_lit_y(
+                    baseline_y,
+                    metrics,
+                    signal_metrics.size,
+                    line_style,
+                    signal_metrics.stroke_extent,
+                )
+                if signal_metrics is not None and signal_x is not None
+                else None
+            ),
         )
     return layouts
 
@@ -981,22 +999,28 @@ def _signal_lit_groups(
         line = display_line.line
         if line.is_blank or not line.chars:
             continue
-        line_style = _style_for_line(style, line)
-        font = _build_font(line_style)
-        metrics = QFontMetrics(font)
-        latin_font = _build_latin_font(line_style)
-        font_for = _make_font_for(line_style, font, latin_font)
-        latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
-        active_rubies = _active_rubies_for_line(track.rubies, line)
-        ruby_metrics = QFontMetrics(_build_ruby_font(line_style)) if active_rubies else None
-        char_widths = [_char_advance(c.text, metrics, latin_metrics, font_for) for c in line.chars]
-        total_w = _line_text_width(char_widths, line_style)
+        line_layout = line_layouts.get(display_line.lane) if line_layouts is not None else None
+        if line_layout is not None:
+            line_style = line_layout.line_style
+            metrics = line_layout.metrics
+            total_w = line_layout.total_w
+            baseline_y = line_layout.baseline_y
+        else:
+            line_style = _style_for_line(style, line)
+            font = _build_font(line_style)
+            metrics = QFontMetrics(font)
+            latin_font = _build_latin_font(line_style)
+            font_for = _make_font_for(line_style, font, latin_font)
+            latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
+            active_rubies = _active_rubies_for_line(track.rubies, line)
+            ruby_metrics = QFontMetrics(_build_ruby_font(line_style)) if active_rubies else None
+            char_widths = [_char_advance(c.text, metrics, latin_metrics, font_for) for c in line.chars]
+            total_w = _line_text_width(char_widths, line_style)
+            baseline_y = baselines.get(display_line.lane)
+            if baseline_y is None:
+                baseline_y = _resolve_baseline_y(metrics, img_h, line_style, ruby_metrics)
         if total_w <= 0:
             continue
-        line_layout = line_layouts.get(display_line.lane) if line_layouts is not None else None
-        baseline_y = line_layout.baseline_y if line_layout is not None else baselines.get(display_line.lane)
-        if baseline_y is None:
-            baseline_y = _resolve_baseline_y(metrics, img_h, line_style, ruby_metrics)
 
         signal_end = _line_start_ms(line) + time_offset
         active_start = signal_end - active_duration
@@ -1024,7 +1048,11 @@ def _signal_lit_groups(
             if line_layout is not None and line_layout.signal_x is not None
             else _signal_lit_x(img_w, group_width, line_style, stroke_extent)
         )
-        y = _signal_lit_y(baseline_y, metrics, size, line_style, stroke_extent)
+        y = (
+            line_layout.signal_y
+            if line_layout is not None and line_layout.signal_y is not None
+            else _signal_lit_y(baseline_y, metrics, size, line_style, stroke_extent)
+        )
         groups.append(
             _SignalLitGroup(
                 x=x,
