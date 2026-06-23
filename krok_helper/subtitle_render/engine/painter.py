@@ -32,7 +32,7 @@ from __future__ import annotations
 import math
 import os
 from collections import OrderedDict
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from threading import Lock
 from typing import Hashable, Optional
 
@@ -222,6 +222,9 @@ class _LineLayout:
     colors: KaraokeColors
     rtl: bool
     has_inline_styles: bool
+    # 各字符墨水边界（绝对坐标）；走字按墨水推进，不含 advance 两侧空白。
+    # 仅用于扫光 ratio/分段计算，绘制定位仍用 advance 的 char_x_ranges。
+    ink_x_ranges: list = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -3218,14 +3221,14 @@ def _paint_line_static(
             _paint_role_line_with_character_transition(
                 painter, line, layout.text_layout, layout.char_x_ranges, layout.intervals,
                 layout.active_rubies, layout.baseline_y, t_ms, transition, style,
-                rtl=layout.rtl,
+                rtl=layout.rtl, ink_x_ranges=layout.ink_x_ranges,
             )
         else:
             _paint_line_with_character_transition(
                 painter, line, layout.char_widths, layout.char_x_ranges, layout.intervals,
                 layout.active_rubies, layout.font, layout.baseline_y, layout.metrics,
                 style, layout.colors, layout.line_rect, t_ms, transition,
-                rtl=layout.rtl, font_for=layout.font_for,
+                rtl=layout.rtl, font_for=layout.font_for, ink_x_ranges=layout.ink_x_ranges,
             )
         return
 
@@ -3318,7 +3321,7 @@ def _layout_plain_line(
         char_widths=char_widths, total_w=total_w, x0=x0, baseline_y=y,
         intervals=intervals, char_lefts=char_lefts, char_x_ranges=char_x_ranges,
         fill_segments=fill_segments, line_rect=line_rect, colors=colors, rtl=rtl,
-        has_inline_styles=False,
+        has_inline_styles=False, ink_x_ranges=ink_x_ranges,
     )
 
 
@@ -3691,7 +3694,7 @@ def _layout_role_line(
         char_x_ranges=char_x_ranges,
         fill_segments=fill_segments, line_rect=text_layout.line_rect,
         colors=_effective_karaoke_colors(style), rtl=style.right_to_left,
-        has_inline_styles=True,
+        has_inline_styles=True, ink_x_ranges=ink_x_ranges,
     )
 
 
@@ -4489,7 +4492,10 @@ def _paint_role_line_with_character_transition(
     style: Style,
     *,
     rtl: bool = False,
+    ink_x_ranges: list[tuple[int, int]] | None = None,
 ) -> None:
+    # 走字 ratio 按墨水边界算（与静态路径一致）；缺省回退 advance 框。
+    fill_ranges = ink_x_ranges if ink_x_ranges is not None else char_x_ranges
     glyphs_by_index = _role_glyphs_by_index(line, layout)
     count = max(len(line.chars), 1)
     handled_indices: set[int] = set()
@@ -4600,7 +4606,7 @@ def _paint_role_line_with_character_transition(
             ratio = _character_fill_ratio(
                 line,
                 intervals,
-                char_x_ranges,
+                fill_ranges,
                 active_rubies,
                 index,
                 t_ms,
@@ -4839,7 +4845,10 @@ def _paint_line_with_character_transition(
     transition: _LineCharTransition,
     rtl: bool = False,
     font_for=None,
+    ink_x_ranges: list[tuple[int, int]] | None = None,
 ) -> None:
+    # 走字 ratio 按墨水边界算（与静态路径一致）；缺省回退 advance 框。
+    fill_ranges = ink_x_ranges if ink_x_ranges is not None else char_x_ranges
     count = max(len(line.chars), 1)
     handled_indices: set[int] = set()
     for index, (ch, width) in enumerate(zip(line.chars, char_widths)):
@@ -4910,7 +4919,7 @@ def _paint_line_with_character_transition(
             fill_ratio = _ruby_progress_ratio(group_ruby, t_ms)
         else:
             fill_ratio = _character_fill_ratio(
-                line, intervals, char_x_ranges, active_rubies, index, t_ms
+                line, intervals, fill_ranges, active_rubies, index, t_ms
             )
 
         path = QPainterPath()

@@ -1489,6 +1489,37 @@ def test_static_wipe_segments_use_ink_bounds_not_advance(qapp):
     assert any_strictly_narrower
 
 
+def test_character_fill_ratio_honors_ink_ranges(qapp):
+    """transition（utopia 等）路径的逐字走字 ratio 也按墨水边界推进。
+
+    _character_fill_ratio 的 ruby 分支用传入的 x 范围把 ruby 进度映射成本字 ratio。
+    现在 transition 路径传入墨水边界（而非 advance 框），故同一时刻、同一 ruby 进度下
+    墨水与 advance 给出的 ratio 不同——本测试锁定这一差异，防止 transition 路径回退。
+    """
+    from krok_helper.subtitle_render.engine.timeline import (  # noqa: E402,PLC0415
+        compute_char_intervals,
+    )
+
+    line = TimingLine(
+        chars=[TimingChar(text="W", start_ms=1000), TimingChar(text="A", start_ms=1500)],
+        end_ms=2000,
+    )
+    rubies = [
+        RubyAnnotation(kanji="WA", reading="わ", pos_start_ms=1000, pos_end_ms=2000)
+    ]
+    intervals = compute_char_intervals(line)
+    # 合成范围：advance 框相邻无空隙，墨水框两侧各留 bearing。
+    advance_ranges = [(0, 100), (100, 200)]
+    ink_ranges = [(15, 85), (115, 185)]
+
+    t = 1200  # ruby 进度 ≈ 0.2 → 首字 W 处于部分填充
+    r_adv = _character_fill_ratio(line, intervals, advance_ranges, rubies, 0, t)
+    r_ink = _character_fill_ratio(line, intervals, ink_ranges, rubies, 0, t)
+    assert 0.0 < r_adv < 1.0
+    assert 0.0 < r_ink < 1.0
+    assert r_adv != r_ink
+
+
 def test_paint_frame_glow_decoration_changes_rendered_frame(qapp):
     img_plain = _blank()
     img_glow = _blank()
