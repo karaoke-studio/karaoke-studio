@@ -207,6 +207,9 @@ class PreviewGraphicsView(QGraphicsView):
         self._t_ms: int = 0
         self._video_player: Optional[QMediaPlayer] = None
         self._video_audio_out: Optional[QAudioOutput] = None
+        # 单播放器统一（步骤2，§10.9）：use_external_player 后视频由共享 controller 驱动，
+        # 本视图不再自建/seek 视频 player；set_time 只驱动字幕层。None → 旧自建路径不变。
+        self._external_player = None
 
         # 把字幕栅格化搬到工作线程，GUI 线程只 blit → 主呈现循环不再被
         # 单帧 14ms paint 阻塞（§9 A4 解耦）。默认开，env KROK_SUBTITLE_ASYNC_PREVIEW=0 回退。
@@ -325,7 +328,16 @@ class PreviewGraphicsView(QGraphicsView):
         self._async_renderer = None
         renderer.stop()
 
+    def use_external_player(self, controller) -> None:
+        """单播放器统一：视频输出接到共享 controller，本视图不再自建/驱动视频 player。"""
+        self._external_player = controller
+        controller.set_video_output(self._video_item)
+
     def set_video_source(self, path: Optional[Path]) -> None:
+        if self._external_player is not None:
+            # 视频由共享 controller 驱动；本视图只记录路径，不创建/操作自己的 player。
+            self._video_path = path
+            return
         if self._video_player is not None:
             self._video_player.pause()
         self._video_path = path
@@ -344,6 +356,9 @@ class PreviewGraphicsView(QGraphicsView):
 
     def set_playing(self, playing: bool) -> None:
         self._video_playing = playing
+        if self._external_player is not None:
+            # 播放由 TransportBar 驱动共享 controller；本视图不操作播放器。
+            return
         if self._video_path is None or self._video_player is None:
             return
         if playing:
@@ -402,6 +417,9 @@ class PreviewGraphicsView(QGraphicsView):
     # ------------------------------------------------------------------ internal
 
     def _sync_video_position(self, *, force: bool = False) -> None:
+        if self._external_player is not None:
+            # 视频 seek 由 TransportBar→controller 统一驱动，本视图不再各自 seek。
+            return
         if self._video_path is None or self._video_player is None:
             return
         current = self._video_player.position()

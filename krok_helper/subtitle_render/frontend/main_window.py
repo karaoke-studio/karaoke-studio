@@ -69,6 +69,10 @@ from krok_helper.subtitle_render.engine.encoder_select import (
 from krok_helper.subtitle_render.engine.renderer import RenderJob, render_subtitle_video
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.frontend.lyrics_list import LyricsPanel
+from krok_helper.subtitle_render.frontend.playback import (
+    PlaybackController,
+    unified_player_enabled,
+)
 from krok_helper.subtitle_render.frontend.preview_view import PreviewPanel, TransportBar
 from krok_helper.subtitle_render.frontend.property_panel import (
     PropertyPanel,
@@ -545,6 +549,16 @@ class SubtitleRenderWindow(QWidget):
         self._transport_bar.timeChanged.connect(self._preview_panel.set_time)
         self._transport_bar.playbackStateChanged.connect(self._preview_panel.set_playing)
         self._preview_panel.canvas.framePainted.connect(self._transport_bar.note_preview_frame_painted)
+        # 单播放器统一（步骤2，§10.9，flag KROK_SUBTITLE_UNIFIED_PLAYER 默认关）：
+        # 视频自带音频时同一文件本不该被音频/视频两个 QMediaPlayer 各自解码。开启后用一个
+        # 共享 PlaybackController 同时驱动音视频（A/V 天然锁帧），预览不再自建视频 player。
+        # raster 回退画布暂不支持 → use_external_player 返回 False，自动回退旧三播放器路径。
+        self._playback: Optional[PlaybackController] = None
+        if unified_player_enabled():
+            controller = PlaybackController(self)
+            if self._preview_panel.use_external_player(controller):
+                self._playback = controller
+                self._transport_bar.attach_playback_controller(controller)
         center_layout.addWidget(self._transport_bar)
         top.addWidget(center)
 
@@ -780,6 +794,10 @@ class SubtitleRenderWindow(QWidget):
         if info.audio_streams > 0:
             self._audio_path = path
             self._audio_info = info
+        if self._playback is not None:
+            # 单播放器：视频（无论是否含音频）整体交给共享 controller（同时出视频 + 音频）。
+            self._transport_bar.set_audio_source(path)
+        elif info.audio_streams > 0:
             self._transport_bar.set_audio_source(path)
         self._refresh_transport_duration()
         self._mark_project_dirty()

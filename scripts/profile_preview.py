@@ -149,6 +149,8 @@ def main() -> None:
     parser.add_argument("--no-subtitle", action="store_true", help="不画字幕，测纯视频呈现节奏（A/B）")
     parser.add_argument("--utopia", action="store_true", help="覆盖样式：entry/exit=utopia")
     parser.add_argument("--glow", action="store_true", help="覆盖样式：decoration_kind=glow")
+    parser.add_argument("--unified", action="store_true",
+                        help="单播放器统一：共享 PlaybackController 同时驱动音视频（步骤2 验证）")
     args = parser.parse_args()
 
     data = load_render_project(Path(args.project))
@@ -189,7 +191,16 @@ def main() -> None:
     view.set_output_size(w, h)
     view.set_style(style)
     view.set_track(None if args.no_subtitle else track)
-    view.set_video_source(video)
+
+    # 单播放器统一（步骤2）：--unified 时由共享 PlaybackController 同时驱动音视频，
+    # view 不自建视频 player（模拟 main_window 的统一接线）。
+    controller = None
+    if args.unified:
+        from krok_helper.subtitle_render.frontend.playback import PlaybackController  # noqa: PLC0415
+        controller = PlaybackController()
+        view.use_external_player(controller)
+    else:
+        view.set_video_source(video)
 
     # 包裹视频播放器 setPosition：统计播放中触发的 seek（_sync_video_position 漂移校正）。
     vp = view._video_player  # noqa: SLF001
@@ -214,7 +225,9 @@ def main() -> None:
     transport = TransportBar()
     transport.set_preview_fps(fps)
     transport.set_duration(total_ms)
-    transport.set_audio_source(video)
+    if controller is not None:
+        transport.attach_playback_controller(controller)
+    transport.set_audio_source(video)  # unified 时 delegates → controller.set_media（同时出视频）
 
     tick_count = {"n": 0}
     transport.timeChanged.connect(view.set_time)

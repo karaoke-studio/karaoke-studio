@@ -534,6 +534,84 @@ def test_player_position_callback_does_not_re_seek_player(qapp, tmp_path):
     assert calls == []
 
 
+# ---------------------------------------------------------------------------
+# 单播放器统一（步骤2）：attach_playback_controller 后传输委托给共享 controller
+# ---------------------------------------------------------------------------
+class _FakeController:
+    """记录调用的轻量 PlaybackController 替身（不创建真实 QMediaPlayer）。"""
+
+    def __init__(self) -> None:
+        self._has = True
+        self._playing = False
+        self._pos = 0
+        self.seeks: list[int] = []
+
+    def has_media(self) -> bool:
+        return self._has
+
+    def set_media(self, path) -> None:
+        self._has = path is not None
+
+    def play(self) -> None:
+        self._playing = True
+
+    def pause(self) -> None:
+        self._playing = False
+
+    def is_playing(self) -> bool:
+        return self._playing
+
+    def seek(self, ms: int) -> None:
+        self._pos = int(ms)
+        self.seeks.append(int(ms))
+
+    def position(self) -> int:
+        return self._pos
+
+
+def test_transport_play_pause_delegate_to_controller(qapp):
+    bar = _bar(qapp)
+    ctrl = _FakeController()
+    bar.attach_playback_controller(ctrl)
+    bar.set_time(1_000)
+
+    bar.play()
+    assert ctrl.is_playing() is True
+    assert bar.is_playing() is True
+    assert ctrl.position() == 1_000  # play 把 controller seek 到锚点
+    assert bar._player is None  # 不再自建音频 player
+
+    bar.pause()
+    assert ctrl.is_playing() is False
+    assert bar.is_playing() is False
+
+
+def test_transport_slider_seek_delegates_to_controller(qapp):
+    bar = _bar(qapp)
+    ctrl = _FakeController()
+    bar.attach_playback_controller(ctrl)
+
+    bar.set_time(3_000)  # → _on_slider_changed → controller.seek
+
+    assert 3_000 in ctrl.seeks
+
+
+def test_audio_clock_uses_controller_position(qapp, monkeypatch):
+    """attach controller 后，时钟锚定读 controller.position()（一致时按 elapsed 插值）。"""
+    bar = _bar(qapp)
+    ctrl = _FakeController()
+    bar.attach_playback_controller(ctrl)
+    bar.set_time(1_000)
+    bar.play()
+    monkeypatch.setattr(bar._tick_anchor_real, "elapsed", lambda: 240)
+    ctrl._pos = 1_240  # 与墙钟外推一致（deadband 内）→ 不纠偏
+
+    bar._on_audio_clock_tick()
+
+    assert bar.current_time_ms == 1_240
+    bar.pause()
+
+
 def test_audio_clock_anchor_correction_deadband_resync_and_gain():
     """音频锚定时钟的纯纠偏逻辑（无 Qt 对象）。"""
     # 正常抖动（≤ deadband）→ 不纠

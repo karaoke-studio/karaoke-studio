@@ -406,6 +406,17 @@ class PreviewPanel(DropPanel):
     def set_playing(self, playing: bool) -> None:
         self._canvas.set_playing(playing)
 
+    def use_external_player(self, controller) -> bool:
+        """单播放器统一：把画布视频输出接到共享 controller。返回是否成功接上。
+
+        当前仅 graphics 画布支持；raster 回退暂不支持（返回 False，调用方据此回退旧路径）。
+        """
+        canvas = self._canvas
+        if hasattr(canvas, "use_external_player"):
+            canvas.use_external_player(controller)
+            return True
+        return False
+
     @property
     def canvas(self) -> PreviewCanvas:
         return self._canvas
@@ -514,6 +525,9 @@ class TransportBar(QWidget):
         self._player: Optional[QMediaPlayer] = None
         self._audio_out: Optional[QAudioOutput] = None
         self._has_audio = False
+        # 单播放器统一（步骤2，§10.9）：attach_playback_controller 后用共享 controller
+        # 取代自建音频 player（同一个播放器同时驱动音视频）。controller=None → 旧路径完全不变。
+        self._controller = None
 
         # ── 无音频时的视觉 tick ─────────────────────────────────────
         self._preview_fps = _DEFAULT_PREVIEW_FPS
@@ -563,10 +577,26 @@ class TransportBar(QWidget):
             return
         self._slider.setValue(ms)  # 触发 valueChanged → timeChanged
 
+    def attach_playback_controller(self, controller) -> None:
+        """单播放器统一（步骤2）：用共享 PlaybackController 取代自建音频 player。
+
+        attach 后 set_audio_source / play / pause / seek / 时钟都走 controller（同一个
+        播放器同时驱动音视频）；不 attach（controller=None）时旧的自建音频 player 路径完全不变。
+        """
+        self._controller = controller
+
+    def _use_controller(self) -> bool:
+        return self._controller is not None and self._controller.has_media()
+
     def set_audio_source(self, path: Optional[Path]) -> None:
-        """喂音频文件给 ``QMediaPlayer``；``None`` 清空。"""
+        """喂音频文件给播放器；``None`` 清空。attach controller 后交给共享 controller。"""
         was_playing = self.is_playing()
         self.pause()
+        if self._controller is not None:
+            self._controller.set_media(path)
+            if was_playing and self._controller.has_media():
+                self.play()
+            return
         if path is None:
             if self._player is not None:
                 self._player.setSource(QUrl())
@@ -590,7 +620,11 @@ class TransportBar(QWidget):
         """开始播放。有音频用 ``QMediaPlayer``；无音频走视觉 tick。"""
         self._tick_anchor_ms = self._slider.value()
         self._tick_anchor_real.start()
-        if self._has_audio:
+        if self._use_controller():
+            self._controller.seek(self._tick_anchor_ms)
+            self._controller.play()
+            self._position_poll_timer.start()
+        elif self._has_audio:
             player = self._ensure_audio_player()
             player.setPosition(self._tick_anchor_ms)
             player.play()
@@ -601,7 +635,9 @@ class TransportBar(QWidget):
 
     def pause(self) -> None:
         """暂停。"""
-        if self._has_audio and self._player is not None:
+        if self._use_controller():
+            self._controller.pause()
+        elif self._has_audio and self._player is not None:
             self._player.pause()
         self._tick_timer.stop()
         self._position_poll_timer.stop()
@@ -614,6 +650,8 @@ class TransportBar(QWidget):
             self.play()
 
     def is_playing(self) -> bool:
+        if self._use_controller():
+            return self._controller.is_playing()
         if self._has_audio and self._player is not None:
             return (
                 self._player.playbackState()
@@ -646,7 +684,9 @@ class TransportBar(QWidget):
         if self._suppress_seek:
             return
         # 用户拖动 / 外部 set_time → 同步给 player / tick 锚点
-        if self._has_audio and self._player is not None:
+        if self._use_controller():
+            self._controller.seek(value)
+        elif self._has_audio and self._player is not None:
             self._player.setPosition(value)
         if self._tick_timer.isActive() or self._position_poll_timer.isActive():
             self._tick_anchor_ms = value
@@ -667,13 +707,17 @@ class TransportBar(QWidget):
             self._update_play_button(False)
 
     def _on_audio_clock_tick(self) -> None:
-        if self._player is None or not self._has_audio:
+        if self._use_controller():
+            audio_pos_source = self._controller.position()
+        elif self._player is not None and self._has_audio:
+            audio_pos_source = self._player.position()
+        else:
             return
         elapsed = self._tick_anchor_real.elapsed()
         target = self._tick_anchor_ms + int(elapsed)
         # 向音频真实播放位置收敛（默认开）：字幕/视频跟随音频，不自走墙钟 → 不会跑在音频前。
         if _audio_clock_enabled():
-            audio_pos = self._player.position()
+            audio_pos = audio_pos_source
             if audio_pos > 0:
                 correction = _audio_clock_anchor_correction(target, audio_pos)
                 if correction:
