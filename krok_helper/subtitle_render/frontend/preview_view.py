@@ -80,6 +80,10 @@ _AUDIO_CLOCK_DEADBAND_MS = 30
 _AUDIO_CLOCK_GAIN = 0.1
 """中等偏差按比例缓慢收敛（每 tick 纠 10%），不产生可见跳变。"""
 
+_FPS_REFRESH_MS = 500
+"""FPS 读数刷新周期：固定节奏更新，避免「按 paint 事件更新」导致的忽高(>100)忽低(<10)。
+读数语义 = **字幕预览渲染帧率**（新字幕帧/秒，不含视频重绘触发的同帧重 blit）。"""
+
 
 def _audio_clock_enabled() -> bool:
     return os.environ.get("KROK_SUBTITLE_AUDIO_CLOCK", "1").strip().lower() not in (
@@ -550,9 +554,15 @@ class TransportBar(QWidget):
         # 抑制 player ↔ slider 反馈环
         self._suppress_seek: bool = False
         self._playing_state: bool = False
+        # FPS = 字幕预览渲染帧率。计数来自「新字幕帧」（异步 worker 产出 / 同步新 t 重栅），
+        # 固定 _FPS_REFRESH_MS 周期刷新读数（不再按 paint 事件刷新 → 不忽高忽低）。
         self._fps_timer = QElapsedTimer()
         self._fps_window_frames = 0
         self._fps_timer.start()
+        self._fps_update_timer = QTimer(self)
+        self._fps_update_timer.setInterval(_FPS_REFRESH_MS)
+        self._fps_update_timer.timeout.connect(self._refresh_fps_label)
+        self._fps_update_timer.start()
 
     # ------------------------------------------------------------------ public API
 
@@ -664,17 +674,20 @@ class TransportBar(QWidget):
         return self._slider.value()
 
     def note_preview_frame_painted(self) -> None:
-        """Record one real preview paint and refresh the displayed FPS."""
-        if not self._fps_timer.isValid():
-            self._fps_timer.start()
+        """记一次「新字幕帧」渲染（读数在 _refresh_fps_label 按固定周期统计，不在此刷新）。"""
         self._fps_window_frames += 1
+
+    def _refresh_fps_label(self) -> None:
+        """固定周期刷新 FPS 读数 = 字幕预览渲染帧率（新字幕帧/秒）。暂停 / 无渲染时显示 --。"""
         elapsed = self._fps_timer.elapsed()
-        if elapsed < 500:
-            return
-        fps = self._fps_window_frames * 1000.0 / max(elapsed, 1)
-        self._fps_label.setText(f"FPS {fps:02.0f}")
+        frames = self._fps_window_frames
         self._fps_window_frames = 0
         self._fps_timer.restart()
+        if not self.is_playing() or frames <= 0 or elapsed <= 0:
+            self._fps_label.setText("FPS --")
+            return
+        fps = frames * 1000.0 / elapsed
+        self._fps_label.setText(f"FPS {fps:02.0f}")
 
     # ------------------------------------------------------------------ events
 

@@ -60,6 +60,9 @@ class SubtitleGraphicsItem(QGraphicsItem):
         # 异步预览（§9 A4 解耦）：开启后 paint() 只 blit worker 渲染好的位图。
         self._async_mode: bool = False
         self._async_image: Optional[QImage] = None
+        # FPS 只统计「新字幕帧」：同步路径按 t 去重（过滤视频区重绘触发的同 t 重栅），
+        # 异步路径在 set_async_image（worker 产出新帧）处计数，不计每次 blit 重绘。
+        self._last_painted_t: Optional[int] = None
 
     # ------------------------------------------------------------------ Qt API
 
@@ -69,15 +72,16 @@ class SubtitleGraphicsItem(QGraphicsItem):
     def paint(self, painter: QPainter, option, widget: Optional[QWidget] = None) -> None:  # noqa: N802, ARG002
         if self._async_mode:
             # 异步路径：只 blit worker 渲染好的最新位图（廉价），不在 GUI 线程栅格化。
+            # 不在此计 FPS：同一帧可能因视频区重绘被重复 blit；新帧计数在 set_async_image。
             if self._async_image is not None and not self._async_image.isNull():
                 painter.drawImage(0, 0, self._async_image)
-                if self._on_painted is not None:
-                    self._on_painted()
             return
         if self._track is None:
             return
         self._paint_subtitles(painter)
-        if self._on_painted is not None:
+        # 同步路径：仅当时间推进（新内容）才计为一次字幕渲染，过滤视频重绘触发的同 t 重栅。
+        if self._on_painted is not None and self._t_ms != self._last_painted_t:
+            self._last_painted_t = self._t_ms
             self._on_painted()
 
     def set_async_mode(self, enabled: bool) -> None:
@@ -86,6 +90,9 @@ class SubtitleGraphicsItem(QGraphicsItem):
     def set_async_image(self, image: QImage) -> None:
         """GUI 线程：收到 worker 渲染好的帧 → 存最新 + 触发一次廉价 blit 重绘。"""
         self._async_image = image
+        # worker 产出一帧新字幕 = 一次真实的字幕预览渲染（FPS 的真实来源，不含重 blit）。
+        if self._on_painted is not None:
+            self._on_painted()
         self.update()
 
     # ------------------------------------------------------------------ public

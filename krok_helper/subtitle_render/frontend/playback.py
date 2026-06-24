@@ -30,12 +30,15 @@ from krok_helper.subtitle_render.frontend.preview_media import qt_playback_sourc
 
 
 def unified_player_enabled() -> bool:
-    """单播放器统一接线总开关（默认关，开启后 main_window 走 PlaybackController）。"""
-    return os.environ.get("KROK_SUBTITLE_UNIFIED_PLAYER", "0").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
+    """单播放器统一接线总开关（默认开，=0 回退旧三播放器路径）。
+
+    真机交互验证（拖入视频 / 播放 / 拖动 / 切源 / 纯字幕）通过后于 2026-06-24 翻默认开。
+    """
+    return os.environ.get("KROK_SUBTITLE_UNIFIED_PLAYER", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
     )
 
 

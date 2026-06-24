@@ -52,11 +52,11 @@ def make_controller(qapp):  # noqa: ARG001
 
 def test_unified_player_flag(monkeypatch):
     monkeypatch.delenv("KROK_SUBTITLE_UNIFIED_PLAYER", raising=False)
-    assert unified_player_enabled() is False
+    assert unified_player_enabled() is True  # 默认开
     for v in ("1", "true", "on", "YES"):
         monkeypatch.setenv("KROK_SUBTITLE_UNIFIED_PLAYER", v)
         assert unified_player_enabled() is True
-    for v in ("0", "false", "off", ""):
+    for v in ("0", "false", "off"):
         monkeypatch.setenv("KROK_SUBTITLE_UNIFIED_PLAYER", v)
         assert unified_player_enabled() is False
 

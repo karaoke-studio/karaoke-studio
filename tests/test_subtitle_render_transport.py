@@ -287,29 +287,17 @@ def test_play_button_text_reflects_state(qapp):
     assert bar._play_btn.text() == "▶"
 
 
-def test_preview_fps_label_updates_from_painted_frames(qapp):
+def test_preview_fps_label_updates_from_painted_frames(qapp, monkeypatch):
+    """note_preview_frame_painted 只累加新字幕帧计数；读数由 _refresh_fps_label 按周期统计。"""
     bar = _bar(qapp)
-
-    class FakeTimer:
-        def __init__(self):
-            self.elapsed_value = 1000
-
-        def isValid(self):
-            return True
-
-        def start(self):
-            return None
-
-        def elapsed(self):
-            return self.elapsed_value
-
-        def restart(self):
-            self.elapsed_value = 0
-
-    bar._fps_timer = FakeTimer()
     bar.note_preview_frame_painted()
+    bar.note_preview_frame_painted()
+    assert bar._fps_window_frames == 2  # 仅计数，不直接刷新读数
 
-    assert bar._fps_label.text() == "FPS 01"
+    monkeypatch.setattr(bar, "is_playing", lambda: True)
+    monkeypatch.setattr(bar._fps_timer, "elapsed", lambda: 1000)
+    bar._refresh_fps_label()
+    assert bar._fps_label.text() == "FPS 02"  # 2 新帧 / 1s
 
 
 def test_tick_advances_slider(qapp, monkeypatch):
@@ -594,6 +582,31 @@ def test_transport_slider_seek_delegates_to_controller(qapp):
     bar.set_time(3_000)  # → _on_slider_changed → controller.seek
 
     assert 3_000 in ctrl.seeks
+
+
+def test_fps_readout_is_subtitle_render_rate(qapp, monkeypatch):
+    """FPS 读数 = 字幕新帧/秒，按固定周期统计；暂停显示 --，播放时按计数算。"""
+    bar = _bar(qapp)
+    # 未播放 → FPS --
+    monkeypatch.setattr(bar, "is_playing", lambda: False)
+    bar.note_preview_frame_painted()
+    bar._refresh_fps_label()
+    assert bar._fps_label.text() == "FPS --"
+    assert bar._fps_window_frames == 0  # 刷新后清零
+
+    # 播放中：30 新帧 / 0.5s = 60fps
+    monkeypatch.setattr(bar, "is_playing", lambda: True)
+    for _ in range(30):
+        bar.note_preview_frame_painted()
+    monkeypatch.setattr(bar._fps_timer, "elapsed", lambda: 500)
+    bar._refresh_fps_label()
+    assert bar._fps_label.text() == "FPS 60"
+    assert bar._fps_window_frames == 0
+
+    # 播放中但本周期无新帧 → FPS --（不残留上次读数式的误导）
+    monkeypatch.setattr(bar._fps_timer, "elapsed", lambda: 500)
+    bar._refresh_fps_label()
+    assert bar._fps_label.text() == "FPS --"
 
 
 def test_audio_clock_uses_controller_position(qapp, monkeypatch):
