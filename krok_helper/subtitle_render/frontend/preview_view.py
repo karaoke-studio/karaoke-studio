@@ -69,6 +69,44 @@ _TICK_INTERVAL_MS = int(1000 / _DEFAULT_PREVIEW_FPS)
 _VIDEO_SEEK_TOLERANCE_MS = 80
 """视频预览播放器允许的轻微漂移，超过后按播放条时间校正。"""
 
+# 音频锚定时钟（KROK_SUBTITLE_AUDIO_CLOCK，默认开，=0 回退纯墙钟）：播放时把墙钟插值出来的
+# UI 时间周期性向 QMediaPlayer.position()（音频真实播放位置）收敛，使字幕/视频跟随**音频**
+# 而非自走墙钟——根治「字幕跑在音频前 / 音画失步」（§10 诉求 #3）。当未来统一成单播放器时，
+# 这套收敛逻辑原样复用（只是 position 来自那个唯一播放器）。
+_AUDIO_CLOCK_RESYNC_MS = 250
+"""偏差 > 此值（如卡顿 / seek 后）→ 直接吸附到音频位置。"""
+_AUDIO_CLOCK_DEADBAND_MS = 30
+"""偏差 ≤ 此值视为正常抖动，不纠（避免来回纠偏自激抖动）。"""
+_AUDIO_CLOCK_GAIN = 0.1
+"""中等偏差按比例缓慢收敛（每 tick 纠 10%），不产生可见跳变。"""
+
+
+def _audio_clock_enabled() -> bool:
+    return os.environ.get("KROK_SUBTITLE_AUDIO_CLOCK", "1").strip().lower() not in (
+        "0",
+        "false",
+        "no",
+        "off",
+    )
+
+
+def _audio_clock_anchor_correction(target_ms: int, audio_pos_ms: int) -> int:
+    """让墙钟外推时间向音频真实位置收敛时，应施加到锚点的校正量（ms）。
+
+    纯函数（便于无 Qt 单测）。``drift = 音频位置 − 当前墙钟外推时间``：
+    - ``|drift| ≤ deadband``：返回 0（正常抖动不纠）；
+    - ``|drift| > resync``：返回整个 drift（大偏差直接吸附，如卡顿 / seek 后）；
+    - 其间：返回 drift 的一个小比例（缓慢收敛，无可见跳变）。
+
+    常见的「字幕跑在音频前」= 墙钟比音频快 → ``drift < 0`` 小负值 → 轻微回拉，平滑消除。
+    """
+    drift = audio_pos_ms - target_ms
+    if abs(drift) <= _AUDIO_CLOCK_DEADBAND_MS:
+        return 0
+    if abs(drift) > _AUDIO_CLOCK_RESYNC_MS:
+        return drift
+    return int(drift * _AUDIO_CLOCK_GAIN)
+
 
 class PreviewCanvas(QWidget):
     """字幕预览画布：原地 ``paint_frame`` 重绘当前时刻活跃行。"""
@@ -633,6 +671,14 @@ class TransportBar(QWidget):
             return
         elapsed = self._tick_anchor_real.elapsed()
         target = self._tick_anchor_ms + int(elapsed)
+        # 向音频真实播放位置收敛（默认开）：字幕/视频跟随音频，不自走墙钟 → 不会跑在音频前。
+        if _audio_clock_enabled():
+            audio_pos = self._player.position()
+            if audio_pos > 0:
+                correction = _audio_clock_anchor_correction(target, audio_pos)
+                if correction:
+                    self._tick_anchor_ms += correction
+                    target += correction
         if target >= self._slider.maximum():
             target = self._slider.maximum()
             self._set_slider_silently(target)

@@ -440,21 +440,60 @@ def test_set_audio_source_none_clears_player(qapp, tmp_path):
 
 
 def test_audio_playback_clock_uses_elapsed_timer(qapp, monkeypatch, tmp_path):
-    """有音频播放时 UI 时间用 60fps elapsed clock，不采样粗粒度 player.position。"""
+    """有音频播放时 UI 时间由 60fps elapsed clock 插值；音频位置一致时不跳到粗粒度 position。
+
+    （音频锚定默认开，但位置落在 deadband 内 → 不纠偏 → 仍按 elapsed 平滑推进。）
+    """
     bar = _bar(qapp)
     fake = tmp_path / "song.wav"
     fake.write_bytes(b"placeholder")
     bar.set_audio_source(fake)
     assert bar._player is not None
 
-    bar._player.position = lambda: 100  # type: ignore[assignment]
     bar.set_time(1_000)
     bar.play()
     monkeypatch.setattr(bar._tick_anchor_real, "elapsed", lambda: 240)
+    # 音频位置与墙钟外推(1240)一致(deadband 内) → 不纠偏 → 按 elapsed 插值，不跳到粗粒度 position
+    bar._player.position = lambda: 1_240  # type: ignore[assignment]
 
     bar._on_audio_clock_tick()
 
     assert bar.current_time_ms == 1_240
+    bar.pause()
+
+
+def test_audio_clock_resyncs_to_audio_on_large_drift(qapp, monkeypatch, tmp_path):
+    """墙钟外推与音频位置大幅偏离（如卡顿后）→ 吸附到音频真实位置（默认开）。"""
+    bar = _bar(qapp)
+    fake = tmp_path / "song.wav"
+    fake.write_bytes(b"placeholder")
+    bar.set_audio_source(fake)
+    bar.set_time(1_000)
+    bar.play()
+    monkeypatch.setattr(bar._tick_anchor_real, "elapsed", lambda: 240)  # 墙钟外推 → 1240
+    bar._player.position = lambda: 500  # type: ignore[assignment]  # 音频实际只到 500（落后 740ms）
+
+    bar._on_audio_clock_tick()
+
+    assert bar.current_time_ms == 500  # 吸附到音频真实位置
+    bar.pause()
+
+
+def test_audio_clock_disabled_falls_back_to_wall_clock(qapp, monkeypatch, tmp_path):
+    """KROK_SUBTITLE_AUDIO_CLOCK=0 → 纯墙钟外推，完全忽略 player.position（回退旧行为）。"""
+    monkeypatch.setenv("KROK_SUBTITLE_AUDIO_CLOCK", "0")
+    bar = _bar(qapp)
+    fake = tmp_path / "song.wav"
+    fake.write_bytes(b"placeholder")
+    bar.set_audio_source(fake)
+    bar.set_time(1_000)
+    bar.play()
+    monkeypatch.setattr(bar._tick_anchor_real, "elapsed", lambda: 240)
+    bar._player.position = lambda: 100  # type: ignore[assignment]
+
+    bar._on_audio_clock_tick()
+
+    assert bar.current_time_ms == 1_240  # 墙钟外推，忽略 position
     bar.pause()
 
 
@@ -493,3 +532,19 @@ def test_player_position_callback_does_not_re_seek_player(qapp, tmp_path):
     assert bar.current_time_ms == 5_000
     # 但 player.setPosition 不应被反向调用（_suppress_seek 起作用）
     assert calls == []
+
+
+def test_audio_clock_anchor_correction_deadband_resync_and_gain():
+    """音频锚定时钟的纯纠偏逻辑（无 Qt 对象）。"""
+    # 正常抖动（≤ deadband）→ 不纠
+    assert pv._audio_clock_anchor_correction(1_000, 1_000 + pv._AUDIO_CLOCK_DEADBAND_MS) == 0
+    assert pv._audio_clock_anchor_correction(1_000, 1_000 - pv._AUDIO_CLOCK_DEADBAND_MS) == 0
+    # 大偏差（> resync，如卡顿/seek 后）→ 整段吸附到音频位置
+    assert pv._audio_clock_anchor_correction(5_000, 5_000 + pv._AUDIO_CLOCK_RESYNC_MS + 100) == \
+        pv._AUDIO_CLOCK_RESYNC_MS + 100
+    # 「字幕跑在音频前」= target 比音频快 → drift<0 → 轻微回拉（按 gain 比例的负值）
+    corr = pv._audio_clock_anchor_correction(2_000, 1_900)  # drift = -100, 在 deadband 与 resync 之间
+    assert corr == int(-100 * pv._AUDIO_CLOCK_GAIN)
+    assert corr < 0  # 向音频回拉，消除「字幕更快」
+    # 收敛是单调缩小偏差：施加校正后，新 target 更接近音频
+    assert abs((2_000 + corr) - 1_900) < abs(2_000 - 1_900)
