@@ -3217,13 +3217,14 @@ def _paint_line_static(
         )
 
     if transition is not None:
-        if transition.effect == "char_fade":
-            # A1（§9.7）：char_fade 逐字仅 opacity → 走 LayerCompositor 烘焙缓存，
-            # 不再每帧 _paint_char_karaoke_stack 重栅（含 glow 复用）。普通行/分色行同路。
+        if transition.effect in ("char_fade", "spin_flip"):
+            # A1/A2（§9.7）：逐字入退场 → 走 LayerCompositor 烘焙缓存，不再每帧
+            # _paint_char_karaoke_stack 重栅（含 glow 复用）。普通行/分色行同路。
+            # char_fade 仅 opacity（无损）；spin_flip 加 scale+skew 残差（D2 软化可接受）。
             _TEXT_RUN_COMPOSITOR.paint_ordered(
                 painter,
                 LayerContext(t_ms=t_ms, logical_w=0, logical_h=0),
-                _char_fade_layer_stack(layout, t_ms, transition, max(len(line.chars), 1)),
+                _char_transition_layer_stack(layout, t_ms, transition, max(len(line.chars), 1)),
             )
             return
         if layout.has_inline_styles:
@@ -3759,23 +3760,54 @@ def _line_layer_stack(layout: _LineLayout, t_ms: int) -> list:
     return before_layers + after_layers
 
 
-def _char_fade_layer_stack(
+def _spin_flip_char_transform(
+    glyph: _GlyphLayout,
+    baseline_y: int,
+    transition: _LineCharTransition,
+    opacity: float,
+) -> QTransform | None:
+    """A2：spin_flip 逐字的 scale(opacity)+skew 残差变换，绕字心枢轴。
+
+    复用 ``_character_transform``（与旧 ``_apply_character_transform`` 同一构造、
+    几何完全一致），把枢轴烘焙进矩阵；compositor 把它作为残差套在烘焙位图上
+    （bitmap-transform，短窗口软化可接受，见 §9.7 D2）。返回恒等时给 ``None``。
+    """
+    direction = 1.0 if transition.phase == "exit" else -1.0
+    skew_y = direction * _spin_flip_skew(opacity)
+    center_x = glyph.left + glyph.width / 2
+    center_y = baseline_y - glyph.metrics.ascent() + glyph.metrics.height() / 2
+    transform = _character_transform(
+        center_x=center_x,
+        center_y=center_y,
+        scale_x=opacity,
+        scale_y=opacity,
+        skew_y=skew_y,
+    )
+    return None if transform.isIdentity() else transform
+
+
+def _char_transition_layer_stack(
     layout: _LineLayout,
     t_ms: int,
     transition: _LineCharTransition,
     char_count: int,
 ) -> list:
-    """A1（§9.7）：char_fade（逐字仅 opacity）走 LayerCompositor。
+    """A1/A2（§9.7）：逐字入退场（char_fade / spin_flip）走 LayerCompositor。
 
     每个 glyph 复用静态路径的 ``_GlyphRunLayer`` / ``_GlyphRunAfterGlowLayer``
-    烘焙缓存（直立烘焙一次、跨帧复用），逐帧只补该字的淡入/淡出 opacity 残差；
+    烘焙缓存（直立烘焙一次、跨帧复用），逐帧只补该字的残差：
+    - **char_fade**：仅淡入/淡出 opacity（无损）；
+    - **spin_flip**：opacity + scale(opacity)+skew 残差变换（绕字心枢轴，
+      bitmap-transform 软化可接受，§9.7 D2）。
     glow 也因此并入烘焙缓存、不再每帧重算高斯。与旧逐帧
     ``_paint_char_karaoke_stack`` 路径同口径：逐字独立栈、按 glyph 顺序交错绘制
-    （后字覆盖前字），扫光带取整行 ``fill_segments``（与静态路径同一来源）。
-    适用于普通行与分色行（per-glyph ``style`` 已携带角色样式）。
+    （后字覆盖前字），扫光带取整行 ``fill_segments``（与静态路径同一来源），
+    同一字的 before/after/glow 三层套同一残差变换。
+    适用于普通行与分色行（per-glyph ``style``/``metrics`` 已携带角色样式）。
     """
     y = layout.baseline_y
     rtl = layout.rtl
+    is_spin = transition.effect == "spin_flip"
     after_band = _fill_clip_band(layout.fill_segments, t_ms, rtl)
     layers: list = []
     z = 0
@@ -3783,11 +3815,14 @@ def _char_fade_layer_stack(
         opacity = _char_fade_opacity(transition, glyph.index, char_count, t_ms=t_ms)
         if opacity <= 0.0:
             continue
+        transform = (
+            _spin_flip_char_transform(glyph, y, transition, opacity) if is_spin else None
+        )
         run = [glyph]
         layers.append(
             _GlyphRunLayer(
                 run, y, layout.fill_segments, t_ms, rtl,
-                after=False, z_index=z, fade_opacity=opacity,
+                after=False, z_index=z, fade_opacity=opacity, transform=transform,
             )
         )
         z += 1
@@ -3797,14 +3832,14 @@ def _char_fade_layer_stack(
             layers.append(
                 _GlyphRunAfterGlowLayer(
                     run, y, layout.fill_segments, t_ms, rtl,
-                    clip_band=after_band, z_index=z, fade_opacity=opacity,
+                    clip_band=after_band, z_index=z, fade_opacity=opacity, transform=transform,
                 )
             )
             z += 1
         layers.append(
             _GlyphRunLayer(
                 run, y, layout.fill_segments, t_ms, rtl,
-                after=True, clip_band=after_band, z_index=z, fade_opacity=opacity,
+                after=True, clip_band=after_band, z_index=z, fade_opacity=opacity, transform=transform,
             )
         )
         z += 1
@@ -3825,6 +3860,7 @@ class _GlyphRunLayer:
     z_index: int = 0
     scope: str = SCOPE_LINE
     fade_opacity: float = 1.0
+    transform: QTransform | None = None
 
     def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
         return []
@@ -3864,6 +3900,7 @@ class _GlyphRunLayer:
             top_left=QPointF(float(run_left), float(self.baseline_y)),
             clip_rect=clip_rect,
             opacity=self.fade_opacity,
+            transform=self.transform,
         )
 
     def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
@@ -3888,6 +3925,7 @@ class _GlyphRunAfterGlowLayer:
     z_index: int = 0
     scope: str = SCOPE_LINE
     fade_opacity: float = 1.0
+    transform: QTransform | None = None
 
     def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
         return []
@@ -3940,6 +3978,7 @@ class _GlyphRunAfterGlowLayer:
             top_left=QPointF(float(run_left), float(self.baseline_y)),
             clip_rect=clip_rect,
             opacity=self.fade_opacity,
+            transform=self.transform,
         )
 
     def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:

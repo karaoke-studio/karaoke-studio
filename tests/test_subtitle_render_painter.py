@@ -35,10 +35,12 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _brush_for_fill,
     _build_font,
     _build_ruby_font,
-    _char_fade_layer_stack,
+    _char_transition_layer_stack,
     _char_fade_opacity,
     _char_left_positions,
     _character_fill_ratio,
+    _character_transform,
+    _spin_flip_skew,
     _fill_clip_band,
     _fill_extent_end,
     _layout_vertical_line,
@@ -2658,7 +2660,7 @@ def test_char_fade_layer_stack_applies_staggered_per_char_opacity(qapp):
     )
     t_ms = 1250  # char0 全淡入、char1 半透明、char2 尚不可见（见 nkm3 timing 测试）
 
-    layers = _char_fade_layer_stack(layout, t_ms, transition, count)
+    layers = _char_transition_layer_stack(layout, t_ms, transition, count)
     before_by_index = {
         layer.glyphs[0].index: layer
         for layer in layers
@@ -2670,9 +2672,48 @@ def test_char_fade_layer_stack_applies_staggered_per_char_opacity(qapp):
         _char_fade_opacity(transition, 1, count, t_ms=t_ms)
     )
     assert 0.0 < before_by_index[1].fade_opacity < 1.0
+    # char_fade 仅 opacity，无变换残差。
+    assert before_by_index[0].transform is None
     # 末字 opacity<=0 → 整字（含 before/after/glow 层）跳过。
     assert _char_fade_opacity(transition, count - 1, count, t_ms=t_ms) <= 0.0
     assert (count - 1) not in before_by_index
+
+
+def test_char_transition_layer_stack_spin_flip_carries_scale_skew_transform(qapp):
+    # A2（§9.7）：spin_flip 走同一 compositor stack，但每字带 scale(opacity)+skew
+    # 残差变换，绕字心枢轴，与旧 _character_transform 几何一致。
+    track = _track()
+    line = track.lines[0]
+    style = Style(line_y_position="center", exit_anim="spin_flip")
+    layout = _layout_line(track, line, style, 800, 450)
+    count = len(line.chars)
+    transition = _LineCharTransition(
+        phase="exit", effect="spin_flip", progress=1.0, start_ms=2900, end_ms=3500,
+    )
+    t_ms = 3375  # 末字半透明 → opacity≈0.5，skew/scale 非恒等
+
+    layers = _char_transition_layer_stack(layout, t_ms, transition, count)
+    before_by_index = {
+        layer.glyphs[0].index: layer
+        for layer in layers
+        if isinstance(layer, _GlyphRunLayer) and not layer.after
+    }
+
+    glyph = layout.text_layout.glyphs[count - 1]
+    opacity = _char_fade_opacity(transition, count - 1, count, t_ms=t_ms)
+    assert 0.0 < opacity < 1.0
+    layer = before_by_index[count - 1]
+    assert layer.fade_opacity == pytest.approx(opacity)
+    # 变换与旧 _character_transform 逐元素一致（同一 scale+skew+枢轴构造）。
+    expected = _character_transform(
+        center_x=glyph.left + glyph.width / 2,
+        center_y=layout.baseline_y - glyph.metrics.ascent() + glyph.metrics.height() / 2,
+        scale_x=opacity,
+        scale_y=opacity,
+        skew_y=_spin_flip_skew(opacity),  # exit → +skew
+    )
+    assert layer.transform is not None
+    assert layer.transform == expected
 
 
 def test_spin_flip_entry_uses_char_fade_timing_with_flip_transform(qapp):
