@@ -90,10 +90,10 @@ def test_request_returns_cached_frame_without_forwarding_to_worker(monkeypatch, 
     emitted: list[int] = []
     forwarded: list[int] = []
     renderer.frame_ready.connect(lambda _img, t: emitted.append(t))
-    renderer._frame_requested.connect(lambda t: forwarded.append(t))  # noqa: SLF001
+    renderer._frame_requested.connect(lambda t, _tok: forwarded.append(t))  # noqa: SLF001
 
     # 模拟 worker 产出 t=100 的帧 → 入缓存 + 上抛一次。
-    renderer._on_worker_frame(_image(), 100)  # noqa: SLF001
+    renderer._on_worker_frame(_image(), 100, 1)  # noqa: SLF001
     assert emitted == [100]
 
     # 同桶请求 → 命中：再上抛一次（用规范 t），且不投 worker。
@@ -107,7 +107,7 @@ def test_request_miss_forwards_canonical_frame_time(monkeypatch, make_renderer):
     renderer = make_renderer()
 
     forwarded: list[int] = []
-    renderer._frame_requested.connect(lambda t: forwarded.append(t))  # noqa: SLF001
+    renderer._frame_requested.connect(lambda t, _tok: forwarded.append(t))  # noqa: SLF001
 
     # 未命中 → 投 worker，且投的是吸附到网格的规范 t（非原始 t）。
     renderer.request(5008)
@@ -120,9 +120,9 @@ def test_set_state_invalidates_cache(monkeypatch, make_renderer):
     renderer = make_renderer()
 
     forwarded: list[int] = []
-    renderer._frame_requested.connect(lambda t: forwarded.append(t))  # noqa: SLF001
+    renderer._frame_requested.connect(lambda t, _tok: forwarded.append(t))  # noqa: SLF001
 
-    renderer._on_worker_frame(_image(), 100)  # noqa: SLF001
+    renderer._on_worker_frame(_image(), 100, 1)  # noqa: SLF001
     renderer.set_state(None, None)  # 轨道/样式变 → 清缓存
 
     renderer.request(100)  # 现在应未命中 → 投 worker
@@ -134,9 +134,9 @@ def test_set_render_target_invalidates_cache(monkeypatch, make_renderer):
     renderer = make_renderer()
 
     forwarded: list[int] = []
-    renderer._frame_requested.connect(lambda t: forwarded.append(t))  # noqa: SLF001
+    renderer._frame_requested.connect(lambda t, _tok: forwarded.append(t))  # noqa: SLF001
 
-    renderer._on_worker_frame(_image(), 100)  # noqa: SLF001
+    renderer._on_worker_frame(_image(), 100, 1)  # noqa: SLF001
     renderer.set_render_target(128, 72, 2.0)  # 尺寸/DPR 变 → 清缓存
 
     renderer.request(100)
@@ -148,13 +148,16 @@ def test_disabled_cache_forwards_raw_time_and_does_not_store(monkeypatch, make_r
     renderer = make_renderer()
 
     forwarded: list[int] = []
-    renderer._frame_requested.connect(lambda t: forwarded.append(t))  # noqa: SLF001
+    emitted: list[int] = []
+    renderer._frame_requested.connect(lambda t, _tok: forwarded.append(t))  # noqa: SLF001
+    renderer.frame_ready.connect(lambda _img, t: emitted.append(t))
 
-    # 关闭时：worker 帧不入缓存，request 原样投递原始 t（行为与改造前一致）。
-    renderer._on_worker_frame(_image(), 100)  # noqa: SLF001
+    # 关闭时：worker 帧不入缓存、无条件上抛，request 原样投递原始 t（行为与改造前一致）。
+    renderer._on_worker_frame(_image(), 100, 0)  # noqa: SLF001
     renderer.request(100)
     renderer.request(5008)
     assert forwarded == [100, 5008]
+    assert emitted == [100]
 
 
 def test_cache_evicts_beyond_max(monkeypatch, make_renderer):
@@ -162,9 +165,49 @@ def test_cache_evicts_beyond_max(monkeypatch, make_renderer):
     monkeypatch.setenv("KROK_SUBTITLE_PREVIEW_FRAME_CACHE_MAX", "3")
     renderer = make_renderer()
 
-    for t in (0, 100, 200, 300, 400):  # 5 帧 → 上界 3
-        renderer._on_worker_frame(_image(), t)  # noqa: SLF001
+    for i, t in enumerate((0, 100, 200, 300, 400), start=1):  # 5 帧 → 上界 3
+        renderer._on_worker_frame(_image(), t, i)  # noqa: SLF001
     assert len(renderer._frame_cache) == 3  # noqa: SLF001
     # 最早的被逐出（LRU）：保留最近 3 个索引。
     kept = set(renderer._frame_cache.keys())  # noqa: SLF001
     assert kept == {preview_frame_index(t) for t in (200, 300, 400)}
+
+
+def test_seek_hit_drops_stale_inflight_frame(monkeypatch, make_renderer):
+    """seek 命中前方缓存后，seek 前就在途、命中后才渲完的过期帧不得覆盖显示。"""
+    monkeypatch.setenv("KROK_SUBTITLE_PREVIEW_FRAME_CACHE", "1")
+    renderer = make_renderer()
+
+    emitted: list[int] = []
+    renderer.frame_ready.connect(lambda _img, t: emitted.append(t))
+
+    # 预热缓存：5000 已渲过（如之前播放到此处）。
+    renderer._on_worker_frame(_image(), 5000, 1)  # noqa: SLF001
+    assert emitted == [5000]
+
+    # 在途渲染旧位置 1000（token=2 由一次未命中请求分配）。
+    renderer.request(1000)  # miss（仅 5000 在缓存）→ token=2，投 worker
+    # 用户向前 seek 到 5000：命中 → 显示 5000，抬高水位（token=3）。
+    renderer.request(5000)
+    assert emitted[-1] == 5000
+
+    # 旧的 1000 在途帧此刻才渲完（token=2 ≤ last_hit=3）→ 入缓存但不显示。
+    renderer._on_worker_frame(_image(), 1000, 2)  # noqa: SLF001
+    assert emitted[-1] == 5000  # 仍停在正确的 5000，未被旧帧覆盖
+    assert preview_frame_index(1000) in renderer._frame_cache  # noqa: SLF001 仍缓存以备回跳
+
+
+def test_lagging_frame_still_displays_during_playback(monkeypatch, make_renderer):
+    """普通播放滞后帧（无命中抬水位）必须照常显示，避免 worker 慢于 tick 时字幕冻结。"""
+    monkeypatch.setenv("KROK_SUBTITLE_PREVIEW_FRAME_CACHE", "1")
+    renderer = make_renderer()
+
+    emitted: list[int] = []
+    renderer.frame_ready.connect(lambda _img, t: emitted.append(t))
+
+    # 连续未命中请求（无命中），worker 滞后产出 → 仍逐帧显示（token 单调 > last_hit=0）。
+    renderer.request(1000)  # token=1
+    renderer.request(1016)  # token=2（latest-wins）
+    renderer._on_worker_frame(_image(), 1000, 1)  # noqa: SLF001 滞后帧
+    renderer._on_worker_frame(_image(), 1016, 2)  # noqa: SLF001
+    assert emitted == [1000, 1016]
