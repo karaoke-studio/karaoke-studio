@@ -228,8 +228,20 @@ def main() -> None:
     lay.setContentsMargins(0, 0, 0, 0)
     lay.addWidget(view, 1)
     lay.addWidget(transport)
-    container.resize(960, 600)
+    _win = os.environ.get("KROK_PROF_WINDOW", "960x600")
+    if _win == "max":
+        container.resize(1920, 1140)
+    else:
+        _ww, _wh = (int(v) for v in _win.split("x"))
+        container.resize(_ww, _wh)
     container.show()
+
+    def _dbg_size():
+        vp = view.viewport()
+        print(f"[probe] viewport={vp.width()}x{vp.height()} dpr={view.devicePixelRatioF():.2f} "
+              f"device≈{int(vp.width()*view.devicePixelRatioF())}x{int(vp.height()*view.devicePixelRatioF())} "
+              f"scene={view._output_w}x{view._output_h}")  # noqa: SLF001
+    QTimer.singleShot(int(args.warmup * 1000) + 50, _dbg_size)
 
     proc = psutil.Process()
     sampler = threading.Thread(target=_sampler, args=(proc, args.sample_interval), daemon=True)
