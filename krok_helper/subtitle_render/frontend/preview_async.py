@@ -95,7 +95,8 @@ def preview_render_target_size(
 class _AsyncSubtitleWorker(QObject):
     """Qt-thread resident worker that rasterises latest-wins subtitle requests."""
 
-    frame_ready = Signal(QImage, int)
+    # 第三参 token：请求序号，原样回带，供 GUI 侧判定该帧是否已被更新的请求作废。
+    frame_ready = Signal(QImage, int, int)
     finished = Signal()
 
     def __init__(self, width: int, height: int) -> None:
@@ -106,6 +107,7 @@ class _AsyncSubtitleWorker(QObject):
         self._track: Optional[TimingTrack] = None
         self._style: Optional[Style] = None
         self._pending_t: Optional[int] = None
+        self._pending_token = 0
         self._rendering = False
         self._stopping = False
 
@@ -120,9 +122,10 @@ class _AsyncSubtitleWorker(QObject):
         self._logical_h = max(int(height), 1)
         self._device_pixel_ratio = max(float(device_pixel_ratio or 1.0), 0.01)
 
-    @Slot(int)
-    def request(self, t_ms: int) -> None:
+    @Slot(int, int)
+    def request(self, t_ms: int, token: int = 0) -> None:
         self._pending_t = int(t_ms)
+        self._pending_token = int(token)
         if not self._rendering:
             QTimer.singleShot(0, self._render_pending)
 
@@ -139,6 +142,7 @@ class _AsyncSubtitleWorker(QObject):
         if self._pending_t is None:
             return
         t_ms = self._pending_t
+        token = self._pending_token
         self._pending_t = None
         track = self._track
         style = self._style
@@ -159,7 +163,7 @@ class _AsyncSubtitleWorker(QObject):
                 paint_frame_to_painter(painter, logical_w, logical_h, track, int(t_ms), style)
             finally:
                 painter.end()
-            self.frame_ready.emit(image, int(t_ms))
+            self.frame_ready.emit(image, int(t_ms), int(token))
         finally:
             self._rendering = False
 
@@ -182,7 +186,7 @@ class AsyncSubtitleRenderer(QObject):
     frame_ready = Signal(QImage, int)
     _state_changed = Signal(object, object)
     _target_changed = Signal(int, int, float)
-    _frame_requested = Signal(int)
+    _frame_requested = Signal(int, int)
 
     def __init__(self, width: int, height: int, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -194,6 +198,10 @@ class AsyncSubtitleRenderer(QObject):
         self._stopped = False
         # P-A 帧缓存（仅 GUI 线程访问：request / _on_worker_frame 都在 GUI 线程跑 → 无需锁）。
         self._frame_cache: "OrderedDict[int, QImage]" = OrderedDict()
+        # 请求序号 + 最近一次「命中显示」的序号：用于丢弃 seek 命中后才完成的在途过期帧。
+        # 仅缓存命中（显式跳转、已显示确定帧）抬高水位；普通未命中不抬 → 保留播放滞后帧的优雅降级。
+        self._token = 0
+        self._last_hit_token = 0
         self._thread = QThread(self)
         self._thread.setObjectName("subtitle-preview-render")
         self._worker = _AsyncSubtitleWorker(self._logical_w, self._logical_h)
@@ -210,7 +218,7 @@ class AsyncSubtitleRenderer(QObject):
     def _clear_frame_cache(self) -> None:
         self._frame_cache.clear()
 
-    def _on_worker_frame(self, image: QImage, t_ms: int) -> None:
+    def _on_worker_frame(self, image: QImage, t_ms: int, token: int = 0) -> None:
         # GUI 线程：worker 产出新帧 → 按帧索引存入缓存（有界 LRU）再上抛给视图。
         if frame_cache_enabled():
             index = preview_frame_index(t_ms)
@@ -218,6 +226,10 @@ class AsyncSubtitleRenderer(QObject):
             self._frame_cache.move_to_end(index)
             while len(self._frame_cache) > _frame_cache_max_frames():
                 self._frame_cache.popitem(last=False)
+            # 该帧在某次「命中显示」之前就已投递、命中后才渲完 → 已过期，缓存但不显示
+            # （否则会把 seek 命中显示的正确帧覆盖回旧位置）。普通滞后帧 token 更新 → 照常显示。
+            if token <= self._last_hit_token:
+                return
         self.frame_ready.emit(image, t_ms)
 
     # ------------------------------------------------------------------ GUI API
@@ -258,16 +270,20 @@ class AsyncSubtitleRenderer(QObject):
         """
         if self._stopped:
             return
+        self._token += 1
+        token = self._token
         if frame_cache_enabled():
             index = preview_frame_index(int(t_ms))
             cached = self._frame_cache.get(index)
             if cached is not None:
                 self._frame_cache.move_to_end(index)
+                # 命中即显示确定帧 → 抬高水位，作废尚在途的旧位置渲染。
+                self._last_hit_token = token
                 self.frame_ready.emit(cached, preview_frame_canonical_ms(index))
                 return
-            self._frame_requested.emit(preview_frame_canonical_ms(index))
+            self._frame_requested.emit(preview_frame_canonical_ms(index), token)
             return
-        self._frame_requested.emit(int(t_ms))
+        self._frame_requested.emit(int(t_ms), token)
 
     def stop(self) -> None:
         if self._stopped:
