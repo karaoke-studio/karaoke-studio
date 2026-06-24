@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PyQt6.QtCore import QRectF, QSizeF, Qt, QUrl, pyqtSignal as Signal
-from PyQt6.QtGui import QBrush, QColor, QPainter
+from PyQt6.QtGui import QBrush, QColor, QImage, QPainter
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 from PyQt6.QtWidgets import (
@@ -23,6 +23,10 @@ from PyQt6.QtWidgets import (
 )
 
 from krok_helper.subtitle_render.engine.painter import frame_vertical_bounds, paint_frame_to_painter
+from krok_helper.subtitle_render.frontend.preview_async import (
+    AsyncSubtitleRenderer,
+    async_preview_enabled,
+)
 from krok_helper.subtitle_render.frontend.preview_media import qt_playback_source
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
 from krok_helper.subtitle_render.models import Style, TimingTrack
@@ -52,6 +56,9 @@ class SubtitleGraphicsItem(QGraphicsItem):
         self._style: Style = Style()
         self._t_ms: int = 0
         self._on_painted = on_painted
+        # 异步预览（实验性，§9 A4 解耦）：开启后 paint() 只 blit worker 渲染好的位图。
+        self._async_mode: bool = False
+        self._async_image: Optional[QImage] = None
 
     # ------------------------------------------------------------------ Qt API
 
@@ -59,11 +66,26 @@ class SubtitleGraphicsItem(QGraphicsItem):
         return QRectF(0, 0, self._width, self._height)
 
     def paint(self, painter: QPainter, option, widget: Optional[QWidget] = None) -> None:  # noqa: N802, ARG002
+        if self._async_mode:
+            # 异步路径：只 blit worker 渲染好的最新位图（廉价），不在 GUI 线程栅格化。
+            if self._async_image is not None and not self._async_image.isNull():
+                painter.drawImage(0, 0, self._async_image)
+                if self._on_painted is not None:
+                    self._on_painted()
+            return
         if self._track is None:
             return
         self._paint_subtitles(painter)
         if self._on_painted is not None:
             self._on_painted()
+
+    def set_async_mode(self, enabled: bool) -> None:
+        self._async_mode = bool(enabled)
+
+    def set_async_image(self, image: QImage) -> None:
+        """GUI 线程：收到 worker 渲染好的帧 → 存最新 + 触发一次廉价 blit 重绘。"""
+        self._async_image = image
+        self.update()
 
     # ------------------------------------------------------------------ public
 
@@ -77,6 +99,10 @@ class SubtitleGraphicsItem(QGraphicsItem):
 
     def set_time(self, t_ms: int) -> None:
         if t_ms == self._t_ms:
+            return
+        if self._async_mode:
+            # 异步模式下不在 GUI 线程算脏区/栅格化；由 view 投递 worker，帧到达时再 blit。
+            self._t_ms = t_ms
             return
         old_dirty = self._dirty_rect_for_time(self._t_ms)
         self._t_ms = t_ms
@@ -180,6 +206,16 @@ class PreviewGraphicsView(QGraphicsView):
         self._video_player: Optional[QMediaPlayer] = None
         self._video_audio_out: Optional[QAudioOutput] = None
 
+        # 实验性：把字幕栅格化搬到工作线程，GUI 线程只 blit → 主呈现循环不再被
+        # 单帧 14ms paint 阻塞（§9 A4 解耦）。默认关，env KROK_SUBTITLE_ASYNC_PREVIEW=1 开。
+        self._async_renderer: Optional[AsyncSubtitleRenderer] = None
+        if async_preview_enabled():
+            self._async_renderer = AsyncSubtitleRenderer(self._output_w, self._output_h, self)
+            self._async_renderer.frame_ready.connect(
+                self._on_async_frame, Qt.ConnectionType.QueuedConnection
+            )
+            self._subtitle_item.set_async_mode(True)
+
     # ------------------------------------------------------------------ Qt API
 
     def resizeEvent(self, event):  # noqa: N802
@@ -190,18 +226,38 @@ class PreviewGraphicsView(QGraphicsView):
         super().showEvent(event)
         self._fit_scene_to_view()
 
+    def closeEvent(self, event):  # noqa: N802
+        if self._async_renderer is not None:
+            self._async_renderer.stop()
+        super().closeEvent(event)
+
     # ------------------------------------------------------------------ public
 
     def set_track(self, track: Optional[TimingTrack]) -> None:
         self._subtitle_item.set_track(track)
+        self._refresh_async_state()
 
     def set_style(self, style: Style) -> None:
         self._subtitle_item.set_style(style)
+        self._refresh_async_state()
 
     def set_time(self, t_ms: int) -> None:
         self._t_ms = t_ms
-        self._subtitle_item.set_time(t_ms)
+        if self._async_renderer is not None:
+            self._async_renderer.request(t_ms)
+        else:
+            self._subtitle_item.set_time(t_ms)
         self._sync_video_position(force=not self._video_playing)
+
+    def _refresh_async_state(self) -> None:
+        if self._async_renderer is None:
+            return
+        self._async_renderer.set_state(self._track, self._style)
+        self._async_renderer.request(self._t_ms)
+
+    def _on_async_frame(self, image: QImage, t_ms: int) -> None:  # noqa: ARG002
+        # GUI 线程：worker 渲染好的最新帧 → 交给字幕 item blit。
+        self._subtitle_item.set_async_image(image)
 
     def set_output_size(self, width: int, height: int) -> None:
         w = max(int(width), 1)
@@ -213,6 +269,9 @@ class PreviewGraphicsView(QGraphicsView):
         self._scene.setSceneRect(0, 0, w, h)
         self._fit_video_item_to_scene()
         self._subtitle_item.set_output_size(w, h)
+        if self._async_renderer is not None:
+            self._async_renderer.set_size(w, h)
+            self._async_renderer.request(self._t_ms)
         self._fit_scene_to_view()
 
     def _fit_video_item_to_scene(self) -> None:

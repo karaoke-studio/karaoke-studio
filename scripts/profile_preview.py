@@ -221,6 +221,10 @@ def main() -> None:
     transport.timeChanged.connect(lambda _v: tick_count.__setitem__("n", tick_count["n"] + 1))
     transport.playbackStateChanged.connect(view.set_playing)
     view.framePainted.connect(transport.note_preview_frame_painted)
+    # 字幕真正贴到屏幕的次数（异步模式下 paint_frame_to_painter 在 worker 线程、
+    # 不经 pg 钩子，故另计 framePainted = blit 实际显示速率）。
+    BLITS: list[float] = []
+    view.framePainted.connect(lambda: BLITS.append(time.perf_counter()))
 
     container = QWidget()
     container.setWindowTitle("preview profile")
@@ -246,7 +250,7 @@ def main() -> None:
     proc = psutil.Process()
     sampler = threading.Thread(target=_sampler, args=(proc, args.sample_interval), daemon=True)
 
-    measure_state = {"t0": 0.0, "tick0": 0, "paint0": 0, "seek0": 0, "gc0": 0, "vf0": 0}
+    measure_state = {"t0": 0.0, "tick0": 0, "paint0": 0, "seek0": 0, "gc0": 0, "vf0": 0, "blit0": 0}
 
     def begin_measure():
         measure_state["t0"] = time.perf_counter()
@@ -255,6 +259,7 @@ def main() -> None:
         measure_state["seek0"] = len(SEEKS)
         measure_state["gc0"] = len(GC_EVENTS)
         measure_state["vf0"] = len(VFRAMES)
+        measure_state["blit0"] = len(BLITS)
         sampler.start()
 
     def finish():
@@ -265,6 +270,9 @@ def main() -> None:
         seeks = SEEKS[measure_state["seek0"]:]
         gcs = GC_EVENTS[measure_state["gc0"]:]
         vframes = VFRAMES[measure_state["vf0"]:]
+        blits = len(BLITS) - measure_state["blit0"]
+        print(f"[字幕显示] framePainted(blit) {blits} 次（{blits/max(t_elapsed,0.001):.1f}/s）"
+              f" ← 字幕真正贴屏速率")
         _report(t_elapsed, ticks, paints, fps, seeks, gcs, args.no_subtitle, vframes)
         app.quit()
 

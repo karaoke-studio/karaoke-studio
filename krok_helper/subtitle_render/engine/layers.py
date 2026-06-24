@@ -7,6 +7,7 @@ can migrate onto this compositor one by one under pixel regression tests.
 
 from __future__ import annotations
 
+import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from typing import Hashable, Protocol
@@ -129,28 +130,43 @@ class SubtitleLayer(Protocol):
 
 
 class LayerCache:
-    """Small LRU cache for baked layer bitmaps."""
+    """Small LRU cache for baked layer bitmaps.
+
+    Thread-safe: the experimental async preview (``KROK_SUBTITLE_ASYNC_PREVIEW``)
+    renders on a worker thread while the GUI thread may call :meth:`clear` on a
+    style edit, so reads/writes/eviction are guarded by a lock.  ``build`` runs
+    outside the lock so a slow bake never blocks other cache lookups.
+    """
 
     def __init__(self, max_items: int = 128) -> None:
         self.max_items = max(max_items, 1)
         self._items: OrderedDict[Hashable, BakedLayer] = OrderedDict()
+        self._lock = threading.Lock()
 
     def clear(self) -> None:
-        self._items.clear()
+        with self._lock:
+            self._items.clear()
 
     def get_or_build(self, key: Hashable, build) -> BakedLayer:
-        cached = self._items.get(key)
-        if cached is not None:
-            self._items.move_to_end(key)
-            return cached
+        with self._lock:
+            cached = self._items.get(key)
+            if cached is not None:
+                self._items.move_to_end(key)
+                return cached
         baked = build()
-        self._items[key] = baked
-        while len(self._items) > self.max_items:
-            self._items.popitem(last=False)
+        with self._lock:
+            existing = self._items.get(key)
+            if existing is not None:
+                self._items.move_to_end(key)
+                return existing
+            self._items[key] = baked
+            while len(self._items) > self.max_items:
+                self._items.popitem(last=False)
         return baked
 
     def __len__(self) -> int:
-        return len(self._items)
+        with self._lock:
+            return len(self._items)
 
 
 class LayerCompositor:
