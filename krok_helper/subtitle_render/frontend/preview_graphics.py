@@ -215,16 +215,19 @@ class PreviewGraphicsView(QGraphicsView):
                 self._on_async_frame, Qt.ConnectionType.QueuedConnection
             )
             self._subtitle_item.set_async_mode(True)
+            self._refresh_async_target()
 
     # ------------------------------------------------------------------ Qt API
 
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
         self._fit_scene_to_view()
+        self._refresh_async_target()
 
     def showEvent(self, event):  # noqa: N802
         super().showEvent(event)
         self._fit_scene_to_view()
+        self._refresh_async_target()
 
     def closeEvent(self, event):  # noqa: N802
         if self._async_renderer is not None:
@@ -269,10 +272,8 @@ class PreviewGraphicsView(QGraphicsView):
         self._scene.setSceneRect(0, 0, w, h)
         self._fit_video_item_to_scene()
         self._subtitle_item.set_output_size(w, h)
-        if self._async_renderer is not None:
-            self._async_renderer.set_size(w, h)
-            self._async_renderer.request(self._t_ms)
         self._fit_scene_to_view()
+        self._refresh_async_target()
 
     def _fit_video_item_to_scene(self) -> None:
         overscan = _VIDEO_EDGE_OVERSCAN_PX
@@ -289,6 +290,22 @@ class PreviewGraphicsView(QGraphicsView):
             self._scene.sceneRect(),
             Qt.AspectRatioMode.KeepAspectRatioByExpanding,
         )
+
+    def _scene_device_pixel_ratio(self) -> float:
+        viewport = self.viewport()
+        dpr = viewport.devicePixelRatioF() if viewport is not None else self.devicePixelRatioF()
+        scene_scale = abs(self.transform().m11()) or 1.0
+        return max(float(dpr or 1.0) * float(scene_scale), 0.01)
+
+    def _refresh_async_target(self) -> None:
+        if self._async_renderer is None:
+            return
+        self._async_renderer.set_render_target(
+            self._output_w,
+            self._output_h,
+            self._scene_device_pixel_ratio(),
+        )
+        self._async_renderer.request(self._t_ms)
 
     def set_video_source(self, path: Optional[Path]) -> None:
         if self._video_player is not None:

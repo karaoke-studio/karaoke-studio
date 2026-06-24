@@ -11,6 +11,7 @@ QMediaPlayer 的真实音频播放在 CI 不稳定，所以这里聚焦：
 
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 
@@ -118,6 +119,65 @@ def test_preview_graphics_video_source_uses_qt_playback_proxy(qapp, monkeypatch,
 
         assert Path(seen["source"]) == proxy
         assert seen["position"] == 0
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
+def test_async_preview_target_size_uses_device_pixel_ratio():
+    from krok_helper.subtitle_render.frontend.preview_async import preview_render_target_size
+
+    assert preview_render_target_size(1920, 1080, 1.25) == (2400, 1350, 1.25)
+    assert preview_render_target_size(0, 0, 0) == (1, 1, 1.0)
+    assert preview_render_target_size(1, 1, -1.0) == (1, 1, 0.01)
+
+
+def test_preview_graphics_updates_async_render_target(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+
+    class FakeSignal:
+        def connect(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    class FakeAsyncRenderer:
+        instances = []
+
+        def __init__(self, width, height, parent=None):
+            self.init_args = (width, height, parent)
+            self.frame_ready = FakeSignal()
+            self.targets = []
+            self.requests = []
+            FakeAsyncRenderer.instances.append(self)
+
+        def set_render_target(self, width, height, device_pixel_ratio=1.0):
+            self.targets.append((width, height, device_pixel_ratio))
+
+        def set_state(self, track, style):
+            self.state = (track, style)
+
+        def request(self, t_ms):
+            self.requests.append(t_ms)
+
+        def stop(self):
+            self.stopped = True
+
+    monkeypatch.setattr(pg, "async_preview_enabled", lambda: True)
+    monkeypatch.setattr(pg, "AsyncSubtitleRenderer", FakeAsyncRenderer)
+
+    graphics = PreviewGraphicsView()
+    try:
+        renderer = FakeAsyncRenderer.instances[-1]
+        assert renderer.targets
+
+        graphics.set_output_size(1280, 720)
+
+        width, height, dpr = renderer.targets[-1]
+        assert (width, height) == (1280, 720)
+        assert math.isclose(dpr, graphics._scene_device_pixel_ratio())
+        assert renderer.requests[-1] == graphics.current_time_ms
     finally:
         graphics.close()
         graphics.deleteLater()

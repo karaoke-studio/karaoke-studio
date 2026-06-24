@@ -33,6 +33,22 @@ def async_preview_enabled() -> bool:
     )
 
 
+def preview_render_target_size(
+    logical_width: int,
+    logical_height: int,
+    device_pixel_ratio: float,
+) -> tuple[int, int, float]:
+    """Return physical image size + normalized DPR for async preview rendering."""
+    logical_w = max(int(logical_width), 1)
+    logical_h = max(int(logical_height), 1)
+    dpr = max(float(device_pixel_ratio or 1.0), 0.01)
+    return (
+        max(int(round(logical_w * dpr)), 1),
+        max(int(round(logical_h * dpr)), 1),
+        dpr,
+    )
+
+
 class AsyncSubtitleRenderer(QObject):
     """Renders subtitle frames on a worker thread; emits :pyattr:`frame_ready`.
 
@@ -46,8 +62,9 @@ class AsyncSubtitleRenderer(QObject):
 
     def __init__(self, width: int, height: int, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
-        self._w = max(int(width), 1)
-        self._h = max(int(height), 1)
+        self._logical_w = max(int(width), 1)
+        self._logical_h = max(int(height), 1)
+        self._device_pixel_ratio = 1.0
         self._track: Optional[TimingTrack] = None
         self._style: Optional[Style] = None
         self._pending_t: Optional[int] = None
@@ -67,9 +84,13 @@ class AsyncSubtitleRenderer(QObject):
             self._style = style
 
     def set_size(self, width: int, height: int) -> None:
+        self.set_render_target(width, height, self._device_pixel_ratio)
+
+    def set_render_target(self, width: int, height: int, device_pixel_ratio: float = 1.0) -> None:
         with self._lock:
-            self._w = max(int(width), 1)
-            self._h = max(int(height), 1)
+            self._logical_w = max(int(width), 1)
+            self._logical_h = max(int(height), 1)
+            self._device_pixel_ratio = max(float(device_pixel_ratio or 1.0), 0.01)
 
     def request(self, t_ms: int) -> None:
         """投递一帧渲染请求；只保留最新 t（合并掉过期请求）。"""
@@ -96,15 +117,18 @@ class AsyncSubtitleRenderer(QObject):
                 self._pending_t = None
                 track = self._track
                 style = self._style
-                w = self._w
-                h = self._h
+                logical_w = self._logical_w
+                logical_h = self._logical_h
+                dpr = self._device_pixel_ratio
             if track is None or style is None:
                 continue
-            image = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+            physical_w, physical_h, dpr = preview_render_target_size(logical_w, logical_h, dpr)
+            image = QImage(physical_w, physical_h, QImage.Format.Format_ARGB32_Premultiplied)
+            image.setDevicePixelRatio(dpr)
             image.fill(0)
             painter = QPainter(image)
             try:
-                paint_frame_to_painter(painter, w, h, track, int(t_ms), style)
+                paint_frame_to_painter(painter, logical_w, logical_h, track, int(t_ms), style)
             finally:
                 painter.end()
             # 从工作线程 emit；接收方 QueuedConnection → 在 GUI 线程交付。
