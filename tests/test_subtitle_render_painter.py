@@ -83,6 +83,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     paint_frame,
     frame_vertical_bounds,
     clear_before_layer_cache,
+    _RUN_GLOW_CACHE,
 )
 from krok_helper.subtitle_render.engine.layers import LayerCompositor, LayerContext, SCOPE_GROUP  # noqa: E402
 from krok_helper.subtitle_render.engine.timeline import DisplayLine  # noqa: E402
@@ -2714,6 +2715,44 @@ def test_char_transition_layer_stack_spin_flip_carries_scale_skew_transform(qapp
     )
     assert layer.transform is not None
     assert layer.transform == expected
+
+
+def test_utopia_glow_uses_cached_run_glow(qapp):
+    # A3（§9.7）：utopia transition + glow → glow 走上正烘焙缓存（before/after 各一条），
+    # 逐帧不再重算高斯；同帧重画纯命中、缓存不增长。
+    colors = KaraokeColors(
+        before=KaraokeColorState(
+            text=PaintFill(color="#FFFFFF"),
+            stroke=PaintFill(color="#222222"),
+            shadow=_solid_fill("#FF8A00"),
+        ),
+        after=KaraokeColorState(
+            text=PaintFill(color="#FFFFFF"),
+            stroke=PaintFill(color="#222222"),
+            shadow=_solid_fill("#0080FF"),  # 与 before 不同 → 也走 after-glow 缓存
+        ),
+    )
+    style = Style(
+        fill_color="#FFFFFF",
+        base_color="#FFFFFF",
+        stroke_color="#222222",
+        decoration_kind="glow",
+        karaoke_colors=colors,
+        line_y_position="center",
+        entry_anim="utopia",
+        exit_anim="utopia",
+    )
+
+    clear_before_layer_cache()
+    assert len(_RUN_GLOW_CACHE) == 0
+
+    paint_frame(_blank(), _track(), 2200, style)
+    populated = len(_RUN_GLOW_CACHE)
+    assert populated > 0  # 新缓存路径被走到
+
+    # 同帧再画一次：同一上正 glyph 身份 → 纯命中，缓存不增长。
+    paint_frame(_blank(), _track(), 2200, style)
+    assert len(_RUN_GLOW_CACHE) == populated
 
 
 def test_spin_flip_entry_uses_char_fade_timing_with_flip_transform(qapp):

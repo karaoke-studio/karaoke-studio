@@ -72,6 +72,10 @@ _IMAGE_FILL_LOCK = Lock()
 # 各烘焙一次；逐帧只按扫光半平面 clip blit。
 _TEXT_RUN_LAYER_CACHE = LayerCache(max_items=128)
 _TEXT_RUN_COMPOSITOR = LayerCompositor(_TEXT_RUN_LAYER_CACHE)
+# A3（§9.7）：utopia transition 路径每帧重算 glow 高斯（实测 18ms 主因）。把 glow 按
+# **上正 glyph 身份**烘焙一次进此缓存（before/after 各一条），逐帧在 utopia 变换下 blit。
+# glow 是软晕、对 bitmap-transform 不敏感 → 复用无明显软化；body 仍逐帧矢量保持锐利（B 档再缓存）。
+_RUN_GLOW_CACHE = LayerCache(max_items=128)
 # P1.c-1（默认关）：ユートピア 逐字仿射跳动改「bake 一次 + 逐帧变换」。实测 utopia 逐帧
 # 瓶颈是光栅化（strokePath/fillPath/glow），bake 后逐帧只 blit+QTransform，预计 ~4×。
 # 代价：bake 位图经变换缩放会引入极小边缘抗锯齿软化（超采样压到几乎不可见，但非零），
@@ -300,6 +304,7 @@ def clear_before_layer_cache() -> None:
     with _UTOPIA_BAKE_LOCK:
         _UTOPIA_BAKE_CACHE.clear()
     _TEXT_RUN_LAYER_CACHE.clear()
+    _RUN_GLOW_CACHE.clear()
 
 from krok_helper.subtitle_render.engine.timeline import (
     DisplayLine,
@@ -4535,20 +4540,23 @@ def _build_glyph_run_layer(
     return (image, offset_x, offset_y)
 
 
-def _build_glyph_run_after_glow_layer(
+def _build_glyph_run_glow_layer(
     glyphs: list[_GlyphLayout],
     role_style: Style,
     colors: KaraokeColors,
+    *,
+    after: bool,
 ) -> tuple[QImage, int, int]:
-    """Bake the full unclipped after-glow image for a glyph run."""
+    """Bake the full unclipped glow image (before/after state) for a glyph run."""
+    state = colors.after if after else colors.before
     run_left = min(glyph.left for glyph in glyphs)
     run_right = max(glyph.left + glyph.width for glyph in glyphs)
     run_ascent = max(glyph.metrics.ascent() for glyph in glyphs)
     run_descent = max(glyph.metrics.descent() for glyph in glyphs)
     run_w = max(run_right - run_left, 1)
     run_h = max(run_ascent + run_descent, 1)
-    after_radius = _glow_radius(role_style, after=True)
-    extent = _glow_extent(role_style.stroke_width_px, role_style.stroke2_width_px, after_radius) + 4
+    radius = _glow_radius(role_style, after=after)
+    extent = _glow_extent(role_style.stroke_width_px, role_style.stroke2_width_px, radius) + 4
 
     img_w = max(extent + run_w + extent, 1)
     img_h = max(extent + run_h + extent, 1)
@@ -4569,9 +4577,9 @@ def _build_glyph_run_after_glow_layer(
         _paint_glow_path(
             p,
             path,
-            colors.after.shadow,
+            state.shadow,
             rect,
-            after_radius,
+            radius,
             role_style.stroke_width_px,
             role_style.stroke2_width_px,
         )
@@ -4581,6 +4589,72 @@ def _build_glyph_run_after_glow_layer(
     offset_x = -extent
     offset_y = -(extent + run_ascent)
     return (image, offset_x, offset_y)
+
+
+def _build_glyph_run_after_glow_layer(
+    glyphs: list[_GlyphLayout],
+    role_style: Style,
+    colors: KaraokeColors,
+) -> tuple[QImage, int, int]:
+    """Bake the full unclipped after-glow image for a glyph run."""
+    return _build_glyph_run_glow_layer(glyphs, role_style, colors, after=True)
+
+
+def _get_or_build_run_glow(
+    glyphs: list[_GlyphLayout],
+    role_style: Style,
+    colors: KaraokeColors,
+    *,
+    after: bool,
+) -> BakedLayer:
+    """A3：按上正 glyph 身份缓存 glow 烘焙位图（before/after 各一条）。"""
+    key = (_glyph_run_layer_key(glyphs, role_style, colors, after=after), "glow", after)
+    return _RUN_GLOW_CACHE.get_or_build(
+        key,
+        lambda: _baked_run_glow(glyphs, role_style, colors, after=after),
+    )
+
+
+def _baked_run_glow(
+    glyphs: list[_GlyphLayout],
+    role_style: Style,
+    colors: KaraokeColors,
+    *,
+    after: bool,
+) -> BakedLayer:
+    image, dx, dy = _build_glyph_run_glow_layer(glyphs, role_style, colors, after=after)
+    return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
+
+
+def _blit_cached_run_glow(
+    painter: QPainter,
+    glyphs: list[_GlyphLayout],
+    baseline_y: int,
+    role_style: Style,
+    colors: KaraokeColors,
+    *,
+    after: bool,
+    transform: QTransform | None,
+) -> None:
+    """A3：在 ``transform`` 下贴出缓存的上正 glow 位图（替代逐帧 ``_paint_glow_path``）。
+
+    glow 在上正坐标烘焙、自然 anchor ``(run_left+dx, baseline_y+dy)`` 贴出；``transform``
+    把它送到与逐帧矢量 body 相同的变换位置。调用方在贴前已设好设备空间 clip（扫光带），
+    本函数 ``setTransform(combine=True)`` 不影响该 clip（Qt clip 存于设备坐标）。
+    """
+    baked = _get_or_build_run_glow(glyphs, role_style, colors, after=after)
+    if baked.image.isNull():
+        return
+    run_left = min(glyph.left for glyph in glyphs)
+    anchor = QPointF(float(run_left) + baked.offset.x(), float(baseline_y) + baked.offset.y())
+    painter.save()
+    try:
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        if transform is not None:
+            painter.setTransform(transform, combine=True)
+        painter.drawImage(anchor, baked.image)
+    finally:
+        painter.restore()
 
 
 def _paint_role_line_with_character_transition(
@@ -4759,6 +4833,7 @@ def _paint_role_line_with_character_transition(
                         skew_y=skew_y,
                     )
                     clip_rect = None
+                is_utopia = transition.effect == "utopia"
                 _paint_char_karaoke_stack(
                     painter,
                     paint_path,
@@ -4772,6 +4847,8 @@ def _paint_role_line_with_character_transition(
                     ratio=ratio,
                     rtl=rtl,
                     clip_rect=clip_rect,
+                    glow_run=run if is_utopia else None,
+                    glow_transform=group_transform if is_utopia else None,
                 )
             finally:
                 painter.restore()
@@ -5039,6 +5116,8 @@ def _paint_line_with_character_transition(
             paint_left = left
             paint_width = width
             paint_clip_rect: QRectF | None = None
+            glow_run: list[_GlyphLayout] | None = None
+            glow_transform: QTransform | None = None
             if transition.effect == "utopia":
                 transform = _character_transform(
                     center_x=left + width / 2,
@@ -5057,22 +5136,24 @@ def _paint_line_with_character_transition(
                 paint_left = int(round(paint_rect.left()))
                 paint_width = max(int(round(paint_rect.width())), 1)
                 paint_clip_rect = paint_rect
+                # 上正 glyph 列表：bake 路径与 A3 glow 缓存共用。
+                group_glyphs = [
+                    _GlyphLayout(
+                        index=ci,
+                        text=line.chars[ci].text,
+                        role_label=None,
+                        style=style,
+                        font=(font_for(line.chars[ci].text) if font_for is not None else font),
+                        metrics=metrics,
+                        left=char_x_ranges[ci][0],
+                        width=char_x_ranges[ci][1] - char_x_ranges[ci][0],
+                    )
+                    for ci in indices
+                ]
+                glow_run = group_glyphs
+                glow_transform = transform
                 if _utopia_bake_enabled():
-                    # P1.c-1（opt-in）：bake+变换 替代逐帧光栅化（普通行 → 构造单 run glyph 列表）。
-                    ratio_value = fill_ratio
-                    group_glyphs = [
-                        _GlyphLayout(
-                            index=ci,
-                            text=line.chars[ci].text,
-                            role_label=None,
-                            style=style,
-                            font=(font_for(line.chars[ci].text) if font_for is not None else font),
-                            metrics=metrics,
-                            left=char_x_ranges[ci][0],
-                            width=char_x_ranges[ci][1] - char_x_ranges[ci][0],
-                        )
-                        for ci in indices
-                    ]
+                    # P1.c-1（opt-in）：bake+变换 替代逐帧光栅化。
                     _paint_utopia_group_baked(
                         painter,
                         group_glyphs,
@@ -5080,7 +5161,7 @@ def _paint_line_with_character_transition(
                         transform,
                         style,
                         colors,
-                        ratio=ratio_value,
+                        ratio=fill_ratio,
                         clip_rect=paint_clip_rect,
                         paint_left=paint_left,
                         paint_width=paint_width,
@@ -5112,6 +5193,8 @@ def _paint_line_with_character_transition(
                 ratio=fill_ratio,
                 rtl=rtl,
                 clip_rect=paint_clip_rect,
+                glow_run=glow_run,
+                glow_transform=glow_transform,
             )
         finally:
             painter.restore()
@@ -5592,8 +5675,23 @@ def _paint_char_karaoke_stack(
     ratio: float,
     rtl: bool = False,
     clip_rect: QRectF | None = None,
+    glow_run: list[_GlyphLayout] | None = None,
+    glow_transform: QTransform | None = None,
 ) -> None:
+    # A3（§9.7）：``glow_run`` 给定（utopia 路径）时，glow 走上正烘焙缓存 + 变换 blit，
+    # 不再每帧 _paint_glow_path 重算高斯；body 仍逐帧矢量（锐利）。``glow_run`` 为 None
+    # 时退回原逐帧 glow 路径（保留旧行为，可回退）。
+    use_cached_glow = glow_run is not None and style.decoration_kind == "glow"
+
+    def _blit_glow(after: bool) -> None:
+        _blit_cached_run_glow(
+            painter, glow_run, baseline_y, style, colors,
+            after=after, transform=glow_transform,
+        )
+
     if ratio <= 0.0:
+        if use_cached_glow:
+            _blit_glow(after=False)
         _paint_text_layer_stack(
             painter,
             path,
@@ -5605,10 +5703,13 @@ def _paint_char_karaoke_stack(
             shadow_dx=style.shadow_offset_x,
             shadow_dy=style.shadow_offset_y,
             glow_radius=_glow_radius(style, after=False),
+            draw_glow=not use_cached_glow,
         )
         return
 
     if ratio < 1.0:
+        if use_cached_glow:
+            _blit_glow(after=False)
         _paint_text_layer_stack(
             painter,
             path,
@@ -5620,6 +5721,7 @@ def _paint_char_karaoke_stack(
             shadow_dx=style.shadow_offset_x,
             shadow_dy=style.shadow_offset_y,
             glow_radius=_glow_radius(style, after=False),
+            draw_glow=not use_cached_glow,
         )
         stroke_pad = _visual_text_padding(style)
         clip_bounds = clip_rect if clip_rect is not None else QRectF(
@@ -5659,15 +5761,18 @@ def _paint_char_karaoke_stack(
                             float(clip_bounds.height() + glow_pad * 2),
                         )
                     )
-                    _paint_glow_path(
-                        painter,
-                        path,
-                        colors.after.shadow,
-                        rect,
-                        _glow_radius(style, after=True),
-                        style.stroke_width_px,
-                        style.stroke2_width_px,
-                    )
+                    if use_cached_glow:
+                        _blit_glow(after=True)
+                    else:
+                        _paint_glow_path(
+                            painter,
+                            path,
+                            colors.after.shadow,
+                            rect,
+                            _glow_radius(style, after=True),
+                            style.stroke_width_px,
+                            style.stroke2_width_px,
+                        )
                 finally:
                     painter.restore()
         # 已唱描边 + 填充：保持卡拉ok 走字的硬边（按字框紧裁），发光已单独画过。
@@ -5698,6 +5803,8 @@ def _paint_char_karaoke_stack(
             painter.restore()
         return
 
+    if use_cached_glow:
+        _blit_glow(after=True)
     _paint_text_layer_stack(
         painter,
         path,
@@ -5709,6 +5816,7 @@ def _paint_char_karaoke_stack(
         shadow_dx=style.shadow_offset_x,
         shadow_dy=style.shadow_offset_y,
         glow_radius=_glow_radius(style, after=True),
+        draw_glow=not use_cached_glow,
     )
 
 
