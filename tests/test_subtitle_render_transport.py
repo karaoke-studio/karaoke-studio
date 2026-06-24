@@ -148,6 +148,17 @@ def test_async_preview_enabled_defaults_on_and_env_can_disable(monkeypatch):
         assert async_preview_enabled() is False
 
 
+def test_async_preview_renderer_stops_qthread(qapp):
+    from krok_helper.subtitle_render.frontend.preview_async import AsyncSubtitleRenderer
+
+    renderer = AsyncSubtitleRenderer(320, 180)
+    assert renderer._thread.isRunning()
+
+    renderer.stop()
+
+    assert not renderer._thread.isRunning()
+
+
 def test_preview_graphics_updates_async_render_target(qapp, monkeypatch):
     from krok_helper.subtitle_render.frontend import preview_graphics as pg
     from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView

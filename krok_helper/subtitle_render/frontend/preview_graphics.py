@@ -154,6 +154,7 @@ class PreviewGraphicsView(QGraphicsView):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("PreviewGraphicsView")
+        self.destroyed.connect(lambda: self._stop_async_renderer())
         self.setMinimumHeight(240)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -230,8 +231,7 @@ class PreviewGraphicsView(QGraphicsView):
         self._refresh_async_target()
 
     def closeEvent(self, event):  # noqa: N802
-        if self._async_renderer is not None:
-            self._async_renderer.stop()
+        self._stop_async_renderer()
         super().closeEvent(event)
 
     # ------------------------------------------------------------------ public
@@ -306,6 +306,13 @@ class PreviewGraphicsView(QGraphicsView):
             self._scene_device_pixel_ratio(),
         )
         self._async_renderer.request(self._t_ms)
+
+    def _stop_async_renderer(self) -> None:
+        renderer = self._async_renderer
+        if renderer is None:
+            return
+        self._async_renderer = None
+        renderer.stop()
 
     def set_video_source(self, path: Optional[Path]) -> None:
         if self._video_player is not None:

@@ -14,10 +14,9 @@ Background (§9 A4 诊断)：预览预览的真实帧率天花板**不是单帧�
 from __future__ import annotations
 
 import os
-import threading
 from typing import Optional
 
-from PyQt6.QtCore import QObject, pyqtSignal as Signal
+from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal as Signal, pyqtSlot as Slot
 from PyQt6.QtGui import QImage, QPainter
 
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
@@ -49,79 +48,64 @@ def preview_render_target_size(
     )
 
 
-class AsyncSubtitleRenderer(QObject):
-    """Renders subtitle frames on a worker thread; emits :pyattr:`frame_ready`.
-
-    协议：GUI 线程通过 :meth:`set_state` / :meth:`set_size` 更新轨道/样式/尺寸，
-    通过 :meth:`request` 投递目标时间（latest-wins 合并）。worker 渲染完成后从工作
-    线程 emit ``frame_ready(QImage, t_ms)``——接收方须用 ``QueuedConnection`` 接到
-    GUI 线程槽（QImage 跨线程经队列连接复制句柄，安全）。
-    """
+class _AsyncSubtitleWorker(QObject):
+    """Qt-thread resident worker that rasterises latest-wins subtitle requests."""
 
     frame_ready = Signal(QImage, int)
+    finished = Signal()
 
-    def __init__(self, width: int, height: int, parent: Optional[QObject] = None) -> None:
-        super().__init__(parent)
+    def __init__(self, width: int, height: int) -> None:
+        super().__init__()
         self._logical_w = max(int(width), 1)
         self._logical_h = max(int(height), 1)
         self._device_pixel_ratio = 1.0
         self._track: Optional[TimingTrack] = None
         self._style: Optional[Style] = None
         self._pending_t: Optional[int] = None
-        self._running = True
-        self._lock = threading.Lock()
-        self._cond = threading.Condition(self._lock)
-        self._thread = threading.Thread(
-            target=self._loop, name="subtitle-preview-render", daemon=True
-        )
-        self._thread.start()
+        self._rendering = False
+        self._stopping = False
 
-    # ------------------------------------------------------------------ GUI API
-
+    @Slot(object, object)
     def set_state(self, track: Optional[TimingTrack], style: Optional[Style]) -> None:
-        with self._lock:
-            self._track = track
-            self._style = style
+        self._track = track
+        self._style = style
 
-    def set_size(self, width: int, height: int) -> None:
-        self.set_render_target(width, height, self._device_pixel_ratio)
-
+    @Slot(int, int, float)
     def set_render_target(self, width: int, height: int, device_pixel_ratio: float = 1.0) -> None:
-        with self._lock:
-            self._logical_w = max(int(width), 1)
-            self._logical_h = max(int(height), 1)
-            self._device_pixel_ratio = max(float(device_pixel_ratio or 1.0), 0.01)
+        self._logical_w = max(int(width), 1)
+        self._logical_h = max(int(height), 1)
+        self._device_pixel_ratio = max(float(device_pixel_ratio or 1.0), 0.01)
 
+    @Slot(int)
     def request(self, t_ms: int) -> None:
-        """投递一帧渲染请求；只保留最新 t（合并掉过期请求）。"""
-        with self._lock:
-            self._pending_t = int(t_ms)
-            self._cond.notify()
+        self._pending_t = int(t_ms)
+        if not self._rendering:
+            QTimer.singleShot(0, self._render_pending)
 
+    @Slot()
     def stop(self) -> None:
-        with self._lock:
-            self._running = False
-            self._cond.notify()
-        self._thread.join(timeout=2.0)
+        self._stopping = True
+        if not self._rendering:
+            self.finished.emit()
 
-    # ------------------------------------------------------------------ worker
+    def _render_pending(self) -> None:
+        if self._stopping:
+            self.finished.emit()
+            return
+        if self._pending_t is None:
+            return
+        t_ms = self._pending_t
+        self._pending_t = None
+        track = self._track
+        style = self._style
+        logical_w = self._logical_w
+        logical_h = self._logical_h
+        dpr = self._device_pixel_ratio
+        if track is None or style is None:
+            return
 
-    def _loop(self) -> None:
-        while True:
-            with self._lock:
-                while self._running and self._pending_t is None:
-                    self._cond.wait()
-                if not self._running:
-                    return
-                t_ms = self._pending_t
-                self._pending_t = None
-                track = self._track
-                style = self._style
-                logical_w = self._logical_w
-                logical_h = self._logical_h
-                dpr = self._device_pixel_ratio
-            if track is None or style is None:
-                continue
+        self._rendering = True
+        try:
             physical_w, physical_h, dpr = preview_render_target_size(logical_w, logical_h, dpr)
             image = QImage(physical_w, physical_h, QImage.Format.Format_ARGB32_Premultiplied)
             image.setDevicePixelRatio(dpr)
@@ -131,5 +115,92 @@ class AsyncSubtitleRenderer(QObject):
                 paint_frame_to_painter(painter, logical_w, logical_h, track, int(t_ms), style)
             finally:
                 painter.end()
-            # 从工作线程 emit；接收方 QueuedConnection → 在 GUI 线程交付。
             self.frame_ready.emit(image, int(t_ms))
+        finally:
+            self._rendering = False
+
+        if self._stopping:
+            self.finished.emit()
+        elif self._pending_t is not None:
+            QTimer.singleShot(0, self._render_pending)
+
+
+class AsyncSubtitleRenderer(QObject):
+    """Renders subtitle frames on a worker thread; emits :pyattr:`frame_ready`.
+
+    协议：GUI 线程通过 :meth:`set_state` / :meth:`set_size` 更新轨道/样式/尺寸，
+    通过 :meth:`request` 投递目标时间（latest-wins 合并）。worker 渲染完成后从工作
+    线程 emit ``frame_ready(QImage, t_ms)``——接收方须用 ``QueuedConnection`` 接到
+    GUI 线程槽（QImage 跨线程经队列连接复制句柄，安全）。内部使用 ``QThread``，
+    避免 Qt 图形对象在普通 Python 线程里启动 ``QBasicTimer``。
+    """
+
+    frame_ready = Signal(QImage, int)
+    _state_changed = Signal(object, object)
+    _target_changed = Signal(int, int, float)
+    _frame_requested = Signal(int)
+
+    def __init__(self, width: int, height: int, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self._logical_w = max(int(width), 1)
+        self._logical_h = max(int(height), 1)
+        self._device_pixel_ratio = 1.0
+        self._track: Optional[TimingTrack] = None
+        self._style: Optional[Style] = None
+        self._stopped = False
+        self._thread = QThread(self)
+        self._thread.setObjectName("subtitle-preview-render")
+        self._worker = _AsyncSubtitleWorker(self._logical_w, self._logical_h)
+        self._worker.moveToThread(self._thread)
+        self._state_changed.connect(self._worker.set_state)
+        self._target_changed.connect(self._worker.set_render_target)
+        self._frame_requested.connect(self._worker.request)
+        self._worker.frame_ready.connect(self.frame_ready)
+        self._worker.finished.connect(self._thread.quit)
+        self._thread.finished.connect(self._worker.deleteLater)
+        self._thread.start()
+
+    # ------------------------------------------------------------------ GUI API
+
+    def __del__(self) -> None:
+        try:
+            self.stop()
+        except RuntimeError:
+            pass
+
+    def set_state(self, track: Optional[TimingTrack], style: Optional[Style]) -> None:
+        if self._stopped:
+            return
+        self._track = track
+        self._style = style
+        self._state_changed.emit(track, style)
+
+    def set_size(self, width: int, height: int) -> None:
+        self.set_render_target(width, height, self._device_pixel_ratio)
+
+    def set_render_target(self, width: int, height: int, device_pixel_ratio: float = 1.0) -> None:
+        if self._stopped:
+            return
+        self._logical_w = max(int(width), 1)
+        self._logical_h = max(int(height), 1)
+        self._device_pixel_ratio = max(float(device_pixel_ratio or 1.0), 0.01)
+        self._target_changed.emit(self._logical_w, self._logical_h, self._device_pixel_ratio)
+
+    def request(self, t_ms: int) -> None:
+        """投递一帧渲染请求；只保留最新 t（合并掉过期请求）。"""
+        if self._stopped:
+            return
+        self._frame_requested.emit(int(t_ms))
+
+    def stop(self) -> None:
+        if self._stopped:
+            return
+        self._stopped = True
+        try:
+            self._worker._stopping = True  # noqa: SLF001
+        except RuntimeError:
+            pass
+        self._thread.quit()
+        if not self._thread.wait(2000):
+            self._thread.quit()
+            self._thread.wait(1000)
