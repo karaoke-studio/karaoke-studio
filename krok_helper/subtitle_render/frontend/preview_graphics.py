@@ -56,7 +56,7 @@ class SubtitleGraphicsItem(QGraphicsItem):
         self._style: Style = Style()
         self._t_ms: int = 0
         self._on_painted = on_painted
-        # 异步预览（实验性，§9 A4 解耦）：开启后 paint() 只 blit worker 渲染好的位图。
+        # 异步预览（§9 A4 解耦）：开启后 paint() 只 blit worker 渲染好的位图。
         self._async_mode: bool = False
         self._async_image: Optional[QImage] = None
 
@@ -206,8 +206,8 @@ class PreviewGraphicsView(QGraphicsView):
         self._video_player: Optional[QMediaPlayer] = None
         self._video_audio_out: Optional[QAudioOutput] = None
 
-        # 实验性：把字幕栅格化搬到工作线程，GUI 线程只 blit → 主呈现循环不再被
-        # 单帧 14ms paint 阻塞（§9 A4 解耦）。默认关，env KROK_SUBTITLE_ASYNC_PREVIEW=1 开。
+        # 把字幕栅格化搬到工作线程，GUI 线程只 blit → 主呈现循环不再被
+        # 单帧 14ms paint 阻塞（§9 A4 解耦）。默认开，env KROK_SUBTITLE_ASYNC_PREVIEW=0 回退。
         self._async_renderer: Optional[AsyncSubtitleRenderer] = None
         if async_preview_enabled():
             self._async_renderer = AsyncSubtitleRenderer(self._output_w, self._output_h, self)

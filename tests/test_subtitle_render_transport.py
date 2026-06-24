@@ -133,6 +133,21 @@ def test_async_preview_target_size_uses_device_pixel_ratio():
     assert preview_render_target_size(1, 1, -1.0) == (1, 1, 0.01)
 
 
+def test_async_preview_enabled_defaults_on_and_env_can_disable(monkeypatch):
+    from krok_helper.subtitle_render.frontend.preview_async import async_preview_enabled
+
+    monkeypatch.delenv("KROK_SUBTITLE_ASYNC_PREVIEW", raising=False)
+    assert async_preview_enabled() is True
+
+    for value in ("1", "true", "yes", "on"):
+        monkeypatch.setenv("KROK_SUBTITLE_ASYNC_PREVIEW", value)
+        assert async_preview_enabled() is True
+
+    for value in ("0", "false", "no", "off"):
+        monkeypatch.setenv("KROK_SUBTITLE_ASYNC_PREVIEW", value)
+        assert async_preview_enabled() is False
+
+
 def test_preview_graphics_updates_async_render_target(qapp, monkeypatch):
     from krok_helper.subtitle_render.frontend import preview_graphics as pg
     from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
