@@ -4054,6 +4054,7 @@ def _utopia_main_scope_layers(
     count = max(len(line.chars), 1)
     layers: list[_ScopeBoundsLayer] = []
     handled_indices: set[int] = set()
+    ruby_groups = _resolve_char_ruby_groups(layout.active_rubies, line, layout.intervals)
     for index in range(len(line.chars)):
         if index in handled_indices:
             continue
@@ -4061,7 +4062,7 @@ def _utopia_main_scope_layers(
             continue
         if index >= len(glyphs_by_index) or glyphs_by_index[index] is None:
             continue
-        group = _utopia_main_group_for_index(layout.active_rubies, line, layout.intervals, index)
+        group = _utopia_main_group_for_index(layout.active_rubies, line, layout.intervals, index, groups=ruby_groups)
         group_ruby: RubyAnnotation | None = None
         group_scope_indices: list[int] | None = None
         group_done_ms: int | None = None
@@ -4669,6 +4670,7 @@ def _paint_role_line_with_character_transition(
     glyphs_by_index = _role_glyphs_by_index(line, layout)
     count = max(len(line.chars), 1)
     handled_indices: set[int] = set()
+    ruby_groups = _resolve_char_ruby_groups(active_rubies, line, intervals)
     for index in range(len(line.chars)):
         if index in handled_indices:
             continue
@@ -4677,7 +4679,7 @@ def _paint_role_line_with_character_transition(
         if glyphs_by_index[index] is None:
             continue
 
-        group = _utopia_main_group_for_index(active_rubies, line, intervals, index) if transition.effect == "utopia" else None
+        group = _utopia_main_group_for_index(active_rubies, line, intervals, index, groups=ruby_groups) if transition.effect == "utopia" else None
         group_done_ms: int | None = None
         group_exiting = False
         if group is not None:
@@ -4780,6 +4782,7 @@ def _paint_role_line_with_character_transition(
                 active_rubies,
                 index,
                 t_ms,
+                groups=ruby_groups,
             )
         for run in _glyph_runs_for_indices(glyphs_by_index, indices):
             role_style = run[0].style
@@ -5008,12 +5011,13 @@ def _paint_line_with_character_transition(
     fill_ranges = ink_x_ranges if ink_x_ranges is not None else char_x_ranges
     count = max(len(line.chars), 1)
     handled_indices: set[int] = set()
+    ruby_groups = _resolve_char_ruby_groups(active_rubies, line, intervals)
     for index, (ch, width) in enumerate(zip(line.chars, char_widths)):
         if index in handled_indices:
             continue
         if index >= len(intervals) or index >= len(char_x_ranges):
             continue
-        group = _utopia_main_group_for_index(active_rubies, line, intervals, index) if transition.effect == "utopia" else None
+        group = _utopia_main_group_for_index(active_rubies, line, intervals, index, groups=ruby_groups) if transition.effect == "utopia" else None
         group_done_ms: int | None = None
         group_exiting = False
         if group is not None:
@@ -5076,7 +5080,7 @@ def _paint_line_with_character_transition(
             fill_ratio = _ruby_progress_ratio(group_ruby, t_ms)
         else:
             fill_ratio = _character_fill_ratio(
-                line, intervals, fill_ranges, active_rubies, index, t_ms
+                line, intervals, fill_ranges, active_rubies, index, t_ms, groups=ruby_groups
             )
 
         path = QPainterPath()
@@ -5166,15 +5170,21 @@ def _utopia_main_group_for_index(
     line: TimingLine,
     intervals: list[tuple[int, int]],
     index: int,
+    *,
+    groups: dict[int, tuple[list[int], RubyAnnotation]] | None = None,
 ) -> tuple[list[int], RubyAnnotation] | None:
-    ruby = _ruby_for_char_index(rubies, line, intervals, index)
-    if ruby is None:
-        return None
-    indices = [
-        candidate
-        for candidate in _ruby_target_indices(ruby, line, intervals)
-        if 0 <= candidate < len(line.chars)
-    ]
+    # groups 由 _resolve_char_ruby_groups 预建（每行一次）；缺省回退逐字查找。
+    if groups is not None:
+        entry = groups.get(index)
+        if entry is None:
+            return None
+        raw_indices, ruby = entry
+    else:
+        ruby = _ruby_for_char_index(rubies, line, intervals, index)
+        if ruby is None:
+            return None
+        raw_indices = _ruby_target_indices(ruby, line, intervals)
+    indices = [candidate for candidate in raw_indices if 0 <= candidate < len(line.chars)]
     if len(indices) <= 1:
         return None
     return indices, ruby
@@ -5937,6 +5947,28 @@ def _ruby_target_indices(
     return time_indices
 
 
+def _resolve_char_ruby_groups(
+    rubies: list[RubyAnnotation],
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+) -> dict[int, tuple[list[int], RubyAnnotation]]:
+    """预解析 ``char index -> (该字所属 ruby 的 target indices, ruby)``，每行算一次。
+
+    等价于逐字调用 ``_ruby_for_char_index`` + ``_ruby_target_indices``，但这些查找是
+    **布局静态**（不依赖 ``t_ms``，只取决于 rubies/line/intervals）。原本在 transition
+    逐字逐帧循环里反复重算（实测每帧数百次 ``_find_ruby_text_span``/``_text_span_indices``），
+    在此一次性建表。``setdefault`` 实现「rubies 顺序中首个命中者胜」，与 ``_ruby_for_char_index``
+    一致；消费方（``_utopia_main_group_for_index`` / ``_character_fill_ratio``）各自对返回的
+    indices 施加自己的范围过滤，故行为逐像素不变。
+    """
+    groups: dict[int, tuple[list[int], RubyAnnotation]] = {}
+    for ruby in rubies:
+        indices = _ruby_target_indices(ruby, line, intervals)
+        for index in indices:
+            groups.setdefault(index, (indices, ruby))
+    return groups
+
+
 def _ruby_time_indices(
     ruby: RubyAnnotation,
     intervals: list[tuple[int, int]],
@@ -6062,12 +6094,21 @@ def _character_fill_ratio(
     active_rubies: list[RubyAnnotation],
     index: int,
     t_ms: int,
+    *,
+    groups: dict[int, tuple[list[int], RubyAnnotation]] | None = None,
 ) -> float:
-    ruby = _ruby_for_char_index(active_rubies, line, intervals, index)
+    # groups 由 _resolve_char_ruby_groups 预建（每行一次）；缺省回退逐字查找。
+    if groups is not None:
+        entry = groups.get(index)
+        ruby = entry[1] if entry is not None else None
+        raw_indices = entry[0] if entry is not None else None
+    else:
+        ruby = _ruby_for_char_index(active_rubies, line, intervals, index)
+        raw_indices = _ruby_target_indices(ruby, line, intervals) if ruby is not None else None
     if ruby is not None:
         indices = [
             candidate
-            for candidate in _ruby_target_indices(ruby, line, intervals)
+            for candidate in raw_indices
             if 0 <= candidate < len(char_x_ranges)
         ]
         if indices:
