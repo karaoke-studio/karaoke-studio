@@ -8,6 +8,7 @@ handled by ``QGraphicsVideoItem`` and the subtitles are painted by a transparent
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -292,6 +293,16 @@ class PreviewGraphicsView(QGraphicsView):
         )
 
     def _scene_device_pixel_ratio(self) -> float:
+        # DPR-aware 渲染（af1ad4e）：worker 直接按 viewport 设备倍率（DPR × scene→viewport
+        # 缩放）栅格化，GUI 等倍 blit，省掉 1920×1080→viewport device 的 smooth-scale。
+        # KROK_SUBTITLE_PREVIEW_DPR_AWARE=0 回退到旧路径（worker 渲 logical、GUI 缩放），用于 A/B。
+        if os.environ.get("KROK_SUBTITLE_PREVIEW_DPR_AWARE", "1").strip().lower() in (
+            "0",
+            "false",
+            "no",
+            "off",
+        ):
+            return 1.0
         viewport = self.viewport()
         dpr = viewport.devicePixelRatioF() if viewport is not None else self.devicePixelRatioF()
         scene_scale = abs(self.transform().m11()) or 1.0
