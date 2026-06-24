@@ -92,6 +92,14 @@ def _utopia_bake_enabled() -> bool:
     )
 
 
+def _glow_cache_enabled() -> bool:
+    """A3：utopia 路径复用 glow 烘焙缓存（默认开）。``KROK_SUBTITLE_GLOW_CACHE=0`` 退回
+    逐帧 ``_paint_glow_path``（A/B 验收 / 紧急回退用）。"""
+    return os.environ.get("KROK_SUBTITLE_GLOW_CACHE", "1").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
+
+
 def _vertical_layer_enabled() -> bool:
     """竖排（縦書き）整条路径（主文本 + ruby）走 LayerCompositor + bake 缓存。
 
@@ -4833,7 +4841,7 @@ def _paint_role_line_with_character_transition(
                         skew_y=skew_y,
                     )
                     clip_rect = None
-                is_utopia = transition.effect == "utopia"
+                use_glow_cache = transition.effect == "utopia" and _glow_cache_enabled()
                 _paint_char_karaoke_stack(
                     painter,
                     paint_path,
@@ -4847,8 +4855,8 @@ def _paint_role_line_with_character_transition(
                     ratio=ratio,
                     rtl=rtl,
                     clip_rect=clip_rect,
-                    glow_run=run if is_utopia else None,
-                    glow_transform=group_transform if is_utopia else None,
+                    glow_run=run if use_glow_cache else None,
+                    glow_transform=group_transform if use_glow_cache else None,
                 )
             finally:
                 painter.restore()
@@ -5150,8 +5158,9 @@ def _paint_line_with_character_transition(
                     )
                     for ci in indices
                 ]
-                glow_run = group_glyphs
-                glow_transform = transform
+                if _glow_cache_enabled():
+                    glow_run = group_glyphs
+                    glow_transform = transform
                 if _utopia_bake_enabled():
                     # P1.c-1（opt-in）：bake+变换 替代逐帧光栅化。
                     _paint_utopia_group_baked(
