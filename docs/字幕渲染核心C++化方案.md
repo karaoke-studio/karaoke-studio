@@ -457,8 +457,24 @@ smoke 输出示例：
 仍未完成：
 
 - native 尚未实际绘制 glow / shadow，只是 clip 边界已准备好。
-- ruby layout/timing 仍未迁移。
 - glow bitmap cache 尚未迁移。
+
+#### C3b：横排 ruby layout/timing（2026-06-25 已启动）
+
+已完成第一刀：
+
+- native 复刻横排 ruby 的目标字匹配：时间范围命中、`kanji` 文本 span 匹配、preferred indices 选择。
+- native 复刻 ruby effective timing：当 `@Ruby` 时间范围与实际目标字范围不一致时，把 reading timing rebased 到目标字范围。
+- native 复刻 ruby reading progress：支持普通 `reading_part_ms` 分段与 pause pair 形式。
+- native `render_frame` 新增 `ruby_diagnostics[]`，包含 `kanji`、`reading`、`indices`、`x`、`baseline_y`、`target_width`、`reading_width`、`progress`、after clip 几何。
+- native 普通横排路径已实际绘制 ruby before/after 两层；当前颜色暂复用主 karaoke color matrix，ruby 专属颜色/渐变/image fill 后续再补。
+- pytest 已覆盖 ruby layout/timing 几何 parity，并增加 native 带 ruby / 不带 ruby 输出不同的像素 smoke。
+
+仍未完成：
+
+- ruby 专属 `ruby_color` / `ruby_karaoke_colors` 尚未迁移；当前仅复用主行 karaoke colors。
+- ruby 与 role/singer override、utopia transition、竖排路径尚未迁移。
+- ruby 像素级 Python-vs-native 严格 diff 尚未建立，目前先以几何 parity + native 有无 ruby 像素 smoke 收口。
 
 验收：
 

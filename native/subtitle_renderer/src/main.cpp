@@ -19,6 +19,7 @@
 #include <cstdint>
 #include <cmath>
 #include <iostream>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -70,6 +71,8 @@ struct RenderConfig {
     int glowAfterRadiusPx = 10;
     int shadowOffsetX = 0;
     int shadowOffsetY = 1;
+    int rubyFontSizePx = 30;
+    int rubyGapPx = 8;
     int lineYMarginPx = 80;
     int lineGapPx = 90;
     int lineLeadInMs = 1800;
@@ -109,6 +112,21 @@ struct LineDiagnostics {
     double afterClipHeight = 0.0;
 };
 
+struct RubyDiagnostics {
+    QString kanji;
+    QString reading;
+    std::vector<int> indices;
+    double x = 0.0;
+    double baselineY = 0.0;
+    double targetWidth = 0.0;
+    double readingWidth = 0.0;
+    double progress = 0.0;
+    double afterClipLeft = 0.0;
+    double afterClipRight = 0.0;
+    double afterClipTop = 0.0;
+    double afterClipHeight = 0.0;
+};
+
 struct RenderDiagnostics {
     int visibleLines = 0;
     bool hasFirstLine = false;
@@ -120,6 +138,7 @@ struct RenderDiagnostics {
     double afterClipTop = 0.0;
     double afterClipHeight = 0.0;
     std::vector<LineDiagnostics> lines;
+    std::vector<RubyDiagnostics> rubies;
 };
 
 struct RenderResult {
@@ -217,6 +236,8 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.glowAfterRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_after_radius_px"), cfg.glowAfterRadiusPx));
     cfg.shadowOffsetX = intValue(style, QStringLiteral("shadow_offset_x"), cfg.shadowOffsetX);
     cfg.shadowOffsetY = intValue(style, QStringLiteral("shadow_offset_y"), cfg.shadowOffsetY);
+    cfg.rubyFontSizePx = std::max(1, intValue(style, QStringLiteral("ruby_font_size_px"), cfg.rubyFontSizePx));
+    cfg.rubyGapPx = std::max(0, intValue(style, QStringLiteral("ruby_gap_px"), cfg.rubyGapPx));
     cfg.lineYMarginPx = std::max(0, intValue(style, QStringLiteral("line_y_margin_px"), cfg.lineYMarginPx));
     cfg.lineGapPx = std::max(0, intValue(style, QStringLiteral("line_gap_px"), cfg.lineGapPx));
     cfg.lineLeadInMs = std::max(0, intValue(style, QStringLiteral("line_lead_in_ms"), cfg.lineLeadInMs));
@@ -344,6 +365,13 @@ QFont buildLineFont(const RenderConfig &cfg) {
     return font;
 }
 
+QFont buildRubyFont(const RenderConfig &cfg) {
+    QFont font(cfg.fontFamily);
+    font.setPixelSize(cfg.rubyFontSizePx);
+    font.setWeight(static_cast<QFont::Weight>(std::clamp(cfg.fontWeight, 1, 999)));
+    return font;
+}
+
 double visualStrokeExtent(const RenderConfig &cfg) {
     return std::ceil((std::max(cfg.strokeWidthPx, 0) + std::max(cfg.stroke2WidthPx, 0)) / 2.0);
 }
@@ -379,6 +407,41 @@ double afterClipVerticalExtent(const RenderConfig &cfg) {
     const double glowExtra = cfg.decorationKind == QStringLiteral("glow") ? glowExtent(cfg, true) : 0.0;
     const double shadowExtra = cfg.decorationKind == QStringLiteral("shadow") ? std::abs(cfg.shadowOffsetY) : 0.0;
     return std::max({strokeExtent, glowExtra, shadowExtra, 2.0}) + 4.0;
+}
+
+int scaledPx(int value, double scale) {
+    if (value <= 0) {
+        return 0;
+    }
+    return std::max(1, static_cast<int>(std::round(value * scale)));
+}
+
+int scaledSignedPx(int value, double scale) {
+    if (value == 0) {
+        return 0;
+    }
+    const int sign = value > 0 ? 1 : -1;
+    return sign * std::max(1, static_cast<int>(std::round(std::abs(value) * scale)));
+}
+
+double rubyScale(const RenderConfig &cfg) {
+    return static_cast<double>(std::max(cfg.rubyFontSizePx, 1)) / static_cast<double>(std::max(cfg.fontSizePx, 1));
+}
+
+double rubyVisualPadding(const RenderConfig &cfg) {
+    const double scale = rubyScale(cfg);
+    const int strokeWidth = scaledPx(cfg.strokeWidthPx, scale);
+    const int stroke2Width = scaledPx(cfg.stroke2WidthPx, scale);
+    const double strokeExtent = std::ceil((std::max(strokeWidth, 0) + std::max(stroke2Width, 0)) / 2.0);
+    double glowExtra = 0.0;
+    if (cfg.decorationKind == QStringLiteral("glow")) {
+        const int rubyGlowRadius = scaledPx(glowRadius(cfg, true), scale);
+        const int baseWidth = stroke2Width > 0 ? strokeWidth + stroke2Width : strokeWidth;
+        glowExtra = std::ceil((std::max(1, baseWidth + rubyGlowRadius)) / 2.0 + std::max(rubyGlowRadius, 1) * 3.0);
+    }
+    const double shadowX = cfg.decorationKind == QStringLiteral("shadow") ? std::abs(scaledSignedPx(cfg.shadowOffsetX, scale)) : 0.0;
+    const double shadowY = cfg.decorationKind == QStringLiteral("shadow") ? std::abs(scaledSignedPx(cfg.shadowOffsetY, scale)) : 0.0;
+    return std::max({strokeExtent, glowExtra, shadowX, shadowY, 2.0});
 }
 
 double baselineYForLine(const RenderConfig &cfg, const QFontMetricsF &metrics, int lane, int visibleLineCount) {
@@ -518,6 +581,477 @@ std::optional<QRectF> afterClipRect(const RenderConfig &cfg, const TimingLine &l
     return QRectF(layout.x, top, right - layout.x, height);
 }
 
+std::vector<std::pair<int, int>> lineIntervals(const TimingLine &line) {
+    std::vector<std::pair<int, int>> intervals;
+    intervals.reserve(line.chars.size());
+    for (std::size_t i = 0; i < line.chars.size(); ++i) {
+        intervals.push_back({line.chars[i].startMs, charEndMs(line, i)});
+    }
+    return intervals;
+}
+
+std::vector<int> rubyTimeIndices(
+    const RubyAnnotation &ruby,
+    const std::vector<std::pair<int, int>> &intervals
+) {
+    std::vector<int> indices;
+    for (std::size_t i = 0; i < intervals.size(); ++i) {
+        if (intervals[i].first < ruby.posEndMs && intervals[i].second > ruby.posStartMs) {
+            indices.push_back(static_cast<int>(i));
+        }
+    }
+    return indices;
+}
+
+QString lineFullText(const TimingLine &line) {
+    QString text;
+    for (const auto &ch : line.chars) {
+        text += ch.text;
+    }
+    return text;
+}
+
+std::vector<int> textSpanIndices(const std::pair<int, int> &span, const TimingLine &line) {
+    std::vector<int> indices;
+    int cursor = 0;
+    for (std::size_t i = 0; i < line.chars.size(); ++i) {
+        const int unitStart = cursor;
+        const int unitEnd = cursor + line.chars[i].text.size();
+        cursor = unitEnd;
+        if (unitStart < span.second && unitEnd > span.first) {
+            indices.push_back(static_cast<int>(i));
+        }
+    }
+    return indices;
+}
+
+std::optional<std::pair<int, int>> findRubyTextSpan(
+    const QString &kanji,
+    const TimingLine &line,
+    const std::vector<int> &preferredIndices
+) {
+    if (kanji.isEmpty()) {
+        return std::nullopt;
+    }
+    const QString text = lineFullText(line);
+    std::vector<std::pair<int, int>> occurrences;
+    int pos = text.indexOf(kanji);
+    while (pos >= 0) {
+        occurrences.push_back({pos, pos + kanji.size()});
+        pos = text.indexOf(kanji, pos + 1);
+    }
+    if (occurrences.empty()) {
+        return std::nullopt;
+    }
+    if (preferredIndices.empty()) {
+        return occurrences.front();
+    }
+
+    std::pair<int, int> best = occurrences.front();
+    std::pair<int, int> bestScore{-1, std::numeric_limits<int>::min()};
+    for (const auto &span : occurrences) {
+        const auto indices = textSpanIndices(span, line);
+        int overlap = 0;
+        int distance = std::numeric_limits<int>::max();
+        for (int index : indices) {
+            for (int preferred : preferredIndices) {
+                if (index == preferred) {
+                    ++overlap;
+                }
+                distance = std::min(distance, std::abs(index - preferred));
+            }
+        }
+        if (distance == std::numeric_limits<int>::max()) {
+            distance = 0;
+        }
+        const std::pair<int, int> score{overlap, -distance};
+        if (score > bestScore) {
+            bestScore = score;
+            best = span;
+        }
+    }
+    return best;
+}
+
+std::vector<int> rubyTargetIndices(
+    const RubyAnnotation &ruby,
+    const TimingLine &line,
+    const std::vector<std::pair<int, int>> &intervals
+) {
+    const auto timeIndices = rubyTimeIndices(ruby, intervals);
+    if (!ruby.kanji.isEmpty()) {
+        const auto span = findRubyTextSpan(ruby.kanji, line, timeIndices);
+        if (!span.has_value()) {
+            return {};
+        }
+        return textSpanIndices(span.value(), line);
+    }
+    return timeIndices;
+}
+
+RubyAnnotation effectiveRubyForTarget(
+    const RubyAnnotation &ruby,
+    const std::vector<int> &indices,
+    const std::vector<std::pair<int, int>> &intervals
+) {
+    std::vector<int> validIndices;
+    for (int index : indices) {
+        if (index >= 0 && static_cast<std::size_t>(index) < intervals.size()) {
+            validIndices.push_back(index);
+        }
+    }
+    if (validIndices.empty()) {
+        return ruby;
+    }
+    int start = intervals[validIndices.front()].first;
+    int end = intervals[validIndices.front()].second;
+    for (int index : validIndices) {
+        start = std::min(start, intervals[index].first);
+        end = std::max(end, intervals[index].second);
+    }
+    if (start == ruby.posStartMs && end == ruby.posEndMs) {
+        return ruby;
+    }
+    RubyAnnotation out = ruby;
+    out.posStartMs = start;
+    out.posEndMs = end;
+    const int duration = std::max(end - start, 0);
+    for (int &relMs : out.readingPartMs) {
+        relMs = std::max(0, std::min(duration, relMs));
+    }
+    return out;
+}
+
+std::optional<std::pair<double, double>> rubyTargetXRange(
+    const RubyAnnotation &ruby,
+    const TimingLine &line,
+    const LineLayout &layout,
+    const std::vector<std::pair<int, int>> &intervals
+) {
+    if (!ruby.kanji.isEmpty()) {
+        const auto timeIndices = rubyTimeIndices(ruby, intervals);
+        const auto span = findRubyTextSpan(ruby.kanji, line, timeIndices);
+        if (!span.has_value()) {
+            return std::nullopt;
+        }
+        int cursor = 0;
+        std::optional<double> left;
+        std::optional<double> right;
+        for (std::size_t i = 0; i < line.chars.size() && i < layout.charLefts.size(); ++i) {
+            const int textLen = line.chars[i].text.size();
+            const int unitStart = cursor;
+            const int unitEnd = cursor + textLen;
+            cursor = unitEnd;
+            if (textLen <= 0 || unitEnd <= span->first || unitStart >= span->second) {
+                continue;
+            }
+            const int overlapStart = std::max(span->first, unitStart) - unitStart;
+            const int overlapEnd = std::min(span->second, unitEnd) - unitStart;
+            const double charLeft = layout.charLefts[i];
+            const double width = layout.charWidths[i];
+            const double segmentLeft = charLeft + std::round(width * overlapStart / textLen);
+            const double segmentRight = charLeft + std::round(width * overlapEnd / textLen);
+            left = left.has_value() ? std::min(left.value(), segmentLeft) : segmentLeft;
+            right = right.has_value() ? std::max(right.value(), segmentRight) : segmentRight;
+        }
+        if (!left.has_value() || !right.has_value() || right.value() <= left.value()) {
+            return std::nullopt;
+        }
+        return std::pair<double, double>{left.value(), right.value()};
+    }
+
+    const auto indices = rubyTimeIndices(ruby, intervals);
+    if (indices.empty()) {
+        return std::nullopt;
+    }
+    double left = 0.0;
+    double right = 0.0;
+    bool seen = false;
+    for (int index : indices) {
+        if (index < 0 || static_cast<std::size_t>(index) >= layout.charLefts.size()) {
+            continue;
+        }
+        const double charLeft = layout.charLefts[index];
+        const double charRight = charLeft + layout.charWidths[index];
+        if (!seen) {
+            left = charLeft;
+            right = charRight;
+            seen = true;
+        } else {
+            left = std::min(left, charLeft);
+            right = std::max(right, charRight);
+        }
+    }
+    if (!seen || right <= left) {
+        return std::nullopt;
+    }
+    return std::pair<double, double>{left, right};
+}
+
+std::vector<QString> rubyReadingUnits(const QString &reading) {
+    std::vector<QString> units;
+    units.reserve(static_cast<std::size_t>(reading.size()));
+    for (const QChar &ch : reading) {
+        units.push_back(QString(ch));
+    }
+    return units;
+}
+
+std::vector<int> rubyReadingBoundaries(const RubyAnnotation &ruby, int unitCount) {
+    if (unitCount <= 0) {
+        return {ruby.posStartMs, ruby.posEndMs};
+    }
+    std::vector<int> boundaries{ruby.posStartMs};
+    const int usableParts = std::max(unitCount - 1, 0);
+    for (int i = 0; i < usableParts && static_cast<std::size_t>(i) < ruby.readingPartMs.size(); ++i) {
+        int ts = ruby.posStartMs + ruby.readingPartMs[i];
+        ts = std::max(boundaries.back(), std::min(ruby.posEndMs, ts));
+        boundaries.push_back(ts);
+    }
+    if (static_cast<int>(boundaries.size()) < unitCount) {
+        const int start = boundaries.back();
+        const int remaining = unitCount - static_cast<int>(boundaries.size()) + 1;
+        for (int step = 1; step < remaining; ++step) {
+            boundaries.push_back(start + static_cast<int>(std::round((ruby.posEndMs - start) * step / static_cast<double>(remaining))));
+        }
+    }
+    boundaries.push_back(std::max(boundaries.back(), ruby.posEndMs));
+    return boundaries;
+}
+
+std::vector<std::pair<int, int>> rubyReadingIntervals(const RubyAnnotation &ruby) {
+    const auto units = rubyReadingUnits(ruby.reading);
+    const int unitCount = static_cast<int>(units.size());
+    if (static_cast<int>(ruby.readingPartMs.size()) >= 2 * std::max(unitCount - 1, 0)) {
+        std::vector<std::pair<int, int>> intervals;
+        int currentStart = ruby.posStartMs;
+        for (int i = 0; i < unitCount - 1; ++i) {
+            int release = ruby.posStartMs + ruby.readingPartMs[i * 2];
+            int nextStart = ruby.posStartMs + ruby.readingPartMs[i * 2 + 1];
+            release = std::max(currentStart, std::min(release, ruby.posEndMs));
+            nextStart = std::max(release, std::min(nextStart, ruby.posEndMs));
+            intervals.push_back({currentStart, release});
+            currentStart = nextStart;
+        }
+        intervals.push_back({currentStart, std::max(currentStart, ruby.posEndMs)});
+        return intervals;
+    }
+
+    std::vector<std::pair<int, int>> intervals;
+    const auto boundaries = rubyReadingBoundaries(ruby, unitCount);
+    for (int i = 0; i < unitCount; ++i) {
+        int start = boundaries[i];
+        int end = boundaries[i + 1];
+        if (end < start) {
+            end = start;
+        }
+        intervals.push_back({start, end});
+    }
+    return intervals;
+}
+
+double rubyProgressRatio(const RubyAnnotation &ruby, int tMs) {
+    if (ruby.reading.isEmpty() || ruby.readingPartMs.empty()) {
+        return progressRatio(ruby.posStartMs, ruby.posEndMs, tMs);
+    }
+    const auto intervals = rubyReadingIntervals(ruby);
+    const int total = std::max(static_cast<int>(intervals.size()), 1);
+    for (int i = 0; i < static_cast<int>(intervals.size()); ++i) {
+        const int start = intervals[i].first;
+        const int end = intervals[i].second;
+        if (tMs < start) {
+            return static_cast<double>(i) / total;
+        }
+        if (tMs < end) {
+            return (i + progressRatio(start, end, tMs)) / total;
+        }
+    }
+    return 1.0;
+}
+
+double rubyLayoutWidth(const QString &reading, const QFontMetricsF &metrics, double targetWidth) {
+    const double natural = metrics.horizontalAdvance(reading);
+    if (targetWidth <= natural) {
+        return natural;
+    }
+    return targetWidth;
+}
+
+QPainterPath rubyTextPath(
+    const QString &reading,
+    const QFont &font,
+    const QFontMetricsF &metrics,
+    double x,
+    double baselineY,
+    double targetWidth
+) {
+    const auto units = rubyReadingUnits(reading);
+    std::vector<double> widths;
+    widths.reserve(units.size());
+    double natural = 0.0;
+    for (const QString &unit : units) {
+        const double width = metrics.horizontalAdvance(unit);
+        widths.push_back(width);
+        natural += width;
+    }
+
+    QPainterPath path;
+    if (units.empty()) {
+        return path;
+    }
+    if (units.size() <= 1 || targetWidth <= natural * 1.15) {
+        double cursor = x + std::max((targetWidth - natural) / 2.0, 0.0);
+        for (std::size_t i = 0; i < units.size(); ++i) {
+            path.addText(QPointF(cursor, baselineY), font, units[i]);
+            cursor += widths[i];
+        }
+        return path;
+    }
+
+    const double slotWidth = targetWidth / static_cast<double>(units.size());
+    for (std::size_t i = 0; i < units.size(); ++i) {
+        const double unitX = x + slotWidth * static_cast<double>(i) + (slotWidth - widths[i]) / 2.0;
+        path.addText(QPointF(unitX, baselineY), font, units[i]);
+    }
+    return path;
+}
+
+std::vector<RubyDiagnostics> rubyDiagnosticsForLine(
+    const RenderConfig &cfg,
+    const TimingLine &line,
+    const LineLayout &layout,
+    int tMs
+) {
+    std::vector<RubyDiagnostics> diagnostics;
+    if (cfg.rubies.empty()) {
+        return diagnostics;
+    }
+    const QFont rubyFont = buildRubyFont(cfg);
+    const QFontMetricsF rubyMetrics(rubyFont);
+    const auto intervals = lineIntervals(line);
+    const double rubyBaselineY = layout.baselineY - layout.ascent - cfg.rubyGapPx;
+    const double pad = rubyVisualPadding(cfg);
+
+    for (const RubyAnnotation &ruby : cfg.rubies) {
+        const auto indices = rubyTargetIndices(ruby, line, intervals);
+        if (indices.empty()) {
+            continue;
+        }
+        const auto targetRange = rubyTargetXRange(ruby, line, layout, intervals);
+        if (!targetRange.has_value()) {
+            continue;
+        }
+        const RubyAnnotation paintRuby = effectiveRubyForTarget(ruby, indices, intervals);
+        const double x = targetRange->first;
+        const double targetWidth = std::max(targetRange->second - targetRange->first, 1.0);
+        const double readingWidth = rubyLayoutWidth(paintRuby.reading, rubyMetrics, targetWidth);
+        const double ratio = rubyProgressRatio(paintRuby, tMs);
+        const double ratioC = std::min(ratio, 1.0);
+        const QRectF rect(x, rubyBaselineY - rubyMetrics.ascent(), readingWidth, rubyMetrics.height());
+        const double clipLeft = cfg.rightToLeft
+            ? rect.left() + rect.width() * (1.0 - ratioC) - pad
+            : rect.left() - pad;
+        const double clipWidth = rect.width() * ratioC + pad;
+
+        RubyDiagnostics item;
+        item.kanji = paintRuby.kanji;
+        item.reading = paintRuby.reading;
+        item.indices = indices;
+        item.x = x;
+        item.baselineY = rubyBaselineY;
+        item.targetWidth = targetWidth;
+        item.readingWidth = readingWidth;
+        item.progress = ratio;
+        item.afterClipLeft = clipLeft;
+        item.afterClipRight = clipLeft + clipWidth;
+        item.afterClipTop = rect.top() - pad;
+        item.afterClipHeight = rect.height() + pad * 2.0;
+        diagnostics.push_back(item);
+    }
+    return diagnostics;
+}
+
+void paintKaraokePathWithWidths(
+    QPainter &painter,
+    const QPainterPath &path,
+    const QColor &fill,
+    const QColor &stroke,
+    const QColor &stroke2,
+    int strokeWidth,
+    int stroke2Width
+) {
+    if (stroke2Width > 0) {
+        painter.strokePath(path, QPen(stroke2, strokeWidth + stroke2Width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    }
+    if (strokeWidth > 0) {
+        painter.strokePath(path, QPen(stroke, strokeWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    }
+    painter.fillPath(path, QBrush(fill));
+}
+
+void paintRubyDiagnostics(
+    QPainter &painter,
+    const RenderConfig &cfg,
+    const std::vector<RubyDiagnostics> &rubies,
+    const QColor &base,
+    const QColor &fill,
+    const QColor &beforeStroke,
+    const QColor &afterStroke,
+    const QColor &beforeStroke2,
+    const QColor &afterStroke2
+) {
+    if (rubies.empty()) {
+        return;
+    }
+    const QFont rubyFont = buildRubyFont(cfg);
+    const QFontMetricsF rubyMetrics(rubyFont);
+    const double scale = rubyScale(cfg);
+    const int strokeWidth = scaledPx(cfg.strokeWidthPx, scale);
+    const int stroke2Width = scaledPx(cfg.stroke2WidthPx, scale);
+    for (const RubyDiagnostics &ruby : rubies) {
+        const QPainterPath path = rubyTextPath(
+            ruby.reading,
+            rubyFont,
+            rubyMetrics,
+            ruby.x,
+            ruby.baselineY,
+            ruby.targetWidth
+        );
+        paintKaraokePathWithWidths(
+            painter,
+            path,
+            base,
+            beforeStroke,
+            beforeStroke2,
+            strokeWidth,
+            stroke2Width
+        );
+        if (ruby.progress <= 0.0) {
+            continue;
+        }
+        painter.save();
+        painter.setClipRect(
+            QRectF(
+                ruby.afterClipLeft,
+                ruby.afterClipTop,
+                ruby.afterClipRight - ruby.afterClipLeft,
+                ruby.afterClipHeight
+            ),
+            Qt::IntersectClip
+        );
+        paintKaraokePathWithWidths(
+            painter,
+            path,
+            fill,
+            afterStroke,
+            afterStroke2,
+            strokeWidth,
+            stroke2Width
+        );
+        painter.restore();
+    }
+}
+
 void paintKaraokePath(QPainter &painter, const QPainterPath &path, const QColor &fill, const QColor &stroke, const QColor &stroke2, const RenderConfig &cfg) {
     if (cfg.stroke2WidthPx > 0) {
         painter.strokePath(path, QPen(stroke2, cfg.strokeWidthPx + cfg.stroke2WidthPx, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
@@ -551,7 +1085,19 @@ void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &lin
     const QColor afterStroke = colorValue(cfg.afterStrokeColor, beforeStroke);
     const QColor beforeStroke2 = colorValue(cfg.beforeStroke2Color, QColor(QStringLiteral("#000000")));
     const QColor afterStroke2 = colorValue(cfg.afterStroke2Color, beforeStroke2);
+    const auto rubyDiagnostics = rubyDiagnosticsForLine(cfg, line, layout, tMs);
 
+    paintRubyDiagnostics(
+        painter,
+        cfg,
+        rubyDiagnostics,
+        base,
+        fill,
+        beforeStroke,
+        afterStroke,
+        beforeStroke2,
+        afterStroke2
+    );
     paintKaraokePath(painter, layout.path, base, beforeStroke, beforeStroke2, cfg);
 
     const auto clip = afterClipRect(cfg, line, layout, tMs);
@@ -592,6 +1138,11 @@ void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &lin
             diagnostics->afterClipTop = lineDiagnostics.afterClipTop;
             diagnostics->afterClipHeight = lineDiagnostics.afterClipHeight;
         }
+        diagnostics->rubies.insert(
+            diagnostics->rubies.end(),
+            rubyDiagnostics.begin(),
+            rubyDiagnostics.end()
+        );
     }
     (void)visibleCount;
 }
@@ -687,6 +1238,28 @@ QJsonObject handleRenderFrame(const QJsonObject &request, const std::optional<Re
         lineDiagnostics.append(item);
     }
     out.insert(QStringLiteral("line_diagnostics"), lineDiagnostics);
+    QJsonArray rubyDiagnostics;
+    for (const RubyDiagnostics &ruby : rendered.diagnostics.rubies) {
+        QJsonObject item;
+        item.insert(QStringLiteral("kanji"), ruby.kanji);
+        item.insert(QStringLiteral("reading"), ruby.reading);
+        QJsonArray indices;
+        for (int index : ruby.indices) {
+            indices.append(index);
+        }
+        item.insert(QStringLiteral("indices"), indices);
+        item.insert(QStringLiteral("x"), ruby.x);
+        item.insert(QStringLiteral("baseline_y"), ruby.baselineY);
+        item.insert(QStringLiteral("target_width"), ruby.targetWidth);
+        item.insert(QStringLiteral("reading_width"), ruby.readingWidth);
+        item.insert(QStringLiteral("progress"), ruby.progress);
+        item.insert(QStringLiteral("after_clip_left"), ruby.afterClipLeft);
+        item.insert(QStringLiteral("after_clip_right"), ruby.afterClipRight);
+        item.insert(QStringLiteral("after_clip_top"), ruby.afterClipTop);
+        item.insert(QStringLiteral("after_clip_height"), ruby.afterClipHeight);
+        rubyDiagnostics.append(item);
+    }
+    out.insert(QStringLiteral("ruby_diagnostics"), rubyDiagnostics);
     if (rendered.diagnostics.hasFirstLine) {
         out.insert(QStringLiteral("line_x"), rendered.diagnostics.lineX);
         out.insert(QStringLiteral("line_width"), rendered.diagnostics.lineWidth);

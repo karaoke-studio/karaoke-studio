@@ -15,6 +15,9 @@ from krok_helper.subtitle_render.engine.painter import (
     _glow_extent,
     _glow_radius,
     _layout_line,
+    _layout_rubies,
+    _ruby_after_clip_rect,
+    _ruby_progress_ratio,
     _resolve_display_baselines,
     _resolve_sayatoo_line_layouts,
     _resolve_visible_content,
@@ -504,6 +507,188 @@ def test_native_after_clip_vertical_extent_matches_painter_decoration_bounds(
         900,
         assert_close=assert_close,
     )
+
+
+def test_native_ruby_diagnostics_match_python_horizontal_layout_and_timing(
+    tmp_path,
+    monkeypatch,
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    line = TimingLine(
+        chars=[
+            TimingChar("A", 0),
+            TimingChar("B", 1000),
+            TimingChar("C", 2000),
+        ],
+        end_ms=3000,
+    )
+    ruby = RubyAnnotation(
+        kanji="AB",
+        reading="xy",
+        reading_part_ms=[1000],
+        pos_start_ms=0,
+        pos_end_ms=2000,
+    )
+    track = TimingTrack(lines=[line], rubies=[ruby])
+    style = Style(
+        font_size_px=48,
+        ruby_font_size_px=20,
+        ruby_gap_px=8,
+        line_lead_in_ms=0,
+        stroke_width_px=4,
+        stroke2_width_px=2,
+        line_y_position="center",
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=PaintFill(color="#FFFFFF"),
+                stroke=PaintFill(color="#222222"),
+                stroke2=PaintFill(color="#202020"),
+            ),
+            after=KaraokeColorState(
+                text=PaintFill(color="#FF5A6F"),
+                stroke=PaintFill(color="#222222"),
+                stroke2=PaintFill(color="#303030"),
+            ),
+        ),
+    )
+
+    track_t_ms, display_style, display_lines, _signal_lines, _title_opacity = (
+        _resolve_visible_content(track, 1500, style)
+    )
+    baselines = _resolve_display_baselines(360, track, display_lines, display_style)
+    line_layouts = _resolve_sayatoo_line_layouts(
+        640,
+        360,
+        track,
+        display_lines,
+        baselines,
+        track_t_ms,
+        display_style,
+    )
+    display_line = display_lines[0]
+    line_layout = line_layouts[display_line.lane]
+    py_layout = _layout_line(
+        track,
+        display_line.line,
+        display_style,
+        640,
+        360,
+        baseline_y=line_layout.baseline_y,
+        line_x=line_layout.text_x,
+        lane=display_line.lane,
+    )
+    assert py_layout is not None
+    assert py_layout.ruby_metrics is not None
+    ruby_layouts = _layout_rubies(
+        py_layout.ruby_metrics,
+        display_line.line,
+        py_layout.intervals,
+        py_layout.char_x_ranges,
+        py_layout.baseline_y,
+        track.rubies,
+        display_style,
+        main_ascent_px=py_layout.metrics.ascent(),
+    )
+    assert len(ruby_layouts) == 1
+    expected = ruby_layouts[0]
+
+    def assert_close(actual, expected_value, label, tolerance=4.0):
+        assert abs(float(actual) - float(expected_value)) <= tolerance, (
+            label,
+            actual,
+            expected_value,
+        )
+
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=640, height=360, fps=60)
+        frame500 = renderer.render_frame_png(500, tmp_path / "ruby-frame-500.png")
+        frame1500 = renderer.render_frame_png(1500, tmp_path / "ruby-frame-1500.png")
+
+    assert len(frame1500["ruby_diagnostics"]) == 1
+    for frame, t_ms in [(frame500, 500), (frame1500, 1500)]:
+        native_ruby = frame["ruby_diagnostics"][0]
+        expected_ratio = _ruby_progress_ratio(expected.ruby, t_ms)
+        expected_clip = _ruby_after_clip_rect(
+            expected,
+            py_layout.ruby_metrics,
+            display_style,
+            py_layout.rtl,
+            expected_ratio,
+        )
+        assert native_ruby["kanji"] == "AB"
+        assert native_ruby["reading"] == "xy"
+        assert native_ruby["indices"] == [0, 1]
+        assert_close(native_ruby["x"], expected.x, f"x@{t_ms}")
+        assert_close(native_ruby["baseline_y"], expected.baseline_y, f"baseline@{t_ms}")
+        assert_close(native_ruby["target_width"], expected.target_width, f"target_width@{t_ms}")
+        assert_close(native_ruby["reading_width"], expected.reading_width, f"reading_width@{t_ms}")
+        assert_close(native_ruby["progress"], expected_ratio, f"progress@{t_ms}", tolerance=0.01)
+        assert_close(native_ruby["after_clip_left"], expected_clip.left(), f"clip_left@{t_ms}")
+        assert_close(native_ruby["after_clip_right"], expected_clip.right(), f"clip_right@{t_ms}")
+        assert_close(native_ruby["after_clip_top"], expected_clip.top(), f"clip_top@{t_ms}")
+        assert_close(native_ruby["after_clip_height"], expected_clip.height(), f"clip_height@{t_ms}")
+
+
+def test_native_ruby_changes_rendered_frame_when_exe_exists(tmp_path, monkeypatch):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QImage
+
+    line = TimingLine(
+        chars=[
+            TimingChar("A", 0),
+            TimingChar("B", 1000),
+            TimingChar("C", 2000),
+        ],
+        end_ms=3000,
+    )
+    ruby = RubyAnnotation(
+        kanji="AB",
+        reading="xy",
+        reading_part_ms=[1000],
+        pos_start_ms=0,
+        pos_end_ms=2000,
+    )
+    style = Style(
+        font_size_px=64,
+        ruby_font_size_px=30,
+        ruby_gap_px=10,
+        line_lead_in_ms=0,
+        line_y_position="center",
+        stroke_width_px=4,
+        stroke2_width_px=2,
+    )
+    plain_output = tmp_path / "native-plain-without-ruby.png"
+    ruby_output = tmp_path / "native-with-ruby.png"
+
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(TimingTrack(lines=[line]), style, width=640, height=360, fps=60)
+        renderer.render_frame_png(1500, plain_output)
+
+        renderer.configure(TimingTrack(lines=[line], rubies=[ruby]), style, width=640, height=360, fps=60)
+        renderer.render_frame_png(1500, ruby_output)
+
+    plain = QImage(str(plain_output)).convertToFormat(QImage.Format.Format_RGBA8888)
+    with_ruby = QImage(str(ruby_output)).convertToFormat(QImage.Format.Format_RGBA8888)
+    assert plain.size() == with_ruby.size()
+    diff_pixels = 0
+    for y in range(plain.height()):
+        for x in range(plain.width()):
+            if plain.pixelColor(x, y).rgba() != with_ruby.pixelColor(x, y).rgba():
+                diff_pixels += 1
+    assert diff_pixels > 100
 
 
 def test_native_renderer_after_stroke2_missing_does_not_inherit_before_stroke2(
