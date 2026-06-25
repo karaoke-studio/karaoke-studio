@@ -512,6 +512,32 @@ smoke 输出示例：
 - 字符级 transform。
 - ruby 与主字联动。
 - glow bitmap transform 路径。
+- 按 `字幕渲染-管线优化调研.md` §9.6 的原语契约落地：effect 只产出 `opacity` /
+  `translate` / `clip` / `affine` / 栅格参数，绘制与缓存共用底层 path/layer 逻辑，避免做成
+  utopia-only 死路。
+
+#### C4 分步计划（2026-06-25）
+
+- **C4-1：native 主文本 utopia primitive/vector 路径。** 解析 `entry_anim` / `exit_anim` /
+  `entry_lead_ms` / `exit_fade_ms`，在 native 侧复刻主文本 entry / wipe / exit 的
+  `AnimationState`（opacity + affine），先以逐字/单行 group 的矢量 path 绘制保证 parity；
+  不在本刀迁移 ruby transition，也不引入 body bitmap/量子化缓存。
+- **C4-2：ruby 与主字 group 联动。** 把 ruby 覆盖的主字组、ruby reading units、退场整组行为
+  接入同一 scope；scope_id 继续按单行拆分，不做跨行联合 group。
+- **C4-3：utopia glow transform cache。** 在 C3a blur LRU 基础上迁移 Python 的上正 run/scope glow
+  bitmap transform 语义，避免 utopia 下重复高斯，同时保留 body 矢量锐利路径。
+- **C4-4：真实重工程 benchmark 与调优。** 用 `utopia + glow + ruby` 场景比较 Python 与 native，
+  再决定是否需要量子化重栅或更粗粒度 composite cache。
+
+#### C4-1 实装状态（2026-06-25 进行中）
+
+- 已实现：native 解析 `entry_anim` / `exit_anim` / `entry_lead_ms` / `exit_fade_ms`。
+- 已实现：主文本 utopia active window 与 entry / wipe / exit 的 `AnimationState` 原语
+  （opacity + affine）计算。
+- 已实现：普通横排、非 inline role 的主文本 utopia 矢量绘制分支；普通路径、inline role 路径继续走旧逻辑。
+- 已实现：普通行主文本 entry / wipe / exit 三个关键帧的 Python-vs-native bounded 像素 diff；
+  测试使用无 ruby、无 glow、无描边的主文本场景，先锁定动画几何与 opacity。
+- 暂不纳入：ruby transition、inline role utopia、utopia glow transform cache。
 
 验收：
 

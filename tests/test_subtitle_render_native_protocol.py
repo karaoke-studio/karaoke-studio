@@ -1889,6 +1889,92 @@ def test_native_plain_horizontal_pixels_stay_within_bounded_diff(
     assert int((diff > 8).sum()) < 50_000
 
 
+@pytest.mark.parametrize(
+    ("label", "t_ms"),
+    [
+        ("entry", 350),
+        ("wipe", 1500),
+        ("exit", 2300),
+    ],
+)
+def test_native_utopia_main_text_pixels_stay_within_bounded_diff(
+    tmp_path, monkeypatch, label, t_ms
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QImage
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    def fill(color: str) -> PaintFill:
+        return PaintFill(color=color)
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("U", 0),
+                    TimingChar("t", 800),
+                    TimingChar("o", 1600),
+                ],
+                end_ms=2200,
+            )
+        ],
+    )
+    style = Style(
+        font_family="Arial",
+        font_size_px=64,
+        line_lead_in_ms=700,
+        line_tail_ms=1200,
+        line_y_position="center",
+        line_horizontal_layout="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        decoration_kind="shadow",
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        entry_anim="utopia",
+        exit_anim="utopia",
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=fill("#FFFFFF"),
+                stroke=fill("#00000000"),
+                stroke2=fill("#00000000"),
+                shadow=fill("#00000000"),
+            ),
+            after=KaraokeColorState(
+                text=fill("#FF5A6F"),
+                stroke=fill("#00000000"),
+                stroke2=fill("#00000000"),
+                shadow=fill("#00000000"),
+            ),
+        ),
+    )
+
+    python_image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+    python_image.fill(0)
+    clear_before_layer_cache()
+    paint_frame(python_image, track, t_ms, style)
+
+    native_output = tmp_path / f"native-utopia-main-text-{label}-{t_ms}.png"
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=640, height=360, fps=60)
+        renderer.render_frame_png(t_ms, native_output)
+
+    python_rows = _image_rows(python_image)
+    native_rows = _image_rows(QImage(str(native_output)))
+    assert python_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    assert native_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    diff = np.abs(python_rows.astype(int) - native_rows.astype(int))
+    assert diff.mean() < 6.0
+    assert int((diff > 8).sum()) < 30_000
+
+
 def test_native_two_line_horizontal_pixels_stay_within_bounded_diff(
     tmp_path, monkeypatch
 ):

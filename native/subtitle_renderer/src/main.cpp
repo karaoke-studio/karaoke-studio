@@ -34,6 +34,16 @@
 namespace {
 
 constexpr int kProtocolSchema = 1;
+constexpr double kPi = 3.14159265358979323846;
+constexpr int kUtopiaIntroTimeMs = 700;
+constexpr int kUtopiaIntroDelayMs = 200;
+constexpr int kUtopiaIntroEnlargeMs = 400;
+constexpr int kUtopiaIntroCondenseMs = 100;
+constexpr double kUtopiaIntroOverRatio = 1.3;
+constexpr double kUtopiaWipeOverRatio = 1.15;
+constexpr double kUtopiaWipeOverTimeRatio = 0.25;
+constexpr int kUtopiaWipeOverTimeLimitMs = 100;
+constexpr int kUtopiaFadeOutTimeMs = 750;
 
 struct TimingChar {
     QString text;
@@ -137,6 +147,10 @@ struct RenderConfig {
     int lowerLineRightMarginPx = 50;
     bool dualLineLayout = true;
     bool rightToLeft = false;
+    QString entryAnim = QStringLiteral("none");
+    int entryLeadMs = 300;
+    QString exitAnim = QStringLiteral("none");
+    int exitFadeMs = 300;
     QJsonObject singerStyleOverrides;
     QJsonObject customStyleSchemes;
     // Built during configure. render_frame must not insert here because LineLayout stores pointers into this QHash.
@@ -194,6 +208,24 @@ struct RubyDiagnostics {
 struct RubyLayerImage {
     QImage image;
     QPointF offset;
+};
+
+struct LineCharTransition {
+    QString phase;
+    QString effect;
+    double progress = 1.0;
+    int startMs = 0;
+    int endMs = 0;
+};
+
+struct AnimationState {
+    double opacity = 1.0;
+    double dx = 0.0;
+    double dy = 0.0;
+    double rotation = 0.0;
+    double scaleX = 1.0;
+    double scaleY = 1.0;
+    double skewY = 0.0;
 };
 
 struct ImageFillCacheEntry {
@@ -661,6 +693,10 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.rightToLeft = style.value(QStringLiteral("right_to_left")).isBool()
         ? style.value(QStringLiteral("right_to_left")).toBool()
         : cfg.rightToLeft;
+    cfg.entryAnim = stringValue(style, QStringLiteral("entry_anim"), cfg.entryAnim);
+    cfg.entryLeadMs = std::max(0, intValue(style, QStringLiteral("entry_lead_ms"), cfg.entryLeadMs));
+    cfg.exitAnim = stringValue(style, QStringLiteral("exit_anim"), cfg.exitAnim);
+    cfg.exitFadeMs = std::max(0, intValue(style, QStringLiteral("exit_fade_ms"), cfg.exitFadeMs));
     const bool hasMainKaraokeColors = style.value(QStringLiteral("karaoke_colors")).isObject();
     const bool hasRubyKaraokeColors = style.value(QStringLiteral("ruby_karaoke_colors")).isObject();
     base.hasMainKaraokeColors = hasMainKaraokeColors;
@@ -844,6 +880,219 @@ double progressRatio(int startMs, int endMs, int tMs) {
     }
     const double raw = static_cast<double>(tMs - startMs) / static_cast<double>(endMs - startMs);
     return std::clamp(raw, 0.0, 1.0);
+}
+
+int lineDisplayEndMs(const TimingLine &line, const RenderConfig &cfg) {
+    if (line.chars.empty()) {
+        return 0;
+    }
+    return std::max(line.endMs, line.chars.back().startMs) + cfg.lineTailMs;
+}
+
+int nextValidCharIndex(const TimingLine &line, std::size_t startIndex) {
+    for (std::size_t i = startIndex; i < line.chars.size(); ++i) {
+        if (!line.chars[i].text.trimmed().isEmpty()) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+int utopiaTailDelayMs(const RenderConfig &cfg) {
+    return std::max(0, cfg.lineTailMs - kUtopiaFadeOutTimeMs);
+}
+
+int utopiaFollowingDoneTime(
+    const TimingLine &line,
+    const std::vector<std::pair<int, int>> &intervals,
+    int index,
+    const RenderConfig &cfg
+) {
+    if (intervals.empty()) {
+        return line.endMs;
+    }
+    index = std::clamp(index, 0, static_cast<int>(intervals.size()) - 1);
+    const int currentEnd = intervals[static_cast<std::size_t>(index)].second;
+    const int nextIndex = nextValidCharIndex(line, static_cast<std::size_t>(index + 1));
+    if (nextIndex >= 0 && nextIndex < static_cast<int>(intervals.size())) {
+        const int nextEnd = intervals[static_cast<std::size_t>(nextIndex)].second;
+        if (currentEnd <= nextEnd) {
+            return nextEnd;
+        }
+    }
+    return currentEnd + utopiaTailDelayMs(cfg);
+}
+
+bool isUtopiaWiping(int tMs, int charStartMs, int charEndMs) {
+    return charStartMs < tMs && tMs < charEndMs && charStartMs != charEndMs;
+}
+
+double utopiaWipeScale(int tMs, int charStartMs, int charEndMs) {
+    if (!isUtopiaWiping(tMs, charStartMs, charEndMs)) {
+        return 1.0;
+    }
+    const int overMs = std::min(
+        static_cast<int>((charEndMs - charStartMs) * kUtopiaWipeOverTimeRatio),
+        kUtopiaWipeOverTimeLimitMs
+    );
+    if (overMs <= 0) {
+        return 1.0;
+    }
+    const int peakMs = charStartMs + overMs;
+    double progress = 0.0;
+    if (tMs <= peakMs) {
+        progress = static_cast<double>(tMs - charStartMs) / overMs;
+    } else {
+        const int releaseMs = std::max(charEndMs - peakMs, 1);
+        progress = static_cast<double>(charEndMs - tMs) / releaseMs;
+    }
+    return 1.0 + (kUtopiaWipeOverRatio - 1.0) * std::clamp(progress, 0.0, 1.0);
+}
+
+std::optional<LineCharTransition> lineCharTransitionContext(
+    const RenderConfig &cfg,
+    const TimingLine &line,
+    int tMs,
+    const std::vector<std::pair<int, int>> &intervals
+) {
+    if (line.chars.empty()) {
+        return std::nullopt;
+    }
+    if (cfg.entryAnim != QStringLiteral("utopia") && cfg.exitAnim != QStringLiteral("utopia")) {
+        return std::nullopt;
+    }
+
+    const int start = lineStartMs(line);
+    const int end = lineDisplayEndMs(line, cfg);
+    const bool inIntro = cfg.entryAnim == QStringLiteral("utopia") && tMs <= start + kUtopiaIntroTimeMs;
+    const bool inExit = cfg.exitAnim == QStringLiteral("utopia")
+        && !intervals.empty()
+        && utopiaFollowingDoneTime(line, intervals, 0, cfg) <= tMs
+        && tMs <= end;
+    bool inWipe = false;
+    for (const auto &interval : intervals) {
+        if (isUtopiaWiping(tMs, interval.first, interval.second)) {
+            inWipe = true;
+            break;
+        }
+    }
+    if (!inIntro && !inExit && !inWipe) {
+        return std::nullopt;
+    }
+
+    return LineCharTransition{
+        QStringLiteral("utopia"),
+        QStringLiteral("utopia"),
+        1.0,
+        start,
+        end,
+    };
+}
+
+QTransform characterTransform(
+    double centerX,
+    double centerY,
+    const AnimationState &state,
+    std::optional<QPointF> scaleOrigin = std::nullopt
+) {
+    QTransform transform;
+    if (state.dx == 0.0
+        && state.dy == 0.0
+        && state.rotation == 0.0
+        && state.scaleX == 1.0
+        && state.scaleY == 1.0
+        && state.skewY == 0.0) {
+        return transform;
+    }
+    if (scaleOrigin.has_value()) {
+        transform.translate(scaleOrigin->x() + state.dx, scaleOrigin->y() + state.dy);
+        if (state.skewY != 0.0) {
+            transform.shear(0.0, state.skewY);
+        }
+        if (state.scaleX != 1.0 || state.scaleY != 1.0) {
+            transform.scale(state.scaleX, state.scaleY);
+        }
+        transform.translate(centerX - scaleOrigin->x(), centerY - scaleOrigin->y());
+        if (state.rotation != 0.0) {
+            transform.rotate(state.rotation);
+        }
+        transform.translate(-centerX, -centerY);
+        return transform;
+    }
+    transform.translate(centerX + state.dx, centerY + state.dy);
+    if (state.rotation != 0.0) {
+        transform.rotate(state.rotation);
+    }
+    if (state.skewY != 0.0) {
+        transform.shear(0.0, state.skewY);
+    }
+    if (state.scaleX != 1.0 || state.scaleY != 1.0) {
+        transform.scale(state.scaleX, state.scaleY);
+    }
+    transform.translate(-centerX, -centerY);
+    return transform;
+}
+
+AnimationState transitionCharState(
+    const RenderConfig &cfg,
+    const LineCharTransition &transition,
+    const std::vector<std::pair<int, int>> &intervals,
+    int index,
+    int count,
+    int tMs,
+    int frameHeight,
+    int followingDoneMs
+) {
+    if (transition.effect == QStringLiteral("utopia") && transition.phase == QStringLiteral("utopia")) {
+        if (cfg.entryAnim == QStringLiteral("utopia") && tMs <= transition.startMs + kUtopiaIntroTimeMs) {
+            const int delay = count <= 1 ? 0 : kUtopiaIntroDelayMs / (count - 1) * index;
+            const int elapsed = tMs - transition.startMs - delay;
+            if (elapsed < 0) {
+                return AnimationState{0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+            }
+            const double opacity = std::min(static_cast<double>(elapsed) / kUtopiaIntroEnlargeMs, 1.0);
+            double scale = 1.0;
+            if (elapsed < kUtopiaIntroEnlargeMs) {
+                scale = kUtopiaIntroOverRatio * static_cast<double>(elapsed) / kUtopiaIntroEnlargeMs;
+            } else if (elapsed < kUtopiaIntroEnlargeMs + kUtopiaIntroCondenseMs) {
+                const int remaining = kUtopiaIntroEnlargeMs + kUtopiaIntroCondenseMs - elapsed;
+                scale = 1.0 + (kUtopiaIntroOverRatio - 1.0) * static_cast<double>(remaining) / kUtopiaIntroCondenseMs;
+            }
+            return AnimationState{opacity, 0.0, 0.0, 0.0, scale, scale, 0.0};
+        }
+
+        if (cfg.exitAnim == QStringLiteral("utopia") && tMs > followingDoneMs) {
+            double local = static_cast<double>(tMs - followingDoneMs) / kUtopiaFadeOutTimeMs;
+            local = std::clamp(local, 0.0, 1.0);
+            const double opacity = std::max(0.0, 1.0 - local);
+            const double shrink = 1.0 - local;
+            const double amp = std::max(frameHeight, 1) / 15.0;
+            const double xTravel = local <= 0.5
+                ? std::sin(kPi * local) * amp
+                : amp + std::sin((local - 0.5) * kPi) * amp;
+            const double yTravel = std::sin(kPi * local / 2.0) * amp;
+            const double xFlip = std::cos(kPi * local);
+            return AnimationState{
+                opacity,
+                -xTravel,
+                yTravel,
+                -180.0 * local,
+                shrink * xFlip,
+                shrink,
+                0.0,
+            };
+        }
+
+        if (index >= 0 && index < static_cast<int>(intervals.size())) {
+            const auto interval = intervals[static_cast<std::size_t>(index)];
+            if (isUtopiaWiping(tMs, interval.first, interval.second)) {
+                const double scale = utopiaWipeScale(tMs, interval.first, interval.second);
+                return AnimationState{1.0, 0.0, 0.0, 0.0, scale, scale, 0.0};
+            }
+        }
+    }
+
+    return AnimationState{};
 }
 
 QColor colorValue(const QString &value, const QColor &fallback) {
@@ -2132,6 +2381,193 @@ void paintInlineTextLayerStack(
     }
 }
 
+double characterFillRatio(
+    const std::vector<std::pair<int, int>> &intervals,
+    std::size_t index,
+    int tMs
+) {
+    if (index >= intervals.size()) {
+        return 0.0;
+    }
+    const auto interval = intervals[index];
+    if (tMs < interval.first) {
+        return 0.0;
+    }
+    if (tMs >= interval.second) {
+        return 1.0;
+    }
+    return progressRatio(interval.first, interval.second, tMs);
+}
+
+void paintTransformedTextStack(
+    QPainter &painter,
+    const QPainterPath &path,
+    const QRectF &rect,
+    const ResolvedStyle &style,
+    double ratio,
+    bool rtl,
+    int charX,
+    int charWidth,
+    bool forceAfter
+) {
+    const double clampedRatio = forceAfter ? 1.0 : std::clamp(ratio, 0.0, 1.0);
+    if (clampedRatio <= 0.0) {
+        paintTextLayerStackWithWidths(
+            painter,
+            path,
+            rect,
+            style.baseFill,
+            style.beforeStrokeFill,
+            style.beforeStroke2Fill,
+            style.beforeShadowFill,
+            style,
+            style.strokeWidthPx,
+            style.stroke2WidthPx,
+            style.shadowOffsetX,
+            style.shadowOffsetY,
+            glowRadius(style, false)
+        );
+        return;
+    }
+    if (clampedRatio >= 1.0) {
+        paintTextLayerStackWithWidths(
+            painter,
+            path,
+            rect,
+            style.afterFill,
+            style.afterStrokeFill,
+            style.afterStroke2Fill,
+            style.afterShadowFill,
+            style,
+            style.strokeWidthPx,
+            style.stroke2WidthPx,
+            style.shadowOffsetX,
+            style.shadowOffsetY,
+            glowRadius(style, true)
+        );
+        return;
+    }
+
+    paintTextLayerStackWithWidths(
+        painter,
+        path,
+        rect,
+        style.baseFill,
+        style.beforeStrokeFill,
+        style.beforeStroke2Fill,
+        style.beforeShadowFill,
+        style,
+        style.strokeWidthPx,
+        style.stroke2WidthPx,
+        style.shadowOffsetX,
+        style.shadowOffsetY,
+        glowRadius(style, false)
+    );
+
+    const double strokePad = visualStrokeExtent(style);
+    const double clipX = rtl
+        ? charX + charWidth * (1.0 - clampedRatio)
+        : charX;
+    const double clipWidth = std::max(charWidth * clampedRatio + strokePad, 1.0);
+    painter.save();
+    painter.setClipRect(
+        QRectF(
+            clipX - strokePad,
+            rect.top() - strokePad,
+            clipWidth,
+            rect.height() + strokePad * 2.0
+        ),
+        Qt::IntersectClip
+    );
+    paintTextLayerStackWithWidths(
+        painter,
+        path,
+        rect,
+        style.afterFill,
+        style.afterStrokeFill,
+        style.afterStroke2Fill,
+        style.afterShadowFill,
+        style,
+        style.strokeWidthPx,
+        style.stroke2WidthPx,
+        style.shadowOffsetX,
+        style.shadowOffsetY,
+        glowRadius(style, true)
+    );
+    painter.restore();
+}
+
+void paintUtopiaMainText(
+    QPainter &painter,
+    const RenderConfig &cfg,
+    const TimingLine &line,
+    const ResolvedStyle &style,
+    const LineLayout &layout,
+    const std::vector<std::pair<int, int>> &intervals,
+    const LineCharTransition &transition,
+    int tMs
+) {
+    const QFontMetricsF metrics(layout.font);
+    const int count = std::max(static_cast<int>(line.chars.size()), 1);
+    for (std::size_t i = 0; i < line.chars.size(); ++i) {
+        if (i >= layout.charLefts.size() || i >= layout.charWidths.size()) {
+            continue;
+        }
+
+        const int followingDoneMs = utopiaFollowingDoneTime(line, intervals, static_cast<int>(i), cfg);
+        const AnimationState state = transitionCharState(
+            cfg,
+            transition,
+            intervals,
+            static_cast<int>(i),
+            count,
+            tMs,
+            cfg.height,
+            followingDoneMs
+        );
+        if (state.opacity <= 0.0) {
+            continue;
+        }
+
+        QPainterPath path;
+        path.addText(QPointF(layout.charLefts[i], layout.baselineY), layout.font, line.chars[i].text);
+        const double left = layout.charLefts[i];
+        const double width = std::max(layout.charWidths[i], 1.0);
+        const double centerX = left + width / 2.0;
+        const double centerY = layout.baselineY - metrics.ascent() + metrics.height() / 2.0;
+        const QTransform transform = characterTransform(
+            centerX,
+            centerY,
+            state,
+            QPointF(left, layout.baselineY)
+        );
+        const QPainterPath paintPath = transform.map(path);
+        const QRectF paintRect = paintPath.boundingRect();
+        if (paintRect.isEmpty()) {
+            continue;
+        }
+        const int paintLeft = static_cast<int>(std::round(paintRect.left()));
+        const int paintWidth = std::max(1, static_cast<int>(std::round(paintRect.width())));
+        const bool inUtopiaExit = cfg.exitAnim == QStringLiteral("utopia") && tMs > followingDoneMs;
+        const double ratio = characterFillRatio(intervals, i, tMs);
+
+        painter.save();
+        painter.setOpacity(painter.opacity() * state.opacity);
+        paintTransformedTextStack(
+            painter,
+            paintPath,
+            paintRect,
+            style,
+            ratio,
+            cfg.rightToLeft,
+            paintLeft,
+            paintWidth,
+            inUtopiaExit
+        );
+        painter.restore();
+    }
+}
+
 void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &line, int tMs, int lane, int visibleLineCount, RenderDiagnostics *diagnostics) {
     const QString text = lineText(line);
     if (text.isEmpty()) {
@@ -2143,6 +2579,8 @@ void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &lin
     const LineLayout layout = layoutLine(cfg, lineStyle, line, lane, visibleLineCount);
 
     const QRectF lineRect(layout.x, layout.baselineY - layout.ascent, layout.width, layout.height);
+    const auto intervals = lineIntervals(line);
+    const auto transition = lineCharTransitionContext(cfg, line, tMs, intervals);
     const auto rubyDiagnostics = rubyDiagnosticsForLine(cfg, lineStyle, line, layout, tMs);
 
     paintRubyDiagnostics(
@@ -2159,7 +2597,22 @@ void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &lin
         lineStyle.rubyAfterShadowFill
     );
 
-    if (layout.hasInlineStyles) {
+    const bool useUtopiaMainText = transition.has_value()
+        && transition->effect == QStringLiteral("utopia")
+        && !layout.hasInlineStyles;
+
+    if (useUtopiaMainText) {
+        paintUtopiaMainText(
+            painter,
+            cfg,
+            line,
+            lineStyle,
+            layout,
+            intervals,
+            transition.value(),
+            tMs
+        );
+    } else if (layout.hasInlineStyles) {
         paintInlineTextLayerStack(painter, line, layout, false);
     } else {
         paintTextLayerStackWithWidths(
@@ -2180,7 +2633,7 @@ void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &lin
     }
 
     const auto clip = afterClipRect(cfg, lineStyle, line, layout, tMs);
-    if (clip.has_value() && clip->width() > 0.0) {
+    if (!useUtopiaMainText && clip.has_value() && clip->width() > 0.0) {
         painter.save();
         painter.setClipRect(*clip, Qt::IntersectClip);
         if (layout.hasInlineStyles) {
