@@ -539,6 +539,16 @@ smoke 输出示例：
   测试使用无 ruby、无 glow、无描边的主文本场景，先锁定动画几何与 opacity。
 - 暂不纳入：ruby transition、inline role utopia、utopia glow transform cache。
 
+#### C4-2 实装状态（2026-06-25 进行中）
+
+- 已实现：native 复用现有 ruby target/effective timing，在 utopia 退场阶段把 ruby 覆盖的多字主文本
+  作为单行内 group 动画单元；非退场阶段仍逐字处理，避免改变正常扫光语义。
+- 已实现：native ruby reading 按 visual units 逐单元套 utopia entry / wipe / exit transform；ruby 继续复用
+  现有 target/effective timing 与 ruby 专属 PaintFill。
+- 已实现：主字 group + ruby reading 的 entry / wipe / exit 三个关键帧 Python-vs-native bounded 像素 diff；
+  测试使用无 glow、无描边场景，先锁定 group/reading 动画几何与 opacity。
+- 暂不纳入：跨行 group、inline role utopia、utopia glow transform cache。
+
 验收：
 
 - 用真实 `A stain` 或同等重工程对比。

@@ -210,6 +210,18 @@ struct RubyLayerImage {
     QPointF offset;
 };
 
+struct RubyGroupInfo {
+    std::vector<int> indices;
+    RubyAnnotation ruby;
+};
+
+struct RubyUnitLayout {
+    QString text;
+    std::pair<int, int> interval;
+    double x = 0.0;
+    double width = 0.0;
+};
+
 struct LineCharTransition {
     QString phase;
     QString effect;
@@ -1041,7 +1053,8 @@ AnimationState transitionCharState(
     int count,
     int tMs,
     int frameHeight,
-    int followingDoneMs
+    int followingDoneMs,
+    std::optional<std::pair<int, int>> overrideInterval = std::nullopt
 ) {
     if (transition.effect == QStringLiteral("utopia") && transition.phase == QStringLiteral("utopia")) {
         if (cfg.entryAnim == QStringLiteral("utopia") && tMs <= transition.startMs + kUtopiaIntroTimeMs) {
@@ -1083,8 +1096,10 @@ AnimationState transitionCharState(
             };
         }
 
-        if (index >= 0 && index < static_cast<int>(intervals.size())) {
-            const auto interval = intervals[static_cast<std::size_t>(index)];
+        if (overrideInterval.has_value() || (index >= 0 && index < static_cast<int>(intervals.size()))) {
+            const auto interval = overrideInterval.has_value()
+                ? overrideInterval.value()
+                : intervals[static_cast<std::size_t>(index)];
             if (isUtopiaWiping(tMs, interval.first, interval.second)) {
                 const double scale = utopiaWipeScale(tMs, interval.first, interval.second);
                 return AnimationState{1.0, 0.0, 0.0, 0.0, scale, scale, 0.0};
@@ -1675,6 +1690,34 @@ std::optional<std::pair<double, double>> rubyTargetXRange(
     return std::pair<double, double>{left, right};
 }
 
+std::optional<RubyGroupInfo> rubyGroupForCharIndex(
+    const RenderConfig &cfg,
+    const TimingLine &line,
+    const std::vector<std::pair<int, int>> &intervals,
+    int index
+) {
+    for (const RubyAnnotation &ruby : cfg.rubies) {
+        auto indices = rubyTargetIndices(ruby, line, intervals);
+        if (indices.size() <= 1) {
+            continue;
+        }
+        if (std::find(indices.begin(), indices.end(), index) == indices.end()) {
+            continue;
+        }
+        std::vector<int> valid;
+        for (int candidate : indices) {
+            if (candidate >= 0 && candidate < static_cast<int>(intervals.size())) {
+                valid.push_back(candidate);
+            }
+        }
+        if (valid.size() <= 1) {
+            continue;
+        }
+        return RubyGroupInfo{valid, effectiveRubyForTarget(ruby, valid, intervals)};
+    }
+    return std::nullopt;
+}
+
 std::vector<QString> rubyReadingUnits(const QString &reading) {
     std::vector<QString> units;
     units.reserve(static_cast<std::size_t>(reading.size()));
@@ -1735,6 +1778,43 @@ std::vector<std::pair<int, int>> rubyReadingIntervals(const RubyAnnotation &ruby
         intervals.push_back({start, end});
     }
     return intervals;
+}
+
+std::vector<QString> rubyUtopiaVisualUnits(const QString &text) {
+    std::vector<QString> units;
+    for (const QChar &ch : text) {
+        if (!units.empty() && (ch == QChar(0x3099) || ch == QChar(0x309A))) {
+            units.back().append(ch);
+        } else {
+            units.push_back(QString(ch));
+        }
+    }
+    return units;
+}
+
+std::vector<std::pair<QString, std::pair<int, int>>> rubyUtopiaReadingUnitsAndIntervals(
+    const RubyAnnotation &ruby
+) {
+    const auto moraUnits = rubyReadingUnits(ruby.reading);
+    const auto moraIntervals = rubyReadingIntervals(ruby);
+    std::vector<std::pair<QString, std::pair<int, int>>> out;
+    const std::size_t count = std::min(moraUnits.size(), moraIntervals.size());
+    for (std::size_t i = 0; i < count; ++i) {
+        const auto visualUnits = rubyUtopiaVisualUnits(moraUnits[i]);
+        if (visualUnits.size() <= 1) {
+            out.push_back({moraUnits[i], moraIntervals[i]});
+            continue;
+        }
+        const int start = moraIntervals[i].first;
+        const int end = moraIntervals[i].second;
+        const int duration = std::max(end - start, 0);
+        for (std::size_t j = 0; j < visualUnits.size(); ++j) {
+            const int unitStart = start + static_cast<int>(std::round(duration * static_cast<double>(j) / visualUnits.size()));
+            const int unitEnd = start + static_cast<int>(std::round(duration * static_cast<double>(j + 1) / visualUnits.size()));
+            out.push_back({visualUnits[j], {unitStart, std::max(unitStart, unitEnd)}});
+        }
+    }
+    return out;
 }
 
 double rubyProgressRatio(const RubyAnnotation &ruby, int tMs) {
@@ -1801,6 +1881,41 @@ QPainterPath rubyTextPath(
         path.addText(QPointF(unitX, baselineY), font, units[i]);
     }
     return path;
+}
+
+std::vector<RubyUnitLayout> rubyUnitLayouts(
+    const std::vector<std::pair<QString, std::pair<int, int>>> &unitsAndIntervals,
+    const QFontMetricsF &metrics,
+    double x,
+    double targetWidth
+) {
+    std::vector<RubyUnitLayout> out;
+    if (unitsAndIntervals.empty()) {
+        return out;
+    }
+    std::vector<double> widths;
+    widths.reserve(unitsAndIntervals.size());
+    double natural = 0.0;
+    for (const auto &item : unitsAndIntervals) {
+        const double width = metrics.horizontalAdvance(item.first);
+        widths.push_back(width);
+        natural += width;
+    }
+    if (unitsAndIntervals.size() <= 1 || targetWidth <= natural * 1.15) {
+        double cursor = x + std::max((targetWidth - natural) / 2.0, 0.0);
+        for (std::size_t i = 0; i < unitsAndIntervals.size(); ++i) {
+            out.push_back(RubyUnitLayout{unitsAndIntervals[i].first, unitsAndIntervals[i].second, cursor, widths[i]});
+            cursor += widths[i];
+        }
+        return out;
+    }
+
+    const double slotWidth = targetWidth / static_cast<double>(unitsAndIntervals.size());
+    for (std::size_t i = 0; i < unitsAndIntervals.size(); ++i) {
+        const double unitX = x + slotWidth * static_cast<double>(i) + (slotWidth - widths[i]) / 2.0;
+        out.push_back(RubyUnitLayout{unitsAndIntervals[i].first, unitsAndIntervals[i].second, unitX, widths[i]});
+    }
+    return out;
 }
 
 std::vector<RubyDiagnostics> rubyDiagnosticsForLine(
@@ -2399,15 +2514,29 @@ double characterFillRatio(
     return progressRatio(interval.first, interval.second, tMs);
 }
 
-void paintTransformedTextStack(
+void paintTransformedTextStackWithFills(
     QPainter &painter,
     const QPainterPath &path,
     const QRectF &rect,
+    const PaintFillSpec &baseFill,
+    const PaintFillSpec &afterFill,
+    const PaintFillSpec &beforeStrokeFill,
+    const PaintFillSpec &afterStrokeFill,
+    const PaintFillSpec &beforeStroke2Fill,
+    const PaintFillSpec &afterStroke2Fill,
+    const PaintFillSpec &beforeShadowFill,
+    const PaintFillSpec &afterShadowFill,
     const ResolvedStyle &style,
     double ratio,
     bool rtl,
     int charX,
     int charWidth,
+    int strokeWidth,
+    int stroke2Width,
+    int shadowOffsetX,
+    int shadowOffsetY,
+    int beforeGlowRadius,
+    int afterGlowRadius,
     bool forceAfter
 ) {
     const double clampedRatio = forceAfter ? 1.0 : std::clamp(ratio, 0.0, 1.0);
@@ -2416,16 +2545,16 @@ void paintTransformedTextStack(
             painter,
             path,
             rect,
-            style.baseFill,
-            style.beforeStrokeFill,
-            style.beforeStroke2Fill,
-            style.beforeShadowFill,
+            baseFill,
+            beforeStrokeFill,
+            beforeStroke2Fill,
+            beforeShadowFill,
             style,
-            style.strokeWidthPx,
-            style.stroke2WidthPx,
-            style.shadowOffsetX,
-            style.shadowOffsetY,
-            glowRadius(style, false)
+            strokeWidth,
+            stroke2Width,
+            shadowOffsetX,
+            shadowOffsetY,
+            beforeGlowRadius
         );
         return;
     }
@@ -2434,16 +2563,16 @@ void paintTransformedTextStack(
             painter,
             path,
             rect,
-            style.afterFill,
-            style.afterStrokeFill,
-            style.afterStroke2Fill,
-            style.afterShadowFill,
+            afterFill,
+            afterStrokeFill,
+            afterStroke2Fill,
+            afterShadowFill,
             style,
-            style.strokeWidthPx,
-            style.stroke2WidthPx,
-            style.shadowOffsetX,
-            style.shadowOffsetY,
-            glowRadius(style, true)
+            strokeWidth,
+            stroke2Width,
+            shadowOffsetX,
+            shadowOffsetY,
+            afterGlowRadius
         );
         return;
     }
@@ -2452,19 +2581,19 @@ void paintTransformedTextStack(
         painter,
         path,
         rect,
-        style.baseFill,
-        style.beforeStrokeFill,
-        style.beforeStroke2Fill,
-        style.beforeShadowFill,
+        baseFill,
+        beforeStrokeFill,
+        beforeStroke2Fill,
+        beforeShadowFill,
         style,
-        style.strokeWidthPx,
-        style.stroke2WidthPx,
-        style.shadowOffsetX,
-        style.shadowOffsetY,
-        glowRadius(style, false)
+        strokeWidth,
+        stroke2Width,
+        shadowOffsetX,
+        shadowOffsetY,
+        beforeGlowRadius
     );
 
-    const double strokePad = visualStrokeExtent(style);
+    const double strokePad = visualStrokeExtentForWidths(strokeWidth, stroke2Width);
     const double clipX = rtl
         ? charX + charWidth * (1.0 - clampedRatio)
         : charX;
@@ -2483,18 +2612,236 @@ void paintTransformedTextStack(
         painter,
         path,
         rect,
+        afterFill,
+        afterStrokeFill,
+        afterStroke2Fill,
+        afterShadowFill,
+        style,
+        strokeWidth,
+        stroke2Width,
+        shadowOffsetX,
+        shadowOffsetY,
+        afterGlowRadius
+    );
+    painter.restore();
+}
+
+void paintTransformedTextStack(
+    QPainter &painter,
+    const QPainterPath &path,
+    const QRectF &rect,
+    const ResolvedStyle &style,
+    double ratio,
+    bool rtl,
+    int charX,
+    int charWidth,
+    bool forceAfter
+) {
+    paintTransformedTextStackWithFills(
+        painter,
+        path,
+        rect,
+        style.baseFill,
         style.afterFill,
+        style.beforeStrokeFill,
         style.afterStrokeFill,
+        style.beforeStroke2Fill,
         style.afterStroke2Fill,
+        style.beforeShadowFill,
         style.afterShadowFill,
         style,
+        ratio,
+        rtl,
+        charX,
+        charWidth,
         style.strokeWidthPx,
         style.stroke2WidthPx,
         style.shadowOffsetX,
         style.shadowOffsetY,
-        glowRadius(style, true)
+        glowRadius(style, false),
+        glowRadius(style, true),
+        forceAfter
     );
-    painter.restore();
+}
+
+void paintRubyTransformedStack(
+    QPainter &painter,
+    const QPainterPath &path,
+    const QRectF &rect,
+    const ResolvedStyle &style,
+    double ratio,
+    bool rtl,
+    bool forceAfter
+) {
+    const double scale = rubyScale(style);
+    const int strokeWidth = scaledPx(style.strokeWidthPx, scale);
+    const int stroke2Width = scaledPx(style.stroke2WidthPx, scale);
+    const int shadowOffsetX = scaledSignedPx(style.shadowOffsetX, scale);
+    const int shadowOffsetY = scaledSignedPx(style.shadowOffsetY, scale);
+    paintTransformedTextStackWithFills(
+        painter,
+        path,
+        rect,
+        style.rubyBaseFill,
+        style.rubyAfterFill,
+        style.rubyBeforeStrokeFill,
+        style.rubyAfterStrokeFill,
+        style.rubyBeforeStroke2Fill,
+        style.rubyAfterStroke2Fill,
+        style.rubyBeforeShadowFill,
+        style.rubyAfterShadowFill,
+        style,
+        ratio,
+        rtl,
+        static_cast<int>(std::round(rect.left())),
+        std::max(1, static_cast<int>(std::round(rect.width()))),
+        strokeWidth,
+        stroke2Width,
+        shadowOffsetX,
+        shadowOffsetY,
+        scaledPx(glowRadius(style, false), scale),
+        scaledPx(glowRadius(style, true), scale),
+        forceAfter
+    );
+}
+
+void paintRubyUtopiaText(
+    QPainter &painter,
+    const RenderConfig &cfg,
+    const ResolvedStyle &style,
+    const TimingLine &line,
+    const LineLayout &layout,
+    const std::vector<std::pair<int, int>> &intervals,
+    const LineCharTransition &transition,
+    int tMs
+) {
+    if (cfg.rubies.empty()) {
+        return;
+    }
+    const QFont rubyFont = buildRubyFont(style);
+    const QFontMetricsF rubyMetrics(rubyFont);
+    const double rubyBaselineY = layout.baselineY - layout.ascent - style.rubyGapPx;
+    const int count = std::max(static_cast<int>(line.chars.size()), 1);
+
+    for (const RubyAnnotation &ruby : cfg.rubies) {
+        const auto indices = rubyTargetIndices(ruby, line, intervals);
+        if (indices.empty()) {
+            continue;
+        }
+        const auto targetRange = rubyTargetXRange(ruby, line, layout, intervals);
+        if (!targetRange.has_value()) {
+            continue;
+        }
+        const RubyAnnotation paintRuby = effectiveRubyForTarget(ruby, indices, intervals);
+        const int firstIndex = *std::min_element(indices.begin(), indices.end());
+        const int lastIndex = *std::max_element(indices.begin(), indices.end());
+        const int followingDoneMs = utopiaFollowingDoneTime(line, intervals, lastIndex, cfg);
+        const AnimationState state = transitionCharState(
+            cfg,
+            transition,
+            intervals,
+            firstIndex,
+            count,
+            tMs,
+            cfg.height,
+            followingDoneMs
+        );
+        if (state.opacity <= 0.0) {
+            continue;
+        }
+
+        const double x = targetRange->first;
+        const double targetWidth = std::max(targetRange->second - targetRange->first, 1.0);
+        const double readingWidth = rubyLayoutWidth(paintRuby.reading, rubyMetrics, targetWidth);
+        const bool groupExiting = indices.size() > 1 && tMs > followingDoneMs;
+        painter.save();
+        painter.setOpacity(painter.opacity() * state.opacity);
+
+        if (groupExiting) {
+            QString reading = paintRuby.reading;
+            if (cfg.rightToLeft) {
+                const auto visual = rubyUtopiaVisualUnits(reading);
+                reading.clear();
+                for (auto it = visual.rbegin(); it != visual.rend(); ++it) {
+                    reading += *it;
+                }
+            }
+            QPainterPath path = rubyTextPath(reading, rubyFont, rubyMetrics, x, rubyBaselineY, targetWidth);
+            const double centerX = x + readingWidth / 2.0;
+            const double centerY = rubyBaselineY - rubyMetrics.ascent() + rubyMetrics.height() / 2.0;
+            const QTransform transform = characterTransform(
+                centerX,
+                centerY,
+                state,
+                QPointF(x, rubyBaselineY)
+            );
+            path = transform.map(path);
+            const QRectF rect = path.boundingRect();
+            if (!rect.isEmpty()) {
+                paintRubyTransformedStack(
+                    painter,
+                    path,
+                    rect,
+                    style,
+                    rubyProgressRatio(paintRuby, tMs),
+                    cfg.rightToLeft,
+                    true
+                );
+            }
+            painter.restore();
+            continue;
+        }
+
+        auto unitsAndIntervals = rubyUtopiaReadingUnitsAndIntervals(paintRuby);
+        if (cfg.rightToLeft) {
+            std::reverse(unitsAndIntervals.begin(), unitsAndIntervals.end());
+        }
+        const auto layouts = rubyUnitLayouts(unitsAndIntervals, rubyMetrics, x, targetWidth);
+        for (const RubyUnitLayout &unit : layouts) {
+            const AnimationState unitState = transitionCharState(
+                cfg,
+                transition,
+                intervals,
+                firstIndex,
+                count,
+                tMs,
+                cfg.height,
+                followingDoneMs,
+                unit.interval
+            );
+            if (unitState.opacity <= 0.0) {
+                continue;
+            }
+            QPainterPath path;
+            path.addText(QPointF(unit.x, rubyBaselineY), rubyFont, unit.text);
+            const double centerX = unit.x + unit.width / 2.0;
+            const double centerY = rubyBaselineY - rubyMetrics.ascent() + rubyMetrics.height() / 2.0;
+            const QTransform transform = characterTransform(
+                centerX,
+                centerY,
+                unitState,
+                QPointF(unit.x, rubyBaselineY)
+            );
+            path = transform.map(path);
+            const QRectF rect = path.boundingRect();
+            if (rect.isEmpty()) {
+                continue;
+            }
+            painter.save();
+            painter.setOpacity(painter.opacity() * unitState.opacity);
+            paintRubyTransformedStack(
+                painter,
+                path,
+                rect,
+                style,
+                progressRatio(unit.interval.first, unit.interval.second, tMs),
+                cfg.rightToLeft,
+                false
+            );
+            painter.restore();
+        }
+        painter.restore();
+    }
 }
 
 void paintUtopiaMainText(
@@ -2514,12 +2861,30 @@ void paintUtopiaMainText(
             continue;
         }
 
-        const int followingDoneMs = utopiaFollowingDoneTime(line, intervals, static_cast<int>(i), cfg);
+        std::vector<int> indices{static_cast<int>(i)};
+        std::optional<RubyAnnotation> groupRuby;
+        const auto group = rubyGroupForCharIndex(cfg, line, intervals, static_cast<int>(i));
+        bool groupExiting = false;
+        if (group.has_value()) {
+            const int groupDoneMs = utopiaFollowingDoneTime(line, intervals, group->indices.back(), cfg);
+            groupExiting = tMs > groupDoneMs;
+            if (groupExiting && static_cast<int>(i) != group->indices.front()) {
+                continue;
+            }
+            if (groupExiting) {
+                indices = group->indices;
+                groupRuby = group->ruby;
+            }
+        }
+
+        const int firstIndex = indices.front();
+        const int lastIndex = indices.back();
+        const int followingDoneMs = utopiaFollowingDoneTime(line, intervals, lastIndex, cfg);
         const AnimationState state = transitionCharState(
             cfg,
             transition,
             intervals,
-            static_cast<int>(i),
+            firstIndex,
             count,
             tMs,
             cfg.height,
@@ -2530,9 +2895,21 @@ void paintUtopiaMainText(
         }
 
         QPainterPath path;
-        path.addText(QPointF(layout.charLefts[i], layout.baselineY), layout.font, line.chars[i].text);
-        const double left = layout.charLefts[i];
-        const double width = std::max(layout.charWidths[i], 1.0);
+        double left = layout.charLefts[static_cast<std::size_t>(firstIndex)];
+        double right = left + layout.charWidths[static_cast<std::size_t>(firstIndex)];
+        for (int index : indices) {
+            if (index < 0 || static_cast<std::size_t>(index) >= line.chars.size()) {
+                continue;
+            }
+            const std::size_t pos = static_cast<std::size_t>(index);
+            if (pos >= layout.charLefts.size() || pos >= layout.charWidths.size()) {
+                continue;
+            }
+            path.addText(QPointF(layout.charLefts[pos], layout.baselineY), layout.font, line.chars[pos].text);
+            left = std::min(left, layout.charLefts[pos]);
+            right = std::max(right, layout.charLefts[pos] + layout.charWidths[pos]);
+        }
+        const double width = std::max(right - left, 1.0);
         const double centerX = left + width / 2.0;
         const double centerY = layout.baselineY - metrics.ascent() + metrics.height() / 2.0;
         const QTransform transform = characterTransform(
@@ -2549,7 +2926,9 @@ void paintUtopiaMainText(
         const int paintLeft = static_cast<int>(std::round(paintRect.left()));
         const int paintWidth = std::max(1, static_cast<int>(std::round(paintRect.width())));
         const bool inUtopiaExit = cfg.exitAnim == QStringLiteral("utopia") && tMs > followingDoneMs;
-        const double ratio = characterFillRatio(intervals, i, tMs);
+        const double ratio = groupRuby.has_value()
+            ? rubyProgressRatio(groupRuby.value(), tMs)
+            : characterFillRatio(intervals, i, tMs);
 
         painter.save();
         painter.setOpacity(painter.opacity() * state.opacity);
@@ -2582,24 +2961,36 @@ void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &lin
     const auto intervals = lineIntervals(line);
     const auto transition = lineCharTransitionContext(cfg, line, tMs, intervals);
     const auto rubyDiagnostics = rubyDiagnosticsForLine(cfg, lineStyle, line, layout, tMs);
-
-    paintRubyDiagnostics(
-        painter,
-        lineStyle,
-        rubyDiagnostics,
-        lineStyle.rubyBaseFill,
-        lineStyle.rubyAfterFill,
-        lineStyle.rubyBeforeStrokeFill,
-        lineStyle.rubyAfterStrokeFill,
-        lineStyle.rubyBeforeStroke2Fill,
-        lineStyle.rubyAfterStroke2Fill,
-        lineStyle.rubyBeforeShadowFill,
-        lineStyle.rubyAfterShadowFill
-    );
-
     const bool useUtopiaMainText = transition.has_value()
         && transition->effect == QStringLiteral("utopia")
         && !layout.hasInlineStyles;
+
+    if (useUtopiaMainText) {
+        paintRubyUtopiaText(
+            painter,
+            cfg,
+            lineStyle,
+            line,
+            layout,
+            intervals,
+            transition.value(),
+            tMs
+        );
+    } else {
+        paintRubyDiagnostics(
+            painter,
+            lineStyle,
+            rubyDiagnostics,
+            lineStyle.rubyBaseFill,
+            lineStyle.rubyAfterFill,
+            lineStyle.rubyBeforeStrokeFill,
+            lineStyle.rubyAfterStrokeFill,
+            lineStyle.rubyBeforeStroke2Fill,
+            lineStyle.rubyAfterStroke2Fill,
+            lineStyle.rubyBeforeShadowFill,
+            lineStyle.rubyAfterShadowFill
+        );
+    }
 
     if (useUtopiaMainText) {
         paintUtopiaMainText(
