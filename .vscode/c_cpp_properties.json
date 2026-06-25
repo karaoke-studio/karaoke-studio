@@ -1,0 +1,20 @@
+{
+  "version": 4,
+  "configurations": [
+    {
+      "name": "Qt-MSVC-x64",
+      "intelliSenseMode": "windows-msvc-x64",
+      "cStandard": "c17",
+      "cppStandard": "c++20",
+      "// compileCommands": "Preferred: uses the exact flags from the CMake/Ninja build. Regenerate with cmake -DCMAKE_EXPORT_COMPILE_COMMANDS=ON.",
+      "compileCommands": "${workspaceFolder}/build/native-renderer/compile_commands.json",
+      "// includePath": "Fallback for when compile_commands.json is absent (e.g. before first configure).",
+      "includePath": [
+        "${workspaceFolder}/native/subtitle_renderer/src/**",
+        "${env:LOCALAPPDATA}/krok-helper/qt/6.11.0/msvc2022_64/include",
+        "${env:LOCALAPPDATA}/krok-helper/qt/6.11.0/msvc2022_64/include/QtCore",
+        "${env:LOCALAPPDATA}/krok-helper/qt/6.11.0/msvc2022_64/include/QtGui"
+      ]
+    }
+  ]
+}
