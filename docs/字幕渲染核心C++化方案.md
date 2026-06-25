@@ -426,7 +426,7 @@ smoke 输出示例：
 
 - 尚未接入 `preview_async.py` 或导出路径。
 - ruby 不在 C2 绘制，完整 ruby layout/timing 放到 C3。
-- 基础 glow / shadow 纯色装饰已在 C3b-6 迁移；image fill、role/singer override、signal、entry/exit animation、`utopia` 尚未迁移。stroke2 目前只覆盖纯色矩阵，gradient/image 等 PaintFill 模式仍未迁移。
+- 基础 glow / shadow 纯色装饰已在 C3b-6 迁移；ruby PaintFill 的 gradient/split/image 已在 C3b-7a/C3b-7b 迁移。role/singer override、signal、entry/exit animation、`utopia` 尚未迁移。
 
 ##### C2 已知偏差 / 待办
 
@@ -481,12 +481,14 @@ smoke 输出示例：
 - C3b-7a 已建立 ruby PaintFill 的 gradient/split Python-vs-native 像素 diff：覆盖 `gradient_horizontal` 与
   `split_vertical` 的中间扫光态与全唱完时刻；native 改用 `PaintFillSpec` + `QBrush` 绘制 text/stroke/stroke2/shadow 层，
   不再把这些模式降级为纯色 `color`。
+- C3b-7b 已建立 ruby PaintFill 的 image Python-vs-native 像素 diff：覆盖中间扫光态与全唱完时刻；native 解析
+  `image_path` / `image_scale_pct`，并将 ruby before/after 绘制切到与 Python 一致的局部 `QImage` 层后再贴回主画布，
+  同时关闭 ruby 局部层的 `SmoothPixmapTransform`，避免纹理 tile 被插值成混色。native 侧已对解码后的 image fill
+  `QImage` 做 64 项 LRU 缓存，避免每个 fill/stroke/ruby 层重复从磁盘读取纹理。
 
 仍未完成：
 
-- ruby PaintFill 的 image 模式尚未迁移。
 - ruby 与 role/singer override、utopia transition、竖排路径尚未迁移。
-- ruby 在 image PaintFill 下的 Python-vs-native 像素 diff 尚未建立。
 
 验收：
 

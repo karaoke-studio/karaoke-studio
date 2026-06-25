@@ -1,5 +1,6 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QFile>
+#include <QtCore/QFileInfo>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
@@ -15,6 +16,7 @@
 #include <QtGui/QPainterPath>
 #include <QtGui/QPen>
 #include <QtGui/QPixmap>
+#include <QtGui/QTransform>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QGraphicsBlurEffect>
 #include <QtWidgets/QGraphicsPixmapItem>
@@ -63,6 +65,8 @@ struct PaintFillSpec {
     QString splitTopColor = QStringLiteral("#FFFFFF");
     QString splitBottomColor = QStringLiteral("#FFFFFF");
     int splitPositionPct = 50;
+    QString imagePath;
+    int imageScalePct = 100;
 };
 
 struct RenderConfig {
@@ -170,6 +174,16 @@ struct RubyDiagnostics {
     double afterClipHeight = 0.0;
 };
 
+struct RubyLayerImage {
+    QImage image;
+    QPointF offset;
+};
+
+struct ImageFillCacheEntry {
+    QString key;
+    QImage image;
+};
+
 struct RenderDiagnostics {
     int visibleLines = 0;
     bool hasFirstLine = false;
@@ -203,7 +217,8 @@ bool supportedFillMode(const QString &mode) {
     return mode == QStringLiteral("solid")
         || mode == QStringLiteral("gradient_horizontal")
         || mode == QStringLiteral("gradient_vertical")
-        || mode == QStringLiteral("split_vertical");
+        || mode == QStringLiteral("split_vertical")
+        || mode == QStringLiteral("image");
 }
 
 PaintFillSpec solidPaintFill(const QString &color) {
@@ -277,6 +292,11 @@ PaintFillSpec paintFillSpec(const QJsonObject &object, const QString &fallback) 
         intValue(object, QStringLiteral("split_position_pct"), fill.splitPositionPct),
         0,
         100
+    );
+    fill.imagePath = stringValue(object, QStringLiteral("image_path"), fill.imagePath);
+    fill.imageScalePct = std::max(
+        1,
+        intValue(object, QStringLiteral("image_scale_pct"), fill.imageScalePct)
     );
     return fill;
 }
@@ -599,7 +619,57 @@ QColor validColor(const QString &value, const QString &fallback) {
     return fallbackColor.isValid() ? fallbackColor : QColor(QStringLiteral("#FFFFFF"));
 }
 
+std::vector<ImageFillCacheEntry> &imageFillCache() {
+    static std::vector<ImageFillCacheEntry> cache;
+    return cache;
+}
+
+QString imageFillCacheKey(const QString &path) {
+    return QFileInfo(path).absoluteFilePath();
+}
+
+QImage cachedFillImage(const QString &path) {
+    if (path.isEmpty()) {
+        return QImage();
+    }
+
+    const QString key = imageFillCacheKey(path);
+    auto &cache = imageFillCache();
+    for (auto it = cache.begin(); it != cache.end(); ++it) {
+        if (it->key == key) {
+            ImageFillCacheEntry entry = *it;
+            cache.erase(it);
+            cache.push_back(entry);
+            return entry.image;
+        }
+    }
+
+    QImage image(path);
+    if (image.isNull()) {
+        return QImage();
+    }
+
+    constexpr std::size_t kImageFillCacheMax = 64;
+    if (cache.size() >= kImageFillCacheMax) {
+        cache.erase(cache.begin());
+    }
+    cache.push_back(ImageFillCacheEntry{key, image});
+    return image;
+}
+
 QBrush brushForFill(const PaintFillSpec &fill, const QRectF &rect) {
+    if (fill.mode == QStringLiteral("image") && !fill.imagePath.isEmpty()) {
+        const QImage image = cachedFillImage(fill.imagePath);
+        if (!image.isNull()) {
+            QBrush brush(image);
+            const double scale = std::max(fill.imageScalePct, 1) / 100.0;
+            QTransform transform;
+            transform.scale(1.0 / scale, 1.0 / scale);
+            transform.translate(rect.left(), rect.top());
+            brush.setTransform(transform);
+            return brush;
+        }
+    }
     if (fill.mode == QStringLiteral("gradient_horizontal")
         || fill.mode == QStringLiteral("gradient_vertical")) {
         const bool horizontal = fill.mode == QStringLiteral("gradient_horizontal");
@@ -656,6 +726,10 @@ double visualStrokeExtent(const RenderConfig &cfg) {
     return std::ceil((std::max(cfg.strokeWidthPx, 0) + std::max(cfg.stroke2WidthPx, 0)) / 2.0);
 }
 
+double visualStrokeExtentForWidths(int strokeWidth, int stroke2Width) {
+    return std::ceil((std::max(strokeWidth, 0) + std::max(stroke2Width, 0)) / 2.0);
+}
+
 double strokePenWidth(const RenderConfig &cfg) {
     return std::max(cfg.strokeWidthPx, 0);
 }
@@ -680,6 +754,20 @@ double glowPenWidth(const RenderConfig &cfg, bool after) {
 double glowExtent(const RenderConfig &cfg, bool after) {
     const int radius = glowRadius(cfg, after);
     return std::ceil(glowPenWidth(cfg, after) / 2.0 + radius * 3.0);
+}
+
+int glowPenWidthForWidths(int strokeWidth, int stroke2Width, int glowRadiusValue) {
+    const int baseWidth = stroke2Width > 0
+        ? std::max(strokeWidth, 0) + std::max(stroke2Width, 0)
+        : std::max(strokeWidth, 0);
+    return std::max(1, baseWidth + std::max(glowRadiusValue, 1));
+}
+
+double glowExtentForWidths(int strokeWidth, int stroke2Width, int glowRadiusValue) {
+    return std::ceil(
+        glowPenWidthForWidths(strokeWidth, stroke2Width, glowRadiusValue) / 2.0
+        + std::max(glowRadiusValue, 1) * 3.0
+    );
 }
 
 double afterClipVerticalExtent(const RenderConfig &cfg) {
@@ -1519,6 +1607,86 @@ void paintTextLayerStackWithWidths(
     );
 }
 
+RubyLayerImage buildRubyTextLayer(
+    const RubyDiagnostics &ruby,
+    const QFont &rubyFont,
+    const QFontMetricsF &rubyMetrics,
+    const PaintFillSpec &fill,
+    const PaintFillSpec &stroke,
+    const PaintFillSpec &stroke2,
+    const PaintFillSpec &shadow,
+    const RenderConfig &cfg,
+    int strokeWidth,
+    int stroke2Width,
+    int shadowOffsetX,
+    int shadowOffsetY,
+    int glowRadiusValue
+) {
+    const double strokeExtent = visualStrokeExtentForWidths(strokeWidth, stroke2Width);
+    const double glowExtra = cfg.decorationKind == QStringLiteral("glow")
+        ? glowExtentForWidths(strokeWidth, stroke2Width, glowRadiusValue)
+        : 0.0;
+    const int extent = static_cast<int>(std::max({
+        strokeExtent,
+        glowExtra,
+        static_cast<double>(std::abs(shadowOffsetX)),
+        static_cast<double>(std::abs(shadowOffsetY)),
+        2.0,
+    })) + 4;
+    const int padLeft = std::max(0, -shadowOffsetX) + extent;
+    const int padRight = std::max(0, shadowOffsetX) + extent;
+    const int padTop = std::max(0, -shadowOffsetY) + extent;
+    const int padBottom = std::max(0, shadowOffsetY) + extent;
+
+    const int rubyWidth = std::max(1, static_cast<int>(std::ceil(ruby.readingWidth)));
+    const int rubyHeight = std::max(1, static_cast<int>(std::ceil(rubyMetrics.height())));
+    const int imageWidth = std::max(1, padLeft + rubyWidth + padRight);
+    const int imageHeight = std::max(1, padTop + rubyHeight + padBottom);
+
+    QImage image(imageWidth, imageHeight, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+
+    const double localBaseline = padTop + rubyMetrics.ascent();
+    const QPainterPath localPath = rubyTextPath(
+        ruby.reading,
+        rubyFont,
+        rubyMetrics,
+        padLeft,
+        localBaseline,
+        ruby.targetWidth
+    );
+    const QRectF localRect(
+        padLeft,
+        localBaseline - rubyMetrics.ascent(),
+        ruby.readingWidth,
+        rubyMetrics.height()
+    );
+
+    QPainter layerPainter(&image);
+    layerPainter.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
+    paintTextLayerStackWithWidths(
+        layerPainter,
+        localPath,
+        localRect,
+        fill,
+        stroke,
+        stroke2,
+        shadow,
+        cfg,
+        strokeWidth,
+        stroke2Width,
+        shadowOffsetX,
+        shadowOffsetY,
+        glowRadiusValue
+    );
+    layerPainter.end();
+
+    return RubyLayerImage{
+        image,
+        QPointF(-padLeft, -(padTop + rubyMetrics.ascent())),
+    };
+}
+
 void paintRubyDiagnostics(
     QPainter &painter,
     const RenderConfig &cfg,
@@ -1540,25 +1708,13 @@ void paintRubyDiagnostics(
     const double scale = rubyScale(cfg);
     const int strokeWidth = scaledPx(cfg.strokeWidthPx, scale);
     const int stroke2Width = scaledPx(cfg.stroke2WidthPx, scale);
+    const int shadowOffsetX = scaledSignedPx(cfg.shadowOffsetX, scale);
+    const int shadowOffsetY = scaledSignedPx(cfg.shadowOffsetY, scale);
     for (const RubyDiagnostics &ruby : rubies) {
-        const QPainterPath path = rubyTextPath(
-            ruby.reading,
+        const RubyLayerImage beforeLayer = buildRubyTextLayer(
+            ruby,
             rubyFont,
             rubyMetrics,
-            ruby.x,
-            ruby.baselineY,
-            ruby.targetWidth
-        );
-        const QRectF rect(
-            ruby.x,
-            ruby.baselineY - rubyMetrics.ascent(),
-            ruby.readingWidth,
-            rubyMetrics.height()
-        );
-        paintTextLayerStackWithWidths(
-            painter,
-            path,
-            rect,
             base,
             beforeStroke,
             beforeStroke2,
@@ -1566,13 +1722,29 @@ void paintRubyDiagnostics(
             cfg,
             strokeWidth,
             stroke2Width,
-            scaledSignedPx(cfg.shadowOffsetX, scale),
-            scaledSignedPx(cfg.shadowOffsetY, scale),
+            shadowOffsetX,
+            shadowOffsetY,
             scaledPx(glowRadius(cfg, false), scale)
         );
+        painter.drawImage(QPointF(ruby.x, ruby.baselineY) + beforeLayer.offset, beforeLayer.image);
         if (ruby.progress <= 0.0) {
             continue;
         }
+        const RubyLayerImage afterLayer = buildRubyTextLayer(
+            ruby,
+            rubyFont,
+            rubyMetrics,
+            fill,
+            afterStroke,
+            afterStroke2,
+            afterShadow,
+            cfg,
+            strokeWidth,
+            stroke2Width,
+            shadowOffsetX,
+            shadowOffsetY,
+            scaledPx(glowRadius(cfg, true), scale)
+        );
         painter.save();
         painter.setClipRect(
             QRectF(
@@ -1583,21 +1755,7 @@ void paintRubyDiagnostics(
             ),
             Qt::IntersectClip
         );
-        paintTextLayerStackWithWidths(
-            painter,
-            path,
-            rect,
-            fill,
-            afterStroke,
-            afterStroke2,
-            afterShadow,
-            cfg,
-            strokeWidth,
-            stroke2Width,
-            scaledSignedPx(cfg.shadowOffsetX, scale),
-            scaledSignedPx(cfg.shadowOffsetY, scale),
-            scaledPx(glowRadius(cfg, true), scale)
-        );
+        painter.drawImage(QPointF(ruby.x, ruby.baselineY) + afterLayer.offset, afterLayer.image);
         painter.restore();
     }
 }

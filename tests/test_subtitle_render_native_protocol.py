@@ -1338,6 +1338,187 @@ def test_native_ruby_paintfill_pixels_match_python_within_bounded_diff(
     assert int((diff > 8).sum()) < 1_000
 
 
+@pytest.mark.parametrize("t_ms", [1000, 2000])
+def test_native_ruby_image_paintfill_pixels_match_python_within_bounded_diff(
+    tmp_path, monkeypatch, t_ms
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QColor, QImage
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    image_path = tmp_path / "ruby-fill-pattern.png"
+    pattern = QImage(8, 8, QImage.Format.Format_ARGB32_Premultiplied)
+    for y in range(pattern.height()):
+        for x in range(pattern.width()):
+            if (x + y) % 3 == 0:
+                color = QColor("#FFCC00")
+            elif x % 2 == 0:
+                color = QColor("#00C8FF")
+            else:
+                color = QColor("#FF4A9A")
+            pattern.setPixelColor(x, y, color)
+    assert pattern.save(str(image_path))
+
+    def solid(color: str) -> PaintFill:
+        return PaintFill(color=color)
+
+    def image_fill(fallback: str) -> PaintFill:
+        return PaintFill(
+            mode="image",
+            color=fallback,
+            image_path=str(image_path),
+            image_scale_pct=125,
+        )
+
+    line = TimingLine(
+        chars=[
+            TimingChar("A", 0),
+            TimingChar("B", 1000),
+        ],
+        end_ms=2000,
+    )
+    ruby = RubyAnnotation(
+        kanji="AB",
+        reading="xy",
+        reading_part_ms=[1600],
+        pos_start_ms=0,
+        pos_end_ms=2000,
+    )
+    style = Style(
+        font_size_px=64,
+        ruby_font_size_px=32,
+        ruby_gap_px=10,
+        line_lead_in_ms=0,
+        line_y_position="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        shadow_color="#00000000",
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=solid("#FFFFFF"),
+                stroke=solid("#00000000"),
+                stroke2=solid("#00000000"),
+                shadow=solid("#00000000"),
+            ),
+            after=KaraokeColorState(
+                text=solid("#FF5A6F"),
+                stroke=solid("#00000000"),
+                stroke2=solid("#00000000"),
+                shadow=solid("#00000000"),
+            ),
+        ),
+        ruby_karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=image_fill("#00FF88"),
+                stroke=solid("#00000000"),
+                stroke2=solid("#00000000"),
+                shadow=solid("#00000000"),
+            ),
+            after=KaraokeColorState(
+                text=image_fill("#FFCC00"),
+                stroke=solid("#00000000"),
+                stroke2=solid("#00000000"),
+                shadow=solid("#00000000"),
+            ),
+        ),
+    )
+    track = TimingTrack(lines=[line], rubies=[ruby])
+
+    python_image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+    python_image.fill(0)
+    clear_before_layer_cache()
+    paint_frame(python_image, track, t_ms, style)
+
+    native_output = tmp_path / f"native-ruby-image-python-parity-{t_ms}.png"
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=640, height=360, fps=60)
+        renderer.render_frame_png(t_ms, native_output)
+
+    python_rows = _image_rows(python_image)
+    native_rows = _image_rows(QImage(str(native_output)))
+    assert python_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    assert native_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    diff = np.abs(python_rows.astype(int) - native_rows.astype(int))
+    assert diff.mean() < 1.0
+    assert int((diff > 8).sum()) < 1_500
+
+
+def test_native_image_paintfill_reuses_decoded_image_after_source_removed(
+    tmp_path, monkeypatch
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QColor, QImage
+
+    image_path = tmp_path / "cached-fill-pattern.png"
+    pattern = QImage(8, 8, QImage.Format.Format_ARGB32_Premultiplied)
+    for y in range(pattern.height()):
+        for x in range(pattern.width()):
+            color = QColor("#FFCC00") if (x + y) % 2 == 0 else QColor("#00AAFF")
+            pattern.setPixelColor(x, y, color)
+    assert pattern.save(str(image_path))
+
+    def fill(color: str) -> PaintFill:
+        return PaintFill(color=color)
+
+    image_fill = PaintFill(
+        mode="image",
+        color="#00FF88",
+        image_path=str(image_path),
+        image_scale_pct=100,
+    )
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("A", 0), TimingChar("B", 1000)], end_ms=2000)]
+    )
+    style = Style(
+        font_size_px=64,
+        line_lead_in_ms=0,
+        line_y_position="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=image_fill,
+                stroke=fill("#00000000"),
+                stroke2=fill("#00000000"),
+                shadow=fill("#00000000"),
+            ),
+            after=KaraokeColorState(
+                text=image_fill,
+                stroke=fill("#00000000"),
+                stroke2=fill("#00000000"),
+                shadow=fill("#00000000"),
+            ),
+        ),
+    )
+    first_output = tmp_path / "native-image-cache-before.png"
+    second_output = tmp_path / "native-image-cache-after.png"
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=640, height=360, fps=60)
+        renderer.render_frame_png(1000, first_output)
+        image_path.unlink()
+        renderer.render_frame_png(1000, second_output)
+
+    first_rows = _image_rows(QImage(str(first_output)))
+    second_rows = _image_rows(QImage(str(second_output)))
+    assert first_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    np.testing.assert_array_equal(second_rows, first_rows)
+
+
 def test_native_renderer_after_stroke2_missing_does_not_inherit_before_stroke2(
     tmp_path, monkeypatch
 ):
