@@ -30,6 +30,7 @@ from krok_helper.subtitle_render.models import (
     PaintFill,
     RubyAnnotation,
     Style,
+    SubtitleStyleScheme,
     TimingChar,
     TimingLine,
     TimingTrack,
@@ -1517,6 +1518,188 @@ def test_native_image_paintfill_reuses_decoded_image_after_source_removed(
     second_rows = _image_rows(QImage(str(second_output)))
     assert first_rows.reshape(360, 640, 4)[..., 3].max() > 0
     np.testing.assert_array_equal(second_rows, first_rows)
+
+
+@pytest.mark.parametrize("t_ms", [1000, 2000])
+def test_native_singer_style_override_with_ruby_matches_python_pixels(
+    tmp_path, monkeypatch, t_ms
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QImage
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    def fill(color: str) -> PaintFill:
+        return PaintFill(color=color)
+
+    line = TimingLine(
+        chars=[
+            TimingChar("A", 0),
+            TimingChar("B", 1000),
+        ],
+        end_ms=2000,
+        singer_id=1,
+        singer_label="A",
+    )
+    track = TimingTrack(
+        lines=[line],
+        rubies=[
+            RubyAnnotation(
+                kanji="AB",
+                reading="xy",
+                reading_part_ms=[1600],
+                pos_start_ms=0,
+                pos_end_ms=2000,
+            )
+        ],
+    )
+    singer_colors = KaraokeColors(
+        before=KaraokeColorState(
+            text=fill("#00FF88"),
+            stroke=fill("#00000000"),
+            stroke2=fill("#00000000"),
+            shadow=fill("#00000000"),
+        ),
+        after=KaraokeColorState(
+            text=fill("#FFCC00"),
+            stroke=fill("#00000000"),
+            stroke2=fill("#00000000"),
+            shadow=fill("#00000000"),
+        ),
+    )
+    style = Style(
+        font_family="Arial",
+        font_size_px=48,
+        ruby_font_size_px=24,
+        ruby_gap_px=8,
+        line_lead_in_ms=0,
+        line_y_position="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        singer_style_overrides={
+            1: SubtitleStyleScheme(
+                font_family="Arial",
+                font_size_px=72,
+                ruby_font_size_px=32,
+                ruby_gap_px=10,
+                karaoke_colors=singer_colors,
+                ruby_karaoke_colors=singer_colors,
+            )
+        },
+    )
+
+    python_image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+    python_image.fill(0)
+    clear_before_layer_cache()
+    paint_frame(python_image, track, t_ms, style)
+
+    native_output = tmp_path / f"native-singer-override-ruby-{t_ms}.png"
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=640, height=360, fps=60)
+        renderer.render_frame_png(t_ms, native_output)
+
+    python_rows = _image_rows(python_image)
+    native_rows = _image_rows(QImage(str(native_output)))
+    assert python_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    assert native_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    diff = np.abs(python_rows.astype(int) - native_rows.astype(int))
+    assert diff.mean() < 1.0
+    assert int((diff > 8).sum()) < 1_500
+
+
+@pytest.mark.parametrize("t_ms", [500, 1500])
+def test_native_inline_role_style_override_matches_python_pixels(
+    tmp_path, monkeypatch, t_ms
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QImage
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    def fill(color: str) -> PaintFill:
+        return PaintFill(color=color)
+
+    line = TimingLine(
+        chars=[
+            TimingChar("A", 0, role_label="lead"),
+            TimingChar("B", 1000, role_label="back"),
+        ],
+        end_ms=2000,
+    )
+    track = TimingTrack(
+        lines=[line],
+        rubies=[
+            RubyAnnotation(
+                kanji="AB",
+                reading="xy",
+                reading_part_ms=[1600],
+                pos_start_ms=0,
+                pos_end_ms=2000,
+            )
+        ],
+    )
+    style = Style(
+        font_family="Arial",
+        font_size_px=48,
+        ruby_font_size_px=28,
+        ruby_gap_px=8,
+        line_lead_in_ms=0,
+        line_y_position="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        custom_style_schemes={
+            "lead": SubtitleStyleScheme(
+                font_family="Arial",
+                font_size_px=72,
+                karaoke_colors=KaraokeColors(
+                    before=KaraokeColorState(text=fill("#00FF88")),
+                    after=KaraokeColorState(text=fill("#FFCC00")),
+                ),
+            ),
+            "back": SubtitleStyleScheme(
+                font_family="Arial",
+                font_size_px=48,
+                karaoke_colors=KaraokeColors(
+                    before=KaraokeColorState(text=fill("#55AAFF")),
+                    after=KaraokeColorState(text=fill("#FF6699")),
+                ),
+            ),
+        },
+    )
+
+    python_image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+    python_image.fill(0)
+    clear_before_layer_cache()
+    paint_frame(python_image, track, t_ms, style)
+
+    native_output = tmp_path / f"native-role-override-ruby-{t_ms}.png"
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=640, height=360, fps=60)
+        renderer.render_frame_png(t_ms, native_output)
+
+    python_rows = _image_rows(python_image)
+    native_rows = _image_rows(QImage(str(native_output)))
+    assert python_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    assert native_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    diff = np.abs(python_rows.astype(int) - native_rows.astype(int))
+    assert diff.mean() < 2.0
+    assert int((diff > 8).sum()) < 5_000
 
 
 def test_native_renderer_after_stroke2_missing_does_not_inherit_before_stroke2(

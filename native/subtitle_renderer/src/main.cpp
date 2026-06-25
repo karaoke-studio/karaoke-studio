@@ -4,6 +4,7 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QHash>
 #include <QtCore/QPointF>
 #include <QtCore/QTextStream>
 #include <QtGui/QBrush>
@@ -69,10 +70,7 @@ struct PaintFillSpec {
     int imageScalePct = 100;
 };
 
-struct RenderConfig {
-    int width = 1920;
-    int height = 1080;
-    int fps = 60;
+struct ResolvedStyle {
     QString fontFamily = QStringLiteral("UD Digi Kyokasho N-B");
     int fontSizePx = 100;
     int fontWeight = 400;
@@ -120,6 +118,15 @@ struct RenderConfig {
     int shadowOffsetY = 1;
     int rubyFontSizePx = 30;
     int rubyGapPx = 8;
+    bool hasMainKaraokeColors = false;
+    bool hasRubyKaraokeColors = false;
+};
+
+struct RenderConfig {
+    int width = 1920;
+    int height = 1080;
+    int fps = 60;
+    ResolvedStyle baseStyle;
     int lineYMarginPx = 80;
     int lineGapPx = 90;
     int lineLeadInMs = 1800;
@@ -130,6 +137,10 @@ struct RenderConfig {
     int lowerLineRightMarginPx = 50;
     bool dualLineLayout = true;
     bool rightToLeft = false;
+    QJsonObject singerStyleOverrides;
+    QJsonObject customStyleSchemes;
+    // Built during configure. render_frame must not insert here because LineLayout stores pointers into this QHash.
+    QHash<QString, ResolvedStyle> resolvedStyles;
     std::vector<TimingLine> lines;
     std::vector<RubyAnnotation> rubies;
 };
@@ -140,12 +151,18 @@ struct LineLayout {
     QPainterPath path;
     std::vector<double> charLefts;
     std::vector<double> charWidths;
+    std::vector<QFont> charFonts;
+    const ResolvedStyle *lineStyle = nullptr;
+    // Pointers into RenderConfig::resolvedStyles, which is frozen for render_frame.
+    std::vector<const ResolvedStyle *> charStyles;
     double x = 0.0;
     double baselineY = 0.0;
     double width = 0.0;
     double height = 0.0;
     double ascent = 0.0;
     double descent = 0.0;
+    double afterClipExtent = 0.0;
+    bool hasInlineStyles = false;
 };
 
 struct LineDiagnostics {
@@ -336,6 +353,199 @@ QString karaokeLayerColorFromColors(
     return paintFillColor(state.value(layerKey).toObject(), fallback);
 }
 
+bool hasObject(const QJsonObject &object, const QString &key) {
+    return object.value(key).isObject();
+}
+
+bool hasNonNull(const QJsonObject &object, const QString &key) {
+    return object.contains(key) && !object.value(key).isNull() && !object.value(key).isUndefined();
+}
+
+void refreshLegacyMainFills(ResolvedStyle &cfg) {
+    cfg.baseFill = solidPaintFill(cfg.baseColor);
+    cfg.afterFill = solidPaintFill(cfg.fillColor);
+    cfg.beforeStrokeFill = solidPaintFill(cfg.beforeStrokeColor);
+    cfg.afterStrokeFill = solidPaintFill(cfg.afterStrokeColor);
+    cfg.beforeStroke2Fill = solidPaintFill(cfg.beforeStroke2Color);
+    cfg.afterStroke2Fill = solidPaintFill(cfg.afterStroke2Color);
+    cfg.beforeShadowFill = solidPaintFill(cfg.beforeShadowColor);
+    cfg.afterShadowFill = solidPaintFill(cfg.afterShadowColor);
+}
+
+void applyMainKaraokeColors(ResolvedStyle &cfg, const QJsonObject &colors) {
+    cfg.baseColor = karaokeLayerColorFromColors(colors, QStringLiteral("before"), QStringLiteral("text"), cfg.baseColor);
+    cfg.fillColor = karaokeLayerColorFromColors(colors, QStringLiteral("after"), QStringLiteral("text"), cfg.fillColor);
+    cfg.beforeStrokeColor = karaokeLayerColorFromColors(colors, QStringLiteral("before"), QStringLiteral("stroke"), cfg.beforeStrokeColor);
+    cfg.afterStrokeColor = karaokeLayerColorFromColors(colors, QStringLiteral("after"), QStringLiteral("stroke"), cfg.afterStrokeColor);
+    cfg.beforeStroke2Color = karaokeLayerColorFromColors(colors, QStringLiteral("before"), QStringLiteral("stroke2"), cfg.beforeStroke2Color);
+    cfg.afterStroke2Color = karaokeLayerColorFromColors(colors, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.afterStroke2Color);
+    cfg.beforeShadowColor = karaokeLayerColorFromColors(colors, QStringLiteral("before"), QStringLiteral("shadow"), cfg.beforeShadowColor);
+    cfg.afterShadowColor = karaokeLayerColorFromColors(colors, QStringLiteral("after"), QStringLiteral("shadow"), cfg.afterShadowColor);
+    cfg.baseFill = karaokeLayerFillFromColors(colors, QStringLiteral("before"), QStringLiteral("text"), cfg.baseColor);
+    cfg.afterFill = karaokeLayerFillFromColors(colors, QStringLiteral("after"), QStringLiteral("text"), cfg.fillColor);
+    cfg.beforeStrokeFill = karaokeLayerFillFromColors(colors, QStringLiteral("before"), QStringLiteral("stroke"), cfg.beforeStrokeColor);
+    cfg.afterStrokeFill = karaokeLayerFillFromColors(colors, QStringLiteral("after"), QStringLiteral("stroke"), cfg.afterStrokeColor);
+    cfg.beforeStroke2Fill = karaokeLayerFillFromColors(colors, QStringLiteral("before"), QStringLiteral("stroke2"), cfg.beforeStroke2Color);
+    cfg.afterStroke2Fill = karaokeLayerFillFromColors(colors, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.afterStroke2Color);
+    cfg.beforeShadowFill = karaokeLayerFillFromColors(colors, QStringLiteral("before"), QStringLiteral("shadow"), cfg.beforeShadowColor);
+    cfg.afterShadowFill = karaokeLayerFillFromColors(colors, QStringLiteral("after"), QStringLiteral("shadow"), cfg.afterShadowColor);
+}
+
+void copyMainColorsToRuby(ResolvedStyle &cfg) {
+    cfg.rubyBaseColor = cfg.baseColor;
+    cfg.rubyFillColor = cfg.fillColor;
+    cfg.rubyBeforeStrokeColor = cfg.beforeStrokeColor;
+    cfg.rubyAfterStrokeColor = cfg.afterStrokeColor;
+    cfg.rubyBeforeStroke2Color = cfg.beforeStroke2Color;
+    cfg.rubyAfterStroke2Color = cfg.afterStroke2Color;
+    cfg.rubyBeforeShadowColor = cfg.beforeShadowColor;
+    cfg.rubyAfterShadowColor = cfg.afterShadowColor;
+    cfg.rubyBaseFill = cfg.baseFill;
+    cfg.rubyAfterFill = cfg.afterFill;
+    cfg.rubyBeforeStrokeFill = cfg.beforeStrokeFill;
+    cfg.rubyAfterStrokeFill = cfg.afterStrokeFill;
+    cfg.rubyBeforeStroke2Fill = cfg.beforeStroke2Fill;
+    cfg.rubyAfterStroke2Fill = cfg.afterStroke2Fill;
+    cfg.rubyBeforeShadowFill = cfg.beforeShadowFill;
+    cfg.rubyAfterShadowFill = cfg.afterShadowFill;
+}
+
+void refreshLegacyRubyFills(ResolvedStyle &cfg) {
+    cfg.rubyBaseColor = cfg.baseColor;
+    cfg.rubyFillColor = cfg.rubyColor;
+    cfg.rubyBeforeStrokeColor = cfg.beforeStrokeColor;
+    cfg.rubyAfterStrokeColor = cfg.afterStrokeColor;
+    cfg.rubyBeforeStroke2Color = QStringLiteral("#000000");
+    cfg.rubyAfterStroke2Color = QStringLiteral("#000000");
+    cfg.rubyBeforeShadowColor = cfg.beforeShadowColor;
+    cfg.rubyAfterShadowColor = cfg.afterShadowColor;
+    cfg.rubyBaseFill = solidPaintFill(cfg.rubyBaseColor);
+    cfg.rubyAfterFill = solidPaintFill(cfg.rubyFillColor);
+    cfg.rubyBeforeStrokeFill = solidPaintFill(cfg.rubyBeforeStrokeColor);
+    cfg.rubyAfterStrokeFill = solidPaintFill(cfg.rubyAfterStrokeColor);
+    cfg.rubyBeforeStroke2Fill = solidPaintFill(cfg.rubyBeforeStroke2Color);
+    cfg.rubyAfterStroke2Fill = solidPaintFill(cfg.rubyAfterStroke2Color);
+    cfg.rubyBeforeShadowFill = solidPaintFill(cfg.rubyBeforeShadowColor);
+    cfg.rubyAfterShadowFill = solidPaintFill(cfg.rubyAfterShadowColor);
+}
+
+void applyRubyKaraokeColors(ResolvedStyle &cfg, const QJsonObject &colors) {
+    cfg.rubyBaseColor = karaokeLayerColorFromColors(colors, QStringLiteral("before"), QStringLiteral("text"), cfg.baseColor);
+    cfg.rubyFillColor = karaokeLayerColorFromColors(colors, QStringLiteral("after"), QStringLiteral("text"), cfg.rubyColor);
+    cfg.rubyBeforeStrokeColor = karaokeLayerColorFromColors(colors, QStringLiteral("before"), QStringLiteral("stroke"), cfg.beforeStrokeColor);
+    cfg.rubyAfterStrokeColor = karaokeLayerColorFromColors(colors, QStringLiteral("after"), QStringLiteral("stroke"), cfg.afterStrokeColor);
+    cfg.rubyBeforeStroke2Color = karaokeLayerColorFromColors(colors, QStringLiteral("before"), QStringLiteral("stroke2"), cfg.beforeStroke2Color);
+    cfg.rubyAfterStroke2Color = karaokeLayerColorFromColors(colors, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.afterStroke2Color);
+    cfg.rubyBeforeShadowColor = karaokeLayerColorFromColors(colors, QStringLiteral("before"), QStringLiteral("shadow"), cfg.beforeShadowColor);
+    cfg.rubyAfterShadowColor = karaokeLayerColorFromColors(colors, QStringLiteral("after"), QStringLiteral("shadow"), cfg.afterShadowColor);
+    cfg.rubyBaseFill = karaokeLayerFillFromColors(colors, QStringLiteral("before"), QStringLiteral("text"), cfg.rubyBaseColor);
+    cfg.rubyAfterFill = karaokeLayerFillFromColors(colors, QStringLiteral("after"), QStringLiteral("text"), cfg.rubyFillColor);
+    cfg.rubyBeforeStrokeFill = karaokeLayerFillFromColors(colors, QStringLiteral("before"), QStringLiteral("stroke"), cfg.rubyBeforeStrokeColor);
+    cfg.rubyAfterStrokeFill = karaokeLayerFillFromColors(colors, QStringLiteral("after"), QStringLiteral("stroke"), cfg.rubyAfterStrokeColor);
+    cfg.rubyBeforeStroke2Fill = karaokeLayerFillFromColors(colors, QStringLiteral("before"), QStringLiteral("stroke2"), cfg.rubyBeforeStroke2Color);
+    cfg.rubyAfterStroke2Fill = karaokeLayerFillFromColors(colors, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.rubyAfterStroke2Color);
+    cfg.rubyBeforeShadowFill = karaokeLayerFillFromColors(colors, QStringLiteral("before"), QStringLiteral("shadow"), cfg.rubyBeforeShadowColor);
+    cfg.rubyAfterShadowFill = karaokeLayerFillFromColors(colors, QStringLiteral("after"), QStringLiteral("shadow"), cfg.rubyAfterShadowColor);
+}
+
+void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
+    if (hasNonNull(style, QStringLiteral("font_family"))) {
+        cfg.fontFamily = stringValue(style, QStringLiteral("font_family"), cfg.fontFamily);
+    }
+    if (hasNonNull(style, QStringLiteral("font_size_px"))) {
+        cfg.fontSizePx = std::max(1, intValue(style, QStringLiteral("font_size_px"), cfg.fontSizePx));
+    }
+    if (hasNonNull(style, QStringLiteral("font_weight"))) {
+        cfg.fontWeight = std::clamp(intValue(style, QStringLiteral("font_weight"), cfg.fontWeight), 1, 999);
+    }
+    if (hasNonNull(style, QStringLiteral("letter_spacing_px"))) {
+        cfg.letterSpacingPx = intValue(style, QStringLiteral("letter_spacing_px"), cfg.letterSpacingPx);
+    }
+    if (hasNonNull(style, QStringLiteral("base_color"))) {
+        cfg.baseColor = stringValue(style, QStringLiteral("base_color"), cfg.baseColor);
+    }
+    if (hasNonNull(style, QStringLiteral("fill_color"))) {
+        cfg.fillColor = stringValue(style, QStringLiteral("fill_color"), cfg.fillColor);
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_color"))) {
+        cfg.rubyColor = stringValue(style, QStringLiteral("ruby_color"), cfg.rubyColor);
+    }
+    if (hasNonNull(style, QStringLiteral("stroke_color"))) {
+        const QString strokeColor = stringValue(style, QStringLiteral("stroke_color"), cfg.beforeStrokeColor);
+        cfg.beforeStrokeColor = strokeColor;
+        cfg.afterStrokeColor = strokeColor;
+        cfg.rubyBeforeStrokeColor = strokeColor;
+        cfg.rubyAfterStrokeColor = strokeColor;
+    }
+    if (hasNonNull(style, QStringLiteral("shadow_color"))) {
+        const QString shadowColor = stringValue(style, QStringLiteral("shadow_color"), cfg.beforeShadowColor);
+        cfg.beforeShadowColor = shadowColor;
+        cfg.afterShadowColor = shadowColor;
+        cfg.rubyBeforeShadowColor = shadowColor;
+        cfg.rubyAfterShadowColor = shadowColor;
+    }
+    if (hasNonNull(style, QStringLiteral("stroke_width_px"))) {
+        cfg.strokeWidthPx = std::max(0, intValue(style, QStringLiteral("stroke_width_px"), cfg.strokeWidthPx));
+    }
+    if (hasNonNull(style, QStringLiteral("stroke2_width_px"))) {
+        cfg.stroke2WidthPx = std::max(0, intValue(style, QStringLiteral("stroke2_width_px"), cfg.stroke2WidthPx));
+    }
+    if (hasNonNull(style, QStringLiteral("decoration_kind"))) {
+        cfg.decorationKind = stringValue(style, QStringLiteral("decoration_kind"), cfg.decorationKind);
+    }
+    if (hasNonNull(style, QStringLiteral("glow_radius_px"))) {
+        cfg.glowRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_radius_px"), cfg.glowRadiusPx));
+        if (!hasNonNull(style, QStringLiteral("glow_before_radius_px"))) {
+            cfg.glowBeforeRadiusPx = cfg.glowRadiusPx;
+        }
+        if (!hasNonNull(style, QStringLiteral("glow_after_radius_px"))) {
+            cfg.glowAfterRadiusPx = cfg.glowRadiusPx;
+        }
+    }
+    if (hasNonNull(style, QStringLiteral("glow_before_radius_px"))) {
+        cfg.glowBeforeRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_before_radius_px"), cfg.glowBeforeRadiusPx));
+    }
+    if (hasNonNull(style, QStringLiteral("glow_after_radius_px"))) {
+        cfg.glowAfterRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_after_radius_px"), cfg.glowAfterRadiusPx));
+    }
+    if (hasNonNull(style, QStringLiteral("shadow_offset_x"))) {
+        cfg.shadowOffsetX = intValue(style, QStringLiteral("shadow_offset_x"), cfg.shadowOffsetX);
+    }
+    if (hasNonNull(style, QStringLiteral("shadow_offset_y"))) {
+        cfg.shadowOffsetY = intValue(style, QStringLiteral("shadow_offset_y"), cfg.shadowOffsetY);
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_font_size_px"))) {
+        cfg.rubyFontSizePx = std::max(1, intValue(style, QStringLiteral("ruby_font_size_px"), cfg.rubyFontSizePx));
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_gap_px"))) {
+        cfg.rubyGapPx = std::max(0, intValue(style, QStringLiteral("ruby_gap_px"), cfg.rubyGapPx));
+    }
+}
+
+ResolvedStyle styleWithOverrides(const ResolvedStyle &base, const QJsonObject &scheme) {
+    ResolvedStyle cfg = base;
+    applyScalarStyleOverrides(cfg, scheme);
+
+    if (hasObject(scheme, QStringLiteral("karaoke_colors"))) {
+        cfg.hasMainKaraokeColors = true;
+        applyMainKaraokeColors(cfg, scheme.value(QStringLiteral("karaoke_colors")).toObject());
+    } else if (!cfg.hasMainKaraokeColors) {
+        refreshLegacyMainFills(cfg);
+    }
+
+    if (hasObject(scheme, QStringLiteral("ruby_karaoke_colors"))) {
+        cfg.hasRubyKaraokeColors = true;
+        applyRubyKaraokeColors(cfg, scheme.value(QStringLiteral("ruby_karaoke_colors")).toObject());
+    } else if (!cfg.hasRubyKaraokeColors) {
+        if (cfg.hasMainKaraokeColors) {
+            copyMainColorsToRuby(cfg);
+        } else {
+            refreshLegacyRubyFills(cfg);
+        }
+    }
+    return cfg;
+}
+
 QJsonObject response(bool ok, const QString &event) {
     QJsonObject out;
     out.insert(QStringLiteral("ok"), ok);
@@ -371,6 +581,8 @@ std::vector<int> parseIntArray(const QJsonArray &items) {
     return out;
 }
 
+void buildResolvedStyleCache(RenderConfig &cfg);
+
 std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     if (ir.value(QStringLiteral("schema")).toInt() != kProtocolSchema) {
         *error = QStringLiteral("unsupported Render IR schema");
@@ -384,49 +596,36 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.fps = std::max(1, intValue(screen, QStringLiteral("fps"), cfg.fps));
 
     const QJsonObject style = ir.value(QStringLiteral("style")).toObject();
-    cfg.fontFamily = stringValue(style, QStringLiteral("font_family"), cfg.fontFamily);
-    cfg.fontSizePx = std::max(1, intValue(style, QStringLiteral("font_size_px"), cfg.fontSizePx));
-    cfg.fontWeight = std::clamp(intValue(style, QStringLiteral("font_weight"), cfg.fontWeight), 1, 999);
-    cfg.letterSpacingPx = intValue(style, QStringLiteral("letter_spacing_px"), cfg.letterSpacingPx);
-    cfg.baseColor = stringValue(style, QStringLiteral("base_color"), cfg.baseColor);
-    cfg.fillColor = stringValue(style, QStringLiteral("fill_color"), cfg.fillColor);
-    cfg.rubyColor = stringValue(style, QStringLiteral("ruby_color"), cfg.rubyColor);
-    const QString strokeColor = stringValue(style, QStringLiteral("stroke_color"), cfg.beforeStrokeColor);
-    cfg.beforeStrokeColor = strokeColor;
-    cfg.afterStrokeColor = strokeColor;
-    cfg.rubyBeforeStrokeColor = strokeColor;
-    cfg.rubyAfterStrokeColor = strokeColor;
-    const QString shadowColor = stringValue(style, QStringLiteral("shadow_color"), cfg.beforeShadowColor);
-    cfg.beforeShadowColor = shadowColor;
-    cfg.afterShadowColor = shadowColor;
-    cfg.rubyBeforeShadowColor = shadowColor;
-    cfg.rubyAfterShadowColor = shadowColor;
-    cfg.baseFill = solidPaintFill(cfg.baseColor);
-    cfg.afterFill = solidPaintFill(cfg.fillColor);
-    cfg.beforeStrokeFill = solidPaintFill(cfg.beforeStrokeColor);
-    cfg.afterStrokeFill = solidPaintFill(cfg.afterStrokeColor);
-    cfg.beforeStroke2Fill = solidPaintFill(cfg.beforeStroke2Color);
-    cfg.afterStroke2Fill = solidPaintFill(cfg.afterStroke2Color);
-    cfg.beforeShadowFill = solidPaintFill(cfg.beforeShadowColor);
-    cfg.afterShadowFill = solidPaintFill(cfg.afterShadowColor);
-    cfg.rubyBaseFill = solidPaintFill(cfg.rubyBaseColor);
-    cfg.rubyAfterFill = solidPaintFill(cfg.rubyFillColor);
-    cfg.rubyBeforeStrokeFill = solidPaintFill(cfg.rubyBeforeStrokeColor);
-    cfg.rubyAfterStrokeFill = solidPaintFill(cfg.rubyAfterStrokeColor);
-    cfg.rubyBeforeStroke2Fill = solidPaintFill(cfg.rubyBeforeStroke2Color);
-    cfg.rubyAfterStroke2Fill = solidPaintFill(cfg.rubyAfterStroke2Color);
-    cfg.rubyBeforeShadowFill = solidPaintFill(cfg.rubyBeforeShadowColor);
-    cfg.rubyAfterShadowFill = solidPaintFill(cfg.rubyAfterShadowColor);
-    cfg.strokeWidthPx = std::max(0, intValue(style, QStringLiteral("stroke_width_px"), cfg.strokeWidthPx));
-    cfg.stroke2WidthPx = std::max(0, intValue(style, QStringLiteral("stroke2_width_px"), cfg.stroke2WidthPx));
-    cfg.decorationKind = stringValue(style, QStringLiteral("decoration_kind"), cfg.decorationKind);
-    cfg.glowRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_radius_px"), cfg.glowRadiusPx));
-    cfg.glowBeforeRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_before_radius_px"), cfg.glowBeforeRadiusPx));
-    cfg.glowAfterRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_after_radius_px"), cfg.glowAfterRadiusPx));
-    cfg.shadowOffsetX = intValue(style, QStringLiteral("shadow_offset_x"), cfg.shadowOffsetX);
-    cfg.shadowOffsetY = intValue(style, QStringLiteral("shadow_offset_y"), cfg.shadowOffsetY);
-    cfg.rubyFontSizePx = std::max(1, intValue(style, QStringLiteral("ruby_font_size_px"), cfg.rubyFontSizePx));
-    cfg.rubyGapPx = std::max(0, intValue(style, QStringLiteral("ruby_gap_px"), cfg.rubyGapPx));
+    ResolvedStyle &base = cfg.baseStyle;
+    base.fontFamily = stringValue(style, QStringLiteral("font_family"), base.fontFamily);
+    base.fontSizePx = std::max(1, intValue(style, QStringLiteral("font_size_px"), base.fontSizePx));
+    base.fontWeight = std::clamp(intValue(style, QStringLiteral("font_weight"), base.fontWeight), 1, 999);
+    base.letterSpacingPx = intValue(style, QStringLiteral("letter_spacing_px"), base.letterSpacingPx);
+    base.baseColor = stringValue(style, QStringLiteral("base_color"), base.baseColor);
+    base.fillColor = stringValue(style, QStringLiteral("fill_color"), base.fillColor);
+    base.rubyColor = stringValue(style, QStringLiteral("ruby_color"), base.rubyColor);
+    const QString strokeColor = stringValue(style, QStringLiteral("stroke_color"), base.beforeStrokeColor);
+    base.beforeStrokeColor = strokeColor;
+    base.afterStrokeColor = strokeColor;
+    base.rubyBeforeStrokeColor = strokeColor;
+    base.rubyAfterStrokeColor = strokeColor;
+    const QString shadowColor = stringValue(style, QStringLiteral("shadow_color"), base.beforeShadowColor);
+    base.beforeShadowColor = shadowColor;
+    base.afterShadowColor = shadowColor;
+    base.rubyBeforeShadowColor = shadowColor;
+    base.rubyAfterShadowColor = shadowColor;
+    refreshLegacyMainFills(base);
+    refreshLegacyRubyFills(base);
+    base.strokeWidthPx = std::max(0, intValue(style, QStringLiteral("stroke_width_px"), base.strokeWidthPx));
+    base.stroke2WidthPx = std::max(0, intValue(style, QStringLiteral("stroke2_width_px"), base.stroke2WidthPx));
+    base.decorationKind = stringValue(style, QStringLiteral("decoration_kind"), base.decorationKind);
+    base.glowRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_radius_px"), base.glowRadiusPx));
+    base.glowBeforeRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_before_radius_px"), base.glowBeforeRadiusPx));
+    base.glowAfterRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_after_radius_px"), base.glowAfterRadiusPx));
+    base.shadowOffsetX = intValue(style, QStringLiteral("shadow_offset_x"), base.shadowOffsetX);
+    base.shadowOffsetY = intValue(style, QStringLiteral("shadow_offset_y"), base.shadowOffsetY);
+    base.rubyFontSizePx = std::max(1, intValue(style, QStringLiteral("ruby_font_size_px"), base.rubyFontSizePx));
+    base.rubyGapPx = std::max(0, intValue(style, QStringLiteral("ruby_gap_px"), base.rubyGapPx));
     cfg.lineYMarginPx = std::max(0, intValue(style, QStringLiteral("line_y_margin_px"), cfg.lineYMarginPx));
     cfg.lineGapPx = std::max(0, intValue(style, QStringLiteral("line_gap_px"), cfg.lineGapPx));
     cfg.lineLeadInMs = std::max(0, intValue(style, QStringLiteral("line_lead_in_ms"), cfg.lineLeadInMs));
@@ -443,75 +642,21 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
         : cfg.rightToLeft;
     const bool hasMainKaraokeColors = style.value(QStringLiteral("karaoke_colors")).isObject();
     const bool hasRubyKaraokeColors = style.value(QStringLiteral("ruby_karaoke_colors")).isObject();
+    base.hasMainKaraokeColors = hasMainKaraokeColors;
+    base.hasRubyKaraokeColors = hasRubyKaraokeColors;
+    cfg.singerStyleOverrides = style.value(QStringLiteral("singer_style_overrides")).toObject();
+    cfg.customStyleSchemes = style.value(QStringLiteral("custom_style_schemes")).toObject();
     const QJsonObject mainKaraokeColors = style.value(QStringLiteral("karaoke_colors")).toObject();
     const QJsonObject rubyKaraokeColors = style.value(QStringLiteral("ruby_karaoke_colors")).toObject();
 
-    cfg.baseColor = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("text"), cfg.baseColor);
-    cfg.fillColor = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("text"), cfg.fillColor);
-    cfg.beforeStrokeColor = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke"), cfg.beforeStrokeColor);
-    cfg.afterStrokeColor = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke"), cfg.afterStrokeColor);
-    cfg.beforeStroke2Color = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke2"), cfg.beforeStroke2Color);
-    cfg.afterStroke2Color = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.afterStroke2Color);
-    cfg.beforeShadowColor = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("shadow"), cfg.beforeShadowColor);
-    cfg.afterShadowColor = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("shadow"), cfg.afterShadowColor);
-    cfg.baseFill = karaokeLayerFillFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("text"), cfg.baseColor);
-    cfg.afterFill = karaokeLayerFillFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("text"), cfg.fillColor);
-    cfg.beforeStrokeFill = karaokeLayerFillFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke"), cfg.beforeStrokeColor);
-    cfg.afterStrokeFill = karaokeLayerFillFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke"), cfg.afterStrokeColor);
-    cfg.beforeStroke2Fill = karaokeLayerFillFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke2"), cfg.beforeStroke2Color);
-    cfg.afterStroke2Fill = karaokeLayerFillFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.afterStroke2Color);
-    cfg.beforeShadowFill = karaokeLayerFillFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("shadow"), cfg.beforeShadowColor);
-    cfg.afterShadowFill = karaokeLayerFillFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("shadow"), cfg.afterShadowColor);
+    applyMainKaraokeColors(base, mainKaraokeColors);
 
     if (hasRubyKaraokeColors) {
-        cfg.rubyBaseColor = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("text"), cfg.baseColor);
-        cfg.rubyFillColor = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("text"), cfg.rubyColor);
-        cfg.rubyBeforeStrokeColor = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke"), cfg.beforeStrokeColor);
-        cfg.rubyAfterStrokeColor = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke"), cfg.afterStrokeColor);
-        cfg.rubyBeforeStroke2Color = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke2"), cfg.beforeStroke2Color);
-        cfg.rubyAfterStroke2Color = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.afterStroke2Color);
-        cfg.rubyBeforeShadowColor = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("shadow"), cfg.beforeShadowColor);
-        cfg.rubyAfterShadowColor = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("shadow"), cfg.afterShadowColor);
-        cfg.rubyBaseFill = karaokeLayerFillFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("text"), cfg.rubyBaseColor);
-        cfg.rubyAfterFill = karaokeLayerFillFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("text"), cfg.rubyFillColor);
-        cfg.rubyBeforeStrokeFill = karaokeLayerFillFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke"), cfg.rubyBeforeStrokeColor);
-        cfg.rubyAfterStrokeFill = karaokeLayerFillFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke"), cfg.rubyAfterStrokeColor);
-        cfg.rubyBeforeStroke2Fill = karaokeLayerFillFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke2"), cfg.rubyBeforeStroke2Color);
-        cfg.rubyAfterStroke2Fill = karaokeLayerFillFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.rubyAfterStroke2Color);
-        cfg.rubyBeforeShadowFill = karaokeLayerFillFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("shadow"), cfg.rubyBeforeShadowColor);
-        cfg.rubyAfterShadowFill = karaokeLayerFillFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("shadow"), cfg.rubyAfterShadowColor);
+        applyRubyKaraokeColors(base, rubyKaraokeColors);
     } else if (hasMainKaraokeColors) {
-        cfg.rubyBaseColor = cfg.baseColor;
-        cfg.rubyFillColor = cfg.fillColor;
-        cfg.rubyBeforeStrokeColor = cfg.beforeStrokeColor;
-        cfg.rubyAfterStrokeColor = cfg.afterStrokeColor;
-        cfg.rubyBeforeStroke2Color = cfg.beforeStroke2Color;
-        cfg.rubyAfterStroke2Color = cfg.afterStroke2Color;
-        cfg.rubyBeforeShadowColor = cfg.beforeShadowColor;
-        cfg.rubyAfterShadowColor = cfg.afterShadowColor;
-        cfg.rubyBaseFill = cfg.baseFill;
-        cfg.rubyAfterFill = cfg.afterFill;
-        cfg.rubyBeforeStrokeFill = cfg.beforeStrokeFill;
-        cfg.rubyAfterStrokeFill = cfg.afterStrokeFill;
-        cfg.rubyBeforeStroke2Fill = cfg.beforeStroke2Fill;
-        cfg.rubyAfterStroke2Fill = cfg.afterStroke2Fill;
-        cfg.rubyBeforeShadowFill = cfg.beforeShadowFill;
-        cfg.rubyAfterShadowFill = cfg.afterShadowFill;
+        copyMainColorsToRuby(base);
     } else {
-        cfg.rubyBaseColor = cfg.baseColor;
-        cfg.rubyFillColor = cfg.rubyColor;
-        cfg.rubyBeforeStroke2Color = QStringLiteral("#000000");
-        cfg.rubyAfterStroke2Color = QStringLiteral("#000000");
-        cfg.rubyBeforeShadowColor = cfg.beforeShadowColor;
-        cfg.rubyAfterShadowColor = cfg.afterShadowColor;
-        cfg.rubyBaseFill = solidPaintFill(cfg.rubyBaseColor);
-        cfg.rubyAfterFill = solidPaintFill(cfg.rubyFillColor);
-        cfg.rubyBeforeStrokeFill = solidPaintFill(cfg.rubyBeforeStrokeColor);
-        cfg.rubyAfterStrokeFill = solidPaintFill(cfg.rubyAfterStrokeColor);
-        cfg.rubyBeforeStroke2Fill = solidPaintFill(cfg.rubyBeforeStroke2Color);
-        cfg.rubyAfterStroke2Fill = solidPaintFill(cfg.rubyAfterStroke2Color);
-        cfg.rubyBeforeShadowFill = solidPaintFill(cfg.rubyBeforeShadowColor);
-        cfg.rubyAfterShadowFill = solidPaintFill(cfg.rubyAfterShadowColor);
+        refreshLegacyRubyFills(base);
     }
 
     const QJsonObject track = ir.value(QStringLiteral("track")).toObject();
@@ -553,6 +698,7 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
         cfg.rubies.push_back(ruby);
     }
 
+    buildResolvedStyleCache(cfg);
     return cfg;
 }
 
@@ -562,6 +708,80 @@ QString lineText(const TimingLine &line) {
         text += ch.text;
     }
     return text;
+}
+
+bool lineHasRoleLabels(const TimingLine &line) {
+    for (const auto &ch : line.chars) {
+        if (!ch.roleLabel.isEmpty()) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QString resolvedStyleKey(int singerId, const QString &roleLabel) {
+    return QString::number(singerId) + QChar(0x1f) + roleLabel;
+}
+
+ResolvedStyle resolvedStyleForSinger(const RenderConfig &cfg, int singerId) {
+    if (singerId < 0) {
+        return cfg.baseStyle;
+    }
+    const QJsonValue value = cfg.singerStyleOverrides.value(QString::number(singerId));
+    if (!value.isObject()) {
+        return cfg.baseStyle;
+    }
+    return styleWithOverrides(cfg.baseStyle, value.toObject());
+}
+
+ResolvedStyle resolvedStyleForRole(const RenderConfig &cfg, const ResolvedStyle &lineStyle, const QString &roleLabel) {
+    if (roleLabel.isEmpty()) {
+        return lineStyle;
+    }
+    const QJsonValue value = cfg.customStyleSchemes.value(roleLabel);
+    if (!value.isObject()) {
+        return lineStyle;
+    }
+    return styleWithOverrides(lineStyle, value.toObject());
+}
+
+void cacheResolvedStyle(RenderConfig &cfg, int singerId, const QString &roleLabel) {
+    const QString key = resolvedStyleKey(singerId, roleLabel);
+    if (cfg.resolvedStyles.contains(key)) {
+        return;
+    }
+    const ResolvedStyle lineStyle = resolvedStyleForSinger(cfg, singerId);
+    const ResolvedStyle finalStyle = resolvedStyleForRole(cfg, lineStyle, roleLabel);
+    cfg.resolvedStyles.insert(key, finalStyle);
+}
+
+void buildResolvedStyleCache(RenderConfig &cfg) {
+    cfg.resolvedStyles.clear();
+    cacheResolvedStyle(cfg, -1, QString());
+    for (const TimingLine &line : cfg.lines) {
+        cacheResolvedStyle(cfg, line.singerId, QString());
+        for (const TimingChar &ch : line.chars) {
+            if (!ch.roleLabel.isEmpty()) {
+                cacheResolvedStyle(cfg, line.singerId, ch.roleLabel);
+            }
+        }
+    }
+}
+
+const ResolvedStyle &resolvedStyleForLine(const RenderConfig &cfg, const TimingLine &line) {
+    const auto it = cfg.resolvedStyles.constFind(resolvedStyleKey(line.singerId, QString()));
+    if (it != cfg.resolvedStyles.constEnd()) {
+        return it.value();
+    }
+    return cfg.baseStyle;
+}
+
+const ResolvedStyle &resolvedStyleForCharacter(const RenderConfig &cfg, const TimingLine &line, const TimingChar &ch) {
+    const auto it = cfg.resolvedStyles.constFind(resolvedStyleKey(line.singerId, ch.roleLabel));
+    if (it != cfg.resolvedStyles.constEnd()) {
+        return it.value();
+    }
+    return resolvedStyleForLine(cfg, line);
 }
 
 int lineStartMs(const TimingLine &line) {
@@ -705,55 +925,55 @@ QBrush brushForFill(const PaintFillSpec &fill, const QRectF &rect) {
     return QBrush(validColor(fill.color, QStringLiteral("#FFFFFF")));
 }
 
-QFont buildLineFont(const RenderConfig &cfg) {
-    QFont font(cfg.fontFamily);
-    font.setPixelSize(cfg.fontSizePx);
-    font.setWeight(static_cast<QFont::Weight>(std::clamp(cfg.fontWeight, 1, 999)));
-    if (cfg.letterSpacingPx != 0) {
-        font.setLetterSpacing(QFont::AbsoluteSpacing, cfg.letterSpacingPx);
+QFont buildLineFont(const ResolvedStyle &style) {
+    QFont font(style.fontFamily);
+    font.setPixelSize(style.fontSizePx);
+    font.setWeight(static_cast<QFont::Weight>(std::clamp(style.fontWeight, 1, 999)));
+    if (style.letterSpacingPx != 0) {
+        font.setLetterSpacing(QFont::AbsoluteSpacing, style.letterSpacingPx);
     }
     return font;
 }
 
-QFont buildRubyFont(const RenderConfig &cfg) {
-    QFont font(cfg.fontFamily);
-    font.setPixelSize(cfg.rubyFontSizePx);
-    font.setWeight(static_cast<QFont::Weight>(std::clamp(cfg.fontWeight, 1, 999)));
+QFont buildRubyFont(const ResolvedStyle &style) {
+    QFont font(style.fontFamily);
+    font.setPixelSize(style.rubyFontSizePx);
+    font.setWeight(static_cast<QFont::Weight>(std::clamp(style.fontWeight, 1, 999)));
     return font;
 }
 
-double visualStrokeExtent(const RenderConfig &cfg) {
-    return std::ceil((std::max(cfg.strokeWidthPx, 0) + std::max(cfg.stroke2WidthPx, 0)) / 2.0);
+double visualStrokeExtent(const ResolvedStyle &style) {
+    return std::ceil((std::max(style.strokeWidthPx, 0) + std::max(style.stroke2WidthPx, 0)) / 2.0);
 }
 
 double visualStrokeExtentForWidths(int strokeWidth, int stroke2Width) {
     return std::ceil((std::max(strokeWidth, 0) + std::max(stroke2Width, 0)) / 2.0);
 }
 
-double strokePenWidth(const RenderConfig &cfg) {
-    return std::max(cfg.strokeWidthPx, 0);
+double strokePenWidth(const ResolvedStyle &style) {
+    return std::max(style.strokeWidthPx, 0);
 }
 
-double stroke2PenWidth(const RenderConfig &cfg) {
-    return std::max(cfg.strokeWidthPx, 0) + std::max(cfg.stroke2WidthPx, 0);
+double stroke2PenWidth(const ResolvedStyle &style) {
+    return std::max(style.strokeWidthPx, 0) + std::max(style.stroke2WidthPx, 0);
 }
 
-int glowRadius(const RenderConfig &cfg, bool after) {
-    int value = after ? cfg.glowAfterRadiusPx : cfg.glowBeforeRadiusPx;
-    if (value == 10 && cfg.glowRadiusPx != 10) {
-        value = cfg.glowRadiusPx;
+int glowRadius(const ResolvedStyle &style, bool after) {
+    int value = after ? style.glowAfterRadiusPx : style.glowBeforeRadiusPx;
+    if (value == 10 && style.glowRadiusPx != 10) {
+        value = style.glowRadiusPx;
     }
     return std::max(value, 1);
 }
 
-double glowPenWidth(const RenderConfig &cfg, bool after) {
-    const double baseWidth = cfg.stroke2WidthPx > 0 ? stroke2PenWidth(cfg) : strokePenWidth(cfg);
-    return std::max(1.0, baseWidth + glowRadius(cfg, after));
+double glowPenWidth(const ResolvedStyle &style, bool after) {
+    const double baseWidth = style.stroke2WidthPx > 0 ? stroke2PenWidth(style) : strokePenWidth(style);
+    return std::max(1.0, baseWidth + glowRadius(style, after));
 }
 
-double glowExtent(const RenderConfig &cfg, bool after) {
-    const int radius = glowRadius(cfg, after);
-    return std::ceil(glowPenWidth(cfg, after) / 2.0 + radius * 3.0);
+double glowExtent(const ResolvedStyle &style, bool after) {
+    const int radius = glowRadius(style, after);
+    return std::ceil(glowPenWidth(style, after) / 2.0 + radius * 3.0);
 }
 
 int glowPenWidthForWidths(int strokeWidth, int stroke2Width, int glowRadiusValue) {
@@ -770,10 +990,10 @@ double glowExtentForWidths(int strokeWidth, int stroke2Width, int glowRadiusValu
     );
 }
 
-double afterClipVerticalExtent(const RenderConfig &cfg) {
-    const double strokeExtent = visualStrokeExtent(cfg);
-    const double glowExtra = cfg.decorationKind == QStringLiteral("glow") ? glowExtent(cfg, true) : 0.0;
-    const double shadowExtra = cfg.decorationKind == QStringLiteral("shadow") ? std::abs(cfg.shadowOffsetY) : 0.0;
+double afterClipVerticalExtent(const ResolvedStyle &style) {
+    const double strokeExtent = visualStrokeExtent(style);
+    const double glowExtra = style.decorationKind == QStringLiteral("glow") ? glowExtent(style, true) : 0.0;
+    const double shadowExtra = style.decorationKind == QStringLiteral("shadow") ? std::abs(style.shadowOffsetY) : 0.0;
     return std::max({strokeExtent, glowExtra, shadowExtra, 2.0}) + 4.0;
 }
 
@@ -792,28 +1012,28 @@ int scaledSignedPx(int value, double scale) {
     return sign * std::max(1, static_cast<int>(std::round(std::abs(value) * scale)));
 }
 
-double rubyScale(const RenderConfig &cfg) {
-    return static_cast<double>(std::max(cfg.rubyFontSizePx, 1)) / static_cast<double>(std::max(cfg.fontSizePx, 1));
+double rubyScale(const ResolvedStyle &style) {
+    return static_cast<double>(std::max(style.rubyFontSizePx, 1)) / static_cast<double>(std::max(style.fontSizePx, 1));
 }
 
-double rubyVisualPadding(const RenderConfig &cfg) {
-    const double scale = rubyScale(cfg);
-    const int strokeWidth = scaledPx(cfg.strokeWidthPx, scale);
-    const int stroke2Width = scaledPx(cfg.stroke2WidthPx, scale);
+double rubyVisualPadding(const ResolvedStyle &style) {
+    const double scale = rubyScale(style);
+    const int strokeWidth = scaledPx(style.strokeWidthPx, scale);
+    const int stroke2Width = scaledPx(style.stroke2WidthPx, scale);
     const double strokeExtent = std::ceil((std::max(strokeWidth, 0) + std::max(stroke2Width, 0)) / 2.0);
     double glowExtra = 0.0;
-    if (cfg.decorationKind == QStringLiteral("glow")) {
-        const int rubyGlowRadius = scaledPx(glowRadius(cfg, true), scale);
+    if (style.decorationKind == QStringLiteral("glow")) {
+        const int rubyGlowRadius = scaledPx(glowRadius(style, true), scale);
         const int baseWidth = stroke2Width > 0 ? strokeWidth + stroke2Width : strokeWidth;
         glowExtra = std::ceil((std::max(1, baseWidth + rubyGlowRadius)) / 2.0 + std::max(rubyGlowRadius, 1) * 3.0);
     }
-    const double shadowX = cfg.decorationKind == QStringLiteral("shadow") ? std::abs(scaledSignedPx(cfg.shadowOffsetX, scale)) : 0.0;
-    const double shadowY = cfg.decorationKind == QStringLiteral("shadow") ? std::abs(scaledSignedPx(cfg.shadowOffsetY, scale)) : 0.0;
+    const double shadowX = style.decorationKind == QStringLiteral("shadow") ? std::abs(scaledSignedPx(style.shadowOffsetX, scale)) : 0.0;
+    const double shadowY = style.decorationKind == QStringLiteral("shadow") ? std::abs(scaledSignedPx(style.shadowOffsetY, scale)) : 0.0;
     return std::max({strokeExtent, glowExtra, shadowX, shadowY, 2.0});
 }
 
-double baselineYForLine(const RenderConfig &cfg, const QFontMetricsF &metrics, int lane, int visibleLineCount) {
-    const double pad = visualStrokeExtent(cfg);
+double baselineYForLine(const RenderConfig &cfg, const ResolvedStyle &style, const QFontMetricsF &metrics, int lane, int visibleLineCount) {
+    const double pad = visualStrokeExtent(style);
     if (cfg.dualLineLayout) {
         const double mainHeight = metrics.ascent() + metrics.descent() + pad * 2.0;
         const double mainAscent = metrics.ascent() + pad;
@@ -858,30 +1078,53 @@ double lineXForLine(const RenderConfig &cfg, double lineWidth, double pad, int l
     return (cfg.width - lineWidth) * 0.5;
 }
 
-LineLayout layoutLine(const RenderConfig &cfg, const TimingLine &line, int lane, int visibleLineCount) {
+LineLayout layoutLine(const RenderConfig &cfg, const ResolvedStyle &lineStyle, const TimingLine &line, int lane, int visibleLineCount) {
     const QString text = lineText(line);
+    const bool inlineStyles = lineHasRoleLabels(line);
 
     LineLayout layout;
     layout.text = text;
-    layout.font = buildLineFont(cfg);
+    layout.font = buildLineFont(lineStyle);
+    layout.lineStyle = &lineStyle;
+    layout.hasInlineStyles = inlineStyles;
 
     const QFontMetricsF metrics(layout.font);
-    layout.ascent = metrics.ascent();
-    layout.descent = metrics.descent();
-    layout.height = metrics.height();
 
     layout.charWidths.reserve(line.chars.size());
+    layout.charFonts.reserve(line.chars.size());
+    layout.charStyles.reserve(line.chars.size());
     double totalWidth = 0.0;
-    for (const auto &ch : line.chars) {
-        const double width = std::max(1.0, metrics.horizontalAdvance(ch.text));
+    double maxAscent = 0.0;
+    double maxDescent = 0.0;
+    double maxVisualPad = visualStrokeExtent(lineStyle);
+    double maxAfterClipExtent = afterClipVerticalExtent(lineStyle);
+    for (std::size_t i = 0; i < line.chars.size(); ++i) {
+        const auto &ch = line.chars[i];
+        const ResolvedStyle &charStyle = inlineStyles ? resolvedStyleForCharacter(cfg, line, ch) : lineStyle;
+        QFont charFont = inlineStyles ? buildLineFont(charStyle) : layout.font;
+        const QFontMetricsF charMetrics(charFont);
+        const double width = std::max(1.0, charMetrics.horizontalAdvance(ch.text));
         layout.charWidths.push_back(width);
+        layout.charFonts.push_back(charFont);
+        layout.charStyles.push_back(&charStyle);
         totalWidth += width;
+        maxAscent = std::max(maxAscent, charMetrics.ascent());
+        maxDescent = std::max(maxDescent, charMetrics.descent());
+        maxVisualPad = std::max(maxVisualPad, visualStrokeExtent(charStyle));
+        maxAfterClipExtent = std::max(maxAfterClipExtent, afterClipVerticalExtent(charStyle));
+        if (i + 1 < line.chars.size()) {
+            totalWidth += charStyle.letterSpacingPx;
+        }
     }
-    totalWidth += std::max(0, static_cast<int>(line.chars.size()) - 1) * cfg.letterSpacingPx;
+    layout.ascent = inlineStyles ? maxAscent : metrics.ascent();
+    layout.descent = inlineStyles ? maxDescent : metrics.descent();
+    layout.height = layout.ascent + layout.descent;
+    layout.afterClipExtent = maxAfterClipExtent;
     layout.width = std::max(1.0, totalWidth);
-    layout.x = lineXForLine(cfg, layout.width, visualStrokeExtent(cfg), lane);
+    const double visualPad = inlineStyles ? maxVisualPad : visualStrokeExtent(lineStyle);
+    layout.x = lineXForLine(cfg, layout.width, visualPad, lane);
 
-    layout.baselineY = baselineYForLine(cfg, metrics, lane, visibleLineCount);
+    layout.baselineY = baselineYForLine(cfg, lineStyle, metrics, lane, visibleLineCount);
 
     layout.charLefts.resize(line.chars.size());
     if (cfg.rightToLeft) {
@@ -889,24 +1132,30 @@ LineLayout layoutLine(const RenderConfig &cfg, const TimingLine &line, int lane,
         for (std::size_t i = 0; i < line.chars.size(); ++i) {
             cursor -= layout.charWidths[i];
             layout.charLefts[i] = cursor;
-            cursor -= cfg.letterSpacingPx;
+            cursor -= (i + 1 < layout.charStyles.size()) ? layout.charStyles[i]->letterSpacingPx : 0;
         }
     } else {
         double cursor = layout.x;
         for (std::size_t i = 0; i < line.chars.size(); ++i) {
             layout.charLefts[i] = cursor;
-            cursor += layout.charWidths[i] + cfg.letterSpacingPx;
+            cursor += layout.charWidths[i] + ((i + 1 < layout.charStyles.size()) ? layout.charStyles[i]->letterSpacingPx : 0);
         }
     }
 
     // C2 keeps one complete line path for both before/after layers. Karaoke
     // progress is expressed only by clipping the after layer, not by rebuilding
     // a prefix string path that can drift under kerning/shaping.
-    layout.path.addText(QPointF(layout.x, layout.baselineY), layout.font, text);
+    if (inlineStyles) {
+        for (std::size_t i = 0; i < line.chars.size(); ++i) {
+            layout.path.addText(QPointF(layout.charLefts[i], layout.baselineY), layout.charFonts[i], line.chars[i].text);
+        }
+    } else {
+        layout.path.addText(QPointF(layout.x, layout.baselineY), layout.font, text);
+    }
     return layout;
 }
 
-std::optional<QRectF> afterClipRectFromCharacterTiming(const RenderConfig &cfg, const TimingLine &line, const LineLayout &layout, int tMs) {
+std::optional<QRectF> afterClipRectFromCharacterTiming(const RenderConfig &cfg, const ResolvedStyle &style, const TimingLine &line, const LineLayout &layout, int tMs) {
     if (line.chars.empty()) {
         return std::nullopt;
     }
@@ -938,7 +1187,7 @@ std::optional<QRectF> afterClipRectFromCharacterTiming(const RenderConfig &cfg, 
         return std::nullopt;
     }
 
-    const double verticalExtent = afterClipVerticalExtent(cfg);
+    const double verticalExtent = layout.afterClipExtent > 0.0 ? layout.afterClipExtent : afterClipVerticalExtent(style);
     const double top = layout.baselineY - layout.ascent - verticalExtent;
     const double height = layout.height + verticalExtent * 2.0;
     if (cfg.rightToLeft) {
@@ -1286,6 +1535,7 @@ QPainterPath rubyTextPath(
 
 std::vector<RubyDiagnostics> rubyDiagnosticsForLine(
     const RenderConfig &cfg,
+    const ResolvedStyle &style,
     const TimingLine &line,
     const LineLayout &layout,
     int tMs
@@ -1294,11 +1544,11 @@ std::vector<RubyDiagnostics> rubyDiagnosticsForLine(
     if (cfg.rubies.empty()) {
         return diagnostics;
     }
-    const QFont rubyFont = buildRubyFont(cfg);
+    const QFont rubyFont = buildRubyFont(style);
     const QFontMetricsF rubyMetrics(rubyFont);
     const auto intervals = lineIntervals(line);
-    const double rubyBaselineY = layout.baselineY - layout.ascent - cfg.rubyGapPx;
-    const double pad = rubyVisualPadding(cfg);
+    const double rubyBaselineY = layout.baselineY - layout.ascent - style.rubyGapPx;
+    const double pad = rubyVisualPadding(style);
 
     for (const RubyAnnotation &ruby : cfg.rubies) {
         const auto indices = rubyTargetIndices(ruby, line, intervals);
@@ -1467,15 +1717,15 @@ std::optional<std::pair<double, double>> fillClipBand(
     return std::pair<double, double>{left, right};
 }
 
-std::optional<QRectF> afterClipRect(const RenderConfig &cfg, const TimingLine &line, const LineLayout &layout, int tMs) {
+std::optional<QRectF> afterClipRect(const RenderConfig &cfg, const ResolvedStyle &style, const TimingLine &line, const LineLayout &layout, int tMs) {
     if (cfg.rubies.empty()) {
-        return afterClipRectFromCharacterTiming(cfg, line, layout, tMs);
+        return afterClipRectFromCharacterTiming(cfg, style, line, layout, tMs);
     }
     const auto band = fillClipBand(fillSegmentsForLine(cfg, line, layout, tMs), cfg.rightToLeft);
     if (!band.has_value()) {
         return std::nullopt;
     }
-    const double verticalExtent = afterClipVerticalExtent(cfg);
+    const double verticalExtent = layout.afterClipExtent > 0.0 ? layout.afterClipExtent : afterClipVerticalExtent(style);
     const double top = layout.baselineY - layout.ascent - verticalExtent;
     const double height = layout.height + verticalExtent * 2.0;
     return QRectF(band->first, top, band->second - band->first, height);
@@ -1572,14 +1822,14 @@ void paintTextLayerStackWithWidths(
     const PaintFillSpec &stroke,
     const PaintFillSpec &stroke2,
     const PaintFillSpec &shadow,
-    const RenderConfig &cfg,
+    const ResolvedStyle &style,
     int strokeWidth,
     int stroke2Width,
     int shadowOffsetX,
     int shadowOffsetY,
     int glowRadiusValue
 ) {
-    if (cfg.decorationKind == QStringLiteral("glow")) {
+    if (style.decorationKind == QStringLiteral("glow")) {
         paintGlowPathWithWidths(
             painter,
             path,
@@ -1615,7 +1865,7 @@ RubyLayerImage buildRubyTextLayer(
     const PaintFillSpec &stroke,
     const PaintFillSpec &stroke2,
     const PaintFillSpec &shadow,
-    const RenderConfig &cfg,
+    const ResolvedStyle &style,
     int strokeWidth,
     int stroke2Width,
     int shadowOffsetX,
@@ -1623,7 +1873,7 @@ RubyLayerImage buildRubyTextLayer(
     int glowRadiusValue
 ) {
     const double strokeExtent = visualStrokeExtentForWidths(strokeWidth, stroke2Width);
-    const double glowExtra = cfg.decorationKind == QStringLiteral("glow")
+    const double glowExtra = style.decorationKind == QStringLiteral("glow")
         ? glowExtentForWidths(strokeWidth, stroke2Width, glowRadiusValue)
         : 0.0;
     const int extent = static_cast<int>(std::max({
@@ -1672,7 +1922,7 @@ RubyLayerImage buildRubyTextLayer(
         stroke,
         stroke2,
         shadow,
-        cfg,
+        style,
         strokeWidth,
         stroke2Width,
         shadowOffsetX,
@@ -1689,7 +1939,7 @@ RubyLayerImage buildRubyTextLayer(
 
 void paintRubyDiagnostics(
     QPainter &painter,
-    const RenderConfig &cfg,
+    const ResolvedStyle &style,
     const std::vector<RubyDiagnostics> &rubies,
     const PaintFillSpec &base,
     const PaintFillSpec &fill,
@@ -1703,13 +1953,13 @@ void paintRubyDiagnostics(
     if (rubies.empty()) {
         return;
     }
-    const QFont rubyFont = buildRubyFont(cfg);
+    const QFont rubyFont = buildRubyFont(style);
     const QFontMetricsF rubyMetrics(rubyFont);
-    const double scale = rubyScale(cfg);
-    const int strokeWidth = scaledPx(cfg.strokeWidthPx, scale);
-    const int stroke2Width = scaledPx(cfg.stroke2WidthPx, scale);
-    const int shadowOffsetX = scaledSignedPx(cfg.shadowOffsetX, scale);
-    const int shadowOffsetY = scaledSignedPx(cfg.shadowOffsetY, scale);
+    const double scale = rubyScale(style);
+    const int strokeWidth = scaledPx(style.strokeWidthPx, scale);
+    const int stroke2Width = scaledPx(style.stroke2WidthPx, scale);
+    const int shadowOffsetX = scaledSignedPx(style.shadowOffsetX, scale);
+    const int shadowOffsetY = scaledSignedPx(style.shadowOffsetY, scale);
     for (const RubyDiagnostics &ruby : rubies) {
         const RubyLayerImage beforeLayer = buildRubyTextLayer(
             ruby,
@@ -1719,12 +1969,12 @@ void paintRubyDiagnostics(
             beforeStroke,
             beforeStroke2,
             beforeShadow,
-            cfg,
+            style,
             strokeWidth,
             stroke2Width,
             shadowOffsetX,
             shadowOffsetY,
-            scaledPx(glowRadius(cfg, false), scale)
+            scaledPx(glowRadius(style, false), scale)
         );
         painter.drawImage(QPointF(ruby.x, ruby.baselineY) + beforeLayer.offset, beforeLayer.image);
         if (ruby.progress <= 0.0) {
@@ -1738,12 +1988,12 @@ void paintRubyDiagnostics(
             afterStroke,
             afterStroke2,
             afterShadow,
-            cfg,
+            style,
             strokeWidth,
             stroke2Width,
             shadowOffsetX,
             shadowOffsetY,
-            scaledPx(glowRadius(cfg, true), scale)
+            scaledPx(glowRadius(style, true), scale)
         );
         painter.save();
         painter.setClipRect(
@@ -1760,65 +2010,114 @@ void paintRubyDiagnostics(
     }
 }
 
+void paintInlineTextLayerStack(
+    QPainter &painter,
+    const TimingLine &line,
+    const LineLayout &layout,
+    bool after
+) {
+    for (std::size_t i = 0; i < line.chars.size(); ++i) {
+        if (i >= layout.charLefts.size() || i >= layout.charWidths.size() || i >= layout.charFonts.size() || i >= layout.charStyles.size()) {
+            continue;
+        }
+        const ResolvedStyle &style = *layout.charStyles[i];
+        const QFontMetricsF metrics(layout.charFonts[i]);
+        QPainterPath path;
+        path.addText(QPointF(layout.charLefts[i], layout.baselineY), layout.charFonts[i], line.chars[i].text);
+        const QRectF rect(
+            layout.charLefts[i],
+            layout.baselineY - metrics.ascent(),
+            layout.charWidths[i],
+            metrics.height()
+        );
+        paintTextLayerStackWithWidths(
+            painter,
+            path,
+            rect,
+            after ? style.afterFill : style.baseFill,
+            after ? style.afterStrokeFill : style.beforeStrokeFill,
+            after ? style.afterStroke2Fill : style.beforeStroke2Fill,
+            after ? style.afterShadowFill : style.beforeShadowFill,
+            style,
+            style.strokeWidthPx,
+            style.stroke2WidthPx,
+            style.shadowOffsetX,
+            style.shadowOffsetY,
+            glowRadius(style, after)
+        );
+    }
+}
+
 void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &line, int tMs, int lane, int visibleLineCount, RenderDiagnostics *diagnostics) {
     const QString text = lineText(line);
     if (text.isEmpty()) {
         return;
     }
 
-    const LineLayout layout = layoutLine(cfg, line, lane, visibleLineCount);
+    const ResolvedStyle &lineStyle = resolvedStyleForLine(cfg, line);
+
+    const LineLayout layout = layoutLine(cfg, lineStyle, line, lane, visibleLineCount);
 
     const QRectF lineRect(layout.x, layout.baselineY - layout.ascent, layout.width, layout.height);
-    const auto rubyDiagnostics = rubyDiagnosticsForLine(cfg, line, layout, tMs);
+    const auto rubyDiagnostics = rubyDiagnosticsForLine(cfg, lineStyle, line, layout, tMs);
 
     paintRubyDiagnostics(
         painter,
-        cfg,
+        lineStyle,
         rubyDiagnostics,
-        cfg.rubyBaseFill,
-        cfg.rubyAfterFill,
-        cfg.rubyBeforeStrokeFill,
-        cfg.rubyAfterStrokeFill,
-        cfg.rubyBeforeStroke2Fill,
-        cfg.rubyAfterStroke2Fill,
-        cfg.rubyBeforeShadowFill,
-        cfg.rubyAfterShadowFill
-    );
-    paintTextLayerStackWithWidths(
-        painter,
-        layout.path,
-        lineRect,
-        cfg.baseFill,
-        cfg.beforeStrokeFill,
-        cfg.beforeStroke2Fill,
-        cfg.beforeShadowFill,
-        cfg,
-        cfg.strokeWidthPx,
-        cfg.stroke2WidthPx,
-        cfg.shadowOffsetX,
-        cfg.shadowOffsetY,
-        glowRadius(cfg, false)
+        lineStyle.rubyBaseFill,
+        lineStyle.rubyAfterFill,
+        lineStyle.rubyBeforeStrokeFill,
+        lineStyle.rubyAfterStrokeFill,
+        lineStyle.rubyBeforeStroke2Fill,
+        lineStyle.rubyAfterStroke2Fill,
+        lineStyle.rubyBeforeShadowFill,
+        lineStyle.rubyAfterShadowFill
     );
 
-    const auto clip = afterClipRect(cfg, line, layout, tMs);
-    if (clip.has_value() && clip->width() > 0.0) {
-        painter.save();
-        painter.setClipRect(*clip, Qt::IntersectClip);
+    if (layout.hasInlineStyles) {
+        paintInlineTextLayerStack(painter, line, layout, false);
+    } else {
         paintTextLayerStackWithWidths(
             painter,
             layout.path,
             lineRect,
-            cfg.afterFill,
-            cfg.afterStrokeFill,
-            cfg.afterStroke2Fill,
-            cfg.afterShadowFill,
-            cfg,
-            cfg.strokeWidthPx,
-            cfg.stroke2WidthPx,
-            cfg.shadowOffsetX,
-            cfg.shadowOffsetY,
-            glowRadius(cfg, true)
+            lineStyle.baseFill,
+            lineStyle.beforeStrokeFill,
+            lineStyle.beforeStroke2Fill,
+            lineStyle.beforeShadowFill,
+            lineStyle,
+            lineStyle.strokeWidthPx,
+            lineStyle.stroke2WidthPx,
+            lineStyle.shadowOffsetX,
+            lineStyle.shadowOffsetY,
+            glowRadius(lineStyle, false)
         );
+    }
+
+    const auto clip = afterClipRect(cfg, lineStyle, line, layout, tMs);
+    if (clip.has_value() && clip->width() > 0.0) {
+        painter.save();
+        painter.setClipRect(*clip, Qt::IntersectClip);
+        if (layout.hasInlineStyles) {
+            paintInlineTextLayerStack(painter, line, layout, true);
+        } else {
+            paintTextLayerStackWithWidths(
+                painter,
+                layout.path,
+                lineRect,
+                lineStyle.afterFill,
+                lineStyle.afterStrokeFill,
+                lineStyle.afterStroke2Fill,
+                lineStyle.afterShadowFill,
+                lineStyle,
+                lineStyle.strokeWidthPx,
+                lineStyle.stroke2WidthPx,
+                lineStyle.shadowOffsetX,
+                lineStyle.shadowOffsetY,
+                glowRadius(lineStyle, true)
+            );
+        }
         painter.restore();
     }
 
@@ -1836,7 +2135,7 @@ void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &lin
         } else {
             lineDiagnostics.afterClipLeft = layout.x;
             lineDiagnostics.afterClipRight = layout.x;
-            const double verticalExtent = afterClipVerticalExtent(cfg);
+            const double verticalExtent = layout.afterClipExtent > 0.0 ? layout.afterClipExtent : afterClipVerticalExtent(lineStyle);
             lineDiagnostics.afterClipTop = layout.baselineY - layout.ascent - verticalExtent;
             lineDiagnostics.afterClipHeight = layout.height + verticalExtent * 2.0;
         }

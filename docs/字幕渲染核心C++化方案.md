@@ -426,7 +426,7 @@ smoke 输出示例：
 
 - 尚未接入 `preview_async.py` 或导出路径。
 - ruby 不在 C2 绘制，完整 ruby layout/timing 放到 C3。
-- 基础 glow / shadow 纯色装饰已在 C3b-6 迁移；ruby PaintFill 的 gradient/split/image 已在 C3b-7a/C3b-7b 迁移。role/singer override、signal、entry/exit animation、`utopia` 尚未迁移。
+- 基础 glow / shadow 纯色装饰已在 C3b-6 迁移；ruby PaintFill 的 gradient/split/image 已在 C3b-7a/C3b-7b 迁移。role/singer override 已在 C3b-8 迁移；signal、entry/exit animation、`utopia` 尚未迁移。
 
 ##### C2 已知偏差 / 待办
 
@@ -485,10 +485,15 @@ smoke 输出示例：
   `image_path` / `image_scale_pct`，并将 ruby before/after 绘制切到与 Python 一致的局部 `QImage` 层后再贴回主画布，
   同时关闭 ruby 局部层的 `SmoothPixmapTransform`，避免纹理 tile 被插值成混色。native 侧已对解码后的 image fill
   `QImage` 做 64 项 LRU 缓存，避免每个 fill/stroke/ruby 层重复从磁盘读取纹理。
+- C3b-8 已迁移横排 native 的 `singer_style_overrides` 与 `custom_style_schemes`：native 会先按行套歌手方案，再在带
+  `role_label` 的行内按字套角色方案，重算逐字 font/width/path 并按角色样式绘制 before/after 层；ruby 继续跟随
+  行级（含 singer override）样式。实现上已把 `(singer_id, role_label)` 的解析结果提升到 `configure` 作用域的
+  `ResolvedStyle` cache，`render_frame` / `layoutLine` 只查表并存轻量指针，不再逐字复制整份 `RenderConfig`。
+  pytest 已覆盖 singer override + ruby、inline role override + ruby 的 Python-vs-native 像素 diff。
 
 仍未完成：
 
-- ruby 与 role/singer override、utopia transition、竖排路径尚未迁移。
+- ruby 的 utopia transition 与竖排路径尚未迁移。
 
 验收：
 
