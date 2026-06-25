@@ -917,10 +917,13 @@ def test_native_ruby_pixels_match_python_within_bounded_diff(tmp_path, monkeypat
         renderer.configure(track, style, width=640, height=360, fps=60)
         renderer.render_frame_png(2000, native_output)
 
-    diff = np.abs(
-        _image_rows(python_image).astype(int)
-        - _image_rows(QImage(str(native_output))).astype(int)
-    )
+    python_rows = _image_rows(python_image)
+    native_rows = _image_rows(QImage(str(native_output)))
+    # Pin a content lower bound so a double-blank regression (both renderers
+    # drawing nothing) can't pass the bounded diff trivially.
+    assert python_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    assert native_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    diff = np.abs(python_rows.astype(int) - native_rows.astype(int))
     assert diff.mean() < 10.0
     assert int((diff > 8).sum()) < 50_000
 
