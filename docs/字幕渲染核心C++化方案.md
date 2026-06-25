@@ -25,9 +25,10 @@
 **sidecar renderer 进程**，而不是一开始做 `.pyd` Python extension。
 
 **C0 探针状态（2026-06-25）**：已新增 `native/subtitle_renderer_probe/`，并在本机 Qt 6.10.0
-MSVC Release 构建下验证：默认重负载（2400×1350、utopia+glow+ruby、240 帧）从 1 线程 31.9fps
-扩到 8 线程 133.6fps，约 4.19x。结论：C++ 同进程线程池没有像 PyQt QThread 一样卡死在 1x，
-native renderer 值得继续推进。
+MSVC Release 构建下重跑。默认重负载（2400×1350、utopia+glow+ruby、240 帧）按每档 3 次取中位：
+1 线程约 37.4fps，8 线程约 121.9fps，16 线程约 133.7fps。结论更准确地说是：C++ 同进程线程池
+没有像 PyQt QThread 一样卡死在 1x，具备继续推进价值；但在 8C/16T 笔记本 CPU 上 8→16 线程收益已经很小，
+探针结果应视为“可行性门槛通过”，不是产品 renderer 吞吐承诺。
 
 **C1 骨架状态（2026-06-25）**：已新增 `native/subtitle_renderer/` sidecar、Python
 `native_protocol.py` / `native_backend.py`、`scripts/run_native_renderer_smoke.ps1`。当前协议为 JSON Lines，
@@ -251,18 +252,20 @@ payload:
 
 ### C0：C++ 并行可行性探针
 
-目标：确认“同进程 C++ 多线程 QPainter 光栅化”是否真的线性扩展。
+目标：确认“同进程 C++ 多线程 QPainter 光栅化”是否存在可用扩展空间，以及在本机 CPU 上大概从哪里开始撞到收益天花板。
 
 做法：
 
 - 写最小 C++ Qt console 程序。
 - 合成 `utopia + glow + ruby` 近似场景。
 - 每个线程独立 `QImage + QPainter`，渲染不同帧。
-- 测 1/2/4/8 线程吞吐、CPU 占用、单帧耗时。
+- 测 1/2/4/8/16 线程吞吐、进程 CPU 采样、单帧耗时。
+- 每档至少跑 3 次，正式引用中位数；单跑只作为烟测信号。
 
 验收：
 
-- 4 线程至少接近 2.5x，8 线程至少明显超过 4 线程。
+- 4 线程至少接近 2.5x，8 线程至少明显超过 4 线程，才说明 native 多线程值得继续投入。
+- 8→16 线程若收益很小，说明已经接近本机天花板或遇到 Qt/font/memory 争用，不能按物理核/逻辑核线性外推。
 - 若仍接近 1x，说明 Qt 内部或字体栈还有全局锁；C++ 化仍可减少 Python 开销，但不能指望多线程主收益。
 
 #### C0 实测结果（2026-06-25）
@@ -275,33 +278,30 @@ payload:
 
 本机环境：
 
+- CPU：AMD Ryzen 9 6900HX，8 物理核 / 16 逻辑核；笔记本平台，结果可能受 boost、温度、后台任务影响。
 - Visual Studio Build Tools 2026 / MSVC 19.50
 - Qt 6.10.0 `win64_msvc2022_64`，由 `aqtinstall` 下载到 `%LOCALAPPDATA%\krok-helper\qt`
 - CMake 4.3.4 + Ninja 1.13.0
 
-默认重负载：2400×1350、240 帧、`utopia + glow + ruby`。
+默认重负载：2400×1350、240 帧、`utopia + glow + ruby`。以下为每档 3 次运行的中位数，不是置信区间。
+CPU 列来自进程 CPU 时间采样；它可辅助判断本进程占用，但不一定覆盖 Windows 字体服务等进程外成本。
 
-| threads | fps | ms/frame | speedup |
-|---:|---:|---:|---:|
-| 1 | 31.92 | 31.33 | 1.00x |
-| 2 | 60.03 | 16.66 | 1.88x |
-| 4 | 100.53 | 9.95 | 3.15x |
-| 8 | 133.63 | 7.48 | 4.19x |
+| threads | runs | median fps | median ms/frame | median speedup | median process CPU cores | median all-core CPU |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 3 | 37.4 | 26.7 | 1.0x | 0.1 | 0.6% |
+| 2 | 3 | 65.0 | 15.4 | 1.7x | 0.1 | 0.8% |
+| 4 | 3 | 100.0 | 10.0 | 2.7x | 0.2 | 1.5% |
+| 8 | 3 | 121.9 | 8.2 | 3.3x | 0.3 | 1.9% |
+| 16 | 3 | 133.7 | 7.5 | 3.6x | 11.2 | 69.9% |
 
-对照负载：2400×1350、240 帧、`utopia + ruby`，关闭 glow。
-
-| threads | fps | ms/frame | speedup |
-|---:|---:|---:|---:|
-| 1 | 104.34 | 9.58 | 1.00x |
-| 2 | 170.70 | 5.86 | 1.64x |
-| 4 | 247.38 | 4.04 | 2.37x |
-| 8 | 383.06 | 2.61 | 3.67x |
+早期有一组单跑数据曾显示 8 线程约 133.6fps / 4.2x，因只跑一次且未覆盖 16 线程，不再作为结论引用。
 
 判读：
 
-- 与 Python QThread 池 8 线程约 1.07x 的结果相比，C++ 同进程线程池扩展性明确成立。
-- glow-heavy 场景 8 线程约 4.19x，已超过 C0 “4 线程接近 2.5x、8 线程明显超过 4 线程”的门槛。
-- 扩展不是满线性，说明仍有内存带宽、字体/Qt 内部共享资源、临时 QImage 分配等成本；但这不是否决项。
+- 与 Python QThread 池 8 线程约 1.07x 的结果相比，C++ 同进程线程池确实绕开了 PyQt/GIL 那堵墙。
+- 4 线程约 2.7x，8 线程约 3.3x，通过“值得继续做 native 探索”的门槛；但 8→16 只从 121.9fps 到 133.7fps，已经明显边际递减。
+- 这组探针负载偏向“并行光栅化上限”：每帧大块 `addText`/stroke/fill/glow，layout、Python 调度、真实工程状态同步等还没放进去。真实 renderer 的可并行占比大概率更低。
+- 因此 C0 不能解读成“native renderer 能稳定跑 133fps”。更稳妥的读法是：sidecar 线程池在这台 8C/16T 机器上具备约 3-4x 封顶空间，且后续优化重点应转向减少共享资源争用、缓存字体/path/layout、降低 per-frame QImage 分配。
 - 下一步可以进入 C1：native sidecar renderer 骨架 + Render IR v1。
 
 ### C1：native sidecar 骨架

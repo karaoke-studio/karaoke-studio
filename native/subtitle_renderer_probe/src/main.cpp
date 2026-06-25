@@ -16,16 +16,25 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
+#include <limits>
+#include <mutex>
 #include <numeric>
 #include <sstream>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
+
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#endif
 
 namespace {
 
@@ -36,24 +45,188 @@ struct Options {
     int fps = 60;
     int fontSize = 80;
     int rubySize = 32;
+    int runs = 3;
     bool glow = true;
     bool ruby = true;
     bool utopia = true;
-    std::vector<int> threadLevels{1, 2, 4, 8};
+    std::vector<int> threadLevels{1, 2, 4, 8, 16};
 };
 
 struct RenderStats {
     int threads = 1;
+    int run = 1;
     double wallSeconds = 0.0;
     double fps = 0.0;
     double msPerFrame = 0.0;
-    double speedup = 1.0;
+    double cpuCoresAvg = std::numeric_limits<double>::quiet_NaN();
+    double cpuCoresMax = std::numeric_limits<double>::quiet_NaN();
+    double cpuAllCorePctAvg = std::numeric_limits<double>::quiet_NaN();
+    double cpuAllCorePctMax = std::numeric_limits<double>::quiet_NaN();
     std::uint64_t checksum = 0;
+};
+
+struct SummaryStats {
+    int threads = 1;
+    int runs = 1;
+    double wallSecondsMedian = 0.0;
+    double fpsMedian = 0.0;
+    double msPerFrameMedian = 0.0;
+    double speedupMedian = 1.0;
+    double cpuCoresAvgMedian = std::numeric_limits<double>::quiet_NaN();
+    double cpuAllCorePctAvgMedian = std::numeric_limits<double>::quiet_NaN();
+    double cpuCoresMaxObserved = std::numeric_limits<double>::quiet_NaN();
+    double cpuAllCorePctMaxObserved = std::numeric_limits<double>::quiet_NaN();
 };
 
 QString utf8(const char *text) {
     return QString::fromUtf8(text);
 }
+
+double median(std::vector<double> values) {
+    values.erase(
+        std::remove_if(values.begin(), values.end(), [](double value) { return !std::isfinite(value); }),
+        values.end()
+    );
+    if (values.empty()) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    std::sort(values.begin(), values.end());
+    const std::size_t mid = values.size() / 2;
+    if (values.size() % 2 == 1) {
+        return values[mid];
+    }
+    return (values[mid - 1] + values[mid]) * 0.5;
+}
+
+double maxFinite(const std::vector<double> &values) {
+    double result = std::numeric_limits<double>::quiet_NaN();
+    for (const double value : values) {
+        if (!std::isfinite(value)) {
+            continue;
+        }
+        if (!std::isfinite(result) || value > result) {
+            result = value;
+        }
+    }
+    return result;
+}
+
+std::string metric(double value, int precision = 1) {
+    if (!std::isfinite(value)) {
+        return "n/a";
+    }
+    std::ostringstream ss;
+    ss << std::fixed << std::setprecision(precision) << value;
+    return ss.str();
+}
+
+#ifdef _WIN32
+std::uint64_t fileTimeToUInt64(const FILETIME &fileTime) {
+    return (static_cast<std::uint64_t>(fileTime.dwHighDateTime) << 32) |
+           static_cast<std::uint64_t>(fileTime.dwLowDateTime);
+}
+
+double processCpuSeconds() {
+    FILETIME creationTime;
+    FILETIME exitTime;
+    FILETIME kernelTime;
+    FILETIME userTime;
+    if (!GetProcessTimes(GetCurrentProcess(), &creationTime, &exitTime, &kernelTime, &userTime)) {
+        return std::numeric_limits<double>::quiet_NaN();
+    }
+    const std::uint64_t ticks = fileTimeToUInt64(kernelTime) + fileTimeToUInt64(userTime);
+    return static_cast<double>(ticks) / 10'000'000.0;
+}
+
+int logicalProcessorCount() {
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    return static_cast<int>(std::max<DWORD>(static_cast<DWORD>(1), info.dwNumberOfProcessors));
+}
+#else
+double processCpuSeconds() {
+    return std::numeric_limits<double>::quiet_NaN();
+}
+
+int logicalProcessorCount() {
+    return static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+}
+#endif
+
+class CpuSampler {
+public:
+    void start() {
+        stopRequested_.store(false, std::memory_order_relaxed);
+        worker_ = std::thread([this]() { sampleLoop(); });
+    }
+
+    void stop() {
+        stopRequested_.store(true, std::memory_order_relaxed);
+        if (worker_.joinable()) {
+            worker_.join();
+        }
+    }
+
+    double averageCores() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (coreSamples_.empty()) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        return std::accumulate(coreSamples_.begin(), coreSamples_.end(), 0.0) /
+               static_cast<double>(coreSamples_.size());
+    }
+
+    double maxCores() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return maxFinite(coreSamples_);
+    }
+
+    double averageAllCorePct() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (pctSamples_.empty()) {
+            return std::numeric_limits<double>::quiet_NaN();
+        }
+        return std::accumulate(pctSamples_.begin(), pctSamples_.end(), 0.0) /
+               static_cast<double>(pctSamples_.size());
+    }
+
+    double maxAllCorePct() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return maxFinite(pctSamples_);
+    }
+
+private:
+    void sampleLoop() {
+        const int logicalCores = logicalProcessorCount();
+        double previousCpu = processCpuSeconds();
+        auto previousWall = std::chrono::steady_clock::now();
+
+        while (!stopRequested_.load(std::memory_order_relaxed)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            const double currentCpu = processCpuSeconds();
+            const auto currentWall = std::chrono::steady_clock::now();
+            const double wallDelta = std::chrono::duration<double>(currentWall - previousWall).count();
+            const double cpuDelta = currentCpu - previousCpu;
+
+            if (std::isfinite(currentCpu) && std::isfinite(previousCpu) && wallDelta > 0.0 && cpuDelta >= 0.0) {
+                const double coreEquivalent = cpuDelta / wallDelta;
+                const double allCorePct = coreEquivalent * 100.0 / static_cast<double>(logicalCores);
+                std::lock_guard<std::mutex> lock(mutex_);
+                coreSamples_.push_back(coreEquivalent);
+                pctSamples_.push_back(allCorePct);
+            }
+
+            previousCpu = currentCpu;
+            previousWall = currentWall;
+        }
+    }
+
+    std::atomic<bool> stopRequested_{false};
+    std::thread worker_;
+    mutable std::mutex mutex_;
+    std::vector<double> coreSamples_;
+    std::vector<double> pctSamples_;
+};
 
 std::vector<int> parseThreadLevels(const std::string &value) {
     std::vector<int> result;
@@ -92,6 +265,8 @@ Options parseOptions(int argc, char **argv) {
             opt.frames = std::max(1, std::atoi(nextValue("--frames").c_str()));
         } else if (arg == "--fps") {
             opt.fps = std::max(1, std::atoi(nextValue("--fps").c_str()));
+        } else if (arg == "--runs") {
+            opt.runs = std::max(1, std::atoi(nextValue("--runs").c_str()));
         } else if (arg == "--font-size") {
             opt.fontSize = std::max(1, std::atoi(nextValue("--font-size").c_str()));
         } else if (arg == "--ruby-size") {
@@ -111,7 +286,8 @@ Options parseOptions(int argc, char **argv) {
                 << "  --height N         physical render height (default 1350)\n"
                 << "  --frames N         frames per run (default 240)\n"
                 << "  --fps N            frame rate used for timestamps (default 60)\n"
-                << "  --threads A,B,C    thread levels (default 1,2,4,8)\n"
+                << "  --runs N           runs per thread level; summary reports medians (default 3)\n"
+                << "  --threads A,B,C    thread levels (default 1,2,4,8,16)\n"
                 << "  --font-size N      main text font size (default 80)\n"
                 << "  --ruby-size N      ruby font size (default 32)\n"
                 << "  --no-glow          skip glow-like offscreen pass\n"
@@ -266,10 +442,13 @@ std::uint64_t renderOneFrame(const Options &opt, int frameIndex) {
     return imageChecksum(image);
 }
 
-RenderStats runLevel(const Options &opt, int threads, double serialWall) {
+RenderStats runLevel(const Options &opt, int threads, int run) {
     std::atomic<int> nextFrame{0};
     std::vector<std::uint64_t> checksums(static_cast<std::size_t>(threads), 0);
 
+    const double cpuStart = processCpuSeconds();
+    CpuSampler cpuSampler;
+    cpuSampler.start();
     QElapsedTimer timer;
     timer.start();
 
@@ -291,6 +470,8 @@ RenderStats runLevel(const Options &opt, int threads, double serialWall) {
     for (auto &worker : workers) {
         worker.join();
     }
+    const double cpuEnd = processCpuSeconds();
+    cpuSampler.stop();
 
     const double wall = static_cast<double>(timer.nsecsElapsed()) / 1'000'000'000.0;
     const double fps = static_cast<double>(opt.frames) / wall;
@@ -301,39 +482,128 @@ RenderStats runLevel(const Options &opt, int threads, double serialWall) {
 
     RenderStats stats;
     stats.threads = threads;
+    stats.run = run;
     stats.wallSeconds = wall;
     stats.fps = fps;
     stats.msPerFrame = wall * 1000.0 / static_cast<double>(opt.frames);
-    stats.speedup = serialWall > 0.0 ? serialWall / wall : 1.0;
+    stats.cpuCoresAvg = (std::isfinite(cpuStart) && std::isfinite(cpuEnd) && wall > 0.0)
+        ? (cpuEnd - cpuStart) / wall
+        : cpuSampler.averageCores();
+    stats.cpuCoresMax = cpuSampler.maxCores();
+    stats.cpuAllCorePctAvg = std::isfinite(stats.cpuCoresAvg)
+        ? stats.cpuCoresAvg * 100.0 / static_cast<double>(logicalProcessorCount())
+        : cpuSampler.averageAllCorePct();
+    stats.cpuAllCorePctMax = cpuSampler.maxAllCorePct();
     stats.checksum = checksum;
     return stats;
 }
 
-void printStats(const std::vector<RenderStats> &stats) {
-    std::cout << std::fixed << std::setprecision(2);
-    std::cout << "\nthreads,wall_s,fps,ms_per_frame,speedup,checksum\n";
-    for (const auto &s : stats) {
+std::vector<SummaryStats> summarizeStats(
+    const std::vector<std::vector<RenderStats>> &allStats,
+    double serialMedianWall
+) {
+    std::vector<SummaryStats> summaries;
+    summaries.reserve(allStats.size());
+    for (const auto &levelStats : allStats) {
+        if (levelStats.empty()) {
+            continue;
+        }
+        std::vector<double> walls;
+        std::vector<double> fpsValues;
+        std::vector<double> msValues;
+        std::vector<double> cpuCoreAvgValues;
+        std::vector<double> cpuCoreMaxValues;
+        std::vector<double> cpuPctAvgValues;
+        std::vector<double> cpuPctMaxValues;
+        walls.reserve(levelStats.size());
+        fpsValues.reserve(levelStats.size());
+        msValues.reserve(levelStats.size());
+        cpuCoreAvgValues.reserve(levelStats.size());
+        cpuCoreMaxValues.reserve(levelStats.size());
+        cpuPctAvgValues.reserve(levelStats.size());
+        cpuPctMaxValues.reserve(levelStats.size());
+
+        for (const auto &stats : levelStats) {
+            walls.push_back(stats.wallSeconds);
+            fpsValues.push_back(stats.fps);
+            msValues.push_back(stats.msPerFrame);
+            cpuCoreAvgValues.push_back(stats.cpuCoresAvg);
+            cpuCoreMaxValues.push_back(stats.cpuCoresMax);
+            cpuPctAvgValues.push_back(stats.cpuAllCorePctAvg);
+            cpuPctMaxValues.push_back(stats.cpuAllCorePctMax);
+        }
+
+        SummaryStats summary;
+        summary.threads = levelStats.front().threads;
+        summary.runs = static_cast<int>(levelStats.size());
+        summary.wallSecondsMedian = median(walls);
+        summary.fpsMedian = median(fpsValues);
+        summary.msPerFrameMedian = median(msValues);
+        summary.speedupMedian = (serialMedianWall > 0.0 && summary.wallSecondsMedian > 0.0)
+            ? serialMedianWall / summary.wallSecondsMedian
+            : 1.0;
+        summary.cpuCoresAvgMedian = median(cpuCoreAvgValues);
+        summary.cpuAllCorePctAvgMedian = median(cpuPctAvgValues);
+        summary.cpuCoresMaxObserved = maxFinite(cpuCoreMaxValues);
+        summary.cpuAllCorePctMaxObserved = maxFinite(cpuPctMaxValues);
+        summaries.push_back(summary);
+    }
+    return summaries;
+}
+
+void printStats(
+    const std::vector<std::vector<RenderStats>> &allStats,
+    const std::vector<SummaryStats> &summaries
+) {
+    std::cout << "\nper-run samples (not confidence intervals)\n";
+    std::cout << "threads,run,wall_s,fps,ms_per_frame,cpu_cores_avg,cpu_cores_max,cpu_all_core_pct_avg,cpu_all_core_pct_max,checksum\n";
+    for (const auto &levelStats : allStats) {
+        for (const auto &s : levelStats) {
+            std::cout << s.threads << ','
+                      << s.run << ','
+                      << metric(s.wallSeconds, 3) << ','
+                      << metric(s.fps, 1) << ','
+                      << metric(s.msPerFrame, 1) << ','
+                      << metric(s.cpuCoresAvg, 1) << ','
+                      << metric(s.cpuCoresMax, 1) << ','
+                      << metric(s.cpuAllCorePctAvg, 1) << ','
+                      << metric(s.cpuAllCorePctMax, 1) << ','
+                      << s.checksum << '\n';
+        }
+    }
+
+    std::cout << "\nmedian summary\n";
+    std::cout << "threads,runs,median_wall_s,median_fps,median_ms_per_frame,median_speedup,cpu_cores_avg_median,cpu_all_core_pct_avg_median,cpu_cores_max_observed,cpu_all_core_pct_max_observed\n";
+    for (const auto &s : summaries) {
         std::cout << s.threads << ','
-                  << s.wallSeconds << ','
-                  << s.fps << ','
-                  << s.msPerFrame << ','
-                  << s.speedup << ','
-                  << s.checksum << '\n';
+                  << s.runs << ','
+                  << metric(s.wallSecondsMedian, 3) << ','
+                  << metric(s.fpsMedian, 1) << ','
+                  << metric(s.msPerFrameMedian, 1) << ','
+                  << metric(s.speedupMedian, 1) << ','
+                  << metric(s.cpuCoresAvgMedian, 1) << ','
+                  << metric(s.cpuAllCorePctAvgMedian, 1) << ','
+                  << metric(s.cpuCoresMaxObserved, 1) << ','
+                  << metric(s.cpuAllCorePctMaxObserved, 1) << '\n';
     }
 
     std::cout << "\n"
               << std::setw(8) << "threads"
-              << std::setw(10) << "wall(s)"
-              << std::setw(10) << "fps"
-              << std::setw(12) << "ms/frame"
+              << std::setw(8) << "runs"
+              << std::setw(12) << "med fps"
+              << std::setw(12) << "med ms"
               << std::setw(10) << "speedup"
+              << std::setw(12) << "cpu core"
+              << std::setw(10) << "cpu %"
               << "\n";
-    for (const auto &s : stats) {
+    for (const auto &s : summaries) {
         std::cout << std::setw(8) << s.threads
-                  << std::setw(10) << s.wallSeconds
-                  << std::setw(10) << s.fps
-                  << std::setw(12) << s.msPerFrame
-                  << std::setw(9) << s.speedup << "x"
+                  << std::setw(8) << s.runs
+                  << std::setw(12) << metric(s.fpsMedian, 1)
+                  << std::setw(12) << metric(s.msPerFrameMedian, 1)
+                  << std::setw(9) << metric(s.speedupMedian, 1) << "x"
+                  << std::setw(12) << metric(s.cpuCoresAvgMedian, 1)
+                  << std::setw(10) << metric(s.cpuAllCorePctAvgMedian, 1)
                   << "\n";
     }
 }
@@ -354,6 +624,9 @@ int main(int argc, char **argv) {
               << " ruby=" << (opt.ruby ? "on" : "off")
               << " glow=" << (opt.glow ? "on" : "off")
               << " utopia=" << (opt.utopia ? "on" : "off")
+              << "\nruns    : " << opt.runs << " per thread level; summary reports medians"
+              << "\ncpu     : process CPU time sampled every ~100ms; "
+              << logicalProcessorCount() << " logical processors"
               << "\nthreads : ";
     for (std::size_t i = 0; i < opt.threadLevels.size(); ++i) {
         std::cout << (i ? "," : "") << opt.threadLevels[i];
@@ -364,17 +637,38 @@ int main(int argc, char **argv) {
         (void)renderOneFrame(opt, i);
     }
 
-    std::vector<RenderStats> stats;
-    stats.reserve(opt.threadLevels.size());
-    double serialWall = 0.0;
+    std::vector<std::vector<RenderStats>> allStats;
+    allStats.reserve(opt.threadLevels.size());
     for (const int level : opt.threadLevels) {
-        RenderStats s = runLevel(opt, level, serialWall);
-        if (level == 1 || serialWall <= 0.0) {
-            serialWall = s.wallSeconds;
-            s.speedup = 1.0;
+        std::vector<RenderStats> levelStats;
+        levelStats.reserve(static_cast<std::size_t>(opt.runs));
+        for (int run = 1; run <= opt.runs; ++run) {
+            levelStats.push_back(runLevel(opt, level, run));
         }
-        stats.push_back(s);
+        allStats.push_back(std::move(levelStats));
     }
-    printStats(stats);
+
+    double serialMedianWall = 0.0;
+    for (const auto &levelStats : allStats) {
+        if (!levelStats.empty() && levelStats.front().threads == 1) {
+            std::vector<double> walls;
+            walls.reserve(levelStats.size());
+            for (const auto &stats : levelStats) {
+                walls.push_back(stats.wallSeconds);
+            }
+            serialMedianWall = median(walls);
+            break;
+        }
+    }
+    if (serialMedianWall <= 0.0 && !allStats.empty()) {
+        std::vector<double> walls;
+        for (const auto &stats : allStats.front()) {
+            walls.push_back(stats.wallSeconds);
+        }
+        serialMedianWall = median(walls);
+    }
+
+    const auto summaries = summarizeStats(allStats, serialMedianWall);
+    printStats(allStats, summaries);
     return 0;
 }

@@ -1,7 +1,8 @@
 param(
     [string]$QtRoot = "$env:LOCALAPPDATA\krok-helper\qt\6.10.0\msvc2022_64",
-    [string]$Threads = "1,2,4,8",
+    [string]$Threads = "1,2,4,8,16",
     [int]$Frames = 240,
+    [int]$Runs = 3,
     [switch]$NoGlow,
     [switch]$NoRuby,
     [switch]$NoUtopia,
@@ -52,7 +53,7 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 $env:PATH = "$QtRoot\bin;$env:PATH"
-$args = @("--threads", $Threads, "--frames", [string]$Frames)
+$args = @("--threads", $Threads, "--frames", [string]$Frames, "--runs", [string]$Runs)
 if ($NoGlow) { $args += "--no-glow" }
 if ($NoRuby) { $args += "--no-ruby" }
 if ($NoUtopia) { $args += "--no-utopia" }
