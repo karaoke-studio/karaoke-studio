@@ -10,7 +10,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # include flags instead of relying on a hand-maintained c_cpp_properties path.
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-find_package(Qt6 REQUIRED COMPONENTS Core Gui)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 
 # Version fingerprint: the native sidecar must be built against the same Qt that
 # PyQt6 bundles, otherwise the sidecar and the Python fallback renderer rasterize
@@ -34,6 +34,7 @@ target_link_libraries(krok_subtitle_renderer
     PRIVATE
         Qt6::Core
         Qt6::Gui
+        Qt6::Widgets
 )
 
 if(MSVC)

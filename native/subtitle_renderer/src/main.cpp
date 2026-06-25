@@ -9,11 +9,16 @@
 #include <QtGui/QColor>
 #include <QtGui/QFont>
 #include <QtGui/QFontMetricsF>
-#include <QtGui/QGuiApplication>
 #include <QtGui/QImage>
+#include <QtGui/QLinearGradient>
 #include <QtGui/QPainter>
 #include <QtGui/QPainterPath>
 #include <QtGui/QPen>
+#include <QtGui/QPixmap>
+#include <QtWidgets/QApplication>
+#include <QtWidgets/QGraphicsBlurEffect>
+#include <QtWidgets/QGraphicsPixmapItem>
+#include <QtWidgets/QGraphicsScene>
 
 #include <algorithm>
 #include <cstdint>
@@ -49,6 +54,17 @@ struct RubyAnnotation {
     int posEndMs = 0;
 };
 
+struct PaintFillSpec {
+    QString mode = QStringLiteral("solid");
+    QString color = QStringLiteral("#FFFFFF");
+    QString startColor = QStringLiteral("#FFFFFF");
+    QString endColor = QStringLiteral("#FFFFFF");
+    std::vector<std::pair<int, QString>> gradientStops;
+    QString splitTopColor = QStringLiteral("#FFFFFF");
+    QString splitBottomColor = QStringLiteral("#FFFFFF");
+    int splitPositionPct = 50;
+};
+
 struct RenderConfig {
     int width = 1920;
     int height = 1080;
@@ -63,6 +79,16 @@ struct RenderConfig {
     QString afterStrokeColor = QStringLiteral("#222222");
     QString beforeStroke2Color = QStringLiteral("#000000");
     QString afterStroke2Color = QStringLiteral("#000000");
+    QString beforeShadowColor = QStringLiteral("#000000");
+    QString afterShadowColor = QStringLiteral("#000000");
+    PaintFillSpec baseFill;
+    PaintFillSpec afterFill;
+    PaintFillSpec beforeStrokeFill;
+    PaintFillSpec afterStrokeFill;
+    PaintFillSpec beforeStroke2Fill;
+    PaintFillSpec afterStroke2Fill;
+    PaintFillSpec beforeShadowFill;
+    PaintFillSpec afterShadowFill;
     QString rubyColor = QStringLiteral("#FF5A6F");
     QString rubyBaseColor = QStringLiteral("#FFFFFF");
     QString rubyFillColor = QStringLiteral("#FF5A6F");
@@ -70,6 +96,16 @@ struct RenderConfig {
     QString rubyAfterStrokeColor = QStringLiteral("#222222");
     QString rubyBeforeStroke2Color = QStringLiteral("#000000");
     QString rubyAfterStroke2Color = QStringLiteral("#000000");
+    QString rubyBeforeShadowColor = QStringLiteral("#000000");
+    QString rubyAfterShadowColor = QStringLiteral("#000000");
+    PaintFillSpec rubyBaseFill;
+    PaintFillSpec rubyAfterFill;
+    PaintFillSpec rubyBeforeStrokeFill;
+    PaintFillSpec rubyAfterStrokeFill;
+    PaintFillSpec rubyBeforeStroke2Fill;
+    PaintFillSpec rubyAfterStroke2Fill;
+    PaintFillSpec rubyBeforeShadowFill;
+    PaintFillSpec rubyAfterShadowFill;
     int strokeWidthPx = 9;
     int stroke2WidthPx = 0;
     QString decorationKind = QStringLiteral("shadow");
@@ -163,8 +199,100 @@ int intValue(const QJsonObject &object, const QString &key, int fallback = 0) {
     return value.isDouble() ? value.toInt() : fallback;
 }
 
+bool supportedFillMode(const QString &mode) {
+    return mode == QStringLiteral("solid")
+        || mode == QStringLiteral("gradient_horizontal")
+        || mode == QStringLiteral("gradient_vertical")
+        || mode == QStringLiteral("split_vertical");
+}
+
+PaintFillSpec solidPaintFill(const QString &color) {
+    PaintFillSpec fill;
+    fill.color = color;
+    fill.startColor = color;
+    fill.endColor = color;
+    fill.gradientStops = {{0, color}, {100, color}};
+    fill.splitTopColor = color;
+    fill.splitBottomColor = color;
+    return fill;
+}
+
+std::vector<std::pair<int, QString>> parseGradientStops(
+    const QJsonValue &value,
+    const QString &startColor,
+    const QString &endColor
+) {
+    std::vector<std::pair<int, QString>> stops;
+    const QJsonArray items = value.toArray();
+    for (const auto &item : items) {
+        const QJsonArray pair = item.toArray();
+        if (pair.size() < 2 || !pair.at(0).isDouble() || !pair.at(1).isString()) {
+            continue;
+        }
+        stops.push_back({
+            std::clamp(pair.at(0).toInt(), 0, 100),
+            pair.at(1).toString(),
+        });
+    }
+    if (stops.empty()) {
+        stops = {{0, startColor}, {100, endColor}};
+    }
+
+    bool hasStart = false;
+    bool hasEnd = false;
+    for (const auto &stop : stops) {
+        hasStart = hasStart || stop.first == 0;
+        hasEnd = hasEnd || stop.first == 100;
+    }
+    if (!hasStart) {
+        stops.push_back({0, startColor});
+    }
+    if (!hasEnd) {
+        stops.push_back({100, endColor});
+    }
+    std::stable_sort(stops.begin(), stops.end(), [](const auto &left, const auto &right) {
+        return left.first < right.first;
+    });
+    return stops;
+}
+
+PaintFillSpec paintFillSpec(const QJsonObject &object, const QString &fallback) {
+    PaintFillSpec fill = solidPaintFill(fallback);
+    if (object.isEmpty()) {
+        return fill;
+    }
+    const QString mode = stringValue(object, QStringLiteral("mode"), fill.mode);
+    fill.mode = supportedFillMode(mode) ? mode : QStringLiteral("solid");
+    fill.color = stringValue(object, QStringLiteral("color"), fallback);
+    fill.startColor = stringValue(object, QStringLiteral("start_color"), fill.color);
+    fill.endColor = stringValue(object, QStringLiteral("end_color"), fill.color);
+    fill.gradientStops = parseGradientStops(
+        object.value(QStringLiteral("gradient_stops")),
+        fill.startColor,
+        fill.endColor
+    );
+    fill.splitTopColor = stringValue(object, QStringLiteral("split_top_color"), fill.startColor);
+    fill.splitBottomColor = stringValue(object, QStringLiteral("split_bottom_color"), fill.endColor);
+    fill.splitPositionPct = std::clamp(
+        intValue(object, QStringLiteral("split_position_pct"), fill.splitPositionPct),
+        0,
+        100
+    );
+    return fill;
+}
+
 QString paintFillColor(const QJsonObject &object, const QString &fallback) {
-    return stringValue(object, QStringLiteral("color"), fallback);
+    return paintFillSpec(object, fallback).color;
+}
+
+PaintFillSpec karaokeLayerFillFromColors(
+    const QJsonObject &colors,
+    const QString &stateKey,
+    const QString &layerKey,
+    const QString &fallback
+) {
+    const QJsonObject state = colors.value(stateKey).toObject();
+    return paintFillSpec(state.value(layerKey).toObject(), fallback);
 }
 
 QString karaokeLayerColor(
@@ -248,6 +376,27 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.afterStrokeColor = strokeColor;
     cfg.rubyBeforeStrokeColor = strokeColor;
     cfg.rubyAfterStrokeColor = strokeColor;
+    const QString shadowColor = stringValue(style, QStringLiteral("shadow_color"), cfg.beforeShadowColor);
+    cfg.beforeShadowColor = shadowColor;
+    cfg.afterShadowColor = shadowColor;
+    cfg.rubyBeforeShadowColor = shadowColor;
+    cfg.rubyAfterShadowColor = shadowColor;
+    cfg.baseFill = solidPaintFill(cfg.baseColor);
+    cfg.afterFill = solidPaintFill(cfg.fillColor);
+    cfg.beforeStrokeFill = solidPaintFill(cfg.beforeStrokeColor);
+    cfg.afterStrokeFill = solidPaintFill(cfg.afterStrokeColor);
+    cfg.beforeStroke2Fill = solidPaintFill(cfg.beforeStroke2Color);
+    cfg.afterStroke2Fill = solidPaintFill(cfg.afterStroke2Color);
+    cfg.beforeShadowFill = solidPaintFill(cfg.beforeShadowColor);
+    cfg.afterShadowFill = solidPaintFill(cfg.afterShadowColor);
+    cfg.rubyBaseFill = solidPaintFill(cfg.rubyBaseColor);
+    cfg.rubyAfterFill = solidPaintFill(cfg.rubyFillColor);
+    cfg.rubyBeforeStrokeFill = solidPaintFill(cfg.rubyBeforeStrokeColor);
+    cfg.rubyAfterStrokeFill = solidPaintFill(cfg.rubyAfterStrokeColor);
+    cfg.rubyBeforeStroke2Fill = solidPaintFill(cfg.rubyBeforeStroke2Color);
+    cfg.rubyAfterStroke2Fill = solidPaintFill(cfg.rubyAfterStroke2Color);
+    cfg.rubyBeforeShadowFill = solidPaintFill(cfg.rubyBeforeShadowColor);
+    cfg.rubyAfterShadowFill = solidPaintFill(cfg.rubyAfterShadowColor);
     cfg.strokeWidthPx = std::max(0, intValue(style, QStringLiteral("stroke_width_px"), cfg.strokeWidthPx));
     cfg.stroke2WidthPx = std::max(0, intValue(style, QStringLiteral("stroke2_width_px"), cfg.stroke2WidthPx));
     cfg.decorationKind = stringValue(style, QStringLiteral("decoration_kind"), cfg.decorationKind);
@@ -283,6 +432,16 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.afterStrokeColor = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke"), cfg.afterStrokeColor);
     cfg.beforeStroke2Color = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke2"), cfg.beforeStroke2Color);
     cfg.afterStroke2Color = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.afterStroke2Color);
+    cfg.beforeShadowColor = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("shadow"), cfg.beforeShadowColor);
+    cfg.afterShadowColor = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("shadow"), cfg.afterShadowColor);
+    cfg.baseFill = karaokeLayerFillFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("text"), cfg.baseColor);
+    cfg.afterFill = karaokeLayerFillFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("text"), cfg.fillColor);
+    cfg.beforeStrokeFill = karaokeLayerFillFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke"), cfg.beforeStrokeColor);
+    cfg.afterStrokeFill = karaokeLayerFillFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke"), cfg.afterStrokeColor);
+    cfg.beforeStroke2Fill = karaokeLayerFillFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke2"), cfg.beforeStroke2Color);
+    cfg.afterStroke2Fill = karaokeLayerFillFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.afterStroke2Color);
+    cfg.beforeShadowFill = karaokeLayerFillFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("shadow"), cfg.beforeShadowColor);
+    cfg.afterShadowFill = karaokeLayerFillFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("shadow"), cfg.afterShadowColor);
 
     if (hasRubyKaraokeColors) {
         cfg.rubyBaseColor = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("text"), cfg.baseColor);
@@ -291,6 +450,16 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
         cfg.rubyAfterStrokeColor = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke"), cfg.afterStrokeColor);
         cfg.rubyBeforeStroke2Color = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke2"), cfg.beforeStroke2Color);
         cfg.rubyAfterStroke2Color = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.afterStroke2Color);
+        cfg.rubyBeforeShadowColor = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("shadow"), cfg.beforeShadowColor);
+        cfg.rubyAfterShadowColor = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("shadow"), cfg.afterShadowColor);
+        cfg.rubyBaseFill = karaokeLayerFillFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("text"), cfg.rubyBaseColor);
+        cfg.rubyAfterFill = karaokeLayerFillFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("text"), cfg.rubyFillColor);
+        cfg.rubyBeforeStrokeFill = karaokeLayerFillFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke"), cfg.rubyBeforeStrokeColor);
+        cfg.rubyAfterStrokeFill = karaokeLayerFillFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke"), cfg.rubyAfterStrokeColor);
+        cfg.rubyBeforeStroke2Fill = karaokeLayerFillFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke2"), cfg.rubyBeforeStroke2Color);
+        cfg.rubyAfterStroke2Fill = karaokeLayerFillFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.rubyAfterStroke2Color);
+        cfg.rubyBeforeShadowFill = karaokeLayerFillFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("shadow"), cfg.rubyBeforeShadowColor);
+        cfg.rubyAfterShadowFill = karaokeLayerFillFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("shadow"), cfg.rubyAfterShadowColor);
     } else if (hasMainKaraokeColors) {
         cfg.rubyBaseColor = cfg.baseColor;
         cfg.rubyFillColor = cfg.fillColor;
@@ -298,11 +467,31 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
         cfg.rubyAfterStrokeColor = cfg.afterStrokeColor;
         cfg.rubyBeforeStroke2Color = cfg.beforeStroke2Color;
         cfg.rubyAfterStroke2Color = cfg.afterStroke2Color;
+        cfg.rubyBeforeShadowColor = cfg.beforeShadowColor;
+        cfg.rubyAfterShadowColor = cfg.afterShadowColor;
+        cfg.rubyBaseFill = cfg.baseFill;
+        cfg.rubyAfterFill = cfg.afterFill;
+        cfg.rubyBeforeStrokeFill = cfg.beforeStrokeFill;
+        cfg.rubyAfterStrokeFill = cfg.afterStrokeFill;
+        cfg.rubyBeforeStroke2Fill = cfg.beforeStroke2Fill;
+        cfg.rubyAfterStroke2Fill = cfg.afterStroke2Fill;
+        cfg.rubyBeforeShadowFill = cfg.beforeShadowFill;
+        cfg.rubyAfterShadowFill = cfg.afterShadowFill;
     } else {
         cfg.rubyBaseColor = cfg.baseColor;
         cfg.rubyFillColor = cfg.rubyColor;
         cfg.rubyBeforeStroke2Color = QStringLiteral("#000000");
         cfg.rubyAfterStroke2Color = QStringLiteral("#000000");
+        cfg.rubyBeforeShadowColor = cfg.beforeShadowColor;
+        cfg.rubyAfterShadowColor = cfg.afterShadowColor;
+        cfg.rubyBaseFill = solidPaintFill(cfg.rubyBaseColor);
+        cfg.rubyAfterFill = solidPaintFill(cfg.rubyFillColor);
+        cfg.rubyBeforeStrokeFill = solidPaintFill(cfg.rubyBeforeStrokeColor);
+        cfg.rubyAfterStrokeFill = solidPaintFill(cfg.rubyAfterStrokeColor);
+        cfg.rubyBeforeStroke2Fill = solidPaintFill(cfg.rubyBeforeStroke2Color);
+        cfg.rubyAfterStroke2Fill = solidPaintFill(cfg.rubyAfterStroke2Color);
+        cfg.rubyBeforeShadowFill = solidPaintFill(cfg.rubyBeforeShadowColor);
+        cfg.rubyAfterShadowFill = solidPaintFill(cfg.rubyAfterShadowColor);
     }
 
     const QJsonObject track = ir.value(QStringLiteral("track")).toObject();
@@ -399,6 +588,51 @@ double progressRatio(int startMs, int endMs, int tMs) {
 QColor colorValue(const QString &value, const QColor &fallback) {
     const QColor color(value);
     return color.isValid() ? color : fallback;
+}
+
+QColor validColor(const QString &value, const QString &fallback) {
+    const QColor color(value);
+    if (color.isValid()) {
+        return color;
+    }
+    const QColor fallbackColor(fallback);
+    return fallbackColor.isValid() ? fallbackColor : QColor(QStringLiteral("#FFFFFF"));
+}
+
+QBrush brushForFill(const PaintFillSpec &fill, const QRectF &rect) {
+    if (fill.mode == QStringLiteral("gradient_horizontal")
+        || fill.mode == QStringLiteral("gradient_vertical")) {
+        const bool horizontal = fill.mode == QStringLiteral("gradient_horizontal");
+        const QPointF start = horizontal
+            ? QPointF(rect.left(), rect.center().y())
+            : QPointF(rect.center().x(), rect.top());
+        const QPointF end = horizontal
+            ? QPointF(rect.right(), rect.center().y())
+            : QPointF(rect.center().x(), rect.bottom());
+        QLinearGradient gradient(start, end);
+        for (const auto &stop : fill.gradientStops) {
+            gradient.setColorAt(
+                std::clamp(stop.first / 100.0, 0.0, 1.0),
+                validColor(stop.second, fill.color)
+            );
+        }
+        return QBrush(gradient);
+    }
+    if (fill.mode == QStringLiteral("split_vertical")) {
+        QLinearGradient gradient(
+            QPointF(rect.left(), rect.top()),
+            QPointF(rect.left(), rect.bottom())
+        );
+        const double position = std::clamp(fill.splitPositionPct / 100.0, 0.0, 1.0);
+        const QColor top = validColor(fill.splitTopColor, fill.color);
+        const QColor bottom = validColor(fill.splitBottomColor, fill.color);
+        gradient.setColorAt(0.0, top);
+        gradient.setColorAt(std::max(0.0, position - 0.001), top);
+        gradient.setColorAt(std::min(1.0, position + 0.001), bottom);
+        gradient.setColorAt(1.0, bottom);
+        return QBrush(gradient);
+    }
+    return QBrush(validColor(fill.color, QStringLiteral("#FFFFFF")));
 }
 
 QFont buildLineFont(const RenderConfig &cfg) {
@@ -1162,31 +1396,141 @@ std::optional<QRectF> afterClipRect(const RenderConfig &cfg, const TimingLine &l
 void paintKaraokePathWithWidths(
     QPainter &painter,
     const QPainterPath &path,
-    const QColor &fill,
-    const QColor &stroke,
-    const QColor &stroke2,
+    const QRectF &rect,
+    const PaintFillSpec &fill,
+    const PaintFillSpec &stroke,
+    const PaintFillSpec &stroke2,
     int strokeWidth,
     int stroke2Width
 ) {
     if (stroke2Width > 0) {
-        painter.strokePath(path, QPen(stroke2, strokeWidth + stroke2Width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.strokePath(path, QPen(brushForFill(stroke2, rect), strokeWidth + stroke2Width, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
     }
     if (strokeWidth > 0) {
-        painter.strokePath(path, QPen(stroke, strokeWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+        painter.strokePath(path, QPen(brushForFill(stroke, rect), strokeWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
     }
-    painter.fillPath(path, QBrush(fill));
+    painter.fillPath(path, brushForFill(fill, rect));
+}
+
+QImage blurImage(const QImage &source, int radius) {
+    const int blurRadius = std::max(radius, 1);
+    QImage result(source.size(), QImage::Format_ARGB32_Premultiplied);
+    result.fill(Qt::transparent);
+
+    auto *effect = new QGraphicsBlurEffect();
+    effect->setBlurRadius(static_cast<qreal>(blurRadius));
+    effect->setBlurHints(QGraphicsBlurEffect::QualityHint);
+
+    QGraphicsPixmapItem item(QPixmap::fromImage(source));
+    item.setGraphicsEffect(effect);
+
+    QGraphicsScene scene;
+    scene.setSceneRect(0.0, 0.0, static_cast<qreal>(source.width()), static_cast<qreal>(source.height()));
+    scene.addItem(&item);
+
+    QPainter painter(&result);
+    painter.setRenderHint(QPainter::Antialiasing);
+    scene.render(
+        &painter,
+        QRectF(0.0, 0.0, static_cast<qreal>(source.width()), static_cast<qreal>(source.height())),
+        QRectF(0.0, 0.0, static_cast<qreal>(source.width()), static_cast<qreal>(source.height()))
+    );
+    painter.end();
+    scene.removeItem(&item);
+    return result;
+}
+
+void paintGlowPathWithWidths(
+    QPainter &painter,
+    const QPainterPath &path,
+    const PaintFillSpec &fill,
+    const QRectF &rect,
+    int radius,
+    int strokeWidth,
+    int stroke2Width
+) {
+    const int glowRadius = std::max(radius, 1);
+    const int baseWidth = stroke2Width > 0 ? strokeWidth + stroke2Width : std::max(strokeWidth, 0);
+    const int glowWidth = std::max(1, baseWidth + glowRadius);
+    const QRectF bounds = path.boundingRect();
+    if (bounds.isEmpty()) {
+        return;
+    }
+    const double pad = std::ceil(glowWidth / 2.0 + glowRadius * 3.0) + 2.0;
+    const QRectF layerRect = bounds.adjusted(-pad, -pad, pad, pad);
+    const int imageWidth = std::max(1, static_cast<int>(std::ceil(layerRect.width())));
+    const int imageHeight = std::max(1, static_cast<int>(std::ceil(layerRect.height())));
+
+    QImage source(imageWidth, imageHeight, QImage::Format_ARGB32_Premultiplied);
+    source.fill(Qt::transparent);
+
+    QPainterPath localPath(path);
+    localPath.translate(-layerRect.left(), -layerRect.top());
+    const QRectF localRect = rect.translated(-layerRect.left(), -layerRect.top());
+
+    QPainter layerPainter(&source);
+    layerPainter.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
+    layerPainter.strokePath(localPath, QPen(brushForFill(fill, localRect), glowWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    layerPainter.end();
+
+    painter.drawImage(QPointF(layerRect.left(), layerRect.top()), blurImage(source, glowRadius));
+}
+
+void paintTextLayerStackWithWidths(
+    QPainter &painter,
+    const QPainterPath &path,
+    const QRectF &rect,
+    const PaintFillSpec &fill,
+    const PaintFillSpec &stroke,
+    const PaintFillSpec &stroke2,
+    const PaintFillSpec &shadow,
+    const RenderConfig &cfg,
+    int strokeWidth,
+    int stroke2Width,
+    int shadowOffsetX,
+    int shadowOffsetY,
+    int glowRadiusValue
+) {
+    if (cfg.decorationKind == QStringLiteral("glow")) {
+        paintGlowPathWithWidths(
+            painter,
+            path,
+            shadow,
+            rect,
+            glowRadiusValue,
+            strokeWidth,
+            stroke2Width
+        );
+    } else if (shadowOffsetX != 0 || shadowOffsetY != 0) {
+        QPainterPath shadowPath(path);
+        shadowPath.translate(shadowOffsetX, shadowOffsetY);
+        painter.fillPath(shadowPath, brushForFill(shadow, rect.translated(shadowOffsetX, shadowOffsetY)));
+    }
+
+    paintKaraokePathWithWidths(
+        painter,
+        path,
+        rect,
+        fill,
+        stroke,
+        stroke2,
+        strokeWidth,
+        stroke2Width
+    );
 }
 
 void paintRubyDiagnostics(
     QPainter &painter,
     const RenderConfig &cfg,
     const std::vector<RubyDiagnostics> &rubies,
-    const QColor &base,
-    const QColor &fill,
-    const QColor &beforeStroke,
-    const QColor &afterStroke,
-    const QColor &beforeStroke2,
-    const QColor &afterStroke2
+    const PaintFillSpec &base,
+    const PaintFillSpec &fill,
+    const PaintFillSpec &beforeStroke,
+    const PaintFillSpec &afterStroke,
+    const PaintFillSpec &beforeStroke2,
+    const PaintFillSpec &afterStroke2,
+    const PaintFillSpec &beforeShadow,
+    const PaintFillSpec &afterShadow
 ) {
     if (rubies.empty()) {
         return;
@@ -1205,14 +1549,26 @@ void paintRubyDiagnostics(
             ruby.baselineY,
             ruby.targetWidth
         );
-        paintKaraokePathWithWidths(
+        const QRectF rect(
+            ruby.x,
+            ruby.baselineY - rubyMetrics.ascent(),
+            ruby.readingWidth,
+            rubyMetrics.height()
+        );
+        paintTextLayerStackWithWidths(
             painter,
             path,
+            rect,
             base,
             beforeStroke,
             beforeStroke2,
+            beforeShadow,
+            cfg,
             strokeWidth,
-            stroke2Width
+            stroke2Width,
+            scaledSignedPx(cfg.shadowOffsetX, scale),
+            scaledSignedPx(cfg.shadowOffsetY, scale),
+            scaledPx(glowRadius(cfg, false), scale)
         );
         if (ruby.progress <= 0.0) {
             continue;
@@ -1227,39 +1583,26 @@ void paintRubyDiagnostics(
             ),
             Qt::IntersectClip
         );
-        paintKaraokePathWithWidths(
+        paintTextLayerStackWithWidths(
             painter,
             path,
+            rect,
             fill,
             afterStroke,
             afterStroke2,
+            afterShadow,
+            cfg,
             strokeWidth,
-            stroke2Width
+            stroke2Width,
+            scaledSignedPx(cfg.shadowOffsetX, scale),
+            scaledSignedPx(cfg.shadowOffsetY, scale),
+            scaledPx(glowRadius(cfg, true), scale)
         );
         painter.restore();
     }
 }
 
-void paintKaraokePath(QPainter &painter, const QPainterPath &path, const QColor &fill, const QColor &stroke, const QColor &stroke2, const RenderConfig &cfg) {
-    if (cfg.stroke2WidthPx > 0) {
-        painter.strokePath(path, QPen(stroke2, cfg.strokeWidthPx + cfg.stroke2WidthPx, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    }
-    if (cfg.strokeWidthPx > 0) {
-        painter.strokePath(path, QPen(stroke, cfg.strokeWidthPx, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    }
-    painter.fillPath(path, QBrush(fill));
-}
-
-void paintKaraokeStrokes(QPainter &painter, const QPainterPath &path, const QColor &stroke, const QColor &stroke2, const RenderConfig &cfg) {
-    if (cfg.stroke2WidthPx > 0) {
-        painter.strokePath(path, QPen(stroke2, cfg.strokeWidthPx + cfg.stroke2WidthPx, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    }
-    if (cfg.strokeWidthPx > 0) {
-        painter.strokePath(path, QPen(stroke, cfg.strokeWidthPx, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
-    }
-}
-
-void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &line, int tMs, int lane, int visibleCount, int visibleLineCount, RenderDiagnostics *diagnostics) {
+void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &line, int tMs, int lane, int visibleLineCount, RenderDiagnostics *diagnostics) {
     const QString text = lineText(line);
     if (text.isEmpty()) {
         return;
@@ -1267,33 +1610,57 @@ void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &lin
 
     const LineLayout layout = layoutLine(cfg, line, lane, visibleLineCount);
 
-    const QColor base = colorValue(cfg.baseColor, QColor(QStringLiteral("#FFFFFF")));
-    const QColor fill = colorValue(cfg.fillColor, QColor(QStringLiteral("#FF5A6F")));
-    const QColor beforeStroke = colorValue(cfg.beforeStrokeColor, QColor(QStringLiteral("#222222")));
-    const QColor afterStroke = colorValue(cfg.afterStrokeColor, beforeStroke);
-    const QColor beforeStroke2 = colorValue(cfg.beforeStroke2Color, QColor(QStringLiteral("#000000")));
-    const QColor afterStroke2 = colorValue(cfg.afterStroke2Color, beforeStroke2);
+    const QRectF lineRect(layout.x, layout.baselineY - layout.ascent, layout.width, layout.height);
     const auto rubyDiagnostics = rubyDiagnosticsForLine(cfg, line, layout, tMs);
 
     paintRubyDiagnostics(
         painter,
         cfg,
         rubyDiagnostics,
-        colorValue(cfg.rubyBaseColor, base),
-        colorValue(cfg.rubyFillColor, fill),
-        colorValue(cfg.rubyBeforeStrokeColor, beforeStroke),
-        colorValue(cfg.rubyAfterStrokeColor, afterStroke),
-        colorValue(cfg.rubyBeforeStroke2Color, beforeStroke2),
-        colorValue(cfg.rubyAfterStroke2Color, afterStroke2)
+        cfg.rubyBaseFill,
+        cfg.rubyAfterFill,
+        cfg.rubyBeforeStrokeFill,
+        cfg.rubyAfterStrokeFill,
+        cfg.rubyBeforeStroke2Fill,
+        cfg.rubyAfterStroke2Fill,
+        cfg.rubyBeforeShadowFill,
+        cfg.rubyAfterShadowFill
     );
-    paintKaraokePath(painter, layout.path, base, beforeStroke, beforeStroke2, cfg);
+    paintTextLayerStackWithWidths(
+        painter,
+        layout.path,
+        lineRect,
+        cfg.baseFill,
+        cfg.beforeStrokeFill,
+        cfg.beforeStroke2Fill,
+        cfg.beforeShadowFill,
+        cfg,
+        cfg.strokeWidthPx,
+        cfg.stroke2WidthPx,
+        cfg.shadowOffsetX,
+        cfg.shadowOffsetY,
+        glowRadius(cfg, false)
+    );
 
     const auto clip = afterClipRect(cfg, line, layout, tMs);
     if (clip.has_value() && clip->width() > 0.0) {
         painter.save();
         painter.setClipRect(*clip, Qt::IntersectClip);
-        paintKaraokeStrokes(painter, layout.path, afterStroke, afterStroke2, cfg);
-        painter.fillPath(layout.path, QBrush(fill));
+        paintTextLayerStackWithWidths(
+            painter,
+            layout.path,
+            lineRect,
+            cfg.afterFill,
+            cfg.afterStrokeFill,
+            cfg.afterStroke2Fill,
+            cfg.afterShadowFill,
+            cfg,
+            cfg.strokeWidthPx,
+            cfg.stroke2WidthPx,
+            cfg.shadowOffsetX,
+            cfg.shadowOffsetY,
+            glowRadius(cfg, true)
+        );
         painter.restore();
     }
 
@@ -1332,7 +1699,6 @@ void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &lin
             rubyDiagnostics.end()
         );
     }
-    (void)visibleCount;
 }
 
 RenderResult renderFrame(const RenderConfig &cfg, int tMs) {
@@ -1358,11 +1724,9 @@ RenderResult renderFrame(const RenderConfig &cfg, int tMs) {
     }
 
     int lane = 0;
-    int visibleCount = 0;
     for (const TimingLine *line : visibleLines) {
-        paintLine(painter, cfg, *line, tMs, lane, visibleCount, result.diagnostics.visibleLines, &result.diagnostics);
+        paintLine(painter, cfg, *line, tMs, lane, result.diagnostics.visibleLines, &result.diagnostics);
         lane = std::min(lane + 1, 2);
-        ++visibleCount;
     }
 
     painter.end();
@@ -1473,7 +1837,7 @@ QJsonObject parseErrorResponse(const QString &message) {
 
 int main(int argc, char **argv) {
     qputenv("QT_QPA_PLATFORM", qgetenv("QT_QPA_PLATFORM").isEmpty() ? QByteArray("offscreen") : qgetenv("QT_QPA_PLATFORM"));
-    QGuiApplication app(argc, argv);
+    QApplication app(argc, argv);
 
     QJsonObject ready = response(true, QStringLiteral("ready"));
     ready.insert(QStringLiteral("schema"), kProtocolSchema);

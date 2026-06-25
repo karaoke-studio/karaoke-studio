@@ -1114,6 +1114,230 @@ def test_native_ruby_stroked_pixels_match_python_within_bounded_diff(
     assert int((diff > 8).sum()) < 500
 
 
+@pytest.mark.parametrize(
+    ("decoration_kind", "t_ms", "shadow_offset_x", "shadow_offset_y", "glow_radius"),
+    [
+        ("shadow", 1000, 5, 3, 10),
+        ("shadow", 2000, 5, 3, 10),
+        ("glow", 1000, 0, 0, 8),
+        ("glow", 2000, 0, 0, 8),
+    ],
+)
+def test_native_ruby_decorated_pixels_match_python_within_bounded_diff(
+    tmp_path,
+    monkeypatch,
+    decoration_kind,
+    t_ms,
+    shadow_offset_x,
+    shadow_offset_y,
+    glow_radius,
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QImage
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    def fill(color: str) -> PaintFill:
+        return PaintFill(color=color)
+
+    line = TimingLine(
+        chars=[
+            TimingChar("A", 0),
+            TimingChar("B", 1000),
+        ],
+        end_ms=2000,
+    )
+    ruby = RubyAnnotation(
+        kanji="AB",
+        reading="xy",
+        reading_part_ms=[1600],
+        pos_start_ms=0,
+        pos_end_ms=2000,
+    )
+    style = Style(
+        font_size_px=64,
+        ruby_font_size_px=32,
+        ruby_gap_px=10,
+        line_lead_in_ms=0,
+        line_y_position="center",
+        stroke_width_px=0 if decoration_kind == "shadow" else 4,
+        stroke2_width_px=0,
+        decoration_kind=decoration_kind,
+        glow_radius_px=glow_radius,
+        glow_before_radius_px=glow_radius,
+        glow_after_radius_px=glow_radius,
+        shadow_offset_x=shadow_offset_x,
+        shadow_offset_y=shadow_offset_y,
+        shadow_color="#223344",
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=fill("#FFFFFF"),
+                stroke=fill("#202020"),
+                stroke2=fill("#00000000"),
+                shadow=fill("#223344"),
+            ),
+            after=KaraokeColorState(
+                text=fill("#FF5A6F"),
+                stroke=fill("#202020"),
+                stroke2=fill("#00000000"),
+                shadow=fill("#3355AA"),
+            ),
+        ),
+        ruby_karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=fill("#00FF88"),
+                stroke=fill("#103830"),
+                stroke2=fill("#00000000"),
+                shadow=fill("#1F5A46"),
+            ),
+            after=KaraokeColorState(
+                text=fill("#FFCC00"),
+                stroke=fill("#4A3500"),
+                stroke2=fill("#00000000"),
+                shadow=fill("#A06A00"),
+            ),
+        ),
+    )
+    track = TimingTrack(lines=[line], rubies=[ruby])
+
+    python_image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+    python_image.fill(0)
+    clear_before_layer_cache()
+    paint_frame(python_image, track, t_ms, style)
+
+    native_output = tmp_path / f"native-ruby-{decoration_kind}-python-parity-{t_ms}.png"
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=640, height=360, fps=60)
+        renderer.render_frame_png(t_ms, native_output)
+
+    python_rows = _image_rows(python_image)
+    native_rows = _image_rows(QImage(str(native_output)))
+    assert python_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    assert native_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    diff = np.abs(python_rows.astype(int) - native_rows.astype(int))
+    assert diff.mean() < 1.5
+    assert int((diff > 8).sum()) < 3_000
+
+
+@pytest.mark.parametrize(
+    ("mode", "t_ms"),
+    [
+        ("gradient_horizontal", 1000),
+        ("gradient_horizontal", 2000),
+        ("split_vertical", 1000),
+        ("split_vertical", 2000),
+    ],
+)
+def test_native_ruby_paintfill_pixels_match_python_within_bounded_diff(
+    tmp_path, monkeypatch, mode, t_ms
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QImage
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    def solid(color: str) -> PaintFill:
+        return PaintFill(color=color)
+
+    def rich_fill(start: str, middle: str, end: str) -> PaintFill:
+        return PaintFill(
+            mode=mode,
+            color=start,
+            start_color=start,
+            end_color=end,
+            gradient_stops=[(0, start), (45, middle), (100, end)],
+            split_top_color=start,
+            split_bottom_color=end,
+            split_position_pct=42,
+        )
+
+    line = TimingLine(
+        chars=[
+            TimingChar("A", 0),
+            TimingChar("B", 1000),
+        ],
+        end_ms=2000,
+    )
+    ruby = RubyAnnotation(
+        kanji="AB",
+        reading="xy",
+        reading_part_ms=[1600],
+        pos_start_ms=0,
+        pos_end_ms=2000,
+    )
+    style = Style(
+        font_size_px=64,
+        ruby_font_size_px=32,
+        ruby_gap_px=10,
+        line_lead_in_ms=0,
+        line_y_position="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        shadow_color="#00000000",
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=solid("#FFFFFF"),
+                stroke=solid("#00000000"),
+                stroke2=solid("#00000000"),
+                shadow=solid("#00000000"),
+            ),
+            after=KaraokeColorState(
+                text=solid("#FF5A6F"),
+                stroke=solid("#00000000"),
+                stroke2=solid("#00000000"),
+                shadow=solid("#00000000"),
+            ),
+        ),
+        ruby_karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=rich_fill("#00FF88", "#55AAFF", "#AA66FF"),
+                stroke=solid("#00000000"),
+                stroke2=solid("#00000000"),
+                shadow=solid("#00000000"),
+            ),
+            after=KaraokeColorState(
+                text=rich_fill("#FFCC00", "#FF6699", "#6633FF"),
+                stroke=solid("#00000000"),
+                stroke2=solid("#00000000"),
+                shadow=solid("#00000000"),
+            ),
+        ),
+    )
+    track = TimingTrack(lines=[line], rubies=[ruby])
+
+    python_image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+    python_image.fill(0)
+    clear_before_layer_cache()
+    paint_frame(python_image, track, t_ms, style)
+
+    native_output = tmp_path / f"native-ruby-{mode}-python-parity-{t_ms}.png"
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=640, height=360, fps=60)
+        renderer.render_frame_png(t_ms, native_output)
+
+    python_rows = _image_rows(python_image)
+    native_rows = _image_rows(QImage(str(native_output)))
+    assert python_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    assert native_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    diff = np.abs(python_rows.astype(int) - native_rows.astype(int))
+    assert diff.mean() < 1.0
+    assert int((diff > 8).sum()) < 1_000
+
+
 def test_native_renderer_after_stroke2_missing_does_not_inherit_before_stroke2(
     tmp_path, monkeypatch
 ):

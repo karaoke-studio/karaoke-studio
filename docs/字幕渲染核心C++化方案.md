@@ -426,15 +426,15 @@ smoke 输出示例：
 
 - 尚未接入 `preview_async.py` 或导出路径。
 - ruby 不在 C2 绘制，完整 ruby layout/timing 放到 C3。
-- 未迁移 glow、shadow、image fill、role/singer override、signal、entry/exit animation、`utopia`；stroke2 目前只覆盖纯色矩阵，gradient/image 等 PaintFill 模式仍未迁移。
+- 基础 glow / shadow 纯色装饰已在 C3b-6 迁移；image fill、role/singer override、signal、entry/exit animation、`utopia` 尚未迁移。stroke2 目前只覆盖纯色矩阵，gradient/image 等 PaintFill 模式仍未迁移。
 
 ##### C2 已知偏差 / 待办
 
-1. **glow/shadow 本体尚未绘制。**
+1. **glow/shadow 本体已绘制，缓存尚未迁移。**
    C3a 已把 native after-clip 纵向 extent 改为复刻 painter 的 visual extent 口径：
    `max(_visual_stroke_extent, after_glow_extent, |shadow_dy|, 2) + 4`，并把 smoke / pytest 的 `after_clip_top/height`
-   期望值从旧的 stroke-only 自比升级为 painter 公式真比。当前这一步只保证后续绘制 glow/shadow 时不会被错误 clip 截掉，
-   还没有在 native 里实际画 glow 或 shadow。
+   期望值从旧的 stroke-only 自比升级为 painter 公式真比。C3b-6 已补 native 实际绘制 glow/shadow 的路径与像素 diff；
+   后续还需要把 Python 侧 glow bitmap cache 的命中/复用语义迁移到 native。
 
 ### C3：ruby 与缓存迁移
 
@@ -453,10 +453,10 @@ smoke 输出示例：
 - native after-clip 的纵向 top/height 使用 painter 同口径 visual extent：
   `max(stroke/stroke2 extent, after glow extent, |shadow_dy|, 2) + 4`。
 - smoke 与 pytest 均改用 painter 公式作为期望值，新增 glow / shadow 参数化测试，避免再次退回 stroke-only 自比。
+- C3b-6 已在 native 中实际绘制基础 glow / shadow 纯色装饰，并覆盖 ruby 场景的 Python-vs-native 像素 diff。
 
 仍未完成：
 
-- native 尚未实际绘制 glow / shadow，只是 clip 边界已准备好。
 - glow bitmap cache 尚未迁移。
 
 #### C3b：横排 ruby layout/timing（2026-06-25 已启动）
@@ -476,12 +476,17 @@ smoke 输出示例：
   ruby 覆盖的主字组会作为一个连续 segment 按 rebased ruby progress 推进，而不是继续按单字 timing 推进。
 - C3b-5 已建立 ruby stroke/stroke2 的 Python-vs-native 像素 diff：覆盖中间扫光态与全唱完时刻，验证 ruby 缩放后的描边宽度、
   stroke2 宽度和 clip padding 均落入严格 bounded diff 容差。
+- C3b-6 已建立 ruby glow/shadow 的 Python-vs-native 像素 diff：覆盖中间扫光态与全唱完时刻；native 解析 `shadow` layer 颜色，
+  并按 Python `_paint_text_layer_stack()` 顺序绘制 glow/shadow、stroke/stroke2 与填充层。
+- C3b-7a 已建立 ruby PaintFill 的 gradient/split Python-vs-native 像素 diff：覆盖 `gradient_horizontal` 与
+  `split_vertical` 的中间扫光态与全唱完时刻；native 改用 `PaintFillSpec` + `QBrush` 绘制 text/stroke/stroke2/shadow 层，
+  不再把这些模式降级为纯色 `color`。
 
 仍未完成：
 
-- ruby PaintFill 的 gradient / image / split 等非纯色模式尚未迁移；当前 native 仍只读取 `color`。
+- ruby PaintFill 的 image 模式尚未迁移。
 - ruby 与 role/singer override、utopia transition、竖排路径尚未迁移。
-- ruby 在带 glow/shadow、复杂 PaintFill 下的 Python-vs-native 像素 diff 尚未建立。
+- ruby 在 image PaintFill 下的 Python-vs-native 像素 diff 尚未建立。
 
 验收：
 
