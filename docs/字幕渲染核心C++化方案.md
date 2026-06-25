@@ -332,7 +332,7 @@ krok_helper/subtitle_render/native_protocol.py
 - sidecar 启动/关闭。
 - `configure` 命令。
 - 单帧纯色/简单文字渲染。
-- shared memory 返回帧。
+- 后续接 shared memory 返回帧；C1 先用 PNG smoke 验证协议。
 - 环境变量开关：`KROK_SUBTITLE_NATIVE_RENDER=1`。
 - native 不可用时自动 fallback Python。
 
@@ -366,6 +366,14 @@ sidecar 启动后会先输出：
 - `C:\Python314\python.exe -m pytest tests\test_subtitle_render_native_protocol.py`
 - `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_native_renderer_smoke.ps1`
 
+通信硬化状态：
+
+- Python wrapper 后台排空 stderr，避免 sidecar 大量 Qt/font 日志把 stderr pipe 写满后互锁。
+- stdout 响应读取带 timeout；sidecar 卡住时会抛 `NativeRendererError`，不再无限 `readline()`。
+- stdout 上的非协议杂行会被记录为 noise 并跳过；正式响应仍要求是带 `event` 字段的 JSON object。
+- `close()` 发送 shutdown 后会 `wait(timeout=...)`，必要时 terminate/kill，避免 Windows 上遗留僵尸进程或 pipe 句柄。
+- 自动化测试使用 fake sidecar 覆盖 noisy stdout、大量 stderr、正常 round-trip 和卡死 timeout，不依赖本机 Qt/native 构建。
+
 smoke 输出示例：
 
 ```text
@@ -377,7 +385,8 @@ smoke 输出示例：
 
 - 尚未接入 `preview_async.py` 或 `renderer.py`。
 - 尚未实现 shared memory ring buffer。
-- native 侧只消费 Render IR 的基础字段，用于验证协议接缝；完整 painter 迁移从 C2 开始。
+- native 侧只消费 Render IR 的基础字段，用于验证协议接缝；当前 `afterText` 字符串拼接只是 toy renderer。
+  C2 必须重写为整行 path + 时间/字符 clip 的模型，不能继承 C1 的简单 `addText(afterText)` 路径。
 
 ### C2：普通横排路径迁移
 

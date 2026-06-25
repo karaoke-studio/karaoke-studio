@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import stat
+import sys
+import textwrap
+
+import pytest
 
 from krok_helper.subtitle_render.models import (
     RubyAnnotation,
@@ -10,6 +16,8 @@ from krok_helper.subtitle_render.models import (
     TimingTrack,
 )
 from krok_helper.subtitle_render.native_backend import (
+    NativeRendererError,
+    NativeRendererProcess,
     default_native_renderer_path,
     resolve_native_renderer_path,
 )
@@ -76,3 +84,76 @@ def test_resolve_native_renderer_path_prefers_explicit_existing_path(tmp_path, m
 def test_resolve_native_renderer_path_returns_none_when_missing(tmp_path, monkeypatch):
     monkeypatch.delenv("KROK_SUBTITLE_NATIVE_RENDERER", raising=False)
     assert resolve_native_renderer_path(root=tmp_path) is None
+
+
+def _write_fake_sidecar(tmp_path: Path, *, mode: str = "normal") -> Path:
+    script = tmp_path / "fake_sidecar.py"
+    script.write_text(
+        textwrap.dedent(
+            f"""
+            import json
+            import sys
+            import time
+
+            mode = {mode!r}
+
+            sys.stdout.write("qt debug noise before ready\\n")
+            sys.stdout.flush()
+            for i in range(160):
+                sys.stderr.write("qt warning %03d %s\\n" % (i, "x" * 1024))
+            sys.stderr.flush()
+            print(json.dumps({{"ok": True, "event": "ready", "schema": 1}}), flush=True)
+
+            for raw in sys.stdin:
+                request = json.loads(raw)
+                command = request.get("cmd")
+                if mode == "hang_after_ready":
+                    time.sleep(30)
+                if command == "configure":
+                    print(json.dumps({{"ok": True, "event": "configured"}}), flush=True)
+                elif command == "render_frame":
+                    print(json.dumps({{"ok": True, "event": "frame_ready", "checksum": "fake"}}), flush=True)
+                elif command == "shutdown":
+                    print(json.dumps({{"ok": True, "event": "shutdown"}}), flush=True)
+                    break
+                else:
+                    print(json.dumps({{"ok": False, "event": "error", "error": "bad command"}}), flush=True)
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    if os.name == "nt":
+        launcher = tmp_path / "fake_sidecar.cmd"
+        launcher.write_text(f'@echo off\r\n"{sys.executable}" "{script}" %*\r\n', encoding="utf-8")
+        return launcher
+
+    launcher = tmp_path / "fake_sidecar"
+    launcher.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{script}" "$@"\n', encoding="utf-8")
+    launcher.chmod(launcher.stat().st_mode | stat.S_IXUSR)
+    return launcher
+
+
+def test_native_renderer_process_round_trips_with_noisy_sidecar(tmp_path):
+    sidecar = _write_fake_sidecar(tmp_path)
+    renderer = NativeRendererProcess(sidecar, response_timeout_s=2.0, close_timeout_s=1.0)
+
+    ready = renderer.start()
+    assert ready["event"] == "ready"
+    assert renderer.configure(TimingTrack(), Style(), width=640, height=360, fps=60)["event"] == "configured"
+    assert renderer.render_frame_png(900, tmp_path / "frame.png")["event"] == "frame_ready"
+
+    renderer.close()
+    assert renderer.is_running is False
+
+
+def test_native_renderer_process_times_out_when_sidecar_stalls(tmp_path):
+    sidecar = _write_fake_sidecar(tmp_path, mode="hang_after_ready")
+    renderer = NativeRendererProcess(sidecar, response_timeout_s=0.3, close_timeout_s=1.0)
+
+    renderer.start()
+    with pytest.raises(NativeRendererError, match="timed out"):
+        renderer.configure(TimingTrack(), Style(), width=640, height=360, fps=60)
+
+    renderer.close()
+    assert renderer.is_running is False
