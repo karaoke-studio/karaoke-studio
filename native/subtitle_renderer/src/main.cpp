@@ -69,6 +69,9 @@ struct RenderConfig {
     int lineLeadInMs = 1800;
     int lineTailMs = 1000;
     QString lineYPosition = QStringLiteral("bottom");
+    QString lineHorizontalLayout = QStringLiteral("asymmetric");
+    int upperLineLeftMarginPx = 50;
+    int lowerLineRightMarginPx = 50;
     bool dualLineLayout = true;
     bool rightToLeft = false;
     std::vector<TimingLine> lines;
@@ -89,6 +92,17 @@ struct LineLayout {
     double descent = 0.0;
 };
 
+struct LineDiagnostics {
+    int lane = 0;
+    double lineX = 0.0;
+    double lineWidth = 0.0;
+    double baselineY = 0.0;
+    double afterClipLeft = 0.0;
+    double afterClipRight = 0.0;
+    double afterClipTop = 0.0;
+    double afterClipHeight = 0.0;
+};
+
 struct RenderDiagnostics {
     int visibleLines = 0;
     bool hasFirstLine = false;
@@ -99,6 +113,7 @@ struct RenderDiagnostics {
     double afterClipRight = 0.0;
     double afterClipTop = 0.0;
     double afterClipHeight = 0.0;
+    std::vector<LineDiagnostics> lines;
 };
 
 struct RenderResult {
@@ -195,6 +210,9 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.lineLeadInMs = std::max(0, intValue(style, QStringLiteral("line_lead_in_ms"), cfg.lineLeadInMs));
     cfg.lineTailMs = std::max(0, intValue(style, QStringLiteral("line_tail_ms"), cfg.lineTailMs));
     cfg.lineYPosition = stringValue(style, QStringLiteral("line_y_position"), cfg.lineYPosition);
+    cfg.lineHorizontalLayout = stringValue(style, QStringLiteral("line_horizontal_layout"), cfg.lineHorizontalLayout);
+    cfg.upperLineLeftMarginPx = std::max(0, intValue(style, QStringLiteral("upper_line_left_margin_px"), cfg.upperLineLeftMarginPx));
+    cfg.lowerLineRightMarginPx = std::max(0, intValue(style, QStringLiteral("lower_line_right_margin_px"), cfg.lowerLineRightMarginPx));
     cfg.dualLineLayout = style.value(QStringLiteral("dual_line_layout")).isBool()
         ? style.value(QStringLiteral("dual_line_layout")).toBool()
         : cfg.dualLineLayout;
@@ -206,7 +224,7 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.beforeStrokeColor = karaokeLayerColor(style, QStringLiteral("before"), QStringLiteral("stroke"), cfg.beforeStrokeColor);
     cfg.afterStrokeColor = karaokeLayerColor(style, QStringLiteral("after"), QStringLiteral("stroke"), cfg.afterStrokeColor);
     cfg.beforeStroke2Color = karaokeLayerColor(style, QStringLiteral("before"), QStringLiteral("stroke2"), cfg.beforeStroke2Color);
-    cfg.afterStroke2Color = karaokeLayerColor(style, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.beforeStroke2Color);
+    cfg.afterStroke2Color = karaokeLayerColor(style, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.afterStroke2Color);
 
     const QJsonObject track = ir.value(QStringLiteral("track")).toObject();
     const QJsonArray lines = track.value(QStringLiteral("lines")).toArray();
@@ -320,7 +338,7 @@ double visualStrokeExtent(const RenderConfig &cfg) {
 
 double baselineYForLine(const RenderConfig &cfg, const QFontMetricsF &metrics, int lane, int visibleLineCount) {
     const double pad = visualStrokeExtent(cfg);
-    if (cfg.dualLineLayout && visibleLineCount >= 2) {
+    if (cfg.dualLineLayout) {
         const double mainHeight = metrics.ascent() + metrics.descent() + pad * 2.0;
         const double mainAscent = metrics.ascent() + pad;
         const double mainDescent = metrics.descent() + pad;
@@ -351,6 +369,19 @@ double baselineYForLine(const RenderConfig &cfg, const QFontMetricsF &metrics, i
     return cfg.height - cfg.lineYMarginPx - pad - metrics.descent();
 }
 
+double lineXForLine(const RenderConfig &cfg, double lineWidth, double pad, int lane) {
+    if (cfg.lineHorizontalLayout == QStringLiteral("center")) {
+        return (cfg.width - lineWidth) * 0.5;
+    }
+    if (cfg.dualLineLayout && std::min(lane, 1) == 0) {
+        return cfg.upperLineLeftMarginPx + pad;
+    }
+    if (cfg.dualLineLayout && std::min(lane, 1) == 1) {
+        return cfg.width - cfg.lowerLineRightMarginPx - lineWidth - pad;
+    }
+    return (cfg.width - lineWidth) * 0.5;
+}
+
 LineLayout layoutLine(const RenderConfig &cfg, const TimingLine &line, int lane, int visibleLineCount) {
     const QString text = lineText(line);
 
@@ -372,7 +403,7 @@ LineLayout layoutLine(const RenderConfig &cfg, const TimingLine &line, int lane,
     }
     totalWidth += std::max(0, static_cast<int>(line.chars.size()) - 1) * cfg.letterSpacingPx;
     layout.width = std::max(1.0, totalWidth);
-    layout.x = (cfg.width - layout.width) * 0.5;
+    layout.x = lineXForLine(cfg, layout.width, visualStrokeExtent(cfg), lane);
 
     layout.baselineY = baselineYForLine(cfg, metrics, lane, visibleLineCount);
 
@@ -487,22 +518,34 @@ void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &lin
         painter.restore();
     }
 
-    if (diagnostics != nullptr && !diagnostics->hasFirstLine) {
-        diagnostics->hasFirstLine = true;
-        diagnostics->lineX = layout.x;
-        diagnostics->lineWidth = layout.width;
-        diagnostics->baselineY = layout.baselineY;
+    if (diagnostics != nullptr) {
+        LineDiagnostics lineDiagnostics;
+        lineDiagnostics.lane = lane;
+        lineDiagnostics.lineX = layout.x;
+        lineDiagnostics.lineWidth = layout.width;
+        lineDiagnostics.baselineY = layout.baselineY;
         if (clip.has_value()) {
-            diagnostics->afterClipLeft = clip->left();
-            diagnostics->afterClipRight = clip->right();
-            diagnostics->afterClipTop = clip->top();
-            diagnostics->afterClipHeight = clip->height();
+            lineDiagnostics.afterClipLeft = clip->left();
+            lineDiagnostics.afterClipRight = clip->right();
+            lineDiagnostics.afterClipTop = clip->top();
+            lineDiagnostics.afterClipHeight = clip->height();
         } else {
-            diagnostics->afterClipLeft = layout.x;
-            diagnostics->afterClipRight = layout.x;
+            lineDiagnostics.afterClipLeft = layout.x;
+            lineDiagnostics.afterClipRight = layout.x;
             const double strokePad = std::ceil(cfg.strokeWidthPx / 2.0);
-            diagnostics->afterClipTop = layout.baselineY - layout.ascent - strokePad;
-            diagnostics->afterClipHeight = layout.height + strokePad * 2.0;
+            lineDiagnostics.afterClipTop = layout.baselineY - layout.ascent - strokePad;
+            lineDiagnostics.afterClipHeight = layout.height + strokePad * 2.0;
+        }
+        diagnostics->lines.push_back(lineDiagnostics);
+        if (!diagnostics->hasFirstLine) {
+            diagnostics->hasFirstLine = true;
+            diagnostics->lineX = lineDiagnostics.lineX;
+            diagnostics->lineWidth = lineDiagnostics.lineWidth;
+            diagnostics->baselineY = lineDiagnostics.baselineY;
+            diagnostics->afterClipLeft = lineDiagnostics.afterClipLeft;
+            diagnostics->afterClipRight = lineDiagnostics.afterClipRight;
+            diagnostics->afterClipTop = lineDiagnostics.afterClipTop;
+            diagnostics->afterClipHeight = lineDiagnostics.afterClipHeight;
         }
     }
     (void)visibleCount;
@@ -585,6 +628,20 @@ QJsonObject handleRenderFrame(const QJsonObject &request, const std::optional<Re
     out.insert(QStringLiteral("output_path"), outputPath);
     out.insert(QStringLiteral("checksum"), QString::number(imageChecksum(image)));
     out.insert(QStringLiteral("visible_lines"), rendered.diagnostics.visibleLines);
+    QJsonArray lineDiagnostics;
+    for (const LineDiagnostics &line : rendered.diagnostics.lines) {
+        QJsonObject item;
+        item.insert(QStringLiteral("lane"), line.lane);
+        item.insert(QStringLiteral("line_x"), line.lineX);
+        item.insert(QStringLiteral("line_width"), line.lineWidth);
+        item.insert(QStringLiteral("baseline_y"), line.baselineY);
+        item.insert(QStringLiteral("after_clip_left"), line.afterClipLeft);
+        item.insert(QStringLiteral("after_clip_right"), line.afterClipRight);
+        item.insert(QStringLiteral("after_clip_top"), line.afterClipTop);
+        item.insert(QStringLiteral("after_clip_height"), line.afterClipHeight);
+        lineDiagnostics.append(item);
+    }
+    out.insert(QStringLiteral("line_diagnostics"), lineDiagnostics);
     if (rendered.diagnostics.hasFirstLine) {
         out.insert(QStringLiteral("line_x"), rendered.diagnostics.lineX);
         out.insert(QStringLiteral("line_width"), rendered.diagnostics.lineWidth);

@@ -62,14 +62,20 @@ $env:KROK_NATIVE_SMOKE_OUTPUT = $OutputPath
 
 @'
 import os
-import math
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication
 
-from krok_helper.subtitle_render.engine.painter import _fill_clip_band, _layout_line
+from krok_helper.subtitle_render.engine.painter import (
+    _fill_clip_band,
+    _horizontal_after_path_clip_rect,
+    _layout_line,
+    _resolve_display_baselines,
+    _resolve_sayatoo_line_layouts,
+    _resolve_visible_content,
+)
 from krok_helper.subtitle_render.models import (
     KaraokeColors,
     KaraokeColorState,
@@ -115,7 +121,31 @@ style = Style(
 )
 output = Path(os.environ["KROK_NATIVE_SMOKE_OUTPUT"])
 app = QApplication.instance() or QApplication([])
-py_layout = _layout_line(track, track.lines[0], style, 640, 360)
+track_t_ms, display_style, display_lines, _signal_lines, _title_opacity = (
+    _resolve_visible_content(track, 900, style)
+)
+baselines = _resolve_display_baselines(360, track, display_lines, display_style)
+line_layouts = _resolve_sayatoo_line_layouts(
+    640,
+    360,
+    track,
+    display_lines,
+    baselines,
+    track_t_ms,
+    display_style,
+)
+display_line = display_lines[0]
+line_layout = line_layouts[display_line.lane]
+py_layout = _layout_line(
+    track,
+    display_line.line,
+    display_style,
+    640,
+    360,
+    baseline_y=line_layout.baseline_y,
+    line_x=line_layout.text_x,
+    lane=display_line.lane,
+)
 assert py_layout is not None
 
 
@@ -128,9 +158,15 @@ def assert_close(actual, expected, label, tolerance=4.0):
     assert abs(float(actual) - float(expected)) <= tolerance, (label, actual, expected)
 
 
-stroke_pad = math.ceil(style.stroke_width_px / 2)
-expected_clip_top = py_layout.baseline_y - py_layout.metrics.ascent() - stroke_pad
-expected_clip_height = py_layout.metrics.height() + stroke_pad * 2
+expected_clip = _horizontal_after_path_clip_rect(
+    py_layout.fill_segments,
+    py_layout.baseline_y,
+    py_layout.metrics,
+    900,
+    py_layout.rtl,
+    style.stroke_width_px,
+)
+assert expected_clip is not None
 
 
 with NativeRendererProcess() as renderer:
@@ -146,8 +182,8 @@ with NativeRendererProcess() as renderer:
     assert_close(line_x, py_layout.x0, "line_x")
     assert_close(frame900["line_width"], py_layout.total_w, "line_width")
     assert_close(frame900["baseline_y"], py_layout.baseline_y, "baseline_y")
-    assert_close(frame900["after_clip_top"], expected_clip_top, "clip_top")
-    assert_close(frame900["after_clip_height"], expected_clip_height, "clip_height")
+    assert_close(frame900["after_clip_top"], expected_clip.top(), "clip_top")
+    assert_close(frame900["after_clip_height"], expected_clip.height(), "clip_height")
     clips = [
         frame0["after_clip_right"],
         frame200["after_clip_right"],

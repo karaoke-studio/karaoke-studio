@@ -83,6 +83,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     paint_frame,
     frame_vertical_bounds,
     clear_before_layer_cache,
+    _TEXT_RUN_LAYER_CACHE,
     _RUN_GLOW_CACHE,
 )
 from krok_helper.subtitle_render.engine.layers import LayerCompositor, LayerContext, SCOPE_GROUP  # noqa: E402
@@ -3085,6 +3086,34 @@ def _img_rows_rgba(image: QImage) -> np.ndarray:
     ptr.setsize(img.sizeInBytes())
     arr = np.frombuffer(ptr, dtype=np.uint8, count=bpl * h).reshape(h, bpl)
     return arr[:, : w * 4].copy()
+
+
+@pytest.mark.parametrize("t_ms", [1000, 1300, 1800, 2500])
+def test_horizontal_layer_path_matches_direct_within_rounding(qapp, monkeypatch, t_ms):
+    track = _track()
+    style = Style(
+        font_size_px=48,
+        line_lead_in_ms=0,
+        stroke_width_px=4,
+        stroke2_width_px=2,
+        decoration_kind="none",
+    )
+
+    monkeypatch.setenv("KROK_SUBTITLE_HORIZONTAL_LAYER", "0")
+    clear_before_layer_cache()
+    direct = _blank()
+    paint_frame(direct, track, t_ms, style)
+    assert len(_TEXT_RUN_LAYER_CACHE) == 0
+
+    monkeypatch.setenv("KROK_SUBTITLE_HORIZONTAL_LAYER", "1")
+    clear_before_layer_cache()
+    layers = _blank()
+    paint_frame(layers, track, t_ms, style)
+    assert len(_TEXT_RUN_LAYER_CACHE) > 0
+    clear_before_layer_cache()
+
+    diff = np.abs(_img_rows_rgba(direct).astype(int) - _img_rows_rgba(layers).astype(int))
+    assert diff.max() <= 1
 
 
 @pytest.mark.parametrize("t_ms", [800, 1200, 1700, 2100, 2600])

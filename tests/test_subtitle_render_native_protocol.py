@@ -1,15 +1,24 @@
 from __future__ import annotations
 
-import math
 import os
 from pathlib import Path
 import stat
 import sys
 import textwrap
 
+import numpy as np
 import pytest
 
-from krok_helper.subtitle_render.engine.painter import _fill_clip_band, _layout_line
+from krok_helper.subtitle_render.engine.painter import (
+    clear_before_layer_cache,
+    _fill_clip_band,
+    _horizontal_after_path_clip_rect,
+    _layout_line,
+    _resolve_display_baselines,
+    _resolve_sayatoo_line_layouts,
+    _resolve_visible_content,
+    paint_frame,
+)
 from krok_helper.subtitle_render.models import (
     KaraokeColors,
     KaraokeColorState,
@@ -207,7 +216,31 @@ def test_native_renderer_process_matches_python_layout_when_exe_exists(tmp_path,
             ),
         ),
     )
-    py_layout = _layout_line(track, track.lines[0], style, 640, 360)
+    track_t_ms, display_style, display_lines, _signal_lines, _title_opacity = (
+        _resolve_visible_content(track, 900, style)
+    )
+    baselines = _resolve_display_baselines(360, track, display_lines, display_style)
+    line_layouts = _resolve_sayatoo_line_layouts(
+        640,
+        360,
+        track,
+        display_lines,
+        baselines,
+        track_t_ms,
+        display_style,
+    )
+    display_line = display_lines[0]
+    line_layout = line_layouts[display_line.lane]
+    py_layout = _layout_line(
+        track,
+        display_line.line,
+        display_style,
+        640,
+        360,
+        baseline_y=line_layout.baseline_y,
+        line_x=line_layout.text_x,
+        lane=display_line.lane,
+    )
     assert py_layout is not None
 
     def assert_close(actual, expected, label, tolerance=4.0):
@@ -217,9 +250,15 @@ def test_native_renderer_process_matches_python_layout_when_exe_exists(tmp_path,
         band = _fill_clip_band(py_layout.fill_segments, t_ms, py_layout.rtl)
         return py_layout.x0 if band is None else band[1]
 
-    stroke_pad = math.ceil(style.stroke_width_px / 2)
-    expected_clip_top = py_layout.baseline_y - py_layout.metrics.ascent() - stroke_pad
-    expected_clip_height = py_layout.metrics.height() + stroke_pad * 2
+    expected_clip = _horizontal_after_path_clip_rect(
+        py_layout.fill_segments,
+        py_layout.baseline_y,
+        py_layout.metrics,
+        900,
+        py_layout.rtl,
+        style.stroke_width_px,
+    )
+    assert expected_clip is not None
 
     with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
         renderer.configure(track, style, width=640, height=360, fps=60)
@@ -231,9 +270,314 @@ def test_native_renderer_process_matches_python_layout_when_exe_exists(tmp_path,
     assert_close(frame900["line_x"], py_layout.x0, "line_x")
     assert_close(frame900["line_width"], py_layout.total_w, "line_width")
     assert_close(frame900["baseline_y"], py_layout.baseline_y, "baseline_y")
-    assert_close(frame900["after_clip_top"], expected_clip_top, "clip_top")
-    assert_close(frame900["after_clip_height"], expected_clip_height, "clip_height")
+    assert_close(frame900["after_clip_top"], expected_clip.top(), "clip_top")
+    assert_close(frame900["after_clip_height"], expected_clip.height(), "clip_height")
     assert_close(frame0["after_clip_right"], py_clip_right(0), "clip@0")
     assert_close(frame200["after_clip_right"], py_clip_right(200), "clip@200")
     assert_close(frame900["after_clip_right"], py_clip_right(900), "clip@900")
     assert_close(frame1800["after_clip_right"], py_clip_right(1800), "clip@1800")
+
+
+def test_native_renderer_matches_python_layout_for_lower_lane_when_two_lines_visible(
+    tmp_path, monkeypatch
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("U", 0),
+                    TimingChar("p", 400),
+                ],
+                end_ms=1800,
+            ),
+            TimingLine(
+                chars=[
+                    TimingChar("D", 0),
+                    TimingChar("n", 400),
+                ],
+                end_ms=1800,
+            ),
+        ],
+    )
+    style = Style(
+        font_size_px=48,
+        ruby_font_size_px=20,
+        line_lead_in_ms=0,
+        stroke_width_px=10,
+        stroke2_width_px=6,
+        line_y_margin_px=70,
+        line_gap_px=60,
+        upper_line_left_margin_px=50,
+        lower_line_right_margin_px=50,
+    )
+    track_t_ms, display_style, display_lines, _signal_lines, _title_opacity = (
+        _resolve_visible_content(track, 900, style)
+    )
+    assert [display_line.lane for display_line in display_lines[:2]] == [0, 1]
+
+    baselines = _resolve_display_baselines(360, track, display_lines, display_style)
+    line_layouts = _resolve_sayatoo_line_layouts(
+        640,
+        360,
+        track,
+        display_lines,
+        baselines,
+        track_t_ms,
+        display_style,
+    )
+    expected_layouts = []
+    for display_line in display_lines[:2]:
+        line_layout = line_layouts[display_line.lane]
+        py_layout = _layout_line(
+            track,
+            display_line.line,
+            display_style,
+            640,
+            360,
+            baseline_y=line_layout.baseline_y,
+            line_x=line_layout.text_x,
+            lane=display_line.lane,
+        )
+        assert py_layout is not None
+        expected_layouts.append(py_layout)
+
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=640, height=360, fps=60)
+        frame900 = renderer.render_frame_png(900, tmp_path / "two-line-frame-900.png")
+
+    assert frame900["visible_lines"] == 2
+    assert len(frame900["line_diagnostics"]) == 2
+    for index, py_layout in enumerate(expected_layouts):
+        native_line = frame900["line_diagnostics"][index]
+        assert native_line["lane"] == index
+        assert abs(float(native_line["line_x"]) - float(py_layout.x0)) <= 4.0
+        assert abs(float(native_line["line_width"]) - float(py_layout.total_w)) <= 4.0
+        assert abs(float(native_line["baseline_y"]) - float(py_layout.baseline_y)) <= 4.0
+
+
+def test_native_renderer_after_stroke2_missing_does_not_inherit_before_stroke2(
+    tmp_path, monkeypatch
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QImage
+
+    def fill(color: str) -> PaintFill:
+        return PaintFill(color=color)
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("K", 0),
+                    TimingChar("a", 400),
+                    TimingChar("r", 800),
+                    TimingChar("a", 1200),
+                ],
+                end_ms=1800,
+            )
+        ],
+    )
+    style = Style(
+        font_size_px=72,
+        line_lead_in_ms=0,
+        stroke_width_px=8,
+        stroke2_width_px=18,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=fill("#FFFFFF"),
+                stroke=fill("#222222"),
+                stroke2=fill("#00FF00"),
+            ),
+            after=KaraokeColorState(
+                text=fill("#FF5A6F"),
+                stroke=fill("#222222"),
+                stroke2=fill("#000000"),
+            ),
+        ),
+    )
+    ir = build_render_ir(track, style, width=640, height=360, fps=60)
+    del ir["style"]["karaoke_colors"]["after"]["stroke2"]
+
+    explicit_output = tmp_path / "explicit-after-stroke2.png"
+    missing_output = tmp_path / "missing-after-stroke2.png"
+    explicit_ir = build_render_ir(track, style, width=640, height=360, fps=60)
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer._send({"cmd": "configure", "ir": explicit_ir})
+        renderer._expect_ok(renderer._read_response())
+        renderer.render_frame_png(1800, explicit_output)
+
+        renderer._send({"cmd": "configure", "ir": ir})
+        renderer._expect_ok(renderer._read_response())
+        renderer.render_frame_png(1800, missing_output)
+
+    explicit = QImage(str(explicit_output)).convertToFormat(QImage.Format.Format_RGBA8888)
+    missing = QImage(str(missing_output)).convertToFormat(QImage.Format.Format_RGBA8888)
+    assert explicit.size() == missing.size()
+    for y in range(explicit.height()):
+        for x in range(explicit.width()):
+            assert explicit.pixelColor(x, y).rgba() == missing.pixelColor(x, y).rgba()
+
+
+@pytest.mark.parametrize("t_ms", [0, 900, 1800])
+def test_native_plain_horizontal_pixels_stay_within_bounded_diff(
+    tmp_path, monkeypatch, t_ms
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QImage
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    def fill(color: str) -> PaintFill:
+        return PaintFill(color=color)
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("K", 0),
+                    TimingChar("a", 400),
+                    TimingChar("r", 800),
+                    TimingChar("a", 1200),
+                ],
+                end_ms=1800,
+            )
+        ],
+    )
+    style = Style(
+        font_size_px=48,
+        line_lead_in_ms=0,
+        stroke_width_px=10,
+        stroke2_width_px=6,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=fill("#FFFFFF"),
+                stroke=fill("#222222"),
+                stroke2=fill("#202020"),
+            ),
+            after=KaraokeColorState(
+                text=fill("#FF5A6F"),
+                stroke=fill("#222222"),
+                stroke2=fill("#303030"),
+            ),
+        ),
+    )
+
+    python_image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+    python_image.fill(0)
+    clear_before_layer_cache()
+    paint_frame(python_image, track, t_ms, style)
+
+    native_output = tmp_path / f"native-plain-horizontal-{t_ms}.png"
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=640, height=360, fps=60)
+        renderer.render_frame_png(t_ms, native_output)
+
+    def image_rows(image: QImage) -> np.ndarray:
+        converted = image.convertToFormat(QImage.Format.Format_RGBA8888)
+        height, width = converted.height(), converted.width()
+        bytes_per_line = converted.bytesPerLine()
+        bits = converted.constBits()
+        bits.setsize(converted.sizeInBytes())
+        rows = np.frombuffer(bits, dtype=np.uint8, count=bytes_per_line * height).reshape(
+            height, bytes_per_line
+        )
+        return rows[:, : width * 4].copy()
+
+    diff = np.abs(
+        image_rows(python_image).astype(int)
+        - image_rows(QImage(str(native_output))).astype(int)
+    )
+    assert diff.mean() < 10.0
+    assert int((diff > 8).sum()) < 50_000
+
+
+def test_native_two_line_horizontal_pixels_stay_within_bounded_diff(
+    tmp_path, monkeypatch
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QImage
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("U", 0),
+                    TimingChar("p", 400),
+                ],
+                end_ms=1800,
+            ),
+            TimingLine(
+                chars=[
+                    TimingChar("D", 0),
+                    TimingChar("n", 400),
+                ],
+                end_ms=1800,
+            ),
+        ],
+    )
+    style = Style(
+        font_size_px=48,
+        line_lead_in_ms=0,
+        stroke_width_px=10,
+        stroke2_width_px=6,
+        line_y_margin_px=70,
+        line_gap_px=60,
+        upper_line_left_margin_px=50,
+        lower_line_right_margin_px=50,
+    )
+
+    python_image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+    python_image.fill(0)
+    clear_before_layer_cache()
+    paint_frame(python_image, track, 900, style)
+
+    native_output = tmp_path / "native-two-line-horizontal-900.png"
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=640, height=360, fps=60)
+        renderer.render_frame_png(900, native_output)
+
+    def image_rows(image: QImage) -> np.ndarray:
+        converted = image.convertToFormat(QImage.Format.Format_RGBA8888)
+        height, width = converted.height(), converted.width()
+        bytes_per_line = converted.bytesPerLine()
+        bits = converted.constBits()
+        bits.setsize(converted.sizeInBytes())
+        rows = np.frombuffer(bits, dtype=np.uint8, count=bytes_per_line * height).reshape(
+            height, bytes_per_line
+        )
+        return rows[:, : width * 4].copy()
+
+    diff = np.abs(
+        image_rows(python_image).astype(int)
+        - image_rows(QImage(str(native_output))).astype(int)
+    )
+    assert diff.mean() < 10.0
+    assert int((diff > 8).sum()) < 50_000

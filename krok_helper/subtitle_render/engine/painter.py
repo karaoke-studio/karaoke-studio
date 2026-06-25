@@ -96,6 +96,19 @@ def _vertical_layer_enabled() -> bool:
     return os.environ.get("KROK_SUBTITLE_VERTICAL_LAYER", "1").strip().lower() not in (
         "0", "false", "no", "off",
     )
+
+
+def _horizontal_layer_enabled() -> bool:
+    """横排主文本走 LayerCompositor + bake 缓存。
+
+    默认开启；``KROK_SUBTITLE_HORIZONTAL_LAYER=0`` 保留同 layout 的矢量直绘
+    oracle，供 direct-vs-bake 像素回归使用。
+    """
+    return os.environ.get("KROK_SUBTITLE_HORIZONTAL_LAYER", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+
+
 _RUBY_COMBINING_CHARS = set("ぁぃぅぇぉゃゅょゎァィゥェォャュョヮ\u3099\u309A")
 
 
@@ -3239,8 +3252,11 @@ def _paint_line_static(
             )
         return
 
-    # paint 段：消费 layout，blit 未唱层 + 已唱层（不再每帧重排版）。
-    _paint_line_layers(painter, layout, t_ms)
+    # paint 段：消费 layout。默认 blit 未唱层 + 已唱层；测试/调试可回退同 layout 直绘。
+    if _horizontal_layer_enabled():
+        _paint_line_layers(painter, layout, t_ms)
+    else:
+        _paint_line_direct(painter, layout, t_ms)
 
 
 def _layout_line(
@@ -3718,6 +3734,31 @@ def _paint_line_layers(
     )
 
 
+def _paint_line_direct(
+    painter: QPainter,
+    layout: _LineLayout,
+    t_ms: int,
+) -> None:
+    """Vector oracle for horizontal static lines, sharing the baked path layout."""
+    runs = [layout.text_layout.glyphs] if not layout.has_inline_styles else _glyph_runs(layout.text_layout)
+    y = layout.baseline_y
+    for run in runs:
+        _paint_glyph_run_direct(painter, run, y, after=False)
+
+    after_band = _fill_clip_band(layout.fill_segments, t_ms, layout.rtl)
+    if after_band is None:
+        return
+    for run in runs:
+        if _glyph_run_needs_after_glow(run):
+            _paint_glyph_run_after_glow_direct(painter, run, y, after_band)
+        painter.save()
+        try:
+            painter.setClipRect(_horizontal_after_clip_rect(after_band, layout.rtl))
+            _paint_glyph_run_direct(painter, run, y, after=True)
+        finally:
+            painter.restore()
+
+
 def _line_layer_stack(layout: _LineLayout, t_ms: int) -> list:
     runs = [layout.text_layout.glyphs] if not layout.has_inline_styles else _glyph_runs(layout.text_layout)
     y = layout.baseline_y
@@ -3755,6 +3796,79 @@ def _line_layer_stack(layout: _LineLayout, t_ms: int) -> list:
             )
         )
     return before_layers + after_layers
+
+
+def _horizontal_after_clip_rect(band: tuple[int, int], rtl: bool) -> QRectF:
+    band_left, band_right = band
+    if rtl:
+        return QRectF(float(band_left), -1_000_000.0, 1_000_000.0, 2_000_000.0)
+    return QRectF(-1_000_000.0, -1_000_000.0, float(band_right) + 1_000_000.0, 2_000_000.0)
+
+
+def _paint_glyph_run_direct(
+    painter: QPainter,
+    glyphs: list[_GlyphLayout],
+    baseline_y: int,
+    *,
+    after: bool,
+) -> None:
+    role_style = glyphs[0].style
+    colors = _effective_karaoke_colors(role_style)
+    state = colors.after if after else colors.before
+    path = _glyph_run_path(glyphs, baseline_y)
+    rect = _glyph_run_rect(glyphs, baseline_y)
+    _paint_text_layer_stack(
+        painter,
+        path,
+        rect,
+        state,
+        role_style,
+        stroke_width=role_style.stroke_width_px,
+        stroke2_width=role_style.stroke2_width_px,
+        shadow_dx=role_style.shadow_offset_x,
+        shadow_dy=role_style.shadow_offset_y,
+        glow_radius=_glow_radius(role_style, after=after),
+        draw_glow=not (after and role_style.decoration_kind == "glow"),
+    )
+
+
+def _paint_glyph_run_after_glow_direct(
+    painter: QPainter,
+    glyphs: list[_GlyphLayout],
+    baseline_y: int,
+    band: tuple[int, int],
+) -> None:
+    role_style = glyphs[0].style
+    colors = _effective_karaoke_colors(role_style)
+    path = _glyph_run_path(glyphs, baseline_y)
+    rect = _glyph_run_rect(glyphs, baseline_y)
+    band_left, band_right = band
+    pad = _glow_extent(
+        role_style.stroke_width_px,
+        role_style.stroke2_width_px,
+        _glow_radius(role_style, after=True),
+    )
+    painter.save()
+    try:
+        painter.setClipRect(
+            QRectF(
+                float(band_left),
+                rect.top() - pad,
+                float(band_right - band_left),
+                rect.height() + pad * 2,
+            )
+        )
+        _paint_glow_path(
+            painter,
+            path,
+            colors.after.shadow,
+            rect,
+            _glow_radius(role_style, after=True),
+            role_style.stroke_width_px,
+            role_style.stroke2_width_px,
+        )
+    finally:
+        painter.restore()
 
 
 def _spin_flip_char_transform(
@@ -5806,16 +5920,13 @@ def _paint_after_path(
     band = _fill_clip_band(fill_segments, t_ms, rtl)
     if band is None:
         return
-    fill_start, fill_end = band
-    stroke_pad = 0 if stroke_width is None else math.ceil(stroke_width / 2)
+    clip = _horizontal_after_path_clip_rect(
+        fill_segments, y, metrics, t_ms, rtl, stroke_width
+    )
+    if clip is None:
+        return
     painter.save()
     try:
-        clip = QRectF(
-            float(fill_start - stroke_pad),
-            float(y - metrics.ascent() - stroke_pad),
-            float((fill_end - fill_start) + stroke_pad),
-            float(metrics.height() + stroke_pad * 2),
-        )
         painter.setClipRect(clip)
         if stroke_width is None:
             _paint_fill_path(painter, path, fill, rect)
@@ -5823,6 +5934,27 @@ def _paint_after_path(
             _paint_stroke_path(painter, path, fill, rect, stroke_width)
     finally:
         painter.restore()
+
+
+def _horizontal_after_path_clip_rect(
+    fill_segments: list[_FillSegment],
+    y: int,
+    metrics: QFontMetrics,
+    t_ms: int,
+    rtl: bool,
+    stroke_width: int | None,
+) -> QRectF | None:
+    band = _fill_clip_band(fill_segments, t_ms, rtl)
+    if band is None:
+        return None
+    fill_start, fill_end = band
+    stroke_pad = 0 if stroke_width is None else math.ceil(stroke_width / 2)
+    return QRectF(
+        float(fill_start - stroke_pad),
+        float(y - metrics.ascent() - stroke_pad),
+        float((fill_end - fill_start) + stroke_pad),
+        float(metrics.height() + stroke_pad * 2),
+    )
 
 
 def _legacy_fill_extent_end(
