@@ -547,7 +547,22 @@ smoke 输出示例：
   现有 target/effective timing 与 ruby 专属 PaintFill。
 - 已实现：主字 group + ruby reading 的 entry / wipe / exit 三个关键帧 Python-vs-native bounded 像素 diff；
   测试使用无 glow、无描边场景，先锁定 group/reading 动画几何与 opacity。
-- 暂不纳入：跨行 group、inline role utopia、utopia glow transform cache。
+- 暂不纳入：跨行 group、inline role utopia。
+
+#### C4-3 实装状态（2026-06-25 已完成第一刀）
+
+- 已实现：native transformed text stack 支持传入上正 `QPainterPath` / `QRectF` / `QTransform`，
+  在 `utopia` 路径下先按上正 glyph/group/ruby path 构建 glow bitmap，再用同一 transform blit；
+  主体文字、描边、扫光填充仍保持矢量绘制。
+- 已实现：主文本单字/多字 ruby group、ruby reading visual unit、ruby 退场 group 均接入同一
+  transformed glow cache 路径；非 `utopia` 路径继续使用原有逐帧绘制/基础 blur LRU。
+- 已实现：`KROK_SUBTITLE_NATIVE_GLOW_CACHE=0` 或 `KROK_SUBTITLE_GLOW_CACHE=0` 时回退到旧的
+  transformed path glow 绘制，便于 A/B 与紧急回退。
+- 已验证：新增 native 测试覆盖不同 `utopia` transform 帧复用同一上正 glow layer，第二帧
+  `glow_cache_hits` 增加且 `glow_cache_misses` / cache size 不增长。
+- 已验证：新增 `utopia + ruby group + glow + stroke` Python-vs-native bounded 像素 diff，确保缓存
+  只改变 glow 生成位置，不改变可见语义。
+- 暂不纳入：跨行 group、inline role utopia、真实重工程 benchmark、预览/导出接线。
 
 验收：
 

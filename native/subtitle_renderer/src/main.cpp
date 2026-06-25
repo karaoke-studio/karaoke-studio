@@ -250,6 +250,11 @@ struct GlowBitmapCacheEntry {
     QImage image;
 };
 
+struct GlowLayerImage {
+    QImage image;
+    QPointF offset;
+};
+
 struct GlowBitmapCacheStats {
     int hits = 0;
     int misses = 0;
@@ -2226,8 +2231,7 @@ QImage cachedBlurImage(const QImage &source, int radius) {
     return blurred;
 }
 
-void paintGlowPathWithWidths(
-    QPainter &painter,
+GlowLayerImage buildGlowLayerWithWidths(
     const QPainterPath &path,
     const PaintFillSpec &fill,
     const QRectF &rect,
@@ -2240,7 +2244,7 @@ void paintGlowPathWithWidths(
     const int glowWidth = std::max(1, baseWidth + glowRadius);
     const QRectF bounds = path.boundingRect();
     if (bounds.isEmpty()) {
-        return;
+        return GlowLayerImage{};
     }
     const double pad = std::ceil(glowWidth / 2.0 + glowRadius * 3.0) + 2.0;
     const QRectF layerRect = bounds.adjusted(-pad, -pad, pad, pad);
@@ -2259,7 +2263,53 @@ void paintGlowPathWithWidths(
     layerPainter.strokePath(localPath, QPen(brushForFill(fill, localRect), glowWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
     layerPainter.end();
 
-    painter.drawImage(QPointF(layerRect.left(), layerRect.top()), cachedBlurImage(source, glowRadius));
+    return GlowLayerImage{
+        cachedBlurImage(source, glowRadius),
+        QPointF(layerRect.left(), layerRect.top()),
+    };
+}
+
+void paintGlowPathWithWidths(
+    QPainter &painter,
+    const QPainterPath &path,
+    const PaintFillSpec &fill,
+    const QRectF &rect,
+    int radius,
+    int strokeWidth,
+    int stroke2Width
+) {
+    const GlowLayerImage layer = buildGlowLayerWithWidths(path, fill, rect, radius, strokeWidth, stroke2Width);
+    if (!layer.image.isNull()) {
+        painter.drawImage(layer.offset, layer.image);
+    }
+}
+
+void blitTransformedGlowLayerWithWidths(
+    QPainter &painter,
+    const QPainterPath &uprightPath,
+    const PaintFillSpec &fill,
+    const QRectF &uprightRect,
+    int radius,
+    int strokeWidth,
+    int stroke2Width,
+    const QTransform &transform
+) {
+    const GlowLayerImage layer = buildGlowLayerWithWidths(
+        uprightPath,
+        fill,
+        uprightRect,
+        radius,
+        strokeWidth,
+        stroke2Width
+    );
+    if (layer.image.isNull()) {
+        return;
+    }
+    painter.save();
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.setTransform(transform, true);
+    painter.drawImage(layer.offset, layer.image);
+    painter.restore();
 }
 
 void paintTextLayerStackWithWidths(
@@ -2275,9 +2325,10 @@ void paintTextLayerStackWithWidths(
     int stroke2Width,
     int shadowOffsetX,
     int shadowOffsetY,
-    int glowRadiusValue
+    int glowRadiusValue,
+    bool drawGlow = true
 ) {
-    if (style.decorationKind == QStringLiteral("glow")) {
+    if (style.decorationKind == QStringLiteral("glow") && drawGlow) {
         paintGlowPathWithWidths(
             painter,
             path,
@@ -2537,10 +2588,35 @@ void paintTransformedTextStackWithFills(
     int shadowOffsetY,
     int beforeGlowRadius,
     int afterGlowRadius,
-    bool forceAfter
+    bool forceAfter,
+    const QPainterPath *uprightPath = nullptr,
+    const QRectF *uprightRect = nullptr,
+    const QTransform *uprightTransform = nullptr
 ) {
+    const bool useCachedGlow = style.decorationKind == QStringLiteral("glow")
+        && uprightPath != nullptr
+        && uprightRect != nullptr
+        && uprightTransform != nullptr
+        && glowBitmapCacheEnabled();
+    auto blitGlow = [&](const PaintFillSpec &shadowFill, int radius) {
+        if (!useCachedGlow) {
+            return;
+        }
+        blitTransformedGlowLayerWithWidths(
+            painter,
+            *uprightPath,
+            shadowFill,
+            *uprightRect,
+            radius,
+            strokeWidth,
+            stroke2Width,
+            *uprightTransform
+        );
+    };
+
     const double clampedRatio = forceAfter ? 1.0 : std::clamp(ratio, 0.0, 1.0);
     if (clampedRatio <= 0.0) {
+        blitGlow(beforeShadowFill, beforeGlowRadius);
         paintTextLayerStackWithWidths(
             painter,
             path,
@@ -2554,11 +2630,13 @@ void paintTransformedTextStackWithFills(
             stroke2Width,
             shadowOffsetX,
             shadowOffsetY,
-            beforeGlowRadius
+            beforeGlowRadius,
+            !useCachedGlow
         );
         return;
     }
     if (clampedRatio >= 1.0) {
+        blitGlow(afterShadowFill, afterGlowRadius);
         paintTextLayerStackWithWidths(
             painter,
             path,
@@ -2572,11 +2650,13 @@ void paintTransformedTextStackWithFills(
             stroke2Width,
             shadowOffsetX,
             shadowOffsetY,
-            afterGlowRadius
+            afterGlowRadius,
+            !useCachedGlow
         );
         return;
     }
 
+    blitGlow(beforeShadowFill, beforeGlowRadius);
     paintTextLayerStackWithWidths(
         painter,
         path,
@@ -2590,7 +2670,8 @@ void paintTransformedTextStackWithFills(
         stroke2Width,
         shadowOffsetX,
         shadowOffsetY,
-        beforeGlowRadius
+        beforeGlowRadius,
+        !useCachedGlow
     );
 
     const double strokePad = visualStrokeExtentForWidths(strokeWidth, stroke2Width);
@@ -2608,6 +2689,7 @@ void paintTransformedTextStackWithFills(
         ),
         Qt::IntersectClip
     );
+    blitGlow(afterShadowFill, afterGlowRadius);
     paintTextLayerStackWithWidths(
         painter,
         path,
@@ -2621,7 +2703,8 @@ void paintTransformedTextStackWithFills(
         stroke2Width,
         shadowOffsetX,
         shadowOffsetY,
-        afterGlowRadius
+        afterGlowRadius,
+        !useCachedGlow
     );
     painter.restore();
 }
@@ -2635,7 +2718,10 @@ void paintTransformedTextStack(
     bool rtl,
     int charX,
     int charWidth,
-    bool forceAfter
+    bool forceAfter,
+    const QPainterPath *uprightPath = nullptr,
+    const QRectF *uprightRect = nullptr,
+    const QTransform *uprightTransform = nullptr
 ) {
     paintTransformedTextStackWithFills(
         painter,
@@ -2660,7 +2746,10 @@ void paintTransformedTextStack(
         style.shadowOffsetY,
         glowRadius(style, false),
         glowRadius(style, true),
-        forceAfter
+        forceAfter,
+        uprightPath,
+        uprightRect,
+        uprightTransform
     );
 }
 
@@ -2671,7 +2760,10 @@ void paintRubyTransformedStack(
     const ResolvedStyle &style,
     double ratio,
     bool rtl,
-    bool forceAfter
+    bool forceAfter,
+    const QPainterPath *uprightPath = nullptr,
+    const QRectF *uprightRect = nullptr,
+    const QTransform *uprightTransform = nullptr
 ) {
     const double scale = rubyScale(style);
     const int strokeWidth = scaledPx(style.strokeWidthPx, scale);
@@ -2701,7 +2793,10 @@ void paintRubyTransformedStack(
         shadowOffsetY,
         scaledPx(glowRadius(style, false), scale),
         scaledPx(glowRadius(style, true), scale),
-        forceAfter
+        forceAfter,
+        uprightPath,
+        uprightRect,
+        uprightTransform
     );
 }
 
@@ -2767,6 +2862,12 @@ void paintRubyUtopiaText(
                 }
             }
             QPainterPath path = rubyTextPath(reading, rubyFont, rubyMetrics, x, rubyBaselineY, targetWidth);
+            const QRectF sourceRect(
+                x,
+                rubyBaselineY - rubyMetrics.ascent(),
+                readingWidth,
+                rubyMetrics.height()
+            );
             const double centerX = x + readingWidth / 2.0;
             const double centerY = rubyBaselineY - rubyMetrics.ascent() + rubyMetrics.height() / 2.0;
             const QTransform transform = characterTransform(
@@ -2785,7 +2886,10 @@ void paintRubyUtopiaText(
                     style,
                     rubyProgressRatio(paintRuby, tMs),
                     cfg.rightToLeft,
-                    true
+                    true,
+                    &path,
+                    &sourceRect,
+                    &transform
                 );
             }
             painter.restore();
@@ -2814,6 +2918,12 @@ void paintRubyUtopiaText(
             }
             QPainterPath path;
             path.addText(QPointF(unit.x, rubyBaselineY), rubyFont, unit.text);
+            const QRectF sourceRect(
+                unit.x,
+                rubyBaselineY - rubyMetrics.ascent(),
+                unit.width,
+                rubyMetrics.height()
+            );
             const double centerX = unit.x + unit.width / 2.0;
             const double centerY = rubyBaselineY - rubyMetrics.ascent() + rubyMetrics.height() / 2.0;
             const QTransform transform = characterTransform(
@@ -2836,7 +2946,10 @@ void paintRubyUtopiaText(
                 style,
                 progressRatio(unit.interval.first, unit.interval.second, tMs),
                 cfg.rightToLeft,
-                false
+                false,
+                &path,
+                &sourceRect,
+                &transform
             );
             painter.restore();
         }
@@ -2910,6 +3023,7 @@ void paintUtopiaMainText(
             right = std::max(right, layout.charLefts[pos] + layout.charWidths[pos]);
         }
         const double width = std::max(right - left, 1.0);
+        const QRectF sourceRect(left, layout.baselineY - metrics.ascent(), width, metrics.height());
         const double centerX = left + width / 2.0;
         const double centerY = layout.baselineY - metrics.ascent() + metrics.height() / 2.0;
         const QTransform transform = characterTransform(
@@ -2941,7 +3055,10 @@ void paintUtopiaMainText(
             cfg.rightToLeft,
             paintLeft,
             paintWidth,
-            inUtopiaExit
+            inUtopiaExit,
+            &path,
+            &sourceRect,
+            &transform
         );
         painter.restore();
     }

@@ -1561,6 +1561,52 @@ def test_native_glow_bitmap_cache_reuses_blurred_layer(tmp_path, monkeypatch):
     assert second["checksum"] == first["checksum"]
 
 
+def test_native_utopia_glow_cache_reuses_upright_layer_across_transforms(
+    tmp_path, monkeypatch
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.delenv("KROK_SUBTITLE_NATIVE_GLOW_CACHE", raising=False)
+    monkeypatch.delenv("KROK_SUBTITLE_GLOW_CACHE", raising=False)
+
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("A", 0)], end_ms=1600)]
+    )
+    style = Style(
+        font_family="Arial",
+        font_size_px=72,
+        line_lead_in_ms=700,
+        line_tail_ms=1200,
+        line_y_position="center",
+        line_horizontal_layout="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        decoration_kind="glow",
+        glow_radius_px=12,
+        glow_before_radius_px=12,
+        glow_after_radius_px=12,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        entry_anim="utopia",
+        exit_anim="utopia",
+    )
+
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=640, height=360, fps=60)
+        first = renderer.render_frame_png(350, tmp_path / "native-utopia-glow-cache-first.png")
+        second = renderer.render_frame_png(450, tmp_path / "native-utopia-glow-cache-second.png")
+
+    if "glow_cache_misses" not in first:
+        pytest.skip("native subtitle renderer executable predates glow cache diagnostics")
+    assert first["glow_cache_misses"] > 0
+    assert second["glow_cache_hits"] > first["glow_cache_hits"]
+    assert second["glow_cache_misses"] == first["glow_cache_misses"]
+    assert second["glow_cache_size"] == first["glow_cache_size"]
+
+
 @pytest.mark.parametrize("t_ms", [1000, 2000])
 def test_native_singer_style_override_with_ruby_matches_python_pixels(
     tmp_path, monkeypatch, t_ms
@@ -2079,6 +2125,107 @@ def test_native_utopia_ruby_group_pixels_stay_within_bounded_diff(
     diff = np.abs(python_rows.astype(int) - native_rows.astype(int))
     assert diff.mean() < 8.0
     assert int((diff > 8).sum()) < 45_000
+
+
+def test_native_utopia_ruby_group_with_glow_pixels_stay_within_bounded_diff(
+    tmp_path, monkeypatch
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QImage
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    def fill(color: str) -> PaintFill:
+        return PaintFill(color=color)
+
+    line = TimingLine(
+        chars=[
+            TimingChar("A", 0),
+            TimingChar("B", 800),
+            TimingChar("C", 1600),
+        ],
+        end_ms=2400,
+    )
+    ruby = RubyAnnotation(
+        kanji="AB",
+        reading="xy",
+        reading_part_ms=[800],
+        pos_start_ms=0,
+        pos_end_ms=1600,
+    )
+    track = TimingTrack(lines=[line], rubies=[ruby])
+    style = Style(
+        font_family="Arial",
+        font_size_px=64,
+        ruby_font_size_px=28,
+        ruby_gap_px=8,
+        line_lead_in_ms=700,
+        line_tail_ms=1200,
+        line_y_position="center",
+        line_horizontal_layout="center",
+        stroke_width_px=2,
+        stroke2_width_px=0,
+        decoration_kind="glow",
+        glow_radius_px=8,
+        glow_before_radius_px=8,
+        glow_after_radius_px=8,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        entry_anim="utopia",
+        exit_anim="utopia",
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=fill("#FFFFFF"),
+                stroke=fill("#111111"),
+                stroke2=fill("#00000000"),
+                shadow=fill("#4D7CFE"),
+            ),
+            after=KaraokeColorState(
+                text=fill("#FF5A6F"),
+                stroke=fill("#111111"),
+                stroke2=fill("#00000000"),
+                shadow=fill("#FFD54A"),
+            ),
+        ),
+        ruby_karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=fill("#00FF88"),
+                stroke=fill("#111111"),
+                stroke2=fill("#00000000"),
+                shadow=fill("#4D7CFE"),
+            ),
+            after=KaraokeColorState(
+                text=fill("#FFCC00"),
+                stroke=fill("#111111"),
+                stroke2=fill("#00000000"),
+                shadow=fill("#FFD54A"),
+            ),
+        ),
+    )
+
+    python_image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+    python_image.fill(0)
+    clear_before_layer_cache()
+    paint_frame(python_image, track, 2350, style)
+
+    native_output = tmp_path / "native-utopia-ruby-group-glow.png"
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=640, height=360, fps=60)
+        renderer.render_frame_png(2350, native_output)
+
+    python_rows = _image_rows(python_image)
+    native_rows = _image_rows(QImage(str(native_output)))
+    assert python_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    assert native_rows.reshape(360, 640, 4)[..., 3].max() > 0
+    diff = np.abs(python_rows.astype(int) - native_rows.astype(int))
+    assert diff.mean() < 12.0
+    assert int((diff > 10).sum()) < 80_000
 
 
 def test_native_two_line_horizontal_pixels_stay_within_bounded_diff(
