@@ -467,12 +467,14 @@ smoke 输出示例：
 - native 复刻 ruby effective timing：当 `@Ruby` 时间范围与实际目标字范围不一致时，把 reading timing rebased 到目标字范围。
 - native 复刻 ruby reading progress：支持普通 `reading_part_ms` 分段与 pause pair 形式。
 - native `render_frame` 新增 `ruby_diagnostics[]`，包含 `kanji`、`reading`、`indices`、`x`、`baseline_y`、`target_width`、`reading_width`、`progress`、after clip 几何。
-- native 普通横排路径已实际绘制 ruby before/after 两层；当前颜色暂复用主 karaoke color matrix，ruby 专属颜色/渐变/image fill 后续再补。
+- native 普通横排路径已实际绘制 ruby before/after 两层。
+- C3b-2 已迁移 ruby 专属配色：`ruby_color` legacy 路径、`ruby_karaoke_colors` 优先级，以及无独立 ruby matrix 时回退主 `karaoke_colors`。
 - pytest 已覆盖 ruby layout/timing 几何 parity，并增加 native 带 ruby / 不带 ruby 输出不同的像素 smoke。
+- pytest 已覆盖 `ruby_color` 与 `ruby_karaoke_colors` 会改变 native ruby 像素输出。
 
 仍未完成：
 
-- ruby 专属 `ruby_color` / `ruby_karaoke_colors` 尚未迁移；当前仅复用主行 karaoke colors。
+- ruby PaintFill 的 gradient / image / split 等非纯色模式尚未迁移；当前 native 仍只读取 `color`。
 - ruby 与 role/singer override、utopia transition、竖排路径尚未迁移。
 - ruby 像素级 Python-vs-native 严格 diff 尚未建立，目前先以几何 parity + native 有无 ruby 像素 smoke 收口。
 

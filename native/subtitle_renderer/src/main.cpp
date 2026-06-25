@@ -63,6 +63,13 @@ struct RenderConfig {
     QString afterStrokeColor = QStringLiteral("#222222");
     QString beforeStroke2Color = QStringLiteral("#000000");
     QString afterStroke2Color = QStringLiteral("#000000");
+    QString rubyColor = QStringLiteral("#FF5A6F");
+    QString rubyBaseColor = QStringLiteral("#FFFFFF");
+    QString rubyFillColor = QStringLiteral("#FF5A6F");
+    QString rubyBeforeStrokeColor = QStringLiteral("#222222");
+    QString rubyAfterStrokeColor = QStringLiteral("#222222");
+    QString rubyBeforeStroke2Color = QStringLiteral("#000000");
+    QString rubyAfterStroke2Color = QStringLiteral("#000000");
     int strokeWidthPx = 9;
     int stroke2WidthPx = 0;
     QString decorationKind = QStringLiteral("shadow");
@@ -171,6 +178,16 @@ QString karaokeLayerColor(
     return paintFillColor(state.value(layerKey).toObject(), fallback);
 }
 
+QString karaokeLayerColorFromColors(
+    const QJsonObject &colors,
+    const QString &stateKey,
+    const QString &layerKey,
+    const QString &fallback
+) {
+    const QJsonObject state = colors.value(stateKey).toObject();
+    return paintFillColor(state.value(layerKey).toObject(), fallback);
+}
+
 QJsonObject response(bool ok, const QString &event) {
     QJsonObject out;
     out.insert(QStringLiteral("ok"), ok);
@@ -225,9 +242,12 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.letterSpacingPx = intValue(style, QStringLiteral("letter_spacing_px"), cfg.letterSpacingPx);
     cfg.baseColor = stringValue(style, QStringLiteral("base_color"), cfg.baseColor);
     cfg.fillColor = stringValue(style, QStringLiteral("fill_color"), cfg.fillColor);
+    cfg.rubyColor = stringValue(style, QStringLiteral("ruby_color"), cfg.rubyColor);
     const QString strokeColor = stringValue(style, QStringLiteral("stroke_color"), cfg.beforeStrokeColor);
     cfg.beforeStrokeColor = strokeColor;
     cfg.afterStrokeColor = strokeColor;
+    cfg.rubyBeforeStrokeColor = strokeColor;
+    cfg.rubyAfterStrokeColor = strokeColor;
     cfg.strokeWidthPx = std::max(0, intValue(style, QStringLiteral("stroke_width_px"), cfg.strokeWidthPx));
     cfg.stroke2WidthPx = std::max(0, intValue(style, QStringLiteral("stroke2_width_px"), cfg.stroke2WidthPx));
     cfg.decorationKind = stringValue(style, QStringLiteral("decoration_kind"), cfg.decorationKind);
@@ -252,12 +272,38 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.rightToLeft = style.value(QStringLiteral("right_to_left")).isBool()
         ? style.value(QStringLiteral("right_to_left")).toBool()
         : cfg.rightToLeft;
-    cfg.baseColor = karaokeLayerColor(style, QStringLiteral("before"), QStringLiteral("text"), cfg.baseColor);
-    cfg.fillColor = karaokeLayerColor(style, QStringLiteral("after"), QStringLiteral("text"), cfg.fillColor);
-    cfg.beforeStrokeColor = karaokeLayerColor(style, QStringLiteral("before"), QStringLiteral("stroke"), cfg.beforeStrokeColor);
-    cfg.afterStrokeColor = karaokeLayerColor(style, QStringLiteral("after"), QStringLiteral("stroke"), cfg.afterStrokeColor);
-    cfg.beforeStroke2Color = karaokeLayerColor(style, QStringLiteral("before"), QStringLiteral("stroke2"), cfg.beforeStroke2Color);
-    cfg.afterStroke2Color = karaokeLayerColor(style, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.afterStroke2Color);
+    const bool hasMainKaraokeColors = style.value(QStringLiteral("karaoke_colors")).isObject();
+    const bool hasRubyKaraokeColors = style.value(QStringLiteral("ruby_karaoke_colors")).isObject();
+    const QJsonObject mainKaraokeColors = style.value(QStringLiteral("karaoke_colors")).toObject();
+    const QJsonObject rubyKaraokeColors = style.value(QStringLiteral("ruby_karaoke_colors")).toObject();
+
+    cfg.baseColor = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("text"), cfg.baseColor);
+    cfg.fillColor = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("text"), cfg.fillColor);
+    cfg.beforeStrokeColor = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke"), cfg.beforeStrokeColor);
+    cfg.afterStrokeColor = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke"), cfg.afterStrokeColor);
+    cfg.beforeStroke2Color = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke2"), cfg.beforeStroke2Color);
+    cfg.afterStroke2Color = karaokeLayerColorFromColors(mainKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.afterStroke2Color);
+
+    if (hasRubyKaraokeColors) {
+        cfg.rubyBaseColor = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("text"), cfg.baseColor);
+        cfg.rubyFillColor = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("text"), cfg.rubyColor);
+        cfg.rubyBeforeStrokeColor = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke"), cfg.beforeStrokeColor);
+        cfg.rubyAfterStrokeColor = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke"), cfg.afterStrokeColor);
+        cfg.rubyBeforeStroke2Color = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("before"), QStringLiteral("stroke2"), cfg.beforeStroke2Color);
+        cfg.rubyAfterStroke2Color = karaokeLayerColorFromColors(rubyKaraokeColors, QStringLiteral("after"), QStringLiteral("stroke2"), cfg.afterStroke2Color);
+    } else if (hasMainKaraokeColors) {
+        cfg.rubyBaseColor = cfg.baseColor;
+        cfg.rubyFillColor = cfg.fillColor;
+        cfg.rubyBeforeStrokeColor = cfg.beforeStrokeColor;
+        cfg.rubyAfterStrokeColor = cfg.afterStrokeColor;
+        cfg.rubyBeforeStroke2Color = cfg.beforeStroke2Color;
+        cfg.rubyAfterStroke2Color = cfg.afterStroke2Color;
+    } else {
+        cfg.rubyBaseColor = cfg.baseColor;
+        cfg.rubyFillColor = cfg.rubyColor;
+        cfg.rubyBeforeStroke2Color = QStringLiteral("#000000");
+        cfg.rubyAfterStroke2Color = QStringLiteral("#000000");
+    }
 
     const QJsonObject track = ir.value(QStringLiteral("track")).toObject();
     const QJsonArray lines = track.value(QStringLiteral("lines")).toArray();
@@ -1091,12 +1137,12 @@ void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &lin
         painter,
         cfg,
         rubyDiagnostics,
-        base,
-        fill,
-        beforeStroke,
-        afterStroke,
-        beforeStroke2,
-        afterStroke2
+        colorValue(cfg.rubyBaseColor, base),
+        colorValue(cfg.rubyFillColor, fill),
+        colorValue(cfg.rubyBeforeStrokeColor, beforeStroke),
+        colorValue(cfg.rubyAfterStrokeColor, afterStroke),
+        colorValue(cfg.rubyBeforeStroke2Color, beforeStroke2),
+        colorValue(cfg.rubyAfterStroke2Color, afterStroke2)
     );
     paintKaraokePath(painter, layout.path, base, beforeStroke, beforeStroke2, cfg);
 

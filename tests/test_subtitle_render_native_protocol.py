@@ -691,6 +691,136 @@ def test_native_ruby_changes_rendered_frame_when_exe_exists(tmp_path, monkeypatc
     assert diff_pixels > 100
 
 
+def test_native_ruby_color_controls_rendered_ruby_pixels(tmp_path, monkeypatch):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QImage
+
+    line = TimingLine(
+        chars=[
+            TimingChar("A", 0),
+            TimingChar("B", 1000),
+        ],
+        end_ms=2000,
+    )
+    ruby = RubyAnnotation(
+        kanji="AB",
+        reading="xy",
+        reading_part_ms=[1000],
+        pos_start_ms=0,
+        pos_end_ms=2000,
+    )
+    base_style = dict(
+        font_size_px=64,
+        ruby_font_size_px=32,
+        ruby_gap_px=10,
+        line_lead_in_ms=0,
+        line_y_position="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        base_color="#FFFFFF",
+        fill_color="#FFFFFF",
+        stroke_color="#00000000",
+        shadow_color="#00000000",
+    )
+    red_style = Style(**base_style, ruby_color="#FF0000")
+    green_style = Style(**base_style, ruby_color="#00FF00")
+    track = TimingTrack(lines=[line], rubies=[ruby])
+    red_output = tmp_path / "native-ruby-red.png"
+    green_output = tmp_path / "native-ruby-green.png"
+
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, red_style, width=640, height=360, fps=60)
+        renderer.render_frame_png(2000, red_output)
+
+        renderer.configure(track, green_style, width=640, height=360, fps=60)
+        renderer.render_frame_png(2000, green_output)
+
+    red = QImage(str(red_output)).convertToFormat(QImage.Format.Format_RGBA8888)
+    green = QImage(str(green_output)).convertToFormat(QImage.Format.Format_RGBA8888)
+    assert red.size() == green.size()
+    diff_pixels = 0
+    for y in range(red.height()):
+        for x in range(red.width()):
+            if red.pixelColor(x, y).rgba() != green.pixelColor(x, y).rgba():
+                diff_pixels += 1
+    assert diff_pixels > 100
+
+
+def test_native_ruby_karaoke_colors_override_main_karaoke_colors(tmp_path, monkeypatch):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QImage
+
+    def fill(color: str) -> PaintFill:
+        return PaintFill(color=color)
+
+    line = TimingLine(
+        chars=[
+            TimingChar("A", 0),
+            TimingChar("B", 1000),
+        ],
+        end_ms=2000,
+    )
+    ruby = RubyAnnotation(
+        kanji="AB",
+        reading="xy",
+        reading_part_ms=[1000],
+        pos_start_ms=0,
+        pos_end_ms=2000,
+    )
+    main_colors = KaraokeColors(
+        before=KaraokeColorState(text=fill("#FFFFFF"), stroke=fill("#00000000"), stroke2=fill("#00000000")),
+        after=KaraokeColorState(text=fill("#FFFFFF"), stroke=fill("#00000000"), stroke2=fill("#00000000")),
+    )
+    ruby_red = KaraokeColors(
+        before=KaraokeColorState(text=fill("#FF0000"), stroke=fill("#00000000"), stroke2=fill("#00000000")),
+        after=KaraokeColorState(text=fill("#FF0000"), stroke=fill("#00000000"), stroke2=fill("#00000000")),
+    )
+    ruby_green = KaraokeColors(
+        before=KaraokeColorState(text=fill("#00FF00"), stroke=fill("#00000000"), stroke2=fill("#00000000")),
+        after=KaraokeColorState(text=fill("#00FF00"), stroke=fill("#00000000"), stroke2=fill("#00000000")),
+    )
+    base_style = dict(
+        font_size_px=64,
+        ruby_font_size_px=32,
+        ruby_gap_px=10,
+        line_lead_in_ms=0,
+        line_y_position="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        karaoke_colors=main_colors,
+    )
+    red_style = Style(**base_style, ruby_karaoke_colors=ruby_red)
+    green_style = Style(**base_style, ruby_karaoke_colors=ruby_green)
+    track = TimingTrack(lines=[line], rubies=[ruby])
+    red_output = tmp_path / "native-ruby-matrix-red.png"
+    green_output = tmp_path / "native-ruby-matrix-green.png"
+
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, red_style, width=640, height=360, fps=60)
+        renderer.render_frame_png(2000, red_output)
+
+        renderer.configure(track, green_style, width=640, height=360, fps=60)
+        renderer.render_frame_png(2000, green_output)
+
+    red = QImage(str(red_output)).convertToFormat(QImage.Format.Format_RGBA8888)
+    green = QImage(str(green_output)).convertToFormat(QImage.Format.Format_RGBA8888)
+    assert red.size() == green.size()
+    diff_pixels = 0
+    for y in range(red.height()):
+        for x in range(red.width()):
+            if red.pixelColor(x, y).rgba() != green.pixelColor(x, y).rgba():
+                diff_pixels += 1
+    assert diff_pixels > 100
+
+
 def test_native_renderer_after_stroke2_missing_does_not_inherit_before_stroke2(
     tmp_path, monkeypatch
 ):
