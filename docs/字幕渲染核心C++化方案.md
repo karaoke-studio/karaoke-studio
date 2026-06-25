@@ -512,8 +512,40 @@ smoke 输出示例：
 注意：
 
 - 当前 Windows/macOS build script 以 Python/PyInstaller 为主，尚无 native toolchain。
-- Qt 版本应尽量与 PyQt6 wheel 自带 Qt 主版本一致，避免字体/渲染差异过大。
+- Qt 版本应与 PyQt6 wheel 自带 Qt **完全一致**（已由版本指纹强制，见 §7.1），避免字体/渲染差异。
 - sidecar 自带 Qt runtime 时，要检查包体积与插件裁剪。
+
+#### 谁需要构建 native（重要：不是所有人）
+
+native renderer 是**可选 sidecar**，Python 侧始终保留 fallback 渲染器，native 路径由 env 开关 opt-in。
+因此构建前置分人群：
+
+| 人群 | 是否需要 native toolchain / Qt 6.x dev |
+|---|---|
+| 只改 Python 侧的贡献者（多数） | **不需要**。装 PyQt6 跑 fallback 即可，app 正常工作 |
+| 要动 native（C++）的开发者 | 需要：MSVC x64 + CMake/Ninja + 与 PyQt6 同版本的可构建 Qt（aqt 或官方安装器），构建出 exe |
+| 发布 / CI 流水线 | 在 CI 里构建一次 sidecar，PyInstaller 把 exe 打进包 |
+| 终端用户 | **不需要**。拿到的是预编译 exe，不装 Qt、不构建任何东西 |
+
+> 即：版本匹配（如当前 6.11）只约束「构建 native 的人 + CI」。以后 PyQt6 升版，也只有这两类需要重建 native，
+> 不波及纯 Python 贡献者与用户。这正是选 sidecar 而非 `.pyd` 的收益之一。
+
+#### native 构建 toolchain 前置（2026-06-25 实测）
+
+构建 native（上面第 2、3 类人）需要：
+
+- MSVC x64（Visual Studio Build Tools，C++ 工作负载）、CMake、Ninja。
+- **与 PyQt6 完全同版本的可构建 Qt**（dev 文件 + cmake config，PyQt6 wheel 自带的 runtime DLL 不含这些，无法用于构建）。
+- 推荐用 `scripts/run_native_renderer_smoke.ps1`：它读 PyQt6 `QT_VERSION_STR`，自动推导/安装对应 Qt、传指纹给 CMake、构建并跑 parity。
+
+> ⚠️ **aqtinstall 版本坑（当前必读）**：Qt 6.11 改了下载仓库结构（内层目录
+> `qt6_6110/qt6_6110/` → `qt6_6110/qt6_6110_msvc2022_64/`），**aqtinstall 3.3.0（PyPI 最新）按旧结构拼
+> URL 会 404，装不了 6.11/6.12**。修复已在 aqt git main。两种解法：
+> 1. 临时用 dev 版：`pip install --user --upgrade "git+https://github.com/miurahr/aqtinstall.git"`（本机已用
+>    3.3.1.dev115 成功装 6.11.0）；待 aqt 正式发版带此修复后回退稳定版。
+> 2. 用 Qt 官方在线安装器装 6.11.0 / MSVC2022 64-bit，再 `run_native_renderer_smoke.ps1 -QtRoot <路径>`。
+>
+> 旧版 Qt（如 6.10）不受影响，aqt 3.3.0 仍能装——但那会触发版本指纹 FATAL，不能用于本项目构建。
 
 ---
 
