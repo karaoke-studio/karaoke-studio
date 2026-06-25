@@ -430,11 +430,13 @@ smoke 输出示例：
 
 ##### C2 已知偏差 / 待办
 
-1. **glow/shadow 本体已绘制，缓存尚未迁移。**
+1. **glow/shadow 本体与 glow bitmap cache 已迁移。**
    C3a 已把 native after-clip 纵向 extent 改为复刻 painter 的 visual extent 口径：
    `max(_visual_stroke_extent, after_glow_extent, |shadow_dy|, 2) + 4`，并把 smoke / pytest 的 `after_clip_top/height`
    期望值从旧的 stroke-only 自比升级为 painter 公式真比。C3b-6 已补 native 实际绘制 glow/shadow 的路径与像素 diff；
-   后续还需要把 Python 侧 glow bitmap cache 的命中/复用语义迁移到 native。
+   C3a 后续补上 native 侧 glow blur bitmap LRU：按待模糊 source bitmap 内容 hash、尺寸与 radius 复用
+   `QGraphicsBlurEffect` 的输出，`frame_ready` 暂时返回 `glow_cache_hits` / `glow_cache_misses` /
+   `glow_cache_size` 诊断字段用于验收。
 
 ### C3：ruby 与缓存迁移
 
@@ -454,10 +456,12 @@ smoke 输出示例：
   `max(stroke/stroke2 extent, after glow extent, |shadow_dy|, 2) + 4`。
 - smoke 与 pytest 均改用 painter 公式作为期望值，新增 glow / shadow 参数化测试，避免再次退回 stroke-only 自比。
 - C3b-6 已在 native 中实际绘制基础 glow / shadow 纯色装饰，并覆盖 ruby 场景的 Python-vs-native 像素 diff。
+- native 已迁移 glow blur bitmap LRU 缓存；重复渲染同一 glow frame 时 `glow_cache_hits` 增加、miss 不增加，
+  并保持输出 checksum 不变。
 
 仍未完成：
 
-- glow bitmap cache 尚未迁移。
+- `utopia` 上正 glyph run 级 glow bitmap transform 路径尚未迁移；当前 native 缓存先覆盖普通 glow blur 结果复用。
 
 #### C3b：横排 ruby layout/timing（2026-06-25 已启动）
 

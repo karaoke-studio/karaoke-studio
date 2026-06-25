@@ -1520,6 +1520,47 @@ def test_native_image_paintfill_reuses_decoded_image_after_source_removed(
     np.testing.assert_array_equal(second_rows, first_rows)
 
 
+def test_native_glow_bitmap_cache_reuses_blurred_layer(tmp_path, monkeypatch):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.delenv("KROK_SUBTITLE_NATIVE_GLOW_CACHE", raising=False)
+    monkeypatch.delenv("KROK_SUBTITLE_GLOW_CACHE", raising=False)
+
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("A", 0), TimingChar("B", 1000)], end_ms=2000)]
+    )
+    style = Style(
+        font_family="Arial",
+        font_size_px=72,
+        line_lead_in_ms=0,
+        line_y_position="center",
+        stroke_width_px=4,
+        stroke2_width_px=0,
+        decoration_kind="glow",
+        glow_radius_px=10,
+        glow_before_radius_px=10,
+        glow_after_radius_px=10,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+    )
+
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=640, height=360, fps=60)
+        first = renderer.render_frame_png(1000, tmp_path / "native-glow-cache-first.png")
+        second = renderer.render_frame_png(1000, tmp_path / "native-glow-cache-second.png")
+
+    if "glow_cache_misses" not in first:
+        pytest.skip("native subtitle renderer executable predates glow cache diagnostics")
+    assert first["glow_cache_misses"] > 0
+    assert second["glow_cache_hits"] > first["glow_cache_hits"]
+    assert second["glow_cache_misses"] == first["glow_cache_misses"]
+    assert second["glow_cache_size"] >= first["glow_cache_size"] > 0
+    assert second["checksum"] == first["checksum"]
+
+
 @pytest.mark.parametrize("t_ms", [1000, 2000])
 def test_native_singer_style_override_with_ruby_matches_python_pixels(
     tmp_path, monkeypatch, t_ms

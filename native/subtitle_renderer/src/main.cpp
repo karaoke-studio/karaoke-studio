@@ -201,6 +201,16 @@ struct ImageFillCacheEntry {
     QImage image;
 };
 
+struct GlowBitmapCacheEntry {
+    QString key;
+    QImage image;
+};
+
+struct GlowBitmapCacheStats {
+    int hits = 0;
+    int misses = 0;
+};
+
 struct RenderDiagnostics {
     int visibleLines = 0;
     bool hasFirstLine = false;
@@ -564,6 +574,17 @@ std::uint64_t imageChecksum(const QImage &image) {
     std::uint64_t hash = 1469598103934665603ull;
     const qsizetype step = std::max<qsizetype>(1, size / 4096);
     for (qsizetype i = 0; i < size; i += step) {
+        hash ^= static_cast<std::uint64_t>(data[i]);
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+std::uint64_t imageFullChecksum(const QImage &image) {
+    const uchar *data = image.constBits();
+    const qsizetype size = image.sizeInBytes();
+    std::uint64_t hash = 1469598103934665603ull;
+    for (qsizetype i = 0; i < size; ++i) {
         hash ^= static_cast<std::uint64_t>(data[i]);
         hash *= 1099511628211ull;
     }
@@ -1778,6 +1799,69 @@ QImage blurImage(const QImage &source, int radius) {
     return result;
 }
 
+bool environmentDisablesCache(const char *name) {
+    const QByteArray value = qgetenv(name).trimmed().toLower();
+    return value == QByteArray("0") || value == QByteArray("false") || value == QByteArray("off");
+}
+
+bool glowBitmapCacheEnabled() {
+    static const bool enabled = !environmentDisablesCache("KROK_SUBTITLE_NATIVE_GLOW_CACHE")
+        && !environmentDisablesCache("KROK_SUBTITLE_GLOW_CACHE");
+    return enabled;
+}
+
+std::vector<GlowBitmapCacheEntry> &glowBitmapCache() {
+    static std::vector<GlowBitmapCacheEntry> cache;
+    return cache;
+}
+
+GlowBitmapCacheStats &glowBitmapCacheStats() {
+    static GlowBitmapCacheStats stats;
+    return stats;
+}
+
+void clearGlowBitmapCache() {
+    glowBitmapCache().clear();
+    glowBitmapCacheStats() = GlowBitmapCacheStats{};
+}
+
+QString glowBitmapCacheKey(const QImage &source, int radius) {
+    return QStringLiteral("%1:%2:%3:%4:%5")
+        .arg(std::max(radius, 1))
+        .arg(source.width())
+        .arg(source.height())
+        .arg(static_cast<int>(source.format()))
+        .arg(QString::number(imageFullChecksum(source), 16));
+}
+
+QImage cachedBlurImage(const QImage &source, int radius) {
+    if (!glowBitmapCacheEnabled()) {
+        return blurImage(source, radius);
+    }
+
+    const QString key = glowBitmapCacheKey(source, radius);
+    auto &cache = glowBitmapCache();
+    auto &stats = glowBitmapCacheStats();
+    for (auto it = cache.begin(); it != cache.end(); ++it) {
+        if (it->key == key) {
+            GlowBitmapCacheEntry entry = *it;
+            cache.erase(it);
+            cache.push_back(entry);
+            ++stats.hits;
+            return entry.image;
+        }
+    }
+
+    ++stats.misses;
+    QImage blurred = blurImage(source, radius);
+    constexpr std::size_t kGlowBitmapCacheMax = 128;
+    if (cache.size() >= kGlowBitmapCacheMax) {
+        cache.erase(cache.begin());
+    }
+    cache.push_back(GlowBitmapCacheEntry{key, blurred});
+    return blurred;
+}
+
 void paintGlowPathWithWidths(
     QPainter &painter,
     const QPainterPath &path,
@@ -1811,7 +1895,7 @@ void paintGlowPathWithWidths(
     layerPainter.strokePath(localPath, QPen(brushForFill(fill, localRect), glowWidth, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
     layerPainter.end();
 
-    painter.drawImage(QPointF(layerRect.left(), layerRect.top()), blurImage(source, glowRadius));
+    painter.drawImage(QPointF(layerRect.left(), layerRect.top()), cachedBlurImage(source, glowRadius));
 }
 
 void paintTextLayerStackWithWidths(
@@ -2199,6 +2283,7 @@ QJsonObject handleConfigure(const QJsonObject &request, std::optional<RenderConf
         return out;
     }
     *config = parsed;
+    clearGlowBitmapCache();
     QJsonObject out = response(true, QStringLiteral("configured"));
     out.insert(QStringLiteral("width"), parsed->width);
     out.insert(QStringLiteral("height"), parsed->height);
@@ -2233,6 +2318,9 @@ QJsonObject handleRenderFrame(const QJsonObject &request, const std::optional<Re
     out.insert(QStringLiteral("output_path"), outputPath);
     out.insert(QStringLiteral("checksum"), QString::number(imageChecksum(image)));
     out.insert(QStringLiteral("visible_lines"), rendered.diagnostics.visibleLines);
+    out.insert(QStringLiteral("glow_cache_hits"), glowBitmapCacheStats().hits);
+    out.insert(QStringLiteral("glow_cache_misses"), glowBitmapCacheStats().misses);
+    out.insert(QStringLiteral("glow_cache_size"), static_cast<int>(glowBitmapCache().size()));
     QJsonArray lineDiagnostics;
     for (const LineDiagnostics &line : rendered.diagnostics.lines) {
         QJsonObject item;
