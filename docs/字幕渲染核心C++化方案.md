@@ -564,6 +564,19 @@ smoke 输出示例：
   只改变 glow 生成位置，不改变可见语义。
 - 暂不纳入：跨行 group、inline role utopia、真实重工程 benchmark、预览/导出接线。
 
+#### C4-4 实装状态（2026-06-26 已启动）
+
+- 已新增 `scripts/bench_native_renderer.py`，用同一个 `.yurika` 工程、`TimingTrack` 与 `Style`
+  对比 Python `paint_frame()` 和 native sidecar `render_frame_png()` 的逐帧耗时，并输出 CSV。
+- 默认项目沿用本机 `D:\カラオケ\songs\A stain\A stain.yurika`，默认强制覆盖为
+  `entry_anim=utopia` / `exit_anim=utopia` / `decoration_kind=glow`，可用
+  `--keep-project-style` 保留项目原样式。
+- 已记录重要限制：当前 native 协议仍是 PNG smoke 输出，native 计时包含 PNG 编码与磁盘写入；
+  因此该脚本是 C4-4 初始 A/B 信号，不代表最终 preview/export throughput。
+- smoke（2026-06-26，本机 A stain，1920x1080，4 帧 + 2 帧 warmup）：
+  Python mean 约 9.36ms，native mean 约 95.28ms，native glow cache hits=61 / misses=12。
+  该结果主要反映 C1 PNG 输出协议开销，下一步应增加 raw/in-memory render 计时或 range render 协议。
+
 验收：
 
 - 用真实 `A stain` 或同等重工程对比。
