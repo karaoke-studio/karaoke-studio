@@ -12,11 +12,13 @@ import pytest
 from krok_helper.subtitle_render.engine.painter import (
     clear_before_layer_cache,
     _fill_clip_band,
-    _horizontal_after_path_clip_rect,
+    _glow_extent,
+    _glow_radius,
     _layout_line,
     _resolve_display_baselines,
     _resolve_sayatoo_line_layouts,
     _resolve_visible_content,
+    _visual_stroke_extent,
     paint_frame,
 )
 from krok_helper.subtitle_render.models import (
@@ -36,6 +38,59 @@ from krok_helper.subtitle_render.native_backend import (
     resolve_native_renderer_path,
 )
 from krok_helper.subtitle_render.native_protocol import RENDER_IR_SCHEMA, build_render_ir
+
+
+def _native_after_clip_vertical_extent(style: Style) -> int:
+    stroke_extent = _visual_stroke_extent(
+        style.stroke_width_px,
+        style.stroke2_width_px,
+    )
+    glow_extent = (
+        _glow_extent(
+            style.stroke_width_px,
+            style.stroke2_width_px,
+            _glow_radius(style, after=True),
+        )
+        if style.decoration_kind == "glow"
+        else 0
+    )
+    shadow_extent = abs(style.shadow_offset_y) if style.decoration_kind == "shadow" else 0
+    return max(stroke_extent, glow_extent, shadow_extent, 2) + 4
+
+
+def _assert_native_after_clip_matches_layout(
+    frame: dict,
+    py_layout,
+    style: Style,
+    t_ms: int,
+    *,
+    assert_close,
+) -> None:
+    band = _fill_clip_band(py_layout.fill_segments, t_ms, py_layout.rtl)
+    if band is None:
+        fill_start = py_layout.x0 + py_layout.total_w if py_layout.rtl else py_layout.x0
+        fill_end = fill_start
+    else:
+        fill_start, fill_end = band
+    extent = _native_after_clip_vertical_extent(style)
+    if py_layout.rtl:
+        expected_left = fill_start
+        expected_right = py_layout.x0 + py_layout.total_w
+    else:
+        expected_left = py_layout.x0
+        expected_right = fill_end
+    assert_close(frame["after_clip_left"], expected_left, f"clip_left@{t_ms}")
+    assert_close(frame["after_clip_right"], expected_right, f"clip_right@{t_ms}")
+    assert_close(
+        frame["after_clip_top"],
+        py_layout.baseline_y - py_layout.metrics.ascent() - extent,
+        f"clip_top@{t_ms}",
+    )
+    assert_close(
+        frame["after_clip_height"],
+        py_layout.metrics.height() + extent * 2,
+        f"clip_height@{t_ms}",
+    )
 
 
 def test_build_render_ir_contains_screen_style_track_and_ruby():
@@ -246,20 +301,6 @@ def test_native_renderer_process_matches_python_layout_when_exe_exists(tmp_path,
     def assert_close(actual, expected, label, tolerance=4.0):
         assert abs(float(actual) - float(expected)) <= tolerance, (label, actual, expected)
 
-    def py_clip_right(t_ms):
-        band = _fill_clip_band(py_layout.fill_segments, t_ms, py_layout.rtl)
-        return py_layout.x0 if band is None else band[1]
-
-    expected_clip = _horizontal_after_path_clip_rect(
-        py_layout.fill_segments,
-        py_layout.baseline_y,
-        py_layout.metrics,
-        900,
-        py_layout.rtl,
-        style.stroke_width_px,
-    )
-    assert expected_clip is not None
-
     with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
         renderer.configure(track, style, width=640, height=360, fps=60)
         frame0 = renderer.render_frame_png(0, tmp_path / "frame-000.png")
@@ -270,12 +311,18 @@ def test_native_renderer_process_matches_python_layout_when_exe_exists(tmp_path,
     assert_close(frame900["line_x"], py_layout.x0, "line_x")
     assert_close(frame900["line_width"], py_layout.total_w, "line_width")
     assert_close(frame900["baseline_y"], py_layout.baseline_y, "baseline_y")
-    assert_close(frame900["after_clip_top"], expected_clip.top(), "clip_top")
-    assert_close(frame900["after_clip_height"], expected_clip.height(), "clip_height")
-    assert_close(frame0["after_clip_right"], py_clip_right(0), "clip@0")
-    assert_close(frame200["after_clip_right"], py_clip_right(200), "clip@200")
-    assert_close(frame900["after_clip_right"], py_clip_right(900), "clip@900")
-    assert_close(frame1800["after_clip_right"], py_clip_right(1800), "clip@1800")
+    _assert_native_after_clip_matches_layout(
+        frame0, py_layout, style, 0, assert_close=assert_close
+    )
+    _assert_native_after_clip_matches_layout(
+        frame200, py_layout, style, 200, assert_close=assert_close
+    )
+    _assert_native_after_clip_matches_layout(
+        frame900, py_layout, style, 900, assert_close=assert_close
+    )
+    _assert_native_after_clip_matches_layout(
+        frame1800, py_layout, style, 1800, assert_close=assert_close
+    )
 
 
 def test_native_renderer_matches_python_layout_for_lower_lane_when_two_lines_visible(
@@ -363,6 +410,100 @@ def test_native_renderer_matches_python_layout_for_lower_lane_when_two_lines_vis
         assert abs(float(native_line["line_x"]) - float(py_layout.x0)) <= 4.0
         assert abs(float(native_line["line_width"]) - float(py_layout.total_w)) <= 4.0
         assert abs(float(native_line["baseline_y"]) - float(py_layout.baseline_y)) <= 4.0
+
+
+@pytest.mark.parametrize(
+    ("decoration_kind", "glow_after_radius_px", "shadow_offset_y"),
+    [
+        ("glow", 14, 1),
+        ("shadow", 10, 18),
+    ],
+)
+def test_native_after_clip_vertical_extent_matches_painter_decoration_bounds(
+    tmp_path,
+    monkeypatch,
+    decoration_kind,
+    glow_after_radius_px,
+    shadow_offset_y,
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("K", 0),
+                    TimingChar("a", 400),
+                    TimingChar("r", 800),
+                    TimingChar("a", 1200),
+                ],
+                end_ms=1800,
+            )
+        ],
+    )
+    style = Style(
+        font_size_px=48,
+        ruby_font_size_px=20,
+        line_lead_in_ms=0,
+        stroke_width_px=4,
+        stroke2_width_px=6,
+        decoration_kind=decoration_kind,
+        glow_before_radius_px=6,
+        glow_after_radius_px=glow_after_radius_px,
+        shadow_offset_y=shadow_offset_y,
+    )
+    track_t_ms, display_style, display_lines, _signal_lines, _title_opacity = (
+        _resolve_visible_content(track, 900, style)
+    )
+    baselines = _resolve_display_baselines(360, track, display_lines, display_style)
+    line_layouts = _resolve_sayatoo_line_layouts(
+        640,
+        360,
+        track,
+        display_lines,
+        baselines,
+        track_t_ms,
+        display_style,
+    )
+    display_line = display_lines[0]
+    line_layout = line_layouts[display_line.lane]
+    py_layout = _layout_line(
+        track,
+        display_line.line,
+        display_style,
+        640,
+        360,
+        baseline_y=line_layout.baseline_y,
+        line_x=line_layout.text_x,
+        lane=display_line.lane,
+    )
+    assert py_layout is not None
+
+    def assert_close(actual, expected, label, tolerance=4.0):
+        assert abs(float(actual) - float(expected)) <= tolerance, (label, actual, expected)
+
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=640, height=360, fps=60)
+        frame900 = renderer.render_frame_png(
+            900,
+            tmp_path / f"{decoration_kind}-clip-extent-900.png",
+        )
+
+    _assert_native_after_clip_matches_layout(
+        frame900,
+        py_layout,
+        style,
+        900,
+        assert_close=assert_close,
+    )
 
 
 def test_native_renderer_after_stroke2_missing_does_not_inherit_before_stroke2(

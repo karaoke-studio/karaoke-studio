@@ -414,33 +414,27 @@ smoke 输出示例：
 - 已解析并使用 `letter_spacing_px`、`stroke2_width_px`、`line_y_margin_px`、`line_gap_px`、`line_y_position`、`dual_line_layout`、`right_to_left` 等基础横排字段。
 - after 填充使用纯色 `fill_color`，font weight 读取 `font_weight`，stroke2 颜色跟随 Render IR 的 `karaoke_colors` 矩阵，不再沿用 C1 smoke 的蓝色渐变、写死 DemiBold 或固定黑色 stroke2。
 - `render_frame` 临时返回 `line_x`、`line_width`、`baseline_y`、`after_clip_left/right/top/height`、`visible_lines` 诊断字段，用于 smoke 阶段验证 clip 行为。
+- `render_frame` 同时返回 `line_diagnostics[]`，覆盖双行 lane 0 / lane 1 的 x、width、baseline 与 after clip 诊断；旧的首行字段继续保留，便于 smoke 与旧测试兼容。
 - `scripts/run_native_renderer_smoke.ps1` 会渲染 0ms / 200ms / 900ms / 1800ms 四帧，并断言 after clip 单调推进、
-  末帧接近整行宽度，且 `line_x` / `line_width` / `baseline_y` / `after_clip_right/top/height` 与 Python `_layout_line` / `_fill_clip_band` 的几何结果接近。
+  末帧接近整行宽度，且 `line_x` / `line_width` / `baseline_y` / `after_clip_right/top/height` 与 Python `_layout_line` / `_fill_clip_band` / C3a visual extent 的几何结果接近。
 - `tests/test_subtitle_render_native_protocol.py` 已加入同类 pytest：本机或 CI 里存在 native exe 时自动跑几何回归，不存在则 `pytest.skip`。
+- 已补 Python renderer vs native renderer 的普通横排像素级回归，覆盖单行与双行；双行测试明确验证 lane 1 下行 x 与 baseline 堆叠。
+- 已修复 `afterStroke2Color` fallback：`karaoke_colors.after.stroke2` 缺省时回到 after stroke2 自身默认，不再错误继承 before stroke2。
+- 已建立 direct vs bake 的 painter 侧像素基线：`KROK_SUBTITLE_HORIZONTAL_LAYER=0` 可禁用横排 layer bake，作为后续 native parity 的矢量 oracle。
 
 仍未完成：
 
-- 尚未做 Python renderer vs native renderer 像素级回归；当前先做几何级回归。
 - 尚未接入 `preview_async.py` 或导出路径。
 - ruby 不在 C2 绘制，完整 ruby layout/timing 放到 C3。
 - 未迁移 glow、shadow、image fill、role/singer override、signal、entry/exit animation、`utopia`；stroke2 目前只覆盖纯色矩阵，gradient/image 等 PaintFill 模式仍未迁移。
 
 ##### C2 已知偏差 / 待办
 
-1. **纵向 clip parity 当前是「自比」，非「真比」。**
-   native 的 after-clip 纵向用 `ceil(stroke_width/2)`；而 painter 的真实纵向 extent 是
-   `_visual_stroke_extent(stroke_width, stroke2_width) + glow + |shadow_dy| + 4`（[painter.py 约 2538 行]），
-   含 stroke2/glow/shadow。parity 测试里 `after_clip_top/height` 的期望值是用 native 的同一公式现推的，
-   并未对到 painter 的真实 clip 函数——因此**painter 比 native 高一截时，差异不会被 parity 抓到**。
-   - 影响：C2 无 glow/shadow，差异主要来自 stroke2——stroke2 越粗，已唱字上下描边外缘越可能被切，
-     表现为「已唱字顶/底轮廓略平」。横排里 band 给得宽，通常切不到可见墨，**严重度低**，但「已验证」是虚的。
-   - 待办：C3 接 glow/shadow 时，把 native 纵向 extent 改为复刻 `_visual_stroke_extent(...)+glow+shadow+4`，
-     且 parity 期望值改为从 painter 真实 clip 函数取，把「自比」升级为「真比」。
-
-2. **`afterStroke2Color` fallback 取了 `beforeStroke2Color`，与相邻 after-* 字段不一致。**
-   [main.cpp 约 209 行]：`afterStroke`/`afterText` 缺省回各自默认，唯独 `afterStroke2` 缺省继承 before。
-   仅当 `karaoke_colors.after.stroke2` 缺省但 `before.stroke2` 有值时触发（半配置场景），全配齐时永不触发。
-   - 待办：确认意图——若要「after 缺省继承 before」就把四个 after-* 字段都改成一致级联；否则改回兜底取自身默认。
+1. **glow/shadow 本体尚未绘制。**
+   C3a 已把 native after-clip 纵向 extent 改为复刻 painter 的 visual extent 口径：
+   `max(_visual_stroke_extent, after_glow_extent, |shadow_dy|, 2) + 4`，并把 smoke / pytest 的 `after_clip_top/height`
+   期望值从旧的 stroke-only 自比升级为 painter 公式真比。当前这一步只保证后续绘制 glow/shadow 时不会被错误 clip 截掉，
+   还没有在 native 里实际画 glow 或 shadow。
 
 ### C3：ruby 与缓存迁移
 
@@ -450,6 +444,21 @@ smoke 输出示例：
 - ruby timing。
 - before/after layer bake cache。
 - glow cache。
+
+#### C3a：visual extent parity（2026-06-25 已启动）
+
+已完成第一刀：
+
+- native 解析 `decoration_kind`、`glow_radius_px`、`glow_before_radius_px`、`glow_after_radius_px`、`shadow_offset_x/y`。
+- native after-clip 的纵向 top/height 使用 painter 同口径 visual extent：
+  `max(stroke/stroke2 extent, after glow extent, |shadow_dy|, 2) + 4`。
+- smoke 与 pytest 均改用 painter 公式作为期望值，新增 glow / shadow 参数化测试，避免再次退回 stroke-only 自比。
+
+仍未完成：
+
+- native 尚未实际绘制 glow / shadow，只是 clip 边界已准备好。
+- ruby layout/timing 仍未迁移。
+- glow bitmap cache 尚未迁移。
 
 验收：
 

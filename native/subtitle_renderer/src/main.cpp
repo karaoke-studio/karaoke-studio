@@ -64,6 +64,12 @@ struct RenderConfig {
     QString afterStroke2Color = QStringLiteral("#000000");
     int strokeWidthPx = 9;
     int stroke2WidthPx = 0;
+    QString decorationKind = QStringLiteral("shadow");
+    int glowRadiusPx = 10;
+    int glowBeforeRadiusPx = 10;
+    int glowAfterRadiusPx = 10;
+    int shadowOffsetX = 0;
+    int shadowOffsetY = 1;
     int lineYMarginPx = 80;
     int lineGapPx = 90;
     int lineLeadInMs = 1800;
@@ -205,6 +211,12 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.afterStrokeColor = strokeColor;
     cfg.strokeWidthPx = std::max(0, intValue(style, QStringLiteral("stroke_width_px"), cfg.strokeWidthPx));
     cfg.stroke2WidthPx = std::max(0, intValue(style, QStringLiteral("stroke2_width_px"), cfg.stroke2WidthPx));
+    cfg.decorationKind = stringValue(style, QStringLiteral("decoration_kind"), cfg.decorationKind);
+    cfg.glowRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_radius_px"), cfg.glowRadiusPx));
+    cfg.glowBeforeRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_before_radius_px"), cfg.glowBeforeRadiusPx));
+    cfg.glowAfterRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_after_radius_px"), cfg.glowAfterRadiusPx));
+    cfg.shadowOffsetX = intValue(style, QStringLiteral("shadow_offset_x"), cfg.shadowOffsetX);
+    cfg.shadowOffsetY = intValue(style, QStringLiteral("shadow_offset_y"), cfg.shadowOffsetY);
     cfg.lineYMarginPx = std::max(0, intValue(style, QStringLiteral("line_y_margin_px"), cfg.lineYMarginPx));
     cfg.lineGapPx = std::max(0, intValue(style, QStringLiteral("line_gap_px"), cfg.lineGapPx));
     cfg.lineLeadInMs = std::max(0, intValue(style, QStringLiteral("line_lead_in_ms"), cfg.lineLeadInMs));
@@ -336,6 +348,39 @@ double visualStrokeExtent(const RenderConfig &cfg) {
     return std::ceil((std::max(cfg.strokeWidthPx, 0) + std::max(cfg.stroke2WidthPx, 0)) / 2.0);
 }
 
+double strokePenWidth(const RenderConfig &cfg) {
+    return std::max(cfg.strokeWidthPx, 0);
+}
+
+double stroke2PenWidth(const RenderConfig &cfg) {
+    return std::max(cfg.strokeWidthPx, 0) + std::max(cfg.stroke2WidthPx, 0);
+}
+
+int glowRadius(const RenderConfig &cfg, bool after) {
+    int value = after ? cfg.glowAfterRadiusPx : cfg.glowBeforeRadiusPx;
+    if (value == 10 && cfg.glowRadiusPx != 10) {
+        value = cfg.glowRadiusPx;
+    }
+    return std::max(value, 1);
+}
+
+double glowPenWidth(const RenderConfig &cfg, bool after) {
+    const double baseWidth = cfg.stroke2WidthPx > 0 ? stroke2PenWidth(cfg) : strokePenWidth(cfg);
+    return std::max(1.0, baseWidth + glowRadius(cfg, after));
+}
+
+double glowExtent(const RenderConfig &cfg, bool after) {
+    const int radius = glowRadius(cfg, after);
+    return std::ceil(glowPenWidth(cfg, after) / 2.0 + radius * 3.0);
+}
+
+double afterClipVerticalExtent(const RenderConfig &cfg) {
+    const double strokeExtent = visualStrokeExtent(cfg);
+    const double glowExtra = cfg.decorationKind == QStringLiteral("glow") ? glowExtent(cfg, true) : 0.0;
+    const double shadowExtra = cfg.decorationKind == QStringLiteral("shadow") ? std::abs(cfg.shadowOffsetY) : 0.0;
+    return std::max({strokeExtent, glowExtra, shadowExtra, 2.0}) + 4.0;
+}
+
 double baselineYForLine(const RenderConfig &cfg, const QFontMetricsF &metrics, int lane, int visibleLineCount) {
     const double pad = visualStrokeExtent(cfg);
     if (cfg.dualLineLayout) {
@@ -462,9 +507,9 @@ std::optional<QRectF> afterClipRect(const RenderConfig &cfg, const TimingLine &l
         return std::nullopt;
     }
 
-    const double strokePad = std::ceil(cfg.strokeWidthPx / 2.0);
-    const double top = layout.baselineY - layout.ascent - strokePad;
-    const double height = layout.height + strokePad * 2.0;
+    const double verticalExtent = afterClipVerticalExtent(cfg);
+    const double top = layout.baselineY - layout.ascent - verticalExtent;
+    const double height = layout.height + verticalExtent * 2.0;
     if (cfg.rightToLeft) {
         const double left = std::clamp(clipEdge, layout.x, layout.x + layout.width);
         return QRectF(left, top, layout.x + layout.width - left, height);
@@ -532,9 +577,9 @@ void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &lin
         } else {
             lineDiagnostics.afterClipLeft = layout.x;
             lineDiagnostics.afterClipRight = layout.x;
-            const double strokePad = std::ceil(cfg.strokeWidthPx / 2.0);
-            lineDiagnostics.afterClipTop = layout.baselineY - layout.ascent - strokePad;
-            lineDiagnostics.afterClipHeight = layout.height + strokePad * 2.0;
+            const double verticalExtent = afterClipVerticalExtent(cfg);
+            lineDiagnostics.afterClipTop = layout.baselineY - layout.ascent - verticalExtent;
+            lineDiagnostics.afterClipHeight = layout.height + verticalExtent * 2.0;
         }
         diagnostics->lines.push_back(lineDiagnostics);
         if (!diagnostics->hasFirstLine) {

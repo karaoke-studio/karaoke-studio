@@ -70,11 +70,13 @@ from PyQt6.QtWidgets import QApplication
 
 from krok_helper.subtitle_render.engine.painter import (
     _fill_clip_band,
-    _horizontal_after_path_clip_rect,
+    _glow_extent,
+    _glow_radius,
     _layout_line,
     _resolve_display_baselines,
     _resolve_sayatoo_line_layouts,
     _resolve_visible_content,
+    _visual_stroke_extent,
 )
 from krok_helper.subtitle_render.models import (
     KaraokeColors,
@@ -154,19 +156,28 @@ def py_clip_right(t_ms):
     return py_layout.x0 if band is None else band[1]
 
 
+def after_clip_vertical_extent(style):
+    stroke_extent = _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px)
+    glow_extent = (
+        _glow_extent(
+            style.stroke_width_px,
+            style.stroke2_width_px,
+            _glow_radius(style, after=True),
+        )
+        if style.decoration_kind == "glow"
+        else 0
+    )
+    shadow_extent = abs(style.shadow_offset_y) if style.decoration_kind == "shadow" else 0
+    return max(stroke_extent, glow_extent, shadow_extent, 2) + 4
+
+
 def assert_close(actual, expected, label, tolerance=4.0):
     assert abs(float(actual) - float(expected)) <= tolerance, (label, actual, expected)
 
 
-expected_clip = _horizontal_after_path_clip_rect(
-    py_layout.fill_segments,
-    py_layout.baseline_y,
-    py_layout.metrics,
-    900,
-    py_layout.rtl,
-    style.stroke_width_px,
-)
-assert expected_clip is not None
+clip_extent = after_clip_vertical_extent(style)
+expected_clip_top = py_layout.baseline_y - py_layout.metrics.ascent() - clip_extent
+expected_clip_height = py_layout.metrics.height() + clip_extent * 2
 
 
 with NativeRendererProcess() as renderer:
@@ -182,8 +193,8 @@ with NativeRendererProcess() as renderer:
     assert_close(line_x, py_layout.x0, "line_x")
     assert_close(frame900["line_width"], py_layout.total_w, "line_width")
     assert_close(frame900["baseline_y"], py_layout.baseline_y, "baseline_y")
-    assert_close(frame900["after_clip_top"], expected_clip.top(), "clip_top")
-    assert_close(frame900["after_clip_height"], expected_clip.height(), "clip_height")
+    assert_close(frame900["after_clip_top"], expected_clip_top, "clip_top")
+    assert_close(frame900["after_clip_height"], expected_clip_height, "clip_height")
     clips = [
         frame0["after_clip_right"],
         frame200["after_clip_right"],
