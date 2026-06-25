@@ -471,12 +471,13 @@ smoke 输出示例：
 - C3b-2 已迁移 ruby 专属配色：`ruby_color` legacy 路径、`ruby_karaoke_colors` 优先级，以及无独立 ruby matrix 时回退主 `karaoke_colors`。
 - pytest 已覆盖 ruby layout/timing 几何 parity，并增加 native 带 ruby / 不带 ruby 输出不同的像素 smoke。
 - pytest 已覆盖 `ruby_color` 与 `ruby_karaoke_colors` 会改变 native ruby 像素输出。
+- C3b-3 已建立受限 ruby Python-vs-native 像素 diff：纯色、无 stroke/glow/shadow、普通横排、全唱完时刻，native 输出落入现有 bounded diff 容差。
 
 仍未完成：
 
 - ruby PaintFill 的 gradient / image / split 等非纯色模式尚未迁移；当前 native 仍只读取 `color`。
 - ruby 与 role/singer override、utopia transition、竖排路径尚未迁移。
-- ruby 像素级 Python-vs-native 严格 diff 尚未建立，目前先以几何 parity + native 有无 ruby 像素 smoke 收口。
+- ruby 在带 stroke/glow/shadow、逐字扫光中间态、复杂 PaintFill 下的 Python-vs-native 像素 diff 尚未建立。
 
 验收：
 
