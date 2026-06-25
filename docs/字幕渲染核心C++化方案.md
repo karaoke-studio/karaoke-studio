@@ -385,8 +385,8 @@ smoke 输出示例：
 
 - 尚未接入 `preview_async.py` 或 `renderer.py`。
 - 尚未实现 shared memory ring buffer。
-- native 侧只消费 Render IR 的基础字段，用于验证协议接缝；当前 `afterText` 字符串拼接只是 toy renderer。
-  C2 必须重写为整行 path + 时间/字符 clip 的模型，不能继承 C1 的简单 `addText(afterText)` 路径。
+- native 侧只消费 Render IR 的基础字段，用于验证协议接缝；C2 已替换 C1 的 `afterText` 字符串拼接，
+  但仍未覆盖完整 Python painter 语义。
 
 ### C2：普通横排路径迁移
 
@@ -403,6 +403,44 @@ smoke 输出示例：
 - 增加 Python renderer vs native renderer 的像素回归测试。
 - 普通工程预览/导出能用 native 路径。
 - 输出与 Python 旧路径视觉差异可解释，最好逐像素一致。
+
+#### C2 实装状态（2026-06-25）
+
+已完成第一段普通横排 native 迁移：
+
+- native 侧不再用 `afterText` 前缀字符串重建已唱路径。
+- before/after 共用同一条整行 `QPainterPath`，已唱层只通过当前时间计算出的横向 clip 叠加。
+- clip 依据每个 `TimingChar` 的 `start_ms` / `pause_release_ms` / 下一字符起点 / 行尾时间做线性推进。
+- 已解析并使用 `letter_spacing_px`、`stroke2_width_px`、`line_y_margin_px`、`line_gap_px`、`line_y_position`、`dual_line_layout`、`right_to_left` 等基础横排字段。
+- after 填充使用纯色 `fill_color`，font weight 读取 `font_weight`，stroke2 颜色跟随 Render IR 的 `karaoke_colors` 矩阵，不再沿用 C1 smoke 的蓝色渐变、写死 DemiBold 或固定黑色 stroke2。
+- `render_frame` 临时返回 `line_x`、`line_width`、`baseline_y`、`after_clip_left/right/top/height`、`visible_lines` 诊断字段，用于 smoke 阶段验证 clip 行为。
+- `scripts/run_native_renderer_smoke.ps1` 会渲染 0ms / 200ms / 900ms / 1800ms 四帧，并断言 after clip 单调推进、
+  末帧接近整行宽度，且 `line_x` / `line_width` / `baseline_y` / `after_clip_right/top/height` 与 Python `_layout_line` / `_fill_clip_band` 的几何结果接近。
+- `tests/test_subtitle_render_native_protocol.py` 已加入同类 pytest：本机或 CI 里存在 native exe 时自动跑几何回归，不存在则 `pytest.skip`。
+
+仍未完成：
+
+- 尚未做 Python renderer vs native renderer 像素级回归；当前先做几何级回归。
+- 尚未接入 `preview_async.py` 或导出路径。
+- ruby 不在 C2 绘制，完整 ruby layout/timing 放到 C3。
+- 未迁移 glow、shadow、image fill、role/singer override、signal、entry/exit animation、`utopia`；stroke2 目前只覆盖纯色矩阵，gradient/image 等 PaintFill 模式仍未迁移。
+
+##### C2 已知偏差 / 待办
+
+1. **纵向 clip parity 当前是「自比」，非「真比」。**
+   native 的 after-clip 纵向用 `ceil(stroke_width/2)`；而 painter 的真实纵向 extent 是
+   `_visual_stroke_extent(stroke_width, stroke2_width) + glow + |shadow_dy| + 4`（[painter.py 约 2538 行]），
+   含 stroke2/glow/shadow。parity 测试里 `after_clip_top/height` 的期望值是用 native 的同一公式现推的，
+   并未对到 painter 的真实 clip 函数——因此**painter 比 native 高一截时，差异不会被 parity 抓到**。
+   - 影响：C2 无 glow/shadow，差异主要来自 stroke2——stroke2 越粗，已唱字上下描边外缘越可能被切，
+     表现为「已唱字顶/底轮廓略平」。横排里 band 给得宽，通常切不到可见墨，**严重度低**，但「已验证」是虚的。
+   - 待办：C3 接 glow/shadow 时，把 native 纵向 extent 改为复刻 `_visual_stroke_extent(...)+glow+shadow+4`，
+     且 parity 期望值改为从 painter 真实 clip 函数取，把「自比」升级为「真比」。
+
+2. **`afterStroke2Color` fallback 取了 `beforeStroke2Color`，与相邻 after-* 字段不一致。**
+   [main.cpp 约 209 行]：`afterStroke`/`afterText` 缺省回各自默认，唯独 `afterStroke2` 缺省继承 before。
+   仅当 `karaoke_colors.after.stroke2` 缺省但 `before.stroke2` 有值时触发（半配置场景），全配齐时永不触发。
+   - 待办：确认意图——若要「after 缺省继承 before」就把四个 after-* 字段都改成一致级联；否则改回兜底取自身默认。
 
 ### C3：ruby 与缓存迁移
 
@@ -499,8 +537,17 @@ smoke 输出示例：
 
 ## 7. 风险清单
 
-1. **Qt 版本差异**
-   PyQt6 wheel 与 native Qt 如果版本不同，字体 hinting、路径描边、抗锯齿可能产生像素差异。
+1. **Qt 版本差异（已加版本指纹强约束）**
+   PyQt6 wheel 与 native Qt 如果版本不同，字体 hinting、路径描边、抗锯齿会产生像素差异。
+   **不变量：native Qt 必须 == PyQt6 `QT_VERSION_STR`。** 落地方式：
+   - `scripts/run_native_renderer_smoke.ps1` 在构建前读 PyQt6 的 `QT_VERSION_STR`，据此推导 `QtRoot`、
+     安装/使用对应版本，并把版本号通过 `-DKROK_EXPECTED_QT_VERSION` 传给 CMake。
+   - `native/subtitle_renderer/CMakeLists.txt` 断言 `Qt6_VERSION VERSION_EQUAL KROK_EXPECTED_QT_VERSION`，
+     不一致直接 `FATAL_ERROR`（已实测：6.10 配 expected=6.11 会构建失败）。
+   - 含义：以后升 PyQt6 时，**必须同步把 native 重建到相同 Qt 版本**，否则构建直接挡下；
+     parity 测试的容差因此只用于吸收舍入噪声，而不是悄悄掩盖跨版本度量差。
+   - 历史背景：C0/C1/C2 早期 native 按 6.10.0 构建，而 PyQt6 自带 6.11.0；几何 parity 当时是靠 4px
+     容差吸收了 6.10↔6.11 的差异。指纹约束就是为了堵住这种静默漂移。
 
 2. **字体一致性**
    Windows/macOS 字体枚举、fallback、CJK/ruby 字形 fallback 都要与现有 Python 路径尽量一致。

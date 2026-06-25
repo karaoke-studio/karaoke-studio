@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import os
 from pathlib import Path
 import stat
@@ -8,7 +9,11 @@ import textwrap
 
 import pytest
 
+from krok_helper.subtitle_render.engine.painter import _fill_clip_band, _layout_line
 from krok_helper.subtitle_render.models import (
+    KaraokeColors,
+    KaraokeColorState,
+    PaintFill,
     RubyAnnotation,
     Style,
     TimingChar,
@@ -157,3 +162,78 @@ def test_native_renderer_process_times_out_when_sidecar_stalls(tmp_path):
 
     renderer.close()
     assert renderer.is_running is False
+
+
+def test_native_renderer_process_matches_python_layout_when_exe_exists(tmp_path, monkeypatch):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("K", 0),
+                    TimingChar("a", 400),
+                    TimingChar("r", 800),
+                    TimingChar("a", 1200),
+                ],
+                end_ms=1800,
+            )
+        ],
+    )
+    style = Style(
+        font_size_px=48,
+        ruby_font_size_px=20,
+        line_lead_in_ms=0,
+        stroke_width_px=10,
+        stroke2_width_px=6,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=PaintFill(color="#FFFFFF"),
+                stroke=PaintFill(color="#222222"),
+                stroke2=PaintFill(color="#202020"),
+            ),
+            after=KaraokeColorState(
+                text=PaintFill(color="#FF5A6F"),
+                stroke=PaintFill(color="#222222"),
+                stroke2=PaintFill(color="#303030"),
+            ),
+        ),
+    )
+    py_layout = _layout_line(track, track.lines[0], style, 640, 360)
+    assert py_layout is not None
+
+    def assert_close(actual, expected, label, tolerance=4.0):
+        assert abs(float(actual) - float(expected)) <= tolerance, (label, actual, expected)
+
+    def py_clip_right(t_ms):
+        band = _fill_clip_band(py_layout.fill_segments, t_ms, py_layout.rtl)
+        return py_layout.x0 if band is None else band[1]
+
+    stroke_pad = math.ceil(style.stroke_width_px / 2)
+    expected_clip_top = py_layout.baseline_y - py_layout.metrics.ascent() - stroke_pad
+    expected_clip_height = py_layout.metrics.height() + stroke_pad * 2
+
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=640, height=360, fps=60)
+        frame0 = renderer.render_frame_png(0, tmp_path / "frame-000.png")
+        frame200 = renderer.render_frame_png(200, tmp_path / "frame-200.png")
+        frame900 = renderer.render_frame_png(900, tmp_path / "frame-900.png")
+        frame1800 = renderer.render_frame_png(1800, tmp_path / "frame-1800.png")
+
+    assert_close(frame900["line_x"], py_layout.x0, "line_x")
+    assert_close(frame900["line_width"], py_layout.total_w, "line_width")
+    assert_close(frame900["baseline_y"], py_layout.baseline_y, "baseline_y")
+    assert_close(frame900["after_clip_top"], expected_clip_top, "clip_top")
+    assert_close(frame900["after_clip_height"], expected_clip_height, "clip_height")
+    assert_close(frame0["after_clip_right"], py_clip_right(0), "clip@0")
+    assert_close(frame200["after_clip_right"], py_clip_right(200), "clip@200")
+    assert_close(frame900["after_clip_right"], py_clip_right(900), "clip@900")
+    assert_close(frame1800["after_clip_right"], py_clip_right(1800), "clip@1800")
