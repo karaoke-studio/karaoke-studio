@@ -146,6 +146,20 @@ def test_native_preview_lookahead_timestamps_only_expand_while_playing():
         1_050,
         1_067,
     ]
+    assert native_preview_timestamps(
+        1_000,
+        playing=True,
+        fps=60,
+        lookahead_frames=4,
+        include_current=False,
+    ) == [1_017, 1_033, 1_050, 1_067]
+    assert native_preview_timestamps(
+        1_000,
+        playing=False,
+        fps=60,
+        lookahead_frames=4,
+        include_current=False,
+    ) == []
 
 
 def test_native_preview_frame_cache_detaches_and_evicts_oldest():
@@ -568,6 +582,58 @@ def test_native_async_renderer_stats_report_cache_counts(qapp, monkeypatch):
         assert stats["cache_hits"] == 1
         assert stats["cache_misses"] == 1
     finally:
+        renderer.stop()
+
+
+def test_native_async_renderer_skips_current_native_frame_after_cache_hit(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.models import Style, TimingTrack
+
+    started = threading.Event()
+    unblock = threading.Event()
+    started_timestamps: list[int] = []
+
+    class FakeNativeRendererProcess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return {"ok": True, "event": "ready"}
+
+        def configure(self, *args, **kwargs):
+            return {"ok": True, "event": "configured"}
+
+        def start_render_range(self, timestamps_ms, *, generation, threads, shm_key=None, ring_slots=3):
+            started_timestamps.extend(int(value) for value in timestamps_ms)
+            started.set()
+            return {"ok": True, "event": "range_started"}
+
+        def read_event(self):
+            unblock.wait(timeout=0.05)
+            return {"ok": True, "event": "range_done"}
+
+        def send_cancel_generation(self, generation):
+            unblock.set()
+
+        def close(self):
+            unblock.set()
+
+    monkeypatch.setattr(pa, "NativeRendererProcess", FakeNativeRendererProcess)
+    renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
+    try:
+        renderer.set_state(TimingTrack(), Style())
+        renderer.set_playing(True)
+        image = QImage(8, 8, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor("#111111"))
+        renderer._frame_cache.store(1_017, image)
+
+        renderer.request(1_017)
+
+        assert started.wait(timeout=2.0)
+        assert 1_017 not in started_timestamps
+        assert started_timestamps
+    finally:
+        unblock.set()
         renderer.stop()
 
 

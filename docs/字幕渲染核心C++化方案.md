@@ -728,14 +728,16 @@ C:\Python314\python.exe -m pytest tests/test_subtitle_render_native_protocol.py 
   `NativeAsyncSubtitleRenderer`，输出请求帧、唯一回帧、重复回帧事件、p95 延迟，并抽样比较两者 subtitle layer 画质。
   `A stain` 真素材 720p/60fps/5s probe 中，Python 为 `ready=296/296 p95=1.57ms`，native 为
   `ready=292/296 p95=0.93ms`，4 个抽样时间点像素差均为 0。
+- native preview 已跳过 cache hit 后的当前帧重复渲染：cache 命中会即时 emit cached frame，同时只向 sidecar 请求未来
+  look-ahead 帧。`A stain` 720p/60fps/5s 对比中 native 重复回帧事件从约 `291` 降到 `1`，p95 延迟约 `0.77ms`。
 
 待继续：
 
 - 当前 look-ahead 缓存仍是最小实现，需继续在真实播放中结合 stats 观察命中率、内存占用、晚到帧比例，并决定是否要
   增加命中率/丢帧率汇总输出或可视化诊断。
 - 还需要把高频 seek / resize / style churn 压测沉淀成更稳定的基准输出，例如 CSV 汇总、失败阈值或 CI 可选 smoke。
-- 还需要解释并优化 native preview 的重复回帧事件：当前 cache 命中后可能仍收到同一 `t_ms` 的晚到 native
-  当前帧，功能正确但会增加 GUI signal 噪声。
+- 还需要继续追踪 native preview 的少量未回帧：当前 `A stain` 720p/60fps/5s 为 `ready=292/296`，需判断是
+  generation 取消、range 末尾调度，还是脚本统计窗口造成。
 
 ### C6：接入导出
 

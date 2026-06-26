@@ -62,15 +62,20 @@ def native_preview_timestamps(
     playing: bool,
     fps: int,
     lookahead_frames: int,
+    include_current: bool = True,
 ) -> list[int]:
     """Return current frame plus optional playback look-ahead timestamps."""
     current = int(t_ms)
     if not playing:
-        return [current]
+        return [current] if include_current else []
     normalized_fps = max(int(fps), 1)
     frame_ms = 1000.0 / normalized_fps
     count = max(int(lookahead_frames), 0)
-    timestamps = [int(round(current + frame_ms * offset)) for offset in range(count + 1)]
+    start_offset = 0 if include_current else 1
+    timestamps = [
+        int(round(current + frame_ms * offset))
+        for offset in range(start_offset, count + 1)
+    ]
     return list(dict.fromkeys(timestamps))
 
 
@@ -347,6 +352,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         self._generation = 0
         self._active_generation: Optional[int] = None
         self._pending_t: Optional[int] = None
+        self._pending_skip_current = False
         self._stopped = False
         self._needs_configure = True
         self._renderer: Optional[NativeRendererProcess] = None
@@ -415,6 +421,7 @@ class NativeAsyncSubtitleRenderer(QObject):
             self._advance_generation_locked()
             self._last_t = requested_t
             self._pending_t = self._last_t
+            self._pending_skip_current = cached is not None
             self._condition.notify()
 
     def set_playing(self, playing: bool) -> None:
@@ -428,6 +435,7 @@ class NativeAsyncSubtitleRenderer(QObject):
             if self._last_t is not None:
                 self._advance_generation_locked()
                 self._pending_t = self._last_t
+                self._pending_skip_current = False
                 self._condition.notify()
 
     def stop(self) -> None:
@@ -447,7 +455,7 @@ class NativeAsyncSubtitleRenderer(QObject):
             snapshot = self._take_next_request()
             if snapshot is None:
                 return
-            track, style, width, height, t_ms, generation, needs_configure, playing = snapshot
+            track, style, width, height, t_ms, generation, needs_configure, playing, skip_current = snapshot
             if track is None or style is None:
                 continue
             if self._renderer_failed:
@@ -463,6 +471,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                     generation=generation,
                     needs_configure=needs_configure,
                     playing=playing,
+                    skip_current=skip_current,
                 )
             except NativeRendererError:
                 self._renderer_failed = True
@@ -471,14 +480,16 @@ class NativeAsyncSubtitleRenderer(QObject):
 
     def _take_next_request(
         self,
-    ) -> tuple[TimingTrack | None, Style | None, int, int, int, int, bool, bool] | None:
+    ) -> tuple[TimingTrack | None, Style | None, int, int, int, int, bool, bool, bool] | None:
         with self._condition:
             while not self._stopped and self._pending_t is None:
                 self._condition.wait()
             if self._stopped:
                 return None
             t_ms = int(self._pending_t or 0)
+            skip_current = self._pending_skip_current
             self._pending_t = None
+            self._pending_skip_current = False
             needs_configure = self._needs_configure
             self._needs_configure = False
             return (
@@ -490,6 +501,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                 self._generation,
                 needs_configure,
                 self._playing,
+                skip_current,
             )
 
     def _render_native(
@@ -503,7 +515,17 @@ class NativeAsyncSubtitleRenderer(QObject):
         generation: int,
         needs_configure: bool,
         playing: bool,
+        skip_current: bool,
     ) -> None:
+        timestamps = native_preview_timestamps(
+            t_ms,
+            playing=playing,
+            fps=self._fps,
+            lookahead_frames=self._lookahead_frames,
+            include_current=not skip_current,
+        )
+        if not timestamps:
+            return
         with self._process_lock:
             renderer_was_missing = self._renderer is None
             renderer = self._ensure_renderer()
@@ -515,12 +537,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                     self._active_generation = generation
             try:
                 renderer.start_render_range(
-                    native_preview_timestamps(
-                        t_ms,
-                        playing=playing,
-                        fps=self._fps,
-                        lookahead_frames=self._lookahead_frames,
-                    ),
+                    timestamps,
                     generation=generation,
                     threads=self._threads,
                     shm_key=shm_key,
