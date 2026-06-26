@@ -1264,6 +1264,31 @@ def test_main_window_screen_panel_updates_export_and_persists(qapp, monkeypatch)
     assert provider.data["screen"]["fps"] == 120
 
 
+def test_main_window_native_export_switch_loads_and_persists(qapp, monkeypatch):
+    monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
+    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+
+    class FakeSettingsProvider:
+        def __init__(self):
+            self.data = {"output": {"native_export_enabled": True}}
+
+        def load(self):
+            return dict(self.data)
+
+        def save(self, data):
+            self.data = dict(data)
+
+    provider = FakeSettingsProvider()
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+
+    assert win._export_native_check.isChecked() is True
+
+    win._export_native_check.setChecked(False)
+
+    assert provider.data["output"]["native_export_enabled"] is False
+    assert win._project_dirty is True
+
+
 def test_main_window_persists_style_and_selected_scheme(qapp, monkeypatch):
     monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
     monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)

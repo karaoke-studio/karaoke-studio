@@ -67,6 +67,7 @@ class RenderJob:
     encoder_mode: str = "cpu"
     crf: int = 18
     preset: str = "veryfast"
+    native_export_enabled: bool | None = None
 
 
 def render_subtitle_video(
@@ -85,7 +86,7 @@ def render_subtitle_video(
 
     duration_ms = _resolve_duration_ms(job)
     total_frames = _frame_count(duration_ms, job.fps)
-    native_export_requested = _native_export_enabled()
+    native_export_requested = _native_export_requested(job)
     native_renderer_path = resolve_native_renderer_path() if native_export_requested else None
     native_export_active = native_renderer_path is not None
     if native_export_requested and native_renderer_path is None:
@@ -345,6 +346,12 @@ def _native_export_enabled() -> bool:
     return os.environ.get("KROK_SUBTITLE_NATIVE_EXPORT", "0").strip().lower() in (
         "1", "true", "yes", "on",
     )
+
+
+def _native_export_requested(job: RenderJob) -> bool:
+    if job.native_export_enabled is not None:
+        return bool(job.native_export_enabled)
+    return _native_export_enabled()
 
 
 def _paint_overlay_strip(

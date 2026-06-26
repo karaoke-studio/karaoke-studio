@@ -94,11 +94,17 @@ def is_project_file(path: object) -> bool:
 
 
 def project_output_payload(
-    *, encoder_mode: str, crf: int, preset: str, output_path: str
+    *,
+    encoder_mode: str,
+    crf: int,
+    preset: str,
+    output_path: str,
+    native_export_enabled: bool = False,
 ) -> dict[str, Any]:
     return {
         "encoder_mode": encoder_mode,
         "crf": int(crf),
         "preset": preset,
         "output_path": output_path,
+        "native_export_enabled": bool(native_export_enabled),
     }

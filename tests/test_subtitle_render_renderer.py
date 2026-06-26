@@ -421,6 +421,17 @@ def test_render_uses_native_full_frame_export_when_enabled(monkeypatch, tmp_path
     assert native_kwargs["renderer_path"] == native_path
 
 
+def test_render_job_native_export_flag_overrides_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("KROK_SUBTITLE_NATIVE_EXPORT", "1")
+
+    assert renderer._native_export_requested(replace(_job(tmp_path), native_export_enabled=False)) is False
+    assert renderer._native_export_requested(replace(_job(tmp_path), native_export_enabled=True)) is True
+
+    monkeypatch.setenv("KROK_SUBTITLE_NATIVE_EXPORT", "0")
+
+    assert renderer._native_export_requested(replace(_job(tmp_path), native_export_enabled=None)) is False
+
+
 def test_render_native_export_error_removes_incomplete_output(monkeypatch, tmp_path):
     job = replace(_job(tmp_path), width=2, height=1, fps=2, duration_ms=1000)
     native_path = tmp_path / "krok_subtitle_renderer.exe"

@@ -32,6 +32,7 @@ from PyQt6.QtCore import QObject, QRect, QSize, QThread, Qt, pyqtSignal as Signa
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog,
+    QCheckBox,
     QComboBox,
     QHBoxLayout,
     QLabel,
@@ -260,6 +261,9 @@ class SubtitleRenderWindow(QWidget):
         self._export_tab = self._make_export_tab()
         self._stack.addWidget(self._preview_tab)
         self._stack.addWidget(self._export_tab)
+        persisted = self._load_subtitle_settings()
+        output = persisted.get("output") if isinstance(persisted.get("output"), dict) else {}
+        self._apply_output_settings(output)
         self._set_export_screen_controls(self._screen_settings)
         self._sync_preview_output_size()
         self._export_width_spin.valueChanged.connect(self._sync_preview_output_size)
@@ -355,6 +359,7 @@ class SubtitleRenderWindow(QWidget):
                 crf=self._export_crf_spin.value(),
                 preset=str(self._export_preset_combo.currentData() or "veryfast"),
                 output_path=self._export_output_edit.text().strip(),
+                native_export_enabled=self._export_native_check.isChecked(),
             ),
         )
 
@@ -408,6 +413,11 @@ class SubtitleRenderWindow(QWidget):
         out_path = output.get("output_path")
         if isinstance(out_path, str) and out_path.strip():
             self._export_output_edit.setText(out_path.strip())
+        blocked = self._export_native_check.blockSignals(True)
+        try:
+            self._export_native_check.setChecked(bool(output.get("native_export_enabled", False)))
+        finally:
+            self._export_native_check.blockSignals(blocked)
 
     def _confirm_discard_changes(self) -> bool:
         """有未保存改动时弹确认；返回 True 表示可以继续（已处理）。"""
@@ -679,6 +689,14 @@ class SubtitleRenderWindow(QWidget):
         encode_row.addWidget(self._labeled_export_control("质量", self._export_crf_spin))
         layout.addLayout(encode_row)
 
+        self._export_native_check = QCheckBox("实验：使用 native 字幕渲染器导出")
+        self._export_native_check.setToolTip(
+            "开启后会优先使用本机 native sidecar 渲染字幕帧；不可用时自动回退 Python 渲染器。"
+        )
+        self._export_native_check.toggled.connect(self._on_output_settings_changed)
+        themed(self._export_native_check, lambda: f"color: {palette().text_secondary}; font-size: 9.5pt;")
+        layout.addWidget(self._export_native_check)
+
         self._export_progress = QProgressBar()
         self._export_progress.setRange(0, 1)
         self._export_progress.setValue(0)
@@ -934,6 +952,10 @@ class SubtitleRenderWindow(QWidget):
         index = self._export_fps_combo.findData(fps)
         self._export_fps_combo.setCurrentIndex(index if index >= 0 else 0)
 
+    def _on_output_settings_changed(self) -> None:
+        self._save_persisted_state()
+        self._mark_project_dirty()
+
     def _on_scheme_selection_changed(self, key: str) -> None:
         self._selected_scheme_key = key
         self._save_persisted_state()
@@ -952,6 +974,10 @@ class SubtitleRenderWindow(QWidget):
         data["style"] = style_to_dict(self._style)
         data["screen"] = screen_settings_to_dict(self._screen_settings)
         data["selected_scheme_key"] = self._selected_scheme_key
+        if hasattr(self, "_export_native_check"):
+            output = dict(data.get("output")) if isinstance(data.get("output"), dict) else {}
+            output["native_export_enabled"] = self._export_native_check.isChecked()
+            data["output"] = output
         try:
             if self._settings_provider is not None and hasattr(self._settings_provider, "save"):
                 self._settings_provider.save(data)
@@ -1018,6 +1044,7 @@ class SubtitleRenderWindow(QWidget):
             encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
             crf=self._export_crf_spin.value(),
             preset=str(self._export_preset_combo.currentData() or "veryfast"),
+            native_export_enabled=self._export_native_check.isChecked(),
         )
 
     def _current_export_duration_ms(self) -> int:

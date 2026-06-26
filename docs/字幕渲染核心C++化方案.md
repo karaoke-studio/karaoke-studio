@@ -819,6 +819,9 @@ C:\Python314\python.exe -m pytest tests\test_subtitle_render_transport.py tests\
   帧，跳过 ffmpeg/H.264 编码与抽帧链路，用于建立更干净的渲染器级质量基线。
 - `engine/native_export.py` 已补 `iter_native_rgba_frames_at_times()`，供质量抽样按指定 timestamp 读取 native shared-memory
   RGBA 帧；原导出路径继续通过 `iter_native_rgba_frames()` 按帧序输出，不改变默认导出口径。
+- 导出页已新增“实验：使用 native 字幕渲染器导出”开关，默认关闭；开关会写入全局 `subtitle_render.output` 与
+  `.yurika` 项目文件的 `output.native_export_enabled`。开启后 `RenderJob.native_export_enabled=True`，不再依赖全局
+  `KROK_SUBTITLE_NATIVE_EXPORT`；脚本与自动化仍可继续用环境变量走旧入口。
 - 可不传 `--video`，脚本会用 ffmpeg 生成黑底背景；传真实背景视频时可测完整素材链路。
 - A stain 真实 LRC、720p/60fps/5s、`--disable-strip` 初测：
   - Python full-frame：`frames=300`，约 `97.57fps`，`elapsed=3074.74ms`
@@ -870,7 +873,7 @@ raw_quality t=4500ms: changed=0/18849 max_delta=0
 
 待继续：
 
-- native export 质量基线已通过；下一步建议做 UI/设置里的实验开关，仍保持默认关闭，并在日志里明确 native sidecar / fallback 状态。
+- native export 质量基线与 UI/设置实验开关已通过；下一步进入 C7，补 native sidecar 的构建/打包/发布接线。
 
 ### C7：构建与发布
 
