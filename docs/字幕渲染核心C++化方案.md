@@ -798,14 +798,42 @@ C:\Python314\python.exe -m pytest tests\test_subtitle_render_transport.py tests\
 
 第一阶段：
 
-- Python `renderer.py` 仍负责 ffmpeg 命令与进度。
-- native 渲染 RGBA frame/range。
-- Python 按序写 ffmpeg stdin。
+- 已新增 `engine/native_export.py` 薄 adapter：native sidecar 通过 `render_range` + shared memory ring 返回全帧
+  RGBA8888，Python 按序读取并可写入 ffmpeg stdin。
+- adapter 覆盖 frame timestamp、chunk/ring 大小、stride padding 打包、乱序 ready 事件重排、跨 chunk 输出与
+  `cancel_generation`。
+- Python `renderer.py` 仍负责 ffmpeg 命令、进度、取消、清理与 fallback 口径。
 
 第二阶段：
 
-- native renderer 可选直接写 rawvideo pipe。
-- Python 只负责启动 ffmpeg、取消、日志、错误上报。
+- 已通过 `KROK_SUBTITLE_NATIVE_EXPORT=1` 把 native full-frame export 接入 `render_subtitle_video`。
+- 默认仍走 Python renderer；native sidecar 找不到时自动回退 Python。
+- 当前 native export 仅走 full-frame；开启时跳过 strip/bands 预扫，避免被条带优化挡住。
+- native 运行中失败会终止 ffmpeg 并删除半成品，不做中途续接 fallback。
+
+第三阶段：
+
+- 已新增 `scripts/compare_export_backends.py`，可端到端对比 Python export 与 native full-frame export，输出 summary CSV，
+  并从两个 MP4 中抽帧做像素采样差异统计。
+- 可不传 `--video`，脚本会用 ffmpeg 生成黑底背景；传真实背景视频时可测完整素材链路。
+- A stain 真实 LRC、720p/60fps/5s、`--disable-strip` 初测：
+  - Python full-frame：`frames=300`，约 `97.57fps`，`elapsed=3074.74ms`
+  - native full-frame：`frames=300`，约 `152.11fps`，`elapsed=1972.31ms`
+  - quality 抽样 5 帧：`changed=0`、`max_delta=0`
+
+当前验证：
+
+```powershell
+C:\Python314\python.exe -m pytest tests\test_subtitle_render_native_benchmark.py -q
+C:\Python314\python.exe -m pytest tests\test_subtitle_render_transport.py tests\test_subtitle_render_native_benchmark.py tests\test_subtitle_render_native_export.py tests\test_subtitle_render_renderer.py -q
+C:\Python314\python.exe scripts\compare_export_backends.py --lrc "D:\カラオケ\songs\A stain\A stain.lrc" --native-renderer "D:\カラオケ\krok-helper\build\native-renderer\krok_subtitle_renderer.exe" --duration-ms 5000 --fps 60 --width 1280 --height 720 --sample-frames 5 --disable-strip --offscreen
+```
+
+待继续：
+
+- 用真实背景视频再跑 Python default（strip/bands 开）vs native full-frame，判断端到端收益是否仍稳定。
+- 增加 raw overlay 级质量对比入口，避开 H.264 编码带来的潜在抽帧噪声。
+- 若导出稳定，再考虑 UI/设置里的实验开关；否则先继续优化 native export chunk/threads/诊断字段。
 
 ### C7：构建与发布
 

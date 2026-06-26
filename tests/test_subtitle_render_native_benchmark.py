@@ -19,6 +19,14 @@ from scripts.compare_preview_backends import (
     _image_diff_summary,
     _summarize_backend_samples,
 )
+from scripts.compare_export_backends import (
+    ExportRunResult,
+    _build_parser as _build_export_parser,
+    _frame_count as _export_frame_count,
+    _result_row as _export_result_row,
+    _run_export as _run_export_backend,
+    _sample_times as _export_sample_times,
+)
 from scripts.probe_native_preview_stats import (
     _build_parser,
     _churned_size,
@@ -29,6 +37,7 @@ from scripts.probe_native_preview_stats import (
     _summary_row,
 )
 from krok_helper.subtitle_render.models import Style
+from pathlib import Path
 from PyQt6.QtGui import QColor, QImage
 
 
@@ -424,3 +433,119 @@ def test_compare_preview_image_diff_summary_samples_rgba_pixels() -> None:
     assert same["changed_pixels"] == 0
     assert diff["changed_pixels"] == 1
     assert diff["max_channel_delta"] == 255
+
+
+def test_compare_export_parser_accepts_native_export_options() -> None:
+    args = _build_export_parser().parse_args(
+        [
+            "--lrc",
+            "song.lrc",
+            "--video",
+            "bg.mp4",
+            "--native-renderer",
+            "renderer.exe",
+            "--duration-ms",
+            "5000",
+            "--sample-frames",
+            "3",
+            "--disable-strip",
+            "--out",
+            "summary.csv",
+        ]
+    )
+
+    assert args.lrc.name == "song.lrc"
+    assert args.video.name == "bg.mp4"
+    assert args.native_renderer.name == "renderer.exe"
+    assert args.duration_ms == 5000
+    assert args.sample_frames == 3
+    assert args.disable_strip is True
+    assert args.out.name == "summary.csv"
+
+
+def test_compare_export_helpers_report_frames_samples_and_summary() -> None:
+    assert _export_frame_count(1001, 60) == 61
+    assert _export_sample_times(1000, 3) == [167, 500, 833]
+
+    row = _export_result_row(
+        ExportRunResult(
+            backend="native",
+            output_path=Path("native.mp4"),
+            elapsed_ms=500.0,
+            total_frames=60,
+            progress_events=60,
+            file_size=1234,
+        )
+    )
+
+    assert row["backend"] == "native"
+    assert row["frames"] == 60
+    assert row["export_fps"] == "120.00"
+    assert row["file_size"] == 1234
+
+
+def test_compare_export_run_sets_backend_env(monkeypatch, tmp_path) -> None:
+    calls = []
+
+    def fake_render_subtitle_video(job, *, on_progress=None):
+        calls.append(
+            {
+                "native_export": os.environ.get("KROK_SUBTITLE_NATIVE_EXPORT"),
+                "native_renderer": os.environ.get("KROK_SUBTITLE_NATIVE_RENDERER"),
+                "strip": os.environ.get("KROK_SUBTITLE_RENDER_STRIP"),
+                "output": job.output_path.name,
+            }
+        )
+        if on_progress is not None:
+            on_progress(1, 1)
+        job.output_path.write_bytes(b"mp4")
+
+    import krok_helper.subtitle_render.engine.renderer as render_module
+
+    monkeypatch.setattr(render_module, "render_subtitle_video", fake_render_subtitle_video)
+    background = tmp_path / "bg.mp4"
+    background.write_bytes(b"bg")
+    native_renderer = tmp_path / "renderer.exe"
+
+    python_result = _run_export_backend(
+        "python",
+        track=None,
+        style=Style(),
+        background_video=background,
+        output_path=tmp_path / "python.mp4",
+        width=2,
+        height=2,
+        fps=1,
+        duration_ms=1000,
+        include_audio=False,
+        crf=18,
+        preset="veryfast",
+        encoder_mode="cpu",
+        native_renderer=native_renderer,
+        strip_enabled=False,
+    )
+    native_result = _run_export_backend(
+        "native",
+        track=None,
+        style=Style(),
+        background_video=background,
+        output_path=tmp_path / "native.mp4",
+        width=2,
+        height=2,
+        fps=1,
+        duration_ms=1000,
+        include_audio=False,
+        crf=18,
+        preset="veryfast",
+        encoder_mode="cpu",
+        native_renderer=native_renderer,
+        strip_enabled=False,
+    )
+
+    assert calls[0]["native_export"] == "0"
+    assert calls[0]["strip"] == "0"
+    assert calls[1]["native_export"] == "1"
+    assert calls[1]["native_renderer"] == str(native_renderer)
+    assert calls[1]["strip"] == "0"
+    assert python_result.progress_events == 1
+    assert native_result.file_size == 3
