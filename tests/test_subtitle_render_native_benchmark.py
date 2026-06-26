@@ -13,6 +13,10 @@ from scripts.bench_native_renderer import (
     _sample_rows,
     _summarize_samples,
 )
+from scripts.probe_native_preview_stats import (
+    _format_stats_line,
+    _playback_times,
+)
 
 
 def test_sample_timestamps_covers_window_endpoints() -> None:
@@ -161,3 +165,34 @@ def test_native_glow_cache_mode_restores_environment(monkeypatch) -> None:
 
     assert os.environ["KROK_SUBTITLE_NATIVE_GLOW_CACHE"] == "custom"
     assert "KROK_SUBTITLE_GLOW_CACHE" not in os.environ
+
+
+def test_preview_probe_playback_times_cover_duration_at_fps() -> None:
+    assert _playback_times(duration_ms=100, fps=25) == [0, 40, 80, 100]
+    assert _playback_times(duration_ms=0, fps=60) == [0]
+
+
+def test_preview_probe_formats_stats_line_with_deltas() -> None:
+    line = _format_stats_line(
+        elapsed_ms=1200,
+        t_ms=3400,
+        current={
+            "cache_hits": 5,
+            "cache_misses": 8,
+            "future_frames_cached": 3,
+            "stale_frames_dropped": 2,
+            "generations_cancelled": 1,
+        },
+        previous={
+            "cache_hits": 2,
+            "cache_misses": 6,
+            "future_frames_cached": 1,
+            "stale_frames_dropped": 2,
+            "generations_cancelled": 0,
+        },
+    )
+
+    assert line == (
+        "elapsed=1.20s t=3400ms "
+        "hit=5(+3) miss=8(+2) future=3(+2) stale=2(+0) cancel=1(+1)"
+    )
