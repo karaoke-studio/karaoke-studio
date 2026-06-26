@@ -3973,7 +3973,9 @@ QJsonObject parseErrorResponse(const QString &message) {
 }  // namespace
 
 int main(int argc, char **argv) {
+#if !defined(Q_OS_WIN)
     qputenv("QT_QPA_PLATFORM", qgetenv("QT_QPA_PLATFORM").isEmpty() ? QByteArray("offscreen") : qgetenv("QT_QPA_PLATFORM"));
+#endif
     QApplication app(argc, argv);
 
     QJsonObject ready = response(true, QStringLiteral("ready"));
