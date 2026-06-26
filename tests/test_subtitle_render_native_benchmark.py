@@ -13,6 +13,11 @@ from scripts.bench_native_renderer import (
     _sample_rows,
     _summarize_samples,
 )
+from scripts.compare_preview_backends import (
+    PreviewBackendSample,
+    _image_diff_summary,
+    _summarize_backend_samples,
+)
 from scripts.probe_native_preview_stats import (
     _build_parser,
     _churned_size,
@@ -21,6 +26,7 @@ from scripts.probe_native_preview_stats import (
     _playback_times,
 )
 from krok_helper.subtitle_render.models import Style
+from PyQt6.QtGui import QColor, QImage
 
 
 def test_sample_timestamps_covers_window_endpoints() -> None:
@@ -241,3 +247,58 @@ def test_preview_probe_churned_style_alternates_font_size() -> None:
 
     assert _churned_style(style, churn_index=0, delta_px=6).font_size_px == 100
     assert _churned_style(style, churn_index=1, delta_px=6).font_size_px == 106
+
+
+def test_compare_preview_backend_summary_reports_latency_and_fps() -> None:
+    row = _summarize_backend_samples(
+        "native",
+        requested_count=4,
+        duration_ms=1000,
+        samples=[
+            PreviewBackendSample(t_ms=0, latency_ms=10.0),
+            PreviewBackendSample(t_ms=17, latency_ms=20.0),
+        ],
+        extra={"cache_hits": 3},
+    )
+
+    assert row["backend"] == "native"
+    assert row["requested_frames"] == 4
+    assert row["ready_frames"] == 2
+    assert row["dropped_frames"] == 2
+    assert row["ready_fps"] == "2.00"
+    assert row["latency_mean_ms"] == "15.0000"
+    assert row["latency_p95_ms"] == "20.0000"
+    assert row["cache_hits"] == 3
+
+
+def test_compare_preview_backend_summary_counts_duplicate_ready_events() -> None:
+    row = _summarize_backend_samples(
+        "native",
+        requested_count=2,
+        duration_ms=1000,
+        samples=[
+            PreviewBackendSample(t_ms=0, latency_ms=10.0),
+            PreviewBackendSample(t_ms=0, latency_ms=12.0),
+            PreviewBackendSample(t_ms=17, latency_ms=20.0),
+        ],
+    )
+
+    assert row["ready_events"] == 3
+    assert row["ready_frames"] == 2
+    assert row["duplicate_ready_events"] == 1
+
+
+def test_compare_preview_image_diff_summary_samples_rgba_pixels() -> None:
+    first = QImage(4, 4, QImage.Format.Format_ARGB32_Premultiplied)
+    second = QImage(4, 4, QImage.Format.Format_ARGB32_Premultiplied)
+    first.fill(QColor("#000000"))
+    second.fill(QColor("#000000"))
+    second.setPixelColor(0, 0, QColor("#FFFFFF"))
+
+    same = _image_diff_summary(first, first, max_samples=16)
+    diff = _image_diff_summary(first, second, max_samples=16)
+
+    assert same["sampled_pixels"] == 16
+    assert same["changed_pixels"] == 0
+    assert diff["changed_pixels"] == 1
+    assert diff["max_channel_delta"] == 255

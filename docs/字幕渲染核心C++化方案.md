@@ -724,13 +724,18 @@ C:\Python314\python.exe -m pytest tests/test_subtitle_render_native_protocol.py 
 - 主动取消压测入口已扩展：`probe_native_preview_stats.py` 支持高频 seek、resize churn、style churn，并输出
   sidecar `generation_cancelled` / `range_done` 事件计数。`A stain` 真素材 4s 高频 seek+resize+style probe 可正常退出，
   最终约 `hit=98 miss=37 stale=55 cancel=39 native_cancel=35 done=125`。
+- 预览后端对比入口已落地：`compare_preview_backends.py` 可直接驱动 Python `AsyncSubtitleRenderer` 与 native
+  `NativeAsyncSubtitleRenderer`，输出请求帧、唯一回帧、重复回帧事件、p95 延迟，并抽样比较两者 subtitle layer 画质。
+  `A stain` 真素材 720p/60fps/5s probe 中，Python 为 `ready=296/296 p95=1.57ms`，native 为
+  `ready=292/296 p95=0.93ms`，4 个抽样时间点像素差均为 0。
 
 待继续：
 
 - 当前 look-ahead 缓存仍是最小实现，需继续在真实播放中结合 stats 观察命中率、内存占用、晚到帧比例，并决定是否要
   增加命中率/丢帧率汇总输出或可视化诊断。
 - 还需要把高频 seek / resize / style churn 压测沉淀成更稳定的基准输出，例如 CSV 汇总、失败阈值或 CI 可选 smoke。
-- 还需要用真实重工程对比 native preview / Python async preview 的稳定帧率和画质。
+- 还需要解释并优化 native preview 的重复回帧事件：当前 cache 命中后可能仍收到同一 `t_ms` 的晚到 native
+  当前帧，功能正确但会增加 GUI signal 噪声。
 
 ### C6：接入导出
 
