@@ -372,7 +372,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         self._threads = max(int(os.environ.get("KROK_SUBTITLE_NATIVE_THREADS", "4") or 4), 1)
         self._ring_slots = max(int(os.environ.get("KROK_SUBTITLE_NATIVE_RING_SLOTS", "3") or 3), 1)
         self._lookahead_frames = max(
-            int(os.environ.get("KROK_SUBTITLE_NATIVE_LOOKAHEAD_FRAMES", "4") or 4),
+            int(os.environ.get("KROK_SUBTITLE_NATIVE_LOOKAHEAD_FRAMES", "1") or 1),
             0,
         )
         self._frame_cache = NativePreviewFrameCache(self._lookahead_frames + 1)

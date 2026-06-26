@@ -663,6 +663,8 @@ class TransportBar(QWidget):
         if self._use_controller():
             return self._controller.is_playing()
         if self._has_audio and self._player is not None:
+            if not hasattr(self._player, "playbackState"):
+                return False
             return (
                 self._player.playbackState()
                 == QMediaPlayer.PlaybackState.PlayingState

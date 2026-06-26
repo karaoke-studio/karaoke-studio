@@ -150,8 +150,16 @@ struct RenderConfig {
     int lineGapPx = 90;
     int lineLeadInMs = 1800;
     int lineTailMs = 1000;
+    int lineProtectMs = 0;
+    int lineLaneGapMs = 300;
+    int lineContinuitySnapMs = 800;
+    int linePairSecondDelayMs = 3000;
+    int lineMaxHoldMs = 12000;
+    int sectionGapMs = 4000;
     QString lineYPosition = QStringLiteral("bottom");
     QString lineHorizontalLayout = QStringLiteral("asymmetric");
+    QString sectionEndingMode = QStringLiteral("hold");
+    bool syncEnding = false;
     int upperLineLeftMarginPx = 50;
     int lowerLineRightMarginPx = 50;
     bool dualLineLayout = true;
@@ -197,6 +205,13 @@ struct LineDiagnostics {
     double afterClipRight = 0.0;
     double afterClipTop = 0.0;
     double afterClipHeight = 0.0;
+};
+
+struct DisplayLineRef {
+    const TimingLine *line = nullptr;
+    int lane = 0;
+    int displayStartMs = 0;
+    int displayEndMs = 0;
 };
 
 struct RubyDiagnostics {
@@ -935,8 +950,18 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.lineGapPx = std::max(0, intValue(style, QStringLiteral("line_gap_px"), cfg.lineGapPx));
     cfg.lineLeadInMs = std::max(0, intValue(style, QStringLiteral("line_lead_in_ms"), cfg.lineLeadInMs));
     cfg.lineTailMs = std::max(0, intValue(style, QStringLiteral("line_tail_ms"), cfg.lineTailMs));
+    cfg.lineProtectMs = std::max(0, intValue(style, QStringLiteral("line_protect_ms"), cfg.lineProtectMs));
+    cfg.lineLaneGapMs = std::max(0, intValue(style, QStringLiteral("line_lane_gap_ms"), cfg.lineLaneGapMs));
+    cfg.lineContinuitySnapMs = std::max(0, intValue(style, QStringLiteral("line_continuity_snap_ms"), cfg.lineContinuitySnapMs));
+    cfg.linePairSecondDelayMs = std::max(0, intValue(style, QStringLiteral("line_pair_second_delay_ms"), cfg.linePairSecondDelayMs));
+    cfg.lineMaxHoldMs = std::max(0, intValue(style, QStringLiteral("line_max_hold_ms"), cfg.lineMaxHoldMs));
+    cfg.sectionGapMs = std::max(0, intValue(style, QStringLiteral("section_gap_ms"), cfg.sectionGapMs));
     cfg.lineYPosition = stringValue(style, QStringLiteral("line_y_position"), cfg.lineYPosition);
     cfg.lineHorizontalLayout = stringValue(style, QStringLiteral("line_horizontal_layout"), cfg.lineHorizontalLayout);
+    cfg.sectionEndingMode = stringValue(style, QStringLiteral("section_ending_mode"), cfg.sectionEndingMode);
+    cfg.syncEnding = style.value(QStringLiteral("sync_ending")).isBool()
+        ? style.value(QStringLiteral("sync_ending")).toBool()
+        : cfg.syncEnding;
     cfg.upperLineLeftMarginPx = std::max(0, intValue(style, QStringLiteral("upper_line_left_margin_px"), cfg.upperLineLeftMarginPx));
     cfg.lowerLineRightMarginPx = std::max(0, intValue(style, QStringLiteral("lower_line_right_margin_px"), cfg.lowerLineRightMarginPx));
     cfg.dualLineLayout = style.value(QStringLiteral("dual_line_layout")).isBool()
@@ -1107,6 +1132,275 @@ bool lineVisible(const TimingLine &line, int tMs, const RenderConfig &cfg) {
     const int start = lineStartMs(line) - cfg.lineLeadInMs;
     const int end = std::max(line.endMs, line.chars.back().startMs) + cfg.lineTailMs;
     return start <= tMs && tMs <= end;
+}
+
+int lineEndMs(const TimingLine &line) {
+    if (line.endMs > 0) {
+        return line.endMs;
+    }
+    if (!line.chars.empty()) {
+        return line.chars.back().startMs + 1000;
+    }
+    return 0;
+}
+
+int effectiveLineProtectMs(const RenderConfig &cfg) {
+    if (cfg.lineProtectMs > 0) {
+        return cfg.lineProtectMs;
+    }
+    const int base = std::min(std::max(cfg.lineLeadInMs, 0), std::max(cfg.lineTailMs, 0)) / 2;
+    return std::max(base, std::max(cfg.exitFadeMs, 0));
+}
+
+int pairSingEndMs(const std::vector<const TimingLine *> &lines, int index) {
+    const int pairStart = (index / 2) * 2;
+    int best = 0;
+    for (int i = pairStart; i < std::min(pairStart + 2, static_cast<int>(lines.size())); ++i) {
+        best = std::max(best, lineEndMs(*lines[static_cast<std::size_t>(i)]));
+    }
+    return best;
+}
+
+std::vector<int> computeSectionIds(const std::vector<const TimingLine *> &lines, int sectionGapMs) {
+    std::vector<int> sectionIds;
+    sectionIds.reserve(lines.size());
+    int current = 0;
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        if (i > 0 && sectionGapMs > 0) {
+            const int gap = lineStartMs(*lines[i]) - lineEndMs(*lines[i - 1]);
+            if (gap > sectionGapMs) {
+                ++current;
+            }
+        }
+        sectionIds.push_back(current);
+    }
+    return sectionIds;
+}
+
+QHash<int, int> computeSectionEnds(
+    const std::vector<const TimingLine *> &lines,
+    const std::vector<int> &sectionIds,
+    int tailMs
+) {
+    QHash<int, int> ends;
+    for (std::size_t i = 0; i < lines.size(); ++i) {
+        const int sid = sectionIds[i];
+        const int end = lineEndMs(*lines[i]) + std::max(tailMs, 0);
+        ends.insert(sid, std::max(ends.value(sid, end), end));
+    }
+    return ends;
+}
+
+bool isLastInLaneInSection(
+    const std::vector<int> &lanes,
+    const std::vector<int> &sectionIds,
+    int index
+) {
+    const int lane = lanes[static_cast<std::size_t>(index)];
+    const int sid = sectionIds[static_cast<std::size_t>(index)];
+    for (int i = index + 1; i < static_cast<int>(lanes.size()); ++i) {
+        if (sectionIds[static_cast<std::size_t>(i)] != sid) {
+            break;
+        }
+        if (lanes[static_cast<std::size_t>(i)] == lane) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void adjustSameLaneDisplayWindows(
+    const std::vector<const TimingLine *> &lines,
+    std::vector<int> *starts,
+    std::vector<int> *displayEnds,
+    const std::vector<int> &lanes,
+    int protectMs,
+    int laneGapMs
+) {
+    QHash<int, int> previousByLane;
+    for (int index = 0; index < static_cast<int>(lines.size()); ++index) {
+        const int lane = lanes[static_cast<std::size_t>(index)];
+        if (!previousByLane.contains(lane)) {
+            previousByLane.insert(lane, index);
+            continue;
+        }
+
+        const int previous = previousByLane.value(lane);
+        if ((*displayEnds)[static_cast<std::size_t>(previous)] + laneGapMs <= (*starts)[static_cast<std::size_t>(index)]) {
+            previousByLane.insert(lane, index);
+            continue;
+        }
+
+        const int previousFloor = lineEndMs(*lines[static_cast<std::size_t>(previous)]) + protectMs;
+        const int currentProtectStart = std::max(lineStartMs(*lines[static_cast<std::size_t>(index)]) - protectMs, 0);
+
+        (*displayEnds)[static_cast<std::size_t>(previous)] = std::max(
+            previousFloor,
+            (*starts)[static_cast<std::size_t>(index)] - laneGapMs
+        );
+        if ((*displayEnds)[static_cast<std::size_t>(previous)] + laneGapMs <= (*starts)[static_cast<std::size_t>(index)]) {
+            previousByLane.insert(lane, index);
+            continue;
+        }
+
+        const int targetStart = (*displayEnds)[static_cast<std::size_t>(previous)] + laneGapMs;
+        const int latestStart = std::max(currentProtectStart, (*starts)[static_cast<std::size_t>(index)]);
+        (*starts)[static_cast<std::size_t>(index)] = std::min(
+            std::max((*starts)[static_cast<std::size_t>(index)], targetStart),
+            latestStart
+        );
+        if ((*displayEnds)[static_cast<std::size_t>(previous)] + laneGapMs <= (*starts)[static_cast<std::size_t>(index)]) {
+            previousByLane.insert(lane, index);
+            continue;
+        }
+
+        if ((*displayEnds)[static_cast<std::size_t>(previous)] <= (*starts)[static_cast<std::size_t>(index)]) {
+            previousByLane.insert(lane, index);
+            continue;
+        }
+
+        if ((*displayEnds)[static_cast<std::size_t>(previous)] <= currentProtectStart) {
+            (*starts)[static_cast<std::size_t>(index)] = (*displayEnds)[static_cast<std::size_t>(previous)];
+        }
+        previousByLane.insert(lane, index);
+    }
+}
+
+std::vector<DisplayLineRef> computeDisplayLines(const RenderConfig &cfg) {
+    std::vector<const TimingLine *> lines;
+    lines.reserve(cfg.lines.size());
+    for (const auto &line : cfg.lines) {
+        if (!line.chars.empty()) {
+            lines.push_back(&line);
+        }
+    }
+    if (lines.empty()) {
+        return {};
+    }
+
+    const int lead = std::max(cfg.lineLeadInMs, 0);
+    const int tail = std::max(cfg.lineTailMs, 0);
+    const int protect = effectiveLineProtectMs(cfg);
+    const int laneGap = std::max(cfg.lineLaneGapMs, 0);
+    const int snap = std::max(cfg.lineContinuitySnapMs, 0);
+    const int pairSecondDelay = std::max(cfg.linePairSecondDelayMs, 0);
+    const int maxHold = std::max(cfg.lineMaxHoldMs, 0);
+    const int sectionGap = std::max(cfg.sectionGapMs, 0);
+
+    const std::vector<int> sectionIds = computeSectionIds(lines, sectionGap);
+    const QHash<int, int> sectionEnds = computeSectionEnds(lines, sectionIds, tail);
+
+    std::vector<int> starts;
+    std::vector<int> naturalEnds;
+    std::vector<int> lanes;
+    starts.reserve(lines.size());
+    naturalEnds.reserve(lines.size());
+    lanes.reserve(lines.size());
+    QHash<int, int> prevLaneNaturalEnd;
+
+    for (int index = 0; index < static_cast<int>(lines.size()); ++index) {
+        const TimingLine &line = *lines[static_cast<std::size_t>(index)];
+        const int lane = index % 2;
+        lanes.push_back(lane);
+        int preferredStart = std::max(lineStartMs(line) - lead, 0);
+        if (
+            index % 2 == 1
+            && !starts.empty()
+            && sectionIds[static_cast<std::size_t>(index)] == sectionIds[static_cast<std::size_t>(index - 1)]
+        ) {
+            preferredStart = std::min(preferredStart, starts[static_cast<std::size_t>(index - 1)] + pairSecondDelay);
+        }
+
+        int naturalEnd = pairSingEndMs(lines, index) + tail;
+        if (maxHold > 0) {
+            naturalEnd = std::min(naturalEnd, preferredStart + maxHold);
+        }
+        naturalEnds.push_back(naturalEnd);
+
+        int displayStart = preferredStart;
+        if (prevLaneNaturalEnd.contains(lane)) {
+            const int availableStart = prevLaneNaturalEnd.value(lane) + laneGap;
+            displayStart = std::abs(preferredStart - availableStart) <= snap
+                ? availableStart
+                : preferredStart;
+        }
+        starts.push_back(displayStart);
+        prevLaneNaturalEnd.insert(lane, naturalEnd);
+    }
+
+    std::vector<int> displayEnds;
+    displayEnds.reserve(lines.size());
+    for (int index = 0; index < static_cast<int>(lines.size()); ++index) {
+        const int floorEnd = lineEndMs(*lines[static_cast<std::size_t>(index)]) + protect;
+        int displayEnd = std::max(naturalEnds[static_cast<std::size_t>(index)], floorEnd);
+        if (maxHold > 0) {
+            displayEnd = std::max(floorEnd, std::min(displayEnd, starts[static_cast<std::size_t>(index)] + maxHold));
+        }
+        displayEnds.push_back(displayEnd);
+    }
+
+    adjustSameLaneDisplayWindows(lines, &starts, &displayEnds, lanes, protect, laneGap);
+
+    std::vector<DisplayLineRef> result;
+    result.reserve(lines.size());
+    for (int index = 0; index < static_cast<int>(lines.size()); ++index) {
+        const int sid = sectionIds[static_cast<std::size_t>(index)];
+        const int floorEnd = lineEndMs(*lines[static_cast<std::size_t>(index)]) + protect;
+        int displayEnd = std::max(displayEnds[static_cast<std::size_t>(index)], floorEnd);
+        if (maxHold > 0) {
+            displayEnd = std::max(floorEnd, std::min(displayEnd, starts[static_cast<std::size_t>(index)] + maxHold));
+        }
+        if (cfg.syncEnding && isLastInLaneInSection(lanes, sectionIds, index)) {
+            displayEnd = std::max(displayEnd, sectionEnds.value(sid, displayEnd));
+        }
+        if (cfg.sectionEndingMode == QStringLiteral("clear")) {
+            displayEnd = std::max(floorEnd, std::min(displayEnd, sectionEnds.value(sid, displayEnd)));
+        }
+        if (displayEnd < starts[static_cast<std::size_t>(index)]) {
+            displayEnd = starts[static_cast<std::size_t>(index)];
+        }
+        result.push_back(DisplayLineRef{
+            lines[static_cast<std::size_t>(index)],
+            lanes[static_cast<std::size_t>(index)],
+            starts[static_cast<std::size_t>(index)],
+            displayEnd,
+        });
+    }
+    return result;
+}
+
+std::vector<DisplayLineRef> visibleDisplayLines(const RenderConfig &cfg, int tMs) {
+    if (!cfg.dualLineLayout) {
+        std::vector<DisplayLineRef> candidates;
+        candidates.reserve(cfg.lines.size());
+        for (const auto &line : cfg.lines) {
+            if (!line.chars.empty() && lineVisible(line, tMs, cfg)) {
+                candidates.push_back(DisplayLineRef{
+                    &line,
+                    0,
+                    std::max(lineStartMs(line) - cfg.lineLeadInMs, 0),
+                    std::max(line.endMs, line.chars.back().startMs) + cfg.lineTailMs,
+                });
+            }
+        }
+        if (candidates.empty()) {
+            return {};
+        }
+        std::stable_sort(candidates.begin(), candidates.end(), [](const DisplayLineRef &left, const DisplayLineRef &right) {
+            return lineStartMs(*left.line) > lineStartMs(*right.line);
+        });
+        return {candidates.front()};
+    }
+
+    const auto all = computeDisplayLines(cfg);
+    std::vector<DisplayLineRef> visible;
+    visible.reserve(all.size());
+    for (const auto &item : all) {
+        if (item.line != nullptr && item.displayStartMs <= tMs && tMs <= item.displayEndMs) {
+            visible.push_back(item);
+        }
+    }
+    return visible;
 }
 
 int charEndMs(const TimingLine &line, std::size_t index) {
@@ -3515,22 +3809,22 @@ RenderResult renderFrame(const RenderConfig &cfg, int tMs) {
     QPainter painter(&result.image);
     painter.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing | QPainter::SmoothPixmapTransform);
 
-    std::vector<const TimingLine *> visibleLines;
-    visibleLines.reserve(cfg.lines.size());
-    for (const auto &line : cfg.lines) {
-        if (lineVisible(line, tMs, cfg)) {
-            visibleLines.push_back(&line);
-        }
-    }
+    const std::vector<DisplayLineRef> visibleLines = visibleDisplayLines(cfg, tMs);
     result.diagnostics.visibleLines = static_cast<int>(visibleLines.size());
-    if (cfg.dualLineLayout && visibleLines.size() > 2) {
-        visibleLines.resize(2);
-    }
 
-    int lane = 0;
-    for (const TimingLine *line : visibleLines) {
-        paintLine(painter, cfg, *line, tMs, lane, result.diagnostics.visibleLines, &result.diagnostics);
-        lane = std::min(lane + 1, 2);
+    for (const DisplayLineRef &displayLine : visibleLines) {
+        if (displayLine.line == nullptr) {
+            continue;
+        }
+        paintLine(
+            painter,
+            cfg,
+            *displayLine.line,
+            tMs,
+            displayLine.lane,
+            result.diagnostics.visibleLines,
+            &result.diagnostics
+        );
     }
 
     painter.end();

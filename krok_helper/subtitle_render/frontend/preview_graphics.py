@@ -38,6 +38,9 @@ from krok_helper.subtitle_render.models import Style, TimingTrack
 _VIDEO_SEEK_TOLERANCE_MS = 80
 """Small playback drift allowed before forcing the preview video position."""
 
+_ASYNC_PLAYBACK_STALE_TOLERANCE_MS = 120
+"""Late subtitle frames accepted while video playback is advancing."""
+
 _VIDEO_EDGE_OVERSCAN_PX = 4
 """Small scene-space bleed to cover native video edge underdraw while playing."""
 
@@ -279,7 +282,9 @@ class PreviewGraphicsView(QGraphicsView):
 
     def _on_async_frame(self, image: QImage, t_ms: int) -> None:
         if int(t_ms) != int(self._t_ms):
-            return
+            tolerance = _ASYNC_PLAYBACK_STALE_TOLERANCE_MS if self._video_playing else 0
+            if tolerance <= 0 or abs(int(t_ms) - int(self._t_ms)) > tolerance:
+                return
         self._subtitle_item.set_async_image(image)
 
     def set_output_size(self, width: int, height: int) -> None:
