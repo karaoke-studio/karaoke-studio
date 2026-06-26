@@ -294,6 +294,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         self._track: Optional[TimingTrack] = None
         self._style: Optional[Style] = None
         self._generation = 0
+        self._active_generation: Optional[int] = None
         self._pending_t: Optional[int] = None
         self._stopped = False
         self._needs_configure = True
@@ -324,7 +325,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                 return
             self._track = track
             self._style = style
-            self._generation += 1
+            self._advance_generation_locked()
             self._needs_configure = True
             self._frame_cache.clear()
             self._condition.notify()
@@ -341,7 +342,7 @@ class NativeAsyncSubtitleRenderer(QObject):
             dpr = max(float(device_pixel_ratio or 1.0), 0.01)
             if (w, h, dpr) != (self._logical_w, self._logical_h, self._device_pixel_ratio):
                 self._needs_configure = True
-                self._generation += 1
+                self._advance_generation_locked()
                 self._frame_cache.clear()
             self._logical_w = w
             self._logical_h = h
@@ -356,7 +357,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         with self._condition:
             if self._stopped:
                 return
-            self._generation += 1
+            self._advance_generation_locked()
             self._last_t = requested_t
             self._pending_t = self._last_t
             self._condition.notify()
@@ -370,7 +371,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                 return
             self._playing = normalized
             if self._last_t is not None:
-                self._generation += 1
+                self._advance_generation_locked()
                 self._pending_t = self._last_t
                 self._condition.notify()
 
@@ -454,31 +455,41 @@ class NativeAsyncSubtitleRenderer(QObject):
             if renderer_was_missing or needs_configure:
                 renderer.configure(track, style, width=width, height=height, fps=60)
             shm_key = f"krok-preview-{os.getpid()}-{uuid.uuid4().hex}"
-            renderer.start_render_range(
-                native_preview_timestamps(
-                    t_ms,
-                    playing=playing,
-                    fps=self._fps,
-                    lookahead_frames=self._lookahead_frames,
-                ),
-                generation=generation,
-                threads=self._threads,
-                shm_key=shm_key,
-                ring_slots=self._ring_slots,
-            )
-            while True:
-                event = renderer.read_event()
-                if event.get("event") == "frame_ready":
-                    if self._is_current_generation(generation):
-                        with SharedFrameRingReader.from_event(event) as reader:
-                            slot = reader.read_frame(event)
-                        image = slot.to_qimage()
-                        if int(slot.t_ms) == int(t_ms):
-                            self.frame_ready.emit(image, slot.t_ms)
-                        else:
-                            self._frame_cache.store(slot.t_ms, image)
-                elif event.get("event") == "range_done":
-                    return
+            with self._condition:
+                if not self._stopped and self._generation == generation:
+                    self._active_generation = generation
+            try:
+                renderer.start_render_range(
+                    native_preview_timestamps(
+                        t_ms,
+                        playing=playing,
+                        fps=self._fps,
+                        lookahead_frames=self._lookahead_frames,
+                    ),
+                    generation=generation,
+                    threads=self._threads,
+                    shm_key=shm_key,
+                    ring_slots=self._ring_slots,
+                )
+                while True:
+                    event = renderer.read_event()
+                    if event.get("event") == "frame_ready":
+                        if self._is_current_generation(generation):
+                            with SharedFrameRingReader.from_event(event) as reader:
+                                slot = reader.read_frame(event)
+                            image = slot.to_qimage()
+                            if int(slot.t_ms) == int(t_ms):
+                                self.frame_ready.emit(image, slot.t_ms)
+                            else:
+                                self._frame_cache.store(slot.t_ms, image)
+                    elif event.get("event") == "range_done":
+                        return
+                    elif event.get("event") == "generation_cancelled":
+                        continue
+            finally:
+                with self._condition:
+                    if self._active_generation == generation:
+                        self._active_generation = None
 
     def _ensure_renderer(self) -> NativeRendererProcess:
         if self._renderer is None:
@@ -517,3 +528,16 @@ class NativeAsyncSubtitleRenderer(QObject):
     def _is_current_generation(self, generation: int) -> bool:
         with self._condition:
             return not self._stopped and int(generation) == self._generation
+
+    def _advance_generation_locked(self) -> None:
+        active_generation = self._active_generation
+        self._generation += 1
+        if active_generation is None:
+            return
+        renderer = self._renderer
+        if renderer is None:
+            return
+        try:
+            renderer.send_cancel_generation(active_generation)
+        except NativeRendererError:
+            self._renderer_failed = True

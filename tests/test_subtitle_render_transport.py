@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import math
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -367,6 +368,62 @@ def test_preview_graphics_passes_playing_state_to_async_renderer(qapp, monkeypat
         graphics.close()
         graphics.deleteLater()
         qapp.processEvents()
+
+
+def test_native_async_renderer_cancels_active_generation_on_new_request(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.models import Style, TimingTrack
+
+    started = threading.Event()
+    unblock = threading.Event()
+    cancels: list[int] = []
+
+    class FakeNativeRendererProcess:
+        def __init__(self, *args, **kwargs):
+            self.started_ranges: list[dict[str, object]] = []
+
+        def start(self):
+            return {"ok": True, "event": "ready"}
+
+        def configure(self, *args, **kwargs):
+            return {"ok": True, "event": "configured"}
+
+        def start_render_range(self, timestamps_ms, *, generation, threads, shm_key=None, ring_slots=3):
+            self.started_ranges.append(
+                {
+                    "timestamps": list(timestamps_ms),
+                    "generation": generation,
+                    "threads": threads,
+                    "shm_key": shm_key,
+                    "ring_slots": ring_slots,
+                }
+            )
+            started.set()
+            return {"ok": True, "event": "range_started", "generation": generation}
+
+        def read_event(self):
+            unblock.wait(timeout=2.0)
+            return {"ok": True, "event": "range_done", "generation": 1}
+
+        def send_cancel_generation(self, generation):
+            cancels.append(int(generation))
+            unblock.set()
+
+        def close(self):
+            unblock.set()
+
+    monkeypatch.setattr(pa, "NativeRendererProcess", FakeNativeRendererProcess)
+    renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
+    try:
+        renderer.set_state(TimingTrack(), Style())
+        renderer.request(1_000)
+        assert started.wait(timeout=2.0)
+
+        renderer.request(1_017)
+
+        assert cancels == [2]
+    finally:
+        renderer.stop()
 
 
 def test_preview_graphics_ignores_stale_async_frame(qapp, monkeypatch):

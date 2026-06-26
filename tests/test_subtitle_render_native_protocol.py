@@ -276,6 +276,18 @@ def test_native_renderer_process_round_trips_with_noisy_sidecar(tmp_path):
     assert renderer.is_running is False
 
 
+def test_native_renderer_process_can_send_cancel_without_consuming_response(tmp_path):
+    sidecar = _write_fake_sidecar(tmp_path)
+
+    with NativeRendererProcess(sidecar, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.send_cancel_generation(11)
+
+        event = renderer.read_event()
+
+    assert event["event"] == "generation_cancelled"
+    assert event["generation"] == 11
+
+
 def test_native_render_range_shared_memory_reader_reads_slot_when_exe_exists(monkeypatch):
     renderer_path = resolve_native_renderer_path(root=Path.cwd())
     if renderer_path is None:

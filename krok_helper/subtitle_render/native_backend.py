@@ -316,6 +316,7 @@ class NativeRendererProcess:
         self._event_backlog: deque[dict[str, Any]] = deque()
         self._stderr_lock = threading.Lock()
         self._stdout_noise_lock = threading.Lock()
+        self._send_lock = threading.Lock()
         self._pipe_threads: list[threading.Thread] = []
 
     @property
@@ -441,6 +442,14 @@ class NativeRendererProcess:
         self._send({"cmd": "cancel_generation", "generation": int(generation)})
         return self._expect_ok(self._read_until_event("generation_cancelled"))
 
+    def send_cancel_generation(self, generation: int) -> None:
+        """Send cancellation without consuming stdout events.
+
+        Preview uses this from the GUI/request side while the worker thread is
+        still the sole protocol event reader.
+        """
+        self._send({"cmd": "cancel_generation", "generation": int(generation)})
+
     def read_event(self) -> dict[str, Any]:
         if self._event_backlog:
             return self._event_backlog.popleft()
@@ -449,8 +458,9 @@ class NativeRendererProcess:
     def _send(self, payload: dict[str, Any]) -> None:
         process = self._require_process()
         assert process.stdin is not None
-        process.stdin.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
-        process.stdin.flush()
+        with self._send_lock:
+            process.stdin.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
+            process.stdin.flush()
 
     def _read_response(self) -> dict[str, Any]:
         process = self._current_process()
