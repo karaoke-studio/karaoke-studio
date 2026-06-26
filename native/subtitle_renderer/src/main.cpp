@@ -1,6 +1,7 @@
 #include <QtCore/QByteArray>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
+#include <QtCore/QElapsedTimer>
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
@@ -3254,36 +3255,24 @@ QJsonObject handleConfigure(const QJsonObject &request, std::optional<RenderConf
     return out;
 }
 
-QJsonObject handleRenderFrame(const QJsonObject &request, const std::optional<RenderConfig> &config) {
-    if (!config.has_value()) {
-        QJsonObject out = response(false, QStringLiteral("render_frame"));
-        out.insert(QStringLiteral("error"), QStringLiteral("renderer is not configured"));
-        return out;
-    }
-
-    const int tMs = intValue(request, QStringLiteral("t_ms"), 0);
-    const QString outputPath = stringValue(request, QStringLiteral("output_path"));
-    if (outputPath.isEmpty()) {
-        QJsonObject out = response(false, QStringLiteral("render_frame"));
-        out.insert(QStringLiteral("error"), QStringLiteral("output_path is required for native smoke render"));
-        return out;
-    }
-
-    RenderResult rendered = renderFrame(*config, tMs);
-    QImage &image = rendered.image;
-    const bool saved = image.save(outputPath);
-    QJsonObject out = response(saved, QStringLiteral("frame_ready"));
-    out.insert(QStringLiteral("t_ms"), tMs);
-    out.insert(QStringLiteral("width"), image.width());
-    out.insert(QStringLiteral("height"), image.height());
-    out.insert(QStringLiteral("output_path"), outputPath);
-    out.insert(QStringLiteral("checksum"), QString::number(imageChecksum(image)));
-    out.insert(QStringLiteral("visible_lines"), rendered.diagnostics.visibleLines);
-    out.insert(QStringLiteral("glow_cache_hits"), glowBitmapCacheStats().hits);
-    out.insert(QStringLiteral("glow_cache_misses"), glowBitmapCacheStats().misses);
-    out.insert(QStringLiteral("glow_cache_size"), static_cast<int>(glowBitmapCache().size()));
+void appendFrameDiagnostics(
+    QJsonObject *out,
+    int tMs,
+    const QImage &image,
+    const RenderDiagnostics &diagnostics,
+    double renderMs
+) {
+    out->insert(QStringLiteral("t_ms"), tMs);
+    out->insert(QStringLiteral("width"), image.width());
+    out->insert(QStringLiteral("height"), image.height());
+    out->insert(QStringLiteral("checksum"), QString::number(imageChecksum(image)));
+    out->insert(QStringLiteral("render_ms"), renderMs);
+    out->insert(QStringLiteral("visible_lines"), diagnostics.visibleLines);
+    out->insert(QStringLiteral("glow_cache_hits"), glowBitmapCacheStats().hits);
+    out->insert(QStringLiteral("glow_cache_misses"), glowBitmapCacheStats().misses);
+    out->insert(QStringLiteral("glow_cache_size"), static_cast<int>(glowBitmapCache().size()));
     QJsonArray lineDiagnostics;
-    for (const LineDiagnostics &line : rendered.diagnostics.lines) {
+    for (const LineDiagnostics &line : diagnostics.lines) {
         QJsonObject item;
         item.insert(QStringLiteral("lane"), line.lane);
         item.insert(QStringLiteral("line_x"), line.lineX);
@@ -3295,9 +3284,9 @@ QJsonObject handleRenderFrame(const QJsonObject &request, const std::optional<Re
         item.insert(QStringLiteral("after_clip_height"), line.afterClipHeight);
         lineDiagnostics.append(item);
     }
-    out.insert(QStringLiteral("line_diagnostics"), lineDiagnostics);
+    out->insert(QStringLiteral("line_diagnostics"), lineDiagnostics);
     QJsonArray rubyDiagnostics;
-    for (const RubyDiagnostics &ruby : rendered.diagnostics.rubies) {
+    for (const RubyDiagnostics &ruby : diagnostics.rubies) {
         QJsonObject item;
         item.insert(QStringLiteral("kanji"), ruby.kanji);
         item.insert(QStringLiteral("reading"), ruby.reading);
@@ -3317,19 +3306,62 @@ QJsonObject handleRenderFrame(const QJsonObject &request, const std::optional<Re
         item.insert(QStringLiteral("after_clip_height"), ruby.afterClipHeight);
         rubyDiagnostics.append(item);
     }
-    out.insert(QStringLiteral("ruby_diagnostics"), rubyDiagnostics);
-    if (rendered.diagnostics.hasFirstLine) {
-        out.insert(QStringLiteral("line_x"), rendered.diagnostics.lineX);
-        out.insert(QStringLiteral("line_width"), rendered.diagnostics.lineWidth);
-        out.insert(QStringLiteral("baseline_y"), rendered.diagnostics.baselineY);
-        out.insert(QStringLiteral("after_clip_left"), rendered.diagnostics.afterClipLeft);
-        out.insert(QStringLiteral("after_clip_right"), rendered.diagnostics.afterClipRight);
-        out.insert(QStringLiteral("after_clip_top"), rendered.diagnostics.afterClipTop);
-        out.insert(QStringLiteral("after_clip_height"), rendered.diagnostics.afterClipHeight);
+    out->insert(QStringLiteral("ruby_diagnostics"), rubyDiagnostics);
+    if (diagnostics.hasFirstLine) {
+        out->insert(QStringLiteral("line_x"), diagnostics.lineX);
+        out->insert(QStringLiteral("line_width"), diagnostics.lineWidth);
+        out->insert(QStringLiteral("baseline_y"), diagnostics.baselineY);
+        out->insert(QStringLiteral("after_clip_left"), diagnostics.afterClipLeft);
+        out->insert(QStringLiteral("after_clip_right"), diagnostics.afterClipRight);
+        out->insert(QStringLiteral("after_clip_top"), diagnostics.afterClipTop);
+        out->insert(QStringLiteral("after_clip_height"), diagnostics.afterClipHeight);
     }
+}
+
+QJsonObject handleRenderFrame(const QJsonObject &request, const std::optional<RenderConfig> &config) {
+    if (!config.has_value()) {
+        QJsonObject out = response(false, QStringLiteral("render_frame"));
+        out.insert(QStringLiteral("error"), QStringLiteral("renderer is not configured"));
+        return out;
+    }
+
+    const int tMs = intValue(request, QStringLiteral("t_ms"), 0);
+    const QString outputPath = stringValue(request, QStringLiteral("output_path"));
+    if (outputPath.isEmpty()) {
+        QJsonObject out = response(false, QStringLiteral("render_frame"));
+        out.insert(QStringLiteral("error"), QStringLiteral("output_path is required for native smoke render"));
+        return out;
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+    RenderResult rendered = renderFrame(*config, tMs);
+    const double renderMs = static_cast<double>(timer.nsecsElapsed()) / 1000000.0;
+    QImage &image = rendered.image;
+    const bool saved = image.save(outputPath);
+    QJsonObject out = response(saved, QStringLiteral("frame_ready"));
+    out.insert(QStringLiteral("output_path"), outputPath);
+    appendFrameDiagnostics(&out, tMs, image, rendered.diagnostics, renderMs);
     if (!saved) {
         out.insert(QStringLiteral("error"), QStringLiteral("failed to save output image"));
     }
+    return out;
+}
+
+QJsonObject handleRenderFrameStats(const QJsonObject &request, const std::optional<RenderConfig> &config) {
+    if (!config.has_value()) {
+        QJsonObject out = response(false, QStringLiteral("render_frame_stats"));
+        out.insert(QStringLiteral("error"), QStringLiteral("renderer is not configured"));
+        return out;
+    }
+
+    const int tMs = intValue(request, QStringLiteral("t_ms"), 0);
+    QElapsedTimer timer;
+    timer.start();
+    RenderResult rendered = renderFrame(*config, tMs);
+    const double renderMs = static_cast<double>(timer.nsecsElapsed()) / 1000000.0;
+    QJsonObject out = response(true, QStringLiteral("frame_stats"));
+    appendFrameDiagnostics(&out, tMs, rendered.image, rendered.diagnostics, renderMs);
     return out;
 }
 
@@ -3371,6 +3403,8 @@ int main(int argc, char **argv) {
             writeJson(handleConfigure(request, &config));
         } else if (command == QStringLiteral("render_frame")) {
             writeJson(handleRenderFrame(request, config));
+        } else if (command == QStringLiteral("render_frame_stats")) {
+            writeJson(handleRenderFrameStats(request, config));
         } else if (command == QStringLiteral("shutdown")) {
             writeJson(response(true, QStringLiteral("shutdown")));
             return 0;

@@ -571,11 +571,20 @@ smoke 输出示例：
 - 默认项目沿用本机 `D:\カラオケ\songs\A stain\A stain.yurika`，默认强制覆盖为
   `entry_anim=utopia` / `exit_anim=utopia` / `decoration_kind=glow`，可用
   `--keep-project-style` 保留项目原样式。
-- 已记录重要限制：当前 native 协议仍是 PNG smoke 输出，native 计时包含 PNG 编码与磁盘写入；
-  因此该脚本是 C4-4 初始 A/B 信号，不代表最终 preview/export throughput。
-- smoke（2026-06-26，本机 A stain，1920x1080，4 帧 + 2 帧 warmup）：
+- 已新增 native `render_frame_stats` 协议与 Python `NativeRendererProcess.render_frame_stats()`：sidecar 渲染一帧并返回
+  `render_ms`、checksum、line/ruby diagnostics 与 glow cache 计数，但不做 PNG 编码/磁盘写入。旧的
+  `render_frame` + `output_path` PNG smoke 协议继续保留，并同样返回 `render_ms` 便于拆分“渲染成本”和“落盘成本”。
+- `scripts/bench_native_renderer.py` 默认改用 `--native-mode stats`；需要旧 smoke 路径时可显式传
+  `--native-mode png`。CSV 现在同时输出 native roundtrip 与 sidecar 内部 render-only 耗时。
+- 旧 PNG smoke（2026-06-26，本机 A stain，1920x1080，4 帧 + 2 帧 warmup）：
   Python mean 约 9.36ms，native mean 约 95.28ms，native glow cache hits=61 / misses=12。
-  该结果主要反映 C1 PNG 输出协议开销，下一步应增加 raw/in-memory render 计时或 range render 协议。
+  该结果主要反映 C1 PNG 输出协议开销，不代表最终 preview/export throughput。
+- stats smoke（2026-06-26，本机 A stain，1920x1080，4 帧 + 2 帧 warmup）：Python mean 约 7.69ms，
+  native roundtrip mean 约 6.07ms，native render-only mean 约 5.37ms，native glow cache hits=61 / misses=12。
+  这说明 C4-3 后 native 单帧渲染成本已经能低于当前 Python 单进程路径；旧 PNG smoke 的 80-95ms 主要来自
+  PNG 编码/磁盘写入，不应作为 preview/export throughput 判据。
+- PNG compat smoke（2026-06-26，本机 A stain，1920x1080，2 帧 + 1 帧 warmup）：native roundtrip mean
+  约 80.70ms，但同一响应里的 render-only mean 约 5.19ms，进一步确认落盘协议是主要污染项。
 
 验收：
 

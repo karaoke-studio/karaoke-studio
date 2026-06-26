@@ -14,8 +14,22 @@ def test_sample_timestamps_covers_window_endpoints() -> None:
 def test_summarize_samples_reports_python_native_and_speedup() -> None:
     rows = _summarize_samples(
         [
-            TimingSample(t_ms=0, python_ms=10.0, native_ms=5.0, native_cache_hits=0, native_cache_misses=1),
-            TimingSample(t_ms=16, python_ms=20.0, native_ms=5.0, native_cache_hits=1, native_cache_misses=1),
+            TimingSample(
+                t_ms=0,
+                python_ms=10.0,
+                native_ms=5.0,
+                native_cache_hits=0,
+                native_cache_misses=1,
+                native_render_ms=4.0,
+            ),
+            TimingSample(
+                t_ms=16,
+                python_ms=20.0,
+                native_ms=5.0,
+                native_cache_hits=1,
+                native_cache_misses=1,
+                native_render_ms=6.0,
+            ),
         ],
         scenario="fixture",
         width=640,
@@ -26,6 +40,8 @@ def test_summarize_samples_reports_python_native_and_speedup() -> None:
     assert rows["frames"] == 2
     assert rows["python_mean_ms"] == "15.0000"
     assert rows["native_mean_ms"] == "5.0000"
+    assert rows["native_render_mean_ms"] == "5.0000"
     assert rows["speedup"] == "3.00"
+    assert rows["render_speedup"] == "3.00"
     assert rows["native_cache_hits"] == 1
     assert rows["native_cache_misses"] == 1

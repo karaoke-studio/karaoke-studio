@@ -200,7 +200,9 @@ def _write_fake_sidecar(tmp_path: Path, *, mode: str = "normal") -> Path:
                 if command == "configure":
                     print(json.dumps({{"ok": True, "event": "configured"}}), flush=True)
                 elif command == "render_frame":
-                    print(json.dumps({{"ok": True, "event": "frame_ready", "checksum": "fake"}}), flush=True)
+                    print(json.dumps({{"ok": True, "event": "frame_ready", "checksum": "fake", "render_ms": 1.25}}), flush=True)
+                elif command == "render_frame_stats":
+                    print(json.dumps({{"ok": True, "event": "frame_stats", "checksum": "fake", "render_ms": 1.25}}), flush=True)
                 elif command == "shutdown":
                     print(json.dumps({{"ok": True, "event": "shutdown"}}), flush=True)
                     break
@@ -230,6 +232,9 @@ def test_native_renderer_process_round_trips_with_noisy_sidecar(tmp_path):
     assert ready["event"] == "ready"
     assert renderer.configure(TimingTrack(), Style(), width=640, height=360, fps=60)["event"] == "configured"
     assert renderer.render_frame_png(900, tmp_path / "frame.png")["event"] == "frame_ready"
+    stats = renderer.render_frame_stats(900)
+    assert stats["event"] == "frame_stats"
+    assert stats["render_ms"] == 1.25
 
     renderer.close()
     assert renderer.is_running is False

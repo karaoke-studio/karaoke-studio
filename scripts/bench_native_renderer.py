@@ -1,10 +1,9 @@
 """Compare Python QPainter rendering with the native subtitle renderer sidecar.
 
-This is the first C4-4 harness: it uses the same project/style/track input for
-both paths and records per-frame timings plus native cache diagnostics.  The
-native path currently writes PNG files through the C1/C4 smoke protocol, so its
-timings include PNG encode and disk write overhead.  Treat the result as an
-early A/B signal, not the final export or preview throughput number.
+The default native path uses the C4-4 ``render_frame_stats`` protocol, which
+renders in the sidecar and returns diagnostics without PNG encoding or disk
+I/O.  ``--native-mode png`` keeps the older smoke path available for regression
+checks against saved images.
 """
 
 from __future__ import annotations
@@ -41,6 +40,7 @@ class TimingSample:
     native_ms: float
     native_cache_hits: int
     native_cache_misses: int
+    native_render_ms: float = 0.0
 
 
 def _sample_timestamps(*, start_ms: int, frames: int, fps: int) -> list[int]:
@@ -70,8 +70,10 @@ def _summarize_samples(
 ) -> dict[str, str | int]:
     python_values = [sample.python_ms for sample in samples]
     native_values = [sample.native_ms for sample in samples]
+    native_render_values = [sample.native_render_ms for sample in samples if sample.native_render_ms > 0.0]
     python_mean = _mean(python_values)
     native_mean = _mean(native_values)
+    native_render_mean = _mean(native_render_values)
     return {
         "scenario": scenario,
         "frames": len(samples),
@@ -83,7 +85,10 @@ def _summarize_samples(
         "native_mean_ms": f"{native_mean:.4f}",
         "native_p50_ms": f"{_percentile(native_values, 0.5):.4f}",
         "native_p95_ms": f"{_percentile(native_values, 0.95):.4f}",
+        "native_render_mean_ms": f"{native_render_mean:.4f}",
+        "native_render_p95_ms": f"{_percentile(native_render_values, 0.95):.4f}",
         "speedup": f"{(python_mean / native_mean) if native_mean > 0 else 0.0:.2f}",
+        "render_speedup": f"{(python_mean / native_render_mean) if native_render_mean > 0 else 0.0:.2f}",
         "native_cache_hits": max((sample.native_cache_hits for sample in samples), default=0),
         "native_cache_misses": max((sample.native_cache_misses for sample in samples), default=0),
     }
@@ -146,7 +151,10 @@ def _bench_project(args: argparse.Namespace) -> tuple[dict[str, str | int], list
     with NativeRendererProcess(renderer_path, response_timeout_s=args.timeout, close_timeout_s=2.0) as renderer:
         renderer.configure(track, style, width=width, height=height, fps=fps)
         for index, t_ms in enumerate(warmup_timestamps):
-            renderer.render_frame_png(t_ms, output_dir / f"warmup-{index:04d}.png")
+            if args.native_mode == "png":
+                renderer.render_frame_png(t_ms, output_dir / f"warmup-{index:04d}.png")
+            else:
+                renderer.render_frame_stats(t_ms)
 
         for index, t_ms in enumerate(timestamps):
             image = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
@@ -156,7 +164,10 @@ def _bench_project(args: argparse.Namespace) -> tuple[dict[str, str | int], list
             python_ms = (time.perf_counter() - py_start) * 1000.0
 
             native_start = time.perf_counter()
-            response = renderer.render_frame_png(t_ms, output_dir / f"frame-{index:04d}.png")
+            if args.native_mode == "png":
+                response = renderer.render_frame_png(t_ms, output_dir / f"frame-{index:04d}.png")
+            else:
+                response = renderer.render_frame_stats(t_ms)
             native_ms = (time.perf_counter() - native_start) * 1000.0
 
             samples.append(
@@ -164,6 +175,7 @@ def _bench_project(args: argparse.Namespace) -> tuple[dict[str, str | int], list
                     t_ms=t_ms,
                     python_ms=python_ms,
                     native_ms=native_ms,
+                    native_render_ms=float(response.get("render_ms", 0.0)),
                     native_cache_hits=int(response.get("glow_cache_hits", 0)),
                     native_cache_misses=int(response.get("glow_cache_misses", 0)),
                 )
@@ -171,9 +183,13 @@ def _bench_project(args: argparse.Namespace) -> tuple[dict[str, str | int], list
 
     summary = _summarize_samples(samples, scenario=project_path.stem, width=width, height=height)
     if not args.keep_png and not args.png_dir:
-        for path in output_dir.glob("*.png"):
-            path.unlink(missing_ok=True)
-        output_dir.rmdir()
+        if output_dir.exists():
+            for path in output_dir.glob("*.png"):
+                path.unlink(missing_ok=True)
+            try:
+                output_dir.rmdir()
+            except OSError:
+                pass
     return summary, samples
 
 
@@ -188,7 +204,10 @@ _CSV_FIELDS = [
     "native_mean_ms",
     "native_p50_ms",
     "native_p95_ms",
+    "native_render_mean_ms",
+    "native_render_p95_ms",
     "speedup",
+    "render_speedup",
     "native_cache_hits",
     "native_cache_misses",
 ]
@@ -206,8 +225,9 @@ def _print_summary(row: dict[str, str | int]) -> None:
     print("scenario          :", row["scenario"])
     print("frames / size     :", row["frames"], f"{row['width']}x{row['height']}")
     print("python mean / p95 :", f"{row['python_mean_ms']} ms", f"/ {row['python_p95_ms']} ms")
-    print("native mean / p95 :", f"{row['native_mean_ms']} ms", f"/ {row['native_p95_ms']} ms")
-    print("speedup           :", f"{row['speedup']}x")
+    print("native roundtrip  :", f"{row['native_mean_ms']} ms", f"/ {row['native_p95_ms']} ms")
+    print("native render     :", f"{row['native_render_mean_ms']} ms", f"/ {row['native_render_p95_ms']} ms")
+    print("speedup           :", f"{row['speedup']}x", f"(render-only {row['render_speedup']}x)")
     print("native glow cache :", f"hits={row['native_cache_hits']}", f"misses={row['native_cache_misses']}")
 
 
@@ -221,6 +241,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--height", type=int, default=None, help="覆盖项目高度")
     parser.add_argument("--fps", type=int, default=None, help="覆盖项目 fps")
     parser.add_argument("--timeout", type=float, default=10.0, help="native 单帧响应超时秒数")
+    parser.add_argument(
+        "--native-mode",
+        choices=("stats", "png"),
+        default="stats",
+        help="native 计时模式：stats 不落盘，png 保留旧 smoke 输出",
+    )
     parser.add_argument("--keep-project-style", action="store_true", help="不强制覆盖为 utopia + glow")
     parser.add_argument("--png-dir", type=Path, default=None, help="保留 native PNG 输出到指定目录")
     parser.add_argument("--keep-png", action="store_true", help="保留临时 native PNG 输出")
