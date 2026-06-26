@@ -851,21 +851,26 @@ C:\Python314\python.exe -m pytest tests\test_subtitle_render_native_export.py te
 
 结果：`57 passed in 3.18s`。
 
-短样本真实素材 smoke（A stain 真实背景，720p/60fps/1s，`--disable-strip --raw-overlay-quality`）：
+raw overlay 真实素材回归（A stain 真实背景，720p/60fps/5s，`--disable-strip --raw-overlay-quality`）：
 
 ```text
-python: frames=60 fps=70.59 elapsed=850.00ms size=508855
-native: frames=60 fps=69.56 elapsed=862.52ms size=508855
-quality t=250ms: changed=0/18849 max_delta=0
-quality t=750ms: changed=0/18849 max_delta=0
-raw_quality t=250ms: changed=0/18849 max_delta=0
-raw_quality t=750ms: changed=0/18849 max_delta=0
+python: frames=300 fps=70.63 elapsed=4247.68ms size=3297237
+native: frames=300 fps=110.39 elapsed=2717.61ms size=3297237
+quality t=500ms: changed=0/18849 max_delta=0
+quality t=1500ms: changed=0/18849 max_delta=0
+quality t=2500ms: changed=0/18849 max_delta=0
+quality t=3500ms: changed=0/18849 max_delta=0
+quality t=4500ms: changed=0/18849 max_delta=0
+raw_quality t=500ms: changed=0/18849 max_delta=0
+raw_quality t=1500ms: changed=0/18849 max_delta=0
+raw_quality t=2500ms: changed=0/18849 max_delta=0
+raw_quality t=3500ms: changed=0/18849 max_delta=0
+raw_quality t=4500ms: changed=0/18849 max_delta=0
 ```
 
 待继续：
 
-- 用 A stain 真实背景重跑 5s/5 帧 `--raw-overlay-quality` 端到端对比，记录 raw_quality 与 MP4 quality 两组抽样结果。
-- 若导出稳定，再考虑 UI/设置里的实验开关；否则先继续优化 native export chunk/threads/诊断字段。
+- native export 质量基线已通过；下一步建议做 UI/设置里的实验开关，仍保持默认关闭，并在日志里明确 native sidecar / fallback 状态。
 
 ### C7：构建与发布
 
