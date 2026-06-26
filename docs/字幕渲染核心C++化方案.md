@@ -567,7 +567,7 @@ smoke 输出示例：
 #### C4-4 实装状态（2026-06-26 已启动）
 
 - 已新增 `scripts/bench_native_renderer.py`，用同一个 `.yurika` 工程、`TimingTrack` 与 `Style`
-  对比 Python `paint_frame()` 和 native sidecar `render_frame_png()` 的逐帧耗时，并输出 CSV。
+  对比 Python `paint_frame()` 和 native sidecar 的逐帧耗时，并输出 CSV。
 - 默认项目沿用本机 `D:\カラオケ\songs\A stain\A stain.yurika`，默认强制覆盖为
   `entry_anim=utopia` / `exit_anim=utopia` / `decoration_kind=glow`，可用
   `--keep-project-style` 保留项目原样式。
@@ -576,6 +576,10 @@ smoke 输出示例：
   `render_frame` + `output_path` PNG smoke 协议继续保留，并同样返回 `render_ms` 便于拆分“渲染成本”和“落盘成本”。
 - `scripts/bench_native_renderer.py` 默认改用 `--native-mode stats`；需要旧 smoke 路径时可显式传
   `--native-mode png`。CSV 现在同时输出 native roundtrip 与 sidecar 内部 render-only 耗时。
+- C4-4b 已把 benchmark 升级为可定位慢帧的工具：`--cache on|off|both` 可自动跑 glow cache 对照；
+  summary CSV 一行对应一个 cache 模式；新增 samples CSV，逐帧输出 `frame_index`、`t_ms`、Python/native 耗时、
+  native render-only 耗时、glow cache 累计值与逐帧 delta。默认 samples 文件与 summary 同名加 `_samples`，
+  也可用 `--samples-out` 指定。
 - 旧 PNG smoke（2026-06-26，本机 A stain，1920x1080，4 帧 + 2 帧 warmup）：
   Python mean 约 9.36ms，native mean 约 95.28ms，native glow cache hits=61 / misses=12。
   该结果主要反映 C1 PNG 输出协议开销，不代表最终 preview/export throughput。
@@ -585,6 +589,38 @@ smoke 输出示例：
   PNG 编码/磁盘写入，不应作为 preview/export throughput 判据。
 - PNG compat smoke（2026-06-26，本机 A stain，1920x1080，2 帧 + 1 帧 warmup）：native roundtrip mean
   约 80.70ms，但同一响应里的 render-only mean 约 5.19ms，进一步确认落盘协议是主要污染项。
+- C4-4b smoke（2026-06-26，本机 A stain，1920x1080，3 帧 + 1 帧 warmup，`--cache both`）：
+  cache on 时 Python mean 约 7.44ms、native render-only mean 约 5.95ms、sample cache delta `+30/+6`；
+  cache off 时 Python mean 约 7.74ms、native render-only mean 约 6.96ms。该短窗口只作工具烟测，
+  正式判断仍应使用 60 帧以上窗口和 samples CSV 排查慢帧。
+- C4-4b 60 帧初测（2026-06-26，本机 A stain，1920x1080，60 帧 + 10 帧 warmup，`--cache both`）：
+  cache on 时 Python mean 约 10.07ms、native render-only mean 约 7.72ms（render-only 约 1.30x）、
+  sample cache delta `+1563/+219`；cache off 时 native render-only mean 约 13.26ms。samples CSV 显示
+  cache on 的慢帧集中在 92200-92470ms 附近，慢帧仍伴随每帧约 6-7 个 glow miss；cache off 同窗口会升到
+  16-17ms。下一步优化应优先分析这些 miss 的 key 稳定性与可复用粒度，而不是继续看 PNG/IPC。
+- 已新增 native glow miss 诊断：`frame_ready` / `frame_stats` 返回 `glow_cache_shape_misses`、
+  `glow_cache_content_variant_misses`、`glow_cache_evicted_key_misses` 和最近 miss 摘要；benchmark 的 summary
+  与 samples CSV 也输出三类 miss delta。分类含义：`shape` 是 radius/尺寸/格式首次出现；`content` 是同 shape
+  但源 bitmap checksum 变化；`evicted` 是曾见过的完整 key 被 LRU 淘汰后再 miss。
+- C4-4c 60 帧诊断（2026-06-26，本机 A stain，1920x1080，60 帧 + 10 帧 warmup，`--cache both`）：
+  cache on 时 sample miss `+219` 拆为 `shape=51`、`content=168`、`evicted=0`；cache off 仍约
+  14.12ms render-only。结论：当前 miss 不是 LRU 容量不足，主要是同尺寸/radius 的 glow source bitmap 内容持续变化。
+  下一刀应优先看 utopia/ruby group 的 glow source 内容为何不稳定，或改为缓存更上游的路径/轮廓层，而不是单纯扩大
+  `kGlowBitmapCacheMax`。
+- 已新增 glow miss scope 诊断：benchmark samples CSV 输出 `cache_scope_miss_delta`，native 响应输出
+  `glow_cache_misses_by_scope`。实测确认 content variant 几乎全部来自 `ruby_utopia_reading`，主字仅 1 个 miss。
+- 已修复 ruby utopia glow cache 的上正 path 传参：之前 ruby group / ruby reading 先把 path 套上 transform，
+  又把 transformed path 作为 cache source 传入，导致每帧 transform 变化都会产生 content miss；现改为绘制仍使用
+  transformed path，但 glow cache 使用未变换的 upright path，与主文本路径一致。修复后 60 帧 `--cache both`：
+  cache on 时 sample miss 从 `+219` 降到 `+0`，总 miss 仅 warmup 的 `main_utopia_char=1` 与
+  `ruby_utopia_reading=1`；native render-only mean 约 8.23ms，cache off render-only mean 约 14.37ms。
+- 已新增 benchmark 专用 `render_range_stats` 协议：Python 传入一组 timestamps 与 `threads`，sidecar 内部用
+  C++ worker 并行渲染，不落盘，返回 range 总耗时、每帧 render_ms/checksum 与 cache 诊断。`bench_native_renderer.py`
+  可用 `--native-mode range --range-threads N` 调用该路径。
+- C4-4d range thread pool 初测（2026-06-26，本机 A stain，1920x1080，60 帧 + 10 帧 warmup，cache on）：
+  `range:1` 约 8.12ms/帧，`range:2` 约 4.07ms/帧，`range:4` 约 2.40ms/帧，`range:8` 约 1.67ms/帧。
+  worker 内单帧 render_ms 会随并发升高（8 线程约 11.97ms），说明存在 Qt/font/cache/CPU 争用，但总吞吐已经明显
+  受益于 C++ 多线程。该结果把后续方向重新拉回 range render / preview scheduler，而不是继续深挖 utopia 专项缓存。
 
 验收：
 

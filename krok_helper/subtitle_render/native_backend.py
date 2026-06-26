@@ -182,6 +182,16 @@ class NativeRendererProcess:
         )
         return self._expect_ok(self._read_response())
 
+    def render_range_stats(self, timestamps_ms: list[int], *, threads: int) -> dict[str, Any]:
+        self._send(
+            {
+                "cmd": "render_range_stats",
+                "t_ms": [int(t_ms) for t_ms in timestamps_ms],
+                "threads": int(threads),
+            }
+        )
+        return self._expect_ok(self._read_response())
+
     def _send(self, payload: dict[str, Any]) -> None:
         process = self._require_process()
         assert process.stdin is not None

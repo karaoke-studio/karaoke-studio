@@ -203,6 +203,12 @@ def _write_fake_sidecar(tmp_path: Path, *, mode: str = "normal") -> Path:
                     print(json.dumps({{"ok": True, "event": "frame_ready", "checksum": "fake", "render_ms": 1.25}}), flush=True)
                 elif command == "render_frame_stats":
                     print(json.dumps({{"ok": True, "event": "frame_stats", "checksum": "fake", "render_ms": 1.25}}), flush=True)
+                elif command == "render_range_stats":
+                    frames = [
+                        {{"t_ms": t_ms, "render_ms": 1.5, "checksum": "fake", "visible_lines": 1}}
+                        for t_ms in request.get("t_ms", [])
+                    ]
+                    print(json.dumps({{"ok": True, "event": "range_stats", "frames": len(frames), "threads": request.get("threads", 1), "elapsed_ms": 3.0, "frame_stats": frames}}), flush=True)
                 elif command == "shutdown":
                     print(json.dumps({{"ok": True, "event": "shutdown"}}), flush=True)
                     break
@@ -235,6 +241,10 @@ def test_native_renderer_process_round_trips_with_noisy_sidecar(tmp_path):
     stats = renderer.render_frame_stats(900)
     assert stats["event"] == "frame_stats"
     assert stats["render_ms"] == 1.25
+    range_stats = renderer.render_range_stats([900, 917], threads=2)
+    assert range_stats["event"] == "range_stats"
+    assert range_stats["threads"] == 2
+    assert len(range_stats["frame_stats"]) == 2
 
     renderer.close()
     assert renderer.is_running is False

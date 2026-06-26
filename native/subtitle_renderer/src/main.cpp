@@ -7,6 +7,7 @@
 #include <QtCore/QJsonObject>
 #include <QtCore/QHash>
 #include <QtCore/QPointF>
+#include <QtCore/QSet>
 #include <QtCore/QTextStream>
 #include <QtGui/QBrush>
 #include <QtGui/QColor>
@@ -25,11 +26,14 @@
 #include <QtWidgets/QGraphicsScene>
 
 #include <algorithm>
+#include <atomic>
 #include <cstdint>
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <mutex>
 #include <optional>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -251,6 +255,26 @@ struct GlowBitmapCacheEntry {
     QImage image;
 };
 
+struct GlowBitmapCacheKeyParts {
+    QString key;
+    QString shapeKey;
+    QString checksum;
+    int radius = 1;
+    int width = 0;
+    int height = 0;
+    int format = 0;
+};
+
+struct GlowBitmapCacheMissDiagnostic {
+    QString scope;
+    QString category;
+    int radius = 1;
+    int width = 0;
+    int height = 0;
+    int format = 0;
+    QString checksum;
+};
+
 struct GlowLayerImage {
     QImage image;
     QPointF offset;
@@ -259,6 +283,13 @@ struct GlowLayerImage {
 struct GlowBitmapCacheStats {
     int hits = 0;
     int misses = 0;
+    int shapeMisses = 0;
+    int contentVariantMisses = 0;
+    int evictedKeyMisses = 0;
+    QSet<QString> seenKeys;
+    QSet<QString> seenShapes;
+    QHash<QString, int> missesByScope;
+    std::vector<GlowBitmapCacheMissDiagnostic> recentMisses;
 };
 
 struct RenderDiagnostics {
@@ -278,6 +309,13 @@ struct RenderDiagnostics {
 struct RenderResult {
     QImage image;
     RenderDiagnostics diagnostics;
+};
+
+struct RangeFrameResult {
+    int tMs = 0;
+    double renderMs = 0.0;
+    QString checksum;
+    int visibleLines = 0;
 };
 
 QString stringValue(const QJsonObject &object, const QString &key, const QString &fallback = {}) {
@@ -1135,6 +1173,11 @@ std::vector<ImageFillCacheEntry> &imageFillCache() {
     return cache;
 }
 
+std::mutex &imageFillCacheMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
 QString imageFillCacheKey(const QString &path) {
     return QFileInfo(path).absoluteFilePath();
 }
@@ -1145,6 +1188,7 @@ QImage cachedFillImage(const QString &path) {
     }
 
     const QString key = imageFillCacheKey(path);
+    std::lock_guard<std::mutex> lock(imageFillCacheMutex());
     auto &cache = imageFillCache();
     for (auto it = cache.begin(); it != cache.end(); ++it) {
         if (it->key == key) {
@@ -2185,35 +2229,77 @@ std::vector<GlowBitmapCacheEntry> &glowBitmapCache() {
     return cache;
 }
 
+std::mutex &glowBitmapCacheMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
 GlowBitmapCacheStats &glowBitmapCacheStats() {
     static GlowBitmapCacheStats stats;
     return stats;
 }
 
 void clearGlowBitmapCache() {
+    std::lock_guard<std::mutex> lock(glowBitmapCacheMutex());
     glowBitmapCache().clear();
     glowBitmapCacheStats() = GlowBitmapCacheStats{};
 }
 
-QString glowBitmapCacheKey(const QImage &source, int radius) {
-    return QStringLiteral("%1:%2:%3:%4:%5")
-        .arg(std::max(radius, 1))
-        .arg(source.width())
-        .arg(source.height())
-        .arg(static_cast<int>(source.format()))
-        .arg(QString::number(imageFullChecksum(source), 16));
+GlowBitmapCacheKeyParts glowBitmapCacheKey(const QImage &source, int radius) {
+    GlowBitmapCacheKeyParts parts;
+    parts.radius = std::max(radius, 1);
+    parts.width = source.width();
+    parts.height = source.height();
+    parts.format = static_cast<int>(source.format());
+    parts.checksum = QString::number(imageFullChecksum(source), 16);
+    parts.shapeKey = QStringLiteral("%1:%2:%3:%4")
+        .arg(parts.radius)
+        .arg(parts.width)
+        .arg(parts.height)
+        .arg(parts.format);
+    parts.key = QStringLiteral("%1:%2").arg(parts.shapeKey, parts.checksum);
+    return parts;
 }
 
-QImage cachedBlurImage(const QImage &source, int radius) {
+void recordGlowBitmapCacheMiss(GlowBitmapCacheStats *stats, const GlowBitmapCacheKeyParts &parts, const QString &scope) {
+    GlowBitmapCacheMissDiagnostic diagnostic;
+    diagnostic.scope = scope.isEmpty() ? QStringLiteral("unknown") : scope;
+    diagnostic.radius = parts.radius;
+    diagnostic.width = parts.width;
+    diagnostic.height = parts.height;
+    diagnostic.format = parts.format;
+    diagnostic.checksum = parts.checksum.left(16);
+    if (stats->seenKeys.contains(parts.key)) {
+        ++stats->evictedKeyMisses;
+        diagnostic.category = QStringLiteral("evicted_key");
+    } else if (stats->seenShapes.contains(parts.shapeKey)) {
+        ++stats->contentVariantMisses;
+        diagnostic.category = QStringLiteral("content_variant");
+    } else {
+        ++stats->shapeMisses;
+        diagnostic.category = QStringLiteral("new_shape");
+    }
+    stats->seenKeys.insert(parts.key);
+    stats->seenShapes.insert(parts.shapeKey);
+    stats->missesByScope[diagnostic.scope] = stats->missesByScope.value(diagnostic.scope, 0) + 1;
+    constexpr std::size_t kRecentMissLimit = 64;
+    if (stats->recentMisses.size() >= kRecentMissLimit) {
+        stats->recentMisses.erase(stats->recentMisses.begin());
+    }
+    stats->recentMisses.push_back(diagnostic);
+}
+
+QImage cachedBlurImage(const QImage &source, int radius, const QString &scope = QStringLiteral("unknown")) {
     if (!glowBitmapCacheEnabled()) {
         return blurImage(source, radius);
     }
 
-    const QString key = glowBitmapCacheKey(source, radius);
+    const GlowBitmapCacheKeyParts key = glowBitmapCacheKey(source, radius);
+    std::lock_guard<std::mutex> lock(glowBitmapCacheMutex());
     auto &cache = glowBitmapCache();
     auto &stats = glowBitmapCacheStats();
     for (auto it = cache.begin(); it != cache.end(); ++it) {
-        if (it->key == key) {
+        if (it->key == key.key) {
             GlowBitmapCacheEntry entry = *it;
             cache.erase(it);
             cache.push_back(entry);
@@ -2223,12 +2309,13 @@ QImage cachedBlurImage(const QImage &source, int radius) {
     }
 
     ++stats.misses;
+    recordGlowBitmapCacheMiss(&stats, key, scope);
     QImage blurred = blurImage(source, radius);
     constexpr std::size_t kGlowBitmapCacheMax = 128;
     if (cache.size() >= kGlowBitmapCacheMax) {
         cache.erase(cache.begin());
     }
-    cache.push_back(GlowBitmapCacheEntry{key, blurred});
+    cache.push_back(GlowBitmapCacheEntry{key.key, blurred});
     return blurred;
 }
 
@@ -2238,7 +2325,8 @@ GlowLayerImage buildGlowLayerWithWidths(
     const QRectF &rect,
     int radius,
     int strokeWidth,
-    int stroke2Width
+    int stroke2Width,
+    const QString &scope = QStringLiteral("unknown")
 ) {
     const int glowRadius = std::max(radius, 1);
     const int baseWidth = stroke2Width > 0 ? strokeWidth + stroke2Width : std::max(strokeWidth, 0);
@@ -2265,7 +2353,7 @@ GlowLayerImage buildGlowLayerWithWidths(
     layerPainter.end();
 
     return GlowLayerImage{
-        cachedBlurImage(source, glowRadius),
+        cachedBlurImage(source, glowRadius, scope),
         QPointF(layerRect.left(), layerRect.top()),
     };
 }
@@ -2277,9 +2365,10 @@ void paintGlowPathWithWidths(
     const QRectF &rect,
     int radius,
     int strokeWidth,
-    int stroke2Width
+    int stroke2Width,
+    const QString &scope = QStringLiteral("text")
 ) {
-    const GlowLayerImage layer = buildGlowLayerWithWidths(path, fill, rect, radius, strokeWidth, stroke2Width);
+    const GlowLayerImage layer = buildGlowLayerWithWidths(path, fill, rect, radius, strokeWidth, stroke2Width, scope);
     if (!layer.image.isNull()) {
         painter.drawImage(layer.offset, layer.image);
     }
@@ -2293,7 +2382,8 @@ void blitTransformedGlowLayerWithWidths(
     int radius,
     int strokeWidth,
     int stroke2Width,
-    const QTransform &transform
+    const QTransform &transform,
+    const QString &scope = QStringLiteral("transformed_text")
 ) {
     const GlowLayerImage layer = buildGlowLayerWithWidths(
         uprightPath,
@@ -2301,7 +2391,8 @@ void blitTransformedGlowLayerWithWidths(
         uprightRect,
         radius,
         strokeWidth,
-        stroke2Width
+        stroke2Width,
+        scope
     );
     if (layer.image.isNull()) {
         return;
@@ -2327,7 +2418,8 @@ void paintTextLayerStackWithWidths(
     int shadowOffsetX,
     int shadowOffsetY,
     int glowRadiusValue,
-    bool drawGlow = true
+    bool drawGlow = true,
+    const QString &glowScope = QStringLiteral("text")
 ) {
     if (style.decorationKind == QStringLiteral("glow") && drawGlow) {
         paintGlowPathWithWidths(
@@ -2337,7 +2429,8 @@ void paintTextLayerStackWithWidths(
             rect,
             glowRadiusValue,
             strokeWidth,
-            stroke2Width
+            stroke2Width,
+            glowScope
         );
     } else if (shadowOffsetX != 0 || shadowOffsetY != 0) {
         QPainterPath shadowPath(path);
@@ -2592,7 +2685,8 @@ void paintTransformedTextStackWithFills(
     bool forceAfter,
     const QPainterPath *uprightPath = nullptr,
     const QRectF *uprightRect = nullptr,
-    const QTransform *uprightTransform = nullptr
+    const QTransform *uprightTransform = nullptr,
+    const QString &glowScope = QStringLiteral("transformed_text")
 ) {
     const bool useCachedGlow = style.decorationKind == QStringLiteral("glow")
         && uprightPath != nullptr
@@ -2611,7 +2705,8 @@ void paintTransformedTextStackWithFills(
             radius,
             strokeWidth,
             stroke2Width,
-            *uprightTransform
+            *uprightTransform,
+            glowScope
         );
     };
 
@@ -2632,7 +2727,8 @@ void paintTransformedTextStackWithFills(
             shadowOffsetX,
             shadowOffsetY,
             beforeGlowRadius,
-            !useCachedGlow
+            !useCachedGlow,
+            glowScope + QStringLiteral(":before")
         );
         return;
     }
@@ -2652,7 +2748,8 @@ void paintTransformedTextStackWithFills(
             shadowOffsetX,
             shadowOffsetY,
             afterGlowRadius,
-            !useCachedGlow
+            !useCachedGlow,
+            glowScope + QStringLiteral(":after")
         );
         return;
     }
@@ -2672,7 +2769,8 @@ void paintTransformedTextStackWithFills(
         shadowOffsetX,
         shadowOffsetY,
         beforeGlowRadius,
-        !useCachedGlow
+        !useCachedGlow,
+        glowScope + QStringLiteral(":before")
     );
 
     const double strokePad = visualStrokeExtentForWidths(strokeWidth, stroke2Width);
@@ -2705,7 +2803,8 @@ void paintTransformedTextStackWithFills(
         shadowOffsetX,
         shadowOffsetY,
         afterGlowRadius,
-        !useCachedGlow
+        !useCachedGlow,
+        glowScope + QStringLiteral(":after")
     );
     painter.restore();
 }
@@ -2722,7 +2821,8 @@ void paintTransformedTextStack(
     bool forceAfter,
     const QPainterPath *uprightPath = nullptr,
     const QRectF *uprightRect = nullptr,
-    const QTransform *uprightTransform = nullptr
+    const QTransform *uprightTransform = nullptr,
+    const QString &glowScope = QStringLiteral("main_transformed")
 ) {
     paintTransformedTextStackWithFills(
         painter,
@@ -2750,7 +2850,8 @@ void paintTransformedTextStack(
         forceAfter,
         uprightPath,
         uprightRect,
-        uprightTransform
+        uprightTransform,
+        glowScope
     );
 }
 
@@ -2764,7 +2865,8 @@ void paintRubyTransformedStack(
     bool forceAfter,
     const QPainterPath *uprightPath = nullptr,
     const QRectF *uprightRect = nullptr,
-    const QTransform *uprightTransform = nullptr
+    const QTransform *uprightTransform = nullptr,
+    const QString &glowScope = QStringLiteral("ruby_transformed")
 ) {
     const double scale = rubyScale(style);
     const int strokeWidth = scaledPx(style.strokeWidthPx, scale);
@@ -2797,7 +2899,8 @@ void paintRubyTransformedStack(
         forceAfter,
         uprightPath,
         uprightRect,
-        uprightTransform
+        uprightTransform,
+        glowScope
     );
 }
 
@@ -2862,7 +2965,7 @@ void paintRubyUtopiaText(
                     reading += *it;
                 }
             }
-            QPainterPath path = rubyTextPath(reading, rubyFont, rubyMetrics, x, rubyBaselineY, targetWidth);
+            QPainterPath uprightPath = rubyTextPath(reading, rubyFont, rubyMetrics, x, rubyBaselineY, targetWidth);
             const QRectF sourceRect(
                 x,
                 rubyBaselineY - rubyMetrics.ascent(),
@@ -2877,7 +2980,7 @@ void paintRubyUtopiaText(
                 state,
                 QPointF(x, rubyBaselineY)
             );
-            path = transform.map(path);
+            QPainterPath path = transform.map(uprightPath);
             const QRectF rect = path.boundingRect();
             if (!rect.isEmpty()) {
                 paintRubyTransformedStack(
@@ -2888,9 +2991,10 @@ void paintRubyUtopiaText(
                     rubyProgressRatio(paintRuby, tMs),
                     cfg.rightToLeft,
                     true,
-                    &path,
+                    &uprightPath,
                     &sourceRect,
-                    &transform
+                    &transform,
+                    QStringLiteral("ruby_utopia_group")
                 );
             }
             painter.restore();
@@ -2917,8 +3021,8 @@ void paintRubyUtopiaText(
             if (unitState.opacity <= 0.0) {
                 continue;
             }
-            QPainterPath path;
-            path.addText(QPointF(unit.x, rubyBaselineY), rubyFont, unit.text);
+            QPainterPath uprightPath;
+            uprightPath.addText(QPointF(unit.x, rubyBaselineY), rubyFont, unit.text);
             const QRectF sourceRect(
                 unit.x,
                 rubyBaselineY - rubyMetrics.ascent(),
@@ -2933,7 +3037,7 @@ void paintRubyUtopiaText(
                 unitState,
                 QPointF(unit.x, rubyBaselineY)
             );
-            path = transform.map(path);
+            QPainterPath path = transform.map(uprightPath);
             const QRectF rect = path.boundingRect();
             if (rect.isEmpty()) {
                 continue;
@@ -2948,9 +3052,10 @@ void paintRubyUtopiaText(
                 progressRatio(unit.interval.first, unit.interval.second, tMs),
                 cfg.rightToLeft,
                 false,
-                &path,
+                &uprightPath,
                 &sourceRect,
-                &transform
+                &transform,
+                QStringLiteral("ruby_utopia_reading")
             );
             painter.restore();
         }
@@ -3059,7 +3164,8 @@ void paintUtopiaMainText(
             inUtopiaExit,
             &path,
             &sourceRect,
-            &transform
+            &transform,
+            groupRuby.has_value() ? QStringLiteral("main_utopia_ruby_group") : QStringLiteral("main_utopia_char")
         );
         painter.restore();
     }
@@ -3270,7 +3376,32 @@ void appendFrameDiagnostics(
     out->insert(QStringLiteral("visible_lines"), diagnostics.visibleLines);
     out->insert(QStringLiteral("glow_cache_hits"), glowBitmapCacheStats().hits);
     out->insert(QStringLiteral("glow_cache_misses"), glowBitmapCacheStats().misses);
+    out->insert(QStringLiteral("glow_cache_shape_misses"), glowBitmapCacheStats().shapeMisses);
+    out->insert(QStringLiteral("glow_cache_content_variant_misses"), glowBitmapCacheStats().contentVariantMisses);
+    out->insert(QStringLiteral("glow_cache_evicted_key_misses"), glowBitmapCacheStats().evictedKeyMisses);
     out->insert(QStringLiteral("glow_cache_size"), static_cast<int>(glowBitmapCache().size()));
+    QJsonObject missesByScope;
+    const auto scopeKeys = glowBitmapCacheStats().missesByScope.keys();
+    for (const QString &scope : scopeKeys) {
+        missesByScope.insert(scope, glowBitmapCacheStats().missesByScope.value(scope));
+    }
+    out->insert(QStringLiteral("glow_cache_misses_by_scope"), missesByScope);
+    QJsonArray recentGlowMisses;
+    const auto &misses = glowBitmapCacheStats().recentMisses;
+    const std::size_t start = misses.size() > 8 ? misses.size() - 8 : 0;
+    for (std::size_t index = start; index < misses.size(); ++index) {
+        const GlowBitmapCacheMissDiagnostic &miss = misses[index];
+        QJsonObject item;
+        item.insert(QStringLiteral("scope"), miss.scope);
+        item.insert(QStringLiteral("category"), miss.category);
+        item.insert(QStringLiteral("radius"), miss.radius);
+        item.insert(QStringLiteral("width"), miss.width);
+        item.insert(QStringLiteral("height"), miss.height);
+        item.insert(QStringLiteral("format"), miss.format);
+        item.insert(QStringLiteral("checksum"), miss.checksum);
+        recentGlowMisses.append(item);
+    }
+    out->insert(QStringLiteral("glow_cache_recent_misses"), recentGlowMisses);
     QJsonArray lineDiagnostics;
     for (const LineDiagnostics &line : diagnostics.lines) {
         QJsonObject item;
@@ -3365,6 +3496,97 @@ QJsonObject handleRenderFrameStats(const QJsonObject &request, const std::option
     return out;
 }
 
+QJsonObject handleRenderRangeStats(const QJsonObject &request, const std::optional<RenderConfig> &config) {
+    if (!config.has_value()) {
+        QJsonObject out = response(false, QStringLiteral("render_range_stats"));
+        out.insert(QStringLiteral("error"), QStringLiteral("renderer is not configured"));
+        return out;
+    }
+
+    std::vector<int> timestamps = parseIntArray(request.value(QStringLiteral("t_ms")).toArray());
+    if (timestamps.empty()) {
+        const int startFrame = std::max(0, intValue(request, QStringLiteral("start_frame"), 0));
+        const int count = std::max(0, intValue(request, QStringLiteral("count"), 0));
+        timestamps.reserve(static_cast<std::size_t>(count));
+        for (int index = 0; index < count; ++index) {
+            const double frameMs = 1000.0 / static_cast<double>(std::max(config->fps, 1));
+            timestamps.push_back(static_cast<int>(std::round((startFrame + index) * frameMs)));
+        }
+    }
+    if (timestamps.empty()) {
+        QJsonObject out = response(false, QStringLiteral("render_range_stats"));
+        out.insert(QStringLiteral("error"), QStringLiteral("t_ms array or positive count is required"));
+        return out;
+    }
+
+    const unsigned int hardwareThreads = std::max(1u, std::thread::hardware_concurrency());
+    const int requestedThreads = intValue(request, QStringLiteral("threads"), static_cast<int>(hardwareThreads));
+    const int workerCount = std::max(1, std::min(requestedThreads, static_cast<int>(timestamps.size())));
+    std::vector<RangeFrameResult> results(timestamps.size());
+    std::atomic<int> nextIndex{0};
+    QElapsedTimer totalTimer;
+    totalTimer.start();
+
+    auto worker = [&]() {
+        while (true) {
+            const int index = nextIndex.fetch_add(1);
+            if (index >= static_cast<int>(timestamps.size())) {
+                return;
+            }
+            QElapsedTimer frameTimer;
+            frameTimer.start();
+            RenderResult rendered = renderFrame(*config, timestamps[static_cast<std::size_t>(index)]);
+            const double renderMs = static_cast<double>(frameTimer.nsecsElapsed()) / 1000000.0;
+            results[static_cast<std::size_t>(index)] = RangeFrameResult{
+                timestamps[static_cast<std::size_t>(index)],
+                renderMs,
+                QString::number(imageChecksum(rendered.image)),
+                rendered.diagnostics.visibleLines,
+            };
+        }
+    };
+
+    std::vector<std::thread> workers;
+    workers.reserve(static_cast<std::size_t>(workerCount));
+    for (int index = 0; index < workerCount; ++index) {
+        workers.emplace_back(worker);
+    }
+    for (auto &thread : workers) {
+        thread.join();
+    }
+
+    const double elapsedMs = static_cast<double>(totalTimer.nsecsElapsed()) / 1000000.0;
+    QJsonObject out = response(true, QStringLiteral("range_stats"));
+    out.insert(QStringLiteral("frames"), static_cast<int>(timestamps.size()));
+    out.insert(QStringLiteral("threads"), workerCount);
+    out.insert(QStringLiteral("elapsed_ms"), elapsedMs);
+    out.insert(QStringLiteral("fps"), elapsedMs > 0.0 ? (static_cast<double>(timestamps.size()) * 1000.0 / elapsedMs) : 0.0);
+    out.insert(QStringLiteral("glow_cache_hits"), glowBitmapCacheStats().hits);
+    out.insert(QStringLiteral("glow_cache_misses"), glowBitmapCacheStats().misses);
+    out.insert(QStringLiteral("glow_cache_shape_misses"), glowBitmapCacheStats().shapeMisses);
+    out.insert(QStringLiteral("glow_cache_content_variant_misses"), glowBitmapCacheStats().contentVariantMisses);
+    out.insert(QStringLiteral("glow_cache_evicted_key_misses"), glowBitmapCacheStats().evictedKeyMisses);
+    out.insert(QStringLiteral("glow_cache_size"), static_cast<int>(glowBitmapCache().size()));
+    QJsonObject missesByScope;
+    const auto scopeKeys = glowBitmapCacheStats().missesByScope.keys();
+    for (const QString &scope : scopeKeys) {
+        missesByScope.insert(scope, glowBitmapCacheStats().missesByScope.value(scope));
+    }
+    out.insert(QStringLiteral("glow_cache_misses_by_scope"), missesByScope);
+
+    QJsonArray frames;
+    for (const RangeFrameResult &result : results) {
+        QJsonObject item;
+        item.insert(QStringLiteral("t_ms"), result.tMs);
+        item.insert(QStringLiteral("render_ms"), result.renderMs);
+        item.insert(QStringLiteral("checksum"), result.checksum);
+        item.insert(QStringLiteral("visible_lines"), result.visibleLines);
+        frames.append(item);
+    }
+    out.insert(QStringLiteral("frame_stats"), frames);
+    return out;
+}
+
 QJsonObject parseErrorResponse(const QString &message) {
     QJsonObject out = response(false, QStringLiteral("parse_error"));
     out.insert(QStringLiteral("error"), message);
@@ -3405,6 +3627,8 @@ int main(int argc, char **argv) {
             writeJson(handleRenderFrame(request, config));
         } else if (command == QStringLiteral("render_frame_stats")) {
             writeJson(handleRenderFrameStats(request, config));
+        } else if (command == QStringLiteral("render_range_stats")) {
+            writeJson(handleRenderRangeStats(request, config));
         } else if (command == QStringLiteral("shutdown")) {
             writeJson(response(true, QStringLiteral("shutdown")));
             return 0;

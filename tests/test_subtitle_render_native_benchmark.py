@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import os
+
 from scripts.bench_native_renderer import (
     TimingSample,
+    _cache_modes,
+    _format_counts,
+    _int_map,
+    _map_delta,
+    _native_glow_cache_mode,
     _sample_timestamps,
+    _sample_rows,
     _summarize_samples,
 )
 
@@ -21,6 +29,12 @@ def test_summarize_samples_reports_python_native_and_speedup() -> None:
                 native_cache_hits=0,
                 native_cache_misses=1,
                 native_render_ms=4.0,
+                cache_hit_delta=0,
+                cache_miss_delta=1,
+                cache_shape_miss_delta=1,
+                native_cache_shape_misses=1,
+                cache_scope_miss_delta="main=1",
+                native_cache_misses_by_scope="main=1",
             ),
             TimingSample(
                 t_ms=16,
@@ -29,14 +43,26 @@ def test_summarize_samples_reports_python_native_and_speedup() -> None:
                 native_cache_hits=1,
                 native_cache_misses=1,
                 native_render_ms=6.0,
+                cache_hit_delta=1,
+                cache_miss_delta=0,
+                cache_content_variant_miss_delta=2,
+                cache_evicted_key_miss_delta=3,
+                native_cache_content_variant_misses=2,
+                native_cache_evicted_key_misses=3,
+                cache_scope_miss_delta="ruby=5",
+                native_cache_misses_by_scope="main=1;ruby=5",
             ),
         ],
         scenario="fixture",
         width=640,
         height=360,
+        cache_mode="on",
+        native_mode="stats",
     )
 
     assert rows["scenario"] == "fixture"
+    assert rows["cache_mode"] == "on"
+    assert rows["native_mode"] == "stats"
     assert rows["frames"] == 2
     assert rows["python_mean_ms"] == "15.0000"
     assert rows["native_mean_ms"] == "5.0000"
@@ -45,3 +71,93 @@ def test_summarize_samples_reports_python_native_and_speedup() -> None:
     assert rows["render_speedup"] == "3.00"
     assert rows["native_cache_hits"] == 1
     assert rows["native_cache_misses"] == 1
+    assert rows["native_cache_hit_delta"] == 1
+    assert rows["native_cache_miss_delta"] == 1
+    assert rows["native_cache_shape_misses"] == 1
+    assert rows["native_cache_content_variant_misses"] == 2
+    assert rows["native_cache_evicted_key_misses"] == 3
+    assert rows["native_cache_shape_miss_delta"] == 1
+    assert rows["native_cache_content_variant_miss_delta"] == 2
+    assert rows["native_cache_evicted_key_miss_delta"] == 3
+    assert rows["native_cache_misses_by_scope"] == "main=1;ruby=5"
+
+
+def test_sample_rows_reports_per_frame_cache_deltas() -> None:
+    rows = _sample_rows(
+        [
+            TimingSample(
+                t_ms=1000,
+                python_ms=10.12345,
+                native_ms=5.5,
+                native_cache_hits=4,
+                native_cache_misses=2,
+                native_render_ms=4.25,
+                frame_index=3,
+                cache_hit_delta=2,
+                cache_miss_delta=1,
+                cache_shape_miss_delta=0,
+                cache_content_variant_miss_delta=1,
+                cache_evicted_key_miss_delta=0,
+                native_cache_shape_misses=1,
+                native_cache_content_variant_misses=2,
+                native_cache_evicted_key_misses=3,
+                cache_scope_miss_delta="ruby=1",
+                native_cache_misses_by_scope="main=1;ruby=1",
+                cache_mode="off",
+                native_mode="png",
+            )
+        ],
+        scenario="fixture",
+    )
+
+    assert rows == [
+        {
+            "scenario": "fixture",
+            "cache_mode": "off",
+            "native_mode": "png",
+            "frame_index": 3,
+            "t_ms": 1000,
+            "python_ms": "10.1235",
+            "native_ms": "5.5000",
+            "native_render_ms": "4.2500",
+            "cache_hit_delta": 2,
+            "cache_miss_delta": 1,
+            "cache_shape_miss_delta": 0,
+            "cache_content_variant_miss_delta": 1,
+            "cache_evicted_key_miss_delta": 0,
+            "cache_scope_miss_delta": "ruby=1",
+            "native_cache_hits": 4,
+            "native_cache_misses": 2,
+            "native_cache_shape_misses": 1,
+            "native_cache_content_variant_misses": 2,
+            "native_cache_evicted_key_misses": 3,
+            "native_cache_misses_by_scope": "main=1;ruby=1",
+        }
+    ]
+
+
+def test_cache_modes_expands_both() -> None:
+    assert _cache_modes("on") == ["on"]
+    assert _cache_modes("off") == ["off"]
+    assert _cache_modes("both") == ["on", "off"]
+
+
+def test_count_map_helpers_ignore_bad_values_and_format_deltas() -> None:
+    current = _int_map({"ruby": "3", "main": 2, 1: 9, "bad": object()})
+    previous = {"ruby": 1, "old": 5}
+
+    assert current == {"main": 2, "ruby": 3}
+    assert _map_delta(current, previous) == {"main": 2, "ruby": 2}
+    assert _format_counts({"ruby": 2, "main": 1}) == "main=1;ruby=2"
+
+
+def test_native_glow_cache_mode_restores_environment(monkeypatch) -> None:
+    monkeypatch.setenv("KROK_SUBTITLE_NATIVE_GLOW_CACHE", "custom")
+    monkeypatch.delenv("KROK_SUBTITLE_GLOW_CACHE", raising=False)
+
+    with _native_glow_cache_mode("on"):
+        assert "KROK_SUBTITLE_NATIVE_GLOW_CACHE" not in os.environ
+        assert "KROK_SUBTITLE_GLOW_CACHE" not in os.environ
+
+    assert os.environ["KROK_SUBTITLE_NATIVE_GLOW_CACHE"] == "custom"
+    assert "KROK_SUBTITLE_GLOW_CACHE" not in os.environ
