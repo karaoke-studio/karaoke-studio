@@ -176,6 +176,21 @@ def test_native_preview_frame_cache_detaches_and_evicts_oldest():
     assert cache.take(1_017) is None
 
 
+def test_native_preview_frame_cache_uses_fps_normalized_keys():
+    from krok_helper.subtitle_render.frontend.preview_async import NativePreviewFrameCache
+
+    cache = NativePreviewFrameCache(max_frames=2, fps=60)
+    image = QImage(8, 8, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(QColor("#223344"))
+
+    cache.store(1_017, image)
+
+    cached = cache.take(1_016)
+    assert cached is not None
+    assert cached.pixelColor(0, 0) == QColor("#223344")
+    assert cache.take(1_017) is None
+
+
 def test_native_preview_stats_snapshot_tracks_core_counters():
     from krok_helper.subtitle_render.frontend.preview_async import NativePreviewStats
 

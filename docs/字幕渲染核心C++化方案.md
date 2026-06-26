@@ -718,11 +718,14 @@ C:\Python314\python.exe -m pytest tests/test_subtitle_render_native_protocol.py 
   在 seek / style / size / playing 状态导致 generation 前进时，会对当前活跃 generation 发送 cancel。
 - 轻量诊断计数已接入：`NativePreviewStats` 可通过 `stats_snapshot()` 读取 cache hit/miss、未来帧缓存数、过期帧丢弃数、
   主动 cancel 次数，用于后续真实工程压测。
+- look-ahead 缓存 key 已从裸 `t_ms` 调整为按预览 fps 归一化的 frame bucket，避免 `1016ms` / `1017ms` 这类同一
+  视觉帧因为毫秒抖动重复 miss。`A stain` 真素材 3s 高频 seek probe 中，最终统计从约 `hit=49 miss=46` 改善到
+  `hit=74 miss=21`。
 
 待继续：
 
-- 当前 look-ahead 缓存仍是最小实现，需在真实播放中结合 stats 观察命中率、内存占用、晚到帧比例，并决定是否要按
-  frame index 或 fps-normalized bucket 做更稳定的键。
+- 当前 look-ahead 缓存仍是最小实现，需继续在真实播放中结合 stats 观察命中率、内存占用、晚到帧比例，并决定是否要
+  增加命中率/丢帧率汇总输出或可视化诊断。
 - 还需要用真实高频 seek / style resize 压测主动取消路径，确认 native sidecar 的 `generation_cancelled` / `range_done`
   事件不会在极端交错下造成预览卡住或 backlog 堆积。
 - 还需要用真实重工程对比 native preview / Python async preview 的稳定帧率和画质。

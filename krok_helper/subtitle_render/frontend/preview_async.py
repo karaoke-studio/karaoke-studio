@@ -77,15 +77,19 @@ def native_preview_timestamps(
 class NativePreviewFrameCache:
     """Small thread-safe QImage cache for native preview look-ahead frames."""
 
-    def __init__(self, max_frames: int) -> None:
+    def __init__(self, max_frames: int, fps: int = 60) -> None:
         self._max_frames = max(int(max_frames), 1)
+        self._fps = max(int(fps), 1)
         self._images: OrderedDict[int, QImage] = OrderedDict()
         self._lock = threading.Lock()
+
+    def _key(self, t_ms: int) -> int:
+        return int(round(int(t_ms) * self._fps / 1000.0))
 
     def store(self, t_ms: int, image: QImage) -> None:
         copied = image.copy()
         with self._lock:
-            key = int(t_ms)
+            key = self._key(t_ms)
             self._images.pop(key, None)
             self._images[key] = copied
             while len(self._images) > self._max_frames:
@@ -93,7 +97,7 @@ class NativePreviewFrameCache:
 
     def take(self, t_ms: int) -> Optional[QImage]:
         with self._lock:
-            image = self._images.pop(int(t_ms), None)
+            image = self._images.pop(self._key(t_ms), None)
         if image is None:
             return None
         return image.copy()
