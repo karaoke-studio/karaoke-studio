@@ -344,6 +344,130 @@ def test_render_cancel_removes_incomplete_output(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
+class _FakeRenderStdin:
+    def __init__(self):
+        self.data = bytearray()
+        self.closed = False
+
+    def write(self, payload):
+        self.data += payload
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeRenderProcess:
+    def __init__(self, output_path: Path):
+        self.output_path = output_path
+        self.stdin = _FakeRenderStdin()
+        self.stdout = []
+        self.returncode = None
+        self.terminated = False
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+        self.returncode = -15
+
+    def kill(self):
+        self.returncode = -9
+
+    def wait(self, timeout=None):
+        if self.returncode is None:
+            self.output_path.write_bytes(b"ok")
+            self.returncode = 0
+        return self.returncode
+
+
+def test_render_uses_native_full_frame_export_when_enabled(monkeypatch, tmp_path):
+    job = replace(_job(tmp_path), width=2, height=1, fps=2, duration_ms=1000)
+    native_path = tmp_path / "krok_subtitle_renderer.exe"
+    command_log = []
+    progress = []
+
+    def fail_strip(*_args, **_kwargs):
+        raise AssertionError("native export should bypass strip pre-scan")
+
+    def fake_iter_native_rgba_frames(*args, **kwargs):
+        command_log.append(("native", args, kwargs))
+        yield b"a" * 8
+        yield b"b" * 8
+
+    fake_process = _FakeRenderProcess(job.output_path)
+    monkeypatch.setenv("KROK_SUBTITLE_NATIVE_EXPORT", "1")
+    monkeypatch.setattr(renderer, "find_tool", lambda _name, _ffmpeg_dir=None: "ffmpeg")
+    monkeypatch.setattr(renderer, "resolve_native_renderer_path", lambda: native_path)
+    monkeypatch.setattr(renderer, "_compute_content_bands", fail_strip)
+    monkeypatch.setattr(renderer, "_compute_subtitle_strip", fail_strip)
+    monkeypatch.setattr(renderer, "iter_native_rgba_frames", fake_iter_native_rgba_frames)
+    monkeypatch.setattr(
+        renderer.subprocess,
+        "Popen",
+        lambda command, *args, **kwargs: command_log.append(("ffmpeg", command, kwargs)) or fake_process,
+    )
+
+    assert render_subtitle_video(job, on_progress=lambda done, total: progress.append((done, total))) == job.output_path
+
+    assert bytes(fake_process.stdin.data) == b"a" * 8 + b"b" * 8
+    assert progress == [(1, 2), (2, 2)]
+    ffmpeg_command = command_log[0][1]
+    assert ffmpeg_command[ffmpeg_command.index("-s:v") + 1] == "2x1"
+    native_kwargs = command_log[1][2]
+    assert native_kwargs["width"] == 2
+    assert native_kwargs["height"] == 1
+    assert native_kwargs["total_frames"] == 2
+    assert native_kwargs["renderer_path"] == native_path
+
+
+def test_render_native_export_error_removes_incomplete_output(monkeypatch, tmp_path):
+    job = replace(_job(tmp_path), width=2, height=1, fps=2, duration_ms=1000)
+    native_path = tmp_path / "krok_subtitle_renderer.exe"
+    job.output_path.write_bytes(b"partial")
+    fake_process = _FakeRenderProcess(job.output_path)
+
+    def fail_iter_native_rgba_frames(*_args, **_kwargs):
+        raise renderer.NativeRendererError("boom")
+        yield b""
+
+    monkeypatch.setenv("KROK_SUBTITLE_NATIVE_EXPORT", "1")
+    monkeypatch.setattr(renderer, "find_tool", lambda _name, _ffmpeg_dir=None: "ffmpeg")
+    monkeypatch.setattr(renderer, "resolve_native_renderer_path", lambda: native_path)
+    monkeypatch.setattr(renderer, "iter_native_rgba_frames", fail_iter_native_rgba_frames)
+    monkeypatch.setattr(renderer.subprocess, "Popen", lambda *args, **kwargs: fake_process)
+
+    with pytest.raises(ProcessingError, match="native"):
+        render_subtitle_video(job)
+
+    assert fake_process.terminated is True
+    assert not job.output_path.exists()
+
+
+def test_render_falls_back_to_python_when_native_export_sidecar_missing(monkeypatch, tmp_path):
+    job = replace(_job(tmp_path), width=2, height=1, fps=2, duration_ms=1000)
+    fake_process = _FakeRenderProcess(job.output_path)
+    writes = []
+
+    def fake_write_frames_single(process, _job, strip_top, render_h, total_frames, should_cancel, on_progress):
+        writes.append((strip_top, render_h, total_frames))
+        process.stdin.write(b"p" * (_job.width * render_h * 4 * total_frames))
+        if on_progress is not None:
+            on_progress(total_frames, total_frames)
+
+    monkeypatch.setenv("KROK_SUBTITLE_NATIVE_EXPORT", "1")
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STRIP", "0")
+    monkeypatch.setattr(renderer, "find_tool", lambda _name, _ffmpeg_dir=None: "ffmpeg")
+    monkeypatch.setattr(renderer, "resolve_native_renderer_path", lambda: None)
+    monkeypatch.setattr(renderer, "_write_frames_single", fake_write_frames_single)
+    monkeypatch.setattr(renderer.subprocess, "Popen", lambda *args, **kwargs: fake_process)
+
+    render_subtitle_video(job)
+
+    assert writes == [(0, 1, 2)]
+    assert bytes(fake_process.stdin.data) == b"p" * 16
+
+
 def _band_job(tmp_path: Path) -> RenderJob:
     """顶部标题 + 底部歌词 的两块分离场景（中间大片空白 → 适合方案 B）。"""
     background = tmp_path / "bg.mp4"

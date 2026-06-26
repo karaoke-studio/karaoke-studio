@@ -25,6 +25,7 @@ from krok_helper.subtitle_render.engine.encoder_select import (
     resolved_encoder_label,
     video_encoder_options,
 )
+from krok_helper.subtitle_render.engine.native_export import iter_native_rgba_frames
 from krok_helper.subtitle_render.engine.painter import (
     frame_content_intervals,
     frame_vertical_bounds,
@@ -34,6 +35,7 @@ from krok_helper.subtitle_render.engine.painter import (
 )
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.models import Style, TimingTrack
+from krok_helper.subtitle_render.native_backend import NativeRendererError, resolve_native_renderer_path
 
 # A2 条带渲染：只把字幕所在窄条喂给 ffmpeg pipe，省每帧 8MB 拷贝 / pipe 带宽。
 # 条带 = 整段渲染里所有可见内容纵向范围的并集（单条覆盖，方案 A）。可用环境变量
@@ -83,13 +85,18 @@ def render_subtitle_video(
 
     duration_ms = _resolve_duration_ms(job)
     total_frames = _frame_count(duration_ms, job.fps)
+    native_export_requested = _native_export_enabled()
+    native_renderer_path = resolve_native_renderer_path() if native_export_requested else None
+    native_export_active = native_renderer_path is not None
+    if native_export_requested and native_renderer_path is None:
+        logger("native 导出 sidecar 未找到，已回退到 Python 渲染器")
 
     # A2：预扫字幕纵向范围只渲染窄条（取消 / 关闭 / 无收益时退回整帧）。
     # 优先方案 B（多条分离带），不适用时退回方案 A（单条并集）。
     cancelled = should_cancel is not None and should_cancel()
     strip: tuple[int, int] | None = None
     bands: list[tuple[int, int]] | None = None
-    if _strip_enabled() and not cancelled:
+    if _strip_enabled() and not cancelled and not native_export_active:
         if _bands_enabled():
             bands = _compute_content_bands(job, duration_ms, should_cancel=should_cancel)
         if bands is None:
@@ -129,7 +136,13 @@ def render_subtitle_video(
         # A3：帧数够多时多进程并行渲染（offscreen worker 池），主进程按序喂 ffmpeg；
         # 否则走单进程。两条路径逐帧逻辑一致（A4 缓冲复用 + 空帧短路 + A2 条带/多带）。
         worker_count = _resolve_worker_count(total_frames)
-        if worker_count > 1:
+        if native_export_active:
+            logger(f"native 导出: {native_renderer_path}")
+            _write_frames_native(
+                process, job, total_frames, native_renderer_path,
+                should_cancel, on_progress,
+            )
+        elif worker_count > 1:
             logger(f"多进程导出: {worker_count} 个 worker")
             if bands is not None:
                 _write_frames_multiprocess_bands(
@@ -158,6 +171,10 @@ def render_subtitle_video(
         terminate_process(process)
         _remove_incomplete_output(job.output_path, logger)
         raise
+    except NativeRendererError as exc:
+        terminate_process(process)
+        _remove_incomplete_output(job.output_path, logger)
+        raise ProcessingError(f"native 字幕渲染器导出失败: {exc}") from exc
     except (BrokenPipeError, OSError) as exc:
         terminate_process(process)
         _remove_incomplete_output(job.output_path, logger)
@@ -321,6 +338,12 @@ def _image_bytes(image: QImage) -> bytes:
 def _strip_enabled() -> bool:
     return os.environ.get("KROK_SUBTITLE_RENDER_STRIP", "1").strip().lower() not in (
         "0", "false", "no", "off",
+    )
+
+
+def _native_export_enabled() -> bool:
+    return os.environ.get("KROK_SUBTITLE_NATIVE_EXPORT", "0").strip().lower() in (
+        "1", "true", "yes", "on",
     )
 
 
@@ -606,6 +629,34 @@ def _frame_bytes(
         )
         return _image_bytes(buffer)
     return empty_frame
+
+
+def _write_frames_native(
+    process: subprocess.Popen,
+    job: RenderJob,
+    total_frames: int,
+    renderer_path: Path,
+    should_cancel: Callable[[], bool] | None,
+    on_progress: Callable[[int, int], None] | None,
+) -> None:
+    """Write full-frame RGBA frames rendered by the native sidecar."""
+    written = 0
+    for frame in iter_native_rgba_frames(
+        job.track,
+        job.style,
+        width=job.width,
+        height=job.height,
+        fps=job.fps,
+        total_frames=total_frames,
+        renderer_path=renderer_path,
+        should_cancel=should_cancel,
+    ):
+        if should_cancel is not None and should_cancel():
+            raise ExportCancelled("已停止导出。")
+        process.stdin.write(frame)
+        written += 1
+        if on_progress is not None:
+            on_progress(written, total_frames)
 
 
 def _write_frames_single(
