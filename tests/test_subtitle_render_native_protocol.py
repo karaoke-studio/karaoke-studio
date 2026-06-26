@@ -392,6 +392,7 @@ def test_native_renderer_process_matches_python_layout_when_exe_exists(tmp_path,
     )
     style = Style(
         font_size_px=48,
+        letter_spacing_px=12,
         ruby_font_size_px=20,
         line_lead_in_ms=0,
         stroke_width_px=10,

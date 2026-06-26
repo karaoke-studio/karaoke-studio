@@ -759,29 +759,7 @@ def test_preview_graphics_ignores_stale_async_frame(qapp, monkeypatch):
         qapp.processEvents()
 
 
-def test_preview_graphics_accepts_recent_late_async_frame_while_playing(qapp, monkeypatch):
-    from krok_helper.subtitle_render.frontend import preview_graphics as pg
-    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
-
-    monkeypatch.setattr(pg, "async_preview_enabled", lambda: False)
-    graphics = PreviewGraphicsView()
-    try:
-        graphics._subtitle_item.set_async_mode(True)
-        graphics.set_playing(True)
-        graphics.set_time(2_000)
-        recent = QImage(16, 9, QImage.Format.Format_ARGB32_Premultiplied)
-        recent.fill(QColor("#00FF00"))
-
-        graphics._on_async_frame(recent, 1_900)
-
-        assert graphics._subtitle_item._async_image is not None
-    finally:
-        graphics.close()
-        graphics.deleteLater()
-        qapp.processEvents()
-
-
-def test_preview_graphics_ignores_very_old_async_frame_while_playing(qapp, monkeypatch):
+def test_preview_graphics_ignores_late_async_frame_while_playing(qapp, monkeypatch):
     from krok_helper.subtitle_render.frontend import preview_graphics as pg
     from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
 
@@ -795,6 +773,29 @@ def test_preview_graphics_ignores_very_old_async_frame_while_playing(qapp, monke
         old.fill(QColor("#0000FF"))
 
         graphics._on_async_frame(old, 1_000)
+
+        assert graphics._subtitle_item._async_image is None
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
+def test_preview_graphics_clears_async_frame_on_style_change(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+    from krok_helper.subtitle_render.models import Style
+
+    monkeypatch.setattr(pg, "async_preview_enabled", lambda: False)
+    graphics = PreviewGraphicsView()
+    try:
+        graphics._subtitle_item.set_async_mode(True)
+        image = QImage(16, 9, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor("#00FF00"))
+        graphics._on_async_frame(image, graphics.current_time_ms)
+        assert graphics._subtitle_item._async_image is not None
+
+        graphics.set_style(Style(font_size_px=72))
 
         assert graphics._subtitle_item._async_image is None
     finally:

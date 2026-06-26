@@ -1460,9 +1460,6 @@ QFont buildLineFont(const ResolvedStyle &style) {
     QFont font(style.fontFamily);
     font.setPixelSize(style.fontSizePx);
     font.setWeight(static_cast<QFont::Weight>(std::clamp(style.fontWeight, 1, 999)));
-    if (style.letterSpacingPx != 0) {
-        font.setLetterSpacing(QFont::AbsoluteSpacing, style.letterSpacingPx);
-    }
     return font;
 }
 
@@ -1681,7 +1678,9 @@ LineLayout layoutLine(const RenderConfig &cfg, const ResolvedStyle &lineStyle, c
             layout.path.addText(QPointF(layout.charLefts[i], layout.baselineY), layout.charFonts[i], line.chars[i].text);
         }
     } else {
-        layout.path.addText(QPointF(layout.x, layout.baselineY), layout.font, text);
+        for (std::size_t i = 0; i < line.chars.size(); ++i) {
+            layout.path.addText(QPointF(layout.charLefts[i], layout.baselineY), layout.charFonts[i], line.chars[i].text);
+        }
     }
     return layout;
 }

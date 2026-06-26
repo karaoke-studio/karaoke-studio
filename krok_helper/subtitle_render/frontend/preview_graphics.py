@@ -41,10 +41,6 @@ _VIDEO_SEEK_TOLERANCE_MS = 80
 _VIDEO_EDGE_OVERSCAN_PX = 4
 """Small scene-space bleed to cover native video edge underdraw while playing."""
 
-_ASYNC_PLAYBACK_STALE_TOLERANCE_MS = 250
-"""Late async subtitle frames are still useful while playback is advancing."""
-
-
 class SubtitleGraphicsItem(QGraphicsItem):
     """Transparent subtitle layer placed above the video item."""
 
@@ -98,6 +94,10 @@ class SubtitleGraphicsItem(QGraphicsItem):
         # worker 产出一帧新字幕 = 一次真实的字幕预览渲染（FPS 的真实来源，不含重 blit）。
         if self._on_painted is not None:
             self._on_painted()
+        self.update()
+
+    def clear_async_image(self) -> None:
+        self._async_image = None
         self.update()
 
     # ------------------------------------------------------------------ public
@@ -255,10 +255,12 @@ class PreviewGraphicsView(QGraphicsView):
 
     def set_track(self, track: Optional[TimingTrack]) -> None:
         self._subtitle_item.set_track(track)
+        self._subtitle_item.clear_async_image()
         self._refresh_async_state()
 
     def set_style(self, style: Style) -> None:
         self._subtitle_item.set_style(style)
+        self._subtitle_item.clear_async_image()
         self._refresh_async_state()
 
     def set_time(self, t_ms: int) -> None:
@@ -276,15 +278,8 @@ class PreviewGraphicsView(QGraphicsView):
         self._async_renderer.request(self._t_ms)
 
     def _on_async_frame(self, image: QImage, t_ms: int) -> None:
-        frame_t = int(t_ms)
-        current_t = int(self._t_ms)
-        if frame_t != current_t:
-            if (
-                not self._video_playing
-                or frame_t > current_t
-                or current_t - frame_t > _ASYNC_PLAYBACK_STALE_TOLERANCE_MS
-            ):
-                return
+        if int(t_ms) != int(self._t_ms):
+            return
         self._subtitle_item.set_async_image(image)
 
     def set_output_size(self, width: int, height: int) -> None:
