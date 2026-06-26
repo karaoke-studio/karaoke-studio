@@ -116,6 +116,8 @@ class NativePreviewStats:
         "future_frames_cached",
         "stale_frames_dropped",
         "generations_cancelled",
+        "native_generation_cancelled_events",
+        "range_done_events",
     )
 
     def __init__(self) -> None:
@@ -136,6 +138,12 @@ class NativePreviewStats:
 
     def note_generation_cancelled(self) -> None:
         self._increment("generations_cancelled")
+
+    def note_native_generation_cancelled_event(self) -> None:
+        self._increment("native_generation_cancelled_events")
+
+    def note_range_done_event(self) -> None:
+        self._increment("range_done_events")
 
     def snapshot(self) -> dict[str, int]:
         with self._lock:
@@ -533,8 +541,10 @@ class NativeAsyncSubtitleRenderer(QObject):
                         else:
                             self._stats.note_stale_frame_dropped()
                     elif event.get("event") == "range_done":
+                        self._stats.note_range_done_event()
                         return
                     elif event.get("event") == "generation_cancelled":
+                        self._stats.note_native_generation_cancelled_event()
                         continue
             finally:
                 with self._condition:

@@ -721,13 +721,15 @@ C:\Python314\python.exe -m pytest tests/test_subtitle_render_native_protocol.py 
 - look-ahead 缓存 key 已从裸 `t_ms` 调整为按预览 fps 归一化的 frame bucket，避免 `1016ms` / `1017ms` 这类同一
   视觉帧因为毫秒抖动重复 miss。`A stain` 真素材 3s 高频 seek probe 中，最终统计从约 `hit=49 miss=46` 改善到
   `hit=74 miss=21`。
+- 主动取消压测入口已扩展：`probe_native_preview_stats.py` 支持高频 seek、resize churn、style churn，并输出
+  sidecar `generation_cancelled` / `range_done` 事件计数。`A stain` 真素材 4s 高频 seek+resize+style probe 可正常退出，
+  最终约 `hit=98 miss=37 stale=55 cancel=39 native_cancel=35 done=125`。
 
 待继续：
 
 - 当前 look-ahead 缓存仍是最小实现，需继续在真实播放中结合 stats 观察命中率、内存占用、晚到帧比例，并决定是否要
   增加命中率/丢帧率汇总输出或可视化诊断。
-- 还需要用真实高频 seek / style resize 压测主动取消路径，确认 native sidecar 的 `generation_cancelled` / `range_done`
-  事件不会在极端交错下造成预览卡住或 backlog 堆积。
+- 还需要把高频 seek / resize / style churn 压测沉淀成更稳定的基准输出，例如 CSV 汇总、失败阈值或 CI 可选 smoke。
 - 还需要用真实重工程对比 native preview / Python async preview 的稳定帧率和画质。
 
 ### C6：接入导出

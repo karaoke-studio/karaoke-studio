@@ -14,6 +14,7 @@ from __future__ import annotations
 import math
 import os
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -201,6 +202,8 @@ def test_native_preview_stats_snapshot_tracks_core_counters():
     stats.note_future_frame_cached()
     stats.note_stale_frame_dropped()
     stats.note_generation_cancelled()
+    stats.note_native_generation_cancelled_event()
+    stats.note_range_done_event()
 
     assert stats.snapshot() == {
         "cache_hits": 1,
@@ -208,6 +211,8 @@ def test_native_preview_stats_snapshot_tracks_core_counters():
         "future_frames_cached": 1,
         "stale_frames_dropped": 1,
         "generations_cancelled": 1,
+        "native_generation_cancelled_events": 1,
+        "range_done_events": 1,
     }
 
 
@@ -458,6 +463,68 @@ def test_native_async_renderer_cancels_active_generation_on_new_request(qapp, mo
 
         assert cancels == [2]
         assert renderer.stats_snapshot()["generations_cancelled"] == 1
+    finally:
+        renderer.stop()
+
+
+def test_native_async_renderer_handles_cancelled_event_before_range_done(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.models import Style, TimingTrack
+
+    started = threading.Event()
+    cancel_sent = threading.Event()
+    events = [
+        {"ok": True, "event": "generation_cancelled", "generation": 2},
+        {"ok": True, "event": "range_done", "generation": 2},
+    ]
+    cancels: list[int] = []
+
+    class FakeNativeRendererProcess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return {"ok": True, "event": "ready"}
+
+        def configure(self, *args, **kwargs):
+            return {"ok": True, "event": "configured"}
+
+        def start_render_range(self, *args, **kwargs):
+            started.set()
+            return {"ok": True, "event": "range_started"}
+
+        def read_event(self):
+            cancel_sent.wait(timeout=2.0)
+            if events:
+                return events.pop(0)
+            return {"ok": True, "event": "range_done", "generation": 2}
+
+        def send_cancel_generation(self, generation):
+            cancels.append(int(generation))
+            cancel_sent.set()
+
+        def close(self):
+            cancel_sent.set()
+
+    monkeypatch.setattr(pa, "NativeRendererProcess", FakeNativeRendererProcess)
+    renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
+    try:
+        renderer.set_state(TimingTrack(), Style())
+        renderer.request(1_000)
+        assert started.wait(timeout=2.0)
+
+        renderer.set_render_target(640, 360, 1.0)
+        deadline = time.monotonic() + 2.0
+        while events and time.monotonic() < deadline:
+            qapp.processEvents()
+            cancel_sent.wait(timeout=0.01)
+        assert events == []
+
+        stats = renderer.stats_snapshot()
+        assert cancels == [2]
+        assert stats["generations_cancelled"] == 1
+        assert stats["native_generation_cancelled_events"] == 1
+        assert stats["range_done_events"] == 1
     finally:
         renderer.stop()
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Mapping
 
@@ -20,6 +21,22 @@ def _playback_times(*, duration_ms: int, fps: int) -> list[int]:
     if not times or times[-1] != duration:
         times.append(duration)
     return times
+
+
+def _churned_size(width: int, height: int, *, churn_index: int, scale: float) -> tuple[int, int]:
+    if int(churn_index) % 2 == 0:
+        return max(int(width), 1), max(int(height), 1)
+    normalized_scale = max(float(scale), 0.01)
+    return (
+        max(int(round(int(width) * normalized_scale)), 1),
+        max(int(round(int(height) * normalized_scale)), 1),
+    )
+
+
+def _churned_style(style, *, churn_index: int, delta_px: int):
+    if int(churn_index) % 2 == 0:
+        return replace(style)
+    return replace(style, font_size_px=max(int(style.font_size_px) + int(delta_px), 1))
 
 
 def _format_stats_line(
@@ -41,7 +58,10 @@ def _format_stats_line(
         f"miss={value('cache_misses')}(+{delta('cache_misses')}) "
         f"future={value('future_frames_cached')}(+{delta('future_frames_cached')}) "
         f"stale={value('stale_frames_dropped')}(+{delta('stale_frames_dropped')}) "
-        f"cancel={value('generations_cancelled')}(+{delta('generations_cancelled')})"
+        f"cancel={value('generations_cancelled')}(+{delta('generations_cancelled')}) "
+        f"native_cancel={value('native_generation_cancelled_events')}"
+        f"(+{delta('native_generation_cancelled_events')}) "
+        f"done={value('range_done_events')}(+{delta('range_done_events')})"
     )
 
 
@@ -72,6 +92,30 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=2000,
         help="Timeline jump amount used with --seek-every-ms",
+    )
+    parser.add_argument(
+        "--resize-every-ms",
+        type=int,
+        default=0,
+        help="If >0, alternate preview output size on this wall-clock interval",
+    )
+    parser.add_argument(
+        "--resize-scale",
+        type=float,
+        default=0.75,
+        help="Scaled preview size used on alternating resize churn steps",
+    )
+    parser.add_argument(
+        "--style-every-ms",
+        type=int,
+        default=0,
+        help="If >0, alternate subtitle font size on this wall-clock interval",
+    )
+    parser.add_argument(
+        "--style-delta-px",
+        type=int,
+        default=6,
+        help="Font-size delta used on alternating style churn steps",
     )
     parser.add_argument(
         "--native-renderer",
@@ -118,6 +162,7 @@ def _run_probe(args: argparse.Namespace) -> int:
     window.load_video(args.video)
     window._preview_panel.set_output_size(args.width, args.height)
     window._preview_panel.set_playing(True)
+    base_style = replace(window._style)
 
     times = _playback_times(duration_ms=args.duration_ms, fps=args.fps)
     previous_stats: dict[str, int] = {}
@@ -126,7 +171,11 @@ def _run_probe(args: argparse.Namespace) -> int:
         "elapsed_ms": 0,
         "last_report_ms": -max(int(args.report_every_ms), 1),
         "last_seek_ms": 0,
+        "last_resize_ms": 0,
+        "last_style_ms": 0,
         "seek_offset_ms": 0,
+        "resize_churn_index": 0,
+        "style_churn_index": 0,
         "last_t_ms": 0,
     }
     step_ms = max(int(round(1000 / max(args.fps, 1))), 1)
@@ -153,6 +202,34 @@ def _run_probe(args: argparse.Namespace) -> int:
         ):
             state["last_seek_ms"] = elapsed_ms
             state["seek_offset_ms"] += int(args.seek_step_ms)
+        if (
+            args.resize_every_ms > 0
+            and elapsed_ms > 0
+            and elapsed_ms - state["last_resize_ms"] >= args.resize_every_ms
+        ):
+            state["last_resize_ms"] = elapsed_ms
+            state["resize_churn_index"] += 1
+            width, height = _churned_size(
+                args.width,
+                args.height,
+                churn_index=state["resize_churn_index"],
+                scale=args.resize_scale,
+            )
+            window._preview_panel.set_output_size(width, height)
+        if (
+            args.style_every_ms > 0
+            and elapsed_ms > 0
+            and elapsed_ms - state["last_style_ms"] >= args.style_every_ms
+        ):
+            state["last_style_ms"] = elapsed_ms
+            state["style_churn_index"] += 1
+            churned_style = _churned_style(
+                base_style,
+                churn_index=state["style_churn_index"],
+                delta_px=args.style_delta_px,
+            )
+            window._style = churned_style
+            window._preview_panel.set_style(churned_style)
 
         raw_t_ms = times[state["index"]] + state["seek_offset_ms"]
         if state["seek_offset_ms"] > 0:

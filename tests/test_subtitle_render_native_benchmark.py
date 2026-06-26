@@ -14,9 +14,13 @@ from scripts.bench_native_renderer import (
     _summarize_samples,
 )
 from scripts.probe_native_preview_stats import (
+    _build_parser,
+    _churned_size,
+    _churned_style,
     _format_stats_line,
     _playback_times,
 )
+from krok_helper.subtitle_render.models import Style
 
 
 def test_sample_timestamps_covers_window_endpoints() -> None:
@@ -182,6 +186,8 @@ def test_preview_probe_formats_stats_line_with_deltas() -> None:
             "future_frames_cached": 3,
             "stale_frames_dropped": 2,
             "generations_cancelled": 1,
+            "native_generation_cancelled_events": 4,
+            "range_done_events": 7,
         },
         previous={
             "cache_hits": 2,
@@ -189,10 +195,49 @@ def test_preview_probe_formats_stats_line_with_deltas() -> None:
             "future_frames_cached": 1,
             "stale_frames_dropped": 2,
             "generations_cancelled": 0,
+            "native_generation_cancelled_events": 1,
+            "range_done_events": 5,
         },
     )
 
     assert line == (
         "elapsed=1.20s t=3400ms "
-        "hit=5(+3) miss=8(+2) future=3(+2) stale=2(+0) cancel=1(+1)"
+        "hit=5(+3) miss=8(+2) future=3(+2) stale=2(+0) "
+        "cancel=1(+1) native_cancel=4(+3) done=7(+2)"
     )
+
+
+def test_preview_probe_parses_resize_and_style_churn_options() -> None:
+    args = _build_parser().parse_args(
+        [
+            "--lrc",
+            "song.lrc",
+            "--video",
+            "bg.mp4",
+            "--resize-every-ms",
+            "250",
+            "--resize-scale",
+            "0.5",
+            "--style-every-ms",
+            "500",
+            "--style-delta-px",
+            "6",
+        ]
+    )
+
+    assert args.resize_every_ms == 250
+    assert args.resize_scale == 0.5
+    assert args.style_every_ms == 500
+    assert args.style_delta_px == 6
+
+
+def test_preview_probe_churned_size_alternates_scaled_output() -> None:
+    assert _churned_size(1920, 1080, churn_index=0, scale=0.75) == (1920, 1080)
+    assert _churned_size(1920, 1080, churn_index=1, scale=0.75) == (1440, 810)
+
+
+def test_preview_probe_churned_style_alternates_font_size() -> None:
+    style = Style(font_size_px=100)
+
+    assert _churned_style(style, churn_index=0, delta_px=6).font_size_px == 100
+    assert _churned_style(style, churn_index=1, delta_px=6).font_size_px == 106
