@@ -41,6 +41,9 @@ _VIDEO_SEEK_TOLERANCE_MS = 80
 _VIDEO_EDGE_OVERSCAN_PX = 4
 """Small scene-space bleed to cover native video edge underdraw while playing."""
 
+_ASYNC_PLAYBACK_STALE_TOLERANCE_MS = 250
+"""Late async subtitle frames are still useful while playback is advancing."""
+
 
 class SubtitleGraphicsItem(QGraphicsItem):
     """Transparent subtitle layer placed above the video item."""
@@ -273,8 +276,15 @@ class PreviewGraphicsView(QGraphicsView):
         self._async_renderer.request(self._t_ms)
 
     def _on_async_frame(self, image: QImage, t_ms: int) -> None:
-        if int(t_ms) != int(self._t_ms):
-            return
+        frame_t = int(t_ms)
+        current_t = int(self._t_ms)
+        if frame_t != current_t:
+            if (
+                not self._video_playing
+                or frame_t > current_t
+                or current_t - frame_t > _ASYNC_PLAYBACK_STALE_TOLERANCE_MS
+            ):
+                return
         self._subtitle_item.set_async_image(image)
 
     def set_output_size(self, width: int, height: int) -> None:

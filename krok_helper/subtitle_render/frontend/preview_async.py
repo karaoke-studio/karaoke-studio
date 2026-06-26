@@ -48,10 +48,11 @@ def async_preview_enabled() -> bool:
 def native_preview_enabled() -> bool:
     """Return whether preview should try the native sidecar renderer.
 
-    The sidecar path is intentionally opt-in while C5 is still being wired.
-    Missing executables silently keep the existing Python async renderer.
+    The sidecar path is default-on for this branch. Missing executables silently
+    keep the existing Python async renderer; set ``KROK_SUBTITLE_NATIVE_RENDER=0``
+    to force the Python path.
     """
-    if not _env_enabled("KROK_SUBTITLE_NATIVE_RENDER", "0"):
+    if not _env_enabled("KROK_SUBTITLE_NATIVE_RENDER", "1"):
         return False
     return resolve_native_renderer_path() is not None
 

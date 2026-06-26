@@ -246,7 +246,7 @@ def test_async_preview_enabled_defaults_on_and_env_can_disable(monkeypatch):
         assert async_preview_enabled() is False
 
 
-def test_native_preview_enabled_requires_env_and_sidecar(monkeypatch, tmp_path):
+def test_native_preview_enabled_defaults_on_and_requires_sidecar(monkeypatch, tmp_path):
     from krok_helper.subtitle_render.frontend import preview_async as pa
 
     sidecar = tmp_path / "krok_subtitle_renderer.exe"
@@ -254,7 +254,7 @@ def test_native_preview_enabled_requires_env_and_sidecar(monkeypatch, tmp_path):
     monkeypatch.setattr(pa, "resolve_native_renderer_path", lambda: sidecar)
 
     monkeypatch.delenv("KROK_SUBTITLE_NATIVE_RENDER", raising=False)
-    assert pa.native_preview_enabled() is False
+    assert pa.native_preview_enabled() is True
 
     monkeypatch.setenv("KROK_SUBTITLE_NATIVE_RENDER", "1")
     assert pa.native_preview_enabled() is True
@@ -262,7 +262,7 @@ def test_native_preview_enabled_requires_env_and_sidecar(monkeypatch, tmp_path):
     monkeypatch.setenv("KROK_SUBTITLE_NATIVE_RENDER", "0")
     assert pa.native_preview_enabled() is False
 
-    monkeypatch.setenv("KROK_SUBTITLE_NATIVE_RENDER", "1")
+    monkeypatch.delenv("KROK_SUBTITLE_NATIVE_RENDER", raising=False)
     monkeypatch.setattr(pa, "resolve_native_renderer_path", lambda: None)
     assert pa.native_preview_enabled() is False
 
@@ -310,6 +310,7 @@ def test_preview_graphics_updates_async_render_target(qapp, monkeypatch):
             self.stopped = True
 
     monkeypatch.setattr(pg, "async_preview_enabled", lambda: True)
+    monkeypatch.setattr(pg, "native_preview_enabled", lambda: False)
     monkeypatch.setattr(pg, "AsyncSubtitleRenderer", FakeAsyncRenderer)
 
     graphics = PreviewGraphicsView()
@@ -750,6 +751,50 @@ def test_preview_graphics_ignores_stale_async_frame(qapp, monkeypatch):
         stale.fill(QColor("#FF0000"))
 
         graphics._on_async_frame(stale, 1_000)
+
+        assert graphics._subtitle_item._async_image is None
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
+def test_preview_graphics_accepts_recent_late_async_frame_while_playing(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+
+    monkeypatch.setattr(pg, "async_preview_enabled", lambda: False)
+    graphics = PreviewGraphicsView()
+    try:
+        graphics._subtitle_item.set_async_mode(True)
+        graphics.set_playing(True)
+        graphics.set_time(2_000)
+        recent = QImage(16, 9, QImage.Format.Format_ARGB32_Premultiplied)
+        recent.fill(QColor("#00FF00"))
+
+        graphics._on_async_frame(recent, 1_900)
+
+        assert graphics._subtitle_item._async_image is not None
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
+def test_preview_graphics_ignores_very_old_async_frame_while_playing(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+
+    monkeypatch.setattr(pg, "async_preview_enabled", lambda: False)
+    graphics = PreviewGraphicsView()
+    try:
+        graphics._subtitle_item.set_async_mode(True)
+        graphics.set_playing(True)
+        graphics.set_time(2_000)
+        old = QImage(16, 9, QImage.Format.Format_ARGB32_Premultiplied)
+        old.fill(QColor("#0000FF"))
+
+        graphics._on_async_frame(old, 1_000)
 
         assert graphics._subtitle_item._async_image is None
     finally:
