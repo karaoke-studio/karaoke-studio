@@ -367,6 +367,8 @@ class PreviewGraphicsView(QGraphicsView):
 
     def set_playing(self, playing: bool) -> None:
         self._video_playing = playing
+        if self._async_renderer is not None and hasattr(self._async_renderer, "set_playing"):
+            self._async_renderer.set_playing(playing)
         if self._external_player is not None:
             # 播放由 TransportBar 驱动共享 controller；本视图不操作播放器。
             return

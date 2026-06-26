@@ -710,10 +710,15 @@ C:\Python314\python.exe -m pytest tests/test_subtitle_render_native_protocol.py 
 - native preview 使用 generation 过滤过期帧；UI 侧 `_on_async_frame(image, t_ms)` 也会丢弃与当前时间不一致的晚到帧。
 - native sidecar 启动、configure、render_range、shared-memory 读取任一阶段失败时，会回退到后台 Python QPainter
   单帧渲染，不阻塞 GUI 线程。
+- 播放态 look-ahead 的第一步已接入：`PreviewGraphicsView.set_playing()` 会透传播放状态，native renderer 在播放中
+  用 `render_range` 请求当前帧 + 默认 4 个未来帧。
+- look-ahead 帧基础缓存已接入：未来帧到达后会按 `t_ms` 存入 `NativePreviewFrameCache`，后续 request 命中时先即时
+  emit cached `QImage`，并继续调度新的前瞻窗口。
 
 待继续：
 
-- 当前初始接线按“一次 request 渲当前帧”推进，尚未实现播放态 look-ahead 窗口。
+- 当前 look-ahead 缓存仍是最小实现，需在真实播放中观察命中率、内存占用、晚到帧比例，并决定是否要按 frame index
+  或 fps-normalized bucket 做更稳定的键。
 - `cancel_generation` 的主动取消仍需接到高频 seek / style resize 路径；目前主要依赖 generation 丢弃晚到帧。
 - 还需要用真实重工程对比 native preview / Python async preview 的稳定帧率和画质。
 

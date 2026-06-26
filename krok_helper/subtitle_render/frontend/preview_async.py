@@ -16,6 +16,7 @@ from __future__ import annotations
 import os
 import threading
 import uuid
+from collections import OrderedDict
 from typing import Optional
 
 from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal as Signal, pyqtSlot as Slot
@@ -53,6 +54,53 @@ def native_preview_enabled() -> bool:
     if not _env_enabled("KROK_SUBTITLE_NATIVE_RENDER", "0"):
         return False
     return resolve_native_renderer_path() is not None
+
+
+def native_preview_timestamps(
+    t_ms: int,
+    *,
+    playing: bool,
+    fps: int,
+    lookahead_frames: int,
+) -> list[int]:
+    """Return current frame plus optional playback look-ahead timestamps."""
+    current = int(t_ms)
+    if not playing:
+        return [current]
+    normalized_fps = max(int(fps), 1)
+    frame_ms = 1000.0 / normalized_fps
+    count = max(int(lookahead_frames), 0)
+    timestamps = [int(round(current + frame_ms * offset)) for offset in range(count + 1)]
+    return list(dict.fromkeys(timestamps))
+
+
+class NativePreviewFrameCache:
+    """Small thread-safe QImage cache for native preview look-ahead frames."""
+
+    def __init__(self, max_frames: int) -> None:
+        self._max_frames = max(int(max_frames), 1)
+        self._images: OrderedDict[int, QImage] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def store(self, t_ms: int, image: QImage) -> None:
+        copied = image.copy()
+        with self._lock:
+            key = int(t_ms)
+            self._images.pop(key, None)
+            self._images[key] = copied
+            while len(self._images) > self._max_frames:
+                self._images.popitem(last=False)
+
+    def take(self, t_ms: int) -> Optional[QImage]:
+        with self._lock:
+            image = self._images.pop(int(t_ms), None)
+        if image is None:
+            return None
+        return image.copy()
+
+    def clear(self) -> None:
+        with self._lock:
+            self._images.clear()
 
 
 def preview_render_target_size(
@@ -215,6 +263,10 @@ class AsyncSubtitleRenderer(QObject):
             return
         self._frame_requested.emit(int(t_ms))
 
+    def set_playing(self, playing: bool) -> None:  # noqa: ARG002
+        """Playback state hook kept for API symmetry with the native preview path."""
+        return
+
     def stop(self) -> None:
         if self._stopped:
             return
@@ -247,8 +299,16 @@ class NativeAsyncSubtitleRenderer(QObject):
         self._needs_configure = True
         self._renderer: Optional[NativeRendererProcess] = None
         self._renderer_failed = False
+        self._playing = False
+        self._last_t: Optional[int] = None
+        self._fps = 60
         self._threads = max(int(os.environ.get("KROK_SUBTITLE_NATIVE_THREADS", "4") or 4), 1)
         self._ring_slots = max(int(os.environ.get("KROK_SUBTITLE_NATIVE_RING_SLOTS", "3") or 3), 1)
+        self._lookahead_frames = max(
+            int(os.environ.get("KROK_SUBTITLE_NATIVE_LOOKAHEAD_FRAMES", "4") or 4),
+            0,
+        )
+        self._frame_cache = NativePreviewFrameCache(self._lookahead_frames + 1)
         self._condition = threading.Condition()
         self._process_lock = threading.Lock()
         self._thread = threading.Thread(
@@ -266,6 +326,7 @@ class NativeAsyncSubtitleRenderer(QObject):
             self._style = style
             self._generation += 1
             self._needs_configure = True
+            self._frame_cache.clear()
             self._condition.notify()
 
     def set_size(self, width: int, height: int) -> None:
@@ -281,18 +342,37 @@ class NativeAsyncSubtitleRenderer(QObject):
             if (w, h, dpr) != (self._logical_w, self._logical_h, self._device_pixel_ratio):
                 self._needs_configure = True
                 self._generation += 1
+                self._frame_cache.clear()
             self._logical_w = w
             self._logical_h = h
             self._device_pixel_ratio = dpr
             self._condition.notify()
 
     def request(self, t_ms: int) -> None:
+        requested_t = int(t_ms)
+        cached = self._frame_cache.take(requested_t)
+        if cached is not None:
+            self.frame_ready.emit(cached, requested_t)
         with self._condition:
             if self._stopped:
                 return
             self._generation += 1
-            self._pending_t = int(t_ms)
+            self._last_t = requested_t
+            self._pending_t = self._last_t
             self._condition.notify()
+
+    def set_playing(self, playing: bool) -> None:
+        with self._condition:
+            if self._stopped:
+                return
+            normalized = bool(playing)
+            if self._playing == normalized:
+                return
+            self._playing = normalized
+            if self._last_t is not None:
+                self._generation += 1
+                self._pending_t = self._last_t
+                self._condition.notify()
 
     def stop(self) -> None:
         with self._condition:
@@ -311,7 +391,7 @@ class NativeAsyncSubtitleRenderer(QObject):
             snapshot = self._take_next_request()
             if snapshot is None:
                 return
-            track, style, width, height, t_ms, generation, needs_configure = snapshot
+            track, style, width, height, t_ms, generation, needs_configure, playing = snapshot
             if track is None or style is None:
                 continue
             if self._renderer_failed:
@@ -326,6 +406,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                     t_ms=t_ms,
                     generation=generation,
                     needs_configure=needs_configure,
+                    playing=playing,
                 )
             except NativeRendererError:
                 self._renderer_failed = True
@@ -334,7 +415,7 @@ class NativeAsyncSubtitleRenderer(QObject):
 
     def _take_next_request(
         self,
-    ) -> tuple[TimingTrack | None, Style | None, int, int, int, int, bool] | None:
+    ) -> tuple[TimingTrack | None, Style | None, int, int, int, int, bool, bool] | None:
         with self._condition:
             while not self._stopped and self._pending_t is None:
                 self._condition.wait()
@@ -352,6 +433,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                 t_ms,
                 self._generation,
                 needs_configure,
+                self._playing,
             )
 
     def _render_native(
@@ -364,6 +446,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         t_ms: int,
         generation: int,
         needs_configure: bool,
+        playing: bool,
     ) -> None:
         with self._process_lock:
             renderer_was_missing = self._renderer is None
@@ -372,7 +455,12 @@ class NativeAsyncSubtitleRenderer(QObject):
                 renderer.configure(track, style, width=width, height=height, fps=60)
             shm_key = f"krok-preview-{os.getpid()}-{uuid.uuid4().hex}"
             renderer.start_render_range(
-                [t_ms],
+                native_preview_timestamps(
+                    t_ms,
+                    playing=playing,
+                    fps=self._fps,
+                    lookahead_frames=self._lookahead_frames,
+                ),
                 generation=generation,
                 threads=self._threads,
                 shm_key=shm_key,
@@ -385,7 +473,10 @@ class NativeAsyncSubtitleRenderer(QObject):
                         with SharedFrameRingReader.from_event(event) as reader:
                             slot = reader.read_frame(event)
                         image = slot.to_qimage()
-                        self.frame_ready.emit(image, slot.t_ms)
+                        if int(slot.t_ms) == int(t_ms):
+                            self.frame_ready.emit(image, slot.t_ms)
+                        else:
+                            self._frame_cache.store(slot.t_ms, image)
                 elif event.get("event") == "range_done":
                     return
 

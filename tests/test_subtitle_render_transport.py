@@ -133,6 +133,48 @@ def test_async_preview_target_size_uses_device_pixel_ratio():
     assert preview_render_target_size(1, 1, -1.0) == (1, 1, 0.01)
 
 
+def test_native_preview_lookahead_timestamps_only_expand_while_playing():
+    from krok_helper.subtitle_render.frontend.preview_async import native_preview_timestamps
+
+    assert native_preview_timestamps(1_000, playing=False, fps=60, lookahead_frames=4) == [1_000]
+    assert native_preview_timestamps(1_000, playing=True, fps=60, lookahead_frames=4) == [
+        1_000,
+        1_017,
+        1_033,
+        1_050,
+        1_067,
+    ]
+
+
+def test_native_preview_frame_cache_detaches_and_evicts_oldest():
+    from krok_helper.subtitle_render.frontend.preview_async import NativePreviewFrameCache
+
+    cache = NativePreviewFrameCache(max_frames=2)
+    first = QImage(8, 8, QImage.Format.Format_ARGB32_Premultiplied)
+    second = QImage(8, 8, QImage.Format.Format_ARGB32_Premultiplied)
+    third = QImage(8, 8, QImage.Format.Format_ARGB32_Premultiplied)
+
+    first.fill(QColor("#112233"))
+    cache.store(1_000, first)
+    first.fill(QColor("#445566"))
+    cached_first = cache.take(1_000)
+    assert cached_first is not None
+    assert cached_first.pixelColor(0, 0) == QColor("#112233")
+
+    first.fill(QColor("#112233"))
+    second.fill(QColor("#000000"))
+    third.fill(QColor("#FFFFFF"))
+    cache.store(1_000, first)
+    cache.store(1_017, second)
+    cache.store(1_033, third)
+
+    assert cache.take(1_000) is None
+    cached = cache.take(1_017)
+    assert cached is not None
+    assert cached.pixelColor(0, 0) == QColor("#000000")
+    assert cache.take(1_017) is None
+
+
 def test_async_preview_enabled_defaults_on_and_env_can_disable(monkeypatch):
     from krok_helper.subtitle_render.frontend.preview_async import async_preview_enabled
 
@@ -272,6 +314,55 @@ def test_preview_graphics_uses_native_async_renderer_when_enabled(qapp, monkeypa
         assert renderer.init_args[:2] == (1920, 1080)
         assert renderer.targets
         assert renderer.requests[-1] == graphics.current_time_ms
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
+def test_preview_graphics_passes_playing_state_to_async_renderer(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+
+    class FakeSignal:
+        def connect(self, *args, **kwargs):
+            pass
+
+    class FakeAsyncRenderer:
+        instances = []
+
+        def __init__(self, width, height, parent=None):
+            self.frame_ready = FakeSignal()
+            self.playing_states = []
+            FakeAsyncRenderer.instances.append(self)
+
+        def set_render_target(self, width, height, device_pixel_ratio=1.0):
+            pass
+
+        def set_state(self, track, style):
+            pass
+
+        def request(self, t_ms):
+            pass
+
+        def set_playing(self, playing):
+            self.playing_states.append(bool(playing))
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(pg, "async_preview_enabled", lambda: True)
+    monkeypatch.setattr(pg, "native_preview_enabled", lambda: False)
+    monkeypatch.setattr(pg, "AsyncSubtitleRenderer", FakeAsyncRenderer)
+
+    graphics = PreviewGraphicsView()
+    try:
+        renderer = FakeAsyncRenderer.instances[-1]
+
+        graphics.set_playing(True)
+        graphics.set_playing(False)
+
+        assert renderer.playing_states == [True, False]
     finally:
         graphics.close()
         graphics.deleteLater()
