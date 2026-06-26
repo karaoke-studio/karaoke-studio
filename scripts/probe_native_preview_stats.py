@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import os
 import sys
 from dataclasses import replace
@@ -11,6 +12,18 @@ from typing import Mapping
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+
+_STATS_KEYS = (
+    "cache_hits",
+    "cache_misses",
+    "future_frames_cached",
+    "stale_frames_dropped",
+    "generations_cancelled",
+    "native_generation_cancelled_events",
+    "range_done_events",
+    "native_renderer_failures",
+)
 
 
 def _playback_times(*, duration_ms: int, fps: int) -> list[int]:
@@ -64,6 +77,68 @@ def _format_stats_line(
         f"done={value('range_done_events')}(+{delta('range_done_events')}) "
         f"fail={value('native_renderer_failures')}(+{delta('native_renderer_failures')})"
     )
+
+
+def _format_summary_line(row: Mapping[str, object]) -> str:
+    keys = (
+        "requests",
+        "elapsed_ms",
+        "last_t_ms",
+        "cache_hits",
+        "cache_misses",
+        "cache_hit_rate",
+        "future_frames_cached",
+        "stale_frames_dropped",
+        "generations_cancelled",
+        "native_generation_cancelled_events",
+        "range_done_events",
+        "native_renderer_failures",
+    )
+    return "summary " + " ".join(f"{key}={row.get(key, '')}" for key in keys)
+
+
+def _summary_row(
+    *,
+    args: argparse.Namespace,
+    requests: int,
+    elapsed_ms: int,
+    last_t_ms: int,
+    stats: Mapping[str, int],
+) -> dict[str, str | int]:
+    hits = int(stats.get("cache_hits", 0))
+    misses = int(stats.get("cache_misses", 0))
+    attempts = hits + misses
+    row: dict[str, str | int] = {
+        "lrc": str(args.lrc),
+        "video": str(args.video),
+        "duration_ms": int(args.duration_ms),
+        "fps": int(args.fps),
+        "width": int(args.width),
+        "height": int(args.height),
+        "seek_every_ms": int(args.seek_every_ms),
+        "seek_step_ms": int(args.seek_step_ms),
+        "resize_every_ms": int(args.resize_every_ms),
+        "resize_scale": f"{float(args.resize_scale):.4f}",
+        "style_every_ms": int(args.style_every_ms),
+        "style_delta_px": int(args.style_delta_px),
+        "fast": int(bool(args.fast)),
+        "requests": int(requests),
+        "elapsed_ms": int(elapsed_ms),
+        "last_t_ms": int(last_t_ms),
+        "cache_hit_rate": f"{(hits / attempts if attempts else 0.0):.4f}",
+    }
+    for key in _STATS_KEYS:
+        row[key] = int(stats.get(key, 0))
+    return row
+
+
+def _write_summary_csv(path: Path, row: Mapping[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fieldnames = list(row.keys())
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerow(row)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -134,6 +209,7 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Generate preview requests without wall-clock pacing",
     )
+    parser.add_argument("--out", type=Path, default=None, help="Optional final summary CSV output path")
     return parser
 
 
@@ -186,12 +262,24 @@ def _run_probe(args: argparse.Namespace) -> int:
         nonlocal previous_stats
         if state["index"] >= len(times):
             window._preview_panel.set_playing(False)
+            current = _preview_stats(window)
             print(_format_stats_line(
                 elapsed_ms=state["elapsed_ms"],
                 t_ms=state["last_t_ms"],
-                current=_preview_stats(window),
+                current=current,
                 previous=previous_stats,
             ))
+            summary = _summary_row(
+                args=args,
+                requests=state["index"],
+                elapsed_ms=state["elapsed_ms"],
+                last_t_ms=state["last_t_ms"],
+                stats=current,
+            )
+            print(_format_summary_line(summary))
+            if args.out is not None:
+                _write_summary_csv(args.out, summary)
+                print(f"CSV -> {args.out}")
             app.quit()
             return
 

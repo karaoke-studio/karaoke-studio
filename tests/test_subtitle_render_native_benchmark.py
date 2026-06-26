@@ -24,7 +24,9 @@ from scripts.probe_native_preview_stats import (
     _churned_size,
     _churned_style,
     _format_stats_line,
+    _format_summary_line,
     _playback_times,
+    _summary_row,
 )
 from krok_helper.subtitle_render.models import Style
 from PyQt6.QtGui import QColor, QImage
@@ -231,6 +233,8 @@ def test_preview_probe_parses_resize_and_style_churn_options() -> None:
             "500",
             "--style-delta-px",
             "6",
+            "--out",
+            "summary.csv",
         ]
     )
 
@@ -238,6 +242,45 @@ def test_preview_probe_parses_resize_and_style_churn_options() -> None:
     assert args.resize_scale == 0.5
     assert args.style_every_ms == 500
     assert args.style_delta_px == 6
+    assert args.out.name == "summary.csv"
+
+
+def test_preview_probe_summary_row_reports_machine_readable_totals() -> None:
+    args = _build_parser().parse_args(
+        [
+            "--lrc",
+            "song.lrc",
+            "--video",
+            "bg.mp4",
+            "--duration-ms",
+            "5000",
+            "--fps",
+            "60",
+        ]
+    )
+
+    row = _summary_row(
+        args=args,
+        requests=296,
+        elapsed_ms=5032,
+        last_t_ms=5000,
+        stats={
+            "cache_hits": 180,
+            "cache_misses": 120,
+            "future_frames_cached": 800,
+            "stale_frames_dropped": 10,
+            "generations_cancelled": 3,
+            "native_generation_cancelled_events": 2,
+            "range_done_events": 250,
+            "native_renderer_failures": 0,
+        },
+    )
+
+    assert row["requests"] == 296
+    assert row["cache_hit_rate"] == "0.6000"
+    assert row["native_renderer_failures"] == 0
+    assert row["duration_ms"] == 5000
+    assert _format_summary_line(row).startswith("summary requests=296 elapsed_ms=5032")
 
 
 def test_preview_probe_churned_size_alternates_scaled_output() -> None:
