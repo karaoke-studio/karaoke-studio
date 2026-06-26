@@ -1,4 +1,5 @@
 #include <QtCore/QByteArray>
+#include <QtCore/QCoreApplication>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QElapsedTimer>
@@ -8,6 +9,7 @@
 #include <QtCore/QHash>
 #include <QtCore/QPointF>
 #include <QtCore/QSet>
+#include <QtCore/QSharedMemory>
 #include <QtCore/QTextStream>
 #include <QtGui/QBrush>
 #include <QtGui/QColor>
@@ -27,12 +29,14 @@
 
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <cmath>
 #include <iostream>
 #include <limits>
 #include <mutex>
 #include <optional>
+#include <cstring>
 #include <thread>
 #include <vector>
 
@@ -316,6 +320,31 @@ struct RangeFrameResult {
     double renderMs = 0.0;
     QString checksum;
     int visibleLines = 0;
+    QImage image;
+};
+
+struct SharedFrameRing {
+    QString key;
+    int slotCount = 0;
+    int width = 0;
+    int height = 0;
+    int stride = 0;
+    int pixelBytes = 0;
+    int headerBytes = 64;
+    int slotBytes = 0;
+    int totalBytes = 0;
+    QString pixelFormat = QStringLiteral("rgba8888");
+};
+
+struct RenderRuntime {
+    std::mutex cancelMutex;
+    QSet<int> cancelledGenerations;
+    std::atomic<bool> shutdownRequested{false};
+    std::mutex jobsMutex;
+    std::vector<std::thread> jobs;
+    std::mutex sharedMemoryMutex;
+    std::unique_ptr<QSharedMemory> sharedMemory;
+    SharedFrameRing sharedRing;
 };
 
 QString stringValue(const QJsonObject &object, const QString &key, const QString &fallback = {}) {
@@ -652,8 +681,175 @@ QJsonObject response(bool ok, const QString &event) {
 }
 
 void writeJson(const QJsonObject &object) {
+    static std::mutex mutex;
+    std::lock_guard<std::mutex> lock(mutex);
     const QJsonDocument doc(object);
     std::cout << doc.toJson(QJsonDocument::Compact).constData() << std::endl;
+}
+
+bool generationCancelled(RenderRuntime *runtime, int generation) {
+    if (runtime == nullptr) {
+        return false;
+    }
+    if (runtime->shutdownRequested.load()) {
+        return true;
+    }
+    std::lock_guard<std::mutex> lock(runtime->cancelMutex);
+    return runtime->cancelledGenerations.contains(generation);
+}
+
+void cancelGeneration(RenderRuntime *runtime, int generation) {
+    if (runtime == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(runtime->cancelMutex);
+    runtime->cancelledGenerations.insert(generation);
+}
+
+void clearGenerationCancel(RenderRuntime *runtime, int generation) {
+    if (runtime == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(runtime->cancelMutex);
+    runtime->cancelledGenerations.remove(generation);
+}
+
+void rememberRenderJob(RenderRuntime *runtime, std::thread job) {
+    if (runtime == nullptr) {
+        if (job.joinable()) {
+            job.detach();
+        }
+        return;
+    }
+    std::lock_guard<std::mutex> lock(runtime->jobsMutex);
+    runtime->jobs.push_back(std::move(job));
+}
+
+void joinRenderJobs(RenderRuntime *runtime) {
+    if (runtime == nullptr) {
+        return;
+    }
+    std::vector<std::thread> jobs;
+    {
+        std::lock_guard<std::mutex> lock(runtime->jobsMutex);
+        jobs.swap(runtime->jobs);
+    }
+    for (auto &job : jobs) {
+        if (job.joinable()) {
+            job.join();
+        }
+    }
+}
+
+QString defaultSharedMemoryKey(int generation) {
+    return QStringLiteral("krok_subtitle_renderer_%1_%2")
+        .arg(QCoreApplication::applicationPid())
+        .arg(generation);
+}
+
+bool ensureSharedFrameRing(
+    RenderRuntime *runtime,
+    const QString &key,
+    int ringSlotCount,
+    int width,
+    int height,
+    QString *error
+) {
+    if (runtime == nullptr) {
+        if (error != nullptr) {
+            *error = QStringLiteral("render runtime is unavailable");
+        }
+        return false;
+    }
+    const int safeSlots = std::max(1, ringSlotCount);
+    QImage probe(std::max(1, width), std::max(1, height), QImage::Format_RGBA8888);
+    const int stride = probe.bytesPerLine();
+    const int pixelBytes = stride * probe.height();
+    constexpr int headerBytes = 64;
+    const int slotBytes = headerBytes + pixelBytes;
+    const int totalBytes = slotBytes * safeSlots;
+
+    std::lock_guard<std::mutex> lock(runtime->sharedMemoryMutex);
+    if (runtime->sharedMemory != nullptr && runtime->sharedMemory->isAttached()) {
+        runtime->sharedMemory->detach();
+    }
+    runtime->sharedMemory = std::make_unique<QSharedMemory>(key);
+    if (!runtime->sharedMemory->create(totalBytes)) {
+        if (error != nullptr) {
+            *error = runtime->sharedMemory->errorString();
+        }
+        runtime->sharedMemory.reset();
+        return false;
+    }
+    runtime->sharedRing = SharedFrameRing{
+        key,
+        safeSlots,
+        probe.width(),
+        probe.height(),
+        stride,
+        pixelBytes,
+        headerBytes,
+        slotBytes,
+        totalBytes,
+        QStringLiteral("rgba8888"),
+    };
+    if (runtime->sharedMemory->lock()) {
+        std::memset(runtime->sharedMemory->data(), 0, static_cast<std::size_t>(totalBytes));
+        runtime->sharedMemory->unlock();
+    }
+    return true;
+}
+
+void writeSlotInt(char *base, int offset, int value) {
+    std::int32_t stored = static_cast<std::int32_t>(value);
+    std::memcpy(base + offset, &stored, sizeof(stored));
+}
+
+bool writeSharedFrameSlot(
+    RenderRuntime *runtime,
+    const RangeFrameResult &result,
+    int generation,
+    int frameIndex,
+    int slotIndex,
+    SharedFrameRing *ringOut
+) {
+    if (runtime == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(runtime->sharedMemoryMutex);
+    if (runtime->sharedMemory == nullptr || !runtime->sharedMemory->isAttached() || runtime->sharedRing.slotCount <= 0) {
+        return false;
+    }
+    SharedFrameRing ring = runtime->sharedRing;
+    const int safeSlot = ((slotIndex % ring.slotCount) + ring.slotCount) % ring.slotCount;
+    QImage image = result.image.convertToFormat(QImage::Format_RGBA8888);
+    if (image.width() != ring.width || image.height() != ring.height || image.bytesPerLine() != ring.stride) {
+        image = image.scaled(ring.width, ring.height).convertToFormat(QImage::Format_RGBA8888);
+    }
+    if (!runtime->sharedMemory->lock()) {
+        return false;
+    }
+    char *base = static_cast<char *>(runtime->sharedMemory->data());
+    const int slotOffset = safeSlot * ring.slotBytes;
+    char *slot = base + slotOffset;
+    writeSlotInt(slot, 0, 1);  // writing
+    writeSlotInt(slot, 4, generation);
+    writeSlotInt(slot, 8, frameIndex);
+    writeSlotInt(slot, 12, result.tMs);
+    writeSlotInt(slot, 16, ring.width);
+    writeSlotInt(slot, 20, ring.height);
+    writeSlotInt(slot, 24, ring.stride);
+    writeSlotInt(slot, 28, 1);  // rgba8888
+    writeSlotInt(slot, 32, ring.headerBytes);
+    writeSlotInt(slot, 36, ring.pixelBytes);
+    const uchar *bits = image.constBits();
+    std::memcpy(slot + ring.headerBytes, bits, static_cast<std::size_t>(ring.pixelBytes));
+    writeSlotInt(slot, 0, 2);  // ready
+    runtime->sharedMemory->unlock();
+    if (ringOut != nullptr) {
+        *ringOut = ring;
+    }
+    return true;
 }
 
 std::uint64_t imageChecksum(const QImage &image) {
@@ -3496,6 +3692,26 @@ QJsonObject handleRenderFrameStats(const QJsonObject &request, const std::option
     return out;
 }
 
+std::vector<int> rangeTimestampsFromRequest(const QJsonObject &request, const RenderConfig &config) {
+    std::vector<int> timestamps = parseIntArray(request.value(QStringLiteral("t_ms")).toArray());
+    if (timestamps.empty()) {
+        const int startFrame = std::max(0, intValue(request, QStringLiteral("start_frame"), 0));
+        const int count = std::max(0, intValue(request, QStringLiteral("count"), 0));
+        timestamps.reserve(static_cast<std::size_t>(count));
+        for (int index = 0; index < count; ++index) {
+            const double frameMs = 1000.0 / static_cast<double>(std::max(config.fps, 1));
+            timestamps.push_back(static_cast<int>(std::round((startFrame + index) * frameMs)));
+        }
+    }
+    return timestamps;
+}
+
+int rangeWorkerCountFromRequest(const QJsonObject &request, const RenderConfig &config, int frameCount) {
+    const unsigned int hardwareThreads = std::max(1u, std::thread::hardware_concurrency());
+    const int requestedThreads = intValue(request, QStringLiteral("threads"), static_cast<int>(hardwareThreads));
+    return std::max(1, std::min(requestedThreads, std::max(frameCount, 1)));
+}
+
 QJsonObject handleRenderRangeStats(const QJsonObject &request, const std::optional<RenderConfig> &config) {
     if (!config.has_value()) {
         QJsonObject out = response(false, QStringLiteral("render_range_stats"));
@@ -3503,25 +3719,14 @@ QJsonObject handleRenderRangeStats(const QJsonObject &request, const std::option
         return out;
     }
 
-    std::vector<int> timestamps = parseIntArray(request.value(QStringLiteral("t_ms")).toArray());
-    if (timestamps.empty()) {
-        const int startFrame = std::max(0, intValue(request, QStringLiteral("start_frame"), 0));
-        const int count = std::max(0, intValue(request, QStringLiteral("count"), 0));
-        timestamps.reserve(static_cast<std::size_t>(count));
-        for (int index = 0; index < count; ++index) {
-            const double frameMs = 1000.0 / static_cast<double>(std::max(config->fps, 1));
-            timestamps.push_back(static_cast<int>(std::round((startFrame + index) * frameMs)));
-        }
-    }
+    std::vector<int> timestamps = rangeTimestampsFromRequest(request, *config);
     if (timestamps.empty()) {
         QJsonObject out = response(false, QStringLiteral("render_range_stats"));
         out.insert(QStringLiteral("error"), QStringLiteral("t_ms array or positive count is required"));
         return out;
     }
 
-    const unsigned int hardwareThreads = std::max(1u, std::thread::hardware_concurrency());
-    const int requestedThreads = intValue(request, QStringLiteral("threads"), static_cast<int>(hardwareThreads));
-    const int workerCount = std::max(1, std::min(requestedThreads, static_cast<int>(timestamps.size())));
+    const int workerCount = rangeWorkerCountFromRequest(request, *config, static_cast<int>(timestamps.size()));
     std::vector<RangeFrameResult> results(timestamps.size());
     std::atomic<int> nextIndex{0};
     QElapsedTimer totalTimer;
@@ -3587,6 +3792,178 @@ QJsonObject handleRenderRangeStats(const QJsonObject &request, const std::option
     return out;
 }
 
+void launchRenderRangeJob(
+    RenderRuntime *runtime,
+    RenderConfig config,
+    std::vector<int> timestamps,
+    int generation,
+    int workerCount
+) {
+    auto job = std::thread([runtime, config = std::move(config), timestamps = std::move(timestamps), generation, workerCount]() {
+        std::vector<RangeFrameResult> results(timestamps.size());
+        std::vector<bool> ready(timestamps.size(), false);
+        std::mutex resultMutex;
+        std::condition_variable resultReady;
+        std::atomic<int> nextIndex{0};
+        std::atomic<int> activeWorkers{workerCount};
+        std::atomic<int> completedFrames{0};
+        QElapsedTimer totalTimer;
+        totalTimer.start();
+
+        auto worker = [&]() {
+            while (true) {
+                if (generationCancelled(runtime, generation)) {
+                    break;
+                }
+                const int index = nextIndex.fetch_add(1);
+                if (index >= static_cast<int>(timestamps.size())) {
+                    break;
+                }
+                QElapsedTimer frameTimer;
+                frameTimer.start();
+                RenderResult rendered = renderFrame(config, timestamps[static_cast<std::size_t>(index)]);
+                const double renderMs = static_cast<double>(frameTimer.nsecsElapsed()) / 1000000.0;
+                if (generationCancelled(runtime, generation)) {
+                    break;
+                }
+                {
+                    std::lock_guard<std::mutex> lock(resultMutex);
+                    results[static_cast<std::size_t>(index)] = RangeFrameResult{
+                        timestamps[static_cast<std::size_t>(index)],
+                        renderMs,
+                        QString::number(imageChecksum(rendered.image)),
+                        rendered.diagnostics.visibleLines,
+                        std::move(rendered.image),
+                    };
+                    ready[static_cast<std::size_t>(index)] = true;
+                }
+                ++completedFrames;
+                resultReady.notify_all();
+            }
+            --activeWorkers;
+            resultReady.notify_all();
+        };
+
+        std::vector<std::thread> workers;
+        workers.reserve(static_cast<std::size_t>(workerCount));
+        for (int index = 0; index < workerCount; ++index) {
+            workers.emplace_back(worker);
+        }
+
+        int nextEmit = 0;
+        while (nextEmit < static_cast<int>(timestamps.size())) {
+            RangeFrameResult result;
+            {
+                std::unique_lock<std::mutex> lock(resultMutex);
+                resultReady.wait(lock, [&]() {
+                    return ready[static_cast<std::size_t>(nextEmit)]
+                        || activeWorkers.load() == 0
+                        || generationCancelled(runtime, generation);
+                });
+                if (!ready[static_cast<std::size_t>(nextEmit)]) {
+                    break;
+                }
+                result = results[static_cast<std::size_t>(nextEmit)];
+            }
+            const int slotIndex = nextEmit % std::max(1, runtime->sharedRing.slotCount);
+            SharedFrameRing ring;
+            const bool wroteSlot = writeSharedFrameSlot(runtime, result, generation, nextEmit, slotIndex, &ring);
+            QJsonObject frame = response(true, QStringLiteral("frame_ready"));
+            frame.insert(QStringLiteral("generation"), generation);
+            frame.insert(QStringLiteral("frame_index"), nextEmit);
+            frame.insert(QStringLiteral("t_ms"), result.tMs);
+            frame.insert(QStringLiteral("render_ms"), result.renderMs);
+            frame.insert(QStringLiteral("checksum"), result.checksum);
+            frame.insert(QStringLiteral("visible_lines"), result.visibleLines);
+            frame.insert(QStringLiteral("payload"), wroteSlot ? QStringLiteral("shared_memory") : QStringLiteral("metadata"));
+            if (wroteSlot) {
+                frame.insert(QStringLiteral("shm_key"), ring.key);
+                frame.insert(QStringLiteral("slot_index"), slotIndex);
+                frame.insert(QStringLiteral("slot_count"), ring.slotCount);
+                frame.insert(QStringLiteral("slot_offset"), slotIndex * ring.slotBytes);
+                frame.insert(QStringLiteral("slot_bytes"), ring.slotBytes);
+                frame.insert(QStringLiteral("header_bytes"), ring.headerBytes);
+                frame.insert(QStringLiteral("payload_offset"), slotIndex * ring.slotBytes + ring.headerBytes);
+                frame.insert(QStringLiteral("payload_bytes"), ring.pixelBytes);
+                frame.insert(QStringLiteral("width"), ring.width);
+                frame.insert(QStringLiteral("height"), ring.height);
+                frame.insert(QStringLiteral("stride"), ring.stride);
+                frame.insert(QStringLiteral("pixel_format"), ring.pixelFormat);
+            }
+            writeJson(frame);
+            ++nextEmit;
+        }
+
+        for (auto &thread : workers) {
+            if (thread.joinable()) {
+                thread.join();
+            }
+        }
+
+        const bool cancelled = generationCancelled(runtime, generation);
+        QJsonObject done = response(true, QStringLiteral("range_done"));
+        done.insert(QStringLiteral("generation"), generation);
+        done.insert(QStringLiteral("frames"), static_cast<int>(timestamps.size()));
+        done.insert(QStringLiteral("frames_done"), completedFrames.load());
+        done.insert(QStringLiteral("frames_emitted"), nextEmit);
+        done.insert(QStringLiteral("threads"), workerCount);
+        done.insert(QStringLiteral("cancelled"), cancelled);
+        done.insert(QStringLiteral("elapsed_ms"), static_cast<double>(totalTimer.nsecsElapsed()) / 1000000.0);
+        writeJson(done);
+    });
+    rememberRenderJob(runtime, std::move(job));
+}
+
+QJsonObject handleRenderRange(const QJsonObject &request, const std::optional<RenderConfig> &config, RenderRuntime *runtime) {
+    if (!config.has_value()) {
+        QJsonObject out = response(false, QStringLiteral("render_range"));
+        out.insert(QStringLiteral("error"), QStringLiteral("renderer is not configured"));
+        return out;
+    }
+
+    std::vector<int> timestamps = rangeTimestampsFromRequest(request, *config);
+    if (timestamps.empty()) {
+        QJsonObject out = response(false, QStringLiteral("render_range"));
+        out.insert(QStringLiteral("error"), QStringLiteral("t_ms array or positive count is required"));
+        return out;
+    }
+
+    const int generation = intValue(request, QStringLiteral("generation"), 0);
+    clearGenerationCancel(runtime, generation);
+    const int workerCount = rangeWorkerCountFromRequest(request, *config, static_cast<int>(timestamps.size()));
+    const QString shmKey = stringValue(
+        request,
+        QStringLiteral("shm_key"),
+        defaultSharedMemoryKey(generation)
+    );
+    const int ringSlots = std::max(1, intValue(request, QStringLiteral("ring_slots"), 3));
+    QString shmError;
+    if (!ensureSharedFrameRing(runtime, shmKey, ringSlots, config->width, config->height, &shmError)) {
+        QJsonObject out = response(false, QStringLiteral("render_range"));
+        out.insert(QStringLiteral("generation"), generation);
+        out.insert(QStringLiteral("error"), QStringLiteral("failed to create shared memory: ") + shmError);
+        return out;
+    }
+    QJsonObject out = response(true, QStringLiteral("range_started"));
+    out.insert(QStringLiteral("generation"), generation);
+    out.insert(QStringLiteral("frames"), static_cast<int>(timestamps.size()));
+    out.insert(QStringLiteral("threads"), workerCount);
+    out.insert(QStringLiteral("shm_key"), shmKey);
+    out.insert(QStringLiteral("ring_slots"), ringSlots);
+    out.insert(QStringLiteral("width"), config->width);
+    out.insert(QStringLiteral("height"), config->height);
+    launchRenderRangeJob(runtime, *config, std::move(timestamps), generation, workerCount);
+    return out;
+}
+
+QJsonObject handleCancelGeneration(const QJsonObject &request, RenderRuntime *runtime) {
+    const int generation = intValue(request, QStringLiteral("generation"), 0);
+    cancelGeneration(runtime, generation);
+    QJsonObject out = response(true, QStringLiteral("generation_cancelled"));
+    out.insert(QStringLiteral("generation"), generation);
+    return out;
+}
+
 QJsonObject parseErrorResponse(const QString &message) {
     QJsonObject out = response(false, QStringLiteral("parse_error"));
     out.insert(QStringLiteral("error"), message);
@@ -3605,6 +3982,7 @@ int main(int argc, char **argv) {
     writeJson(ready);
 
     std::optional<RenderConfig> config;
+    RenderRuntime runtime;
     QTextStream input(stdin, QIODevice::ReadOnly);
     while (!input.atEnd()) {
         const QString line = input.readLine().trimmed();
@@ -3629,7 +4007,13 @@ int main(int argc, char **argv) {
             writeJson(handleRenderFrameStats(request, config));
         } else if (command == QStringLiteral("render_range_stats")) {
             writeJson(handleRenderRangeStats(request, config));
+        } else if (command == QStringLiteral("render_range")) {
+            writeJson(handleRenderRange(request, config, &runtime));
+        } else if (command == QStringLiteral("cancel_generation")) {
+            writeJson(handleCancelGeneration(request, &runtime));
         } else if (command == QStringLiteral("shutdown")) {
+            runtime.shutdownRequested.store(true);
+            joinRenderJobs(&runtime);
             writeJson(response(true, QStringLiteral("shutdown")));
             return 0;
         } else {
@@ -3639,5 +4023,7 @@ int main(int argc, char **argv) {
         }
     }
 
+    runtime.shutdownRequested.store(true);
+    joinRenderJobs(&runtime);
     return 0;
 }

@@ -209,6 +209,17 @@ def _write_fake_sidecar(tmp_path: Path, *, mode: str = "normal") -> Path:
                         for t_ms in request.get("t_ms", [])
                     ]
                     print(json.dumps({{"ok": True, "event": "range_stats", "frames": len(frames), "threads": request.get("threads", 1), "elapsed_ms": 3.0, "frame_stats": frames}}), flush=True)
+                elif command == "render_range":
+                    generation = request.get("generation", 0)
+                    frames = request.get("t_ms", [])
+                    shm_key = request.get("shm_key", "fake-shm")
+                    ring_slots = request.get("ring_slots", 3)
+                    print(json.dumps({{"ok": True, "event": "range_started", "generation": generation, "frames": len(frames), "threads": request.get("threads", 1), "shm_key": shm_key, "ring_slots": ring_slots, "width": 640, "height": 360}}), flush=True)
+                    for index, t_ms in enumerate(frames):
+                        print(json.dumps({{"ok": True, "event": "frame_ready", "generation": generation, "frame_index": index, "t_ms": t_ms, "render_ms": 1.5, "checksum": "fake", "payload": "shared_memory", "shm_key": shm_key, "slot_index": index % ring_slots, "slot_count": ring_slots, "slot_offset": 0, "slot_bytes": 64, "header_bytes": 64, "payload_offset": 64, "payload_bytes": 0, "width": 640, "height": 360, "stride": 2560, "pixel_format": "rgba8888"}}), flush=True)
+                    print(json.dumps({{"ok": True, "event": "range_done", "generation": generation, "frames": len(frames), "frames_done": len(frames), "frames_emitted": len(frames), "cancelled": False}}), flush=True)
+                elif command == "cancel_generation":
+                    print(json.dumps({{"ok": True, "event": "generation_cancelled", "generation": request.get("generation", 0)}}), flush=True)
                 elif command == "shutdown":
                     print(json.dumps({{"ok": True, "event": "shutdown"}}), flush=True)
                     break
@@ -245,6 +256,19 @@ def test_native_renderer_process_round_trips_with_noisy_sidecar(tmp_path):
     assert range_stats["event"] == "range_stats"
     assert range_stats["threads"] == 2
     assert len(range_stats["frame_stats"]) == 2
+    started = renderer.start_render_range([900, 917], generation=7, threads=2, shm_key="fake-shm", ring_slots=2)
+    assert started["event"] == "range_started"
+    assert started["generation"] == 7
+    assert started["shm_key"] == "fake-shm"
+    first_frame = renderer.read_event()
+    assert first_frame["event"] == "frame_ready"
+    assert first_frame["payload"] == "shared_memory"
+    assert first_frame["slot_index"] == 0
+    second_frame = renderer.read_event()
+    assert second_frame["event"] == "frame_ready"
+    assert second_frame["slot_index"] == 1
+    assert renderer.read_event()["event"] == "range_done"
+    assert renderer.cancel_generation(7)["event"] == "generation_cancelled"
 
     renderer.close()
     assert renderer.is_running is False

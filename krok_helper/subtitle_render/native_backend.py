@@ -92,6 +92,7 @@ class NativeRendererProcess:
         self._stdout_queue: queue.Queue[str | None] = queue.Queue()
         self._stderr_tail: deque[str] = deque(maxlen=80)
         self._stdout_noise_tail: deque[str] = deque(maxlen=20)
+        self._event_backlog: deque[dict[str, Any]] = deque()
         self._stderr_lock = threading.Lock()
         self._stdout_noise_lock = threading.Lock()
         self._pipe_threads: list[threading.Thread] = []
@@ -192,6 +193,38 @@ class NativeRendererProcess:
         )
         return self._expect_ok(self._read_response())
 
+    def start_render_range(
+        self,
+        timestamps_ms: list[int],
+        *,
+        generation: int,
+        threads: int,
+        shm_key: str | None = None,
+        ring_slots: int = 3,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "cmd": "render_range",
+            "t_ms": [int(t_ms) for t_ms in timestamps_ms],
+            "generation": int(generation),
+            "threads": int(threads),
+            "ring_slots": int(ring_slots),
+        }
+        if shm_key:
+            payload["shm_key"] = shm_key
+        self._send(
+            payload
+        )
+        return self._expect_ok(self._read_until_event("range_started"))
+
+    def cancel_generation(self, generation: int) -> dict[str, Any]:
+        self._send({"cmd": "cancel_generation", "generation": int(generation)})
+        return self._expect_ok(self._read_until_event("generation_cancelled"))
+
+    def read_event(self) -> dict[str, Any]:
+        if self._event_backlog:
+            return self._event_backlog.popleft()
+        return self._read_response()
+
     def _send(self, payload: dict[str, Any]) -> None:
         process = self._require_process()
         assert process.stdin is not None
@@ -221,6 +254,21 @@ class NativeRendererProcess:
             if isinstance(payload, dict) and isinstance(payload.get("event"), str):
                 return payload
             self._remember_stdout_noise(line)
+
+    def _read_until_event(self, event: str) -> dict[str, Any]:
+        kept: deque[dict[str, Any]] = deque()
+        while self._event_backlog:
+            payload = self._event_backlog.popleft()
+            if payload.get("event") == event:
+                self._event_backlog.extendleft(reversed(kept))
+                return payload
+            kept.append(payload)
+        self._event_backlog = kept
+        while True:
+            payload = self._read_response()
+            if payload.get("event") == event:
+                return payload
+            self._event_backlog.append(payload)
 
     def _expect_ok(self, response: dict[str, Any]) -> dict[str, Any]:
         if response.get("ok"):

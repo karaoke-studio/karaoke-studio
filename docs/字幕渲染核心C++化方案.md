@@ -621,6 +621,13 @@ smoke 输出示例：
   `range:1` 约 8.12ms/帧，`range:2` 约 4.07ms/帧，`range:4` 约 2.40ms/帧，`range:8` 约 1.67ms/帧。
   worker 内单帧 render_ms 会随并发升高（8 线程约 11.97ms），说明存在 Qt/font/cache/CPU 争用，但总吞吐已经明显
   受益于 C++ 多线程。该结果把后续方向重新拉回 range render / preview scheduler，而不是继续深挖 utopia 专项缓存。
+- 已新增产品协议雏形 `render_range` / `cancel_generation`：`render_range` 带 `generation`、timestamps 或
+  `start_frame/count`、`threads`、`shm_key`、`ring_slots`，sidecar 后台开 C++ worker 渲染，按输出顺序写入
+  `QSharedMemory` ring slot，并逐帧输出 `frame_ready` 事件；事件包含 `slot_index`、`slot_count`、`slot_offset`、
+  `slot_bytes`、`payload_offset`、`payload_bytes`、`width`、`height`、`stride`、`pixel_format=rgba8888` 等 slot
+  信息，最后输出 `range_done`。`cancel_generation` 会标记 generation 取消，worker 后续停止并以 `cancelled=true`
+  收尾。当前 Python wrapper 只接收 slot metadata，尚未 attach shared memory 或把像素转为 `QImage`；下一步应实现
+  Python 侧 slot 消费与 generation 过滤，再接 C5 预览调度。
 
 验收：
 
