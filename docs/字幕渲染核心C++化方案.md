@@ -820,6 +820,12 @@ C:\Python314\python.exe -m pytest tests\test_subtitle_render_transport.py tests\
   - Python full-frame：`frames=300`，约 `97.57fps`，`elapsed=3074.74ms`
   - native full-frame：`frames=300`，约 `152.11fps`，`elapsed=1972.31ms`
   - quality 抽样 5 帧：`changed=0`、`max_delta=0`
+- A stain 真实 LRC + 真实背景视频 `A stain.mp4`、720p/60fps/5s 回归：
+  - 默认对比（Python 保留 strip/bands，native full-frame）：Python `85.49fps / 3509.07ms`，
+    native `133.79fps / 2242.34ms`，quality 抽样 5 帧 `changed=0`、`max_delta=0`
+  - full-frame 公平对比（`--disable-strip`）：Python `85.13fps / 3524.19ms`，
+    native `128.62fps / 2332.52ms`，quality 抽样 5 帧 `changed=0`、`max_delta=0`
+  - 两组输出大小一致（`3297237` bytes），说明真实背景缩放/pad/编码链路下 native full-frame 仍稳定。
 
 当前验证：
 
@@ -827,11 +833,12 @@ C:\Python314\python.exe -m pytest tests\test_subtitle_render_transport.py tests\
 C:\Python314\python.exe -m pytest tests\test_subtitle_render_native_benchmark.py -q
 C:\Python314\python.exe -m pytest tests\test_subtitle_render_transport.py tests\test_subtitle_render_native_benchmark.py tests\test_subtitle_render_native_export.py tests\test_subtitle_render_renderer.py -q
 C:\Python314\python.exe scripts\compare_export_backends.py --lrc "D:\カラオケ\songs\A stain\A stain.lrc" --native-renderer "D:\カラオケ\krok-helper\build\native-renderer\krok_subtitle_renderer.exe" --duration-ms 5000 --fps 60 --width 1280 --height 720 --sample-frames 5 --disable-strip --offscreen
+C:\Python314\python.exe scripts\compare_export_backends.py --lrc "D:\カラオケ\songs\A stain\A stain.lrc" --video "D:\カラオケ\songs\A stain\A stain.mp4" --native-renderer "D:\カラオケ\krok-helper\build\native-renderer\krok_subtitle_renderer.exe" --duration-ms 5000 --fps 60 --width 1280 --height 720 --sample-frames 5 --offscreen
+C:\Python314\python.exe scripts\compare_export_backends.py --lrc "D:\カラオケ\songs\A stain\A stain.lrc" --video "D:\カラオケ\songs\A stain\A stain.mp4" --native-renderer "D:\カラオケ\krok-helper\build\native-renderer\krok_subtitle_renderer.exe" --duration-ms 5000 --fps 60 --width 1280 --height 720 --sample-frames 5 --disable-strip --offscreen
 ```
 
 待继续：
 
-- 用真实背景视频再跑 Python default（strip/bands 开）vs native full-frame，判断端到端收益是否仍稳定。
 - 增加 raw overlay 级质量对比入口，避开 H.264 编码带来的潜在抽帧噪声。
 - 若导出稳定，再考虑 UI/设置里的实验开关；否则先继续优化 native export chunk/threads/诊断字段。
 
