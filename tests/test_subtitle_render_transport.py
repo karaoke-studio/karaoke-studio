@@ -227,6 +227,7 @@ def test_native_preview_stats_snapshot_tracks_core_counters():
         "generations_cancelled": 1,
         "native_generation_cancelled_events": 1,
         "range_done_events": 1,
+        "native_renderer_failures": 0,
     }
 
 
@@ -477,6 +478,105 @@ def test_native_async_renderer_cancels_active_generation_on_new_request(qapp, mo
 
         assert cancels == [2]
         assert renderer.stats_snapshot()["generations_cancelled"] == 1
+    finally:
+        renderer.stop()
+
+
+def test_native_async_renderer_keeps_active_generation_for_sequential_playback_tick(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.models import Style, TimingTrack
+
+    started = threading.Event()
+    unblock = threading.Event()
+    cancels: list[int] = []
+
+    class FakeNativeRendererProcess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return {"ok": True, "event": "ready"}
+
+        def configure(self, *args, **kwargs):
+            return {"ok": True, "event": "configured"}
+
+        def start_render_range(self, *args, **kwargs):
+            started.set()
+            return {"ok": True, "event": "range_started"}
+
+        def read_event(self):
+            unblock.wait(timeout=2.0)
+            return {"ok": True, "event": "range_done"}
+
+        def send_cancel_generation(self, generation):
+            cancels.append(int(generation))
+            unblock.set()
+
+        def close(self):
+            unblock.set()
+
+    monkeypatch.setattr(pa, "NativeRendererProcess", FakeNativeRendererProcess)
+    renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
+    try:
+        renderer.set_state(TimingTrack(), Style())
+        renderer.set_playing(True)
+        renderer.request(1_000)
+        assert started.wait(timeout=2.0)
+
+        renderer.request(1_017)
+
+        assert cancels == []
+        assert renderer.stats_snapshot()["generations_cancelled"] == 0
+    finally:
+        unblock.set()
+        renderer.stop()
+
+
+def test_native_async_renderer_waiting_requests_use_frame_bucket(qapp):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+
+    renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
+    try:
+        with renderer._condition:
+            renderer._waiting_request_by_key[renderer._frame_cache.key_for(1_034)] = 1_034
+
+        assert renderer._take_waiting_request_for_slot(1_033) == 1_034
+        assert renderer._take_waiting_request_for_slot(1_033) is None
+        assert renderer._mark_emitted_if_new(1_034) is False
+    finally:
+        renderer.stop()
+
+
+def test_native_async_renderer_marks_restart_on_render_target_change(qapp):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+
+    renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
+    try:
+        renderer.set_render_target(640, 360, 1.0)
+        with renderer._condition:
+            renderer._pending_t = 1_000
+        snapshot = renderer._take_next_request()
+
+        assert snapshot is not None
+        restart_renderer = snapshot[7]
+        assert restart_renderer is True
+    finally:
+        renderer.stop()
+
+
+def test_native_async_renderer_includes_waiting_timestamps_during_playback(qapp):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+
+    renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
+    try:
+        renderer.set_playing(True)
+        with renderer._condition:
+            renderer._waiting_request_by_key[renderer._frame_cache.key_for(1_017)] = 1_017
+            renderer._waiting_request_by_key[renderer._frame_cache.key_for(1_034)] = 1_034
+
+        timestamps = renderer._include_waiting_timestamps([1_034, 1_050], t_ms=1_034)
+
+        assert timestamps == [1_017, 1_034, 1_050]
     finally:
         renderer.stop()
 

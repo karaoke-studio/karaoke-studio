@@ -61,7 +61,8 @@ def _format_stats_line(
         f"cancel={value('generations_cancelled')}(+{delta('generations_cancelled')}) "
         f"native_cancel={value('native_generation_cancelled_events')}"
         f"(+{delta('native_generation_cancelled_events')}) "
-        f"done={value('range_done_events')}(+{delta('range_done_events')})"
+        f"done={value('range_done_events')}(+{delta('range_done_events')}) "
+        f"fail={value('native_renderer_failures')}(+{delta('native_renderer_failures')})"
     )
 
 

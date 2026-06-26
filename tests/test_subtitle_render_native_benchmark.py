@@ -15,6 +15,7 @@ from scripts.bench_native_renderer import (
 )
 from scripts.compare_preview_backends import (
     PreviewBackendSample,
+    _detail_rows,
     _image_diff_summary,
     _summarize_backend_samples,
 )
@@ -194,6 +195,7 @@ def test_preview_probe_formats_stats_line_with_deltas() -> None:
             "generations_cancelled": 1,
             "native_generation_cancelled_events": 4,
             "range_done_events": 7,
+            "native_renderer_failures": 2,
         },
         previous={
             "cache_hits": 2,
@@ -203,13 +205,14 @@ def test_preview_probe_formats_stats_line_with_deltas() -> None:
             "generations_cancelled": 0,
             "native_generation_cancelled_events": 1,
             "range_done_events": 5,
+            "native_renderer_failures": 1,
         },
     )
 
     assert line == (
         "elapsed=1.20s t=3400ms "
         "hit=5(+3) miss=8(+2) future=3(+2) stale=2(+0) "
-        "cancel=1(+1) native_cancel=4(+3) done=7(+2)"
+        "cancel=1(+1) native_cancel=4(+3) done=7(+2) fail=2(+1)"
     )
 
 
@@ -286,6 +289,82 @@ def test_compare_preview_backend_summary_counts_duplicate_ready_events() -> None
     assert row["ready_events"] == 3
     assert row["ready_frames"] == 2
     assert row["duplicate_ready_events"] == 1
+
+
+def test_compare_preview_backend_summary_reports_missing_duplicate_and_settle_times() -> None:
+    row = _summarize_backend_samples(
+        "native",
+        requested_t_ms=[0, 17, 33],
+        duration_ms=1000,
+        samples=[
+            PreviewBackendSample(t_ms=0, latency_ms=10.0),
+            PreviewBackendSample(t_ms=17, latency_ms=20.0, phase="settle"),
+            PreviewBackendSample(t_ms=17, latency_ms=25.0, phase="settle"),
+        ],
+    )
+
+    assert row["ready_frames"] == 2
+    assert row["dropped_frames"] == 1
+    assert row["leading_missing_frames"] == 0
+    assert row["trailing_missing_frames"] == 1
+    assert row["steady_dropped_frames"] == 0
+    assert row["ready_in_settle_frames"] == 1
+    assert row["missing_t_ms"] == "33"
+    assert row["duplicate_t_ms"] == "17"
+    assert row["settle_ready_t_ms"] == "17"
+
+
+def test_compare_preview_backend_summary_separates_leading_from_steady_drops() -> None:
+    row = _summarize_backend_samples(
+        "native",
+        requested_t_ms=[0, 17, 34, 51, 68],
+        duration_ms=1000,
+        samples=[
+            PreviewBackendSample(t_ms=51, latency_ms=20.0),
+            PreviewBackendSample(t_ms=68, latency_ms=10.0),
+        ],
+    )
+
+    assert row["dropped_frames"] == 3
+    assert row["leading_missing_frames"] == 3
+    assert row["trailing_missing_frames"] == 0
+    assert row["steady_requested_frames"] == 2
+    assert row["steady_ready_frames"] == 2
+    assert row["steady_dropped_frames"] == 0
+
+
+def test_compare_preview_backend_detail_rows_report_first_latency_and_missing() -> None:
+    rows = _detail_rows(
+        "native",
+        requested_t_ms=[0, 17],
+        samples=[
+            PreviewBackendSample(t_ms=0, latency_ms=10.0),
+            PreviewBackendSample(t_ms=0, latency_ms=15.0, phase="settle"),
+        ],
+    )
+
+    assert rows == [
+        {
+            "backend": "native",
+            "request_index": 0,
+            "t_ms": 0,
+            "ready_events": 2,
+            "duplicate_ready_events": 1,
+            "missing": 0,
+            "first_latency_ms": "10.0000",
+            "first_ready_phase": "request",
+        },
+        {
+            "backend": "native",
+            "request_index": 1,
+            "t_ms": 17,
+            "ready_events": 0,
+            "duplicate_ready_events": 0,
+            "missing": 1,
+            "first_latency_ms": "",
+            "first_ready_phase": "",
+        },
+    ]
 
 
 def test_compare_preview_image_diff_summary_samples_rgba_pixels() -> None:

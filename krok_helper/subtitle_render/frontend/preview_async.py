@@ -91,6 +91,9 @@ class NativePreviewFrameCache:
     def _key(self, t_ms: int) -> int:
         return int(round(int(t_ms) * self._fps / 1000.0))
 
+    def key_for(self, t_ms: int) -> int:
+        return self._key(t_ms)
+
     def store(self, t_ms: int, image: QImage) -> None:
         copied = image.copy()
         with self._lock:
@@ -123,6 +126,7 @@ class NativePreviewStats:
         "generations_cancelled",
         "native_generation_cancelled_events",
         "range_done_events",
+        "native_renderer_failures",
     )
 
     def __init__(self) -> None:
@@ -149,6 +153,9 @@ class NativePreviewStats:
 
     def note_range_done_event(self) -> None:
         self._increment("range_done_events")
+
+    def note_native_renderer_failure(self) -> None:
+        self._increment("native_renderer_failures")
 
     def snapshot(self) -> dict[str, int]:
         with self._lock:
@@ -355,6 +362,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         self._pending_skip_current = False
         self._stopped = False
         self._needs_configure = True
+        self._restart_renderer = False
         self._renderer: Optional[NativeRendererProcess] = None
         self._renderer_failed = False
         self._playing = False
@@ -367,6 +375,8 @@ class NativeAsyncSubtitleRenderer(QObject):
             0,
         )
         self._frame_cache = NativePreviewFrameCache(self._lookahead_frames + 1)
+        self._waiting_request_by_key: dict[int, int] = {}
+        self._emitted_request_keys: set[int] = set()
         self._stats = NativePreviewStats()
         self._condition = threading.Condition()
         self._process_lock = threading.Lock()
@@ -386,6 +396,8 @@ class NativeAsyncSubtitleRenderer(QObject):
             self._advance_generation_locked()
             self._needs_configure = True
             self._frame_cache.clear()
+            self._waiting_request_by_key.clear()
+            self._emitted_request_keys.clear()
             self._condition.notify()
 
     def set_size(self, width: int, height: int) -> None:
@@ -400,8 +412,11 @@ class NativeAsyncSubtitleRenderer(QObject):
             dpr = max(float(device_pixel_ratio or 1.0), 0.01)
             if (w, h, dpr) != (self._logical_w, self._logical_h, self._device_pixel_ratio):
                 self._needs_configure = True
+                self._restart_renderer = True
                 self._advance_generation_locked()
                 self._frame_cache.clear()
+                self._waiting_request_by_key.clear()
+                self._emitted_request_keys.clear()
             self._logical_w = w
             self._logical_h = h
             self._device_pixel_ratio = dpr
@@ -409,19 +424,27 @@ class NativeAsyncSubtitleRenderer(QObject):
 
     def request(self, t_ms: int) -> None:
         requested_t = int(t_ms)
+        requested_key = self._frame_cache.key_for(requested_t)
         cached = self._frame_cache.take(requested_t)
         if cached is not None:
             self._stats.note_cache_hit()
+            with self._condition:
+                self._emitted_request_keys.add(requested_key)
             self.frame_ready.emit(cached, requested_t)
         else:
             self._stats.note_cache_miss()
         with self._condition:
             if self._stopped:
                 return
-            self._advance_generation_locked()
+            if self._should_advance_generation_for_request_locked(requested_t):
+                self._advance_generation_locked()
+                self._waiting_request_by_key.clear()
+                self._emitted_request_keys.clear()
             self._last_t = requested_t
             self._pending_t = self._last_t
             self._pending_skip_current = cached is not None
+            if cached is None:
+                self._waiting_request_by_key[requested_key] = requested_t
             self._condition.notify()
 
     def set_playing(self, playing: bool) -> None:
@@ -434,8 +457,11 @@ class NativeAsyncSubtitleRenderer(QObject):
             self._playing = normalized
             if self._last_t is not None:
                 self._advance_generation_locked()
+                self._waiting_request_by_key.clear()
+                self._emitted_request_keys.clear()
                 self._pending_t = self._last_t
                 self._pending_skip_current = False
+                self._waiting_request_by_key[self._frame_cache.key_for(self._last_t)] = self._last_t
                 self._condition.notify()
 
     def stop(self) -> None:
@@ -455,7 +481,18 @@ class NativeAsyncSubtitleRenderer(QObject):
             snapshot = self._take_next_request()
             if snapshot is None:
                 return
-            track, style, width, height, t_ms, generation, needs_configure, playing, skip_current = snapshot
+            (
+                track,
+                style,
+                width,
+                height,
+                t_ms,
+                generation,
+                needs_configure,
+                restart_renderer,
+                playing,
+                skip_current,
+            ) = snapshot
             if track is None or style is None:
                 continue
             if self._renderer_failed:
@@ -470,17 +507,21 @@ class NativeAsyncSubtitleRenderer(QObject):
                     t_ms=t_ms,
                     generation=generation,
                     needs_configure=needs_configure,
+                    restart_renderer=restart_renderer,
                     playing=playing,
                     skip_current=skip_current,
                 )
-            except NativeRendererError:
+            except NativeRendererError as exc:
+                self._stats.note_native_renderer_failure()
+                if _env_enabled("KROK_SUBTITLE_NATIVE_DEBUG_FAILURES", "0"):
+                    print(f"native preview failed: {exc}")
                 self._renderer_failed = True
                 self._close_renderer()
                 self._emit_python_fallback(track, style, width, height, t_ms, generation)
 
     def _take_next_request(
         self,
-    ) -> tuple[TimingTrack | None, Style | None, int, int, int, int, bool, bool, bool] | None:
+    ) -> tuple[TimingTrack | None, Style | None, int, int, int, int, bool, bool, bool, bool] | None:
         with self._condition:
             while not self._stopped and self._pending_t is None:
                 self._condition.wait()
@@ -492,6 +533,8 @@ class NativeAsyncSubtitleRenderer(QObject):
             self._pending_skip_current = False
             needs_configure = self._needs_configure
             self._needs_configure = False
+            restart_renderer = self._restart_renderer
+            self._restart_renderer = False
             return (
                 self._track,
                 self._style,
@@ -500,6 +543,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                 t_ms,
                 self._generation,
                 needs_configure,
+                restart_renderer,
                 self._playing,
                 skip_current,
             )
@@ -514,6 +558,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         t_ms: int,
         generation: int,
         needs_configure: bool,
+        restart_renderer: bool,
         playing: bool,
         skip_current: bool,
     ) -> None:
@@ -524,9 +569,14 @@ class NativeAsyncSubtitleRenderer(QObject):
             lookahead_frames=self._lookahead_frames,
             include_current=not skip_current,
         )
+        timestamps = self._include_waiting_timestamps(timestamps, t_ms=t_ms)
         if not timestamps:
             return
         with self._process_lock:
+            if restart_renderer and self._renderer is not None:
+                self._renderer.close()
+                self._renderer = None
+                needs_configure = True
             renderer_was_missing = self._renderer is None
             renderer = self._ensure_renderer()
             if renderer_was_missing or needs_configure:
@@ -547,11 +597,20 @@ class NativeAsyncSubtitleRenderer(QObject):
                     event = renderer.read_event()
                     if event.get("event") == "frame_ready":
                         if self._is_current_generation(generation):
-                            with SharedFrameRingReader.from_event(event) as reader:
-                                slot = reader.read_frame(event)
-                            image = slot.to_qimage()
-                            if int(slot.t_ms) == int(t_ms):
+                            try:
+                                with SharedFrameRingReader.from_event(event) as reader:
+                                    slot = reader.read_frame(event)
+                                image = slot.to_qimage()
+                            except NativeRendererError:
+                                self._stats.note_stale_frame_dropped()
+                                continue
+                            requested_t = self._take_waiting_request_for_slot(slot.t_ms)
+                            if requested_t is not None:
+                                self.frame_ready.emit(image, requested_t)
+                            elif int(slot.t_ms) == int(t_ms) and self._mark_emitted_if_new(slot.t_ms):
                                 self.frame_ready.emit(image, slot.t_ms)
+                            elif self._was_emitted(slot.t_ms):
+                                continue
                             else:
                                 self._stats.note_future_frame_cached()
                                 self._frame_cache.store(slot.t_ms, image)
@@ -605,6 +664,51 @@ class NativeAsyncSubtitleRenderer(QObject):
     def _is_current_generation(self, generation: int) -> bool:
         with self._condition:
             return not self._stopped and int(generation) == self._generation
+
+    def _take_waiting_request_for_slot(self, t_ms: int) -> Optional[int]:
+        key = self._frame_cache.key_for(int(t_ms))
+        with self._condition:
+            requested_t = self._waiting_request_by_key.pop(key, None)
+            if requested_t is None or key in self._emitted_request_keys:
+                return None
+            self._emitted_request_keys.add(key)
+            return requested_t
+
+    def _mark_emitted_if_new(self, t_ms: int) -> bool:
+        key = self._frame_cache.key_for(int(t_ms))
+        with self._condition:
+            if key in self._emitted_request_keys:
+                return False
+            self._emitted_request_keys.add(key)
+            return True
+
+    def _was_emitted(self, t_ms: int) -> bool:
+        key = self._frame_cache.key_for(int(t_ms))
+        with self._condition:
+            return key in self._emitted_request_keys
+
+    def _include_waiting_timestamps(self, timestamps: list[int], *, t_ms: int) -> list[int]:
+        if not self._playing:
+            return timestamps
+        with self._condition:
+            waiting = sorted(
+                int(value)
+                for key, value in self._waiting_request_by_key.items()
+                if key not in self._emitted_request_keys and int(value) <= int(t_ms)
+            )
+        return list(dict.fromkeys([*waiting, *timestamps]))
+
+    def _should_advance_generation_for_request_locked(self, requested_t: int) -> bool:
+        if not self._playing:
+            return True
+        if self._last_t is None:
+            return False
+        frame_ms = max(1000.0 / max(self._fps, 1), 1.0)
+        delta = int(requested_t) - int(self._last_t)
+        if delta < -frame_ms:
+            return True
+        lookahead_window_ms = frame_ms * max(self._lookahead_frames + 1, 1)
+        return delta > lookahead_window_ms
 
     def _advance_generation_locked(self) -> None:
         active_generation = self._active_generation

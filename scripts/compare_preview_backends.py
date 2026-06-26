@@ -20,6 +20,7 @@ if str(ROOT) not in sys.path:
 class PreviewBackendSample:
     t_ms: int
     latency_ms: float
+    phase: str = "request"
 
 
 @dataclass
@@ -28,6 +29,7 @@ class _BackendRunState:
     requested_at: dict[int, float] = field(default_factory=dict)
     samples: list[PreviewBackendSample] = field(default_factory=list)
     images: dict[int, object] = field(default_factory=dict)
+    phase: str = "request"
 
 
 def _playback_times(*, duration_ms: int, fps: int) -> list[int]:
@@ -52,35 +54,127 @@ def _percentile(values: Iterable[float], q: float) -> float:
     return items[index]
 
 
+def _format_t_ms_list(values: Iterable[int], *, limit: int = 24) -> str:
+    items = [int(value) for value in values]
+    head = items[: max(int(limit), 0)]
+    text = ";".join(str(value) for value in head)
+    if len(items) > len(head):
+        suffix = f"...(+{len(items) - len(head)})"
+        return f"{text};{suffix}" if text else suffix
+    return text
+
+
+def _samples_by_t(samples: Iterable[PreviewBackendSample]) -> dict[int, list[PreviewBackendSample]]:
+    by_t: dict[int, list[PreviewBackendSample]] = {}
+    for sample in samples:
+        by_t.setdefault(int(sample.t_ms), []).append(sample)
+    return by_t
+
+
+def _leading_missing_count(requested_t_ms: list[int], ready_t_ms: set[int]) -> int:
+    count = 0
+    for t_ms in requested_t_ms:
+        if t_ms in ready_t_ms:
+            break
+        count += 1
+    return count
+
+
+def _trailing_missing_count(requested_t_ms: list[int], ready_t_ms: set[int]) -> int:
+    count = 0
+    for t_ms in reversed(requested_t_ms):
+        if t_ms in ready_t_ms:
+            break
+        count += 1
+    return count
+
+
 def _summarize_backend_samples(
     backend: str,
     *,
-    requested_count: int,
+    requested_count: int | None = None,
+    requested_t_ms: Iterable[int] | None = None,
     duration_ms: int,
     samples: list[PreviewBackendSample],
     extra: dict[str, int] | None = None,
 ) -> dict[str, str | int]:
-    first_by_t: dict[int, PreviewBackendSample] = {}
-    for sample in samples:
-        first_by_t.setdefault(int(sample.t_ms), sample)
+    by_t = _samples_by_t(samples)
+    first_by_t: dict[int, PreviewBackendSample] = {
+        t_ms: events[0] for t_ms, events in by_t.items() if events
+    }
+    if requested_t_ms is None:
+        requested = sorted(first_by_t)
+        requested_frames = int(requested_count or 0)
+    else:
+        requested = [int(t_ms) for t_ms in requested_t_ms]
+        requested_frames = len(requested)
+    requested_set = set(requested)
     latencies = [sample.latency_ms for sample in first_by_t.values()]
     ready_events = len(samples)
-    ready_count = len(first_by_t)
+    ready_count = len(first_by_t) if requested_t_ms is None else len(requested_set & set(first_by_t))
+    duplicate_t_ms = sorted(t_ms for t_ms, events in by_t.items() if len(events) > 1)
+    missing_t_ms = [t_ms for t_ms in requested if t_ms not in first_by_t]
+    ready_t_ms = requested_set & set(first_by_t)
+    leading_missing = _leading_missing_count(requested, ready_t_ms)
+    trailing_missing = _trailing_missing_count(requested, ready_t_ms)
+    steady_requested = requested_frames - leading_missing - trailing_missing
+    steady_missing = max(len(missing_t_ms) - leading_missing - trailing_missing, 0)
+    steady_ready = max(steady_requested - steady_missing, 0)
+    settle_ready_t_ms = sorted(
+        t_ms
+        for t_ms in requested_set
+        if t_ms in first_by_t and first_by_t[t_ms].phase == "settle"
+    )
     row: dict[str, str | int] = {
         "backend": backend,
-        "requested_frames": int(requested_count),
+        "requested_frames": requested_frames,
         "ready_events": ready_events,
         "ready_frames": ready_count,
         "duplicate_ready_events": max(ready_events - ready_count, 0),
-        "dropped_frames": max(int(requested_count) - ready_count, 0),
+        "dropped_frames": max(requested_frames - ready_count, 0),
+        "leading_missing_frames": leading_missing,
+        "trailing_missing_frames": trailing_missing,
+        "steady_requested_frames": steady_requested,
+        "steady_ready_frames": steady_ready,
+        "steady_dropped_frames": steady_missing,
+        "ready_in_settle_frames": len(settle_ready_t_ms),
         "ready_fps": f"{(ready_count * 1000.0 / max(int(duration_ms), 1)):.2f}",
         "latency_mean_ms": f"{_mean(latencies):.4f}",
         "latency_p50_ms": f"{_percentile(latencies, 0.5):.4f}",
         "latency_p95_ms": f"{_percentile(latencies, 0.95):.4f}",
+        "missing_t_ms": _format_t_ms_list(missing_t_ms),
+        "duplicate_t_ms": _format_t_ms_list(duplicate_t_ms),
+        "settle_ready_t_ms": _format_t_ms_list(settle_ready_t_ms),
     }
     if extra:
         row.update({key: int(value) for key, value in extra.items()})
     return row
+
+
+def _detail_rows(
+    backend: str,
+    *,
+    requested_t_ms: Iterable[int],
+    samples: list[PreviewBackendSample],
+) -> list[dict[str, str | int]]:
+    by_t = _samples_by_t(samples)
+    rows: list[dict[str, str | int]] = []
+    for index, t_ms in enumerate(int(value) for value in requested_t_ms):
+        events = by_t.get(t_ms, [])
+        first = events[0] if events else None
+        rows.append(
+            {
+                "backend": backend,
+                "request_index": index,
+                "t_ms": t_ms,
+                "ready_events": len(events),
+                "duplicate_ready_events": max(len(events) - 1, 0),
+                "missing": 0 if first is not None else 1,
+                "first_latency_ms": f"{first.latency_ms:.4f}" if first is not None else "",
+                "first_ready_phase": first.phase if first is not None else "",
+            }
+        )
+    return rows
 
 
 def _image_diff_summary(first, second, *, max_samples: int = 20_000) -> dict[str, int | str]:
@@ -138,6 +232,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--settle-ms", type=int, default=1500, help="Extra wait after last request")
     parser.add_argument("--native-renderer", type=Path, default=None, help="Optional native sidecar executable")
     parser.add_argument("--out", type=Path, default=None, help="Summary CSV output path")
+    parser.add_argument("--details-out", type=Path, default=None, help="Per-request detail CSV output path")
     parser.add_argument("--offscreen", action="store_true", help="Set QT_QPA_PLATFORM=offscreen")
     return parser
 
@@ -153,7 +248,7 @@ def _run_backend(
     fps: int,
     sample_images: int,
     settle_ms: int,
-) -> tuple[dict[str, str | int], dict[int, object]]:
+) -> tuple[dict[str, str | int], dict[int, object], list[dict[str, str | int]]]:
     from PyQt6.QtCore import QTimer
     from PyQt6.QtWidgets import QApplication
 
@@ -176,7 +271,11 @@ def _run_backend(
         if requested_at is None:
             return
         state.samples.append(
-            PreviewBackendSample(t_ms=int(t_ms), latency_ms=(now - requested_at) * 1000.0)
+            PreviewBackendSample(
+                t_ms=int(t_ms),
+                latency_ms=(now - requested_at) * 1000.0,
+                phase=state.phase,
+            )
         )
         index = times.index(int(t_ms)) if int(t_ms) in times else -1
         if index >= 0 and index % retain_every == 0 and len(state.images) < sample_images:
@@ -193,6 +292,7 @@ def _run_backend(
         index = state_index["value"]
         if index >= len(times):
             renderer.set_playing(False)
+            state.phase = "settle"
             QTimer.singleShot(max(int(settle_ms), 0), app.quit)
             return
         t_ms = int(times[index])
@@ -209,12 +309,13 @@ def _run_backend(
     renderer.stop()
     summary = _summarize_backend_samples(
         backend,
-        requested_count=requested_count,
+        requested_t_ms=times,
         duration_ms=max(times[-1] if times else 0, 1),
         samples=state.samples,
         extra=extra,
     )
-    return summary, state.images
+    details = _detail_rows(backend, requested_t_ms=times, samples=state.samples)
+    return summary, state.images, details
 
 
 def _write_csv(path: Path, rows: list[dict[str, str | int]]) -> None:
@@ -248,9 +349,10 @@ def main(argv: list[str] | None = None) -> int:
     times = _playback_times(duration_ms=args.duration_ms, fps=args.fps)
 
     rows: list[dict[str, str | int]] = []
+    detail_rows: list[dict[str, str | int]] = []
     images_by_backend: dict[str, dict[int, object]] = {}
     for backend in ("python", "native"):
-        summary, images = _run_backend(
+        summary, images, details = _run_backend(
             backend,
             track=track,
             style=style,
@@ -262,12 +364,20 @@ def main(argv: list[str] | None = None) -> int:
             settle_ms=args.settle_ms,
         )
         rows.append(summary)
+        detail_rows.extend(details)
         images_by_backend[backend] = images
         print(
             f"{backend}: ready={summary['ready_frames']}/{summary['requested_frames']} "
             f"events={summary['ready_events']} dup={summary['duplicate_ready_events']} "
-            f"fps={summary['ready_fps']} latency_p95={summary['latency_p95_ms']}ms"
+            f"leading_miss={summary['leading_missing_frames']} "
+            f"steady_drop={summary['steady_dropped_frames']} "
+            f"settle={summary['ready_in_settle_frames']} fps={summary['ready_fps']} "
+            f"latency_p95={summary['latency_p95_ms']}ms"
         )
+        if summary.get("missing_t_ms"):
+            print(f"{backend} missing_t_ms: {summary['missing_t_ms']}")
+        if summary.get("duplicate_t_ms"):
+            print(f"{backend} duplicate_t_ms: {summary['duplicate_t_ms']}")
 
     common_times = sorted(set(images_by_backend["python"]) & set(images_by_backend["native"]))
     for t_ms in common_times:
@@ -286,6 +396,12 @@ def main(argv: list[str] | None = None) -> int:
         out = args.out
     _write_csv(out, rows)
     print(f"CSV -> {out}")
+    if args.details_out is None:
+        details_out = out.with_name(f"{out.stem}_details{out.suffix}")
+    else:
+        details_out = args.details_out
+    _write_csv(details_out, detail_rows)
+    print(f"Details CSV -> {details_out}")
     return 0
 
 
