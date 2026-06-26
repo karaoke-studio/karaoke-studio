@@ -230,6 +230,41 @@ def _image_diff_summary(first: Path, second: Path, *, max_samples: int = 20_000)
     }
 
 
+def _rgba_bytes_diff_summary(
+    first: bytes,
+    second: bytes,
+    *,
+    width: int,
+    height: int,
+    max_samples: int = 20_000,
+) -> dict[str, int]:
+    expected = max(int(width), 0) * max(int(height), 0) * 4
+    if expected <= 0:
+        return {"width": int(width), "height": int(height), "sampled_pixels": 0, "changed_pixels": 0, "max_channel_delta": 0}
+    if len(first) < expected or len(second) < expected:
+        raise ValueError(f"RGBA payload is too small: {len(first)} / {len(second)} < {expected}")
+    total = int(width) * int(height)
+    stride = max(int(round((total / max(int(max_samples), 1)) ** 0.5)), 1)
+    sampled = 0
+    changed = 0
+    max_delta = 0
+    for y in range(0, int(height), stride):
+        for x in range(0, int(width), stride):
+            offset = (y * int(width) + x) * 4
+            delta = max(abs(first[offset + channel] - second[offset + channel]) for channel in range(4))
+            if delta:
+                changed += 1
+                max_delta = max(max_delta, delta)
+            sampled += 1
+    return {
+        "width": int(width),
+        "height": int(height),
+        "sampled_pixels": sampled,
+        "changed_pixels": changed,
+        "max_channel_delta": max_delta,
+    }
+
+
 def _quality_rows(
     *,
     ffmpeg_path: str,
@@ -255,6 +290,43 @@ def _quality_rows(
         )
         diff = _image_diff_summary(python_frame, native_frame)
         rows.append({"backend": "quality", "t_ms": t_ms, **diff})
+    return rows
+
+
+def _raw_overlay_quality_rows(
+    *,
+    track,
+    style,
+    width: int,
+    height: int,
+    fps: int,
+    duration_ms: int,
+    sample_count: int,
+    native_renderer: Path | None,
+) -> list[dict[str, str | int | float]]:
+    from krok_helper.subtitle_render.engine.native_export import iter_native_rgba_frames_at_times
+    from krok_helper.subtitle_render.engine.renderer import _render_overlay_frame
+
+    timestamps = _sample_times(duration_ms, sample_count)
+    native_frames = {
+        int(t_ms): frame
+        for t_ms, frame in iter_native_rgba_frames_at_times(
+            track,
+            style,
+            timestamps,
+            width=width,
+            height=height,
+            fps=fps,
+            renderer_path=native_renderer,
+            chunk_frames=max(len(timestamps), 1),
+        )
+    }
+    rows: list[dict[str, str | int | float]] = []
+    for t_ms in timestamps:
+        python_frame = _render_overlay_frame(track, style, t_ms, width, height)
+        native_frame = native_frames[t_ms]
+        diff = _rgba_bytes_diff_summary(python_frame, native_frame, width=width, height=height)
+        rows.append({"backend": "raw_quality", "t_ms": t_ms, **diff})
     return rows
 
 
@@ -285,6 +357,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--encoder-mode", default="cpu", choices=("cpu", "nvenc", "qsv", "amf"), help="Encoder mode")
     parser.add_argument("--include-audio", action="store_true", help="Copy optional background audio")
     parser.add_argument("--sample-frames", type=int, default=5, help="Extract this many output frames for diff")
+    parser.add_argument("--raw-overlay-quality", action="store_true", help="Also compare Python/native RGBA subtitle overlay frames before video encoding")
     parser.add_argument("--disable-strip", action="store_true", help="Disable Python strip/band optimization for fair full-frame A/B")
     parser.add_argument("--out-dir", type=Path, default=None, help="Directory for output MP4 files")
     parser.add_argument("--out", type=Path, default=None, help="Summary CSV output path")
@@ -357,12 +430,30 @@ def main(argv: list[str] | None = None) -> int:
             sample_count=args.sample_frames,
         )
         rows.extend(quality)
+        if args.raw_overlay_quality:
+            rows.extend(
+                _raw_overlay_quality_rows(
+                    track=track,
+                    style=style,
+                    width=args.width,
+                    height=args.height,
+                    fps=args.fps,
+                    duration_ms=args.duration_ms,
+                    sample_count=args.sample_frames,
+                    native_renderer=args.native_renderer,
+                )
+            )
         _write_csv(summary_path, rows)
 
         for row in rows:
             if row["backend"] == "quality":
                 print(
                     f"quality t={row['t_ms']}ms: changed={row['changed_pixels']}/{row['sampled_pixels']} "
+                    f"max_delta={row['max_channel_delta']}"
+                )
+            elif row["backend"] == "raw_quality":
+                print(
+                    f"raw_quality t={row['t_ms']}ms: changed={row['changed_pixels']}/{row['sampled_pixels']} "
                     f"max_delta={row['max_channel_delta']}"
                 )
             else:

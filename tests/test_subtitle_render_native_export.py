@@ -198,3 +198,30 @@ def test_iter_native_rgba_frames_sends_cancel_when_cancelled_mid_range(monkeypat
         )
 
     assert _FakeNativeRendererProcess.instances[-1].cancels == [1]
+
+
+def test_iter_native_rgba_frames_at_times_uses_explicit_timestamps(monkeypatch) -> None:
+    _FakeNativeRendererProcess.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _FakeNativeRendererProcess)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeRingReader)
+
+    frames = list(
+        ne.iter_native_rgba_frames_at_times(
+            _track(),
+            Style(),
+            [167, 500, 833],
+            width=1,
+            height=1,
+            fps=60,
+            threads=2,
+            chunk_frames=3,
+        )
+    )
+
+    assert frames == [
+        (167, bytes([0, 0, 0, 255])),
+        (500, bytes([1, 1, 1, 255])),
+        (833, bytes([2, 2, 2, 255])),
+    ]
+    process = _FakeNativeRendererProcess.instances[-1]
+    assert process.ranges[0]["timestamps"] == [167, 500, 833]

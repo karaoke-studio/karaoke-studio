@@ -815,6 +815,10 @@ C:\Python314\python.exe -m pytest tests\test_subtitle_render_transport.py tests\
 
 - 已新增 `scripts/compare_export_backends.py`，可端到端对比 Python export 与 native full-frame export，输出 summary CSV，
   并从两个 MP4 中抽帧做像素采样差异统计。
+- 已新增 `--raw-overlay-quality` 可选入口：脚本会直接比较 Python painter 与 native sidecar 输出的 RGBA subtitle overlay
+  帧，跳过 ffmpeg/H.264 编码与抽帧链路，用于建立更干净的渲染器级质量基线。
+- `engine/native_export.py` 已补 `iter_native_rgba_frames_at_times()`，供质量抽样按指定 timestamp 读取 native shared-memory
+  RGBA 帧；原导出路径继续通过 `iter_native_rgba_frames()` 按帧序输出，不改变默认导出口径。
 - 可不传 `--video`，脚本会用 ffmpeg 生成黑底背景；传真实背景视频时可测完整素材链路。
 - A stain 真实 LRC、720p/60fps/5s、`--disable-strip` 初测：
   - Python full-frame：`frames=300`，约 `97.57fps`，`elapsed=3074.74ms`
@@ -835,11 +839,32 @@ C:\Python314\python.exe -m pytest tests\test_subtitle_render_transport.py tests\
 C:\Python314\python.exe scripts\compare_export_backends.py --lrc "D:\カラオケ\songs\A stain\A stain.lrc" --native-renderer "D:\カラオケ\krok-helper\build\native-renderer\krok_subtitle_renderer.exe" --duration-ms 5000 --fps 60 --width 1280 --height 720 --sample-frames 5 --disable-strip --offscreen
 C:\Python314\python.exe scripts\compare_export_backends.py --lrc "D:\カラオケ\songs\A stain\A stain.lrc" --video "D:\カラオケ\songs\A stain\A stain.mp4" --native-renderer "D:\カラオケ\krok-helper\build\native-renderer\krok_subtitle_renderer.exe" --duration-ms 5000 --fps 60 --width 1280 --height 720 --sample-frames 5 --offscreen
 C:\Python314\python.exe scripts\compare_export_backends.py --lrc "D:\カラオケ\songs\A stain\A stain.lrc" --video "D:\カラオケ\songs\A stain\A stain.mp4" --native-renderer "D:\カラオケ\krok-helper\build\native-renderer\krok_subtitle_renderer.exe" --duration-ms 5000 --fps 60 --width 1280 --height 720 --sample-frames 5 --disable-strip --offscreen
+C:\Python314\python.exe scripts\compare_export_backends.py --lrc "D:\カラオケ\songs\A stain\A stain.lrc" --video "D:\カラオケ\songs\A stain\A stain.mp4" --native-renderer "D:\カラオケ\krok-helper\build\native-renderer\krok_subtitle_renderer.exe" --duration-ms 5000 --fps 60 --width 1280 --height 720 --sample-frames 5 --disable-strip --raw-overlay-quality --offscreen
+```
+
+本轮单测补充验证：
+
+```powershell
+$env:TMP = Join-Path (Get-Location) '.tmp'; $env:TEMP = $env:TMP
+C:\Python314\python.exe -m pytest tests\test_subtitle_render_native_export.py tests\test_subtitle_render_native_benchmark.py tests\test_subtitle_render_renderer.py -q
+```
+
+结果：`57 passed in 3.18s`。
+
+短样本真实素材 smoke（A stain 真实背景，720p/60fps/1s，`--disable-strip --raw-overlay-quality`）：
+
+```text
+python: frames=60 fps=70.59 elapsed=850.00ms size=508855
+native: frames=60 fps=69.56 elapsed=862.52ms size=508855
+quality t=250ms: changed=0/18849 max_delta=0
+quality t=750ms: changed=0/18849 max_delta=0
+raw_quality t=250ms: changed=0/18849 max_delta=0
+raw_quality t=750ms: changed=0/18849 max_delta=0
 ```
 
 待继续：
 
-- 增加 raw overlay 级质量对比入口，避开 H.264 编码带来的潜在抽帧噪声。
+- 用 A stain 真实背景重跑 5s/5 帧 `--raw-overlay-quality` 端到端对比，记录 raw_quality 与 MP4 quality 两组抽样结果。
 - 若导出稳定，再考虑 UI/设置里的实验开关；否则先继续优化 native export chunk/threads/诊断字段。
 
 ### C7：构建与发布

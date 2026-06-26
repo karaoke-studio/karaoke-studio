@@ -112,6 +112,40 @@ def iter_native_rgba_frames(
     frame_total = max(int(total_frames), 0)
     if frame_total <= 0:
         return
+    timestamps = native_export_timestamps(start_frame=0, count=frame_total, fps=fps)
+    for _t_ms, frame in iter_native_rgba_frames_at_times(
+        track,
+        style,
+        timestamps,
+        width=width,
+        height=height,
+        fps=fps,
+        renderer_path=renderer_path,
+        threads=threads,
+        chunk_frames=chunk_frames,
+        should_cancel=should_cancel,
+    ):
+        yield frame
+
+
+def iter_native_rgba_frames_at_times(
+    track: TimingTrack,
+    style: Style,
+    timestamps_ms: list[int],
+    *,
+    width: int,
+    height: int,
+    fps: int,
+    renderer_path: str | os.PathLike[str] | None = None,
+    threads: int | None = None,
+    chunk_frames: int | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> Iterator[tuple[int, bytes]]:
+    """Yield ``(t_ms, rgba_bytes)`` for explicit timestamps from the sidecar."""
+    timestamps_all = [int(t_ms) for t_ms in timestamps_ms]
+    frame_total = len(timestamps_all)
+    if frame_total <= 0:
+        return
     worker_threads = native_export_threads() if threads is None else max(int(threads), 1)
     chunk_size = (
         native_export_chunk_frames(width=width, height=height, total_frames=frame_total)
@@ -126,7 +160,7 @@ def iter_native_rgba_frames(
             if should_cancel is not None and should_cancel():
                 raise ExportCancelled("已停止导出。")
             count = min(chunk_size, frame_total - start_frame)
-            timestamps = native_export_timestamps(start_frame=start_frame, count=count, fps=fps)
+            timestamps = timestamps_all[start_frame : start_frame + count]
             shm_key = f"krok-export-{os.getpid()}-{uuid.uuid4().hex}"
             renderer.start_render_range(
                 timestamps,
@@ -153,7 +187,7 @@ def iter_native_rgba_frames(
                         frame_index = int(event.get("frame_index", slot.frame_index))
                         pending[frame_index] = shared_slot_rgba_bytes(slot)
                         while next_emit in pending:
-                            yield pending.pop(next_emit)
+                            yield timestamps[next_emit], pending.pop(next_emit)
                             next_emit += 1
                     elif kind == "range_done":
                         range_done = True

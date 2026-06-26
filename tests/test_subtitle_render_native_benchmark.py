@@ -23,7 +23,9 @@ from scripts.compare_export_backends import (
     ExportRunResult,
     _build_parser as _build_export_parser,
     _frame_count as _export_frame_count,
+    _raw_overlay_quality_rows,
     _result_row as _export_result_row,
+    _rgba_bytes_diff_summary,
     _run_export as _run_export_backend,
     _sample_times as _export_sample_times,
 )
@@ -448,6 +450,7 @@ def test_compare_export_parser_accepts_native_export_options() -> None:
             "5000",
             "--sample-frames",
             "3",
+            "--raw-overlay-quality",
             "--disable-strip",
             "--out",
             "summary.csv",
@@ -459,6 +462,7 @@ def test_compare_export_parser_accepts_native_export_options() -> None:
     assert args.native_renderer.name == "renderer.exe"
     assert args.duration_ms == 5000
     assert args.sample_frames == 3
+    assert args.raw_overlay_quality is True
     assert args.disable_strip is True
     assert args.out.name == "summary.csv"
 
@@ -482,6 +486,53 @@ def test_compare_export_helpers_report_frames_samples_and_summary() -> None:
     assert row["frames"] == 60
     assert row["export_fps"] == "120.00"
     assert row["file_size"] == 1234
+
+
+def test_compare_export_rgba_bytes_diff_summary_samples_raw_overlay() -> None:
+    first = bytearray(bytes([0, 0, 0, 0]) * 4)
+    second = bytearray(first)
+    second[0:4] = bytes([0, 0, 0, 0])
+    second[4:8] = bytes([0, 10, 0, 0])
+
+    same = _rgba_bytes_diff_summary(bytes(first), bytes(first), width=2, height=2, max_samples=4)
+    diff = _rgba_bytes_diff_summary(bytes(first), bytes(second), width=2, height=2, max_samples=4)
+
+    assert same["sampled_pixels"] == 4
+    assert same["changed_pixels"] == 0
+    assert diff["changed_pixels"] == 1
+    assert diff["max_channel_delta"] == 10
+
+
+def test_compare_export_raw_overlay_quality_rows_compare_python_and_native(monkeypatch) -> None:
+    def fake_python_frame(_track, _style, t_ms, width, height):
+        value = t_ms // 100
+        return bytes([value, 0, 0, 255]) * (width * height)
+
+    def fake_native_frames(_track, _style, timestamps, *, width, height, **_kwargs):
+        for t_ms in timestamps:
+            value = t_ms // 100
+            yield t_ms, bytes([value, 0, 0, 255]) * (width * height)
+
+    import krok_helper.subtitle_render.engine.native_export as native_export_module
+    import krok_helper.subtitle_render.engine.renderer as renderer_module
+
+    monkeypatch.setattr(renderer_module, "_render_overlay_frame", fake_python_frame)
+    monkeypatch.setattr(native_export_module, "iter_native_rgba_frames_at_times", fake_native_frames)
+
+    rows = _raw_overlay_quality_rows(
+        track=None,
+        style=Style(),
+        width=2,
+        height=2,
+        fps=60,
+        duration_ms=300,
+        sample_count=3,
+        native_renderer=None,
+    )
+
+    assert [row["backend"] for row in rows] == ["raw_quality", "raw_quality", "raw_quality"]
+    assert [row["t_ms"] for row in rows] == [50, 150, 250]
+    assert all(row["changed_pixels"] == 0 for row in rows)
 
 
 def test_compare_export_run_sets_backend_env(monkeypatch, tmp_path) -> None:
