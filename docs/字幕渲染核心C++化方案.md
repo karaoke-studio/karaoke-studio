@@ -716,11 +716,13 @@ C:\Python314\python.exe -m pytest tests/test_subtitle_render_native_protocol.py 
   emit cached `QImage`，并继续调度新的前瞻窗口。
 - 主动取消已接入：`NativeRendererProcess.send_cancel_generation()` 只写入 cancel 命令、不消费 stdout；native preview
   在 seek / style / size / playing 状态导致 generation 前进时，会对当前活跃 generation 发送 cancel。
+- 轻量诊断计数已接入：`NativePreviewStats` 可通过 `stats_snapshot()` 读取 cache hit/miss、未来帧缓存数、过期帧丢弃数、
+  主动 cancel 次数，用于后续真实工程压测。
 
 待继续：
 
-- 当前 look-ahead 缓存仍是最小实现，需在真实播放中观察命中率、内存占用、晚到帧比例，并决定是否要按 frame index
-  或 fps-normalized bucket 做更稳定的键。
+- 当前 look-ahead 缓存仍是最小实现，需在真实播放中结合 stats 观察命中率、内存占用、晚到帧比例，并决定是否要按
+  frame index 或 fps-normalized bucket 做更稳定的键。
 - 还需要用真实高频 seek / style resize 压测主动取消路径，确认 native sidecar 的 `generation_cancelled` / `range_done`
   事件不会在极端交错下造成预览卡住或 backlog 堆积。
 - 还需要用真实重工程对比 native preview / Python async preview 的稳定帧率和画质。

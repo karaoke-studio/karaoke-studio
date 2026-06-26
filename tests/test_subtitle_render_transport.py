@@ -176,6 +176,26 @@ def test_native_preview_frame_cache_detaches_and_evicts_oldest():
     assert cache.take(1_017) is None
 
 
+def test_native_preview_stats_snapshot_tracks_core_counters():
+    from krok_helper.subtitle_render.frontend.preview_async import NativePreviewStats
+
+    stats = NativePreviewStats()
+
+    stats.note_cache_hit()
+    stats.note_cache_miss()
+    stats.note_future_frame_cached()
+    stats.note_stale_frame_dropped()
+    stats.note_generation_cancelled()
+
+    assert stats.snapshot() == {
+        "cache_hits": 1,
+        "cache_misses": 1,
+        "future_frames_cached": 1,
+        "stale_frames_dropped": 1,
+        "generations_cancelled": 1,
+    }
+
+
 def test_async_preview_enabled_defaults_on_and_env_can_disable(monkeypatch):
     from krok_helper.subtitle_render.frontend.preview_async import async_preview_enabled
 
@@ -422,6 +442,49 @@ def test_native_async_renderer_cancels_active_generation_on_new_request(qapp, mo
         renderer.request(1_017)
 
         assert cancels == [2]
+        assert renderer.stats_snapshot()["generations_cancelled"] == 1
+    finally:
+        renderer.stop()
+
+
+def test_native_async_renderer_stats_report_cache_counts(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+
+    unblock = threading.Event()
+
+    class FakeNativeRendererProcess:
+        def start(self):
+            return {"ok": True, "event": "ready"}
+
+        def configure(self, *args, **kwargs):
+            return {"ok": True, "event": "configured"}
+
+        def start_render_range(self, *args, **kwargs):
+            return {"ok": True, "event": "range_started"}
+
+        def read_event(self):
+            unblock.wait(timeout=2.0)
+            return {"ok": True, "event": "range_done"}
+
+        def send_cancel_generation(self, generation):
+            unblock.set()
+
+        def close(self):
+            unblock.set()
+
+    monkeypatch.setattr(pa, "NativeRendererProcess", FakeNativeRendererProcess)
+    renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
+    try:
+        image = QImage(8, 8, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor("#111111"))
+        renderer._frame_cache.store(1_017, image)
+
+        renderer.request(1_017)
+        renderer.request(1_000)
+
+        stats = renderer.stats_snapshot()
+        assert stats["cache_hits"] == 1
+        assert stats["cache_misses"] == 1
     finally:
         renderer.stop()
 

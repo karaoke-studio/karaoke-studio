@@ -103,6 +103,45 @@ class NativePreviewFrameCache:
             self._images.clear()
 
 
+class NativePreviewStats:
+    """Thread-safe counters for native preview scheduler diagnostics."""
+
+    _COUNTERS = (
+        "cache_hits",
+        "cache_misses",
+        "future_frames_cached",
+        "stale_frames_dropped",
+        "generations_cancelled",
+    )
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._values = {key: 0 for key in self._COUNTERS}
+
+    def note_cache_hit(self) -> None:
+        self._increment("cache_hits")
+
+    def note_cache_miss(self) -> None:
+        self._increment("cache_misses")
+
+    def note_future_frame_cached(self) -> None:
+        self._increment("future_frames_cached")
+
+    def note_stale_frame_dropped(self) -> None:
+        self._increment("stale_frames_dropped")
+
+    def note_generation_cancelled(self) -> None:
+        self._increment("generations_cancelled")
+
+    def snapshot(self) -> dict[str, int]:
+        with self._lock:
+            return dict(self._values)
+
+    def _increment(self, key: str) -> None:
+        with self._lock:
+            self._values[key] += 1
+
+
 def preview_render_target_size(
     logical_width: int,
     logical_height: int,
@@ -310,6 +349,7 @@ class NativeAsyncSubtitleRenderer(QObject):
             0,
         )
         self._frame_cache = NativePreviewFrameCache(self._lookahead_frames + 1)
+        self._stats = NativePreviewStats()
         self._condition = threading.Condition()
         self._process_lock = threading.Lock()
         self._thread = threading.Thread(
@@ -353,7 +393,10 @@ class NativeAsyncSubtitleRenderer(QObject):
         requested_t = int(t_ms)
         cached = self._frame_cache.take(requested_t)
         if cached is not None:
+            self._stats.note_cache_hit()
             self.frame_ready.emit(cached, requested_t)
+        else:
+            self._stats.note_cache_miss()
         with self._condition:
             if self._stopped:
                 return
@@ -481,7 +524,10 @@ class NativeAsyncSubtitleRenderer(QObject):
                             if int(slot.t_ms) == int(t_ms):
                                 self.frame_ready.emit(image, slot.t_ms)
                             else:
+                                self._stats.note_future_frame_cached()
                                 self._frame_cache.store(slot.t_ms, image)
+                        else:
+                            self._stats.note_stale_frame_dropped()
                     elif event.get("event") == "range_done":
                         return
                     elif event.get("event") == "generation_cancelled":
@@ -539,5 +585,9 @@ class NativeAsyncSubtitleRenderer(QObject):
             return
         try:
             renderer.send_cancel_generation(active_generation)
+            self._stats.note_generation_cancelled()
         except NativeRendererError:
             self._renderer_failed = True
+
+    def stats_snapshot(self) -> dict[str, int]:
+        return self._stats.snapshot()
