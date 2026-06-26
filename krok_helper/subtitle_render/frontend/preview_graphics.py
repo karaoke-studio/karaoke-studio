@@ -26,7 +26,9 @@ from PyQt6.QtWidgets import (
 from krok_helper.subtitle_render.engine.painter import frame_vertical_bounds, paint_frame_to_painter
 from krok_helper.subtitle_render.frontend.preview_async import (
     AsyncSubtitleRenderer,
+    NativeAsyncSubtitleRenderer,
     async_preview_enabled,
+    native_preview_enabled,
 )
 from krok_helper.subtitle_render.frontend.preview_media import qt_playback_source
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
@@ -222,7 +224,8 @@ class PreviewGraphicsView(QGraphicsView):
         # 单帧 14ms paint 阻塞（§9 A4 解耦）。默认开，env KROK_SUBTITLE_ASYNC_PREVIEW=0 回退。
         self._async_renderer: Optional[AsyncSubtitleRenderer] = None
         if async_preview_enabled():
-            self._async_renderer = AsyncSubtitleRenderer(self._output_w, self._output_h, self)
+            renderer_cls = NativeAsyncSubtitleRenderer if native_preview_enabled() else AsyncSubtitleRenderer
+            self._async_renderer = renderer_cls(self._output_w, self._output_h, self)
             self._async_renderer.frame_ready.connect(
                 self._on_async_frame, Qt.ConnectionType.QueuedConnection
             )
@@ -269,8 +272,9 @@ class PreviewGraphicsView(QGraphicsView):
         self._async_renderer.set_state(self._track, self._style)
         self._async_renderer.request(self._t_ms)
 
-    def _on_async_frame(self, image: QImage, t_ms: int) -> None:  # noqa: ARG002
-        # GUI 线程：worker 渲染好的最新帧 → 交给字幕 item blit。
+    def _on_async_frame(self, image: QImage, t_ms: int) -> None:
+        if int(t_ms) != int(self._t_ms):
+            return
         self._subtitle_item.set_async_image(image)
 
     def set_output_size(self, width: int, height: int) -> None:

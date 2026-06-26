@@ -5,6 +5,7 @@ from pathlib import Path
 import stat
 import sys
 import textwrap
+import uuid
 
 import numpy as np
 import pytest
@@ -38,6 +39,7 @@ from krok_helper.subtitle_render.models import (
 from krok_helper.subtitle_render.native_backend import (
     NativeRendererError,
     NativeRendererProcess,
+    SharedFrameRingReader,
     default_native_renderer_path,
     resolve_native_renderer_path,
 )
@@ -272,6 +274,72 @@ def test_native_renderer_process_round_trips_with_noisy_sidecar(tmp_path):
 
     renderer.close()
     assert renderer.is_running is False
+
+
+def test_native_render_range_shared_memory_reader_reads_slot_when_exe_exists(monkeypatch):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("K", 0),
+                    TimingChar("a", 400),
+                    TimingChar("r", 800),
+                    TimingChar("a", 1200),
+                ],
+                end_ms=1800,
+            )
+        ],
+    )
+    style = Style(
+        font_size_px=48,
+        line_lead_in_ms=0,
+        line_tail_ms=300,
+        stroke_width_px=4,
+        stroke2_width_px=0,
+        line_y_position="center",
+    )
+    generation = 41
+    shm_key = f"krok-test-shm-reader-{os.getpid()}-{uuid.uuid4().hex}"
+
+    with NativeRendererProcess(renderer_path, response_timeout_s=3.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=320, height=180, fps=60)
+        started = renderer.start_render_range(
+            [900],
+            generation=generation,
+            threads=2,
+            shm_key=shm_key,
+            ring_slots=2,
+        )
+        assert started["event"] == "range_started"
+        assert started["shm_key"] == shm_key
+
+        frame = renderer.read_event()
+        assert frame["event"] == "frame_ready"
+        assert frame["payload"] == "shared_memory"
+        with SharedFrameRingReader.from_event(frame) as reader:
+            slot = reader.read_frame(frame)
+            image = slot.to_qimage()
+
+        assert slot.shm_key == shm_key
+        assert slot.generation == generation
+        assert slot.frame_index == 0
+        assert slot.t_ms == 900
+        assert slot.width == 320
+        assert slot.height == 180
+        assert slot.stride >= slot.width * 4
+        assert slot.pixel_format == "rgba8888"
+        assert len(slot.payload) == int(frame["payload_bytes"])
+        rows = np.frombuffer(slot.payload, dtype=np.uint8).reshape(slot.height, slot.stride)
+        assert int(rows[:, 3 : slot.width * 4 : 4].max()) > 0
+        assert image.width() == slot.width
+        assert image.height() == slot.height
+        assert renderer.read_event()["event"] == "range_done"
 
 
 def test_native_renderer_process_times_out_when_sidecar_stalls(tmp_path):

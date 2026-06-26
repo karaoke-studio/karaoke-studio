@@ -14,6 +14,8 @@ Background (§9 A4 诊断)：预览预览的真实帧率天花板**不是单帧�
 from __future__ import annotations
 
 import os
+import threading
+import uuid
 from typing import Optional
 
 from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal as Signal, pyqtSlot as Slot
@@ -21,15 +23,36 @@ from PyQt6.QtGui import QImage, QPainter
 
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
 from krok_helper.subtitle_render.models import Style, TimingTrack
+from krok_helper.subtitle_render.native_backend import (
+    NativeRendererError,
+    NativeRendererProcess,
+    SharedFrameRingReader,
+    resolve_native_renderer_path,
+)
 
 
-def async_preview_enabled() -> bool:
-    return os.environ.get("KROK_SUBTITLE_ASYNC_PREVIEW", "1").strip().lower() not in (
+def _env_enabled(name: str, default: str) -> bool:
+    return os.environ.get(name, default).strip().lower() not in (
         "0",
         "false",
         "no",
         "off",
     )
+
+
+def async_preview_enabled() -> bool:
+    return _env_enabled("KROK_SUBTITLE_ASYNC_PREVIEW", "1")
+
+
+def native_preview_enabled() -> bool:
+    """Return whether preview should try the native sidecar renderer.
+
+    The sidecar path is intentionally opt-in while C5 is still being wired.
+    Missing executables silently keep the existing Python async renderer.
+    """
+    if not _env_enabled("KROK_SUBTITLE_NATIVE_RENDER", "0"):
+        return False
+    return resolve_native_renderer_path() is not None
 
 
 def preview_render_target_size(
@@ -204,3 +227,202 @@ class AsyncSubtitleRenderer(QObject):
         if not self._thread.wait(2000):
             self._thread.quit()
             self._thread.wait(1000)
+
+
+class NativeAsyncSubtitleRenderer(QObject):
+    """Preview renderer backed by the native sidecar shared-memory range path."""
+
+    frame_ready = Signal(QImage, int)
+
+    def __init__(self, width: int, height: int, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self._logical_w = max(int(width), 1)
+        self._logical_h = max(int(height), 1)
+        self._device_pixel_ratio = 1.0
+        self._track: Optional[TimingTrack] = None
+        self._style: Optional[Style] = None
+        self._generation = 0
+        self._pending_t: Optional[int] = None
+        self._stopped = False
+        self._needs_configure = True
+        self._renderer: Optional[NativeRendererProcess] = None
+        self._renderer_failed = False
+        self._threads = max(int(os.environ.get("KROK_SUBTITLE_NATIVE_THREADS", "4") or 4), 1)
+        self._ring_slots = max(int(os.environ.get("KROK_SUBTITLE_NATIVE_RING_SLOTS", "3") or 3), 1)
+        self._condition = threading.Condition()
+        self._process_lock = threading.Lock()
+        self._thread = threading.Thread(
+            target=self._run,
+            name="subtitle-preview-native-render",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def set_state(self, track: Optional[TimingTrack], style: Optional[Style]) -> None:
+        with self._condition:
+            if self._stopped:
+                return
+            self._track = track
+            self._style = style
+            self._generation += 1
+            self._needs_configure = True
+            self._condition.notify()
+
+    def set_size(self, width: int, height: int) -> None:
+        self.set_render_target(width, height, self._device_pixel_ratio)
+
+    def set_render_target(self, width: int, height: int, device_pixel_ratio: float = 1.0) -> None:
+        with self._condition:
+            if self._stopped:
+                return
+            w = max(int(width), 1)
+            h = max(int(height), 1)
+            dpr = max(float(device_pixel_ratio or 1.0), 0.01)
+            if (w, h, dpr) != (self._logical_w, self._logical_h, self._device_pixel_ratio):
+                self._needs_configure = True
+                self._generation += 1
+            self._logical_w = w
+            self._logical_h = h
+            self._device_pixel_ratio = dpr
+            self._condition.notify()
+
+    def request(self, t_ms: int) -> None:
+        with self._condition:
+            if self._stopped:
+                return
+            self._generation += 1
+            self._pending_t = int(t_ms)
+            self._condition.notify()
+
+    def stop(self) -> None:
+        with self._condition:
+            if self._stopped:
+                return
+            self._stopped = True
+            self._condition.notify_all()
+        with self._process_lock:
+            if self._renderer is not None:
+                self._renderer.close()
+                self._renderer = None
+        self._thread.join(timeout=2.0)
+
+    def _run(self) -> None:
+        while True:
+            snapshot = self._take_next_request()
+            if snapshot is None:
+                return
+            track, style, width, height, t_ms, generation, needs_configure = snapshot
+            if track is None or style is None:
+                continue
+            if self._renderer_failed:
+                self._emit_python_fallback(track, style, width, height, t_ms, generation)
+                continue
+            try:
+                self._render_native(
+                    track,
+                    style,
+                    width=width,
+                    height=height,
+                    t_ms=t_ms,
+                    generation=generation,
+                    needs_configure=needs_configure,
+                )
+            except NativeRendererError:
+                self._renderer_failed = True
+                self._close_renderer()
+                self._emit_python_fallback(track, style, width, height, t_ms, generation)
+
+    def _take_next_request(
+        self,
+    ) -> tuple[TimingTrack | None, Style | None, int, int, int, int, bool] | None:
+        with self._condition:
+            while not self._stopped and self._pending_t is None:
+                self._condition.wait()
+            if self._stopped:
+                return None
+            t_ms = int(self._pending_t or 0)
+            self._pending_t = None
+            needs_configure = self._needs_configure
+            self._needs_configure = False
+            return (
+                self._track,
+                self._style,
+                self._logical_w,
+                self._logical_h,
+                t_ms,
+                self._generation,
+                needs_configure,
+            )
+
+    def _render_native(
+        self,
+        track: TimingTrack,
+        style: Style,
+        *,
+        width: int,
+        height: int,
+        t_ms: int,
+        generation: int,
+        needs_configure: bool,
+    ) -> None:
+        with self._process_lock:
+            renderer_was_missing = self._renderer is None
+            renderer = self._ensure_renderer()
+            if renderer_was_missing or needs_configure:
+                renderer.configure(track, style, width=width, height=height, fps=60)
+            shm_key = f"krok-preview-{os.getpid()}-{uuid.uuid4().hex}"
+            renderer.start_render_range(
+                [t_ms],
+                generation=generation,
+                threads=self._threads,
+                shm_key=shm_key,
+                ring_slots=self._ring_slots,
+            )
+            while True:
+                event = renderer.read_event()
+                if event.get("event") == "frame_ready":
+                    if self._is_current_generation(generation):
+                        with SharedFrameRingReader.from_event(event) as reader:
+                            slot = reader.read_frame(event)
+                        image = slot.to_qimage()
+                        self.frame_ready.emit(image, slot.t_ms)
+                elif event.get("event") == "range_done":
+                    return
+
+    def _ensure_renderer(self) -> NativeRendererProcess:
+        if self._renderer is None:
+            self._renderer = NativeRendererProcess(response_timeout_s=2.0, close_timeout_s=1.0)
+            self._renderer.start()
+            self._needs_configure = True
+        return self._renderer
+
+    def _close_renderer(self) -> None:
+        with self._process_lock:
+            if self._renderer is not None:
+                self._renderer.close()
+                self._renderer = None
+
+    def _emit_python_fallback(
+        self,
+        track: TimingTrack,
+        style: Style,
+        width: int,
+        height: int,
+        t_ms: int,
+        generation: int,
+    ) -> None:
+        if not self._is_current_generation(generation):
+            return
+        image = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(0)
+        painter = QPainter(image)
+        try:
+            paint_frame_to_painter(painter, width, height, track, int(t_ms), style)
+        finally:
+            painter.end()
+        if self._is_current_generation(generation):
+            self.frame_ready.emit(image, int(t_ms))
+
+    def _is_current_generation(self, generation: int) -> bool:
+        with self._condition:
+            return not self._stopped and int(generation) == self._generation

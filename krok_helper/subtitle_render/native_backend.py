@@ -10,11 +10,13 @@ from __future__ import annotations
 import json
 import os
 import queue
+import struct
 import subprocess
 import sys
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -22,10 +24,229 @@ from krok_helper.subtitle_render.models import Style, TimingTrack
 from krok_helper.subtitle_render.native_protocol import build_render_ir
 
 _EXE_NAME = "krok_subtitle_renderer.exe" if os.name == "nt" else "krok_subtitle_renderer"
+_SHARED_FRAME_HEADER = struct.Struct("<10i")
+_SHARED_FRAME_READY = 2
+_SHARED_FRAME_PIXEL_FORMATS = {
+    1: "rgba8888",
+}
 
 
 class NativeRendererError(RuntimeError):
     """Raised when the native sidecar reports an error or exits unexpectedly."""
+
+
+@dataclass(frozen=True)
+class SharedFrameSlot:
+    """A copied RGBA frame read from one native shared-memory ring slot."""
+
+    shm_key: str
+    slot_index: int
+    generation: int
+    frame_index: int
+    t_ms: int
+    width: int
+    height: int
+    stride: int
+    pixel_format: str
+    payload: bytes
+
+    def to_qimage(self):
+        """Return a detached ``QImage`` backed by this slot payload copy."""
+        if self.pixel_format != "rgba8888":
+            raise NativeRendererError(f"unsupported shared frame pixel format: {self.pixel_format}")
+        from PyQt6.QtGui import QImage
+
+        image = QImage(
+            self.payload,
+            self.width,
+            self.height,
+            self.stride,
+            QImage.Format.Format_RGBA8888,
+        )
+        if image.isNull():
+            raise NativeRendererError("failed to construct QImage from shared frame payload")
+        return image.copy()
+
+
+class SharedFrameRingReader:
+    """Attach to the native renderer's ``QSharedMemory`` ring and copy ready slots."""
+
+    def __init__(self, shm_key: str) -> None:
+        if not shm_key:
+            raise NativeRendererError("shared memory key is empty")
+        self.shm_key = str(shm_key)
+        self._shared = None
+
+    @classmethod
+    def from_event(cls, frame_ready_event: dict[str, Any]) -> "SharedFrameRingReader":
+        return cls(str(frame_ready_event.get("shm_key") or ""))
+
+    @property
+    def is_attached(self) -> bool:
+        return bool(self._shared is not None and self._shared.isAttached())
+
+    def attach(self) -> None:
+        if self.is_attached:
+            return
+        from PyQt6.QtCore import QSharedMemory
+
+        shared = QSharedMemory(self.shm_key)
+        if not shared.attach(QSharedMemory.AccessMode.ReadOnly):
+            raise NativeRendererError(
+                f"failed to attach native shared memory {self.shm_key!r}: {shared.errorString()}"
+            )
+        self._shared = shared
+
+    def close(self) -> None:
+        if self._shared is not None and self._shared.isAttached():
+            self._shared.detach()
+        self._shared = None
+
+    def __enter__(self) -> "SharedFrameRingReader":
+        self.attach()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.close()
+
+    def read_frame(self, frame_ready_event: dict[str, Any]) -> SharedFrameSlot:
+        """Copy and validate the slot described by a ``frame_ready`` event."""
+        self._validate_event_payload(frame_ready_event)
+        self.attach()
+        assert self._shared is not None
+
+        slot_offset = _event_int(frame_ready_event, "slot_offset")
+        header_bytes = _event_int(frame_ready_event, "header_bytes")
+        payload_offset = _event_int(frame_ready_event, "payload_offset")
+        payload_bytes = _event_int(frame_ready_event, "payload_bytes")
+        slot_index = _event_int(frame_ready_event, "slot_index")
+        slot_bytes = _event_int(frame_ready_event, "slot_bytes")
+        if header_bytes < _SHARED_FRAME_HEADER.size:
+            raise NativeRendererError(f"shared frame header is too small: {header_bytes}")
+        if slot_offset < 0 or payload_offset < 0 or payload_bytes < 0 or slot_bytes <= 0:
+            raise NativeRendererError("shared frame event contains invalid slot bounds")
+        if payload_offset < slot_offset + header_bytes:
+            raise NativeRendererError("shared frame payload overlaps slot header")
+
+        shared_size = int(self._shared.size())
+        required_size = payload_offset + payload_bytes
+        header_end = slot_offset + header_bytes
+        slot_end = slot_offset + slot_bytes
+        if header_end > shared_size or slot_end > shared_size:
+            raise NativeRendererError("shared frame slot exceeds shared memory size")
+        if required_size > shared_size:
+            raise NativeRendererError(
+                f"shared frame payload exceeds shared memory size: {required_size} > {shared_size}"
+            )
+
+        if not self._shared.lock():
+            raise NativeRendererError(
+                f"failed to lock native shared memory {self.shm_key!r}: {self._shared.errorString()}"
+            )
+        try:
+            pointer = self._shared.constData()
+            pointer.setsize(shared_size)
+            view = memoryview(pointer)
+            header_snapshot = bytes(view[slot_offset : slot_offset + _SHARED_FRAME_HEADER.size])
+            payload = bytes(view[payload_offset:required_size])
+        finally:
+            self._shared.unlock()
+
+        header = _SHARED_FRAME_HEADER.unpack(header_snapshot)
+        (
+            state,
+            generation,
+            frame_index,
+            t_ms,
+            width,
+            height,
+            stride,
+            format_id,
+            header_payload_offset,
+            header_payload_bytes,
+        ) = header
+        if state != _SHARED_FRAME_READY:
+            raise NativeRendererError(f"shared frame slot is not ready: state={state}")
+        pixel_format = _SHARED_FRAME_PIXEL_FORMATS.get(format_id)
+        if pixel_format is None:
+            raise NativeRendererError(f"unsupported shared frame pixel format id: {format_id}")
+        if slot_offset + header_payload_offset != payload_offset:
+            raise NativeRendererError("shared frame payload offset does not match slot header")
+        if header_payload_bytes != payload_bytes:
+            raise NativeRendererError("shared frame payload byte count does not match slot header")
+        self._validate_header_matches_event(
+            frame_ready_event,
+            generation=generation,
+            frame_index=frame_index,
+            t_ms=t_ms,
+            width=width,
+            height=height,
+            stride=stride,
+            pixel_format=pixel_format,
+        )
+
+        return SharedFrameSlot(
+            shm_key=self.shm_key,
+            slot_index=slot_index,
+            generation=generation,
+            frame_index=frame_index,
+            t_ms=t_ms,
+            width=width,
+            height=height,
+            stride=stride,
+            pixel_format=pixel_format,
+            payload=payload,
+        )
+
+    def _validate_event_payload(self, frame_ready_event: dict[str, Any]) -> None:
+        if frame_ready_event.get("event") != "frame_ready":
+            raise NativeRendererError("shared frame reader expects a frame_ready event")
+        if frame_ready_event.get("payload") != "shared_memory":
+            raise NativeRendererError("frame_ready event does not describe a shared memory payload")
+        event_key = str(frame_ready_event.get("shm_key") or "")
+        if event_key != self.shm_key:
+            raise NativeRendererError(
+                f"frame_ready shared memory key mismatch: {event_key!r} != {self.shm_key!r}"
+            )
+
+    def _validate_header_matches_event(
+        self,
+        frame_ready_event: dict[str, Any],
+        *,
+        generation: int,
+        frame_index: int,
+        t_ms: int,
+        width: int,
+        height: int,
+        stride: int,
+        pixel_format: str,
+    ) -> None:
+        expected = {
+            "generation": generation,
+            "frame_index": frame_index,
+            "t_ms": t_ms,
+            "width": width,
+            "height": height,
+            "stride": stride,
+        }
+        for key, actual in expected.items():
+            if _event_int(frame_ready_event, key) != actual:
+                raise NativeRendererError(f"shared frame slot no longer matches event field {key}")
+        event_format = str(frame_ready_event.get("pixel_format") or "")
+        if event_format and event_format != pixel_format:
+            raise NativeRendererError(
+                f"shared frame pixel format mismatch: {event_format!r} != {pixel_format!r}"
+            )
+
+
+def _event_int(event: dict[str, Any], key: str) -> int:
+    value = event.get(key)
+    if isinstance(value, bool) or value is None:
+        raise NativeRendererError(f"shared frame event is missing integer field {key!r}")
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise NativeRendererError(f"shared frame event field {key!r} is not an integer") from exc
 
 
 def repository_root() -> Path:

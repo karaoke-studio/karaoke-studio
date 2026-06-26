@@ -148,6 +148,27 @@ def test_async_preview_enabled_defaults_on_and_env_can_disable(monkeypatch):
         assert async_preview_enabled() is False
 
 
+def test_native_preview_enabled_requires_env_and_sidecar(monkeypatch, tmp_path):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+
+    sidecar = tmp_path / "krok_subtitle_renderer.exe"
+    sidecar.write_bytes(b"placeholder")
+    monkeypatch.setattr(pa, "resolve_native_renderer_path", lambda: sidecar)
+
+    monkeypatch.delenv("KROK_SUBTITLE_NATIVE_RENDER", raising=False)
+    assert pa.native_preview_enabled() is False
+
+    monkeypatch.setenv("KROK_SUBTITLE_NATIVE_RENDER", "1")
+    assert pa.native_preview_enabled() is True
+
+    monkeypatch.setenv("KROK_SUBTITLE_NATIVE_RENDER", "0")
+    assert pa.native_preview_enabled() is False
+
+    monkeypatch.setenv("KROK_SUBTITLE_NATIVE_RENDER", "1")
+    monkeypatch.setattr(pa, "resolve_native_renderer_path", lambda: None)
+    assert pa.native_preview_enabled() is False
+
+
 def test_async_preview_renderer_stops_qthread(qapp):
     from krok_helper.subtitle_render.frontend.preview_async import AsyncSubtitleRenderer
 
@@ -204,6 +225,74 @@ def test_preview_graphics_updates_async_render_target(qapp, monkeypatch):
         assert (width, height) == (1280, 720)
         assert math.isclose(dpr, graphics._scene_device_pixel_ratio())
         assert renderer.requests[-1] == graphics.current_time_ms
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
+def test_preview_graphics_uses_native_async_renderer_when_enabled(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+
+    class FakeSignal:
+        def connect(self, *args, **kwargs):
+            self.args = args
+            self.kwargs = kwargs
+
+    class FakeNativeRenderer:
+        instances = []
+
+        def __init__(self, width, height, parent=None):
+            self.init_args = (width, height, parent)
+            self.frame_ready = FakeSignal()
+            self.targets = []
+            self.requests = []
+            FakeNativeRenderer.instances.append(self)
+
+        def set_render_target(self, width, height, device_pixel_ratio=1.0):
+            self.targets.append((width, height, device_pixel_ratio))
+
+        def set_state(self, track, style):
+            self.state = (track, style)
+
+        def request(self, t_ms):
+            self.requests.append(t_ms)
+
+        def stop(self):
+            self.stopped = True
+
+    monkeypatch.setattr(pg, "async_preview_enabled", lambda: True)
+    monkeypatch.setattr(pg, "native_preview_enabled", lambda: True)
+    monkeypatch.setattr(pg, "NativeAsyncSubtitleRenderer", FakeNativeRenderer)
+
+    graphics = PreviewGraphicsView()
+    try:
+        renderer = FakeNativeRenderer.instances[-1]
+        assert renderer.init_args[:2] == (1920, 1080)
+        assert renderer.targets
+        assert renderer.requests[-1] == graphics.current_time_ms
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
+def test_preview_graphics_ignores_stale_async_frame(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+
+    monkeypatch.setattr(pg, "async_preview_enabled", lambda: False)
+    graphics = PreviewGraphicsView()
+    try:
+        graphics._subtitle_item.set_async_mode(True)
+        graphics.set_time(2_000)
+        stale = QImage(16, 9, QImage.Format.Format_ARGB32_Premultiplied)
+        stale.fill(QColor("#FF0000"))
+
+        graphics._on_async_frame(stale, 1_000)
+
+        assert graphics._subtitle_item._async_image is None
     finally:
         graphics.close()
         graphics.deleteLater()
