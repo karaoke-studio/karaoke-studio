@@ -87,6 +87,7 @@ class RubyAnnotation:
     - ``kanji``：基底字（汉字 / 假名）
     - ``reading``：读音去掉 mora 时间戳后的纯文本
     - ``reading_part_ms``：mora 时间戳序列（毫秒，与原始 ``[t]`` 数量相同）
+    - ``reading_parts``：被内嵌时间戳分开的原始读音 part；连续时间戳会保留空 part
     - ``pos_start_ms`` / ``pos_end_ms``：本条注音在歌曲时间轴上的生效区间
     """
 
@@ -95,6 +96,7 @@ class RubyAnnotation:
     reading_part_ms: list[int] = field(default_factory=list)
     pos_start_ms: int = 0
     pos_end_ms: int = 0
+    reading_parts: list[str] = field(default_factory=list)
 
 
 @dataclass

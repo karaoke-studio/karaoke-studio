@@ -2061,6 +2061,49 @@ def test_main_text_uses_all_ruby_checkpoints_even_when_reading_units_are_missing
     ) == pytest.approx(4 / 9)
 
 
+def test_ruby_progress_uses_rendered_part_widths(qapp):
+    style = Style(ruby_font_size_px=32)
+    metrics = QFontMetrics(_build_ruby_font(style))
+    ruby = RubyAnnotation(
+        kanji="字",
+        reading="WWi",
+        reading_part_ms=[500],
+        pos_start_ms=1000,
+        pos_end_ms=2000,
+        reading_parts=["WW", "i"],
+    )
+    wide = metrics.horizontalAdvance("WW")
+    narrow = metrics.horizontalAdvance("i")
+
+    # 第一段走到一半：SUG 按该 part 的实际 advance 累计，而不是固定占 1/2。
+    assert _ruby_progress_ratio(ruby, 1250, metrics) == pytest.approx(
+        wide * 0.5 / (wide + narrow)
+    )
+    assert _ruby_progress_ratio(ruby, 1500, metrics) == pytest.approx(
+        wide / (wide + narrow)
+    )
+
+
+def test_empty_ruby_part_consumes_time_without_spatial_progress(qapp):
+    style = Style(ruby_font_size_px=32)
+    metrics = QFontMetrics(_build_ruby_font(style))
+    ruby = RubyAnnotation(
+        kanji="字",
+        reading="WWi",
+        reading_part_ms=[200, 500],
+        pos_start_ms=1000,
+        pos_end_ms=2000,
+        reading_parts=["WW", "", "i"],
+    )
+
+    assert _ruby_progress_ratio(ruby, 1200, metrics) == pytest.approx(
+        _ruby_progress_ratio(ruby, 1350, metrics)
+    )
+    assert _ruby_progress_ratio(ruby, 1499, metrics) == pytest.approx(
+        _ruby_progress_ratio(ruby, 1350, metrics)
+    )
+
+
 def test_ruby_with_unmatched_kanji_does_not_group_timed_characters(qapp):
     line = TimingLine(
         chars=[

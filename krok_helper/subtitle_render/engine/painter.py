@@ -2876,7 +2876,7 @@ def _vertical_ruby_layers(
             )
         )
         z += 1
-        ratio = _ruby_progress_ratio(ruby, t_ms)
+        ratio = _ruby_progress_ratio(ruby, t_ms, ruby_metrics)
         if ratio <= 0.0:
             continue
         scan_y = base_top + span_h * min(ratio, 1.0)
@@ -3070,7 +3070,7 @@ def _paint_rubies_vertical(
             glow_radius=before_glow_radius,
         )
 
-        ratio = _ruby_progress_ratio(ruby, t_ms)
+        ratio = _ruby_progress_ratio(ruby, t_ms, ruby_metrics)
         if ratio <= 0.0:
             continue
         scan_y = base_top + span_h * min(ratio, 1.0)
@@ -6657,6 +6657,7 @@ def _paint_rubies(
                             t_ms,
                             style,
                             rtl,
+                            ruby_metrics,
                         )
                     else:
                         _paint_ruby_text_units_with_transition(
@@ -6851,7 +6852,9 @@ class _RubyTextLayer:
         return self
 
     def static_key(self, ctx: LayerContext, layout: object) -> tuple | None:
-        if self.after and _ruby_progress_ratio(self.ruby_layout.ruby, self.t_ms) <= 0.0:
+        if self.after and _ruby_progress_ratio(
+            self.ruby_layout.ruby, self.t_ms, self.ruby_metrics
+        ) <= 0.0:
             return None
         return _ruby_text_layer_key(
             self.ruby_layout,
@@ -6875,7 +6878,9 @@ class _RubyTextLayer:
     def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
         clip_rect = None
         if self.after:
-            ratio = _ruby_progress_ratio(self.ruby_layout.ruby, self.t_ms)
+            ratio = _ruby_progress_ratio(
+                self.ruby_layout.ruby, self.t_ms, self.ruby_metrics
+            )
             if ratio <= 0.0:
                 return LayerAnimation(opacity=0.0)
             clip_rect = _ruby_after_clip_rect(
@@ -7277,6 +7282,7 @@ def _paint_ruby_text(
         t_ms,
         style,
         rtl,
+        ruby_metrics,
     )
 
 
@@ -7396,8 +7402,9 @@ def _paint_ruby_karaoke_path(
     t_ms: int,
     style: Style,
     rtl: bool = False,
+    ruby_metrics: QFontMetrics | None = None,
 ) -> None:
-    ratio = _ruby_progress_ratio(ruby, t_ms)
+    ratio = _ruby_progress_ratio(ruby, t_ms, ruby_metrics)
     _paint_ruby_karaoke_fragment(painter, path, rect, ratio, style, rtl)
 
 
@@ -7563,20 +7570,64 @@ def _scaled_signed_px(value: int, scale: float) -> int:
     return sign * max(1, int(round(abs(value) * scale)))
 
 
-def _ruby_progress_ratio(ruby: RubyAnnotation, t_ms: int) -> float:
+def _ruby_progress_ratio(
+    ruby: RubyAnnotation,
+    t_ms: int,
+    ruby_metrics: QFontMetrics | None = None,
+) -> float:
     if not ruby.reading:
         return char_fill_ratio(ruby.pos_start_ms, ruby.pos_end_ms, t_ms)
     if not ruby.reading_part_ms:
         return char_fill_ratio(ruby.pos_start_ms, ruby.pos_end_ms, t_ms)
 
-    intervals = _ruby_reading_intervals(ruby)
-    total = max(len(intervals), 1)
-    for index, (start, end) in enumerate(intervals):
+    parts, intervals = _ruby_progress_parts_and_intervals(ruby)
+    if ruby_metrics is not None and len(parts) == len(intervals):
+        weights = [max(float(ruby_metrics.horizontalAdvance(part)), 0.0) for part in parts]
+    else:
+        weights = [1.0] * len(intervals)
+    total_weight = sum(weights)
+    if total_weight <= 0.0:
+        weights = [1.0] * len(intervals)
+        total_weight = float(len(intervals))
+
+    completed_weight = 0.0
+    for weight, (start, end) in zip(weights, intervals):
         if t_ms < start:
-            return index / total
+            return completed_weight / total_weight
         if t_ms < end:
-            return (index + char_fill_ratio(start, end, t_ms)) / total
+            local = char_fill_ratio(start, end, t_ms)
+            return (completed_weight + weight * local) / total_weight
+        completed_weight += weight
     return 1.0
+
+
+def _ruby_progress_parts_and_intervals(
+    ruby: RubyAnnotation,
+) -> tuple[list[str], list[tuple[int, int]]]:
+    """Return the exported ruby parts and their checkpoint intervals.
+
+    Nicokara embeds one relative timestamp before every part after the first.
+    Preserving those exact slices matters for SUG parity: a multi-character
+    part owns its combined rendered width, while a part between consecutive
+    timestamps is empty and consumes time without advancing the wipe.
+    """
+    parts = list(ruby.reading_parts)
+    if (
+        parts
+        and len(parts) == len(ruby.reading_part_ms) + 1
+        and "".join(parts) == ruby.reading
+    ):
+        start = int(ruby.pos_start_ms)
+        end = max(start, int(ruby.pos_end_ms))
+        anchors = [start]
+        for relative_ms in ruby.reading_part_ms:
+            timestamp = start + int(relative_ms)
+            anchors.append(max(anchors[-1], min(end, timestamp)))
+        anchors.append(max(anchors[-1], end))
+        return parts, list(zip(anchors, anchors[1:]))
+
+    units = _ruby_reading_units(ruby.reading)
+    return units, _ruby_reading_intervals(ruby)
 
 
 def _main_text_ruby_progress_ratio(ruby: RubyAnnotation, t_ms: int) -> float:

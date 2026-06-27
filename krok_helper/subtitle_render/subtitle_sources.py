@@ -419,9 +419,14 @@ def _parse_ruby_entry(payload: str) -> Optional[RubyAnnotation]:
     # SUG exports these timestamps relative to pos_start_ms, not the global
     # song timeline. Keep them relative; the painter adds pos_start_ms.
     reading_part_ms: list[int] = []
-    reading = _TS_RE.sub("", reading_raw)
+    reading_parts: list[str] = []
+    cursor = 0
     for m in _TS_RE.finditer(reading_raw):
+        reading_parts.append(reading_raw[cursor:m.start()])
         reading_part_ms.append(_ts_to_ms(*m.groups()))
+        cursor = m.end()
+    reading_parts.append(reading_raw[cursor:])
+    reading = "".join(reading_parts)
 
     pos_start_ms = _extract_first_ts(pos1_raw) or 0
     pos_end_ms = _extract_first_ts(pos2_raw) or pos_start_ms
@@ -432,6 +437,7 @@ def _parse_ruby_entry(payload: str) -> Optional[RubyAnnotation]:
         reading_part_ms=reading_part_ms,
         pos_start_ms=pos_start_ms,
         pos_end_ms=pos_end_ms,
+        reading_parts=reading_parts,
     )
 
 

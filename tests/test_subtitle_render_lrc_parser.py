@@ -199,6 +199,7 @@ def test_ruby_simple_entry():
     assert r.kanji == "漢"
     assert r.reading == "かん"
     assert r.reading_part_ms == []
+    assert r.reading_parts == ["かん"]
     assert r.pos_start_ms == 3000
     assert r.pos_end_ms == 4000
 
@@ -215,6 +216,7 @@ def test_ruby_with_mora_timestamps_in_reading():
     # 读音内部的 mora ts 被剥离，但毫秒序列按 ruby 组起点保留为相对时间
     assert r.reading == "かんじ"
     assert r.reading_part_ms == [500, 1500]
+    assert r.reading_parts == ["か", "ん", "じ"]
     assert r.pos_start_ms == 3000
     assert r.pos_end_ms == 5000
 
@@ -231,8 +233,22 @@ def test_ruby_entry_without_position_is_kept_as_global_annotation():
     assert r.kanji == "哀"
     assert r.reading == "かな"
     assert r.reading_part_ms == [290]
+    assert r.reading_parts == ["か", "な"]
     assert r.pos_start_ms == 0
     assert r.pos_end_ms == 0
+
+
+def test_ruby_consecutive_timestamps_preserve_empty_parts():
+    text = (
+        "[00:03:00]寿[00:04:00]\n"
+        "\n"
+        "@Ruby1=寿,す[00:00:15][00:00:30],[00:03:00],[00:04:00]\n"
+    )
+    ruby = parse_nicokara_lrc(text).rubies[0]
+
+    assert ruby.reading == "す"
+    assert ruby.reading_part_ms == [150, 300]
+    assert ruby.reading_parts == ["す", "", ""]
 
 
 def test_multiple_ruby_entries():
