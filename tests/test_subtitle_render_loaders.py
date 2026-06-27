@@ -383,8 +383,8 @@ def test_stop_render_export_requests_worker_cancel(qapp, monkeypatch):
 def test_window_shell_components_present(qapp, monkeypatch):
     win = _make_window(qapp, monkeypatch)
 
-    # 左侧纵向导航栏 + stack
-    assert win._nav is not None
+    # 底部 Pivot 导航栏 + stack
+    assert win._pivot is not None
     assert win._stack.count() == 2
 
     # 四区 widget 已挂载

@@ -1,4 +1,4 @@
-"""字幕视频渲染主窗口（Sayatoo 风格 + 左侧纵向导航 + 拖拽加载）。
+"""字幕视频渲染主窗口（Sayatoo 风格 + 底部 Pivot 导航 + 拖拽加载）。
 
 照搬 SUG（lyrics_timing/.../frontend/main_window.py）的双模式骨架：
 
@@ -6,18 +6,19 @@
 - ``SubtitleRenderWindow.for_embedding(parent, settings_provider, workflow_context)``
   — 嵌入工作台
 
-UI 顶层结构（左侧 ``NavigationBar`` 纵向导航，仿 SUG MSFluentWindow 样式）：
+UI 顶层结构（底部 ``Pivot`` 导航，仿 SUG SettingsInterface 样式）：
 
-  ┌────┬──────────────────────────────────────────────┐
-  │ 预 │  ◆ 预览页（当前唯一可用）                       │
-  │ 览 │    ┌─────────┬──────────────┬──────────────┐  │
-  │    │    │ 左·歌词 │ 中·预览       │ 右·属性 tab │  │
-  │ 导 │    │ (拖.lrc)│ + transport   │              │  │
-  │ 出 │    ├─────────┴──────────────┴──────────────┤  │
-  │    │    │ 底·字幕轨道                            │  │
-  │    │    └─────────────────────────────────────────┘ │
-  │    │  ◆ 导出页                                       │
-  └────┴──────────────────────────────────────────────┘
+  ┌──────────────────────────────────────────────────────┐
+  │  ◆ 预览页                                             │
+  │    ┌─────────┬──────────────┬──────────────┐        │
+  │    │ 左·歌词 │ 中·预览       │ 右·属性 tab │        │
+  │    │ (拖.lrc)│ + transport   │              │        │
+  │    ├─────────┴──────────────┴──────────────┤        │
+  │    │ 底·字幕轨道                            │        │
+  │    └─────────────────────────────────────────┘        │
+  ├──────────────────────────────────────────────────────┤
+  │  [预览] [导出]                                         │
+  └──────────────────────────────────────────────────────┘
 
 三个素材区均接受拖拽 + 点击浏览（详见 :mod:`drop_panel`）。
 """
@@ -51,7 +52,7 @@ from qfluentwidgets import (
     Action,
     DropDownPushButton,
     FluentIcon as FIF,
-    NavigationBar,
+    Pivot,
     RoundMenu,
 )
 
@@ -238,28 +239,14 @@ class SubtitleRenderWindow(QWidget):
     # ------------------------------------------------------------------ layout
 
     def _init_layout(self) -> None:
-        # 左侧纵向导航栏（图标 + 文字，仿 SUG MSFluentWindow 的 NavigationBar）+ 右侧内容。
-        root = QHBoxLayout(self)
+        # 底部 Pivot 导航（仿 SUG SettingsInterface）+ 上方内容区。
+        root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        self._nav = NavigationBar(self)
-        root.addWidget(self._nav)
-
-        content = QWidget(self)
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(16, 8, 16, 14)
-        content_layout.setSpacing(6)
-        root.addWidget(content, 1)
-
-        # 顶部项目命令栏（新建 / 打开 / 保存 / 另存为 + 当前项目名）。standalone 与嵌入
-        # 模式都显示——嵌入工作台里也能把当前字幕样式工程存成 .yurika 复用。
-        self._project_bar = self._make_project_bar()
-        content_layout.addWidget(self._project_bar)
-
         # QStackedWidget 承载各页内容
-        self._stack = QStackedWidget(content)
-        content_layout.addWidget(self._stack, 1)
+        self._stack = QStackedWidget(self)
+        root.addWidget(self._stack, 1)
 
         self._preview_tab = self._make_preview_tab()
         self._export_tab = self._make_export_tab()
@@ -276,21 +263,22 @@ class SubtitleRenderWindow(QWidget):
         self._export_height_spin.valueChanged.connect(self._on_export_screen_changed)
         self._export_fps_combo.currentIndexChanged.connect(self._on_export_screen_changed)
 
-        self._nav.addItem(
+        # 底部导航条
+        self._pivot = Pivot(self)
+        self._pivot.setFixedHeight(36)
+        self._pivot.addItem(
             routeKey="preview",
-            icon=FIF.VIEW,
             text="预览",
             onClick=lambda: self._stack.setCurrentIndex(0),
-            selectable=True,
         )
-        self._nav.addItem(
+        self._pivot.addItem(
             routeKey="export",
-            icon=FIF.SHARE,
             text="导出",
             onClick=lambda: self._stack.setCurrentIndex(1),
-            selectable=True,
         )
-        self._nav.setCurrentItem("preview")
+        self._pivot.setCurrentItem("preview")
+        root.addWidget(self._pivot)
+
         self._stack.setCurrentIndex(0)
         self._refresh_project_title()
 
@@ -534,8 +522,11 @@ class SubtitleRenderWindow(QWidget):
     def _make_preview_tab(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(8)
+        outer.setContentsMargins(0, 4, 0, 0)
+        outer.setSpacing(4)
+
+        # 顶部项目命令栏（新建 / 打开 / 保存 / 另存为 + 当前项目名）
+        outer.addWidget(self._make_project_bar())
 
         body = QSplitter(Qt.Orientation.Vertical)
         body.setChildrenCollapsible(False)
@@ -644,8 +635,11 @@ class SubtitleRenderWindow(QWidget):
             ),
         )
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(32, 28, 32, 32)
-        layout.setSpacing(14)
+        layout.setContentsMargins(16, 4, 16, 16)
+        layout.setSpacing(10)
+
+        # 顶部项目命令栏（同预览页）
+        layout.addWidget(self._make_project_bar())
 
         title = QLabel("导出 MP4")
         themed(
