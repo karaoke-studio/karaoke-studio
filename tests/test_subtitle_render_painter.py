@@ -46,6 +46,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _layout_vertical_line,
     _layout_rubies,
     _layout_line,
+    _line_layer_stack,
     _ruby_layer_stack,
     _resolve_vertical_columns,
     _ruby_utopia_visual_units,
@@ -2519,6 +2520,91 @@ def test_ruby_layout_centers_single_reading_unit_in_target(qapp):
 
     assert unit == "そ"
     assert x + width / 2 == pytest.approx(250)
+
+
+def test_ruby_gradient_reference_uses_main_text_run(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="A", start_ms=1000),
+            TimingChar(text="B", start_ms=1500),
+        ],
+        end_ms=2000,
+    )
+    track = TimingTrack(
+        lines=[line],
+        rubies=[
+            RubyAnnotation(
+                kanji="B",
+                reading="び",
+                pos_start_ms=1500,
+                pos_end_ms=2000,
+            )
+        ],
+    )
+    style = Style(
+        font_size_px=64,
+        ruby_font_size_px=28,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=PaintFill(mode="solid", color="#FFFFFF")),
+            after=KaraokeColorState(
+                text=PaintFill(
+                    mode="gradient_horizontal",
+                    gradient_stops=((0, "#FF0000"), (100, "#0000FF")),
+                )
+            ),
+        ),
+    )
+    layout = _layout_line(track, line, style, 420, 240, baseline_y=140)
+    assert layout is not None
+
+    ruby_layers = _ruby_layer_stack(layout, line, 1750, style)
+    assert ruby_layers
+    ruby_layout = ruby_layers[0].ruby_layout
+
+    assert ruby_layout.gradient_rect.left() == pytest.approx(layout.line_rect.left())
+    assert ruby_layout.gradient_rect.width() == pytest.approx(layout.line_rect.width())
+    assert ruby_layout.gradient_rect.width() > ruby_layout.target_width
+
+
+def test_role_line_simultaneous_wipe_uses_scoped_after_band(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="溶", start_ms=35900, role_label="fhana"),
+            TimingChar(text="け", start_ms=36130, role_label="fhana"),
+            TimingChar(text="合", start_ms=36360, role_label="fhana"),
+            TimingChar(text="い", start_ms=36490, role_label="fhana"),
+            TimingChar(text=" ", start_ms=37580, role_label="未命名"),
+            TimingChar(text="一", start_ms=36890, role_label="佐藤 純一"),
+            TimingChar(text="つ", start_ms=37350, role_label="佐藤 純一"),
+            TimingChar(text="に", start_ms=37480, role_label="佐藤 純一"),
+        ],
+        end_ms=38310,
+    )
+    track = TimingTrack(lines=[line])
+    style = Style(
+        font_size_px=64,
+        custom_style_schemes={
+            "fhana": SubtitleStyleScheme(fill_color="#FF5577"),
+            "未命名": SubtitleStyleScheme(fill_color="#FFFFFF"),
+            "佐藤 純一": SubtitleStyleScheme(fill_color="#4488FF"),
+        },
+    )
+    layout = _layout_line(track, line, style, 900, 300, baseline_y=180)
+    assert layout is not None
+    one_glyph = next(glyph for glyph in layout.text_layout.glyphs if glyph.text == "一")
+
+    layers = _line_layer_stack(layout, 37000)
+    sato_after_layers = [
+        layer
+        for layer in layers
+        if isinstance(layer, _GlyphRunLayer)
+        and layer.after
+        and any(glyph.text == "一" for glyph in layer.glyphs)
+    ]
+
+    assert sato_after_layers
+    assert sato_after_layers[0].clip_band is not None
+    assert sato_after_layers[0].clip_band[1] > one_glyph.left
 
 
 def test_ruby_small_kana_reading_uses_mora_units(qapp):

@@ -119,6 +119,7 @@ class _FillSegment:
     start_ms: int = 0
     end_ms: int = 0
     ruby: RubyAnnotation | None = None
+    indices: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -268,6 +269,7 @@ class _RubyLayout:
     baseline_y: int
     target_width: int
     reading_width: float
+    gradient_rect: QRectF
 
 
 @dataclass(frozen=True)
@@ -3226,6 +3228,7 @@ def _paint_line_static(
             layout.intervals, layout.char_x_ranges, layout.baseline_y,
             t_ms, layout.active_rubies, style, transition,
             main_ascent_px=layout.text_layout.ascent if layout.has_inline_styles else None,
+            text_layout=layout.text_layout,
         )
 
     if transition is not None:
@@ -3747,10 +3750,12 @@ def _paint_line_direct(
     for run in runs:
         _paint_glyph_run_direct(painter, run, y, after=False)
 
-    after_band = _fill_clip_band(layout.fill_segments, t_ms, layout.rtl)
-    if after_band is None:
-        return
     for run in runs:
+        after_band = _fill_clip_band_for_glyphs(
+            layout.fill_segments, run, t_ms, layout.rtl
+        )
+        if after_band is None:
+            continue
         if _glyph_run_needs_after_glow(run):
             _paint_glyph_run_after_glow_direct(painter, run, y, after_band)
         painter.save()
@@ -3768,9 +3773,11 @@ def _line_layer_stack(layout: _LineLayout, t_ms: int) -> list:
         _GlyphRunLayer(run, y, layout.fill_segments, t_ms, layout.rtl, after=False)
         for run in runs
     ]
-    after_band = _fill_clip_band(layout.fill_segments, t_ms, layout.rtl)
     after_layers = []
     for index, run in enumerate(runs):
+        after_band = _fill_clip_band_for_glyphs(
+            layout.fill_segments, run, t_ms, layout.rtl
+        )
         if after_band is not None and _glyph_run_needs_after_glow(run):
             after_layers.append(
                 _GlyphRunAfterGlowLayer(
@@ -3921,7 +3928,6 @@ def _char_transition_layer_stack(
     y = layout.baseline_y
     rtl = layout.rtl
     is_spin = transition.effect == "spin_flip"
-    after_band = _fill_clip_band(layout.fill_segments, t_ms, rtl)
     layers: list = []
     z = 0
     for glyph in layout.text_layout.glyphs:
@@ -3939,6 +3945,7 @@ def _char_transition_layer_stack(
             )
         )
         z += 1
+        after_band = _fill_clip_band_for_glyphs(layout.fill_segments, run, t_ms, rtl)
         if after_band is None:
             continue
         if _glyph_run_needs_after_glow(run):
@@ -4284,6 +4291,7 @@ def _utopia_ruby_scope_layers(
         layout.active_rubies,
         style,
         main_ascent_px=layout.text_layout.ascent if layout.has_inline_styles else None,
+        text_layout=layout.text_layout,
     )
     layers: list[_ScopeBoundsLayer] = []
     for index, ruby_layout in enumerate(ruby_layouts):
@@ -6034,7 +6042,15 @@ def _karaoke_fill_segments(
         if ruby is None:
             left, right = ink_x_ranges[index]
             start, end = intervals[index]
-            segments.append(_FillSegment(left=left, right=right, start_ms=start, end_ms=end))
+            segments.append(
+                _FillSegment(
+                    left=left,
+                    right=right,
+                    start_ms=start,
+                    end_ms=end,
+                    indices=(index,),
+                )
+            )
             index += 1
             continue
 
@@ -6043,7 +6059,15 @@ def _karaoke_fill_segments(
         if not indices:
             left, right = ink_x_ranges[index]
             start, end = intervals[index]
-            segments.append(_FillSegment(left=left, right=right, start_ms=start, end_ms=end))
+            segments.append(
+                _FillSegment(
+                    left=left,
+                    right=right,
+                    start_ms=start,
+                    end_ms=end,
+                    indices=(index,),
+                )
+            )
             index += 1
             continue
 
@@ -6054,6 +6078,7 @@ def _karaoke_fill_segments(
                 left=left,
                 right=right,
                 ruby=_effective_ruby_for_target(ruby, indices, intervals),
+                indices=tuple(indices),
             )
         )
         index = max(indices) + 1
@@ -6148,6 +6173,7 @@ def _offset_fill_segments(segments: list[_FillSegment], dx: int) -> list[_FillSe
             start_ms=segment.start_ms,
             end_ms=segment.end_ms,
             ruby=segment.ruby,
+            indices=segment.indices,
         )
         for segment in segments
     ]
@@ -6215,6 +6241,41 @@ def _fill_clip_band(
     if left is None or right is None or right <= left:
         return None
     return left, right
+
+
+def _fill_clip_band_for_indices(
+    segments: list[_FillSegment],
+    indices: set[int],
+    t_ms: int,
+    rtl: bool,
+) -> tuple[int, int] | None:
+    if not indices:
+        return _fill_clip_band(segments, t_ms, rtl)
+    scoped = [
+        segment
+        for segment in segments
+        if segment.indices and any(index in indices for index in segment.indices)
+    ]
+    while scoped and (
+        scoped[0].right <= scoped[0].left
+        or _segment_fill_ratio(scoped[0], t_ms) <= 0.0
+    ):
+        scoped = scoped[1:]
+    return _fill_clip_band(scoped, t_ms, rtl)
+
+
+def _fill_clip_band_for_glyphs(
+    segments: list[_FillSegment],
+    glyphs: list[_GlyphLayout],
+    t_ms: int,
+    rtl: bool,
+) -> tuple[int, int] | None:
+    return _fill_clip_band_for_indices(
+        segments,
+        {glyph.index for glyph in glyphs},
+        t_ms,
+        rtl,
+    )
 
 
 def _segment_fill_ratio(segment: _FillSegment, t_ms: int) -> float:
@@ -6565,6 +6626,7 @@ def _paint_rubies(
     style: Style,
     transition: _LineCharTransition | None = None,
     main_ascent_px: int | None = None,
+    text_layout: _TextLayout | None = None,
 ) -> None:
     rtl = style.right_to_left
     painter.save()
@@ -6579,6 +6641,7 @@ def _paint_rubies(
             rubies,
             style,
             main_ascent_px=main_ascent_px,
+            text_layout=text_layout,
         )
         if transition is None:
             _paint_ruby_layers(painter, layouts, ruby_font, ruby_metrics, t_ms, style, rtl)
@@ -6658,6 +6721,7 @@ def _paint_rubies(
                             style,
                             rtl,
                             ruby_metrics,
+                            gradient_rect=transform.mapRect(layout.gradient_rect),
                         )
                     else:
                         _paint_ruby_text_units_with_transition(
@@ -6675,6 +6739,7 @@ def _paint_rubies(
                             following_done_ms,
                             rtl,
                             target_width=target_width,
+                            gradient_rect=layout.gradient_rect,
                         )
                 else:
                     _apply_character_transform(
@@ -6699,6 +6764,7 @@ def _paint_rubies(
                         style,
                         rtl,
                         target_width=target_width,
+                        gradient_rect=layout.gradient_rect,
                     )
             finally:
                 painter.restore()
@@ -6716,6 +6782,7 @@ def _layout_rubies(
     style: Style,
     *,
     main_ascent_px: int | None = None,
+    text_layout: _TextLayout | None = None,
 ) -> list[_RubyLayout]:
     """layout 段：算横排 ruby 的目标字符范围、基线与排布宽度。"""
     if not rubies:
@@ -6737,6 +6804,14 @@ def _layout_rubies(
             continue
         left, right = target_range
         target_width = max(right - left, 1)
+        gradient_rect = _ruby_main_gradient_rect(
+            indices,
+            text_layout,
+            main_baseline_y,
+            left,
+            target_width,
+            main_ascent,
+        )
         layouts.append(
             _RubyLayout(
                 ruby=paint_ruby,
@@ -6745,9 +6820,38 @@ def _layout_rubies(
                 baseline_y=ruby_baseline_y,
                 target_width=target_width,
                 reading_width=_ruby_layout_width(paint_ruby.reading, ruby_metrics, target_width),
+                gradient_rect=gradient_rect,
             )
         )
     return layouts
+
+
+def _ruby_main_gradient_rect(
+    indices: list[int],
+    text_layout: _TextLayout | None,
+    baseline_y: int,
+    fallback_left: int,
+    fallback_width: int,
+    fallback_ascent: int,
+) -> QRectF:
+    if text_layout is not None:
+        index_set = set(indices)
+        runs = [
+            run for run in _glyph_runs(text_layout)
+            if any(glyph.index in index_set for glyph in run)
+        ]
+        rect: QRectF | None = None
+        for run in runs:
+            run_rect = _glyph_run_rect(run, baseline_y)
+            rect = run_rect if rect is None else rect.united(run_rect)
+        if rect is not None and not rect.isEmpty():
+            return rect
+    return QRectF(
+        float(fallback_left),
+        float(baseline_y - fallback_ascent),
+        float(max(fallback_width, 1)),
+        float(max(fallback_ascent, 1)),
+    )
 
 
 def _paint_ruby_layers(
@@ -6820,6 +6924,7 @@ def _ruby_layer_stack(
         layout.active_rubies,
         style,
         main_ascent_px=layout.text_layout.ascent if layout.has_inline_styles else None,
+        text_layout=layout.text_layout,
     )
     return _ruby_text_layers(
         ruby_layouts,
@@ -6918,10 +7023,19 @@ def _ruby_text_layer_key(
     colors = _effective_ruby_karaoke_colors(style)
     scale = _ruby_scale(style)
     state = colors.after if after else colors.before
+    inherited_main_colors = style.ruby_karaoke_colors is None
     return (
         layout.ruby.reading,
         layout.target_width,
         round(layout.reading_width, 3),
+        (
+            round(layout.gradient_rect.left() - layout.x, 3),
+            round(layout.gradient_rect.top() - layout.baseline_y, 3),
+            round(layout.gradient_rect.width(), 3),
+            round(layout.gradient_rect.height(), 3),
+        )
+        if inherited_main_colors
+        else None,
         rtl,
         ruby_font.family(),
         ruby_font.pixelSize(),
@@ -6988,6 +7102,12 @@ def _build_ruby_text_layer(
         local_baseline,
         layout.target_width,
     )
+    fill_rect = None
+    if style.ruby_karaoke_colors is None:
+        fill_rect = layout.gradient_rect.translated(
+            -float(layout.x) + float(pad_left),
+            -float(layout.baseline_y) + float(local_baseline),
+        )
 
     p = QPainter(image)
     try:
@@ -7006,6 +7126,7 @@ def _build_ruby_text_layer(
             shadow_dx=shadow_dx,
             shadow_dy=shadow_dy,
             glow_radius=glow_radius,
+            fill_rect=fill_rect,
         )
     finally:
         p.end()
@@ -7181,6 +7302,7 @@ def _paint_ruby_text_units_with_transition(
     following_done_ms: int | None,
     rtl: bool = False,
     target_width: int | float | None = None,
+    gradient_rect: QRectF | None = None,
 ) -> None:
     visual_units = _ruby_utopia_reading_units_and_intervals(ruby)
     # RTL：按音节反转排布顺序，使首音节落在最右；各音节计时不变。
@@ -7200,6 +7322,7 @@ def _paint_ruby_text_units_with_transition(
             style,
             rtl,
             target_width=target_width,
+            gradient_rect=gradient_rect,
         )
         return
 
@@ -7243,6 +7366,7 @@ def _paint_ruby_text_units_with_transition(
                     style,
                     rtl,
                     transform=transform,
+                    gradient_rect=gradient_rect,
                 )
             finally:
                 painter.restore()
@@ -7259,6 +7383,7 @@ def _paint_ruby_text(
     style: Style,
     rtl: bool = False,
     target_width: int | float | None = None,
+    gradient_rect: QRectF | None = None,
 ) -> None:
     # RTL：按可见字形反转读音——小书き假名(ゃゅょ等)是独立字形，也要反过来；
     # 只有零宽浊点/半浊点(゙゚)留在基字后。直接 reading[::-1] 会让浊点
@@ -7283,6 +7408,7 @@ def _paint_ruby_text(
         style,
         rtl,
         ruby_metrics,
+        gradient_rect=gradient_rect,
     )
 
 
@@ -7372,6 +7498,7 @@ def _paint_ruby_text_fragment(
     style: Style,
     rtl: bool = False,
     transform: QTransform | None = None,
+    gradient_rect: QRectF | None = None,
 ) -> None:
     path = QPainterPath()
     path.addText(float(x), float(baseline_y), ruby_font, text)
@@ -7384,6 +7511,8 @@ def _paint_ruby_text_fragment(
     if transform is not None and not transform.isIdentity():
         path = transform.map(path)
         rect = path.boundingRect()
+        if gradient_rect is not None:
+            gradient_rect = transform.mapRect(gradient_rect)
     _paint_ruby_karaoke_fragment(
         painter,
         path,
@@ -7391,6 +7520,7 @@ def _paint_ruby_text_fragment(
         ratio,
         style,
         rtl,
+        fill_rect=gradient_rect,
     )
 
 
@@ -7403,9 +7533,18 @@ def _paint_ruby_karaoke_path(
     style: Style,
     rtl: bool = False,
     ruby_metrics: QFontMetrics | None = None,
+    gradient_rect: QRectF | None = None,
 ) -> None:
     ratio = _ruby_progress_ratio(ruby, t_ms, ruby_metrics)
-    _paint_ruby_karaoke_fragment(painter, path, rect, ratio, style, rtl)
+    _paint_ruby_karaoke_fragment(
+        painter,
+        path,
+        rect,
+        ratio,
+        style,
+        rtl,
+        fill_rect=gradient_rect,
+    )
 
 
 def _paint_ruby_karaoke_fragment(
@@ -7415,7 +7554,10 @@ def _paint_ruby_karaoke_fragment(
     ratio: float,
     style: Style,
     rtl: bool = False,
+    fill_rect: QRectF | None = None,
 ) -> None:
+    if style.ruby_karaoke_colors is not None:
+        fill_rect = None
     colors = _effective_ruby_karaoke_colors(style)
     scale = _ruby_scale(style)
     stroke_width = _scaled_px(style.stroke_width_px, scale)
@@ -7436,6 +7578,7 @@ def _paint_ruby_karaoke_fragment(
         shadow_dx=shadow_dx,
         shadow_dy=shadow_dy,
         glow_radius=before_glow_radius,
+        fill_rect=fill_rect,
     )
 
     if ratio <= 0.0:
@@ -7473,6 +7616,7 @@ def _paint_ruby_karaoke_fragment(
             shadow_dx=shadow_dx,
             shadow_dy=shadow_dy,
             glow_radius=after_glow_radius,
+            fill_rect=fill_rect,
         )
     finally:
         painter.restore()
@@ -7491,7 +7635,9 @@ def _paint_text_layer_stack(
     shadow_dy: int,
     glow_radius: int,
     draw_glow: bool = True,
+    fill_rect: QRectF | None = None,
 ) -> None:
+    brush_rect = fill_rect if fill_rect is not None else rect
     if style.decoration_kind == "glow":
         # ``draw_glow=False`` 让调用方把发光单独按「发光级」宽松裁切处理（卡拉ok 走字
         # 时发光软晕不能跟描边/填充一样按字框硬裁，否则会被裁成方框）。
@@ -7500,7 +7646,7 @@ def _paint_text_layer_stack(
                 painter,
                 path,
                 colors.shadow,
-                rect,
+                brush_rect,
                 max(glow_radius, 1),
                 stroke_width,
                 stroke2_width,
@@ -7511,7 +7657,7 @@ def _paint_text_layer_stack(
             painter,
             shadow_path,
             colors.shadow,
-            rect.translated(shadow_dx, shadow_dy),
+            brush_rect,
         )
 
     if stroke2_width > 0:
@@ -7519,7 +7665,7 @@ def _paint_text_layer_stack(
             painter,
             path,
             colors.stroke2,
-            rect,
+            brush_rect,
             _stroke2_pen_width(stroke_width, stroke2_width),
         )
     if stroke_width > 0:
@@ -7527,10 +7673,10 @@ def _paint_text_layer_stack(
             painter,
             path,
             colors.stroke,
-            rect,
+            brush_rect,
             _stroke_pen_width(stroke_width),
         )
-    _paint_fill_path(painter, path, colors.text, rect)
+    _paint_fill_path(painter, path, colors.text, brush_rect)
 
 
 def _effective_ruby_karaoke_colors(style: Style) -> KaraokeColors:
