@@ -86,8 +86,11 @@ from krok_helper.subtitle_render.frontend.property_panel import (
 from krok_helper.subtitle_render.frontend.timeline_view import TrackTimelineView
 from krok_helper.subtitle_render.models import (
     PROJECT_FILE_SUFFIX,
+    SubtitleStyleScheme,
     Style,
     TimingTrack,
+    subtitle_style_scheme_from_dict,
+    subtitle_style_scheme_to_dict,
     style_from_dict,
     style_to_dict,
 )
@@ -213,6 +216,7 @@ class SubtitleRenderWindow(QWidget):
         self._audio_path: Optional[Path] = None
         self._audio_info: Optional[MediaInfo] = None
         self._style: Style = Style()
+        self._style_presets: dict[str, SubtitleStyleScheme] = {}
         self._screen_settings: ScreenSettings = ScreenSettings()
         self._selected_scheme_key = "global"
         self._project_path: Optional[Path] = None
@@ -380,6 +384,7 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.set_style(self._style)
         self._property_panel.set_screen_settings(self._screen_settings)
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
+        self._selected_scheme_key = self._property_panel.current_scheme_key()
         self._preview_panel.set_style(self._style)
         self._set_export_screen_controls(self._screen_settings)
         self._sync_preview_output_size()
@@ -574,11 +579,14 @@ class SubtitleRenderWindow(QWidget):
 
         self._property_panel = PropertyPanel()
         self._property_panel.set_style(self._style)
+        self._property_panel.set_preset_schemes(self._style_presets)
         self._property_panel.set_screen_settings(self._screen_settings)
         self._property_panel.styleChanged.connect(self._apply_style)
+        self._property_panel.presetSchemesChanged.connect(self._apply_style_presets)
         self._property_panel.screenChanged.connect(self._apply_screen_settings)
         self._property_panel.schemeSelectionChanged.connect(self._on_scheme_selection_changed)
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
+        self._selected_scheme_key = self._property_panel.current_scheme_key()
         top.addWidget(self._property_panel)
 
         top.setStretchFactor(0, 1)
@@ -786,6 +794,7 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.set_track(track)
         self._property_panel.set_roles(track.role_options)
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
+        self._selected_scheme_key = self._property_panel.current_scheme_key()
         self._preview_panel.set_track(track)
         self._refresh_transport_duration()
         self._transport_bar.set_time(0)
@@ -898,6 +907,10 @@ class SubtitleRenderWindow(QWidget):
         self._save_persisted_state()
         self._mark_project_dirty()
 
+    def _apply_style_presets(self, presets: dict) -> None:
+        self._style_presets = _style_presets_from_dict(presets)
+        self._save_persisted_state()
+
     def _apply_screen_settings(self, settings: object) -> None:
         self._screen_settings = screen_settings_from_dict(
             screen_settings_to_dict(settings)
@@ -964,6 +977,7 @@ class SubtitleRenderWindow(QWidget):
     def _load_persisted_state(self) -> None:
         data = self._load_subtitle_settings()
         self._style = style_from_dict(data.get("style"))
+        self._style_presets = _style_presets_from_dict(data.get("style_presets"))
         self._screen_settings = screen_settings_from_dict(data.get("screen"))
         key = data.get("selected_scheme_key")
         if isinstance(key, str) and key:
@@ -972,6 +986,7 @@ class SubtitleRenderWindow(QWidget):
     def _save_persisted_state(self) -> None:
         data = self._load_subtitle_settings()
         data["style"] = style_to_dict(self._style)
+        data["style_presets"] = _style_presets_to_dict(self._style_presets)
         data["screen"] = screen_settings_to_dict(self._screen_settings)
         data["selected_scheme_key"] = self._selected_scheme_key
         if hasattr(self, "_export_native_check"):
@@ -1149,3 +1164,23 @@ class SubtitleRenderWindow(QWidget):
     def flush_unsaved(self) -> None:
         """宿主销毁本 widget 前调用的兜底（占位）。"""
         return
+
+
+def _style_presets_from_dict(payload: object) -> dict[str, SubtitleStyleScheme]:
+    if not isinstance(payload, dict):
+        return {}
+    return {
+        str(name): subtitle_style_scheme_from_dict(value)
+        for name, value in payload.items()
+        if str(name)
+    }
+
+
+def _style_presets_to_dict(
+    presets: dict[str, SubtitleStyleScheme],
+) -> dict[str, dict]:
+    return {
+        str(name): subtitle_style_scheme_to_dict(scheme)
+        for name, scheme in presets.items()
+        if str(name)
+    }

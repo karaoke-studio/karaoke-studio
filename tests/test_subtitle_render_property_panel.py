@@ -10,13 +10,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
 from PyQt6.QtGui import QMouseEvent, QWheelEvent  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QInputDialog, QWidget  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QInputDialog, QMessageBox, QWidget  # noqa: E402
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
     ColorButton,
     PropertyPanel,
     ScreenSettings,
+    StylePresetManagerDialog,
 )
 from krok_helper.subtitle_render.models import (  # noqa: E402
     KaraokeColors,
@@ -1082,6 +1083,193 @@ def test_property_panel_role_scheme_switches_subtitle_controls(qapp):
     assert panel._paint_solid_btn.color == style.fill_color
 
 
+def test_property_panel_hides_presets_when_subtitle_has_no_roles(qapp):
+    panel = PropertyPanel()
+    panel.set_preset_schemes({"蓝色方案": SubtitleStyleScheme(fill_color="#123456")})
+
+    panel.set_roles([])
+
+    assert panel._singer_combo.count() == 1
+    assert panel._singer_combo.currentData() == "global"
+    assert panel._singer_combo.findData("custom:蓝色方案") == -1
+    assert panel.preset_schemes["蓝色方案"].fill_color == "#123456"
+
+
+def test_property_panel_delete_role_keeps_same_named_preset(qapp):
+    panel = PropertyPanel()
+    panel.set_preset_schemes({"fhana": SubtitleStyleScheme(fill_color="#123456")})
+    panel.set_roles(["fhana"])
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:fhana"))
+
+    assert panel.subtitle_style.custom_style_schemes["fhana"].fill_color == "#123456"
+
+    panel._delete_current_role()
+
+    assert panel._singer_combo.findData("custom:fhana") == -1
+    assert "fhana" not in panel.subtitle_style.custom_style_schemes
+    assert panel.preset_schemes["fhana"].fill_color == "#123456"
+
+
+def test_property_panel_auto_created_role_scheme_is_saved_as_preset(qapp):
+    panel = PropertyPanel()
+
+    panel.set_roles(["新分色"])
+
+    assert "新分色" in panel.subtitle_style.custom_style_schemes
+    assert "新分色" in panel.preset_schemes
+    assert (
+        panel.preset_schemes["新分色"].fill_color
+        == panel.subtitle_style.custom_style_schemes["新分色"].fill_color
+    )
+
+
+def test_property_panel_existing_role_scheme_is_backfilled_to_presets(qapp):
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            custom_style_schemes={
+                "fhana": SubtitleStyleScheme(fill_color="#123456"),
+            }
+        )
+    )
+
+    panel.set_roles(["fhana"])
+
+    assert panel.subtitle_style.custom_style_schemes["fhana"].fill_color == "#123456"
+    assert panel.preset_schemes["fhana"].fill_color == "#123456"
+
+
+def test_property_panel_can_apply_preset_to_global_and_role(qapp):
+    panel = PropertyPanel()
+    preset = SubtitleStyleScheme(fill_color="#12ABCD", font_size_px=88)
+
+    panel._apply_preset_to_current_target(preset)
+
+    assert panel.subtitle_style.fill_color == "#12ABCD"
+    assert panel.subtitle_style.font_size_px == 88
+
+    panel.set_roles(["A"])
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:A"))
+    panel._apply_preset_to_current_target(SubtitleStyleScheme(fill_color="#FFCC00"))
+
+    assert panel.subtitle_style.custom_style_schemes["A"].fill_color == "#FFCC00"
+
+
+def test_style_preset_manager_dialog_saves_current_scheme(qapp):
+    dialog = StylePresetManagerDialog(
+        presets={},
+        current_scheme=SubtitleStyleScheme(fill_color="#123456", font_size_px=77),
+        target_label="全局默认",
+    )
+
+    assert dialog.add_preset("蓝色方案")
+
+    presets = dialog.preset_schemes()
+    assert presets["蓝色方案"].fill_color == "#123456"
+    assert presets["蓝色方案"].font_size_px == 77
+    assert dialog._preset_list.count() == 1
+
+
+def test_style_preset_manager_dialog_imports_multiple_selected_schemes(qapp):
+    dialog = StylePresetManagerDialog(
+        presets={
+            "A": SubtitleStyleScheme(fill_color="#111111"),
+            "B": SubtitleStyleScheme(fill_color="#222222"),
+        },
+        current_scheme=SubtitleStyleScheme(),
+        target_label="全局默认",
+    )
+
+    dialog._preset_list.item(0).setSelected(True)
+    dialog._preset_list.item(1).setSelected(True)
+    dialog._on_import_selected()
+
+    imported = dialog.imported_schemes()
+    assert set(imported) == {"A", "B"}
+    assert imported["A"].fill_color == "#111111"
+    assert imported["B"].fill_color == "#222222"
+
+
+def test_property_panel_imports_selected_presets_as_role_schemes(qapp):
+    panel = PropertyPanel()
+
+    panel._import_preset_schemes(
+        {
+            "A": SubtitleStyleScheme(fill_color="#111111"),
+            "B": SubtitleStyleScheme(fill_color="#222222"),
+        }
+    )
+
+    assert panel._singer_combo.findData("custom:A") >= 0
+    assert panel._singer_combo.findData("custom:B") >= 0
+    assert panel.subtitle_style.custom_style_schemes["A"].fill_color == "#111111"
+    assert panel.subtitle_style.custom_style_schemes["B"].fill_color == "#222222"
+
+
+def test_property_panel_deleting_preset_removes_same_named_role_scheme(qapp):
+    panel = PropertyPanel()
+    panel.set_preset_schemes({"A": SubtitleStyleScheme(fill_color="#111111")})
+    panel.set_roles(["A"])
+
+    panel._remove_preset_targets({"A"})
+
+    assert "A" not in panel.preset_schemes
+    assert "A" not in panel.subtitle_style.custom_style_schemes
+    assert panel._singer_combo.findData("custom:A") == -1
+
+
+def test_style_preset_manager_dialog_tracks_deleted_presets(qapp, monkeypatch):
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+    dialog = StylePresetManagerDialog(
+        presets={"A": SubtitleStyleScheme(fill_color="#111111")},
+        current_scheme=SubtitleStyleScheme(),
+        target_label="全局默认",
+    )
+
+    dialog._preset_list.item(0).setSelected(True)
+    dialog._on_delete()
+
+    assert "A" not in dialog.preset_schemes()
+    assert dialog.deleted_names() == {"A"}
+
+
+def test_property_panel_applies_dialog_deletions_even_when_dialog_rejected(qapp, monkeypatch):
+    panel = PropertyPanel()
+    panel.set_preset_schemes({"A": SubtitleStyleScheme(fill_color="#111111")})
+    panel.set_roles(["A"])
+
+    class FakeDialog:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def exec(self):
+            return 0
+
+        def preset_schemes(self):
+            return {}
+
+        def deleted_names(self):
+            return {"A"}
+
+        def imported_schemes(self):
+            return {}
+
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.property_panel.StylePresetManagerDialog",
+        FakeDialog,
+    )
+
+    panel._open_preset_manager()
+
+    assert "A" not in panel.preset_schemes
+    assert "A" not in panel.subtitle_style.custom_style_schemes
+    assert panel._singer_combo.findData("custom:A") == -1
+
+
 def test_property_panel_can_add_custom_scheme(qapp):
     panel = PropertyPanel()
     emitted: list[Style] = []
@@ -1289,7 +1477,7 @@ def test_main_window_native_export_switch_loads_and_persists(qapp, monkeypatch):
     assert win._project_dirty is True
 
 
-def test_main_window_persists_style_and_selected_scheme(qapp, monkeypatch):
+def test_main_window_keeps_presets_but_falls_back_to_global_selection(qapp, monkeypatch):
     monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
     monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
     initial_style = Style(
@@ -1324,14 +1512,13 @@ def test_main_window_persists_style_and_selected_scheme(qapp, monkeypatch):
     provider = FakeSettingsProvider()
     win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
 
-    assert win._property_panel.current_scheme_key() == "custom:图像方案"
+    assert win._property_panel.current_scheme_key() == "global"
     assert win._style.custom_style_schemes["图像方案"].karaoke_colors.after.text.image_path == r"D:\cover.png"
 
-    win._property_panel._paint_image_scale_spin.setValue(175)
-    win._property_panel.set_current_scheme_key("global")
+    win._save_persisted_state()
 
     saved_style = style_from_dict(provider.data["style"])
-    assert saved_style.custom_style_schemes["图像方案"].karaoke_colors.after.text.image_scale_pct == 175
+    assert saved_style.custom_style_schemes["图像方案"].karaoke_colors.after.text.image_scale_pct == 150
     assert provider.data["selected_scheme_key"] == "global"
 
 
