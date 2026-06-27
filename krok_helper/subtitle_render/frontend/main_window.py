@@ -1,4 +1,4 @@
-"""字幕视频渲染主窗口（Sayatoo 风格 + 底部 Pivot 导航 + 拖拽加载）。
+"""字幕视频渲染主窗口（Sayatoo 风格 + 底部 NavigationBar + 拖拽加载）。
 
 照搬 SUG（lyrics_timing/.../frontend/main_window.py）的双模式骨架：
 
@@ -6,17 +6,16 @@
 - ``SubtitleRenderWindow.for_embedding(parent, settings_provider, workflow_context)``
   — 嵌入工作台
 
-UI 顶层结构（底部 ``Pivot`` 导航，仿 SUG SettingsInterface 样式）：
+UI 顶层结构（底部左下角 ``NavigationBar``，与工作流区域一致的 24px 左右 margin）：
 
   ┌──────────────────────────────────────────────────────┐
-  │  ◆ 预览页                                             │
-  │    ┌─────────┬──────────────┬──────────────┐        │
-  │    │ 左·歌词 │ 中·预览       │ 右·属性 tab │        │
-  │    │ (拖.lrc)│ + transport   │              │        │
-  │    ├─────────┴──────────────┴──────────────┤        │
-  │    │ 底·字幕轨道                            │        │
-  │    └─────────────────────────────────────────┘        │
-  ├──────────────────────────────────────────────────────┤
+  │  项目命令栏                                           │
+  │  ┌─────────┬──────────────┬──────────────┐          │
+  │  │ 左·歌词 │ 中·预览       │ 右·属性 tab │          │
+  │  │ (拖.lrc)│ + transport   │              │          │
+  │  ├─────────┴──────────────┴──────────────┤          │
+  │  │ 底·字幕轨道                            │          │
+  │  └─────────────────────────────────────────┘          │
   │  [预览] [导出]                                         │
   └──────────────────────────────────────────────────────┘
 
@@ -52,7 +51,6 @@ from qfluentwidgets import (
     Action,
     DropDownPushButton,
     FluentIcon as FIF,
-    Pivot,
     RoundMenu,
 )
 
@@ -239,7 +237,7 @@ class SubtitleRenderWindow(QWidget):
     # ------------------------------------------------------------------ layout
 
     def _init_layout(self) -> None:
-        # 底部 Pivot 导航（仿 SUG SettingsInterface）+ 上方内容区。
+        # 主布局：内容区 + 底部导航条（水平按钮靠左下角）
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -263,24 +261,60 @@ class SubtitleRenderWindow(QWidget):
         self._export_height_spin.valueChanged.connect(self._on_export_screen_changed)
         self._export_fps_combo.currentIndexChanged.connect(self._on_export_screen_changed)
 
-        # 底部导航条
-        self._pivot = Pivot(self)
-        self._pivot.setFixedHeight(36)
-        self._pivot.addItem(
-            routeKey="preview",
-            text="预览",
-            onClick=lambda: self._stack.setCurrentIndex(0),
-        )
-        self._pivot.addItem(
-            routeKey="export",
-            text="导出",
-            onClick=lambda: self._stack.setCurrentIndex(1),
-        )
-        self._pivot.setCurrentItem("preview")
-        root.addWidget(self._pivot)
+        # 底部导航：两个水平按钮，距左/下边各 24px
+        bottom_bar = QWidget(self)
+        bottom_layout = QHBoxLayout(bottom_bar)
+        bottom_layout.setContentsMargins(24, 4, 24, 24)
+        bottom_layout.setSpacing(8)
 
+        self._nav_btns: dict[str, QPushButton] = {}
+        for key, text in [("preview", "预览"), ("export", "导出")]:
+            btn = QPushButton(text, bottom_bar)
+            btn.setCheckable(True)
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(32)
+            btn.clicked.connect(lambda _checked, k=key: self._switch_tab(k))
+            self._nav_btns[key] = btn
+            bottom_layout.addWidget(btn)
+        bottom_layout.addStretch(1)
+        themed(bottom_bar, self._nav_qss)
+        root.addWidget(bottom_bar)
+
+        self._nav_btns["preview"].setChecked(True)
         self._stack.setCurrentIndex(0)
         self._refresh_project_title()
+
+    def _switch_tab(self, key: str) -> None:
+        idx = 0 if key == "preview" else 1
+        self._stack.setCurrentIndex(idx)
+        for k, btn in self._nav_btns.items():
+            btn.setChecked(k == key)
+
+    @staticmethod
+    def _nav_qss() -> str:
+        p = palette()
+        return (
+            f"""
+            QPushButton {{
+                background: transparent;
+                color: {p.text_secondary};
+                border: none;
+                border-radius: 6px;
+                padding: 4px 14px;
+                font-family: "Microsoft YaHei UI";
+                font-size: 10pt;
+            }}
+            QPushButton:hover {{
+                color: {p.text_primary};
+                background: {p.table_row_hover};
+            }}
+            QPushButton:checked {{
+                color: {p.accent_primary};
+                font-weight: 600;
+            }}
+            """
+        )
 
     # ----------------------------------------------------------- 项目文件（A11）
 
@@ -522,7 +556,7 @@ class SubtitleRenderWindow(QWidget):
     def _make_preview_tab(self) -> QWidget:
         page = QWidget()
         outer = QVBoxLayout(page)
-        outer.setContentsMargins(0, 4, 0, 0)
+        outer.setContentsMargins(24, 4, 24, 4)
         outer.setSpacing(4)
 
         # 顶部项目命令栏（新建 / 打开 / 保存 / 另存为 + 当前项目名）
@@ -635,7 +669,7 @@ class SubtitleRenderWindow(QWidget):
             ),
         )
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(16, 4, 16, 16)
+        layout.setContentsMargins(24, 4, 24, 16)
         layout.setSpacing(10)
 
         # 顶部项目命令栏（同预览页）
