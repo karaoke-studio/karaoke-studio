@@ -400,6 +400,7 @@ class Style:
     """英数（ASCII）字体；为空时英数与日文共用 ``font_family``。"""
     font_size_px: int = 100
     letter_spacing_px: int = 0
+    """NicokaraMaker3 ``LyricsInterval`` default: 0 px."""
     space_width_percent: int = 20
     """空格宽度占字号的百分比；20% 对齐 NicokaraMaker3 默认值。"""
 
@@ -442,7 +443,8 @@ class Style:
     # ふりがな / ruby（B1）
     ruby_font_size_px: int = 35
     ruby_color: str = "#FF5A6F"
-    ruby_gap_px: int = 4
+    ruby_gap_px: int = 0
+    """NicokaraMaker3 ``LyricsAndRubyInterval`` default: 0 px."""
     ruby_karaoke_colors: Optional[KaraokeColors] = None
     """注音独立配色矩阵；为空时退回 ``ruby_color`` / 主文字配色。可由「应用主文字
     配色」一键从主文字矩阵复制（颜色照搬，描边宽度/阴影偏移在渲染时按注音字号比例缩放）。"""

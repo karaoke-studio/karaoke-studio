@@ -266,7 +266,7 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.fill_gradient_end_color == "#0055FF"
     assert style.fill_gradient_angle_deg == 0
     assert style.ruby_font_size_px == 35
-    assert style.ruby_gap_px == 4
+    assert style.ruby_gap_px == 0
     assert style.viewport_align == "center"
     assert style.viewport_offset_x == 0
     assert style.viewport_offset_y == 0

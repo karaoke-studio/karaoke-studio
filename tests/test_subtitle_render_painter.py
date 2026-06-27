@@ -416,7 +416,10 @@ def test_signal_lits_render_during_signal_window(qapp):
     assert bounds[0] == int(layout.signal_x)
     assert layout.text_x > layout.signal_x
     assert QColor(img.pixel(int(layout.signal_x) + 2, 36)).name(QColor.NameFormat.HexRgb).upper() == "#0000FF"
-    assert QColor(img.pixel(layout.text_x, 56)).name(QColor.NameFormat.HexRgb).upper() == "#FFFFFF"
+    assert any(
+        QColor(img.pixel(x, 56)).name(QColor.NameFormat.HexRgb).upper() == "#FFFFFF"
+        for x in range(layout.text_x, bounds[2] + 1)
+    )
 
 
 def test_frame_vertical_bounds_cover_signal_only_window(qapp):
@@ -473,7 +476,10 @@ def test_signal_lits_extend_the_lyric_text_window(qapp):
     bounds = _ink_bounds(img)
     assert bounds[0] == int(layout.signal_x)
     assert bounds[2] >= layout.text_x
-    assert QColor(img.pixel(layout.text_x, 56)).name(QColor.NameFormat.HexRgb).upper() == "#FFFFFF"
+    assert any(
+        QColor(img.pixel(x, 56)).name(QColor.NameFormat.HexRgb).upper() == "#FFFFFF"
+        for x in range(layout.text_x, bounds[2] + 1)
+    )
 
 
 def test_signal_lits_are_line_countdown_not_singer_lamps(qapp):
@@ -1510,6 +1516,66 @@ def test_nicokara_layout_width_includes_edge_and_optional_biting():
 
     assert locked == without_edge + 9
     assert biting < locked
+
+
+def test_nicokara_char_geometry_left_offset_clamps_biting():
+    from krok_helper.subtitle_render.engine.painter import _nicokara_char_geometry_left_offset
+
+    assert _nicokara_char_geometry_left_offset(
+        80, 100, 25, allow_biting=False,
+    ) == 20
+    assert _nicokara_char_geometry_left_offset(
+        80, 100, -10, allow_biting=False,
+    ) == 0
+    assert _nicokara_char_geometry_left_offset(
+        80, 100, -10, allow_biting=True,
+    ) == -8
+
+
+def test_glyph_path_offset_drives_render_path_and_ink_ranges(qapp, monkeypatch):
+    import math  # noqa: PLC0415
+
+    from PyQt6.QtGui import QPainterPath  # noqa: E402,PLC0415
+    from krok_helper.subtitle_render.engine import painter as painter_module  # noqa: PLC0415
+
+    def controlled_path_offset(*args, **kwargs):
+        return 12.25
+
+    monkeypatch.setattr(painter_module, "_char_path_left_offset", controlled_path_offset)
+    line = TimingLine(
+        chars=[TimingChar(text="A", start_ms=1000)],
+        end_ms=2000,
+    )
+    track = TimingTrack(lines=[line])
+    style = Style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=96,
+        line_y_position="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+    )
+
+    layout = painter_module._layout_line(track, line, style, 400, 200)
+
+    assert layout is not None
+    glyph = layout.text_layout.glyphs[0]
+    assert glyph.path_offset_x == pytest.approx(12.25)
+
+    raw_path = QPainterPath()
+    raw_path.addText(float(glyph.left), float(layout.baseline_y), glyph.font, glyph.text)
+    shifted_path = painter_module._glyph_run_path([glyph], layout.baseline_y)
+    assert shifted_path.boundingRect().left() == pytest.approx(
+        raw_path.boundingRect().left() + 12.25
+    )
+
+    shifted_bounds = shifted_path.boundingRect()
+    assert layout.ink_x_ranges[0] == (
+        int(math.floor(shifted_bounds.left())),
+        int(math.ceil(shifted_bounds.right())),
+    )
 
 
 def test_nicokara_space_width_uses_font_percentage_and_edge(qapp):

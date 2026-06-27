@@ -194,6 +194,7 @@ class _GlyphLayout:
     metrics: QFontMetrics
     left: int
     width: int
+    path_offset_x: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -2057,6 +2058,57 @@ def _nicokara_layout_width(
     return max(body_width, 0) + max(int(edge_size), 0)
 
 
+def _nicokara_char_geometry_left_offset(
+    ink_width: int,
+    advance: int,
+    left_bearing: int,
+    *,
+    allow_biting: bool,
+) -> int:
+    """Approximate NicokaraMaker3's CharGeometryLeftOffset."""
+    advance = max(int(advance), 1)
+    left = int(left_bearing)
+    if not allow_biting:
+        left = max(left, 0)
+    return _truncate_div(max(int(ink_width), 0) * left, advance)
+
+
+def _char_path_left_offset(
+    ch_text: str,
+    font: QFont,
+    metrics: QFontMetrics,
+    latin_metrics: QFontMetrics,
+    font_for,
+    style: Style,
+) -> float:
+    """Offset from the layout-box left edge to the QPainterPath text origin."""
+    if not ch_text or ch_text.isspace():
+        return 0.0
+    glyph_font = font_for(ch_text) if font_for is not None else font
+    glyph_metrics = (
+        latin_metrics
+        if font_for is not None and ch_text and ch_text.isascii()
+        else metrics
+    )
+    path = QPainterPath()
+    path.addText(0.0, 0.0, glyph_font, ch_text)
+    bounds = path.boundingRect()
+    if bounds.isEmpty():
+        return 0.0
+    advance = _char_advance(ch_text, metrics, latin_metrics, font_for)
+    try:
+        left_bearing = glyph_metrics.leftBearing(ch_text)
+    except (TypeError, ValueError):
+        left_bearing = int(bounds.left())
+    geometry_left = _nicokara_char_geometry_left_offset(
+        int(bounds.width()),
+        advance,
+        left_bearing,
+        allow_biting=bool(style.allow_biting),
+    )
+    return -float(bounds.left()) + float(geometry_left) + max(int(style.stroke_width_px), 0) / 2.0
+
+
 def _char_layout_width(
     ch_text: str,
     font: QFont,
@@ -3346,6 +3398,7 @@ def _paint_line_static(
                 layout.active_rubies, layout.font, layout.baseline_y, layout.metrics,
                 style, layout.colors, layout.line_rect, t_ms, transition,
                 rtl=layout.rtl, font_for=layout.font_for, ink_x_ranges=layout.ink_x_ranges,
+                glyphs_by_index=_role_glyphs_by_index(line, layout.text_layout),
             )
         return
 
@@ -3423,19 +3476,14 @@ def _layout_plain_line(
     char_x_ranges: list[tuple[int, int]] = [
         (left, left + w) for left, w in zip(char_lefts, char_widths)
     ]
-    char_fonts = [
-        (font_for(c.text) if font_for is not None else font) for c in line.chars
-    ]
-    ink_x_ranges = _char_ink_x_ranges(
-        [c.text for c in line.chars], char_fonts, char_lefts,
-    )
+    text_layout = _build_text_layout(line, style, x0=x0, baseline_y=y, inline_styles=False)
+    ink_x_ranges = _role_char_ink_ranges_by_index(line, text_layout, char_x_ranges)
     fill_segments = _karaoke_fill_segments(
         char_widths, intervals, ink_x_ranges, active_rubies, line,
     )
     line_rect = QRectF(
         float(x0), float(y - metrics.ascent()), float(total_w), float(metrics.height()),
     )
-    text_layout = _build_text_layout(line, style, x0=x0, baseline_y=y, inline_styles=False)
     colors = _effective_karaoke_colors(style)
     return _LineLayout(
         text_layout=text_layout,
@@ -3556,7 +3604,7 @@ def _build_text_layout(
     inline_styles: bool,
 ) -> _TextLayout:
     rtl = style.right_to_left
-    measured: list[tuple[int, str, str | None, Style, QFont, QFontMetrics, int, int]] = []
+    measured: list[tuple[int, str, str | None, Style, QFont, QFontMetrics, int, int, float]] = []
     total_w = 0
     max_ascent = 0
     max_descent = 0
@@ -3620,6 +3668,9 @@ def _build_text_layout(
                 glyph_metrics,
                 width,
                 spacing_after,
+                _char_path_left_offset(
+                    ch.text, font, metrics, latin_metrics, font_for, role_style,
+                ),
             )
         )
         total_w += width + spacing_after
@@ -3629,7 +3680,7 @@ def _build_text_layout(
     glyphs: list[_GlyphLayout] = []
     if rtl:
         cursor = x0 + total_w
-        for index, text, role_label, role_style, glyph_font, metrics, width, spacing_after in measured:
+        for index, text, role_label, role_style, glyph_font, metrics, width, spacing_after, path_offset_x in measured:
             cursor -= width
             glyphs.append(
                 _GlyphLayout(
@@ -3641,12 +3692,13 @@ def _build_text_layout(
                     metrics=metrics,
                     left=cursor,
                     width=width,
+                    path_offset_x=path_offset_x,
                 )
             )
             cursor -= spacing_after
     else:
         cursor = x0
-        for index, text, role_label, role_style, glyph_font, metrics, width, spacing_after in measured:
+        for index, text, role_label, role_style, glyph_font, metrics, width, spacing_after, path_offset_x in measured:
             glyphs.append(
                 _GlyphLayout(
                     index=index,
@@ -3657,6 +3709,7 @@ def _build_text_layout(
                     metrics=metrics,
                     left=cursor,
                     width=width,
+                    path_offset_x=path_offset_x,
                 )
             )
             cursor += width + spacing_after
@@ -3773,7 +3826,7 @@ def _glyph_runs(layout: _TextLayout) -> list[list[_GlyphLayout]]:
 def _glyph_run_path(glyphs: list[_GlyphLayout], baseline_y: int) -> QPainterPath:
     path = QPainterPath()
     for glyph in glyphs:
-        path.addText(float(glyph.left), float(baseline_y), glyph.font, glyph.text)
+        path.addText(float(glyph.left + glyph.path_offset_x), float(baseline_y), glyph.font, glyph.text)
     return path
 
 
@@ -4594,6 +4647,7 @@ def _glyph_run_layer_key(
             int(glyph.font.weight()),
             glyph.font.italic(),
             glyph.left - run_left,
+            round(float(glyph.path_offset_x), 3),
             glyph.width,
         )
         for glyph in glyphs
@@ -4626,6 +4680,7 @@ def _glyph_run_after_glow_key(
             int(glyph.font.weight()),
             glyph.font.italic(),
             glyph.left - run_left,
+            round(float(glyph.path_offset_x), 3),
             glyph.width,
         )
         for glyph in glyphs
@@ -5148,7 +5203,7 @@ def _role_char_ink_ranges_by_index(
             ranges[glyph.index] = (left, left)
             continue
         path = QPainterPath()
-        path.addText(float(left), 0.0, glyph.font, text)
+        path.addText(float(left + glyph.path_offset_x), 0.0, glyph.font, text)
         br = path.boundingRect()
         if br.isEmpty():
             ranges[glyph.index] = (left, left)
@@ -5165,13 +5220,16 @@ def _line_text_path(
     y: int,
     char_lefts: list[int] | None = None,
     font_for=None,
+    char_path_offsets: list[float] | None = None,
 ) -> QPainterPath:
     path = QPainterPath()
     if char_lefts is None:
         char_lefts = _char_left_positions(char_widths, x, False)
-    for ch, left in zip(line.chars, char_lefts):
+    if char_path_offsets is None:
+        char_path_offsets = [0.0 for _ in char_lefts]
+    for ch, left, path_offset_x in zip(line.chars, char_lefts, char_path_offsets):
         glyph_font = font_for(ch.text) if font_for is not None else font
-        path.addText(float(left), float(y), glyph_font, ch.text)
+        path.addText(float(left + path_offset_x), float(y), glyph_font, ch.text)
     return path
 
 
@@ -5250,12 +5308,15 @@ def _paint_line_with_character_transition(
     rtl: bool = False,
     font_for=None,
     ink_x_ranges: list[tuple[int, int]] | None = None,
+    glyphs_by_index: list[_GlyphLayout | None] | None = None,
 ) -> None:
     # 走字 ratio 按墨水边界算（与静态路径一致）；缺省回退 advance 框。
     fill_ranges = ink_x_ranges if ink_x_ranges is not None else char_x_ranges
     count = max(len(line.chars), 1)
     handled_indices: set[int] = set()
     ruby_groups = _resolve_char_ruby_groups(active_rubies, line, intervals)
+    if glyphs_by_index is None:
+        glyphs_by_index = [None for _ in line.chars]
     for index, (ch, width) in enumerate(zip(line.chars, char_widths)):
         if index in handled_indices:
             continue
@@ -5329,9 +5390,12 @@ def _paint_line_with_character_transition(
 
         path = QPainterPath()
         for char_index in indices:
+            layout_glyph = glyphs_by_index[char_index] if char_index < len(glyphs_by_index) else None
             glyph = line.chars[char_index]
-            glyph_font = font_for(glyph.text) if font_for is not None else font
-            path.addText(float(char_x_ranges[char_index][0]), float(baseline_y), glyph_font, glyph.text)
+            glyph_font = layout_glyph.font if layout_glyph is not None else (font_for(glyph.text) if font_for is not None else font)
+            glyph_left = layout_glyph.left if layout_glyph is not None else char_x_ranges[char_index][0]
+            path_offset_x = layout_glyph.path_offset_x if layout_glyph is not None else 0.0
+            path.addText(float(glyph_left + path_offset_x), float(baseline_y), glyph_font, glyph.text)
         painter.save()
         try:
             painter.setOpacity(painter.opacity() * opacity)
@@ -5361,19 +5425,24 @@ def _paint_line_with_character_transition(
                 paint_width = max(int(round(paint_rect.width())), 1)
                 paint_clip_rect = paint_rect
                 # 上正 glyph 列表：bake 路径与 A3 glow 缓存共用。
-                group_glyphs = [
-                    _GlyphLayout(
-                        index=ci,
-                        text=line.chars[ci].text,
-                        role_label=None,
-                        style=style,
-                        font=(font_for(line.chars[ci].text) if font_for is not None else font),
-                        metrics=metrics,
-                        left=char_x_ranges[ci][0],
-                        width=char_x_ranges[ci][1] - char_x_ranges[ci][0],
+                group_glyphs = []
+                for ci in indices:
+                    layout_glyph = glyphs_by_index[ci] if ci < len(glyphs_by_index) else None
+                    if layout_glyph is not None:
+                        group_glyphs.append(layout_glyph)
+                        continue
+                    group_glyphs.append(
+                        _GlyphLayout(
+                            index=ci,
+                            text=line.chars[ci].text,
+                            role_label=None,
+                            style=style,
+                            font=(font_for(line.chars[ci].text) if font_for is not None else font),
+                            metrics=metrics,
+                            left=char_x_ranges[ci][0],
+                            width=char_x_ranges[ci][1] - char_x_ranges[ci][0],
+                        )
                     )
-                    for ci in indices
-                ]
                 if _glow_cache_enabled():
                     glow_run = group_glyphs
                     glow_transform = transform
@@ -6119,6 +6188,7 @@ def _char_ink_x_ranges(
     texts: list[str],
     fonts: list[QFont],
     char_lefts: list[int],
+    char_path_offsets: list[float] | None = None,
 ) -> list[tuple[int, int]]:
     """每个字符的墨水水平边界（绝对坐标 ``(ink_left, ink_right)``）。
 
@@ -6129,13 +6199,15 @@ def _char_ink_x_ranges(
     ``fillPath`` 绘制同源、与 DPR/点阵 strike 无关。空白字符无墨水 → 零宽 ``(left, left)``。
     与 SUG ``karaoke_preview.py`` 的 ``_ink_bounds``（``tightBoundingRect``）同口径。
     """
+    if char_path_offsets is None:
+        char_path_offsets = [0.0 for _ in char_lefts]
     ranges: list[tuple[int, int]] = []
-    for text, font, left in zip(texts, fonts, char_lefts):
+    for text, font, left, path_offset_x in zip(texts, fonts, char_lefts, char_path_offsets):
         if not text or text.isspace():
             ranges.append((left, left))
             continue
         path = QPainterPath()
-        path.addText(float(left), 0.0, font, text)
+        path.addText(float(left + path_offset_x), 0.0, font, text)
         br = path.boundingRect()
         if br.isEmpty():
             ranges.append((left, left))
