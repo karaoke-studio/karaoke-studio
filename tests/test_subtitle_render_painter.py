@@ -66,6 +66,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _volume_signal_column_rects,
     _volume_signal_geometry,
     _ruby_progress_ratio,
+    _main_text_ruby_progress_ratio,
     _ruby_reading_intervals,
     _ruby_layout_units,
     _ruby_target_indices,
@@ -2021,6 +2022,43 @@ def test_ruby_timing_drives_main_text_fill_extent(qapp):
     )
 
     assert _fill_extent_end(segments, 2400) == 146
+
+
+def test_main_text_uses_all_ruby_checkpoints_even_when_reading_units_are_missing(qapp):
+    """占位 ruby part 被 LRC 剥掉后，主文字仍按全部 checkpoint 分段。
+
+    SUG 的 ``char_part_anchors`` 不依赖可见 reading unit 数；旧字幕路径复用
+    ``_ruby_progress_ratio``，reading 只剩一个字时会忽略两个额外 checkpoint。
+    """
+    line = TimingLine(chars=[TimingChar(text="寿", start_ms=5000)], end_ms=6000)
+    ruby = RubyAnnotation(
+        kanji="寿",
+        reading="す",
+        reading_part_ms=[150, 300],
+        pos_start_ms=5000,
+        pos_end_ms=6000,
+    )
+    segments = _karaoke_fill_segments(
+        [100],
+        [(5000, 6000)],
+        [(0, 100)],
+        [ruby],
+        line,
+    )
+
+    # anchors=[5000, 5150, 5300, 6000]；5200 位于第 2/3 段的 1/3 处，
+    # 总进度=(1+1/3)/3=4/9。Ruby 自身仍按一个可见 unit 线性走到 20%。
+    assert _main_text_ruby_progress_ratio(ruby, 5200) == pytest.approx(4 / 9)
+    assert _ruby_progress_ratio(ruby, 5200) == pytest.approx(0.2)
+    assert _fill_extent_end(segments, 5200) == 44
+    assert _character_fill_ratio(
+        line,
+        [(5000, 6000)],
+        [(0, 100)],
+        [ruby],
+        0,
+        5200,
+    ) == pytest.approx(4 / 9)
 
 
 def test_ruby_with_unmatched_kanji_does_not_group_timed_characters(qapp):

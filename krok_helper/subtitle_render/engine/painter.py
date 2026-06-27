@@ -4889,7 +4889,7 @@ def _paint_role_line_with_character_transition(
         if in_utopia_exit:
             ratio = 1.0
         elif group_ruby is not None:
-            ratio = _ruby_progress_ratio(group_ruby, t_ms)
+            ratio = _main_text_ruby_progress_ratio(group_ruby, t_ms)
         else:
             ratio = _character_fill_ratio(
                 line,
@@ -5195,7 +5195,7 @@ def _paint_line_with_character_transition(
         if in_utopia_exit:
             fill_ratio = 1.0
         elif group_ruby is not None:
-            fill_ratio = _ruby_progress_ratio(group_ruby, t_ms)
+            fill_ratio = _main_text_ruby_progress_ratio(group_ruby, t_ms)
         else:
             fill_ratio = _character_fill_ratio(
                 line, intervals, fill_ranges, active_rubies, index, t_ms, groups=ruby_groups
@@ -6220,7 +6220,7 @@ def _fill_clip_band(
 def _segment_fill_ratio(segment: _FillSegment, t_ms: int) -> float:
     if segment.ruby is None:
         return char_fill_ratio(segment.start_ms, segment.end_ms, t_ms)
-    return _ruby_progress_ratio(segment.ruby, t_ms)
+    return _main_text_ruby_progress_ratio(segment.ruby, t_ms)
 
 
 def _character_fill_ratio(
@@ -6251,7 +6251,7 @@ def _character_fill_ratio(
             effective_ruby = _effective_ruby_for_target(ruby, indices, intervals)
             group_left = min(char_x_ranges[candidate][0] for candidate in indices)
             group_right = max(char_x_ranges[candidate][1] for candidate in indices)
-            fill_end = group_left + (group_right - group_left) * _ruby_progress_ratio(
+            fill_end = group_left + (group_right - group_left) * _main_text_ruby_progress_ratio(
                 effective_ruby, t_ms
             )
             char_left, char_right = char_x_ranges[index]
@@ -7576,6 +7576,47 @@ def _ruby_progress_ratio(ruby: RubyAnnotation, t_ms: int) -> float:
             return index / total
         if t_ms < end:
             return (index + char_fill_ratio(start, end, t_ms)) / total
+    return 1.0
+
+
+def _main_text_ruby_progress_ratio(ruby: RubyAnnotation, t_ms: int) -> float:
+    """Return SUG-style multi-checkpoint progress for the ruby's base text.
+
+    ``@Ruby`` stores every checkpoint after the first as a relative timestamp.
+    Ruby rendering interprets those timestamps against reading/mora units (and
+    can treat alternating timestamps as pauses).  SUG main text does something
+    deliberately different: ``char_part_anchors`` divides the base glyph's
+    horizontal progress equally by checkpoint segment, regardless of reading
+    unit count or width.  Keep that main-text clock separate from
+    :func:`_ruby_progress_ratio` so placeholder/empty ruby parts still advance
+    the base glyph exactly as SUG does.
+    """
+    if not ruby.reading_part_ms:
+        return char_fill_ratio(ruby.pos_start_ms, ruby.pos_end_ms, t_ms)
+
+    start = int(ruby.pos_start_ms)
+    end = max(start, int(ruby.pos_end_ms))
+    anchors = [start]
+    for relative_ms in ruby.reading_part_ms:
+        timestamp = start + int(relative_ms)
+        anchors.append(max(anchors[-1], min(end, timestamp)))
+    anchors.append(max(anchors[-1], end))
+
+    segment_count = len(anchors) - 1
+    if segment_count <= 0:
+        return 1.0
+    if t_ms < anchors[0]:
+        return 0.0
+    if t_ms >= anchors[-1]:
+        return 1.0
+    for index in range(segment_count):
+        segment_start = anchors[index]
+        segment_end = anchors[index + 1]
+        if t_ms < segment_end:
+            duration = segment_end - segment_start
+            local = (t_ms - segment_start) / duration if duration > 0 else 1.0
+            local = max(0.0, min(1.0, local))
+            return (index + local) / segment_count
     return 1.0
 
 
