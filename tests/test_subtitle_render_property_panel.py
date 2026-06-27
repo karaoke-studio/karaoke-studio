@@ -1109,6 +1109,71 @@ def test_property_panel_apply_main_colors_button_only_shows_for_ruby_colors(qapp
     assert not panel._ruby_apply_main_btn.isHidden()
 
 
+def test_property_panel_ruby_color_subject_controls_emit_ruby_style(qapp):
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            stroke_width_px=10,
+            stroke2_width_px=4,
+            decoration_kind="shadow",
+            shadow_offset_y=3,
+        )
+    )
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._color_subject_combo.setCurrentIndex(
+        panel._color_subject_combo.findData("ruby")
+    )
+    assert panel._stroke_width_spin.value() == 4
+    assert panel._stroke2_width_spin.value() == 1
+
+    panel._stroke_width_spin.setValue(6)
+    assert emitted[-1].ruby_stroke_width_px == 6
+    assert emitted[-1].stroke_width_px == 10
+
+    panel._stroke2_width_spin.setValue(2)
+    assert emitted[-1].ruby_stroke2_width_px == 2
+    assert emitted[-1].stroke2_width_px == 4
+
+    panel._decoration_type_combo.setCurrentIndex(
+        panel._decoration_type_combo.findData("glow")
+    )
+    assert emitted[-1].ruby_decoration_kind == "glow"
+    assert emitted[-1].decoration_kind == "shadow"
+
+    panel._glow_radius_spin.setValue(9)
+    assert emitted[-1].ruby_glow_radius_px == 9
+    assert emitted[-1].ruby_glow_before_radius_px == 9
+    assert emitted[-1].glow_before_radius_px == 10
+
+    panel._color_subject_combo.setCurrentIndex(
+        panel._color_subject_combo.findData("main")
+    )
+    assert panel._stroke_width_spin.value() == 10
+    assert panel._decoration_type_combo.currentData() == "shadow"
+
+
+def test_property_panel_role_ruby_subject_controls_go_into_custom_scheme(qapp):
+    panel = PropertyPanel()
+    panel.set_roles(["B"])
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:B"))
+    panel._color_subject_combo.setCurrentIndex(
+        panel._color_subject_combo.findData("ruby")
+    )
+    panel._stroke_width_spin.setValue(7)
+    panel._shadow_y_spin.setValue(5)
+
+    scheme = emitted[-1].custom_style_schemes["B"]
+    assert scheme.ruby_stroke_width_px == 7
+    assert scheme.ruby_shadow_offset_y == 5
+    assert scheme.stroke_width_px != 7
+    assert emitted[-1].ruby_stroke_width_px is None
+
+
 def test_property_panel_role_scheme_switches_subtitle_controls(qapp):
     panel = PropertyPanel()
     panel.set_roles(["A"])

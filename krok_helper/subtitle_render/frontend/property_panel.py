@@ -103,8 +103,27 @@ _SCHEME_FIELDS = {
     "ruby_font_size_px",
     "ruby_color",
     "ruby_gap_px",
+    "ruby_stroke_width_px",
+    "ruby_stroke2_width_px",
+    "ruby_decoration_kind",
+    "ruby_glow_radius_px",
+    "ruby_glow_before_radius_px",
+    "ruby_glow_after_radius_px",
+    "ruby_shadow_offset_x",
+    "ruby_shadow_offset_y",
     "karaoke_colors",
     "ruby_karaoke_colors",
+}
+
+_RUBY_COLOR_SUBJECT_FIELDS = {
+    "stroke_width_px": "ruby_stroke_width_px",
+    "stroke2_width_px": "ruby_stroke2_width_px",
+    "decoration_kind": "ruby_decoration_kind",
+    "glow_radius_px": "ruby_glow_radius_px",
+    "glow_before_radius_px": "ruby_glow_before_radius_px",
+    "glow_after_radius_px": "ruby_glow_after_radius_px",
+    "shadow_offset_x": "ruby_shadow_offset_x",
+    "shadow_offset_y": "ruby_shadow_offset_y",
 }
 
 _GLOBAL_SCHEME_KEY = "global"
@@ -1606,7 +1625,7 @@ class PropertyPanel(QTabWidget):
         self._decoration_type_combo.addItem("阴影", "shadow")
         self._decoration_type_combo.addItem("发光", "glow")
         self._decoration_type_combo.currentIndexChanged.connect(
-            lambda _index: self._update_style(
+            lambda _index: self._update_color_subject_style(
                 decoration_kind=str(self._decoration_type_combo.currentData())
             )
         )
@@ -1628,33 +1647,33 @@ class PropertyPanel(QTabWidget):
 
         self._stroke_width_spin = _spin(0, 24, suffix=" px")
         self._stroke_width_spin.valueChanged.connect(
-            lambda value: self._update_style(stroke_width_px=value)
+            lambda value: self._update_color_subject_style(stroke_width_px=value)
         )
         detail_layout.addWidget(_field("描边宽度", self._stroke_width_spin), 0, 0)
 
         self._stroke2_width_spin = _spin(0, 48, suffix=" px")
         self._stroke2_width_spin.valueChanged.connect(
-            lambda value: self._update_style(stroke2_width_px=value)
+            lambda value: self._update_color_subject_style(stroke2_width_px=value)
         )
         detail_layout.addWidget(_field("描边2宽度", self._stroke2_width_spin), 0, 1)
 
         self._shadow_x_spin = _spin(-40, 40, suffix=" px")
         self._shadow_x_spin.valueChanged.connect(
-            lambda value: self._update_style(shadow_offset_x=value)
+            lambda value: self._update_color_subject_style(shadow_offset_x=value)
         )
         self._shadow_x_field = _field("阴影 X", self._shadow_x_spin)
         detail_layout.addWidget(self._shadow_x_field, 1, 0)
 
         self._shadow_y_spin = _spin(-40, 40, suffix=" px")
         self._shadow_y_spin.valueChanged.connect(
-            lambda value: self._update_style(shadow_offset_y=value)
+            lambda value: self._update_color_subject_style(shadow_offset_y=value)
         )
         self._shadow_y_field = _field("阴影 Y", self._shadow_y_spin)
         detail_layout.addWidget(self._shadow_y_field, 1, 1)
 
         self._glow_before_radius_spin = _spin(1, 120, suffix=" px")
         self._glow_before_radius_spin.valueChanged.connect(
-            lambda value: self._update_style(
+            lambda value: self._update_color_subject_style(
                 glow_radius_px=value,
                 glow_before_radius_px=value,
             )
@@ -1665,7 +1684,7 @@ class PropertyPanel(QTabWidget):
 
         self._glow_after_radius_spin = _spin(1, 120, suffix=" px")
         self._glow_after_radius_spin.valueChanged.connect(
-            lambda value: self._update_style(glow_after_radius_px=value)
+            lambda value: self._update_color_subject_style(glow_after_radius_px=value)
         )
         self._glow_after_radius_field = _field("走字后发光", self._glow_after_radius_spin)
         detail_layout.addWidget(self._glow_after_radius_field, 1, 1)
@@ -2850,6 +2869,7 @@ class PropertyPanel(QTabWidget):
             self._ruby_apply_main_btn.setVisible(
                 self._current_color_subject_key() == "ruby"
             )
+        self._sync_color_subject_style_controls()
         self._sync_color_fill_controls()
 
     def _on_color_target_combo_changed(self) -> None:
@@ -2874,6 +2894,60 @@ class PropertyPanel(QTabWidget):
             return "main"
         data = self._color_subject_combo.currentData()
         return "ruby" if data == "ruby" else "main"
+
+    def _color_subject_field(self, field_name: str) -> str:
+        if self._current_color_subject_key() == "ruby":
+            return _RUBY_COLOR_SUBJECT_FIELDS.get(field_name, field_name)
+        return field_name
+
+    def _color_subject_value(self, field_name: str):
+        if self._current_color_subject_key() != "ruby":
+            return self._scheme_value(field_name)
+        ruby_field = _RUBY_COLOR_SUBJECT_FIELDS.get(field_name)
+        if ruby_field is None:
+            return self._scheme_value(field_name)
+        value = self._scheme_value(ruby_field)
+        if value is not None:
+            return value
+        return self._inherited_ruby_subject_value(field_name)
+
+    def _inherited_ruby_subject_value(self, field_name: str):
+        scale = max(int(self._scheme_value("ruby_font_size_px")), 1) / max(
+            int(self._scheme_value("font_size_px")), 1
+        )
+        if field_name == "stroke_width_px":
+            return _scaled_panel_px(int(self._scheme_value("stroke_width_px")), scale)
+        if field_name == "stroke2_width_px":
+            return _scaled_panel_px(int(self._scheme_value("stroke2_width_px")), scale)
+        if field_name == "decoration_kind":
+            return self._scheme_value("decoration_kind")
+        if field_name == "shadow_offset_x":
+            return _scaled_panel_signed_px(int(self._scheme_value("shadow_offset_x")), scale)
+        if field_name == "shadow_offset_y":
+            return _scaled_panel_signed_px(int(self._scheme_value("shadow_offset_y")), scale)
+        if field_name == "glow_radius_px":
+            return _scaled_panel_px(self._scheme_glow_radius(after=False), scale)
+        if field_name == "glow_before_radius_px":
+            return _scaled_panel_px(self._scheme_glow_radius(after=False), scale)
+        if field_name == "glow_after_radius_px":
+            return _scaled_panel_px(self._scheme_glow_radius(after=True), scale)
+        return self._scheme_value(field_name)
+
+    def _scheme_glow_radius(self, *, after: bool) -> int:
+        value = int(
+            self._scheme_value("glow_after_radius_px" if after else "glow_before_radius_px")
+        )
+        legacy = int(self._scheme_value("glow_radius_px"))
+        if value == 10 and legacy != 10:
+            value = legacy
+        return max(value, 1)
+
+    def _update_color_subject_style(self, **changes) -> None:
+        mapped = {
+            self._color_subject_field(field_name): value
+            for field_name, value in changes.items()
+        }
+        self._update_style(**mapped)
 
     def _current_karaoke_colors(self) -> KaraokeColors:
         value = self._scheme_value("karaoke_colors")
@@ -2927,13 +3001,50 @@ class PropertyPanel(QTabWidget):
         if not hasattr(self, "_decoration_type_field"):
             return
         is_decoration = self._current_color_layer_key() == "shadow"
-        is_shadow = str(self._scheme_value("decoration_kind")) == "shadow"
-        is_glow = str(self._scheme_value("decoration_kind")) == "glow"
+        decoration_kind = str(self._color_subject_value("decoration_kind"))
+        is_shadow = decoration_kind == "shadow"
+        is_glow = decoration_kind == "glow"
         self._decoration_type_field.setVisible(is_decoration)
         self._shadow_x_field.setVisible(is_decoration and is_shadow)
         self._shadow_y_field.setVisible(is_decoration and is_shadow)
         self._glow_radius_field.setVisible(is_decoration and is_glow)
         self._glow_after_radius_field.setVisible(is_decoration and is_glow)
+
+    def _sync_color_subject_style_controls(self) -> None:
+        if not hasattr(self, "_stroke_width_spin"):
+            return
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            self._stroke_width_spin.setValue(
+                int(self._color_subject_value("stroke_width_px"))
+            )
+            self._stroke2_width_spin.setValue(
+                int(self._color_subject_value("stroke2_width_px"))
+            )
+            self._decoration_type_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._decoration_type_combo.findData(
+                        str(self._color_subject_value("decoration_kind"))
+                    ),
+                )
+            )
+            self._glow_radius_spin.setValue(
+                int(self._color_subject_value("glow_before_radius_px"))
+            )
+            self._glow_after_radius_spin.setValue(
+                int(self._color_subject_value("glow_after_radius_px"))
+            )
+            self._shadow_x_spin.setValue(
+                int(self._color_subject_value("shadow_offset_x"))
+            )
+            self._shadow_y_spin.setValue(
+                int(self._color_subject_value("shadow_offset_y"))
+            )
+            self._sync_decoration_visibility()
+        finally:
+            self._syncing = was_syncing
 
     def _update_current_fill(self, **changes) -> None:
         if self._syncing:
@@ -3279,28 +3390,7 @@ class PropertyPanel(QTabWidget):
             )
             self._italic_check.setChecked(bool(self._scheme_value("italic")))
             self._allow_biting_check.setChecked(bool(self._scheme_value("allow_biting")))
-            self._stroke_width_spin.setValue(int(self._scheme_value("stroke_width_px")))
-            self._stroke2_width_spin.setValue(int(self._scheme_value("stroke2_width_px")))
-            self._decoration_type_combo.setCurrentIndex(
-                max(
-                    0,
-                    self._decoration_type_combo.findData(
-                        str(self._scheme_value("decoration_kind"))
-                    ),
-                )
-            )
-            legacy_glow = int(self._scheme_value("glow_radius_px"))
-            before_glow = int(self._scheme_value("glow_before_radius_px"))
-            after_glow = int(self._scheme_value("glow_after_radius_px"))
-            if legacy_glow != 10:
-                if before_glow == 10:
-                    before_glow = legacy_glow
-                if after_glow == 10:
-                    after_glow = legacy_glow
-            self._glow_radius_spin.setValue(before_glow)
-            self._glow_after_radius_spin.setValue(after_glow)
-            self._shadow_x_spin.setValue(int(self._scheme_value("shadow_offset_x")))
-            self._shadow_y_spin.setValue(int(self._scheme_value("shadow_offset_y")))
+            self._sync_color_subject_style_controls()
             self._ruby_font_size_spin.setValue(int(self._scheme_value("ruby_font_size_px")))
             self._ruby_gap_spin.setValue(int(self._scheme_value("ruby_gap_px")))
             if hasattr(self, "_ruby_apply_main_btn"):
@@ -3391,6 +3481,10 @@ class PropertyPanel(QTabWidget):
             changes["decoration_kind"] = _normalize_decoration_kind(
                 changes["decoration_kind"]
             )
+        if "ruby_decoration_kind" in changes:
+            changes["ruby_decoration_kind"] = _normalize_decoration_kind(
+                changes["ruby_decoration_kind"]
+            )
         if "entry_anim" in changes:
             changes["entry_anim"] = _normalize_entry_animation(changes["entry_anim"])
         if "exit_anim" in changes:
@@ -3443,6 +3537,19 @@ def _normalize_decoration_kind(value: object) -> DecorationKind:
     if value in {"shadow", "glow"}:
         return value  # type: ignore[return-value]
     return "shadow"
+
+
+def _scaled_panel_px(value: int, scale: float) -> int:
+    if value <= 0:
+        return 0
+    return max(1, int(round(value * scale)))
+
+
+def _scaled_panel_signed_px(value: int, scale: float) -> int:
+    if value == 0:
+        return 0
+    sign = 1 if value > 0 else -1
+    return sign * max(1, int(round(abs(value) * scale)))
 
 
 def _normalize_entry_animation(value: object) -> EntryAnimation:
@@ -3630,6 +3737,14 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         ruby_font_size_px=int(panel._scheme_value("ruby_font_size_px")),
         ruby_color=str(panel._scheme_value("ruby_color")),
         ruby_gap_px=int(panel._scheme_value("ruby_gap_px")),
+        ruby_stroke_width_px=panel._scheme_value("ruby_stroke_width_px"),
+        ruby_stroke2_width_px=panel._scheme_value("ruby_stroke2_width_px"),
+        ruby_decoration_kind=panel._scheme_value("ruby_decoration_kind"),
+        ruby_glow_radius_px=panel._scheme_value("ruby_glow_radius_px"),
+        ruby_glow_before_radius_px=panel._scheme_value("ruby_glow_before_radius_px"),
+        ruby_glow_after_radius_px=panel._scheme_value("ruby_glow_after_radius_px"),
+        ruby_shadow_offset_x=panel._scheme_value("ruby_shadow_offset_x"),
+        ruby_shadow_offset_y=panel._scheme_value("ruby_shadow_offset_y"),
         karaoke_colors=panel._current_karaoke_colors(),
         ruby_karaoke_colors=panel._scheme_value("ruby_karaoke_colors"),
     )

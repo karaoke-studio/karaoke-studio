@@ -324,6 +324,7 @@ from krok_helper.subtitle_render.engine.timeline import (
 )
 from krok_helper.subtitle_render.engine.animator import line_animation_state
 from krok_helper.subtitle_render.models import (
+    DecorationKind,
     KaraokeColors,
     KaraokeColorState,
     PaintFill,
@@ -2310,10 +2311,9 @@ def _visual_stroke_extent(stroke_width: int, stroke2_width: int) -> int:
 
 
 def _ruby_stroke_extent(style: Style) -> int:
-    scale = _ruby_scale(style)
     return _visual_stroke_extent(
-        _scaled_px(style.stroke_width_px, scale),
-        _scaled_px(style.stroke2_width_px, scale),
+        _ruby_stroke_width(style),
+        _ruby_stroke2_width(style),
     )
 
 
@@ -2360,6 +2360,51 @@ def _glow_radius(style: Style, *, after: bool) -> int:
     return max(int(value), 1)
 
 
+def _ruby_stroke_width(style: Style) -> int:
+    if style.ruby_stroke_width_px is not None:
+        return max(int(style.ruby_stroke_width_px), 0)
+    return _scaled_px(style.stroke_width_px, _ruby_scale(style))
+
+
+def _ruby_stroke2_width(style: Style) -> int:
+    if style.ruby_stroke2_width_px is not None:
+        return max(int(style.ruby_stroke2_width_px), 0)
+    return _scaled_px(style.stroke2_width_px, _ruby_scale(style))
+
+
+def _ruby_decoration_kind(style: Style) -> DecorationKind:
+    value = style.ruby_decoration_kind
+    return value if value in {"shadow", "glow"} else style.decoration_kind
+
+
+def _ruby_shadow_dx(style: Style) -> int:
+    if style.ruby_shadow_offset_x is not None:
+        return int(style.ruby_shadow_offset_x)
+    return _scaled_signed_px(style.shadow_offset_x, _ruby_scale(style))
+
+
+def _ruby_shadow_dy(style: Style) -> int:
+    if style.ruby_shadow_offset_y is not None:
+        return int(style.ruby_shadow_offset_y)
+    return _scaled_signed_px(style.shadow_offset_y, _ruby_scale(style))
+
+
+def _ruby_glow_radius(style: Style, *, after: bool) -> int:
+    value = style.ruby_glow_after_radius_px if after else style.ruby_glow_before_radius_px
+    if value is None and style.ruby_glow_radius_px is not None:
+        value = style.ruby_glow_radius_px
+    if value is not None:
+        return max(int(value), 1)
+    return _scaled_glow_radius(style, _ruby_scale(style), after=after)
+
+
+def _ruby_paint_style(style: Style) -> Style:
+    decoration = _ruby_decoration_kind(style)
+    if decoration == style.decoration_kind:
+        return style
+    return replace(style, decoration_kind=decoration)
+
+
 def _text_visual_padding(style: Style, *, after: bool) -> int:
     pad = _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px)
     if style.decoration_kind == "glow":
@@ -2377,21 +2422,20 @@ def _text_visual_padding(style: Style, *, after: bool) -> int:
 
 
 def _ruby_visual_padding(style: Style, *, after: bool) -> int:
-    scale = _ruby_scale(style)
-    stroke_width = _scaled_px(style.stroke_width_px, scale)
-    stroke2_width = _scaled_px(style.stroke2_width_px, scale)
+    stroke_width = _ruby_stroke_width(style)
+    stroke2_width = _ruby_stroke2_width(style)
     pad = _visual_stroke_extent(stroke_width, stroke2_width)
-    if style.decoration_kind == "glow":
+    if _ruby_decoration_kind(style) == "glow":
         pad = max(
             pad,
             _glow_extent(
                 stroke_width,
                 stroke2_width,
-                _scaled_glow_radius(style, scale, after=after),
+                _ruby_glow_radius(style, after=after),
             ),
         )
     else:
-        pad = max(pad, abs(_scaled_signed_px(style.shadow_offset_y, scale)))
+        pad = max(pad, abs(_ruby_shadow_dy(style)))
     return max(pad, 2)
 
 
@@ -2986,13 +3030,13 @@ def _vertical_ruby_layers(
         return []
     ruby_font = _build_ruby_font(style)
     ruby_metrics = QFontMetrics(ruby_font)
-    scale = _ruby_scale(style)
-    stroke_width = _scaled_px(style.stroke_width_px, scale)
-    stroke2_width = _scaled_px(style.stroke2_width_px, scale)
-    shadow_dx = _scaled_signed_px(style.shadow_offset_x, scale)
-    shadow_dy = _scaled_signed_px(style.shadow_offset_y, scale)
-    before_glow_radius = _scaled_glow_radius(style, scale, after=False)
-    after_glow_radius = _scaled_glow_radius(style, scale, after=True)
+    paint_style = _ruby_paint_style(style)
+    stroke_width = _ruby_stroke_width(style)
+    stroke2_width = _ruby_stroke2_width(style)
+    shadow_dx = _ruby_shadow_dx(style)
+    shadow_dy = _ruby_shadow_dy(style)
+    before_glow_radius = _ruby_glow_radius(style, after=False)
+    after_glow_radius = _ruby_glow_radius(style, after=True)
     colors = _effective_ruby_karaoke_colors(style)
     ruby_cell_w = _vertical_cell_width(ruby_metrics)
     ruby_ascent = ruby_metrics.ascent()
@@ -3036,9 +3080,9 @@ def _vertical_ruby_layers(
         )
         layers.append(
             _BakedPathStackLayer(
-                path=ruby_path, rect=ruby_rect, state=colors.before, style=style,
+                path=ruby_path, rect=ruby_rect, state=colors.before, style=paint_style,
                 cache_key=_baked_stack_key(
-                    ruby_sig, ruby_rect, colors.before, style,
+                    ruby_sig, ruby_rect, colors.before, paint_style,
                     stroke_width=stroke_width, stroke2_width=stroke2_width,
                     shadow_dx=shadow_dx, shadow_dy=shadow_dy,
                     glow_radius=before_glow_radius, after=False,
@@ -3055,7 +3099,7 @@ def _vertical_ruby_layers(
         scan_y = base_top + span_h * min(ratio, 1.0)
         pad = max(
             _visual_stroke_extent(stroke_width, stroke2_width),
-            _glow_extent(stroke_width, stroke2_width, after_glow_radius) if style.decoration_kind == "glow" else 0,
+            _glow_extent(stroke_width, stroke2_width, after_glow_radius) if _ruby_decoration_kind(style) == "glow" else 0,
             abs(shadow_dx), abs(shadow_dy), 2,
         )
         clip = QRectF(
@@ -3064,9 +3108,9 @@ def _vertical_ruby_layers(
         )
         layers.append(
             _BakedPathStackLayer(
-                path=ruby_path, rect=ruby_rect, state=colors.after, style=style,
+                path=ruby_path, rect=ruby_rect, state=colors.after, style=paint_style,
                 cache_key=_baked_stack_key(
-                    ruby_sig, ruby_rect, colors.after, style,
+                    ruby_sig, ruby_rect, colors.after, paint_style,
                     stroke_width=stroke_width, stroke2_width=stroke2_width,
                     shadow_dx=shadow_dx, shadow_dy=shadow_dy,
                     glow_radius=after_glow_radius, after=True,
@@ -3176,13 +3220,13 @@ def _paint_rubies_vertical(
     """竖排注音：读音字形竖向堆叠在基字列右侧，覆盖基字纵向区间，上→下扫光。"""
     if not cells:
         return
-    scale = _ruby_scale(style)
-    stroke_width = _scaled_px(style.stroke_width_px, scale)
-    stroke2_width = _scaled_px(style.stroke2_width_px, scale)
-    shadow_dx = _scaled_signed_px(style.shadow_offset_x, scale)
-    shadow_dy = _scaled_signed_px(style.shadow_offset_y, scale)
-    before_glow_radius = _scaled_glow_radius(style, scale, after=False)
-    after_glow_radius = _scaled_glow_radius(style, scale, after=True)
+    paint_style = _ruby_paint_style(style)
+    stroke_width = _ruby_stroke_width(style)
+    stroke2_width = _ruby_stroke2_width(style)
+    shadow_dx = _ruby_shadow_dx(style)
+    shadow_dy = _ruby_shadow_dy(style)
+    before_glow_radius = _ruby_glow_radius(style, after=False)
+    after_glow_radius = _ruby_glow_radius(style, after=True)
     colors = _effective_ruby_karaoke_colors(style)
     ruby_cell_w = _vertical_cell_width(ruby_metrics)
     ruby_ascent = ruby_metrics.ascent()
@@ -3235,7 +3279,7 @@ def _paint_rubies_vertical(
             ruby_path,
             ruby_rect,
             colors.before,
-            style,
+            paint_style,
             stroke_width=stroke_width,
             stroke2_width=stroke2_width,
             shadow_dx=shadow_dx,
@@ -3249,7 +3293,9 @@ def _paint_rubies_vertical(
         scan_y = base_top + span_h * min(ratio, 1.0)
         pad = max(
             _visual_stroke_extent(stroke_width, stroke2_width),
-            _glow_extent(stroke_width, stroke2_width, after_glow_radius) if style.decoration_kind == "glow" else 0,
+            _glow_extent(stroke_width, stroke2_width, after_glow_radius)
+            if _ruby_decoration_kind(style) == "glow"
+            else 0,
             abs(shadow_dx),
             abs(shadow_dy),
             2,
@@ -3269,7 +3315,7 @@ def _paint_rubies_vertical(
                 ruby_path,
                 ruby_rect,
                 colors.after,
-                style,
+                paint_style,
                 stroke_width=stroke_width,
                 stroke2_width=stroke2_width,
                 shadow_dx=shadow_dx,
@@ -7257,7 +7303,6 @@ def _ruby_text_layer_key(
     after: bool,
 ) -> tuple:
     colors = _effective_ruby_karaoke_colors(style)
-    scale = _ruby_scale(style)
     state = colors.after if after else colors.before
     inherited_main_colors = style.ruby_karaoke_colors is None
     return (
@@ -7278,12 +7323,12 @@ def _ruby_text_layer_key(
         int(ruby_font.weight()),
         ruby_font.italic(),
         _karaoke_state_signature(state),
-        _scaled_px(style.stroke_width_px, scale),
-        _scaled_px(style.stroke2_width_px, scale),
-        _scaled_signed_px(style.shadow_offset_x, scale),
-        _scaled_signed_px(style.shadow_offset_y, scale),
-        style.decoration_kind,
-        _scaled_glow_radius(style, scale, after=after),
+        _ruby_stroke_width(style),
+        _ruby_stroke2_width(style),
+        _ruby_shadow_dx(style),
+        _ruby_shadow_dy(style),
+        _ruby_decoration_kind(style),
+        _ruby_glow_radius(style, after=after),
         after,
     )
 
@@ -7299,16 +7344,16 @@ def _build_ruby_text_layer(
 ) -> tuple[QImage, int, int]:
     colors = _effective_ruby_karaoke_colors(style)
     state = colors.after if after else colors.before
-    scale = _ruby_scale(style)
-    stroke_width = _scaled_px(style.stroke_width_px, scale)
-    stroke2_width = _scaled_px(style.stroke2_width_px, scale)
-    shadow_dx = _scaled_signed_px(style.shadow_offset_x, scale)
-    shadow_dy = _scaled_signed_px(style.shadow_offset_y, scale)
-    glow_radius = _scaled_glow_radius(style, scale, after=after)
+    paint_style = _ruby_paint_style(style)
+    stroke_width = _ruby_stroke_width(style)
+    stroke2_width = _ruby_stroke2_width(style)
+    shadow_dx = _ruby_shadow_dx(style)
+    shadow_dy = _ruby_shadow_dy(style)
+    glow_radius = _ruby_glow_radius(style, after=after)
     stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
     glow_extra = (
         _glow_extent(stroke_width, stroke2_width, glow_radius)
-        if style.decoration_kind == "glow"
+        if _ruby_decoration_kind(style) == "glow"
         else 0
     )
     extent = max(stroke_extent, glow_extra, abs(shadow_dx), abs(shadow_dy), 2) + 4
@@ -7363,7 +7408,7 @@ def _build_ruby_text_layer(
             path,
             rect,
             state,
-            style,
+            paint_style,
             stroke_width=stroke_width,
             stroke2_width=stroke2_width,
             shadow_dx=shadow_dx,
@@ -7400,17 +7445,16 @@ def _ruby_after_clip_rect(
     ratio: float,
 ) -> QRectF:
     rect = _ruby_text_rect(layout, ruby_metrics)
-    scale = _ruby_scale(style)
-    stroke_width = _scaled_px(style.stroke_width_px, scale)
-    stroke2_width = _scaled_px(style.stroke2_width_px, scale)
-    shadow_dx = _scaled_signed_px(style.shadow_offset_x, scale)
-    shadow_dy = _scaled_signed_px(style.shadow_offset_y, scale)
-    after_glow_radius = _scaled_glow_radius(style, scale, after=True)
+    stroke_width = _ruby_stroke_width(style)
+    stroke2_width = _ruby_stroke2_width(style)
+    shadow_dx = _ruby_shadow_dx(style)
+    shadow_dy = _ruby_shadow_dy(style)
+    after_glow_radius = _ruby_glow_radius(style, after=True)
     stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
     pad = max(
         stroke_extent,
         _glow_extent(stroke_width, stroke2_width, after_glow_radius)
-        if style.decoration_kind == "glow"
+        if _ruby_decoration_kind(style) == "glow"
         else 0,
         abs(shadow_dx),
         abs(shadow_dy),
@@ -7816,8 +7860,8 @@ def _ruby_unit_layouts(
     measure_style = replace(
         style,
         font_size_px=max(int(style.ruby_font_size_px), 1),
-        stroke_width_px=_scaled_px(style.stroke_width_px, _ruby_scale(style)),
-        stroke2_width_px=_scaled_px(style.stroke2_width_px, _ruby_scale(style)),
+        stroke_width_px=_ruby_stroke_width(style),
+        stroke2_width_px=_ruby_stroke2_width(style),
     )
     return [
         (
@@ -7901,20 +7945,20 @@ def _paint_ruby_karaoke_fragment(
     if style.ruby_karaoke_colors is not None:
         fill_rect = None
     colors = _effective_ruby_karaoke_colors(style)
-    scale = _ruby_scale(style)
-    stroke_width = _scaled_px(style.stroke_width_px, scale)
-    stroke2_width = _scaled_px(style.stroke2_width_px, scale)
-    shadow_dx = _scaled_signed_px(style.shadow_offset_x, scale)
-    shadow_dy = _scaled_signed_px(style.shadow_offset_y, scale)
-    before_glow_radius = _scaled_glow_radius(style, scale, after=False)
-    after_glow_radius = _scaled_glow_radius(style, scale, after=True)
+    paint_style = _ruby_paint_style(style)
+    stroke_width = _ruby_stroke_width(style)
+    stroke2_width = _ruby_stroke2_width(style)
+    shadow_dx = _ruby_shadow_dx(style)
+    shadow_dy = _ruby_shadow_dy(style)
+    before_glow_radius = _ruby_glow_radius(style, after=False)
+    after_glow_radius = _ruby_glow_radius(style, after=True)
 
     _paint_text_layer_stack(
         painter,
         path,
         rect,
         colors.before,
-        style,
+        paint_style,
         stroke_width=stroke_width,
         stroke2_width=stroke2_width,
         shadow_dx=shadow_dx,
@@ -7929,7 +7973,9 @@ def _paint_ruby_karaoke_fragment(
     stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
     pad = max(
         stroke_extent,
-        _glow_extent(stroke_width, stroke2_width, after_glow_radius) if style.decoration_kind == "glow" else 0,
+        _glow_extent(stroke_width, stroke2_width, after_glow_radius)
+        if _ruby_decoration_kind(style) == "glow"
+        else 0,
         abs(shadow_dx),
         abs(shadow_dy),
         2,
@@ -7952,7 +7998,7 @@ def _paint_ruby_karaoke_fragment(
             path,
             rect,
             colors.after,
-            style,
+            paint_style,
             stroke_width=stroke_width,
             stroke2_width=stroke2_width,
             shadow_dx=shadow_dx,

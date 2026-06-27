@@ -382,6 +382,14 @@ class SubtitleStyleScheme:
     ruby_font_size_px: Optional[int] = None
     ruby_color: Optional[str] = None
     ruby_gap_px: Optional[int] = None
+    ruby_stroke_width_px: Optional[int] = None
+    ruby_stroke2_width_px: Optional[int] = None
+    ruby_decoration_kind: Optional[DecorationKind] = None
+    ruby_glow_radius_px: Optional[int] = None
+    ruby_glow_before_radius_px: Optional[int] = None
+    ruby_glow_after_radius_px: Optional[int] = None
+    ruby_shadow_offset_x: Optional[int] = None
+    ruby_shadow_offset_y: Optional[int] = None
     karaoke_colors: Optional[KaraokeColors] = None
     ruby_karaoke_colors: Optional[KaraokeColors] = None
 
@@ -445,6 +453,14 @@ class Style:
     ruby_color: str = "#FF5A6F"
     ruby_gap_px: int = 0
     """NicokaraMaker3 ``LyricsAndRubyInterval`` default: 0 px."""
+    ruby_stroke_width_px: Optional[int] = None
+    ruby_stroke2_width_px: Optional[int] = None
+    ruby_decoration_kind: Optional[DecorationKind] = None
+    ruby_glow_radius_px: Optional[int] = None
+    ruby_glow_before_radius_px: Optional[int] = None
+    ruby_glow_after_radius_px: Optional[int] = None
+    ruby_shadow_offset_x: Optional[int] = None
+    ruby_shadow_offset_y: Optional[int] = None
     ruby_karaoke_colors: Optional[KaraokeColors] = None
     """注音独立配色矩阵；为空时退回 ``ruby_color`` / 主文字配色。可由「应用主文字
     配色」一键从主文字矩阵复制（颜色照搬，描边宽度/阴影偏移在渲染时按注音字号比例缩放）。"""
@@ -696,6 +712,13 @@ def style_from_dict(payload: object) -> Style:
             "shadow_offset_y",
             "ruby_font_size_px",
             "ruby_gap_px",
+            "ruby_stroke_width_px",
+            "ruby_stroke2_width_px",
+            "ruby_glow_radius_px",
+            "ruby_glow_before_radius_px",
+            "ruby_glow_after_radius_px",
+            "ruby_shadow_offset_x",
+            "ruby_shadow_offset_y",
             "viewport_offset_x",
             "viewport_offset_y",
             "viewport_scale_pct",
@@ -777,6 +800,8 @@ def style_from_dict(payload: object) -> Style:
             changes[key] = value if value in VIEWPORT_ALIGNS else defaults.viewport_align
         elif key == "decoration_kind":
             changes[key] = value if value in {"shadow", "glow"} else defaults.decoration_kind
+        elif key == "ruby_decoration_kind":
+            changes[key] = value if value in {"shadow", "glow"} else None
         elif key == "entry_anim":
             changes[key] = (
                 value
