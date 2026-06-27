@@ -469,6 +469,7 @@ class SubtitleRenderWindow(QWidget):
             self._audio_info = None
             # 歌词列表回空态
             self._lyrics_panel.set_track(None)
+            self._lyrics_panel.set_role_options([])
             # 预览回空态：清字幕 + 视频 + 取消 populated
             self._preview_panel.set_track(None)
             self._preview_panel.set_video_source(None)
@@ -547,6 +548,8 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel = LyricsPanel()
         self._lyrics_panel.pathDropped.connect(self.load_from_lrc)
         self._lyrics_panel.browseRequested.connect(self._browse_subtitle)
+        self._lyrics_panel.roleChanged.connect(self._on_lyrics_role_changed)
+        self._lyrics_panel.rowClicked.connect(self._on_lyrics_row_clicked)
         top.addWidget(self._lyrics_panel)
 
         center = QWidget()
@@ -792,6 +795,7 @@ class SubtitleRenderWindow(QWidget):
         self._timing_track = track
         self._subtitle_path = path
         self._lyrics_panel.set_track(track)
+        self._lyrics_panel.set_role_options(self._merged_role_options())
         self._property_panel.set_roles(track.role_options)
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
         self._selected_scheme_key = self._property_panel.current_scheme_key()
@@ -909,6 +913,8 @@ class SubtitleRenderWindow(QWidget):
 
     def _apply_style_presets(self, presets: dict) -> None:
         self._style_presets = _style_presets_from_dict(presets)
+        if hasattr(self, "_lyrics_panel") and self._lyrics_panel is not None:
+            self._lyrics_panel.set_role_options(self._merged_role_options())
         self._save_persisted_state()
 
     def _apply_screen_settings(self, settings: object) -> None:
@@ -973,6 +979,46 @@ class SubtitleRenderWindow(QWidget):
         self._selected_scheme_key = key
         self._save_persisted_state()
         self._mark_project_dirty()
+
+    def _merged_role_options(self) -> list[str]:
+        """合并 LRC 角色标签 与 自建配色方案名，去重后供歌词列表角色下拉使用。"""
+        options: list[str] = []
+        seen: set[str] = set()
+        if self._timing_track is not None:
+            for name in self._timing_track.role_options:
+                if name not in seen:
+                    seen.add(name)
+                    options.append(name)
+        for name in self._style_presets:
+            if name not in seen:
+                seen.add(name)
+                options.append(name)
+        return options
+
+    def _on_lyrics_role_changed(self, row: int, role_name: str) -> None:
+        """用户修改了某句歌词的角色时，将角色名写入该行所有字素。"""
+        track = self._timing_track
+        if track is None:
+            return
+        if row < 0 or row >= len(track.lines):
+            return
+        label = role_name.strip() if role_name else None
+        for ch in track.lines[row].chars:
+            ch.role_label = label
+        self._mark_project_dirty()
+
+    def _on_lyrics_row_clicked(self, row: int) -> None:
+        """点击歌词列表某行 → 预览跳转到该行起始时间。"""
+        track = self._timing_track
+        if track is None:
+            return
+        if row < 0 or row >= len(track.lines):
+            return
+        line = track.lines[row]
+        if line.is_blank or not line.chars:
+            return
+        start_ms = line.chars[0].start_ms
+        self._transport_bar.set_time(start_ms)
 
     def _load_persisted_state(self) -> None:
         data = self._load_subtitle_settings()

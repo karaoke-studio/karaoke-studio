@@ -90,13 +90,14 @@ def test_load_subtitle_populates_lyrics_panel(qapp, monkeypatch, tmp_path):
     assert track is not None
     assert win._lyrics_panel.is_populated()
 
-    list_widget = win._lyrics_panel.list_widget
+    table = win._lyrics_panel.table_widget
     # body 4 行（含中间空行）
-    assert list_widget.count() == 4
-    assert list_widget.item(0).text() == "あ"
-    assert list_widget.item(1).text() == "いう"
-    assert list_widget.item(2).text() == ""  # 空行
-    assert list_widget.item(3).text() == "え"
+    assert table.rowCount() == 4
+    # 内容列（第 2 列）
+    assert table.item(0, 2).text() == "あ"
+    assert table.item(1, 2).text() == "いう"
+    assert table.item(2, 2).text() == ""  # 空行
+    assert table.item(3, 2).text() == "え"
 
 
 # ---------------------------------------------------------------------------
