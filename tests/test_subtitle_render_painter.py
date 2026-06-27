@@ -397,6 +397,8 @@ def test_signal_lits_render_during_signal_window(qapp):
     img = _blank(120, 80)
     style = Style(
         font_size_px=20,
+        stroke_width_px=9,
+        stroke2_width_px=0,
         line_y_margin_px=10,
         dual_line_layout=False,
         line_lead_in_ms=0,
@@ -429,6 +431,8 @@ def test_frame_vertical_bounds_cover_signal_only_window(qapp):
     track = _singer_track(singer_id=0)
     style = Style(
         font_size_px=20,
+        stroke_width_px=0,
+        stroke2_width_px=0,
         line_y_margin_px=10,
         dual_line_layout=False,
         line_lead_in_ms=0,
@@ -805,6 +809,8 @@ def test_signal_shape_fade_makes_the_whole_shape_transparent(qapp):
     img = _blank(140, 90)
     style = Style(
         font_size_px=20,
+        stroke_width_px=0,
+        stroke2_width_px=0,
         line_y_margin_px=10,
         dual_line_layout=False,
         line_lead_in_ms=0,
@@ -2636,12 +2642,38 @@ def test_ruby_layout_centers_overwide_reading_like_nicokara(qapp):
     assert (positions[0][1] + total_width / 2) == pytest.approx(125)
 
 
-def test_default_ruby_gap_matches_nicokara_zero_interval(qapp):
-    style = Style(
-        font_size_px=100,
+def test_default_ruby_geometry_uses_nicokara_ruby_font_defaults(qapp):
+    style = Style()
+    metrics = QFontMetrics(_build_ruby_font(style))
+    old_style = Style(
         ruby_font_size_px=35,
         stroke_width_px=9,
         stroke2_width_px=0,
+        ruby_stroke_width_px=None,
+        ruby_stroke2_width_px=None,
+    )
+    old_metrics = QFontMetrics(_build_ruby_font(old_style))
+
+    assert style.ruby_font_size_px == 45
+    assert style.ruby_stroke_width_px == 10
+    assert style.ruby_stroke2_width_px == 3
+    assert _ruby_stroke_extent(style) == 7
+    assert _ruby_layout_width("\u3072\u304b\u308a", metrics, 80, style=style) > _ruby_layout_width(
+        "\u3072\u304b\u308a",
+        old_metrics,
+        80,
+        style=old_style,
+    )
+
+
+def test_default_ruby_gap_matches_nicokara_zero_interval(qapp):
+    style = Style(
+        font_size_px=100,
+        ruby_font_size_px=45,
+        stroke_width_px=15,
+        stroke2_width_px=5,
+        ruby_stroke_width_px=10,
+        ruby_stroke2_width_px=3,
         ruby_gap_px=0,
     )
     main_metrics = QFontMetrics(_build_font(style))
@@ -2653,6 +2685,37 @@ def test_default_ruby_gap_matches_nicokara_zero_interval(qapp):
     ruby_outer_bottom = ruby_baseline + ruby_metrics.descent() + _ruby_stroke_extent(style)
     assert style.ruby_gap_px == 0
     assert ruby_outer_bottom == main_top
+
+
+def test_ruby_target_width_uses_main_draw_width_not_ink_bounds(qapp):
+    line = TimingLine(
+        chars=[TimingChar(text="\u5149", start_ms=1000)],
+        end_ms=1600,
+    )
+    ruby = RubyAnnotation(
+        kanji="\u5149",
+        reading="\u3072\u304b\u308a",
+        pos_start_ms=1000,
+        pos_end_ms=1600,
+    )
+    track = TimingTrack(lines=[line], rubies=[ruby])
+    style = Style(line_y_position="center", dual_line_layout=False)
+    layout = _layout_line(track, line, style, 640, 360, baseline_y=220)
+    assert layout is not None and layout.ruby_metrics is not None
+
+    ruby_layouts = _layout_rubies(
+        layout.ruby_metrics,
+        line,
+        layout.intervals,
+        layout.char_x_ranges,
+        layout.baseline_y,
+        [ruby],
+        style,
+        text_layout=layout.text_layout,
+    )
+
+    assert ruby_layouts[0].target_width == layout.char_widths[0]
+    assert ruby_layouts[0].reading_width > ruby_layouts[0].target_width
 
 
 def test_ruby_gradient_reference_uses_main_text_run(qapp):
@@ -2940,6 +3003,7 @@ def test_image_fill_before_and_after_layers_share_text_anchor(qapp, tmp_path):
     style = Style(
         font_size_px=96,
         stroke_width_px=0,
+        stroke2_width_px=0,
         shadow_color="",
         line_y_position="center",
         karaoke_colors=colors,

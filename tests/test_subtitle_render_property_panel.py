@@ -265,8 +265,10 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.fill_gradient_start_color == "#FF5A6F"
     assert style.fill_gradient_end_color == "#0055FF"
     assert style.fill_gradient_angle_deg == 0
-    assert style.ruby_font_size_px == 35
+    assert style.ruby_font_size_px == 45
     assert style.ruby_gap_px == 0
+    assert style.ruby_stroke_width_px == 10
+    assert style.ruby_stroke2_width_px == 3
     assert style.viewport_align == "center"
     assert style.viewport_offset_x == 0
     assert style.viewport_offset_y == 0
@@ -285,8 +287,8 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.row2_offset_x == -50
     assert style.row2_offset_y == 0
     assert style.line_gap_px == 90
-    assert style.stroke_width_px == 9
-    assert style.stroke2_width_px == 0
+    assert style.stroke_width_px == 15
+    assert style.stroke2_width_px == 5
     assert style.decoration_kind == "shadow"
     assert style.glow_radius_px == 10
     assert style.shadow_offset_x == 0
@@ -1117,6 +1119,8 @@ def test_property_panel_ruby_color_subject_controls_emit_ruby_style(qapp):
             stroke2_width_px=4,
             decoration_kind="shadow",
             shadow_offset_y=3,
+            ruby_stroke_width_px=None,
+            ruby_stroke2_width_px=None,
         )
     )
     emitted: list[Style] = []
@@ -1126,14 +1130,14 @@ def test_property_panel_ruby_color_subject_controls_emit_ruby_style(qapp):
         panel._color_subject_combo.findData("ruby")
     )
     assert panel._stroke_width_spin.value() == 4
-    assert panel._stroke2_width_spin.value() == 1
+    assert panel._stroke2_width_spin.value() == 2
 
     panel._stroke_width_spin.setValue(6)
     assert emitted[-1].ruby_stroke_width_px == 6
     assert emitted[-1].stroke_width_px == 10
 
-    panel._stroke2_width_spin.setValue(2)
-    assert emitted[-1].ruby_stroke2_width_px == 2
+    panel._stroke2_width_spin.setValue(3)
+    assert emitted[-1].ruby_stroke2_width_px == 3
     assert emitted[-1].stroke2_width_px == 4
 
     panel._decoration_type_combo.setCurrentIndex(
@@ -1171,7 +1175,7 @@ def test_property_panel_role_ruby_subject_controls_go_into_custom_scheme(qapp):
     assert scheme.ruby_stroke_width_px == 7
     assert scheme.ruby_shadow_offset_y == 5
     assert scheme.stroke_width_px != 7
-    assert emitted[-1].ruby_stroke_width_px is None
+    assert emitted[-1].ruby_stroke_width_px == 10
 
 
 def test_property_panel_role_scheme_switches_subtitle_controls(qapp):

@@ -430,8 +430,8 @@ class Style:
     """已唱状态填充色。默认取工作台主色。"""
 
     stroke_color: str = "#222222"
-    stroke_width_px: int = 9
-    stroke2_width_px: int = 0
+    stroke_width_px: int = 15
+    stroke2_width_px: int = 5
 
     decoration_kind: DecorationKind = "shadow"
     glow_radius_px: int = 10
@@ -449,12 +449,12 @@ class Style:
     """用户自行添加的配色方案。当前用于编辑/复用，后续可接入方案分配。"""
 
     # ふりがな / ruby（B1）
-    ruby_font_size_px: int = 35
+    ruby_font_size_px: int = 45
     ruby_color: str = "#FF5A6F"
     ruby_gap_px: int = 0
     """NicokaraMaker3 ``LyricsAndRubyInterval`` default: 0 px."""
-    ruby_stroke_width_px: Optional[int] = None
-    ruby_stroke2_width_px: Optional[int] = None
+    ruby_stroke_width_px: Optional[int] = 10
+    ruby_stroke2_width_px: Optional[int] = 3
     ruby_decoration_kind: Optional[DecorationKind] = None
     ruby_glow_radius_px: Optional[int] = None
     ruby_glow_before_radius_px: Optional[int] = None
