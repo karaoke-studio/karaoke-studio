@@ -1045,6 +1045,36 @@ def test_property_panel_role_scheme_controls_emit_style(qapp):
     assert panel._paint_gradient_start_btn.color == "#00AAEE"
 
 
+def test_property_panel_role_ruby_color_matrix_edits_go_into_custom_scheme(qapp):
+    panel = PropertyPanel()
+    panel.set_roles(["B"])
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:B"))
+    panel._color_subject_combo.setCurrentIndex(
+        panel._color_subject_combo.findData("ruby")
+    )
+    panel._color_state_combo.setCurrentIndex(panel._color_state_combo.findData("after"))
+    panel._color_layer_combo.setCurrentIndex(panel._color_layer_combo.findData("text"))
+    panel._fill_mode_combo.setCurrentIndex(
+        panel._fill_mode_combo.findData("gradient_horizontal")
+    )
+    panel._update_current_fill(start_color="#11AAFF")
+    panel._update_current_fill(end_color="#FFAA11")
+
+    scheme = emitted[-1].custom_style_schemes["B"]
+    assert scheme.ruby_karaoke_colors is not None
+    fill = scheme.ruby_karaoke_colors.after.text
+    assert fill.mode == "gradient_horizontal"
+    assert fill.start_color == "#11AAFF"
+    assert fill.end_color == "#FFAA11"
+    assert (
+        scheme.karaoke_colors is None
+        or scheme.karaoke_colors.after.text.start_color != "#11AAFF"
+    )
+
+
 def test_property_panel_role_scheme_switches_subtitle_controls(qapp):
     panel = PropertyPanel()
     panel.set_roles(["A"])

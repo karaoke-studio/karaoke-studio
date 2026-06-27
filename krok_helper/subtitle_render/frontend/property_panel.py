@@ -1550,6 +1550,15 @@ class PropertyPanel(QTabWidget):
     def _make_color_section(self) -> QFrame:
         section, layout = _section("颜色")
 
+        self._color_subject_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._color_subject_combo)
+        self._color_subject_combo.addItem("主文字", "main")
+        self._color_subject_combo.addItem("注音", "ruby")
+        self._color_subject_combo.currentIndexChanged.connect(
+            lambda _index: self._on_color_subject_changed()
+        )
+        layout.addWidget(_field("编辑对象", self._color_subject_combo))
+
         # 状态(走字前/后) × 图层(文字/描边/描边2/装饰) 用一个点选矩阵呈现（对标
         # nicokara maker3）。两个 combo 仍作为隐藏的取值后端，矩阵与之双向同步，
         # 这样依赖 currentData 的取值/同步逻辑与测试都无需改动。
@@ -2831,6 +2840,9 @@ class PropertyPanel(QTabWidget):
             self._color_layer_combo.blockSignals(False)
         self._sync_color_fill_controls()
 
+    def _on_color_subject_changed(self) -> None:
+        self._sync_color_fill_controls()
+
     def _on_color_target_combo_changed(self) -> None:
         if hasattr(self, "_color_matrix"):
             self._color_matrix.set_selection(
@@ -2848,14 +2860,31 @@ class PropertyPanel(QTabWidget):
             return data  # type: ignore[return-value]
         return "text"
 
+    def _current_color_subject_key(self) -> str:
+        if not hasattr(self, "_color_subject_combo"):
+            return "main"
+        data = self._color_subject_combo.currentData()
+        return "ruby" if data == "ruby" else "main"
+
     def _current_karaoke_colors(self) -> KaraokeColors:
         value = self._scheme_value("karaoke_colors")
         if isinstance(value, KaraokeColors):
             return deepcopy(value)
         return _legacy_colors_from_panel(self)
 
+    def _current_ruby_karaoke_colors(self) -> KaraokeColors:
+        value = self._scheme_value("ruby_karaoke_colors")
+        if isinstance(value, KaraokeColors):
+            return deepcopy(value)
+        return self._current_karaoke_colors()
+
+    def _current_editing_karaoke_colors(self) -> KaraokeColors:
+        if self._current_color_subject_key() == "ruby":
+            return self._current_ruby_karaoke_colors()
+        return self._current_karaoke_colors()
+
     def _current_paint_fill(self) -> PaintFill:
-        colors = self._current_karaoke_colors()
+        colors = self._current_editing_karaoke_colors()
         state = getattr(colors, self._current_color_state_key())
         return deepcopy(getattr(state, self._current_color_layer_key()))
 
@@ -2900,7 +2929,7 @@ class PropertyPanel(QTabWidget):
     def _update_current_fill(self, **changes) -> None:
         if self._syncing:
             return
-        colors = self._current_karaoke_colors()
+        colors = self._current_editing_karaoke_colors()
         state_key = self._current_color_state_key()
         layer_key = self._current_color_layer_key()
         state = deepcopy(getattr(colors, state_key))
@@ -2916,7 +2945,10 @@ class PropertyPanel(QTabWidget):
             )
         state = replace(state, **{layer_key: fill})
         colors = replace(colors, **{state_key: state})
-        self._update_style(karaoke_colors=colors)
+        if self._current_color_subject_key() == "ruby":
+            self._update_style(ruby_karaoke_colors=colors)
+        else:
+            self._update_style(karaoke_colors=colors)
 
     def _update_gradient_stops(self, stops: list[tuple[int, str]]) -> None:
         if self._syncing:
@@ -3162,6 +3194,15 @@ class PropertyPanel(QTabWidget):
         role_name = self._current_custom_scheme_name()
         if role_name is not None:
             scheme = self._style.custom_style_schemes.get(role_name)
+            if (
+                field_name == "karaoke_colors"
+                and scheme is not None
+                and scheme.karaoke_colors is None
+                and _scheme_has_legacy_color_values(scheme)
+            ):
+                return None
+            if field_name == "ruby_karaoke_colors" and scheme is not None:
+                return scheme.ruby_karaoke_colors
             value = getattr(scheme, field_name, None) if scheme is not None else None
             if value is not None:
                 return value
@@ -3252,11 +3293,11 @@ class PropertyPanel(QTabWidget):
             self._ruby_font_size_spin.setValue(int(self._scheme_value("ruby_font_size_px")))
             self._ruby_color_btn.set_color(str(self._scheme_value("ruby_color")))
             self._ruby_gap_spin.setValue(int(self._scheme_value("ruby_gap_px")))
-            ruby_follows_main = self._scheme_value("ruby_karaoke_colors") is not None
+            ruby_has_custom_colors = self._scheme_value("ruby_karaoke_colors") is not None
             self._ruby_color_hint.setText(
-                "当前：注音跟随主文字配色（改上方颜色即可恢复单色）"
-                if ruby_follows_main
-                else "当前：注音使用上方单色"
+                "当前：注音使用独立颜色矩阵；在颜色区选择“注音”可继续编辑"
+                if ruby_has_custom_colors
+                else "当前：注音默认跟随主文字配色"
             )
             self._sync_color_fill_controls()
         finally:
@@ -3590,6 +3631,22 @@ def _style_scheme_changes(scheme: SubtitleStyleScheme) -> dict[str, object]:
         for field in _SCHEME_FIELDS
         if (value := getattr(scheme, field)) is not None
     }
+
+
+def _scheme_has_legacy_color_values(scheme: SubtitleStyleScheme) -> bool:
+    return any(
+        getattr(scheme, field) is not None
+        for field in (
+            "base_color",
+            "fill_color",
+            "fill_gradient_enabled",
+            "fill_gradient_start_color",
+            "fill_gradient_end_color",
+            "fill_gradient_angle_deg",
+            "stroke_color",
+            "shadow_color",
+        )
+    )
 
 
 def _auto_role_scheme(base: SubtitleStyleScheme, index: int) -> SubtitleStyleScheme:

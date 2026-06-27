@@ -3422,6 +3422,25 @@ def _style_for_role(style: Style, role_label: str | None) -> Style:
     if scheme is None:
         return style
     changes = _style_scheme_changes(scheme)
+    has_legacy_color_changes = any(
+        getattr(scheme, field) is not None
+        for field in (
+            "base_color",
+            "fill_color",
+            "fill_gradient_enabled",
+            "fill_gradient_start_color",
+            "fill_gradient_end_color",
+            "fill_gradient_angle_deg",
+            "stroke_color",
+            "shadow_color",
+        )
+    )
+    if scheme.karaoke_colors is None and has_legacy_color_changes:
+        changes["karaoke_colors"] = None
+    if scheme.ruby_karaoke_colors is None and (
+        scheme.karaoke_colors is not None or has_legacy_color_changes
+    ):
+        changes["ruby_karaoke_colors"] = None
     if not changes:
         return style
     return replace(style, **changes)

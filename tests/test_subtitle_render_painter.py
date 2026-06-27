@@ -79,6 +79,8 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _visual_text_padding,
     _display_style_for_signal_window,
     _effective_ruby_for_target,
+    _effective_ruby_karaoke_colors,
+    _style_for_role,
     _visible_lines_for_style,
     _resolve_title_text,
     _title_overlay_opacity,
@@ -2564,6 +2566,24 @@ def test_ruby_gradient_reference_uses_main_text_run(qapp):
     assert ruby_layout.gradient_rect.left() == pytest.approx(layout.line_rect.left())
     assert ruby_layout.gradient_rect.width() == pytest.approx(layout.line_rect.width())
     assert ruby_layout.gradient_rect.width() > ruby_layout.target_width
+
+
+def test_role_ruby_defaults_to_role_main_colors_not_global_ruby(qapp):
+    global_ruby = KaraokeColors(after=KaraokeColorState(text=_solid_fill("#FF0000")))
+    role_main = KaraokeColors(after=KaraokeColorState(text=_solid_fill("#0088FF")))
+    style = Style(
+        karaoke_colors=KaraokeColors(after=KaraokeColorState(text=_solid_fill("#FFFFFF"))),
+        ruby_karaoke_colors=global_ruby,
+        custom_style_schemes={
+            "A": SubtitleStyleScheme(karaoke_colors=role_main, fill_color="#0088FF")
+        },
+    )
+
+    role_style = _style_for_role(style, "A")
+
+    assert role_style.karaoke_colors == role_main
+    assert role_style.ruby_karaoke_colors is None
+    assert _effective_ruby_karaoke_colors(role_style).after.text.color == "#0088FF"
 
 
 def test_role_line_simultaneous_wipe_uses_scoped_after_band(qapp):
