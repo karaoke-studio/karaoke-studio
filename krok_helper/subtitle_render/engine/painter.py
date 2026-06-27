@@ -2309,6 +2309,33 @@ def _visual_stroke_extent(stroke_width: int, stroke2_width: int) -> int:
     return math.ceil((max(stroke_width, 0) + max(stroke2_width, 0)) / 2)
 
 
+def _ruby_stroke_extent(style: Style) -> int:
+    scale = _ruby_scale(style)
+    return _visual_stroke_extent(
+        _scaled_px(style.stroke_width_px, scale),
+        _scaled_px(style.stroke2_width_px, scale),
+    )
+
+
+def _ruby_vertical_extra(style: Style, ruby_metrics: QFontMetrics) -> int:
+    return max(style.ruby_gap_px, 0) + ruby_metrics.height() + _ruby_stroke_extent(style) * 2
+
+
+def _ruby_baseline_y(
+    main_baseline_y: int,
+    main_ascent: int,
+    ruby_metrics: QFontMetrics,
+    style: Style,
+) -> int:
+    main_top = main_baseline_y - main_ascent - _visual_text_padding(style)
+    return int(round(
+        main_top
+        - max(style.ruby_gap_px, 0)
+        - ruby_metrics.descent()
+        - _ruby_stroke_extent(style)
+    ))
+
+
 def _stroke_pen_width(stroke_width: int) -> int:
     return max(stroke_width, 0)
 
@@ -2399,7 +2426,7 @@ def _resolve_baseline_y(
     pad = _visual_text_padding(style)
     ruby_extra = 0
     if ruby_metrics is not None:
-        ruby_extra = max(style.ruby_gap_px, 0) + ruby_metrics.height()
+        ruby_extra = _ruby_vertical_extra(style, ruby_metrics)
     if pos == "top":
         return margin + ruby_extra + pad + metrics.ascent()
     if pos == "center":
@@ -2413,7 +2440,7 @@ def _fixed_line_geometry(style: Style) -> tuple[int, int, int, int]:
     font = _build_font(style)
     metrics = QFontMetrics(font)
     ruby_metrics = QFontMetrics(_build_ruby_font(style))
-    ruby_extra = max(style.ruby_gap_px, 0) + ruby_metrics.height()
+    ruby_extra = _ruby_vertical_extra(style, ruby_metrics)
     pad = _visual_text_padding(style)
     main_h = metrics.ascent() + metrics.descent() + pad * 2
     return main_h, metrics.ascent() + pad, metrics.descent() + pad, ruby_extra
@@ -3758,7 +3785,7 @@ def _resolve_role_baseline_y(
     pad = _role_visual_text_padding(layout)
     ruby_extra = 0
     if ruby_metrics is not None:
-        ruby_extra = max(style.ruby_gap_px, 0) + ruby_metrics.height()
+        ruby_extra = _ruby_vertical_extra(style, ruby_metrics)
     if pos == "top":
         return margin + ruby_extra + pad + layout.ascent
     if pos == "center":
@@ -3777,7 +3804,7 @@ def _clamp_role_baseline_y(
     pad = _role_visual_text_padding(layout)
     ruby_extra = 0
     if ruby_metrics is not None:
-        ruby_extra = max(style.ruby_gap_px, 0) + ruby_metrics.height()
+        ruby_extra = _ruby_vertical_extra(style, ruby_metrics)
     min_y = ruby_extra + pad + layout.ascent
     max_y = img_h - pad - layout.descent
     if max_y < min_y:
@@ -4537,6 +4564,7 @@ def _utopia_ruby_scope_rect(
             layout.x,
             layout.baseline_y,
             layout.target_width,
+            style,
         )
         transform = _character_transform(
             center_x=layout.x + layout.reading_width / 2,
@@ -4565,12 +4593,13 @@ def _utopia_ruby_scope_rect(
             layout.x,
             layout.baseline_y,
             layout.target_width,
+            style,
         )
         return path.boundingRect()
 
     rect: QRectF | None = None
     for (unit, unit_x, unit_width), (start_ms, end_ms) in zip(
-        _ruby_layout_units(units, ruby_metrics, layout.x, layout.target_width),
+        _ruby_layout_units(units, ruby_metrics, layout.x, layout.target_width, style=style),
         unit_intervals,
     ):
         opacity, dx, dy, rotation, scale_x, scale_y, skew_y = _transition_char_state(
@@ -6901,6 +6930,7 @@ def _paint_rubies(
                             x,
                             ruby_baseline_y,
                             target_width,
+                            ruby_style,
                         )
                         ruby_path = transform.map(ruby_path)
                         _paint_ruby_karaoke_path(
@@ -6983,7 +7013,7 @@ def _layout_rubies(
         if main_ascent_px is not None
         else QFontMetrics(_build_font(style)).ascent()
     )
-    ruby_baseline_y = main_baseline_y - main_ascent - max(style.ruby_gap_px, 0)
+    ruby_baseline_y = _ruby_baseline_y(main_baseline_y, main_ascent, ruby_metrics, style)
     layouts: list[_RubyLayout] = []
     for ruby in rubies:
         indices = _ruby_target_indices(ruby, line, intervals)
@@ -7012,7 +7042,7 @@ def _layout_rubies(
                 x=left,
                 baseline_y=ruby_baseline_y,
                 target_width=target_width,
-                reading_width=_ruby_layout_width(paint_ruby.reading, ruby_metrics, target_width),
+                reading_width=_ruby_layout_width(paint_ruby.reading, ruby_metrics, target_width, style=ruby_style),
                 gradient_rect=gradient_rect,
             )
         )
@@ -7282,7 +7312,13 @@ def _build_ruby_text_layer(
         else 0
     )
     extent = max(stroke_extent, glow_extra, abs(shadow_dx), abs(shadow_dy), 2) + 4
-    pad_left = max(0, -shadow_dx) + extent
+    layout_overhang_left = int(math.ceil(_ruby_layout_left_overhang(
+        layout.ruby.reading,
+        ruby_metrics,
+        layout.target_width,
+        style,
+    )))
+    pad_left = max(0, -shadow_dx) + extent + layout_overhang_left
     pad_right = max(0, shadow_dx) + extent
     pad_top = max(0, -shadow_dy) + extent
     pad_bottom = max(0, shadow_dy) + extent
@@ -7307,6 +7343,7 @@ def _build_ruby_text_layer(
         pad_left,
         local_baseline,
         layout.target_width,
+        style,
     )
     fill_rect = None
     if style.ruby_karaoke_colors is None:
@@ -7341,8 +7378,14 @@ def _build_ruby_text_layer(
 
 
 def _ruby_text_rect(layout: _RubyLayout, ruby_metrics: QFontMetrics) -> QRectF:
+    left_offset = _ruby_layout_left_offset(
+        layout.ruby.reading,
+        ruby_metrics,
+        layout.target_width,
+        layout.style,
+    )
     return QRectF(
-        float(layout.x),
+        float(layout.x + left_offset),
         float(layout.baseline_y - ruby_metrics.ascent()),
         float(layout.reading_width),
         float(ruby_metrics.height()),
@@ -7532,7 +7575,7 @@ def _paint_ruby_text_units_with_transition(
         )
         return
 
-    layout_units = _ruby_layout_units(units, ruby_metrics, x, target_width)
+    layout_units = _ruby_layout_units(units, ruby_metrics, x, target_width, style=style)
     for (unit, unit_x, unit_width), (start_ms, end_ms) in zip(layout_units, intervals):
         opacity, dx, dy, rotation, scale_x, scale_y, skew_y = _transition_char_state(
             style,
@@ -7604,6 +7647,7 @@ def _paint_ruby_text(
         x,
         baseline_y,
         target_width,
+        style,
     )
     _paint_ruby_karaoke_path(
         painter,
@@ -7625,6 +7669,7 @@ def _ruby_text_path_and_rect(
     x: int | float,
     baseline_y: int | float,
     target_width: int | float | None,
+    style: Style | None = None,
 ) -> tuple[QPainterPath, QRectF]:
     path = QPainterPath()
     if target_width is None:
@@ -7638,12 +7683,18 @@ def _ruby_text_path_and_rect(
         )
 
     units = _ruby_reading_units(reading)
-    layout_units = _ruby_layout_units(units, ruby_metrics, x, target_width)
+    layout_units = _ruby_layout_units(units, ruby_metrics, x, target_width, style=style)
     for unit, unit_x, _unit_width in layout_units:
         path.addText(float(unit_x), float(baseline_y), ruby_font, unit)
-    layout_width = _ruby_layout_width(reading, ruby_metrics, target_width)
+    layout_width = _ruby_layout_width(reading, ruby_metrics, target_width, style=style)
+    layout_left = float(x) + _ruby_layout_left_offset(
+        reading,
+        ruby_metrics,
+        target_width,
+        style,
+    )
     return path, QRectF(
-        float(x),
+        layout_left,
         float(baseline_y - ruby_metrics.ascent()),
         float(layout_width),
         float(ruby_metrics.height()),
@@ -7654,14 +7705,49 @@ def _ruby_layout_width(
     reading: str,
     ruby_metrics: QFontMetrics,
     target_width: int | float | None,
+    style: Style | None = None,
 ) -> float:
-    natural = float(ruby_metrics.horizontalAdvance(reading))
+    units = _ruby_reading_units(reading)
+    unit_layouts = _ruby_unit_layouts(units, ruby_metrics, style)
+    natural = sum(width for _unit, width, _offset in unit_layouts)
     if target_width is None:
         return natural
     target = float(max(target_width, 0))
-    if target <= natural:
-        return natural
-    return target
+    if len(units) <= 1:
+        return max(target, natural)
+    gap = _ruby_equal_space_gap(natural, len(units), target, style)
+    return max(target, natural + gap * (len(units) - 1))
+
+
+def _ruby_layout_left_offset(
+    reading: str,
+    ruby_metrics: QFontMetrics,
+    target_width: int | float | None,
+    style: Style | None = None,
+) -> float:
+    if target_width is None:
+        return 0.0
+    units = _ruby_reading_units(reading)
+    if not units:
+        return 0.0
+    unit_layouts = _ruby_unit_layouts(units, ruby_metrics, style)
+    natural = sum(width for _unit, width, _offset in unit_layouts)
+    target = float(target_width)
+    if len(units) <= 1:
+        content_width = natural
+    else:
+        gap = _ruby_equal_space_gap(natural, len(units), target, style)
+        content_width = natural + gap * (len(units) - 1)
+    return min((target - content_width) / 2.0, 0.0)
+
+
+def _ruby_layout_left_overhang(
+    reading: str,
+    ruby_metrics: QFontMetrics,
+    target_width: int | float | None,
+    style: Style | None = None,
+) -> float:
+    return max(0.0, -_ruby_layout_left_offset(reading, ruby_metrics, target_width, style))
 
 
 def _ruby_layout_units(
@@ -7669,28 +7755,78 @@ def _ruby_layout_units(
     ruby_metrics: QFontMetrics,
     x: int | float,
     target_width: int | float | None,
+    *,
+    style: Style | None = None,
 ) -> list[tuple[str, float, float]]:
-    widths = [float(ruby_metrics.horizontalAdvance(unit)) for unit in units]
+    unit_layouts = _ruby_unit_layouts(units, ruby_metrics, style)
+    widths = [width for _unit, width, _offset in unit_layouts]
     if not units:
         return []
     natural = sum(widths)
-    if target_width is None or len(units) <= 1 or float(target_width) <= natural * 1.15:
+    if target_width is None:
         cursor = float(x)
-        if target_width is not None:
-            cursor += max((float(target_width) - natural) / 2, 0.0)
         result: list[tuple[str, float, float]] = []
-        for unit, width in zip(units, widths):
-            result.append((unit, cursor, width))
+        for unit, width, offset in unit_layouts:
+            result.append((unit, cursor + offset, width))
             cursor += width
         return result
 
+    if len(units) <= 1:
+        unit, width, offset = unit_layouts[0]
+        unit_left = float(x) + (float(target_width) - width) / 2.0
+        return [(unit, unit_left + offset, width)]
+
     target = float(target_width)
-    slot_width = target / len(units)
+    gap = _ruby_equal_space_gap(natural, len(units), target, style)
+    cursor = float(x) + (target - (natural + gap * (len(units) - 1))) / 2.0
     result = []
-    for index, (unit, width) in enumerate(zip(units, widths)):
-        unit_x = float(x) + slot_width * index + (slot_width - width) / 2
-        result.append((unit, unit_x, width))
+    for unit, width, offset in unit_layouts:
+        result.append((unit, cursor + offset, width))
+        cursor += width + gap
     return result
+
+
+def _ruby_equal_space_gap(
+    natural_width: float,
+    unit_count: int,
+    target_width: float,
+    style: Style | None,
+) -> float:
+    if unit_count <= 1:
+        return 0.0
+    if target_width <= natural_width:
+        gap = (target_width - natural_width) / (unit_count - 1)
+    else:
+        gap = (target_width - natural_width) / (unit_count + 1)
+    return max(gap, float(_ruby_interval_px(style)))
+
+
+def _ruby_interval_px(style: Style | None) -> int:
+    return max(int(getattr(style, "ruby_interval_px", 0) or 0), 0)
+
+
+def _ruby_unit_layouts(
+    units: list[str],
+    ruby_metrics: QFontMetrics,
+    style: Style | None,
+) -> list[tuple[str, float, float]]:
+    if style is None:
+        return [(unit, float(ruby_metrics.horizontalAdvance(unit)), 0.0) for unit in units]
+    ruby_font = _build_ruby_font(style)
+    measure_style = replace(
+        style,
+        font_size_px=max(int(style.ruby_font_size_px), 1),
+        stroke_width_px=_scaled_px(style.stroke_width_px, _ruby_scale(style)),
+        stroke2_width_px=_scaled_px(style.stroke2_width_px, _ruby_scale(style)),
+    )
+    return [
+        (
+            unit,
+            float(_char_layout_width(unit, ruby_font, ruby_metrics, ruby_metrics, None, measure_style)),
+            _char_path_left_offset(unit, ruby_font, ruby_metrics, ruby_metrics, None, measure_style),
+        )
+        for unit in units
+    ]
 
 
 def _paint_ruby_text_fragment(

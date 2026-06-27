@@ -70,6 +70,9 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _main_text_ruby_progress_ratio,
     _ruby_reading_intervals,
     _ruby_layout_units,
+    _ruby_layout_width,
+    _ruby_baseline_y,
+    _ruby_stroke_extent,
     _ruby_target_indices,
     _ruby_target_x_range,
     _ruby_utopia_reading_units_and_intervals,
@@ -2602,8 +2605,9 @@ def test_frame_vertical_bounds_covers_utopia_transition_pixels(qapp):
 
 def test_ruby_layout_spreads_reading_units_across_wide_target(qapp):
     metrics = QFontMetrics(_build_ruby_font(Style(ruby_font_size_px=36)))
-    natural_positions = _ruby_layout_units(["か", "な", "た"], metrics, 100, None)
-    spread_positions = _ruby_layout_units(["か", "な", "た"], metrics, 100, 180)
+    style = Style(ruby_font_size_px=36, stroke_width_px=0, stroke2_width_px=0)
+    natural_positions = _ruby_layout_units(["か", "な", "た"], metrics, 100, None, style=style)
+    spread_positions = _ruby_layout_units(["か", "な", "た"], metrics, 100, 180, style=style)
 
     natural_gap = natural_positions[1][1] - natural_positions[0][1]
     spread_gap = spread_positions[1][1] - spread_positions[0][1]
@@ -2619,6 +2623,36 @@ def test_ruby_layout_centers_single_reading_unit_in_target(qapp):
 
     assert unit == "そ"
     assert x + width / 2 == pytest.approx(250)
+
+
+def test_ruby_layout_centers_overwide_reading_like_nicokara(qapp):
+    metrics = QFontMetrics(_build_ruby_font(Style(ruby_font_size_px=36)))
+    units = ["ひ", "か", "り"]
+    positions = _ruby_layout_units(units, metrics, 100, 50)
+    total_width = _ruby_layout_width("ひかり", metrics, 50)
+
+    assert positions[0][1] < 100
+    assert positions[-1][1] + positions[-1][2] > 150
+    assert (positions[0][1] + total_width / 2) == pytest.approx(125)
+
+
+def test_default_ruby_gap_matches_nicokara_zero_interval(qapp):
+    style = Style(
+        font_size_px=100,
+        ruby_font_size_px=35,
+        stroke_width_px=9,
+        stroke2_width_px=0,
+        ruby_gap_px=0,
+    )
+    main_metrics = QFontMetrics(_build_font(style))
+    ruby_metrics = QFontMetrics(_build_ruby_font(style))
+    baseline_y = 180
+    ruby_baseline = _ruby_baseline_y(baseline_y, main_metrics.ascent(), ruby_metrics, style)
+
+    main_top = baseline_y - main_metrics.ascent() - _visual_text_padding(style)
+    ruby_outer_bottom = ruby_baseline + ruby_metrics.descent() + _ruby_stroke_extent(style)
+    assert style.ruby_gap_px == 0
+    assert ruby_outer_bottom == main_top
 
 
 def test_ruby_gradient_reference_uses_main_text_run(qapp):
