@@ -246,24 +246,19 @@ def test_async_preview_enabled_defaults_on_and_env_can_disable(monkeypatch):
         assert async_preview_enabled() is False
 
 
-def test_native_preview_enabled_defaults_off_and_requires_sidecar(monkeypatch, tmp_path):
+def test_native_preview_is_hard_disabled(monkeypatch):
     from krok_helper.subtitle_render.frontend import preview_async as pa
-
-    sidecar = tmp_path / "krok_subtitle_renderer.exe"
-    sidecar.write_bytes(b"placeholder")
-    monkeypatch.setattr(pa, "resolve_native_renderer_path", lambda: sidecar)
 
     monkeypatch.delenv("KROK_SUBTITLE_NATIVE_RENDER", raising=False)
     assert pa.native_preview_enabled() is False
 
     monkeypatch.setenv("KROK_SUBTITLE_NATIVE_RENDER", "1")
-    assert pa.native_preview_enabled() is True
+    assert pa.native_preview_enabled() is False
 
     monkeypatch.setenv("KROK_SUBTITLE_NATIVE_RENDER", "0")
     assert pa.native_preview_enabled() is False
 
     monkeypatch.delenv("KROK_SUBTITLE_NATIVE_RENDER", raising=False)
-    monkeypatch.setattr(pa, "resolve_native_renderer_path", lambda: None)
     assert pa.native_preview_enabled() is False
 
 

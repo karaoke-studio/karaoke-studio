@@ -91,7 +91,7 @@ def test_window_save_new_open_round_trip(qapp, monkeypatch, tmp_path):
     assert win._style.font_size_px == 88
     assert win._style.title_overlay is not None and win._style.title_overlay.enabled
     assert win._export_crf_spin.value() == 23
-    assert win._export_native_check.isChecked() is True
+    assert win._export_native_check.isChecked() is False
     # 加载过程中不应把项目标脏
     assert win._project_dirty is False
 

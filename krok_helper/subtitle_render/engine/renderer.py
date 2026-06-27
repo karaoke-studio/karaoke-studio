@@ -343,15 +343,13 @@ def _strip_enabled() -> bool:
 
 
 def _native_export_enabled() -> bool:
-    return os.environ.get("KROK_SUBTITLE_NATIVE_EXPORT", "0").strip().lower() in (
-        "1", "true", "yes", "on",
-    )
+    return False
 
 
 def _native_export_requested(job: RenderJob) -> bool:
-    if job.native_export_enabled is not None:
-        return bool(job.native_export_enabled)
-    return _native_export_enabled()
+    # Keep the job field for project-file compatibility, but never activate the
+    # sidecar until its layout matches the Python renderer again.
+    return False
 
 
 def _paint_overlay_strip(

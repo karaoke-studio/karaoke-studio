@@ -605,10 +605,8 @@ def test_signal_volume_widens_line_and_shifts_text(qapp):
     )
 
     # The union (bars' left edge .. text's right edge) stays centred on the frame.
-    metrics = QFontMetrics(_build_font(style))
-    text_w = sum(metrics.horizontalAdvance(c.text) for c in track.lines[0].chars)
     visual_pad = _visual_text_padding(style)
-    union_mid = (layout.signal_x + (layout.text_x + text_w + visual_pad)) / 2
+    union_mid = (layout.signal_x + (layout.text_x + layout.total_w + visual_pad)) / 2
     assert union_mid == pytest.approx(160 / 2, abs=1.0)
 
 
@@ -1484,22 +1482,55 @@ def test_static_wipe_segments_use_ink_bounds_not_advance(qapp):
     assert len(layout.fill_segments) == len(line.chars)
 
     font = _build_font(style)
-    any_strictly_narrower = False
     for idx, ch in enumerate(line.chars):
         seg = layout.fill_segments[idx]
-        adv_left, adv_right = layout.char_x_ranges[idx]
-        # 墨水段必须落在 advance 框内
-        assert adv_left <= seg.left <= seg.right <= adv_right
+        box_left, box_right = layout.char_x_ranges[idx]
+        # Nicokara 风格布局盒可能与墨水等宽；扫光仍严格取实际 path 边界。
+        assert box_left <= seg.left <= seg.right <= box_right
         # 且与该字形的矢量墨水包围盒（与 fillPath 同源）一致
         path = QPainterPath()
-        path.addText(float(adv_left), 0.0, font, ch.text)
+        path.addText(float(box_left), 0.0, font, ch.text)
         br = path.boundingRect()
         assert seg.left == int(math.floor(br.left()))
         assert seg.right == int(math.ceil(br.right()))
-        if (seg.left, seg.right) != (adv_left, adv_right):
-            any_strictly_narrower = True
-    # 至少一个字形墨水严格窄于 advance 框 → 证明确实按墨水而非 advance 走字
-    assert any_strictly_narrower
+
+
+def test_nicokara_layout_width_includes_edge_and_optional_biting():
+    from krok_helper.subtitle_render.engine.painter import _nicokara_layout_width
+
+    locked = _nicokara_layout_width(
+        80, 100, -10, -5, edge_size=9, allow_biting=False,
+    )
+    biting = _nicokara_layout_width(
+        80, 100, -10, -5, edge_size=9, allow_biting=True,
+    )
+    without_edge = _nicokara_layout_width(
+        80, 100, -10, -5, edge_size=0, allow_biting=False,
+    )
+
+    assert locked == without_edge + 9
+    assert biting < locked
+
+
+def test_nicokara_space_width_uses_font_percentage_and_edge(qapp):
+    line = TimingLine(
+        chars=[TimingChar(text=" ", start_ms=1000)],
+        end_ms=2000,
+    )
+    track = TimingTrack(lines=[line])
+    style = Style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=100,
+        space_width_percent=20,
+        stroke_width_px=9,
+        dual_line_layout=False,
+    )
+
+    layout = _layout_line(track, line, style, 400, 200)
+
+    assert layout is not None
+    assert layout.char_widths == [29]
 
 
 def test_shared_lrc_text_span_uses_rendered_char_widths_for_timing(qapp, monkeypatch):
@@ -1512,18 +1543,18 @@ def test_shared_lrc_text_span_uses_rendered_char_widths_for_timing(qapp, monkeyp
     line = track.lines[0]
     from krok_helper.subtitle_render.engine import painter as painter_module  # noqa: PLC0415
 
-    real_char_advance = painter_module._char_advance
+    real_layout_width = painter_module._char_layout_width
 
-    def controlled_advance(text, metrics, latin_metrics, font_for):
+    def controlled_layout_width(text, font, metrics, latin_metrics, font_for, style):
         if text == "W":
             return 30
         if text == "i":
             return 10
-        return real_char_advance(text, metrics, latin_metrics, font_for)
+        return real_layout_width(text, font, metrics, latin_metrics, font_for, style)
 
     # 系统测试字体可能回退为等宽字体；固定两个 advance，锁定本测试只验证
     # Painter 是否把自己的实际布局宽度传给时间分配，而不依赖宿主字体库。
-    monkeypatch.setattr(painter_module, "_char_advance", controlled_advance)
+    monkeypatch.setattr(painter_module, "_char_layout_width", controlled_layout_width)
     style = Style(
         font_family="Arial",
         font_family_latin="Arial",

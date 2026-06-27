@@ -28,7 +28,6 @@ from krok_helper.subtitle_render.native_backend import (
     NativeRendererError,
     NativeRendererProcess,
     SharedFrameRingReader,
-    resolve_native_renderer_path,
 )
 
 
@@ -58,15 +57,8 @@ def async_preview_enabled() -> bool:
 
 
 def native_preview_enabled() -> bool:
-    """Return whether preview should try the native sidecar renderer.
-
-    The sidecar path is opt-in while the native renderer remains experimental.
-    Set ``KROK_SUBTITLE_NATIVE_RENDER=1`` to try it; missing executables
-    silently keep the existing Python async renderer.
-    """
-    if not _env_enabled("KROK_SUBTITLE_NATIVE_RENDER", "0"):
-        return False
-    return resolve_native_renderer_path() is not None
+    """Native preview is temporarily hard-disabled for layout consistency."""
+    return False
 
 
 def native_preview_timestamps(

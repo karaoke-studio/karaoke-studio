@@ -359,6 +359,8 @@ class SubtitleStyleScheme:
     font_family_latin: Optional[str] = None
     font_size_px: Optional[int] = None
     letter_spacing_px: Optional[int] = None
+    space_width_percent: Optional[int] = None
+    allow_biting: Optional[bool] = None
     font_weight: Optional[int] = None
     italic: Optional[bool] = None
     base_color: Optional[str] = None
@@ -398,6 +400,12 @@ class Style:
     """英数（ASCII）字体；为空时英数与日文共用 ``font_family``。"""
     font_size_px: int = 100
     letter_spacing_px: int = 0
+    space_width_percent: int = 20
+    """空格宽度占字号的百分比；20% 对齐 NicokaraMaker3 默认值。"""
+
+    allow_biting: bool = False
+    """允许负 side bearing 令相邻字形咬合。"""
+
     font_weight: int = 400  # Qt 习惯 100-900
     italic: bool = False
 
@@ -675,6 +683,7 @@ def style_from_dict(payload: object) -> Style:
         elif key in {
             "font_size_px",
             "letter_spacing_px",
+            "space_width_percent",
             "font_weight",
             "stroke_width_px",
             "stroke2_width_px",
@@ -741,6 +750,7 @@ def style_from_dict(payload: object) -> Style:
             changes[key] = _float_value(value, getattr(defaults, key))
         elif key in {
             "italic",
+            "allow_biting",
             "dual_line_layout",
             "right_to_left",
             "vertical",

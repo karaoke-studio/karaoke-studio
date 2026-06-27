@@ -42,6 +42,8 @@ def test_property_panel_set_style_populates_controls(qapp):
         font_family="Microsoft YaHei UI",
         font_size_px=72,
         letter_spacing_px=6,
+        space_width_percent=35,
+        allow_biting=True,
         font_weight=900,
         italic=True,
         base_color="#102030",
@@ -136,8 +138,10 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel.subtitle_style == style
     assert panel._font_size_spin.value() == 72
     assert panel._letter_spacing_spin.value() == 6
+    assert panel._space_width_spin.value() == 35
     assert panel._font_weight_combo.currentData() == 900
     assert panel._italic_check.isChecked()
+    assert panel._allow_biting_check.isChecked()
     assert panel._color_state_combo.currentData() == "after"
     assert panel._color_layer_combo.currentData() == "text"
     assert panel._fill_mode_combo.currentData() == "gradient_horizontal"
@@ -254,6 +258,8 @@ def test_style_defaults_match_nicokara_layout_baseline():
 
     assert style.font_family == "UD Digi Kyokasho N-B"
     assert style.font_size_px == 100
+    assert style.space_width_percent == 20
+    assert style.allow_biting is False
     assert style.letter_spacing_px == 0
     assert style.font_weight == 400
     assert style.fill_gradient_enabled is False
@@ -430,13 +436,17 @@ def test_property_panel_font_controls_emit_style(qapp):
     panel.styleChanged.connect(emitted.append)
 
     panel._font_size_spin.setValue(88)
+    panel._space_width_spin.setValue(30)
     panel._letter_spacing_spin.setValue(7)
     panel._font_weight_combo.setCurrentIndex(panel._font_weight_combo.findData(500))
+    panel._allow_biting_check.setChecked(True)
     panel._italic_check.setChecked(True)
 
     assert emitted[-1].font_size_px == 88
+    assert emitted[-1].space_width_percent == 30
     assert emitted[-1].letter_spacing_px == 7
     assert emitted[-1].font_weight == 500
+    assert emitted[-1].allow_biting is True
     assert emitted[-1].italic is True
 
 
@@ -646,11 +656,15 @@ def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
     )
     scheme = SubtitleStyleScheme(
         font_size_px=88,
+        space_width_percent=40,
+        allow_biting=True,
         letter_spacing_px=5,
         fill_color="#112233",
         karaoke_colors=KaraokeColors(after=KaraokeColorState(text=fill)),
     )
     style = Style(
+        space_width_percent=25,
+        allow_biting=True,
         letter_spacing_px=3,
         entry_anim="utopia",
         entry_lead_ms=500,
@@ -702,7 +716,11 @@ def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
 
     restored = style_from_dict(style_to_dict(style))
 
+    assert restored.space_width_percent == 25
+    assert restored.allow_biting is True
     assert restored.letter_spacing_px == 3
+    assert restored.singer_style_overrides[2].space_width_percent == 40
+    assert restored.singer_style_overrides[2].allow_biting is True
     assert restored.singer_style_overrides[2].letter_spacing_px == 5
     assert restored.entry_anim == "utopia"
     assert restored.exit_anim == "char_fade"
@@ -1482,7 +1500,7 @@ def test_main_window_screen_panel_updates_export_and_persists(qapp, monkeypatch)
     assert provider.data["screen"]["fps"] == 120
 
 
-def test_main_window_native_export_switch_loads_and_persists(qapp, monkeypatch):
+def test_main_window_native_export_is_hard_disabled(qapp, monkeypatch):
     monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
     monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
 
@@ -1499,12 +1517,11 @@ def test_main_window_native_export_switch_loads_and_persists(qapp, monkeypatch):
     provider = FakeSettingsProvider()
     win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
 
-    assert win._export_native_check.isChecked() is True
-
-    win._export_native_check.setChecked(False)
-
+    assert win._export_native_check.isChecked() is False
+    assert win._export_native_check.isEnabled() is False
+    assert win._export_native_check.isHidden() is True
+    win._save_persisted_state()
     assert provider.data["output"]["native_export_enabled"] is False
-    assert win._project_dirty is True
 
 
 def test_main_window_keeps_presets_but_falls_back_to_global_selection(qapp, monkeypatch):

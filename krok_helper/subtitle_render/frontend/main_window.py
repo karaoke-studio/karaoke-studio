@@ -363,7 +363,7 @@ class SubtitleRenderWindow(QWidget):
                 crf=self._export_crf_spin.value(),
                 preset=str(self._export_preset_combo.currentData() or "veryfast"),
                 output_path=self._export_output_edit.text().strip(),
-                native_export_enabled=self._export_native_check.isChecked(),
+                native_export_enabled=False,
             ),
         )
 
@@ -420,7 +420,7 @@ class SubtitleRenderWindow(QWidget):
             self._export_output_edit.setText(out_path.strip())
         blocked = self._export_native_check.blockSignals(True)
         try:
-            self._export_native_check.setChecked(bool(output.get("native_export_enabled", False)))
+            self._export_native_check.setChecked(False)
         finally:
             self._export_native_check.blockSignals(blocked)
 
@@ -698,10 +698,10 @@ class SubtitleRenderWindow(QWidget):
         layout.addLayout(encode_row)
 
         self._export_native_check = QCheckBox("实验：使用 native 字幕渲染器导出")
-        self._export_native_check.setToolTip(
-            "开启后会优先使用本机 native sidecar 渲染字幕帧；不可用时自动回退 Python 渲染器。"
-        )
-        self._export_native_check.toggled.connect(self._on_output_settings_changed)
+        self._export_native_check.setChecked(False)
+        self._export_native_check.setEnabled(False)
+        self._export_native_check.setVisible(False)
+        self._export_native_check.setToolTip("native 字幕渲染器暂时停用。")
         themed(self._export_native_check, lambda: f"color: {palette().text_secondary}; font-size: 9.5pt;")
         layout.addWidget(self._export_native_check)
 
@@ -991,7 +991,7 @@ class SubtitleRenderWindow(QWidget):
         data["selected_scheme_key"] = self._selected_scheme_key
         if hasattr(self, "_export_native_check"):
             output = dict(data.get("output")) if isinstance(data.get("output"), dict) else {}
-            output["native_export_enabled"] = self._export_native_check.isChecked()
+            output["native_export_enabled"] = False
             data["output"] = output
         try:
             if self._settings_provider is not None and hasattr(self._settings_provider, "save"):
@@ -1059,7 +1059,7 @@ class SubtitleRenderWindow(QWidget):
             encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
             crf=self._export_crf_spin.value(),
             preset=str(self._export_preset_combo.currentData() or "veryfast"),
-            native_export_enabled=self._export_native_check.isChecked(),
+            native_export_enabled=False,
         )
 
     def _current_export_duration_ms(self) -> int:

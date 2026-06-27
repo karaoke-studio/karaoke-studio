@@ -80,6 +80,8 @@ _SCHEME_FIELDS = {
     "font_family_latin",
     "font_size_px",
     "letter_spacing_px",
+    "space_width_percent",
+    "allow_biting",
     "font_weight",
     "italic",
     "base_color",
@@ -1455,6 +1457,12 @@ class PropertyPanel(QTabWidget):
         )
         row_layout.addWidget(_field("字间距", self._letter_spacing_spin), 1, 0)
 
+        self._space_width_spin = _spin(10, 100, suffix=" %")
+        self._space_width_spin.valueChanged.connect(
+            lambda value: self._update_style(space_width_percent=value)
+        )
+        row_layout.addWidget(_field("空格宽度", self._space_width_spin), 1, 1)
+
         self._font_weight_combo = _WheelFocusedComboBox(section)
         _compact_control(self._font_weight_combo)
         for label, value in [
@@ -1479,6 +1487,15 @@ class PropertyPanel(QTabWidget):
         self._italic_check = QCheckBox("斜体", section)
         self._italic_check.toggled.connect(lambda checked: self._update_style(italic=checked))
         layout.addWidget(self._italic_check)
+
+        self._allow_biting_check = QCheckBox("允许文字咬合", section)
+        self._allow_biting_check.setToolTip(
+            "允许斜体和部分标点使用负字形边距，效果更接近 NicokaraMaker3。"
+        )
+        self._allow_biting_check.toggled.connect(
+            lambda checked: self._update_style(allow_biting=checked)
+        )
+        layout.addWidget(self._allow_biting_check)
         return section
 
     def _on_font_latin_toggled(self, checked: bool) -> None:
@@ -3256,10 +3273,12 @@ class PropertyPanel(QTabWidget):
         was_syncing = self._syncing
         self._syncing = True
         try:
+            self._space_width_spin.setValue(int(self._scheme_value("space_width_percent")))
             self._font_combo.setCurrentFont(QFont(str(self._scheme_value("font_family"))))
             latin_family = self._scheme_value("font_family_latin")
             self._font_latin_check.setChecked(bool(latin_family))
             self._font_latin_combo.setEnabled(bool(latin_family))
+            self._allow_biting_check.setChecked(bool(self._scheme_value("allow_biting")))
             if latin_family:
                 self._font_latin_combo.setCurrentFont(QFont(str(latin_family)))
             self._font_size_spin.setValue(int(self._scheme_value("font_size_px")))
@@ -3588,6 +3607,8 @@ def _solid_fill(color: str) -> PaintFill:
         start_color=color,
         end_color=color,
         gradient_stops=[(0, color), (100, color)],
+        space_width_percent=int(panel._scheme_value("space_width_percent")),
+        allow_biting=bool(panel._scheme_value("allow_biting")),
         split_top_color=color,
         split_bottom_color=color,
     )

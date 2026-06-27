@@ -1193,7 +1193,10 @@ def _resolve_sayatoo_line_layouts(
         latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
         active_rubies = _active_rubies_for_line(track.rubies, line)
         ruby_metrics = QFontMetrics(_build_ruby_font(line_style)) if active_rubies else None
-        char_widths = [_char_advance(c.text, metrics, latin_metrics, font_for) for c in line.chars]
+        char_widths = [
+            _char_layout_width(c.text, font, metrics, latin_metrics, font_for, line_style)
+            for c in line.chars
+        ]
         text_w = _line_text_width(char_widths, line_style)
         visual_pad = _visual_text_padding(line_style)
         text_line_w = max(int(round(text_w + visual_pad * 2)), 1)
@@ -1654,7 +1657,10 @@ def _signal_lit_groups(
             latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
             active_rubies = _active_rubies_for_line(track.rubies, line)
             ruby_metrics = QFontMetrics(_build_ruby_font(line_style)) if active_rubies else None
-            char_widths = [_char_advance(c.text, metrics, latin_metrics, font_for) for c in line.chars]
+            char_widths = [
+                _char_layout_width(c.text, font, metrics, latin_metrics, font_for, line_style)
+                for c in line.chars
+            ]
             total_w = _line_text_width(char_widths, line_style)
             baseline_y = baselines.get(display_line.lane)
             if baseline_y is None:
@@ -2019,6 +2025,91 @@ def _char_advance(
 
 
 def _letter_spacing(style: Style) -> int:
+def _truncate_div(numerator: int, denominator: int) -> int:
+    """Integer division truncated toward zero, matching C# arithmetic."""
+    if denominator == 0:
+        return 0
+    sign = -1 if (numerator < 0) != (denominator < 0) else 1
+    return sign * (abs(numerator) // abs(denominator))
+
+
+def _nicokara_layout_width(
+    ink_width: int,
+    advance: int,
+    left_bearing: int,
+    right_bearing: int,
+    *,
+    edge_size: int,
+    allow_biting: bool,
+) -> int:
+    """Approximate NicokaraMaker3's per-glyph layout-box width."""
+    advance = max(int(advance), 1)
+    left = int(left_bearing)
+    right = int(right_bearing)
+    if not allow_biting:
+        left = max(left, 0)
+        right = max(right, 0)
+    body_width = _truncate_div(
+        max(int(ink_width), 0) * (left + advance + right),
+        advance,
+    )
+    # NicokaraMaker3's DrawWidth includes EdgeSize (the first outline only).
+    return max(body_width, 0) + max(int(edge_size), 0)
+
+
+def _char_layout_width(
+    ch_text: str,
+    font: QFont,
+    metrics: QFontMetrics,
+    latin_metrics: QFontMetrics,
+    font_for,
+    style: Style,
+) -> int:
+    """Character step using NicokaraMaker3-like outline and spacing rules."""
+    glyph_font = font_for(ch_text) if font_for is not None else font
+    glyph_metrics = (
+        latin_metrics
+        if font_for is not None and ch_text and ch_text.isascii()
+        else metrics
+    )
+    font_size = glyph_font.pixelSize()
+    if font_size <= 0:
+        font_size = max(int(style.font_size_px), 1)
+    space_percent = max(10, min(int(style.space_width_percent), 100))
+    edge_size = max(int(style.stroke_width_px), 0)
+
+    # Treat ASCII space explicitly.  Some headless Qt font backends expose a
+    # tofu outline for it, while NicokaraMaker3 always applies SpaceWidth.
+    if ch_text == " ":
+        return font_size * space_percent // 100 + edge_size
+
+    path = QPainterPath()
+    if ch_text:
+        path.addText(0.0, 0.0, glyph_font, ch_text)
+    bounds = path.boundingRect()
+    if bounds.isEmpty():
+        body_width = font_size * space_percent * 25 // 100 // 10
+        return max(body_width, 0) + edge_size
+
+    advance = _char_advance(ch_text, metrics, latin_metrics, font_for)
+    try:
+        left_bearing = glyph_metrics.leftBearing(ch_text)
+        right_bearing = glyph_metrics.rightBearing(ch_text)
+    except (TypeError, ValueError):
+        # Multi-codepoint graphemes and non-BMP characters cannot always be
+        # represented by QChar; derive equivalent bearings from the same path.
+        left_bearing = int(bounds.left())
+        right_bearing = int(advance - bounds.right())
+    return _nicokara_layout_width(
+        int(bounds.width()),
+        advance,
+        left_bearing,
+        right_bearing,
+        edge_size=edge_size,
+        allow_biting=bool(style.allow_biting),
+    )
+
+
     return int(style.letter_spacing_px)
 
 
@@ -3308,7 +3399,10 @@ def _layout_plain_line(
     ruby_metrics = QFontMetrics(ruby_font) if active_rubies else None
 
     # 整行宽度 → 水平居中起点（英数字符用英数字体的步进）
-    char_widths = [_char_advance(c.text, metrics, latin_metrics, font_for) for c in line.chars]
+    char_widths = [
+        _char_layout_width(c.text, font, metrics, latin_metrics, font_for, style)
+        for c in line.chars
+    ]
     total_w = _line_text_width(char_widths, style)
     visual_pad = _visual_text_padding(style)
     x0 = (
@@ -3382,6 +3476,8 @@ _SUBTITLE_SCHEME_STYLE_FIELDS: tuple[str, ...] = (
     "font_size_px",
     "letter_spacing_px",
     "font_weight",
+    "space_width_percent",
+    "allow_biting",
     "italic",
     "base_color",
     "fill_color",
@@ -3509,7 +3605,9 @@ def _build_text_layout(
             if inline_styles and font_for is not None and ch.text.isascii()
             else metrics
         )
-        width = _char_advance(ch.text, metrics, latin_metrics, font_for)
+        width = _char_layout_width(
+            ch.text, font, metrics, latin_metrics, font_for, role_style,
+        )
         spacing_after = _letter_spacing(role_style) if index < len(line.chars) - 1 else 0
         measured.append(
             (

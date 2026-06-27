@@ -345,7 +345,7 @@ def test_export_tab_builds_render_job_from_loaded_media(qapp, monkeypatch, tmp_p
     assert job.encoder_mode == "nvenc"
     assert job.preset == "slow"
     assert job.crf == 23
-    assert job.native_export_enabled is True
+    assert job.native_export_enabled is False
 
 
 def test_stop_render_export_requests_worker_cancel(qapp, monkeypatch):

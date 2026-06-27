@@ -271,16 +271,17 @@ def resolve_native_renderer_path(
     *,
     root: Path | None = None,
 ) -> Path | None:
-    """Resolve a usable sidecar executable, honoring ``KROK_SUBTITLE_NATIVE_RENDERER``."""
+    """Resolve a sidecar only for explicit protocol/test use.
+
+    Runtime auto-discovery is intentionally disabled.  Passing an explicit
+    executable keeps the protocol harness usable without allowing preview or
+    export code to activate native rendering through environment variables or
+    a bundled binary.
+    """
+    if executable_path is None:
+        return None
     candidates: list[Path] = []
-    if executable_path is not None:
-        candidates.append(Path(executable_path))
-    env_path = os.environ.get("KROK_SUBTITLE_NATIVE_RENDERER")
-    if env_path:
-        candidates.append(Path(env_path))
-    candidates.append(bundled_native_renderer_path(root))
-    if root is not None:
-        candidates.append(default_native_renderer_path(root))
+    candidates.append(Path(executable_path))
 
     seen: set[Path] = set()
     for candidate in candidates:
