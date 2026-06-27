@@ -409,6 +409,39 @@ def test_leading_text_before_first_timestamp_is_kept():
     assert line.chars[0].start_ms == 500  # 行首字符以第一个 ts 为起点
 
 
+def test_leading_text_borrows_previous_line_end_as_shared_span():
+    track = parse_nicokara_lrc(
+        "[00:01:00]あ[00:02:00]\n"
+        " い[00:03:00]う[00:04:00]\n"
+    )
+    line = track.lines[1]
+
+    assert "".join(c.text for c in line.chars) == " いう"
+    assert [c.start_ms for c in line.chars[:2]] == [2_000, 2_500]
+    assert [
+        (
+            c.source_span_start_ms,
+            c.source_span_end_ms,
+            c.source_span_index,
+            c.source_span_count,
+        )
+        for c in line.chars[:2]
+    ] == [
+        (2_000, 3_000, 0, 2),
+        (2_000, 3_000, 1, 2),
+    ]
+
+
+def test_missing_line_end_borrows_next_line_start():
+    track = parse_nicokara_lrc(
+        "[00:01:00]あ\n"
+        "\n"
+        "[00:03:00]い[00:04:00]\n"
+    )
+
+    assert track.lines[0].end_ms == 3_000
+
+
 def test_emoji_tag_not_parsed_as_body_and_kept_in_custom():
     # @Emoji 行（歌手→图定义）应归入尾部元数据，不污染正文，并保留以便 round-trip。
     text = (

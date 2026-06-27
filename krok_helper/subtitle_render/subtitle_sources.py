@@ -170,6 +170,7 @@ def _parse_body_lines(lines: Iterable[str]) -> list[TimingLine]:
                 singer_ids[line.singer_label] = len(singer_ids)
             line.singer_id = singer_ids[line.singer_label]
         timing_lines.append(line)
+    _normalize_cross_line_anchors(timing_lines)
     return timing_lines
 
 
@@ -237,8 +238,19 @@ def _parse_body_line(
             continue
         # 行首缓存字符补回：以本组的起点 ts 作为它们的起始（与本组首字共享时间）。
         if leading_buffer:
-            for ch, role in leading_buffer:
-                chars.append(TimingChar(text=ch, start_ms=pending_ts, role_label=role))
+            leading_count = len(leading_buffer)
+            for offset, (ch, role) in enumerate(leading_buffer):
+                chars.append(
+                    TimingChar(
+                        text=ch,
+                        start_ms=pending_ts,
+                        role_label=role,
+                        source_span_start_ms=pending_ts,
+                        source_span_end_ms=pending_ts,
+                        source_span_index=offset,
+                        source_span_count=leading_count,
+                    )
+                )
             leading_buffer.clear()
         char_starts = _spread_text_starts(pending_ts, next_ts, visible_count)
         shared_span = (
@@ -274,8 +286,19 @@ def _parse_body_line(
     # 行内有时间戳、但行首缓存字符一直没机会补回（如 ` [ts]` 仅"行首文本 + 结束 ts"）：
     # 用行末 ts 作为起点补回，仍不丢字。完全无时间戳的纯文本行保持空行语义（丢弃缓存）。
     if leading_buffer and end_ms is not None:
-        for ch, role in leading_buffer:
-            chars.append(TimingChar(text=ch, start_ms=end_ms, role_label=role))
+        leading_count = len(leading_buffer)
+        for offset, (ch, role) in enumerate(leading_buffer):
+            chars.append(
+                TimingChar(
+                    text=ch,
+                    start_ms=end_ms,
+                    role_label=role,
+                    source_span_start_ms=end_ms,
+                    source_span_end_ms=end_ms,
+                    source_span_index=offset,
+                    source_span_count=leading_count,
+                )
+            )
         leading_buffer.clear()
 
     raw = line.strip()
@@ -290,6 +313,83 @@ def _parse_body_line(
         ),
         active_role,
     )
+
+
+def _normalize_cross_line_anchors(lines: list[TimingLine]) -> None:
+    _borrow_missing_line_ends(lines)
+
+    previous_end_ms: Optional[int] = None
+    for line in lines:
+        if line.is_blank or not line.chars:
+            continue
+        leading_count = _leading_unanchored_count(line)
+        leader_ms = _line_leader_ms(line)
+        if (
+            leading_count > 0
+            and leader_ms is not None
+            and previous_end_ms is not None
+            and previous_end_ms < leader_ms
+        ):
+            starts = _spread_text_starts(previous_end_ms, leader_ms, leading_count)
+            for offset, ch in enumerate(line.chars[:leading_count]):
+                ch.start_ms = starts[offset]
+                ch.source_span_start_ms = previous_end_ms
+                ch.source_span_end_ms = leader_ms
+                ch.source_span_index = offset
+                ch.source_span_count = leading_count
+        if line.end_ms is not None:
+            previous_end_ms = line.end_ms
+
+
+def _borrow_missing_line_ends(lines: list[TimingLine]) -> None:
+    for index, line in enumerate(lines):
+        if line.is_blank or not line.chars or line.end_ms is not None:
+            continue
+        next_start = _next_line_leader_ms(lines, index + 1)
+        if next_start is None or next_start < line.chars[-1].start_ms:
+            continue
+        line.end_ms = next_start
+
+
+def _next_line_leader_ms(lines: list[TimingLine], start_index: int) -> Optional[int]:
+    for line in lines[start_index:]:
+        if line.is_blank or not line.chars:
+            continue
+        return _line_leader_ms(line)
+    return None
+
+
+def _line_leader_ms(line: TimingLine) -> Optional[int]:
+    if not line.chars:
+        return None
+    leading_count = _leading_unanchored_count(line)
+    if leading_count > 0:
+        end_ms = line.chars[0].source_span_end_ms
+        if end_ms is not None:
+            return end_ms
+    return line.chars[0].start_ms
+
+
+def _leading_unanchored_count(line: TimingLine) -> int:
+    if not line.chars:
+        return 0
+    first = line.chars[0]
+    count = int(first.source_span_count)
+    start = first.source_span_start_ms
+    end = first.source_span_end_ms
+    if count <= 0 or start is None or end is None or start != end:
+        return 0
+    if count > len(line.chars):
+        return 0
+    for offset, ch in enumerate(line.chars[:count]):
+        if (
+            ch.source_span_start_ms != start
+            or ch.source_span_end_ms != end
+            or ch.source_span_index != offset
+            or ch.source_span_count != count
+        ):
+            return 0
+    return count
 
 
 def _split_role_labels(text: str) -> list[tuple[str, str]]:
