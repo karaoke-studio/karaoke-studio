@@ -1648,6 +1648,7 @@ def test_native_glow_bitmap_cache_reuses_blurred_layer(tmp_path, monkeypatch):
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     monkeypatch.delenv("KROK_SUBTITLE_NATIVE_GLOW_CACHE", raising=False)
     monkeypatch.delenv("KROK_SUBTITLE_GLOW_CACHE", raising=False)
+    monkeypatch.setenv("KROK_SUBTITLE_NATIVE_TEXT_LAYER_CACHE", "off")
 
     track = TimingTrack(
         lines=[TimingLine(chars=[TimingChar("A", 0), TimingChar("B", 1000)], end_ms=2000)]
@@ -1679,6 +1680,127 @@ def test_native_glow_bitmap_cache_reuses_blurred_layer(tmp_path, monkeypatch):
     assert second["glow_cache_misses"] == first["glow_cache_misses"]
     assert second["glow_cache_size"] >= first["glow_cache_size"] > 0
     assert second["checksum"] == first["checksum"]
+
+
+def test_native_text_layer_cache_reuses_static_main_and_ruby_layers(tmp_path, monkeypatch):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("真", 0),
+                    TimingChar("実", 700),
+                    TimingChar(" ", 1200),
+                    TimingChar("物", 1500),
+                    TimingChar("憂", 2200),
+                ],
+                end_ms=3200,
+            )
+        ],
+        rubies=[
+            RubyAnnotation("真実", "しんじつ", pos_start_ms=0, pos_end_ms=2),
+            RubyAnnotation("物憂", "ものう", pos_start_ms=3, pos_end_ms=5),
+        ],
+    )
+    style = Style(
+        font_family="Arial",
+        font_size_px=72,
+        ruby_font_size_px=24,
+        line_lead_in_ms=0,
+        line_y_position="center",
+        line_horizontal_layout="center",
+        stroke_width_px=6,
+        stroke2_width_px=2,
+        decoration_kind="shadow",
+        shadow_offset_x=2,
+        shadow_offset_y=3,
+    )
+
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=960, height=540, fps=60)
+        first = renderer.render_frame_stats(1800)
+        second = renderer.render_frame_stats(1800)
+
+    assert first["checksum"] == second["checksum"]
+    assert "text_layer_cache_hits" in first
+    assert first["text_layer_cache_misses"] > 0
+    assert second["text_layer_cache_hits"] > first["text_layer_cache_hits"]
+    assert second["text_layer_cache_misses"] == first["text_layer_cache_misses"]
+    assert second["text_layer_cache_size"] >= first["text_layer_cache_size"] > 0
+    assert "layout_cache_hits" in first
+    assert first["layout_cache_misses"] > 0
+    assert second["layout_cache_hits"] > first["layout_cache_hits"]
+    assert second["layout_cache_misses"] == first["layout_cache_misses"]
+
+
+def test_native_text_layer_cache_reuses_inline_role_runs(tmp_path, monkeypatch):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    def fill(color: str) -> PaintFill:
+        return PaintFill(color=color)
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("A", 0, role_label="lead"),
+                    TimingChar("B", 600, role_label="lead"),
+                    TimingChar("C", 1200, role_label="back"),
+                    TimingChar("D", 1800, role_label="back"),
+                ],
+                end_ms=2600,
+            )
+        ]
+    )
+    style = Style(
+        font_family="Arial",
+        font_size_px=56,
+        line_lead_in_ms=0,
+        line_y_position="center",
+        line_horizontal_layout="center",
+        stroke_width_px=5,
+        stroke2_width_px=1,
+        decoration_kind="shadow",
+        shadow_offset_x=2,
+        shadow_offset_y=2,
+        custom_style_schemes={
+            "lead": SubtitleStyleScheme(
+                font_family="Arial",
+                font_size_px=70,
+                karaoke_colors=KaraokeColors(
+                    before=KaraokeColorState(text=fill("#EFFFFF")),
+                    after=KaraokeColorState(text=fill("#FF3366")),
+                ),
+            ),
+            "back": SubtitleStyleScheme(
+                font_family="Arial",
+                font_size_px=50,
+                karaoke_colors=KaraokeColors(
+                    before=KaraokeColorState(text=fill("#DDE8FF")),
+                    after=KaraokeColorState(text=fill("#55AAFF")),
+                ),
+            ),
+        },
+    )
+
+    with NativeRendererProcess(renderer_path, response_timeout_s=2.0, close_timeout_s=1.0) as renderer:
+        renderer.configure(track, style, width=960, height=540, fps=60)
+        first = renderer.render_frame_stats(1500)
+        second = renderer.render_frame_stats(1500)
+
+    assert first["checksum"] == second["checksum"]
+    assert first["text_layer_cache_misses"] > 0
+    assert second["text_layer_cache_hits"] > first["text_layer_cache_hits"]
+    assert second["text_layer_cache_misses"] == first["text_layer_cache_misses"]
 
 
 def test_native_utopia_glow_cache_reuses_upright_layer_across_transforms(

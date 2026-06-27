@@ -246,7 +246,7 @@ def test_async_preview_enabled_defaults_on_and_env_can_disable(monkeypatch):
         assert async_preview_enabled() is False
 
 
-def test_native_preview_enabled_defaults_on_and_requires_sidecar(monkeypatch, tmp_path):
+def test_native_preview_enabled_defaults_off_and_requires_sidecar(monkeypatch, tmp_path):
     from krok_helper.subtitle_render.frontend import preview_async as pa
 
     sidecar = tmp_path / "krok_subtitle_renderer.exe"
@@ -254,7 +254,7 @@ def test_native_preview_enabled_defaults_on_and_requires_sidecar(monkeypatch, tm
     monkeypatch.setattr(pa, "resolve_native_renderer_path", lambda: sidecar)
 
     monkeypatch.delenv("KROK_SUBTITLE_NATIVE_RENDER", raising=False)
-    assert pa.native_preview_enabled() is True
+    assert pa.native_preview_enabled() is False
 
     monkeypatch.setenv("KROK_SUBTITLE_NATIVE_RENDER", "1")
     assert pa.native_preview_enabled() is True
@@ -735,6 +735,120 @@ def test_native_async_renderer_skips_current_native_frame_after_cache_hit(qapp, 
         assert started_timestamps
     finally:
         unblock.set()
+        renderer.stop()
+
+
+def test_native_async_renderer_defaults_keep_preview_ahead(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+
+    monkeypatch.delenv("KROK_SUBTITLE_NATIVE_THREADS", raising=False)
+    monkeypatch.delenv("KROK_SUBTITLE_NATIVE_RING_SLOTS", raising=False)
+    monkeypatch.delenv("KROK_SUBTITLE_NATIVE_LOOKAHEAD_FRAMES", raising=False)
+    monkeypatch.setattr(pa.os, "cpu_count", lambda: 12)
+
+    renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
+    try:
+        assert renderer._lookahead_frames == 6
+        assert renderer._threads == 6
+        assert renderer._ring_slots == 8
+    finally:
+        renderer.stop()
+
+
+def test_native_async_renderer_reuses_shared_reader_for_range(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.models import Style, TimingTrack
+
+    class FakeSlot:
+        def __init__(self, t_ms: int) -> None:
+            self.t_ms = int(t_ms)
+
+        def to_qimage(self):
+            image = QImage(8, 8, QImage.Format.Format_ARGB32_Premultiplied)
+            image.fill(QColor("#111111"))
+            return image
+
+    class FakeRingReader:
+        created: list[str] = []
+
+        def __init__(self, shm_key: str) -> None:
+            self.shm_key = shm_key
+            self.closed = False
+            self.created.append(shm_key)
+
+        @classmethod
+        def from_event(cls, event):
+            return cls(str(event["shm_key"]))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            self.close()
+            return None
+
+        def close(self):
+            self.closed = True
+
+        def read_frame(self, event):
+            return FakeSlot(int(event["t_ms"]))
+
+    class FakeNativeRendererProcess:
+        def __init__(self, *args, **kwargs):
+            self.events: list[dict[str, object]] = []
+
+        def start(self):
+            return {"ok": True, "event": "ready"}
+
+        def configure(self, *args, **kwargs):
+            return {"ok": True, "event": "configured"}
+
+        def start_render_range(self, timestamps_ms, *, generation, threads, shm_key=None, ring_slots=3):
+            for index, t_ms in enumerate(timestamps_ms[:3]):
+                self.events.append(
+                    {
+                        "ok": True,
+                        "event": "frame_ready",
+                        "generation": generation,
+                        "frame_index": index,
+                        "t_ms": int(t_ms),
+                        "payload": "shared_memory",
+                        "shm_key": shm_key,
+                    }
+                )
+            self.events.append({"ok": True, "event": "range_done", "generation": generation})
+            return {"ok": True, "event": "range_started"}
+
+        def read_event(self):
+            return self.events.pop(0)
+
+        def send_cancel_generation(self, generation):
+            return None
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(pa, "NativeRendererProcess", FakeNativeRendererProcess)
+    monkeypatch.setattr(pa, "SharedFrameRingReader", FakeRingReader)
+    monkeypatch.setenv("KROK_SUBTITLE_NATIVE_LOOKAHEAD_FRAMES", "2")
+
+    renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
+    try:
+        renderer._render_native(
+            TimingTrack(),
+            Style(),
+            width=320,
+            height=180,
+            t_ms=1_000,
+            generation=renderer._generation,
+            needs_configure=True,
+            restart_renderer=False,
+            playing=True,
+            skip_current=False,
+        )
+
+        assert len(FakeRingReader.created) == 1
+    finally:
         renderer.stop()
 
 

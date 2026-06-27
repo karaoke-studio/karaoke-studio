@@ -234,6 +234,16 @@ struct RubyLayerImage {
     QPointF offset;
 };
 
+struct TextLayerImage {
+    QImage image;
+    QPointF offset;
+};
+
+struct GlyphRunRef {
+    std::size_t start = 0;
+    std::size_t end = 0;
+};
+
 struct RubyGroupInfo {
     std::vector<int> indices;
     RubyAnnotation ruby;
@@ -274,6 +284,16 @@ struct GlowBitmapCacheEntry {
     QImage image;
 };
 
+struct TextLayerCacheEntry {
+    QString key;
+    TextLayerImage layer;
+};
+
+struct LayoutCacheEntry {
+    QString key;
+    LineLayout layout;
+};
+
 struct GlowBitmapCacheKeyParts {
     QString key;
     QString shapeKey;
@@ -309,6 +329,16 @@ struct GlowBitmapCacheStats {
     QSet<QString> seenShapes;
     QHash<QString, int> missesByScope;
     std::vector<GlowBitmapCacheMissDiagnostic> recentMisses;
+};
+
+struct TextLayerCacheStats {
+    int hits = 0;
+    int misses = 0;
+};
+
+struct LayoutCacheStats {
+    int hits = 0;
+    int misses = 0;
 };
 
 struct RenderDiagnostics {
@@ -361,6 +391,10 @@ struct RenderRuntime {
     std::unique_ptr<QSharedMemory> sharedMemory;
     SharedFrameRing sharedRing;
 };
+
+QString fontCacheKey(const QFont &font);
+std::optional<LineLayout> lookupLayoutCache(const QString &key);
+void storeLayoutCache(const QString &key, const LineLayout &layout);
 
 QString stringValue(const QJsonObject &object, const QString &key, const QString &fallback = {}) {
     const auto value = object.value(key);
@@ -1979,6 +2013,67 @@ LineLayout layoutLine(const RenderConfig &cfg, const ResolvedStyle &lineStyle, c
     return layout;
 }
 
+QString timingLineLayoutTextKey(const TimingLine &line) {
+    QString key;
+    for (const TimingChar &ch : line.chars) {
+        key += QStringLiteral("|%1:%2").arg(ch.text.size()).arg(ch.text);
+    }
+    return key;
+}
+
+QString layoutLineCacheKey(
+    const RenderConfig &cfg,
+    const ResolvedStyle &lineStyle,
+    const TimingLine &line,
+    int lane,
+    int visibleLineCount
+) {
+    const QFont font = buildLineFont(lineStyle);
+    return QStringLiteral("layout|text=%1|font=%2|w=%3|h=%4|lane=%5|visible=%6|rtl=%7|y=%8|h_layout=%9|dual=%10|ym=%11|gap=%12|upper=%13|lower=%14|sw=%15|s2w=%16|deco=%17|sx=%18|sy=%19|glow=%20|spacing=%21")
+        .arg(timingLineLayoutTextKey(line))
+        .arg(fontCacheKey(font))
+        .arg(cfg.width)
+        .arg(cfg.height)
+        .arg(lane)
+        .arg(visibleLineCount)
+        .arg(cfg.rightToLeft ? 1 : 0)
+        .arg(cfg.lineYPosition)
+        .arg(cfg.lineHorizontalLayout)
+        .arg(cfg.dualLineLayout ? 1 : 0)
+        .arg(cfg.lineYMarginPx)
+        .arg(cfg.lineGapPx)
+        .arg(cfg.upperLineLeftMarginPx)
+        .arg(cfg.lowerLineRightMarginPx)
+        .arg(lineStyle.strokeWidthPx)
+        .arg(lineStyle.stroke2WidthPx)
+        .arg(lineStyle.decorationKind)
+        .arg(lineStyle.shadowOffsetX)
+        .arg(lineStyle.shadowOffsetY)
+        .arg(glowRadius(lineStyle, false))
+        .arg(lineStyle.letterSpacingPx);
+}
+
+LineLayout cachedLayoutLine(
+    const RenderConfig &cfg,
+    const ResolvedStyle &lineStyle,
+    const TimingLine &line,
+    int lane,
+    int visibleLineCount
+) {
+    if (lineHasRoleLabels(line)) {
+        return layoutLine(cfg, lineStyle, line, lane, visibleLineCount);
+    }
+    const QString key = layoutLineCacheKey(cfg, lineStyle, line, lane, visibleLineCount);
+    if (const auto cached = lookupLayoutCache(key)) {
+        return *cached;
+    }
+    LineLayout layout = layoutLine(cfg, lineStyle, line, lane, visibleLineCount);
+    layout.lineStyle = nullptr;
+    layout.charStyles.clear();
+    storeLayoutCache(key, layout);
+    return layout;
+}
+
 std::optional<QRectF> afterClipRectFromCharacterTiming(const RenderConfig &cfg, const ResolvedStyle &style, const TimingLine &line, const LineLayout &layout, int tMs) {
     if (line.chars.empty()) {
         return std::nullopt;
@@ -2713,9 +2808,30 @@ bool glowBitmapCacheEnabled() {
     return enabled;
 }
 
+bool textLayerCacheEnabled() {
+    static const bool enabled = !environmentDisablesCache("KROK_SUBTITLE_NATIVE_TEXT_LAYER_CACHE")
+        && !environmentDisablesCache("KROK_SUBTITLE_TEXT_LAYER_CACHE");
+    return enabled;
+}
+
 std::vector<GlowBitmapCacheEntry> &glowBitmapCache() {
     static std::vector<GlowBitmapCacheEntry> cache;
     return cache;
+}
+
+std::vector<TextLayerCacheEntry> &textLayerCache() {
+    static std::vector<TextLayerCacheEntry> cache;
+    return cache;
+}
+
+std::vector<LayoutCacheEntry> &layoutCache() {
+    thread_local std::vector<LayoutCacheEntry> cache;
+    return cache;
+}
+
+int &layoutCacheLocalGeneration() {
+    thread_local int generation = -1;
+    return generation;
 }
 
 std::mutex &glowBitmapCacheMutex() {
@@ -2723,8 +2839,33 @@ std::mutex &glowBitmapCacheMutex() {
     return mutex;
 }
 
+std::mutex &textLayerCacheMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::mutex &layoutCacheMutex() {
+    static std::mutex mutex;
+    return mutex;
+}
+
+std::atomic<int> &layoutCacheGeneration() {
+    static std::atomic<int> generation{0};
+    return generation;
+}
+
 GlowBitmapCacheStats &glowBitmapCacheStats() {
     static GlowBitmapCacheStats stats;
+    return stats;
+}
+
+TextLayerCacheStats &textLayerCacheStats() {
+    static TextLayerCacheStats stats;
+    return stats;
+}
+
+LayoutCacheStats &layoutCacheStats() {
+    static LayoutCacheStats stats;
     return stats;
 }
 
@@ -2732,6 +2873,154 @@ void clearGlowBitmapCache() {
     std::lock_guard<std::mutex> lock(glowBitmapCacheMutex());
     glowBitmapCache().clear();
     glowBitmapCacheStats() = GlowBitmapCacheStats{};
+}
+
+void clearTextLayerCache() {
+    std::lock_guard<std::mutex> lock(textLayerCacheMutex());
+    textLayerCache().clear();
+    textLayerCacheStats() = TextLayerCacheStats{};
+}
+
+void clearLayoutCache() {
+    std::lock_guard<std::mutex> lock(layoutCacheMutex());
+    layoutCacheGeneration().fetch_add(1);
+    layoutCache().clear();
+    layoutCacheLocalGeneration() = layoutCacheGeneration().load();
+    layoutCacheStats() = LayoutCacheStats{};
+}
+
+QString doubleCacheKey(double value) {
+    return QString::number(static_cast<qint64>(std::llround(value * 1000.0)));
+}
+
+QString fontCacheKey(const QFont &font) {
+    return QStringLiteral("%1|%2|%3|%4|%5")
+        .arg(font.family())
+        .arg(font.pixelSize())
+        .arg(font.weight())
+        .arg(font.italic() ? 1 : 0)
+        .arg(font.letterSpacing());
+}
+
+QString fillCacheKey(const PaintFillSpec &fill) {
+    QString key = QStringLiteral("%1|%2|%3|%4|%5|%6|%7|%8|%9")
+        .arg(fill.mode)
+        .arg(fill.color)
+        .arg(fill.startColor)
+        .arg(fill.endColor)
+        .arg(fill.splitTopColor)
+        .arg(fill.splitBottomColor)
+        .arg(fill.splitPositionPct)
+        .arg(fill.imagePath)
+        .arg(fill.imageScalePct);
+    for (const auto &stop : fill.gradientStops) {
+        key += QStringLiteral("|%1:%2").arg(stop.first).arg(stop.second);
+    }
+    return key;
+}
+
+QString textStackStyleCacheKey(
+    const PaintFillSpec &fill,
+    const PaintFillSpec &stroke,
+    const PaintFillSpec &stroke2,
+    const PaintFillSpec &shadow,
+    const ResolvedStyle &style,
+    int strokeWidth,
+    int stroke2Width,
+    int shadowOffsetX,
+    int shadowOffsetY,
+    int glowRadiusValue
+) {
+    return QStringLiteral("fill=%1|stroke=%2|stroke2=%3|shadow=%4|deco=%5|sw=%6|s2w=%7|sx=%8|sy=%9|glow=%10")
+        .arg(fillCacheKey(fill))
+        .arg(fillCacheKey(stroke))
+        .arg(fillCacheKey(stroke2))
+        .arg(fillCacheKey(shadow))
+        .arg(style.decorationKind)
+        .arg(strokeWidth)
+        .arg(stroke2Width)
+        .arg(shadowOffsetX)
+        .arg(shadowOffsetY)
+        .arg(glowRadiusValue);
+}
+
+std::optional<TextLayerImage> lookupTextLayerCache(const QString &key) {
+    std::lock_guard<std::mutex> lock(textLayerCacheMutex());
+    auto &cache = textLayerCache();
+    auto &stats = textLayerCacheStats();
+    for (auto it = cache.begin(); it != cache.end(); ++it) {
+        if (it->key == key) {
+            TextLayerCacheEntry entry = *it;
+            cache.erase(it);
+            cache.push_back(entry);
+            ++stats.hits;
+            return entry.layer;
+        }
+    }
+    ++stats.misses;
+    return std::nullopt;
+}
+
+void storeTextLayerCache(const QString &key, const TextLayerImage &layer) {
+    std::lock_guard<std::mutex> lock(textLayerCacheMutex());
+    auto &cache = textLayerCache();
+    for (auto it = cache.begin(); it != cache.end(); ++it) {
+        if (it->key == key) {
+            cache.erase(it);
+            break;
+        }
+    }
+    constexpr std::size_t kTextLayerCacheMax = 256;
+    if (cache.size() >= kTextLayerCacheMax) {
+        cache.erase(cache.begin());
+    }
+    cache.push_back(TextLayerCacheEntry{key, layer});
+}
+
+std::optional<LineLayout> lookupLayoutCache(const QString &key) {
+    const int generation = layoutCacheGeneration().load();
+    if (layoutCacheLocalGeneration() != generation) {
+        layoutCache().clear();
+        layoutCacheLocalGeneration() = generation;
+    }
+    auto &cache = layoutCache();
+    for (auto it = cache.begin(); it != cache.end(); ++it) {
+        if (it->key == key) {
+            LayoutCacheEntry entry = *it;
+            cache.erase(it);
+            cache.push_back(entry);
+            {
+                std::lock_guard<std::mutex> lock(layoutCacheMutex());
+                ++layoutCacheStats().hits;
+            }
+            return entry.layout;
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(layoutCacheMutex());
+        ++layoutCacheStats().misses;
+    }
+    return std::nullopt;
+}
+
+void storeLayoutCache(const QString &key, const LineLayout &layout) {
+    const int generation = layoutCacheGeneration().load();
+    if (layoutCacheLocalGeneration() != generation) {
+        layoutCache().clear();
+        layoutCacheLocalGeneration() = generation;
+    }
+    auto &cache = layoutCache();
+    for (auto it = cache.begin(); it != cache.end(); ++it) {
+        if (it->key == key) {
+            cache.erase(it);
+            break;
+        }
+    }
+    constexpr std::size_t kLayoutCacheMax = 512;
+    if (cache.size() >= kLayoutCacheMax) {
+        cache.erase(cache.begin());
+    }
+    cache.push_back(LayoutCacheEntry{key, layout});
 }
 
 GlowBitmapCacheKeyParts glowBitmapCacheKey(const QImage &source, int radius) {
@@ -2939,6 +3228,444 @@ void paintTextLayerStackWithWidths(
     );
 }
 
+TextLayerImage buildTextLayerStackWithWidths(
+    const QPainterPath &path,
+    const QRectF &rect,
+    const PaintFillSpec &fill,
+    const PaintFillSpec &stroke,
+    const PaintFillSpec &stroke2,
+    const PaintFillSpec &shadow,
+    const ResolvedStyle &style,
+    int strokeWidth,
+    int stroke2Width,
+    int shadowOffsetX,
+    int shadowOffsetY,
+    int glowRadiusValue
+) {
+    const QRectF bounds = path.boundingRect().united(rect);
+    if (bounds.isEmpty()) {
+        return TextLayerImage{};
+    }
+    const double strokeExtent = visualStrokeExtentForWidths(strokeWidth, stroke2Width);
+    const double glowExtra = style.decorationKind == QStringLiteral("glow")
+        ? glowExtentForWidths(strokeWidth, stroke2Width, glowRadiusValue)
+        : 0.0;
+    const int extent = static_cast<int>(std::max({
+        strokeExtent,
+        glowExtra,
+        static_cast<double>(std::abs(shadowOffsetX)),
+        static_cast<double>(std::abs(shadowOffsetY)),
+        2.0,
+    })) + 4;
+    const int padLeft = std::max(0, -shadowOffsetX) + extent;
+    const int padRight = std::max(0, shadowOffsetX) + extent;
+    const int padTop = std::max(0, -shadowOffsetY) + extent;
+    const int padBottom = std::max(0, shadowOffsetY) + extent;
+
+    const QRectF layerRect(
+        std::floor(bounds.left() - padLeft),
+        std::floor(bounds.top() - padTop),
+        std::ceil(bounds.width() + padLeft + padRight),
+        std::ceil(bounds.height() + padTop + padBottom)
+    );
+    const int imageWidth = std::max(1, static_cast<int>(std::ceil(layerRect.width())));
+    const int imageHeight = std::max(1, static_cast<int>(std::ceil(layerRect.height())));
+
+    QImage image(imageWidth, imageHeight, QImage::Format_ARGB32_Premultiplied);
+    image.fill(Qt::transparent);
+
+    QPainterPath localPath(path);
+    localPath.translate(-layerRect.left(), -layerRect.top());
+    const QRectF localRect = rect.translated(-layerRect.left(), -layerRect.top());
+
+    QPainter layerPainter(&image);
+    layerPainter.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing);
+    paintTextLayerStackWithWidths(
+        layerPainter,
+        localPath,
+        localRect,
+        fill,
+        stroke,
+        stroke2,
+        shadow,
+        style,
+        strokeWidth,
+        stroke2Width,
+        shadowOffsetX,
+        shadowOffsetY,
+        glowRadiusValue
+    );
+    layerPainter.end();
+
+    return TextLayerImage{
+        image,
+        QPointF(layerRect.left(), layerRect.top()),
+    };
+}
+
+QString mainTextLayerCacheKey(
+    const LineLayout &layout,
+    const QRectF &rect,
+    const QString &phase,
+    const PaintFillSpec &fill,
+    const PaintFillSpec &stroke,
+    const PaintFillSpec &stroke2,
+    const PaintFillSpec &shadow,
+    const ResolvedStyle &style,
+    int strokeWidth,
+    int stroke2Width,
+    int shadowOffsetX,
+    int shadowOffsetY,
+    int glowRadiusValue
+) {
+    return QStringLiteral("main|%1|text=%2|font=%3|x=%4|y=%5|w=%6|h=%7|ascent=%8|descent=%9|style=%10")
+        .arg(phase)
+        .arg(layout.text)
+        .arg(fontCacheKey(layout.font))
+        .arg(doubleCacheKey(rect.left()))
+        .arg(doubleCacheKey(rect.top()))
+        .arg(doubleCacheKey(rect.width()))
+        .arg(doubleCacheKey(rect.height()))
+        .arg(doubleCacheKey(layout.ascent))
+        .arg(doubleCacheKey(layout.descent))
+        .arg(textStackStyleCacheKey(
+            fill,
+            stroke,
+            stroke2,
+            shadow,
+            style,
+            strokeWidth,
+            stroke2Width,
+            shadowOffsetX,
+            shadowOffsetY,
+            glowRadiusValue
+        ));
+}
+
+void paintCachedTextLayerStackWithWidths(
+    QPainter &painter,
+    const QString &cacheKey,
+    const QPainterPath &path,
+    const QRectF &rect,
+    const PaintFillSpec &fill,
+    const PaintFillSpec &stroke,
+    const PaintFillSpec &stroke2,
+    const PaintFillSpec &shadow,
+    const ResolvedStyle &style,
+    int strokeWidth,
+    int stroke2Width,
+    int shadowOffsetX,
+    int shadowOffsetY,
+    int glowRadiusValue
+);
+
+const ResolvedStyle &layoutCharStyle(
+    const LineLayout &layout,
+    const ResolvedStyle &lineStyle,
+    std::size_t index
+) {
+    if (layout.hasInlineStyles && index < layout.charStyles.size() && layout.charStyles[index] != nullptr) {
+        return *layout.charStyles[index];
+    }
+    return lineStyle;
+}
+
+QFont layoutCharFont(const LineLayout &layout, std::size_t index) {
+    if (index < layout.charFonts.size()) {
+        return layout.charFonts[index];
+    }
+    return layout.font;
+}
+
+QString glyphRunVisualSignature(
+    const LineLayout &layout,
+    const ResolvedStyle &lineStyle,
+    std::size_t index
+) {
+    const ResolvedStyle &style = layoutCharStyle(layout, lineStyle, index);
+    return QStringLiteral("font=%1|before=%2|after=%3")
+        .arg(fontCacheKey(layoutCharFont(layout, index)))
+        .arg(textStackStyleCacheKey(
+            style.baseFill,
+            style.beforeStrokeFill,
+            style.beforeStroke2Fill,
+            style.beforeShadowFill,
+            style,
+            style.strokeWidthPx,
+            style.stroke2WidthPx,
+            style.shadowOffsetX,
+            style.shadowOffsetY,
+            glowRadius(style, false)
+        ))
+        .arg(textStackStyleCacheKey(
+            style.afterFill,
+            style.afterStrokeFill,
+            style.afterStroke2Fill,
+            style.afterShadowFill,
+            style,
+            style.strokeWidthPx,
+            style.stroke2WidthPx,
+            style.shadowOffsetX,
+            style.shadowOffsetY,
+            glowRadius(style, true)
+        ));
+}
+
+std::vector<GlyphRunRef> glyphRunsForLayout(
+    const TimingLine &line,
+    const LineLayout &layout,
+    const ResolvedStyle &lineStyle
+) {
+    std::vector<GlyphRunRef> runs;
+    if (line.chars.empty()) {
+        return runs;
+    }
+    if (!layout.hasInlineStyles) {
+        runs.push_back(GlyphRunRef{0, line.chars.size()});
+        return runs;
+    }
+    std::size_t start = 0;
+    QString current = glyphRunVisualSignature(layout, lineStyle, 0);
+    for (std::size_t index = 1; index < line.chars.size(); ++index) {
+        const QString signature = glyphRunVisualSignature(layout, lineStyle, index);
+        if (signature == current) {
+            continue;
+        }
+        runs.push_back(GlyphRunRef{start, index});
+        start = index;
+        current = signature;
+    }
+    runs.push_back(GlyphRunRef{start, line.chars.size()});
+    return runs;
+}
+
+QPainterPath glyphRunPath(
+    const TimingLine &line,
+    const LineLayout &layout,
+    const GlyphRunRef &run
+) {
+    QPainterPath path;
+    for (std::size_t index = run.start; index < run.end; ++index) {
+        if (index >= line.chars.size() || index >= layout.charLefts.size()) {
+            continue;
+        }
+        path.addText(
+            QPointF(layout.charLefts[index], layout.baselineY),
+            layoutCharFont(layout, index),
+            line.chars[index].text
+        );
+    }
+    return path;
+}
+
+QRectF glyphRunRect(
+    const TimingLine &line,
+    const LineLayout &layout,
+    const GlyphRunRef &run
+) {
+    double left = std::numeric_limits<double>::infinity();
+    double right = -std::numeric_limits<double>::infinity();
+    double ascent = 0.0;
+    double descent = 0.0;
+    for (std::size_t index = run.start; index < run.end; ++index) {
+        if (index >= line.chars.size() || index >= layout.charLefts.size() || index >= layout.charWidths.size()) {
+            continue;
+        }
+        const QFont font = layoutCharFont(layout, index);
+        const QFontMetricsF metrics(font);
+        left = std::min(left, layout.charLefts[index]);
+        right = std::max(right, layout.charLefts[index] + layout.charWidths[index]);
+        ascent = std::max(ascent, metrics.ascent());
+        descent = std::max(descent, metrics.descent());
+    }
+    if (!std::isfinite(left) || !std::isfinite(right)) {
+        return QRectF();
+    }
+    return QRectF(
+        left,
+        layout.baselineY - ascent,
+        std::max(right - left, 1.0),
+        std::max(ascent + descent, 1.0)
+    );
+}
+
+QString glyphRunTextLayerCacheKey(
+    const TimingLine &line,
+    const LineLayout &layout,
+    const GlyphRunRef &run,
+    const QRectF &rect,
+    const QString &phase,
+    const ResolvedStyle &style,
+    const PaintFillSpec &fill,
+    const PaintFillSpec &stroke,
+    const PaintFillSpec &stroke2,
+    const PaintFillSpec &shadow,
+    int strokeWidth,
+    int stroke2Width,
+    int shadowOffsetX,
+    int shadowOffsetY,
+    int glowRadiusValue
+) {
+    QString glyphKey;
+    for (std::size_t index = run.start; index < run.end; ++index) {
+        if (index >= line.chars.size() || index >= layout.charLefts.size() || index >= layout.charWidths.size()) {
+            continue;
+        }
+        glyphKey += QStringLiteral("|%1:%2@%3:%4:%5")
+            .arg(index)
+            .arg(line.chars[index].text)
+            .arg(doubleCacheKey(layout.charLefts[index]))
+            .arg(doubleCacheKey(layout.charWidths[index]))
+            .arg(fontCacheKey(layoutCharFont(layout, index)));
+    }
+    return QStringLiteral("glyph_run|%1|glyphs=%2|x=%3|y=%4|w=%5|h=%6|style=%7")
+        .arg(phase)
+        .arg(glyphKey)
+        .arg(doubleCacheKey(rect.left()))
+        .arg(doubleCacheKey(rect.top()))
+        .arg(doubleCacheKey(rect.width()))
+        .arg(doubleCacheKey(rect.height()))
+        .arg(textStackStyleCacheKey(
+            fill,
+            stroke,
+            stroke2,
+            shadow,
+            style,
+            strokeWidth,
+            stroke2Width,
+            shadowOffsetX,
+            shadowOffsetY,
+            glowRadiusValue
+        ));
+}
+
+void paintGlyphRunTextLayer(
+    QPainter &painter,
+    const TimingLine &line,
+    const LineLayout &layout,
+    const GlyphRunRef &run,
+    const ResolvedStyle &style,
+    bool after
+) {
+    const QPainterPath path = glyphRunPath(line, layout, run);
+    const QRectF rect = glyphRunRect(line, layout, run);
+    if (path.isEmpty() || rect.isEmpty()) {
+        return;
+    }
+    const PaintFillSpec &fill = after ? style.afterFill : style.baseFill;
+    const PaintFillSpec &stroke = after ? style.afterStrokeFill : style.beforeStrokeFill;
+    const PaintFillSpec &stroke2 = after ? style.afterStroke2Fill : style.beforeStroke2Fill;
+    const PaintFillSpec &shadow = after ? style.afterShadowFill : style.beforeShadowFill;
+    const int glow = glowRadius(style, after);
+    paintCachedTextLayerStackWithWidths(
+        painter,
+        glyphRunTextLayerCacheKey(
+            line,
+            layout,
+            run,
+            rect,
+            after ? QStringLiteral("after") : QStringLiteral("before"),
+            style,
+            fill,
+            stroke,
+            stroke2,
+            shadow,
+            style.strokeWidthPx,
+            style.stroke2WidthPx,
+            style.shadowOffsetX,
+            style.shadowOffsetY,
+            glow
+        ),
+        path,
+        rect,
+        fill,
+        stroke,
+        stroke2,
+        shadow,
+        style,
+        style.strokeWidthPx,
+        style.stroke2WidthPx,
+        style.shadowOffsetX,
+        style.shadowOffsetY,
+        glow
+    );
+}
+
+void paintGlyphRunTextLayers(
+    QPainter &painter,
+    const TimingLine &line,
+    const LineLayout &layout,
+    const ResolvedStyle &lineStyle,
+    bool after
+) {
+    const auto runs = glyphRunsForLayout(line, layout, lineStyle);
+    for (const GlyphRunRef &run : runs) {
+        if (run.start >= run.end) {
+            continue;
+        }
+        const ResolvedStyle &style = layoutCharStyle(layout, lineStyle, run.start);
+        paintGlyphRunTextLayer(painter, line, layout, run, style, after);
+    }
+}
+
+void paintCachedTextLayerStackWithWidths(
+    QPainter &painter,
+    const QString &cacheKey,
+    const QPainterPath &path,
+    const QRectF &rect,
+    const PaintFillSpec &fill,
+    const PaintFillSpec &stroke,
+    const PaintFillSpec &stroke2,
+    const PaintFillSpec &shadow,
+    const ResolvedStyle &style,
+    int strokeWidth,
+    int stroke2Width,
+    int shadowOffsetX,
+    int shadowOffsetY,
+    int glowRadiusValue
+) {
+    if (!textLayerCacheEnabled()) {
+        const TextLayerImage layer = buildTextLayerStackWithWidths(
+            path,
+            rect,
+            fill,
+            stroke,
+            stroke2,
+            shadow,
+            style,
+            strokeWidth,
+            stroke2Width,
+            shadowOffsetX,
+            shadowOffsetY,
+            glowRadiusValue
+        );
+        painter.drawImage(layer.offset, layer.image);
+        return;
+    }
+
+    if (const auto cached = lookupTextLayerCache(cacheKey)) {
+        painter.drawImage(cached->offset, cached->image);
+        return;
+    }
+
+    const TextLayerImage layer = buildTextLayerStackWithWidths(
+        path,
+        rect,
+        fill,
+        stroke,
+        stroke2,
+        shadow,
+        style,
+        strokeWidth,
+        stroke2Width,
+        shadowOffsetX,
+        shadowOffsetY,
+        glowRadiusValue
+    );
+    storeTextLayerCache(cacheKey, layer);
+    painter.drawImage(layer.offset, layer.image);
+}
+
 RubyLayerImage buildRubyTextLayer(
     const RubyDiagnostics &ruby,
     const QFont &rubyFont,
@@ -3019,6 +3746,103 @@ RubyLayerImage buildRubyTextLayer(
     };
 }
 
+QString rubyTextLayerCacheKey(
+    const RubyDiagnostics &ruby,
+    const QFont &rubyFont,
+    const QFontMetricsF &rubyMetrics,
+    const QString &phase,
+    const PaintFillSpec &fill,
+    const PaintFillSpec &stroke,
+    const PaintFillSpec &stroke2,
+    const PaintFillSpec &shadow,
+    const ResolvedStyle &style,
+    int strokeWidth,
+    int stroke2Width,
+    int shadowOffsetX,
+    int shadowOffsetY,
+    int glowRadiusValue
+) {
+    return QStringLiteral("ruby|%1|reading=%2|target=%3|reading_w=%4|font=%5|height=%6|ascent=%7|style=%8")
+        .arg(phase)
+        .arg(ruby.reading)
+        .arg(doubleCacheKey(ruby.targetWidth))
+        .arg(doubleCacheKey(ruby.readingWidth))
+        .arg(fontCacheKey(rubyFont))
+        .arg(doubleCacheKey(rubyMetrics.height()))
+        .arg(doubleCacheKey(rubyMetrics.ascent()))
+        .arg(textStackStyleCacheKey(
+            fill,
+            stroke,
+            stroke2,
+            shadow,
+            style,
+            strokeWidth,
+            stroke2Width,
+            shadowOffsetX,
+            shadowOffsetY,
+            glowRadiusValue
+        ));
+}
+
+RubyLayerImage cachedRubyTextLayer(
+    const RubyDiagnostics &ruby,
+    const QFont &rubyFont,
+    const QFontMetricsF &rubyMetrics,
+    const QString &phase,
+    const PaintFillSpec &fill,
+    const PaintFillSpec &stroke,
+    const PaintFillSpec &stroke2,
+    const PaintFillSpec &shadow,
+    const ResolvedStyle &style,
+    int strokeWidth,
+    int stroke2Width,
+    int shadowOffsetX,
+    int shadowOffsetY,
+    int glowRadiusValue
+) {
+    const QString cacheKey = rubyTextLayerCacheKey(
+        ruby,
+        rubyFont,
+        rubyMetrics,
+        phase,
+        fill,
+        stroke,
+        stroke2,
+        shadow,
+        style,
+        strokeWidth,
+        stroke2Width,
+        shadowOffsetX,
+        shadowOffsetY,
+        glowRadiusValue
+    );
+    if (textLayerCacheEnabled()) {
+        if (const auto cached = lookupTextLayerCache(cacheKey)) {
+            return RubyLayerImage{cached->image, cached->offset};
+        }
+    }
+
+    const RubyLayerImage layer = buildRubyTextLayer(
+        ruby,
+        rubyFont,
+        rubyMetrics,
+        fill,
+        stroke,
+        stroke2,
+        shadow,
+        style,
+        strokeWidth,
+        stroke2Width,
+        shadowOffsetX,
+        shadowOffsetY,
+        glowRadiusValue
+    );
+    if (textLayerCacheEnabled()) {
+        storeTextLayerCache(cacheKey, TextLayerImage{layer.image, layer.offset});
+    }
+    return layer;
+}
+
 void paintRubyDiagnostics(
     QPainter &painter,
     const ResolvedStyle &style,
@@ -3043,10 +3867,11 @@ void paintRubyDiagnostics(
     const int shadowOffsetX = scaledSignedPx(style.shadowOffsetX, scale);
     const int shadowOffsetY = scaledSignedPx(style.shadowOffsetY, scale);
     for (const RubyDiagnostics &ruby : rubies) {
-        const RubyLayerImage beforeLayer = buildRubyTextLayer(
+        const RubyLayerImage beforeLayer = cachedRubyTextLayer(
             ruby,
             rubyFont,
             rubyMetrics,
+            QStringLiteral("before"),
             base,
             beforeStroke,
             beforeStroke2,
@@ -3062,10 +3887,11 @@ void paintRubyDiagnostics(
         if (ruby.progress <= 0.0) {
             continue;
         }
-        const RubyLayerImage afterLayer = buildRubyTextLayer(
+        const RubyLayerImage afterLayer = cachedRubyTextLayer(
             ruby,
             rubyFont,
             rubyMetrics,
+            QStringLiteral("after"),
             fill,
             afterStroke,
             afterStroke2,
@@ -3668,7 +4494,7 @@ void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &lin
 
     const ResolvedStyle &lineStyle = resolvedStyleForLine(cfg, line);
 
-    const LineLayout layout = layoutLine(cfg, lineStyle, line, lane, visibleLineCount);
+    const LineLayout layout = cachedLayoutLine(cfg, lineStyle, line, lane, visibleLineCount);
 
     const QRectF lineRect(layout.x, layout.baselineY - layout.ascent, layout.width, layout.height);
     const auto intervals = lineIntervals(line);
@@ -3716,49 +4542,15 @@ void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &lin
             transition.value(),
             tMs
         );
-    } else if (layout.hasInlineStyles) {
-        paintInlineTextLayerStack(painter, line, layout, false);
     } else {
-        paintTextLayerStackWithWidths(
-            painter,
-            layout.path,
-            lineRect,
-            lineStyle.baseFill,
-            lineStyle.beforeStrokeFill,
-            lineStyle.beforeStroke2Fill,
-            lineStyle.beforeShadowFill,
-            lineStyle,
-            lineStyle.strokeWidthPx,
-            lineStyle.stroke2WidthPx,
-            lineStyle.shadowOffsetX,
-            lineStyle.shadowOffsetY,
-            glowRadius(lineStyle, false)
-        );
+        paintGlyphRunTextLayers(painter, line, layout, lineStyle, false);
     }
 
     const auto clip = afterClipRect(cfg, lineStyle, line, layout, tMs);
     if (!useUtopiaMainText && clip.has_value() && clip->width() > 0.0) {
         painter.save();
         painter.setClipRect(*clip, Qt::IntersectClip);
-        if (layout.hasInlineStyles) {
-            paintInlineTextLayerStack(painter, line, layout, true);
-        } else {
-            paintTextLayerStackWithWidths(
-                painter,
-                layout.path,
-                lineRect,
-                lineStyle.afterFill,
-                lineStyle.afterStrokeFill,
-                lineStyle.afterStroke2Fill,
-                lineStyle.afterShadowFill,
-                lineStyle,
-                lineStyle.strokeWidthPx,
-                lineStyle.stroke2WidthPx,
-                lineStyle.shadowOffsetX,
-                lineStyle.shadowOffsetY,
-                glowRadius(lineStyle, true)
-            );
-        }
+        paintGlyphRunTextLayers(painter, line, layout, lineStyle, true);
         painter.restore();
     }
 
@@ -3841,6 +4633,8 @@ QJsonObject handleConfigure(const QJsonObject &request, std::optional<RenderConf
     }
     *config = parsed;
     clearGlowBitmapCache();
+    clearTextLayerCache();
+    clearLayoutCache();
     QJsonObject out = response(true, QStringLiteral("configured"));
     out.insert(QStringLiteral("width"), parsed->width);
     out.insert(QStringLiteral("height"), parsed->height);
@@ -3869,6 +4663,12 @@ void appendFrameDiagnostics(
     out->insert(QStringLiteral("glow_cache_content_variant_misses"), glowBitmapCacheStats().contentVariantMisses);
     out->insert(QStringLiteral("glow_cache_evicted_key_misses"), glowBitmapCacheStats().evictedKeyMisses);
     out->insert(QStringLiteral("glow_cache_size"), static_cast<int>(glowBitmapCache().size()));
+    out->insert(QStringLiteral("text_layer_cache_hits"), textLayerCacheStats().hits);
+    out->insert(QStringLiteral("text_layer_cache_misses"), textLayerCacheStats().misses);
+    out->insert(QStringLiteral("text_layer_cache_size"), static_cast<int>(textLayerCache().size()));
+    out->insert(QStringLiteral("layout_cache_hits"), layoutCacheStats().hits);
+    out->insert(QStringLiteral("layout_cache_misses"), layoutCacheStats().misses);
+    out->insert(QStringLiteral("layout_cache_size"), static_cast<int>(layoutCache().size()));
     QJsonObject missesByScope;
     const auto scopeKeys = glowBitmapCacheStats().missesByScope.keys();
     for (const QString &scope : scopeKeys) {
@@ -4065,6 +4865,12 @@ QJsonObject handleRenderRangeStats(const QJsonObject &request, const std::option
     out.insert(QStringLiteral("glow_cache_content_variant_misses"), glowBitmapCacheStats().contentVariantMisses);
     out.insert(QStringLiteral("glow_cache_evicted_key_misses"), glowBitmapCacheStats().evictedKeyMisses);
     out.insert(QStringLiteral("glow_cache_size"), static_cast<int>(glowBitmapCache().size()));
+    out.insert(QStringLiteral("text_layer_cache_hits"), textLayerCacheStats().hits);
+    out.insert(QStringLiteral("text_layer_cache_misses"), textLayerCacheStats().misses);
+    out.insert(QStringLiteral("text_layer_cache_size"), static_cast<int>(textLayerCache().size()));
+    out.insert(QStringLiteral("layout_cache_hits"), layoutCacheStats().hits);
+    out.insert(QStringLiteral("layout_cache_misses"), layoutCacheStats().misses);
+    out.insert(QStringLiteral("layout_cache_size"), static_cast<int>(layoutCache().size()));
     QJsonObject missesByScope;
     const auto scopeKeys = glowBitmapCacheStats().missesByScope.keys();
     for (const QString &scope : scopeKeys) {

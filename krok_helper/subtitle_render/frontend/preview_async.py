@@ -41,6 +41,18 @@ def _env_enabled(name: str, default: str) -> bool:
     )
 
 
+def _env_int(name: str, default: int, *, minimum: int = 1) -> int:
+    try:
+        value = int(os.environ.get(name, str(default)) or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(int(value), int(minimum))
+
+
+def _default_native_preview_threads() -> int:
+    return min(max(os.cpu_count() or 4, 1), 6)
+
+
 def async_preview_enabled() -> bool:
     return _env_enabled("KROK_SUBTITLE_ASYNC_PREVIEW", "1")
 
@@ -48,11 +60,11 @@ def async_preview_enabled() -> bool:
 def native_preview_enabled() -> bool:
     """Return whether preview should try the native sidecar renderer.
 
-    The sidecar path is default-on for this branch. Missing executables silently
-    keep the existing Python async renderer; set ``KROK_SUBTITLE_NATIVE_RENDER=0``
-    to force the Python path.
+    The sidecar path is opt-in while the native renderer remains experimental.
+    Set ``KROK_SUBTITLE_NATIVE_RENDER=1`` to try it; missing executables
+    silently keep the existing Python async renderer.
     """
-    if not _env_enabled("KROK_SUBTITLE_NATIVE_RENDER", "1"):
+    if not _env_enabled("KROK_SUBTITLE_NATIVE_RENDER", "0"):
         return False
     return resolve_native_renderer_path() is not None
 
@@ -369,11 +381,23 @@ class NativeAsyncSubtitleRenderer(QObject):
         self._playing = False
         self._last_t: Optional[int] = None
         self._fps = 60
-        self._threads = max(int(os.environ.get("KROK_SUBTITLE_NATIVE_THREADS", "4") or 4), 1)
-        self._ring_slots = max(int(os.environ.get("KROK_SUBTITLE_NATIVE_RING_SLOTS", "3") or 3), 1)
-        self._lookahead_frames = max(
-            int(os.environ.get("KROK_SUBTITLE_NATIVE_LOOKAHEAD_FRAMES", "1") or 1),
-            0,
+        self._lookahead_frames = _env_int(
+            "KROK_SUBTITLE_NATIVE_LOOKAHEAD_FRAMES",
+            6,
+            minimum=0,
+        )
+        self._threads = _env_int(
+            "KROK_SUBTITLE_NATIVE_THREADS",
+            _default_native_preview_threads(),
+            minimum=1,
+        )
+        self._ring_slots = max(
+            _env_int(
+                "KROK_SUBTITLE_NATIVE_RING_SLOTS",
+                self._lookahead_frames + 2,
+                minimum=1,
+            ),
+            self._lookahead_frames + 2,
         )
         self._frame_cache = NativePreviewFrameCache(self._lookahead_frames + 1)
         self._waiting_request_by_key: dict[int, int] = {}
@@ -587,6 +611,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                 if not self._stopped and self._generation == generation:
                     self._active_generation = generation
             try:
+                reader: Optional[SharedFrameRingReader] = None
                 renderer.start_render_range(
                     timestamps,
                     generation=generation,
@@ -599,8 +624,12 @@ class NativeAsyncSubtitleRenderer(QObject):
                     if event.get("event") == "frame_ready":
                         if self._is_current_generation(generation):
                             try:
-                                with SharedFrameRingReader.from_event(event) as reader:
-                                    slot = reader.read_frame(event)
+                                event_key = str(event.get("shm_key") or "")
+                                if reader is None or reader.shm_key != event_key:
+                                    if reader is not None:
+                                        reader.close()
+                                    reader = SharedFrameRingReader.from_event(event)
+                                slot = reader.read_frame(event)
                                 image = slot.to_qimage()
                             except NativeRendererError:
                                 self._stats.note_stale_frame_dropped()
@@ -624,6 +653,8 @@ class NativeAsyncSubtitleRenderer(QObject):
                         self._stats.note_native_generation_cancelled_event()
                         continue
             finally:
+                if reader is not None:
+                    reader.close()
                 with self._condition:
                     if self._active_generation == generation:
                         self._active_generation = None
