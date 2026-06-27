@@ -101,6 +101,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     TimingTrackMeta,
     TitleOverlay,
 )
+from krok_helper.subtitle_render.subtitle_sources import parse_nicokara_lrc  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -1495,6 +1496,55 @@ def test_static_wipe_segments_use_ink_bounds_not_advance(qapp):
             any_strictly_narrower = True
     # 至少一个字形墨水严格窄于 advance 框 → 证明确实按墨水而非 advance 走字
     assert any_strictly_narrower
+
+
+def test_shared_lrc_text_span_uses_rendered_char_widths_for_timing(qapp, monkeypatch):
+    """``[start]多字[next]`` 在横排 Painter 中按当前字体 advance 分时。
+
+    解析器保留等分 ``start_ms`` 供无字体消费者兼容；真正渲染 layout 必须覆盖为
+    SUG 同款的像素宽度加权区间。选 ``W`` / ``i`` 是为了确保比例明显不等于 1:1。
+    """
+    track = parse_nicokara_lrc("[00:01:00]Wi[00:02:00]\n")
+    line = track.lines[0]
+    from krok_helper.subtitle_render.engine import painter as painter_module  # noqa: PLC0415
+
+    real_char_advance = painter_module._char_advance
+
+    def controlled_advance(text, metrics, latin_metrics, font_for):
+        if text == "W":
+            return 30
+        if text == "i":
+            return 10
+        return real_char_advance(text, metrics, latin_metrics, font_for)
+
+    # 系统测试字体可能回退为等宽字体；固定两个 advance，锁定本测试只验证
+    # Painter 是否把自己的实际布局宽度传给时间分配，而不依赖宿主字体库。
+    monkeypatch.setattr(painter_module, "_char_advance", controlled_advance)
+    style = Style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=96,
+        line_y_position="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+    )
+
+    layout = _layout_line(track, line, style, 600, 240)
+    assert layout is not None
+    assert layout.char_widths[0] > layout.char_widths[1]
+    expected_boundary = int(
+        1000
+        + 1000
+        * layout.char_widths[0]
+        / sum(layout.char_widths)
+    )
+    assert expected_boundary != 1500
+    assert layout.intervals == [
+        (1000, expected_boundary),
+        (expected_boundary, 2000),
+    ]
 
 
 def test_character_fill_ratio_honors_ink_ranges(qapp):

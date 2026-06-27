@@ -50,6 +50,18 @@ class TimingChar:
     """该字符所属「角色 / 配色」标签（来自行内 ``【N配色】`` 等标签）。同一行内可多次
     切换，标签会跨行延续到下次切换为止。``None`` = 未指定（用全局/默认样式）。"""
 
+    source_span_start_ms: Optional[int] = None
+    """原始 LRC ``[start]多字[next]`` 共享时间块的起点。仅多字块设置。"""
+
+    source_span_end_ms: Optional[int] = None
+    """共享时间块的终点。Painter 用当前字体的字符宽度在该区间内重新分时。"""
+
+    source_span_index: int = 0
+    """当前字符在共享时间块内的零基索引。"""
+
+    source_span_count: int = 1
+    """共享时间块内的字符总数；1 表示普通独立字符。"""
+
 
 @dataclass
 class TimingLine:

@@ -66,6 +66,37 @@ def test_compute_char_intervals_basic():
     ]
 
 
+def test_compute_char_intervals_weights_shared_lrc_span_like_sug():
+    line = TimingLine(
+        chars=[
+            TimingChar(
+                text="W",
+                start_ms=1000,
+                source_span_start_ms=1000,
+                source_span_end_ms=2000,
+                source_span_index=0,
+                source_span_count=2,
+            ),
+            TimingChar(
+                text="i",
+                start_ms=1500,
+                source_span_start_ms=1000,
+                source_span_end_ms=2000,
+                source_span_index=1,
+                source_span_count=2,
+            ),
+        ],
+        end_ms=2000,
+    )
+
+    assert compute_char_intervals(line, [30, 10]) == [
+        (1000, 1750),
+        (1750, 2000),
+    ]
+    # 没有字体宽度的消费者保持解析阶段兼容区间。
+    assert compute_char_intervals(line) == [(1000, 1500), (1500, 2000)]
+
+
 def test_compute_char_intervals_uses_pause_release_as_char_end():
     line = TimingLine(
         chars=[

@@ -43,6 +43,20 @@ def test_multi_char_block_is_evenly_spread_until_next_timestamp():
 
     assert [c.text for c in line.chars] == ["ど", "う", "し"]
     assert [c.start_ms for c in line.chars] == [38_050, 38_185, 38_320]
+    assert [
+        (
+            c.source_span_start_ms,
+            c.source_span_end_ms,
+            c.source_span_index,
+            c.source_span_count,
+        )
+        for c in line.chars[:2]
+    ] == [
+        (38_050, 38_320, 0, 2),
+        (38_050, 38_320, 1, 2),
+    ]
+    assert line.chars[2].source_span_start_ms is None
+    assert line.chars[2].source_span_count == 1
     assert line.end_ms == 38_370
 
 

@@ -2,9 +2,10 @@
 
 字符级时间区间约定（与 :class:`paint_frame` 共用语义）：
 
-- 每个字符的 ``start_ms`` 是 ``[ts]<char>`` 中的前导时间戳；如果同一个
-  ``[ts]`` 后面跟多个字符（如 ``[00:38:05]どう[00:38:32]``），解析器会把
-  这段文本均分到下一个时间戳前
+- 每个字符的 ``start_ms`` 是 ``[ts]<char>`` 中的前导或兼容合成时间戳；如果同一个
+  ``[ts]`` 后面跟多个字符（如 ``[00:38:05]どう[00:38:32]``），解析器还会保留
+  ``source_span_*`` 共享块。Painter 传入字符布局宽度后，区间按像素宽度重新分配；
+  无宽度的消费者继续使用兼容合成时间
 - 字符 i 的 ``end_ms`` = 字符 i+1 的 ``start_ms``（行内）；行末字符 = ``line.end_ms``
 - 如果某字符设了 ``pause_release_ms``（行内呼吸），它的 ``end_ms`` 取释放点；
   下一字起始前的空白段会保持填色不变，避免"呼吸期还在涨色"
@@ -15,7 +16,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Sequence
 
 from krok_helper.subtitle_render.models import TimingChar, TimingLine, TimingTrack
 
@@ -340,11 +341,19 @@ def find_upcoming_line(track: TimingTrack, t_ms: int) -> Optional[TimingLine]:
     return candidate
 
 
-def compute_char_intervals(line: TimingLine) -> list[tuple[int, int]]:
+def compute_char_intervals(
+    line: TimingLine,
+    char_widths: Optional[Sequence[int | float]] = None,
+) -> list[tuple[int, int]]:
     """返回 ``line`` 中每个字符的 ``(start_ms, end_ms)`` 区间序列。
 
     长度 == ``len(line.chars)``；末字符 ``end_ms`` 取 ``line.end_ms``，若 None
     则用末字 ``start_ms + 500`` 兜底。
+
+    若传入与字符数等长的 ``char_widths``，解析器标记的
+    ``[start]多字[next]`` 共享时间块会按正布局宽度加权切分。算法与 SUG
+    ``KaraokePreview`` 一致：边界使用 ``int(start + duration * 累计宽度 / 总宽度)``。
+    元数据不完整、区间无效或总宽度为 0 时保留兼容的 ``start_ms`` 区间。
     """
     chars = line.chars
     n = len(chars)
@@ -369,6 +378,57 @@ def compute_char_intervals(line: TimingLine) -> list[tuple[int, int]]:
         if end < ch.start_ms:
             end = ch.start_ms
         result.append((ch.start_ms, end))
+    if char_widths is None or len(char_widths) != n:
+        return result
+
+    index = 0
+    while index < n:
+        first = chars[index]
+        count = int(first.source_span_count)
+        span_start = first.source_span_start_ms
+        span_end = first.source_span_end_ms
+        if (
+            count <= 1
+            or first.source_span_index != 0
+            or span_start is None
+            or span_end is None
+            or span_end <= span_start
+            or index + count > n
+        ):
+            index += 1
+            continue
+
+        group = chars[index : index + count]
+        valid_group = all(
+            ch.source_span_start_ms == span_start
+            and ch.source_span_end_ms == span_end
+            and ch.source_span_index == offset
+            and ch.source_span_count == count
+            for offset, ch in enumerate(group)
+        )
+        if not valid_group:
+            index += 1
+            continue
+
+        weights = [max(float(char_widths[index + offset]), 0.0) for offset in range(count)]
+        total_width = sum(weights)
+        if total_width <= 0.0:
+            index += count
+            continue
+
+        duration = span_end - span_start
+        cumulative = 0.0
+        for offset, width in enumerate(weights):
+            char_start = int(span_start + duration * cumulative / total_width)
+            cumulative += width
+            char_end = (
+                span_end
+                if offset == count - 1
+                else int(span_start + duration * cumulative / total_width)
+            )
+            result[index + offset] = (char_start, max(char_start, char_end))
+        index += count
+
     return result
 
 

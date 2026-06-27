@@ -5,8 +5,10 @@
 
 本模块照 ``nicokara_exporter.py`` 的格式规范实现，并对齐 SUG submodule 既有的权威
 解析器 ``strange_uta_game.backend.infrastructure.parsers.lyric_parser.NicokaraParser``
-的关键语义（尤其"绝不丢字"：行首/连读等无独立时间戳的字符必须保留）。本模块保留
-本项目特有的"多字均分走字"增强（``_spread_text_starts``），故未直接复用 NicokaraParser。
+的关键语义（尤其"绝不丢字"：行首/连读等无独立时间戳的字符必须保留）。本模块会保留
+``[start]多字[next]`` 的共享时间块元数据；解析阶段仍生成兼容旧消费者的
+等分 ``start_ms``，Python Painter 再按当前字体的字符布局宽度重新分时，以对齐 SUG
+``KaraokePreview`` 的无独立时间戳多字走字。
 规范要点（详见导出器源码）：
 
 - 时间戳 ``[MM:SS:CC]`` 厘秒精度
@@ -239,6 +241,11 @@ def _parse_body_line(
                 chars.append(TimingChar(text=ch, start_ms=pending_ts, role_label=role))
             leading_buffer.clear()
         char_starts = _spread_text_starts(pending_ts, next_ts, visible_count)
+        shared_span = (
+            visible_count > 1
+            and next_ts is not None
+            and next_ts > pending_ts
+        )
         start_index = 0
         for kind, value in parts:
             if kind == "role":
@@ -252,6 +259,10 @@ def _parse_body_line(
                         text=ch,
                         start_ms=char_starts[start_index],
                         role_label=active_role,
+                        source_span_start_ms=pending_ts if shared_span else None,
+                        source_span_end_ms=next_ts if shared_span else None,
+                        source_span_index=start_index if shared_span else 0,
+                        source_span_count=visible_count if shared_span else 1,
                     )
                 )
                 start_index += 1
@@ -310,11 +321,11 @@ def _spread_text_starts(
     next_ts_ms: Optional[int],
     char_count: int,
 ) -> list[int]:
-    """Evenly distribute multiple chars in ``[start]text[next]``.
+    """Generate compatibility starts for multiple chars in ``[start]text[next]``.
 
-    Nicokara can put a mora such as ``どう`` between two timestamps. In that
-    case the whole text block should wipe uniformly from start to next, so each
-    codepoint receives a synthetic start time inside the span.
+    ``TimingChar.source_span_*`` preserves the original shared block. Horizontal
+    Python rendering uses those fields to redistribute the span by glyph layout
+    width; these equal starts remain for consumers that do not have font metrics.
     """
     if char_count <= 0:
         return []

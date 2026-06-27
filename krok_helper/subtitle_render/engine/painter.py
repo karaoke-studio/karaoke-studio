@@ -1111,6 +1111,7 @@ def _display_line_vertical_bounds(
         display_line.display_start_ms,
         display_line.display_end_ms,
         len(line.chars),
+        intervals=layout.intervals,
     )
     if transition is not None:
         if transition.effect == "utopia":
@@ -3217,6 +3218,7 @@ def _paint_line_static(
     # animation 段（依赖 t_ms）：逐字入退场上下文。
     transition = _line_char_transition_context(
         style, line, t_ms, display_start_ms, display_end_ms, len(line.chars),
+        intervals=layout.intervals,
     )
     if layout.active_rubies and layout.ruby_metrics is not None:
         _paint_rubies(
@@ -3317,7 +3319,7 @@ def _layout_plain_line(
         else _resolve_baseline_y(metrics, img_h, style, ruby_metrics)
     )
 
-    intervals = compute_char_intervals(line)
+    intervals = compute_char_intervals(line, char_widths)
     rtl = style.right_to_left
     char_lefts = _char_left_positions(char_widths, x0, rtl, _letter_spacing(style))
     char_x_ranges: list[tuple[int, int]] = [
@@ -3699,8 +3701,8 @@ def _layout_role_line(
     )
     y = _clamp_role_baseline_y(y, measure_layout, img_h, style, ruby_metrics)
     text_layout = _build_role_text_layout(line, style, x0=x0, baseline_y=y)
-    intervals = compute_char_intervals(line)
     char_widths, char_x_ranges = _role_char_geometry_by_index(line, text_layout)
+    intervals = compute_char_intervals(line, char_widths)
     ink_x_ranges = _role_char_ink_ranges_by_index(line, text_layout, char_x_ranges)
     fill_segments = _karaoke_fill_segments(
         char_widths, intervals, ink_x_ranges, active_rubies, line,
@@ -5054,6 +5056,8 @@ def _line_char_transition_context(
     display_start_ms: int | None,
     display_end_ms: int | None,
     char_count: int,
+    *,
+    intervals: list[tuple[int, int]] | None = None,
 ) -> _LineCharTransition | None:
     if char_count <= 0:
         return None
@@ -5061,7 +5065,7 @@ def _line_char_transition_context(
     end = display_end_ms if display_end_ms is not None else _line_end_ms(line)
 
     if style.entry_anim == "utopia" or style.exit_anim == "utopia":
-        intervals = compute_char_intervals(line)
+        intervals = intervals if intervals is not None else compute_char_intervals(line)
         in_intro = style.entry_anim == "utopia" and t_ms <= start + _UTOPIA_INTRO_TIME_MS
         in_exit = (
             style.exit_anim == "utopia"
