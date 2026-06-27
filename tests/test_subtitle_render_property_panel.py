@@ -219,7 +219,6 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._volume_overlay_fill_btn.color == "#070809"
     assert panel._volume_overlay_stroke_btn.color == "#0A0B0C"
     assert panel._ruby_font_size_spin.value() == 30
-    assert panel._ruby_color_btn.color == "#223344"
     assert panel._ruby_gap_spin.value() == 9
 
 
@@ -258,9 +257,9 @@ def test_style_defaults_match_nicokara_layout_baseline():
 
     assert style.font_family == "UD Digi Kyokasho N-B"
     assert style.font_size_px == 100
+    assert style.letter_spacing_px == 0
     assert style.space_width_percent == 20
     assert style.allow_biting is False
-    assert style.letter_spacing_px == 0
     assert style.font_weight == 400
     assert style.fill_gradient_enabled is False
     assert style.fill_gradient_start_color == "#FF5A6F"
@@ -436,18 +435,18 @@ def test_property_panel_font_controls_emit_style(qapp):
     panel.styleChanged.connect(emitted.append)
 
     panel._font_size_spin.setValue(88)
-    panel._space_width_spin.setValue(30)
     panel._letter_spacing_spin.setValue(7)
+    panel._space_width_spin.setValue(30)
     panel._font_weight_combo.setCurrentIndex(panel._font_weight_combo.findData(500))
-    panel._allow_biting_check.setChecked(True)
     panel._italic_check.setChecked(True)
+    panel._allow_biting_check.setChecked(True)
 
     assert emitted[-1].font_size_px == 88
-    assert emitted[-1].space_width_percent == 30
     assert emitted[-1].letter_spacing_px == 7
+    assert emitted[-1].space_width_percent == 30
     assert emitted[-1].font_weight == 500
-    assert emitted[-1].allow_biting is True
     assert emitted[-1].italic is True
+    assert emitted[-1].allow_biting is True
 
 
 def test_property_panel_color_controls_emit_normalized_style(qapp):
@@ -656,16 +655,16 @@ def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
     )
     scheme = SubtitleStyleScheme(
         font_size_px=88,
+        letter_spacing_px=5,
         space_width_percent=40,
         allow_biting=True,
-        letter_spacing_px=5,
         fill_color="#112233",
         karaoke_colors=KaraokeColors(after=KaraokeColorState(text=fill)),
     )
     style = Style(
+        letter_spacing_px=3,
         space_width_percent=25,
         allow_biting=True,
-        letter_spacing_px=3,
         entry_anim="utopia",
         entry_lead_ms=500,
         exit_anim="char_fade",
@@ -716,12 +715,12 @@ def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
 
     restored = style_from_dict(style_to_dict(style))
 
+    assert restored.letter_spacing_px == 3
     assert restored.space_width_percent == 25
     assert restored.allow_biting is True
-    assert restored.letter_spacing_px == 3
+    assert restored.singer_style_overrides[2].letter_spacing_px == 5
     assert restored.singer_style_overrides[2].space_width_percent == 40
     assert restored.singer_style_overrides[2].allow_biting is True
-    assert restored.singer_style_overrides[2].letter_spacing_px == 5
     assert restored.entry_anim == "utopia"
     assert restored.exit_anim == "char_fade"
     assert restored.line_protect_ms == 450
@@ -814,12 +813,16 @@ def test_property_panel_ruby_controls_emit_style(qapp):
 
     panel._ruby_font_size_spin.setValue(34)
     panel._ruby_gap_spin.setValue(11)
-    panel._set_color("ruby_color", "#00aa77")
 
     assert emitted[-1].ruby_font_size_px == 34
     assert emitted[-1].ruby_gap_px == 11
-    assert emitted[-1].ruby_color == "#00AA77"
-    assert panel._ruby_color_btn.color == "#00AA77"
+
+
+def test_property_panel_ruby_section_has_no_color_controls(qapp):
+    panel = PropertyPanel()
+
+    assert not hasattr(panel, "_ruby_color_btn")
+    assert not hasattr(panel, "_ruby_color_hint")
 
 
 def test_property_panel_layout_controls_emit_style(qapp):
@@ -1093,6 +1096,19 @@ def test_property_panel_role_ruby_color_matrix_edits_go_into_custom_scheme(qapp)
     )
 
 
+def test_property_panel_apply_main_colors_button_only_shows_for_ruby_colors(qapp):
+    panel = PropertyPanel()
+
+    assert panel._color_subject_combo.currentData() == "main"
+    assert panel._ruby_apply_main_btn.isHidden()
+
+    panel._color_subject_combo.setCurrentIndex(
+        panel._color_subject_combo.findData("ruby")
+    )
+
+    assert not panel._ruby_apply_main_btn.isHidden()
+
+
 def test_property_panel_role_scheme_switches_subtitle_controls(qapp):
     panel = PropertyPanel()
     panel.set_roles(["A"])
@@ -1107,7 +1123,6 @@ def test_property_panel_role_scheme_switches_subtitle_controls(qapp):
                 fill_gradient_start_color="#0088ff",
                 fill_gradient_end_color="#ffcc00",
                 fill_gradient_angle_deg=270,
-                ruby_color="#00ff88",
                 ruby_gap_px=12,
             )
         }
@@ -1122,7 +1137,6 @@ def test_property_panel_role_scheme_switches_subtitle_controls(qapp):
     assert panel._fill_mode_combo.currentData() == "gradient_vertical"
     assert panel._paint_gradient_start_btn.color == "#0088FF"
     assert panel._paint_gradient_end_btn.color == "#FFCC00"
-    assert panel._ruby_color_btn.color == "#00FF88"
     assert panel._ruby_gap_spin.value() == 12
 
     panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("global"))

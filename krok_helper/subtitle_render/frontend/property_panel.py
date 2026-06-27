@@ -1536,27 +1536,9 @@ class PropertyPanel(QTabWidget):
         )
         row_layout.addWidget(_field("间距", self._ruby_gap_spin), 0, 1)
 
-        self._ruby_color_btn = self._color_button("ruby_color", self._style.ruby_color)
-        row_layout.addWidget(_field("颜色", self._ruby_color_btn), 1, 0, 1, 2)
-
         row_layout.setColumnStretch(0, 1)
         row_layout.setColumnStretch(1, 1)
         layout.addWidget(row)
-
-        # 一键把主文字配色矩阵（走字前后 × 文字/描边/装饰）复制给注音；颜色照搬，
-        # 描边宽度 / 阴影偏移在渲染时按注音字号比例自动缩放。
-        self._ruby_apply_main_btn = QPushButton("应用主文字配色", section)
-        self._ruby_apply_main_btn.setMinimumHeight(32)
-        self._ruby_apply_main_btn.clicked.connect(self._apply_main_colors_to_ruby)
-        layout.addWidget(self._ruby_apply_main_btn)
-
-        self._ruby_color_hint = QLabel("", section)
-        self._ruby_color_hint.setWordWrap(True)
-        themed(
-            self._ruby_color_hint,
-            lambda: f"color: {palette().text_hint}; font-size: 8.5pt;",
-        )
-        layout.addWidget(self._ruby_color_hint)
         return section
 
     def _apply_main_colors_to_ruby(self) -> None:
@@ -1691,6 +1673,12 @@ class PropertyPanel(QTabWidget):
         detail_layout.setColumnStretch(0, 1)
         detail_layout.setColumnStretch(1, 1)
         layout.addWidget(detail_grid)
+
+        self._ruby_apply_main_btn = QPushButton("应用主文字配色", section)
+        self._ruby_apply_main_btn.setMinimumHeight(32)
+        self._ruby_apply_main_btn.clicked.connect(self._apply_main_colors_to_ruby)
+        self._ruby_apply_main_btn.hide()
+        layout.addWidget(self._ruby_apply_main_btn)
         return section
 
     def _make_solid_fill_page(self) -> QWidget:
@@ -2858,6 +2846,10 @@ class PropertyPanel(QTabWidget):
         self._sync_color_fill_controls()
 
     def _on_color_subject_changed(self) -> None:
+        if hasattr(self, "_ruby_apply_main_btn"):
+            self._ruby_apply_main_btn.setVisible(
+                self._current_color_subject_key() == "ruby"
+            )
         self._sync_color_fill_controls()
 
     def _on_color_target_combo_changed(self) -> None:
@@ -3273,20 +3265,20 @@ class PropertyPanel(QTabWidget):
         was_syncing = self._syncing
         self._syncing = True
         try:
-            self._space_width_spin.setValue(int(self._scheme_value("space_width_percent")))
             self._font_combo.setCurrentFont(QFont(str(self._scheme_value("font_family"))))
             latin_family = self._scheme_value("font_family_latin")
             self._font_latin_check.setChecked(bool(latin_family))
             self._font_latin_combo.setEnabled(bool(latin_family))
-            self._allow_biting_check.setChecked(bool(self._scheme_value("allow_biting")))
             if latin_family:
                 self._font_latin_combo.setCurrentFont(QFont(str(latin_family)))
             self._font_size_spin.setValue(int(self._scheme_value("font_size_px")))
             self._letter_spacing_spin.setValue(int(self._scheme_value("letter_spacing_px")))
+            self._space_width_spin.setValue(int(self._scheme_value("space_width_percent")))
             self._font_weight_combo.setCurrentIndex(
                 max(0, self._font_weight_combo.findData(int(self._scheme_value("font_weight"))))
             )
             self._italic_check.setChecked(bool(self._scheme_value("italic")))
+            self._allow_biting_check.setChecked(bool(self._scheme_value("allow_biting")))
             self._stroke_width_spin.setValue(int(self._scheme_value("stroke_width_px")))
             self._stroke2_width_spin.setValue(int(self._scheme_value("stroke2_width_px")))
             self._decoration_type_combo.setCurrentIndex(
@@ -3310,14 +3302,11 @@ class PropertyPanel(QTabWidget):
             self._shadow_x_spin.setValue(int(self._scheme_value("shadow_offset_x")))
             self._shadow_y_spin.setValue(int(self._scheme_value("shadow_offset_y")))
             self._ruby_font_size_spin.setValue(int(self._scheme_value("ruby_font_size_px")))
-            self._ruby_color_btn.set_color(str(self._scheme_value("ruby_color")))
             self._ruby_gap_spin.setValue(int(self._scheme_value("ruby_gap_px")))
-            ruby_has_custom_colors = self._scheme_value("ruby_karaoke_colors") is not None
-            self._ruby_color_hint.setText(
-                "当前：注音使用独立颜色矩阵；在颜色区选择“注音”可继续编辑"
-                if ruby_has_custom_colors
-                else "当前：注音默认跟随主文字配色"
-            )
+            if hasattr(self, "_ruby_apply_main_btn"):
+                self._ruby_apply_main_btn.setVisible(
+                    self._current_color_subject_key() == "ruby"
+                )
             self._sync_color_fill_controls()
         finally:
             self._syncing = was_syncing
@@ -3607,8 +3596,6 @@ def _solid_fill(color: str) -> PaintFill:
         start_color=color,
         end_color=color,
         gradient_stops=[(0, color), (100, color)],
-        space_width_percent=int(panel._scheme_value("space_width_percent")),
-        allow_biting=bool(panel._scheme_value("allow_biting")),
         split_top_color=color,
         split_bottom_color=color,
     )
@@ -3620,6 +3607,8 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         font_family_latin=panel._scheme_value("font_family_latin"),
         font_size_px=int(panel._scheme_value("font_size_px")),
         letter_spacing_px=int(panel._scheme_value("letter_spacing_px")),
+        space_width_percent=int(panel._scheme_value("space_width_percent")),
+        allow_biting=bool(panel._scheme_value("allow_biting")),
         font_weight=int(panel._scheme_value("font_weight")),
         italic=bool(panel._scheme_value("italic")),
         base_color=str(panel._scheme_value("base_color")),

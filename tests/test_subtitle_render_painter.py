@@ -2617,6 +2617,35 @@ def test_role_ruby_defaults_to_role_main_colors_not_global_ruby(qapp):
     assert _effective_ruby_karaoke_colors(role_style).after.text.color == "#0088FF"
 
 
+def test_role_ruby_layer_uses_target_role_style(qapp):
+    line = TimingLine(
+        chars=[TimingChar(text="歌", start_ms=1000, role_label="A")],
+        end_ms=2000,
+    )
+    ruby = RubyAnnotation(
+        kanji="歌",
+        reading="うた",
+        pos_start_ms=1000,
+        pos_end_ms=2000,
+    )
+    role_main = KaraokeColors(after=KaraokeColorState(text=_solid_fill("#0088FF")))
+    style = Style(
+        ruby_karaoke_colors=KaraokeColors(
+            after=KaraokeColorState(text=_solid_fill("#FF0000"))
+        ),
+        custom_style_schemes={
+            "A": SubtitleStyleScheme(karaoke_colors=role_main, fill_color="#0088FF")
+        },
+    )
+    layout = _layout_line(TimingTrack(lines=[line], rubies=[ruby]), line, style, 420, 240)
+    assert layout is not None
+
+    ruby_layers = _ruby_layer_stack(layout, line, 1500, style)
+    after_layer = next(layer for layer in ruby_layers if layer.after)
+
+    assert _effective_ruby_karaoke_colors(after_layer.style).after.text.color == "#0088FF"
+
+
 def test_role_line_simultaneous_wipe_uses_scoped_after_band(qapp):
     line = TimingLine(
         chars=[

@@ -265,6 +265,7 @@ class _RubyLayout:
 
     ruby: RubyAnnotation
     indices: list[int]
+    style: Style
     x: int
     baseline_y: int
     target_width: int
@@ -2024,7 +2025,6 @@ def _char_advance(
     return metrics.horizontalAdvance(ch_text)
 
 
-def _letter_spacing(style: Style) -> int:
 def _truncate_div(numerator: int, denominator: int) -> int:
     """Integer division truncated toward zero, matching C# arithmetic."""
     if denominator == 0:
@@ -2110,6 +2110,7 @@ def _char_layout_width(
     )
 
 
+def _letter_spacing(style: Style) -> int:
     return int(style.letter_spacing_px)
 
 
@@ -3475,9 +3476,9 @@ _SUBTITLE_SCHEME_STYLE_FIELDS: tuple[str, ...] = (
     "font_family_latin",
     "font_size_px",
     "letter_spacing_px",
-    "font_weight",
     "space_width_percent",
     "allow_biting",
+    "font_weight",
     "italic",
     "base_color",
     "fill_color",
@@ -6764,6 +6765,7 @@ def _paint_rubies(
             _paint_ruby_layers(painter, layouts, ruby_font, ruby_metrics, t_ms, style, rtl)
             return
         for layout in layouts:
+            ruby_style = layout.style
             indices = layout.indices
             paint_ruby = layout.ruby
             x = layout.x
@@ -6835,7 +6837,7 @@ def _paint_rubies(
                             ruby_path.boundingRect(),
                             paint_ruby,
                             t_ms,
-                            style,
+                            ruby_style,
                             rtl,
                             ruby_metrics,
                             gradient_rect=transform.mapRect(layout.gradient_rect),
@@ -6849,7 +6851,7 @@ def _paint_rubies(
                             x,
                             ruby_baseline_y,
                             t_ms,
-                            style,
+                            ruby_style,
                             transition,
                             first_index,
                             max(len(line.chars), 1),
@@ -6878,7 +6880,7 @@ def _paint_rubies(
                         x,
                         ruby_baseline_y,
                         t_ms,
-                        style,
+                        ruby_style,
                         rtl,
                         target_width=target_width,
                         gradient_rect=layout.gradient_rect,
@@ -6919,6 +6921,7 @@ def _layout_rubies(
         target_range = _ruby_target_x_range(ruby, line, intervals, char_x_ranges)
         if target_range is None:
             continue
+        ruby_style = _ruby_style_for_target_indices(style, line, indices)
         left, right = target_range
         target_width = max(right - left, 1)
         gradient_rect = _ruby_main_gradient_rect(
@@ -6933,6 +6936,7 @@ def _layout_rubies(
             _RubyLayout(
                 ruby=paint_ruby,
                 indices=indices,
+                style=ruby_style,
                 x=left,
                 baseline_y=ruby_baseline_y,
                 target_width=target_width,
@@ -6941,6 +6945,19 @@ def _layout_rubies(
             )
         )
     return layouts
+
+
+def _ruby_style_for_target_indices(
+    style: Style,
+    line: TimingLine,
+    indices: list[int],
+) -> Style:
+    for index in indices:
+        if 0 <= index < len(line.chars):
+            role_label = line.chars[index].role_label
+            if role_label:
+                return _style_for_role(style, role_label)
+    return style
 
 
 def _ruby_main_gradient_rect(
@@ -7003,7 +7020,7 @@ def _ruby_text_layers(
                 ruby_font,
                 ruby_metrics,
                 t_ms,
-                style,
+                layout.style,
                 rtl,
                 after=False,
                 z_index=index * 2,
@@ -7015,7 +7032,7 @@ def _ruby_text_layers(
                 ruby_font,
                 ruby_metrics,
                 t_ms,
-                style,
+                layout.style,
                 rtl,
                 after=True,
                 z_index=index * 2 + 1,
