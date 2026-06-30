@@ -194,7 +194,7 @@ class ScreenPreset:
 
 @dataclass(frozen=True)
 class ScreenSettings:
-    """Canvas/export screen settings shared by the property panel and exporter."""
+    """Canvas/export screen settings persisted with projects and user settings."""
 
     preset_key: str = "hdtv_1080"
     par: str = "1:1"
@@ -1193,12 +1193,10 @@ class PropertyPanel(QTabWidget):
     styleChanged = Signal(Style)
     schemeSelectionChanged = Signal(str)
     presetSchemesChanged = Signal(dict)
-    screenChanged = Signal(object)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._style = Style()
-        self._screen = ScreenSettings()
         self._syncing = False
         self._role_names: list[str] = []
         self._preset_schemes: dict[str, SubtitleStyleScheme] = {}
@@ -1243,7 +1241,6 @@ class PropertyPanel(QTabWidget):
         self.addTab(_placeholder_page("时段图片（P2）"), "装饰")
         self.addTab(self._make_title_page(), "标题")
         self.set_roles([])
-        self.set_screen_settings(self._screen, emit=False)
         self.set_style(self._style, emit=False)
 
     @property
@@ -1254,35 +1251,12 @@ class PropertyPanel(QTabWidget):
     def preset_schemes(self) -> dict[str, SubtitleStyleScheme]:
         return {name: deepcopy(scheme) for name, scheme in self._preset_schemes.items()}
 
-    @property
-    def screen_settings(self) -> ScreenSettings:
-        return self._screen
-
     def set_preset_schemes(self, schemes: dict[str, SubtitleStyleScheme]) -> None:
         self._preset_schemes = {
             str(name): deepcopy(scheme)
             for name, scheme in schemes.items()
             if str(name)
         }
-
-    def set_screen_settings(self, settings: ScreenSettings, *, emit: bool = False) -> None:
-        self._screen = screen_settings_from_dict(screen_settings_to_dict(settings))
-        if not hasattr(self, "_screen_preset_combo"):
-            return
-        self._syncing = True
-        try:
-            preset_index = self._screen_preset_combo.findData(self._screen.preset_key)
-            self._screen_preset_combo.setCurrentIndex(max(0, preset_index))
-            par_index = self._screen_par_combo.findData(self._screen.par)
-            self._screen_par_combo.setCurrentIndex(max(0, par_index))
-            self._screen_width_spin.setValue(self._screen.width)
-            self._screen_height_spin.setValue(self._screen.height)
-            fps_index = self._screen_fps_combo.findData(self._screen.fps)
-            self._screen_fps_combo.setCurrentIndex(max(0, fps_index))
-        finally:
-            self._syncing = False
-        if emit:
-            self.screenChanged.emit(self._screen)
 
     def set_style(self, style: Style, *, emit: bool = False) -> None:
         self._style = replace(style)
@@ -1366,66 +1340,11 @@ class PropertyPanel(QTabWidget):
 
     def _make_basic_page(self) -> QWidget:
         scroll, layout = _scroll_page()
-        layout.addWidget(self._make_screen_section())
         layout.addWidget(self._make_viewport_section())
         layout.addWidget(self._make_position_section())
         layout.addWidget(self._make_timing_section())
         layout.addStretch(1)
         return scroll
-
-    def _make_screen_section(self) -> QFrame:
-        section, layout = _section("屏幕")
-
-        self._screen_preset_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._screen_preset_combo)
-        for preset in SCREEN_PRESETS:
-            self._screen_preset_combo.addItem(preset.label, preset.key)
-        self._screen_preset_combo.addItem("自定义", "custom")
-        self._screen_preset_combo.currentIndexChanged.connect(
-            lambda _index: self._on_screen_preset_changed()
-        )
-        layout.addWidget(_field("预设", self._screen_preset_combo))
-
-        self._screen_par_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._screen_par_combo)
-        for label, value in PAR_OPTIONS:
-            self._screen_par_combo.addItem(label, value)
-        self._screen_par_combo.currentIndexChanged.connect(
-            lambda _index: self._on_screen_controls_changed()
-        )
-        layout.addWidget(_field("像素纵横比", self._screen_par_combo))
-
-        row = QWidget(section)
-        row_layout = QGridLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setHorizontalSpacing(8)
-        row_layout.setVerticalSpacing(8)
-
-        self._screen_width_spin = _spin(160, 7680, suffix=" px")
-        self._screen_width_spin.valueChanged.connect(
-            lambda _value: self._on_screen_controls_changed()
-        )
-        row_layout.addWidget(_field("宽度", self._screen_width_spin), 0, 0)
-
-        self._screen_height_spin = _spin(90, 4320, suffix=" px")
-        self._screen_height_spin.valueChanged.connect(
-            lambda _value: self._on_screen_controls_changed()
-        )
-        row_layout.addWidget(_field("高度", self._screen_height_spin), 0, 1)
-
-        self._screen_fps_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._screen_fps_combo)
-        for fps in SCREEN_FPS_OPTIONS:
-            self._screen_fps_combo.addItem(f"{fps} fps", fps)
-        self._screen_fps_combo.currentIndexChanged.connect(
-            lambda _index: self._on_screen_controls_changed()
-        )
-        row_layout.addWidget(_field("帧率", self._screen_fps_combo), 1, 0)
-
-        row_layout.setColumnStretch(0, 1)
-        row_layout.setColumnStretch(1, 1)
-        layout.addWidget(row)
-        return section
 
     def _make_subtitle_page(self) -> QWidget:
         scroll, layout = _scroll_page()
@@ -2762,43 +2681,6 @@ class PropertyPanel(QTabWidget):
         return button
 
     # ------------------------------------------------------------------ update
-
-    def _on_screen_preset_changed(self) -> None:
-        if self._syncing:
-            return
-        key = str(self._screen_preset_combo.currentData() or "custom")
-        preset = _SCREEN_PRESET_BY_KEY.get(key)
-        if preset is None:
-            self.set_screen_settings(replace(self._screen, preset_key="custom"), emit=True)
-            return
-        self.set_screen_settings(
-            ScreenSettings(
-                preset_key=preset.key,
-                par=preset.par,
-                width=preset.width,
-                height=preset.height,
-                fps=self._screen.fps,
-            ),
-            emit=True,
-        )
-
-    def _on_screen_controls_changed(self) -> None:
-        if self._syncing:
-            return
-        par = str(self._screen_par_combo.currentData() or "1:1")
-        width = self._screen_width_spin.value()
-        height = self._screen_height_spin.value()
-        fps = int(self._screen_fps_combo.currentData() or 60)
-        self.set_screen_settings(
-            ScreenSettings(
-                preset_key=match_screen_preset_key(width, height, par),
-                par=par,
-                width=width,
-                height=height,
-                fps=fps,
-            ),
-            emit=True,
-        )
 
     def _choose_color(self, field_name: str) -> None:
         current = QColor(self._scheme_value(field_name))

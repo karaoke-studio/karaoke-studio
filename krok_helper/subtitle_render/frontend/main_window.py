@@ -657,7 +657,6 @@ class SubtitleRenderWindow(QWidget):
         if isinstance(key, str) and key:
             self._selected_scheme_key = key
         self._property_panel.set_style(self._style)
-        self._property_panel.set_screen_settings(self._screen_settings)
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
         self._selected_scheme_key = self._property_panel.current_scheme_key()
         self._preview_panel.set_style(self._style)
@@ -857,10 +856,8 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel = PropertyPanel()
         self._property_panel.set_style(self._style)
         self._property_panel.set_preset_schemes(self._style_presets)
-        self._property_panel.set_screen_settings(self._screen_settings)
         self._property_panel.styleChanged.connect(self._apply_style)
         self._property_panel.presetSchemesChanged.connect(self._apply_style_presets)
-        self._property_panel.screenChanged.connect(self._apply_screen_settings)
         self._property_panel.schemeSelectionChanged.connect(self._on_scheme_selection_changed)
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
         self._selected_scheme_key = self._property_panel.current_scheme_key()
@@ -1206,18 +1203,6 @@ class SubtitleRenderWindow(QWidget):
             self._lyrics_panel.set_role_options(self._merged_role_options())
         self._save_persisted_state()
 
-    def _apply_screen_settings(self, settings: object) -> None:
-        self._screen_settings = screen_settings_from_dict(
-            screen_settings_to_dict(settings)
-            if isinstance(settings, ScreenSettings)
-            else settings
-        )
-        self._set_export_screen_controls(self._screen_settings)
-        self._transport_bar.set_preview_fps(self._screen_settings.fps)
-        self._sync_preview_output_size()
-        self._save_persisted_state()
-        self._mark_project_dirty()
-
     def _on_export_screen_changed(self) -> None:
         if self._syncing_screen_controls:
             return
@@ -1239,7 +1224,6 @@ class SubtitleRenderWindow(QWidget):
             height=self._screen_settings.height,
             fps=self._screen_settings.fps,
         )
-        self._property_panel.set_screen_settings(self._screen_settings)
         self._transport_bar.set_preview_fps(self._screen_settings.fps)
         self._save_persisted_state()
 
