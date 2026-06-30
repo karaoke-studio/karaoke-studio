@@ -1390,10 +1390,32 @@ class PropertyPanel(QWidget):
 
     def _make_subtitle_page(self) -> QWidget:
         scroll, layout = _scroll_page()
-        layout.addWidget(self._make_scheme_section())
-        layout.addWidget(self._make_font_section())
-        layout.addWidget(self._make_ruby_section())
-        layout.addWidget(self._make_color_section())
+        self._role_section = self._make_scheme_section()
+        self._role_section.set_expanded(False)
+        layout.addWidget(self._role_section)
+
+        self._font_color_row = QWidget()
+        font_color_layout = QHBoxLayout(self._font_color_row)
+        font_color_layout.setContentsMargins(0, 0, 0, 0)
+        font_color_layout.setSpacing(10)
+        self._font_section = self._make_font_section()
+        self._color_section = self._make_color_section()
+        self._font_section.layout().setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._color_section.layout().setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._font_section.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        self._color_section.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        font_color_layout.addWidget(self._font_section, 1)
+        font_color_layout.addWidget(self._color_section, 1)
+        layout.addWidget(self._font_color_row)
+
+        self._ruby_section = self._make_ruby_section()
+        layout.addWidget(self._ruby_section)
         layout.addStretch(1)
         return scroll
 

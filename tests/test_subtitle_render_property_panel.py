@@ -387,15 +387,32 @@ def test_property_panel_sections_are_collapsible(qapp):
     content = first_section.layout().itemAt(1).widget()
 
     assert header.text() == "角色"
-    assert not content.isHidden()
-
-    header.click()
     assert content.isHidden()
     assert header.arrowType() == Qt.ArrowType.RightArrow
 
     header.click()
     assert not content.isHidden()
     assert header.arrowType() == Qt.ArrowType.DownArrow
+
+    header.click()
+    assert content.isHidden()
+    assert header.arrowType() == Qt.ArrowType.RightArrow
+
+
+def test_property_panel_font_and_color_sections_are_side_by_side(qapp):
+    panel = PropertyPanel()
+    panel.resize(900, 800)
+    panel.show()
+    qapp.processEvents()
+
+    assert panel._font_section.parentWidget() is panel._font_color_row
+    assert panel._color_section.parentWidget() is panel._font_color_row
+    assert panel._font_section.geometry().top() == panel._color_section.geometry().top()
+    assert panel._font_section.geometry().right() < panel._color_section.geometry().left()
+    assert abs(panel._font_section.width() - panel._color_section.width()) <= 1
+    font_header_top = panel._font_section.header.mapTo(panel._font_color_row, QPoint()).y()
+    color_header_top = panel._color_section.header.mapTo(panel._font_color_row, QPoint()).y()
+    assert font_header_top == color_header_top
 
 
 def test_subtitle_preview_frame_keeps_child_at_16_9(qapp):
