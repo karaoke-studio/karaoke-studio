@@ -105,6 +105,9 @@ class PlaybackController(QObject):
     def pause(self) -> None:
         self._player.pause()
 
+    def stop(self) -> None:
+        self._player.stop()
+
     def is_playing(self) -> bool:
         return self._player.playbackState() == QMediaPlayer.PlaybackState.PlayingState
 

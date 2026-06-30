@@ -10,6 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QSize, Qt  # noqa: E402
 from PyQt6.QtGui import QMouseEvent, QWheelEvent  # noqa: E402
+from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
     QInputDialog,
@@ -1617,6 +1618,47 @@ def test_preview_player_transport_bar_uses_overlay_style(qapp):
     assert "border: none" in bar._play_btn.styleSheet()
     assert bar._slider.__class__.__name__ == "PlayerProgressSlider"
     assert "rgba(0, 0, 0, 0)" in bar.styleSheet()
+
+
+def test_preview_player_close_stops_playback(qapp, monkeypatch):
+    win = mw.SubtitleRenderWindow(embedded=False)
+    preview = win._preview_window
+    stopped: list[bool] = []
+    monkeypatch.setattr(preview.transport_bar, "stop", lambda: stopped.append(True))
+    preview.show()
+    qapp.processEvents()
+
+    preview._close_button.click()
+    qapp.processEvents()
+
+    assert stopped == [True]
+    assert preview.isVisible() is False
+
+
+def test_preview_player_keyboard_shortcuts_control_transport(qapp, monkeypatch):
+    win = mw.SubtitleRenderWindow(embedded=False)
+    preview = win._preview_window
+    toggled: list[bool] = []
+    seeks: list[int] = []
+    monkeypatch.setattr(
+        preview.transport_bar,
+        "toggle_play",
+        lambda: toggled.append(True),
+    )
+    monkeypatch.setattr(preview.transport_bar, "seek_relative", seeks.append)
+
+    preview.show()
+    preview.activateWindow()
+    preview.setFocus()
+    qapp.processEvents()
+    QTest.keyClick(preview, Qt.Key.Key_Space)
+    QTest.keyClick(preview, Qt.Key.Key_Z)
+    QTest.keyClick(preview, Qt.Key.Key_X)
+    qapp.processEvents()
+
+    assert toggled == [True]
+    assert seeks == [-5_000, 5_000]
+    assert preview._space_shortcut.context() == Qt.ShortcutContext.WindowShortcut
 
 
 def test_video_drop_region_becomes_property_panel_after_video_load(qapp, monkeypatch, tmp_path):

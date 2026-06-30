@@ -1003,6 +1003,30 @@ def test_toggle_play_alternates(qapp):
     assert not bar.is_playing()
 
 
+def test_stop_resets_visual_playback_to_start(qapp):
+    bar = _bar(qapp)
+    bar.set_time(3_000)
+    bar.play()
+
+    bar.stop()
+
+    assert not bar.is_playing()
+    assert bar.current_time_ms == 0
+    assert bar._play_btn.text() == "▶"
+
+
+def test_seek_relative_clamps_to_timeline(qapp):
+    bar = _bar(qapp)
+    bar.set_duration(10_000)
+    bar.set_time(3_000)
+
+    bar.seek_relative(-5_000)
+    assert bar.current_time_ms == 0
+
+    bar.seek_relative(15_000)
+    assert bar.current_time_ms == 10_000
+
+
 def test_play_button_text_reflects_state(qapp):
     bar = _bar(qapp)
     assert bar._play_btn.text() == "▶"
@@ -1258,6 +1282,7 @@ class _FakeController:
         self._playing = False
         self._pos = 0
         self.seeks: list[int] = []
+        self.stops = 0
 
     def has_media(self) -> bool:
         return self._has
@@ -1270,6 +1295,11 @@ class _FakeController:
 
     def pause(self) -> None:
         self._playing = False
+
+    def stop(self) -> None:
+        self._playing = False
+        self._pos = 0
+        self.stops += 1
 
     def is_playing(self) -> bool:
         return self._playing
@@ -1307,6 +1337,20 @@ def test_transport_slider_seek_delegates_to_controller(qapp):
     bar.set_time(3_000)  # → _on_slider_changed → controller.seek
 
     assert 3_000 in ctrl.seeks
+
+
+def test_transport_stop_delegates_to_controller(qapp):
+    bar = _bar(qapp)
+    ctrl = _FakeController()
+    bar.attach_playback_controller(ctrl)
+    bar.set_time(3_000)
+    bar.play()
+
+    bar.stop()
+
+    assert ctrl.stops == 1
+    assert ctrl.is_playing() is False
+    assert bar.current_time_ms == 0
 
 
 def test_fps_readout_is_subtitle_render_rate(qapp, monkeypatch):

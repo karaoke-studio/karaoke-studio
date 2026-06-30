@@ -717,11 +717,26 @@ class TransportBar(QWidget):
         self._position_poll_timer.stop()
         self._update_play_button(False)
 
+    def stop(self) -> None:
+        """停止播放并将时间轴复位到起点。"""
+        if self._use_controller():
+            self._controller.stop()
+        elif self._has_audio and self._player is not None:
+            self._player.stop()
+        self._tick_timer.stop()
+        self._position_poll_timer.stop()
+        self._update_play_button(False)
+        self.set_time(0)
+
     def toggle_play(self) -> None:
         if self.is_playing():
             self.pause()
         else:
             self.play()
+
+    def seek_relative(self, delta_ms: int) -> None:
+        """以当前时间为基准前后跳转，并自动限制在时间轴范围内。"""
+        self.set_time(self.current_time_ms + int(delta_ms))
 
     def is_playing(self) -> bool:
         if self._use_controller():

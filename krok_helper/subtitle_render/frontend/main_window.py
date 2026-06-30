@@ -188,11 +188,12 @@ class PreviewPlayerWindow(QWidget):
             top_layout.addWidget(button)
         self._minimize_button.clicked.connect(self.showMinimized)
         self._maximize_button.clicked.connect(self._toggle_maximized)
-        self._close_button.clicked.connect(self.hide)
+        self._close_button.clicked.connect(self.close)
 
         self._transport_bar = TransportBar(self)
         self._transport_bar.setObjectName("PreviewTransportBar")
         self._bottom_controls = self._transport_bar
+        self._init_playback_shortcuts()
 
         self._hide_controls_timer = QTimer(self)
         self._hide_controls_timer.setSingleShot(True)
@@ -270,6 +271,28 @@ class PreviewPlayerWindow(QWidget):
     def set_media_title(self, path: Optional[Path]) -> None:
         self._title_label.setText(path.name if path is not None else "字幕视频预览")
 
+    def _init_playback_shortcuts(self) -> None:
+        self._space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
+        self._backward_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Z), self)
+        self._forward_shortcut = QShortcut(QKeySequence(Qt.Key.Key_X), self)
+        for shortcut in (
+            self._space_shortcut,
+            self._backward_shortcut,
+            self._forward_shortcut,
+        ):
+            shortcut.setContext(Qt.ShortcutContext.WindowShortcut)
+        self._space_shortcut.activated.connect(self._toggle_playback)
+        self._backward_shortcut.activated.connect(lambda: self._seek_relative(-5_000))
+        self._forward_shortcut.activated.connect(lambda: self._seek_relative(5_000))
+
+    def _toggle_playback(self) -> None:
+        self._transport_bar.toggle_play()
+        self.show_controls()
+
+    def _seek_relative(self, delta_ms: int) -> None:
+        self._transport_bar.seek_relative(delta_ms)
+        self.show_controls()
+
     def show_controls(self) -> None:
         if self._suppress_control_show:
             return
@@ -333,6 +356,11 @@ class PreviewPlayerWindow(QWidget):
     def mouseReleaseEvent(self, event):  # noqa: N802
         self._drag_origin = None
         super().mouseReleaseEvent(event)
+
+    def closeEvent(self, event):  # noqa: N802
+        self._hide_controls_timer.stop()
+        self._transport_bar.stop()
+        super().closeEvent(event)
 
     def _toggle_maximized(self) -> None:
         if self.isMaximized():
