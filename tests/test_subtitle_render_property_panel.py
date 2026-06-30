@@ -10,7 +10,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QSize, Qt  # noqa: E402
 from PyQt6.QtGui import QMouseEvent, QWheelEvent  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QInputDialog, QMessageBox, QWidget  # noqa: E402
+from PyQt6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QInputDialog,
+    QMessageBox,
+    QWidget,
+)
+from qfluentwidgets import SegmentedToggleToolWidget  # noqa: E402
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
@@ -351,16 +357,17 @@ def test_style_defaults_match_nicokara_layout_baseline():
 
 def test_property_panel_subtitle_page_has_no_horizontal_scroll(qapp):
     panel = PropertyPanel()
-    basic_page = panel.widget(0)
-    subtitle_page = panel.widget(1)
+    subtitle_page = panel.widget(0)
+    layout_page = panel.widget(1)
 
     assert panel.minimumWidth() == 320
-    assert basic_page.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
     assert subtitle_page.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    assert layout_page.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    panel.setCurrentIndex(1)
     panel.show()
     panel.resize(320, 800)
     qapp.processEvents()
-    assert basic_page.widget().width() <= basic_page.viewport().width()
+    assert layout_page.widget().width() <= layout_page.viewport().width()
     assert panel._font_combo.minimumWidth() == 0
     assert panel._font_size_spin.minimumWidth() == 0
     assert panel._line_margin_spin.parentWidget() is not panel._font_size_spin.parentWidget()
@@ -372,7 +379,7 @@ def test_property_panel_subtitle_page_has_no_horizontal_scroll(qapp):
 
 def test_property_panel_sections_are_collapsible(qapp):
     panel = PropertyPanel()
-    subtitle_page = panel.widget(1)
+    subtitle_page = panel.widget(0)
     subtitle_layout = subtitle_page.widget().layout()
     first_section = subtitle_layout.itemAt(0).widget()
     header = first_section.header
@@ -406,7 +413,7 @@ def test_subtitle_preview_frame_keeps_child_at_16_9(qapp):
 
 def test_property_panel_basic_page_has_no_screen_section(qapp):
     panel = PropertyPanel()
-    basic_layout = panel.widget(0).widget().layout()
+    basic_layout = panel.widget(1).widget().layout()
     section_titles = [
         basic_layout.itemAt(index).widget().header.text()
         for index in range(basic_layout.count() - 1)
@@ -414,6 +421,29 @@ def test_property_panel_basic_page_has_no_screen_section(qapp):
 
     assert section_titles == ["视图", "位置", "时间"]
     assert not hasattr(panel, "_screen_preset_combo")
+
+
+def test_property_panel_uses_horizontal_icon_tabs_in_expected_order(qapp):
+    panel = PropertyPanel()
+
+    assert isinstance(panel._navigation, SegmentedToggleToolWidget)
+    assert panel.count() == 4
+    assert [spec[2] for spec in panel._PAGE_SPECS] == ["字体", "布局", "特效", "标题"]
+    for route_key, _icon, label in panel._PAGE_SPECS:
+        item = panel._navigation.widget(route_key)
+        assert not item.icon().isNull()
+        assert item.toolTip() == label
+        assert item.height() == 32
+
+    panel.setCurrentIndex(2)
+    assert panel.currentIndex() == 2
+    assert panel._navigation.currentRouteKey() == "effects"
+
+    for expected_index, (route_key, _icon, _label) in enumerate(panel._PAGE_SPECS):
+        panel._navigation.widget(route_key).click()
+        qapp.processEvents()
+        assert panel.currentIndex() == expected_index
+        assert panel._navigation.currentRouteKey() == route_key
 
 
 def test_property_panel_font_controls_emit_style(qapp):

@@ -36,18 +36,19 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSpinBox,
     QStackedWidget,
-    QTabWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import (
     CaptionLabel,
+    FluentIcon as FIF,
     InfoBar,
     LineEdit as FluentLineEdit,
     ListWidget as FluentListWidget,
     PrimaryPushButton as FluentPrimaryPushButton,
     PushButton as FluentPushButton,
+    SegmentedToggleToolWidget,
 )
 
 from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
@@ -289,20 +290,6 @@ def match_screen_preset_key(width: int, height: int, par: str) -> str:
         if preset.width == width and preset.height == height and preset.par == par:
             return preset.key
     return "custom"
-
-
-def _placeholder_page(text: str) -> QWidget:
-    page = QWidget()
-    layout = QVBoxLayout(page)
-    layout.setContentsMargins(20, 24, 20, 24)
-    label = QLabel(text)
-    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-    label.setWordWrap(True)
-    themed(label, lambda: f"color: {palette().text_hint}; font-size: 10pt;")
-    layout.addStretch(1)
-    layout.addWidget(label)
-    layout.addStretch(2)
-    return page
 
 
 def _normalize_hex(value: str, fallback: str = "#000000") -> str:
@@ -1187,8 +1174,15 @@ class StylePresetManagerDialog(QDialog):
         self._populate_list()
 
 
-class PropertyPanel(QTabWidget):
-    """字幕样式 / 特效 / 装饰属性面板。"""
+class PropertyPanel(QWidget):
+    """字体 / 布局 / 特效 / 标题属性面板。"""
+
+    _PAGE_SPECS = (
+        ("font", FIF.FONT, "字体"),
+        ("layout", FIF.LAYOUT, "布局"),
+        ("effects", FIF.BRUSH, "特效"),
+        ("title", FIF.LABEL, "标题"),
+    )
 
     styleChanged = Signal(Style)
     schemeSelectionChanged = Signal(str)
@@ -1200,48 +1194,96 @@ class PropertyPanel(QTabWidget):
         self._syncing = False
         self._role_names: list[str] = []
         self._preset_schemes: dict[str, SubtitleStyleScheme] = {}
+        self._pages: list[QWidget] = []
 
         self.setObjectName("PropertyPanel")
         self.setMinimumWidth(320)
-        self.setDocumentMode(True)
-        self.setTabPosition(QTabWidget.TabPosition.North)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        navigation_row = QWidget(self)
+        navigation_row.setObjectName("PropertyNavigationRow")
+        navigation_layout = QHBoxLayout(navigation_row)
+        navigation_layout.setContentsMargins(8, 4, 8, 4)
+        navigation_layout.setSpacing(0)
+
+        self._navigation = SegmentedToggleToolWidget(navigation_row)
+        self._navigation.setObjectName("PropertyNavigation")
+        self._navigation.setAccessibleName("字幕属性分类")
+        self._navigation.currentItemChanged.connect(self._on_navigation_changed)
+        navigation_layout.addWidget(self._navigation, 0)
+        navigation_layout.addStretch(1)
+        root.addWidget(navigation_row, 0)
+
+        self._stack = QStackedWidget(self)
+        self._stack.setObjectName("PropertyPanelStack")
+        root.addWidget(self._stack, 1)
         themed(
             self,
             lambda: (
                 f"""
                 #PropertyPanel {{ background: {palette().panel_bg}; }}
-                #PropertyPanel::pane {{
+                #PropertyPanelStack {{
                     border: 1px solid {palette().card_border};
                     border-radius: 6px;
                     background: {palette().panel_bg};
-                    top: -1px;
-                }}
-                #PropertyPanel QTabBar::tab {{
-                    min-width: 44px;
-                    padding: 7px 10px;
-                    color: {palette().text_secondary};
-                    background: transparent;
-                    border: none;
-                    font-size: 9.5pt;
-                }}
-                #PropertyPanel QTabBar::tab:selected {{
-                    color: {palette().title_text};
-                    border-bottom: 2px solid {palette().accent_primary};
-                }}
-                #PropertyPanel QTabBar::tab:hover {{
-                    color: {palette().title_text};
                 }}
                 """
             ),
         )
 
-        self.addTab(self._make_basic_page(), "基本")
-        self.addTab(self._make_subtitle_page(), "字幕")
-        self.addTab(self._make_effects_page(), "特效")
-        self.addTab(_placeholder_page("时段图片（P2）"), "装饰")
-        self.addTab(self._make_title_page(), "标题")
+        pages = (
+            self._make_subtitle_page(),
+            self._make_basic_page(),
+            self._make_effects_page(),
+            self._make_title_page(),
+        )
+        for page, (route_key, icon, label) in zip(pages, self._PAGE_SPECS):
+            self._add_navigation_page(page, route_key, icon, label)
+        self.setCurrentIndex(0)
         self.set_roles([])
         self.set_style(self._style, emit=False)
+
+    def _add_navigation_page(
+        self,
+        page: QWidget,
+        route_key: str,
+        icon: FIF,
+        label: str,
+    ) -> None:
+        self._pages.append(page)
+        self._stack.addWidget(page)
+        self._navigation.addItem(
+            route_key,
+            icon,
+        )
+        item = self._navigation.widget(route_key)
+        item.setToolTip(label)
+        item.setAccessibleName(label)
+        page.setAccessibleName(label)
+
+    def _on_navigation_changed(self, route_key: str) -> None:
+        for index, (candidate, _icon, _label) in enumerate(self._PAGE_SPECS):
+            if candidate == route_key:
+                self._stack.setCurrentIndex(index)
+                return
+
+    def count(self) -> int:
+        return len(self._pages)
+
+    def widget(self, index: int) -> Optional[QWidget]:
+        return self._stack.widget(index)
+
+    def currentIndex(self) -> int:  # noqa: N802
+        return self._stack.currentIndex()
+
+    def setCurrentIndex(self, index: int) -> None:  # noqa: N802
+        if not 0 <= index < self.count():
+            return
+        self._stack.setCurrentIndex(index)
+        self._navigation.setCurrentItem(self._PAGE_SPECS[index][0])
 
     @property
     def subtitle_style(self) -> Style:
