@@ -28,7 +28,7 @@ from pathlib import Path
 import subprocess
 from typing import Any, Optional
 
-from PyQt6.QtCore import QObject, QRect, QSize, QThread, Qt, pyqtSignal as Signal
+from PyQt6.QtCore import QObject, QPoint, QRect, QSize, QThread, QTimer, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog,
@@ -68,6 +68,7 @@ from krok_helper.subtitle_render.engine.encoder_select import (
 )
 from krok_helper.subtitle_render.engine.renderer import RenderJob, render_subtitle_video
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
+from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
 from krok_helper.subtitle_render.frontend.lyrics_list import LyricsPanel
 from krok_helper.subtitle_render.frontend.playback import (
     PlaybackController,
@@ -144,6 +145,242 @@ class _AspectRatioBox(QWidget):
         x = (w - target_w) // 2
         y = (h - target_h) // 2
         self._child.setGeometry(QRect(x, y, max(target_w, 1), max(target_h, 1)))
+
+
+class PreviewPlayerWindow(QWidget):
+    """独立预览窗口：只承载 16:9 的视频预览画面。"""
+
+    def __init__(self, owner: QWidget) -> None:
+        super().__init__(
+            owner,
+            Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint,
+        )
+        self._owner = owner
+        self._drag_origin: Optional[QPoint] = None
+        self._suppress_control_show = False
+        self.setWindowTitle("字幕视频预览")
+        self.setObjectName("SubtitlePreviewPlayerWindow")
+        self.setMouseTracking(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+        self._preview_panel = PreviewPanel(self)
+        self._preview_frame = _AspectRatioBox(self._preview_panel, parent=self)
+        self._preview_frame.setMouseTracking(True)
+        self._preview_panel.setMouseTracking(True)
+
+        self._top_controls = QWidget(self)
+        self._top_controls.setObjectName("PreviewTopControls")
+        self._top_controls.setMouseTracking(True)
+        top_layout = QHBoxLayout(self._top_controls)
+        top_layout.setContentsMargins(12, 0, 8, 0)
+        top_layout.setSpacing(8)
+        self._title_label = QLabel("字幕视频预览", self._top_controls)
+        self._title_label.setObjectName("PreviewTitleLabel")
+        top_layout.addWidget(self._title_label, 1)
+
+        self._minimize_button = QPushButton("－", self._top_controls)
+        self._maximize_button = QPushButton("□", self._top_controls)
+        self._close_button = QPushButton("×", self._top_controls)
+        for button in (self._minimize_button, self._maximize_button, self._close_button):
+            button.setFixedSize(28, 28)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            top_layout.addWidget(button)
+        self._minimize_button.clicked.connect(self.showMinimized)
+        self._maximize_button.clicked.connect(self._toggle_maximized)
+        self._close_button.clicked.connect(self.hide)
+
+        self._transport_bar = TransportBar(self)
+        self._transport_bar.setObjectName("PreviewTransportBar")
+        self._bottom_controls = self._transport_bar
+
+        self._hide_controls_timer = QTimer(self)
+        self._hide_controls_timer.setSingleShot(True)
+        self._hide_controls_timer.setInterval(2600)
+        self._hide_controls_timer.timeout.connect(self._on_controls_idle_timeout)
+        self._apply_player_transport_style()
+
+        self.setMinimumSize(QSize(426, 240))
+        themed(
+            self,
+            lambda: (
+                """
+                #SubtitlePreviewPlayerWindow {
+                    background: #15171A;
+                }
+                #PreviewTopControls {
+                    background: rgba(0, 0, 0, 178);
+                }
+                #PreviewTitleLabel {
+                    color: #F8FAFC;
+                    font-size: 9.5pt;
+                    font-family: "Microsoft YaHei UI";
+                }
+                #PreviewTopControls QPushButton {
+                    background: transparent;
+                    color: #FFFFFF;
+                    border: none;
+                    border-radius: 4px;
+                    font-size: 13pt;
+                }
+                #PreviewTopControls QPushButton:hover {
+                    background: rgba(255, 255, 255, 48);
+                }
+                #PreviewTopControls QPushButton:pressed {
+                    background: rgba(255, 255, 255, 72);
+                }
+                #PreviewTransportBar {
+                    background: rgba(0, 0, 0, 0);
+                    border-top: none;
+                }
+                #PreviewTransportBar QLabel {
+                    color: #F8FAFC;
+                }
+                """
+            ),
+        )
+        self._preview_frame.lower()
+        self.show_controls()
+        self.apply_workspace_geometry()
+
+    @property
+    def preview_panel(self) -> PreviewPanel:
+        return self._preview_panel
+
+    @property
+    def transport_bar(self) -> TransportBar:
+        return self._transport_bar
+
+    def apply_workspace_geometry(self) -> None:
+        workspace_size = self._owner.size()
+        width = max(426, workspace_size.width() // 2)
+        height = max(240, int(round(width * 9 / 16)))
+        max_height = max(240, workspace_size.height() // 2)
+        if height > max_height:
+            height = max_height
+            width = max(426, int(round(height * 16 / 9)))
+        top_left = self._owner.mapToGlobal(QPoint(0, 0))
+        self.setGeometry(QRect(top_left, QSize(width, height)))
+
+    def show_near_workspace(self) -> None:
+        self.apply_workspace_geometry()
+        self.show()
+        self.show_controls()
+
+    def set_media_title(self, path: Optional[Path]) -> None:
+        self._title_label.setText(path.name if path is not None else "字幕视频预览")
+
+    def show_controls(self) -> None:
+        if self._suppress_control_show:
+            return
+        self._top_controls.show()
+        self._bottom_controls.show()
+        self._top_controls.raise_()
+        self._bottom_controls.raise_()
+        self._hide_controls_timer.start()
+
+    def _on_controls_idle_timeout(self) -> None:
+        self.hide_controls(force=False)
+
+    def hide_controls(self, *, force: bool = False) -> None:
+        if self.underMouse() and not force:
+            self._hide_controls_timer.start()
+            return
+        self._hide_controls_timer.stop()
+        self._suppress_control_show = True
+        try:
+            self._top_controls.setVisible(False)
+            self._bottom_controls.setVisible(False)
+        finally:
+            self._suppress_control_show = False
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        self._preview_frame.setGeometry(0, 0, self.width(), self.height())
+        self._top_controls.setGeometry(0, 0, self.width(), 42)
+        self._bottom_controls.setGeometry(0, max(0, self.height() - 58), self.width(), 58)
+        self._top_controls.raise_()
+        self._bottom_controls.raise_()
+
+    def focusInEvent(self, event):  # noqa: N802
+        super().focusInEvent(event)
+        self.show_controls()
+
+    def focusOutEvent(self, event):  # noqa: N802
+        super().focusOutEvent(event)
+        self._hide_controls_timer.start(900)
+
+    def enterEvent(self, event):  # noqa: N802
+        super().enterEvent(event)
+        self.show_controls()
+
+    def mouseMoveEvent(self, event):  # noqa: N802
+        super().mouseMoveEvent(event)
+        if self._drag_origin is not None:
+            self.move(event.globalPosition().toPoint() - self._drag_origin)
+        self.show_controls()
+
+    def mousePressEvent(self, event):  # noqa: N802
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and event.position().y() <= self._top_controls.height()
+        ):
+            self._drag_origin = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):  # noqa: N802
+        self._drag_origin = None
+        super().mouseReleaseEvent(event)
+
+    def _toggle_maximized(self) -> None:
+        if self.isMaximized():
+            self.showNormal()
+            self.apply_workspace_geometry()
+        else:
+            self.showMaximized()
+
+    def _apply_player_transport_style(self) -> None:
+        self._transport_bar.setFixedHeight(58)
+        self._transport_bar.setStyleSheet(
+            """
+            #PreviewTransportBar {
+                background: rgba(0, 0, 0, 0);
+                border-top: none;
+            }
+            """
+        )
+        self._transport_bar._play_btn.setFixedSize(36, 36)
+        self._transport_bar._play_btn.setStyleSheet(
+            """
+            QToolButton {
+                background: transparent;
+                color: #FFFFFF;
+                border: none;
+                border-radius: 18px;
+                font-size: 18pt;
+                font-weight: 700;
+            }
+            QToolButton:hover {
+                background: rgba(255, 255, 255, 42);
+            }
+            QToolButton:pressed {
+                background: rgba(255, 255, 255, 66);
+            }
+            """
+        )
+        for label in (self._transport_bar._timecode, self._transport_bar._fps_label):
+            label.setStyleSheet(
+                """
+                QLabel {
+                    color: rgba(255, 255, 255, 210);
+                    background: transparent;
+                    font-family: "Consolas", "Courier New", monospace;
+                    font-size: 9.5pt;
+                }
+                """
+            )
 
 
 class _RenderWorker(QObject):
@@ -234,6 +471,21 @@ class SubtitleRenderWindow(QWidget):
         self._init_layout()
         self._init_shortcuts()
 
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        if hasattr(self, "_preview_window"):
+            self._preview_window.apply_workspace_geometry()
+
+    def moveEvent(self, event):  # noqa: N802
+        super().moveEvent(event)
+        if hasattr(self, "_preview_window"):
+            self._preview_window.apply_workspace_geometry()
+
+    def closeEvent(self, event):  # noqa: N802
+        if hasattr(self, "_preview_window"):
+            self._preview_window.close()
+        super().closeEvent(event)
+
     # ------------------------------------------------------------------ layout
 
     def _init_layout(self) -> None:
@@ -320,6 +572,7 @@ class SubtitleRenderWindow(QWidget):
 
     def _make_project_bar(self) -> QWidget:
         bar = QWidget()
+        self._project_bar = bar
         bar.setObjectName("SrProjectBar")
         themed(bar, lambda: "#SrProjectBar { background: transparent; }")
         layout = QHBoxLayout(bar)
@@ -496,6 +749,7 @@ class SubtitleRenderWindow(QWidget):
             self._preview_panel.set_track(None)
             self._preview_panel.set_video_source(None)
             self._preview_panel.set_populated(False)
+            self._video_settings_panel.set_populated(False)
             self._property_panel.set_roles([])
             # 播放条复位
             self._transport_bar.set_audio_source(None)
@@ -564,11 +818,19 @@ class SubtitleRenderWindow(QWidget):
 
         body = QSplitter(Qt.Orientation.Vertical)
         body.setChildrenCollapsible(False)
+        self._preview_body_splitter = body
 
-        # 上半部：左·歌词 ┃ 中·预览 ┃ 右·属性
+        # 上半部：左·歌词 / 右·背景视频拖入，视频加载后右侧切换为属性设置。
         top = QSplitter(Qt.Orientation.Horizontal)
         top.setChildrenCollapsible(False)
         self._preview_splitter = top
+
+        self._preview_window = PreviewPlayerWindow(self)
+        self._preview_panel = self._preview_window.preview_panel
+        self._preview_panel.set_style(self._style)
+        self._preview_panel.pathDropped.connect(self.load_video)
+        self._preview_panel.browseRequested.connect(self._browse_video)
+        self._transport_bar = self._preview_window.transport_bar
 
         self._lyrics_panel = LyricsPanel()
         self._lyrics_panel.pathDropped.connect(self.load_from_lrc)
@@ -577,17 +839,6 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.rowClicked.connect(self._on_lyrics_row_clicked)
         top.addWidget(self._lyrics_panel)
 
-        center = QWidget()
-        center_layout = QVBoxLayout(center)
-        center_layout.setContentsMargins(0, 0, 0, 0)
-        center_layout.setSpacing(0)
-        self._preview_panel = PreviewPanel()
-        self._preview_panel.set_style(self._style)
-        self._preview_panel.pathDropped.connect(self.load_video)
-        self._preview_panel.browseRequested.connect(self._browse_video)
-        self._preview_frame = _AspectRatioBox(self._preview_panel)
-        center_layout.addWidget(self._preview_frame, 1)
-        self._transport_bar = TransportBar()
         self._transport_bar.set_preview_fps(self._screen_settings.fps)
         self._transport_bar.timeChanged.connect(self._preview_panel.set_time)
         self._transport_bar.playbackStateChanged.connect(self._preview_panel.set_playing)
@@ -602,8 +853,6 @@ class SubtitleRenderWindow(QWidget):
             if self._preview_panel.use_external_player(controller):
                 self._playback = controller
                 self._transport_bar.attach_playback_controller(controller)
-        center_layout.addWidget(self._transport_bar)
-        top.addWidget(center)
 
         self._property_panel = PropertyPanel()
         self._property_panel.set_style(self._style)
@@ -615,21 +864,30 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.schemeSelectionChanged.connect(self._on_scheme_selection_changed)
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
         self._selected_scheme_key = self._property_panel.current_scheme_key()
-        top.addWidget(self._property_panel)
+
+        self._video_settings_panel = DropPanel(
+            extensions={".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv"},
+            empty_title="拖入背景视频",
+            empty_hint="支持 .mp4 / .mkv / .mov / .webm 等\n或点击此处选择",
+            empty_icon="🎬",
+        )
+        self._video_settings_panel.pathDropped.connect(self.load_video)
+        self._video_settings_panel.browseRequested.connect(self._browse_video)
+        self._video_settings_panel.set_content(self._property_panel)
+        top.addWidget(self._video_settings_panel)
 
         top.setStretchFactor(0, 1)
-        top.setStretchFactor(1, 4)
-        top.setStretchFactor(2, 0)
-        top.setSizes([340, 900, self._property_panel.minimumWidth()])
+        top.setStretchFactor(1, 2)
+        top.setSizes([520, max(520, self._property_panel.minimumWidth())])
         body.addWidget(top)
 
         # 底部：字幕轨道（波形已移除，不做波形图功能）
         self._tracks_view = TrackTimelineView()
         body.addWidget(self._tracks_view)
 
-        body.setStretchFactor(0, 6)
+        body.setStretchFactor(0, 5)
         body.setStretchFactor(1, 2)
-        body.setSizes([560, 160])
+        body.setSizes([520, 180])
 
         outer.addWidget(body, 1)
         return page
@@ -847,6 +1105,9 @@ class SubtitleRenderWindow(QWidget):
         self._video_path = path
         self._video_info = info
         self._preview_panel.set_video_source(path)
+        self._video_settings_panel.set_populated(True)
+        self._preview_window.set_media_title(path)
+        self._preview_window.show_near_workspace()
         if not self._export_output_edit.text().strip():
             self._export_output_edit.setText(str(self._default_export_path()))
         # 视频自带音频 → 喂给 TransportBar 走 QMediaPlayer 播放

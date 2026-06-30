@@ -8,7 +8,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QSize, Qt  # noqa: E402
 from PyQt6.QtGui import QMouseEvent, QWheelEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QInputDialog, QMessageBox, QWidget  # noqa: E402
 
@@ -1523,16 +1523,117 @@ def test_main_window_style_panel_updates_preview(qapp, monkeypatch):
     assert win._preview_panel.canvas._style.custom_style_schemes["A"].fill_color == "#FFCC00"
 
 
-def test_main_window_preview_splitter_defaults_to_compact_property_panel(qapp):
+def test_main_window_preview_tab_uses_two_top_regions_and_bottom_timeline(qapp):
     win = mw.SubtitleRenderWindow(embedded=False)
     win.resize(1600, 900)
     win.show()
     qapp.processEvents()
 
-    left_width, _center_width, right_width = win._preview_splitter.sizes()
+    left_width, right_width = win._preview_splitter.sizes()
 
-    assert right_width == win._property_panel.minimumWidth()
+    assert win._preview_body_splitter.orientation() == Qt.Orientation.Vertical
+    assert win._preview_body_splitter.widget(0) is win._preview_splitter
+    assert win._preview_body_splitter.widget(1) is win._tracks_view
+    assert win._preview_splitter.orientation() == Qt.Orientation.Horizontal
+    assert win._preview_splitter.count() == 2
+    assert win._preview_splitter.widget(0) is win._lyrics_panel
+    assert win._preview_splitter.widget(1) is win._video_settings_panel
     assert left_width >= 320
+    assert right_width >= win._property_panel.minimumWidth()
+    assert win._transport_bar.parentWidget() is win._preview_window
+
+
+def test_preview_player_window_defaults_to_workspace_quarter_at_top_left(qapp):
+    win = mw.SubtitleRenderWindow(embedded=False)
+    win.resize(1600, 900)
+    win.move(120, 80)
+    win.show()
+    qapp.processEvents()
+
+    preview = win._preview_window
+    geometry = preview.geometry()
+
+    assert geometry.size() == QSize(800, 450)
+    assert geometry.topLeft() == win.mapToGlobal(QPoint(0, 0))
+    assert preview.windowFlags() & Qt.WindowType.FramelessWindowHint
+    assert preview.findChild(mw.TransportBar) is win._transport_bar
+
+
+def test_preview_player_controls_auto_hide_and_restore(qapp):
+    win = mw.SubtitleRenderWindow(embedded=False)
+    preview = win._preview_window
+    preview.show()
+    qapp.processEvents()
+
+    preview.show_controls()
+    assert preview._top_controls.isVisible() is True
+    assert preview._bottom_controls.isVisible() is True
+
+    preview.hide_controls(force=True)
+    qapp.processEvents()
+    assert preview._top_controls.isVisible() is False
+    assert preview._bottom_controls.isVisible() is False
+
+    preview.show_controls()
+    assert preview._top_controls.isVisible() is True
+    assert preview._bottom_controls.isVisible() is True
+
+
+def test_preview_player_idle_timeout_keeps_controls_while_mouse_inside(qapp, monkeypatch):
+    win = mw.SubtitleRenderWindow(embedded=False)
+    preview = win._preview_window
+    preview.show()
+    qapp.processEvents()
+    preview.show_controls()
+    monkeypatch.setattr(preview, "underMouse", lambda: True)
+
+    preview._on_controls_idle_timeout()
+
+    assert preview._top_controls.isVisible() is True
+    assert preview._bottom_controls.isVisible() is True
+    assert preview._hide_controls_timer.isActive() is True
+
+
+def test_preview_player_transport_bar_uses_overlay_style(qapp):
+    win = mw.SubtitleRenderWindow(embedded=False)
+    bar = win._transport_bar
+
+    assert "background: transparent" in bar._play_btn.styleSheet()
+    assert "border: none" in bar._play_btn.styleSheet()
+    assert bar._slider.__class__.__name__ == "PlayerProgressSlider"
+    assert "rgba(0, 0, 0, 0)" in bar.styleSheet()
+
+
+def test_video_drop_region_becomes_property_panel_after_video_load(qapp, monkeypatch, tmp_path):
+    monkeypatch.setattr(mw, "unified_player_enabled", lambda: False)
+    monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
+    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+    monkeypatch.setattr(
+        mw.SubtitleRenderWindow,
+        "_probe",
+        lambda self, path, label: mw.MediaInfo(
+            path=path,
+            duration=10.0,
+            video_streams=1,
+            audio_streams=0,
+            subtitle_streams=0,
+            video_width=1920,
+            video_height=1080,
+            video_fps=60.0,
+        ),
+    )
+    path = tmp_path / "sample.mp4"
+    path.write_bytes(b"fake")
+    win = mw.SubtitleRenderWindow(embedded=False)
+
+    assert win._video_settings_panel.is_populated() is False
+
+    info = win.load_video(path)
+
+    assert info is not None
+    assert win._video_settings_panel.is_populated() is True
+    assert win._video_settings_panel._content_layout.itemAt(0).widget() is win._property_panel
+    assert win._preview_panel.canvas.has_video_source is True
 
 
 def test_main_window_screen_panel_updates_export_and_persists(qapp, monkeypatch):

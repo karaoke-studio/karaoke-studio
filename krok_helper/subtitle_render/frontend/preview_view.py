@@ -28,7 +28,7 @@ from PyQt6.QtCore import (
     QUrl,
     pyqtSignal as Signal,
 )
-from PyQt6.QtGui import QColor, QImage, QPainter
+from PyQt6.QtGui import QColor, QImage, QMouseEvent, QPainter, QPen
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -426,6 +426,70 @@ class PreviewPanel(DropPanel):
         return self._canvas
 
 
+class PlayerProgressSlider(QSlider):
+    """播放器风格进度条：细圆角轨道 + 圆形拖点，避免默认方形 handle。"""
+
+    def __init__(self, orientation: Qt.Orientation, parent: Optional[QWidget] = None) -> None:
+        super().__init__(orientation, parent)
+        self.setMouseTracking(True)
+        self.setFixedHeight(24)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(360, 24)
+
+    def paintEvent(self, event):  # noqa: N802
+        if self.orientation() != Qt.Orientation.Horizontal:
+            super().paintEvent(event)
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        margin = 7.0
+        track_h = 3.5
+        y = self.height() / 2.0
+        track_w = max(1.0, self.width() - margin * 2)
+        minimum = self.minimum()
+        span = max(1, self.maximum() - minimum)
+        ratio = max(0.0, min(1.0, (self.value() - minimum) / span))
+
+        base = QRectF(margin, y - track_h / 2.0, track_w, track_h)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 105))
+        painter.drawRoundedRect(base, track_h / 2.0, track_h / 2.0)
+
+        if ratio > 0:
+            played = QRectF(margin, y - track_h / 2.0, track_w * ratio, track_h)
+            painter.setBrush(QColor("#5AA9FF"))
+            painter.drawRoundedRect(played, track_h / 2.0, track_h / 2.0)
+
+        x = margin + track_w * ratio
+        painter.setBrush(QColor(0, 0, 0, 80))
+        painter.drawEllipse(QRectF(x - 7.5, y - 7.5, 15.0, 15.0))
+        painter.setBrush(QColor("#FFFFFF"))
+        painter.setPen(QPen(QColor("#5AA9FF"), 2.0))
+        painter.drawEllipse(QRectF(x - 5.5, y - 5.5, 11.0, 11.0))
+
+    def mousePressEvent(self, event: QMouseEvent):  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._set_value_from_x(event.position().x())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent):  # noqa: N802
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            self._set_value_from_x(event.position().x())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def _set_value_from_x(self, x: float) -> None:
+        margin = 7.0
+        track_w = max(1.0, self.width() - margin * 2)
+        ratio = max(0.0, min(1.0, (x - margin) / track_w))
+        self.setValue(int(round(self.minimum() + (self.maximum() - self.minimum()) * ratio)))
+
+
 class TransportBar(QWidget):
     """播放控件 + 时间码 + 进度条。
 
@@ -484,7 +548,7 @@ class TransportBar(QWidget):
         )
         self._play_btn.clicked.connect(self.toggle_play)
 
-        self._slider = QSlider(Qt.Orientation.Horizontal, self)
+        self._slider = PlayerProgressSlider(Qt.Orientation.Horizontal, self)
         self._slider.setMinimum(0)
         self._slider.setMaximum(60_000)
         self._slider.setValue(0)
