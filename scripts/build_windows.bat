@@ -38,9 +38,8 @@ call :ensure_pkg numpy numpy || exit /b 1
 call :ensure_pkg pykakasi pykakasi || exit /b 1
 call :ensure_pkg jaconv jaconv || exit /b 1
 call :ensure_pkg pyphen pyphen || exit /b 1
-call :ensure_pkg winrt.windows.globalization winrt-Windows.Globalization || exit /b 1
-call :ensure_pkg winrt.windows.foundation winrt-Windows.Foundation || exit /b 1
-call :ensure_pkg winrt.windows.foundation.collections winrt-Windows.Foundation.Collections || exit /b 1
+call :ensure_pkg sudachipy sudachipy || exit /b 1
+call :ensure_pkg sudachidict_small sudachidict_small || exit /b 1
 
 echo Checking bundled SUG source path...
 %PYTHON_BIN% -c "import sys; from pathlib import Path; src=Path(r'%SUG_SRC%').resolve(); sys.path.insert(0, str(src)); import strange_uta_game; actual=Path(strange_uta_game.__file__).resolve(); expected=src/'strange_uta_game'/'__init__.py'; print('  strange_uta_game:', actual); raise SystemExit(0 if actual == expected else f'Expected {expected}, got {actual}')" || exit /b 1
@@ -61,6 +60,17 @@ if not exist "%WORK_PATH%" mkdir "%WORK_PATH%"
 if not exist "%SPEC_PATH%" mkdir "%SPEC_PATH%"
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "Get-ChildItem -LiteralPath '%SPEC_PATH%' -Filter '*.spec' -File -ErrorAction SilentlyContinue | Remove-Item -Force"
+
+echo Setting SUG package variant to noWinIME for this build...
+copy /Y "%SUG_PACKAGE%\__version__.py" "%SUG_PACKAGE%\__version__.py.bak" >nul
+%PYTHON_BIN% -c "import re; q=chr(34); p=r'%SUG_PACKAGE%\__version__.py'; t=open(p,encoding='utf-8').read(); n=re.sub('^(VARIANT *= *)'+q+'[^'+q+']*'+q, r'\1'+q+'noWinIME'+q, t, flags=re.M); open(p,'w',encoding='utf-8').write(n); raise SystemExit(0 if n!=t else 1)"
+if errorlevel 1 (
+    echo Failed to patch VARIANT in strange_uta_game\__version__.py.
+    copy /Y "%SUG_PACKAGE%\__version__.py.bak" "%SUG_PACKAGE%\__version__.py" >nul
+    del "%SUG_PACKAGE%\__version__.py.bak" >nul
+    if not defined IS_CI pause
+    exit /b 1
+)
 
 echo Building Windows package...
 %PYTHON_BIN% -m PyInstaller ^
@@ -84,7 +94,8 @@ echo Building Windows package...
     --collect-all soundfile ^
     --collect-all pedalboard ^
     --collect-all pykakasi ^
-    --collect-all winrt ^
+    --collect-all sudachipy ^
+    --collect-data sudachidict_small ^
     --collect-all pyphen ^
     --collect-binaries soundfile ^
     --collect-submodules strange_uta_game ^
@@ -102,11 +113,12 @@ echo Building Windows package...
     --hidden-import PyQt6.sip ^
     --hidden-import encodings.idna ^
     --hidden-import colorsys ^
-    --hidden-import winrt.windows.globalization ^
-    --hidden-import winrt.windows.foundation ^
-    --hidden-import winrt.windows.foundation.collections ^
-    --exclude-module sudachipy ^
-    --exclude-module sudachidict_small ^
+    --hidden-import sudachipy ^
+    --hidden-import sudachidict_small ^
+    --exclude-module winrt ^
+    --exclude-module winrt.windows.globalization ^
+    --exclude-module winrt.windows.foundation ^
+    --exclude-module winrt.windows.foundation.collections ^
     --exclude-module sudachidict_core ^
     --exclude-module sudachidict_full ^
     --exclude-module scipy ^
@@ -153,7 +165,12 @@ echo Building Windows package...
     --exclude-module PyQt6.QtWebView ^
     app.py
 
-if errorlevel 1 (
+set "BUILD_RC=%errorlevel%"
+echo Restoring SUG __version__.py...
+copy /Y "%SUG_PACKAGE%\__version__.py.bak" "%SUG_PACKAGE%\__version__.py" >nul
+del "%SUG_PACKAGE%\__version__.py.bak" >nul
+
+if not "%BUILD_RC%"=="0" (
     echo.
     echo Build failed.
     if not defined IS_CI pause
