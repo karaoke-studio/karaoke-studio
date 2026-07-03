@@ -1394,33 +1394,61 @@ class PropertyPanel(QWidget):
         self._role_section.set_expanded(False)
         layout.addWidget(self._role_section)
 
-        self._font_color_row = QWidget()
-        font_color_layout = QHBoxLayout(self._font_color_row)
-        font_color_layout.setContentsMargins(0, 0, 0, 0)
-        font_color_layout.setSpacing(10)
-        self._font_section = self._make_font_section()
-        self._color_section = self._make_color_section()
-        self._font_section.layout().setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._color_section.layout().setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._font_section.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Preferred,
-        )
-        self._color_section.setSizePolicy(
-            QSizePolicy.Policy.Expanding,
-            QSizePolicy.Policy.Preferred,
-        )
-        font_color_layout.addWidget(self._font_section, 1)
-        font_color_layout.addWidget(self._color_section, 1)
-        layout.addWidget(self._font_color_row)
+        self._font_color_section = self._make_font_color_section()
+        layout.addWidget(self._font_color_section)
 
         self._ruby_section = self._make_ruby_section()
         layout.addWidget(self._ruby_section)
         layout.addStretch(1)
         return scroll
 
-    def _make_font_section(self) -> QFrame:
-        section, layout = _section("字体")
+    def _make_font_color_section(self) -> QFrame:
+        section, layout = _section("颜色 / 字体")
+
+        row = QWidget(section)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(12)
+
+        self._color_section = self._make_color_section(parent=row, inline=True)
+        self._font_section = self._make_font_section(parent=row, inline=True)
+        self._color_section.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        self._font_section.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+
+        divider = QFrame(row)
+        divider.setObjectName("SubtitlePropertyInnerDivider")
+        divider.setFrameShape(QFrame.Shape.VLine)
+        divider.setFixedWidth(1)
+        divider.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Expanding,
+        )
+        themed(
+            divider,
+            lambda: (
+                "QFrame#SubtitlePropertyInnerDivider { "
+                f"background: {palette().card_border}; "
+                "border: 0; "
+                "}"
+            ),
+        )
+
+        row_layout.addWidget(self._color_section, 1, Qt.AlignmentFlag.AlignTop)
+        row_layout.addWidget(divider, 0)
+        row_layout.addWidget(self._font_section, 1, Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(row)
+        return section
+
+    def _make_font_section(
+        self, parent: Optional[QWidget] = None, *, inline: bool = False
+    ) -> QWidget:
+        section, layout = _inline_section("字体", parent) if inline else _section("字体")
 
         self._font_combo = _WheelFocusedFontComboBox(section)
         _compact_control(self._font_combo)
@@ -1548,8 +1576,10 @@ class PropertyPanel(QWidget):
             return
         self._update_style(ruby_karaoke_colors=deepcopy(self._current_karaoke_colors()))
 
-    def _make_color_section(self) -> QFrame:
-        section, layout = _section("颜色")
+    def _make_color_section(
+        self, parent: Optional[QWidget] = None, *, inline: bool = False
+    ) -> QWidget:
+        section, layout = _inline_section("颜色", parent) if inline else _section("颜色")
 
         self._color_subject_combo = _WheelFocusedComboBox(section)
         _compact_control(self._color_subject_combo)
@@ -3915,3 +3945,14 @@ def _section(
         ),
     )
     return section, section.content_layout
+
+
+def _inline_section(
+    title: str, parent: Optional[QWidget] = None
+) -> tuple[QWidget, QVBoxLayout]:
+    section = QWidget(parent)
+    layout = QVBoxLayout(section)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(10)
+    layout.addWidget(_subgroup_label(title))
+    return section, layout
