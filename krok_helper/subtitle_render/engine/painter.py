@@ -1229,16 +1229,16 @@ def _resolve_sayatoo_line_layouts(
             union_left = min(-float(visual_pad), natural_left)
             union_right = max(float(text_w + visual_pad), natural_right)
             union_w = max(int(round(union_right - union_left)), 1)
-            union_x = _resolve_line_x(
-                img_w, union_w, line_style, display_line.lane,
+            union_x = _resolve_line_x_smart(
+                img_w, union_w, track, line, line_style, display_line.lane,
                 center_override=center_line,
             )
             text_x = float(union_x) - union_left
             signal_x = text_x + draw_left
         else:
             text_x = float(
-                _resolve_line_x(
-                    img_w, text_line_w, line_style, display_line.lane,
+                _resolve_line_x_smart(
+                    img_w, text_line_w, track, line, line_style, display_line.lane,
                     center_override=center_line,
                 )
                 + visual_pad
@@ -3550,8 +3550,8 @@ def _layout_plain_line(
     x0 = (
         line_x
         if line_x is not None
-        else _resolve_line_x(
-            img_w, total_w + visual_pad * 2, style, lane,
+        else _resolve_line_x_smart(
+            img_w, total_w + visual_pad * 2, track, line, style, lane,
             center_override=_line_center_override(track, line, style),
         )
         + visual_pad
@@ -3957,8 +3957,8 @@ def _layout_role_line(
     x0 = (
         line_x
         if line_x is not None
-        else _resolve_line_x(
-            img_w, measure_layout.total_width + visual_pad * 2, style, lane,
+        else _resolve_line_x_smart(
+            img_w, measure_layout.total_width + visual_pad * 2, track, line, style, lane,
             center_override=_line_center_override(track, line, style),
         )
         + visual_pad
@@ -6852,8 +6852,11 @@ def _line_center_override(track: TimingTrack, line: TimingLine, style: Style) ->
     """段落最后一行居中（逆向 NKM3 EmptyLineBreaker/SetParagraphBreaks）。
 
     仅在默认「上左下右」双行布局下生效；center 布局本就居中，per_row 是
-    用户手动逐行控制，不覆盖。
+    用户手动逐行控制，不覆盖。N3 中该行为属于 SmartHorizon 的单行页居中，
+    因此 ``smart_horizontal == "none"`` 时一并关闭。
     """
+    if style.smart_horizontal == "none":
+        return False
     if not style.dual_line_layout or style.line_horizontal_layout != "asymmetric":
         return False
     threshold = _paragraph_center_threshold(style)
@@ -6907,6 +6910,106 @@ def _row_layout_params(style: Style, lane: int | None) -> tuple[str, int, int]:
     if lane == 1:
         return style.row2_align, style.row2_offset_x, style.row2_offset_y
     return style.row1_align, style.row1_offset_x, style.row1_offset_y
+
+
+def _line_total_width(line: TimingLine, style: Style) -> int:
+    """行主文字外框宽度（含描边 padding），与绘制路径同一套测量。"""
+    font = _build_font(style)
+    metrics = QFontMetrics(font)
+    latin_font = _build_latin_font(style)
+    font_for = _make_font_for(style, font, latin_font)
+    latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
+    char_widths = [
+        _char_layout_width(c.text, font, metrics, latin_metrics, font_for, style)
+        for c in line.chars
+    ]
+    return max(
+        int(round(_line_text_width(char_widths, style) + _visual_text_padding(style) * 2)),
+        1,
+    )
+
+
+def _renderable_pair_partner(track: TimingTrack, line: TimingLine) -> TimingLine | None:
+    """N3「页」的近似：可渲染行按 (2k, 2k+1) 配对（与 lane 交替规则一致）。"""
+    render_lines = [
+        item for item in track.lines if not item.is_blank and item.chars
+    ]
+    for index, item in enumerate(render_lines):
+        if item is line:
+            partner_index = index + 1 if index % 2 == 0 else index - 1
+            if 0 <= partner_index < len(render_lines):
+                return render_lines[partner_index]
+            return None
+    return None
+
+
+def _smart_horizontal_dx(
+    img_w: int,
+    total_w: int,
+    track: TimingTrack,
+    line: TimingLine,
+    style: Style,
+    lane: int | None,
+    *,
+    center_override: bool,
+) -> int:
+    """SmartHorizon 二次水平修正（逆向 N3 ``SetOneLineX``）。
+
+    仅作用于「上左下右」双行布局：``center_position`` 逐行判断短行是否
+    从画面中心附近开始/结束；``equal_margins`` 以页（相邻两行）为单位，
+    把多余空隙对半分给左右两行。Center（居中覆盖）行不修正。
+    """
+    mode = style.smart_horizontal
+    if mode == "none" or style.vertical or center_override:
+        return 0
+    if not style.dual_line_layout or style.line_horizontal_layout != "asymmetric":
+        return 0
+    margin_left = max(style.upper_line_left_margin_px, 0)
+    margin_right = max(style.lower_line_right_margin_px, 0)
+    font = max(style.font_size_px, 1)
+    base_x = _resolve_line_x(img_w, total_w, style, lane, center_override=False)
+    partner = _renderable_pair_partner(track, line)
+    if partner is None:
+        # 单行页：SmartHorizon != None 时整行居中。
+        return (img_w - total_w) // 2 - base_x
+
+    if mode == "center_position":
+        threshold = img_w // 2 + font // 2 - total_w
+        if lane == 1:
+            if threshold > margin_right:
+                return (img_w // 2 - font // 2) - base_x
+            return 0
+        if threshold > margin_left:
+            return threshold - base_x
+        return 0
+
+    # equal_margins：页内必须同时存在 Left 与 Right 行（Center 行不算）。
+    partner_style = _style_for_line(style, partner)
+    if _line_center_override(track, partner, partner_style):
+        return 0
+    partner_w = _line_total_width(partner, partner_style)
+    left_w = total_w if lane != 1 else partner_w
+    right_w = partner_w if lane != 1 else total_w
+    slack = img_w - margin_left - margin_right - left_w - right_w + font
+    if slack <= 0:
+        return 0
+    return -(slack // 2) if lane == 1 else slack // 2
+
+
+def _resolve_line_x_smart(
+    img_w: int,
+    total_w: int,
+    track: TimingTrack,
+    line: TimingLine,
+    style: Style,
+    lane: int | None,
+    *,
+    center_override: bool = False,
+) -> int:
+    x = _resolve_line_x(img_w, total_w, style, lane, center_override=center_override)
+    return x + _smart_horizontal_dx(
+        img_w, total_w, track, line, style, lane, center_override=center_override
+    )
 
 
 @dataclass(frozen=True)
@@ -6964,21 +7067,13 @@ def check_layout_margins(
         if not line.chars:
             continue
         line_style = _style_for_line(style, line)
-        font = _build_font(line_style)
-        metrics = QFontMetrics(font)
-        latin_font = _build_latin_font(line_style)
-        font_for = _make_font_for(line_style, font, latin_font)
-        latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
-        char_widths = [
-            _char_layout_width(c.text, font, metrics, latin_metrics, font_for, line_style)
-            for c in line.chars
-        ]
-        pad = _visual_text_padding(line_style)
-        total_w = max(int(round(_line_text_width(char_widths, line_style) + pad * 2)), 1)
+        total_w = _line_total_width(line, line_style)
         lane = display_line.lane if line_style.dual_line_layout else None
-        x0 = _resolve_line_x(
+        x0 = _resolve_line_x_smart(
             img_w,
             total_w,
+            track,
+            line,
             line_style,
             lane,
             center_override=_line_center_override(track, line, line_style),

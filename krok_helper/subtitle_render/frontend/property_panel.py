@@ -1328,6 +1328,12 @@ class PropertyPanel(QWidget):
                     ),
                 )
             )
+            self._smart_horizontal_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._smart_horizontal_combo.findData(self._style.smart_horizontal),
+                )
+            )
             self._line_gap_spin.setValue(self._style.line_gap_px)
             self._upper_left_spin.setValue(self._style.upper_line_left_margin_px)
             self._lower_right_spin.setValue(self._style.lower_line_right_margin_px)
@@ -2680,6 +2686,26 @@ class PropertyPanel(QWidget):
             lambda value: self._update_style(lower_line_right_margin_px=value)
         )
         row_layout.addWidget(_field("下行右边距", self._lower_right_spin), 2, 1)
+
+        self._smart_horizontal_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._smart_horizontal_combo)
+        for label, value in [
+            ("左右余白对齐", "equal_margins"),
+            ("中心位置对齐", "center_position"),
+            ("不调整", "none"),
+        ]:
+            self._smart_horizontal_combo.addItem(label, value)
+        self._smart_horizontal_combo.setToolTip(
+            "智能水平配置（N3 スマート水平配置，仅「上左下右」布局）：短行自动向画面"
+            "中央收拢。左右余白对齐 = 按上下两行整体判断（N3 默认）；中心位置对齐 = "
+            "逐行判断；不调整 = 行永远贴左右边距，同时关闭段落末行居中。"
+        )
+        self._smart_horizontal_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                smart_horizontal=self._smart_horizontal_combo.currentData()
+            )
+        )
+        row_layout.addWidget(_field("智能水平", self._smart_horizontal_combo), 3, 0)
 
         row_layout.setColumnStretch(0, 1)
         row_layout.setColumnStretch(1, 1)

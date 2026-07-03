@@ -3776,3 +3776,122 @@ def test_check_layout_margins_ok_when_screen_is_wide(qapp):
 def test_check_layout_margins_skips_vertical_mode(qapp):
     track = _margin_track("あいうえおかきくけこ")
     assert check_layout_margins(track, Style(vertical=True), 200) == []
+
+
+# ---------------------------------------------------------------------------
+# P2：SmartHorizon（N3 スマート水平配置）
+# ---------------------------------------------------------------------------
+
+from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
+    _line_center_override,
+    _line_total_width,
+    _resolve_line_x_smart,
+)
+
+
+def _continuous_track(texts: list[str]) -> TimingTrack:
+    """无间隙连续演唱的多行 track（同一段落，只有最后一行是段落末行）。"""
+    lines = []
+    t = 0
+    for text in texts:
+        chars = [
+            TimingChar(text=ch, start_ms=t + index * 300)
+            for index, ch in enumerate(text)
+        ]
+        lines.append(TimingLine(chars=chars, end_ms=t + len(text) * 300))
+        t += len(text) * 300
+    return TimingTrack(lines=lines)
+
+
+def test_smart_equal_margins_shifts_short_pair_toward_center(qapp):
+    track = _continuous_track(["あい", "うえ", "おか", "きく"])
+    style = Style()  # 默认 equal_margins
+    img_w = 1920
+    line0, line1 = track.lines[0], track.lines[1]
+    w0 = _line_total_width(line0, style)
+    w1 = _line_total_width(line1, style)
+    slack = img_w - 50 - 50 - w0 - w1 + style.font_size_px
+    assert slack > 0
+
+    x0_plain = _resolve_line_x(img_w, w0, style, 0, center_override=False)
+    x1_plain = _resolve_line_x(img_w, w1, style, 1, center_override=False)
+    x0_smart = _resolve_line_x_smart(img_w, w0, track, line0, style, 0)
+    x1_smart = _resolve_line_x_smart(img_w, w1, track, line1, style, 1)
+
+    assert x0_smart == x0_plain + slack // 2
+    assert x1_smart == x1_plain - slack // 2
+
+
+def test_smart_equal_margins_skips_pair_without_slack(qapp):
+    track = _continuous_track(["あ" * 12, "い" * 12, "う" * 2, "え" * 2])
+    style = Style()
+    img_w = 1920
+    line0 = track.lines[0]
+    w0 = _line_total_width(line0, style)
+
+    x0_smart = _resolve_line_x_smart(img_w, w0, track, line0, style, 0)
+
+    assert x0_smart == _resolve_line_x(img_w, w0, style, 0, center_override=False)
+
+
+def test_smart_none_keeps_margin_anchor_and_paragraph_centering_off(qapp):
+    track = _continuous_track(["あい", "うえ", "おか", "きく"])
+    style = Style(smart_horizontal="none")
+    img_w = 1920
+    line0 = track.lines[0]
+    w0 = _line_total_width(line0, style)
+
+    assert _resolve_line_x_smart(img_w, w0, track, line0, style, 0) == 50
+    # 段落末行居中随 none 一并关闭（同属 N3 SetOneLineX 语义）
+    last = track.lines[-1]
+    assert _line_center_override(track, last, style) is False
+    assert _line_center_override(track, last, Style()) is True
+
+
+def test_smart_center_position_moves_short_lines_near_center(qapp):
+    track = _continuous_track(["あい", "うえ", "おか", "きく"])
+    style = Style(smart_horizontal="center_position")
+    img_w = 1920
+    font = style.font_size_px
+    line0, line1 = track.lines[0], track.lines[1]
+    w0 = _line_total_width(line0, style)
+    w1 = _line_total_width(line1, style)
+
+    # 短左行：从中心附近开始；短右行：在中心附近结束。
+    assert (
+        _resolve_line_x_smart(img_w, w0, track, line0, style, 0)
+        == img_w // 2 + font // 2 - w0
+    )
+    assert (
+        _resolve_line_x_smart(img_w, w1, track, line1, style, 1)
+        == img_w // 2 - font // 2
+    )
+
+
+def test_smart_center_position_keeps_long_line_at_margin(qapp):
+    track = _continuous_track(["あ" * 18, "い" * 18, "う" * 2, "え" * 2])
+    style = Style(smart_horizontal="center_position")
+    img_w = 1920
+    line0 = track.lines[0]
+    w0 = _line_total_width(line0, style)
+    assert img_w // 2 + style.font_size_px // 2 - w0 <= 50  # 阈值不满足
+
+    assert _resolve_line_x_smart(img_w, w0, track, line0, style, 0) == 50
+
+
+def test_smart_single_page_line_is_centered(qapp):
+    track = _continuous_track(["あい", "うえ", "おか"])  # 第 3 行无配对行
+    style = Style()
+    img_w = 1920
+    last = track.lines[-1]
+    w = _line_total_width(last, style)
+
+    x = _resolve_line_x_smart(img_w, w, track, last, style, 0)
+
+    assert x == (img_w - w) // 2
+
+
+def test_style_dict_roundtrip_keeps_smart_horizontal():
+    restored = style_from_dict(style_to_dict(Style(smart_horizontal="center_position")))
+    assert restored.smart_horizontal == "center_position"
+    assert style_from_dict({"smart_horizontal": "bogus"}).smart_horizontal == "equal_margins"

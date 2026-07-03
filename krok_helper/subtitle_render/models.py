@@ -209,6 +209,12 @@ ColorLayerKey = Literal["text", "stroke", "stroke2", "shadow"]
 DecorationKind = Literal["shadow", "glow"]
 RubyAlignment = Literal["auto", "center", "equal_space"]
 RUBY_ALIGNMENTS: tuple[RubyAlignment, ...] = ("auto", "center", "equal_space")
+SmartHorizontal = Literal["none", "center_position", "equal_margins"]
+SMART_HORIZONTALS: tuple[SmartHorizontal, ...] = (
+    "none",
+    "center_position",
+    "equal_margins",
+)
 SectionEndingMode = Literal["hold", "clear"]
 EntryAnimation = Literal["none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"]
 ExitAnimation = Literal["none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"]
@@ -511,6 +517,12 @@ class Style:
     lower_line_right_margin_px: int = 50
     """双行布局中下排字幕距离右边的边距（仅 ``asymmetric`` 模式）。"""
 
+    smart_horizontal: SmartHorizontal = "equal_margins"
+    """智能水平配置（N3 ``SmartHorizon``，仅 ``asymmetric`` 双行布局）：短行向中央
+    收拢。``none`` = 不调整（同时关闭段落末行/单行页居中）；``center_position`` =
+    中心位置对齐（逐行判断，N3 Single）；``equal_margins`` = 左右余白对齐
+    （整页判断，N3 Multi，N3 默认）。"""
+
     # 逐行独立布局（per_row 模式，对标 Sayatoo「布局」第一行 / 第二行）
     # 对齐决定该行的水平锚点（left=贴左 / center=居中 / right=贴右），
     # offset_x/y 为锚点之上的像素位移，正值向右 / 向下。
@@ -812,6 +824,8 @@ def style_from_dict(payload: object) -> Style:
             changes[key] = value if value in {"shadow", "glow"} else None
         elif key == "ruby_alignment":
             changes[key] = value if value in RUBY_ALIGNMENTS else defaults.ruby_alignment
+        elif key == "smart_horizontal":
+            changes[key] = value if value in SMART_HORIZONTALS else defaults.smart_horizontal
         elif key == "entry_anim":
             changes[key] = (
                 value
