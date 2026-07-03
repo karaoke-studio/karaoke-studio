@@ -53,6 +53,8 @@ from qfluentwidgets import (
     Action,
     DropDownPushButton,
     FluentIcon as FIF,
+    InfoBar,
+    InfoBarPosition,
     RoundMenu,
 )
 
@@ -68,6 +70,7 @@ from krok_helper.subtitle_render.engine.encoder_select import (
     ENCODER_NVENC,
     ENCODER_QSV,
 )
+from krok_helper.subtitle_render.engine.painter import check_layout_margins
 from krok_helper.subtitle_render.engine.renderer import RenderJob, render_subtitle_video
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
@@ -458,6 +461,15 @@ class _RenderWorker(QObject):
         self._process = process
 
 
+def _format_warning_lines(warnings: list) -> str:
+    """把余白警告压成「第 1、3 行」式的短文案，最多点名 4 行。"""
+    numbers = [str(w.line_index + 1) for w in warnings[:4]]
+    text = f"第 {'、'.join(numbers)} 行"
+    if len(warnings) > 4:
+        text += f" 等 {len(warnings)} 行"
+    return text
+
+
 class SubtitleRenderWindow(QWidget):
     """字幕视频渲染模块主 widget。"""
 
@@ -491,6 +503,13 @@ class SubtitleRenderWindow(QWidget):
         self._syncing_screen_controls = False
         self._render_thread: Optional[QThread] = None
         self._render_worker: Optional[_RenderWorker] = None
+        # 左右余白检查：属性面板每个 SpinBox tick 都会触发样式变更，
+        # 用单发定时器合并成一次检查，提示只在结果变化时弹出。
+        self._margin_check_timer = QTimer(self)
+        self._margin_check_timer.setSingleShot(True)
+        self._margin_check_timer.setInterval(400)
+        self._margin_check_timer.timeout.connect(self._check_layout_margins)
+        self._last_margin_warning_key = ""
         self._load_persisted_state()
 
         themed(
@@ -1119,6 +1138,7 @@ class SubtitleRenderWindow(QWidget):
         self._preview_panel.set_track(track)
         self._refresh_transport_duration()
         self._transport_bar.set_time(0)
+        self._margin_check_timer.start()
         self._mark_project_dirty()
         return track
 
@@ -1229,8 +1249,45 @@ class SubtitleRenderWindow(QWidget):
         self._style = style
         self._preview_panel.set_style(style)
         self._lyrics_panel.set_style(style)
+        self._margin_check_timer.start()
         self._save_persisted_state()
         self._mark_project_dirty()
+
+    def _check_layout_margins(self) -> None:
+        """N3 式左右余白检查：溢出画面 → Warning；侵入余白 → Information。"""
+        track = self._timing_track
+        if track is None:
+            return
+        try:
+            warnings = check_layout_margins(track, self._style, self._screen_settings.width)
+        except Exception:  # noqa: BLE001 — 检查失败不影响正常编辑
+            return
+        overflow = [w for w in warnings if w.level == "overflow"]
+        margin = [w for w in warnings if w.level == "margin"]
+        key = (
+            f"o:{','.join(str(w.line_index) for w in overflow)}"
+            f"|m:{','.join(str(w.line_index) for w in margin)}"
+        )
+        if key == self._last_margin_warning_key:
+            return
+        self._last_margin_warning_key = key
+        if overflow:
+            InfoBar.warning(
+                title="字幕溢出画面",
+                content=f"{_format_warning_lines(overflow)}超出画面范围，"
+                "请调小字号或缩短该行。",
+                parent=self,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=5000,
+            )
+        elif margin:
+            InfoBar.info(
+                title="左右余白无法确保",
+                content=f"{_format_warning_lines(margin)}侵入左右余白。",
+                parent=self,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=4000,
+            )
 
     def _apply_style_presets(self, presets: dict) -> None:
         self._style_presets = _style_presets_from_dict(presets)
@@ -1260,6 +1317,7 @@ class SubtitleRenderWindow(QWidget):
             fps=self._screen_settings.fps,
         )
         self._transport_bar.set_preview_fps(self._screen_settings.fps)
+        self._margin_check_timer.start()
         self._save_persisted_state()
 
     def _set_export_screen_controls(self, settings: ScreenSettings) -> None:

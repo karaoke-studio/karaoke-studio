@@ -1406,6 +1406,7 @@ class PropertyPanel(QWidget):
         section, layout = _section("颜色 / 字体")
 
         row = QWidget(section)
+        self._font_color_row = row
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(12)
@@ -1481,7 +1482,7 @@ class PropertyPanel(QWidget):
         )
         row_layout.addWidget(_field("字号", self._font_size_spin), 0, 0)
 
-        self._letter_spacing_spin = _spin(0, 120, suffix=" px")
+        self._letter_spacing_spin = _spin(-120, 120, suffix=" px")
         self._letter_spacing_spin.valueChanged.connect(
             lambda value: self._update_style(letter_spacing_px=value)
         )
@@ -1560,11 +1561,39 @@ class PropertyPanel(QWidget):
         )
         row_layout.addWidget(_field("字号", self._ruby_font_size_spin), 0, 0)
 
-        self._ruby_gap_spin = _spin(0, 40, suffix=" px")
+        self._ruby_gap_spin = _spin(-40, 40, suffix=" px")
         self._ruby_gap_spin.valueChanged.connect(
             lambda value: self._update_style(ruby_gap_px=value)
         )
-        row_layout.addWidget(_field("间距", self._ruby_gap_spin), 0, 1)
+        row_layout.addWidget(_field("与正文间距", self._ruby_gap_spin), 0, 1)
+
+        self._ruby_interval_spin = _spin(-40, 40, suffix=" px")
+        self._ruby_interval_spin.setToolTip(
+            "注音字符之间的最小间距（N3 ルビ間隔），可为负让注音字符收紧。"
+        )
+        self._ruby_interval_spin.valueChanged.connect(
+            lambda value: self._update_style(ruby_interval_px=value)
+        )
+        row_layout.addWidget(_field("字间距", self._ruby_interval_spin), 1, 0)
+
+        self._ruby_alignment_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._ruby_alignment_combo)
+        for label, value in [
+            ("自动", "auto"),
+            ("居中", "center"),
+            ("均等分布", "equal_space"),
+        ]:
+            self._ruby_alignment_combo.addItem(label, value)
+        self._ruby_alignment_combo.setToolTip(
+            "注音相对正文范围的排布（N3 ルビ配置）：自动 = 正文或注音全为英数时居中、"
+            "否则均等分布。"
+        )
+        self._ruby_alignment_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                ruby_alignment=self._ruby_alignment_combo.currentData()
+            )
+        )
+        row_layout.addWidget(_field("排布", self._ruby_alignment_combo), 1, 1)
 
         row_layout.setColumnStretch(0, 1)
         row_layout.setColumnStretch(1, 1)
@@ -2634,7 +2663,7 @@ class PropertyPanel(QWidget):
         )
         row_layout.addWidget(_field("水平布局", self._horizontal_layout_combo), 1, 0)
 
-        self._line_gap_spin = _spin(0, 400, suffix=" px")
+        self._line_gap_spin = _spin(-400, 400, suffix=" px")
         self._line_gap_spin.valueChanged.connect(
             lambda value: self._update_style(line_gap_px=value)
         )
@@ -3369,6 +3398,13 @@ class PropertyPanel(QWidget):
             self._sync_color_subject_style_controls()
             self._ruby_font_size_spin.setValue(int(self._scheme_value("ruby_font_size_px")))
             self._ruby_gap_spin.setValue(int(self._scheme_value("ruby_gap_px")))
+            self._ruby_interval_spin.setValue(int(self._style.ruby_interval_px))
+            self._ruby_alignment_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._ruby_alignment_combo.findData(self._style.ruby_alignment),
+                )
+            )
             if hasattr(self, "_ruby_apply_main_btn"):
                 self._ruby_apply_main_btn.setVisible(
                     self._current_color_subject_key() == "ruby"

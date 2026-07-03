@@ -207,6 +207,8 @@ ColorFillMode = Literal[
 ColorStateKey = Literal["before", "after"]
 ColorLayerKey = Literal["text", "stroke", "stroke2", "shadow"]
 DecorationKind = Literal["shadow", "glow"]
+RubyAlignment = Literal["auto", "center", "equal_space"]
+RUBY_ALIGNMENTS: tuple[RubyAlignment, ...] = ("auto", "center", "equal_space")
 SectionEndingMode = Literal["hold", "clear"]
 EntryAnimation = Literal["none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"]
 ExitAnimation = Literal["none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"]
@@ -453,6 +455,11 @@ class Style:
     ruby_color: str = "#FF5A6F"
     ruby_gap_px: int = 0
     """NicokaraMaker3 ``LyricsAndRubyInterval`` default: 0 px."""
+    ruby_interval_px: int = 0
+    """NicokaraMaker3 ``RubyInterval``：注音字符间最小间距，可为负。"""
+    ruby_alignment: RubyAlignment = "auto"
+    """注音相对正文范围的排布（N3 ``RubyAlignment``）：``auto`` = 正文或注音全为
+    英数时居中、否则均等分布；``center`` = 整组居中；``equal_space`` = 均等分布。"""
     ruby_stroke_width_px: Optional[int] = 10
     ruby_stroke2_width_px: Optional[int] = 3
     ruby_decoration_kind: Optional[DecorationKind] = None
@@ -712,6 +719,7 @@ def style_from_dict(payload: object) -> Style:
             "shadow_offset_y",
             "ruby_font_size_px",
             "ruby_gap_px",
+            "ruby_interval_px",
             "ruby_stroke_width_px",
             "ruby_stroke2_width_px",
             "ruby_glow_radius_px",
@@ -802,6 +810,8 @@ def style_from_dict(payload: object) -> Style:
             changes[key] = value if value in {"shadow", "glow"} else defaults.decoration_kind
         elif key == "ruby_decoration_kind":
             changes[key] = value if value in {"shadow", "glow"} else None
+        elif key == "ruby_alignment":
+            changes[key] = value if value in RUBY_ALIGNMENTS else defaults.ruby_alignment
         elif key == "entry_anim":
             changes[key] = (
                 value

@@ -3610,3 +3610,169 @@ def test_vertical_layer_populates_and_clears_cache(qapp, monkeypatch):
     assert len(_TEXT_RUN_LAYER_CACHE) > 0
     clear_before_layer_cache()
     assert len(_TEXT_RUN_LAYER_CACHE) == 0
+
+
+# ---------------------------------------------------------------------------
+# P1：N3 布局对齐（负值间距 / ルビ間隔 / ルビ配置 / 余白警告）
+# ---------------------------------------------------------------------------
+
+from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
+    LayoutMarginWarning,
+    _build_latin_font,
+    _char_layout_width,
+    _line_text_width,
+    _make_font_for,
+    _resolve_ruby_alignment,
+    check_layout_margins,
+)
+from krok_helper.subtitle_render.models import style_from_dict, style_to_dict  # noqa: E402
+
+
+def test_negative_line_gap_overlaps_dual_line_boxes(qapp):
+    track = TimingTrack()
+    zero = _resolve_display_baselines(1080, track, [], Style(line_gap_px=0))
+    negative = _resolve_display_baselines(1080, track, [], Style(line_gap_px=-40))
+
+    # bottom 锚定：下行基线不动，负行距让上行向下靠近 40 px。
+    assert negative[1] == zero[1]
+    assert negative[0] == zero[0] + 40
+
+
+def test_negative_ruby_gap_moves_ruby_down_into_main_text(qapp):
+    base = Style(ruby_gap_px=0)
+    biting = Style(ruby_gap_px=-10)
+    metrics = QFontMetrics(_build_font(base))
+    ruby_metrics = QFontMetrics(_build_ruby_font(base))
+
+    zero_baseline = _ruby_baseline_y(300, metrics.ascent(), ruby_metrics, base)
+    biting_baseline = _ruby_baseline_y(300, metrics.ascent(), ruby_metrics, biting)
+
+    assert biting_baseline == zero_baseline + 10
+
+
+def test_ruby_interval_enforces_min_gap_between_units(qapp):
+    tight_style = Style(
+        ruby_font_size_px=36, ruby_alignment="equal_space", ruby_interval_px=0
+    )
+    spaced_style = Style(
+        ruby_font_size_px=36, ruby_alignment="equal_space", ruby_interval_px=12
+    )
+    metrics = QFontMetrics(_build_ruby_font(tight_style))
+    units = ["か", "な", "た"]
+
+    # 目标宽度远小于自然宽度 → equal_space 的摊分间距为负，被 interval 抬到下限。
+    tight = _ruby_layout_units(units, metrics, 100, 50, style=tight_style)
+    spaced = _ruby_layout_units(units, metrics, 100, 50, style=spaced_style)
+
+    tight_step = tight[1][1] - tight[0][1]
+    spaced_step = spaced[1][1] - spaced[0][1]
+    assert spaced_step == pytest.approx(tight_step + 12)
+
+
+def test_ruby_alignment_center_keeps_natural_spacing_in_wide_target(qapp):
+    center_style = Style(ruby_font_size_px=36, ruby_alignment="center")
+    equal_style = Style(ruby_font_size_px=36, ruby_alignment="equal_space")
+    metrics = QFontMetrics(_build_ruby_font(center_style))
+    units = ["か", "な", "た"]
+    target = 400
+
+    center = _ruby_layout_units(units, metrics, 100, target, style=center_style)
+    equal = _ruby_layout_units(units, metrics, 100, target, style=equal_style)
+
+    center_step = center[1][1] - center[0][1]
+    equal_step = equal[1][1] - equal[0][1]
+    assert center_step < equal_step
+
+    # center：整组围绕正文范围中心（布局盒居中；墨水中点受字形左偏移影响有几 px 漂移）。
+    group_mid = (center[0][1] + center[-1][1] + center[-1][2]) / 2
+    assert group_mid == pytest.approx(100 + target / 2, abs=8)
+
+
+def test_ruby_alignment_auto_matches_n3_rules(qapp):
+    style = Style()  # 默认 auto
+    assert _resolve_ruby_alignment(style, "星", "ほし") == "equal_space"
+    assert _resolve_ruby_alignment(style, "STAR", "すたー") == "center"
+    assert _resolve_ruby_alignment(style, "星", "hoshi") == "center"
+    assert (
+        _resolve_ruby_alignment(Style(ruby_alignment="center"), "星", "ほし")
+        == "center"
+    )
+    assert (
+        _resolve_ruby_alignment(Style(ruby_alignment="equal_space"), "STAR", "SUTA")
+        == "equal_space"
+    )
+
+
+def test_style_dict_roundtrip_keeps_n3_layout_fields():
+    style = Style(
+        line_gap_px=-30,
+        letter_spacing_px=-8,
+        ruby_gap_px=-4,
+        ruby_interval_px=-6,
+        ruby_alignment="center",
+    )
+    restored = style_from_dict(style_to_dict(style))
+
+    assert restored.line_gap_px == -30
+    assert restored.letter_spacing_px == -8
+    assert restored.ruby_gap_px == -4
+    assert restored.ruby_interval_px == -6
+    assert restored.ruby_alignment == "center"
+    # 非法值回退默认
+    assert style_from_dict({"ruby_alignment": "bogus"}).ruby_alignment == "auto"
+
+
+def _margin_track(text: str) -> TimingTrack:
+    chars = [TimingChar(text=ch, start_ms=index * 500) for index, ch in enumerate(text)]
+    return TimingTrack(lines=[TimingLine(chars=chars, end_ms=len(text) * 500)])
+
+
+def _measured_line_width(style: Style, track: TimingTrack) -> int:
+    line = track.lines[0]
+    font = _build_font(style)
+    metrics = QFontMetrics(font)
+    latin_font = _build_latin_font(style)
+    font_for = _make_font_for(style, font, latin_font)
+    latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
+    widths = [
+        _char_layout_width(c.text, font, metrics, latin_metrics, font_for, style)
+        for c in line.chars
+    ]
+    return max(
+        int(round(_line_text_width(widths, style) + _visual_text_padding(style) * 2)), 1
+    )
+
+
+def test_check_layout_margins_flags_overflow(qapp):
+    track = _margin_track("あいうえおかきくけこ")
+    style = Style()
+    total_w = _measured_line_width(style, track)
+
+    warnings = check_layout_margins(track, style, total_w - 10)
+
+    assert warnings
+    assert warnings[0].level == "overflow"
+    assert warnings[0].line_index == 0
+
+
+def test_check_layout_margins_flags_margin_intrusion(qapp):
+    track = _margin_track("あいうえおかきくけこ")
+    style = Style()
+    total_w = _measured_line_width(style, track)
+
+    # 画面比行宽 60 px：行放得下但左右余白（默认 50）无法同时确保。
+    warnings = check_layout_margins(track, style, total_w + 60)
+
+    assert warnings
+    assert all(w.level == "margin" for w in warnings)
+
+
+def test_check_layout_margins_ok_when_screen_is_wide(qapp):
+    track = _margin_track("あい")
+    warnings = check_layout_margins(track, Style(), 1920)
+    assert warnings == []
+
+
+def test_check_layout_margins_skips_vertical_mode(qapp):
+    track = _margin_track("あいうえおかきくけこ")
+    assert check_layout_margins(track, Style(vertical=True), 200) == []
