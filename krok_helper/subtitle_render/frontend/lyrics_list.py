@@ -197,29 +197,11 @@ class LyricsPanel(DropPanel):
         role_name = str(item.data(Qt.ItemDataRole.UserRole) or "")
         self.roleChanged.emit(item.row(), role_name)
 
-    def _panel_qss(self) -> str:
-        p = palette()
-        if self._drag_state == "accept":
-            border_color = p.accent_primary
-            border_width = 2
-            border_style = "dashed"
-        elif self._drag_state == "reject":
-            border_color = "#E53935"
-            border_width = 2
-            border_style = "dashed"
-        elif not self._populated:
-            border_color = p.card_border
-            border_width = 1
-            border_style = "dashed"
-        else:
-            border_color = "transparent"
-            border_width = 0
-            border_style = "solid"
-        return (
-            f"#LyricsPanel {{ background-color: {p.card_bg}; "
-            f"border: {border_width}px {border_style} {border_color}; "
-            f"border-radius: 0; }}"
-        )
+    def _panel_style_spec(self) -> tuple[str, int, str, str, int]:
+        # 载入后表格铺满面板：去边框、去圆角；空态 / 拖拽态沿用基类
+        if self._populated and self._drag_state == "idle":
+            return "transparent", 0, "solid", palette().card_bg, 0
+        return super()._panel_style_spec()
 
 
 def _dominant_role(line) -> str:

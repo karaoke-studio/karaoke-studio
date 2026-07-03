@@ -52,6 +52,7 @@ class DropPanel(QFrame):
         self._extensions = {ext.lower() for ext in extensions}
         self._drag_state: str = "idle"  # idle / accept / reject
         self._populated: bool = False
+        self._hovered: bool = False
 
         self.setObjectName("DropPanel")
         self.setAcceptDrops(True)
@@ -71,12 +72,24 @@ class DropPanel(QFrame):
         empty_layout.addStretch(1)
 
         if empty_icon:
+            # 圆形浅色徽章托住图标，空态视觉重心更聚焦
             self._icon_label = QLabel(empty_icon, self._empty_page)
             self._icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            icon_font = QFont("Segoe UI Emoji", 28)
+            self._icon_label.setFixedSize(72, 72)
+            icon_font = QFont("Segoe UI Emoji", 26)
             self._icon_label.setFont(icon_font)
             self._icon_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-            empty_layout.addWidget(self._icon_label)
+            themed(
+                self._icon_label,
+                lambda: (
+                    f"background: {palette().preview_selection_bg}; "
+                    "border-radius: 36px;"
+                ),
+            )
+            empty_layout.addWidget(
+                self._icon_label, 0, Qt.AlignmentFlag.AlignHCenter
+            )
+            empty_layout.addSpacing(4)
         else:
             self._icon_label = None  # type: ignore[assignment]
 
@@ -131,6 +144,13 @@ class DropPanel(QFrame):
         """切换到内容页 / 空态页。"""
         self._populated = populated
         self._stack.setCurrentIndex(1 if populated else 0)
+        # 空态整块可点击浏览 → 手型；载入内容后恢复箭头，避免误导
+        self.setCursor(
+            Qt.CursorShape.ArrowCursor
+            if populated
+            else Qt.CursorShape.PointingHandCursor
+        )
+        self._apply_panel_style()
 
     def is_populated(self) -> bool:
         return self._populated
@@ -170,6 +190,18 @@ class DropPanel(QFrame):
         self._apply_panel_style()
         super().dragLeaveEvent(event)
 
+    def enterEvent(self, event):  # noqa: N802
+        self._hovered = True
+        if not self._populated:
+            self._apply_panel_style()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):  # noqa: N802
+        self._hovered = False
+        if not self._populated:
+            self._apply_panel_style()
+        super().leaveEvent(event)
+
     def dropEvent(self, event):  # noqa: N802
         urls = event.mimeData().urls()
         self._drag_state = "idle"
@@ -189,26 +221,23 @@ class DropPanel(QFrame):
     def _apply_panel_style(self) -> None:
         self.setStyleSheet(self._panel_qss())
 
-    def _panel_qss(self) -> str:
+    def _panel_style_spec(self) -> tuple[str, int, str, str, int]:
+        """返回 (边框色, 边框宽, 边框线型, 背景色, 圆角)。子类可按状态覆写。"""
         p = palette()
         if self._drag_state == "accept":
-            border_color = p.accent_primary
-            border_width = 2
-            border_style = "dashed"
-        elif self._drag_state == "reject":
-            border_color = "#E53935"
-            border_width = 2
-            border_style = "dashed"
-        elif not self._populated:
-            border_color = p.card_border
-            border_width = 1
-            border_style = "dashed"
-        else:
-            border_color = p.card_border
-            border_width = 1
-            border_style = "solid"
+            return p.accent_primary, 2, "dashed", p.table_row_hover, 8
+        if self._drag_state == "reject":
+            return "#E53935", 2, "dashed", p.card_bg, 8
+        if not self._populated:
+            if self._hovered:
+                return p.input_border_focus, 1, "dashed", p.input_hover_bg, 8
+            return p.input_border, 1, "dashed", p.card_bg, 8
+        return p.card_border, 1, "solid", p.card_bg, 8
+
+    def _panel_qss(self) -> str:
+        border_color, border_width, border_style, bg, radius = self._panel_style_spec()
         return (
-            f"#DropPanel {{ background-color: {p.card_bg}; "
+            f"#{self.objectName()} {{ background-color: {bg}; "
             f"border: {border_width}px {border_style} {border_color}; "
-            f"border-radius: 8px; }}"
+            f"border-radius: {radius}px; }}"
         )

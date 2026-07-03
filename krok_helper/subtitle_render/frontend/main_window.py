@@ -573,6 +573,7 @@ class SubtitleRenderWindow(QWidget):
 
     @staticmethod
     def _nav_qss() -> str:
+        # 胶囊形分段按钮：选中态带浅色底，比纯文字变色更醒目
         p = palette()
         return (
             f"""
@@ -580,8 +581,8 @@ class SubtitleRenderWindow(QWidget):
                 background: transparent;
                 color: {p.text_secondary};
                 border: none;
-                border-radius: 6px;
-                padding: 4px 14px;
+                border-radius: 16px;
+                padding: 0 18px;
                 font-family: "Microsoft YaHei UI";
                 font-size: 10pt;
             }}
@@ -591,6 +592,7 @@ class SubtitleRenderWindow(QWidget):
             }}
             QPushButton:checked {{
                 color: {p.accent_primary};
+                background: {p.preview_selection_bg};
                 font-weight: 600;
             }}
             """
