@@ -8,6 +8,7 @@ from krok_helper.subtitle_render.engine.timeline import (
     compute_display_lines,
     find_active_line,
     find_upcoming_line,
+    paragraph_last_line_flags,
     track_duration_ms,
     visible_display_lines,
 )
@@ -392,3 +393,77 @@ def test_sections_disabled_keep_legacy_windows():
     )
     sectioned_off = _compute(track, sync_ending=False, section_ending_mode="hold")
     assert [d.display_end_ms for d in legacy] == [d.display_end_ms for d in sectioned_off]
+
+
+# ---------------------------------------------------------------------------
+# paragraph_last_line_flags（逆向 NKM3 EmptyLineBreaker + SetParagraphBreaks）
+# ---------------------------------------------------------------------------
+
+
+def test_paragraph_last_blank_lines_split_pages():
+    # 空行 = 页边界；每页最后一行标 True
+    track = _track(
+        _make_line([("a", 1000)], end_ms=2000),
+        _make_line([("b", 2100)], end_ms=3000),
+        TimingLine(is_blank=True),
+        _make_line([("c", 10000)], end_ms=11000),
+    )
+    assert paragraph_last_line_flags(track, threshold_ms=3100) == [
+        False,
+        True,
+        False,
+        True,
+    ]
+
+
+def test_paragraph_last_timing_gap_splits_page():
+    # 页内演唱空隙 >= 阈值 → 开新段落；间隔小于阈值不分
+    track = _track(
+        _make_line([("a", 1000)], end_ms=2000),
+        _make_line([("b", 2100)], end_ms=3000),
+        # 3000 → 10000 空隙 7000 >= 3100 → b 是段落末行
+        _make_line([("c", 10000)], end_ms=11000),
+        _make_line([("d", 11100)], end_ms=12000),
+    )
+    assert paragraph_last_line_flags(track, threshold_ms=3100) == [
+        False,
+        True,
+        False,
+        True,
+    ]
+
+
+def test_paragraph_last_gap_below_threshold_keeps_paragraph():
+    track = _track(
+        _make_line([("a", 1000)], end_ms=2000),
+        _make_line([("b", 2100)], end_ms=3000),
+        _make_line([("c", 5000)], end_ms=6000),  # 空隙 2000 < 3100
+    )
+    assert paragraph_last_line_flags(track, threshold_ms=3100) == [
+        False,
+        False,
+        True,
+    ]
+
+
+def test_paragraph_last_single_line_page_is_last():
+    track = _track(
+        _make_line([("a", 1000)], end_ms=2000),
+        TimingLine(is_blank=True),
+    )
+    assert paragraph_last_line_flags(track, threshold_ms=3100) == [True, False]
+
+
+def test_paragraph_last_gap_measured_against_max_end_so_far():
+    # NKM3 用「段内已扫描行的最晚结束」对比「后续行的最早开始」——
+    # 叠唱场景第一行拖得比第二行长时，以第一行的结束为准
+    track = _track(
+        _make_line([("a", 1000)], end_ms=9000),  # 长行，结束晚
+        _make_line([("b", 2000)], end_ms=3000),  # 与 a 重叠
+        _make_line([("c", 10000)], end_ms=11000),  # 距 max(9000,3000)=9000 仅 1000
+    )
+    assert paragraph_last_line_flags(track, threshold_ms=3100) == [
+        False,
+        False,
+        True,
+    ]

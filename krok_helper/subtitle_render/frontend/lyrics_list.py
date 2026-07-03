@@ -23,13 +23,16 @@ from PyQt6.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
+    QStyle,
     QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTableWidgetItem,
     QWidget,
 )
 from qfluentwidgets import ComboBox as FluentComboBox
 from qfluentwidgets import TableWidget as FluentTableWidget
 
+from krok_helper.subtitle_render.engine.timeline import paragraph_last_line_flags
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
 from krok_helper.subtitle_render.models import Style, TimingTrack
 from krok_helper.subtitle_render.frontend.theme import palette, themed
@@ -96,11 +99,20 @@ class _GroupBackgroundDelegate(QStyledItemDelegate):
         self._group_bg_provider = provider
 
     def paint(self, painter, option, index):  # type: ignore[override]
+        # 选中态自己画：qfluentwidgets 表格 QSS 的 ::item:selected 会把文字刷成
+        # 白色，压在浅底上完全看不清。剥掉 State_Selected（QSS 选中规则不再命中，
+        # 文字保持正常深色），底色换成主题浅粉。
+        opt = QStyleOptionViewItem(option)
+        selected = bool(opt.state & QStyle.StateFlag.State_Selected)
+        if selected:
+            opt.state &= ~QStyle.StateFlag.State_Selected
         if self._group_bg_provider is not None:
             color = self._group_bg_provider(index.row())
             if color is not None:
-                painter.fillRect(option.rect, color)
-        super().paint(painter, option, index)
+                painter.fillRect(opt.rect, color)
+        if selected:
+            painter.fillRect(opt.rect, QColor(palette().preview_selection_bg))
+        super().paint(painter, opt, index)
 
 
 class _ReadOnlyDelegate(_GroupBackgroundDelegate):
@@ -178,6 +190,8 @@ class LyricsPanel(DropPanel):
         self._track: Optional[TimingTrack] = None
         # 每行元数据：(是否空行, lane 0/1, 双行组号)；空行 lane / 组号取 -1
         self._row_meta: list[tuple[bool, int, int]] = []
+        # 段落最后一行标记（与渲染端 NKM3 式段落划分一致），随 style 阈值重算
+        self._paragraph_last: list[bool] = []
 
         # ---- qfluentwidgets TableWidget ----
         self._table = FluentTableWidget(self)
@@ -328,10 +342,22 @@ class LyricsPanel(DropPanel):
         return color
 
     def _refresh_presentation(self, rows: Optional[list[int]] = None) -> None:
-        """按当前 Style 刷新：轨标 / 内容对齐 / 角色色点。"""
+        """按当前 Style 刷新：轨标 / 内容对齐 / 角色色点 / 段落末行居中。"""
         style = self._style
         dual = bool(style.dual_line_layout)
         lane_color = QColor(palette().text_hint)
+
+        if self._track is not None:
+            threshold = (
+                max(style.line_lead_in_ms, 0)
+                + max(style.line_tail_ms, 0)
+                + max(style.line_lane_gap_ms, 0)
+            )
+            self._paragraph_last = paragraph_last_line_flags(
+                self._track, threshold_ms=threshold
+            )
+        else:
+            self._paragraph_last = []
 
         self._table.setColumnHidden(COL_LANE, not dual)
 
@@ -355,8 +381,11 @@ class LyricsPanel(DropPanel):
                 lane_font = lane_item.font()
                 lane_font.setPointSizeF(8.0)
                 lane_item.setFont(lane_font)
+                paragraph_last = (
+                    row < len(self._paragraph_last) and self._paragraph_last[row]
+                )
                 content_item.setTextAlignment(
-                    self._content_alignment(style, lane, dual)
+                    self._content_alignment(style, lane, dual, paragraph_last)
                 )
 
                 role = str(role_item.data(Qt.ItemDataRole.UserRole) or "")
@@ -367,7 +396,9 @@ class LyricsPanel(DropPanel):
         self._table.viewport().update()
 
     @staticmethod
-    def _content_alignment(style: Style, lane: int, dual: bool) -> Qt.AlignmentFlag:
+    def _content_alignment(
+        style: Style, lane: int, dual: bool, paragraph_last: bool = False
+    ) -> Qt.AlignmentFlag:
         vertical = Qt.AlignmentFlag.AlignVCenter
         if not dual:
             return Qt.AlignmentFlag.AlignLeft | vertical
@@ -382,7 +413,9 @@ class LyricsPanel(DropPanel):
                 "right": Qt.AlignmentFlag.AlignRight,
             }
             return mapping.get(align, Qt.AlignmentFlag.AlignLeft) | vertical
-        # asymmetric（默认）：上左下右
+        # asymmetric（默认）：上左下右；段落最后一行居中（与渲染端一致）
+        if paragraph_last:
+            return Qt.AlignmentFlag.AlignHCenter | vertical
         if lane == 0:
             return Qt.AlignmentFlag.AlignLeft | vertical
         return Qt.AlignmentFlag.AlignRight | vertical

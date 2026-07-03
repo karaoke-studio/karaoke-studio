@@ -325,6 +325,53 @@ def _is_last_in_lane_in_section(
     return True
 
 
+def paragraph_last_line_flags(
+    track: TimingTrack,
+    *,
+    threshold_ms: int,
+) -> list[bool]:
+    """标记每行是否是"段落"的最后一行（与 ``track.lines`` 等长）。
+
+    段落划分逆向自 NicoKaraMaker3（EmptyLineBreaker + LineBreaker.SetParagraphBreaks）：
+
+    1. **页**：歌词文件的空行是页边界（NKM3 在空行处插 PageBreak）；
+    2. **段落**：页内从段落起点扫描，若「后续行的最早演唱开始」与「段落内已扫描行的
+       最晚演唱结束」之差 ≥ ``threshold_ms``，则在此处开新段落
+       （NKM3 阈值 = PreTime2 + PostTime2 + IntervalTime2，默认 1800+1000+300）；
+    3. 每个段落（含单行段落）的最后一行标 True。空行恒为 False。
+
+    段落最后一行在渲染时居中显示（对标 NKM3「下寄せ3行」布局的中/右行为的简化）。
+    """
+    flags = [False] * len(track.lines)
+    threshold = max(int(threshold_ms), 0)
+
+    def close_page(page: list[int]) -> None:
+        if not page:
+            return
+        start = 0  # 当前段落在 page 内的起点
+        for i in range(1, len(page)):
+            prev_end = max(
+                _line_end_ms(track.lines[page[j]]) for j in range(start, i)
+            )
+            next_begin = min(
+                _line_start_ms(track.lines[page[j]]) for j in range(i, len(page))
+            )
+            if next_begin - prev_end >= threshold:
+                flags[page[i - 1]] = True
+                start = i
+        flags[page[-1]] = True
+
+    page: list[int] = []
+    for index, line in enumerate(track.lines):
+        if line.is_blank or not line.chars:
+            close_page(page)
+            page = []
+        else:
+            page.append(index)
+    close_page(page)
+    return flags
+
+
 def find_upcoming_line(track: TimingTrack, t_ms: int) -> Optional[TimingLine]:
     """返回 ``t_ms`` 之后即将开始的最近一行。"""
     candidate: Optional[TimingLine] = None

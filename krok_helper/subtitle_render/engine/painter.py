@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import math
 import os
+import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from threading import Lock
@@ -319,6 +320,7 @@ from krok_helper.subtitle_render.engine.timeline import (
     DisplayLine,
     char_fill_ratio,
     compute_char_intervals,
+    paragraph_last_line_flags,
     track_duration_ms,
     visible_display_lines,
 )
@@ -1203,6 +1205,7 @@ def _resolve_sayatoo_line_layouts(
         text_w = _line_text_width(char_widths, line_style)
         visual_pad = _visual_text_padding(line_style)
         text_line_w = max(int(round(text_w + visual_pad * 2)), 1)
+        center_line = _line_center_override(track, line, line_style)
         signal_x: float | None = None
         if (
             signal_metrics is not None
@@ -1225,12 +1228,19 @@ def _resolve_sayatoo_line_layouts(
             union_left = min(-float(visual_pad), natural_left)
             union_right = max(float(text_w + visual_pad), natural_right)
             union_w = max(int(round(union_right - union_left)), 1)
-            union_x = _resolve_line_x(img_w, union_w, line_style, display_line.lane)
+            union_x = _resolve_line_x(
+                img_w, union_w, line_style, display_line.lane,
+                center_override=center_line,
+            )
             text_x = float(union_x) - union_left
             signal_x = text_x + draw_left
         else:
             text_x = float(
-                _resolve_line_x(img_w, text_line_w, line_style, display_line.lane) + visual_pad
+                _resolve_line_x(
+                    img_w, text_line_w, line_style, display_line.lane,
+                    center_override=center_line,
+                )
+                + visual_pad
             )
         baseline_y = baselines.get(display_line.lane)
         if baseline_y is None:
@@ -3535,7 +3545,11 @@ def _layout_plain_line(
     x0 = (
         line_x
         if line_x is not None
-        else _resolve_line_x(img_w, total_w + visual_pad * 2, style, lane) + visual_pad
+        else _resolve_line_x(
+            img_w, total_w + visual_pad * 2, style, lane,
+            center_override=_line_center_override(track, line, style),
+        )
+        + visual_pad
     )
     y = (
         baseline_y
@@ -3938,7 +3952,10 @@ def _layout_role_line(
     x0 = (
         line_x
         if line_x is not None
-        else _resolve_line_x(img_w, measure_layout.total_width + visual_pad * 2, style, lane)
+        else _resolve_line_x(
+            img_w, measure_layout.total_width + visual_pad * 2, style, lane,
+            center_override=_line_center_override(track, line, style),
+        )
         + visual_pad
     )
     y = (
@@ -6798,12 +6815,58 @@ def _valid_color(value: str, fallback: str) -> QColor:
     return fallback_color if fallback_color.isValid() else QColor("#FF5A6F")
 
 
+# 段落最后一行缓存：id(track) → (track 弱引用, 阈值, 段落末行 line id 集合)。
+# TimingTrack 是 eq=True 的 dataclass（不可哈希），不能直接进 WeakKeyDictionary；
+# 用 id 作键，取值时校验弱引用仍指向同一对象，防止 id 复用串味。
+_PARAGRAPH_LAST_CACHE: dict[
+    int, tuple["weakref.ref[TimingTrack]", int, frozenset[int]]
+] = {}
+_PARAGRAPH_LAST_CACHE_MAX = 8
+
+
+def _paragraph_center_threshold(style: Style) -> int:
+    """NKM3 段落划分阈值 = PreTime2 + PostTime2 + IntervalTime2；
+    本模块对应字段（默认 1800+1000+300 与 NKM3 相同）。"""
+    return (
+        max(style.line_lead_in_ms, 0)
+        + max(style.line_tail_ms, 0)
+        + max(style.line_lane_gap_ms, 0)
+    )
+
+
+def _line_center_override(track: TimingTrack, line: TimingLine, style: Style) -> bool:
+    """段落最后一行居中（逆向 NKM3 EmptyLineBreaker/SetParagraphBreaks）。
+
+    仅在默认「上左下右」双行布局下生效；center 布局本就居中，per_row 是
+    用户手动逐行控制，不覆盖。
+    """
+    if not style.dual_line_layout or style.line_horizontal_layout != "asymmetric":
+        return False
+    threshold = _paragraph_center_threshold(style)
+    key = id(track)
+    cached = _PARAGRAPH_LAST_CACHE.get(key)
+    if cached is not None:
+        track_ref, cached_threshold, ids = cached
+        if track_ref() is track and cached_threshold == threshold:
+            return id(line) in ids
+    flags = paragraph_last_line_flags(track, threshold_ms=threshold)
+    ids = frozenset(id(item) for item, flag in zip(track.lines, flags) if flag)
+    if len(_PARAGRAPH_LAST_CACHE) >= _PARAGRAPH_LAST_CACHE_MAX:
+        _PARAGRAPH_LAST_CACHE.clear()
+    _PARAGRAPH_LAST_CACHE[key] = (weakref.ref(track), threshold, ids)
+    return id(line) in ids
+
+
 def _resolve_line_x(
     img_w: int,
     total_w: int,
     style: Style,
     lane: int | None,
+    *,
+    center_override: bool = False,
 ) -> int:
+    if center_override:
+        return (img_w - total_w) // 2
     if style.line_horizontal_layout == "per_row":
         align, offset_x, _ = _row_layout_params(style, lane)
         return _aligned_x0(img_w, total_w, align) + offset_x
