@@ -3895,3 +3895,113 @@ def test_style_dict_roundtrip_keeps_smart_horizontal():
     restored = style_from_dict(style_to_dict(Style(smart_horizontal="center_position")))
     assert restored.smart_horizontal == "center_position"
     assert style_from_dict({"smart_horizontal": "bogus"}).smart_horizontal == "equal_margins"
+
+
+# ---------------------------------------------------------------------------
+# P3：任意行数布局列表（N3 行ごとの左右レイアウト）
+# ---------------------------------------------------------------------------
+
+from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
+    _lane_count,
+    _lane_alignment,
+)
+from krok_helper.subtitle_render.engine.timeline import compute_display_lines  # noqa: E402
+
+
+def test_lane_count_follows_line_alignments_length(qapp):
+    assert _lane_count(Style()) == 2
+    assert _lane_count(Style(line_alignments=["left", "center", "right"])) == 3
+    assert _lane_count(Style(dual_line_layout=False)) == 1
+
+
+def test_lane_alignment_maps_rows_and_clamps_overflow(qapp):
+    style = Style(line_alignments=["left", "center", "right"])
+    assert _lane_alignment(style, 0) == "left"
+    assert _lane_alignment(style, 1) == "center"
+    assert _lane_alignment(style, 2) == "right"
+    assert _lane_alignment(style, 5) == "right"  # 越界沿用端项
+
+
+def test_timeline_rotates_three_lanes(qapp):
+    track = _continuous_track(["あい", "うえ", "おか", "きく", "けこ", "さし"])
+    display = compute_display_lines(
+        track,
+        lead_in_ms=0,
+        tail_ms=0,
+        lane_gap_ms=0,
+        max_hold_ms=0,
+        continuity_snap_ms=0,
+        lane_count=3,
+    )
+    assert [item.lane for item in display] == [0, 1, 2, 0, 1, 2]
+
+
+def test_three_lane_baselines_stack_from_bottom(qapp):
+    style = Style(line_alignments=["left", "center", "right"])
+    track = TimingTrack()
+    baselines = _resolve_display_baselines(1080, track, [], style)
+
+    assert set(baselines) == {0, 1, 2}
+    dual = _resolve_display_baselines(1080, track, [], Style())
+    # bottom 锚定：最下行（末 lane）位置一致，其余向上等距堆叠
+    assert baselines[2] == dual[1]
+    step = baselines[2] - baselines[1]
+    assert step == baselines[1] - baselines[0]
+    assert step > 0
+
+
+def test_resolve_line_x_uses_alignment_list_and_single_margin(qapp):
+    style = Style(
+        line_alignments=["left", "center", "right"],
+        horizontal_margin_px=64,
+        smart_horizontal="none",
+    )
+    img_w, total_w = 1920, 400
+    assert _resolve_line_x(img_w, total_w, style, 0) == 64
+    assert _resolve_line_x(img_w, total_w, style, 1) == (img_w - total_w) // 2
+    assert _resolve_line_x(img_w, total_w, style, 2) == img_w - 64 - total_w
+
+
+def test_smart_equal_margins_three_lane_page_uses_max_widths(qapp):
+    texts = ["あい", "うえお", "かき", "くけ", "こさ", "しす"]
+    track = _continuous_track(texts)
+    style = Style(line_alignments=["left", "center", "right"])
+    img_w = 1920
+    line0, line1, line2 = track.lines[0], track.lines[1], track.lines[2]
+    w0 = _line_total_width(line0, style)
+    w1 = _line_total_width(line1, style)
+    w2 = _line_total_width(line2, style)
+    slack = img_w - 50 * 2 - w0 - w1 - w2 + style.font_size_px
+    assert slack > 0
+
+    x0 = _resolve_line_x_smart(img_w, w0, track, line0, style, 0)
+    x1 = _resolve_line_x_smart(img_w, w1, track, line1, style, 1)
+    x2 = _resolve_line_x_smart(img_w, w2, track, line2, style, 2)
+
+    assert x0 == 50 + slack // 2  # Left 行右移
+    assert x1 == (img_w - w1) // 2  # Center 行不动
+    assert x2 == img_w - 50 - w2 - slack // 2  # Right 行左移
+
+
+def test_style_dict_roundtrip_keeps_line_alignments_and_margin():
+    style = Style(
+        line_alignments=["center", "left", "right"],
+        horizontal_margin_px=72,
+    )
+    restored = style_from_dict(style_to_dict(style))
+    assert restored.line_alignments == ["center", "left", "right"]
+    assert restored.horizontal_margin_px == 72
+    # 非法项回退 left；空列表回退默认
+    assert style_from_dict({"line_alignments": ["left", "bogus"]}).line_alignments == [
+        "left",
+        "left",
+    ]
+    assert style_from_dict({"line_alignments": []}).line_alignments == ["left", "right"]
+
+
+def test_style_dict_migrates_legacy_margin_when_new_key_missing():
+    payload = style_to_dict(Style())
+    del payload["horizontal_margin_px"]
+    payload["upper_line_left_margin_px"] = 80
+    restored = style_from_dict(payload)
+    assert restored.horizontal_margin_px == 80

@@ -1795,7 +1795,7 @@ def _signal_lit_x(
     bounded inside the viewport.
     """
     offset_x = style.volume_offset_x if style.lit_style == "volume" else style.lit_offset_x
-    x = float(style.upper_line_left_margin_px + offset_x)
+    x = float(style.horizontal_margin_px + offset_x)
     if style.lit_style == "volume":
         x -= stroke_extent
     return max(0.0, min(x, float(max(img_w - group_width, 0))))
@@ -2203,6 +2203,7 @@ def _visible_lines_for_style(
             sync_ending=style.sync_ending,
             section_ending_mode=style.section_ending_mode,
             protect_ms=_effective_line_protect_ms(style),
+            lane_count=_lane_count(style),
         )
     display_line = _single_visible_display_line(track, t_ms, style)
     if display_line is None:
@@ -2528,25 +2529,25 @@ def _resolve_display_baselines(
     main_h, main_ascent, main_descent, ruby_extra = _fixed_line_geometry(style)
     gap = int(style.line_gap_px)
     margin = max(style.line_y_margin_px, 0)
+    lanes = _lane_count(style)
+    step = main_h + gap
 
     if style.line_y_position == "top":
-        upper_baseline = margin + ruby_extra + main_ascent
-        lower_baseline = upper_baseline + main_h + gap
+        first_baseline = margin + ruby_extra + main_ascent
     elif style.line_y_position == "center":
-        total_h = main_h * 2 + gap
-        upper_main_top = (img_h - total_h) // 2
-        upper_baseline = upper_main_top + main_ascent
-        lower_baseline = upper_baseline + main_h + gap
+        total_h = main_h * lanes + gap * (lanes - 1)
+        first_baseline = (img_h - total_h) // 2 + main_ascent
     else:
-        lower_baseline = img_h - margin - main_descent
-        upper_baseline = lower_baseline - main_h - gap
+        last_baseline = img_h - margin - main_descent
+        first_baseline = last_baseline - step * (lanes - 1)
+    baselines = {lane: first_baseline + step * lane for lane in range(lanes)}
     if style.line_horizontal_layout == "per_row":
-        upper_baseline += style.row1_offset_y
-        lower_baseline += style.row2_offset_y
-    return {
-        0: upper_baseline,
-        1: lower_baseline,
-    }
+        # per_row 是 Sayatoo 双行遗留：Y 偏移只定义了前两行。
+        if 0 in baselines:
+            baselines[0] += style.row1_offset_y
+        if 1 in baselines:
+            baselines[1] += style.row2_offset_y
+    return baselines
 
 
 # ---------------------------------------------------------------------------
@@ -2647,12 +2648,12 @@ def _resolve_vertical_columns(
     margin = max(style.line_y_margin_px, 0)
     gap = max(style.line_gap_px, 0)  # 竖排列距不允许负值（列重叠无意义）
     ruby_w = _vertical_ruby_allowance(track, style)
-    # 右列：列右侧留出 ruby 宽度（ruby 排在基字右边）。
+    # 右列：列右侧留出 ruby 宽度（ruby 排在基字右边）。列数随 lane 数扩展，
+    # lane k 在 lane k-1 左侧一列。
     right_center = img_w - margin - ruby_w - cell_w / 2
-    columns = {0: int(round(right_center))}
-    if style.dual_line_layout:
-        left_center = right_center - (cell_w + ruby_w + gap)
-        columns[1] = int(round(left_center))
+    columns: dict[int, int] = {}
+    for lane in range(_lane_count(style)):
+        columns[lane] = int(round(right_center - lane * (cell_w + ruby_w + gap)))
     return columns
 
 
@@ -6874,6 +6875,24 @@ def _line_center_override(track: TimingTrack, line: TimingLine, style: Style) ->
     return id(line) in ids
 
 
+def _lane_count(style: Style) -> int:
+    """多行显示的行数 = 每行对齐列表长度；单行模式恒为 1。"""
+    if not style.dual_line_layout:
+        return 1
+    return max(len(style.line_alignments), 1)
+
+
+def _lane_alignment(style: Style, lane: int | None) -> str:
+    """lane（0 = 最上行）对应的水平对齐。
+
+    显示行数恒等于 ``line_alignments`` 长度，因此 N3 的 Bottom「从下往上取列表
+    末尾」与正序索引等价；越界时沿用端项（对应 N3 溢出行为）。
+    """
+    alignments = style.line_alignments or ["left"]
+    index = 0 if lane is None else max(int(lane), 0)
+    return alignments[min(index, len(alignments) - 1)]
+
+
 def _resolve_line_x(
     img_w: int,
     total_w: int,
@@ -6889,10 +6908,14 @@ def _resolve_line_x(
         return _aligned_x0(img_w, total_w, align) + offset_x
     if style.line_horizontal_layout == "center":
         return (img_w - total_w) // 2
-    if style.dual_line_layout and lane == 0:
-        return max(style.upper_line_left_margin_px, 0)
-    if style.dual_line_layout and lane == 1:
-        return img_w - max(style.lower_line_right_margin_px, 0) - total_w
+    if style.dual_line_layout and lane is not None:
+        align = _lane_alignment(style, lane)
+        margin = max(style.horizontal_margin_px, 0)
+        if align == "left":
+            return margin
+        if align == "right":
+            return img_w - margin - total_w
+        return (img_w - total_w) // 2
     return (img_w - total_w) // 2
 
 
@@ -6929,17 +6952,24 @@ def _line_total_width(line: TimingLine, style: Style) -> int:
     )
 
 
-def _renderable_pair_partner(track: TimingTrack, line: TimingLine) -> TimingLine | None:
-    """N3「页」的近似：可渲染行按 (2k, 2k+1) 配对（与 lane 交替规则一致）。"""
-    render_lines = [
-        item for item in track.lines if not item.is_blank and item.chars
-    ]
+def _renderable_page_lines(
+    track: TimingTrack,
+    line: TimingLine,
+    lane_count: int,
+) -> list[tuple[TimingLine, int]] | None:
+    """N3「页」的近似：连续 ``lane_count`` 条可渲染行为一页（与 lane 分配一致）。
+
+    返回同页 ``(行, lane)`` 列表（含自身）；行不在 track 中时返回 ``None``。
+    """
+    render_lines = [item for item in track.lines if not item.is_blank and item.chars]
+    lanes = max(int(lane_count), 1)
     for index, item in enumerate(render_lines):
         if item is line:
-            partner_index = index + 1 if index % 2 == 0 else index - 1
-            if 0 <= partner_index < len(render_lines):
-                return render_lines[partner_index]
-            return None
+            page_start = (index // lanes) * lanes
+            return [
+                (render_lines[i], i - page_start)
+                for i in range(page_start, min(page_start + lanes, len(render_lines)))
+            ]
     return None
 
 
@@ -6955,45 +6985,64 @@ def _smart_horizontal_dx(
 ) -> int:
     """SmartHorizon 二次水平修正（逆向 N3 ``SetOneLineX``）。
 
-    仅作用于「上左下右」双行布局：``center_position`` 逐行判断短行是否
-    从画面中心附近开始/结束；``equal_margins`` 以页（相邻两行）为单位，
-    把多余空隙对半分给左右两行。Center（居中覆盖）行不修正。
+    仅作用于 ``asymmetric`` 多行布局：``center_position`` 逐行判断短行是否
+    从画面中心附近开始/结束；``equal_margins`` 以页为单位，页内同时存在
+    Left 与 Right 行且有空隙时，把空隙对半分给 Left/Right 行。Center 行
+    （含被居中覆盖的行）不修正。
     """
     mode = style.smart_horizontal
     if mode == "none" or style.vertical or center_override:
         return 0
     if not style.dual_line_layout or style.line_horizontal_layout != "asymmetric":
         return 0
-    margin_left = max(style.upper_line_left_margin_px, 0)
-    margin_right = max(style.lower_line_right_margin_px, 0)
+    own_align = _lane_alignment(style, lane)
+    if own_align == "center":
+        return 0
+    margin = max(style.horizontal_margin_px, 0)
     font = max(style.font_size_px, 1)
     base_x = _resolve_line_x(img_w, total_w, style, lane, center_override=False)
-    partner = _renderable_pair_partner(track, line)
-    if partner is None:
+    page = _renderable_page_lines(track, line, _lane_count(style))
+    if page is not None and len(page) <= 1:
         # 单行页：SmartHorizon != None 时整行居中。
         return (img_w - total_w) // 2 - base_x
 
     if mode == "center_position":
         threshold = img_w // 2 + font // 2 - total_w
-        if lane == 1:
-            if threshold > margin_right:
-                return (img_w // 2 - font // 2) - base_x
+        if threshold <= margin:
             return 0
-        if threshold > margin_left:
-            return threshold - base_x
-        return 0
+        if own_align == "right":
+            return (img_w // 2 - font // 2) - base_x
+        return threshold - base_x
 
-    # equal_margins：页内必须同时存在 Left 与 Right 行（Center 行不算）。
-    partner_style = _style_for_line(style, partner)
-    if _line_center_override(track, partner, partner_style):
+    # equal_margins：按页内 Left / Center / Right 各自最大宽度计算空隙。
+    if page is None:
         return 0
-    partner_w = _line_total_width(partner, partner_style)
-    left_w = total_w if lane != 1 else partner_w
-    right_w = partner_w if lane != 1 else total_w
-    slack = img_w - margin_left - margin_right - left_w - right_w + font
+    max_widths = {"left": 0, "center": 0, "right": 0}
+    for page_line, page_lane in page:
+        page_style = _style_for_line(style, page_line)
+        if _line_center_override(track, page_line, page_style):
+            align = "center"
+        else:
+            align = _lane_alignment(page_style, page_lane)
+        width = (
+            total_w
+            if page_line is line
+            else _line_total_width(page_line, page_style)
+        )
+        max_widths[align] = max(max_widths[align], width)
+    if max_widths["left"] == 0 or max_widths["right"] == 0:
+        return 0
+    slack = (
+        img_w
+        - margin * 2
+        - max_widths["left"]
+        - max_widths["center"]
+        - max_widths["right"]
+        + font
+    )
     if slack <= 0:
         return 0
-    return -(slack // 2) if lane == 1 else slack // 2
+    return -(slack // 2) if own_align == "right" else slack // 2
 
 
 def _resolve_line_x_smart(
@@ -7051,6 +7100,7 @@ def check_layout_margins(
             sync_ending=style.sync_ending,
             section_ending_mode=style.section_ending_mode,
             protect_ms=_effective_line_protect_ms(style),
+            lane_count=_lane_count(style),
         )
     else:
         display_lines = [
@@ -7058,8 +7108,8 @@ def check_layout_margins(
             for line in track.lines
             if not line.is_blank and line.chars
         ]
-    margin_left = max(style.upper_line_left_margin_px, 0)
-    margin_right = max(style.lower_line_right_margin_px, 0)
+    margin_left = max(style.horizontal_margin_px, 0)
+    margin_right = max(style.horizontal_margin_px, 0)
     line_indices = {id(line): index for index, line in enumerate(track.lines)}
     warnings: list[LayoutMarginWarning] = []
     for display_line in display_lines:

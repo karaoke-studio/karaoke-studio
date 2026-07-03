@@ -1335,8 +1335,8 @@ class PropertyPanel(QWidget):
                 )
             )
             self._line_gap_spin.setValue(self._style.line_gap_px)
-            self._upper_left_spin.setValue(self._style.upper_line_left_margin_px)
-            self._lower_right_spin.setValue(self._style.lower_line_right_margin_px)
+            self._horizontal_margin_spin.setValue(self._style.horizontal_margin_px)
+            self._rebuild_line_alignment_rows()
             self._row1_align_combo.setCurrentIndex(
                 max(0, self._row1_align_combo.findData(self._style.row1_align))
             )
@@ -2616,10 +2616,12 @@ class PropertyPanel(QWidget):
     def _make_position_section(self) -> QFrame:
         section, layout = _section("位置")
 
-        self._dual_line_check = QCheckBox("双行显示", section)
-        self._dual_line_check.toggled.connect(
-            lambda checked: self._update_style(dual_line_layout=checked)
+        self._dual_line_check = QCheckBox("多行显示", section)
+        self._dual_line_check.setToolTip(
+            "开启后按「行布局」列表的行数轮换显示（默认上左下右双行）；"
+            "关闭则一次只显示一行。"
         )
+        self._dual_line_check.toggled.connect(self._on_dual_line_toggled)
         layout.addWidget(self._dual_line_check)
 
         self._rtl_check = QCheckBox("从右到左", section)
@@ -2675,17 +2677,15 @@ class PropertyPanel(QWidget):
         )
         row_layout.addWidget(_field("两行间距", self._line_gap_spin), 1, 1)
 
-        self._upper_left_spin = _spin(0, 800, suffix=" px")
-        self._upper_left_spin.valueChanged.connect(
-            lambda value: self._update_style(upper_line_left_margin_px=value)
+        self._horizontal_margin_spin = _spin(0, 800, suffix=" px")
+        self._horizontal_margin_spin.setToolTip(
+            "左右余白（N3 左右余白）：左对齐行的左缘贴此值，右对齐行的右缘贴"
+            "「画面宽 − 此值」。"
         )
-        row_layout.addWidget(_field("上行左边距", self._upper_left_spin), 2, 0)
-
-        self._lower_right_spin = _spin(0, 800, suffix=" px")
-        self._lower_right_spin.valueChanged.connect(
-            lambda value: self._update_style(lower_line_right_margin_px=value)
+        self._horizontal_margin_spin.valueChanged.connect(
+            self._on_horizontal_margin_changed
         )
-        row_layout.addWidget(_field("下行右边距", self._lower_right_spin), 2, 1)
+        row_layout.addWidget(_field("左右余白", self._horizontal_margin_spin), 2, 0)
 
         self._smart_horizontal_combo = _WheelFocusedComboBox(section)
         _compact_control(self._smart_horizontal_combo)
@@ -2705,14 +2705,119 @@ class PropertyPanel(QWidget):
                 smart_horizontal=self._smart_horizontal_combo.currentData()
             )
         )
-        row_layout.addWidget(_field("智能水平", self._smart_horizontal_combo), 3, 0)
+        row_layout.addWidget(_field("智能水平", self._smart_horizontal_combo), 2, 1)
 
         row_layout.setColumnStretch(0, 1)
         row_layout.setColumnStretch(1, 1)
         layout.addWidget(row)
 
+        layout.addWidget(self._make_line_alignments_box(section))
         layout.addWidget(self._make_per_row_box(section))
         return section
+
+    def _on_horizontal_margin_changed(self, value: int) -> None:
+        # 旧字段跟随镜像：native 后端（C++）仍读取上/下行边距两个键。
+        self._update_style(
+            horizontal_margin_px=value,
+            upper_line_left_margin_px=value,
+            lower_line_right_margin_px=value,
+        )
+
+    def _make_line_alignments_box(self, parent: QWidget) -> QWidget:
+        """行布局编辑器：每行一个左/中/右下拉（N3 行ごとの左右レイアウト）。"""
+        box = self._line_alignments_box = QWidget(parent)
+        root = QVBoxLayout(box)
+        root.setContentsMargins(0, 4, 0, 0)
+        root.setSpacing(6)
+        root.addWidget(_subgroup_label("行布局"))
+
+        self._line_alignment_rows_host = QWidget(box)
+        self._line_alignment_rows = QVBoxLayout(self._line_alignment_rows_host)
+        self._line_alignment_rows.setContentsMargins(0, 0, 0, 0)
+        self._line_alignment_rows.setSpacing(6)
+        root.addWidget(self._line_alignment_rows_host)
+
+        self._add_line_alignment_btn = QPushButton("添加一行", box)
+        self._add_line_alignment_btn.setMinimumHeight(30)
+        self._add_line_alignment_btn.setToolTip(
+            "底部锚定时在上方插入一行（复制第一行对齐），顶部/居中锚定时在下方"
+            "追加一行（复制最后一行对齐）——与 N3 一致。"
+        )
+        self._add_line_alignment_btn.clicked.connect(
+            lambda _checked=False: self._on_add_line_alignment()
+        )
+        root.addWidget(self._add_line_alignment_btn)
+        self._rebuild_line_alignment_rows()
+        return box
+
+    def _rebuild_line_alignment_rows(self) -> None:
+        while self._line_alignment_rows.count():
+            item = self._line_alignment_rows.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        alignments = list(self._style.line_alignments) or ["left"]
+        removable = len(alignments) > 1
+        for index, align in enumerate(alignments):
+            row = QWidget(self._line_alignment_rows_host)
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(6)
+            label = QLabel(f"第 {index + 1} 行", row)
+            themed(
+                label,
+                lambda: f"color: {palette().text_secondary}; font-size: 9pt;",
+            )
+            combo = _WheelFocusedComboBox(row)
+            _compact_control(combo)
+            for text, value in [("左", "left"), ("中", "center"), ("右", "right")]:
+                combo.addItem(text, value)
+            combo.setCurrentIndex(max(0, combo.findData(align)))
+            combo.currentIndexChanged.connect(
+                lambda _i, idx=index, c=combo: self._on_line_alignment_changed(idx, c)
+            )
+            remove_btn = QToolButton(row)
+            remove_btn.setText("✕")
+            remove_btn.setToolTip("删除此行")
+            remove_btn.setEnabled(removable)
+            remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            remove_btn.clicked.connect(
+                lambda _checked=False, idx=index: self._on_remove_line_alignment(idx)
+            )
+            row_layout.addWidget(label, 0)
+            row_layout.addWidget(combo, 1)
+            row_layout.addWidget(remove_btn, 0)
+            self._line_alignment_rows.addWidget(row)
+        self._add_line_alignment_btn.setEnabled(len(alignments) < 8)
+
+    def _on_line_alignment_changed(self, index: int, combo: QComboBox) -> None:
+        if self._syncing:
+            return
+        alignments = list(self._style.line_alignments) or ["left"]
+        value = combo.currentData()
+        if not (0 <= index < len(alignments)) or alignments[index] == value:
+            return
+        alignments[index] = value
+        self._update_style(line_alignments=alignments)
+
+    def _on_add_line_alignment(self) -> None:
+        alignments = list(self._style.line_alignments) or ["left"]
+        if len(alignments) >= 8:
+            return
+        if self._style.line_y_position == "bottom":
+            alignments.insert(0, alignments[0])
+        else:
+            alignments.append(alignments[-1])
+        self._update_style(line_alignments=alignments)
+        self._rebuild_line_alignment_rows()
+
+    def _on_remove_line_alignment(self, index: int) -> None:
+        alignments = list(self._style.line_alignments)
+        if len(alignments) <= 1 or not (0 <= index < len(alignments)):
+            return
+        del alignments[index]
+        self._update_style(line_alignments=alignments)
+        self._rebuild_line_alignment_rows()
 
     def _make_per_row_box(self, parent: QWidget) -> QWidget:
         """逐行独立布局控件（仅「水平布局 = 逐行独立」时启用）。"""
@@ -2758,6 +2863,10 @@ class PropertyPanel(QWidget):
         spin.valueChanged.connect(lambda value: self._update_style(**{field_name: value}))
         return spin
 
+    def _on_dual_line_toggled(self, checked: bool) -> None:
+        self._update_style(dual_line_layout=checked)
+        self._sync_per_row_enabled()
+
     def _on_horizontal_layout_changed(self) -> None:
         self._update_style(
             line_horizontal_layout=self._horizontal_layout_combo.currentData()
@@ -2768,6 +2877,11 @@ class PropertyPanel(QWidget):
         if not hasattr(self, "_per_row_box"):
             return
         self._per_row_box.setEnabled(self._style.line_horizontal_layout == "per_row")
+        if hasattr(self, "_line_alignments_box"):
+            self._line_alignments_box.setEnabled(
+                self._style.line_horizontal_layout == "asymmetric"
+                and self._style.dual_line_layout
+            )
 
     def _make_timing_section(self) -> QFrame:
         section, layout = _section("时间")

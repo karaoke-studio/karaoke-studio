@@ -84,17 +84,19 @@ def visible_display_lines(
     sync_ending: bool = False,
     section_ending_mode: str = "hold",
     protect_ms: int = 0,
+    lane_count: int = 2,
 ) -> list[DisplayLine]:
     """Return lines whose display window contains ``t_ms``.
 
     The display window intentionally differs from singing time:
 
-    - Lines alternate between lane 0 (upper) and lane 1 (lower).
+    - Lines rotate through lanes ``0..lane_count-1`` (lane 0 = top row).
     - Preferred display start is ``sing_start - lead_in_ms``.
     - When the same lane becomes available shortly before the preferred start,
       the next line snaps earlier to keep the lane visually continuous.
-    - Display end is the paired two-line singing end plus ``tail_ms``, capped by
-      the next same-lane display start minus ``lane_gap_ms``.
+    - Display end is the page (``lane_count`` consecutive lines) singing end
+      plus ``tail_ms``, capped by the next same-lane display start minus
+      ``lane_gap_ms``.
     """
     layouts = compute_display_lines(
         track,
@@ -108,6 +110,7 @@ def visible_display_lines(
         section_gap_ms=section_gap_ms,
         sync_ending=sync_ending,
         section_ending_mode=section_ending_mode,
+        lane_count=lane_count,
     )
     return [item for item in layouts if item.display_start_ms <= t_ms <= item.display_end_ms]
 
@@ -125,6 +128,7 @@ def compute_display_lines(
     sync_ending: bool = False,
     section_ending_mode: str = "hold",
     protect_ms: int = 0,
+    lane_count: int = 2,
 ) -> list[DisplayLine]:
     """Compute NicoKara-style display windows for all renderable lines.
 
@@ -153,12 +157,13 @@ def compute_display_lines(
     lanes: list[int] = []
     prev_lane_natural_end: dict[int, int] = {}
 
+    lanes_total = max(int(lane_count), 1)
     for index, line in enumerate(render_lines):
-        lane = index % 2
+        lane = index % lanes_total
         lanes.append(lane)
         preferred_start = max(line.chars[0].start_ms - lead, 0)
         if (
-            index % 2 == 1
+            lane != 0
             and starts
             and section_ids[index] == section_ids[index - 1]
         ):
@@ -166,7 +171,7 @@ def compute_display_lines(
                 preferred_start,
                 starts[index - 1] + pair_second_delay,
             )
-        pair_end = _pair_sing_end_ms(render_lines, index)
+        pair_end = _pair_sing_end_ms(render_lines, index, lanes_total)
         natural_end = pair_end + tail
         if max_hold > 0:
             natural_end = min(natural_end, preferred_start + max_hold)
@@ -515,7 +520,9 @@ def _line_start_ms(line: TimingLine) -> int:
     return 0
 
 
-def _pair_sing_end_ms(lines: list[TimingLine], index: int) -> int:
-    pair_start = (index // 2) * 2
-    pair = lines[pair_start : pair_start + 2]
-    return max(_line_end_ms(line) for line in pair)
+def _pair_sing_end_ms(lines: list[TimingLine], index: int, lane_count: int = 2) -> int:
+    """同页（连续 ``lane_count`` 行为一页）所有行的最晚演唱结束。"""
+    lanes = max(int(lane_count), 1)
+    page_start = (index // lanes) * lanes
+    page = lines[page_start : page_start + lanes]
+    return max(_line_end_ms(line) for line in page)

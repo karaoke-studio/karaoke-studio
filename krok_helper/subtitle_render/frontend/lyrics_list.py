@@ -5,11 +5,11 @@ UI 设计：
 - **空态**：居中显示"拖入字幕文件 / 点击此处选择"，受 :class:`DropPanel` 接管
 - **载入后**：``TableWidget``（qfluentwidgets），三列——轨 / 角色 / 内容。
 
-  - **轨**：双行布局下按实际渲染 lane（非空行序号 % 2）标 T1 / T2，
-    同一组两行共享一个浅色底，直观呈现"两行两行贴在一起"的显示分组
+  - **轨**：多行布局下按实际渲染 lane（非空行序号 % 行数）标 T1 / T2 / …，
+    同一组行共享一个浅色底，直观呈现"按页贴在一起"的显示分组
   - **角色**：可编辑（下拉选择配色方案），名字前带该方案的颜色色点
-  - **内容**：只读；水平对齐跟随布局设置（asymmetric 上左下右 / center 居中 /
-    per_row 按行独立对齐），布局改动即时反映到列表
+  - **内容**：只读；水平对齐跟随布局设置（asymmetric 按每行对齐列表 / center
+    居中 / per_row 按行独立对齐），布局改动即时反映到列表
   - 空行渲染成矮分隔行（间奏 ♪），不再占一整行空白
 """
 
@@ -188,8 +188,9 @@ class LyricsPanel(DropPanel):
 
         self._style: Style = Style()
         self._track: Optional[TimingTrack] = None
-        # 每行元数据：(是否空行, lane 0/1, 双行组号)；空行 lane / 组号取 -1
-        self._row_meta: list[tuple[bool, int, int]] = []
+        # 每行元数据：(是否空行, 可渲染序号)；空行序号取 -1。
+        # lane / 组号由序号 + 当前 Style 的行数动态推出（行数可随布局变化）。
+        self._row_meta: list[tuple[bool, int]] = []
         # 段落最后一行标记（与渲染端 NKM3 式段落划分一致），随 style 阈值重算
         self._paragraph_last: list[bool] = []
 
@@ -268,9 +269,9 @@ class LyricsPanel(DropPanel):
             for row, line in enumerate(track.lines):
                 blank = bool(line.is_blank or not line.chars)
                 if blank:
-                    self._row_meta.append((True, -1, -1))
+                    self._row_meta.append((True, -1))
                 else:
-                    self._row_meta.append((False, render_index % 2, render_index // 2))
+                    self._row_meta.append((False, render_index))
                     render_index += 1
 
                 lane_item = QTableWidgetItem("")
@@ -328,13 +329,20 @@ class LyricsPanel(DropPanel):
 
     # ------------------------------------------------------------------ private
 
+    def _lane_count(self) -> int:
+        """多行显示的行数（与渲染端 lane 分配一致）。"""
+        if not self._style.dual_line_layout:
+            return 1
+        return max(len(self._style.line_alignments), 1)
+
     def _group_bg_for_row(self, row: int) -> Optional[QColor]:
-        """双行组斑马纹：奇数组一层主题色薄底，同组两行"贴在一起"。"""
+        """行组斑马纹：奇数组一层主题色薄底，同组行"贴在一起"。"""
         if not self._style.dual_line_layout:
             return None
         if row < 0 or row >= len(self._row_meta):
             return None
-        blank, _lane, group = self._row_meta[row]
+        blank, render_index = self._row_meta[row]
+        group = render_index // self._lane_count() if render_index >= 0 else -1
         if blank or group % 2 != 1:
             return None
         color = QColor(palette().accent_primary)
@@ -363,11 +371,13 @@ class LyricsPanel(DropPanel):
 
         self._table.blockSignals(True)
         try:
+            lanes = self._lane_count()
             target_rows = rows if rows is not None else range(self._table.rowCount())
             for row in target_rows:
                 if row < 0 or row >= len(self._row_meta):
                     continue
-                blank, lane, _group = self._row_meta[row]
+                blank, render_index = self._row_meta[row]
+                lane = render_index % lanes if render_index >= 0 else -1
                 lane_item = self._table.item(row, COL_LANE)
                 role_item = self._table.item(row, COL_ROLE)
                 content_item = self._table.item(row, COL_CONTENT)
@@ -376,7 +386,7 @@ class LyricsPanel(DropPanel):
                 if blank:
                     continue
 
-                lane_item.setText(("T1" if lane == 0 else "T2") if dual else "")
+                lane_item.setText(f"T{lane + 1}" if dual else "")
                 lane_item.setForeground(QBrush(lane_color))
                 lane_font = lane_item.font()
                 lane_font.setPointSizeF(8.0)
@@ -413,12 +423,18 @@ class LyricsPanel(DropPanel):
                 "right": Qt.AlignmentFlag.AlignRight,
             }
             return mapping.get(align, Qt.AlignmentFlag.AlignLeft) | vertical
-        # asymmetric（默认）：上左下右；段落最后一行居中（与渲染端一致）
-        if paragraph_last:
+        # asymmetric（默认）：按每行对齐列表；段落最后一行居中（与渲染端一致，
+        # 智能水平 = 不调整 时同步关闭）
+        if paragraph_last and style.smart_horizontal != "none":
             return Qt.AlignmentFlag.AlignHCenter | vertical
-        if lane == 0:
-            return Qt.AlignmentFlag.AlignLeft | vertical
-        return Qt.AlignmentFlag.AlignRight | vertical
+        alignments = style.line_alignments or ["left"]
+        align = alignments[min(max(lane, 0), len(alignments) - 1)]
+        mapping = {
+            "left": Qt.AlignmentFlag.AlignLeft,
+            "center": Qt.AlignmentFlag.AlignHCenter,
+            "right": Qt.AlignmentFlag.AlignRight,
+        }
+        return mapping.get(align, Qt.AlignmentFlag.AlignLeft) | vertical
 
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
         if item.column() != COL_ROLE:

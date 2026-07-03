@@ -75,8 +75,7 @@ def test_property_panel_set_style_populates_controls(qapp):
         vertical=True,
         line_horizontal_layout="per_row",
         line_gap_px=66,
-        upper_line_left_margin_px=77,
-        lower_line_right_margin_px=88,
+        horizontal_margin_px=77,
         row1_align="center",
         row1_offset_x=11,
         row1_offset_y=-22,
@@ -170,8 +169,7 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._vertical_check.isChecked()
     assert panel._horizontal_layout_combo.currentData() == "per_row"
     assert panel._line_gap_spin.value() == 66
-    assert panel._upper_left_spin.value() == 77
-    assert panel._lower_right_spin.value() == 88
+    assert panel._horizontal_margin_spin.value() == 77
     assert panel._row1_align_combo.currentData() == "center"
     assert panel._row1_x_spin.value() == 11
     assert panel._row1_y_spin.value() == -22
@@ -299,8 +297,8 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.glow_radius_px == 10
     assert style.shadow_offset_x == 0
     assert style.shadow_offset_y == 1
-    assert style.upper_line_left_margin_px == 50
-    assert style.lower_line_right_margin_px == 50
+    assert style.horizontal_margin_px == 50
+    assert style.line_alignments == ["left", "right"]
     assert style.line_lead_in_ms == 1800
     assert style.line_tail_ms == 1000
     assert style.timing_offset_ms == 0
@@ -872,8 +870,7 @@ def test_property_panel_layout_controls_emit_style(qapp):
     )
     panel._line_margin_spin.setValue(123)
     panel._line_gap_spin.setValue(70)
-    panel._upper_left_spin.setValue(31)
-    panel._lower_right_spin.setValue(42)
+    panel._horizontal_margin_spin.setValue(31)
 
     panel._rtl_check.setChecked(True)
     panel._vertical_check.setChecked(True)
@@ -884,8 +881,10 @@ def test_property_panel_layout_controls_emit_style(qapp):
     assert emitted[-1].line_horizontal_layout == "center"
     assert emitted[-1].line_y_margin_px == 123
     assert emitted[-1].line_gap_px == 70
+    assert emitted[-1].horizontal_margin_px == 31
+    # 旧字段镜像跟随（native 后端序列化兼容）
     assert emitted[-1].upper_line_left_margin_px == 31
-    assert emitted[-1].lower_line_right_margin_px == 42
+    assert emitted[-1].lower_line_right_margin_px == 31
 
 
 def test_property_panel_per_row_controls_emit_style(qapp):

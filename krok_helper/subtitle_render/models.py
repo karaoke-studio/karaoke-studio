@@ -511,11 +511,23 @@ class Style:
     line_gap_px: int = 90
     """双行布局中两行主文字外框之间的间距，不包含 ruby 高度。"""
 
+    line_alignments: list[HorizontalAlign] = field(
+        default_factory=lambda: ["left", "right"]
+    )
+    """每行（lane）的水平对齐列表（N3 ``HorizontalAlignments``），仅 ``asymmetric``
+    模式使用。列表长度即多行显示的行数，索引 0 = 最上行。显示行数恒等于列表
+    长度，因此 Bottom 锚定的「从下往上取列表末尾」与正序索引等价。"""
+
+    horizontal_margin_px: int = 50
+    """左右余白（N3 ``HorizontalMargin``）：Left 行左缘贴此值，Right 行右缘贴
+    ``width - 此值``。"""
+
     upper_line_left_margin_px: int = 50
-    """双行布局中上排字幕距离左边的边距（仅 ``asymmetric`` 模式）。"""
+    """【旧字段】双行布局上排左边距。已由 ``horizontal_margin_px`` 取代，保留用于
+    旧工程迁移与 native 后端（C++ 仍读取该键）序列化兼容。"""
 
     lower_line_right_margin_px: int = 50
-    """双行布局中下排字幕距离右边的边距（仅 ``asymmetric`` 模式）。"""
+    """【旧字段】双行布局下排右边距。同上，保留序列化兼容。"""
 
     smart_horizontal: SmartHorizontal = "equal_margins"
     """智能水平配置（N3 ``SmartHorizon``，仅 ``asymmetric`` 双行布局）：短行向中央
@@ -745,6 +757,7 @@ def style_from_dict(payload: object) -> Style:
             "viewport_rotation_deg",
             "line_y_margin_px",
             "line_gap_px",
+            "horizontal_margin_px",
             "upper_line_left_margin_px",
             "lower_line_right_margin_px",
             "row1_offset_x",
@@ -826,6 +839,8 @@ def style_from_dict(payload: object) -> Style:
             changes[key] = value if value in RUBY_ALIGNMENTS else defaults.ruby_alignment
         elif key == "smart_horizontal":
             changes[key] = value if value in SMART_HORIZONTALS else defaults.smart_horizontal
+        elif key == "line_alignments":
+            changes[key] = _line_alignments_from_payload(value)
         elif key == "entry_anim":
             changes[key] = (
                 value
@@ -847,7 +862,21 @@ def style_from_dict(payload: object) -> Style:
             changes["glow_before_radius_px"] = changes["glow_radius_px"]
         if "glow_after_radius_px" not in changes:
             changes["glow_after_radius_px"] = changes["glow_radius_px"]
+    # 旧工程迁移：没有 horizontal_margin_px 时沿用旧的上排左边距（默认双双为 50）。
+    if "horizontal_margin_px" not in changes and "upper_line_left_margin_px" in changes:
+        changes["horizontal_margin_px"] = changes["upper_line_left_margin_px"]
     return Style(**changes)
+
+
+def _line_alignments_from_payload(payload: object) -> list[HorizontalAlign]:
+    """校验每行对齐列表；非法项回退 left，空列表回退默认双行。"""
+    if not isinstance(payload, list):
+        return ["left", "right"]
+    result: list[HorizontalAlign] = [
+        value if value in HORIZONTAL_ALIGNS else "left" for value in payload
+    ]
+    result = result[:8]  # 行数上限，防御异常数据
+    return result or ["left", "right"]
 
 
 def subtitle_style_scheme_to_dict(scheme: SubtitleStyleScheme) -> dict:
