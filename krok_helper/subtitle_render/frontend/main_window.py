@@ -24,6 +24,8 @@ UI 顶层结构（底部左下角 ``NavigationBar``，与工作流区域一致�
 
 from __future__ import annotations
 
+from copy import deepcopy
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 from typing import Any, Optional
@@ -690,6 +692,7 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
         self._selected_scheme_key = self._property_panel.current_scheme_key()
         self._preview_panel.set_style(self._style)
+        self._lyrics_panel.set_style(self._style)
         self._set_export_screen_controls(self._screen_settings)
         self._sync_preview_output_size()
         # 2) 导出参数
@@ -862,6 +865,7 @@ class SubtitleRenderWindow(QWidget):
         self._transport_bar = self._preview_window.transport_bar
 
         self._lyrics_panel = LyricsPanel()
+        self._lyrics_panel.set_style(self._style)
         self._lyrics_panel.pathDropped.connect(self.load_from_lrc)
         self._lyrics_panel.browseRequested.connect(self._browse_subtitle)
         self._lyrics_panel.roleChanged.connect(self._on_lyrics_role_changed)
@@ -1224,6 +1228,7 @@ class SubtitleRenderWindow(QWidget):
     def _apply_style(self, style: Style) -> None:
         self._style = style
         self._preview_panel.set_style(style)
+        self._lyrics_panel.set_style(style)
         self._save_persisted_state()
         self._mark_project_dirty()
 
@@ -1308,6 +1313,24 @@ class SubtitleRenderWindow(QWidget):
         label = role_name.strip() if role_name else None
         for ch in track.lines[row].chars:
             ch.role_label = label
+        # 角色名来自预设库但样式里还没有对应方案时，先把预设物化进
+        # custom_style_schemes——否则 painter 解析不到，改了角色颜色毫无变化。
+        if (
+            label
+            and label not in self._style.custom_style_schemes
+            and label in self._style_presets
+        ):
+            schemes = dict(self._style.custom_style_schemes)
+            schemes[label] = deepcopy(self._style_presets[label])
+            self._style = replace(self._style, custom_style_schemes=schemes)
+            self._property_panel.set_style(self._style)
+            self._preview_panel.set_style(self._style)
+            self._lyrics_panel.set_style(self._style)
+            self._save_persisted_state()
+        # track 是原地修改的，预览（含异步渲染 worker）不会自己发现——
+        # 重新喂一次让当前帧立即按新角色配色重渲染。
+        self._preview_panel.set_track(track)
+        self._lyrics_panel.refresh_row_role(row)
         self._mark_project_dirty()
 
     def _on_lyrics_row_clicked(self, row: int) -> None:
