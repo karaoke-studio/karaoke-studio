@@ -402,13 +402,12 @@ def test_window_shell_components_present(qapp, monkeypatch):
     assert win._export_crf_spin.value() == 18
     assert win._export_native_check is not None
 
-    # 属性面板 5 个 tab
-    assert win._property_panel.count() == 5
-    assert [win._property_panel.tabText(i) for i in range(5)] == [
-        "基本",
-        "字幕",
+    # 属性面板 4 个分类页（顶部 segmented 导航，页面用 accessibleName 标注）
+    assert win._property_panel.count() == 4
+    assert [win._property_panel.widget(i).accessibleName() for i in range(4)] == [
+        "字体",
+        "布局",
         "特效",
-        "装饰",
         "标题",
     ]
 

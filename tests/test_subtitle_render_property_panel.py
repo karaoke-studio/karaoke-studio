@@ -408,10 +408,11 @@ def test_property_panel_font_and_color_sections_are_side_by_side(qapp):
     assert panel._font_section.parentWidget() is panel._font_color_row
     assert panel._color_section.parentWidget() is panel._font_color_row
     assert panel._font_section.geometry().top() == panel._color_section.geometry().top()
-    assert panel._font_section.geometry().right() < panel._color_section.geometry().left()
+    # 颜色在左、字体在右（与 nicokara maker3 的编辑顺序一致）。
+    assert panel._color_section.geometry().right() < panel._font_section.geometry().left()
     assert abs(panel._font_section.width() - panel._color_section.width()) <= 1
-    font_header_top = panel._font_section.header.mapTo(panel._font_color_row, QPoint()).y()
-    color_header_top = panel._color_section.header.mapTo(panel._font_color_row, QPoint()).y()
+    font_header_top = panel._font_section.mapTo(panel._font_color_row, QPoint()).y()
+    color_header_top = panel._color_section.mapTo(panel._font_color_row, QPoint()).y()
     assert font_header_top == color_header_top
 
 
