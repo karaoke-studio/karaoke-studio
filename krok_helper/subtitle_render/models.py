@@ -18,7 +18,7 @@ Nicokara LRC 即可（SUG submodule 自身只有导出器没有解析器）。
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 from typing import Literal, Optional
 
 SCHEMA_VERSION = 1
@@ -76,6 +76,10 @@ class TimingLine:
     """解析阶段分配的稳定歌手序号。仅用于配色覆盖，不参与布局。"""
     is_blank: bool = False
     """是否是用户主动留的空行（无任何字符 / 时间戳 / 标签）。"""
+    layout_index: int = 0
+    """该行使用的布局（N3 ``LayoutIndex``）：0 = 默认布局（``Style`` 自身字段），
+    k >= 1 = ``Style.layouts[k-1]``。由 UI 按页联动写入，随项目文件持久化
+    （LRC 本身不含布局信息）。"""
 
 
 @dataclass
@@ -360,6 +364,37 @@ class TitleOverlay:
 
 
 @dataclass
+class LyricsLayout:
+    """一套可命名的布局定义（N3 ``LyricsLayoutModel`` 的布局几何子集）。
+
+    只包含「位置」域字段；字间距 / 咬合 / 注音间距等在本项目属于字体与配色
+    方案域（可按角色覆盖），不进布局对象。生效优先级：全局 ``Style`` <
+    布局 < 歌手/角色方案。
+    """
+
+    name: str = "布局"
+    line_y_position: LineYPosition = "bottom"
+    line_y_margin_px: int = 80
+    line_gap_px: int = 90
+    smart_horizontal: SmartHorizontal = "equal_margins"
+    horizontal_margin_px: int = 50
+    line_alignments: list[HorizontalAlign] = field(
+        default_factory=lambda: ["left", "right"]
+    )
+
+
+LYRICS_LAYOUT_FIELDS: tuple[str, ...] = (
+    "line_y_position",
+    "line_y_margin_px",
+    "line_gap_px",
+    "smart_horizontal",
+    "horizontal_margin_px",
+    "line_alignments",
+)
+"""布局对象作用到 ``Style`` 上的字段（不含 ``name``）。"""
+
+
+@dataclass
 class SubtitleStyleScheme:
     """字幕 tab 的完整视觉方案；不包含位置、布局和显示时间。"""
 
@@ -535,6 +570,15 @@ class Style:
     中心位置对齐（逐行判断，N3 Single）；``equal_margins`` = 左右余白对齐
     （整页判断，N3 Multi，N3 默认）。"""
 
+    layouts: list["LyricsLayout"] = field(default_factory=list)
+    """额外的命名布局定义（N3 ``LyricsLayouts``）。``Style`` 自身的布局字段是
+    「默认布局」（index 0），本列表从 index 1 起被 ``TimingLine.layout_index``
+    引用。布局定义是可复用预设，随全局设置与项目文件一起持久化。"""
+
+    layout_reference_height: int = 1080
+    """布局像素字段（上下余白 / 行间距 / 左右余白）当前对应的输出高度
+    （N3 ``SizeAndRatio.Reference``）。输出高度变化时按比例重算并更新此值。"""
+
     # 逐行独立布局（per_row 模式，对标 Sayatoo「布局」第一行 / 第二行）
     # 对齐决定该行的水平锚点（left=贴左 / center=居中 / right=贴右），
     # offset_x/y 为锚点之上的像素位移，正值向右 / 向下。
@@ -694,6 +738,8 @@ def style_to_dict(style: Style) -> dict:
         value = getattr(style, item.name)
         if item.name in {"karaoke_colors", "ruby_karaoke_colors"}:
             data[item.name] = karaoke_colors_to_dict(value) if value is not None else None
+        elif item.name == "layouts":
+            data[item.name] = [lyrics_layout_to_dict(layout) for layout in value]
         elif item.name == "title_overlay":
             data[item.name] = title_overlay_to_dict(value) if value is not None else None
         elif item.name == "singer_style_overrides":
@@ -723,6 +769,8 @@ def style_from_dict(payload: object) -> Style:
             continue
         if key in {"karaoke_colors", "ruby_karaoke_colors"}:
             changes[key] = karaoke_colors_from_dict(value)
+        elif key == "layouts":
+            changes[key] = _layouts_from_payload(value)
         elif key == "title_overlay":
             changes[key] = title_overlay_from_dict(value)
         elif key == "singer_style_overrides":
@@ -758,6 +806,7 @@ def style_from_dict(payload: object) -> Style:
             "line_y_margin_px",
             "line_gap_px",
             "horizontal_margin_px",
+            "layout_reference_height",
             "upper_line_left_margin_px",
             "lower_line_right_margin_px",
             "row1_offset_x",
@@ -866,6 +915,84 @@ def style_from_dict(payload: object) -> Style:
     if "horizontal_margin_px" not in changes and "upper_line_left_margin_px" in changes:
         changes["horizontal_margin_px"] = changes["upper_line_left_margin_px"]
     return Style(**changes)
+
+
+def rescale_layout_sizes(style: Style, new_height: int) -> Style:
+    """输出高度变化时按 N3 ``SizeAndRatio`` 语义重算布局像素字段。
+
+    ``new = int(new_height * old / reference)``（向 0 截断，0 保持 0），作用于
+    默认布局与所有额外布局的 上下余白 / 行间距 / 左右余白；旧的上/下行边距
+    镜像跟随左右余白。高度不变或非法时原样返回。
+    """
+    reference = max(int(style.layout_reference_height), 1)
+    new_height = int(new_height)
+    if new_height <= 0 or new_height == reference:
+        return style
+
+    def scaled(value: int) -> int:
+        return int(new_height * (int(value) / reference))
+
+    layouts = [
+        replace(
+            layout,
+            line_y_margin_px=scaled(layout.line_y_margin_px),
+            line_gap_px=scaled(layout.line_gap_px),
+            horizontal_margin_px=scaled(layout.horizontal_margin_px),
+        )
+        for layout in style.layouts
+    ]
+    margin = scaled(style.horizontal_margin_px)
+    return replace(
+        style,
+        line_y_margin_px=scaled(style.line_y_margin_px),
+        line_gap_px=scaled(style.line_gap_px),
+        horizontal_margin_px=margin,
+        upper_line_left_margin_px=margin,
+        lower_line_right_margin_px=margin,
+        layouts=layouts,
+        layout_reference_height=new_height,
+    )
+
+
+def lyrics_layout_to_dict(layout: LyricsLayout) -> dict:
+    return {
+        "name": layout.name,
+        "line_y_position": layout.line_y_position,
+        "line_y_margin_px": layout.line_y_margin_px,
+        "line_gap_px": layout.line_gap_px,
+        "smart_horizontal": layout.smart_horizontal,
+        "horizontal_margin_px": layout.horizontal_margin_px,
+        "line_alignments": list(layout.line_alignments),
+    }
+
+
+def lyrics_layout_from_dict(payload: object) -> LyricsLayout:
+    if not isinstance(payload, dict):
+        return LyricsLayout()
+    defaults = LyricsLayout()
+    position = payload.get("line_y_position", defaults.line_y_position)
+    if position not in {"top", "center", "bottom"}:
+        position = defaults.line_y_position
+    smart = payload.get("smart_horizontal", defaults.smart_horizontal)
+    if smart not in SMART_HORIZONTALS:
+        smart = defaults.smart_horizontal
+    return LyricsLayout(
+        name=str(payload.get("name") or defaults.name),
+        line_y_position=position,  # type: ignore[arg-type]
+        line_y_margin_px=_int_value(payload.get("line_y_margin_px"), defaults.line_y_margin_px),
+        line_gap_px=_int_value(payload.get("line_gap_px"), defaults.line_gap_px),
+        smart_horizontal=smart,  # type: ignore[arg-type]
+        horizontal_margin_px=_int_value(
+            payload.get("horizontal_margin_px"), defaults.horizontal_margin_px
+        ),
+        line_alignments=_line_alignments_from_payload(payload.get("line_alignments")),
+    )
+
+
+def _layouts_from_payload(payload: object) -> list[LyricsLayout]:
+    if not isinstance(payload, list):
+        return []
+    return [lyrics_layout_from_dict(item) for item in payload[:32]]
 
 
 def _line_alignments_from_payload(payload: object) -> list[HorizontalAlign]:

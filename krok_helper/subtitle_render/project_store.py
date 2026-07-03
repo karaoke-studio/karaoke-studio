@@ -62,9 +62,14 @@ def project_payload(
     screen: dict,
     selected_scheme_key: str,
     output: dict,
+    line_layout_indices: Optional[list[int]] = None,
 ) -> dict:
-    """组装项目快照 dict（纯数据，不碰 UI）。便于单测与复用。"""
-    return {
+    """组装项目快照 dict（纯数据，不碰 UI）。便于单测与复用。
+
+    ``line_layout_indices`` 与 ``track.lines`` 对齐（含空行），记录每行引用的
+    布局（0 = 默认布局）。LRC 本身不含布局信息，只能存在项目文件里。
+    """
+    payload = {
         "subtitle_path": str(subtitle_path) if subtitle_path else None,
         "video_path": str(video_path) if video_path else None,
         "audio_path": str(audio_path) if audio_path else None,
@@ -73,6 +78,9 @@ def project_payload(
         "selected_scheme_key": selected_scheme_key,
         "output": output,
     }
+    if line_layout_indices is not None:
+        payload["line_layout_indices"] = [int(v) for v in line_layout_indices]
+    return payload
 
 
 def split_project_paths(data: dict) -> dict[str, Optional[Path]]:

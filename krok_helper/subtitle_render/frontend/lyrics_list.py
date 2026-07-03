@@ -18,11 +18,14 @@ from __future__ import annotations
 from collections import Counter
 from typing import Optional
 
-from PyQt6.QtCore import Qt, QSize, pyqtSignal as Signal
+from dataclasses import replace as _dataclass_replace
+
+from PyQt6.QtCore import QPoint, Qt, QSize, pyqtSignal as Signal
 from PyQt6.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QHeaderView,
+    QMenu,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -32,9 +35,17 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import ComboBox as FluentComboBox
 from qfluentwidgets import TableWidget as FluentTableWidget
 
-from krok_helper.subtitle_render.engine.timeline import paragraph_last_line_flags
+from krok_helper.subtitle_render.engine.timeline import (
+    assign_lanes,
+    paragraph_last_line_flags,
+)
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
-from krok_helper.subtitle_render.models import Style, TimingTrack
+from krok_helper.subtitle_render.models import (
+    LYRICS_LAYOUT_FIELDS,
+    Style,
+    TimingLine,
+    TimingTrack,
+)
 from krok_helper.subtitle_render.frontend.theme import palette, themed
 
 COL_LANE = 0
@@ -169,11 +180,24 @@ class _RoleComboDelegate(_GroupBackgroundDelegate):
         model.setData(index, display, Qt.ItemDataRole.DisplayRole)
 
 
+def _effective_layout_style(style: Style, line: TimingLine) -> Style:
+    """行引用的布局套用到 style 上（与渲染端 ``_layout_style_for_line`` 同语义）。"""
+    index = int(getattr(line, "layout_index", 0) or 0)
+    if index <= 0 or index > len(style.layouts):
+        return style
+    layout = style.layouts[index - 1]
+    return _dataclass_replace(
+        style, **{name: getattr(layout, name) for name in LYRICS_LAYOUT_FIELDS}
+    )
+
+
 class LyricsPanel(DropPanel):
     """左侧歌词面板（含空态拖拽 + 已加载表格两态）。"""
 
     roleChanged = Signal(int, str)
     rowClicked = Signal(int)  # 用户点击歌词行时发出行号
+    layoutChangeRequested = Signal(list, int)
+    """右键菜单选择布局：(选中的 track.lines 行号列表, 布局 index)。宿主按页联动应用。"""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(
@@ -193,6 +217,9 @@ class LyricsPanel(DropPanel):
         self._row_meta: list[tuple[bool, int]] = []
         # 段落最后一行标记（与渲染端 NKM3 式段落划分一致），随 style 阈值重算
         self._paragraph_last: list[bool] = []
+        # 每个可渲染行的 lane / 页序号缓存（页首行布局定行数，与渲染端一致）
+        self._render_lanes: list[int] = []
+        self._render_groups: list[int] = []
 
         # ---- qfluentwidgets TableWidget ----
         self._table = FluentTableWidget(self)
@@ -201,8 +228,10 @@ class LyricsPanel(DropPanel):
         self._table.setHorizontalHeaderLabels(_COLUMN_HEADERS)
 
         self._table.setFrameShape(FluentTableWidget.Shape.NoFrame)
-        self._table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._show_context_menu)
         self._table.setEditTriggers(QAbstractItemView.EditTrigger.DoubleClicked
                                     | QAbstractItemView.EditTrigger.EditKeyPressed)
         self._table.setShowGrid(False)
@@ -330,19 +359,50 @@ class LyricsPanel(DropPanel):
     # ------------------------------------------------------------------ private
 
     def _lane_count(self) -> int:
-        """多行显示的行数（与渲染端 lane 分配一致）。"""
+        """多行显示的默认行数（与渲染端 lane 分配一致）。"""
         if not self._style.dual_line_layout:
             return 1
         return max(len(self._style.line_alignments), 1)
 
+    def _recompute_render_lanes(self) -> None:
+        """按当前布局分配（页首行布局定行数）算出每个可渲染行的 lane / 页序号。"""
+        self._render_lanes = []
+        self._render_groups = []
+        if self._track is None:
+            return
+        render_lines = [
+            line for line in self._track.lines if not line.is_blank and line.chars
+        ]
+        row_count_of = None
+        if self._style.dual_line_layout and self._style.layouts:
+            style = self._style
+            row_count_of = lambda line: max(  # noqa: E731
+                len(_effective_layout_style(style, line).line_alignments), 1
+            )
+        lanes, page_starts, _page_rows = assign_lanes(
+            render_lines, self._lane_count(), row_count_of
+        )
+        self._render_lanes = lanes
+        ordinal = -1
+        seen_start: Optional[int] = None
+        for start in page_starts:
+            if start != seen_start:
+                ordinal += 1
+                seen_start = start
+            self._render_groups.append(ordinal)
+
     def _group_bg_for_row(self, row: int) -> Optional[QColor]:
-        """行组斑马纹：奇数组一层主题色薄底，同组行"贴在一起"。"""
+        """行组斑马纹：奇数页一层主题色薄底，同页行"贴在一起"。"""
         if not self._style.dual_line_layout:
             return None
         if row < 0 or row >= len(self._row_meta):
             return None
         blank, render_index = self._row_meta[row]
-        group = render_index // self._lane_count() if render_index >= 0 else -1
+        group = (
+            self._render_groups[render_index]
+            if 0 <= render_index < len(self._render_groups)
+            else -1
+        )
         if blank or group % 2 != 1:
             return None
         color = QColor(palette().accent_primary)
@@ -368,16 +428,20 @@ class LyricsPanel(DropPanel):
             self._paragraph_last = []
 
         self._table.setColumnHidden(COL_LANE, not dual)
+        self._recompute_render_lanes()
 
         self._table.blockSignals(True)
         try:
-            lanes = self._lane_count()
             target_rows = rows if rows is not None else range(self._table.rowCount())
             for row in target_rows:
                 if row < 0 or row >= len(self._row_meta):
                     continue
                 blank, render_index = self._row_meta[row]
-                lane = render_index % lanes if render_index >= 0 else -1
+                lane = (
+                    self._render_lanes[render_index]
+                    if 0 <= render_index < len(self._render_lanes)
+                    else 0
+                )
                 lane_item = self._table.item(row, COL_LANE)
                 role_item = self._table.item(row, COL_ROLE)
                 content_item = self._table.item(row, COL_CONTENT)
@@ -386,7 +450,20 @@ class LyricsPanel(DropPanel):
                 if blank:
                     continue
 
+                line = (
+                    self._track.lines[row]
+                    if self._track is not None and row < len(self._track.lines)
+                    else None
+                )
+                line_style = (
+                    _effective_layout_style(style, line) if line is not None else style
+                )
                 lane_item.setText(f"T{lane + 1}" if dual else "")
+                layout_ref = int(getattr(line, "layout_index", 0) or 0) if line else 0
+                if 1 <= layout_ref <= len(style.layouts):
+                    lane_item.setToolTip(f"布局：{style.layouts[layout_ref - 1].name}")
+                else:
+                    lane_item.setToolTip("布局：默认布局")
                 lane_item.setForeground(QBrush(lane_color))
                 lane_font = lane_item.font()
                 lane_font.setPointSizeF(8.0)
@@ -395,7 +472,7 @@ class LyricsPanel(DropPanel):
                     row < len(self._paragraph_last) and self._paragraph_last[row]
                 )
                 content_item.setTextAlignment(
-                    self._content_alignment(style, lane, dual, paragraph_last)
+                    self._content_alignment(line_style, lane, dual, paragraph_last)
                 )
 
                 role = str(role_item.data(Qt.ItemDataRole.UserRole) or "")
@@ -435,6 +512,40 @@ class LyricsPanel(DropPanel):
             "right": Qt.AlignmentFlag.AlignRight,
         }
         return mapping.get(align, Qt.AlignmentFlag.AlignLeft) | vertical
+
+    def _show_context_menu(self, pos: QPoint) -> None:
+        """右键菜单：把布局应用到选中行（宿主按页联动扩散到同页行）。"""
+        if self._track is None:
+            return
+        rows = sorted({item.row() for item in self._table.selectedItems()})
+        clicked = self._table.rowAt(pos.y())
+        if clicked >= 0 and clicked not in rows:
+            rows = [clicked]
+        rows = [
+            row
+            for row in rows
+            if 0 <= row < len(self._row_meta) and not self._row_meta[row][0]
+        ]
+        if not rows:
+            return
+        menu = QMenu(self._table)
+        layout_menu = menu.addMenu("应用布局")
+        current_indices = {
+            int(getattr(self._track.lines[row], "layout_index", 0) or 0)
+            for row in rows
+            if row < len(self._track.lines)
+        }
+        names = ["默认布局"] + [layout.name for layout in self._style.layouts]
+        for index, name in enumerate(names):
+            action = layout_menu.addAction(name)
+            action.setCheckable(True)
+            action.setChecked(current_indices == {index})
+            action.triggered.connect(
+                lambda _checked=False, idx=index, rs=list(rows): (
+                    self.layoutChangeRequested.emit(rs, idx)
+                )
+            )
+        menu.exec(self._table.viewport().mapToGlobal(pos))
 
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
         if item.column() != COL_ROLE:

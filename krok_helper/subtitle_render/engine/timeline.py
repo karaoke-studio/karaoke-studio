@@ -16,7 +16,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 from krok_helper.subtitle_render.models import TimingChar, TimingLine, TimingTrack
 
@@ -29,6 +29,34 @@ class DisplayLine:
     lane: int
     display_start_ms: int
     display_end_ms: int
+
+
+def assign_lanes(
+    render_lines: list[TimingLine],
+    default_rows: int,
+    row_count_of: Optional[Callable[[TimingLine], int]] = None,
+) -> tuple[list[int], list[int], list[int]]:
+    """按页分配 lane（N3 页级布局联动）。
+
+    页从页首行的布局行数决定：连续 ``rows`` 条可渲染行组成一页，页内行依次占
+    lane ``0..rows-1``。返回与 ``render_lines`` 对齐的
+    ``(lanes, page_starts, page_rows)``。
+    """
+    lanes: list[int] = []
+    page_starts: list[int] = []
+    page_rows: list[int] = []
+    index = 0
+    total = len(render_lines)
+    while index < total:
+        rows = max(int(default_rows), 1)
+        if row_count_of is not None:
+            rows = max(int(row_count_of(render_lines[index])), 1)
+        for offset in range(min(rows, total - index)):
+            lanes.append(offset)
+            page_starts.append(index)
+            page_rows.append(rows)
+        index += rows
+    return lanes, page_starts, page_rows
 
 
 def find_active_line(
@@ -85,6 +113,7 @@ def visible_display_lines(
     section_ending_mode: str = "hold",
     protect_ms: int = 0,
     lane_count: int = 2,
+    row_count_of: Optional[Callable[[TimingLine], int]] = None,
 ) -> list[DisplayLine]:
     """Return lines whose display window contains ``t_ms``.
 
@@ -111,6 +140,7 @@ def visible_display_lines(
         sync_ending=sync_ending,
         section_ending_mode=section_ending_mode,
         lane_count=lane_count,
+        row_count_of=row_count_of,
     )
     return [item for item in layouts if item.display_start_ms <= t_ms <= item.display_end_ms]
 
@@ -129,6 +159,7 @@ def compute_display_lines(
     section_ending_mode: str = "hold",
     protect_ms: int = 0,
     lane_count: int = 2,
+    row_count_of: Optional[Callable[[TimingLine], int]] = None,
 ) -> list[DisplayLine]:
     """Compute NicoKara-style display windows for all renderable lines.
 
@@ -136,6 +167,9 @@ def compute_display_lines(
     新段落。``sync_ending`` 时同段落内每个 lane 的末行延到段末一起退场；
     ``section_ending_mode == "clear"`` 时把每行结束钳到段末（不拖进间奏）。
     两项默认关闭时输出与原行为一致。
+
+    ``row_count_of``（可选）按行返回其布局的行数：页从页首行的行数决定
+    （N3 页级布局联动），未提供时全部页使用 ``lane_count``。
     """
     render_lines = [line for line in track.lines if not line.is_blank and line.chars]
     if not render_lines:
@@ -152,15 +186,17 @@ def compute_display_lines(
     section_ids = _compute_section_ids(render_lines, section_gap)
     section_end = _compute_section_ends(render_lines, section_ids, tail)
 
+    lanes_total = max(int(lane_count), 1)
+    lanes, page_starts, page_rows = assign_lanes(
+        render_lines, lanes_total, row_count_of
+    )
+
     starts: list[int] = []
     natural_ends: list[int] = []
-    lanes: list[int] = []
     prev_lane_natural_end: dict[int, int] = {}
 
-    lanes_total = max(int(lane_count), 1)
     for index, line in enumerate(render_lines):
-        lane = index % lanes_total
-        lanes.append(lane)
+        lane = lanes[index]
         preferred_start = max(line.chars[0].start_ms - lead, 0)
         if (
             lane != 0
@@ -171,7 +207,11 @@ def compute_display_lines(
                 preferred_start,
                 starts[index - 1] + pair_second_delay,
             )
-        pair_end = _pair_sing_end_ms(render_lines, index, lanes_total)
+        page_start = page_starts[index]
+        pair_end = max(
+            _line_end_ms(item)
+            for item in render_lines[page_start : page_start + page_rows[index]]
+        )
         natural_end = pair_end + tail
         if max_hold > 0:
             natural_end = min(natural_end, preferred_start + max_hold)

@@ -64,6 +64,8 @@ from krok_helper.subtitle_render.models import (
     KaraokeColorState,
     LineHorizontalLayout,
     LineYPosition,
+    LYRICS_LAYOUT_FIELDS,
+    LyricsLayout,
     PaintFill,
     SubtitleStyleScheme,
     Style,
@@ -1187,6 +1189,12 @@ class PropertyPanel(QWidget):
     styleChanged = Signal(Style)
     schemeSelectionChanged = Signal(str)
     presetSchemesChanged = Signal(dict)
+    layoutAssignAllRequested = Signal(int)
+    """「应用到全部行」：参数为布局 index（0 = 默认布局）。"""
+    layoutAutoAssignRequested = Signal()
+    """「按行数自动分配」：按段落行数匹配布局行数。"""
+    layoutDeleted = Signal(int)
+    """布局被删除：参数为被删布局 index（>= 1），宿主需修正歌词行引用。"""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -1313,10 +1321,6 @@ class PropertyPanel(QWidget):
             self._viewport_y_spin.setValue(self._style.viewport_offset_y)
             self._viewport_scale_spin.setValue(self._style.viewport_scale_pct)
             self._viewport_rotation_spin.setValue(self._style.viewport_rotation_deg)
-            self._line_position_combo.setCurrentIndex(
-                max(0, self._line_position_combo.findData(self._style.line_y_position))
-            )
-            self._line_margin_spin.setValue(self._style.line_y_margin_px)
             self._dual_line_check.setChecked(self._style.dual_line_layout)
             self._rtl_check.setChecked(self._style.right_to_left)
             self._vertical_check.setChecked(self._style.vertical)
@@ -1328,15 +1332,8 @@ class PropertyPanel(QWidget):
                     ),
                 )
             )
-            self._smart_horizontal_combo.setCurrentIndex(
-                max(
-                    0,
-                    self._smart_horizontal_combo.findData(self._style.smart_horizontal),
-                )
-            )
-            self._line_gap_spin.setValue(self._style.line_gap_px)
-            self._horizontal_margin_spin.setValue(self._style.horizontal_margin_px)
-            self._rebuild_line_alignment_rows()
+            self._refresh_layout_combo()
+            self._sync_layout_editor_controls()
             self._row1_align_combo.setCurrentIndex(
                 max(0, self._row1_align_combo.findData(self._style.row1_align))
             )
@@ -2616,6 +2613,62 @@ class PropertyPanel(QWidget):
     def _make_position_section(self) -> QFrame:
         section, layout = _section("位置")
 
+        # ---- 布局方案（N3 レイアウト設定）：默认布局 = Style 自身字段 ----
+        self._layout_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._layout_combo)
+        self._layout_combo.setToolTip(
+            "布局方案（N3 レイアウト設定）：下方「行位置 / 行距 / 余白 / 行布局」"
+            "编辑的是当前选中的布局；歌词行可分别引用不同布局（歌词列表右键应用）。"
+        )
+        self._layout_combo.currentIndexChanged.connect(
+            lambda _index: self._on_layout_combo_changed()
+        )
+        layout.addWidget(_field("当前布局", self._layout_combo))
+
+        layout_btn_row = QWidget(section)
+        layout_btn_layout = QHBoxLayout(layout_btn_row)
+        layout_btn_layout.setContentsMargins(0, 0, 0, 0)
+        layout_btn_layout.setSpacing(6)
+        self._add_layout_btn = QPushButton("新建布局", section)
+        self._add_layout_btn.setToolTip("以当前布局的值复制出一个新布局。")
+        self._add_layout_btn.clicked.connect(lambda _checked=False: self._on_add_layout())
+        self._rename_layout_btn = QPushButton("重命名", section)
+        self._rename_layout_btn.clicked.connect(
+            lambda _checked=False: self._on_rename_layout()
+        )
+        self._delete_layout_btn = QPushButton("删除", section)
+        self._delete_layout_btn.clicked.connect(
+            lambda _checked=False: self._on_delete_layout()
+        )
+        for btn in (self._add_layout_btn, self._rename_layout_btn, self._delete_layout_btn):
+            btn.setMinimumHeight(30)
+            layout_btn_layout.addWidget(btn, 1)
+        layout.addWidget(layout_btn_row)
+
+        assign_btn_row = QWidget(section)
+        assign_btn_layout = QHBoxLayout(assign_btn_row)
+        assign_btn_layout.setContentsMargins(0, 0, 0, 0)
+        assign_btn_layout.setSpacing(6)
+        self._assign_all_btn = QPushButton("应用到全部行", section)
+        self._assign_all_btn.setToolTip("所有歌词行统一使用当前布局（N3 全部统一）。")
+        self._assign_all_btn.clicked.connect(
+            lambda _checked=False: self.layoutAssignAllRequested.emit(
+                self._current_layout_index()
+            )
+        )
+        self._auto_assign_btn = QPushButton("按行数自动分配", section)
+        self._auto_assign_btn.setToolTip(
+            "每个段落按行数匹配行数相同的布局（找不到按行数递减匹配，"
+            "仍找不到用默认布局）——对齐 N3 自动布局选择器。"
+        )
+        self._auto_assign_btn.clicked.connect(
+            lambda _checked=False: self.layoutAutoAssignRequested.emit()
+        )
+        for btn in (self._assign_all_btn, self._auto_assign_btn):
+            btn.setMinimumHeight(30)
+            assign_btn_layout.addWidget(btn, 1)
+        layout.addWidget(assign_btn_row)
+
         self._dual_line_check = QCheckBox("多行显示", section)
         self._dual_line_check.setToolTip(
             "开启后按「行布局」列表的行数轮换显示（默认上左下右双行）；"
@@ -2646,7 +2699,7 @@ class PropertyPanel(QWidget):
         for label, value in [("底部", "bottom"), ("居中", "center"), ("顶部", "top")]:
             self._line_position_combo.addItem(label, value)
         self._line_position_combo.currentIndexChanged.connect(
-            lambda _index: self._update_style(
+            lambda _index: self._update_layout_field(
                 line_y_position=self._line_position_combo.currentData()
             )
         )
@@ -2654,7 +2707,7 @@ class PropertyPanel(QWidget):
 
         self._line_margin_spin = _spin(0, 400, suffix=" px")
         self._line_margin_spin.valueChanged.connect(
-            lambda value: self._update_style(line_y_margin_px=value)
+            lambda value: self._update_layout_field(line_y_margin_px=value)
         )
         row_layout.addWidget(_field("下行底边距", self._line_margin_spin), 0, 1)
 
@@ -2673,7 +2726,7 @@ class PropertyPanel(QWidget):
 
         self._line_gap_spin = _spin(-400, 400, suffix=" px")
         self._line_gap_spin.valueChanged.connect(
-            lambda value: self._update_style(line_gap_px=value)
+            lambda value: self._update_layout_field(line_gap_px=value)
         )
         row_layout.addWidget(_field("两行间距", self._line_gap_spin), 1, 1)
 
@@ -2701,7 +2754,7 @@ class PropertyPanel(QWidget):
             "逐行判断；不调整 = 行永远贴左右边距，同时关闭段落末行居中。"
         )
         self._smart_horizontal_combo.currentIndexChanged.connect(
-            lambda _index: self._update_style(
+            lambda _index: self._update_layout_field(
                 smart_horizontal=self._smart_horizontal_combo.currentData()
             )
         )
@@ -2716,12 +2769,140 @@ class PropertyPanel(QWidget):
         return section
 
     def _on_horizontal_margin_changed(self, value: int) -> None:
+        if self._current_layout_index() > 0:
+            self._update_layout_field(horizontal_margin_px=value)
+            return
         # 旧字段跟随镜像：native 后端（C++）仍读取上/下行边距两个键。
         self._update_style(
             horizontal_margin_px=value,
             upper_line_left_margin_px=value,
             lower_line_right_margin_px=value,
         )
+
+    # ------------------------------------------------------------- 布局方案
+
+    def _current_layout_index(self) -> int:
+        if not hasattr(self, "_layout_combo"):
+            return 0
+        try:
+            index = int(self._layout_combo.currentData())
+        except (TypeError, ValueError):
+            return 0
+        return index if 0 <= index <= len(self._style.layouts) else 0
+
+    def _current_layout_source(self):
+        index = self._current_layout_index()
+        return self._style if index == 0 else self._style.layouts[index - 1]
+
+    def _current_layout_values(self) -> dict:
+        source = self._current_layout_source()
+        return {name: deepcopy(getattr(source, name)) for name in LYRICS_LAYOUT_FIELDS}
+
+    def _update_layout_field(self, **changes) -> None:
+        if self._syncing:
+            return
+        index = self._current_layout_index()
+        if index <= 0:
+            self._update_style(**changes)
+            return
+        layouts = list(self._style.layouts)
+        layouts[index - 1] = replace(layouts[index - 1], **changes)
+        self._update_style(layouts=layouts)
+
+    def _refresh_layout_combo(self, selected: Optional[int] = None) -> None:
+        if selected is None:
+            selected = self._current_layout_index()
+        selected = min(max(selected, 0), len(self._style.layouts))
+        combo = self._layout_combo
+        blocked = combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItem("默认布局", 0)
+            for index, layout_def in enumerate(self._style.layouts, start=1):
+                combo.addItem(layout_def.name, index)
+            combo.setCurrentIndex(max(0, combo.findData(selected)))
+        finally:
+            combo.blockSignals(blocked)
+        editable = self._current_layout_index() > 0
+        self._rename_layout_btn.setEnabled(editable)
+        self._delete_layout_btn.setEnabled(editable)
+
+    def _sync_layout_editor_controls(self) -> None:
+        values = self._current_layout_values()
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            self._line_position_combo.setCurrentIndex(
+                max(0, self._line_position_combo.findData(values["line_y_position"]))
+            )
+            self._line_margin_spin.setValue(int(values["line_y_margin_px"]))
+            self._line_gap_spin.setValue(int(values["line_gap_px"]))
+            self._smart_horizontal_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._smart_horizontal_combo.findData(values["smart_horizontal"]),
+                )
+            )
+            self._horizontal_margin_spin.setValue(int(values["horizontal_margin_px"]))
+            self._rebuild_line_alignment_rows()
+        finally:
+            self._syncing = was_syncing
+
+    def _on_layout_combo_changed(self) -> None:
+        if self._syncing:
+            return
+        self._refresh_layout_combo()
+        self._sync_layout_editor_controls()
+
+    def _on_add_layout(self) -> None:
+        values = self._current_layout_values()
+        existing = {layout.name for layout in self._style.layouts}
+        number = len(self._style.layouts) + 1
+        name = f"布局 {number}"
+        while name in existing:
+            number += 1
+            name = f"布局 {number}"
+        layouts = list(self._style.layouts) + [LyricsLayout(name=name, **values)]
+        self._update_style(layouts=layouts)
+        self._refresh_layout_combo(selected=len(layouts))
+        self._sync_layout_editor_controls()
+
+    def _on_rename_layout(self) -> None:
+        index = self._current_layout_index()
+        if index <= 0:
+            return
+        old = self._style.layouts[index - 1].name
+        new, ok = QInputDialog.getText(self, "重命名布局", "布局名称", text=old)
+        if not ok:
+            return
+        new = new.strip()
+        if not new or new == old:
+            return
+        layouts = list(self._style.layouts)
+        layouts[index - 1] = replace(layouts[index - 1], name=new)
+        self._update_style(layouts=layouts)
+        self._refresh_layout_combo(selected=index)
+
+    def _on_delete_layout(self) -> None:
+        index = self._current_layout_index()
+        if index <= 0:
+            return
+        name = self._style.layouts[index - 1].name
+        result = QMessageBox.question(
+            self,
+            "删除布局",
+            f"确定要删除布局“{name}”吗？\n使用它的歌词行会回到默认布局。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if result != QMessageBox.StandardButton.Yes:
+            return
+        layouts = list(self._style.layouts)
+        del layouts[index - 1]
+        self._update_style(layouts=layouts)
+        self.layoutDeleted.emit(index)
+        self._refresh_layout_combo(selected=0)
+        self._sync_layout_editor_controls()
 
     def _make_line_alignments_box(self, parent: QWidget) -> QWidget:
         """行布局编辑器：每行一个左/中/右下拉（N3 行ごとの左右レイアウト）。"""
@@ -2750,13 +2931,17 @@ class PropertyPanel(QWidget):
         self._rebuild_line_alignment_rows()
         return box
 
+    def _current_layout_alignments(self) -> list:
+        source = self._current_layout_source()
+        return list(source.line_alignments) or ["left"]
+
     def _rebuild_line_alignment_rows(self) -> None:
         while self._line_alignment_rows.count():
             item = self._line_alignment_rows.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        alignments = list(self._style.line_alignments) or ["left"]
+        alignments = self._current_layout_alignments()
         removable = len(alignments) > 1
         for index, align in enumerate(alignments):
             row = QWidget(self._line_alignment_rows_host)
@@ -2793,30 +2978,30 @@ class PropertyPanel(QWidget):
     def _on_line_alignment_changed(self, index: int, combo: QComboBox) -> None:
         if self._syncing:
             return
-        alignments = list(self._style.line_alignments) or ["left"]
+        alignments = self._current_layout_alignments()
         value = combo.currentData()
         if not (0 <= index < len(alignments)) or alignments[index] == value:
             return
         alignments[index] = value
-        self._update_style(line_alignments=alignments)
+        self._update_layout_field(line_alignments=alignments)
 
     def _on_add_line_alignment(self) -> None:
-        alignments = list(self._style.line_alignments) or ["left"]
+        alignments = self._current_layout_alignments()
         if len(alignments) >= 8:
             return
-        if self._style.line_y_position == "bottom":
+        if self._current_layout_source().line_y_position == "bottom":
             alignments.insert(0, alignments[0])
         else:
             alignments.append(alignments[-1])
-        self._update_style(line_alignments=alignments)
+        self._update_layout_field(line_alignments=alignments)
         self._rebuild_line_alignment_rows()
 
     def _on_remove_line_alignment(self, index: int) -> None:
-        alignments = list(self._style.line_alignments)
+        alignments = self._current_layout_alignments()
         if len(alignments) <= 1 or not (0 <= index < len(alignments)):
             return
         del alignments[index]
-        self._update_style(line_alignments=alignments)
+        self._update_layout_field(line_alignments=alignments)
         self._rebuild_line_alignment_rows()
 
     def _make_per_row_box(self, parent: QWidget) -> QWidget:

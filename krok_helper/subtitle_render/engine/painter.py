@@ -318,6 +318,7 @@ def clear_before_layer_cache() -> None:
 
 from krok_helper.subtitle_render.engine.timeline import (
     DisplayLine,
+    assign_lanes,
     char_fill_ratio,
     compute_char_intervals,
     compute_display_lines,
@@ -330,6 +331,7 @@ from krok_helper.subtitle_render.models import (
     DecorationKind,
     KaraokeColors,
     KaraokeColorState,
+    LYRICS_LAYOUT_FIELDS,
     PaintFill,
     RubyAnnotation,
     Style,
@@ -536,7 +538,12 @@ def paint_frame_to_painter(
                 track_t_ms,
                 display_style,
                 baseline_y=(
-                    line_layout.baseline_y if line_layout is not None else baselines[display_line.lane]
+                    line_layout.baseline_y
+                    if line_layout is not None
+                    else baselines.get(
+                        display_line.lane,
+                        next(iter(baselines.values()), logical_h // 2),
+                    )
                 ),
                 line_x=line_x,
                 lane=display_line.lane if display_style.dual_line_layout else None,
@@ -1243,7 +1250,13 @@ def _resolve_sayatoo_line_layouts(
                 )
                 + visual_pad
             )
-        baseline_y = baselines.get(display_line.lane)
+        if int(getattr(line, "layout_index", 0) or 0) > 0:
+            # 行引用了额外布局 → 垂直几何（锚点/余白/行距/行数）按该布局单独解析。
+            baseline_y = _resolve_display_baselines(
+                img_h, track, [display_line], line_style
+            ).get(display_line.lane)
+        else:
+            baseline_y = baselines.get(display_line.lane)
         if baseline_y is None:
             baseline_y = _resolve_baseline_y(metrics, img_h, line_style, ruby_metrics)
         layouts[display_line.lane] = _SayatooLineLayout(
@@ -2204,6 +2217,7 @@ def _visible_lines_for_style(
             section_ending_mode=style.section_ending_mode,
             protect_ms=_effective_line_protect_ms(style),
             lane_count=_lane_count(style),
+            row_count_of=_row_count_resolver(style),
         )
     display_line = _single_visible_display_line(track, t_ms, style)
     if display_line is None:
@@ -2649,10 +2663,11 @@ def _resolve_vertical_columns(
     gap = max(style.line_gap_px, 0)  # 竖排列距不允许负值（列重叠无意义）
     ruby_w = _vertical_ruby_allowance(track, style)
     # 右列：列右侧留出 ruby 宽度（ruby 排在基字右边）。列数随 lane 数扩展，
-    # lane k 在 lane k-1 左侧一列。
+    # lane k 在 lane k-1 左侧一列；行级布局的页行数可能超过全局行数，按可见行补足。
     right_center = img_w - margin - ruby_w - cell_w / 2
+    max_lane = max((item.lane for item in display_lines), default=0)
     columns: dict[int, int] = {}
-    for lane in range(_lane_count(style)):
+    for lane in range(max(_lane_count(style), max_lane + 1)):
         columns[lane] = int(round(right_center - lane * (cell_w + ruby_w + gap)))
     return columns
 
@@ -6955,20 +6970,22 @@ def _line_total_width(line: TimingLine, style: Style) -> int:
 def _renderable_page_lines(
     track: TimingTrack,
     line: TimingLine,
-    lane_count: int,
+    style: Style,
 ) -> list[tuple[TimingLine, int]] | None:
-    """N3「页」的近似：连续 ``lane_count`` 条可渲染行为一页（与 lane 分配一致）。
+    """N3「页」的近似：页划分与 timeline 的 lane 分配一致（页首行布局定行数）。
 
     返回同页 ``(行, lane)`` 列表（含自身）；行不在 track 中时返回 ``None``。
     """
     render_lines = [item for item in track.lines if not item.is_blank and item.chars]
-    lanes = max(int(lane_count), 1)
+    lanes, page_starts, page_rows = assign_lanes(
+        render_lines, _lane_count(style), _row_count_resolver(style)
+    )
     for index, item in enumerate(render_lines):
         if item is line:
-            page_start = (index // lanes) * lanes
+            page_start = page_starts[index]
+            page_end = min(page_start + page_rows[index], len(render_lines))
             return [
-                (render_lines[i], i - page_start)
-                for i in range(page_start, min(page_start + lanes, len(render_lines)))
+                (render_lines[i], lanes[i]) for i in range(page_start, page_end)
             ]
     return None
 
@@ -7001,7 +7018,7 @@ def _smart_horizontal_dx(
     margin = max(style.horizontal_margin_px, 0)
     font = max(style.font_size_px, 1)
     base_x = _resolve_line_x(img_w, total_w, style, lane, center_override=False)
-    page = _renderable_page_lines(track, line, _lane_count(style))
+    page = _renderable_page_lines(track, line, style)
     if page is not None and len(page) <= 1:
         # 单行页：SmartHorizon != None 时整行居中。
         return (img_w - total_w) // 2 - base_x
@@ -7061,6 +7078,104 @@ def _resolve_line_x_smart(
     )
 
 
+def apply_layout_to_page(
+    track: TimingTrack,
+    style: Style,
+    track_line_index: int,
+    layout_index: int,
+) -> list[int]:
+    """把 ``layout_index`` 应用到指定行所在页的所有行（N3 页级联动）。
+
+    ``track_line_index`` 是 ``track.lines`` 索引；返回被改写的 ``track.lines``
+    索引列表（空 = 该行不可渲染或未变化）。页按应用前的布局分配计算。
+    """
+    render_positions = [
+        i for i, line in enumerate(track.lines) if not line.is_blank and line.chars
+    ]
+    render_lines = [track.lines[i] for i in render_positions]
+    try:
+        render_index = render_positions.index(track_line_index)
+    except ValueError:
+        return []
+    _lanes, page_starts, page_rows = assign_lanes(
+        render_lines, _lane_count(style), _row_count_resolver(style)
+    )
+    page_start = page_starts[render_index]
+    page_end = min(page_start + page_rows[render_index], len(render_lines))
+    affected: list[int] = []
+    for i in range(page_start, page_end):
+        line = render_lines[i]
+        if line.layout_index != layout_index:
+            line.layout_index = layout_index
+            affected.append(render_positions[i])
+    return affected
+
+
+def assign_layout_to_all(track: TimingTrack, layout_index: int) -> bool:
+    """所有可渲染行统一应用同一布局（N3 UnificationLayoutSelector）。"""
+    changed = False
+    for line in track.lines:
+        if line.is_blank or not line.chars:
+            continue
+        if line.layout_index != layout_index:
+            line.layout_index = layout_index
+            changed = True
+    return changed
+
+
+def auto_assign_layouts_by_paragraph(track: TimingTrack, style: Style) -> bool:
+    """按段落行数自动选布局（N3 LinesLayoutSelector 的段落近似）。
+
+    每个段落（空行 + 间奏阈值划分，与段落末行居中同一套分段）取行数 N，
+    在「默认布局 + 额外布局」中找第一个行数 == N 的；找不到按 N-1, N-2…
+    递减再找；仍找不到用默认布局。返回是否有行被改写。
+    """
+    threshold = _paragraph_center_threshold(style)
+    flags = paragraph_last_line_flags(track, threshold_ms=threshold)
+    row_counts = [max(len(style.line_alignments), 1)] + [
+        max(len(layout.line_alignments), 1) for layout in style.layouts
+    ]
+    pick_cache: dict[int, int] = {}
+
+    def pick(page_lines: int) -> int:
+        if page_lines in pick_cache:
+            return pick_cache[page_lines]
+        choice = 0
+        for want in range(page_lines, 0, -1):
+            found = next(
+                (i for i, count in enumerate(row_counts) if count == want), None
+            )
+            if found is not None:
+                choice = found
+                break
+        pick_cache[page_lines] = choice
+        return choice
+
+    changed = False
+    paragraph: list[TimingLine] = []
+
+    def flush() -> None:
+        nonlocal changed
+        if not paragraph:
+            return
+        index = pick(len(paragraph))
+        for item in paragraph:
+            if item.layout_index != index:
+                item.layout_index = index
+                changed = True
+        paragraph.clear()
+
+    for i, line in enumerate(track.lines):
+        if line.is_blank or not line.chars:
+            flush()
+            continue
+        paragraph.append(line)
+        if i < len(flags) and flags[i]:
+            flush()
+    flush()
+    return changed
+
+
 @dataclass(frozen=True)
 class LayoutMarginWarning:
     """一条歌词行的左右余白检查结果（对齐 N3 预览警告语义）。"""
@@ -7101,6 +7216,7 @@ def check_layout_margins(
             section_ending_mode=style.section_ending_mode,
             protect_ms=_effective_line_protect_ms(style),
             lane_count=_lane_count(style),
+            row_count_of=_row_count_resolver(style),
         )
     else:
         display_lines = [
@@ -7108,8 +7224,6 @@ def check_layout_margins(
             for line in track.lines
             if not line.is_blank and line.chars
         ]
-    margin_left = max(style.horizontal_margin_px, 0)
-    margin_right = max(style.horizontal_margin_px, 0)
     line_indices = {id(line): index for index, line in enumerate(track.lines)}
     warnings: list[LayoutMarginWarning] = []
     for display_line in display_lines:
@@ -7117,6 +7231,8 @@ def check_layout_margins(
         if not line.chars:
             continue
         line_style = _style_for_line(style, line)
+        margin_left = max(line_style.horizontal_margin_px, 0)
+        margin_right = max(line_style.horizontal_margin_px, 0)
         total_w = _line_total_width(line, line_style)
         lane = display_line.lane if line_style.dual_line_layout else None
         x0 = _resolve_line_x_smart(
@@ -7158,7 +7274,26 @@ def _line_end_ms(line: TimingLine) -> int:
     return line.chars[-1].start_ms + 1000 if line.chars else 0
 
 
+def _layout_style_for_line(style: Style, line: TimingLine) -> Style:
+    """把行引用的布局定义套到 style 上（0 = 默认布局，原样返回）。"""
+    index = int(getattr(line, "layout_index", 0) or 0)
+    if index <= 0 or index > len(style.layouts):
+        return style
+    layout = style.layouts[index - 1]
+    return replace(
+        style, **{name: getattr(layout, name) for name in LYRICS_LAYOUT_FIELDS}
+    )
+
+
+def _row_count_resolver(style: Style):
+    """timeline ``row_count_of`` 回调：按行布局返回该行所在页的行数。"""
+    if not style.layouts:
+        return None  # 没有额外布局 → 全部页用全局行数，走快路径
+    return lambda line: _lane_count(_layout_style_for_line(style, line))
+
+
 def _style_for_line(style: Style, line: TimingLine) -> Style:
+    style = _layout_style_for_line(style, line)
     if line.singer_id is None:
         return style
     scheme = style.singer_style_overrides.get(line.singer_id)

@@ -70,7 +70,12 @@ from krok_helper.subtitle_render.engine.encoder_select import (
     ENCODER_NVENC,
     ENCODER_QSV,
 )
-from krok_helper.subtitle_render.engine.painter import check_layout_margins
+from krok_helper.subtitle_render.engine.painter import (
+    apply_layout_to_page,
+    assign_layout_to_all,
+    auto_assign_layouts_by_paragraph,
+    check_layout_margins,
+)
 from krok_helper.subtitle_render.engine.renderer import RenderJob, render_subtitle_video
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
@@ -94,6 +99,7 @@ from krok_helper.subtitle_render.models import (
     SubtitleStyleScheme,
     Style,
     TimingTrack,
+    rescale_layout_sizes,
     subtitle_style_scheme_from_dict,
     subtitle_style_scheme_to_dict,
     style_from_dict,
@@ -677,6 +683,11 @@ class SubtitleRenderWindow(QWidget):
             if self._audio_path is not None and self._audio_path != self._video_path
             else None
         )
+        line_layout_indices = (
+            [int(getattr(line, "layout_index", 0) or 0) for line in self._timing_track.lines]
+            if self._timing_track is not None
+            else None
+        )
         return project_payload(
             subtitle_path=self._subtitle_path,
             video_path=self._video_path,
@@ -684,6 +695,7 @@ class SubtitleRenderWindow(QWidget):
             style=style_to_dict(self._style),
             screen=screen_settings_to_dict(self._screen_settings),
             selected_scheme_key=self._selected_scheme_key,
+            line_layout_indices=line_layout_indices,
             output=project_output_payload(
                 encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
                 crf=self._export_crf_spin.value(),
@@ -721,6 +733,7 @@ class SubtitleRenderWindow(QWidget):
         paths = split_project_paths(data)
         if paths["subtitle_path"] is not None and paths["subtitle_path"].is_file():
             self.load_from_lrc(paths["subtitle_path"])
+            self._apply_line_layout_indices(data.get("line_layout_indices"))
         if paths["video_path"] is not None and paths["video_path"].is_file():
             self.load_video(paths["video_path"])
         audio = paths["audio_path"]
@@ -889,6 +902,7 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.browseRequested.connect(self._browse_subtitle)
         self._lyrics_panel.roleChanged.connect(self._on_lyrics_role_changed)
         self._lyrics_panel.rowClicked.connect(self._on_lyrics_row_clicked)
+        self._lyrics_panel.layoutChangeRequested.connect(self._on_layout_change_requested)
         top.addWidget(self._lyrics_panel)
 
         self._transport_bar.set_preview_fps(self._screen_settings.fps)
@@ -912,6 +926,9 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.styleChanged.connect(self._apply_style)
         self._property_panel.presetSchemesChanged.connect(self._apply_style_presets)
         self._property_panel.schemeSelectionChanged.connect(self._on_scheme_selection_changed)
+        self._property_panel.layoutAssignAllRequested.connect(self._on_layout_assign_all)
+        self._property_panel.layoutAutoAssignRequested.connect(self._on_layout_auto_assign)
+        self._property_panel.layoutDeleted.connect(self._on_layout_deleted)
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
         self._selected_scheme_key = self._property_panel.current_scheme_key()
 
@@ -1253,6 +1270,82 @@ class SubtitleRenderWindow(QWidget):
         self._save_persisted_state()
         self._mark_project_dirty()
 
+    def _apply_line_layout_indices(self, payload: object) -> None:
+        """把项目文件里的每行布局引用套回刚加载的 track。"""
+        track = self._timing_track
+        if track is None or not isinstance(payload, list):
+            return
+        limit = len(self._style.layouts)
+        for line, value in zip(track.lines, payload):
+            try:
+                index = int(value)
+            except (TypeError, ValueError):
+                continue
+            line.layout_index = index if 0 <= index <= limit else 0
+        self._lyrics_panel.set_style(self._style)
+        self._preview_panel.set_style(self._style)
+
+    def _rescale_layout_for_height(self, new_height: int) -> None:
+        """输出高度变化时按 N3 SizeAndRatio 语义重算布局像素字段。"""
+        rescaled = rescale_layout_sizes(self._style, new_height)
+        if rescaled is self._style:
+            return
+        self._style = rescaled
+        self._property_panel.set_style(self._style)
+        self._apply_style(self._style)
+
+    def _on_layout_change_requested(self, rows: list, layout_index: int) -> None:
+        """歌词列表右键应用布局：对每个选中行按页联动写入。"""
+        track = self._timing_track
+        if track is None:
+            return
+        changed: set[int] = set()
+        for row in rows:
+            if isinstance(row, int) and 0 <= row < len(track.lines):
+                changed.update(
+                    apply_layout_to_page(track, self._style, row, int(layout_index))
+                )
+        if changed:
+            self._refresh_after_layout_assignment()
+
+    def _on_layout_assign_all(self, layout_index: int) -> None:
+        track = self._timing_track
+        if track is None:
+            return
+        if assign_layout_to_all(track, int(layout_index)):
+            self._refresh_after_layout_assignment()
+
+    def _on_layout_auto_assign(self) -> None:
+        track = self._timing_track
+        if track is None:
+            return
+        if auto_assign_layouts_by_paragraph(track, self._style):
+            self._refresh_after_layout_assignment()
+
+    def _on_layout_deleted(self, deleted_index: int) -> None:
+        """布局被删除后修正歌词行引用：被删的回默认，其后的序号前移。"""
+        track = self._timing_track
+        if track is None:
+            return
+        changed = False
+        for line in track.lines:
+            index = int(getattr(line, "layout_index", 0) or 0)
+            if index == deleted_index:
+                line.layout_index = 0
+                changed = True
+            elif index > deleted_index:
+                line.layout_index = index - 1
+                changed = True
+        if changed:
+            self._refresh_after_layout_assignment()
+
+    def _refresh_after_layout_assignment(self) -> None:
+        # track 是就地修改的，set_style 只为触发预览/列表重绘。
+        self._preview_panel.set_style(self._style)
+        self._lyrics_panel.set_style(self._style)
+        self._margin_check_timer.start()
+        self._mark_project_dirty()
+
     def _check_layout_margins(self) -> None:
         """N3 式左右余白检查：溢出画面 → Warning；侵入余白 → Information。"""
         track = self._timing_track
@@ -1317,6 +1410,7 @@ class SubtitleRenderWindow(QWidget):
             fps=self._screen_settings.fps,
         )
         self._transport_bar.set_preview_fps(self._screen_settings.fps)
+        self._rescale_layout_for_height(self._screen_settings.height)
         self._margin_check_timer.start()
         self._save_persisted_state()
 

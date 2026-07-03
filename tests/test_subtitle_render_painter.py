@@ -4005,3 +4005,139 @@ def test_style_dict_migrates_legacy_margin_when_new_key_missing():
     payload["upper_line_left_margin_px"] = 80
     restored = style_from_dict(payload)
     assert restored.horizontal_margin_px == 80
+
+
+# ---------------------------------------------------------------------------
+# P4：多布局定义 + 页级应用 + 自动选择器 + SizeAndRatio
+# ---------------------------------------------------------------------------
+
+from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
+    _layout_style_for_line,
+    apply_layout_to_page,
+    assign_layout_to_all,
+    auto_assign_layouts_by_paragraph,
+)
+from krok_helper.subtitle_render.engine.timeline import assign_lanes  # noqa: E402
+from krok_helper.subtitle_render.models import (  # noqa: E402
+    LyricsLayout,
+    rescale_layout_sizes,
+)
+
+
+def _three_row_layout(name: str = "三行") -> LyricsLayout:
+    return LyricsLayout(
+        name=name,
+        line_y_position="top",
+        line_y_margin_px=40,
+        line_gap_px=30,
+        horizontal_margin_px=60,
+        line_alignments=["left", "center", "right"],
+    )
+
+
+def test_layout_style_for_line_applies_referenced_layout(qapp):
+    style = Style(layouts=[_three_row_layout()])
+    line = TimingLine(chars=[TimingChar(text="あ", start_ms=0)], end_ms=500)
+
+    assert _layout_style_for_line(style, line) is style  # index 0 = 默认布局
+
+    line.layout_index = 1
+    effective = _layout_style_for_line(style, line)
+    assert effective.line_y_position == "top"
+    assert effective.line_alignments == ["left", "center", "right"]
+    assert effective.horizontal_margin_px == 60
+    assert effective.layouts == style.layouts  # 布局列表保留，可继续解析同页其他行
+
+    line.layout_index = 9  # 越界 → 回默认
+    assert _layout_style_for_line(style, line) is style
+
+
+def test_apply_layout_to_page_links_whole_page(qapp):
+    track = _continuous_track(["あい", "うえ", "おか", "きく"])
+    style = Style(layouts=[_three_row_layout()])
+
+    affected = apply_layout_to_page(track, style, 1, 1)  # 第 2 行 → 页 (0,1)
+
+    assert affected == [0, 1]
+    assert [line.layout_index for line in track.lines] == [1, 1, 0, 0]
+
+
+def test_apply_layout_pages_follow_page_head_row_count(qapp):
+    # 前两行已用三行布局 → 第一页覆盖 0..2，后续页从第 3 行重新开始
+    track = _continuous_track(["あい", "うえ", "おか", "きく", "けこ"])
+    style = Style(layouts=[_three_row_layout()])
+    track.lines[0].layout_index = 1
+
+    render_lines = [l for l in track.lines if not l.is_blank and l.chars]
+    lanes, page_starts, _rows = assign_lanes(
+        render_lines,
+        2,
+        lambda line: len(_layout_style_for_line(style, line).line_alignments),
+    )
+    assert lanes == [0, 1, 2, 0, 1]
+    assert page_starts == [0, 0, 0, 3, 3]
+
+
+def test_assign_layout_to_all_and_auto_assign(qapp):
+    # 两个段落：3 行 + 2 行（空行分隔）
+    lines = []
+    t = 0
+    for count, texts in ((3, ["あい", "うえ", "おか"]), (2, ["きく", "けこ"])):
+        for text in texts:
+            chars = [
+                TimingChar(text=ch, start_ms=t + i * 300) for i, ch in enumerate(text)
+            ]
+            lines.append(TimingLine(chars=chars, end_ms=t + len(text) * 300))
+            t += len(text) * 300
+        lines.append(TimingLine(is_blank=True))
+        t += 10_000
+    track = TimingTrack(lines=lines)
+    style = Style(layouts=[_three_row_layout()])
+
+    assert auto_assign_layouts_by_paragraph(track, style) is True
+    renderable = [l for l in track.lines if not l.is_blank and l.chars]
+    # 3 行段落命中三行布局（index 1），2 行段落命中默认布局（行数 2）
+    assert [l.layout_index for l in renderable] == [1, 1, 1, 0, 0]
+
+    assert assign_layout_to_all(track, 1) is True
+    assert all(l.layout_index == 1 for l in renderable)
+    assert assign_layout_to_all(track, 1) is False  # 无变化
+
+
+def test_style_dict_roundtrip_keeps_layout_definitions():
+    style = Style(layouts=[_three_row_layout("下寄せ3行")])
+    restored = style_from_dict(style_to_dict(style))
+
+    assert len(restored.layouts) == 1
+    layout = restored.layouts[0]
+    assert layout.name == "下寄せ3行"
+    assert layout.line_y_position == "top"
+    assert layout.line_alignments == ["left", "center", "right"]
+    assert layout.horizontal_margin_px == 60
+    # 非法 payload 防御
+    assert style_from_dict({"layouts": "bogus"}).layouts == []
+
+
+def test_rescale_layout_sizes_matches_n3_size_and_ratio():
+    style = Style(
+        line_y_margin_px=80,
+        line_gap_px=90,
+        horizontal_margin_px=50,
+        layout_reference_height=1080,
+        layouts=[_three_row_layout()],
+    )
+    scaled = rescale_layout_sizes(style, 720)
+
+    assert scaled.layout_reference_height == 720
+    assert scaled.line_y_margin_px == int(720 * 80 / 1080)
+    assert scaled.line_gap_px == int(720 * 90 / 1080)
+    assert scaled.horizontal_margin_px == int(720 * 50 / 1080)
+    assert scaled.upper_line_left_margin_px == scaled.horizontal_margin_px
+    layout = scaled.layouts[0]
+    assert layout.line_y_margin_px == int(720 * 40 / 1080)
+    assert layout.line_gap_px == int(720 * 30 / 1080)
+    assert layout.horizontal_margin_px == int(720 * 60 / 1080)
+    # 高度不变 → 原对象返回；0 保持 0
+    assert rescale_layout_sizes(scaled, 720) is scaled
+    zero = rescale_layout_sizes(replace(style, line_gap_px=0), 720)
+    assert zero.line_gap_px == 0

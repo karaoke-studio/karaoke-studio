@@ -1835,3 +1835,24 @@ def _wheel_event(widget, delta: int = 120) -> QWheelEvent:
         Qt.ScrollPhase.ScrollUpdate,
         False,
     )
+
+
+def test_property_panel_layout_selector_edits_selected_layout(qapp):
+    panel = PropertyPanel()
+    emitted = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._on_add_layout()
+    assert len(panel.subtitle_style.layouts) == 1
+    assert panel._current_layout_index() == 1
+
+    # 编辑写入选中的布局，不动默认布局字段
+    panel._line_gap_spin.setValue(33)
+    assert emitted[-1].layouts[0].line_gap_px == 33
+    assert emitted[-1].line_gap_px == Style().line_gap_px
+
+    # 切回默认布局 → 编辑写回 Style 自身
+    panel._layout_combo.setCurrentIndex(0)
+    panel._line_gap_spin.setValue(44)
+    assert emitted[-1].line_gap_px == 44
+    assert emitted[-1].layouts[0].line_gap_px == 33
