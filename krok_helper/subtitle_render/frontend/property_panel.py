@@ -1182,6 +1182,7 @@ class PropertyPanel(QWidget):
     _PAGE_SPECS = (
         ("font", FIF.FONT, "字体"),
         ("layout", FIF.LAYOUT, "布局"),
+        ("timing", FIF.DATE_TIME, "时间"),
         ("effects", FIF.BRUSH, "特效"),
         ("title", FIF.LABEL, "标题"),
     )
@@ -1245,6 +1246,7 @@ class PropertyPanel(QWidget):
         pages = (
             self._make_subtitle_page(),
             self._make_basic_page(),
+            self._make_timing_page(),
             self._make_effects_page(),
             self._make_title_page(),
         )
@@ -1349,6 +1351,9 @@ class PropertyPanel(QWidget):
             self._line_tail_spin.setValue(self._style.line_tail_ms)
             self._line_offset_spin.setValue(self._style.timing_offset_ms)
             self._section_gap_spin.setValue(self._style.section_gap_ms)
+            self._lane_gap_spin.setValue(self._style.line_lane_gap_ms)
+            self._pair_delay_spin.setValue(self._style.line_pair_second_delay_ms)
+            self._max_hold_spin.setValue(self._style.line_max_hold_ms)
             self._section_ending_combo.setCurrentIndex(
                 max(0, self._section_ending_combo.findData(self._style.section_ending_mode))
             )
@@ -1385,8 +1390,18 @@ class PropertyPanel(QWidget):
 
     def _make_basic_page(self) -> QWidget:
         scroll, layout = _scroll_page()
-        layout.addWidget(self._make_viewport_section())
-        layout.addWidget(self._make_position_section())
+        layout.addWidget(self._make_layout_scheme_section())
+        layout.addWidget(self._make_row_structure_section())
+        layout.addWidget(self._make_vertical_layout_section())
+        layout.addWidget(self._make_writing_direction_section())
+        viewport = self._make_viewport_section()
+        viewport.set_expanded(False)  # 本项目特有的整体变换，低频使用默认折叠
+        layout.addWidget(viewport)
+        layout.addStretch(1)
+        return scroll
+
+    def _make_timing_page(self) -> QWidget:
+        scroll, layout = _scroll_page()
         layout.addWidget(self._make_timing_section())
         layout.addStretch(1)
         return scroll
@@ -2610,10 +2625,10 @@ class PropertyPanel(QWidget):
         layout.addWidget(row)
         return section
 
-    def _make_position_section(self) -> QFrame:
-        section, layout = _section("位置")
+    def _make_layout_scheme_section(self) -> QFrame:
+        """布局方案（N3 レイアウト設定）：默认布局 = Style 自身字段。"""
+        section, layout = _section("布局方案")
 
-        # ---- 布局方案（N3 レイアウト設定）：默认布局 = Style 自身字段 ----
         self._layout_combo = _WheelFocusedComboBox(section)
         _compact_control(self._layout_combo)
         self._layout_combo.setToolTip(
@@ -2668,6 +2683,11 @@ class PropertyPanel(QWidget):
             btn.setMinimumHeight(30)
             assign_btn_layout.addWidget(btn, 1)
         layout.addWidget(assign_btn_row)
+        return section
+
+    def _make_row_structure_section(self) -> QFrame:
+        """行结构：行数 / 每行对齐 / 水平模式 / 智能水平 / 左右余白。"""
+        section, layout = _section("行结构")
 
         self._dual_line_check = QCheckBox("多行显示", section)
         self._dual_line_check.setToolTip(
@@ -2677,39 +2697,11 @@ class PropertyPanel(QWidget):
         self._dual_line_check.toggled.connect(self._on_dual_line_toggled)
         layout.addWidget(self._dual_line_check)
 
-        self._rtl_check = QCheckBox("从右到左", section)
-        self._rtl_check.toggled.connect(
-            lambda checked: self._update_style(right_to_left=checked)
-        )
-        layout.addWidget(self._rtl_check)
-
-        self._vertical_check = QCheckBox("竖排", section)
-        self._vertical_check.toggled.connect(
-            lambda checked: self._update_style(vertical=checked)
-        )
-        layout.addWidget(self._vertical_check)
-
         row = QWidget(section)
         row_layout = QGridLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setHorizontalSpacing(8)
         row_layout.setVerticalSpacing(8)
-        self._line_position_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._line_position_combo)
-        for label, value in [("底部", "bottom"), ("居中", "center"), ("顶部", "top")]:
-            self._line_position_combo.addItem(label, value)
-        self._line_position_combo.currentIndexChanged.connect(
-            lambda _index: self._update_layout_field(
-                line_y_position=self._line_position_combo.currentData()
-            )
-        )
-        row_layout.addWidget(_field("行位置", self._line_position_combo), 0, 0)
-
-        self._line_margin_spin = _spin(0, 400, suffix=" px")
-        self._line_margin_spin.valueChanged.connect(
-            lambda value: self._update_layout_field(line_y_margin_px=value)
-        )
-        row_layout.addWidget(_field("下行底边距", self._line_margin_spin), 0, 1)
 
         self._horizontal_layout_combo = _WheelFocusedComboBox(section)
         _compact_control(self._horizontal_layout_combo)
@@ -2722,23 +2714,7 @@ class PropertyPanel(QWidget):
         self._horizontal_layout_combo.currentIndexChanged.connect(
             lambda _index: self._on_horizontal_layout_changed()
         )
-        row_layout.addWidget(_field("水平布局", self._horizontal_layout_combo), 1, 0)
-
-        self._line_gap_spin = _spin(-400, 400, suffix=" px")
-        self._line_gap_spin.valueChanged.connect(
-            lambda value: self._update_layout_field(line_gap_px=value)
-        )
-        row_layout.addWidget(_field("两行间距", self._line_gap_spin), 1, 1)
-
-        self._horizontal_margin_spin = _spin(0, 800, suffix=" px")
-        self._horizontal_margin_spin.setToolTip(
-            "左右余白（N3 左右余白）：左对齐行的左缘贴此值，右对齐行的右缘贴"
-            "「画面宽 − 此值」。"
-        )
-        self._horizontal_margin_spin.valueChanged.connect(
-            self._on_horizontal_margin_changed
-        )
-        row_layout.addWidget(_field("左右余白", self._horizontal_margin_spin), 2, 0)
+        row_layout.addWidget(_field("水平布局", self._horizontal_layout_combo), 0, 0)
 
         self._smart_horizontal_combo = _WheelFocusedComboBox(section)
         _compact_control(self._smart_horizontal_combo)
@@ -2750,7 +2726,7 @@ class PropertyPanel(QWidget):
             self._smart_horizontal_combo.addItem(label, value)
         self._smart_horizontal_combo.setToolTip(
             "智能水平配置（N3 スマート水平配置，仅「上左下右」布局）：短行自动向画面"
-            "中央收拢。左右余白对齐 = 按上下两行整体判断（N3 默认）；中心位置对齐 = "
+            "中央收拢。左右余白对齐 = 按页整体判断（N3 默认）；中心位置对齐 = "
             "逐行判断；不调整 = 行永远贴左右边距，同时关闭段落末行居中。"
         )
         self._smart_horizontal_combo.currentIndexChanged.connect(
@@ -2758,7 +2734,17 @@ class PropertyPanel(QWidget):
                 smart_horizontal=self._smart_horizontal_combo.currentData()
             )
         )
-        row_layout.addWidget(_field("智能水平", self._smart_horizontal_combo), 2, 1)
+        row_layout.addWidget(_field("智能水平", self._smart_horizontal_combo), 0, 1)
+
+        self._horizontal_margin_spin = _spin(0, 800, suffix=" px")
+        self._horizontal_margin_spin.setToolTip(
+            "左右余白（N3 左右余白）：左对齐行的左缘贴此值，右对齐行的右缘贴"
+            "「画面宽 − 此值」。"
+        )
+        self._horizontal_margin_spin.valueChanged.connect(
+            self._on_horizontal_margin_changed
+        )
+        row_layout.addWidget(_field("左右余白", self._horizontal_margin_spin), 1, 0)
 
         row_layout.setColumnStretch(0, 1)
         row_layout.setColumnStretch(1, 1)
@@ -2766,6 +2752,80 @@ class PropertyPanel(QWidget):
 
         layout.addWidget(self._make_line_alignments_box(section))
         layout.addWidget(self._make_per_row_box(section))
+        return section
+
+    def _make_vertical_layout_section(self) -> QFrame:
+        """垂直：上下配置 / 上下余白 / 行间距（N3 上下配置・余白・行間）。"""
+        section, layout = _section("垂直")
+
+        row = QWidget(section)
+        row_layout = QGridLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setHorizontalSpacing(8)
+        row_layout.setVerticalSpacing(8)
+
+        self._line_position_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._line_position_combo)
+        for label, value in [("底部", "bottom"), ("居中", "center"), ("顶部", "top")]:
+            self._line_position_combo.addItem(label, value)
+        self._line_position_combo.currentIndexChanged.connect(
+            self._on_line_position_changed
+        )
+        row_layout.addWidget(_field("上下配置", self._line_position_combo), 0, 0)
+
+        self._line_margin_spin = _spin(0, 400, suffix=" px")
+        self._line_margin_spin.setToolTip(
+            "顶部锚定 = 画面上端到最上行的余白；底部锚定 = 画面下端到最下行的"
+            "余白；居中时忽略（N3 上/下余白）。"
+        )
+        self._line_margin_spin.valueChanged.connect(
+            lambda value: self._update_layout_field(line_y_margin_px=value)
+        )
+        row_layout.addWidget(_field("上下余白", self._line_margin_spin), 0, 1)
+
+        self._line_gap_spin = _spin(-400, 400, suffix=" px")
+        self._line_gap_spin.setToolTip(
+            "相邻两行主文字行盒之间的间距（N3 行間），可为负让行盒重叠；"
+            "不包含注音高度。"
+        )
+        self._line_gap_spin.valueChanged.connect(
+            lambda value: self._update_layout_field(line_gap_px=value)
+        )
+        row_layout.addWidget(_field("行间距", self._line_gap_spin), 1, 0)
+
+        row_layout.setColumnStretch(0, 1)
+        row_layout.setColumnStretch(1, 1)
+        layout.addWidget(row)
+        return section
+
+    def _on_line_position_changed(self, _index: int = 0) -> None:
+        self._update_layout_field(
+            line_y_position=self._line_position_combo.currentData()
+        )
+        self._sync_vertical_margin_enabled()
+
+    def _sync_vertical_margin_enabled(self) -> None:
+        """居中锚定时上下余白不参与排版（对齐 N3 的控件显隐逻辑）。"""
+        if not hasattr(self, "_line_margin_spin"):
+            return
+        position = self._current_layout_values().get("line_y_position")
+        self._line_margin_spin.setEnabled(position != "center")
+
+    def _make_writing_direction_section(self) -> QFrame:
+        """书写方向：全局模式开关（本项目特有，N3 无对应项）。"""
+        section, layout = _section("书写方向")
+
+        self._vertical_check = QCheckBox("竖排", section)
+        self._vertical_check.toggled.connect(
+            lambda checked: self._update_style(vertical=checked)
+        )
+        layout.addWidget(self._vertical_check)
+
+        self._rtl_check = QCheckBox("从右到左", section)
+        self._rtl_check.toggled.connect(
+            lambda checked: self._update_style(right_to_left=checked)
+        )
+        layout.addWidget(self._rtl_check)
         return section
 
     def _on_horizontal_margin_changed(self, value: int) -> None:
@@ -2845,6 +2905,7 @@ class PropertyPanel(QWidget):
             )
             self._horizontal_margin_spin.setValue(int(values["horizontal_margin_px"]))
             self._rebuild_line_alignment_rows()
+            self._sync_vertical_margin_enabled()
         finally:
             self._syncing = was_syncing
 
@@ -3111,6 +3172,31 @@ class PropertyPanel(QWidget):
             )
         )
         row_layout.addWidget(_field("段落结束", self._section_ending_combo), 2, 0)
+
+        self._lane_gap_spin = _spin(0, 5_000, suffix=" ms")
+        self._lane_gap_spin.setToolTip("同一显示轨上相邻两句之间保留的时间间隔。")
+        self._lane_gap_spin.valueChanged.connect(
+            lambda value: self._update_style(line_lane_gap_ms=value)
+        )
+        row_layout.addWidget(_field("同轨间隔", self._lane_gap_spin), 2, 1)
+
+        self._pair_delay_spin = _spin(0, 20_000, suffix=" ms")
+        self._pair_delay_spin.setToolTip(
+            "同页中非首行相对上一行表示开始的默认延迟（N3 页内行延迟）。"
+        )
+        self._pair_delay_spin.valueChanged.connect(
+            lambda value: self._update_style(line_pair_second_delay_ms=value)
+        )
+        row_layout.addWidget(_field("页内行延迟", self._pair_delay_spin), 3, 0)
+
+        self._max_hold_spin = _spin(0, 60_000, suffix=" ms")
+        self._max_hold_spin.setToolTip(
+            "单句显示窗口最长保留时间，避免长间奏时字幕过久挂屏；0 = 不限制。"
+        )
+        self._max_hold_spin.valueChanged.connect(
+            lambda value: self._update_style(line_max_hold_ms=value)
+        )
+        row_layout.addWidget(_field("最长挂屏", self._max_hold_spin), 3, 1)
 
         row_layout.setColumnStretch(0, 1)
         row_layout.setColumnStretch(1, 1)

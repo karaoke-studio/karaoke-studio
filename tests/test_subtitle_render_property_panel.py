@@ -436,24 +436,35 @@ def test_property_panel_basic_page_has_no_screen_section(qapp):
         for index in range(basic_layout.count() - 1)
     ]
 
-    assert section_titles == ["视图", "位置", "时间"]
+    assert section_titles == ["布局方案", "行结构", "垂直", "书写方向", "视图"]
     assert not hasattr(panel, "_screen_preset_combo")
+    # 视图是低频的整体变换，默认折叠
+    viewport_section = basic_layout.itemAt(len(section_titles) - 1).widget()
+    assert viewport_section.header.text() == "视图"
+    assert viewport_section.is_expanded() is False
+
+    timing_layout = panel.widget(2).widget().layout()
+    timing_titles = [
+        timing_layout.itemAt(index).widget().header.text()
+        for index in range(timing_layout.count() - 1)
+    ]
+    assert timing_titles == ["时间"]
 
 
 def test_property_panel_uses_horizontal_icon_tabs_in_expected_order(qapp):
     panel = PropertyPanel()
 
     assert isinstance(panel._navigation, SegmentedToggleToolWidget)
-    assert panel.count() == 4
-    assert [spec[2] for spec in panel._PAGE_SPECS] == ["字体", "布局", "特效", "标题"]
+    assert panel.count() == 5
+    assert [spec[2] for spec in panel._PAGE_SPECS] == ["字体", "布局", "时间", "特效", "标题"]
     for route_key, _icon, label in panel._PAGE_SPECS:
         item = panel._navigation.widget(route_key)
         assert not item.icon().isNull()
         assert item.toolTip() == label
         assert item.height() == 32
 
-    panel.setCurrentIndex(2)
-    assert panel.currentIndex() == 2
+    panel.setCurrentIndex(3)
+    assert panel.currentIndex() == 3
     assert panel._navigation.currentRouteKey() == "effects"
 
     for expected_index, (route_key, _icon, _label) in enumerate(panel._PAGE_SPECS):
