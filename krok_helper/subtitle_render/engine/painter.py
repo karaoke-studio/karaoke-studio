@@ -1210,9 +1210,14 @@ def _resolve_sayatoo_line_layouts(
             _char_layout_width(c.text, font, metrics, latin_metrics, font_for, line_style)
             for c in line.chars
         ]
-        text_w = _line_text_width(char_widths, line_style)
+        char_gaps, ruby_left, ruby_right = _ruby_char_gaps(
+            line, char_widths, active_rubies, line_style
+        )
+        text_w = _line_text_width(char_widths, line_style) + sum(char_gaps)
         visual_pad = _visual_text_padding(line_style)
-        text_line_w = max(int(round(text_w + visual_pad * 2)), 1)
+        left_ext = max(visual_pad, ruby_left)
+        right_ext = max(visual_pad, ruby_right)
+        text_line_w = max(int(round(text_w)) + left_ext + right_ext, 1)
         center_line = _line_center_override(track, line, line_style)
         signal_x: float | None = None
         if (
@@ -1233,8 +1238,8 @@ def _resolve_sayatoo_line_layouts(
             draw_left = _signal_local_x(signal_metrics, line_style)
             natural_left = draw_left - _signal_offset_x(line_style)
             natural_right = natural_left + signal_metrics.group_width
-            union_left = min(-float(visual_pad), natural_left)
-            union_right = max(float(text_w + visual_pad), natural_right)
+            union_left = min(-float(left_ext), natural_left)
+            union_right = max(float(text_w) + right_ext, natural_right)
             union_w = max(int(round(union_right - union_left)), 1)
             union_x = _resolve_line_x_smart(
                 img_w, union_w, track, line, line_style, display_line.lane,
@@ -1248,7 +1253,7 @@ def _resolve_sayatoo_line_layouts(
                     img_w, text_line_w, track, line, line_style, display_line.lane,
                     center_override=center_line,
                 )
-                + visual_pad
+                + left_ext
             )
         if int(getattr(line, "layout_index", 0) or 0) > 0:
             # 行引用了额外布局 → 垂直几何（锚点/余白/行距/行数）按该布局单独解析。
@@ -3556,35 +3561,44 @@ def _layout_plain_line(
     ruby_font = _build_ruby_font(style)
     ruby_metrics = QFontMetrics(ruby_font) if active_rubies else None
 
-    # 整行宽度 → 水平居中起点（英数字符用英数字体的步进）
+    # 整行宽度 → 水平居中起点（英数字符用英数字体的步进）。
+    # 演唱计时用原始字宽；ruby 避让间隙只改几何。
     char_widths = [
         _char_layout_width(c.text, font, metrics, latin_metrics, font_for, style)
         for c in line.chars
     ]
-    total_w = _line_text_width(char_widths, style)
+    intervals = compute_char_intervals(line, char_widths)
+    char_gaps, ruby_left_ext, ruby_right_ext = _ruby_char_gaps(
+        line, char_widths, active_rubies, style, intervals
+    )
+    total_w = _line_text_width(char_widths, style) + sum(char_gaps)
     visual_pad = _visual_text_padding(style)
+    left_ext = max(visual_pad, ruby_left_ext)
+    right_ext = max(visual_pad, ruby_right_ext)
     x0 = (
         line_x
         if line_x is not None
         else _resolve_line_x_smart(
-            img_w, total_w + visual_pad * 2, track, line, style, lane,
+            img_w, total_w + left_ext + right_ext, track, line, style, lane,
             center_override=_line_center_override(track, line, style),
         )
-        + visual_pad
+        + left_ext
     )
     y = (
         baseline_y
         if baseline_y is not None
         else _resolve_baseline_y(metrics, img_h, style, ruby_metrics)
     )
-
-    intervals = compute_char_intervals(line, char_widths)
     rtl = style.right_to_left
-    char_lefts = _char_left_positions(char_widths, x0, rtl, _letter_spacing(style))
+    char_lefts = _char_left_positions(
+        char_widths, x0, rtl, _letter_spacing(style), char_gaps=char_gaps
+    )
     char_x_ranges: list[tuple[int, int]] = [
         (left, left + w) for left, w in zip(char_lefts, char_widths)
     ]
-    text_layout = _build_text_layout(line, style, x0=x0, baseline_y=y, inline_styles=False)
+    text_layout = _build_text_layout(
+        line, style, x0=x0, baseline_y=y, inline_styles=False, char_gaps=char_gaps
+    )
     ink_x_ranges = _role_char_ink_ranges_by_index(line, text_layout, char_x_ranges)
     fill_segments = _karaoke_fill_segments(
         char_widths, intervals, ink_x_ranges, active_rubies, line,
@@ -3609,8 +3623,13 @@ def _char_left_positions(
     base_x: int,
     rtl: bool,
     letter_spacing_px: int = 0,
+    char_gaps: list[int] | None = None,
 ) -> list[int]:
-    """每个字符左缘的 x 坐标。``rtl`` 时第一个字符排在最右、依次向左。"""
+    """每个字符左缘的 x 坐标。``rtl`` 时第一个字符排在最右、依次向左。
+
+    ``char_gaps[i]`` = 字符 i 前插入的 ruby 避让间隙（仅 LTR，见
+    :func:`_ruby_char_gaps`）。
+    """
     lefts: list[int] = []
     total_w = sum(char_widths) + letter_spacing_px * max(len(char_widths) - 1, 0)
     if rtl:
@@ -3621,7 +3640,9 @@ def _char_left_positions(
             cursor -= letter_spacing_px
     else:
         cursor = base_x
-        for w in char_widths:
+        for index, w in enumerate(char_widths):
+            if char_gaps is not None and index < len(char_gaps):
+                cursor += char_gaps[index]
             lefts.append(cursor)
             cursor += w + letter_spacing_px
     return lefts
@@ -3710,6 +3731,7 @@ def _build_text_layout(
     x0: int,
     baseline_y: int,
     inline_styles: bool,
+    char_gaps: list[int] | None = None,
 ) -> _TextLayout:
     rtl = style.right_to_left
     measured: list[tuple[int, str, str | None, Style, QFont, QFontMetrics, int, int, float]] = []
@@ -3807,6 +3829,8 @@ def _build_text_layout(
     else:
         cursor = x0
         for index, text, role_label, role_style, glyph_font, metrics, width, spacing_after, path_offset_x in measured:
+            if char_gaps is not None and index < len(char_gaps):
+                cursor += char_gaps[index]
             glyphs.append(
                 _GlyphLayout(
                     index=index,
@@ -6950,8 +6974,99 @@ def _row_layout_params(style: Style, lane: int | None) -> tuple[str, int, int]:
     return style.row1_align, style.row1_offset_x, style.row1_offset_y
 
 
-def _line_total_width(line: TimingLine, style: Style) -> int:
-    """行主文字外框宽度（含描边 padding），与绘制路径同一套测量。"""
+def _ruby_char_gaps(
+    line: TimingLine,
+    char_widths: list[int],
+    rubies: list[RubyAnnotation],
+    style: Style,
+    intervals: list[tuple[int, int]] | None = None,
+) -> tuple[list[int], int, int]:
+    """相邻 ruby 避让（N3 无条件规则）+ 行缘 ruby 溢出。
+
+    返回 ``(每字符前插入的间隙列表, 行首左溢出, 行末右溢出)``：
+
+    - 相邻两条 ruby 的排布缘间距 < ``RubyInterval`` 时，在当前 ruby 首字符
+      **之前**插入差值间隙——等价 N3「从当前正文字符开始整行向右移动」。
+      间隙不加宽任何字符框，因此不会反过来加宽前一条 ruby 的标注范围；
+    - 溢出 = ruby 排布缘超出正文行盒左/右边界的像素（≥ 0），供行锚定并入
+      行盒（N3 ``DrawLineLeft/Right`` 语义）。
+
+    演唱计时用**原始**字宽（间隙只影响几何）。竖排 / RTL 几何互为镜像，
+    不做推移。ruby 宽度按行级注音样式测量（角色级注音字号差异忽略）。
+    """
+    zero = [0] * len(char_widths)
+    if not rubies or not line.chars or style.vertical or style.right_to_left:
+        return zero, 0, 0
+    if intervals is None:
+        intervals = compute_char_intervals(line, char_widths)
+    ruby_metrics = QFontMetrics(_build_ruby_font(style))
+    spacing = _letter_spacing(style)
+    interval = _ruby_interval_px(style)
+
+    entries: list[tuple[int, int, RubyAnnotation, RubyAnnotation]] = []
+    for ruby in rubies:
+        indices = _ruby_target_indices(ruby, line, intervals)
+        if not indices:
+            continue
+        paint_ruby = _effective_ruby_for_target(ruby, indices, intervals)
+        entries.append((min(indices), max(indices), paint_ruby, ruby))
+    if not entries:
+        return zero, 0, 0
+    entries.sort(key=lambda item: item[0])
+
+    gaps = [0] * len(char_widths)
+
+    def char_span(first: int, last: int) -> tuple[float, float]:
+        left = float(
+            sum(char_widths[:first]) + spacing * first + sum(gaps[: first + 1])
+        )
+        right = float(
+            sum(char_widths[: last + 1]) + spacing * last + sum(gaps[: last + 1])
+        )
+        return left, right
+
+    prev_right: float | None = None
+    min_ruby_left = 0.0
+    max_ruby_right = 0.0
+    for first, last, paint_ruby, ruby in entries:
+        span_left, span_right = char_span(first, min(last, len(char_widths) - 1))
+        target_w = max(span_right - span_left, 1.0)
+        offset = _ruby_layout_left_offset(
+            paint_ruby.reading, ruby_metrics, target_w, style, ruby.kanji
+        )
+        width = _ruby_layout_width(
+            paint_ruby.reading, ruby_metrics, target_w, style, ruby.kanji
+        )
+        ruby_left = span_left + offset
+        ruby_right = ruby_left + width
+        if prev_right is not None and first > 0:
+            deficit = (prev_right + interval) - ruby_left
+            if deficit > 0:
+                push = int(math.ceil(deficit))
+                gaps[first] += push
+                ruby_left += push
+                ruby_right += push
+        prev_right = ruby_right
+        min_ruby_left = min(min_ruby_left, ruby_left)
+        max_ruby_right = max(max_ruby_right, ruby_right)
+
+    text_w = float(
+        sum(char_widths) + spacing * max(len(char_widths) - 1, 0) + sum(gaps)
+    )
+    left_ext = max(0, int(math.ceil(-min_ruby_left)))
+    right_ext = max(0, int(math.ceil(max_ruby_right - text_w)))
+    return gaps, left_ext, right_ext
+
+
+def _line_total_width(
+    line: TimingLine,
+    style: Style,
+    rubies: list[RubyAnnotation] | None = None,
+) -> int:
+    """行盒宽度（含描边 padding；给了 rubies 时含 ruby 推移间隙与行缘溢出）。
+
+    与绘制路径同一套测量，供 SmartHorizon 页宽与余白警告使用。
+    """
     font = _build_font(style)
     metrics = QFontMetrics(font)
     latin_font = _build_latin_font(style)
@@ -6961,8 +7076,27 @@ def _line_total_width(line: TimingLine, style: Style) -> int:
         _char_layout_width(c.text, font, metrics, latin_metrics, font_for, style)
         for c in line.chars
     ]
+    pad = _visual_text_padding(style)
+    left_ext = right_ext = pad
+    gap_total = 0
+    if rubies:
+        active = _active_rubies_for_line(rubies, line)
+        if active:
+            gaps, ruby_left, ruby_right = _ruby_char_gaps(
+                line, char_widths, active, style
+            )
+            gap_total = sum(gaps)
+            left_ext = max(pad, ruby_left)
+            right_ext = max(pad, ruby_right)
     return max(
-        int(round(_line_text_width(char_widths, style) + _visual_text_padding(style) * 2)),
+        int(
+            round(
+                _line_text_width(char_widths, style)
+                + gap_total
+                + left_ext
+                + right_ext
+            )
+        ),
         1,
     )
 
@@ -7044,7 +7178,7 @@ def _smart_horizontal_dx(
         width = (
             total_w
             if page_line is line
-            else _line_total_width(page_line, page_style)
+            else _line_total_width(page_line, page_style, track.rubies)
         )
         max_widths[align] = max(max_widths[align], width)
     if max_widths["left"] == 0 or max_widths["right"] == 0:
@@ -7233,7 +7367,7 @@ def check_layout_margins(
         line_style = _style_for_line(style, line)
         margin_left = max(line_style.horizontal_margin_px, 0)
         margin_right = max(line_style.horizontal_margin_px, 0)
-        total_w = _line_total_width(line, line_style)
+        total_w = _line_total_width(line, line_style, track.rubies)
         lane = display_line.lane if line_style.dual_line_layout else None
         x0 = _resolve_line_x_smart(
             img_w,

@@ -4141,3 +4141,105 @@ def test_rescale_layout_sizes_matches_n3_size_and_ratio():
     assert rescale_layout_sizes(scaled, 720) is scaled
     zero = rescale_layout_sizes(replace(style, line_gap_px=0), 720)
     assert zero.line_gap_px == 0
+
+
+# ---------------------------------------------------------------------------
+# 像素级规则：相邻 ruby 避让（N3 无条件）+ 行缘 ruby 溢出
+# ---------------------------------------------------------------------------
+
+from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
+    _char_layout_width,
+    _ruby_char_gaps,
+    _ruby_interval_px,
+    _ruby_layout_left_offset,
+)
+
+
+def _wide_ruby_line() -> tuple[TimingLine, list[RubyAnnotation]]:
+    line = TimingLine(
+        chars=[TimingChar(text="星", start_ms=0), TimingChar(text="空", start_ms=500)],
+        end_ms=1000,
+    )
+    rubies = [
+        RubyAnnotation(kanji="星", reading="きらきらぼし", pos_start_ms=0, pos_end_ms=500),
+        RubyAnnotation(kanji="空", reading="おおぞらさま", pos_start_ms=500, pos_end_ms=1000),
+    ]
+    return line, rubies
+
+
+def _base_char_widths(line: TimingLine, style: Style) -> list[int]:
+    font = _build_font(style)
+    metrics = QFontMetrics(font)
+    return [
+        _char_layout_width(c.text, font, metrics, metrics, None, style)
+        for c in line.chars
+    ]
+
+
+def test_adjacent_wide_rubies_insert_avoidance_gap(qapp):
+    line, rubies = _wide_ruby_line()
+    style = Style()
+    widths = _base_char_widths(line, style)
+
+    gaps, left_ext, right_ext = _ruby_char_gaps(line, widths, rubies, style)
+
+    assert gaps[0] == 0
+    assert gaps[1] > 0  # 第二条 ruby 首字符前插入推移
+    assert left_ext > 0  # 行首 ruby 左溢出
+    assert right_ext > 0  # 行末 ruby 右溢出
+
+    # 推移后两条 ruby 的排布缘间距 >= RubyInterval
+    ruby_metrics = QFontMetrics(_build_ruby_font(style))
+    r0_left = 0 + _ruby_layout_left_offset(
+        rubies[0].reading, ruby_metrics, widths[0], style, rubies[0].kanji
+    )
+    r0_right = r0_left + _ruby_layout_width(
+        rubies[0].reading, ruby_metrics, widths[0], style, rubies[0].kanji
+    )
+    span1_left = widths[0] + gaps[1]
+    r1_left = span1_left + _ruby_layout_left_offset(
+        rubies[1].reading, ruby_metrics, widths[1], style, rubies[1].kanji
+    )
+    assert r1_left - r0_right >= _ruby_interval_px(style) - 1e-6
+
+
+def test_ruby_gaps_zero_without_collision(qapp):
+    line = TimingLine(
+        chars=[TimingChar(text="星", start_ms=0), TimingChar(text="空", start_ms=500)],
+        end_ms=1000,
+    )
+    rubies = [
+        RubyAnnotation(kanji="星", reading="ほし", pos_start_ms=0, pos_end_ms=500),
+    ]
+    style = Style()
+    gaps, _left, _right = _ruby_char_gaps(line, _base_char_widths(line, style), rubies, style)
+    assert gaps == [0, 0]
+
+
+def test_ruby_gaps_skipped_in_vertical_and_rtl(qapp):
+    line, rubies = _wide_ruby_line()
+    for mode_style in (Style(vertical=True), Style(right_to_left=True)):
+        widths = _base_char_widths(line, mode_style)
+        gaps, left_ext, right_ext = _ruby_char_gaps(line, widths, rubies, mode_style)
+        assert gaps == [0, 0]
+        assert (left_ext, right_ext) == (0, 0)
+
+
+def test_line_total_width_includes_ruby_push_and_overhang(qapp):
+    line, rubies = _wide_ruby_line()
+    style = Style()
+    assert _line_total_width(line, style, rubies) > _line_total_width(line, style)
+
+
+def test_layout_line_applies_ruby_gaps_to_boxes_and_glyphs(qapp):
+    line, rubies = _wide_ruby_line()
+    track = TimingTrack(lines=[line], rubies=rubies)
+    style = Style(dual_line_layout=False)
+
+    layout = _layout_line(track, line, style, 1920, 1080)
+
+    # 字符盒之间出现避让间隙，且 glyph 位置与 char_lefts 同源一致
+    assert layout.char_x_ranges[1][0] - layout.char_x_ranges[0][1] > 0
+    assert layout.text_layout.glyphs[1].left == layout.char_lefts[1]
+    # 行盒（含 ruby 溢出）不越出画面（1920 足够宽时整体居中）
+    assert layout.x0 > 0
