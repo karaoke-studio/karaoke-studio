@@ -4062,8 +4062,18 @@ def _paint_line_direct(
         )
         if after_band is None:
             continue
+        complete = _run_fill_complete(
+            layout.fill_segments, {glyph.index for glyph in run}, t_ms
+        )
         if _glyph_run_needs_after_glow(run):
-            _paint_glyph_run_after_glow_direct(painter, run, y, after_band)
+            _paint_glyph_run_after_glow_direct(
+                painter, run, y, after_band, rtl=layout.rtl, complete=complete
+            )
+        if complete:
+            # 唱完后扫光线已越过 run 尾，无未唱区可保护——不裁切，
+            # 避免把行缘的描边/阴影硬截掉（与逐字路径 ratio>=1 分支一致）。
+            _paint_glyph_run_direct(painter, run, y, after=True)
+            continue
         painter.save()
         try:
             painter.setClipRect(_horizontal_after_clip_rect(after_band, layout.rtl))
@@ -4147,17 +4157,43 @@ def _paint_glyph_run_direct(
     )
 
 
+def _after_glow_loose_clip_rect(
+    band: tuple[int, int],
+    rect: QRectF,
+    pad: int,
+    rtl: bool,
+    complete: bool,
+) -> QRectF:
+    """已唱发光的「发光级」宽松裁切矩形（理由见 ``_paint_char_karaoke_stack`` 内注释）。
+
+    尾缘（已唱后方）与上下恒外扩 ``pad`` 让 halo 自然衰减；前缘（扫光线）不外扩，
+    避免把未唱区染上已唱发光。run 全部唱完（``complete``）后扫光线已越过 run 尾，
+    前缘同样外扩——否则行首/行尾的 halo 会被硬截出竖直方边。
+    """
+    band_left, band_right = band
+    left = float(band_left) - (0.0 if rtl and not complete else float(pad))
+    right = float(band_right) + (float(pad) if rtl or complete else 0.0)
+    return QRectF(
+        left,
+        rect.top() - pad,
+        right - left,
+        rect.height() + pad * 2,
+    )
+
+
 def _paint_glyph_run_after_glow_direct(
     painter: QPainter,
     glyphs: list[_GlyphLayout],
     baseline_y: int,
     band: tuple[int, int],
+    *,
+    rtl: bool,
+    complete: bool,
 ) -> None:
     role_style = glyphs[0].style
     colors = _effective_karaoke_colors(role_style)
     path = _glyph_run_path(glyphs, baseline_y)
     rect = _glyph_run_rect(glyphs, baseline_y)
-    band_left, band_right = band
     pad = _glow_extent(
         role_style.stroke_width_px,
         role_style.stroke2_width_px,
@@ -4165,14 +4201,7 @@ def _paint_glyph_run_after_glow_direct(
     )
     painter.save()
     try:
-        painter.setClipRect(
-            QRectF(
-                float(band_left),
-                rect.top() - pad,
-                float(band_right - band_left),
-                rect.height() + pad * 2,
-            )
-        )
+        painter.setClipRect(_after_glow_loose_clip_rect(band, rect, pad, rtl, complete))
         _paint_glow_path(
             painter,
             path,
@@ -4318,7 +4347,12 @@ class _GlyphRunLayer:
             if band is None:
                 return LayerAnimation(opacity=0.0)
             band_left, band_right = band
-            if self.rtl:
+            if _run_fill_complete(
+                self.fill_segments, {glyph.index for glyph in self.glyphs}, self.t_ms
+            ):
+                # 唱完后不裁切：带缘停在墨水边界，再裁会把行缘的描边/阴影硬截掉。
+                clip_rect = None
+            elif self.rtl:
                 clip_rect = QRectF(float(band_left), -1_000_000.0, 1_000_000.0, 2_000_000.0)
             else:
                 clip_rect = QRectF(-1_000_000.0, -1_000_000.0, float(band_right) + 1_000_000.0, 2_000_000.0)
@@ -4386,7 +4420,6 @@ class _GlyphRunAfterGlowLayer:
         band = self.clip_band or _fill_clip_band(self.fill_segments, self.t_ms, self.rtl)
         if band is None:
             return LayerAnimation(opacity=0.0)
-        band_left, band_right = band
         rect = _glyph_run_rect(self.glyphs, self.baseline_y)
         role_style = self.glyphs[0].style
         pad = _glow_extent(
@@ -4394,11 +4427,14 @@ class _GlyphRunAfterGlowLayer:
             role_style.stroke2_width_px,
             _glow_radius(role_style, after=True),
         )
-        clip_rect = QRectF(
-            float(band_left),
-            rect.top() - pad,
-            float(band_right - band_left),
-            rect.height() + pad * 2,
+        clip_rect = _after_glow_loose_clip_rect(
+            band,
+            rect,
+            pad,
+            self.rtl,
+            _run_fill_complete(
+                self.fill_segments, {glyph.index for glyph in self.glyphs}, self.t_ms
+            ),
         )
         return LayerAnimation(
             top_left=QPointF(float(run_left), float(self.baseline_y)),
@@ -6482,11 +6518,21 @@ def _effective_ruby_for_target(
     indices: list[int],
     intervals: list[tuple[int, int]],
 ) -> RubyAnnotation:
+    """把 ruby 的 wipe 时钟对齐到目标字符区间（收窄方向）。
+
+    基字区间可因呼吸停顿 / 多字块再分配而比导出的 ``pos`` 区间**短**，此时
+    以基字区间为准（``fix: honor subtitle pause timing`` 的场景）；但基字
+    interval 的末端是「下一字开始 / 行末」，比 ruby 自身唱完时刻**晚**时不能
+    采用，否则每条 ruby 会拖到间隙 / 行尾才走完。取交集：结束时刻用两者中
+    更早的有效值。
+    """
     valid_indices = [index for index in indices if 0 <= index < len(intervals)]
     if not valid_indices:
         return ruby
     start = min(intervals[index][0] for index in valid_indices)
     end = max(intervals[index][1] for index in valid_indices)
+    if ruby.pos_end_ms > ruby.pos_start_ms and start < ruby.pos_end_ms < end:
+        end = ruby.pos_end_ms
     if start == ruby.pos_start_ms and end == ruby.pos_end_ms:
         return ruby
     target_duration = max(end - start, 0)
@@ -6611,6 +6657,28 @@ def _fill_clip_band_for_glyphs(
         {glyph.index for glyph in glyphs},
         t_ms,
         rtl,
+    )
+
+
+def _run_fill_complete(
+    segments: list[_FillSegment],
+    indices: set[int],
+    t_ms: int,
+) -> bool:
+    """run 覆盖的走字分段是否已全部唱完（扫光线已越过 run 前缘）。
+
+    唱完后已唱层不再需要在扫光线处裁切，行缘的发光/描边可完整外扩。
+    """
+    if indices:
+        scoped = [
+            segment
+            for segment in segments
+            if segment.indices and any(index in indices for index in segment.indices)
+        ]
+    else:
+        scoped = segments
+    return bool(scoped) and all(
+        _segment_fill_ratio(segment, t_ms) >= 1.0 for segment in scoped
     )
 
 

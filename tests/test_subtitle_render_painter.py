@@ -41,8 +41,10 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _character_fill_ratio,
     _character_transform,
     _spin_flip_skew,
+    _after_glow_loose_clip_rect,
     _fill_clip_band,
     _fill_extent_end,
+    _run_fill_complete,
     _layout_vertical_line,
     _layout_rubies,
     _layout_line,
@@ -993,6 +995,105 @@ def test_fill_clip_band_rtl_grows_from_right(qapp):
     # t=1500：首字符满 + 第二字一半 → 左缘移到 50 → 带 [50, 200]
     assert _fill_clip_band(segments, 1500, rtl=True) == (50, 200)
     assert _fill_clip_band(segments, 0, rtl=True) is None
+
+
+def test_run_fill_complete_scopes_to_run_indices(qapp):
+    segments = [
+        _FillSegment(0, 100, 0, 1000, indices=(0,)),
+        _FillSegment(100, 200, 1000, 2000, indices=(1,)),
+    ]
+    # t=1500：第一段唱完、第二段唱到一半
+    assert _run_fill_complete(segments, {0}, 1500)
+    assert not _run_fill_complete(segments, {1}, 1500)
+    assert not _run_fill_complete(segments, {0, 1}, 1500)
+    # 空 indices 回退整行判断（与 _fill_clip_band_for_indices 语义一致）
+    assert not _run_fill_complete(segments, set(), 1500)
+    assert _run_fill_complete(segments, {0, 1}, 2500)
+    assert _run_fill_complete(segments, set(), 2500)
+
+
+def test_after_glow_loose_clip_pads_trailing_edge_and_opens_when_complete(qapp):
+    rect = QRectF(0.0, 100.0, 200.0, 60.0)
+    pad = 20
+    # LTR 走字中：尾缘（左）与上下外扩 pad，前缘（扫光线，右）严格停在带缘
+    mid = _after_glow_loose_clip_rect((0, 150), rect, pad, False, False)
+    assert mid.left() == -20.0
+    assert mid.right() == 150.0
+    assert mid.top() == 80.0
+    assert mid.bottom() == 180.0
+    # 唱完：前缘同样外扩，行尾 halo 不再被硬截
+    done = _after_glow_loose_clip_rect((0, 200), rect, pad, False, True)
+    assert done.left() == -20.0
+    assert done.right() == 220.0
+    # RTL 镜像：尾缘在右恒外扩，前缘（左）走字中不外扩、唱完后放开
+    mid_rtl = _after_glow_loose_clip_rect((50, 200), rect, pad, True, False)
+    assert mid_rtl.left() == 50.0
+    assert mid_rtl.right() == 220.0
+    done_rtl = _after_glow_loose_clip_rect((0, 200), rect, pad, True, True)
+    assert done_rtl.left() == -20.0
+    assert done_rtl.right() == 220.0
+
+
+def _glow_after_style() -> Style:
+    # before/after 发光色不同 → 已唱发光需要单独的 after-glow 层
+    return Style(
+        decoration_kind="glow",
+        glow_radius_px=12,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(shadow=PaintFill(color="#000000")),
+            after=KaraokeColorState(shadow=PaintFill(color="#FF8800")),
+        ),
+    )
+
+
+def test_after_glow_layer_clip_releases_line_edges_when_fully_sung(qapp):
+    track = _track()
+    line = track.lines[0]
+    layout = _layout_line(track, line, _glow_after_style(), 800, 450)
+    assert layout is not None
+    ink_left = min(seg.left for seg in layout.fill_segments)
+    ink_right = max(seg.right for seg in layout.fill_segments)
+    ctx = LayerContext(t_ms=0, logical_w=800, logical_h=450)
+
+    def glow_clip(t_ms: int) -> QRectF:
+        layers = [
+            layer
+            for layer in _line_layer_stack(layout, t_ms)
+            if isinstance(layer, _GlyphRunAfterGlowLayer)
+        ]
+        assert layers
+        return layers[0].animate(ctx, layers[0].layout(ctx)).clip_rect
+
+    # 走字途中：尾缘（行首）已外扩，前缘停在扫光线（未越过 run 右缘）
+    mid = glow_clip(1700)
+    assert mid.left() < ink_left
+    assert mid.right() < ink_right
+    # 唱完：两侧都放开，行首/行尾 halo 不再被硬截
+    done = glow_clip(9000)
+    assert done.left() < ink_left
+    assert done.right() > ink_right
+
+
+def test_after_body_layer_unclipped_when_fully_sung(qapp):
+    track = _track()
+    line = track.lines[0]
+    layout = _layout_line(track, line, _glow_after_style(), 800, 450)
+    assert layout is not None
+    ctx = LayerContext(t_ms=0, logical_w=800, logical_h=450)
+
+    def body_clip(t_ms: int) -> QRectF | None:
+        layers = [
+            layer
+            for layer in _line_layer_stack(layout, t_ms)
+            if isinstance(layer, _GlyphRunLayer) and layer.after
+        ]
+        assert layers
+        return layers[0].animate(ctx, layers[0].layout(ctx)).clip_rect
+
+    # 走字途中仍需在扫光线处裁切
+    assert body_clip(1700) is not None
+    # 唱完后不裁切，行缘描边/阴影完整
+    assert body_clip(9000) is None
 
 
 def test_rtl_changes_render_vs_ltr(qapp):
