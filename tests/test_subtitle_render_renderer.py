@@ -13,6 +13,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from krok_helper.errors import ExportCancelled, ProcessingError  # noqa: E402
+from krok_helper.subtitle_render.engine import painter as subtitle_painter  # noqa: E402
 from krok_helper.subtitle_render.engine import renderer  # noqa: E402
 import numpy as np  # noqa: E402
 from PyQt6.QtGui import QColor, QImage  # noqa: E402
@@ -535,6 +536,31 @@ def test_compute_content_bands_splits_title_and_lyrics(qapp, tmp_path):
     # 380：歌词条带顶随阴影剪影 pad（描边半宽 + 偏移）略上移。
     assert last_top > 380
     assert last_top - (first_top + first_h) > renderer._BAND_MERGE_GAP_PX
+
+
+def test_title_overlay_bake_uses_target_device_pixel_ratio(qapp):
+    subtitle_painter.clear_before_layer_cache()
+    image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+    image.setDevicePixelRatio(2.0)
+    image.fill(QColor(0, 0, 0, 0))
+    style = Style(
+        title_overlay=TitleOverlay(
+            enabled=True,
+            text_template="Title",
+            font_size_px=48,
+            show_mode="whole",
+        )
+    )
+
+    paint_frame(image, _track(), 200, style)
+
+    title_layers = [
+        baked
+        for key, baked in subtitle_painter._TEXT_RUN_LAYER_CACHE._items.items()
+        if key[0].__name__ == "_TitleOverlayLayer"
+    ]
+    assert title_layers
+    assert title_layers[-1].image.devicePixelRatioF() == 2.0
 
 
 def test_packed_offsets_are_cumulative_heights():

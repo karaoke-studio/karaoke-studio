@@ -821,10 +821,17 @@ class _TitleOverlayLayer:
         return self
 
     def static_key(self, ctx: LayerContext, layout: object) -> tuple:
-        return _title_overlay_layer_key(self.title_layout, self.title)
+        return (
+            *_title_overlay_layer_key(self.title_layout, self.title),
+            _raster_scale_key(ctx.device_pixel_ratio),
+        )
 
     def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
-        image, dx, dy = _build_title_overlay_layer(self.title_layout, self.title)
+        image, dx, dy = _build_title_overlay_layer(
+            self.title_layout,
+            self.title,
+            device_pixel_ratio=ctx.device_pixel_ratio,
+        )
         return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
 
     def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
@@ -881,6 +888,8 @@ def _title_overlay_layer_key(
 def _build_title_overlay_layer(
     layout: _TitleOverlayLayout,
     title: TitleOverlay,
+    *,
+    device_pixel_ratio: float = 1.0,
 ) -> tuple[QImage, int, int]:
     stroke_extent = _visual_stroke_extent(title.stroke_width_px, title.stroke2_width_px)
     glow_extra = (
@@ -901,7 +910,7 @@ def _build_title_overlay_layer(
     pad_bottom = max(0, title.shadow_offset_y) + extent
     img_w = max(int(math.ceil(pad_left + layout.block_w + pad_right)), 1)
     img_h = max(int(math.ceil(pad_top + layout.block_h + pad_bottom)), 1)
-    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
+    image = _make_raster_image(img_w, img_h, device_pixel_ratio)
     image.fill(0)
 
     p = QPainter(image)
@@ -942,6 +951,19 @@ def _build_title_overlay_layer(
     finally:
         p.end()
     return image, -pad_left, -pad_top
+
+
+def _raster_scale_key(device_pixel_ratio: float) -> int:
+    return max(int(round(max(float(device_pixel_ratio or 1.0), 0.01) * 1000)), 1)
+
+
+def _make_raster_image(logical_w: int, logical_h: int, device_pixel_ratio: float) -> QImage:
+    dpr = max(float(device_pixel_ratio or 1.0), 0.01)
+    physical_w = max(int(math.ceil(max(int(logical_w), 1) * dpr)), 1)
+    physical_h = max(int(math.ceil(max(int(logical_h), 1) * dpr)), 1)
+    image = QImage(physical_w, physical_h, QImage.Format.Format_ARGB32_Premultiplied)
+    image.setDevicePixelRatio(dpr)
+    return image
 
 
 def _make_title_font_for(title: TitleOverlay, jp_font: QFont, latin_font: QFont):

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import threading
 from collections import OrderedDict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Hashable, Protocol
 
 from PyQt6.QtCore import QPointF, QRectF
@@ -30,6 +30,7 @@ class LayerContext:
     t_ms: int
     logical_w: int
     logical_h: int
+    device_pixel_ratio: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -182,6 +183,7 @@ class LayerCompositor:
         self, painter: QPainter, ctx: LayerContext, layers: list[SubtitleLayer]
     ) -> None:
         """Paint layers that are already in desired z-order."""
+        ctx = _context_for_painter(painter, ctx)
         for layer in layers:
             if not _is_layer_active(layer, ctx):
                 continue
@@ -298,6 +300,14 @@ def _ordered_scope_keys(
     known.sort(key=lambda key: (scope_rank[key[0]], "" if key[1] is None else repr(key[1])))
     extra.sort(key=lambda key: (key[0], "" if key[1] is None else repr(key[1])))
     return known + extra
+
+
+def _context_for_painter(painter: QPainter, ctx: LayerContext) -> LayerContext:
+    transform = painter.deviceTransform()
+    scale = max(abs(float(transform.m11())), abs(float(transform.m22())), 0.01)
+    if abs(scale - float(ctx.device_pixel_ratio or 1.0)) < 0.001:
+        return ctx
+    return replace(ctx, device_pixel_ratio=scale)
 
 
 def _pivoted_transform(transform: QTransform, origin: QPointF | None) -> QTransform:
