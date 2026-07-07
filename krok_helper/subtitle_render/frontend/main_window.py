@@ -25,7 +25,7 @@ UI 顶层结构（底部左下角 ``NavigationBar``，与工作流区域一致�
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 import subprocess
 from typing import Any, Optional
@@ -160,11 +160,21 @@ class _AspectRatioBox(QWidget):
         self._child.setGeometry(QRect(x, y, max(target_w, 1), max(target_h, 1)))
 
 
+@dataclass
+class ExtraSubtitleSource:
+    """一个副字幕源（对标 N3 ``SourceLyricsInfos`` 的コーラス槽位）。"""
+
+    name: str
+    path: Path
+    track: TimingTrack
+
+
 class _WindowEdgeGrip(QWidget):
     """无边框窗口的边缘/角落拖拽调整手柄。
 
-    覆盖在窗口内容之上的透明细条；按下后交给系统 ``startSystemResize``，
-    拖拽行为与原生窗口一致（含最小尺寸约束）。
+    覆盖在窗口内容之上的透明细条。缩放为**手动实现**（按下记录起始几何，
+    拖动按边计算新几何）：Windows 上 ``startSystemResize`` 对无边框窗口
+    会返回成功但实际不进入缩放循环（缺 ``WS_THICKFRAME``），不可依赖。
     """
 
     _EDGE_CURSORS = {
@@ -182,17 +192,48 @@ class _WindowEdgeGrip(QWidget):
         super().__init__(window)
         self._window = window
         self._edges = edges
+        self._edge_bits = int(edges.value)
+        self._drag_start: Optional[QPoint] = None
+        self._start_geometry: Optional[QRect] = None
         cursor = self._EDGE_CURSORS.get(edges.value)
         if cursor is not None:
             self.setCursor(cursor)
 
     def mousePressEvent(self, event):  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton and not self._window.isMaximized():
-            handle = self._window.windowHandle()
-            if handle is not None and handle.startSystemResize(self._edges):
-                event.accept()
-                return
+            self._drag_start = event.globalPosition().toPoint()
+            self._start_geometry = QRect(self._window.geometry())
+            event.accept()
+            return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):  # noqa: N802
+        if self._drag_start is None or self._start_geometry is None:
+            super().mouseMoveEvent(event)
+            return
+        delta = event.globalPosition().toPoint() - self._drag_start
+        geometry = QRect(self._start_geometry)
+        hint = self._window.minimumSizeHint()
+        min_w = max(self._window.minimumWidth(), hint.width(), 1)
+        min_h = max(self._window.minimumHeight(), hint.height(), 1)
+        if self._edge_bits & Qt.Edge.LeftEdge.value:
+            geometry.setLeft(min(geometry.left() + delta.x(), geometry.right() - min_w + 1))
+        if self._edge_bits & Qt.Edge.RightEdge.value:
+            geometry.setRight(max(geometry.right() + delta.x(), geometry.left() + min_w - 1))
+        if self._edge_bits & Qt.Edge.TopEdge.value:
+            geometry.setTop(min(geometry.top() + delta.y(), geometry.bottom() - min_h + 1))
+        if self._edge_bits & Qt.Edge.BottomEdge.value:
+            geometry.setBottom(max(geometry.bottom() + delta.y(), geometry.top() + min_h - 1))
+        self._window.setGeometry(geometry)
+        event.accept()
+
+    def mouseReleaseEvent(self, event):  # noqa: N802
+        if self._drag_start is not None:
+            self._drag_start = None
+            self._start_geometry = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class PreviewPlayerWindow(QWidget):
@@ -432,10 +473,47 @@ class PreviewPlayerWindow(QWidget):
             event.button() == Qt.MouseButton.LeftButton
             and event.position().y() <= self._top_controls.height()
         ):
+            # 兜底命中：个别情况下（覆盖层/事件路由异常）标题栏按钮收不到点击，
+            # 在窗口层按坐标直接分发，保证 最小化/最大化/关闭 永远可用。
+            if self._dispatch_titlebar_button(event.position().toPoint()):
+                event.accept()
+                return
+            if self.isMaximized():
+                # 最大化状态下不允许手动拖动（会把窗口拖成"假最大化"状态）。
+                event.accept()
+                return
             self._drag_origin = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             event.accept()
             return
         super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):  # noqa: N802
+        # 顶栏双击 = 最大化/还原（与原生窗口一致）；避开按钮区域。
+        if (
+            event.button() == Qt.MouseButton.LeftButton
+            and event.position().y() <= self._top_controls.height()
+            and not self._titlebar_button_at(event.position().toPoint())
+        ):
+            self._toggle_maximized()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def _titlebar_button_at(self, pos: QPoint) -> Optional[QPushButton]:
+        if not self._top_controls.isVisible():
+            return None
+        for button in (self._minimize_button, self._maximize_button, self._close_button):
+            rect = QRect(button.mapTo(self, QPoint(0, 0)), button.size())
+            if rect.contains(pos):
+                return button
+        return None
+
+    def _dispatch_titlebar_button(self, pos: QPoint) -> bool:
+        button = self._titlebar_button_at(pos)
+        if button is None:
+            return False
+        button.click()
+        return True
 
     def mouseReleaseEvent(self, event):  # noqa: N802
         self._drag_origin = None
@@ -567,6 +645,10 @@ class SubtitleRenderWindow(QWidget):
         self._workflow_context = workflow_context
 
         self._timing_track: Optional[TimingTrack] = None
+        self._extra_sources: list[ExtraSubtitleSource] = []
+        """副字幕源（N3 多歌词文件，如コーラス轨）：与主字幕同帧叠绘。"""
+        self._active_source_index = 0
+        """歌词列表当前显示的源：0 = 主字幕，k >= 1 = ``_extra_sources[k-1]``。"""
         self._subtitle_path: Optional[Path] = None
         self._video_path: Optional[Path] = None
         self._video_info: Optional[MediaInfo] = None
@@ -778,6 +860,17 @@ class SubtitleRenderWindow(QWidget):
             else None
         )
         char_role_labels = self._collect_char_role_labels()
+        extra_subtitle_sources = [
+            {
+                "name": source.name,
+                "path": str(source.path),
+                "line_layout_indices": [
+                    int(getattr(line, "layout_index", 0) or 0) for line in source.track.lines
+                ],
+                "char_role_labels": self._char_role_rows(source.track),
+            }
+            for source in self._extra_sources
+        ] or None
         return project_payload(
             subtitle_path=self._subtitle_path,
             video_path=self._video_path,
@@ -787,6 +880,7 @@ class SubtitleRenderWindow(QWidget):
             selected_scheme_key=self._selected_scheme_key,
             line_layout_indices=line_layout_indices,
             char_role_labels=char_role_labels,
+            extra_subtitle_sources=extra_subtitle_sources,
             output=project_output_payload(
                 encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
                 crf=self._export_crf_spin.value(),
@@ -826,6 +920,7 @@ class SubtitleRenderWindow(QWidget):
             self.load_from_lrc(paths["subtitle_path"])
             self._apply_line_layout_indices(data.get("line_layout_indices"))
             self._apply_char_role_labels(data.get("char_role_labels"))
+            self._apply_extra_subtitle_sources(data.get("extra_subtitle_sources"))
         if paths["video_path"] is not None and paths["video_path"].is_file():
             self.load_video(paths["video_path"])
         audio = paths["audio_path"]
@@ -893,6 +988,8 @@ class SubtitleRenderWindow(QWidget):
         self._loading_project = True
         try:
             self._timing_track = None
+            self._extra_sources = []
+            self._active_source_index = 0
             self._subtitle_path = None
             self._video_path = None
             self._video_info = None
@@ -901,6 +998,8 @@ class SubtitleRenderWindow(QWidget):
             # 歌词列表回空态
             self._lyrics_panel.set_track(None)
             self._lyrics_panel.set_role_options([])
+            self._lyrics_panel.set_sources([], 0)
+            self._preview_panel.set_extra_tracks([])
             # 预览回空态：清字幕 + 视频 + 取消 populated
             self._preview_panel.set_track(None)
             self._preview_panel.set_video_source(None)
@@ -1041,6 +1140,9 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.roleChanged.connect(self._on_lyrics_role_changed)
         self._lyrics_panel.rowClicked.connect(self._on_lyrics_row_clicked)
         self._lyrics_panel.layoutChangeRequested.connect(self._on_layout_change_requested)
+        self._lyrics_panel.sourceSelected.connect(self._on_source_selected)
+        self._lyrics_panel.sourceAddRequested.connect(self._on_source_add_requested)
+        self._lyrics_panel.sourceRemoveRequested.connect(self._on_source_remove_requested)
         top.addWidget(self._lyrics_panel)
 
         self._transport_bar.set_preview_fps(self._screen_settings.fps)
@@ -1285,6 +1387,8 @@ class SubtitleRenderWindow(QWidget):
             return None
         self._timing_track = track
         self._subtitle_path = path
+        self._active_source_index = 0
+        self._refresh_source_ui()
         self._lyrics_panel.set_track(track)
         self._lyrics_panel.set_role_options(self._merged_role_options())
         self._property_panel.set_roles(track.role_options)
@@ -1389,9 +1493,7 @@ class SubtitleRenderWindow(QWidget):
         return find_tool("ffprobe", ffmpeg_dir)
 
     def _refresh_transport_duration(self) -> None:
-        candidates: list[int] = []
-        if self._timing_track is not None:
-            candidates.append(track_duration_ms(self._timing_track))
+        candidates: list[int] = [track_duration_ms(track) for track in self._all_tracks()]
         if self._video_info is not None and self._video_info.duration > 0:
             candidates.append(int(self._video_info.duration * 1000))
         if self._audio_info is not None and self._audio_info.duration > 0:
@@ -1424,10 +1526,13 @@ class SubtitleRenderWindow(QWidget):
         self._preview_panel.set_style(self._style)
 
     def _collect_char_role_labels(self) -> Optional[list]:
-        """收集每行逐字角色标签用于项目持久化；全部为空则返回 None（不写盘）。"""
-        track = self._timing_track
-        if track is None:
+        """收集主字幕每行逐字角色标签用于项目持久化；全部为空则返回 None（不写盘）。"""
+        if self._timing_track is None:
             return None
+        return self._char_role_rows(self._timing_track)
+
+    @staticmethod
+    def _char_role_rows(track: TimingTrack) -> Optional[list]:
         rows: list = []
         any_label = False
         for line in track.lines:
@@ -1459,6 +1564,140 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.set_roles(track.role_options)
         self._preview_panel.set_track(track)
 
+    # ------------------------------------------------------- 副字幕源（N3 多歌词文件）
+
+    def _apply_extra_subtitle_sources(self, payload: object) -> None:
+        """从项目快照 / N3 导入恢复副字幕源（含每行布局与逐字角色）。"""
+        self._extra_sources = []
+        self._active_source_index = 0
+        if isinstance(payload, list):
+            layout_limit = len(self._style.layouts)
+            for item in payload:
+                if not isinstance(item, dict):
+                    continue
+                path_text = str(item.get("path") or "").strip()
+                if not path_text:
+                    continue
+                path = Path(path_text)
+                if not path.is_file():
+                    continue
+                try:
+                    track = load_nicokara_lrc(path)
+                except Exception:  # noqa: BLE001 — 单个副源坏了不阻塞项目打开
+                    continue
+                layout_indices = item.get("line_layout_indices")
+                if isinstance(layout_indices, list):
+                    for line, value in zip(track.lines, layout_indices):
+                        try:
+                            index = int(value)
+                        except (TypeError, ValueError):
+                            continue
+                        line.layout_index = index if 0 <= index <= layout_limit else 0
+                role_rows = item.get("char_role_labels")
+                if isinstance(role_rows, list):
+                    for line, labels in zip(track.lines, role_rows):
+                        if not isinstance(labels, list):
+                            continue
+                        for ch, label in zip(line.chars, labels):
+                            ch.role_label = str(label) if label else None
+                name = str(item.get("name") or "").strip() or path.stem
+                self._extra_sources.append(
+                    ExtraSubtitleSource(name=name, path=path, track=track)
+                )
+        self._refresh_source_ui()
+        self._refresh_lyrics_panel_source()
+        self._sync_extra_tracks_to_preview()
+        self._refresh_transport_duration()
+
+    def _all_tracks(self) -> list[TimingTrack]:
+        tracks = [] if self._timing_track is None else [self._timing_track]
+        tracks.extend(source.track for source in self._extra_sources)
+        return tracks
+
+    def _extra_track_list(self) -> list[TimingTrack]:
+        return [source.track for source in self._extra_sources]
+
+    def _active_track(self) -> Optional[TimingTrack]:
+        """歌词列表当前显示的 track（0 = 主字幕）。"""
+        index = self._active_source_index
+        if index <= 0:
+            return self._timing_track
+        if index - 1 < len(self._extra_sources):
+            return self._extra_sources[index - 1].track
+        return self._timing_track
+
+    def _refresh_source_ui(self) -> None:
+        """刷新歌词面板的字幕源下拉；无主字幕时隐藏。"""
+        if self._timing_track is None:
+            self._active_source_index = 0
+            self._lyrics_panel.set_sources([], 0)
+            return
+        names = ["主字幕"] + [source.name for source in self._extra_sources]
+        self._active_source_index = max(0, min(self._active_source_index, len(names) - 1))
+        self._lyrics_panel.set_sources(names, self._active_source_index)
+
+    def _refresh_lyrics_panel_source(self) -> None:
+        """把当前选中源的行喂给歌词列表。"""
+        self._lyrics_panel.set_track(self._active_track())
+        self._lyrics_panel.set_role_options(self._merged_role_options())
+
+    def _sync_extra_tracks_to_preview(self) -> None:
+        self._preview_panel.set_extra_tracks(self._extra_track_list())
+
+    def _on_source_selected(self, index: int) -> None:
+        self._active_source_index = max(int(index), 0)
+        self._refresh_lyrics_panel_source()
+
+    def _on_source_add_requested(self) -> None:
+        if self._timing_track is None:
+            QMessageBox.information(self, "先加载主字幕", "请先加载主字幕文件，再添加副字幕源。")
+            return
+        start_dir = str(self._subtitle_path.parent) if self._subtitle_path else ""
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "添加副字幕源（与主字幕同时显示）", start_dir, SUBTITLE_FILTER
+        )
+        if not path_str:
+            return
+        path = Path(path_str)
+        try:
+            track = load_nicokara_lrc(path)
+        except Exception as exc:  # noqa: BLE001 — 统一错误弹窗
+            QMessageBox.critical(
+                self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"
+            )
+            return
+        self._extra_sources.append(
+            ExtraSubtitleSource(name=path.stem, path=path, track=track)
+        )
+        self._active_source_index = len(self._extra_sources)
+        self._refresh_source_ui()
+        self._refresh_lyrics_panel_source()
+        self._sync_extra_tracks_to_preview()
+        self._refresh_transport_duration()
+        self._margin_check_timer.start()
+        self._mark_project_dirty()
+
+    def _on_source_remove_requested(self, index: int) -> None:
+        extra_index = int(index) - 1
+        if not 0 <= extra_index < len(self._extra_sources):
+            return
+        source = self._extra_sources[extra_index]
+        choice = QMessageBox.question(
+            self,
+            "移除副字幕源",
+            f"确定移除副字幕源「{source.name}」？\n（不会删除歌词文件本身）",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if choice != QMessageBox.StandardButton.Yes:
+            return
+        del self._extra_sources[extra_index]
+        self._active_source_index = 0
+        self._refresh_source_ui()
+        self._refresh_lyrics_panel_source()
+        self._sync_extra_tracks_to_preview()
+        self._refresh_transport_duration()
+        self._mark_project_dirty()
+
     def _rescale_layout_for_height(self, new_height: int) -> None:
         """输出高度变化时按 N3 SizeAndRatio 语义重算布局像素字段。"""
         rescaled = rescale_layout_sizes(self._style, new_height)
@@ -1469,8 +1708,8 @@ class SubtitleRenderWindow(QWidget):
         self._apply_style(self._style)
 
     def _on_layout_change_requested(self, rows: list, layout_index: int) -> None:
-        """歌词列表右键应用布局：对每个选中行按页联动写入。"""
-        track = self._timing_track
+        """歌词列表右键应用布局：对每个选中行按页联动写入（作用于当前选中源）。"""
+        track = self._active_track()
         if track is None:
             return
         changed: set[int] = set()
@@ -1483,50 +1722,53 @@ class SubtitleRenderWindow(QWidget):
             self._refresh_after_layout_assignment()
 
     def _on_layout_assign_all(self, layout_index: int) -> None:
-        track = self._timing_track
+        track = self._active_track()
         if track is None:
             return
         if assign_layout_to_all(track, int(layout_index)):
             self._refresh_after_layout_assignment()
 
     def _on_layout_auto_assign(self) -> None:
-        track = self._timing_track
+        track = self._active_track()
         if track is None:
             return
         if auto_assign_layouts_by_paragraph(track, self._style):
             self._refresh_after_layout_assignment()
 
     def _on_layout_deleted(self, deleted_index: int) -> None:
-        """布局被删除后修正歌词行引用：被删的回默认，其后的序号前移。"""
-        track = self._timing_track
-        if track is None:
-            return
+        """布局被删除后修正歌词行引用（全部字幕源）：被删的回默认，其后的序号前移。"""
         changed = False
-        for line in track.lines:
-            index = int(getattr(line, "layout_index", 0) or 0)
-            if index == deleted_index:
-                line.layout_index = 0
-                changed = True
-            elif index > deleted_index:
-                line.layout_index = index - 1
-                changed = True
+        for track in self._all_tracks():
+            for line in track.lines:
+                index = int(getattr(line, "layout_index", 0) or 0)
+                if index == deleted_index:
+                    line.layout_index = 0
+                    changed = True
+                elif index > deleted_index:
+                    line.layout_index = index - 1
+                    changed = True
         if changed:
             self._refresh_after_layout_assignment()
 
     def _refresh_after_layout_assignment(self) -> None:
-        # track 是就地修改的，set_style 只为触发预览/列表重绘。
+        # track 是就地修改的，set_style 只为触发预览/列表重绘；副轨需重喂 worker。
         self._preview_panel.set_style(self._style)
         self._lyrics_panel.set_style(self._style)
+        self._sync_extra_tracks_to_preview()
         self._margin_check_timer.start()
         self._mark_project_dirty()
 
     def _check_layout_margins(self) -> None:
-        """N3 式左右余白检查：溢出画面 → Warning；侵入余白 → Information。"""
-        track = self._timing_track
-        if track is None:
+        """N3 式左右余白检查（全部字幕源）：溢出画面 → Warning；侵入余白 → Information。"""
+        tracks = self._all_tracks()
+        if not tracks:
             return
         try:
-            warnings = check_layout_margins(track, self._style, self._screen_settings.width)
+            warnings = [
+                warning
+                for track in tracks
+                for warning in check_layout_margins(track, self._style, self._screen_settings.width)
+            ]
         except Exception:  # noqa: BLE001 — 检查失败不影响正常编辑
             return
         overflow = [w for w in warnings if w.level == "overflow"]
@@ -1615,11 +1857,11 @@ class SubtitleRenderWindow(QWidget):
         self._mark_project_dirty()
 
     def _merged_role_options(self) -> list[str]:
-        """合并 LRC 角色标签 与 自建配色方案名，去重后供歌词列表角色下拉使用。"""
+        """合并各字幕源的 LRC 角色标签 与 自建配色方案名，供歌词列表角色下拉使用。"""
         options: list[str] = []
         seen: set[str] = set()
-        if self._timing_track is not None:
-            for name in self._timing_track.role_options:
+        for track in self._all_tracks():
+            for name in track.role_options:
                 if name not in seen:
                     seen.add(name)
                     options.append(name)
@@ -1630,8 +1872,8 @@ class SubtitleRenderWindow(QWidget):
         return options
 
     def _on_lyrics_role_changed(self, row: int, role_name: str) -> None:
-        """用户修改了某句歌词的角色时，将角色名写入该行所有字素。"""
-        track = self._timing_track
+        """用户修改了某句歌词的角色时，将角色名写入该行所有字素（当前选中源）。"""
+        track = self._active_track()
         if track is None:
             return
         if row < 0 or row >= len(track.lines):
@@ -1655,13 +1897,16 @@ class SubtitleRenderWindow(QWidget):
             self._save_persisted_state()
         # track 是原地修改的，预览（含异步渲染 worker）不会自己发现——
         # 重新喂一次让当前帧立即按新角色配色重渲染。
-        self._preview_panel.set_track(track)
+        if self._active_source_index == 0:
+            self._preview_panel.set_track(track)
+        else:
+            self._sync_extra_tracks_to_preview()
         self._lyrics_panel.refresh_row_role(row)
         self._mark_project_dirty()
 
     def _on_lyrics_row_clicked(self, row: int) -> None:
-        """点击歌词列表某行 → 预览跳转到该行起始时间。"""
-        track = self._timing_track
+        """点击歌词列表某行 → 预览跳转到该行起始时间（当前选中源）。"""
+        track = self._active_track()
         if track is None:
             return
         if row < 0 or row >= len(track.lines):
@@ -1749,6 +1994,7 @@ class SubtitleRenderWindow(QWidget):
             style=self._style,
             background_video_path=self._video_path,
             output_path=output_path,
+            extra_tracks=tuple(self._extra_track_list()),
             width=self._export_width_spin.value(),
             height=self._export_height_spin.value(),
             fps=self._export_fps_value(),
@@ -1761,9 +2007,7 @@ class SubtitleRenderWindow(QWidget):
         )
 
     def _current_export_duration_ms(self) -> int:
-        candidates: list[int] = []
-        if self._timing_track is not None:
-            candidates.append(track_duration_ms(self._timing_track))
+        candidates: list[int] = [track_duration_ms(track) for track in self._all_tracks()]
         if self._video_info is not None and self._video_info.duration > 0:
             candidates.append(int(round(self._video_info.duration * 1000)))
         return max(candidates, default=0)

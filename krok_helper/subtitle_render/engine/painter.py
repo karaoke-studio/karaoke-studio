@@ -357,16 +357,29 @@ def _resolve_visible_content(track: TimingTrack, t_ms: int, style: Style):
     return track_t_ms, display_style, display_lines, signal_lines, title_opacity
 
 
-def frame_has_content(track: Optional[TimingTrack], t_ms: int, style: Style) -> bool:
+def frame_has_content(
+    track: Optional[TimingTrack],
+    t_ms: int,
+    style: Style,
+    extra_tracks: Optional[list[TimingTrack]] = None,
+) -> bool:
     """该帧是否会画出任何字幕内容（行 / 信号 / 标题）。
 
     用于导出 / 预览的"空帧短路"：返回 ``False`` 时可直接写全透明帧，省去
     ``fill`` + 光栅化 + 字节拷贝。与 :func:`paint_frame_to_painter` 的早退条件同源。
+
+    ``extra_tracks``：副字幕源（N3 多歌词文件，如コーラス轨）；任一轨有内容即为真。
+    标题只随主轨。
     """
-    if track is None:
-        return False
-    _, _, display_lines, signal_lines, title_opacity = _resolve_visible_content(track, t_ms, style)
-    return bool(display_lines or signal_lines or title_opacity > 0.0)
+    if track is not None:
+        _, _, display_lines, signal_lines, title_opacity = _resolve_visible_content(track, t_ms, style)
+        if display_lines or signal_lines or title_opacity > 0.0:
+            return True
+    for extra in extra_tracks or ():
+        _, _, display_lines, signal_lines, _unused = _resolve_visible_content(extra, t_ms, style)
+        if display_lines or signal_lines:
+            return True
+    return False
 
 
 def frame_content_intervals(
@@ -375,6 +388,7 @@ def frame_content_intervals(
     track: Optional[TimingTrack],
     t_ms: int,
     style: Style,
+    extra_tracks: Optional[list[TimingTrack]] = None,
 ) -> list[tuple[int, int]] | None:
     """Return per-source (lyric / title) vertical content intervals, **unmerged**.
 
@@ -384,39 +398,52 @@ def frame_content_intervals(
     ``None`` for paths not yet migrated to layer bounds (竖排 / viewport 旋转 /
     逐字 transition)，调用方应回退到整帧 / alpha 扫描。
     """
-    if track is None:
-        return None
-    track_t_ms, display_style, display_lines, signal_lines, title_opacity = (
-        _resolve_visible_content(track, t_ms, style)
-    )
-    if not display_lines and not signal_lines and title_opacity <= 0.0:
+    track_entries: list[tuple[TimingTrack, bool]] = []
+    if track is not None:
+        track_entries.append((track, True))
+    track_entries.extend((extra, False) for extra in extra_tracks or ())
+    if not track_entries:
         return None
 
     intervals: list[tuple[int, int]] = []
-    if display_lines:
-        lyric_bounds = _subtitle_lines_vertical_bounds(
-            logical_w,
-            logical_h,
-            track,
-            track_t_ms,
-            display_style,
-            display_lines,
-            signal_lines,
+    any_content = False
+    for entry_track, with_title in track_entries:
+        track_t_ms, display_style, display_lines, signal_lines, title_opacity = (
+            _resolve_visible_content(entry_track, t_ms, style)
         )
-        if lyric_bounds is None:
-            return None
-        intervals.append(lyric_bounds)
-
-    if title_opacity > 0.0 and style.title_overlay is not None:
-        title_layout = _layout_title_overlay(logical_w, logical_h, track, style.title_overlay)
-        if title_layout is not None:
-            title_bounds = _TEXT_RUN_COMPOSITOR.vertical_bounds(
-                LayerContext(t_ms=track_t_ms, logical_w=logical_w, logical_h=logical_h),
-                [_TitleOverlayLayer(title_layout, style.title_overlay, title_opacity)],
+        if not with_title:
+            title_opacity = 0.0
+        if not display_lines and not signal_lines and title_opacity <= 0.0:
+            continue
+        any_content = True
+        if display_lines:
+            lyric_bounds = _subtitle_lines_vertical_bounds(
+                logical_w,
+                logical_h,
+                entry_track,
+                track_t_ms,
+                display_style,
+                display_lines,
+                signal_lines,
             )
-            if title_bounds is not None:
-                intervals.append(title_bounds)
+            if lyric_bounds is None:
+                return None
+            intervals.append(lyric_bounds)
 
+        if with_title and title_opacity > 0.0 and style.title_overlay is not None:
+            title_layout = _layout_title_overlay(
+                logical_w, logical_h, entry_track, style.title_overlay
+            )
+            if title_layout is not None:
+                title_bounds = _TEXT_RUN_COMPOSITOR.vertical_bounds(
+                    LayerContext(t_ms=track_t_ms, logical_w=logical_w, logical_h=logical_h),
+                    [_TitleOverlayLayer(title_layout, style.title_overlay, title_opacity)],
+                )
+                if title_bounds is not None:
+                    intervals.append(title_bounds)
+
+    if not any_content:
+        return None
     clamped: list[tuple[int, int]] = []
     for top, bottom in intervals:
         ct = max(0, top)
@@ -432,6 +459,7 @@ def frame_vertical_bounds(
     track: Optional[TimingTrack],
     t_ms: int,
     style: Style,
+    extra_tracks: Optional[list[TimingTrack]] = None,
 ) -> tuple[int, int] | None:
     """Return conservative vertical content bounds (union) for the current frame.
 
@@ -440,7 +468,7 @@ def frame_vertical_bounds(
     that have not migrated to layer bounds yet; callers should then fall back to
     the existing pixel scan / full repaint path.
     """
-    intervals = frame_content_intervals(logical_w, logical_h, track, t_ms, style)
+    intervals = frame_content_intervals(logical_w, logical_h, track, t_ms, style, extra_tracks)
     if not intervals:
         return None
     top = min(item[0] for item in intervals)
@@ -455,10 +483,12 @@ def paint_frame(
     track: Optional[TimingTrack],
     t_ms: int,
     style: Style,
+    extra_tracks: Optional[list[TimingTrack]] = None,
 ) -> QImage:
     """把 ``track`` 在 ``t_ms`` 时刻的活跃行渲染到 ``image``（原地修改）。
 
     若无活跃行则不画任何字（image 不变）。返回同一个 image 以便链式调用。
+    ``extra_tracks`` 为副字幕源（N3 多歌词文件），在主轨之上依次叠绘。
     """
     painter = QPainter(image)
     try:
@@ -469,7 +499,9 @@ def paint_frame(
         dpr = image.devicePixelRatioF() or 1.0
         logical_w = max(int(round(image.width() / dpr)), 1)
         logical_h = max(int(round(image.height() / dpr)), 1)
-        paint_frame_to_painter(painter, logical_w, logical_h, track, t_ms, style)
+        paint_frame_to_painter(
+            painter, logical_w, logical_h, track, t_ms, style, extra_tracks
+        )
     finally:
         painter.end()
     return image
@@ -482,16 +514,41 @@ def paint_frame_to_painter(
     track: Optional[TimingTrack],
     t_ms: int,
     style: Style,
+    extra_tracks: Optional[list[TimingTrack]] = None,
 ) -> None:
     """把当前字幕帧直接绘制到已打开的 ``QPainter``。
 
     ``logical_w`` / ``logical_h`` 使用 Qt 逻辑像素；调用方负责先绘制背景。
+
+    ``extra_tracks``：副字幕源（对标 N3 ``SourceLyricsInfos`` 多歌词文件，
+    如コーラス轨）。每轨独立分页 / 分 lane / 计算显示窗口，依次叠绘到同一帧；
+    标题 overlay 只随主轨绘制一次。
     """
-    if track is None:
-        return
+    if track is not None:
+        _paint_track_to_painter(
+            painter, logical_w, logical_h, track, t_ms, style, draw_title=True
+        )
+    for extra in extra_tracks or ():
+        _paint_track_to_painter(
+            painter, logical_w, logical_h, extra, t_ms, style, draw_title=False
+        )
+
+
+def _paint_track_to_painter(
+    painter: QPainter,
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    t_ms: int,
+    style: Style,
+    *,
+    draw_title: bool,
+) -> None:
     track_t_ms, display_style, display_lines, signal_lines, title_opacity = (
         _resolve_visible_content(track, t_ms, style)
     )
+    if not draw_title:
+        title_opacity = 0.0
     if not display_lines and not signal_lines and title_opacity <= 0.0:
         return
 

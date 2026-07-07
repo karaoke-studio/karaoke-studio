@@ -68,6 +68,12 @@ class RenderJob:
     crf: int = 18
     preset: str = "veryfast"
     native_export_enabled: bool | None = None
+    extra_tracks: tuple[TimingTrack, ...] = ()
+    """副字幕源（N3 多歌词文件，如コーラス轨），与主轨同帧叠绘。"""
+
+
+def _job_tracks(job: "RenderJob") -> list[TimingTrack]:
+    return [job.track, *job.extra_tracks]
 
 
 def render_subtitle_video(
@@ -298,7 +304,7 @@ def build_render_command(
 
 
 def _validate_job(job: RenderJob) -> None:
-    if job.track.char_count <= 0:
+    if all(track.char_count <= 0 for track in _job_tracks(job)):
         raise ProcessingError("请先加载有效的字幕文件。")
     if not job.background_video_path.is_file():
         raise ProcessingError(f"请先加载背景视频: {job.background_video_path}")
@@ -319,7 +325,7 @@ def _validate_job(job: RenderJob) -> None:
 def _resolve_duration_ms(job: RenderJob) -> int:
     if job.duration_ms is not None and job.duration_ms > 0:
         return job.duration_ms
-    duration = track_duration_ms(job.track)
+    duration = max(track_duration_ms(track) for track in _job_tracks(job))
     if duration <= 0:
         raise ProcessingError("字幕时长无效，无法导出。")
     return duration
@@ -362,6 +368,7 @@ def _paint_overlay_strip(
     logical_h: int,
     strip_top: int,
     transparent: QColor,
+    extra_tracks: tuple[TimingTrack, ...] = (),
 ) -> None:
     """把整帧字幕布局画进只有条带高的 ``buffer``。
 
@@ -374,20 +381,24 @@ def _paint_overlay_strip(
     try:
         if strip_top:
             painter.translate(0, -strip_top)
-        paint_frame_to_painter(painter, logical_w, logical_h, track, t_ms, style)
+        paint_frame_to_painter(
+            painter, logical_w, logical_h, track, t_ms, style, list(extra_tracks or ())
+        )
     finally:
         painter.end()
 
 
-def _strip_sample_times(track: TimingTrack, style: Style, duration_ms: int, total_frames: int) -> list[int]:
-    """纵向并集预扫的采样时刻：均匀网格 + 每行起止（含 lead-in/tail 动画极值）。"""
+def _strip_sample_times(
+    tracks: list[TimingTrack], style: Style, duration_ms: int, total_frames: int
+) -> list[int]:
+    """纵向并集预扫的采样时刻：均匀网格 + 每轨每行起止（含 lead-in/tail 动画极值）。"""
     times: set[int] = set()
     grid = min(total_frames, _STRIP_MAX_SAMPLES)
     for i in range(grid):
         times.add(int(round(i * duration_ms / max(grid - 1, 1))))
     lead = max(getattr(style, "line_lead_in_ms", 0) or 0, 0)
     tail = max(getattr(style, "line_tail_ms", 0) or 0, 0)
-    for line in track.lines:
+    for line in [line for track in tracks for line in track.lines]:
         if not line.chars:
             continue
         start = line.chars[0].start_ms
@@ -426,10 +437,11 @@ def _compute_subtitle_strip(
     """
     width, height = job.width, job.height
     total_frames = _frame_count(duration_ms, job.fps)
-    times = _strip_sample_times(job.track, job.style, duration_ms, total_frames)
+    times = _strip_sample_times(_job_tracks(job), job.style, duration_ms, total_frames)
     if not times:
         return None
 
+    extras = list(job.extra_tracks)
     scratch: QImage | None = None
     transparent = QColor(0, 0, 0, 0)
     top = height
@@ -437,14 +449,14 @@ def _compute_subtitle_strip(
     for t_ms in times:
         if should_cancel is not None and should_cancel():
             return None
-        if not frame_has_content(job.track, t_ms, job.style):
+        if not frame_has_content(job.track, t_ms, job.style, extras):
             continue
-        bounds = frame_vertical_bounds(width, height, job.track, t_ms, job.style)
+        bounds = frame_vertical_bounds(width, height, job.track, t_ms, job.style, extras)
         if bounds is None:
             if scratch is None:
                 scratch = QImage(width, height, QImage.Format.Format_RGBA8888)
             scratch.fill(transparent)
-            paint_frame(scratch, job.track, t_ms, job.style)
+            paint_frame(scratch, job.track, t_ms, job.style, extras)
             bounds = _content_row_bounds(scratch)
         if bounds is None:
             continue
@@ -521,17 +533,18 @@ def _compute_content_bands(
     """
     width, height = job.width, job.height
     total_frames = _frame_count(duration_ms, job.fps)
-    times = _strip_sample_times(job.track, job.style, duration_ms, total_frames)
+    times = _strip_sample_times(_job_tracks(job), job.style, duration_ms, total_frames)
     if not times:
         return None
 
+    extras = list(job.extra_tracks)
     collected: list[tuple[int, int]] = []
     for t_ms in times:
         if should_cancel is not None and should_cancel():
             return None
-        if not frame_has_content(job.track, t_ms, job.style):
+        if not frame_has_content(job.track, t_ms, job.style, extras):
             continue
-        intervals = frame_content_intervals(width, height, job.track, t_ms, job.style)
+        intervals = frame_content_intervals(width, height, job.track, t_ms, job.style, extras)
         if intervals is None:
             return None  # 未迁移路径，方案 B 无法保证不漏像素
         collected.extend(intervals)
@@ -571,6 +584,7 @@ def _paint_overlay_bands(
     logical_h: int,
     bands: list[tuple[int, int]],
     transparent: QColor,
+    extra_tracks: tuple[TimingTrack, ...] = (),
 ) -> None:
     """把整帧字幕布局画进竖向打包的 ``buffer``（高 = 各 band 高之和）。
 
@@ -586,7 +600,9 @@ def _paint_overlay_bands(
             try:
                 painter.setClipRect(0, packed_off, logical_w, band_h)
                 painter.translate(0, packed_off - band_top)
-                paint_frame_to_painter(painter, logical_w, logical_h, track, t_ms, style)
+                paint_frame_to_painter(
+                    painter, logical_w, logical_h, track, t_ms, style, list(extra_tracks)
+                )
             finally:
                 painter.restore()
     finally:
@@ -602,11 +618,12 @@ def _frame_bytes_bands(
     empty_frame: bytes,
 ) -> bytes:
     """渲染一帧为打包 RGBA 字节：有内容画进复用 ``buffer``，否则返回预存全透明帧。"""
-    if frame_has_content(job.track, t_ms, job.style):
+    if frame_has_content(job.track, t_ms, job.style, list(job.extra_tracks)):
         _paint_overlay_bands(
             buffer, job.track, job.style, t_ms,
             logical_w=job.width, logical_h=job.height,
             bands=bands, transparent=transparent,
+            extra_tracks=job.extra_tracks,
         )
         return _image_bytes(buffer)
     return empty_frame
@@ -626,11 +643,12 @@ def _frame_bytes(
     empty_frame: bytes,
 ) -> bytes:
     """渲染一帧为 RGBA 字节：有内容则画进（复用的）``buffer``，否则返回预存全透明帧。"""
-    if frame_has_content(job.track, t_ms, job.style):
+    if frame_has_content(job.track, t_ms, job.style, list(job.extra_tracks)):
         _paint_overlay_strip(
             buffer, job.track, job.style, t_ms,
             logical_w=job.width, logical_h=job.height,
             strip_top=strip_top, transparent=transparent,
+            extra_tracks=job.extra_tracks,
         )
         return _image_bytes(buffer)
     return empty_frame

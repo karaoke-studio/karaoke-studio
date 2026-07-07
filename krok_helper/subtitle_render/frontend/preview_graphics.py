@@ -58,6 +58,7 @@ class SubtitleGraphicsItem(QGraphicsItem):
         self._width = max(int(width), 1)
         self._height = max(int(height), 1)
         self._track: Optional[TimingTrack] = None
+        self._extra_tracks: list[TimingTrack] = []
         self._style: Style = Style()
         self._t_ms: int = 0
         self._on_painted = on_painted
@@ -109,6 +110,10 @@ class SubtitleGraphicsItem(QGraphicsItem):
         self._track = track
         self.update()
 
+    def set_extra_tracks(self, tracks: list[TimingTrack]) -> None:
+        self._extra_tracks = list(tracks)
+        self.update()
+
     def set_style(self, style: Style) -> None:
         self._style = style
         self.update()
@@ -143,7 +148,9 @@ class SubtitleGraphicsItem(QGraphicsItem):
         return self._t_ms
 
     def _dirty_rect_for_time(self, t_ms: int) -> QRectF | None:
-        bounds = frame_vertical_bounds(self._width, self._height, self._track, t_ms, self._style)
+        bounds = frame_vertical_bounds(
+            self._width, self._height, self._track, t_ms, self._style, self._extra_tracks
+        )
         if bounds is None:
             return None
         top, bottom = bounds
@@ -159,6 +166,7 @@ class SubtitleGraphicsItem(QGraphicsItem):
             self._track,
             self._t_ms,
             self._style,
+            self._extra_tracks,
         )
 
 
@@ -269,6 +277,12 @@ class PreviewGraphicsView(QGraphicsView):
         self._subtitle_item.clear_async_image()
         self._refresh_async_state()
 
+    def set_extra_tracks(self, tracks: list[TimingTrack]) -> None:
+        """副字幕源（N3 多歌词文件）：与主轨同帧叠绘。"""
+        self._subtitle_item.set_extra_tracks(tracks)
+        self._subtitle_item.clear_async_image()
+        self._refresh_async_state()
+
     def set_style(self, style: Style) -> None:
         self._subtitle_item.set_style(style)
         self._subtitle_item.clear_async_image()
@@ -285,7 +299,9 @@ class PreviewGraphicsView(QGraphicsView):
     def _refresh_async_state(self) -> None:
         if self._async_renderer is None:
             return
-        self._async_renderer.set_state(self._track, self._style)
+        self._async_renderer.set_state(
+            self._track, self._style, self._subtitle_item._extra_tracks  # noqa: SLF001
+        )
         self._async_renderer.request(self._t_ms)
 
     def _on_async_frame(self, image: QImage, t_ms: int) -> None:

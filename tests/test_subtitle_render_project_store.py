@@ -132,3 +132,50 @@ def test_preview_canvas_does_not_swallow_drops(qapp, monkeypatch):
         assert canvas.viewport().acceptDrops() is False
     # 外层 DropPanel 仍接受拖拽
     assert win._preview_panel.acceptDrops() is True
+
+
+def _write_demo_lrc(path, text="[00:01:00]あ[00:01:50]い[00:02:00]\r\n"):
+    path.write_bytes(b"\xef\xbb\xbf" + text.encode("utf-8"))
+    return path
+
+
+def test_extra_subtitle_sources_round_trip(qapp, monkeypatch, tmp_path):
+    """副字幕源（N3 多歌词文件）随 .yurika 保存/恢复：路径、每行布局、逐字角色。"""
+    win = _make_window(qapp, monkeypatch)
+    main_lrc = _write_demo_lrc(tmp_path / "main.lrc")
+    chorus_lrc = _write_demo_lrc(tmp_path / "chorus.lrc", "[00:10:00]ラ[00:11:00]ラ[00:12:00]\r\n")
+    assert win.load_from_lrc(main_lrc) is not None
+
+    from krok_helper.subtitle_render.frontend.main_window import ExtraSubtitleSource
+    from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
+
+    chorus_track = load_nicokara_lrc(chorus_lrc)
+    chorus_track.lines[0].layout_index = 1
+    for ch in chorus_track.lines[0].chars:
+        ch.role_label = "コーラス配色"
+    win._extra_sources.append(
+        ExtraSubtitleSource(name="コーラス1", path=chorus_lrc, track=chorus_track)
+    )
+
+    data = win._current_project_data()
+    extras = data.get("extra_subtitle_sources")
+    assert extras and extras[0]["name"] == "コーラス1"
+    assert extras[0]["line_layout_indices"] == [1]
+    assert extras[0]["char_role_labels"] == [["コーラス配色", "コーラス配色"]]
+
+    # 恢复到新窗口（布局数量需覆盖 layout_index=1）
+    from dataclasses import replace as dc_replace
+    from krok_helper.subtitle_render.models import LyricsLayout, style_to_dict
+
+    data["style"] = style_to_dict(
+        dc_replace(win._style, layouts=[LyricsLayout(name="コーラス")])
+    )
+    win2 = _make_window(qapp, monkeypatch)
+    win2._apply_project_data(data)
+    assert len(win2._extra_sources) == 1
+    restored = win2._extra_sources[0]
+    assert restored.name == "コーラス1"
+    assert restored.track.lines[0].layout_index == 1
+    assert [c.role_label for c in restored.track.lines[0].chars] == ["コーラス配色", "コーラス配色"]
+    combo = win2._lyrics_panel._source_combo
+    assert [combo.itemText(i) for i in range(combo.count())] == ["主字幕", "コーラス1"]

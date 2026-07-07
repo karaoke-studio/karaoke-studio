@@ -150,11 +150,6 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
             warnings,
             "字幕源",
         )
-        if len(lyrics_with_source) > 1:
-            extra = "、".join(
-                str(info.get("SettingsName") or "?") for info in lyrics_with_source[1:]
-            )
-            warnings.append(f"N3 项目包含多个字幕源，仅导入第一个（{extra} 被忽略）")
     lyrics_dir = subtitle_path.parent if subtitle_path is not None else base_dir
 
     # ---------------------------------------------------------------- 画面
@@ -212,16 +207,43 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
     # ---------------------------------------------------------- 每行布局 / 逐字配色 / 动画
     line_layout_indices: Optional[list[int]] = None
     char_role_labels: Optional[list[Optional[list[Optional[str]]]]] = None
+    extra_sources: list[dict[str, Any]] = []
     if lyrics_with_source:
+        layout_limit = len(changes.get("layouts") or [])
+        font_names = [str(font.get("SettingsName") or "") for font in fonts]
+
         line_infos = [_dict(item) for item in _list(lyrics_with_source[0].get("LineInfos"))]
         changes.update(_animation_changes(line_infos, warnings))
         track = _load_track(subtitle_path, warnings)
         if track is not None:
-            layout_limit = len(changes.get("layouts") or [])
-            font_names = [str(font.get("SettingsName") or "") for font in fonts]
             line_layout_indices, char_role_labels = _per_line_payloads(
                 line_infos, track, layout_limit, font_names, warnings
             )
+
+        # 副字幕源（コーラス等）：与主字幕同时渲染，逐源导入路径 / 每行布局 / 逐字配色。
+        for info in lyrics_with_source[1:]:
+            name = str(info.get("SettingsName") or "").strip() or "コーラス"
+            extra_path = _resolve_media(
+                info.get("SourceLyricsPath"),
+                info.get("SourceLyricsRelativePath"),
+                base_dir,
+                warnings,
+                f"字幕源「{name}」",
+            )
+            if extra_path is None:
+                continue
+            extra_payload: dict[str, Any] = {"name": name, "path": str(extra_path)}
+            extra_track = _load_track(extra_path, warnings)
+            if extra_track is not None:
+                extra_line_infos = [_dict(item) for item in _list(info.get("LineInfos"))]
+                extra_layouts, extra_roles = _per_line_payloads(
+                    extra_line_infos, extra_track, layout_limit, font_names, warnings
+                )
+                if extra_layouts is not None:
+                    extra_payload["line_layout_indices"] = extra_layouts
+                if extra_roles is not None:
+                    extra_payload["char_role_labels"] = extra_roles
+            extra_sources.append(extra_payload)
 
     style = replace(Style(), **changes)
 
@@ -251,6 +273,8 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
         project_data["line_layout_indices"] = line_layout_indices
     if char_role_labels is not None:
         project_data["char_role_labels"] = char_role_labels
+    if extra_sources:
+        project_data["extra_subtitle_sources"] = extra_sources
     return N3ImportResult(project_data=project_data, warnings=warnings)
 
 

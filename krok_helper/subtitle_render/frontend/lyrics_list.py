@@ -24,12 +24,15 @@ from PyQt6.QtCore import QPoint, Qt, QSize, pyqtSignal as Signal
 from PyQt6.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QHBoxLayout,
     QHeaderView,
     QMenu,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableWidgetItem,
+    QToolButton,
+    QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import ComboBox as FluentComboBox
@@ -198,6 +201,12 @@ class LyricsPanel(DropPanel):
     rowClicked = Signal(int)  # 用户点击歌词行时发出行号
     layoutChangeRequested = Signal(list, int)
     """右键菜单选择布局：(选中的 track.lines 行号列表, 布局 index)。宿主按页联动应用。"""
+    sourceSelected = Signal(int)
+    """字幕源下拉切换：0 = 主字幕，k >= 1 = 第 k 个副字幕源。"""
+    sourceAddRequested = Signal()
+    """「＋」按钮：请求添加副字幕源（N3 多歌词文件，如コーラス轨）。"""
+    sourceRemoveRequested = Signal(int)
+    """「－」按钮：请求移除当前选中的副字幕源（主字幕不可移除）。"""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(
@@ -260,7 +269,38 @@ class LyricsPanel(DropPanel):
         self._table.setItemDelegateForColumn(COL_ROLE, self._role_delegate)
         self._table.setItemDelegateForColumn(COL_CONTENT, self._readonly_delegate)
 
-        self.set_content(self._table)
+        # ---- 字幕源工具条（对标 N3 多歌词文件：メイン / コーラス1 / …）----
+        self._syncing_sources = False
+        self._source_bar = QWidget(self)
+        source_layout = QHBoxLayout(self._source_bar)
+        source_layout.setContentsMargins(8, 6, 8, 0)
+        source_layout.setSpacing(6)
+        self._source_combo = FluentComboBox(self._source_bar)
+        self._source_combo.setToolTip("切换列表显示的字幕源（预览与导出始终同时渲染全部源）")
+        self._source_combo.currentIndexChanged.connect(self._on_source_combo_changed)
+        self._add_source_btn = QToolButton(self._source_bar)
+        self._add_source_btn.setText("＋")
+        self._add_source_btn.setToolTip("添加副字幕源（如コーラス .lrc，与主字幕同时显示）")
+        self._add_source_btn.clicked.connect(self.sourceAddRequested)
+        self._remove_source_btn = QToolButton(self._source_bar)
+        self._remove_source_btn.setText("－")
+        self._remove_source_btn.setToolTip("移除当前副字幕源")
+        self._remove_source_btn.clicked.connect(self._on_remove_source_clicked)
+        for button in (self._add_source_btn, self._remove_source_btn):
+            button.setFixedSize(26, 26)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+        source_layout.addWidget(self._source_combo, 1)
+        source_layout.addWidget(self._add_source_btn)
+        source_layout.addWidget(self._remove_source_btn)
+        self._source_bar.setVisible(False)
+
+        container = QWidget(self)
+        content_layout = QVBoxLayout(container)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.setSpacing(2)
+        content_layout.addWidget(self._source_bar)
+        content_layout.addWidget(self._table, 1)
+        self.set_content(container)
 
         # 代理编辑后通知宿主
         self._table.itemChanged.connect(self._on_item_changed)
@@ -268,6 +308,35 @@ class LyricsPanel(DropPanel):
         self._table.cellClicked.connect(lambda row, _col: self.rowClicked.emit(row))
 
     # ------------------------------------------------------------------ public
+
+    def set_sources(self, names: list[str], active_index: int) -> None:
+        """刷新字幕源下拉（首项 = 主字幕）；只有一个源时也显示，便于发现「＋」入口。"""
+        self._syncing_sources = True
+        try:
+            self._source_combo.clear()
+            self._source_combo.addItems(list(names))
+            if names:
+                self._source_combo.setCurrentIndex(
+                    max(0, min(int(active_index), len(names) - 1))
+                )
+        finally:
+            self._syncing_sources = False
+        self._source_bar.setVisible(bool(names))
+        self._remove_source_btn.setEnabled(self._source_combo.currentIndex() > 0)
+
+    def current_source_index(self) -> int:
+        return max(self._source_combo.currentIndex(), 0)
+
+    def _on_source_combo_changed(self, index: int) -> None:
+        self._remove_source_btn.setEnabled(index > 0)
+        if self._syncing_sources or index < 0:
+            return
+        self.sourceSelected.emit(index)
+
+    def _on_remove_source_clicked(self) -> None:
+        index = self._source_combo.currentIndex()
+        if index > 0:
+            self.sourceRemoveRequested.emit(index)
 
     def set_role_options(self, options: list[str]) -> None:
         """设置可选的配色方案 / 角色名列表。"""

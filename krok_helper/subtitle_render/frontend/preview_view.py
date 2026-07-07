@@ -122,6 +122,7 @@ class PreviewCanvas(QWidget):
         super().__init__(parent)
         self.setMinimumHeight(240)
         self._track: Optional[TimingTrack] = None
+        self._extra_tracks: list[TimingTrack] = []
         self._style: Style = Style()
         self._t_ms: int = 0
         self._video_path: Optional[Path] = None
@@ -148,6 +149,10 @@ class PreviewCanvas(QWidget):
 
     def set_track(self, track: Optional[TimingTrack]) -> None:
         self._track = track
+        self.update()
+
+    def set_extra_tracks(self, tracks: list[TimingTrack]) -> None:
+        self._extra_tracks = list(tracks)
         self.update()
 
     def set_style(self, style: Style) -> None:
@@ -252,6 +257,7 @@ class PreviewCanvas(QWidget):
             self._track,
             self._t_ms,
             self._style,
+            self._extra_tracks,
         )
 
     # ------------------------------------------------------------------ video
@@ -392,6 +398,12 @@ class PreviewPanel(DropPanel):
         self._canvas.set_track(track)
         if track is not None and track.lines:
             self.set_populated(True)
+
+    def set_extra_tracks(self, tracks: list[TimingTrack]) -> None:
+        """副字幕源（N3 多歌词文件）：与主轨同帧叠绘；raster 旧画布不支持时忽略。"""
+        setter = getattr(self._canvas, "set_extra_tracks", None)
+        if setter is not None:
+            setter(list(tracks))
 
     def set_time(self, t_ms: int) -> None:
         self._canvas.set_time(t_ms)

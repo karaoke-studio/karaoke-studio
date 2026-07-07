@@ -378,3 +378,39 @@ def test_import_real_project_smoke():
     assert style.title_overlay is not None
     assert style.title_overlay.show_mode == "whole"
     assert len(result.project_data["line_layout_indices"]) == 34
+
+
+CHORUS_LRC_TEXT = "[00:10:00]ラ[00:11:00]ラ[00:12:00]\n"
+
+
+def test_import_multiple_lyrics_sources(tmp_path):
+    payload = _project_payload(tmp_path)
+    chorus = tmp_path / "chorus.lrc"
+    chorus.write_text(CHORUS_LRC_TEXT, encoding="utf-8")
+    payload["SourceLyricsInfos"].append(
+        {
+            "SourceLyricsPath": str(chorus),
+            "SourceLyricsRelativePath": "chorus.lrc",
+            "LineInfos": [
+                _line_info(
+                    [_char("ラ", 10000, 11000, font_index=1), _char("ラ", 11000, 12000)],
+                    layout_index=1,
+                ),
+            ],
+            "SettingsName": "コーラス1",
+        }
+    )
+    # 空槽位（N3 常见的 コーラス2 占位）应被忽略
+    payload["SourceLyricsInfos"].append(
+        {"SourceLyricsPath": None, "SourceLyricsRelativePath": "", "LineInfos": [], "SettingsName": "コーラス2"}
+    )
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    extras = result.project_data.get("extra_subtitle_sources")
+    assert extras is not None and len(extras) == 1
+    entry = extras[0]
+    assert entry["name"] == "コーラス1"
+    assert entry["path"] == str(chorus)
+    assert entry["line_layout_indices"] == [1]
+    assert entry["char_role_labels"] == [["青配色", None]]
+    # 不再出现「仅导入第一个」的提示
+    assert not any("仅导入第一个" in w for w in result.warnings)

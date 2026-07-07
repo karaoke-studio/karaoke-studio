@@ -89,6 +89,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _visible_lines_for_style,
     _resolve_title_text,
     _title_overlay_opacity,
+    frame_has_content,
     paint_frame,
     frame_vertical_bounds,
     clear_before_layer_cache,
@@ -4404,3 +4405,47 @@ def test_whitespace_glyphs_do_not_inflate_line_metrics(qapp, monkeypatch):
     # 整行空白：行高退回首字符 metrics，不为 0
     all_blank = build([" ", " "])
     assert all_blank.ascent > 0
+
+
+def test_paint_frame_renders_extra_tracks(qapp):
+    """副字幕源（N3 多歌词文件）与主轨同帧叠绘：副轨行出现在主轨行之外的区域。"""
+    main = _track()
+    # 和声行放在主轨结束很久之后，该时刻只有副轨可见 → 有墨水即证明副轨被绘制。
+    chorus_line = TimingLine(
+        chars=[
+            TimingChar(text="ラ", start_ms=60000),
+            TimingChar(text="ラ", start_ms=60500),
+        ],
+        end_ms=61500,
+    )
+    chorus = TimingTrack(lines=[chorus_line])
+    # 和声轨用独立布局（顶部居中），与主轨（底部）不重叠
+    style = replace(
+        Style(),
+        layouts=[
+            LyricsLayout(
+                name="コーラス",
+                line_y_position="top",
+                line_y_margin_px=40,
+                line_alignments=["center"],
+            )
+        ],
+    )
+    chorus_line.layout_index = 1
+
+    bg = QColor("#101010")
+
+    def render(track, extras, t_ms):
+        img = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+        img.fill(bg)
+        paint_frame(img, track, t_ms, style, extras)
+        return _bounds_size(_ink_bounds(img, bg))
+
+    # 主轨早已唱完的时刻：无副轨 → 空帧；带副轨 → 画出和声行
+    assert render(main, [], 60800) == (0, 0)
+    assert render(main, [chorus], 60800) != (0, 0)
+    # 只有副轨时（主轨为 None）也能渲染
+    assert render(None, [chorus], 60800) != (0, 0)
+    # frame_has_content 与绘制口径一致
+    assert not frame_has_content(main, 60800, style)
+    assert frame_has_content(main, 60800, style, [chorus])

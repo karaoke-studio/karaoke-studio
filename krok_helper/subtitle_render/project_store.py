@@ -64,6 +64,7 @@ def project_payload(
     output: dict,
     line_layout_indices: Optional[list[int]] = None,
     char_role_labels: Optional[list] = None,
+    extra_subtitle_sources: Optional[list] = None,
 ) -> dict:
     """组装项目快照 dict（纯数据，不碰 UI）。便于单测与复用。
 
@@ -73,6 +74,9 @@ def project_payload(
     ``char_role_labels`` 同样与 ``track.lines`` 对齐：每项为 None（整行无角色）
     或与该行字符对齐的角色名列表。覆盖 UI 手动分配与 N3 导入的逐字配色
     （LRC 内的 ``【N配色】`` 标签解析后也会落到这里，重复应用无害）。
+
+    ``extra_subtitle_sources``：副字幕源列表（N3 多歌词文件，如コーラス轨），
+    每项为 ``{"name", "path", "line_layout_indices", "char_role_labels"}``。
     """
     payload = {
         "subtitle_path": str(subtitle_path) if subtitle_path else None,
@@ -89,6 +93,10 @@ def project_payload(
         payload["char_role_labels"] = [
             [str(label) if label else None for label in row] if isinstance(row, list) else None
             for row in char_role_labels
+        ]
+    if extra_subtitle_sources is not None:
+        payload["extra_subtitle_sources"] = [
+            dict(item) for item in extra_subtitle_sources if isinstance(item, dict)
         ]
     return payload
 

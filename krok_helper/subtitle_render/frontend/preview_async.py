@@ -200,14 +200,21 @@ class _AsyncSubtitleWorker(QObject):
         self._device_pixel_ratio = 1.0
         self._track: Optional[TimingTrack] = None
         self._style: Optional[Style] = None
+        self._extra_tracks: list[TimingTrack] = []
         self._pending_t: Optional[int] = None
         self._rendering = False
         self._stopping = False
 
-    @Slot(object, object)
-    def set_state(self, track: Optional[TimingTrack], style: Optional[Style]) -> None:
+    @Slot(object, object, object)
+    def set_state(
+        self,
+        track: Optional[TimingTrack],
+        style: Optional[Style],
+        extra_tracks: object = None,
+    ) -> None:
         self._track = track
         self._style = style
+        self._extra_tracks = list(extra_tracks) if isinstance(extra_tracks, (list, tuple)) else []
 
     @Slot(int, int, float)
     def set_render_target(self, width: int, height: int, device_pixel_ratio: float = 1.0) -> None:
@@ -237,6 +244,7 @@ class _AsyncSubtitleWorker(QObject):
         self._pending_t = None
         track = self._track
         style = self._style
+        extra_tracks = self._extra_tracks
         logical_w = self._logical_w
         logical_h = self._logical_h
         dpr = self._device_pixel_ratio
@@ -251,7 +259,9 @@ class _AsyncSubtitleWorker(QObject):
             image.fill(0)
             painter = QPainter(image)
             try:
-                paint_frame_to_painter(painter, logical_w, logical_h, track, int(t_ms), style)
+                paint_frame_to_painter(
+                    painter, logical_w, logical_h, track, int(t_ms), style, extra_tracks
+                )
             finally:
                 painter.end()
             self.frame_ready.emit(image, int(t_ms))
@@ -275,7 +285,7 @@ class AsyncSubtitleRenderer(QObject):
     """
 
     frame_ready = Signal(QImage, int)
-    _state_changed = Signal(object, object)
+    _state_changed = Signal(object, object, object)
     _target_changed = Signal(int, int, float)
     _frame_requested = Signal(int)
 
@@ -307,12 +317,17 @@ class AsyncSubtitleRenderer(QObject):
         except RuntimeError:
             pass
 
-    def set_state(self, track: Optional[TimingTrack], style: Optional[Style]) -> None:
+    def set_state(
+        self,
+        track: Optional[TimingTrack],
+        style: Optional[Style],
+        extra_tracks: Optional[list[TimingTrack]] = None,
+    ) -> None:
         if self._stopped:
             return
         self._track = track
         self._style = style
-        self._state_changed.emit(track, style)
+        self._state_changed.emit(track, style, list(extra_tracks or ()))
 
     def set_size(self, width: int, height: int) -> None:
         self.set_render_target(width, height, self._device_pixel_ratio)
@@ -404,7 +419,12 @@ class NativeAsyncSubtitleRenderer(QObject):
         )
         self._thread.start()
 
-    def set_state(self, track: Optional[TimingTrack], style: Optional[Style]) -> None:
+    def set_state(
+        self,
+        track: Optional[TimingTrack],
+        style: Optional[Style],
+        extra_tracks: Optional[list[TimingTrack]] = None,  # noqa: ARG002 — native 预览暂不支持副轨
+    ) -> None:
         with self._condition:
             if self._stopped:
                 return
