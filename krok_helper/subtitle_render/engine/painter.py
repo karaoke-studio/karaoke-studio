@@ -931,9 +931,15 @@ def _paint_title_text_stack(
             title.stroke2_width_px,
         )
     elif title.shadow_offset_x or title.shadow_offset_y:
-        shadow_path = QTransform().translate(title.shadow_offset_x, title.shadow_offset_y).map(path)
-        _paint_fill_path(
-            painter, shadow_path, title.shadow, rect.translated(title.shadow_offset_x, title.shadow_offset_y)
+        _paint_shadow_silhouette(
+            painter,
+            path,
+            title.shadow,
+            rect,
+            title.shadow_offset_x,
+            title.shadow_offset_y,
+            title.stroke_width_px,
+            title.stroke2_width_px,
         )
     if title.stroke2_width_px > 0:
         _paint_stroke_path(
@@ -2452,7 +2458,8 @@ def _text_visual_padding(style: Style, *, after: bool) -> int:
             ),
         )
     else:
-        pad = max(pad, abs(style.shadow_offset_y))
+        # 阴影是含描边的整字剪影：足迹 = 描边半宽 + 偏移。
+        pad = pad + abs(style.shadow_offset_y)
     return max(pad, 2)
 
 
@@ -2470,7 +2477,7 @@ def _ruby_visual_padding(style: Style, *, after: bool) -> int:
             ),
         )
     else:
-        pad = max(pad, abs(_ruby_shadow_dy(style)))
+        pad = pad + abs(_ruby_shadow_dy(style))
     return max(pad, 2)
 
 
@@ -2486,7 +2493,7 @@ def _title_visual_padding(title: TitleOverlay) -> int:
             ),
         )
     else:
-        pad = max(pad, abs(title.shadow_offset_y))
+        pad = pad + abs(title.shadow_offset_y)
     return max(pad, 2)
 
 
@@ -2910,13 +2917,14 @@ def _paint_line_vertical_direct(
 
 
 def _vertical_after_clip_pad(style: Style) -> int:
+    stroke_extent = _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px)
     return max(
-        _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px),
+        stroke_extent,
         _glow_extent(style.stroke_width_px, style.stroke2_width_px, _glow_radius(style, after=True))
         if style.decoration_kind == "glow"
         else 0,
-        abs(style.shadow_offset_x),
-        abs(style.shadow_offset_y),
+        stroke_extent + abs(style.shadow_offset_x),
+        stroke_extent + abs(style.shadow_offset_y),
         2,
     )
 
@@ -3133,10 +3141,11 @@ def _vertical_ruby_layers(
         if ratio <= 0.0:
             continue
         scan_y = base_top + span_h * min(ratio, 1.0)
+        stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
         pad = max(
-            _visual_stroke_extent(stroke_width, stroke2_width),
+            stroke_extent,
             _glow_extent(stroke_width, stroke2_width, after_glow_radius) if _ruby_decoration_kind(style) == "glow" else 0,
-            abs(shadow_dx), abs(shadow_dy), 2,
+            stroke_extent + abs(shadow_dx), stroke_extent + abs(shadow_dy), 2,
         )
         clip = QRectF(
             float(ruby_x - ruby_cell_w / 2 - pad), float(base_top - pad),
@@ -3327,13 +3336,14 @@ def _paint_rubies_vertical(
         if ratio <= 0.0:
             continue
         scan_y = base_top + span_h * min(ratio, 1.0)
+        stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
         pad = max(
-            _visual_stroke_extent(stroke_width, stroke2_width),
+            stroke_extent,
             _glow_extent(stroke_width, stroke2_width, after_glow_radius)
             if _ruby_decoration_kind(style) == "glow"
             else 0,
-            abs(shadow_dx),
-            abs(shadow_dy),
+            stroke_extent + abs(shadow_dx),
+            stroke_extent + abs(shadow_dy),
             2,
         )
         painter.save()
@@ -4985,13 +4995,15 @@ def _build_glyph_run_layer(
                 role_style.stroke2_width_px,
             )
         elif has_shadow:
-            shadow_path = QPainterPath(path)
-            shadow_path.translate(role_style.shadow_offset_x, role_style.shadow_offset_y)
-            _paint_fill_path(
+            _paint_shadow_silhouette(
                 p,
-                shadow_path,
+                path,
                 state.shadow,
-                rect.translated(role_style.shadow_offset_x, role_style.shadow_offset_y),
+                rect,
+                role_style.shadow_offset_x,
+                role_style.shadow_offset_y,
+                role_style.stroke_width_px,
+                role_style.stroke2_width_px,
             )
         # 2) stroke2
         if role_style.stroke2_width_px > 0:
@@ -6196,6 +6208,33 @@ def _paint_stroke_path(
     pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     painter.strokePath(path, pen)
+
+
+def _paint_shadow_silhouette(
+    painter: QPainter,
+    path: QPainterPath,
+    fill: PaintFill,
+    rect: QRectF,
+    dx: int,
+    dy: int,
+    stroke_width: int,
+    stroke2_width: int,
+) -> None:
+    """N3 式阴影：整字**剪影**（含描边外缘）平移绘制。
+
+    N3 的 DrawOneLineDecorShadow 把 edge2+edge+body 整行画进 work bitmap 再整体
+    平移 blit——阴影轮廓因此比正文描边外缘还大。若只平移文字本体路径，偏移小于
+    描边半宽时阴影会被正文描边完全盖住（「几乎看不到阴影」）。"""
+    shadow_path = QTransform().translate(dx, dy).map(path)
+    shadow_rect = rect.translated(dx, dy)
+    pen_width = (
+        _stroke2_pen_width(stroke_width, stroke2_width)
+        if stroke2_width > 0
+        else _stroke_pen_width(stroke_width)
+    )
+    if pen_width > 0:
+        _paint_stroke_path(painter, shadow_path, fill, shadow_rect, pen_width)
+    _paint_fill_path(painter, shadow_path, fill, shadow_rect)
 
 
 def _paint_glow_path(
@@ -8028,7 +8067,13 @@ def _build_ruby_text_layer(
         if _ruby_decoration_kind(style) == "glow"
         else 0
     )
-    extent = max(stroke_extent, glow_extra, abs(shadow_dx), abs(shadow_dy), 2) + 4
+    extent = max(
+        stroke_extent,
+        glow_extra,
+        stroke_extent + abs(shadow_dx),
+        stroke_extent + abs(shadow_dy),
+        2,
+    ) + 4
     layout_overhang_left = int(math.ceil(_ruby_layout_left_overhang(
         layout.ruby.reading,
         ruby_metrics,
@@ -8131,8 +8176,8 @@ def _ruby_after_clip_rect(
         _glow_extent(stroke_width, stroke2_width, after_glow_radius)
         if _ruby_decoration_kind(style) == "glow"
         else 0,
-        abs(shadow_dx),
-        abs(shadow_dy),
+        stroke_extent + abs(shadow_dx),
+        stroke_extent + abs(shadow_dy),
         2,
     )
     ratio_c = min(ratio, 1.0)
@@ -8697,8 +8742,8 @@ def _paint_ruby_karaoke_fragment(
                 _glow_extent(stroke_width, stroke2_width, after_glow_radius)
                 if _ruby_decoration_kind(style) == "glow"
                 else 0,
-                abs(shadow_dx),
-                abs(shadow_dy),
+                stroke_extent + abs(shadow_dx),
+                stroke_extent + abs(shadow_dy),
                 2,
             )
             # RTL：已唱区贴读音右缘，左缘随进度左移。
@@ -8760,12 +8805,15 @@ def _paint_text_layer_stack(
                 stroke2_width,
             )
     elif shadow_dx or shadow_dy:
-        shadow_path = QTransform().translate(shadow_dx, shadow_dy).map(path)
-        _paint_fill_path(
+        _paint_shadow_silhouette(
             painter,
-            shadow_path,
+            path,
             colors.shadow,
             brush_rect,
+            shadow_dx,
+            shadow_dy,
+            stroke_width,
+            stroke2_width,
         )
 
     if stroke2_width > 0:

@@ -481,8 +481,10 @@ class Style:
     glow_before_radius_px: int = 10
     glow_after_radius_px: int = 10
     shadow_color: str = "#000000"
-    shadow_offset_x: int = 0
-    shadow_offset_y: int = 1
+    shadow_offset_x: int = 10
+    """阴影 X 偏移。N3 阴影偏移固定为 DecorSize（双轴同值），新建默认 10
+    （``CreateLyricsFont``），这里默认值对齐。"""
+    shadow_offset_y: int = 10
     karaoke_colors: Optional[KaraokeColors] = None
 
     singer_style_overrides: dict[int, SubtitleStyleScheme] = field(default_factory=dict)

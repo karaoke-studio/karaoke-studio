@@ -160,6 +160,41 @@ class _AspectRatioBox(QWidget):
         self._child.setGeometry(QRect(x, y, max(target_w, 1), max(target_h, 1)))
 
 
+class _WindowEdgeGrip(QWidget):
+    """无边框窗口的边缘/角落拖拽调整手柄。
+
+    覆盖在窗口内容之上的透明细条；按下后交给系统 ``startSystemResize``，
+    拖拽行为与原生窗口一致（含最小尺寸约束）。
+    """
+
+    _EDGE_CURSORS = {
+        Qt.Edge.LeftEdge.value: Qt.CursorShape.SizeHorCursor,
+        Qt.Edge.RightEdge.value: Qt.CursorShape.SizeHorCursor,
+        Qt.Edge.TopEdge.value: Qt.CursorShape.SizeVerCursor,
+        Qt.Edge.BottomEdge.value: Qt.CursorShape.SizeVerCursor,
+        (Qt.Edge.TopEdge | Qt.Edge.LeftEdge).value: Qt.CursorShape.SizeFDiagCursor,
+        (Qt.Edge.BottomEdge | Qt.Edge.RightEdge).value: Qt.CursorShape.SizeFDiagCursor,
+        (Qt.Edge.TopEdge | Qt.Edge.RightEdge).value: Qt.CursorShape.SizeBDiagCursor,
+        (Qt.Edge.BottomEdge | Qt.Edge.LeftEdge).value: Qt.CursorShape.SizeBDiagCursor,
+    }
+
+    def __init__(self, window: QWidget, edges) -> None:
+        super().__init__(window)
+        self._window = window
+        self._edges = edges
+        cursor = self._EDGE_CURSORS.get(edges.value)
+        if cursor is not None:
+            self.setCursor(cursor)
+
+    def mousePressEvent(self, event):  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton and not self._window.isMaximized():
+            handle = self._window.windowHandle()
+            if handle is not None and handle.startSystemResize(self._edges):
+                event.accept()
+                return
+        super().mousePressEvent(event)
+
+
 class PreviewPlayerWindow(QWidget):
     """独立预览窗口：只承载 16:9 的视频预览画面。"""
 
@@ -215,6 +250,20 @@ class PreviewPlayerWindow(QWidget):
         self._apply_player_transport_style()
 
         self.setMinimumSize(QSize(426, 240))
+
+        # 无边框窗口的八向拖拽调整手柄（边 + 角），叠在最上层。
+        edge = Qt.Edge
+        self._edge_grips = [
+            _WindowEdgeGrip(self, edge.LeftEdge),
+            _WindowEdgeGrip(self, edge.RightEdge),
+            _WindowEdgeGrip(self, edge.TopEdge),
+            _WindowEdgeGrip(self, edge.BottomEdge),
+            _WindowEdgeGrip(self, edge.TopEdge | edge.LeftEdge),
+            _WindowEdgeGrip(self, edge.TopEdge | edge.RightEdge),
+            _WindowEdgeGrip(self, edge.BottomEdge | edge.LeftEdge),
+            _WindowEdgeGrip(self, edge.BottomEdge | edge.RightEdge),
+        ]
+
         themed(
             self,
             lambda: (
@@ -337,6 +386,28 @@ class PreviewPlayerWindow(QWidget):
         self._bottom_controls.setGeometry(0, max(0, self.height() - 58), self.width(), 58)
         self._top_controls.raise_()
         self._bottom_controls.raise_()
+        self._layout_edge_grips()
+
+    def _layout_edge_grips(self) -> None:
+        w, h = self.width(), self.height()
+        margin = 6  # 边条厚度
+        corner = 14  # 角块边长
+        edge = Qt.Edge
+        rects = {
+            edge.LeftEdge.value: QRect(0, corner, margin, max(h - corner * 2, 0)),
+            edge.RightEdge.value: QRect(w - margin, corner, margin, max(h - corner * 2, 0)),
+            edge.TopEdge.value: QRect(corner, 0, max(w - corner * 2, 0), margin),
+            edge.BottomEdge.value: QRect(corner, h - margin, max(w - corner * 2, 0), margin),
+            (edge.TopEdge | edge.LeftEdge).value: QRect(0, 0, corner, corner),
+            (edge.TopEdge | edge.RightEdge).value: QRect(w - corner, 0, corner, corner),
+            (edge.BottomEdge | edge.LeftEdge).value: QRect(0, h - corner, corner, corner),
+            (edge.BottomEdge | edge.RightEdge).value: QRect(w - corner, h - corner, corner, corner),
+        }
+        maximized = self.isMaximized()
+        for grip in self._edge_grips:
+            grip.setGeometry(rects[grip._edges.value])
+            grip.setVisible(not maximized)
+            grip.raise_()
 
     def focusInEvent(self, event):  # noqa: N802
         super().focusInEvent(event)

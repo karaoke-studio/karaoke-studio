@@ -187,7 +187,18 @@ def test_compute_subtitle_strip_uses_signal_layer_bounds_without_alpha_scan(qapp
 
 def test_compute_subtitle_strip_falls_back_when_content_fills_height(qapp, tmp_path):
     # 矮帧 + 大字：内容纵向并集 ≥ 85% 全高 → 退回整帧（None）。
-    job = replace(_job(tmp_path), style=Style(font_size_px=72, line_y_position="center"), height=80)
+    # 阴影偏移固定为小值：默认 (10,10) 会把该退化场景的 bounds 推到帧外，
+    # 触发不了本用例要测的“占满高度回退”分支。
+    job = replace(
+        _job(tmp_path),
+        style=Style(
+            font_size_px=72,
+            line_y_position="center",
+            shadow_offset_x=0,
+            shadow_offset_y=1,
+        ),
+        height=80,
+    )
     assert _compute_subtitle_strip(job, 1000) is None
 
 
@@ -521,7 +532,8 @@ def test_compute_content_bands_splits_title_and_lyrics(qapp, tmp_path):
     first_top, first_h = bands[0]
     last_top, _last_h = bands[-1]
     assert first_top < 200
-    assert last_top > 400
+    # 380：歌词条带顶随阴影剪影 pad（描边半宽 + 偏移）略上移。
+    assert last_top > 380
     assert last_top - (first_top + first_h) > renderer._BAND_MERGE_GAP_PX
 
 

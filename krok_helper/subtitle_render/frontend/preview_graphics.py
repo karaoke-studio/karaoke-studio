@@ -12,7 +12,7 @@ import os
 from pathlib import Path
 from typing import Callable, Optional
 
-from PyQt6.QtCore import QRectF, QSizeF, Qt, QUrl, pyqtSignal as Signal
+from PyQt6.QtCore import QEvent, QRectF, QSizeF, Qt, QUrl, pyqtSignal as Signal
 from PyQt6.QtGui import QBrush, QColor, QImage, QPainter
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
@@ -245,6 +245,14 @@ class PreviewGraphicsView(QGraphicsView):
         self._fit_scene_to_view()
         self._refresh_async_target()
 
+    def event(self, ev):  # noqa: N802
+        # 窗口被拖到缩放比例（DPR）不同的显示器时不会触发 resizeEvent，
+        # 若不刷新渲染目标，字幕层会按旧物理分辨率渲染再被拉伸 → 整体发虚。
+        if ev.type() == QEvent.Type.DevicePixelRatioChange:
+            self._fit_scene_to_view()
+            self._refresh_async_target()
+        return super().event(ev)
+
     def showEvent(self, event):  # noqa: N802
         super().showEvent(event)
         self._fit_scene_to_view()
@@ -330,6 +338,9 @@ class PreviewGraphicsView(QGraphicsView):
         viewport = self.viewport()
         dpr = viewport.devicePixelRatioF() if viewport is not None else self.devicePixelRatioF()
         scene_scale = abs(self.transform().m11()) or 1.0
+        # 按显示物理分辨率栅格化即可：文字直接在目标尺寸光栅化比
+        # 高分辨率渲染再缩小更锐（实测边缘梯度更高）。预览清晰度的上限
+        # 是窗口像素数——想看 1:1 细节请把预览窗口拉大 / 最大化。
         return max(float(dpr or 1.0) * float(scene_scale), 0.01)
 
     def _refresh_async_target(self) -> None:

@@ -295,8 +295,9 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.stroke2_width_px == 5
     assert style.decoration_kind == "shadow"
     assert style.glow_radius_px == 10
-    assert style.shadow_offset_x == 0
-    assert style.shadow_offset_y == 1
+    # N3 阴影偏移固定 = DecorSize（双轴同值），新建默认 10（CreateLyricsFont）。
+    assert style.shadow_offset_x == 10
+    assert style.shadow_offset_y == 10
     assert style.horizontal_margin_px == 50
     assert style.line_alignments == ["left", "right"]
     assert style.line_lead_in_ms == 1800
