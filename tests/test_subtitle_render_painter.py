@@ -2068,12 +2068,18 @@ def test_paint_frame_ruby_changes_rendered_frame(qapp):
     assert _pixel_hash(img_ruby) != _pixel_hash(img_plain)
 
 
-def test_horizontal_ruby_paints_after_main_text_glow(qapp, monkeypatch):
-    """Ruby must sit above the main glyph glow, matching N3 layering."""
+def test_horizontal_ruby_glow_stays_below_solid_text_layers(qapp, monkeypatch):
+    """N3-like layering: ruby glow under text bodies, ruby solid layer on top."""
     import krok_helper.subtitle_render.engine.painter as painter_mod
 
     calls: list[str] = []
+    ruby_kwargs: list[dict] = []
 
+    monkeypatch.setattr(
+        painter_mod,
+        "_paint_ruby_glow_layers",
+        lambda *args, **kwargs: calls.append("ruby_glow"),
+    )
     monkeypatch.setattr(
         painter_mod,
         "_paint_line_layers",
@@ -2082,7 +2088,7 @@ def test_horizontal_ruby_paints_after_main_text_glow(qapp, monkeypatch):
     monkeypatch.setattr(
         painter_mod,
         "_paint_rubies",
-        lambda *args, **kwargs: calls.append("ruby"),
+        lambda *args, **kwargs: (calls.append("ruby"), ruby_kwargs.append(kwargs)),
     )
 
     track = _track_with_ruby()
@@ -2101,7 +2107,8 @@ def test_horizontal_ruby_paints_after_main_text_glow(qapp, monkeypatch):
     finally:
         painter.end()
 
-    assert calls == ["main", "ruby"]
+    assert calls == ["ruby_glow", "main", "ruby"]
+    assert ruby_kwargs[-1]["draw_glow"] is False
 
 
 def test_layout_rubies_is_pure_t_independent_geometry(qapp):

@@ -3579,6 +3579,34 @@ def _paint_line_static(
         style, line, t_ms, display_start_ms, display_end_ms, len(line.chars),
         intervals=layout.intervals,
     )
+    def paint_ruby_glow_under_main() -> None:
+        if (
+            transition is not None
+            or not layout.active_rubies
+            or layout.ruby_metrics is None
+        ):
+            return
+        ruby_layouts = _layout_rubies(
+            layout.ruby_metrics,
+            line,
+            layout.intervals,
+            layout.char_x_ranges,
+            layout.baseline_y,
+            layout.active_rubies,
+            style,
+            main_ascent_px=layout.text_layout.ascent if layout.has_inline_styles else None,
+            text_layout=layout.text_layout,
+        )
+        _paint_ruby_glow_layers(
+            painter,
+            ruby_layouts,
+            layout.ruby_font,
+            layout.ruby_metrics,
+            t_ms,
+            style,
+            layout.rtl,
+        )
+
     def paint_rubies_on_top() -> None:
         if not layout.active_rubies or layout.ruby_metrics is None:
             return
@@ -3591,6 +3619,7 @@ def _paint_line_static(
             t_ms, layout.active_rubies, style, transition,
             main_ascent_px=layout.text_layout.ascent if layout.has_inline_styles else None,
             text_layout=layout.text_layout,
+            draw_glow=transition is not None,
         )
 
     if transition is not None:
@@ -3623,6 +3652,7 @@ def _paint_line_static(
         return
 
     # paint 段：消费 layout。默认 blit 未唱层 + 已唱层；测试/调试可回退同 layout 直绘。
+    paint_ruby_glow_under_main()
     if _horizontal_layer_enabled():
         _paint_line_layers(painter, layout, t_ms)
     else:
@@ -7695,6 +7725,7 @@ def _paint_rubies(
     transition: _LineCharTransition | None = None,
     main_ascent_px: int | None = None,
     text_layout: _TextLayout | None = None,
+    draw_glow: bool = True,
 ) -> None:
     rtl = style.right_to_left
     painter.save()
@@ -7712,7 +7743,16 @@ def _paint_rubies(
             text_layout=text_layout,
         )
         if transition is None:
-            _paint_ruby_layers(painter, layouts, ruby_font, ruby_metrics, t_ms, style, rtl)
+            _paint_ruby_layers(
+                painter,
+                layouts,
+                ruby_font,
+                ruby_metrics,
+                t_ms,
+                style,
+                rtl,
+                draw_glow=draw_glow,
+            )
             return
         for layout in layouts:
             ruby_style = layout.style
@@ -7971,11 +8011,31 @@ def _paint_ruby_layers(
     t_ms: int,
     style: Style,
     rtl: bool,
+    *,
+    draw_glow: bool = True,
 ) -> None:
     _TEXT_RUN_COMPOSITOR.paint_ordered(
         painter,
         LayerContext(t_ms=t_ms, logical_w=0, logical_h=0),
-        _ruby_text_layers(layouts, ruby_font, ruby_metrics, t_ms, style, rtl),
+        _ruby_text_layers(
+            layouts, ruby_font, ruby_metrics, t_ms, style, rtl, draw_glow=draw_glow
+        ),
+    )
+
+
+def _paint_ruby_glow_layers(
+    painter: QPainter,
+    layouts: list[_RubyLayout],
+    ruby_font: QFont,
+    ruby_metrics: QFontMetrics,
+    t_ms: int,
+    style: Style,
+    rtl: bool,
+) -> None:
+    _TEXT_RUN_COMPOSITOR.paint_ordered(
+        painter,
+        LayerContext(t_ms=t_ms, logical_w=0, logical_h=0),
+        _ruby_glow_layers(layouts, ruby_font, ruby_metrics, t_ms, style, rtl),
     )
 
 
@@ -7986,6 +8046,8 @@ def _ruby_text_layers(
     t_ms: int,
     style: Style,
     rtl: bool,
+    *,
+    draw_glow: bool = True,
 ) -> list:
     layers = []
     for index, layout in enumerate(layouts):
@@ -7999,10 +8061,49 @@ def _ruby_text_layers(
                 rtl,
                 after=False,
                 z_index=index * 2,
+                draw_glow=draw_glow,
             )
         )
         layers.append(
             _RubyTextLayer(
+                layout,
+                ruby_font,
+                ruby_metrics,
+                t_ms,
+                layout.style,
+                rtl,
+                after=True,
+                z_index=index * 2 + 1,
+                draw_glow=draw_glow,
+            )
+        )
+    return layers
+
+
+def _ruby_glow_layers(
+    layouts: list[_RubyLayout],
+    ruby_font: QFont,
+    ruby_metrics: QFontMetrics,
+    t_ms: int,
+    style: Style,
+    rtl: bool,
+) -> list:
+    layers = []
+    for index, layout in enumerate(layouts):
+        layers.append(
+            _RubyGlowLayer(
+                layout,
+                ruby_font,
+                ruby_metrics,
+                t_ms,
+                layout.style,
+                rtl,
+                after=False,
+                z_index=index * 2,
+            )
+        )
+        layers.append(
+            _RubyGlowLayer(
                 layout,
                 ruby_font,
                 ruby_metrics,
@@ -8046,6 +8147,103 @@ def _ruby_layer_stack(
 
 
 @dataclass(frozen=True)
+class _RubyGlowLayer:
+    """Glow-only layer for one horizontal ruby reading.
+
+    N3 paints ruby/main decorations first, then paints the solid strokes/bodies.
+    Splitting ruby glow from ruby body prevents the ruby halo from covering the
+    main glyph body while still keeping the ruby stroke/fill above the main glow.
+    """
+
+    ruby_layout: _RubyLayout
+    ruby_font: QFont
+    ruby_metrics: QFontMetrics
+    t_ms: int
+    style: Style
+    rtl: bool
+    after: bool
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "_RubyGlowLayer":
+        return self
+
+    def static_key(self, ctx: LayerContext, layout: object) -> tuple | None:
+        if _ruby_decoration_kind(self.style) != "glow":
+            return None
+        colors = _effective_ruby_karaoke_colors(self.style)
+        if self.after:
+            ratio = _ruby_progress_ratio(
+                self.ruby_layout.ruby, self.t_ms, self.ruby_metrics
+            )
+            if ratio <= 0.0:
+                return None
+            before_glow = (
+                _fill_signature(colors.before.shadow),
+                _ruby_glow_radius(self.style, after=False),
+            )
+            after_glow = (
+                _fill_signature(colors.after.shadow),
+                _ruby_glow_radius(self.style, after=True),
+            )
+            if before_glow == after_glow:
+                return None
+        return _ruby_glow_layer_key(
+            self.ruby_layout,
+            self.ruby_font,
+            self.style,
+            self.rtl,
+            after=self.after,
+        )
+
+    def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
+        image, dx, dy = _build_ruby_glow_layer(
+            self.ruby_layout,
+            self.ruby_font,
+            self.ruby_metrics,
+            self.style,
+            self.rtl,
+            after=self.after,
+        )
+        return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        clip_rect = None
+        if self.after:
+            ratio = _ruby_progress_ratio(
+                self.ruby_layout.ruby, self.t_ms, self.ruby_metrics
+            )
+            if ratio <= 0.0:
+                return LayerAnimation(opacity=0.0)
+            if ratio < 1.0:
+                clip_rect = _ruby_after_clip_rect(
+                    self.ruby_layout,
+                    self.ruby_metrics,
+                    self.style,
+                    self.rtl,
+                    ratio,
+                )
+        return LayerAnimation(
+            top_left=QPointF(
+                float(self.ruby_layout.x),
+                float(self.ruby_layout.baseline_y),
+            ),
+            clip_rect=clip_rect,
+        )
+
+    def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
+        return
+
+    def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
+        rect = _ruby_text_rect(self.ruby_layout, self.ruby_metrics)
+        pad = _ruby_visual_padding(self.style, after=self.after)
+        return int(math.floor(rect.top() - pad)), int(math.ceil(rect.bottom() + pad))
+
+
+@dataclass(frozen=True)
 class _RubyTextLayer:
     """Layer wrapper for one horizontal ruby reading."""
 
@@ -8058,6 +8256,7 @@ class _RubyTextLayer:
     after: bool
     z_index: int = 0
     scope: str = SCOPE_LINE
+    draw_glow: bool = True
 
     def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
         return []
@@ -8076,6 +8275,7 @@ class _RubyTextLayer:
             self.style,
             self.rtl,
             after=self.after,
+            draw_glow=self.draw_glow,
         )
 
     def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
@@ -8086,6 +8286,7 @@ class _RubyTextLayer:
             self.style,
             self.rtl,
             after=self.after,
+            draw_glow=self.draw_glow,
         )
         return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
 
@@ -8131,6 +8332,7 @@ def _ruby_text_layer_key(
     rtl: bool,
     *,
     after: bool,
+    draw_glow: bool = True,
 ) -> tuple:
     colors = _effective_ruby_karaoke_colors(style)
     state = colors.after if after else colors.before
@@ -8160,6 +8362,35 @@ def _ruby_text_layer_key(
         _ruby_decoration_kind(style),
         _ruby_glow_radius(style, after=after),
         after,
+        draw_glow,
+    )
+
+
+def _ruby_glow_layer_key(
+    layout: _RubyLayout,
+    ruby_font: QFont,
+    style: Style,
+    rtl: bool,
+    *,
+    after: bool,
+) -> tuple:
+    colors = _effective_ruby_karaoke_colors(style)
+    state = colors.after if after else colors.before
+    return (
+        "ruby_glow",
+        layout.ruby.reading,
+        layout.target_width,
+        round(layout.reading_width, 3),
+        rtl,
+        ruby_font.family(),
+        ruby_font.pixelSize(),
+        int(ruby_font.weight()),
+        ruby_font.italic(),
+        _fill_signature(state.shadow),
+        _ruby_stroke_width(style),
+        _ruby_stroke2_width(style),
+        _ruby_glow_radius(style, after=after),
+        after,
     )
 
 
@@ -8171,6 +8402,7 @@ def _build_ruby_text_layer(
     rtl: bool,
     *,
     after: bool,
+    draw_glow: bool = True,
 ) -> tuple[QImage, int, int]:
     colors = _effective_ruby_karaoke_colors(style)
     state = colors.after if after else colors.before
@@ -8252,7 +8484,80 @@ def _build_ruby_text_layer(
             shadow_dx=shadow_dx,
             shadow_dy=shadow_dy,
             glow_radius=glow_radius,
+            draw_glow=draw_glow,
             fill_rect=fill_rect,
+        )
+    finally:
+        p.end()
+
+    return image, -pad_left, -(pad_top + ruby_metrics.ascent())
+
+
+def _build_ruby_glow_layer(
+    layout: _RubyLayout,
+    ruby_font: QFont,
+    ruby_metrics: QFontMetrics,
+    style: Style,
+    rtl: bool,
+    *,
+    after: bool,
+) -> tuple[QImage, int, int]:
+    colors = _effective_ruby_karaoke_colors(style)
+    state = colors.after if after else colors.before
+    stroke_width = _ruby_stroke_width(style)
+    stroke2_width = _ruby_stroke2_width(style)
+    glow_radius = _ruby_glow_radius(style, after=after)
+    extent = _glow_extent(stroke_width, stroke2_width, glow_radius) + 4
+    layout_overhang_left = int(math.ceil(_ruby_layout_left_overhang(
+        layout.ruby.reading,
+        ruby_metrics,
+        layout.target_width,
+        style,
+        layout.ruby.kanji,
+    )))
+    pad_left = extent + layout_overhang_left
+    pad_right = extent
+    pad_top = extent
+    pad_bottom = extent
+
+    ruby_w = max(int(math.ceil(layout.reading_width)), 1)
+    ruby_h = max(ruby_metrics.height(), 1)
+    img_w = max(pad_left + ruby_w + pad_right, 1)
+    img_h = max(pad_top + ruby_h + pad_bottom, 1)
+    image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+
+    reading = (
+        "".join(reversed(_ruby_utopia_visual_units(layout.ruby.reading)))
+        if rtl
+        else layout.ruby.reading
+    )
+    local_baseline = pad_top + ruby_metrics.ascent()
+    path, rect = _ruby_text_path_and_rect(
+        reading,
+        ruby_font,
+        ruby_metrics,
+        pad_left,
+        local_baseline,
+        layout.target_width,
+        style,
+        base_text=layout.ruby.kanji,
+    )
+
+    p = QPainter(image)
+    try:
+        p.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+        )
+        _paint_glow_path(
+            p,
+            path,
+            state.shadow,
+            rect,
+            glow_radius,
+            stroke_width,
+            stroke2_width,
         )
     finally:
         p.end()
