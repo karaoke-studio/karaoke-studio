@@ -4374,20 +4374,39 @@ def _paint_glyph_run_after_glow_direct(
         role_style.stroke2_width_px,
         _glow_radius(role_style, after=True),
     )
-    painter.save()
-    try:
-        painter.setClipRect(_after_glow_loose_clip_rect(band, rect, pad, rtl, complete))
-        _paint_glow_path(
-            painter,
-            path,
-            colors.after.shadow,
-            rect,
-            _glow_radius(role_style, after=True),
-            role_style.stroke_width_px,
-            role_style.stroke2_width_px,
-        )
-    finally:
-        painter.restore()
+    _paint_glow_path(
+        painter,
+        path,
+        colors.after.shadow,
+        rect,
+        _glow_radius(role_style, after=True),
+        role_style.stroke_width_px,
+        role_style.stroke2_width_px,
+        source_clip=_after_glow_source_clip_rect(band, rect, pad, rtl, complete),
+    )
+
+
+def _after_glow_source_clip_rect(
+    band: tuple[int, int],
+    rect: QRectF,
+    glow_pad: int,
+    rtl: bool,
+    complete: bool,
+) -> QRectF | None:
+    """Source clip for N3-style glow wiping.
+
+    N3 clips the edge source by ``WipeLeft`` and then blurs the resulting
+    work bitmap.  Returning this as ``source_clip`` keeps the visible glow front
+    soft; clipping the already-blurred bitmap would create a hard vertical edge.
+    """
+    if complete:
+        return None
+    band_left, band_right = band
+    top = rect.top() - glow_pad
+    height = rect.height() + glow_pad * 2
+    if rtl:
+        return QRectF(float(band_left), top, 1_000_000.0, height)
+    return QRectF(-1_000_000.0, top, float(band_right) + 1_000_000.0, height)
 
 
 def _spin_flip_char_transform(
@@ -4582,6 +4601,10 @@ class _GlyphRunAfterGlowLayer:
         band = self.clip_band or _fill_clip_band(self.fill_segments, self.t_ms, self.rtl)
         if not need_after_glow or band is None:
             return None
+        if not _run_fill_complete(
+            self.fill_segments, {glyph.index for glyph in self.glyphs}, self.t_ms
+        ):
+            return None
         return _glyph_run_after_glow_key(self.glyphs, role_style, colors)
 
     def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
@@ -4602,14 +4625,15 @@ class _GlyphRunAfterGlowLayer:
             role_style.stroke2_width_px,
             _glow_radius(role_style, after=True),
         )
-        clip_rect = _after_glow_loose_clip_rect(
+        complete = _run_fill_complete(
+            self.fill_segments, {glyph.index for glyph in self.glyphs}, self.t_ms
+        )
+        clip_rect = None if complete else _after_glow_loose_clip_rect(
             band,
             rect,
             pad,
             self.rtl,
-            _run_fill_complete(
-                self.fill_segments, {glyph.index for glyph in self.glyphs}, self.t_ms
-            ),
+            complete,
         )
         return LayerAnimation(
             top_left=QPointF(float(run_left), float(self.baseline_y)),
@@ -4619,7 +4643,30 @@ class _GlyphRunAfterGlowLayer:
         )
 
     def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
-        return
+        band = self.clip_band or _fill_clip_band(self.fill_segments, self.t_ms, self.rtl)
+        if band is None:
+            return
+        opacity = max(0.0, min(float(self.fade_opacity), 1.0))
+        if opacity <= 0.0:
+            return
+        complete = _run_fill_complete(
+            self.fill_segments, {glyph.index for glyph in self.glyphs}, self.t_ms
+        )
+        painter.save()
+        try:
+            painter.setOpacity(painter.opacity() * opacity)
+            if self.transform is not None:
+                painter.setTransform(self.transform, combine=True)
+            _paint_glyph_run_after_glow_direct(
+                painter,
+                self.glyphs,
+                self.baseline_y,
+                band,
+                rtl=self.rtl,
+                complete=complete,
+            )
+        finally:
+            painter.restore()
 
     def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
         rect = _glyph_run_rect(self.glyphs, self.baseline_y)

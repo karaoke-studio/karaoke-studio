@@ -21,6 +21,7 @@ from PyQt6.QtCore import QRectF  # noqa: E402
 from PyQt6.QtGui import QColor, QFontMetrics, QImage, QPainter  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
+import krok_helper.subtitle_render.engine.painter as subtitle_painter  # noqa: E402
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _IMAGE_BRUSH_CACHE,
     _IMAGE_FILL_CACHE,
@@ -42,6 +43,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _character_transform,
     _spin_flip_skew,
     _after_glow_loose_clip_rect,
+    _after_glow_source_clip_rect,
     _fill_clip_band,
     _fill_extent_end,
     _run_fill_complete,
@@ -1037,6 +1039,25 @@ def test_after_glow_loose_clip_pads_trailing_edge_and_opens_when_complete(qapp):
     assert done_rtl.right() == 220.0
 
 
+def test_after_glow_source_clip_keeps_visible_front_soft(qapp):
+    rect = QRectF(0.0, 100.0, 200.0, 60.0)
+    glow_pad = 20
+
+    mid = _after_glow_source_clip_rect((0, 150), rect, glow_pad, False, False)
+    assert mid is not None
+    assert mid.left() < -999_000.0
+    assert mid.right() == 150.0
+    assert mid.top() == 80.0
+    assert mid.bottom() == 180.0
+
+    mid_rtl = _after_glow_source_clip_rect((50, 200), rect, glow_pad, True, False)
+    assert mid_rtl is not None
+    assert mid_rtl.left() == 50.0
+    assert mid_rtl.right() > 999_000.0
+
+    assert _after_glow_source_clip_rect((0, 200), rect, glow_pad, False, True) is None
+
+
 def _glow_after_style() -> Style:
     # before/after 发光色不同 → 已唱发光需要单独的 after-glow 层
     return Style(
@@ -1071,10 +1092,62 @@ def test_after_glow_layer_clip_releases_line_edges_when_fully_sung(qapp):
     mid = glow_clip(1700)
     assert mid.left() < ink_left
     assert mid.right() < ink_right
-    # 唱完：两侧都放开，行首/行尾 halo 不再被硬截
+    # 唱完：不再裁剪，行首/行尾 halo 不再被硬截
     done = glow_clip(9000)
-    assert done.left() < ink_left
-    assert done.right() > ink_right
+    assert done is None
+
+
+def test_after_glow_layer_is_dynamic_until_run_is_complete(qapp):
+    track = _track()
+    line = track.lines[0]
+    layout = _layout_line(track, line, _glow_after_style(), 800, 450)
+    assert layout is not None
+    ctx = LayerContext(t_ms=0, logical_w=800, logical_h=450)
+
+    def glow_layer(t_ms: int) -> _GlyphRunAfterGlowLayer:
+        layers = [
+            layer
+            for layer in _line_layer_stack(layout, t_ms)
+            if isinstance(layer, _GlyphRunAfterGlowLayer)
+        ]
+        assert layers
+        return layers[0]
+
+    mid = glow_layer(1700)
+    assert mid.static_key(ctx, mid.layout(ctx)) is None
+
+    done = glow_layer(9000)
+    assert done.static_key(ctx, done.layout(ctx)) is not None
+    assert done.animate(ctx, done.layout(ctx)).clip_rect is None
+
+
+def test_after_glow_dynamic_paints_clipped_source_before_blur(qapp, monkeypatch):
+    track = _track()
+    line = track.lines[0]
+    layout = _layout_line(track, line, _glow_after_style(), 800, 450)
+    assert layout is not None
+    layer = [
+        item
+        for item in _line_layer_stack(layout, 1700)
+        if isinstance(item, _GlyphRunAfterGlowLayer)
+    ][0]
+    ctx = LayerContext(t_ms=1700, logical_w=800, logical_h=450)
+    seen: list[QRectF | None] = []
+
+    def fake_paint_glow_path(*args, source_clip=None, **kwargs):
+        seen.append(source_clip)
+
+    monkeypatch.setattr(subtitle_painter, "_paint_glow_path", fake_paint_glow_path)
+    image = QImage(800, 450, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+    painter = QPainter(image)
+    try:
+        layer.paint_dynamic(painter, ctx, layer.layout(ctx))
+    finally:
+        painter.end()
+
+    assert seen
+    assert seen[0] is not None
 
 
 def test_after_body_layer_unclipped_when_fully_sung(qapp):
