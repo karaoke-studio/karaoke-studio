@@ -74,6 +74,8 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _ruby_layout_units,
     _ruby_layout_width,
     _ruby_baseline_y,
+    _n3_char_box_ascent,
+    _n3_char_box_descent,
     _ruby_stroke_extent,
     _ruby_target_indices,
     _ruby_target_x_range,
@@ -2066,6 +2068,42 @@ def test_paint_frame_ruby_changes_rendered_frame(qapp):
     assert _pixel_hash(img_ruby) != _pixel_hash(img_plain)
 
 
+def test_horizontal_ruby_paints_after_main_text_glow(qapp, monkeypatch):
+    """Ruby must sit above the main glyph glow, matching N3 layering."""
+    import krok_helper.subtitle_render.engine.painter as painter_mod
+
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        painter_mod,
+        "_paint_line_layers",
+        lambda *args, **kwargs: calls.append("main"),
+    )
+    monkeypatch.setattr(
+        painter_mod,
+        "_paint_rubies",
+        lambda *args, **kwargs: calls.append("ruby"),
+    )
+
+    track = _track_with_ruby()
+    image = _blank()
+    painter = QPainter(image)
+    try:
+        painter_mod._paint_line_static(
+            painter,
+            image.width(),
+            image.height(),
+            track,
+            track.lines[0],
+            1500,
+            Style(decoration_kind="glow", line_y_position="center"),
+        )
+    finally:
+        painter.end()
+
+    assert calls == ["main", "ruby"]
+
+
 def test_layout_rubies_is_pure_t_independent_geometry(qapp):
     track = _track_with_ruby()
     line = track.lines[0]
@@ -2781,12 +2819,19 @@ def test_default_ruby_gap_matches_nicokara_zero_interval(qapp):
     main_metrics = QFontMetrics(_build_font(style))
     ruby_metrics = QFontMetrics(_build_ruby_font(style))
     baseline_y = 180
-    ruby_baseline = _ruby_baseline_y(baseline_y, main_metrics.ascent(), ruby_metrics, style)
+    # N3 盒模型：盒高 = 字号 + 描边宽（edge2 不占位），基线按字体 A:(A+D) 比例分割。
+    main_box_ascent = _n3_char_box_ascent(main_metrics, style.font_size_px, style.stroke_width_px)
+    ruby_baseline = _ruby_baseline_y(baseline_y, main_box_ascent, ruby_metrics, style)
 
-    main_top = baseline_y - main_metrics.ascent() - _visual_text_padding(style)
-    ruby_outer_bottom = ruby_baseline + ruby_metrics.descent() + _ruby_stroke_extent(style)
+    main_box_top = baseline_y - main_box_ascent
+    ruby_box_bottom = ruby_baseline + _n3_char_box_descent(
+        ruby_metrics, style.ruby_font_size_px, style.ruby_stroke_width_px
+    )
     assert style.ruby_gap_px == 0
-    assert ruby_outer_bottom == main_top
+    # 间隔 0 → ruby 盒底与主行盒顶相接（基线取整误差 ≤ 1px）
+    assert abs(ruby_box_bottom - main_box_top) <= 1.0
+    # N3 盒顶显著低于 Qt metric 顶（无 em 外头部空隙）——注音因此更贴近正文
+    assert main_box_ascent < main_metrics.ascent() + _visual_text_padding(style)
 
 
 def test_ruby_target_width_uses_main_draw_width_not_ink_bounds(qapp):
@@ -3745,9 +3790,10 @@ def test_negative_ruby_gap_moves_ruby_down_into_main_text(qapp):
     biting = Style(ruby_gap_px=-10)
     metrics = QFontMetrics(_build_font(base))
     ruby_metrics = QFontMetrics(_build_ruby_font(base))
+    main_box_ascent = _n3_char_box_ascent(metrics, base.font_size_px, base.stroke_width_px)
 
-    zero_baseline = _ruby_baseline_y(300, metrics.ascent(), ruby_metrics, base)
-    biting_baseline = _ruby_baseline_y(300, metrics.ascent(), ruby_metrics, biting)
+    zero_baseline = _ruby_baseline_y(300, main_box_ascent, ruby_metrics, base)
+    biting_baseline = _ruby_baseline_y(300, main_box_ascent, ruby_metrics, biting)
 
     assert biting_baseline == zero_baseline + 10
 

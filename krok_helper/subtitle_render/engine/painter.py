@@ -2411,26 +2411,63 @@ def _ruby_stroke_extent(style: Style) -> int:
     )
 
 
+def _n3_char_box_ascent(metrics: QFontMetrics, font_size_px: int, stroke_width: int) -> float:
+    """N3 字符盒的「基线以上」高度。
+
+    N3 的字符/行盒（``DrawCharInfo.Height``）= **字号 + 描边宽**（edge2 不占位），
+    基线把盒按字体 ascent:descent 比例分割（``CreateTransformedCharGeometryChar``：
+    ``baseline = 盒底 - FontSize·D/(A+D) - Edge/2``）。即字体 metric 被归一化到
+    字号高，没有 Qt metric 的 em 外头部空隙——这是 N3 注音贴得更近的根本原因。
+    """
+    ascent = max(metrics.ascent(), 0)
+    descent = max(metrics.descent(), 0)
+    total = max(ascent + descent, 1)
+    return max(font_size_px, 1) * ascent / total + max(stroke_width, 0) / 2.0
+
+
+def _n3_char_box_descent(metrics: QFontMetrics, font_size_px: int, stroke_width: int) -> float:
+    """N3 字符盒的「基线以下」高度（含描边半宽）。见 :func:`_n3_char_box_ascent`。"""
+    ascent = max(metrics.ascent(), 0)
+    descent = max(metrics.descent(), 0)
+    total = max(ascent + descent, 1)
+    return max(font_size_px, 1) * descent / total + max(stroke_width, 0) / 2.0
+
+
 def _ruby_vertical_extra(style: Style, ruby_metrics: QFontMetrics) -> int:
-    # 间距可为负（ruby 咬进正文），但预留高度不能倒扣。
+    """主文字上方为注音预留的高度（N3：间隔 + ruby 盒高 = 注音字号 + 注音描边宽）。
+
+    间距可为负（ruby 咬进正文），但预留高度不能倒扣。``ruby_metrics`` 保留在签名里
+    以兼容调用方（N3 盒高与 metric 无关）。
+    """
+    del ruby_metrics
     return max(
-        int(style.ruby_gap_px) + ruby_metrics.height() + _ruby_stroke_extent(style) * 2,
+        int(round(
+            int(style.ruby_gap_px)
+            + max(style.ruby_font_size_px, 1)
+            + max(_ruby_stroke_width(style), 0)
+        )),
         0,
     )
 
 
 def _ruby_baseline_y(
     main_baseline_y: int,
-    main_ascent: int,
+    main_box_ascent: float,
     ruby_metrics: QFontMetrics,
     style: Style,
 ) -> int:
-    main_top = main_baseline_y - main_ascent - _visual_text_padding(style)
+    """N3 语义的注音基线：ruby 盒底 = 主行盒顶 − 歌詞とルビの間隔。
+
+    ``main_box_ascent`` 为主行基线到主行盒顶的距离（:func:`_n3_char_box_ascent`）。
+    ruby 基线在 ruby 盒底之上「字号归一化 descent + 描边半宽」处。
+    """
+    main_top = main_baseline_y - main_box_ascent
     return int(round(
         main_top
         - int(style.ruby_gap_px)
-        - ruby_metrics.descent()
-        - _ruby_stroke_extent(style)
+        - _n3_char_box_descent(
+            ruby_metrics, style.ruby_font_size_px, _ruby_stroke_width(style)
+        )
     ))
 
 
@@ -3542,7 +3579,12 @@ def _paint_line_static(
         style, line, t_ms, display_start_ms, display_end_ms, len(line.chars),
         intervals=layout.intervals,
     )
-    if layout.active_rubies and layout.ruby_metrics is not None:
+    def paint_rubies_on_top() -> None:
+        if not layout.active_rubies or layout.ruby_metrics is None:
+            return
+        # N3 renders main text decoration first, then ruby on top.  Painting
+        # ruby before the main glyphs lets a large main glow bleed over the
+        # reading stroke/fill, which makes ruby look submerged.
         _paint_rubies(
             painter, layout.ruby_font, layout.ruby_metrics, line,
             layout.intervals, layout.char_x_ranges, layout.baseline_y,
@@ -3561,6 +3603,7 @@ def _paint_line_static(
                 LayerContext(t_ms=t_ms, logical_w=0, logical_h=0),
                 _char_transition_layer_stack(layout, t_ms, transition, max(len(line.chars), 1)),
             )
+            paint_rubies_on_top()
             return
         if layout.has_inline_styles:
             _paint_role_line_with_character_transition(
@@ -3576,6 +3619,7 @@ def _paint_line_static(
                 rtl=layout.rtl, font_for=layout.font_for, ink_x_ranges=layout.ink_x_ranges,
                 glyphs_by_index=_role_glyphs_by_index(line, layout.text_layout),
             )
+        paint_rubies_on_top()
         return
 
     # paint 段：消费 layout。默认 blit 未唱层 + 已唱层；测试/调试可回退同 layout 直绘。
@@ -3583,6 +3627,7 @@ def _paint_line_static(
         _paint_line_layers(painter, layout, t_ms)
     else:
         _paint_line_direct(painter, layout, t_ms)
+    paint_rubies_on_top()
 
 
 def _layout_line(
@@ -7813,12 +7858,29 @@ def _layout_rubies(
     """layout 段：算横排 ruby 的目标字符范围、基线与排布宽度。"""
     if not rubies:
         return []
+    # metric ascent：仍用于已唱渐变参考矩形（主文字整字高度）。
     main_ascent = (
         main_ascent_px
         if main_ascent_px is not None
         else QFontMetrics(_build_font(style)).ascent()
     )
-    ruby_baseline_y = _ruby_baseline_y(main_baseline_y, main_ascent, ruby_metrics, style)
+    main_box_ascent: Optional[float] = None
+    if main_ascent_px is not None and text_layout is not None and text_layout.glyphs:
+        # 分色行：N3 行盒顶 = 各字符盒顶最高者（字号/描边随角色方案；空白无墨水不算）。
+        candidates = [
+            _n3_char_box_ascent(
+                glyph.metrics, glyph.style.font_size_px, glyph.style.stroke_width_px
+            )
+            for glyph in text_layout.glyphs
+            if glyph.text.strip()
+        ]
+        if candidates:
+            main_box_ascent = max(candidates)
+    if main_box_ascent is None:
+        main_box_ascent = _n3_char_box_ascent(
+            QFontMetrics(_build_font(style)), style.font_size_px, style.stroke_width_px
+        )
+    ruby_baseline_y = _ruby_baseline_y(main_baseline_y, main_box_ascent, ruby_metrics, style)
     layouts: list[_RubyLayout] = []
     for ruby in rubies:
         indices = _ruby_target_indices(ruby, line, intervals)
