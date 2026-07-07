@@ -4333,25 +4333,33 @@ def _paint_glyph_run_direct(
 def _after_glow_loose_clip_rect(
     band: tuple[int, int],
     rect: QRectF,
-    pad: int,
+    glow_pad: int,
+    front_pad: int,
     rtl: bool,
     complete: bool,
 ) -> QRectF:
-    """已唱发光的「发光级」宽松裁切矩形（理由见 ``_paint_char_karaoke_stack`` 内注释）。
+    """已唱发光的宽松裁切矩形（理由见 ``_paint_char_karaoke_stack`` 内注释）。
 
-    尾缘（已唱后方）与上下恒外扩 ``pad`` 让 halo 自然衰减；前缘（扫光线）不外扩，
-    避免把未唱区染上已唱发光。run 全部唱完（``complete``）后扫光线已越过 run 尾，
-    前缘同样外扩——否则行首/行尾的 halo 会被硬截出竖直方边。
+    N3 的 WipeLeft 用字形轮廓加一半一重描边计算锋面，不包含二重描边或 glow/blur
+    半径。这里也把「锋面」和「halo 留白」拆开：``glow_pad`` 只用于尾缘、上下和唱完
+    后的边缘释放；走字中的前缘最多只外放 ``front_pad``。
     """
     band_left, band_right = band
-    left = float(band_left) - (0.0 if rtl and not complete else float(pad))
-    right = float(band_right) + (float(pad) if rtl or complete else 0.0)
+    glow_pad_f = float(glow_pad)
+    front_pad_f = float(front_pad)
+    left = float(band_left) - (front_pad_f if rtl and not complete else glow_pad_f)
+    right = float(band_right) + (glow_pad_f if rtl or complete else front_pad_f)
     return QRectF(
         left,
-        rect.top() - pad,
+        rect.top() - glow_pad,
         right - left,
-        rect.height() + pad * 2,
+        rect.height() + glow_pad * 2,
     )
+
+
+def _n3_wipe_front_pad(stroke_width: int) -> int:
+    """N3-style active wipe front padding: half of the primary edge only."""
+    return math.ceil(max(stroke_width, 0) / 2)
 
 
 def _paint_glyph_run_after_glow_direct(
@@ -4372,9 +4380,12 @@ def _paint_glyph_run_after_glow_direct(
         role_style.stroke2_width_px,
         _glow_radius(role_style, after=True),
     )
+    front_pad = _n3_wipe_front_pad(role_style.stroke_width_px)
     painter.save()
     try:
-        painter.setClipRect(_after_glow_loose_clip_rect(band, rect, pad, rtl, complete))
+        painter.setClipRect(
+            _after_glow_loose_clip_rect(band, rect, pad, front_pad, rtl, complete)
+        )
         _paint_glow_path(
             painter,
             path,
@@ -4600,10 +4611,12 @@ class _GlyphRunAfterGlowLayer:
             role_style.stroke2_width_px,
             _glow_radius(role_style, after=True),
         )
+        front_pad = _n3_wipe_front_pad(role_style.stroke_width_px)
         clip_rect = _after_glow_loose_clip_rect(
             band,
             rect,
             pad,
+            front_pad,
             self.rtl,
             _run_fill_complete(
                 self.fill_segments, {glyph.index for glyph in self.glyphs}, self.t_ms
