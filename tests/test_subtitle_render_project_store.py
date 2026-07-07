@@ -8,9 +8,13 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QPoint  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
+from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu  # noqa: E402
+from qfluentwidgets.components.widgets.menu import MenuAnimationType  # noqa: E402
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
+from krok_helper.subtitle_render.frontend import lyrics_list  # noqa: E402
 from krok_helper.subtitle_render.models import Style, TitleOverlay  # noqa: E402
 from krok_helper.subtitle_render.project_store import (  # noqa: E402
     PROJECT_SCHEMA_VERSION,
@@ -179,3 +183,18 @@ def test_extra_subtitle_sources_round_trip(qapp, monkeypatch, tmp_path):
     assert [c.role_label for c in restored.track.lines[0].chars] == ["コーラス配色", "コーラス配色"]
     combo = win2._lyrics_panel._source_combo
     assert [combo.itemText(i) for i in range(combo.count())] == ["主字幕", "コーラス1"]
+
+
+def test_lyrics_combo_menu_disables_racy_popup_animation(qapp, monkeypatch):
+    """菜单提前关闭时不得留下访问已删除 view 的动画回调。"""
+    seen = {}
+
+    def fake_exec(self, pos, ani=True, aniType=MenuAnimationType.DROP_DOWN):
+        seen["animation"] = aniType
+
+    monkeypatch.setattr(ComboBoxMenu, "exec", fake_exec)
+    combo = lyrics_list._StableFluentComboBox()
+    menu = combo._createComboMenu()
+    menu.exec(QPoint(0, 0), aniType=MenuAnimationType.DROP_DOWN)
+
+    assert seen["animation"] == MenuAnimationType.NONE

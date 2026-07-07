@@ -75,6 +75,7 @@ from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 from qfluentwidgets.components.widgets.menu import MenuAnimationType
 from qfluentwidgets.components.widgets.table_view import TableItemDelegate
 
+from krok_helper.qfluent_compat import apply_qfluent_menu_lifetime_patch
 from krok_helper.audio_alignment import (
     DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE,
     DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE,
@@ -148,6 +149,8 @@ from krok_helper.updater.settings import UpdaterSettings
 from krok_helper.updater.sources import SOURCE_IDS, SOURCE_LABELS, normalize_order
 from krok_helper.video_download import VideoDownloadPage
 from krok_helper.windows import set_explicit_app_user_model_id
+
+apply_qfluent_menu_lifetime_patch()
 
 
 ALIGN_TARGET_VIDEO = "video"

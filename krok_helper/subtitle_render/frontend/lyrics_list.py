@@ -37,6 +37,8 @@ from PyQt6.QtWidgets import (
 )
 from qfluentwidgets import ComboBox as FluentComboBox
 from qfluentwidgets import TableWidget as FluentTableWidget
+from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
+from qfluentwidgets.components.widgets.menu import MenuAnimationType
 
 from krok_helper.subtitle_render.engine.timeline import (
     assign_lanes,
@@ -60,6 +62,22 @@ _COLUMN_HEADERS = ["轨", "角色", "内容"]
 _ROW_HEIGHT = 34
 _BLANK_ROW_HEIGHT = 18
 _DEFAULT_ROLE_TEXT = "（默认）"
+
+
+class _StableComboBoxMenu(ComboBoxMenu):
+    """避开 qfluentwidgets 1.11.2 的菜单关闭动画销毁竞争。"""
+
+    def exec(self, pos, ani=True, aniType=MenuAnimationType.DROP_DOWN):
+        # ComboBoxMenu 带 WA_DeleteOnClose。若用户在 250 ms 弹出动画结束前
+        # 选中项目，菜单 view 会先销毁，但动画的 valueChanged 仍会调用
+        # MenuAnimationManager._updateMenuViewport()，导致包装 C++ 对象已删除异常。
+        # NONE manager 不启动 QPropertyAnimation，因此关闭菜单时没有悬空回调。
+        return super().exec(pos, ani, MenuAnimationType.NONE)
+
+
+class _StableFluentComboBox(FluentComboBox):
+    def _createComboMenu(self):
+        return _StableComboBoxMenu(self)
 
 
 def _swatch_icon(color: Optional[QColor]) -> QIcon:
@@ -151,7 +169,7 @@ class _RoleComboDelegate(_GroupBackgroundDelegate):
         self._style = style
 
     def createEditor(self, parent, option, index):  # type: ignore[override]
-        combo = FluentComboBox(parent)
+        combo = _StableFluentComboBox(parent)
         combo.setFixedHeight(30)
         combo.addItem(
             _DEFAULT_ROLE_TEXT,
@@ -275,7 +293,7 @@ class LyricsPanel(DropPanel):
         source_layout = QHBoxLayout(self._source_bar)
         source_layout.setContentsMargins(8, 6, 8, 0)
         source_layout.setSpacing(6)
-        self._source_combo = FluentComboBox(self._source_bar)
+        self._source_combo = _StableFluentComboBox(self._source_bar)
         self._source_combo.setToolTip("切换列表显示的字幕源（预览与导出始终同时渲染全部源）")
         self._source_combo.currentIndexChanged.connect(self._on_source_combo_changed)
         self._add_source_btn = QToolButton(self._source_bar)

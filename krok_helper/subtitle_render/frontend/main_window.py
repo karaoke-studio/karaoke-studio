@@ -62,6 +62,7 @@ from qfluentwidgets import (
 from krok_helper.errors import ExportCancelled, ProcessingError
 from krok_helper.ffmpeg import find_tool, probe_media, terminate_process
 from krok_helper.models import MediaInfo
+from krok_helper.qfluent_compat import apply_qfluent_menu_lifetime_patch
 from krok_helper.settings import load_app_settings, save_app_settings
 from krok_helper.subtitle_render.engine.encoder_select import (
     CPU_PRESETS,
@@ -116,6 +117,8 @@ from krok_helper.subtitle_render.project_store import (
 )
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
+
+apply_qfluent_menu_lifetime_patch()
 
 SUBTITLE_FILTER = "Nicokara 逐字 LRC (*.lrc);;所有文件 (*.*)"
 VIDEO_FILTER = "视频文件 (*.mp4 *.mkv *.mov *.webm *.avi *.flv);;所有文件 (*.*)"
