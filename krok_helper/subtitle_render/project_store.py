@@ -63,11 +63,16 @@ def project_payload(
     selected_scheme_key: str,
     output: dict,
     line_layout_indices: Optional[list[int]] = None,
+    char_role_labels: Optional[list] = None,
 ) -> dict:
     """组装项目快照 dict（纯数据，不碰 UI）。便于单测与复用。
 
     ``line_layout_indices`` 与 ``track.lines`` 对齐（含空行），记录每行引用的
     布局（0 = 默认布局）。LRC 本身不含布局信息，只能存在项目文件里。
+
+    ``char_role_labels`` 同样与 ``track.lines`` 对齐：每项为 None（整行无角色）
+    或与该行字符对齐的角色名列表。覆盖 UI 手动分配与 N3 导入的逐字配色
+    （LRC 内的 ``【N配色】`` 标签解析后也会落到这里，重复应用无害）。
     """
     payload = {
         "subtitle_path": str(subtitle_path) if subtitle_path else None,
@@ -80,6 +85,11 @@ def project_payload(
     }
     if line_layout_indices is not None:
         payload["line_layout_indices"] = [int(v) for v in line_layout_indices]
+    if char_role_labels is not None:
+        payload["char_role_labels"] = [
+            [str(label) if label else None for label in row] if isinstance(row, list) else None
+            for row in char_role_labels
+        ]
     return payload
 
 

@@ -55,6 +55,7 @@ from qfluentwidgets import (
     FluentIcon as FIF,
     InfoBar,
     InfoBarPosition,
+    PushButton as FluentPushButton,
     RoundMenu,
 )
 
@@ -105,6 +106,7 @@ from krok_helper.subtitle_render.models import (
     style_from_dict,
     style_to_dict,
 )
+from krok_helper.subtitle_render.n3proj_import import N3_PROJECT_FILTER, load_n3proj
 from krok_helper.subtitle_render.project_store import (
     load_render_project,
     project_output_payload,
@@ -644,6 +646,8 @@ class SubtitleRenderWindow(QWidget):
         menu.addAction(Action(FIF.FOLDER, "打开", triggered=self._open_project))
         menu.addAction(Action(FIF.SAVE, "保存", triggered=self._save_project))
         menu.addAction(Action(FIF.SAVE_AS, "另存为", triggered=self._save_project_as))
+        menu.addSeparator()
+        menu.addAction(Action(FIF.DOWNLOAD, "导入 N3 项目", triggered=self._import_n3_project))
         self._file_menu_btn.setMenu(menu)
         layout.addWidget(self._file_menu_btn)
 
@@ -656,7 +660,21 @@ class SubtitleRenderWindow(QWidget):
         )
         layout.addWidget(self._project_name_label)
         layout.addStretch(1)
+
+        # 预览窗口是独立浮窗，被用户关掉后需要一个固定入口重新打开。
+        self._show_preview_btn = FluentPushButton("预览窗口", bar)
+        self._show_preview_btn.setFixedHeight(30)
+        self._show_preview_btn.setToolTip("打开 / 唤起字幕预览窗口")
+        self._show_preview_btn.clicked.connect(self._show_preview_window)
+        layout.addWidget(self._show_preview_btn)
         return bar
+
+    def _show_preview_window(self) -> None:
+        if not hasattr(self, "_preview_window"):
+            return
+        self._preview_window.show_near_workspace()
+        self._preview_window.raise_()
+        self._preview_window.activateWindow()
 
     def _refresh_project_title(self) -> None:
         if not hasattr(self, "_project_name_label"):
@@ -688,6 +706,7 @@ class SubtitleRenderWindow(QWidget):
             if self._timing_track is not None
             else None
         )
+        char_role_labels = self._collect_char_role_labels()
         return project_payload(
             subtitle_path=self._subtitle_path,
             video_path=self._video_path,
@@ -696,6 +715,7 @@ class SubtitleRenderWindow(QWidget):
             screen=screen_settings_to_dict(self._screen_settings),
             selected_scheme_key=self._selected_scheme_key,
             line_layout_indices=line_layout_indices,
+            char_role_labels=char_role_labels,
             output=project_output_payload(
                 encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
                 crf=self._export_crf_spin.value(),
@@ -734,6 +754,7 @@ class SubtitleRenderWindow(QWidget):
         if paths["subtitle_path"] is not None and paths["subtitle_path"].is_file():
             self.load_from_lrc(paths["subtitle_path"])
             self._apply_line_layout_indices(data.get("line_layout_indices"))
+            self._apply_char_role_labels(data.get("char_role_labels"))
         if paths["video_path"] is not None and paths["video_path"].is_file():
             self.load_video(paths["video_path"])
         audio = paths["audio_path"]
@@ -841,6 +862,45 @@ class SubtitleRenderWindow(QWidget):
         self._project_dirty = False
         self._refresh_project_title()
 
+    def _import_n3_project(self) -> None:
+        """导入 NicoKaraMaker3 项目（.n3proj）：素材 / 字体配色 / 布局 / 标题 / 输出。"""
+        if not self._confirm_discard_changes():
+            return
+        start_dir = str(self._project_path.parent) if self._project_path else ""
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "导入 NicoKaraMaker3 项目", start_dir, N3_PROJECT_FILTER
+        )
+        if not path_str:
+            return
+        try:
+            result = load_n3proj(Path(path_str))
+        except (OSError, ValueError) as exc:
+            QMessageBox.critical(
+                self, "导入失败", f"无法读取 NicoKaraMaker3 项目文件：\n{path_str}\n\n{exc}"
+            )
+            return
+        self._clear_loaded_media()
+        self._apply_project_data(result.project_data)
+        # 导入的是外来工程：保存时必须另存为 .yurika，因此视为未命名 + 有改动。
+        self._project_path = None
+        self._project_dirty = True
+        self._refresh_project_title()
+        if result.warnings:
+            QMessageBox.information(
+                self,
+                "导入完成（部分设置需注意）",
+                "已导入 N3 项目，以下内容请检查：\n\n"
+                + "\n".join(f"• {warning}" for warning in result.warnings),
+            )
+        else:
+            InfoBar.success(
+                title="N3 项目导入完成",
+                content=Path(path_str).name,
+                parent=self,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=2500,
+            )
+
     def _save_project(self) -> bool:
         if self._project_path is None:
             return self._save_project_as()
@@ -869,6 +929,13 @@ class SubtitleRenderWindow(QWidget):
         self._project_path = path
         self._project_dirty = False
         self._refresh_project_title()
+        InfoBar.success(
+            title="项目已保存",
+            content=str(path),
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=2500,
+        )
         return True
 
     def _make_preview_tab(self) -> QWidget:
@@ -1284,6 +1351,42 @@ class SubtitleRenderWindow(QWidget):
             line.layout_index = index if 0 <= index <= limit else 0
         self._lyrics_panel.set_style(self._style)
         self._preview_panel.set_style(self._style)
+
+    def _collect_char_role_labels(self) -> Optional[list]:
+        """收集每行逐字角色标签用于项目持久化；全部为空则返回 None（不写盘）。"""
+        track = self._timing_track
+        if track is None:
+            return None
+        rows: list = []
+        any_label = False
+        for line in track.lines:
+            if any(ch.role_label for ch in line.chars):
+                any_label = True
+                rows.append([ch.role_label for ch in line.chars])
+            else:
+                rows.append(None)
+        return rows if any_label else None
+
+    def _apply_char_role_labels(self, payload: object) -> None:
+        """把项目文件 / N3 导入的逐字角色标签套回刚加载的 track。"""
+        track = self._timing_track
+        if track is None or not isinstance(payload, list):
+            return
+        changed = False
+        for line, labels in zip(track.lines, payload):
+            if not isinstance(labels, list):
+                continue
+            for ch, label in zip(line.chars, labels):
+                new_label = str(label) if label else None
+                if ch.role_label != new_label:
+                    ch.role_label = new_label
+                    changed = True
+        if not changed:
+            return
+        self._lyrics_panel.set_track(track)
+        self._lyrics_panel.set_role_options(self._merged_role_options())
+        self._property_panel.set_roles(track.role_options)
+        self._preview_panel.set_track(track)
 
     def _rescale_layout_for_height(self, new_height: int) -> None:
         """输出高度变化时按 N3 SizeAndRatio 语义重算布局像素字段。"""

@@ -4344,3 +4344,63 @@ def test_layout_line_applies_ruby_gaps_to_boxes_and_glyphs(qapp):
     assert layout.text_layout.glyphs[1].left == layout.char_lefts[1]
     # 行盒（含 ruby 溢出）不越出画面（1920 足够宽时整体居中）
     assert layout.x0 > 0
+
+
+def test_effective_ruby_clamps_but_never_stretches_wipe_clock(qapp):
+    """ruby 走字时钟对齐基字区间只收窄不拉长（诉求：唱完即完整变色）。"""
+    intervals = [(0, 1000), (1000, 2000)]  # 基字区间末端 = 下一字开始
+
+    # ruby 自身 500 结束：不能被拉长到基字区间末（1000）
+    ruby = RubyAnnotation(kanji="星", reading="ほし", pos_start_ms=0, pos_end_ms=500)
+    effective = _effective_ruby_for_target(ruby, [0], intervals)
+    assert effective.pos_end_ms == 500
+    assert _ruby_progress_ratio(effective, 700) == 1.0
+
+    # 收窄方向保留（呼吸停顿场景：导出的 pos 区间比基字区间长）
+    wide = RubyAnnotation(kanji="星", reading="ほし", pos_start_ms=0, pos_end_ms=1500)
+    shrunk = _effective_ruby_for_target(wide, [0], intervals)
+    assert shrunk.pos_end_ms == 1000
+
+
+def test_whitespace_glyphs_do_not_inflate_line_metrics(qapp, monkeypatch):
+    """空白字符不参与行高：半角空格走英数字体时不得把注音基线顶高（N3 按墨水求行盒）。"""
+    import krok_helper.subtitle_render.engine.painter as painter_mod
+
+    real_metrics = QFontMetrics
+
+    class TallLatinMetrics:
+        """给英数字体伪造超高 metrics，模拟 Comic Sans 之类的字体。"""
+
+        def __init__(self, font):
+            self._metrics = real_metrics(font)
+            self._tall = font.family() == "FakeTallLatin"
+
+        def ascent(self):
+            return self._metrics.ascent() + (40 if self._tall else 0)
+
+        def descent(self):
+            return self._metrics.descent() + (20 if self._tall else 0)
+
+        def __getattr__(self, name):
+            return getattr(self._metrics, name)
+
+    monkeypatch.setattr(painter_mod, "QFontMetrics", TallLatinMetrics)
+    style = replace(Style(), font_family_latin="FakeTallLatin")
+
+    def build(chars: list[str]):
+        line = TimingLine(
+            chars=[TimingChar(text=ch, start_ms=1000 + i * 500) for i, ch in enumerate(chars)],
+            end_ms=5000,
+        )
+        return painter_mod._build_text_layout(
+            line, style, x0=0, baseline_y=0, inline_styles=True
+        )
+
+    with_space = build(["あ", " ", "い"])
+    without_space = build(["あ", "い"])
+    assert with_space.ascent == without_space.ascent
+    assert with_space.descent == without_space.descent
+
+    # 整行空白：行高退回首字符 metrics，不为 0
+    all_blank = build([" ", " "])
+    assert all_blank.ascent > 0

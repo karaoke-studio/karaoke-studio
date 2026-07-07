@@ -3804,8 +3804,17 @@ def _build_text_layout(
             )
         )
         total_w += width + spacing_after
-        max_ascent = max(max_ascent, glyph_metrics.ascent())
-        max_descent = max(max_descent, glyph_metrics.descent())
+        # 空白字符无墨水，不参与行高（N3 按墨水轮廓求行盒）。否则半角空格走
+        # 英数字体时，其超高 metrics（如 Comic Sans）会把注音顶离正文。
+        if ch.text.strip():
+            max_ascent = max(max_ascent, glyph_metrics.ascent())
+            max_descent = max(max_descent, glyph_metrics.descent())
+
+    if measured and max_ascent == 0 and max_descent == 0:
+        # 整行都是空白：退回第一个字符的 metrics，保证行高非零。
+        fallback_metrics = measured[0][5]
+        max_ascent = fallback_metrics.ascent()
+        max_descent = fallback_metrics.descent()
 
     glyphs: list[_GlyphLayout] = []
     if rtl:
@@ -7930,13 +7939,16 @@ class _RubyTextLayer:
             )
             if ratio <= 0.0:
                 return LayerAnimation(opacity=0.0)
-            clip_rect = _ruby_after_clip_rect(
-                self.ruby_layout,
-                self.ruby_metrics,
-                self.style,
-                self.rtl,
-                ratio,
-            )
+            if ratio < 1.0:
+                # 唱完（>= 1.0）不再裁剪：裁剪带右缘恰好压在字框右缘，
+                # 会把末字形的描边外扩留在走字前状态。
+                clip_rect = _ruby_after_clip_rect(
+                    self.ruby_layout,
+                    self.ruby_metrics,
+                    self.style,
+                    self.rtl,
+                    ratio,
+                )
         return LayerAnimation(
             top_left=QPointF(
                 float(self.ruby_layout.x),
@@ -8676,29 +8688,31 @@ def _paint_ruby_karaoke_fragment(
     if ratio <= 0.0:
         return
 
-    stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
-    pad = max(
-        stroke_extent,
-        _glow_extent(stroke_width, stroke2_width, after_glow_radius)
-        if _ruby_decoration_kind(style) == "glow"
-        else 0,
-        abs(shadow_dx),
-        abs(shadow_dy),
-        2,
-    )
-    ratio_c = min(ratio, 1.0)
-    # RTL：已唱区贴读音右缘，左缘随进度左移。
-    clip_left = rect.left() + (rect.width() * (1.0 - ratio_c) if rtl else 0.0) - pad
     painter.save()
     try:
-        painter.setClipRect(
-            QRectF(
-                clip_left,
-                rect.top() - pad,
-                rect.width() * ratio_c + pad,
-                rect.height() + pad * 2,
+        if ratio < 1.0:
+            stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
+            pad = max(
+                stroke_extent,
+                _glow_extent(stroke_width, stroke2_width, after_glow_radius)
+                if _ruby_decoration_kind(style) == "glow"
+                else 0,
+                abs(shadow_dx),
+                abs(shadow_dy),
+                2,
             )
-        )
+            # RTL：已唱区贴读音右缘，左缘随进度左移。
+            clip_left = rect.left() + (rect.width() * (1.0 - ratio) if rtl else 0.0) - pad
+            painter.setClipRect(
+                QRectF(
+                    clip_left,
+                    rect.top() - pad,
+                    rect.width() * ratio + pad,
+                    rect.height() + pad * 2,
+                )
+            )
+        # ratio >= 1.0：唱完不再裁剪——裁剪带右缘恰好压在字框右缘，
+        # 会把末字形的描边外扩留在走字前状态。
         _paint_text_layer_stack(
             painter,
             path,

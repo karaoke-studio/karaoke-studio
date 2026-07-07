@@ -1867,3 +1867,53 @@ def test_property_panel_layout_selector_edits_selected_layout(qapp):
     panel._line_gap_spin.setValue(44)
     assert emitted[-1].line_gap_px == 44
     assert emitted[-1].layouts[0].line_gap_px == 33
+
+
+def test_ruby_color_subject_edits_write_ruby_fields(qapp):
+    """#6 回归：编辑对象=注音 时描边宽度写入注音字段（全局路径）。"""
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._color_subject_combo.setCurrentIndex(
+        panel._color_subject_combo.findData("ruby")
+    )
+    panel._stroke_width_spin.setValue(21)
+    panel._stroke2_width_spin.setValue(7)
+
+    assert emitted[-1].ruby_stroke_width_px == 21
+    assert emitted[-1].ruby_stroke2_width_px == 7
+    # 主文字宽度不受影响
+    assert emitted[-1].stroke_width_px == Style().stroke_width_px
+
+
+def test_apply_main_colors_to_ruby_clears_width_overrides(qapp):
+    """#5 回归：应用主文字配色后注音宽度覆盖清空 → 渲染端按比例跟随主文字。"""
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+    panel.set_style(Style(stroke_width_px=20, stroke2_width_px=8))
+
+    panel._apply_main_colors_to_ruby()
+
+    style = emitted[-1]
+    assert style.ruby_karaoke_colors is not None
+    assert style.ruby_stroke_width_px is None
+    assert style.ruby_stroke2_width_px is None
+    assert style.ruby_shadow_offset_x is None
+
+
+def test_scheme_section_headers_show_role_target(qapp):
+    """#4/#6 可用性：角色选中时卡片标题标出编辑目标。"""
+    panel = PropertyPanel()
+    panel.set_roles(["主唱"])
+    for i in range(panel._singer_combo.count()):
+        if "主唱" in str(panel._singer_combo.itemText(i)):
+            panel._singer_combo.setCurrentIndex(i)
+            break
+    assert "主唱" in panel._font_color_section.header.text()
+    assert "主唱" in panel._ruby_section.header.text()
+
+    panel._singer_combo.setCurrentIndex(0)  # 回全局默认
+    assert panel._font_color_section.header.text() == "颜色 / 字体"
+    assert panel._ruby_section.header.text() == "注音"

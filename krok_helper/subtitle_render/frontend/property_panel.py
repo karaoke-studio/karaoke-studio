@@ -972,7 +972,7 @@ class StylePresetManagerDialog(QDialog):
             ),
         )
         layout.addWidget(title)
-        layout.addWidget(CaptionLabel(f"当前目标：{target_label}", self))
+        layout.addWidget(QLabel(f"当前目标：{target_label}", self))
 
         filter_row = QHBoxLayout()
         filter_row.setContentsMargins(0, 0, 0, 0)
@@ -991,7 +991,7 @@ class StylePresetManagerDialog(QDialog):
         self._preset_list.itemSelectionChanged.connect(self._sync_buttons)
         layout.addWidget(self._preset_list, 1)
 
-        self._empty_label = CaptionLabel("暂无预设。可以把当前样式保存为新预设。", self)
+        self._empty_label = QLabel("暂无预设。可以把当前样式保存为新预设。", self)
         layout.addWidget(self._empty_label)
 
         edit_row = QHBoxLayout()
@@ -1587,7 +1587,9 @@ class PropertyPanel(QWidget):
 
         self._ruby_interval_spin = _spin(-40, 40, suffix=" px")
         self._ruby_interval_spin.setToolTip(
-            "注音字符之间的最小间距（N3 ルビ間隔），可为负让注音字符收紧。"
+            "注音字符之间的最小间距（N3 ルビ間隔），可为负让注音字符收紧。\n"
+            "注意这是「下限」：注音比正文窄、均等分布摊出的间距大于此值时，"
+            "调整它看不到变化；对超出正文宽度的长注音效果最明显。"
         )
         self._ruby_interval_spin.valueChanged.connect(
             lambda value: self._update_style(ruby_interval_px=value)
@@ -1621,7 +1623,19 @@ class PropertyPanel(QWidget):
     def _apply_main_colors_to_ruby(self) -> None:
         if self._syncing:
             return
-        self._update_style(ruby_karaoke_colors=deepcopy(self._current_karaoke_colors()))
+        # 颜色照搬主文字矩阵；宽度/装饰/阴影/发光的注音覆盖一并清空——
+        # 清空后渲染端按注音字号比例从主文字缩放（与按钮描述一致）。
+        self._update_style(
+            ruby_karaoke_colors=deepcopy(self._current_karaoke_colors()),
+            ruby_stroke_width_px=None,
+            ruby_stroke2_width_px=None,
+            ruby_decoration_kind=None,
+            ruby_glow_radius_px=None,
+            ruby_glow_before_radius_px=None,
+            ruby_glow_after_radius_px=None,
+            ruby_shadow_offset_x=None,
+            ruby_shadow_offset_y=None,
+        )
 
     def _make_color_section(
         self, parent: Optional[QWidget] = None, *, inline: bool = False
@@ -3792,6 +3806,14 @@ class PropertyPanel(QWidget):
         was_syncing = self._syncing
         self._syncing = True
         try:
+            # 卡片标题显示当前编辑目标：角色选中时这里的修改只写进该角色的
+            # 方案，不改全局——不标出来用户会以为参数无效。
+            role_name = self._current_custom_scheme_name()
+            suffix = f"（角色：{role_name}）" if role_name else ""
+            if hasattr(self, "_font_color_section"):
+                self._font_color_section.header.setText(f"颜色 / 字体{suffix}")
+            if hasattr(self, "_ruby_section"):
+                self._ruby_section.header.setText(f"注音{suffix}")
             self._font_combo.setCurrentFont(QFont(str(self._scheme_value("font_family"))))
             latin_family = self._scheme_value("font_family_latin")
             self._font_latin_check.setChecked(bool(latin_family))

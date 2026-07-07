@@ -1,0 +1,380 @@
+"""NicoKaraMaker3 项目（.n3proj）导入：zip/JSON 解析与字段映射。"""
+
+from __future__ import annotations
+
+import json
+import zipfile
+from pathlib import Path
+
+import pytest
+
+from krok_helper.subtitle_render.models import style_from_dict
+from krok_helper.subtitle_render.n3proj_import import (
+    N3ImportResult,
+    is_n3proj_file,
+    load_n3proj,
+)
+
+
+def _size(px: int, reference: int = 1080) -> dict:
+    return {"Size": px, "Reference": reference, "Ratio": px / reference}
+
+
+def _dxcolor(r: float, g: float, b: float) -> dict:
+    return {"R": r, "G": g, "B": b, "A": 1}
+
+
+def _solid_brush(name: str, hex6: str, r: float, g: float, b: float) -> dict:
+    return {
+        "SelectedBrushTypeIndex": 0,
+        "SolidColor": {"DxColor": _dxcolor(r, g, b), "Web16": hex6},
+        "GradientStops": [],
+        "BitmapPath": "",
+        "BitmapScale": 100,
+        "SettingsName": name,
+    }
+
+
+def _font_info(name: str, font: str, face: str, char: int, edge: int, edge2: int,
+               fallback: str, use_edge2=None) -> dict:
+    return {
+        "FontName": font,
+        "FontFaceName": face,
+        "CharSize": _size(char),
+        "EdgeSize": _size(edge),
+        "UseEdge2": use_edge2,
+        "EdgeSize2": _size(edge2),
+        "FallbackName": fallback,
+        "SettingsName": name,
+    }
+
+
+def _lyrics_font(name: str, *, decor_kind: int = 1, decor_size: int = 5,
+                 after_text: dict | None = None, use_edge2=None) -> dict:
+    brushes = [
+        after_text or _solid_brush("ワイプ後／文字色", "FF0000", 1, 0, 0),
+        _solid_brush("縁取り色", "FFFFFF", 1, 1, 1),
+        _solid_brush("縁取り 2 色", "000000", 0, 0, 0),
+        _solid_brush("飾り色", "000000", 0, 0, 0),
+        _solid_brush("ワイプ前／文字色", "FFFFFF", 1, 1, 1),
+        _solid_brush("縁取り色", "000000", 0, 0, 0),
+        _solid_brush("縁取り 2 色", "FFFFFF", 1, 1, 1),
+        _solid_brush("飾り色", "26386A", 0.14901961, 0.21960784, 0.41568628),
+    ]
+    return {
+        "BrushInfos": brushes,
+        "FontInfos": [
+            _font_info("歌詞／漢字", "UD デジタル 教科書体 N-B", "Bold", 100, 15, 5,
+                       "デフォルトフォント", use_edge2),
+            _font_info("かな", "", "", 0, 0, 0, "歌詞／漢字"),
+            _font_info("英数", "Comic Sans MS", "Negreta", 0, 0, 0, "歌詞／漢字"),
+            _font_info("ルビ／漢字", "", "", 45, 10, 3, "歌詞／漢字", use_edge2),
+            _font_info("かな", "", "", 0, 0, 0, "ルビ／漢字"),
+            _font_info("英数", "", "", 0, 0, 0, "ルビ／漢字"),
+        ],
+        "DecorKind": decor_kind,
+        "DecorSize": _size(decor_size),
+        "BlurLevel": 0,
+        "SettingsName": name,
+    }
+
+
+def _layout(name: str, va: int, aligns: list[int], *, line_space: int = 85,
+            v_margin: int = 50, h_margin: int = 50, smart: int = 2,
+            lyrics_interval: int = 0) -> dict:
+    return {
+        "SelectedVerticalAlignmentIndex": va,
+        "LineSpace": _size(line_space),
+        "SmartHorizon": smart,
+        "VerticalMargin": _size(v_margin),
+        "HorizontalMargin": _size(h_margin),
+        "HorizontalAlignments": [{"HorizontalLayoutAlignment": a} for a in aligns],
+        "LyricsInterval": _size(lyrics_interval),
+        "AllowBiting": False,
+        "RubyInterval": _size(0),
+        "RubyAlignment": 0,
+        "LyricsAndRubyInterval": _size(0),
+        "SettingsName": name,
+    }
+
+
+def _char(ch: str, begin: int, end: int, font_index: int = 0) -> dict:
+    return {"Kind": 0, "Char": ch, "BeginTime": begin, "EndTime": end,
+            "FontIndex": font_index, "IsRuby": False}
+
+
+LRC_TEXT = (
+    "[00:01:00]あ[00:02:00]い[00:03:00]\n"
+    "\n"
+    "[00:05:00]う[00:06:00]え[00:07:00]\n"
+)
+
+
+def _line_info(chars: list[dict], layout_index: int = 0,
+               action_id: str = "SHINTA.LineFadeInFadeOut") -> dict:
+    return {
+        "Kind": 1,
+        "LyricsCharInfos": chars,
+        "SubtitleActionId": action_id,
+        "SubtitleActionSettings": {"FadeInTime": 250, "FadeOutTime": 300},
+        "LayoutIndex": layout_index,
+        "Raw": "",
+    }
+
+
+def _project_payload(tmp_path: Path) -> dict:
+    lrc = tmp_path / "demo.lrc"
+    lrc.write_text(LRC_TEXT, encoding="utf-8")
+    video = tmp_path / "demo.mp4"
+    video.write_bytes(b"fake")
+    return {
+        "SourceInfo": {
+            "SourceKind": 0,
+            "MoviePath": str(video),
+            "MovieRelativePath": "demo.mp4",
+            "BackgroundWidth": 1920,
+            "BackgroundHeight": 1080,
+            "Fps": 60,
+            "SoundPath": None,
+        },
+        "SourceLyricsInfos": [
+            {
+                "SourceLyricsPath": str(lrc),
+                "SourceLyricsRelativePath": "demo.lrc",
+                "LineInfos": [
+                    _line_info(
+                        [_char("あ", 1000, 2000), _char("い", 2000, 3000, font_index=1)],
+                        layout_index=1,
+                    ),
+                    {"Kind": 2, "LyricsCharInfos": [], "LayoutIndex": -1, "Raw": ""},
+                    _line_info([_char("う", 5000, 6000), _char("え", 6000, 7000)]),
+                ],
+                "SettingsName": "メイン",
+            },
+        ],
+        "TitleInfos": [
+            {
+                "ShowTime": {"Kind": 0, "HeadOffset": 0, "HeadEnd": 5999990,
+                             "Interval": 10000, "TailOffset": 0},
+                "LayoutIndex": 1,
+                "LineInfos": [
+                    {"Kind": 5, "LyricsCharInfos": [
+                        _char("曲", 5999990, 5999990, font_index=1),
+                        _char("名", 5999990, 5999990, font_index=1),
+                    ]},
+                ],
+                "SettingsName": "タイトル1",
+            },
+        ],
+        "LyricsFonts": [
+            _lyrics_font("標準配色", decor_kind=1, decor_size=5),
+            _lyrics_font(
+                "青配色",
+                decor_kind=2,
+                decor_size=10,
+                after_text={
+                    "SelectedBrushTypeIndex": 1,
+                    "SolidColor": {"DxColor": _dxcolor(0, 0, 1), "Web16": "0000FF"},
+                    "GradientStops": [
+                        {"Position": 0, "Color": _dxcolor(1, 1, 1)},
+                        {"Position": 1, "Color": _dxcolor(0, 0, 1)},
+                    ],
+                    "BitmapPath": "",
+                    "BitmapScale": 100,
+                    "SettingsName": "ワイプ後／文字色",
+                },
+            ),
+        ],
+        "LyricsLayouts": [
+            _layout("下寄せ2行", 2, [0, 2], v_margin=90, line_space=80),
+            _layout("タイトル左上", 0, [0], line_space=15),
+        ],
+        "DestPath": str(tmp_path / "out.mp4"),
+        "DestFormat": 1,
+    }
+
+
+def _write_n3proj(tmp_path: Path, payload: dict) -> Path:
+    path = tmp_path / "demo.n3proj"
+    raw = "﻿" + json.dumps(payload, ensure_ascii=False)
+    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("0", raw.encode("utf-8"))
+    return path
+
+
+@pytest.fixture()
+def imported(tmp_path) -> N3ImportResult:
+    return load_n3proj(_write_n3proj(tmp_path, _project_payload(tmp_path)))
+
+
+def test_is_n3proj_file():
+    assert is_n3proj_file("a.n3proj")
+    assert is_n3proj_file(Path("A.N3PROJ"))
+    assert not is_n3proj_file("a.yurika")
+
+
+def test_load_n3proj_rejects_non_zip(tmp_path):
+    bad = tmp_path / "bad.n3proj"
+    bad.write_bytes(b"not a zip")
+    with pytest.raises(ValueError):
+        load_n3proj(bad)
+
+
+def test_load_n3proj_rejects_bad_json(tmp_path):
+    path = tmp_path / "bad.n3proj"
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("0", b"{ not json")
+    with pytest.raises(ValueError):
+        load_n3proj(path)
+
+
+def test_import_media_and_screen(imported, tmp_path):
+    data = imported.project_data
+    assert data["subtitle_path"] == str(tmp_path / "demo.lrc")
+    assert data["video_path"] == str(tmp_path / "demo.mp4")
+    assert data["audio_path"] is None
+    assert data["screen"] == {"width": 1920, "height": 1080, "fps": 60, "par": "1:1"}
+    assert data["output"]["output_path"] == str(tmp_path / "out.mp4")
+
+
+def test_import_global_style_font_and_colors(imported):
+    style = style_from_dict(imported.project_data["style"])
+    assert style.font_family == "UD デジタル 教科書体 N-B"
+    assert style.font_family_latin == "Comic Sans MS"
+    assert style.font_size_px == 100
+    assert style.font_weight == 700
+    assert style.stroke_width_px == 15
+    # UseEdge2 全链 None → N3 不绘制二重描边
+    assert style.stroke2_width_px == 0
+    # DecorKind.Shadow → 右下偏移 DecorSize
+    assert style.decoration_kind == "shadow"
+    assert style.shadow_offset_x == 5
+    assert style.shadow_offset_y == 5
+    colors = style.karaoke_colors
+    assert colors is not None
+    assert colors.after.text.color == "#FF0000"
+    assert colors.before.text.color == "#FFFFFF"
+    assert colors.before.shadow.color == "#26386A"
+    # ルビ：字号/描边独立解析，配色与主文字一致
+    assert style.ruby_font_size_px == 45
+    assert style.ruby_stroke_width_px == 10
+    assert style.ruby_karaoke_colors is not None
+
+
+def test_import_layouts(imported):
+    style = style_from_dict(imported.project_data["style"])
+    # LyricsLayouts[0] → 默认布局（Style 本体字段）
+    assert style.line_y_position == "bottom"
+    assert style.line_y_margin_px == 90
+    assert style.line_gap_px == 80
+    assert style.horizontal_margin_px == 50
+    assert style.smart_horizontal == "equal_margins"
+    assert style.line_alignments == ["left", "right"]
+    assert style.layout_reference_height == 1080
+    # LyricsLayouts[1:] → Style.layouts
+    assert [layout.name for layout in style.layouts] == ["タイトル左上"]
+    assert style.layouts[0].line_y_position == "top"
+    assert style.layouts[0].line_alignments == ["left"]
+
+
+def test_import_custom_scheme_with_gradient(imported):
+    style = style_from_dict(imported.project_data["style"])
+    assert "青配色" in style.custom_style_schemes
+    scheme = style.custom_style_schemes["青配色"]
+    # DecorKind.Blur → 发光
+    assert scheme.decoration_kind == "glow"
+    assert scheme.glow_radius_px == 10
+    fill = scheme.karaoke_colors.after.text
+    assert fill.mode == "gradient_vertical"
+    assert fill.gradient_stops[0] == (0, "#FFFFFF")
+    assert fill.gradient_stops[-1] == (100, "#0000FF")
+
+
+def test_import_title_overlay(imported):
+    style = style_from_dict(imported.project_data["style"])
+    title = style.title_overlay
+    assert title is not None and title.enabled
+    assert title.text_template == "曲名"
+    # FontIndex=1 → 青配色 的字体设置
+    assert title.font_family == "UD デジタル 教科書体 N-B"
+    # 标题永不走字 → ワイプ前配色
+    assert title.fill.color == "#FFFFFF"
+    # LayoutIndex=1 → タイトル左上（Top+Left，边距 50/50）
+    assert title.anchor == "top_left"
+    assert title.align == "left"
+    assert title.offset_x == 50
+    assert title.offset_y == 50
+    # Head + HeadEnd 哨兵 → 整段显示
+    assert title.show_mode == "whole"
+    assert title.fade_in_ms == 0 and title.fade_out_ms == 0
+
+
+def test_import_per_line_layout_and_roles(imported):
+    data = imported.project_data
+    # track 共 3 行（含 1 空行），第一行引用布局 1
+    assert data["line_layout_indices"] == [1, 0, 0]
+    roles = data["char_role_labels"]
+    assert roles[0] == [None, "青配色"]
+    assert roles[1] is None
+    assert roles[2] is None
+
+
+def test_import_line_fade_animation(imported):
+    style = style_from_dict(imported.project_data["style"])
+    assert style.entry_anim == "fade"
+    assert style.entry_lead_ms == 250
+    assert style.exit_anim == "fade"
+    assert style.exit_fade_ms == 300
+
+
+def test_mismatched_lyrics_skip_line_payload(tmp_path):
+    payload = _project_payload(tmp_path)
+    # 少一行歌词记录 → 行数不一致，整体跳过行级导入
+    payload["SourceLyricsInfos"][0]["LineInfos"].pop()
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    assert "line_layout_indices" not in result.project_data
+    assert any("行数" in warning for warning in result.warnings)
+
+
+def test_unsupported_dest_format_warns(tmp_path):
+    payload = _project_payload(tmp_path)
+    payload["DestFormat"] = 0
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    assert "output_path" not in result.project_data["output"]
+    assert any("输出格式" in warning for warning in result.warnings)
+
+
+def test_unsupported_fps_falls_back(tmp_path):
+    payload = _project_payload(tmp_path)
+    payload["SourceInfo"]["Fps"] = 30
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    assert result.project_data["screen"]["fps"] == 60
+    assert any("帧率" in warning for warning in result.warnings)
+
+
+def test_image_background_warns(tmp_path):
+    payload = _project_payload(tmp_path)
+    payload["SourceInfo"]["SourceKind"] = 1
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    assert result.project_data["video_path"] is None
+    assert any("图片背景" in warning for warning in result.warnings)
+
+
+REAL_N3PROJ = Path(r"D:\カラオケ\songs\Marginality\1.n3proj")
+
+
+@pytest.mark.skipif(not REAL_N3PROJ.is_file(), reason="本机样例工程不存在")
+def test_import_real_project_smoke():
+    result = load_n3proj(REAL_N3PROJ)
+    style = style_from_dict(result.project_data["style"])
+    assert style.font_family == "UD デジタル 教科書体 N-B"
+    assert style.karaoke_colors.after.text.color == "#1C6FB5"
+    assert [layout.name for layout in style.layouts] == [
+        "下寄せ3行", "上寄せ2行", "コーラス", "タイトル左上", "タイトル中央",
+    ]
+    assert set(style.custom_style_schemes) == {
+        "青配色", "緑配色", "グラデーション配色", "コーラス配色", "情報小", "情報中", "情報大",
+    }
+    assert style.title_overlay is not None
+    assert style.title_overlay.show_mode == "whole"
+    assert len(result.project_data["line_layout_indices"]) == 34
