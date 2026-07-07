@@ -31,7 +31,6 @@ from __future__ import annotations
 
 import math
 import os
-import weakref
 from collections import OrderedDict
 from dataclasses import dataclass, field, replace
 from threading import Lock
@@ -322,7 +321,6 @@ from krok_helper.subtitle_render.engine.timeline import (
     char_fill_ratio,
     compute_char_intervals,
     compute_display_lines,
-    paragraph_last_line_flags,
     track_duration_ms,
     visible_display_lines,
 )
@@ -7188,49 +7186,20 @@ def _valid_color(value: str, fallback: str) -> QColor:
     return fallback_color if fallback_color.isValid() else QColor("#FF5A6F")
 
 
-# 段落最后一行缓存：id(track) → (track 弱引用, 阈值, 段落末行 line id 集合)。
-# TimingTrack 是 eq=True 的 dataclass（不可哈希），不能直接进 WeakKeyDictionary；
-# 用 id 作键，取值时校验弱引用仍指向同一对象，防止 id 复用串味。
-_PARAGRAPH_LAST_CACHE: dict[
-    int, tuple["weakref.ref[TimingTrack]", int, frozenset[int]]
-] = {}
-_PARAGRAPH_LAST_CACHE_MAX = 8
-
-
-def _paragraph_center_threshold(style: Style) -> int:
-    """NKM3 段落划分阈值 = PreTime2 + PostTime2 + IntervalTime2；
-    本模块对应字段（默认 1800+1000+300 与 NKM3 相同）。"""
-    return (
-        max(style.line_lead_in_ms, 0)
-        + max(style.line_tail_ms, 0)
-        + max(style.line_lane_gap_ms, 0)
-    )
-
-
 def _line_center_override(track: TimingTrack, line: TimingLine, style: Style) -> bool:
-    """段落最后一行居中（逆向 NKM3 EmptyLineBreaker/SetParagraphBreaks）。
+    """N3 SmartHorizon：仅页内只有一行时强制居中。
 
     仅在默认「上左下右」双行布局下生效；center 布局本就居中，per_row 是
-    用户手动逐行控制，不覆盖。N3 中该行为属于 SmartHorizon 的单行页居中，
-    因此 ``smart_horizontal == "none"`` 时一并关闭。
+    用户手动逐行控制，不覆盖。``ParagraphBreak`` 只结束当前页/段落，并不
+    令多行页的最后一行单独居中；N3 的准确条件是 ``topLineIndex ==
+    bottomLineIndex``。``smart_horizontal == "none"`` 时关闭此覆盖。
     """
     if style.smart_horizontal == "none":
         return False
     if not style.dual_line_layout or style.line_horizontal_layout != "asymmetric":
         return False
-    threshold = _paragraph_center_threshold(style)
-    key = id(track)
-    cached = _PARAGRAPH_LAST_CACHE.get(key)
-    if cached is not None:
-        track_ref, cached_threshold, ids = cached
-        if track_ref() is track and cached_threshold == threshold:
-            return id(line) in ids
-    flags = paragraph_last_line_flags(track, threshold_ms=threshold)
-    ids = frozenset(id(item) for item, flag in zip(track.lines, flags) if flag)
-    if len(_PARAGRAPH_LAST_CACHE) >= _PARAGRAPH_LAST_CACHE_MAX:
-        _PARAGRAPH_LAST_CACHE.clear()
-    _PARAGRAPH_LAST_CACHE[key] = (weakref.ref(track), threshold, ids)
-    return id(line) in ids
+    page = _renderable_page_lines(track, line, style)
+    return page is not None and len(page) == 1
 
 
 def _lane_count(style: Style) -> int:
@@ -7576,15 +7545,13 @@ def assign_layout_to_all(track: TimingTrack, layout_index: int) -> bool:
     return changed
 
 
-def auto_assign_layouts_by_paragraph(track: TimingTrack, style: Style) -> bool:
-    """按段落行数自动选布局（N3 LinesLayoutSelector 的段落近似）。
+def auto_assign_layouts_by_page(track: TimingTrack, style: Style) -> bool:
+    """按页内行数自动选布局（N3 ``LinesLayoutSelector``）。
 
-    每个段落（空行 + 间奏阈值划分，与段落末行居中同一套分段）取行数 N，
+    每页取实际歌词行数 N，
     在「默认布局 + 额外布局」中找第一个行数 == N 的；找不到按 N-1, N-2…
     递减再找；仍找不到用默认布局。返回是否有行被改写。
     """
-    threshold = _paragraph_center_threshold(style)
-    flags = paragraph_last_line_flags(track, threshold_ms=threshold)
     row_counts = [max(len(style.line_alignments), 1)] + [
         max(len(layout.line_alignments), 1) for layout in style.layouts
     ]
@@ -7604,28 +7571,23 @@ def auto_assign_layouts_by_paragraph(track: TimingTrack, style: Style) -> bool:
         pick_cache[page_lines] = choice
         return choice
 
+    render_lines = [line for line in track.lines if not line.is_blank and line.chars]
+    if not render_lines:
+        return False
+    _lanes, page_starts, _page_rows = assign_lanes(
+        render_lines, _lane_count(style), _row_count_resolver(style)
+    )
+    pages: dict[int, list[TimingLine]] = {}
+    for line, page_start in zip(render_lines, page_starts):
+        pages.setdefault(page_start, []).append(line)
+
     changed = False
-    paragraph: list[TimingLine] = []
-
-    def flush() -> None:
-        nonlocal changed
-        if not paragraph:
-            return
-        index = pick(len(paragraph))
-        for item in paragraph:
-            if item.layout_index != index:
-                item.layout_index = index
+    for page in pages.values():
+        index = pick(len(page))
+        for line in page:
+            if line.layout_index != index:
+                line.layout_index = index
                 changed = True
-        paragraph.clear()
-
-    for i, line in enumerate(track.lines):
-        if line.is_blank or not line.chars:
-            flush()
-            continue
-        paragraph.append(line)
-        if i < len(flags) and flags[i]:
-            flush()
-    flush()
     return changed
 
 

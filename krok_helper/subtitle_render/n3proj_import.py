@@ -206,6 +206,7 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
 
     # ---------------------------------------------------------- 每行布局 / 逐字配色 / 动画
     line_layout_indices: Optional[list[int]] = None
+    line_breaks_before: Optional[list[str]] = None
     char_role_labels: Optional[list[Optional[list[Optional[str]]]]] = None
     extra_sources: list[dict[str, Any]] = []
     if lyrics_with_source:
@@ -216,7 +217,7 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
         changes.update(_animation_changes(line_infos, warnings))
         track = _load_track(subtitle_path, warnings)
         if track is not None:
-            line_layout_indices, char_role_labels = _per_line_payloads(
+            line_layout_indices, line_breaks_before, char_role_labels = _per_line_payloads(
                 line_infos, track, layout_limit, font_names, warnings
             )
 
@@ -236,11 +237,13 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
             extra_track = _load_track(extra_path, warnings)
             if extra_track is not None:
                 extra_line_infos = [_dict(item) for item in _list(info.get("LineInfos"))]
-                extra_layouts, extra_roles = _per_line_payloads(
+                extra_layouts, extra_breaks, extra_roles = _per_line_payloads(
                     extra_line_infos, extra_track, layout_limit, font_names, warnings
                 )
                 if extra_layouts is not None:
                     extra_payload["line_layout_indices"] = extra_layouts
+                if extra_breaks is not None:
+                    extra_payload["line_breaks_before"] = extra_breaks
                 if extra_roles is not None:
                     extra_payload["char_role_labels"] = extra_roles
             extra_sources.append(extra_payload)
@@ -271,6 +274,8 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
     }
     if line_layout_indices is not None:
         project_data["line_layout_indices"] = line_layout_indices
+    if line_breaks_before is not None:
+        project_data["line_breaks_before"] = line_breaks_before
     if char_role_labels is not None:
         project_data["char_role_labels"] = char_role_labels
     if extra_sources:
@@ -871,26 +876,47 @@ def _per_line_payloads(
     layout_limit: int,
     font_names: list[str],
     warnings: list[str],
-) -> tuple[Optional[list[int]], Optional[list[Optional[list[Optional[str]]]]]]:
-    """对齐 N3 歌词行与本模块解析行，导出每行布局引用与逐字配色角色。
+) -> tuple[
+    Optional[list[int]],
+    Optional[list[str]],
+    Optional[list[Optional[list[Optional[str]]]]],
+]:
+    """对齐 N3 歌词行与本模块解析行，导出布局、分页与逐字配色。
 
     N3 ``LineInfos`` 里 Kind==1（Lyrics）的行与 LRC 非空行一一对应（空行/分页
     在 N3 里是 Empty/PageBreak，段落分隔 ParagraphBreak 是运行时插入的）。
     逐行校验字符文本，一致才导入该行数据，避免歌词文件被改动后错位。
     """
-    n3_lines = [line for line in line_infos if _int(line.get("Kind"), -1) == 1]
+    n3_lines: list[dict] = []
+    n3_breaks_before: list[str] = []
+    pending_break = "none"
+    for line in line_infos:
+        kind = _int(line.get("Kind"), -1)
+        if kind in (2, 3):  # PageBreak / ParagraphBreak 都结束当前显示页
+            pending_break = "page" if kind == 2 else "paragraph"
+        elif kind == 1:
+            n3_lines.append(line)
+            n3_breaks_before.append(pending_break)
+            pending_break = "none"
     our_indexed = [(index, line) for index, line in enumerate(track.lines) if not line.is_blank]
     if not n3_lines:
-        return None, None
+        return None, None, None
     if len(n3_lines) != len(our_indexed):
-        warnings.append("歌词行数与 N3 项目记录不一致（歌词文件可能已改动），已跳过每行布局与逐字配色导入")
-        return None, None
+        warnings.append(
+            "歌词行数与 N3 项目记录不一致（歌词文件可能已改动），"
+            "已跳过每行布局、分页与逐字配色导入"
+        )
+        return None, None, None
 
     layout_payload = [0] * len(track.lines)
+    break_payload = ["none"] * len(track.lines)
     role_payload: list[Optional[list[Optional[str]]]] = [None] * len(track.lines)
     mismatched = 0
     any_role = False
-    for (line_index, our_line), n3_line in zip(our_indexed, n3_lines):
+    for (line_index, our_line), n3_line, break_before in zip(
+        our_indexed, n3_lines, n3_breaks_before
+    ):
+        break_payload[line_index] = break_before
         n3_chars = _stripped_n3_chars(n3_line)
         n3_text = "".join(str(char.get("Char") or "") for char in n3_chars)
         our_text = "".join(char.text for char in our_line.chars)
@@ -922,4 +948,8 @@ def _per_line_payloads(
             role_payload[line_index] = labels
     if mismatched:
         warnings.append(f"{mismatched} 行歌词文本与 N3 项目记录不一致，这些行的布局与逐字配色未导入")
-    return layout_payload, (role_payload if any_role else None)
+    return (
+        layout_payload,
+        break_payload,
+        role_payload if any_role else None,
+    )

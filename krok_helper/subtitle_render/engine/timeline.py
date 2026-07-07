@@ -38,8 +38,9 @@ def assign_lanes(
 ) -> tuple[list[int], list[int], list[int]]:
     """按页分配 lane（N3 页级布局联动）。
 
-    页从页首行的布局行数决定：连续 ``rows`` 条可渲染行组成一页，页内行依次占
-    lane ``0..rows-1``。返回与 ``render_lines`` 对齐的
+    页从页首行的布局行数决定：最多连续 ``rows`` 条可渲染行组成一页；若后续行
+    带 ``break_before``（N3 PageBreak / ParagraphBreak），则提前结束
+    当前页。页内行依次占 lane ``0..rows-1``。返回与 ``render_lines`` 对齐的
     ``(lanes, page_starts, page_rows)``。
     """
     lanes: list[int] = []
@@ -47,15 +48,25 @@ def assign_lanes(
     page_rows: list[int] = []
     index = 0
     total = len(render_lines)
+    has_explicit_breaks = any(
+        getattr(line, "break_before", "none") != "none"
+        for line in render_lines[1:]
+    )
     while index < total:
         rows = max(int(default_rows), 1)
         if row_count_of is not None:
             rows = max(int(row_count_of(render_lines[index])), 1)
-        for offset in range(min(rows, total - index)):
+        page_end = total if has_explicit_breaks else min(index + rows, total)
+        for candidate in range(index + 1, page_end):
+            if getattr(render_lines[candidate], "break_before", "none") != "none":
+                page_end = candidate
+                break
+        page_size = max(page_end - index, 1)
+        for offset in range(page_size):
             lanes.append(offset)
             page_starts.append(index)
-            page_rows.append(rows)
-        index += rows
+            page_rows.append(page_size)
+        index = page_end
     return lanes, page_starts, page_rows
 
 
@@ -385,7 +396,8 @@ def paragraph_last_line_flags(
        （NKM3 阈值 = PreTime2 + PostTime2 + IntervalTime2，默认 1800+1000+300）；
     3. 每个段落（含单行段落）的最后一行标 True。空行恒为 False。
 
-    段落最后一行在渲染时居中显示（对标 NKM3「下寄せ3行」布局的中/右行为的简化）。
+    本函数只描述段落边界；N3 的 SmartHorizon 单行页居中必须按页内行数另行判断，
+    不能把段落最后一行等同于单行页。
     """
     flags = [False] * len(track.lines)
     threshold = max(int(threshold_ms), 0)
@@ -415,6 +427,73 @@ def paragraph_last_line_flags(
             page.append(index)
     close_page(page)
     return flags
+
+
+def apply_n3_seq_line_breaks(
+    track: TimingTrack,
+    *,
+    seq: int = 2,
+    pre_time_ms: int = 1800,
+    post_time_ms: int = 1000,
+    interval_time_ms: int = 300,
+) -> list[str]:
+    """按 N3 ``SeqLinesBreaker.SetBreaks`` 生成分页与段落分隔。
+
+    N3 默认每 2 行分页。处理每个候选新行时，它先看从该行起最多 ``seq`` 行的
+    最早演唱开始，与上一页当前已收集行的最晚演唱结束之差：若达到
+    ``PreTime2 + PostTime2 + IntervalTime2``，优先插入 ``ParagraphBreak``；
+    否则累计行数达到 ``seq`` 时插入 ``PageBreak``。
+
+    返回值与 ``track.lines`` 对齐，值为 ``none/page/paragraph``；同时写回每行
+    ``break_before``，供 lane、SmartHorizon、预览与导出统一消费。
+    """
+    page_size = max(1, min(int(seq), 10))
+    threshold = (
+        max(int(pre_time_ms), 0)
+        + max(int(post_time_ms), 0)
+        + max(int(interval_time_ms), 0)
+    )
+    result = ["none"] * len(track.lines)
+    indexed = [
+        (index, line)
+        for index, line in enumerate(track.lines)
+        if not line.is_blank and line.chars
+    ]
+    for line in track.lines:
+        line.break_before = "none"
+    if not indexed:
+        return result
+
+    count_in_page = 0
+    page_start = 0
+    render_lines = [line for _, line in indexed]
+    for render_index, (track_index, line) in enumerate(indexed):
+        kind = "none"
+        if render_index == 0:
+            count_in_page = 1
+        else:
+            lookahead_end = min(render_index + page_size, len(render_lines))
+            next_begin = min(
+                _line_start_ms(item)
+                for item in render_lines[render_index:lookahead_end]
+            )
+            previous_end = max(
+                _line_end_ms(item)
+                for item in render_lines[page_start:render_index]
+            )
+            if next_begin - previous_end >= threshold:
+                kind = "paragraph"
+                count_in_page = 1
+                page_start = render_index
+            elif count_in_page >= page_size:
+                kind = "page"
+                count_in_page = 1
+                page_start = render_index
+            else:
+                count_in_page += 1
+        line.break_before = kind
+        result[track_index] = kind
+    return result
 
 
 def find_upcoming_line(track: TimingTrack, t_ms: int) -> Optional[TimingLine]:

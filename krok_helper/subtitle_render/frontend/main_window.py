@@ -75,7 +75,7 @@ from krok_helper.subtitle_render.engine.encoder_select import (
 from krok_helper.subtitle_render.engine.painter import (
     apply_layout_to_page,
     assign_layout_to_all,
-    auto_assign_layouts_by_paragraph,
+    auto_assign_layouts_by_page,
     check_layout_margins,
 )
 from krok_helper.subtitle_render.engine.renderer import RenderJob, render_subtitle_video
@@ -871,6 +871,7 @@ class SubtitleRenderWindow(QWidget):
             if self._timing_track is not None
             else None
         )
+        line_breaks_before = self._line_break_rows(self._timing_track)
         char_role_labels = self._collect_char_role_labels()
         extra_subtitle_sources = [
             {
@@ -879,6 +880,7 @@ class SubtitleRenderWindow(QWidget):
                 "line_layout_indices": [
                     int(getattr(line, "layout_index", 0) or 0) for line in source.track.lines
                 ],
+                "line_breaks_before": self._line_break_rows(source.track),
                 "char_role_labels": self._char_role_rows(source.track),
             }
             for source in self._extra_sources
@@ -891,6 +893,7 @@ class SubtitleRenderWindow(QWidget):
             screen=screen_settings_to_dict(self._screen_settings),
             selected_scheme_key=self._selected_scheme_key,
             line_layout_indices=line_layout_indices,
+            line_breaks_before=line_breaks_before,
             char_role_labels=char_role_labels,
             extra_subtitle_sources=extra_subtitle_sources,
             output=project_output_payload(
@@ -930,6 +933,7 @@ class SubtitleRenderWindow(QWidget):
         paths = split_project_paths(data)
         if paths["subtitle_path"] is not None and paths["subtitle_path"].is_file():
             self.load_from_lrc(paths["subtitle_path"])
+            self._apply_line_breaks_before(data.get("line_breaks_before"))
             self._apply_line_layout_indices(data.get("line_layout_indices"))
             self._apply_char_role_labels(data.get("char_role_labels"))
             self._apply_extra_subtitle_sources(data.get("extra_subtitle_sources"))
@@ -1537,6 +1541,23 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.set_style(self._style)
         self._preview_panel.set_style(self._style)
 
+    @staticmethod
+    def _line_break_rows(track: Optional[TimingTrack]) -> Optional[list[str]]:
+        if track is None:
+            return None
+        return [str(getattr(line, "break_before", "none")) for line in track.lines]
+
+    def _apply_line_breaks_before(self, payload: object) -> None:
+        """恢复 N3 的显式 PageBreak / ParagraphBreak 页边界。"""
+        track = self._timing_track
+        if track is None or not isinstance(payload, list):
+            return
+        for line, value in zip(track.lines, payload):
+            kind = str(value)
+            line.break_before = kind if kind in {"page", "paragraph"} else "none"
+        self._lyrics_panel.set_track(track)
+        self._preview_panel.set_track(track)
+
     def _collect_char_role_labels(self) -> Optional[list]:
         """收集主字幕每行逐字角色标签用于项目持久化；全部为空则返回 None（不写盘）。"""
         if self._timing_track is None:
@@ -1605,6 +1626,13 @@ class SubtitleRenderWindow(QWidget):
                         except (TypeError, ValueError):
                             continue
                         line.layout_index = index if 0 <= index <= layout_limit else 0
+                breaks = item.get("line_breaks_before")
+                if isinstance(breaks, list):
+                    for line, value in zip(track.lines, breaks):
+                        kind = str(value)
+                        line.break_before = (
+                            kind if kind in {"page", "paragraph"} else "none"
+                        )
                 role_rows = item.get("char_role_labels")
                 if isinstance(role_rows, list):
                     for line, labels in zip(track.lines, role_rows):
@@ -1744,7 +1772,7 @@ class SubtitleRenderWindow(QWidget):
         track = self._active_track()
         if track is None:
             return
-        if auto_assign_layouts_by_paragraph(track, self._style):
+        if auto_assign_layouts_by_page(track, self._style):
             self._refresh_after_layout_assignment()
 
     def _on_layout_deleted(self, deleted_index: int) -> None:

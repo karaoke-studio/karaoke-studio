@@ -63,6 +63,7 @@ def project_payload(
     selected_scheme_key: str,
     output: dict,
     line_layout_indices: Optional[list[int]] = None,
+    line_breaks_before: Optional[list[str]] = None,
     char_role_labels: Optional[list] = None,
     extra_subtitle_sources: Optional[list] = None,
 ) -> dict:
@@ -70,6 +71,9 @@ def project_payload(
 
     ``line_layout_indices`` 与 ``track.lines`` 对齐（含空行），记录每行引用的
     布局（0 = 默认布局）。LRC 本身不含布局信息，只能存在项目文件里。
+
+    ``line_breaks_before`` 同样与 ``track.lines`` 对齐，保存 N3 等价算法生成或
+    N3 项目显式恢复的 ``none/page/paragraph`` 分隔类型。
 
     ``char_role_labels`` 同样与 ``track.lines`` 对齐：每项为 None（整行无角色）
     或与该行字符对齐的角色名列表。覆盖 UI 手动分配与 N3 导入的逐字配色
@@ -89,6 +93,11 @@ def project_payload(
     }
     if line_layout_indices is not None:
         payload["line_layout_indices"] = [int(v) for v in line_layout_indices]
+    if line_breaks_before is not None:
+        payload["line_breaks_before"] = [
+            str(value) if str(value) in {"page", "paragraph"} else "none"
+            for value in line_breaks_before
+        ]
     if char_role_labels is not None:
         payload["char_role_labels"] = [
             [str(label) if label else None for label in row] if isinstance(row, list) else None

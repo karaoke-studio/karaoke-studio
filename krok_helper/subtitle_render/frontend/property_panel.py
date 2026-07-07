@@ -1193,7 +1193,7 @@ class PropertyPanel(QWidget):
     layoutAssignAllRequested = Signal(int)
     """「应用到全部行」：参数为布局 index（0 = 默认布局）。"""
     layoutAutoAssignRequested = Signal()
-    """「按行数自动分配」：按段落行数匹配布局行数。"""
+    """「按行数自动分配」：按页内行数匹配布局行数。"""
     layoutDeleted = Signal(int)
     """布局被删除：参数为被删布局 index（>= 1），宿主需修正歌词行引用。"""
 
@@ -2687,7 +2687,7 @@ class PropertyPanel(QWidget):
         )
         self._auto_assign_btn = QPushButton("按行数自动分配", section)
         self._auto_assign_btn.setToolTip(
-            "每个段落按行数匹配行数相同的布局（找不到按行数递减匹配，"
+            "每一页按页内行数匹配行数相同的布局（找不到按行数递减匹配，"
             "仍找不到用默认布局）——对齐 N3 自动布局选择器。"
         )
         self._auto_assign_btn.clicked.connect(
@@ -2741,7 +2741,7 @@ class PropertyPanel(QWidget):
         self._smart_horizontal_combo.setToolTip(
             "智能水平配置（N3 スマート水平配置，仅「上左下右」布局）：短行自动向画面"
             "中央收拢。左右余白对齐 = 按页整体判断（N3 默认）；中心位置对齐 = "
-            "逐行判断；不调整 = 行永远贴左右边距，同时关闭段落末行居中。"
+            "逐行判断；不调整 = 行永远贴左右边距，同时关闭单行页居中。"
         )
         self._smart_horizontal_combo.currentIndexChanged.connect(
             lambda _index: self._update_layout_field(

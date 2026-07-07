@@ -183,6 +183,23 @@ Center 行虽然不按左右余白锚定，仍会被余白检查提示。
 
 `SmartHorizon` 只在整页基础布局完成后作为二次水平修正。
 
+这里的“整页”严格取 `MultiTextInfoModel.TopLineIndex/BottomLineIndex`：
+`PageBreak` 与 `ParagraphBreak` **都会**结束当前页。两者之间即使只有一条歌词，
+也是真正的单行页；反之，`ParagraphBreak` 前的最后一条歌词若与前一条同处边界内，
+仍属于多行页，不能因为它同时是“段落末行”就单独居中。导入 `.n3proj` 时必须保留
+`LineInfos` 的显式 break，不能只按布局行数机械分组。
+
+直接加载 LRC 时，N3 默认使用 `SeqLinesBreaker`（`Seq=2`）重建这些 break：
+
+1. 从当前候选行起向后最多取 `Seq` 行，求最早演唱开始；
+2. 从当前页首到上一行求最晚演唱结束；
+3. 两者间隔达到 `PreTime2 + PostTime2 + IntervalTime2`（默认
+   `1800 + 1000 + 300 = 3100ms`）时，优先在当前行前插入 `ParagraphBreak`；
+4. 否则当前页累计达到 `Seq` 行时插入 `PageBreak`；两种 break 都重置页内计数。
+
+注意第 1 步会向后看满一页，不是只比较相邻两行。这正是 Marginality 中
+“真っ白な頁…”前判为 `PageBreak`、下一句前判为 `ParagraphBreak` 的原因。
+
 | 值 | UI | 行为 |
 |---|---|---|
 | `None` | 調整しない | 不做二次修正；Left/Right 永远贴指定左右余白 |

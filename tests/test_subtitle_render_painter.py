@@ -4018,7 +4018,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
 
 
 def _continuous_track(texts: list[str]) -> TimingTrack:
-    """无间隙连续演唱的多行 track（同一段落，只有最后一行是段落末行）。"""
+    """无间隙连续演唱的多行 track。"""
     lines = []
     t = 0
     for text in texts:
@@ -4062,7 +4062,7 @@ def test_smart_equal_margins_skips_pair_without_slack(qapp):
     assert x0_smart == _resolve_line_x(img_w, w0, style, 0, center_override=False)
 
 
-def test_smart_none_keeps_margin_anchor_and_paragraph_centering_off(qapp):
+def test_smart_none_keeps_margin_anchor_and_single_page_centering_off(qapp):
     track = _continuous_track(["あい", "うえ", "おか", "きく"])
     style = Style(smart_horizontal="none")
     img_w = 1920
@@ -4070,10 +4070,43 @@ def test_smart_none_keeps_margin_anchor_and_paragraph_centering_off(qapp):
     w0 = _line_total_width(line0, style)
 
     assert _resolve_line_x_smart(img_w, w0, track, line0, style, 0) == 50
-    # 段落末行居中随 none 一并关闭（同属 N3 SetOneLineX 语义）
+    # 4 行按两行一页分成两页，末行不是单行页，任何模式都不得强制居中。
     last = track.lines[-1]
     assert _line_center_override(track, last, style) is False
-    assert _line_center_override(track, last, Style()) is True
+    assert _line_center_override(track, last, Style()) is False
+
+
+def test_two_line_page_last_line_is_not_centered_after_large_gap(qapp):
+    """Marginality 回归：ParagraphBreak 前的第二行仍属于两行页。"""
+    first = TimingLine(
+        chars=[TimingChar(text="人", start_ms=9_670)], end_ms=16_480
+    )
+    second = TimingLine(
+        chars=[TimingChar(text="答", start_ms=16_670)], end_ms=23_210
+    )
+    later = TimingLine(
+        chars=[TimingChar(text="存", start_ms=32_220)], end_ms=41_940
+    )
+    track = TimingTrack(lines=[first, second, later])
+
+    assert _line_center_override(track, second, Style()) is False
+    assert _line_center_override(track, later, Style()) is True
+
+
+def test_explicit_n3_breaks_make_middle_line_a_centered_single_page(qapp):
+    """Marginality 回归：「真っ白な頁…」前后有显式 break，独占一页。"""
+    lines = [
+        TimingLine(chars=[TimingChar(text="感", start_ms=55_020)], end_ms=63_040),
+        TimingLine(chars=[TimingChar(text="哀", start_ms=63_720)], end_ms=66_940),
+        TimingLine(chars=[TimingChar(text="真", start_ms=67_610)], end_ms=72_940),
+        TimingLine(chars=[TimingChar(text="わ", start_ms=76_180)], end_ms=81_560),
+    ]
+    lines[2].break_before = "page"
+    lines[3].break_before = "paragraph"
+    track = TimingTrack(lines=lines)
+
+    assert _line_center_override(track, lines[1], Style()) is False
+    assert _line_center_override(track, lines[2], Style()) is True
 
 
 def test_smart_center_position_moves_short_lines_near_center(qapp):
@@ -4243,7 +4276,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _layout_style_for_line,
     apply_layout_to_page,
     assign_layout_to_all,
-    auto_assign_layouts_by_paragraph,
+    auto_assign_layouts_by_page,
 )
 from krok_helper.subtitle_render.engine.timeline import assign_lanes  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
@@ -4307,7 +4340,7 @@ def test_apply_layout_pages_follow_page_head_row_count(qapp):
 
 
 def test_assign_layout_to_all_and_auto_assign(qapp):
-    # 两个段落：3 行 + 2 行（空行分隔）
+    # 两页：显式 break 前 3 行 + 后 2 行。
     lines = []
     t = 0
     for count, texts in ((3, ["あい", "うえ", "おか"]), (2, ["きく", "けこ"])):
@@ -4320,11 +4353,12 @@ def test_assign_layout_to_all_and_auto_assign(qapp):
         lines.append(TimingLine(is_blank=True))
         t += 10_000
     track = TimingTrack(lines=lines)
+    renderable = [l for l in track.lines if not l.is_blank and l.chars]
+    renderable[3].break_before = "paragraph"
     style = Style(layouts=[_three_row_layout()])
 
-    assert auto_assign_layouts_by_paragraph(track, style) is True
-    renderable = [l for l in track.lines if not l.is_blank and l.chars]
-    # 3 行段落命中三行布局（index 1），2 行段落命中默认布局（行数 2）
+    assert auto_assign_layouts_by_page(track, style) is True
+    # 3 行页命中三行布局（index 1），2 行页命中默认布局（行数 2）
     assert [l.layout_index for l in renderable] == [1, 1, 1, 0, 0]
 
     assert assign_layout_to_all(track, 1) is True

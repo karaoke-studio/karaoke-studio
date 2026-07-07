@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from krok_helper.subtitle_render.engine.timeline import (
+    apply_n3_seq_line_breaks,
+    assign_lanes,
     char_fill_ratio,
     compute_char_intervals,
     compute_display_lines,
@@ -335,6 +337,56 @@ def test_track_duration_ms_empty_track():
 def test_track_duration_ms_no_end_ms_falls_back():
     line = _make_line([("a", 1000)], end_ms=None)
     assert track_duration_ms(_track(line)) == 2000  # 1000 + 1000 fallback
+
+
+def test_assign_lanes_honors_explicit_n3_page_breaks():
+    lines = [
+        _make_line([("a", 0)], end_ms=1000),
+        _make_line([("b", 1000)], end_ms=2000),
+        _make_line([("c", 2000)], end_ms=3000),
+        _make_line([("d", 3000)], end_ms=4000),
+    ]
+    lines[2].break_before = "page"
+    lines[3].break_before = "paragraph"
+
+    lanes, page_starts, page_rows = assign_lanes(lines, 2)
+
+    assert lanes == [0, 1, 0, 0]
+    assert page_starts == [0, 0, 2, 3]
+    assert page_rows == [2, 2, 1, 1]
+
+
+def test_n3_seq_line_breaker_matches_marginality_opening():
+    """N3 10.74 SeqLinesBreaker 默认参数的真实项目回归。"""
+    times = [
+        (9_670, 16_480),
+        (16_670, 23_210),
+        (32_220, 41_940),
+        (43_410, 52_890),
+        (55_020, 63_040),
+        (63_720, 66_940),
+        (67_610, 72_940),
+        (76_180, 81_560),
+        (81_960, 87_080),
+    ]
+    track = _track(
+        *[
+            _make_line([(chr(ord("a") + index), start)], end_ms=end)
+            for index, (start, end) in enumerate(times)
+        ]
+    )
+
+    assert apply_n3_seq_line_breaks(track) == [
+        "none",
+        "none",
+        "paragraph",
+        "none",
+        "page",
+        "none",
+        "page",
+        "paragraph",
+        "none",
+    ]
 
 
 # ---------------------------------------------------------------------------

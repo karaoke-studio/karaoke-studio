@@ -21,6 +21,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields, replace
 from typing import Literal, Optional
 
+LineBreakKind = Literal["none", "page", "paragraph"]
+
 SCHEMA_VERSION = 1
 PROJECT_FILE_SUFFIX = ".yurika"
 STYLE_PRESET_FILE_SUFFIX = ".krstyle.json"
@@ -80,6 +82,13 @@ class TimingLine:
     """该行使用的布局（N3 ``LayoutIndex``）：0 = 默认布局（``Style`` 自身字段），
     k >= 1 = ``Style.layouts[k-1]``。由 UI 按页联动写入，随项目文件持久化
     （LRC 本身不含布局信息）。"""
+    break_before: LineBreakKind = "none"
+    """本行前的 N3 分隔类型。
+
+    ``page`` / ``paragraph`` 都会开启新页；区别用于 N3 的跨页衔接与段落语义。
+    直接载入 LRC 时由 SeqLinesBreaker 等价算法生成，导入 N3 项目时由其
+    ``LineInfos`` 精确恢复。
+    """
 
 
 @dataclass
@@ -568,7 +577,7 @@ class Style:
 
     smart_horizontal: SmartHorizontal = "equal_margins"
     """智能水平配置（N3 ``SmartHorizon``，仅 ``asymmetric`` 双行布局）：短行向中央
-    收拢。``none`` = 不调整（同时关闭段落末行/单行页居中）；``center_position`` =
+    收拢。``none`` = 不调整（同时关闭单行页居中）；``center_position`` =
     中心位置对齐（逐行判断，N3 Single）；``equal_margins`` = 左右余白对齐
     （整页判断，N3 Multi，N3 默认）。"""
 

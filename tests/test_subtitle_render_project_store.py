@@ -155,6 +155,7 @@ def test_extra_subtitle_sources_round_trip(qapp, monkeypatch, tmp_path):
 
     chorus_track = load_nicokara_lrc(chorus_lrc)
     chorus_track.lines[0].layout_index = 1
+    chorus_track.lines[0].break_before = "paragraph"
     for ch in chorus_track.lines[0].chars:
         ch.role_label = "コーラス配色"
     win._extra_sources.append(
@@ -165,6 +166,7 @@ def test_extra_subtitle_sources_round_trip(qapp, monkeypatch, tmp_path):
     extras = data.get("extra_subtitle_sources")
     assert extras and extras[0]["name"] == "コーラス1"
     assert extras[0]["line_layout_indices"] == [1]
+    assert extras[0]["line_breaks_before"] == ["paragraph"]
     assert extras[0]["char_role_labels"] == [["コーラス配色", "コーラス配色"]]
 
     # 恢复到新窗口（布局数量需覆盖 layout_index=1）
@@ -180,6 +182,7 @@ def test_extra_subtitle_sources_round_trip(qapp, monkeypatch, tmp_path):
     restored = win2._extra_sources[0]
     assert restored.name == "コーラス1"
     assert restored.track.lines[0].layout_index == 1
+    assert restored.track.lines[0].break_before == "paragraph"
     assert [c.role_label for c in restored.track.lines[0].chars] == ["コーラス配色", "コーラス配色"]
     combo = win2._lyrics_panel._source_combo
     assert [combo.itemText(i) for i in range(combo.count())] == ["主字幕", "コーラス1"]

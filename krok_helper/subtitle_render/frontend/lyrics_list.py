@@ -42,7 +42,6 @@ from qfluentwidgets.components.widgets.menu import MenuAnimationType
 
 from krok_helper.subtitle_render.engine.timeline import (
     assign_lanes,
-    paragraph_last_line_flags,
 )
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
 from krok_helper.subtitle_render.models import (
@@ -243,7 +242,6 @@ class LyricsPanel(DropPanel):
         # lane / 组号由序号 + 当前 Style 的行数动态推出（行数可随布局变化）。
         self._row_meta: list[tuple[bool, int]] = []
         # 段落最后一行标记（与渲染端 NKM3 式段落划分一致），随 style 阈值重算
-        self._paragraph_last: list[bool] = []
         # 每个可渲染行的 lane / 页序号缓存（页首行布局定行数，与渲染端一致）
         self._render_lanes: list[int] = []
         self._render_groups: list[int] = []
@@ -497,25 +495,14 @@ class LyricsPanel(DropPanel):
         return color
 
     def _refresh_presentation(self, rows: Optional[list[int]] = None) -> None:
-        """按当前 Style 刷新：轨标 / 内容对齐 / 角色色点 / 段落末行居中。"""
+        """按当前 Style 刷新：轨标 / 内容对齐 / 角色色点 / 单行页居中。"""
         style = self._style
         dual = bool(style.dual_line_layout)
         lane_color = QColor(palette().text_hint)
 
-        if self._track is not None:
-            threshold = (
-                max(style.line_lead_in_ms, 0)
-                + max(style.line_tail_ms, 0)
-                + max(style.line_lane_gap_ms, 0)
-            )
-            self._paragraph_last = paragraph_last_line_flags(
-                self._track, threshold_ms=threshold
-            )
-        else:
-            self._paragraph_last = []
-
         self._table.setColumnHidden(COL_LANE, not dual)
         self._recompute_render_lanes()
+        page_sizes = Counter(self._render_groups)
 
         self._table.blockSignals(True)
         try:
@@ -555,11 +542,12 @@ class LyricsPanel(DropPanel):
                 lane_font = lane_item.font()
                 lane_font.setPointSizeF(8.0)
                 lane_item.setFont(lane_font)
-                paragraph_last = (
-                    row < len(self._paragraph_last) and self._paragraph_last[row]
+                single_line_page = (
+                    0 <= render_index < len(self._render_groups)
+                    and page_sizes[self._render_groups[render_index]] == 1
                 )
                 content_item.setTextAlignment(
-                    self._content_alignment(line_style, lane, dual, paragraph_last)
+                    self._content_alignment(line_style, lane, dual, single_line_page)
                 )
 
                 role = str(role_item.data(Qt.ItemDataRole.UserRole) or "")
@@ -571,7 +559,7 @@ class LyricsPanel(DropPanel):
 
     @staticmethod
     def _content_alignment(
-        style: Style, lane: int, dual: bool, paragraph_last: bool = False
+        style: Style, lane: int, dual: bool, single_line_page: bool = False
     ) -> Qt.AlignmentFlag:
         vertical = Qt.AlignmentFlag.AlignVCenter
         if not dual:
@@ -587,9 +575,9 @@ class LyricsPanel(DropPanel):
                 "right": Qt.AlignmentFlag.AlignRight,
             }
             return mapping.get(align, Qt.AlignmentFlag.AlignLeft) | vertical
-        # asymmetric（默认）：按每行对齐列表；段落最后一行居中（与渲染端一致，
-        # 智能水平 = 不调整 时同步关闭）
-        if paragraph_last and style.smart_horizontal != "none":
+        # asymmetric（默认）：按每行对齐列表；仅单行页居中（与 N3
+        # SmartHorizonOnePage 的 topLineIndex == bottomLineIndex 条件一致）。
+        if single_line_page and style.smart_horizontal != "none":
             return Qt.AlignmentFlag.AlignHCenter | vertical
         alignments = style.line_alignments or ["left"]
         align = alignments[min(max(lane, 0), len(alignments) - 1)]

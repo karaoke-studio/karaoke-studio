@@ -17,6 +17,11 @@ from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from krok_helper.models import MediaInfo  # noqa: E402
+from krok_helper.subtitle_render.models import (  # noqa: E402
+    TimingChar,
+    TimingLine,
+    TimingTrack,
+)
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 
 
@@ -413,6 +418,22 @@ def test_window_shell_components_present(qapp, monkeypatch):
         "特效",
         "标题",
     ]
+
+
+def test_lyrics_list_centers_only_explicit_single_line_page(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+    lines = [
+        TimingLine(chars=[TimingChar(text=text, start_ms=i * 1000)], end_ms=(i + 1) * 1000)
+        for i, text in enumerate(("感傷", "哀しみ", "真っ白", "わたし"))
+    ]
+    lines[2].break_before = "page"
+    lines[3].break_before = "paragraph"
+    win._lyrics_panel.set_track(TimingTrack(lines=lines))
+
+    second_alignment = win._lyrics_panel._table.item(1, 2).textAlignment()
+    single_alignment = win._lyrics_panel._table.item(2, 2).textAlignment()
+    assert second_alignment & Qt.AlignmentFlag.AlignRight
+    assert single_alignment & Qt.AlignmentFlag.AlignHCenter
 
 
 def test_preview_window_corners_stay_above_player_controls(qapp, monkeypatch):

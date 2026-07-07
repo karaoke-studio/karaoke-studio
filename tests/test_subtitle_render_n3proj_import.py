@@ -14,6 +14,7 @@ from krok_helper.subtitle_render.n3proj_import import (
     is_n3proj_file,
     load_n3proj,
 )
+from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 
 
 def _size(px: int, reference: int = 1080) -> dict:
@@ -235,6 +236,8 @@ def test_import_media_and_screen(imported, tmp_path):
     assert data["audio_path"] is None
     assert data["screen"] == {"width": 1920, "height": 1080, "fps": 60, "par": "1:1"}
     assert data["output"]["output_path"] == str(tmp_path / "out.mp4")
+    # N3 PageBreak 在 LRC 的第二个歌词行前开启新页（中间空行也保留槽位）。
+    assert data["line_breaks_before"] == ["none", "none", "page"]
 
 
 def test_import_global_style_font_and_colors(imported):
@@ -378,6 +381,10 @@ def test_import_real_project_smoke():
     assert style.title_overlay is not None
     assert style.title_overlay.show_mode == "whole"
     assert len(result.project_data["line_layout_indices"]) == 34
+    direct_track = load_nicokara_lrc(Path(result.project_data["subtitle_path"]))
+    assert [line.break_before for line in direct_track.lines] == result.project_data[
+        "line_breaks_before"
+    ]
 
 
 CHORUS_LRC_TEXT = "[00:10:00]ラ[00:11:00]ラ[00:12:00]\n"
