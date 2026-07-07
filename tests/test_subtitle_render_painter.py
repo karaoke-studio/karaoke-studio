@@ -1018,22 +1018,21 @@ def test_run_fill_complete_scopes_to_run_indices(qapp):
 def test_after_glow_loose_clip_pads_trailing_edge_and_opens_when_complete(qapp):
     rect = QRectF(0.0, 100.0, 200.0, 60.0)
     glow_pad = 20
-    front_pad = 3
-    # LTR 走字中：尾缘（左）与上下外扩 glow_pad，前缘（扫光线，右）只按 N3 的一重描边半宽外放
-    mid = _after_glow_loose_clip_rect((0, 150), rect, glow_pad, front_pad, False, False)
+    # LTR 走字中：尾缘（左）与上下外扩 glow_pad，预 blur 的 after-glow 前缘严格停在扫光线
+    mid = _after_glow_loose_clip_rect((0, 150), rect, glow_pad, False, False)
     assert mid.left() == -20.0
-    assert mid.right() == 153.0
+    assert mid.right() == 150.0
     assert mid.top() == 80.0
     assert mid.bottom() == 180.0
     # 唱完：前缘释放完整 halo，行尾不再被硬截
-    done = _after_glow_loose_clip_rect((0, 200), rect, glow_pad, front_pad, False, True)
+    done = _after_glow_loose_clip_rect((0, 200), rect, glow_pad, False, True)
     assert done.left() == -20.0
     assert done.right() == 220.0
-    # RTL 镜像：尾缘在右恒外扩，前缘（左）走字中只按一重描边半宽外放、唱完后放开
-    mid_rtl = _after_glow_loose_clip_rect((50, 200), rect, glow_pad, front_pad, True, False)
-    assert mid_rtl.left() == 47.0
+    # RTL 镜像：尾缘在右恒外扩，前缘（左）走字中严格停在扫光线、唱完后放开
+    mid_rtl = _after_glow_loose_clip_rect((50, 200), rect, glow_pad, True, False)
+    assert mid_rtl.left() == 50.0
     assert mid_rtl.right() == 220.0
-    done_rtl = _after_glow_loose_clip_rect((0, 200), rect, glow_pad, front_pad, True, True)
+    done_rtl = _after_glow_loose_clip_rect((0, 200), rect, glow_pad, True, True)
     assert done_rtl.left() == -20.0
     assert done_rtl.right() == 220.0
 
