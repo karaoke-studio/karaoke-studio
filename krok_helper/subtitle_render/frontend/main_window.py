@@ -406,6 +406,9 @@ class PreviewPlayerWindow(QWidget):
         self._bottom_controls.show()
         self._top_controls.raise_()
         self._bottom_controls.raise_()
+        # 控制栏覆盖窗口上下沿；若最后提升的是控制栏，四个角的透明 resize
+        # grip 就收不到鼠标事件。始终让边角手柄位于控制栏之上。
+        self._raise_edge_grips()
         self._hide_controls_timer.start()
 
     def _on_controls_idle_timeout(self) -> None:
@@ -451,6 +454,12 @@ class PreviewPlayerWindow(QWidget):
         for grip in self._edge_grips:
             grip.setGeometry(rects[grip._edges.value])
             grip.setVisible(not maximized)
+        self._raise_edge_grips()
+
+    def _raise_edge_grips(self) -> None:
+        if not hasattr(self, "_edge_grips"):
+            return
+        for grip in self._edge_grips:
             grip.raise_()
 
     def focusInEvent(self, event):  # noqa: N802

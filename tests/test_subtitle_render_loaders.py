@@ -12,6 +12,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PyQt6.QtCore import QPoint, Qt  # noqa: E402
+from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from krok_helper.models import MediaInfo  # noqa: E402
@@ -411,6 +413,60 @@ def test_window_shell_components_present(qapp, monkeypatch):
         "特效",
         "标题",
     ]
+
+
+def test_preview_window_corners_stay_above_player_controls(qapp, monkeypatch):
+    """控制栏显示后，四角仍须命中无边框窗口的 resize grip。"""
+    win = _make_window(qapp, monkeypatch)
+    preview = win._preview_window
+    preview.resize(800, 450)
+    preview.show()
+    qapp.processEvents()
+    preview.show_controls()
+
+    edge = mw.Qt.Edge
+    expected = {
+        QPoint(2, 2): (edge.TopEdge | edge.LeftEdge).value,
+        QPoint(preview.width() - 3, 2): (edge.TopEdge | edge.RightEdge).value,
+        QPoint(2, preview.height() - 3): (edge.BottomEdge | edge.LeftEdge).value,
+        QPoint(preview.width() - 3, preview.height() - 3): (
+            edge.BottomEdge | edge.RightEdge
+        ).value,
+    }
+    for point, edge_bits in expected.items():
+        hit = preview.childAt(point)
+        assert isinstance(hit, mw._WindowEdgeGrip)
+        assert hit._edge_bits == edge_bits
+
+
+def test_preview_window_resizes_from_all_four_corners(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+    preview = win._preview_window
+    preview.show()
+    qapp.processEvents()
+
+    edge = Qt.Edge
+    cases = [
+        (edge.TopEdge | edge.LeftEdge, -30, -20),
+        (edge.TopEdge | edge.RightEdge, 30, -20),
+        (edge.BottomEdge | edge.LeftEdge, -30, 20),
+        (edge.BottomEdge | edge.RightEdge, 30, 20),
+    ]
+    for edges, dx, dy in cases:
+        preview.setGeometry(100, 100, 800, 450)
+        qapp.processEvents()
+        grip = next(g for g in preview._edge_grips if g._edge_bits == edges.value)
+        QTest.mousePress(grip, Qt.MouseButton.LeftButton, pos=QPoint(7, 7))
+        QTest.mouseMove(grip, QPoint(7 + dx, 7 + dy))
+        QTest.mouseRelease(
+            grip,
+            Qt.MouseButton.LeftButton,
+            pos=QPoint(7 + dx, 7 + dy),
+        )
+        qapp.processEvents()
+
+        assert preview.width() == 830
+        assert preview.height() == 470
 
 
 def test_drop_panel_accepts_correct_extensions(qapp, monkeypatch, tmp_path):
