@@ -11,6 +11,13 @@ def test_ffmpeg_not_found_maps_to_friendly() -> None:
     assert "未找到 ffmpeg" in normalize("ffmpeg not found")
 
 
+def test_ffmpeg_not_installed_maps_to_friendly() -> None:
+    result = normalize("ffmpeg is not installed")
+
+    assert result != "ffmpeg is not installed"
+    assert "ffmpeg" in result
+
+
 def test_requested_format_not_available_maps_to_friendly() -> None:
     assert "当前清晰度不可用" in normalize("requested format is not available")
 

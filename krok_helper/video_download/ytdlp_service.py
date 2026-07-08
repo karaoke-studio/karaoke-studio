@@ -72,6 +72,10 @@ class YtDlpService:
     def _settings(self):
         return self._app_settings or load_current_app_settings()
 
+    def _configured_ffmpeg_location(self) -> str:
+        value = str(getattr(self._settings(), "ffmpeg_dir", "") or "").strip()
+        return str(Path(value).expanduser()) if value else ""
+
     def get_ytdlp_version(self) -> str:
         try:
             import yt_dlp
@@ -558,6 +562,9 @@ class YtDlpService:
             ydl_opts["extractor_args"] = self._build_python_extractor_args(extractor_args_hint)
         if options.merge_video_audio:
             ydl_opts["merge_output_format"] = "mp4"
+        ffmpeg_location = self._configured_ffmpeg_location()
+        if ffmpeg_location:
+            ydl_opts["ffmpeg_location"] = ffmpeg_location
         usable_cookie_file = "" if self._hint_disables_cookies(extractor_args_hint) else self._usable_cookie_file(options.cookie_file)
         if usable_cookie_file:
             ydl_opts["cookiefile"] = usable_cookie_file
@@ -666,6 +673,9 @@ class YtDlpService:
             command.extend(["--write-subs", "--write-auto-subs"])
         if options.merge_video_audio:
             command.extend(["--merge-output-format", "mp4"])
+        ffmpeg_location = self._configured_ffmpeg_location()
+        if ffmpeg_location:
+            command.extend(["--ffmpeg-location", ffmpeg_location])
         usable_cookie_file = "" if self._hint_disables_cookies(extractor_args_hint) else self._usable_cookie_file(options.cookie_file)
         if usable_cookie_file:
             command.extend(["--cookies", usable_cookie_file])
@@ -1297,7 +1307,7 @@ class YtDlpService:
     def _normalize_error_message(self, exc: Exception) -> str:
         message = str(exc).strip() or exc.__class__.__name__
         lower = message.lower()
-        if "ffmpeg" in lower and "not found" in lower:
+        if "ffmpeg" in lower and ("not found" in lower or "not installed" in lower):
             return "未找到 ffmpeg，无法合并音视频或处理封面。请先安装 ffmpeg 并加入 PATH。"
         if "requested format is not available" in lower:
             return "当前清晰度不可用，请重新解析后选择其他格式。"
