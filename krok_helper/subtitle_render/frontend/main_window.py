@@ -203,7 +203,8 @@ class _WindowEdgeGrip(QWidget):
             self.setCursor(cursor)
 
     def mousePressEvent(self, event):  # noqa: N802
-        if event.button() == Qt.MouseButton.LeftButton and not self._window.isMaximized():
+        is_expanded = getattr(self._window, "_is_expanded", self._window.isMaximized)
+        if event.button() == Qt.MouseButton.LeftButton and not is_expanded():
             self._drag_start = event.globalPosition().toPoint()
             self._start_geometry = QRect(self._window.geometry())
             event.accept()
@@ -370,6 +371,8 @@ class PreviewPlayerWindow(QWidget):
         self.setGeometry(QRect(top_left, QSize(width, height)))
 
     def show_near_workspace(self) -> None:
+        if self._is_expanded():
+            self._restore_windowed()
         self.apply_workspace_geometry()
         self.show()
         self.show_controls()
@@ -450,7 +453,7 @@ class PreviewPlayerWindow(QWidget):
             (edge.BottomEdge | edge.LeftEdge).value: QRect(0, h - corner, corner, corner),
             (edge.BottomEdge | edge.RightEdge).value: QRect(w - corner, h - corner, corner, corner),
         }
-        maximized = self.isMaximized()
+        maximized = self._is_expanded()
         for grip in self._edge_grips:
             grip.setGeometry(rects[grip._edges.value])
             grip.setVisible(not maximized)
@@ -490,7 +493,7 @@ class PreviewPlayerWindow(QWidget):
             if self._dispatch_titlebar_button(event.position().toPoint()):
                 event.accept()
                 return
-            if self.isMaximized():
+            if self._is_expanded():
                 # 最大化状态下不允许手动拖动（会把窗口拖成"假最大化"状态）。
                 event.accept()
                 return
@@ -536,10 +539,20 @@ class PreviewPlayerWindow(QWidget):
         self._transport_bar.stop()
         super().closeEvent(event)
 
+    def _is_expanded(self) -> bool:
+        expanded = Qt.WindowState.WindowMaximized | Qt.WindowState.WindowFullScreen
+        return bool(self.windowState() & expanded) or self.isMaximized() or self.isFullScreen()
+
+    def _restore_windowed(self) -> None:
+        self.setWindowState(Qt.WindowState.WindowNoState)
+        self.showNormal()
+        self.apply_workspace_geometry()
+        self._layout_edge_grips()
+        self.show_controls()
+
     def _toggle_maximized(self) -> None:
-        if self.isMaximized():
-            self.showNormal()
-            self.apply_workspace_geometry()
+        if self._is_expanded():
+            self._restore_windowed()
         else:
             self.showMaximized()
 

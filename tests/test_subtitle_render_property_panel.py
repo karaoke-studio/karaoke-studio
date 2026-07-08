@@ -1604,6 +1604,26 @@ def test_preview_player_window_defaults_to_workspace_quarter_at_top_left(qapp):
     assert preview.findChild(mw.TransportBar) is win._transport_bar
 
 
+def test_preview_player_maximize_button_restores_from_fullscreen_state(qapp):
+    win = mw.SubtitleRenderWindow(embedded=False)
+    win.resize(1600, 900)
+    win.move(120, 80)
+    win.show()
+    qapp.processEvents()
+
+    preview = win._preview_window
+    preview.showFullScreen()
+    qapp.processEvents()
+    assert preview._is_expanded() is True
+
+    preview._maximize_button.click()
+    qapp.processEvents()
+
+    assert preview._is_expanded() is False
+    assert preview.geometry().size() == QSize(800, 450)
+    assert preview.geometry().topLeft() == win.mapToGlobal(QPoint(0, 0))
+
+
 def test_preview_player_controls_auto_hide_and_restore(qapp):
     win = mw.SubtitleRenderWindow(embedded=False)
     preview = win._preview_window
