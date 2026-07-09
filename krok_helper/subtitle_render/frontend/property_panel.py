@@ -1,7 +1,7 @@
 """右侧字幕属性面板。
 
 窄侧栏里不要使用横向表单布局：标签和输入框会互相挤压，尤其是
-``QFontComboBox``。这里采用工具软件常见的分组卡片 + 垂直字段，保证
+字体选择框。这里采用工具软件常见的分组卡片 + 垂直字段，保证
 280-320px 宽度下没有横向溢出。
 """
 
@@ -12,29 +12,31 @@ from dataclasses import dataclass, replace
 from typing import Any, Optional
 
 from PyQt6.QtCore import QPointF, QRect, QRectF, QSize, Qt, pyqtSignal as Signal
-from PyQt6.QtGui import QColor, QFont, QIcon, QLinearGradient, QPainter, QPixmap, QPolygonF
+from PyQt6.QtGui import (
+    QColor,
+    QFont,
+    QFontDatabase,
+    QIcon,
+    QLinearGradient,
+    QPainter,
+    QPixmap,
+    QPolygonF,
+)
 from PyQt6.QtWidgets import (
     QAbstractButton,
     QAbstractItemView,
-    QCheckBox,
     QColorDialog,
-    QComboBox,
     QDialog,
     QFileDialog,
-    QFontComboBox,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QInputDialog,
     QLabel,
-    QLineEdit,
     QListWidgetItem,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
-    QScrollArea,
     QSizePolicy,
-    QSpinBox,
     QStackedWidget,
     QToolButton,
     QVBoxLayout,
@@ -42,13 +44,19 @@ from PyQt6.QtWidgets import (
 )
 from qfluentwidgets import (
     CaptionLabel,
+    CheckBox,
+    ComboBox as FluentComboBox,
     FluentIcon as FIF,
     InfoBar,
     LineEdit as FluentLineEdit,
     ListWidget as FluentListWidget,
+    PlainTextEdit as FluentPlainTextEdit,
     PrimaryPushButton as FluentPrimaryPushButton,
     PushButton as FluentPushButton,
+    ScrollArea as FluentScrollArea,
     SegmentedToggleToolWidget,
+    SpinBox as FluentSpinBox,
+    TransparentToolButton as FluentTransparentToolButton,
 )
 
 from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
@@ -854,7 +862,7 @@ class GradientStopsEditor(QWidget):
         self.stopsChanged.emit(list(self._stops))
 
 
-class _WheelFocusedSpinBox(QSpinBox):
+class _WheelFocusedSpinBox(FluentSpinBox):
     """Only adjust by wheel after the control has explicit focus."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -869,13 +877,17 @@ class _WheelFocusedSpinBox(QSpinBox):
         super().wheelEvent(event)
 
 
-class _WheelFocusedComboBox(QComboBox):
+class _WheelFocusedComboBox(FluentComboBox):
     """Avoid accidental option changes while scrolling the property panel."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
+    def addItem(self, text: str, userData=None) -> None:  # noqa: N802 - Qt API
+        """Keep QComboBox's positional ``userData`` convention."""
+        super().addItem(text, userData=userData)
+
     def wheelEvent(self, event):  # noqa: N802 - Qt API
         if not self.hasFocus():
             event.ignore()
@@ -883,21 +895,34 @@ class _WheelFocusedComboBox(QComboBox):
         super().wheelEvent(event)
 
 
-class _WheelFocusedFontComboBox(QFontComboBox):
-    """Font list variant of the focus-gated wheel behavior."""
+class _WheelFocusedFontComboBox(_WheelFocusedComboBox):
+    """Fluent font picker preserving QFontComboBox's small public contract."""
+
+    currentFontChanged = Signal(QFont)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.addItems(QFontDatabase.families())
+        self.currentIndexChanged.connect(
+            lambda _index: self.currentFontChanged.emit(self.currentFont())
+        )
 
-    def wheelEvent(self, event):  # noqa: N802 - Qt API
-        if not self.hasFocus():
-            event.ignore()
+    def currentFont(self) -> QFont:  # noqa: N802 - QFontComboBox compatibility
+        return QFont(self.currentText())
+
+    def setCurrentFont(self, font: QFont) -> None:  # noqa: N802
+        family = font.family()
+        index = self.findText(family)
+        if index < 0:
+            self.addItem(family)
+            index = self.count() - 1
+        if index == self.currentIndex():
+            self.currentFontChanged.emit(self.currentFont())
             return
-        super().wheelEvent(event)
+        self.setCurrentIndex(index)
 
 
-class _GrowingPlainTextEdit(QPlainTextEdit):
+class _GrowingPlainTextEdit(FluentPlainTextEdit):
     """多行文本框：随内容行数自动增高，背景卡片随之变高（回车即变高）。"""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -906,7 +931,7 @@ class _GrowingPlainTextEdit(QPlainTextEdit):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.setLineWrapMode(FluentPlainTextEdit.LineWrapMode.WidgetWidth)
         self.textChanged.connect(self._adjust_height)
         self._adjust_height()
 
@@ -1477,7 +1502,7 @@ class PropertyPanel(QWidget):
         layout.addWidget(_field("日文字体", self._font_combo))
 
         # 英数（ASCII）字体可单独指定；不勾选时与日文共用一套字体。
-        self._font_latin_check = QCheckBox("英数单独字体", section)
+        self._font_latin_check = CheckBox("英数单独字体", section)
         self._font_latin_check.toggled.connect(self._on_font_latin_toggled)
         layout.addWidget(self._font_latin_check)
 
@@ -1533,11 +1558,11 @@ class PropertyPanel(QWidget):
         row_layout.setColumnStretch(1, 1)
         layout.addWidget(row)
 
-        self._italic_check = QCheckBox("斜体", section)
+        self._italic_check = CheckBox("斜体", section)
         self._italic_check.toggled.connect(lambda checked: self._update_style(italic=checked))
         layout.addWidget(self._italic_check)
 
-        self._allow_biting_check = QCheckBox("允许文字咬合", section)
+        self._allow_biting_check = CheckBox("允许文字咬合", section)
         self._allow_biting_check.setToolTip(
             "允许斜体和部分标点使用负字形边距，效果更接近 NicokaraMaker3。"
         )
@@ -1767,7 +1792,7 @@ class PropertyPanel(QWidget):
         detail_layout.setColumnStretch(1, 1)
         layout.addWidget(detail_grid)
 
-        self._ruby_apply_main_btn = QPushButton("应用主文字配色", section)
+        self._ruby_apply_main_btn = FluentPushButton("应用主文字配色", section)
         self._ruby_apply_main_btn.setMinimumHeight(32)
         self._ruby_apply_main_btn.clicked.connect(self._apply_main_colors_to_ruby)
         self._ruby_apply_main_btn.hide()
@@ -1805,7 +1830,7 @@ class PropertyPanel(QWidget):
         self._gradient_stop_position_spin.valueChanged.connect(
             self._set_gradient_stop_position
         )
-        self._gradient_stop_delete_btn = QPushButton("删除关键点", page)
+        self._gradient_stop_delete_btn = FluentPushButton("删除关键点", page)
         self._gradient_stop_delete_btn.setMinimumHeight(30)
         self._gradient_stop_delete_btn.clicked.connect(
             self._gradient_editor.delete_selected_stop
@@ -1844,12 +1869,12 @@ class PropertyPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(8)
-        self._paint_image_path_edit = QLineEdit(page)
+        self._paint_image_path_edit = FluentLineEdit(page)
         _compact_control(self._paint_image_path_edit)
         self._paint_image_path_edit.editingFinished.connect(
             lambda: self._update_current_fill(image_path=self._paint_image_path_edit.text())
         )
-        self._paint_image_browse_btn = QPushButton("浏览...", page)
+        self._paint_image_browse_btn = FluentPushButton("浏览...", page)
         self._paint_image_browse_btn.setMinimumHeight(32)
         self._paint_image_browse_btn.clicked.connect(self._choose_paint_image)
         self._paint_image_scale_spin = _spin(10, 400, suffix=" %")
@@ -1888,13 +1913,13 @@ class PropertyPanel(QWidget):
         btn_layout = QHBoxLayout(btn_row)
         btn_layout.setContentsMargins(0, 0, 0, 0)
         btn_layout.setSpacing(6)
-        self._add_scheme_button = QPushButton("新建角色", section)
+        self._add_scheme_button = FluentPushButton("新建角色", section)
         self._add_scheme_button.setMinimumHeight(30)
         self._add_scheme_button.clicked.connect(lambda _checked=False: self._add_custom_scheme())
-        self._rename_role_button = QPushButton("重命名", section)
+        self._rename_role_button = FluentPushButton("重命名", section)
         self._rename_role_button.setMinimumHeight(30)
         self._rename_role_button.clicked.connect(lambda _checked=False: self._rename_current_role())
-        self._delete_role_button = QPushButton("删除", section)
+        self._delete_role_button = FluentPushButton("删除", section)
         self._delete_role_button.setMinimumHeight(30)
         self._delete_role_button.clicked.connect(lambda _checked=False: self._delete_current_role())
         for btn in (self._add_scheme_button, self._rename_role_button, self._delete_role_button):
@@ -1951,7 +1976,7 @@ class PropertyPanel(QWidget):
         layout.addWidget(_field("日文字体", self._title_font_combo))
 
         # 英数（ASCII）字体可单独指定；不勾选时与日文共用一套字体（同字幕字体处理）。
-        self._title_latin_check = QCheckBox("英数单独字体", section)
+        self._title_latin_check = CheckBox("英数单独字体", section)
         self._title_latin_check.toggled.connect(self._on_title_font_latin_toggled)
         layout.addWidget(self._title_latin_check)
 
@@ -1990,7 +2015,7 @@ class PropertyPanel(QWidget):
         )
         add("行间距", self._title_line_gap_spin)
 
-        self._title_italic_check = QCheckBox("斜体", section)
+        self._title_italic_check = CheckBox("斜体", section)
         self._title_italic_check.toggled.connect(
             lambda checked: self._update_title(italic=checked)
         )
@@ -2464,7 +2489,7 @@ class PropertyPanel(QWidget):
         )
         add("描边柔化", self._lit_stroke_soften_spin)
 
-        self._lit_shadow_check = QCheckBox("阴影", section)
+        self._lit_shadow_check = CheckBox("阴影", section)
         self._lit_shadow_check.toggled.connect(
             lambda checked: self._update_style(lit_shadow=checked)
         )
@@ -2658,14 +2683,14 @@ class PropertyPanel(QWidget):
         layout_btn_layout = QHBoxLayout(layout_btn_row)
         layout_btn_layout.setContentsMargins(0, 0, 0, 0)
         layout_btn_layout.setSpacing(6)
-        self._add_layout_btn = QPushButton("新建布局", section)
+        self._add_layout_btn = FluentPushButton("新建布局", section)
         self._add_layout_btn.setToolTip("以当前布局的值复制出一个新布局。")
         self._add_layout_btn.clicked.connect(lambda _checked=False: self._on_add_layout())
-        self._rename_layout_btn = QPushButton("重命名", section)
+        self._rename_layout_btn = FluentPushButton("重命名", section)
         self._rename_layout_btn.clicked.connect(
             lambda _checked=False: self._on_rename_layout()
         )
-        self._delete_layout_btn = QPushButton("删除", section)
+        self._delete_layout_btn = FluentPushButton("删除", section)
         self._delete_layout_btn.clicked.connect(
             lambda _checked=False: self._on_delete_layout()
         )
@@ -2678,14 +2703,14 @@ class PropertyPanel(QWidget):
         assign_btn_layout = QHBoxLayout(assign_btn_row)
         assign_btn_layout.setContentsMargins(0, 0, 0, 0)
         assign_btn_layout.setSpacing(6)
-        self._assign_all_btn = QPushButton("应用到全部行", section)
+        self._assign_all_btn = FluentPushButton("应用到全部行", section)
         self._assign_all_btn.setToolTip("所有歌词行统一使用当前布局（N3 全部统一）。")
         self._assign_all_btn.clicked.connect(
             lambda _checked=False: self.layoutAssignAllRequested.emit(
                 self._current_layout_index()
             )
         )
-        self._auto_assign_btn = QPushButton("按行数自动分配", section)
+        self._auto_assign_btn = FluentPushButton("按行数自动分配", section)
         self._auto_assign_btn.setToolTip(
             "每一页按页内行数匹配行数相同的布局（找不到按行数递减匹配，"
             "仍找不到用默认布局）——对齐 N3 自动布局选择器。"
@@ -2703,7 +2728,7 @@ class PropertyPanel(QWidget):
         """行结构：行数 / 每行对齐 / 水平模式 / 智能水平 / 左右余白。"""
         section, layout = _section("行结构")
 
-        self._dual_line_check = QCheckBox("多行显示", section)
+        self._dual_line_check = CheckBox("多行显示", section)
         self._dual_line_check.setToolTip(
             "开启后按「行布局」列表的行数轮换显示（默认上左下右双行）；"
             "关闭则一次只显示一行。"
@@ -2829,13 +2854,13 @@ class PropertyPanel(QWidget):
         """书写方向：全局模式开关（本项目特有，N3 无对应项）。"""
         section, layout = _section("书写方向")
 
-        self._vertical_check = QCheckBox("竖排", section)
+        self._vertical_check = CheckBox("竖排", section)
         self._vertical_check.toggled.connect(
             lambda checked: self._update_style(vertical=checked)
         )
         layout.addWidget(self._vertical_check)
 
-        self._rtl_check = QCheckBox("从右到左", section)
+        self._rtl_check = CheckBox("从右到左", section)
         self._rtl_check.toggled.connect(
             lambda checked: self._update_style(right_to_left=checked)
         )
@@ -2993,7 +3018,7 @@ class PropertyPanel(QWidget):
         self._line_alignment_rows.setSpacing(6)
         root.addWidget(self._line_alignment_rows_host)
 
-        self._add_line_alignment_btn = QPushButton("添加一行", box)
+        self._add_line_alignment_btn = FluentPushButton("添加一行", box)
         self._add_line_alignment_btn.setMinimumHeight(30)
         self._add_line_alignment_btn.setToolTip(
             "底部锚定时在上方插入一行（复制第一行对齐），顶部/居中锚定时在下方"
@@ -3036,8 +3061,7 @@ class PropertyPanel(QWidget):
             combo.currentIndexChanged.connect(
                 lambda _i, idx=index, c=combo: self._on_line_alignment_changed(idx, c)
             )
-            remove_btn = QToolButton(row)
-            remove_btn.setText("✕")
+            remove_btn = FluentTransparentToolButton(FIF.CLOSE, row)
             remove_btn.setToolTip("删除此行")
             remove_btn.setEnabled(removable)
             remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -3050,7 +3074,9 @@ class PropertyPanel(QWidget):
             self._line_alignment_rows.addWidget(row)
         self._add_line_alignment_btn.setEnabled(len(alignments) < 8)
 
-    def _on_line_alignment_changed(self, index: int, combo: QComboBox) -> None:
+    def _on_line_alignment_changed(
+        self, index: int, combo: _WheelFocusedComboBox
+    ) -> None:
         if self._syncing:
             return
         alignments = self._current_layout_alignments()
@@ -3117,7 +3143,7 @@ class PropertyPanel(QWidget):
         )
         return combo
 
-    def _make_offset_spin(self, field_name: str) -> QSpinBox:
+    def _make_offset_spin(self, field_name: str) -> _WheelFocusedSpinBox:
         # 不加 " px" 后缀：窄面板下两列并排会横向溢出，单位由字段标签隐含。
         spin = _spin(-4000, 4000)
         spin.valueChanged.connect(lambda value: self._update_style(**{field_name: value}))
@@ -3216,7 +3242,7 @@ class PropertyPanel(QWidget):
         row_layout.setColumnStretch(1, 1)
         layout.addWidget(row)
 
-        self._sync_ending_check = QCheckBox("同步退场", section)
+        self._sync_ending_check = CheckBox("同步退场", section)
         self._sync_ending_check.toggled.connect(
             lambda checked: self._update_style(sync_ending=checked)
         )
@@ -4247,11 +4273,12 @@ def _scheme_icon(scheme: SubtitleStyleScheme) -> QIcon:
     return QIcon(pixmap)
 
 
-def _spin(minimum: int, maximum: int, *, suffix: str = "") -> QSpinBox:
+def _spin(
+    minimum: int, maximum: int, *, suffix: str = ""
+) -> _WheelFocusedSpinBox:
     spin = _WheelFocusedSpinBox()
     spin.setRange(minimum, maximum)
     spin.setSuffix(suffix)
-    spin.setButtonSymbols(QSpinBox.ButtonSymbols.NoButtons)
     spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     _compact_control(spin)
     return spin
@@ -4264,27 +4291,12 @@ def _compact_control(widget: QWidget) -> None:
     widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
 
 
-def _scroll_page() -> tuple[QScrollArea, QVBoxLayout]:
-    scroll = QScrollArea()
+def _scroll_page() -> tuple[FluentScrollArea, QVBoxLayout]:
+    scroll = FluentScrollArea()
     scroll.setObjectName("SubtitlePropertyScroll")
     scroll.setWidgetResizable(True)
-    scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+    scroll.setFrameShape(FluentScrollArea.Shape.NoFrame)
     scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-    themed(
-        scroll,
-        lambda: (
-            """
-            QScrollArea#SubtitlePropertyScroll {
-                background: transparent;
-                border: 0;
-            }
-            QScrollArea#SubtitlePropertyScroll > QWidget > QWidget {
-                background: transparent;
-            }
-            """
-        ),
-    )
-
     page = QWidget()
     page.setObjectName("SubtitlePropertyPage")
     page.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
@@ -4395,19 +4407,6 @@ def _section(
             }}
             QFrame#SubtitlePropertySection QWidget {{
                 background: transparent;
-            }}
-            QFrame#SubtitlePropertySection QCheckBox {{
-                color: {palette().text_primary};
-                font-size: 9.5pt;
-                background: transparent;
-            }}
-            QFrame#SubtitlePropertySection QComboBox QAbstractItemView,
-            QFrame#SubtitlePropertySection QFontComboBox QAbstractItemView {{
-                background: {palette().card_bg};
-                color: {palette().text_primary};
-                border: 1px solid {palette().card_border};
-                selection-background-color: {palette().preview_selection_bg};
-                selection-color: {palette().preview_selection_text};
             }}
             {control_qss("QFrame#SubtitlePropertySection")}
             """

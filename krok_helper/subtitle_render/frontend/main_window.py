@@ -34,29 +34,31 @@ from PyQt6.QtCore import QObject, QPoint, QRect, QSize, QThread, QTimer, Qt, pyq
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog,
-    QCheckBox,
-    QComboBox,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QMessageBox,
-    QProgressBar,
     QPushButton,
     QSizePolicy,
     QSplitter,
-    QSpinBox,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 from qfluentwidgets import (
     Action,
+    CheckBox,
+    ComboBox as FluentComboBox,
     DropDownPushButton,
     FluentIcon as FIF,
     InfoBar,
     InfoBarPosition,
+    LineEdit as FluentLineEdit,
+    PrimaryPushButton as FluentPrimaryPushButton,
+    ProgressBar as FluentProgressBar,
     PushButton as FluentPushButton,
     RoundMenu,
+    SegmentedWidget,
+    SpinBox as FluentSpinBox,
 )
 
 from krok_helper.errors import ExportCancelled, ProcessingError
@@ -116,7 +118,7 @@ from krok_helper.subtitle_render.project_store import (
     split_project_paths,
 )
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
-from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
+from krok_helper.subtitle_render.frontend.theme import palette, themed
 
 apply_qfluent_menu_lifetime_patch()
 
@@ -754,56 +756,30 @@ class SubtitleRenderWindow(QWidget):
         bottom_layout.setContentsMargins(24, 4, 24, 24)
         bottom_layout.setSpacing(8)
 
-        self._nav_btns: dict[str, QPushButton] = {}
+        self._bottom_navigation = SegmentedWidget(bottom_bar)
+        self._nav_btns: dict[str, QWidget] = {}
         for key, text in [("preview", "预览"), ("export", "导出")]:
-            btn = QPushButton(text, bottom_bar)
-            btn.setCheckable(True)
+            btn = self._bottom_navigation.addItem(
+                key,
+                text,
+                onClick=lambda k=key: self._switch_tab(k),
+            )
             btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setFixedHeight(32)
-            btn.clicked.connect(lambda _checked, k=key: self._switch_tab(k))
             self._nav_btns[key] = btn
-            bottom_layout.addWidget(btn)
+        bottom_layout.addWidget(self._bottom_navigation)
         bottom_layout.addStretch(1)
-        themed(bottom_bar, self._nav_qss)
         root.addWidget(bottom_bar)
 
-        self._nav_btns["preview"].setChecked(True)
+        self._bottom_navigation.setCurrentItem("preview")
         self._stack.setCurrentIndex(0)
         self._refresh_project_title()
 
     def _switch_tab(self, key: str) -> None:
         idx = 0 if key == "preview" else 1
         self._stack.setCurrentIndex(idx)
-        for k, btn in self._nav_btns.items():
-            btn.setChecked(k == key)
-
-    @staticmethod
-    def _nav_qss() -> str:
-        # 胶囊形分段按钮：选中态带浅色底，比纯文字变色更醒目
-        p = palette()
-        return (
-            f"""
-            QPushButton {{
-                background: transparent;
-                color: {p.text_secondary};
-                border: none;
-                border-radius: 16px;
-                padding: 0 18px;
-                font-family: "Microsoft YaHei UI";
-                font-size: 10pt;
-            }}
-            QPushButton:hover {{
-                color: {p.text_primary};
-                background: {p.table_row_hover};
-            }}
-            QPushButton:checked {{
-                color: {p.accent_primary};
-                background: {p.preview_selection_bg};
-                font-weight: 600;
-            }}
-            """
-        )
+        self._bottom_navigation.setCurrentItem(key)
 
     # ----------------------------------------------------------- 项目文件（A11）
 
@@ -1253,14 +1229,7 @@ class SubtitleRenderWindow(QWidget):
         page.setObjectName("SubtitleExportPage")
         themed(
             page,
-            lambda: (
-                f"""
-                #SubtitleExportPage {{
-                    background: transparent;
-                }}
-                {control_qss("#SubtitleExportPage")}
-                """
-            ),
+            lambda: "#SubtitleExportPage { background: transparent; }",
         )
         layout = QVBoxLayout(page)
         layout.setContentsMargins(24, 4, 24, 16)
@@ -1279,9 +1248,9 @@ class SubtitleRenderWindow(QWidget):
         output_row = QHBoxLayout()
         output_row.setContentsMargins(0, 0, 0, 0)
         output_row.setSpacing(8)
-        self._export_output_edit = QLineEdit()
+        self._export_output_edit = FluentLineEdit()
         self._export_output_edit.setPlaceholderText("选择输出 MP4 路径")
-        self._export_browse_button = QPushButton("浏览")
+        self._export_browse_button = FluentPushButton("浏览")
         self._export_browse_button.clicked.connect(self._browse_export_output)
         output_row.addWidget(self._export_output_edit, 1)
         output_row.addWidget(self._export_browse_button)
@@ -1292,10 +1261,10 @@ class SubtitleRenderWindow(QWidget):
         params_row.setSpacing(10)
         self._export_width_spin = self._export_spin(160, 7680, 1920, " 宽")
         self._export_height_spin = self._export_spin(90, 4320, 1080, " 高")
-        self._export_fps_combo = QComboBox()
+        self._export_fps_combo = FluentComboBox()
         self._export_fps_combo.setMinimumHeight(32)
         for fps in SCREEN_FPS_OPTIONS:
-            self._export_fps_combo.addItem(f"{fps} fps", fps)
+            self._export_fps_combo.addItem(f"{fps} fps", userData=fps)
         params_row.addWidget(self._labeled_export_control("宽度", self._export_width_spin))
         params_row.addWidget(self._labeled_export_control("高度", self._export_height_spin))
         params_row.addWidget(self._labeled_export_control("帧率", self._export_fps_combo))
@@ -1304,17 +1273,17 @@ class SubtitleRenderWindow(QWidget):
         encode_row = QHBoxLayout()
         encode_row.setContentsMargins(0, 0, 0, 0)
         encode_row.setSpacing(10)
-        self._export_encoder_combo = QComboBox()
+        self._export_encoder_combo = FluentComboBox()
         self._export_encoder_combo.setMinimumHeight(32)
-        self._export_encoder_combo.addItem("CPU / libx264", ENCODER_CPU)
-        self._export_encoder_combo.addItem("自动硬编", ENCODER_AUTO)
-        self._export_encoder_combo.addItem("NVIDIA NVENC", ENCODER_NVENC)
-        self._export_encoder_combo.addItem("Intel QSV", ENCODER_QSV)
-        self._export_encoder_combo.addItem("AMD AMF", ENCODER_AMF)
-        self._export_preset_combo = QComboBox()
+        self._export_encoder_combo.addItem("CPU / libx264", userData=ENCODER_CPU)
+        self._export_encoder_combo.addItem("自动硬编", userData=ENCODER_AUTO)
+        self._export_encoder_combo.addItem("NVIDIA NVENC", userData=ENCODER_NVENC)
+        self._export_encoder_combo.addItem("Intel QSV", userData=ENCODER_QSV)
+        self._export_encoder_combo.addItem("AMD AMF", userData=ENCODER_AMF)
+        self._export_preset_combo = FluentComboBox()
         self._export_preset_combo.setMinimumHeight(32)
         for preset in CPU_PRESETS:
-            self._export_preset_combo.addItem(preset, preset)
+            self._export_preset_combo.addItem(preset, userData=preset)
         self._export_preset_combo.setCurrentText("veryfast")
         self._export_crf_spin = self._export_spin(0, 51, 18, " CRF")
         encode_row.addWidget(self._labeled_export_control("编码器", self._export_encoder_combo))
@@ -1322,15 +1291,14 @@ class SubtitleRenderWindow(QWidget):
         encode_row.addWidget(self._labeled_export_control("质量", self._export_crf_spin))
         layout.addLayout(encode_row)
 
-        self._export_native_check = QCheckBox("实验：使用 native 字幕渲染器导出")
+        self._export_native_check = CheckBox("实验：使用 native 字幕渲染器导出")
         self._export_native_check.setChecked(False)
         self._export_native_check.setEnabled(False)
         self._export_native_check.setVisible(False)
         self._export_native_check.setToolTip("native 字幕渲染器暂时停用。")
-        themed(self._export_native_check, lambda: f"color: {palette().text_secondary}; font-size: 9.5pt;")
         layout.addWidget(self._export_native_check)
 
-        self._export_progress = QProgressBar()
+        self._export_progress = FluentProgressBar()
         self._export_progress.setRange(0, 1)
         self._export_progress.setValue(0)
         layout.addWidget(self._export_progress)
@@ -1342,10 +1310,10 @@ class SubtitleRenderWindow(QWidget):
         action_row = QHBoxLayout()
         action_row.setContentsMargins(0, 0, 0, 0)
         action_row.setSpacing(8)
-        self._export_start_button = QPushButton("开始导出")
+        self._export_start_button = FluentPrimaryPushButton("开始导出")
         self._export_start_button.setMinimumHeight(38)
         self._export_start_button.clicked.connect(self._start_render_export)
-        self._export_stop_button = QPushButton("停止导出")
+        self._export_stop_button = FluentPushButton("停止导出")
         self._export_stop_button.setMinimumHeight(38)
         self._export_stop_button.setEnabled(False)
         self._export_stop_button.clicked.connect(self._stop_render_export)
@@ -1357,8 +1325,10 @@ class SubtitleRenderWindow(QWidget):
         return page
 
     @staticmethod
-    def _export_spin(minimum: int, maximum: int, value: int, suffix: str) -> QSpinBox:
-        spin = QSpinBox()
+    def _export_spin(
+        minimum: int, maximum: int, value: int, suffix: str
+    ) -> FluentSpinBox:
+        spin = FluentSpinBox()
         spin.setRange(minimum, maximum)
         spin.setValue(value)
         spin.setSuffix(suffix)

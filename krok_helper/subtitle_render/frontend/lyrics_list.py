@@ -31,12 +31,15 @@ from PyQt6.QtWidgets import (
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableWidgetItem,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
-from qfluentwidgets import ComboBox as FluentComboBox
-from qfluentwidgets import TableWidget as FluentTableWidget
+from qfluentwidgets import (
+    ComboBox as FluentComboBox,
+    FluentIcon as FIF,
+    TableWidget as FluentTableWidget,
+    TransparentToolButton,
+)
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 from qfluentwidgets.components.widgets.menu import MenuAnimationType
 
@@ -294,12 +297,10 @@ class LyricsPanel(DropPanel):
         self._source_combo = _StableFluentComboBox(self._source_bar)
         self._source_combo.setToolTip("切换列表显示的字幕源（预览与导出始终同时渲染全部源）")
         self._source_combo.currentIndexChanged.connect(self._on_source_combo_changed)
-        self._add_source_btn = QToolButton(self._source_bar)
-        self._add_source_btn.setText("＋")
+        self._add_source_btn = TransparentToolButton(FIF.ADD, self._source_bar)
         self._add_source_btn.setToolTip("添加副字幕源（如コーラス .lrc，与主字幕同时显示）")
         self._add_source_btn.clicked.connect(self.sourceAddRequested)
-        self._remove_source_btn = QToolButton(self._source_bar)
-        self._remove_source_btn.setText("－")
+        self._remove_source_btn = TransparentToolButton(FIF.REMOVE, self._source_bar)
         self._remove_source_btn.setToolTip("移除当前副字幕源")
         self._remove_source_btn.clicked.connect(self._on_remove_source_clicked)
         for button in (self._add_source_btn, self._remove_source_btn):

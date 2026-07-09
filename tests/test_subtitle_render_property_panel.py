@@ -17,7 +17,16 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QMessageBox,
     QWidget,
 )
-from qfluentwidgets import SegmentedToggleToolWidget  # noqa: E402
+from qfluentwidgets import (  # noqa: E402
+    CheckBox,
+    ComboBox,
+    LineEdit,
+    PlainTextEdit,
+    PushButton,
+    ScrollArea,
+    SegmentedToggleToolWidget,
+    SpinBox,
+)
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
@@ -40,6 +49,39 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
 def qapp():
     app = QApplication.instance() or QApplication([])
     yield app
+
+
+def test_property_panel_uses_fluent_checkboxes(qapp):
+    panel = PropertyPanel()
+
+    checkboxes = (
+        panel._font_latin_check,
+        panel._italic_check,
+        panel._allow_biting_check,
+        panel._title_latin_check,
+        panel._title_italic_check,
+        panel._lit_shadow_check,
+        panel._dual_line_check,
+        panel._vertical_check,
+        panel._rtl_check,
+        panel._sync_ending_check,
+    )
+
+    assert all(isinstance(checkbox, CheckBox) for checkbox in checkboxes)
+
+
+def test_property_panel_uses_fluent_form_controls(qapp):
+    panel = PropertyPanel()
+
+    assert isinstance(panel._font_combo, ComboBox)
+    assert isinstance(panel._title_font_combo, ComboBox)
+    assert isinstance(panel._font_weight_combo, ComboBox)
+    assert isinstance(panel._font_size_spin, SpinBox)
+    assert isinstance(panel._paint_image_path_edit, LineEdit)
+    assert isinstance(panel._title_text_edit, PlainTextEdit)
+    assert isinstance(panel._pages[0], ScrollArea)
+    assert isinstance(panel._add_scheme_button, PushButton)
+    assert isinstance(panel._add_layout_btn, PushButton)
 
 
 def test_property_panel_set_style_populates_controls(qapp):
@@ -1802,6 +1844,7 @@ def test_main_window_native_export_is_hard_disabled(qapp, monkeypatch):
     provider = FakeSettingsProvider()
     win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
 
+    assert isinstance(win._export_native_check, CheckBox)
     assert win._export_native_check.isChecked() is False
     assert win._export_native_check.isEnabled() is False
     assert win._export_native_check.isHidden() is True

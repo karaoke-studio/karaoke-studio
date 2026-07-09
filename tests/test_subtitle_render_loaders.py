@@ -15,6 +15,16 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6.QtCore import QPoint, Qt  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
+from qfluentwidgets import (  # noqa: E402
+    ComboBox,
+    LineEdit,
+    PrimaryPushButton,
+    ProgressBar,
+    PushButton,
+    SegmentedWidget,
+    SpinBox,
+    TransparentToolButton,
+)
 
 from krok_helper.models import MediaInfo  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
@@ -408,6 +418,15 @@ def test_window_shell_components_present(qapp, monkeypatch):
     assert win._export_preset_combo is not None
     assert win._export_crf_spin.value() == 18
     assert win._export_native_check is not None
+    assert isinstance(win._bottom_navigation, SegmentedWidget)
+    assert isinstance(win._export_output_edit, LineEdit)
+    assert isinstance(win._export_encoder_combo, ComboBox)
+    assert isinstance(win._export_crf_spin, SpinBox)
+    assert isinstance(win._export_progress, ProgressBar)
+    assert isinstance(win._export_start_button, PrimaryPushButton)
+    assert isinstance(win._export_stop_button, PushButton)
+    assert isinstance(win._lyrics_panel._add_source_btn, TransparentToolButton)
+    assert isinstance(win._lyrics_panel._remove_source_btn, TransparentToolButton)
 
     # 属性面板 5 个分类页（顶部 segmented 导航，页面用 accessibleName 标注）
     assert win._property_panel.count() == 5
