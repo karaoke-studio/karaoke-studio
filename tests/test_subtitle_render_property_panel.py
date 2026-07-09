@@ -14,6 +14,7 @@ from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
     QInputDialog,
+    QLabel,
     QMessageBox,
     QWidget,
 )
@@ -455,6 +456,14 @@ def test_property_panel_font_and_color_sections_are_side_by_side(qapp):
     font_header_top = panel._font_section.mapTo(panel._font_color_row, QPoint()).y()
     color_header_top = panel._color_section.mapTo(panel._font_color_row, QPoint()).y()
     assert font_header_top == color_header_top
+    assert panel._ruby_section.parentWidget() is panel._font_section
+    subgroup_titles = [
+        label.text()
+        for label in panel._font_section.findChildren(
+            QLabel, "SubtitlePropertySubheading"
+        )
+    ]
+    assert subgroup_titles == ["字体", "注音"]
 
 
 def test_subtitle_preview_frame_keeps_child_at_16_9(qapp):
@@ -1976,8 +1985,6 @@ def test_scheme_section_headers_show_role_target(qapp):
             panel._singer_combo.setCurrentIndex(i)
             break
     assert "主唱" in panel._font_color_section.header.text()
-    assert "主唱" in panel._ruby_section.header.text()
 
     panel._singer_combo.setCurrentIndex(0)  # 回全局默认
     assert panel._font_color_section.header.text() == "颜色 / 字体"
-    assert panel._ruby_section.header.text() == "注音"

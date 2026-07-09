@@ -1440,8 +1440,6 @@ class PropertyPanel(QWidget):
         self._font_color_section = self._make_font_color_section()
         layout.addWidget(self._font_color_section)
 
-        self._ruby_section = self._make_ruby_section()
-        layout.addWidget(self._ruby_section)
         layout.addStretch(1)
         return scroll
 
@@ -1570,6 +1568,14 @@ class PropertyPanel(QWidget):
             lambda checked: self._update_style(allow_biting=checked)
         )
         layout.addWidget(self._allow_biting_check)
+
+        if inline:
+            layout.addSpacing(8)
+            self._ruby_section = self._make_ruby_section(
+                parent=section,
+                inline=True,
+            )
+            layout.addWidget(self._ruby_section)
         return section
 
     def _on_font_latin_toggled(self, checked: bool) -> None:
@@ -1589,8 +1595,10 @@ class PropertyPanel(QWidget):
         if self._font_latin_check.isChecked():
             self._update_style(font_family_latin=font.family())
 
-    def _make_ruby_section(self) -> QFrame:
-        section, layout = _section("注音")
+    def _make_ruby_section(
+        self, parent: Optional[QWidget] = None, *, inline: bool = False
+    ) -> QWidget:
+        section, layout = _inline_section("注音", parent) if inline else _section("注音")
 
         row = QWidget(section)
         row_layout = QGridLayout(row)
@@ -3838,8 +3846,6 @@ class PropertyPanel(QWidget):
             suffix = f"（角色：{role_name}）" if role_name else ""
             if hasattr(self, "_font_color_section"):
                 self._font_color_section.header.setText(f"颜色 / 字体{suffix}")
-            if hasattr(self, "_ruby_section"):
-                self._ruby_section.header.setText(f"注音{suffix}")
             self._font_combo.setCurrentFont(QFont(str(self._scheme_value("font_family"))))
             latin_family = self._scheme_value("font_family_latin")
             self._font_latin_check.setChecked(bool(latin_family))
