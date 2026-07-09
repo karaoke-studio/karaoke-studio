@@ -27,8 +27,8 @@ def qapp():
     yield app
 
 
-def test_prepare_subtitle_render_exports_sug_project_to_lrc_and_loads_page(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_prepare_subtitle_render_loads_sug_project_directly(
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     calls: dict[str, object] = {}
     project = SimpleNamespace(
@@ -39,23 +39,14 @@ def test_prepare_subtitle_render_exports_sug_project_to_lrc_and_loads_page(
         ],
     )
 
-    class FakeResult:
-        success = True
-        file_path = str(tmp_path / "Song_Title.lrc")
-        error_message = None
-
     class FakeExportService:
         def export(self, project_arg, format_name, file_path, **kwargs):
-            calls["project"] = project_arg
-            calls["format_name"] = format_name
-            calls["file_path"] = Path(file_path)
-            calls["kwargs"] = kwargs
-            Path(file_path).write_text("@Title=Song\r\n", encoding="utf-8")
-            return FakeResult()
+            raise AssertionError("workflow should not export an intermediate Nicokara LRC")
 
     class FakeSubtitlePage:
-        def load_from_lrc(self, path: Path):
-            calls["loaded_lrc"] = path
+        def load_from_sug_project(self, project_arg, source_path=None):
+            calls["loaded_project"] = project_arg
+            calls["source_path"] = source_path
             return object()
 
     monkeypatch.setattr(gui_qt, "ExportService", FakeExportService, raising=False)
@@ -64,7 +55,7 @@ def test_prepare_subtitle_render_exports_sug_project_to_lrc_and_loads_page(
 
     app = SimpleNamespace(
         lyrics_timing_page=SimpleNamespace(
-            _store=SimpleNamespace(project=project, save_path=tmp_path / "song.sug")
+            _store=SimpleNamespace(project=project, save_path=Path("song.sug"))
         ),
         subtitle_render_page=FakeSubtitlePage(),
         _show_module=lambda module_id: calls.setdefault("shown", module_id),
@@ -72,17 +63,9 @@ def test_prepare_subtitle_render_exports_sug_project_to_lrc_and_loads_page(
 
     result = KrokHelperQtApp._prepare_subtitle_render_from_workflow(app)
 
-    assert result == tmp_path / "Song_Title.lrc"
-    assert calls["project"] is project
-    assert calls["format_name"] == "Nicokara (带注音)"
-    assert calls["file_path"] == tmp_path / "Song_Title.lrc"
-    assert calls["kwargs"] == {
-        "singer_ids": None,
-        "insert_singer_tags": True,
-        "insert_singer_each_line": False,
-        "singer_map": {"s1": "主唱", "s2": "和声"},
-    }
-    assert calls["loaded_lrc"] == tmp_path / "Song_Title.lrc"
+    assert result == project
+    assert calls["loaded_project"] is project
+    assert calls["source_path"] == Path("song.sug")
     assert calls["shown"] == WORKFLOW_SUBTITLE_RENDER
 
 
@@ -97,7 +80,7 @@ def test_entering_subtitle_render_prepares_workflow_once() -> None:
         workflow_stepper=SimpleNamespace(setCurrentModule=lambda module: calls.append(f"step:{module}")),
         _sync_page_stack_margins=lambda module: calls.append(f"margin:{module}"),
         _sync_workflow_shortcut_scope=lambda: calls.append("shortcuts"),
-        _prepare_subtitle_render_from_workflow=lambda: calls.append("prepare") or Path("song.lrc"),
+        _prepare_subtitle_render_from_workflow=lambda: calls.append("prepare") or object(),
     )
 
     KrokHelperQtApp._show_module(app, WORKFLOW_SUBTITLE_RENDER)

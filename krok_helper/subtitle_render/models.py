@@ -2,7 +2,7 @@
 
 包含两层模型：
 
-1. **TimingTrack** 及其下属 — 字幕源（Nicokara 逐字 LRC）解析后的中间表示。
+1. **TimingTrack** 及其下属 — 字幕源（SUG 项目 / Nicokara 逐字 LRC）解析后的中间表示。
    每行可寻址到具体字符、字符的起始毫秒、行末与行内停顿释放时间戳、ふりがな 注音。
    解析器在 :mod:`subtitle_sources` 实现。
 
@@ -10,10 +10,9 @@
    字幕源引用、背景、样式、输出参数。MVP 阶段 :class:`Style` / 序列化等仍为占位，
    后续 P0 任务（A4/A6/A8 等）落地。
 
-**字幕源格式**：唯一支持 Nicokara 逐字 LRC（``.lrc``，SUG ``NicokaraExporter``
-产物，含 ``@Ruby`` / ``@Offset`` / ``@Title`` / ``@Artist`` / 演唱者标签）。
-不支持 ``.ass`` / ``.sug`` / ``.nkm``——SUG 已能输出 Nicokara LRC，模块只需要解析
-Nicokara LRC 即可（SUG submodule 自身只有导出器没有解析器）。
+**字幕源格式**：支持 SUG 项目（``.sug``）与 Nicokara 逐字 LRC（``.lrc``）。
+``.sug`` 直接读取 SUG domain 中的逐字时间戳、注音、演唱者/分色信息；``.lrc``
+保留对既有 Nicokara 文件的导入能力。不支持 ``.ass`` / ``.nkm``。
 """
 
 from __future__ import annotations
@@ -26,11 +25,11 @@ LineBreakKind = Literal["none", "page", "paragraph"]
 SCHEMA_VERSION = 1
 PROJECT_FILE_SUFFIX = ".yurika"
 STYLE_PRESET_FILE_SUFFIX = ".krstyle.json"
-SUBTITLE_SOURCE_SUFFIX = ".lrc"
+SUBTITLE_SOURCE_SUFFIX = ".sug"
 
 
 # ---------------------------------------------------------------------------
-# 字幕源（Nicokara LRC）中间表示
+# 字幕源（SUG / Nicokara LRC）中间表示
 # ---------------------------------------------------------------------------
 
 
@@ -130,7 +129,7 @@ class TimingTrackMeta:
 
 @dataclass
 class TimingTrack:
-    """解析 Nicokara LRC 后的完整中间表示。"""
+    """解析 SUG 项目或 Nicokara LRC 后的完整中间表示。"""
 
     meta: TimingTrackMeta = field(default_factory=TimingTrackMeta)
     lines: list[TimingLine] = field(default_factory=list)
@@ -178,7 +177,7 @@ class TimingTrack:
 
 @dataclass
 class SubtitleSource:
-    """字幕源引用（Nicokara 逐字 LRC，唯一格式）。"""
+    """字幕源引用（优先 SUG 项目，也兼容 Nicokara 逐字 LRC）。"""
 
     path: str = ""
     singer_filter: Optional[list[int]] = None

@@ -12,7 +12,7 @@ UI 顶层结构（底部左下角 ``NavigationBar``，与工作流区域一致�
   │  项目命令栏                                           │
   │  ┌─────────┬──────────────┬──────────────┐          │
   │  │ 左·歌词 │ 中·预览       │ 右·属性 tab │          │
-  │  │ (拖.lrc)│ + transport   │              │          │
+  │  │(拖.sug/.lrc) + transport│              │          │
   │  ├─────────┴──────────────┴──────────────┤          │
   │  │ 底·字幕轨道                            │          │
   │  └─────────────────────────────────────────┘          │
@@ -118,11 +118,15 @@ from krok_helper.subtitle_render.project_store import (
     split_project_paths,
 )
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
+from krok_helper.subtitle_render.sug_project import (
+    load_sug_timing_track,
+    timing_track_from_sug_project,
+)
 from krok_helper.subtitle_render.frontend.theme import palette, themed
 
 apply_qfluent_menu_lifetime_patch()
 
-SUBTITLE_FILTER = "Nicokara 逐字 LRC (*.lrc);;所有文件 (*.*)"
+SUBTITLE_FILTER = "SUG 项目 / Nicokara LRC (*.sug *.lrc);;SUG 项目 (*.sug);;Nicokara 逐字 LRC (*.lrc);;所有文件 (*.*)"
 VIDEO_FILTER = "视频文件 (*.mp4 *.mkv *.mov *.webm *.avi *.flv);;所有文件 (*.*)"
 OUTPUT_FILTER = "MP4 视频 (*.mp4);;所有文件 (*.*)"
 PROJECT_FILTER = f"字幕渲染项目 (*{PROJECT_FILE_SUFFIX});;所有文件 (*.*)"
@@ -921,7 +925,7 @@ class SubtitleRenderWindow(QWidget):
         # 3) 素材（存在才加载；缺失静默跳过，不阻塞打开）
         paths = split_project_paths(data)
         if paths["subtitle_path"] is not None and paths["subtitle_path"].is_file():
-            self.load_from_lrc(paths["subtitle_path"])
+            self.load_subtitle_source(paths["subtitle_path"])
             self._apply_line_breaks_before(data.get("line_breaks_before"))
             self._apply_line_layout_indices(data.get("line_layout_indices"))
             self._apply_char_role_labels(data.get("char_role_labels"))
@@ -1140,7 +1144,7 @@ class SubtitleRenderWindow(QWidget):
 
         self._lyrics_panel = LyricsPanel()
         self._lyrics_panel.set_style(self._style)
-        self._lyrics_panel.pathDropped.connect(self.load_from_lrc)
+        self._lyrics_panel.pathDropped.connect(self.load_subtitle_source)
         self._lyrics_panel.browseRequested.connect(self._browse_subtitle)
         self._lyrics_panel.roleChanged.connect(self._on_lyrics_role_changed)
         self._lyrics_panel.rowClicked.connect(self._on_lyrics_row_clicked)
@@ -1351,10 +1355,10 @@ class SubtitleRenderWindow(QWidget):
     def _browse_subtitle(self) -> None:
         start_dir = str(self._subtitle_path.parent) if self._subtitle_path else ""
         path_str, _ = QFileDialog.getOpenFileName(
-            self, "选择 Nicokara 逐字 LRC 文件", start_dir, SUBTITLE_FILTER
+            self, "选择 SUG 项目或 Nicokara 逐字 LRC 文件", start_dir, SUBTITLE_FILTER
         )
         if path_str:
-            self.load_from_lrc(Path(path_str))
+            self.load_subtitle_source(Path(path_str))
 
     def _browse_video(self) -> None:
         start_dir = str(self._video_path.parent) if self._video_path else ""
@@ -1375,6 +1379,13 @@ class SubtitleRenderWindow(QWidget):
 
     # ------------------------------------------------------------------ public
 
+    def load_subtitle_source(self, path: Path) -> Optional[TimingTrack]:
+        """加载字幕源文件。支持 SUG 项目（.sug）与 Nicokara 逐字 LRC（.lrc）。"""
+        suffix = path.suffix.lower()
+        if suffix == ".sug":
+            return self.load_from_sug(path)
+        return self.load_from_lrc(path)
+
     def load_from_lrc(self, path: Path) -> Optional[TimingTrack]:
         """加载 Nicokara 逐字 LRC 文件。返回解析结果（失败返回 None 并弹错）。"""
         try:
@@ -1384,8 +1395,40 @@ class SubtitleRenderWindow(QWidget):
                 self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"
             )
             return None
+        self._apply_timing_track(track, path)
+        return track
+
+    def load_from_sug(self, path: Path) -> Optional[TimingTrack]:
+        """加载 SUG 项目文件，直接读取打轴数据而不导出中间 LRC。"""
+        try:
+            track = load_sug_timing_track(path)
+        except Exception as exc:  # noqa: BLE001 — 暴露给用户的统一错误处理
+            QMessageBox.critical(
+                self, "加载字幕失败", f"无法解析 SUG 项目：\n{path}\n\n错误：{exc}"
+            )
+            return None
+        self._apply_timing_track(track, path)
+        return track
+
+    def load_from_sug_project(
+        self, project: object, source_path: Optional[Path] = None
+    ) -> Optional[TimingTrack]:
+        """加载嵌入式 SUG 当前项目对象，供主工作流第 4 步 → 第 5 步接线使用。"""
+        try:
+            track = timing_track_from_sug_project(project)
+        except Exception as exc:  # noqa: BLE001
+            QMessageBox.critical(
+                self, "加载字幕失败", f"无法读取打轴项目：\n{exc}"
+            )
+            return None
+        self._apply_timing_track(track, source_path)
+        return track
+
+    def _apply_timing_track(
+        self, track: TimingTrack, source_path: Optional[Path]
+    ) -> None:
         self._timing_track = track
-        self._subtitle_path = path
+        self._subtitle_path = source_path
         self._active_source_index = 0
         self._refresh_source_ui()
         self._lyrics_panel.set_track(track)
@@ -1398,7 +1441,6 @@ class SubtitleRenderWindow(QWidget):
         self._transport_bar.set_time(0)
         self._margin_check_timer.start()
         self._mark_project_dirty()
-        return track
 
     def load_video(self, path: Path) -> Optional[MediaInfo]:
         """加载背景视频，调用 ffprobe 读取分辨率 / 帧率 / 时长。
@@ -1598,7 +1640,7 @@ class SubtitleRenderWindow(QWidget):
                 if not path.is_file():
                     continue
                 try:
-                    track = load_nicokara_lrc(path)
+                    track = self._load_timing_track_file(path)
                 except Exception:  # noqa: BLE001 — 单个副源坏了不阻塞项目打开
                     continue
                 layout_indices = item.get("line_layout_indices")
@@ -1683,7 +1725,7 @@ class SubtitleRenderWindow(QWidget):
             return
         path = Path(path_str)
         try:
-            track = load_nicokara_lrc(path)
+            track = self._load_timing_track_file(path)
         except Exception as exc:  # noqa: BLE001 — 统一错误弹窗
             QMessageBox.critical(
                 self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"
@@ -1699,6 +1741,12 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_transport_duration()
         self._margin_check_timer.start()
         self._mark_project_dirty()
+
+    @staticmethod
+    def _load_timing_track_file(path: Path) -> TimingTrack:
+        if path.suffix.lower() == ".sug":
+            return load_sug_timing_track(path)
+        return load_nicokara_lrc(path)
 
     def _on_source_remove_requested(self, index: int) -> None:
         extra_index = int(index) - 1

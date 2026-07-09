@@ -1,0 +1,145 @@
+from __future__ import annotations
+
+from pathlib import Path
+
+import krok_helper  # noqa: F401 - ensures bundled SUG src is importable
+from strange_uta_game.backend.domain import (
+    Character,
+    Project,
+    ProjectMetadata,
+    Ruby,
+    RubyPart,
+    Sentence,
+    Singer,
+)
+from strange_uta_game.backend.infrastructure.persistence.sug_io import SugProjectParser
+
+from krok_helper.subtitle_render.sug_project import (
+    load_sug_timing_track,
+    timing_track_from_sug_project,
+)
+
+
+def _sample_sug_project() -> Project:
+    main = Singer(
+        id="main",
+        name="主唱",
+        color="#ff0000",
+        is_default=True,
+        backend_number=1,
+    )
+    chorus = Singer(
+        id="chorus",
+        name="和声",
+        color="#00ff00",
+        backend_number=2,
+    )
+    ai = Character(
+        char="愛",
+        ruby=Ruby(parts=[RubyPart("あ"), RubyPart("い")]),
+        check_count=2,
+        timestamps=[1000, 1300],
+        sentence_end_ts=1800,
+        is_sentence_end=True,
+        is_line_end=True,
+        singer_id=main.id,
+    )
+    ai.set_offset(50)
+    sora = Character(
+        char="空",
+        ruby=Ruby(parts=[RubyPart("そら")]),
+        check_count=1,
+        timestamps=[2200],
+        sentence_end_ts=2600,
+        is_sentence_end=True,
+        is_line_end=True,
+        singer_id=chorus.id,
+    )
+    sora.set_offset(50)
+    return Project(
+        metadata=ProjectMetadata(title="曲名", artist="作者", album="专辑"),
+        singers=[main, chorus],
+        sentences=[
+            Sentence(singer_id=main.id, characters=[ai]),
+            Sentence(singer_id=chorus.id, characters=[sora]),
+        ],
+        audio_duration_ms=3000,
+        global_offset_ms=50,
+    )
+
+
+def test_timing_track_from_sug_project_preserves_timing_ruby_and_singers() -> None:
+    track = timing_track_from_sug_project(_sample_sug_project())
+
+    assert track.meta.title == "曲名"
+    assert track.meta.artist == "作者"
+    assert track.meta.album == "专辑"
+    assert track.meta.offset_ms == 50
+    assert len(track.lines) == 2
+
+    first = track.lines[0]
+    assert first.singer_label == "主唱"
+    assert first.singer_id == 0
+    assert first.end_ms == 1850
+    assert [(ch.text, ch.start_ms, ch.pause_release_ms, ch.role_label) for ch in first.chars] == [
+        ("愛", 1050, 1850, "主唱")
+    ]
+
+    second = track.lines[1]
+    assert second.singer_label == "和声"
+    assert second.singer_id == 1
+    assert second.end_ms == 2650
+    assert [(ch.text, ch.start_ms, ch.pause_release_ms, ch.role_label) for ch in second.chars] == [
+        ("空", 2250, 2650, "和声")
+    ]
+
+    assert track.singer_options == [(0, "主唱"), (1, "和声")]
+    assert track.role_options == ["主唱", "和声"]
+
+    ruby = track.rubies[0]
+    assert ruby.kanji == "愛"
+    assert ruby.reading == "あい"
+    assert ruby.reading_parts == ["あ", "い"]
+    assert ruby.reading_part_ms == [300]
+    assert ruby.pos_start_ms == 1050
+    assert ruby.pos_end_ms == 1850
+
+
+def test_load_sug_timing_track_reads_sug_file(tmp_path: Path) -> None:
+    sug_path = tmp_path / "song.sug"
+    SugProjectParser.save(_sample_sug_project(), str(sug_path))
+
+    track = load_sug_timing_track(sug_path)
+
+    assert track.meta.title == "曲名"
+    assert [line.singer_label for line in track.lines] == ["主唱", "和声"]
+    assert [line.chars[0].text for line in track.lines] == ["愛", "空"]
+
+
+def test_sug_ruby_without_sentence_end_borrows_next_line_start() -> None:
+    singer = Singer(id="main", name="主唱", color="#ff0000", is_default=True)
+    first = Character(
+        char="青",
+        ruby=Ruby(parts=[RubyPart("あお")]),
+        check_count=1,
+        timestamps=[1000],
+        singer_id=singer.id,
+    )
+    second = Character(
+        char="空",
+        check_count=1,
+        timestamps=[2400],
+        singer_id=singer.id,
+    )
+    project = Project(
+        singers=[singer],
+        sentences=[
+            Sentence(singer_id=singer.id, characters=[first]),
+            Sentence(singer_id=singer.id, characters=[second]),
+        ],
+    )
+
+    track = timing_track_from_sug_project(project)
+
+    assert track.rubies[0].pos_start_ms == 1000
+    assert track.rubies[0].pos_end_ms == 2400

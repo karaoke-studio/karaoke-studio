@@ -230,9 +230,9 @@ class LyricsPanel(DropPanel):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(
-            extensions={".lrc"},
+            extensions={".sug", ".lrc"},
             empty_title="拖入字幕文件",
-            empty_hint="拖入 SUG 导出的 Nicokara 逐字 LRC（.lrc）\n或点击此处选择",
+            empty_hint="拖入 SUG 项目（.sug）或 Nicokara 逐字 LRC（.lrc）\n或点击此处选择",
             empty_icon="📝",
             parent=parent,
         )
@@ -298,7 +298,7 @@ class LyricsPanel(DropPanel):
         self._source_combo.setToolTip("切换列表显示的字幕源（预览与导出始终同时渲染全部源）")
         self._source_combo.currentIndexChanged.connect(self._on_source_combo_changed)
         self._add_source_btn = TransparentToolButton(FIF.ADD, self._source_bar)
-        self._add_source_btn.setToolTip("添加副字幕源（如コーラス .lrc，与主字幕同时显示）")
+        self._add_source_btn.setToolTip("添加副字幕源（如コーラス .sug/.lrc，与主字幕同时显示）")
         self._add_source_btn.clicked.connect(self.sourceAddRequested)
         self._remove_source_btn = TransparentToolButton(FIF.REMOVE, self._source_bar)
         self._remove_source_btn.setToolTip("移除当前副字幕源")

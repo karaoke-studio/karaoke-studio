@@ -2,121 +2,118 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** 将第 5 步「字幕视频生成」接入主工作流：自动读取第 4 步 SUG 打轴项目并转成 Nicokara LRC，字幕 MP4 导出完成后自动填入第 6 步 Hi-Res 混流并切换过去。
+**Goal:** 将第 5 步「字幕视频生成」接入主工作流：自动读取第 4 步 SUG 打轴项目（`.sug` / SUG `Project`）并转换为渲染模块 `TimingTrack`，字幕 MP4 导出完成后自动填入第 6 步 Hi-Res 混流并切换过去。
 
-**Architecture:** 主窗口提供一个轻量 workflow adapter，负责从嵌入式 SUG `ProjectStore.project` 导出临时 Nicokara LRC，并接收字幕渲染页的导出完成通知。字幕渲染页只暴露小型公共方法/回调，不直接依赖 `KrokHelperQtApp` 的大类实现。
+**Architecture:** 主窗口提供一个轻量 workflow adapter，负责把嵌入式 SUG `ProjectStore.project` 直接交给字幕渲染页。字幕渲染模块新增 `sug_project.py` 适配层，把 SUG domain 的逐字时间戳、注音、演唱者/分色信息转换为统一的 `TimingTrack`；同时保留既有 `.lrc` 导入能力。
 
-**Tech Stack:** Python 3.14、PyQt6、qfluentwidgets、SUG submodule `ExportService`、现有 `SubtitleRenderWindow.load_from_lrc()` / `load_video()` / `DropZoneCard.set_path()`。
+**Tech Stack:** Python 3.14、PyQt6、qfluentwidgets、SUG submodule `SugProjectParser` / domain model、现有 `SubtitleRenderWindow.load_from_lrc()` / `load_video()` / `DropZoneCard.set_path()`。
 
 ## Global Constraints
 
 - 不修改 `krok_helper/lyrics_timing/src/strange_uta_game/` submodule 源码。
-- 字幕源仍以 SUG Nicokara 导出格式 `.lrc` 作为边界，保留时间戳、注音、演唱者标签与分色字段。
+- 字幕源优先以 `.sug` / SUG `Project` 作为边界，直接保留时间戳、注音、演唱者/分色信息；`.lrc` 仅作为兼容导入入口。
 - 第 5 步导出仍使用现有 QPainter + ffmpeg rawvideo pipe，不启用 native renderer。
 - 用户可见字符串使用中文。
 - 只实现本轮闭环：第 4 步 → 第 5 步读取；第 5 步导出完成 → 第 6 步填入字幕视频并切页。
 
 ---
 
-### Task 1: Host adapter loads SUG project into subtitle render
+### Task 1: Direct SUG project adapter
 
 **Files:**
+- Create: `krok_helper/subtitle_render/sug_project.py`
+- Modify: `krok_helper/subtitle_render/frontend/main_window.py`
 - Modify: `krok_helper/gui_qt.py`
+- Modify: `krok_helper/subtitle_render/frontend/lyrics_list.py`
+- Modify: `krok_helper/subtitle_render/models.py`
+- Test: `tests/test_subtitle_render_sug_project.py`
 - Test: `tests/test_subtitle_render_workflow.py`
 
 **Interfaces:**
-- Consumes: `self.lyrics_timing_page._store.project`, `strange_uta_game.backend.application.export_service.ExportService`
-- Produces: `KrokHelperQtApp._prepare_subtitle_render_from_workflow() -> Path | None`
+- Consumes: `self.lyrics_timing_page._store.project`, `.sug` files read by `SugProjectParser.load()`
+- Produces: `timing_track_from_sug_project(project) -> TimingTrack`
+- Produces: `load_sug_timing_track(path: Path) -> TimingTrack`
+- Produces: `SubtitleRenderWindow.load_from_sug_project(project, source_path=None) -> TimingTrack | None`
+- Produces: `KrokHelperQtApp._prepare_subtitle_render_from_workflow() -> object | None`
 
 - [ ] **Step 1: Write the failing test**
 
 ```python
-def test_prepare_subtitle_render_exports_sug_project_to_lrc_and_loads_page(tmp_path, monkeypatch):
+def test_timing_track_from_sug_project_preserves_timing_ruby_and_singers():
+    main = Singer(id="main", name="主唱", color="#ff0000", is_default=True)
+    ch = Character(
+        char="愛",
+        ruby=Ruby(parts=[RubyPart("あ"), RubyPart("い")]),
+        check_count=2,
+        timestamps=[1000, 1300],
+        sentence_end_ts=1800,
+        is_sentence_end=True,
+        singer_id=main.id,
+    )
+    project = Project(
+        metadata=ProjectMetadata(title="曲名"),
+        singers=[main],
+        sentences=[Sentence(singer_id=main.id, characters=[ch])],
+        global_offset_ms=50,
+    )
+
+    track = timing_track_from_sug_project(project)
+
+    assert track.meta.title == "曲名"
+    assert track.meta.offset_ms == 50
+    assert track.lines[0].singer_label == "主唱"
+    assert track.lines[0].chars[0].start_ms == 1050
+    assert track.lines[0].chars[0].role_label == "主唱"
+    assert track.rubies[0].reading_parts == ["あ", "い"]
+    assert track.rubies[0].reading_part_ms == [300]
+```
+
+```python
+def test_prepare_subtitle_render_loads_sug_project_directly(monkeypatch):
     calls = {}
 
-    class FakeResult:
-        success = True
-        file_path = str(tmp_path / "song.lrc")
-        error_message = None
-
     class FakeExportService:
-        def export(self, project, format_name, file_path, **kwargs):
-            calls["project"] = project
-            calls["format_name"] = format_name
-            calls["file_path"] = file_path
-            calls["kwargs"] = kwargs
-            Path(file_path).write_text("@Title=song\n", encoding="utf-8")
-            return FakeResult()
+        def export(self, *args, **kwargs):
+            raise AssertionError("workflow should not export an intermediate Nicokara LRC")
 
     class FakeSubtitlePage:
-        def load_from_lrc(self, path):
-            calls["loaded_lrc"] = path
+        def load_from_sug_project(self, project, source_path=None):
+            calls["loaded_project"] = project
+            calls["source_path"] = source_path
             return object()
 
+    project = object()
     app = SimpleNamespace(
         lyrics_timing_page=SimpleNamespace(
-            _store=SimpleNamespace(project=object(), save_path=tmp_path / "song.sug")
+            _store=SimpleNamespace(project=project, save_path=Path("song.sug"))
         ),
         subtitle_render_page=FakeSubtitlePage(),
         _show_module=lambda module_id: calls.setdefault("shown", module_id),
     )
 
-    monkeypatch.setattr("krok_helper.gui_qt.ExportService", FakeExportService)
+    monkeypatch.setattr(gui_qt, "ExportService", FakeExportService, raising=False)
 
     result = KrokHelperQtApp._prepare_subtitle_render_from_workflow(app)
 
-    assert result == tmp_path / "song.lrc"
-    assert calls["format_name"] == "Nicokara (带注音)"
-    assert calls["kwargs"]["insert_singer_tags"] is True
-    assert calls["loaded_lrc"] == tmp_path / "song.lrc"
+    assert result is project
+    assert calls["loaded_project"] is project
+    assert calls["source_path"] == Path("song.sug")
     assert calls["shown"] == WORKFLOW_SUBTITLE_RENDER
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `C:\Python314\python.exe -m pytest tests\test_subtitle_render_workflow.py::test_prepare_subtitle_render_exports_sug_project_to_lrc_and_loads_page -q`
+Run: `C:\Python314\python.exe -m pytest tests\test_subtitle_render_sug_project.py tests\test_subtitle_render_workflow.py -q`
 
-Expected: FAIL because `tests/test_subtitle_render_workflow.py` or `_prepare_subtitle_render_from_workflow` does not exist.
+Expected: FAIL because `krok_helper.subtitle_render.sug_project` / `load_from_sug_project` do not exist.
 
 - [ ] **Step 3: Write minimal implementation**
 
-Add a main-window helper that:
-
-```python
-def _prepare_subtitle_render_from_workflow(self) -> Path | None:
-    store = getattr(getattr(self, "lyrics_timing_page", None), "_store", None)
-    project = getattr(store, "project", None)
-    if project is None:
-        QMessageBox.information(self, APP_TITLE, "请先在第 4 步完成歌词打轴。")
-        return None
-    save_path = getattr(store, "save_path", None)
-    base_dir = Path(save_path).parent if save_path else Path(tempfile.gettempdir()) / "KaraokeStudioSubtitleRender"
-    base_dir.mkdir(parents=True, exist_ok=True)
-    title = getattr(getattr(project, "metadata", None), "title", "") or "subtitle_render"
-    output_path = base_dir / f"{safe_filename(title)}.lrc"
-    result = ExportService().export(
-        project,
-        "Nicokara (带注音)",
-        str(output_path),
-        singer_ids=None,
-        insert_singer_tags=True,
-        insert_singer_each_line=False,
-        singer_map={s.id: s.name for s in getattr(project, "singers", [])},
-    )
-    if not result.success:
-        QMessageBox.critical(self, APP_TITLE, result.error_message or "导出 Nicokara LRC 失败。")
-        return None
-    if self.subtitle_render_page.load_from_lrc(output_path) is None:
-        return None
-    self._show_module(WORKFLOW_SUBTITLE_RENDER)
-    return output_path
-```
-
-Use the existing Windows invalid filename rules when constructing `output_path`.
+Implement `sug_project.py` to convert SUG `Project` to `TimingTrack`, then add `SubtitleRenderWindow.load_from_sug()` / `load_from_sug_project()` and change `KrokHelperQtApp._prepare_subtitle_render_from_workflow()` to call `load_from_sug_project(project, source_path=save_path)`.
 
 - [ ] **Step 4: Run test to verify it passes**
 
-Run: `C:\Python314\python.exe -m pytest tests\test_subtitle_render_workflow.py::test_prepare_subtitle_render_exports_sug_project_to_lrc_and_loads_page -q`
+Run: `C:\Python314\python.exe -m pytest tests\test_subtitle_render_sug_project.py tests\test_subtitle_render_workflow.py -q`
 
 Expected: PASS.
 
@@ -127,8 +124,8 @@ Modify `KrokHelperQtApp._show_module()` so navigating to `WORKFLOW_SUBTITLE_REND
 - [ ] **Step 6: Commit**
 
 ```bash
-git add krok_helper/gui_qt.py tests/test_subtitle_render_workflow.py
-git commit -m "feat: load SUG timing into subtitle render workflow"
+git add krok_helper/subtitle_render/sug_project.py krok_helper/subtitle_render/frontend/main_window.py krok_helper/subtitle_render/frontend/lyrics_list.py krok_helper/subtitle_render/models.py krok_helper/gui_qt.py tests/test_subtitle_render_sug_project.py tests/test_subtitle_render_workflow.py docs/superpowers/plans/2026-07-09-subtitle-render-workflow-wiring.md
+git commit -m "feat: load SUG projects directly in subtitle workflow"
 ```
 
 ### Task 2: Subtitle export completion notifies host and advances to Hi-Res

@@ -5,7 +5,6 @@ import math
 import os
 import subprocess
 import sys
-import tempfile
 import time
 from copy import deepcopy
 from dataclasses import dataclass
@@ -151,11 +150,6 @@ from krok_helper.updater.sources import SOURCE_IDS, SOURCE_LABELS, normalize_ord
 from krok_helper.video_download import VideoDownloadPage
 from krok_helper.windows import set_explicit_app_user_model_id
 
-try:
-    from strange_uta_game.backend.application.export_service import ExportService
-except Exception:  # pragma: no cover - submodule import errors are surfaced at use time
-    ExportService = None
-
 apply_qfluent_menu_lifetime_patch()
 
 
@@ -189,14 +183,6 @@ LYRICS_PREVIEW_MODE_OPTIONS = [
     ("按字 LRC", LYRICS_PREVIEW_VERBATIM),
 ]
 LYRICS_PREVIEW_MODE_MAP = {label: mode for label, mode in LYRICS_PREVIEW_MODE_OPTIONS}
-
-
-def _safe_workflow_filename(value: object, fallback: str = "subtitle_render") -> str:
-    text = str(value or "").strip()
-    cleaned = "".join(
-        "_" if char in WINDOWS_INVALID_FILENAME_CHARS else char for char in text
-    ).strip(" .")
-    return cleaned or fallback
 
 
 class KrokHelperSettingsBridge:
@@ -2701,58 +2687,23 @@ class KrokHelperQtApp(QMainWindow):
         self.workflow_stepper.setCurrentModule(module_id)
         self._sync_workflow_shortcut_scope()
 
-    def _prepare_subtitle_render_from_workflow(self) -> Path | None:
+    def _prepare_subtitle_render_from_workflow(self) -> object | None:
         store = getattr(getattr(self, "lyrics_timing_page", None), "_store", None)
         project = getattr(store, "project", None)
         if project is None:
             QMessageBox.information(self, APP_TITLE, "请先在第 4 步完成歌词打轴。")
             return None
 
-        export_service_cls = ExportService
-        if export_service_cls is None:
-            QMessageBox.critical(self, APP_TITLE, "打轴模块导出服务不可用，无法生成字幕源。")
-            return None
-
         save_path = getattr(store, "save_path", None)
-        if save_path:
-            base_dir = Path(save_path).expanduser().parent
-        else:
-            base_dir = Path(tempfile.gettempdir()) / "KaraokeStudioSubtitleRender"
-        base_dir.mkdir(parents=True, exist_ok=True)
-
-        metadata = getattr(project, "metadata", None)
-        title = getattr(metadata, "title", "") if metadata is not None else ""
-        output_path = base_dir / f"{_safe_workflow_filename(title)}.lrc"
-        singers = getattr(project, "singers", []) or []
-        singer_map = {
-            str(getattr(singer, "id")): str(getattr(singer, "name"))
-            for singer in singers
-            if getattr(singer, "id", None) is not None
-            and getattr(singer, "name", None) is not None
-        }
-
-        result = export_service_cls().export(
-            project,
-            "Nicokara (带注音)",
-            str(output_path),
-            singer_ids=None,
-            insert_singer_tags=True,
-            insert_singer_each_line=False,
-            singer_map=singer_map,
-        )
-        if not getattr(result, "success", False):
-            QMessageBox.critical(
-                self,
-                APP_TITLE,
-                getattr(result, "error_message", None) or "导出 Nicokara LRC 失败。",
-            )
+        source_path = Path(save_path).expanduser() if save_path else None
+        if self.subtitle_render_page.load_from_sug_project(
+            project, source_path=source_path
+        ) is None:
             return None
 
-        if self.subtitle_render_page.load_from_lrc(output_path) is None:
-            return None
         if not getattr(self, "_preparing_subtitle_render_workflow", False):
             self._show_module(WORKFLOW_SUBTITLE_RENDER)
-        return output_path
+        return project
 
     def accept_subtitle_video(self, path: Path) -> None:
         self.set_video_path(path)

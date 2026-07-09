@@ -2,6 +2,8 @@
 
 > 本文比较歌词打轴子模块 StrangeUtaGame（下称 **SUG**）的 `KaraokePreview`，与工作台字幕渲染模块（下称 **字幕模块**）当前 **Python QPainter** 渲染路径。字幕模块暂缓中的 C++/native 渲染核心不在比较范围内。
 
+> 2026-07-09 更新：工作流主路径已改为直接消费 SUG `Project` / `.sug`，通过 `subtitle_render/sug_project.py` 转换为 `TimingTrack`；下文关于 Nicokara LRC 中间层的信息损耗仍用于理解 `.lrc` 兼容入口和历史差异，但不再是第 4→第 5 步的默认数据流。
+
 ## 1. 对比基线与代码范围
 
 ### 1.1 SUG
