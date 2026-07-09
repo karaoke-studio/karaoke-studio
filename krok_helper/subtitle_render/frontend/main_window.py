@@ -2089,6 +2089,9 @@ class SubtitleRenderWindow(QWidget):
         self._export_status_label.setText(f"导出完成: {output_path}")
         self._export_start_button.setEnabled(True)
         self._export_stop_button.setEnabled(False)
+        context = self._workflow_context
+        if context is not None and hasattr(context, "accept_subtitle_video"):
+            context.accept_subtitle_video(output_path)
 
     def _finish_render_cancelled(self, message: str) -> None:
         self._export_progress.setRange(0, 1)
