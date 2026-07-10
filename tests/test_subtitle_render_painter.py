@@ -3926,6 +3926,51 @@ def test_vertical_layer_populates_and_clears_cache(qapp, monkeypatch):
     assert len(_TEXT_RUN_LAYER_CACHE) == 0
 
 
+@pytest.mark.parametrize("t_ms", [1000, 1700, 2500])
+def test_line_layout_cache_matches_uncached(qapp, monkeypatch, t_ms):
+    # 行级布局缓存命中与逐帧重算必须逐字节一致（同一计算，只是缓存了产物）。
+    track = _track_with_ruby()
+    style = Style(line_y_position="center", stroke_width_px=4, ruby_font_size_px=20)
+
+    monkeypatch.setenv("KROK_SUBTITLE_LAYOUT_CACHE", "0")
+    clear_before_layer_cache()
+    direct = _blank()
+    paint_frame(direct, track, t_ms, style)
+
+    monkeypatch.setenv("KROK_SUBTITLE_LAYOUT_CACHE", "1")
+    clear_before_layer_cache()
+    paint_frame(_blank(), track, t_ms, style)  # 先填缓存
+    cached = _blank()
+    paint_frame(cached, track, t_ms, style)  # 命中路径
+    clear_before_layer_cache()
+
+    assert _img_rows_rgba(direct).tobytes() == _img_rows_rgba(cached).tobytes()
+
+
+def test_line_layout_cache_picks_up_inplace_track_edits(qapp, monkeypatch):
+    # models 是可变 dataclass、前端不调失效接口：布局缓存 key 必须每帧由当前值
+    # 重建，track 被就地修改（如打轴微调）后下一帧立刻生效，不许吐旧几何。
+    monkeypatch.setenv("KROK_SUBTITLE_LAYOUT_CACHE", "1")
+    track = _track()
+    style = Style(line_y_position="center")
+    original_start = track.lines[0].chars[1].start_ms
+
+    clear_before_layer_cache()
+    before = _blank()
+    paint_frame(before, track, 1700, style)
+
+    track.lines[0].chars[1].start_ms = original_start + 400  # 走字推进点右移
+    edited = _blank()
+    paint_frame(edited, track, 1700, style)
+    assert _pixel_hash(edited) != _pixel_hash(before)
+
+    track.lines[0].chars[1].start_ms = original_start
+    restored = _blank()
+    paint_frame(restored, track, 1700, style)
+    clear_before_layer_cache()
+    assert _pixel_hash(restored) == _pixel_hash(before)
+
+
 @pytest.mark.parametrize("t_ms", [1300, 1700, 2100])
 @pytest.mark.parametrize("rtl", [False, True])
 def test_after_glow_strip_matches_full_blur_within_tolerance(qapp, monkeypatch, t_ms, rtl):

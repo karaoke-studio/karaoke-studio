@@ -32,7 +32,7 @@ from __future__ import annotations
 import math
 import os
 from collections import OrderedDict
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field, fields as dataclass_fields, is_dataclass, replace
 from threading import Lock
 from typing import Hashable, Optional
 
@@ -76,6 +76,21 @@ _TEXT_RUN_COMPOSITOR = LayerCompositor(_TEXT_RUN_LAYER_CACHE)
 # **上正 glyph 身份**烘焙一次进此缓存（before/after 各一条），逐帧在 utopia 变换下 blit。
 # glow 是软晕、对 bitmap-transform 不敏感 → 复用无明显软化；body 仍逐帧矢量保持锐利（B 档再缓存）。
 _RUN_GLOW_CACHE = LayerCache(max_items=128)
+# 行级布局缓存：_LineLayout（纯几何 + 字体资源）与 t_ms 无关，但此前每帧重算
+# （full 场景约 30% paint 时间）。key = (整 track 值签名, display_style 值签名,
+# 行索引, 画布尺寸, baseline/line_x/lane)——签名每帧从当前值重建（models 是可变
+# dataclass、前端不调失效接口），track/style 就地改动下一帧自然 miss，不会取脏值。
+# 行索引而非行内容进 key：SmartHorizon 的页定位用 `item is line` 身份判断，
+# 值相同的两行也可能落在不同页。
+_LINE_LAYOUT_CACHE = LayerCache(max_items=48)
+
+
+def _layout_cache_enabled() -> bool:
+    """行级布局缓存（默认开）。``KROK_SUBTITLE_LAYOUT_CACHE=0`` 退回逐帧重算
+    （A/B 验收 / 紧急回退用）。"""
+    return os.environ.get("KROK_SUBTITLE_LAYOUT_CACHE", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
 
 
 def _glow_cache_enabled() -> bool:
@@ -316,6 +331,107 @@ def clear_before_layer_cache() -> None:
     _RUN_GLOW_CACHE.clear()
     _CHAR_METRIC_CACHE.clear()
     _RUBY_MEASURE_CACHE.clear()
+    _LINE_LAYOUT_CACHE.clear()
+
+
+_SIG_FIELD_NAMES_BY_TYPE: dict[type, tuple[str, ...]] = {}
+
+
+def _value_signature(value) -> Hashable:
+    """任意 models 值的递归值签名（dataclass / list / dict / 标量）。
+
+    用于布局缓存 key：models 全部是可变 dataclass 且前端从不调用失效接口，
+    所以 key 必须完全由当前值构成，不掺对象 id。"""
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, (list, tuple)):
+        return tuple(_value_signature(item) for item in value)
+    if isinstance(value, dict):
+        return tuple(
+            (key, _value_signature(item))
+            for key, item in sorted(value.items(), key=lambda kv: str(kv[0]))
+        )
+    if is_dataclass(value) and not isinstance(value, type):
+        tp = type(value)
+        names = _SIG_FIELD_NAMES_BY_TYPE.get(tp)
+        if names is None:
+            names = tuple(f.name for f in dataclass_fields(value))
+            _SIG_FIELD_NAMES_BY_TYPE[tp] = names
+        return (tp.__name__,) + tuple(
+            _value_signature(getattr(value, name)) for name in names
+        )
+    return repr(value)
+
+
+def _track_layout_signature(track: TimingTrack) -> tuple:
+    """track 中影响**邻行可见**布局的值（手写快速版）。
+
+    邻行只通过 SmartHorizon 分页 / 页宽参与本行布局（``assign_lanes`` 与
+    ``_line_total_width`` 都不读邻行计时），所以帧级签名只收每行文本 / 布局
+    结构字段 + 全部注音 + meta 偏移；目标行自己的逐字符计时细节由
+    :func:`_line_layout_signature` 按行补充，避免大轨每帧走全量计时元组。"""
+    return (
+        tuple(
+            (
+                "".join(c.text for c in line.chars),
+                tuple(
+                    (index, c.role_label)
+                    for index, c in enumerate(line.chars)
+                    if c.role_label is not None
+                ),
+                line.singer_id,
+                line.is_blank,
+                line.layout_index,
+                line.break_before,
+            )
+            for line in track.lines
+        ),
+        tuple(
+            (
+                ruby.kanji,
+                ruby.reading,
+                tuple(ruby.reading_part_ms),
+                ruby.pos_start_ms,
+                ruby.pos_end_ms,
+                tuple(ruby.reading_parts),
+            )
+            for ruby in track.rubies
+        ),
+        (track.meta.silence_ms, track.meta.offset_ms),
+    )
+
+
+def _line_layout_signature(line: TimingLine) -> tuple:
+    """目标行的逐字符计时细节（intervals / fill_segments / ruby 时窗的输入）。"""
+    return (
+        tuple(c.start_ms for c in line.chars),
+        tuple(
+            (index, c.pause_release_ms)
+            for index, c in enumerate(line.chars)
+            if c.pause_release_ms is not None
+        ),
+        tuple(
+            (
+                index,
+                c.source_span_start_ms,
+                c.source_span_end_ms,
+                c.source_span_index,
+                c.source_span_count,
+            )
+            for index, c in enumerate(line.chars)
+            if c.source_span_count != 1 or c.source_span_start_ms is not None
+        ),
+        line.end_ms,
+        line.display_start_override_ms,
+        line.display_end_override_ms,
+    )
+
+
+def _layout_cache_sig(track: TimingTrack, display_style: Style) -> tuple | None:
+    """每帧一次的布局缓存基础签名；关闭开关或竖排时返回 None（竖排走独立路径）。"""
+    if not _layout_cache_enabled() or display_style.vertical:
+        return None
+    return (_track_layout_signature(track), _value_signature(display_style))
 
 from krok_helper.subtitle_render.engine.timeline import (
     DisplayLine,
@@ -582,6 +698,9 @@ def _paint_track_to_painter(
                 track_t_ms,
                 display_style,
             )
+        layout_cache_sig = (
+            _layout_cache_sig(track, display_style) if display_lines else None
+        )
         for display_line in display_lines:
             line_layout = line_layouts.get(display_line.lane)
             has_role_labels = _line_has_role_labels(display_line.line)
@@ -608,6 +727,7 @@ def _paint_track_to_painter(
                 lane=display_line.lane if display_style.dual_line_layout else None,
                 display_start_ms=display_line.display_start_ms,
                 display_end_ms=display_line.display_end_ms,
+                layout_cache_sig=layout_cache_sig,
             )
         if not display_style.vertical and signal_lines:
             _paint_signal_lits(
@@ -1127,6 +1247,7 @@ def _subtitle_lines_vertical_bounds(
         if display_lines
         else {}
     )
+    layout_cache_sig = _layout_cache_sig(track, style) if display_lines else None
     bounds: list[tuple[int, int]] = []
     for display_line in display_lines:
         line_bounds = _display_line_vertical_bounds(
@@ -1138,6 +1259,7 @@ def _subtitle_lines_vertical_bounds(
             display_line,
             baselines,
             line_layouts,
+            layout_cache_sig=layout_cache_sig,
         )
         if line_bounds is None:
             return None
@@ -1175,6 +1297,7 @@ def _display_line_vertical_bounds(
     display_line: DisplayLine,
     baselines: dict[int, int],
     line_layouts: dict[int, _SayatooLineLayout],
+    layout_cache_sig: tuple | None = None,
 ) -> tuple[int, int] | None:
     line = display_line.line
     line_style = _style_for_line(style, line)
@@ -1204,6 +1327,7 @@ def _display_line_vertical_bounds(
         baseline_y=line_layout.baseline_y if line_layout is not None else baselines[display_line.lane],
         line_x=line_x,
         lane=display_line.lane if line_style.dual_line_layout else None,
+        cache_sig=layout_cache_sig,
     )
     if layout is None:
         return None
@@ -3646,6 +3770,7 @@ def _paint_line(
     lane: int | None = None,
     display_start_ms: int | None = None,
     display_end_ms: int | None = None,
+    layout_cache_sig: tuple | None = None,
 ) -> None:
     style = _style_for_line(style, line)
     animation = line_animation_state(
@@ -3676,6 +3801,7 @@ def _paint_line(
             lane=lane,
             display_start_ms=display_start_ms,
             display_end_ms=display_end_ms,
+            layout_cache_sig=layout_cache_sig,
         )
     finally:
         painter.restore()
@@ -3695,6 +3821,7 @@ def _paint_line_static(
     lane: int | None = None,
     display_start_ms: int | None = None,
     display_end_ms: int | None = None,
+    layout_cache_sig: tuple | None = None,
 ) -> None:
     if style.vertical:
         _paint_line_vertical(
@@ -3713,6 +3840,7 @@ def _paint_line_static(
     layout = _layout_line(
         track, line, style, img_w, img_h,
         baseline_y=baseline_y, line_x=line_x, lane=lane,
+        cache_sig=layout_cache_sig,
     )
     if layout is None:
         return
@@ -3803,6 +3931,52 @@ def _paint_line_static(
 
 
 def _layout_line(
+    track: TimingTrack,
+    line: TimingLine,
+    style: Style,
+    img_w: int,
+    img_h: int,
+    *,
+    baseline_y: int | None = None,
+    line_x: int | None = None,
+    lane: int | None = None,
+    cache_sig: tuple | None = None,
+) -> _LineLayout | None:
+    if cache_sig is None:
+        return _layout_line_uncached(
+            track, line, style, img_w, img_h,
+            baseline_y=baseline_y, line_x=line_x, lane=lane,
+        )
+    line_index = -1
+    for index, item in enumerate(track.lines):
+        if item is line:
+            line_index = index
+            break
+    if line_index < 0:
+        return _layout_line_uncached(
+            track, line, style, img_w, img_h,
+            baseline_y=baseline_y, line_x=line_x, lane=lane,
+        )
+    key = (
+        cache_sig,
+        line_index,
+        _line_layout_signature(line),
+        img_w,
+        img_h,
+        baseline_y,
+        line_x,
+        lane,
+    )
+    return _LINE_LAYOUT_CACHE.get_or_build(
+        key,
+        lambda: _layout_line_uncached(
+            track, line, style, img_w, img_h,
+            baseline_y=baseline_y, line_x=line_x, lane=lane,
+        ),
+    )
+
+
+def _layout_line_uncached(
     track: TimingTrack,
     line: TimingLine,
     style: Style,
