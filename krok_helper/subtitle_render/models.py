@@ -357,6 +357,8 @@ class TitleOverlay:
     stroke2_width_px: int = 5
     decoration_kind: DecorationKind = "glow"
     glow_radius_px: int = 10
+    glow_concentration_level: int = 0
+    """NicoKaraMaker3 ``BlurLevel``: 0/1/2 = 低/中/高发光浓度。"""
     shadow: PaintFill = field(default_factory=lambda: _paint_fill("#E19696"))
     shadow_offset_x: int = 0
     shadow_offset_y: int = 2
@@ -432,6 +434,7 @@ class SubtitleStyleScheme:
     glow_radius_px: Optional[int] = None
     glow_before_radius_px: Optional[int] = None
     glow_after_radius_px: Optional[int] = None
+    glow_concentration_level: Optional[int] = None
     shadow_color: Optional[str] = None
     shadow_offset_x: Optional[int] = None
     shadow_offset_y: Optional[int] = None
@@ -444,6 +447,7 @@ class SubtitleStyleScheme:
     ruby_glow_radius_px: Optional[int] = None
     ruby_glow_before_radius_px: Optional[int] = None
     ruby_glow_after_radius_px: Optional[int] = None
+    ruby_glow_concentration_level: Optional[int] = None
     ruby_shadow_offset_x: Optional[int] = None
     ruby_shadow_offset_y: Optional[int] = None
     karaoke_colors: Optional[KaraokeColors] = None
@@ -493,6 +497,8 @@ class Style:
     glow_radius_px: int = 10
     glow_before_radius_px: int = 10
     glow_after_radius_px: int = 10
+    glow_concentration_level: int = 0
+    """NicoKaraMaker3 ``BlurLevel``: 0/1/2 = 低/中/高发光浓度。"""
     shadow_color: str = "#000000"
     shadow_offset_x: int = 10
     """阴影 X 偏移。N3 阴影偏移固定为 DecorSize（双轴同值），新建默认 10
@@ -522,6 +528,8 @@ class Style:
     ruby_glow_radius_px: Optional[int] = None
     ruby_glow_before_radius_px: Optional[int] = None
     ruby_glow_after_radius_px: Optional[int] = None
+    ruby_glow_concentration_level: Optional[int] = None
+    """Optional ruby override; ``None`` inherits ``glow_concentration_level``."""
     ruby_shadow_offset_x: Optional[int] = None
     ruby_shadow_offset_y: Optional[int] = None
     ruby_karaoke_colors: Optional[KaraokeColors] = None
@@ -746,6 +754,14 @@ class RenderProject:
 # ---------------------------------------------------------------------------
 
 
+def normalize_glow_concentration_level(value: object, fallback: int = 0) -> int:
+    """Clamp NicoKaraMaker3 ``BlurLevel`` to its three supported levels."""
+    try:
+        return max(0, min(2, int(value)))  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return max(0, min(2, int(fallback)))
+
+
 def style_to_dict(style: Style) -> dict:
     """Serialize ``Style`` into JSON-friendly primitives."""
     data: dict = {}
@@ -792,6 +808,12 @@ def style_from_dict(payload: object) -> Style:
             changes[key] = _singer_overrides_from_dict(value)
         elif key == "custom_style_schemes":
             changes[key] = _custom_schemes_from_dict(value)
+        elif key == "glow_concentration_level":
+            changes[key] = normalize_glow_concentration_level(value)
+        elif key == "ruby_glow_concentration_level":
+            changes[key] = (
+                normalize_glow_concentration_level(value) if value is not None else None
+            )
         elif key in {
             "font_size_px",
             "letter_spacing_px",
@@ -1042,6 +1064,10 @@ def subtitle_style_scheme_from_dict(payload: object) -> SubtitleStyleScheme:
             continue
         if key in {"karaoke_colors", "ruby_karaoke_colors"}:
             changes[key] = karaoke_colors_from_dict(value)
+        elif key in {"glow_concentration_level", "ruby_glow_concentration_level"}:
+            changes[key] = (
+                normalize_glow_concentration_level(value) if value is not None else None
+            )
         else:
             changes[key] = value
     return SubtitleStyleScheme(**changes)
@@ -1065,6 +1091,7 @@ def title_overlay_to_dict(title: TitleOverlay) -> dict:
         "stroke2_width_px": title.stroke2_width_px,
         "decoration_kind": title.decoration_kind,
         "glow_radius_px": title.glow_radius_px,
+        "glow_concentration_level": title.glow_concentration_level,
         "shadow": paint_fill_to_dict(title.shadow),
         "shadow_offset_x": title.shadow_offset_x,
         "shadow_offset_y": title.shadow_offset_y,
@@ -1118,6 +1145,9 @@ def title_overlay_from_dict(payload: object) -> Optional[TitleOverlay]:
         stroke2_width_px=_int_value(payload.get("stroke2_width_px"), defaults.stroke2_width_px),
         decoration_kind=decoration,  # type: ignore[arg-type]
         glow_radius_px=_int_value(payload.get("glow_radius_px"), defaults.glow_radius_px),
+        glow_concentration_level=normalize_glow_concentration_level(
+            payload.get("glow_concentration_level"), defaults.glow_concentration_level
+        ),
         shadow=paint_fill_from_dict(payload.get("shadow"), fallback="#E19696"),
         shadow_offset_x=_int_value(payload.get("shadow_offset_x"), defaults.shadow_offset_x),
         shadow_offset_y=_int_value(payload.get("shadow_offset_y"), defaults.shadow_offset_y),

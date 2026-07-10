@@ -3950,6 +3950,52 @@ def test_style_dict_roundtrip_keeps_n3_layout_fields():
     assert style_from_dict({"ruby_alignment": "bogus"}).ruby_alignment == "auto"
 
 
+def test_style_dict_roundtrip_keeps_glow_concentration_levels():
+    style = Style(
+        glow_concentration_level=2,
+        ruby_glow_concentration_level=1,
+        custom_style_schemes={
+            "B": SubtitleStyleScheme(
+                glow_concentration_level=1,
+                ruby_glow_concentration_level=2,
+            )
+        },
+        title_overlay=TitleOverlay(glow_concentration_level=2),
+    )
+
+    restored = style_from_dict(style_to_dict(style))
+
+    assert restored.glow_concentration_level == 2
+    assert restored.ruby_glow_concentration_level == 1
+    assert restored.custom_style_schemes["B"].glow_concentration_level == 1
+    assert restored.custom_style_schemes["B"].ruby_glow_concentration_level == 2
+    assert restored.title_overlay is not None
+    assert restored.title_overlay.glow_concentration_level == 2
+
+
+def test_glow_concentration_payloads_are_clamped():
+    assert style_from_dict({"glow_concentration_level": -1}).glow_concentration_level == 0
+    assert style_from_dict({"glow_concentration_level": 8}).glow_concentration_level == 2
+    assert style_from_dict({}).ruby_glow_concentration_level is None
+    restored = style_from_dict(
+        {
+            "ruby_glow_concentration_level": 9,
+            "custom_style_schemes": {
+                "B": {
+                    "glow_concentration_level": -2,
+                    "ruby_glow_concentration_level": 5,
+                }
+            },
+            "title_overlay": {"glow_concentration_level": 99},
+        }
+    )
+    assert restored.ruby_glow_concentration_level == 2
+    assert restored.custom_style_schemes["B"].glow_concentration_level == 0
+    assert restored.custom_style_schemes["B"].ruby_glow_concentration_level == 2
+    assert restored.title_overlay is not None
+    assert restored.title_overlay.glow_concentration_level == 2
+
+
 def _margin_track(text: str) -> TimingTrack:
     chars = [TimingChar(text=ch, start_ms=index * 500) for index, ch in enumerate(text)]
     return TimingTrack(lines=[TimingLine(chars=chars, end_ms=len(text) * 500)])
