@@ -4609,3 +4609,29 @@ def test_paint_frame_renders_extra_tracks(qapp):
     # frame_has_content 与绘制口径一致
     assert not frame_has_content(main, 60800, style)
     assert frame_has_content(main, 60800, style, [chorus])
+
+
+def test_display_windows_for_style_maps_line_indices_and_overrides():
+    from krok_helper.subtitle_render.engine.painter import display_windows_for_style
+    from krok_helper.subtitle_render.models import Style, TimingChar, TimingLine, TimingTrack
+
+    line1 = TimingLine(chars=[TimingChar("あ", 5000)], end_ms=6000)
+    blank = TimingLine(is_blank=True)
+    line2 = TimingLine(chars=[TimingChar("い", 20000)], end_ms=21000)
+    line2.display_end_override_ms = 30000
+    track = TimingTrack(lines=[line1, blank, line2])
+    style = replace(Style(), line_lead_in_ms=1000, line_tail_ms=500)
+
+    windows = display_windows_for_style(track, style)
+
+    # key = track.lines 索引；空行不产生窗口
+    assert set(windows.keys()) == {0, 2}
+    assert windows[0][0] == 4000  # 5000 - 提前入场 1000
+    assert windows[2][1] == 30000  # 消失时刻手动覆盖
+
+    # 单行模式同样生效
+    single = replace(style, dual_line_layout=False)
+    windows_single = display_windows_for_style(track, single)
+    assert set(windows_single.keys()) == {0, 2}
+    assert windows_single[0] == (4000, 6500)
+    assert windows_single[2][1] == 30000

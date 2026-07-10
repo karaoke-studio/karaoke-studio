@@ -88,6 +88,11 @@ class TimingLine:
     直接载入 LRC 时由 SeqLinesBreaker 等价算法生成，导入 N3 项目时由其
     ``LineInfos`` 精确恢复。
     """
+    display_start_override_ms: Optional[int] = None
+    """本行「上屏时刻」手动覆盖（毫秒）。None = 按全局提前入场自动计算。
+    由字幕轨道拖动写入，随项目文件持久化；覆盖值优先于自动布局。"""
+    display_end_override_ms: Optional[int] = None
+    """本行「消失时刻」手动覆盖（毫秒）。None = 按全局延迟退场自动计算。"""
 
 
 @dataclass

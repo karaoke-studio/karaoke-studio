@@ -18,14 +18,7 @@ from dataclasses import dataclass
 from typing import Optional, Sequence
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal as Signal
-from PyQt6.QtGui import (
-    QColor,
-    QFont,
-    QFontMetrics,
-    QPainter,
-    QPixmap,
-    QPolygonF,
-)
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPixmap
 from PyQt6.QtWidgets import QStyle, QStyleOption, QToolTip, QWidget
 
 from krok_helper.subtitle_render.frontend.theme import palette, themed
@@ -39,6 +32,12 @@ _RULER_H = 20
 
 _ZOOMBAR_H = 18
 """底部缩放滚动条区高度。"""
+
+_HANDLE_STRIP_H = 16
+"""轨道与缩放条之间的句子显示/隐藏时间把手条高度。"""
+
+_HANDLE_MIN_W = 12
+"""余量为零时虚线把手的最小可抓宽度（像素）。"""
 
 _LANE_MIN_H = 20
 _LANE_MAX_H = 44
@@ -144,12 +143,23 @@ class TrackTimelineView(QWidget):
     seekRequested = Signal(int)
     """用户点击 / 拖动轨道请求跳转（毫秒）。"""
 
+    displayWindowChanged = Signal(int)
+    """用户拖动把手修改了某轨道（参数 = 轨道序号，0 = 主字幕）某句的
+    显示/隐藏时间覆盖。写入已直接落在 ``TimingLine`` 上，宿主收到后
+    刷新预览并标脏。"""
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("TrackTimelineView")
         self.setMinimumHeight(120)
         self.setMouseTracking(True)
         self._lanes: tuple[Lane, ...] = ()
+        self._track_refs: list[TimingTrack] = []
+        """与 ``_lanes`` 对齐的 TimingTrack 引用，把手拖动直接写覆盖字段。"""
+        self._windows: list[dict[int, tuple[int, int]]] = []
+        """宿主推送的显示窗口：每轨 ``行索引 → (上屏, 消失)``（含全局提前/延迟）。"""
+        self._selected: Optional[tuple[int, int]] = None
+        """当前选中句：(轨道序号, ``track.lines`` 行索引)。"""
         self._duration_ms = 0
         self._time_ms = 0
         self._view_start_ms = 0.0
@@ -178,13 +188,23 @@ class TrackTimelineView(QWidget):
     def set_tracks(self, tracks: Sequence[tuple[str, TimingTrack]]) -> None:
         """设置全部字幕源：``[(源名, TimingTrack), ...]``，空列表回空态。
 
-        重置视口到开头、比例尺回默认 15 秒。
+        重置视口到开头、比例尺回默认 15 秒，并清除句子选中态。
         """
         self._lanes = build_lanes(tracks)
+        self._track_refs = [track for _name, track in tracks]
+        self._windows = []
+        self._selected = None
         self._view_start_ms = 0.0
         self._desired_span_ms = float(_DEFAULT_VIEW_SPAN_MS)
         self._clamp_view()
         self._lanes_pixmap = None
+        self.update()
+
+    def set_display_windows(
+        self, windows: Sequence[dict[int, tuple[int, int]]]
+    ) -> None:
+        """宿主推送各轨道的行显示窗口（与预览同一套布局参数算出）。"""
+        self._windows = [dict(item) for item in windows]
         self.update()
 
     def set_duration(self, ms: int) -> None:
@@ -304,7 +324,7 @@ class TrackTimelineView(QWidget):
             return []
         count = len(self._lanes)
         area_top = _RULER_H + 2
-        area_bottom = self.height() - _ZOOMBAR_H - 2
+        area_bottom = self.height() - _ZOOMBAR_H - _HANDLE_STRIP_H - 2
         avail = area_bottom - area_top - (count - 1) * _LANE_GAP
         lane_h = max(_LANE_MIN_H, min(_LANE_MAX_H, avail // count))
         total_h = count * lane_h + (count - 1) * _LANE_GAP
@@ -321,21 +341,101 @@ class TrackTimelineView(QWidget):
 
     def _hit_test(
         self, x: float, y: float
-    ) -> tuple[Optional[Lane], Optional[LineBlock], Optional[CharCell]]:
-        for lane, rect in self._lane_geometry():
+    ) -> tuple[Optional[int], Optional[LineBlock], Optional[CharCell]]:
+        for lane_index, (lane, rect) in enumerate(self._lane_geometry()):
             if not rect.top() <= y <= rect.bottom():
                 continue
             if x < rect.left():
-                return lane, None, None
+                return lane_index, None, None
             ms = self._ms_for_x(x)
             for block in lane.blocks:
                 if block.start_ms <= ms < block.end_ms:
                     for cell in block.cells:
                         if cell.start_ms <= ms < cell.end_ms:
-                            return lane, block, cell
-                    return lane, block, None
-            return lane, None, None
+                            return lane_index, block, cell
+                    return lane_index, block, None
+            return lane_index, None, None
         return None, None, None
+
+    # ----------------------------------------------------------- selection
+
+    def _selected_block(self) -> Optional[tuple[int, LineBlock]]:
+        """当前选中句对应的 (轨道序号, 块)；选中已失效时返回 None。"""
+        if self._selected is None:
+            return None
+        lane_index, line_index = self._selected
+        if not 0 <= lane_index < len(self._lanes):
+            return None
+        for block in self._lanes[lane_index].blocks:
+            if block.line_index == line_index:
+                return lane_index, block
+        return None
+
+    def _selected_window(self, lane_index: int, block: LineBlock) -> tuple[int, int]:
+        """选中句的显示窗口；宿主还没推送时退化为演唱区间（零余量）。"""
+        if lane_index < len(self._windows):
+            window = self._windows[lane_index].get(block.line_index)
+            if window is not None:
+                return window
+        return block.start_ms, block.end_ms
+
+    def _handle_strip_rect(self) -> QRectF:
+        return QRectF(
+            float(self._plot_left()),
+            float(self.height() - _ZOOMBAR_H - _HANDLE_STRIP_H),
+            float(self._plot_width()),
+            float(_HANDLE_STRIP_H),
+        )
+
+    def _handle_rects(self) -> Optional[tuple[QRectF, QRectF, int, LineBlock]]:
+        """选中句的两个虚线把手矩形 (左=上屏余量, 右=消失余量, 轨道序号, 块)。"""
+        selected = self._selected_block()
+        if selected is None:
+            return None
+        lane_index, block = selected
+        show_ms, hide_ms = self._selected_window(lane_index, block)
+        strip = self._handle_strip_rect()
+        top = strip.top() + 2
+        height = strip.height() - 4
+
+        left_x0 = self._x_for_ms(show_ms)
+        left_x1 = self._x_for_ms(block.start_ms)
+        if left_x1 - left_x0 < _HANDLE_MIN_W:
+            left_x0 = left_x1 - _HANDLE_MIN_W
+        right_x0 = self._x_for_ms(block.end_ms)
+        right_x1 = self._x_for_ms(hide_ms)
+        if right_x1 - right_x0 < _HANDLE_MIN_W:
+            right_x1 = right_x0 + _HANDLE_MIN_W
+        return (
+            QRectF(left_x0, top, left_x1 - left_x0, height),
+            QRectF(right_x0, top, right_x1 - right_x0, height),
+            lane_index,
+            block,
+        )
+
+    def _apply_lead_drag(self, lane_index: int, block: LineBlock, x: float) -> None:
+        """拖左把手：改「上屏时刻」覆盖，不晚于开始走字。"""
+        ms = min(self._ms_for_x(x), block.start_ms)
+        track = self._track_refs[lane_index]
+        track.lines[block.line_index].display_start_override_ms = ms
+        if lane_index < len(self._windows):
+            _old_show, hide = self._windows[lane_index].get(
+                block.line_index, (block.start_ms, block.end_ms)
+            )
+            self._windows[lane_index][block.line_index] = (ms, hide)
+        self.update()
+
+    def _apply_tail_drag(self, lane_index: int, block: LineBlock, x: float) -> None:
+        """拖右把手：改「消失时刻」覆盖，不早于走字结束。"""
+        ms = max(self._ms_for_x(x), block.end_ms)
+        track = self._track_refs[lane_index]
+        track.lines[block.line_index].display_end_override_ms = ms
+        if lane_index < len(self._windows):
+            show, _old_hide = self._windows[lane_index].get(
+                block.line_index, (block.start_ms, block.end_ms)
+            )
+            self._windows[lane_index][block.line_index] = (show, ms)
+        self.update()
 
     # ------------------------------------------------------------- painting
 
@@ -369,6 +469,7 @@ class TrackTimelineView(QWidget):
             self._lanes_pixmap = self._render_static_pixmap()
             self._pixmap_key = key
         painter.drawPixmap(0, 0, self._lanes_pixmap)
+        self._paint_selection(painter)
         self._paint_playhead(painter)
         painter.end()
 
@@ -547,36 +648,69 @@ class TrackTimelineView(QWidget):
         for x in (x0, x1):
             painter.drawEllipse(QPointF(x, cy), 5.0, 5.0)
 
-    def _paint_playhead(self, painter: QPainter) -> None:
-        geometry = self._lane_geometry()
-        if not geometry:
+    def _paint_selection(self, painter: QPainter) -> None:
+        """选中句高亮 + 把手条上的两个虚线余量框（可拖动）。"""
+        handles = self._handle_rects()
+        if handles is None:
             return
+        left_rect, right_rect, lane_index, block = handles
+        accent = QColor(palette().accent_primary)
+
+        # 选中块高亮描边
+        geometry = self._lane_geometry()
+        if lane_index < len(geometry):
+            _lane, lane_rect = geometry[lane_index]
+            x0 = self._x_for_ms(block.start_ms)
+            x1 = max(self._x_for_ms(block.end_ms), x0 + 2)
+            painter.save()
+            painter.setClipRect(lane_rect.adjusted(-1, -2, 1, 2))
+            pen = painter.pen()
+            pen.setColor(accent)
+            pen.setWidthF(2.0)
+            painter.setPen(pen)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(
+                QRectF(x0, lane_rect.top() + 1, x1 - x0, lane_rect.height() - 2),
+                2.0,
+                2.0,
+            )
+            painter.restore()
+
+        # 虚线余量框
+        painter.save()
+        painter.setClipRect(
+            QRectF(
+                float(self._plot_left()),
+                self._handle_strip_rect().top(),
+                float(self._plot_width()),
+                self._handle_strip_rect().height(),
+            )
+        )
+        fill = QColor(accent)
+        fill.setAlpha(28)
+        pen = painter.pen()
+        pen.setColor(accent)
+        pen.setWidthF(1.0)
+        pen.setStyle(Qt.PenStyle.DashLine)
+        painter.setPen(pen)
+        painter.setBrush(fill)
+        for rect in (left_rect, right_rect):
+            painter.drawRect(rect)
+        painter.restore()
+
+    def _paint_playhead(self, painter: QPainter) -> None:
         ms = min(self._time_ms, self._timeline_duration_ms())
         x = self._x_for_ms(ms)
         rect = self._ruler_rect()
         if x < rect.left() or x > rect.right():
             return
-        color = QColor(palette().accent_primary)
-        # 刻度尺上的播放头把手（下指小旗标）
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(color)
-        painter.drawPolygon(
-            QPolygonF(
-                [
-                    QPointF(x - 4, _RULER_H - 9),
-                    QPointF(x + 4, _RULER_H - 9),
-                    QPointF(x + 4, _RULER_H - 4),
-                    QPointF(x, _RULER_H),
-                    QPointF(x - 4, _RULER_H - 4),
-                ]
-            )
-        )
-        pen_color = QColor(color)
+        # 一条直线从顶贯穿到底（缩放条是全曲坐标系，不穿过）
+        pen_color = QColor(palette().accent_primary)
         pen_color.setAlpha(230)
         painter.setPen(pen_color)
-        top = geometry[0][1].top() - 2
-        bottom = geometry[-1][1].bottom() + 2
-        painter.drawLine(QPointF(x, top), QPointF(x, bottom))
+        painter.drawLine(
+            QPointF(x, 1.0), QPointF(x, float(self.height() - _ZOOMBAR_H))
+        )
 
     # ------------------------------------------------------------------ mouse
 
@@ -592,18 +726,33 @@ class TrackTimelineView(QWidget):
             self._press_zoombar(pos)
             event.accept()
             return
+        handles = self._handle_rects()
+        if handles is not None:
+            left_rect, right_rect, lane_index, block = handles
+            if left_rect.adjusted(-3, -3, 3, 3).contains(pos):
+                self._drag = ("lead", lane_index, block)
+                event.accept()
+                return
+            if right_rect.adjusted(-3, -3, 3, 3).contains(pos):
+                self._drag = ("tail", lane_index, block)
+                event.accept()
+                return
         if self._ruler_rect().contains(pos):
             self._drag = ("scrub",)
             self.seekRequested.emit(self._ms_for_x(pos.x()))
             event.accept()
             return
-        _lane, block, cell = self._hit_test(pos.x(), pos.y())
-        if cell is not None:
-            self.seekRequested.emit(cell.start_ms)
-        elif block is not None:
-            self.seekRequested.emit(block.start_ms)
+        lane_index, block, cell = self._hit_test(pos.x(), pos.y())
+        if block is not None:
+            # 单击句子 → 选中（出现显示/隐藏余量把手）并跳到点击的字符
+            self._selected = (lane_index, block.line_index)
+            self.seekRequested.emit(
+                cell.start_ms if cell is not None else block.start_ms
+            )
         else:
+            self._selected = None
             self.seekRequested.emit(self._ms_for_x(pos.x()))
+        self.update()
         event.accept()
 
     def _press_zoombar(self, pos) -> None:
@@ -627,6 +776,10 @@ class TrackTimelineView(QWidget):
             mode = self._drag[0]
             if mode == "scrub":
                 self.seekRequested.emit(self._ms_for_x(pos.x()))
+            elif mode == "lead":
+                self._apply_lead_drag(self._drag[1], self._drag[2], pos.x())
+            elif mode == "tail":
+                self._apply_tail_drag(self._drag[1], self._drag[2], pos.x())
             elif mode == "pan":
                 self._set_view(
                     self._zoombar_ms_for_x(pos.x()) - self._drag[1],
@@ -653,6 +806,15 @@ class TrackTimelineView(QWidget):
         super().mouseMoveEvent(event)
 
     def _update_hover(self, event, pos) -> None:
+        handles = self._handle_rects()
+        if handles is not None:
+            left_rect, right_rect, _lane_index, _block = handles
+            if left_rect.adjusted(-3, -3, 3, 3).contains(pos) or right_rect.adjusted(
+                -3, -3, 3, 3
+            ).contains(pos):
+                self.setCursor(Qt.CursorShape.SizeHorCursor)
+                QToolTip.hideText()
+                return
         if self._zoombar_rect().contains(pos):
             x0, x1 = self._zoombar_thumb_span()
             if abs(pos.x() - x0) <= 8 or abs(pos.x() - x1) <= 8:
@@ -675,6 +837,9 @@ class TrackTimelineView(QWidget):
             QToolTip.hideText()
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 — Qt override
+        if self._drag is not None and self._drag[0] in ("lead", "tail"):
+            # 拖动结束才通知宿主刷新预览，避免拖动中反复重渲染
+            self.displayWindowChanged.emit(self._drag[1])
         self._drag = None
         super().mouseReleaseEvent(event)
 

@@ -317,6 +317,7 @@ def clear_before_layer_cache() -> None:
 
 from krok_helper.subtitle_render.engine.timeline import (
     DisplayLine,
+    apply_display_overrides,
     assign_lanes,
     char_fill_ratio,
     compute_char_intervals,
@@ -2313,6 +2314,48 @@ def _visible_lines_for_style(
     return [display_line]
 
 
+def display_windows_for_style(
+    track: TimingTrack, style: Style
+) -> dict[int, tuple[int, int]]:
+    """全部可渲染行的显示窗口：``track.lines`` 索引 → (上屏, 消失) 毫秒。
+
+    与预览/导出使用同一套布局参数（含逐行手动覆盖），供字幕轨道 UI
+    展示与编辑句子的显示/隐藏时间。
+    """
+    windows: dict[int, tuple[int, int]] = {}
+    if style.dual_line_layout:
+        items = compute_display_lines(
+            track,
+            lead_in_ms=style.line_lead_in_ms,
+            tail_ms=style.line_tail_ms,
+            lane_gap_ms=style.line_lane_gap_ms,
+            max_hold_ms=style.line_max_hold_ms,
+            continuity_snap_ms=style.line_continuity_snap_ms,
+            pair_second_delay_ms=style.line_pair_second_delay_ms,
+            section_gap_ms=style.section_gap_ms,
+            sync_ending=style.sync_ending,
+            section_ending_mode=style.section_ending_mode,
+            protect_ms=_effective_line_protect_ms(style),
+            lane_count=_lane_count(style),
+            row_count_of=_row_count_resolver(style),
+        )
+        index_of = {id(line): i for i, line in enumerate(track.lines)}
+        for item in items:
+            index = index_of.get(id(item.line))
+            if index is not None:
+                windows[index] = (item.display_start_ms, item.display_end_ms)
+        return windows
+    lead = max(style.line_lead_in_ms, 0)
+    tail = max(style.line_tail_ms, 0)
+    for index, line in enumerate(track.lines):
+        if line.is_blank or not line.chars:
+            continue
+        display_start = max(_line_start_ms(line) - lead, 0)
+        display_end = _line_end_ms(line) + tail
+        windows[index] = apply_display_overrides(line, display_start, display_end)
+    return windows
+
+
 def _single_visible_display_line(
     track: TimingTrack,
     t_ms: int,
@@ -2329,6 +2372,9 @@ def _single_visible_display_line(
         sing_end = _line_end_ms(line)
         display_start = max(sing_start - lead, 0)
         display_end = sing_end + tail
+        display_start, display_end = apply_display_overrides(
+            line, display_start, display_end
+        )
         display_line = DisplayLine(
             line=line,
             lane=0,

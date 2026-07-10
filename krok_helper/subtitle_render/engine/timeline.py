@@ -272,17 +272,38 @@ def compute_display_lines(
             display_end = max(display_end, section_end[sid])
         if section_ending_mode == "clear":
             display_end = max(floor_end, min(display_end, section_end[sid]))
-        if display_end < starts[index]:
-            display_end = starts[index]
+        # 逐行手动覆盖（字幕轨道拖动写入）优先于所有自动布局调整
+        display_start, display_end = apply_display_overrides(
+            line, starts[index], display_end
+        )
+        if display_end < display_start:
+            display_end = display_start
         result.append(
             DisplayLine(
                 line=line,
                 lane=lanes[index],
-                display_start_ms=starts[index],
+                display_start_ms=display_start,
                 display_end_ms=display_end,
             )
         )
     return result
+
+
+def apply_display_overrides(
+    line: TimingLine, display_start: int, display_end: int
+) -> tuple[int, int]:
+    """应用逐行「上屏 / 消失时刻」手动覆盖。
+
+    上屏覆盖不晚于开始走字（首字符起点），消失覆盖不早于走字结束——
+    两个虚线把手只编辑演唱区间外侧的余量，不会吃进演唱本体。
+    """
+    start_override = getattr(line, "display_start_override_ms", None)
+    if start_override is not None:
+        display_start = max(0, min(int(start_override), _line_start_ms(line)))
+    end_override = getattr(line, "display_end_override_ms", None)
+    if end_override is not None:
+        display_end = max(int(end_override), _line_end_ms(line))
+    return display_start, display_end
 
 
 def _adjust_same_lane_display_windows(

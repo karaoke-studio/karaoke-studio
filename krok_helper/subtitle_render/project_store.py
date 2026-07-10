@@ -65,6 +65,7 @@ def project_payload(
     line_layout_indices: Optional[list[int]] = None,
     line_breaks_before: Optional[list[str]] = None,
     char_role_labels: Optional[list] = None,
+    line_display_overrides: Optional[list] = None,
     extra_subtitle_sources: Optional[list] = None,
 ) -> dict:
     """组装项目快照 dict（纯数据，不碰 UI）。便于单测与复用。
@@ -79,8 +80,13 @@ def project_payload(
     或与该行字符对齐的角色名列表。覆盖 UI 手动分配与 N3 导入的逐字配色
     （LRC 内的 ``【N配色】`` 标签解析后也会落到这里，重复应用无害）。
 
+    ``line_display_overrides`` 同样与 ``track.lines`` 对齐：每项为 None（该行
+    无手动覆盖）或 ``[上屏覆盖毫秒或 None, 消失覆盖毫秒或 None]``（字幕轨道
+    把手拖动写入的逐行显示/隐藏时间）。
+
     ``extra_subtitle_sources``：副字幕源列表（N3 多歌词文件，如コーラス轨），
-    每项为 ``{"name", "path", "line_layout_indices", "char_role_labels"}``。
+    每项为 ``{"name", "path", "line_layout_indices", "char_role_labels",
+    "line_display_overrides"}``。
     """
     payload = {
         "subtitle_path": str(subtitle_path) if subtitle_path else None,
@@ -102,6 +108,11 @@ def project_payload(
         payload["char_role_labels"] = [
             [str(label) if label else None for label in row] if isinstance(row, list) else None
             for row in char_role_labels
+        ]
+    if line_display_overrides is not None:
+        payload["line_display_overrides"] = [
+            list(row) if isinstance(row, (list, tuple)) else None
+            for row in line_display_overrides
         ]
     if extra_subtitle_sources is not None:
         payload["extra_subtitle_sources"] = [

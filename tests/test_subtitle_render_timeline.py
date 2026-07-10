@@ -519,3 +519,50 @@ def test_paragraph_last_gap_measured_against_max_end_so_far():
         False,
         True,
     ]
+
+
+# ---------------------------------------------------------------------------
+# 逐行显示/隐藏时间覆盖（字幕轨道把手）
+# ---------------------------------------------------------------------------
+
+
+def test_compute_display_lines_respects_per_line_overrides():
+    line1 = _make_line([("a", 5000), ("b", 5500)], end_ms=6000)
+    line2 = _make_line([("c", 9000)], end_ms=9500)
+    line1.display_start_override_ms = 3000
+    line1.display_end_override_ms = 8000
+    track = _track(line1, line2)
+
+    items = compute_display_lines(
+        track,
+        lead_in_ms=500,
+        tail_ms=500,
+        lane_gap_ms=0,
+        max_hold_ms=0,
+        continuity_snap_ms=0,
+    )
+
+    assert items[0].display_start_ms == 3000
+    assert items[0].display_end_ms == 8000
+    # 未覆盖的行仍走自动布局（lane 1 受 pair_second_delay 联动 = 4500 + 3000）
+    assert items[1].display_start_ms == 7500
+
+
+def test_display_overrides_clamped_to_singing_interval():
+    # 覆盖只编辑演唱区间外侧的余量：上屏不晚于首字符，消失不早于行末
+    line = _make_line([("a", 5000), ("b", 5500)], end_ms=6000)
+    line.display_start_override_ms = 5800
+    line.display_end_override_ms = 5200
+    track = _track(line)
+
+    items = compute_display_lines(
+        track,
+        lead_in_ms=500,
+        tail_ms=500,
+        lane_gap_ms=0,
+        max_hold_ms=0,
+        continuity_snap_ms=0,
+    )
+
+    assert items[0].display_start_ms == 5000
+    assert items[0].display_end_ms == 6000

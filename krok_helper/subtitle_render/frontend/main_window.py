@@ -79,6 +79,7 @@ from krok_helper.subtitle_render.engine.painter import (
     assign_layout_to_all,
     auto_assign_layouts_by_page,
     check_layout_margins,
+    display_windows_for_style,
 )
 from krok_helper.subtitle_render.engine.renderer import RenderJob, render_subtitle_video
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
@@ -866,6 +867,7 @@ class SubtitleRenderWindow(QWidget):
         )
         line_breaks_before = self._line_break_rows(self._timing_track)
         char_role_labels = self._collect_char_role_labels()
+        line_display_overrides = self._display_override_rows(self._timing_track)
         extra_subtitle_sources = [
             {
                 "name": source.name,
@@ -875,6 +877,7 @@ class SubtitleRenderWindow(QWidget):
                 ],
                 "line_breaks_before": self._line_break_rows(source.track),
                 "char_role_labels": self._char_role_rows(source.track),
+                "line_display_overrides": self._display_override_rows(source.track),
             }
             for source in self._extra_sources
         ] or None
@@ -888,6 +891,7 @@ class SubtitleRenderWindow(QWidget):
             line_layout_indices=line_layout_indices,
             line_breaks_before=line_breaks_before,
             char_role_labels=char_role_labels,
+            line_display_overrides=line_display_overrides,
             extra_subtitle_sources=extra_subtitle_sources,
             output=project_output_payload(
                 encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
@@ -929,7 +933,12 @@ class SubtitleRenderWindow(QWidget):
             self._apply_line_breaks_before(data.get("line_breaks_before"))
             self._apply_line_layout_indices(data.get("line_layout_indices"))
             self._apply_char_role_labels(data.get("char_role_labels"))
+            if self._timing_track is not None:
+                self._apply_display_override_rows(
+                    self._timing_track, data.get("line_display_overrides")
+                )
             self._apply_extra_subtitle_sources(data.get("extra_subtitle_sources"))
+            self._refresh_tracks_view_windows()
         if paths["video_path"] is not None and paths["video_path"].is_file():
             self.load_video(paths["video_path"])
         audio = paths["audio_path"]
@@ -1203,6 +1212,7 @@ class SubtitleRenderWindow(QWidget):
         # 底部：字幕轨道（波形已移除，不做波形图功能）
         self._tracks_view = TrackTimelineView()
         self._tracks_view.seekRequested.connect(self._transport_bar.set_time)
+        self._tracks_view.displayWindowChanged.connect(self._on_display_window_changed)
         self._transport_bar.timeChanged.connect(self._tracks_view.set_time)
         body.addWidget(self._tracks_view)
 
@@ -1554,6 +1564,8 @@ class SubtitleRenderWindow(QWidget):
         self._style = style
         self._preview_panel.set_style(style)
         self._lyrics_panel.set_style(style)
+        # 提前入场/延迟退场等布局参数会改行显示窗口 → 同步轨道把手数据
+        self._refresh_tracks_view_windows()
         self._margin_check_timer.start()
         self._save_persisted_state()
         self._mark_project_dirty()
@@ -1589,6 +1601,38 @@ class SubtitleRenderWindow(QWidget):
             line.break_before = kind if kind in {"page", "paragraph"} else "none"
         self._lyrics_panel.set_track(track)
         self._preview_panel.set_track(track)
+
+    @staticmethod
+    def _display_override_rows(track: Optional[TimingTrack]) -> Optional[list]:
+        """采集逐行显示/隐藏覆盖：与 ``track.lines`` 对齐，无覆盖的行为 None。"""
+        if track is None:
+            return None
+        rows = [
+            (
+                [line.display_start_override_ms, line.display_end_override_ms]
+                if line.display_start_override_ms is not None
+                or line.display_end_override_ms is not None
+                else None
+            )
+            for line in track.lines
+        ]
+        return rows if any(row is not None for row in rows) else None
+
+    @staticmethod
+    def _apply_display_override_rows(track: TimingTrack, payload: object) -> None:
+        """把项目文件里的逐行显示/隐藏覆盖套回刚加载的 track。"""
+        if not isinstance(payload, list):
+            return
+        for line, row in zip(track.lines, payload):
+            if not isinstance(row, (list, tuple)) or len(row) != 2:
+                continue
+            start, end = row
+            line.display_start_override_ms = (
+                int(start) if isinstance(start, (int, float)) else None
+            )
+            line.display_end_override_ms = (
+                int(end) if isinstance(end, (int, float)) else None
+            )
 
     def _collect_char_role_labels(self) -> Optional[list]:
         """收集主字幕每行逐字角色标签用于项目持久化；全部为空则返回 None（不写盘）。"""
@@ -1672,6 +1716,9 @@ class SubtitleRenderWindow(QWidget):
                             continue
                         for ch, label in zip(line.chars, labels):
                             ch.role_label = str(label) if label else None
+                self._apply_display_override_rows(
+                    track, item.get("line_display_overrides")
+                )
                 name = str(item.get("name") or "").strip() or path.stem
                 self._extra_sources.append(
                     ExtraSubtitleSource(name=name, path=path, track=track)
@@ -1725,6 +1772,27 @@ class SubtitleRenderWindow(QWidget):
         named = [("主字幕", self._timing_track)]
         named.extend((source.name, source.track) for source in self._extra_sources)
         self._tracks_view.set_tracks(named)
+        self._refresh_tracks_view_windows()
+
+    def _refresh_tracks_view_windows(self) -> None:
+        """按当前样式重算各轨行显示窗口，推给字幕轨道（把手条数据源）。"""
+        if self._timing_track is None:
+            return
+        self._tracks_view.set_display_windows(
+            [display_windows_for_style(track, self._style) for track in self._all_tracks()]
+        )
+
+    def _on_display_window_changed(self, track_index: int) -> None:
+        """字幕轨道拖动把手改了某句显示/隐藏时间：刷新预览 + 标脏。"""
+        # 覆盖值已由轨道视图直接写进 TimingLine；track 是原地修改的，
+        # 预览（含异步渲染 worker）不会自己发现——重新喂一次。
+        if track_index == 0 and self._timing_track is not None:
+            self._preview_panel.set_track(self._timing_track)
+        elif track_index > 0:
+            # 不走 _sync_extra_tracks_to_preview：它会重建轨道视图、丢掉选中态
+            self._preview_panel.set_extra_tracks(self._extra_track_list())
+        self._refresh_tracks_view_windows()
+        self._mark_project_dirty()
 
     def _on_source_selected(self, index: int) -> None:
         self._active_source_index = max(int(index), 0)

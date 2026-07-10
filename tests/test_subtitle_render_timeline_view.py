@@ -282,3 +282,92 @@ def test_zoombar_thumb_drag_pans(qapp) -> None:
     _move(widget, mid + (x1 - x0), bar_y)  # 向右拖一个视口宽
     assert widget.view_start_ms == pytest.approx(15_000, abs=500)
     _release(widget, mid, bar_y)
+
+
+def test_click_block_selects_and_click_empty_deselects(qapp) -> None:
+    widget = TrackTimelineView()
+    widget.resize(800, 180)
+    widget.set_tracks([("主字幕", _make_track())])
+    widget.set_duration(10_000)
+    widget.set_display_windows([{0: (500, 3200), 2: (3500, 6000)}])
+
+    _lane, rect = widget._lane_geometry()[0]
+    _click(widget, widget._x_for_ms(1650), rect.center().y())
+    assert widget._selected == (0, 0)
+
+    handles = widget._handle_rects()
+    assert handles is not None
+    left_rect, right_rect, lane_index, block = handles
+    assert lane_index == 0
+    # 左框 = [上屏 500ms, 首字符 1000ms]；右框 = [行末 2600ms, 消失 3200ms]
+    assert left_rect.left() == pytest.approx(widget._x_for_ms(500), abs=1)
+    assert left_rect.right() == pytest.approx(widget._x_for_ms(1000), abs=1)
+    assert right_rect.left() == pytest.approx(widget._x_for_ms(2600), abs=1)
+    assert right_rect.right() == pytest.approx(widget._x_for_ms(3200), abs=1)
+
+    _click(widget, widget._x_for_ms(8000), rect.center().y())  # 空白处
+    assert widget._selected is None
+    assert widget._handle_rects() is None
+
+
+def test_drag_left_handle_writes_show_override(qapp) -> None:
+    track = _make_track()
+    widget = TrackTimelineView()
+    widget.resize(800, 180)
+    widget.set_tracks([("主字幕", track)])
+    widget.set_duration(10_000)
+    widget.set_display_windows([{0: (800, 3000)}])
+
+    changed: list[int] = []
+    widget.displayWindowChanged.connect(changed.append)
+
+    _lane, rect = widget._lane_geometry()[0]
+    _click(widget, widget._x_for_ms(1650), rect.center().y())  # 选中第一句
+
+    left_rect, _right, _lane_idx, _block = widget._handle_rects()
+    _click(widget, left_rect.center().x(), left_rect.center().y())
+    assert widget._drag is not None and widget._drag[0] == "lead"
+
+    _move(widget, widget._x_for_ms(300), left_rect.center().y())
+    assert track.lines[0].display_start_override_ms == pytest.approx(300, abs=30)
+    assert widget._windows[0][0][0] == track.lines[0].display_start_override_ms
+    assert changed == []  # 拖动中不通知
+
+    _release(widget, widget._x_for_ms(300), left_rect.center().y())
+    assert changed == [0]
+    assert widget._drag is None
+
+
+def test_drag_right_handle_clamps_to_sing_end(qapp) -> None:
+    track = _make_track()
+    widget = TrackTimelineView()
+    widget.resize(800, 180)
+    widget.set_tracks([("主字幕", track)])
+    widget.set_duration(10_000)
+    widget.set_display_windows([{0: (800, 3000)}])
+
+    _lane, rect = widget._lane_geometry()[0]
+    _click(widget, widget._x_for_ms(1650), rect.center().y())
+
+    _left, right_rect, _lane_idx, _block = widget._handle_rects()
+    _click(widget, right_rect.center().x(), right_rect.center().y())
+    assert widget._drag is not None and widget._drag[0] == "tail"
+
+    _move(widget, widget._x_for_ms(5000), right_rect.center().y())
+    assert track.lines[0].display_end_override_ms == pytest.approx(5000, abs=30)
+
+    # 往回拖不早于走字结束（2600ms）
+    _move(widget, widget._x_for_ms(1200), right_rect.center().y())
+    assert track.lines[0].display_end_override_ms == 2600
+    _release(widget, widget._x_for_ms(1200), right_rect.center().y())
+
+
+def test_selection_paint_smoke(qapp) -> None:
+    widget = TrackTimelineView()
+    widget.resize(800, 180)
+    widget.set_tracks([("主字幕", _make_track())])
+    widget.set_duration(10_000)
+    widget.set_display_windows([{0: (500, 3200)}])
+    _lane, rect = widget._lane_geometry()[0]
+    _click(widget, widget._x_for_ms(1650), rect.center().y())
+    widget.grab()  # 选中态 + 把手绘制
