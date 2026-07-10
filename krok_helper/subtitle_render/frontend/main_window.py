@@ -1015,10 +1015,13 @@ class SubtitleRenderWindow(QWidget):
             self._preview_panel.set_populated(False)
             self._video_settings_panel.set_populated(False)
             self._property_panel.set_roles([])
-            # 播放条复位
+            # 播放条 + 字幕轨道复位
             self._transport_bar.set_audio_source(None)
             self._transport_bar.set_time(0)
             self._transport_bar.set_duration(0)
+            self._tracks_view.set_tracks([])
+            self._tracks_view.set_duration(0)
+            self._tracks_view.set_time(0)
         finally:
             self._loading_project = False
 
@@ -1199,6 +1202,8 @@ class SubtitleRenderWindow(QWidget):
 
         # 底部：字幕轨道（波形已移除，不做波形图功能）
         self._tracks_view = TrackTimelineView()
+        self._tracks_view.seekRequested.connect(self._transport_bar.set_time)
+        self._transport_bar.timeChanged.connect(self._tracks_view.set_time)
         body.addWidget(self._tracks_view)
 
         body.setStretchFactor(0, 5)
@@ -1437,6 +1442,7 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
         self._selected_scheme_key = self._property_panel.current_scheme_key()
         self._preview_panel.set_track(track)
+        self._sync_tracks_view()
         self._refresh_transport_duration()
         self._transport_bar.set_time(0)
         self._margin_check_timer.start()
@@ -1540,6 +1546,7 @@ class SubtitleRenderWindow(QWidget):
         if self._audio_info is not None and self._audio_info.duration > 0:
             candidates.append(int(self._audio_info.duration * 1000))
         duration = max(candidates, default=0)
+        self._tracks_view.set_duration(duration)
         if duration > 0:
             self._transport_bar.set_duration(duration)
 
@@ -1708,6 +1715,16 @@ class SubtitleRenderWindow(QWidget):
 
     def _sync_extra_tracks_to_preview(self) -> None:
         self._preview_panel.set_extra_tracks(self._extra_track_list())
+        self._sync_tracks_view()
+
+    def _sync_tracks_view(self) -> None:
+        """把主 + 副字幕源喂给底部字幕轨道（T1 = 主字幕）。"""
+        if self._timing_track is None:
+            self._tracks_view.set_tracks([])
+            return
+        named = [("主字幕", self._timing_track)]
+        named.extend((source.name, source.track) for source in self._extra_sources)
+        self._tracks_view.set_tracks(named)
 
     def _on_source_selected(self, index: int) -> None:
         self._active_source_index = max(int(index), 0)
