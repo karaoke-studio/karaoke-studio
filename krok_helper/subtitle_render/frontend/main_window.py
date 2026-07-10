@@ -128,6 +128,9 @@ from krok_helper.subtitle_render.frontend.theme import palette, themed
 apply_qfluent_menu_lifetime_patch()
 
 SUBTITLE_FILTER = "SUG 项目 / Nicokara LRC (*.sug *.lrc);;SUG 项目 (*.sug);;Nicokara 逐字 LRC (*.lrc);;所有文件 (*.*)"
+
+_UNDO_STACK_LIMIT = 200
+"""撤销栈上限（字幕轨道显示/隐藏时间编辑）。"""
 VIDEO_FILTER = "视频文件 (*.mp4 *.mkv *.mov *.webm *.avi *.flv);;所有文件 (*.*)"
 OUTPUT_FILTER = "MP4 视频 (*.mp4);;所有文件 (*.*)"
 PROJECT_FILTER = f"字幕渲染项目 (*{PROJECT_FILE_SUFFIX});;所有文件 (*.*)"
@@ -677,6 +680,9 @@ class SubtitleRenderWindow(QWidget):
         self._workflow_context = workflow_context
 
         self._timing_track: Optional[TimingTrack] = None
+        # 字幕轨道编辑的撤销/重做栈：每项 (轨道序号, 行索引, 旧 (上屏, 消失) 覆盖, 新覆盖)
+        self._undo_stack: list[tuple[int, int, object, object]] = []
+        self._redo_stack: list[tuple[int, int, object, object]] = []
         self._extra_sources: list[ExtraSubtitleSource] = []
         """副字幕源（N3 多歌词文件，如コーラス轨）：与主字幕同帧叠绘。"""
         self._active_source_index = 0
@@ -1008,6 +1014,7 @@ class SubtitleRenderWindow(QWidget):
             self._timing_track = None
             self._extra_sources = []
             self._active_source_index = 0
+            self._clear_undo_history()
             self._subtitle_path = None
             self._video_path = None
             self._video_info = None
@@ -1212,7 +1219,7 @@ class SubtitleRenderWindow(QWidget):
         # 底部：字幕轨道（波形已移除，不做波形图功能）
         self._tracks_view = TrackTimelineView()
         self._tracks_view.seekRequested.connect(self._transport_bar.set_time)
-        self._tracks_view.displayWindowChanged.connect(self._on_display_window_changed)
+        self._tracks_view.displayWindowEdited.connect(self._on_display_window_edited)
         self._transport_bar.timeChanged.connect(self._tracks_view.set_time)
         body.addWidget(self._tracks_view)
 
@@ -1237,6 +1244,11 @@ class SubtitleRenderWindow(QWidget):
             (QKeySequence.StandardKey.Open, self._open_project),
             (QKeySequence.StandardKey.Save, self._save_project),
             (QKeySequence.StandardKey.SaveAs, self._save_project_as),
+            # 撤销/重做：字幕轨道显示/隐藏时间编辑（Ctrl+Z / Ctrl+Y；
+            # 另补 Ctrl+Shift+Z，StandardKey.Redo 在 Windows 上只映射 Ctrl+Y）
+            (QKeySequence.StandardKey.Undo, self._undo_edit),
+            (QKeySequence.StandardKey.Redo, self._redo_edit),
+            ("Ctrl+Shift+Z", self._redo_edit),
         ):
             shortcut = QShortcut(QKeySequence(seq), self)
             shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
@@ -1445,6 +1457,8 @@ class SubtitleRenderWindow(QWidget):
         self._timing_track = track
         self._subtitle_path = source_path
         self._active_source_index = 0
+        # 换字幕源后旧的行索引全部失效
+        self._clear_undo_history()
         self._refresh_source_ui()
         self._lyrics_panel.set_track(track)
         self._lyrics_panel.set_role_options(self._merged_role_options())
@@ -1782,9 +1796,17 @@ class SubtitleRenderWindow(QWidget):
             [display_windows_for_style(track, self._style) for track in self._all_tracks()]
         )
 
-    def _on_display_window_changed(self, track_index: int) -> None:
-        """字幕轨道拖动把手改了某句显示/隐藏时间：刷新预览 + 标脏。"""
-        # 覆盖值已由轨道视图直接写进 TimingLine；track 是原地修改的，
+    def _on_display_window_edited(
+        self, track_index: int, line_index: int, old_values: object, new_values: object
+    ) -> None:
+        """字幕轨道拖动把手改了某句显示/隐藏时间：入撤销栈 + 刷新预览 + 标脏。"""
+        self._undo_stack.append((track_index, line_index, old_values, new_values))
+        del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+        self._refresh_after_display_edit(track_index)
+
+    def _refresh_after_display_edit(self, track_index: int) -> None:
+        # 覆盖值已直接写在 TimingLine 上；track 是原地修改的，
         # 预览（含异步渲染 worker）不会自己发现——重新喂一次。
         if track_index == 0 and self._timing_track is not None:
             self._preview_panel.set_track(self._timing_track)
@@ -1793,6 +1815,55 @@ class SubtitleRenderWindow(QWidget):
             self._preview_panel.set_extra_tracks(self._extra_track_list())
         self._refresh_tracks_view_windows()
         self._mark_project_dirty()
+
+    def _track_by_index(self, track_index: int) -> Optional[TimingTrack]:
+        if track_index == 0:
+            return self._timing_track
+        if 1 <= track_index <= len(self._extra_sources):
+            return self._extra_sources[track_index - 1].track
+        return None
+
+    def _restore_display_override(
+        self, track_index: int, line_index: int, values: object
+    ) -> bool:
+        track = self._track_by_index(track_index)
+        if (
+            track is None
+            or not isinstance(values, tuple)
+            or not 0 <= line_index < len(track.lines)
+        ):
+            return False
+        start, end = values
+        line = track.lines[line_index]
+        line.display_start_override_ms = start
+        line.display_end_override_ms = end
+        self._refresh_after_display_edit(track_index)
+        return True
+
+    def _undo_edit(self) -> None:
+        """Ctrl+Z：撤销最近一次字幕轨道显示/隐藏时间编辑。"""
+        while self._undo_stack:
+            track_index, line_index, old_values, new_values = self._undo_stack.pop()
+            if self._restore_display_override(track_index, line_index, old_values):
+                self._redo_stack.append(
+                    (track_index, line_index, old_values, new_values)
+                )
+                return
+            # 目标轨道/行已不存在（换源等）→ 丢弃该条继续往下找
+
+    def _redo_edit(self) -> None:
+        """Ctrl+Y / Ctrl+Shift+Z：重做被撤销的编辑。"""
+        while self._redo_stack:
+            track_index, line_index, old_values, new_values = self._redo_stack.pop()
+            if self._restore_display_override(track_index, line_index, new_values):
+                self._undo_stack.append(
+                    (track_index, line_index, old_values, new_values)
+                )
+                return
+
+    def _clear_undo_history(self) -> None:
+        self._undo_stack.clear()
+        self._redo_stack.clear()
 
     def _on_source_selected(self, index: int) -> None:
         self._active_source_index = max(int(index), 0)
@@ -1848,6 +1919,8 @@ class SubtitleRenderWindow(QWidget):
             return
         del self._extra_sources[extra_index]
         self._active_source_index = 0
+        # 副字幕源序号整体前移，撤销记录里的轨道序号失效
+        self._clear_undo_history()
         self._refresh_source_ui()
         self._refresh_lyrics_panel_source()
         self._sync_extra_tracks_to_preview()

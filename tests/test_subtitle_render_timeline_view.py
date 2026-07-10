@@ -318,8 +318,8 @@ def test_drag_left_handle_writes_show_override(qapp) -> None:
     widget.set_duration(10_000)
     widget.set_display_windows([{0: (800, 3000)}])
 
-    changed: list[int] = []
-    widget.displayWindowChanged.connect(changed.append)
+    edits: list[tuple] = []
+    widget.displayWindowEdited.connect(lambda *args: edits.append(args))
 
     _lane, rect = widget._lane_geometry()[0]
     _click(widget, widget._x_for_ms(1650), rect.center().y())  # 选中第一句
@@ -331,11 +331,34 @@ def test_drag_left_handle_writes_show_override(qapp) -> None:
     _move(widget, widget._x_for_ms(300), left_rect.center().y())
     assert track.lines[0].display_start_override_ms == pytest.approx(300, abs=30)
     assert widget._windows[0][0][0] == track.lines[0].display_start_override_ms
-    assert changed == []  # 拖动中不通知
+    assert edits == []  # 拖动中不通知
 
     _release(widget, widget._x_for_ms(300), left_rect.center().y())
-    assert changed == [0]
+    assert len(edits) == 1
+    track_index, line_index, old_values, new_values = edits[0]
+    assert (track_index, line_index) == (0, 0)
+    assert old_values == (None, None)
+    assert new_values == (track.lines[0].display_start_override_ms, None)
     assert widget._drag is None
+
+
+def test_handle_press_release_without_move_emits_nothing(qapp) -> None:
+    track = _make_track()
+    widget = TrackTimelineView()
+    widget.resize(800, 180)
+    widget.set_tracks([("主字幕", track)])
+    widget.set_duration(10_000)
+    widget.set_display_windows([{0: (800, 3000)}])
+
+    edits: list[tuple] = []
+    widget.displayWindowEdited.connect(lambda *args: edits.append(args))
+
+    _lane, rect = widget._lane_geometry()[0]
+    _click(widget, widget._x_for_ms(1650), rect.center().y())
+    left_rect, _right, _lane_idx, _block = widget._handle_rects()
+    _click(widget, left_rect.center().x(), left_rect.center().y())
+    _release(widget, left_rect.center().x(), left_rect.center().y())
+    assert edits == []  # 没有实际变化不产生可撤销编辑
 
 
 def test_drag_right_handle_clamps_to_sing_end(qapp) -> None:

@@ -143,10 +143,11 @@ class TrackTimelineView(QWidget):
     seekRequested = Signal(int)
     """用户点击 / 拖动轨道请求跳转（毫秒）。"""
 
-    displayWindowChanged = Signal(int)
-    """用户拖动把手修改了某轨道（参数 = 轨道序号，0 = 主字幕）某句的
-    显示/隐藏时间覆盖。写入已直接落在 ``TimingLine`` 上，宿主收到后
-    刷新预览并标脏。"""
+    displayWindowEdited = Signal(int, int, object, object)
+    """用户拖动把手完成了一次显示/隐藏时间编辑：
+    ``(轨道序号, 行索引, 旧 (上屏覆盖, 消失覆盖), 新 (上屏覆盖, 消失覆盖))``。
+    新值已直接写在 ``TimingLine`` 上；宿主收到后刷新预览、标脏，并用
+    旧值入撤销栈（Ctrl+Z）。拖动无实际变化时不发。"""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -729,12 +730,14 @@ class TrackTimelineView(QWidget):
         handles = self._handle_rects()
         if handles is not None:
             left_rect, right_rect, lane_index, block = handles
+            # 按下时记住旧覆盖值，松手时作为一次可撤销的编辑上报
+            old_values = self._line_override_values(lane_index, block.line_index)
             if left_rect.adjusted(-3, -3, 3, 3).contains(pos):
-                self._drag = ("lead", lane_index, block)
+                self._drag = ("lead", lane_index, block, old_values)
                 event.accept()
                 return
             if right_rect.adjusted(-3, -3, 3, 3).contains(pos):
-                self._drag = ("tail", lane_index, block)
+                self._drag = ("tail", lane_index, block, old_values)
                 event.accept()
                 return
         if self._ruler_rect().contains(pos):
@@ -836,10 +839,21 @@ class TrackTimelineView(QWidget):
             self.unsetCursor()
             QToolTip.hideText()
 
+    def _line_override_values(
+        self, lane_index: int, line_index: int
+    ) -> tuple[Optional[int], Optional[int]]:
+        line = self._track_refs[lane_index].lines[line_index]
+        return line.display_start_override_ms, line.display_end_override_ms
+
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802 — Qt override
         if self._drag is not None and self._drag[0] in ("lead", "tail"):
             # 拖动结束才通知宿主刷新预览，避免拖动中反复重渲染
-            self.displayWindowChanged.emit(self._drag[1])
+            _mode, lane_index, block, old_values = self._drag
+            new_values = self._line_override_values(lane_index, block.line_index)
+            if new_values != old_values:
+                self.displayWindowEdited.emit(
+                    lane_index, block.line_index, old_values, new_values
+                )
         self._drag = None
         super().mouseReleaseEvent(event)
 
