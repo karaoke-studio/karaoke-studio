@@ -108,6 +108,7 @@ _SCHEME_FIELDS = {
     "glow_radius_px",
     "glow_before_radius_px",
     "glow_after_radius_px",
+    "glow_concentration_level",
     "shadow_color",
     "shadow_offset_x",
     "shadow_offset_y",
@@ -120,6 +121,7 @@ _SCHEME_FIELDS = {
     "ruby_glow_radius_px",
     "ruby_glow_before_radius_px",
     "ruby_glow_after_radius_px",
+    "ruby_glow_concentration_level",
     "ruby_shadow_offset_x",
     "ruby_shadow_offset_y",
     "karaoke_colors",
@@ -133,6 +135,7 @@ _RUBY_COLOR_SUBJECT_FIELDS = {
     "glow_radius_px": "ruby_glow_radius_px",
     "glow_before_radius_px": "ruby_glow_before_radius_px",
     "glow_after_radius_px": "ruby_glow_after_radius_px",
+    "glow_concentration_level": "ruby_glow_concentration_level",
     "shadow_offset_x": "ruby_shadow_offset_x",
     "shadow_offset_y": "ruby_shadow_offset_y",
 }
@@ -1666,6 +1669,7 @@ class PropertyPanel(QWidget):
             ruby_glow_radius_px=None,
             ruby_glow_before_radius_px=None,
             ruby_glow_after_radius_px=None,
+            ruby_glow_concentration_level=None,
             ruby_shadow_offset_x=None,
             ruby_shadow_offset_y=None,
         )
@@ -1795,6 +1799,22 @@ class PropertyPanel(QWidget):
         )
         self._glow_after_radius_field = _field("走字后发光", self._glow_after_radius_spin)
         detail_layout.addWidget(self._glow_after_radius_field, 1, 1)
+
+        self._glow_concentration_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._glow_concentration_combo)
+        for label, value in [("低", 0), ("中", 1), ("高", 2)]:
+            self._glow_concentration_combo.addItem(label, value)
+        self._glow_concentration_combo.currentIndexChanged.connect(
+            lambda _index: self._update_color_subject_style(
+                glow_concentration_level=int(
+                    self._glow_concentration_combo.currentData() or 0
+                )
+            )
+        )
+        self._glow_concentration_field = _field(
+            "发光浓度", self._glow_concentration_combo
+        )
+        detail_layout.addWidget(self._glow_concentration_field, 2, 0, 1, 2)
 
         detail_layout.setColumnStretch(0, 1)
         detail_layout.setColumnStretch(1, 1)
@@ -3473,6 +3493,7 @@ class PropertyPanel(QWidget):
         self._shadow_y_field.setVisible(is_decoration and is_shadow)
         self._glow_radius_field.setVisible(is_decoration and is_glow)
         self._glow_after_radius_field.setVisible(is_decoration and is_glow)
+        self._glow_concentration_field.setVisible(is_decoration and is_glow)
 
     def _sync_color_subject_style_controls(self) -> None:
         if not hasattr(self, "_stroke_width_spin"):
@@ -3499,6 +3520,14 @@ class PropertyPanel(QWidget):
             )
             self._glow_after_radius_spin.setValue(
                 int(self._color_subject_value("glow_after_radius_px"))
+            )
+            self._glow_concentration_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._glow_concentration_combo.findData(
+                        int(self._color_subject_value("glow_concentration_level"))
+                    ),
+                )
             )
             self._shadow_x_spin.setValue(
                 int(self._color_subject_value("shadow_offset_x"))
@@ -4208,6 +4237,7 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         glow_radius_px=int(panel._scheme_value("glow_before_radius_px")),
         glow_before_radius_px=int(panel._scheme_value("glow_before_radius_px")),
         glow_after_radius_px=int(panel._scheme_value("glow_after_radius_px")),
+        glow_concentration_level=int(panel._scheme_value("glow_concentration_level")),
         shadow_color=str(panel._scheme_value("shadow_color")),
         shadow_offset_x=int(panel._scheme_value("shadow_offset_x")),
         shadow_offset_y=int(panel._scheme_value("shadow_offset_y")),
@@ -4220,6 +4250,9 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         ruby_glow_radius_px=panel._scheme_value("ruby_glow_radius_px"),
         ruby_glow_before_radius_px=panel._scheme_value("ruby_glow_before_radius_px"),
         ruby_glow_after_radius_px=panel._scheme_value("ruby_glow_after_radius_px"),
+        ruby_glow_concentration_level=panel._scheme_value(
+            "ruby_glow_concentration_level"
+        ),
         ruby_shadow_offset_x=panel._scheme_value("ruby_shadow_offset_x"),
         ruby_shadow_offset_y=panel._scheme_value("ruby_shadow_offset_y"),
         karaoke_colors=panel._current_karaoke_colors(),

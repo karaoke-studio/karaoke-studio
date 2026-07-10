@@ -903,6 +903,47 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     assert panel._glow_after_radius_field.isHidden()
 
 
+def test_property_panel_glow_concentration_edits_main_and_ruby(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._color_layer_combo.setCurrentIndex(
+        panel._color_layer_combo.findData("shadow")
+    )
+    panel._decoration_type_combo.setCurrentIndex(
+        panel._decoration_type_combo.findData("glow")
+    )
+
+    assert not panel._glow_concentration_field.isHidden()
+    assert panel._glow_concentration_combo.currentData() == 0
+
+    panel._glow_concentration_combo.setCurrentIndex(
+        panel._glow_concentration_combo.findData(2)
+    )
+    assert emitted[-1].glow_concentration_level == 2
+    assert emitted[-1].ruby_glow_concentration_level is None
+
+    panel._color_subject_combo.setCurrentIndex(
+        panel._color_subject_combo.findData("ruby")
+    )
+    assert panel._glow_concentration_combo.currentData() == 2
+
+    panel._glow_concentration_combo.setCurrentIndex(
+        panel._glow_concentration_combo.findData(1)
+    )
+    assert emitted[-1].ruby_glow_concentration_level == 1
+    assert emitted[-1].glow_concentration_level == 2
+
+    panel._apply_main_colors_to_ruby()
+    assert emitted[-1].ruby_glow_concentration_level is None
+
+    panel._decoration_type_combo.setCurrentIndex(
+        panel._decoration_type_combo.findData("shadow")
+    )
+    assert panel._glow_concentration_field.isHidden()
+
+
 def test_property_panel_ruby_controls_emit_style(qapp):
     panel = PropertyPanel()
     emitted: list[Style] = []
