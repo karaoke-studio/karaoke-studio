@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -18,7 +19,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QRectF  # noqa: E402
-from PyQt6.QtGui import QColor, QFontMetrics, QImage, QPainter  # noqa: E402
+from PyQt6.QtGui import QColor, QFontMetrics, QImage, QPainter, QPainterPath  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 import krok_helper.subtitle_render.engine.painter as subtitle_painter  # noqa: E402
@@ -1944,6 +1945,60 @@ def test_paint_frame_glow_radius_changes_rendered_frame(qapp):
     assert _pixel_hash(img_small) != _pixel_hash(img_large)
 
 
+def test_n3_glow_blur_radii_match_three_concentration_levels():
+    assert subtitle_painter._glow_blur_radii(13, 0) == (13,)
+    assert subtitle_painter._glow_blur_radii(13, 1) == (13, 7)
+    assert subtitle_painter._glow_blur_radii(13, 2) == (13, 9, 5)
+
+
+def test_glow_concentration_levels_stack_more_alpha(qapp):
+    path = QPainterPath()
+    path.addRoundedRect(QRectF(36, 36, 24, 24), 3, 3)
+    rect = path.boundingRect()
+    fill = _solid_fill("#36BFFA")
+
+    def render(level: int) -> QImage:
+        image = QImage(96, 96, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(0)
+        painter = QPainter(image)
+        try:
+            subtitle_painter._paint_glow_path(
+                painter,
+                path,
+                fill,
+                rect,
+                13,
+                2,
+                0,
+                concentration_level=level,
+            )
+        finally:
+            painter.end()
+        return image
+
+    images = [render(level) for level in range(3)]
+    alpha_sums = [
+        int(
+            _img_rows_rgba(image)
+            .reshape((image.height(), image.width(), 4))[:, :, 3]
+            .sum()
+        )
+        for image in images
+    ]
+
+    assert len({_pixel_hash(image) for image in images}) == 3
+    assert alpha_sums[0] < alpha_sums[1] < alpha_sums[2]
+
+
+def test_glow_concentration_is_part_of_cached_run_signature():
+    low = SimpleNamespace(style=Style(glow_concentration_level=0))
+    medium = SimpleNamespace(style=Style(glow_concentration_level=1))
+
+    assert subtitle_painter._glyph_run_signature(low) != subtitle_painter._glyph_run_signature(
+        medium
+    )
+
+
 def test_paint_frame_default_dual_line_layout_renders_next_line(qapp):
     img_single = _blank()
     img_dual = _blank()
@@ -3005,6 +3060,38 @@ def test_role_ruby_defaults_to_role_main_colors_not_global_ruby(qapp):
     assert role_style.karaoke_colors == role_main
     assert role_style.ruby_karaoke_colors is None
     assert _effective_ruby_karaoke_colors(role_style).after.text.color == "#0088FF"
+
+
+def test_role_style_applies_ruby_outline_decoration_and_glow_overrides(qapp):
+    style = Style(
+        custom_style_schemes={
+            "A": SubtitleStyleScheme(
+                glow_concentration_level=1,
+                ruby_stroke_width_px=7,
+                ruby_stroke2_width_px=3,
+                ruby_decoration_kind="glow",
+                ruby_glow_radius_px=11,
+                ruby_glow_before_radius_px=12,
+                ruby_glow_after_radius_px=13,
+                ruby_glow_concentration_level=2,
+                ruby_shadow_offset_x=4,
+                ruby_shadow_offset_y=5,
+            )
+        }
+    )
+
+    role_style = _style_for_role(style, "A")
+
+    assert role_style.glow_concentration_level == 1
+    assert role_style.ruby_stroke_width_px == 7
+    assert role_style.ruby_stroke2_width_px == 3
+    assert role_style.ruby_decoration_kind == "glow"
+    assert role_style.ruby_glow_radius_px == 11
+    assert role_style.ruby_glow_before_radius_px == 12
+    assert role_style.ruby_glow_after_radius_px == 13
+    assert role_style.ruby_glow_concentration_level == 2
+    assert role_style.ruby_shadow_offset_x == 4
+    assert role_style.ruby_shadow_offset_y == 5
 
 
 def test_role_ruby_layer_uses_target_role_style(qapp):

@@ -338,6 +338,7 @@ from krok_helper.subtitle_render.models import (
     TimingLine,
     TimingTrack,
     TitleOverlay,
+    normalize_glow_concentration_level,
 )
 
 
@@ -878,6 +879,7 @@ def _title_overlay_layer_key(
         title.stroke2_width_px,
         title.decoration_kind,
         title.glow_radius_px,
+        title.glow_concentration_level,
         _fill_signature(title.shadow),
         title.shadow_offset_x,
         title.shadow_offset_y,
@@ -1007,6 +1009,7 @@ def _paint_title_text_stack(
             max(int(title.glow_radius_px), 1),
             title.stroke_width_px,
             title.stroke2_width_px,
+            concentration_level=title.glow_concentration_level,
         )
     elif title.shadow_offset_x or title.shadow_offset_y:
         _paint_shadow_silhouette(
@@ -2554,6 +2557,17 @@ def _glow_extent(stroke_width: int, stroke2_width: int, glow_radius: int) -> int
     return math.ceil(_glow_pen_width(stroke_width, stroke2_width, glow_radius) / 2 + max(glow_radius, 1) * 3)
 
 
+def _glow_blur_radii(radius: int, concentration_level: int) -> tuple[int, ...]:
+    """N3 ``DrawOneLineDecorBlurMulti`` radii for low/medium/high density."""
+    radius = max(int(radius), 1)
+    passes = normalize_glow_concentration_level(concentration_level) + 1
+    return tuple(radius - (index * radius // passes) for index in range(passes))
+
+
+def _glow_concentration_level(style: Style) -> int:
+    return normalize_glow_concentration_level(style.glow_concentration_level)
+
+
 def _glow_radius(style: Style, *, after: bool) -> int:
     value = style.glow_after_radius_px if after else style.glow_before_radius_px
     if value == 10 and style.glow_radius_px != 10:
@@ -2599,11 +2613,26 @@ def _ruby_glow_radius(style: Style, *, after: bool) -> int:
     return _scaled_glow_radius(style, _ruby_scale(style), after=after)
 
 
+def _ruby_glow_concentration_level(style: Style) -> int:
+    value = style.ruby_glow_concentration_level
+    if value is None:
+        return _glow_concentration_level(style)
+    return normalize_glow_concentration_level(value)
+
+
 def _ruby_paint_style(style: Style) -> Style:
     decoration = _ruby_decoration_kind(style)
-    if decoration == style.decoration_kind:
+    concentration = _ruby_glow_concentration_level(style)
+    if (
+        decoration == style.decoration_kind
+        and concentration == _glow_concentration_level(style)
+    ):
         return style
-    return replace(style, decoration_kind=decoration)
+    return replace(
+        style,
+        decoration_kind=decoration,
+        glow_concentration_level=concentration,
+    )
 
 
 def _text_visual_padding(style: Style, *, after: bool) -> int:
@@ -3878,12 +3907,22 @@ _SUBTITLE_SCHEME_STYLE_FIELDS: tuple[str, ...] = (
     "glow_radius_px",
     "glow_before_radius_px",
     "glow_after_radius_px",
+    "glow_concentration_level",
     "shadow_color",
     "shadow_offset_x",
     "shadow_offset_y",
     "ruby_font_size_px",
     "ruby_color",
     "ruby_gap_px",
+    "ruby_stroke_width_px",
+    "ruby_stroke2_width_px",
+    "ruby_decoration_kind",
+    "ruby_glow_radius_px",
+    "ruby_glow_before_radius_px",
+    "ruby_glow_after_radius_px",
+    "ruby_glow_concentration_level",
+    "ruby_shadow_offset_x",
+    "ruby_shadow_offset_y",
     "karaoke_colors",
     "ruby_karaoke_colors",
 )
@@ -4146,6 +4185,7 @@ def _glyph_run_signature(glyph: _GlyphLayout) -> tuple:
         glyph.style.decoration_kind,
         _glow_radius(glyph.style, after=False),
         _glow_radius(glyph.style, after=True),
+        _glow_concentration_level(glyph.style),
     )
 
 
@@ -4427,6 +4467,7 @@ def _paint_glyph_run_after_glow_direct(
         role_style.stroke_width_px,
         role_style.stroke2_width_px,
         source_clip=_after_glow_source_clip_rect(band, rect, pad, rtl, complete),
+        concentration_level=_glow_concentration_level(role_style),
     )
 
 
@@ -5110,6 +5151,7 @@ def _glyph_run_layer_key(
         role_style.stroke2_width_px,
         role_style.decoration_kind,
         _glow_radius(role_style, after=False),
+        _glow_concentration_level(role_style),
         after,
     )
 
@@ -5140,6 +5182,7 @@ def _glyph_run_after_glow_key(
         role_style.stroke_width_px,
         role_style.stroke2_width_px,
         _glow_radius(role_style, after=True),
+        _glow_concentration_level(role_style),
         role_style.decoration_kind,
     )
 
@@ -5240,6 +5283,7 @@ def _build_glyph_run_layer(
                 _glow_radius(role_style, after=False),
                 role_style.stroke_width_px,
                 role_style.stroke2_width_px,
+                concentration_level=_glow_concentration_level(role_style),
             )
         elif has_shadow:
             _paint_shadow_silhouette(
@@ -5322,6 +5366,7 @@ def _build_glyph_run_glow_layer(
             radius,
             role_style.stroke_width_px,
             role_style.stroke2_width_px,
+            concentration_level=_glow_concentration_level(role_style),
         )
     finally:
         p.end()
@@ -6372,6 +6417,7 @@ def _paint_char_karaoke_stack(
                             _glow_radius(style, after=True),
                             style.stroke_width_px,
                             style.stroke2_width_px,
+                            concentration_level=_glow_concentration_level(style),
                         )
                 finally:
                     painter.restore()
@@ -6493,6 +6539,7 @@ def _paint_glow_path(
     stroke_width: int,
     stroke2_width: int,
     source_clip: QRectF | None = None,
+    concentration_level: int = 0,
 ) -> None:
     radius = max(radius, 1)
     width = _glow_pen_width(stroke_width, stroke2_width, radius)
@@ -6518,7 +6565,9 @@ def _paint_glow_path(
     finally:
         p.end()
 
-    painter.drawImage(QPointF(layer_rect.left(), layer_rect.top()), _blur_image(source, radius))
+    target = QPointF(layer_rect.left(), layer_rect.top())
+    for blur_radius in _glow_blur_radii(radius, concentration_level):
+        painter.drawImage(target, _blur_image(source, blur_radius))
 
 
 def _blur_image(source: QImage, radius: int) -> QImage:
@@ -8440,6 +8489,7 @@ def _ruby_text_layer_key(
         _ruby_shadow_dy(style),
         _ruby_decoration_kind(style),
         _ruby_glow_radius(style, after=after),
+        _ruby_glow_concentration_level(style),
         after,
         draw_glow,
     )
@@ -8469,6 +8519,7 @@ def _ruby_glow_layer_key(
         _ruby_stroke_width(style),
         _ruby_stroke2_width(style),
         _ruby_glow_radius(style, after=after),
+        _ruby_glow_concentration_level(style),
         after,
     )
 
@@ -8637,6 +8688,7 @@ def _build_ruby_glow_layer(
             glow_radius,
             stroke_width,
             stroke2_width,
+            concentration_level=_ruby_glow_concentration_level(style),
         )
     finally:
         p.end()
@@ -9306,6 +9358,7 @@ def _paint_text_layer_stack(
                 max(glow_radius, 1),
                 stroke_width,
                 stroke2_width,
+                concentration_level=_glow_concentration_level(style),
             )
     elif shadow_dx or shadow_dy:
         _paint_shadow_silhouette(
