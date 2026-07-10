@@ -2670,8 +2670,7 @@ class KrokHelperQtApp(QMainWindow):
         ):
             self._preparing_subtitle_render_workflow = True
             try:
-                if self._prepare_subtitle_render_from_workflow() is None:
-                    return
+                self._prepare_subtitle_render_from_workflow()
             finally:
                 self._preparing_subtitle_render_workflow = False
         if (
@@ -2691,7 +2690,6 @@ class KrokHelperQtApp(QMainWindow):
         store = getattr(getattr(self, "lyrics_timing_page", None), "_store", None)
         project = getattr(store, "project", None)
         if project is None:
-            QMessageBox.information(self, APP_TITLE, "请先在第 4 步完成歌词打轴。")
             return None
 
         save_path = getattr(store, "save_path", None)
