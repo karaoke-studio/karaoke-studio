@@ -314,6 +314,8 @@ def clear_before_layer_cache() -> None:
         _IMAGE_BRUSH_CACHE.clear()
     _TEXT_RUN_LAYER_CACHE.clear()
     _RUN_GLOW_CACHE.clear()
+    _CHAR_METRIC_CACHE.clear()
+    _RUBY_MEASURE_CACHE.clear()
 
 from krok_helper.subtitle_render.engine.timeline import (
     DisplayLine,
@@ -2143,6 +2145,35 @@ def _char_advance(
     return metrics.horizontalAdvance(ch_text)
 
 
+# 逐字 N3 度量（layout width / path left offset）是 (字符, 字体, 少数 style 标量) 的纯函数，
+# 但每次都要 QPainterPath.addText + boundingRect + bearing，布局段每帧逐字调用非常贵。
+# 按值键 memo：key 不含任何对象 id，track/style 被就地修改也不会取到脏值。
+_CHAR_METRIC_CACHE: dict[tuple, tuple[int, float]] = {}
+_CHAR_METRIC_CACHE_MAX = 16384
+
+
+def _font_signature(font: QFont) -> tuple:
+    return (font.family(), font.pixelSize(), int(font.weight()), font.italic())
+
+
+def _char_metric_key(
+    ch_text: str,
+    glyph_font: QFont,
+    advance: int,
+    style: Style,
+) -> tuple:
+    # advance 进 key：它携带了 metrics（英数/日文字体选择）对结果的全部影响。
+    return (
+        ch_text,
+        _font_signature(glyph_font),
+        advance,
+        bool(style.allow_biting),
+        int(style.stroke_width_px),
+        int(style.space_width_percent),
+        int(style.font_size_px),
+    )
+
+
 def _truncate_div(numerator: int, denominator: int) -> int:
     """Integer division truncated toward zero, matching C# arithmetic."""
     if denominator == 0:
@@ -2190,51 +2221,15 @@ def _nicokara_char_geometry_left_offset(
     return _truncate_div(max(int(ink_width), 0) * left, advance)
 
 
-def _char_path_left_offset(
+def _char_layout_metrics(
     ch_text: str,
     font: QFont,
     metrics: QFontMetrics,
     latin_metrics: QFontMetrics,
     font_for,
     style: Style,
-) -> float:
-    """Offset from the layout-box left edge to the QPainterPath text origin."""
-    if not ch_text or ch_text.isspace():
-        return 0.0
-    glyph_font = font_for(ch_text) if font_for is not None else font
-    glyph_metrics = (
-        latin_metrics
-        if font_for is not None and ch_text and ch_text.isascii()
-        else metrics
-    )
-    path = QPainterPath()
-    path.addText(0.0, 0.0, glyph_font, ch_text)
-    bounds = path.boundingRect()
-    if bounds.isEmpty():
-        return 0.0
-    advance = _char_advance(ch_text, metrics, latin_metrics, font_for)
-    try:
-        left_bearing = glyph_metrics.leftBearing(ch_text)
-    except (TypeError, ValueError):
-        left_bearing = int(bounds.left())
-    geometry_left = _nicokara_char_geometry_left_offset(
-        int(bounds.width()),
-        advance,
-        left_bearing,
-        allow_biting=bool(style.allow_biting),
-    )
-    return -float(bounds.left()) + float(geometry_left) + max(int(style.stroke_width_px), 0) / 2.0
-
-
-def _char_layout_width(
-    ch_text: str,
-    font: QFont,
-    metrics: QFontMetrics,
-    latin_metrics: QFontMetrics,
-    font_for,
-    style: Style,
-) -> int:
-    """Character step using NicokaraMaker3-like outline and spacing rules."""
+) -> tuple[int, float]:
+    """(layout width, path left offset) using NicokaraMaker3-like rules, memoized."""
     glyph_font = font_for(ch_text) if font_for is not None else font
     glyph_metrics = (
         latin_metrics
@@ -2250,7 +2245,13 @@ def _char_layout_width(
     # Treat ASCII space explicitly.  Some headless Qt font backends expose a
     # tofu outline for it, while NicokaraMaker3 always applies SpaceWidth.
     if ch_text == " ":
-        return font_size * space_percent // 100 + edge_size
+        return font_size * space_percent // 100 + edge_size, 0.0
+
+    advance = _char_advance(ch_text, metrics, latin_metrics, font_for)
+    key = _char_metric_key(ch_text, glyph_font, advance, style)
+    cached = _CHAR_METRIC_CACHE.get(key)
+    if cached is not None:
+        return cached
 
     path = QPainterPath()
     if ch_text:
@@ -2258,25 +2259,71 @@ def _char_layout_width(
     bounds = path.boundingRect()
     if bounds.isEmpty():
         body_width = font_size * space_percent * 25 // 100 // 10
-        return max(body_width, 0) + edge_size
+        result = (max(body_width, 0) + edge_size, 0.0)
+    else:
+        try:
+            width_left_bearing = glyph_metrics.leftBearing(ch_text)
+            width_right_bearing = glyph_metrics.rightBearing(ch_text)
+        except (TypeError, ValueError):
+            # Multi-codepoint graphemes and non-BMP characters cannot always be
+            # represented by QChar; derive equivalent bearings from the same path.
+            width_left_bearing = int(bounds.left())
+            width_right_bearing = int(advance - bounds.right())
+        width = _nicokara_layout_width(
+            int(bounds.width()),
+            advance,
+            width_left_bearing,
+            width_right_bearing,
+            edge_size=edge_size,
+            allow_biting=bool(style.allow_biting),
+        )
+        try:
+            offset_left_bearing = glyph_metrics.leftBearing(ch_text)
+        except (TypeError, ValueError):
+            offset_left_bearing = int(bounds.left())
+        geometry_left = _nicokara_char_geometry_left_offset(
+            int(bounds.width()),
+            advance,
+            offset_left_bearing,
+            allow_biting=bool(style.allow_biting),
+        )
+        offset = (
+            -float(bounds.left())
+            + float(geometry_left)
+            + max(int(style.stroke_width_px), 0) / 2.0
+        )
+        result = (width, offset)
 
-    advance = _char_advance(ch_text, metrics, latin_metrics, font_for)
-    try:
-        left_bearing = glyph_metrics.leftBearing(ch_text)
-        right_bearing = glyph_metrics.rightBearing(ch_text)
-    except (TypeError, ValueError):
-        # Multi-codepoint graphemes and non-BMP characters cannot always be
-        # represented by QChar; derive equivalent bearings from the same path.
-        left_bearing = int(bounds.left())
-        right_bearing = int(advance - bounds.right())
-    return _nicokara_layout_width(
-        int(bounds.width()),
-        advance,
-        left_bearing,
-        right_bearing,
-        edge_size=edge_size,
-        allow_biting=bool(style.allow_biting),
-    )
+    if len(_CHAR_METRIC_CACHE) >= _CHAR_METRIC_CACHE_MAX:
+        _CHAR_METRIC_CACHE.clear()
+    _CHAR_METRIC_CACHE[key] = result
+    return result
+
+
+def _char_path_left_offset(
+    ch_text: str,
+    font: QFont,
+    metrics: QFontMetrics,
+    latin_metrics: QFontMetrics,
+    font_for,
+    style: Style,
+) -> float:
+    """Offset from the layout-box left edge to the QPainterPath text origin."""
+    if not ch_text or ch_text.isspace():
+        return 0.0
+    return _char_layout_metrics(ch_text, font, metrics, latin_metrics, font_for, style)[1]
+
+
+def _char_layout_width(
+    ch_text: str,
+    font: QFont,
+    metrics: QFontMetrics,
+    latin_metrics: QFontMetrics,
+    font_for,
+    style: Style,
+) -> int:
+    """Character step using NicokaraMaker3-like outline and spacing rules."""
+    return _char_layout_metrics(ch_text, font, metrics, latin_metrics, font_for, style)[0]
 
 
 def _letter_spacing(style: Style) -> int:
@@ -4471,6 +4518,85 @@ def _paint_glyph_run_after_glow_direct(
     )
 
 
+def _afterglow_strip_enabled() -> bool:
+    """走字中 after-glow 只逐帧模糊扫光前沿窄带（默认开）。
+
+    ``KROK_SUBTITLE_AFTERGLOW_STRIP=0`` 退回整行逐帧
+    ``_paint_glyph_run_after_glow_direct``（A/B 像素 oracle / 紧急回退用）。
+    """
+    return os.environ.get("KROK_SUBTITLE_AFTERGLOW_STRIP", "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+
+
+def _paint_glyph_run_after_glow_wipe(
+    painter: QPainter,
+    glyphs: list[_GlyphLayout],
+    baseline_y: int,
+    band: tuple[int, int],
+    *,
+    rtl: bool,
+    complete: bool,
+) -> None:
+    """走字中的已唱发光：前沿窄带逐帧模糊 + 其余贴整段烘焙位图。
+
+    N3 语义要求「先按扫光线裁源、再模糊」让前沿保持柔和，因此该层无法整层烘焙。
+    但 blur(裁切源) 与 blur(完整源) 只在扫光线 ±支撑半径（``_glow_extent``，≥3×radius）
+    内不同：seam（前沿 - pad）之前两者逐像素一致 → 直接贴 ``_RUN_GLOW_CACHE`` 里
+    整段 after-glow 烘焙；seam 之后仅对 2×pad 宽的窄带做逐帧 stroke+blur。模糊成本
+    随画布面积线性，长行收益一个数量级。"""
+    role_style = glyphs[0].style
+    if complete or not _afterglow_strip_enabled() or not _glow_cache_enabled():
+        _paint_glyph_run_after_glow_direct(
+            painter, glyphs, baseline_y, band, rtl=rtl, complete=complete
+        )
+        return
+    colors = _effective_karaoke_colors(role_style)
+    path = _glyph_run_path(glyphs, baseline_y)
+    rect = _glyph_run_rect(glyphs, baseline_y)
+    radius = _glow_radius(role_style, after=True)
+    pad = _glow_extent(role_style.stroke_width_px, role_style.stroke2_width_px, radius)
+    band_left, band_right = band
+    front = float(band_left) if rtl else float(band_right)
+    # 前沿窄带 [front-pad, front+pad]；seam 在其已唱侧边缘。
+    if rtl:
+        seam = front + pad
+        strip_clip = QRectF(front - pad, -1_000_000.0, 2.0 * pad, 2_000_000.0)
+        baked_clip = QRectF(seam, -1_000_000.0, 1_000_000.0, 2_000_000.0)
+    else:
+        seam = front - pad
+        strip_clip = QRectF(seam, -1_000_000.0, 2.0 * pad, 2_000_000.0)
+        baked_clip = QRectF(-1_000_000.0, -1_000_000.0, seam + 1_000_000.0, 2_000_000.0)
+    painter.save()
+    try:
+        painter.setClipRect(strip_clip)
+        _paint_glow_path(
+            painter,
+            path,
+            colors.after.shadow,
+            rect,
+            radius,
+            role_style.stroke_width_px,
+            role_style.stroke2_width_px,
+            source_clip=_after_glow_source_clip_rect(band, rect, pad, rtl, complete),
+            concentration_level=_glow_concentration_level(role_style),
+            target_clip=strip_clip,
+        )
+    finally:
+        painter.restore()
+    baked = _get_or_build_run_glow(glyphs, role_style, colors, after=True)
+    if baked.image.isNull():
+        return
+    run_left = min(glyph.left for glyph in glyphs)
+    anchor = QPointF(float(run_left) + baked.offset.x(), float(baseline_y) + baked.offset.y())
+    painter.save()
+    try:
+        painter.setClipRect(baked_clip)
+        painter.drawImage(anchor, baked.image)
+    finally:
+        painter.restore()
+
+
 def _after_glow_source_clip_rect(
     band: tuple[int, int],
     rect: QRectF,
@@ -4742,7 +4868,7 @@ class _GlyphRunAfterGlowLayer:
             painter.setOpacity(painter.opacity() * opacity)
             if self.transform is not None:
                 painter.setTransform(self.transform, combine=True)
-            _paint_glyph_run_after_glow_direct(
+            _paint_glyph_run_after_glow_wipe(
                 painter,
                 self.glyphs,
                 self.baseline_y,
@@ -6540,6 +6666,7 @@ def _paint_glow_path(
     stroke2_width: int,
     source_clip: QRectF | None = None,
     concentration_level: int = 0,
+    target_clip: QRectF | None = None,
 ) -> None:
     radius = max(radius, 1)
     width = _glow_pen_width(stroke_width, stroke2_width, radius)
@@ -6548,6 +6675,19 @@ def _paint_glow_path(
         return
     pad = _glow_extent(stroke_width, stroke2_width, radius) + 2
     layer_rect = bounds.adjusted(-pad, -pad, pad, pad)
+    if target_clip is not None:
+        # 调用方只消费 target_clip 内的输出：把 stroke/blur 画布水平裁到
+        # target ± pad（pad ≥ 模糊支撑半径），窄带模糊代替整行模糊。裁剪量取整，
+        # 保留 layer_rect 原有的小数相位——drawImage 的亚像素重采样必须与整行
+        # 路径逐位一致，否则扫光前沿的陡坡会产生半像素偏移。
+        needed_left = float(target_clip.left()) - pad
+        needed_right = float(target_clip.right()) + pad
+        if needed_left > layer_rect.left():
+            layer_rect.setLeft(layer_rect.left() + math.floor(needed_left - layer_rect.left()))
+        if needed_right < layer_rect.right():
+            layer_rect.setRight(layer_rect.right() - math.floor(layer_rect.right() - needed_right))
+        if layer_rect.isEmpty():
+            return
     image_w = max(1, math.ceil(layer_rect.width()))
     image_h = max(1, math.ceil(layer_rect.height()))
     source = QImage(image_w, image_h, QImage.Format.Format_ARGB32_Premultiplied)
@@ -9167,13 +9307,31 @@ def _ruby_interval_px(style: Style | None) -> int:
     return int(getattr(style, "ruby_interval_px", 0) or 0)
 
 
-def _ruby_unit_layouts(
-    units: list[str],
-    ruby_metrics: QFontMetrics,
-    style: Style | None,
-) -> list[tuple[str, float, float]]:
-    if style is None:
-        return [(unit, float(ruby_metrics.horizontalAdvance(unit)), 0.0) for unit in units]
+# ruby 测量资源（QFont + measure_style）与单元布局按值键缓存：_ruby_unit_layouts 逐帧
+# 高频调用（同一注音在 gap/宽度/偏移计算里一帧内被反复度量），每次 QFont 构造 +
+# dataclasses.replace + 逐单元度量的开销可观。key 覆盖下游度量读取的全部字段。
+_RUBY_MEASURE_CACHE: dict[tuple, tuple[QFont, Style]] = {}
+_RUBY_MEASURE_CACHE_MAX = 64
+_RUBY_UNIT_LAYOUT_CACHE: dict[tuple, list[tuple[str, float, float]]] = {}
+_RUBY_UNIT_LAYOUT_CACHE_MAX = 4096
+
+
+def _ruby_measure_key(style: Style) -> tuple:
+    return (
+        style.font_family,
+        max(int(style.ruby_font_size_px), 1),
+        style.italic,
+        _ruby_stroke_width(style),
+        _ruby_stroke2_width(style),
+        int(style.space_width_percent),
+        bool(style.allow_biting),
+    )
+
+
+def _ruby_measure_resources(style: Style, key: tuple) -> tuple[QFont, Style]:
+    cached = _RUBY_MEASURE_CACHE.get(key)
+    if cached is not None:
+        return cached
     ruby_font = _build_ruby_font(style)
     measure_style = replace(
         style,
@@ -9181,7 +9339,34 @@ def _ruby_unit_layouts(
         stroke_width_px=_ruby_stroke_width(style),
         stroke2_width_px=_ruby_stroke2_width(style),
     )
-    return [
+    if len(_RUBY_MEASURE_CACHE) >= _RUBY_MEASURE_CACHE_MAX:
+        _RUBY_MEASURE_CACHE.clear()
+    _RUBY_MEASURE_CACHE[key] = (ruby_font, measure_style)
+    return ruby_font, measure_style
+
+
+def _ruby_unit_layouts(
+    units: list[str],
+    ruby_metrics: QFontMetrics,
+    style: Style | None,
+) -> list[tuple[str, float, float]]:
+    if style is None:
+        return [(unit, float(ruby_metrics.horizontalAdvance(unit)), 0.0) for unit in units]
+    measure_key = _ruby_measure_key(style)
+    # metrics 指纹进 key：调用方的 ruby_metrics 可能按基础 style 构建、而 style 是
+    # 角色解析后的（见 _layout_rubies），两者字体不必一致；advance 取自 metrics。
+    metrics_sig = (
+        ruby_metrics.height(),
+        ruby_metrics.ascent(),
+        ruby_metrics.averageCharWidth(),
+        ruby_metrics.maxWidth(),
+    )
+    layout_key = (tuple(units), metrics_sig, measure_key)
+    cached = _RUBY_UNIT_LAYOUT_CACHE.get(layout_key)
+    if cached is not None:
+        return cached
+    ruby_font, measure_style = _ruby_measure_resources(style, measure_key)
+    result = [
         (
             unit,
             float(_char_layout_width(unit, ruby_font, ruby_metrics, ruby_metrics, None, measure_style)),
@@ -9189,6 +9374,10 @@ def _ruby_unit_layouts(
         )
         for unit in units
     ]
+    if len(_RUBY_UNIT_LAYOUT_CACHE) >= _RUBY_UNIT_LAYOUT_CACHE_MAX:
+        _RUBY_UNIT_LAYOUT_CACHE.clear()
+    _RUBY_UNIT_LAYOUT_CACHE[layout_key] = result
+    return result
 
 
 def _paint_ruby_text_fragment(

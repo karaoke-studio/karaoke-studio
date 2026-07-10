@@ -3926,6 +3926,35 @@ def test_vertical_layer_populates_and_clears_cache(qapp, monkeypatch):
     assert len(_TEXT_RUN_LAYER_CACHE) == 0
 
 
+@pytest.mark.parametrize("t_ms", [1300, 1700, 2100])
+@pytest.mark.parametrize("rtl", [False, True])
+def test_after_glow_strip_matches_full_blur_within_tolerance(qapp, monkeypatch, t_ms, rtl):
+    # 走字中 after-glow 的窄带优化（前沿逐帧模糊 + 其余贴烘焙位图）与整行逐帧模糊
+    # 的差异只剩烘焙位图与直绘之间既有的模糊尾部容差（软晕上 ≤12/255，肉眼不可见），
+    # 且扫光前沿不得偏移（窄带画布保留原亚像素相位）。
+    track = _track()
+    style = replace(
+        _glow_after_style(),
+        glow_concentration_level=2,
+        right_to_left=rtl,
+    )
+
+    monkeypatch.setenv("KROK_SUBTITLE_AFTERGLOW_STRIP", "0")
+    clear_before_layer_cache()
+    full = _blank()
+    paint_frame(full, track, t_ms, style)
+
+    monkeypatch.setenv("KROK_SUBTITLE_AFTERGLOW_STRIP", "1")
+    clear_before_layer_cache()
+    strip = _blank()
+    paint_frame(strip, track, t_ms, style)
+    clear_before_layer_cache()
+
+    diff = np.abs(_img_rows_rgba(full).astype(int) - _img_rows_rgba(strip).astype(int))
+    assert diff.max() <= 12
+    assert diff.mean() < 0.5
+
+
 # ---------------------------------------------------------------------------
 # P1：N3 布局对齐（负值间距 / ルビ間隔 / ルビ配置 / 余白警告）
 # ---------------------------------------------------------------------------
