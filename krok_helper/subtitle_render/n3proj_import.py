@@ -49,6 +49,7 @@ from krok_helper.subtitle_render.models import (
     TimingTrack,
     TitleOverlay,
     _paint_fill,
+    normalize_glow_concentration_level,
     style_to_dict,
 )
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
@@ -587,16 +588,17 @@ def _scheme_changes(
     decor_kind = _int(font.get("DecorKind"), 0)
     decor_size = _size(font.get("DecorSize"))
     if decor_kind == 2:
+        concentration = normalize_glow_concentration_level(font.get("BlurLevel"))
         changes["decoration_kind"] = "glow"
         changes["glow_radius_px"] = decor_size
         changes["glow_before_radius_px"] = decor_size
         changes["glow_after_radius_px"] = decor_size
+        changes["glow_concentration_level"] = concentration
         changes["ruby_decoration_kind"] = "glow"
         changes["ruby_glow_radius_px"] = decor_size
         changes["ruby_glow_before_radius_px"] = decor_size
         changes["ruby_glow_after_radius_px"] = decor_size
-        if _int(font.get("BlurLevel"), 0) > 0:
-            warnings.append(f"{context}：ブラー浓度（BlurLevel）暂不支持，已按默认浓度导入发光")
+        changes["ruby_glow_concentration_level"] = concentration
     elif decor_kind == 1:
         changes["decoration_kind"] = "shadow"
         changes["shadow_offset_x"] = decor_size
@@ -749,6 +751,9 @@ def _build_title_overlay(
         if decor_kind == 2:
             kwargs["decoration_kind"] = "glow"
             kwargs["glow_radius_px"] = decor_size
+            kwargs["glow_concentration_level"] = normalize_glow_concentration_level(
+                scheme.get("BlurLevel")
+            )
             kwargs["shadow_offset_x"] = 0
             kwargs["shadow_offset_y"] = 0
         elif decor_kind == 1:

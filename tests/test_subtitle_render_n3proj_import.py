@@ -51,7 +51,8 @@ def _font_info(name: str, font: str, face: str, char: int, edge: int, edge2: int
 
 
 def _lyrics_font(name: str, *, decor_kind: int = 1, decor_size: int = 5,
-                 after_text: dict | None = None, use_edge2=None) -> dict:
+                 blur_level: int = 0, after_text: dict | None = None,
+                 use_edge2=None) -> dict:
     brushes = [
         after_text or _solid_brush("ワイプ後／文字色", "FF0000", 1, 0, 0),
         _solid_brush("縁取り色", "FFFFFF", 1, 1, 1),
@@ -75,7 +76,7 @@ def _lyrics_font(name: str, *, decor_kind: int = 1, decor_size: int = 5,
         ],
         "DecorKind": decor_kind,
         "DecorSize": _size(decor_size),
-        "BlurLevel": 0,
+        "BlurLevel": blur_level,
         "SettingsName": name,
     }
 
@@ -293,6 +294,21 @@ def test_import_custom_scheme_with_gradient(imported):
     assert fill.gradient_stops[-1] == (100, "#0000FF")
 
 
+def test_import_blur_concentration_for_scheme_ruby_and_title(tmp_path):
+    payload = _project_payload(tmp_path)
+    payload["LyricsFonts"][1]["BlurLevel"] = 2
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+    scheme = style.custom_style_schemes["青配色"]
+
+    assert scheme.glow_concentration_level == 2
+    assert scheme.ruby_glow_concentration_level == 2
+    assert style.title_overlay is not None
+    assert style.title_overlay.glow_concentration_level == 2
+    assert not any("BlurLevel" in warning or "ブラー浓度" in warning for warning in result.warnings)
+
+
 def test_import_title_overlay(imported):
     style = style_from_dict(imported.project_data["style"])
     title = style.title_overlay
@@ -364,6 +380,7 @@ def test_image_background_warns(tmp_path):
 
 
 REAL_N3PROJ = Path(r"D:\カラオケ\songs\Marginality\1.n3proj")
+TACTIC_N3PROJ = Path(r"D:\カラオケ\songs\TACTIC\1.n3proj")
 
 
 @pytest.mark.skipif(not REAL_N3PROJ.is_file(), reason="本机样例工程不存在")
@@ -385,6 +402,26 @@ def test_import_real_project_smoke():
     assert [line.break_before for line in direct_track.lines] == result.project_data[
         "line_breaks_before"
     ]
+
+
+@pytest.mark.skipif(not TACTIC_N3PROJ.is_file(), reason="TACTIC 样例工程不存在")
+def test_import_tactic_project_style_parity():
+    result = load_n3proj(TACTIC_N3PROJ)
+    style = style_from_dict(result.project_data["style"])
+
+    assert style.glow_concentration_level == 1
+    assert style.ruby_glow_concentration_level == 1
+    assert style.letter_spacing_px == 7
+    assert style.stroke_width_px == 2
+    assert style.stroke2_width_px == 0
+    assert style.ruby_font_size_px == 45
+    assert style.ruby_stroke_width_px == 2
+    assert style.ruby_stroke2_width_px == 0
+    assert style.karaoke_colors is not None
+    assert style.karaoke_colors.after.text.color == "#FFF1FB"
+    assert style.karaoke_colors.after.stroke.color == "#4EAADE"
+    assert style.karaoke_colors.after.stroke2.color == "#000000"
+    assert style.karaoke_colors.after.shadow.color == "#4EAADE"
 
 
 CHORUS_LRC_TEXT = "[00:10:00]ラ[00:11:00]ラ[00:12:00]\n"
