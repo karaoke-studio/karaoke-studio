@@ -442,6 +442,55 @@ def test_missing_line_end_borrows_next_line_start():
     assert track.lines[0].end_ms == 3_000
 
 
+def test_trailing_multi_char_block_without_line_end_aligns_sug_span():
+    track = parse_nicokara_lrc(
+        "[00:01:00]This [00:01:20]love\n"
+        "[00:02:00]Next[00:02:50]\n"
+    )
+    line = track.lines[0]
+
+    assert "".join(ch.text for ch in line.chars) == "This love"
+    assert line.end_ms == 2_000
+    assert [
+        (
+            ch.text,
+            ch.start_ms,
+            ch.source_span_start_ms,
+            ch.source_span_end_ms,
+            ch.source_span_index,
+            ch.source_span_count,
+        )
+        for ch in line.chars[-4:]
+    ] == [
+        ("l", 1_200, 1_200, 2_000, 0, 4),
+        ("o", 1_400, 1_200, 2_000, 1, 4),
+        ("v", 1_600, 1_200, 2_000, 2, 4),
+        ("e", 1_800, 1_200, 2_000, 3, 4),
+    ]
+
+
+def test_space_release_anchor_between_words_aligns_sug_span():
+    track = parse_nicokara_lrc("[00:01:00]も[00:01:40] [00:02:00]憧[00:02:50]\n")
+    line = track.lines[0]
+
+    assert "".join(ch.text for ch in line.chars) == "も 憧"
+    assert [
+        (
+            ch.text,
+            ch.start_ms,
+            ch.source_span_start_ms,
+            ch.source_span_end_ms,
+            ch.source_span_index,
+            ch.source_span_count,
+        )
+        for ch in line.chars[:2]
+    ] == [
+        ("も", 1_000, 1_000, 2_000, 0, 2),
+        (" ", 1_500, 1_000, 2_000, 1, 2),
+    ]
+    assert line.chars[2].start_ms == 2_000
+
+
 def test_emoji_tag_not_parsed_as_body_and_kept_in_custom():
     # @Emoji 行（歌手→图定义）应归入尾部元数据，不污染正文，并保留以便 round-trip。
     text = (

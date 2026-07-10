@@ -322,6 +322,8 @@ def _parse_body_line(
 
 
 def _normalize_cross_line_anchors(lines: list[TimingLine]) -> None:
+    _normalize_space_release_anchors(lines)
+    _normalize_trailing_unclosed_blocks(lines)
     _borrow_missing_line_ends(lines)
 
     previous_end_ms: Optional[int] = None
@@ -345,6 +347,97 @@ def _normalize_cross_line_anchors(lines: list[TimingLine]) -> None:
                 ch.source_span_count = leading_count
         if line.end_ms is not None:
             previous_end_ms = line.end_ms
+
+
+def _normalize_space_release_anchors(lines: list[TimingLine]) -> None:
+    """Make exported LRC space-release anchors behave like direct SUG loading.
+
+    SUG stores a short phrase break as ``previous timed char`` + an untimed
+    space + ``next timed char``.  Nicokara LRC exports the same pause as a
+    timestamp before the space.  For rendering parity, merge the previous char
+    and the space into one shared span ending at the next non-space char.
+    """
+
+    for line in lines:
+        if line.is_blank or len(line.chars) < 3:
+            continue
+        chars = line.chars
+        for index in range(1, len(chars) - 1):
+            previous = chars[index - 1]
+            current = chars[index]
+            following = chars[index + 1]
+            if (
+                not current.text.isspace()
+                or previous.text.isspace()
+                or following.text.isspace()
+                or previous.role_label != current.role_label
+                or current.role_label != following.role_label
+                or not _is_plain_timing_char(previous)
+                or not _is_plain_timing_char(current)
+                or not (previous.start_ms < current.start_ms < following.start_ms)
+            ):
+                continue
+            _apply_shared_span(
+                [previous, current],
+                start_ms=previous.start_ms,
+                end_ms=following.start_ms,
+            )
+
+
+def _normalize_trailing_unclosed_blocks(lines: list[TimingLine]) -> None:
+    """Spread a final multi-char block with no explicit line end to next line.
+
+    Direct SUG loading uses the next sentence's first timestamp as the final
+    untimed group end.  LRC export omits an explicit trailing timestamp for
+    some lines (for example ``[01:04:48]love``), so reproduce the SUG span
+    before the compatibility ``line.end_ms`` borrow runs.
+    """
+
+    for index, line in enumerate(lines):
+        if line.is_blank or not line.chars or line.end_ms is not None:
+            continue
+        end_ms = _next_line_leader_ms(lines, index + 1)
+        if end_ms is None:
+            continue
+        chars = line.chars
+        group_start = len(chars) - 1
+        start_ms = chars[group_start].start_ms
+        while (
+            group_start > 0
+            and chars[group_start - 1].start_ms == start_ms
+            and _is_plain_timing_char(chars[group_start - 1])
+        ):
+            group_start -= 1
+        group = chars[group_start:]
+        if len(group) <= 1 or end_ms <= start_ms:
+            continue
+        if not all(_is_plain_timing_char(ch) for ch in group):
+            continue
+        _apply_shared_span(group, start_ms=start_ms, end_ms=end_ms)
+
+
+def _apply_shared_span(
+    chars: list[TimingChar],
+    *,
+    start_ms: int,
+    end_ms: int,
+) -> None:
+    starts = _spread_text_starts(start_ms, end_ms, len(chars))
+    for offset, ch in enumerate(chars):
+        ch.start_ms = starts[offset]
+        ch.source_span_start_ms = start_ms
+        ch.source_span_end_ms = end_ms
+        ch.source_span_index = offset
+        ch.source_span_count = len(chars)
+
+
+def _is_plain_timing_char(ch: TimingChar) -> bool:
+    return (
+        ch.source_span_start_ms is None
+        and ch.source_span_end_ms is None
+        and ch.source_span_index == 0
+        and ch.source_span_count == 1
+    )
 
 
 def _borrow_missing_line_ends(lines: list[TimingLine]) -> None:
