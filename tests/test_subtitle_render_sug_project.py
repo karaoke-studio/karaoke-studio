@@ -116,6 +116,69 @@ def test_load_sug_timing_track_reads_sug_file(tmp_path: Path) -> None:
     assert [line.chars[0].text for line in track.lines] == ["愛", "空"]
 
 
+def test_sug_project_preserves_untimed_characters_in_timed_spans() -> None:
+    singer = Singer(id="main", name="主唱", color="#ff0000", is_default=True)
+    chars = [
+        Character(char="I", check_count=1, timestamps=[1000], singer_id=singer.id),
+        Character(char="'", check_count=0, singer_id=singer.id, linked_to_next=True),
+        Character(char="v", check_count=0, singer_id=singer.id, linked_to_next=True),
+        Character(char="e", check_count=0, singer_id=singer.id),
+        Character(char=" ", check_count=0, singer_id=singer.id),
+        Character(char="n", check_count=1, timestamps=[1500], singer_id=singer.id),
+        Character(char="e", check_count=0, singer_id=singer.id, linked_to_next=True),
+        Character(char="v", check_count=1, timestamps=[1700], singer_id=singer.id),
+        Character(char="e", check_count=0, singer_id=singer.id, linked_to_next=True),
+        Character(char="r", check_count=0, singer_id=singer.id),
+        Character(char=" ", check_count=0, singer_id=singer.id),
+        Character(char="s", check_count=1, timestamps=[1900], singer_id=singer.id),
+        Character(char="e", check_count=0, singer_id=singer.id, linked_to_next=True),
+        Character(char="e", check_count=0, singer_id=singer.id, linked_to_next=True),
+        Character(char="n", check_count=0, singer_id=singer.id),
+        Character(char=" ", check_count=0, singer_id=singer.id),
+        Character(char="a", check_count=1, timestamps=[2400], singer_id=singer.id),
+        Character(char=" ", check_count=0, singer_id=singer.id),
+        Character(char="l", check_count=1, timestamps=[2600], singer_id=singer.id),
+        Character(char="i", check_count=0, singer_id=singer.id, linked_to_next=True),
+        Character(char="a", check_count=0, singer_id=singer.id, linked_to_next=True),
+        Character(
+            char="r",
+            check_count=1,
+            timestamps=[3000],
+            sentence_end_ts=3400,
+            is_sentence_end=True,
+            is_line_end=True,
+            singer_id=singer.id,
+        ),
+    ]
+    project = Project(
+        singers=[singer],
+        sentences=[Sentence(singer_id=singer.id, characters=chars)],
+    )
+
+    track = timing_track_from_sug_project(project)
+
+    line = track.lines[0]
+    assert "".join(ch.text for ch in line.chars) == "I've never seen a liar"
+    assert line.end_ms == 3400
+    assert line.chars[-1].pause_release_ms == 3400
+    assert [
+        (
+            ch.text,
+            ch.source_span_start_ms,
+            ch.source_span_end_ms,
+            ch.source_span_index,
+            ch.source_span_count,
+        )
+        for ch in line.chars[:5]
+    ] == [
+        ("I", 1000, 1500, 0, 5),
+        ("'", 1000, 1500, 1, 5),
+        ("v", 1000, 1500, 2, 5),
+        ("e", 1000, 1500, 3, 5),
+        (" ", 1000, 1500, 4, 5),
+    ]
+
+
 def test_sug_ruby_without_sentence_end_borrows_next_line_start() -> None:
     singer = Singer(id="main", name="主唱", color="#ff0000", is_default=True)
     first = Character(

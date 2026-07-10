@@ -70,33 +70,21 @@ def timing_track_from_sug_project(project: Any) -> TimingTrack:
         )
 
         for ch in chars:
-            timestamps = _offset_timestamps(getattr(ch, "timestamps", []) or [], offset_ms)
             sentence_end_ms = _offset_optional(
                 getattr(ch, "sentence_end_ts", None), offset_ms
             )
             if sentence_end_ms is not None:
                 line_end_ms = sentence_end_ms
-            if not timestamps:
-                continue
 
-            ch_singer_id = _effective_singer_id(
-                getattr(ch, "singer_id", "") or getattr(sentence, "singer_id", ""),
-                default_singer_id,
-            )
-            ch_singer = singer_by_id.get(ch_singer_id or "")
-            ch_singer_label = _singer_name(ch_singer)
-            line_chars.append(
-                TimingChar(
-                    text=str(getattr(ch, "char", "")),
-                    start_ms=timestamps[0],
-                    pause_release_ms=(
-                        sentence_end_ms
-                        if bool(getattr(ch, "is_sentence_end", False))
-                        else None
-                    ),
-                    role_label=ch_singer_label,
-                )
-            )
+        line_chars = _timing_chars_for_sentence(
+            chars=chars,
+            offset_ms=offset_ms,
+            project=project,
+            sentence_index=sentence_index,
+            sentence_singer_id=getattr(sentence, "singer_id", ""),
+            default_singer_id=default_singer_id,
+            singer_by_id=singer_by_id,
+        )
 
         rubies.extend(
             _ruby_annotations_for_sentence(chars, offset_ms, project, sentence_index)
@@ -122,6 +110,79 @@ def timing_track_from_sug_project(project: Any) -> TimingTrack:
         lines=lines,
         rubies=rubies,
     )
+
+
+def _timing_chars_for_sentence(
+    *,
+    chars: list[Any],
+    offset_ms: int,
+    project: Any,
+    sentence_index: int,
+    sentence_singer_id: object,
+    default_singer_id: str | None,
+    singer_by_id: dict[str, Any],
+) -> list[TimingChar]:
+    timed_indices = [
+        index
+        for index, ch in enumerate(chars)
+        if _offset_timestamps(getattr(ch, "timestamps", []) or [], offset_ms)
+    ]
+    if not timed_indices:
+        return []
+
+    result: list[TimingChar] = []
+    for timed_index_position, timed_index in enumerate(timed_indices):
+        group_start = 0 if timed_index_position == 0 else timed_index
+        group_end = (
+            timed_indices[timed_index_position + 1]
+            if timed_index_position + 1 < len(timed_indices)
+            else len(chars)
+        )
+        group_items = [
+            (index, ch, text)
+            for index, ch in enumerate(chars[group_start:group_end], start=group_start)
+            if (text := str(getattr(ch, "char", "")))
+        ]
+        if not group_items:
+            continue
+
+        anchor_start_ms = _first_timestamp(chars[timed_index], offset_ms)
+        if anchor_start_ms is None:
+            continue
+        span_end_ms = _group_end_ms(chars, group_end, offset_ms, project, sentence_index)
+        starts = _spread_text_starts(anchor_start_ms, span_end_ms, len(group_items))
+        shared_span = (
+            len(group_items) > 1
+            and span_end_ms is not None
+            and span_end_ms > anchor_start_ms
+        )
+
+        for local_index, (_index, ch, text) in enumerate(group_items):
+            sentence_end_ms = _offset_optional(
+                getattr(ch, "sentence_end_ts", None), offset_ms
+            )
+            ch_singer_id = _effective_singer_id(
+                getattr(ch, "singer_id", "") or sentence_singer_id,
+                default_singer_id,
+            )
+            ch_singer = singer_by_id.get(ch_singer_id or "")
+            result.append(
+                TimingChar(
+                    text=text,
+                    start_ms=starts[local_index],
+                    pause_release_ms=(
+                        sentence_end_ms
+                        if bool(getattr(ch, "is_sentence_end", False))
+                        else None
+                    ),
+                    role_label=_singer_name(ch_singer),
+                    source_span_start_ms=anchor_start_ms if shared_span else None,
+                    source_span_end_ms=span_end_ms if shared_span else None,
+                    source_span_index=local_index if shared_span else 0,
+                    source_span_count=len(group_items) if shared_span else 1,
+                )
+            )
+    return result
 
 
 def _ruby_annotations_for_sentence(
@@ -259,6 +320,19 @@ def _offset_optional(value: Any, offset_ms: int) -> int | None:
     if value is None:
         return None
     return max(0, int(value) + offset_ms)
+
+
+def _spread_text_starts(
+    start_ms: int,
+    next_ts_ms: int | None,
+    char_count: int,
+) -> list[int]:
+    if char_count <= 0:
+        return []
+    if char_count == 1 or next_ts_ms is None or next_ts_ms <= start_ms:
+        return [start_ms] * char_count
+    duration = next_ts_ms - start_ms
+    return [start_ms + (duration * index) // char_count for index in range(char_count)]
 
 
 def _is_blank_sentence(chars: list[Any]) -> bool:
