@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img">
+  <title>横向渐变</title>
+  <defs>
+    <linearGradient id="horizontalFill" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#111827"/>
+      <stop offset="1" stop-color="#FFFFFF"/>
+    </linearGradient>
+  </defs>
+  <rect x="3.5" y="3.5" width="17" height="17" rx="1.5" fill="url(#horizontalFill)" stroke="#111827"/>
+</svg>

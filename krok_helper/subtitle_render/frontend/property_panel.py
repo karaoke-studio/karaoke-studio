@@ -9,9 +9,10 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Any, Optional
 
-from PyQt6.QtCore import QPointF, QRect, QRectF, QSize, Qt, pyqtSignal as Signal
+from PyQt6.QtCore import QPointF, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal as Signal
 from PyQt6.QtGui import (
     QColor,
     QFont,
@@ -19,12 +20,15 @@ from PyQt6.QtGui import (
     QIcon,
     QLinearGradient,
     QPainter,
+    QPainterPath,
+    QPen,
     QPixmap,
     QPolygonF,
 )
 from PyQt6.QtWidgets import (
     QAbstractButton,
     QAbstractItemView,
+    QBoxLayout,
     QColorDialog,
     QDialog,
     QFileDialog,
@@ -38,9 +42,11 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSizePolicy,
     QStackedWidget,
+    QStyle,
     QToolButton,
     QVBoxLayout,
     QWidget,
+    QWIDGETSIZE_MAX,
 )
 from qfluentwidgets import (
     CaptionLabel,
@@ -90,6 +96,8 @@ _SCHEME_FIELDS = {
     "font_family",
     "font_family_latin",
     "font_size_px",
+    "latin_font_size_px",
+    "latin_font_weight",
     "letter_spacing_px",
     "space_width_percent",
     "allow_biting",
@@ -142,6 +150,10 @@ _RUBY_COLOR_SUBJECT_FIELDS = {
 
 _GLOBAL_SCHEME_KEY = "global"
 _CUSTOM_SCHEME_PREFIX = "custom:"
+_COMPACT_CONTROL_HEIGHT = 32
+_FILL_MODE_ICON_DIR = (
+    Path(__file__).resolve().parents[2] / "assets" / "subtitle_render" / "fill_modes"
+)
 _AUTO_ROLE_COLORS = (
     "#FF5A6F",
     "#00A6FF",
@@ -556,72 +568,88 @@ class _SubGroup(QWidget):
         return not self._host.isVisible()
 
 
-class _ColorMatrixSelector(QWidget):
-    """NicoKara-style state×layer picker: columns 走字后/走字前, rows 文字/描边/描边2/装饰.
+def _fill_mode_icons() -> dict[str, QIcon]:
+    """Load packaged SVG icons for the five PaintFill modes."""
+    return {
+        key: QIcon(str(_FILL_MODE_ICON_DIR / filename))
+        for key, filename in (
+            ("solid", "solid.svg"),
+            ("gradient_horizontal", "gradient-horizontal.svg"),
+            ("gradient_vertical", "gradient-vertical.svg"),
+            ("split_vertical", "split-vertical.svg"),
+            ("image", "image.svg"),
+        )
+    }
 
-    Replaces two dropdowns with a single clickable grid so the active cell is
-    visible at a glance and reachable in one click.
+
+class _PillSelector(QWidget):
+    """一行紧凑胶囊单选组：走字前/后切换与图层选择共用。
+
+    取代旧的 2×4 状态×图层矩阵——前/后两列按钮完全重复，一个双段开关 +
+    一行图层按钮就够了。按钮按文字紧凑测宽、靠左排布，不再撑满整列。
     """
 
-    selectionChanged = Signal(str, str)  # state_key, layer_key
+    changed = Signal(str)
 
-    _STATES = (("after", "走字后"), ("before", "走字前"))
-    _LAYERS = (
-        ("text", "文字"),
-        ("stroke", "描边"),
-        ("stroke2", "描边2"),
-        ("shadow", "装饰"),
-    )
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        options: tuple[tuple[str, str], ...],
+        parent: Optional[QWidget] = None,
+        *,
+        vertical: bool = False,
+        icons: Optional[dict[str, QIcon]] = None,
+    ) -> None:
         super().__init__(parent)
-        self._state = "after"
-        self._layer = "text"
-        self._buttons: dict[tuple[str, str], QPushButton] = {}
+        self._current = options[0][0] if options else ""
+        self._buttons: dict[str, QPushButton] = {}
 
-        grid = QGridLayout(self)
-        grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(6)
-        grid.setVerticalSpacing(6)
-
-        for col, (_state_key, state_label) in enumerate(self._STATES):
-            head = QLabel(state_label, self)
-            head.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            themed(head, lambda: f"color: {palette().text_secondary}; font-size: 9pt;")
-            grid.addWidget(head, 0, col)
-
-        for row, (layer_key, layer_label) in enumerate(self._LAYERS):
-            for col, (state_key, _state_label) in enumerate(self._STATES):
-                btn = QPushButton(layer_label, self)
-                btn.setObjectName("ColorMatrixCell")
-                btn.setCheckable(True)
-                btn.setMinimumHeight(30)
-                btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                btn.setCursor(Qt.CursorShape.PointingHandCursor)
-                btn.clicked.connect(
-                    lambda _checked=False, s=state_key, lyr=layer_key: self._select(s, lyr)
+        row = QVBoxLayout(self) if vertical else QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        for key, label in options:
+            btn = QPushButton(label, self)
+            btn.setObjectName("ColorPillCell")
+            btn.setCheckable(True)
+            btn.setMinimumHeight(28)
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            icon = (icons or {}).get(key)
+            if icon is not None:
+                # 图标模式与项目紧凑控件使用同一逻辑尺寸；Qt 会按 DPR 生成
+                # 对应设备像素，不依赖某张截图的物理像素。
+                btn.setText("")
+                btn.setIcon(icon)
+                icon_extent = _COMPACT_CONTROL_HEIGHT * 3 // 4
+                btn.setIconSize(QSize(icon_extent, icon_extent))
+                btn.setFixedSize(_COMPACT_CONTROL_HEIGHT, _COMPACT_CONTROL_HEIGHT)
+                btn.setToolTip(label)
+                btn.setAccessibleName(label)
+            # 竖排列内按钮统一拉到列宽（列宽 = 最宽文字），横排按文字紧凑测宽
+            if icon is None:
+                btn.setSizePolicy(
+                    QSizePolicy.Policy.Expanding if vertical else QSizePolicy.Policy.Maximum,
+                    QSizePolicy.Policy.Fixed,
                 )
-                self._buttons[(state_key, layer_key)] = btn
-                grid.addWidget(btn, row + 1, col)
-
-        grid.setColumnStretch(0, 1)
-        grid.setColumnStretch(1, 1)
+            btn.clicked.connect(lambda _checked=False, k=key: self._select(k))
+            self._buttons[key] = btn
+            row.addWidget(btn, 0)
+        row.addStretch(1)
         themed(
             self,
             lambda: (
                 f"""
-                QPushButton#ColorMatrixCell {{
+                QPushButton#ColorPillCell {{
                     background: {palette().secondary_button_bg};
                     color: {palette().secondary_button_text};
                     border: 1px solid {palette().secondary_button_border};
                     border-radius: 6px;
-                    padding: 0 6px;
+                    padding: 0 10px;
                     font-size: 9.5pt;
                 }}
-                QPushButton#ColorMatrixCell:hover {{
+                QPushButton#ColorPillCell:hover {{
                     border-color: {palette().accent_primary};
                 }}
-                QPushButton#ColorMatrixCell:checked {{
+                QPushButton#ColorPillCell:checked {{
                     background: {palette().accent_primary};
                     color: #FFFFFF;
                     border-color: {palette().accent_primary};
@@ -632,27 +660,179 @@ class _ColorMatrixSelector(QWidget):
         )
         self._refresh_checked()
 
-    def current(self) -> tuple[str, str]:
-        return self._state, self._layer
+    def current(self) -> str:
+        return self._current
 
-    def set_selection(self, state: str, layer: str) -> None:
-        if (state, layer) == (self._state, self._layer):
+    def set_current(self, key: str) -> None:
+        if key == self._current or key not in self._buttons:
+            self._refresh_checked()
             return
-        self._state, self._layer = state, layer
+        self._current = key
         self._refresh_checked()
 
-    def _select(self, state: str, layer: str) -> None:
-        if (state, layer) != (self._state, self._layer):
-            self._state, self._layer = state, layer
+    def _select(self, key: str) -> None:
+        if key != self._current:
+            self._current = key
             self._refresh_checked()
-            self.selectionChanged.emit(state, layer)
+            self.changed.emit(key)
         else:
-            self._refresh_checked()  # re-check if the user clicked the active cell
+            self._refresh_checked()  # 点当前项也保持选中态
 
     def _refresh_checked(self) -> None:
-        active = (self._state, self._layer)
         for key, btn in self._buttons.items():
-            btn.setChecked(key == active)
+            btn.setChecked(key == self._current)
+
+
+class _FolderTabPanel(QWidget):
+    """文件夹式 tab 面板：上圆角 tab，选中 tab 底色与灰色内容区连成一片。
+
+    左组 = 编辑对象（主文字/注音），右组 = 走字时机（走字后/走字前）——
+    两组都是「点一下切换」，不再用下拉。tab 普通态白底、选中态与内容区
+    同灰底且底边不画线，面板轮廓用灰描边连贯勾出（对应用户手绘的路径）。
+    tab 形状与底色全部在 paintEvent 里画，按钮本体透明、只出文字和点击。
+    """
+
+    leftChanged = Signal(str)
+    rightChanged = Signal(str)
+
+    _TAB_HEIGHT = 32
+    _RADIUS = 8.0
+    _TAB_RADIUS = 6.0
+
+    def __init__(
+        self,
+        left_options: tuple[tuple[str, str], ...],
+        right_options: tuple[tuple[str, str], ...],
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        # 允许右组为空（只有左上角一组 tab 的面板，如字体的日文/英数）
+        self._current = {
+            "left": left_options[0][0] if left_options else "",
+            "right": right_options[0][0] if right_options else "",
+        }
+        self._buttons: dict[tuple[str, str], QPushButton] = {}
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        tab_row = QHBoxLayout()
+        # tab 离面板左右边缘留出比圆角略大的缩进，转角处不打架
+        tab_row.setContentsMargins(12, 0, 12, 0)
+        tab_row.setSpacing(0)
+        for key, label in left_options:
+            tab_row.addWidget(self._make_tab("left", key, label), 0)
+        tab_row.addStretch(1)
+        for key, label in right_options:
+            tab_row.addWidget(self._make_tab("right", key, label), 0)
+        root.addLayout(tab_row)
+
+        self._content = QWidget(self)
+        self.content_layout = QVBoxLayout(self._content)
+        self.content_layout.setContentsMargins(10, 10, 10, 10)
+        self.content_layout.setSpacing(10)
+        root.addWidget(self._content)
+
+        themed(self, self._tab_qss)
+        self._refresh_checked()
+
+    def _make_tab(self, side: str, key: str, label: str) -> QPushButton:
+        btn = QPushButton(label, self)
+        btn.setObjectName("FolderTabButton")
+        btn.setCheckable(True)
+        btn.setFixedHeight(self._TAB_HEIGHT)
+        btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        btn.clicked.connect(lambda _checked=False, s=side, k=key: self._select(s, k))
+        self._buttons[(side, key)] = btn
+        return btn
+
+    @staticmethod
+    def _tab_qss() -> str:
+        return (
+            "QPushButton#FolderTabButton {"
+            " background: transparent; border: none; padding: 0 14px;"
+            f" font-size: 9.5pt; color: {palette().text_secondary}; }}"
+            "QPushButton#FolderTabButton:checked {"
+            f" color: {palette().title_text}; font-weight: 600; }}"
+        )
+
+    def current_left(self) -> str:
+        return self._current["left"]
+
+    def current_right(self) -> str:
+        return self._current["right"]
+
+    def set_left(self, key: str) -> None:
+        self._set_current("left", key)
+
+    def set_right(self, key: str) -> None:
+        self._set_current("right", key)
+
+    def _set_current(self, side: str, key: str) -> None:
+        if key != self._current[side] and (side, key) in self._buttons:
+            self._current[side] = key
+        self._refresh_checked()
+
+    def _select(self, side: str, key: str) -> None:
+        if key != self._current[side]:
+            self._current[side] = key
+            self._refresh_checked()
+            (self.leftChanged if side == "left" else self.rightChanged).emit(key)
+        else:
+            self._refresh_checked()
+
+    def _refresh_checked(self) -> None:
+        for (side, key), btn in self._buttons.items():
+            btn.setChecked(key == self._current[side])
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802, ARG002
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            pal = palette()
+            panel_bg = QColor(pal.shell_bg)
+            tab_bg = QColor(pal.card_bg)
+            border = QPen(QColor(pal.input_border), 1)
+
+            content = QRectF(self._content.geometry()).adjusted(0.5, 0.5, -0.5, -0.5)
+            painter.setPen(border)
+            painter.setBrush(panel_bg)
+            painter.drawRoundedRect(content, self._RADIUS, self._RADIUS)
+
+            for (side, key), btn in self._buttons.items():
+                selected = key == self._current[side]
+                # 未选中 tab 底部收 1px，保住其下方的内容区顶边线
+                rect = QRectF(btn.geometry()).adjusted(
+                    0.5, 0.5, -0.5, 0.0 if selected else -1.0
+                )
+                radius = self._TAB_RADIUS
+                path = QPainterPath()
+                path.moveTo(rect.left(), rect.bottom())
+                path.lineTo(rect.left(), rect.top() + radius)
+                path.quadTo(rect.left(), rect.top(), rect.left() + radius, rect.top())
+                path.lineTo(rect.right() - radius, rect.top())
+                path.quadTo(rect.right(), rect.top(), rect.right(), rect.top() + radius)
+                path.lineTo(rect.right(), rect.bottom())
+                painter.setPen(border)
+                painter.setBrush(panel_bg if selected else tab_bg)
+                painter.drawPath(path)
+                if selected:
+                    # 抹掉选中 tab 底下那段内容区顶边线，灰底连成一片
+                    painter.fillRect(
+                        QRectF(
+                            rect.left() + 0.5,
+                            rect.bottom() - 0.5,
+                            rect.width() - 1.0,
+                            2.0,
+                        ),
+                        panel_bg,
+                    )
+        finally:
+            painter.end()
 
 
 class GradientStopsEditor(QWidget):
@@ -666,13 +846,18 @@ class GradientStopsEditor(QWidget):
         self._stops: list[tuple[int, str]] = [(0, "#FFFFFF"), (100, "#FF5A6F")]
         self._selected = 0
         self._orientation = "horizontal"
+        self._hard_edges = False
         self._dragging = False
-        self.setMinimumHeight(92)
+        self.setMinimumHeight(64)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        height = 198 if self._orientation == "vertical" else 94
+        height = 140 if self._orientation == "vertical" else 66
+        if self._orientation == "vertical":
+            # 12 left + 48 bar + 4 gap + 10 arrow + 34 tag + 4 right.
+            # Both smooth gradient and hard split editors share this geometry.
+            return QSize(12 + 48 + 4 + 10 + 34 + 4, height)
         return QSize(220, height)
 
     @property
@@ -684,11 +869,17 @@ class GradientStopsEditor(QWidget):
         return self._stops[self._selected]
 
     def set_orientation(self, mode: str) -> None:
-        orientation = "vertical" if mode == "gradient_vertical" else "horizontal"
-        if orientation == self._orientation:
+        orientation = (
+            "vertical"
+            if mode in {"gradient_vertical", "split_vertical"}
+            else "horizontal"
+        )
+        hard_edges = mode == "split_vertical"
+        if orientation == self._orientation and hard_edges == self._hard_edges:
             return
         self._orientation = orientation
-        self.setMinimumHeight(190 if orientation == "vertical" else 92)
+        self._hard_edges = hard_edges
+        self.setMinimumHeight(132 if orientation == "vertical" else 64)
         self.updateGeometry()
         self.update()
 
@@ -706,6 +897,9 @@ class GradientStopsEditor(QWidget):
         position, old = self._stops[self._selected]
         normalized = _normalize_hex(color, old)
         self._stops[self._selected] = (position, normalized)
+        if self._hard_edges and position == 100 and self._selected > 0:
+            previous_position, _previous_color = self._stops[self._selected - 1]
+            self._stops[self._selected - 1] = (previous_position, normalized)
         self._emit_stops_changed()
 
     def set_selected_position(self, position: int) -> None:
@@ -734,31 +928,64 @@ class GradientStopsEditor(QWidget):
         try:
             painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
             rect = self._bar_rect()
-            gradient = (
-                QLinearGradient(rect.left(), rect.top(), rect.right(), rect.top())
-                if self._orientation == "horizontal"
-                else QLinearGradient(rect.left(), rect.top(), rect.left(), rect.bottom())
-            )
-            for position, color in self._stops:
-                gradient.setColorAt(position / 100.0, QColor(color))
             painter.setPen(QColor(palette().card_border))
-            painter.setBrush(gradient)
-            painter.drawRoundedRect(rect, 4, 4)
+            if self._hard_edges:
+                # Clip all bands to the same rounded outline used by gradients.
+                clip = QPainterPath()
+                clip.addRoundedRect(rect, 4, 4)
+                painter.save()
+                painter.setClipPath(clip)
+                for index, (position, color) in enumerate(self._stops[:-1]):
+                    next_position = self._stops[index + 1][0]
+                    top = rect.top() + rect.height() * position / 100.0
+                    bottom = rect.top() + rect.height() * next_position / 100.0
+                    painter.fillRect(
+                        QRectF(rect.left(), top, rect.width(), max(bottom - top, 0.0)),
+                        QColor(color),
+                    )
+                painter.restore()
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.drawRoundedRect(rect, 4, 4)
+            else:
+                gradient = (
+                    QLinearGradient(rect.left(), rect.top(), rect.right(), rect.top())
+                    if self._orientation == "horizontal"
+                    else QLinearGradient(rect.left(), rect.top(), rect.left(), rect.bottom())
+                )
+                for position, color in self._stops:
+                    gradient.setColorAt(position / 100.0, QColor(color))
+                painter.setBrush(gradient)
+                painter.drawRoundedRect(rect, 4, 4)
 
             rail = self._rail_rect()
-            painter.setPen(QColor(palette().card_border))
-            painter.drawRoundedRect(rail, 3, 3)
+            if not self._hard_edges:
+                painter.setPen(QColor(palette().card_border))
+                painter.drawRoundedRect(rail, 3, 3)
             for index, (position, color) in enumerate(self._stops):
                 center = self._marker_center(position)
                 selected = index == self._selected
                 painter.setBrush(QColor(color))
                 painter.setPen(QColor("#0B84FF" if selected else palette().card_bg))
-                points = [
-                    QPointF(center.x(), center.y() - 8),
-                    QPointF(center.x() + 8, center.y()),
-                    QPointF(center.x(), center.y() + 8),
-                    QPointF(center.x() - 8, center.y()),
-                ]
+                if self._hard_edges and self._orientation == "vertical":
+                    # N3-style stop tag: arrow tip points at the exact band edge,
+                    # while the rectangular body remains an easy click target.
+                    tip_x = self._bar_rect().right() + 4
+                    body_left = tip_x + 10
+                    body_right = min(body_left + 34, self.width() - 4)
+                    points = [
+                        QPointF(tip_x, center.y()),
+                        QPointF(body_left, center.y() - 7),
+                        QPointF(body_right, center.y() - 7),
+                        QPointF(body_right, center.y() + 7),
+                        QPointF(body_left, center.y() + 7),
+                    ]
+                else:
+                    points = [
+                        QPointF(center.x(), center.y() - 8),
+                        QPointF(center.x() + 8, center.y()),
+                        QPointF(center.x(), center.y() + 8),
+                        QPointF(center.x() - 8, center.y()),
+                    ]
                 painter.drawPolygon(QPolygonF(points))
                 painter.setBrush(Qt.BrushStyle.NoBrush)
                 painter.setPen(QColor("#0B84FF" if selected else palette().card_border))
@@ -794,13 +1021,13 @@ class GradientStopsEditor(QWidget):
 
     def _bar_rect(self) -> QRectF:
         if self._orientation == "horizontal":
-            return QRectF(8, 12, max(self.width() - 16, 1), 30)
-        return QRectF(12, 8, 72, max(self.height() - 16, 1))
+            return QRectF(8, 8, max(self.width() - 16, 1), 22)
+        return QRectF(12, 8, 48, max(self.height() - 16, 1))
 
     def _rail_rect(self) -> QRectF:
         if self._orientation == "horizontal":
-            return QRectF(8, 56, max(self.width() - 16, 1), 14)
-        return QRectF(102, 8, 14, max(self.height() - 16, 1))
+            return QRectF(8, 40, max(self.width() - 16, 1), 14)
+        return QRectF(72, 8, 14, max(self.height() - 16, 1))
 
     def _marker_center(self, position: int) -> QPointF:
         pos = max(0.0, min(1.0, position / 100.0))
@@ -871,7 +1098,7 @@ class GradientStopsEditor(QWidget):
                 break
             if index == len(stops) - 1:
                 right = stop
-        if left[0] == right[0]:
+        if self._hard_edges or left[0] == right[0]:
             return left[1]
         ratio = (pos - left[0]) / max(right[0] - left[0], 1)
         a = QColor(left[1])
@@ -890,16 +1117,49 @@ class GradientStopsEditor(QWidget):
 
 
 class _WheelFocusedSpinBox(FluentSpinBox):
-    """Only adjust by wheel after the control has explicit focus."""
+    """Direct-entry Fluent spin box without overlapping step controls."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        # InlineSpinBox's two permanent arrow buttons consume most of a narrow
+        # two-column field. Hide them entirely: click focuses the line edit, while
+        # focused wheel input remains available without any popup/flyout.
+        self.setSymbolVisible(False)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.lineEdit().setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.lineEdit().textChanged.connect(self._sync_text_minimum)
+        self.valueChanged.connect(
+            lambda _value: QTimer.singleShot(0, self._sync_text_minimum)
+        )
+
+    def showEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().showEvent(event)
+        # The final application font may only be resolved when the page is shown.
+        self._sync_text_minimum()
+
+    def _sync_text_minimum(self) -> None:
+        """Derive a DPI-aware minimum that keeps the current value readable."""
+        style = self.style()
+        text_width = self.lineEdit().fontMetrics().horizontalAdvance(
+            self.lineEdit().text()
+        )
+        text_chrome = (
+            2 * style.pixelMetric(QStyle.PixelMetric.PM_LayoutLeftMargin)
+            + 2 * style.pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin)
+        )
+        self.setMinimumWidth(max(text_width + text_chrome, 1))
 
     def wheelEvent(self, event):  # noqa: N802 - Qt API
-        if not self.hasFocus():
+        if not (self.hasFocus() or self.lineEdit().hasFocus()):
             event.ignore()
+            return
+        delta = event.angleDelta().y()
+        if event.inverted():
+            delta = -delta
+        if delta:
+            steps = int(delta / 120) or (1 if delta > 0 else -1)
+            self.stepBy(steps)
+            event.accept()
             return
         super().wheelEvent(event)
 
@@ -1228,6 +1488,117 @@ class StylePresetManagerDialog(QDialog):
         self._populate_list()
 
 
+class _ResponsivePropertyPair(QWidget):
+    """Lay two property cards side by side when they genuinely fit.
+
+    The property page intentionally has no horizontal scrollbar.  A regular
+    ``QHBoxLayout`` therefore lets its children extend beyond the viewport
+    when their combined preferred width no longer fits.  This container uses
+    the cards' own size hints (font, DPI and translated labels included) as
+    the breakpoint and stacks them instead of relying on a screen-pixel
+    threshold.
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._first: Optional[QWidget] = None
+        self._divider: Optional[QFrame] = None
+        self._second: Optional[QWidget] = None
+        self._stacked: Optional[bool] = None
+
+        self._layout = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self._layout.setContentsMargins(0, 0, 0, 0)
+        self._layout.setSpacing(12)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
+    def set_widgets(self, first: QWidget, divider: QFrame, second: QWidget) -> None:
+        self._first = first
+        self._divider = divider
+        self._second = second
+        self._layout.addWidget(first)
+        self._layout.addWidget(divider)
+        self._layout.addWidget(second)
+        # Equal horizontal stretch must not imply equal card heights.  Both
+        # cards keep their own preferred height and simply share the same top.
+        self._layout.setAlignment(first, Qt.AlignmentFlag.AlignTop)
+        self._layout.setAlignment(second, Qt.AlignmentFlag.AlignTop)
+        self._sync_direction(force=True)
+
+    def is_stacked(self) -> bool:
+        return bool(self._stacked)
+
+    def horizontal_width_hint(self) -> int:
+        if self._first is None or self._divider is None or self._second is None:
+            return 0
+        first_width = max(
+            self._first.minimumSizeHint().width(), self._first.sizeHint().width()
+        )
+        second_width = max(
+            self._second.minimumSizeHint().width(), self._second.sizeHint().width()
+        )
+        divider_width = max(1, self._divider.sizeHint().width())
+        return first_width + second_width + divider_width + self._layout.spacing() * 2
+
+    def minimumSizeHint(self) -> QSize:
+        if self._first is None or self._divider is None or self._second is None:
+            return super().minimumSizeHint()
+        width = max(
+            self._first.minimumSizeHint().width(),
+            self._second.minimumSizeHint().width(),
+        )
+        if self.is_stacked():
+            height = (
+                self._first.minimumSizeHint().height()
+                + self._second.minimumSizeHint().height()
+                + 1
+                + self._layout.spacing() * 2
+            )
+        else:
+            height = max(
+                self._first.minimumSizeHint().height(),
+                self._second.minimumSizeHint().height(),
+            )
+        return QSize(width, height)
+
+    def resizeEvent(self, event: Any) -> None:
+        self._sync_direction()
+        super().resizeEvent(event)
+
+    def _sync_direction(self, *, force: bool = False) -> None:
+        if self._first is None or self._divider is None or self._second is None:
+            return
+        stacked = self.width() < self.horizontal_width_hint()
+        if not force and stacked == self._stacked:
+            return
+        self._stacked = stacked
+
+        if stacked:
+            self._layout.setDirection(QBoxLayout.Direction.TopToBottom)
+            self._layout.setStretch(0, 0)
+            self._layout.setStretch(1, 0)
+            self._layout.setStretch(2, 0)
+            self._divider.setMinimumWidth(0)
+            self._divider.setMaximumWidth(QWIDGETSIZE_MAX)
+            self._divider.setFixedHeight(1)
+            self._divider.setFrameShape(QFrame.Shape.HLine)
+            self._divider.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+            )
+        else:
+            self._layout.setDirection(QBoxLayout.Direction.LeftToRight)
+            self._layout.setStretch(0, 1)
+            self._layout.setStretch(1, 0)
+            self._layout.setStretch(2, 1)
+            self._divider.setMinimumHeight(0)
+            self._divider.setMaximumHeight(QWIDGETSIZE_MAX)
+            self._divider.setFixedWidth(1)
+            self._divider.setFrameShape(QFrame.Shape.VLine)
+            self._divider.setSizePolicy(
+                QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding
+            )
+        self.updateGeometry()
+
+
 class PropertyPanel(QWidget):
     """字体 / 布局 / 特效 / 标题属性面板。"""
 
@@ -1441,7 +1812,12 @@ class PropertyPanel(QWidget):
     def _make_basic_page(self) -> QWidget:
         scroll, layout = _scroll_page()
         layout.addWidget(self._make_layout_scheme_section())
+        self._character_layout_section = self._make_character_layout_section()
+        layout.addWidget(self._character_layout_section)
         layout.addWidget(self._make_row_structure_section())
+        # 注音的字号/间距/排布是排版参数，归布局页（配色仍在字体页的颜色列）
+        self._ruby_section = self._make_ruby_section()
+        layout.addWidget(self._ruby_section)
         layout.addWidget(self._make_vertical_layout_section())
         layout.addWidget(self._make_writing_direction_section())
         viewport = self._make_viewport_section()
@@ -1471,11 +1847,8 @@ class PropertyPanel(QWidget):
     def _make_font_color_section(self) -> QFrame:
         section, layout = _section("颜色 / 字体")
 
-        row = QWidget(section)
+        row = _ResponsivePropertyPair(section)
         self._font_color_row = row
-        row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(12)
 
         self._color_section = self._make_color_section(parent=row, inline=True)
         self._font_section = self._make_font_section(parent=row, inline=True)
@@ -1506,9 +1879,7 @@ class PropertyPanel(QWidget):
             ),
         )
 
-        row_layout.addWidget(self._color_section, 1, Qt.AlignmentFlag.AlignTop)
-        row_layout.addWidget(divider, 0)
-        row_layout.addWidget(self._font_section, 1, Qt.AlignmentFlag.AlignTop)
+        row.set_widgets(self._color_section, divider, self._font_section)
         layout.addWidget(row)
         return section
 
@@ -1517,26 +1888,23 @@ class PropertyPanel(QWidget):
     ) -> QWidget:
         section, layout = _inline_section("字体", parent) if inline else _section("字体")
 
-        self._font_combo = _WheelFocusedFontComboBox(section)
+        self._font_tab_panel = _FolderTabPanel(
+            (("japanese", "日文"), ("latin", "英数")), (), section
+        )
+        self._font_tab_stack = QStackedWidget(self._font_tab_panel)
+
+        japanese_page = QWidget(self._font_tab_stack)
+        japanese_layout = QVBoxLayout(japanese_page)
+        japanese_layout.setContentsMargins(0, 0, 0, 0)
+        japanese_layout.setSpacing(8)
+        self._font_combo = _WheelFocusedFontComboBox(japanese_page)
         _compact_control(self._font_combo)
         self._font_combo.currentFontChanged.connect(
             lambda font: self._update_style(font_family=font.family())
         )
-        layout.addWidget(_field("日文字体", self._font_combo))
+        japanese_layout.addWidget(_field("字体", self._font_combo))
 
-        # 英数（ASCII）字体可单独指定；不勾选时与日文共用一套字体。
-        self._font_latin_check = CheckBox("英数单独字体", section)
-        self._font_latin_check.toggled.connect(self._on_font_latin_toggled)
-        layout.addWidget(self._font_latin_check)
-
-        self._font_latin_combo = _WheelFocusedFontComboBox(section)
-        _compact_control(self._font_latin_combo)
-        self._font_latin_combo.setEnabled(False)
-        self._font_latin_combo.currentFontChanged.connect(self._on_font_latin_changed)
-        self._font_latin_field = _field("英数字体", self._font_latin_combo)
-        layout.addWidget(self._font_latin_field)
-
-        row = QWidget(section)
+        row = QWidget(japanese_page)
         row_layout = QGridLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setHorizontalSpacing(8)
@@ -1547,18 +1915,6 @@ class PropertyPanel(QWidget):
             lambda value: self._update_style(font_size_px=value)
         )
         row_layout.addWidget(_field("字号", self._font_size_spin), 0, 0)
-
-        self._letter_spacing_spin = _spin(-120, 120, suffix=" px")
-        self._letter_spacing_spin.valueChanged.connect(
-            lambda value: self._update_style(letter_spacing_px=value)
-        )
-        row_layout.addWidget(_field("字间距", self._letter_spacing_spin), 1, 0)
-
-        self._space_width_spin = _spin(10, 100, suffix=" %")
-        self._space_width_spin.valueChanged.connect(
-            lambda value: self._update_style(space_width_percent=value)
-        )
-        row_layout.addWidget(_field("空格宽度", self._space_width_spin), 1, 1)
 
         self._font_weight_combo = _WheelFocusedComboBox(section)
         _compact_control(self._font_weight_combo)
@@ -1579,12 +1935,64 @@ class PropertyPanel(QWidget):
         row_layout.addWidget(_field("字重", self._font_weight_combo), 0, 1)
         row_layout.setColumnStretch(0, 1)
         row_layout.setColumnStretch(1, 1)
-        layout.addWidget(row)
+        japanese_layout.addWidget(row)
+
+        latin_page = QWidget(self._font_tab_stack)
+        latin_layout = QVBoxLayout(latin_page)
+        latin_layout.setContentsMargins(0, 0, 0, 0)
+        latin_layout.setSpacing(8)
+        self._font_latin_combo = _WheelFocusedFontComboBox(latin_page)
+        _compact_control(self._font_latin_combo)
+        self._font_latin_combo.currentFontChanged.connect(self._on_font_latin_changed)
+        self._font_latin_field = _field("字体", self._font_latin_combo)
+        latin_layout.addWidget(self._font_latin_field)
+
+        latin_row = QWidget(latin_page)
+        latin_row_layout = QGridLayout(latin_row)
+        latin_row_layout.setContentsMargins(0, 0, 0, 0)
+        latin_row_layout.setHorizontalSpacing(8)
+        latin_row_layout.setVerticalSpacing(0)
+        self._font_latin_size_spin = _spin(12, 180, suffix=" px")
+        self._font_latin_size_spin.valueChanged.connect(
+            lambda value: self._update_style(latin_font_size_px=value)
+        )
+        latin_row_layout.addWidget(_field("字号", self._font_latin_size_spin), 0, 0)
+
+        self._font_latin_weight_combo = _WheelFocusedComboBox(latin_page)
+        _compact_control(self._font_latin_weight_combo)
+        for label, value in [
+            ("常规 400", 400),
+            ("中等 500", 500),
+            ("半粗 600", 600),
+            ("粗体 700", 700),
+            ("特粗 800", 800),
+            ("黑体 900", 900),
+        ]:
+            self._font_latin_weight_combo.addItem(label, value)
+        self._font_latin_weight_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                latin_font_weight=int(self._font_latin_weight_combo.currentData())
+            )
+        )
+        latin_row_layout.addWidget(
+            _field("字重", self._font_latin_weight_combo), 0, 1
+        )
+        latin_row_layout.setColumnStretch(0, 1)
+        latin_row_layout.setColumnStretch(1, 1)
+        latin_layout.addWidget(latin_row)
+
+        self._font_tab_stack.addWidget(japanese_page)
+        self._font_tab_stack.addWidget(latin_page)
+        self._font_tab_panel.content_layout.addWidget(self._font_tab_stack)
+        self._font_tab_panel.leftChanged.connect(
+            lambda key: self._font_tab_stack.setCurrentIndex(
+                1 if key == "latin" else 0
+            )
+        )
+        layout.addWidget(self._font_tab_panel)
 
         self._italic_check = CheckBox("斜体", section)
         self._italic_check.toggled.connect(lambda checked: self._update_style(italic=checked))
-        layout.addWidget(self._italic_check)
-
         self._allow_biting_check = CheckBox("允许文字咬合", section)
         self._allow_biting_check.setToolTip(
             "允许斜体和部分标点使用负字形边距，效果更接近 NicokaraMaker3。"
@@ -1592,33 +2000,47 @@ class PropertyPanel(QWidget):
         self._allow_biting_check.toggled.connect(
             lambda checked: self._update_style(allow_biting=checked)
         )
-        layout.addWidget(self._allow_biting_check)
+        flags_row = QHBoxLayout()
+        flags_row.setContentsMargins(0, 0, 0, 0)
+        flags_row.setSpacing(12)
+        flags_row.addWidget(self._italic_check)
+        flags_row.addWidget(self._allow_biting_check)
+        flags_row.addStretch(1)
+        layout.addLayout(flags_row)
 
-        if inline:
-            layout.addSpacing(8)
-            self._ruby_section = self._make_ruby_section(
-                parent=section,
-                inline=True,
-            )
-            layout.addWidget(self._ruby_section)
+        # 注音的排版参数（字号/间距/排布）属于排版语义，放在「布局」页
+        # （_make_basic_page）；本列只留字体本体设置。
         return section
-
-    def _on_font_latin_toggled(self, checked: bool) -> None:
-        self._font_latin_combo.setEnabled(checked)
-        if self._syncing:
-            return
-        if checked:
-            self._update_style(
-                font_family_latin=self._font_latin_combo.currentFont().family()
-            )
-        else:
-            self._update_style(font_family_latin=None)
 
     def _on_font_latin_changed(self, font: QFont) -> None:
         if self._syncing:
             return
-        if self._font_latin_check.isChecked():
-            self._update_style(font_family_latin=font.family())
+        self._update_style(font_family_latin=font.family())
+
+    def _make_character_layout_section(self) -> QFrame:
+        """Global character spacing belongs to layout, not a font script tab."""
+        section, layout = _section("字符排版")
+        row = QWidget(section)
+        row_layout = QGridLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setHorizontalSpacing(8)
+        row_layout.setVerticalSpacing(0)
+
+        self._letter_spacing_spin = _spin(-120, 120, suffix=" px")
+        self._letter_spacing_spin.valueChanged.connect(
+            lambda value: self._update_style(letter_spacing_px=value)
+        )
+        row_layout.addWidget(_field("字间距", self._letter_spacing_spin), 0, 0)
+
+        self._space_width_spin = _spin(10, 100, suffix=" %")
+        self._space_width_spin.valueChanged.connect(
+            lambda value: self._update_style(space_width_percent=value)
+        )
+        row_layout.addWidget(_field("空格宽度", self._space_width_spin), 0, 1)
+        row_layout.setColumnStretch(0, 1)
+        row_layout.setColumnStretch(1, 1)
+        layout.addWidget(row)
+        return section
 
     def _make_ruby_section(
         self, parent: Optional[QWidget] = None, *, inline: bool = False
@@ -1701,18 +2123,17 @@ class PropertyPanel(QWidget):
     ) -> QWidget:
         section, layout = _inline_section("颜色", parent) if inline else _section("颜色")
 
+        # 编辑对象 / 走字前后 / 图层 / 填充方式的下拉全部转为隐藏取值后端，
+        # 界面换成文件夹式 tab + 竖排按钮列；依赖 currentData 的取值 / 同步
+        # 逻辑与测试都无需改动。
         self._color_subject_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._color_subject_combo)
         self._color_subject_combo.addItem("主文字", "main")
         self._color_subject_combo.addItem("注音", "ruby")
+        self._color_subject_combo.hide()
         self._color_subject_combo.currentIndexChanged.connect(
             lambda _index: self._on_color_subject_changed()
         )
-        layout.addWidget(_field("编辑对象", self._color_subject_combo))
 
-        # 状态(走字前/后) × 图层(文字/描边/描边2/装饰) 用一个点选矩阵呈现（对标
-        # nicokara maker3）。两个 combo 仍作为隐藏的取值后端，矩阵与之双向同步，
-        # 这样依赖 currentData 的取值/同步逻辑与测试都无需改动。
         self._color_state_combo = _WheelFocusedComboBox(section)
         self._color_state_combo.addItem("走字前", "before")
         self._color_state_combo.addItem("走字后", "after")
@@ -1732,9 +2153,27 @@ class PropertyPanel(QWidget):
             lambda _index: self._on_color_target_combo_changed()
         )
 
-        self._color_matrix = _ColorMatrixSelector(section)
-        self._color_matrix.selectionChanged.connect(self._on_color_matrix_changed)
-        layout.addWidget(self._color_matrix)
+        # 文件夹式 tab 面板：左上主文字/注音，右上走字后/走字前
+        self._color_tab_panel = _FolderTabPanel(
+            (("main", "主文字"), ("ruby", "注音")),
+            (("after", "走字后"), ("before", "走字前")),
+            section,
+        )
+        self._color_tab_panel.leftChanged.connect(self._on_color_subject_tab_changed)
+        self._color_tab_panel.rightChanged.connect(self._on_color_state_tab_changed)
+        layout.addWidget(self._color_tab_panel)
+
+        self._color_layer_pill = _PillSelector(
+            (
+                ("text", "文字"),
+                ("stroke", "描边"),
+                ("stroke2", "描边2"),
+                ("shadow", "装饰"),
+            ),
+            section,
+            vertical=True,
+        )
+        self._color_layer_pill.changed.connect(self._on_color_layer_pill_changed)
 
         self._fill_mode_combo = _WheelFocusedComboBox(section)
         _compact_control(self._fill_mode_combo)
@@ -1746,12 +2185,36 @@ class PropertyPanel(QWidget):
             ("图像", "image"),
         ]:
             self._fill_mode_combo.addItem(label, value)
+        self._fill_mode_combo.hide()
         self._fill_mode_combo.currentIndexChanged.connect(
             lambda _index: self._update_current_fill(
                 mode=str(self._fill_mode_combo.currentData())
             )
         )
-        layout.addWidget(_field("填充方式", self._fill_mode_combo))
+        # 填充方式改竖排按钮列，与隐藏 combo 双向同步：按钮 → combo 触发
+        # _update_current_fill；_sync_color_fill_controls 设 combo → 按钮跟随
+        self._fill_mode_pill = _PillSelector(
+            (
+                ("solid", "全色"),
+                ("gradient_horizontal", "横渐变"),
+                ("gradient_vertical", "纵渐变"),
+                ("split_vertical", "拼色"),
+                ("image", "图像"),
+            ),
+            section,
+            vertical=True,
+            icons=_fill_mode_icons(),
+        )
+        self._fill_mode_pill.changed.connect(
+            lambda mode: self._fill_mode_combo.setCurrentIndex(
+                max(0, self._fill_mode_combo.findData(mode))
+            )
+        )
+        self._fill_mode_combo.currentIndexChanged.connect(
+            lambda _index: self._fill_mode_pill.set_current(
+                str(self._fill_mode_combo.currentData())
+            )
+        )
 
         self._decoration_type_combo = _WheelFocusedComboBox(section)
         _compact_control(self._decoration_type_combo)
@@ -1763,14 +2226,12 @@ class PropertyPanel(QWidget):
             )
         )
         self._decoration_type_field = _field("装饰类型", self._decoration_type_combo)
-        layout.addWidget(self._decoration_type_field)
 
         self._fill_editor_stack = _DynamicStackedWidget(section)
         self._fill_editor_stack.addWidget(self._make_solid_fill_page())
         self._fill_editor_stack.addWidget(self._make_gradient_fill_page())
         self._fill_editor_stack.addWidget(self._make_split_fill_page())
         self._fill_editor_stack.addWidget(self._make_image_fill_page())
-        layout.addWidget(self._fill_editor_stack)
 
         detail_grid = QWidget(section)
         detail_layout = QGridLayout(detail_grid)
@@ -1782,13 +2243,15 @@ class PropertyPanel(QWidget):
         self._stroke_width_spin.valueChanged.connect(
             lambda value: self._update_color_subject_style(stroke_width_px=value)
         )
-        detail_layout.addWidget(_field("描边宽度", self._stroke_width_spin), 0, 0)
+        self._stroke_width_field = _field("描边宽度", self._stroke_width_spin)
+        detail_layout.addWidget(self._stroke_width_field, 0, 0)
 
         self._stroke2_width_spin = _spin(0, 48, suffix=" px")
         self._stroke2_width_spin.valueChanged.connect(
             lambda value: self._update_color_subject_style(stroke2_width_px=value)
         )
-        detail_layout.addWidget(_field("描边2宽度", self._stroke2_width_spin), 0, 1)
+        self._stroke2_width_field = _field("描边2宽度", self._stroke2_width_spin)
+        detail_layout.addWidget(self._stroke2_width_field, 0, 1)
 
         self._shadow_x_spin = _spin(-40, 40, suffix=" px")
         self._shadow_x_spin.valueChanged.connect(
@@ -1813,14 +2276,12 @@ class PropertyPanel(QWidget):
         )
         self._glow_radius_spin = self._glow_before_radius_spin
         self._glow_radius_field = _field("走字前发光", self._glow_before_radius_spin)
-        detail_layout.addWidget(self._glow_radius_field, 1, 0)
 
         self._glow_after_radius_spin = _spin(1, 120, suffix=" px")
         self._glow_after_radius_spin.valueChanged.connect(
             lambda value: self._update_color_subject_style(glow_after_radius_px=value)
         )
         self._glow_after_radius_field = _field("走字后发光", self._glow_after_radius_spin)
-        detail_layout.addWidget(self._glow_after_radius_field, 1, 1)
 
         self._glow_concentration_combo = _WheelFocusedComboBox(section)
         _compact_control(self._glow_concentration_combo)
@@ -1836,17 +2297,42 @@ class PropertyPanel(QWidget):
         self._glow_concentration_field = _field(
             "发光浓度", self._glow_concentration_combo
         )
-        detail_layout.addWidget(self._glow_concentration_field, 2, 0, 1, 2)
+
+        # 发光的三个参数共享一行，顺序与预览语义一致：走字前、走字后、浓度。
+        self._glow_controls_row = QWidget(detail_grid)
+        glow_row_layout = QHBoxLayout(self._glow_controls_row)
+        glow_row_layout.setContentsMargins(0, 0, 0, 0)
+        glow_row_layout.setSpacing(8)
+        glow_row_layout.addWidget(self._glow_radius_field, 1)
+        glow_row_layout.addWidget(self._glow_after_radius_field, 1)
+        glow_row_layout.addWidget(self._glow_concentration_field, 1)
+        detail_layout.addWidget(self._glow_controls_row, 1, 0, 1, 2)
 
         detail_layout.setColumnStretch(0, 1)
         detail_layout.setColumnStretch(1, 1)
-        layout.addWidget(detail_grid)
 
         self._ruby_apply_main_btn = FluentPushButton("应用主文字配色", section)
         self._ruby_apply_main_btn.setMinimumHeight(32)
         self._ruby_apply_main_btn.clicked.connect(self._apply_main_colors_to_ruby)
         self._ruby_apply_main_btn.hide()
-        layout.addWidget(self._ruby_apply_main_btn)
+
+        # tab 内容区：左·图层列 + 填充方式列（竖排按钮），右·填充编辑 /
+        # 装饰 / 宽度明细（对应用户手绘的两列方块 + 右侧编辑区）
+        columns = QHBoxLayout()
+        columns.setContentsMargins(0, 0, 0, 0)
+        columns.setSpacing(10)
+        columns.addWidget(self._color_layer_pill, 0, Qt.AlignmentFlag.AlignTop)
+        columns.addWidget(self._fill_mode_pill, 0, Qt.AlignmentFlag.AlignTop)
+        editors = QVBoxLayout()
+        editors.setContentsMargins(0, 0, 0, 0)
+        editors.setSpacing(10)
+        editors.addWidget(self._decoration_type_field)
+        editors.addWidget(self._fill_editor_stack)
+        editors.addWidget(detail_grid)
+        editors.addStretch(1)
+        columns.addLayout(editors, 1)
+        self._color_tab_panel.content_layout.addLayout(columns)
+        self._color_tab_panel.content_layout.addWidget(self._ruby_apply_main_btn)
         return section
 
     def _make_solid_fill_page(self) -> QWidget:
@@ -1872,7 +2358,7 @@ class PropertyPanel(QWidget):
         self._gradient_editor.selectedChanged.connect(
             lambda _index: self._sync_gradient_stop_controls()
         )
-        layout.addWidget(_field("渐变条", self._gradient_editor), 0, 0, 1, 2)
+        self._gradient_bar_field = _field("渐变条", self._gradient_editor)
 
         self._gradient_stop_color_btn = ColorButton("#FFFFFF", page)
         self._gradient_stop_color_btn.clicked.connect(self._choose_gradient_stop_color)
@@ -1880,16 +2366,35 @@ class PropertyPanel(QWidget):
         self._gradient_stop_position_spin.valueChanged.connect(
             self._set_gradient_stop_position
         )
-        self._gradient_stop_delete_btn = FluentPushButton("删除关键点", page)
-        self._gradient_stop_delete_btn.setMinimumHeight(30)
+        # 删除收成图标按钮，和颜色 / 位置挤在关键点行里，省一整行
+        self._gradient_stop_delete_btn = FluentTransparentToolButton(FIF.DELETE, page)
+        self._gradient_stop_delete_btn.setToolTip("删除关键点")
+        self._gradient_stop_delete_btn.setAccessibleName("删除关键点")
+        self._gradient_stop_delete_btn.setFixedSize(30, 30)
+        self._gradient_stop_delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._gradient_stop_delete_btn.clicked.connect(
             self._gradient_editor.delete_selected_stop
         )
-        layout.addWidget(_field("关键点颜色", self._gradient_stop_color_btn), 1, 0)
-        layout.addWidget(_field("关键点位置", self._gradient_stop_position_spin), 1, 1)
-        layout.addWidget(self._gradient_stop_delete_btn, 2, 0, 1, 2)
-        layout.setColumnStretch(0, 1)
-        layout.setColumnStretch(1, 1)
+        self._gradient_color_field = _field(
+            "关键点颜色", self._gradient_stop_color_btn
+        )
+        position_row = QWidget(page)
+        position_layout = QHBoxLayout(position_row)
+        position_layout.setContentsMargins(0, 0, 0, 0)
+        position_layout.setSpacing(6)
+        position_layout.addWidget(self._gradient_stop_position_spin, 1)
+        position_layout.addWidget(
+            self._gradient_stop_delete_btn, 0, Qt.AlignmentFlag.AlignBottom
+        )
+        self._gradient_position_field = _field("关键点位置", position_row)
+        self._gradient_editor_layout = layout
+        self._arrange_stop_editor(
+            layout,
+            self._gradient_bar_field,
+            self._gradient_color_field,
+            self._gradient_position_field,
+            vertical=False,
+        )
         return page
 
     def _make_split_fill_page(self) -> QWidget:
@@ -1898,20 +2403,80 @@ class PropertyPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(8)
-        self._paint_split_top_btn = self._paint_color_button("split_top_color", "#FFFFFF")
-        self._paint_split_bottom_btn = self._paint_color_button(
-            "split_bottom_color", "#FF5A6F"
+        self._split_editor = GradientStopsEditor(page)
+        self._split_editor.set_orientation("split_vertical")
+        self._split_editor.stopsChanged.connect(self._update_split_stops)
+        self._split_editor.selectedChanged.connect(
+            lambda _index: self._sync_split_stop_controls()
         )
-        self._paint_split_position_spin = _spin(0, 100, suffix=" %")
-        self._paint_split_position_spin.valueChanged.connect(
-            lambda value: self._update_current_fill(split_position_pct=value)
+        self._split_bar_field = _field("拼色条", self._split_editor)
+
+        self._split_stop_color_btn = ColorButton("#FFFFFF", page)
+        self._split_stop_color_btn.clicked.connect(self._choose_split_stop_color)
+        self._split_stop_position_spin = _spin(0, 100, suffix=" %")
+        self._split_stop_position_spin.valueChanged.connect(
+            self._set_split_stop_position
         )
-        layout.addWidget(_field("上色", self._paint_split_top_btn), 0, 0)
-        layout.addWidget(_field("下色", self._paint_split_bottom_btn), 0, 1)
-        layout.addWidget(_field("分割位置", self._paint_split_position_spin), 1, 0)
-        layout.setColumnStretch(0, 1)
-        layout.setColumnStretch(1, 1)
+        self._split_stop_delete_btn = FluentTransparentToolButton(FIF.DELETE, page)
+        self._split_stop_delete_btn.setToolTip("删除分段点")
+        self._split_stop_delete_btn.setAccessibleName("删除分段点")
+        self._split_stop_delete_btn.setFixedSize(30, 30)
+        self._split_stop_delete_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._split_stop_delete_btn.clicked.connect(
+            self._split_editor.delete_selected_stop
+        )
+        self._split_color_field = _field("分段颜色", self._split_stop_color_btn)
+        position_row = QWidget(page)
+        position_layout = QHBoxLayout(position_row)
+        position_layout.setContentsMargins(0, 0, 0, 0)
+        position_layout.setSpacing(6)
+        position_layout.addWidget(self._split_stop_position_spin, 1)
+        position_layout.addWidget(
+            self._split_stop_delete_btn, 0, Qt.AlignmentFlag.AlignBottom
+        )
+        self._split_position_field = _field("分段位置", position_row)
+        self._arrange_stop_editor(
+            layout,
+            self._split_bar_field,
+            self._split_color_field,
+            self._split_position_field,
+            vertical=True,
+        )
         return page
+
+    @staticmethod
+    def _arrange_stop_editor(
+        layout: QGridLayout,
+        bar_field: QWidget,
+        color_field: QWidget,
+        position_field: QWidget,
+        *,
+        vertical: bool,
+    ) -> None:
+        """Place vertical bars left with two stacked editors on the right."""
+        while layout.count():
+            layout.takeAt(0)
+        if vertical:
+            bar_field.setSizePolicy(
+                QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred
+            )
+            layout.addWidget(bar_field, 0, 0, 2, 1, Qt.AlignmentFlag.AlignTop)
+            # Keep label → control spacing identical to ordinary fields such as
+            # “描边宽度”. Without AlignTop, the tall color bar stretches both grid
+            # rows and Qt expands the field label into the surplus height.
+            layout.addWidget(color_field, 0, 1, Qt.AlignmentFlag.AlignTop)
+            layout.addWidget(position_field, 1, 1, Qt.AlignmentFlag.AlignTop)
+            layout.setColumnStretch(0, 0)
+            layout.setColumnStretch(1, 1)
+        else:
+            bar_field.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+            )
+            layout.addWidget(bar_field, 0, 0, 1, 2)
+            layout.addWidget(color_field, 1, 0)
+            layout.addWidget(position_field, 1, 1)
+            layout.setColumnStretch(0, 1)
+            layout.setColumnStretch(1, 1)
 
     def _make_image_fill_page(self) -> QWidget:
         page = QWidget()
@@ -1988,7 +2553,8 @@ class PropertyPanel(QWidget):
             # 图标按钮无文字，可访问名沿用中文提示
             btn.setAccessibleName(btn.toolTip())
             row_layout.addWidget(btn, 0)
-        layout.addWidget(_field("当前角色", row))
+        # 不加「当前角色」字段标签——卡片标题「角色」已经说明语义，纯浪费一行
+        layout.addWidget(row)
 
         # 折叠后标题栏保留当前角色摘要（此卡片是面板的高频信息源）
         self._singer_combo.currentTextChanged.connect(section.set_collapsed_summary)
@@ -3367,22 +3933,36 @@ class PropertyPanel(QWidget):
             self._paint_image_path_edit.setText(path)
             self._update_current_fill(image_path=path)
 
-    def _on_color_matrix_changed(self, state: str, layer: str) -> None:
+    def _on_color_subject_tab_changed(self, subject: str) -> None:
+        # 不阻塞信号：combo 变化要驱动 _on_color_subject_changed 的完整同步
+        # （注音按钮显隐 + 宽度/装饰/填充重灌）
+        self._color_subject_combo.setCurrentIndex(
+            max(0, self._color_subject_combo.findData(subject))
+        )
+
+    def _on_color_state_tab_changed(self, state: str) -> None:
         self._color_state_combo.blockSignals(True)
-        self._color_layer_combo.blockSignals(True)
         try:
             self._color_state_combo.setCurrentIndex(
                 max(0, self._color_state_combo.findData(state))
             )
+        finally:
+            self._color_state_combo.blockSignals(False)
+        self._sync_color_fill_controls()
+
+    def _on_color_layer_pill_changed(self, layer: str) -> None:
+        self._color_layer_combo.blockSignals(True)
+        try:
             self._color_layer_combo.setCurrentIndex(
                 max(0, self._color_layer_combo.findData(layer))
             )
         finally:
-            self._color_state_combo.blockSignals(False)
             self._color_layer_combo.blockSignals(False)
         self._sync_color_fill_controls()
 
     def _on_color_subject_changed(self) -> None:
+        if hasattr(self, "_color_tab_panel"):
+            self._color_tab_panel.set_left(self._current_color_subject_key())
         if hasattr(self, "_ruby_apply_main_btn"):
             self._ruby_apply_main_btn.setVisible(
                 self._current_color_subject_key() == "ruby"
@@ -3391,10 +3971,10 @@ class PropertyPanel(QWidget):
         self._sync_color_fill_controls()
 
     def _on_color_target_combo_changed(self) -> None:
-        if hasattr(self, "_color_matrix"):
-            self._color_matrix.set_selection(
-                self._current_color_state_key(), self._current_color_layer_key()
-            )
+        if hasattr(self, "_color_tab_panel"):
+            self._color_tab_panel.set_right(self._current_color_state_key())
+        if hasattr(self, "_color_layer_pill"):
+            self._color_layer_pill.set_current(self._current_color_layer_key())
         self._sync_color_fill_controls()
 
     def _current_color_state_key(self) -> ColorStateKey:
@@ -3504,11 +4084,17 @@ class PropertyPanel(QWidget):
             self._paint_gradient_start_btn.set_color(fill.start_color)
             self._paint_gradient_end_btn.set_color(fill.end_color)
             self._gradient_editor.set_orientation(fill.mode)
+            self._arrange_stop_editor(
+                self._gradient_editor_layout,
+                self._gradient_bar_field,
+                self._gradient_color_field,
+                self._gradient_position_field,
+                vertical=fill.mode == "gradient_vertical",
+            )
             self._gradient_editor.set_stops(_gradient_stops(fill))
             self._sync_gradient_stop_controls()
-            self._paint_split_top_btn.set_color(fill.split_top_color)
-            self._paint_split_bottom_btn.set_color(fill.split_bottom_color)
-            self._paint_split_position_spin.setValue(fill.split_position_pct)
+            self._split_editor.set_stops(_split_stops(fill))
+            self._sync_split_stop_controls()
             self._paint_image_path_edit.setText(fill.image_path)
             self._paint_image_scale_spin.setValue(fill.image_scale_pct)
             self._sync_decoration_visibility()
@@ -3522,9 +4108,12 @@ class PropertyPanel(QWidget):
         decoration_kind = str(self._color_subject_value("decoration_kind"))
         is_shadow = decoration_kind == "shadow"
         is_glow = decoration_kind == "glow"
+        self._stroke_width_field.setVisible(not is_decoration)
+        self._stroke2_width_field.setVisible(not is_decoration)
         self._decoration_type_field.setVisible(is_decoration)
         self._shadow_x_field.setVisible(is_decoration and is_shadow)
         self._shadow_y_field.setVisible(is_decoration and is_shadow)
+        self._glow_controls_row.setVisible(is_decoration and is_glow)
         self._glow_radius_field.setVisible(is_decoration and is_glow)
         self._glow_after_radius_field.setVisible(is_decoration and is_glow)
         self._glow_concentration_field.setVisible(is_decoration and is_glow)
@@ -3589,6 +4178,11 @@ class PropertyPanel(QWidget):
                 gradient_stops=[(0, changes["color"]), (100, changes["color"])],
                 split_top_color=changes["color"],
                 split_bottom_color=changes["color"],
+                split_stops=[
+                    (0, changes["color"]),
+                    (50, changes["color"]),
+                    (100, changes["color"]),
+                ],
             )
         state = replace(state, **{layer_key: fill})
         colors = replace(colors, **{state_key: state})
@@ -3639,6 +4233,51 @@ class PropertyPanel(QWidget):
         if self._syncing:
             return
         self._gradient_editor.set_selected_position(value)
+
+    def _update_split_stops(self, stops: list[tuple[int, str]]) -> None:
+        if self._syncing:
+            return
+        normalized = _normalize_gradient_stops(stops)
+        interior = [position for position, _color in normalized if position not in {0, 100}]
+        self._update_current_fill(
+            split_stops=normalized,
+            split_top_color=normalized[0][1],
+            split_bottom_color=normalized[-2][1] if len(normalized) > 1 else normalized[-1][1],
+            split_position_pct=interior[0] if interior else 50,
+        )
+
+    def _sync_split_stop_controls(self) -> None:
+        if not hasattr(self, "_split_stop_color_btn"):
+            return
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            position, color = self._split_editor.selected_stop
+            self._split_stop_color_btn.set_color(color)
+            self._split_stop_position_spin.setValue(position)
+            self._split_stop_delete_btn.setEnabled(
+                len(_split_stops(self._current_paint_fill())) > 2
+                and position not in {0, 100}
+            )
+        finally:
+            self._syncing = was_syncing
+
+    def _choose_split_stop_color(self) -> None:
+        current = QColor(self._split_editor.selected_stop[1])
+        color = QColorDialog.getColor(
+            current,
+            self,
+            "选择分段颜色",
+            QColorDialog.ColorDialogOption.ShowAlphaChannel,
+        )
+        if color.isValid():
+            normalized = _normalize_hex(color.name(QColor.NameFormat.HexArgb))
+            self._split_editor.set_selected_color(normalized)
+
+    def _set_split_stop_position(self, value: int) -> None:
+        if self._syncing:
+            return
+        self._split_editor.set_selected_position(value)
 
     def _refresh_scheme_combo(self, selected_key: Optional[str] = None) -> None:
         self._singer_combo.clear()
@@ -3910,16 +4549,32 @@ class PropertyPanel(QWidget):
             if hasattr(self, "_font_color_section"):
                 self._font_color_section.header.setText(f"颜色 / 字体{suffix}")
             self._font_combo.setCurrentFont(QFont(str(self._scheme_value("font_family"))))
-            latin_family = self._scheme_value("font_family_latin")
-            self._font_latin_check.setChecked(bool(latin_family))
-            self._font_latin_combo.setEnabled(bool(latin_family))
-            if latin_family:
-                self._font_latin_combo.setCurrentFont(QFont(str(latin_family)))
+            latin_family = self._scheme_value("font_family_latin") or self._scheme_value(
+                "font_family"
+            )
+            self._font_latin_combo.setCurrentFont(QFont(str(latin_family)))
             self._font_size_spin.setValue(int(self._scheme_value("font_size_px")))
+            latin_size = self._scheme_value("latin_font_size_px")
+            self._font_latin_size_spin.setValue(
+                int(latin_size if latin_size is not None else self._scheme_value("font_size_px"))
+            )
             self._letter_spacing_spin.setValue(int(self._scheme_value("letter_spacing_px")))
             self._space_width_spin.setValue(int(self._scheme_value("space_width_percent")))
             self._font_weight_combo.setCurrentIndex(
                 max(0, self._font_weight_combo.findData(int(self._scheme_value("font_weight"))))
+            )
+            latin_weight = self._scheme_value("latin_font_weight")
+            self._font_latin_weight_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._font_latin_weight_combo.findData(
+                        int(
+                            latin_weight
+                            if latin_weight is not None
+                            else self._scheme_value("font_weight")
+                        )
+                    ),
+                )
             )
             self._italic_check.setChecked(bool(self._scheme_value("italic")))
             self._allow_biting_check.setChecked(bool(self._scheme_value("allow_biting")))
@@ -4146,6 +4801,18 @@ def _gradient_stops(fill: PaintFill) -> list[tuple[int, str]]:
     return _normalize_gradient_stops([(0, fill.start_color), (100, fill.end_color)])
 
 
+def _split_stops(fill: PaintFill) -> list[tuple[int, str]]:
+    if fill.split_stops:
+        return _normalize_gradient_stops(fill.split_stops)
+    return _normalize_gradient_stops(
+        [
+            (0, fill.split_top_color),
+            (fill.split_position_pct, fill.split_bottom_color),
+            (100, fill.split_bottom_color),
+        ]
+    )
+
+
 def _replace_fill(fill: PaintFill, **changes) -> PaintFill:
     if "start_color" in changes or "end_color" in changes:
         stops = _gradient_stops(fill)
@@ -4159,6 +4826,15 @@ def _replace_fill(fill: PaintFill, **changes) -> PaintFill:
         changes["gradient_stops"] = stops
         changes.setdefault("start_color", stops[0][1])
         changes.setdefault("end_color", stops[-1][1])
+    if "split_stops" in changes:
+        stops = _normalize_gradient_stops(changes["split_stops"])
+        changes["split_stops"] = stops
+        changes.setdefault("split_top_color", stops[0][1])
+        changes.setdefault(
+            "split_bottom_color", stops[-2][1] if len(stops) > 1 else stops[-1][1]
+        )
+        interior = [position for position, _color in stops if position not in {0, 100}]
+        changes.setdefault("split_position_pct", interior[0] if interior else 50)
     return replace(fill, **changes)
 
 
@@ -4253,6 +4929,8 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         font_family=str(panel._scheme_value("font_family")),
         font_family_latin=panel._scheme_value("font_family_latin"),
         font_size_px=int(panel._scheme_value("font_size_px")),
+        latin_font_size_px=panel._scheme_value("latin_font_size_px"),
+        latin_font_weight=panel._scheme_value("latin_font_weight"),
         letter_spacing_px=int(panel._scheme_value("letter_spacing_px")),
         space_width_percent=int(panel._scheme_value("space_width_percent")),
         allow_biting=bool(panel._scheme_value("allow_biting")),
@@ -4354,12 +5032,13 @@ def _spin(
     spin.setSuffix(suffix)
     spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     _compact_control(spin)
+    spin._sync_text_minimum()
     return spin
 
 
 def _compact_control(widget: QWidget) -> None:
     widget.setMinimumWidth(0)
-    widget.setFixedHeight(32)
+    widget.setFixedHeight(_COMPACT_CONTROL_HEIGHT)
     widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
     widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
 

@@ -42,6 +42,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     PaintFill,
     SubtitleStyleScheme,
     Style,
+    paint_fill_from_dict,
     style_from_dict,
     style_to_dict,
 )
@@ -57,7 +58,6 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
     panel = PropertyPanel()
 
     checkboxes = (
-        panel._font_latin_check,
         panel._italic_check,
         panel._allow_biting_check,
         panel._title_latin_check,
@@ -76,9 +76,12 @@ def test_property_panel_uses_fluent_form_controls(qapp):
     panel = PropertyPanel()
 
     assert isinstance(panel._font_combo, ComboBox)
+    assert isinstance(panel._font_latin_combo, ComboBox)
     assert isinstance(panel._title_font_combo, ComboBox)
     assert isinstance(panel._font_weight_combo, ComboBox)
+    assert isinstance(panel._font_latin_weight_combo, ComboBox)
     assert isinstance(panel._font_size_spin, SpinBox)
+    assert isinstance(panel._font_latin_size_spin, SpinBox)
     assert isinstance(panel._paint_image_path_edit, LineEdit)
     assert isinstance(panel._title_text_edit, PlainTextEdit)
     assert isinstance(panel._pages[0], ScrollArea)
@@ -94,7 +97,10 @@ def test_property_panel_set_style_populates_controls(qapp):
     panel = PropertyPanel()
     style = Style(
         font_family="Microsoft YaHei UI",
+        font_family_latin="Arial",
         font_size_px=72,
+        latin_font_size_px=64,
+        latin_font_weight=600,
         letter_spacing_px=6,
         space_width_percent=35,
         allow_biting=True,
@@ -190,6 +196,9 @@ def test_property_panel_set_style_populates_controls(qapp):
 
     assert panel.subtitle_style == style
     assert panel._font_size_spin.value() == 72
+    assert panel._font_latin_combo.currentFont().family() == "Arial"
+    assert panel._font_latin_size_spin.value() == 64
+    assert panel._font_latin_weight_combo.currentData() == 600
     assert panel._letter_spacing_spin.value() == 6
     assert panel._space_width_spin.value() == 35
     assert panel._font_weight_combo.currentData() == 900
@@ -417,7 +426,13 @@ def test_property_panel_subtitle_page_has_no_horizontal_scroll(qapp):
     qapp.processEvents()
     assert layout_page.widget().width() <= layout_page.viewport().width()
     assert panel._font_combo.minimumWidth() == 0
-    assert panel._font_size_spin.minimumWidth() == 0
+    # Numeric controls keep the current localized value readable; the compact
+    # arrow hides before it can overlap instead of forcing a zero minimum width.
+    assert panel._font_size_spin.minimumWidth() >= (
+        panel._font_size_spin.lineEdit().fontMetrics().horizontalAdvance(
+            panel._font_size_spin.lineEdit().text()
+        )
+    )
     assert panel._line_margin_spin.parentWidget() is not panel._font_size_spin.parentWidget()
     assert panel._singer_combo.parentWidget() is not panel._line_margin_spin.parentWidget()
     subtitle_layout = subtitle_page.widget().layout()
@@ -458,17 +473,38 @@ def test_property_panel_font_and_color_sections_are_side_by_side(qapp):
     # 颜色在左、字体在右（与 nicokara maker3 的编辑顺序一致）。
     assert panel._color_section.geometry().right() < panel._font_section.geometry().left()
     assert abs(panel._font_section.width() - panel._color_section.width()) <= 1
+    # 两张卡片只需顶部对齐；颜色编辑器较高时不能把字体卡片强行等高。
+    assert panel._font_section.height() < panel._color_section.height()
     font_header_top = panel._font_section.mapTo(panel._font_color_row, QPoint()).y()
     color_header_top = panel._color_section.mapTo(panel._font_color_row, QPoint()).y()
     assert font_header_top == color_header_top
-    assert panel._ruby_section.parentWidget() is panel._font_section
+    # 注音排版是排版语义，卡片挪到了「布局」页；字体列只留字体本体
+    assert panel._ruby_section.header.text() == "注音"
+    assert panel._pages[1].isAncestorOf(panel._ruby_section)
+    assert not panel._font_section.isAncestorOf(panel._ruby_section)
     subgroup_titles = [
         label.text()
         for label in panel._font_section.findChildren(
             QLabel, "SubtitlePropertySubheading"
         )
     ]
-    assert subgroup_titles == ["字体", "注音"]
+    assert subgroup_titles == ["字体"]
+
+
+def test_property_panel_font_and_color_sections_stack_in_narrow_viewport(qapp):
+    panel = PropertyPanel()
+    panel.resize(520, 800)
+    panel.show()
+    qapp.processEvents()
+
+    row = panel._font_color_row
+    assert row.is_stacked()
+    assert panel._color_section.geometry().bottom() < panel._font_section.geometry().top()
+    assert panel._color_section.geometry().right() <= row.rect().right()
+    assert panel._font_section.geometry().right() <= row.rect().right()
+
+    subtitle_page = panel.widget(0)
+    assert subtitle_page.widget().width() <= subtitle_page.viewport().width()
 
 
 def test_subtitle_preview_frame_keeps_child_at_16_9(qapp):
@@ -493,7 +529,15 @@ def test_property_panel_basic_page_has_no_screen_section(qapp):
         for index in range(basic_layout.count() - 1)
     ]
 
-    assert section_titles == ["布局方案", "行结构", "垂直", "书写方向", "视图"]
+    assert section_titles == [
+        "布局方案",
+        "字符排版",
+        "行结构",
+        "注音",
+        "垂直",
+        "书写方向",
+        "视图",
+    ]
     assert not hasattr(panel, "_screen_preset_combo")
     # 视图是低频的整体变换，默认折叠
     viewport_section = basic_layout.itemAt(len(section_titles) - 1).widget()
@@ -536,6 +580,10 @@ def test_property_panel_font_controls_emit_style(qapp):
     panel.styleChanged.connect(emitted.append)
 
     panel._font_size_spin.setValue(88)
+    panel._font_latin_size_spin.setValue(76)
+    panel._font_latin_weight_combo.setCurrentIndex(
+        panel._font_latin_weight_combo.findData(600)
+    )
     panel._letter_spacing_spin.setValue(7)
     panel._space_width_spin.setValue(30)
     panel._font_weight_combo.setCurrentIndex(panel._font_weight_combo.findData(500))
@@ -543,11 +591,63 @@ def test_property_panel_font_controls_emit_style(qapp):
     panel._allow_biting_check.setChecked(True)
 
     assert emitted[-1].font_size_px == 88
+    assert emitted[-1].latin_font_size_px == 76
+    assert emitted[-1].latin_font_weight == 600
     assert emitted[-1].letter_spacing_px == 7
     assert emitted[-1].space_width_percent == 30
     assert emitted[-1].font_weight == 500
     assert emitted[-1].italic is True
     assert emitted[-1].allow_biting is True
+
+
+def test_font_scripts_are_tabs_and_spacing_lives_on_layout_page(qapp):
+    panel = PropertyPanel()
+
+    assert not hasattr(panel, "_font_latin_check")
+    assert panel._font_tab_stack.count() == 2
+    assert panel._font_tab_panel._buttons[("left", "japanese")].text() == "日文"
+    assert panel._font_tab_panel._buttons[("left", "latin")].text() == "英数"
+    assert panel._font_tab_stack.currentIndex() == 0
+
+    panel._font_tab_panel._buttons[("left", "latin")].click()
+    qapp.processEvents()
+    assert panel._font_tab_stack.currentIndex() == 1
+    assert panel._font_latin_combo.isEnabled()
+
+    assert panel._character_layout_section.header.text() == "字符排版"
+    assert not panel._font_tab_panel.isAncestorOf(panel._letter_spacing_spin)
+    assert not panel._font_tab_panel.isAncestorOf(panel._space_width_spin)
+    assert panel._italic_check.parentWidget() is panel._allow_biting_check.parentWidget()
+
+    panel.set_style(
+        Style(font_family="Yu Gothic UI", font_size_px=70, font_weight=800)
+    )
+    assert panel._font_latin_combo.currentFont().family() == "Yu Gothic UI"
+    assert panel._font_latin_size_spin.value() == 70
+    assert panel._font_latin_weight_combo.currentData() == 800
+
+
+def test_latin_font_overrides_round_trip_and_legacy_values_inherit():
+    style = Style(
+        font_family="Yu Gothic UI",
+        font_family_latin="Arial",
+        font_size_px=72,
+        font_weight=700,
+        latin_font_size_px=60,
+        latin_font_weight=500,
+    )
+
+    restored = style_from_dict(style_to_dict(style))
+    assert restored.font_family_latin == "Arial"
+    assert restored.latin_font_size_px == 60
+    assert restored.latin_font_weight == 500
+
+    legacy = style_from_dict(
+        {"font_family": "Yu Gothic UI", "font_size_px": 72, "font_weight": 700}
+    )
+    assert legacy.font_family_latin is None
+    assert legacy.latin_font_size_px is None
+    assert legacy.latin_font_weight is None
 
 
 def test_property_panel_color_controls_emit_normalized_style(qapp):
@@ -575,6 +675,31 @@ def test_property_panel_color_controls_preserve_alpha(qapp):
     assert emitted[-1].fill_color == "#80123ABC"
     assert emitted[-1].karaoke_colors.after.text.color == "#80123ABC"
     assert panel._paint_solid_btn.color == "#80123ABC"
+
+
+def test_property_panel_fill_modes_use_compact_svg_icon_buttons(qapp):
+    panel = PropertyPanel()
+    expected_labels = {
+        "solid": "全色",
+        "gradient_horizontal": "横渐变",
+        "gradient_vertical": "纵渐变",
+        "split_vertical": "拼色",
+        "image": "图像",
+    }
+
+    for key, label in expected_labels.items():
+        button = panel._fill_mode_pill._buttons[key]
+        assert button.text() == ""
+        assert not button.icon().isNull()
+        assert not button.icon().pixmap(button.iconSize()).isNull()
+        assert button.toolTip() == label
+        assert button.accessibleName() == label
+        assert button.width() == button.height()
+        assert button.iconSize().width() < button.width()
+
+    panel._fill_mode_pill._buttons["gradient_vertical"].click()
+    assert panel._fill_mode_combo.currentData() == "gradient_vertical"
+    assert panel._fill_mode_pill.current() == "gradient_vertical"
 
 
 def test_property_panel_gradient_controls_emit_style(qapp):
@@ -713,21 +838,63 @@ def test_property_panel_fill_editor_height_follows_current_page(qapp):
     assert solid_height < gradient_height
 
 
+def test_vertical_gradient_and_split_use_compact_matching_bar_layout(qapp):
+    panel = PropertyPanel()
+    panel.resize(900, 800)
+    panel.show()
+    panel._fill_mode_combo.setCurrentIndex(
+        panel._fill_mode_combo.findData("gradient_vertical")
+    )
+    qapp.processEvents()
+    layout = panel._gradient_editor_layout
+
+    bar_position = layout.getItemPosition(layout.indexOf(panel._gradient_bar_field))
+    color_position = layout.getItemPosition(layout.indexOf(panel._gradient_color_field))
+    stop_position = layout.getItemPosition(layout.indexOf(panel._gradient_position_field))
+    assert bar_position == (0, 0, 2, 1)
+    assert color_position == (0, 1, 1, 1)
+    assert stop_position == (1, 1, 1, 1)
+    assert panel._gradient_editor.sizeHint().width() == panel._split_editor.sizeHint().width()
+    assert panel._gradient_editor._bar_rect().width() == panel._split_editor._bar_rect().width()
+
+    def label_control_gap(field):
+        field_layout = field.layout()
+        label = field_layout.itemAt(0).widget()
+        control = field_layout.itemAt(1).widget()
+        return control.geometry().top() - label.geometry().bottom() - 1
+
+    assert label_control_gap(panel._gradient_color_field) == label_control_gap(
+        panel._stroke_width_field
+    )
+
+    panel._fill_mode_combo.setCurrentIndex(
+        panel._fill_mode_combo.findData("gradient_horizontal")
+    )
+    bar_position = layout.getItemPosition(layout.indexOf(panel._gradient_bar_field))
+    assert bar_position == (0, 0, 1, 2)
+
+
 def test_property_panel_split_and_image_fill_controls_emit_style(qapp):
     panel = PropertyPanel()
     emitted: list[Style] = []
     panel.styleChanged.connect(emitted.append)
 
     panel._fill_mode_combo.setCurrentIndex(panel._fill_mode_combo.findData("split_vertical"))
-    panel._update_current_fill(split_top_color="#111111")
-    panel._update_current_fill(split_bottom_color="#EEEEEE")
-    panel._paint_split_position_spin.setValue(42)
+    panel._update_split_stops(
+        [(0, "#FFFFFF"), (30, "#FF0000"), (65, "#888888"), (100, "#888888")]
+    )
 
     split = emitted[-1].karaoke_colors.after.text
     assert split.mode == "split_vertical"
-    assert split.split_top_color == "#111111"
-    assert split.split_bottom_color == "#EEEEEE"
-    assert split.split_position_pct == 42
+    assert split.split_stops == [
+        (0, "#FFFFFF"),
+        (30, "#FF0000"),
+        (65, "#888888"),
+        (100, "#888888"),
+    ]
+    assert split.split_top_color == "#FFFFFF"
+    assert split.split_bottom_color == "#888888"
+    assert split.split_position_pct == 30
 
     panel._fill_mode_combo.setCurrentIndex(panel._fill_mode_combo.findData("image"))
     panel._paint_image_path_edit.setText(r"D:\cover.png")
@@ -738,6 +905,52 @@ def test_property_panel_split_and_image_fill_controls_emit_style(qapp):
     assert image.mode == "image"
     assert image.image_path == r"D:\cover.png"
     assert image.image_scale_pct == 150
+
+
+def test_split_fill_editor_supports_multiple_hard_color_bands(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+    panel._fill_mode_combo.setCurrentIndex(
+        panel._fill_mode_combo.findData("split_vertical")
+    )
+
+    editor = panel._split_editor
+    assert editor._orientation == "vertical"
+    assert editor._hard_edges is True
+
+    panel._update_split_stops(
+        [(0, "#FFFFFF"), (30, "#FF0000"), (65, "#888888"), (100, "#888888")]
+    )
+    editor.add_stop(80, "#123456")
+
+    assert emitted[-1].karaoke_colors.after.text.split_stops == [
+        (0, "#FFFFFF"),
+        (30, "#FF0000"),
+        (65, "#888888"),
+        (80, "#123456"),
+        (100, "#888888"),
+    ]
+
+
+def test_spin_box_uses_direct_input_without_step_button_overlay(qapp):
+    panel = PropertyPanel()
+    spin = panel._font_size_spin
+    spin.setParent(None)
+    spin.setValue(spin.maximum())
+    spin.resize(1, spin.height())
+    spin.show()
+    qapp.processEvents()
+
+    text_width = spin.lineEdit().fontMetrics().horizontalAdvance(
+        spin.lineEdit().text()
+    )
+    assert spin.lineEdit().width() >= text_width
+    assert spin.upButton.isHidden()
+    assert spin.downButton.isHidden()
+    assert not hasattr(spin, "spinFlyout")
+    spin.close()
+    spin.deleteLater()
 
 
 def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
@@ -751,6 +964,12 @@ def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
         split_top_color="#112233",
         split_bottom_color="#445566",
         split_position_pct=35,
+        split_stops=[
+            (0, "#112233"),
+            (35, "#778899"),
+            (70, "#445566"),
+            (100, "#445566"),
+        ],
         image_path=image_path,
         image_scale_pct=175,
     )
@@ -866,7 +1085,30 @@ def test_style_serialization_preserves_complex_fills_and_schemes(tmp_path):
     assert restored.volume_transition_ratio_pct == 44
     assert restored.singer_style_overrides[2].karaoke_colors.after.text.image_path == image_path
     assert restored.singer_style_overrides[2].karaoke_colors.after.text.image_scale_pct == 175
+    assert restored.singer_style_overrides[2].karaoke_colors.after.text.split_stops == [
+        (0, "#112233"),
+        (35, "#778899"),
+        (70, "#445566"),
+        (100, "#445566"),
+    ]
     assert restored.custom_style_schemes["图像方案"].karaoke_colors.after.text.mode == "image"
+
+
+def test_legacy_two_color_split_fill_is_upgraded_to_hard_stops():
+    fill = paint_fill_from_dict(
+        {
+            "mode": "split_vertical",
+            "split_top_color": "#FFFFFF",
+            "split_bottom_color": "#777777",
+            "split_position_pct": 35,
+        }
+    )
+
+    assert fill.split_stops == [
+        (0, "#FFFFFF"),
+        (35, "#777777"),
+        (100, "#777777"),
+    ]
 
 
 def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
@@ -875,9 +1117,13 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     panel.styleChanged.connect(emitted.append)
 
     assert panel._decoration_type_field.isHidden()
+    assert not panel._stroke_width_field.isHidden()
+    assert not panel._stroke2_width_field.isHidden()
 
     panel._color_layer_combo.setCurrentIndex(panel._color_layer_combo.findData("shadow"))
     assert not panel._decoration_type_field.isHidden()
+    assert panel._stroke_width_field.isHidden()
+    assert panel._stroke2_width_field.isHidden()
     assert not panel._shadow_x_field.isHidden()
     assert not panel._shadow_y_field.isHidden()
 
@@ -889,6 +1135,13 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     assert panel._shadow_y_field.isHidden()
     assert not panel._glow_radius_field.isHidden()
     assert not panel._glow_after_radius_field.isHidden()
+    assert not panel._glow_controls_row.isHidden()
+    glow_layout = panel._glow_controls_row.layout()
+    assert [glow_layout.itemAt(index).widget() for index in range(3)] == [
+        panel._glow_radius_field,
+        panel._glow_after_radius_field,
+        panel._glow_concentration_field,
+    ]
 
     panel._glow_radius_spin.setValue(28)
     assert emitted[-1].glow_radius_px == 28
@@ -905,6 +1158,7 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     assert not panel._shadow_y_field.isHidden()
     assert panel._glow_radius_field.isHidden()
     assert panel._glow_after_radius_field.isHidden()
+    assert panel._glow_controls_row.isHidden()
 
 
 def test_property_panel_glow_concentration_edits_main_and_ruby(qapp):
@@ -1185,6 +1439,7 @@ def test_property_panel_role_scheme_controls_emit_style(qapp):
 
     panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:B"))
     panel._font_size_spin.setValue(88)
+    panel._font_latin_size_spin.setValue(74)
     panel._letter_spacing_spin.setValue(9)
     panel._set_color("fill_color", "#00aaee")
     panel._fill_mode_combo.setCurrentIndex(
@@ -1198,6 +1453,7 @@ def test_property_panel_role_scheme_controls_emit_style(qapp):
     # 编辑进角色 B（按名字存进 custom_style_schemes）
     scheme = emitted[-1].custom_style_schemes["B"]
     assert scheme.font_size_px == 88
+    assert scheme.latin_font_size_px == 74
     assert scheme.letter_spacing_px == 9
     assert scheme.fill_color == "#00AAEE"
     assert scheme.karaoke_colors.after.text.mode == "gradient_horizontal"
@@ -1596,14 +1852,14 @@ def test_wheel_changes_spinbox_only_when_focused(qapp):
     qapp.processEvents()
 
     unfocused_event = _wheel_event(spin)
-    QApplication.sendEvent(spin, unfocused_event)
+    spin.wheelEvent(unfocused_event)
     assert spin.value() == 100
     assert not unfocused_event.isAccepted()
 
     spin.setFocus(Qt.FocusReason.MouseFocusReason)
     qapp.processEvents()
     focused_event = _wheel_event(spin)
-    QApplication.sendEvent(spin, focused_event)
+    spin.wheelEvent(focused_event)
     assert spin.value() != 100
 
 

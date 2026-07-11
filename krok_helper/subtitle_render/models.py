@@ -289,6 +289,9 @@ class PaintFill:
     split_top_color: str = "#FFFFFF"
     split_bottom_color: str = "#FFFFFF"
     split_position_pct: int = 50
+    # Hard-edged vertical color bands: each item marks where that color starts.
+    # The final 100% endpoint repeats the last band color for editor/persistence.
+    split_stops: list[tuple[int, str]] = field(default_factory=list)
     image_path: str = ""
     image_scale_pct: int = 100
 
@@ -303,6 +306,7 @@ def _paint_fill(color: str, *, mode: ColorFillMode = "solid", end: Optional[str]
         gradient_stops=[(0, color), (100, end_color)],
         split_top_color=color,
         split_bottom_color=end_color,
+        split_stops=[(0, color), (50, end_color), (100, end_color)],
     )
 
 
@@ -430,6 +434,8 @@ class SubtitleStyleScheme:
     font_size_px: Optional[int] = None
     letter_spacing_px: Optional[int] = None
     space_width_percent: Optional[int] = None
+    latin_font_size_px: Optional[int] = None
+    latin_font_weight: Optional[int] = None
     allow_biting: Optional[bool] = None
     font_weight: Optional[int] = None
     italic: Optional[bool] = None
@@ -483,6 +489,11 @@ class Style:
     """NicokaraMaker3 ``LyricsInterval`` default: 0 px."""
     space_width_percent: int = 20
     """空格宽度占字号的百分比；20% 对齐 NicokaraMaker3 默认值。"""
+
+    # 英数（ASCII）轨的可选覆盖：``None`` 实时跟随日文轨对应字段。
+    # 字体族沿用历史字段 ``font_family_latin``（同一语义）。
+    latin_font_size_px: Optional[int] = None
+    latin_font_weight: Optional[int] = None
 
     allow_biting: bool = False
     """允许负 side bearing 令相邻字形咬合。"""
@@ -1004,6 +1015,12 @@ def style_from_dict(payload: object) -> Style:
             )
         elif key == "font_family_latin":
             changes[key] = str(value) if value else None
+        elif key in {
+            "latin_font_size_px",
+            "latin_font_weight",
+        }:
+            # 英数轨覆盖：None = 跟随日文轨，序列化保留 null
+            changes[key] = None if value is None else _int_value(value, 0)
         elif value is not None:
             changes[key] = str(value)
     if "glow_radius_px" in changes:
@@ -1273,6 +1290,7 @@ def paint_fill_to_dict(fill: PaintFill) -> dict:
         "split_top_color": fill.split_top_color,
         "split_bottom_color": fill.split_bottom_color,
         "split_position_pct": fill.split_position_pct,
+        "split_stops": list(fill.split_stops),
         "image_path": fill.image_path,
         "image_scale_pct": fill.image_scale_pct,
     }
@@ -1289,15 +1307,30 @@ def paint_fill_from_dict(payload: object, *, fallback: str = "#FFFFFF") -> Paint
     start_color = str(payload.get("start_color", color))
     end_color = str(payload.get("end_color", color))
     stops = payload.get("gradient_stops", [(0, start_color), (100, end_color)])
+    split_top_color = str(payload.get("split_top_color", start_color))
+    split_bottom_color = str(payload.get("split_bottom_color", end_color))
+    split_position_pct = max(
+        0, min(100, _int_value(payload.get("split_position_pct"), 50))
+    )
+    split_stops_payload = payload.get("split_stops")
+    if not split_stops_payload:
+        split_stops_payload = [
+            (0, split_top_color),
+            (split_position_pct, split_bottom_color),
+            (100, split_bottom_color),
+        ]
     return PaintFill(
         mode=mode,  # type: ignore[arg-type]
         color=color,
         start_color=start_color,
         end_color=end_color,
         gradient_stops=_gradient_stops_from_payload(stops, start_color, end_color),
-        split_top_color=str(payload.get("split_top_color", start_color)),
-        split_bottom_color=str(payload.get("split_bottom_color", end_color)),
-        split_position_pct=max(0, min(100, _int_value(payload.get("split_position_pct"), 50))),
+        split_top_color=split_top_color,
+        split_bottom_color=split_bottom_color,
+        split_position_pct=split_position_pct,
+        split_stops=_gradient_stops_from_payload(
+            split_stops_payload, split_top_color, split_bottom_color
+        ),
         image_path=str(payload.get("image_path", "")),
         image_scale_pct=max(1, _int_value(payload.get("image_scale_pct"), 100)),
     )

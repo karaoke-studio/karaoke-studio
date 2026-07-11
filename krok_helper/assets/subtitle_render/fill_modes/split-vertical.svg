@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img">
+  <title>纵向拼色</title>
+  <path d="M5 4h14a1 1 0 0 1 1 1v7H4V5a1 1 0 0 1 1-1Z" fill="#FFFFFF"/>
+  <path d="M4 12h16v7a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1v-7Z" fill="#374151"/>
+  <rect x="3.5" y="3.5" width="17" height="17" rx="1.5" fill="none" stroke="#111827"/>
+  <path d="M4 12h16" stroke="#111827"/>
+</svg>

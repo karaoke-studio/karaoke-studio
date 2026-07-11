@@ -2234,12 +2234,24 @@ def _build_font(style: Style) -> QFont:
     return font
 
 
+def _latin_font_size(style: Style) -> int:
+    """英数轨字号；``None`` 跟随日文轨。"""
+    value = style.latin_font_size_px
+    return int(value) if value is not None else int(style.font_size_px)
+
+
+def _latin_font_weight(style: Style) -> int:
+    value = style.latin_font_weight
+    return int(value) if value is not None else int(style.font_weight)
+
+
 def _build_latin_font(style: Style) -> QFont:
-    """英数字体；未单独设置时退回日文字体（行为与单字体一致）。"""
+    """英数字体；未单独设置时各参数退回日文轨（行为与单字体一致）。"""
     family = style.font_family_latin or style.font_family
-    font = QFont(family, max(style.font_size_px, 1))
-    font.setPixelSize(max(style.font_size_px, 1))
-    font.setWeight(_clamp_weight(style.font_weight))
+    size = max(_latin_font_size(style), 1)
+    font = QFont(family, size)
+    font.setPixelSize(size)
+    font.setWeight(_clamp_weight(_latin_font_weight(style)))
     font.setItalic(style.italic)
     return font
 
@@ -2249,8 +2261,9 @@ def _make_font_for(style: Style, jp_font: QFont, latin_font: QFont):
 
     ``QPainterPath.addText`` 不遵循 ``setFamilies`` 的回退顺序，所以必须显式按
     字符挑字体：全 ASCII 的字符用英数字体，其余（假名/汉字/标点）用日文字体。
+    英数轨的字号 / 字重覆盖也会使两套字体分离（family 相同亦然）。
     """
-    if not style.font_family_latin or latin_font.family() == jp_font.family():
+    if _font_signature(latin_font) == _font_signature(jp_font):
         return None
 
     def font_for(ch_text: str) -> QFont:
@@ -2356,15 +2369,14 @@ def _char_layout_metrics(
     style: Style,
 ) -> tuple[int, float]:
     """(layout width, path left offset) using NicokaraMaker3-like rules, memoized."""
+    is_latin_glyph = font_for is not None and bool(ch_text) and ch_text.isascii()
     glyph_font = font_for(ch_text) if font_for is not None else font
-    glyph_metrics = (
-        latin_metrics
-        if font_for is not None and ch_text and ch_text.isascii()
-        else metrics
-    )
+    glyph_metrics = latin_metrics if is_latin_glyph else metrics
     font_size = glyph_font.pixelSize()
     if font_size <= 0:
-        font_size = max(int(style.font_size_px), 1)
+        font_size = max(
+            _latin_font_size(style) if is_latin_glyph else int(style.font_size_px), 1
+        )
     space_percent = max(10, min(int(style.space_width_percent), 100))
     edge_size = max(int(style.stroke_width_px), 0)
 
@@ -3326,7 +3338,9 @@ def _vertical_main_path_sig(line: TimingLine, style: Style, layout: _VerticalLin
         style.font_family,
         style.font_family_latin,
         style.font_size_px,
+        _latin_font_size(style),
         int(style.font_weight),
+        _latin_font_weight(style),
         style.italic,
         layout.column_x,
         layout.y_top,
@@ -4114,6 +4128,8 @@ _SUBTITLE_SCHEME_STYLE_FIELDS: tuple[str, ...] = (
     "font_size_px",
     "letter_spacing_px",
     "space_width_percent",
+    "latin_font_size_px",
+    "latin_font_weight",
     "allow_biting",
     "font_weight",
     "italic",
@@ -7548,15 +7564,27 @@ def _split_vertical_brush(fill: PaintFill, rect: QRectF) -> QBrush:
         QPointF(rect.left(), rect.top()),
         QPointF(rect.left(), rect.bottom()),
     )
-    position = max(0.0, min(1.0, fill.split_position_pct / 100.0))
-    top = _valid_color(fill.split_top_color, fill.color)
-    bottom = _valid_color(fill.split_bottom_color, fill.color)
-    edge_before = max(0.0, position - 0.001)
-    edge_after = min(1.0, position + 0.001)
-    gradient.setColorAt(0.0, top)
-    gradient.setColorAt(edge_before, top)
-    gradient.setColorAt(edge_after, bottom)
-    gradient.setColorAt(1.0, bottom)
+    stops = list(fill.split_stops)
+    if len(stops) < 2:
+        stops = [
+            (0, fill.split_top_color),
+            (fill.split_position_pct, fill.split_bottom_color),
+            (100, fill.split_bottom_color),
+        ]
+    stops = sorted(
+        (max(0, min(100, int(position))), color) for position, color in stops
+    )
+    first = _valid_color(stops[0][1], fill.color)
+    gradient.setColorAt(0.0, first)
+    previous = first
+    for position_pct, color_value in stops[1:]:
+        position = max(0.0, min(1.0, position_pct / 100.0))
+        color = _valid_color(color_value, fill.color)
+        if position < 1.0:
+            gradient.setColorAt(max(0.0, position - 0.001), previous)
+            gradient.setColorAt(min(1.0, position + 0.001), color)
+        previous = color
+    gradient.setColorAt(1.0, previous)
     return QBrush(gradient)
 
 
@@ -7575,6 +7603,7 @@ def _fill_signature(fill: PaintFill) -> tuple:
         fill.split_top_color,
         fill.split_bottom_color,
         fill.split_position_pct,
+        tuple(fill.split_stops),
         fill.image_path,
         fill.image_scale_pct,
     )

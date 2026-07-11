@@ -1365,6 +1365,27 @@ def test_paint_frame_fill_gradient_changes_rendered_frame(qapp):
     assert _pixel_hash(img_solid) != _pixel_hash(img_gradient)
 
 
+def test_split_vertical_brush_renders_multiple_hard_color_bands(qapp):
+    fill = PaintFill(
+        mode="split_vertical",
+        split_stops=[
+            (0, "#FFFFFF"),
+            (30, "#FF0000"),
+            (65, "#888888"),
+            (100, "#888888"),
+        ],
+    )
+    image = QImage(12, 100, QImage.Format.Format_RGB32)
+    image.fill(QColor("#000000"))
+    painter = QPainter(image)
+    painter.fillRect(QRectF(0, 0, 12, 100), _brush_for_fill(fill, QRectF(0, 0, 12, 100)))
+    painter.end()
+
+    assert image.pixelColor(6, 15) == QColor("#FFFFFF")
+    assert image.pixelColor(6, 45) == QColor("#FF0000")
+    assert image.pixelColor(6, 80) == QColor("#888888")
+
+
 def test_paint_frame_gradient_stops_change_rendered_frame(qapp):
     img_two_stops = _blank()
     img_three_stops = _blank()
@@ -4229,6 +4250,26 @@ def _measured_line_width(style: Style, track: TimingTrack) -> int:
     return max(
         int(round(_line_text_width(widths, style) + _visual_text_padding(style) * 2)), 1
     )
+
+
+def test_main_latin_font_uses_independent_size_and_weight(qapp):
+    style = Style(
+        font_family="Yu Gothic UI",
+        font_family_latin="Arial",
+        font_size_px=52,
+        font_weight=400,
+        latin_font_size_px=68,
+        latin_font_weight=700,
+    )
+    japanese = _build_font(style)
+    latin = _build_latin_font(style)
+    font_for = _make_font_for(style, japanese, latin)
+
+    assert latin.pixelSize() == 68
+    assert int(latin.weight()) == 700
+    assert font_for is not None
+    assert font_for("A") == latin
+    assert font_for("あ") == japanese
 
 
 def test_check_layout_margins_flags_overflow(qapp):

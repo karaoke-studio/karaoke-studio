@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img">
+  <title>图像填充</title>
+  <rect x="3.5" y="3.5" width="17" height="17" rx="1.5" fill="#FFFFFF" stroke="#111827"/>
+  <circle cx="8.5" cy="8.5" r="1.8" fill="#374151"/>
+  <path d="m5.5 18 4.1-4.8 2.8 2.8 2.5-3 3.6 5H5.5Z" fill="#D1D5DB" stroke="#111827" stroke-linejoin="round"/>
+</svg>
