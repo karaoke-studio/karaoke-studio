@@ -346,6 +346,32 @@ def test_import_line_fade_animation(imported):
     assert style.exit_fade_ms == 300
 
 
+def test_import_mixed_line_actions_as_per_line_overrides(tmp_path):
+    payload = _project_payload(tmp_path)
+    lyric_lines = [
+        line for line in payload["SourceLyricsInfos"][0]["LineInfos"]
+        if line.get("Kind") == 1
+    ]
+    lyric_lines[-1]["SubtitleActionId"] = "SHINTA.NoAction"
+    lyric_lines[-1]["SubtitleActionSettings"] = {}
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+
+    style = style_from_dict(result.project_data["style"])
+    assert style.entry_anim == "fade"
+    assert style.exit_anim == "fade"
+    overrides = result.project_data["line_animation_overrides"]
+    assert overrides[0] is None
+    assert overrides[1] is None  # LRC 中的空行占位
+    assert overrides[2] == {
+        "entry_anim": "none",
+        "entry_duration_ms": 0,
+        "exit_anim": "none",
+        "exit_duration_ms": 0,
+    }
+    assert not any("多数行" in warning for warning in result.warnings)
+
+
 def test_mismatched_lyrics_skip_line_payload(tmp_path):
     payload = _project_payload(tmp_path)
     # 少一行歌词记录 → 行数不一致，整体跳过行级导入

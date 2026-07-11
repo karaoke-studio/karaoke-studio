@@ -21,6 +21,8 @@ from dataclasses import dataclass, field, fields, replace
 from typing import Literal, Optional
 
 LineBreakKind = Literal["none", "page", "paragraph"]
+EntryAnimation = Literal["none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"]
+ExitAnimation = Literal["none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"]
 
 SCHEMA_VERSION = 1
 PROJECT_FILE_SUFFIX = ".yurika"
@@ -64,6 +66,16 @@ class TimingChar:
     """共享时间块内的字符总数；1 表示普通独立字符。"""
 
 
+@dataclass(frozen=True)
+class LineAnimationOverride:
+    """一行歌词对全局入场/退场动画的完整覆盖。"""
+
+    entry_anim: EntryAnimation = "none"
+    entry_duration_ms: int = 300
+    exit_anim: ExitAnimation = "none"
+    exit_duration_ms: int = 300
+
+
 @dataclass
 class TimingLine:
     """一行歌词（可能为空行——保留用户排版意图）。"""
@@ -93,6 +105,8 @@ class TimingLine:
     由字幕轨道拖动写入，随项目文件持久化；覆盖值优先于自动布局。"""
     display_end_override_ms: Optional[int] = None
     """本行「消失时刻」手动覆盖（毫秒）。None = 按全局延迟退场自动计算。"""
+    animation_override: Optional[LineAnimationOverride] = None
+    """逐行动画覆盖；None = 继承全局 ``Style`` 的入场/退场设置。"""
 
 
 @dataclass
@@ -233,8 +247,6 @@ SMART_HORIZONTALS: tuple[SmartHorizontal, ...] = (
     "equal_margins",
 )
 SectionEndingMode = Literal["hold", "clear"]
-EntryAnimation = Literal["none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"]
-ExitAnimation = Literal["none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"]
 LitStyle = Literal["volume", "circle", "square", "rounded"]
 # 标题字幕（B7）：静态叠加文字的锚点 / 对齐 / 显示时段模式。
 TitleAnchor = Literal[
@@ -714,6 +726,20 @@ class Style:
     title_overlay: Optional[TitleOverlay] = None
 
 
+def style_with_line_animation(style: Style, line: TimingLine) -> Style:
+    """把逐行动画覆盖套到样式上；其他视觉与布局字段保持不变。"""
+    override = line.animation_override
+    if override is None:
+        return style
+    return replace(
+        style,
+        entry_anim=override.entry_anim,
+        entry_lead_ms=max(int(override.entry_duration_ms), 0),
+        exit_anim=override.exit_anim,
+        exit_fade_ms=max(int(override.exit_duration_ms), 0),
+    )
+
+
 @dataclass
 class Background:
     """背景层占位。kind 取值：solid / image / video / loop_video。"""
@@ -760,6 +786,43 @@ def normalize_glow_concentration_level(value: object, fallback: int = 0) -> int:
         return max(0, min(2, int(value)))  # type: ignore[arg-type]
     except (TypeError, ValueError):
         return max(0, min(2, int(fallback)))
+
+
+def line_animation_override_to_dict(
+    override: Optional[LineAnimationOverride],
+) -> Optional[dict[str, object]]:
+    if override is None:
+        return None
+    return {
+        "entry_anim": override.entry_anim,
+        "entry_duration_ms": max(int(override.entry_duration_ms), 0),
+        "exit_anim": override.exit_anim,
+        "exit_duration_ms": max(int(override.exit_duration_ms), 0),
+    }
+
+
+def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOverride]:
+    if not isinstance(value, dict):
+        return None
+    entry = value.get("entry_anim")
+    exit_ = value.get("exit_anim")
+    valid_entry = {"none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"}
+    valid_exit = {"none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"}
+    if entry not in valid_entry or exit_ not in valid_exit:
+        return None
+
+    def duration(key: str, fallback: int) -> int:
+        try:
+            return max(int(value.get(key, fallback)), 0)
+        except (TypeError, ValueError):
+            return fallback
+
+    return LineAnimationOverride(
+        entry_anim=entry,
+        entry_duration_ms=duration("entry_duration_ms", 300),
+        exit_anim=exit_,
+        exit_duration_ms=duration("exit_duration_ms", 300),
+    )
 
 
 def style_to_dict(style: Style) -> dict:

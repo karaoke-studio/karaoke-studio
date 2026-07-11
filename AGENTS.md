@@ -147,29 +147,40 @@ git submodule status
 
 第 5 步「字幕视频生成」是 1.0 发版前最后、也最复杂的模块，目标对标 NicoKaraMaker3。**所有该模块的工作在 `feat/subtitle-render` 长线分支上进行**，期间 `main` 上的 bugfix 用 `git merge main` 反向并入开发分支，最终一次性 merge 回 main。不要把零散 bugfix 直接提交到本分支。
 
-**接手前必读**：[`docs/字幕渲染模块-需求设计.md`](docs/字幕渲染模块-需求设计.md) —— 含完整需求清单（P0/P1/P2）、双模式数据流、UI 布局、数据模型、引擎选型、已确认的产品决策。
+### 接手前必读（2026-07-11 校准）
 
-**Sayatoo 参考实现专项**：模仿 Sayatoo「基本」页的任务已持久化到 [`docs/Sayatoo基本页逆向与实现计划.md`](docs/Sayatoo基本页逆向与实现计划.md)。本机 Sayatoo 路径：`C:\Program Files\Sayatoo Software\SubtitleMaker2\2.3.18.9487`。后续新会话如果要继续做「基本」页，先读该文档；里面标了每项实现优先级和难度。
+1. [`docs/字幕渲染模块-需求设计.md`](docs/字幕渲染模块-需求设计.md)：总体状态、产品决策和剩余主线。
+2. [`docs/N3项目导入兼容性与实施计划.md`](docs/N3项目导入兼容性与实施计划.md)：N3 字段矩阵、明确不做项、下一步 TDD 顺序。
+3. [`docs/字幕布局-N3对齐改造计划.md`](docs/字幕布局-N3对齐改造计划.md)：布局 P1-P4 历史与 P5 每布局字符域。
+4. [`docs/SUG与字幕渲染模块-Python走字差异.md`](docs/SUG与字幕渲染模块-Python走字差异.md)：SUG/LRC 数据保真边界。
 
-### 骨架现状（提交 `d077b3e`）
+### 当前现状
 
-- 目录 `krok_helper/subtitle_render/` 已建：`__init__.py` / `__main__.py` / `models.py` / `settings_bridge.py` + `engine/` 与 `frontend/` 子包
-- `SubtitleRenderWindow(embedded=False)` + `for_embedding(parent, settings_provider, workflow_context)` 已实现（UI 仅显示"开发中"提示）
-- `KrokHelperSubtitleRenderSettingsBridge` 已实现，桥接 `AppSettings.subtitle_render: dict` 命名空间
-- `gui_qt.py` 中第 5 步的 `PlaceholderPage` 已替换为本模块的嵌入实例
-- 烟测通过：`python -m krok_helper.subtitle_render` 弹空窗；工作台切到第 5 步不报错
+- P0 主路径已完成：`.sug`/`.lrc`/`.n3proj`、视频预览、QPainter 逐字渲染、MP4 导出、取消、工作流嵌入和 `.yurika`。
+- ruby、角色/多歌手、行内混合字体/字号/配色、渐变/图片填充、glow/stroke2、竖排/RTL、标题、时间轴和多字幕源均已实现。
+- N3 TACTIC 对齐已覆盖：三档发光、蓝白 after 配色、ruby 样式、7px 默认布局字间距，以及 `UseEdge2` 关闭时不强制二重描边。
+- 逐行特效（四列表格、批量编辑、N3 行动作、持久化、撤销/重做、Painter）已在工作区实现，尚未 commit/push。
+- `Background` 仍是占位；产品只支持视频背景。静态图、图片序列、纯色与独立音频导出尚未接通。
+- native C++ sidecar 产品路径硬关闭，Python QPainter 是唯一正式路径。
 
-### 推进顺序
+### 下一步顺序
 
-按 P0 优先级：A1（加载字幕源）→ A2/A3（背景视频 + 音轨）→ A4（卡拉ok逐字高亮，核心）→ A7（实时预览）→ A8/A9（输出 MP4 + 取消）→ A10/A12/A11（双模式接线 + WorkflowContext + standalone 文件 IO）。
+1. 验证并提交当前逐行特效；
+2. N3 每布局字符排版参数（`LyricsInterval` / `AllowBiting` / `RubyInterval` / `RubyAlignment` / `LyricsAndRubyInterval`）；
+3. 背景源抽象与独立音频；
+4. N3 提示策略清理；
+5. 无交互 CLI、CI 烟测、PyInstaller 包内验证；
+6. 同步 `main` 并整体合并。
 
 ### 关键约束
 
-- **引擎选型已定**：QPainter 离屏 + ffmpeg rawvideo pipe（不要改成 ass + libass burn-in）。理由见 plan §E。
-- **不要改 SUG submodule 源码**——字幕源走 SUG `NicokaraExporter` 落盘的 Nicokara 逐字 LRC（`.lrc`，含 `@Ruby` / `@Offset` / `@Title` / 演唱者标签）。解析器在 `subtitle_render/subtitle_sources.py`（SUG 自己只有导出器没解析器，由本模块新写）。
-- **MVP 仅横书き**，縦書き 推迟到 P1（B9）。
-- **MVP 不内置样式预设包**，只实现 `.krstyle.json` 保存/加载能力。
+- **引擎选型已定**：QPainter 离屏 + ffmpeg rawvideo pipe，不改成 ASS/libass 主路径。
+- **不要改 SUG submodule 源码**：优先直接消费 SUG `Project`/`.sug`；`.lrc` 仅为兼容入口。
+- **只输出 MP4、只支持 60/120fps**；不做 30fps 原样输出、AVI 或 ARGB/透明 PNG 序列。
+- **不支持假名独立字体族**；假名沿用日文字体，英数字体仍可独立。
+- **N3 二重描边严格遵守 `UseEdge2`**，不能因保存了宽度就强制开启。
 - **所有用户面向字符串中文**。
+- 字幕测试 645 项同一 Qt 进程在尾段可能发生 pooled-thread teardown access violation；文件级隔离正常，正式 CI 前需修复销毁顺序。
 
 ---
 

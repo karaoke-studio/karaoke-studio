@@ -383,6 +383,7 @@ def _track_layout_signature(track: TimingTrack) -> tuple:
                 line.is_blank,
                 line.layout_index,
                 line.break_before,
+                _value_signature(line.animation_override),
             )
             for line in track.lines
         ),
@@ -457,6 +458,7 @@ from krok_helper.subtitle_render.models import (
     TimingTrack,
     TitleOverlay,
     normalize_glow_concentration_level,
+    style_with_line_animation,
 )
 
 
@@ -8118,15 +8120,13 @@ def _row_count_resolver(style: Style):
 
 def _style_for_line(style: Style, line: TimingLine) -> Style:
     style = _layout_style_for_line(style, line)
-    if line.singer_id is None:
-        return style
-    scheme = style.singer_style_overrides.get(line.singer_id)
-    if scheme is None:
-        return style
-    changes = _style_scheme_changes(scheme)
-    if not changes:
-        return style
-    return replace(style, **changes)
+    if line.singer_id is not None:
+        scheme = style.singer_style_overrides.get(line.singer_id)
+        if scheme is not None:
+            changes = _style_scheme_changes(scheme)
+            if changes:
+                style = replace(style, **changes)
+    return style_with_line_animation(style, line)
 
 
 def _active_rubies_for_line(

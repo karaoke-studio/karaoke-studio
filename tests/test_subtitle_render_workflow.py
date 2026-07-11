@@ -191,11 +191,15 @@ def _bind_undo_host(track, extra_sources=()):
         "_undo_edit",
         "_redo_edit",
         "_restore_display_override",
+        "_restore_animation_overrides",
+        "_on_line_animation_override_requested",
         "_track_by_index",
         "_clear_undo_history",
     ):
         setattr(host, name, getattr(W, name).__get__(host))
     host._refresh_after_display_edit = host.refreshed.append
+    host._active_source_index = 0
+    host._lyrics_panel = SimpleNamespace(refresh_row_effect=lambda row: None)
     return host
 
 
@@ -258,3 +262,30 @@ def test_undo_skips_stale_entries() -> None:
     # 失效记录被丢弃，继续撤销到有效记录
     assert line.display_start_override_ms is None
     assert host._undo_stack == []
+
+
+def test_line_animation_batch_edit_supports_undo_redo() -> None:
+    from krok_helper.subtitle_render.models import LineAnimationOverride, TimingChar, TimingLine, TimingTrack
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("あ", 1000)], end_ms=2000),
+            TimingLine(chars=[TimingChar("い", 3000)], end_ms=4000),
+        ]
+    )
+    host = _bind_undo_host(track)
+    override = LineAnimationOverride(
+        entry_anim="slide_in",
+        entry_duration_ms=450,
+        exit_anim="fade",
+        exit_duration_ms=300,
+    )
+
+    host._on_line_animation_override_requested([0, 1], override)
+    assert [line.animation_override for line in track.lines] == [override, override]
+
+    host._undo_edit()
+    assert [line.animation_override for line in track.lines] == [None, None]
+
+    host._redo_edit()
+    assert [line.animation_override for line in track.lines] == [override, override]

@@ -3,11 +3,12 @@
 UI 设计：
 
 - **空态**：居中显示"拖入字幕文件 / 点击此处选择"，受 :class:`DropPanel` 接管
-- **载入后**：``TableWidget``（qfluentwidgets），三列——轨 / 角色 / 内容。
+- **载入后**：``TableWidget``（qfluentwidgets），四列——轨 / 角色 / 特效 / 内容。
 
   - **轨**：多行布局下按实际渲染 lane（非空行序号 % 行数）标 T1 / T2 / …，
     同一组行共享一个浅色底，直观呈现"按页贴在一起"的显示分组
   - **角色**：可编辑（下拉选择配色方案），名字前带该方案的颜色色点
+  - **特效**：双击编辑逐行入场/退场动画；右键可批量设置选中行
   - **内容**：只读；水平对齐跟随布局设置（asymmetric 按每行对齐列表 / center
     居中 / per_row 按行独立对齐），布局改动即时反映到列表
   - 空行渲染成矮分隔行（间奏 ♪），不再占一整行空白
@@ -24,6 +25,8 @@ from PyQt6.QtCore import QPoint, Qt, QSize, pyqtSignal as Signal
 from PyQt6.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QDialog,
+    QFormLayout,
     QHBoxLayout,
     QHeaderView,
     QMenu,
@@ -35,9 +38,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from qfluentwidgets import (
+    CheckBox,
     ComboBox as FluentComboBox,
     FluentIcon as FIF,
     TableWidget as FluentTableWidget,
+    PrimaryPushButton as FluentPrimaryPushButton,
+    PushButton as FluentPushButton,
+    SpinBox as FluentSpinBox,
     TransparentToolButton,
 )
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
@@ -49,6 +56,7 @@ from krok_helper.subtitle_render.engine.timeline import (
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
 from krok_helper.subtitle_render.models import (
     LYRICS_LAYOUT_FIELDS,
+    LineAnimationOverride,
     Style,
     TimingLine,
     TimingTrack,
@@ -57,13 +65,157 @@ from krok_helper.subtitle_render.frontend.theme import palette, themed
 
 COL_LANE = 0
 COL_ROLE = 1
-COL_CONTENT = 2
+COL_EFFECT = 2
+COL_CONTENT = 3
 
-_COLUMN_HEADERS = ["轨", "角色", "内容"]
+_COLUMN_HEADERS = ["轨", "角色", "特效", "内容"]
 
 _ROW_HEIGHT = 34
 _BLANK_ROW_HEIGHT = 18
 _DEFAULT_ROLE_TEXT = "（默认）"
+
+_ENTRY_EFFECTS = (
+    ("none", "无"),
+    ("fade", "淡入"),
+    ("slide_in", "滑入"),
+    ("rise", "上升"),
+    ("char_fade", "逐字淡入"),
+    ("spin_flip", "翻转"),
+    ("utopia", "Utopia"),
+)
+_EXIT_EFFECTS = (
+    ("none", "无"),
+    ("fade", "淡出"),
+    ("slide_out", "滑出"),
+    ("rise", "上升"),
+    ("char_fade", "逐字淡出"),
+    ("spin_flip", "翻转"),
+    ("utopia", "Utopia"),
+)
+_ENTRY_LABELS = dict(_ENTRY_EFFECTS)
+_EXIT_LABELS = dict(_EXIT_EFFECTS)
+
+
+def _animation_summary(style: Style, override: Optional[LineAnimationOverride]) -> str:
+    prefix = "全局：" if override is None else ""
+    entry = style.entry_anim if override is None else override.entry_anim
+    exit_ = style.exit_anim if override is None else override.exit_anim
+    return f"{prefix}{_ENTRY_LABELS.get(entry, entry)} / {_EXIT_LABELS.get(exit_, exit_)}"
+
+
+class _LineAnimationDialog(QDialog):
+    """歌词列表逐行动画的紧凑编辑弹窗。"""
+
+    def __init__(
+        self,
+        style: Style,
+        override: Optional[LineAnimationOverride],
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("逐行特效")
+        self.setMinimumWidth(360)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(14)
+
+        self._inherit_check = CheckBox("继承全局设置", self)
+        self._inherit_check.setChecked(override is None)
+        root.addWidget(self._inherit_check)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+        self._preset_combo = _StableFluentComboBox(self)
+        for value, label in (
+            ("custom", "自定义"),
+            ("none", "无特效"),
+            ("fade", "淡入淡出"),
+            ("slide", "滑入滑出"),
+            ("char_fade", "逐字淡入淡出"),
+            ("utopia", "Utopia"),
+        ):
+            self._preset_combo.addItem(label, userData=value)
+        self._entry_combo = _StableFluentComboBox(self)
+        self._exit_combo = _StableFluentComboBox(self)
+        for value, label in _ENTRY_EFFECTS:
+            self._entry_combo.addItem(label, userData=value)
+        for value, label in _EXIT_EFFECTS:
+            self._exit_combo.addItem(label, userData=value)
+        self._entry_duration = FluentSpinBox(self)
+        self._exit_duration = FluentSpinBox(self)
+        for spin in (self._entry_duration, self._exit_duration):
+            spin.setRange(0, 10_000)
+            spin.setSuffix(" ms")
+            spin.setSingleStep(50)
+
+        entry = style.entry_anim if override is None else override.entry_anim
+        exit_ = style.exit_anim if override is None else override.exit_anim
+        entry_ms = style.entry_lead_ms if override is None else override.entry_duration_ms
+        exit_ms = style.exit_fade_ms if override is None else override.exit_duration_ms
+        self._set_combo_value(self._entry_combo, entry)
+        self._set_combo_value(self._exit_combo, exit_)
+        self._entry_duration.setValue(max(int(entry_ms), 0))
+        self._exit_duration.setValue(max(int(exit_ms), 0))
+        form.addRow("快捷组合", self._preset_combo)
+        form.addRow("入场", self._entry_combo)
+        form.addRow("入场时长", self._entry_duration)
+        form.addRow("退场", self._exit_combo)
+        form.addRow("退场时长", self._exit_duration)
+        root.addLayout(form)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel = FluentPushButton("取消", self)
+        confirm = FluentPrimaryPushButton("确定", self)
+        cancel.clicked.connect(self.reject)
+        confirm.clicked.connect(self.accept)
+        buttons.addWidget(cancel)
+        buttons.addWidget(confirm)
+        root.addLayout(buttons)
+
+        self._inherit_check.toggled.connect(self._sync_enabled)
+        self._preset_combo.activated.connect(self._apply_preset)
+        self._sync_enabled(self._inherit_check.isChecked())
+
+    @staticmethod
+    def _set_combo_value(combo: FluentComboBox, value: str) -> None:
+        index = combo.findData(value)
+        combo.setCurrentIndex(index if index >= 0 else 0)
+
+    def _sync_enabled(self, inherit: bool) -> None:
+        for widget in (
+            self._entry_combo,
+            self._preset_combo,
+            self._entry_duration,
+            self._exit_combo,
+            self._exit_duration,
+        ):
+            widget.setEnabled(not inherit)
+
+    def _apply_preset(self, _index: int) -> None:
+        preset = str(self._preset_combo.currentData() or "custom")
+        mapping = {
+            "none": ("none", "none"),
+            "fade": ("fade", "fade"),
+            "slide": ("slide_in", "slide_out"),
+            "char_fade": ("char_fade", "char_fade"),
+            "utopia": ("utopia", "utopia"),
+        }
+        pair = mapping.get(preset)
+        if pair is None:
+            return
+        self._set_combo_value(self._entry_combo, pair[0])
+        self._set_combo_value(self._exit_combo, pair[1])
+
+    def animation_override(self) -> Optional[LineAnimationOverride]:
+        if self._inherit_check.isChecked():
+            return None
+        return LineAnimationOverride(
+            entry_anim=str(self._entry_combo.currentData() or "none"),
+            entry_duration_ms=self._entry_duration.value(),
+            exit_anim=str(self._exit_combo.currentData() or "none"),
+            exit_duration_ms=self._exit_duration.value(),
+        )
 
 
 class _StableComboBoxMenu(ComboBoxMenu):
@@ -218,6 +370,8 @@ class LyricsPanel(DropPanel):
     """左侧歌词面板（含空态拖拽 + 已加载表格两态）。"""
 
     roleChanged = Signal(int, str)
+    animationOverrideRequested = Signal(list, object)
+    """逐行动画编辑请求：track.lines 行号列表 + ``LineAnimationOverride | None``。"""
     rowClicked = Signal(int)  # 用户点击歌词行时发出行号
     layoutChangeRequested = Signal(list, int)
     """右键菜单选择布局：(选中的 track.lines 行号列表, 布局 index)。宿主按页联动应用。"""
@@ -252,7 +406,7 @@ class LyricsPanel(DropPanel):
         # ---- qfluentwidgets TableWidget ----
         self._table = FluentTableWidget(self)
         self._table.setObjectName("LyricsTable")
-        self._table.setColumnCount(3)
+        self._table.setColumnCount(4)
         self._table.setHorizontalHeaderLabels(_COLUMN_HEADERS)
 
         self._table.setFrameShape(FluentTableWidget.Shape.NoFrame)
@@ -275,9 +429,11 @@ class LyricsPanel(DropPanel):
         hh = self._table.horizontalHeader()
         hh.setSectionResizeMode(COL_LANE, QHeaderView.ResizeMode.Fixed)
         hh.setSectionResizeMode(COL_ROLE, QHeaderView.ResizeMode.Fixed)
+        hh.setSectionResizeMode(COL_EFFECT, QHeaderView.ResizeMode.Fixed)
         hh.setSectionResizeMode(COL_CONTENT, QHeaderView.ResizeMode.Stretch)
         self._table.setColumnWidth(COL_LANE, 64)
         self._table.setColumnWidth(COL_ROLE, 148)
+        self._table.setColumnWidth(COL_EFFECT, 160)
 
         # 角色列 → FluentComboBox 委托；轨 / 内容列 → 只读委托
         self._role_delegate = _RoleComboDelegate(self)
@@ -286,6 +442,7 @@ class LyricsPanel(DropPanel):
             delegate.set_group_bg_provider(self._group_bg_for_row)
         self._table.setItemDelegateForColumn(COL_LANE, self._readonly_delegate)
         self._table.setItemDelegateForColumn(COL_ROLE, self._role_delegate)
+        self._table.setItemDelegateForColumn(COL_EFFECT, self._readonly_delegate)
         self._table.setItemDelegateForColumn(COL_CONTENT, self._readonly_delegate)
 
         # ---- 字幕源工具条（对标 N3 多歌词文件：メイン / コーラス1 / …）----
@@ -323,6 +480,7 @@ class LyricsPanel(DropPanel):
         self._table.itemChanged.connect(self._on_item_changed)
         # 点击行 → 跳转预览
         self._table.cellClicked.connect(lambda row, _col: self.rowClicked.emit(row))
+        self._table.cellDoubleClicked.connect(self._on_cell_double_clicked)
 
     # ------------------------------------------------------------------ public
 
@@ -406,6 +564,12 @@ class LyricsPanel(DropPanel):
                     role_item.setFlags(Qt.ItemFlag.NoItemFlags)
                 self._table.setItem(row, COL_ROLE, role_item)
 
+                effect_item = QTableWidgetItem(_animation_summary(self._style, line.animation_override))
+                effect_item.setFlags(effect_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                if blank:
+                    effect_item.setFlags(Qt.ItemFlag.NoItemFlags)
+                self._table.setItem(row, COL_EFFECT, effect_item)
+
                 content_item = QTableWidgetItem(
                     "".join(c.text for c in line.chars) if not blank else ""
                 )
@@ -417,8 +581,8 @@ class LyricsPanel(DropPanel):
                 self._table.setItem(row, COL_CONTENT, content_item)
 
                 if blank:
-                    # 间奏 / 段落分隔：矮行 + 跨三列的居中提示
-                    self._table.setSpan(row, 0, 1, 3)
+                    # 间奏 / 段落分隔：矮行 + 跨四列的居中提示
+                    self._table.setSpan(row, 0, 1, 4)
                     self._table.setRowHeight(row, _BLANK_ROW_HEIGHT)
                     lane_item.setText("♪")
                 else:
@@ -431,6 +595,10 @@ class LyricsPanel(DropPanel):
 
     def refresh_row_role(self, row: int) -> None:
         """宿主改完 role_label 后刷新该行的色点（角色文本已由委托更新）。"""
+        self._refresh_presentation(rows=[row])
+
+    def refresh_row_effect(self, row: int) -> None:
+        """逐行动画覆盖变化后刷新该行摘要。"""
         self._refresh_presentation(rows=[row])
 
     @property
@@ -520,7 +688,8 @@ class LyricsPanel(DropPanel):
                 lane_item = self._table.item(row, COL_LANE)
                 role_item = self._table.item(row, COL_ROLE)
                 content_item = self._table.item(row, COL_CONTENT)
-                if lane_item is None or role_item is None or content_item is None:
+                effect_item = self._table.item(row, COL_EFFECT)
+                if lane_item is None or role_item is None or effect_item is None or content_item is None:
                     continue
                 if blank:
                     continue
@@ -553,6 +722,17 @@ class LyricsPanel(DropPanel):
 
                 role = str(role_item.data(Qt.ItemDataRole.UserRole) or "")
                 role_item.setIcon(_swatch_icon(_scheme_swatch_color(style, role)))
+                if line is not None:
+                    effect_item.setText(_animation_summary(style, line.animation_override))
+                    if line.animation_override is None:
+                        effect_item.setIcon(QIcon())
+                        effect_item.setForeground(QBrush(QColor(palette().text_hint)))
+                    else:
+                        effect_item.setIcon(_swatch_icon(QColor(palette().accent_primary)))
+                        effect_item.setForeground(QBrush(QColor(palette().accent_primary)))
+                    effect_item.setToolTip(
+                        "双击编辑该行特效；右键可批量设置选中行。"
+                    )
         finally:
             self._table.blockSignals(False)
         # 组底色由委托绘制，Style 变化后要触发一次重绘
@@ -605,6 +785,15 @@ class LyricsPanel(DropPanel):
         if not rows:
             return
         menu = QMenu(self._table)
+        effect_action = menu.addAction("设置所选行特效…")
+        effect_action.triggered.connect(
+            lambda _checked=False, rs=list(rows): self._edit_animation_rows(rs)
+        )
+        reset_action = menu.addAction("所选行恢复全局特效")
+        reset_action.triggered.connect(
+            lambda _checked=False, rs=list(rows): self.animationOverrideRequested.emit(rs, None)
+        )
+        menu.addSeparator()
         layout_menu = menu.addMenu("应用布局")
         current_indices = {
             int(getattr(self._track.lines[row], "layout_index", 0) or 0)
@@ -622,6 +811,24 @@ class LyricsPanel(DropPanel):
                 )
             )
         menu.exec(self._table.viewport().mapToGlobal(pos))
+
+    def _on_cell_double_clicked(self, row: int, column: int) -> None:
+        if column != COL_EFFECT or self._track is None:
+            return
+        if not 0 <= row < len(self._track.lines):
+            return
+        line = self._track.lines[row]
+        if line.is_blank or not line.chars:
+            return
+        self._edit_animation_rows([row])
+
+    def _edit_animation_rows(self, rows: list[int]) -> None:
+        if self._track is None or not rows:
+            return
+        first = self._track.lines[rows[0]].animation_override
+        dialog = _LineAnimationDialog(self._style, first, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.animationOverrideRequested.emit(list(rows), dialog.animation_override())
 
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
         if item.column() != COL_ROLE:

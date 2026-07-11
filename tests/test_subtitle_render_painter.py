@@ -91,6 +91,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _effective_ruby_for_target,
     _effective_ruby_karaoke_colors,
     _style_for_role,
+    _style_for_line,
     _visible_lines_for_style,
     _resolve_title_text,
     _title_overlay_opacity,
@@ -106,6 +107,7 @@ from krok_helper.subtitle_render.engine.timeline import DisplayLine  # noqa: E40
 from krok_helper.subtitle_render.models import (  # noqa: E402
     KaraokeColors,
     KaraokeColorState,
+    LineAnimationOverride,
     PaintFill,
     RubyAnnotation,
     SubtitleStyleScheme,
@@ -4518,6 +4520,27 @@ def test_layout_style_for_line_applies_referenced_layout(qapp):
 
     line.layout_index = 9  # 越界 → 回默认
     assert _layout_style_for_line(style, line) is style
+
+
+def test_style_for_line_applies_animation_override_after_other_line_styles(qapp):
+    style = Style(entry_anim="fade", entry_lead_ms=900, exit_anim="fade", exit_fade_ms=800)
+    line = TimingLine(
+        chars=[TimingChar("歌", 1000)],
+        end_ms=2000,
+        animation_override=LineAnimationOverride(
+            entry_anim="slide_in",
+            entry_duration_ms=450,
+            exit_anim="none",
+            exit_duration_ms=0,
+        ),
+    )
+
+    effective = _style_for_line(style, line)
+
+    assert effective.entry_anim == "slide_in"
+    assert effective.entry_lead_ms == 450
+    assert effective.exit_anim == "none"
+    assert effective.exit_fade_ms == 0
 
 
 def test_apply_layout_to_page_links_whole_page(qapp):

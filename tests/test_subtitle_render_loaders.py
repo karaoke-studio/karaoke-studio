@@ -33,6 +33,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     TimingTrack,
 )
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
+from krok_helper.subtitle_render.frontend.lyrics_list import COL_CONTENT  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -110,11 +111,10 @@ def test_load_subtitle_populates_lyrics_panel(qapp, monkeypatch, tmp_path):
     table = win._lyrics_panel.table_widget
     # body 4 行（含中间空行）
     assert table.rowCount() == 4
-    # 内容列（第 2 列）
-    assert table.item(0, 2).text() == "あ"
-    assert table.item(1, 2).text() == "いう"
-    assert table.item(2, 2).text() == ""  # 空行
-    assert table.item(3, 2).text() == "え"
+    assert table.item(0, COL_CONTENT).text() == "あ"
+    assert table.item(1, COL_CONTENT).text() == "いう"
+    assert table.item(2, COL_CONTENT).text() == ""  # 空行
+    assert table.item(3, COL_CONTENT).text() == "え"
 
 
 # ---------------------------------------------------------------------------
@@ -449,8 +449,8 @@ def test_lyrics_list_centers_only_explicit_single_line_page(qapp, monkeypatch):
     lines[3].break_before = "paragraph"
     win._lyrics_panel.set_track(TimingTrack(lines=lines))
 
-    second_alignment = win._lyrics_panel._table.item(1, 2).textAlignment()
-    single_alignment = win._lyrics_panel._table.item(2, 2).textAlignment()
+    second_alignment = win._lyrics_panel._table.item(1, COL_CONTENT).textAlignment()
+    single_alignment = win._lyrics_panel._table.item(2, COL_CONTENT).textAlignment()
     assert second_alignment & Qt.AlignmentFlag.AlignRight
     assert single_alignment & Qt.AlignmentFlag.AlignHCenter
 

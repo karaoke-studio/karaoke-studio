@@ -100,10 +100,13 @@ from krok_helper.subtitle_render.frontend.property_panel import (
 )
 from krok_helper.subtitle_render.frontend.timeline_view import TrackTimelineView
 from krok_helper.subtitle_render.models import (
+    LineAnimationOverride,
     PROJECT_FILE_SUFFIX,
     SubtitleStyleScheme,
     Style,
     TimingTrack,
+    line_animation_override_from_dict,
+    line_animation_override_to_dict,
     rescale_layout_sizes,
     subtitle_style_scheme_from_dict,
     subtitle_style_scheme_to_dict,
@@ -680,9 +683,9 @@ class SubtitleRenderWindow(QWidget):
         self._workflow_context = workflow_context
 
         self._timing_track: Optional[TimingTrack] = None
-        # 字幕轨道编辑的撤销/重做栈：每项 (轨道序号, 行索引, 旧 (上屏, 消失) 覆盖, 新覆盖)
-        self._undo_stack: list[tuple[int, int, object, object]] = []
-        self._redo_stack: list[tuple[int, int, object, object]] = []
+        # 字幕轨道编辑的撤销/重做栈：兼容显示窗口四元组与逐行动画批量命令。
+        self._undo_stack: list[tuple] = []
+        self._redo_stack: list[tuple] = []
         self._extra_sources: list[ExtraSubtitleSource] = []
         """副字幕源（N3 多歌词文件，如コーラス轨）：与主字幕同帧叠绘。"""
         self._active_source_index = 0
@@ -874,6 +877,7 @@ class SubtitleRenderWindow(QWidget):
         line_breaks_before = self._line_break_rows(self._timing_track)
         char_role_labels = self._collect_char_role_labels()
         line_display_overrides = self._display_override_rows(self._timing_track)
+        line_animation_overrides = self._animation_override_rows(self._timing_track)
         extra_subtitle_sources = [
             {
                 "name": source.name,
@@ -884,6 +888,7 @@ class SubtitleRenderWindow(QWidget):
                 "line_breaks_before": self._line_break_rows(source.track),
                 "char_role_labels": self._char_role_rows(source.track),
                 "line_display_overrides": self._display_override_rows(source.track),
+                "line_animation_overrides": self._animation_override_rows(source.track),
             }
             for source in self._extra_sources
         ] or None
@@ -898,6 +903,7 @@ class SubtitleRenderWindow(QWidget):
             line_breaks_before=line_breaks_before,
             char_role_labels=char_role_labels,
             line_display_overrides=line_display_overrides,
+            line_animation_overrides=line_animation_overrides,
             extra_subtitle_sources=extra_subtitle_sources,
             output=project_output_payload(
                 encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
@@ -942,6 +948,9 @@ class SubtitleRenderWindow(QWidget):
             if self._timing_track is not None:
                 self._apply_display_override_rows(
                     self._timing_track, data.get("line_display_overrides")
+                )
+                self._apply_animation_override_rows(
+                    self._timing_track, data.get("line_animation_overrides")
                 )
             self._apply_extra_subtitle_sources(data.get("extra_subtitle_sources"))
             self._refresh_tracks_view_windows()
@@ -1166,6 +1175,9 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.pathDropped.connect(self.load_subtitle_source)
         self._lyrics_panel.browseRequested.connect(self._browse_subtitle)
         self._lyrics_panel.roleChanged.connect(self._on_lyrics_role_changed)
+        self._lyrics_panel.animationOverrideRequested.connect(
+            self._on_line_animation_override_requested
+        )
         self._lyrics_panel.rowClicked.connect(self._on_lyrics_row_clicked)
         self._lyrics_panel.layoutChangeRequested.connect(self._on_layout_change_requested)
         self._lyrics_panel.sourceSelected.connect(self._on_source_selected)
@@ -1648,6 +1660,21 @@ class SubtitleRenderWindow(QWidget):
                 int(end) if isinstance(end, (int, float)) else None
             )
 
+    @staticmethod
+    def _animation_override_rows(track: Optional[TimingTrack]) -> Optional[list]:
+        """采集逐行动画覆盖；全部继承全局时不写项目字段。"""
+        if track is None:
+            return None
+        rows = [line_animation_override_to_dict(line.animation_override) for line in track.lines]
+        return rows if any(row is not None for row in rows) else None
+
+    @staticmethod
+    def _apply_animation_override_rows(track: TimingTrack, payload: object) -> None:
+        if not isinstance(payload, list):
+            return
+        for line, row in zip(track.lines, payload):
+            line.animation_override = line_animation_override_from_dict(row)
+
     def _collect_char_role_labels(self) -> Optional[list]:
         """收集主字幕每行逐字角色标签用于项目持久化；全部为空则返回 None（不写盘）。"""
         if self._timing_track is None:
@@ -1733,6 +1760,9 @@ class SubtitleRenderWindow(QWidget):
                 self._apply_display_override_rows(
                     track, item.get("line_display_overrides")
                 )
+                self._apply_animation_override_rows(
+                    track, item.get("line_animation_overrides")
+                )
                 name = str(item.get("name") or "").strip() or path.stem
                 self._extra_sources.append(
                     ExtraSubtitleSource(name=name, path=path, track=track)
@@ -1805,6 +1835,36 @@ class SubtitleRenderWindow(QWidget):
         self._redo_stack.clear()
         self._refresh_after_display_edit(track_index)
 
+    def _on_line_animation_override_requested(
+        self, rows: list[int], override: Optional[LineAnimationOverride]
+    ) -> None:
+        """歌词列表批量修改逐行特效：应用、入撤销栈并立即刷新预览。"""
+        track_index = self._active_source_index
+        track = self._track_by_index(track_index)
+        if track is None:
+            return
+        valid_rows = sorted({int(row) for row in rows if 0 <= int(row) < len(track.lines)})
+        if not valid_rows:
+            return
+        old_values = tuple(track.lines[row].animation_override for row in valid_rows)
+        new_values = tuple(override for _row in valid_rows)
+        if old_values == new_values:
+            return
+        for row in valid_rows:
+            track.lines[row].animation_override = override
+        self._undo_stack.append(
+            ("animation", track_index, tuple(valid_rows), old_values, new_values)
+        )
+        del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+        self._refresh_after_display_edit(track_index)
+        for row in valid_rows:
+            self._lyrics_panel.refresh_row_effect(row)
+        if hasattr(self, "_style") and hasattr(self, "_transport_bar"):
+            first_window = display_windows_for_style(track, self._style).get(valid_rows[0])
+            if first_window is not None:
+                self._transport_bar.set_time(max(first_window[0], 0))
+
     def _refresh_after_display_edit(self, track_index: int) -> None:
         # 覆盖值已直接写在 TimingLine 上；track 是原地修改的，
         # 预览（含异步渲染 worker）不会自己发现——重新喂一次。
@@ -1840,10 +1900,33 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_after_display_edit(track_index)
         return True
 
+    def _restore_animation_overrides(
+        self, track_index: int, rows: object, values: object
+    ) -> bool:
+        track = self._track_by_index(track_index)
+        if track is None or not isinstance(rows, tuple) or not isinstance(values, tuple):
+            return False
+        if len(rows) != len(values) or any(not 0 <= row < len(track.lines) for row in rows):
+            return False
+        for row, value in zip(rows, values):
+            track.lines[row].animation_override = value
+        self._refresh_after_display_edit(track_index)
+        if track_index == self._active_source_index:
+            for row in rows:
+                self._lyrics_panel.refresh_row_effect(row)
+        return True
+
     def _undo_edit(self) -> None:
-        """Ctrl+Z：撤销最近一次字幕轨道显示/隐藏时间编辑。"""
+        """Ctrl+Z：撤销最近一次字幕轨道时间或逐行特效编辑。"""
         while self._undo_stack:
-            track_index, line_index, old_values, new_values = self._undo_stack.pop()
+            command = self._undo_stack.pop()
+            if len(command) == 5 and command[0] == "animation":
+                _kind, track_index, rows, old_values, new_values = command
+                if self._restore_animation_overrides(track_index, rows, old_values):
+                    self._redo_stack.append(command)
+                    return
+                continue
+            track_index, line_index, old_values, new_values = command
             if self._restore_display_override(track_index, line_index, old_values):
                 self._redo_stack.append(
                     (track_index, line_index, old_values, new_values)
@@ -1852,9 +1935,16 @@ class SubtitleRenderWindow(QWidget):
             # 目标轨道/行已不存在（换源等）→ 丢弃该条继续往下找
 
     def _redo_edit(self) -> None:
-        """Ctrl+Y / Ctrl+Shift+Z：重做被撤销的编辑。"""
+        """Ctrl+Y / Ctrl+Shift+Z：重做被撤销的字幕轨道编辑。"""
         while self._redo_stack:
-            track_index, line_index, old_values, new_values = self._redo_stack.pop()
+            command = self._redo_stack.pop()
+            if len(command) == 5 and command[0] == "animation":
+                _kind, track_index, rows, old_values, new_values = command
+                if self._restore_animation_overrides(track_index, rows, new_values):
+                    self._undo_stack.append(command)
+                    return
+                continue
+            track_index, line_index, old_values, new_values = command
             if self._restore_display_override(track_index, line_index, new_values):
                 self._undo_stack.append(
                     (track_index, line_index, old_values, new_values)

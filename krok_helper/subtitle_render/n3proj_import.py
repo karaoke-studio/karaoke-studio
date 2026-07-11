@@ -42,6 +42,7 @@ from typing import Any, Optional
 from krok_helper.subtitle_render.models import (
     KaraokeColorState,
     KaraokeColors,
+    LineAnimationOverride,
     LyricsLayout,
     PaintFill,
     Style,
@@ -50,6 +51,7 @@ from krok_helper.subtitle_render.models import (
     TitleOverlay,
     _paint_fill,
     normalize_glow_concentration_level,
+    line_animation_override_to_dict,
     style_to_dict,
 )
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
@@ -72,6 +74,7 @@ _RUBY_ALIGN_MAP = {0: "auto", 1: "center", 2: "equal_space"}
 _FONT_FALLBACK_INDEX = {1: 0, 2: 0, 3: 0, 4: 3, 5: 3}
 
 _LINE_FADE_ACTION_ID = "SHINTA.LineFadeInFadeOut"
+_NO_ACTION_ID = "SHINTA.NoAction"
 
 # FontFaceName 是本地化字重/斜体名（"Bold" / "Negreta" / "太字" …），按关键字匹配。
 _FACE_WEIGHT_KEYWORDS: tuple[tuple[str, int], ...] = (
@@ -209,17 +212,19 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
     line_layout_indices: Optional[list[int]] = None
     line_breaks_before: Optional[list[str]] = None
     char_role_labels: Optional[list[Optional[list[Optional[str]]]]] = None
+    line_animation_overrides: Optional[list[Optional[dict[str, object]]]] = None
     extra_sources: list[dict[str, Any]] = []
     if lyrics_with_source:
         layout_limit = len(changes.get("layouts") or [])
         font_names = [str(font.get("SettingsName") or "") for font in fonts]
 
         line_infos = [_dict(item) for item in _list(lyrics_with_source[0].get("LineInfos"))]
-        changes.update(_animation_changes(line_infos, warnings))
+        animation_changes, default_animation = _animation_changes(line_infos, warnings)
+        changes.update(animation_changes)
         track = _load_track(subtitle_path, warnings)
         if track is not None:
-            line_layout_indices, line_breaks_before, char_role_labels = _per_line_payloads(
-                line_infos, track, layout_limit, font_names, warnings
+            line_layout_indices, line_breaks_before, char_role_labels, line_animation_overrides = _per_line_payloads(
+                line_infos, track, layout_limit, font_names, default_animation, warnings
             )
 
         # 副字幕源（コーラス等）：与主字幕同时渲染，逐源导入路径 / 每行布局 / 逐字配色。
@@ -238,8 +243,8 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
             extra_track = _load_track(extra_path, warnings)
             if extra_track is not None:
                 extra_line_infos = [_dict(item) for item in _list(info.get("LineInfos"))]
-                extra_layouts, extra_breaks, extra_roles = _per_line_payloads(
-                    extra_line_infos, extra_track, layout_limit, font_names, warnings
+                extra_layouts, extra_breaks, extra_roles, extra_animations = _per_line_payloads(
+                    extra_line_infos, extra_track, layout_limit, font_names, default_animation, warnings
                 )
                 if extra_layouts is not None:
                     extra_payload["line_layout_indices"] = extra_layouts
@@ -247,6 +252,8 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
                     extra_payload["line_breaks_before"] = extra_breaks
                 if extra_roles is not None:
                     extra_payload["char_role_labels"] = extra_roles
+                if extra_animations is not None:
+                    extra_payload["line_animation_overrides"] = extra_animations
             extra_sources.append(extra_payload)
 
     style = replace(Style(), **changes)
@@ -279,6 +286,8 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
         project_data["line_breaks_before"] = line_breaks_before
     if char_role_labels is not None:
         project_data["char_role_labels"] = char_role_labels
+    if line_animation_overrides is not None:
+        project_data["line_animation_overrides"] = line_animation_overrides
     if extra_sources:
         project_data["extra_subtitle_sources"] = extra_sources
     return N3ImportResult(project_data=project_data, warnings=warnings)
@@ -840,39 +849,52 @@ def _stripped_n3_chars(line: dict) -> list[dict]:
     return result
 
 
-def _animation_changes(line_infos: list[dict], warnings: list[str]) -> dict[str, Any]:
-    """行字幕动作（``SubtitleActionId``）→ 全局入场/退场动画。"""
+def _line_animation_signature(line: dict) -> Optional[tuple[str, int, str, int]]:
+    """N3 单行动作 → 本模块逐行动画值；未知动作返回 None。"""
+    action_id = str(line.get("SubtitleActionId") or "")
+    if not action_id or action_id == _NO_ACTION_ID:
+        return ("none", 0, "none", 0)
+    if action_id != _LINE_FADE_ACTION_ID:
+        return None
+    settings = _dict(line.get("SubtitleActionSettings"))
+    return (
+        "fade",
+        max(0, _int(settings.get("FadeInTime"), 250)),
+        "fade",
+        max(0, _int(settings.get("FadeOutTime"), 250)),
+    )
+
+
+def _signature_changes(signature: tuple[str, int, str, int]) -> dict[str, Any]:
+    entry, entry_ms, exit_, exit_ms = signature
+    return {
+        "entry_anim": entry,
+        "entry_lead_ms": entry_ms,
+        "exit_anim": exit_,
+        "exit_fade_ms": exit_ms,
+    }
+
+
+def _animation_changes(
+    line_infos: list[dict], warnings: list[str]
+) -> tuple[dict[str, Any], tuple[str, int, str, int]]:
+    """选出全局默认动作；差异行由 ``_per_line_payloads`` 保存为 override。"""
     lyric_lines = [line for line in line_infos if _int(line.get("Kind"), -1) == 1]
     if not lyric_lines:
-        return {}
-    counts: dict[str, int] = {}
+        signature = ("none", 0, "none", 0)
+        return {}, signature
+    counts: dict[tuple[str, int, str, int], int] = {}
+    unknown: set[str] = set()
     for line in lyric_lines:
-        action_id = str(line.get("SubtitleActionId") or "")
-        counts[action_id] = counts.get(action_id, 0) + 1
-    top_id = max(counts, key=lambda key: counts[key])
-    if len(counts) > 1:
-        warnings.append("N3 项目中各行字幕动作不一致，已按多数行的动作导入入场/退场动画")
-    if not top_id:
-        return {}
-    if top_id != _LINE_FADE_ACTION_ID:
-        warnings.append(f"字幕动作「{top_id}」暂不支持，入场/退场动画未导入")
-        return {}
-    settings = next(
-        (
-            _dict(line.get("SubtitleActionSettings"))
-            for line in lyric_lines
-            if str(line.get("SubtitleActionId") or "") == top_id
-        ),
-        {},
-    )
-    fade_in = max(0, _int(settings.get("FadeInTime"), 250))
-    fade_out = max(0, _int(settings.get("FadeOutTime"), 250))
-    return {
-        "entry_anim": "fade",
-        "entry_lead_ms": fade_in,
-        "exit_anim": "fade",
-        "exit_fade_ms": fade_out,
-    }
+        signature = _line_animation_signature(line)
+        if signature is None:
+            unknown.add(str(line.get("SubtitleActionId") or "?"))
+            continue
+        counts[signature] = counts.get(signature, 0) + 1
+    for action_id in sorted(unknown):
+        warnings.append(f"字幕动作「{action_id}」暂不支持，这些行将继承全局特效")
+    default = max(counts, key=counts.get) if counts else ("none", 0, "none", 0)
+    return _signature_changes(default), default
 
 
 def _per_line_payloads(
@@ -880,11 +902,13 @@ def _per_line_payloads(
     track: TimingTrack,
     layout_limit: int,
     font_names: list[str],
+    default_animation: tuple[str, int, str, int],
     warnings: list[str],
 ) -> tuple[
     Optional[list[int]],
     Optional[list[str]],
     Optional[list[Optional[list[Optional[str]]]]],
+    Optional[list[Optional[dict[str, object]]]],
 ]:
     """对齐 N3 歌词行与本模块解析行，导出布局、分页与逐字配色。
 
@@ -905,17 +929,18 @@ def _per_line_payloads(
             pending_break = "none"
     our_indexed = [(index, line) for index, line in enumerate(track.lines) if not line.is_blank]
     if not n3_lines:
-        return None, None, None
+        return None, None, None, None
     if len(n3_lines) != len(our_indexed):
         warnings.append(
             "歌词行数与 N3 项目记录不一致（歌词文件可能已改动），"
             "已跳过每行布局、分页与逐字配色导入"
         )
-        return None, None, None
+        return None, None, None, None
 
     layout_payload = [0] * len(track.lines)
     break_payload = ["none"] * len(track.lines)
     role_payload: list[Optional[list[Optional[str]]]] = [None] * len(track.lines)
+    animation_payload: list[Optional[dict[str, object]]] = [None] * len(track.lines)
     mismatched = 0
     any_role = False
     for (line_index, our_line), n3_line, break_before in zip(
@@ -930,6 +955,16 @@ def _per_line_payloads(
             continue
         layout_index = _int(n3_line.get("LayoutIndex"), 0)
         layout_payload[line_index] = layout_index if 0 <= layout_index <= layout_limit else 0
+        signature = _line_animation_signature(n3_line)
+        if signature is not None and signature != default_animation:
+            animation_payload[line_index] = line_animation_override_to_dict(
+                LineAnimationOverride(
+                    entry_anim=signature[0],
+                    entry_duration_ms=signature[1],
+                    exit_anim=signature[2],
+                    exit_duration_ms=signature[3],
+                )
+            )
         # 逐字配色：FontIndex > 0 → 对应 フォント設定 名称作为角色标签。
         offset_to_char: dict[int, dict] = {}
         position = 0
@@ -957,4 +992,5 @@ def _per_line_payloads(
         layout_payload,
         break_payload,
         role_payload if any_role else None,
+        animation_payload if any(item is not None for item in animation_payload) else None,
     )

@@ -15,7 +15,14 @@ from qfluentwidgets.components.widgets.menu import MenuAnimationType  # noqa: E4
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend import lyrics_list  # noqa: E402
-from krok_helper.subtitle_render.models import Style, TitleOverlay  # noqa: E402
+from krok_helper.subtitle_render.models import (  # noqa: E402
+    LineAnimationOverride,
+    Style,
+    TimingChar,
+    TimingLine,
+    TimingTrack,
+    TitleOverlay,
+)
 from krok_helper.subtitle_render.project_store import (  # noqa: E402
     PROJECT_SCHEMA_VERSION,
     load_render_project,
@@ -188,6 +195,40 @@ def test_extra_subtitle_sources_round_trip(qapp, monkeypatch, tmp_path):
     assert [combo.itemText(i) for i in range(combo.count())] == ["主字幕", "コーラス1"]
 
 
+def test_line_animation_overrides_round_trip(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    lrc = _write_demo_lrc(
+        tmp_path / "effects.lrc",
+        "[00:01:00]あ[00:01:50]い[00:02:00]\r\n"
+        "[00:03:00]う[00:03:50]え[00:04:00]\r\n",
+    )
+    assert win.load_from_lrc(lrc) is not None
+    override = LineAnimationOverride(
+        entry_anim="slide_in",
+        entry_duration_ms=450,
+        exit_anim="char_fade",
+        exit_duration_ms=350,
+    )
+    win._timing_track.lines[1].animation_override = override
+
+    data = win._current_project_data()
+    assert data["line_animation_overrides"] == [
+        None,
+        {
+            "entry_anim": "slide_in",
+            "entry_duration_ms": 450,
+            "exit_anim": "char_fade",
+            "exit_duration_ms": 350,
+        },
+    ]
+
+    restored = _make_window(qapp, monkeypatch)
+    restored._apply_project_data(data)
+    assert restored._timing_track is not None
+    assert restored._timing_track.lines[0].animation_override is None
+    assert restored._timing_track.lines[1].animation_override == override
+
+
 def test_lyrics_combo_menu_disables_racy_popup_animation(qapp, monkeypatch):
     """菜单提前关闭时不得留下访问已删除 view 的动画回调。"""
     seen = {}
@@ -201,3 +242,30 @@ def test_lyrics_combo_menu_disables_racy_popup_animation(qapp, monkeypatch):
     menu.exec(QPoint(0, 0), aniType=MenuAnimationType.DROP_DOWN)
 
     assert seen["animation"] == MenuAnimationType.NONE
+
+
+def test_lyrics_table_shows_global_and_overridden_line_effects(qapp):
+    panel = lyrics_list.LyricsPanel()
+    panel.set_style(Style(entry_anim="fade", exit_anim="fade"))
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("全", 1000)], end_ms=2000),
+            TimingLine(
+                chars=[TimingChar("別", 3000)],
+                end_ms=4000,
+                animation_override=LineAnimationOverride(
+                    entry_anim="slide_in",
+                    entry_duration_ms=450,
+                    exit_anim="none",
+                    exit_duration_ms=0,
+                ),
+            ),
+        ]
+    )
+
+    panel.set_track(track)
+
+    assert panel.table_widget.columnCount() == 4
+    assert panel.table_widget.horizontalHeaderItem(lyrics_list.COL_EFFECT).text() == "特效"
+    assert panel.table_widget.item(0, lyrics_list.COL_EFFECT).text() == "全局：淡入 / 淡出"
+    assert panel.table_widget.item(1, lyrics_list.COL_EFFECT).text() == "滑入 / 无"
