@@ -439,6 +439,20 @@ def test_window_shell_components_present(qapp, monkeypatch):
     ]
 
 
+def test_bottom_navigation_switches_export_and_back_to_preview(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+
+    win._nav_btns["export"].click()
+    qapp.processEvents()
+    assert win._stack.currentWidget() is win._export_tab
+    assert win._bottom_navigation.currentRouteKey() == "export"
+
+    win._nav_btns["preview"].click()
+    qapp.processEvents()
+    assert win._stack.currentWidget() is win._preview_tab
+    assert win._bottom_navigation.currentRouteKey() == "preview"
+
+
 def test_lyrics_list_centers_only_explicit_single_line_page(qapp, monkeypatch):
     win = _make_window(qapp, monkeypatch)
     lines = [

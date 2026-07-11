@@ -776,7 +776,7 @@ class SubtitleRenderWindow(QWidget):
             btn = self._bottom_navigation.addItem(
                 key,
                 text,
-                onClick=lambda k=key: self._switch_tab(k),
+                onClick=lambda _checked=False, k=key: self._switch_tab(k),
             )
             btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
