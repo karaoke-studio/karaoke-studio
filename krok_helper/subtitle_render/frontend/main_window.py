@@ -598,7 +598,11 @@ class PreviewPlayerWindow(QWidget):
             }
             """
         )
-        for label in (self._transport_bar._timecode, self._transport_bar._fps_label):
+        for label in (
+            self._transport_bar._timecode,
+            self._transport_bar._fps_label,
+            self._transport_bar._volume_label,
+        ):
             label.setStyleSheet(
                 """
                 QLabel {

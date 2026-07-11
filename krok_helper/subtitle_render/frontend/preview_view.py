@@ -28,7 +28,16 @@ from PyQt6.QtCore import (
     QUrl,
     pyqtSignal as Signal,
 )
-from PyQt6.QtGui import QColor, QImage, QMouseEvent, QPainter, QPen
+from PyQt6.QtGui import (
+    QColor,
+    QIcon,
+    QImage,
+    QMouseEvent,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+)
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PyQt6.QtWidgets import (
     QHBoxLayout,
@@ -83,6 +92,34 @@ _AUDIO_CLOCK_GAIN = 0.1
 _FPS_REFRESH_MS = 500
 """FPS 读数刷新周期：固定节奏更新，避免「按 paint 事件更新」导致的忽高(>100)忽低(<10)。
 读数语义 = **字幕预览渲染帧率**（新字幕帧/秒，不含视频重绘触发的同帧重 blit）。"""
+
+
+def _transport_icon(*, playing: bool) -> QIcon:
+    """绘制透明底的播放/暂停图标，避免 Windows 将暂停符号渲染为彩色 Emoji。"""
+    icon = QIcon()
+    for scale in (1, 2):
+        pixmap = QPixmap(24 * scale, 24 * scale)
+        pixmap.setDevicePixelRatio(scale)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor("#FFFFFF"))
+            if playing:
+                painter.drawRoundedRect(7, 5, 4, 14, 1, 1)
+                painter.drawRoundedRect(14, 5, 4, 14, 1, 1)
+            else:
+                path = QPainterPath()
+                path.moveTo(7, 4)
+                path.lineTo(19, 12)
+                path.lineTo(7, 20)
+                path.closeSubpath()
+                painter.drawPath(path)
+        finally:
+            painter.end()
+        icon.addPixmap(pixmap)
+    return icon
 
 
 def _audio_clock_enabled() -> bool:
@@ -533,7 +570,9 @@ class TransportBar(QWidget):
 
         # ── 子控件 ─────────────────────────────────────────────────
         self._play_btn = QToolButton(self)
-        self._play_btn.setText("▶")
+        self._play_btn.setIcon(_transport_icon(playing=False))
+        self._play_btn.setIconSize(QSize(24, 24))
+        self._play_btn.setAccessibleName("播放")
         self._play_btn.setToolTip("播放 / 暂停 (Space)")
         self._play_btn.setFixedSize(32, 32)
         self._play_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -592,6 +631,26 @@ class TransportBar(QWidget):
         self._fps_label.setFixedWidth(58)
         self._fps_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
+        self._volume_label = QLabel("音量", self)
+        self._volume_label.setToolTip("预览音量")
+        themed(
+            self._volume_label,
+            lambda: f"color: {palette().text_secondary}; font-size: 9pt;",
+        )
+        self._volume_label.setFixedWidth(28)
+        self._volume_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        # 复用自绘播放轨道，避免 Windows 原生 QSlider 在深色悬浮栏上
+        # 绘制一块白色的控件底板。
+        self._volume_slider = PlayerProgressSlider(Qt.Orientation.Horizontal, self)
+        self._volume_slider.setObjectName("PreviewVolumeSlider")
+        self._volume_slider.setAccessibleName("预览音量")
+        self._volume_slider.setRange(0, 100)
+        self._volume_slider.setValue(100)
+        self._volume_slider.setFixedWidth(64)
+        self._volume_slider.setToolTip("预览音量：100%")
+        self._volume_slider.valueChanged.connect(self._on_volume_changed)
+
         # ── 布局 ───────────────────────────────────────────────────
         layout = QHBoxLayout(self)
         layout.setContentsMargins(12, 6, 12, 6)
@@ -600,6 +659,8 @@ class TransportBar(QWidget):
         layout.addWidget(self._slider, 1)
         layout.addWidget(self._timecode)
         layout.addWidget(self._fps_label)
+        layout.addWidget(self._volume_label)
+        layout.addWidget(self._volume_slider)
 
         # ── 音频播放（QMediaPlayer，真实非空音频文件才懒创建） ────────
         self._player: Optional[QMediaPlayer] = None
@@ -670,6 +731,12 @@ class TransportBar(QWidget):
         播放器同时驱动音视频）；不 attach（controller=None）时旧的自建音频 player 路径完全不变。
         """
         self._controller = controller
+        if controller is not None and hasattr(controller, "set_volume"):
+            controller.set_volume(self._volume_slider.value() / 100.0)
+
+    def set_volume(self, percent: int) -> None:
+        """设置预览音量（0–100），并同步到当前播放路径。"""
+        self._volume_slider.setValue(max(0, min(100, int(percent))))
 
     def _use_controller(self) -> bool:
         return self._controller is not None and self._controller.has_media()
@@ -812,6 +879,14 @@ class TransportBar(QWidget):
             self._position_poll_timer.stop()
             self._update_play_button(False)
 
+    def _on_volume_changed(self, percent: int) -> None:
+        volume = max(0, min(100, int(percent))) / 100.0
+        self._volume_slider.setToolTip(f"预览音量：{int(percent)}%")
+        if self._controller is not None and hasattr(self._controller, "set_volume"):
+            self._controller.set_volume(volume)
+        if self._audio_out is not None:
+            self._audio_out.setVolume(volume)
+
     def _on_audio_clock_tick(self) -> None:
         if self._use_controller():
             audio_pos_source = self._controller.position()
@@ -867,13 +942,15 @@ class TransportBar(QWidget):
         if playing != self._playing_state:
             self._playing_state = playing
             self.playbackStateChanged.emit(playing)
-        self._play_btn.setText("⏸" if playing else "▶")
+        self._play_btn.setIcon(_transport_icon(playing=playing))
+        self._play_btn.setAccessibleName("暂停" if playing else "播放")
 
     def _ensure_audio_player(self) -> QMediaPlayer:
         if self._player is not None:
             return self._player
         self._player = QMediaPlayer(self)
         self._audio_out = QAudioOutput(self)
+        self._audio_out.setVolume(self._volume_slider.value() / 100.0)
         self._player.setAudioOutput(self._audio_out)
         self._player.positionChanged.connect(self._on_player_position)
         self._player.playbackStateChanged.connect(self._on_player_state_changed)

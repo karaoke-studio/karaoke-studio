@@ -1012,7 +1012,7 @@ def test_stop_resets_visual_playback_to_start(qapp):
 
     assert not bar.is_playing()
     assert bar.current_time_ms == 0
-    assert bar._play_btn.text() == "▶"
+    assert bar._play_btn.accessibleName() == "播放"
 
 
 def test_seek_relative_clamps_to_timeline(qapp):
@@ -1027,13 +1027,52 @@ def test_seek_relative_clamps_to_timeline(qapp):
     assert bar.current_time_ms == 10_000
 
 
-def test_play_button_text_reflects_state(qapp):
+def test_play_button_icon_reflects_state(qapp):
     bar = _bar(qapp)
-    assert bar._play_btn.text() == "▶"
+    assert bar._play_btn.accessibleName() == "播放"
     bar.play()
-    assert bar._play_btn.text() == "⏸"
+    assert bar._play_btn.accessibleName() == "暂停"
     bar.pause()
-    assert bar._play_btn.text() == "▶"
+    assert bar._play_btn.accessibleName() == "播放"
+
+
+def test_volume_slider_controls_legacy_audio_output(qapp):
+    bar = _bar(qapp)
+    assert isinstance(bar._volume_slider, pv.PlayerProgressSlider)
+    bar._ensure_audio_player()
+
+    bar.set_volume(35)
+
+    assert bar._volume_slider.value() == 35
+    assert bar._audio_out is not None
+    assert bar._audio_out.volume() == pytest.approx(0.35)
+    assert bar._volume_slider.toolTip() == "预览音量：35%"
+
+
+def test_volume_slider_controls_shared_playback_controller(qapp):
+    bar = _bar(qapp)
+    volumes: list[float] = []
+
+    class Controller:
+        def set_volume(self, volume: float) -> None:
+            volumes.append(volume)
+
+        def has_media(self) -> bool:
+            return False
+
+    bar.attach_playback_controller(Controller())
+    bar.set_volume(62)
+
+    assert volumes == [1.0, 0.62]
+
+
+def test_set_volume_clamps_to_slider_range(qapp):
+    bar = _bar(qapp)
+
+    bar.set_volume(150)
+    assert bar._volume_slider.value() == 100
+    bar.set_volume(-5)
+    assert bar._volume_slider.value() == 0
 
 
 def test_preview_fps_label_updates_from_painted_frames(qapp, monkeypatch):
