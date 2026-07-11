@@ -66,6 +66,10 @@ UPDATER_EXE_NAME = "Updater.exe"
 ASSET_BASE = "KaraokeStudio-windows"
 MANIFEST_SCHEMA = 1
 LOCAL_MANIFEST_FILENAME = ".installed_manifest.json"
+# 发布端 runtime 收集策略版本。改变 PyInstaller 的模块/插件收集规则不一定会
+# 改变包版本或 pip freeze；显式 profile 用来阻止错误复用缺少新组件的旧 runtime。
+# Updater 不读取 build 字段，因此该值不影响存量客户端协议。
+RUNTIME_PROFILE = "qt-multimedia-v1"
 
 # _internal 下不属于 runtime 的顶层条目（属于 app part 或本地状态）。
 INTERNAL_NON_RUNTIME_NAMES = {
@@ -277,11 +281,18 @@ def try_reuse_runtime(
     prev_build = prev_manifest.get("build") or {}
     prev_pkgs = prev_build.get("dist_packages") or {}
     prev_freeze = prev_build.get("freeze_hash") or ""
+    prev_profile = prev_build.get("runtime_profile") or ""
     prev_runtime = (prev_manifest.get("parts") or {}).get("runtime") or {}
     prev_sha = prev_runtime.get("sha256") or ""
 
     if not prev_pkgs or not prev_sha:
         print("  上一版 manifest 缺少构建指纹或 runtime sha256，重新打包 runtime")
+        return None
+    if prev_profile != RUNTIME_PROFILE:
+        print(
+            "  runtime 收集策略已变化"
+            f"（{prev_profile or '旧版未记录'} -> {RUNTIME_PROFILE}），重新打包 runtime"
+        )
         return None
     if prev_pkgs != dist_packages:
         added = sorted(set(dist_packages) - set(prev_pkgs))
@@ -381,6 +392,7 @@ def write_release_manifest(
         "build": {
             "dist_packages": dist_packages,
             "freeze_hash": freeze_hash,
+            "runtime_profile": RUNTIME_PROFILE,
         },
     }
     p = out_dir / f"{ASSET_BASE}.json"

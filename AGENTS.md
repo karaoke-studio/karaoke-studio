@@ -16,7 +16,7 @@ UI 的核心是 [`WORKFLOW_STEPS`](krok_helper/gui_qt.py)（约第 1064 行）�
 | 2 | 波形对齐 | [`krok_helper/audio_alignment.py`](krok_helper/audio_alignment.py)（999 行） |
 | 3 | 歌词检索 | [`krok_helper/lyrics.py`](krok_helper/lyrics.py)（1426 行） |
 | 4 | 歌词打轴 | [`krok_helper/lyrics_timing/`](krok_helper/lyrics_timing/) — **SUG submodule** |
-| 5 | 字幕视频生成 | [`krok_helper/subtitle_render/`](krok_helper/subtitle_render/)（骨架已落地，在 `feat/subtitle-render` 分支推进；详见 §10） |
+| 5 | 字幕视频生成 | [`krok_helper/subtitle_render/`](krok_helper/subtitle_render/)（已合入 `main`；详见 §9） |
 | 6 | Hi-Res 混流 | [`krok_helper/pipeline.py`](krok_helper/pipeline.py) |
 
 ---
@@ -145,9 +145,11 @@ git submodule status
 
 ---
 
-## 9. 当前开发分支：`feat/subtitle-render`
+## 9. 字幕渲染模块
 
-第 5 步「字幕视频生成」是 1.0 发版前最后、也最复杂的模块，目标对标 NicoKaraMaker3。**所有该模块的工作在 `feat/subtitle-render` 长线分支上进行**，期间 `main` 上的 bugfix 用 `git merge main` 反向并入开发分支，最终一次性 merge 回 main。不要把零散 bugfix 直接提交到本分支。
+第 5 步「字幕视频生成」目标对标 NicoKaraMaker3，已于 2026-07-11 从
+`feat/subtitle-render` 整体合入 `main`。后续修复直接按工作台流程 A 在 `main` 开发，
+不再继续使用该长线分支。
 
 ### 接手前必读（2026-07-11 校准）
 
@@ -161,7 +163,7 @@ git submodule status
 - P0 主路径已完成：`.sug`/`.lrc`/`.n3proj`、视频预览、QPainter 逐字渲染、MP4 导出、取消、工作流嵌入和 `.yurika`。
 - ruby、角色/多歌手、行内混合字体/字号/配色、渐变/图片填充、glow/stroke2、竖排/RTL、标题、时间轴和多字幕源均已实现。
 - N3 TACTIC 对齐已覆盖：三档发光、蓝白 after 配色、ruby 样式、7px 默认布局字间距，以及 `UseEdge2` 关闭时不强制二重描边。
-- 逐行特效（四列表格、批量编辑、N3 行动作、持久化、撤销/重做、Painter）已在工作区实现，尚未 commit/push。
+- 逐行特效（四列表格、批量编辑、N3 行动作、持久化、撤销/重做、Painter）已合入。
 - `Background` 仍是占位；产品只支持视频背景。静态图、图片序列、纯色与独立音频导出尚未接通。
 - native C++ sidecar 产品路径硬关闭，Python QPainter 是唯一正式路径。
 
@@ -171,8 +173,11 @@ git submodule status
 2. N3 每布局字符排版参数（`LyricsInterval` / `AllowBiting` / `RubyInterval` / `RubyAlignment` / `LyricsAndRubyInterval`）；
 3. 背景源抽象与独立音频；
 4. N3 提示策略清理；
-5. 无交互 CLI、CI 烟测、PyInstaller 包内验证；
-6. 同步 `main` 并整体合并。
+5. 无交互 CLI 与端到端 CI MP4 烟测。
+
+Windows PyInstaller onedir 已完成实际构建和包内 Multimedia 校验；完整测试基线为
+`843 passed, 50 skipped`。macOS 脚本已同步收集 QtMultimedia，仍需在 macOS runner
+完成真实构建验证。
 
 ### 关键约束
 
@@ -182,7 +187,8 @@ git submodule status
 - **不支持假名独立字体族**；假名沿用日文字体，英数字体仍可独立。
 - **N3 二重描边严格遵守 `UseEdge2`**，不能因保存了宽度就强制开启。
 - **所有用户面向字符串中文**。
-- 字幕测试 645 项同一 Qt 进程在尾段可能发生 pooled-thread teardown access violation；文件级隔离正常，正式 CI 前需修复销毁顺序。
+- 若以后再次出现 Qt pooled-thread teardown access violation，优先检查预览 worker
+  的销毁顺序；2026-07-11 合并后的 893 项测试在同一进程执行未复现。
 
 ---
 

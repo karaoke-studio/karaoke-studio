@@ -27,8 +27,6 @@ EXCLUDED_MODULES=(
   PyQt6.QtCharts
   PyQt6.QtDataVisualization
   PyQt6.QtDesigner
-  PyQt6.QtMultimedia
-  PyQt6.QtMultimediaWidgets
   PyQt6.QtNetworkAuth
   PyQt6.QtPdf
   PyQt6.QtPdfWidgets
@@ -101,7 +99,6 @@ REMOVE_PLUGIN_DIRS=(
 REMOVE_QT_LIBS=(
   "QtPdf.framework"
   "QtVirtualKeyboard.framework"
-  "QtMultimedia.framework"
   "QtQml.framework"
   "QtQuick.framework"
 )
@@ -223,6 +220,8 @@ PYINSTALLER_ARGS=(
   --hidden-import sudachipy
   --hidden-import sudachidict_small
   --hidden-import PyQt6.sip
+  --hidden-import PyQt6.QtMultimedia
+  --hidden-import PyQt6.QtMultimediaWidgets
   --hidden-import encodings.idna
   --hidden-import colorsys
 )
@@ -310,6 +309,15 @@ missing=0
 for rel in "${REQUIRED_FILES[@]}"; do
   if [ ! -f "$APP_INTERNAL/$rel" ]; then
     echo "Missing package file: $APP_INTERNAL/$rel"
+    missing=1
+  fi
+done
+if [ "$missing" -ne 0 ]; then
+  exit 1
+fi
+for component in "QtMultimedia.framework" "QtMultimediaWidgets.framework" "libffmpegmediaplugin.dylib"; do
+  if ! find "$APP_DIST" -name "$component" -print -quit | grep -q .; then
+    echo "Missing Qt Multimedia component: $component"
     missing=1
   fi
 done

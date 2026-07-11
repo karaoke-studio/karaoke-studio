@@ -117,7 +117,11 @@ def _write_prev(prev_dir: Path, runtime_zip_entries: dict[str, bytes], pkgs: dic
                 "targets": ["_internal/PyQt6"],
             },
         },
-        "build": {"dist_packages": pkgs, "freeze_hash": freeze},
+        "build": {
+            "dist_packages": pkgs,
+            "freeze_hash": freeze,
+            "runtime_profile": build_parts.RUNTIME_PROFILE,
+        },
     }
     (prev_dir / "KaraokeStudio-windows.json").write_text(
         json.dumps(manifest), encoding="utf-8"
@@ -154,6 +158,18 @@ def test_rebuild_runtime_when_fingerprint_differs(tmp_path, pkgs_now, freeze_now
 def test_reuse_without_prev_manifest_is_fresh_build(tmp_path) -> None:
     out = tmp_path / "rt.zip"
     assert build_parts.try_reuse_runtime(tmp_path / "prev", out, {"n": "1"}, "abc", require_reuse=True) is None
+
+
+def test_rebuild_runtime_when_profile_is_missing(tmp_path) -> None:
+    prev = tmp_path / "prev"
+    _write_prev(prev, {"a": b"1"}, {"numpy": "2.4.6"}, "abc")
+    manifest_path = prev / "KaraokeStudio-windows.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    del manifest["build"]["runtime_profile"]
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert build_parts.try_reuse_runtime(
+        prev, tmp_path / "rt.zip", {"numpy": "2.4.6"}, "abc", require_reuse=True
+    ) is None
 
 
 def test_require_reuse_fails_when_zip_missing(tmp_path) -> None:
@@ -199,6 +215,7 @@ def test_manifest_and_installed_manifest_contract(tmp_path) -> None:
     assert data["full"]["asset"] == "KaraokeStudio-windows.zip"
     assert data["parts"]["runtime"]["sha256"] == "h2"
     assert data["build"]["dist_packages"] == {"numpy": "2.4.6"}
+    assert data["build"]["runtime_profile"] == build_parts.RUNTIME_PROFILE
 
 
 def test_derived_manifest_name_matches_shipped_updater_rule() -> None:

@@ -111,6 +111,8 @@ echo Building Windows package...
     --hidden-import pykakasi.kakasi ^
     --hidden-import jaconv ^
     --hidden-import PyQt6.sip ^
+    --hidden-import PyQt6.QtMultimedia ^
+    --hidden-import PyQt6.QtMultimediaWidgets ^
     --hidden-import encodings.idna ^
     --hidden-import colorsys ^
     --hidden-import sudachipy ^
@@ -137,8 +139,6 @@ echo Building Windows package...
     --exclude-module PyQt6.QtCharts ^
     --exclude-module PyQt6.QtDataVisualization ^
     --exclude-module PyQt6.QtDesigner ^
-    --exclude-module PyQt6.QtMultimedia ^
-    --exclude-module PyQt6.QtMultimediaWidgets ^
     --exclude-module PyQt6.QtNetworkAuth ^
     --exclude-module PyQt6.QtPdf ^
     --exclude-module PyQt6.QtPdfWidgets ^
@@ -191,7 +191,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "foreach ($rel in $removeFiles) { $path = Join-Path $plugins $rel; if (Test-Path $path) { Remove-Item -LiteralPath $path -Force } };" ^
     "$removeDirs = @('generic','networkinformation','platforminputcontexts');" ^
     "foreach ($rel in $removeDirs) { $path = Join-Path $plugins $rel; if ((Test-Path $path -PathType Container) -and -not (Get-ChildItem $path -Force)) { Remove-Item -LiteralPath $path -Force } };" ^
-    "$dlls = @('Qt6Pdf.dll','Qt6VirtualKeyboard.dll','Qt6Multimedia.dll','Qt6Quick.dll','Qt6Qml.dll');" ^
+    "$dlls = @('Qt6Pdf.dll','Qt6VirtualKeyboard.dll','Qt6Quick.dll','Qt6Qml.dll');" ^
     "foreach ($base in @($qt6, (Join-Path $qt6 'bin'), $root)) { if (-not (Test-Path $base)) { continue }; foreach ($name in $dlls) { $path = Join-Path $base $name; if (Test-Path $path) { Remove-Item -LiteralPath $path -Force } } }"
 if errorlevel 1 (
     echo.
@@ -252,6 +252,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     ");" ^
     "$missing = @();" ^
     "foreach ($rel in $required) { $base = if ($rel -eq 'Updater.exe') { $targetDir } else { $internal }; $path = Join-Path $base $rel; if (-not (Test-Path $path -PathType Leaf)) { $missing += $path } };" ^
+    "$multimediaRequired = @('QtMultimedia.pyd','QtMultimediaWidgets.pyd','Qt6Multimedia.dll','Qt6MultimediaWidgets.dll','ffmpegmediaplugin.dll');" ^
+    "foreach ($name in $multimediaRequired) { if (-not (Get-ChildItem -LiteralPath $internal -Recurse -File -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1)) { $missing += ('Qt Multimedia component: ' + $name) } };" ^
     "if ($missing.Count) { Write-Host 'Missing package files:'; $missing | ForEach-Object { Write-Host ('  ' + $_) }; exit 1 };" ^
     "$warnRoot = Join-Path '%WORK_PATH%' '%BUILD_NAME%';" ^
     "$warn = if (Test-Path $warnRoot) { Get-ChildItem -LiteralPath $warnRoot -Recurse -Filter 'warn-*.txt' -File -ErrorAction SilentlyContinue | Select-Object -First 1 } else { $null };" ^

@@ -99,7 +99,9 @@ manifest 协议。
 manifest 中 part 的 `sha256` 是解压内容哈希，用于判断是否需要替换；旁边的
 `.sha256` 是 zip 文件哈希，用于下载校验，两者用途不同。
 
-`app` 每版重新构建。依赖指纹不变时，CI 必须复用上一版 runtime zip 原文件；
+`app` 每版重新构建。依赖指纹与 `build.runtime_profile` 都不变时，CI 必须复用
+上一版 runtime zip 原文件；profile 用于标记 PyInstaller 模块/插件收集策略，避免
+包版本未变时误复用缺少新 Qt 组件的旧 runtime。
 `--require-runtime-reuse` 会在「应复用但找不到旧 zip」时中止构建，避免无意义地改变
 runtime 内容哈希、迫使所有用户重下运行库。
 
