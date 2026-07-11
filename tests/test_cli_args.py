@@ -16,3 +16,9 @@ def test_parse_args_keeps_project_optional_for_default_gui() -> None:
     args = parse_args([])
 
     assert args.project is None
+
+
+def test_parse_args_accepts_hidden_package_spawn_smoke() -> None:
+    args = parse_args(["--package-spawn-smoke"])
+
+    assert args.package_spawn_smoke is True

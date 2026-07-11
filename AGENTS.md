@@ -175,8 +175,8 @@ git submodule status
 4. N3 提示策略清理；
 5. 无交互 CLI 与端到端 CI MP4 烟测。
 
-Windows PyInstaller onedir 已完成实际构建和包内 Multimedia 校验；完整测试基线为
-`843 passed, 50 skipped`。macOS 脚本已同步收集 QtMultimedia，仍需在 macOS runner
+Windows PyInstaller onedir 已完成实际构建、包内 Multimedia 校验和 frozen
+multiprocessing spawn 冒烟；完整测试基线为 `845 passed, 50 skipped`。macOS 脚本已同步收集 QtMultimedia，仍需在 macOS runner
 完成真实构建验证。
 
 ### 关键约束

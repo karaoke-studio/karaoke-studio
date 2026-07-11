@@ -266,6 +266,19 @@ if errorlevel 1 (
     exit /b 1
 )
 
+echo Validating packaged multiprocessing spawn...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$exe = Resolve-Path '%APP_DIST%\%APP_NAME%.exe';" ^
+    "$process = Start-Process -FilePath $exe -ArgumentList '--package-spawn-smoke' -WindowStyle Hidden -Wait -PassThru;" ^
+    "if ($process.ExitCode -ne 0) { Write-Host ('Packaged spawn smoke failed with exit code ' + $process.ExitCode); exit 1 };" ^
+    "Write-Host 'Packaged multiprocessing spawn passed.'"
+if errorlevel 1 (
+    echo.
+    echo Packaged multiprocessing validation failed.
+    if not defined IS_CI pause
+    exit /b 1
+)
+
 echo Creating update archives (full zip + incremental parts + manifest)...
 if defined IS_CI (
     %PYTHON_BIN% scripts\build_parts.py --require-runtime-reuse
