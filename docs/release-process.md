@@ -63,16 +63,27 @@ $env:QT_QPA_PLATFORM='offscreen'
 ..\karaoke-studio\.venv\Scripts\python.exe -c "from PyQt6.QtWidgets import QApplication; app=QApplication([]); from krok_helper.gui_qt import KrokHelperQtApp; w=KrokHelperQtApp(); print(type(w.lyrics_timing_page).__name__)"
 ```
 
-### 4.3 改版本号
+### 4.3 准备版本号与 CHANGELOG
 
-按 §2 决定 bump，编辑：
+按 §2 决定 bump，运行：
 
-- [`krok_helper/config.py`](../krok_helper/config.py) 的 `APP_VERSION`
-- [`README.md`](../README.md) 顶部「当前版本」
+```powershell
+C:\Python314\python.exe scripts\release.py prepare X.Y.Z
+```
 
-### 4.4 写 CHANGELOG
+脚本会同步 [`krok_helper/config.py`](../krok_helper/config.py) 的 `APP_VERSION`、
+[`README.md`](../README.md) 顶部「当前版本」，并在 CHANGELOG 插入当天的中文占位段。
 
-把 [`CHANGELOG.md`](../CHANGELOG.md) 的 `[Unreleased]` 落到新版本节，格式见 §6。
+### 4.4 补全 CHANGELOG 并生成 release notes
+
+按 §6 补全新版本段，删除没有内容的分类及所有「待补充」文本，然后运行：
+
+```powershell
+C:\Python314\python.exe scripts\release.py notes X.Y.Z
+```
+
+生成 `dist/release-notes-vX.Y.Z.md`，并打印 CI 完成后要执行的
+`gh release edit` 命令。该文件是本地发版产物，不入库。
 
 ### 4.5 Commit
 
@@ -114,16 +125,22 @@ $env:QT_QPA_PLATFORM='offscreen'
 
 如果 SUG 涉及自动检测/打轴/LLM 流程，再跑一遍 SUG 自己的回归脚本。
 
-### 5.3 改版本号
+### 5.3 准备版本号与 CHANGELOG
 
-第 4 段递增，按 §2。编辑：
+第 4 段递增，按 §2，运行：
 
-- [`krok_helper/config.py`](../krok_helper/config.py) 的 `APP_VERSION`
-- [`README.md`](../README.md) 顶部「当前版本」
+```powershell
+C:\Python314\python.exe scripts\release.py prepare X.Y.Z.N
+```
 
-### 5.4 写 CHANGELOG
+### 5.4 补全 CHANGELOG 并生成 release notes
 
-把 [`CHANGELOG.md`](../CHANGELOG.md) 的 `[Unreleased]` 落到新版本节，格式见 §6。**必须**额外有一行：`更新 StrangeUtaGame 子模块到 SUGvX.Y.Z`（或短 SHA），第一段标注「仅 submodule 同步，主程序代码无改动」。
+补全新版本段。**必须**额外有一行：`更新 StrangeUtaGame 子模块到 SUGvX.Y.Z`
+（或短 SHA），第一段标注「仅 submodule 同步，主程序代码无改动」。然后运行：
+
+```powershell
+C:\Python314\python.exe scripts\release.py notes X.Y.Z.N
+```
 
 ### 5.5 两笔 Commit
 
@@ -140,7 +157,9 @@ Release X.Y.Z.N                                       # APP_VERSION + README + C
 
 ## 6. CHANGELOG 与 release body 格式
 
-[`CHANGELOG.md`](../CHANGELOG.md) 沿用 Keep a Changelog 英文小标题（`### Added` / `### Fixed` / `### Changed`）；GitHub Release body 用中文小标题（`### 新增` / `### 修复` / `### 其他更新`），内容与 CHANGELOG 对应版本节保持一致。
+[`CHANGELOG.md`](../CHANGELOG.md) 与 GitHub Release body 都使用中文小标题（例如
+`### 新增功能` / `### 特性改变` / `### 修复项目`），release body 由
+`scripts/release.py notes` 从对应版本节直接抽取，二者内容保持一致。
 
 每个版本节必须包含：
 
@@ -192,18 +211,18 @@ gh run list --workflow=release.yml --limit 3
 > Workflow 配的是 `generate_release_notes: true`，默认 body 是英文 `compare/...` 链接。**主程序更新弹窗会直接展示 body**，必须在 CI 完成后立刻覆盖。
 
 ```powershell
-# 把 §4.4 / §5.4 写好的中文 CHANGELOG 段保存到本地，例如 release-notes-vX.Y.Z.md
-gh release edit vX.Y.Z[.N] --notes-file release-notes-vX.Y.Z.md
+# §4.4 / §5.4 的 notes 命令会打印含实际版本和路径的可执行命令
+gh release edit vX.Y.Z[.N] --notes-file dist/release-notes-vX.Y.Z[.N].md
 gh release view vX.Y.Z[.N] --json body --jq .body   # 验证一下
 ```
 
-`release-notes-*.md` 不入库，用完删掉。
+`dist/release-notes-*.md` 不入库。
 
 ---
 
 ## 9. 自动更新验收
 
-从旧版安装目录启动应用：
+从旧版安装目录启动应用。完整失败矩阵见 [`auto_update.md`](./auto_update.md)：
 
 1. 打开全局设置 → 「应用更新」，关于页应显示旧版本号。
 2. 点「检查更新」，弹窗应显示 §8 覆盖好的中文 release notes（跨版本升级时聚合展示中间所有版本）。
@@ -212,6 +231,11 @@ gh release view vX.Y.Z[.N] --json body --jq .body   # 验证一下
    - 本地无清单（首次增量）→ 下载 app + runtime 两个 part 并写入清单；
    - manifest 拉取失败 → 自动回退全量 zip。
 4. 重启后关于页应显示新版本号。
+
+**增量 + Updater 自更新首发的强制验收**：必须使用本地没有
+`_internal/.installed_manifest.json` 的旧版客户端，确认首次增量下载 app + runtime
+两个 part、写入本地清单并成功重启；再从这份已带清单的安装目录验证下一版只下载
+变化的 app part。不得只用新打出的全量包测试。
 
 日志：`$env:TEMP\KaraokeStudioUpdater\updater.log`（开头会标明走了「增量路径」还是「全量路径」）。
 

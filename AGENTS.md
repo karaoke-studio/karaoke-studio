@@ -104,7 +104,7 @@ git submodule status
 
 - [`krok_helper/updater/worker.py`](krok_helper/updater/worker.py)：在主程序里跑，查询 GitHub Releases API（全 403 时用 github.com 网页 302 跳转兜底），对比 `APP_VERSION`，跨版本聚合 changelog。
 - [`krok_helper/updater_app/`](krok_helper/updater_app/)：独立 `Updater.exe`（复用 SUG `updater_app`，含增量更新逻辑），主程序退出后由它替换文件并重启。需要 `build_updater.py` 单独打包。
-- **增量更新**：[`scripts/build_parts.py`](scripts/build_parts.py) 产出 `KaraokeStudio-windows.json`（manifest）+ `-app.zip` + `-runtime.zip`；Updater 按 manifest diff 只下变化的 part，失败自动回退全量 zip。依赖未变时 CI 复用上一版 runtime zip 原文件（`--require-runtime-reuse` 安全闸）。机制详解与发布不变量见 [`docs/工作台更新器完善计划.md`](docs/工作台更新器完善计划.md) 与 [`docs/release-process.md`](docs/release-process.md) §7。
+- **增量更新**：[`scripts/build_parts.py`](scripts/build_parts.py) 产出 `KaraokeStudio-windows.json`（manifest）+ `-app.zip` + `-runtime.zip`；Updater 按 manifest diff 只下变化的 part，失败自动回退全量 zip。依赖未变时 CI 复用上一版 runtime zip 原文件（`--require-runtime-reuse` 安全闸）。完整机制、配置与失败矩阵见 [`docs/auto_update.md`](docs/auto_update.md)；设计取舍见 [`docs/工作台更新器完善计划.md`](docs/工作台更新器完善计划.md)。
 - 资产命名是硬编码的：`KaraokeStudio-windows.zip` / `KaraokeStudio-macos.zip`（见 `worker.current_asset_name()`）。**manifest 名 `KaraokeStudio-windows.json` 由存量客户端从 zip 名派生，全都不可改**。改名要改四处：worker、`scripts/build_*`、`scripts/build_parts.py`、workflow。
 - **更新弹窗会直接展示 GitHub Release 的 body**，所以 release body 必须是中文。详见 §6。
 
@@ -120,6 +120,7 @@ git submodule status
 - Tag 格式 `vX.Y.Z[.N]`，push tag 触发 [`.github/workflows/release.yml`](.github/workflows/release.yml) 自动打包+发 release。
 - CI 默认 release body 是英文，**必须用 `gh release edit --notes-file` 覆盖成中文**，否则更新弹窗会给用户看英文 compare 链接。
 - 改 `APP_VERSION` 时同时改 [`README.md`](README.md) 顶部「当前版本」（容易漏）。
+- 发版准备统一运行 `python scripts/release.py prepare X.Y.Z[.N]`；补全 CHANGELOG 后运行 `python scripts/release.py notes X.Y.Z[.N]` 生成中文 release body。详见 [`docs/release-process.md`](docs/release-process.md)。
 
 ---
 
