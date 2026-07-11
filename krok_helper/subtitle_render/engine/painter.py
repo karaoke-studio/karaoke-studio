@@ -6886,7 +6886,7 @@ def _paint_glow_path(
         painter.drawImage(target, _blur_image(source, blur_radius))
 
 
-def _n3_gaussian_kernel_1d(standard_deviation: int) -> np.ndarray:
+def _n3_gaussian_kernel_1d(standard_deviation: float) -> np.ndarray:
     """Return N3/Direct2D's normalized Gaussian kernel for one axis."""
     sigma = max(float(standard_deviation), 1.0)
     support_radius = math.ceil(sigma * 3.0)
@@ -6896,13 +6896,36 @@ def _n3_gaussian_kernel_1d(standard_deviation: int) -> np.ndarray:
 
 
 def _blur_image(source: QImage, radius: int) -> QImage:
-    """Apply N3's Direct2D GaussianBlur semantics with a soft border.
+    """Approximate N3's default Direct2D ``Balanced`` Gaussian blur.
 
     N3 assigns ``DecorSize`` directly to Direct2D's ``StandardDeviation``.
-    Direct2D uses a ``3 * sigma`` kernel support and transparent pixels beyond
-    the input (``D2D1_BORDER_MODE_SOFT``).  Qt's QGraphicsBlurEffect instead
-    uses an exponential blur whose ``blurRadius`` is not a standard deviation.
+    In the default ``Balanced`` optimization mode, Direct2D pre-scales the
+    input before filtering at larger radii, then restores it with filtered
+    sampling.  A half-size pass reproduces the radius-10 response used by N3
+    projects within one 8-bit alpha value; smaller radii retain the direct
+    Gaussian path.  Qt's QGraphicsBlurEffect cannot be used because it applies
+    an unrelated exponential blur.
     """
+    sigma = max(float(radius), 1.0)
+    if sigma < 8.0 or source.width() < 2 or source.height() < 2:
+        return _gaussian_blur_image(source, sigma)
+
+    reduced = source.scaled(
+        max(source.width() // 2, 1),
+        max(source.height() // 2, 1),
+        Qt.AspectRatioMode.IgnoreAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    blurred = _gaussian_blur_image(reduced, sigma / 2.0)
+    return blurred.scaled(
+        source.size(),
+        Qt.AspectRatioMode.IgnoreAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+
+
+def _gaussian_blur_image(source: QImage, standard_deviation: float) -> QImage:
+    """Apply a separable ``3 * sigma`` Gaussian with a transparent border."""
     image = source.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
     width = image.width()
     height = image.height()
@@ -6916,7 +6939,7 @@ def _blur_image(source: QImage, radius: int) -> QImage:
     )
     pixels = source_rows[:, : width * 4].reshape(height, width, 4).astype(np.float32)
 
-    kernel = _n3_gaussian_kernel_1d(max(int(radius), 1)).astype(np.float32)
+    kernel = _n3_gaussian_kernel_1d(standard_deviation).astype(np.float32)
     support_radius = len(kernel) // 2
     horizontal = np.pad(
         pixels,

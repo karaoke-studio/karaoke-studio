@@ -1965,19 +1965,43 @@ def test_n3_gaussian_kernel_uses_decor_radius_as_standard_deviation():
     )
 
 
-def test_n3_gaussian_blur_preserves_impulse_alpha_energy(qapp):
+def test_separable_gaussian_blur_preserves_expected_impulse_energy(qapp):
     source = QImage(129, 129, QImage.Format.Format_ARGB32_Premultiplied)
     source.fill(0)
     source.setPixelColor(64, 64, QColor(255, 255, 255, 255))
 
-    blurred = subtitle_painter._blur_image(source, 4)
+    blurred = subtitle_painter._gaussian_blur_image(source, 4)
     alpha = _img_rows_rgba(blurred).reshape((129, 129, 4))[:, :, 3]
 
-    # The normalized 25x25 Gaussian produces 219 alpha units after the same
-    # per-pixel 8-bit quantization used by the render target.  Qt's former
-    # exponential blur only retained 98 and concentrated 11 at the centre.
+    # The normalized 25x25 Gaussian produces 219 alpha units after per-pixel
+    # 8-bit quantization. Qt's former exponential blur only retained 98 and
+    # concentrated 11 at the centre.
     assert int(alpha.sum()) == 219
     assert int(alpha[64, 64]) == 3
+
+
+def test_n3_balanced_blur_matches_dark_spiral_radius_ten_response(qapp):
+    """N3 Direct2D Balanced response for 1.n3proj's 15 px glow source."""
+    source = QImage(129, 129, QImage.Format.Format_ARGB32_Premultiplied)
+    source.fill(0)
+    for y in range(129):
+        for x in range(57, 72):
+            source.setPixelColor(x, y, QColor(255, 255, 255, 255))
+
+    blurred = subtitle_painter._blur_image(source, 10)
+    alpha = _img_rows_rgba(blurred).reshape((129, 129, 4))[:, :, 3]
+    actual = alpha[64, 64:98].astype(np.int16)
+    direct2d_balanced = np.array(
+        [
+            139, 138, 135, 133, 130, 125, 119, 113, 107, 100, 92, 84,
+            76, 69, 62, 55, 48, 42, 37, 31, 26, 22, 19, 15, 12, 10, 8,
+            6, 4, 3, 2, 2, 1, 0,
+        ],
+        dtype=np.int16,
+    )
+
+    assert int(np.abs(actual - direct2d_balanced).max()) <= 1
+    assert int(alpha.sum()) == pytest.approx(458_773, rel=0.002)
 
 
 def test_glow_concentration_levels_stack_more_alpha(qapp):

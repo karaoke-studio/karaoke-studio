@@ -462,8 +462,7 @@ sigma_i = R - floor(i * R / N)
 因此 `R=13` 时低/中/高三档分别是 `(13)`、`(13, 7)`、
 `(13, 9, 5)`。每次都重新清空工作位图，先以装饰色绘制轮廓，再把
 `sigma_i` 直接赋给 Vortice/Direct2D `GaussianBlur.StandardDeviation`，最后以
-SourceOver 叠加到目标。Direct2D 默认使用 soft border，核支撑半径为 `3σ`；等价的
-一维离散核为：
+SourceOver 叠加到目标。Direct2D 默认使用 soft border，理论核支撑半径为 `3σ`：
 
 ```text
 w(x) = exp(-(x*x) / (2*sigma*sigma)),  x in [-ceil(3*sigma), ceil(3*sigma)]
@@ -479,7 +478,15 @@ w = w / sum(w)
 
 工作台不能把 `sigma_i` 直接传给 Qt `QGraphicsBlurEffect.blurRadius`：Qt 的 raster
 实现会先乘 `2.5`，再使用指数模糊而非上述高斯核，中心 alpha 分布与 N3 明显不同。
-当前 Python Painter 已改为按上述 `3σ` 软边界可分离高斯公式计算。
+
+另一个容易遗漏的细节是 N3 没有设置 `GaussianBlur.Optimization`，因此使用
+Direct2D 默认的 `Balanced`，不是直接计算上面的离散核。微软定义该模式会先做
+pre-scaling，再用 trilinear filtering 恢复尺寸。对 `Dark spiral journey/1.n3proj`
+的默认样式（`DecorSize=10`、`BlurLevel=0`、`EdgeSize=5`）做 BGRA8 实测：15px
+竖直发光源的中心 alpha 为 139；直接离散高斯为 140，多个内圈像素高 1–2，整图
+alpha 总和高约 0.9%。工作台现对半径不小于 8px 的发光先做半尺寸平滑预缩放，
+以同比例 σ 模糊后再平滑恢复；上述探针 34 个采样点与 N3 的误差均不超过 1 alpha，
+总 alpha 误差约 0.12%。小半径仍使用直接 `3σ` 可分离高斯，避免无谓的缩放损失。
 
 ## 实现优先级建议
 
