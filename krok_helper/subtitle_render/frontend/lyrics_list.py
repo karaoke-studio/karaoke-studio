@@ -21,7 +21,7 @@ from typing import Optional
 
 from dataclasses import replace as _dataclass_replace
 
-from PyQt6.QtCore import QPoint, Qt, QSize, pyqtSignal as Signal
+from PyQt6.QtCore import QEvent, QPoint, Qt, QSize, pyqtSignal as Signal
 from PyQt6.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -298,6 +298,14 @@ class _GroupBackgroundDelegate(QStyledItemDelegate):
                 painter.fillRect(opt.rect, color)
         if selected:
             painter.fillRect(opt.rect, QColor(palette().preview_selection_bg))
+        # 角色 / 特效列把「色点图标 + 文本」整组水平居中。setTextAlignment
+        # 只居中文字、图标仍钉在左缘，所以改为把绘制矩形收窄到内容理想宽
+        # 后居中放置，再按默认左对齐绘制；空间不足时保持原样走省略号。
+        if index.column() in (COL_ROLE, COL_EFFECT):
+            hint = self.sizeHint(option, index).width()
+            if 0 < hint < opt.rect.width():
+                dx = (opt.rect.width() - hint) // 2
+                opt.rect = opt.rect.adjusted(dx, 0, -dx, 0)
         super().paint(painter, opt, index)
 
 
@@ -418,22 +426,35 @@ class LyricsPanel(DropPanel):
                                     | QAbstractItemView.EditTrigger.EditKeyPressed)
         self._table.setShowGrid(False)
         self._table.setWordWrap(False)
+        self._table.setTextElideMode(Qt.TextElideMode.ElideRight)
+        # 列宽在下方被钳制到永不超出 viewport（内容列 Stretch 吸收余量、
+        # 拖拽有上限），横向滚动没有存在意义；关掉以保证任何状态下
+        # 都不会把内容列滚出可视区。
+        self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setIconSize(QSize(14, 14))
 
         self._table.verticalHeader().setVisible(False)
         self._table.verticalHeader().setDefaultSectionSize(_ROW_HEIGHT)
 
-        # 列宽：轨 / 角色 固定，内容撑满。
-        # 注意 qfluentwidgets 的表格 QSS 给 item 加了左右各 16px padding，
-        # 列宽必须把这 32px 算进去，否则文本会被省略号吃掉。
+        # 两级宽度策略：轨列按内容紧凑测量，角色 / 特效允许用户调整，内容列
+        # Stretch 填满 viewport 剩余空间。这样拖宽角色 / 特效时由内容列吸收，
+        # 不会把表格的绘制区域推到右侧属性面板下面。
         hh = self._table.horizontalHeader()
-        hh.setSectionResizeMode(COL_LANE, QHeaderView.ResizeMode.Fixed)
-        hh.setSectionResizeMode(COL_ROLE, QHeaderView.ResizeMode.Fixed)
-        hh.setSectionResizeMode(COL_EFFECT, QHeaderView.ResizeMode.Fixed)
+        hh.setSectionResizeMode(COL_LANE, QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(COL_ROLE, QHeaderView.ResizeMode.Interactive)
+        hh.setSectionResizeMode(COL_EFFECT, QHeaderView.ResizeMode.Interactive)
         hh.setSectionResizeMode(COL_CONTENT, QHeaderView.ResizeMode.Stretch)
-        self._table.setColumnWidth(COL_LANE, 64)
-        self._table.setColumnWidth(COL_ROLE, 148)
-        self._table.setColumnWidth(COL_EFFECT, 160)
+        # QHeaderView 只提供全局 minimumSectionSize。这里仅设置由当前 style
+        # header margin 推导出的 DPI 感知技术下限；各列语义下限由下方字体与
+        # 实际单元格 sizeHint 测量分别控制，不共享固定像素值。
+        header_margin = self._table.style().pixelMetric(QStyle.PixelMetric.PM_HeaderMargin)
+        hh.setMinimumSectionSize(max(1, header_margin * 2))
+        self._setting_column_widths = False
+        self._user_sized_columns: set[int] = set()
+        hh.sectionResized.connect(self._on_column_resized)
+        # viewport 尺寸变化（拖 splitter / 缩放窗口 / 竖直滚动条出现）时重测列宽，
+        # 是响应式的唯一可靠信号——resizeEvent 时机早于子布局落位。
+        self._table.viewport().installEventFilter(self)
 
         # 角色列 → FluentComboBox 委托；轨 / 内容列 → 只读委托
         self._role_delegate = _RoleComboDelegate(self)
@@ -481,6 +502,9 @@ class LyricsPanel(DropPanel):
         # 点击行 → 跳转预览
         self._table.cellClicked.connect(lambda row, _col: self.rowClicked.emit(row))
         self._table.cellDoubleClicked.connect(self._on_cell_double_clicked)
+
+        # 各列语义下限之和向上传给 splitter，面板不再能被压到布局散架
+        self._update_minimum_width()
 
     # ------------------------------------------------------------------ public
 
@@ -592,6 +616,8 @@ class LyricsPanel(DropPanel):
 
         self.set_populated(True)
         self._refresh_presentation()
+        self._apply_measured_column_widths()
+        self._clamp_columns_to_viewport()
 
     def refresh_row_role(self, row: int) -> None:
         """宿主改完 role_label 后刷新该行的色点（角色文本已由委托更新）。"""
@@ -611,6 +637,243 @@ class LyricsPanel(DropPanel):
         return self._table
 
     # ------------------------------------------------------------------ private
+
+    def _visible_rows(self) -> range:
+        """Return rows intersecting the viewport, falling back to all rows.
+
+        Qt delegate size hints include the active font, DPI, item padding and icons,
+        so measuring only visible rows keeps widths responsive without scanning a
+        large subtitle project or letting one distant outlier dominate the layout.
+        """
+        count = self._table.rowCount()
+        if count <= 0:
+            return range(0)
+        viewport = self._table.viewport()
+        first = self._table.rowAt(0)
+        last = self._table.rowAt(max(viewport.height() - 1, 0))
+        if first < 0:
+            return range(count)
+        if last < first:
+            last = count - 1
+        return range(first, min(last + 1, count))
+
+    def _header_width_hint(self, column: int) -> int:
+        return max(self._table.horizontalHeader().sectionSizeHint(column), 1)
+
+    def _cell_width_hint(self, row: int, column: int) -> int:
+        index = self._table.model().index(row, column)
+        hint = self._table.sizeHintForIndex(index)
+        return max(hint.width(), 0)
+
+    def _visible_column_width_hint(self, column: int) -> int:
+        return max(
+            [self._header_width_hint(column)]
+            + [self._cell_width_hint(row, column) for row in self._visible_rows()]
+        )
+
+    def _role_minimum_width(self) -> int:
+        """Compact role width: header plus the color swatch affordance.
+
+        Long role names may elide, but the column must retain room for its localized
+        header and role color icon. Both values come from the live Qt style/DPI.
+        """
+        return max(
+            self._header_width_hint(COL_ROLE),
+            self._table.iconSize().width()
+            + 2 * self._table.style().pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin)
+            + self._table.fontMetrics().horizontalAdvance(_DEFAULT_ROLE_TEXT),
+        )
+
+    def _effect_minimum_width(self) -> int:
+        """Measure the most common visible effect summary as the semantic minimum."""
+        candidates: list[tuple[str, int]] = []
+        for row in self._visible_rows():
+            item = self._table.item(row, COL_EFFECT)
+            if item is not None and item.text():
+                candidates.append((item.text(), row))
+        if not candidates:
+            return self._header_width_hint(COL_EFFECT)
+        typical = Counter(text for text, _row in candidates).most_common(1)[0][0]
+        typical_width = max(
+            self._cell_width_hint(row, COL_EFFECT)
+            for text, row in candidates
+            if text == typical
+        )
+        return max(self._header_width_hint(COL_EFFECT), typical_width)
+
+    def _content_minimum_width(self) -> int:
+        """内容列语义下限：表头 + 至少能看清几个 CJK 字，宽度随当前字体缩放。"""
+        return max(
+            self._header_width_hint(COL_CONTENT),
+            self._table.fontMetrics().horizontalAdvance("中") * 6,
+        )
+
+    def _column_minimum_width(self, column: int) -> int:
+        if column == COL_ROLE:
+            return self._role_minimum_width()
+        if column == COL_EFFECT:
+            return self._effect_minimum_width()
+        if column == COL_LANE:
+            return self._visible_column_width_hint(COL_LANE)
+        return self._content_minimum_width()
+
+    def _column_maximum_width(self, column: int) -> int:
+        """交互列上限：拖宽到内容列只剩语义下限为止，表格总宽永不超 viewport。"""
+        available = self._table.viewport().width()
+        if available <= 0:
+            return 16_777_215  # 布局未落位时不设限（QWIDGETSIZE_MAX）
+        header = self._table.horizontalHeader()
+        lane = 0 if header.isSectionHidden(COL_LANE) else header.sectionSize(COL_LANE)
+        other = COL_EFFECT if column == COL_ROLE else COL_ROLE
+        maximum = (
+            available - lane - header.sectionSize(other) - self._content_minimum_width()
+        )
+        return max(maximum, self._column_minimum_width(column))
+
+    def _update_minimum_width(self) -> int:
+        """把"各列语义下限 + 竖直滚动条"设为表格最小宽，经布局传给 splitter。"""
+        header = self._table.horizontalHeader()
+        lane = (
+            0
+            if header.isSectionHidden(COL_LANE)
+            else self._visible_column_width_hint(COL_LANE)
+        )
+        minimum = (
+            lane
+            + self._role_minimum_width()
+            + self._effect_minimum_width()
+            + self._content_minimum_width()
+            + self._table.verticalScrollBar().sizeHint().width()
+            + 2 * self._table.frameWidth()
+        )
+        self._table.setMinimumWidth(minimum)
+        return minimum
+
+    def _apply_measured_column_widths(self) -> None:
+        """Choose initial fixed-column widths from live content and viewport space.
+
+        Role/effect ideals come from visible delegate size hints. If both ideals do
+        not fit, only their space above independently measured semantic minima is
+        compressed; the content column keeps the remainder through Stretch mode.
+        When even minima cannot fit, QTableView's own horizontal scrollbar handles
+        the shortage while its viewport clips painting to the lyrics panel.
+        """
+        if self._table.rowCount() <= 0:
+            return
+        header = self._table.horizontalHeader()
+        available = self._table.viewport().width()
+        if available <= 0:
+            return
+
+        role_min = self._role_minimum_width()
+        effect_min = self._effect_minimum_width()
+        role_ideal = max(role_min, self._visible_column_width_hint(COL_ROLE))
+        effect_ideal = max(effect_min, self._visible_column_width_hint(COL_EFFECT))
+        lane_width = 0 if header.isSectionHidden(COL_LANE) else header.sectionSize(COL_LANE)
+        content_min = self._column_minimum_width(COL_CONTENT)
+        budget = max(available - lane_width - content_min, 0)
+
+        role_width, effect_width = role_ideal, effect_ideal
+        minimum_total = role_min + effect_min
+        ideal_total = role_ideal + effect_ideal
+        if minimum_total < ideal_total and budget < ideal_total:
+            distributable = max(budget - minimum_total, 0)
+            extra_total = ideal_total - minimum_total
+            role_width = role_min + round(
+                distributable * (role_ideal - role_min) / extra_total
+            )
+            effect_width = effect_min + round(
+                distributable * (effect_ideal - effect_min) / extra_total
+            )
+
+        self._setting_column_widths = True
+        try:
+            if COL_ROLE not in self._user_sized_columns:
+                header.resizeSection(COL_ROLE, role_width)
+            if COL_EFFECT not in self._user_sized_columns:
+                header.resizeSection(COL_EFFECT, effect_width)
+        finally:
+            self._setting_column_widths = False
+
+    def _on_column_resized(self, column: int, _old: int, new: int) -> None:
+        """交互列双向钳制：下限是语义最小宽，上限是 viewport 预算。
+
+        上限保证拖宽角色 / 特效时内容列最多缩到自己的语义下限就顶住，
+        表格总宽从不超过 viewport——内容列不可能被推到右侧属性面板后面。
+        """
+        if self._setting_column_widths or column not in (COL_ROLE, COL_EFFECT):
+            return
+        self._user_sized_columns.add(column)
+        clamped = min(
+            max(new, self._column_minimum_width(column)),
+            self._column_maximum_width(column),
+        )
+        if clamped == new:
+            return
+        self._setting_column_widths = True
+        try:
+            self._table.horizontalHeader().resizeSection(column, clamped)
+        finally:
+            self._setting_column_widths = False
+
+    def _clamp_columns_to_viewport(self) -> None:
+        """面板变窄后按"先压特效、再压角色"回收超预算宽度，保住内容列下限。"""
+        if self._table.rowCount() <= 0:
+            return
+        available = self._table.viewport().width()
+        if available <= 0:
+            return
+        header = self._table.horizontalHeader()
+        lane = 0 if header.isSectionHidden(COL_LANE) else header.sectionSize(COL_LANE)
+        budget = available - lane - self._content_minimum_width()
+        overflow = (
+            header.sectionSize(COL_ROLE) + header.sectionSize(COL_EFFECT) - budget
+        )
+        for column in (COL_EFFECT, COL_ROLE):
+            if overflow <= 0:
+                return
+            width = header.sectionSize(column)
+            take = min(overflow, max(width - self._column_minimum_width(column), 0))
+            if take <= 0:
+                continue
+            self._setting_column_widths = True
+            try:
+                header.resizeSection(column, width - take)
+            finally:
+                self._setting_column_widths = False
+            overflow -= take
+
+    def eventFilter(self, obj, event):  # noqa: N802 - Qt API
+        if obj is self._table.viewport() and event.type() == QEvent.Type.Resize:
+            # 自动列跟随新宽度重测；用户手调列不重测，但重新钳制，
+            # 变宽时把多出的空间自然还给 Stretch 的内容列。
+            self._apply_measured_column_widths()
+            self._clamp_columns_to_viewport()
+        return super().eventFilter(obj, event)
+
+    def changeEvent(self, event: QEvent) -> None:  # noqa: N802 - Qt API
+        super().changeEvent(event)
+        if not hasattr(self, "_table") or not hasattr(self, "_setting_column_widths"):
+            return
+        if event.type() in (
+            QEvent.Type.FontChange,
+            QEvent.Type.ApplicationFontChange,
+            QEvent.Type.StyleChange,
+        ):
+            # Re-measure with the new font/style. User-selected widths remain unless
+            # the new semantic minimum requires clamping.
+            self._update_minimum_width()
+            self._apply_measured_column_widths()
+            header = self._table.horizontalHeader()
+            for column in (COL_ROLE, COL_EFFECT):
+                minimum = self._column_minimum_width(column)
+                if header.sectionSize(column) < minimum:
+                    self._setting_column_widths = True
+                    try:
+                        header.resizeSection(column, minimum)
+                    finally:
+                        self._setting_column_widths = False
+            self._clamp_columns_to_viewport()
 
     def _lane_count(self) -> int:
         """多行显示的默认行数（与渲染端 lane 分配一致）。"""
@@ -735,6 +998,8 @@ class LyricsPanel(DropPanel):
                     )
         finally:
             self._table.blockSignals(False)
+        # 轨列显隐 / 特效摘要变化都会改变各列语义下限 → 重算表格最小宽
+        self._update_minimum_width()
         # 组底色由委托绘制，Style 变化后要触发一次重绘
         self._table.viewport().update()
 

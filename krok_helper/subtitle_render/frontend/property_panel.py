@@ -54,7 +54,7 @@ from qfluentwidgets import (
     PrimaryPushButton as FluentPrimaryPushButton,
     PushButton as FluentPushButton,
     ScrollArea as FluentScrollArea,
-    SegmentedToggleToolWidget,
+    SegmentedWidget,
     SpinBox as FluentSpinBox,
     TransparentToolButton as FluentTransparentToolButton,
 )
@@ -1208,11 +1208,11 @@ class PropertyPanel(QWidget):
     """字体 / 布局 / 特效 / 标题属性面板。"""
 
     _PAGE_SPECS = (
-        ("font", FIF.FONT, "字体"),
-        ("layout", FIF.LAYOUT, "布局"),
-        ("timing", FIF.DATE_TIME, "时间"),
-        ("effects", FIF.BRUSH, "特效"),
-        ("title", FIF.LABEL, "标题"),
+        ("font", "字体"),
+        ("layout", "布局"),
+        ("timing", "时间"),
+        ("effects", "特效"),
+        ("title", "标题"),
     )
 
     styleChanged = Signal(Style)
@@ -1246,7 +1246,7 @@ class PropertyPanel(QWidget):
         navigation_layout.setContentsMargins(8, 4, 8, 4)
         navigation_layout.setSpacing(0)
 
-        self._navigation = SegmentedToggleToolWidget(navigation_row)
+        self._navigation = SegmentedWidget(navigation_row)
         self._navigation.setObjectName("PropertyNavigation")
         self._navigation.setAccessibleName("字幕属性分类")
         self._navigation.currentItemChanged.connect(self._on_navigation_changed)
@@ -1278,8 +1278,8 @@ class PropertyPanel(QWidget):
             self._make_effects_page(),
             self._make_title_page(),
         )
-        for page, (route_key, icon, label) in zip(pages, self._PAGE_SPECS):
-            self._add_navigation_page(page, route_key, icon, label)
+        for page, (route_key, label) in zip(pages, self._PAGE_SPECS):
+            self._add_navigation_page(page, route_key, label)
         self.setCurrentIndex(0)
         self.set_roles([])
         self.set_style(self._style, emit=False)
@@ -1288,22 +1288,20 @@ class PropertyPanel(QWidget):
         self,
         page: QWidget,
         route_key: str,
-        icon: FIF,
         label: str,
     ) -> None:
         self._pages.append(page)
         self._stack.addWidget(page)
         self._navigation.addItem(
             route_key,
-            icon,
+            label,
         )
         item = self._navigation.widget(route_key)
-        item.setToolTip(label)
         item.setAccessibleName(label)
         page.setAccessibleName(label)
 
     def _on_navigation_changed(self, route_key: str) -> None:
-        for index, (candidate, _icon, _label) in enumerate(self._PAGE_SPECS):
+        for index, (candidate, _label) in enumerate(self._PAGE_SPECS):
             if candidate == route_key:
                 self._stack.setCurrentIndex(index)
                 return

@@ -8,7 +8,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint  # noqa: E402
+from PyQt6.QtCore import QPoint, Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu  # noqa: E402
 from qfluentwidgets.components.widgets.menu import MenuAnimationType  # noqa: E402
@@ -269,3 +269,129 @@ def test_lyrics_table_shows_global_and_overridden_line_effects(qapp):
     assert panel.table_widget.horizontalHeaderItem(lyrics_list.COL_EFFECT).text() == "特效"
     assert panel.table_widget.item(0, lyrics_list.COL_EFFECT).text() == "全局：淡入 / 淡出"
     assert panel.table_widget.item(1, lyrics_list.COL_EFFECT).text() == "滑入 / 无"
+
+
+def test_lyrics_table_uses_measured_fixed_columns_and_elastic_content(qapp):
+    panel = lyrics_list.LyricsPanel()
+    panel.resize(900, 480)
+    panel.show()
+    panel.set_style(Style(entry_anim="fade", exit_anim="fade"))
+    panel.set_track(
+        TimingTrack(
+            lines=[
+                TimingLine(
+                    chars=[TimingChar("一段用于测量的歌词内容", 1000)],
+                    end_ms=2000,
+                )
+            ]
+        )
+    )
+    qapp.processEvents()
+
+    header = panel.table_widget.horizontalHeader()
+    assert header.sectionResizeMode(lyrics_list.COL_LANE) == (
+        lyrics_list.QHeaderView.ResizeMode.ResizeToContents
+    )
+    assert header.sectionResizeMode(lyrics_list.COL_ROLE) == (
+        lyrics_list.QHeaderView.ResizeMode.Interactive
+    )
+    assert header.sectionResizeMode(lyrics_list.COL_EFFECT) == (
+        lyrics_list.QHeaderView.ResizeMode.Interactive
+    )
+    assert header.sectionResizeMode(lyrics_list.COL_CONTENT) == (
+        lyrics_list.QHeaderView.ResizeMode.Stretch
+    )
+
+    content_before = header.sectionSize(lyrics_list.COL_CONTENT)
+    role_before = header.sectionSize(lyrics_list.COL_ROLE)
+    delta = max(panel.fontMetrics().horizontalAdvance("宽"), 1)
+    header.resizeSection(lyrics_list.COL_ROLE, role_before + delta)
+    qapp.processEvents()
+
+    assert header.sectionSize(lyrics_list.COL_ROLE) == role_before + delta
+    assert header.sectionSize(lyrics_list.COL_CONTENT) == content_before - delta
+    assert header.length() == panel.table_widget.viewport().width()
+
+    role_after_drag = header.sectionSize(lyrics_list.COL_ROLE)
+    effect_after_drag = header.sectionSize(lyrics_list.COL_EFFECT)
+    content_after_drag = header.sectionSize(lyrics_list.COL_CONTENT)
+    viewport_before_resize = panel.table_widget.viewport().width()
+    panel.resize(panel.width() + delta * 3, panel.height())
+    qapp.processEvents()
+    viewport_growth = panel.table_widget.viewport().width() - viewport_before_resize
+
+    assert header.sectionSize(lyrics_list.COL_ROLE) == role_after_drag
+    assert header.sectionSize(lyrics_list.COL_EFFECT) == effect_after_drag
+    assert header.sectionSize(lyrics_list.COL_CONTENT) == (
+        content_after_drag + viewport_growth
+    )
+    panel.close()
+    panel.deleteLater()
+    qapp.processEvents()
+
+
+def test_lyrics_table_effect_column_uses_measured_semantic_minimum(qapp):
+    panel = lyrics_list.LyricsPanel()
+    panel.resize(900, 480)
+    panel.show()
+    panel.set_style(Style(entry_anim="fade", exit_anim="fade"))
+    panel.set_track(
+        TimingTrack(
+            lines=[TimingLine(chars=[TimingChar("歌词", 1000)], end_ms=2000)]
+        )
+    )
+    qapp.processEvents()
+
+    header = panel.table_widget.horizontalHeader()
+    measured_minimum = panel._effect_minimum_width()
+    header.resizeSection(lyrics_list.COL_EFFECT, 1)
+    qapp.processEvents()
+
+    assert measured_minimum > header.sectionSizeHint(lyrics_list.COL_EFFECT)
+    assert header.sectionSize(lyrics_list.COL_EFFECT) == measured_minimum
+    panel.close()
+    panel.deleteLater()
+    qapp.processEvents()
+
+
+def test_lyrics_table_clamps_columns_to_viewport_and_exposes_minimum_width(qapp):
+    """列宽双向钳制：拖不出 viewport、面板缩窄自动回收、最小宽传给 splitter。"""
+    panel = lyrics_list.LyricsPanel()
+    panel.resize(900, 480)
+    panel.show()
+    panel.set_style(Style(entry_anim="fade", exit_anim="fade"))
+    panel.set_track(
+        TimingTrack(
+            lines=[
+                TimingLine(
+                    chars=[TimingChar("一段用于测量的歌词内容", 1000)],
+                    end_ms=2000,
+                )
+            ]
+        )
+    )
+    qapp.processEvents()
+
+    table = panel.table_widget
+    header = table.horizontalHeader()
+    # 横向滚动被禁用：列宽预算保证总宽 == viewport，不存在"滚出去"的内容
+    assert table.horizontalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+    # 各列语义下限之和成为表格最小宽，并经布局上传为面板的最小尺寸
+    assert table.minimumWidth() > 0
+    assert panel.minimumSizeHint().width() >= table.minimumWidth()
+
+    # 特效列拖到再宽，内容列也最多缩到语义下限，总宽不超 viewport
+    content_min = panel._content_minimum_width()
+    header.resizeSection(lyrics_list.COL_EFFECT, 10_000)
+    qapp.processEvents()
+    assert header.length() == table.viewport().width()
+    assert header.sectionSize(lyrics_list.COL_CONTENT) >= content_min
+
+    # 面板缩窄后回收特效 / 角色列宽度，内容列仍保住下限
+    panel.resize(table.minimumWidth() + 40, panel.height())
+    qapp.processEvents()
+    assert header.length() == table.viewport().width()
+    assert header.sectionSize(lyrics_list.COL_CONTENT) >= content_min
+    panel.close()
+    panel.deleteLater()
+    qapp.processEvents()

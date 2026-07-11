@@ -25,7 +25,7 @@ from qfluentwidgets import (  # noqa: E402
     PlainTextEdit,
     PushButton,
     ScrollArea,
-    SegmentedToggleToolWidget,
+    SegmentedWidget,
     SpinBox,
 )
 
@@ -503,23 +503,22 @@ def test_property_panel_basic_page_has_no_screen_section(qapp):
     assert timing_titles == ["时间"]
 
 
-def test_property_panel_uses_horizontal_icon_tabs_in_expected_order(qapp):
+def test_property_panel_uses_horizontal_text_tabs_in_expected_order(qapp):
     panel = PropertyPanel()
 
-    assert isinstance(panel._navigation, SegmentedToggleToolWidget)
+    assert isinstance(panel._navigation, SegmentedWidget)
     assert panel.count() == 5
-    assert [spec[2] for spec in panel._PAGE_SPECS] == ["字体", "布局", "时间", "特效", "标题"]
-    for route_key, _icon, label in panel._PAGE_SPECS:
+    assert [spec[1] for spec in panel._PAGE_SPECS] == ["字体", "布局", "时间", "特效", "标题"]
+    for route_key, label in panel._PAGE_SPECS:
         item = panel._navigation.widget(route_key)
-        assert not item.icon().isNull()
-        assert item.toolTip() == label
-        assert item.height() == 32
+        assert item.text() == label
+        assert item.accessibleName() == label
 
     panel.setCurrentIndex(3)
     assert panel.currentIndex() == 3
     assert panel._navigation.currentRouteKey() == "effects"
 
-    for expected_index, (route_key, _icon, _label) in enumerate(panel._PAGE_SPECS):
+    for expected_index, (route_key, _label) in enumerate(panel._PAGE_SPECS):
         panel._navigation.widget(route_key).click()
         qapp.processEvents()
         assert panel.currentIndex() == expected_index
@@ -1675,6 +1674,7 @@ def test_main_window_preview_tab_uses_two_top_regions_and_bottom_timeline(qapp):
     assert win._preview_splitter.count() == 2
     assert win._preview_splitter.widget(0) is win._lyrics_panel
     assert win._preview_splitter.widget(1) is win._video_settings_panel
+    assert win._lyrics_panel.geometry().right() < win._video_settings_panel.geometry().left()
     assert left_width >= 320
     assert right_width >= win._property_panel.minimumWidth()
     assert win._transport_bar.parentWidget() is win._preview_window
