@@ -162,9 +162,19 @@ git push origin vX.Y.Z[.N]
 
 触发 [`release.yml`](../.github/workflows/release.yml)：
 
-- **Build Windows**：跑 `scripts\build_windows.bat`，产出 `dist\windows\KaraokeStudio-windows.zip` + `KaraokeStudio-windows.zip.sha256`。
-- **Build macOS**：跑 `scripts/build_macos.command` 后用 `ditto` 打包成 `KaraokeStudio-macos.zip`。
-- **Publish Release**：把三个文件上传到 GitHub Release（仅 tag 推送时执行）。
+- **Build Windows**：先从上一版 release 下载 `KaraokeStudio-windows.json` + `-runtime.zip` 到 `dist\windows\prev\`（首次分包发布时自动跳过），再跑 `scripts\build_windows.bat`（末尾调用 [`scripts/build_parts.py`](../scripts/build_parts.py)），产出 **7 个 Windows 资产**：
+
+  | 资产 | 作用 |
+  |---|---|
+  | `KaraokeStudio-windows.zip` (+`.sha256`) | 全量包（含出厂 `_internal/.installed_manifest.json`），旧客户端全量兜底路径 |
+  | `KaraokeStudio-windows.json` | 增量清单（schema=1）。**文件名不可改**：存量客户端按 `zip 名 → .json` 派生 |
+  | `KaraokeStudio-windows-app.zip` (+`.sha256`) | EXE + Updater + `_internal/{krok_helper,strange_uta_game}`，每版必变（约 35 MB） |
+  | `KaraokeStudio-windows-runtime.zip` (+`.sha256`) | 其余 `_internal/`，依赖未变时跨版本复用同一文件（约 60 MB） |
+
+- **Build macOS**：跑 `scripts/build_macos.command` 后用 `ditto` 打包成 `KaraokeStudio-macos.zip`（无增量）。
+- **Publish Release**：把全部文件上传到 GitHub Release（仅 tag 推送时执行）。
+
+**发布不变量（违反任何一条都会甩掉存量客户端）**：全量 zip / part / manifest 资产名不可改；`Karaoke Studio.exe` 与 onedir 布局不可改名/改结构；tag 保持 `vX.Y.Z[.N]`；runtime 依赖未变时必须复用上一版 zip 原文件（CI 已内置 `--require-runtime-reuse` 安全闸，重打会改变内容哈希令全部老用户重下 runtime）。
 
 3 个 job 必须全绿才会创建 release。监控：
 
@@ -196,11 +206,14 @@ gh release view vX.Y.Z[.N] --json body --jq .body   # 验证一下
 从旧版安装目录启动应用：
 
 1. 打开全局设置 → 「应用更新」，关于页应显示旧版本号。
-2. 点「检查更新」，弹窗应显示 §8 覆盖好的中文 release notes。
-3. 点「立即更新」，`Updater.exe` 会下载 zip → 替换 `Karaoke Studio.exe` 和 `_internal\` → 重启应用。
+2. 点「检查更新」，弹窗应显示 §8 覆盖好的中文 release notes（跨版本升级时聚合展示中间所有版本）。
+3. 点「立即更新」，`Updater.exe` 接管：
+   - 本地有 `.installed_manifest.json` 且仅 app part 变化 → 只下载 `-app.zip`（约 35 MB）；
+   - 本地无清单（首次增量）→ 下载 app + runtime 两个 part 并写入清单；
+   - manifest 拉取失败 → 自动回退全量 zip。
 4. 重启后关于页应显示新版本号。
 
-日志：`$env:TEMP\KaraokeStudioUpdater\updater.log`。
+日志：`$env:TEMP\KaraokeStudioUpdater\updater.log`（开头会标明走了「增量路径」还是「全量路径」）。
 
 ---
 
@@ -228,8 +241,13 @@ gh release view vX.Y.Z[.N] --json body --jq .body   # 验证一下
 CI 不可用或要离线验证时：
 
 ```powershell
+# 若要保持 runtime 复用（强烈建议），先把上一版 release 的
+# KaraokeStudio-windows.json 与 -runtime.zip 下载到 dist\windows\prev\：
+gh release download --pattern "KaraokeStudio-windows.json" --dir dist\windows\prev
+gh release download --pattern "KaraokeStudio-windows-runtime.zip" --dir dist\windows\prev
+
 scripts\build_windows.bat
-# 产出 dist\windows\KaraokeStudio-windows.zip + .sha256
+# 产出 dist\windows\ 下全部 7 个资产（见 §7 表格）
 ```
 
 macOS：
@@ -245,5 +263,10 @@ cd dist/macos && ditto -c -k --sequesterRsrc --keepParent "Karaoke Studio.app" "
 gh release upload vX.Y.Z[.N] `
   dist\windows\KaraokeStudio-windows.zip `
   dist\windows\KaraokeStudio-windows.zip.sha256 `
+  dist\windows\KaraokeStudio-windows.json `
+  dist\windows\KaraokeStudio-windows-app.zip `
+  dist\windows\KaraokeStudio-windows-app.zip.sha256 `
+  dist\windows\KaraokeStudio-windows-runtime.zip `
+  dist\windows\KaraokeStudio-windows-runtime.zip.sha256 `
   KaraokeStudio-macos.zip
 ```

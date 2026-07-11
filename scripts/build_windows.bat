@@ -264,22 +264,15 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo Creating Windows update archive...
-powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-    "$distRoot = (Resolve-Path '%DIST_PATH%').Path;" ^
-    "$packageDir = (Resolve-Path '%APP_DIST%').Path;" ^
-    "$zipPath = Join-Path $distRoot 'KaraokeStudio-windows.zip';" ^
-    "$shaPath = $zipPath + '.sha256';" ^
-    "if (Test-Path $zipPath) { Remove-Item -LiteralPath $zipPath -Force };" ^
-    "if (Test-Path $shaPath) { Remove-Item -LiteralPath $shaPath -Force };" ^
-    "Compress-Archive -LiteralPath $packageDir -DestinationPath $zipPath -CompressionLevel Optimal;" ^
-    "$hash = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant();" ^
-    "Set-Content -LiteralPath $shaPath -Value ($hash + '  KaraokeStudio-windows.zip') -Encoding ascii;" ^
-    "Write-Host ('Update archive: ' + $zipPath);" ^
-    "Write-Host ('SHA-256:        ' + $shaPath)"
+echo Creating update archives (full zip + incremental parts + manifest)...
+if defined IS_CI (
+    %PYTHON_BIN% scripts\build_parts.py --require-runtime-reuse
+) else (
+    %PYTHON_BIN% scripts\build_parts.py
+)
 if errorlevel 1 (
     echo.
-    echo Failed to create update archive.
+    echo Failed to create update archives.
     if not defined IS_CI pause
     exit /b 1
 )

@@ -31,6 +31,25 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pyinstaller PySide6
 
+      # 增量更新的 runtime 复用基准：依赖未变时必须复用上一版 release 的
+      # runtime zip 原文件（CI 重打会改变内容哈希，令全部老用户重下 runtime）。
+      # 上一版没有 manifest 资产（首次分包发布）时静默跳过；有 manifest 但
+      # runtime zip 下载失败则让任务失败，避免静默重打。
+      - name: Fetch previous release runtime for reuse
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          New-Item -ItemType Directory -Force dist\windows\prev | Out-Null
+          $assets = gh release view --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name'
+          if ($LASTEXITCODE -ne 0) { Write-Host 'No previous release found; building runtime fresh.'; exit 0 }
+          if (-not ($assets -contains 'KaraokeStudio-windows.json')) { Write-Host 'Previous release has no manifest; building runtime fresh.'; exit 0 }
+          gh release download --repo $env:GITHUB_REPOSITORY --pattern 'KaraokeStudio-windows.json' --dir dist\windows\prev
+          if ($LASTEXITCODE -ne 0) { Write-Error 'Failed to download previous manifest.'; exit 1 }
+          gh release download --repo $env:GITHUB_REPOSITORY --pattern 'KaraokeStudio-windows-runtime.zip' --dir dist\windows\prev
+          if ($LASTEXITCODE -ne 0) { Write-Error 'Failed to download previous runtime zip.'; exit 1 }
+          Write-Host 'Previous manifest + runtime zip ready for reuse check.'
+
       - name: Build Windows package
         shell: cmd
         env:
@@ -44,6 +63,11 @@ jobs:
           path: |
             dist/windows/KaraokeStudio-windows.zip
             dist/windows/KaraokeStudio-windows.zip.sha256
+            dist/windows/KaraokeStudio-windows.json
+            dist/windows/KaraokeStudio-windows-app.zip
+            dist/windows/KaraokeStudio-windows-app.zip.sha256
+            dist/windows/KaraokeStudio-windows-runtime.zip
+            dist/windows/KaraokeStudio-windows-runtime.zip.sha256
 
   build-macos:
     name: Build macOS
@@ -107,4 +131,9 @@ jobs:
           files: |
             release-assets/windows/KaraokeStudio-windows.zip
             release-assets/windows/KaraokeStudio-windows.zip.sha256
+            release-assets/windows/KaraokeStudio-windows.json
+            release-assets/windows/KaraokeStudio-windows-app.zip
+            release-assets/windows/KaraokeStudio-windows-app.zip.sha256
+            release-assets/windows/KaraokeStudio-windows-runtime.zip
+            release-assets/windows/KaraokeStudio-windows-runtime.zip.sha256
             release-assets/macos/KaraokeStudio-macos.zip
