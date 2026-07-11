@@ -256,6 +256,7 @@ class WorkbenchUpdateDialog(QDialog):
         *,
         local_version: str,
         source_label: str = "",
+        all_releases: list | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -264,9 +265,27 @@ class WorkbenchUpdateDialog(QDialog):
         self.setWindowTitle(APP_TITLE)
         self.setModal(True)
         self.setMinimumSize(720, 560)
-        self._build_ui(release, local_version, source_label)
+        self._build_ui(release, local_version, source_label, all_releases or [])
 
-    def _build_ui(self, release, local_version: str, source_label: str) -> None:
+    @staticmethod
+    def _compose_changelog(release, all_releases: list) -> tuple[str, int]:
+        """聚合跨版本更新日志。
+
+        返回 ``(markdown 文本, 版本数)``；只有 1 个版本时保持原样输出该版本 body。
+        """
+        releases = list(all_releases)
+        if len(releases) <= 1:
+            single = releases[0] if releases else release
+            return (getattr(single, "body", "") or "").strip(), 1
+        sections: list[str] = []
+        for item in releases:
+            date = (getattr(item, "published_at", "") or "")[:10]
+            heading = f"## v{item.version}" + (f"（{date}）" if date else "")
+            body = (getattr(item, "body", "") or "").strip() or "（该版本没有填写发布说明）"
+            sections.append(f"{heading}\n\n{body}")
+        return "\n\n---\n\n".join(sections), len(releases)
+
+    def _build_ui(self, release, local_version: str, source_label: str, all_releases: list) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(28, 26, 28, 22)
         layout.setSpacing(14)
@@ -288,7 +307,12 @@ class WorkbenchUpdateDialog(QDialog):
         meta.setWordWrap(True)
         layout.addWidget(meta)
 
-        content_label = QLabel("更新内容：")
+        body_text, release_count = self._compose_changelog(release, all_releases)
+        content_label = QLabel(
+            f"更新内容（当前版本之后共 {release_count} 个版本）："
+            if release_count > 1
+            else "更新内容："
+        )
         content_label.setStyleSheet('font-family: "Microsoft YaHei UI"; font-size: 10.5pt; color: #111827;')
         layout.addWidget(content_label)
 
@@ -309,7 +333,6 @@ class WorkbenchUpdateDialog(QDialog):
             }
             """
         )
-        body_text = (getattr(release, "body", "") or "").strip()
         if body_text:
             try:
                 body_view.setMarkdown(body_text)
@@ -6692,6 +6715,7 @@ class KrokHelperQtApp(QMainWindow):
             release,
             local_version=APP_VERSION,
             source_label=source_label,
+            all_releases=result.all_releases,
             parent=self,
         )
         dialog.exec()
