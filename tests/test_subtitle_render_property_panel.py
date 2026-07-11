@@ -27,6 +27,7 @@ from qfluentwidgets import (  # noqa: E402
     ScrollArea,
     SegmentedWidget,
     SpinBox,
+    TransparentToolButton,
 )
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
@@ -81,7 +82,11 @@ def test_property_panel_uses_fluent_form_controls(qapp):
     assert isinstance(panel._paint_image_path_edit, LineEdit)
     assert isinstance(panel._title_text_edit, PlainTextEdit)
     assert isinstance(panel._pages[0], ScrollArea)
-    assert isinstance(panel._add_scheme_button, PushButton)
+    # 角色卡片的四个操作收成单行紧凑图标按钮（下拉框吸收剩余宽度）
+    assert isinstance(panel._add_scheme_button, TransparentToolButton)
+    assert isinstance(panel._rename_role_button, TransparentToolButton)
+    assert isinstance(panel._delete_role_button, TransparentToolButton)
+    assert isinstance(panel._manage_presets_button, TransparentToolButton)
     assert isinstance(panel._add_layout_btn, PushButton)
 
 
@@ -2029,3 +2034,77 @@ def test_scheme_section_headers_show_role_target(qapp):
 
     panel._singer_combo.setCurrentIndex(0)  # 回全局默认
     assert panel._font_color_section.header.text() == "颜色 / 字体"
+
+
+def test_scheme_section_header_shows_current_role_when_collapsed(qapp):
+    """角色卡片折叠后标题栏保留当前角色摘要，展开时隐藏。"""
+    panel = PropertyPanel()
+    panel.show()
+    qapp.processEvents()
+    section = panel._scheme_section
+
+    # 角色区默认折叠 → 摘要直接可见；展开后隐藏（正文自身可见，不重复）
+    assert section._summary_label.isVisible()
+    assert section._summary_label.text() == panel._singer_combo.currentText()
+
+    section.set_expanded(True)
+    assert not section._summary_label.isVisible()
+
+    section.set_expanded(False)
+    assert section._summary_label.isVisible()
+
+    panel.set_roles(["主唱A"])
+    for i in range(panel._singer_combo.count()):
+        if "主唱A" in str(panel._singer_combo.itemText(i)):
+            panel._singer_combo.setCurrentIndex(i)
+            break
+    assert section._summary_label.text() == panel._singer_combo.currentText()
+
+    section.set_expanded(True)
+    assert not section._summary_label.isVisible()
+    panel.close()
+    panel.deleteLater()
+    qapp.processEvents()
+
+
+def test_preview_splitter_defaults_to_4_6_and_remembers_dragged_ratio(qapp, monkeypatch):
+    monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
+    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+
+    class FakeSettingsProvider:
+        def __init__(self):
+            self.data = {}
+
+        def load(self):
+            return dict(self.data)
+
+        def save(self, data):
+            self.data = dict(data)
+
+    provider = FakeSettingsProvider()
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    win.resize(1600, 900)
+    win.show()
+    qapp.processEvents()
+
+    left, right = win._preview_splitter.sizes()
+    assert left / (left + right) == pytest.approx(0.4, abs=0.03)
+
+    # 模拟拖动 splitter 到 55%，比例应被记忆并在下次构建时恢复
+    total = left + right
+    win._preview_splitter.setSizes([round(total * 0.55), round(total * 0.45)])
+    win._on_preview_splitter_moved(0, 1)
+    win._save_persisted_state()
+    assert provider.data["preview_splitter_ratio"] == pytest.approx(0.55, abs=0.02)
+
+    win2 = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    win2.resize(1600, 900)
+    win2.show()
+    qapp.processEvents()
+    left2, right2 = win2._preview_splitter.sizes()
+    assert left2 / (left2 + right2) == pytest.approx(0.55, abs=0.03)
+    win.close()
+    win2.close()
+    win.deleteLater()
+    win2.deleteLater()
+    qapp.processEvents()

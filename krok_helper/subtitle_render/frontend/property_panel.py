@@ -433,6 +433,17 @@ class CollapsibleSection(QFrame):
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(0)
         header_layout.addWidget(self._header, 0)
+        # 折叠摘要：内容收起后把关键状态（如当前角色名）留在标题栏。
+        # 展开时隐藏——正文自身可见，标题栏不重复。
+        self._summary_text = ""
+        self._summary_label = QLabel(header_row)
+        self._summary_label.setObjectName("SubtitlePropertySectionSummary")
+        self._summary_label.setVisible(False)
+        themed(
+            self._summary_label,
+            lambda: f"color: {palette().text_secondary}; font-size: 9.5pt;",
+        )
+        header_layout.addWidget(self._summary_label, 0, Qt.AlignmentFlag.AlignVCenter)
         header_layout.addStretch(1)
 
         self.header_switch: Optional[ToggleSwitch] = None
@@ -463,9 +474,22 @@ class CollapsibleSection(QFrame):
             Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
         )
         self._content.setVisible(expanded)
+        self._refresh_summary()
 
     def is_expanded(self) -> bool:
         return self._content.isVisible()
+
+    def set_collapsed_summary(self, text: str) -> None:
+        """设置折叠态显示在标题栏的摘要文本；空串表示无摘要。"""
+        self._summary_text = str(text)
+        self._refresh_summary()
+
+    def _refresh_summary(self) -> None:
+        # 用 header 的 checked 态判断展开与否——widget 未 show 前
+        # isVisible() 恒为 False，不能作为展开依据。
+        collapsed = not self._header.isChecked()
+        self._summary_label.setText(self._summary_text)
+        self._summary_label.setVisible(collapsed and bool(self._summary_text))
 
 
 class _ClickableRow(QWidget):
@@ -1928,34 +1952,46 @@ class PropertyPanel(QWidget):
 
     def _make_scheme_section(self) -> QFrame:
         section, layout = _section("角色")
+        self._scheme_section = section
 
+        # 单行排布：角色下拉吸收剩余宽度，四个操作收成紧凑图标按钮。
         # 内部仍叫 _singer_combo（少改动），但现在装的是「角色」：全局默认 + 各角色名。
+        row = QWidget(section)
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
         self._singer_combo = _WheelFocusedComboBox(section)
         _compact_control(self._singer_combo)
         self._singer_combo.currentIndexChanged.connect(self._on_scheme_combo_changed)
-        layout.addWidget(_field("当前角色", self._singer_combo))
+        row_layout.addWidget(self._singer_combo, 1)
 
-        btn_row = QWidget(section)
-        btn_layout = QHBoxLayout(btn_row)
-        btn_layout.setContentsMargins(0, 0, 0, 0)
-        btn_layout.setSpacing(6)
-        self._add_scheme_button = FluentPushButton("新建角色", section)
-        self._add_scheme_button.setMinimumHeight(30)
+        self._add_scheme_button = FluentTransparentToolButton(FIF.ADD, section)
+        self._add_scheme_button.setToolTip("新建角色")
         self._add_scheme_button.clicked.connect(lambda _checked=False: self._add_custom_scheme())
-        self._rename_role_button = FluentPushButton("重命名", section)
-        self._rename_role_button.setMinimumHeight(30)
+        self._rename_role_button = FluentTransparentToolButton(FIF.EDIT, section)
+        self._rename_role_button.setToolTip("重命名当前角色")
         self._rename_role_button.clicked.connect(lambda _checked=False: self._rename_current_role())
-        self._delete_role_button = FluentPushButton("删除", section)
-        self._delete_role_button.setMinimumHeight(30)
+        self._delete_role_button = FluentTransparentToolButton(FIF.DELETE, section)
+        self._delete_role_button.setToolTip("删除当前角色")
         self._delete_role_button.clicked.connect(lambda _checked=False: self._delete_current_role())
-        for btn in (self._add_scheme_button, self._rename_role_button, self._delete_role_button):
-            btn_layout.addWidget(btn, 1)
-        layout.addWidget(btn_row)
-
-        self._manage_presets_button = FluentPushButton("管理预设", section)
-        self._manage_presets_button.setMinimumHeight(30)
+        self._manage_presets_button = FluentTransparentToolButton(FIF.PALETTE, section)
+        self._manage_presets_button.setToolTip("管理预设")
         self._manage_presets_button.clicked.connect(lambda _checked=False: self._open_preset_manager())
-        layout.addWidget(self._manage_presets_button)
+        for btn in (
+            self._add_scheme_button,
+            self._rename_role_button,
+            self._delete_role_button,
+            self._manage_presets_button,
+        ):
+            btn.setFixedSize(30, 30)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            # 图标按钮无文字，可访问名沿用中文提示
+            btn.setAccessibleName(btn.toolTip())
+            row_layout.addWidget(btn, 0)
+        layout.addWidget(_field("当前角色", row))
+
+        # 折叠后标题栏保留当前角色摘要（此卡片是面板的高频信息源）
+        self._singer_combo.currentTextChanged.connect(section.set_collapsed_summary)
         return section
 
     def _make_effects_page(self) -> QWidget:

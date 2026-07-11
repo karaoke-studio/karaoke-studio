@@ -716,6 +716,13 @@ class SubtitleRenderWindow(QWidget):
         self._margin_check_timer.setInterval(400)
         self._margin_check_timer.timeout.connect(self._check_layout_margins)
         self._last_margin_warning_key = ""
+        # 歌词 / 属性面板分割比例：默认 4:6，用户拖动后记忆。拖动过程中
+        # splitterMoved 连续触发，用单发定时器合并成一次落盘。
+        self._preview_splitter_ratio = 0.4
+        self._splitter_save_timer = QTimer(self)
+        self._splitter_save_timer.setSingleShot(True)
+        self._splitter_save_timer.setInterval(400)
+        self._splitter_save_timer.timeout.connect(self._save_persisted_state)
         self._load_persisted_state()
 
         themed(
@@ -1227,9 +1234,12 @@ class SubtitleRenderWindow(QWidget):
         self._video_settings_panel.set_content(self._property_panel)
         top.addWidget(self._video_settings_panel)
 
-        top.setStretchFactor(0, 1)
-        top.setStretchFactor(1, 2)
-        top.setSizes([520, max(520, self._property_panel.minimumWidth())])
+        # 不设 stretch factor：QSplitter 默认按当前尺寸比例分配新增空间，
+        # 窗口缩放时能保持用户拖出的比例。传大数值让 setSizes 按比例缩放
+        # 到实际宽度（面板各自的最小宽仍然优先）。
+        ratio = self._preview_splitter_ratio
+        top.setSizes([round(ratio * 10_000), round((1.0 - ratio) * 10_000)])
+        top.splitterMoved.connect(self._on_preview_splitter_moved)
         body.addWidget(top)
 
         # 底部：字幕轨道（波形已移除，不做波形图功能）
@@ -2248,6 +2258,18 @@ class SubtitleRenderWindow(QWidget):
         key = data.get("selected_scheme_key")
         if isinstance(key, str) and key:
             self._selected_scheme_key = key
+        ratio = data.get("preview_splitter_ratio")
+        if isinstance(ratio, (int, float)):
+            # 钳到两侧都还能正常操作的区间，坏数据回落默认 4:6
+            self._preview_splitter_ratio = min(max(float(ratio), 0.15), 0.85)
+
+    def _on_preview_splitter_moved(self, _pos: int, _index: int) -> None:
+        sizes = self._preview_splitter.sizes()
+        total = sum(sizes)
+        if total <= 0:
+            return
+        self._preview_splitter_ratio = sizes[0] / total
+        self._splitter_save_timer.start()
 
     def _save_persisted_state(self) -> None:
         data = self._load_subtitle_settings()
@@ -2255,6 +2277,7 @@ class SubtitleRenderWindow(QWidget):
         data["style_presets"] = _style_presets_to_dict(self._style_presets)
         data["screen"] = screen_settings_to_dict(self._screen_settings)
         data["selected_scheme_key"] = self._selected_scheme_key
+        data["preview_splitter_ratio"] = round(self._preview_splitter_ratio, 4)
         if hasattr(self, "_export_native_check"):
             output = dict(data.get("output")) if isinstance(data.get("output"), dict) else {}
             output["native_export_enabled"] = False
