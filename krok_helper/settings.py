@@ -96,6 +96,11 @@ class AppSettings:
     # 一次性迁移 marker（见 :func:`migrate_strange_uta_game_settings`）
     lyrics_timing_migrated_v1: bool = False
 
+    # ── 字幕视频渲染模块（subtitle_render）的设置 namespace ──
+    # 由模块内部以 dict 形式自由读写，宿主只负责整体持久化；具体字段（字体、
+    # 输出目录、硬编偏好、最近样式预设等）在模块 P0-A8 输出 MP4 时落地。
+    subtitle_render: dict = field(default_factory=dict)
+
 
 def _settings_path_for_app_name(app_name: str) -> Path:
     appdata = os.getenv("APPDATA")
@@ -242,6 +247,7 @@ def load_app_settings() -> AppSettings:
         lyrics_timing_network_dictionary=_safe_dict(payload.get("lyrics_timing_network_dictionary")),
         lyrics_timing_migrated_v1=bool(payload.get(LYRICS_TIMING_MIGRATED_KEY, False)),
         workflow_compact=bool(payload.get("workflow_compact", False)),
+        subtitle_render=_safe_dict(payload.get("subtitle_render")),
     )
 
 

@@ -75,6 +75,7 @@ from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 from qfluentwidgets.components.widgets.menu import MenuAnimationType
 from qfluentwidgets.components.widgets.table_view import TableItemDelegate
 
+from krok_helper.qfluent_compat import apply_qfluent_menu_lifetime_patch
 from krok_helper.audio_alignment import (
     DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE,
     DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE,
@@ -148,6 +149,8 @@ from krok_helper.updater.settings import UpdaterSettings
 from krok_helper.updater.sources import SOURCE_IDS, SOURCE_LABELS, normalize_order
 from krok_helper.video_download import VideoDownloadPage
 from krok_helper.windows import set_explicit_app_user_model_id
+
+apply_qfluent_menu_lifetime_patch()
 
 
 ALIGN_TARGET_VIDEO = "video"
@@ -2635,18 +2638,28 @@ class KrokHelperQtApp(QMainWindow):
                 timeline.set_zoom_enabled(True)
         except Exception:
             pass
-        # SUG 嵌入后标题栏被隐藏，但 _update_title() 仍在持续 setWindowTitle，
-        # 故监听 windowTitleChanged 把「当前 .sug 文件名 + 未保存」状态转贴到
-        # 「歌词打轴」步骤的描述行（见 _on_lyrics_timing_title_changed）。
+        # SUG embedded mode hides its title bar, but _update_title() keeps
+        # calling setWindowTitle(), so mirror the current .sug file state to
+        # the workflow description line for the lyrics timing step.
         try:
             self.lyrics_timing_page.windowTitleChanged.connect(
                 self._on_lyrics_timing_title_changed
             )
         except Exception:
             pass
-        self.subtitle_render_page = PlaceholderPage(
-            title="字幕视频生成",
-            description="将已完成时间轴和样式设置渲染为字幕视频输出。",
+
+        from krok_helper.subtitle_render import SubtitleRenderWindow
+        from krok_helper.subtitle_render.settings_bridge import (
+            KrokHelperSubtitleRenderSettingsBridge,
+        )
+
+        self.subtitle_render_settings_bridge = KrokHelperSubtitleRenderSettingsBridge(
+            self.settings, self._save_all_settings
+        )
+        self.subtitle_render_page = SubtitleRenderWindow.for_embedding(
+            parent=self.page_stack,
+            settings_provider=self.subtitle_render_settings_bridge,
+            workflow_context=self,
         )
         self.hires_page = self._build_hires_page()
         self.module_pages = {
@@ -2676,6 +2689,16 @@ class KrokHelperQtApp(QMainWindow):
             return
         previous_module = self.active_module
         if (
+            module_id == WORKFLOW_SUBTITLE_RENDER
+            and previous_module != WORKFLOW_SUBTITLE_RENDER
+            and not getattr(self, "_preparing_subtitle_render_workflow", False)
+        ):
+            self._preparing_subtitle_render_workflow = True
+            try:
+                self._prepare_subtitle_render_from_workflow()
+            finally:
+                self._preparing_subtitle_render_workflow = False
+        if (
             previous_module == WORKFLOW_WAVEFORM_ALIGN
             and module_id != WORKFLOW_WAVEFORM_ALIGN
             and getattr(self, "align_preview_process", None) is not None
@@ -2687,6 +2710,27 @@ class KrokHelperQtApp(QMainWindow):
         self.page_stack.setCurrentWidget(self.module_pages[module_id])
         self.workflow_stepper.setCurrentModule(module_id)
         self._sync_workflow_shortcut_scope()
+
+    def _prepare_subtitle_render_from_workflow(self) -> object | None:
+        store = getattr(getattr(self, "lyrics_timing_page", None), "_store", None)
+        project = getattr(store, "project", None)
+        if project is None:
+            return None
+
+        save_path = getattr(store, "save_path", None)
+        source_path = Path(save_path).expanduser() if save_path else None
+        if self.subtitle_render_page.load_from_sug_project(
+            project, source_path=source_path
+        ) is None:
+            return None
+
+        if not getattr(self, "_preparing_subtitle_render_workflow", False):
+            self._show_module(WORKFLOW_SUBTITLE_RENDER)
+        return project
+
+    def accept_subtitle_video(self, path: Path) -> None:
+        self.set_video_path(path)
+        self._show_module(WORKFLOW_HIRES_MIX)
 
     def _on_lyrics_timing_title_changed(self, title: str) -> None:
         """把 SUG 窗口标题里的项目状态镜像到「歌词打轴」步骤描述行。
@@ -2748,9 +2792,10 @@ class KrokHelperQtApp(QMainWindow):
         layout = getattr(self, "_page_stack_container_layout", None)
         if layout is None:
             return
+        flush_modules = {WORKFLOW_LYRICS_TIMING, WORKFLOW_SUBTITLE_RENDER}
         margins = (
             self._page_stack_flush_margins
-            if module_id == WORKFLOW_LYRICS_TIMING
+            if module_id in flush_modules
             else self._page_stack_normal_margins
         )
         layout.setContentsMargins(*margins)

@@ -11,6 +11,9 @@ venv/
 env/
 ENV/
 
+# Render benchmark artifacts (scripts/bench_render.py)
+.bench/
+
 # Tooling caches
 .cache/
 .mypy_cache/
@@ -20,6 +23,9 @@ ENV/
 .coverage.*
 htmlcov/
 
+# Self-improvement agent learnings (per-developer, not shared)
+.learnings/
+
 # AI coding agent session state — never commit
 # (Claude Code's worktree submodule gitlinks were accidentally
 # committed by StrangeUtaGame and removed in this PR; this rule
@@ -27,6 +33,8 @@ htmlcov/
 .claude/
 .cursor/
 .aider*
+.reverse/
+.tools/
 
 # Build artifacts
 build/
@@ -42,6 +50,12 @@ output/
 tmp-pycache/
 tmp-test/
 *.log
+
+# StrangeUtaGame runtime files generated when embedded/imported from repo root
+config.json
+dictionary.json
+ProjectBackup/
+
 docs/release-runbook.local.md
 docs/Codex启动文档-.NET8-CSharp-WinUI3重构指南.md
 docs/功能文档-当前项目与WinUI3重构参考.md
@@ -52,14 +66,4 @@ docs/1.png
 docs/2.png
 docs/3.png
 docs/4.png
-
-# SUG standalone 从仓库根运行（offscreen 冒烟/测试）时写的运行时配置
-/config.json
-/dictionary.json
-
-# 会话工作区（逆向工具、基准输出、agent 学习记录）
-.tools/
-.reverse/
-.bench/
-.learnings/
 docs/Sayatoo基本页逆向与实现计划.md

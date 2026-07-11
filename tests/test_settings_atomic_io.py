@@ -29,7 +29,11 @@ def _settings_path(tmp_path: Path) -> Path:
 
 
 def test_save_uses_atomic_replace_and_writes_complete_json(tmp_path: Path):
-    settings = AppSettings(ffmpeg_dir="D:/ffmpeg", lyrics_timing={"audio": {"default_volume": 42}})
+    settings = AppSettings(
+        ffmpeg_dir="D:/ffmpeg",
+        lyrics_timing={"audio": {"default_volume": 42}},
+        subtitle_render={"selected_scheme_key": "custom:图像方案"},
+    )
     save_app_settings(settings)
 
     target = _settings_path(tmp_path)
@@ -40,6 +44,8 @@ def test_save_uses_atomic_replace_and_writes_complete_json(tmp_path: Path):
     data = json.loads(target.read_text(encoding="utf-8"))
     assert data["ffmpeg_dir"] == "D:/ffmpeg"
     assert data["lyrics_timing"]["audio"]["default_volume"] == 42
+    assert data["subtitle_render"]["selected_scheme_key"] == "custom:图像方案"
+    assert load_app_settings().subtitle_render["selected_scheme_key"] == "custom:图像方案"
 
 
 def test_save_preserves_existing_file_when_write_fails_mid_flight(

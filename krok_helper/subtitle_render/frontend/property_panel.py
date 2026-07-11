@@ -1,0 +1,4465 @@
+"""右侧字幕属性面板。
+
+窄侧栏里不要使用横向表单布局：标签和输入框会互相挤压，尤其是
+字体选择框。这里采用工具软件常见的分组卡片 + 垂直字段，保证
+280-320px 宽度下没有横向溢出。
+"""
+
+from __future__ import annotations
+
+from copy import deepcopy
+from dataclasses import dataclass, replace
+from typing import Any, Optional
+
+from PyQt6.QtCore import QPointF, QRect, QRectF, QSize, Qt, pyqtSignal as Signal
+from PyQt6.QtGui import (
+    QColor,
+    QFont,
+    QFontDatabase,
+    QIcon,
+    QLinearGradient,
+    QPainter,
+    QPixmap,
+    QPolygonF,
+)
+from PyQt6.QtWidgets import (
+    QAbstractButton,
+    QAbstractItemView,
+    QColorDialog,
+    QDialog,
+    QFileDialog,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QSizePolicy,
+    QStackedWidget,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
+from qfluentwidgets import (
+    CaptionLabel,
+    CheckBox,
+    ComboBox as FluentComboBox,
+    FluentIcon as FIF,
+    InfoBar,
+    LineEdit as FluentLineEdit,
+    ListWidget as FluentListWidget,
+    PlainTextEdit as FluentPlainTextEdit,
+    PrimaryPushButton as FluentPrimaryPushButton,
+    PushButton as FluentPushButton,
+    ScrollArea as FluentScrollArea,
+    SegmentedToggleToolWidget,
+    SpinBox as FluentSpinBox,
+    TransparentToolButton as FluentTransparentToolButton,
+)
+
+from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
+from krok_helper.subtitle_render.models import (
+    ColorLayerKey,
+    ColorStateKey,
+    DecorationKind,
+    EntryAnimation,
+    ExitAnimation,
+    HORIZONTAL_ALIGNS,
+    HorizontalAlign,
+    KaraokeColors,
+    KaraokeColorState,
+    LineHorizontalLayout,
+    LineYPosition,
+    LYRICS_LAYOUT_FIELDS,
+    LyricsLayout,
+    PaintFill,
+    SubtitleStyleScheme,
+    Style,
+    TITLE_ANCHORS,
+    TITLE_SHOW_MODES,
+    TitleAnchor,
+    TitleOverlay,
+    TitleShowMode,
+    VIEWPORT_ALIGNS,
+    ViewportAlign,
+)
+
+_SCHEME_FIELDS = {
+    "font_family",
+    "font_family_latin",
+    "font_size_px",
+    "letter_spacing_px",
+    "space_width_percent",
+    "allow_biting",
+    "font_weight",
+    "italic",
+    "base_color",
+    "fill_color",
+    "fill_gradient_enabled",
+    "fill_gradient_start_color",
+    "fill_gradient_end_color",
+    "fill_gradient_angle_deg",
+    "stroke_color",
+    "stroke_width_px",
+    "stroke2_width_px",
+    "decoration_kind",
+    "glow_radius_px",
+    "glow_before_radius_px",
+    "glow_after_radius_px",
+    "glow_concentration_level",
+    "shadow_color",
+    "shadow_offset_x",
+    "shadow_offset_y",
+    "ruby_font_size_px",
+    "ruby_color",
+    "ruby_gap_px",
+    "ruby_stroke_width_px",
+    "ruby_stroke2_width_px",
+    "ruby_decoration_kind",
+    "ruby_glow_radius_px",
+    "ruby_glow_before_radius_px",
+    "ruby_glow_after_radius_px",
+    "ruby_glow_concentration_level",
+    "ruby_shadow_offset_x",
+    "ruby_shadow_offset_y",
+    "karaoke_colors",
+    "ruby_karaoke_colors",
+}
+
+_RUBY_COLOR_SUBJECT_FIELDS = {
+    "stroke_width_px": "ruby_stroke_width_px",
+    "stroke2_width_px": "ruby_stroke2_width_px",
+    "decoration_kind": "ruby_decoration_kind",
+    "glow_radius_px": "ruby_glow_radius_px",
+    "glow_before_radius_px": "ruby_glow_before_radius_px",
+    "glow_after_radius_px": "ruby_glow_after_radius_px",
+    "glow_concentration_level": "ruby_glow_concentration_level",
+    "shadow_offset_x": "ruby_shadow_offset_x",
+    "shadow_offset_y": "ruby_shadow_offset_y",
+}
+
+_GLOBAL_SCHEME_KEY = "global"
+_CUSTOM_SCHEME_PREFIX = "custom:"
+_AUTO_ROLE_COLORS = (
+    "#FF5A6F",
+    "#00A6FF",
+    "#FFCC00",
+    "#22C55E",
+    "#A855F7",
+    "#F97316",
+    "#14B8A6",
+    "#EC4899",
+)
+_LIT_FIELDS = {
+    "lit_enabled",
+    "lit_style",
+    "lit_number",
+    "lit_size",
+    "lit_offset_x",
+    "lit_offset_y",
+    "lit_tracking",
+    "lit_fill_color",
+    "lit1_fill_color",
+    "lit2_fill_color",
+    "lit3_fill_color",
+    "lit_stroke_color",
+    "lit_stroke_width",
+    "lit_stroke_soften",
+    "lit_opacity_pct",
+    "lit_edge_brightness_pct",
+    "lit_shadow",
+    "lit_time_offset_ms",
+    "lit_waiting_time_ms",
+    "lit_transition_mode",
+    "lit_transition_ratio_pct",
+    "lit_transition_angle_deg",
+    "lit_transition_distance",
+    "signals_duration_ms",
+    "volume_size",
+    "volume_offset_x",
+    "volume_offset_y",
+    "volume_column_width",
+    "volume_column_count",
+    "volume_column_spacing",
+    "volume_align",
+    "volume_ratio",
+    "volume_fill_color",
+    "volume_stroke_color",
+    "volume_overlay_fill_color",
+    "volume_overlay_stroke_color",
+    "volume_flash_times",
+    "volume_flash_duration_ratio",
+    "volume_transition_ratio_pct",
+}
+
+
+@dataclass(frozen=True)
+class ScreenPreset:
+    """Sayatoo-compatible screen preset metadata."""
+
+    key: str
+    label: str
+    width: int
+    height: int
+    par: str = "1:1"
+
+
+@dataclass(frozen=True)
+class ScreenSettings:
+    """Canvas/export screen settings persisted with projects and user settings."""
+
+    preset_key: str = "hdtv_1080"
+    par: str = "1:1"
+    width: int = 1920
+    height: int = 1080
+    fps: int = 60
+
+
+SCREEN_FPS_OPTIONS = (60, 120)
+SCREEN_PRESETS: tuple[ScreenPreset, ...] = (
+    ScreenPreset("hd_540", "HD 540", 960, 540),
+    ScreenPreset("hdv_720", "HDV 720", 1280, 720),
+    ScreenPreset("hdtv_720", "HDTV 720", 1280, 720),
+    ScreenPreset("hdv_1080", "HDV 1080", 1440, 1080, "4:3"),
+    ScreenPreset("hdtv_1080", "HDTV 1080", 1920, 1080),
+    ScreenPreset("dvcprohd_720", "DVCPROHD 720", 960, 720, "4:3"),
+    ScreenPreset("dvcprohd_1080", "DVCPROHD 1080", 1280, 1080, "3:2"),
+    ScreenPreset("d1_dv_ntsc", "D1/DV NTSC", 720, 480, "10:11"),
+    ScreenPreset("d1_dv_ntsc_wide", "D1/DV NTSC 宽屏", 720, 480, "40:33"),
+    ScreenPreset("d1_dv_pal", "D1/DV PAL", 720, 576, "128:117"),
+    ScreenPreset("d1_dv_pal_wide", "D1/DV PAL 宽屏", 720, 576, "512:351"),
+    ScreenPreset("uhd_4k", "UHD 4K", 3840, 2160),
+    ScreenPreset("uhd_8k", "UHD 8K", 7680, 4320),
+    ScreenPreset("hd_540_vertical", "HD 540 竖屏", 540, 960),
+    ScreenPreset("hd_720_vertical", "HD 720 竖屏", 720, 1280),
+    ScreenPreset("hdtv_1080_vertical", "HDTV 1080 竖屏", 1080, 1920),
+)
+
+PAR_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("方形像素", "1:1"),
+    ("HDV 1080 / DVCPROHD 720（4:3）", "4:3"),
+    ("DVCPROHD 1080（3:2）", "3:2"),
+    ("D1/DV NTSC（10:11）", "10:11"),
+    ("D1/DV NTSC 宽屏（40:33）", "40:33"),
+    ("D1/DV PAL（128:117）", "128:117"),
+    ("D1/DV PAL 宽屏（512:351）", "512:351"),
+)
+
+_SCREEN_PRESET_BY_KEY = {preset.key: preset for preset in SCREEN_PRESETS}
+_PAR_VALUES = {value for _label, value in PAR_OPTIONS}
+
+
+def screen_settings_to_dict(settings: ScreenSettings) -> dict[str, Any]:
+    return {
+        "preset_key": settings.preset_key,
+        "par": settings.par,
+        "width": settings.width,
+        "height": settings.height,
+        "fps": settings.fps,
+    }
+
+
+def screen_settings_from_dict(payload: object) -> ScreenSettings:
+    if not isinstance(payload, dict):
+        return ScreenSettings()
+    width = _int_setting(payload.get("width"), 160, 7680, ScreenSettings.width)
+    height = _int_setting(payload.get("height"), 90, 4320, ScreenSettings.height)
+    fps = _normalize_screen_fps(payload.get("fps"))
+    par = str(payload.get("par") or ScreenSettings.par)
+    if par not in _PAR_VALUES:
+        par = ScreenSettings.par
+    preset_key = str(payload.get("preset_key") or "")
+    if preset_key not in _SCREEN_PRESET_BY_KEY and preset_key != "custom":
+        preset_key = match_screen_preset_key(width, height, par)
+    return ScreenSettings(
+        preset_key=preset_key,
+        par=par,
+        width=width,
+        height=height,
+        fps=fps,
+    )
+
+
+def _int_setting(value: object, minimum: int, maximum: int, fallback: int) -> int:
+    try:
+        number = int(value)
+    except (TypeError, ValueError):
+        return fallback
+    return min(max(number, minimum), maximum)
+
+
+def _normalize_screen_fps(value: object) -> int:
+    try:
+        fps = int(value)
+    except (TypeError, ValueError):
+        return ScreenSettings.fps
+    return fps if fps in SCREEN_FPS_OPTIONS else ScreenSettings.fps
+
+
+def match_screen_preset_key(width: int, height: int, par: str) -> str:
+    for preset in SCREEN_PRESETS:
+        if preset.width == width and preset.height == height and preset.par == par:
+            return preset.key
+    return "custom"
+
+
+def _normalize_hex(value: str, fallback: str = "#000000") -> str:
+    color = QColor(value)
+    if not color.isValid():
+        color = QColor(fallback)
+    name_format = (
+        QColor.NameFormat.HexArgb
+        if color.alpha() < 255
+        else QColor.NameFormat.HexRgb
+    )
+    return color.name(name_format).upper()
+
+
+class ColorButton(QPushButton):
+    """Compact color swatch button."""
+
+    def __init__(self, color: str, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._color = _normalize_hex(color)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(30)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._apply()
+
+    @property
+    def color(self) -> str:
+        return self._color
+
+    def set_color(self, color: str) -> None:
+        normalized = _normalize_hex(color, self._color)
+        if normalized == self._color:
+            return
+        self._color = normalized
+        self._apply()
+
+    def _apply(self) -> None:
+        color = QColor(self._color)
+        text_color = "#111827" if color.lightness() > 150 else "#FFFFFF"
+        self.setText(self._color)
+        background = f"rgba({color.red()}, {color.green()}, {color.blue()}, {color.alpha()})"
+        self.setStyleSheet(
+            f"""
+            QPushButton {{
+                background: {background};
+                color: {text_color};
+                border: 1px solid {palette().card_border};
+                border-radius: 6px;
+                padding: 0 8px;
+                font-family: "Consolas", "Courier New", monospace;
+                font-size: 9pt;
+            }}
+            QPushButton:hover {{
+                border-color: {palette().accent_primary};
+            }}
+            """
+        )
+
+
+class ToggleSwitch(QAbstractButton):
+    """A compact iOS-style on/off switch used in place of a checkbox."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setCheckable(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._track_w = 38
+        self._track_h = 22
+        self.setFixedSize(self._track_w, self._track_h)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(self._track_w, self._track_h)
+
+    def paintEvent(self, event) -> None:  # noqa: N802, ARG002
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            p = palette()
+            checked = self.isChecked()
+            track = QColor(p.accent_primary if checked else p.input_border)
+            if not self.isEnabled():
+                track.setAlpha(90)
+            radius = self.height() / 2
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(track)
+            painter.drawRoundedRect(
+                QRectF(0, 0, self.width(), self.height()), radius, radius
+            )
+            knob = self.height() - 6
+            x = self.width() - knob - 3 if checked else 3
+            painter.setBrush(QColor("#FFFFFF"))
+            painter.drawEllipse(QRectF(x, 3, knob, knob))
+        finally:
+            painter.end()
+
+
+class CollapsibleSection(QFrame):
+    """A property card with a clickable header and collapsible content."""
+
+    def __init__(
+        self,
+        title: str,
+        parent: Optional[QWidget] = None,
+        *,
+        switch: bool = False,
+    ) -> None:
+        super().__init__(parent)
+        self.setObjectName("SubtitlePropertySection")
+        self._content = QWidget(self)
+        self._content.setObjectName("SubtitlePropertySectionContent")
+        self._header = QToolButton(self)
+        self._header.setObjectName("SubtitlePropertySectionHeader")
+        self._header.setText(title)
+        self._header.setCheckable(True)
+        self._header.setChecked(True)
+        self._header.setArrowType(Qt.ArrowType.DownArrow)
+        self._header.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._header.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._header.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._header.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self._header.clicked.connect(self.set_expanded)
+
+        header_row = QWidget(self)
+        header_row.setObjectName("SubtitlePropertySectionHeaderRow")
+        header_layout = QHBoxLayout(header_row)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(0)
+        header_layout.addWidget(self._header, 0)
+        header_layout.addStretch(1)
+
+        self.header_switch: Optional[ToggleSwitch] = None
+        if switch:
+            self.header_switch = ToggleSwitch(header_row)
+            header_layout.addWidget(
+                self.header_switch, 0, Qt.AlignmentFlag.AlignVCenter
+            )
+            header_layout.addSpacing(12)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(header_row)
+        root.addWidget(self._content)
+
+        self.content_layout = QVBoxLayout(self._content)
+        self.content_layout.setContentsMargins(12, 0, 12, 12)
+        self.content_layout.setSpacing(10)
+
+    @property
+    def header(self) -> QToolButton:
+        return self._header
+
+    def set_expanded(self, expanded: bool) -> None:
+        self._header.setChecked(expanded)
+        self._header.setArrowType(
+            Qt.ArrowType.DownArrow if expanded else Qt.ArrowType.RightArrow
+        )
+        self._content.setVisible(expanded)
+
+    def is_expanded(self) -> bool:
+        return self._content.isVisible()
+
+
+class _ClickableRow(QWidget):
+    """A bare row widget that emits ``clicked`` on a left mouse press."""
+
+    clicked = Signal()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(event)
+
+
+class _SubGroup(QWidget):
+    """A collapsible sub-section inside a property card (accent-bar heading + grid)."""
+
+    def __init__(
+        self,
+        title: str,
+        *,
+        collapsed: bool = False,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 4, 0, 0)
+        root.setSpacing(6)
+
+        self._header = _ClickableRow(self)
+        self._header.setCursor(Qt.CursorShape.PointingHandCursor)
+        header_layout = QHBoxLayout(self._header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(6)
+        label = _subgroup_label(title)
+        label.setParent(self._header)
+        header_layout.addWidget(label, 0)
+        header_layout.addStretch(1)
+        self._chevron = QLabel(self._header)
+        themed(
+            self._chevron,
+            lambda: f"color: {palette().text_secondary}; font-size: 9pt;",
+        )
+        header_layout.addWidget(self._chevron, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self._host = QWidget(self)
+        self.grid = QGridLayout(self._host)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(8)
+        self.grid.setVerticalSpacing(8)
+        self.grid.setColumnStretch(0, 1)
+        self.grid.setColumnStretch(1, 1)
+
+        root.addWidget(self._header)
+        root.addWidget(self._host)
+
+        self._header.clicked.connect(lambda: self.set_collapsed(self._host.isVisible()))
+        self.set_collapsed(collapsed)
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        self._host.setVisible(not collapsed)
+        self._chevron.setText("▸" if collapsed else "▾")
+
+    def is_collapsed(self) -> bool:
+        return not self._host.isVisible()
+
+
+class _ColorMatrixSelector(QWidget):
+    """NicoKara-style state×layer picker: columns 走字后/走字前, rows 文字/描边/描边2/装饰.
+
+    Replaces two dropdowns with a single clickable grid so the active cell is
+    visible at a glance and reachable in one click.
+    """
+
+    selectionChanged = Signal(str, str)  # state_key, layer_key
+
+    _STATES = (("after", "走字后"), ("before", "走字前"))
+    _LAYERS = (
+        ("text", "文字"),
+        ("stroke", "描边"),
+        ("stroke2", "描边2"),
+        ("shadow", "装饰"),
+    )
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._state = "after"
+        self._layer = "text"
+        self._buttons: dict[tuple[str, str], QPushButton] = {}
+
+        grid = QGridLayout(self)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(6)
+
+        for col, (_state_key, state_label) in enumerate(self._STATES):
+            head = QLabel(state_label, self)
+            head.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            themed(head, lambda: f"color: {palette().text_secondary}; font-size: 9pt;")
+            grid.addWidget(head, 0, col)
+
+        for row, (layer_key, layer_label) in enumerate(self._LAYERS):
+            for col, (state_key, _state_label) in enumerate(self._STATES):
+                btn = QPushButton(layer_label, self)
+                btn.setObjectName("ColorMatrixCell")
+                btn.setCheckable(True)
+                btn.setMinimumHeight(30)
+                btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+                btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                btn.clicked.connect(
+                    lambda _checked=False, s=state_key, lyr=layer_key: self._select(s, lyr)
+                )
+                self._buttons[(state_key, layer_key)] = btn
+                grid.addWidget(btn, row + 1, col)
+
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        themed(
+            self,
+            lambda: (
+                f"""
+                QPushButton#ColorMatrixCell {{
+                    background: {palette().secondary_button_bg};
+                    color: {palette().secondary_button_text};
+                    border: 1px solid {palette().secondary_button_border};
+                    border-radius: 6px;
+                    padding: 0 6px;
+                    font-size: 9.5pt;
+                }}
+                QPushButton#ColorMatrixCell:hover {{
+                    border-color: {palette().accent_primary};
+                }}
+                QPushButton#ColorMatrixCell:checked {{
+                    background: {palette().accent_primary};
+                    color: #FFFFFF;
+                    border-color: {palette().accent_primary};
+                    font-weight: 600;
+                }}
+                """
+            ),
+        )
+        self._refresh_checked()
+
+    def current(self) -> tuple[str, str]:
+        return self._state, self._layer
+
+    def set_selection(self, state: str, layer: str) -> None:
+        if (state, layer) == (self._state, self._layer):
+            return
+        self._state, self._layer = state, layer
+        self._refresh_checked()
+
+    def _select(self, state: str, layer: str) -> None:
+        if (state, layer) != (self._state, self._layer):
+            self._state, self._layer = state, layer
+            self._refresh_checked()
+            self.selectionChanged.emit(state, layer)
+        else:
+            self._refresh_checked()  # re-check if the user clicked the active cell
+
+    def _refresh_checked(self) -> None:
+        active = (self._state, self._layer)
+        for key, btn in self._buttons.items():
+            btn.setChecked(key == active)
+
+
+class GradientStopsEditor(QWidget):
+    """Compact gradient stop editor for horizontal/vertical PaintFill gradients."""
+
+    stopsChanged = Signal(list)
+    selectedChanged = Signal(int)
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._stops: list[tuple[int, str]] = [(0, "#FFFFFF"), (100, "#FF5A6F")]
+        self._selected = 0
+        self._orientation = "horizontal"
+        self._dragging = False
+        self.setMinimumHeight(92)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        height = 198 if self._orientation == "vertical" else 94
+        return QSize(220, height)
+
+    @property
+    def selected_index(self) -> int:
+        return self._selected
+
+    @property
+    def selected_stop(self) -> tuple[int, str]:
+        return self._stops[self._selected]
+
+    def set_orientation(self, mode: str) -> None:
+        orientation = "vertical" if mode == "gradient_vertical" else "horizontal"
+        if orientation == self._orientation:
+            return
+        self._orientation = orientation
+        self.setMinimumHeight(190 if orientation == "vertical" else 92)
+        self.updateGeometry()
+        self.update()
+
+    def set_stops(self, stops: list[tuple[int, str]]) -> None:
+        selected_position = self._stops[self._selected][0] if self._stops else 0
+        self._stops = _normalize_gradient_stops(stops)
+        self._selected = min(
+            range(len(self._stops)),
+            key=lambda index: abs(self._stops[index][0] - selected_position),
+        )
+        self.update()
+        self.selectedChanged.emit(self._selected)
+
+    def set_selected_color(self, color: str) -> None:
+        position, old = self._stops[self._selected]
+        normalized = _normalize_hex(color, old)
+        self._stops[self._selected] = (position, normalized)
+        self._emit_stops_changed()
+
+    def set_selected_position(self, position: int) -> None:
+        self._move_selected_stop(position)
+
+    def add_stop(self, position: int, color: Optional[str] = None) -> None:
+        pos = max(0, min(100, int(position)))
+        color = _normalize_hex(color or self._interpolated_color(pos))
+        self._stops.append((pos, color))
+        self._stops = _normalize_gradient_stops(self._stops)
+        self._selected = self._index_for_position(pos)
+        self._emit_stops_changed()
+
+    def delete_selected_stop(self) -> None:
+        if len(self._stops) <= 2:
+            return
+        position, _color = self._stops[self._selected]
+        if position in {0, 100}:
+            return
+        del self._stops[self._selected]
+        self._selected = max(0, min(self._selected, len(self._stops) - 1))
+        self._emit_stops_changed()
+
+    def paintEvent(self, event) -> None:  # noqa: N802, ARG002
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            rect = self._bar_rect()
+            gradient = (
+                QLinearGradient(rect.left(), rect.top(), rect.right(), rect.top())
+                if self._orientation == "horizontal"
+                else QLinearGradient(rect.left(), rect.top(), rect.left(), rect.bottom())
+            )
+            for position, color in self._stops:
+                gradient.setColorAt(position / 100.0, QColor(color))
+            painter.setPen(QColor(palette().card_border))
+            painter.setBrush(gradient)
+            painter.drawRoundedRect(rect, 4, 4)
+
+            rail = self._rail_rect()
+            painter.setPen(QColor(palette().card_border))
+            painter.drawRoundedRect(rail, 3, 3)
+            for index, (position, color) in enumerate(self._stops):
+                center = self._marker_center(position)
+                selected = index == self._selected
+                painter.setBrush(QColor(color))
+                painter.setPen(QColor("#0B84FF" if selected else palette().card_bg))
+                points = [
+                    QPointF(center.x(), center.y() - 8),
+                    QPointF(center.x() + 8, center.y()),
+                    QPointF(center.x(), center.y() + 8),
+                    QPointF(center.x() - 8, center.y()),
+                ]
+                painter.drawPolygon(QPolygonF(points))
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+                painter.setPen(QColor("#0B84FF" if selected else palette().card_border))
+                painter.drawPolygon(QPolygonF(points))
+        finally:
+            painter.end()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        pos = self._position_from_point(event.position())
+        nearest = self._nearest_marker_index(event.position())
+        self._dragging = False
+        hit_rect = self._bar_rect().adjusted(-8, -8, 8, 8).united(
+            self._rail_rect().adjusted(-10, -10, 10, 10)
+        )
+        if nearest is not None:
+            self._selected = nearest
+            self.selectedChanged.emit(self._selected)
+            self.update()
+            self._dragging = True
+        elif hit_rect.contains(event.position()):
+            self.add_stop(pos)
+            self._dragging = True
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if not self._dragging:
+            return
+        self._move_selected_stop(self._position_from_point(event.position()))
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802, ARG002
+        self._dragging = False
+
+    def _bar_rect(self) -> QRectF:
+        if self._orientation == "horizontal":
+            return QRectF(8, 12, max(self.width() - 16, 1), 30)
+        return QRectF(12, 8, 72, max(self.height() - 16, 1))
+
+    def _rail_rect(self) -> QRectF:
+        if self._orientation == "horizontal":
+            return QRectF(8, 56, max(self.width() - 16, 1), 14)
+        return QRectF(102, 8, 14, max(self.height() - 16, 1))
+
+    def _marker_center(self, position: int) -> QPointF:
+        pos = max(0.0, min(1.0, position / 100.0))
+        if self._orientation == "horizontal":
+            rail = self._rail_rect()
+            return QPointF(rail.left() + rail.width() * pos, rail.center().y())
+        rail = self._rail_rect()
+        return QPointF(rail.center().x(), rail.top() + rail.height() * pos)
+
+    def _position_from_point(self, point: QPointF) -> int:
+        if self._orientation == "horizontal":
+            rect = self._bar_rect()
+            ratio = (point.x() - rect.left()) / max(rect.width(), 1.0)
+        else:
+            rect = self._bar_rect()
+            ratio = (point.y() - rect.top()) / max(rect.height(), 1.0)
+        return max(0, min(100, int(round(ratio * 100))))
+
+    def _nearest_stop_index(self, position: int) -> Optional[int]:
+        if not self._stops:
+            return None
+        return min(range(len(self._stops)), key=lambda index: abs(self._stops[index][0] - position))
+
+    def _nearest_marker_index(self, point: QPointF) -> Optional[int]:
+        if not self._stops:
+            return None
+        nearest = min(
+            range(len(self._stops)),
+            key=lambda index: (
+                self._marker_center(self._stops[index][0]).x() - point.x()
+            )
+            ** 2
+            + (
+                self._marker_center(self._stops[index][0]).y() - point.y()
+            )
+            ** 2,
+        )
+        center = self._marker_center(self._stops[nearest][0])
+        distance_sq = (center.x() - point.x()) ** 2 + (center.y() - point.y()) ** 2
+        return nearest if distance_sq <= 16**2 else None
+
+    def _index_for_position(self, position: int) -> int:
+        return min(range(len(self._stops)), key=lambda index: abs(self._stops[index][0] - position))
+
+    def _move_selected_stop(self, position: int) -> None:
+        old_position, color = self._stops[self._selected]
+        pos = max(0, min(100, int(position)))
+        if old_position in {0, 100}:
+            if pos == old_position:
+                return
+            self._stops.append((pos, color))
+        else:
+            self._stops[self._selected] = (pos, color)
+        self._stops = _normalize_gradient_stops(self._stops)
+        self._selected = self._index_for_position(pos)
+        self._emit_stops_changed()
+
+    def _interpolated_color(self, position: int) -> str:
+        stops = _normalize_gradient_stops(self._stops)
+        pos = max(0, min(100, int(position)))
+        left = stops[0]
+        right = stops[-1]
+        for index, stop in enumerate(stops):
+            if stop[0] <= pos:
+                left = stop
+            if stop[0] >= pos:
+                right = stop
+                break
+            if index == len(stops) - 1:
+                right = stop
+        if left[0] == right[0]:
+            return left[1]
+        ratio = (pos - left[0]) / max(right[0] - left[0], 1)
+        a = QColor(left[1])
+        b = QColor(right[1])
+        return QColor(
+            round(a.red() + (b.red() - a.red()) * ratio),
+            round(a.green() + (b.green() - a.green()) * ratio),
+            round(a.blue() + (b.blue() - a.blue()) * ratio),
+            round(a.alpha() + (b.alpha() - a.alpha()) * ratio),
+        ).name(QColor.NameFormat.HexArgb).upper()
+
+    def _emit_stops_changed(self) -> None:
+        self.update()
+        self.selectedChanged.emit(self._selected)
+        self.stopsChanged.emit(list(self._stops))
+
+
+class _WheelFocusedSpinBox(FluentSpinBox):
+    """Only adjust by wheel after the control has explicit focus."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.lineEdit().setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):  # noqa: N802 - Qt API
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
+
+class _WheelFocusedComboBox(FluentComboBox):
+    """Avoid accidental option changes while scrolling the property panel."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def addItem(self, text: str, userData=None) -> None:  # noqa: N802 - Qt API
+        """Keep QComboBox's positional ``userData`` convention."""
+        super().addItem(text, userData=userData)
+
+    def wheelEvent(self, event):  # noqa: N802 - Qt API
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
+
+class _WheelFocusedFontComboBox(_WheelFocusedComboBox):
+    """Fluent font picker preserving QFontComboBox's small public contract."""
+
+    currentFontChanged = Signal(QFont)
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.addItems(QFontDatabase.families())
+        self.currentIndexChanged.connect(
+            lambda _index: self.currentFontChanged.emit(self.currentFont())
+        )
+
+    def currentFont(self) -> QFont:  # noqa: N802 - QFontComboBox compatibility
+        return QFont(self.currentText())
+
+    def setCurrentFont(self, font: QFont) -> None:  # noqa: N802
+        family = font.family()
+        index = self.findText(family)
+        if index < 0:
+            self.addItem(family)
+            index = self.count() - 1
+        if index == self.currentIndex():
+            self.currentFontChanged.emit(self.currentFont())
+            return
+        self.setCurrentIndex(index)
+
+
+class _GrowingPlainTextEdit(FluentPlainTextEdit):
+    """多行文本框：随内容行数自动增高，背景卡片随之变高（回车即变高）。"""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setLineWrapMode(FluentPlainTextEdit.LineWrapMode.WidgetWidth)
+        self.textChanged.connect(self._adjust_height)
+        self._adjust_height()
+
+    def _adjust_height(self) -> None:
+        # 按段落数（回车数 + 1）× 行高估算，不依赖控件是否可见 / 已布局。
+        blocks = max(1, self.document().blockCount())
+        line_height = self.fontMetrics().lineSpacing()
+        frame = int(self.frameWidth()) * 2
+        margins = self.contentsMargins()
+        doc_margin = int(self.document().documentMargin()) * 2
+        height = blocks * line_height + frame + margins.top() + margins.bottom() + doc_margin + 4
+        self.setFixedHeight(max(32, height))
+
+    def wheelEvent(self, event):  # noqa: N802 - Qt API
+        if not self.hasFocus():
+            event.ignore()
+            return
+        super().wheelEvent(event)
+
+
+class _DynamicStackedWidget(QStackedWidget):
+    """Use the current page height instead of the tallest page height."""
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        widget = self.currentWidget()
+        return widget.sizeHint() if widget is not None else super().sizeHint()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        widget = self.currentWidget()
+        return widget.minimumSizeHint() if widget is not None else super().minimumSizeHint()
+
+
+class StylePresetManagerDialog(QDialog):
+    """Small qfluentwidgets-style dialog for managing reusable subtitle schemes."""
+
+    def __init__(
+        self,
+        presets: dict[str, SubtitleStyleScheme],
+        current_scheme: SubtitleStyleScheme,
+        target_label: str,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("预设方案管理")
+        self.resize(520, 460)
+        self._presets = {str(name): deepcopy(scheme) for name, scheme in presets.items()}
+        self._current_scheme = deepcopy(current_scheme)
+        self._applied_scheme: Optional[SubtitleStyleScheme] = None
+        self._imported_schemes: dict[str, SubtitleStyleScheme] = {}
+        self._deleted_names: set[str] = set()
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(10)
+
+        title = QLabel("预设方案管理", self)
+        themed(
+            title,
+            lambda: (
+                f"color: {palette().title_text};"
+                "font-size: 15pt;"
+                "font-weight: 600;"
+            ),
+        )
+        layout.addWidget(title)
+        layout.addWidget(QLabel(f"当前目标：{target_label}", self))
+
+        filter_row = QHBoxLayout()
+        filter_row.setContentsMargins(0, 0, 0, 0)
+        filter_row.setSpacing(8)
+        filter_row.addWidget(QLabel("过滤:", self))
+        self._filter_edit = FluentLineEdit(self)
+        self._filter_edit.setPlaceholderText("输入名称搜索...")
+        self._filter_edit.textChanged.connect(self._apply_filter)
+        filter_row.addWidget(self._filter_edit, 1)
+        layout.addLayout(filter_row)
+
+        self._preset_list = FluentListWidget(self)
+        self._preset_list.setIconSize(QSize(34, 20))
+        self._preset_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+        self._preset_list.currentItemChanged.connect(lambda _cur, _old: self._sync_buttons())
+        self._preset_list.itemSelectionChanged.connect(self._sync_buttons)
+        layout.addWidget(self._preset_list, 1)
+
+        self._empty_label = QLabel("暂无预设。可以把当前样式保存为新预设。", self)
+        layout.addWidget(self._empty_label)
+
+        edit_row = QHBoxLayout()
+        edit_row.setContentsMargins(0, 0, 0, 0)
+        edit_row.setSpacing(8)
+        self._save_current_btn = FluentPushButton("保存当前为预设", self)
+        self._save_current_btn.clicked.connect(self._on_save_current)
+        self._rename_btn = FluentPushButton("重命名", self)
+        self._rename_btn.clicked.connect(self._on_rename)
+        self._delete_btn = FluentPushButton("删除", self)
+        self._delete_btn.clicked.connect(self._on_delete)
+        edit_row.addWidget(self._save_current_btn)
+        edit_row.addWidget(self._rename_btn)
+        edit_row.addWidget(self._delete_btn)
+        layout.addLayout(edit_row)
+
+        button_row = QHBoxLayout()
+        button_row.setContentsMargins(0, 4, 0, 0)
+        button_row.addStretch(1)
+        self._apply_btn = FluentPrimaryPushButton("导入选中的颜色方案", self)
+        self._apply_btn.clicked.connect(self._on_import_selected)
+        close_btn = FluentPushButton("关闭", self)
+        close_btn.clicked.connect(self.accept)
+        button_row.addWidget(self._apply_btn)
+        button_row.addWidget(close_btn)
+        layout.addLayout(button_row)
+
+        self._populate_list()
+
+    def preset_schemes(self) -> dict[str, SubtitleStyleScheme]:
+        return {name: deepcopy(scheme) for name, scheme in self._presets.items()}
+
+    def applied_scheme(self) -> Optional[SubtitleStyleScheme]:
+        if self._applied_scheme is None:
+            return None
+        return deepcopy(self._applied_scheme)
+
+    def imported_schemes(self) -> dict[str, SubtitleStyleScheme]:
+        return {name: deepcopy(scheme) for name, scheme in self._imported_schemes.items()}
+
+    def deleted_names(self) -> set[str]:
+        return set(self._deleted_names)
+
+    def add_preset(self, name: str) -> bool:
+        name = str(name).strip()
+        if not name:
+            return False
+        name = self._unique_name(name)
+        self._presets[name] = deepcopy(self._current_scheme)
+        self._populate_list(selected=name)
+        return True
+
+    def _unique_name(self, name: str) -> str:
+        if name not in self._presets:
+            return name
+        original = name
+        suffix = 2
+        while name in self._presets:
+            name = f"{original} {suffix}"
+            suffix += 1
+        return name
+
+    def _populate_list(self, selected: Optional[str] = None) -> None:
+        self._preset_list.clear()
+        for name, scheme in self._presets.items():
+            item = QListWidgetItem()
+            item.setText(f"{name}    {self._scheme_summary(scheme)}")
+            item.setIcon(_scheme_icon(scheme))
+            item.setData(Qt.ItemDataRole.UserRole, name)
+            self._preset_list.addItem(item)
+            if selected == name:
+                self._preset_list.setCurrentItem(item)
+        if selected is None and self._preset_list.count() > 0:
+            self._preset_list.setCurrentRow(0)
+        self._apply_filter()
+        self._sync_buttons()
+
+    def _apply_filter(self) -> None:
+        needle = self._filter_edit.text().strip().lower()
+        visible_count = 0
+        for i in range(self._preset_list.count()):
+            item = self._preset_list.item(i)
+            name = str(item.data(Qt.ItemDataRole.UserRole) or "")
+            visible = not needle or needle in name.lower()
+            item.setHidden(not visible)
+            if visible:
+                visible_count += 1
+        self._empty_label.setVisible(visible_count == 0)
+        self._sync_buttons()
+
+    def _sync_buttons(self) -> None:
+        selected_count = len(self._selected_names())
+        has_selection = selected_count > 0
+        self._apply_btn.setEnabled(has_selection)
+        self._rename_btn.setEnabled(selected_count == 1)
+        self._delete_btn.setEnabled(has_selection)
+
+    def _selected_name(self) -> Optional[str]:
+        names = self._selected_names()
+        if len(names) != 1:
+            return None
+        return names[0]
+
+    def _selected_names(self) -> list[str]:
+        names: list[str] = []
+        for item in self._preset_list.selectedItems():
+            if item.isHidden():
+                continue
+            name = item.data(Qt.ItemDataRole.UserRole)
+            if name is not None:
+                names.append(str(name))
+        return names
+
+    def _scheme_summary(self, scheme: SubtitleStyleScheme) -> str:
+        fill = scheme.fill_color or "#FFFFFF"
+        base = scheme.base_color or "#FFFFFF"
+        font_size = scheme.font_size_px
+        size_text = f" / {font_size}px" if font_size is not None else ""
+        return f"已唱 {fill} / 未唱 {base}{size_text}"
+
+    def _on_save_current(self) -> None:
+        name, ok = QInputDialog.getText(self, "保存当前为预设", "预设名称")
+        if not ok:
+            return
+        if not self.add_preset(name):
+            InfoBar.warning(title="未保存", content="请输入预设名称。", parent=self, duration=2000)
+
+    def _on_apply(self) -> None:
+        name = self._selected_name()
+        if name is None:
+            InfoBar.warning(title="未选择", content="请先选择一个预设。", parent=self, duration=2000)
+            return
+        self._applied_scheme = deepcopy(self._presets[name])
+        self.accept()
+
+    def _on_import_selected(self) -> None:
+        names = self._selected_names()
+        if not names:
+            InfoBar.warning(title="未选择", content="请先选择一个预设。", parent=self, duration=2000)
+            return
+        self._imported_schemes = {
+            name: deepcopy(self._presets[name])
+            for name in names
+            if name in self._presets
+        }
+        self.accept()
+
+    def _on_rename(self) -> None:
+        old = self._selected_name()
+        if old is None:
+            return
+        new, ok = QInputDialog.getText(self, "重命名预设", "预设名称", text=old)
+        if not ok:
+            return
+        new = new.strip()
+        if not new or new == old:
+            return
+        scheme = self._presets.pop(old)
+        new = self._unique_name(new)
+        self._presets[new] = scheme
+        self._populate_list(selected=new)
+
+    def _on_delete(self) -> None:
+        names = self._selected_names()
+        if not names:
+            return
+        name_text = "、".join(names[:5])
+        if len(names) > 5:
+            name_text += f" 等 {len(names)} 个"
+        result = QMessageBox.question(
+            self,
+            "删除预设",
+            f"确定要删除预设“{name_text}”吗？\n删除后将无法恢复，并会从当前颜色方案中移除同名角色。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if result != QMessageBox.StandardButton.Yes:
+            return
+        for name in names:
+            self._presets.pop(name, None)
+            self._deleted_names.add(name)
+        self._populate_list()
+
+
+class PropertyPanel(QWidget):
+    """字体 / 布局 / 特效 / 标题属性面板。"""
+
+    _PAGE_SPECS = (
+        ("font", FIF.FONT, "字体"),
+        ("layout", FIF.LAYOUT, "布局"),
+        ("timing", FIF.DATE_TIME, "时间"),
+        ("effects", FIF.BRUSH, "特效"),
+        ("title", FIF.LABEL, "标题"),
+    )
+
+    styleChanged = Signal(Style)
+    schemeSelectionChanged = Signal(str)
+    presetSchemesChanged = Signal(dict)
+    layoutAssignAllRequested = Signal(int)
+    """「应用到全部行」：参数为布局 index（0 = 默认布局）。"""
+    layoutAutoAssignRequested = Signal()
+    """「按行数自动分配」：按页内行数匹配布局行数。"""
+    layoutDeleted = Signal(int)
+    """布局被删除：参数为被删布局 index（>= 1），宿主需修正歌词行引用。"""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._style = Style()
+        self._syncing = False
+        self._role_names: list[str] = []
+        self._preset_schemes: dict[str, SubtitleStyleScheme] = {}
+        self._pages: list[QWidget] = []
+
+        self.setObjectName("PropertyPanel")
+        self.setMinimumWidth(320)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        navigation_row = QWidget(self)
+        navigation_row.setObjectName("PropertyNavigationRow")
+        navigation_layout = QHBoxLayout(navigation_row)
+        navigation_layout.setContentsMargins(8, 4, 8, 4)
+        navigation_layout.setSpacing(0)
+
+        self._navigation = SegmentedToggleToolWidget(navigation_row)
+        self._navigation.setObjectName("PropertyNavigation")
+        self._navigation.setAccessibleName("字幕属性分类")
+        self._navigation.currentItemChanged.connect(self._on_navigation_changed)
+        navigation_layout.addWidget(self._navigation, 0)
+        navigation_layout.addStretch(1)
+        root.addWidget(navigation_row, 0)
+
+        self._stack = QStackedWidget(self)
+        self._stack.setObjectName("PropertyPanelStack")
+        root.addWidget(self._stack, 1)
+        themed(
+            self,
+            lambda: (
+                f"""
+                #PropertyPanel {{ background: {palette().panel_bg}; }}
+                #PropertyPanelStack {{
+                    border: 1px solid {palette().card_border};
+                    border-radius: 6px;
+                    background: {palette().panel_bg};
+                }}
+                """
+            ),
+        )
+
+        pages = (
+            self._make_subtitle_page(),
+            self._make_basic_page(),
+            self._make_timing_page(),
+            self._make_effects_page(),
+            self._make_title_page(),
+        )
+        for page, (route_key, icon, label) in zip(pages, self._PAGE_SPECS):
+            self._add_navigation_page(page, route_key, icon, label)
+        self.setCurrentIndex(0)
+        self.set_roles([])
+        self.set_style(self._style, emit=False)
+
+    def _add_navigation_page(
+        self,
+        page: QWidget,
+        route_key: str,
+        icon: FIF,
+        label: str,
+    ) -> None:
+        self._pages.append(page)
+        self._stack.addWidget(page)
+        self._navigation.addItem(
+            route_key,
+            icon,
+        )
+        item = self._navigation.widget(route_key)
+        item.setToolTip(label)
+        item.setAccessibleName(label)
+        page.setAccessibleName(label)
+
+    def _on_navigation_changed(self, route_key: str) -> None:
+        for index, (candidate, _icon, _label) in enumerate(self._PAGE_SPECS):
+            if candidate == route_key:
+                self._stack.setCurrentIndex(index)
+                return
+
+    def count(self) -> int:
+        return len(self._pages)
+
+    def widget(self, index: int) -> Optional[QWidget]:
+        return self._stack.widget(index)
+
+    def currentIndex(self) -> int:  # noqa: N802
+        return self._stack.currentIndex()
+
+    def setCurrentIndex(self, index: int) -> None:  # noqa: N802
+        if not 0 <= index < self.count():
+            return
+        self._stack.setCurrentIndex(index)
+        self._navigation.setCurrentItem(self._PAGE_SPECS[index][0])
+
+    @property
+    def subtitle_style(self) -> Style:
+        return self._style
+
+    @property
+    def preset_schemes(self) -> dict[str, SubtitleStyleScheme]:
+        return {name: deepcopy(scheme) for name, scheme in self._preset_schemes.items()}
+
+    def set_preset_schemes(self, schemes: dict[str, SubtitleStyleScheme]) -> None:
+        self._preset_schemes = {
+            str(name): deepcopy(scheme)
+            for name, scheme in schemes.items()
+            if str(name)
+        }
+
+    def set_style(self, style: Style, *, emit: bool = False) -> None:
+        self._style = replace(style)
+        current_key = self._current_scheme_key()
+        self._syncing = True
+        try:
+            self._refresh_scheme_combo(current_key)
+            self._viewport_align_combo.setCurrentIndex(
+                max(0, self._viewport_align_combo.findData(self._style.viewport_align))
+            )
+            self._viewport_x_spin.setValue(self._style.viewport_offset_x)
+            self._viewport_y_spin.setValue(self._style.viewport_offset_y)
+            self._viewport_scale_spin.setValue(self._style.viewport_scale_pct)
+            self._viewport_rotation_spin.setValue(self._style.viewport_rotation_deg)
+            self._dual_line_check.setChecked(self._style.dual_line_layout)
+            self._rtl_check.setChecked(self._style.right_to_left)
+            self._vertical_check.setChecked(self._style.vertical)
+            self._horizontal_layout_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._horizontal_layout_combo.findData(
+                        self._style.line_horizontal_layout
+                    ),
+                )
+            )
+            self._refresh_layout_combo()
+            self._sync_layout_editor_controls()
+            self._row1_align_combo.setCurrentIndex(
+                max(0, self._row1_align_combo.findData(self._style.row1_align))
+            )
+            self._row1_x_spin.setValue(self._style.row1_offset_x)
+            self._row1_y_spin.setValue(self._style.row1_offset_y)
+            self._row2_align_combo.setCurrentIndex(
+                max(0, self._row2_align_combo.findData(self._style.row2_align))
+            )
+            self._row2_x_spin.setValue(self._style.row2_offset_x)
+            self._row2_y_spin.setValue(self._style.row2_offset_y)
+            self._sync_per_row_enabled()
+            self._line_lead_spin.setValue(self._style.line_lead_in_ms)
+            self._line_tail_spin.setValue(self._style.line_tail_ms)
+            self._line_offset_spin.setValue(self._style.timing_offset_ms)
+            self._section_gap_spin.setValue(self._style.section_gap_ms)
+            self._lane_gap_spin.setValue(self._style.line_lane_gap_ms)
+            self._pair_delay_spin.setValue(self._style.line_pair_second_delay_ms)
+            self._max_hold_spin.setValue(self._style.line_max_hold_ms)
+            self._section_ending_combo.setCurrentIndex(
+                max(0, self._section_ending_combo.findData(self._style.section_ending_mode))
+            )
+            self._sync_ending_check.setChecked(self._style.sync_ending)
+            self._entry_anim_combo.setCurrentIndex(
+                max(0, self._entry_anim_combo.findData(self._style.entry_anim))
+            )
+            self._entry_lead_spin.setValue(self._style.entry_lead_ms)
+            self._exit_anim_combo.setCurrentIndex(
+                max(0, self._exit_anim_combo.findData(self._style.exit_anim))
+            )
+            self._exit_fade_spin.setValue(self._style.exit_fade_ms)
+            self._sync_lit_controls()
+            self._sync_subtitle_scheme_controls()
+            self._sync_title_controls()
+        finally:
+            self._syncing = False
+        if emit:
+            self.styleChanged.emit(self._style)
+
+    def set_roles(self, role_names: list[str]) -> None:
+        """喂入字幕里出现过的角色名（来自 ``track.role_options``），刷新角色下拉。"""
+        self._role_names = [str(n) for n in role_names if n]
+        self._ensure_role_schemes()
+        current_key = self._current_scheme_key()
+        self._syncing = True
+        try:
+            self._refresh_scheme_combo(current_key)
+        finally:
+            self._syncing = False
+        self._sync_subtitle_scheme_controls()
+
+    # ------------------------------------------------------------------ layout
+
+    def _make_basic_page(self) -> QWidget:
+        scroll, layout = _scroll_page()
+        layout.addWidget(self._make_layout_scheme_section())
+        layout.addWidget(self._make_row_structure_section())
+        layout.addWidget(self._make_vertical_layout_section())
+        layout.addWidget(self._make_writing_direction_section())
+        viewport = self._make_viewport_section()
+        viewport.set_expanded(False)  # 本项目特有的整体变换，低频使用默认折叠
+        layout.addWidget(viewport)
+        layout.addStretch(1)
+        return scroll
+
+    def _make_timing_page(self) -> QWidget:
+        scroll, layout = _scroll_page()
+        layout.addWidget(self._make_timing_section())
+        layout.addStretch(1)
+        return scroll
+
+    def _make_subtitle_page(self) -> QWidget:
+        scroll, layout = _scroll_page()
+        self._role_section = self._make_scheme_section()
+        self._role_section.set_expanded(False)
+        layout.addWidget(self._role_section)
+
+        self._font_color_section = self._make_font_color_section()
+        layout.addWidget(self._font_color_section)
+
+        layout.addStretch(1)
+        return scroll
+
+    def _make_font_color_section(self) -> QFrame:
+        section, layout = _section("颜色 / 字体")
+
+        row = QWidget(section)
+        self._font_color_row = row
+        row_layout = QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(12)
+
+        self._color_section = self._make_color_section(parent=row, inline=True)
+        self._font_section = self._make_font_section(parent=row, inline=True)
+        self._color_section.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        self._font_section.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+
+        divider = QFrame(row)
+        divider.setObjectName("SubtitlePropertyInnerDivider")
+        divider.setFrameShape(QFrame.Shape.VLine)
+        divider.setFixedWidth(1)
+        divider.setSizePolicy(
+            QSizePolicy.Policy.Fixed,
+            QSizePolicy.Policy.Expanding,
+        )
+        themed(
+            divider,
+            lambda: (
+                "QFrame#SubtitlePropertyInnerDivider { "
+                f"background: {palette().card_border}; "
+                "border: 0; "
+                "}"
+            ),
+        )
+
+        row_layout.addWidget(self._color_section, 1, Qt.AlignmentFlag.AlignTop)
+        row_layout.addWidget(divider, 0)
+        row_layout.addWidget(self._font_section, 1, Qt.AlignmentFlag.AlignTop)
+        layout.addWidget(row)
+        return section
+
+    def _make_font_section(
+        self, parent: Optional[QWidget] = None, *, inline: bool = False
+    ) -> QWidget:
+        section, layout = _inline_section("字体", parent) if inline else _section("字体")
+
+        self._font_combo = _WheelFocusedFontComboBox(section)
+        _compact_control(self._font_combo)
+        self._font_combo.currentFontChanged.connect(
+            lambda font: self._update_style(font_family=font.family())
+        )
+        layout.addWidget(_field("日文字体", self._font_combo))
+
+        # 英数（ASCII）字体可单独指定；不勾选时与日文共用一套字体。
+        self._font_latin_check = CheckBox("英数单独字体", section)
+        self._font_latin_check.toggled.connect(self._on_font_latin_toggled)
+        layout.addWidget(self._font_latin_check)
+
+        self._font_latin_combo = _WheelFocusedFontComboBox(section)
+        _compact_control(self._font_latin_combo)
+        self._font_latin_combo.setEnabled(False)
+        self._font_latin_combo.currentFontChanged.connect(self._on_font_latin_changed)
+        self._font_latin_field = _field("英数字体", self._font_latin_combo)
+        layout.addWidget(self._font_latin_field)
+
+        row = QWidget(section)
+        row_layout = QGridLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setHorizontalSpacing(8)
+        row_layout.setVerticalSpacing(0)
+
+        self._font_size_spin = _spin(12, 180, suffix=" px")
+        self._font_size_spin.valueChanged.connect(
+            lambda value: self._update_style(font_size_px=value)
+        )
+        row_layout.addWidget(_field("字号", self._font_size_spin), 0, 0)
+
+        self._letter_spacing_spin = _spin(-120, 120, suffix=" px")
+        self._letter_spacing_spin.valueChanged.connect(
+            lambda value: self._update_style(letter_spacing_px=value)
+        )
+        row_layout.addWidget(_field("字间距", self._letter_spacing_spin), 1, 0)
+
+        self._space_width_spin = _spin(10, 100, suffix=" %")
+        self._space_width_spin.valueChanged.connect(
+            lambda value: self._update_style(space_width_percent=value)
+        )
+        row_layout.addWidget(_field("空格宽度", self._space_width_spin), 1, 1)
+
+        self._font_weight_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._font_weight_combo)
+        for label, value in [
+            ("常规 400", 400),
+            ("中等 500", 500),
+            ("半粗 600", 600),
+            ("粗体 700", 700),
+            ("特粗 800", 800),
+            ("黑体 900", 900),
+        ]:
+            self._font_weight_combo.addItem(label, value)
+        self._font_weight_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                font_weight=int(self._font_weight_combo.currentData())
+            )
+        )
+        row_layout.addWidget(_field("字重", self._font_weight_combo), 0, 1)
+        row_layout.setColumnStretch(0, 1)
+        row_layout.setColumnStretch(1, 1)
+        layout.addWidget(row)
+
+        self._italic_check = CheckBox("斜体", section)
+        self._italic_check.toggled.connect(lambda checked: self._update_style(italic=checked))
+        layout.addWidget(self._italic_check)
+
+        self._allow_biting_check = CheckBox("允许文字咬合", section)
+        self._allow_biting_check.setToolTip(
+            "允许斜体和部分标点使用负字形边距，效果更接近 NicokaraMaker3。"
+        )
+        self._allow_biting_check.toggled.connect(
+            lambda checked: self._update_style(allow_biting=checked)
+        )
+        layout.addWidget(self._allow_biting_check)
+
+        if inline:
+            layout.addSpacing(8)
+            self._ruby_section = self._make_ruby_section(
+                parent=section,
+                inline=True,
+            )
+            layout.addWidget(self._ruby_section)
+        return section
+
+    def _on_font_latin_toggled(self, checked: bool) -> None:
+        self._font_latin_combo.setEnabled(checked)
+        if self._syncing:
+            return
+        if checked:
+            self._update_style(
+                font_family_latin=self._font_latin_combo.currentFont().family()
+            )
+        else:
+            self._update_style(font_family_latin=None)
+
+    def _on_font_latin_changed(self, font: QFont) -> None:
+        if self._syncing:
+            return
+        if self._font_latin_check.isChecked():
+            self._update_style(font_family_latin=font.family())
+
+    def _make_ruby_section(
+        self, parent: Optional[QWidget] = None, *, inline: bool = False
+    ) -> QWidget:
+        section, layout = _inline_section("注音", parent) if inline else _section("注音")
+
+        row = QWidget(section)
+        row_layout = QGridLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setHorizontalSpacing(8)
+        row_layout.setVerticalSpacing(8)
+
+        self._ruby_font_size_spin = _spin(8, 96, suffix=" px")
+        self._ruby_font_size_spin.valueChanged.connect(
+            lambda value: self._update_style(ruby_font_size_px=value)
+        )
+        row_layout.addWidget(_field("字号", self._ruby_font_size_spin), 0, 0)
+
+        self._ruby_gap_spin = _spin(-40, 40, suffix=" px")
+        self._ruby_gap_spin.valueChanged.connect(
+            lambda value: self._update_style(ruby_gap_px=value)
+        )
+        row_layout.addWidget(_field("与正文间距", self._ruby_gap_spin), 0, 1)
+
+        self._ruby_interval_spin = _spin(-40, 40, suffix=" px")
+        self._ruby_interval_spin.setToolTip(
+            "注音字符之间的最小间距（N3 ルビ間隔），可为负让注音字符收紧。\n"
+            "注意这是「下限」：注音比正文窄、均等分布摊出的间距大于此值时，"
+            "调整它看不到变化；对超出正文宽度的长注音效果最明显。"
+        )
+        self._ruby_interval_spin.valueChanged.connect(
+            lambda value: self._update_style(ruby_interval_px=value)
+        )
+        row_layout.addWidget(_field("字间距", self._ruby_interval_spin), 1, 0)
+
+        self._ruby_alignment_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._ruby_alignment_combo)
+        for label, value in [
+            ("自动", "auto"),
+            ("居中", "center"),
+            ("均等分布", "equal_space"),
+        ]:
+            self._ruby_alignment_combo.addItem(label, value)
+        self._ruby_alignment_combo.setToolTip(
+            "注音相对正文范围的排布（N3 ルビ配置）：自动 = 正文或注音全为英数时居中、"
+            "否则均等分布。"
+        )
+        self._ruby_alignment_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                ruby_alignment=self._ruby_alignment_combo.currentData()
+            )
+        )
+        row_layout.addWidget(_field("排布", self._ruby_alignment_combo), 1, 1)
+
+        row_layout.setColumnStretch(0, 1)
+        row_layout.setColumnStretch(1, 1)
+        layout.addWidget(row)
+        return section
+
+    def _apply_main_colors_to_ruby(self) -> None:
+        if self._syncing:
+            return
+        # 颜色照搬主文字矩阵；宽度/装饰/阴影/发光的注音覆盖一并清空——
+        # 清空后渲染端按注音字号比例从主文字缩放（与按钮描述一致）。
+        self._update_style(
+            ruby_karaoke_colors=deepcopy(self._current_karaoke_colors()),
+            ruby_stroke_width_px=None,
+            ruby_stroke2_width_px=None,
+            ruby_decoration_kind=None,
+            ruby_glow_radius_px=None,
+            ruby_glow_before_radius_px=None,
+            ruby_glow_after_radius_px=None,
+            ruby_glow_concentration_level=None,
+            ruby_shadow_offset_x=None,
+            ruby_shadow_offset_y=None,
+        )
+
+    def _make_color_section(
+        self, parent: Optional[QWidget] = None, *, inline: bool = False
+    ) -> QWidget:
+        section, layout = _inline_section("颜色", parent) if inline else _section("颜色")
+
+        self._color_subject_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._color_subject_combo)
+        self._color_subject_combo.addItem("主文字", "main")
+        self._color_subject_combo.addItem("注音", "ruby")
+        self._color_subject_combo.currentIndexChanged.connect(
+            lambda _index: self._on_color_subject_changed()
+        )
+        layout.addWidget(_field("编辑对象", self._color_subject_combo))
+
+        # 状态(走字前/后) × 图层(文字/描边/描边2/装饰) 用一个点选矩阵呈现（对标
+        # nicokara maker3）。两个 combo 仍作为隐藏的取值后端，矩阵与之双向同步，
+        # 这样依赖 currentData 的取值/同步逻辑与测试都无需改动。
+        self._color_state_combo = _WheelFocusedComboBox(section)
+        self._color_state_combo.addItem("走字前", "before")
+        self._color_state_combo.addItem("走字后", "after")
+        self._color_state_combo.setCurrentIndex(1)
+        self._color_state_combo.hide()
+        self._color_state_combo.currentIndexChanged.connect(
+            lambda _index: self._on_color_target_combo_changed()
+        )
+
+        self._color_layer_combo = _WheelFocusedComboBox(section)
+        self._color_layer_combo.addItem("文字", "text")
+        self._color_layer_combo.addItem("描边", "stroke")
+        self._color_layer_combo.addItem("描边2", "stroke2")
+        self._color_layer_combo.addItem("装饰", "shadow")
+        self._color_layer_combo.hide()
+        self._color_layer_combo.currentIndexChanged.connect(
+            lambda _index: self._on_color_target_combo_changed()
+        )
+
+        self._color_matrix = _ColorMatrixSelector(section)
+        self._color_matrix.selectionChanged.connect(self._on_color_matrix_changed)
+        layout.addWidget(self._color_matrix)
+
+        self._fill_mode_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._fill_mode_combo)
+        for label, value in [
+            ("全色", "solid"),
+            ("横向渐变", "gradient_horizontal"),
+            ("纵向渐变", "gradient_vertical"),
+            ("纵向拼色", "split_vertical"),
+            ("图像", "image"),
+        ]:
+            self._fill_mode_combo.addItem(label, value)
+        self._fill_mode_combo.currentIndexChanged.connect(
+            lambda _index: self._update_current_fill(
+                mode=str(self._fill_mode_combo.currentData())
+            )
+        )
+        layout.addWidget(_field("填充方式", self._fill_mode_combo))
+
+        self._decoration_type_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._decoration_type_combo)
+        self._decoration_type_combo.addItem("阴影", "shadow")
+        self._decoration_type_combo.addItem("发光", "glow")
+        self._decoration_type_combo.currentIndexChanged.connect(
+            lambda _index: self._update_color_subject_style(
+                decoration_kind=str(self._decoration_type_combo.currentData())
+            )
+        )
+        self._decoration_type_field = _field("装饰类型", self._decoration_type_combo)
+        layout.addWidget(self._decoration_type_field)
+
+        self._fill_editor_stack = _DynamicStackedWidget(section)
+        self._fill_editor_stack.addWidget(self._make_solid_fill_page())
+        self._fill_editor_stack.addWidget(self._make_gradient_fill_page())
+        self._fill_editor_stack.addWidget(self._make_split_fill_page())
+        self._fill_editor_stack.addWidget(self._make_image_fill_page())
+        layout.addWidget(self._fill_editor_stack)
+
+        detail_grid = QWidget(section)
+        detail_layout = QGridLayout(detail_grid)
+        detail_layout.setContentsMargins(0, 0, 0, 0)
+        detail_layout.setHorizontalSpacing(8)
+        detail_layout.setVerticalSpacing(8)
+
+        self._stroke_width_spin = _spin(0, 24, suffix=" px")
+        self._stroke_width_spin.valueChanged.connect(
+            lambda value: self._update_color_subject_style(stroke_width_px=value)
+        )
+        detail_layout.addWidget(_field("描边宽度", self._stroke_width_spin), 0, 0)
+
+        self._stroke2_width_spin = _spin(0, 48, suffix=" px")
+        self._stroke2_width_spin.valueChanged.connect(
+            lambda value: self._update_color_subject_style(stroke2_width_px=value)
+        )
+        detail_layout.addWidget(_field("描边2宽度", self._stroke2_width_spin), 0, 1)
+
+        self._shadow_x_spin = _spin(-40, 40, suffix=" px")
+        self._shadow_x_spin.valueChanged.connect(
+            lambda value: self._update_color_subject_style(shadow_offset_x=value)
+        )
+        self._shadow_x_field = _field("阴影 X", self._shadow_x_spin)
+        detail_layout.addWidget(self._shadow_x_field, 1, 0)
+
+        self._shadow_y_spin = _spin(-40, 40, suffix=" px")
+        self._shadow_y_spin.valueChanged.connect(
+            lambda value: self._update_color_subject_style(shadow_offset_y=value)
+        )
+        self._shadow_y_field = _field("阴影 Y", self._shadow_y_spin)
+        detail_layout.addWidget(self._shadow_y_field, 1, 1)
+
+        self._glow_before_radius_spin = _spin(1, 120, suffix=" px")
+        self._glow_before_radius_spin.valueChanged.connect(
+            lambda value: self._update_color_subject_style(
+                glow_radius_px=value,
+                glow_before_radius_px=value,
+            )
+        )
+        self._glow_radius_spin = self._glow_before_radius_spin
+        self._glow_radius_field = _field("走字前发光", self._glow_before_radius_spin)
+        detail_layout.addWidget(self._glow_radius_field, 1, 0)
+
+        self._glow_after_radius_spin = _spin(1, 120, suffix=" px")
+        self._glow_after_radius_spin.valueChanged.connect(
+            lambda value: self._update_color_subject_style(glow_after_radius_px=value)
+        )
+        self._glow_after_radius_field = _field("走字后发光", self._glow_after_radius_spin)
+        detail_layout.addWidget(self._glow_after_radius_field, 1, 1)
+
+        self._glow_concentration_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._glow_concentration_combo)
+        for label, value in [("低", 0), ("中", 1), ("高", 2)]:
+            self._glow_concentration_combo.addItem(label, value)
+        self._glow_concentration_combo.currentIndexChanged.connect(
+            lambda _index: self._update_color_subject_style(
+                glow_concentration_level=int(
+                    self._glow_concentration_combo.currentData() or 0
+                )
+            )
+        )
+        self._glow_concentration_field = _field(
+            "发光浓度", self._glow_concentration_combo
+        )
+        detail_layout.addWidget(self._glow_concentration_field, 2, 0, 1, 2)
+
+        detail_layout.setColumnStretch(0, 1)
+        detail_layout.setColumnStretch(1, 1)
+        layout.addWidget(detail_grid)
+
+        self._ruby_apply_main_btn = FluentPushButton("应用主文字配色", section)
+        self._ruby_apply_main_btn.setMinimumHeight(32)
+        self._ruby_apply_main_btn.clicked.connect(self._apply_main_colors_to_ruby)
+        self._ruby_apply_main_btn.hide()
+        layout.addWidget(self._ruby_apply_main_btn)
+        return section
+
+    def _make_solid_fill_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._paint_solid_btn = self._paint_color_button("color", "#FFFFFF")
+        layout.addWidget(_field("颜色", self._paint_solid_btn))
+        return page
+
+    def _make_gradient_fill_page(self) -> QWidget:
+        page = QWidget()
+        layout = QGridLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
+        self._paint_gradient_start_btn = self._paint_color_button("start_color", "#FFFFFF")
+        self._paint_gradient_end_btn = self._paint_color_button("end_color", "#FF5A6F")
+        self._paint_gradient_start_btn.hide()
+        self._paint_gradient_end_btn.hide()
+        self._gradient_editor = GradientStopsEditor(page)
+        self._gradient_editor.stopsChanged.connect(self._update_gradient_stops)
+        self._gradient_editor.selectedChanged.connect(
+            lambda _index: self._sync_gradient_stop_controls()
+        )
+        layout.addWidget(_field("渐变条", self._gradient_editor), 0, 0, 1, 2)
+
+        self._gradient_stop_color_btn = ColorButton("#FFFFFF", page)
+        self._gradient_stop_color_btn.clicked.connect(self._choose_gradient_stop_color)
+        self._gradient_stop_position_spin = _spin(0, 100, suffix=" %")
+        self._gradient_stop_position_spin.valueChanged.connect(
+            self._set_gradient_stop_position
+        )
+        self._gradient_stop_delete_btn = FluentPushButton("删除关键点", page)
+        self._gradient_stop_delete_btn.setMinimumHeight(30)
+        self._gradient_stop_delete_btn.clicked.connect(
+            self._gradient_editor.delete_selected_stop
+        )
+        layout.addWidget(_field("关键点颜色", self._gradient_stop_color_btn), 1, 0)
+        layout.addWidget(_field("关键点位置", self._gradient_stop_position_spin), 1, 1)
+        layout.addWidget(self._gradient_stop_delete_btn, 2, 0, 1, 2)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
+        return page
+
+    def _make_split_fill_page(self) -> QWidget:
+        page = QWidget()
+        layout = QGridLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
+        self._paint_split_top_btn = self._paint_color_button("split_top_color", "#FFFFFF")
+        self._paint_split_bottom_btn = self._paint_color_button(
+            "split_bottom_color", "#FF5A6F"
+        )
+        self._paint_split_position_spin = _spin(0, 100, suffix=" %")
+        self._paint_split_position_spin.valueChanged.connect(
+            lambda value: self._update_current_fill(split_position_pct=value)
+        )
+        layout.addWidget(_field("上色", self._paint_split_top_btn), 0, 0)
+        layout.addWidget(_field("下色", self._paint_split_bottom_btn), 0, 1)
+        layout.addWidget(_field("分割位置", self._paint_split_position_spin), 1, 0)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
+        return page
+
+    def _make_image_fill_page(self) -> QWidget:
+        page = QWidget()
+        layout = QGridLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(8)
+        self._paint_image_path_edit = FluentLineEdit(page)
+        _compact_control(self._paint_image_path_edit)
+        self._paint_image_path_edit.editingFinished.connect(
+            lambda: self._update_current_fill(image_path=self._paint_image_path_edit.text())
+        )
+        self._paint_image_browse_btn = FluentPushButton("浏览...", page)
+        self._paint_image_browse_btn.setMinimumHeight(32)
+        self._paint_image_browse_btn.clicked.connect(self._choose_paint_image)
+        self._paint_image_scale_spin = _spin(10, 400, suffix=" %")
+        self._paint_image_scale_spin.valueChanged.connect(
+            lambda value: self._update_current_fill(image_scale_pct=value)
+        )
+        path_row = QWidget(page)
+        path_layout = QHBoxLayout(path_row)
+        path_layout.setContentsMargins(0, 0, 0, 0)
+        path_layout.setSpacing(4)
+        path_layout.addWidget(self._paint_image_path_edit, 1)
+        path_layout.addWidget(self._paint_image_browse_btn)
+        layout.addWidget(_field("图像文件", path_row), 0, 0, 1, 2)
+        layout.addWidget(_field("缩放", self._paint_image_scale_spin), 1, 0)
+        layout.setColumnStretch(0, 1)
+        layout.setColumnStretch(1, 1)
+        return page
+
+    def _paint_color_button(self, field_name: str, color: str) -> ColorButton:
+        button = ColorButton(color)
+        button.clicked.connect(
+            lambda _checked=False, field=field_name: self._choose_paint_color(field)
+        )
+        return button
+
+    def _make_scheme_section(self) -> QFrame:
+        section, layout = _section("角色")
+
+        # 内部仍叫 _singer_combo（少改动），但现在装的是「角色」：全局默认 + 各角色名。
+        self._singer_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._singer_combo)
+        self._singer_combo.currentIndexChanged.connect(self._on_scheme_combo_changed)
+        layout.addWidget(_field("当前角色", self._singer_combo))
+
+        btn_row = QWidget(section)
+        btn_layout = QHBoxLayout(btn_row)
+        btn_layout.setContentsMargins(0, 0, 0, 0)
+        btn_layout.setSpacing(6)
+        self._add_scheme_button = FluentPushButton("新建角色", section)
+        self._add_scheme_button.setMinimumHeight(30)
+        self._add_scheme_button.clicked.connect(lambda _checked=False: self._add_custom_scheme())
+        self._rename_role_button = FluentPushButton("重命名", section)
+        self._rename_role_button.setMinimumHeight(30)
+        self._rename_role_button.clicked.connect(lambda _checked=False: self._rename_current_role())
+        self._delete_role_button = FluentPushButton("删除", section)
+        self._delete_role_button.setMinimumHeight(30)
+        self._delete_role_button.clicked.connect(lambda _checked=False: self._delete_current_role())
+        for btn in (self._add_scheme_button, self._rename_role_button, self._delete_role_button):
+            btn_layout.addWidget(btn, 1)
+        layout.addWidget(btn_row)
+
+        self._manage_presets_button = FluentPushButton("管理预设", section)
+        self._manage_presets_button.setMinimumHeight(30)
+        self._manage_presets_button.clicked.connect(lambda _checked=False: self._open_preset_manager())
+        layout.addWidget(self._manage_presets_button)
+        return section
+
+    def _make_effects_page(self) -> QWidget:
+        scroll, layout = _scroll_page()
+        layout.addWidget(self._make_animation_section())
+        layout.addWidget(self._make_lit_section())
+        layout.addStretch(1)
+        return scroll
+
+    # ----------------------------------------------------------------- 标题（B7）
+
+    def _make_title_page(self) -> QWidget:
+        scroll, layout = _scroll_page()
+        layout.addWidget(self._make_title_text_section())
+        layout.addWidget(self._make_title_font_section())
+        layout.addWidget(self._make_title_color_section())
+        layout.addWidget(self._make_title_position_section())
+        layout.addWidget(self._make_title_time_section())
+        layout.addStretch(1)
+        return scroll
+
+    def _make_title_text_section(self) -> QFrame:
+        section, layout = _section("标题", switch=True)
+        self._title_enabled_switch = section.header_switch
+        self._title_enabled_switch.toggled.connect(self._on_title_enabled_toggled)
+
+        # 多行文本框：回车换行后自动增高（背景卡片随之变高）。
+        self._title_text_edit = _GrowingPlainTextEdit(section)
+        self._title_text_edit.setPlaceholderText("{title} / {artist}")
+        self._title_text_edit.textChanged.connect(
+            lambda: self._update_title(text_template=self._title_text_edit.toPlainText())
+        )
+        layout.addWidget(_field("文字（{title} / {artist} 取自字幕元数据，可换行）", self._title_text_edit))
+        return section
+
+    def _make_title_font_section(self) -> QFrame:
+        section, layout = _section("字体")
+
+        self._title_font_combo = _WheelFocusedFontComboBox(section)
+        _compact_control(self._title_font_combo)
+        self._title_font_combo.currentFontChanged.connect(
+            lambda font: self._update_title(font_family=font.family())
+        )
+        layout.addWidget(_field("日文字体", self._title_font_combo))
+
+        # 英数（ASCII）字体可单独指定；不勾选时与日文共用一套字体（同字幕字体处理）。
+        self._title_latin_check = CheckBox("英数单独字体", section)
+        self._title_latin_check.toggled.connect(self._on_title_font_latin_toggled)
+        layout.addWidget(self._title_latin_check)
+
+        self._title_latin_combo = _WheelFocusedFontComboBox(section)
+        _compact_control(self._title_latin_combo)
+        self._title_latin_combo.setEnabled(False)
+        self._title_latin_combo.currentFontChanged.connect(self._on_title_font_latin_changed)
+        layout.addWidget(_field("英数字体", self._title_latin_combo))
+
+        box = _SubGroup("尺寸 / 间距", parent=section)
+        layout.addWidget(box)
+        add = _grid_adder(box.grid)
+
+        self._title_size_spin = _spin(8, 400, suffix=" px")
+        self._title_size_spin.valueChanged.connect(
+            lambda value: self._update_title(font_size_px=value)
+        )
+        add("字号", self._title_size_spin)
+
+        self._title_weight_spin = _spin(100, 900)
+        self._title_weight_spin.setSingleStep(100)
+        self._title_weight_spin.valueChanged.connect(
+            lambda value: self._update_title(font_weight=value)
+        )
+        add("字重", self._title_weight_spin)
+
+        self._title_letter_spin = _spin(-20, 200, suffix=" px")
+        self._title_letter_spin.valueChanged.connect(
+            lambda value: self._update_title(letter_spacing_px=value)
+        )
+        add("字间距", self._title_letter_spin)
+
+        self._title_line_gap_spin = _spin(0, 200, suffix=" px")
+        self._title_line_gap_spin.valueChanged.connect(
+            lambda value: self._update_title(line_gap_px=value)
+        )
+        add("行间距", self._title_line_gap_spin)
+
+        self._title_italic_check = CheckBox("斜体", section)
+        self._title_italic_check.toggled.connect(
+            lambda checked: self._update_title(italic=checked)
+        )
+        layout.addWidget(self._title_italic_check)
+        return section
+
+    def _make_title_color_section(self) -> QFrame:
+        section, layout = _section("颜色")
+
+        self._title_fill_button = self._title_color_button("fill")
+        layout.addWidget(_field("填充", self._title_fill_button))
+
+        stroke_box = _SubGroup("描边", parent=section)
+        layout.addWidget(stroke_box)
+        add = _grid_adder(stroke_box.grid)
+        self._title_stroke_button = self._title_color_button("stroke")
+        add("颜色", self._title_stroke_button)
+        self._title_stroke_width_spin = _spin(0, 80, suffix=" px")
+        self._title_stroke_width_spin.valueChanged.connect(
+            lambda value: self._update_title(stroke_width_px=value)
+        )
+        add("宽度", self._title_stroke_width_spin)
+        self._title_stroke2_button = self._title_color_button("stroke2")
+        add("二重边色", self._title_stroke2_button)
+        self._title_stroke2_width_spin = _spin(0, 80, suffix=" px")
+        self._title_stroke2_width_spin.valueChanged.connect(
+            lambda value: self._update_title(stroke2_width_px=value)
+        )
+        add("二重边宽", self._title_stroke2_width_spin)
+
+        deco_box = _SubGroup("装饰", parent=section)
+        layout.addWidget(deco_box)
+        add = _grid_adder(deco_box.grid)
+        self._title_decoration_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._title_decoration_combo)
+        for label, value in [("阴影", "shadow"), ("发光", "glow")]:
+            self._title_decoration_combo.addItem(label, value)
+        self._title_decoration_combo.currentIndexChanged.connect(
+            lambda _i: self._update_title(decoration_kind=self._title_decoration_combo.currentData())
+        )
+        add("装饰类型", self._title_decoration_combo)
+        self._title_shadow_button = self._title_color_button("shadow")
+        add("装饰颜色", self._title_shadow_button)
+        self._title_glow_spin = _spin(1, 80, suffix=" px")
+        self._title_glow_spin.valueChanged.connect(
+            lambda value: self._update_title(glow_radius_px=value)
+        )
+        add("发光半径", self._title_glow_spin)
+        self._title_shadow_x_spin = _spin(-60, 60, suffix=" px")
+        self._title_shadow_x_spin.valueChanged.connect(
+            lambda value: self._update_title(shadow_offset_x=value)
+        )
+        add("阴影 X", self._title_shadow_x_spin)
+        self._title_shadow_y_spin = _spin(-60, 60, suffix=" px")
+        self._title_shadow_y_spin.valueChanged.connect(
+            lambda value: self._update_title(shadow_offset_y=value)
+        )
+        add("阴影 Y", self._title_shadow_y_spin)
+        return section
+
+    def _make_title_position_section(self) -> QFrame:
+        section, layout = _section("位置")
+        box = _SubGroup("锚点 / 偏移", parent=section)
+        layout.addWidget(box)
+        add = _grid_adder(box.grid)
+
+        self._title_anchor_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._title_anchor_combo)
+        for label, value in _TITLE_ANCHOR_OPTIONS:
+            self._title_anchor_combo.addItem(label, value)
+        self._title_anchor_combo.currentIndexChanged.connect(
+            lambda _i: self._update_title(anchor=self._title_anchor_combo.currentData())
+        )
+        add("锚点", self._title_anchor_combo)
+
+        self._title_align_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._title_align_combo)
+        for label, value in [("左对齐", "left"), ("居中", "center"), ("右对齐", "right")]:
+            self._title_align_combo.addItem(label, value)
+        self._title_align_combo.currentIndexChanged.connect(
+            lambda _i: self._update_title(align=self._title_align_combo.currentData())
+        )
+        add("多行对齐", self._title_align_combo)
+
+        self._title_offset_x_spin = _spin(-2000, 2000, suffix=" px")
+        self._title_offset_x_spin.valueChanged.connect(
+            lambda value: self._update_title(offset_x=value)
+        )
+        add("X 偏移", self._title_offset_x_spin)
+
+        self._title_offset_y_spin = _spin(-2000, 2000, suffix=" px")
+        self._title_offset_y_spin.valueChanged.connect(
+            lambda value: self._update_title(offset_y=value)
+        )
+        add("Y 偏移", self._title_offset_y_spin)
+        return section
+
+    def _make_title_time_section(self) -> QFrame:
+        section, layout = _section("显示时段")
+
+        self._title_mode_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._title_mode_combo)
+        for label, value in [
+            ("全程显示", "whole"),
+            ("仅开头", "head"),
+            ("仅片尾", "tail"),
+            ("开头+片尾", "head_tail"),
+        ]:
+            self._title_mode_combo.addItem(label, value)
+        self._title_mode_combo.currentIndexChanged.connect(
+            lambda _i: self._update_title(show_mode=self._title_mode_combo.currentData())
+        )
+        layout.addWidget(_field("显示模式", self._title_mode_combo))
+
+        box = _SubGroup("时间", parent=section)
+        layout.addWidget(box)
+        add = _grid_adder(box.grid)
+        self._title_head_spin = _spin(0, 600_000, suffix=" ms")
+        self._title_head_spin.valueChanged.connect(
+            lambda value: self._update_title(head_offset_ms=value)
+        )
+        add("开始偏移", self._title_head_spin)
+        self._title_duration_spin = _spin(0, 600_000, suffix=" ms")
+        self._title_duration_spin.valueChanged.connect(
+            lambda value: self._update_title(duration_ms=value)
+        )
+        add("显示时长", self._title_duration_spin)
+        self._title_tail_spin = _spin(0, 600_000, suffix=" ms")
+        self._title_tail_spin.valueChanged.connect(
+            lambda value: self._update_title(tail_offset_ms=value)
+        )
+        add("片尾偏移", self._title_tail_spin)
+        self._title_fade_in_spin = _spin(0, 10_000, suffix=" ms")
+        self._title_fade_in_spin.valueChanged.connect(
+            lambda value: self._update_title(fade_in_ms=value)
+        )
+        add("淡入", self._title_fade_in_spin)
+        self._title_fade_out_spin = _spin(0, 10_000, suffix=" ms")
+        self._title_fade_out_spin.valueChanged.connect(
+            lambda value: self._update_title(fade_out_ms=value)
+        )
+        add("淡出", self._title_fade_out_spin)
+        return section
+
+    def _title_color_button(self, attr: str) -> ColorButton:
+        fill = getattr(self._current_title(), attr)
+        button = ColorButton(fill.color)
+        button.clicked.connect(lambda _checked=False, a=attr: self._choose_title_color(a))
+        return button
+
+    def _current_title(self) -> TitleOverlay:
+        return self._style.title_overlay if self._style.title_overlay is not None else TitleOverlay()
+
+    def _choose_title_color(self, attr: str) -> None:
+        fill = getattr(self._current_title(), attr)
+        color = QColorDialog.getColor(
+            QColor(fill.color),
+            self,
+            "选择颜色",
+            QColorDialog.ColorDialogOption.ShowAlphaChannel,
+        )
+        if color.isValid():
+            normalized = _normalize_hex(color.name(QColor.NameFormat.HexArgb))
+            self._update_title(**{attr: _solid_paint_fill(normalized)})
+
+    def _on_title_enabled_toggled(self, checked: bool) -> None:
+        self._update_title(enabled=checked)
+
+    def _on_title_font_latin_toggled(self, checked: bool) -> None:
+        self._title_latin_combo.setEnabled(checked)
+        if self._syncing:
+            return
+        if checked:
+            self._update_title(font_family_latin=self._title_latin_combo.currentFont().family())
+        else:
+            self._update_title(font_family_latin=None)
+
+    def _on_title_font_latin_changed(self, font: QFont) -> None:
+        if self._syncing:
+            return
+        if self._title_latin_check.isChecked():
+            self._update_title(font_family_latin=font.family())
+
+    def _update_title(self, **changes) -> None:
+        if self._syncing:
+            return
+        title = self._current_title()
+        if "anchor" in changes and changes["anchor"] not in TITLE_ANCHORS:
+            changes["anchor"] = "top_left"
+        if "align" in changes and changes["align"] not in HORIZONTAL_ALIGNS:
+            changes["align"] = "left"
+        if "show_mode" in changes and changes["show_mode"] not in TITLE_SHOW_MODES:
+            changes["show_mode"] = "whole"
+        if "decoration_kind" in changes and changes["decoration_kind"] not in {"shadow", "glow"}:
+            changes["decoration_kind"] = "glow"
+        new_title = replace(title, **changes)
+        self._style = replace(self._style, title_overlay=new_title)
+        self._syncing = True
+        try:
+            self._sync_title_controls()
+        finally:
+            self._syncing = False
+        self.styleChanged.emit(self._style)
+
+    def _sync_title_controls(self) -> None:
+        if not hasattr(self, "_title_enabled_switch"):
+            return
+        title = self._current_title()
+        self._title_enabled_switch.setChecked(title.enabled)
+        # 仅在内容不同才回填，避免实时输入时把光标弹到末尾。
+        if self._title_text_edit.toPlainText() != title.text_template:
+            self._title_text_edit.setPlainText(title.text_template)
+        self._title_font_combo.setCurrentFont(QFont(title.font_family))
+        has_latin = bool(title.font_family_latin)
+        self._title_latin_check.setChecked(has_latin)
+        self._title_latin_combo.setEnabled(has_latin)
+        if has_latin:
+            self._title_latin_combo.setCurrentFont(QFont(title.font_family_latin))
+        self._title_size_spin.setValue(title.font_size_px)
+        self._title_weight_spin.setValue(title.font_weight)
+        self._title_letter_spin.setValue(title.letter_spacing_px)
+        self._title_line_gap_spin.setValue(title.line_gap_px)
+        self._title_italic_check.setChecked(title.italic)
+        self._title_fill_button.set_color(title.fill.color)
+        self._title_stroke_button.set_color(title.stroke.color)
+        self._title_stroke_width_spin.setValue(title.stroke_width_px)
+        self._title_stroke2_button.set_color(title.stroke2.color)
+        self._title_stroke2_width_spin.setValue(title.stroke2_width_px)
+        self._title_decoration_combo.setCurrentIndex(
+            max(0, self._title_decoration_combo.findData(title.decoration_kind))
+        )
+        self._title_shadow_button.set_color(title.shadow.color)
+        self._title_glow_spin.setValue(title.glow_radius_px)
+        self._title_shadow_x_spin.setValue(title.shadow_offset_x)
+        self._title_shadow_y_spin.setValue(title.shadow_offset_y)
+        self._title_anchor_combo.setCurrentIndex(
+            max(0, self._title_anchor_combo.findData(title.anchor))
+        )
+        self._title_align_combo.setCurrentIndex(
+            max(0, self._title_align_combo.findData(title.align))
+        )
+        self._title_offset_x_spin.setValue(title.offset_x)
+        self._title_offset_y_spin.setValue(title.offset_y)
+        self._title_mode_combo.setCurrentIndex(
+            max(0, self._title_mode_combo.findData(title.show_mode))
+        )
+        self._title_head_spin.setValue(title.head_offset_ms)
+        self._title_duration_spin.setValue(title.duration_ms)
+        self._title_tail_spin.setValue(title.tail_offset_ms)
+        self._title_fade_in_spin.setValue(title.fade_in_ms)
+        self._title_fade_out_spin.setValue(title.fade_out_ms)
+
+    def _make_lit_section(self) -> QFrame:
+        section, layout = _section("指示灯", switch=True)
+
+        self._lit_enabled_switch = section.header_switch
+        self._lit_enabled_switch.toggled.connect(
+            lambda checked: self._update_style(lit_enabled=checked)
+        )
+
+        # 形状灯（圆/方/圆角）与音量柱用的是两套互不相干的字段：形状灯读 lit.*，
+        # 音量柱读 volume.*。控件按种类分组成小节，再按当前 lit_style 整组显隐，
+        # 既不会出现「调了没反应」的死控件，也不会留下空网格。
+        self._lit_volume_groups: list[QWidget] = []
+        self._lit_shape_groups: list[QWidget] = []
+
+        def group(title: str, category: str | None, *, collapsed: bool = False):
+            box = _SubGroup(title, collapsed=collapsed, parent=section)
+            grid = box.grid
+            layout.addWidget(box)
+            if category == "volume":
+                self._lit_volume_groups.append(box)
+            elif category == "shape":
+                self._lit_shape_groups.append(box)
+            pos = [0, 0]
+
+            def add(label: str | None, control: QWidget) -> None:
+                widget = _field(label, control) if label is not None else control
+                grid.addWidget(widget, pos[0], pos[1])
+                pos[1] += 1
+                if pos[1] >= 2:
+                    pos[0] += 1
+                    pos[1] = 0
+
+            return add
+
+        # ---- 样式（始终可见，决定下面显示哪一组） -------------------------------
+        self._lit_style_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._lit_style_combo)
+        for label, value in [
+            ("音量柱", "volume"),
+            ("圆形", "circle"),
+            ("方形", "square"),
+            ("圆角", "rounded"),
+        ]:
+            self._lit_style_combo.addItem(label, value)
+        self._lit_style_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(lit_style=self._lit_style_combo.currentData())
+        )
+        layout.addWidget(_field("样式", self._lit_style_combo))
+
+        # ---- 通用（两种样式共用） ----------------------------------------------
+        add = group("通用", None)
+        self._lit_duration_spin = _spin(0, 60_000, suffix=" ms")
+        self._lit_duration_spin.valueChanged.connect(
+            lambda value: self._update_style(signals_duration_ms=value)
+        )
+        add("持续", self._lit_duration_spin)
+
+        self._lit_waiting_time_spin = _spin(0, 60_000, suffix=" ms")
+        self._lit_waiting_time_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_waiting_time_ms=value)
+        )
+        add("等待", self._lit_waiting_time_spin)
+
+        self._lit_stroke_width_spin = _spin(0, 40, suffix=" px")
+        self._lit_stroke_width_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_stroke_width=value)
+        )
+        add("描边宽度", self._lit_stroke_width_spin)
+
+        self._lit_opacity_spin = _spin(0, 100, suffix=" %")
+        self._lit_opacity_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_opacity_pct=value)
+        )
+        add("透明度", self._lit_opacity_spin)
+
+        # ---- 音量柱 · 尺寸 ------------------------------------------------------
+        add = group("音量柱 · 尺寸", "volume")
+        self._volume_size_spin = _spin(4, 240, suffix=" px")
+        self._volume_size_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_size=value)
+        )
+        add("整体大小", self._volume_size_spin)
+
+        self._volume_column_width_spin = _spin(1, 120, suffix=" px")
+        self._volume_column_width_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_column_width=value)
+        )
+        add("柱条宽度", self._volume_column_width_spin)
+
+        self._volume_column_count_spin = _spin(1, 16)
+        self._volume_column_count_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_column_count=value)
+        )
+        add("柱条数量", self._volume_column_count_spin)
+
+        self._volume_column_spacing_spin = _spin(0, 120, suffix=" px")
+        self._volume_column_spacing_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_column_spacing=value)
+        )
+        add("柱条间距", self._volume_column_spacing_spin)
+
+        self._volume_ratio_spin = _spin(1, 20)
+        self._volume_ratio_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_ratio=float(value))
+        )
+        add("前后比率", self._volume_ratio_spin)
+
+        self._volume_align_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._volume_align_combo)
+        for label, value in [("顶部", 0), ("居中", 1), ("底部", 2)]:
+            self._volume_align_combo.addItem(label, value)
+        self._volume_align_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(volume_align=int(self._volume_align_combo.currentData()))
+        )
+        add("柱条对齐", self._volume_align_combo)
+
+        # ---- 音量柱 · 位置 ------------------------------------------------------
+        add = group("音量柱 · 位置", "volume", collapsed=True)
+        self._volume_x_spin = _spin(-4000, 4000)
+        self._volume_x_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_offset_x=value)
+        )
+        add("X", self._volume_x_spin)
+
+        self._volume_y_spin = _spin(-4000, 4000)
+        self._volume_y_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_offset_y=value)
+        )
+        add("Y", self._volume_y_spin)
+
+        # ---- 音量柱 · 闪烁 ------------------------------------------------------
+        add = group("音量柱 · 闪烁", "volume", collapsed=True)
+        self._volume_flash_times_spin = _spin(1, 20)
+        self._volume_flash_times_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_flash_times=value)
+        )
+        add("闪烁次数", self._volume_flash_times_spin)
+
+        self._volume_flash_duration_spin = _spin(0, 100, suffix=" %")
+        self._volume_flash_duration_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_flash_duration_ratio=value / 100.0)
+        )
+        add("闪烁占比", self._volume_flash_duration_spin)
+
+        self._volume_transition_ratio_spin = _spin(0, 100, suffix=" %")
+        self._volume_transition_ratio_spin.valueChanged.connect(
+            lambda value: self._update_style(volume_transition_ratio_pct=value)
+        )
+        add("覆盖过渡", self._volume_transition_ratio_spin)
+
+        # ---- 音量柱 · 颜色 ------------------------------------------------------
+        add = group("音量柱 · 颜色", "volume")
+        self._volume_fill_btn = self._color_button("volume_fill_color", self._style.volume_fill_color)
+        self._volume_stroke_btn = self._color_button(
+            "volume_stroke_color", self._style.volume_stroke_color
+        )
+        self._volume_overlay_fill_btn = self._color_button(
+            "volume_overlay_fill_color", self._style.volume_overlay_fill_color
+        )
+        self._volume_overlay_stroke_btn = self._color_button(
+            "volume_overlay_stroke_color", self._style.volume_overlay_stroke_color
+        )
+        add("柱填充色", self._volume_fill_btn)
+        add("柱描边色", self._volume_stroke_btn)
+        add("覆盖填充色", self._volume_overlay_fill_btn)
+        add("覆盖描边色", self._volume_overlay_stroke_btn)
+
+        # ---- 形状灯 · 尺寸 ------------------------------------------------------
+        add = group("形状灯 · 尺寸", "shape")
+        self._lit_number_spin = _spin(1, 8)
+        self._lit_number_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_number=value)
+        )
+        add("数量", self._lit_number_spin)
+
+        self._lit_size_spin = _spin(4, 160, suffix=" px")
+        self._lit_size_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_size=value)
+        )
+        add("大小", self._lit_size_spin)
+
+        self._lit_tracking_spin = _spin(0, 200, suffix=" px")
+        self._lit_tracking_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_tracking=value)
+        )
+        add("间距", self._lit_tracking_spin)
+
+        # ---- 形状灯 · 位置 ------------------------------------------------------
+        add = group("形状灯 · 位置", "shape", collapsed=True)
+        self._lit_x_spin = _spin(-4000, 4000)
+        self._lit_x_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_offset_x=value)
+        )
+        add("X", self._lit_x_spin)
+
+        self._lit_y_spin = _spin(-4000, 4000)
+        self._lit_y_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_offset_y=value)
+        )
+        add("Y", self._lit_y_spin)
+
+        # ---- 形状灯 · 外观 ------------------------------------------------------
+        add = group("形状灯 · 外观", "shape")
+        self._lit_fill_btn = self._color_button("lit_fill_color", self._style.lit_fill_color)
+        add("填充颜色", self._lit_fill_btn)
+
+        self._lit_stroke_btn = self._color_button("lit_stroke_color", self._style.lit_stroke_color)
+        add("描边颜色", self._lit_stroke_btn)
+
+        self._lit_edge_brightness_spin = _spin(0, 100, suffix=" %")
+        self._lit_edge_brightness_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_edge_brightness_pct=value)
+        )
+        add("边缘亮度", self._lit_edge_brightness_spin)
+
+        self._lit_stroke_soften_spin = _spin(0, 40, suffix=" px")
+        self._lit_stroke_soften_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_stroke_soften=value)
+        )
+        add("描边柔化", self._lit_stroke_soften_spin)
+
+        self._lit_shadow_check = CheckBox("阴影", section)
+        self._lit_shadow_check.toggled.connect(
+            lambda checked: self._update_style(lit_shadow=checked)
+        )
+        add(None, self._lit_shadow_check)
+
+        # ---- 形状灯 · 转场 ------------------------------------------------------
+        add = group("形状灯 · 转场", "shape", collapsed=True)
+        self._lit_transition_mode_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._lit_transition_mode_combo)
+        for label, value in [("无", "none"), ("淡入淡出", "fade"), ("滑动", "slide")]:
+            self._lit_transition_mode_combo.addItem(label, value)
+        self._lit_transition_mode_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                lit_transition_mode=self._lit_transition_mode_combo.currentData()
+            )
+        )
+        add("类型", self._lit_transition_mode_combo)
+
+        self._lit_transition_ratio_spin = _spin(0, 100, suffix=" %")
+        self._lit_transition_ratio_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_transition_ratio_pct=value)
+        )
+        add("时长比例", self._lit_transition_ratio_spin)
+
+        self._lit_transition_angle_spin = _spin(-360, 360, suffix=" °")
+        self._lit_transition_angle_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_transition_angle_deg=value)
+        )
+        add("角度", self._lit_transition_angle_spin)
+
+        self._lit_transition_distance_spin = _spin(0, 800, suffix=" px")
+        self._lit_transition_distance_spin.valueChanged.connect(
+            lambda value: self._update_style(lit_transition_distance=value)
+        )
+        add("距离", self._lit_transition_distance_spin)
+
+        self._sync_lit_style_visibility()
+        return section
+
+    def _sync_lit_style_visibility(self) -> None:
+        """按当前指示灯样式整组显隐：音量柱组只在音量柱样式下显示，形状灯组反之。"""
+        if not hasattr(self, "_lit_volume_groups"):
+            return
+        is_volume = self._style.lit_style == "volume"
+        for box in self._lit_volume_groups:
+            box.setVisible(is_volume)
+        for box in self._lit_shape_groups:
+            box.setVisible(not is_volume)
+
+    def _make_animation_section(self) -> QFrame:
+        section, layout = _section("入退场动画")
+
+        grid = QWidget(section)
+        grid_layout = QGridLayout(grid)
+        grid_layout.setContentsMargins(0, 0, 0, 0)
+        grid_layout.setHorizontalSpacing(8)
+        grid_layout.setVerticalSpacing(8)
+
+        self._entry_anim_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._entry_anim_combo)
+        for label, value in [
+            ("无", "none"),
+            ("淡入", "fade"),
+            ("滑入", "slide_in"),
+            ("上移", "rise"),
+            ("逐文字渐显", "char_fade"),
+            ("旋转翻转", "spin_flip"),
+            ("ユートピア", "utopia"),
+        ]:
+            self._entry_anim_combo.addItem(label, value)
+        self._entry_anim_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                entry_anim=self._entry_anim_combo.currentData()
+            )
+        )
+        grid_layout.addWidget(_field("入场", self._entry_anim_combo), 0, 0)
+
+        self._entry_lead_spin = _spin(0, 3000, suffix=" ms")
+        self._entry_lead_spin.valueChanged.connect(
+            lambda value: self._update_style(entry_lead_ms=value)
+        )
+        grid_layout.addWidget(_field("入场时长", self._entry_lead_spin), 0, 1)
+
+        self._exit_anim_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._exit_anim_combo)
+        for label, value in [
+            ("无", "none"),
+            ("淡出", "fade"),
+            ("滑出", "slide_out"),
+            ("上移", "rise"),
+            ("逐文字渐隐", "char_fade"),
+            ("旋转翻转", "spin_flip"),
+            ("ユートピア", "utopia"),
+        ]:
+            self._exit_anim_combo.addItem(label, value)
+        self._exit_anim_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                exit_anim=self._exit_anim_combo.currentData()
+            )
+        )
+        grid_layout.addWidget(_field("退场", self._exit_anim_combo), 1, 0)
+
+        self._exit_fade_spin = _spin(0, 3000, suffix=" ms")
+        self._exit_fade_spin.valueChanged.connect(
+            lambda value: self._update_style(exit_fade_ms=value)
+        )
+        grid_layout.addWidget(_field("退场时长", self._exit_fade_spin), 1, 1)
+
+        grid_layout.setColumnStretch(0, 1)
+        grid_layout.setColumnStretch(1, 1)
+        layout.addWidget(grid)
+        return section
+
+    def _make_viewport_section(self) -> QFrame:
+        section, layout = _section("视图")
+
+        self._viewport_align_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._viewport_align_combo)
+        for label, value in [
+            ("左上", "top_left"),
+            ("中上", "top_center"),
+            ("右上", "top_right"),
+            ("左中", "center_left"),
+            ("居中", "center"),
+            ("右中", "center_right"),
+            ("左下", "bottom_left"),
+            ("中下", "bottom_center"),
+            ("右下", "bottom_right"),
+        ]:
+            self._viewport_align_combo.addItem(label, value)
+        self._viewport_align_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                viewport_align=self._viewport_align_combo.currentData()
+            )
+        )
+        layout.addWidget(_field("对齐", self._viewport_align_combo))
+
+        row = QWidget(section)
+        row_layout = QGridLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setHorizontalSpacing(8)
+        row_layout.setVerticalSpacing(8)
+
+        # 位置 X / Y 为 4 位数值框（含上下箭头），窄面板下两个并排会溢出，
+        # 各占整行；缩放 / 旋转较窄，可同行。
+        self._viewport_x_spin = _spin(-4000, 4000)
+        self._viewport_x_spin.valueChanged.connect(
+            lambda value: self._update_style(viewport_offset_x=value)
+        )
+        row_layout.addWidget(_field("位置 X", self._viewport_x_spin), 0, 0, 1, 2)
+
+        self._viewport_y_spin = _spin(-4000, 4000)
+        self._viewport_y_spin.valueChanged.connect(
+            lambda value: self._update_style(viewport_offset_y=value)
+        )
+        row_layout.addWidget(_field("位置 Y", self._viewport_y_spin), 1, 0, 1, 2)
+
+        self._viewport_scale_spin = _spin(10, 400, suffix=" %")
+        self._viewport_scale_spin.valueChanged.connect(
+            lambda value: self._update_style(viewport_scale_pct=value)
+        )
+        row_layout.addWidget(_field("缩放", self._viewport_scale_spin), 2, 0)
+
+        self._viewport_rotation_spin = _spin(-180, 180, suffix=" °")
+        self._viewport_rotation_spin.valueChanged.connect(
+            lambda value: self._update_style(viewport_rotation_deg=value)
+        )
+        row_layout.addWidget(_field("旋转", self._viewport_rotation_spin), 2, 1)
+
+        row_layout.setColumnStretch(0, 1)
+        row_layout.setColumnStretch(1, 1)
+        layout.addWidget(row)
+        return section
+
+    def _make_layout_scheme_section(self) -> QFrame:
+        """布局方案（N3 レイアウト設定）：默认布局 = Style 自身字段。"""
+        section, layout = _section("布局方案")
+
+        self._layout_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._layout_combo)
+        self._layout_combo.setToolTip(
+            "布局方案（N3 レイアウト設定）：下方「行位置 / 行距 / 余白 / 行布局」"
+            "编辑的是当前选中的布局；歌词行可分别引用不同布局（歌词列表右键应用）。"
+        )
+        self._layout_combo.currentIndexChanged.connect(
+            lambda _index: self._on_layout_combo_changed()
+        )
+        layout.addWidget(_field("当前布局", self._layout_combo))
+
+        layout_btn_row = QWidget(section)
+        layout_btn_layout = QHBoxLayout(layout_btn_row)
+        layout_btn_layout.setContentsMargins(0, 0, 0, 0)
+        layout_btn_layout.setSpacing(6)
+        self._add_layout_btn = FluentPushButton("新建布局", section)
+        self._add_layout_btn.setToolTip("以当前布局的值复制出一个新布局。")
+        self._add_layout_btn.clicked.connect(lambda _checked=False: self._on_add_layout())
+        self._rename_layout_btn = FluentPushButton("重命名", section)
+        self._rename_layout_btn.clicked.connect(
+            lambda _checked=False: self._on_rename_layout()
+        )
+        self._delete_layout_btn = FluentPushButton("删除", section)
+        self._delete_layout_btn.clicked.connect(
+            lambda _checked=False: self._on_delete_layout()
+        )
+        for btn in (self._add_layout_btn, self._rename_layout_btn, self._delete_layout_btn):
+            btn.setMinimumHeight(30)
+            layout_btn_layout.addWidget(btn, 1)
+        layout.addWidget(layout_btn_row)
+
+        assign_btn_row = QWidget(section)
+        assign_btn_layout = QHBoxLayout(assign_btn_row)
+        assign_btn_layout.setContentsMargins(0, 0, 0, 0)
+        assign_btn_layout.setSpacing(6)
+        self._assign_all_btn = FluentPushButton("应用到全部行", section)
+        self._assign_all_btn.setToolTip("所有歌词行统一使用当前布局（N3 全部统一）。")
+        self._assign_all_btn.clicked.connect(
+            lambda _checked=False: self.layoutAssignAllRequested.emit(
+                self._current_layout_index()
+            )
+        )
+        self._auto_assign_btn = FluentPushButton("按行数自动分配", section)
+        self._auto_assign_btn.setToolTip(
+            "每一页按页内行数匹配行数相同的布局（找不到按行数递减匹配，"
+            "仍找不到用默认布局）——对齐 N3 自动布局选择器。"
+        )
+        self._auto_assign_btn.clicked.connect(
+            lambda _checked=False: self.layoutAutoAssignRequested.emit()
+        )
+        for btn in (self._assign_all_btn, self._auto_assign_btn):
+            btn.setMinimumHeight(30)
+            assign_btn_layout.addWidget(btn, 1)
+        layout.addWidget(assign_btn_row)
+        return section
+
+    def _make_row_structure_section(self) -> QFrame:
+        """行结构：行数 / 每行对齐 / 水平模式 / 智能水平 / 左右余白。"""
+        section, layout = _section("行结构")
+
+        self._dual_line_check = CheckBox("多行显示", section)
+        self._dual_line_check.setToolTip(
+            "开启后按「行布局」列表的行数轮换显示（默认上左下右双行）；"
+            "关闭则一次只显示一行。"
+        )
+        self._dual_line_check.toggled.connect(self._on_dual_line_toggled)
+        layout.addWidget(self._dual_line_check)
+
+        row = QWidget(section)
+        row_layout = QGridLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setHorizontalSpacing(8)
+        row_layout.setVerticalSpacing(8)
+
+        self._horizontal_layout_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._horizontal_layout_combo)
+        for label, value in [
+            ("上左下右", "asymmetric"),
+            ("居中", "center"),
+            ("逐行独立", "per_row"),
+        ]:
+            self._horizontal_layout_combo.addItem(label, value)
+        self._horizontal_layout_combo.currentIndexChanged.connect(
+            lambda _index: self._on_horizontal_layout_changed()
+        )
+        row_layout.addWidget(_field("水平布局", self._horizontal_layout_combo), 0, 0)
+
+        self._smart_horizontal_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._smart_horizontal_combo)
+        for label, value in [
+            ("左右余白对齐", "equal_margins"),
+            ("中心位置对齐", "center_position"),
+            ("不调整", "none"),
+        ]:
+            self._smart_horizontal_combo.addItem(label, value)
+        self._smart_horizontal_combo.setToolTip(
+            "智能水平配置（N3 スマート水平配置，仅「上左下右」布局）：短行自动向画面"
+            "中央收拢。左右余白对齐 = 按页整体判断（N3 默认）；中心位置对齐 = "
+            "逐行判断；不调整 = 行永远贴左右边距，同时关闭单行页居中。"
+        )
+        self._smart_horizontal_combo.currentIndexChanged.connect(
+            lambda _index: self._update_layout_field(
+                smart_horizontal=self._smart_horizontal_combo.currentData()
+            )
+        )
+        row_layout.addWidget(_field("智能水平", self._smart_horizontal_combo), 0, 1)
+
+        self._horizontal_margin_spin = _spin(0, 800, suffix=" px")
+        self._horizontal_margin_spin.setToolTip(
+            "左右余白（N3 左右余白）：左对齐行的左缘贴此值，右对齐行的右缘贴"
+            "「画面宽 − 此值」。"
+        )
+        self._horizontal_margin_spin.valueChanged.connect(
+            self._on_horizontal_margin_changed
+        )
+        row_layout.addWidget(_field("左右余白", self._horizontal_margin_spin), 1, 0)
+
+        row_layout.setColumnStretch(0, 1)
+        row_layout.setColumnStretch(1, 1)
+        layout.addWidget(row)
+
+        layout.addWidget(self._make_line_alignments_box(section))
+        layout.addWidget(self._make_per_row_box(section))
+        return section
+
+    def _make_vertical_layout_section(self) -> QFrame:
+        """垂直：上下配置 / 上下余白 / 行间距（N3 上下配置・余白・行間）。"""
+        section, layout = _section("垂直")
+
+        row = QWidget(section)
+        row_layout = QGridLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setHorizontalSpacing(8)
+        row_layout.setVerticalSpacing(8)
+
+        self._line_position_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._line_position_combo)
+        for label, value in [("底部", "bottom"), ("居中", "center"), ("顶部", "top")]:
+            self._line_position_combo.addItem(label, value)
+        self._line_position_combo.currentIndexChanged.connect(
+            self._on_line_position_changed
+        )
+        row_layout.addWidget(_field("上下配置", self._line_position_combo), 0, 0)
+
+        self._line_margin_spin = _spin(0, 400, suffix=" px")
+        self._line_margin_spin.setToolTip(
+            "顶部锚定 = 画面上端到最上行的余白；底部锚定 = 画面下端到最下行的"
+            "余白；居中时忽略（N3 上/下余白）。"
+        )
+        self._line_margin_spin.valueChanged.connect(
+            lambda value: self._update_layout_field(line_y_margin_px=value)
+        )
+        row_layout.addWidget(_field("上下余白", self._line_margin_spin), 0, 1)
+
+        self._line_gap_spin = _spin(-400, 400, suffix=" px")
+        self._line_gap_spin.setToolTip(
+            "相邻两行主文字行盒之间的间距（N3 行間），可为负让行盒重叠；"
+            "不包含注音高度。"
+        )
+        self._line_gap_spin.valueChanged.connect(
+            lambda value: self._update_layout_field(line_gap_px=value)
+        )
+        row_layout.addWidget(_field("行间距", self._line_gap_spin), 1, 0)
+
+        row_layout.setColumnStretch(0, 1)
+        row_layout.setColumnStretch(1, 1)
+        layout.addWidget(row)
+        return section
+
+    def _on_line_position_changed(self, _index: int = 0) -> None:
+        self._update_layout_field(
+            line_y_position=self._line_position_combo.currentData()
+        )
+        self._sync_vertical_margin_enabled()
+
+    def _sync_vertical_margin_enabled(self) -> None:
+        """居中锚定时上下余白不参与排版（对齐 N3 的控件显隐逻辑）。"""
+        if not hasattr(self, "_line_margin_spin"):
+            return
+        position = self._current_layout_values().get("line_y_position")
+        self._line_margin_spin.setEnabled(position != "center")
+
+    def _make_writing_direction_section(self) -> QFrame:
+        """书写方向：全局模式开关（本项目特有，N3 无对应项）。"""
+        section, layout = _section("书写方向")
+
+        self._vertical_check = CheckBox("竖排", section)
+        self._vertical_check.toggled.connect(
+            lambda checked: self._update_style(vertical=checked)
+        )
+        layout.addWidget(self._vertical_check)
+
+        self._rtl_check = CheckBox("从右到左", section)
+        self._rtl_check.toggled.connect(
+            lambda checked: self._update_style(right_to_left=checked)
+        )
+        layout.addWidget(self._rtl_check)
+        return section
+
+    def _on_horizontal_margin_changed(self, value: int) -> None:
+        if self._current_layout_index() > 0:
+            self._update_layout_field(horizontal_margin_px=value)
+            return
+        # 旧字段跟随镜像：native 后端（C++）仍读取上/下行边距两个键。
+        self._update_style(
+            horizontal_margin_px=value,
+            upper_line_left_margin_px=value,
+            lower_line_right_margin_px=value,
+        )
+
+    # ------------------------------------------------------------- 布局方案
+
+    def _current_layout_index(self) -> int:
+        if not hasattr(self, "_layout_combo"):
+            return 0
+        try:
+            index = int(self._layout_combo.currentData())
+        except (TypeError, ValueError):
+            return 0
+        return index if 0 <= index <= len(self._style.layouts) else 0
+
+    def _current_layout_source(self):
+        index = self._current_layout_index()
+        return self._style if index == 0 else self._style.layouts[index - 1]
+
+    def _current_layout_values(self) -> dict:
+        source = self._current_layout_source()
+        return {name: deepcopy(getattr(source, name)) for name in LYRICS_LAYOUT_FIELDS}
+
+    def _update_layout_field(self, **changes) -> None:
+        if self._syncing:
+            return
+        index = self._current_layout_index()
+        if index <= 0:
+            self._update_style(**changes)
+            return
+        layouts = list(self._style.layouts)
+        layouts[index - 1] = replace(layouts[index - 1], **changes)
+        self._update_style(layouts=layouts)
+
+    def _refresh_layout_combo(self, selected: Optional[int] = None) -> None:
+        if selected is None:
+            selected = self._current_layout_index()
+        selected = min(max(selected, 0), len(self._style.layouts))
+        combo = self._layout_combo
+        blocked = combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItem("默认布局", 0)
+            for index, layout_def in enumerate(self._style.layouts, start=1):
+                combo.addItem(layout_def.name, index)
+            combo.setCurrentIndex(max(0, combo.findData(selected)))
+        finally:
+            combo.blockSignals(blocked)
+        editable = self._current_layout_index() > 0
+        self._rename_layout_btn.setEnabled(editable)
+        self._delete_layout_btn.setEnabled(editable)
+
+    def _sync_layout_editor_controls(self) -> None:
+        values = self._current_layout_values()
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            self._line_position_combo.setCurrentIndex(
+                max(0, self._line_position_combo.findData(values["line_y_position"]))
+            )
+            self._line_margin_spin.setValue(int(values["line_y_margin_px"]))
+            self._line_gap_spin.setValue(int(values["line_gap_px"]))
+            self._smart_horizontal_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._smart_horizontal_combo.findData(values["smart_horizontal"]),
+                )
+            )
+            self._horizontal_margin_spin.setValue(int(values["horizontal_margin_px"]))
+            self._rebuild_line_alignment_rows()
+            self._sync_vertical_margin_enabled()
+        finally:
+            self._syncing = was_syncing
+
+    def _on_layout_combo_changed(self) -> None:
+        if self._syncing:
+            return
+        self._refresh_layout_combo()
+        self._sync_layout_editor_controls()
+
+    def _on_add_layout(self) -> None:
+        values = self._current_layout_values()
+        existing = {layout.name for layout in self._style.layouts}
+        number = len(self._style.layouts) + 1
+        name = f"布局 {number}"
+        while name in existing:
+            number += 1
+            name = f"布局 {number}"
+        layouts = list(self._style.layouts) + [LyricsLayout(name=name, **values)]
+        self._update_style(layouts=layouts)
+        self._refresh_layout_combo(selected=len(layouts))
+        self._sync_layout_editor_controls()
+
+    def _on_rename_layout(self) -> None:
+        index = self._current_layout_index()
+        if index <= 0:
+            return
+        old = self._style.layouts[index - 1].name
+        new, ok = QInputDialog.getText(self, "重命名布局", "布局名称", text=old)
+        if not ok:
+            return
+        new = new.strip()
+        if not new or new == old:
+            return
+        layouts = list(self._style.layouts)
+        layouts[index - 1] = replace(layouts[index - 1], name=new)
+        self._update_style(layouts=layouts)
+        self._refresh_layout_combo(selected=index)
+
+    def _on_delete_layout(self) -> None:
+        index = self._current_layout_index()
+        if index <= 0:
+            return
+        name = self._style.layouts[index - 1].name
+        result = QMessageBox.question(
+            self,
+            "删除布局",
+            f"确定要删除布局“{name}”吗？\n使用它的歌词行会回到默认布局。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if result != QMessageBox.StandardButton.Yes:
+            return
+        layouts = list(self._style.layouts)
+        del layouts[index - 1]
+        self._update_style(layouts=layouts)
+        self.layoutDeleted.emit(index)
+        self._refresh_layout_combo(selected=0)
+        self._sync_layout_editor_controls()
+
+    def _make_line_alignments_box(self, parent: QWidget) -> QWidget:
+        """行布局编辑器：每行一个左/中/右下拉（N3 行ごとの左右レイアウト）。"""
+        box = self._line_alignments_box = QWidget(parent)
+        root = QVBoxLayout(box)
+        root.setContentsMargins(0, 4, 0, 0)
+        root.setSpacing(6)
+        root.addWidget(_subgroup_label("行布局"))
+
+        self._line_alignment_rows_host = QWidget(box)
+        self._line_alignment_rows = QVBoxLayout(self._line_alignment_rows_host)
+        self._line_alignment_rows.setContentsMargins(0, 0, 0, 0)
+        self._line_alignment_rows.setSpacing(6)
+        root.addWidget(self._line_alignment_rows_host)
+
+        self._add_line_alignment_btn = FluentPushButton("添加一行", box)
+        self._add_line_alignment_btn.setMinimumHeight(30)
+        self._add_line_alignment_btn.setToolTip(
+            "底部锚定时在上方插入一行（复制第一行对齐），顶部/居中锚定时在下方"
+            "追加一行（复制最后一行对齐）——与 N3 一致。"
+        )
+        self._add_line_alignment_btn.clicked.connect(
+            lambda _checked=False: self._on_add_line_alignment()
+        )
+        root.addWidget(self._add_line_alignment_btn)
+        self._rebuild_line_alignment_rows()
+        return box
+
+    def _current_layout_alignments(self) -> list:
+        source = self._current_layout_source()
+        return list(source.line_alignments) or ["left"]
+
+    def _rebuild_line_alignment_rows(self) -> None:
+        while self._line_alignment_rows.count():
+            item = self._line_alignment_rows.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        alignments = self._current_layout_alignments()
+        removable = len(alignments) > 1
+        for index, align in enumerate(alignments):
+            row = QWidget(self._line_alignment_rows_host)
+            row_layout = QHBoxLayout(row)
+            row_layout.setContentsMargins(0, 0, 0, 0)
+            row_layout.setSpacing(6)
+            label = QLabel(f"第 {index + 1} 行", row)
+            themed(
+                label,
+                lambda: f"color: {palette().text_secondary}; font-size: 9pt;",
+            )
+            combo = _WheelFocusedComboBox(row)
+            _compact_control(combo)
+            for text, value in [("左", "left"), ("中", "center"), ("右", "right")]:
+                combo.addItem(text, value)
+            combo.setCurrentIndex(max(0, combo.findData(align)))
+            combo.currentIndexChanged.connect(
+                lambda _i, idx=index, c=combo: self._on_line_alignment_changed(idx, c)
+            )
+            remove_btn = FluentTransparentToolButton(FIF.CLOSE, row)
+            remove_btn.setToolTip("删除此行")
+            remove_btn.setEnabled(removable)
+            remove_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            remove_btn.clicked.connect(
+                lambda _checked=False, idx=index: self._on_remove_line_alignment(idx)
+            )
+            row_layout.addWidget(label, 0)
+            row_layout.addWidget(combo, 1)
+            row_layout.addWidget(remove_btn, 0)
+            self._line_alignment_rows.addWidget(row)
+        self._add_line_alignment_btn.setEnabled(len(alignments) < 8)
+
+    def _on_line_alignment_changed(
+        self, index: int, combo: _WheelFocusedComboBox
+    ) -> None:
+        if self._syncing:
+            return
+        alignments = self._current_layout_alignments()
+        value = combo.currentData()
+        if not (0 <= index < len(alignments)) or alignments[index] == value:
+            return
+        alignments[index] = value
+        self._update_layout_field(line_alignments=alignments)
+
+    def _on_add_line_alignment(self) -> None:
+        alignments = self._current_layout_alignments()
+        if len(alignments) >= 8:
+            return
+        if self._current_layout_source().line_y_position == "bottom":
+            alignments.insert(0, alignments[0])
+        else:
+            alignments.append(alignments[-1])
+        self._update_layout_field(line_alignments=alignments)
+        self._rebuild_line_alignment_rows()
+
+    def _on_remove_line_alignment(self, index: int) -> None:
+        alignments = self._current_layout_alignments()
+        if len(alignments) <= 1 or not (0 <= index < len(alignments)):
+            return
+        del alignments[index]
+        self._update_layout_field(line_alignments=alignments)
+        self._rebuild_line_alignment_rows()
+
+    def _make_per_row_box(self, parent: QWidget) -> QWidget:
+        """逐行独立布局控件（仅「水平布局 = 逐行独立」时启用）。"""
+        box = self._per_row_box = QWidget(parent)
+        grid = QGridLayout(box)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+
+        # 窄面板（~260px）下两个数值框并排会横向溢出，所以每行最多放
+        # 「对齐(窄) + X」，Y 单独整行。对齐下拉很窄，与 X 同行可容纳。
+        self._row1_align_combo = self._make_align_combo(box, "row1_align")
+        grid.addWidget(_field("一行对齐", self._row1_align_combo), 0, 0)
+        self._row1_x_spin = self._make_offset_spin("row1_offset_x")
+        grid.addWidget(_field("一行 X", self._row1_x_spin), 0, 1)
+        self._row1_y_spin = self._make_offset_spin("row1_offset_y")
+        grid.addWidget(_field("一行 Y", self._row1_y_spin), 1, 0, 1, 2)
+
+        self._row2_align_combo = self._make_align_combo(box, "row2_align")
+        grid.addWidget(_field("二行对齐", self._row2_align_combo), 2, 0)
+        self._row2_x_spin = self._make_offset_spin("row2_offset_x")
+        grid.addWidget(_field("二行 X", self._row2_x_spin), 2, 1)
+        self._row2_y_spin = self._make_offset_spin("row2_offset_y")
+        grid.addWidget(_field("二行 Y", self._row2_y_spin), 3, 0, 1, 2)
+
+        grid.setColumnStretch(0, 0)
+        grid.setColumnStretch(1, 1)
+        return box
+
+    def _make_align_combo(self, parent: QWidget, field_name: str) -> "_WheelFocusedComboBox":
+        combo = _WheelFocusedComboBox(parent)
+        _compact_control(combo)
+        for label, value in [("左", "left"), ("中", "center"), ("右", "right")]:
+            combo.addItem(label, value)
+        combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(**{field_name: combo.currentData()})
+        )
+        return combo
+
+    def _make_offset_spin(self, field_name: str) -> _WheelFocusedSpinBox:
+        # 不加 " px" 后缀：窄面板下两列并排会横向溢出，单位由字段标签隐含。
+        spin = _spin(-4000, 4000)
+        spin.valueChanged.connect(lambda value: self._update_style(**{field_name: value}))
+        return spin
+
+    def _on_dual_line_toggled(self, checked: bool) -> None:
+        self._update_style(dual_line_layout=checked)
+        self._sync_per_row_enabled()
+
+    def _on_horizontal_layout_changed(self) -> None:
+        self._update_style(
+            line_horizontal_layout=self._horizontal_layout_combo.currentData()
+        )
+        self._sync_per_row_enabled()
+
+    def _sync_per_row_enabled(self) -> None:
+        if not hasattr(self, "_per_row_box"):
+            return
+        self._per_row_box.setEnabled(self._style.line_horizontal_layout == "per_row")
+        if hasattr(self, "_line_alignments_box"):
+            self._line_alignments_box.setEnabled(
+                self._style.line_horizontal_layout == "asymmetric"
+                and self._style.dual_line_layout
+            )
+
+    def _make_timing_section(self) -> QFrame:
+        section, layout = _section("时间")
+
+        row = QWidget(section)
+        row_layout = QGridLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setHorizontalSpacing(8)
+        row_layout.setVerticalSpacing(8)
+
+        self._line_lead_spin = _spin(0, 10_000, suffix=" ms")
+        self._line_lead_spin.valueChanged.connect(
+            lambda value: self._update_style(line_lead_in_ms=value)
+        )
+        row_layout.addWidget(_field("提前入场", self._line_lead_spin), 0, 0)
+
+        self._line_tail_spin = _spin(0, 10_000, suffix=" ms")
+        self._line_tail_spin.valueChanged.connect(
+            lambda value: self._update_style(line_tail_ms=value)
+        )
+        row_layout.addWidget(_field("延迟退场", self._line_tail_spin), 0, 1)
+
+        self._line_offset_spin = _spin(-10_000, 10_000, suffix=" ms")
+        self._line_offset_spin.valueChanged.connect(
+            lambda value: self._update_style(timing_offset_ms=value)
+        )
+        row_layout.addWidget(_field("偏移", self._line_offset_spin), 1, 0)
+
+        self._section_gap_spin = _spin(0, 60_000, suffix=" ms")
+        self._section_gap_spin.valueChanged.connect(
+            lambda value: self._update_style(section_gap_ms=value)
+        )
+        row_layout.addWidget(_field("分段间隔", self._section_gap_spin), 1, 1)
+
+        self._section_ending_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._section_ending_combo)
+        for label, value in [("保持", "hold"), ("段末清屏", "clear")]:
+            self._section_ending_combo.addItem(label, value)
+        self._section_ending_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                section_ending_mode=self._section_ending_combo.currentData()
+            )
+        )
+        row_layout.addWidget(_field("段落结束", self._section_ending_combo), 2, 0)
+
+        self._lane_gap_spin = _spin(0, 5_000, suffix=" ms")
+        self._lane_gap_spin.setToolTip("同一显示轨上相邻两句之间保留的时间间隔。")
+        self._lane_gap_spin.valueChanged.connect(
+            lambda value: self._update_style(line_lane_gap_ms=value)
+        )
+        row_layout.addWidget(_field("同轨间隔", self._lane_gap_spin), 2, 1)
+
+        self._pair_delay_spin = _spin(0, 20_000, suffix=" ms")
+        self._pair_delay_spin.setToolTip(
+            "同页中非首行相对上一行表示开始的默认延迟（N3 页内行延迟）。"
+        )
+        self._pair_delay_spin.valueChanged.connect(
+            lambda value: self._update_style(line_pair_second_delay_ms=value)
+        )
+        row_layout.addWidget(_field("页内行延迟", self._pair_delay_spin), 3, 0)
+
+        self._max_hold_spin = _spin(0, 60_000, suffix=" ms")
+        self._max_hold_spin.setToolTip(
+            "单句显示窗口最长保留时间，避免长间奏时字幕过久挂屏；0 = 不限制。"
+        )
+        self._max_hold_spin.valueChanged.connect(
+            lambda value: self._update_style(line_max_hold_ms=value)
+        )
+        row_layout.addWidget(_field("最长挂屏", self._max_hold_spin), 3, 1)
+
+        row_layout.setColumnStretch(0, 1)
+        row_layout.setColumnStretch(1, 1)
+        layout.addWidget(row)
+
+        self._sync_ending_check = CheckBox("同步退场", section)
+        self._sync_ending_check.toggled.connect(
+            lambda checked: self._update_style(sync_ending=checked)
+        )
+        layout.addWidget(self._sync_ending_check)
+        return section
+
+    def _color_button(self, field_name: str, color: str) -> ColorButton:
+        button = ColorButton(color)
+        button.clicked.connect(lambda _checked=False, field=field_name: self._choose_color(field))
+        return button
+
+    # ------------------------------------------------------------------ update
+
+    def _choose_color(self, field_name: str) -> None:
+        current = QColor(self._scheme_value(field_name))
+        color = QColorDialog.getColor(
+            current,
+            self,
+            "选择颜色",
+            QColorDialog.ColorDialogOption.ShowAlphaChannel,
+        )
+        if color.isValid():
+            self._set_color(field_name, color.name(QColor.NameFormat.HexArgb))
+
+    def _set_color(self, field_name: str, color: str) -> None:
+        normalized = _normalize_hex(color, str(self._scheme_value(field_name)))
+        changes = {field_name: normalized}
+        if field_name == "ruby_color":
+            # 选了单色就退出"跟随主文字"模式，让单色重新生效。
+            changes["ruby_karaoke_colors"] = None
+        else:
+            colors = _apply_legacy_color_to_matrix(
+                self._current_karaoke_colors(), field_name, normalized
+            )
+            if colors is not None:
+                changes["karaoke_colors"] = colors
+        self._update_style(**changes)
+
+    def _choose_paint_color(self, field_name: str) -> None:
+        fill = self._current_paint_fill()
+        current = QColor(getattr(fill, field_name))
+        color = QColorDialog.getColor(
+            current,
+            self,
+            "选择颜色",
+            QColorDialog.ColorDialogOption.ShowAlphaChannel,
+        )
+        if color.isValid():
+            normalized = _normalize_hex(color.name(QColor.NameFormat.HexArgb))
+            self._update_current_fill(**{field_name: normalized})
+
+    def _choose_paint_image(self) -> None:
+        path, _selected_filter = QFileDialog.getOpenFileName(
+            self,
+            "选择填充图像",
+            self._paint_image_path_edit.text(),
+            "图像文件 (*.png *.jpg *.jpeg *.bmp *.webp);;所有文件 (*.*)",
+        )
+        if path:
+            self._paint_image_path_edit.setText(path)
+            self._update_current_fill(image_path=path)
+
+    def _on_color_matrix_changed(self, state: str, layer: str) -> None:
+        self._color_state_combo.blockSignals(True)
+        self._color_layer_combo.blockSignals(True)
+        try:
+            self._color_state_combo.setCurrentIndex(
+                max(0, self._color_state_combo.findData(state))
+            )
+            self._color_layer_combo.setCurrentIndex(
+                max(0, self._color_layer_combo.findData(layer))
+            )
+        finally:
+            self._color_state_combo.blockSignals(False)
+            self._color_layer_combo.blockSignals(False)
+        self._sync_color_fill_controls()
+
+    def _on_color_subject_changed(self) -> None:
+        if hasattr(self, "_ruby_apply_main_btn"):
+            self._ruby_apply_main_btn.setVisible(
+                self._current_color_subject_key() == "ruby"
+            )
+        self._sync_color_subject_style_controls()
+        self._sync_color_fill_controls()
+
+    def _on_color_target_combo_changed(self) -> None:
+        if hasattr(self, "_color_matrix"):
+            self._color_matrix.set_selection(
+                self._current_color_state_key(), self._current_color_layer_key()
+            )
+        self._sync_color_fill_controls()
+
+    def _current_color_state_key(self) -> ColorStateKey:
+        data = self._color_state_combo.currentData()
+        return data if data in {"before", "after"} else "after"  # type: ignore[return-value]
+
+    def _current_color_layer_key(self) -> ColorLayerKey:
+        data = self._color_layer_combo.currentData()
+        if data in {"text", "stroke", "stroke2", "shadow"}:
+            return data  # type: ignore[return-value]
+        return "text"
+
+    def _current_color_subject_key(self) -> str:
+        if not hasattr(self, "_color_subject_combo"):
+            return "main"
+        data = self._color_subject_combo.currentData()
+        return "ruby" if data == "ruby" else "main"
+
+    def _color_subject_field(self, field_name: str) -> str:
+        if self._current_color_subject_key() == "ruby":
+            return _RUBY_COLOR_SUBJECT_FIELDS.get(field_name, field_name)
+        return field_name
+
+    def _color_subject_value(self, field_name: str):
+        if self._current_color_subject_key() != "ruby":
+            return self._scheme_value(field_name)
+        ruby_field = _RUBY_COLOR_SUBJECT_FIELDS.get(field_name)
+        if ruby_field is None:
+            return self._scheme_value(field_name)
+        value = self._scheme_value(ruby_field)
+        if value is not None:
+            return value
+        return self._inherited_ruby_subject_value(field_name)
+
+    def _inherited_ruby_subject_value(self, field_name: str):
+        scale = max(int(self._scheme_value("ruby_font_size_px")), 1) / max(
+            int(self._scheme_value("font_size_px")), 1
+        )
+        if field_name == "stroke_width_px":
+            return _scaled_panel_px(int(self._scheme_value("stroke_width_px")), scale)
+        if field_name == "stroke2_width_px":
+            return _scaled_panel_px(int(self._scheme_value("stroke2_width_px")), scale)
+        if field_name == "decoration_kind":
+            return self._scheme_value("decoration_kind")
+        if field_name == "shadow_offset_x":
+            return _scaled_panel_signed_px(int(self._scheme_value("shadow_offset_x")), scale)
+        if field_name == "shadow_offset_y":
+            return _scaled_panel_signed_px(int(self._scheme_value("shadow_offset_y")), scale)
+        if field_name == "glow_radius_px":
+            return _scaled_panel_px(self._scheme_glow_radius(after=False), scale)
+        if field_name == "glow_before_radius_px":
+            return _scaled_panel_px(self._scheme_glow_radius(after=False), scale)
+        if field_name == "glow_after_radius_px":
+            return _scaled_panel_px(self._scheme_glow_radius(after=True), scale)
+        return self._scheme_value(field_name)
+
+    def _scheme_glow_radius(self, *, after: bool) -> int:
+        value = int(
+            self._scheme_value("glow_after_radius_px" if after else "glow_before_radius_px")
+        )
+        legacy = int(self._scheme_value("glow_radius_px"))
+        if value == 10 and legacy != 10:
+            value = legacy
+        return max(value, 1)
+
+    def _update_color_subject_style(self, **changes) -> None:
+        mapped = {
+            self._color_subject_field(field_name): value
+            for field_name, value in changes.items()
+        }
+        self._update_style(**mapped)
+
+    def _current_karaoke_colors(self) -> KaraokeColors:
+        value = self._scheme_value("karaoke_colors")
+        if isinstance(value, KaraokeColors):
+            return deepcopy(value)
+        return _legacy_colors_from_panel(self)
+
+    def _current_ruby_karaoke_colors(self) -> KaraokeColors:
+        value = self._scheme_value("ruby_karaoke_colors")
+        if isinstance(value, KaraokeColors):
+            return deepcopy(value)
+        return self._current_karaoke_colors()
+
+    def _current_editing_karaoke_colors(self) -> KaraokeColors:
+        if self._current_color_subject_key() == "ruby":
+            return self._current_ruby_karaoke_colors()
+        return self._current_karaoke_colors()
+
+    def _current_paint_fill(self) -> PaintFill:
+        colors = self._current_editing_karaoke_colors()
+        state = getattr(colors, self._current_color_state_key())
+        return deepcopy(getattr(state, self._current_color_layer_key()))
+
+    def _sync_color_fill_controls(self) -> None:
+        if not hasattr(self, "_fill_mode_combo"):
+            return
+        fill = self._current_paint_fill()
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            mode_index = max(0, self._fill_mode_combo.findData(fill.mode))
+            self._fill_mode_combo.setCurrentIndex(mode_index)
+            self._fill_editor_stack.setCurrentIndex(_fill_stack_index(fill.mode))
+            self._fill_editor_stack.updateGeometry()
+            self._paint_solid_btn.set_color(fill.color)
+            self._paint_gradient_start_btn.set_color(fill.start_color)
+            self._paint_gradient_end_btn.set_color(fill.end_color)
+            self._gradient_editor.set_orientation(fill.mode)
+            self._gradient_editor.set_stops(_gradient_stops(fill))
+            self._sync_gradient_stop_controls()
+            self._paint_split_top_btn.set_color(fill.split_top_color)
+            self._paint_split_bottom_btn.set_color(fill.split_bottom_color)
+            self._paint_split_position_spin.setValue(fill.split_position_pct)
+            self._paint_image_path_edit.setText(fill.image_path)
+            self._paint_image_scale_spin.setValue(fill.image_scale_pct)
+            self._sync_decoration_visibility()
+        finally:
+            self._syncing = was_syncing
+
+    def _sync_decoration_visibility(self) -> None:
+        if not hasattr(self, "_decoration_type_field"):
+            return
+        is_decoration = self._current_color_layer_key() == "shadow"
+        decoration_kind = str(self._color_subject_value("decoration_kind"))
+        is_shadow = decoration_kind == "shadow"
+        is_glow = decoration_kind == "glow"
+        self._decoration_type_field.setVisible(is_decoration)
+        self._shadow_x_field.setVisible(is_decoration and is_shadow)
+        self._shadow_y_field.setVisible(is_decoration and is_shadow)
+        self._glow_radius_field.setVisible(is_decoration and is_glow)
+        self._glow_after_radius_field.setVisible(is_decoration and is_glow)
+        self._glow_concentration_field.setVisible(is_decoration and is_glow)
+
+    def _sync_color_subject_style_controls(self) -> None:
+        if not hasattr(self, "_stroke_width_spin"):
+            return
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            self._stroke_width_spin.setValue(
+                int(self._color_subject_value("stroke_width_px"))
+            )
+            self._stroke2_width_spin.setValue(
+                int(self._color_subject_value("stroke2_width_px"))
+            )
+            self._decoration_type_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._decoration_type_combo.findData(
+                        str(self._color_subject_value("decoration_kind"))
+                    ),
+                )
+            )
+            self._glow_radius_spin.setValue(
+                int(self._color_subject_value("glow_before_radius_px"))
+            )
+            self._glow_after_radius_spin.setValue(
+                int(self._color_subject_value("glow_after_radius_px"))
+            )
+            self._glow_concentration_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._glow_concentration_combo.findData(
+                        int(self._color_subject_value("glow_concentration_level"))
+                    ),
+                )
+            )
+            self._shadow_x_spin.setValue(
+                int(self._color_subject_value("shadow_offset_x"))
+            )
+            self._shadow_y_spin.setValue(
+                int(self._color_subject_value("shadow_offset_y"))
+            )
+            self._sync_decoration_visibility()
+        finally:
+            self._syncing = was_syncing
+
+    def _update_current_fill(self, **changes) -> None:
+        if self._syncing:
+            return
+        colors = self._current_editing_karaoke_colors()
+        state_key = self._current_color_state_key()
+        layer_key = self._current_color_layer_key()
+        state = deepcopy(getattr(colors, state_key))
+        fill = _replace_fill(getattr(state, layer_key), **changes)
+        if "color" in changes:
+            fill = _replace_fill(
+                fill,
+                start_color=changes["color"],
+                end_color=changes["color"],
+                gradient_stops=[(0, changes["color"]), (100, changes["color"])],
+                split_top_color=changes["color"],
+                split_bottom_color=changes["color"],
+            )
+        state = replace(state, **{layer_key: fill})
+        colors = replace(colors, **{state_key: state})
+        if self._current_color_subject_key() == "ruby":
+            self._update_style(ruby_karaoke_colors=colors)
+        else:
+            self._update_style(karaoke_colors=colors)
+
+    def _update_gradient_stops(self, stops: list[tuple[int, str]]) -> None:
+        if self._syncing:
+            return
+        normalized = _normalize_gradient_stops(stops)
+        self._update_current_fill(
+            gradient_stops=normalized,
+            start_color=normalized[0][1],
+            end_color=normalized[-1][1],
+        )
+
+    def _sync_gradient_stop_controls(self) -> None:
+        if not hasattr(self, "_gradient_stop_color_btn"):
+            return
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            position, color = self._gradient_editor.selected_stop
+            self._gradient_stop_color_btn.set_color(color)
+            self._gradient_stop_position_spin.setValue(position)
+            self._gradient_stop_delete_btn.setEnabled(
+                len(_gradient_stops(self._current_paint_fill())) > 2
+                and position not in {0, 100}
+            )
+        finally:
+            self._syncing = was_syncing
+
+    def _choose_gradient_stop_color(self) -> None:
+        current = QColor(self._gradient_editor.selected_stop[1])
+        color = QColorDialog.getColor(
+            current,
+            self,
+            "选择颜色",
+            QColorDialog.ColorDialogOption.ShowAlphaChannel,
+        )
+        if color.isValid():
+            normalized = _normalize_hex(color.name(QColor.NameFormat.HexArgb))
+            self._gradient_editor.set_selected_color(normalized)
+
+    def _set_gradient_stop_position(self, value: int) -> None:
+        if self._syncing:
+            return
+        self._gradient_editor.set_selected_position(value)
+
+    def _refresh_scheme_combo(self, selected_key: Optional[str] = None) -> None:
+        self._singer_combo.clear()
+        self._singer_combo.addItem("全局默认", _GLOBAL_SCHEME_KEY)
+        # 这里只显示当前字幕里出现过、或用户手动新建的角色目标。
+        # 用户保存过的可复用预设由「管理预设」弹窗维护，避免未分色文件自动套用历史方案。
+        seen: set[str] = set()
+        for name in self._role_names:
+            if name in seen:
+                continue
+            seen.add(name)
+            self._singer_combo.addItem(name, f"{_CUSTOM_SCHEME_PREFIX}{name}")
+        if selected_key is not None:
+            index = self._singer_combo.findData(selected_key)
+            if index >= 0:
+                self._singer_combo.setCurrentIndex(index)
+
+    def _add_custom_scheme(self, name: Optional[str] = None) -> None:
+        if name is None or isinstance(name, bool):
+            name, ok = QInputDialog.getText(self, "新建角色", "角色名称")
+            if not ok:
+                return
+        name = name.strip()
+        if not name:
+            return
+        schemes = dict(self._style.custom_style_schemes)
+        original = name
+        suffix = 2
+        while name in schemes:
+            name = f"{original} {suffix}"
+            suffix += 1
+        schemes[name] = _scheme_from_current(self)
+        if name not in self._role_names:
+            self._role_names.append(name)
+        self._update_style(custom_style_schemes=schemes)
+        self._syncing = True
+        try:
+            self._refresh_scheme_combo(f"{_CUSTOM_SCHEME_PREFIX}{name}")
+        finally:
+            self._syncing = False
+        self._sync_subtitle_scheme_controls()
+
+    def _open_preset_manager(self) -> None:
+        dialog = StylePresetManagerDialog(
+            presets=self._preset_schemes,
+            current_scheme=_scheme_from_current(self),
+            target_label=self._current_target_label(),
+            parent=self,
+        )
+        dialog.exec()
+        schemes = dialog.preset_schemes()
+        deleted_names = dialog.deleted_names()
+        imported = dialog.imported_schemes()
+        self._set_preset_schemes_from_dialog(schemes)
+        if deleted_names:
+            self._remove_preset_targets(deleted_names)
+        if imported:
+            self._import_preset_schemes(imported)
+
+    def _set_preset_schemes_from_dialog(self, schemes: dict[str, SubtitleStyleScheme]) -> None:
+        self._preset_schemes = {
+            str(name): deepcopy(scheme)
+            for name, scheme in schemes.items()
+            if str(name)
+        }
+        self.presetSchemesChanged.emit(self.preset_schemes)
+
+    def _import_preset_schemes(self, schemes: dict[str, SubtitleStyleScheme]) -> None:
+        if not schemes:
+            return
+        role_names = list(self._role_names)
+        style_schemes = dict(self._style.custom_style_schemes)
+        for name, scheme in schemes.items():
+            name = str(name).strip()
+            if not name:
+                continue
+            style_schemes[name] = deepcopy(scheme)
+            if name not in role_names:
+                role_names.append(name)
+        self._role_names = role_names
+        self._update_style(custom_style_schemes=style_schemes)
+        self._syncing = True
+        try:
+            self._refresh_scheme_combo(self._current_scheme_key())
+        finally:
+            self._syncing = False
+        self._sync_subtitle_scheme_controls()
+
+    def _remove_preset_targets(self, names: set[str]) -> None:
+        if not names:
+            return
+        normalized = {str(name) for name in names if str(name)}
+        if not normalized:
+            return
+        presets = {
+            name: scheme
+            for name, scheme in self._preset_schemes.items()
+            if name not in normalized
+        }
+        presets_changed = len(presets) != len(self._preset_schemes)
+        self._preset_schemes = presets
+        if presets_changed:
+            self.presetSchemesChanged.emit(self.preset_schemes)
+
+        role_names = [name for name in self._role_names if name not in normalized]
+        role_names_changed = role_names != self._role_names
+        style_schemes = {
+            name: scheme
+            for name, scheme in self._style.custom_style_schemes.items()
+            if name not in normalized
+        }
+        style_changed = len(style_schemes) != len(self._style.custom_style_schemes)
+        self._role_names = role_names
+        if style_changed:
+            self._update_style(custom_style_schemes=style_schemes)
+        if role_names_changed or style_changed:
+            self._syncing = True
+            try:
+                self._refresh_scheme_combo(_GLOBAL_SCHEME_KEY)
+            finally:
+                self._syncing = False
+            self._sync_subtitle_scheme_controls()
+
+    def _ensure_role_schemes(self) -> None:
+        schemes = dict(self._style.custom_style_schemes)
+        presets = dict(self._preset_schemes)
+        changed = False
+        presets_changed = False
+        for index, name in enumerate(self._role_names):
+            if name in schemes:
+                if name not in presets:
+                    presets[name] = deepcopy(schemes[name])
+                    presets_changed = True
+                continue
+            preset = self._preset_schemes.get(name)
+            if preset is not None:
+                schemes[name] = deepcopy(preset)
+            else:
+                scheme = _auto_role_scheme(_scheme_from_current(self), index)
+                schemes[name] = scheme
+                presets[name] = deepcopy(scheme)
+                presets_changed = True
+            changed = True
+        if changed:
+            self._style = replace(self._style, custom_style_schemes=schemes)
+        if presets_changed:
+            self._preset_schemes = presets
+            self.presetSchemesChanged.emit(self.preset_schemes)
+        if changed:
+            self.styleChanged.emit(self._style)
+
+    def _current_target_label(self) -> str:
+        role_name = self._current_custom_scheme_name()
+        return role_name if role_name is not None else "全局默认"
+
+    def _apply_preset_to_current_target(self, scheme: SubtitleStyleScheme) -> None:
+        role_name = self._current_custom_scheme_name()
+        if role_name is not None:
+            schemes = dict(self._style.custom_style_schemes)
+            schemes[role_name] = deepcopy(scheme)
+            if role_name not in self._role_names:
+                self._role_names.append(role_name)
+            self._update_style(custom_style_schemes=schemes)
+            return
+        changes = _style_scheme_changes(scheme)
+        if changes:
+            self._update_style(**changes)
+
+    def _current_scheme_key(self) -> Optional[str]:
+        if not hasattr(self, "_singer_combo"):
+            return None
+        data = self._singer_combo.currentData()
+        return str(data) if data is not None else _GLOBAL_SCHEME_KEY
+
+    def current_scheme_key(self) -> str:
+        return self._current_scheme_key() or _GLOBAL_SCHEME_KEY
+
+    def set_current_scheme_key(self, key: str) -> None:
+        if not hasattr(self, "_singer_combo"):
+            return
+        index = self._singer_combo.findData(key)
+        if index < 0:
+            index = self._singer_combo.findData(_GLOBAL_SCHEME_KEY)
+        if index < 0:
+            return
+        self._singer_combo.setCurrentIndex(index)
+
+    def _on_scheme_combo_changed(self, _index: int) -> None:
+        self._sync_subtitle_scheme_controls()
+        if not self._syncing:
+            self.schemeSelectionChanged.emit(self.current_scheme_key())
+
+    def _current_custom_scheme_name(self) -> Optional[str]:
+        key = self._current_scheme_key()
+        if key is None or not key.startswith(_CUSTOM_SCHEME_PREFIX):
+            return None
+        return key.removeprefix(_CUSTOM_SCHEME_PREFIX)
+
+    def _scheme_value(self, field_name: str):
+        role_name = self._current_custom_scheme_name()
+        if role_name is not None:
+            scheme = self._style.custom_style_schemes.get(role_name)
+            if (
+                field_name == "karaoke_colors"
+                and scheme is not None
+                and scheme.karaoke_colors is None
+                and _scheme_has_legacy_color_values(scheme)
+            ):
+                return None
+            if field_name == "ruby_karaoke_colors" and scheme is not None:
+                return scheme.ruby_karaoke_colors
+            value = getattr(scheme, field_name, None) if scheme is not None else None
+            if value is not None:
+                return value
+        return getattr(self._style, field_name)
+
+    def _rename_current_role(self) -> None:
+        old = self._current_custom_scheme_name()
+        if old is None:
+            return  # 全局默认不能重命名
+        new, ok = QInputDialog.getText(self, "重命名角色", "角色名称", text=old)
+        if not ok:
+            return
+        new = new.strip()
+        if not new or new == old:
+            return
+        schemes = dict(self._style.custom_style_schemes)
+        scheme = schemes.get(old) or _scheme_from_current(self)
+        if old in schemes:
+            del schemes[old]
+        schemes[new] = scheme
+        # 角色名来自字幕标签（role_names）的，重命名后也从可选名单里替换掉旧名。
+        if old in self._role_names:
+            self._role_names = [new if n == old else n for n in self._role_names]
+        self._update_style(custom_style_schemes=schemes)
+        self._syncing = True
+        try:
+            self._refresh_scheme_combo(f"{_CUSTOM_SCHEME_PREFIX}{new}")
+        finally:
+            self._syncing = False
+        self._sync_subtitle_scheme_controls()
+
+    def _delete_current_role(self) -> None:
+        name = self._current_custom_scheme_name()
+        if name is None:
+            return  # 全局默认不能删
+        schemes = dict(self._style.custom_style_schemes)
+        schemes.pop(name, None)
+        if name in self._role_names:
+            self._role_names = [n for n in self._role_names if n != name]
+        self._update_style(custom_style_schemes=schemes)
+        self._syncing = True
+        try:
+            self._refresh_scheme_combo(_GLOBAL_SCHEME_KEY)
+        finally:
+            self._syncing = False
+        self._sync_subtitle_scheme_controls()
+
+    def _sync_subtitle_scheme_controls(self) -> None:
+        if not hasattr(self, "_singer_combo"):
+            return
+        was_syncing = self._syncing
+        self._syncing = True
+        try:
+            # 卡片标题显示当前编辑目标：角色选中时这里的修改只写进该角色的
+            # 方案，不改全局——不标出来用户会以为参数无效。
+            role_name = self._current_custom_scheme_name()
+            suffix = f"（角色：{role_name}）" if role_name else ""
+            if hasattr(self, "_font_color_section"):
+                self._font_color_section.header.setText(f"颜色 / 字体{suffix}")
+            self._font_combo.setCurrentFont(QFont(str(self._scheme_value("font_family"))))
+            latin_family = self._scheme_value("font_family_latin")
+            self._font_latin_check.setChecked(bool(latin_family))
+            self._font_latin_combo.setEnabled(bool(latin_family))
+            if latin_family:
+                self._font_latin_combo.setCurrentFont(QFont(str(latin_family)))
+            self._font_size_spin.setValue(int(self._scheme_value("font_size_px")))
+            self._letter_spacing_spin.setValue(int(self._scheme_value("letter_spacing_px")))
+            self._space_width_spin.setValue(int(self._scheme_value("space_width_percent")))
+            self._font_weight_combo.setCurrentIndex(
+                max(0, self._font_weight_combo.findData(int(self._scheme_value("font_weight"))))
+            )
+            self._italic_check.setChecked(bool(self._scheme_value("italic")))
+            self._allow_biting_check.setChecked(bool(self._scheme_value("allow_biting")))
+            self._sync_color_subject_style_controls()
+            self._ruby_font_size_spin.setValue(int(self._scheme_value("ruby_font_size_px")))
+            self._ruby_gap_spin.setValue(int(self._scheme_value("ruby_gap_px")))
+            self._ruby_interval_spin.setValue(int(self._style.ruby_interval_px))
+            self._ruby_alignment_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._ruby_alignment_combo.findData(self._style.ruby_alignment),
+                )
+            )
+            if hasattr(self, "_ruby_apply_main_btn"):
+                self._ruby_apply_main_btn.setVisible(
+                    self._current_color_subject_key() == "ruby"
+                )
+            self._sync_color_fill_controls()
+        finally:
+            self._syncing = was_syncing
+
+    def _sync_lit_controls(self) -> None:
+        if not hasattr(self, "_lit_enabled_switch"):
+            return
+        self._lit_enabled_switch.setChecked(self._style.lit_enabled)
+        self._lit_style_combo.setCurrentIndex(
+            max(0, self._lit_style_combo.findData(self._style.lit_style))
+        )
+        self._lit_number_spin.setValue(self._style.lit_number)
+        self._lit_size_spin.setValue(self._style.lit_size)
+        self._lit_x_spin.setValue(self._style.lit_offset_x)
+        self._lit_y_spin.setValue(self._style.lit_offset_y)
+        self._lit_tracking_spin.setValue(self._style.lit_tracking)
+        self._lit_duration_spin.setValue(self._style.signals_duration_ms)
+        self._lit_stroke_width_spin.setValue(self._style.lit_stroke_width)
+        self._lit_fill_btn.set_color(self._style.lit_fill_color)
+        self._lit_stroke_btn.set_color(self._style.lit_stroke_color)
+        self._lit_stroke_soften_spin.setValue(self._style.lit_stroke_soften)
+        self._lit_opacity_spin.setValue(self._style.lit_opacity_pct)
+        self._lit_edge_brightness_spin.setValue(self._style.lit_edge_brightness_pct)
+        self._lit_shadow_check.setChecked(self._style.lit_shadow)
+        self._lit_waiting_time_spin.setValue(self._style.lit_waiting_time_ms)
+        self._lit_transition_mode_combo.setCurrentIndex(
+            max(0, self._lit_transition_mode_combo.findData(self._style.lit_transition_mode))
+        )
+        self._lit_transition_ratio_spin.setValue(self._style.lit_transition_ratio_pct)
+        self._lit_transition_angle_spin.setValue(self._style.lit_transition_angle_deg)
+        self._lit_transition_distance_spin.setValue(self._style.lit_transition_distance)
+        self._volume_size_spin.setValue(self._style.volume_size)
+        self._volume_x_spin.setValue(self._style.volume_offset_x)
+        self._volume_y_spin.setValue(self._style.volume_offset_y)
+        self._volume_column_width_spin.setValue(self._style.volume_column_width)
+        self._volume_column_count_spin.setValue(self._style.volume_column_count)
+        self._volume_column_spacing_spin.setValue(self._style.volume_column_spacing)
+        self._volume_ratio_spin.setValue(int(round(self._style.volume_ratio)))
+        self._volume_align_combo.setCurrentIndex(
+            max(0, self._volume_align_combo.findData(self._style.volume_align))
+        )
+        self._volume_flash_times_spin.setValue(self._style.volume_flash_times)
+        self._volume_flash_duration_spin.setValue(
+            int(round(self._style.volume_flash_duration_ratio * 100))
+        )
+        self._volume_transition_ratio_spin.setValue(self._style.volume_transition_ratio_pct)
+        self._volume_fill_btn.set_color(self._style.volume_fill_color)
+        self._volume_stroke_btn.set_color(self._style.volume_stroke_color)
+        self._volume_overlay_fill_btn.set_color(self._style.volume_overlay_fill_color)
+        self._volume_overlay_stroke_btn.set_color(self._style.volume_overlay_stroke_color)
+        self._sync_lit_style_visibility()
+
+    def _update_style(self, **changes) -> None:
+        if self._syncing:
+            return
+        if changes and set(changes).issubset(_SCHEME_FIELDS):
+            role_name = self._current_custom_scheme_name()
+            if role_name is not None:
+                # 当前选中某个角色 → 编辑进该角色（按名字存进 custom_style_schemes）。
+                schemes = dict(self._style.custom_style_schemes)
+                scheme = schemes.get(role_name) or _scheme_from_current(self)
+                schemes[role_name] = replace(scheme, **changes)
+                changes = {"custom_style_schemes": schemes}
+        if "line_y_position" in changes:
+            changes["line_y_position"] = _normalize_line_position(changes["line_y_position"])
+        if "line_horizontal_layout" in changes:
+            changes["line_horizontal_layout"] = _normalize_horizontal_layout(
+                changes["line_horizontal_layout"]
+            )
+        for align_field in ("row1_align", "row2_align"):
+            if align_field in changes:
+                changes[align_field] = _normalize_horizontal_align(changes[align_field])
+        if "viewport_align" in changes:
+            changes["viewport_align"] = _normalize_viewport_align(changes["viewport_align"])
+        if "section_ending_mode" in changes:
+            changes["section_ending_mode"] = (
+                changes["section_ending_mode"]
+                if changes["section_ending_mode"] in {"hold", "clear"}
+                else "hold"
+            )
+        if "decoration_kind" in changes:
+            changes["decoration_kind"] = _normalize_decoration_kind(
+                changes["decoration_kind"]
+            )
+        if "ruby_decoration_kind" in changes:
+            changes["ruby_decoration_kind"] = _normalize_decoration_kind(
+                changes["ruby_decoration_kind"]
+            )
+        if "entry_anim" in changes:
+            changes["entry_anim"] = _normalize_entry_animation(changes["entry_anim"])
+        if "exit_anim" in changes:
+            changes["exit_anim"] = _normalize_exit_animation(changes["exit_anim"])
+        if "lit_style" in changes:
+            changes["lit_style"] = _normalize_lit_style(changes["lit_style"])
+        if "lit_transition_mode" in changes:
+            changes["lit_transition_mode"] = _normalize_lit_transition_mode(
+                changes["lit_transition_mode"]
+            )
+        self._style = replace(self._style, **changes)
+        self._syncing = True
+        try:
+            if set(changes).intersection(
+                _SCHEME_FIELDS | {"singer_style_overrides", "custom_style_schemes"}
+            ):
+                self._sync_subtitle_scheme_controls()
+            if set(changes).intersection(_LIT_FIELDS):
+                self._sync_lit_controls()
+        finally:
+            self._syncing = False
+        self.styleChanged.emit(self._style)
+
+
+def _normalize_line_position(value: object) -> LineYPosition:
+    if value in {"top", "center", "bottom"}:
+        return value  # type: ignore[return-value]
+    return "bottom"
+
+
+def _normalize_horizontal_layout(value: object) -> LineHorizontalLayout:
+    if value in {"asymmetric", "center", "per_row"}:
+        return value  # type: ignore[return-value]
+    return "asymmetric"
+
+
+def _normalize_horizontal_align(value: object) -> HorizontalAlign:
+    if value in HORIZONTAL_ALIGNS:
+        return value  # type: ignore[return-value]
+    return "left"
+
+
+def _normalize_viewport_align(value: object) -> ViewportAlign:
+    if value in VIEWPORT_ALIGNS:
+        return value  # type: ignore[return-value]
+    return "center"
+
+
+def _normalize_decoration_kind(value: object) -> DecorationKind:
+    if value in {"shadow", "glow"}:
+        return value  # type: ignore[return-value]
+    return "shadow"
+
+
+def _scaled_panel_px(value: int, scale: float) -> int:
+    if value <= 0:
+        return 0
+    return max(1, int(round(value * scale)))
+
+
+def _scaled_panel_signed_px(value: int, scale: float) -> int:
+    if value == 0:
+        return 0
+    sign = 1 if value > 0 else -1
+    return sign * max(1, int(round(abs(value) * scale)))
+
+
+def _normalize_entry_animation(value: object) -> EntryAnimation:
+    if value in {"none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"}:
+        return value  # type: ignore[return-value]
+    return "none"
+
+
+def _normalize_exit_animation(value: object) -> ExitAnimation:
+    if value in {"none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"}:
+        return value  # type: ignore[return-value]
+    return "none"
+
+
+def _normalize_lit_style(value: object):
+    if value in {"volume", "circle", "square", "rounded"}:
+        return value
+    return "volume"
+
+
+def _normalize_lit_transition_mode(value: object) -> str:
+    if value in {"none", "fade", "slide"}:
+        return str(value)
+    return "fade"
+
+
+def _fill_stack_index(mode: str) -> int:
+    if mode in {"gradient_horizontal", "gradient_vertical"}:
+        return 1
+    if mode == "split_vertical":
+        return 2
+    if mode == "image":
+        return 3
+    return 0
+
+
+def _normalize_gradient_stops(stops: list[tuple[int, str]]) -> list[tuple[int, str]]:
+    normalized: dict[int, str] = {}
+    for position, color in stops:
+        pos = max(0, min(100, int(position)))
+        normalized[pos] = _normalize_hex(str(color), "#FFFFFF")
+    if 0 not in normalized:
+        first = next(iter(normalized.values()), "#FFFFFF")
+        normalized[0] = first
+    if 100 not in normalized:
+        last = next(reversed(normalized.values()), normalized[0])
+        normalized[100] = last
+    return sorted(normalized.items())
+
+
+def _gradient_stops(fill: PaintFill) -> list[tuple[int, str]]:
+    if fill.gradient_stops:
+        return _normalize_gradient_stops(fill.gradient_stops)
+    return _normalize_gradient_stops([(0, fill.start_color), (100, fill.end_color)])
+
+
+def _replace_fill(fill: PaintFill, **changes) -> PaintFill:
+    if "start_color" in changes or "end_color" in changes:
+        stops = _gradient_stops(fill)
+        if "start_color" in changes:
+            stops = [(0, changes["start_color"])] + [(p, c) for p, c in stops if p != 0]
+        if "end_color" in changes:
+            stops = [(p, c) for p, c in stops if p != 100] + [(100, changes["end_color"])]
+        changes.setdefault("gradient_stops", _normalize_gradient_stops(stops))
+    if "gradient_stops" in changes:
+        stops = _normalize_gradient_stops(changes["gradient_stops"])
+        changes["gradient_stops"] = stops
+        changes.setdefault("start_color", stops[0][1])
+        changes.setdefault("end_color", stops[-1][1])
+    return replace(fill, **changes)
+
+
+def _legacy_colors_from_panel(panel: PropertyPanel) -> KaraokeColors:
+    before = KaraokeColorState(
+        text=_solid_fill(str(panel._scheme_value("base_color"))),
+        stroke=_solid_fill(str(panel._scheme_value("stroke_color"))),
+        stroke2=_solid_fill("#000000"),
+        shadow=_solid_fill(str(panel._scheme_value("shadow_color"))),
+    )
+    after = KaraokeColorState(
+        text=_legacy_after_text_fill(panel),
+        stroke=_solid_fill(str(panel._scheme_value("stroke_color"))),
+        stroke2=_solid_fill("#000000"),
+        shadow=_solid_fill(str(panel._scheme_value("shadow_color"))),
+    )
+    return KaraokeColors(before=before, after=after)
+
+
+def _legacy_after_text_fill(panel: PropertyPanel) -> PaintFill:
+    fill_color = str(panel._scheme_value("fill_color"))
+    if not bool(panel._scheme_value("fill_gradient_enabled")):
+        return _solid_fill(fill_color)
+    mode = (
+        "gradient_vertical"
+        if int(panel._scheme_value("fill_gradient_angle_deg")) in {90, 270}
+        else "gradient_horizontal"
+    )
+    return PaintFill(
+        mode=mode,
+        color=fill_color,
+        start_color=str(panel._scheme_value("fill_gradient_start_color")),
+        end_color=str(panel._scheme_value("fill_gradient_end_color")),
+        gradient_stops=[
+            (0, str(panel._scheme_value("fill_gradient_start_color"))),
+            (100, str(panel._scheme_value("fill_gradient_end_color"))),
+        ],
+        split_top_color=str(panel._scheme_value("fill_gradient_start_color")),
+        split_bottom_color=str(panel._scheme_value("fill_gradient_end_color")),
+    )
+
+
+def _apply_legacy_color_to_matrix(
+    colors: KaraokeColors, field_name: str, color: str
+) -> Optional[KaraokeColors]:
+    colors = deepcopy(colors)
+    if field_name == "base_color":
+        colors.before.text = _solid_fill(color)
+        return colors
+    if field_name == "fill_color":
+        colors.after.text = _replace_fill(colors.after.text, color=color)
+        return colors
+    if field_name == "fill_gradient_start_color":
+        colors.after.text = _replace_fill(
+            colors.after.text,
+            start_color=color,
+            split_top_color=color,
+        )
+        return colors
+    if field_name == "fill_gradient_end_color":
+        colors.after.text = _replace_fill(
+            colors.after.text,
+            end_color=color,
+            split_bottom_color=color,
+        )
+        return colors
+    if field_name == "stroke_color":
+        colors.before.stroke = _solid_fill(color)
+        colors.after.stroke = _solid_fill(color)
+        return colors
+    if field_name == "shadow_color":
+        colors.before.shadow = _solid_fill(color)
+        colors.after.shadow = _solid_fill(color)
+        return colors
+    return None
+
+
+def _solid_fill(color: str) -> PaintFill:
+    return PaintFill(
+        mode="solid",
+        color=color,
+        start_color=color,
+        end_color=color,
+        gradient_stops=[(0, color), (100, color)],
+        split_top_color=color,
+        split_bottom_color=color,
+    )
+
+
+def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
+    return SubtitleStyleScheme(
+        font_family=str(panel._scheme_value("font_family")),
+        font_family_latin=panel._scheme_value("font_family_latin"),
+        font_size_px=int(panel._scheme_value("font_size_px")),
+        letter_spacing_px=int(panel._scheme_value("letter_spacing_px")),
+        space_width_percent=int(panel._scheme_value("space_width_percent")),
+        allow_biting=bool(panel._scheme_value("allow_biting")),
+        font_weight=int(panel._scheme_value("font_weight")),
+        italic=bool(panel._scheme_value("italic")),
+        base_color=str(panel._scheme_value("base_color")),
+        fill_color=str(panel._scheme_value("fill_color")),
+        fill_gradient_enabled=bool(panel._scheme_value("fill_gradient_enabled")),
+        fill_gradient_start_color=str(panel._scheme_value("fill_gradient_start_color")),
+        fill_gradient_end_color=str(panel._scheme_value("fill_gradient_end_color")),
+        fill_gradient_angle_deg=int(panel._scheme_value("fill_gradient_angle_deg")),
+        stroke_color=str(panel._scheme_value("stroke_color")),
+        stroke_width_px=int(panel._scheme_value("stroke_width_px")),
+        stroke2_width_px=int(panel._scheme_value("stroke2_width_px")),
+        decoration_kind=_normalize_decoration_kind(panel._scheme_value("decoration_kind")),
+        glow_radius_px=int(panel._scheme_value("glow_before_radius_px")),
+        glow_before_radius_px=int(panel._scheme_value("glow_before_radius_px")),
+        glow_after_radius_px=int(panel._scheme_value("glow_after_radius_px")),
+        glow_concentration_level=int(panel._scheme_value("glow_concentration_level")),
+        shadow_color=str(panel._scheme_value("shadow_color")),
+        shadow_offset_x=int(panel._scheme_value("shadow_offset_x")),
+        shadow_offset_y=int(panel._scheme_value("shadow_offset_y")),
+        ruby_font_size_px=int(panel._scheme_value("ruby_font_size_px")),
+        ruby_color=str(panel._scheme_value("ruby_color")),
+        ruby_gap_px=int(panel._scheme_value("ruby_gap_px")),
+        ruby_stroke_width_px=panel._scheme_value("ruby_stroke_width_px"),
+        ruby_stroke2_width_px=panel._scheme_value("ruby_stroke2_width_px"),
+        ruby_decoration_kind=panel._scheme_value("ruby_decoration_kind"),
+        ruby_glow_radius_px=panel._scheme_value("ruby_glow_radius_px"),
+        ruby_glow_before_radius_px=panel._scheme_value("ruby_glow_before_radius_px"),
+        ruby_glow_after_radius_px=panel._scheme_value("ruby_glow_after_radius_px"),
+        ruby_glow_concentration_level=panel._scheme_value(
+            "ruby_glow_concentration_level"
+        ),
+        ruby_shadow_offset_x=panel._scheme_value("ruby_shadow_offset_x"),
+        ruby_shadow_offset_y=panel._scheme_value("ruby_shadow_offset_y"),
+        karaoke_colors=panel._current_karaoke_colors(),
+        ruby_karaoke_colors=panel._scheme_value("ruby_karaoke_colors"),
+    )
+
+
+def _style_scheme_changes(scheme: SubtitleStyleScheme) -> dict[str, object]:
+    return {
+        field: value
+        for field in _SCHEME_FIELDS
+        if (value := getattr(scheme, field)) is not None
+    }
+
+
+def _scheme_has_legacy_color_values(scheme: SubtitleStyleScheme) -> bool:
+    return any(
+        getattr(scheme, field) is not None
+        for field in (
+            "base_color",
+            "fill_color",
+            "fill_gradient_enabled",
+            "fill_gradient_start_color",
+            "fill_gradient_end_color",
+            "fill_gradient_angle_deg",
+            "stroke_color",
+            "shadow_color",
+        )
+    )
+
+
+def _auto_role_scheme(base: SubtitleStyleScheme, index: int) -> SubtitleStyleScheme:
+    color = _AUTO_ROLE_COLORS[index % len(_AUTO_ROLE_COLORS)]
+    colors = deepcopy(base.karaoke_colors) if base.karaoke_colors is not None else KaraokeColors()
+    colors = _apply_legacy_color_to_matrix(colors, "fill_color", color) or colors
+    return replace(
+        deepcopy(base),
+        fill_color=color,
+        fill_gradient_enabled=False,
+        fill_gradient_start_color=color,
+        fill_gradient_end_color=color,
+        karaoke_colors=colors,
+    )
+
+
+def _scheme_icon(scheme: SubtitleStyleScheme) -> QIcon:
+    before = QColor(scheme.base_color or "#FFFFFF")
+    after = QColor(scheme.fill_color or "#FF5A6F")
+    pixmap = QPixmap(34, 20)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.fillRect(QRect(0, 0, 17, 20), before)
+    painter.fillRect(QRect(17, 0, 17, 20), after)
+    painter.setPen(QColor("#000000"))
+    painter.drawRect(0, 0, 33, 19)
+    painter.end()
+    return QIcon(pixmap)
+
+
+def _spin(
+    minimum: int, maximum: int, *, suffix: str = ""
+) -> _WheelFocusedSpinBox:
+    spin = _WheelFocusedSpinBox()
+    spin.setRange(minimum, maximum)
+    spin.setSuffix(suffix)
+    spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    _compact_control(spin)
+    return spin
+
+
+def _compact_control(widget: QWidget) -> None:
+    widget.setMinimumWidth(0)
+    widget.setFixedHeight(32)
+    widget.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+    widget.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+
+
+def _scroll_page() -> tuple[FluentScrollArea, QVBoxLayout]:
+    scroll = FluentScrollArea()
+    scroll.setObjectName("SubtitlePropertyScroll")
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(FluentScrollArea.Shape.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    page = QWidget()
+    page.setObjectName("SubtitlePropertyPage")
+    page.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+    themed(page, lambda: "#SubtitlePropertyPage { background: transparent; }")
+    layout = QVBoxLayout(page)
+    layout.setContentsMargins(10, 10, 10, 12)
+    layout.setSpacing(10)
+    scroll.setWidget(page)
+    return scroll, layout
+
+
+def _field(label_text: str, control: QWidget) -> QWidget:
+    box = QWidget()
+    box.setObjectName("SubtitlePropertyField")
+    themed(box, lambda: "#SubtitlePropertyField { background: transparent; }")
+    layout = QVBoxLayout(box)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(4)
+    label = QLabel(label_text)
+    themed(label, lambda: f"color: {palette().text_secondary}; font-size: 9pt;")
+    control.setParent(box)
+    layout.addWidget(label)
+    layout.addWidget(control)
+    return box
+
+
+def _grid_adder(grid: QGridLayout):
+    """Return an ``add(label, control)`` that fills a 2-column grid left→right."""
+    pos = [0, 0]
+
+    def add(label: Optional[str], control: QWidget) -> None:
+        widget = _field(label, control) if label is not None else control
+        grid.addWidget(widget, pos[0], pos[1])
+        pos[1] += 1
+        if pos[1] >= 2:
+            pos[0] += 1
+            pos[1] = 0
+
+    return add
+
+
+def _solid_paint_fill(color: str) -> PaintFill:
+    normalized = _normalize_hex(color)
+    return PaintFill(
+        mode="solid",
+        color=normalized,
+        start_color=normalized,
+        end_color=normalized,
+        gradient_stops=[(0, normalized), (100, normalized)],
+        split_top_color=normalized,
+        split_bottom_color=normalized,
+    )
+
+
+_TITLE_ANCHOR_OPTIONS: tuple[tuple[str, TitleAnchor], ...] = (
+    ("左上", "top_left"),
+    ("中上", "top_center"),
+    ("右上", "top_right"),
+    ("左中", "center_left"),
+    ("正中", "center"),
+    ("右中", "center_right"),
+    ("左下", "bottom_left"),
+    ("中下", "bottom_center"),
+    ("右下", "bottom_right"),
+)
+
+
+def _subgroup_label(text: str) -> QLabel:
+    """A sub-section heading: accent bar + bold dark text, distinct from field labels."""
+    label = QLabel(text)
+    label.setObjectName("SubtitlePropertySubheading")
+    themed(
+        label,
+        lambda: (
+            f"color: {palette().title_text};"
+            "font-size: 9.5pt;"
+            "font-weight: 700;"
+            f"border-left: 3px solid {palette().accent_primary};"
+            "padding: 0 0 0 8px;"
+        ),
+    )
+    return label
+
+
+def _section(
+    title: str, *, switch: bool = False
+) -> tuple[CollapsibleSection, QVBoxLayout]:
+    section = CollapsibleSection(title, switch=switch)
+    themed(
+        section,
+        lambda: (
+            f"""
+            QFrame#SubtitlePropertySection {{
+                background: {palette().card_bg};
+                border: 1px solid {palette().card_border};
+                border-radius: 8px;
+            }}
+            QToolButton#SubtitlePropertySectionHeader {{
+                color: {palette().title_text};
+                border: 0;
+                padding: 10px 12px;
+                font-size: 10.5pt;
+                font-weight: 700;
+                text-align: left;
+            }}
+            QToolButton#SubtitlePropertySectionHeader:hover {{
+                color: {palette().accent_primary};
+            }}
+            QFrame#SubtitlePropertySection QWidget {{
+                background: transparent;
+            }}
+            {control_qss("QFrame#SubtitlePropertySection")}
+            """
+        ),
+    )
+    return section, section.content_layout
+
+
+def _inline_section(
+    title: str, parent: Optional[QWidget] = None
+) -> tuple[QWidget, QVBoxLayout]:
+    section = QWidget(parent)
+    layout = QVBoxLayout(section)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(10)
+    layout.addWidget(_subgroup_label(title))
+    return section, layout

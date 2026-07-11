@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "self-improving-agent": {
+      "version": "3.0.24",
+      "installedAt": 1782569361886,
+      "ownerHandle": "pskoett"
+    }
+  }
+}

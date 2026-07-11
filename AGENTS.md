@@ -16,7 +16,7 @@ UI 的核心是 [`WORKFLOW_STEPS`](krok_helper/gui_qt.py)（约第 1064 行）�
 | 2 | 波形对齐 | [`krok_helper/audio_alignment.py`](krok_helper/audio_alignment.py)（999 行） |
 | 3 | 歌词检索 | [`krok_helper/lyrics.py`](krok_helper/lyrics.py)（1426 行） |
 | 4 | 歌词打轴 | [`krok_helper/lyrics_timing/`](krok_helper/lyrics_timing/) — **SUG submodule** |
-| 5 | 字幕视频生成 | 占位（`PlaceholderPage`） |
+| 5 | 字幕视频生成 | [`krok_helper/subtitle_render/`](krok_helper/subtitle_render/)（骨架已落地，在 `feat/subtitle-render` 分支推进；详见 §10） |
 | 6 | Hi-Res 混流 | [`krok_helper/pipeline.py`](krok_helper/pipeline.py) |
 
 ---
@@ -58,8 +58,8 @@ karaoke-studio/
 ## 3. 跑起来
 
 ```powershell
-# 用户的 venv 在仓库外
-..\karaoke-studio\.venv\Scripts\python.exe app.py
+# 带 PyQt6 的 Python 解释器
+C:\Python314\python.exe app.py
 ```
 
 CLI 选项见 [`krok_helper/cli.py`](krok_helper/cli.py)（`--video` / `--on-audio` / `--off-audio` / `--output-dir` / `--ffmpeg-dir` 等）。无参数则直接进 GUI。
@@ -67,14 +67,14 @@ CLI 选项见 [`krok_helper/cli.py`](krok_helper/cli.py)（`--video` / `--on-aud
 测试：
 
 ```powershell
-..\karaoke-studio\.venv\Scripts\python.exe -m pytest tests\
+C:\Python314\python.exe -m pytest tests\
 ```
 
 Qt 嵌入冒烟（无显示器环境）：
 
 ```powershell
 $env:QT_QPA_PLATFORM='offscreen'
-..\karaoke-studio\.venv\Scripts\python.exe -c "from PyQt6.QtWidgets import QApplication; app=QApplication([]); from krok_helper.gui_qt import KrokHelperQtApp; w=KrokHelperQtApp(); print(type(w.lyrics_timing_page).__name__)"
+C:\Python314\python.exe -c "from PyQt6.QtWidgets import QApplication; app=QApplication([]); from krok_helper.gui_qt import KrokHelperQtApp; w=KrokHelperQtApp(); print(type(w.lyrics_timing_page).__name__)"
 ```
 
 ---
@@ -145,7 +145,48 @@ git submodule status
 
 ---
 
-## 9. 资源指针
+## 9. 当前开发分支：`feat/subtitle-render`
+
+第 5 步「字幕视频生成」是 1.0 发版前最后、也最复杂的模块，目标对标 NicoKaraMaker3。**所有该模块的工作在 `feat/subtitle-render` 长线分支上进行**，期间 `main` 上的 bugfix 用 `git merge main` 反向并入开发分支，最终一次性 merge 回 main。不要把零散 bugfix 直接提交到本分支。
+
+### 接手前必读（2026-07-11 校准）
+
+1. [`docs/字幕渲染模块-需求设计.md`](docs/字幕渲染模块-需求设计.md)：总体状态、产品决策和剩余主线。
+2. [`docs/N3项目导入兼容性与实施计划.md`](docs/N3项目导入兼容性与实施计划.md)：N3 字段矩阵、明确不做项、下一步 TDD 顺序。
+3. [`docs/字幕布局-N3对齐改造计划.md`](docs/字幕布局-N3对齐改造计划.md)：布局 P1-P4 历史与 P5 每布局字符域。
+4. [`docs/SUG与字幕渲染模块-Python走字差异.md`](docs/SUG与字幕渲染模块-Python走字差异.md)：SUG/LRC 数据保真边界。
+
+### 当前现状
+
+- P0 主路径已完成：`.sug`/`.lrc`/`.n3proj`、视频预览、QPainter 逐字渲染、MP4 导出、取消、工作流嵌入和 `.yurika`。
+- ruby、角色/多歌手、行内混合字体/字号/配色、渐变/图片填充、glow/stroke2、竖排/RTL、标题、时间轴和多字幕源均已实现。
+- N3 TACTIC 对齐已覆盖：三档发光、蓝白 after 配色、ruby 样式、7px 默认布局字间距，以及 `UseEdge2` 关闭时不强制二重描边。
+- 逐行特效（四列表格、批量编辑、N3 行动作、持久化、撤销/重做、Painter）已在工作区实现，尚未 commit/push。
+- `Background` 仍是占位；产品只支持视频背景。静态图、图片序列、纯色与独立音频导出尚未接通。
+- native C++ sidecar 产品路径硬关闭，Python QPainter 是唯一正式路径。
+
+### 下一步顺序
+
+1. 验证并提交当前逐行特效；
+2. N3 每布局字符排版参数（`LyricsInterval` / `AllowBiting` / `RubyInterval` / `RubyAlignment` / `LyricsAndRubyInterval`）；
+3. 背景源抽象与独立音频；
+4. N3 提示策略清理；
+5. 无交互 CLI、CI 烟测、PyInstaller 包内验证；
+6. 同步 `main` 并整体合并。
+
+### 关键约束
+
+- **引擎选型已定**：QPainter 离屏 + ffmpeg rawvideo pipe，不改成 ASS/libass 主路径。
+- **不要改 SUG submodule 源码**：优先直接消费 SUG `Project`/`.sug`；`.lrc` 仅为兼容入口。
+- **只输出 MP4、只支持 60/120fps**；不做 30fps 原样输出、AVI 或 ARGB/透明 PNG 序列。
+- **不支持假名独立字体族**；假名沿用日文字体，英数字体仍可独立。
+- **N3 二重描边严格遵守 `UseEdge2`**，不能因保存了宽度就强制开启。
+- **所有用户面向字符串中文**。
+- 字幕测试 645 项同一 Qt 进程在尾段可能发生 pooled-thread teardown access violation；文件级隔离正常，正式 CI 前需修复销毁顺序。
+
+---
+
+## 10. 资源指针
 
 - 主仓库：https://github.com/karaoke-studio/karaoke-studio
 - SUG submodule：https://github.com/karaoke-studio/StrangeUtaGame
