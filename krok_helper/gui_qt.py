@@ -2322,6 +2322,8 @@ class KrokHelperQtApp(QMainWindow):
         self.align_auto_task: BackgroundTask | None = None
         self.align_export_task: BackgroundTask | None = None
         self._update_checker: UpdateChecker | None = None
+        self._update_launch_worker = None
+        self._update_progress_win = None
         self.lyrics_search_service = LyricsSearchService()
         self.lyrics_search_results: list[LyricsSearchCandidate] = []
         self.lyrics_pending_results: list[LyricsSearchCandidate] = []
@@ -6760,6 +6762,8 @@ class KrokHelperQtApp(QMainWindow):
             return
         try:
             from krok_helper.updater import installer
+            from krok_helper.updater.progress_window import UpdateProgressWindow
+            from krok_helper.updater.worker import LaunchUpdaterWorker
         except Exception as exc:  # noqa: BLE001
             QMessageBox.critical(self, APP_TITLE, f"无法加载更新器：\n{exc}")
             return
@@ -6780,11 +6784,34 @@ class KrokHelperQtApp(QMainWindow):
             download_urls=[(source, url) for source, url in result.download_candidates],
             proxy_url=proxy_url,
         )
-        launch_result = installer.launch_updater(plan)
-        if not launch_result.launched:
-            QMessageBox.critical(self, APP_TITLE, f"无法启动 Updater：\n{launch_result.reason}")
-            return
-        QApplication.quit()
+
+        # launch_updater 内部的 Updater.exe 自更新会发起网络下载（数秒到数十秒），
+        # 放到后台线程执行，主线程用进度窗给用户反馈并支持取消。
+        progress_win = UpdateProgressWindow()
+        progress_win.show()
+        worker = LaunchUpdaterWorker(plan, parent=self)
+        self._update_launch_worker = worker  # 防 GC
+        self._update_progress_win = progress_win  # 防 GC
+
+        worker.progress.connect(progress_win.update_from_text, Qt.ConnectionType.QueuedConnection)
+        progress_win.cancelled.connect(worker.request_cancel)
+
+        def _on_launch_done(launch_result: object) -> None:
+            self._update_launch_worker = None
+            self._update_progress_win = None
+            progress_win.finish()
+            lr = launch_result
+            if getattr(lr, "reason", "") == "用户取消更新":
+                return
+            if not getattr(lr, "launched", False):
+                QMessageBox.critical(
+                    self, APP_TITLE, f"无法启动 Updater：\n{getattr(lr, 'reason', '未知错误')}"
+                )
+                return
+            QApplication.quit()
+
+        worker.done.connect(_on_launch_done, Qt.ConnectionType.QueuedConnection)
+        worker.start()
 
     def _save_settings_payload(
         self,

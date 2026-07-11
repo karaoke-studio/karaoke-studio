@@ -342,6 +342,42 @@ class _CheckRunnable(QObject):
         )
 
 
+class LaunchUpdaterWorker(QThread):
+    """后台线程执行 Updater 预热（自更新）+ 启动，避免主线程卡死。
+
+    ``installer.launch_updater`` 内部的自更新会下载 app part zip（数秒到数十秒
+    的网络 IO）。``progress`` 信号供进度窗实时刷新；:meth:`request_cancel`
+    由主线程调用请求取消。
+    """
+
+    done = pyqtSignal(object)  # LaunchResult
+    progress = pyqtSignal(str)
+
+    def __init__(self, plan, parent: QObject | None = None):
+        super().__init__(parent)
+        self._plan = plan
+        self._cancelled = False
+
+    def request_cancel(self) -> None:
+        self._cancelled = True
+
+    def run(self) -> None:
+        from krok_helper.updater import installer
+
+        try:
+            result = installer.launch_updater(
+                self._plan,
+                progress_cb=self.progress.emit,
+                cancel_check=lambda: self._cancelled,
+            )
+        except installer.UpdateCancelledError:
+            result = installer.LaunchResult(launched=False, reason="用户取消更新")
+        except Exception as exc:  # noqa: BLE001
+            log.exception("启动 Updater 异常")
+            result = installer.LaunchResult(launched=False, reason=str(exc))
+        self.done.emit(result)
+
+
 class UpdateChecker(QObject):
     finished = pyqtSignal(object)
 

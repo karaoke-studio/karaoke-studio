@@ -52,3 +52,14 @@ docs/1.png
 docs/2.png
 docs/3.png
 docs/4.png
+
+# SUG standalone 从仓库根运行（offscreen 冒烟/测试）时写的运行时配置
+/config.json
+/dictionary.json
+
+# 会话工作区（逆向工具、基准输出、agent 学习记录）
+.tools/
+.reverse/
+.bench/
+.learnings/
+docs/Sayatoo基本页逆向与实现计划.md
