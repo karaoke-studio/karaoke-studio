@@ -14,6 +14,35 @@
 
 ---
 
+## [4.0.0] — 2026-07-11
+
+工作台六步制作链路正式完整贯通：字幕视频生成模块上线，同时启用增量更新、
+Updater 自更新和更可靠的跨版本更新检查。
+
+从较旧版本直接升级时，更新弹窗可能只展示本版本说明；完整历史请查看
+[CHANGELOG](https://github.com/karaoke-studio/karaoke-studio/blob/main/CHANGELOG.md)。
+
+### 新增功能
+- **字幕视频生成工作流**：第 5 步不再是占位页，可从歌词打轴项目直接载入字幕和背景视频。
+- 支持导入 `.sug`、逐字 `.lrc`、`.n3proj`，并保存 / 打开 `.yurika` 字幕工程。
+- 支持卡拉 OK 逐字高亮、ruby、角色 / 多歌手、多字幕源、渐变 / 图片填充、双描边、发光、竖排 / RTL、标题与逐行特效。
+- 支持视频同步预览、歌词列表、时间轴、属性面板以及 60 / 120 fps MP4 导出。
+- 支持 CPU / NVENC / QSV / AMF 编码选择和多进程 QPainter + FFmpeg 渲染。
+- **增量更新**：Windows 发布新增 app/runtime parts 与 manifest；首次升级写入本地清单，后续只下载发生变化的 part。
+- **Updater 自更新**：主程序退出前可先更新 `Updater.exe`，并提供可取消的更新准备进度窗。
+- 更新检查增加 GitHub 302 跳转兜底、403 限流专属说明和跨版本更新日志聚合。
+
+### 特性改变
+- Windows 包加入 QtMultimedia 及 FFmpeg 媒体插件，支持字幕模块内的视频和音频预览。
+- Windows runtime 增加构建 profile，PyInstaller 收集策略变化时强制重建，避免误复用缺组件的旧 runtime。
+- 发布工具新增 `prepare` / `notes` 命令，自动同步版本号、README 和中文 Release notes。
+
+### 修复项目
+- 修复 PyInstaller 版本多进程字幕导出无法启动 worker、进度停在第一帧的问题。
+- 增加 frozen multiprocessing 构建冒烟，今后 worker 启动失败会直接阻止发布包生成。
+
+---
+
 ## [3.1.7.4] — 2026-07-11
 同步打轴模块 StrangeUtaGame 到最新发布版，工作台主流程部分改动。
 
