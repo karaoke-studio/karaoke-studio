@@ -36,6 +36,8 @@ from dataclasses import dataclass, field, fields as dataclass_fields, is_datacla
 from threading import Lock
 from typing import Hashable, Optional
 
+import numpy as np
+
 from PyQt6.QtCore import QPointF, QRectF, Qt
 from PyQt6.QtGui import (
     QBrush,
@@ -46,11 +48,9 @@ from PyQt6.QtGui import (
     QLinearGradient,
     QPainter,
     QPainterPath,
-    QPixmap,
     QPen,
     QTransform,
 )
-from PyQt6.QtWidgets import QGraphicsBlurEffect, QGraphicsPixmapItem, QGraphicsScene
 
 from krok_helper.subtitle_render.engine.layers import (
     BakedLayer,
@@ -6886,28 +6886,68 @@ def _paint_glow_path(
         painter.drawImage(target, _blur_image(source, blur_radius))
 
 
+def _n3_gaussian_kernel_1d(standard_deviation: int) -> np.ndarray:
+    """Return N3/Direct2D's normalized Gaussian kernel for one axis."""
+    sigma = max(float(standard_deviation), 1.0)
+    support_radius = math.ceil(sigma * 3.0)
+    offsets = np.arange(-support_radius, support_radius + 1, dtype=np.float64)
+    kernel = np.exp(-(offsets * offsets) / (2.0 * sigma * sigma))
+    return kernel / kernel.sum()
+
+
 def _blur_image(source: QImage, radius: int) -> QImage:
-    radius = max(int(radius), 1)
-    result = QImage(source.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    """Apply N3's Direct2D GaussianBlur semantics with a soft border.
+
+    N3 assigns ``DecorSize`` directly to Direct2D's ``StandardDeviation``.
+    Direct2D uses a ``3 * sigma`` kernel support and transparent pixels beyond
+    the input (``D2D1_BORDER_MODE_SOFT``).  Qt's QGraphicsBlurEffect instead
+    uses an exponential blur whose ``blurRadius`` is not a standard deviation.
+    """
+    image = source.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+    width = image.width()
+    height = image.height()
+    if width <= 0 or height <= 0:
+        return image
+
+    source_bits = image.constBits()
+    source_bits.setsize(image.sizeInBytes())
+    source_rows = np.frombuffer(source_bits, dtype=np.uint8).reshape(
+        height, image.bytesPerLine()
+    )
+    pixels = source_rows[:, : width * 4].reshape(height, width, 4).astype(np.float32)
+
+    kernel = _n3_gaussian_kernel_1d(max(int(radius), 1)).astype(np.float32)
+    support_radius = len(kernel) // 2
+    horizontal = np.pad(
+        pixels,
+        ((0, 0), (support_radius, support_radius), (0, 0)),
+        mode="constant",
+    )
+    horizontal_windows = np.lib.stride_tricks.sliding_window_view(
+        horizontal, len(kernel), axis=1
+    )
+    horizontal_blur = np.einsum(
+        "...k,k->...", horizontal_windows, kernel, optimize=True
+    )
+    vertical = np.pad(
+        horizontal_blur,
+        ((support_radius, support_radius), (0, 0), (0, 0)),
+        mode="constant",
+    )
+    vertical_windows = np.lib.stride_tricks.sliding_window_view(
+        vertical, len(kernel), axis=0
+    )
+    blurred = np.einsum("...k,k->...", vertical_windows, kernel, optimize=True)
+    quantized = np.clip(np.rint(blurred), 0, 255).astype(np.uint8)
+
+    result = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
     result.fill(0)
-    effect = QGraphicsBlurEffect()
-    effect.setBlurRadius(float(radius))
-    effect.setBlurHints(QGraphicsBlurEffect.BlurHint.QualityHint)
-    item = QGraphicsPixmapItem(QPixmap.fromImage(source))
-    item.setGraphicsEffect(effect)
-    scene = QGraphicsScene()
-    scene.setSceneRect(0.0, 0.0, float(source.width()), float(source.height()))
-    scene.addItem(item)
-    p = QPainter(result)
-    try:
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        scene.render(
-            p,
-            QRectF(0.0, 0.0, float(source.width()), float(source.height())),
-            QRectF(0.0, 0.0, float(source.width()), float(source.height())),
-        )
-    finally:
-        p.end()
+    result_bits = result.bits()
+    result_bits.setsize(result.sizeInBytes())
+    result_rows = np.frombuffer(result_bits, dtype=np.uint8).reshape(
+        height, result.bytesPerLine()
+    )
+    result_rows[:, : width * 4] = quantized.reshape(height, width * 4)
     return result
 
 

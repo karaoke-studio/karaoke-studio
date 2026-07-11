@@ -1953,6 +1953,33 @@ def test_n3_glow_blur_radii_match_three_concentration_levels():
     assert subtitle_painter._glow_blur_radii(13, 2) == (13, 9, 5)
 
 
+def test_n3_gaussian_kernel_uses_decor_radius_as_standard_deviation():
+    sigma = 4
+    kernel = subtitle_painter._n3_gaussian_kernel_1d(sigma)
+
+    assert len(kernel) == sigma * 6 + 1
+    assert float(kernel.sum()) == pytest.approx(1.0)
+    assert kernel == pytest.approx(kernel[::-1])
+    assert float(kernel[sigma * 3 + 1] / kernel[sigma * 3]) == pytest.approx(
+        np.exp(-1.0 / (2.0 * sigma * sigma))
+    )
+
+
+def test_n3_gaussian_blur_preserves_impulse_alpha_energy(qapp):
+    source = QImage(129, 129, QImage.Format.Format_ARGB32_Premultiplied)
+    source.fill(0)
+    source.setPixelColor(64, 64, QColor(255, 255, 255, 255))
+
+    blurred = subtitle_painter._blur_image(source, 4)
+    alpha = _img_rows_rgba(blurred).reshape((129, 129, 4))[:, :, 3]
+
+    # The normalized 25x25 Gaussian produces 219 alpha units after the same
+    # per-pixel 8-bit quantization used by the render target.  Qt's former
+    # exponential blur only retained 98 and concentrated 11 at the centre.
+    assert int(alpha.sum()) == 219
+    assert int(alpha[64, 64]) == 3
+
+
 def test_glow_concentration_levels_stack_more_alpha(qapp):
     path = QPainterPath()
     path.addRoundedRect(QRectF(36, 36, 24, 24), 3, 3)

@@ -449,6 +449,38 @@ UI 设置：
 
 以「寄り添って」为例，`り` 的左 side bearing 很大。若 QPainter 原样保留该留白，会令 `り` 的墨水偏向字符框右侧；N3 会把左留白按轮廓宽度重新缩放后作为左偏移，使 `寄→り` 与 `り→添` 的描边外缘间距更接近一致。
 
+## 发光公式（2026-07-11 补充逆向）
+
+N3 的 `SubtitleAction.DrawOneLineDecorBlurMulti()` 对每行执行
+`BlurLevel + 1` 次发光。设 `R = int(DecorSize.Size * Scale)`、
+`N = BlurLevel + 1`，第 `i` 次（从 0 开始）的参数为：
+
+```text
+sigma_i = R - floor(i * R / N)
+```
+
+因此 `R=13` 时低/中/高三档分别是 `(13)`、`(13, 7)`、
+`(13, 9, 5)`。每次都重新清空工作位图，先以装饰色绘制轮廓，再把
+`sigma_i` 直接赋给 Vortice/Direct2D `GaussianBlur.StandardDeviation`，最后以
+SourceOver 叠加到目标。Direct2D 默认使用 soft border，核支撑半径为 `3σ`；等价的
+一维离散核为：
+
+```text
+w(x) = exp(-(x*x) / (2*sigma*sigma)),  x in [-ceil(3*sigma), ceil(3*sigma)]
+w = w / sum(w)
+```
+
+发光源轮廓宽度也不是普通描边宽度：
+
+- 未启用二重描边：`(EdgeSize + DecorSize) * Scale`；
+- 启用二重描边：`(EdgeSize + EdgeSize2 + DecorSize) * Scale`，此时一重描边的
+  blur 绘制会提前返回，只使用合并后的二重轮廓；
+- 使用 `DecorBefore` / `DecorAfter` 画刷，正文填充不进入 blur 工作位图。
+
+工作台不能把 `sigma_i` 直接传给 Qt `QGraphicsBlurEffect.blurRadius`：Qt 的 raster
+实现会先乘 `2.5`，再使用指数模糊而非上述高斯核，中心 alpha 分布与 N3 明显不同。
+当前 Python Painter 已改为按上述 `3σ` 软边界可分离高斯公式计算。
+
 ## 实现优先级建议
 
 如果要把 N3 布局语义并入工作台，推荐顺序：
