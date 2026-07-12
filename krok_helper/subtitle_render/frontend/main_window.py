@@ -28,6 +28,7 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
 import subprocess
+import time
 from typing import Any, Optional
 
 from PyQt6.QtCore import QObject, QPoint, QRect, QSize, QThread, QTimer, Qt, pyqtSignal as Signal
@@ -933,6 +934,8 @@ class SubtitleRenderWindow(QWidget):
             self._loading_project = False
 
     def _apply_project_data_inner(self, data: dict) -> None:
+        # 项目内容整体替换，旧的样式/轨道撤销记录全部失效
+        self._clear_undo_history()
         # 1) 样式 / 屏幕 / 配色方案
         self._style = style_from_dict(data.get("style"))
         self._screen_settings = screen_settings_from_dict(data.get("screen"))
@@ -1270,7 +1273,7 @@ class SubtitleRenderWindow(QWidget):
             (QKeySequence.StandardKey.Open, self._open_project),
             (QKeySequence.StandardKey.Save, self._save_project),
             (QKeySequence.StandardKey.SaveAs, self._save_project_as),
-            # 撤销/重做：字幕轨道显示/隐藏时间编辑（Ctrl+Z / Ctrl+Y；
+            # 撤销/重做：样式（字体/布局等）与字幕轨道编辑（Ctrl+Z / Ctrl+Y；
             # 另补 Ctrl+Shift+Z，StandardKey.Redo 在 Windows 上只映射 Ctrl+Y）
             (QKeySequence.StandardKey.Undo, self._undo_edit),
             (QKeySequence.StandardKey.Redo, self._redo_edit),
@@ -1601,6 +1604,7 @@ class SubtitleRenderWindow(QWidget):
             self._transport_bar.set_duration(duration)
 
     def _apply_style(self, style: Style) -> None:
+        previous = self._style
         self._style = style
         self._preview_panel.set_style(style)
         self._lyrics_panel.set_style(style)
@@ -1609,6 +1613,68 @@ class SubtitleRenderWindow(QWidget):
         self._margin_check_timer.start()
         self._save_persisted_state()
         self._mark_project_dirty()
+        # 调用方预先改写过 self._style 的路径（如导出高度重算）不入撤销栈。
+        if previous is not style:
+            self._record_style_undo(previous, style)
+
+    _STYLE_UNDO_MERGE_WINDOW_S = 1.2
+    """同一批字段的连续样式微调（spin 连点 / 文本逐字输入）合并为一条撤销记录。"""
+
+    @staticmethod
+    def _style_diff_paths(old: object, new: object, prefix: str = "", depth: int = 3) -> set[str]:
+        """两份样式快照的差异路径（如 ``custom_style_schemes.标题.font_size_px``）。
+
+        只下钻 dict（层数受限），列表等按叶子整体比较——签名用于「同一控件的
+        连续微调」合并判定，精确到字段即可。
+        """
+        if not (isinstance(old, dict) and isinstance(new, dict) and depth > 0):
+            return {prefix} if old != new else set()
+        paths: set[str] = set()
+        for key in set(old) | set(new):
+            if old.get(key) == new.get(key):
+                continue
+            child_prefix = f"{prefix}.{key}" if prefix else str(key)
+            paths |= SubtitleRenderWindow._style_diff_paths(
+                old.get(key), new.get(key), child_prefix, depth - 1
+            )
+        return paths
+
+    def _record_style_undo(self, previous: Style, current: Style) -> None:
+        """字体/布局等属性面板编辑入撤销栈（Ctrl+Z / Ctrl+Y）。"""
+        old_payload = style_to_dict(previous)
+        new_payload = style_to_dict(current)
+        if old_payload == new_payload:
+            return
+        changed = frozenset(self._style_diff_paths(old_payload, new_payload))
+        now = time.monotonic()
+        top = self._undo_stack[-1] if self._undo_stack else None
+        if (
+            top is not None
+            and top[0] == "style"
+            and top[3] == changed
+            and now - top[4] <= self._STYLE_UNDO_MERGE_WINDOW_S
+        ):
+            # 合并：保留最早的旧值，滚动更新新值与时间戳。
+            self._undo_stack[-1] = ("style", top[1], new_payload, changed, now)
+        else:
+            self._undo_stack.append(("style", old_payload, new_payload, changed, now))
+            del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+
+    def _restore_style(self, payload: object) -> bool:
+        """把撤销/重做快照套回全局样式（不再录制新的撤销记录）。"""
+        if not isinstance(payload, dict):
+            return False
+        style = style_from_dict(payload)
+        self._style = style
+        self._property_panel.set_style(style)
+        self._preview_panel.set_style(style)
+        self._lyrics_panel.set_style(style)
+        self._refresh_tracks_view_windows()
+        self._margin_check_timer.start()
+        self._save_persisted_state()
+        self._mark_project_dirty()
+        return True
 
     def _apply_line_layout_indices(self, payload: object) -> None:
         """把项目文件里的每行布局引用套回刚加载的 track。"""
@@ -1931,9 +1997,14 @@ class SubtitleRenderWindow(QWidget):
         return True
 
     def _undo_edit(self) -> None:
-        """Ctrl+Z：撤销最近一次字幕轨道时间或逐行特效编辑。"""
+        """Ctrl+Z：撤销最近一次样式（字体/布局等）、轨道时间或逐行特效编辑。"""
         while self._undo_stack:
             command = self._undo_stack.pop()
+            if command[0] == "style":
+                if self._restore_style(command[1]):
+                    self._redo_stack.append(command)
+                    return
+                continue
             if len(command) == 5 and command[0] == "animation":
                 _kind, track_index, rows, old_values, new_values = command
                 if self._restore_animation_overrides(track_index, rows, old_values):
@@ -1949,9 +2020,14 @@ class SubtitleRenderWindow(QWidget):
             # 目标轨道/行已不存在（换源等）→ 丢弃该条继续往下找
 
     def _redo_edit(self) -> None:
-        """Ctrl+Y / Ctrl+Shift+Z：重做被撤销的字幕轨道编辑。"""
+        """Ctrl+Y / Ctrl+Shift+Z：重做被撤销的样式或字幕轨道编辑。"""
         while self._redo_stack:
             command = self._redo_stack.pop()
+            if command[0] == "style":
+                if self._restore_style(command[2]):
+                    self._undo_stack.append(command)
+                    return
+                continue
             if len(command) == 5 and command[0] == "animation":
                 _kind, track_index, rows, old_values, new_values = command
                 if self._restore_animation_overrides(track_index, rows, new_values):
