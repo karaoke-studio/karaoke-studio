@@ -2482,6 +2482,38 @@ def test_ruby_timing_drives_main_text_fill_extent(qapp):
     assert _fill_extent_end(segments, 2400) == 146
 
 
+def test_fill_extent_rests_at_gap_midpoint_during_pause(qapp):
+    """句中停顿：前沿推进到墨水间隙中点，盖住已唱字符的描边/发光外扩。
+
+    前沿若停在已唱段墨水右缘，描边尾巴会留在走字前状态（wipe 不完全的
+    「小尾巴」）；行尾停顿由 run 级裁剪释放处理，不经此路径。
+    """
+    from krok_helper.subtitle_render.engine.painter import _fill_extent_left
+
+    segments = [
+        _FillSegment(100, 200, 1000, 2000, indices=(0,)),
+        # 墨水间隙 200→240，时间停顿 2000→2500
+        _FillSegment(240, 300, 2500, 3000, indices=(1,)),
+    ]
+    # 唱到一半 / 恰好唱完瞬间：不受影响
+    assert _fill_extent_end(segments, 1500) == 150
+    assert _fill_extent_end(segments, 2000) == 220  # 停顿开始即推进到中点
+    # 停顿中：前沿在间隙中点 (200+240)//2
+    assert _fill_extent_end(segments, 2300) == 220
+    # 下一段开始后：正常从其墨水左缘继续，前沿单调不回退
+    assert _fill_extent_end(segments, 2750) == 270
+    # 未开始时不受 previous_complete 影响
+    assert _fill_extent_end(segments, 500) == 100
+
+    # RTL 镜像：segments 从右往左排列
+    rtl_segments = [
+        _FillSegment(240, 300, 1000, 2000, indices=(0,)),
+        _FillSegment(100, 200, 2500, 3000, indices=(1,)),
+    ]
+    assert _fill_extent_left(rtl_segments, 2300) == 220
+    assert _fill_extent_left(rtl_segments, 500) == 300
+
+
 def test_main_text_uses_all_ruby_checkpoints_even_when_reading_units_are_missing(qapp):
     """占位 ruby part 被 LRC 剥掉后，主文字仍按全部 checkpoint 分段。
 

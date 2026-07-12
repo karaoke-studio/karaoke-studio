@@ -7410,35 +7410,59 @@ def _fill_extent_end(
     segments: list[_FillSegment],
     t_ms: int,
 ) -> int:
-    """Return the current right edge of the continuous karaoke scan."""
+    """Return the current right edge of the continuous karaoke scan.
+
+    句中停顿（前一段唱完、下一段未开始）时前沿推进到两段墨水间隙的中点：
+    描边/发光比墨水各宽出半个外扩，前沿若停在已唱段墨水右缘，会把它的描边
+    尾巴留在走字前状态（用户可见的「wipe 不完全小尾巴」）；推进到间隙中点
+    既完整覆盖已唱段的视觉外扩，又不会提前染到未唱段的描边左缘。行尾停顿
+    由 ``_run_fill_complete`` 的整体裁剪释放处理，不走此分支。
+    """
     if not segments:
         return 0
     fill_end = segments[0].left
+    previous_complete = False
     for segment in segments:
         ratio = _segment_fill_ratio(segment, t_ms)
         if ratio <= 0.0:
+            if previous_complete and segment.left > fill_end:
+                fill_end += (segment.left - fill_end) // 2
             break
         if ratio >= 1.0:
-            fill_end = segment.right
+            fill_end = max(fill_end, segment.right)
+            previous_complete = True
             continue
-        fill_end = segment.left + int(round((segment.right - segment.left) * ratio))
+        fill_end = max(
+            fill_end,
+            segment.left + int(round((segment.right - segment.left) * ratio)),
+        )
         break
     return fill_end
 
 
 def _fill_extent_left(segments: list[_FillSegment], t_ms: int) -> int:
-    """RTL：返回已唱区的左缘 x（扫光从右向左推进时的移动边）。"""
+    """RTL：返回已唱区的左缘 x（扫光从右向左推进时的移动边）。
+
+    句中停顿的间隙中点推进与 :func:`_fill_extent_end` 镜像。
+    """
     if not segments:
         return 0
     scanline = segments[0].right
+    previous_complete = False
     for segment in segments:
         ratio = _segment_fill_ratio(segment, t_ms)
         if ratio <= 0.0:
+            if previous_complete and segment.right < scanline:
+                scanline -= (scanline - segment.right) // 2
             break
         if ratio >= 1.0:
-            scanline = segment.left
+            scanline = min(scanline, segment.left)
+            previous_complete = True
             continue
-        scanline = segment.right - int(round((segment.right - segment.left) * ratio))
+        scanline = min(
+            scanline,
+            segment.right - int(round((segment.right - segment.left) * ratio)),
+        )
         break
     return scanline
 
