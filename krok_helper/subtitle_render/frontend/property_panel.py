@@ -86,6 +86,7 @@ from krok_helper.subtitle_render.models import (
     TITLE_SCHEME_NAME,
     TITLE_SHOW_MODES,
     TitleOverlay,
+    migrate_title_char_role_labels,
     VIEWPORT_ALIGNS,
     ViewportAlign,
 )
@@ -2379,6 +2380,11 @@ class PropertyPanel(QWidget):
     def preset_schemes(self) -> dict[str, SubtitleStyleScheme]:
         return {name: deepcopy(scheme) for name, scheme in self._preset_schemes.items()}
 
+    @property
+    def role_names(self) -> list[str]:
+        """当前角色导航中可分配给歌词的角色名（不含全局默认与标题）。"""
+        return list(self._role_names)
+
     def set_preset_schemes(self, schemes: dict[str, SubtitleStyleScheme]) -> None:
         self._preset_schemes = {
             str(name): deepcopy(scheme)
@@ -3378,6 +3384,13 @@ class PropertyPanel(QWidget):
         if self._syncing:
             return
         title = self._current_title()
+        if "text_template" in changes:
+            new_text = str(changes["text_template"])
+            changes["char_role_labels"] = migrate_title_char_role_labels(
+                title.text_template,
+                title.char_role_labels,
+                new_text,
+            )
         if "show_mode" in changes and changes["show_mode"] not in TITLE_SHOW_MODES:
             changes["show_mode"] = "whole"
         new_title = replace(title, **changes)

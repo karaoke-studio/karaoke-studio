@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 
 import pytest
 
@@ -15,13 +16,18 @@ from qfluentwidgets.components.widgets.menu import MenuAnimationType  # noqa: E4
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend import lyrics_list  # noqa: E402
+from krok_helper.subtitle_render import models as subtitle_models  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
     LineAnimationOverride,
     Style,
+    SubtitleStyleScheme,
     TimingChar,
     TimingLine,
     TimingTrack,
+    TimingTrackMeta,
     TitleOverlay,
+    style_from_dict,
+    style_to_dict,
 )
 from krok_helper.subtitle_render.project_store import (  # noqa: E402
     PROJECT_SCHEMA_VERSION,
@@ -115,6 +121,127 @@ def test_apply_project_data_does_not_mark_dirty(qapp, monkeypatch):
     assert win._style.font_size_px == 64
 
 
+def test_title_char_roles_round_trip_and_follow_text_edits():
+    title = TitleOverlay(
+        text_template="AB\nCD",
+        char_role_labels=[["red", None], ["blue", "blue"]],
+    )
+    restored = style_from_dict(style_to_dict(Style(title_overlay=title))).title_overlay
+    assert restored is not None
+    assert restored.char_role_labels == [["red", None], ["blue", "blue"]]
+
+    migrated = subtitle_models.migrate_title_char_role_labels(
+        "AB\nCD",
+        restored.char_role_labels,
+        "AXB\nD",
+    )
+    assert migrated == [["red", None, None], ["blue"]]
+
+
+def test_lyrics_panel_title_mode_reuses_character_role_editor(qapp):
+    panel = lyrics_list.LyricsPanel()
+    title = TitleOverlay(
+        enabled=True,
+        text_template="标题甲\n标题乙",
+        char_role_labels=[[None, None, "A"], ["B", "B", None]],
+    )
+    panel.set_title(title)
+
+    assert panel.table_widget.rowCount() == 2
+    assert panel.table_widget.horizontalHeaderItem(lyrics_list.COL_LANE).text() == "行"
+    assert panel.table_widget.isColumnHidden(lyrics_list.COL_EFFECT)
+    assert panel.table_widget.item(0, lyrics_list.COL_LANE).text() == "1"
+    assert panel.table_widget.item(0, lyrics_list.COL_CONTENT).text() == "标题甲"
+    editor = panel._role_delegate.createEditor(
+        panel, None, panel.table_widget.model().index(0, lyrics_list.COL_ROLE)
+    )
+    assert editor.itemText(0) == "标题默认"
+
+    dialog = lyrics_list._CharRoleDialog(
+        0,
+        ["标"],
+        [None],
+        ["A"],
+        _role_style(),
+        default_role_text="标题默认",
+        default_swatch_role="标题",
+    )
+    assert dialog._role_buttons[0].text() == "标题默认"
+
+
+def test_title_source_is_last_and_title_text_syncs_from_tab(qapp, monkeypatch, tmp_path):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    win = _make_window(qapp, monkeypatch)
+    track = _mixed_track()
+    win._timing_track = track
+    win._extra_sources = [
+        mw.ExtraSubtitleSource(name="副字幕", path=tmp_path / "extra.lrc", track=_mixed_track())
+    ]
+    title = TitleOverlay(
+        enabled=True,
+        text_template="AB",
+        char_role_labels=[["A", "B"]],
+    )
+    win._style = Style(title_overlay=title)
+    win._property_panel.set_style(win._style)
+    win._refresh_source_ui()
+
+    combo = win._lyrics_panel._source_combo
+    assert [combo.itemText(i) for i in range(combo.count())] == ["主字幕", "副字幕", "标题"]
+
+    win._on_source_selected(2)
+    win._clear_undo_history()
+    win._property_panel._update_title(text_template="AXB")
+    assert win._style.title_overlay.char_role_labels == [["A", None, "B"]]
+    assert win._lyrics_panel.table_widget.item(0, lyrics_list.COL_CONTENT).text() == "AXB"
+    win._undo_edit()
+    assert win._style.title_overlay.text_template == "AB"
+    assert win._lyrics_panel.table_widget.item(0, lyrics_list.COL_CONTENT).text() == "AB"
+
+    win._active_source_index = 1
+    win._on_source_selected(2)
+    win._property_panel._update_title(enabled=False)
+    assert win._lyrics_panel.current_source_index() == 0
+
+
+def test_title_roles_join_current_options_and_template_freezes_on_edit(qapp, monkeypatch, tmp_path):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    win = _make_window(qapp, monkeypatch)
+    win._timing_track = TimingTrack(
+        meta=TimingTrackMeta(title="曲名", artist="歌手"),
+        lines=_mixed_track().lines,
+    )
+    win._property_panel.set_roles(["A"])
+    win._style = Style(
+        title_overlay=TitleOverlay(
+            enabled=True,
+            text_template="{title} / {artist}",
+            char_role_labels=[],
+        )
+    )
+    win._property_panel.set_style(win._style)
+    win._title_source_active = True
+    win._refresh_source_ui()
+    win._refresh_lyrics_panel_source()
+
+    assert win._lyrics_panel.table_widget.item(0, lyrics_list.COL_CONTENT).text() == "曲名 / 歌手"
+
+    title = replace(
+        win._style.title_overlay,
+        text_template="固定",
+        char_role_labels=[["标题角色", None]],
+    )
+    win._style = replace(win._style, title_overlay=title)
+    assert win._merged_role_options() == ["A", "标题角色"]
+
+    win._style = replace(
+        win._style,
+        title_overlay=replace(title, text_template="{title} / {artist}", char_role_labels=[]),
+    )
+    win._freeze_title_template_for_character_edit()
+    assert win._style.title_overlay.text_template == "曲名 / 歌手"
+
+
 def test_new_project_clears_loaded_media(qapp, monkeypatch, tmp_path):
     win = _make_window(qapp, monkeypatch)
     lrc = tmp_path / "demo.lrc"
@@ -192,7 +319,10 @@ def test_extra_subtitle_sources_round_trip(qapp, monkeypatch, tmp_path):
     assert restored.track.lines[0].break_before == "paragraph"
     assert [c.role_label for c in restored.track.lines[0].chars] == ["コーラス配色", "コーラス配色"]
     combo = win2._lyrics_panel._source_combo
-    assert [combo.itemText(i) for i in range(combo.count())] == ["主字幕", "コーラス1"]
+    expected_sources = ["主字幕", "コーラス1"]
+    if win2._style.title_overlay is not None and win2._style.title_overlay.enabled:
+        expected_sources.append("标题")
+    assert [combo.itemText(i) for i in range(combo.count())] == expected_sources
 
 
 def test_line_animation_overrides_round_trip(qapp, monkeypatch, tmp_path):
@@ -269,6 +399,154 @@ def test_lyrics_table_shows_global_and_overridden_line_effects(qapp):
     assert panel.table_widget.horizontalHeaderItem(lyrics_list.COL_EFFECT).text() == "特效"
     assert panel.table_widget.item(0, lyrics_list.COL_EFFECT).text() == "全局：淡入 / 淡出"
     assert panel.table_widget.item(1, lyrics_list.COL_EFFECT).text() == "滑入 / 无"
+
+
+def _role_style() -> Style:
+    schemes = dict(Style().custom_style_schemes)
+    schemes["A"] = SubtitleStyleScheme(fill_color="#FF0000")
+    schemes["B"] = SubtitleStyleScheme(fill_color="#0000FF")
+    return Style(custom_style_schemes=schemes)
+
+
+def _mixed_track() -> TimingTrack:
+    return TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("あ", 1000),
+                    TimingChar("い", 1500, role_label="A"),
+                    TimingChar("う", 2000, role_label="A"),
+                ],
+                end_ms=3000,
+            ),
+            TimingLine(
+                chars=[
+                    TimingChar("え", 4000, role_label="A"),
+                    TimingChar("お", 4500, role_label="A"),
+                ],
+                end_ms=5000,
+            ),
+        ]
+    )
+
+
+def test_char_role_chips_selection_and_apply(qapp):
+    chips = lyrics_list._CharChipsView(["あ", "い", "う"], [None, "A", None], _role_style())
+    chips.resize(400, 120)
+    chips._selected = {0, 2}
+    chips.apply_role("B")
+    assert chips.labels() == ["B", "A", "B"]
+    chips.select_all()
+    chips.apply_role(None)
+    assert chips.labels() == [None, None, None]
+
+
+def test_char_role_dialog_returns_edited_labels(qapp):
+    dialog = lyrics_list._CharRoleDialog(
+        0, ["あ", "い"], [None, None], ["A", "B"], _role_style()
+    )
+    dialog._chips._selected = {1}
+    dialog._chips.apply_role("A")
+    assert dialog.char_labels() == [None, "A"]
+
+
+def test_char_role_options_match_current_property_panel_roles(qapp, monkeypatch, tmp_path):
+    """导入覆盖逐字标签后，不应把旧歌词标签留下的预设继续列为可分配角色。"""
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    win = _make_window(qapp, monkeypatch)
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("甲", 1000, role_label="1"),
+                    TimingChar("乙", 1500, role_label="裏声"),
+                    TimingChar("丙", 2000, role_label="标准配色2"),
+                ],
+                end_ms=3000,
+            )
+        ]
+    )
+    win._timing_track = track
+    win._property_panel.set_roles(track.role_options)
+
+    # 模拟 N3 的 char_role_labels 覆盖：当前导航只剩实际可用的两个角色，
+    # 但初次载入歌词时自动生成的旧预设仍留在 preset 库中。
+    track.lines[0].chars[0].role_label = "1"
+    track.lines[0].chars[1].role_label = "【裏声】"
+    track.lines[0].chars[2].role_label = None
+    win._property_panel.set_roles(track.role_options)
+
+    assert win._merged_role_options() == ["1", "【裏声】"]
+
+
+def test_lyrics_table_marks_mixed_role_rows(qapp):
+    panel = lyrics_list.LyricsPanel()
+    panel.set_style(_role_style())
+    panel.set_track(_mixed_track())
+
+    assert panel.table_widget.item(0, lyrics_list.COL_ROLE).text() == "混合"
+    assert panel.table_widget.item(1, lyrics_list.COL_ROLE).text() == "A"
+
+
+def test_line_role_overwrite_on_mixed_row_asks_confirmation(qapp, monkeypatch):
+    panel = lyrics_list.LyricsPanel()
+    panel.set_style(_role_style())
+    panel.set_track(_mixed_track())
+    emitted: list[tuple[int, str]] = []
+    panel.roleChanged.connect(lambda row, name: emitted.append((row, name)))
+
+    monkeypatch.setattr(
+        lyrics_list.QMessageBox,
+        "question",
+        lambda *a, **k: lyrics_list.QMessageBox.StandardButton.No,
+    )
+    panel.table_widget.item(0, lyrics_list.COL_ROLE).setData(
+        Qt.ItemDataRole.UserRole, "B"
+    )
+    assert emitted == []
+    # 取消后角色列还原混合显示
+    assert panel.table_widget.item(0, lyrics_list.COL_ROLE).text() == "混合"
+
+    monkeypatch.setattr(
+        lyrics_list.QMessageBox,
+        "question",
+        lambda *a, **k: lyrics_list.QMessageBox.StandardButton.Yes,
+    )
+    panel.table_widget.item(0, lyrics_list.COL_ROLE).setData(
+        Qt.ItemDataRole.UserRole, "A"
+    )
+    assert emitted == [(0, "A")]
+    # 非混合行（单一角色）不弹确认
+    panel.table_widget.item(1, lyrics_list.COL_ROLE).setData(
+        Qt.ItemDataRole.UserRole, "B"
+    )
+    assert emitted[-1] == (1, "B")
+
+
+def test_char_roles_write_back_with_undo_redo(qapp, monkeypatch, tmp_path):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    win = _make_window(qapp, monkeypatch)
+    track = _mixed_track()
+    win._timing_track = track
+    win._lyrics_panel.set_track(track)
+    win._property_panel.set_style(_role_style())
+    win._style = win._property_panel.subtitle_style
+    win._clear_undo_history()
+
+    win._on_lyrics_char_roles_changed(0, ["B", None, "A"])
+    assert [ch.role_label for ch in track.lines[0].chars] == ["B", None, "A"]
+    assert win._undo_stack and win._undo_stack[-1][0] == "char_roles"
+
+    win._undo_edit()
+    assert [ch.role_label for ch in track.lines[0].chars] == [None, "A", "A"]
+    win._redo_edit()
+    assert [ch.role_label for ch in track.lines[0].chars] == ["B", None, "A"]
+
+    # 行级下拉整行覆盖同样可撤销
+    win._on_lyrics_role_changed(1, "B")
+    assert [ch.role_label for ch in track.lines[1].chars] == ["B", "B"]
+    win._undo_edit()
+    assert [ch.role_label for ch in track.lines[1].chars] == ["A", "A"]
 
 
 def test_lyrics_table_uses_measured_fixed_columns_and_elastic_content(qapp):

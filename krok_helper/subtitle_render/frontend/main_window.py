@@ -76,6 +76,7 @@ from krok_helper.subtitle_render.engine.encoder_select import (
     ENCODER_QSV,
 )
 from krok_helper.subtitle_render.engine.painter import (
+    _resolve_title_text,
     apply_layout_to_page,
     assign_layout_to_all,
     auto_assign_layouts_by_page,
@@ -105,6 +106,7 @@ from krok_helper.subtitle_render.models import (
     PROJECT_FILE_SUFFIX,
     SubtitleStyleScheme,
     Style,
+    TITLE_SCHEME_NAME,
     TimingTrack,
     line_animation_override_from_dict,
     line_animation_override_to_dict,
@@ -695,6 +697,8 @@ class SubtitleRenderWindow(QWidget):
         """副字幕源（N3 多歌词文件，如コーラス轨）：与主字幕同帧叠绘。"""
         self._active_source_index = 0
         """歌词列表当前显示的源：0 = 主字幕，k >= 1 = ``_extra_sources[k-1]``。"""
+        self._title_source_active = False
+        """左侧列表当前是否显示末位的特殊「标题」源。"""
         self._subtitle_path: Optional[Path] = None
         self._video_path: Optional[Path] = None
         self._video_info: Optional[MediaInfo] = None
@@ -1037,6 +1041,7 @@ class SubtitleRenderWindow(QWidget):
             self._timing_track = None
             self._extra_sources = []
             self._active_source_index = 0
+            self._title_source_active = False
             self._clear_undo_history()
             self._subtitle_path = None
             self._video_path = None
@@ -1189,6 +1194,10 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.pathDropped.connect(self.load_subtitle_source)
         self._lyrics_panel.browseRequested.connect(self._browse_subtitle)
         self._lyrics_panel.roleChanged.connect(self._on_lyrics_role_changed)
+        self._lyrics_panel.charRolesChanged.connect(self._on_lyrics_char_roles_changed)
+        self._lyrics_panel.titleEditRequested.connect(
+            self._freeze_title_template_for_character_edit
+        )
         self._lyrics_panel.animationOverrideRequested.connect(
             self._on_line_animation_override_requested
         )
@@ -1486,12 +1495,13 @@ class SubtitleRenderWindow(QWidget):
         self._timing_track = track
         self._subtitle_path = source_path
         self._active_source_index = 0
+        self._title_source_active = False
         # 换字幕源后旧的行索引全部失效
         self._clear_undo_history()
         self._refresh_source_ui()
         self._lyrics_panel.set_track(track)
         self._lyrics_panel.set_role_options(self._merged_role_options())
-        self._property_panel.set_roles(track.role_options)
+        self._property_panel.set_roles(self._content_role_options())
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
         self._selected_scheme_key = self._property_panel.current_scheme_key()
         self._preview_panel.set_track(track)
@@ -1608,6 +1618,19 @@ class SubtitleRenderWindow(QWidget):
         self._style = style
         self._preview_panel.set_style(style)
         self._lyrics_panel.set_style(style)
+        # 角色在属性面板中新建 / 重命名 / 删除时，同步逐字符编辑器的可选项。
+        self._lyrics_panel.set_role_options(self._merged_role_options())
+        if (
+            bool(previous.title_overlay and previous.title_overlay.enabled)
+            != bool(style.title_overlay and style.title_overlay.enabled)
+        ):
+            if not (style.title_overlay and style.title_overlay.enabled):
+                if self._title_source_active:
+                    self._active_source_index = 0
+                self._title_source_active = False
+            self._refresh_source_ui()
+        if self._title_source_active:
+            self._refresh_lyrics_panel_source()
         # 提前入场/延迟退场等布局参数会改行显示窗口 → 同步轨道把手数据
         self._refresh_tracks_view_windows()
         self._margin_check_timer.start()
@@ -1670,6 +1693,13 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.set_style(style)
         self._preview_panel.set_style(style)
         self._lyrics_panel.set_style(style)
+        if not (style.title_overlay and style.title_overlay.enabled):
+            if self._title_source_active:
+                self._active_source_index = 0
+            self._title_source_active = False
+        self._refresh_source_ui()
+        if self._title_source_active:
+            self._refresh_lyrics_panel_source()
         self._refresh_tracks_view_windows()
         self._margin_check_timer.start()
         self._save_persisted_state()
@@ -1791,7 +1821,7 @@ class SubtitleRenderWindow(QWidget):
             return
         self._lyrics_panel.set_track(track)
         self._lyrics_panel.set_role_options(self._merged_role_options())
-        self._property_panel.set_roles(track.role_options)
+        self._property_panel.set_roles(self._content_role_options())
         self._preview_panel.set_track(track)
 
     # ------------------------------------------------------- 副字幕源（N3 多歌词文件）
@@ -1800,6 +1830,7 @@ class SubtitleRenderWindow(QWidget):
         """从项目快照 / N3 导入恢复副字幕源（含每行布局与逐字角色）。"""
         self._extra_sources = []
         self._active_source_index = 0
+        self._title_source_active = False
         if isinstance(payload, list):
             layout_limit = len(self._style.layouts)
             for item in payload:
@@ -1849,6 +1880,7 @@ class SubtitleRenderWindow(QWidget):
                 )
         self._refresh_source_ui()
         self._refresh_lyrics_panel_source()
+        self._property_panel.set_roles(self._content_role_options())
         self._sync_extra_tracks_to_preview()
         self._refresh_transport_duration()
 
@@ -1869,19 +1901,45 @@ class SubtitleRenderWindow(QWidget):
             return self._extra_sources[index - 1].track
         return self._timing_track
 
+    def _title_source_index(self) -> Optional[int]:
+        title = self._style.title_overlay
+        if title is None or not title.enabled or self._timing_track is None:
+            return None
+        return len(self._extra_sources) + 1
+
     def _refresh_source_ui(self) -> None:
         """刷新歌词面板的字幕源下拉；无主字幕时隐藏。"""
         if self._timing_track is None:
             self._active_source_index = 0
+            self._title_source_active = False
             self._lyrics_panel.set_sources([], 0)
             return
         names = ["主字幕"] + [source.name for source in self._extra_sources]
-        self._active_source_index = max(0, min(self._active_source_index, len(names) - 1))
-        self._lyrics_panel.set_sources(names, self._active_source_index)
+        title_index = self._title_source_index()
+        if title_index is not None:
+            names.append("标题")
+        self._active_source_index = max(
+            0, min(self._active_source_index, len(self._extra_sources))
+        )
+        active_index = title_index if self._title_source_active and title_index is not None else self._active_source_index
+        self._lyrics_panel.set_sources(
+            names,
+            active_index,
+            removable_indices=set(range(1, len(self._extra_sources) + 1)),
+        )
 
     def _refresh_lyrics_panel_source(self) -> None:
         """把当前选中源的行喂给歌词列表。"""
-        self._lyrics_panel.set_track(self._active_track())
+        if self._title_source_active:
+            title = self._style.title_overlay
+            if title is not None and self._timing_track is not None:
+                title = replace(
+                    title,
+                    text_template=_resolve_title_text(title, self._timing_track),
+                )
+            self._lyrics_panel.set_title(title)
+        else:
+            self._lyrics_panel.set_track(self._active_track())
         self._lyrics_panel.set_role_options(self._merged_role_options())
 
     def _sync_extra_tracks_to_preview(self) -> None:
@@ -2005,6 +2063,12 @@ class SubtitleRenderWindow(QWidget):
                     self._redo_stack.append(command)
                     return
                 continue
+            if command[0] == "char_roles":
+                _kind, track_index, row, old_labels, _new_labels = command
+                if self._restore_char_roles(track_index, row, old_labels):
+                    self._redo_stack.append(command)
+                    return
+                continue
             if len(command) == 5 and command[0] == "animation":
                 _kind, track_index, rows, old_values, new_values = command
                 if self._restore_animation_overrides(track_index, rows, old_values):
@@ -2028,6 +2092,12 @@ class SubtitleRenderWindow(QWidget):
                     self._undo_stack.append(command)
                     return
                 continue
+            if command[0] == "char_roles":
+                _kind, track_index, row, _old_labels, new_labels = command
+                if self._restore_char_roles(track_index, row, new_labels):
+                    self._undo_stack.append(command)
+                    return
+                continue
             if len(command) == 5 and command[0] == "animation":
                 _kind, track_index, rows, old_values, new_values = command
                 if self._restore_animation_overrides(track_index, rows, new_values):
@@ -2046,7 +2116,11 @@ class SubtitleRenderWindow(QWidget):
         self._redo_stack.clear()
 
     def _on_source_selected(self, index: int) -> None:
-        self._active_source_index = max(int(index), 0)
+        index = max(int(index), 0)
+        title_index = self._title_source_index()
+        self._title_source_active = title_index is not None and index == title_index
+        if not self._title_source_active:
+            self._active_source_index = min(index, len(self._extra_sources))
         self._refresh_lyrics_panel_source()
 
     def _on_source_add_requested(self) -> None:
@@ -2266,55 +2340,219 @@ class SubtitleRenderWindow(QWidget):
         self._mark_project_dirty()
 
     def _merged_role_options(self) -> list[str]:
-        """合并各字幕源的 LRC 角色标签 与 自建配色方案名，供歌词列表角色下拉使用。"""
+        """返回属性面板当前可分配角色，供歌词列表与逐字符编辑器使用。
+
+        预设库只是可复用模板，不代表当前项目里的角色。N3 导入会先加载 LRC，
+        再用 ``char_role_labels`` 覆盖标签；若把两者或预设库合并，旧标签就会
+        以无效角色残留在逐字符对话框中。
+        """
+        return self._content_role_options()
+
+    def _content_role_options(self) -> list[str]:
+        """歌词与标题实际引用的角色名；不混入历史预设。"""
         options: list[str] = []
         seen: set[str] = set()
         for track in self._all_tracks():
             for name in track.role_options:
-                if name not in seen:
+                if name and name != TITLE_SCHEME_NAME and name not in seen:
                     seen.add(name)
                     options.append(name)
-        for name in self._style_presets:
-            if name not in seen:
-                seen.add(name)
-                options.append(name)
+        title = self._style.title_overlay
+        if title is not None:
+            for row in title.char_role_labels:
+                for label in row:
+                    name = str(label or "").strip()
+                    if name and name != TITLE_SCHEME_NAME and name not in seen:
+                        seen.add(name)
+                        options.append(name)
         return options
+
+    def _freeze_title_template_for_character_edit(self) -> None:
+        """首次逐字编辑前把标题元数据模板展开为当前固定文字。"""
+        title = self._style.title_overlay
+        if (
+            title is None
+            or self._timing_track is None
+            or ("{title}" not in title.text_template and "{artist}" not in title.text_template)
+        ):
+            return
+        resolved = _resolve_title_text(title, self._timing_track)
+        if not resolved:
+            InfoBar.warning(
+                title="标题为空",
+                content="请先在标题页输入文字，再进行逐字符角色分配。",
+                parent=self,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=3000,
+            )
+            return
+        fixed = replace(
+            title,
+            text_template=resolved,
+            char_role_labels=[[None] * len(line) for line in resolved.split("\n")],
+        )
+        self._property_panel.set_style(
+            replace(self._style, title_overlay=fixed), emit=True
+        )
+        InfoBar.info(
+            title="标题模板已固定",
+            content="已按当前歌曲信息展开为固定文字，可逐字符分配角色。",
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=2500,
+        )
 
     def _on_lyrics_role_changed(self, row: int, role_name: str) -> None:
         """用户修改了某句歌词的角色时，将角色名写入该行所有字素（当前选中源）。"""
+        if self._title_source_active:
+            title = self._style.title_overlay
+            if title is None:
+                return
+            lines = title.text_template.split("\n")
+            if not 0 <= row < len(lines):
+                return
+            label = role_name.strip() if role_name else None
+            self._set_title_role_labels(row, [label] * len(lines[row]))
+            return
         track = self._active_track()
         if track is None:
             return
         if row < 0 or row >= len(track.lines):
             return
         label = role_name.strip() if role_name else None
-        for ch in track.lines[row].chars:
+        self._set_line_role_labels(
+            track, row, [label for _ch in track.lines[row].chars]
+        )
+
+    def _on_lyrics_char_roles_changed(self, row: int, labels: list) -> None:
+        """行内逐字符角色编辑器确定后写回（当前选中源）。"""
+        if self._title_source_active:
+            self._set_title_role_labels(row, labels)
+            return
+        track = self._active_track()
+        if track is None:
+            return
+        if row < 0 or row >= len(track.lines):
+            return
+        line = track.lines[row]
+        if len(labels) != len(line.chars):
+            return
+        normalized = [str(label).strip() or None if label else None for label in labels]
+        self._set_line_role_labels(track, row, normalized)
+
+    def _set_title_role_labels(self, row: int, labels: list) -> None:
+        """写回标题某行逐字符角色，作为 Style 修改进入统一撤销栈。"""
+        title = self._style.title_overlay
+        if title is None:
+            return
+        rows = [list(values) for values in title.char_role_labels]
+        lines = title.text_template.split("\n")
+        if not 0 <= row < len(lines) or len(labels) != len(lines[row]):
+            return
+        while len(rows) < len(lines):
+            rows.append([None] * len(lines[len(rows)]))
+        normalized = [str(label).strip() or None if label else None for label in labels]
+        if rows[row] == normalized:
+            return
+        rows[row] = normalized
+        self._materialize_role_schemes({label for label in normalized if label})
+        self._property_panel.set_style(
+            replace(
+                self._style,
+                title_overlay=replace(title, char_role_labels=rows),
+            ),
+            emit=True,
+        )
+
+    def _set_line_role_labels(
+        self, track: TimingTrack, row: int, labels: list[Optional[str]]
+    ) -> None:
+        """逐字符写回角色标签：物化方案 + 入撤销栈 + 刷新（整行/逐字共用）。"""
+        line = track.lines[row]
+        old_labels = tuple(ch.role_label for ch in line.chars)
+        new_labels = tuple(labels)
+        if new_labels == old_labels:
+            return
+        for ch, label in zip(line.chars, labels):
             ch.role_label = label
-        # 角色名来自预设库但样式里还没有对应方案时，先把预设物化进
-        # custom_style_schemes——否则 painter 解析不到，改了角色颜色毫无变化。
-        if (
-            label
-            and label not in self._style.custom_style_schemes
-            and label in self._style_presets
-        ):
+        self._materialize_role_schemes({label for label in labels if label})
+        self._undo_stack.append(
+            ("char_roles", self._active_source_index, row, old_labels, new_labels)
+        )
+        del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+        self._refresh_after_role_labels_changed(row)
+
+    def _materialize_role_schemes(self, labels: set[str]) -> None:
+        """把还没有配色方案的角色名物化进 custom_style_schemes。
+
+        预设库命中的深拷贝预设；全新名字（对话框「＋新建」）交给
+        ``set_roles`` → ``_ensure_role_schemes`` 按当前面板值自动建。
+        不物化 painter 就解析不到，改了角色毫无视觉变化。
+        """
+        missing = [label for label in labels if label not in self._style.custom_style_schemes]
+        if not missing:
+            return
+        from_presets = {
+            label: deepcopy(self._style_presets[label])
+            for label in missing
+            if label in self._style_presets
+        }
+        if from_presets:
             schemes = dict(self._style.custom_style_schemes)
-            schemes[label] = deepcopy(self._style_presets[label])
+            schemes.update(from_presets)
             self._style = replace(self._style, custom_style_schemes=schemes)
             self._property_panel.set_style(self._style)
             self._preview_panel.set_style(self._style)
             self._lyrics_panel.set_style(self._style)
             self._save_persisted_state()
-        # track 是原地修改的，预览（含异步渲染 worker）不会自己发现——
+        if any(label not in from_presets for label in missing):
+            track = self._active_track()
+            if track is not None:
+                # 触发属性面板为新角色自动建方案（styleChanged 回流 _apply_style）
+                self._property_panel.set_roles(
+                    self._content_role_options()
+                    + [label for label in missing if label not in self._content_role_options()]
+                )
+                self._lyrics_panel.set_role_options(self._merged_role_options())
+
+    def _refresh_after_role_labels_changed(self, row: int) -> None:
+        # track 是就地修改的，预览（含异步渲染 worker）不会自己发现——
         # 重新喂一次让当前帧立即按新角色配色重渲染。
-        if self._active_source_index == 0:
-            self._preview_panel.set_track(track)
+        if self._active_source_index == 0 and self._timing_track is not None:
+            self._preview_panel.set_track(self._timing_track)
         else:
             self._sync_extra_tracks_to_preview()
         self._lyrics_panel.refresh_row_role(row)
         self._mark_project_dirty()
 
+    def _restore_char_roles(
+        self, track_index: int, row: int, labels: object
+    ) -> bool:
+        """撤销/重做：直接写回整行角色标签（不经信号，不再入栈）。"""
+        track = self._track_by_index(track_index)
+        if (
+            track is None
+            or not isinstance(labels, tuple)
+            or not 0 <= row < len(track.lines)
+            or len(labels) != len(track.lines[row].chars)
+        ):
+            return False
+        for ch, label in zip(track.lines[row].chars, labels):
+            ch.role_label = label
+        if track_index == 0 and self._timing_track is not None:
+            self._preview_panel.set_track(self._timing_track)
+        else:
+            self._sync_extra_tracks_to_preview()
+        if track_index == self._active_source_index:
+            self._lyrics_panel.refresh_row_role(row)
+        self._mark_project_dirty()
+        return True
+
     def _on_lyrics_row_clicked(self, row: int) -> None:
         """点击歌词列表某行 → 预览跳转到该行起始时间（当前选中源）。"""
+        if self._title_source_active:
+            return
         track = self._active_track()
         if track is None:
             return

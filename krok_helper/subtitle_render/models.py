@@ -19,6 +19,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field, fields, replace
+from difflib import SequenceMatcher
 from typing import Literal, Optional
 
 LineBreakKind = Literal["none", "page", "paragraph"]
@@ -363,6 +364,9 @@ class TitleOverlay:
     enabled: bool = False
     text_template: str = "{title} / {artist}"
     """``{title}`` / ``{artist}`` 占位符按元数据替换；``\\n`` 分行。"""
+
+    char_role_labels: list[list[Optional[str]]] = field(default_factory=list)
+    """逐行逐字符角色标签；``None`` 表示继承内置「标题」方案。"""
 
     # 字体（逆向 ニコカラ「標準配色」字体：明朝体、字号 100、描边 15/5）
     font_family: str = "游明朝"
@@ -1318,6 +1322,7 @@ def title_overlay_to_dict(title: TitleOverlay) -> dict:
     return {
         "enabled": title.enabled,
         "text_template": title.text_template,
+        "char_role_labels": [list(row) for row in title.char_role_labels],
         "font_family": title.font_family,
         "font_family_latin": title.font_family_latin,
         "font_size_px": title.font_size_px,
@@ -1366,9 +1371,13 @@ def title_overlay_from_dict(payload: object) -> Optional[TitleOverlay]:
     decoration = payload.get("decoration_kind", defaults.decoration_kind)
     if decoration not in {"shadow", "glow"}:
         decoration = defaults.decoration_kind
+    text_template = str(payload.get("text_template", defaults.text_template))
     return TitleOverlay(
         enabled=bool(payload.get("enabled", defaults.enabled)),
-        text_template=str(payload.get("text_template", defaults.text_template)),
+        text_template=text_template,
+        char_role_labels=normalize_title_char_role_labels(
+            text_template, payload.get("char_role_labels")
+        ),
         font_family=str(payload.get("font_family", defaults.font_family)),
         font_family_latin=(
             str(payload["font_family_latin"])
@@ -1410,6 +1419,57 @@ def title_overlay_from_dict(payload: object) -> Optional[TitleOverlay]:
         fade_in_ms=_int_value(payload.get("fade_in_ms"), defaults.fade_in_ms),
         fade_out_ms=_int_value(payload.get("fade_out_ms"), defaults.fade_out_ms),
     )
+
+
+def normalize_title_char_role_labels(
+    text: str, payload: object
+) -> list[list[Optional[str]]]:
+    """把持久化标题标签规范成与当前逐行文字严格等长的矩阵。"""
+    raw_rows = payload if isinstance(payload, list) else []
+    normalized: list[list[Optional[str]]] = []
+    for row_index, line in enumerate(str(text).split("\n")):
+        raw = raw_rows[row_index] if row_index < len(raw_rows) else []
+        values = raw if isinstance(raw, (list, tuple)) else []
+        normalized.append(
+            [
+                (str(values[index]).strip() or None)
+                if index < len(values) and values[index]
+                else None
+                for index in range(len(line))
+            ]
+        )
+    return normalized
+
+
+def migrate_title_char_role_labels(
+    old_text: str,
+    old_labels: object,
+    new_text: str,
+) -> list[list[Optional[str]]]:
+    """按字符差异把标题角色迁移到新文字；新增/替换字符回到标题默认。"""
+    old_text = str(old_text)
+    new_text = str(new_text)
+    normalized = normalize_title_char_role_labels(old_text, old_labels)
+    flat_old_labels: list[Optional[str]] = []
+    for row_index, line in enumerate(old_text.split("\n")):
+        flat_old_labels.extend(normalized[row_index])
+        if row_index + 1 < len(old_text.split("\n")):
+            flat_old_labels.append(None)
+
+    migrated_flat: list[Optional[str]] = [None] * len(new_text)
+    matcher = SequenceMatcher(a=old_text, b=new_text, autojunk=False)
+    for old_start, new_start, size in matcher.get_matching_blocks():
+        for offset in range(size):
+            if old_start + offset < len(flat_old_labels):
+                migrated_flat[new_start + offset] = flat_old_labels[old_start + offset]
+
+    rows: list[list[Optional[str]]] = [[]]
+    for index, char in enumerate(new_text):
+        if char == "\n":
+            rows.append([])
+        else:
+            rows[-1].append(migrated_flat[index])
+    return rows
 
 
 def karaoke_colors_to_dict(colors: KaraokeColors) -> dict:

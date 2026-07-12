@@ -21,15 +21,19 @@ from typing import Optional
 
 from dataclasses import replace as _dataclass_replace
 
-from PyQt6.QtCore import QEvent, QPoint, Qt, QSize, pyqtSignal as Signal
-from PyQt6.QtGui import QBrush, QColor, QIcon, QPainter, QPen, QPixmap
+from PyQt6.QtCore import QEvent, QPoint, QRectF, Qt, QSize, pyqtSignal as Signal
+from PyQt6.QtGui import QBrush, QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDialog,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
+    QLabel,
     QMenu,
+    QMessageBox,
+    QScrollArea,
     QStyle,
     QStyledItemDelegate,
     QStyleOptionViewItem,
@@ -40,6 +44,7 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     CheckBox,
     ComboBox as FluentComboBox,
+    FlowLayout,
     FluentIcon as FIF,
     TableWidget as FluentTableWidget,
     PrimaryPushButton as FluentPrimaryPushButton,
@@ -58,8 +63,12 @@ from krok_helper.subtitle_render.models import (
     LYRICS_LAYOUT_FIELDS,
     LineAnimationOverride,
     Style,
+    TITLE_SCHEME_NAME,
+    TimingChar,
     TimingLine,
     TimingTrack,
+    TitleOverlay,
+    normalize_title_char_role_labels,
 )
 from krok_helper.subtitle_render.frontend.theme import palette, themed
 
@@ -269,6 +278,35 @@ def _scheme_swatch_color(style: Style, role: str) -> Optional[QColor]:
     return None
 
 
+def _mixed_swatch_icon(colors: list[Optional[QColor]]) -> QIcon:
+    """混合角色行的双色点（左右各半圆，取行内前两种代表色）。"""
+    pixmap = QPixmap(24, 24)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    halves = (colors + [None, None])[:2]
+    for index, color in enumerate(halves):
+        painter.setBrush(color if color is not None else QColor(148, 163, 184, 120))
+        painter.setPen(Qt.PenStyle.NoPen)
+        start = (90 if index == 0 else 270) * 16
+        painter.drawPie(5, 5, 14, 14, start, 180 * 16)
+    painter.setBrush(Qt.BrushStyle.NoBrush)
+    painter.setPen(QPen(QColor(0, 0, 0, 64), 1.5))
+    painter.drawEllipse(5, 5, 14, 14)
+    painter.end()
+    return QIcon(pixmap)
+
+
+def _line_role_labels(line) -> list[str]:
+    """行内非空白字符的角色标签序列（无角色为空串）。"""
+    return [str(ch.role_label or "") for ch in line.chars if ch.text.strip()]
+
+
+def _line_role_mixed(line) -> bool:
+    """行内是否存在 ≥2 种不同角色（含「无角色」与具名角色混合）。"""
+    return len(set(_line_role_labels(line))) > 1
+
+
 class _GroupBackgroundDelegate(QStyledItemDelegate):
     """在 QSS item 背景之上自绘"双行组"底色的基类。
 
@@ -323,6 +361,8 @@ class _RoleComboDelegate(_GroupBackgroundDelegate):
         super().__init__(parent)
         self._role_options: list[str] = []
         self._style: Style = Style()
+        self._default_role_text = _DEFAULT_ROLE_TEXT
+        self._default_swatch_role = ""
 
     def set_role_options(self, options: list[str]) -> None:
         self._role_options = list(options)
@@ -330,12 +370,18 @@ class _RoleComboDelegate(_GroupBackgroundDelegate):
     def set_style(self, style: Style) -> None:
         self._style = style
 
+    def set_default_role(self, text: str, swatch_role: str = "") -> None:
+        self._default_role_text = text
+        self._default_swatch_role = swatch_role
+
     def createEditor(self, parent, option, index):  # type: ignore[override]
         combo = _StableFluentComboBox(parent)
         combo.setFixedHeight(30)
         combo.addItem(
-            _DEFAULT_ROLE_TEXT,
-            icon=_swatch_icon(_scheme_swatch_color(self._style, "")),
+            self._default_role_text,
+            icon=_swatch_icon(
+                _scheme_swatch_color(self._style, self._default_swatch_role)
+            ),
             userData="",
         )
         for name in self._role_options:
@@ -358,7 +404,7 @@ class _RoleComboDelegate(_GroupBackgroundDelegate):
 
     def setModelData(self, editor, model, index):  # type: ignore[override]
         value = editor.currentData() or ""
-        display = value if value else _DEFAULT_ROLE_TEXT
+        display = value if value else self._default_role_text
         model.setData(index, value, Qt.ItemDataRole.UserRole)
         model.setData(index, display, Qt.ItemDataRole.DisplayRole)
 
@@ -374,10 +420,310 @@ def _effective_layout_style(style: Style, line: TimingLine) -> Style:
     )
 
 
+class _CharChipsView(QWidget):
+    """逐字符角色对话框的字符块视图：流式排布 + 拖选 / Ctrl 点选 / Shift 范围。
+
+    每字一块，底色 = 该字符角色方案的代表色（浅），底缘一条实色角色条；
+    无角色为中性块。选中块以主题色描边。纯自绘，块序即字符序。
+    """
+
+    selectionChanged = Signal()
+
+    _CHIP_W = 46
+    _CHIP_H = 56
+    _GAP = 6
+
+    def __init__(
+        self,
+        texts: list[str],
+        labels: list[Optional[str]],
+        style: Style,
+        default_swatch_role: str = "",
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self._texts = list(texts)
+        self._labels: list[Optional[str]] = [label or None for label in labels]
+        self._style = style
+        self._default_swatch_role = default_swatch_role
+        self._selected: set[int] = set()
+        self._anchor: Optional[int] = None
+        self._dragging = False
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    # ------------------------------------------------------------- 数据接口
+
+    def labels(self) -> list[Optional[str]]:
+        return list(self._labels)
+
+    def selected_indices(self) -> set[int]:
+        return set(self._selected)
+
+    def apply_role(self, label: Optional[str]) -> None:
+        for index in self._selected:
+            if 0 <= index < len(self._labels):
+                self._labels[index] = label or None
+        self.update()
+
+    def select_all(self) -> None:
+        self._selected = set(range(len(self._texts)))
+        self.selectionChanged.emit()
+        self.update()
+
+    # ------------------------------------------------------------- 布局几何
+
+    def _columns(self) -> int:
+        return max(1, (self.width() + self._GAP) // (self._CHIP_W + self._GAP))
+
+    def hasHeightForWidth(self) -> bool:  # noqa: N802 - Qt API
+        return True
+
+    def heightForWidth(self, width: int) -> int:  # noqa: N802 - Qt API
+        columns = max(1, (width + self._GAP) // (self._CHIP_W + self._GAP))
+        rows = max(1, -(-len(self._texts) // columns))
+        return rows * (self._CHIP_H + self._GAP) - self._GAP
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        return QSize(self._CHIP_W * 6 + self._GAP * 5, self._CHIP_H)
+
+    def sizeHint(self) -> QSize:  # noqa: N802 - Qt API
+        width = self._CHIP_W * 12 + self._GAP * 11
+        return QSize(width, self.heightForWidth(width))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().resizeEvent(event)
+        # 在 QScrollArea 里 heightForWidth 不会自动传导，按当前宽度钉住最小高。
+        self.setMinimumHeight(self.heightForWidth(self.width()))
+        self.updateGeometry()
+
+    def _chip_rect(self, index: int) -> QRectF:
+        columns = self._columns()
+        row, col = divmod(index, columns)
+        return QRectF(
+            col * (self._CHIP_W + self._GAP),
+            row * (self._CHIP_H + self._GAP),
+            self._CHIP_W,
+            self._CHIP_H,
+        )
+
+    def _index_at(self, pos) -> Optional[int]:
+        columns = self._columns()
+        col = int(pos.x()) // (self._CHIP_W + self._GAP)
+        row = int(pos.y()) // (self._CHIP_H + self._GAP)
+        if col >= columns:
+            col = columns - 1
+        index = row * columns + col
+        if 0 <= index < len(self._texts) and self._chip_rect(index).adjusted(
+            -self._GAP / 2, -self._GAP / 2, self._GAP / 2, self._GAP / 2
+        ).contains(pos):
+            return index
+        return None
+
+    # ------------------------------------------------------------- 交互
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        index = self._index_at(event.position())
+        modifiers = event.modifiers()
+        if index is None:
+            if not modifiers & Qt.KeyboardModifier.ControlModifier:
+                self._selected.clear()
+                self.selectionChanged.emit()
+                self.update()
+            return
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            if index in self._selected:
+                self._selected.discard(index)
+            else:
+                self._selected.add(index)
+            self._anchor = index
+        elif modifiers & Qt.KeyboardModifier.ShiftModifier and self._anchor is not None:
+            low, high = sorted((self._anchor, index))
+            self._selected = set(range(low, high + 1))
+        else:
+            self._anchor = index
+            self._selected = {index}
+            self._dragging = True
+        self.selectionChanged.emit()
+        self.update()
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if not self._dragging or self._anchor is None:
+            return
+        index = self._index_at(event.position())
+        if index is None:
+            return
+        low, high = sorted((self._anchor, index))
+        new_selection = set(range(low, high + 1))
+        if new_selection != self._selected:
+            self._selected = new_selection
+            self.selectionChanged.emit()
+            self.update()
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 - Qt API
+        self._dragging = False
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802 - Qt API
+        if event.matches(QKeySequence.StandardKey.SelectAll):
+            self.select_all()
+            return
+        super().keyPressEvent(event)
+
+    # ------------------------------------------------------------- 绘制
+
+    def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        text_color = QColor(palette().title_text)
+        neutral_border = QColor(148, 163, 184, 150)
+        accent = QColor(palette().accent_primary)
+        font = QFont(self.font())
+        font.setPixelSize(24)
+        font.setBold(True)
+        painter.setFont(font)
+        for index, text in enumerate(self._texts):
+            rect = self._chip_rect(index)
+            label = self._labels[index] or ""
+            swatch_role = label or self._default_swatch_role
+            swatch = _scheme_swatch_color(self._style, swatch_role) if swatch_role else None
+            # 底色：有角色 → 代表色浅化；无角色 → 透明中性块
+            if swatch is not None:
+                bg = QColor(swatch)
+                bg.setAlpha(46)
+                painter.setBrush(bg)
+            else:
+                painter.setBrush(Qt.BrushStyle.NoBrush)
+            if index in self._selected:
+                painter.setPen(QPen(accent, 2))
+            else:
+                painter.setPen(QPen(neutral_border, 1))
+            painter.drawRoundedRect(rect.adjusted(1, 1, -1, -1), 6, 6)
+            # 底缘角色条（实色），无角色不画
+            if swatch is not None:
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(swatch)
+                painter.drawRoundedRect(
+                    QRectF(rect.left() + 5, rect.bottom() - 8, rect.width() - 10, 4), 2, 2
+                )
+            painter.setPen(text_color)
+            painter.drawText(
+                rect.adjusted(0, 2, 0, -8),
+                Qt.AlignmentFlag.AlignCenter,
+                text if text.strip() else "␣",
+            )
+        painter.end()
+
+
+class _CharRoleDialog(QDialog):
+    """行内逐字符角色编辑器：拖选字符块 → 点角色按钮应用 → 确定写回。"""
+
+    def __init__(
+        self,
+        row: int,
+        texts: list[str],
+        labels: list[Optional[str]],
+        role_options: list[str],
+        style: Style,
+        parent: Optional[QWidget] = None,
+        *,
+        default_role_text: str = _DEFAULT_ROLE_TEXT,
+        default_swatch_role: str = "",
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle(f"逐字符角色 · 第 {row + 1} 行")
+        self._style = style
+        self._role_buttons: list[FluentPushButton] = []
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 12)
+        layout.setSpacing(10)
+
+        hint = QLabel("拖动选择字符（Ctrl 点选 / Shift 连选 / Ctrl+A 全选），再点下方角色应用。", self)
+        hint.setWordWrap(True)
+        themed(hint, lambda: f"color: {palette().text_secondary}; font-size: 9pt;")
+        layout.addWidget(hint)
+
+        self._chips = _CharChipsView(
+            texts, labels, style, default_swatch_role, self
+        )
+        scroll = QScrollArea(self)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(self._chips)
+        scroll.setMinimumHeight(self._chips._CHIP_H + 24)
+        scroll.setMaximumHeight((self._chips._CHIP_H + self._chips._GAP) * 4)
+        layout.addWidget(scroll, 1)
+
+        roles_label = QLabel("分配为：", self)
+        themed(roles_label, lambda: f"color: {palette().text_secondary}; font-size: 9pt;")
+        layout.addWidget(roles_label)
+
+        roles_host = QWidget(self)
+        self._roles_flow = FlowLayout(roles_host, needAni=False)
+        self._roles_flow.setContentsMargins(0, 0, 0, 0)
+        self._default_swatch_role = default_swatch_role
+        self._add_role_button("", default_role_text)
+        for name in role_options:
+            self._add_role_button(name, name)
+        new_button = FluentPushButton("＋新建角色", roles_host)
+        new_button.clicked.connect(self._create_role)
+        self._roles_flow.addWidget(new_button)
+        layout.addWidget(roles_host)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel = FluentPushButton("取消", self)
+        cancel.clicked.connect(self.reject)
+        buttons.addWidget(cancel)
+        ok = FluentPrimaryPushButton("确定", self)
+        ok.clicked.connect(self.accept)
+        buttons.addWidget(ok)
+        layout.addLayout(buttons)
+
+        self._chips.selectionChanged.connect(self._sync_role_buttons_enabled)
+        self._sync_role_buttons_enabled()
+        self.resize(720, 380)
+
+    def _add_role_button(self, label: str, text: str) -> None:
+        button = FluentPushButton(text, self)
+        swatch_role = label or self._default_swatch_role
+        button.setIcon(_swatch_icon(_scheme_swatch_color(self._style, swatch_role)))
+        button.clicked.connect(lambda _checked=False, l=label: self._chips.apply_role(l or None))
+        self._roles_flow.insertWidget(len(self._role_buttons), button)
+        self._role_buttons.append(button)
+
+    def _sync_role_buttons_enabled(self) -> None:
+        enabled = bool(self._chips.selected_indices())
+        for button in self._role_buttons:
+            button.setEnabled(enabled)
+
+    def _create_role(self) -> None:
+        name, ok = QInputDialog.getText(self, "新建角色", "角色名称")
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            return
+        existing = {button.text() for button in self._role_buttons}
+        if name not in existing:
+            self._add_role_button(name, name)
+            self._sync_role_buttons_enabled()
+        if self._chips.selected_indices():
+            self._chips.apply_role(name)
+
+    def char_labels(self) -> list[Optional[str]]:
+        return self._chips.labels()
+
+
 class LyricsPanel(DropPanel):
     """左侧歌词面板（含空态拖拽 + 已加载表格两态）。"""
 
     roleChanged = Signal(int, str)
+    charRolesChanged = Signal(int, list)
+    """逐字符角色编辑：track.lines 行号 + 与该行字符数等长的标签列表（str | None）。"""
+    titleEditRequested = Signal()
+    """标题模式打开逐字符编辑器前，请宿主把动态模板固定为当前实际文字。"""
     animationOverrideRequested = Signal(list, object)
     """逐行动画编辑请求：track.lines 行号列表 + ``LineAnimationOverride | None``。"""
     rowClicked = Signal(int)  # 用户点击歌词行时发出行号
@@ -403,6 +749,8 @@ class LyricsPanel(DropPanel):
 
         self._style: Style = Style()
         self._track: Optional[TimingTrack] = None
+        self._title_mode = False
+        self._role_options: list[str] = []
         # 每行元数据：(是否空行, 可渲染序号)；空行序号取 -1。
         # lane / 组号由序号 + 当前 Style 的行数动态推出（行数可随布局变化）。
         self._row_meta: list[tuple[bool, int]] = []
@@ -468,6 +816,7 @@ class LyricsPanel(DropPanel):
 
         # ---- 字幕源工具条（对标 N3 多歌词文件：メイン / コーラス1 / …）----
         self._syncing_sources = False
+        self._removable_source_indices: set[int] = set()
         self._source_bar = QWidget(self)
         source_layout = QHBoxLayout(self._source_bar)
         source_layout.setContentsMargins(8, 6, 8, 0)
@@ -508,9 +857,19 @@ class LyricsPanel(DropPanel):
 
     # ------------------------------------------------------------------ public
 
-    def set_sources(self, names: list[str], active_index: int) -> None:
+    def set_sources(
+        self,
+        names: list[str],
+        active_index: int,
+        removable_indices: Optional[set[int]] = None,
+    ) -> None:
         """刷新字幕源下拉（首项 = 主字幕）；只有一个源时也显示，便于发现「＋」入口。"""
         self._syncing_sources = True
+        self._removable_source_indices = (
+            set(removable_indices)
+            if removable_indices is not None
+            else set(range(1, len(names)))
+        )
         try:
             self._source_combo.clear()
             self._source_combo.addItems(list(names))
@@ -521,24 +880,27 @@ class LyricsPanel(DropPanel):
         finally:
             self._syncing_sources = False
         self._source_bar.setVisible(bool(names))
-        self._remove_source_btn.setEnabled(self._source_combo.currentIndex() > 0)
+        self._remove_source_btn.setEnabled(
+            self._source_combo.currentIndex() in self._removable_source_indices
+        )
 
     def current_source_index(self) -> int:
         return max(self._source_combo.currentIndex(), 0)
 
     def _on_source_combo_changed(self, index: int) -> None:
-        self._remove_source_btn.setEnabled(index > 0)
+        self._remove_source_btn.setEnabled(index in self._removable_source_indices)
         if self._syncing_sources or index < 0:
             return
         self.sourceSelected.emit(index)
 
     def _on_remove_source_clicked(self) -> None:
         index = self._source_combo.currentIndex()
-        if index > 0:
+        if index in self._removable_source_indices:
             self.sourceRemoveRequested.emit(index)
 
     def set_role_options(self, options: list[str]) -> None:
         """设置可选的配色方案 / 角色名列表。"""
+        self._role_options = list(options)
         self._role_delegate.set_role_options(list(options))
 
     def set_style(self, style: Style) -> None:
@@ -550,6 +912,10 @@ class LyricsPanel(DropPanel):
 
     def set_track(self, track: Optional[TimingTrack]) -> None:
         """加载 / 清空字幕。``None`` / 无行时回到空态。"""
+        self._title_mode = False
+        self._role_delegate.set_default_role(_DEFAULT_ROLE_TEXT)
+        self._table.setHorizontalHeaderLabels(_COLUMN_HEADERS)
+        self._table.setColumnHidden(COL_EFFECT, False)
         self._track = track
         self._table.blockSignals(True)
         try:
@@ -581,7 +947,10 @@ class LyricsPanel(DropPanel):
                 self._table.setItem(row, COL_LANE, lane_item)
 
                 role = _dominant_role(line)
-                role_item = QTableWidgetItem(role if role else _DEFAULT_ROLE_TEXT)
+                mixed = not blank and _line_role_mixed(line)
+                role_item = QTableWidgetItem(
+                    "混合" if mixed else (role if role else _DEFAULT_ROLE_TEXT)
+                )
                 role_item.setData(Qt.ItemDataRole.UserRole, role)
                 if blank:
                     role_item.setText("")
@@ -618,6 +987,31 @@ class LyricsPanel(DropPanel):
         self._refresh_presentation()
         self._apply_measured_column_widths()
         self._clamp_columns_to_viewport()
+
+    def set_title(self, title: Optional[TitleOverlay]) -> None:
+        """以无时间语义的行适配器显示标题，复用角色与逐字符编辑 UI。"""
+        if title is None:
+            self.set_track(None)
+            return
+        labels = normalize_title_char_role_labels(
+            title.text_template, title.char_role_labels
+        )
+        lines = [
+            TimingLine(
+                chars=[
+                    TimingChar(text=char, start_ms=0, role_label=labels[row][index])
+                    for index, char in enumerate(text)
+                ],
+                end_ms=0,
+            )
+            for row, text in enumerate(title.text_template.split("\n"))
+        ]
+        self.set_track(TimingTrack(lines=lines))
+        self._title_mode = True
+        self._role_delegate.set_default_role("标题默认", TITLE_SCHEME_NAME)
+        self._table.setHorizontalHeaderLabels(["行", "角色", "", "内容"])
+        self._refresh_presentation()
+        self._apply_measured_column_widths()
 
     def refresh_row_role(self, row: int) -> None:
         """宿主改完 role_label 后刷新该行的色点（角色文本已由委托更新）。"""
@@ -932,7 +1326,8 @@ class LyricsPanel(DropPanel):
         dual = bool(style.dual_line_layout)
         lane_color = QColor(palette().text_hint)
 
-        self._table.setColumnHidden(COL_LANE, not dual)
+        self._table.setColumnHidden(COL_LANE, False if self._title_mode else not dual)
+        self._table.setColumnHidden(COL_EFFECT, self._title_mode)
         self._recompute_render_lanes()
         page_sizes = Counter(self._render_groups)
 
@@ -965,7 +1360,11 @@ class LyricsPanel(DropPanel):
                 line_style = (
                     _effective_layout_style(style, line) if line is not None else style
                 )
-                lane_item.setText(f"T{lane + 1}" if dual else "")
+                lane_item.setText(
+                    str(row + 1)
+                    if self._title_mode
+                    else (f"T{lane + 1}" if dual else "")
+                )
                 layout_ref = int(getattr(line, "layout_index", 0) or 0) if line else 0
                 if 1 <= layout_ref <= len(style.layouts):
                     lane_item.setToolTip(f"布局：{style.layouts[layout_ref - 1].name}")
@@ -980,12 +1379,50 @@ class LyricsPanel(DropPanel):
                     and page_sizes[self._render_groups[render_index]] == 1
                 )
                 content_item.setTextAlignment(
-                    self._content_alignment(line_style, lane, dual, single_line_page)
+                    (Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                    if self._title_mode
+                    else self._content_alignment(line_style, lane, dual, single_line_page)
                 )
 
                 role = str(role_item.data(Qt.ItemDataRole.UserRole) or "")
-                role_item.setIcon(_swatch_icon(_scheme_swatch_color(style, role)))
-                if line is not None:
+                if line is not None and _line_role_mixed(line):
+                    # 行内混合角色：显示「混合」+ 双色点（前两种代表色）
+                    seen: list[str] = []
+                    for label in _line_role_labels(line):
+                        if label not in seen:
+                            seen.append(label)
+                    role_item.setText("混合")
+                    role_item.setIcon(
+                        _mixed_swatch_icon(
+                            [
+                                _scheme_swatch_color(
+                                    style,
+                                    label or (TITLE_SCHEME_NAME if self._title_mode else ""),
+                                )
+                                for label in seen[:2]
+                            ]
+                        )
+                    )
+                    role_item.setToolTip(
+                        "该行包含逐字符角色分配（双击内容列或右键「逐字符分配角色…」编辑）。"
+                    )
+                else:
+                    if line is not None:
+                        role_item.setText(
+                            role
+                            if role
+                            else ("标题默认" if self._title_mode else _DEFAULT_ROLE_TEXT)
+                        )
+                        role_item.setToolTip("")
+                    role_item.setIcon(
+                        _swatch_icon(
+                            _scheme_swatch_color(
+                                style,
+                                role or (TITLE_SCHEME_NAME if self._title_mode else ""),
+                            )
+                        )
+                    )
+                if line is not None and not self._title_mode:
                     effect_item.setText(_animation_summary(style, line.animation_override))
                     if line.animation_override is None:
                         effect_item.setIcon(QIcon())
@@ -1050,6 +1487,15 @@ class LyricsPanel(DropPanel):
         if not rows:
             return
         menu = QMenu(self._table)
+        if len(rows) == 1:
+            char_role_action = menu.addAction("逐字符分配角色…")
+            char_role_action.triggered.connect(
+                lambda _checked=False, r=rows[0]: self._edit_char_roles(r)
+            )
+            menu.addSeparator()
+        if self._title_mode:
+            menu.exec(self._table.viewport().mapToGlobal(pos))
+            return
         effect_action = menu.addAction("设置所选行特效…")
         effect_action.triggered.connect(
             lambda _checked=False, rs=list(rows): self._edit_animation_rows(rs)
@@ -1078,14 +1524,17 @@ class LyricsPanel(DropPanel):
         menu.exec(self._table.viewport().mapToGlobal(pos))
 
     def _on_cell_double_clicked(self, row: int, column: int) -> None:
-        if column != COL_EFFECT or self._track is None:
+        if column not in (COL_EFFECT, COL_CONTENT) or self._track is None:
             return
         if not 0 <= row < len(self._track.lines):
             return
         line = self._track.lines[row]
         if line.is_blank or not line.chars:
             return
-        self._edit_animation_rows([row])
+        if column == COL_EFFECT and not self._title_mode:
+            self._edit_animation_rows([row])
+        elif column == COL_CONTENT:
+            self._edit_char_roles(row)
 
     def _edit_animation_rows(self, rows: list[int]) -> None:
         if self._track is None or not rows:
@@ -1095,11 +1544,58 @@ class LyricsPanel(DropPanel):
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self.animationOverrideRequested.emit(list(rows), dialog.animation_override())
 
+    def _edit_char_roles(self, row: int) -> None:
+        """打开行内逐字符角色编辑器，确定后按整行标签列表发给宿主。"""
+        if self._title_mode:
+            self.titleEditRequested.emit()
+        if self._track is None or not 0 <= row < len(self._track.lines):
+            return
+        line = self._track.lines[row]
+        if line.is_blank or not line.chars:
+            return
+        dialog = _CharRoleDialog(
+            row,
+            [ch.text for ch in line.chars],
+            [ch.role_label for ch in line.chars],
+            list(self._role_options),
+            self._style,
+            self,
+            default_role_text="标题默认" if self._title_mode else _DEFAULT_ROLE_TEXT,
+            default_swatch_role=TITLE_SCHEME_NAME if self._title_mode else "",
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        labels = dialog.char_labels()
+        if labels == [ch.role_label for ch in line.chars]:
+            return
+        self.charRolesChanged.emit(row, labels)
+
     def _on_item_changed(self, item: QTableWidgetItem) -> None:
         if item.column() != COL_ROLE:
             return
         role_name = str(item.data(Qt.ItemDataRole.UserRole) or "")
-        self.roleChanged.emit(item.row(), role_name)
+        row = item.row()
+        # 混合行整行覆盖前确认，避免误抹掉行内逐字符分配。
+        if (
+            self._track is not None
+            and 0 <= row < len(self._track.lines)
+            and _line_role_mixed(self._track.lines[row])
+        ):
+            display = role_name if role_name else (
+                "标题默认" if self._title_mode else _DEFAULT_ROLE_TEXT
+            )
+            choice = QMessageBox.question(
+                self,
+                "整行覆盖角色",
+                f"该行包含逐字符角色分配，确定整行覆盖为“{display}”吗？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if choice != QMessageBox.StandardButton.Yes:
+                # 还原显示为混合态（数据未写回，行内标签保持原样）
+                self._refresh_presentation(rows=[row])
+                return
+        self.roleChanged.emit(row, role_name)
 
     def _panel_style_spec(self) -> tuple[str, int, str, str, int]:
         # 载入后表格铺满面板：去边框、去圆角；空态 / 拖拽态沿用基类

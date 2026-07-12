@@ -206,7 +206,7 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
         changes["custom_style_schemes"] = custom
 
     title_infos = [_dict(item) for item in _list(data.get("TitleInfos"))]
-    title_overlay, title_scheme = _build_title_overlay(
+    title_overlay, title_scheme, title_role_schemes = _build_title_overlay(
         title_infos, fonts, layouts, lyrics_dir, warnings
     )
     if title_overlay is not None:
@@ -214,6 +214,13 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
     # 「标题」方案恒存在：N3 标题引用的 フォント設定 优先，否则保持默认标题外观。
     custom_schemes = changes.get("custom_style_schemes")
     if isinstance(custom_schemes, dict):
+        custom_schemes.update(
+            {
+                name: scheme
+                for name, scheme in title_role_schemes.items()
+                if name not in custom_schemes
+            }
+        )
         custom_schemes[TITLE_SCHEME_NAME] = title_scheme or default_title_scheme()
 
     # ---------------------------------------------------------- 每行布局 / 逐字配色 / 动画
@@ -718,11 +725,45 @@ def _title_lines(title: dict) -> list[str]:
     return lines
 
 
-def _title_first_font_index(title: dict) -> int:
+def _title_character_rows(title: dict) -> list[list[dict]]:
+    rows: list[list[dict]] = []
     for line in _list(title.get("LineInfos")):
-        for char in _list(_dict(line).get("LyricsCharInfos")):
-            return _int(_dict(char).get("FontIndex"), 0)
-    return 0
+        line = _dict(line)
+        if _int(line.get("Kind"), -1) != 5:
+            continue
+        rows.append(
+            [
+                _dict(char)
+                for char in _list(line.get("LyricsCharInfos"))
+                if not _dict(char).get("IsRuby")
+            ]
+        )
+    while rows and not any(str(char.get("Char") or "").strip() for char in rows[-1]):
+        rows.pop()
+    return rows
+
+
+def _title_base_font_index(title: dict, font_count: int) -> int:
+    """取非空白标题字符中出现最多的 FontIndex；平票按首次出现。"""
+    counts: dict[int, int] = {}
+    order: list[int] = []
+    first_valid: Optional[int] = None
+    for row in _title_character_rows(title):
+        for char in row:
+            index = _int(char.get("FontIndex"), 0)
+            if not 0 <= index < font_count:
+                continue
+            if first_valid is None:
+                first_valid = index
+            if not str(char.get("Char") or "").strip():
+                continue
+            if index not in counts:
+                counts[index] = 0
+                order.append(index)
+            counts[index] += 1
+    if counts:
+        return max(order, key=lambda index: counts[index])
+    return first_valid if first_valid is not None else 0
 
 
 def _build_title_overlay(
@@ -731,7 +772,11 @@ def _build_title_overlay(
     layouts: list[dict],
     lyrics_dir: Path,
     warnings: list[str],
-) -> tuple[Optional[TitleOverlay], Optional[SubtitleStyleScheme]]:
+) -> tuple[
+    Optional[TitleOverlay],
+    Optional[SubtitleStyleScheme],
+    dict[str, SubtitleStyleScheme],
+]:
     """标题 → (文字/布局引用/显示时段, 「标题」配色方案)。
 
     字体/颜色不再展开进 ``TitleOverlay``：标题引用的 フォント設定 折算成
@@ -741,7 +786,7 @@ def _build_title_overlay(
     candidates = [(title, _title_lines(title)) for title in title_infos]
     candidates = [(title, lines) for title, lines in candidates if any(line.strip() for line in lines)]
     if not candidates:
-        return None, None
+        return None, None, {}
     if len(candidates) > 1:
         skipped = "、".join(str(title.get("SettingsName") or "?") for title, _lines in candidates[1:])
         warnings.append(f"N3 项目包含多个标题设置，仅导入第一个（{skipped} 被忽略）")
@@ -755,7 +800,7 @@ def _build_title_overlay(
     }
 
     scheme: Optional[SubtitleStyleScheme] = None
-    font_index = _title_first_font_index(title)
+    font_index = _title_base_font_index(title, len(fonts))
     font = fonts[font_index] if 0 <= font_index < len(fonts) else (fonts[0] if fonts else None)
     if font is not None:
         context = f"标题·{font.get('SettingsName') or '?'}"
@@ -764,6 +809,28 @@ def _build_title_overlay(
         scheme = SubtitleStyleScheme(
             **{key: value for key, value in scheme_changes.items() if key in field_names}
         )
+
+    title_role_schemes: dict[str, SubtitleStyleScheme] = {}
+    role_rows: list[list[Optional[str]]] = []
+    for row in _title_character_rows(title):
+        labels: list[Optional[str]] = []
+        for char in row:
+            index = _int(char.get("FontIndex"), 0)
+            if index == font_index or not 0 <= index < len(fonts):
+                labels.append(None)
+                continue
+            role_font = fonts[index]
+            name = str(role_font.get("SettingsName") or "").strip() or f"配色{index}"
+            labels.append(name)
+            if name not in title_role_schemes:
+                context = f"标题字符·{name}"
+                changes = _scheme_changes(role_font, lyrics_dir, warnings, context)
+                field_names = {item.name for item in dataclass_fields(SubtitleStyleScheme)}
+                title_role_schemes[name] = SubtitleStyleScheme(
+                    **{key: value for key, value in changes.items() if key in field_names}
+                )
+        role_rows.append(labels)
+    kwargs["char_role_labels"] = role_rows
 
     layout_index = _int(title.get("LayoutIndex"), 0)
     if not (0 <= layout_index < len(layouts)):
@@ -802,7 +869,7 @@ def _build_title_overlay(
         kwargs["show_mode"] = "tail"
         kwargs["duration_ms"] = interval
         kwargs["tail_offset_ms"] = tail_offset
-    return TitleOverlay(**kwargs), scheme
+    return TitleOverlay(**kwargs), scheme, title_role_schemes
 
 
 # ---------------------------------------------------------------------------

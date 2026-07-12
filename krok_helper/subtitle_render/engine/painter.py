@@ -306,6 +306,19 @@ class _TitleOverlayLayout:
     latin_font: QFont
     latin_metrics: QFontMetrics
     font_for: object
+    glyph_rows: list[list["_TitleGlyphLayout"]]
+    line_heights: list[int]
+    line_ascents: list[int]
+
+
+@dataclass(frozen=True)
+class _TitleGlyphLayout:
+    text: str
+    x: float
+    advance: float
+    font: QFont
+    metrics: QFontMetrics
+    title: TitleOverlay
 
 
 _UTOPIA_INTRO_TIME_MS = 700
@@ -458,6 +471,7 @@ from krok_helper.subtitle_render.models import (
     TimingLine,
     TimingTrack,
     TitleOverlay,
+    normalize_title_char_role_labels,
     normalize_glow_concentration_level,
     style_with_line_animation,
 )
@@ -554,7 +568,7 @@ def frame_content_intervals(
         if with_title and title_opacity > 0.0 and style.title_overlay is not None:
             resolved_title = resolve_title_overlay(style)
             title_layout = _layout_title_overlay(
-                logical_w, logical_h, entry_track, resolved_title
+                logical_w, logical_h, entry_track, resolved_title, style=style
             )
             if title_layout is not None:
                 title_bounds = _TEXT_RUN_COMPOSITOR.vertical_bounds(
@@ -752,7 +766,7 @@ def _paint_track_to_painter(
     # 在歌词之上独立绘制。外观由「标题」配色方案与布局引用解析。
     if title_opacity > 0.0 and style.title_overlay is not None:
         _paint_title_overlay(
-            painter, logical_w, logical_h, track, resolve_title_overlay(style), title_opacity
+            painter, logical_w, logical_h, track, style, title_opacity
         )
 
 
@@ -825,6 +839,36 @@ def resolve_title_overlay(style: Style) -> Optional[TitleOverlay]:
     if not changes:
         return title
     return replace(title, **changes)
+
+
+def _resolve_title_role_overlay(
+    style: Style, base: TitleOverlay, role_label: Optional[str]
+) -> TitleOverlay:
+    """标题字符角色 → 静态标题外观；缺失方案回退内置标题方案。"""
+    if not role_label or role_label not in style.custom_style_schemes:
+        return base
+    merged = _style_for_role(style, role_label)
+    colors = _effective_karaoke_colors(merged).before
+    return replace(
+        base,
+        font_family=merged.font_family,
+        font_family_latin=merged.font_family_latin,
+        font_size_px=int(merged.font_size_px),
+        font_weight=int(merged.font_weight),
+        italic=bool(merged.italic),
+        letter_spacing_px=int(merged.letter_spacing_px),
+        fill=colors.text,
+        stroke=colors.stroke,
+        stroke_width_px=int(merged.stroke_width_px),
+        stroke2=colors.stroke2,
+        stroke2_width_px=int(merged.stroke2_width_px),
+        decoration_kind=merged.decoration_kind,
+        glow_radius_px=int(merged.glow_before_radius_px),
+        glow_concentration_level=int(merged.glow_concentration_level),
+        shadow=colors.shadow,
+        shadow_offset_x=int(merged.shadow_offset_x),
+        shadow_offset_y=int(merged.shadow_offset_y),
+    )
 
 
 _TITLE_SEPARATOR_CHARS = " \t/|・-–—~　"
@@ -934,10 +978,13 @@ def _paint_title_overlay(
     img_w: int,
     img_h: int,
     track: TimingTrack,
-    title: TitleOverlay,
+    style: Style,
     opacity: float,
 ) -> None:
-    layout = _layout_title_overlay(img_w, img_h, track, title)
+    title = resolve_title_overlay(style)
+    if title is None:
+        return
+    layout = _layout_title_overlay(img_w, img_h, track, title, style=style)
     if layout is None:
         return
     _TEXT_RUN_COMPOSITOR.paint_ordered(
@@ -952,6 +999,8 @@ def _layout_title_overlay(
     img_h: int,
     track: TimingTrack,
     title: TitleOverlay,
+    *,
+    style: Optional[Style] = None,
 ) -> _TitleOverlayLayout | None:
     text = _resolve_title_text(title, track)
     lines = [line for line in text.split("\n")]
@@ -962,19 +1011,55 @@ def _layout_title_overlay(
     latin_font = _build_title_latin_font(title)
     font_for = _make_title_font_for(title, font, latin_font)
     latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
-    spacing = int(title.letter_spacing_px)
-
-    def line_width(text_line: str) -> float:
-        if not text_line:
-            return 0.0
-        total = sum(_char_advance(ch, metrics, latin_metrics, font_for) for ch in text_line)
-        return total + spacing * max(len(text_line) - 1, 0)
-
-    widths = [line_width(line) for line in lines]
+    labels = normalize_title_char_role_labels(text, title.char_role_labels)
+    glyph_rows: list[list[_TitleGlyphLayout]] = []
+    widths: list[float] = []
+    line_heights: list[int] = []
+    line_ascents: list[int] = []
+    for row_index, text_line in enumerate(lines):
+        glyphs: list[_TitleGlyphLayout] = []
+        cursor = 0.0
+        max_ascent = metrics.ascent()
+        max_descent = metrics.descent()
+        for char_index, char in enumerate(text_line):
+            glyph_title = (
+                _resolve_title_role_overlay(style, title, labels[row_index][char_index])
+                if style is not None
+                else title
+            )
+            glyph_jp_font = _build_title_font(glyph_title)
+            glyph_latin_font = _build_title_latin_font(glyph_title)
+            glyph_font_for = _make_title_font_for(
+                glyph_title, glyph_jp_font, glyph_latin_font
+            )
+            glyph_font = (
+                glyph_font_for(char) if glyph_font_for is not None else glyph_jp_font
+            )
+            glyph_metrics = QFontMetrics(glyph_font)
+            advance = float(glyph_metrics.horizontalAdvance(char))
+            glyphs.append(
+                _TitleGlyphLayout(
+                    text=char,
+                    x=cursor,
+                    advance=advance,
+                    font=glyph_font,
+                    metrics=glyph_metrics,
+                    title=glyph_title,
+                )
+            )
+            cursor += advance
+            if char_index + 1 < len(text_line):
+                cursor += int(glyph_title.letter_spacing_px)
+            max_ascent = max(max_ascent, glyph_metrics.ascent())
+            max_descent = max(max_descent, glyph_metrics.descent())
+        glyph_rows.append(glyphs)
+        widths.append(cursor)
+        line_ascents.append(max_ascent)
+        line_heights.append(max_ascent + max_descent)
     block_w = max(widths) if widths else 0.0
-    line_h = metrics.height()
+    line_h = max(line_heights, default=metrics.height())
     gap = max(int(title.line_gap_px), 0)
-    block_h = line_h * len(lines) + gap * max(len(lines) - 1, 0)
+    block_h = sum(line_heights) + gap * max(len(lines) - 1, 0)
     if block_w <= 0 or block_h <= 0:
         return None
 
@@ -993,6 +1078,9 @@ def _layout_title_overlay(
         latin_font=latin_font,
         latin_metrics=latin_metrics,
         font_for=font_for,
+        glyph_rows=glyph_rows,
+        line_heights=line_heights,
+        line_ascents=line_ascents,
     )
 
 
@@ -1036,7 +1124,10 @@ class _TitleOverlayLayer:
         return
 
     def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
-        pad = _title_visual_padding(self.title)
+        pad = max(
+            (_title_visual_padding(glyph.title) for row in self.title_layout.glyph_rows for glyph in row),
+            default=_title_visual_padding(self.title),
+        )
         return (
             int(math.floor(self.title_layout.y_top - pad)),
             int(math.ceil(self.title_layout.y_top + self.title_layout.block_h + pad)),
@@ -1075,6 +1166,30 @@ def _title_overlay_layer_key(
         _fill_signature(title.shadow),
         title.shadow_offset_x,
         title.shadow_offset_y,
+        tuple(
+            (
+                glyph.text,
+                round(glyph.x, 3),
+                round(glyph.advance, 3),
+                glyph.font.family(),
+                glyph.font.pixelSize(),
+                int(glyph.font.weight()),
+                glyph.font.italic(),
+                _fill_signature(glyph.title.fill),
+                _fill_signature(glyph.title.stroke),
+                glyph.title.stroke_width_px,
+                _fill_signature(glyph.title.stroke2),
+                glyph.title.stroke2_width_px,
+                glyph.title.decoration_kind,
+                glyph.title.glow_radius_px,
+                glyph.title.glow_concentration_level,
+                _fill_signature(glyph.title.shadow),
+                glyph.title.shadow_offset_x,
+                glyph.title.shadow_offset_y,
+            )
+            for row in layout.glyph_rows
+            for glyph in row
+        ),
     )
 
 
@@ -1084,23 +1199,12 @@ def _build_title_overlay_layer(
     *,
     device_pixel_ratio: float = 1.0,
 ) -> tuple[QImage, int, int]:
-    stroke_extent = _visual_stroke_extent(title.stroke_width_px, title.stroke2_width_px)
-    glow_extra = (
-        _glow_extent(title.stroke_width_px, title.stroke2_width_px, title.glow_radius_px)
-        if title.decoration_kind == "glow"
-        else 0
-    )
-    extent = max(
-        stroke_extent,
-        glow_extra,
-        abs(title.shadow_offset_x),
-        abs(title.shadow_offset_y),
-        2,
-    ) + 4
-    pad_left = max(0, -title.shadow_offset_x) + extent
-    pad_right = max(0, title.shadow_offset_x) + extent
-    pad_top = max(0, -title.shadow_offset_y) + extent
-    pad_bottom = max(0, title.shadow_offset_y) + extent
+    glyph_titles = [glyph.title for row in layout.glyph_rows for glyph in row] or [title]
+    extent = max(_title_visual_padding(item) for item in glyph_titles) + 4
+    pad_left = max(max(0, -item.shadow_offset_x) for item in glyph_titles) + extent
+    pad_right = max(max(0, item.shadow_offset_x) for item in glyph_titles) + extent
+    pad_top = max(max(0, -item.shadow_offset_y) for item in glyph_titles) + extent
+    pad_bottom = max(max(0, item.shadow_offset_y) for item in glyph_titles) + extent
     img_w = max(int(math.ceil(pad_left + layout.block_w + pad_right)), 1)
     img_h = max(int(math.ceil(pad_top + layout.block_h + pad_bottom)), 1)
     image = _make_raster_image(img_w, img_h, device_pixel_ratio)
@@ -1113,34 +1217,49 @@ def _build_title_overlay_layer(
             | QPainter.RenderHint.TextAntialiasing
             | QPainter.RenderHint.SmoothPixmapTransform
         )
-        p.setFont(layout.font)
-        baseline = pad_top + layout.metrics.ascent()
-        for line, width in zip(layout.lines, layout.widths):
-            if line.strip():
+        line_top = float(pad_top)
+        for glyphs, width, line_height, line_ascent in zip(
+            layout.glyph_rows,
+            layout.widths,
+            layout.line_heights,
+            layout.line_ascents,
+        ):
+            if glyphs:
                 if title.align == "center":
                     lx = pad_left + (layout.block_w - width) / 2.0
                 elif title.align == "right":
                     lx = pad_left + (layout.block_w - width)
                 else:
                     lx = float(pad_left)
-                path = _title_line_path(
-                    line,
-                    layout.font,
-                    lx,
-                    baseline,
-                    layout.metrics,
-                    layout.latin_metrics,
-                    layout.font_for,
-                    int(title.letter_spacing_px),
-                )
-                rect = QRectF(
-                    float(lx),
-                    float(baseline - layout.metrics.ascent()),
-                    float(width),
-                    float(layout.line_h),
-                )
-                _paint_title_text_stack(p, path, rect, title)
-            baseline += layout.line_h + layout.gap
+                baseline = line_top + line_ascent
+                run_start = 0
+                while run_start < len(glyphs):
+                    run_end = run_start + 1
+                    run_title = glyphs[run_start].title
+                    while (
+                        run_end < len(glyphs)
+                        and glyphs[run_end].title == run_title
+                    ):
+                        run_end += 1
+                    run = glyphs[run_start:run_end]
+                    path = QPainterPath()
+                    for glyph in run:
+                        path.addText(
+                            float(lx + glyph.x), baseline, glyph.font, glyph.text
+                        )
+                    left = float(lx + run[0].x)
+                    right = float(lx + run[-1].x + run[-1].advance)
+                    ascent = max(glyph.metrics.ascent() for glyph in run)
+                    descent = max(glyph.metrics.descent() for glyph in run)
+                    rect = QRectF(
+                        left,
+                        float(baseline - ascent),
+                        max(right - left, 1.0),
+                        float(ascent + descent),
+                    )
+                    _paint_title_text_stack(p, path, rect, run_title)
+                    run_start = run_end
+            line_top += line_height + layout.gap
     finally:
         p.end()
     return image, -pad_left, -pad_top

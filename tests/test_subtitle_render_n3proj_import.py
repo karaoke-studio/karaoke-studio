@@ -334,6 +334,26 @@ def test_import_title_overlay(imported):
     assert title.fade_in_ms == 0 and title.fade_out_ms == 0
 
 
+def test_import_title_preserves_per_character_font_roles(tmp_path):
+    payload = _project_payload(tmp_path)
+    chars = payload["TitleInfos"][0]["LineInfos"][0]["LyricsCharInfos"]
+    chars[:] = [
+        _char("青", 5999990, 5999990, font_index=1),
+        _char("標", 5999990, 5999990, font_index=0),
+        _char("青", 5999990, 5999990, font_index=1),
+    ]
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+    title = style.title_overlay
+
+    assert title is not None
+    assert title.text_template == "青標青"
+    assert title.char_role_labels == [[None, "標準配色", None]]
+    assert style.custom_style_schemes["标题"].decoration_kind == "glow"
+    assert "標準配色" in style.custom_style_schemes
+
+
 def test_import_title_scheme_always_present(tmp_path):
     """N3 项目没有标题时也保底写入默认「标题」方案（渲染/编辑入口恒可用）。"""
     payload = _project_payload(tmp_path)

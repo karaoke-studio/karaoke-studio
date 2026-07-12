@@ -3883,6 +3883,62 @@ def test_title_overlay_renders_only_when_enabled(qapp):
     assert _pixel_hash(off) == _pixel_hash(disabled)
 
 
+def test_title_overlay_applies_role_scheme_per_character(qapp):
+    track = _title_track()
+    base = Style()
+    schemes = dict(base.custom_style_schemes)
+    schemes["标题"] = replace(
+        schemes["标题"],
+        font_size_px=48,
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=_solid_fill("#FF0000"))
+        ),
+    )
+    schemes["蓝色大字"] = SubtitleStyleScheme(
+        font_size_px=80,
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=_solid_fill("#0000FF"))
+        ),
+    )
+    uniform = replace(
+        base,
+        custom_style_schemes=schemes,
+        title_overlay=TitleOverlay(
+            enabled=True,
+            text_template="AB",
+            char_role_labels=[[None, None]],
+            fade_in_ms=0,
+            fade_out_ms=0,
+        ),
+    )
+    mixed = replace(
+        uniform,
+        title_overlay=replace(
+            uniform.title_overlay,
+            char_role_labels=[[None, "蓝色大字"]],
+        ),
+    )
+
+    uniform_image = _blank()
+    mixed_image = _blank()
+    paint_frame(uniform_image, track, 500, uniform)
+    paint_frame(mixed_image, track, 500, mixed)
+
+    assert _pixel_hash(mixed_image) != _pixel_hash(uniform_image)
+    mixed_rgba = _img_rows_rgba(mixed_image).reshape(
+        mixed_image.height(), mixed_image.width(), 4
+    ).astype(np.int16)
+    uniform_rgba = _img_rows_rgba(uniform_image).reshape(
+        uniform_image.height(), uniform_image.width(), 4
+    ).astype(np.int16)
+    assert np.any(mixed_rgba[:, :, 2] > mixed_rgba[:, :, 0] + 30)
+    assert not np.any(uniform_rgba[:, :, 2] > uniform_rgba[:, :, 0] + 30)
+
+
 def test_title_overlay_text_template_substitutes_metadata(qapp):
     track = _title_track()
     title = TitleOverlay(text_template="{title} / {artist}")
