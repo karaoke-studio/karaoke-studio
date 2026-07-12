@@ -807,15 +807,22 @@ def test_font_scripts_are_tabs_and_spacing_lives_on_layout_page(qapp):
     panel = PropertyPanel()
 
     assert not hasattr(panel, "_font_latin_check")
-    assert panel._font_tab_stack.count() == 2
-    assert panel._font_tab_panel._buttons[("left", "japanese")].text() == "日文"
-    assert panel._font_tab_panel._buttons[("left", "latin")].text() == "英数"
+    assert panel._font_tab_stack.count() == 4
+    assert panel._font_tab_panel._buttons[("left", "main")].text() == "主文字"
+    assert panel._font_tab_panel._buttons[("left", "ruby")].text() == "注音"
+    assert panel._font_tab_panel._buttons[("right", "japanese")].text() == "日文"
+    assert panel._font_tab_panel._buttons[("right", "latin")].text() == "英数"
     assert panel._font_tab_stack.currentIndex() == 0
 
-    panel._font_tab_panel._buttons[("left", "latin")].click()
+    panel._font_tab_panel._buttons[("right", "latin")].click()
     qapp.processEvents()
     assert panel._font_tab_stack.currentIndex() == 1
     assert panel._font_latin_combo.isEnabled()
+
+    panel._font_tab_panel._buttons[("left", "ruby")].click()
+    qapp.processEvents()
+    assert panel._font_tab_stack.currentIndex() == 3
+    assert panel._ruby_font_latin_combo.isEnabled()
 
     subgroup_titles = [
         label.text()
@@ -825,6 +832,7 @@ def test_font_scripts_are_tabs_and_spacing_lives_on_layout_page(qapp):
     ]
     assert subgroup_titles == ["字符排版"]
     assert panel._layout_section.isAncestorOf(panel._character_layout_section)
+    assert not panel._layout_section.isAncestorOf(panel._ruby_font_size_spin)
     assert not panel._font_tab_panel.isAncestorOf(panel._letter_spacing_spin)
     assert not panel._font_tab_panel.isAncestorOf(panel._space_width_spin)
     assert panel._italic_check.parentWidget() is panel._allow_biting_check.parentWidget()
@@ -858,6 +866,62 @@ def test_latin_font_overrides_round_trip_and_legacy_values_inherit():
     assert legacy.font_family_latin is None
     assert legacy.latin_font_size_px is None
     assert legacy.latin_font_weight is None
+
+
+def test_ruby_font_defaults_follow_main_until_edited(qapp):
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            font_family="Arial",
+            font_family_latin="Courier New",
+            font_size_px=72,
+            latin_font_size_px=64,
+            font_weight=700,
+            latin_font_weight=600,
+        )
+    )
+
+    assert panel._ruby_font_combo.currentFont().family() == "Arial"
+    assert panel._ruby_font_size_spin.value() == 72
+    assert panel._ruby_font_weight_combo.currentData() == 700
+    assert panel._ruby_font_latin_combo.currentFont().family() == "Courier New"
+    assert panel._ruby_font_latin_size_spin.value() == 64
+    assert panel._ruby_font_latin_weight_combo.currentData() == 600
+
+    panel._font_size_spin.setValue(80)
+    assert panel.subtitle_style.ruby_font_follow_main is True
+    assert panel._ruby_font_size_spin.value() == 80
+
+    panel._ruby_font_size_spin.setValue(34)
+    assert panel.subtitle_style.ruby_font_follow_main is False
+    panel._font_size_spin.setValue(90)
+    assert panel._ruby_font_size_spin.value() == 34
+
+
+def test_layout_ruby_and_direction_controls_are_single_row(qapp):
+    panel = PropertyPanel()
+    panel.setCurrentIndex(1)
+    panel.resize(1000, 800)
+    panel.show()
+    qapp.processEvents()
+
+    assert not panel._ruby_section.isAncestorOf(panel._ruby_font_size_spin)
+    ruby_controls = [
+        panel._ruby_gap_spin,
+        panel._ruby_interval_spin,
+        panel._ruby_alignment_combo,
+    ]
+    assert len({control.geometry().top() for control in ruby_controls}) == 1
+    direction_controls = [
+        panel._line_gap_spin,
+        panel._vertical_check,
+        panel._rtl_check,
+    ]
+    assert len({control.geometry().bottom() for control in direction_controls}) == 1
+    assert not any(
+        label.text() == "书写方向"
+        for label in panel._layout_section.parentWidget().findChildren(QLabel)
+    )
 
 
 def test_property_panel_color_controls_emit_normalized_style(qapp):
@@ -1421,6 +1485,7 @@ def test_property_panel_ruby_controls_emit_style(qapp):
     panel._ruby_gap_spin.setValue(11)
 
     assert emitted[-1].ruby_font_size_px == 34
+    assert emitted[-1].ruby_font_follow_main is False
     assert emitted[-1].ruby_gap_px == 11
 
 

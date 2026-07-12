@@ -2623,11 +2623,39 @@ def _signal_display_lines_for_style(
 
 
 def _build_ruby_font(style: Style) -> QFont:
-    font = QFont(style.font_family, max(style.ruby_font_size_px, 1))
-    font.setPixelSize(max(style.ruby_font_size_px, 1))
-    font.setWeight(QFont.Weight.Medium)
+    family = style.font_family if _ruby_uses_main_font(style) else (
+        style.ruby_font_family or style.font_family
+    )
+    size = _ruby_font_size(style)
+    weight = style.font_weight if _ruby_uses_main_font(style) else (
+        style.ruby_font_weight
+        if style.ruby_font_weight is not None
+        else style.font_weight
+    )
+    font = QFont(family, size)
+    font.setPixelSize(size)
+    font.setWeight(_clamp_weight(int(weight)))
     font.setItalic(style.italic)
     return font
+
+
+def _ruby_uses_main_font(style: Style) -> bool:
+    """旧工程显式保存了非默认注音字号时，视为已经解除跟随。"""
+    return bool(style.ruby_font_follow_main) and all(
+        value is None
+        for value in (
+            style.ruby_font_family,
+            style.ruby_font_family_latin,
+            style.ruby_font_weight,
+            style.ruby_latin_font_size_px,
+            style.ruby_latin_font_weight,
+        )
+    ) and int(style.ruby_font_size_px) == 45
+
+
+def _ruby_font_size(style: Style) -> int:
+    value = style.font_size_px if _ruby_uses_main_font(style) else style.ruby_font_size_px
+    return max(int(value), 1)
 
 
 def _clamp_weight(w: int) -> QFont.Weight:
@@ -2697,7 +2725,7 @@ def _ruby_vertical_extra(style: Style, ruby_metrics: QFontMetrics) -> int:
     return max(
         int(round(
             int(style.ruby_gap_px)
-            + max(style.ruby_font_size_px, 1)
+            + _ruby_font_size(style)
             + max(_ruby_stroke_width(style), 0)
         )),
         0,
@@ -2720,7 +2748,7 @@ def _ruby_baseline_y(
         main_top
         - int(style.ruby_gap_px)
         - _n3_char_box_descent(
-            ruby_metrics, style.ruby_font_size_px, _ruby_stroke_width(style)
+            ruby_metrics, _ruby_font_size(style), _ruby_stroke_width(style)
         )
     ))
 
@@ -4151,6 +4179,12 @@ _SUBTITLE_SCHEME_STYLE_FIELDS: tuple[str, ...] = (
     "shadow_offset_x",
     "shadow_offset_y",
     "ruby_font_size_px",
+    "ruby_font_family",
+    "ruby_font_family_latin",
+    "ruby_font_weight",
+    "ruby_latin_font_size_px",
+    "ruby_latin_font_weight",
+    "ruby_font_follow_main",
     "ruby_color",
     "ruby_gap_px",
     "ruby_stroke_width_px",
@@ -9585,7 +9619,7 @@ _RUBY_UNIT_LAYOUT_CACHE_MAX = 4096
 def _ruby_measure_key(style: Style) -> tuple:
     return (
         style.font_family,
-        max(int(style.ruby_font_size_px), 1),
+        _ruby_font_size(style),
         style.italic,
         _ruby_stroke_width(style),
         _ruby_stroke2_width(style),
@@ -9601,7 +9635,7 @@ def _ruby_measure_resources(style: Style, key: tuple) -> tuple[QFont, Style]:
     ruby_font = _build_ruby_font(style)
     measure_style = replace(
         style,
-        font_size_px=max(int(style.ruby_font_size_px), 1),
+        font_size_px=_ruby_font_size(style),
         stroke_width_px=_ruby_stroke_width(style),
         stroke2_width_px=_ruby_stroke2_width(style),
     )
@@ -9867,7 +9901,7 @@ def _effective_ruby_karaoke_colors(style: Style) -> KaraokeColors:
 
 
 def _ruby_scale(style: Style) -> float:
-    return max(style.ruby_font_size_px, 1) / max(style.font_size_px, 1)
+    return _ruby_font_size(style) / max(style.font_size_px, 1)
 
 
 def _scaled_px(value: int, scale: float) -> int:

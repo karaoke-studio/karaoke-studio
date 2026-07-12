@@ -624,6 +624,23 @@ def _scheme_changes(
         changes["ruby_shadow_offset_x"] = 0
         changes["ruby_shadow_offset_y"] = 0
 
+    # N3 のルビ字体/字号独立于歌詞（未设置时沿 Fallback 链取歌詞漢字字体，但
+    # 字号始终是ルビ自己的值）；本模块默认「注音跟随主文字」会连字号一起跟随
+    # 主文字，导入时显式解除跟随并落地链上解析结果。
+    changes["ruby_font_follow_main"] = False
+    ruby_family = _resolve_font_name(ruby_kanji)
+    if ruby_family:
+        changes["ruby_font_family"] = ruby_family
+    ruby_kana_own = str(_dict(font_infos[4] if len(font_infos) > 4 else {}).get("FontName") or "").strip()
+    ruby_alnum_own = str(_dict(font_infos[5] if len(font_infos) > 5 else {}).get("FontName") or "").strip()
+    if ruby_kana_own and ruby_family and ruby_kana_own != ruby_family:
+        warnings.append(f"{context}：ルビかな独立字体（{ruby_kana_own}）暂不支持，已沿用ルビ漢字字体")
+    if ruby_alnum_own and ruby_alnum_own != (ruby_family or ""):
+        changes["ruby_font_family_latin"] = ruby_alnum_own
+    ruby_weight, ruby_italic = _face_weight_italic(_resolve_face_name(ruby_kanji))
+    changes["ruby_font_weight"] = ruby_weight
+    if ruby_italic != changes["italic"]:
+        warnings.append(f"{context}：注音斜体与主文字不同，本模块注音斜体跟随主文字，已沿用主文字设置")
     ruby_size = _resolve_font_size(ruby_kanji, "CharSize")
     if ruby_size > 0:
         changes["ruby_font_size_px"] = ruby_size

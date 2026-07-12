@@ -457,6 +457,12 @@ class SubtitleStyleScheme:
     shadow_offset_x: Optional[int] = None
     shadow_offset_y: Optional[int] = None
     ruby_font_size_px: Optional[int] = None
+    ruby_font_family: Optional[str] = None
+    ruby_font_family_latin: Optional[str] = None
+    ruby_font_weight: Optional[int] = None
+    ruby_latin_font_size_px: Optional[int] = None
+    ruby_latin_font_weight: Optional[int] = None
+    ruby_font_follow_main: Optional[bool] = None
     ruby_color: Optional[str] = None
     ruby_gap_px: Optional[int] = None
     ruby_stroke_width_px: Optional[int] = None
@@ -537,6 +543,13 @@ class Style:
 
     # ふりがな / ruby（B1）
     ruby_font_size_px: int = 45
+    ruby_font_family: Optional[str] = None
+    ruby_font_family_latin: Optional[str] = None
+    ruby_font_weight: Optional[int] = None
+    ruby_latin_font_size_px: Optional[int] = None
+    ruby_latin_font_weight: Optional[int] = None
+    ruby_font_follow_main: bool = True
+    """新建样式的注音字体跟随主文字；任一注音字体字段被编辑后关闭跟随。"""
     ruby_color: str = "#FF5A6F"
     ruby_gap_px: int = 0
     """NicokaraMaker3 ``LyricsAndRubyInterval`` default: 0 px."""
@@ -969,6 +982,7 @@ def style_from_dict(payload: object) -> Style:
         elif key in {
             "italic",
             "allow_biting",
+            "ruby_font_follow_main",
             "dual_line_layout",
             "right_to_left",
             "vertical",
@@ -1013,11 +1027,18 @@ def style_from_dict(payload: object) -> Style:
                 if value in {"none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"}
                 else defaults.exit_anim
             )
-        elif key == "font_family_latin":
+        elif key in {
+            "font_family_latin",
+            "ruby_font_family",
+            "ruby_font_family_latin",
+        }:
             changes[key] = str(value) if value else None
         elif key in {
             "latin_font_size_px",
             "latin_font_weight",
+            "ruby_font_weight",
+            "ruby_latin_font_size_px",
+            "ruby_latin_font_weight",
         }:
             # 英数轨覆盖：None = 跟随日文轨，序列化保留 null
             changes[key] = None if value is None else _int_value(value, 0)

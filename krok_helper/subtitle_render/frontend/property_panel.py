@@ -121,6 +121,12 @@ _SCHEME_FIELDS = {
     "shadow_offset_x",
     "shadow_offset_y",
     "ruby_font_size_px",
+    "ruby_font_family",
+    "ruby_font_family_latin",
+    "ruby_font_weight",
+    "ruby_latin_font_size_px",
+    "ruby_latin_font_weight",
+    "ruby_font_follow_main",
     "ruby_color",
     "ruby_gap_px",
     "ruby_stroke_width_px",
@@ -2523,105 +2529,26 @@ class PropertyPanel(QWidget):
         section, layout = _inline_section("字体", parent) if inline else _section("字体")
 
         self._font_tab_panel = _FolderTabPanel(
-            (("japanese", "日文"), ("latin", "英数")), (), section
+            (("main", "主文字"), ("ruby", "注音")),
+            (("japanese", "日文"), ("latin", "英数")),
+            section,
         )
         self._font_tab_stack = QStackedWidget(self._font_tab_panel)
-
-        japanese_page = QWidget(self._font_tab_stack)
-        japanese_layout = QVBoxLayout(japanese_page)
-        japanese_layout.setContentsMargins(0, 0, 0, 0)
-        japanese_layout.setSpacing(8)
-        self._font_combo = _WheelFocusedFontComboBox(japanese_page)
-        _compact_control(self._font_combo)
-        self._font_combo.currentFontChanged.connect(
-            lambda font: self._update_style(font_family=font.family())
-        )
-        japanese_layout.addWidget(_field("字体", self._font_combo))
-
-        row = QWidget(japanese_page)
-        row_layout = QGridLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setHorizontalSpacing(8)
-        row_layout.setVerticalSpacing(0)
-
-        self._font_size_spin = _spin(12, 180, suffix=" px")
-        self._font_size_spin.valueChanged.connect(
-            lambda value: self._update_style(font_size_px=value)
-        )
-        row_layout.addWidget(_field("字号", self._font_size_spin), 0, 0)
-
-        self._font_weight_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._font_weight_combo)
-        for label, value in [
-            ("常规 400", 400),
-            ("中等 500", 500),
-            ("半粗 600", 600),
-            ("粗体 700", 700),
-            ("特粗 800", 800),
-            ("黑体 900", 900),
-        ]:
-            self._font_weight_combo.addItem(label, value)
-        self._font_weight_combo.currentIndexChanged.connect(
-            lambda _index: self._update_style(
-                font_weight=int(self._font_weight_combo.currentData())
+        for subject, script in (
+            ("main", "japanese"),
+            ("main", "latin"),
+            ("ruby", "japanese"),
+            ("ruby", "latin"),
+        ):
+            self._font_tab_stack.addWidget(
+                self._make_font_settings_page(subject, script, self._font_tab_stack)
             )
-        )
-        row_layout.addWidget(_field("字重", self._font_weight_combo), 0, 1)
-        row_layout.setColumnStretch(0, 1)
-        row_layout.setColumnStretch(1, 1)
-        japanese_layout.addWidget(row)
-
-        latin_page = QWidget(self._font_tab_stack)
-        latin_layout = QVBoxLayout(latin_page)
-        latin_layout.setContentsMargins(0, 0, 0, 0)
-        latin_layout.setSpacing(8)
-        self._font_latin_combo = _WheelFocusedFontComboBox(latin_page)
-        _compact_control(self._font_latin_combo)
-        self._font_latin_combo.currentFontChanged.connect(self._on_font_latin_changed)
-        self._font_latin_field = _field("字体", self._font_latin_combo)
-        latin_layout.addWidget(self._font_latin_field)
-
-        latin_row = QWidget(latin_page)
-        latin_row_layout = QGridLayout(latin_row)
-        latin_row_layout.setContentsMargins(0, 0, 0, 0)
-        latin_row_layout.setHorizontalSpacing(8)
-        latin_row_layout.setVerticalSpacing(0)
-        self._font_latin_size_spin = _spin(12, 180, suffix=" px")
-        self._font_latin_size_spin.valueChanged.connect(
-            lambda value: self._update_style(latin_font_size_px=value)
-        )
-        latin_row_layout.addWidget(_field("字号", self._font_latin_size_spin), 0, 0)
-
-        self._font_latin_weight_combo = _WheelFocusedComboBox(latin_page)
-        _compact_control(self._font_latin_weight_combo)
-        for label, value in [
-            ("常规 400", 400),
-            ("中等 500", 500),
-            ("半粗 600", 600),
-            ("粗体 700", 700),
-            ("特粗 800", 800),
-            ("黑体 900", 900),
-        ]:
-            self._font_latin_weight_combo.addItem(label, value)
-        self._font_latin_weight_combo.currentIndexChanged.connect(
-            lambda _index: self._update_style(
-                latin_font_weight=int(self._font_latin_weight_combo.currentData())
-            )
-        )
-        latin_row_layout.addWidget(
-            _field("字重", self._font_latin_weight_combo), 0, 1
-        )
-        latin_row_layout.setColumnStretch(0, 1)
-        latin_row_layout.setColumnStretch(1, 1)
-        latin_layout.addWidget(latin_row)
-
-        self._font_tab_stack.addWidget(japanese_page)
-        self._font_tab_stack.addWidget(latin_page)
         self._font_tab_panel.content_layout.addWidget(self._font_tab_stack)
         self._font_tab_panel.leftChanged.connect(
-            lambda key: self._font_tab_stack.setCurrentIndex(
-                1 if key == "latin" else 0
-            )
+            lambda _key: self._sync_font_settings_page()
+        )
+        self._font_tab_panel.rightChanged.connect(
+            lambda _key: self._sync_font_settings_page()
         )
         layout.addWidget(self._font_tab_panel)
 
@@ -2642,9 +2569,114 @@ class PropertyPanel(QWidget):
         flags_row.addStretch(1)
         layout.addLayout(flags_row)
 
-        # 注音的排版参数（字号/间距/排布）属于排版语义，放在「布局」页
-        # （_make_basic_page）；本列只留字体本体设置。
         return section
+
+    def _make_font_settings_page(
+        self, subject: str, script: str, parent: QWidget
+    ) -> QWidget:
+        page = QWidget(parent)
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        font_combo = _WheelFocusedFontComboBox(page)
+        _compact_control(font_combo)
+        size_spin = _spin(8 if subject == "ruby" else 12, 180, suffix=" px")
+        weight_combo = _WheelFocusedComboBox(page)
+        _compact_control(weight_combo)
+        for label, value in [
+            ("常规 400", 400), ("中等 500", 500), ("半粗 600", 600),
+            ("粗体 700", 700), ("特粗 800", 800), ("黑体 900", 900),
+        ]:
+            weight_combo.addItem(label, value)
+
+        if (subject, script) == ("main", "japanese"):
+            self._font_combo = font_combo
+            self._font_size_spin = size_spin
+            self._font_weight_combo = weight_combo
+            font_combo.currentFontChanged.connect(
+                lambda font: self._update_style(font_family=font.family())
+            )
+            size_spin.valueChanged.connect(
+                lambda value: self._update_style(font_size_px=value)
+            )
+            weight_combo.currentIndexChanged.connect(
+                lambda _index: self._update_style(
+                    font_weight=int(weight_combo.currentData())
+                )
+            )
+        elif (subject, script) == ("main", "latin"):
+            self._font_latin_combo = font_combo
+            self._font_latin_size_spin = size_spin
+            self._font_latin_weight_combo = weight_combo
+            font_combo.currentFontChanged.connect(self._on_font_latin_changed)
+            size_spin.valueChanged.connect(
+                lambda value: self._update_style(latin_font_size_px=value)
+            )
+            weight_combo.currentIndexChanged.connect(
+                lambda _index: self._update_style(
+                    latin_font_weight=int(weight_combo.currentData())
+                )
+            )
+        elif (subject, script) == ("ruby", "japanese"):
+            self._ruby_font_combo = font_combo
+            self._ruby_font_size_spin = size_spin
+            self._ruby_font_weight_combo = weight_combo
+            font_combo.currentFontChanged.connect(
+                lambda font: self._update_ruby_font_override(
+                    ruby_font_family=font.family()
+                )
+            )
+            size_spin.valueChanged.connect(
+                lambda value: self._update_ruby_font_override(
+                    ruby_font_size_px=value
+                )
+            )
+            weight_combo.currentIndexChanged.connect(
+                lambda _index: self._update_ruby_font_override(
+                    ruby_font_weight=int(weight_combo.currentData())
+                )
+            )
+        else:
+            self._ruby_font_latin_combo = font_combo
+            self._ruby_font_latin_size_spin = size_spin
+            self._ruby_font_latin_weight_combo = weight_combo
+            font_combo.currentFontChanged.connect(
+                lambda font: self._update_ruby_font_override(
+                    ruby_font_family_latin=font.family()
+                )
+            )
+            size_spin.valueChanged.connect(
+                lambda value: self._update_ruby_font_override(
+                    ruby_latin_font_size_px=value
+                )
+            )
+            weight_combo.currentIndexChanged.connect(
+                lambda _index: self._update_ruby_font_override(
+                    ruby_latin_font_weight=int(weight_combo.currentData())
+                )
+            )
+
+        layout.addWidget(_field("字体", font_combo))
+        row = QWidget(page)
+        row_layout = QGridLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setHorizontalSpacing(8)
+        row_layout.addWidget(_field("字号", size_spin), 0, 0)
+        row_layout.addWidget(_field("字重", weight_combo), 0, 1)
+        row_layout.setColumnStretch(0, 1)
+        row_layout.setColumnStretch(1, 1)
+        layout.addWidget(row)
+        return page
+
+    def _sync_font_settings_page(self) -> None:
+        subject_index = 0 if self._font_tab_panel.current_left() == "main" else 1
+        script_index = 0 if self._font_tab_panel.current_right() == "japanese" else 1
+        self._font_tab_stack.setCurrentIndex(subject_index * 2 + script_index)
+
+    def _update_ruby_font_override(self, **changes) -> None:
+        changes["ruby_font_follow_main"] = False
+        self._update_style(**changes)
 
     def _on_font_latin_changed(self, font: QFont) -> None:
         if self._syncing:
@@ -2692,13 +2724,8 @@ class PropertyPanel(QWidget):
     ) -> QWidget:
         section, layout = _inline_section("注音", parent) if inline else _section("注音")
 
-        grid = _ResponsiveFieldGrid(section, min_column_width=130, max_columns=4)
-
-        self._ruby_font_size_spin = _spin(8, 96, suffix=" px")
-        self._ruby_font_size_spin.valueChanged.connect(
-            lambda value: self._update_style(ruby_font_size_px=value)
-        )
-        grid.add_field("字号", self._ruby_font_size_spin)
+        # 三个控件都很窄（数值框 / 短下拉），列宽阈值放低让常规面板宽度下单行放下。
+        grid = _ResponsiveFieldGrid(section, min_column_width=90, max_columns=3)
 
         self._ruby_gap_spin = _spin(-40, 40, suffix=" px")
         self._ruby_gap_spin.valueChanged.connect(
@@ -3904,43 +3931,35 @@ class PropertyPanel(QWidget):
                 viewport_align=self._viewport_align_combo.currentData()
             )
         )
-        layout.addWidget(_field("对齐", self._viewport_align_combo))
 
-        row = QWidget(section)
-        row_layout = QGridLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setHorizontalSpacing(8)
-        row_layout.setVerticalSpacing(8)
+        grid = _ResponsiveFieldGrid(section, min_column_width=110, max_columns=5)
+        grid.add_field("对齐", self._viewport_align_combo)
 
-        # 位置 X / Y 为 4 位数值框（含上下箭头），窄面板下两个并排会溢出，
-        # 各占整行；缩放 / 旋转较窄，可同行。
         self._viewport_x_spin = _spin(-4000, 4000)
         self._viewport_x_spin.valueChanged.connect(
             lambda value: self._update_style(viewport_offset_x=value)
         )
-        row_layout.addWidget(_field("位置 X", self._viewport_x_spin), 0, 0, 1, 2)
+        grid.add_field("位置 X", self._viewport_x_spin)
 
         self._viewport_y_spin = _spin(-4000, 4000)
         self._viewport_y_spin.valueChanged.connect(
             lambda value: self._update_style(viewport_offset_y=value)
         )
-        row_layout.addWidget(_field("位置 Y", self._viewport_y_spin), 1, 0, 1, 2)
+        grid.add_field("位置 Y", self._viewport_y_spin)
 
         self._viewport_scale_spin = _spin(10, 400, suffix=" %")
         self._viewport_scale_spin.valueChanged.connect(
             lambda value: self._update_style(viewport_scale_pct=value)
         )
-        row_layout.addWidget(_field("缩放", self._viewport_scale_spin), 2, 0)
+        grid.add_field("缩放", self._viewport_scale_spin)
 
         self._viewport_rotation_spin = _spin(-180, 180, suffix=" °")
         self._viewport_rotation_spin.valueChanged.connect(
             lambda value: self._update_style(viewport_rotation_deg=value)
         )
-        row_layout.addWidget(_field("旋转", self._viewport_rotation_spin), 2, 1)
+        grid.add_field("旋转", self._viewport_rotation_spin)
 
-        row_layout.setColumnStretch(0, 1)
-        row_layout.setColumnStretch(1, 1)
-        layout.addWidget(row)
+        layout.addWidget(grid)
         return section
 
     def _make_layout_navigation(self, parent: QWidget) -> QFrame:
@@ -4158,9 +4177,12 @@ class PropertyPanel(QWidget):
         """
         section, layout = _section("垂直与方向")
 
-        grid = _ResponsiveFieldGrid(section, min_column_width=130, max_columns=3)
-
         self._line_gap_spin = _spin(-400, 400, suffix=" px")
+        self._line_gap_spin.setFixedWidth(120)
+        # _spin 默认水平 Ignored，会被 HBox 压到最小宽把「px」单位裁掉。
+        self._line_gap_spin.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         self._line_gap_spin.setToolTip(
             "相邻两行主文字行盒之间的间距（N3 行間），可为负让行盒重叠；"
             "不包含注音高度。"
@@ -4168,27 +4190,23 @@ class PropertyPanel(QWidget):
         self._line_gap_spin.valueChanged.connect(
             lambda value: self._update_layout_field(line_gap_px=value)
         )
-        grid.add_field("行间距", self._line_gap_spin)
-
-        direction_box = QWidget(section)
-        direction_layout = QHBoxLayout(direction_box)
-        direction_layout.setContentsMargins(0, 0, 0, 0)
-        direction_layout.setSpacing(12)
-        self._vertical_check = CheckBox("竖排", direction_box)
+        compact_row = QWidget(section)
+        compact_layout = QHBoxLayout(compact_row)
+        compact_layout.setContentsMargins(0, 0, 0, 0)
+        compact_layout.setSpacing(12)
+        compact_layout.addWidget(_field("行间距", self._line_gap_spin), 0)
+        self._vertical_check = CheckBox("竖排", compact_row)
         self._vertical_check.toggled.connect(
             lambda checked: self._update_style(vertical=checked)
         )
-        direction_layout.addWidget(self._vertical_check)
-        self._rtl_check = CheckBox("从右到左", direction_box)
+        compact_layout.addWidget(self._vertical_check, 0, Qt.AlignmentFlag.AlignBottom)
+        self._rtl_check = CheckBox("从右到左", compact_row)
         self._rtl_check.toggled.connect(
             lambda checked: self._update_style(right_to_left=checked)
         )
-        direction_layout.addWidget(self._rtl_check)
-        direction_layout.addStretch(1)
-
-        layout.addWidget(grid)
-        # 复选框有固有最小宽度，塞进网格单元在窄面板会被截断，单独成行
-        layout.addWidget(_field("书写方向", direction_box))
+        compact_layout.addWidget(self._rtl_check, 0, Qt.AlignmentFlag.AlignBottom)
+        compact_layout.addStretch(1)
+        layout.addWidget(compact_row)
         return section
 
     def _on_line_position_changed(self, _value: str = "") -> None:
@@ -5286,8 +5304,65 @@ class PropertyPanel(QWidget):
             )
             self._italic_check.setChecked(bool(self._scheme_value("italic")))
             self._allow_biting_check.setChecked(bool(self._scheme_value("allow_biting")))
+            ruby_follow = bool(self._scheme_value("ruby_font_follow_main")) and all(
+                self._scheme_value(field) is None
+                for field in (
+                    "ruby_font_family",
+                    "ruby_font_family_latin",
+                    "ruby_font_weight",
+                    "ruby_latin_font_size_px",
+                    "ruby_latin_font_weight",
+                )
+            ) and int(self._scheme_value("ruby_font_size_px")) == 45
+            ruby_family = (
+                self._scheme_value("font_family")
+                if ruby_follow
+                else self._scheme_value("ruby_font_family")
+                or self._scheme_value("font_family")
+            )
+            ruby_size = (
+                self._scheme_value("font_size_px")
+                if ruby_follow
+                else self._scheme_value("ruby_font_size_px")
+            )
+            ruby_weight = (
+                self._scheme_value("font_weight")
+                if ruby_follow
+                else self._scheme_value("ruby_font_weight")
+                or self._scheme_value("font_weight")
+            )
+            self._ruby_font_combo.setCurrentFont(QFont(str(ruby_family)))
+            self._ruby_font_size_spin.setValue(int(ruby_size))
+            self._ruby_font_weight_combo.setCurrentIndex(
+                max(0, self._ruby_font_weight_combo.findData(int(ruby_weight)))
+            )
+            ruby_latin_family = (
+                latin_family
+                if ruby_follow
+                else self._scheme_value("ruby_font_family_latin")
+                or ruby_family
+            )
+            ruby_latin_size = (
+                (latin_size if latin_size is not None else self._scheme_value("font_size_px"))
+                if ruby_follow
+                else self._scheme_value("ruby_latin_font_size_px") or ruby_size
+            )
+            ruby_latin_weight = (
+                (latin_weight if latin_weight is not None else self._scheme_value("font_weight"))
+                if ruby_follow
+                else self._scheme_value("ruby_latin_font_weight") or ruby_weight
+            )
+            self._ruby_font_latin_combo.setCurrentFont(QFont(str(ruby_latin_family)))
+            self._ruby_font_latin_size_spin.setValue(int(ruby_latin_size))
+            self._ruby_font_latin_weight_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._ruby_font_latin_weight_combo.findData(
+                        int(ruby_latin_weight)
+                    ),
+                )
+            )
             self._sync_color_subject_style_controls()
-            self._ruby_font_size_spin.setValue(int(self._scheme_value("ruby_font_size_px")))
             self._ruby_gap_spin.setValue(int(self._scheme_value("ruby_gap_px")))
             self._ruby_interval_spin.setValue(int(self._style.ruby_interval_px))
             self._ruby_alignment_combo.setCurrentIndex(
@@ -5664,6 +5739,12 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         shadow_offset_x=int(panel._scheme_value("shadow_offset_x")),
         shadow_offset_y=int(panel._scheme_value("shadow_offset_y")),
         ruby_font_size_px=int(panel._scheme_value("ruby_font_size_px")),
+        ruby_font_family=panel._scheme_value("ruby_font_family"),
+        ruby_font_family_latin=panel._scheme_value("ruby_font_family_latin"),
+        ruby_font_weight=panel._scheme_value("ruby_font_weight"),
+        ruby_latin_font_size_px=panel._scheme_value("ruby_latin_font_size_px"),
+        ruby_latin_font_weight=panel._scheme_value("ruby_latin_font_weight"),
+        ruby_font_follow_main=bool(panel._scheme_value("ruby_font_follow_main")),
         ruby_color=str(panel._scheme_value("ruby_color")),
         ruby_gap_px=int(panel._scheme_value("ruby_gap_px")),
         ruby_stroke_width_px=panel._scheme_value("ruby_stroke_width_px"),

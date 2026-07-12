@@ -259,7 +259,12 @@ def test_import_global_style_font_and_colors(imported):
     assert colors.after.text.color == "#FF0000"
     assert colors.before.text.color == "#FFFFFF"
     assert colors.before.shadow.color == "#26386A"
-    # ルビ：字号/描边独立解析，配色与主文字一致
+    # ルビ：字体/字号/描边独立解析（解除「跟随主文字」，否则注音会按主字号渲染），
+    # 配色与主文字一致
+    assert style.ruby_font_follow_main is False
+    assert style.ruby_font_family == "UD デジタル 教科書体 N-B"
+    assert style.ruby_font_weight == 700
+    assert style.ruby_font_family_latin is None
     assert style.ruby_font_size_px == 45
     assert style.ruby_stroke_width_px == 10
     assert style.ruby_karaoke_colors is not None
