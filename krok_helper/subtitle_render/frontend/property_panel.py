@@ -2376,18 +2376,23 @@ class PropertyPanel(QWidget):
 
     def _make_subtitle_page(self) -> QWidget:
         scroll, layout = _scroll_page()
-        self._role_section = self._make_scheme_section()
-        self._role_section.set_expanded(False)
-        layout.addWidget(self._role_section)
-
         self._font_color_section = self._make_font_color_section()
+        # 角色选择是颜色/字体的编辑上下文，放在同一卡片的
+        # 顶部导航条，不再单独占一张可折叠卡片。
+        self._role_section = self._font_color_section
         layout.addWidget(self._font_color_section)
 
         layout.addStretch(1)
         return scroll
 
     def _make_font_color_section(self) -> QFrame:
-        section, layout = _section("颜色 / 字体")
+        section, layout = _plain_card()
+        self._scheme_section = section
+        layout.addWidget(
+            self._make_scheme_navigation(section),
+            0,
+            Qt.AlignmentFlag.AlignLeft,
+        )
 
         row = _ResponsivePropertyPair(section)
         self._font_color_row = row
@@ -3045,31 +3050,36 @@ class PropertyPanel(QWidget):
         )
         return button
 
-    def _make_scheme_section(self) -> QFrame:
-        section, layout = _section("角色")
-        self._scheme_section = section
+    def _make_scheme_navigation(self, parent: QWidget) -> QFrame:
+        """颜色/字体卡片的角色导航条。
+
+        角色决定下方正在编辑的样式方案，因此它是卡片导航，而不是一张
+        独立属性卡。导航条用轻微凸起的内层背景和边框与编辑区区分。
+        """
+        nav = QFrame(parent)
+        self._role_navigation = nav
+        nav.setObjectName("SubtitleRoleNavigation")
+        row_layout = QHBoxLayout(nav)
+        row_layout.setContentsMargins(6, 6, 6, 6)
+        row_layout.setSpacing(4)
 
         # 单行排布：角色下拉吸收剩余宽度，四个操作收成紧凑图标按钮。
         # 内部仍叫 _singer_combo（少改动），但现在装的是「角色」：全局默认 + 各角色名。
-        row = QWidget(section)
-        row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(6)
-        self._singer_combo = _WheelFocusedComboBox(section)
+        self._singer_combo = _WheelFocusedComboBox(nav)
         _compact_control(self._singer_combo)
         self._singer_combo.currentIndexChanged.connect(self._on_scheme_combo_changed)
         row_layout.addWidget(self._singer_combo, 1)
 
-        self._add_scheme_button = FluentTransparentToolButton(FIF.ADD, section)
+        self._add_scheme_button = FluentTransparentToolButton(FIF.ADD, nav)
         self._add_scheme_button.setToolTip("新建角色")
         self._add_scheme_button.clicked.connect(lambda _checked=False: self._add_custom_scheme())
-        self._rename_role_button = FluentTransparentToolButton(FIF.EDIT, section)
+        self._rename_role_button = FluentTransparentToolButton(FIF.EDIT, nav)
         self._rename_role_button.setToolTip("重命名当前角色")
         self._rename_role_button.clicked.connect(lambda _checked=False: self._rename_current_role())
-        self._delete_role_button = FluentTransparentToolButton(FIF.DELETE, section)
+        self._delete_role_button = FluentTransparentToolButton(FIF.DELETE, nav)
         self._delete_role_button.setToolTip("删除当前角色")
         self._delete_role_button.clicked.connect(lambda _checked=False: self._delete_current_role())
-        self._manage_presets_button = FluentTransparentToolButton(FIF.PALETTE, section)
+        self._manage_presets_button = FluentTransparentToolButton(FIF.PALETTE, nav)
         self._manage_presets_button.setToolTip("管理预设")
         self._manage_presets_button.clicked.connect(lambda _checked=False: self._open_preset_manager())
         for btn in (
@@ -3083,12 +3093,19 @@ class PropertyPanel(QWidget):
             # 图标按钮无文字，可访问名沿用中文提示
             btn.setAccessibleName(btn.toolTip())
             row_layout.addWidget(btn, 0)
-        # 不加「当前角色」字段标签——卡片标题「角色」已经说明语义，纯浪费一行
-        layout.addWidget(row)
 
-        # 折叠后标题栏保留当前角色摘要（此卡片是面板的高频信息源）
-        self._singer_combo.currentTextChanged.connect(section.set_collapsed_summary)
-        return section
+        themed(
+            nav,
+            lambda: (
+                "QFrame#SubtitleRoleNavigation { "
+                f"background: {palette().secondary_button_bg}; "
+                f"border: 1px solid {palette().card_border}; "
+                "border-radius: 7px; "
+                "}"
+            ),
+        )
+
+        return nav
 
     def _make_effects_page(self) -> QWidget:
         scroll, layout = _scroll_page()
@@ -4878,6 +4895,23 @@ class PropertyPanel(QWidget):
             index = self._singer_combo.findData(selected_key)
             if index >= 0:
                 self._singer_combo.setCurrentIndex(index)
+        self._sync_scheme_combo_width()
+
+    def _sync_scheme_combo_width(self) -> None:
+        """按最长角色名设置下拉框宽度，不占用导航条的全部剩余空间。"""
+        if not hasattr(self, "_singer_combo"):
+            return
+        metrics = self._singer_combo.fontMetrics()
+        text_width = max(
+            (
+                metrics.horizontalAdvance(str(self._singer_combo.itemText(index)))
+                for index in range(self._singer_combo.count())
+            ),
+            default=0,
+        )
+        # 为文字左右留白和下拉箭头预留 48px；超长角色名交给
+        # ComboBox 内部省略，不让导航条再次铺满整张卡片。
+        self._singer_combo.setFixedWidth(max(120, min(280, text_width + 48)))
 
     def _add_custom_scheme(self, name: Optional[str] = None) -> None:
         if name is None or isinstance(name, bool):
@@ -5126,12 +5160,6 @@ class PropertyPanel(QWidget):
         was_syncing = self._syncing
         self._syncing = True
         try:
-            # 卡片标题显示当前编辑目标：角色选中时这里的修改只写进该角色的
-            # 方案，不改全局——不标出来用户会以为参数无效。
-            role_name = self._current_custom_scheme_name()
-            suffix = f"（角色：{role_name}）" if role_name else ""
-            if hasattr(self, "_font_color_section"):
-                self._font_color_section.header.setText(f"颜色 / 字体{suffix}")
             self._font_combo.setCurrentFont(QFont(str(self._scheme_value("font_family"))))
             latin_family = self._scheme_value("font_family_latin") or self._scheme_value(
                 "font_family"
@@ -5751,6 +5779,32 @@ def _section(
         ),
     )
     return section, section.content_layout
+
+
+def _plain_card() -> tuple[QFrame, QVBoxLayout]:
+    """无标题、不折叠的属性卡片，用于顶部导航已表明编辑上下文的页面。"""
+    card = QFrame()
+    card.setObjectName("SubtitlePropertyCard")
+    layout = QVBoxLayout(card)
+    layout.setContentsMargins(12, 12, 12, 12)
+    layout.setSpacing(10)
+    themed(
+        card,
+        lambda: (
+            f"""
+            QFrame#SubtitlePropertyCard {{
+                background: {palette().card_bg};
+                border: 1px solid {palette().card_border};
+                border-radius: 8px;
+            }}
+            QFrame#SubtitlePropertyCard QWidget {{
+                background: transparent;
+            }}
+            {control_qss("QFrame#SubtitlePropertyCard")}
+            """
+        ),
+    )
+    return card, layout
 
 
 def _section_pair(first: QWidget, second: QWidget) -> _ResponsivePropertyPair:

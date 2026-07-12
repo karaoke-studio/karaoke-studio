@@ -441,28 +441,31 @@ def test_property_panel_subtitle_page_has_no_horizontal_scroll(qapp):
     assert panel._singer_combo.parentWidget() is not panel._line_margin_spin.parentWidget()
     subtitle_layout = subtitle_page.widget().layout()
     first_section = subtitle_layout.itemAt(0).widget()
-    assert first_section.header.text() == "角色"
+    assert first_section.objectName() == "SubtitlePropertyCard"
+    assert not hasattr(first_section, "header")
+    assert panel._role_section is first_section
+    assert panel._font_color_section is first_section
 
 
 def test_property_panel_sections_are_collapsible(qapp):
     panel = PropertyPanel()
-    subtitle_page = panel.widget(0)
-    subtitle_layout = subtitle_page.widget().layout()
-    first_section = subtitle_layout.itemAt(0).widget()
+    effects_page = panel.widget(3)
+    effects_layout = effects_page.widget().layout()
+    first_section = effects_layout.itemAt(0).widget()
     header = first_section.header
     content = first_section.layout().itemAt(1).widget()
 
-    assert header.text() == "角色"
-    assert content.isHidden()
-    assert header.arrowType() == Qt.ArrowType.RightArrow
-
-    header.click()
+    assert header.text() == "入退场动画"
     assert not content.isHidden()
     assert header.arrowType() == Qt.ArrowType.DownArrow
 
     header.click()
     assert content.isHidden()
     assert header.arrowType() == Qt.ArrowType.RightArrow
+
+    header.click()
+    assert not content.isHidden()
+    assert header.arrowType() == Qt.ArrowType.DownArrow
 
 
 def test_property_panel_font_and_color_sections_are_side_by_side(qapp):
@@ -471,6 +474,11 @@ def test_property_panel_font_and_color_sections_are_side_by_side(qapp):
     panel.show()
     qapp.processEvents()
 
+    subtitle_layout = panel.widget(0).widget().layout()
+    assert subtitle_layout.count() == 2  # 一张组合卡片 + 底部 stretch
+    assert panel._font_color_section.isAncestorOf(panel._role_navigation)
+    assert panel._scheme_section is panel._font_color_section
+    assert panel._role_navigation.geometry().bottom() < panel._font_color_row.geometry().top()
     assert panel._font_section.parentWidget() is panel._font_color_row
     assert panel._color_section.parentWidget() is panel._font_color_row
     assert panel._font_section.geometry().top() == panel._color_section.geometry().top()
@@ -509,6 +517,17 @@ def test_property_panel_font_and_color_sections_stack_in_narrow_viewport(qapp):
 
     subtitle_page = panel.widget(0)
     assert subtitle_page.widget().width() <= subtitle_page.viewport().width()
+
+
+def test_role_navigation_prioritizes_combo_width_at_minimum_panel_width(qapp):
+    panel = PropertyPanel()
+    panel.resize(320, 800)
+    panel.show()
+    qapp.processEvents()
+
+    assert panel.currentIndex() == 0
+    assert panel._singer_combo.width() == 120
+    assert panel._role_navigation.width() < panel._font_color_section.width()
 
 
 def test_subtitle_preview_frame_keeps_child_at_16_9(qapp):
@@ -2344,46 +2363,31 @@ def test_apply_main_colors_to_ruby_clears_width_overrides(qapp):
     assert style.ruby_shadow_offset_x is None
 
 
-def test_scheme_section_headers_show_role_target(qapp):
-    """#4/#6 可用性：角色选中时卡片标题标出编辑目标。"""
+def test_role_navigation_selects_target_without_card_header(qapp):
+    """当前角色只由紧凑导航条显示，外层卡片没有重复标题。"""
     panel = PropertyPanel()
     panel.set_roles(["主唱"])
     for i in range(panel._singer_combo.count()):
         if "主唱" in str(panel._singer_combo.itemText(i)):
             panel._singer_combo.setCurrentIndex(i)
             break
-    assert "主唱" in panel._font_color_section.header.text()
+    assert "主唱" in panel._singer_combo.currentText()
+    assert panel._font_color_section.objectName() == "SubtitlePropertyCard"
+    assert not hasattr(panel._font_color_section, "header")
 
     panel._singer_combo.setCurrentIndex(0)  # 回全局默认
-    assert panel._font_color_section.header.text() == "颜色 / 字体"
+    assert panel._singer_combo.currentText() == "全局默认"
 
 
-def test_scheme_section_header_shows_current_role_when_collapsed(qapp):
-    """角色卡片折叠后标题栏保留当前角色摘要，展开时隐藏。"""
+def test_role_combo_width_tracks_longest_option_with_cap(qapp):
+    """角色下拉框跟随内容自然宽度，但超长名称不能撑满整张卡片。"""
     panel = PropertyPanel()
     panel.show()
     qapp.processEvents()
-    section = panel._scheme_section
 
-    # 角色区默认折叠 → 摘要直接可见；展开后隐藏（正文自身可见，不重复）
-    assert section._summary_label.isVisible()
-    assert section._summary_label.text() == panel._singer_combo.currentText()
-
-    section.set_expanded(True)
-    assert not section._summary_label.isVisible()
-
-    section.set_expanded(False)
-    assert section._summary_label.isVisible()
-
-    panel.set_roles(["主唱A"])
-    for i in range(panel._singer_combo.count()):
-        if "主唱A" in str(panel._singer_combo.itemText(i)):
-            panel._singer_combo.setCurrentIndex(i)
-            break
-    assert section._summary_label.text() == panel._singer_combo.currentText()
-
-    section.set_expanded(True)
-    assert not section._summary_label.isVisible()
+    assert panel._singer_combo.width() == 120
+    panel.set_roles(["这是一个非常非常长的角色名称用于测试"])
+    assert 120 < panel._singer_combo.width() <= 280
     panel.close()
     panel.deleteLater()
     qapp.processEvents()
