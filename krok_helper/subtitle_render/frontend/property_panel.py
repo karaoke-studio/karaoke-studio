@@ -3976,6 +3976,11 @@ class PropertyPanel(QWidget):
         )
 
         self._vertical_margin_field = QWidget(section)
+        # 居中锚定时余白字段隐藏但保留占位，避免示意图与左下的字符排版
+        # 随行高塌缩整体上移（位置稳定 > 空行观感）。
+        retain_policy = self._vertical_margin_field.sizePolicy()
+        retain_policy.setRetainSizeWhenHidden(True)
+        self._vertical_margin_field.setSizePolicy(retain_policy)
         vertical_margin_layout = QHBoxLayout(self._vertical_margin_field)
         vertical_margin_layout.setContentsMargins(0, 0, 0, 0)
         vertical_margin_layout.setSpacing(8)
