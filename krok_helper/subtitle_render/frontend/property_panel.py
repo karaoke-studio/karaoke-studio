@@ -1825,20 +1825,38 @@ class _SchematicBoard(QWidget):
         right: QWidget,
         parent: Optional[QWidget] = None,
         *,
+        header_left: Optional[QWidget] = None,
+        header_right: Optional[QWidget] = None,
         top_left: Optional[QWidget] = None,
+        top_center: Optional[QWidget] = None,
+        bottom_left: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._left = left
         self._center = center
         self._bottom = bottom
         self._right = right
+        self._header_left = header_left
+        self._header_right = header_right
         self._top_left = top_left
+        self._top_center = top_center
+        self._bottom_left = bottom_left
         self._wide: Optional[bool] = None
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(0, 0, 0, 0)
-        self._grid.setHorizontalSpacing(12)
+        self._grid.setHorizontalSpacing(8)
         self._grid.setVerticalSpacing(8)
-        for child in (left, center, bottom, right, top_left):
+        for child in (
+            left,
+            center,
+            bottom,
+            right,
+            header_left,
+            header_right,
+            top_left,
+            top_center,
+            bottom_left,
+        ):
             if child is not None:
                 child.setParent(self)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -1849,14 +1867,24 @@ class _SchematicBoard(QWidget):
         return max(widget.minimumSizeHint().width(), widget.sizeHint().width())
 
     def _wide_width_hint(self) -> int:
-        # 示意图低于 ~180px 就失去辨识度，作为中列的保底宽度
+        # 中列现在通常是固定 16:9 幕布；断点必须使用它的真实宽度，
+        # 否则 600px 左右的面板会误判为三列并导致行布局覆盖幕布。
+        center_width = max(
+            180,
+            self._center.minimumWidth(),
+            self._center.minimumSizeHint().width(),
+            self._center.sizeHint().width(),
+            self._side_width(self._top_center)
+            if self._top_center is not None
+            else 0,
+        )
         return (
             max(
                 self._side_width(self._left),
                 self._side_width(self._top_left) if self._top_left is not None else 0,
             )
             + self._side_width(self._right)
-            + 180
+            + center_width
             + self._grid.horizontalSpacing() * 2
         )
 
@@ -1867,10 +1895,22 @@ class _SchematicBoard(QWidget):
         width = max(
             self._left.minimumSizeHint().width(),
             self._right.minimumSizeHint().width(),
+            self._header_left.minimumSizeHint().width()
+            if self._header_left is not None
+            else 0,
+            self._header_right.minimumSizeHint().width()
+            if self._header_right is not None
+            else 0,
             self._bottom.minimumSizeHint().width(),
             self._center.minimumSizeHint().width(),
             self._top_left.minimumSizeHint().width()
             if self._top_left is not None
+            else 0,
+            self._top_center.minimumSizeHint().width()
+            if self._top_center is not None
+            else 0,
+            self._bottom_left.minimumSizeHint().width()
+            if self._bottom_left is not None
             else 0,
         )
         return QSize(width, base.height())
@@ -1887,28 +1927,65 @@ class _SchematicBoard(QWidget):
         while self._grid.count():
             self._grid.takeAt(0)
         if wide:
+            if self._header_left is not None:
+                self._grid.addWidget(
+                    self._header_left,
+                    0,
+                    0,
+                    1,
+                    2,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                )
+            if self._header_right is not None:
+                self._grid.addWidget(
+                    self._header_right,
+                    0,
+                    1,
+                    1,
+                    2,
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop,
+                )
             self._grid.addWidget(
                 self._left,
-                0,
+                1,
                 0,
                 Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
             )
             if self._top_left is not None:
                 self._grid.addWidget(
                     self._top_left,
+                    1,
                     0,
-                    0,
-                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
+                    Qt.AlignmentFlag.AlignTop,
                 )
-            self._grid.addWidget(self._center, 0, 1)
+            if self._top_center is not None:
+                self._grid.addWidget(
+                    self._top_center,
+                    0,
+                    1,
+                    Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom,
+                )
+            if self._bottom_left is not None:
+                self._grid.addWidget(
+                    self._bottom_left,
+                    1,
+                    0,
+                    2,
+                    1,
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignBottom,
+                )
+            self._grid.addWidget(self._center, 1, 1)
             self._grid.addWidget(
                 self._right,
-                0,
+                1,
                 2,
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop,
             )
             self._grid.addWidget(
-                self._bottom, 1, 1, Qt.AlignmentFlag.AlignHCenter
+                self._bottom,
+                2,
+                1,
+                Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
             )
             # 幕布是固定 16:9 的紧凑中心列；两侧列均分剩余空间。
             # 左右余白在左列右对齐，因而紧贴幕布而不是贴中间列边界。
@@ -1916,18 +1993,50 @@ class _SchematicBoard(QWidget):
             self._grid.setColumnStretch(1, 0)
             self._grid.setColumnStretch(2, 1)
         else:
-            self._grid.addWidget(self._center, 0, 0)
-            self._grid.addWidget(self._bottom, 1, 0, Qt.AlignmentFlag.AlignHCenter)
-            next_row = 2
+            next_row = 0
+            if self._header_left is not None:
+                self._grid.addWidget(
+                    self._header_left,
+                    next_row,
+                    0,
+                    Qt.AlignmentFlag.AlignLeft,
+                )
+                next_row += 1
+            if self._header_right is not None:
+                self._grid.addWidget(
+                    self._header_right,
+                    next_row,
+                    0,
+                    Qt.AlignmentFlag.AlignLeft,
+                )
+                next_row += 1
+            if self._top_center is not None:
+                self._grid.addWidget(
+                    self._top_center, next_row, 0, Qt.AlignmentFlag.AlignHCenter
+                )
+                next_row += 1
+            self._grid.addWidget(self._center, next_row, 0)
+            next_row += 1
+            self._grid.addWidget(
+                self._bottom, next_row, 0, Qt.AlignmentFlag.AlignHCenter
+            )
+            next_row += 1
             if self._top_left is not None:
                 self._grid.addWidget(self._top_left, next_row, 0)
                 next_row += 1
             self._grid.addWidget(self._left, next_row, 0)
-            self._grid.addWidget(self._right, next_row + 1, 0)
+            next_row += 1
+            if self._bottom_left is not None:
+                self._grid.addWidget(self._bottom_left, next_row, 0)
+                next_row += 1
+            self._grid.addWidget(self._right, next_row, 0)
             self._grid.setColumnStretch(0, 1)
             self._grid.setColumnStretch(1, 0)
             self._grid.setColumnStretch(2, 0)
         self.updateGeometry()
+        # 换行后子控件的 sizeHint 可能改变；Qt 不一定会再派发一次
+        # resizeEvent。下一轮事件再核对一次，消除断点附近的迟滞。
+        QTimer.singleShot(0, self._sync)
 
 
 class _ResponsivePropertyPair(QWidget):
@@ -2286,26 +2395,10 @@ class PropertyPanel(QWidget):
             self._viewport_y_spin.setValue(self._style.viewport_offset_y)
             self._viewport_scale_spin.setValue(self._style.viewport_scale_pct)
             self._viewport_rotation_spin.setValue(self._style.viewport_rotation_deg)
-            self._dual_line_check.setChecked(self._style.dual_line_layout)
             self._rtl_check.setChecked(self._style.right_to_left)
             self._vertical_check.setChecked(self._style.vertical)
-            self._horizontal_layout_combo.setCurrentIndex(
-                max(
-                    0,
-                    self._horizontal_layout_combo.findData(
-                        self._style.line_horizontal_layout
-                    ),
-                )
-            )
             self._refresh_layout_combo()
             self._sync_layout_editor_controls()
-            self._row1_align_seg.setValue(self._style.row1_align)
-            self._row1_x_spin.setValue(self._style.row1_offset_x)
-            self._row1_y_spin.setValue(self._style.row1_offset_y)
-            self._row2_align_seg.setValue(self._style.row2_align)
-            self._row2_x_spin.setValue(self._style.row2_offset_x)
-            self._row2_y_spin.setValue(self._style.row2_offset_y)
-            self._sync_per_row_enabled()
             self._line_lead_spin.setValue(self._style.line_lead_in_ms)
             self._line_tail_spin.setValue(self._style.line_tail_ms)
             self._line_offset_spin.setValue(self._style.timing_offset_ms)
@@ -2349,13 +2442,7 @@ class PropertyPanel(QWidget):
 
     def _make_basic_page(self) -> QWidget:
         scroll, layout = _scroll_page()
-        # 宽面板时相邻小卡片两两并排（窄面板自动叠回单列），保持原有阅读顺序
-        self._character_layout_section = self._make_character_layout_section()
-        layout.addWidget(
-            _section_pair(
-                self._make_layout_scheme_section(), self._character_layout_section
-            )
-        )
+        # 布局方案、行结构与字符排版共享同一张无标题工作区卡片。
         layout.addWidget(self._make_row_structure_section())
         # 注音的字号/间距/排布是排版参数，归布局页（配色仍在字体页的颜色列）
         self._ruby_section = self._make_ruby_section()
@@ -2564,24 +2651,41 @@ class PropertyPanel(QWidget):
             return
         self._update_style(font_family_latin=font.family())
 
-    def _make_character_layout_section(self) -> QFrame:
-        """Global character spacing belongs to layout, not a font script tab."""
-        section, layout = _section("字符排版")
-        grid = _ResponsiveFieldGrid(section, min_column_width=130, max_columns=2)
+    def _make_character_layout_group(self, parent: QWidget) -> QWidget:
+        """左侧紧凑字符排版组，与智能水平共享幕布侧边区域。"""
+        group = QWidget(parent)
+        self._character_layout_section = group
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(_subgroup_label("字符排版"))
+
+        fields = QWidget(group)
+        fields_layout = QHBoxLayout(fields)
+        fields_layout.setContentsMargins(0, 0, 0, 0)
+        fields_layout.setSpacing(8)
 
         self._letter_spacing_spin = _spin(-120, 120, suffix=" px")
+        self._letter_spacing_spin.setFixedWidth(120)
+        self._letter_spacing_spin.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         self._letter_spacing_spin.valueChanged.connect(
             lambda value: self._update_style(letter_spacing_px=value)
         )
-        grid.add_field("字间距", self._letter_spacing_spin)
+        fields_layout.addWidget(_field("字间距", self._letter_spacing_spin))
 
         self._space_width_spin = _spin(10, 100, suffix=" %")
+        self._space_width_spin.setFixedWidth(120)
+        self._space_width_spin.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
         self._space_width_spin.valueChanged.connect(
             lambda value: self._update_style(space_width_percent=value)
         )
-        grid.add_field("空格宽度", self._space_width_spin)
-        layout.addWidget(grid)
-        return section
+        fields_layout.addWidget(_field("空格宽度", self._space_width_spin))
+        layout.addWidget(fields)
+        return group
 
     def _make_ruby_section(
         self, parent: Optional[QWidget] = None, *, inline: bool = False
@@ -3839,11 +3943,16 @@ class PropertyPanel(QWidget):
         layout.addWidget(row)
         return section
 
-    def _make_layout_scheme_section(self) -> QFrame:
-        """布局方案（N3 レイアウト設定）：默认布局 = Style 自身字段。"""
-        section, layout = _section("布局方案")
+    def _make_layout_navigation(self, parent: QWidget) -> QFrame:
+        """行结构卡片顶部的布局方案导航条。"""
+        nav = QFrame(parent)
+        self._layout_navigation = nav
+        nav.setObjectName("SubtitleLayoutNavigation")
+        layout = QVBoxLayout(nav)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
 
-        self._layout_combo = _WheelFocusedComboBox(section)
+        self._layout_combo = _WheelFocusedComboBox(nav)
         _compact_control(self._layout_combo)
         self._layout_combo.setToolTip(
             "布局方案（N3 レイアウト設定）：下方「行位置 / 行距 / 余白 / 行布局」"
@@ -3855,21 +3964,21 @@ class PropertyPanel(QWidget):
 
         # 与角色卡片同款：下拉吸收剩余宽度，管理操作收成单行紧凑图标按钮；
         # 不加「当前布局」字段标签——卡片标题「布局方案」已经说明语义。
-        combo_row = QWidget(section)
+        combo_row = QWidget(nav)
         combo_row_layout = QHBoxLayout(combo_row)
         combo_row_layout.setContentsMargins(0, 0, 0, 0)
         combo_row_layout.setSpacing(6)
         combo_row_layout.addWidget(self._layout_combo, 1)
 
-        self._add_layout_btn = FluentTransparentToolButton(FIF.ADD, section)
+        self._add_layout_btn = FluentTransparentToolButton(FIF.ADD, nav)
         self._add_layout_btn.setToolTip("新建布局（以当前布局的值复制）")
         self._add_layout_btn.clicked.connect(lambda _checked=False: self._on_add_layout())
-        self._rename_layout_btn = FluentTransparentToolButton(FIF.EDIT, section)
+        self._rename_layout_btn = FluentTransparentToolButton(FIF.EDIT, nav)
         self._rename_layout_btn.setToolTip("重命名当前布局")
         self._rename_layout_btn.clicked.connect(
             lambda _checked=False: self._on_rename_layout()
         )
-        self._delete_layout_btn = FluentTransparentToolButton(FIF.DELETE, section)
+        self._delete_layout_btn = FluentTransparentToolButton(FIF.DELETE, nav)
         self._delete_layout_btn.setToolTip("删除当前布局")
         self._delete_layout_btn.clicked.connect(
             lambda _checked=False: self._on_delete_layout()
@@ -3882,18 +3991,58 @@ class PropertyPanel(QWidget):
             combo_row_layout.addWidget(btn, 0)
         layout.addWidget(combo_row)
 
-        assign_btn_row = QWidget(section)
+        themed(
+            nav,
+            lambda: (
+                "QFrame#SubtitleLayoutNavigation { "
+                f"background: {palette().secondary_button_bg}; "
+                f"border: 1px solid {palette().card_border}; "
+                "border-radius: 7px; "
+                "}"
+            ),
+        )
+        return nav
+
+    def _make_smart_horizontal_field(self, parent: QWidget) -> QWidget:
+        """布局方案导航下方的智能水平配置。"""
+        self._smart_horizontal_combo = _WheelFocusedComboBox(parent)
+        _compact_control(self._smart_horizontal_combo)
+        self._smart_horizontal_combo.setFixedWidth(180)
+        for label, value in [
+            ("左右余白对齐", "equal_margins"),
+            ("中心位置对齐", "center_position"),
+            ("不调整", "none"),
+        ]:
+            self._smart_horizontal_combo.addItem(label, value)
+        self._smart_horizontal_combo.setToolTip(
+            "智能水平配置：短行自动向画面中央收拢。左右余白对齐 = "
+            "按页整体判断（N3 默认）；中心位置对齐 = 逐行判断；"
+            "不调整 = 行永远贴左右边距，同时关闭单行页居中。"
+        )
+        self._smart_horizontal_combo.currentIndexChanged.connect(
+            lambda _index: self._update_layout_field(
+                smart_horizontal=self._smart_horizontal_combo.currentData()
+            )
+        )
+        return _field("智能水平", self._smart_horizontal_combo)
+
+    def _make_layout_assignment_actions(self, parent: QWidget) -> QWidget:
+        """行结构工作区右上角的批量布局操作。"""
+        assign_btn_row = QWidget(parent)
+        self._layout_assignment_actions = assign_btn_row
         assign_btn_layout = QHBoxLayout(assign_btn_row)
         assign_btn_layout.setContentsMargins(0, 0, 0, 0)
         assign_btn_layout.setSpacing(6)
-        self._assign_all_btn = FluentPushButton("应用到全部行", section)
+        self._assign_all_btn = FluentPushButton("应用到全部行", assign_btn_row)
         self._assign_all_btn.setToolTip("所有歌词行统一使用当前布局（N3 全部统一）。")
         self._assign_all_btn.clicked.connect(
             lambda _checked=False: self.layoutAssignAllRequested.emit(
                 self._current_layout_index()
             )
         )
-        self._auto_assign_btn = FluentPushButton("按行数自动分配", section)
+        self._auto_assign_btn = FluentPushButton(
+            "按行数自动分配", assign_btn_row
+        )
         self._auto_assign_btn.setToolTip(
             "每一页按页内行数匹配行数相同的布局（找不到按行数递减匹配，"
             "仍找不到用默认布局）——对齐 N3 自动布局选择器。"
@@ -3904,29 +4053,22 @@ class PropertyPanel(QWidget):
         for btn in (self._assign_all_btn, self._auto_assign_btn):
             btn.setMinimumHeight(30)
             assign_btn_layout.addWidget(btn, 1)
-        layout.addWidget(assign_btn_row)
-
-        # 折叠后标题栏保留当前布局名（同角色卡片的折叠摘要）
-        self._layout_section = section
-        return section
+        return assign_btn_row
 
     def _make_row_structure_section(self) -> QFrame:
         """行结构：示意图居中，锚定/余白/行布局按空间语义贴边（N3 式编排）。"""
-        section, layout = _section("行结构")
+        section, layout = _plain_card()
+        self._layout_section = section
+        navigation = self._make_layout_navigation(section)
+        assignment_actions = self._make_layout_assignment_actions(section)
 
-        # 锚定和左右余白共享幕布所在行：前者贴左上，后者垂直居中。
-        # 不把锚定单独放成一整行，避免将幕布向下推。
+        # 上下配置贴幕布中上；智能水平占用原来的左上位置。
         self._line_position_seg = _GlyphSegment(_POSITION_SEGMENT_OPTIONS, section)
         self._line_position_seg.setValue("bottom")
         self._line_position_seg.valueChanged.connect(self._on_line_position_changed)
-        position_field = _field("上下配置", self._line_position_seg)
-
-        # 左列（示意图左侧）：只保留左右余白，由 _SchematicBoard
-        # 将整列相对幕布垂直居中。
-        left_col = QWidget(section)
-        left_layout = QVBoxLayout(left_col)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(0)
+        self._line_position_field = _field(
+            "上下配置", self._line_position_seg
+        )
 
         self._horizontal_margin_spin = _spin(0, 800, suffix=" px")
         # 三位数 + 单位足够；必须改回 Fixed 策略——_compact_control 的
@@ -3942,7 +4084,25 @@ class PropertyPanel(QWidget):
         self._horizontal_margin_spin.valueChanged.connect(
             self._on_horizontal_margin_changed
         )
-        left_layout.addWidget(_field("左右余白", self._horizontal_margin_spin))
+        self._horizontal_margin_field = _field(
+            "左右余白", self._horizontal_margin_spin
+        )
+
+        self._smart_horizontal_field = self._make_smart_horizontal_field(section)
+        self._left_layout_controls = QWidget(section)
+        self._left_layout_controls.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+        )
+        left_controls_layout = QVBoxLayout(self._left_layout_controls)
+        left_controls_layout.setContentsMargins(0, 0, 0, 0)
+        left_controls_layout.setSpacing(8)
+        left_controls_layout.addWidget(
+            self._smart_horizontal_field, 0, Qt.AlignmentFlag.AlignLeft
+        )
+        left_controls_layout.addWidget(
+            self._horizontal_margin_field, 0, Qt.AlignmentFlag.AlignRight
+        )
+        self._character_layout_group = self._make_character_layout_group(section)
 
         # 中列：布局示意图；下方用单行表单贴上/下余白。
         self._layout_schematic = _LayoutSchematic(section)
@@ -3976,60 +4136,18 @@ class PropertyPanel(QWidget):
         vertical_margin_layout.addWidget(self._line_margin_spin)
 
         self._schematic_board = _SchematicBoard(
-            left_col,
+            QWidget(section),
             self._layout_schematic,
             self._vertical_margin_field,
             self._make_line_alignments_box(section),
             section,
-            top_left=position_field,
+            header_left=navigation,
+            header_right=assignment_actions,
+            top_left=self._left_layout_controls,
+            top_center=self._line_position_field,
+            bottom_left=self._character_layout_group,
         )
         layout.addWidget(self._schematic_board)
-
-        self._dual_line_check = CheckBox("多行显示", section)
-        self._dual_line_check.setToolTip(
-            "开启后按「行布局」列表的行数轮换显示（默认上左下右双行）；"
-            "关闭则一次只显示一行。"
-        )
-        self._dual_line_check.toggled.connect(self._on_dual_line_toggled)
-        layout.addWidget(self._dual_line_check)
-
-        grid = _ResponsiveFieldGrid(section, min_column_width=130, max_columns=2)
-
-        self._horizontal_layout_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._horizontal_layout_combo)
-        for label, value in [
-            ("上左下右", "asymmetric"),
-            ("居中", "center"),
-            ("逐行独立", "per_row"),
-        ]:
-            self._horizontal_layout_combo.addItem(label, value)
-        self._horizontal_layout_combo.currentIndexChanged.connect(
-            lambda _index: self._on_horizontal_layout_changed()
-        )
-        grid.add_field("水平布局", self._horizontal_layout_combo)
-
-        self._smart_horizontal_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._smart_horizontal_combo)
-        for label, value in [
-            ("左右余白对齐", "equal_margins"),
-            ("中心位置对齐", "center_position"),
-            ("不调整", "none"),
-        ]:
-            self._smart_horizontal_combo.addItem(label, value)
-        self._smart_horizontal_combo.setToolTip(
-            "智能水平配置（N3 スマート水平配置，仅「上左下右」布局）：短行自动向画面"
-            "中央收拢。左右余白对齐 = 按页整体判断（N3 默认）；中心位置对齐 = "
-            "逐行判断；不调整 = 行永远贴左右边距，同时关闭单行页居中。"
-        )
-        self._smart_horizontal_combo.currentIndexChanged.connect(
-            lambda _index: self._update_layout_field(
-                smart_horizontal=self._smart_horizontal_combo.currentData()
-            )
-        )
-        grid.add_field("智能水平", self._smart_horizontal_combo)
-
-        layout.addWidget(grid)
-        layout.addWidget(self._make_per_row_box(section))
         return section
 
     def _make_vertical_layout_section(self) -> QFrame:
@@ -4147,8 +4265,19 @@ class PropertyPanel(QWidget):
         editable = self._current_layout_index() > 0
         self._rename_layout_btn.setEnabled(editable)
         self._delete_layout_btn.setEnabled(editable)
-        # 刷新期间信号被屏蔽，折叠摘要在这里显式更新（覆盖改名/增删路径）
-        self._layout_section.set_collapsed_summary(combo.currentText())
+        self._sync_layout_combo_width()
+
+    def _sync_layout_combo_width(self) -> None:
+        """布局方案下拉框按最长方案名自然展开，不铺满行结构卡片。"""
+        metrics = self._layout_combo.fontMetrics()
+        text_width = max(
+            (
+                metrics.horizontalAdvance(str(self._layout_combo.itemText(index)))
+                for index in range(self._layout_combo.count())
+            ),
+            default=0,
+        )
+        self._layout_combo.setFixedWidth(max(120, min(280, text_width + 48)))
 
     def _sync_layout_editor_controls(self) -> None:
         values = self._current_layout_values()
@@ -4258,7 +4387,41 @@ class PropertyPanel(QWidget):
 
     def _current_layout_alignments(self) -> list:
         source = self._current_layout_source()
-        return list(source.line_alignments) or ["left"]
+        alignments = list(source.line_alignments) or ["left"]
+        # 旧项目可能仍带「单行 / 居中 / 逐行独立」字段。新界面不再
+        # 暴露这两个模式开关，因此把它们投影成右侧「行布局」的直接行列表。
+        if not self._style.dual_line_layout:
+            if self._style.line_horizontal_layout == "center":
+                return ["center"]
+            if self._style.line_horizontal_layout == "per_row":
+                return [self._style.row1_align]
+            return alignments[:1]
+        if self._style.line_horizontal_layout == "center":
+            return ["center"] * len(alignments)
+        if self._style.line_horizontal_layout == "per_row":
+            return [self._style.row1_align, self._style.row2_align]
+        return alignments
+
+    def _update_direct_line_alignments(self, alignments: list[str]) -> None:
+        """行列表是新 UI 的唯一水平布局来源，写入时将旧模式归一化。"""
+        normalized = [_normalize_horizontal_align(value) for value in alignments]
+        index = self._current_layout_index()
+        if index <= 0:
+            self._update_style(
+                line_alignments=normalized,
+                dual_line_layout=True,
+                line_horizontal_layout="asymmetric",
+            )
+            return
+        layouts = list(self._style.layouts)
+        layouts[index - 1] = replace(
+            layouts[index - 1], line_alignments=normalized
+        )
+        self._update_style(
+            layouts=layouts,
+            dual_line_layout=True,
+            line_horizontal_layout="asymmetric",
+        )
 
     def _rebuild_line_alignment_rows(self) -> None:
         while self._line_alignment_rows.count():
@@ -4299,7 +4462,7 @@ class PropertyPanel(QWidget):
         if not (0 <= index < len(alignments)) or alignments[index] == value:
             return
         alignments[index] = value
-        self._update_layout_field(line_alignments=alignments)
+        self._update_direct_line_alignments(alignments)
 
     def _on_add_line_alignment(self) -> None:
         alignments = self._current_layout_alignments()
@@ -4309,7 +4472,7 @@ class PropertyPanel(QWidget):
             alignments.insert(0, alignments[0])
         else:
             alignments.append(alignments[-1])
-        self._update_layout_field(line_alignments=alignments)
+        self._update_direct_line_alignments(alignments)
         self._rebuild_line_alignment_rows()
 
     def _on_remove_line_alignment(self, index: int) -> None:
@@ -4317,71 +4480,8 @@ class PropertyPanel(QWidget):
         if len(alignments) <= 1 or not (0 <= index < len(alignments)):
             return
         del alignments[index]
-        self._update_layout_field(line_alignments=alignments)
+        self._update_direct_line_alignments(alignments)
         self._rebuild_line_alignment_rows()
-
-    def _make_per_row_box(self, parent: QWidget) -> QWidget:
-        """逐行独立布局控件（仅「水平布局 = 逐行独立」时显示）。"""
-        box = self._per_row_box = QWidget(parent)
-        root = QVBoxLayout(box)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(8)
-
-        # 每个歌词行单独一个网格：宽面板「对齐/X/Y」排成一行，窄面板
-        # 按列数折行，不会把一行/二行的字段混在同一排。
-        grid1 = _ResponsiveFieldGrid(box, min_column_width=110, max_columns=3)
-        self._row1_align_seg = self._make_align_segment(box, "row1_align")
-        grid1.add_field("一行对齐", self._row1_align_seg)
-        self._row1_x_spin = self._make_offset_spin("row1_offset_x")
-        grid1.add_field("一行 X", self._row1_x_spin)
-        self._row1_y_spin = self._make_offset_spin("row1_offset_y")
-        grid1.add_field("一行 Y", self._row1_y_spin)
-        root.addWidget(grid1)
-
-        grid2 = _ResponsiveFieldGrid(box, min_column_width=110, max_columns=3)
-        self._row2_align_seg = self._make_align_segment(box, "row2_align")
-        grid2.add_field("二行对齐", self._row2_align_seg)
-        self._row2_x_spin = self._make_offset_spin("row2_offset_x")
-        grid2.add_field("二行 X", self._row2_x_spin)
-        self._row2_y_spin = self._make_offset_spin("row2_offset_y")
-        grid2.add_field("二行 Y", self._row2_y_spin)
-        root.addWidget(grid2)
-        return box
-
-    def _make_align_segment(self, parent: QWidget, field_name: str) -> _GlyphSegment:
-        seg = _GlyphSegment(_ALIGN_SEGMENT_OPTIONS, parent)
-        seg.valueChanged.connect(
-            lambda value: self._update_style(**{field_name: value})
-        )
-        return seg
-
-    def _make_offset_spin(self, field_name: str) -> _WheelFocusedSpinBox:
-        # 不加 " px" 后缀：窄面板下两列并排会横向溢出，单位由字段标签隐含。
-        spin = _spin(-4000, 4000)
-        spin.valueChanged.connect(lambda value: self._update_style(**{field_name: value}))
-        return spin
-
-    def _on_dual_line_toggled(self, checked: bool) -> None:
-        self._update_style(dual_line_layout=checked)
-        self._sync_per_row_enabled()
-
-    def _on_horizontal_layout_changed(self) -> None:
-        self._update_style(
-            line_horizontal_layout=self._horizontal_layout_combo.currentData()
-        )
-        self._sync_per_row_enabled()
-
-    def _sync_per_row_enabled(self) -> None:
-        # 行布局列表与逐行独立框互斥（跟随「水平布局」），置灰会留下
-        # 大片死区，所以整个隐藏而不是禁用。
-        if not hasattr(self, "_per_row_box"):
-            return
-        self._per_row_box.setVisible(self._style.line_horizontal_layout == "per_row")
-        if hasattr(self, "_line_alignments_box"):
-            self._line_alignments_box.setVisible(
-                self._style.line_horizontal_layout == "asymmetric"
-                and self._style.dual_line_layout
-            )
 
     def _refresh_layout_schematic(self) -> None:
         if not hasattr(self, "_layout_schematic"):
@@ -4389,18 +4489,14 @@ class PropertyPanel(QWidget):
         values = self._current_layout_values()
         style = self._style
         self._layout_schematic.set_state(
-            mode=style.line_horizontal_layout,
-            dual_line=style.dual_line_layout,
-            alignments=list(values["line_alignments"]) or ["left"],
+            mode="asymmetric",
+            dual_line=True,
+            alignments=self._current_layout_alignments(),
             y_position=values["line_y_position"],
             y_margin=int(values["line_y_margin_px"]),
             gap=int(values["line_gap_px"]),
             h_margin=int(values["horizontal_margin_px"]),
             font_px=int(style.font_size_px or 70),
-            rows=[
-                (style.row1_align, style.row1_offset_x, style.row1_offset_y),
-                (style.row2_align, style.row2_offset_x, style.row2_offset_y),
-            ],
             vertical=bool(style.vertical),
         )
 

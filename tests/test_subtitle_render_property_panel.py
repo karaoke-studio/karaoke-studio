@@ -64,7 +64,6 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
         panel._title_latin_check,
         panel._title_italic_check,
         panel._lit_shadow_check,
-        panel._dual_line_check,
         panel._vertical_check,
         panel._rtl_check,
         panel._sync_ending_check,
@@ -225,19 +224,14 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._viewport_rotation_spin.value() == -30
     assert panel._line_position_seg.value() == "top"
     assert panel._line_margin_spin.value() == 120
-    assert not panel._dual_line_check.isChecked()
     assert panel._rtl_check.isChecked()
     assert panel._vertical_check.isChecked()
-    assert panel._horizontal_layout_combo.currentData() == "per_row"
     assert panel._line_gap_spin.value() == 66
     assert panel._horizontal_margin_spin.value() == 77
-    assert panel._row1_align_seg.value() == "center"
-    assert panel._row1_x_spin.value() == 11
-    assert panel._row1_y_spin.value() == -22
-    assert panel._row2_align_seg.value() == "left"
-    assert panel._row2_x_spin.value() == 33
-    assert panel._row2_y_spin.value() == 44
-    assert not panel._per_row_box.isHidden()
+    # 旧项目的「单行 + 逐行独立」投影为右侧唯一的行布局列表。
+    assert panel._current_layout_alignments() == ["center"]
+    assert not hasattr(panel, "_dual_line_check")
+    assert not hasattr(panel, "_horizontal_layout_combo")
     assert panel._line_lead_spin.value() == 900
     assert panel._line_tail_spin.value() == 1100
     assert panel._line_offset_spin.value() == -120
@@ -547,15 +541,27 @@ def test_subtitle_preview_frame_keeps_child_at_16_9(qapp):
 def test_schematic_board_places_margin_controls_beside_and_below_screen(qapp):
     left = QWidget()
     top_left = QWidget()
+    top_center = QWidget()
+    bottom_left = QWidget()
     center = QWidget()
     bottom = QWidget()
     right = QWidget()
     left.setFixedSize(100, 60)
     top_left.setFixedSize(100, 40)
+    top_center.setFixedSize(120, 40)
+    bottom_left.setFixedSize(120, 40)
     center.setFixedSize(320, 180)
     bottom.setFixedSize(180, 32)
     right.setFixedSize(100, 60)
-    board = _SchematicBoard(left, center, bottom, right, top_left=top_left)
+    board = _SchematicBoard(
+        left,
+        center,
+        bottom,
+        right,
+        top_left=top_left,
+        top_center=top_center,
+        bottom_left=bottom_left,
+    )
 
     board.resize(700, 240)
     board.show()
@@ -565,6 +571,12 @@ def test_schematic_board_places_margin_controls_beside_and_below_screen(qapp):
     assert center.geometry().left() - left.geometry().right() <= 13
     assert top_left.geometry().right() < center.geometry().left()
     assert top_left.geometry().top() == center.geometry().top()
+    assert top_center.geometry().bottom() < center.geometry().top()
+    assert top_center.geometry().center().x() == pytest.approx(
+        center.geometry().center().x(), abs=1
+    )
+    assert bottom_left.geometry().bottom() == bottom.geometry().bottom()
+    assert bottom_left.geometry().right() < center.geometry().left()
     assert left.geometry().center().y() == pytest.approx(
         center.geometry().center().y(), abs=1
     )
@@ -572,6 +584,53 @@ def test_schematic_board_places_margin_controls_beside_and_below_screen(qapp):
     assert bottom.geometry().center().x() == pytest.approx(
         center.geometry().center().x(), abs=1
     )
+
+
+def test_layout_schematic_preserves_columns_until_controls_would_collide(qapp):
+    panel = PropertyPanel()
+    panel.setCurrentIndex(1)
+    panel.resize(680, 800)
+    panel.show()
+    qapp.processEvents()
+
+    assert panel._schematic_board._wide is True
+    assert panel._layout_navigation.geometry().top() == (
+        panel._layout_assignment_actions.geometry().top()
+    )
+    assert panel._smart_horizontal_field.mapTo(
+        panel._schematic_board, QPoint()
+    ).x() < panel._layout_schematic.geometry().left()
+    assert panel._layout_schematic.geometry().right() < (
+        panel._line_alignments_box.geometry().left()
+    )
+
+
+def test_layout_schematic_stacks_cleanly_after_collision_breakpoint(qapp):
+    panel = PropertyPanel()
+    panel.setCurrentIndex(1)
+    panel.resize(660, 1000)
+    panel.show()
+    qapp.processEvents()
+
+    board = panel._schematic_board
+    assert board.width() < board._wide_width_hint()
+    assert board._wide is False
+    ordered = [
+        panel._layout_navigation,
+        panel._layout_assignment_actions,
+        panel._line_position_field,
+        panel._layout_schematic,
+        panel._vertical_margin_field,
+        panel._left_layout_controls,
+        panel._character_layout_group,
+        panel._line_alignments_box,
+    ]
+    tops = [widget.mapTo(board, QPoint()).y() for widget in ordered]
+    assert tops == sorted(tops)
+    for widget in ordered:
+        top_left = widget.mapTo(board, QPoint())
+        assert top_left.x() >= 0
+        assert top_left.x() + widget.width() <= board.width()
 
 
 def test_vertical_margin_label_follows_line_anchor(qapp):
@@ -592,27 +651,13 @@ def test_vertical_margin_label_follows_line_anchor(qapp):
 def test_property_panel_basic_page_has_no_screen_section(qapp):
     panel = PropertyPanel()
     basic_layout = panel.widget(1).widget().layout()
-    section_titles = []
-    for index in range(basic_layout.count() - 1):
-        widget = basic_layout.itemAt(index).widget()
-        if hasattr(widget, "header"):
-            section_titles.append(widget.header.text())
-        else:
-            # 宽面板下两两并排的卡片对（_ResponsivePropertyPair）
-            pair_layout = widget.layout()
-            section_titles.extend(
-                pair_layout.itemAt(pair_index).widget().header.text()
-                for pair_index in range(pair_layout.count())
-            )
-
-    assert section_titles == [
-        "布局方案",
-        "字符排版",
-        "行结构",
-        "注音",
-        "垂直与方向",
-        "视图",
-    ]
+    assert basic_layout.itemAt(0).widget() is panel._layout_section
+    assert panel._layout_section.objectName() == "SubtitlePropertyCard"
+    pair = basic_layout.itemAt(1).widget()
+    assert [
+        pair.layout().itemAt(index).widget().header.text()
+        for index in range(pair.layout().count())
+    ] == ["注音", "垂直与方向"]
     assert not hasattr(panel, "_screen_preset_combo")
     # 视图是低频的整体变换，默认折叠
     viewport_section = basic_layout.itemAt(basic_layout.count() - 2).widget()
@@ -625,6 +670,89 @@ def test_property_panel_basic_page_has_no_screen_section(qapp):
         for index in range(timing_layout.count() - 1)
     ]
     assert timing_titles == ["时间"]
+
+
+def test_layout_navigation_is_merged_above_row_structure(qapp):
+    panel = PropertyPanel()
+    panel.setCurrentIndex(1)
+    panel.resize(1000, 800)
+    panel.show()
+    qapp.processEvents()
+
+    basic_layout = panel.widget(1).widget().layout()
+    assert basic_layout.itemAt(0).widget() is panel._layout_section
+    assert panel._layout_section.height() < 360
+    assert panel._layout_section.isAncestorOf(panel._layout_navigation)
+    assert panel._layout_navigation.geometry().right() < (
+        panel._layout_assignment_actions.geometry().left()
+    )
+    assert panel._layout_navigation.geometry().top() == (
+        panel._layout_assignment_actions.geometry().top()
+    )
+    assert panel._layout_navigation.geometry().right() < (
+        panel._line_position_field.geometry().left()
+    )
+    assert panel._line_position_field.geometry().right() < (
+        panel._layout_assignment_actions.geometry().left()
+    )
+    assert panel._layout_navigation.width() < panel._layout_section.width()
+    assert not panel._layout_navigation.isAncestorOf(panel._smart_horizontal_field)
+    smart_top_left = panel._smart_horizontal_field.mapTo(
+        panel._schematic_board, QPoint()
+    )
+    assert smart_top_left.x() + panel._smart_horizontal_field.width() < (
+        panel._layout_schematic.geometry().left()
+    )
+    assert smart_top_left.y() == panel._layout_schematic.geometry().top()
+    horizontal_margin_top_left = panel._horizontal_margin_field.mapTo(
+        panel._schematic_board, QPoint()
+    )
+    assert horizontal_margin_top_left.y() > (
+        smart_top_left.y() + panel._smart_horizontal_field.height()
+    )
+    assert panel._line_position_field.geometry().bottom() < (
+        panel._layout_schematic.geometry().top()
+    )
+    assert panel._line_position_field.geometry().center().x() == pytest.approx(
+        panel._layout_schematic.geometry().center().x(), abs=1
+    )
+    character_top_left = panel._character_layout_group.mapTo(
+        panel._schematic_board, QPoint()
+    )
+    assert character_top_left.y() > (
+        horizontal_margin_top_left.y() + panel._horizontal_margin_field.height()
+    )
+    assert character_top_left.x() + panel._character_layout_group.width() < (
+        panel._layout_schematic.geometry().left()
+    )
+    assert 105 <= panel._letter_spacing_spin.width() <= 120
+    assert 105 <= panel._space_width_spin.width() <= 120
+    horizontal_gap = panel._layout_schematic.geometry().left() - (
+        horizontal_margin_top_left.x() + panel._horizontal_margin_field.width()
+    )
+    line_margin_top_left = panel._line_margin_spin.mapTo(
+        panel._schematic_board, QPoint()
+    )
+    vertical_gap = line_margin_top_left.y() - (
+        panel._layout_schematic.geometry().top()
+        + panel._layout_schematic.height()
+    )
+    assert horizontal_gap == pytest.approx(vertical_gap, abs=1)
+    assert panel._letter_spacing_spin.height() == panel._line_margin_spin.height()
+    assert panel._space_width_spin.height() == panel._line_margin_spin.height()
+    letter_top_left = panel._letter_spacing_spin.mapTo(
+        panel._schematic_board, QPoint()
+    )
+    space_top_left = panel._space_width_spin.mapTo(
+        panel._schematic_board, QPoint()
+    )
+    line_margin_bottom = line_margin_top_left.y() + panel._line_margin_spin.height()
+    assert letter_top_left.y() + panel._letter_spacing_spin.height() == (
+        line_margin_bottom
+    )
+    assert space_top_left.y() + panel._space_width_spin.height() == (
+        line_margin_bottom
+    )
 
 
 def test_property_panel_uses_horizontal_text_tabs_in_expected_order(qapp):
@@ -689,7 +817,14 @@ def test_font_scripts_are_tabs_and_spacing_lives_on_layout_page(qapp):
     assert panel._font_tab_stack.currentIndex() == 1
     assert panel._font_latin_combo.isEnabled()
 
-    assert panel._character_layout_section.header.text() == "字符排版"
+    subgroup_titles = [
+        label.text()
+        for label in panel._character_layout_section.findChildren(
+            QLabel, "SubtitlePropertySubheading"
+        )
+    ]
+    assert subgroup_titles == ["字符排版"]
+    assert panel._layout_section.isAncestorOf(panel._character_layout_section)
     assert not panel._font_tab_panel.isAncestorOf(panel._letter_spacing_spin)
     assert not panel._font_tab_panel.isAncestorOf(panel._space_width_spin)
     assert panel._italic_check.parentWidget() is panel._allow_biting_check.parentWidget()
@@ -1301,10 +1436,6 @@ def test_property_panel_layout_controls_emit_style(qapp):
     emitted: list[Style] = []
     panel.styleChanged.connect(emitted.append)
 
-    panel._dual_line_check.setChecked(False)
-    panel._horizontal_layout_combo.setCurrentIndex(
-        panel._horizontal_layout_combo.findData("center")
-    )
     panel._line_margin_spin.setValue(123)
     panel._line_gap_spin.setValue(70)
     panel._horizontal_margin_spin.setValue(31)
@@ -1312,10 +1443,10 @@ def test_property_panel_layout_controls_emit_style(qapp):
     panel._rtl_check.setChecked(True)
     panel._vertical_check.setChecked(True)
 
-    assert emitted[-1].dual_line_layout is False
+    assert emitted[-1].dual_line_layout is True
     assert emitted[-1].right_to_left is True
     assert emitted[-1].vertical is True
-    assert emitted[-1].line_horizontal_layout == "center"
+    assert emitted[-1].line_horizontal_layout == "asymmetric"
     assert emitted[-1].line_y_margin_px == 123
     assert emitted[-1].line_gap_px == 70
     assert emitted[-1].horizontal_margin_px == 31
@@ -1324,56 +1455,41 @@ def test_property_panel_layout_controls_emit_style(qapp):
     assert emitted[-1].lower_line_right_margin_px == 31
 
 
-def test_property_panel_per_row_controls_emit_style(qapp):
+def test_property_panel_line_layout_directly_controls_rows(qapp):
     panel = PropertyPanel()
     emitted: list[Style] = []
     panel.styleChanged.connect(emitted.append)
 
-    panel._horizontal_layout_combo.setCurrentIndex(
-        panel._horizontal_layout_combo.findData("per_row")
-    )
-    assert not panel._per_row_box.isHidden()
+    assert panel._current_layout_alignments() == ["left", "right"]
+    panel._on_line_alignment_changed(0, "center")
 
-    panel._row1_align_seg.setValue("center")
-    panel._row1_x_spin.setValue(120)
-    panel._row1_y_spin.setValue(-15)
-    panel._row2_align_seg.setValue("left")
-    panel._row2_x_spin.setValue(-60)
-    panel._row2_y_spin.setValue(25)
+    assert emitted[-1].line_alignments == ["center", "right"]
+    assert emitted[-1].dual_line_layout is True
+    assert emitted[-1].line_horizontal_layout == "asymmetric"
 
-    assert emitted[-1].line_horizontal_layout == "per_row"
-    assert emitted[-1].row1_align == "center"
-    assert emitted[-1].row1_offset_x == 120
-    assert emitted[-1].row1_offset_y == -15
-    assert emitted[-1].row2_align == "left"
-    assert emitted[-1].row2_offset_x == -60
-    assert emitted[-1].row2_offset_y == 25
+    panel._on_add_line_alignment()
+    assert len(emitted[-1].line_alignments) == 3
+    panel._on_remove_line_alignment(0)
+    assert len(emitted[-1].line_alignments) == 2
 
 
-def test_property_panel_per_row_box_hidden_for_other_layouts(qapp):
-    """行布局列表与逐行独立框互斥：置灰会留死区，改为整个隐藏。"""
+def test_property_panel_legacy_layout_modes_project_into_line_list(qapp):
+    """旧模式只用于导入投影；用户一旦编辑行列表就归一化为新逻辑。"""
     panel = PropertyPanel()
-    # 默认 asymmetric + 多行 → 显示行布局列表，隐藏逐行控件
-    assert panel._per_row_box.isHidden()
+    panel.set_style(
+        Style(
+            dual_line_layout=False,
+            line_horizontal_layout="per_row",
+            row1_align="center",
+        )
+    )
+    assert panel._current_layout_alignments() == ["center"]
     assert not panel._line_alignments_box.isHidden()
-    panel._horizontal_layout_combo.setCurrentIndex(
-        panel._horizontal_layout_combo.findData("per_row")
-    )
-    assert not panel._per_row_box.isHidden()
-    assert panel._line_alignments_box.isHidden()
-    panel._horizontal_layout_combo.setCurrentIndex(
-        panel._horizontal_layout_combo.findData("center")
-    )
-    # 居中布局两者都无意义，全部收起
-    assert panel._per_row_box.isHidden()
-    assert panel._line_alignments_box.isHidden()
-    panel._horizontal_layout_combo.setCurrentIndex(
-        panel._horizontal_layout_combo.findData("asymmetric")
-    )
-    assert not panel._line_alignments_box.isHidden()
-    # 关掉多行显示后行布局列表也收起
-    panel._dual_line_check.setChecked(False)
-    assert panel._line_alignments_box.isHidden()
+
+    panel._on_line_alignment_changed(0, "right")
+    assert panel.subtitle_style.line_alignments == ["right"]
+    assert panel.subtitle_style.dual_line_layout is True
+    assert panel.subtitle_style.line_horizontal_layout == "asymmetric"
 
 
 def test_property_panel_viewport_controls_emit_style(qapp):
