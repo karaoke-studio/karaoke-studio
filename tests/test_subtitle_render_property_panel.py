@@ -61,8 +61,6 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
     checkboxes = (
         panel._italic_check,
         panel._allow_biting_check,
-        panel._title_latin_check,
-        panel._title_italic_check,
         panel._lit_shadow_check,
         panel._vertical_check,
         panel._rtl_check,
@@ -77,7 +75,7 @@ def test_property_panel_uses_fluent_form_controls(qapp):
 
     assert isinstance(panel._font_combo, ComboBox)
     assert isinstance(panel._font_latin_combo, ComboBox)
-    assert isinstance(panel._title_font_combo, ComboBox)
+    assert isinstance(panel._title_layout_combo, ComboBox)
     assert isinstance(panel._font_weight_combo, ComboBox)
     assert isinstance(panel._font_latin_weight_combo, ComboBox)
     assert isinstance(panel._font_size_spin, SpinBox)
@@ -1883,8 +1881,10 @@ def test_property_panel_hides_presets_when_subtitle_has_no_roles(qapp):
 
     panel.set_roles([])
 
-    assert panel._singer_combo.count() == 1
+    # 全局默认 + 内置「标题」方案（恒在），预设不自动进入角色下拉
+    assert panel._singer_combo.count() == 2
     assert panel._singer_combo.currentData() == "global"
+    assert panel._singer_combo.findData("custom:标题") >= 0
     assert panel._singer_combo.findData("custom:蓝色方案") == -1
     assert panel.preset_schemes["蓝色方案"].fill_color == "#123456"
 
@@ -2494,20 +2494,21 @@ def test_property_panel_layout_selector_edits_selected_layout(qapp):
     emitted = []
     panel.styleChanged.connect(emitted.append)
 
+    base_count = len(Style().layouts)  # 内置タイトル左上
     panel._on_add_layout()
-    assert len(panel.subtitle_style.layouts) == 1
-    assert panel._current_layout_index() == 1
+    assert len(panel.subtitle_style.layouts) == base_count + 1
+    assert panel._current_layout_index() == base_count + 1
 
     # 编辑写入选中的布局，不动默认布局字段
     panel._line_gap_spin.setValue(33)
-    assert emitted[-1].layouts[0].line_gap_px == 33
+    assert emitted[-1].layouts[base_count].line_gap_px == 33
     assert emitted[-1].line_gap_px == Style().line_gap_px
 
     # 切回默认布局 → 编辑写回 Style 自身
     panel._layout_combo.setCurrentIndex(0)
     panel._line_gap_spin.setValue(44)
     assert emitted[-1].line_gap_px == 44
-    assert emitted[-1].layouts[0].line_gap_px == 33
+    assert emitted[-1].layouts[base_count].line_gap_px == 33
 
 
 def test_ruby_color_subject_edits_write_ruby_fields(qapp):

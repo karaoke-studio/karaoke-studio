@@ -454,6 +454,7 @@ from krok_helper.subtitle_render.models import (
     RubyAnnotation,
     Style,
     SubtitleStyleScheme,
+    TITLE_SCHEME_NAME,
     TimingLine,
     TimingTrack,
     TitleOverlay,
@@ -551,13 +552,14 @@ def frame_content_intervals(
             intervals.append(lyric_bounds)
 
         if with_title and title_opacity > 0.0 and style.title_overlay is not None:
+            resolved_title = resolve_title_overlay(style)
             title_layout = _layout_title_overlay(
-                logical_w, logical_h, entry_track, style.title_overlay
+                logical_w, logical_h, entry_track, resolved_title
             )
             if title_layout is not None:
                 title_bounds = _TEXT_RUN_COMPOSITOR.vertical_bounds(
                     LayerContext(t_ms=track_t_ms, logical_w=logical_w, logical_h=logical_h),
-                    [_TitleOverlayLayer(title_layout, style.title_overlay, title_opacity)],
+                    [_TitleOverlayLayer(title_layout, resolved_title, title_opacity)],
                 )
                 if title_bounds is not None:
                     intervals.append(title_bounds)
@@ -747,16 +749,82 @@ def _paint_track_to_painter(
         painter.restore()
 
     # 标题字幕 overlay（B7）：静态文字，画在屏幕坐标系（不随「视图」变换 / 行布局），
-    # 在歌词之上独立绘制。
+    # 在歌词之上独立绘制。外观由「标题」配色方案与布局引用解析。
     if title_opacity > 0.0 and style.title_overlay is not None:
         _paint_title_overlay(
-            painter, logical_w, logical_h, track, style.title_overlay, title_opacity
+            painter, logical_w, logical_h, track, resolve_title_overlay(style), title_opacity
         )
 
 
 # ---------------------------------------------------------------------------
 # 标题字幕 overlay（B7）
 # ---------------------------------------------------------------------------
+
+
+def _title_layout_source(style: Style, index: Optional[int]):
+    """标题布局引用 → 几何来源（0 = 默认布局即 ``Style`` 自身；悬空返回 None）。"""
+    if index is None:
+        return None
+    index = int(index)
+    if index == 0:
+        return style
+    if 1 <= index <= len(style.layouts):
+        return style.layouts[index - 1]
+    return None
+
+
+def resolve_title_overlay(style: Style) -> Optional[TitleOverlay]:
+    """把「标题」配色方案与布局引用解析成有效 ``TitleOverlay``。
+
+    字体/颜色来自 ``custom_style_schemes[TITLE_SCHEME_NAME]`` 与全局样式的合并
+    结果（标题永不走字，取走字前配色）；位置/行距来自 ``layout_index`` 引用的
+    布局。方案或布局缺失（旧工程迁移前 / 引用悬空）时保留字段原值。
+    """
+    title = style.title_overlay
+    if title is None:
+        return None
+    changes: dict[str, object] = {}
+    if TITLE_SCHEME_NAME in style.custom_style_schemes:
+        merged = _style_for_role(style, TITLE_SCHEME_NAME)
+        colors = _effective_karaoke_colors(merged).before
+        changes.update(
+            font_family=merged.font_family,
+            font_family_latin=merged.font_family_latin,
+            font_size_px=int(merged.font_size_px),
+            font_weight=int(merged.font_weight),
+            italic=bool(merged.italic),
+            letter_spacing_px=int(merged.letter_spacing_px),
+            fill=colors.text,
+            stroke=colors.stroke,
+            stroke_width_px=int(merged.stroke_width_px),
+            stroke2=colors.stroke2,
+            stroke2_width_px=int(merged.stroke2_width_px),
+            decoration_kind=merged.decoration_kind,
+            glow_radius_px=int(merged.glow_before_radius_px),
+            glow_concentration_level=int(merged.glow_concentration_level),
+            shadow=colors.shadow,
+            shadow_offset_x=int(merged.shadow_offset_x),
+            shadow_offset_y=int(merged.shadow_offset_y),
+        )
+    source = _title_layout_source(style, title.layout_index)
+    if source is not None:
+        alignments = list(source.line_alignments) or ["left"]
+        horizontal = alignments[0]
+        vertical = source.line_y_position
+        changes.update(
+            anchor=(
+                "center"
+                if (vertical, horizontal) == ("center", "center")
+                else f"{vertical}_{horizontal}"
+            ),
+            align=horizontal,
+            offset_x=int(source.horizontal_margin_px),
+            offset_y=int(source.line_y_margin_px),
+            line_gap_px=int(source.line_gap_px),
+        )
+    if not changes:
+        return title
+    return replace(title, **changes)
 
 
 _TITLE_SEPARATOR_CHARS = " \t/|・-–—~　"

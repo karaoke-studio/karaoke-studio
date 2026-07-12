@@ -309,8 +309,9 @@ def test_import_blur_concentration_for_scheme_ruby_and_title(tmp_path):
 
     assert scheme.glow_concentration_level == 2
     assert scheme.ruby_glow_concentration_level == 2
-    assert style.title_overlay is not None
-    assert style.title_overlay.glow_concentration_level == 2
+    # 标题引用 FontIndex=1（青配色）→ 同步进「标题」方案
+    title_scheme = style.custom_style_schemes["标题"]
+    assert title_scheme.glow_concentration_level == 2
     assert not any("BlurLevel" in warning or "ブラー浓度" in warning for warning in result.warnings)
 
 
@@ -319,18 +320,28 @@ def test_import_title_overlay(imported):
     title = style.title_overlay
     assert title is not None and title.enabled
     assert title.text_template == "曲名"
-    # FontIndex=1 → 青配色 的字体设置
-    assert title.font_family == "UD デジタル 教科書体 N-B"
-    # 标题永不走字 → ワイプ前配色
-    assert title.fill.color == "#FFFFFF"
-    # LayoutIndex=1 → タイトル左上（Top+Left，边距 50/50）
-    assert title.anchor == "top_left"
-    assert title.align == "left"
-    assert title.offset_x == 50
-    assert title.offset_y == 50
+    # LayoutIndex=1 → 引用タイトル左上布局（几何由布局解析，不再展开进 TitleOverlay）
+    assert title.layout_index == 1
+    assert style.layouts[0].name == "タイトル左上"
+    assert style.layouts[0].line_y_position == "top"
+    # FontIndex=1（青配色）→ 写入「标题」配色方案；标题永不走字 → 渲染取ワイプ前
+    scheme = style.custom_style_schemes["标题"]
+    assert scheme.font_family == "UD デジタル 教科書体 N-B"
+    assert scheme.karaoke_colors.before.text.color == "#FFFFFF"
+    assert scheme.decoration_kind == "glow"
     # Head + HeadEnd 哨兵 → 整段显示
     assert title.show_mode == "whole"
     assert title.fade_in_ms == 0 and title.fade_out_ms == 0
+
+
+def test_import_title_scheme_always_present(tmp_path):
+    """N3 项目没有标题时也保底写入默认「标题」方案（渲染/编辑入口恒可用）。"""
+    payload = _project_payload(tmp_path)
+    payload["TitleInfos"] = []
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+    assert style.title_overlay is None
+    assert "标题" in style.custom_style_schemes
 
 
 def test_import_per_line_layout_and_roles(imported):

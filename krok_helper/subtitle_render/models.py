@@ -17,6 +17,7 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
 from dataclasses import dataclass, field, fields, replace
 from typing import Literal, Optional
 
@@ -276,6 +277,14 @@ TITLE_ANCHORS: tuple[TitleAnchor, ...] = (
 TitleShowMode = Literal["whole", "head", "tail", "head_tail"]
 TITLE_SHOW_MODES: tuple[TitleShowMode, ...] = ("whole", "head", "tail", "head_tail")
 
+TITLE_SCHEME_NAME = "标题"
+"""标题外观所引用的配色方案名：标题的字体与颜色统一由
+``custom_style_schemes[TITLE_SCHEME_NAME]`` 描述（在字体页与其他角色方案一起编辑），
+``TitleOverlay`` 只保留文字内容、布局引用与显示时段。"""
+
+TITLE_LAYOUT_NAME = "タイトル左上"
+"""默认标题布局名（对齐 N3 出厂布局预设 index 4）。"""
+
 
 @dataclass
 class PaintFill:
@@ -379,11 +388,19 @@ class TitleOverlay:
     shadow_offset_x: int = 0
     shadow_offset_y: int = 2
 
-    # 位置（锚点 9 宫格 + 内边距 / 偏移；逆向 ニコカラ「タイトル左上」）
+    # 位置（锚点 9 宫格 + 内边距 / 偏移；逆向 ニコカラ「タイトル左上」）。
+    # 这些字段与上方字体/颜色字段一样，现在是「解析结果」：渲染时由
+    # ``layout_index`` 引用的布局方案与 ``TITLE_SCHEME_NAME`` 配色方案推导，
+    # 仅当布局/方案缺失（旧工程迁移前）时按字段原值绘制。
     anchor: TitleAnchor = "top_left"
     align: HorizontalAlign = "left"
     offset_x: int = 50
     offset_y: int = 50
+
+    layout_index: Optional[int] = 1
+    """标题引用的布局方案（同 ``TimingLine.layout_index``：0 = 默认布局，
+    n = ``Style.layouts[n-1]``）。默认 1 指向内置「タイトル左上」；``None``
+    表示旧工程的显式 anchor/offset 字段仍然生效（加载时会自动迁移）。"""
 
     # 显示时段（逆向 ニコカラ TitleShowTime，默认 Head=整段显示）
     show_mode: TitleShowMode = "whole"
@@ -478,6 +495,56 @@ class SubtitleStyleScheme:
     ruby_karaoke_colors: Optional[KaraokeColors] = None
 
 
+def default_title_layout() -> LyricsLayout:
+    """内置标题布局（N3 出厂预设「タイトル左上」：Top、行間 15、余白 50/50、Left）。"""
+    return LyricsLayout(
+        name=TITLE_LAYOUT_NAME,
+        line_y_position="top",
+        line_y_margin_px=50,
+        line_gap_px=15,
+        smart_horizontal="equal_margins",
+        horizontal_margin_px=50,
+        line_alignments=["left"],
+    )
+
+
+def _title_karaoke_colors(
+    fill: PaintFill, stroke: PaintFill, stroke2: PaintFill, shadow: PaintFill
+) -> KaraokeColors:
+    """标题永不走字，走字前/走字后同色，编辑任一态都能看到效果。"""
+    state = KaraokeColorState(text=fill, stroke=stroke, stroke2=stroke2, shadow=shadow)
+    return KaraokeColors(before=state, after=deepcopy(state))
+
+
+def title_scheme_from_overlay(title: "TitleOverlay") -> SubtitleStyleScheme:
+    """把（旧工程的）``TitleOverlay`` 显式外观字段折算成「标题」配色方案。"""
+    return SubtitleStyleScheme(
+        font_family=title.font_family,
+        font_family_latin=title.font_family_latin,
+        font_size_px=title.font_size_px,
+        font_weight=title.font_weight,
+        italic=title.italic,
+        letter_spacing_px=title.letter_spacing_px,
+        stroke_width_px=title.stroke_width_px,
+        stroke2_width_px=title.stroke2_width_px,
+        decoration_kind=title.decoration_kind,
+        glow_radius_px=title.glow_radius_px,
+        glow_before_radius_px=title.glow_radius_px,
+        glow_after_radius_px=title.glow_radius_px,
+        glow_concentration_level=title.glow_concentration_level,
+        shadow_offset_x=title.shadow_offset_x,
+        shadow_offset_y=title.shadow_offset_y,
+        karaoke_colors=_title_karaoke_colors(
+            title.fill, title.stroke, title.stroke2, title.shadow
+        ),
+    )
+
+
+def default_title_scheme() -> SubtitleStyleScheme:
+    """默认「标题」方案 = ``TitleOverlay`` 字段默认值（ニコカラ標準配色标题外观）。"""
+    return title_scheme_from_overlay(TitleOverlay())
+
+
 @dataclass
 class Style:
     """字幕样式（A4 / A5 / A6 实装的纯色 + 横书き子集）。
@@ -538,8 +605,11 @@ class Style:
     singer_style_overrides: dict[int, SubtitleStyleScheme] = field(default_factory=dict)
     """B2：按歌手自动套用的字幕 tab 方案。不覆盖位置、时间或布局。"""
 
-    custom_style_schemes: dict[str, SubtitleStyleScheme] = field(default_factory=dict)
-    """用户自行添加的配色方案。当前用于编辑/复用，后续可接入方案分配。"""
+    custom_style_schemes: dict[str, SubtitleStyleScheme] = field(
+        default_factory=lambda: {TITLE_SCHEME_NAME: default_title_scheme()}
+    )
+    """用户自行添加的配色方案。当前用于编辑/复用，后续可接入方案分配。
+    内置「标题」方案（``TITLE_SCHEME_NAME``）描述标题外观，随字体页统一编辑。"""
 
     # ふりがな / ruby（B1）
     ruby_font_size_px: int = 45
@@ -629,10 +699,13 @@ class Style:
     中心位置对齐（逐行判断，N3 Single）；``equal_margins`` = 左右余白对齐
     （整页判断，N3 Multi，N3 默认）。"""
 
-    layouts: list["LyricsLayout"] = field(default_factory=list)
+    layouts: list["LyricsLayout"] = field(
+        default_factory=lambda: [default_title_layout()]
+    )
     """额外的命名布局定义（N3 ``LyricsLayouts``）。``Style`` 自身的布局字段是
     「默认布局」（index 0），本列表从 index 1 起被 ``TimingLine.layout_index``
-    引用。布局定义是可复用预设，随全局设置与项目文件一起持久化。"""
+    引用。布局定义是可复用预设，随全局设置与项目文件一起持久化。
+    默认内置「タイトル左上」（对齐 N3 出厂预设），供标题引用。"""
 
     layout_reference_height: int = 1080
     """布局像素字段（上下余白 / 行间距 / 左右余白）当前对应的输出高度
@@ -1052,7 +1125,74 @@ def style_from_dict(payload: object) -> Style:
     # 旧工程迁移：没有 horizontal_margin_px 时沿用旧的上排左边距（默认双双为 50）。
     if "horizontal_margin_px" not in changes and "upper_line_left_margin_px" in changes:
         changes["horizontal_margin_px"] = changes["upper_line_left_margin_px"]
+    _migrate_title_references(changes)
     return Style(**changes)
+
+
+def _migrate_title_references(changes: dict) -> None:
+    """旧工程标题迁移：显式外观/位置字段 → 「标题」方案 + 布局引用。
+
+    新版工程恒满足两个不变量：``custom_style_schemes`` 含 ``TITLE_SCHEME_NAME``、
+    启用标题时 ``title_overlay.layout_index`` 非 None。旧工程加载时按原
+    ``TitleOverlay`` 字段折算补齐，保证外观不变。
+    """
+    title = changes.get("title_overlay")
+    schemes = changes.get("custom_style_schemes")
+    if schemes is None:
+        # 快照没有方案字典：仅当标题需要迁移时显式给出（否则交给默认值）。
+        if title is not None:
+            changes["custom_style_schemes"] = {
+                TITLE_SCHEME_NAME: title_scheme_from_overlay(title)
+            }
+    elif TITLE_SCHEME_NAME not in schemes:
+        schemes = dict(schemes)
+        schemes[TITLE_SCHEME_NAME] = (
+            title_scheme_from_overlay(title)
+            if title is not None
+            else default_title_scheme()
+        )
+        changes["custom_style_schemes"] = schemes
+    if title is None or title.layout_index is not None:
+        return
+    layouts = list(changes.get("layouts") or [])
+    layouts.append(
+        _layout_from_title_position(title, {layout.name for layout in layouts})
+    )
+    changes["layouts"] = layouts
+    changes["title_overlay"] = replace(title, layout_index=len(layouts))
+
+
+def _layout_from_title_position(
+    title: TitleOverlay, existing_names: set[str]
+) -> LyricsLayout:
+    """旧工程标题的 anchor/offset → 等效布局。居中锚点的正负偏移语义无法用
+    余白表达，按 0 余白近似（默认标题为 top_left，几乎不受影响）。"""
+    anchor = str(title.anchor)
+    if anchor.endswith("left"):
+        horizontal = "left"
+    elif anchor.endswith("right"):
+        horizontal = "right"
+    else:
+        horizontal = "center"
+    vertical = (
+        "top" if anchor.startswith("top")
+        else "bottom" if anchor.startswith("bottom")
+        else "center"
+    )
+    name = TITLE_LAYOUT_NAME
+    suffix = 2
+    while name in existing_names:
+        name = f"{TITLE_LAYOUT_NAME} {suffix}"
+        suffix += 1
+    return LyricsLayout(
+        name=name,
+        line_y_position=vertical,  # type: ignore[arg-type]
+        line_y_margin_px=max(int(title.offset_y), 0),
+        line_gap_px=max(int(title.line_gap_px), 0),
+        smart_horizontal="equal_margins",
+        horizontal_margin_px=max(int(title.offset_x), 0),
+        line_alignments=[horizontal],  # type: ignore[list-item]
+    )
 
 
 def rescale_layout_sizes(style: Style, new_height: int) -> Style:
@@ -1200,6 +1340,7 @@ def title_overlay_to_dict(title: TitleOverlay) -> dict:
         "align": title.align,
         "offset_x": title.offset_x,
         "offset_y": title.offset_y,
+        "layout_index": title.layout_index,
         "show_mode": title.show_mode,
         "head_offset_ms": title.head_offset_ms,
         "duration_ms": title.duration_ms,
@@ -1256,6 +1397,12 @@ def title_overlay_from_dict(payload: object) -> Optional[TitleOverlay]:
         align=align,  # type: ignore[arg-type]
         offset_x=_int_value(payload.get("offset_x"), defaults.offset_x),
         offset_y=_int_value(payload.get("offset_y"), defaults.offset_y),
+        # 缺失（旧工程）时保持 None，由 style_from_dict 的迁移逻辑补布局引用。
+        layout_index=(
+            _int_value(payload.get("layout_index"), 0)
+            if payload.get("layout_index") is not None
+            else None
+        ),
         show_mode=show_mode,  # type: ignore[arg-type]
         head_offset_ms=_int_value(payload.get("head_offset_ms"), defaults.head_offset_ms),
         duration_ms=_int_value(payload.get("duration_ms"), defaults.duration_ms),

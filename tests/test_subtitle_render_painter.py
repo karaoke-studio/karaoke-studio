@@ -3878,8 +3878,9 @@ def test_title_overlay_show_modes_and_fade(qapp):
 
 def test_title_overlay_anchor_moves_block(qapp):
     track = _title_track()
-    base = Style(dual_line_layout=False)
-    title = TitleOverlay(enabled=True, font_size_px=40, align="left")
+    # layout_index=None + 清空方案表：绕过引用解析，直接驱动画笔的锚点机制
+    base = Style(dual_line_layout=False, custom_style_schemes={})
+    title = TitleOverlay(enabled=True, font_size_px=40, align="left", layout_index=None)
 
     top_left = _blank()
     paint_frame(top_left, track, 500, replace(base, title_overlay=replace(title, anchor="top_left")))
@@ -3903,6 +3904,66 @@ def test_title_overlay_defaults_match_nicokara(qapp):
     assert t.stroke2.color == "#FFFFFF" and t.stroke2_width_px == 5
     assert t.decoration_kind == "glow" and t.glow_radius_px == 10
     assert t.shadow.color == "#E19696"
+
+
+def test_resolve_title_overlay_uses_scheme_and_layout(qapp):
+    from krok_helper.subtitle_render.engine.painter import resolve_title_overlay
+
+    style = Style(title_overlay=TitleOverlay(enabled=True))
+    resolved = resolve_title_overlay(style)
+    # 默认「标题」方案 = 原 TitleOverlay 默认外观（ニコカラ標準配色）
+    assert resolved.font_family == "游明朝"
+    assert resolved.fill.color == "#FFEBEB"
+    assert resolved.stroke_width_px == 15
+    # 默认布局引用（内置タイトル左上）→ 顶部左上、余白 50/50、行間 15
+    assert resolved.anchor == "top_left" and resolved.align == "left"
+    assert resolved.offset_x == 50 and resolved.offset_y == 50
+    assert resolved.line_gap_px == 15
+
+    # 编辑「标题」方案 → 标题外观跟随
+    schemes = dict(style.custom_style_schemes)
+    schemes["标题"] = replace(schemes["标题"], font_size_px=64, font_family="Yu Mincho")
+    resolved = resolve_title_overlay(replace(style, custom_style_schemes=schemes))
+    assert resolved.font_size_px == 64
+    assert resolved.font_family == "Yu Mincho"
+
+    # 布局引用悬空 → 位置保留字段原值
+    dangling = replace(
+        style, title_overlay=replace(style.title_overlay, layout_index=9)
+    )
+    assert resolve_title_overlay(dangling).anchor == "top_left"
+
+
+def test_old_project_title_fields_migrate_to_scheme_and_layout():
+    """旧工程（标题带显式外观、无布局引用）加载后外观折算进方案与布局。"""
+    payload = {
+        "title_overlay": {
+            "enabled": True,
+            "text_template": "T",
+            "font_family": "Custom Font",
+            "font_size_px": 77,
+            "anchor": "bottom_right",
+            "align": "right",
+            "offset_x": 30,
+            "offset_y": 40,
+            "line_gap_px": 22,
+        },
+        "custom_style_schemes": {},
+        "layouts": [],
+    }
+    restored = style_from_dict(payload)
+    scheme = restored.custom_style_schemes["标题"]
+    assert scheme.font_family == "Custom Font"
+    assert scheme.font_size_px == 77
+    assert scheme.karaoke_colors.before.text.color == "#FFEBEB"
+    # 位置折算成新布局并被标题引用
+    assert restored.title_overlay.layout_index == len(restored.layouts)
+    layout = restored.layouts[-1]
+    assert layout.line_y_position == "bottom"
+    assert layout.line_alignments == ["right"]
+    assert layout.horizontal_margin_px == 30
+    assert layout.line_y_margin_px == 40
+    assert layout.line_gap_px == 22
 
 
 def test_title_overlay_latin_font_splits_ascii(qapp):

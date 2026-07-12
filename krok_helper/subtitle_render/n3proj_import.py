@@ -47,9 +47,11 @@ from krok_helper.subtitle_render.models import (
     PaintFill,
     Style,
     SubtitleStyleScheme,
+    TITLE_SCHEME_NAME,
     TimingTrack,
     TitleOverlay,
     _paint_fill,
+    default_title_scheme,
     normalize_glow_concentration_level,
     line_animation_override_to_dict,
     style_to_dict,
@@ -195,7 +197,7 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
         custom: dict[str, SubtitleStyleScheme] = {}
         for index, font in enumerate(fonts[1:], start=1):
             name = str(font.get("SettingsName") or "").strip() or f"配色{index}"
-            if name in custom:
+            if name in custom or name == TITLE_SCHEME_NAME:
                 name = f"{name}（{index}）"
             scheme_changes = _scheme_changes(font, lyrics_dir, warnings, name)
             custom[name] = SubtitleStyleScheme(
@@ -204,9 +206,15 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
         changes["custom_style_schemes"] = custom
 
     title_infos = [_dict(item) for item in _list(data.get("TitleInfos"))]
-    title_overlay = _build_title_overlay(title_infos, fonts, layouts, lyrics_dir, warnings)
+    title_overlay, title_scheme = _build_title_overlay(
+        title_infos, fonts, layouts, lyrics_dir, warnings
+    )
     if title_overlay is not None:
         changes["title_overlay"] = title_overlay
+    # 「标题」方案恒存在：N3 标题引用的 フォント設定 优先，否则保持默认标题外观。
+    custom_schemes = changes.get("custom_style_schemes")
+    if isinstance(custom_schemes, dict):
+        custom_schemes[TITLE_SCHEME_NAME] = title_scheme or default_title_scheme()
 
     # ---------------------------------------------------------- 每行布局 / 逐字配色 / 动画
     line_layout_indices: Optional[list[int]] = None
@@ -723,11 +731,17 @@ def _build_title_overlay(
     layouts: list[dict],
     lyrics_dir: Path,
     warnings: list[str],
-) -> Optional[TitleOverlay]:
+) -> tuple[Optional[TitleOverlay], Optional[SubtitleStyleScheme]]:
+    """标题 → (文字/布局引用/显示时段, 「标题」配色方案)。
+
+    字体/颜色不再展开进 ``TitleOverlay``：标题引用的 フォント設定 折算成
+    ``SubtitleStyleScheme`` 由调用方写入 ``custom_style_schemes[TITLE_SCHEME_NAME]``；
+    位置改为 ``layout_index`` 引用（与 N3 ``TitleInfoModel.LayoutIndex`` 同序）。
+    """
     candidates = [(title, _title_lines(title)) for title in title_infos]
     candidates = [(title, lines) for title, lines in candidates if any(line.strip() for line in lines)]
     if not candidates:
-        return None
+        return None, None
     if len(candidates) > 1:
         skipped = "、".join(str(title.get("SettingsName") or "?") for title, _lines in candidates[1:])
         warnings.append(f"N3 项目包含多个标题设置，仅导入第一个（{skipped} 被忽略）")
@@ -740,69 +754,27 @@ def _build_title_overlay(
         "fade_out_ms": 0,
     }
 
+    scheme: Optional[SubtitleStyleScheme] = None
     font_index = _title_first_font_index(title)
-    scheme = fonts[font_index] if 0 <= font_index < len(fonts) else (fonts[0] if fonts else None)
-    if scheme is not None:
-        context = f"标题·{scheme.get('SettingsName') or '?'}"
-        font_infos = _list(scheme.get("FontInfos"))
-        kanji = _font_chain(font_infos, 0)
-        family = _resolve_font_name(kanji)
-        if family:
-            kwargs["font_family"] = family
-        alnum_own = str(
-            _dict(font_infos[2] if len(font_infos) > 2 else {}).get("FontName") or ""
-        ).strip()
-        if alnum_own and alnum_own != (family or ""):
-            kwargs["font_family_latin"] = alnum_own
-        size = _resolve_font_size(kanji, "CharSize")
-        if size > 0:
-            kwargs["font_size_px"] = size
-        weight, italic = _face_weight_italic(_resolve_face_name(kanji))
-        kwargs["font_weight"] = weight
-        kwargs["italic"] = italic
-        kwargs["stroke_width_px"] = _resolve_font_size(kanji, "EdgeSize")
-        kwargs["stroke2_width_px"] = (
-            _resolve_font_size(kanji, "EdgeSize2") if _resolve_use_edge2(kanji) else 0
+    font = fonts[font_index] if 0 <= font_index < len(fonts) else (fonts[0] if fonts else None)
+    if font is not None:
+        context = f"标题·{font.get('SettingsName') or '?'}"
+        scheme_changes = _scheme_changes(font, lyrics_dir, warnings, context)
+        field_names = {item.name for item in dataclass_fields(SubtitleStyleScheme)}
+        scheme = SubtitleStyleScheme(
+            **{key: value for key, value in scheme_changes.items() if key in field_names}
         )
-        colors = _karaoke_colors_from_brushes(
-            _list(scheme.get("BrushInfos")), lyrics_dir, warnings, context
-        )
-        # 标题永不走字（BeginTime=EndTime=哨兵），始终呈现ワイプ前外观。
-        kwargs["fill"] = colors.before.text
-        kwargs["stroke"] = colors.before.stroke
-        kwargs["stroke2"] = colors.before.stroke2
-        kwargs["shadow"] = colors.before.shadow
-        decor_kind = _int(scheme.get("DecorKind"), 0)
-        decor_size = _size(scheme.get("DecorSize"))
-        if decor_kind == 2:
-            kwargs["decoration_kind"] = "glow"
-            kwargs["glow_radius_px"] = decor_size
-            kwargs["glow_concentration_level"] = normalize_glow_concentration_level(
-                scheme.get("BlurLevel")
-            )
-            kwargs["shadow_offset_x"] = 0
-            kwargs["shadow_offset_y"] = 0
-        elif decor_kind == 1:
-            kwargs["decoration_kind"] = "shadow"
-            kwargs["shadow_offset_x"] = decor_size
-            kwargs["shadow_offset_y"] = decor_size
-        else:
-            kwargs["decoration_kind"] = "shadow"
-            kwargs["shadow_offset_x"] = 0
-            kwargs["shadow_offset_y"] = 0
 
     layout_index = _int(title.get("LayoutIndex"), 0)
+    if not (0 <= layout_index < len(layouts)):
+        layout_index = 0
+    kwargs["layout_index"] = layout_index
     layout = layouts[layout_index] if 0 <= layout_index < len(layouts) else None
-    if layout is not None:
-        geometry = _layout_geometry(layout)
-        vertical = geometry["line_y_position"]
-        horizontal = geometry["line_alignments"][0]
-        kwargs["anchor"] = "center" if (vertical, horizontal) == ("center", "center") else f"{vertical}_{horizontal}"
-        kwargs["align"] = horizontal
-        kwargs["offset_x"] = geometry["horizontal_margin_px"]
-        kwargs["offset_y"] = geometry["line_y_margin_px"]
-        kwargs["line_gap_px"] = geometry["line_gap_px"]
-        kwargs["letter_spacing_px"] = _layout_char_domain(layout)["letter_spacing_px"]
+    if layout is not None and scheme is not None:
+        # N3 标题字间距来自布局的歌詞間隔；本模块字间距归配色方案域。
+        scheme = replace(
+            scheme, letter_spacing_px=_layout_char_domain(layout)["letter_spacing_px"]
+        )
 
     show_time = _dict(title.get("ShowTime"))
     kind = _int(show_time.get("Kind"), 0)
@@ -830,7 +802,7 @@ def _build_title_overlay(
         kwargs["show_mode"] = "tail"
         kwargs["duration_ms"] = interval
         kwargs["tail_offset_ms"] = tail_offset
-    return TitleOverlay(**kwargs)
+    return TitleOverlay(**kwargs), scheme
 
 
 # ---------------------------------------------------------------------------

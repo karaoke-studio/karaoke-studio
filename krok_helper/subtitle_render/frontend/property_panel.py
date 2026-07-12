@@ -83,11 +83,9 @@ from krok_helper.subtitle_render.models import (
     PaintFill,
     SubtitleStyleScheme,
     Style,
-    TITLE_ANCHORS,
+    TITLE_SCHEME_NAME,
     TITLE_SHOW_MODES,
-    TitleAnchor,
     TitleOverlay,
-    TitleShowMode,
     VIEWPORT_ALIGNS,
     ViewportAlign,
 )
@@ -3250,9 +3248,7 @@ class PropertyPanel(QWidget):
     def _make_title_page(self) -> QWidget:
         scroll, layout = _scroll_page()
         layout.addWidget(self._make_title_text_section())
-        layout.addWidget(self._make_title_font_section())
-        layout.addWidget(self._make_title_color_section())
-        layout.addWidget(self._make_title_position_section())
+        layout.addWidget(self._make_title_style_section())
         layout.addWidget(self._make_title_time_section())
         layout.addStretch(1)
         return scroll
@@ -3271,153 +3267,59 @@ class PropertyPanel(QWidget):
         layout.addWidget(_field("文字（{title} / {artist} 取自字幕元数据，可换行）", self._title_text_edit))
         return section
 
-    def _make_title_font_section(self) -> QFrame:
-        section, layout = _section("字体")
+    def _make_title_style_section(self) -> QFrame:
+        section, layout = _section("外观")
 
-        self._title_font_combo = _WheelFocusedFontComboBox(section)
-        _compact_control(self._title_font_combo)
-        self._title_font_combo.currentFontChanged.connect(
-            lambda font: self._update_title(font_family=font.family())
+        self._title_layout_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._title_layout_combo)
+        self._title_layout_combo.setToolTip(
+            "标题引用的布局方案（与布局页管理的是同一份列表）："
+            "决定标题的锚点、余白与行间距。"
         )
-        layout.addWidget(_field("日文字体", self._title_font_combo))
+        self._title_layout_combo.currentIndexChanged.connect(self._on_title_layout_changed)
+        layout.addWidget(_field("布局方案", self._title_layout_combo))
 
-        # 英数（ASCII）字体可单独指定；不勾选时与日文共用一套字体（同字幕字体处理）。
-        self._title_latin_check = CheckBox("英数单独字体", section)
-        self._title_latin_check.toggled.connect(self._on_title_font_latin_toggled)
-        layout.addWidget(self._title_latin_check)
-
-        self._title_latin_combo = _WheelFocusedFontComboBox(section)
-        _compact_control(self._title_latin_combo)
-        self._title_latin_combo.setEnabled(False)
-        self._title_latin_combo.currentFontChanged.connect(self._on_title_font_latin_changed)
-        layout.addWidget(_field("英数字体", self._title_latin_combo))
-
-        box = _SubGroup("尺寸 / 间距", parent=section)
-        layout.addWidget(box)
-        add = _grid_adder(box.grid)
-
-        self._title_size_spin = _spin(8, 400, suffix=" px")
-        self._title_size_spin.valueChanged.connect(
-            lambda value: self._update_title(font_size_px=value)
+        hint = QLabel(
+            "字体与颜色由字体页的「标题」配色方案决定，"
+            "与角色方案一起编辑。",
+            section,
         )
-        add("字号", self._title_size_spin)
+        hint.setWordWrap(True)
+        themed(hint, lambda: f"color: {palette().text_secondary}; font-size: 9pt;")
+        layout.addWidget(hint)
 
-        self._title_weight_spin = _spin(100, 900)
-        self._title_weight_spin.setSingleStep(100)
-        self._title_weight_spin.valueChanged.connect(
-            lambda value: self._update_title(font_weight=value)
-        )
-        add("字重", self._title_weight_spin)
-
-        self._title_letter_spin = _spin(-20, 200, suffix=" px")
-        self._title_letter_spin.valueChanged.connect(
-            lambda value: self._update_title(letter_spacing_px=value)
-        )
-        add("字间距", self._title_letter_spin)
-
-        self._title_line_gap_spin = _spin(0, 200, suffix=" px")
-        self._title_line_gap_spin.valueChanged.connect(
-            lambda value: self._update_title(line_gap_px=value)
-        )
-        add("行间距", self._title_line_gap_spin)
-
-        self._title_italic_check = CheckBox("斜体", section)
-        self._title_italic_check.toggled.connect(
-            lambda checked: self._update_title(italic=checked)
-        )
-        layout.addWidget(self._title_italic_check)
+        edit_btn = FluentPushButton("编辑「标题」配色方案", section)
+        edit_btn.setMinimumHeight(30)
+        edit_btn.clicked.connect(self._open_title_scheme)
+        layout.addWidget(edit_btn)
         return section
 
-    def _make_title_color_section(self) -> QFrame:
-        section, layout = _section("颜色")
+    def _on_title_layout_changed(self, _index: int) -> None:
+        if self._syncing:
+            return
+        data = self._title_layout_combo.currentData()
+        self._update_title(layout_index=int(data) if data is not None else 0)
 
-        self._title_fill_button = self._title_color_button("fill")
-        layout.addWidget(_field("填充", self._title_fill_button))
+    def _open_title_scheme(self) -> None:
+        """跳到字体页并选中「标题」方案。"""
+        self.setCurrentIndex(0)
+        self.set_current_scheme_key(f"{_CUSTOM_SCHEME_PREFIX}{TITLE_SCHEME_NAME}")
 
-        stroke_box = _SubGroup("描边", parent=section)
-        layout.addWidget(stroke_box)
-        add = _grid_adder(stroke_box.grid)
-        self._title_stroke_button = self._title_color_button("stroke")
-        add("颜色", self._title_stroke_button)
-        self._title_stroke_width_spin = _spin(0, 80, suffix=" px")
-        self._title_stroke_width_spin.valueChanged.connect(
-            lambda value: self._update_title(stroke_width_px=value)
-        )
-        add("宽度", self._title_stroke_width_spin)
-        self._title_stroke2_button = self._title_color_button("stroke2")
-        add("二重边色", self._title_stroke2_button)
-        self._title_stroke2_width_spin = _spin(0, 80, suffix=" px")
-        self._title_stroke2_width_spin.valueChanged.connect(
-            lambda value: self._update_title(stroke2_width_px=value)
-        )
-        add("二重边宽", self._title_stroke2_width_spin)
-
-        deco_box = _SubGroup("装饰", parent=section)
-        layout.addWidget(deco_box)
-        add = _grid_adder(deco_box.grid)
-        self._title_decoration_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._title_decoration_combo)
-        for label, value in [("阴影", "shadow"), ("发光", "glow")]:
-            self._title_decoration_combo.addItem(label, value)
-        self._title_decoration_combo.currentIndexChanged.connect(
-            lambda _i: self._update_title(decoration_kind=self._title_decoration_combo.currentData())
-        )
-        add("装饰类型", self._title_decoration_combo)
-        self._title_shadow_button = self._title_color_button("shadow")
-        add("装饰颜色", self._title_shadow_button)
-        self._title_glow_spin = _spin(1, 80, suffix=" px")
-        self._title_glow_spin.valueChanged.connect(
-            lambda value: self._update_title(glow_radius_px=value)
-        )
-        add("发光半径", self._title_glow_spin)
-        self._title_shadow_x_spin = _spin(-60, 60, suffix=" px")
-        self._title_shadow_x_spin.valueChanged.connect(
-            lambda value: self._update_title(shadow_offset_x=value)
-        )
-        add("阴影 X", self._title_shadow_x_spin)
-        self._title_shadow_y_spin = _spin(-60, 60, suffix=" px")
-        self._title_shadow_y_spin.valueChanged.connect(
-            lambda value: self._update_title(shadow_offset_y=value)
-        )
-        add("阴影 Y", self._title_shadow_y_spin)
-        return section
-
-    def _make_title_position_section(self) -> QFrame:
-        section, layout = _section("位置")
-        box = _SubGroup("锚点 / 偏移", parent=section)
-        layout.addWidget(box)
-        add = _grid_adder(box.grid)
-
-        self._title_anchor_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._title_anchor_combo)
-        for label, value in _TITLE_ANCHOR_OPTIONS:
-            self._title_anchor_combo.addItem(label, value)
-        self._title_anchor_combo.currentIndexChanged.connect(
-            lambda _i: self._update_title(anchor=self._title_anchor_combo.currentData())
-        )
-        add("锚点", self._title_anchor_combo)
-
-        self._title_align_combo = _WheelFocusedComboBox(section)
-        _compact_control(self._title_align_combo)
-        for label, value in [("左对齐", "left"), ("居中", "center"), ("右对齐", "right")]:
-            self._title_align_combo.addItem(label, value)
-        self._title_align_combo.currentIndexChanged.connect(
-            lambda _i: self._update_title(align=self._title_align_combo.currentData())
-        )
-        add("多行对齐", self._title_align_combo)
-
-        self._title_offset_x_spin = _spin(-2000, 2000, suffix=" px")
-        self._title_offset_x_spin.valueChanged.connect(
-            lambda value: self._update_title(offset_x=value)
-        )
-        add("X 偏移", self._title_offset_x_spin)
-
-        self._title_offset_y_spin = _spin(-2000, 2000, suffix=" px")
-        self._title_offset_y_spin.valueChanged.connect(
-            lambda value: self._update_title(offset_y=value)
-        )
-        add("Y 偏移", self._title_offset_y_spin)
-        return section
+    def _refresh_title_layout_combo(self) -> None:
+        if not hasattr(self, "_title_layout_combo"):
+            return
+        combo = self._title_layout_combo
+        blocked = combo.blockSignals(True)
+        try:
+            combo.clear()
+            combo.addItem("默认布局", 0)
+            for index, layout_def in enumerate(self._style.layouts, start=1):
+                combo.addItem(layout_def.name, index)
+            title = self._current_title()
+            target = title.layout_index if title.layout_index is not None else 0
+            combo.setCurrentIndex(max(0, combo.findData(int(target))))
+        finally:
+            combo.blockSignals(blocked)
 
     def _make_title_time_section(self) -> QFrame:
         section, layout = _section("显示时段")
@@ -3466,57 +3368,18 @@ class PropertyPanel(QWidget):
         add("淡出", self._title_fade_out_spin)
         return section
 
-    def _title_color_button(self, attr: str) -> ColorButton:
-        fill = getattr(self._current_title(), attr)
-        button = ColorButton(fill.color)
-        button.clicked.connect(lambda _checked=False, a=attr: self._choose_title_color(a))
-        return button
-
     def _current_title(self) -> TitleOverlay:
         return self._style.title_overlay if self._style.title_overlay is not None else TitleOverlay()
 
-    def _choose_title_color(self, attr: str) -> None:
-        fill = getattr(self._current_title(), attr)
-        color = QColorDialog.getColor(
-            QColor(fill.color),
-            self,
-            "选择颜色",
-            QColorDialog.ColorDialogOption.ShowAlphaChannel,
-        )
-        if color.isValid():
-            normalized = _normalize_hex(color.name(QColor.NameFormat.HexArgb))
-            self._update_title(**{attr: _solid_paint_fill(normalized)})
-
     def _on_title_enabled_toggled(self, checked: bool) -> None:
         self._update_title(enabled=checked)
-
-    def _on_title_font_latin_toggled(self, checked: bool) -> None:
-        self._title_latin_combo.setEnabled(checked)
-        if self._syncing:
-            return
-        if checked:
-            self._update_title(font_family_latin=self._title_latin_combo.currentFont().family())
-        else:
-            self._update_title(font_family_latin=None)
-
-    def _on_title_font_latin_changed(self, font: QFont) -> None:
-        if self._syncing:
-            return
-        if self._title_latin_check.isChecked():
-            self._update_title(font_family_latin=font.family())
 
     def _update_title(self, **changes) -> None:
         if self._syncing:
             return
         title = self._current_title()
-        if "anchor" in changes and changes["anchor"] not in TITLE_ANCHORS:
-            changes["anchor"] = "top_left"
-        if "align" in changes and changes["align"] not in HORIZONTAL_ALIGNS:
-            changes["align"] = "left"
         if "show_mode" in changes and changes["show_mode"] not in TITLE_SHOW_MODES:
             changes["show_mode"] = "whole"
-        if "decoration_kind" in changes and changes["decoration_kind"] not in {"shadow", "glow"}:
-            changes["decoration_kind"] = "glow"
         new_title = replace(title, **changes)
         self._style = replace(self._style, title_overlay=new_title)
         self._syncing = True
@@ -3534,37 +3397,7 @@ class PropertyPanel(QWidget):
         # 仅在内容不同才回填，避免实时输入时把光标弹到末尾。
         if self._title_text_edit.toPlainText() != title.text_template:
             self._title_text_edit.setPlainText(title.text_template)
-        self._title_font_combo.setCurrentFont(QFont(title.font_family))
-        has_latin = bool(title.font_family_latin)
-        self._title_latin_check.setChecked(has_latin)
-        self._title_latin_combo.setEnabled(has_latin)
-        if has_latin:
-            self._title_latin_combo.setCurrentFont(QFont(title.font_family_latin))
-        self._title_size_spin.setValue(title.font_size_px)
-        self._title_weight_spin.setValue(title.font_weight)
-        self._title_letter_spin.setValue(title.letter_spacing_px)
-        self._title_line_gap_spin.setValue(title.line_gap_px)
-        self._title_italic_check.setChecked(title.italic)
-        self._title_fill_button.set_color(title.fill.color)
-        self._title_stroke_button.set_color(title.stroke.color)
-        self._title_stroke_width_spin.setValue(title.stroke_width_px)
-        self._title_stroke2_button.set_color(title.stroke2.color)
-        self._title_stroke2_width_spin.setValue(title.stroke2_width_px)
-        self._title_decoration_combo.setCurrentIndex(
-            max(0, self._title_decoration_combo.findData(title.decoration_kind))
-        )
-        self._title_shadow_button.set_color(title.shadow.color)
-        self._title_glow_spin.setValue(title.glow_radius_px)
-        self._title_shadow_x_spin.setValue(title.shadow_offset_x)
-        self._title_shadow_y_spin.setValue(title.shadow_offset_y)
-        self._title_anchor_combo.setCurrentIndex(
-            max(0, self._title_anchor_combo.findData(title.anchor))
-        )
-        self._title_align_combo.setCurrentIndex(
-            max(0, self._title_align_combo.findData(title.align))
-        )
-        self._title_offset_x_spin.setValue(title.offset_x)
-        self._title_offset_y_spin.setValue(title.offset_y)
+        self._refresh_title_layout_combo()
         self._title_mode_combo.setCurrentIndex(
             max(0, self._title_mode_combo.findData(title.show_mode))
         )
@@ -4284,6 +4117,8 @@ class PropertyPanel(QWidget):
         self._rename_layout_btn.setEnabled(editable)
         self._delete_layout_btn.setEnabled(editable)
         self._sync_layout_combo_width()
+        # 标题页的布局引用下拉与本列表同源，布局增删改名后一起刷新。
+        self._refresh_title_layout_combo()
 
     def _sync_layout_combo_width(self) -> None:
         """布局方案下拉框按最长方案名自然展开，不铺满行结构卡片。"""
@@ -4361,7 +4196,7 @@ class PropertyPanel(QWidget):
         result = QMessageBox.question(
             self,
             "删除布局",
-            f"确定要删除布局“{name}”吗？\n使用它的歌词行会回到默认布局。",
+            f"确定要删除布局“{name}”吗？\n使用它的歌词行（和标题）会回到默认布局。",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
         )
@@ -4369,7 +4204,16 @@ class PropertyPanel(QWidget):
             return
         layouts = list(self._style.layouts)
         del layouts[index - 1]
-        self._update_style(layouts=layouts)
+        changes: dict[str, Any] = {"layouts": layouts}
+        # 标题的布局引用与歌词行一样修正：被删的回默认，其后的序号前移。
+        title = self._style.title_overlay
+        if title is not None and title.layout_index is not None:
+            title_index = int(title.layout_index)
+            if title_index == index:
+                changes["title_overlay"] = replace(title, layout_index=0)
+            elif title_index > index:
+                changes["title_overlay"] = replace(title, layout_index=title_index - 1)
+        self._update_style(**changes)
         self.layoutDeleted.emit(index)
         self._refresh_layout_combo(selected=0)
         self._sync_layout_editor_controls()
@@ -4997,9 +4841,13 @@ class PropertyPanel(QWidget):
     def _refresh_scheme_combo(self, selected_key: Optional[str] = None) -> None:
         self._singer_combo.clear()
         self._singer_combo.addItem("全局默认", _GLOBAL_SCHEME_KEY)
+        # 「标题」是内置方案：恒在列表中（标题外观由它描述），不参与角色分配。
+        self._singer_combo.addItem(
+            TITLE_SCHEME_NAME, f"{_CUSTOM_SCHEME_PREFIX}{TITLE_SCHEME_NAME}"
+        )
         # 这里只显示当前字幕里出现过、或用户手动新建的角色目标。
         # 用户保存过的可复用预设由「管理预设」弹窗维护，避免未分色文件自动套用历史方案。
-        seen: set[str] = set()
+        seen: set[str] = {TITLE_SCHEME_NAME}
         for name in self._role_names:
             if name in seen:
                 continue
@@ -5198,6 +5046,11 @@ class PropertyPanel(QWidget):
         self._singer_combo.setCurrentIndex(index)
 
     def _on_scheme_combo_changed(self, _index: int) -> None:
+        name = self._current_custom_scheme_name()
+        editable = name is not None and name != TITLE_SCHEME_NAME
+        if hasattr(self, "_rename_role_button"):
+            self._rename_role_button.setEnabled(editable)
+            self._delete_role_button.setEnabled(editable)
         self._sync_subtitle_scheme_controls()
         if not self._syncing:
             self.schemeSelectionChanged.emit(self.current_scheme_key())
@@ -5228,8 +5081,8 @@ class PropertyPanel(QWidget):
 
     def _rename_current_role(self) -> None:
         old = self._current_custom_scheme_name()
-        if old is None:
-            return  # 全局默认不能重命名
+        if old is None or old == TITLE_SCHEME_NAME:
+            return  # 全局默认 / 内置「标题」方案不能重命名（标题按名字引用它）
         new, ok = QInputDialog.getText(self, "重命名角色", "角色名称", text=old)
         if not ok:
             return
@@ -5254,8 +5107,8 @@ class PropertyPanel(QWidget):
 
     def _delete_current_role(self) -> None:
         name = self._current_custom_scheme_name()
-        if name is None:
-            return  # 全局默认不能删
+        if name is None or name == TITLE_SCHEME_NAME:
+            return  # 全局默认 / 内置「标题」方案不能删
         schemes = dict(self._style.custom_style_schemes)
         schemes.pop(name, None)
         if name in self._role_names:
@@ -5892,19 +5745,6 @@ def _solid_paint_fill(color: str) -> PaintFill:
         split_top_color=normalized,
         split_bottom_color=normalized,
     )
-
-
-_TITLE_ANCHOR_OPTIONS: tuple[tuple[str, TitleAnchor], ...] = (
-    ("左上", "top_left"),
-    ("中上", "top_center"),
-    ("右上", "top_right"),
-    ("左中", "center_left"),
-    ("正中", "center"),
-    ("右中", "center_right"),
-    ("左下", "bottom_left"),
-    ("中下", "bottom_center"),
-    ("右下", "bottom_right"),
-)
 
 
 def _subgroup_label(text: str) -> QLabel:
