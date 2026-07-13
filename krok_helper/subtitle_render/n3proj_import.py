@@ -165,6 +165,9 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
     audio_path = _resolve_media(
         source.get("SoundPath"), source.get("SoundRelativePath"), base_dir, warnings, "音频"
     )
+    if source_kind == 0 and audio_path is not None:
+        warnings.append("视频背景不使用独立音频，已忽略 SoundPath 并沿用视频内嵌音轨")
+        audio_path = None
 
     lyrics_infos = [_dict(item) for item in _list(data.get("SourceLyricsInfos"))]
     lyrics_with_source = [

@@ -249,6 +249,19 @@ def test_import_media_and_screen(imported, tmp_path):
     assert data["line_breaks_before"] == ["none", "none", "page"]
 
 
+def test_video_background_ignores_independent_sound_path(tmp_path):
+    payload = _project_payload(tmp_path)
+    audio = tmp_path / "song.wav"
+    audio.write_bytes(b"fake")
+    payload["SourceInfo"]["SoundPath"] = str(audio)
+    payload["SourceInfo"]["SoundRelativePath"] = audio.name
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+
+    assert result.project_data["audio_path"] is None
+    assert any("视频背景不使用独立音频" in warning for warning in result.warnings)
+
+
 def test_import_global_style_font_and_colors(imported):
     style = style_from_dict(imported.project_data["style"])
     assert style.font_family == "UD デジタル 教科書体 N-B"

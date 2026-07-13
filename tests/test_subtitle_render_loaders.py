@@ -334,6 +334,55 @@ def test_build_render_job_uses_independent_audio_with_static_background(
     assert job.duration_ms == 5000
 
 
+def test_video_background_rejects_independent_audio(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    video = tmp_path / "bg.mp4"
+    audio = tmp_path / "song.wav"
+    video_info = MediaInfo(
+        path=video, duration=5.0, video_streams=1, audio_streams=1,
+        subtitle_streams=0, sample_rate=48000, channels=2,
+        video_width=320, video_height=180, video_fps=60.0,
+    )
+    audio_info = MediaInfo(
+        path=audio, duration=5.0, video_streams=0, audio_streams=1,
+        subtitle_streams=0, sample_rate=48000, channels=2,
+    )
+    monkeypatch.setattr(
+        mw, "probe_media", lambda probe, path: video_info if path == video else audio_info
+    )
+
+    win.load_video(video)
+    assert win.load_audio(audio) is None
+    assert win._audio_path == video
+    assert all(not action.isEnabled() for action in win._audio_menu_actions)
+
+
+def test_switching_to_video_clears_existing_independent_audio(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    audio = tmp_path / "song.wav"
+    video = tmp_path / "silent.mp4"
+    audio_info = MediaInfo(
+        path=audio, duration=5.0, video_streams=0, audio_streams=1,
+        subtitle_streams=0, sample_rate=48000, channels=2,
+    )
+    video_info = MediaInfo(
+        path=video, duration=5.0, video_streams=1, audio_streams=0,
+        subtitle_streams=0, video_width=320, video_height=180, video_fps=60.0,
+    )
+    monkeypatch.setattr(
+        mw, "probe_media", lambda probe, path: audio_info if path == audio else video_info
+    )
+
+    win.set_solid_background("#000000")
+    assert win.load_audio(audio) is audio_info
+    win.load_video(video)
+
+    assert win._audio_path is None
+    assert win._audio_info is None
+
+
 def test_subtitle_and_video_panels_can_coexist(qapp, monkeypatch, tmp_path):
     win = _make_window(qapp, monkeypatch)
 

@@ -318,6 +318,8 @@ def _validate_job(job: RenderJob) -> None:
     if all(track.char_count <= 0 for track in _job_tracks(job)):
         raise ProcessingError("请先加载有效的字幕文件。")
     background = _resolved_background(job)
+    if background.kind == "video" and job.audio_path is not None:
+        raise ProcessingError("视频背景不支持独立音频，请使用视频内嵌音轨。")
     if background.kind in {"video", "image", "image_sequence"}:
         if not background.path:
             raise ProcessingError("请先选择背景素材。")

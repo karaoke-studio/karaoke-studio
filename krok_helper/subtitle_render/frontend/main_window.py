@@ -715,6 +715,7 @@ class SubtitleRenderWindow(QWidget):
         self._video_path: Optional[Path] = None
         self._video_info: Optional[MediaInfo] = None
         self._background_source: Optional[BackgroundSource] = None
+        self._audio_menu_actions: list[Action] = []
         self._audio_path: Optional[Path] = None
         self._audio_info: Optional[MediaInfo] = None
         self._style: Style = Style()
@@ -856,7 +857,9 @@ class SubtitleRenderWindow(QWidget):
         background_menu.addAction(Action("图片序列首帧…", triggered=self._browse_background_sequence))
         background_menu.addAction(Action("纯色背景…", triggered=self._choose_solid_background))
         background_menu.addSeparator()
-        background_menu.addAction(Action("独立音频…", triggered=self._browse_audio))
+        audio_action = Action("独立音频…", triggered=self._browse_audio)
+        background_menu.addAction(audio_action)
+        self._audio_menu_actions.append(audio_action)
         self._background_menu_btn.setMenu(background_menu)
         layout.addWidget(self._background_menu_btn)
 
@@ -1085,6 +1088,7 @@ class SubtitleRenderWindow(QWidget):
             self._background_source = None
             self._audio_path = None
             self._audio_info = None
+            self._sync_audio_action_enabled()
             # 歌词列表回空态
             self._lyrics_panel.set_track(None)
             self._lyrics_panel.set_role_options([])
@@ -1624,6 +1628,12 @@ class SubtitleRenderWindow(QWidget):
             QMessageBox.warning(self, "背景视频不可用", f"该文件不含视频流：\n{path}")
             return None
         old_video = self._video_path
+        had_independent_audio = (
+            self._audio_path is not None and self._audio_path != old_video
+        )
+        if had_independent_audio:
+            self._audio_path = None
+            self._audio_info = None
         self._video_path = path
         self._video_info = info
         self._background_source = BackgroundSource(kind="video", path=str(path))
@@ -1645,6 +1655,17 @@ class SubtitleRenderWindow(QWidget):
             self._transport_bar.set_audio_source(path)
         elif info.audio_streams > 0:
             self._transport_bar.set_audio_source(path)
+        else:
+            self._transport_bar.set_audio_source(None)
+        self._sync_audio_action_enabled()
+        if had_independent_audio:
+            InfoBar.warning(
+                title="已移除独立音频",
+                content="视频背景只使用内嵌音轨，避免双时钟造成音画不同步。",
+                parent=self,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=3500,
+            )
         self._refresh_transport_duration()
         self._mark_project_dirty()
         return info
@@ -1692,6 +1713,7 @@ class SubtitleRenderWindow(QWidget):
         self._background_source = source
         self._preview_panel.set_background_source(source)
         self._video_settings_panel.set_populated(True)
+        self._sync_audio_action_enabled()
         if source.path:
             self._preview_window.set_media_title(Path(source.path))
         self._preview_window.show_near_workspace()
@@ -1723,11 +1745,17 @@ class SubtitleRenderWindow(QWidget):
             self._set_non_video_background(source)
 
     def load_audio(self, path: Path) -> Optional[MediaInfo]:
-        """加载独立音轨（覆盖视频自带音频）。
+        """为图片/图片序列/纯色背景加载独立音轨。
 
-        当前 UI 不直接暴露此入口；保留为 API，便于将来高级用户 / 测试 /
-        嵌入工作流（A10）从外部喂独立音频。
+        视频背景严格使用内嵌音轨，避免预览形成两个媒体时钟。
         """
+        if self._background_source is not None and self._background_source.kind == "video":
+            QMessageBox.warning(
+                self,
+                "无法添加独立音频",
+                "视频背景只使用视频内嵌音轨，以避免双时钟造成音画不同步。",
+            )
+            return None
         info = self._probe(path, "音频")
         if info is None:
             return None
@@ -1740,6 +1768,14 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_transport_duration()
         self._mark_project_dirty()
         return info
+
+    def _sync_audio_action_enabled(self) -> None:
+        enabled = not (
+            self._background_source is not None
+            and self._background_source.kind == "video"
+        )
+        for action in self._audio_menu_actions:
+            action.setEnabled(enabled)
 
     @property
     def timing_track(self) -> Optional[TimingTrack]:

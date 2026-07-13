@@ -114,13 +114,27 @@ def test_build_render_command_can_skip_audio(tmp_path):
 def test_build_render_command_uses_independent_audio(tmp_path):
     audio = tmp_path / "song.wav"
     audio.write_bytes(b"fake")
-    job = replace(_job(tmp_path), audio_path=audio)
+    job = replace(
+        _job(tmp_path),
+        background_video_path=None,
+        background_source=BackgroundSource(kind="solid", color="#000000"),
+        audio_path=audio,
+    )
 
     command = build_render_command("ffmpeg", job)
 
     assert command[command.index(str(audio)) - 1] == "-i"
     assert "2:a:0?" in command
     assert "1:a:0?" not in command
+
+
+def test_render_job_rejects_independent_audio_with_video_background(tmp_path):
+    audio = tmp_path / "song.wav"
+    audio.write_bytes(b"fake")
+    job = replace(_job(tmp_path), audio_path=audio)
+
+    with pytest.raises(ProcessingError, match="视频背景不支持独立音频"):
+        build_render_command("ffmpeg", job)
 
 
 def test_build_render_command_supports_solid_background(tmp_path):

@@ -164,7 +164,7 @@ git submodule status
 - ruby、角色/多歌手、行内混合字体/字号/配色、渐变/图片填充、glow/stroke2、竖排/RTL、标题、时间轴和多字幕源均已实现。
 - N3 TACTIC 对齐已覆盖：三档发光、蓝白 after 配色、ruby 样式、7px 默认布局字间距，以及 `UseEdge2` 关闭时不强制二重描边。
 - 逐行特效（四列表格、批量编辑、N3 行动作、持久化、撤销/重做、Painter）已合入。
-- `BackgroundSource` 已支持视频、静态图、图片序列和纯色；独立音频已接入预览、项目保存与 MP4 导出。
+- `BackgroundSource` 已支持视频、静态图、图片序列和纯色；独立音频已接入预览、项目保存与 MP4 导出，但仅允许用于非视频背景。视频背景只使用内嵌音轨，避免双时钟。
 - native C++ sidecar 产品路径硬关闭，Python QPainter 是唯一正式路径。
 
 ### 下一步顺序
