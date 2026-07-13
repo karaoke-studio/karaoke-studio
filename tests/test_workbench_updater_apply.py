@@ -76,7 +76,8 @@ def test_workbench_updater_applies_full_zip_from_local_http(tmp_path, monkeypatc
                 "--sha256",
                 digest,
                 "--no-launch",
-            ]
+            ],
+            use_gui=False,
         )
     finally:
         server.shutdown()

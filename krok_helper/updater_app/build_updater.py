@@ -10,22 +10,12 @@ REPO_ROOT = PROJECT_ROOT.parents[1]
 SUG_ROOT = REPO_ROOT / "krok_helper" / "lyrics_timing"
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="Build Karaoke Studio Updater.exe")
-    parser.add_argument("--clean", action="store_true", default=False)
-    args = parser.parse_args()
-
-    try:
-        import PyInstaller.__main__ as pyinstaller
-    except ImportError:
-        print("Missing pyinstaller. Please install it before building Updater.exe.", file=sys.stderr)
-        return 1
-
-    pi_args = [
+def pyinstaller_args(*, clean: bool = False) -> list[str]:
+    args = [
         str(PROJECT_ROOT / "main.py"),
         "--name=Updater",
         "--onefile",
-        "--console",
+        "--windowed",
         "--noconfirm",
         "--distpath",
         str(PROJECT_ROOT / "dist"),
@@ -39,6 +29,11 @@ def main() -> int:
         str(SUG_ROOT),
         "--collect-submodules=requests",
         "--hidden-import=updater_app.main",
+        "--hidden-import=updater_app.gui",
+        "--hidden-import=PyQt6.QtCore",
+        "--hidden-import=PyQt6.QtGui",
+        "--hidden-import=PyQt6.QtWidgets",
+        "--hidden-import=qfluentwidgets",
         "--hidden-import=requests",
         "--hidden-import=urllib3",
         "--hidden-import=charset_normalizer",
@@ -59,8 +54,6 @@ def main() -> int:
         "--hidden-import=tempfile",
         "--hidden-import=ssl",
         "--hidden-import=_ssl",
-        "--exclude-module=PyQt6",
-        "--exclude-module=qfluentwidgets",
         "--exclude-module=numpy",
         "--exclude-module=sounddevice",
         "--exclude-module=soundfile",
@@ -76,11 +69,24 @@ def main() -> int:
     ]
     icon = REPO_ROOT / "krok_helper" / "lyrics_timing" / "src" / "strange_uta_game" / "resource" / "icon.ico"
     if icon.exists():
-        pi_args.append(f"--icon={icon}")
-    if args.clean:
-        pi_args.append("--clean")
+        args.append(f"--icon={icon}")
+    if clean:
+        args.append("--clean")
+    return args
 
-    pyinstaller.run(pi_args)
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Build Karaoke Studio GUI Updater.exe")
+    parser.add_argument("--clean", action="store_true", default=False)
+    args = parser.parse_args()
+
+    try:
+        import PyInstaller.__main__ as pyinstaller
+    except ImportError:
+        print("Missing pyinstaller. Please install it before building Updater.exe.", file=sys.stderr)
+        return 1
+
+    pyinstaller.run(pyinstaller_args(clean=args.clean))
     exe = PROJECT_ROOT / "dist" / "Updater.exe"
     if not exe.exists():
         print("Build finished, but dist/Updater.exe was not found.", file=sys.stderr)

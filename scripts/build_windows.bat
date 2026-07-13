@@ -44,15 +44,13 @@ call :ensure_pkg sudachidict_small sudachidict_small || exit /b 1
 echo Checking bundled SUG source path...
 %PYTHON_BIN% -c "import sys; from pathlib import Path; src=Path(r'%SUG_SRC%').resolve(); sys.path.insert(0, str(src)); import strange_uta_game; actual=Path(strange_uta_game.__file__).resolve(); expected=src/'strange_uta_game'/'__init__.py'; print('  strange_uta_game:', actual); raise SystemExit(0 if actual == expected else f'Expected {expected}, got {actual}')" || exit /b 1
 
-if not exist "krok_helper\updater_app\dist\Updater.exe" (
-    echo Building Updater.exe...
-    %PYTHON_BIN% krok_helper\updater_app\build_updater.py
-    if errorlevel 1 (
-        echo.
-        echo Updater build failed.
-        if not defined IS_CI pause
-        exit /b 1
-    )
+echo Building GUI Updater.exe...
+%PYTHON_BIN% krok_helper\updater_app\build_updater.py
+if errorlevel 1 (
+    echo.
+    echo Updater build failed.
+    if not defined IS_CI pause
+    exit /b 1
 )
 
 if not exist "%DIST_PATH%" mkdir "%DIST_PATH%"
