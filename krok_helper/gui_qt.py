@@ -5,6 +5,7 @@ import math
 import os
 import subprocess
 import sys
+import threading
 import time
 from copy import deepcopy
 from dataclasses import dataclass
@@ -18,6 +19,14 @@ DWMWA_WINDOW_CORNER_PREFERENCE = 33
 DWMWCP_DONOTROUND = 1
 
 os.environ["QFLUENT_WIDGETS_NO_PROMOTION"] = "1"
+
+
+def _schedule_hard_process_exit(delay_seconds: float = 0.25) -> None:
+    """Guarantee updater handoff even if Qt or a worker prevents normal teardown."""
+
+    timer = threading.Timer(delay_seconds, lambda: os._exit(0))
+    timer.daemon = True
+    timer.start()
 
 from PyQt6.QtCore import QEvent, QSize, QThread, QTimer, Qt, QUrl, pyqtSignal as Signal
 from PyQt6.QtGui import QColor, QBrush, QDesktopServices, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPalette, QPen, QShortcut
@@ -2327,6 +2336,8 @@ class KrokHelperQtApp(QMainWindow):
         self._update_checker: UpdateChecker | None = None
         self._update_launch_worker = None
         self._update_progress_win = None
+        self._force_quitting_for_update = False
+        self._update_exit_prepared = False
         self.lyrics_search_service = LyricsSearchService()
         self.lyrics_search_results: list[LyricsSearchCandidate] = []
         self.lyrics_pending_results: list[LyricsSearchCandidate] = []
@@ -6842,7 +6853,7 @@ class KrokHelperQtApp(QMainWindow):
                     self, APP_TITLE, f"无法启动 Updater：\n{getattr(lr, 'reason', '未知错误')}"
                 )
                 return
-            QApplication.quit()
+            self.request_force_quit()
 
         worker.done.connect(_on_launch_done, Qt.ConnectionType.QueuedConnection)
         worker.start()
@@ -7938,7 +7949,58 @@ class KrokHelperQtApp(QMainWindow):
         output_dir.mkdir(parents=True, exist_ok=True)
         open_in_explorer(output_dir)
 
+    def request_force_quit(self) -> None:
+        """Release embedded resources, then guarantee process exit for Updater."""
+
+        if getattr(self, "_force_quitting_for_update", False):
+            return
+        self._force_quitting_for_update = True
+
+        try:
+            self.close()
+        except Exception:
+            pass
+        # Use a Python timer rather than a QTimer: QApplication.quit() can stop
+        # the Qt event loop while a non-Qt worker still keeps the process alive.
+        # Schedule only after closeEvent has synchronously flushed recovery data
+        # and released BASS resources.
+        _schedule_hard_process_exit()
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
+
+    def _prepare_force_quit_for_update(self) -> None:
+        """Persist recoverable state and release SUG/BASS before updater handoff."""
+
+        if getattr(self, "_update_exit_prepared", False):
+            return
+        self._update_exit_prepared = True
+
+        try:
+            self._stop_alignment_preview(log_message=False)
+        except Exception:
+            pass
+        try:
+            self._save_all_settings()
+        except Exception:
+            pass
+
+        page = getattr(self, "lyrics_timing_page", None)
+        if page is None:
+            return
+        flush_unsaved = getattr(page, "flush_unsaved", None)
+        if flush_unsaved is not None:
+            try:
+                flush_unsaved()
+            except Exception:
+                pass
+        KrokHelperQtApp._release_lyrics_timing_resources(page)
+
     def closeEvent(self, event) -> None:  # noqa: N802
+        if getattr(self, "_force_quitting_for_update", False):
+            self._prepare_force_quit_for_update()
+            super().closeEvent(event)
+            return
         if self._running_background_tasks():
             QMessageBox.information(self, APP_TITLE, "当前后台任务仍在运行，请等待完成后再关闭窗口。")
             event.ignore()
