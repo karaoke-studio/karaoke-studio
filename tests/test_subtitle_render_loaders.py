@@ -13,6 +13,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPoint, Qt  # noqa: E402
+from PyQt6.QtGui import QColor, QImage  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 from qfluentwidgets import (  # noqa: E402
@@ -283,6 +284,56 @@ def test_load_video_without_audio_stream_keeps_audio_unset(qapp, monkeypatch, tm
     assert win.audio_info is None
 
 
+def test_static_sequence_and_solid_backgrounds_populate_preview(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    image = tmp_path / "frame_0000.png"
+    frame = QImage(64, 36, QImage.Format.Format_RGB32)
+    frame.fill(QColor("#123456"))
+    assert frame.save(str(image))
+
+    assert win.load_background_image(image) is True
+    assert win._background_source.kind == "image"
+    assert win._preview_panel.is_populated()
+
+    assert win.load_background_sequence(image, 24) is True
+    assert win._background_source.kind == "image_sequence"
+    assert win._background_source.path.endswith("frame_%04d.png")
+    assert win._background_source.source_fps == 24
+    assert win._background_source.sequence_start_number == 0
+
+    win.set_solid_background("#654321")
+    assert win._background_source.kind == "solid"
+    assert win._background_source.color == "#654321"
+
+
+def test_build_render_job_uses_independent_audio_with_static_background(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    lrc = tmp_path / "lyrics.lrc"
+    lrc.write_text("[00:00:00]a[00:01:00]\n", encoding="utf-8")
+    win.load_from_lrc(lrc)
+    win.set_solid_background("#000000")
+
+    audio = tmp_path / "song.wav"
+    audio.write_bytes(b"fake")
+    audio_info = MediaInfo(
+        path=audio, duration=5.0, video_streams=0, audio_streams=1,
+        subtitle_streams=0, sample_rate=48000, channels=2,
+    )
+    monkeypatch.setattr(mw, "probe_media", lambda probe, path: audio_info)
+    win.load_audio(audio)
+    win._export_output_edit.setText(str(tmp_path / "out.mp4"))
+
+    job = win._build_render_job()
+
+    assert job.background_video_path is None
+    assert job.background_source.kind == "solid"
+    assert job.audio_path == audio
+    assert job.include_audio is True
+    assert job.duration_ms == 5000
+
+
 def test_subtitle_and_video_panels_can_coexist(qapp, monkeypatch, tmp_path):
     win = _make_window(qapp, monkeypatch)
 
@@ -531,9 +582,18 @@ def test_drop_panel_accepts_correct_extensions(qapp, monkeypatch, tmp_path):
     lrc.write_text("[00:00:00]a[00:00:50]", encoding="utf-8")
     mp4 = tmp_path / "x.mp4"
     mp4.write_bytes(b"\x00")
+    png = tmp_path / "x.png"
+    png.write_bytes(b"\x00")
 
     assert win._lyrics_panel.accepts(lrc) is True
     assert win._lyrics_panel.accepts(mp4) is False
 
     assert win._preview_panel.accepts(mp4) is True
+    assert win._preview_panel.accepts(png) is True
     assert win._preview_panel.accepts(lrc) is False
+
+    actions = [
+        win._preview_panel._empty_actions.itemAt(i).widget().text()
+        for i in range(win._preview_panel._empty_actions.count())
+    ]
+    assert actions == ["视频", "静态图", "图片序列", "纯色"]

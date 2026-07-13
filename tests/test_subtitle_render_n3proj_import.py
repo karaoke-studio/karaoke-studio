@@ -235,6 +235,14 @@ def test_import_media_and_screen(imported, tmp_path):
     assert data["subtitle_path"] == str(tmp_path / "demo.lrc")
     assert data["video_path"] == str(tmp_path / "demo.mp4")
     assert data["audio_path"] is None
+    assert data["background"] == {
+        "kind": "video",
+        "path": str(tmp_path / "demo.mp4"),
+        "color": "#000000",
+        "source_fps": None,
+        "sequence_start_number": 0,
+        "video_offset_ms": 0,
+    }
     assert data["screen"] == {"width": 1920, "height": 1080, "fps": 60, "par": "1:1"}
     assert data["output"]["output_path"] == str(tmp_path / "out.mp4")
     # N3 PageBreak 在 LRC 的第二个歌词行前开启新页（中间空行也保留槽位）。
@@ -433,12 +441,42 @@ def test_unsupported_fps_falls_back(tmp_path):
     assert any("帧率" in warning for warning in result.warnings)
 
 
-def test_image_background_warns(tmp_path):
+def test_image_background_is_imported(tmp_path):
     payload = _project_payload(tmp_path)
+    image = tmp_path / "background.png"
+    image.write_bytes(b"fake")
     payload["SourceInfo"]["SourceKind"] = 1
+    payload["SourceInfo"]["ImagePath"] = str(image)
+    payload["SourceInfo"]["ImageRelativePath"] = image.name
     result = load_n3proj(_write_n3proj(tmp_path, payload))
     assert result.project_data["video_path"] is None
-    assert any("图片背景" in warning for warning in result.warnings)
+    assert result.project_data["background"]["kind"] == "image"
+    assert result.project_data["background"]["path"] == str(image)
+    assert not any("图片背景" in warning for warning in result.warnings)
+
+
+def test_sequence_and_solid_background_are_imported(tmp_path):
+    payload = _project_payload(tmp_path)
+    sequence = tmp_path / "frame_%04d.png"
+    sequence.write_bytes(b"fake")
+    payload["SourceInfo"].update(
+        {"SourceKind": 2, "ImagePath": str(sequence), "ImageRelativePath": sequence.name}
+    )
+    sequence_result = load_n3proj(_write_n3proj(tmp_path, payload))
+    assert sequence_result.project_data["background"] == {
+        "kind": "image_sequence",
+        "path": str(tmp_path / "frame_%04d.png"),
+        "color": "#000000",
+        "source_fps": 60,
+        "sequence_start_number": 0,
+        "video_offset_ms": 0,
+    }
+
+    payload["SourceInfo"]["SourceKind"] = 3
+    payload["SourceInfo"]["BackgroundColor"] = {"Web16": "123456"}
+    solid_result = load_n3proj(_write_n3proj(tmp_path, payload))
+    assert solid_result.project_data["background"]["kind"] == "solid"
+    assert solid_result.project_data["background"]["color"] == "#123456"
 
 
 REAL_N3PROJ = Path(r"D:\カラオケ\songs\Marginality\1.n3proj")

@@ -40,6 +40,7 @@ from krok_helper.subtitle_render.engine.renderer import (  # noqa: E402
     render_subtitle_video,
 )
 from krok_helper.subtitle_render.models import (  # noqa: E402
+    BackgroundSource,
     Style,
     TimingChar,
     TimingLine,
@@ -108,6 +109,72 @@ def test_build_render_command_can_skip_audio(tmp_path):
     command = build_render_command("ffmpeg", _job(tmp_path, include_audio=False))
     assert "1:a:0?" not in command
     assert "-c:a" not in command
+
+
+def test_build_render_command_uses_independent_audio(tmp_path):
+    audio = tmp_path / "song.wav"
+    audio.write_bytes(b"fake")
+    job = replace(_job(tmp_path), audio_path=audio)
+
+    command = build_render_command("ffmpeg", job)
+
+    assert command[command.index(str(audio)) - 1] == "-i"
+    assert "2:a:0?" in command
+    assert "1:a:0?" not in command
+
+
+def test_build_render_command_supports_solid_background(tmp_path):
+    job = replace(
+        _job(tmp_path),
+        background_video_path=None,
+        background_source=BackgroundSource(kind="solid", color="#123456"),
+        include_audio=False,
+    )
+
+    command = build_render_command("ffmpeg", job)
+
+    assert "lavfi" in command
+    assert any("color=c=#123456:s=320x180:r=60" in part for part in command)
+    filter_graph = command[command.index("-filter_complex") + 1]
+    assert "[1:v:0]scale=320:180" in filter_graph
+
+
+def test_build_render_command_supports_static_image_and_audio(tmp_path):
+    image = tmp_path / "background.png"
+    image.write_bytes(b"fake")
+    audio = tmp_path / "song.flac"
+    audio.write_bytes(b"fake")
+    job = replace(
+        _job(tmp_path),
+        background_video_path=None,
+        background_source=BackgroundSource(kind="image", path=str(image)),
+        audio_path=audio,
+    )
+
+    command = build_render_command("ffmpeg", job)
+
+    assert command[command.index(str(image)) - 5 : command.index(str(image)) + 1] == [
+        "-loop", "1", "-framerate", "60", "-i", str(image)
+    ]
+    assert "2:a:0?" in command
+
+
+def test_build_render_command_supports_image_sequence(tmp_path):
+    first = tmp_path / "frame_%04d.png"
+    job = replace(
+        _job(tmp_path),
+        background_video_path=None,
+        background_source=BackgroundSource(
+            kind="image_sequence", path=str(first), source_fps=24
+        ),
+        include_audio=False,
+    )
+
+    command = build_render_command("ffmpeg", job)
+
+    assert command[command.index(str(first)) - 7 : command.index(str(first)) + 1] == [
+        "-stream_loop", "-1", "-framerate", "24", "-start_number", "0", "-i", str(first)
+    ]
 
 
 def test_build_render_command_honors_cpu_quality_settings(tmp_path):

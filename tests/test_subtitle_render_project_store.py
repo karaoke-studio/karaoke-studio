@@ -31,6 +31,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
 )
 from krok_helper.subtitle_render.project_store import (  # noqa: E402
     PROJECT_SCHEMA_VERSION,
+    background_payload,
     load_render_project,
     save_render_project,
 )
@@ -59,6 +60,24 @@ def test_save_render_project_round_trip(tmp_path):
     loaded = load_render_project(path)
     assert loaded["schema_version"] == PROJECT_SCHEMA_VERSION
     assert loaded["style"]["font_size_px"] == 80
+
+
+def test_background_payload_round_trip(tmp_path):
+    image = tmp_path / "background.png"
+    payload = background_payload(
+        kind="image", path=image, color="#102030", source_fps=24, video_offset_ms=125
+    )
+    path = tmp_path / "background.yurika"
+    save_render_project(path, {"background": payload})
+
+    assert load_render_project(path)["background"] == {
+        "kind": "image",
+        "path": str(image),
+        "color": "#102030",
+        "source_fps": 24,
+        "sequence_start_number": 0,
+        "video_offset_ms": 125,
+    }
 
 
 def test_load_render_project_rejects_bad_json(tmp_path):

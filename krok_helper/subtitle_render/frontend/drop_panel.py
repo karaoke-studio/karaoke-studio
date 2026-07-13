@@ -21,7 +21,9 @@ from PyQt6.QtCore import Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QFrame,
+    QHBoxLayout,
     QLabel,
+    QPushButton,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -114,6 +116,11 @@ class DropPanel(QFrame):
             lambda: f'color: {palette().text_hint}; font-size: 9pt;',
         )
         empty_layout.addWidget(self._hint_label)
+
+        self._empty_actions = QHBoxLayout()
+        self._empty_actions.setSpacing(6)
+        self._empty_actions.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        empty_layout.addLayout(self._empty_actions)
         empty_layout.addStretch(2)
 
         # 第 1 页：真实内容（由子类 / 调用方塞进来）
@@ -139,6 +146,24 @@ class DropPanel(QFrame):
             if w is not None:
                 w.setParent(None)
         self._content_layout.addWidget(widget)
+
+    def add_empty_action(self, text: str, callback) -> QPushButton:
+        """在空态提示下增加一个可直接发现的素材操作按钮。"""
+        button = QPushButton(text, self._empty_page)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        button.clicked.connect(callback)
+        themed(
+            button,
+            lambda: (
+                f"QPushButton {{ color: {palette().text_secondary}; "
+                f"background: {palette().input_bg}; border: 1px solid {palette().input_border}; "
+                "border-radius: 5px; padding: 4px 9px; }} "
+                f"QPushButton:hover {{ background: {palette().input_hover_bg}; "
+                f"border-color: {palette().input_border_focus}; }}"
+            ),
+        )
+        self._empty_actions.addWidget(button)
+        return button
 
     def set_populated(self, populated: bool) -> None:
         """切换到内容页 / 空态页。"""

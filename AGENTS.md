@@ -155,7 +155,7 @@ git submodule status
 
 1. [`docs/字幕渲染模块-需求设计.md`](docs/字幕渲染模块-需求设计.md)：总体状态、产品决策和剩余主线。
 2. [`docs/N3项目导入兼容性与实施计划.md`](docs/N3项目导入兼容性与实施计划.md)：N3 字段矩阵、明确不做项、下一步 TDD 顺序。
-3. [`docs/字幕布局-N3对齐改造计划.md`](docs/字幕布局-N3对齐改造计划.md)：布局 P1-P4 历史与 P5 每布局字符域。
+3. [`docs/字幕布局-N3对齐改造计划.md`](docs/字幕布局-N3对齐改造计划.md)：布局 P1-P4 历史、字符排版参数现状与兼容边界。
 4. [`docs/SUG与字幕渲染模块-Python走字差异.md`](docs/SUG与字幕渲染模块-Python走字差异.md)：SUG/LRC 数据保真边界。
 
 ### 当前现状
@@ -164,19 +164,16 @@ git submodule status
 - ruby、角色/多歌手、行内混合字体/字号/配色、渐变/图片填充、glow/stroke2、竖排/RTL、标题、时间轴和多字幕源均已实现。
 - N3 TACTIC 对齐已覆盖：三档发光、蓝白 after 配色、ruby 样式、7px 默认布局字间距，以及 `UseEdge2` 关闭时不强制二重描边。
 - 逐行特效（四列表格、批量编辑、N3 行动作、持久化、撤销/重做、Painter）已合入。
-- `Background` 仍是占位；产品只支持视频背景。静态图、图片序列、纯色与独立音频导出尚未接通。
+- `BackgroundSource` 已支持视频、静态图、图片序列和纯色；独立音频已接入预览、项目保存与 MP4 导出。
 - native C++ sidecar 产品路径硬关闭，Python QPainter 是唯一正式路径。
 
 ### 下一步顺序
 
-1. 验证并提交当前逐行特效；
-2. N3 每布局字符排版参数（`LyricsInterval` / `AllowBiting` / `RubyInterval` / `RubyAlignment` / `LyricsAndRubyInterval`）；
-3. 背景源抽象与独立音频；
-4. N3 提示策略清理；
-5. 无交互 CLI 与端到端 CI MP4 烟测。
+1. N3 提示策略清理；
+2. 无交互 CLI 与端到端 CI MP4 烟测。
 
 Windows PyInstaller onedir 已完成实际构建、包内 Multimedia 校验和 frozen
-multiprocessing spawn 冒烟；完整测试基线为 `845 passed, 50 skipped`。macOS 脚本已同步收集 QtMultimedia，仍需在 macOS runner
+multiprocessing spawn 冒烟；完整测试基线为 `901 passed, 50 skipped`。macOS 脚本已同步收集 QtMultimedia，仍需在 macOS runner
 完成真实构建验证。
 
 ### 关键约束
@@ -188,7 +185,7 @@ multiprocessing spawn 冒烟；完整测试基线为 `845 passed, 50 skipped`。
 - **N3 二重描边严格遵守 `UseEdge2`**，不能因保存了宽度就强制开启。
 - **所有用户面向字符串中文**。
 - 若以后再次出现 Qt pooled-thread teardown access violation，优先检查预览 worker
-  的销毁顺序；2026-07-11 合并后的 893 项测试在同一进程执行未复现。
+  的销毁顺序；2026-07-13 完整测试 `901 passed, 50 skipped`，未复现。
 
 ---
 

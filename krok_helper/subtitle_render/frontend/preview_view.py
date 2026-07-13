@@ -51,7 +51,12 @@ from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
 from krok_helper.subtitle_render.frontend.preview_media import qt_playback_source
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
-from krok_helper.subtitle_render.models import Style, TimingTrack
+from krok_helper.subtitle_render.models import (
+    BackgroundSource,
+    Style,
+    TimingTrack,
+    background_sequence_frame_path,
+)
 
 
 PREVIEW_BG = QColor("#101010")
@@ -163,6 +168,8 @@ class PreviewCanvas(QWidget):
         self._style: Style = Style()
         self._t_ms: int = 0
         self._video_path: Optional[Path] = None
+        self._background_source = BackgroundSource()
+        self._background_image_cache: dict[Path, QImage] = {}
         self._video_image: Optional[QImage] = None
         self._scaled_video_image: Optional[QImage] = None
         self._scaled_video_key: Optional[tuple[int, int, int, int]] = None
@@ -236,6 +243,23 @@ class PreviewCanvas(QWidget):
             player.play()
         self.update()
 
+    def set_background_source(self, source: BackgroundSource) -> None:
+        self._background_source = source
+        self._background_image_cache.clear()
+        self.set_video_source(Path(source.path) if source.kind == "video" and source.path else None)
+        if source.kind in {"image", "image_sequence"}:
+            image_path = (
+                background_sequence_frame_path(source, self._t_ms)
+                if source.kind == "image_sequence"
+                else Path(source.path) if source.path else None
+            )
+            image = self._load_background_image(image_path)
+            self._video_image = (
+                image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+                if not image.isNull() else None
+            )
+        self.update()
+
     def set_playing(self, playing: bool) -> None:
         """Mirror the transport state into the silent video preview player."""
         self._video_playing = playing
@@ -266,7 +290,11 @@ class PreviewCanvas(QWidget):
         logical_h = max(self.height(), 1)
         painter = QPainter(self)
         try:
-            painter.fillRect(self.rect(), PREVIEW_BG)
+            solid = QColor(self._background_source.color)
+            painter.fillRect(
+                self.rect(),
+                solid if self._background_source.kind == "solid" and solid.isValid() else PREVIEW_BG,
+            )
             target = self._paint_background_video(painter, logical_w, logical_h, dpr)
             if target is None:
                 target = self._fit_output_rect(logical_w, logical_h)
@@ -311,11 +339,36 @@ class PreviewCanvas(QWidget):
         self.update()
 
     def _sync_video_position(self, *, force: bool = False) -> None:
+        if self._background_source.kind == "image_sequence":
+            image_path = background_sequence_frame_path(self._background_source, self._t_ms)
+            image = self._load_background_image(image_path)
+            self._video_image = (
+                image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+                if not image.isNull() else None
+            )
+            self._scaled_video_image = None
+            self._scaled_video_key = None
+            return
         if self._video_path is None or self._video_player is None:
             return
         current = self._video_player.position()
         if force or abs(current - self._t_ms) > _VIDEO_SEEK_TOLERANCE_MS:
             self._video_player.setPosition(self._t_ms)
+
+    def _load_background_image(self, path: Optional[Path]) -> QImage:
+        if path is None:
+            return QImage()
+        cached = self._background_image_cache.get(path)
+        if cached is not None:
+            return cached
+        image = QImage(str(path))
+        if image.isNull():
+            return image
+        image = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+        self._background_image_cache[path] = image
+        while len(self._background_image_cache) > 8:
+            self._background_image_cache.pop(next(iter(self._background_image_cache)))
+        return image
 
     def _ensure_video_player(self) -> QMediaPlayer:
         if self._video_player is not None:
@@ -411,9 +464,12 @@ class PreviewPanel(DropPanel):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(
-            extensions={".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv"},
-            empty_title="拖入背景视频",
-            empty_hint="支持 .mp4 / .mkv / .mov / .webm 等\n或点击此处选择\n\n（仅加载字幕也可直接预览）",
+            extensions={
+                ".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv",
+                ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff",
+            },
+            empty_title="拖入背景素材",
+            empty_hint="支持视频或静态图片\n也可用下方按钮选择图片序列 / 纯色\n\n（仅加载字幕也可直接预览）",
             empty_icon="🎬",
             parent=parent,
         )
@@ -455,6 +511,14 @@ class PreviewPanel(DropPanel):
         self._canvas.set_video_source(path)
         if path is not None:
             self.set_populated(True)
+
+    def set_background_source(self, source: BackgroundSource) -> None:
+        setter = getattr(self._canvas, "set_background_source", None)
+        if setter is not None:
+            setter(source)
+        else:
+            self.set_video_source(Path(source.path) if source.kind == "video" and source.path else None)
+        self.set_populated(True)
 
     def set_playing(self, playing: bool) -> None:
         self._canvas.set_playing(playing)

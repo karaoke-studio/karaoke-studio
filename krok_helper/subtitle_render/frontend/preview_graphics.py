@@ -13,11 +13,12 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from PyQt6.QtCore import QEvent, QRectF, QSizeF, Qt, QUrl, pyqtSignal as Signal
-from PyQt6.QtGui import QBrush, QColor, QImage, QPainter
+from PyQt6.QtGui import QBrush, QColor, QImage, QPainter, QPixmap
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
 from PyQt6.QtWidgets import (
     QGraphicsItem,
+    QGraphicsPixmapItem,
     QGraphicsScene,
     QGraphicsView,
     QWidget,
@@ -32,7 +33,12 @@ from krok_helper.subtitle_render.frontend.preview_async import (
 )
 from krok_helper.subtitle_render.frontend.preview_media import qt_playback_source
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
-from krok_helper.subtitle_render.models import Style, TimingTrack
+from krok_helper.subtitle_render.models import (
+    BackgroundSource,
+    Style,
+    TimingTrack,
+    background_sequence_frame_path,
+)
 
 
 _VIDEO_SEEK_TOLERANCE_MS = 80
@@ -217,6 +223,11 @@ class PreviewGraphicsView(QGraphicsView):
         scene.addItem(self._video_item)
         self._fit_video_item_to_scene()
 
+        self._image_item = QGraphicsPixmapItem()
+        self._image_item.setZValue(1)
+        self._image_item.setVisible(False)
+        scene.addItem(self._image_item)
+
         self._subtitle_item = SubtitleGraphicsItem(
             self._output_w,
             self._output_h,
@@ -226,6 +237,8 @@ class PreviewGraphicsView(QGraphicsView):
         scene.addItem(self._subtitle_item)
 
         self._video_path: Optional[Path] = None
+        self._background_source = BackgroundSource()
+        self._background_pixmap_cache: dict[Path, QPixmap] = {}
         self._video_playing: bool = False
         self._t_ms: int = 0
         self._video_player: Optional[QMediaPlayer] = None
@@ -290,6 +303,8 @@ class PreviewGraphicsView(QGraphicsView):
 
     def set_time(self, t_ms: int) -> None:
         self._t_ms = t_ms
+        if self._background_source.kind == "image_sequence":
+            self._refresh_background_image()
         if self._async_renderer is not None:
             self._async_renderer.request(t_ms)
         else:
@@ -320,6 +335,7 @@ class PreviewGraphicsView(QGraphicsView):
         self._output_h = h
         self._scene.setSceneRect(0, 0, w, h)
         self._fit_video_item_to_scene()
+        self._refresh_background_image()
         self._subtitle_item.set_output_size(w, h)
         self._fit_scene_to_view()
         self._refresh_async_target()
@@ -401,6 +417,51 @@ class PreviewGraphicsView(QGraphicsView):
         player.setPosition(self._t_ms)
         if self._video_playing:
             player.play()
+
+    def set_background_source(self, source: BackgroundSource) -> None:
+        self._background_source = source
+        self._background_pixmap_cache.clear()
+        self._video_item.setVisible(source.kind == "video")
+        self._image_item.setVisible(source.kind in {"image", "image_sequence"})
+        color = QColor(source.color)
+        if source.kind == "solid" and color.isValid():
+            self._scene.setBackgroundBrush(QBrush(color))
+        else:
+            self._scene.setBackgroundBrush(QBrush(QColor(stage_bg())))
+        self.set_video_source(Path(source.path) if source.kind == "video" and source.path else None)
+        self._refresh_background_image()
+
+    def _refresh_background_image(self) -> None:
+        source = self._background_source
+        if source.kind not in {"image", "image_sequence"} or not source.path:
+            self._image_item.setPixmap(QPixmap())
+            return
+        path = (
+            background_sequence_frame_path(source, self._t_ms)
+            if source.kind == "image_sequence"
+            else Path(source.path)
+        )
+        pixmap = self._background_pixmap_cache.get(path) if path is not None else None
+        if pixmap is None:
+            pixmap = QPixmap(str(path)) if path is not None else QPixmap()
+            if path is not None and not pixmap.isNull():
+                self._background_pixmap_cache[path] = pixmap
+                while len(self._background_pixmap_cache) > 8:
+                    self._background_pixmap_cache.pop(next(iter(self._background_pixmap_cache)))
+        if pixmap.isNull():
+            self._image_item.setPixmap(QPixmap())
+            return
+        scaled = pixmap.scaled(
+            self._output_w,
+            self._output_h,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        self._image_item.setPixmap(scaled)
+        self._image_item.setPos(
+            (self._output_w - scaled.width()) / 2,
+            (self._output_h - scaled.height()) / 2,
+        )
 
     def set_playing(self, playing: bool) -> None:
         self._video_playing = playing

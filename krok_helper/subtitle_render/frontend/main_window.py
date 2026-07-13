@@ -32,10 +32,12 @@ import time
 from typing import Any, Optional
 
 from PyQt6.QtCore import QObject, QPoint, QRect, QSize, QThread, QTimer, Qt, pyqtSignal as Signal
-from PyQt6.QtGui import QKeySequence, QShortcut
+from PyQt6.QtGui import QColor, QImage, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog,
+    QColorDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
     QMessageBox,
     QPushButton,
@@ -102,6 +104,7 @@ from krok_helper.subtitle_render.frontend.property_panel import (
 )
 from krok_helper.subtitle_render.frontend.timeline_view import TrackTimelineView
 from krok_helper.subtitle_render.models import (
+    BackgroundSource,
     LineAnimationOverride,
     PROJECT_FILE_SUFFIX,
     SubtitleStyleScheme,
@@ -115,9 +118,11 @@ from krok_helper.subtitle_render.models import (
     subtitle_style_scheme_to_dict,
     style_from_dict,
     style_to_dict,
+    infer_image_sequence_pattern,
 )
 from krok_helper.subtitle_render.n3proj_import import N3_PROJECT_FILTER, load_n3proj
 from krok_helper.subtitle_render.project_store import (
+    background_payload,
     load_render_project,
     project_output_payload,
     project_payload,
@@ -138,6 +143,13 @@ SUBTITLE_FILTER = "SUG 项目 / Nicokara LRC (*.sug *.lrc);;SUG 项目 (*.sug);;
 _UNDO_STACK_LIMIT = 200
 """撤销栈上限（字幕轨道显示/隐藏时间编辑）。"""
 VIDEO_FILTER = "视频文件 (*.mp4 *.mkv *.mov *.webm *.avi *.flv);;所有文件 (*.*)"
+IMAGE_FILTER = "图片文件 (*.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff);;所有文件 (*.*)"
+AUDIO_FILTER = "音频文件 (*.wav *.flac *.mp3 *.m4a *.aac *.ogg *.opus);;所有文件 (*.*)"
+BACKGROUND_MEDIA_FILTER = (
+    "背景素材 (*.mp4 *.mkv *.mov *.webm *.avi *.flv *.png *.jpg *.jpeg *.bmp *.webp *.tif *.tiff);;"
+    + VIDEO_FILTER + ";;" + IMAGE_FILTER
+)
+IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 OUTPUT_FILTER = "MP4 视频 (*.mp4);;所有文件 (*.*)"
 PROJECT_FILTER = f"字幕渲染项目 (*{PROJECT_FILE_SUFFIX});;所有文件 (*.*)"
 
@@ -702,6 +714,7 @@ class SubtitleRenderWindow(QWidget):
         self._subtitle_path: Optional[Path] = None
         self._video_path: Optional[Path] = None
         self._video_info: Optional[MediaInfo] = None
+        self._background_source: Optional[BackgroundSource] = None
         self._audio_path: Optional[Path] = None
         self._audio_info: Optional[MediaInfo] = None
         self._style: Style = Style()
@@ -835,6 +848,18 @@ class SubtitleRenderWindow(QWidget):
         self._file_menu_btn.setMenu(menu)
         layout.addWidget(self._file_menu_btn)
 
+        self._background_menu_btn = DropDownPushButton("背景与音频")
+        self._background_menu_btn.setFixedHeight(30)
+        background_menu = RoundMenu(parent=self._background_menu_btn)
+        background_menu.addAction(Action("背景视频…", triggered=self._browse_video))
+        background_menu.addAction(Action("静态图片…", triggered=self._browse_background_image))
+        background_menu.addAction(Action("图片序列首帧…", triggered=self._browse_background_sequence))
+        background_menu.addAction(Action("纯色背景…", triggered=self._choose_solid_background))
+        background_menu.addSeparator()
+        background_menu.addAction(Action("独立音频…", triggered=self._browse_audio))
+        self._background_menu_btn.setMenu(background_menu)
+        layout.addWidget(self._background_menu_btn)
+
         # 项目名：超长用 … 截断（完整名放 tooltip）。
         self._project_name_label = QLabel("")
         self._project_name_label.setMaximumWidth(260)
@@ -912,6 +937,14 @@ class SubtitleRenderWindow(QWidget):
             subtitle_path=self._subtitle_path,
             video_path=self._video_path,
             audio_path=independent_audio,
+            background=background_payload(
+                kind=self._background_source.kind,
+                path=Path(self._background_source.path) if self._background_source.path else None,
+                color=self._background_source.color,
+                source_fps=self._background_source.source_fps,
+                sequence_start_number=self._background_source.sequence_start_number,
+                video_offset_ms=self._background_source.video_offset_ms,
+            ) if self._background_source is not None else None,
             style=style_to_dict(self._style),
             screen=screen_settings_to_dict(self._screen_settings),
             selected_scheme_key=self._selected_scheme_key,
@@ -972,7 +1005,10 @@ class SubtitleRenderWindow(QWidget):
                 )
             self._apply_extra_subtitle_sources(data.get("extra_subtitle_sources"))
             self._refresh_tracks_view_windows()
-        if paths["video_path"] is not None and paths["video_path"].is_file():
+        background = data.get("background") if isinstance(data.get("background"), dict) else None
+        if background is not None:
+            self._load_background_payload(background)
+        elif paths["video_path"] is not None and paths["video_path"].is_file():
             self.load_video(paths["video_path"])
         audio = paths["audio_path"]
         if audio is not None and audio.is_file() and audio != self._video_path:
@@ -1046,6 +1082,7 @@ class SubtitleRenderWindow(QWidget):
             self._subtitle_path = None
             self._video_path = None
             self._video_info = None
+            self._background_source = None
             self._audio_path = None
             self._audio_info = None
             # 歌词列表回空态
@@ -1185,8 +1222,9 @@ class SubtitleRenderWindow(QWidget):
         self._preview_window = PreviewPlayerWindow(self)
         self._preview_panel = self._preview_window.preview_panel
         self._preview_panel.set_style(self._style)
-        self._preview_panel.pathDropped.connect(self.load_video)
-        self._preview_panel.browseRequested.connect(self._browse_video)
+        self._preview_panel.pathDropped.connect(self._load_dropped_background)
+        self._preview_panel.browseRequested.connect(self._browse_background_media)
+        self._add_background_empty_actions(self._preview_panel)
         self._transport_bar = self._preview_window.transport_bar
 
         self._lyrics_panel = LyricsPanel()
@@ -1236,13 +1274,17 @@ class SubtitleRenderWindow(QWidget):
         self._selected_scheme_key = self._property_panel.current_scheme_key()
 
         self._video_settings_panel = DropPanel(
-            extensions={".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv"},
-            empty_title="拖入背景视频",
-            empty_hint="支持 .mp4 / .mkv / .mov / .webm 等\n或点击此处选择",
+            extensions={
+                ".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv",
+                *IMAGE_EXTENSIONS,
+            },
+            empty_title="拖入背景素材",
+            empty_hint="支持视频或静态图片\n图片序列与纯色请用下方按钮",
             empty_icon="🎬",
         )
-        self._video_settings_panel.pathDropped.connect(self.load_video)
-        self._video_settings_panel.browseRequested.connect(self._browse_video)
+        self._video_settings_panel.pathDropped.connect(self._load_dropped_background)
+        self._video_settings_panel.browseRequested.connect(self._browse_background_media)
+        self._add_background_empty_actions(self._video_settings_panel)
         self._video_settings_panel.set_content(self._property_panel)
         top.addWidget(self._video_settings_panel)
 
@@ -1433,6 +1475,65 @@ class SubtitleRenderWindow(QWidget):
         if path_str:
             self.load_video(Path(path_str))
 
+    def _browse_background_media(self) -> None:
+        current = (
+            Path(self._background_source.path)
+            if self._background_source is not None and self._background_source.path
+            else self._video_path
+        )
+        start_dir = str(current.parent) if current is not None else ""
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "选择背景视频或静态图片", start_dir, BACKGROUND_MEDIA_FILTER
+        )
+        if path_str:
+            self._load_dropped_background(Path(path_str))
+
+    def _load_dropped_background(self, path: Path) -> None:
+        if path.suffix.lower() in IMAGE_EXTENSIONS:
+            self.load_background_image(path)
+        else:
+            self.load_video(path)
+
+    def _add_background_empty_actions(self, panel: DropPanel) -> None:
+        panel.add_empty_action("视频", self._browse_video)
+        panel.add_empty_action("静态图", self._browse_background_image)
+        panel.add_empty_action("图片序列", self._browse_background_sequence)
+        panel.add_empty_action("纯色", self._choose_solid_background)
+
+    def _browse_background_image(self) -> None:
+        start_dir = str(Path(self._background_source.path).parent) if self._background_source and self._background_source.path else ""
+        path_str, _ = QFileDialog.getOpenFileName(self, "选择静态背景图片", start_dir, IMAGE_FILTER)
+        if path_str:
+            self.load_background_image(Path(path_str))
+
+    def _browse_background_sequence(self) -> None:
+        start_dir = str(Path(self._background_source.path).parent) if self._background_source and self._background_source.path else ""
+        path_str, _ = QFileDialog.getOpenFileName(self, "选择图片序列首帧", start_dir, IMAGE_FILTER)
+        if path_str:
+            fps, ok = QInputDialog.getInt(
+                self,
+                "图片序列帧率",
+                "源帧率（每秒图片数）",
+                int(self._background_source.source_fps or self._screen_settings.fps)
+                if self._background_source is not None else self._screen_settings.fps,
+                1,
+                240,
+            )
+            if ok:
+                self.load_background_sequence(Path(path_str), fps)
+
+    def _choose_solid_background(self) -> None:
+        initial = self._background_source.color if self._background_source else "#000000"
+        color = QColorDialog.getColor(initial=QColor(initial), parent=self, title="选择纯色背景")
+        if color.isValid():
+            self.set_solid_background(color.name())
+
+    def _browse_audio(self) -> None:
+        start_dir = str(self._audio_path.parent) if self._audio_path else ""
+        path_str, _ = QFileDialog.getOpenFileName(self, "选择独立音频", start_dir, AUDIO_FILTER)
+        if path_str:
+            self.load_audio(Path(path_str))
+
     def _browse_export_output(self) -> None:
         start = self._default_export_path()
         path_str, _ = QFileDialog.getSaveFileName(self, "导出字幕视频", str(start), OUTPUT_FILTER)
@@ -1522,9 +1623,11 @@ class SubtitleRenderWindow(QWidget):
         if info.video_streams == 0:
             QMessageBox.warning(self, "背景视频不可用", f"该文件不含视频流：\n{path}")
             return None
+        old_video = self._video_path
         self._video_path = path
         self._video_info = info
-        self._preview_panel.set_video_source(path)
+        self._background_source = BackgroundSource(kind="video", path=str(path))
+        self._preview_panel.set_background_source(self._background_source)
         self._video_settings_panel.set_populated(True)
         self._preview_window.set_media_title(path)
         self._preview_window.show_near_workspace()
@@ -1534,6 +1637,9 @@ class SubtitleRenderWindow(QWidget):
         if info.audio_streams > 0:
             self._audio_path = path
             self._audio_info = info
+        elif self._audio_path == old_video:
+            self._audio_path = None
+            self._audio_info = None
         if self._playback is not None:
             # 单播放器：视频（无论是否含音频）整体交给共享 controller（同时出视频 + 音频）。
             self._transport_bar.set_audio_source(path)
@@ -1542,6 +1648,79 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_transport_duration()
         self._mark_project_dirty()
         return info
+
+    def load_background_image(self, path: Path) -> bool:
+        image = QImage(str(path))
+        if image.isNull():
+            QMessageBox.warning(self, "背景图片不可用", f"无法读取图片：\n{path}")
+            return False
+        self._set_non_video_background(BackgroundSource(kind="image", path=str(path)))
+        return True
+
+    def load_background_sequence(self, first_frame: Path, source_fps: int = 60) -> bool:
+        image = QImage(str(first_frame))
+        if image.isNull():
+            QMessageBox.warning(self, "图片序列不可用", f"无法读取首帧：\n{first_frame}")
+            return False
+        pattern, start_number = infer_image_sequence_pattern(first_frame)
+        if pattern == first_frame:
+            QMessageBox.warning(
+                self,
+                "图片序列命名无效",
+                "首帧文件名需要以连续编号结尾，例如 frame_0001.png。",
+            )
+            return False
+        self._set_non_video_background(
+            BackgroundSource(
+                kind="image_sequence", path=str(pattern), source_fps=max(int(source_fps), 1),
+                sequence_start_number=start_number,
+            )
+        )
+        return True
+
+    def set_solid_background(self, color: str) -> None:
+        self._set_non_video_background(BackgroundSource(kind="solid", color=color))
+
+    def _set_non_video_background(self, source: BackgroundSource) -> None:
+        old_video = self._video_path
+        self._video_path = None
+        self._video_info = None
+        if self._audio_path == old_video:
+            self._audio_path = None
+            self._audio_info = None
+            self._transport_bar.set_audio_source(None)
+        self._background_source = source
+        self._preview_panel.set_background_source(source)
+        self._video_settings_panel.set_populated(True)
+        if source.path:
+            self._preview_window.set_media_title(Path(source.path))
+        self._preview_window.show_near_workspace()
+        if not self._export_output_edit.text().strip():
+            self._export_output_edit.setText(str(self._default_export_path()))
+        self._refresh_transport_duration()
+        self._mark_project_dirty()
+
+    def _load_background_payload(self, payload: dict) -> None:
+        kind = str(payload.get("kind") or "solid")
+        path = Path(str(payload.get("path"))) if payload.get("path") else None
+        source = BackgroundSource(
+            kind=kind if kind in {"video", "image", "image_sequence", "solid"} else "solid",
+            path=str(path) if path is not None else None,
+            color=str(payload.get("color") or "#000000"),
+            source_fps=(int(payload["source_fps"]) if payload.get("source_fps") else None),
+            sequence_start_number=max(int(payload.get("sequence_start_number") or 0), 0),
+            video_offset_ms=int(payload.get("video_offset_ms") or 0),
+        )
+        if kind == "video" and path is not None and path.is_file():
+            self.load_video(path)
+            self._background_source = source
+            self._preview_panel.set_background_source(source)
+        elif kind == "image" and path is not None and path.is_file():
+            self._set_non_video_background(source)
+        elif kind == "image_sequence" and path is not None:
+            self._set_non_video_background(source)
+        elif kind == "solid":
+            self._set_non_video_background(source)
 
     def load_audio(self, path: Path) -> Optional[MediaInfo]:
         """加载独立音轨（覆盖视频自带音频）。
@@ -2623,7 +2802,12 @@ class SubtitleRenderWindow(QWidget):
         )
 
     def _default_export_path(self) -> Path:
-        base = self._video_path or self._subtitle_path
+        background_path = (
+            Path(self._background_source.path)
+            if self._background_source is not None and self._background_source.path
+            else None
+        )
+        base = self._video_path or background_path or self._subtitle_path
         if base is None:
             return Path.cwd() / "subtitle_render.mp4"
         return base.with_name(f"{base.stem}_subtitle.mp4")
@@ -2639,8 +2823,8 @@ class SubtitleRenderWindow(QWidget):
     def _build_render_job(self) -> RenderJob:
         if self._timing_track is None:
             raise ProcessingError("请先加载字幕文件。")
-        if self._video_path is None:
-            raise ProcessingError("请先加载背景视频。")
+        if self._background_source is None:
+            raise ProcessingError("请先选择背景源。")
         output_text = self._export_output_edit.text().strip()
         if not output_text:
             raise ProcessingError("请先选择输出路径。")
@@ -2653,13 +2837,19 @@ class SubtitleRenderWindow(QWidget):
             track=self._timing_track,
             style=self._style,
             background_video_path=self._video_path,
+            background_source=self._background_source,
+            audio_path=(
+                self._audio_path
+                if self._audio_path is not None and self._audio_path != self._video_path
+                else None
+            ),
             output_path=output_path,
             extra_tracks=tuple(self._extra_track_list()),
             width=self._export_width_spin.value(),
             height=self._export_height_spin.value(),
             fps=self._export_fps_value(),
             duration_ms=duration_ms,
-            include_audio=bool(self._video_info and self._video_info.audio_streams > 0),
+            include_audio=bool(self._audio_info and self._audio_info.audio_streams > 0),
             encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
             crf=self._export_crf_spin.value(),
             preset=str(self._export_preset_combo.currentData() or "veryfast"),
@@ -2670,6 +2860,8 @@ class SubtitleRenderWindow(QWidget):
         candidates: list[int] = [track_duration_ms(track) for track in self._all_tracks()]
         if self._video_info is not None and self._video_info.duration > 0:
             candidates.append(int(round(self._video_info.duration * 1000)))
+        if self._audio_info is not None and self._audio_info.duration > 0:
+            candidates.append(int(round(self._audio_info.duration * 1000)))
         return max(candidates, default=0)
 
     def _start_render_export(self) -> None:

@@ -34,7 +34,7 @@ from krok_helper.subtitle_render.engine.painter import (
     paint_frame_to_painter,
 )
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
-from krok_helper.subtitle_render.models import Style, TimingTrack
+from krok_helper.subtitle_render.models import BackgroundSource, Style, TimingTrack
 from krok_helper.subtitle_render.native_backend import NativeRendererError, resolve_native_renderer_path
 
 # A2 条带渲染：只把字幕所在窄条喂给 ffmpeg pipe，省每帧 8MB 拷贝 / pipe 带宽。
@@ -57,8 +57,10 @@ from krok_helper.types import Logger
 class RenderJob:
     track: TimingTrack
     style: Style
-    background_video_path: Path
+    background_video_path: Path | None
     output_path: Path
+    background_source: BackgroundSource | None = None
+    audio_path: Path | None = None
     width: int = 1920
     height: int = 1080
     fps: int = 60
@@ -262,6 +264,8 @@ def build_render_command(
             "[0:v:0]format=rgba,setpts=PTS-STARTPTS[ov];"
             f"[bg][ov]overlay=0:{overlay_y}:format=auto[v]"
         )
+    background = _resolved_background(job)
+    background_args = _background_input_args(background, job, duration_seconds)
     command = [
         ffmpeg_path,
         "-y",
@@ -278,15 +282,22 @@ def build_render_command(
         str(job.fps),
         "-i",
         "pipe:0",
-        "-i",
-        str(job.background_video_path),
+        *background_args,
+    ]
+    audio_input_index: int | None = None
+    if job.include_audio and job.audio_path is not None:
+        audio_input_index = 2
+        command.extend(["-i", str(job.audio_path)])
+    elif job.include_audio and background.kind == "video":
+        audio_input_index = 1
+    command.extend([
         "-filter_complex",
         filter_graph,
         "-map",
         "[v]",
-    ]
-    if job.include_audio:
-        command.extend(["-map", "1:a:0?"])
+    ])
+    if audio_input_index is not None:
+        command.extend(["-map", f"{audio_input_index}:a:0?"])
     command.extend(["-t", f"{duration_seconds:.6f}", "-r", str(job.fps), "-fps_mode", "cfr"])
     command.extend(
         video_encoder_options(
@@ -297,7 +308,7 @@ def build_render_command(
         )
     )
     command.extend(["-pix_fmt", "yuv420p"])
-    if job.include_audio:
+    if audio_input_index is not None:
         command.extend(["-c:a", "aac", "-b:a", "192k"])
     command.extend(["-movflags", "+faststart", str(job.output_path)])
     return command
@@ -306,8 +317,19 @@ def build_render_command(
 def _validate_job(job: RenderJob) -> None:
     if all(track.char_count <= 0 for track in _job_tracks(job)):
         raise ProcessingError("请先加载有效的字幕文件。")
-    if not job.background_video_path.is_file():
-        raise ProcessingError(f"请先加载背景视频: {job.background_video_path}")
+    background = _resolved_background(job)
+    if background.kind in {"video", "image", "image_sequence"}:
+        if not background.path:
+            raise ProcessingError("请先选择背景素材。")
+        path = Path(background.path)
+        if background.kind != "image_sequence" and not path.is_file():
+            raise ProcessingError(f"背景素材不存在: {path}")
+        if background.kind == "image_sequence" and not (
+            path.exists() or path.parent.exists()
+        ):
+            raise ProcessingError(f"背景图片序列不存在: {path}")
+    if job.audio_path is not None and not job.audio_path.is_file():
+        raise ProcessingError(f"独立音频不存在: {job.audio_path}")
     if job.width <= 0 or job.height <= 0:
         raise ProcessingError("输出分辨率无效。")
     if job.fps <= 0:
@@ -320,6 +342,42 @@ def _validate_job(job: RenderJob) -> None:
         raise ProcessingError(f"不支持的 CPU preset: {job.preset}")
     if not str(job.output_path).strip():
         raise ProcessingError("请先选择输出路径。")
+
+
+def _resolved_background(job: RenderJob) -> BackgroundSource:
+    if job.background_source is not None:
+        return job.background_source
+    if job.background_video_path is not None:
+        return BackgroundSource(kind="video", path=str(job.background_video_path))
+    return BackgroundSource(kind="solid", color="#000000")
+
+
+def _background_input_args(
+    source: BackgroundSource, job: RenderJob, duration_seconds: float
+) -> list[str]:
+    """返回始终占据 ffmpeg input #1 的背景输入参数。"""
+    if source.kind == "solid":
+        color = QColor(source.color)
+        if not color.isValid():
+            raise ProcessingError(f"背景颜色无效: {source.color}")
+        return [
+            "-f", "lavfi", "-i",
+            f"color=c={color.name()}:s={job.width}x{job.height}:r={job.fps}:d={duration_seconds:.6f}",
+        ]
+    if source.kind == "image":
+        return ["-loop", "1", "-framerate", str(job.fps), "-i", str(source.path)]
+    if source.kind == "image_sequence":
+        fps = max(int(source.source_fps or job.fps), 1)
+        return [
+            "-stream_loop", "-1", "-framerate", str(fps),
+            "-start_number", str(max(int(source.sequence_start_number), 0)),
+            "-i", str(source.path),
+        ]
+    args: list[str] = []
+    if source.video_offset_ms:
+        args.extend(["-ss", f"{source.video_offset_ms / 1000.0:.6f}"])
+    args.extend(["-i", str(source.path)])
+    return args
 
 
 def _resolve_duration_ms(job: RenderJob) -> int:

@@ -25,7 +25,7 @@
 - ``SourceKind``：0 Movie / 1 Image / 2 SequenceImage / 3 Background（纯色）。
 - ``DestFormat``：0 UnCompressedAvi / 1 Mp4 / 2·3 ArgbPng。
 
-不支持的设置（图片背景、非 MP4 输出、未知字幕动作等）不阻塞导入，
+不支持的设置（非 MP4 输出、未知字幕动作等）不阻塞导入，
 收集为中文 warning 由 UI 一次性展示。
 """
 
@@ -55,6 +55,7 @@ from krok_helper.subtitle_render.models import (
     normalize_glow_concentration_level,
     line_animation_override_to_dict,
     style_to_dict,
+    infer_image_sequence_pattern,
 )
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 
@@ -126,15 +127,40 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
     source = _dict(data.get("SourceInfo"))
     video_path: Optional[Path] = None
     source_kind = _int(source.get("SourceKind"), 0)
+    background: dict[str, Any]
     if source_kind == 0:
         video_path = _resolve_media(
             source.get("MoviePath"), source.get("MovieRelativePath"), base_dir, warnings, "背景视频"
         )
+        background = {
+            "kind": "video", "path": str(video_path) if video_path else None,
+            "color": "#000000", "source_fps": None, "sequence_start_number": 0,
+            "video_offset_ms": 0,
+        }
     elif source_kind in (1, 2):
-        warnings.append("N3 项目使用图片背景，本模块暂不支持图片背景，请手动选择背景视频")
+        image_path = _resolve_media(
+            source.get("ImagePath"), source.get("ImageRelativePath"), base_dir, warnings,
+            "背景图片序列" if source_kind == 2 else "背景图片",
+        )
+        sequence_path, sequence_start = (
+            infer_image_sequence_pattern(image_path)
+            if source_kind == 2 and image_path is not None
+            else (image_path, 0)
+        )
+        background = {
+            "kind": "image_sequence" if source_kind == 2 else "image",
+            "path": str(sequence_path) if sequence_path else None,
+            "color": "#000000",
+            "source_fps": _int(source.get("Fps"), 60) if source_kind == 2 else None,
+            "sequence_start_number": sequence_start,
+            "video_offset_ms": 0,
+        }
     else:
         color = _hex_from_colorbind(source.get("BackgroundColor"), "#000000")
-        warnings.append(f"N3 项目使用纯色背景（{color}），本模块暂不支持，已忽略")
+        background = {
+            "kind": "solid", "path": None, "color": color,
+            "source_fps": None, "sequence_start_number": 0, "video_offset_ms": 0,
+        }
 
     audio_path = _resolve_media(
         source.get("SoundPath"), source.get("SoundRelativePath"), base_dir, warnings, "音频"
@@ -290,6 +316,7 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
         "subtitle_path": str(subtitle_path) if subtitle_path else None,
         "video_path": str(video_path) if video_path else None,
         "audio_path": str(audio_path) if audio_path else None,
+        "background": background,
         "style": style_to_dict(style),
         "screen": screen,
         "selected_scheme_key": "global",

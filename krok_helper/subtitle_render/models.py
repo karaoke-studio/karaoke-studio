@@ -20,6 +20,8 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field, fields, replace
 from difflib import SequenceMatcher
+from pathlib import Path
+import re
 from typing import Literal, Optional
 
 LineBreakKind = Literal["none", "page", "paragraph"]
@@ -842,13 +844,52 @@ def style_with_line_animation(style: Style, line: TimingLine) -> Style:
 
 
 @dataclass
-class Background:
-    """背景层占位。kind 取值：solid / image / video / loop_video。"""
+class BackgroundSource:
+    """字幕画面的正式背景源。
 
-    kind: Literal["solid", "image", "video", "loop_video"] = "solid"
-    color: str = "#000000"
+    ``image_sequence`` 的 ``path`` 可以是首帧/编号模式；``source_fps`` 决定取帧
+    速度。视频偏移保留为毫秒，供预览和导出统一应用。
+    """
+
+    kind: Literal["video", "image", "image_sequence", "solid"] = "solid"
     path: Optional[str] = None
+    color: str = "#000000"
+    source_fps: Optional[int] = None
+    sequence_start_number: int = 0
     video_offset_ms: int = 0
+
+
+def background_sequence_frame_path(source: BackgroundSource, t_ms: int) -> Optional[Path]:
+    """按 ffmpeg ``%0Nd``/``%d`` 编号模式解析图片序列当前帧。"""
+    if source.kind != "image_sequence" or not source.path:
+        return None
+    index = (
+        max(int(t_ms), 0) * max(int(source.source_fps or 60), 1) // 1000
+        + max(int(source.sequence_start_number), 0)
+    )
+    raw = str(source.path)
+    match = re.search(r"%0?(\d*)d", raw)
+    if match:
+        width = int(match.group(1) or 0)
+        number = f"{index:0{width}d}" if width else str(index)
+        return Path(raw[: match.start()] + number + raw[match.end() :])
+    return Path(raw)
+
+
+def infer_image_sequence_pattern(path: Path) -> tuple[Path, int]:
+    """把 ``frame_0001.png`` 转成 ffmpeg 模式并保留起始编号。"""
+    match = re.search(r"(\d+)$", path.stem)
+    if not match:
+        return path, 0
+    start = int(match.group(1))
+    pattern = path.with_name(
+        path.stem[: match.start()] + f"%0{len(match.group(1))}d" + path.suffix
+    )
+    return pattern, start
+
+
+# 旧代码曾公开 ``Background`` 名称；保留别名以兼容项目外调用。
+Background = BackgroundSource
 
 
 @dataclass
@@ -870,7 +911,7 @@ class RenderProject:
 
     subtitle_source: SubtitleSource = field(default_factory=SubtitleSource)
     global_style: Style = field(default_factory=Style)
-    background: Background = field(default_factory=Background)
+    background: BackgroundSource = field(default_factory=BackgroundSource)
     output: OutputConfig = field(default_factory=OutputConfig)
     audio_path: Optional[str] = None
     schema_version: int = SCHEMA_VERSION

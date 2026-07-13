@@ -62,6 +62,7 @@ def project_payload(
     screen: dict,
     selected_scheme_key: str,
     output: dict,
+    background: Optional[dict] = None,
     line_layout_indices: Optional[list[int]] = None,
     line_breaks_before: Optional[list[str]] = None,
     char_role_labels: Optional[list] = None,
@@ -101,6 +102,8 @@ def project_payload(
         "selected_scheme_key": selected_scheme_key,
         "output": output,
     }
+    if background is not None:
+        payload["background"] = dict(background)
     if line_layout_indices is not None:
         payload["line_layout_indices"] = [int(v) for v in line_layout_indices]
     if line_breaks_before is not None:
@@ -136,6 +139,26 @@ def split_project_paths(data: dict) -> dict[str, Optional[Path]]:
         "subtitle_path": _as_path(data.get("subtitle_path")),
         "video_path": _as_path(data.get("video_path")),
         "audio_path": _as_path(data.get("audio_path")),
+    }
+
+
+def background_payload(
+    *,
+    kind: str,
+    path: Optional[Path] = None,
+    color: str = "#000000",
+    source_fps: Optional[int] = None,
+    sequence_start_number: int = 0,
+    video_offset_ms: int = 0,
+) -> dict[str, object]:
+    """组装可写入 ``.yurika`` 的背景源快照。"""
+    return {
+        "kind": kind if kind in {"video", "image", "image_sequence", "solid"} else "solid",
+        "path": str(path) if path else None,
+        "color": str(color or "#000000"),
+        "source_fps": int(source_fps) if source_fps is not None else None,
+        "sequence_start_number": int(sequence_start_number),
+        "video_offset_ms": int(video_offset_ms),
     }
 
 
