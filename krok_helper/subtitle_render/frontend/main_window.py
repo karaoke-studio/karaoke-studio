@@ -959,6 +959,7 @@ class SubtitleRenderWindow(QWidget):
             line_display_overrides=line_display_overrides,
             line_animation_overrides=line_animation_overrides,
             extra_subtitle_sources=extra_subtitle_sources,
+            project_role_names=self._property_panel.role_names,
             output=project_output_payload(
                 encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
                 crf=self._export_crf_spin.value(),
@@ -1022,8 +1023,22 @@ class SubtitleRenderWindow(QWidget):
         # schemes only after those payloads have replaced source-LRC markers;
         # otherwise a transient ``【アクア】`` marker can auto-create an unrelated
         # palette before FontIndex=0 clears it back to the global N3 scheme.
+        content_roles = self._content_role_options()
+        project_roles = data.get("project_role_names")
+        if isinstance(project_roles, list):
+            seen = set(content_roles)
+            for value in project_roles:
+                name = str(value or "").strip()
+                if (
+                    name
+                    and name != TITLE_SCHEME_NAME
+                    and name in self._style.custom_style_schemes
+                    and name not in seen
+                ):
+                    seen.add(name)
+                    content_roles.append(name)
+        self._property_panel.set_roles(content_roles)
         self._lyrics_panel.set_role_options(self._merged_role_options())
-        self._property_panel.set_roles(self._content_role_options())
 
     def _apply_output_settings(self, output: dict) -> None:
         encoder = output.get("encoder_mode")
@@ -1245,6 +1260,9 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.pathDropped.connect(self.load_subtitle_source)
         self._lyrics_panel.browseRequested.connect(self._browse_subtitle)
         self._lyrics_panel.roleChanged.connect(self._on_lyrics_role_changed)
+        self._lyrics_panel.roleChangeRequested.connect(
+            self._on_lyrics_roles_changed
+        )
         self._lyrics_panel.charRolesChanged.connect(self._on_lyrics_char_roles_changed)
         self._lyrics_panel.titleEditRequested.connect(
             self._freeze_title_template_for_character_edit
@@ -2298,6 +2316,12 @@ class SubtitleRenderWindow(QWidget):
                     self._redo_stack.append(command)
                     return
                 continue
+            if command[0] == "char_roles_batch":
+                _kind, track_index, rows, old_values, _new_values = command
+                if self._restore_char_role_rows(track_index, rows, old_values):
+                    self._redo_stack.append(command)
+                    return
+                continue
             if len(command) == 5 and command[0] == "animation":
                 _kind, track_index, rows, old_values, new_values = command
                 if self._restore_animation_overrides(track_index, rows, old_values):
@@ -2324,6 +2348,12 @@ class SubtitleRenderWindow(QWidget):
             if command[0] == "char_roles":
                 _kind, track_index, row, _old_labels, new_labels = command
                 if self._restore_char_roles(track_index, row, new_labels):
+                    self._undo_stack.append(command)
+                    return
+                continue
+            if command[0] == "char_roles_batch":
+                _kind, track_index, rows, _old_values, new_values = command
+                if self._restore_char_role_rows(track_index, rows, new_values):
                     self._undo_stack.append(command)
                     return
                 continue
@@ -2574,10 +2604,19 @@ class SubtitleRenderWindow(QWidget):
     def _merged_role_options(self) -> list[str]:
         """返回属性面板当前可分配角色，供歌词列表与逐字符编辑器使用。
 
-        预设库只是可复用模板，不代表当前项目里的角色。N3 导入会先加载 LRC，
-        再用 ``char_role_labels`` 覆盖标签；若把两者或预设库合并，旧标签就会
-        以无效角色残留在逐字符对话框中。
+        预设库只是可复用模板，不代表当前项目里的角色；但用户通过预设库
+        “导入为项目角色”的方案已经进入属性面板角色导航，必须在首次分配前
+        同步到左侧歌词表格。直接读取 ``role_names`` 还能排除 N3 覆盖后残留的
+        旧 LRC 标签，因为 ``set_roles`` 会以当前内容角色重建该列表。
         """
+        if hasattr(self, "_property_panel"):
+            options = self._property_panel.role_names
+            seen = set(options)
+            for name in self._content_role_options():
+                if name not in seen:
+                    seen.add(name)
+                    options.append(name)
+            return options
         return self._content_role_options()
 
     def _content_role_options(self) -> list[str]:
@@ -2655,6 +2694,50 @@ class SubtitleRenderWindow(QWidget):
         self._set_line_role_labels(
             track, row, [label for _ch in track.lines[row].chars]
         )
+
+    def _on_lyrics_roles_changed(self, rows: list[int], role_name: str) -> None:
+        """把一个角色方案批量覆盖到所选歌词行，并作为一条命令撤销/重做。"""
+        if self._title_source_active:
+            return
+        track_index = self._active_source_index
+        track = self._track_by_index(track_index)
+        if track is None:
+            return
+        valid_rows = tuple(
+            sorted(
+                {
+                    int(row)
+                    for row in rows
+                    if 0 <= int(row) < len(track.lines)
+                    and track.lines[int(row)].chars
+                    and not track.lines[int(row)].is_blank
+                }
+            )
+        )
+        if not valid_rows:
+            return
+        label = role_name.strip() if role_name else None
+        old_values = tuple(
+            tuple(ch.role_label for ch in track.lines[row].chars)
+            for row in valid_rows
+        )
+        new_values = tuple(
+            tuple(label for _ch in track.lines[row].chars)
+            for row in valid_rows
+        )
+        if old_values == new_values:
+            return
+        for row, labels in zip(valid_rows, new_values):
+            for ch, value in zip(track.lines[row].chars, labels):
+                ch.role_label = value
+        if label:
+            self._materialize_role_schemes({label})
+        self._undo_stack.append(
+            ("char_roles_batch", track_index, valid_rows, old_values, new_values)
+        )
+        del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+        self._refresh_after_role_labels_changed(valid_rows)
 
     def _on_lyrics_char_roles_changed(self, row: int, labels: list) -> None:
         """行内逐字符角色编辑器确定后写回（当前选中源）。"""
@@ -2748,14 +2831,16 @@ class SubtitleRenderWindow(QWidget):
                 )
                 self._lyrics_panel.set_role_options(self._merged_role_options())
 
-    def _refresh_after_role_labels_changed(self, row: int) -> None:
+    def _refresh_after_role_labels_changed(self, rows: int | tuple[int, ...]) -> None:
         # track 是就地修改的，预览（含异步渲染 worker）不会自己发现——
         # 重新喂一次让当前帧立即按新角色配色重渲染。
         if self._active_source_index == 0 and self._timing_track is not None:
             self._preview_panel.set_track(self._timing_track)
         else:
             self._sync_extra_tracks_to_preview()
-        self._lyrics_panel.refresh_row_role(row)
+        affected_rows = (rows,) if isinstance(rows, int) else rows
+        for row in affected_rows:
+            self._lyrics_panel.refresh_row_role(row)
         self._mark_project_dirty()
 
     def _restore_char_roles(
@@ -2778,6 +2863,39 @@ class SubtitleRenderWindow(QWidget):
             self._sync_extra_tracks_to_preview()
         if track_index == self._active_source_index:
             self._lyrics_panel.refresh_row_role(row)
+        self._mark_project_dirty()
+        return True
+
+    def _restore_char_role_rows(
+        self, track_index: int, rows: object, values: object
+    ) -> bool:
+        """撤销/重做一次批量整行角色覆盖。"""
+        track = self._track_by_index(track_index)
+        if (
+            track is None
+            or not isinstance(rows, tuple)
+            or not isinstance(values, tuple)
+            or len(rows) != len(values)
+        ):
+            return False
+        for row, labels in zip(rows, values):
+            if (
+                not isinstance(row, int)
+                or not isinstance(labels, tuple)
+                or not 0 <= row < len(track.lines)
+                or len(labels) != len(track.lines[row].chars)
+            ):
+                return False
+        for row, labels in zip(rows, values):
+            for ch, label in zip(track.lines[row].chars, labels):
+                ch.role_label = label
+        if track_index == 0 and self._timing_track is not None:
+            self._preview_panel.set_track(self._timing_track)
+        else:
+            self._sync_extra_tracks_to_preview()
+        if track_index == self._active_source_index:
+            for row in rows:
+                self._lyrics_panel.refresh_row_role(row)
         self._mark_project_dirty()
         return True
 

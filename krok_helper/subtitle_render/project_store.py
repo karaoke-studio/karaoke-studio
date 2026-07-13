@@ -69,6 +69,7 @@ def project_payload(
     line_display_overrides: Optional[list] = None,
     line_animation_overrides: Optional[list] = None,
     extra_subtitle_sources: Optional[list] = None,
+    project_role_names: Optional[list[str]] = None,
 ) -> dict:
     """组装项目快照 dict（纯数据，不碰 UI）。便于单测与复用。
 
@@ -92,6 +93,9 @@ def project_payload(
     ``extra_subtitle_sources``：副字幕源列表（N3 多歌词文件，如コーラス轨），
     每项为 ``{"name", "path", "line_layout_indices", "char_role_labels",
     "line_display_overrides", "line_animation_overrides"}``。
+
+    ``project_role_names`` 保存已导入为项目角色、但尚未分配到歌词的方案名；
+    它与应用级预设库分离，避免历史预设污染当前项目的角色菜单。
     """
     payload = {
         "subtitle_path": str(subtitle_path) if subtitle_path else None,
@@ -129,6 +133,10 @@ def project_payload(
     if extra_subtitle_sources is not None:
         payload["extra_subtitle_sources"] = [
             dict(item) for item in extra_subtitle_sources if isinstance(item, dict)
+        ]
+    if project_role_names is not None:
+        payload["project_role_names"] = [
+            str(name).strip() for name in project_role_names if str(name).strip()
         ]
     return payload
 

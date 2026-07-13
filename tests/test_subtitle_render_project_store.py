@@ -20,6 +20,7 @@ from krok_helper.subtitle_render import models as subtitle_models  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
     LineAnimationOverride,
     Style,
+    StylePreset,
     SubtitleStyleScheme,
     TimingChar,
     TimingLine,
@@ -519,6 +520,173 @@ def test_char_role_options_match_current_property_panel_roles(qapp, monkeypatch,
     win._property_panel.set_roles(track.role_options)
 
     assert win._merged_role_options() == ["1", "【裏声】"]
+
+
+def test_imported_project_role_is_immediately_available_in_lyrics_panel(
+    qapp, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    win = _make_window(qapp, monkeypatch)
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("甲", 1000, role_label="原角色")], end_ms=2000)]
+    )
+    win._timing_track = track
+    win._lyrics_panel.set_track(track)
+    win._property_panel.set_roles(track.role_options)
+
+    win._property_panel._import_preset_schemes(
+        {
+            "新导入配色": StylePreset(
+                name="新导入配色",
+                scheme=SubtitleStyleScheme(fill_color="#123456"),
+            )
+        }
+    )
+
+    assert win._merged_role_options() == ["原角色", "新导入配色"]
+    assert win._lyrics_panel._role_options == ["原角色", "新导入配色"]
+    assert "新导入配色" in win._style.custom_style_schemes
+
+
+def test_unassigned_imported_project_role_round_trips_in_project_data(
+    qapp, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    win = _make_window(qapp, monkeypatch)
+    win._property_panel._import_preset_schemes(
+        {
+            "尚未分配": StylePreset(
+                name="尚未分配",
+                scheme=SubtitleStyleScheme(fill_color="#654321"),
+            )
+        }
+    )
+
+    data = win._current_project_data()
+    assert data["project_role_names"] == ["尚未分配"]
+
+    restored = _make_window(qapp, monkeypatch)
+    restored._apply_project_data(data)
+
+    assert restored._property_panel.role_names == ["尚未分配"]
+    assert restored._lyrics_panel._role_options == ["尚未分配"]
+    assert restored._style.custom_style_schemes["尚未分配"].fill_color == "#654321"
+
+
+def test_lyrics_panel_requests_one_role_for_multiple_selected_rows(qapp):
+    panel = lyrics_list.LyricsPanel()
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("甲", 1000)], end_ms=1500),
+            TimingLine(chars=[TimingChar("乙", 2000)], end_ms=2500),
+        ]
+    )
+    panel.set_track(track)
+    emitted: list[tuple[list[int], str]] = []
+    panel.roleChangeRequested.connect(
+        lambda rows, name: emitted.append((list(rows), name))
+    )
+
+    panel._request_role_change([0, 1], "新导入配色")
+
+    assert emitted == [([0, 1], "新导入配色")]
+
+
+def test_selected_rows_context_menu_exposes_role_schemes(qapp, monkeypatch):
+    panel = lyrics_list.LyricsPanel()
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("甲", 1000)], end_ms=1500),
+            TimingLine(chars=[TimingChar("乙", 2000)], end_ms=2500),
+        ]
+    )
+    panel.set_track(track)
+    panel.set_role_options(["新导入配色"])
+    for row in (0, 1):
+        for column in range(panel.table_widget.columnCount()):
+            panel.table_widget.item(row, column).setSelected(True)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        lyrics_list._StableRoundMenu,
+        "exec",
+        lambda menu, *_args: captured.setdefault("menu", menu),
+    )
+    emitted: list[tuple[list[int], str]] = []
+    panel.roleChangeRequested.connect(
+        lambda rows, name: emitted.append((list(rows), name))
+    )
+
+    panel._show_context_menu(QPoint(4, 4))
+
+    menu = captured["menu"]
+    role_menu = next(
+        submenu for submenu in menu._subMenus
+        if submenu.title() == "应用角色方案"
+    )
+    target = next(
+        action for action in role_menu.actions() if action.text() == "新导入配色"
+    )
+    target.trigger()
+    assert emitted == [([0, 1], "新导入配色")]
+
+
+def test_batch_line_roles_apply_and_undo_as_one_command(
+    qapp, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    win = _make_window(qapp, monkeypatch)
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("甲", 1000, role_label="A")], end_ms=1500
+            ),
+            TimingLine(
+                chars=[TimingChar("乙", 2000, role_label="B")], end_ms=2500
+            ),
+        ]
+    )
+    win._timing_track = track
+    win._lyrics_panel.set_track(track)
+    win._property_panel.set_roles(["A", "B", "新导入配色"])
+    win._clear_undo_history()
+
+    win._on_lyrics_roles_changed([0, 1], "新导入配色")
+
+    assert [[ch.role_label for ch in line.chars] for line in track.lines] == [
+        ["新导入配色"],
+        ["新导入配色"],
+    ]
+    assert [
+        win._lyrics_panel.table_widget.item(row, lyrics_list.COL_ROLE).text()
+        for row in (0, 1)
+    ] == ["新导入配色", "新导入配色"]
+    assert [
+        win._lyrics_panel.table_widget.item(
+            row, lyrics_list.COL_ROLE
+        ).data(Qt.ItemDataRole.UserRole)
+        for row in (0, 1)
+    ] == ["新导入配色", "新导入配色"]
+    assert len(win._undo_stack) == 1
+    assert win._undo_stack[-1][0] == "char_roles_batch"
+
+    win._undo_edit()
+    assert [[ch.role_label for ch in line.chars] for line in track.lines] == [
+        ["A"],
+        ["B"],
+    ]
+    assert [
+        win._lyrics_panel.table_widget.item(row, lyrics_list.COL_ROLE).text()
+        for row in (0, 1)
+    ] == ["A", "B"]
+    win._redo_edit()
+    assert [[ch.role_label for ch in line.chars] for line in track.lines] == [
+        ["新导入配色"],
+        ["新导入配色"],
+    ]
+    assert [
+        win._lyrics_panel.table_widget.item(row, lyrics_list.COL_ROLE).text()
+        for row in (0, 1)
+    ] == ["新导入配色", "新导入配色"]
 
 
 def test_lyrics_table_marks_mixed_role_rows(qapp):

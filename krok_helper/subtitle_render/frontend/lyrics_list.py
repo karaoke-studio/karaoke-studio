@@ -31,7 +31,6 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QInputDialog,
     QLabel,
-    QMenu,
     QMessageBox,
     QScrollArea,
     QStyle,
@@ -42,6 +41,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 from qfluentwidgets import (
+    Action,
     CheckBox,
     ComboBox as FluentComboBox,
     FlowLayout,
@@ -49,6 +49,7 @@ from qfluentwidgets import (
     TableWidget as FluentTableWidget,
     PrimaryPushButton as FluentPrimaryPushButton,
     PushButton as FluentPushButton,
+    RoundMenu,
     SpinBox as FluentSpinBox,
     TransparentToolButton,
 )
@@ -241,6 +242,13 @@ class _StableComboBoxMenu(ComboBoxMenu):
 class _StableFluentComboBox(FluentComboBox):
     def _createComboMenu(self):
         return _StableComboBoxMenu(self)
+
+
+class _StableRoundMenu(RoundMenu):
+    """Fluent context menu without the close-animation teardown race."""
+
+    def exec(self, pos, ani=True, aniType=MenuAnimationType.DROP_DOWN):
+        return super().exec(pos, ani, MenuAnimationType.NONE)
 
 
 def _swatch_icon(color: Optional[QColor]) -> QIcon:
@@ -720,6 +728,8 @@ class LyricsPanel(DropPanel):
     """左侧歌词面板（含空态拖拽 + 已加载表格两态）。"""
 
     roleChanged = Signal(int, str)
+    roleChangeRequested = Signal(list, str)
+    """批量整行角色覆盖：所选 track.lines 行号列表 + 角色名（空串为全局默认）。"""
     charRolesChanged = Signal(int, list)
     """逐字符角色编辑：track.lines 行号 + 与该行字符数等长的标签列表（str | None）。"""
     titleEditRequested = Signal()
@@ -1384,8 +1394,26 @@ class LyricsPanel(DropPanel):
                     else self._content_alignment(line_style, lane, dual, single_line_page)
                 )
 
-                role = str(role_item.data(Qt.ItemDataRole.UserRole) or "")
-                if line is not None and _line_role_mixed(line):
+                # ``role_label`` is the source of truth.  Whole-row/batch edits
+                # mutate the TimingTrack in place, so keeping the old item
+                # UserRole here makes the table continue displaying the role
+                # that was present when set_track() first built the row.
+                role = (
+                    _dominant_role(line)
+                    if line is not None
+                    else str(role_item.data(Qt.ItemDataRole.UserRole) or "")
+                )
+                line_role_mixed = line is not None and _line_role_mixed(line)
+                if line is not None:
+                    # A mixed row has no single selected value.  Keeping its
+                    # dominant role as the editor value would make choosing
+                    # that same role a no-op instead of an explicit whole-row
+                    # overwrite.
+                    role_item.setData(
+                        Qt.ItemDataRole.UserRole,
+                        "" if line_role_mixed else role,
+                    )
+                if line_role_mixed:
                     # 行内混合角色：显示「混合」+ 双色点（前两种代表色）
                     seen: list[str] = []
                     for label in _line_role_labels(line):
@@ -1486,26 +1514,49 @@ class LyricsPanel(DropPanel):
         ]
         if not rows:
             return
-        menu = QMenu(self._table)
+        menu = _StableRoundMenu(parent=self._table)
         if len(rows) == 1:
-            char_role_action = menu.addAction("逐字符分配角色…")
+            char_role_action = Action("逐字符分配角色…", menu)
             char_role_action.triggered.connect(
                 lambda _checked=False, r=rows[0]: self._edit_char_roles(r)
             )
+            menu.addAction(char_role_action)
             menu.addSeparator()
         if self._title_mode:
             menu.exec(self._table.viewport().mapToGlobal(pos))
             return
-        effect_action = menu.addAction("设置所选行特效…")
+        role_menu = _StableRoundMenu("应用角色方案", menu)
+        current_roles = {
+            _dominant_role(self._track.lines[row]) for row in rows
+        }
+        has_mixed_rows = any(_line_role_mixed(self._track.lines[row]) for row in rows)
+        role_choices = [(_DEFAULT_ROLE_TEXT, "")] + [
+            (name, name) for name in self._role_options
+        ]
+        for display, name in role_choices:
+            action = Action(display, role_menu)
+            action.setCheckable(True)
+            action.setChecked(not has_mixed_rows and current_roles == {name})
+            action.triggered.connect(
+                lambda _checked=False, rs=list(rows), value=name: (
+                    self._request_role_change(rs, value)
+                )
+            )
+            role_menu.addAction(action)
+        menu.addMenu(role_menu)
+        menu.addSeparator()
+        effect_action = Action("设置所选行特效…", menu)
         effect_action.triggered.connect(
             lambda _checked=False, rs=list(rows): self._edit_animation_rows(rs)
         )
-        reset_action = menu.addAction("所选行恢复全局特效")
+        menu.addAction(effect_action)
+        reset_action = Action("所选行恢复全局特效", menu)
         reset_action.triggered.connect(
             lambda _checked=False, rs=list(rows): self.animationOverrideRequested.emit(rs, None)
         )
+        menu.addAction(reset_action)
         menu.addSeparator()
-        layout_menu = menu.addMenu("应用布局")
+        layout_menu = _StableRoundMenu("应用布局", menu)
         current_indices = {
             int(getattr(self._track.lines[row], "layout_index", 0) or 0)
             for row in rows
@@ -1513,7 +1564,7 @@ class LyricsPanel(DropPanel):
         }
         names = ["默认布局"] + [layout.name for layout in self._style.layouts]
         for index, name in enumerate(names):
-            action = layout_menu.addAction(name)
+            action = Action(name, layout_menu)
             action.setCheckable(True)
             action.setChecked(current_indices == {index})
             action.triggered.connect(
@@ -1521,7 +1572,33 @@ class LyricsPanel(DropPanel):
                     self.layoutChangeRequested.emit(rs, idx)
                 )
             )
+            layout_menu.addAction(action)
+        menu.addMenu(layout_menu)
         menu.exec(self._table.viewport().mapToGlobal(pos))
+
+    def _request_role_change(self, rows: list[int], role_name: str) -> None:
+        """确认可能的逐字符覆盖后，发出一次批量整行角色修改。"""
+        if self._track is None or not rows:
+            return
+        mixed_count = sum(
+            1
+            for row in rows
+            if 0 <= row < len(self._track.lines)
+            and _line_role_mixed(self._track.lines[row])
+        )
+        if mixed_count:
+            display = role_name or _DEFAULT_ROLE_TEXT
+            choice = QMessageBox.question(
+                self,
+                "整行覆盖角色",
+                f"所选行中有 {mixed_count} 行包含逐字符角色分配，"
+                f"确定全部整行覆盖为“{display}”吗？",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if choice != QMessageBox.StandardButton.Yes:
+                return
+        self.roleChangeRequested.emit(list(rows), role_name)
 
     def _on_cell_double_clicked(self, row: int, column: int) -> None:
         if column not in (COL_EFFECT, COL_CONTENT) or self._track is None:
