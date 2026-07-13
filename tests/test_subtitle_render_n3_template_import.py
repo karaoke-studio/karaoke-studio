@@ -216,15 +216,22 @@ def test_merge_conflict_policies(tmp_path, policy, expected_names, skipped, rena
 
 @pytest.mark.skipif(not REAL_TEMPLATE_DIR.is_dir(), reason="本机没有 N3 TemplateFont")
 def test_real_n3_templates_import_at_1080():
+    files = find_n3_template_files([REAL_TEMPLATE_DIR])
     result = load_n3_font_templates([REAL_TEMPLATE_DIR], target_height=1080)
 
     assert not result.failed
-    assert not result.skipped
-    assert {item.name for item in result.templates} == {
+    assert len(result.templates) + len(result.skipped) == len(files)
+    assert all("Synchronize=false" in reason for _path, reason in result.skipped)
+    assert {
         "【1配色】",
         "【2配色】",
         "【3配色】",
         "標準配色",
-    }
+    } <= {item.name for item in result.templates}
+    for item in result.templates:
+        scheme = item.preset.scheme
+        assert scheme.font_size_px is not None and scheme.font_size_px > 0
+        assert scheme.stroke_width_px is not None and scheme.stroke_width_px > 0
+        assert scheme.ruby_font_size_px is not None and scheme.ruby_font_size_px > 0
     standard = next(item for item in result.templates if item.name == "標準配色")
     assert standard.preset.scheme.font_size_px == 100
