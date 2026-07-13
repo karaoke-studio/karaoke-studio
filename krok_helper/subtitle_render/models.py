@@ -459,6 +459,9 @@ class SubtitleStyleScheme:
     space_width_percent: Optional[int] = None
     latin_font_size_px: Optional[int] = None
     latin_font_weight: Optional[int] = None
+    latin_stroke_width_px: Optional[int] = None
+    latin_stroke2_enabled: Optional[bool] = None
+    latin_stroke2_width_px: Optional[int] = None
     allow_biting: Optional[bool] = None
     font_weight: Optional[int] = None
     italic: Optional[bool] = None
@@ -470,6 +473,7 @@ class SubtitleStyleScheme:
     fill_gradient_angle_deg: Optional[int] = None
     stroke_color: Optional[str] = None
     stroke_width_px: Optional[int] = None
+    stroke2_enabled: Optional[bool] = None
     stroke2_width_px: Optional[int] = None
     decoration_kind: Optional[DecorationKind] = None
     glow_radius_px: Optional[int] = None
@@ -489,7 +493,11 @@ class SubtitleStyleScheme:
     ruby_color: Optional[str] = None
     ruby_gap_px: Optional[int] = None
     ruby_stroke_width_px: Optional[int] = None
+    ruby_stroke2_enabled: Optional[bool] = None
     ruby_stroke2_width_px: Optional[int] = None
+    ruby_latin_stroke_width_px: Optional[int] = None
+    ruby_latin_stroke2_enabled: Optional[bool] = None
+    ruby_latin_stroke2_width_px: Optional[int] = None
     ruby_decoration_kind: Optional[DecorationKind] = None
     ruby_glow_radius_px: Optional[int] = None
     ruby_glow_before_radius_px: Optional[int] = None
@@ -545,6 +553,7 @@ def title_scheme_from_overlay(title: "TitleOverlay") -> SubtitleStyleScheme:
         italic=title.italic,
         letter_spacing_px=title.letter_spacing_px,
         stroke_width_px=title.stroke_width_px,
+        stroke2_enabled=title.stroke2_width_px > 0,
         stroke2_width_px=title.stroke2_width_px,
         decoration_kind=title.decoration_kind,
         glow_radius_px=title.glow_radius_px,
@@ -586,6 +595,9 @@ class Style:
     # 字体族沿用历史字段 ``font_family_latin``（同一语义）。
     latin_font_size_px: Optional[int] = None
     latin_font_weight: Optional[int] = None
+    latin_stroke_width_px: Optional[int] = None
+    latin_stroke2_enabled: Optional[bool] = None
+    latin_stroke2_width_px: Optional[int] = None
 
     allow_biting: bool = False
     """允许负 side bearing 令相邻字形咬合。"""
@@ -606,6 +618,7 @@ class Style:
 
     stroke_color: str = "#222222"
     stroke_width_px: int = 15
+    stroke2_enabled: bool = True
     stroke2_width_px: int = 5
 
     decoration_kind: DecorationKind = "shadow"
@@ -648,7 +661,11 @@ class Style:
     """注音相对正文范围的排布（N3 ``RubyAlignment``）：``auto`` = 正文或注音全为
     英数时居中、否则均等分布；``center`` = 整组居中；``equal_space`` = 均等分布。"""
     ruby_stroke_width_px: Optional[int] = 10
+    ruby_stroke2_enabled: Optional[bool] = True
     ruby_stroke2_width_px: Optional[int] = 3
+    ruby_latin_stroke_width_px: Optional[int] = None
+    ruby_latin_stroke2_enabled: Optional[bool] = None
+    ruby_latin_stroke2_width_px: Optional[int] = None
     ruby_decoration_kind: Optional[DecorationKind] = None
     ruby_glow_radius_px: Optional[int] = None
     ruby_glow_before_radius_px: Optional[int] = None
@@ -1047,8 +1064,6 @@ def style_from_dict(payload: object) -> Style:
             "ruby_font_size_px",
             "ruby_gap_px",
             "ruby_interval_px",
-            "ruby_stroke_width_px",
-            "ruby_stroke2_width_px",
             "ruby_glow_radius_px",
             "ruby_glow_before_radius_px",
             "ruby_glow_after_radius_px",
@@ -1113,6 +1128,7 @@ def style_from_dict(payload: object) -> Style:
         elif key in {
             "italic",
             "allow_biting",
+            "stroke2_enabled",
             "ruby_font_follow_main",
             "dual_line_layout",
             "right_to_left",
@@ -1167,12 +1183,24 @@ def style_from_dict(payload: object) -> Style:
         elif key in {
             "latin_font_size_px",
             "latin_font_weight",
+            "latin_stroke_width_px",
+            "latin_stroke2_width_px",
             "ruby_font_weight",
             "ruby_latin_font_size_px",
             "ruby_latin_font_weight",
+            "ruby_stroke_width_px",
+            "ruby_stroke2_width_px",
+            "ruby_latin_stroke_width_px",
+            "ruby_latin_stroke2_width_px",
         }:
             # 英数轨覆盖：None = 跟随日文轨，序列化保留 null
             changes[key] = None if value is None else _int_value(value, 0)
+        elif key in {
+            "latin_stroke2_enabled",
+            "ruby_stroke2_enabled",
+            "ruby_latin_stroke2_enabled",
+        }:
+            changes[key] = None if value is None else bool(value)
         elif value is not None:
             changes[key] = str(value)
     if "glow_radius_px" in changes:

@@ -108,6 +108,9 @@ _SCHEME_FIELDS = {
     "font_size_px",
     "latin_font_size_px",
     "latin_font_weight",
+    "latin_stroke_width_px",
+    "latin_stroke2_enabled",
+    "latin_stroke2_width_px",
     "letter_spacing_px",
     "space_width_percent",
     "allow_biting",
@@ -121,6 +124,7 @@ _SCHEME_FIELDS = {
     "fill_gradient_angle_deg",
     "stroke_color",
     "stroke_width_px",
+    "stroke2_enabled",
     "stroke2_width_px",
     "decoration_kind",
     "glow_radius_px",
@@ -140,7 +144,11 @@ _SCHEME_FIELDS = {
     "ruby_color",
     "ruby_gap_px",
     "ruby_stroke_width_px",
+    "ruby_stroke2_enabled",
     "ruby_stroke2_width_px",
+    "ruby_latin_stroke_width_px",
+    "ruby_latin_stroke2_enabled",
+    "ruby_latin_stroke2_width_px",
     "ruby_decoration_kind",
     "ruby_glow_radius_px",
     "ruby_glow_before_radius_px",
@@ -150,18 +158,6 @@ _SCHEME_FIELDS = {
     "ruby_shadow_offset_y",
     "karaoke_colors",
     "ruby_karaoke_colors",
-}
-
-_RUBY_COLOR_SUBJECT_FIELDS = {
-    "stroke_width_px": "ruby_stroke_width_px",
-    "stroke2_width_px": "ruby_stroke2_width_px",
-    "decoration_kind": "ruby_decoration_kind",
-    "glow_radius_px": "ruby_glow_radius_px",
-    "glow_before_radius_px": "ruby_glow_before_radius_px",
-    "glow_after_radius_px": "ruby_glow_after_radius_px",
-    "glow_concentration_level": "ruby_glow_concentration_level",
-    "shadow_offset_x": "ruby_shadow_offset_x",
-    "shadow_offset_y": "ruby_shadow_offset_y",
 }
 
 _GLOBAL_SCHEME_KEY = "global"
@@ -2817,6 +2813,9 @@ class PropertyPanel(QWidget):
             section,
         )
         self._font_tab_stack = QStackedWidget(self._font_tab_panel)
+        self._font_stroke_controls: dict[
+            tuple[str, str], tuple[FluentSpinBox, CheckBox, FluentSpinBox]
+        ] = {}
         for subject, script in (
             ("main", "japanese"),
             ("main", "latin"),
@@ -2940,6 +2939,60 @@ class PropertyPanel(QWidget):
                 )
             )
 
+        stroke_fields = {
+            ("main", "japanese"): (
+                "stroke_width_px", "stroke2_enabled", "stroke2_width_px"
+            ),
+            ("main", "latin"): (
+                "latin_stroke_width_px",
+                "latin_stroke2_enabled",
+                "latin_stroke2_width_px",
+            ),
+            ("ruby", "japanese"): (
+                "ruby_stroke_width_px",
+                "ruby_stroke2_enabled",
+                "ruby_stroke2_width_px",
+            ),
+            ("ruby", "latin"): (
+                "ruby_latin_stroke_width_px",
+                "ruby_latin_stroke2_enabled",
+                "ruby_latin_stroke2_width_px",
+            ),
+        }[(subject, script)]
+        stroke_width_field, stroke2_enabled_field, stroke2_width_field = stroke_fields
+        stroke_width_spin = _spin(0, 120, suffix=" px")
+        stroke2_enabled_check = CheckBox("", page)
+        stroke2_enabled_check.setToolTip("启用或关闭描边 2")
+        stroke2_enabled_check.setFixedWidth(28)
+        stroke2_enabled_check.setSizePolicy(
+            QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
+        )
+        stroke2_width_spin = _spin(0, 120, suffix=" px")
+        stroke_width_spin.valueChanged.connect(
+            lambda value, field=stroke_width_field: self._update_style(**{field: value})
+        )
+        stroke2_enabled_check.toggled.connect(
+            lambda checked, field=stroke2_enabled_field, spin=stroke2_width_spin:
+            self._on_font_stroke2_toggled(field, spin, checked)
+        )
+        stroke2_width_spin.valueChanged.connect(
+            lambda value, field=stroke2_width_field: self._update_style(**{field: value})
+        )
+        self._font_stroke_controls[(subject, script)] = (
+            stroke_width_spin,
+            stroke2_enabled_check,
+            stroke2_width_spin,
+        )
+        attr_prefix = {
+            ("main", "japanese"): "",
+            ("main", "latin"): "latin_",
+            ("ruby", "japanese"): "ruby_",
+            ("ruby", "latin"): "ruby_latin_",
+        }[(subject, script)]
+        setattr(self, f"_{attr_prefix}stroke_width_spin", stroke_width_spin)
+        setattr(self, f"_{attr_prefix}stroke2_enabled_check", stroke2_enabled_check)
+        setattr(self, f"_{attr_prefix}stroke2_width_spin", stroke2_width_spin)
+
         layout.addWidget(_field("字体", font_combo))
         row = QWidget(page)
         row_layout = QGridLayout(row)
@@ -2950,12 +3003,41 @@ class PropertyPanel(QWidget):
         row_layout.setColumnStretch(0, 1)
         row_layout.setColumnStretch(1, 1)
         layout.addWidget(row)
+
+        stroke_row = QWidget(page)
+        stroke_layout = QGridLayout(stroke_row)
+        stroke_layout.setContentsMargins(0, 0, 0, 0)
+        stroke_layout.setHorizontalSpacing(8)
+        stroke_width_widget = _field("描边宽度", stroke_width_spin)
+        stroke2_control = QWidget(stroke_row)
+        stroke2_control_layout = QHBoxLayout(stroke2_control)
+        stroke2_control_layout.setContentsMargins(0, 0, 0, 0)
+        stroke2_control_layout.setSpacing(2)
+        stroke2_control_layout.addWidget(stroke2_enabled_check, 0)
+        stroke2_control_layout.addWidget(stroke2_width_spin, 1)
+        stroke2_widget = _field("描边 2", stroke2_control)
+        setattr(self, f"_{attr_prefix}stroke_width_field", stroke_width_widget)
+        setattr(self, f"_{attr_prefix}stroke2_field", stroke2_widget)
+        # 兼容现有内部引用；开关与宽度现在属于同一个组合字段。
+        setattr(self, f"_{attr_prefix}stroke2_enabled_field", stroke2_widget)
+        setattr(self, f"_{attr_prefix}stroke2_width_field", stroke2_widget)
+        stroke_layout.addWidget(stroke_width_widget, 0, 0)
+        stroke_layout.addWidget(stroke2_widget, 0, 1)
+        for column in range(2):
+            stroke_layout.setColumnStretch(column, 1)
+        layout.addWidget(stroke_row)
         return page
 
     def _sync_font_settings_page(self) -> None:
         subject_index = 0 if self._font_tab_panel.current_left() == "main" else 1
         script_index = 0 if self._font_tab_panel.current_right() == "japanese" else 1
         self._font_tab_stack.setCurrentIndex(subject_index * 2 + script_index)
+
+    def _on_font_stroke2_toggled(
+        self, field_name: str, width_spin: FluentSpinBox, checked: bool
+    ) -> None:
+        width_spin.setEnabled(checked)
+        self._update_style(**{field_name: checked})
 
     def _update_ruby_font_override(self, **changes) -> None:
         changes["ruby_font_follow_main"] = False
@@ -3052,19 +3134,10 @@ class PropertyPanel(QWidget):
     def _apply_main_colors_to_ruby(self) -> None:
         if self._syncing:
             return
-        # 颜色照搬主文字矩阵；宽度/装饰/阴影/发光的注音覆盖一并清空——
-        # 清空后渲染端按注音字号比例从主文字缩放（与按钮描述一致）。
+        # 只复制颜色和填充。字体卡片里的描边尺寸、以及方案共用的装饰参数
+        # 都不属于这个按钮的职责。
         self._update_style(
             ruby_karaoke_colors=deepcopy(self._current_karaoke_colors()),
-            ruby_stroke_width_px=None,
-            ruby_stroke2_width_px=None,
-            ruby_decoration_kind=None,
-            ruby_glow_radius_px=None,
-            ruby_glow_before_radius_px=None,
-            ruby_glow_after_radius_px=None,
-            ruby_glow_concentration_level=None,
-            ruby_shadow_offset_x=None,
-            ruby_shadow_offset_y=None,
         )
 
     def _make_color_section(
@@ -3170,7 +3243,7 @@ class PropertyPanel(QWidget):
         self._decoration_type_combo.addItem("阴影", "shadow")
         self._decoration_type_combo.addItem("发光", "glow")
         self._decoration_type_combo.currentIndexChanged.connect(
-            lambda _index: self._update_color_subject_style(
+            lambda _index: self._update_shared_decoration(
                 decoration_kind=str(self._decoration_type_combo.currentData())
             )
         )
@@ -3188,37 +3261,23 @@ class PropertyPanel(QWidget):
         detail_layout.setHorizontalSpacing(8)
         detail_layout.setVerticalSpacing(8)
 
-        self._stroke_width_spin = _spin(0, 24, suffix=" px")
-        self._stroke_width_spin.valueChanged.connect(
-            lambda value: self._update_color_subject_style(stroke_width_px=value)
-        )
-        self._stroke_width_field = _field("描边宽度", self._stroke_width_spin)
-        detail_layout.addWidget(self._stroke_width_field, 0, 0)
-
-        self._stroke2_width_spin = _spin(0, 48, suffix=" px")
-        self._stroke2_width_spin.valueChanged.connect(
-            lambda value: self._update_color_subject_style(stroke2_width_px=value)
-        )
-        self._stroke2_width_field = _field("描边2宽度", self._stroke2_width_spin)
-        detail_layout.addWidget(self._stroke2_width_field, 0, 1)
-
         self._shadow_x_spin = _spin(-40, 40, suffix=" px")
         self._shadow_x_spin.valueChanged.connect(
-            lambda value: self._update_color_subject_style(shadow_offset_x=value)
+            lambda value: self._update_shared_decoration(shadow_offset_x=value)
         )
         self._shadow_x_field = _field("阴影 X", self._shadow_x_spin)
         detail_layout.addWidget(self._shadow_x_field, 1, 0)
 
         self._shadow_y_spin = _spin(-40, 40, suffix=" px")
         self._shadow_y_spin.valueChanged.connect(
-            lambda value: self._update_color_subject_style(shadow_offset_y=value)
+            lambda value: self._update_shared_decoration(shadow_offset_y=value)
         )
         self._shadow_y_field = _field("阴影 Y", self._shadow_y_spin)
         detail_layout.addWidget(self._shadow_y_field, 1, 1)
 
         self._glow_before_radius_spin = _spin(1, 120, suffix=" px")
         self._glow_before_radius_spin.valueChanged.connect(
-            lambda value: self._update_color_subject_style(
+            lambda value: self._update_shared_decoration(
                 glow_radius_px=value,
                 glow_before_radius_px=value,
             )
@@ -3228,7 +3287,7 @@ class PropertyPanel(QWidget):
 
         self._glow_after_radius_spin = _spin(1, 120, suffix=" px")
         self._glow_after_radius_spin.valueChanged.connect(
-            lambda value: self._update_color_subject_style(glow_after_radius_px=value)
+            lambda value: self._update_shared_decoration(glow_after_radius_px=value)
         )
         self._glow_after_radius_field = _field("走字后发光", self._glow_after_radius_spin)
 
@@ -3237,7 +3296,7 @@ class PropertyPanel(QWidget):
         for label, value in [("低", 0), ("中", 1), ("高", 2)]:
             self._glow_concentration_combo.addItem(label, value)
         self._glow_concentration_combo.currentIndexChanged.connect(
-            lambda _index: self._update_color_subject_style(
+            lambda _index: self._update_shared_decoration(
                 glow_concentration_level=int(
                     self._glow_concentration_combo.currentData() or 0
                 )
@@ -3265,8 +3324,8 @@ class PropertyPanel(QWidget):
         self._ruby_apply_main_btn.clicked.connect(self._apply_main_colors_to_ruby)
         self._ruby_apply_main_btn.hide()
 
-        # tab 内容区：左·图层列 + 填充方式列（竖排按钮），右·填充编辑 /
-        # 装饰 / 宽度明细（对应用户手绘的两列方块 + 右侧编辑区）
+        # tab 内容区：左·图层列 + 填充方式列（竖排按钮），右·填充编辑和
+        # 整个配色方案共用的装饰参数。描边尺寸已经归入字体卡片。
         columns = QHBoxLayout()
         columns.setContentsMargins(0, 0, 0, 0)
         columns.setSpacing(10)
@@ -3283,6 +3342,23 @@ class PropertyPanel(QWidget):
         self._color_tab_panel.content_layout.addLayout(columns)
         self._color_tab_panel.content_layout.addWidget(self._ruby_apply_main_btn)
         return section
+
+    def _update_shared_decoration(self, **changes) -> None:
+        """装饰是配色方案级参数；编辑时清除旧工程遗留的 ruby 独立覆盖。"""
+        ruby_fields = {
+            "decoration_kind": "ruby_decoration_kind",
+            "glow_radius_px": "ruby_glow_radius_px",
+            "glow_before_radius_px": "ruby_glow_before_radius_px",
+            "glow_after_radius_px": "ruby_glow_after_radius_px",
+            "glow_concentration_level": "ruby_glow_concentration_level",
+            "shadow_offset_x": "ruby_shadow_offset_x",
+            "shadow_offset_y": "ruby_shadow_offset_y",
+        }
+        shared = dict(changes)
+        shared.update(
+            {ruby_fields[field]: None for field in changes if field in ruby_fields}
+        )
+        self._update_style(**shared)
 
     def _make_solid_fill_page(self) -> QWidget:
         page = QWidget()
@@ -4866,44 +4942,6 @@ class PropertyPanel(QWidget):
         data = self._color_subject_combo.currentData()
         return "ruby" if data == "ruby" else "main"
 
-    def _color_subject_field(self, field_name: str) -> str:
-        if self._current_color_subject_key() == "ruby":
-            return _RUBY_COLOR_SUBJECT_FIELDS.get(field_name, field_name)
-        return field_name
-
-    def _color_subject_value(self, field_name: str):
-        if self._current_color_subject_key() != "ruby":
-            return self._scheme_value(field_name)
-        ruby_field = _RUBY_COLOR_SUBJECT_FIELDS.get(field_name)
-        if ruby_field is None:
-            return self._scheme_value(field_name)
-        value = self._scheme_value(ruby_field)
-        if value is not None:
-            return value
-        return self._inherited_ruby_subject_value(field_name)
-
-    def _inherited_ruby_subject_value(self, field_name: str):
-        scale = max(int(self._scheme_value("ruby_font_size_px")), 1) / max(
-            int(self._scheme_value("font_size_px")), 1
-        )
-        if field_name == "stroke_width_px":
-            return _scaled_panel_px(int(self._scheme_value("stroke_width_px")), scale)
-        if field_name == "stroke2_width_px":
-            return _scaled_panel_px(int(self._scheme_value("stroke2_width_px")), scale)
-        if field_name == "decoration_kind":
-            return self._scheme_value("decoration_kind")
-        if field_name == "shadow_offset_x":
-            return _scaled_panel_signed_px(int(self._scheme_value("shadow_offset_x")), scale)
-        if field_name == "shadow_offset_y":
-            return _scaled_panel_signed_px(int(self._scheme_value("shadow_offset_y")), scale)
-        if field_name == "glow_radius_px":
-            return _scaled_panel_px(self._scheme_glow_radius(after=False), scale)
-        if field_name == "glow_before_radius_px":
-            return _scaled_panel_px(self._scheme_glow_radius(after=False), scale)
-        if field_name == "glow_after_radius_px":
-            return _scaled_panel_px(self._scheme_glow_radius(after=True), scale)
-        return self._scheme_value(field_name)
-
     def _scheme_glow_radius(self, *, after: bool) -> int:
         value = int(
             self._scheme_value("glow_after_radius_px" if after else "glow_before_radius_px")
@@ -4912,13 +4950,6 @@ class PropertyPanel(QWidget):
         if value == 10 and legacy != 10:
             value = legacy
         return max(value, 1)
-
-    def _update_color_subject_style(self, **changes) -> None:
-        mapped = {
-            self._color_subject_field(field_name): value
-            for field_name, value in changes.items()
-        }
-        self._update_style(**mapped)
 
     def _current_karaoke_colors(self) -> KaraokeColors:
         value = self._scheme_value("karaoke_colors")
@@ -4978,11 +5009,9 @@ class PropertyPanel(QWidget):
         if not hasattr(self, "_decoration_type_field"):
             return
         is_decoration = self._current_color_layer_key() == "shadow"
-        decoration_kind = str(self._color_subject_value("decoration_kind"))
+        decoration_kind = str(self._scheme_value("decoration_kind"))
         is_shadow = decoration_kind == "shadow"
         is_glow = decoration_kind == "glow"
-        self._stroke_width_field.setVisible(not is_decoration)
-        self._stroke2_width_field.setVisible(not is_decoration)
         self._decoration_type_field.setVisible(is_decoration)
         self._shadow_x_field.setVisible(is_decoration and is_shadow)
         self._shadow_y_field.setVisible(is_decoration and is_shadow)
@@ -4992,44 +5021,38 @@ class PropertyPanel(QWidget):
         self._glow_concentration_field.setVisible(is_decoration and is_glow)
 
     def _sync_color_subject_style_controls(self) -> None:
-        if not hasattr(self, "_stroke_width_spin"):
+        if not hasattr(self, "_decoration_type_combo"):
             return
         was_syncing = self._syncing
         self._syncing = True
         try:
-            self._stroke_width_spin.setValue(
-                int(self._color_subject_value("stroke_width_px"))
-            )
-            self._stroke2_width_spin.setValue(
-                int(self._color_subject_value("stroke2_width_px"))
-            )
             self._decoration_type_combo.setCurrentIndex(
                 max(
                     0,
                     self._decoration_type_combo.findData(
-                        str(self._color_subject_value("decoration_kind"))
+                        str(self._scheme_value("decoration_kind"))
                     ),
                 )
             )
             self._glow_radius_spin.setValue(
-                int(self._color_subject_value("glow_before_radius_px"))
+                int(self._scheme_value("glow_before_radius_px"))
             )
             self._glow_after_radius_spin.setValue(
-                int(self._color_subject_value("glow_after_radius_px"))
+                int(self._scheme_value("glow_after_radius_px"))
             )
             self._glow_concentration_combo.setCurrentIndex(
                 max(
                     0,
                     self._glow_concentration_combo.findData(
-                        int(self._color_subject_value("glow_concentration_level"))
+                        int(self._scheme_value("glow_concentration_level"))
                     ),
                 )
             )
             self._shadow_x_spin.setValue(
-                int(self._color_subject_value("shadow_offset_x"))
+                int(self._scheme_value("shadow_offset_x"))
             )
             self._shadow_y_spin.setValue(
-                int(self._color_subject_value("shadow_offset_y"))
+                int(self._scheme_value("shadow_offset_y"))
             )
             self._sync_decoration_visibility()
         finally:
@@ -5483,6 +5506,7 @@ class PropertyPanel(QWidget):
                     ),
                 )
             )
+            self._sync_font_stroke_controls()
             self._sync_color_subject_style_controls()
             self._ruby_gap_spin.setValue(int(self._scheme_value("ruby_gap_px")))
             self._ruby_interval_spin.setValue(int(self._style.ruby_interval_px))
@@ -5499,6 +5523,70 @@ class PropertyPanel(QWidget):
             self._sync_color_fill_controls()
         finally:
             self._syncing = was_syncing
+
+    def _sync_font_stroke_controls(self) -> None:
+        if not hasattr(self, "_font_stroke_controls"):
+            return
+        main_width = int(self._scheme_value("stroke_width_px"))
+        main_enabled = bool(self._scheme_value("stroke2_enabled"))
+        main_width2 = int(self._scheme_value("stroke2_width_px"))
+
+        latin_width_value = self._scheme_value("latin_stroke_width_px")
+        latin_enabled_value = self._scheme_value("latin_stroke2_enabled")
+        latin_width2_value = self._scheme_value("latin_stroke2_width_px")
+        latin_width = main_width if latin_width_value is None else int(latin_width_value)
+        latin_enabled = (
+            main_enabled if latin_enabled_value is None else bool(latin_enabled_value)
+        )
+        latin_width2 = (
+            main_width2 if latin_width2_value is None else int(latin_width2_value)
+        )
+
+        ruby_width_value = self._scheme_value("ruby_stroke_width_px")
+        ruby_enabled_value = self._scheme_value("ruby_stroke2_enabled")
+        ruby_width2_value = self._scheme_value("ruby_stroke2_width_px")
+        scale = max(int(self._scheme_value("ruby_font_size_px")), 1) / max(
+            int(self._scheme_value("font_size_px")), 1
+        )
+        ruby_width = (
+            _scaled_panel_px(main_width, scale)
+            if ruby_width_value is None
+            else int(ruby_width_value)
+        )
+        ruby_enabled = (
+            main_enabled if ruby_enabled_value is None else bool(ruby_enabled_value)
+        )
+        ruby_width2 = (
+            _scaled_panel_px(main_width2, scale)
+            if ruby_width2_value is None
+            else int(ruby_width2_value)
+        )
+
+        ruby_latin_width_value = self._scheme_value("ruby_latin_stroke_width_px")
+        ruby_latin_enabled_value = self._scheme_value("ruby_latin_stroke2_enabled")
+        ruby_latin_width2_value = self._scheme_value("ruby_latin_stroke2_width_px")
+        values = {
+            ("main", "japanese"): (main_width, main_enabled, main_width2),
+            ("main", "latin"): (latin_width, latin_enabled, latin_width2),
+            ("ruby", "japanese"): (ruby_width, ruby_enabled, ruby_width2),
+            ("ruby", "latin"): (
+                ruby_width
+                if ruby_latin_width_value is None
+                else int(ruby_latin_width_value),
+                ruby_enabled
+                if ruby_latin_enabled_value is None
+                else bool(ruby_latin_enabled_value),
+                ruby_width2
+                if ruby_latin_width2_value is None
+                else int(ruby_latin_width2_value),
+            ),
+        }
+        for key, (width, enabled, width2) in values.items():
+            width_spin, enabled_check, width2_spin = self._font_stroke_controls[key]
+            width_spin.setValue(width)
+            enabled_check.setChecked(enabled)
+            width2_spin.setValue(width2)
+            width2_spin.setEnabled(enabled)
 
     def _sync_lit_controls(self) -> None:
         if not hasattr(self, "_lit_enabled_switch"):
@@ -5581,8 +5669,10 @@ class PropertyPanel(QWidget):
                 changes["decoration_kind"]
             )
         if "ruby_decoration_kind" in changes:
-            changes["ruby_decoration_kind"] = _normalize_decoration_kind(
-                changes["ruby_decoration_kind"]
+            changes["ruby_decoration_kind"] = (
+                None
+                if changes["ruby_decoration_kind"] is None
+                else _normalize_decoration_kind(changes["ruby_decoration_kind"])
             )
         if "entry_anim" in changes:
             changes["entry_anim"] = _normalize_entry_animation(changes["entry_anim"])
@@ -5837,6 +5927,9 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         font_size_px=int(panel._scheme_value("font_size_px")),
         latin_font_size_px=panel._scheme_value("latin_font_size_px"),
         latin_font_weight=panel._scheme_value("latin_font_weight"),
+        latin_stroke_width_px=panel._scheme_value("latin_stroke_width_px"),
+        latin_stroke2_enabled=panel._scheme_value("latin_stroke2_enabled"),
+        latin_stroke2_width_px=panel._scheme_value("latin_stroke2_width_px"),
         letter_spacing_px=int(panel._scheme_value("letter_spacing_px")),
         space_width_percent=int(panel._scheme_value("space_width_percent")),
         allow_biting=bool(panel._scheme_value("allow_biting")),
@@ -5850,6 +5943,7 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         fill_gradient_angle_deg=int(panel._scheme_value("fill_gradient_angle_deg")),
         stroke_color=str(panel._scheme_value("stroke_color")),
         stroke_width_px=int(panel._scheme_value("stroke_width_px")),
+        stroke2_enabled=bool(panel._scheme_value("stroke2_enabled")),
         stroke2_width_px=int(panel._scheme_value("stroke2_width_px")),
         decoration_kind=_normalize_decoration_kind(panel._scheme_value("decoration_kind")),
         glow_radius_px=int(panel._scheme_value("glow_before_radius_px")),
@@ -5869,7 +5963,17 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         ruby_color=str(panel._scheme_value("ruby_color")),
         ruby_gap_px=int(panel._scheme_value("ruby_gap_px")),
         ruby_stroke_width_px=panel._scheme_value("ruby_stroke_width_px"),
+        ruby_stroke2_enabled=panel._scheme_value("ruby_stroke2_enabled"),
         ruby_stroke2_width_px=panel._scheme_value("ruby_stroke2_width_px"),
+        ruby_latin_stroke_width_px=panel._scheme_value(
+            "ruby_latin_stroke_width_px"
+        ),
+        ruby_latin_stroke2_enabled=panel._scheme_value(
+            "ruby_latin_stroke2_enabled"
+        ),
+        ruby_latin_stroke2_width_px=panel._scheme_value(
+            "ruby_latin_stroke2_width_px"
+        ),
         ruby_decoration_kind=panel._scheme_value("ruby_decoration_kind"),
         ruby_glow_radius_px=panel._scheme_value("ruby_glow_radius_px"),
         ruby_glow_before_radius_px=panel._scheme_value("ruby_glow_before_radius_px"),

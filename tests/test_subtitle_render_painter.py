@@ -217,6 +217,57 @@ def _track() -> TimingTrack:
     return TimingTrack(lines=[line])
 
 
+def test_main_glyphs_use_script_specific_stroke_parameters(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="A", start_ms=0),
+            TimingChar(text="あ", start_ms=100),
+            TimingChar(text="É", start_ms=200),
+        ],
+        end_ms=300,
+    )
+    style = Style(
+        stroke_width_px=12,
+        stroke2_enabled=True,
+        stroke2_width_px=5,
+        latin_stroke_width_px=7,
+        latin_stroke2_enabled=False,
+        latin_stroke2_width_px=9,
+    )
+
+    layout = subtitle_painter._build_text_layout(
+        line,
+        style,
+        x0=0,
+        baseline_y=100,
+        inline_styles=False,
+    )
+
+    assert [glyph.style.stroke_width_px for glyph in layout.glyphs] == [7, 12, 7]
+    assert [glyph.style.stroke2_width_px for glyph in layout.glyphs] == [0, 5, 0]
+    # 关闭开关只影响有效渲染宽度，不会改掉模型里保存的 9 px。
+    assert style.latin_stroke2_width_px == 9
+
+
+def test_ruby_latin_strokes_resolve_independently():
+    style = Style(
+        ruby_stroke_width_px=6,
+        ruby_stroke2_enabled=True,
+        ruby_stroke2_width_px=3,
+        ruby_latin_stroke_width_px=4,
+        ruby_latin_stroke2_enabled=False,
+        ruby_latin_stroke2_width_px=2,
+    )
+
+    japanese = subtitle_painter._ruby_script_stroke_style(style, "かな")
+    latin = subtitle_painter._ruby_script_stroke_style(style, "ABC")
+
+    assert subtitle_painter._ruby_stroke_width(japanese) == 6
+    assert subtitle_painter._ruby_stroke2_width(japanese) == 3
+    assert subtitle_painter._ruby_stroke_width(latin) == 4
+    assert subtitle_painter._ruby_stroke2_width(latin) == 0
+
+
 def _two_line_track() -> TimingTrack:
     line1 = TimingLine(
         chars=[

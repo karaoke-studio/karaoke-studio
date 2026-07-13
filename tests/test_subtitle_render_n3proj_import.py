@@ -270,7 +270,11 @@ def test_import_global_style_font_and_colors(imported):
     assert style.font_weight == 700
     assert style.stroke_width_px == 15
     # UseEdge2 全链 None → N3 不绘制二重描边
-    assert style.stroke2_width_px == 0
+    assert style.stroke2_enabled is False
+    assert style.stroke2_width_px == 5
+    assert style.latin_stroke_width_px == 15
+    assert style.latin_stroke2_enabled is False
+    assert style.latin_stroke2_width_px == 5
     # DecorKind.Shadow → 右下偏移 DecorSize
     assert style.decoration_kind == "shadow"
     assert style.shadow_offset_x == 5
@@ -288,7 +292,43 @@ def test_import_global_style_font_and_colors(imported):
     assert style.ruby_font_family_latin is None
     assert style.ruby_font_size_px == 45
     assert style.ruby_stroke_width_px == 10
+    assert style.ruby_stroke2_enabled is False
+    assert style.ruby_stroke2_width_px == 3
+    assert style.ruby_latin_font_size_px == 45
+    assert style.ruby_latin_font_weight == 700
+    assert style.ruby_latin_stroke_width_px == 10
+    assert style.ruby_latin_stroke2_enabled is False
+    assert style.ruby_latin_stroke2_width_px == 3
     assert style.ruby_karaoke_colors is not None
+
+
+def test_import_applies_explicit_latin_and_ruby_latin_strokes(tmp_path):
+    payload = _project_payload(tmp_path)
+    infos = payload["LyricsFonts"][0]["FontInfos"]
+    infos[2].update(
+        CharSize=_size(72),
+        EdgeSize=_size(8),
+        UseEdge2=True,
+        EdgeSize2=_size(4),
+    )
+    infos[5].update(
+        CharSize=_size(30),
+        EdgeSize=_size(6),
+        UseEdge2=False,
+        EdgeSize2=_size(2),
+    )
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+
+    assert style.latin_font_size_px == 72
+    assert style.latin_stroke_width_px == 8
+    assert style.latin_stroke2_enabled is True
+    assert style.latin_stroke2_width_px == 4
+    assert style.ruby_latin_font_size_px == 30
+    assert style.ruby_latin_stroke_width_px == 6
+    assert style.ruby_latin_stroke2_enabled is False
+    assert style.ruby_latin_stroke2_width_px == 2
 
 
 def test_import_layouts(imported):
@@ -320,7 +360,7 @@ def test_import_custom_scheme_with_gradient(imported):
     assert fill.gradient_stops[-1] == (100, "#0000FF")
 
 
-def test_import_blur_concentration_for_scheme_ruby_and_title(tmp_path):
+def test_import_blur_concentration_is_scheme_shared_and_reaches_title(tmp_path):
     payload = _project_payload(tmp_path)
     payload["LyricsFonts"][1]["BlurLevel"] = 2
 
@@ -329,7 +369,7 @@ def test_import_blur_concentration_for_scheme_ruby_and_title(tmp_path):
     scheme = style.custom_style_schemes["青配色"]
 
     assert scheme.glow_concentration_level == 2
-    assert scheme.ruby_glow_concentration_level == 2
+    assert scheme.ruby_glow_concentration_level is None
     # 标题引用 FontIndex=1（青配色）→ 同步进「标题」方案
     title_scheme = style.custom_style_schemes["标题"]
     assert title_scheme.glow_concentration_level == 2
@@ -523,13 +563,13 @@ def test_import_tactic_project_style_parity():
     style = style_from_dict(result.project_data["style"])
 
     assert style.glow_concentration_level == 1
-    assert style.ruby_glow_concentration_level == 1
+    assert style.ruby_glow_concentration_level is None
     assert style.letter_spacing_px == 7
     assert style.stroke_width_px == 2
-    assert style.stroke2_width_px == 0
+    assert style.stroke2_enabled is False
     assert style.ruby_font_size_px == 45
     assert style.ruby_stroke_width_px == 2
-    assert style.ruby_stroke2_width_px == 0
+    assert style.ruby_stroke2_enabled is False
     assert style.karaoke_colors is not None
     assert style.karaoke_colors.after.text.color == "#FFF1FB"
     assert style.karaoke_colors.after.stroke.color == "#4EAADE"

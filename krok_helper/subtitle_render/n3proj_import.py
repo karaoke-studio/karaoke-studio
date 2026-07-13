@@ -608,6 +608,7 @@ def _scheme_changes(
     """一个 フォント設定 → ``Style`` / ``SubtitleStyleScheme`` 通用字段字典。"""
     font_infos = _list(font.get("FontInfos"))
     kanji = _font_chain(font_infos, 0)
+    alnum = _font_chain(font_infos, 2)
     kana_own = str(_dict(font_infos[1] if len(font_infos) > 1 else {}).get("FontName") or "").strip()
     alnum_own = str(_dict(font_infos[2] if len(font_infos) > 2 else {}).get("FontName") or "").strip()
     ruby_kanji = _font_chain(font_infos, 3)
@@ -628,9 +629,17 @@ def _scheme_changes(
     changes["font_weight"] = weight
     changes["italic"] = italic
     changes["stroke_width_px"] = _resolve_font_size(kanji, "EdgeSize")
-    changes["stroke2_width_px"] = (
-        _resolve_font_size(kanji, "EdgeSize2") if _resolve_use_edge2(kanji) else 0
-    )
+    changes["stroke2_enabled"] = _resolve_use_edge2(kanji)
+    changes["stroke2_width_px"] = _resolve_font_size(kanji, "EdgeSize2")
+
+    latin_size = _resolve_font_size(alnum, "CharSize")
+    if latin_size > 0:
+        changes["latin_font_size_px"] = latin_size
+    latin_weight, _latin_italic = _face_weight_italic(_resolve_face_name(alnum))
+    changes["latin_font_weight"] = latin_weight
+    changes["latin_stroke_width_px"] = _resolve_font_size(alnum, "EdgeSize")
+    changes["latin_stroke2_enabled"] = _resolve_use_edge2(alnum)
+    changes["latin_stroke2_width_px"] = _resolve_font_size(alnum, "EdgeSize2")
 
     colors = _karaoke_colors_from_brushes(_list(font.get("BrushInfos")), lyrics_dir, warnings, context)
     changes["karaoke_colors"] = colors
@@ -648,26 +657,15 @@ def _scheme_changes(
         changes["glow_before_radius_px"] = decor_size
         changes["glow_after_radius_px"] = decor_size
         changes["glow_concentration_level"] = concentration
-        changes["ruby_decoration_kind"] = "glow"
-        changes["ruby_glow_radius_px"] = decor_size
-        changes["ruby_glow_before_radius_px"] = decor_size
-        changes["ruby_glow_after_radius_px"] = decor_size
-        changes["ruby_glow_concentration_level"] = concentration
     elif decor_kind == 1:
         changes["decoration_kind"] = "shadow"
         changes["shadow_offset_x"] = decor_size
         changes["shadow_offset_y"] = decor_size
-        changes["ruby_decoration_kind"] = "shadow"
-        changes["ruby_shadow_offset_x"] = decor_size
-        changes["ruby_shadow_offset_y"] = decor_size
     else:
         # N3「飾りなし」：以 0 偏移阴影表达（视觉上不可见）。
         changes["decoration_kind"] = "shadow"
         changes["shadow_offset_x"] = 0
         changes["shadow_offset_y"] = 0
-        changes["ruby_decoration_kind"] = "shadow"
-        changes["ruby_shadow_offset_x"] = 0
-        changes["ruby_shadow_offset_y"] = 0
 
     # N3 のルビ字体/字号独立于歌詞（未设置时沿 Fallback 链取歌詞漢字字体，但
     # 字号始终是ルビ自己的值）；本模块默认「注音跟随主文字」会连字号一起跟随
@@ -678,6 +676,7 @@ def _scheme_changes(
         changes["ruby_font_family"] = ruby_family
     ruby_kana_own = str(_dict(font_infos[4] if len(font_infos) > 4 else {}).get("FontName") or "").strip()
     ruby_alnum_own = str(_dict(font_infos[5] if len(font_infos) > 5 else {}).get("FontName") or "").strip()
+    ruby_alnum = _font_chain(font_infos, 5)
     if ruby_kana_own and ruby_family and ruby_kana_own != ruby_family:
         warnings.append(f"{context}：ルビかな独立字体（{ruby_kana_own}）暂不支持，已沿用ルビ漢字字体")
     if ruby_alnum_own and ruby_alnum_own != (ruby_family or ""):
@@ -690,8 +689,21 @@ def _scheme_changes(
     if ruby_size > 0:
         changes["ruby_font_size_px"] = ruby_size
     changes["ruby_stroke_width_px"] = _resolve_font_size(ruby_kanji, "EdgeSize")
-    changes["ruby_stroke2_width_px"] = (
-        _resolve_font_size(ruby_kanji, "EdgeSize2") if _resolve_use_edge2(ruby_kanji) else 0
+    changes["ruby_stroke2_enabled"] = _resolve_use_edge2(ruby_kanji)
+    changes["ruby_stroke2_width_px"] = _resolve_font_size(ruby_kanji, "EdgeSize2")
+    ruby_latin_size = _resolve_font_size(ruby_alnum, "CharSize")
+    if ruby_latin_size > 0:
+        changes["ruby_latin_font_size_px"] = ruby_latin_size
+    ruby_latin_weight, _ruby_latin_italic = _face_weight_italic(
+        _resolve_face_name(ruby_alnum)
+    )
+    changes["ruby_latin_font_weight"] = ruby_latin_weight
+    changes["ruby_latin_stroke_width_px"] = _resolve_font_size(
+        ruby_alnum, "EdgeSize"
+    )
+    changes["ruby_latin_stroke2_enabled"] = _resolve_use_edge2(ruby_alnum)
+    changes["ruby_latin_stroke2_width_px"] = _resolve_font_size(
+        ruby_alnum, "EdgeSize2"
     )
     changes["ruby_color"] = colors.after.text.color
     changes["ruby_karaoke_colors"] = deepcopy(colors)

@@ -547,8 +547,8 @@ def test_property_panel_font_and_color_sections_are_side_by_side(qapp):
     # 颜色在左、字体在右（与 nicokara maker3 的编辑顺序一致）。
     assert panel._color_section.geometry().right() < panel._font_section.geometry().left()
     assert abs(panel._font_section.width() - panel._color_section.width()) <= 1
-    # 两张卡片只需顶部对齐；颜色编辑器较高时不能把字体卡片强行等高。
-    assert panel._font_section.height() < panel._color_section.height()
+    # 描边尺寸进入字体页后字体卡片更高；两张卡片仍只做顶部对齐。
+    assert panel._font_section.height() > panel._color_section.height()
     font_header_top = panel._font_section.mapTo(panel._font_color_row, QPoint()).y()
     color_header_top = panel._color_section.mapTo(panel._font_color_row, QPoint()).y()
     assert font_header_top == color_header_top
@@ -871,6 +871,71 @@ def test_property_panel_font_controls_emit_style(qapp):
     assert emitted[-1].allow_biting is True
 
 
+def test_font_tabs_own_four_independent_stroke_groups(qapp):
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            stroke_width_px=12,
+            stroke2_enabled=True,
+            stroke2_width_px=5,
+            latin_stroke_width_px=9,
+            latin_stroke2_enabled=False,
+            latin_stroke2_width_px=4,
+            ruby_stroke_width_px=6,
+            ruby_stroke2_enabled=True,
+            ruby_stroke2_width_px=3,
+            ruby_latin_stroke_width_px=2,
+            ruby_latin_stroke2_enabled=True,
+            ruby_latin_stroke2_width_px=1,
+        )
+    )
+
+    assert panel._stroke_width_spin.value() == 12
+    assert panel._latin_stroke_width_spin.value() == 9
+    assert panel._ruby_stroke_width_spin.value() == 6
+    assert panel._ruby_latin_stroke_width_spin.value() == 2
+    assert panel._latin_stroke2_enabled_check.isChecked() is False
+    assert panel._latin_stroke2_width_spin.value() == 4
+    assert panel._latin_stroke2_width_spin.isEnabled() is False
+    for prefix in ("", "latin_", "ruby_", "ruby_latin_"):
+        enabled_check = getattr(panel, f"_{prefix}stroke2_enabled_check")
+        enabled_field = getattr(panel, f"_{prefix}stroke2_enabled_field")
+        width_field = getattr(panel, f"_{prefix}stroke2_width_field")
+        assert enabled_check.text() == ""
+        assert enabled_field is width_field
+    for field in (
+        panel._stroke_width_field,
+        panel._latin_stroke_width_field,
+        panel._ruby_stroke_width_field,
+        panel._ruby_latin_stroke_width_field,
+    ):
+        assert panel._font_section.isAncestorOf(field)
+        assert not panel._color_section.isAncestorOf(field)
+
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+    panel._latin_stroke2_enabled_check.setChecked(True)
+    panel._ruby_latin_stroke_width_spin.setValue(7)
+
+    assert emitted[-1].latin_stroke2_enabled is True
+    assert emitted[-1].latin_stroke2_width_px == 4
+    assert emitted[-1].ruby_latin_stroke_width_px == 7
+
+
+def test_stroke2_checkbox_sits_tightly_beside_width_input(qapp):
+    panel = PropertyPanel()
+    panel.resize(900, 800)
+    panel.show()
+    qapp.processEvents()
+
+    checkbox = panel._stroke2_enabled_check
+    width_spin = panel._stroke2_width_spin
+    assert checkbox.width() <= 30
+    assert checkbox.parentWidget() is width_spin.parentWidget()
+    gap = width_spin.geometry().left() - checkbox.geometry().right() - 1
+    assert 0 <= gap <= 2
+
+
 def test_font_scripts_are_tabs_and_spacing_lives_on_layout_page(qapp):
     panel = PropertyPanel()
 
@@ -921,12 +986,24 @@ def test_latin_font_overrides_round_trip_and_legacy_values_inherit():
         font_weight=700,
         latin_font_size_px=60,
         latin_font_weight=500,
+        latin_stroke_width_px=8,
+        latin_stroke2_enabled=False,
+        latin_stroke2_width_px=3,
+        ruby_latin_stroke_width_px=4,
+        ruby_latin_stroke2_enabled=True,
+        ruby_latin_stroke2_width_px=2,
     )
 
     restored = style_from_dict(style_to_dict(style))
     assert restored.font_family_latin == "Arial"
     assert restored.latin_font_size_px == 60
     assert restored.latin_font_weight == 500
+    assert restored.latin_stroke_width_px == 8
+    assert restored.latin_stroke2_enabled is False
+    assert restored.latin_stroke2_width_px == 3
+    assert restored.ruby_latin_stroke_width_px == 4
+    assert restored.ruby_latin_stroke2_enabled is True
+    assert restored.ruby_latin_stroke2_width_px == 2
 
     legacy = style_from_dict(
         {"font_family": "Yu Gothic UI", "font_size_px": 72, "font_weight": 700}
@@ -934,6 +1011,9 @@ def test_latin_font_overrides_round_trip_and_legacy_values_inherit():
     assert legacy.font_family_latin is None
     assert legacy.latin_font_size_px is None
     assert legacy.latin_font_weight is None
+    assert legacy.latin_stroke_width_px is None
+    assert legacy.latin_stroke2_enabled is None
+    assert legacy.latin_stroke2_width_px is None
 
 
 def test_ruby_font_defaults_follow_main_until_edited(qapp):
@@ -1461,11 +1541,13 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     assert panel._decoration_type_field.isHidden()
     assert not panel._stroke_width_field.isHidden()
     assert not panel._stroke2_width_field.isHidden()
+    assert panel._font_section.isAncestorOf(panel._stroke_width_field)
+    assert panel._font_section.isAncestorOf(panel._stroke2_width_field)
 
     panel._color_layer_combo.setCurrentIndex(panel._color_layer_combo.findData("shadow"))
     assert not panel._decoration_type_field.isHidden()
-    assert panel._stroke_width_field.isHidden()
-    assert panel._stroke2_width_field.isHidden()
+    assert not panel._stroke_width_field.isHidden()
+    assert not panel._stroke2_width_field.isHidden()
     assert not panel._shadow_x_field.isHidden()
     assert not panel._shadow_y_field.isHidden()
 
@@ -1503,8 +1585,14 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     assert panel._glow_controls_row.isHidden()
 
 
-def test_property_panel_glow_concentration_edits_main_and_ruby(qapp):
+def test_property_panel_glow_concentration_is_shared_by_main_and_ruby(qapp):
     panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            ruby_decoration_kind="shadow",
+            ruby_glow_concentration_level=2,
+        )
+    )
     emitted: list[Style] = []
     panel.styleChanged.connect(emitted.append)
 
@@ -1514,6 +1602,7 @@ def test_property_panel_glow_concentration_edits_main_and_ruby(qapp):
     panel._decoration_type_combo.setCurrentIndex(
         panel._decoration_type_combo.findData("glow")
     )
+    assert emitted[-1].ruby_decoration_kind is None
 
     assert not panel._glow_concentration_field.isHidden()
     assert panel._glow_concentration_combo.currentData() == 0
@@ -1532,8 +1621,8 @@ def test_property_panel_glow_concentration_edits_main_and_ruby(qapp):
     panel._glow_concentration_combo.setCurrentIndex(
         panel._glow_concentration_combo.findData(1)
     )
-    assert emitted[-1].ruby_glow_concentration_level == 1
-    assert emitted[-1].glow_concentration_level == 2
+    assert emitted[-1].ruby_glow_concentration_level is None
+    assert emitted[-1].glow_concentration_level == 1
 
     panel._apply_main_colors_to_ruby()
     assert emitted[-1].ruby_glow_concentration_level is None
@@ -1842,7 +1931,7 @@ def test_property_panel_apply_main_colors_button_only_shows_for_ruby_colors(qapp
     assert not panel._ruby_apply_main_btn.isHidden()
 
 
-def test_property_panel_ruby_color_subject_controls_emit_ruby_style(qapp):
+def test_property_panel_ruby_font_tab_controls_emit_ruby_strokes(qapp):
     panel = PropertyPanel()
     panel.set_style(
         Style(
@@ -1857,36 +1946,33 @@ def test_property_panel_ruby_color_subject_controls_emit_ruby_style(qapp):
     emitted: list[Style] = []
     panel.styleChanged.connect(emitted.append)
 
-    panel._color_subject_combo.setCurrentIndex(
-        panel._color_subject_combo.findData("ruby")
-    )
-    assert panel._stroke_width_spin.value() == 4
-    assert panel._stroke2_width_spin.value() == 2
+    assert panel._ruby_stroke_width_spin.value() == 4
+    assert panel._ruby_stroke2_width_spin.value() == 2
 
-    panel._stroke_width_spin.setValue(6)
+    panel._ruby_stroke_width_spin.setValue(6)
     assert emitted[-1].ruby_stroke_width_px == 6
     assert emitted[-1].stroke_width_px == 10
 
-    panel._stroke2_width_spin.setValue(3)
+    panel._ruby_stroke2_width_spin.setValue(3)
     assert emitted[-1].ruby_stroke2_width_px == 3
     assert emitted[-1].stroke2_width_px == 4
 
     panel._decoration_type_combo.setCurrentIndex(
         panel._decoration_type_combo.findData("glow")
     )
-    assert emitted[-1].ruby_decoration_kind == "glow"
-    assert emitted[-1].decoration_kind == "shadow"
+    assert emitted[-1].ruby_decoration_kind is None
+    assert emitted[-1].decoration_kind == "glow"
 
     panel._glow_radius_spin.setValue(9)
-    assert emitted[-1].ruby_glow_radius_px == 9
-    assert emitted[-1].ruby_glow_before_radius_px == 9
-    assert emitted[-1].glow_before_radius_px == 10
+    assert emitted[-1].ruby_glow_radius_px is None
+    assert emitted[-1].ruby_glow_before_radius_px is None
+    assert emitted[-1].glow_before_radius_px == 9
 
     panel._color_subject_combo.setCurrentIndex(
         panel._color_subject_combo.findData("main")
     )
     assert panel._stroke_width_spin.value() == 10
-    assert panel._decoration_type_combo.currentData() == "shadow"
+    assert panel._decoration_type_combo.currentData() == "glow"
 
 
 def test_property_panel_role_ruby_subject_controls_go_into_custom_scheme(qapp):
@@ -1896,15 +1982,13 @@ def test_property_panel_role_ruby_subject_controls_go_into_custom_scheme(qapp):
     panel.styleChanged.connect(emitted.append)
 
     panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:B"))
-    panel._color_subject_combo.setCurrentIndex(
-        panel._color_subject_combo.findData("ruby")
-    )
-    panel._stroke_width_spin.setValue(7)
+    panel._ruby_stroke_width_spin.setValue(7)
     panel._shadow_y_spin.setValue(5)
 
     scheme = emitted[-1].custom_style_schemes["B"]
     assert scheme.ruby_stroke_width_px == 7
-    assert scheme.ruby_shadow_offset_y == 5
+    assert scheme.shadow_offset_y == 5
+    assert scheme.ruby_shadow_offset_y is None
     assert scheme.stroke_width_px != 7
     assert emitted[-1].ruby_stroke_width_px == 10
 
@@ -2766,17 +2850,14 @@ def test_property_panel_layout_selector_edits_selected_layout(qapp):
     assert emitted[-1].layouts[base_count].line_gap_px == 33
 
 
-def test_ruby_color_subject_edits_write_ruby_fields(qapp):
-    """#6 回归：编辑对象=注音 时描边宽度写入注音字段（全局路径）。"""
+def test_ruby_font_tab_edits_write_ruby_fields(qapp):
+    """注音字体页的描边尺寸写入注音字段（全局路径）。"""
     panel = PropertyPanel()
     emitted: list[Style] = []
     panel.styleChanged.connect(emitted.append)
 
-    panel._color_subject_combo.setCurrentIndex(
-        panel._color_subject_combo.findData("ruby")
-    )
-    panel._stroke_width_spin.setValue(21)
-    panel._stroke2_width_spin.setValue(7)
+    panel._ruby_stroke_width_spin.setValue(21)
+    panel._ruby_stroke2_width_spin.setValue(7)
 
     assert emitted[-1].ruby_stroke_width_px == 21
     assert emitted[-1].ruby_stroke2_width_px == 7
@@ -2784,19 +2865,28 @@ def test_ruby_color_subject_edits_write_ruby_fields(qapp):
     assert emitted[-1].stroke_width_px == Style().stroke_width_px
 
 
-def test_apply_main_colors_to_ruby_clears_width_overrides(qapp):
-    """#5 回归：应用主文字配色后注音宽度覆盖清空 → 渲染端按比例跟随主文字。"""
+def test_apply_main_colors_to_ruby_preserves_font_and_decoration_parameters(qapp):
+    """应用主文字配色只复制颜色，不修改字体页描边或方案装饰参数。"""
     panel = PropertyPanel()
     emitted: list[Style] = []
     panel.styleChanged.connect(emitted.append)
-    panel.set_style(Style(stroke_width_px=20, stroke2_width_px=8))
+    panel.set_style(
+        Style(
+            stroke_width_px=20,
+            stroke2_width_px=8,
+            ruby_stroke_width_px=11,
+            ruby_stroke2_width_px=4,
+            shadow_offset_x=6,
+        )
+    )
 
     panel._apply_main_colors_to_ruby()
 
     style = emitted[-1]
     assert style.ruby_karaoke_colors is not None
-    assert style.ruby_stroke_width_px is None
-    assert style.ruby_stroke2_width_px is None
+    assert style.ruby_stroke_width_px == 11
+    assert style.ruby_stroke2_width_px == 4
+    assert style.shadow_offset_x == 6
     assert style.ruby_shadow_offset_x is None
 
 

@@ -812,7 +812,9 @@ def resolve_title_overlay(style: Style) -> Optional[TitleOverlay]:
             stroke=colors.stroke,
             stroke_width_px=int(merged.stroke_width_px),
             stroke2=colors.stroke2,
-            stroke2_width_px=int(merged.stroke2_width_px),
+            stroke2_width_px=(
+                int(merged.stroke2_width_px) if merged.stroke2_enabled else 0
+            ),
             decoration_kind=merged.decoration_kind,
             glow_radius_px=int(merged.glow_before_radius_px),
             glow_concentration_level=int(merged.glow_concentration_level),
@@ -861,7 +863,9 @@ def _resolve_title_role_overlay(
         stroke=colors.stroke,
         stroke_width_px=int(merged.stroke_width_px),
         stroke2=colors.stroke2,
-        stroke2_width_px=int(merged.stroke2_width_px),
+        stroke2_width_px=(
+            int(merged.stroke2_width_px) if merged.stroke2_enabled else 0
+        ),
         decoration_kind=merged.decoration_kind,
         glow_radius_px=int(merged.glow_before_radius_px),
         glow_concentration_level=int(merged.glow_concentration_level),
@@ -2432,6 +2436,54 @@ def _latin_font_weight(style: Style) -> int:
     return int(value) if value is not None else int(style.font_weight)
 
 
+def _is_n3_latin_text(text: str) -> bool:
+    """N3 英数页：ASCII U+0020..007E 加 Latin-1 字母 À..ÿ。"""
+    return bool(text) and all(
+        "\u0020" <= char <= "\u007e" or "\u00c0" <= char <= "\u00ff"
+        for char in text
+    )
+
+
+def _main_script_stroke_style(style: Style, text: str) -> Style:
+    """把当前字符对应字体槽的描边参数物化到 Painter 的通用字段。"""
+    if _is_n3_latin_text(text):
+        width = (
+            style.stroke_width_px
+            if style.latin_stroke_width_px is None
+            else int(style.latin_stroke_width_px)
+        )
+        enabled = (
+            style.stroke2_enabled
+            if style.latin_stroke2_enabled is None
+            else bool(style.latin_stroke2_enabled)
+        )
+        width2 = (
+            style.stroke2_width_px
+            if style.latin_stroke2_width_px is None
+            else int(style.latin_stroke2_width_px)
+        )
+    else:
+        width = style.stroke_width_px
+        enabled = style.stroke2_enabled
+        width2 = style.stroke2_width_px
+    effective_width2 = max(int(width2), 0) if enabled else 0
+    if (
+        int(style.stroke_width_px) == int(width)
+        and int(style.stroke2_width_px) == effective_width2
+    ):
+        return style
+    return replace(
+        style,
+        stroke_width_px=max(int(width), 0),
+        stroke2_enabled=True,
+        stroke2_width_px=effective_width2,
+    )
+
+
+def _main_stroke2_width(style: Style) -> int:
+    return max(int(style.stroke2_width_px), 0) if style.stroke2_enabled else 0
+
+
 def _build_latin_font(style: Style) -> QFont:
     """英数字体；未单独设置时各参数退回日文轨（行为与单字体一致）。"""
     family = style.font_family_latin or style.font_family
@@ -2454,7 +2506,7 @@ def _make_font_for(style: Style, jp_font: QFont, latin_font: QFont):
         return None
 
     def font_for(ch_text: str) -> QFont:
-        return latin_font if (ch_text and ch_text.isascii()) else jp_font
+        return latin_font if _is_n3_latin_text(ch_text) else jp_font
 
     return font_for
 
@@ -2466,7 +2518,7 @@ def _char_advance(
     font_for,
 ) -> int:
     """单字符步进；英数字符用英数字体度量，其余用日文字体度量。"""
-    if font_for is not None and ch_text and ch_text.isascii():
+    if font_for is not None and _is_n3_latin_text(ch_text):
         return latin_metrics.horizontalAdvance(ch_text)
     return metrics.horizontalAdvance(ch_text)
 
@@ -2556,7 +2608,7 @@ def _char_layout_metrics(
     style: Style,
 ) -> tuple[int, float]:
     """(layout width, path left offset) using NicokaraMaker3-like rules, memoized."""
-    is_latin_glyph = font_for is not None and bool(ch_text) and ch_text.isascii()
+    is_latin_glyph = font_for is not None and _is_n3_latin_text(ch_text)
     glyph_font = font_for(ch_text) if font_for is not None else font
     glyph_metrics = latin_metrics if is_latin_glyph else metrics
     font_size = glyph_font.pixelSize()
@@ -2866,7 +2918,7 @@ def _clamp_weight(w: int) -> QFont.Weight:
 
 
 def _visual_text_padding(style: Style) -> int:
-    return _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px)
+    return _visual_stroke_extent(style.stroke_width_px, _main_stroke2_width(style))
 
 
 def _visual_stroke_extent(stroke_width: int, stroke2_width: int) -> int:
@@ -2982,9 +3034,48 @@ def _ruby_stroke_width(style: Style) -> int:
 
 
 def _ruby_stroke2_width(style: Style) -> int:
+    enabled = (
+        style.stroke2_enabled
+        if style.ruby_stroke2_enabled is None
+        else bool(style.ruby_stroke2_enabled)
+    )
+    if not enabled:
+        return 0
     if style.ruby_stroke2_width_px is not None:
         return max(int(style.ruby_stroke2_width_px), 0)
-    return _scaled_px(style.stroke2_width_px, _ruby_scale(style))
+    main_width = style.stroke2_width_px if style.stroke2_enabled else 0
+    return _scaled_px(main_width, _ruby_scale(style))
+
+
+def _ruby_script_stroke_style(style: Style, reading: str) -> Style:
+    """把整段 ruby 读音所用字体槽的描边物化到 ruby 通用字段。"""
+    if not _is_n3_latin_text(reading):
+        return style
+    width = (
+        _ruby_stroke_width(style)
+        if style.ruby_latin_stroke_width_px is None
+        else max(int(style.ruby_latin_stroke_width_px), 0)
+    )
+    enabled = (
+        (
+            style.stroke2_enabled
+            if style.ruby_stroke2_enabled is None
+            else bool(style.ruby_stroke2_enabled)
+        )
+        if style.ruby_latin_stroke2_enabled is None
+        else bool(style.ruby_latin_stroke2_enabled)
+    )
+    width2 = (
+        _ruby_stroke2_width(style)
+        if style.ruby_latin_stroke2_width_px is None
+        else max(int(style.ruby_latin_stroke2_width_px), 0)
+    )
+    return replace(
+        style,
+        ruby_stroke_width_px=width,
+        ruby_stroke2_enabled=True,
+        ruby_stroke2_width_px=width2 if enabled else 0,
+    )
 
 
 def _ruby_decoration_kind(style: Style) -> DecorationKind:
@@ -3036,13 +3127,14 @@ def _ruby_paint_style(style: Style) -> Style:
 
 
 def _text_visual_padding(style: Style, *, after: bool) -> int:
-    pad = _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px)
+    stroke2_width = _main_stroke2_width(style)
+    pad = _visual_stroke_extent(style.stroke_width_px, stroke2_width)
     if style.decoration_kind == "glow":
         pad = max(
             pad,
             _glow_extent(
                 style.stroke_width_px,
-                style.stroke2_width_px,
+                stroke2_width,
                 _glow_radius(style, after=after),
             ),
         )
@@ -3448,6 +3540,7 @@ def _paint_line_vertical_direct(
     style: Style,
 ) -> None:
     """竖排逐帧直绘（旧路径，A/B oracle + env 回退）。"""
+    stroke2_width = _main_stroke2_width(style)
     # 「未唱」层
     _paint_text_layer_stack(
         painter,
@@ -3456,7 +3549,7 @@ def _paint_line_vertical_direct(
         layout.colors.before,
         style,
         stroke_width=style.stroke_width_px,
-        stroke2_width=style.stroke2_width_px,
+        stroke2_width=stroke2_width,
         shadow_dx=style.shadow_offset_x,
         shadow_dy=style.shadow_offset_y,
         glow_radius=_glow_radius(style, after=False),
@@ -3479,7 +3572,7 @@ def _paint_line_vertical_direct(
                 layout.colors.after,
                 style,
                 stroke_width=style.stroke_width_px,
-                stroke2_width=style.stroke2_width_px,
+                stroke2_width=stroke2_width,
                 shadow_dx=style.shadow_offset_x,
                 shadow_dy=style.shadow_offset_y,
                 glow_radius=_glow_radius(style, after=True),
@@ -3506,10 +3599,11 @@ def _paint_line_vertical_direct(
 
 
 def _vertical_after_clip_pad(style: Style) -> int:
-    stroke_extent = _visual_stroke_extent(style.stroke_width_px, style.stroke2_width_px)
+    stroke2_width = _main_stroke2_width(style)
+    stroke_extent = _visual_stroke_extent(style.stroke_width_px, stroke2_width)
     return max(
         stroke_extent,
-        _glow_extent(style.stroke_width_px, style.stroke2_width_px, _glow_radius(style, after=True))
+        _glow_extent(style.stroke_width_px, stroke2_width, _glow_radius(style, after=True))
         if style.decoration_kind == "glow"
         else 0,
         stroke_extent + abs(style.shadow_offset_x),
@@ -3602,6 +3696,7 @@ def _vertical_layer_stack(
     style: Style,
 ) -> list:
     layers: list = []
+    stroke2_width = _main_stroke2_width(style)
     main_sig = _vertical_main_path_sig(line, style, layout)
     layers.append(
         _BakedPathStackLayer(
@@ -3611,12 +3706,12 @@ def _vertical_layer_stack(
             style=style,
             cache_key=_baked_stack_key(
                 main_sig, layout.line_rect, layout.colors.before, style,
-                stroke_width=style.stroke_width_px, stroke2_width=style.stroke2_width_px,
+                stroke_width=style.stroke_width_px, stroke2_width=stroke2_width,
                 shadow_dx=style.shadow_offset_x, shadow_dy=style.shadow_offset_y,
                 glow_radius=_glow_radius(style, after=False), after=False,
             ),
             stroke_width=style.stroke_width_px,
-            stroke2_width=style.stroke2_width_px,
+            stroke2_width=stroke2_width,
             shadow_dx=style.shadow_offset_x,
             shadow_dy=style.shadow_offset_y,
             glow_radius=_glow_radius(style, after=False),
@@ -3636,12 +3731,12 @@ def _vertical_layer_stack(
                 style=style,
                 cache_key=_baked_stack_key(
                     main_sig, layout.line_rect, layout.colors.after, style,
-                    stroke_width=style.stroke_width_px, stroke2_width=style.stroke2_width_px,
+                    stroke_width=style.stroke_width_px, stroke2_width=stroke2_width,
                     shadow_dx=style.shadow_offset_x, shadow_dy=style.shadow_offset_y,
                     glow_radius=_glow_radius(style, after=True), after=True,
                 ),
                 stroke_width=style.stroke_width_px,
-                stroke2_width=style.stroke2_width_px,
+                stroke2_width=stroke2_width,
                 shadow_dx=style.shadow_offset_x,
                 shadow_dy=style.shadow_offset_y,
                 glow_radius=_glow_radius(style, after=True),
@@ -4345,6 +4440,9 @@ _SUBTITLE_SCHEME_STYLE_FIELDS: tuple[str, ...] = (
     "space_width_percent",
     "latin_font_size_px",
     "latin_font_weight",
+    "latin_stroke_width_px",
+    "latin_stroke2_enabled",
+    "latin_stroke2_width_px",
     "allow_biting",
     "font_weight",
     "italic",
@@ -4356,6 +4454,7 @@ _SUBTITLE_SCHEME_STYLE_FIELDS: tuple[str, ...] = (
     "fill_gradient_angle_deg",
     "stroke_color",
     "stroke_width_px",
+    "stroke2_enabled",
     "stroke2_width_px",
     "decoration_kind",
     "glow_radius_px",
@@ -4375,7 +4474,11 @@ _SUBTITLE_SCHEME_STYLE_FIELDS: tuple[str, ...] = (
     "ruby_color",
     "ruby_gap_px",
     "ruby_stroke_width_px",
+    "ruby_stroke2_enabled",
     "ruby_stroke2_width_px",
+    "ruby_latin_stroke_width_px",
+    "ruby_latin_stroke2_enabled",
+    "ruby_latin_stroke2_width_px",
     "ruby_decoration_kind",
     "ruby_glow_radius_px",
     "ruby_glow_before_radius_px",
@@ -4485,14 +4588,15 @@ def _build_text_layout(
             latin_metrics = plain_latin_metrics
             if font is None or metrics is None or latin_metrics is None:
                 continue
+        glyph_style = _main_script_stroke_style(role_style, ch.text)
         glyph_font = font_for(ch.text) if font_for is not None else font
         glyph_metrics = (
             latin_metrics
-            if inline_styles and font_for is not None and ch.text.isascii()
+            if font_for is not None and _is_n3_latin_text(ch.text)
             else metrics
         )
         width = _char_layout_width(
-            ch.text, font, metrics, latin_metrics, font_for, role_style,
+            ch.text, font, metrics, latin_metrics, font_for, glyph_style,
         )
         spacing_after = _letter_spacing(role_style) if index < len(line.chars) - 1 else 0
         measured.append(
@@ -4500,13 +4604,13 @@ def _build_text_layout(
                 index,
                 ch.text,
                 role_label,
-                role_style,
+                glyph_style,
                 glyph_font,
                 glyph_metrics,
                 width,
                 spacing_after,
                 _char_path_left_offset(
-                    ch.text, font, metrics, latin_metrics, font_for, role_style,
+                    ch.text, font, metrics, latin_metrics, font_for, glyph_style,
                 ),
             )
         )
@@ -6866,6 +6970,7 @@ def _paint_char_karaoke_stack(
     # 不再每帧 _paint_glow_path 重算高斯；body 仍逐帧矢量（锐利）。``glow_run`` 为 None
     # 时退回原逐帧 glow 路径（保留旧行为，可回退）。
     use_cached_glow = glow_run is not None and style.decoration_kind == "glow"
+    stroke2_width = _main_stroke2_width(style)
 
     def _blit_glow(after: bool) -> None:
         _blit_cached_run_glow(
@@ -6883,7 +6988,7 @@ def _paint_char_karaoke_stack(
             colors.before,
             style,
             stroke_width=style.stroke_width_px,
-            stroke2_width=style.stroke2_width_px,
+            stroke2_width=stroke2_width,
             shadow_dx=style.shadow_offset_x,
             shadow_dy=style.shadow_offset_y,
             glow_radius=_glow_radius(style, after=False),
@@ -6901,7 +7006,7 @@ def _paint_char_karaoke_stack(
             colors.before,
             style,
             stroke_width=style.stroke_width_px,
-            stroke2_width=style.stroke2_width_px,
+            stroke2_width=stroke2_width,
             shadow_dx=style.shadow_offset_x,
             shadow_dy=style.shadow_offset_y,
             glow_radius=_glow_radius(style, after=False),
@@ -6929,7 +7034,7 @@ def _paint_char_karaoke_stack(
             after_glow = (_fill_signature(colors.after.shadow), _glow_radius(style, after=True))
             if before_glow != after_glow:
                 glow_pad = _glow_extent(
-                    style.stroke_width_px, style.stroke2_width_px, _glow_radius(style, after=True)
+                    style.stroke_width_px, stroke2_width, _glow_radius(style, after=True)
                 )
                 # 尾缘 + 上下外扩 glow_pad，前缘（扫光线）不外扩：
                 # LTR 扫光线在右缘，RTL 在左缘（clip_x 即扫光线左侧）。
@@ -6955,7 +7060,7 @@ def _paint_char_karaoke_stack(
                             rect,
                             _glow_radius(style, after=True),
                             style.stroke_width_px,
-                            style.stroke2_width_px,
+                            stroke2_width,
                             concentration_level=_glow_concentration_level(style),
                         )
                 finally:
@@ -6978,7 +7083,7 @@ def _paint_char_karaoke_stack(
                 colors.after,
                 style,
                 stroke_width=style.stroke_width_px,
-                stroke2_width=style.stroke2_width_px,
+                stroke2_width=stroke2_width,
                 shadow_dx=style.shadow_offset_x,
                 shadow_dy=style.shadow_offset_y,
                 glow_radius=_glow_radius(style, after=True),
@@ -6997,7 +7102,7 @@ def _paint_char_karaoke_stack(
         colors.after,
         style,
         stroke_width=style.stroke_width_px,
-        stroke2_width=style.stroke2_width_px,
+        stroke2_width=stroke2_width,
         shadow_dx=style.shadow_offset_x,
         shadow_dy=style.shadow_offset_y,
         glow_radius=_glow_radius(style, after=True),
@@ -8710,6 +8815,7 @@ def _layout_rubies(
         if target_range is None:
             continue
         ruby_style = _ruby_style_for_target_indices(style, line, indices)
+        ruby_style = _ruby_script_stroke_style(ruby_style, paint_ruby.reading)
         left, right = target_range
         target_width = max(right - left, 1)
         gradient_rect = _ruby_main_gradient_rect(
