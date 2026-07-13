@@ -116,6 +116,14 @@ from krok_helper.subtitle_render.models import (
     VIEWPORT_ALIGNS,
     ViewportAlign,
 )
+from krok_helper.subtitle_render.n3_template_import import (
+    N3_TEMPLATE_FILTER,
+    default_n3_template_directories,
+    find_n3_template_files,
+    load_n3_font_templates,
+    merge_n3_template_presets,
+    resolve_n3_template_preset,
+)
 
 _SCHEME_FIELDS = {
     "font_family",
@@ -208,6 +216,8 @@ def _normalize_style_presets(
                 name=name,
                 group=str(value.group).strip(),
                 scheme=deepcopy(value.scheme),
+                source_type=str(value.source_type).strip(),
+                source_data=deepcopy(value.source_data),
             )
         elif isinstance(value, SubtitleStyleScheme):
             result[name] = StylePreset(name=name, scheme=deepcopy(value))
@@ -1852,12 +1862,23 @@ class StylePresetManagerDialog(QDialog):
         current_scheme: SubtitleStyleScheme,
         target_label: str,
         existing_role_names: Optional[set[str]] = None,
+        target_height: int = 1080,
+        lyrics_dir: Optional[Path] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("样式预设库")
         self.resize(640, 520)
-        self._presets = _normalize_style_presets(presets)
+        self._target_height = max(1, int(target_height))
+        self._lyrics_dir = Path(lyrics_dir) if lyrics_dir is not None else None
+        self._presets = {}
+        for name, preset in _normalize_style_presets(presets).items():
+            resolved, _warnings = resolve_n3_template_preset(
+                preset,
+                target_height=self._target_height,
+                lyrics_dir=self._lyrics_dir,
+            )
+            self._presets[name] = resolved
         self._current_scheme = deepcopy(current_scheme)
         self._target_label = str(target_label)
         self._existing_role_names = set(existing_role_names or set())
@@ -1925,6 +1946,8 @@ class StylePresetManagerDialog(QDialog):
         edit_row = QHBoxLayout()
         edit_row.setContentsMargins(0, 0, 0, 0)
         edit_row.setSpacing(8)
+        self._import_n3_btn = FluentPushButton("从 N3 导入", self)
+        self._import_n3_btn.clicked.connect(self._on_import_n3)
         self._save_current_btn = FluentPushButton("保存当前样式为预设", self)
         self._save_current_btn.clicked.connect(self._on_save_current)
         self._rename_btn = FluentPushButton("重命名", self)
@@ -1933,6 +1956,7 @@ class StylePresetManagerDialog(QDialog):
         self._set_group_btn.clicked.connect(self._on_set_group)
         self._delete_btn = FluentPushButton("删除", self)
         self._delete_btn.clicked.connect(self._on_delete)
+        edit_row.addWidget(self._import_n3_btn)
         edit_row.addWidget(self._save_current_btn)
         edit_row.addWidget(self._rename_btn)
         edit_row.addWidget(self._set_group_btn)
@@ -2148,6 +2172,125 @@ class StylePresetManagerDialog(QDialog):
                 continue
             return
 
+    def _on_import_n3(self) -> None:
+        discovered = find_n3_template_files()
+        if discovered:
+            choice = fluent_choice(
+                self,
+                "从 N3 导入字体模板",
+                f"已自动发现 {len(discovered)} 个有效扩展名的 N3 字体模板。请选择导入来源。",
+                ("导入已发现模板", "选择模板文件", "选择模板目录", "取消"),
+                default=0,
+            )
+            if choice == 0:
+                selected: list[Path] = discovered
+            elif choice == 1:
+                selected = self._select_n3_template_files()
+            elif choice == 2:
+                selected = self._select_n3_template_directory()
+            else:
+                return
+        else:
+            choice = fluent_choice(
+                self,
+                "从 N3 导入字体模板",
+                "没有自动发现 N3 的 TemplateFont 目录，请手动选择模板文件或目录。",
+                ("选择模板文件", "选择模板目录", "取消"),
+                default=0,
+            )
+            if choice == 0:
+                selected = self._select_n3_template_files()
+            elif choice == 1:
+                selected = self._select_n3_template_directory()
+            else:
+                return
+        if not selected:
+            return
+
+        batch = load_n3_font_templates(
+            selected,
+            target_height=self._target_height,
+            lyrics_dir=self._lyrics_dir,
+        )
+        if not batch.templates and not batch.failed:
+            InfoBar.warning(
+                title="没有可导入模板",
+                content="所选位置没有同步状态的 N3 字体模板。",
+                parent=self,
+                duration=3500,
+            )
+            return
+
+        conflicts = sorted({item.name for item in batch.templates if item.name in self._presets})
+        policy = "overwrite"
+        if conflicts:
+            shown = "、".join(conflicts[:5])
+            if len(conflicts) > 5:
+                shown += f" 等 {len(conflicts)} 项"
+            decision = fluent_choice(
+                self,
+                "同名 N3 字体模板",
+                f"以下模板与预设库重名：{shown}\n请选择本批次统一处理方式。",
+                ("覆盖", "自动改名", "跳过", "取消导入"),
+                default=2,
+            )
+            if decision == 0:
+                policy = "overwrite"
+            elif decision == 1:
+                policy = "rename"
+            elif decision == 2:
+                policy = "skip"
+            else:
+                return
+
+        merged = merge_n3_template_presets(
+            self._presets, batch.templates, conflict_policy=policy
+        )
+        self._presets = merged.presets
+        selected_name = merged.imported_names[-1] if merged.imported_names else None
+        self._populate_list(selected=selected_name)
+
+        warning_count = sum(len(item.warnings) for item in batch.templates)
+        summary = (
+            f"成功 {len(merged.imported_names)} 个，跳过 "
+            f"{len(batch.skipped) + len(merged.skipped_names)} 个，失败 {len(batch.failed)} 个"
+        )
+        if batch.failed:
+            details = "\n".join(f"{path.name}：{reason}" for path, reason in batch.failed[:8])
+            QMessageBox.warning(self, "N3 模板导入完成", f"{summary}\n\n{details}")
+        elif warning_count:
+            InfoBar.warning(
+                title="N3 模板已导入",
+                content=f"{summary}；另有 {warning_count} 条素材或字段提示。",
+                parent=self,
+                duration=5000,
+            )
+        else:
+            InfoBar.success(
+                title="N3 模板已导入", content=summary, parent=self, duration=3500
+            )
+
+    def _n3_dialog_start_directory(self) -> str:
+        directories = default_n3_template_directories()
+        return str(directories[0]) if directories else str(Path.home())
+
+    def _select_n3_template_files(self) -> list[Path]:
+        paths, _filter = QFileDialog.getOpenFileNames(
+            self,
+            "选择 N3 字体模板",
+            self._n3_dialog_start_directory(),
+            N3_TEMPLATE_FILTER,
+        )
+        return [Path(path) for path in paths]
+
+    def _select_n3_template_directory(self) -> list[Path]:
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "选择 N3 字体模板目录",
+            self._n3_dialog_start_directory(),
+        )
+        return [Path(path)] if path else []
+
     def _prompt_preset_details(
         self, suggested_name: str, suggested_group: str
     ) -> Optional[tuple[str, str]]:
@@ -2227,7 +2370,11 @@ class StylePresetManagerDialog(QDialog):
             return
         preset = self._presets.pop(old)
         self._presets[new] = StylePreset(
-            name=new, group=preset.group, scheme=deepcopy(preset.scheme)
+            name=new,
+            group=preset.group,
+            scheme=deepcopy(preset.scheme),
+            source_type=preset.source_type,
+            source_data=deepcopy(preset.source_data),
         )
         self._populate_list(selected=new)
 
@@ -3070,6 +3217,8 @@ class PropertyPanel(QWidget):
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
         self._screen_color_picker: Optional[ScreenColorPicker] = None
+        self._n3_template_target_height = 1080
+        self._n3_template_lyrics_dir: Optional[Path] = None
 
         self.setObjectName("PropertyPanel")
         self.setMinimumWidth(320)
@@ -3176,6 +3325,14 @@ class PropertyPanel(QWidget):
         self, schemes: dict[str, StylePreset | SubtitleStyleScheme]
     ) -> None:
         self._preset_schemes = _normalize_style_presets(schemes)
+
+    def set_n3_template_target_height(self, height: int) -> None:
+        """Set the output height used when an N3 template preset is applied."""
+        self._n3_template_target_height = max(1, int(height))
+
+    def set_n3_template_lyrics_directory(self, path: Optional[Path]) -> None:
+        """Set the project lyrics directory used for delayed bitmap lookup."""
+        self._n3_template_lyrics_dir = Path(path) if path is not None else None
 
     def set_style(self, style: Style, *, emit: bool = False) -> None:
         self._style = replace(style)
@@ -5850,6 +6007,8 @@ class PropertyPanel(QWidget):
             current_scheme=_scheme_from_current(self),
             target_label=self._current_target_label(),
             existing_role_names=set(self._role_names) | {TITLE_SCHEME_NAME},
+            target_height=self._n3_template_target_height,
+            lyrics_dir=self._n3_template_lyrics_dir,
             parent=self,
         )
         dialog.exec()

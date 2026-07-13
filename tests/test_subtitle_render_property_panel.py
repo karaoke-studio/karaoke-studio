@@ -64,6 +64,14 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
 def qapp():
     app = QApplication.instance() or QApplication([])
     yield app
+    # This module creates many parentless panels/dialogs.  Leaving their Qt
+    # objects alive until a later module starts pooled preview rendering can
+    # make Windows destroy them from an unsafe teardown context.
+    for widget in QApplication.topLevelWidgets():
+        widget.close()
+        widget.deleteLater()
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    app.processEvents()
 
 
 def test_property_panel_uses_fluent_checkboxes(qapp):
@@ -2184,6 +2192,8 @@ def test_style_preset_library_forms_use_fluent_controls(qapp):
     assert isinstance(details.name_edit, LineEdit)
     assert isinstance(details.group_combo, EditableComboBox)
     assert isinstance(details.ok_button, PrimaryPushButton)
+    assert isinstance(manager._import_n3_btn, PushButton)
+    assert manager._import_n3_btn.text() == "从 N3 导入"
     assert manager.findChildren(SubtitleLabel)
     assert isinstance(confirmation, Dialog)
     assert isinstance(confirmation.yesButton, PrimaryPushButton)
@@ -2252,6 +2262,8 @@ def test_style_preset_settings_migrate_legacy_entries_and_roundtrip_groups():
             "新预设": {
                 "group": "作品一",
                 "scheme": {"fill_color": "#ABCDEF", "font_size_px": 72},
+                "source_type": "n3_font_template",
+                "source_data": {"guid": "demo", "payload": {"SettingsName": "新预设"}},
             },
         }
     )
@@ -2260,11 +2272,15 @@ def test_style_preset_settings_migrate_legacy_entries_and_roundtrip_groups():
     assert loaded["旧预设"].scheme.fill_color == "#123456"
     assert loaded["新预设"].group == "作品一"
     assert loaded["新预设"].scheme.font_size_px == 72
+    assert loaded["新预设"].source_type == "n3_font_template"
+    assert loaded["新预设"].source_data["guid"] == "demo"
 
     payload = mw._style_presets_to_dict(loaded)
     assert payload["旧预设"]["group"] == ""
     assert payload["旧预设"]["scheme"]["fill_color"] == "#123456"
     assert payload["新预设"]["group"] == "作品一"
+    assert payload["新预设"]["source_type"] == "n3_font_template"
+    assert payload["新预设"]["source_data"]["guid"] == "demo"
 
 
 def test_style_preset_manager_dialog_imports_multiple_selected_schemes(qapp):

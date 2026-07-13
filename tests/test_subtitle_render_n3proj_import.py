@@ -289,7 +289,7 @@ def test_import_global_style_font_and_colors(imported):
     assert style.ruby_font_follow_main is False
     assert style.ruby_font_family == "UD デジタル 教科書体 N-B"
     assert style.ruby_font_weight == 700
-    assert style.ruby_font_family_latin is None
+    assert style.ruby_font_family_latin == "UD デジタル 教科書体 N-B"
     assert style.ruby_font_size_px == 45
     assert style.ruby_stroke_width_px == 10
     assert style.ruby_stroke2_enabled is False
@@ -329,6 +329,66 @@ def test_import_applies_explicit_latin_and_ruby_latin_strokes(tmp_path):
     assert style.ruby_latin_stroke_width_px == 6
     assert style.ruby_latin_stroke2_enabled is False
     assert style.ruby_latin_stroke2_width_px == 2
+
+
+def test_import_ignores_kana_slots_and_uses_japanese_settings(tmp_path):
+    payload = _project_payload(tmp_path)
+    infos = payload["LyricsFonts"][0]["FontInfos"]
+    for index in (1, 4):
+        infos[index].update(
+            FontName="Kana Only Font",
+            FontFaceName="Black",
+            CharSize=_size(222),
+            EdgeSize=_size(33),
+            UseEdge2=True,
+            EdgeSize2=_size(11),
+        )
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+
+    assert style.font_family == "UD デジタル 教科書体 N-B"
+    assert style.font_size_px == 100
+    assert style.stroke_width_px == 15
+    assert style.stroke2_enabled is False
+    assert style.ruby_font_family == "UD デジタル 教科書体 N-B"
+    assert style.ruby_font_size_px == 45
+    assert style.ruby_stroke_width_px == 10
+    assert style.ruby_stroke2_enabled is False
+    assert not any("かな" in warning or "假名" in warning for warning in result.warnings)
+
+
+def test_import_materializes_custom_scheme_fallbacks(tmp_path):
+    payload = _project_payload(tmp_path)
+    infos = payload["LyricsFonts"][1]["FontInfos"]
+    infos[0].update(FontName="游明朝", FontFaceName="Bold")
+    infos[2].update(FontName="", FontFaceName="Black")
+    infos[3].update(FontName="", FontFaceName="")
+    infos[5].update(FontName="", FontFaceName="Black")
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+    scheme = style.custom_style_schemes["青配色"]
+
+    # Empty Latin slots inherit inside this N3 scheme, never from the global
+    # scheme's Comic Sans MS.  Every effective value is serialized explicitly.
+    assert scheme.font_family == "游明朝"
+    assert scheme.font_family_latin == "游明朝"
+    assert scheme.ruby_font_family == "游明朝"
+    assert scheme.ruby_font_family_latin == "游明朝"
+    assert scheme.font_weight == 700
+    assert scheme.latin_font_weight == 700
+    assert scheme.ruby_font_weight == 700
+    assert scheme.ruby_latin_font_weight == 700
+    assert scheme.italic is False
+    assert scheme.font_size_px == 100
+    assert scheme.latin_font_size_px == 100
+    assert scheme.ruby_font_size_px == 45
+    assert scheme.ruby_latin_font_size_px == 45
+    assert scheme.stroke_width_px == 15
+    assert scheme.latin_stroke_width_px == 15
+    assert scheme.ruby_stroke_width_px == 10
+    assert scheme.ruby_latin_stroke_width_px == 10
 
 
 def test_import_layouts(imported):
@@ -513,7 +573,38 @@ def test_import_per_line_layout_and_roles(imported):
     roles = data["char_role_labels"]
     assert roles[0] == [None, "青配色"]
     assert roles[1] is None
-    assert roles[2] is None
+    # FontIndex=0 explicitly clears any role marker parsed from the source LRC.
+    assert roles[2] == [None, None]
+
+
+def test_import_normalizes_bracketed_n3_scheme_names(tmp_path):
+    payload = _project_payload(tmp_path)
+    payload["LyricsFonts"][0]["SettingsName"] = "【アクア】"
+    payload["LyricsFonts"][1]["SettingsName"] = "【エミリア】"
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+
+    assert "エミリア" in style.custom_style_schemes
+    assert "【エミリア】" not in style.custom_style_schemes
+    assert result.project_data["char_role_labels"][0] == [None, "エミリア"]
+
+
+def test_import_emits_explicit_role_clears_for_all_default_font_indices(tmp_path):
+    payload = _project_payload(tmp_path)
+    payload["LyricsFonts"] = payload["LyricsFonts"][:1]
+    payload["TitleInfos"] = []
+    for line in payload["SourceLyricsInfos"][0]["LineInfos"]:
+        for char in line.get("LyricsCharInfos", []):
+            char["FontIndex"] = 0
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+
+    assert result.project_data["char_role_labels"] == [
+        [None, None],
+        None,
+        [None, None],
+    ]
 
 
 def test_import_line_fade_animation(imported):

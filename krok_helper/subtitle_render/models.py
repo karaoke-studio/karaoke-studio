@@ -521,6 +521,10 @@ class StylePreset:
     name: str
     group: str = ""
     scheme: SubtitleStyleScheme = field(default_factory=SubtitleStyleScheme)
+    # N3 templates retain their original payload so sizes can be resolved
+    # again for the target project's output height when the preset is used.
+    source_type: str = ""
+    source_data: dict[str, Any] = field(default_factory=dict)
 
 
 def default_title_layout() -> LyricsLayout:

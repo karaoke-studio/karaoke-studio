@@ -11,8 +11,8 @@
 - ``ColorPage``：``BrushInfos`` 固定 8 项 = ワイプ後（文字 / 縁取り / 縁取り2 /
   飾り）+ ワイプ前（同序）→ ``KaraokeColors.after`` / ``.before``。
 - ``FontFacePage``：``FontInfos`` 固定 6 项 = 歌詞（漢字 / かな / 英数）+
-  ルビ（漢字 / かな / 英数）；数值 0 / 空串沿 Fallback 链上溯
-  （かな・英数 → 漢字，ルビ漢字 → 歌詞漢字）。
+  ルビ（漢字 / かな / 英数）。本模块按产品规则忽略两个かな槽，かな始终使用同域
+  漢字槽；英数和ルビ漢字的数值 0 / 空串沿 Fallback 链上溯。
 - ``BrushType``：0 Solid / 1 Gradient（字符渲染目标内纵向线性渐变）/ 2 MilleFeuille
   （分层硬渐变，N3 通过复制 stop 制造硬边界）/ 3 Bitmap（贴图，相对歌词文件
   所在目录解析，``BitmapScale`` 为百分比）。
@@ -39,20 +39,19 @@ from dataclasses import dataclass, fields as dataclass_fields, replace
 from pathlib import Path
 from typing import Any, Optional
 
+from krok_helper.subtitle_render.n3_font_scheme import (
+    convert_n3_font_scheme as _scheme_changes,
+    hex_from_colorbind as _hex_from_colorbind,
+)
 from krok_helper.subtitle_render.models import (
-    KaraokeColorState,
-    KaraokeColors,
     LineAnimationOverride,
     LyricsLayout,
-    PaintFill,
     Style,
     SubtitleStyleScheme,
     TITLE_SCHEME_NAME,
     TimingTrack,
     TitleOverlay,
-    _paint_fill,
     default_title_scheme,
-    normalize_glow_concentration_level,
     line_animation_override_to_dict,
     style_to_dict,
     infer_image_sequence_pattern,
@@ -73,35 +72,11 @@ _SMART_HORIZON_MAP = {0: "none", 1: "center_position", 2: "equal_margins"}
 _HORIZONTAL_ALIGN_MAP = {0: "left", 1: "center", 2: "right"}
 _RUBY_ALIGN_MAP = {0: "auto", 1: "center", 2: "equal_space"}
 
-# FontFacePage 的 Fallback 链（かな/英数 → 同域漢字；ルビ漢字 → 歌詞漢字）。
-_FONT_FALLBACK_INDEX = {1: 0, 2: 0, 3: 0, 4: 3, 5: 3}
-
 _LINE_FADE_ACTION_ID = "SHINTA.LineFadeInFadeOut"
 _NO_ACTION_ID = "SHINTA.NoAction"
 
-# FontFaceName 是本地化字重/斜体名（"Bold" / "Negreta" / "太字" …），按关键字匹配。
-_FACE_WEIGHT_KEYWORDS: tuple[tuple[str, int], ...] = (
-    ("extrabold", 800),
-    ("ultrabold", 800),
-    ("semibold", 600),
-    ("demibold", 600),
-    ("black", 900),
-    ("heavy", 900),
-    ("medium", 500),
-    ("light", 300),
-    ("thin", 100),
-    ("bold", 700),
-    ("negreta", 700),
-    ("negrita", 700),
-    ("grassetto", 700),
-    ("fett", 700),
-    ("gras", 700),
-    ("太字", 700),
-    ("ボールド", 700),
-)
-_FACE_ITALIC_KEYWORDS = ("italic", "oblique", "cursiva", "kursiv", "corsivo", "斜体", "イタリック")
-
 _BRACKET_LABEL_RE = re.compile(r"【[^】]*】")
+_BRACKETED_SCHEME_NAME_RE = re.compile(r"^【([^】]+)】(.*)$")
 
 
 @dataclass
@@ -225,7 +200,7 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
         scheme_field_names = {item.name for item in dataclass_fields(SubtitleStyleScheme)}
         custom: dict[str, SubtitleStyleScheme] = {}
         for index, font in enumerate(fonts[1:], start=1):
-            name = str(font.get("SettingsName") or "").strip() or f"配色{index}"
+            name = _n3_scheme_name(font.get("SettingsName"), f"配色{index}")
             if name in custom or name == TITLE_SCHEME_NAME:
                 name = f"{name}（{index}）"
             scheme_changes = _scheme_changes(font, lyrics_dir, warnings, name)
@@ -260,7 +235,10 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
     extra_sources: list[dict[str, Any]] = []
     if lyrics_with_source:
         layout_limit = len(changes.get("layouts") or [])
-        font_names = [str(font.get("SettingsName") or "") for font in fonts]
+        font_names = [
+            _n3_scheme_name(font.get("SettingsName"), f"配色{index}")
+            for index, font in enumerate(fonts)
+        ]
 
         line_infos = [_dict(item) for item in _list(lyrics_with_source[0].get("LineInfos"))]
         animation_changes, default_animation = _animation_changes(line_infos, warnings)
@@ -371,6 +349,22 @@ def _dict(value: object) -> dict:
     return value if isinstance(value, dict) else {}
 
 
+def _n3_scheme_name(value: object, fallback: str) -> str:
+    """Return the canonical internal name for an N3 font/color scheme.
+
+    N3 projects commonly name schemes ``【アクア】`` because the same name is
+    emitted into Nicokara LRC as a ``【...】`` role marker. LRC and SUG adapters
+    store the semantic role name without those syntax delimiters, so normalize
+    the N3 side as well. A duplicate suffix remains intact
+    (``【アクア】2`` -> ``アクア2``).
+    """
+    name = str(value or "").strip()
+    match = _BRACKETED_SCHEME_NAME_RE.fullmatch(name)
+    if match is not None:
+        name = f"{match.group(1)}{match.group(2)}".strip()
+    return name or fallback
+
+
 def _list(value: object) -> list:
     return value if isinstance(value, list) else []
 
@@ -385,37 +379,6 @@ def _int(value: object, fallback: int) -> int:
 def _size(value: object) -> int:
     """``SizeAndRatio`` → 当前像素值（N3 渲染同样直接用 ``Size``）。"""
     return _int(_dict(value).get("Size"), 0)
-
-
-def _hex_from_dxcolor(value: object, fallback: str) -> str:
-    color = _dict(value)
-    if not color:
-        return fallback
-
-    def channel(key: str, default: float = 0.0) -> int:
-        try:
-            number = float(color.get(key, default))
-        except (TypeError, ValueError):
-            number = default
-        return max(0, min(255, round(number * 255)))
-
-    alpha = channel("A", 1.0)
-    rgb = "%02X%02X%02X" % (channel("R"), channel("G"), channel("B"))
-    return f"#{alpha:02X}{rgb}" if alpha < 255 else f"#{rgb}"
-
-
-def _hex_from_colorbind(value: object, fallback: str = "#FFFFFF") -> str:
-    """``ColorBindModel`` → ``#RRGGBB`` or ``#AARRGGBB``."""
-    bind = _dict(value)
-    if "DxColor" in bind:
-        return _hex_from_dxcolor(bind.get("DxColor"), fallback)
-    # BackgroundColor 等场合外层就是 DxColor 字段集
-    if {"R", "G", "B"} <= bind.keys():
-        return _hex_from_dxcolor(bind, fallback)
-    web = str(bind.get("Web16") or "").strip()
-    if re.fullmatch(r"[0-9A-Fa-f]{6}", web):
-        return f"#{web.upper()}"
-    return fallback
 
 
 def _resolve_media(
@@ -441,294 +404,6 @@ def _resolve_media(
     missing = absolute_text or relative_text
     warnings.append(f"{label}文件不存在：{missing}")
     return Path(absolute_text) if absolute_text else base_dir / relative_text
-
-
-# ---------------------------------------------------------------------------
-# 颜色 / 笔刷
-# ---------------------------------------------------------------------------
-
-
-def _gradient_stop_list(brush: dict) -> list[tuple[float, str]]:
-    stops: list[tuple[float, str]] = []
-    for stop in _list(brush.get("GradientStops")):
-        stop = _dict(stop)
-        try:
-            position = float(stop.get("Position", 0.0))
-        except (TypeError, ValueError):
-            position = 0.0
-        pct = round(max(0.0, min(100.0, position * 100.0)), 9)
-        if pct.is_integer():
-            pct = int(pct)
-        stops.append((pct, _hex_from_dxcolor(stop.get("Color"), "#FFFFFF")))
-    stops.sort(key=lambda item: item[0])
-    return stops
-
-
-def _mille_feuille_band_stops(
-    stops: list[tuple[float, str]],
-) -> list[tuple[float, str]]:
-    """Convert N3's duplicated gradient stops to exact hard color bands.
-
-    N3 appends ``(next.Position, current.Color)`` after every source stop and
-    never appends the final source color. ``split_vertical`` stores the same
-    result directly as band-start positions, avoiding QGradient's duplicate
-    position collapse and the former 1% transition approximation.
-    """
-    if not stops:
-        return []
-    if len(stops) == 1:
-        return [(0, stops[0][1]), (100, stops[0][1])]
-    result = list(stops[:-1])
-    if result[0][0] > 0:
-        result.insert(0, (0, result[0][1]))
-    if result[-1][0] < 100:
-        result.append((100, result[-1][1]))
-    return result
-
-
-def _fill_from_brush(
-    brush: object,
-    lyrics_dir: Path,
-    warnings: list[str],
-    context: str,
-) -> PaintFill:
-    brush = _dict(brush)
-    solid = _hex_from_colorbind(brush.get("SolidColor"))
-    brush_type = _int(brush.get("SelectedBrushTypeIndex"), 0)
-    if brush_type == 0:
-        return _paint_fill(solid)
-    if brush_type in (1, 2):
-        stops = _gradient_stop_list(brush) or [(0, solid), (100, solid)]
-        if brush_type == 2:
-            bands = _mille_feuille_band_stops(stops)
-            start_color = bands[0][1]
-            end_color = bands[-1][1]
-            interior = [
-                position for position, _color in bands if position not in {0, 100}
-            ]
-            return PaintFill(
-                mode="split_vertical",
-                color=start_color,
-                start_color=start_color,
-                end_color=end_color,
-                gradient_stops=stops,
-                split_top_color=start_color,
-                split_bottom_color=bands[-2][1] if len(bands) > 1 else end_color,
-                split_position_pct=interior[0] if interior else 50,
-                split_stops=bands,
-            )
-        start_color = stops[0][1]
-        end_color = stops[-1][1]
-        return PaintFill(
-            mode="gradient_vertical",
-            color=start_color,
-            start_color=start_color,
-            end_color=end_color,
-            gradient_stops=stops,
-            split_top_color=start_color,
-            split_bottom_color=end_color,
-        )
-    if brush_type == 3:
-        image = str(brush.get("BitmapPath") or "").strip()
-        candidate = Path(image) if image else None
-        if candidate is not None and not candidate.is_absolute():
-            candidate = lyrics_dir / image
-        if candidate is None or not candidate.is_file():
-            warnings.append(f"{context}：贴图填充素材不存在（{image or '未设置'}），已回退纯色")
-            return _paint_fill(solid)
-        fill = _paint_fill(solid)
-        fill.mode = "image"
-        fill.image_path = str(candidate)
-        fill.image_scale_pct = max(1, _int(brush.get("BitmapScale"), 100))
-        return fill
-    warnings.append(f"{context}：未知笔刷类型（{brush_type}），已回退纯色")
-    return _paint_fill(solid)
-
-
-def _karaoke_colors_from_brushes(
-    brushes: list, lyrics_dir: Path, warnings: list[str], context: str
-) -> KaraokeColors:
-    """``ColorPage`` 顺序：after(文字/縁/縁2/飾り) + before(同序)。"""
-    fills: list[PaintFill] = []
-    for index in range(8):
-        brush = brushes[index] if index < len(brushes) else None
-        name = str(_dict(brush).get("SettingsName") or f"笔刷{index}")
-        fills.append(_fill_from_brush(brush, lyrics_dir, warnings, f"{context}·{name}"))
-    return KaraokeColors(
-        before=KaraokeColorState(text=fills[4], stroke=fills[5], stroke2=fills[6], shadow=fills[7]),
-        after=KaraokeColorState(text=fills[0], stroke=fills[1], stroke2=fills[2], shadow=fills[3]),
-    )
-
-
-# ---------------------------------------------------------------------------
-# フォント設定（字体 + 配色方案）
-# ---------------------------------------------------------------------------
-
-
-def _font_chain(font_infos: list, index: int) -> list[dict]:
-    """按 ``FontFacePage`` 位置沿 Fallback 链展开（かな→漢字 等）。"""
-    chain: list[dict] = []
-    seen: set[int] = set()
-    current: Optional[int] = index
-    while current is not None and current not in seen and 0 <= current < len(font_infos):
-        seen.add(current)
-        chain.append(_dict(font_infos[current]))
-        current = _FONT_FALLBACK_INDEX.get(current)
-    return chain
-
-
-def _resolve_font_name(chain: list[dict]) -> Optional[str]:
-    for info in chain:
-        name = str(info.get("FontName") or "").strip()
-        if name:
-            return name
-    return None
-
-
-def _resolve_font_size(chain: list[dict], key: str) -> int:
-    """数值 0 表示未设置，沿链上溯（与 N3 ``Nkm3Common`` 解析一致）。"""
-    for info in chain:
-        value = _size(info.get(key))
-        if value > 0:
-            return value
-    return 0
-
-
-def _resolve_use_edge2(chain: list[dict]) -> bool:
-    for info in chain:
-        value = info.get("UseEdge2")
-        if isinstance(value, bool):
-            return value
-    return False
-
-
-def _face_weight_italic(face_name: Optional[str]) -> tuple[int, bool]:
-    if not face_name:
-        return 400, False
-    lowered = face_name.lower()
-    weight = 400
-    for keyword, value in _FACE_WEIGHT_KEYWORDS:
-        if keyword in lowered:
-            weight = value
-            break
-    italic = any(keyword in lowered for keyword in _FACE_ITALIC_KEYWORDS)
-    return weight, italic
-
-
-def _resolve_face_name(chain: list[dict]) -> Optional[str]:
-    for info in chain:
-        name = str(info.get("FontFaceName") or "").strip()
-        if name:
-            return name
-    return None
-
-
-def _scheme_changes(
-    font: dict, lyrics_dir: Path, warnings: list[str], context: str
-) -> dict[str, Any]:
-    """一个 フォント設定 → ``Style`` / ``SubtitleStyleScheme`` 通用字段字典。"""
-    font_infos = _list(font.get("FontInfos"))
-    kanji = _font_chain(font_infos, 0)
-    alnum = _font_chain(font_infos, 2)
-    kana_own = str(_dict(font_infos[1] if len(font_infos) > 1 else {}).get("FontName") or "").strip()
-    alnum_own = str(_dict(font_infos[2] if len(font_infos) > 2 else {}).get("FontName") or "").strip()
-    ruby_kanji = _font_chain(font_infos, 3)
-
-    changes: dict[str, Any] = {}
-    family = _resolve_font_name(kanji)
-    if family:
-        changes["font_family"] = family
-    if kana_own and family and kana_own != family:
-        warnings.append(f"{context}：かな独立字体（{kana_own}）暂不支持，已沿用漢字字体")
-    if alnum_own and alnum_own != (family or ""):
-        changes["font_family_latin"] = alnum_own
-
-    size = _resolve_font_size(kanji, "CharSize")
-    if size > 0:
-        changes["font_size_px"] = size
-    weight, italic = _face_weight_italic(_resolve_face_name(kanji))
-    changes["font_weight"] = weight
-    changes["italic"] = italic
-    changes["stroke_width_px"] = _resolve_font_size(kanji, "EdgeSize")
-    changes["stroke2_enabled"] = _resolve_use_edge2(kanji)
-    changes["stroke2_width_px"] = _resolve_font_size(kanji, "EdgeSize2")
-
-    latin_size = _resolve_font_size(alnum, "CharSize")
-    if latin_size > 0:
-        changes["latin_font_size_px"] = latin_size
-    latin_weight, _latin_italic = _face_weight_italic(_resolve_face_name(alnum))
-    changes["latin_font_weight"] = latin_weight
-    changes["latin_stroke_width_px"] = _resolve_font_size(alnum, "EdgeSize")
-    changes["latin_stroke2_enabled"] = _resolve_use_edge2(alnum)
-    changes["latin_stroke2_width_px"] = _resolve_font_size(alnum, "EdgeSize2")
-
-    colors = _karaoke_colors_from_brushes(_list(font.get("BrushInfos")), lyrics_dir, warnings, context)
-    changes["karaoke_colors"] = colors
-    changes["base_color"] = colors.before.text.color
-    changes["fill_color"] = colors.after.text.color
-    changes["stroke_color"] = colors.after.stroke.color
-    changes["shadow_color"] = colors.after.shadow.color
-
-    decor_kind = _int(font.get("DecorKind"), 0)
-    decor_size = _size(font.get("DecorSize"))
-    if decor_kind == 2:
-        concentration = normalize_glow_concentration_level(font.get("BlurLevel"))
-        changes["decoration_kind"] = "glow"
-        changes["glow_radius_px"] = decor_size
-        changes["glow_before_radius_px"] = decor_size
-        changes["glow_after_radius_px"] = decor_size
-        changes["glow_concentration_level"] = concentration
-    elif decor_kind == 1:
-        changes["decoration_kind"] = "shadow"
-        changes["shadow_offset_x"] = decor_size
-        changes["shadow_offset_y"] = decor_size
-    else:
-        # N3「飾りなし」：以 0 偏移阴影表达（视觉上不可见）。
-        changes["decoration_kind"] = "shadow"
-        changes["shadow_offset_x"] = 0
-        changes["shadow_offset_y"] = 0
-
-    # N3 のルビ字体/字号独立于歌詞（未设置时沿 Fallback 链取歌詞漢字字体，但
-    # 字号始终是ルビ自己的值）；本模块默认「注音跟随主文字」会连字号一起跟随
-    # 主文字，导入时显式解除跟随并落地链上解析结果。
-    changes["ruby_font_follow_main"] = False
-    ruby_family = _resolve_font_name(ruby_kanji)
-    if ruby_family:
-        changes["ruby_font_family"] = ruby_family
-    ruby_kana_own = str(_dict(font_infos[4] if len(font_infos) > 4 else {}).get("FontName") or "").strip()
-    ruby_alnum_own = str(_dict(font_infos[5] if len(font_infos) > 5 else {}).get("FontName") or "").strip()
-    ruby_alnum = _font_chain(font_infos, 5)
-    if ruby_kana_own and ruby_family and ruby_kana_own != ruby_family:
-        warnings.append(f"{context}：ルビかな独立字体（{ruby_kana_own}）暂不支持，已沿用ルビ漢字字体")
-    if ruby_alnum_own and ruby_alnum_own != (ruby_family or ""):
-        changes["ruby_font_family_latin"] = ruby_alnum_own
-    ruby_weight, ruby_italic = _face_weight_italic(_resolve_face_name(ruby_kanji))
-    changes["ruby_font_weight"] = ruby_weight
-    if ruby_italic != changes["italic"]:
-        warnings.append(f"{context}：注音斜体与主文字不同，本模块注音斜体跟随主文字，已沿用主文字设置")
-    ruby_size = _resolve_font_size(ruby_kanji, "CharSize")
-    if ruby_size > 0:
-        changes["ruby_font_size_px"] = ruby_size
-    changes["ruby_stroke_width_px"] = _resolve_font_size(ruby_kanji, "EdgeSize")
-    changes["ruby_stroke2_enabled"] = _resolve_use_edge2(ruby_kanji)
-    changes["ruby_stroke2_width_px"] = _resolve_font_size(ruby_kanji, "EdgeSize2")
-    ruby_latin_size = _resolve_font_size(ruby_alnum, "CharSize")
-    if ruby_latin_size > 0:
-        changes["ruby_latin_font_size_px"] = ruby_latin_size
-    ruby_latin_weight, _ruby_latin_italic = _face_weight_italic(
-        _resolve_face_name(ruby_alnum)
-    )
-    changes["ruby_latin_font_weight"] = ruby_latin_weight
-    changes["ruby_latin_stroke_width_px"] = _resolve_font_size(
-        ruby_alnum, "EdgeSize"
-    )
-    changes["ruby_latin_stroke2_enabled"] = _resolve_use_edge2(ruby_alnum)
-    changes["ruby_latin_stroke2_width_px"] = _resolve_font_size(
-        ruby_alnum, "EdgeSize2"
-    )
-    changes["ruby_color"] = colors.after.text.color
-    changes["ruby_karaoke_colors"] = deepcopy(colors)
-    return changes
 
 
 # ---------------------------------------------------------------------------
@@ -883,7 +558,7 @@ def _build_title_overlay(
                 labels.append(None)
                 continue
             role_font = fonts[index]
-            name = str(role_font.get("SettingsName") or "").strip() or f"配色{index}"
+            name = _n3_scheme_name(role_font.get("SettingsName"), f"配色{index}")
             labels.append(name)
             if name not in title_role_schemes:
                 context = f"标题字符·{name}"
@@ -1061,7 +736,6 @@ def _per_line_payloads(
     role_payload: list[Optional[list[Optional[str]]]] = [None] * len(track.lines)
     animation_payload: list[Optional[dict[str, object]]] = [None] * len(track.lines)
     mismatched = 0
-    any_role = False
     for (line_index, our_line), n3_line, break_before in zip(
         our_indexed, n3_lines, n3_breaks_before
     ):
@@ -1085,6 +759,9 @@ def _per_line_payloads(
                 )
             )
         # 逐字配色：FontIndex > 0 → 对应 フォント設定 名称作为角色标签。
+        # FontIndex == 0 是 N3 第一套（全局）方案，不是“没有数据”。
+        # 即使整行都是 0，也必须写入与字符对齐的 None 列表，
+        # 用于覆盖 LRC ``【...】`` 语法解析后遗留的角色标签。
         offset_to_char: dict[int, dict] = {}
         position = 0
         for char in n3_chars:
@@ -1102,14 +779,12 @@ def _per_line_payloads(
             )
             labels.append(label)
             position += len(our_char.text)
-        if any(labels):
-            any_role = True
-            role_payload[line_index] = labels
+        role_payload[line_index] = labels
     if mismatched:
         warnings.append(f"{mismatched} 行歌词文本与 N3 项目记录不一致，这些行的布局与逐字配色未导入")
     return (
         layout_payload,
         break_payload,
-        role_payload if any_role else None,
+        role_payload,
         animation_payload if any(item is not None for item in animation_payload) else None,
     )

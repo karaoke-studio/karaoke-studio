@@ -1017,6 +1017,12 @@ class SubtitleRenderWindow(QWidget):
         audio = paths["audio_path"]
         if audio is not None and audio.is_file() and audio != self._video_path:
             self.load_audio(audio)
+        # Project/N3 role payloads are authoritative.  Populate missing role
+        # schemes only after those payloads have replaced source-LRC markers;
+        # otherwise a transient ``【アクア】`` marker can auto-create an unrelated
+        # palette before FontIndex=0 clears it back to the global N3 scheme.
+        self._lyrics_panel.set_role_options(self._merged_role_options())
+        self._property_panel.set_roles(self._content_role_options())
 
     def _apply_output_settings(self, output: dict) -> None:
         encoder = output.get("encoder_mode")
@@ -1084,6 +1090,7 @@ class SubtitleRenderWindow(QWidget):
             self._title_source_active = False
             self._clear_undo_history()
             self._subtitle_path = None
+            self._property_panel.set_n3_template_lyrics_directory(None)
             self._video_path = None
             self._video_info = None
             self._background_source = None
@@ -1269,6 +1276,7 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel = PropertyPanel()
         self._property_panel.set_style(self._style)
         self._property_panel.set_preset_schemes(self._style_presets)
+        self._property_panel.set_n3_template_target_height(self._screen_settings.height)
         self._property_panel.styleChanged.connect(self._apply_style)
         self._property_panel.presetSchemesChanged.connect(self._apply_style_presets)
         self._property_panel.schemeSelectionChanged.connect(self._on_scheme_selection_changed)
@@ -1600,14 +1608,18 @@ class SubtitleRenderWindow(QWidget):
     ) -> None:
         self._timing_track = track
         self._subtitle_path = source_path
+        self._property_panel.set_n3_template_lyrics_directory(
+            source_path.parent if source_path is not None else None
+        )
         self._active_source_index = 0
         self._title_source_active = False
         # 换字幕源后旧的行索引全部失效
         self._clear_undo_history()
         self._refresh_source_ui()
         self._lyrics_panel.set_track(track)
-        self._lyrics_panel.set_role_options(self._merged_role_options())
-        self._property_panel.set_roles(self._content_role_options())
+        if not self._loading_project:
+            self._lyrics_panel.set_role_options(self._merged_role_options())
+            self._property_panel.set_roles(self._content_role_options())
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
         self._selected_scheme_key = self._property_panel.current_scheme_key()
         self._preview_panel.set_track(track)
@@ -2526,6 +2538,7 @@ class SubtitleRenderWindow(QWidget):
         )
         self._transport_bar.set_preview_fps(self._screen_settings.fps)
         self._rescale_layout_for_height(self._screen_settings.height)
+        self._property_panel.set_n3_template_target_height(self._screen_settings.height)
         self._margin_check_timer.start()
         self._save_persisted_state()
 
@@ -2537,6 +2550,8 @@ class SubtitleRenderWindow(QWidget):
             self._set_export_fps_value(settings.fps)
         finally:
             self._syncing_screen_controls = False
+        if hasattr(self, "_property_panel"):
+            self._property_panel.set_n3_template_target_height(settings.height)
 
     def _export_fps_value(self) -> int:
         data = self._export_fps_combo.currentData()
@@ -3014,14 +3029,21 @@ def _style_presets_from_dict(payload: object) -> dict[str, StylePreset]:
                 name=name,
                 group=str(value.group).strip(),
                 scheme=deepcopy(value.scheme),
+                source_type=str(value.source_type).strip(),
+                source_data=deepcopy(value.source_data),
             )
             continue
         if isinstance(value, SubtitleStyleScheme):
             result[name] = StylePreset(name=name, scheme=deepcopy(value))
             continue
+        source_type = ""
+        source_data: dict = {}
         if isinstance(value, dict) and isinstance(value.get("scheme"), dict):
             group = str(value.get("group") or "").strip()
             scheme_payload = value["scheme"]
+            source_type = str(value.get("source_type") or "").strip()
+            if isinstance(value.get("source_data"), dict):
+                source_data = deepcopy(value["source_data"])
         else:
             group = ""
             scheme_payload = value
@@ -3029,6 +3051,8 @@ def _style_presets_from_dict(payload: object) -> dict[str, StylePreset]:
             name=name,
             group=group,
             scheme=subtitle_style_scheme_from_dict(scheme_payload),
+            source_type=source_type,
+            source_data=source_data,
         )
     return result
 
@@ -3040,6 +3064,8 @@ def _style_presets_to_dict(
         str(name): {
             "group": str(preset.group).strip(),
             "scheme": subtitle_style_scheme_to_dict(preset.scheme),
+            "source_type": str(preset.source_type).strip(),
+            "source_data": deepcopy(preset.source_data),
         }
         for name, preset in presets.items()
         if str(name)

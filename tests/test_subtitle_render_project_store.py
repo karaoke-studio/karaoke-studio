@@ -279,6 +279,29 @@ def test_new_project_clears_loaded_media(qapp, monkeypatch, tmp_path):
     assert not win._preview_panel.is_populated()
 
 
+def test_project_role_payload_applies_before_missing_schemes_are_materialized(
+    qapp, monkeypatch, tmp_path
+):
+    """N3 FontIndex=0 clears LRC markers before auto-role colors are created."""
+    win = _make_window(qapp, monkeypatch)
+    lrc = tmp_path / "roles.lrc"
+    lrc.write_text(
+        "【Aqua】[00:01:00]a[00:01:50]b[00:02:00]\n",
+        encoding="utf-8-sig",
+    )
+
+    win._apply_project_data(
+        {
+            "subtitle_path": str(lrc),
+            "style": style_to_dict(Style()),
+            "char_role_labels": [[None, None]],
+        }
+    )
+
+    assert [ch.role_label for ch in win._timing_track.lines[0].chars] == [None, None]
+    assert "Aqua" not in win._style.custom_style_schemes
+
+
 def test_preview_canvas_does_not_swallow_drops(qapp, monkeypatch):
     # 预览画布（QGraphicsView）默认会吞拖拽；必须关掉它，让拖拽冒泡到 DropPanel，
     # 这样预览被填充后仍能往播放区拖入新视频。
