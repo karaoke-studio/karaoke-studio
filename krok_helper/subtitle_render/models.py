@@ -656,7 +656,7 @@ class Style:
     ruby_latin_font_size_px: Optional[int] = None
     ruby_latin_font_weight: Optional[int] = None
     ruby_font_follow_main: bool = True
-    """新建样式的注音字体跟随主文字；任一注音字体字段被编辑后关闭跟随。"""
+    """注音字体族/字重跟随主文字；注音字号始终由独立字段控制。"""
     ruby_color: str = "#FF5A6F"
     ruby_gap_px: int = 0
     """NicokaraMaker3 ``LyricsAndRubyInterval`` default: 0 px."""

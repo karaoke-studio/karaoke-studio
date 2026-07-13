@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -35,6 +36,7 @@ from qfluentwidgets import (  # noqa: E402
 )
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
+from krok_helper.subtitle_render.frontend import property_panel as pp  # noqa: E402
 from krok_helper.subtitle_render.frontend.fluent_dialogs import (  # noqa: E402
     FluentMessageDialog,
 )
@@ -57,6 +59,10 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     paint_fill_from_dict,
     style_from_dict,
     style_to_dict,
+)
+from krok_helper.subtitle_render.n3_template_import import (  # noqa: E402
+    N3TemplateBatchResult,
+    N3TemplateLoadResult,
 )
 
 
@@ -1026,7 +1032,7 @@ def test_latin_font_overrides_round_trip_and_legacy_values_inherit():
     assert legacy.latin_stroke2_width_px is None
 
 
-def test_ruby_font_defaults_follow_main_until_edited(qapp):
+def test_ruby_font_defaults_follow_main_family_but_keep_own_size_until_edited(qapp):
     panel = PropertyPanel()
     panel.set_style(
         Style(
@@ -1040,20 +1046,31 @@ def test_ruby_font_defaults_follow_main_until_edited(qapp):
     )
 
     assert panel._ruby_font_combo.currentFont().family() == "Arial"
-    assert panel._ruby_font_size_spin.value() == 72
+    assert panel._ruby_font_size_spin.value() == 45
     assert panel._ruby_font_weight_combo.currentData() == 700
     assert panel._ruby_font_latin_combo.currentFont().family() == "Courier New"
-    assert panel._ruby_font_latin_size_spin.value() == 64
+    assert panel._ruby_font_latin_size_spin.value() == 45
     assert panel._ruby_font_latin_weight_combo.currentData() == 600
 
     panel._font_size_spin.setValue(80)
     assert panel.subtitle_style.ruby_font_follow_main is True
-    assert panel._ruby_font_size_spin.value() == 80
+    assert panel._ruby_font_size_spin.value() == 45
 
     panel._ruby_font_size_spin.setValue(34)
     assert panel.subtitle_style.ruby_font_follow_main is False
     panel._font_size_spin.setValue(90)
     assert panel._ruby_font_size_spin.value() == 34
+
+
+def test_new_project_global_font_sizes_are_main_100_and_ruby_45(qapp):
+    panel = PropertyPanel()
+
+    panel.set_style(Style())
+
+    assert panel.subtitle_style.font_size_px == 100
+    assert panel.subtitle_style.ruby_font_size_px == 45
+    assert panel._font_size_spin.value() == 100
+    assert panel._ruby_font_size_spin.value() == 45
 
 
 def test_layout_ruby_and_direction_controls_are_single_row(qapp):
@@ -2305,6 +2322,51 @@ def test_style_preset_manager_dialog_imports_multiple_selected_schemes(qapp):
     assert set(imported) == {"A", "B"}
     assert imported["A"].scheme.fill_color == "#111111"
     assert imported["B"].scheme.fill_color == "#222222"
+
+
+def test_style_preset_manager_auto_checks_new_n3_templates_for_role_import(
+    qapp, monkeypatch
+):
+    imported_templates = tuple(
+        N3TemplateLoadResult(
+            path=Path(f"{name}.tpl"),
+            guid=f"guid-{name}",
+            name=name,
+            preset=StylePreset(
+                name=name,
+                scheme=SubtitleStyleScheme(fill_color=color),
+                source_type="n3_font_template",
+            ),
+        )
+        for name, color in (("N3 角色 A", "#111111"), ("N3 角色 B", "#222222"))
+    )
+    monkeypatch.setattr(
+        pp,
+        "find_n3_template_files",
+        lambda: [item.path for item in imported_templates],
+    )
+    monkeypatch.setattr(pp, "fluent_choice", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(
+        pp,
+        "load_n3_font_templates",
+        lambda *_args, **_kwargs: N3TemplateBatchResult(
+            templates=imported_templates,
+            skipped=(),
+            failed=(),
+        ),
+    )
+    monkeypatch.setattr(pp.InfoBar, "success", lambda **_kwargs: None)
+    dialog = StylePresetManagerDialog(
+        presets={"旧预设": StylePreset(name="旧预设")},
+        current_scheme=SubtitleStyleScheme(),
+        target_label="全局默认",
+    )
+
+    dialog._on_import_n3()
+
+    assert set(dialog._checked_names()) == {"N3 角色 A", "N3 角色 B"}
+    dialog._on_import_selected()
+    assert set(dialog.imported_schemes()) == {"N3 角色 A", "N3 角色 B"}
 
 
 def test_style_preset_manager_filters_groups_without_losing_checks(qapp):

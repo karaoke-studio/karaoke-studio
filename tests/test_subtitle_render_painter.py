@@ -3138,6 +3138,7 @@ def test_default_ruby_geometry_uses_nicokara_ruby_font_defaults(qapp):
     old_metrics = QFontMetrics(_build_ruby_font(old_style))
 
     assert style.ruby_font_size_px == 45
+    assert _build_ruby_font(style).pixelSize() == 45
     assert style.ruby_stroke_width_px == 10
     assert style.ruby_stroke2_width_px == 3
     assert _ruby_stroke_extent(style) == 7

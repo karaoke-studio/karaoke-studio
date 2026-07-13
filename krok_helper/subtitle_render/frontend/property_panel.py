@@ -2004,8 +2004,15 @@ class StylePresetManagerDialog(QDialog):
         self._populate_list(selected=name)
         return True
 
-    def _populate_list(self, selected: Optional[str] = None) -> None:
+    def _populate_list(
+        self,
+        selected: Optional[str] = None,
+        *,
+        checked_names: Optional[set[str]] = None,
+    ) -> None:
         checked = set(self._checked_names()) if self._preset_list.count() else set()
+        if checked_names:
+            checked.update(checked_names)
         current = selected or self._selected_name()
         self._refresh_group_filter()
         self._preset_list.blockSignals(True)
@@ -2248,7 +2255,12 @@ class StylePresetManagerDialog(QDialog):
         )
         self._presets = merged.presets
         selected_name = merged.imported_names[-1] if merged.imported_names else None
-        self._populate_list(selected=selected_name)
+        # N3 批量导入后直接勾选本批新增项。用户只需点击一次
+        # “导入选中项为项目角色”，不必在几十个模板中逐项重新勾选。
+        self._populate_list(
+            selected=selected_name,
+            checked_names=set(merged.imported_names),
+        )
 
         warning_count = sum(len(item.warnings) for item in batch.templates)
         summary = (
@@ -6230,11 +6242,9 @@ class PropertyPanel(QWidget):
                 else self._scheme_value("ruby_font_family")
                 or self._scheme_value("font_family")
             )
-            ruby_size = (
-                self._scheme_value("font_size_px")
-                if ruby_follow
-                else self._scheme_value("ruby_font_size_px")
-            )
+            # “跟随主文字”只用于没有独立覆盖时共享字体族/字重。
+            # 注音字号一直是独立参数；全局默认必须保持主文字 100、注音 45。
+            ruby_size = self._scheme_value("ruby_font_size_px")
             ruby_weight = (
                 self._scheme_value("font_weight")
                 if ruby_follow
@@ -6252,11 +6262,7 @@ class PropertyPanel(QWidget):
                 else self._scheme_value("ruby_font_family_latin")
                 or ruby_family
             )
-            ruby_latin_size = (
-                (latin_size if latin_size is not None else self._scheme_value("font_size_px"))
-                if ruby_follow
-                else self._scheme_value("ruby_latin_font_size_px") or ruby_size
-            )
+            ruby_latin_size = self._scheme_value("ruby_latin_font_size_px") or ruby_size
             ruby_latin_weight = (
                 (latin_weight if latin_weight is not None else self._scheme_value("font_weight"))
                 if ruby_follow

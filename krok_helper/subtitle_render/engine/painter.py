@@ -2896,8 +2896,9 @@ def _ruby_uses_main_font(style: Style) -> bool:
 
 
 def _ruby_font_size(style: Style) -> int:
-    value = style.font_size_px if _ruby_uses_main_font(style) else style.ruby_font_size_px
-    return max(int(value), 1)
+    # 字体 fallback 只共享字体族/字重，注音字号始终使用自己的字段。
+    # 否则全局默认 Style() 会把 45px 注音错误渲染成 100px 主文字。
+    return max(int(style.ruby_font_size_px), 1)
 
 
 def _clamp_weight(w: int) -> QFont.Weight:
