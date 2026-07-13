@@ -2494,6 +2494,47 @@ def test_color_button_updates_text_and_color(qapp):
     assert button.text() == "#010203"
 
 
+def test_color_button_click_edits_hex_without_opening_dialog(qapp):
+    button = ColorButton("#4093E9")
+    button.show()
+    entered: list[str] = []
+    dialog_requests: list[bool] = []
+    button.colorEntered.connect(entered.append)
+    button.clicked.connect(lambda: dialog_requests.append(True))
+
+    button.click()
+    assert button._swatch_stack.currentWidget() is button._color_edit
+    button._color_edit.setText("123456")
+    QTest.keyClick(button._color_edit, Qt.Key.Key_Return)
+    assert button.color == "#123456"
+
+    button.click()
+    button._color_edit.setText("#ABCDEF")
+    QTest.keyClick(button._color_edit, Qt.Key.Key_Return)
+
+    assert button.color == "#ABCDEF"
+    assert entered == ["#123456", "#ABCDEF"]
+    assert dialog_requests == []
+
+
+def test_color_button_invalid_hex_or_escape_does_not_apply(qapp):
+    button = ColorButton("#4093E9")
+    button.show()
+    entered: list[str] = []
+    button.colorEntered.connect(entered.append)
+
+    button.click()
+    button._color_edit.setText("not-a-color")
+    QTest.keyClick(button._color_edit, Qt.Key.Key_Return)
+    assert button._swatch_stack.currentWidget() is button._color_edit
+    assert entered == []
+
+    QTest.keyClick(button._color_edit, Qt.Key.Key_Escape)
+    assert button._swatch_stack.currentWidget() is button._swatch
+    assert button.color == "#4093E9"
+    assert entered == []
+
+
 def test_color_button_shortens_swatch_and_exposes_two_icon_actions(qapp):
     button = ColorButton("#4093e9")
     button.resize(220, 30)
@@ -2529,7 +2570,7 @@ def test_direct_screen_picker_maps_virtual_desktop_coordinates(qapp):
 
 
 def test_color_control_screen_action_requests_direct_screen_pick(qapp, monkeypatch):
-    callbacks = []
+    requests = []
 
     def fail_if_dialog_opens(*args, **kwargs):
         raise AssertionError("direct screen picking must not open QColorDialog")
@@ -2539,13 +2580,63 @@ def test_color_control_screen_action_requests_direct_screen_pick(qapp, monkeypat
         fail_if_dialog_opens,
     )
     panel = PropertyPanel()
-    monkeypatch.setattr(panel, "_begin_screen_color_pick", callbacks.append)
+    monkeypatch.setattr(
+        panel,
+        "_begin_screen_color_pick",
+        lambda button, callback: requests.append((button, callback)),
+    )
 
     panel._paint_solid_btn.screen_picker_button.click()
-    assert len(callbacks) == 1
+    assert len(requests) == 1
 
-    callbacks[0](QColor("#123456"))
+    preview_button, callback = requests[0]
+    assert preview_button is panel._paint_solid_btn
+    callback(QColor("#123456"))
     assert panel._paint_solid_btn.color == "#123456"
+
+
+def test_screen_picker_hover_previews_but_cancel_restores(qapp, monkeypatch):
+    monkeypatch.setattr(ScreenColorPicker, "start", lambda self: None)
+    panel = PropertyPanel()
+    button = panel._paint_solid_btn
+    original = button.color
+    applied: list[str] = []
+
+    panel._begin_screen_color_pick(
+        button,
+        lambda color: applied.append(color.name().upper()),
+    )
+    picker = panel._screen_color_picker
+    assert picker is not None
+
+    picker.colorHovered.emit(QColor("#123456"))
+    assert button.color == "#123456"
+    assert applied == []
+
+    picker.cancel()
+    assert button.color == original
+    assert applied == []
+
+
+def test_screen_picker_left_click_preview_is_applied(qapp, monkeypatch):
+    monkeypatch.setattr(ScreenColorPicker, "start", lambda self: None)
+    panel = PropertyPanel()
+    button = panel._paint_solid_btn
+    applied: list[str] = []
+
+    panel._begin_screen_color_pick(
+        button,
+        lambda color: applied.append(color.name().upper()),
+    )
+    picker = panel._screen_color_picker
+    assert picker is not None
+
+    picker.colorHovered.emit(QColor("#123456"))
+    picker.colorPicked.emit(QColor("#ABCDEF"))
+    picker.cancel()
+
+    assert button.color == "#ABCDEF"
+    assert applied == ["#ABCDEF"]
 
 
 def test_main_window_style_panel_updates_preview(qapp, monkeypatch):

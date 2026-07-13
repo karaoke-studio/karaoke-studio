@@ -24,6 +24,7 @@ from PyQt6.QtCore import (
 )
 from PyQt6.QtGui import (
     QColor,
+    QCursor,
     QFont,
     QFontDatabase,
     QIcon,
@@ -374,6 +375,23 @@ def _normalize_hex(value: str, fallback: str = "#000000") -> str:
     return color.name(name_format).upper()
 
 
+def _parse_hex_color(value: str) -> Optional[str]:
+    """Parse common RGB/ARGB hex input, with or without a leading hash."""
+    digits = value.strip()
+    if digits.startswith("#"):
+        digits = digits[1:]
+    if len(digits) not in {3, 4, 6, 8} or any(
+        character not in "0123456789abcdefABCDEF" for character in digits
+    ):
+        return None
+    if len(digits) in {3, 4}:
+        digits = "".join(character * 2 for character in digits)
+    color = QColor(f"#{digits}")
+    if not color.isValid():
+        return None
+    return _normalize_hex(color.name(QColor.NameFormat.HexArgb))
+
+
 def _eyedropper_icon() -> QIcon:
     """Small theme-aware eyedropper icon without an external bitmap asset."""
     pixmap = QPixmap(20, 20)
@@ -448,19 +466,52 @@ class _ColorSwatchButton(QPushButton):
         )
 
 
+class _ColorHexEdit(FluentLineEdit):
+    """Inline hex editor that lets Escape cancel without changing the color."""
+
+    cancelRequested = Signal()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Escape:
+            self.cancelRequested.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802
+        super().focusOutEvent(event)
+        self.cancelRequested.emit()
+
+
 class ColorButton(QWidget):
     """Compact color bar with dialog and direct screen-picker actions."""
 
     clicked = Signal()
     screenPickRequested = Signal()
+    colorEntered = Signal(str)
 
     def __init__(self, color: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setFixedHeight(30)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
-        self._swatch = _ColorSwatchButton(color, self)
-        self._swatch.clicked.connect(self.clicked.emit)
+        self._swatch_stack = QStackedWidget(self)
+        self._swatch_stack.setFixedHeight(30)
+        self._swatch_stack.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+
+        self._swatch = _ColorSwatchButton(color, self._swatch_stack)
+        self._swatch.clicked.connect(self._begin_color_entry)
+        self._color_edit = _ColorHexEdit(self._swatch_stack)
+        self._color_edit.setFixedHeight(30)
+        self._color_edit.setMaxLength(9)
+        self._color_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._color_edit.setPlaceholderText("RRGGBB / AARRGGBB")
+        self._color_edit.returnPressed.connect(self._commit_color_entry)
+        self._color_edit.cancelRequested.connect(self._cancel_color_entry)
+        self._swatch_stack.addWidget(self._swatch)
+        self._swatch_stack.addWidget(self._color_edit)
 
         self.palette_button = FluentToolButton(FIF.PALETTE, self)
         self.palette_button.setFixedSize(30, 30)
@@ -477,7 +528,7 @@ class ColorButton(QWidget):
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        layout.addWidget(self._swatch, 1)
+        layout.addWidget(self._swatch_stack, 1)
         layout.addWidget(self.palette_button, 0)
         layout.addWidget(self.screen_picker_button, 0)
 
@@ -494,11 +545,33 @@ class ColorButton(QWidget):
     def click(self) -> None:
         self._swatch.click()
 
+    def _begin_color_entry(self) -> None:
+        self._color_edit.setText(self.color)
+        self._color_edit.setToolTip("输入 RGB 或 ARGB 色号，按回车应用")
+        self._swatch_stack.setCurrentWidget(self._color_edit)
+        self._color_edit.setFocus(Qt.FocusReason.MouseFocusReason)
+        self._color_edit.selectAll()
+
+    def _commit_color_entry(self) -> None:
+        color = _parse_hex_color(self._color_edit.text())
+        if color is None:
+            self._color_edit.setToolTip("色号无效，请输入 RGB 或 ARGB 十六进制色号")
+            self._color_edit.selectAll()
+            return
+        self.set_color(color)
+        self._swatch_stack.setCurrentWidget(self._swatch)
+        self.colorEntered.emit(color)
+
+    def _cancel_color_entry(self) -> None:
+        if self._swatch_stack.currentWidget() is self._color_edit:
+            self._swatch_stack.setCurrentWidget(self._swatch)
+
 
 class ScreenColorPicker(QWidget):
     """Transparent virtual-desktop overlay for direct screen color picking."""
 
     colorPicked = Signal(QColor)
+    colorHovered = Signal(QColor)
     finished = Signal()
 
     def __init__(self) -> None:
@@ -509,6 +582,7 @@ class ScreenColorPicker(QWidget):
             | Qt.WindowType.WindowStaysOnTopHint,
         )
         self._active = True
+        self._last_hovered_rgba: Optional[int] = None
         self._screens: list[tuple[QRect, QImage]] = []
         desktop_geometry = QRect()
         for screen in QApplication.screens():
@@ -519,6 +593,7 @@ class ScreenColorPicker(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
         self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         if desktop_geometry.isValid():
             self.setGeometry(desktop_geometry)
@@ -530,6 +605,7 @@ class ScreenColorPicker(QWidget):
         self.setFocus(Qt.FocusReason.OtherFocusReason)
         self.grabMouse()
         self.grabKeyboard()
+        QTimer.singleShot(0, lambda: self._emit_hovered_color(QCursor.pos()))
 
     def color_at(self, global_position: QPoint) -> QColor:
         for geometry, image in self._screens:
@@ -557,6 +633,19 @@ class ScreenColorPicker(QWidget):
             event.accept()
             return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        self._emit_hovered_color(event.globalPosition().toPoint())
+        event.accept()
+
+    def _emit_hovered_color(self, global_position: QPoint) -> None:
+        if not self._active:
+            return
+        color = self.color_at(global_position)
+        if not color.isValid() or color.rgba() == self._last_hovered_rgba:
+            return
+        self._last_hovered_rgba = color.rgba()
+        self.colorHovered.emit(color)
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:
@@ -3570,6 +3659,9 @@ class PropertyPanel(QWidget):
 
         self._gradient_stop_color_btn = ColorButton("#FFFFFF", page)
         self._gradient_stop_color_btn.clicked.connect(self._choose_gradient_stop_color)
+        self._gradient_stop_color_btn.colorEntered.connect(
+            self._gradient_editor.set_selected_color
+        )
         self._gradient_stop_color_btn.screenPickRequested.connect(
             lambda: self._choose_gradient_stop_color(screen_pick=True)
         )
@@ -3624,6 +3716,9 @@ class PropertyPanel(QWidget):
 
         self._split_stop_color_btn = ColorButton("#FFFFFF", page)
         self._split_stop_color_btn.clicked.connect(self._choose_split_stop_color)
+        self._split_stop_color_btn.colorEntered.connect(
+            self._split_editor.set_selected_color
+        )
         self._split_stop_color_btn.screenPickRequested.connect(
             lambda: self._choose_split_stop_color(screen_pick=True)
         )
@@ -3727,9 +3822,14 @@ class PropertyPanel(QWidget):
         button.clicked.connect(
             lambda _checked=False, field=field_name: self._choose_paint_color(field)
         )
+        button.colorEntered.connect(
+            lambda color, field=field_name: self._update_current_fill(
+                **{field: color}
+            )
+        )
         button.screenPickRequested.connect(
             lambda field=field_name: self._choose_paint_color(
-                field, screen_pick=True
+                field, screen_pick=True, preview_button=button
             )
         )
         return button
@@ -5023,31 +5123,61 @@ class PropertyPanel(QWidget):
     def _color_button(self, field_name: str, color: str) -> ColorButton:
         button = ColorButton(color)
         button.clicked.connect(lambda _checked=False, field=field_name: self._choose_color(field))
+        button.colorEntered.connect(
+            lambda color, field=field_name: self._set_color(field, color)
+        )
         button.screenPickRequested.connect(
-            lambda field=field_name: self._choose_color(field, screen_pick=True)
+            lambda field=field_name: self._choose_color(
+                field, screen_pick=True, preview_button=button
+            )
         )
         return button
 
     # ------------------------------------------------------------------ update
 
-    def _begin_screen_color_pick(self, apply_color) -> None:
+    def _begin_screen_color_pick(
+        self, preview_button: ColorButton, apply_color
+    ) -> None:
         if self._screen_color_picker is not None:
             self._screen_color_picker.cancel()
 
+        original_color = preview_button.color
+        accepted = False
         picker = ScreenColorPicker()
         self._screen_color_picker = picker
-        picker.colorPicked.connect(apply_color)
+
+        def preview_color(color: QColor) -> None:
+            preview_button.set_color(color.name(QColor.NameFormat.HexArgb))
+
+        def accept_color(color: QColor) -> None:
+            nonlocal accepted
+            accepted = True
+            preview_color(color)
+            apply_color(color)
 
         def clear_picker() -> None:
+            if not accepted:
+                preview_button.set_color(original_color)
             if self._screen_color_picker is picker:
                 self._screen_color_picker = None
 
+        picker.colorHovered.connect(preview_color)
+        picker.colorPicked.connect(accept_color)
         picker.finished.connect(clear_picker)
         picker.start()
 
-    def _choose_color(self, field_name: str, *, screen_pick: bool = False) -> None:
+    def _choose_color(
+        self,
+        field_name: str,
+        *,
+        screen_pick: bool = False,
+        preview_button: Optional[ColorButton] = None,
+    ) -> None:
         if screen_pick:
+            if preview_button is None:
+                return
             self._begin_screen_color_pick(
+                preview_button,
                 lambda color: self._set_color(
                     field_name, color.name(QColor.NameFormat.HexArgb)
                 )
@@ -5073,10 +5203,17 @@ class PropertyPanel(QWidget):
         self._update_style(**changes)
 
     def _choose_paint_color(
-        self, field_name: str, *, screen_pick: bool = False
+        self,
+        field_name: str,
+        *,
+        screen_pick: bool = False,
+        preview_button: Optional[ColorButton] = None,
     ) -> None:
         if screen_pick:
+            if preview_button is None:
+                return
             self._begin_screen_color_pick(
+                preview_button,
                 lambda color: self._update_current_fill(
                     **{
                         field_name: _normalize_hex(
@@ -5338,6 +5475,7 @@ class PropertyPanel(QWidget):
     def _choose_gradient_stop_color(self, *, screen_pick: bool = False) -> None:
         if screen_pick:
             self._begin_screen_color_pick(
+                self._gradient_stop_color_btn,
                 lambda color: self._gradient_editor.set_selected_color(
                     _normalize_hex(color.name(QColor.NameFormat.HexArgb))
                 )
@@ -5385,6 +5523,7 @@ class PropertyPanel(QWidget):
     def _choose_split_stop_color(self, *, screen_pick: bool = False) -> None:
         if screen_pick:
             self._begin_screen_color_pick(
+                self._split_stop_color_btn,
                 lambda color: self._split_editor.set_selected_color(
                     _normalize_hex(color.name(QColor.NameFormat.HexArgb))
                 )
