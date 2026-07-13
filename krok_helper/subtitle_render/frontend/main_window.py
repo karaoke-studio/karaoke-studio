@@ -114,6 +114,7 @@ from krok_helper.subtitle_render.models import (
     TimingTrack,
     line_animation_override_from_dict,
     line_animation_override_to_dict,
+    migrate_legacy_app_title_default,
     rescale_layout_sizes,
     subtitle_style_scheme_from_dict,
     subtitle_style_scheme_to_dict,
@@ -2797,7 +2798,12 @@ class SubtitleRenderWindow(QWidget):
 
     def _load_persisted_state(self) -> None:
         data = self._load_subtitle_settings()
-        self._style = style_from_dict(data.get("style"))
+        # 应用级旧默认曾错误使用“游明朝 100px / 15px 描边”。只在加载
+        # 应用默认时迁移到 N3「情報小」；打开 .yurika / .n3proj 时保留项目
+        # 明确选择的标题方案。
+        self._style = migrate_legacy_app_title_default(
+            style_from_dict(data.get("style"))
+        )
         self._style_presets = _style_presets_from_dict(data.get("style_presets"))
         self._screen_settings = screen_settings_from_dict(data.get("screen"))
         key = data.get("selected_scheme_key")

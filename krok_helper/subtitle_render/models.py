@@ -359,8 +359,9 @@ class KaraokeColors:
 class TitleOverlay:
     """标题字幕叠加层（B7）。
 
-    静态文字（曲名 / 艺术家），不走字；默认参数逆向自 NicoKaraMaker3：
-    明朝体、白字黑边、左上、整段显示。文字模板 ``{title}`` / ``{artist}`` 由字幕源
+    静态文字（曲名 / 艺术家），不走字；默认参数逆向自 NicoKaraMaker3
+    「情報小」：教科书体 40px、灰白字黑边、白色小发光、左上、整段显示。
+    文字模板 ``{title}`` / ``{artist}`` 由字幕源
     ``@Title`` / ``@Artist`` 元数据替换；也可直接填任意自定义文字（含换行）。
     """
 
@@ -371,29 +372,29 @@ class TitleOverlay:
     char_role_labels: list[list[Optional[str]]] = field(default_factory=list)
     """逐行逐字符角色标签；``None`` 表示继承内置「标题」方案。"""
 
-    # 字体（逆向 ニコカラ「標準配色」字体：明朝体、字号 100、描边 15/5）
-    font_family: str = "游明朝"
-    font_family_latin: Optional[str] = None
-    font_size_px: int = 100
-    font_weight: int = 400
+    # 字体（逆向目标项目的 N3「情報小」）
+    font_family: str = "UD デジタル 教科書体 N-B"
+    font_family_latin: Optional[str] = "Comic Sans MS"
+    font_size_px: int = 40
+    font_weight: int = 700
     italic: bool = False
     letter_spacing_px: int = 0
     line_gap_px: int = 15
 
-    # 颜色（单态：不走字）。逆向 ニコカラ「標準配色」的「走字前」外观（标题永不走字）：
-    # 填充 #FFEBEB、内描边黑、外二重边白、模糊发光 #E19696。
-    fill: PaintFill = field(default_factory=lambda: _paint_fill("#FFEBEB"))
+    # 颜色（单态：不走字）。N3「情報小」走字前：#EBEBEB、黑色 5px
+    # 描边、关闭二重描边、白色 2px 发光。
+    fill: PaintFill = field(default_factory=lambda: _paint_fill("#EBEBEB"))
     stroke: PaintFill = field(default_factory=lambda: _paint_fill("#000000"))
-    stroke_width_px: int = 15
+    stroke_width_px: int = 5
     stroke2: PaintFill = field(default_factory=lambda: _paint_fill("#FFFFFF"))
-    stroke2_width_px: int = 5
+    stroke2_width_px: int = 0
     decoration_kind: DecorationKind = "glow"
-    glow_radius_px: int = 10
+    glow_radius_px: int = 2
     glow_concentration_level: int = 0
     """NicoKaraMaker3 ``BlurLevel``: 0/1/2 = 低/中/高发光浓度。"""
-    shadow: PaintFill = field(default_factory=lambda: _paint_fill("#E19696"))
-    shadow_offset_x: int = 0
-    shadow_offset_y: int = 2
+    shadow: PaintFill = field(default_factory=lambda: _paint_fill("#FFFFFF"))
+    shadow_offset_x: int = 10
+    shadow_offset_y: int = 10
 
     # 位置（锚点 9 宫格 + 内边距 / 偏移；逆向 ニコカラ「タイトル左上」）。
     # 这些字段与上方字体/颜色字段一样，现在是「解析结果」：渲染时由
@@ -552,14 +553,21 @@ def title_scheme_from_overlay(title: "TitleOverlay") -> SubtitleStyleScheme:
     """把（旧工程的）``TitleOverlay`` 显式外观字段折算成「标题」配色方案。"""
     return SubtitleStyleScheme(
         font_family=title.font_family,
-        font_family_latin=title.font_family_latin,
+        # 标题方案必须自包含。N3 标题没有另设英数页时，英数跟随标题自身的
+        # 日文字体，而不是继承项目全局歌词的英数字体。
+        font_family_latin=title.font_family_latin or title.font_family,
         font_size_px=title.font_size_px,
+        latin_font_size_px=title.font_size_px,
         font_weight=title.font_weight,
+        latin_font_weight=title.font_weight,
         italic=title.italic,
         letter_spacing_px=title.letter_spacing_px,
         stroke_width_px=title.stroke_width_px,
+        latin_stroke_width_px=title.stroke_width_px,
         stroke2_enabled=title.stroke2_width_px > 0,
+        latin_stroke2_enabled=title.stroke2_width_px > 0,
         stroke2_width_px=title.stroke2_width_px,
+        latin_stroke2_width_px=title.stroke2_width_px,
         decoration_kind=title.decoration_kind,
         glow_radius_px=title.glow_radius_px,
         glow_before_radius_px=title.glow_radius_px,
@@ -574,8 +582,87 @@ def title_scheme_from_overlay(title: "TitleOverlay") -> SubtitleStyleScheme:
 
 
 def default_title_scheme() -> SubtitleStyleScheme:
-    """默认「标题」方案 = ``TitleOverlay`` 字段默认值（ニコカラ標準配色标题外观）。"""
-    return title_scheme_from_overlay(TitleOverlay())
+    """默认「标题」方案：目标 N3 项目 ``Dark spiral journey`` 的「情報小」。"""
+    before = KaraokeColorState(
+        text=_paint_fill("#EBEBEB"),
+        stroke=_paint_fill("#000000"),
+        stroke2=_paint_fill("#FFFFFF"),
+        shadow=_paint_fill("#FFFFFF"),
+    )
+    after = KaraokeColorState(
+        text=_paint_fill("#EBEBEB"),
+        stroke=_paint_fill("#000000"),
+        stroke2=_paint_fill("#000000"),
+        shadow=_paint_fill("#FFFFFF"),
+    )
+    colors = KaraokeColors(before=before, after=after)
+    return SubtitleStyleScheme(
+        font_family="UD デジタル 教科書体 N-B",
+        font_family_latin="Comic Sans MS",
+        font_size_px=40,
+        letter_spacing_px=0,
+        latin_font_size_px=40,
+        latin_font_weight=700,
+        latin_stroke_width_px=5,
+        latin_stroke2_enabled=False,
+        latin_stroke2_width_px=5,
+        font_weight=700,
+        italic=False,
+        base_color="#EBEBEB",
+        fill_color="#EBEBEB",
+        stroke_color="#000000",
+        stroke_width_px=5,
+        stroke2_enabled=False,
+        stroke2_width_px=5,
+        decoration_kind="glow",
+        glow_radius_px=2,
+        glow_before_radius_px=2,
+        glow_after_radius_px=2,
+        glow_concentration_level=0,
+        shadow_color="#FFFFFF",
+        ruby_font_size_px=45,
+        ruby_font_family="UD デジタル 教科書体 N-B",
+        ruby_font_family_latin="UD デジタル 教科書体 N-B",
+        ruby_font_weight=700,
+        ruby_latin_font_size_px=45,
+        ruby_latin_font_weight=700,
+        ruby_font_follow_main=False,
+        ruby_color="#EBEBEB",
+        ruby_stroke_width_px=10,
+        ruby_stroke2_enabled=False,
+        ruby_stroke2_width_px=3,
+        ruby_latin_stroke_width_px=10,
+        ruby_latin_stroke2_enabled=False,
+        ruby_latin_stroke2_width_px=3,
+        karaoke_colors=deepcopy(colors),
+        ruby_karaoke_colors=deepcopy(colors),
+    )
+
+
+def migrate_legacy_app_title_default(style: "Style") -> "Style":
+    """只迁移应用级旧内置标题；项目/N3 显式标题由调用方保留原样。"""
+    scheme = style.custom_style_schemes.get(TITLE_SCHEME_NAME)
+    colors = scheme.karaoke_colors if scheme is not None else None
+    if not (
+        scheme is not None
+        and scheme.font_family == "游明朝"
+        and scheme.font_size_px == 100
+        and scheme.font_weight == 400
+        and scheme.stroke_width_px == 15
+        and scheme.stroke2_enabled is True
+        and scheme.stroke2_width_px == 5
+        and scheme.decoration_kind == "glow"
+        and scheme.glow_before_radius_px == 10
+        and colors is not None
+        and colors.before.text.color == "#FFEBEB"
+        and colors.before.stroke.color == "#000000"
+        and colors.before.stroke2.color == "#FFFFFF"
+        and colors.before.shadow.color == "#E19696"
+    ):
+        return style
+    schemes = dict(style.custom_style_schemes)
+    schemes[TITLE_SCHEME_NAME] = default_title_scheme()
+    return replace(style, custom_style_schemes=schemes)
 
 
 @dataclass
@@ -1243,6 +1330,62 @@ def _migrate_title_references(changes: dict) -> None:
             else default_title_scheme()
         )
         changes["custom_style_schemes"] = schemes
+    else:
+        # 8c3b9b5 之前的标题方案没有英数独立字段。英数轨加入后，这些 None
+        # 会被解释成继承全局歌词方案，导致英文曲名/歌手名突然换字体和描边。
+        # 只补缺失字段，保留用户或 N3 项目显式保存的英数标题设置。
+        title_scheme = schemes[TITLE_SCHEME_NAME]
+        title_family = title_scheme.font_family or TitleOverlay().font_family
+        title_size = title_scheme.font_size_px or TitleOverlay().font_size_px
+        title_weight = title_scheme.font_weight or TitleOverlay().font_weight
+        title_stroke = (
+            title_scheme.stroke_width_px
+            if title_scheme.stroke_width_px is not None
+            else TitleOverlay().stroke_width_px
+        )
+        title_stroke2_enabled = (
+            title_scheme.stroke2_enabled
+            if title_scheme.stroke2_enabled is not None
+            else TitleOverlay().stroke2_width_px > 0
+        )
+        title_stroke2 = (
+            title_scheme.stroke2_width_px
+            if title_scheme.stroke2_width_px is not None
+            else TitleOverlay().stroke2_width_px
+        )
+        completed = replace(
+            title_scheme,
+            font_family_latin=title_scheme.font_family_latin or title_family,
+            latin_font_size_px=(
+                title_scheme.latin_font_size_px
+                if title_scheme.latin_font_size_px is not None
+                else title_size
+            ),
+            latin_font_weight=(
+                title_scheme.latin_font_weight
+                if title_scheme.latin_font_weight is not None
+                else title_weight
+            ),
+            latin_stroke_width_px=(
+                title_scheme.latin_stroke_width_px
+                if title_scheme.latin_stroke_width_px is not None
+                else title_stroke
+            ),
+            latin_stroke2_enabled=(
+                title_scheme.latin_stroke2_enabled
+                if title_scheme.latin_stroke2_enabled is not None
+                else title_stroke2_enabled
+            ),
+            latin_stroke2_width_px=(
+                title_scheme.latin_stroke2_width_px
+                if title_scheme.latin_stroke2_width_px is not None
+                else title_stroke2
+            ),
+        )
+        if completed != title_scheme:
+            schemes = dict(schemes)
+            schemes[TITLE_SCHEME_NAME] = completed
+            changes["custom_style_schemes"] = schemes
     if title is None or title.layout_index is not None:
         return
     layouts = list(changes.get("layouts") or [])
@@ -1476,17 +1619,19 @@ def title_overlay_from_dict(payload: object) -> Optional[TitleOverlay]:
         italic=bool(payload.get("italic", defaults.italic)),
         letter_spacing_px=_int_value(payload.get("letter_spacing_px"), defaults.letter_spacing_px),
         line_gap_px=_int_value(payload.get("line_gap_px"), defaults.line_gap_px),
-        fill=paint_fill_from_dict(payload.get("fill"), fallback="#FFEBEB"),
-        stroke=paint_fill_from_dict(payload.get("stroke"), fallback="#000000"),
+        fill=paint_fill_from_dict(payload.get("fill"), fallback=defaults.fill.color),
+        stroke=paint_fill_from_dict(payload.get("stroke"), fallback=defaults.stroke.color),
         stroke_width_px=_int_value(payload.get("stroke_width_px"), defaults.stroke_width_px),
-        stroke2=paint_fill_from_dict(payload.get("stroke2"), fallback="#FFFFFF"),
+        stroke2=paint_fill_from_dict(
+            payload.get("stroke2"), fallback=defaults.stroke2.color
+        ),
         stroke2_width_px=_int_value(payload.get("stroke2_width_px"), defaults.stroke2_width_px),
         decoration_kind=decoration,  # type: ignore[arg-type]
         glow_radius_px=_int_value(payload.get("glow_radius_px"), defaults.glow_radius_px),
         glow_concentration_level=normalize_glow_concentration_level(
             payload.get("glow_concentration_level"), defaults.glow_concentration_level
         ),
-        shadow=paint_fill_from_dict(payload.get("shadow"), fallback="#E19696"),
+        shadow=paint_fill_from_dict(payload.get("shadow"), fallback=defaults.shadow.color),
         shadow_offset_x=_int_value(payload.get("shadow_offset_x"), defaults.shadow_offset_x),
         shadow_offset_y=_int_value(payload.get("shadow_offset_y"), defaults.shadow_offset_y),
         anchor=anchor,  # type: ignore[arg-type]

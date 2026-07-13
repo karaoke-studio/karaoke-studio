@@ -4087,14 +4087,16 @@ def test_title_overlay_anchor_moves_block(qapp):
 
 
 def test_title_overlay_defaults_match_nicokara(qapp):
-    # ニコカラ「標準配色」走字前外观（标题永不走字）
+    # 指定 N3 项目「情報小」走字前外观（标题永不走字）
     t = TitleOverlay()
-    assert t.font_family == "游明朝"
-    assert t.fill.color == "#FFEBEB"
-    assert t.stroke.color == "#000000" and t.stroke_width_px == 15
-    assert t.stroke2.color == "#FFFFFF" and t.stroke2_width_px == 5
-    assert t.decoration_kind == "glow" and t.glow_radius_px == 10
-    assert t.shadow.color == "#E19696"
+    assert t.font_family == "UD デジタル 教科書体 N-B"
+    assert t.font_family_latin == "Comic Sans MS"
+    assert t.font_size_px == 40 and t.font_weight == 700
+    assert t.fill.color == "#EBEBEB"
+    assert t.stroke.color == "#000000" and t.stroke_width_px == 5
+    assert t.stroke2.color == "#FFFFFF" and t.stroke2_width_px == 0
+    assert t.decoration_kind == "glow" and t.glow_radius_px == 2
+    assert t.shadow.color == "#FFFFFF"
 
 
 def test_resolve_title_overlay_uses_scheme_and_layout(qapp):
@@ -4102,10 +4104,14 @@ def test_resolve_title_overlay_uses_scheme_and_layout(qapp):
 
     style = Style(title_overlay=TitleOverlay(enabled=True))
     resolved = resolve_title_overlay(style)
-    # 默认「标题」方案 = 原 TitleOverlay 默认外观（ニコカラ標準配色）
-    assert resolved.font_family == "游明朝"
-    assert resolved.fill.color == "#FFEBEB"
-    assert resolved.stroke_width_px == 15
+    # 默认「标题」方案 = 指定 N3 项目的「情報小」
+    assert resolved.font_family == "UD デジタル 教科書体 N-B"
+    assert resolved.font_family_latin == "Comic Sans MS"
+    assert resolved.font_size_px == 40 and resolved.font_weight == 700
+    assert resolved.fill.color == "#EBEBEB"
+    assert resolved.stroke_width_px == 5
+    assert resolved.stroke2_width_px == 0
+    assert resolved.glow_radius_px == 2
     # 默认布局引用（内置タイトル左上）→ 顶部左上、余白 50/50、行間 15
     assert resolved.anchor == "top_left" and resolved.align == "left"
     assert resolved.offset_x == 50 and resolved.offset_y == 50
@@ -4123,6 +4129,32 @@ def test_resolve_title_overlay_uses_scheme_and_layout(qapp):
         style, title_overlay=replace(style.title_overlay, layout_index=9)
     )
     assert resolve_title_overlay(dangling).anchor == "top_left"
+
+
+def test_default_title_latin_font_does_not_inherit_global_lyrics_font(qapp):
+    from krok_helper.subtitle_render.engine.painter import resolve_title_overlay
+
+    style = Style(
+        font_family="Global Japanese",
+        font_family_latin="Comic Sans MS",
+        latin_font_size_px=66,
+        latin_font_weight=900,
+        latin_stroke_width_px=1,
+        latin_stroke2_enabled=False,
+        latin_stroke2_width_px=0,
+        title_overlay=TitleOverlay(enabled=True, text_template="English Title"),
+    )
+
+    scheme = style.custom_style_schemes["标题"]
+    resolved = resolve_title_overlay(style)
+
+    assert scheme.font_family_latin == "Comic Sans MS"
+    assert scheme.latin_font_size_px == 40
+    assert scheme.latin_font_weight == 700
+    assert scheme.latin_stroke_width_px == 5
+    assert scheme.latin_stroke2_enabled is False
+    assert scheme.latin_stroke2_width_px == 5
+    assert resolved is not None and resolved.font_family_latin == "Comic Sans MS"
 
 
 def test_old_project_title_fields_migrate_to_scheme_and_layout():
@@ -4146,7 +4178,7 @@ def test_old_project_title_fields_migrate_to_scheme_and_layout():
     scheme = restored.custom_style_schemes["标题"]
     assert scheme.font_family == "Custom Font"
     assert scheme.font_size_px == 77
-    assert scheme.karaoke_colors.before.text.color == "#FFEBEB"
+    assert scheme.karaoke_colors.before.text.color == "#EBEBEB"
     # 位置折算成新布局并被标题引用
     assert restored.title_overlay.layout_index == len(restored.layouts)
     layout = restored.layouts[-1]
@@ -4164,7 +4196,7 @@ def test_title_overlay_latin_font_splits_ascii(qapp):
         _build_title_latin_font,
     )
     # 单字体时不分离
-    single = TitleOverlay(font_family="Yu Mincho")
+    single = TitleOverlay(font_family="Yu Mincho", font_family_latin=None)
     assert _make_title_font_for(single, _build_title_font(single), _build_title_latin_font(single)) is None
     # JP + Latin 分开：ASCII 用英数字体，其余用日文字体
     split = TitleOverlay(font_family="Yu Mincho", font_family_latin="Arial")
