@@ -12,12 +12,22 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Optional
 
-from PyQt6.QtCore import QPointF, QRect, QRectF, QSize, Qt, QTimer, pyqtSignal as Signal
+from PyQt6.QtCore import (
+    QPoint,
+    QPointF,
+    QRect,
+    QRectF,
+    QSize,
+    Qt,
+    QTimer,
+    pyqtSignal as Signal,
+)
 from PyQt6.QtGui import (
     QColor,
     QFont,
     QFontDatabase,
     QIcon,
+    QImage,
     QLinearGradient,
     QPainter,
     QPainterPath,
@@ -28,6 +38,7 @@ from PyQt6.QtGui import (
 from PyQt6.QtWidgets import (
     QAbstractButton,
     QAbstractItemView,
+    QApplication,
     QBoxLayout,
     QColorDialog,
     QDialog,
@@ -65,6 +76,7 @@ from qfluentwidgets import (
     SegmentedWidget,
     SpinBox as FluentSpinBox,
     SubtitleLabel,
+    ToolButton as FluentToolButton,
     TransparentToolButton as FluentTransparentToolButton,
 )
 
@@ -362,8 +374,36 @@ def _normalize_hex(value: str, fallback: str = "#000000") -> str:
     return color.name(name_format).upper()
 
 
-class ColorButton(QPushButton):
-    """Compact color swatch button."""
+def _eyedropper_icon() -> QIcon:
+    """Small theme-aware eyedropper icon without an external bitmap asset."""
+    pixmap = QPixmap(20, 20)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    try:
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        pen = QPen(QColor(palette().text_primary), 1.8)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        painter.setPen(pen)
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        path = QPainterPath()
+        path.moveTo(5.0, 15.5)
+        path.lineTo(7.2, 15.5)
+        path.lineTo(15.0, 7.7)
+        path.lineTo(12.3, 5.0)
+        path.lineTo(4.5, 12.8)
+        path.closeSubpath()
+        painter.drawPath(path)
+        painter.drawLine(QPointF(11.2, 3.8), QPointF(16.2, 8.8))
+        painter.drawLine(QPointF(13.1, 5.7), QPointF(15.7, 3.1))
+        painter.drawLine(QPointF(4.5, 15.5), QPointF(3.0, 17.0))
+    finally:
+        painter.end()
+    return QIcon(pixmap)
+
+
+class _ColorSwatchButton(QPushButton):
+    """Color value bar used inside :class:`ColorButton`."""
 
     def __init__(self, color: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -406,6 +446,148 @@ class ColorButton(QPushButton):
             }}
             """
         )
+
+
+class ColorButton(QWidget):
+    """Compact color bar with dialog and direct screen-picker actions."""
+
+    clicked = Signal()
+    screenPickRequested = Signal()
+
+    def __init__(self, color: str, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setFixedHeight(30)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+        self._swatch = _ColorSwatchButton(color, self)
+        self._swatch.clicked.connect(self.clicked.emit)
+
+        self.palette_button = FluentToolButton(FIF.PALETTE, self)
+        self.palette_button.setFixedSize(30, 30)
+        self.palette_button.setToolTip("打开颜色选择窗口")
+        self.palette_button.setAccessibleName("打开颜色选择窗口")
+        self.palette_button.clicked.connect(self.clicked.emit)
+
+        self.screen_picker_button = FluentToolButton(_eyedropper_icon(), self)
+        self.screen_picker_button.setFixedSize(30, 30)
+        self.screen_picker_button.setToolTip("从屏幕取色")
+        self.screen_picker_button.setAccessibleName("从屏幕取色")
+        self.screen_picker_button.clicked.connect(self.screenPickRequested.emit)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        layout.addWidget(self._swatch, 1)
+        layout.addWidget(self.palette_button, 0)
+        layout.addWidget(self.screen_picker_button, 0)
+
+    @property
+    def color(self) -> str:
+        return self._swatch.color
+
+    def set_color(self, color: str) -> None:
+        self._swatch.set_color(color)
+
+    def text(self) -> str:
+        return self._swatch.text()
+
+    def click(self) -> None:
+        self._swatch.click()
+
+
+class ScreenColorPicker(QWidget):
+    """Transparent virtual-desktop overlay for direct screen color picking."""
+
+    colorPicked = Signal(QColor)
+    finished = Signal()
+
+    def __init__(self) -> None:
+        super().__init__(
+            None,
+            Qt.WindowType.Tool
+            | Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.WindowStaysOnTopHint,
+        )
+        self._active = True
+        self._screens: list[tuple[QRect, QImage]] = []
+        desktop_geometry = QRect()
+        for screen in QApplication.screens():
+            geometry = screen.geometry()
+            desktop_geometry = desktop_geometry.united(geometry)
+            self._screens.append((geometry, screen.grabWindow(0).toImage()))
+
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setCursor(Qt.CursorShape.CrossCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        if desktop_geometry.isValid():
+            self.setGeometry(desktop_geometry)
+
+    def start(self) -> None:
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.grabMouse()
+        self.grabKeyboard()
+
+    def color_at(self, global_position: QPoint) -> QColor:
+        for geometry, image in self._screens:
+            if not geometry.contains(global_position) or image.isNull():
+                continue
+            x_ratio = image.width() / max(geometry.width(), 1)
+            y_ratio = image.height() / max(geometry.height(), 1)
+            x = int((global_position.x() - geometry.x()) * x_ratio)
+            y = int((global_position.y() - geometry.y()) * y_ratio)
+            x = min(max(x, 0), image.width() - 1)
+            y = min(max(y, 0), image.height() - 1)
+            return image.pixelColor(x, y)
+        return QColor()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            color = self.color_at(event.globalPosition().toPoint())
+            if color.isValid():
+                self.colorPicked.emit(color)
+            self._finish()
+            event.accept()
+            return
+        if event.button() == Qt.MouseButton.RightButton:
+            self._finish()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Escape:
+            self._finish()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def cancel(self) -> None:
+        self._finish()
+
+    def _finish(self) -> None:
+        if not self._active:
+            return
+        self._active = False
+        self.releaseMouse()
+        self.releaseKeyboard()
+        self.hide()
+        self.finished.emit()
+        self.deleteLater()
+
+
+def _select_color(current: QColor, parent: QWidget, title: str) -> QColor:
+    """Open the regular color dialog used by the palette action."""
+    dialog = QColorDialog(current, parent)
+    dialog.setWindowTitle(title)
+    dialog.setOption(QColorDialog.ColorDialogOption.ShowAlphaChannel, True)
+    dialog.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog, True)
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return QColor()
+    return dialog.selectedColor()
 
 
 class ToggleSwitch(QAbstractButton):
@@ -2560,6 +2742,7 @@ class PropertyPanel(QWidget):
         self._role_names: list[str] = []
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
+        self._screen_color_picker: Optional[ScreenColorPicker] = None
 
         self.setObjectName("PropertyPanel")
         self.setMinimumWidth(320)
@@ -3387,6 +3570,9 @@ class PropertyPanel(QWidget):
 
         self._gradient_stop_color_btn = ColorButton("#FFFFFF", page)
         self._gradient_stop_color_btn.clicked.connect(self._choose_gradient_stop_color)
+        self._gradient_stop_color_btn.screenPickRequested.connect(
+            lambda: self._choose_gradient_stop_color(screen_pick=True)
+        )
         self._gradient_stop_position_spin = _spin(0, 100, suffix=" %")
         self._gradient_stop_position_spin.valueChanged.connect(
             self._set_gradient_stop_position
@@ -3438,6 +3624,9 @@ class PropertyPanel(QWidget):
 
         self._split_stop_color_btn = ColorButton("#FFFFFF", page)
         self._split_stop_color_btn.clicked.connect(self._choose_split_stop_color)
+        self._split_stop_color_btn.screenPickRequested.connect(
+            lambda: self._choose_split_stop_color(screen_pick=True)
+        )
         self._split_stop_position_spin = _spin(0, 100, suffix=" %")
         self._split_stop_position_spin.valueChanged.connect(
             self._set_split_stop_position
@@ -3537,6 +3726,11 @@ class PropertyPanel(QWidget):
         button = ColorButton(color)
         button.clicked.connect(
             lambda _checked=False, field=field_name: self._choose_paint_color(field)
+        )
+        button.screenPickRequested.connect(
+            lambda field=field_name: self._choose_paint_color(
+                field, screen_pick=True
+            )
         )
         return button
 
@@ -4829,18 +5023,38 @@ class PropertyPanel(QWidget):
     def _color_button(self, field_name: str, color: str) -> ColorButton:
         button = ColorButton(color)
         button.clicked.connect(lambda _checked=False, field=field_name: self._choose_color(field))
+        button.screenPickRequested.connect(
+            lambda field=field_name: self._choose_color(field, screen_pick=True)
+        )
         return button
 
     # ------------------------------------------------------------------ update
 
-    def _choose_color(self, field_name: str) -> None:
+    def _begin_screen_color_pick(self, apply_color) -> None:
+        if self._screen_color_picker is not None:
+            self._screen_color_picker.cancel()
+
+        picker = ScreenColorPicker()
+        self._screen_color_picker = picker
+        picker.colorPicked.connect(apply_color)
+
+        def clear_picker() -> None:
+            if self._screen_color_picker is picker:
+                self._screen_color_picker = None
+
+        picker.finished.connect(clear_picker)
+        picker.start()
+
+    def _choose_color(self, field_name: str, *, screen_pick: bool = False) -> None:
+        if screen_pick:
+            self._begin_screen_color_pick(
+                lambda color: self._set_color(
+                    field_name, color.name(QColor.NameFormat.HexArgb)
+                )
+            )
+            return
         current = QColor(self._scheme_value(field_name))
-        color = QColorDialog.getColor(
-            current,
-            self,
-            "选择颜色",
-            QColorDialog.ColorDialogOption.ShowAlphaChannel,
-        )
+        color = _select_color(current, self, "选择颜色")
         if color.isValid():
             self._set_color(field_name, color.name(QColor.NameFormat.HexArgb))
 
@@ -4858,15 +5072,23 @@ class PropertyPanel(QWidget):
                 changes["karaoke_colors"] = colors
         self._update_style(**changes)
 
-    def _choose_paint_color(self, field_name: str) -> None:
+    def _choose_paint_color(
+        self, field_name: str, *, screen_pick: bool = False
+    ) -> None:
+        if screen_pick:
+            self._begin_screen_color_pick(
+                lambda color: self._update_current_fill(
+                    **{
+                        field_name: _normalize_hex(
+                            color.name(QColor.NameFormat.HexArgb)
+                        )
+                    }
+                )
+            )
+            return
         fill = self._current_paint_fill()
         current = QColor(getattr(fill, field_name))
-        color = QColorDialog.getColor(
-            current,
-            self,
-            "选择颜色",
-            QColorDialog.ColorDialogOption.ShowAlphaChannel,
-        )
+        color = _select_color(current, self, "选择颜色")
         if color.isValid():
             normalized = _normalize_hex(color.name(QColor.NameFormat.HexArgb))
             self._update_current_fill(**{field_name: normalized})
@@ -5113,14 +5335,16 @@ class PropertyPanel(QWidget):
         finally:
             self._syncing = was_syncing
 
-    def _choose_gradient_stop_color(self) -> None:
+    def _choose_gradient_stop_color(self, *, screen_pick: bool = False) -> None:
+        if screen_pick:
+            self._begin_screen_color_pick(
+                lambda color: self._gradient_editor.set_selected_color(
+                    _normalize_hex(color.name(QColor.NameFormat.HexArgb))
+                )
+            )
+            return
         current = QColor(self._gradient_editor.selected_stop[1])
-        color = QColorDialog.getColor(
-            current,
-            self,
-            "选择颜色",
-            QColorDialog.ColorDialogOption.ShowAlphaChannel,
-        )
+        color = _select_color(current, self, "选择颜色")
         if color.isValid():
             normalized = _normalize_hex(color.name(QColor.NameFormat.HexArgb))
             self._gradient_editor.set_selected_color(normalized)
@@ -5158,14 +5382,16 @@ class PropertyPanel(QWidget):
         finally:
             self._syncing = was_syncing
 
-    def _choose_split_stop_color(self) -> None:
+    def _choose_split_stop_color(self, *, screen_pick: bool = False) -> None:
+        if screen_pick:
+            self._begin_screen_color_pick(
+                lambda color: self._split_editor.set_selected_color(
+                    _normalize_hex(color.name(QColor.NameFormat.HexArgb))
+                )
+            )
+            return
         current = QColor(self._split_editor.selected_stop[1])
-        color = QColorDialog.getColor(
-            current,
-            self,
-            "选择分段颜色",
-            QColorDialog.ColorDialogOption.ShowAlphaChannel,
-        )
+        color = _select_color(current, self, "选择分段颜色")
         if color.isValid():
             normalized = _normalize_hex(color.name(QColor.NameFormat.HexArgb))
             self._split_editor.set_selected_color(normalized)

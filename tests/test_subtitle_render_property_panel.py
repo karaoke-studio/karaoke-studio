@@ -8,8 +8,8 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QEvent, QPoint, QPointF, QSize, Qt  # noqa: E402
-from PyQt6.QtGui import QMouseEvent, QWheelEvent  # noqa: E402
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QSize, Qt  # noqa: E402
+from PyQt6.QtGui import QColor, QImage, QMouseEvent, QWheelEvent  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -43,6 +43,7 @@ from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
     _StylePresetDetailsDialog,
     ColorButton,
     PropertyPanel,
+    ScreenColorPicker,
     StylePresetManagerDialog,
 )
 from krok_helper.subtitle_render.models import (  # noqa: E402
@@ -2491,6 +2492,60 @@ def test_color_button_updates_text_and_color(qapp):
     button.set_color("#010203")
     assert button.color == "#010203"
     assert button.text() == "#010203"
+
+
+def test_color_button_shortens_swatch_and_exposes_two_icon_actions(qapp):
+    button = ColorButton("#4093e9")
+    button.resize(220, 30)
+    button.show()
+    qapp.processEvents()
+
+    dialog_requests: list[bool] = []
+    screen_requests: list[bool] = []
+    button.clicked.connect(lambda: dialog_requests.append(True))
+    button.screenPickRequested.connect(lambda: screen_requests.append(True))
+    button.palette_button.click()
+    button.screen_picker_button.click()
+
+    assert button._swatch.width() < button.width() - 60
+    assert button.palette_button.accessibleName() == "打开颜色选择窗口"
+    assert button.screen_picker_button.accessibleName() == "从屏幕取色"
+    assert dialog_requests == [True]
+    assert screen_requests == [True]
+
+
+def test_direct_screen_picker_maps_virtual_desktop_coordinates(qapp):
+    picker = ScreenColorPicker()
+    image = QImage(2, 2, QImage.Format.Format_ARGB32)
+    image.fill(QColor("#123456"))
+    image.setPixelColor(1, 1, QColor("#ABCDEF"))
+    picker._screens = [(QRect(-10, 5, 20, 20), image)]
+
+    assert picker.cursor().shape() == Qt.CursorShape.CrossCursor
+    assert picker.color_at(QPoint(5, 20)).name().upper() == "#ABCDEF"
+
+    picker.cancel()
+    qapp.processEvents()
+
+
+def test_color_control_screen_action_requests_direct_screen_pick(qapp, monkeypatch):
+    callbacks = []
+
+    def fail_if_dialog_opens(*args, **kwargs):
+        raise AssertionError("direct screen picking must not open QColorDialog")
+
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.property_panel._select_color",
+        fail_if_dialog_opens,
+    )
+    panel = PropertyPanel()
+    monkeypatch.setattr(panel, "_begin_screen_color_pick", callbacks.append)
+
+    panel._paint_solid_btn.screen_picker_button.click()
+    assert len(callbacks) == 1
+
+    callbacks[0](QColor("#123456"))
+    assert panel._paint_solid_btn.color == "#123456"
 
 
 def test_main_window_style_panel_updates_preview(qapp, monkeypatch):
