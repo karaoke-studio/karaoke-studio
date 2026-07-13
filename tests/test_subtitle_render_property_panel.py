@@ -460,6 +460,42 @@ def test_property_panel_sections_are_collapsible(qapp):
     assert header.arrowType() == Qt.ArrowType.DownArrow
 
 
+def test_effects_page_uses_compact_responsive_groups(qapp):
+    panel = PropertyPanel()
+    panel.resize(1050, 820)
+    panel.show()
+    panel.setCurrentIndex(3)
+    qapp.processEvents()
+
+    assert not panel._lit_section.header.isChecked()
+    assert not panel._lit_section.is_expanded()
+    assert panel._lit_section.header.arrowType() == Qt.ArrowType.RightArrow
+
+    panel._lit_section.set_expanded(True)
+    qapp.processEvents()
+    assert panel._animation_grid._columns == 2
+    assert panel._entry_anim_combo.parentWidget() is panel._entry_animation_row
+    assert panel._entry_lead_spin.parentWidget() is panel._entry_animation_row
+    assert panel._exit_anim_combo.parentWidget() is panel._exit_animation_row
+    assert panel._exit_fade_spin.parentWidget() is panel._exit_animation_row
+    assert panel._lit_group_grids["通用"]._columns >= 4
+    assert panel._lit_group_grids["音量柱 · 布局"]._columns == 4
+
+    subgroup_titles = [
+        label.text()
+        for label in panel.widget(3).findChildren(QLabel, "SubtitlePropertySubheading")
+    ]
+    assert "音量柱 · 尺寸" not in subgroup_titles
+    assert "音量柱 · 位置" not in subgroup_titles
+    assert "形状灯 · 尺寸" not in subgroup_titles
+    assert "形状灯 · 位置" not in subgroup_titles
+    assert "音量柱 · 布局" in subgroup_titles
+    assert "形状灯 · 布局" in subgroup_titles
+
+    panel.resize(360, 820)
+    qapp.processEvents()
+    assert panel._animation_grid._columns == 1
+
 def test_property_panel_font_and_color_sections_are_side_by_side(qapp):
     panel = PropertyPanel()
     panel.resize(900, 800)

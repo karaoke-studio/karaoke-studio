@@ -3422,6 +3422,7 @@ class PropertyPanel(QWidget):
 
     def _make_lit_section(self) -> QFrame:
         section, layout = _section("指示灯", switch=True)
+        self._lit_section = section
 
         self._lit_enabled_switch = section.header_switch
         self._lit_enabled_switch.toggled.connect(
@@ -3434,23 +3435,32 @@ class PropertyPanel(QWidget):
         self._lit_volume_groups: list[QWidget] = []
         self._lit_shape_groups: list[QWidget] = []
 
-        def group(title: str, category: str | None, *, collapsed: bool = False):
+        self._lit_group_grids: dict[str, _ResponsiveFieldGrid] = {}
+
+        def group(
+            title: str,
+            category: str | None,
+            *,
+            collapsed: bool = False,
+            min_column_width: int = 135,
+            max_columns: int = 4,
+        ):
             box = _SubGroup(title, collapsed=collapsed, parent=section)
-            grid = box.grid
             layout.addWidget(box)
             if category == "volume":
                 self._lit_volume_groups.append(box)
             elif category == "shape":
                 self._lit_shape_groups.append(box)
-            pos = [0, 0]
+            fields = _ResponsiveFieldGrid(
+                box,
+                min_column_width=min_column_width,
+                max_columns=max_columns,
+            )
+            box.grid.addWidget(fields, 0, 0, 1, 2)
+            self._lit_group_grids[title] = fields
 
             def add(label: str | None, control: QWidget) -> None:
-                widget = _field(label, control) if label is not None else control
-                grid.addWidget(widget, pos[0], pos[1])
-                pos[1] += 1
-                if pos[1] >= 2:
-                    pos[0] += 1
-                    pos[1] = 0
+                fields.add_widget(_field(label, control) if label is not None else control)
 
             return add
 
@@ -3467,10 +3477,9 @@ class PropertyPanel(QWidget):
         self._lit_style_combo.currentIndexChanged.connect(
             lambda _index: self._update_style(lit_style=self._lit_style_combo.currentData())
         )
-        layout.addWidget(_field("样式", self._lit_style_combo))
-
         # ---- 通用（两种样式共用） ----------------------------------------------
-        add = group("通用", None)
+        add = group("通用", None, min_column_width=130, max_columns=5)
+        add("样式", self._lit_style_combo)
         self._lit_duration_spin = _spin(0, 60_000, suffix=" ms")
         self._lit_duration_spin.valueChanged.connect(
             lambda value: self._update_style(signals_duration_ms=value)
@@ -3496,7 +3505,7 @@ class PropertyPanel(QWidget):
         add("透明度", self._lit_opacity_spin)
 
         # ---- 音量柱 · 尺寸 ------------------------------------------------------
-        add = group("音量柱 · 尺寸", "volume")
+        add = group("音量柱 · 布局", "volume", max_columns=4)
         self._volume_size_spin = _spin(4, 240, suffix=" px")
         self._volume_size_spin.valueChanged.connect(
             lambda value: self._update_style(volume_size=value)
@@ -3536,8 +3545,7 @@ class PropertyPanel(QWidget):
         )
         add("柱条对齐", self._volume_align_combo)
 
-        # ---- 音量柱 · 位置 ------------------------------------------------------
-        add = group("音量柱 · 位置", "volume", collapsed=True)
+        # 位置与尺寸同属几何域，放在同一个响应式布局组中。
         self._volume_x_spin = _spin(-4000, 4000)
         self._volume_x_spin.valueChanged.connect(
             lambda value: self._update_style(volume_offset_x=value)
@@ -3551,7 +3559,7 @@ class PropertyPanel(QWidget):
         add("Y", self._volume_y_spin)
 
         # ---- 音量柱 · 闪烁 ------------------------------------------------------
-        add = group("音量柱 · 闪烁", "volume", collapsed=True)
+        add = group("音量柱 · 动画", "volume", collapsed=True, max_columns=3)
         self._volume_flash_times_spin = _spin(1, 20)
         self._volume_flash_times_spin.valueChanged.connect(
             lambda value: self._update_style(volume_flash_times=value)
@@ -3571,7 +3579,7 @@ class PropertyPanel(QWidget):
         add("覆盖过渡", self._volume_transition_ratio_spin)
 
         # ---- 音量柱 · 颜色 ------------------------------------------------------
-        add = group("音量柱 · 颜色", "volume")
+        add = group("音量柱 · 颜色", "volume", max_columns=4)
         self._volume_fill_btn = self._color_button("volume_fill_color", self._style.volume_fill_color)
         self._volume_stroke_btn = self._color_button(
             "volume_stroke_color", self._style.volume_stroke_color
@@ -3588,7 +3596,7 @@ class PropertyPanel(QWidget):
         add("覆盖描边色", self._volume_overlay_stroke_btn)
 
         # ---- 形状灯 · 尺寸 ------------------------------------------------------
-        add = group("形状灯 · 尺寸", "shape")
+        add = group("形状灯 · 布局", "shape", max_columns=5)
         self._lit_number_spin = _spin(1, 8)
         self._lit_number_spin.valueChanged.connect(
             lambda value: self._update_style(lit_number=value)
@@ -3607,8 +3615,7 @@ class PropertyPanel(QWidget):
         )
         add("间距", self._lit_tracking_spin)
 
-        # ---- 形状灯 · 位置 ------------------------------------------------------
-        add = group("形状灯 · 位置", "shape", collapsed=True)
+        # 位置与数量/大小/间距合并，避免两个短字段单独占一整小节。
         self._lit_x_spin = _spin(-4000, 4000)
         self._lit_x_spin.valueChanged.connect(
             lambda value: self._update_style(lit_offset_x=value)
@@ -3622,7 +3629,7 @@ class PropertyPanel(QWidget):
         add("Y", self._lit_y_spin)
 
         # ---- 形状灯 · 外观 ------------------------------------------------------
-        add = group("形状灯 · 外观", "shape")
+        add = group("形状灯 · 外观", "shape", max_columns=5)
         self._lit_fill_btn = self._color_button("lit_fill_color", self._style.lit_fill_color)
         add("填充颜色", self._lit_fill_btn)
 
@@ -3641,14 +3648,14 @@ class PropertyPanel(QWidget):
         )
         add("描边柔化", self._lit_stroke_soften_spin)
 
-        self._lit_shadow_check = CheckBox("阴影", section)
+        self._lit_shadow_check = CheckBox("启用", section)
         self._lit_shadow_check.toggled.connect(
             lambda checked: self._update_style(lit_shadow=checked)
         )
-        add(None, self._lit_shadow_check)
+        add("阴影", self._lit_shadow_check)
 
         # ---- 形状灯 · 转场 ------------------------------------------------------
-        add = group("形状灯 · 转场", "shape", collapsed=True)
+        add = group("形状灯 · 转场", "shape", collapsed=True, max_columns=4)
         self._lit_transition_mode_combo = _WheelFocusedComboBox(section)
         _compact_control(self._lit_transition_mode_combo)
         for label, value in [("无", "none"), ("淡入淡出", "fade"), ("滑动", "slide")]:
@@ -3679,6 +3686,7 @@ class PropertyPanel(QWidget):
         add("距离", self._lit_transition_distance_spin)
 
         self._sync_lit_style_visibility()
+        section.set_expanded(False)
         return section
 
     def _sync_lit_style_visibility(self) -> None:
@@ -3694,11 +3702,9 @@ class PropertyPanel(QWidget):
     def _make_animation_section(self) -> QFrame:
         section, layout = _section("入退场动画")
 
-        grid = QWidget(section)
-        grid_layout = QGridLayout(grid)
-        grid_layout.setContentsMargins(0, 0, 0, 0)
-        grid_layout.setHorizontalSpacing(8)
-        grid_layout.setVerticalSpacing(8)
+        self._animation_grid = _ResponsiveFieldGrid(
+            section, min_column_width=260, max_columns=2
+        )
 
         self._entry_anim_combo = _WheelFocusedComboBox(section)
         _compact_control(self._entry_anim_combo)
@@ -3717,13 +3723,18 @@ class PropertyPanel(QWidget):
                 entry_anim=self._entry_anim_combo.currentData()
             )
         )
-        grid_layout.addWidget(_field("入场", self._entry_anim_combo), 0, 0)
-
         self._entry_lead_spin = _spin(0, 3000, suffix=" ms")
         self._entry_lead_spin.valueChanged.connect(
             lambda value: self._update_style(entry_lead_ms=value)
         )
-        grid_layout.addWidget(_field("入场时长", self._entry_lead_spin), 0, 1)
+        self._entry_animation_row = QWidget(section)
+        entry_row_layout = QHBoxLayout(self._entry_animation_row)
+        entry_row_layout.setContentsMargins(0, 0, 0, 0)
+        entry_row_layout.setSpacing(6)
+        entry_row_layout.addWidget(self._entry_anim_combo, 2)
+        self._entry_lead_spin.setToolTip("入场动画时长")
+        entry_row_layout.addWidget(self._entry_lead_spin, 1)
+        self._animation_grid.add_field("入场动画 / 时长", self._entry_animation_row)
 
         self._exit_anim_combo = _WheelFocusedComboBox(section)
         _compact_control(self._exit_anim_combo)
@@ -3742,17 +3753,20 @@ class PropertyPanel(QWidget):
                 exit_anim=self._exit_anim_combo.currentData()
             )
         )
-        grid_layout.addWidget(_field("退场", self._exit_anim_combo), 1, 0)
-
         self._exit_fade_spin = _spin(0, 3000, suffix=" ms")
         self._exit_fade_spin.valueChanged.connect(
             lambda value: self._update_style(exit_fade_ms=value)
         )
-        grid_layout.addWidget(_field("退场时长", self._exit_fade_spin), 1, 1)
+        self._exit_animation_row = QWidget(section)
+        exit_row_layout = QHBoxLayout(self._exit_animation_row)
+        exit_row_layout.setContentsMargins(0, 0, 0, 0)
+        exit_row_layout.setSpacing(6)
+        exit_row_layout.addWidget(self._exit_anim_combo, 2)
+        self._exit_fade_spin.setToolTip("退场动画时长")
+        exit_row_layout.addWidget(self._exit_fade_spin, 1)
+        self._animation_grid.add_field("退场动画 / 时长", self._exit_animation_row)
 
-        grid_layout.setColumnStretch(0, 1)
-        grid_layout.setColumnStretch(1, 1)
-        layout.addWidget(grid)
+        layout.addWidget(self._animation_grid)
         return section
 
     def _make_viewport_section(self) -> QFrame:
