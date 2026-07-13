@@ -392,18 +392,20 @@ def _hex_from_dxcolor(value: object, fallback: str) -> str:
     if not color:
         return fallback
 
-    def channel(key: str) -> int:
+    def channel(key: str, default: float = 0.0) -> int:
         try:
-            number = float(color.get(key, 0.0))
+            number = float(color.get(key, default))
         except (TypeError, ValueError):
-            number = 0.0
+            number = default
         return max(0, min(255, round(number * 255)))
 
-    return "#%02X%02X%02X" % (channel("R"), channel("G"), channel("B"))
+    alpha = channel("A", 1.0)
+    rgb = "%02X%02X%02X" % (channel("R"), channel("G"), channel("B"))
+    return f"#{alpha:02X}{rgb}" if alpha < 255 else f"#{rgb}"
 
 
 def _hex_from_colorbind(value: object, fallback: str = "#FFFFFF") -> str:
-    """``ColorBindModel``（含 ``DxColor`` + ``Web16``）→ ``#RRGGBB``。"""
+    """``ColorBindModel`` → ``#RRGGBB`` or ``#AARRGGBB``."""
     bind = _dict(value)
     if "DxColor" in bind:
         return _hex_from_dxcolor(bind.get("DxColor"), fallback)

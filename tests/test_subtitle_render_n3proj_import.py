@@ -21,8 +21,8 @@ def _size(px: int, reference: int = 1080) -> dict:
     return {"Size": px, "Reference": reference, "Ratio": px / reference}
 
 
-def _dxcolor(r: float, g: float, b: float) -> dict:
-    return {"R": r, "G": g, "B": b, "A": 1}
+def _dxcolor(r: float, g: float, b: float, a: float = 1) -> dict:
+    return {"R": r, "G": g, "B": b, "A": a}
 
 
 def _solid_brush(name: str, hex6: str, r: float, g: float, b: float) -> dict:
@@ -358,6 +358,42 @@ def test_import_custom_scheme_with_gradient(imported):
     assert fill.mode == "gradient_vertical"
     assert fill.gradient_stops[0] == (0, "#FFFFFF")
     assert fill.gradient_stops[-1] == (100, "#0000FF")
+
+
+def test_import_preserves_dxcolor_alpha_for_all_font_brush_layers(tmp_path):
+    payload = _project_payload(tmp_path)
+    brushes = payload["LyricsFonts"][0]["BrushInfos"]
+    for brush, alpha in zip(
+        brushes,
+        (0.5, 0.25, 0.0, 0.75, 0.6, 0.4, 0.2, 0.1),
+    ):
+        brush["SolidColor"]["DxColor"]["A"] = alpha
+
+    gradient = payload["LyricsFonts"][1]["BrushInfos"][0]
+    gradient["GradientStops"][0]["Color"]["A"] = 0.5
+    gradient["GradientStops"][1]["Color"]["A"] = 0.25
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+    colors = style.karaoke_colors
+
+    assert colors.after.text.color == "#80FF0000"
+    assert colors.after.stroke.color == "#40FFFFFF"
+    assert colors.after.stroke2.color == "#00000000"
+    assert colors.after.shadow.color == "#BF000000"
+    assert colors.before.text.color == "#99FFFFFF"
+    assert colors.before.stroke.color == "#66000000"
+    assert colors.before.stroke2.color == "#33FFFFFF"
+    assert colors.before.shadow.color == "#1A26386A"
+    assert style.fill_color == "#80FF0000"
+    assert style.stroke_color == "#40FFFFFF"
+    assert style.shadow_color == "#BF000000"
+
+    gradient_fill = style.custom_style_schemes["青配色"].karaoke_colors.after.text
+    assert gradient_fill.gradient_stops == [
+        (0, "#80FFFFFF"),
+        (100, "#400000FF"),
+    ]
 
 
 def test_import_blur_concentration_is_scheme_shared_and_reaches_title(tmp_path):

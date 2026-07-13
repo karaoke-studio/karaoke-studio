@@ -39,6 +39,7 @@ from krok_helper.subtitle_render.frontend.fluent_dialogs import (  # noqa: E402
     FluentMessageDialog,
 )
 from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
+    _ColorDialog,
     _SchematicBoard,
     _StylePresetDetailsDialog,
     ColorButton,
@@ -1098,6 +1099,24 @@ def test_property_panel_color_controls_preserve_alpha(qapp):
     assert emitted[-1].fill_color == "#80123ABC"
     assert emitted[-1].karaoke_colors.after.text.color == "#80123ABC"
     assert panel._paint_solid_btn.color == "#80123ABC"
+
+
+def test_color_dialog_alpha_slider_is_visible_and_updates_color(qapp):
+    dialog = _ColorDialog(QColor("#804093E9"))
+    dialog.show()
+    qapp.processEvents()
+
+    slider = dialog._alpha_slider
+    assert slider.isVisible()
+    assert slider.alpha == 128
+    assert slider.geometry().height() >= 100
+
+    slider.alphaChanged.emit(64)
+    assert dialog.currentColor().name(QColor.NameFormat.HexArgb).upper() == "#404093E9"
+
+    dialog.setCurrentColor(QColor("#20ABCDEF"))
+    assert slider.alpha == 32
+    dialog.close()
 
 
 def test_property_panel_fill_modes_use_compact_svg_icon_buttons(qapp):

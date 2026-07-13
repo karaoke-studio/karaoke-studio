@@ -668,12 +668,196 @@ class ScreenColorPicker(QWidget):
         self.deleteLater()
 
 
+class _AlphaSlider(QWidget):
+    """Vertical checkerboard slider for editing a QColor alpha channel."""
+
+    alphaChanged = Signal(int)
+
+    def __init__(self, color: QColor, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._color = QColor(color)
+        self._alpha = color.alpha()
+        self.setObjectName("ColorAlphaSlider")
+        self.setFixedWidth(42)
+        self.setMinimumHeight(80)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setAccessibleName("透明度")
+        self._update_tooltip()
+
+    @property
+    def alpha(self) -> int:
+        return self._alpha
+
+    def set_color(self, color: QColor) -> None:
+        if not color.isValid():
+            return
+        changed = color.rgba() != self._color.rgba()
+        self._color = QColor(color)
+        self._alpha = color.alpha()
+        self._update_tooltip()
+        if changed:
+            self.update()
+
+    def _set_alpha(self, alpha: int, *, emit: bool) -> None:
+        alpha = max(0, min(255, int(alpha)))
+        if alpha == self._alpha:
+            return
+        self._alpha = alpha
+        self._color.setAlpha(alpha)
+        self._update_tooltip()
+        self.update()
+        if emit:
+            self.alphaChanged.emit(alpha)
+
+    def _set_alpha_from_y(self, y: float) -> None:
+        groove = self._groove_rect()
+        ratio = 1.0 - (y - groove.top()) / max(groove.height() - 1, 1)
+        self._set_alpha(round(max(0.0, min(1.0, ratio)) * 255), emit=True)
+
+    def _groove_rect(self) -> QRect:
+        return QRect(9, 4, max(self.width() - 18, 1), max(self.height() - 8, 1))
+
+    def _update_tooltip(self) -> None:
+        percent = round(self._alpha * 100 / 255)
+        self.setToolTip(f"透明度：{percent}%（Alpha {self._alpha}）")
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._set_alpha_from_y(event.position().y())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802
+        if event.buttons() & Qt.MouseButton.LeftButton:
+            self._set_alpha_from_y(event.position().y())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        steps = {
+            Qt.Key.Key_Up: 1,
+            Qt.Key.Key_Right: 1,
+            Qt.Key.Key_Down: -1,
+            Qt.Key.Key_Left: -1,
+            Qt.Key.Key_PageUp: 16,
+            Qt.Key.Key_PageDown: -16,
+        }
+        step = steps.get(event.key())
+        if step is not None:
+            self._set_alpha(self._alpha + step, emit=True)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def paintEvent(self, event) -> None:  # noqa: N802, ARG002
+        painter = QPainter(self)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+            groove = self._groove_rect()
+            tile = 6
+            light = QColor("#FFFFFF")
+            dark = QColor("#C8CDD5")
+            for y in range(groove.top(), groove.bottom() + 1, tile):
+                for x in range(groove.left(), groove.right() + 1, tile):
+                    color = light if ((x // tile) + (y // tile)) % 2 == 0 else dark
+                    painter.fillRect(
+                        QRect(
+                            x,
+                            y,
+                            min(tile, groove.right() - x + 1),
+                            min(tile, groove.bottom() - y + 1),
+                        ),
+                        color,
+                    )
+
+            opaque = QColor(self._color)
+            opaque.setAlpha(255)
+            transparent = QColor(opaque)
+            transparent.setAlpha(0)
+            gradient = QLinearGradient(
+                float(groove.left()),
+                float(groove.top()),
+                float(groove.left()),
+                float(groove.bottom()),
+            )
+            gradient.setColorAt(0.0, opaque)
+            gradient.setColorAt(1.0, transparent)
+            painter.fillRect(groove, gradient)
+            painter.setPen(QPen(QColor(palette().input_border), 1))
+            painter.drawRect(groove.adjusted(0, 0, -1, -1))
+
+            handle_y = groove.top() + round(
+                (255 - self._alpha) * max(groove.height() - 1, 1) / 255
+            )
+            painter.setPen(QPen(QColor("#FFFFFF"), 3))
+            painter.drawLine(3, handle_y, self.width() - 4, handle_y)
+            painter.setPen(QPen(QColor("#111827"), 1))
+            painter.drawLine(3, handle_y, self.width() - 4, handle_y)
+        finally:
+            painter.end()
+
+
+class _ColorDialog(QColorDialog):
+    """Qt color dialog with a visible alpha slider beside the hue strip."""
+
+    def __init__(
+        self, current: QColor, parent: Optional[QWidget] = None
+    ) -> None:
+        super().__init__(current, parent)
+        self.setOption(QColorDialog.ColorDialogOption.ShowAlphaChannel, True)
+        self.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog, True)
+        self.setCurrentColor(current)
+        self._alpha_slider = _AlphaSlider(self.currentColor(), self)
+        self._alpha_slider.alphaChanged.connect(self._set_current_alpha)
+        self.currentColorChanged.connect(self._alpha_slider.set_color)
+
+    def _set_current_alpha(self, alpha: int) -> None:
+        color = self.currentColor()
+        if color.alpha() == alpha:
+            return
+        color.setAlpha(alpha)
+        self.setCurrentColor(color)
+
+    def _position_alpha_slider(self) -> None:
+        candidates = [
+            child
+            for child in self.children()
+            if isinstance(child, QWidget)
+            and child is not self._alpha_slider
+            and child.width() <= 40
+            and child.height() >= 100
+        ]
+        if not candidates:
+            self._alpha_slider.hide()
+            return
+        hue_picker = max(candidates, key=lambda child: child.height())
+        geometry = hue_picker.geometry()
+        self._alpha_slider.setGeometry(
+            geometry.right() + 10,
+            geometry.top(),
+            self._alpha_slider.width(),
+            geometry.height(),
+        )
+        self._alpha_slider.show()
+        self._alpha_slider.raise_()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._position_alpha_slider()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if hasattr(self, "_alpha_slider"):
+            self._position_alpha_slider()
+
+
 def _select_color(current: QColor, parent: QWidget, title: str) -> QColor:
     """Open the regular color dialog used by the palette action."""
-    dialog = QColorDialog(current, parent)
+    dialog = _ColorDialog(current, parent)
     dialog.setWindowTitle(title)
-    dialog.setOption(QColorDialog.ColorDialogOption.ShowAlphaChannel, True)
-    dialog.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog, True)
     if dialog.exec() != QDialog.DialogCode.Accepted:
         return QColor()
     return dialog.selectedColor()
