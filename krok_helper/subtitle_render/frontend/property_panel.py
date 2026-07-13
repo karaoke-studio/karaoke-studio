@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
+import math
 from pathlib import Path
 from typing import Any, Optional
 
@@ -65,6 +66,7 @@ from qfluentwidgets import (
     CaptionLabel,
     CheckBox,
     ComboBox as FluentComboBox,
+    DoubleSpinBox as FluentDoubleSpinBox,
     EditableComboBox as FluentEditableComboBox,
     FluentIcon as FIF,
     InfoBar,
@@ -1331,7 +1333,7 @@ class GradientStopsEditor(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
-        self._stops: list[tuple[int, str]] = [(0, "#FFFFFF"), (100, "#FF5A6F")]
+        self._stops: list[tuple[float, str]] = [(0, "#FFFFFF"), (100, "#FF5A6F")]
         self._selected = 0
         self._orientation = "horizontal"
         self._hard_edges = False
@@ -1353,7 +1355,7 @@ class GradientStopsEditor(QWidget):
         return self._selected
 
     @property
-    def selected_stop(self) -> tuple[int, str]:
+    def selected_stop(self) -> tuple[float, str]:
         return self._stops[self._selected]
 
     def set_orientation(self, mode: str) -> None:
@@ -1371,7 +1373,7 @@ class GradientStopsEditor(QWidget):
         self.updateGeometry()
         self.update()
 
-    def set_stops(self, stops: list[tuple[int, str]]) -> None:
+    def set_stops(self, stops: list[tuple[float, str]]) -> None:
         selected_position = self._stops[self._selected][0] if self._stops else 0
         self._stops = _normalize_gradient_stops(stops)
         self._selected = min(
@@ -1390,11 +1392,11 @@ class GradientStopsEditor(QWidget):
             self._stops[self._selected - 1] = (previous_position, normalized)
         self._emit_stops_changed()
 
-    def set_selected_position(self, position: int) -> None:
+    def set_selected_position(self, position: float) -> None:
         self._move_selected_stop(position)
 
-    def add_stop(self, position: int, color: Optional[str] = None) -> None:
-        pos = max(0, min(100, int(position)))
+    def add_stop(self, position: float, color: Optional[str] = None) -> None:
+        pos = _normalized_stop_position(position)
         color = _normalize_hex(color or self._interpolated_color(pos))
         self._stops.append((pos, color))
         self._stops = _normalize_gradient_stops(self._stops)
@@ -1517,7 +1519,7 @@ class GradientStopsEditor(QWidget):
             return QRectF(8, 40, max(self.width() - 16, 1), 14)
         return QRectF(72, 8, 14, max(self.height() - 16, 1))
 
-    def _marker_center(self, position: int) -> QPointF:
+    def _marker_center(self, position: float) -> QPointF:
         pos = max(0.0, min(1.0, position / 100.0))
         if self._orientation == "horizontal":
             rail = self._rail_rect()
@@ -1525,16 +1527,16 @@ class GradientStopsEditor(QWidget):
         rail = self._rail_rect()
         return QPointF(rail.center().x(), rail.top() + rail.height() * pos)
 
-    def _position_from_point(self, point: QPointF) -> int:
+    def _position_from_point(self, point: QPointF) -> float:
         if self._orientation == "horizontal":
             rect = self._bar_rect()
             ratio = (point.x() - rect.left()) / max(rect.width(), 1.0)
         else:
             rect = self._bar_rect()
             ratio = (point.y() - rect.top()) / max(rect.height(), 1.0)
-        return max(0, min(100, int(round(ratio * 100))))
+        return _normalized_stop_position(round(ratio * 100, 3))
 
-    def _nearest_stop_index(self, position: int) -> Optional[int]:
+    def _nearest_stop_index(self, position: float) -> Optional[int]:
         if not self._stops:
             return None
         return min(range(len(self._stops)), key=lambda index: abs(self._stops[index][0] - position))
@@ -1557,25 +1559,34 @@ class GradientStopsEditor(QWidget):
         distance_sq = (center.x() - point.x()) ** 2 + (center.y() - point.y()) ** 2
         return nearest if distance_sq <= 16**2 else None
 
-    def _index_for_position(self, position: int) -> int:
+    def _index_for_position(self, position: float) -> int:
         return min(range(len(self._stops)), key=lambda index: abs(self._stops[index][0] - position))
 
-    def _move_selected_stop(self, position: int) -> None:
+    def _move_selected_stop(self, position: float) -> None:
         old_position, color = self._stops[self._selected]
-        pos = max(0, min(100, int(position)))
+        pos = _normalized_stop_position(position)
         if old_position in {0, 100}:
             if pos == old_position:
                 return
             self._stops.append((pos, color))
+            moved_index = len(self._stops) - 1
         else:
             self._stops[self._selected] = (pos, color)
+            moved_index = self._selected
+        # The persisted model retains equal-position stops, but an explicit UI
+        # drag onto an existing marker means "merge" (the moved marker wins).
+        self._stops = [
+            stop
+            for index, stop in enumerate(self._stops)
+            if stop[0] != pos or index == moved_index
+        ]
         self._stops = _normalize_gradient_stops(self._stops)
         self._selected = self._index_for_position(pos)
         self._emit_stops_changed()
 
-    def _interpolated_color(self, position: int) -> str:
+    def _interpolated_color(self, position: float) -> str:
         stops = _normalize_gradient_stops(self._stops)
-        pos = max(0, min(100, int(position)))
+        pos = _normalized_stop_position(position)
         left = stops[0]
         right = stops[-1]
         for index, stop in enumerate(stops):
@@ -1588,7 +1599,7 @@ class GradientStopsEditor(QWidget):
                 right = stop
         if self._hard_edges or left[0] == right[0]:
             return left[1]
-        ratio = (pos - left[0]) / max(right[0] - left[0], 1)
+        ratio = (pos - left[0]) / max(right[0] - left[0], 1e-9)
         a = QColor(left[1])
         b = QColor(right[1])
         return QColor(
@@ -1638,6 +1649,49 @@ class _WheelFocusedSpinBox(FluentSpinBox):
         self.setMinimumWidth(max(text_width + text_chrome, 1))
 
     def wheelEvent(self, event):  # noqa: N802 - Qt API
+        if not (self.hasFocus() or self.lineEdit().hasFocus()):
+            event.ignore()
+            return
+        delta = event.angleDelta().y()
+        if event.inverted():
+            delta = -delta
+        if delta:
+            steps = int(delta / 120) or (1 if delta > 0 else -1)
+            self.stepBy(steps)
+            event.accept()
+            return
+        super().wheelEvent(event)
+
+
+class _WheelFocusedDoubleSpinBox(FluentDoubleSpinBox):
+    """Floating-point counterpart used for exact gradient stop positions."""
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setSymbolVisible(False)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.lineEdit().setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.lineEdit().textChanged.connect(self._sync_text_minimum)
+        self.valueChanged.connect(
+            lambda _value: QTimer.singleShot(0, self._sync_text_minimum)
+        )
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._sync_text_minimum()
+
+    def _sync_text_minimum(self) -> None:
+        style = self.style()
+        text_width = self.lineEdit().fontMetrics().horizontalAdvance(
+            self.lineEdit().text()
+        )
+        text_chrome = (
+            2 * style.pixelMetric(QStyle.PixelMetric.PM_LayoutLeftMargin)
+            + 2 * style.pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin)
+        )
+        self.setMinimumWidth(max(text_width + text_chrome, 1))
+
+    def wheelEvent(self, event):  # noqa: N802
         if not (self.hasFocus() or self.lineEdit().hasFocus()):
             event.ignore()
             return
@@ -3849,7 +3903,9 @@ class PropertyPanel(QWidget):
         self._gradient_stop_color_btn.screenPickRequested.connect(
             lambda: self._choose_gradient_stop_color(screen_pick=True)
         )
-        self._gradient_stop_position_spin = _spin(0, 100, suffix=" %")
+        self._gradient_stop_position_spin = _double_spin(
+            0, 100, decimals=3, suffix=" %"
+        )
         self._gradient_stop_position_spin.valueChanged.connect(
             self._set_gradient_stop_position
         )
@@ -3906,7 +3962,9 @@ class PropertyPanel(QWidget):
         self._split_stop_color_btn.screenPickRequested.connect(
             lambda: self._choose_split_stop_color(screen_pick=True)
         )
-        self._split_stop_position_spin = _spin(0, 100, suffix=" %")
+        self._split_stop_position_spin = _double_spin(
+            0, 100, decimals=3, suffix=" %"
+        )
         self._split_stop_position_spin.valueChanged.connect(
             self._set_split_stop_position
         )
@@ -5630,7 +5688,7 @@ class PropertyPanel(QWidget):
         else:
             self._update_style(karaoke_colors=colors)
 
-    def _update_gradient_stops(self, stops: list[tuple[int, str]]) -> None:
+    def _update_gradient_stops(self, stops: list[tuple[float, str]]) -> None:
         if self._syncing:
             return
         normalized = _normalize_gradient_stops(stops)
@@ -5671,12 +5729,12 @@ class PropertyPanel(QWidget):
             normalized = _normalize_hex(color.name(QColor.NameFormat.HexArgb))
             self._gradient_editor.set_selected_color(normalized)
 
-    def _set_gradient_stop_position(self, value: int) -> None:
+    def _set_gradient_stop_position(self, value: float) -> None:
         if self._syncing:
             return
         self._gradient_editor.set_selected_position(value)
 
-    def _update_split_stops(self, stops: list[tuple[int, str]]) -> None:
+    def _update_split_stops(self, stops: list[tuple[float, str]]) -> None:
         if self._syncing:
             return
         normalized = _normalize_gradient_stops(stops)
@@ -5719,7 +5777,7 @@ class PropertyPanel(QWidget):
             normalized = _normalize_hex(color.name(QColor.NameFormat.HexArgb))
             self._split_editor.set_selected_color(normalized)
 
-    def _set_split_stop_position(self, value: int) -> None:
+    def _set_split_stop_position(self, value: float) -> None:
         if self._syncing:
             return
         self._split_editor.set_selected_position(value)
@@ -6326,27 +6384,43 @@ def _fill_stack_index(mode: str) -> int:
     return 0
 
 
-def _normalize_gradient_stops(stops: list[tuple[int, str]]) -> list[tuple[int, str]]:
-    normalized: dict[int, str] = {}
+def _normalized_stop_position(value: object) -> float:
+    try:
+        position = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        position = 0.0
+    if not math.isfinite(position):
+        position = 0.0
+    position = round(max(0.0, min(100.0, position)), 6)
+    return int(position) if position.is_integer() else position
+
+
+def _normalize_gradient_stops(
+    stops: list[tuple[float, str]],
+) -> list[tuple[float, str]]:
+    normalized: list[tuple[float, str]] = []
     for position, color in stops:
-        pos = max(0, min(100, int(position)))
-        normalized[pos] = _normalize_hex(str(color), "#FFFFFF")
-    if 0 not in normalized:
-        first = next(iter(normalized.values()), "#FFFFFF")
-        normalized[0] = first
-    if 100 not in normalized:
-        last = next(reversed(normalized.values()), normalized[0])
-        normalized[100] = last
-    return sorted(normalized.items())
+        normalized.append(
+            (_normalized_stop_position(position), _normalize_hex(str(color), "#FFFFFF"))
+        )
+    normalized.sort(key=lambda item: item[0])
+    if not normalized:
+        return [(0, "#FFFFFF"), (100, "#FFFFFF")]
+    positions = {position for position, _color in normalized}
+    if 0 not in positions:
+        normalized.insert(0, (0, normalized[0][1]))
+    if 100 not in positions:
+        normalized.append((100, normalized[-1][1]))
+    return normalized
 
 
-def _gradient_stops(fill: PaintFill) -> list[tuple[int, str]]:
+def _gradient_stops(fill: PaintFill) -> list[tuple[float, str]]:
     if fill.gradient_stops:
         return _normalize_gradient_stops(fill.gradient_stops)
     return _normalize_gradient_stops([(0, fill.start_color), (100, fill.end_color)])
 
 
-def _split_stops(fill: PaintFill) -> list[tuple[int, str]]:
+def _split_stops(fill: PaintFill) -> list[tuple[float, str]]:
     if fill.split_stops:
         return _normalize_gradient_stops(fill.split_stops)
     return _normalize_gradient_stops(
@@ -6594,6 +6668,24 @@ def _spin(
 ) -> _WheelFocusedSpinBox:
     spin = _WheelFocusedSpinBox()
     spin.setRange(minimum, maximum)
+    spin.setSuffix(suffix)
+    spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+    _compact_control(spin)
+    spin._sync_text_minimum()
+    return spin
+
+
+def _double_spin(
+    minimum: float,
+    maximum: float,
+    *,
+    decimals: int = 2,
+    suffix: str = "",
+) -> _WheelFocusedDoubleSpinBox:
+    spin = _WheelFocusedDoubleSpinBox()
+    spin.setRange(minimum, maximum)
+    spin.setDecimals(decimals)
+    spin.setSingleStep(0.1)
     spin.setSuffix(suffix)
     spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
     _compact_control(spin)

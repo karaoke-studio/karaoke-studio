@@ -18,12 +18,13 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QRectF  # noqa: E402
+from PyQt6.QtCore import QPointF, QRectF  # noqa: E402
 from PyQt6.QtGui import QColor, QFontMetrics, QImage, QPainter, QPainterPath  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 import krok_helper.subtitle_render.engine.painter as subtitle_painter  # noqa: E402
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
+    _HARD_BAND_BRUSH_CACHE,
     _IMAGE_BRUSH_CACHE,
     _IMAGE_FILL_CACHE,
     _FillSegment,
@@ -49,6 +50,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _fill_extent_end,
     _run_fill_complete,
     _layout_vertical_line,
+    _linear_gradient_brush,
     _layout_rubies,
     _layout_line,
     _line_layer_stack,
@@ -1421,8 +1423,8 @@ def test_split_vertical_brush_renders_multiple_hard_color_bands(qapp):
         mode="split_vertical",
         split_stops=[
             (0, "#FFFFFF"),
-            (30, "#FF0000"),
-            (65, "#888888"),
+            (30.0, "#FF0000"),
+            (65.0, "#888888"),
             (100, "#888888"),
         ],
     )
@@ -1432,9 +1434,58 @@ def test_split_vertical_brush_renders_multiple_hard_color_bands(qapp):
     painter.fillRect(QRectF(0, 0, 12, 100), _brush_for_fill(fill, QRectF(0, 0, 12, 100)))
     painter.end()
 
-    assert image.pixelColor(6, 15) == QColor("#FFFFFF")
-    assert image.pixelColor(6, 45) == QColor("#FF0000")
-    assert image.pixelColor(6, 80) == QColor("#888888")
+    assert image.pixelColor(6, 29) == QColor("#FFFFFF")
+    assert image.pixelColor(6, 30) == QColor("#FF0000")
+    assert image.pixelColor(6, 64) == QColor("#FF0000")
+    assert image.pixelColor(6, 65) == QColor("#888888")
+
+
+def test_hard_band_brush_cache_keys_height_and_fractional_stops(qapp):
+    clear_before_layer_cache()
+    fill = PaintFill(
+        mode="split_vertical",
+        split_stops=[
+            (0, "#FFFFFF"),
+            (33.3333, "#FF0000"),
+            (100, "#FF0000"),
+        ],
+    )
+
+    _brush_for_fill(fill, QRectF(0, 0, 10, 120))
+    _brush_for_fill(fill, QRectF(50, 200, 30, 120))
+    assert len(_HARD_BAND_BRUSH_CACHE) == 1
+
+    changed = replace(
+        fill,
+        split_stops=[(0, "#FFFFFF"), (33.3334, "#FF0000"), (100, "#FF0000")],
+    )
+    _brush_for_fill(changed, QRectF(0, 0, 10, 120))
+    _brush_for_fill(fill, QRectF(0, 0, 10, 121))
+    assert len(_HARD_BAND_BRUSH_CACHE) == 3
+
+    clear_before_layer_cache()
+    assert len(_HARD_BAND_BRUSH_CACHE) == 0
+
+
+def test_n3_vertical_gradient_uses_render_target_local_height(qapp):
+    fill = PaintFill(
+        mode="gradient_vertical",
+        gradient_stops=[
+            (0, "#FFFFFF"),
+            (33.3333, "#FF0000"),
+            (100, "#000000"),
+        ],
+    )
+    rect = QRectF(10, 20, 30, 80)
+
+    brush = _linear_gradient_brush(fill, rect, 90)
+    gradient = brush.gradient()
+
+    assert gradient.start() == QPointF(25, 20)
+    assert gradient.finalStop() == QPointF(25, 100)
+    assert [position for position, _color in gradient.stops()] == pytest.approx(
+        [0.0, 0.333333, 1.0]
+    )
 
 
 def test_paint_frame_gradient_stops_change_rendered_frame(qapp):

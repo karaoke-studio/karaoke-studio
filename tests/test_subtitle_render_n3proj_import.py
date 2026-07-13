@@ -360,6 +360,51 @@ def test_import_custom_scheme_with_gradient(imported):
     assert fill.gradient_stops[-1] == (100, "#0000FF")
 
 
+def test_import_preserves_fractional_gradient_stop_positions(tmp_path):
+    payload = _project_payload(tmp_path)
+    brush = payload["LyricsFonts"][0]["BrushInfos"][0]
+    brush["SelectedBrushTypeIndex"] = 1
+    brush["GradientStops"] = [
+        {"Position": 0.0, "Color": _dxcolor(1, 0, 0)},
+        {"Position": 0.333333, "Color": _dxcolor(0, 1, 0)},
+        {"Position": 1.0, "Color": _dxcolor(0, 0, 1)},
+    ]
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+
+    assert style.karaoke_colors.after.text.gradient_stops == [
+        (0, "#FF0000"),
+        (33.3333, "#00FF00"),
+        (100, "#0000FF"),
+    ]
+
+
+def test_import_mille_feuille_uses_exact_fractional_hard_bands(tmp_path):
+    payload = _project_payload(tmp_path)
+    brush = payload["LyricsFonts"][0]["BrushInfos"][0]
+    brush["SelectedBrushTypeIndex"] = 2
+    brush["GradientStops"] = [
+        {"Position": 0.0, "Color": _dxcolor(1, 1, 1)},
+        {"Position": 0.333333, "Color": _dxcolor(1, 0, 0)},
+        {"Position": 0.777777, "Color": _dxcolor(0, 0, 1)},
+        # N3 treats the final source color as a position sentinel only.
+        {"Position": 1.0, "Color": _dxcolor(0, 0, 0)},
+    ]
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+    fill = style.karaoke_colors.after.text
+
+    assert fill.mode == "split_vertical"
+    assert fill.split_stops == [
+        (0, "#FFFFFF"),
+        (33.3333, "#FF0000"),
+        (77.7777, "#0000FF"),
+        (100, "#0000FF"),
+    ]
+
+
 def test_import_preserves_dxcolor_alpha_for_all_font_brush_layers(tmp_path):
     payload = _project_payload(tmp_path)
     brushes = payload["LyricsFonts"][0]["BrushInfos"]

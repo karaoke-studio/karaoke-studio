@@ -13,7 +13,7 @@
 - ``FontFacePage``：``FontInfos`` 固定 6 项 = 歌詞（漢字 / かな / 英数）+
   ルビ（漢字 / かな / 英数）；数值 0 / 空串沿 Fallback 链上溯
   （かな・英数 → 漢字，ルビ漢字 → 歌詞漢字）。
-- ``BrushType``：0 Solid / 1 Gradient（整画面纵向线性渐变）/ 2 MilleFeuille
+- ``BrushType``：0 Solid / 1 Gradient（字符渲染目标内纵向线性渐变）/ 2 MilleFeuille
   （分层硬渐变，N3 通过复制 stop 制造硬边界）/ 3 Bitmap（贴图，相对歌词文件
   所在目录解析，``BitmapScale`` 为百分比）。
 - ``DecorKind``：0 None / 1 Shadow（整行向右下平移 ``DecorSize``）/ 2 Blur
@@ -448,38 +448,41 @@ def _resolve_media(
 # ---------------------------------------------------------------------------
 
 
-def _gradient_stop_list(brush: dict) -> list[tuple[int, str]]:
-    stops: list[tuple[int, str]] = []
+def _gradient_stop_list(brush: dict) -> list[tuple[float, str]]:
+    stops: list[tuple[float, str]] = []
     for stop in _list(brush.get("GradientStops")):
         stop = _dict(stop)
         try:
             position = float(stop.get("Position", 0.0))
         except (TypeError, ValueError):
             position = 0.0
-        pct = max(0, min(100, round(position * 100)))
+        pct = round(max(0.0, min(100.0, position * 100.0)), 9)
+        if pct.is_integer():
+            pct = int(pct)
         stops.append((pct, _hex_from_dxcolor(stop.get("Color"), "#FFFFFF")))
     stops.sort(key=lambda item: item[0])
     return stops
 
 
-def _mille_feuille_stops(stops: list[tuple[int, str]]) -> list[tuple[int, str]]:
-    """复刻 N3 MilleFeuille 的 stop 复制（硬色带）。
+def _mille_feuille_band_stops(
+    stops: list[tuple[float, str]],
+) -> list[tuple[float, str]]:
+    """Convert N3's duplicated gradient stops to exact hard color bands.
 
-    N3 在相同 Position 上放两个 stop 制造硬边界；QGradient 侧按位置去重，
-    因此把「上一色带的收尾 stop」放到边界前 1%，边界处 1% 的过渡肉眼不可见。
-    N3 忽略最后一个 stop 自身的颜色（末段色带 = 倒数第二个 stop 的颜色）。
+    N3 appends ``(next.Position, current.Color)`` after every source stop and
+    never appends the final source color. ``split_vertical`` stores the same
+    result directly as band-start positions, avoiding QGradient's duplicate
+    position collapse and the former 1% transition approximation.
     """
-    if len(stops) < 2:
-        return stops
-    result: list[tuple[int, str]] = []
-    for index in range(len(stops) - 1):
-        position, color = stops[index]
-        next_position = stops[index + 1][0]
-        result.append((position, color))
-        edge = max(position, next_position - 1)
-        if edge > position:
-            result.append((edge, color))
-    result.append((100, stops[-2][1]))
+    if not stops:
+        return []
+    if len(stops) == 1:
+        return [(0, stops[0][1]), (100, stops[0][1])]
+    result = list(stops[:-1])
+    if result[0][0] > 0:
+        result.insert(0, (0, result[0][1]))
+    if result[-1][0] < 100:
+        result.append((100, result[-1][1]))
     return result
 
 
@@ -497,7 +500,23 @@ def _fill_from_brush(
     if brush_type in (1, 2):
         stops = _gradient_stop_list(brush) or [(0, solid), (100, solid)]
         if brush_type == 2:
-            stops = _mille_feuille_stops(stops)
+            bands = _mille_feuille_band_stops(stops)
+            start_color = bands[0][1]
+            end_color = bands[-1][1]
+            interior = [
+                position for position, _color in bands if position not in {0, 100}
+            ]
+            return PaintFill(
+                mode="split_vertical",
+                color=start_color,
+                start_color=start_color,
+                end_color=end_color,
+                gradient_stops=stops,
+                split_top_color=start_color,
+                split_bottom_color=bands[-2][1] if len(bands) > 1 else end_color,
+                split_position_pct=interior[0] if interior else 50,
+                split_stops=bands,
+            )
         start_color = stops[0][1]
         end_color = stops[-1][1]
         return PaintFill(

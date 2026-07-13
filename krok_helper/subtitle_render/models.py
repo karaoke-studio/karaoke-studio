@@ -20,6 +20,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, field, fields, replace
 from difflib import SequenceMatcher
+import math
 from pathlib import Path
 import re
 from typing import Literal, Optional
@@ -297,13 +298,13 @@ class PaintFill:
     color: str = "#FFFFFF"
     start_color: str = "#FFFFFF"
     end_color: str = "#FFFFFF"
-    gradient_stops: list[tuple[int, str]] = field(default_factory=list)
+    gradient_stops: list[tuple[float, str]] = field(default_factory=list)
     split_top_color: str = "#FFFFFF"
     split_bottom_color: str = "#FFFFFF"
-    split_position_pct: int = 50
+    split_position_pct: float = 50
     # Hard-edged vertical color bands: each item marks where that color starts.
     # The final 100% endpoint repeats the last band color for editor/persistence.
-    split_stops: list[tuple[int, str]] = field(default_factory=list)
+    split_stops: list[tuple[float, str]] = field(default_factory=list)
     image_path: str = ""
     image_scale_pct: int = 100
 
@@ -1619,8 +1620,8 @@ def paint_fill_from_dict(payload: object, *, fallback: str = "#FFFFFF") -> Paint
     stops = payload.get("gradient_stops", [(0, start_color), (100, end_color)])
     split_top_color = str(payload.get("split_top_color", start_color))
     split_bottom_color = str(payload.get("split_bottom_color", end_color))
-    split_position_pct = max(
-        0, min(100, _int_value(payload.get("split_position_pct"), 50))
+    split_position_pct = _gradient_stop_position(
+        payload.get("split_position_pct"), 50
     )
     split_stops_payload = payload.get("split_stops")
     if not split_stops_payload:
@@ -1673,14 +1674,14 @@ def _gradient_stops_from_payload(
     payload: object,
     start_color: str,
     end_color: str,
-) -> list[tuple[int, str]]:
+) -> list[tuple[float, str]]:
     if not isinstance(payload, list):
         return [(0, start_color), (100, end_color)]
-    result: list[tuple[int, str]] = []
+    result: list[tuple[float, str]] = []
     for item in payload:
         if not isinstance(item, (list, tuple)) or len(item) != 2:
             continue
-        result.append((max(0, min(100, _int_value(item[0], 0))), str(item[1])))
+        result.append((_gradient_stop_position(item[0], 0), str(item[1])))
     if not result:
         return [(0, start_color), (100, end_color)]
     positions = {position for position, _color in result}
@@ -1688,7 +1689,20 @@ def _gradient_stops_from_payload(
         result.append((0, start_color))
     if 100 not in positions:
         result.append((100, end_color))
-    return sorted(result)
+    # Python's sort is stable: equal-position stops retain their source order.
+    return sorted(result, key=lambda item: item[0])
+
+
+def _gradient_stop_position(value: object, fallback: float) -> float:
+    try:
+        position = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        position = fallback
+    if not math.isfinite(position):
+        position = fallback
+    position = max(0.0, min(100.0, position))
+    # Keep old integer projects byte-stable while preserving imported fractions.
+    return int(position) if position.is_integer() else position
 
 
 def _int_value(value: object, fallback: int) -> int:

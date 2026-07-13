@@ -66,6 +66,8 @@ from krok_helper.subtitle_render.engine.layers import (
 _IMAGE_FILL_CACHE_MAX = 16
 _IMAGE_FILL_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 _IMAGE_BRUSH_CACHE: "OrderedDict[tuple, QBrush]" = OrderedDict()
+_HARD_BAND_BRUSH_CACHE_MAX = 128
+_HARD_BAND_BRUSH_CACHE: "OrderedDict[tuple, QBrush]" = OrderedDict()
 _IMAGE_FILL_LOCK = Lock()
 # 横排 glyph run 层缓存：普通行与分色行都按连续同 style 的 run 烘焙。
 # 每个 run 的「未唱」层（含 before-glow）、「已唱」主体层与 after-glow
@@ -340,6 +342,7 @@ def clear_before_layer_cache() -> None:
     with _IMAGE_FILL_LOCK:
         _IMAGE_FILL_CACHE.clear()
         _IMAGE_BRUSH_CACHE.clear()
+        _HARD_BAND_BRUSH_CACHE.clear()
     _TEXT_RUN_LAYER_CACHE.clear()
     _RUN_GLOW_CACHE.clear()
     _CHAR_METRIC_CACHE.clear()
@@ -7910,32 +7913,64 @@ def _linear_gradient_brush(fill: PaintFill, rect: QRectF, angle_deg: int) -> QBr
 
 
 def _split_vertical_brush(fill: PaintFill, rect: QRectF) -> QBrush:
-    gradient = QLinearGradient(
-        QPointF(rect.left(), rect.top()),
-        QPointF(rect.left(), rect.bottom()),
+    """Return an exact hard-band texture, cached by height and stop values.
+
+    Qt collapses duplicate-position ``QGradientStop`` entries, so a linear
+    gradient cannot represent N3 MilleFeuille without a visible transition.
+    A one-pixel-wide texture keeps every boundary exact; the cached base brush
+    is only translated per glyph/run and is never regenerated per frame.
+    """
+    stops = _split_gradient_stops(fill)
+    height = max(int(math.ceil(rect.height())), 1)
+    stop_key = tuple(
+        (position, _valid_color(color, fill.color).rgba())
+        for position, color in stops
     )
-    stops = list(fill.split_stops)
-    if len(stops) < 2:
-        stops = [
+    key = (height, stop_key)
+    with _IMAGE_FILL_LOCK:
+        base = _HARD_BAND_BRUSH_CACHE.get(key)
+        if base is not None:
+            _HARD_BAND_BRUSH_CACHE.move_to_end(key)
+        else:
+            image = QImage(1, height, QImage.Format.Format_ARGB32_Premultiplied)
+            band_index = 0
+            for y in range(height):
+                position = (y + 0.5) * 100.0 / height
+                while (
+                    band_index + 1 < len(stops)
+                    and stops[band_index + 1][0] <= position
+                ):
+                    band_index += 1
+                image.setPixelColor(
+                    0, y, _valid_color(stops[band_index][1], fill.color)
+                )
+            base = QBrush(image)
+            _HARD_BAND_BRUSH_CACHE[key] = base
+            while len(_HARD_BAND_BRUSH_CACHE) > _HARD_BAND_BRUSH_CACHE_MAX:
+                _HARD_BAND_BRUSH_CACHE.popitem(last=False)
+    return _anchor_texture_brush(base, rect)
+
+
+def _split_gradient_stops(fill: PaintFill) -> list[tuple[float, str]]:
+    raw = list(fill.split_stops)
+    if len(raw) < 2:
+        raw = [
             (0, fill.split_top_color),
             (fill.split_position_pct, fill.split_bottom_color),
             (100, fill.split_bottom_color),
         ]
     stops = sorted(
-        (max(0, min(100, int(position))), color) for position, color in stops
+        (
+            _gradient_stop_position(position),
+            color,
+        )
+        for position, color in raw
     )
-    first = _valid_color(stops[0][1], fill.color)
-    gradient.setColorAt(0.0, first)
-    previous = first
-    for position_pct, color_value in stops[1:]:
-        position = max(0.0, min(1.0, position_pct / 100.0))
-        color = _valid_color(color_value, fill.color)
-        if position < 1.0:
-            gradient.setColorAt(max(0.0, position - 0.001), previous)
-            gradient.setColorAt(min(1.0, position + 0.001), color)
-        previous = color
-    gradient.setColorAt(1.0, previous)
-    return QBrush(gradient)
+    if stops[0][0] > 0:
+        stops.insert(0, (0, stops[0][1]))
+    if stops[-1][0] < 100:
+        stops.append((100, stops[-1][1]))
+    return stops
 
 
 # ---------------------------------------------------------------------------
@@ -8018,17 +8053,28 @@ def _solid_fill(color: str) -> PaintFill:
     )
 
 
-def _gradient_stops(fill: PaintFill) -> list[tuple[int, str]]:
+def _gradient_stop_position(value: object) -> float:
+    try:
+        position = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        position = 0.0
+    if not math.isfinite(position):
+        position = 0.0
+    return max(0.0, min(100.0, position))
+
+
+def _gradient_stops(fill: PaintFill) -> list[tuple[float, str]]:
     raw = fill.gradient_stops or [(0, fill.start_color), (100, fill.end_color)]
-    normalized: dict[int, str] = {}
+    normalized: list[tuple[float, str]] = []
     for position, color in raw:
-        pos = max(0, min(100, int(position)))
-        normalized[pos] = color
-    if 0 not in normalized:
-        normalized[0] = fill.start_color
-    if 100 not in normalized:
-        normalized[100] = fill.end_color
-    return sorted(normalized.items())
+        normalized.append((_gradient_stop_position(position), color))
+    normalized.sort(key=lambda item: item[0])
+    positions = {position for position, _color in normalized}
+    if 0 not in positions:
+        normalized.insert(0, (0, fill.start_color))
+    if 100 not in positions:
+        normalized.append((100, fill.end_color))
+    return normalized
 
 
 def _valid_color(value: str, fallback: str) -> QColor:

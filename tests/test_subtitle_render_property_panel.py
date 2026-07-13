@@ -1172,12 +1172,12 @@ def test_property_panel_gradient_stop_editor_emits_style(qapp):
         panel._fill_mode_combo.findData("gradient_horizontal")
     )
     panel._gradient_editor.add_stop(50, "#808080")
-    panel._gradient_stop_position_spin.setValue(60)
+    panel._gradient_stop_position_spin.setValue(60.125)
     panel._gradient_editor.set_selected_color("#336699")
 
     fill = emitted[-1].karaoke_colors.after.text
     assert fill.mode == "gradient_horizontal"
-    assert (60, "#336699") in fill.gradient_stops
+    assert (60.125, "#336699") in fill.gradient_stops
     assert fill.start_color == "#FF5A6F"
     assert fill.end_color == "#FF5A6F"
 
@@ -1550,6 +1550,27 @@ def test_legacy_two_color_split_fill_is_upgraded_to_hard_stops():
         (0, "#FFFFFF"),
         (35, "#777777"),
         (100, "#777777"),
+    ]
+
+
+def test_paint_fill_preserves_fractional_and_duplicate_gradient_stops():
+    fill = paint_fill_from_dict(
+        {
+            "mode": "gradient_vertical",
+            "gradient_stops": [
+                (0, "#FFFFFF"),
+                (33.3333, "#FF0000"),
+                (33.3333, "#0000FF"),
+                (100, "#000000"),
+            ],
+        }
+    )
+
+    assert fill.gradient_stops == [
+        (0, "#FFFFFF"),
+        (33.3333, "#FF0000"),
+        (33.3333, "#0000FF"),
+        (100, "#000000"),
     ]
 
 
