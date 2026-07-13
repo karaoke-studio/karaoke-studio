@@ -6369,27 +6369,16 @@ class KrokHelperQtApp(QMainWindow):
                 proxy_combo.setCurrentIndex(previous_index)
 
         def test_proxy_connectivity() -> None:
-            proxy_status_label.setText("正在测试 GitHub API 连通性…")
+            proxy_status_label.setText("正在测试 GitHub 连通性…")
             QApplication.processEvents()
-            _text, proxies = resolve_proxy_status()
             try:
-                from krok_helper.network import requests_session_for_proxy
+                from krok_helper.updater.worker import probe_github_connectivity
 
-                session, resolved_proxies = requests_session_for_proxy(
+                _ok, message = probe_github_connectivity(
                     current_proxy_mode(),
                     proxy_manual_edit.text().strip(),
                 )
-
-                response = session.get(
-                    "https://api.github.com/repos/karaoke-studio/karaoke-studio/releases/latest",
-                    headers={"User-Agent": "KaraokeStudio-Updater/1.0"},
-                    proxies=resolved_proxies if resolved_proxies is not None else proxies,
-                    timeout=(5, 15),
-                )
-                if response.status_code == 200:
-                    proxy_status_label.setText("连通性测试成功。")
-                else:
-                    proxy_status_label.setText(f"连通性测试失败: HTTP {response.status_code}")
+                proxy_status_label.setText(message)
             except Exception as exc:  # noqa: BLE001
                 proxy_status_label.setText(f"连通性测试失败: {exc}")
 

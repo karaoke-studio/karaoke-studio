@@ -9,7 +9,7 @@ SourceId = Literal["github", "ghproxy", "gh-proxy", "ghproxy-net"]
 SOURCE_IDS: tuple[SourceId, ...] = ("github", "ghproxy", "gh-proxy", "ghproxy-net")
 SOURCE_LABELS: dict[SourceId, str] = {
     "github": "GitHub Release（官方）",
-    "ghproxy": "GitHub Proxy（mirror.ghproxy.com）",
+    "ghproxy": "GitHub Proxy（ghfast.top）",
     "gh-proxy": "GitHub Proxy（gh-proxy.com）",
     "ghproxy-net": "GitHub Proxy（ghproxy.net）",
 }
@@ -32,7 +32,7 @@ def build_download_url(source: SourceId, tag: str, asset_name: str) -> str:
     if source == "github":
         return f"https://github.com/{path}"
     if source == "ghproxy":
-        return f"https://mirror.ghproxy.com/https://github.com/{path}"
+        return f"https://ghfast.top/https://github.com/{path}"
     if source == "gh-proxy":
         return f"https://gh-proxy.com/https://github.com/{path}"
     if source == "ghproxy-net":
@@ -50,7 +50,7 @@ def _build_api_urls_for_path(order: list[str] | tuple[str, ...], api_path: str) 
         if source == "github":
             urls.append((source, f"https://api.github.com/{api_path}"))
         elif source == "ghproxy":
-            urls.append((source, f"https://mirror.ghproxy.com/https://api.github.com/{api_path}"))
+            urls.append((source, f"https://ghfast.top/https://api.github.com/{api_path}"))
         elif source == "gh-proxy":
             urls.append((source, f"https://gh-proxy.com/https://api.github.com/{api_path}"))
         elif source == "ghproxy-net":

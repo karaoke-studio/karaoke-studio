@@ -75,7 +75,7 @@ Windows 支持检查与自动安装；macOS 当前只支持检查和全量包发
 | ID | 说明 |
 |---|---|
 | `github` | GitHub 官方 API / Release |
-| `ghproxy` | `mirror.ghproxy.com` 镜像 |
+| `ghproxy` | `ghfast.top` 镜像 |
 | `gh-proxy` | `gh-proxy.com` 镜像 |
 | `ghproxy-net` | `ghproxy.net` 镜像 |
 

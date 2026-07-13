@@ -38,6 +38,9 @@ def test_download_urls_preserve_published_asset_contract():
         url = build_download_url(source, "v3.2.0", "KaraokeStudio-windows.zip")
         assert "https://github.com/" in url
         assert url.endswith("/v3.2.0/KaraokeStudio-windows.zip")
+    assert build_download_url("ghproxy", "v3.2.0", "x.zip").startswith(
+        "https://ghfast.top/https://github.com/"
+    )
 
 
 def test_unknown_download_source_raises():
@@ -57,6 +60,8 @@ def test_api_urls_cover_all_sources_and_list_uses_100_items():
     assert [source for source, _url in listing] == list(SOURCE_IDS)
     assert all("releases/latest" in url for _source, url in latest)
     assert all("releases?per_page=100" in url for _source, url in listing)
+    assert latest[1][1].startswith("https://ghfast.top/https://api.github.com/")
+    assert all("mirror.ghproxy.com" not in url for _source, url in [*latest, *listing])
 
 
 def test_every_source_has_chinese_label():

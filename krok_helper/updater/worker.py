@@ -139,6 +139,35 @@ def _proxies_for(settings: UpdaterSettings) -> dict[str, str] | None:
     return proxies
 
 
+def probe_github_connectivity(proxy_mode: str, proxy_manual_url: str = "") -> tuple[bool, str]:
+    """Test GitHub reachability without treating API rate limiting as a network failure."""
+
+    session, proxies = requests_session_for_proxy(proxy_mode, proxy_manual_url)
+    release_url = f"https://github.com/{REPO_OWNER}/{REPO_NAME}/releases/latest"
+    reach = http_client.get_redirect_location(
+        release_url,
+        session=session,
+        proxies=proxies,
+        timeout=(5, 10),
+    )
+    api = http_client.get_text(
+        "https://api.github.com/zen",
+        session=session,
+        proxies=proxies,
+        timeout=(5, 10),
+    )
+
+    if reach.ok:
+        if api.status == 403:
+            return (
+                True,
+                "代理可正常访问 GitHub，但官方 API 对当前出口 IP 限流（403）。"
+                "检查更新会自动改用网页端探测，通常不受影响。",
+            )
+        return True, "连通性测试成功。"
+    return False, f"连通性测试失败: {reach.error or f'HTTP {reach.status}'}"
+
+
 def _build_check_error(attempts: list[tuple[SourceId, str, str]]) -> str:
     """根据各源失败原因给出更有指导性的错误文案。
 

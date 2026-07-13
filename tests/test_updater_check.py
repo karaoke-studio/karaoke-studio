@@ -17,6 +17,7 @@ from krok_helper.updater.worker import (
     fetch_latest_release_via_redirect,
     fetch_releases_since,
     is_newer_version,
+    probe_github_connectivity,
 )
 
 
@@ -50,12 +51,49 @@ def test_version_key_four_segments() -> None:
 def test_check_error_distinguishes_rate_limit() -> None:
     attempts = [
         ("github", "https://api.github.com/x", "HTTP 403"),
-        ("ghproxy", "https://mirror.ghproxy.com/x", "网络错误: timeout"),
+        ("ghproxy", "https://ghfast.top/x", "网络错误: timeout"),
     ]
     assert "频率超限" in _build_check_error(attempts)
 
     attempts_plain = [("github", "https://api.github.com/x", "网络错误: timeout")]
     assert _build_check_error(attempts_plain) == "无法访问任何更新源（请检查网络/代理）"
+
+
+def test_connectivity_probe_treats_api_403_as_reachable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        worker.http_client,
+        "get_redirect_location",
+        lambda *args, **kwargs: HttpResult(ok=True, status=302, body="https://github.com/x/y/releases/tag/v1"),
+    )
+    monkeypatch.setattr(
+        worker.http_client,
+        "get_text",
+        lambda *args, **kwargs: HttpResult(ok=False, status=403, error="HTTP 403"),
+    )
+
+    ok, message = probe_github_connectivity("manual", "http://127.0.0.1:7890")
+
+    assert ok
+    assert "API" in message and "403" in message
+    assert "自动改用网页端" in message
+
+
+def test_connectivity_probe_requires_github_web_reachability(monkeypatch) -> None:
+    monkeypatch.setattr(
+        worker.http_client,
+        "get_redirect_location",
+        lambda *args, **kwargs: HttpResult(ok=False, error="网络错误: timeout"),
+    )
+    monkeypatch.setattr(
+        worker.http_client,
+        "get_text",
+        lambda *args, **kwargs: HttpResult(ok=True, status=200, body="Keep it logically awesome"),
+    )
+
+    ok, message = probe_github_connectivity("off")
+
+    assert not ok
+    assert "网络错误: timeout" in message
 
 
 # ── 302 跳转兜底 ─────────────────────────────────────────────────────
