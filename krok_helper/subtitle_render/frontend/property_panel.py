@@ -49,9 +49,11 @@ from PyQt6.QtWidgets import (
     QWIDGETSIZE_MAX,
 )
 from qfluentwidgets import (
+    BodyLabel,
     CaptionLabel,
     CheckBox,
     ComboBox as FluentComboBox,
+    EditableComboBox as FluentEditableComboBox,
     FluentIcon as FIF,
     InfoBar,
     LineEdit as FluentLineEdit,
@@ -62,9 +64,17 @@ from qfluentwidgets import (
     ScrollArea as FluentScrollArea,
     SegmentedWidget,
     SpinBox as FluentSpinBox,
+    SubtitleLabel,
     TransparentToolButton as FluentTransparentToolButton,
 )
 
+from krok_helper.subtitle_render.frontend.fluent_dialogs import (
+    fluent_button_row,
+    fluent_choice,
+    fluent_get_editable_choice,
+    fluent_get_text,
+    fluent_question,
+)
 from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
 from krok_helper.subtitle_render.models import (
     ColorLayerKey,
@@ -81,6 +91,7 @@ from krok_helper.subtitle_render.models import (
     LYRICS_LAYOUT_FIELDS,
     LyricsLayout,
     PaintFill,
+    StylePreset,
     SubtitleStyleScheme,
     Style,
     TITLE_SCHEME_NAME,
@@ -155,6 +166,7 @@ _RUBY_COLOR_SUBJECT_FIELDS = {
 
 _GLOBAL_SCHEME_KEY = "global"
 _CUSTOM_SCHEME_PREFIX = "custom:"
+_PRESET_NO_GROUP = "\x00ungrouped"
 _COMPACT_CONTROL_HEIGHT = 32
 _FILL_MODE_ICON_DIR = (
     Path(__file__).resolve().parents[2] / "assets" / "subtitle_render" / "fill_modes"
@@ -169,6 +181,26 @@ _AUTO_ROLE_COLORS = (
     "#14B8A6",
     "#EC4899",
 )
+
+
+def _normalize_style_presets(
+    presets: dict[str, StylePreset | SubtitleStyleScheme],
+) -> dict[str, StylePreset]:
+    """Normalize public/legacy preset inputs to independent grouped presets."""
+    result: dict[str, StylePreset] = {}
+    for raw_name, value in presets.items():
+        name = str(raw_name).strip()
+        if not name:
+            continue
+        if isinstance(value, StylePreset):
+            result[name] = StylePreset(
+                name=name,
+                group=str(value.group).strip(),
+                scheme=deepcopy(value.scheme),
+            )
+        elif isinstance(value, SubtitleStyleScheme):
+            result[name] = StylePreset(name=name, scheme=deepcopy(value))
+    return result
 _LIT_FIELDS = {
     "lit_enabled",
     "lit_style",
@@ -1256,30 +1288,82 @@ class _DynamicStackedWidget(QStackedWidget):
         return widget.minimumSizeHint() if widget is not None else super().minimumSizeHint()
 
 
-class StylePresetManagerDialog(QDialog):
-    """Small qfluentwidgets-style dialog for managing reusable subtitle schemes."""
+class _StylePresetDetailsDialog(QDialog):
+    """Fluent form for a preset name and optional organizational group."""
 
     def __init__(
         self,
-        presets: dict[str, SubtitleStyleScheme],
+        *,
+        name: str,
+        group: str,
+        groups: list[str],
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent.window() if parent is not None else None)
+        self.setWindowTitle("保存当前样式为预设")
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setMinimumWidth(440)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+        layout.addWidget(SubtitleLabel("保存当前样式为预设", self))
+
+        layout.addWidget(BodyLabel("预设名称", self))
+        self.name_edit = FluentLineEdit(self)
+        self.name_edit.setText(name)
+        self.name_edit.setPlaceholderText("输入唯一的预设名称")
+        self.name_edit.selectAll()
+        layout.addWidget(self.name_edit)
+
+        layout.addWidget(BodyLabel("分组", self))
+        self.group_combo = FluentEditableComboBox(self)
+        self.group_combo.setClearButtonEnabled(True)
+        self.group_combo.setPlaceholderText("留空则归入未分组")
+        for value in groups:
+            if value:
+                self.group_combo.addItem(value)
+        self.group_combo.setText(group)
+        layout.addWidget(self.group_combo)
+
+        button_row, self.ok_button, _cancel_button = fluent_button_row(
+            self, ok_text="保存", cancel_text="取消"
+        )
+        layout.addLayout(button_row)
+        self.name_edit.textChanged.connect(
+            lambda text: self.ok_button.setEnabled(bool(text.strip()))
+        )
+        self.ok_button.setEnabled(bool(name.strip()))
+
+    def details(self) -> tuple[str, str]:
+        return self.name_edit.text().strip(), self.group_combo.text().strip()
+
+
+class StylePresetManagerDialog(QDialog):
+    """Manage independent, grouped subtitle style presets."""
+
+    def __init__(
+        self,
+        presets: dict[str, StylePreset | SubtitleStyleScheme],
         current_scheme: SubtitleStyleScheme,
         target_label: str,
+        existing_role_names: Optional[set[str]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("预设方案管理")
-        self.resize(520, 460)
-        self._presets = {str(name): deepcopy(scheme) for name, scheme in presets.items()}
+        self.setWindowTitle("样式预设库")
+        self.resize(640, 520)
+        self._presets = _normalize_style_presets(presets)
         self._current_scheme = deepcopy(current_scheme)
+        self._target_label = str(target_label)
+        self._existing_role_names = set(existing_role_names or set())
         self._applied_scheme: Optional[SubtitleStyleScheme] = None
-        self._imported_schemes: dict[str, SubtitleStyleScheme] = {}
-        self._deleted_names: set[str] = set()
+        self._imported_schemes: dict[str, StylePreset] = {}
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(10)
 
-        title = QLabel("预设方案管理", self)
+        title = SubtitleLabel("样式预设库", self)
         themed(
             title,
             lambda: (
@@ -1289,163 +1373,319 @@ class StylePresetManagerDialog(QDialog):
             ),
         )
         layout.addWidget(title)
-        layout.addWidget(QLabel(f"当前目标：{target_label}", self))
+        layout.addWidget(BodyLabel(f"当前目标：{target_label}", self))
 
         filter_row = QHBoxLayout()
         filter_row.setContentsMargins(0, 0, 0, 0)
         filter_row.setSpacing(8)
-        filter_row.addWidget(QLabel("过滤:", self))
+        filter_row.addWidget(BodyLabel("过滤:", self))
         self._filter_edit = FluentLineEdit(self)
         self._filter_edit.setPlaceholderText("输入名称搜索...")
         self._filter_edit.textChanged.connect(self._apply_filter)
         filter_row.addWidget(self._filter_edit, 1)
+        filter_row.addWidget(BodyLabel("分组:", self))
+        self._group_filter = FluentComboBox(self)
+        self._group_filter.setMinimumWidth(120)
+        self._group_filter.currentIndexChanged.connect(self._apply_filter)
+        filter_row.addWidget(self._group_filter)
         layout.addLayout(filter_row)
 
         self._preset_list = FluentListWidget(self)
         self._preset_list.setIconSize(QSize(34, 20))
-        self._preset_list.setSelectionMode(QAbstractItemView.SelectionMode.MultiSelection)
+        self._preset_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._preset_list.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._preset_list.setTextElideMode(Qt.TextElideMode.ElideRight)
         self._preset_list.currentItemChanged.connect(lambda _cur, _old: self._sync_buttons())
-        self._preset_list.itemSelectionChanged.connect(self._sync_buttons)
+        self._preset_list.itemChanged.connect(lambda _item: self._sync_buttons())
         layout.addWidget(self._preset_list, 1)
 
-        self._empty_label = QLabel("暂无预设。可以把当前样式保存为新预设。", self)
+        selection_row = QHBoxLayout()
+        selection_row.setContentsMargins(0, 0, 0, 0)
+        self._select_all_btn = FluentPushButton("全选当前结果", self)
+        self._select_all_btn.clicked.connect(self._select_all_visible)
+        self._clear_selection_btn = FluentPushButton("全部取消", self)
+        self._clear_selection_btn.clicked.connect(self._clear_checks)
+        self._selection_stats = CaptionLabel("", self)
+        selection_row.addWidget(self._select_all_btn)
+        selection_row.addWidget(self._clear_selection_btn)
+        selection_row.addStretch(1)
+        selection_row.addWidget(self._selection_stats)
+        layout.addLayout(selection_row)
+
+        self._empty_label = BodyLabel("暂无预设。可以把当前样式保存为新预设。", self)
         layout.addWidget(self._empty_label)
 
         edit_row = QHBoxLayout()
         edit_row.setContentsMargins(0, 0, 0, 0)
         edit_row.setSpacing(8)
-        self._save_current_btn = FluentPushButton("保存当前为预设", self)
+        self._save_current_btn = FluentPushButton("保存当前样式为预设", self)
         self._save_current_btn.clicked.connect(self._on_save_current)
         self._rename_btn = FluentPushButton("重命名", self)
         self._rename_btn.clicked.connect(self._on_rename)
+        self._set_group_btn = FluentPushButton("设置分组", self)
+        self._set_group_btn.clicked.connect(self._on_set_group)
         self._delete_btn = FluentPushButton("删除", self)
         self._delete_btn.clicked.connect(self._on_delete)
         edit_row.addWidget(self._save_current_btn)
         edit_row.addWidget(self._rename_btn)
+        edit_row.addWidget(self._set_group_btn)
         edit_row.addWidget(self._delete_btn)
         layout.addLayout(edit_row)
 
         button_row = QHBoxLayout()
         button_row.setContentsMargins(0, 4, 0, 0)
         button_row.addStretch(1)
-        self._apply_btn = FluentPrimaryPushButton("导入选中的颜色方案", self)
-        self._apply_btn.clicked.connect(self._on_import_selected)
+        self._apply_btn = FluentPushButton("应用到当前目标", self)
+        self._apply_btn.clicked.connect(self._on_apply)
+        self._import_btn = FluentPrimaryPushButton("导入选中项为项目角色", self)
+        self._import_btn.clicked.connect(self._on_import_selected)
         close_btn = FluentPushButton("关闭", self)
         close_btn.clicked.connect(self.accept)
         button_row.addWidget(self._apply_btn)
+        button_row.addWidget(self._import_btn)
         button_row.addWidget(close_btn)
         layout.addLayout(button_row)
 
         self._populate_list()
 
-    def preset_schemes(self) -> dict[str, SubtitleStyleScheme]:
-        return {name: deepcopy(scheme) for name, scheme in self._presets.items()}
+    def preset_schemes(self) -> dict[str, StylePreset]:
+        return _normalize_style_presets(self._presets)
 
     def applied_scheme(self) -> Optional[SubtitleStyleScheme]:
         if self._applied_scheme is None:
             return None
         return deepcopy(self._applied_scheme)
 
-    def imported_schemes(self) -> dict[str, SubtitleStyleScheme]:
-        return {name: deepcopy(scheme) for name, scheme in self._imported_schemes.items()}
+    def imported_schemes(self) -> dict[str, StylePreset]:
+        return _normalize_style_presets(self._imported_schemes)
 
-    def deleted_names(self) -> set[str]:
-        return set(self._deleted_names)
-
-    def add_preset(self, name: str) -> bool:
+    def add_preset(self, name: str, group: str = "", *, overwrite: bool = False) -> bool:
         name = str(name).strip()
         if not name:
             return False
-        name = self._unique_name(name)
-        self._presets[name] = deepcopy(self._current_scheme)
+        if name in self._presets and not overwrite:
+            return False
+        self._presets[name] = StylePreset(
+            name=name,
+            group=str(group).strip(),
+            scheme=deepcopy(self._current_scheme),
+        )
         self._populate_list(selected=name)
         return True
 
-    def _unique_name(self, name: str) -> str:
-        if name not in self._presets:
-            return name
-        original = name
-        suffix = 2
-        while name in self._presets:
-            name = f"{original} {suffix}"
-            suffix += 1
-        return name
-
     def _populate_list(self, selected: Optional[str] = None) -> None:
+        checked = set(self._checked_names()) if self._preset_list.count() else set()
+        current = selected or self._selected_name()
+        self._refresh_group_filter()
+        self._preset_list.blockSignals(True)
         self._preset_list.clear()
-        for name, scheme in self._presets.items():
+        for name, preset in self._presets.items():
+            group_text = f" [{preset.group}]" if preset.group else ""
+            existing_text = "  （项目中已存在）" if name in self._existing_role_names else ""
             item = QListWidgetItem()
-            item.setText(f"{name}    {self._scheme_summary(scheme)}")
-            item.setIcon(_scheme_icon(scheme))
+            item.setText(
+                f"{name}{group_text}{existing_text}    {self._scheme_summary(preset.scheme)}"
+            )
+            item.setIcon(_scheme_icon(preset.scheme))
             item.setData(Qt.ItemDataRole.UserRole, name)
+            item.setData(Qt.ItemDataRole.UserRole + 1, preset.group)
+            if name not in self._existing_role_names:
+                item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+                item.setCheckState(
+                    Qt.CheckState.Checked if name in checked else Qt.CheckState.Unchecked
+                )
+            else:
+                item.setCheckState(Qt.CheckState.Unchecked)
+                item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsUserCheckable)
             self._preset_list.addItem(item)
-            if selected == name:
+            if current == name:
                 self._preset_list.setCurrentItem(item)
-        if selected is None and self._preset_list.count() > 0:
+        self._preset_list.blockSignals(False)
+        if self._preset_list.currentItem() is None and self._preset_list.count() > 0:
             self._preset_list.setCurrentRow(0)
         self._apply_filter()
         self._sync_buttons()
 
-    def _apply_filter(self) -> None:
+    def _refresh_group_filter(self) -> None:
+        current = self._group_filter.currentData()
+        groups = sorted({preset.group for preset in self._presets.values() if preset.group})
+        has_ungrouped = any(not preset.group for preset in self._presets.values())
+        blocked = self._group_filter.blockSignals(True)
+        self._group_filter.clear()
+        self._group_filter.addItem("全部分组", userData=None)
+        if has_ungrouped:
+            self._group_filter.addItem("（未分组）", userData=_PRESET_NO_GROUP)
+        for group in groups:
+            self._group_filter.addItem(group, userData=group)
+        index = self._group_filter.findData(current)
+        self._group_filter.setCurrentIndex(index if index >= 0 else 0)
+        self._group_filter.blockSignals(blocked)
+
+    def _apply_filter(self, *_args: Any) -> None:
         needle = self._filter_edit.text().strip().lower()
+        group_filter = self._group_filter.currentData()
         visible_count = 0
         for i in range(self._preset_list.count()):
             item = self._preset_list.item(i)
             name = str(item.data(Qt.ItemDataRole.UserRole) or "")
-            visible = not needle or needle in name.lower()
+            group = str(item.data(Qt.ItemDataRole.UserRole + 1) or "")
+            name_matches = not needle or needle in name.lower()
+            if group_filter == _PRESET_NO_GROUP:
+                group_matches = not group
+            else:
+                group_matches = group_filter is None or group == str(group_filter)
+            visible = name_matches and group_matches
             item.setHidden(not visible)
             if visible:
                 visible_count += 1
+        current = self._preset_list.currentItem()
+        if current is not None and current.isHidden():
+            replacement = next(
+                (
+                    self._preset_list.item(index)
+                    for index in range(self._preset_list.count())
+                    if not self._preset_list.item(index).isHidden()
+                ),
+                None,
+            )
+            self._preset_list.setCurrentItem(replacement)
         self._empty_label.setVisible(visible_count == 0)
         self._sync_buttons()
 
     def _sync_buttons(self) -> None:
-        selected_count = len(self._selected_names())
-        has_selection = selected_count > 0
-        self._apply_btn.setEnabled(has_selection)
-        self._rename_btn.setEnabled(selected_count == 1)
-        self._delete_btn.setEnabled(has_selection)
+        current = self._selected_name()
+        checked_count = len(self._checked_names())
+        has_batch_target = checked_count > 0 or current is not None
+        self._apply_btn.setEnabled(current is not None)
+        self._import_btn.setEnabled(checked_count > 0)
+        self._rename_btn.setEnabled(current is not None)
+        self._set_group_btn.setEnabled(has_batch_target)
+        self._delete_btn.setEnabled(has_batch_target)
+        self._selection_stats.setText(
+            f"已选 {checked_count}/{self._preset_list.count()}"
+        )
 
     def _selected_name(self) -> Optional[str]:
-        names = self._selected_names()
-        if len(names) != 1:
+        item = self._preset_list.currentItem()
+        if item is None:
             return None
-        return names[0]
+        name = item.data(Qt.ItemDataRole.UserRole)
+        return str(name) if name is not None else None
 
-    def _selected_names(self) -> list[str]:
+    def _checked_names(self) -> list[str]:
         names: list[str] = []
-        for item in self._preset_list.selectedItems():
-            if item.isHidden():
-                continue
-            name = item.data(Qt.ItemDataRole.UserRole)
-            if name is not None:
-                names.append(str(name))
+        for index in range(self._preset_list.count()):
+            item = self._preset_list.item(index)
+            if item.checkState() == Qt.CheckState.Checked:
+                name = item.data(Qt.ItemDataRole.UserRole)
+                if name is not None:
+                    names.append(str(name))
         return names
+
+    def _batch_names(self) -> list[str]:
+        checked = self._checked_names()
+        if checked:
+            return checked
+        current = self._selected_name()
+        return [current] if current is not None else []
+
+    def _select_all_visible(self) -> None:
+        self._preset_list.blockSignals(True)
+        for index in range(self._preset_list.count()):
+            item = self._preset_list.item(index)
+            if not item.isHidden() and item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                item.setCheckState(Qt.CheckState.Checked)
+        self._preset_list.blockSignals(False)
+        self._sync_buttons()
+
+    def _clear_checks(self) -> None:
+        self._preset_list.blockSignals(True)
+        for index in range(self._preset_list.count()):
+            item = self._preset_list.item(index)
+            if item.flags() & Qt.ItemFlag.ItemIsUserCheckable:
+                item.setCheckState(Qt.CheckState.Unchecked)
+        self._preset_list.blockSignals(False)
+        self._sync_buttons()
 
     def _scheme_summary(self, scheme: SubtitleStyleScheme) -> str:
         fill = scheme.fill_color or "#FFFFFF"
         base = scheme.base_color or "#FFFFFF"
         font_size = scheme.font_size_px
-        size_text = f" / {font_size}px" if font_size is not None else ""
-        return f"已唱 {fill} / 未唱 {base}{size_text}"
+        font = scheme.font_family or "继承字体"
+        size_text = f" {font_size}px" if font_size is not None else ""
+        return f"{font}{size_text} · 已唱 {fill} / 未唱 {base}"
 
     def _on_save_current(self) -> None:
-        name, ok = QInputDialog.getText(self, "保存当前为预设", "预设名称")
-        if not ok:
+        suggested_name = self._target_label if self._target_label != "全局默认" else ""
+        suggested_group = ""
+        while True:
+            details = self._prompt_preset_details(suggested_name, suggested_group)
+            if details is None:
+                return
+            name, group = details
+            if not name:
+                InfoBar.warning(
+                    title="未保存", content="请输入预设名称。", parent=self, duration=2000
+                )
+                suggested_group = group
+                continue
+            if name not in self._presets:
+                self.add_preset(name, group)
+                return
+            decision = self._confirm_overwrite(name)
+            if decision == "overwrite":
+                self.add_preset(name, group, overwrite=True)
+                return
+            if decision == "rename":
+                suggested_name, suggested_group = name, group
+                continue
             return
-        if not self.add_preset(name):
-            InfoBar.warning(title="未保存", content="请输入预设名称。", parent=self, duration=2000)
+
+    def _prompt_preset_details(
+        self, suggested_name: str, suggested_group: str
+    ) -> Optional[tuple[str, str]]:
+        groups = [""] + sorted(
+            {preset.group for preset in self._presets.values() if preset.group}
+        )
+        dialog = _StylePresetDetailsDialog(
+            name=suggested_name,
+            group=suggested_group,
+            groups=groups,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return None
+        return dialog.details()
+
+    def _confirm_overwrite(self, name: str) -> str:
+        existing = self._presets[name]
+        group_text = existing.group or "未分组"
+        choice = fluent_choice(
+            self,
+            "同名样式预设",
+            f"样式预设“{name}”已存在，位于“{group_text}”。\n"
+            f"是否用当前目标“{self._target_label}”的样式覆盖它？",
+            ("覆盖现有预设", "返回修改名称", "取消"),
+            default=2,
+        )
+        if choice == 0:
+            return "overwrite"
+        if choice == 1:
+            return "rename"
+        return "cancel"
 
     def _on_apply(self) -> None:
         name = self._selected_name()
         if name is None:
             InfoBar.warning(title="未选择", content="请先选择一个预设。", parent=self, duration=2000)
             return
-        self._applied_scheme = deepcopy(self._presets[name])
+        self._applied_scheme = deepcopy(self._presets[name].scheme)
         self.accept()
 
     def _on_import_selected(self) -> None:
-        names = self._selected_names()
+        names = self._checked_names()
         if not names:
             InfoBar.warning(title="未选择", content="请先选择一个预设。", parent=self, duration=2000)
             return
@@ -1460,36 +1700,77 @@ class StylePresetManagerDialog(QDialog):
         old = self._selected_name()
         if old is None:
             return
-        new, ok = QInputDialog.getText(self, "重命名预设", "预设名称", text=old)
+        new, ok = fluent_get_text(
+            self,
+            "重命名样式预设",
+            "预设名称",
+            text=old,
+            placeholder="输入唯一的预设名称",
+        )
         if not ok:
             return
         new = new.strip()
         if not new or new == old:
             return
-        scheme = self._presets.pop(old)
-        new = self._unique_name(new)
-        self._presets[new] = scheme
+        if new in self._presets:
+            InfoBar.warning(
+                title="名称已存在",
+                content=f"样式预设“{new}”已经存在。",
+                parent=self,
+                duration=2000,
+            )
+            return
+        preset = self._presets.pop(old)
+        self._presets[new] = StylePreset(
+            name=new, group=preset.group, scheme=deepcopy(preset.scheme)
+        )
         self._populate_list(selected=new)
 
+    def _on_set_group(self) -> None:
+        names = self._batch_names()
+        if not names:
+            return
+        groups = [""] + sorted(
+            {preset.group for preset in self._presets.values() if preset.group}
+        )
+        current_group = self._presets[names[0]].group if len(names) == 1 else ""
+        group, ok = fluent_get_editable_choice(
+            self,
+            "设置分组",
+            "分组（留空则移到未分组）",
+            groups,
+            text=current_group,
+            placeholder="留空则移到未分组",
+        )
+        if not ok:
+            return
+        group = str(group).strip()
+        for name in names:
+            preset = self._presets.get(name)
+            if preset is not None:
+                preset.group = group
+        self._populate_list(selected=names[0])
+
     def _on_delete(self) -> None:
-        names = self._selected_names()
+        names = self._batch_names()
         if not names:
             return
         name_text = "、".join(names[:5])
         if len(names) > 5:
             name_text += f" 等 {len(names)} 个"
-        result = QMessageBox.question(
+        confirmed = fluent_question(
             self,
             "删除预设",
-            f"确定要删除预设“{name_text}”吗？\n删除后将无法恢复，并会从当前颜色方案中移除同名角色。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            f"确定要从样式预设库删除“{name_text}”吗？\n"
+            "当前工程中的同名角色和样式不会受到影响。",
+            yes_text="删除",
+            no_text="取消",
+            default_cancel=True,
         )
-        if result != QMessageBox.StandardButton.Yes:
+        if not confirmed:
             return
         for name in names:
             self._presets.pop(name, None)
-            self._deleted_names.add(name)
         self._populate_list()
 
 
@@ -2281,7 +2562,7 @@ class PropertyPanel(QWidget):
         self._style = Style()
         self._syncing = False
         self._role_names: list[str] = []
-        self._preset_schemes: dict[str, SubtitleStyleScheme] = {}
+        self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
 
         self.setObjectName("PropertyPanel")
@@ -2377,20 +2658,18 @@ class PropertyPanel(QWidget):
         return self._style
 
     @property
-    def preset_schemes(self) -> dict[str, SubtitleStyleScheme]:
-        return {name: deepcopy(scheme) for name, scheme in self._preset_schemes.items()}
+    def preset_schemes(self) -> dict[str, StylePreset]:
+        return _normalize_style_presets(self._preset_schemes)
 
     @property
     def role_names(self) -> list[str]:
         """当前角色导航中可分配给歌词的角色名（不含全局默认与标题）。"""
         return list(self._role_names)
 
-    def set_preset_schemes(self, schemes: dict[str, SubtitleStyleScheme]) -> None:
-        self._preset_schemes = {
-            str(name): deepcopy(scheme)
-            for name, scheme in schemes.items()
-            if str(name)
-        }
+    def set_preset_schemes(
+        self, schemes: dict[str, StylePreset | SubtitleStyleScheme]
+    ) -> None:
+        self._preset_schemes = _normalize_style_presets(schemes)
 
     def set_style(self, style: Style, *, emit: bool = False) -> None:
         self._style = replace(style)
@@ -3215,7 +3494,7 @@ class PropertyPanel(QWidget):
         self._delete_role_button.setToolTip("删除当前角色")
         self._delete_role_button.clicked.connect(lambda _checked=False: self._delete_current_role())
         self._manage_presets_button = FluentTransparentToolButton(FIF.PALETTE, nav)
-        self._manage_presets_button.setToolTip("管理预设")
+        self._manage_presets_button.setToolTip("管理样式预设库")
         self._manage_presets_button.clicked.connect(lambda _checked=False: self._open_preset_manager())
         for btn in (
             self._add_scheme_button,
@@ -4881,7 +5160,7 @@ class PropertyPanel(QWidget):
             TITLE_SCHEME_NAME, f"{_CUSTOM_SCHEME_PREFIX}{TITLE_SCHEME_NAME}"
         )
         # 这里只显示当前字幕里出现过、或用户手动新建的角色目标。
-        # 用户保存过的可复用预设由「管理预设」弹窗维护，避免未分色文件自动套用历史方案。
+        # 用户保存过的可复用预设由「样式预设库」维护，避免未分色文件自动套用历史方案。
         seen: set[str] = {TITLE_SCHEME_NAME}
         for name in self._role_names:
             if name in seen:
@@ -4940,38 +5219,38 @@ class PropertyPanel(QWidget):
             presets=self._preset_schemes,
             current_scheme=_scheme_from_current(self),
             target_label=self._current_target_label(),
+            existing_role_names=set(self._role_names) | {TITLE_SCHEME_NAME},
             parent=self,
         )
         dialog.exec()
         schemes = dialog.preset_schemes()
-        deleted_names = dialog.deleted_names()
         imported = dialog.imported_schemes()
+        applied = dialog.applied_scheme()
         self._set_preset_schemes_from_dialog(schemes)
-        if deleted_names:
-            self._remove_preset_targets(deleted_names)
+        if applied is not None:
+            self._apply_preset_to_current_target(applied)
         if imported:
             self._import_preset_schemes(imported)
 
-    def _set_preset_schemes_from_dialog(self, schemes: dict[str, SubtitleStyleScheme]) -> None:
-        self._preset_schemes = {
-            str(name): deepcopy(scheme)
-            for name, scheme in schemes.items()
-            if str(name)
-        }
+    def _set_preset_schemes_from_dialog(
+        self, schemes: dict[str, StylePreset | SubtitleStyleScheme]
+    ) -> None:
+        self._preset_schemes = _normalize_style_presets(schemes)
         self.presetSchemesChanged.emit(self.preset_schemes)
 
-    def _import_preset_schemes(self, schemes: dict[str, SubtitleStyleScheme]) -> None:
+    def _import_preset_schemes(
+        self, schemes: dict[str, StylePreset | SubtitleStyleScheme]
+    ) -> None:
         if not schemes:
             return
         role_names = list(self._role_names)
         style_schemes = dict(self._style.custom_style_schemes)
-        for name, scheme in schemes.items():
+        for name, preset in _normalize_style_presets(schemes).items():
             name = str(name).strip()
-            if not name:
+            if not name or name == TITLE_SCHEME_NAME or name in role_names:
                 continue
-            style_schemes[name] = deepcopy(scheme)
-            if name not in role_names:
-                role_names.append(name)
+            style_schemes[name] = deepcopy(preset.scheme)
+            role_names.append(name)
         self._role_names = role_names
         self._update_style(custom_style_schemes=style_schemes)
         self._syncing = True
@@ -4981,66 +5260,20 @@ class PropertyPanel(QWidget):
             self._syncing = False
         self._sync_subtitle_scheme_controls()
 
-    def _remove_preset_targets(self, names: set[str]) -> None:
-        if not names:
-            return
-        normalized = {str(name) for name in names if str(name)}
-        if not normalized:
-            return
-        presets = {
-            name: scheme
-            for name, scheme in self._preset_schemes.items()
-            if name not in normalized
-        }
-        presets_changed = len(presets) != len(self._preset_schemes)
-        self._preset_schemes = presets
-        if presets_changed:
-            self.presetSchemesChanged.emit(self.preset_schemes)
-
-        role_names = [name for name in self._role_names if name not in normalized]
-        role_names_changed = role_names != self._role_names
-        style_schemes = {
-            name: scheme
-            for name, scheme in self._style.custom_style_schemes.items()
-            if name not in normalized
-        }
-        style_changed = len(style_schemes) != len(self._style.custom_style_schemes)
-        self._role_names = role_names
-        if style_changed:
-            self._update_style(custom_style_schemes=style_schemes)
-        if role_names_changed or style_changed:
-            self._syncing = True
-            try:
-                self._refresh_scheme_combo(_GLOBAL_SCHEME_KEY)
-            finally:
-                self._syncing = False
-            self._sync_subtitle_scheme_controls()
-
     def _ensure_role_schemes(self) -> None:
         schemes = dict(self._style.custom_style_schemes)
-        presets = dict(self._preset_schemes)
         changed = False
-        presets_changed = False
         for index, name in enumerate(self._role_names):
             if name in schemes:
-                if name not in presets:
-                    presets[name] = deepcopy(schemes[name])
-                    presets_changed = True
                 continue
             preset = self._preset_schemes.get(name)
             if preset is not None:
-                schemes[name] = deepcopy(preset)
+                schemes[name] = deepcopy(preset.scheme)
             else:
-                scheme = _auto_role_scheme(_scheme_from_current(self), index)
-                schemes[name] = scheme
-                presets[name] = deepcopy(scheme)
-                presets_changed = True
+                schemes[name] = _auto_role_scheme(_scheme_from_current(self), index)
             changed = True
         if changed:
             self._style = replace(self._style, custom_style_schemes=schemes)
-        if presets_changed:
-            self._preset_schemes = presets
-            self.presetSchemesChanged.emit(self.preset_schemes)
         if changed:
             self.styleChanged.emit(self._style)
 

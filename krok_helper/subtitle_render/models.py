@@ -501,6 +501,19 @@ class SubtitleStyleScheme:
     ruby_karaoke_colors: Optional[KaraokeColors] = None
 
 
+@dataclass
+class StylePreset:
+    """应用级可复用的单目标字幕样式预设。
+
+    ``group`` 只负责整理与筛选，不参与角色解析；预设名称全局唯一。工程角色
+    使用时会深拷贝 ``scheme``，因此预设的重命名、分组或删除不会反向影响工程。
+    """
+
+    name: str
+    group: str = ""
+    scheme: SubtitleStyleScheme = field(default_factory=SubtitleStyleScheme)
+
+
 def default_title_layout() -> LyricsLayout:
     """内置标题布局（N3 出厂预设「タイトル左上」：Top、行間 15、余白 50/50、Left）。"""
     return LyricsLayout(

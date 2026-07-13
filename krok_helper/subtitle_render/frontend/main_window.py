@@ -107,6 +107,7 @@ from krok_helper.subtitle_render.models import (
     BackgroundSource,
     LineAnimationOverride,
     PROJECT_FILE_SUFFIX,
+    StylePreset,
     SubtitleStyleScheme,
     Style,
     TITLE_SCHEME_NAME,
@@ -719,7 +720,7 @@ class SubtitleRenderWindow(QWidget):
         self._audio_path: Optional[Path] = None
         self._audio_info: Optional[MediaInfo] = None
         self._style: Style = Style()
-        self._style_presets: dict[str, SubtitleStyleScheme] = {}
+        self._style_presets: dict[str, StylePreset] = {}
         self._screen_settings: ScreenSettings = ScreenSettings()
         self._selected_scheme_key = "global"
         self._project_path: Optional[Path] = None
@@ -2709,7 +2710,7 @@ class SubtitleRenderWindow(QWidget):
         if not missing:
             return
         from_presets = {
-            label: deepcopy(self._style_presets[label])
+            label: deepcopy(self._style_presets[label].scheme)
             for label in missing
             if label in self._style_presets
         }
@@ -2999,21 +3000,47 @@ class SubtitleRenderWindow(QWidget):
         return
 
 
-def _style_presets_from_dict(payload: object) -> dict[str, SubtitleStyleScheme]:
+def _style_presets_from_dict(payload: object) -> dict[str, StylePreset]:
+    """Load grouped presets and migrate the legacy ``name -> scheme`` mapping."""
     if not isinstance(payload, dict):
         return {}
-    return {
-        str(name): subtitle_style_scheme_from_dict(value)
-        for name, value in payload.items()
-        if str(name)
-    }
+    result: dict[str, StylePreset] = {}
+    for raw_name, value in payload.items():
+        name = str(raw_name).strip()
+        if not name:
+            continue
+        if isinstance(value, StylePreset):
+            result[name] = StylePreset(
+                name=name,
+                group=str(value.group).strip(),
+                scheme=deepcopy(value.scheme),
+            )
+            continue
+        if isinstance(value, SubtitleStyleScheme):
+            result[name] = StylePreset(name=name, scheme=deepcopy(value))
+            continue
+        if isinstance(value, dict) and isinstance(value.get("scheme"), dict):
+            group = str(value.get("group") or "").strip()
+            scheme_payload = value["scheme"]
+        else:
+            group = ""
+            scheme_payload = value
+        result[name] = StylePreset(
+            name=name,
+            group=group,
+            scheme=subtitle_style_scheme_from_dict(scheme_payload),
+        )
+    return result
 
 
 def _style_presets_to_dict(
-    presets: dict[str, SubtitleStyleScheme],
+    presets: dict[str, StylePreset],
 ) -> dict[str, dict]:
     return {
-        str(name): subtitle_style_scheme_to_dict(scheme)
-        for name, scheme in presets.items()
+        str(name): {
+            "group": str(preset.group).strip(),
+            "scheme": subtitle_style_scheme_to_dict(preset.scheme),
+        }
+        for name, preset in presets.items()
         if str(name)
     }

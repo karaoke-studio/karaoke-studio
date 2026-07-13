@@ -173,7 +173,7 @@ git submodule status
 2. 无交互 CLI 与端到端 CI MP4 烟测。
 
 Windows PyInstaller onedir 已完成实际构建、包内 Multimedia 校验和 frozen
-multiprocessing spawn 冒烟；完整测试基线为 `901 passed, 50 skipped`。macOS 脚本已同步收集 QtMultimedia，仍需在 macOS runner
+multiprocessing spawn 冒烟；完整测试基线为 `916 passed, 50 skipped`。macOS 脚本已同步收集 QtMultimedia，仍需在 macOS runner
 完成真实构建验证。
 
 ### 关键约束
@@ -184,8 +184,9 @@ multiprocessing spawn 冒烟；完整测试基线为 `901 passed, 50 skipped`。
 - **不支持假名独立字体族**；假名沿用日文字体，英数字体仍可独立。
 - **N3 二重描边严格遵守 `UseEdge2`**，不能因保存了宽度就强制开启。
 - **所有用户面向字符串中文**。
-- 若以后再次出现 Qt pooled-thread teardown access violation，优先检查预览 worker
-  的销毁顺序；2026-07-13 完整测试 `901 passed, 50 skipped`，未复现。
+- 若以后再次出现 Qt pooled-thread teardown access violation，优先检查预览 worker、
+  QMediaPlayer、QApplication 与顶层对话框的销毁顺序；2026-07-13 一次前序运行在清理
+  阶段偶发复现，补齐新增顶层 Fluent 对话框显式销毁后完整测试 `916 passed, 50 skipped`。
 
 ---
 

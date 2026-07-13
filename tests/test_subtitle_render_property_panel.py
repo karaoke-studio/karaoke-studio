@@ -21,18 +21,26 @@ from PyQt6.QtWidgets import (  # noqa: E402
 from qfluentwidgets import (  # noqa: E402
     CheckBox,
     ComboBox,
+    Dialog,
+    EditableComboBox,
     LineEdit,
     PlainTextEdit,
+    PrimaryPushButton,
     PushButton,
     ScrollArea,
     SegmentedWidget,
     SpinBox,
+    SubtitleLabel,
     TransparentToolButton,
 )
 
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
+from krok_helper.subtitle_render.frontend.fluent_dialogs import (  # noqa: E402
+    FluentMessageDialog,
+)
 from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
     _SchematicBoard,
+    _StylePresetDetailsDialog,
     ColorButton,
     PropertyPanel,
     StylePresetManagerDialog,
@@ -41,6 +49,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     KaraokeColors,
     KaraokeColorState,
     PaintFill,
+    StylePreset,
     SubtitleStyleScheme,
     Style,
     paint_fill_from_dict,
@@ -1938,7 +1947,15 @@ def test_property_panel_role_scheme_switches_subtitle_controls(qapp):
 
 def test_property_panel_hides_presets_when_subtitle_has_no_roles(qapp):
     panel = PropertyPanel()
-    panel.set_preset_schemes({"蓝色方案": SubtitleStyleScheme(fill_color="#123456")})
+    panel.set_preset_schemes(
+        {
+            "蓝色方案": StylePreset(
+                name="蓝色方案",
+                group="常用",
+                scheme=SubtitleStyleScheme(fill_color="#123456"),
+            )
+        }
+    )
 
     panel.set_roles([])
 
@@ -1947,12 +1964,18 @@ def test_property_panel_hides_presets_when_subtitle_has_no_roles(qapp):
     assert panel._singer_combo.currentData() == "global"
     assert panel._singer_combo.findData("custom:标题") >= 0
     assert panel._singer_combo.findData("custom:蓝色方案") == -1
-    assert panel.preset_schemes["蓝色方案"].fill_color == "#123456"
+    assert panel.preset_schemes["蓝色方案"].scheme.fill_color == "#123456"
 
 
 def test_property_panel_delete_role_keeps_same_named_preset(qapp):
     panel = PropertyPanel()
-    panel.set_preset_schemes({"fhana": SubtitleStyleScheme(fill_color="#123456")})
+    panel.set_preset_schemes(
+        {
+            "fhana": StylePreset(
+                name="fhana", scheme=SubtitleStyleScheme(fill_color="#123456")
+            )
+        }
+    )
     panel.set_roles(["fhana"])
     panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:fhana"))
 
@@ -1962,23 +1985,19 @@ def test_property_panel_delete_role_keeps_same_named_preset(qapp):
 
     assert panel._singer_combo.findData("custom:fhana") == -1
     assert "fhana" not in panel.subtitle_style.custom_style_schemes
-    assert panel.preset_schemes["fhana"].fill_color == "#123456"
+    assert panel.preset_schemes["fhana"].scheme.fill_color == "#123456"
 
 
-def test_property_panel_auto_created_role_scheme_is_saved_as_preset(qapp):
+def test_property_panel_auto_created_role_scheme_is_not_saved_as_preset(qapp):
     panel = PropertyPanel()
 
     panel.set_roles(["新分色"])
 
     assert "新分色" in panel.subtitle_style.custom_style_schemes
-    assert "新分色" in panel.preset_schemes
-    assert (
-        panel.preset_schemes["新分色"].fill_color
-        == panel.subtitle_style.custom_style_schemes["新分色"].fill_color
-    )
+    assert "新分色" not in panel.preset_schemes
 
 
-def test_property_panel_existing_role_scheme_is_backfilled_to_presets(qapp):
+def test_property_panel_existing_project_role_is_not_backfilled_to_presets(qapp):
     panel = PropertyPanel()
     panel.set_style(
         Style(
@@ -1991,7 +2010,7 @@ def test_property_panel_existing_role_scheme_is_backfilled_to_presets(qapp):
     panel.set_roles(["fhana"])
 
     assert panel.subtitle_style.custom_style_schemes["fhana"].fill_color == "#123456"
-    assert panel.preset_schemes["fhana"].fill_color == "#123456"
+    assert "fhana" not in panel.preset_schemes
 
 
 def test_property_panel_can_apply_preset_to_global_and_role(qapp):
@@ -2017,32 +2036,181 @@ def test_style_preset_manager_dialog_saves_current_scheme(qapp):
         target_label="全局默认",
     )
 
-    assert dialog.add_preset("蓝色方案")
+    assert dialog.add_preset("蓝色方案", "常用")
 
     presets = dialog.preset_schemes()
-    assert presets["蓝色方案"].fill_color == "#123456"
-    assert presets["蓝色方案"].font_size_px == 77
+    assert presets["蓝色方案"].group == "常用"
+    assert presets["蓝色方案"].scheme.fill_color == "#123456"
+    assert presets["蓝色方案"].scheme.font_size_px == 77
     assert dialog._preset_list.count() == 1
+
+
+def test_style_preset_library_forms_use_fluent_controls(qapp):
+    details = _StylePresetDetailsDialog(
+        name="A", group="作品一", groups=["作品一", "作品二"]
+    )
+    manager = StylePresetManagerDialog(
+        presets={"A": StylePreset(name="A", group="作品一")},
+        current_scheme=SubtitleStyleScheme(),
+        target_label="全局默认",
+    )
+    confirmation = FluentMessageDialog("确认", "确认内容", manager)
+
+    assert isinstance(details.name_edit, LineEdit)
+    assert isinstance(details.group_combo, EditableComboBox)
+    assert isinstance(details.ok_button, PrimaryPushButton)
+    assert manager.findChildren(SubtitleLabel)
+    assert isinstance(confirmation, Dialog)
+    assert isinstance(confirmation.yesButton, PrimaryPushButton)
+    confirmation.close()
+    details.close()
+    manager.close()
+    confirmation.deleteLater()
+    details.deleteLater()
+    manager.deleteLater()
+    qapp.processEvents()
+
+
+def test_style_preset_manager_requires_explicit_same_name_overwrite(qapp):
+    dialog = StylePresetManagerDialog(
+        presets={
+            "蓝色方案": StylePreset(
+                name="蓝色方案",
+                group="旧分组",
+                scheme=SubtitleStyleScheme(fill_color="#111111"),
+            )
+        },
+        current_scheme=SubtitleStyleScheme(fill_color="#222222"),
+        target_label="全局默认",
+    )
+
+    assert not dialog.add_preset("蓝色方案", "新分组")
+    assert dialog.preset_schemes()["蓝色方案"].scheme.fill_color == "#111111"
+
+    assert dialog.add_preset("蓝色方案", "新分组", overwrite=True)
+    preset = dialog.preset_schemes()["蓝色方案"]
+    assert preset.group == "新分组"
+    assert preset.scheme.fill_color == "#222222"
+
+
+def test_style_preset_manager_same_name_save_respects_confirmation(qapp, monkeypatch):
+    dialog = StylePresetManagerDialog(
+        presets={
+            "蓝色方案": StylePreset(
+                name="蓝色方案",
+                group="旧分组",
+                scheme=SubtitleStyleScheme(fill_color="#111111"),
+            )
+        },
+        current_scheme=SubtitleStyleScheme(fill_color="#222222"),
+        target_label="角色 A",
+    )
+    monkeypatch.setattr(
+        dialog, "_prompt_preset_details", lambda *_args: ("蓝色方案", "新分组")
+    )
+    monkeypatch.setattr(dialog, "_confirm_overwrite", lambda _name: "cancel")
+
+    dialog._on_save_current()
+    assert dialog.preset_schemes()["蓝色方案"].scheme.fill_color == "#111111"
+
+    monkeypatch.setattr(dialog, "_confirm_overwrite", lambda _name: "overwrite")
+    dialog._on_save_current()
+    preset = dialog.preset_schemes()["蓝色方案"]
+    assert preset.group == "新分组"
+    assert preset.scheme.fill_color == "#222222"
+
+
+def test_style_preset_settings_migrate_legacy_entries_and_roundtrip_groups():
+    loaded = mw._style_presets_from_dict(
+        {
+            "旧预设": {"fill_color": "#123456"},
+            "新预设": {
+                "group": "作品一",
+                "scheme": {"fill_color": "#ABCDEF", "font_size_px": 72},
+            },
+        }
+    )
+
+    assert loaded["旧预设"].group == ""
+    assert loaded["旧预设"].scheme.fill_color == "#123456"
+    assert loaded["新预设"].group == "作品一"
+    assert loaded["新预设"].scheme.font_size_px == 72
+
+    payload = mw._style_presets_to_dict(loaded)
+    assert payload["旧预设"]["group"] == ""
+    assert payload["旧预设"]["scheme"]["fill_color"] == "#123456"
+    assert payload["新预设"]["group"] == "作品一"
 
 
 def test_style_preset_manager_dialog_imports_multiple_selected_schemes(qapp):
     dialog = StylePresetManagerDialog(
         presets={
-            "A": SubtitleStyleScheme(fill_color="#111111"),
-            "B": SubtitleStyleScheme(fill_color="#222222"),
+            "A": StylePreset(
+                name="A", group="作品一", scheme=SubtitleStyleScheme(fill_color="#111111")
+            ),
+            "B": StylePreset(
+                name="B", group="作品二", scheme=SubtitleStyleScheme(fill_color="#222222")
+            ),
         },
         current_scheme=SubtitleStyleScheme(),
         target_label="全局默认",
     )
 
-    dialog._preset_list.item(0).setSelected(True)
-    dialog._preset_list.item(1).setSelected(True)
+    dialog._preset_list.item(0).setCheckState(Qt.CheckState.Checked)
+    dialog._preset_list.item(1).setCheckState(Qt.CheckState.Checked)
     dialog._on_import_selected()
 
     imported = dialog.imported_schemes()
     assert set(imported) == {"A", "B"}
-    assert imported["A"].fill_color == "#111111"
-    assert imported["B"].fill_color == "#222222"
+    assert imported["A"].scheme.fill_color == "#111111"
+    assert imported["B"].scheme.fill_color == "#222222"
+
+
+def test_style_preset_manager_filters_groups_without_losing_checks(qapp):
+    dialog = StylePresetManagerDialog(
+        presets={
+            "A": StylePreset(name="A", group="作品一"),
+            "B": StylePreset(name="B", group="作品二"),
+            "C": StylePreset(name="C", group=""),
+        },
+        current_scheme=SubtitleStyleScheme(),
+        target_label="全局默认",
+    )
+    item_a = next(
+        dialog._preset_list.item(index)
+        for index in range(dialog._preset_list.count())
+        if dialog._preset_list.item(index).data(Qt.ItemDataRole.UserRole) == "A"
+    )
+    item_a.setCheckState(Qt.CheckState.Checked)
+
+    dialog._group_filter.setCurrentIndex(dialog._group_filter.findData("作品二"))
+    qapp.processEvents()
+
+    assert item_a.isHidden()
+    assert item_a.checkState() == Qt.CheckState.Checked
+    assert dialog._checked_names() == ["A"]
+
+
+def test_style_preset_manager_sets_group_for_checked_items(qapp, monkeypatch):
+    dialog = StylePresetManagerDialog(
+        presets={
+            "A": StylePreset(name="A", group="旧分组"),
+            "B": StylePreset(name="B", group=""),
+        },
+        current_scheme=SubtitleStyleScheme(),
+        target_label="全局默认",
+    )
+    for index in range(dialog._preset_list.count()):
+        dialog._preset_list.item(index).setCheckState(Qt.CheckState.Checked)
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.property_panel.fluent_get_editable_choice",
+        lambda *args, **kwargs: ("新分组", True),
+    )
+
+    dialog._on_set_group()
+
+    assert {preset.group for preset in dialog.preset_schemes().values()} == {"新分组"}
+    assert dialog._group_filter.findData("新分组") >= 0
 
 
 def test_property_panel_imports_selected_presets_as_role_schemes(qapp):
@@ -2050,8 +2218,8 @@ def test_property_panel_imports_selected_presets_as_role_schemes(qapp):
 
     panel._import_preset_schemes(
         {
-            "A": SubtitleStyleScheme(fill_color="#111111"),
-            "B": SubtitleStyleScheme(fill_color="#222222"),
+            "A": StylePreset(name="A", scheme=SubtitleStyleScheme(fill_color="#111111")),
+            "B": StylePreset(name="B", scheme=SubtitleStyleScheme(fill_color="#222222")),
         }
     )
 
@@ -2061,40 +2229,66 @@ def test_property_panel_imports_selected_presets_as_role_schemes(qapp):
     assert panel.subtitle_style.custom_style_schemes["B"].fill_color == "#222222"
 
 
-def test_property_panel_deleting_preset_removes_same_named_role_scheme(qapp):
+def test_property_panel_batch_import_does_not_overwrite_existing_project_role(qapp):
     panel = PropertyPanel()
-    panel.set_preset_schemes({"A": SubtitleStyleScheme(fill_color="#111111")})
+    panel.set_style(
+        Style(
+            custom_style_schemes={
+                "A": SubtitleStyleScheme(fill_color="#AAAAAA"),
+            }
+        )
+    )
     panel.set_roles(["A"])
 
-    panel._remove_preset_targets({"A"})
+    panel._import_preset_schemes(
+        {
+            "A": StylePreset(name="A", scheme=SubtitleStyleScheme(fill_color="#111111")),
+            "B": StylePreset(name="B", scheme=SubtitleStyleScheme(fill_color="#222222")),
+        }
+    )
+
+    assert panel.subtitle_style.custom_style_schemes["A"].fill_color == "#AAAAAA"
+    assert panel.subtitle_style.custom_style_schemes["B"].fill_color == "#222222"
+
+
+def test_property_panel_deleting_preset_keeps_same_named_project_role(qapp):
+    panel = PropertyPanel()
+    panel.set_preset_schemes(
+        {"A": StylePreset(name="A", scheme=SubtitleStyleScheme(fill_color="#111111"))}
+    )
+    panel.set_roles(["A"])
+
+    panel._set_preset_schemes_from_dialog({})
 
     assert "A" not in panel.preset_schemes
-    assert "A" not in panel.subtitle_style.custom_style_schemes
-    assert panel._singer_combo.findData("custom:A") == -1
+    assert panel.subtitle_style.custom_style_schemes["A"].fill_color == "#111111"
+    assert panel._singer_combo.findData("custom:A") >= 0
 
 
-def test_style_preset_manager_dialog_tracks_deleted_presets(qapp, monkeypatch):
+def test_style_preset_manager_dialog_deletes_only_library_entry(qapp, monkeypatch):
     monkeypatch.setattr(
-        QMessageBox,
-        "question",
-        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+        "krok_helper.subtitle_render.frontend.property_panel.fluent_question",
+        lambda *args, **kwargs: True,
     )
     dialog = StylePresetManagerDialog(
-        presets={"A": SubtitleStyleScheme(fill_color="#111111")},
+        presets={
+            "A": StylePreset(name="A", scheme=SubtitleStyleScheme(fill_color="#111111"))
+        },
         current_scheme=SubtitleStyleScheme(),
         target_label="全局默认",
     )
 
-    dialog._preset_list.item(0).setSelected(True)
+    dialog._preset_list.item(0).setCheckState(Qt.CheckState.Checked)
     dialog._on_delete()
 
     assert "A" not in dialog.preset_schemes()
-    assert dialog.deleted_names() == {"A"}
 
 
-def test_property_panel_applies_dialog_deletions_even_when_dialog_rejected(qapp, monkeypatch):
+def test_property_panel_dialog_library_changes_do_not_remove_project_roles(qapp, monkeypatch):
     panel = PropertyPanel()
-    panel.set_preset_schemes({"A": SubtitleStyleScheme(fill_color="#111111")})
+    panel.set_preset_schemes(
+        {"A": StylePreset(name="A", scheme=SubtitleStyleScheme(fill_color="#111111"))}
+    )
     panel.set_roles(["A"])
 
     class FakeDialog:
@@ -2107,11 +2301,11 @@ def test_property_panel_applies_dialog_deletions_even_when_dialog_rejected(qapp,
         def preset_schemes(self):
             return {}
 
-        def deleted_names(self):
-            return {"A"}
-
         def imported_schemes(self):
             return {}
+
+        def applied_scheme(self):
+            return None
 
     monkeypatch.setattr(
         "krok_helper.subtitle_render.frontend.property_panel.StylePresetManagerDialog",
@@ -2121,8 +2315,8 @@ def test_property_panel_applies_dialog_deletions_even_when_dialog_rejected(qapp,
     panel._open_preset_manager()
 
     assert "A" not in panel.preset_schemes
-    assert "A" not in panel.subtitle_style.custom_style_schemes
-    assert panel._singer_combo.findData("custom:A") == -1
+    assert panel.subtitle_style.custom_style_schemes["A"].fill_color == "#111111"
+    assert panel._singer_combo.findData("custom:A") >= 0
 
 
 def test_property_panel_can_add_custom_scheme(qapp):
