@@ -496,6 +496,31 @@ def test_effects_page_uses_compact_responsive_groups(qapp):
     qapp.processEvents()
     assert panel._animation_grid._columns == 1
 
+
+def test_title_page_uses_compact_responsive_appearance_and_timing(qapp):
+    panel = PropertyPanel()
+    panel.resize(1050, 820)
+    panel.show()
+    panel.setCurrentIndex(4)
+    qapp.processEvents()
+
+    assert panel._title_appearance_grid._columns == 2
+    assert panel._title_time_grid._columns == 6
+
+    subgroup_titles = [
+        label.text()
+        for label in panel.widget(4).findChildren(QLabel, "SubtitlePropertySubheading")
+    ]
+    assert "时间" not in subgroup_titles
+
+    panel.resize(360, 820)
+    qapp.processEvents()
+    assert panel._title_appearance_grid._columns == 1
+    assert panel._title_time_grid._columns == 2
+    title_page = panel.widget(4)
+    assert title_page.horizontalScrollBar().maximum() == 0
+
+
 def test_property_panel_font_and_color_sections_are_side_by_side(qapp):
     panel = PropertyPanel()
     panel.resize(900, 800)

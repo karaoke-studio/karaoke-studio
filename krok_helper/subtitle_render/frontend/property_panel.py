@@ -3267,14 +3267,20 @@ class PropertyPanel(QWidget):
         # 多行文本框：回车换行后自动增高（背景卡片随之变高）。
         self._title_text_edit = _GrowingPlainTextEdit(section)
         self._title_text_edit.setPlaceholderText("{title} / {artist}")
+        self._title_text_edit.setToolTip(
+            "支持换行；{title} / {artist} 会从字幕元数据中读取。"
+        )
         self._title_text_edit.textChanged.connect(
             lambda: self._update_title(text_template=self._title_text_edit.toPlainText())
         )
-        layout.addWidget(_field("文字（{title} / {artist} 取自字幕元数据，可换行）", self._title_text_edit))
+        layout.addWidget(_field("标题文字", self._title_text_edit))
         return section
 
     def _make_title_style_section(self) -> QFrame:
         section, layout = _section("外观")
+        self._title_appearance_grid = _ResponsiveFieldGrid(
+            section, min_column_width=260, max_columns=2
+        )
 
         self._title_layout_combo = _WheelFocusedComboBox(section)
         _compact_control(self._title_layout_combo)
@@ -3283,21 +3289,16 @@ class PropertyPanel(QWidget):
             "决定标题的锚点、余白与行间距。"
         )
         self._title_layout_combo.currentIndexChanged.connect(self._on_title_layout_changed)
-        layout.addWidget(_field("布局方案", self._title_layout_combo))
+        self._title_appearance_grid.add_field("布局方案", self._title_layout_combo)
 
-        hint = QLabel(
-            "字体与颜色由字体页的「标题」配色方案决定，"
-            "与角色方案一起编辑。",
-            section,
+        self._title_scheme_edit_btn = FluentPushButton("编辑标题配色", section)
+        self._title_scheme_edit_btn.setMinimumHeight(30)
+        self._title_scheme_edit_btn.setToolTip(
+            "字体与颜色由字体页的「标题」配色方案决定，点击前往编辑。"
         )
-        hint.setWordWrap(True)
-        themed(hint, lambda: f"color: {palette().text_secondary}; font-size: 9pt;")
-        layout.addWidget(hint)
-
-        edit_btn = FluentPushButton("编辑「标题」配色方案", section)
-        edit_btn.setMinimumHeight(30)
-        edit_btn.clicked.connect(self._open_title_scheme)
-        layout.addWidget(edit_btn)
+        self._title_scheme_edit_btn.clicked.connect(self._open_title_scheme)
+        self._title_appearance_grid.add_field("字体与颜色", self._title_scheme_edit_btn)
+        layout.addWidget(self._title_appearance_grid)
         return section
 
     def _on_title_layout_changed(self, _index: int) -> None:
@@ -3329,6 +3330,9 @@ class PropertyPanel(QWidget):
 
     def _make_title_time_section(self) -> QFrame:
         section, layout = _section("显示时段")
+        self._title_time_grid = _ResponsiveFieldGrid(
+            section, min_column_width=150, max_columns=6
+        )
 
         self._title_mode_combo = _WheelFocusedComboBox(section)
         _compact_control(self._title_mode_combo)
@@ -3342,36 +3346,35 @@ class PropertyPanel(QWidget):
         self._title_mode_combo.currentIndexChanged.connect(
             lambda _i: self._update_title(show_mode=self._title_mode_combo.currentData())
         )
-        layout.addWidget(_field("显示模式", self._title_mode_combo))
+        self._title_time_grid.add_field("显示模式", self._title_mode_combo)
 
-        box = _SubGroup("时间", parent=section)
-        layout.addWidget(box)
-        add = _grid_adder(box.grid)
         self._title_head_spin = _spin(0, 600_000, suffix=" ms")
         self._title_head_spin.valueChanged.connect(
             lambda value: self._update_title(head_offset_ms=value)
         )
-        add("开始偏移", self._title_head_spin)
+        self._title_time_grid.add_field("开始偏移", self._title_head_spin)
         self._title_duration_spin = _spin(0, 600_000, suffix=" ms")
         self._title_duration_spin.valueChanged.connect(
             lambda value: self._update_title(duration_ms=value)
         )
-        add("显示时长", self._title_duration_spin)
+        self._title_time_grid.add_field("显示时长", self._title_duration_spin)
         self._title_tail_spin = _spin(0, 600_000, suffix=" ms")
         self._title_tail_spin.valueChanged.connect(
             lambda value: self._update_title(tail_offset_ms=value)
         )
-        add("片尾偏移", self._title_tail_spin)
+        self._title_time_grid.add_field("片尾偏移", self._title_tail_spin)
         self._title_fade_in_spin = _spin(0, 10_000, suffix=" ms")
         self._title_fade_in_spin.valueChanged.connect(
             lambda value: self._update_title(fade_in_ms=value)
         )
-        add("淡入", self._title_fade_in_spin)
         self._title_fade_out_spin = _spin(0, 10_000, suffix=" ms")
         self._title_fade_out_spin.valueChanged.connect(
             lambda value: self._update_title(fade_out_ms=value)
         )
-        add("淡出", self._title_fade_out_spin)
+        self._title_time_grid.add_field("淡入", self._title_fade_in_spin)
+        self._title_time_grid.add_field("淡出", self._title_fade_out_spin)
+
+        layout.addWidget(self._title_time_grid)
         return section
 
     def _current_title(self) -> TitleOverlay:
