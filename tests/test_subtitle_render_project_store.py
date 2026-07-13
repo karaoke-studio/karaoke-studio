@@ -158,7 +158,7 @@ def test_title_char_roles_round_trip_and_follow_text_edits():
     assert migrated == [["red", None, None], ["blue"]]
 
 
-def test_lyrics_panel_title_mode_reuses_character_role_editor(qapp):
+def test_lyrics_panel_title_mode_reuses_character_role_picker(qapp, monkeypatch):
     panel = lyrics_list.LyricsPanel()
     title = TitleOverlay(
         enabled=True,
@@ -172,10 +172,14 @@ def test_lyrics_panel_title_mode_reuses_character_role_editor(qapp):
     assert panel.table_widget.isColumnHidden(lyrics_list.COL_EFFECT)
     assert panel.table_widget.item(0, lyrics_list.COL_LANE).text() == "1"
     assert panel.table_widget.item(0, lyrics_list.COL_CONTENT).text() == "标题甲"
-    editor = panel._role_delegate.createEditor(
-        panel, None, panel.table_widget.model().index(0, lyrics_list.COL_ROLE)
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        lyrics_list._StableRoundMenu,
+        "exec",
+        lambda menu, *_args: captured.setdefault("menu", menu),
     )
-    assert editor.itemText(0) == "标题默认"
+    panel._show_role_picker(0)
+    assert captured["menu"].actions()[0].text() == "标题默认"
 
     dialog = lyrics_list._CharRoleDialog(
         0,
@@ -187,6 +191,42 @@ def test_lyrics_panel_title_mode_reuses_character_role_editor(qapp):
         default_swatch_role="标题",
     )
     assert dialog._role_buttons[0].text() == "标题默认"
+
+
+def test_role_cell_click_uses_fluent_menu_without_inline_editor(qapp, monkeypatch):
+    panel = lyrics_list.LyricsPanel()
+    panel.set_role_options(["京吹"])
+    panel.set_track(
+        TimingTrack(
+            lines=[
+                TimingLine(
+                    chars=[TimingChar("甲", 1000, role_label="京吹")],
+                    end_ms=2000,
+                )
+            ]
+        )
+    )
+    item = panel.table_widget.item(0, lyrics_list.COL_ROLE)
+    assert not item.flags() & Qt.ItemFlag.ItemIsEditable
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        lyrics_list._StableRoundMenu,
+        "exec",
+        lambda menu, *_args: captured.setdefault("menu", menu),
+    )
+    emitted: list[tuple[list[int], str]] = []
+    panel.roleChangeRequested.connect(
+        lambda rows, name: emitted.append((list(rows), name))
+    )
+
+    panel._on_cell_clicked(0, lyrics_list.COL_ROLE)
+
+    menu = captured["menu"]
+    target = next(action for action in menu.actions() if action.text() == "京吹")
+    assert target.isChecked()
+    target.trigger()
+    assert emitted == [([0], "京吹")]
 
 
 def test_title_source_is_last_and_title_text_syncs_from_tab(qapp, monkeypatch, tmp_path):

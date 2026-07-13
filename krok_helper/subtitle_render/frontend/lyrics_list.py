@@ -362,61 +362,6 @@ class _ReadOnlyDelegate(_GroupBackgroundDelegate):
         return None
 
 
-class _RoleComboDelegate(_GroupBackgroundDelegate):
-    """为角色列提供 qfluentwidgets 风格下拉选择框（带配色色点）。"""
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self._role_options: list[str] = []
-        self._style: Style = Style()
-        self._default_role_text = _DEFAULT_ROLE_TEXT
-        self._default_swatch_role = ""
-
-    def set_role_options(self, options: list[str]) -> None:
-        self._role_options = list(options)
-
-    def set_style(self, style: Style) -> None:
-        self._style = style
-
-    def set_default_role(self, text: str, swatch_role: str = "") -> None:
-        self._default_role_text = text
-        self._default_swatch_role = swatch_role
-
-    def createEditor(self, parent, option, index):  # type: ignore[override]
-        combo = _StableFluentComboBox(parent)
-        combo.setFixedHeight(30)
-        combo.addItem(
-            self._default_role_text,
-            icon=_swatch_icon(
-                _scheme_swatch_color(self._style, self._default_swatch_role)
-            ),
-            userData="",
-        )
-        for name in self._role_options:
-            combo.addItem(
-                name,
-                icon=_swatch_icon(_scheme_swatch_color(self._style, name)),
-                userData=name,
-            )
-        # activated 仅用户交互触发，避免编程填充时 emit commitData
-        combo.activated.connect(lambda _idx: self.commitData.emit(combo))  # type: ignore[arg-type]
-        return combo
-
-    def setEditorData(self, editor, index):  # type: ignore[override]
-        current = index.data(Qt.ItemDataRole.UserRole) or ""
-        for i in range(editor.count()):
-            if editor.itemData(i) == current:
-                editor.setCurrentIndex(i)
-                return
-        editor.setCurrentIndex(0)
-
-    def setModelData(self, editor, model, index):  # type: ignore[override]
-        value = editor.currentData() or ""
-        display = value if value else self._default_role_text
-        model.setData(index, value, Qt.ItemDataRole.UserRole)
-        model.setData(index, display, Qt.ItemDataRole.DisplayRole)
-
-
 def _effective_layout_style(style: Style, line: TimingLine) -> Style:
     """行引用的布局套用到 style 上（与渲染端 ``_layout_style_for_line`` 同语义）。"""
     index = int(getattr(line, "layout_index", 0) or 0)
@@ -814,8 +759,9 @@ class LyricsPanel(DropPanel):
         # 是响应式的唯一可靠信号——resizeEvent 时机早于子布局落位。
         self._table.viewport().installEventFilter(self)
 
-        # 角色列 → FluentComboBox 委托；轨 / 内容列 → 只读委托
-        self._role_delegate = _RoleComboDelegate(self)
+        # 表格内只展示角色，不再叠加半透明 ComboBox 编辑器。单击角色列时
+        # 在单元格下方弹出 Fluent RoundMenu，避免底层文字 / 色点透出重影。
+        self._role_delegate = _ReadOnlyDelegate(self)
         self._readonly_delegate = _ReadOnlyDelegate(self)
         for delegate in (self._role_delegate, self._readonly_delegate):
             delegate.set_group_bg_provider(self._group_bg_for_row)
@@ -859,7 +805,7 @@ class LyricsPanel(DropPanel):
         # 代理编辑后通知宿主
         self._table.itemChanged.connect(self._on_item_changed)
         # 点击行 → 跳转预览
-        self._table.cellClicked.connect(lambda row, _col: self.rowClicked.emit(row))
+        self._table.cellClicked.connect(self._on_cell_clicked)
         self._table.cellDoubleClicked.connect(self._on_cell_double_clicked)
 
         # 各列语义下限之和向上传给 splitter，面板不再能被压到布局散架
@@ -911,19 +857,16 @@ class LyricsPanel(DropPanel):
     def set_role_options(self, options: list[str]) -> None:
         """设置可选的配色方案 / 角色名列表。"""
         self._role_options = list(options)
-        self._role_delegate.set_role_options(list(options))
 
     def set_style(self, style: Style) -> None:
         """样式（布局 / 配色方案）变化时刷新色点、对齐与双行分组。"""
         self._style = style
-        self._role_delegate.set_style(style)
         if self._populated:
             self._refresh_presentation()
 
     def set_track(self, track: Optional[TimingTrack]) -> None:
         """加载 / 清空字幕。``None`` / 无行时回到空态。"""
         self._title_mode = False
-        self._role_delegate.set_default_role(_DEFAULT_ROLE_TEXT)
         self._table.setHorizontalHeaderLabels(_COLUMN_HEADERS)
         self._table.setColumnHidden(COL_EFFECT, False)
         self._track = track
@@ -962,6 +905,9 @@ class LyricsPanel(DropPanel):
                     "混合" if mixed else (role if role else _DEFAULT_ROLE_TEXT)
                 )
                 role_item.setData(Qt.ItemDataRole.UserRole, role)
+                role_item.setFlags(
+                    role_item.flags() & ~Qt.ItemFlag.ItemIsEditable
+                )
                 if blank:
                     role_item.setText("")
                     role_item.setFlags(Qt.ItemFlag.NoItemFlags)
@@ -1018,7 +964,6 @@ class LyricsPanel(DropPanel):
         ]
         self.set_track(TimingTrack(lines=lines))
         self._title_mode = True
-        self._role_delegate.set_default_role("标题默认", TITLE_SCHEME_NAME)
         self._table.setHorizontalHeaderLabels(["行", "角色", "", "内容"])
         self._refresh_presentation()
         self._apply_measured_column_widths()
@@ -1598,7 +1543,53 @@ class LyricsPanel(DropPanel):
             )
             if choice != QMessageBox.StandardButton.Yes:
                 return
-        self.roleChangeRequested.emit(list(rows), role_name)
+        if self._title_mode:
+            self.roleChanged.emit(rows[0], role_name)
+        else:
+            self.roleChangeRequested.emit(list(rows), role_name)
+
+    def _on_cell_clicked(self, row: int, column: int) -> None:
+        """跳转到歌词行；角色列单击直接弹出 Fluent 角色菜单。"""
+        self.rowClicked.emit(row)
+        if column == COL_ROLE:
+            self._show_role_picker(row)
+
+    def _show_role_picker(self, row: int) -> None:
+        if self._track is None or not 0 <= row < len(self._track.lines):
+            return
+        line = self._track.lines[row]
+        if line.is_blank or not line.chars:
+            return
+        menu = _StableRoundMenu(parent=self._table)
+        current = _dominant_role(line)
+        mixed = _line_role_mixed(line)
+        default_text = "标题默认" if self._title_mode else _DEFAULT_ROLE_TEXT
+        default_swatch = TITLE_SCHEME_NAME if self._title_mode else ""
+        choices = [(default_text, "", default_swatch)] + [
+            (name, name, name) for name in self._role_options
+        ]
+        for display, name, swatch_name in choices:
+            action = Action(
+                _swatch_icon(_scheme_swatch_color(self._style, swatch_name)),
+                display,
+                menu,
+            )
+            action.setCheckable(True)
+            action.setChecked(not mixed and current == name)
+            action.triggered.connect(
+                lambda _checked=False, value=name: self._request_role_change(
+                    [row], value
+                )
+            )
+            menu.addAction(action)
+        item = self._table.item(row, COL_ROLE)
+        if item is None:
+            return
+        rect = self._table.visualItemRect(item)
+        popup_pos = self._table.viewport().mapToGlobal(
+            QPoint(rect.left(), rect.bottom() + 1)
+        )
+        menu.exec(popup_pos)
 
     def _on_cell_double_clicked(self, row: int, column: int) -> None:
         if column not in (COL_EFFECT, COL_CONTENT) or self._track is None:
