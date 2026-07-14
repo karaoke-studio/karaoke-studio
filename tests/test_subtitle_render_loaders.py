@@ -44,8 +44,8 @@ def qapp():
 
 
 def _make_window(qapp, monkeypatch):
-    monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
-    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
     monkeypatch.setattr(
         mw.SubtitleRenderWindow,
         "_resolve_ffprobe_path",

@@ -16,7 +16,6 @@ from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
     QInputDialog,
     QLabel,
-    QMessageBox,
     QWidget,
 )
 from qfluentwidgets import (  # noqa: E402
@@ -2883,8 +2882,8 @@ def test_screen_picker_left_click_preview_is_applied(qapp, monkeypatch):
 
 
 def test_main_window_style_panel_updates_preview(qapp, monkeypatch):
-    monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
-    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
     monkeypatch.setattr(
         mw.SubtitleRenderWindow,
         "_resolve_ffprobe_path",
@@ -3059,8 +3058,8 @@ def test_preview_player_keyboard_shortcuts_control_transport(qapp, monkeypatch):
 
 def test_video_drop_region_becomes_property_panel_after_video_load(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(mw, "unified_player_enabled", lambda: False)
-    monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
-    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
     monkeypatch.setattr(
         mw.SubtitleRenderWindow,
         "_probe",
@@ -3090,8 +3089,8 @@ def test_video_drop_region_becomes_property_panel_after_video_load(qapp, monkeyp
 
 
 def test_main_window_export_screen_controls_update_and_persist(qapp, monkeypatch):
-    monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
-    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
 
     class FakeSettingsProvider:
         def __init__(self):
@@ -3133,8 +3132,8 @@ def test_main_window_export_screen_controls_update_and_persist(qapp, monkeypatch
 
 
 def test_main_window_native_export_is_hard_disabled(qapp, monkeypatch):
-    monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
-    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
 
     class FakeSettingsProvider:
         def __init__(self):
@@ -3158,8 +3157,8 @@ def test_main_window_native_export_is_hard_disabled(qapp, monkeypatch):
 
 
 def test_main_window_keeps_presets_but_falls_back_to_global_selection(qapp, monkeypatch):
-    monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
-    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
     initial_style = Style(
         custom_style_schemes={
             "图像方案": SubtitleStyleScheme(
@@ -3310,8 +3309,8 @@ def test_role_combo_width_tracks_longest_option_with_cap(qapp):
 
 
 def test_preview_splitter_defaults_to_4_6_and_remembers_dragged_ratio(qapp, monkeypatch):
-    monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
-    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
 
     class FakeSettingsProvider:
         def __init__(self):

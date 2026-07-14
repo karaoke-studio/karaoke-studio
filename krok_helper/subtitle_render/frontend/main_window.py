@@ -39,7 +39,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
-    QMessageBox,
     QPushButton,
     QSizePolicy,
     QSplitter,
@@ -90,7 +89,10 @@ from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
 from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_choice,
+    fluent_error,
+    fluent_info,
     fluent_question,
+    fluent_warning,
 )
 from krok_helper.subtitle_render.frontend.lyrics_list import LyricsPanel
 from krok_helper.subtitle_render.frontend.playback import (
@@ -1149,7 +1151,7 @@ class SubtitleRenderWindow(QWidget):
         try:
             data = load_render_project(Path(path_str))
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(self, "打开项目失败", f"无法读取项目文件：\n{path_str}\n\n{exc}")
+            fluent_error(self, "打开项目失败", f"无法读取项目文件：\n{path_str}\n\n{exc}")
             return
         self._apply_project_data(data)
         self._project_path = Path(path_str)
@@ -1169,7 +1171,7 @@ class SubtitleRenderWindow(QWidget):
         try:
             result = load_n3proj(Path(path_str))
         except (OSError, ValueError) as exc:
-            QMessageBox.critical(
+            fluent_error(
                 self, "导入失败", f"无法读取 NicoKaraMaker3 项目文件：\n{path_str}\n\n{exc}"
             )
             return
@@ -1180,11 +1182,12 @@ class SubtitleRenderWindow(QWidget):
         self._project_dirty = True
         self._refresh_project_title()
         if result.warnings:
-            QMessageBox.information(
+            fluent_info(
                 self,
                 "导入完成（部分设置需注意）",
                 "已导入 N3 项目，以下内容请检查：\n\n"
                 + "\n".join(f"• {warning}" for warning in result.warnings),
+                copyable=True,
             )
         else:
             InfoBar.success(
@@ -1218,7 +1221,7 @@ class SubtitleRenderWindow(QWidget):
         try:
             save_render_project(path, self._current_project_data())
         except OSError as exc:
-            QMessageBox.critical(self, "保存项目失败", f"无法写入项目文件：\n{path}\n\n{exc}")
+            fluent_error(self, "保存项目失败", f"无法写入项目文件：\n{path}\n\n{exc}")
             return False
         self._project_path = path
         self._project_dirty = False
@@ -1592,7 +1595,7 @@ class SubtitleRenderWindow(QWidget):
         try:
             track = load_nicokara_lrc(path)
         except Exception as exc:  # noqa: BLE001 — 暴露给用户的统一错误处理
-            QMessageBox.critical(
+            fluent_error(
                 self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"
             )
             return None
@@ -1604,7 +1607,7 @@ class SubtitleRenderWindow(QWidget):
         try:
             track = load_sug_timing_track(path)
         except Exception as exc:  # noqa: BLE001 — 暴露给用户的统一错误处理
-            QMessageBox.critical(
+            fluent_error(
                 self, "加载字幕失败", f"无法解析 SUG 项目：\n{path}\n\n错误：{exc}"
             )
             return None
@@ -1618,7 +1621,7 @@ class SubtitleRenderWindow(QWidget):
         try:
             track = timing_track_from_sug_project(project)
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(
+            fluent_error(
                 self, "加载字幕失败", f"无法读取打轴项目：\n{exc}"
             )
             return None
@@ -1660,7 +1663,7 @@ class SubtitleRenderWindow(QWidget):
         if info is None:
             return None
         if info.video_streams == 0:
-            QMessageBox.warning(self, "背景视频不可用", f"该文件不含视频流：\n{path}")
+            fluent_warning(self, "背景视频不可用", f"该文件不含视频流：\n{path}")
             return None
         old_video = self._video_path
         had_independent_audio = (
@@ -1708,7 +1711,7 @@ class SubtitleRenderWindow(QWidget):
     def load_background_image(self, path: Path) -> bool:
         image = QImage(str(path))
         if image.isNull():
-            QMessageBox.warning(self, "背景图片不可用", f"无法读取图片：\n{path}")
+            fluent_warning(self, "背景图片不可用", f"无法读取图片：\n{path}")
             return False
         self._set_non_video_background(BackgroundSource(kind="image", path=str(path)))
         return True
@@ -1716,11 +1719,11 @@ class SubtitleRenderWindow(QWidget):
     def load_background_sequence(self, first_frame: Path, source_fps: int = 60) -> bool:
         image = QImage(str(first_frame))
         if image.isNull():
-            QMessageBox.warning(self, "图片序列不可用", f"无法读取首帧：\n{first_frame}")
+            fluent_warning(self, "图片序列不可用", f"无法读取首帧：\n{first_frame}")
             return False
         pattern, start_number = infer_image_sequence_pattern(first_frame)
         if pattern == first_frame:
-            QMessageBox.warning(
+            fluent_warning(
                 self,
                 "图片序列命名无效",
                 "首帧文件名需要以连续编号结尾，例如 frame_0001.png。",
@@ -1785,7 +1788,7 @@ class SubtitleRenderWindow(QWidget):
         视频背景严格使用内嵌音轨，避免预览形成两个媒体时钟。
         """
         if self._background_source is not None and self._background_source.kind == "video":
-            QMessageBox.warning(
+            fluent_warning(
                 self,
                 "无法添加独立音频",
                 "视频背景只使用视频内嵌音轨，以避免双时钟造成音画不同步。",
@@ -1795,7 +1798,7 @@ class SubtitleRenderWindow(QWidget):
         if info is None:
             return None
         if info.audio_streams == 0:
-            QMessageBox.warning(self, "音频不可用", f"该文件不含音频流：\n{path}")
+            fluent_warning(self, "音频不可用", f"该文件不含音频流：\n{path}")
             return None
         self._audio_path = path
         self._audio_info = info
@@ -1831,10 +1834,10 @@ class SubtitleRenderWindow(QWidget):
             ffprobe_path = self._resolve_ffprobe_path()
             return probe_media(ffprobe_path, path)
         except ProcessingError as exc:
-            QMessageBox.critical(self, f"加载{label}失败", str(exc))
+            fluent_error(self, f"加载{label}失败", str(exc))
             return None
         except Exception as exc:  # noqa: BLE001
-            QMessageBox.critical(
+            fluent_error(
                 self,
                 f"加载{label}失败",
                 f"无法读取媒体信息：\n{path}\n\n错误：{exc}",
@@ -2387,7 +2390,7 @@ class SubtitleRenderWindow(QWidget):
 
     def _on_source_add_requested(self) -> None:
         if self._timing_track is None:
-            QMessageBox.information(self, "先加载主字幕", "请先加载主字幕文件，再添加副字幕源。")
+            fluent_info(self, "先加载主字幕", "请先加载主字幕文件，再添加副字幕源。")
             return
         start_dir = str(self._subtitle_path.parent) if self._subtitle_path else ""
         path_str, _ = QFileDialog.getOpenFileName(
@@ -2399,7 +2402,7 @@ class SubtitleRenderWindow(QWidget):
         try:
             track = self._load_timing_track_file(path)
         except Exception as exc:  # noqa: BLE001 — 统一错误弹窗
-            QMessageBox.critical(
+            fluent_error(
                 self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"
             )
             return
@@ -3047,12 +3050,12 @@ class SubtitleRenderWindow(QWidget):
 
     def _start_render_export(self) -> None:
         if self._render_thread is not None and self._render_thread.isRunning():
-            QMessageBox.information(self, "导出中", "当前导出任务还在处理中，请稍等。")
+            fluent_info(self, "导出中", "当前导出任务还在处理中，请稍等。")
             return
         try:
             job = self._build_render_job()
         except ProcessingError as exc:
-            QMessageBox.critical(self, "无法导出", str(exc))
+            fluent_error(self, "无法导出", str(exc))
             return
 
         self._export_start_button.setEnabled(False)
@@ -3116,7 +3119,7 @@ class SubtitleRenderWindow(QWidget):
         self._export_status_label.setText("导出失败")
         self._export_start_button.setEnabled(True)
         self._export_stop_button.setEnabled(False)
-        QMessageBox.critical(self, "导出失败", message)
+        fluent_error(self, "导出失败", message)
 
     def _clear_render_thread(self) -> None:
         self._render_thread = None

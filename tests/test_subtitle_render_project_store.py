@@ -45,8 +45,8 @@ def qapp():
 
 
 def _make_window(qapp, monkeypatch):
-    monkeypatch.setattr(mw.QMessageBox, "critical", lambda *a, **k: None)
-    monkeypatch.setattr(mw.QMessageBox, "warning", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
     monkeypatch.setattr(
         mw.SubtitleRenderWindow, "_resolve_ffprobe_path", lambda self: "ffprobe"
     )
@@ -165,6 +165,41 @@ def test_unsaved_project_uses_fluent_save_discard_cancel_confirmation(
     assert len(calls) == save_calls
     assert captured["args"][3] == ["保存", "放弃", "取消"]
     assert captured["kwargs"] == {"default": 2}
+
+
+def test_n3_import_warnings_use_copyable_fluent_dialog(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+    monkeypatch.setattr(
+        mw.QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: ("example.n3proj", ""),
+    )
+
+    class Result:
+        project_data = {}
+        warnings = ["帧率已调整为 60 fps", "歌词间隔使用默认布局"]
+
+    monkeypatch.setattr(mw, "load_n3proj", lambda _path: Result())
+    monkeypatch.setattr(win, "_clear_loaded_media", lambda: None)
+    monkeypatch.setattr(win, "_apply_project_data", lambda _data: None)
+    monkeypatch.setattr(win, "_refresh_project_title", lambda: None)
+    captured: dict[str, object] = {}
+
+    def capture(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr(mw, "fluent_info", capture)
+
+    win._import_n3_project()
+
+    assert captured["args"][1] == "导入完成（部分设置需注意）"
+    assert captured["args"][2] == (
+        "已导入 N3 项目，以下内容请检查：\n\n"
+        "• 帧率已调整为 60 fps\n"
+        "• 歌词间隔使用默认布局"
+    )
+    assert captured["kwargs"] == {"copyable": True}
 
 
 def test_apply_project_data_does_not_mark_dirty(qapp, monkeypatch):

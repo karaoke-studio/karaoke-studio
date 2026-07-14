@@ -51,7 +51,6 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QLabel,
     QListWidgetItem,
-    QMessageBox,
     QPushButton,
     QSizePolicy,
     QStackedWidget,
@@ -89,6 +88,7 @@ from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_get_editable_choice,
     fluent_get_text,
     fluent_question,
+    fluent_warning,
 )
 from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
 from krok_helper.subtitle_render.models import (
@@ -2285,7 +2285,12 @@ class StylePresetManagerDialog(QDialog):
         )
         if batch.failed:
             details = "\n".join(f"{path.name}：{reason}" for path, reason in batch.failed[:8])
-            QMessageBox.warning(self, "N3 模板导入完成", f"{summary}\n\n{details}")
+            fluent_warning(
+                self,
+                "N3 模板导入完成",
+                f"{summary}\n\n{details}",
+                copyable=True,
+            )
         elif warning_count:
             InfoBar.warning(
                 title="N3 模板已导入",

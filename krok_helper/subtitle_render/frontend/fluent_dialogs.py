@@ -89,6 +89,29 @@ class FluentMessageDialog(Dialog):
                 self._dim = None
 
 
+def fluent_info(
+    parent: Optional[QWidget],
+    title: str,
+    content: str,
+    *,
+    ok_text: str = "确定",
+    copyable: bool = False,
+) -> None:
+    """Show a single-button Fluent message dialog."""
+    dialog = FluentMessageDialog(title, content, parent)
+    dialog.yesButton.setText(ok_text)
+    dialog.hideCancelButton()
+    if copyable:
+        dialog.setContentCopyable(True)
+    dialog.exec()
+
+
+# qfluentwidgets Dialog has no severity icon area. Keep semantic aliases so
+# callers remain explicit and future styling can differentiate them centrally.
+fluent_warning = fluent_info
+fluent_error = fluent_info
+
+
 def fluent_question(
     parent: Optional[QWidget],
     title: str,
