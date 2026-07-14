@@ -249,6 +249,18 @@ def test_import_media_and_screen(imported, tmp_path):
     assert data["line_breaks_before"] == ["none", "none", "page"]
 
 
+def test_import_maps_n3_auto_output_name_to_yurika_suffix(tmp_path):
+    payload = _project_payload(tmp_path)
+    payload["DestPath"] = str(tmp_path / "demo_ニコカラメーカー3出力.mp4")
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+
+    # N3 自动命名换成本模块默认后缀；目录保持不变
+    assert result.project_data["output"]["output_path"] == str(
+        tmp_path / "demo_yurika出力.mp4"
+    )
+
+
 def test_video_background_ignores_independent_sound_path(tmp_path):
     payload = _project_payload(tmp_path)
     audio = tmp_path / "song.wav"

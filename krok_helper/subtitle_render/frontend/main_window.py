@@ -118,6 +118,7 @@ from krok_helper.subtitle_render.frontend.property_panel import (
 from krok_helper.subtitle_render.frontend.timeline_view import TrackTimelineView
 from krok_helper.subtitle_render.models import (
     BackgroundSource,
+    DEFAULT_OUTPUT_NAME_SUFFIX,
     LineAnimationOverride,
     PROJECT_FILE_SUFFIX,
     StylePreset,
@@ -3184,7 +3185,7 @@ class SubtitleRenderWindow(QWidget):
     def _default_export_name(self) -> str:
         base = self._export_output_base()
         stem = base.stem if base is not None else "subtitle_render"
-        return f"{stem}_yurika出力"
+        return f"{stem}{DEFAULT_OUTPUT_NAME_SUFFIX}"
 
     def _normalized_export_name(self) -> str:
         """文件名输入框内容（用户手滑带上 .mp4 时剥掉，扩展名由拼装统一补）。"""

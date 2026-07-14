@@ -44,6 +44,7 @@ from krok_helper.subtitle_render.n3_font_scheme import (
     hex_from_colorbind as _hex_from_colorbind,
 )
 from krok_helper.subtitle_render.models import (
+    DEFAULT_OUTPUT_NAME_SUFFIX,
     LineAnimationOverride,
     LyricsLayout,
     Style,
@@ -60,6 +61,9 @@ from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 
 N3_PROJECT_FILE_SUFFIX = ".n3proj"
 N3_PROJECT_FILTER = "NicoKaraMaker3 项目 (*.n3proj);;所有文件 (*.*)"
+
+# N3 自动生成的输出文件名后缀（DestPath = {视频名} + 此后缀 + .mp4）
+_N3_AUTO_OUTPUT_SUFFIX = "_ニコカラメーカー3出力"
 
 _HEAD_END_MAX_MS = 5_999_990
 """N3 时间标签上限 ``[99:59:99]``，``TitleShowTime.HeadEnd`` 取该值表示“到曲尾”。"""
@@ -302,7 +306,13 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
     dest_path = str(data.get("DestPath") or "").strip()
     if dest_format == 1:
         if dest_path:
-            output["output_path"] = dest_path
+            # N3 自动命名「{视频名}_ニコカラメーカー3出力」换成本模块默认后缀；
+            # 用户在 N3 里自定义过的文件名原样保留。
+            path = Path(dest_path)
+            if path.stem.endswith(_N3_AUTO_OUTPUT_SUFFIX):
+                stem = path.stem[: -len(_N3_AUTO_OUTPUT_SUFFIX)]
+                path = path.with_name(f"{stem}{DEFAULT_OUTPUT_NAME_SUFFIX}{path.suffix}")
+            output["output_path"] = str(path)
     else:
         format_names = {0: "未压缩 AVI", 2: "ARGB PNG 序列", 3: "ARGB PNG 序列（仅字幕）"}
         warnings.append(

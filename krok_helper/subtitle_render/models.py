@@ -33,6 +33,9 @@ SCHEMA_VERSION = 1
 PROJECT_FILE_SUFFIX = ".yurika"
 STYLE_PRESET_FILE_SUFFIX = ".krstyle.json"
 SUBTITLE_SOURCE_SUFFIX = ".sug"
+# 导出文件名默认后缀（{视频文件名}_yurika出力.mp4）；N3 导入时会把
+# N3 自动命名的「_ニコカラメーカー3出力」映射成它。
+DEFAULT_OUTPUT_NAME_SUFFIX = "_yurika出力"
 
 
 # ---------------------------------------------------------------------------
