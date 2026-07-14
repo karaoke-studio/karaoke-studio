@@ -1028,7 +1028,7 @@ def test_font_scripts_are_tabs_and_spacing_lives_on_layout_page(qapp):
     assert not panel._layout_section.isAncestorOf(panel._ruby_font_size_spin)
     assert not panel._font_tab_panel.isAncestorOf(panel._letter_spacing_spin)
     assert not panel._font_tab_panel.isAncestorOf(panel._space_width_spin)
-    assert panel._italic_check.parentWidget() is panel._allow_biting_check.parentWidget()
+    assert panel._character_layout_section.isAncestorOf(panel._allow_biting_check)
 
     panel.set_style(
         Style(font_family="Yu Gothic UI", font_size_px=70, font_weight=800)
@@ -2067,14 +2067,16 @@ def test_property_panel_role_scheme_controls_emit_style(qapp):
     scheme = emitted[-1].custom_style_schemes["B"]
     assert scheme.font_size_px == 88
     assert scheme.latin_font_size_px == 74
-    assert scheme.letter_spacing_px == 9
+    assert emitted[-1].letter_spacing_px == 9
+    assert scheme.letter_spacing_px != 9
     assert scheme.fill_color == "#00AAEE"
     assert scheme.karaoke_colors.after.text.mode == "gradient_horizontal"
     assert scheme.karaoke_colors.after.text.start_color == "#00AAEE"
     assert scheme.karaoke_colors.after.text.end_color == "#FFCC00"
     assert scheme.base_color == "#112233"
     assert scheme.karaoke_colors.before.text.color == "#112233"
-    assert scheme.ruby_gap_px == 8
+    assert emitted[-1].ruby_gap_px == 8
+    assert scheme.ruby_gap_px != 8
     assert panel._paint_gradient_start_btn.color == "#00AAEE"
 
 
@@ -2206,12 +2208,12 @@ def test_property_panel_role_scheme_switches_subtitle_controls(qapp):
     panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:A"))
 
     assert panel._font_size_spin.value() == 72
-    assert panel._letter_spacing_spin.value() == 11
+    assert panel._letter_spacing_spin.value() == style.letter_spacing_px
     assert panel._font_weight_combo.currentData() == 700
     assert panel._fill_mode_combo.currentData() == "gradient_vertical"
     assert panel._paint_gradient_start_btn.color == "#0088FF"
     assert panel._paint_gradient_end_btn.color == "#FFCC00"
-    assert panel._ruby_gap_spin.value() == 12
+    assert panel._ruby_gap_spin.value() == style.ruby_gap_px
 
     panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("global"))
     assert panel._font_size_spin.value() == style.font_size_px
@@ -3228,14 +3230,30 @@ def test_property_panel_layout_selector_edits_selected_layout(qapp):
 
     # 编辑写入选中的布局，不动默认布局字段
     panel._line_gap_spin.setValue(33)
+    panel._letter_spacing_spin.setValue(-6)
+    panel._allow_biting_check.setChecked(True)
+    panel._ruby_interval_spin.setValue(3)
+    panel._ruby_alignment_combo.setCurrentIndex(
+        panel._ruby_alignment_combo.findData("center")
+    )
+    panel._ruby_gap_spin.setValue(-2)
     assert emitted[-1].layouts[base_count].line_gap_px == 33
+    assert emitted[-1].layouts[base_count].letter_spacing_px == -6
+    assert emitted[-1].layouts[base_count].allow_biting is True
+    assert emitted[-1].layouts[base_count].ruby_interval_px == 3
+    assert emitted[-1].layouts[base_count].ruby_alignment == "center"
+    assert emitted[-1].layouts[base_count].ruby_gap_px == -2
     assert emitted[-1].line_gap_px == Style().line_gap_px
+    assert emitted[-1].letter_spacing_px == Style().letter_spacing_px
 
     # 切回默认布局 → 编辑写回 Style 自身
     panel._layout_combo.setCurrentIndex(0)
     panel._line_gap_spin.setValue(44)
+    panel._letter_spacing_spin.setValue(8)
     assert emitted[-1].line_gap_px == 44
+    assert emitted[-1].letter_spacing_px == 8
     assert emitted[-1].layouts[base_count].line_gap_px == 33
+    assert emitted[-1].layouts[base_count].letter_spacing_px == -6
 
 
 def test_ruby_font_tab_edits_write_ruby_fields(qapp):

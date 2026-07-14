@@ -421,11 +421,10 @@ class TitleOverlay:
 
 @dataclass
 class LyricsLayout:
-    """一套可命名的布局定义（N3 ``LyricsLayoutModel`` 的布局几何子集）。
+    """一套可命名的 N3 ``LyricsLayoutModel`` 布局定义。
 
-    只包含「位置」域字段；字间距 / 咬合 / 注音间距等在本项目属于字体与配色
-    方案域（可按角色覆盖），不进布局对象。生效优先级：全局 ``Style`` <
-    布局 < 歌手/角色方案。
+    字符排版字段为 ``None`` 时继承 ``Style``，用于兼容旧版 ``.yurika``；N3
+    导入和新版编辑器会保存显式值，包括合法的 0 / ``False``。
     """
 
     name: str = "布局"
@@ -437,9 +436,14 @@ class LyricsLayout:
     line_alignments: list[HorizontalAlign] = field(
         default_factory=lambda: ["left", "right"]
     )
+    letter_spacing_px: Optional[int] = None
+    allow_biting: Optional[bool] = None
+    ruby_interval_px: Optional[int] = None
+    ruby_alignment: Optional[RubyAlignment] = None
+    ruby_gap_px: Optional[int] = None
 
 
-LYRICS_LAYOUT_FIELDS: tuple[str, ...] = (
+LYRICS_LAYOUT_GEOMETRY_FIELDS: tuple[str, ...] = (
     "line_y_position",
     "line_y_margin_px",
     "line_gap_px",
@@ -447,7 +451,20 @@ LYRICS_LAYOUT_FIELDS: tuple[str, ...] = (
     "horizontal_margin_px",
     "line_alignments",
 )
-"""布局对象作用到 ``Style`` 上的字段（不含 ``name``）。"""
+
+LYRICS_LAYOUT_CHAR_FIELDS: tuple[str, ...] = (
+    "letter_spacing_px",
+    "allow_biting",
+    "ruby_interval_px",
+    "ruby_alignment",
+    "ruby_gap_px",
+)
+
+LYRICS_LAYOUT_FIELDS: tuple[str, ...] = (
+    *LYRICS_LAYOUT_GEOMETRY_FIELDS,
+    *LYRICS_LAYOUT_CHAR_FIELDS,
+)
+"""布局对象可作用到 ``Style`` 上的全部字段（不含 ``name``）。"""
 
 
 @dataclass
@@ -1478,6 +1495,19 @@ def rescale_layout_sizes(style: Style, new_height: int) -> Style:
             line_y_margin_px=scaled(layout.line_y_margin_px),
             line_gap_px=scaled(layout.line_gap_px),
             horizontal_margin_px=scaled(layout.horizontal_margin_px),
+            letter_spacing_px=(
+                None
+                if layout.letter_spacing_px is None
+                else scaled(layout.letter_spacing_px)
+            ),
+            ruby_interval_px=(
+                None
+                if layout.ruby_interval_px is None
+                else scaled(layout.ruby_interval_px)
+            ),
+            ruby_gap_px=(
+                None if layout.ruby_gap_px is None else scaled(layout.ruby_gap_px)
+            ),
         )
         for layout in style.layouts
     ]
@@ -1487,6 +1517,9 @@ def rescale_layout_sizes(style: Style, new_height: int) -> Style:
         line_y_margin_px=scaled(style.line_y_margin_px),
         line_gap_px=scaled(style.line_gap_px),
         horizontal_margin_px=margin,
+        letter_spacing_px=scaled(style.letter_spacing_px),
+        ruby_interval_px=scaled(style.ruby_interval_px),
+        ruby_gap_px=scaled(style.ruby_gap_px),
         upper_line_left_margin_px=margin,
         lower_line_right_margin_px=margin,
         layouts=layouts,
@@ -1503,6 +1536,11 @@ def lyrics_layout_to_dict(layout: LyricsLayout) -> dict:
         "smart_horizontal": layout.smart_horizontal,
         "horizontal_margin_px": layout.horizontal_margin_px,
         "line_alignments": list(layout.line_alignments),
+        "letter_spacing_px": layout.letter_spacing_px,
+        "allow_biting": layout.allow_biting,
+        "ruby_interval_px": layout.ruby_interval_px,
+        "ruby_alignment": layout.ruby_alignment,
+        "ruby_gap_px": layout.ruby_gap_px,
     }
 
 
@@ -1526,6 +1564,31 @@ def lyrics_layout_from_dict(payload: object) -> LyricsLayout:
             payload.get("horizontal_margin_px"), defaults.horizontal_margin_px
         ),
         line_alignments=_line_alignments_from_payload(payload.get("line_alignments")),
+        letter_spacing_px=(
+            _int_value(payload.get("letter_spacing_px"), 0)
+            if payload.get("letter_spacing_px") is not None
+            else None
+        ),
+        allow_biting=(
+            bool(payload.get("allow_biting"))
+            if payload.get("allow_biting") is not None
+            else None
+        ),
+        ruby_interval_px=(
+            _int_value(payload.get("ruby_interval_px"), 0)
+            if payload.get("ruby_interval_px") is not None
+            else None
+        ),
+        ruby_alignment=(
+            payload.get("ruby_alignment")
+            if payload.get("ruby_alignment") in RUBY_ALIGNMENTS
+            else None
+        ),
+        ruby_gap_px=(
+            _int_value(payload.get("ruby_gap_px"), 0)
+            if payload.get("ruby_gap_px") is not None
+            else None
+        ),
     )
 
 

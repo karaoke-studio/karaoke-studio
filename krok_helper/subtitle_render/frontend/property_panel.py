@@ -3536,18 +3536,10 @@ class PropertyPanel(QWidget):
 
         self._italic_check = CheckBox("斜体", section)
         self._italic_check.toggled.connect(lambda checked: self._update_style(italic=checked))
-        self._allow_biting_check = CheckBox("允许文字咬合", section)
-        self._allow_biting_check.setToolTip(
-            "允许斜体和部分标点使用负字形边距，效果更接近 NicokaraMaker3。"
-        )
-        self._allow_biting_check.toggled.connect(
-            lambda checked: self._update_style(allow_biting=checked)
-        )
         flags_row = QHBoxLayout()
         flags_row.setContentsMargins(0, 0, 0, 0)
         flags_row.setSpacing(12)
         flags_row.addWidget(self._italic_check)
-        flags_row.addWidget(self._allow_biting_check)
         flags_row.addStretch(1)
         layout.addLayout(flags_row)
 
@@ -3817,7 +3809,21 @@ class PropertyPanel(QWidget):
         layout = QVBoxLayout(group)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-        layout.addWidget(_subgroup_label("字符排版"))
+
+        header = QWidget(group)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(8)
+        header_layout.addWidget(_subgroup_label("字符排版"))
+        self._allow_biting_check = CheckBox("允许文字咬合", header)
+        self._allow_biting_check.setToolTip(
+            "允许斜体和部分标点使用负字形边距，效果更接近 NicokaraMaker3。"
+        )
+        self._allow_biting_check.toggled.connect(
+            lambda checked: self._update_layout_field(allow_biting=checked)
+        )
+        header_layout.addWidget(self._allow_biting_check)
+        layout.addWidget(header)
 
         fields = QWidget(group)
         fields_layout = QHBoxLayout(fields)
@@ -3830,7 +3836,7 @@ class PropertyPanel(QWidget):
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
         )
         self._letter_spacing_spin.valueChanged.connect(
-            lambda value: self._update_style(letter_spacing_px=value)
+            lambda value: self._update_layout_field(letter_spacing_px=value)
         )
         fields_layout.addWidget(_field("字间距", self._letter_spacing_spin))
 
@@ -3843,6 +3849,7 @@ class PropertyPanel(QWidget):
             lambda value: self._update_style(space_width_percent=value)
         )
         fields_layout.addWidget(_field("空格宽度", self._space_width_spin))
+
         layout.addWidget(fields)
         return group
 
@@ -3856,7 +3863,7 @@ class PropertyPanel(QWidget):
 
         self._ruby_gap_spin = _spin(-40, 40, suffix=" px")
         self._ruby_gap_spin.valueChanged.connect(
-            lambda value: self._update_style(ruby_gap_px=value)
+            lambda value: self._update_layout_field(ruby_gap_px=value)
         )
         grid.add_field("与正文间距", self._ruby_gap_spin)
 
@@ -3867,7 +3874,7 @@ class PropertyPanel(QWidget):
             "调整它看不到变化；对超出正文宽度的长注音效果最明显。"
         )
         self._ruby_interval_spin.valueChanged.connect(
-            lambda value: self._update_style(ruby_interval_px=value)
+            lambda value: self._update_layout_field(ruby_interval_px=value)
         )
         grid.add_field("字间距", self._ruby_interval_spin)
 
@@ -3884,7 +3891,7 @@ class PropertyPanel(QWidget):
             "否则均等分布。"
         )
         self._ruby_alignment_combo.currentIndexChanged.connect(
-            lambda _index: self._update_style(
+            lambda _index: self._update_layout_field(
                 ruby_alignment=self._ruby_alignment_combo.currentData()
             )
         )
@@ -5263,14 +5270,20 @@ class PropertyPanel(QWidget):
 
     def _current_layout_values(self) -> dict:
         source = self._current_layout_source()
-        return {name: deepcopy(getattr(source, name)) for name in LYRICS_LAYOUT_FIELDS}
+        values: dict[str, Any] = {}
+        for name in LYRICS_LAYOUT_FIELDS:
+            value = getattr(source, name)
+            if value is None:
+                value = getattr(self._style, name)
+            values[name] = deepcopy(value)
+        return values
 
     def _update_layout_field(self, **changes) -> None:
         if self._syncing:
             return
         index = self._current_layout_index()
         if index <= 0:
-            self._update_style(**changes)
+            self._update_style(_force_global=True, **changes)
             return
         layouts = list(self._style.layouts)
         layouts[index - 1] = replace(layouts[index - 1], **changes)
@@ -5324,6 +5337,13 @@ class PropertyPanel(QWidget):
                 )
             )
             self._horizontal_margin_spin.setValue(int(values["horizontal_margin_px"]))
+            self._letter_spacing_spin.setValue(int(values["letter_spacing_px"]))
+            self._allow_biting_check.setChecked(bool(values["allow_biting"]))
+            self._ruby_interval_spin.setValue(int(values["ruby_interval_px"]))
+            self._ruby_alignment_combo.setCurrentIndex(
+                max(0, self._ruby_alignment_combo.findData(values["ruby_alignment"]))
+            )
+            self._ruby_gap_spin.setValue(int(values["ruby_gap_px"]))
             self._rebuild_line_alignment_rows()
             self._sync_vertical_margin_enabled()
         finally:
@@ -6293,7 +6313,6 @@ class PropertyPanel(QWidget):
             self._font_latin_size_spin.setValue(
                 0 if latin_size is None else int(latin_size)
             )
-            self._letter_spacing_spin.setValue(int(self._scheme_value("letter_spacing_px")))
             self._space_width_spin.setValue(int(self._scheme_value("space_width_percent")))
             self._font_weight_combo.setCurrentIndex(
                 max(0, self._font_weight_combo.findData(int(self._scheme_value("font_weight"))))
@@ -6308,7 +6327,6 @@ class PropertyPanel(QWidget):
                 )
             )
             self._italic_check.setChecked(bool(self._scheme_value("italic")))
-            self._allow_biting_check.setChecked(bool(self._scheme_value("allow_biting")))
             ruby_family = self._scheme_value("ruby_font_family")
             ruby_size = self._scheme_value("ruby_font_size_px")
             ruby_weight = self._scheme_value("ruby_font_weight")
@@ -6345,14 +6363,6 @@ class PropertyPanel(QWidget):
             )
             self._sync_font_stroke_controls()
             self._sync_color_subject_style_controls()
-            self._ruby_gap_spin.setValue(int(self._scheme_value("ruby_gap_px")))
-            self._ruby_interval_spin.setValue(int(self._style.ruby_interval_px))
-            self._ruby_alignment_combo.setCurrentIndex(
-                max(
-                    0,
-                    self._ruby_alignment_combo.findData(self._style.ruby_alignment),
-                )
-            )
             if hasattr(self, "_ruby_apply_main_btn"):
                 self._ruby_apply_main_btn.setVisible(
                     self._current_color_subject_key() == "ruby"
@@ -6480,10 +6490,10 @@ class PropertyPanel(QWidget):
         self._volume_overlay_stroke_btn.set_color(self._style.volume_overlay_stroke_color)
         self._sync_lit_style_visibility()
 
-    def _update_style(self, **changes) -> None:
+    def _update_style(self, _force_global: bool = False, **changes) -> None:
         if self._syncing:
             return
-        if changes and set(changes).issubset(_SCHEME_FIELDS):
+        if not _force_global and changes and set(changes).issubset(_SCHEME_FIELDS):
             role_name = self._current_custom_scheme_name()
             if role_name is not None:
                 # 当前选中某个角色 → 编辑进该角色（按名字存进 custom_style_schemes）。

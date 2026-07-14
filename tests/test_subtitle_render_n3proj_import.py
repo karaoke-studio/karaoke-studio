@@ -408,6 +408,35 @@ def test_import_layouts(imported):
     assert [layout.name for layout in style.layouts] == ["タイトル左上"]
     assert style.layouts[0].line_y_position == "top"
     assert style.layouts[0].line_alignments == ["left"]
+    assert style.layouts[0].letter_spacing_px == 0
+    assert style.layouts[0].allow_biting is False
+    assert style.layouts[0].ruby_interval_px == 0
+    assert style.layouts[0].ruby_alignment == "auto"
+    assert style.layouts[0].ruby_gap_px == 0
+    assert not any("全局设置" in warning for warning in imported.warnings)
+
+
+def test_import_layout_character_spacing_per_layout(tmp_path):
+    payload = _project_payload(tmp_path)
+    extra = payload["LyricsLayouts"][1]
+    extra["LyricsInterval"] = _size(-6)
+    extra["AllowBiting"] = True
+    extra["RubyInterval"] = _size(3)
+    extra["RubyAlignment"] = 1
+    extra["LyricsAndRubyInterval"] = _size(-2)
+    payload["SourceLyricsInfos"][0]["LineInfos"][0]["LayoutIndex"] = 1
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+    layout = style.layouts[0]
+
+    assert layout.letter_spacing_px == -6
+    assert layout.allow_biting is True
+    assert layout.ruby_interval_px == 3
+    assert layout.ruby_alignment == "center"
+    assert layout.ruby_gap_px == -2
+    assert result.project_data["line_layout_indices"][0] == 1
+    assert not any("全局设置" in warning for warning in result.warnings)
 
 
 def test_import_custom_scheme_with_gradient(imported):
@@ -709,6 +738,7 @@ def test_sequence_and_solid_background_are_imported(tmp_path):
 
 REAL_N3PROJ = Path(r"D:\カラオケ\songs\Marginality\1.n3proj")
 TACTIC_N3PROJ = Path(r"D:\カラオケ\songs\TACTIC\1.n3proj")
+DARK_SPIRAL_N3PROJ = Path(r"D:\カラオケ\songs\Dark spiral journey\1.n3proj")
 
 
 @pytest.mark.skipif(not REAL_N3PROJ.is_file(), reason="本机样例工程不存在")
@@ -750,6 +780,22 @@ def test_import_tactic_project_style_parity():
     assert style.karaoke_colors.after.stroke.color == "#4EAADE"
     assert style.karaoke_colors.after.stroke2.color == "#000000"
     assert style.karaoke_colors.after.shadow.color == "#4EAADE"
+
+
+@pytest.mark.skipif(
+    not DARK_SPIRAL_N3PROJ.is_file(), reason="Dark spiral journey 样例工程不存在"
+)
+def test_import_dark_spiral_layout_character_spacing_parity():
+    result = load_n3proj(DARK_SPIRAL_N3PROJ)
+    style = style_from_dict(result.project_data["style"])
+
+    assert result.warnings == []
+    assert style.letter_spacing_px == 4
+    assert all(layout.letter_spacing_px == 0 for layout in style.layouts)
+    assert set(result.project_data["line_layout_indices"]) == {0}
+    assert style.title_overlay is not None
+    assert style.title_overlay.layout_index == 4
+    assert style.title_overlay.letter_spacing_px == 0
 
 
 CHORUS_LRC_TEXT = "[00:10:00]ラ[00:11:00]ラ[00:12:00]\n"

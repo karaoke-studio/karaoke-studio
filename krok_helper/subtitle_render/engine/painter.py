@@ -483,6 +483,7 @@ from krok_helper.subtitle_render.models import (
     DecorationKind,
     KaraokeColors,
     KaraokeColorState,
+    LYRICS_LAYOUT_CHAR_FIELDS,
     LYRICS_LAYOUT_FIELDS,
     N3_FONT_INHERITANCE_FIELDS,
     PaintFill,
@@ -4600,6 +4601,15 @@ def _style_for_role(style: Style, role_label: str | None) -> Style:
     return replace(style, **changes)
 
 
+def _style_for_role_in_layout(style: Style, role_label: str | None) -> Style:
+    """Apply role visuals while keeping the active layout's character spacing."""
+    role_style = _style_for_role(style, role_label)
+    return replace(
+        role_style,
+        **{name: getattr(style, name) for name in LYRICS_LAYOUT_CHAR_FIELDS},
+    )
+
+
 def _line_has_role_labels(line: TimingLine) -> bool:
     return any(bool(ch.role_label) for ch in line.chars)
 
@@ -4639,7 +4649,7 @@ def _build_text_layout(
         if inline_styles:
             cached = inline_resource_cache.get(ch.role_label)
             if cached is None:
-                role_style = _style_for_role(style, ch.role_label)
+                role_style = _style_for_role_in_layout(style, ch.role_label)
                 role_label = ch.role_label
                 font = _build_font(role_style)
                 metrics = QFontMetrics(font)
@@ -8667,9 +8677,12 @@ def _layout_style_for_line(style: Style, line: TimingLine) -> Style:
     if index <= 0 or index > len(style.layouts):
         return style
     layout = style.layouts[index - 1]
-    return replace(
-        style, **{name: getattr(layout, name) for name in LYRICS_LAYOUT_FIELDS}
-    )
+    changes = {
+        name: value
+        for name in LYRICS_LAYOUT_FIELDS
+        if (value := getattr(layout, name)) is not None
+    }
+    return replace(style, **changes)
 
 
 def _row_count_resolver(style: Style):
@@ -8680,13 +8693,17 @@ def _row_count_resolver(style: Style):
 
 
 def _style_for_line(style: Style, line: TimingLine) -> Style:
-    style = _layout_style_for_line(style, line)
+    layout_style = _layout_style_for_line(style, line)
     if line.singer_id is not None:
         scheme = style.singer_style_overrides.get(line.singer_id)
         if scheme is not None:
             changes = _style_scheme_changes(scheme)
             if changes:
                 style = replace(style, **changes)
+    style = replace(
+        style,
+        **{name: getattr(layout_style, name) for name in LYRICS_LAYOUT_FIELDS},
+    )
     return style_with_line_animation(style, line)
 
 
@@ -9070,7 +9087,7 @@ def _ruby_style_for_target_indices(
         if 0 <= index < len(line.chars):
             role_label = line.chars[index].role_label
             if role_label:
-                return _style_for_role(style, role_label)
+                return _style_for_role_in_layout(style, role_label)
     return style
 
 

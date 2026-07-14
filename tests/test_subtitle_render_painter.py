@@ -5132,6 +5132,11 @@ def _three_row_layout(name: str = "三行") -> LyricsLayout:
         line_gap_px=30,
         horizontal_margin_px=60,
         line_alignments=["left", "center", "right"],
+        letter_spacing_px=-6,
+        allow_biting=True,
+        ruby_interval_px=3,
+        ruby_alignment="center",
+        ruby_gap_px=-2,
     )
 
 
@@ -5146,6 +5151,11 @@ def test_layout_style_for_line_applies_referenced_layout(qapp):
     assert effective.line_y_position == "top"
     assert effective.line_alignments == ["left", "center", "right"]
     assert effective.horizontal_margin_px == 60
+    assert effective.letter_spacing_px == -6
+    assert effective.allow_biting is True
+    assert effective.ruby_interval_px == 3
+    assert effective.ruby_alignment == "center"
+    assert effective.ruby_gap_px == -2
     assert effective.layouts == style.layouts  # 布局列表保留，可继续解析同页其他行
 
     line.layout_index = 9  # 越界 → 回默认
@@ -5171,6 +5181,33 @@ def test_style_for_line_applies_animation_override_after_other_line_styles(qapp)
     assert effective.entry_lead_ms == 450
     assert effective.exit_anim == "none"
     assert effective.exit_fade_ms == 0
+
+
+def test_layout_character_spacing_overrides_singer_scheme(qapp):
+    style = Style(
+        layouts=[_three_row_layout()],
+        singer_style_overrides={
+            1: SubtitleStyleScheme(
+                letter_spacing_px=99,
+                allow_biting=False,
+                ruby_gap_px=77,
+            )
+        },
+    )
+    line = TimingLine(
+        chars=[TimingChar("歌", 0)],
+        end_ms=1000,
+        layout_index=1,
+        singer_id=1,
+    )
+
+    effective = _style_for_line(style, line)
+
+    assert effective.letter_spacing_px == -6
+    assert effective.allow_biting is True
+    assert effective.ruby_interval_px == 3
+    assert effective.ruby_alignment == "center"
+    assert effective.ruby_gap_px == -2
 
 
 def test_apply_layout_to_page_links_whole_page(qapp):
@@ -5236,6 +5273,17 @@ def test_style_dict_roundtrip_keeps_layout_definitions():
     assert layout.line_y_position == "top"
     assert layout.line_alignments == ["left", "center", "right"]
     assert layout.horizontal_margin_px == 60
+    assert layout.letter_spacing_px == -6
+    assert layout.allow_biting is True
+    assert layout.ruby_interval_px == 3
+    assert layout.ruby_alignment == "center"
+    assert layout.ruby_gap_px == -2
+    legacy = style_from_dict(
+        {"letter_spacing_px": 9, "layouts": [{"name": "旧布局"}]}
+    )
+    assert legacy.layouts[0].letter_spacing_px is None
+    legacy_line = TimingLine(chars=[TimingChar("旧", 0)], end_ms=1000, layout_index=1)
+    assert _layout_style_for_line(legacy, legacy_line).letter_spacing_px == 9
     # 非法 payload 防御
     assert style_from_dict({"layouts": "bogus"}).layouts == []
 
@@ -5259,6 +5307,10 @@ def test_rescale_layout_sizes_matches_n3_size_and_ratio():
     assert layout.line_y_margin_px == int(720 * 40 / 1080)
     assert layout.line_gap_px == int(720 * 30 / 1080)
     assert layout.horizontal_margin_px == int(720 * 60 / 1080)
+    assert layout.letter_spacing_px == int(720 * -6 / 1080)
+    assert layout.ruby_interval_px == int(720 * 3 / 1080)
+    assert layout.ruby_gap_px == int(720 * -2 / 1080)
+    assert scaled.letter_spacing_px == int(720 * style.letter_spacing_px / 1080)
     # 高度不变 → 原对象返回；0 保持 0
     assert rescale_layout_sizes(scaled, 720) is scaled
     zero = rescale_layout_sizes(replace(style, line_gap_px=0), 720)

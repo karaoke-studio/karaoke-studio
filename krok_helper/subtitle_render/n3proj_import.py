@@ -184,17 +184,13 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
         changes["upper_line_left_margin_px"] = geometry["horizontal_margin_px"]
         changes["lower_line_right_margin_px"] = geometry["horizontal_margin_px"]
         changes.update(_layout_char_domain(layouts[0]))
-        changes["layouts"] = [LyricsLayout(**_layout_geometry(item)) for item in layouts[1:]]
-        diff_names = [
-            str(item.get("SettingsName") or "?")
-            for item in layouts[1:]
-            if _layout_char_domain(item) != _layout_char_domain(layouts[0])
-        ]
-        if diff_names:
-            warnings.append(
-                "以下布局的歌詞間隔 / ルビ間隔等字段与默认布局不同，本模块这些字段为全局设置，"
-                f"已按默认布局导入：{'、'.join(diff_names)}"
+        changes["layouts"] = [
+            LyricsLayout(
+                **_layout_geometry(item),
+                **_layout_char_domain(item),
             )
+            for item in layouts[1:]
+        ]
 
     if fonts:
         changes.update(
@@ -450,7 +446,7 @@ def _layout_geometry(layout: dict) -> dict[str, Any]:
 
 
 def _layout_char_domain(layout: dict) -> dict[str, Any]:
-    """N3 布局里属于本项目「字体/全局」域的字段（字间距 / 咬合 / ルビ间隔）。"""
+    """N3 布局的字符排版字段（字间距 / 咬合 / ルビ间隔）。"""
     return {
         "letter_spacing_px": _size(layout.get("LyricsInterval")),
         "allow_biting": bool(layout.get("AllowBiting")),
