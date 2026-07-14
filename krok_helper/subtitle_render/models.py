@@ -509,6 +509,29 @@ class SubtitleStyleScheme:
     ruby_shadow_offset_y: Optional[int] = None
     karaoke_colors: Optional[KaraokeColors] = None
     ruby_karaoke_colors: Optional[KaraokeColors] = None
+    n3_font_inheritance: bool = False
+    """N3 子字体槽的 ``None`` 属于方案内 fallback，不继承外部全局方案。"""
+
+
+N3_FONT_INHERITANCE_FIELDS: tuple[str, ...] = (
+    "font_family_latin",
+    "latin_font_size_px",
+    "latin_font_weight",
+    "latin_stroke_width_px",
+    "latin_stroke2_enabled",
+    "latin_stroke2_width_px",
+    "ruby_font_family",
+    "ruby_font_weight",
+    "ruby_stroke_width_px",
+    "ruby_stroke2_enabled",
+    "ruby_stroke2_width_px",
+    "ruby_font_family_latin",
+    "ruby_latin_font_size_px",
+    "ruby_latin_font_weight",
+    "ruby_latin_stroke_width_px",
+    "ruby_latin_stroke2_enabled",
+    "ruby_latin_stroke2_width_px",
+)
 
 
 @dataclass
@@ -1280,12 +1303,17 @@ def style_from_dict(payload: object) -> Style:
             "ruby_font_weight",
             "ruby_latin_font_size_px",
             "ruby_latin_font_weight",
-            "ruby_stroke_width_px",
-            "ruby_stroke2_width_px",
             "ruby_latin_stroke_width_px",
             "ruby_latin_stroke2_width_px",
         }:
-            # 英数轨覆盖：None = 跟随日文轨，序列化保留 null
+            # N3 的子字体槽用 0 表示沿 fallback 链继承，而不是显式零尺寸。
+            parsed = _int_value(value, 0)
+            changes[key] = parsed if parsed > 0 else None
+        elif key in {
+            "ruby_stroke_width_px",
+            "ruby_stroke2_width_px",
+        }:
+            # 注音日文描边仍允许显式 0；只有英数槽的 0 表示继承。
             changes[key] = None if value is None else _int_value(value, 0)
         elif key in {
             "latin_stroke2_enabled",
@@ -1543,6 +1571,25 @@ def subtitle_style_scheme_from_dict(payload: object) -> SubtitleStyleScheme:
             changes[key] = (
                 normalize_glow_concentration_level(value) if value is not None else None
             )
+        elif key in {
+            "font_family_latin",
+            "ruby_font_family",
+            "ruby_font_family_latin",
+        }:
+            changes[key] = str(value) if value else None
+        elif key in {
+            "latin_font_size_px",
+            "latin_font_weight",
+            "latin_stroke_width_px",
+            "latin_stroke2_width_px",
+            "ruby_font_weight",
+            "ruby_latin_font_size_px",
+            "ruby_latin_font_weight",
+            "ruby_latin_stroke_width_px",
+            "ruby_latin_stroke2_width_px",
+        }:
+            parsed = _int_value(value, 0)
+            changes[key] = parsed if parsed > 0 else None
         else:
             changes[key] = value
     return SubtitleStyleScheme(**changes)

@@ -252,29 +252,73 @@ def convert_n3_font_scheme(
     context: str,
     *,
     size_resolver: SizeResolver = project_snapshot_size,
+    preserve_inheritance: bool = False,
 ) -> dict[str, Any]:
-    """Convert one complete N3 font/color scheme to shared style fields."""
+    """Convert one complete N3 font/color scheme to shared style fields.
+
+    The Japanese lyrics slot is materialized because it is the root slot.  When
+    ``preserve_inheritance`` is true, child slots keep N3's empty/zero values as
+    ``None`` so the property panel can show the inheritance state instead of
+    pretending the resolved fallback was saved.  Standalone/custom schemes keep
+    materialized values because their ``None`` fields otherwise inherit another
+    scheme rather than their own Japanese root.
+    """
+    font_infos = _list(font.get("FontInfos"))
     slots = resolve_n3_font_slots(
-        _list(font.get("FontInfos")),
+        font_infos,
         size_resolver=size_resolver,
         default_family=_n3_default_font_family(),
         face_weight_resolver=_font_face_weight,
     )
     kanji, alnum, ruby_kanji, ruby_alnum = slots[0], slots[2], slots[3], slots[5]
+
+    def raw_info(index: int) -> dict:
+        return _dict(font_infos[index]) if index < len(font_infos) else {}
+
+    def raw_family(index: int) -> str | None:
+        value = str(raw_info(index).get("FontName") or "").strip()
+        return value or None
+
+    def raw_weight(index: int) -> int | None:
+        family = raw_family(index)
+        if family is None:
+            return None
+        face = str(raw_info(index).get("FontFaceName") or "").strip()
+        return _font_face_weight(family, face)
+
+    def raw_size(index: int, key: str) -> int | None:
+        value = int(size_resolver(raw_info(index).get(key)))
+        return value if value > 0 else None
+
+    def raw_edge2(index: int) -> bool | None:
+        value = raw_info(index).get("UseEdge2")
+        return value if isinstance(value, bool) else None
+
+    alnum_family = raw_family(2)
+    ruby_family = raw_family(3)
+    ruby_alnum_family = raw_family(5)
     changes: dict[str, Any] = {
         "font_family": kanji.family,
-        "font_family_latin": alnum.family,
+        "font_family_latin": alnum_family if preserve_inheritance else alnum.family,
         "font_size_px": kanji.char_size,
         "font_weight": kanji.weight,
         "italic": False,
         "stroke_width_px": kanji.edge_size,
         "stroke2_enabled": kanji.use_edge2,
         "stroke2_width_px": kanji.edge2_size,
-        "latin_font_size_px": alnum.char_size,
-        "latin_font_weight": alnum.weight,
-        "latin_stroke_width_px": alnum.edge_size,
-        "latin_stroke2_enabled": alnum.use_edge2,
-        "latin_stroke2_width_px": alnum.edge2_size,
+        "latin_font_size_px": (
+            raw_size(2, "CharSize") if preserve_inheritance else alnum.char_size
+        ),
+        "latin_font_weight": raw_weight(2) if preserve_inheritance else alnum.weight,
+        "latin_stroke_width_px": (
+            raw_size(2, "EdgeSize") if preserve_inheritance else alnum.edge_size
+        ),
+        "latin_stroke2_enabled": (
+            raw_edge2(2) if preserve_inheritance else alnum.use_edge2
+        ),
+        "latin_stroke2_width_px": (
+            raw_size(2, "EdgeSize2") if preserve_inheritance else alnum.edge2_size
+        ),
     }
     colors = _karaoke_colors_from_brushes(
         _list(font.get("BrushInfos")), lyrics_dir, warnings, context
@@ -307,19 +351,43 @@ def convert_n3_font_scheme(
         changes.update(decoration_kind="shadow", shadow_offset_x=0, shadow_offset_y=0)
 
     changes.update(
-        ruby_font_follow_main=False,
-        ruby_font_family=ruby_kanji.family,
-        ruby_font_family_latin=ruby_alnum.family,
-        ruby_font_weight=ruby_kanji.weight,
-        ruby_font_size_px=ruby_kanji.char_size,
-        ruby_stroke_width_px=ruby_kanji.edge_size,
-        ruby_stroke2_enabled=ruby_kanji.use_edge2,
-        ruby_stroke2_width_px=ruby_kanji.edge2_size,
-        ruby_latin_font_size_px=ruby_alnum.char_size,
-        ruby_latin_font_weight=ruby_alnum.weight,
-        ruby_latin_stroke_width_px=ruby_alnum.edge_size,
-        ruby_latin_stroke2_enabled=ruby_alnum.use_edge2,
-        ruby_latin_stroke2_width_px=ruby_alnum.edge2_size,
+        ruby_font_follow_main=(
+            ruby_family is None and raw_weight(3) is None
+            if preserve_inheritance
+            else False
+        ),
+        ruby_font_family=ruby_family if preserve_inheritance else ruby_kanji.family,
+        ruby_font_family_latin=(
+            ruby_alnum_family if preserve_inheritance else ruby_alnum.family
+        ),
+        ruby_font_weight=raw_weight(3) if preserve_inheritance else ruby_kanji.weight,
+        ruby_font_size_px=raw_size(3, "CharSize") or ruby_kanji.char_size,
+        ruby_stroke_width_px=(
+            raw_size(3, "EdgeSize") if preserve_inheritance else ruby_kanji.edge_size
+        ),
+        ruby_stroke2_enabled=(
+            raw_edge2(3) if preserve_inheritance else ruby_kanji.use_edge2
+        ),
+        ruby_stroke2_width_px=(
+            raw_size(3, "EdgeSize2") if preserve_inheritance else ruby_kanji.edge2_size
+        ),
+        ruby_latin_font_size_px=(
+            raw_size(5, "CharSize") if preserve_inheritance else ruby_alnum.char_size
+        ),
+        ruby_latin_font_weight=(
+            raw_weight(5) if preserve_inheritance else ruby_alnum.weight
+        ),
+        ruby_latin_stroke_width_px=(
+            raw_size(5, "EdgeSize") if preserve_inheritance else ruby_alnum.edge_size
+        ),
+        ruby_latin_stroke2_enabled=(
+            raw_edge2(5) if preserve_inheritance else ruby_alnum.use_edge2
+        ),
+        ruby_latin_stroke2_width_px=(
+            raw_size(5, "EdgeSize2")
+            if preserve_inheritance
+            else ruby_alnum.edge2_size
+        ),
         ruby_color=colors.after.text.color,
         ruby_karaoke_colors=deepcopy(colors),
     )

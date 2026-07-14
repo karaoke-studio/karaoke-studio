@@ -255,6 +255,9 @@ class _LineLayout:
     # 各字符墨水边界（绝对坐标）；走字按墨水推进，不含 advance 两侧空白。
     # 仅用于扫光 ratio/分段计算，绘制定位仍用 advance 的 char_x_ranges。
     ink_x_ranges: list = field(default_factory=list)
+    # Ruby geometry is frame-independent.  Keep it with the line layout so the
+    # per-character wipe paths are not measured again for every preview frame.
+    ruby_layouts: tuple["_RubyLayout", ...] = ()
 
 
 @dataclass(frozen=True)
@@ -278,6 +281,16 @@ class _VerticalLineLayout:
 
 
 @dataclass(frozen=True)
+class _RubyWipeSegment:
+    """One timed ruby glyph sweep on the horizontal visual axis."""
+
+    start_ms: int
+    end_ms: int
+    axis_start: float
+    axis_end: float
+
+
+@dataclass(frozen=True)
 class _RubyLayout:
     """横排 ruby 的纯几何/目标布局（不依赖 t_ms）。"""
 
@@ -289,6 +302,10 @@ class _RubyLayout:
     target_width: int
     reading_width: float
     gradient_rect: QRectF
+    wipe_segments: tuple[_RubyWipeSegment, ...] = ()
+    wipe_left: float = 0.0
+    wipe_right: float = 0.0
+    geometry_signature: tuple = ()
 
 
 @dataclass(frozen=True)
@@ -347,6 +364,7 @@ def clear_before_layer_cache() -> None:
     _RUN_GLOW_CACHE.clear()
     _CHAR_METRIC_CACHE.clear()
     _RUBY_MEASURE_CACHE.clear()
+    _RUBY_UNIT_LAYOUT_CACHE.clear()
     _LINE_LAYOUT_CACHE.clear()
 
 
@@ -466,6 +484,7 @@ from krok_helper.subtitle_render.models import (
     KaraokeColors,
     KaraokeColorState,
     LYRICS_LAYOUT_FIELDS,
+    N3_FONT_INHERITANCE_FIELDS,
     PaintFill,
     RubyAnnotation,
     Style,
@@ -2431,12 +2450,12 @@ def _build_font(style: Style) -> QFont:
 def _latin_font_size(style: Style) -> int:
     """英数轨字号；``None`` 跟随日文轨。"""
     value = style.latin_font_size_px
-    return int(value) if value is not None else int(style.font_size_px)
+    return int(value) if value is not None and int(value) > 0 else int(style.font_size_px)
 
 
 def _latin_font_weight(style: Style) -> int:
     value = style.latin_font_weight
-    return int(value) if value is not None else int(style.font_weight)
+    return int(value) if value is not None and int(value) > 0 else int(style.font_weight)
 
 
 def _is_n3_latin_text(text: str) -> bool:
@@ -2453,6 +2472,7 @@ def _main_script_stroke_style(style: Style, text: str) -> Style:
         width = (
             style.stroke_width_px
             if style.latin_stroke_width_px is None
+            or int(style.latin_stroke_width_px) <= 0
             else int(style.latin_stroke_width_px)
         )
         enabled = (
@@ -2463,6 +2483,7 @@ def _main_script_stroke_style(style: Style, text: str) -> Style:
         width2 = (
             style.stroke2_width_px
             if style.latin_stroke2_width_px is None
+            or int(style.latin_stroke2_width_px) <= 0
             else int(style.latin_stroke2_width_px)
         )
     else:
@@ -2871,7 +2892,7 @@ def _build_ruby_font(style: Style) -> QFont:
     size = _ruby_font_size(style)
     weight = style.font_weight if _ruby_uses_main_font(style) else (
         style.ruby_font_weight
-        if style.ruby_font_weight is not None
+        if style.ruby_font_weight is not None and int(style.ruby_font_weight) > 0
         else style.font_weight
     )
     font = QFont(family, size)
@@ -3026,8 +3047,6 @@ def _glow_concentration_level(style: Style) -> int:
 
 def _glow_radius(style: Style, *, after: bool) -> int:
     value = style.glow_after_radius_px if after else style.glow_before_radius_px
-    if value == 10 and style.glow_radius_px != 10:
-        value = style.glow_radius_px
     return max(int(value), 1)
 
 
@@ -3058,6 +3077,7 @@ def _ruby_script_stroke_style(style: Style, reading: str) -> Style:
     width = (
         _ruby_stroke_width(style)
         if style.ruby_latin_stroke_width_px is None
+        or int(style.ruby_latin_stroke_width_px) <= 0
         else max(int(style.ruby_latin_stroke_width_px), 0)
     )
     enabled = (
@@ -3072,6 +3092,7 @@ def _ruby_script_stroke_style(style: Style, reading: str) -> Style:
     width2 = (
         _ruby_stroke2_width(style)
         if style.ruby_latin_stroke2_width_px is None
+        or int(style.ruby_latin_stroke2_width_px) <= 0
         else max(int(style.ruby_latin_stroke2_width_px), 0)
     )
     return replace(
@@ -3753,6 +3774,59 @@ def _vertical_layer_stack(
     return layers
 
 
+def _vertical_ruby_path_and_wipe(
+    ruby: RubyAnnotation,
+    ruby_font: QFont,
+    ruby_metrics: QFontMetrics,
+    ruby_x: int,
+    ruby_cell_w: int,
+    ruby_ascent: int,
+    base_top: int,
+    span_h: int,
+) -> tuple[QPainterPath, tuple[_RubyWipeSegment, ...], float, float, tuple[str, ...]]:
+    timed_units = _ruby_visual_units_and_intervals(ruby)
+    if not timed_units:
+        return QPainterPath(), (), float(base_top), float(base_top), ()
+    count = len(timed_units)
+    ruby_path = QPainterPath()
+    segments: list[_RubyWipeSegment] = []
+    ink_bounds: list[tuple[float, float]] = []
+    for unit_index, (unit, (start_ms, end_ms)) in enumerate(timed_units):
+        slot_top = base_top + span_h * unit_index / count
+        slot_h = span_h / count
+        unit_path = _vertical_glyph_path(
+            unit,
+            ruby_font,
+            ruby_metrics,
+            ruby_x,
+            int(round(slot_top)),
+            ruby_cell_w,
+            max(int(round(slot_h)), 1),
+            ruby_ascent,
+        )
+        ruby_path.addPath(unit_path)
+        ink = unit_path.boundingRect()
+        if ink.isEmpty():
+            ink_top = float(slot_top)
+            ink_bottom = float(slot_top + slot_h)
+        else:
+            ink_top = float(ink.top())
+            ink_bottom = float(ink.bottom())
+        segments.append(
+            _RubyWipeSegment(
+                int(start_ms), max(int(start_ms), int(end_ms)), ink_top, ink_bottom
+            )
+        )
+        ink_bounds.append((ink_top, ink_bottom))
+    return (
+        ruby_path,
+        tuple(segments),
+        min(top for top, _bottom in ink_bounds),
+        max(bottom for _top, bottom in ink_bounds),
+        tuple(unit for unit, _interval in timed_units),
+    )
+
+
 def _vertical_ruby_layers(
     layout: _VerticalLineLayout,
     line: TimingLine,
@@ -3787,24 +3861,16 @@ def _vertical_ruby_layers(
         indices = [i for i in _ruby_target_indices(ruby, line, layout.intervals) if 0 <= i < len(cells)]
         if not indices:
             continue
-        units = _ruby_utopia_visual_units(ruby.reading)
-        if not units:
-            continue
         base_top = cells[min(indices)][0]
         base_bottom = cells[max(indices)][1]
         span_h = base_bottom - base_top
+        ruby_path, wipe_segments, wipe_top, _wipe_bottom, units = _vertical_ruby_path_and_wipe(
+            ruby, ruby_font, ruby_metrics, ruby_x, ruby_cell_w, ruby_ascent,
+            base_top, span_h,
+        )
+        if not wipe_segments:
+            continue
         count = len(units)
-
-        ruby_path = QPainterPath()
-        for unit_index, unit in enumerate(units):
-            slot_top = base_top + span_h * unit_index / count
-            slot_h = span_h / count
-            ruby_path.addPath(
-                _vertical_glyph_path(
-                    unit, ruby_font, ruby_metrics, ruby_x,
-                    int(round(slot_top)), ruby_cell_w, max(int(round(slot_h)), 1), ruby_ascent,
-                )
-            )
         ruby_rect = QRectF(
             float(ruby_x - ruby_cell_w / 2), float(base_top), float(ruby_cell_w), float(span_h),
         )
@@ -3827,19 +3893,20 @@ def _vertical_ruby_layers(
             )
         )
         z += 1
-        ratio = _ruby_progress_ratio(ruby, t_ms, ruby_metrics)
-        if ratio <= 0.0:
+        visible, complete, scan_y = _ruby_segment_wipe_state(
+            wipe_segments, ruby.pos_end_ms, t_ms
+        )
+        if not visible:
             continue
-        scan_y = base_top + span_h * min(ratio, 1.0)
         stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
         pad = max(
             stroke_extent,
             _glow_extent(stroke_width, stroke2_width, after_glow_radius) if _ruby_decoration_kind(style) == "glow" else 0,
             stroke_extent + abs(shadow_dx), stroke_extent + abs(shadow_dy), 2,
         )
-        clip = QRectF(
-            float(ruby_x - ruby_cell_w / 2 - pad), float(base_top - pad),
-            float(ruby_cell_w + pad * 2), float((scan_y - base_top) + pad),
+        clip = None if complete else QRectF(
+            float(ruby_x - ruby_cell_w / 2 - pad), float(wipe_top - pad),
+            float(ruby_cell_w + pad * 2), float(max(scan_y - wipe_top, 0.0) + pad),
         )
         layers.append(
             _BakedPathStackLayer(
@@ -3978,30 +4045,15 @@ def _paint_rubies_vertical(
         ]
         if not indices:
             continue
-        units = _ruby_utopia_visual_units(ruby.reading)
-        if not units:
-            continue
         base_top = cells[min(indices)][0]
         base_bottom = cells[max(indices)][1]
         span_h = base_bottom - base_top
-        count = len(units)
-
-        ruby_path = QPainterPath()
-        for unit_index, unit in enumerate(units):
-            slot_top = base_top + span_h * unit_index / count
-            slot_h = span_h / count
-            ruby_path.addPath(
-                _vertical_glyph_path(
-                    unit,
-                    ruby_font,
-                    ruby_metrics,
-                    ruby_x,
-                    int(round(slot_top)),
-                    ruby_cell_w,
-                    max(int(round(slot_h)), 1),
-                    ruby_ascent,
-                )
-            )
+        ruby_path, wipe_segments, wipe_top, _wipe_bottom, _units = _vertical_ruby_path_and_wipe(
+            ruby, ruby_font, ruby_metrics, ruby_x, ruby_cell_w, ruby_ascent,
+            base_top, span_h,
+        )
+        if not wipe_segments:
+            continue
 
         ruby_rect = QRectF(
             float(ruby_x - ruby_cell_w / 2),
@@ -4022,10 +4074,11 @@ def _paint_rubies_vertical(
             glow_radius=before_glow_radius,
         )
 
-        ratio = _ruby_progress_ratio(ruby, t_ms, ruby_metrics)
-        if ratio <= 0.0:
+        visible, complete, scan_y = _ruby_segment_wipe_state(
+            wipe_segments, ruby.pos_end_ms, t_ms
+        )
+        if not visible:
             continue
-        scan_y = base_top + span_h * min(ratio, 1.0)
         stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
         pad = max(
             stroke_extent,
@@ -4038,14 +4091,15 @@ def _paint_rubies_vertical(
         )
         painter.save()
         try:
-            painter.setClipRect(
-                QRectF(
-                    float(ruby_x - ruby_cell_w / 2 - pad),
-                    float(base_top - pad),
-                    float(ruby_cell_w + pad * 2),
-                    float((scan_y - base_top) + pad),
+            if not complete:
+                painter.setClipRect(
+                    QRectF(
+                        float(ruby_x - ruby_cell_w / 2 - pad),
+                        float(wipe_top - pad),
+                        float(ruby_cell_w + pad * 2),
+                        float(max(scan_y - wipe_top, 0.0) + pad),
+                    )
                 )
-            )
             _paint_text_layer_stack(
                 painter,
                 ruby_path,
@@ -4186,20 +4240,9 @@ def _paint_line_static(
             or layout.ruby_metrics is None
         ):
             return
-        ruby_layouts = _layout_rubies(
-            layout.ruby_metrics,
-            line,
-            layout.intervals,
-            layout.char_x_ranges,
-            layout.baseline_y,
-            layout.active_rubies,
-            style,
-            main_ascent_px=layout.text_layout.ascent if layout.has_inline_styles else None,
-            text_layout=layout.text_layout,
-        )
         _paint_ruby_glow_layers(
             painter,
-            ruby_layouts,
+            list(layout.ruby_layouts),
             layout.ruby_font,
             layout.ruby_metrics,
             t_ms,
@@ -4220,6 +4263,7 @@ def _paint_line_static(
             main_ascent_px=layout.text_layout.ascent if layout.has_inline_styles else None,
             text_layout=layout.text_layout,
             draw_glow=transition is not None,
+            precomputed_layouts=layout.ruby_layouts,
         )
 
     if transition is not None:
@@ -4395,6 +4439,21 @@ def _layout_plain_line(
         float(x0), float(y - metrics.ascent()), float(total_w), float(metrics.height()),
     )
     colors = _effective_karaoke_colors(style)
+    ruby_layouts = tuple(
+        _layout_rubies(
+            ruby_metrics,
+            line,
+            intervals,
+            char_x_ranges,
+            y,
+            active_rubies,
+            style,
+            text_layout=text_layout,
+            ruby_font=ruby_font,
+        )
+        if ruby_metrics is not None
+        else ()
+    )
     return _LineLayout(
         text_layout=text_layout,
         font=font, metrics=metrics, latin_font=latin_font, font_for=font_for,
@@ -4403,6 +4462,7 @@ def _layout_plain_line(
         intervals=intervals, char_lefts=char_lefts, char_x_ranges=char_x_ranges,
         fill_segments=fill_segments, line_rect=line_rect, colors=colors, rtl=rtl,
         has_inline_styles=False, ink_x_ranges=ink_x_ranges,
+        ruby_layouts=ruby_layouts,
     )
 
 
@@ -4510,6 +4570,12 @@ def _style_for_role(style: Style, role_label: str | None) -> Style:
     if scheme is None:
         return style
     changes = _style_scheme_changes(scheme)
+    if scheme.n3_font_inheritance:
+        # These None values mean fallback to this scheme's Japanese/root slot,
+        # not inheritance from the outer global scheme.
+        changes.update(
+            {field: getattr(scheme, field) for field in N3_FONT_INHERITANCE_FIELDS}
+        )
     has_legacy_color_changes = any(
         getattr(scheme, field) is not None
         for field in (
@@ -4841,6 +4907,22 @@ def _layout_role_line(
     fill_segments = _karaoke_fill_segments(
         char_widths, intervals, ink_x_ranges, active_rubies, line,
     )
+    ruby_layouts = tuple(
+        _layout_rubies(
+            ruby_metrics,
+            line,
+            intervals,
+            char_x_ranges,
+            y,
+            active_rubies,
+            style,
+            main_ascent_px=text_layout.ascent,
+            text_layout=text_layout,
+            ruby_font=ruby_font,
+        )
+        if ruby_metrics is not None
+        else ()
+    )
     return _LineLayout(
         text_layout=text_layout, active_rubies=active_rubies,
         font=text_layout.glyphs[0].font, metrics=text_layout.glyphs[0].metrics,
@@ -4854,6 +4936,7 @@ def _layout_role_line(
         fill_segments=fill_segments, line_rect=text_layout.line_rect,
         colors=_effective_karaoke_colors(style), rtl=style.right_to_left,
         has_inline_styles=True, ink_x_ranges=ink_x_ranges,
+        ruby_layouts=ruby_layouts,
     )
 
 
@@ -5578,19 +5661,8 @@ def _utopia_ruby_scope_layers(
 ) -> list[_ScopeBoundsLayer]:
     if layout.ruby_metrics is None:
         return []
-    ruby_layouts = _layout_rubies(
-        layout.ruby_metrics,
-        line,
-        layout.intervals,
-        layout.char_x_ranges,
-        layout.baseline_y,
-        layout.active_rubies,
-        style,
-        main_ascent_px=layout.text_layout.ascent if layout.has_inline_styles else None,
-        text_layout=layout.text_layout,
-    )
     layers: list[_ScopeBoundsLayer] = []
-    for index, ruby_layout in enumerate(ruby_layouts):
+    for index, ruby_layout in enumerate(layout.ruby_layouts):
         if not ruby_layout.indices:
             continue
         rect = _utopia_ruby_scope_rect(
@@ -8657,12 +8729,13 @@ def _paint_rubies(
     main_ascent_px: int | None = None,
     text_layout: _TextLayout | None = None,
     draw_glow: bool = True,
+    precomputed_layouts: tuple[_RubyLayout, ...] | None = None,
 ) -> None:
     rtl = style.right_to_left
     painter.save()
     try:
         painter.setFont(ruby_font)
-        layouts = _layout_rubies(
+        layouts = list(precomputed_layouts) if precomputed_layouts is not None else _layout_rubies(
             ruby_metrics,
             line,
             intervals,
@@ -8672,6 +8745,7 @@ def _paint_rubies(
             style,
             main_ascent_px=main_ascent_px,
             text_layout=text_layout,
+            ruby_font=ruby_font,
         )
         if transition is None:
             _paint_ruby_layers(
@@ -8807,6 +8881,7 @@ def _paint_rubies(
                         rtl,
                         target_width=target_width,
                         gradient_rect=layout.gradient_rect,
+                        wipe_layout=layout,
                     )
             finally:
                 painter.restore()
@@ -8825,6 +8900,7 @@ def _layout_rubies(
     *,
     main_ascent_px: int | None = None,
     text_layout: _TextLayout | None = None,
+    ruby_font: QFont | None = None,
 ) -> list[_RubyLayout]:
     """layout 段：算横排 ruby 的目标字符范围、基线与排布宽度。"""
     if not rubies:
@@ -8873,6 +8949,23 @@ def _layout_rubies(
             target_width,
             main_ascent,
         )
+        reading_width = _ruby_layout_width(
+            paint_ruby.reading,
+            ruby_metrics,
+            target_width,
+            style=ruby_style,
+            base_text=paint_ruby.kanji,
+        )
+        wipe_segments, wipe_left, wipe_right, geometry_signature = _ruby_wipe_geometry(
+            paint_ruby,
+            ruby_font or _build_ruby_font(ruby_style),
+            ruby_metrics,
+            left,
+            ruby_baseline_y,
+            target_width,
+            ruby_style,
+            rtl=style.right_to_left,
+        )
         layouts.append(
             _RubyLayout(
                 ruby=paint_ruby,
@@ -8881,17 +8974,91 @@ def _layout_rubies(
                 x=left,
                 baseline_y=ruby_baseline_y,
                 target_width=target_width,
-                reading_width=_ruby_layout_width(
-                    paint_ruby.reading,
-                    ruby_metrics,
-                    target_width,
-                    style=ruby_style,
-                    base_text=paint_ruby.kanji,
-                ),
+                reading_width=reading_width,
                 gradient_rect=gradient_rect,
+                wipe_segments=wipe_segments,
+                wipe_left=wipe_left,
+                wipe_right=wipe_right,
+                geometry_signature=geometry_signature,
             )
         )
     return layouts
+
+
+def _ruby_wipe_geometry(
+    ruby: RubyAnnotation,
+    ruby_font: QFont,
+    ruby_metrics: QFontMetrics,
+    x: int,
+    baseline_y: int,
+    target_width: int,
+    style: Style,
+    *,
+    rtl: bool,
+) -> tuple[tuple[_RubyWipeSegment, ...], float, float, tuple]:
+    """Build N3-style timed glyph geometry independently from the layout box.
+
+    The target-width box is still used for Center/EqualSpace placement.  Wipe
+    fronts, however, follow each visible glyph's actual outline.  This avoids
+    consuming a centered ruby's leading/trailing blank area as singing time.
+    """
+    logical_units = _ruby_visual_units_and_intervals(ruby)
+    if not logical_units:
+        return (), float(x), float(x), ()
+    visual_units = list(reversed(logical_units)) if rtl else logical_units
+    unit_layouts = _ruby_layout_units(
+        [unit for unit, _interval in visual_units],
+        ruby_metrics,
+        x,
+        target_width,
+        style=style,
+        base_text=ruby.kanji,
+    )
+    segments: list[_RubyWipeSegment] = []
+    signature: list[tuple] = []
+    bounds: list[tuple[float, float]] = []
+    for (unit, interval), (_draw_unit, unit_x, unit_width) in zip(
+        visual_units, unit_layouts
+    ):
+        path = QPainterPath()
+        path.addText(float(unit_x), float(baseline_y), ruby_font, unit)
+        ink = path.boundingRect()
+        if ink.isEmpty():
+            ink_left = float(unit_x)
+            ink_right = float(unit_x + max(unit_width, 0.0))
+        else:
+            ink_left = float(ink.left())
+            ink_right = float(ink.right())
+        if ink_right < ink_left:
+            ink_left, ink_right = ink_right, ink_left
+        start_ms, end_ms = interval
+        segments.append(
+            _RubyWipeSegment(
+                int(start_ms),
+                max(int(start_ms), int(end_ms)),
+                ink_right if rtl else ink_left,
+                ink_left if rtl else ink_right,
+            )
+        )
+        bounds.append((ink_left, ink_right))
+        signature.append(
+            (
+                unit,
+                round(float(unit_x) - float(x), 3),
+                round(float(unit_width), 3),
+                round(ink_left - float(x), 3),
+                round(ink_right - float(x), 3),
+            )
+        )
+    if not bounds:
+        return (), float(x), float(x), tuple(signature)
+    segments.sort(key=lambda segment: (segment.start_ms, segment.end_ms))
+    return (
+        tuple(segments),
+        min(left for left, _right in bounds),
+        max(right for _left, right in bounds),
+        tuple(signature),
+    )
 
 
 def _ruby_style_for_target_indices(
@@ -9057,19 +9224,8 @@ def _ruby_layer_stack(
 ) -> list:
     if layout.ruby_metrics is None:
         return []
-    ruby_layouts = _layout_rubies(
-        layout.ruby_metrics,
-        line,
-        layout.intervals,
-        layout.char_x_ranges,
-        layout.baseline_y,
-        layout.active_rubies,
-        style,
-        main_ascent_px=layout.text_layout.ascent if layout.has_inline_styles else None,
-        text_layout=layout.text_layout,
-    )
     return _ruby_text_layers(
-        ruby_layouts,
+        list(layout.ruby_layouts),
         layout.ruby_font,
         layout.ruby_metrics,
         t_ms,
@@ -9108,10 +9264,10 @@ class _RubyGlowLayer:
             return None
         colors = _effective_ruby_karaoke_colors(self.style)
         if self.after:
-            ratio = _ruby_progress_ratio(
-                self.ruby_layout.ruby, self.t_ms, self.ruby_metrics
+            visible, _complete, _front = _ruby_wipe_state(
+                self.ruby_layout, self.t_ms
             )
-            if ratio <= 0.0:
+            if not visible:
                 return None
             before_glow = (
                 _fill_signature(colors.before.shadow),
@@ -9145,18 +9301,18 @@ class _RubyGlowLayer:
     def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
         clip_rect = None
         if self.after:
-            ratio = _ruby_progress_ratio(
-                self.ruby_layout.ruby, self.t_ms, self.ruby_metrics
+            visible, complete, _front = _ruby_wipe_state(
+                self.ruby_layout, self.t_ms
             )
-            if ratio <= 0.0:
+            if not visible:
                 return LayerAnimation(opacity=0.0)
-            if ratio < 1.0:
-                clip_rect = _ruby_after_clip_rect(
+            if not complete:
+                clip_rect = _ruby_after_clip_rect_at_time(
                     self.ruby_layout,
                     self.ruby_metrics,
                     self.style,
                     self.rtl,
-                    ratio,
+                    self.t_ms,
                 )
         return LayerAnimation(
             top_left=QPointF(
@@ -9197,10 +9353,12 @@ class _RubyTextLayer:
         return self
 
     def static_key(self, ctx: LayerContext, layout: object) -> tuple | None:
-        if self.after and _ruby_progress_ratio(
-            self.ruby_layout.ruby, self.t_ms, self.ruby_metrics
-        ) <= 0.0:
-            return None
+        if self.after:
+            visible, _complete, _front = _ruby_wipe_state(
+                self.ruby_layout, self.t_ms
+            )
+            if not visible:
+                return None
         return _ruby_text_layer_key(
             self.ruby_layout,
             self.ruby_font,
@@ -9225,20 +9383,20 @@ class _RubyTextLayer:
     def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
         clip_rect = None
         if self.after:
-            ratio = _ruby_progress_ratio(
-                self.ruby_layout.ruby, self.t_ms, self.ruby_metrics
+            visible, complete, _front = _ruby_wipe_state(
+                self.ruby_layout, self.t_ms
             )
-            if ratio <= 0.0:
+            if not visible:
                 return LayerAnimation(opacity=0.0)
-            if ratio < 1.0:
+            if not complete:
                 # 唱完（>= 1.0）不再裁剪：裁剪带右缘恰好压在字框右缘，
                 # 会把末字形的描边外扩留在走字前状态。
-                clip_rect = _ruby_after_clip_rect(
+                clip_rect = _ruby_after_clip_rect_at_time(
                     self.ruby_layout,
                     self.ruby_metrics,
                     self.style,
                     self.rtl,
-                    ratio,
+                    self.t_ms,
                 )
         return LayerAnimation(
             top_left=QPointF(
@@ -9273,6 +9431,7 @@ def _ruby_text_layer_key(
         layout.ruby.reading,
         layout.target_width,
         round(layout.reading_width, 3),
+        layout.geometry_signature,
         (
             round(layout.gradient_rect.left() - layout.x, 3),
             round(layout.gradient_rect.top() - layout.baseline_y, 3),
@@ -9314,6 +9473,7 @@ def _ruby_glow_layer_key(
         layout.ruby.reading,
         layout.target_width,
         round(layout.reading_width, 3),
+        layout.geometry_signature,
         rtl,
         ruby_font.family(),
         ruby_font.pixelSize(),
@@ -9549,6 +9709,86 @@ def _ruby_after_clip_rect(
     )
 
 
+def _ruby_wipe_state(
+    layout: _RubyLayout,
+    t_ms: int,
+) -> tuple[bool, bool, float]:
+    """Return ``(visible, complete, front)`` for glyph-geometry ruby wipe."""
+    segments = layout.wipe_segments
+    if not segments:
+        ratio = _ruby_progress_ratio(layout.ruby, t_ms)
+        front = layout.wipe_left + (layout.wipe_right - layout.wipe_left) * ratio
+        return ratio > 0.0, ratio >= 1.0, front
+    return _ruby_segment_wipe_state(segments, layout.ruby.pos_end_ms, t_ms)
+
+
+def _ruby_segment_wipe_state(
+    segments: tuple[_RubyWipeSegment, ...],
+    pos_end_ms: int,
+    t_ms: int,
+) -> tuple[bool, bool, float]:
+    """Evaluate timed glyph-axis segments, including empty-part pauses."""
+    first = segments[0]
+    if t_ms <= first.start_ms:
+        return False, False, first.axis_start
+    previous_front = first.axis_start
+    for segment in segments:
+        if t_ms < segment.start_ms:
+            return True, False, previous_front
+        if t_ms < segment.end_ms:
+            duration = segment.end_ms - segment.start_ms
+            local = (t_ms - segment.start_ms) / duration if duration > 0 else 1.0
+            front = segment.axis_start + (segment.axis_end - segment.axis_start) * local
+            return True, False, front
+        previous_front = segment.axis_end
+    complete = t_ms >= max(int(pos_end_ms), segments[-1].end_ms)
+    return True, complete, previous_front
+
+
+def _ruby_after_clip_rect_at_time(
+    layout: _RubyLayout,
+    ruby_metrics: QFontMetrics,
+    style: Style,
+    rtl: bool,
+    t_ms: int,
+) -> QRectF:
+    """Clip the after layer at the current ruby glyph front, not its box ratio."""
+    _visible, _complete, front = _ruby_wipe_state(layout, t_ms)
+    rect = _ruby_text_rect(layout, ruby_metrics)
+    stroke_width = _ruby_stroke_width(style)
+    stroke2_width = _ruby_stroke2_width(style)
+    shadow_dx = _ruby_shadow_dx(style)
+    shadow_dy = _ruby_shadow_dy(style)
+    after_glow_radius = _ruby_glow_radius(style, after=True)
+    stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
+    pad = max(
+        stroke_extent,
+        _glow_extent(stroke_width, stroke2_width, after_glow_radius)
+        if _ruby_decoration_kind(style) == "glow"
+        else 0,
+        stroke_extent + abs(shadow_dx),
+        stroke_extent + abs(shadow_dy),
+        2,
+    )
+    wipe_left = layout.wipe_left if layout.wipe_segments else rect.left()
+    wipe_right = layout.wipe_right if layout.wipe_segments else rect.right()
+    if rtl:
+        left = min(max(front, wipe_left), wipe_right)
+        return QRectF(
+            left - pad,
+            rect.top() - pad,
+            max(wipe_right - left, 0.0) + pad,
+            rect.height() + pad * 2,
+        )
+    right = min(max(front, wipe_left), wipe_right)
+    return QRectF(
+        wipe_left - pad,
+        rect.top() - pad,
+        max(right - wipe_left, 0.0) + pad,
+        rect.height() + pad * 2,
+    )
+
+
 def _ruby_target_x_range(
     ruby: RubyAnnotation,
     line: TimingLine,
@@ -9676,7 +9916,7 @@ def _paint_ruby_text_units_with_transition(
     target_width: int | float | None = None,
     gradient_rect: QRectF | None = None,
 ) -> None:
-    visual_units = _ruby_utopia_reading_units_and_intervals(ruby)
+    visual_units = _ruby_visual_units_and_intervals(ruby)
     # RTL：按音节反转排布顺序，使首音节落在最右；各音节计时不变。
     if rtl:
         visual_units = list(reversed(visual_units))
@@ -9758,6 +9998,7 @@ def _paint_ruby_text(
     rtl: bool = False,
     target_width: int | float | None = None,
     gradient_rect: QRectF | None = None,
+    wipe_layout: _RubyLayout | None = None,
 ) -> None:
     # RTL：按可见字形反转读音——小书き假名(ゃゅょ等)是独立字形，也要反过来；
     # 只有零宽浊点/半浊点(゙゚)留在基字后。直接 reading[::-1] 会让浊点
@@ -9785,6 +10026,7 @@ def _paint_ruby_text(
         rtl,
         ruby_metrics,
         gradient_rect=gradient_rect,
+        wipe_layout=wipe_layout,
     )
 
 
@@ -9809,7 +10051,7 @@ def _ruby_text_path_and_rect(
             float(ruby_metrics.height()),
         )
 
-    units = _ruby_reading_units(reading)
+    units = _ruby_utopia_visual_units(reading)
     layout_units = _ruby_layout_units(
         units, ruby_metrics, x, target_width, style=style, base_text=base_text
     )
@@ -9840,7 +10082,7 @@ def _ruby_layout_width(
     style: Style | None = None,
     base_text: str | None = None,
 ) -> float:
-    units = _ruby_reading_units(reading)
+    units = _ruby_utopia_visual_units(reading)
     unit_layouts = _ruby_unit_layouts(units, ruby_metrics, style)
     natural = sum(width for _unit, width, _offset in unit_layouts)
     interval = float(_ruby_interval_px(style))
@@ -9862,7 +10104,7 @@ def _ruby_layout_left_offset(
 ) -> float:
     if target_width is None:
         return 0.0
-    units = _ruby_reading_units(reading)
+    units = _ruby_utopia_visual_units(reading)
     if not units:
         return 0.0
     unit_layouts = _ruby_unit_layouts(units, ruby_metrics, style)
@@ -10091,8 +10333,18 @@ def _paint_ruby_karaoke_path(
     rtl: bool = False,
     ruby_metrics: QFontMetrics | None = None,
     gradient_rect: QRectF | None = None,
+    wipe_layout: _RubyLayout | None = None,
 ) -> None:
-    ratio = _ruby_progress_ratio(ruby, t_ms, ruby_metrics)
+    after_clip_rect = None
+    if wipe_layout is not None and ruby_metrics is not None:
+        visible, complete, _front = _ruby_wipe_state(wipe_layout, t_ms)
+        ratio = 1.0 if visible else 0.0
+        if visible and not complete:
+            after_clip_rect = _ruby_after_clip_rect_at_time(
+                wipe_layout, ruby_metrics, style, rtl, t_ms
+            )
+    else:
+        ratio = _ruby_progress_ratio(ruby, t_ms, ruby_metrics)
     _paint_ruby_karaoke_fragment(
         painter,
         path,
@@ -10101,6 +10353,7 @@ def _paint_ruby_karaoke_path(
         style,
         rtl,
         fill_rect=gradient_rect,
+        after_clip_rect=after_clip_rect,
     )
 
 
@@ -10112,6 +10365,7 @@ def _paint_ruby_karaoke_fragment(
     style: Style,
     rtl: bool = False,
     fill_rect: QRectF | None = None,
+    after_clip_rect: QRectF | None = None,
 ) -> None:
     if style.ruby_karaoke_colors is not None:
         fill_rect = None
@@ -10143,7 +10397,7 @@ def _paint_ruby_karaoke_fragment(
 
     painter.save()
     try:
-        if ratio < 1.0:
+        if ratio < 1.0 or after_clip_rect is not None:
             stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
             pad = max(
                 stroke_extent,
@@ -10155,15 +10409,15 @@ def _paint_ruby_karaoke_fragment(
                 2,
             )
             # RTL：已唱区贴读音右缘，左缘随进度左移。
-            clip_left = rect.left() + (rect.width() * (1.0 - ratio) if rtl else 0.0) - pad
-            painter.setClipRect(
-                QRectF(
+            if after_clip_rect is None:
+                clip_left = rect.left() + (rect.width() * (1.0 - ratio) if rtl else 0.0) - pad
+                after_clip_rect = QRectF(
                     clip_left,
                     rect.top() - pad,
                     rect.width() * ratio + pad,
                     rect.height() + pad * 2,
                 )
-            )
+            painter.setClipRect(after_clip_rect)
         # ratio >= 1.0：唱完不再裁剪——裁剪带右缘恰好压在字框右缘，
         # 会把末字形的描边外扩留在走字前状态。
         _paint_text_layer_stack(
@@ -10339,6 +10593,30 @@ def _ruby_progress_parts_and_intervals(
 
     units = _ruby_reading_units(ruby.reading)
     return units, _ruby_reading_intervals(ruby)
+
+
+def _ruby_visual_units_and_intervals(
+    ruby: RubyAnnotation,
+) -> list[tuple[str, tuple[int, int]]]:
+    """Expand exported ruby parts into N3 visual characters and exact times.
+
+    An empty exported part is a real pause and therefore yields no geometry.
+    Multi-character parts divide their own interval with integer boundaries;
+    combining dakuten/handakuten stay attached to the preceding character.
+    """
+    parts, intervals = _ruby_progress_parts_and_intervals(ruby)
+    result: list[tuple[str, tuple[int, int]]] = []
+    for part, (start, end) in zip(parts, intervals):
+        units = _ruby_utopia_visual_units(part)
+        if not units:
+            continue
+        duration = max(int(end) - int(start), 0)
+        count = len(units)
+        for index, unit in enumerate(units):
+            unit_start = int(start) + duration * index // count
+            unit_end = int(start) + duration * (index + 1) // count
+            result.append((unit, (unit_start, max(unit_start, unit_end))))
+    return result
 
 
 def _main_text_ruby_progress_ratio(ruby: RubyAnnotation, t_ms: int) -> float:

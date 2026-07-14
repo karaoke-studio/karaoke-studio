@@ -186,10 +186,12 @@ def _scheme_from_payload(
         warnings,
         name,
         size_resolver=lambda value: n3_template_size(value, target_height),
+        preserve_inheritance=True,
     )
     field_names = {item.name for item in dataclass_fields(SubtitleStyleScheme)}
     return SubtitleStyleScheme(
-        **{key: value for key, value in changes.items() if key in field_names}
+        **{key: value for key, value in changes.items() if key in field_names},
+        n3_font_inheritance=True,
     )
 
 

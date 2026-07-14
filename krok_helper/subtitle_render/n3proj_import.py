@@ -196,16 +196,35 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
             )
 
     if fonts:
-        changes.update(_scheme_changes(fonts[0], lyrics_dir, warnings, str(fonts[0].get("SettingsName") or "標準配色")))
+        changes.update(
+            _scheme_changes(
+                fonts[0],
+                lyrics_dir,
+                warnings,
+                str(fonts[0].get("SettingsName") or "標準配色"),
+                preserve_inheritance=True,
+            )
+        )
         scheme_field_names = {item.name for item in dataclass_fields(SubtitleStyleScheme)}
         custom: dict[str, SubtitleStyleScheme] = {}
         for index, font in enumerate(fonts[1:], start=1):
             name = _n3_scheme_name(font.get("SettingsName"), f"配色{index}")
             if name in custom or name == TITLE_SCHEME_NAME:
                 name = f"{name}（{index}）"
-            scheme_changes = _scheme_changes(font, lyrics_dir, warnings, name)
+            scheme_changes = _scheme_changes(
+                font,
+                lyrics_dir,
+                warnings,
+                name,
+                preserve_inheritance=True,
+            )
             custom[name] = SubtitleStyleScheme(
-                **{key: value for key, value in scheme_changes.items() if key in scheme_field_names}
+                **{
+                    key: value
+                    for key, value in scheme_changes.items()
+                    if key in scheme_field_names
+                },
+                n3_font_inheritance=True,
             )
         changes["custom_style_schemes"] = custom
 
