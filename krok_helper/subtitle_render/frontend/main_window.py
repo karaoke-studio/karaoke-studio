@@ -809,6 +809,7 @@ class SubtitleRenderWindow(QWidget):
         self._syncing_screen_controls = False
         self._render_thread: Optional[QThread] = None
         self._render_worker: Optional[_RenderWorker] = None
+        self._suppress_next_render_command_log = False
         # 左右余白检查：属性面板每个 SpinBox tick 都会触发样式变更，
         # 用单发定时器合并成一次检查，提示只在结果变化时弹出。
         self._margin_check_timer = QTimer(self)
@@ -3344,6 +3345,16 @@ class SubtitleRenderWindow(QWidget):
     def _stop_render_export(self) -> None:
         if self._render_worker is None or self._render_thread is None or not self._render_thread.isRunning():
             return
+        confirmed = fluent_question(
+            self,
+            "停止导出",
+            "确定要停止当前导出吗？\n未完成文件将被清理。",
+            yes_text="停止导出",
+            no_text="继续导出",
+            default_cancel=True,
+        )
+        if not confirmed:
+            return
         self._export_stop_button.setEnabled(False)
         self._export_status_label.setText("正在停止导出…")
         self._render_worker.cancel()
@@ -3361,6 +3372,12 @@ class SubtitleRenderWindow(QWidget):
             )
 
     def _on_render_log(self, message: str) -> None:
+        if message == "执行命令:":
+            self._suppress_next_render_command_log = True
+            return
+        if self._suppress_next_render_command_log:
+            self._suppress_next_render_command_log = False
+            return
         self._export_status_label.setText(message)
 
     def _export_codec_value(self) -> str:

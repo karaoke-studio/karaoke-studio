@@ -493,9 +493,7 @@ def test_export_output_prefills_dir_and_yurika_name(qapp, monkeypatch, tmp_path)
     assert win._export_name_edit.text() == "my custom"
 
 
-def test_stop_render_export_requests_worker_cancel(qapp, monkeypatch):
-    win = _make_window(qapp, monkeypatch)
-
+def _install_active_render(win):
     class FakeThread:
         def isRunning(self):
             return True
@@ -511,12 +509,64 @@ def test_stop_render_export_requests_worker_cancel(qapp, monkeypatch):
     win._render_thread = FakeThread()
     win._render_worker = worker
     win._export_stop_button.setEnabled(True)
+    return worker
+
+
+def test_stop_render_export_confirms_before_requesting_cancel(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+    worker = _install_active_render(win)
+    questions = []
+
+    def confirm(*args, **kwargs):
+        questions.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(mw, "fluent_question", confirm)
 
     win._stop_render_export()
 
+    assert len(questions) == 1
+    args, kwargs = questions[0]
+    assert args[0] is win
+    assert args[1] == "停止导出"
+    assert "未完成文件" in args[2]
+    assert kwargs == {
+        "yes_text": "停止导出",
+        "no_text": "继续导出",
+        "default_cancel": True,
+    }
     assert worker.cancel_called is True
     assert win._export_stop_button.isEnabled() is False
     assert "停止导出" in win._export_status_label.text()
+
+
+def test_stop_render_export_keeps_running_when_confirmation_is_rejected(
+    qapp, monkeypatch
+):
+    win = _make_window(qapp, monkeypatch)
+    worker = _install_active_render(win)
+    win._export_status_label.setText("正在导出… 10/100 帧")
+    monkeypatch.setattr(mw, "fluent_question", lambda *args, **kwargs: False)
+
+    win._stop_render_export()
+
+    assert worker.cancel_called is False
+    assert win._export_stop_button.isEnabled() is True
+    assert win._export_status_label.text() == "正在导出… 10/100 帧"
+
+
+def test_render_log_does_not_flash_ffmpeg_command_in_status(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+    win._export_status_label.setText("正在准备导出…")
+
+    win._on_render_log("执行命令:")
+    assert win._export_status_label.text() == "正在准备导出…"
+
+    win._on_render_log("ffmpeg -y -c:v h264_nvenc output.mp4")
+    assert win._export_status_label.text() == "正在准备导出…"
+
+    win._on_render_log("多进程导出: 8 个 worker")
+    assert win._export_status_label.text() == "多进程导出: 8 个 worker"
 
 
 # ---------------------------------------------------------------------------
