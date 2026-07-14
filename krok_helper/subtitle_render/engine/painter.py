@@ -4984,24 +4984,40 @@ def _paint_line_direct(
         )
         if after_band is None:
             continue
-        complete = _run_fill_complete(
-            layout.fill_segments, {glyph.index for glyph in run}, t_ms
-        )
-        if _glyph_run_needs_after_glow(run):
-            _paint_glyph_run_after_glow_direct(
-                painter, run, y, after_band, rtl=layout.rtl, complete=complete
+        fill_rect = _glyph_run_rect(run, y)
+        for glyph in run:
+            glyph_run = [glyph]
+            glyph_band = _fill_clip_band_for_glyphs(
+                layout.fill_segments, glyph_run, t_ms, layout.rtl
             )
-        if complete:
-            # 唱完后扫光线已越过 run 尾，无未唱区可保护——不裁切，
-            # 避免把行缘的描边/阴影硬截掉（与逐字路径 ratio>=1 分支一致）。
-            _paint_glyph_run_direct(painter, run, y, after=True)
-            continue
-        painter.save()
-        try:
-            painter.setClipRect(_horizontal_after_clip_rect(after_band, layout.rtl))
-            _paint_glyph_run_direct(painter, run, y, after=True)
-        finally:
-            painter.restore()
+            if glyph_band is None or glyph.text.isspace():
+                continue
+            glyph_complete = _run_fill_complete(
+                layout.fill_segments, {glyph.index}, t_ms
+            )
+            if _glyph_run_needs_after_glow(glyph_run):
+                _paint_glyph_run_after_glow_direct(
+                    painter,
+                    glyph_run,
+                    y,
+                    glyph_band,
+                    rtl=layout.rtl,
+                    complete=glyph_complete,
+                    fill_rect=fill_rect,
+                )
+            if glyph_complete:
+                _paint_glyph_run_direct(
+                    painter, glyph_run, y, after=True, fill_rect=fill_rect
+                )
+                continue
+            painter.save()
+            try:
+                painter.setClipRect(_horizontal_after_clip_rect(glyph_band, layout.rtl))
+                _paint_glyph_run_direct(
+                    painter, glyph_run, y, after=True, fill_rect=fill_rect
+                )
+            finally:
+                painter.restore()
 
 
 def _line_layer_stack(layout: _LineLayout, t_ms: int) -> list:
@@ -5012,36 +5028,44 @@ def _line_layer_stack(layout: _LineLayout, t_ms: int) -> list:
         for run in runs
     ]
     after_layers = []
-    for index, run in enumerate(runs):
-        after_band = _fill_clip_band_for_glyphs(
-            layout.fill_segments, run, t_ms, layout.rtl
-        )
-        if after_band is not None and _glyph_run_needs_after_glow(run):
+    z_index = len(runs) * 2
+    for run in runs:
+        fill_rect = _glyph_run_rect(run, y)
+        for glyph in run:
+            glyph_run = [glyph]
+            after_band = _fill_clip_band_for_glyphs(
+                layout.fill_segments, glyph_run, t_ms, layout.rtl
+            )
+            if after_band is None or glyph.text.isspace():
+                continue
+            if _glyph_run_needs_after_glow(glyph_run):
+                after_layers.append(
+                    _GlyphRunAfterGlowLayer(
+                        glyph_run,
+                        y,
+                        layout.fill_segments,
+                        t_ms,
+                        layout.rtl,
+                        clip_band=after_band,
+                        z_index=z_index,
+                        fill_rect=fill_rect,
+                    )
+                )
+                z_index += 1
             after_layers.append(
-                _GlyphRunAfterGlowLayer(
-                    run,
+                _GlyphRunLayer(
+                    glyph_run,
                     y,
                     layout.fill_segments,
                     t_ms,
                     layout.rtl,
+                    after=True,
                     clip_band=after_band,
-                    z_index=index * 2,
+                    z_index=z_index,
+                    fill_rect=fill_rect,
                 )
             )
-        if after_band is None:
-            continue
-        after_layers.append(
-            _GlyphRunLayer(
-                run,
-                y,
-                layout.fill_segments,
-                t_ms,
-                layout.rtl,
-                after=True,
-                clip_band=after_band,
-                z_index=index * 2 + 1,
-            )
-        )
+            z_index += 1
     return before_layers + after_layers
 
 
@@ -5058,6 +5082,7 @@ def _paint_glyph_run_direct(
     baseline_y: int,
     *,
     after: bool,
+    fill_rect: QRectF | None = None,
 ) -> None:
     role_style = glyphs[0].style
     colors = _effective_karaoke_colors(role_style)
@@ -5076,6 +5101,7 @@ def _paint_glyph_run_direct(
         shadow_dy=role_style.shadow_offset_y,
         glow_radius=_glow_radius(role_style, after=after),
         draw_glow=not (after and role_style.decoration_kind == "glow"),
+        fill_rect=fill_rect,
     )
 
 
@@ -5113,6 +5139,7 @@ def _paint_glyph_run_after_glow_direct(
     *,
     rtl: bool,
     complete: bool,
+    fill_rect: QRectF | None = None,
 ) -> None:
     role_style = glyphs[0].style
     colors = _effective_karaoke_colors(role_style)
@@ -5127,7 +5154,7 @@ def _paint_glyph_run_after_glow_direct(
         painter,
         path,
         colors.after.shadow,
-        rect,
+        fill_rect if fill_rect is not None else rect,
         _glow_radius(role_style, after=True),
         role_style.stroke_width_px,
         role_style.stroke2_width_px,
@@ -5155,6 +5182,7 @@ def _paint_glyph_run_after_glow_wipe(
     *,
     rtl: bool,
     complete: bool,
+    fill_rect: QRectF | None = None,
 ) -> None:
     """走字中的已唱发光：前沿窄带逐帧模糊 + 其余贴整段烘焙位图。
 
@@ -5166,7 +5194,13 @@ def _paint_glyph_run_after_glow_wipe(
     role_style = glyphs[0].style
     if complete or not _afterglow_strip_enabled() or not _glow_cache_enabled():
         _paint_glyph_run_after_glow_direct(
-            painter, glyphs, baseline_y, band, rtl=rtl, complete=complete
+            painter,
+            glyphs,
+            baseline_y,
+            band,
+            rtl=rtl,
+            complete=complete,
+            fill_rect=fill_rect,
         )
         return
     colors = _effective_karaoke_colors(role_style)
@@ -5192,7 +5226,7 @@ def _paint_glyph_run_after_glow_wipe(
             painter,
             path,
             colors.after.shadow,
-            rect,
+            fill_rect if fill_rect is not None else rect,
             radius,
             role_style.stroke_width_px,
             role_style.stroke2_width_px,
@@ -5202,7 +5236,14 @@ def _paint_glyph_run_after_glow_wipe(
         )
     finally:
         painter.restore()
-    baked = _get_or_build_run_glow(glyphs, role_style, colors, after=True)
+    baked = _get_or_build_run_glow(
+        glyphs,
+        role_style,
+        colors,
+        after=True,
+        fill_rect=fill_rect,
+        baseline_y=baseline_y,
+    )
     if baked.image.isNull():
         return
     run_left = min(glyph.left for glyph in glyphs)
@@ -5339,6 +5380,7 @@ class _GlyphRunLayer:
     scope: str = SCOPE_LINE
     fade_opacity: float = 1.0
     transform: QTransform | None = None
+    fill_rect: QRectF | None = None
 
     def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
         return []
@@ -5349,7 +5391,12 @@ class _GlyphRunLayer:
     def static_key(self, ctx: LayerContext, layout: object) -> tuple:
         role_style = self.glyphs[0].style
         colors = _effective_karaoke_colors(role_style)
-        return _glyph_run_layer_key(self.glyphs, role_style, colors, after=self.after)
+        return (
+            _glyph_run_layer_key(self.glyphs, role_style, colors, after=self.after),
+            _relative_fill_rect_signature(
+                self.glyphs, self.baseline_y, self.fill_rect
+            ),
+        )
 
     def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
         role_style = self.glyphs[0].style
@@ -5359,6 +5406,8 @@ class _GlyphRunLayer:
             role_style,
             colors,
             after=self.after,
+            fill_rect=self.fill_rect,
+            baseline_y=self.baseline_y,
         )
         return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
 
@@ -5409,6 +5458,7 @@ class _GlyphRunAfterGlowLayer:
     scope: str = SCOPE_LINE
     fade_opacity: float = 1.0
     transform: QTransform | None = None
+    fill_rect: QRectF | None = None
 
     def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
         return []
@@ -5434,12 +5484,23 @@ class _GlyphRunAfterGlowLayer:
             self.fill_segments, {glyph.index for glyph in self.glyphs}, self.t_ms
         ):
             return None
-        return _glyph_run_after_glow_key(self.glyphs, role_style, colors)
+        return (
+            _glyph_run_after_glow_key(self.glyphs, role_style, colors),
+            _relative_fill_rect_signature(
+                self.glyphs, self.baseline_y, self.fill_rect
+            ),
+        )
 
     def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
         role_style = self.glyphs[0].style
         colors = _effective_karaoke_colors(role_style)
-        image, dx, dy = _build_glyph_run_after_glow_layer(self.glyphs, role_style, colors)
+        image, dx, dy = _build_glyph_run_after_glow_layer(
+            self.glyphs,
+            role_style,
+            colors,
+            fill_rect=self.fill_rect,
+            baseline_y=self.baseline_y,
+        )
         return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
 
     def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
@@ -5493,6 +5554,7 @@ class _GlyphRunAfterGlowLayer:
                 band,
                 rtl=self.rtl,
                 complete=complete,
+                fill_rect=self.fill_rect,
             )
         finally:
             painter.restore()
@@ -5889,6 +5951,23 @@ def _glyph_run_layer_key(
     )
 
 
+def _relative_fill_rect_signature(
+    glyphs: list[_GlyphLayout],
+    baseline_y: int,
+    fill_rect: QRectF | None,
+) -> tuple[float, float, float, float] | None:
+    """Cache-stable brush anchor relative to a glyph run's blit origin."""
+    if fill_rect is None:
+        return None
+    run_left = min(glyph.left for glyph in glyphs)
+    return (
+        round(float(fill_rect.left()) - run_left, 3),
+        round(float(fill_rect.top()) - baseline_y, 3),
+        round(float(fill_rect.width()), 3),
+        round(float(fill_rect.height()), 3),
+    )
+
+
 def _glyph_run_after_glow_key(
     glyphs: list[_GlyphLayout],
     role_style: Style,
@@ -5940,6 +6019,8 @@ def _build_glyph_run_layer(
     *,
     after: bool,
     supersample: float = 1.0,
+    fill_rect: QRectF | None = None,
+    baseline_y: int = 0,
 ) -> tuple[QImage, int, int]:
     """把一个角色 run 的某状态烘焙成透明 QImage。
 
@@ -5997,6 +6078,14 @@ def _build_glyph_run_layer(
     local_glyphs = [replace(glyph, left=glyph.left - run_left + pad_left) for glyph in glyphs]
     path = _glyph_run_path(local_glyphs, local_baseline)
     rect = QRectF(float(pad_left), float(local_baseline - run_ascent), float(run_w), float(run_h))
+    brush_rect = (
+        fill_rect.translated(
+            float(-run_left + pad_left),
+            float(-baseline_y + local_baseline),
+        )
+        if fill_rect is not None
+        else rect
+    )
 
     p = QPainter(image)
     try:
@@ -6012,7 +6101,7 @@ def _build_glyph_run_layer(
                 p,
                 path,
                 state.shadow,
-                rect,
+                brush_rect,
                 _glow_radius(role_style, after=False),
                 role_style.stroke_width_px,
                 role_style.stroke2_width_px,
@@ -6023,7 +6112,7 @@ def _build_glyph_run_layer(
                 p,
                 path,
                 state.shadow,
-                rect,
+                brush_rect,
                 role_style.shadow_offset_x,
                 role_style.shadow_offset_y,
                 role_style.stroke_width_px,
@@ -6035,7 +6124,7 @@ def _build_glyph_run_layer(
                 p,
                 path,
                 state.stroke2,
-                rect,
+                brush_rect,
                 _stroke2_pen_width(role_style.stroke_width_px, role_style.stroke2_width_px),
             )
         # 3) stroke
@@ -6044,11 +6133,11 @@ def _build_glyph_run_layer(
                 p,
                 path,
                 state.stroke,
-                rect,
+                brush_rect,
                 _stroke_pen_width(role_style.stroke_width_px),
             )
         # 4) 底色文字
-        _paint_fill_path(p, path, state.text, rect)
+        _paint_fill_path(p, path, state.text, brush_rect)
     finally:
         p.end()
 
@@ -6063,6 +6152,8 @@ def _build_glyph_run_glow_layer(
     colors: KaraokeColors,
     *,
     after: bool,
+    fill_rect: QRectF | None = None,
+    baseline_y: int = 0,
 ) -> tuple[QImage, int, int]:
     """Bake the full unclipped glow image (before/after state) for a glyph run."""
     state = colors.after if after else colors.before
@@ -6084,6 +6175,14 @@ def _build_glyph_run_glow_layer(
     local_glyphs = [replace(glyph, left=glyph.left - run_left + extent) for glyph in glyphs]
     path = _glyph_run_path(local_glyphs, local_baseline)
     rect = QRectF(float(extent), float(local_baseline - run_ascent), float(run_w), float(run_h))
+    brush_rect = (
+        fill_rect.translated(
+            float(-run_left + extent),
+            float(-baseline_y + local_baseline),
+        )
+        if fill_rect is not None
+        else rect
+    )
 
     p = QPainter(image)
     try:
@@ -6095,7 +6194,7 @@ def _build_glyph_run_glow_layer(
             p,
             path,
             state.shadow,
-            rect,
+            brush_rect,
             radius,
             role_style.stroke_width_px,
             role_style.stroke2_width_px,
@@ -6113,9 +6212,19 @@ def _build_glyph_run_after_glow_layer(
     glyphs: list[_GlyphLayout],
     role_style: Style,
     colors: KaraokeColors,
+    *,
+    fill_rect: QRectF | None = None,
+    baseline_y: int = 0,
 ) -> tuple[QImage, int, int]:
     """Bake the full unclipped after-glow image for a glyph run."""
-    return _build_glyph_run_glow_layer(glyphs, role_style, colors, after=True)
+    return _build_glyph_run_glow_layer(
+        glyphs,
+        role_style,
+        colors,
+        after=True,
+        fill_rect=fill_rect,
+        baseline_y=baseline_y,
+    )
 
 
 def _get_or_build_run_glow(
@@ -6124,12 +6233,26 @@ def _get_or_build_run_glow(
     colors: KaraokeColors,
     *,
     after: bool,
+    fill_rect: QRectF | None = None,
+    baseline_y: int = 0,
 ) -> BakedLayer:
     """A3：按上正 glyph 身份缓存 glow 烘焙位图（before/after 各一条）。"""
-    key = (_glyph_run_layer_key(glyphs, role_style, colors, after=after), "glow", after)
+    key = (
+        _glyph_run_layer_key(glyphs, role_style, colors, after=after),
+        "glow",
+        after,
+        _relative_fill_rect_signature(glyphs, baseline_y, fill_rect),
+    )
     return _RUN_GLOW_CACHE.get_or_build(
         key,
-        lambda: _baked_run_glow(glyphs, role_style, colors, after=after),
+        lambda: _baked_run_glow(
+            glyphs,
+            role_style,
+            colors,
+            after=after,
+            fill_rect=fill_rect,
+            baseline_y=baseline_y,
+        ),
     )
 
 
@@ -6139,8 +6262,17 @@ def _baked_run_glow(
     colors: KaraokeColors,
     *,
     after: bool,
+    fill_rect: QRectF | None = None,
+    baseline_y: int = 0,
 ) -> BakedLayer:
-    image, dx, dy = _build_glyph_run_glow_layer(glyphs, role_style, colors, after=after)
+    image, dx, dy = _build_glyph_run_glow_layer(
+        glyphs,
+        role_style,
+        colors,
+        after=after,
+        fill_rect=fill_rect,
+        baseline_y=baseline_y,
+    )
     return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
 
 

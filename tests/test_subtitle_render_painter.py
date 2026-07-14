@@ -1133,26 +1133,28 @@ def test_after_glow_layer_clip_releases_line_edges_when_fully_sung(qapp):
     line = track.lines[0]
     layout = _layout_line(track, line, _glow_after_style(), 800, 450)
     assert layout is not None
-    ink_left = min(seg.left for seg in layout.fill_segments)
-    ink_right = max(seg.right for seg in layout.fill_segments)
     ctx = LayerContext(t_ms=0, logical_w=800, logical_h=450)
 
-    def glow_clip(t_ms: int) -> QRectF:
+    def glow_clips(t_ms: int) -> list[QRectF | None]:
         layers = [
             layer
             for layer in _line_layer_stack(layout, t_ms)
             if isinstance(layer, _GlyphRunAfterGlowLayer)
         ]
         assert layers
-        return layers[0].animate(ctx, layers[0].layout(ctx)).clip_rect
+        return [layer.animate(ctx, layer.layout(ctx)).clip_rect for layer in layers]
 
-    # 走字途中：尾缘（行首）已外扩，前缘停在扫光线（未越过 run 右缘）
-    mid = glow_clip(1700)
-    assert mid.left() < ink_left
-    assert mid.right() < ink_right
-    # 唱完：不再裁剪，行首/行尾 halo 不再被硬截
-    done = glow_clip(9000)
-    assert done is None
+    # 走字途中：已唱字符的 glow 已完整释放，当前字符仍停在自己的扫光线。
+    mid = next(clip for clip in glow_clips(1700) if clip is not None)
+    active_segment = next(
+        segment
+        for segment in layout.fill_segments
+        if 0.0 < subtitle_painter._segment_fill_ratio(segment, 1700) < 1.0
+    )
+    assert mid.left() < active_segment.left
+    assert mid.right() < active_segment.right
+    # 唱完：所有字符都不再裁剪，halo 不再被硬截。
+    assert all(clip is None for clip in glow_clips(9000))
 
 
 def test_after_glow_layer_is_dynamic_until_run_is_complete(qapp):
@@ -1162,21 +1164,25 @@ def test_after_glow_layer_is_dynamic_until_run_is_complete(qapp):
     assert layout is not None
     ctx = LayerContext(t_ms=0, logical_w=800, logical_h=450)
 
-    def glow_layer(t_ms: int) -> _GlyphRunAfterGlowLayer:
+    def glow_layers(t_ms: int) -> list[_GlyphRunAfterGlowLayer]:
         layers = [
             layer
             for layer in _line_layer_stack(layout, t_ms)
             if isinstance(layer, _GlyphRunAfterGlowLayer)
         ]
         assert layers
-        return layers[0]
+        return layers
 
-    mid = glow_layer(1700)
+    mid = next(
+        layer
+        for layer in glow_layers(1700)
+        if layer.static_key(ctx, layer.layout(ctx)) is None
+    )
     assert mid.static_key(ctx, mid.layout(ctx)) is None
 
-    done = glow_layer(9000)
-    assert done.static_key(ctx, done.layout(ctx)) is not None
-    assert done.animate(ctx, done.layout(ctx)).clip_rect is None
+    done = glow_layers(9000)
+    assert all(layer.static_key(ctx, layer.layout(ctx)) is not None for layer in done)
+    assert all(layer.animate(ctx, layer.layout(ctx)).clip_rect is None for layer in done)
 
 
 def test_after_glow_dynamic_paints_clipped_source_before_blur(qapp, monkeypatch):
@@ -1184,12 +1190,17 @@ def test_after_glow_dynamic_paints_clipped_source_before_blur(qapp, monkeypatch)
     line = track.lines[0]
     layout = _layout_line(track, line, _glow_after_style(), 800, 450)
     assert layout is not None
-    layer = [
+    layers = [
         item
         for item in _line_layer_stack(layout, 1700)
         if isinstance(item, _GlyphRunAfterGlowLayer)
-    ][0]
+    ]
     ctx = LayerContext(t_ms=1700, logical_w=800, logical_h=450)
+    layer = next(
+        item
+        for item in layers
+        if item.animate(ctx, item.layout(ctx)).clip_rect is not None
+    )
     seen: list[QRectF | None] = []
 
     def fake_paint_glow_path(*args, source_clip=None, **kwargs):
@@ -1215,19 +1226,21 @@ def test_after_body_layer_unclipped_when_fully_sung(qapp):
     assert layout is not None
     ctx = LayerContext(t_ms=0, logical_w=800, logical_h=450)
 
-    def body_clip(t_ms: int) -> QRectF | None:
+    def body_clips(t_ms: int) -> list[QRectF | None]:
         layers = [
             layer
             for layer in _line_layer_stack(layout, t_ms)
             if isinstance(layer, _GlyphRunLayer) and layer.after
         ]
         assert layers
-        return layers[0].animate(ctx, layers[0].layout(ctx)).clip_rect
+        return [layer.animate(ctx, layer.layout(ctx)).clip_rect for layer in layers]
 
-    # 走字途中仍需在扫光线处裁切
-    assert body_clip(1700) is not None
-    # 唱完后不裁切，行缘描边/阴影完整
-    assert body_clip(9000) is None
+    # N3 逐字符语义：前一字唱完立即完整释放，当前字仍按自己的扫光线裁切。
+    mid = body_clips(1700)
+    assert mid[0] is None
+    assert any(clip is not None for clip in mid[1:])
+    # 全部唱完后每个字符都不再裁切，描边/阴影完整。
+    assert all(clip is None for clip in body_clips(9000))
 
 
 def test_rtl_changes_render_vs_ltr(qapp):
@@ -2901,10 +2914,83 @@ def test_explicit_timed_space_has_layout_time_but_no_wipe_geometry(qapp):
     assert _fill_extent_end(layout.fill_segments, 85_600) == week_release
 
     at_week_end = _blank()
-    during_space = _blank()
+    at_space_end = _blank()
     paint_frame(at_week_end, track, 85_370, style)
-    paint_frame(during_space, track, 85_600, style)
-    assert _pixel_hash(at_week_end) == _pixel_hash(during_space)
+    paint_frame(at_space_end, track, 85_760, style)
+    # 週在自己的结束时刻就必须与空格结束时完全一致；旧整行 clip 会让
+    # 走字前阴影尾巴留到空格结束才消失，因此这两个像素哈希会不同。
+    assert _pixel_hash(at_week_end) == _pixel_hash(at_space_end)
+
+
+def test_completed_glyph_glow_does_not_wait_for_timed_space(qapp):
+    track = parse_nicokara_lrc("[00:01:00]週[00:01:30] [00:01:70]バ[00:02:00]\n")
+    style = Style(
+        font_size_px=100,
+        stroke_width_px=15,
+        stroke2_width_px=5,
+        space_width_percent=20,
+        line_y_position="center",
+        decoration_kind="glow",
+        glow_radius_px=12,
+        glow_before_radius_px=12,
+        glow_after_radius_px=12,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=PaintFill(color="#FFFFFF"),
+                stroke=PaintFill(color="#F28A32"),
+                stroke2=PaintFill(color="#FFFFFF"),
+                shadow=PaintFill(color="#FF2244"),
+            ),
+            after=KaraokeColorState(
+                text=PaintFill(color="#FFFFFF"),
+                stroke=PaintFill(color="#F28A32"),
+                stroke2=PaintFill(color="#FFFFFF"),
+                shadow=PaintFill(color="#2288FF"),
+            ),
+        ),
+    )
+    at_week_end = _blank()
+    at_space_end = _blank()
+
+    paint_frame(at_week_end, track, 1_300, style)
+    paint_frame(at_space_end, track, 1_700, style)
+
+    assert _pixel_hash(at_week_end) == _pixel_hash(at_space_end)
+
+
+def test_completed_glyph_shadow_does_not_wait_for_timed_space(qapp):
+    track = parse_nicokara_lrc("[00:01:00]週[00:01:30] [00:01:70]バ[00:02:00]\n")
+    style = Style(
+        font_size_px=100,
+        stroke_width_px=15,
+        stroke2_width_px=5,
+        space_width_percent=20,
+        line_y_position="center",
+        decoration_kind="shadow",
+        shadow_offset_x=10,
+        shadow_offset_y=10,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=PaintFill(color="#FFFFFF"),
+                stroke=PaintFill(color="#F28A32"),
+                stroke2=PaintFill(color="#FFFFFF"),
+                shadow=PaintFill(color="#FF2244"),
+            ),
+            after=KaraokeColorState(
+                text=PaintFill(color="#FFFFFF"),
+                stroke=PaintFill(color="#F28A32"),
+                stroke2=PaintFill(color="#FFFFFF"),
+                shadow=PaintFill(color="#F28A32"),
+            ),
+        ),
+    )
+    at_week_end = _blank()
+    at_space_end = _blank()
+
+    paint_frame(at_week_end, track, 1_300, style)
+    paint_frame(at_space_end, track, 1_700, style)
+
+    assert _pixel_hash(at_week_end) == _pixel_hash(at_space_end)
 
 
 def test_main_text_uses_all_ruby_checkpoints_even_when_reading_units_are_missing(qapp):
