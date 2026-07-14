@@ -1053,7 +1053,7 @@ class VideoDownloadPage(QWidget):
         settings_grid.setColumnStretch(2, 1)
 
         settings_grid.addWidget(CaptionLabel("清晰度 / 格式"), 0, 0, Qt.AlignmentFlag.AlignVCenter)
-        self.format_combo = StyledComboBox()
+        self.format_combo = ComboBox()
         self.format_combo.setMinimumHeight(34)
         self.format_combo.currentIndexChanged.connect(self._handle_format_combo_changed)
         self._install_single_click_combo_behavior(self.format_combo)
