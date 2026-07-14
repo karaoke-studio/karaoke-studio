@@ -1710,7 +1710,9 @@ class SubtitleRenderWindow(QWidget):
         body_row.addWidget(settings_col, 0, Qt.AlignmentFlag.AlignTop)
         body_row.addWidget(monitor_card, 0, Qt.AlignmentFlag.AlignTop)
         body_row.addStretch(1)
+        layout.addStretch(1)
         layout.addLayout(body_row)
+        layout.addStretch(1)
 
         # 底部横贯操作区：进度 + 状态 + 开始/停止
         self._export_progress = FluentProgressBar()
@@ -1718,8 +1720,12 @@ class SubtitleRenderWindow(QWidget):
         self._export_progress.setValue(0)
         layout.addWidget(self._export_progress)
 
-        self._export_status_label = CaptionLabel("加载字幕和背景视频后即可导出。")
+        self._export_status_label = CaptionLabel("")
         self._export_status_label.setWordWrap(True)
+        self._export_status_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Fixed,
+        )
         layout.addWidget(self._export_status_label)
 
         action_row = QHBoxLayout()

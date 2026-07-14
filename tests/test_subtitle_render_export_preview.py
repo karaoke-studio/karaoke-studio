@@ -158,7 +158,19 @@ def test_export_monitor_matches_settings_height_and_uses_card_width(qapp):
         qapp.processEvents()
 
 
-def test_export_cards_start_at_top_without_title_block(qapp):
+def test_export_page_omits_title_block_and_initial_status(qapp):
+    window = SubtitleRenderWindow(embedded=True)
+    try:
+        assert not hasattr(window, "_export_title_label")
+        assert not hasattr(window, "_export_caption_label")
+        assert window._export_status_label.text() == ""
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+def test_export_cards_are_vertically_centered_above_actions(qapp):
     window = SubtitleRenderWindow(embedded=True)
     try:
         window.resize(1280, 800)
@@ -170,9 +182,14 @@ def test_export_cards_start_at_top_without_title_block(qapp):
         assert column is not None
         settings_top = window._export_settings_col.mapTo(column, QPoint()).y()
         monitor_top = window._export_monitor_card.mapTo(column, QPoint()).y()
+        progress_top = window._export_progress.mapTo(column, QPoint()).y()
+        gap_below_cards = progress_top - (
+            settings_top + window._export_settings_col.height()
+        )
 
-        assert settings_top <= 12
+        assert settings_top >= 40
         assert monitor_top == settings_top
+        assert gap_below_cards == pytest.approx(settings_top, abs=16)
     finally:
         window.close()
         window.deleteLater()
