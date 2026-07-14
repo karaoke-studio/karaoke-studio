@@ -9,7 +9,7 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QSize  # noqa: E402
+from PyQt6.QtCore import QPoint, QSize  # noqa: E402
 from PyQt6.QtGui import QImage, QPixmap  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
 
@@ -152,6 +152,27 @@ def test_export_monitor_matches_settings_height_and_uses_card_width(qapp):
         assert view_geometry.width() / view_geometry.height() == pytest.approx(
             16 / 9, rel=0.005
         )
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+def test_export_cards_start_at_top_without_title_block(qapp):
+    window = SubtitleRenderWindow(embedded=True)
+    try:
+        window.resize(1280, 800)
+        window._stack.setCurrentWidget(window._export_tab)
+        window.show()
+        qapp.processEvents()
+
+        column = window.findChild(QWidget, "SrExportColumn")
+        assert column is not None
+        settings_top = window._export_settings_col.mapTo(column, QPoint()).y()
+        monitor_top = window._export_monitor_card.mapTo(column, QPoint()).y()
+
+        assert settings_top <= 12
+        assert monitor_top == settings_top
     finally:
         window.close()
         window.deleteLater()

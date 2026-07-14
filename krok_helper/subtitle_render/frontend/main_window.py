@@ -1554,7 +1554,7 @@ class SubtitleRenderWindow(QWidget):
         column.setMaximumWidth(1200)
         column.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(column)
-        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
         center_row = QHBoxLayout()
         center_row.setContentsMargins(0, 0, 0, 0)
@@ -1566,11 +1566,6 @@ class SubtitleRenderWindow(QWidget):
         # qfluentwidgets 语义标签自行跟随主题；保留实例引用，防止被 GC 移出
         # styleSheetManager 的 WeakKeyDictionary 后主题失效（同 SUG 导出页的教训）。
         self._export_theme_labels: list[QWidget] = []
-        self._export_title_label = TitleLabel("导出 MP4")
-        self._export_caption_label = CaptionLabel("将当前字幕与背景合成为 MP4 视频。")
-        layout.addWidget(self._export_title_label)
-        layout.addWidget(self._export_caption_label)
-
         # 主体两栏：左·设置卡片列（定宽），右·导出预览（吃掉剩余空间）
         body_row = QHBoxLayout()
         body_row.setContentsMargins(0, 0, 0, 0)
