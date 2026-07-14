@@ -2510,6 +2510,126 @@ def test_layout_rubies_is_pure_t_independent_geometry(qapp):
     assert layout[0].reading_width > 0
 
 
+def test_ruby_wipe_uses_visible_door_glyphs_and_n3_character_times(qapp):
+    """2:19: centered ``door`` must not finish in its trailing layout blank."""
+    style = Style(ruby_font_size_px=30, ruby_alignment="center")
+    font = _build_ruby_font(style)
+    metrics = QFontMetrics(font)
+    ruby = RubyAnnotation(
+        kanji="ドア",
+        reading="door",
+        reading_part_ms=[290],
+        reading_parts=["doo", "r"],
+        pos_start_ms=139080,
+        pos_end_ms=139540,
+    )
+    segments, ink_left, ink_right, _signature = subtitle_painter._ruby_wipe_geometry(
+        ruby, font, metrics, 599, 200, 204, style, rtl=False
+    )
+
+    assert [(item.start_ms, item.end_ms) for item in segments] == [
+        (139080, 139176),
+        (139176, 139273),
+        (139273, 139370),
+        (139370, 139540),
+    ]
+    assert ink_left > 599  # centered leading blank is positioning only
+    assert ink_right < 803  # centered trailing blank is not wipe distance
+
+    layout = subtitle_painter._RubyLayout(
+        ruby=ruby,
+        indices=[0, 1],
+        style=style,
+        x=599,
+        baseline_y=200,
+        target_width=204,
+        reading_width=204,
+        gradient_rect=QRectF(599, 100, 204, 100),
+        wipe_segments=segments,
+        wipe_left=ink_left,
+        wipe_right=ink_right,
+    )
+    visible, complete, front = subtitle_painter._ruby_wipe_state(layout, 139416)
+    assert visible and not complete
+    assert segments[-1].axis_start < front < ink_right
+
+
+def test_single_centered_ruby_starts_at_its_visible_glyph(qapp):
+    """4:21: a wide target's leading blank must not delay the ruby wipe."""
+    style = Style(ruby_font_size_px=30, ruby_alignment="center")
+    font = _build_ruby_font(style)
+    metrics = QFontMetrics(font)
+    ruby = RubyAnnotation(
+        kanji="超",
+        reading="こ",
+        reading_parts=["こ"],
+        pos_start_ms=261470,
+        pos_end_ms=261790,
+    )
+    segments, ink_left, ink_right, _signature = subtitle_painter._ruby_wipe_geometry(
+        ruby, font, metrics, 917, 200, 113, style, rtl=False
+    )
+    assert len(segments) == 1
+    assert ink_left > 917
+    assert ink_right < 1030
+
+    layout = subtitle_painter._RubyLayout(
+        ruby=ruby,
+        indices=[0],
+        style=style,
+        x=917,
+        baseline_y=200,
+        target_width=113,
+        reading_width=113,
+        gradient_rect=QRectF(917, 100, 113, 100),
+        wipe_segments=segments,
+        wipe_left=ink_left,
+        wipe_right=ink_right,
+    )
+    visible, complete, front = subtitle_painter._ruby_wipe_state(layout, 261500)
+    assert visible and not complete
+    assert front > ink_left  # visible ink has begun immediately after pos_start
+
+
+def test_ruby_wipe_preserves_empty_part_pause_and_rtl_direction(qapp):
+    ruby = RubyAnnotation(
+        kanji="AB",
+        reading="ab",
+        reading_part_ms=[100, 200],
+        reading_parts=["a", "", "b"],
+        pos_start_ms=1000,
+        pos_end_ms=1300,
+    )
+    style = Style(ruby_font_size_px=30, ruby_alignment="center")
+    font = _build_ruby_font(style)
+    metrics = QFontMetrics(font)
+    segments, left, right, _signature = subtitle_painter._ruby_wipe_geometry(
+        ruby, font, metrics, 100, 200, 160, style, rtl=True
+    )
+    layout = subtitle_painter._RubyLayout(
+        ruby=ruby,
+        indices=[0, 1],
+        style=style,
+        x=100,
+        baseline_y=200,
+        target_width=160,
+        reading_width=160,
+        gradient_rect=QRectF(100, 100, 160, 100),
+        wipe_segments=segments,
+        wipe_left=left,
+        wipe_right=right,
+    )
+
+    assert [(item.start_ms, item.end_ms) for item in segments] == [
+        (1000, 1100),
+        (1200, 1300),
+    ]
+    assert segments[0].axis_start > segments[0].axis_end  # first sound wipes right-to-left
+    pause_start = subtitle_painter._ruby_wipe_state(layout, 1100)[2]
+    pause_mid = subtitle_painter._ruby_wipe_state(layout, 1150)[2]
+    assert pause_mid == pytest.approx(pause_start)
+
+
 def test_ruby_text_layer_static_key_ignores_timing_progress(qapp):
     track = _track_with_ruby()
     line = track.lines[0]
@@ -2559,6 +2679,90 @@ def test_ruby_text_layer_static_key_ignores_timing_progress(qapp):
     assert after_early.static_key(ctx, after_early) == after_late.static_key(
         ctx, after_late
     )
+
+
+def test_ruby_baked_keys_include_relative_alignment_geometry(qapp):
+    ruby = RubyAnnotation(
+        kanji="漢",
+        reading="abc",
+        reading_parts=["abc"],
+        pos_start_ms=1000,
+        pos_end_ms=2000,
+    )
+    layouts = []
+    for alignment in ("center", "equal_space"):
+        style = Style(ruby_font_size_px=36, ruby_alignment=alignment)
+        font = _build_ruby_font(style)
+        metrics = QFontMetrics(font)
+        segments, left, right, signature = subtitle_painter._ruby_wipe_geometry(
+            ruby, font, metrics, 100, 200, 180, style, rtl=False
+        )
+        layouts.append(
+            (
+                subtitle_painter._RubyLayout(
+                    ruby=ruby,
+                    indices=[0],
+                    style=style,
+                    x=100,
+                    baseline_y=200,
+                    target_width=180,
+                    reading_width=180,
+                    gradient_rect=QRectF(100, 100, 180, 100),
+                    wipe_segments=segments,
+                    wipe_left=left,
+                    wipe_right=right,
+                    geometry_signature=signature,
+                ),
+                font,
+                style,
+            )
+        )
+
+    center, center_font, center_style = layouts[0]
+    equal, equal_font, equal_style = layouts[1]
+    assert center.geometry_signature != equal.geometry_signature
+    assert subtitle_painter._ruby_text_layer_key(
+        center, center_font, center_style, False, after=False
+    ) != subtitle_painter._ruby_text_layer_key(
+        equal, equal_font, equal_style, False, after=False
+    )
+    assert subtitle_painter._ruby_glow_layer_key(
+        center, center_font, center_style, False, after=False
+    ) != subtitle_painter._ruby_glow_layer_key(
+        equal, equal_font, equal_style, False, after=False
+    )
+
+
+def test_clear_before_layer_cache_clears_ruby_unit_geometry(qapp):
+    style = Style(ruby_font_size_px=36)
+    metrics = QFontMetrics(_build_ruby_font(style))
+    _ruby_layout_units(["a", "b"], metrics, 0, 100, style=style, base_text="漢")
+    assert subtitle_painter._RUBY_UNIT_LAYOUT_CACHE
+
+    clear_before_layer_cache()
+
+    assert not subtitle_painter._RUBY_UNIT_LAYOUT_CACHE
+
+
+def test_line_layout_cache_reuses_precomputed_ruby_wipe_geometry(qapp, monkeypatch):
+    track = _track_with_ruby()
+    style = Style(font_size_px=64, ruby_font_size_px=30, line_y_position="center")
+    calls = 0
+    original = subtitle_painter._ruby_wipe_geometry
+
+    def counted(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(subtitle_painter, "_ruby_wipe_geometry", counted)
+    clear_before_layer_cache()
+    first = _layout_line(track, track.lines[0], style, 640, 360, cache_sig=("ruby",))
+    second = _layout_line(track, track.lines[0], style, 640, 360, cache_sig=("ruby",))
+
+    assert first is second
+    assert first.ruby_layouts
+    assert calls == len(first.ruby_layouts)
 
 
 def test_ruby_layer_stack_builds_from_line_layout(qapp):
