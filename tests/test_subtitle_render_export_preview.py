@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,9 +11,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QSize  # noqa: E402
 from PyQt6.QtGui import QImage, QPixmap  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 from krok_helper.subtitle_render.frontend.main_window import (  # noqa: E402
+    SubtitleRenderWindow,
+    _AspectRatioBox,
     _ExportMonitorView,
     _export_preview_width,
     _physical_preview_size,
@@ -65,6 +68,15 @@ def test_scaled_preview_pixmap_preserves_physical_pixels_and_dpr(qapp):
     assert pixmap.size() == QSize(611, 344)
 
 
+def test_scaled_preview_pixmap_crops_rounding_mismatch_to_fill_stage(qapp):
+    frame = QPixmap(640, 362)  # ffmpeg ``-2`` can round the calculated height
+    frame.fill(0xFF336699)
+
+    pixmap = _scaled_preview_pixmap(frame, QSize(533, 300), 1.0)
+
+    assert pixmap.size() == QSize(533, 300)
+
+
 def test_export_monitor_displays_frame_at_active_screen_dpr(qapp):
     view = _ExportMonitorView()
     view.resize(489, 275)
@@ -76,3 +88,71 @@ def test_export_monitor_displays_frame_at_active_screen_dpr(qapp):
     pixmap = view.pixmap()
     assert pixmap is not None
     assert pixmap.devicePixelRatioF() == pytest.approx(view.devicePixelRatioF())
+
+
+def test_aspect_ratio_box_can_switch_to_export_ratio(qapp):
+    child = QWidget()
+    frame = _AspectRatioBox(child)
+    frame.resize(1000, 700)
+    frame.show()
+    qapp.processEvents()
+
+    frame.set_aspect_ratio(1440, 1080)
+    qapp.processEvents()
+
+    geometry = child.geometry()
+    assert geometry.size() == QSize(933, 700)
+    assert geometry.x() == pytest.approx(33, abs=1)
+    assert geometry.y() == 0
+    assert geometry.width() / geometry.height() == pytest.approx(4 / 3, rel=0.002)
+
+
+def test_sync_preview_output_size_updates_export_monitor_ratio():
+    calls: list[tuple[object, ...]] = []
+    host = SimpleNamespace(
+        _preview_panel=SimpleNamespace(
+            set_output_size=lambda width, height: calls.append(("preview", width, height))
+        ),
+        _export_monitor_frame=SimpleNamespace(
+            set_aspect_ratio=lambda width, height: calls.append(("monitor", width, height))
+        ),
+        _sync_export_monitor_card_size=lambda width, height: calls.append(
+            ("card", width, height)
+        ),
+        _export_width_spin=SimpleNamespace(value=lambda: 1440),
+        _export_height_spin=SimpleNamespace(value=lambda: 1080),
+    )
+
+    SubtitleRenderWindow._sync_preview_output_size(host)
+
+    assert calls == [
+        ("preview", 1440, 1080),
+        ("monitor", 1440, 1080),
+        ("card", 1440, 1080),
+    ]
+
+
+def test_export_monitor_matches_settings_height_and_uses_card_width(qapp):
+    window = SubtitleRenderWindow(embedded=True)
+    try:
+        window.resize(1280, 800)
+        window._stack.setCurrentWidget(window._export_tab)
+        window.show()
+        qapp.processEvents()
+
+        settings_column = window.findChild(QWidget, "SrExportSettingsCol")
+        assert settings_column is not None
+        monitor_card = window._export_monitor_card
+        assert monitor_card.height() == pytest.approx(
+            settings_column.sizeHint().height(), abs=1
+        )
+        frame_width = window._export_monitor_frame.width()
+        view_geometry = window._export_monitor_view.geometry()
+        assert view_geometry.width() >= frame_width * 0.95
+        assert view_geometry.width() / view_geometry.height() == pytest.approx(
+            16 / 9, rel=0.005
+        )
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()

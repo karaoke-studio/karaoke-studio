@@ -195,8 +195,19 @@ class _AspectRatioBox(QWidget):
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return QSize(426, 240)
 
+    def set_aspect_ratio(self, width: int, height: int) -> None:
+        """Update the child aspect ratio from an output size."""
+        if width <= 0 or height <= 0:
+            return
+        self._aspect_ratio = max(float(width) / float(height), 0.1)
+        self._update_child_geometry()
+        self.updateGeometry()
+
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
+        self._update_child_geometry()
+
+    def _update_child_geometry(self) -> None:
         w = max(self.width(), 1)
         h = max(self.height(), 1)
         target_w = w
@@ -694,11 +705,19 @@ def _scaled_preview_pixmap(
 ) -> QPixmap:
     """Scale a frame for a logical widget while retaining physical pixels."""
     dpr = device_pixel_ratio if isfinite(device_pixel_ratio) and device_pixel_ratio > 0 else 1.0
+    target_size = _physical_preview_size(logical_size, dpr)
     pixmap = frame.scaled(
-        _physical_preview_size(logical_size, dpr),
-        Qt.AspectRatioMode.KeepAspectRatio,
+        target_size,
+        Qt.AspectRatioMode.KeepAspectRatioByExpanding,
         Qt.TransformationMode.SmoothTransformation,
     )
+    if pixmap.size() != target_size:
+        pixmap = pixmap.copy(
+            max((pixmap.width() - target_size.width()) // 2, 0),
+            max((pixmap.height() - target_size.height()) // 2, 0),
+            target_size.width(),
+            target_size.height(),
+        )
     pixmap.setDevicePixelRatio(dpr)
     return pixmap
 
@@ -767,7 +786,7 @@ class _ExportMonitorView(QLabel):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._frame: Optional[QPixmap] = None
-        self.setMinimumSize(320, 220)
+        self.setMinimumSize(1, 1)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         themed(
@@ -1560,6 +1579,7 @@ class SubtitleRenderWindow(QWidget):
         settings_col.setObjectName("SrExportSettingsCol")
         themed(settings_col, lambda: "#SrExportSettingsCol { background: transparent; }")
         settings_col.setFixedWidth(430)
+        self._export_settings_col = settings_col
         settings_layout = QVBoxLayout(settings_col)
         settings_layout.setContentsMargins(0, 0, 0, 0)
         settings_layout.setSpacing(12)
@@ -1664,7 +1684,9 @@ class SubtitleRenderWindow(QWidget):
 
         # 右栏：导出预览（仿 N3 出力预览——边导出边显示 ffmpeg 合成帧）
         monitor_card = SimpleCardWidget()
+        self._export_monitor_card = monitor_card
         monitor_layout = QVBoxLayout(monitor_card)
+        self._export_monitor_layout = monitor_layout
         monitor_layout.setContentsMargins(20, 14, 20, 16)
         monitor_layout.setSpacing(10)
         monitor_header = QHBoxLayout()
@@ -1675,18 +1697,25 @@ class SubtitleRenderWindow(QWidget):
         monitor_header.addWidget(monitor_title)
         monitor_header.addStretch(1)
         monitor_header.addWidget(self._export_eta_label)
+        self._export_monitor_header = monitor_header
         monitor_layout.addLayout(monitor_header)
         self._export_monitor_view = _ExportMonitorView()
-        # 画面高度封顶（导出画面多为 16:9），多余竖向空间留到卡片底部
-        self._export_monitor_view.setMaximumHeight(460)
-        monitor_layout.addWidget(self._export_monitor_view, 1)
+        self._export_monitor_frame = _AspectRatioBox(
+            self._export_monitor_view,
+            aspect_ratio=(
+                self._export_width_spin.value() / self._export_height_spin.value()
+            ),
+        )
+        self._export_monitor_frame.setMinimumSize(240, 135)
+        # 比例容器占用全部可用区域，画面按导出比例尽量吃满卡片宽度。
+        monitor_layout.addWidget(self._export_monitor_frame, 1)
         self._export_format_label = CaptionLabel("输出格式: MP4 · H.264 (AVC)")
         monitor_layout.addWidget(self._export_format_label)
-        monitor_layout.addStretch(1)
 
-        body_row.addWidget(settings_col)
-        body_row.addWidget(monitor_card, 1)
-        layout.addLayout(body_row, 1)
+        body_row.addWidget(settings_col, 0, Qt.AlignmentFlag.AlignTop)
+        body_row.addWidget(monitor_card, 0, Qt.AlignmentFlag.AlignTop)
+        body_row.addStretch(1)
+        layout.addLayout(body_row)
 
         # 底部横贯操作区：进度 + 状态 + 开始/停止
         self._export_progress = FluentProgressBar()
@@ -3248,10 +3277,31 @@ class SubtitleRenderWindow(QWidget):
             return {}
 
     def _sync_preview_output_size(self) -> None:
-        self._preview_panel.set_output_size(
-            self._export_width_spin.value(),
-            self._export_height_spin.value(),
+        width = self._export_width_spin.value()
+        height = self._export_height_spin.value()
+        self._preview_panel.set_output_size(width, height)
+        if hasattr(self, "_export_monitor_frame"):
+            self._export_monitor_frame.set_aspect_ratio(width, height)
+            self._sync_export_monitor_card_size(width, height)
+
+    def _sync_export_monitor_card_size(self, width: int, height: int) -> None:
+        if width <= 0 or height <= 0 or not hasattr(self, "_export_monitor_card"):
+            return
+        target_height = max(self._export_settings_col.sizeHint().height(), 1)
+        margins = self._export_monitor_layout.contentsMargins()
+        spacing = max(self._export_monitor_layout.spacing(), 0)
+        chrome_height = (
+            margins.top()
+            + margins.bottom()
+            + self._export_monitor_header.sizeHint().height()
+            + self._export_format_label.sizeHint().height()
+            + spacing * 2
         )
+        frame_height = max(target_height - chrome_height, 1)
+        frame_width = int(round(frame_height * width / height))
+        target_width = max(frame_width + margins.left() + margins.right(), 1)
+        self._export_monitor_card.setFixedHeight(target_height)
+        self._export_monitor_card.setMaximumWidth(target_width)
 
     def _export_output_base(self) -> Optional[Path]:
         """默认输出目录 / 文件名的来源素材：视频 > 背景素材 > 字幕文件。"""
