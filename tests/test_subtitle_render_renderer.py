@@ -251,6 +251,40 @@ def test_build_render_command_preview_taps_composited_stream(tmp_path):
     assert command[-1] == str(preview)
     assert command.index(str(_job(tmp_path).output_path)) < command.index("[vprev]")
     assert "-update" in command and "-atomic_writing" in command
+    assert command[command.index("-q:v") + 1] == "2"
+
+
+def test_build_render_command_preview_defaults_to_640_for_wide_output(tmp_path):
+    preview = tmp_path / "frame.jpg"
+    job = replace(_job(tmp_path), width=1920, height=1080)
+
+    command = build_render_command("ffmpeg", job, preview_image_path=preview)
+
+    filter_graph = command[command.index("-filter_complex") + 1]
+    assert "[vpin]fps=2,scale=640:-2[vprev]" in filter_graph
+    assert command[command.index("-s:v") + 1] == "1920x1080"
+
+
+@pytest.mark.parametrize(
+    ("requested_width", "expected_width"),
+    [(900, 900), (100, 320), (4000, 1920)],
+)
+def test_build_render_command_preview_clamps_requested_width(
+    tmp_path, requested_width, expected_width
+):
+    preview = tmp_path / "frame.jpg"
+    job = replace(_job(tmp_path), width=1920, height=1080)
+
+    command = build_render_command(
+        "ffmpeg",
+        job,
+        preview_image_path=preview,
+        preview_width=requested_width,
+    )
+
+    filter_graph = command[command.index("-filter_complex") + 1]
+    assert f"[vpin]fps=2,scale={expected_width}:-2[vprev]" in filter_graph
+    assert command[command.index("-s:v") + 1] == "1920x1080"
 
 
 def test_build_render_command_without_preview_keeps_single_output(tmp_path):

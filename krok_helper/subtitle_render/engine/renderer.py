@@ -57,6 +57,7 @@ _CHUNK_TARGET_BYTES = 64 * 1024 * 1024  # 单个 chunk 目标字节（控内存 
 # 边导出边看画面。fps=2 → 60fps 输出下约每 30 帧刷新一次。
 _PREVIEW_FPS = 2
 _PREVIEW_WIDTH = 640
+_PREVIEW_MIN_WIDTH = 320
 from krok_helper.types import Logger
 
 
@@ -86,6 +87,11 @@ def _job_tracks(job: "RenderJob") -> list[TimingTrack]:
     return [job.track, *job.extra_tracks]
 
 
+def _resolved_preview_width(output_width: int, requested_width: int | None) -> int:
+    requested = _PREVIEW_WIDTH if requested_width is None else int(requested_width)
+    return min(max(int(output_width), 1), max(_PREVIEW_MIN_WIDTH, requested))
+
+
 def render_subtitle_video(
     job: RenderJob,
     *,
@@ -95,6 +101,7 @@ def render_subtitle_video(
     on_process_started: Callable[[subprocess.Popen | None], None] | None = None,
     on_progress: Callable[[int, int], None] | None = None,
     preview_image_path: Path | None = None,
+    preview_width: int | None = None,
 ) -> Path:
     """Render ``job`` to MP4 using a transparent rawvideo subtitle pipe."""
     logger = logger or (lambda _message: None)
@@ -126,6 +133,7 @@ def render_subtitle_video(
         command = build_render_command(
             ffmpeg_path, job, duration_ms=duration_ms, bands=bands,
             preview_image_path=preview_image_path,
+            preview_width=preview_width,
         )
     else:
         strip_top, render_h = strip if strip is not None else (0, job.height)
@@ -134,6 +142,7 @@ def render_subtitle_video(
         command = build_render_command(
             ffmpeg_path, job, duration_ms=duration_ms, strip=strip,
             preview_image_path=preview_image_path,
+            preview_width=preview_width,
         )
 
     job.output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -254,6 +263,7 @@ def build_render_command(
     strip: tuple[int, int] | None = None,
     bands: list[tuple[int, int]] | None = None,
     preview_image_path: Path | None = None,
+    preview_width: int | None = None,
 ) -> list[str]:
     """Build the ffmpeg command used by :func:`render_subtitle_video`.
 
@@ -262,7 +272,8 @@ def build_render_command(
     ``bands`` = 多条 ``(y_top, height)``（方案 B）：竖向打包成一条 pipe，split/crop/overlay
     还原到各自原始 y；给定时优先于 ``strip``。
     ``preview_image_path``：导出预览 —— 把合成后的 ``[v]`` 再 split 一路，降频缩宽后
-    持续覆盖写入该 JPG（原子写），供 UI 边导出边轮询显示。
+    持续覆盖写入该 JPG（原子写），供 UI 边导出边轮询显示。``preview_width``
+    指定该支路的目标物理像素宽度；省略时使用兼容默认值。
     """
     _validate_job(job)
     duration = _resolve_duration_ms(job) if duration_ms is None else duration_ms
@@ -284,9 +295,10 @@ def build_render_command(
         )
     video_label = "[v]"
     if preview_image_path is not None:
+        resolved_preview_width = _resolved_preview_width(job.width, preview_width)
         filter_graph += (
             ";[v]split=2[venc][vpin];"
-            f"[vpin]fps={_PREVIEW_FPS},scale={_PREVIEW_WIDTH}:-2[vprev]"
+            f"[vpin]fps={_PREVIEW_FPS},scale={resolved_preview_width}:-2[vprev]"
         )
         video_label = "[venc]"
     background = _resolved_background(job)
@@ -343,7 +355,7 @@ def build_render_command(
             "-f", "image2",
             "-update", "1",
             "-atomic_writing", "1",
-            "-q:v", "4",
+            "-q:v", "2",
             str(preview_image_path),
         ])
     return command

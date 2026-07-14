@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
+from math import isfinite
 from pathlib import Path
 import shutil
 import subprocess
@@ -647,6 +648,61 @@ class PreviewPlayerWindow(QWidget):
             )
 
 
+_EXPORT_PREVIEW_DEFAULT_WIDTH = 640
+_EXPORT_PREVIEW_MIN_WIDTH = 320
+
+
+def _export_preview_width(
+    view_size: QSize,
+    device_pixel_ratio: float,
+    output_width: int,
+    output_height: int,
+) -> int:
+    """Return the fitted preview width in physical pixels."""
+    safe_output_width = max(int(output_width), 1)
+    fallback = min(safe_output_width, _EXPORT_PREVIEW_DEFAULT_WIDTH)
+    if (
+        view_size.width() <= 0
+        or view_size.height() <= 0
+        or output_width <= 0
+        or output_height <= 0
+        or not isfinite(device_pixel_ratio)
+        or device_pixel_ratio <= 0
+    ):
+        return fallback
+    fitted_logical_width = min(
+        float(view_size.width()),
+        float(view_size.height()) * output_width / output_height,
+    )
+    physical_width = int(round(fitted_logical_width * device_pixel_ratio))
+    return min(safe_output_width, max(_EXPORT_PREVIEW_MIN_WIDTH, physical_width))
+
+
+def _physical_preview_size(size: QSize, device_pixel_ratio: float) -> QSize:
+    """Convert a logical widget size to a positive physical-pixel size."""
+    dpr = device_pixel_ratio if isfinite(device_pixel_ratio) and device_pixel_ratio > 0 else 1.0
+    return QSize(
+        max(int(round(size.width() * dpr)), 1),
+        max(int(round(size.height() * dpr)), 1),
+    )
+
+
+def _scaled_preview_pixmap(
+    frame: QPixmap,
+    logical_size: QSize,
+    device_pixel_ratio: float,
+) -> QPixmap:
+    """Scale a frame for a logical widget while retaining physical pixels."""
+    dpr = device_pixel_ratio if isfinite(device_pixel_ratio) and device_pixel_ratio > 0 else 1.0
+    pixmap = frame.scaled(
+        _physical_preview_size(logical_size, dpr),
+        Qt.AspectRatioMode.KeepAspectRatio,
+        Qt.TransformationMode.SmoothTransformation,
+    )
+    pixmap.setDevicePixelRatio(dpr)
+    return pixmap
+
+
 class _RenderWorker(QObject):
     progressChanged = Signal(int, int)
     logMessage = Signal(str)
@@ -659,11 +715,13 @@ class _RenderWorker(QObject):
         job: RenderJob,
         ffmpeg_dir: Optional[Path],
         preview_image_path: Optional[Path] = None,
+        preview_width: Optional[int] = None,
     ) -> None:
         super().__init__()
         self._job = job
         self._ffmpeg_dir = ffmpeg_dir
         self._preview_image_path = preview_image_path
+        self._preview_width = preview_width
         self._process: Optional[subprocess.Popen] = None
         self._cancel_requested = False
 
@@ -677,6 +735,7 @@ class _RenderWorker(QObject):
                 on_progress=self.progressChanged.emit,
                 on_process_started=self._set_process,
                 preview_image_path=self._preview_image_path,
+                preview_width=self._preview_width,
             )
         except ExportCancelled as exc:
             self.cancelled.emit(str(exc))
@@ -734,10 +793,10 @@ class _ExportMonitorView(QLabel):
         if self._frame is None or self._frame.isNull():
             return
         self.setPixmap(
-            self._frame.scaled(
+            _scaled_preview_pixmap(
+                self._frame,
                 self.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
+                float(self.devicePixelRatioF()),
             )
         )
 
@@ -3325,7 +3384,18 @@ class SubtitleRenderWindow(QWidget):
         self._export_preview_timer.start()
 
         thread = QThread(self)
-        worker = _RenderWorker(job, self._resolve_ffmpeg_dir(), self._export_preview_file)
+        preview_width = _export_preview_width(
+            self._export_monitor_view.size(),
+            float(self._export_monitor_view.devicePixelRatioF()),
+            job.width,
+            job.height,
+        )
+        worker = _RenderWorker(
+            job,
+            self._resolve_ffmpeg_dir(),
+            self._export_preview_file,
+            preview_width,
+        )
         worker.moveToThread(thread)
         worker.progressChanged.connect(self._on_render_progress)
         worker.logMessage.connect(self._on_render_log)
