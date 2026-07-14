@@ -726,7 +726,7 @@ class _ExportMonitorView(QLabel):
     def clear_frame(self) -> None:
         self._frame = None
         self.setPixmap(QPixmap())
-        self.setText("开始导出后，这里会实时显示合成画面")
+        self.setText("准备开始导出")
 
     def _rescale(self) -> None:
         if self._frame is None or self._frame.isNull():
