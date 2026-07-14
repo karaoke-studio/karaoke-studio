@@ -3810,20 +3810,7 @@ class PropertyPanel(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        header = QWidget(group)
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(0, 0, 0, 0)
-        header_layout.setSpacing(8)
-        header_layout.addWidget(_subgroup_label("字符排版"))
-        self._allow_biting_check = CheckBox("允许文字咬合", header)
-        self._allow_biting_check.setToolTip(
-            "允许斜体和部分标点使用负字形边距，效果更接近 NicokaraMaker3。"
-        )
-        self._allow_biting_check.toggled.connect(
-            lambda checked: self._update_layout_field(allow_biting=checked)
-        )
-        header_layout.addWidget(self._allow_biting_check)
-        layout.addWidget(header)
+        layout.addWidget(_subgroup_label("字符排版"))
 
         fields = QWidget(group)
         fields_layout = QHBoxLayout(fields)
@@ -3849,6 +3836,16 @@ class PropertyPanel(QWidget):
             lambda value: self._update_style(space_width_percent=value)
         )
         fields_layout.addWidget(_field("空格宽度", self._space_width_spin))
+
+        self._allow_biting_check = CheckBox("启用", fields)
+        self._allow_biting_check.setToolTip(
+            "允许斜体和部分标点使用负字形边距，效果更接近 NicokaraMaker3。"
+        )
+        self._allow_biting_check.toggled.connect(
+            lambda checked: self._update_layout_field(allow_biting=checked)
+        )
+        fields_layout.addWidget(_field("文字咬合", self._allow_biting_check))
+        fields_layout.addStretch(1)
 
         layout.addWidget(fields)
         return group
