@@ -27,13 +27,15 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from typing import Any, Optional
 
 from PyQt6.QtCore import QObject, QPoint, QRect, QSize, QThread, QTimer, QUrl, Qt, pyqtSignal as Signal
-from PyQt6.QtGui import QColor, QDesktopServices, QImage, QKeySequence, QShortcut
+from PyQt6.QtGui import QColor, QDesktopServices, QImage, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog,
     QColorDialog,
@@ -147,7 +149,7 @@ from krok_helper.subtitle_render.sug_project import (
     load_sug_timing_track,
     timing_track_from_sug_project,
 )
-from krok_helper.subtitle_render.frontend.theme import palette, themed
+from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
 
 apply_qfluent_menu_lifetime_patch()
 
@@ -650,10 +652,16 @@ class _RenderWorker(QObject):
     cancelled = Signal(str)
     failed = Signal(str)
 
-    def __init__(self, job: RenderJob, ffmpeg_dir: Optional[Path]) -> None:
+    def __init__(
+        self,
+        job: RenderJob,
+        ffmpeg_dir: Optional[Path],
+        preview_image_path: Optional[Path] = None,
+    ) -> None:
         super().__init__()
         self._job = job
         self._ffmpeg_dir = ffmpeg_dir
+        self._preview_image_path = preview_image_path
         self._process: Optional[subprocess.Popen] = None
         self._cancel_requested = False
 
@@ -666,6 +674,7 @@ class _RenderWorker(QObject):
                 should_cancel=self.should_cancel,
                 on_progress=self.progressChanged.emit,
                 on_process_started=self._set_process,
+                preview_image_path=self._preview_image_path,
             )
         except ExportCancelled as exc:
             self.cancelled.emit(str(exc))
@@ -686,6 +695,63 @@ class _RenderWorker(QObject):
 
     def _set_process(self, process: Optional[subprocess.Popen]) -> None:
         self._process = process
+
+
+class _ExportMonitorView(QLabel):
+    """导出监视器画面（仿 N3 出力预览）：保持纵横比缩放显示最近合成帧。
+
+    无帧时显示占位文案；有帧后 resize 会用原图重新缩放，避免累积模糊。
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._frame: Optional[QPixmap] = None
+        self.setMinimumSize(320, 220)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        themed(
+            self,
+            lambda: (
+                f"background: {stage_bg()}; border-radius: 8px;"
+                f" color: {palette().text_hint}; font-size: 10pt;"
+            ),
+        )
+        self.clear_frame()
+
+    def set_frame(self, image: QImage) -> None:
+        self._frame = QPixmap.fromImage(image)
+        self.setText("")
+        self._rescale()
+
+    def clear_frame(self) -> None:
+        self._frame = None
+        self.setPixmap(QPixmap())
+        self.setText("开始导出后，这里会实时显示合成画面")
+
+    def _rescale(self) -> None:
+        if self._frame is None or self._frame.isNull():
+            return
+        self.setPixmap(
+            self._frame.scaled(
+                self.size(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        )
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._rescale()
+
+
+def _format_eta_seconds(seconds: float) -> str:
+    """导出剩余时间的短文案：1 小时 5 分 / 3 分 20 秒 / 45 秒。"""
+    total = max(int(round(seconds)), 0)
+    if total >= 3600:
+        return f"{total // 3600} 小时 {total % 3600 // 60} 分"
+    if total >= 60:
+        return f"{total // 60} 分 {total % 60} 秒"
+    return f"{total} 秒"
 
 
 def _format_warning_lines(warnings: list) -> str:
@@ -1394,8 +1460,8 @@ class SubtitleRenderWindow(QWidget):
 
         # 内容列限制最大宽度并水平居中，宽屏下表单不再拉满整行。
         column = QWidget()
-        column.setMaximumWidth(760)
-        column.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        column.setMaximumWidth(1200)
+        column.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(column)
         layout.setContentsMargins(0, 8, 0, 0)
         layout.setSpacing(12)
@@ -1404,8 +1470,7 @@ class SubtitleRenderWindow(QWidget):
         center_row.addStretch(1)
         center_row.addWidget(column)
         center_row.addStretch(1)
-        outer.addLayout(center_row)
-        outer.addStretch(1)
+        outer.addLayout(center_row, 1)
 
         # qfluentwidgets 语义标签自行跟随主题；保留实例引用，防止被 GC 移出
         # styleSheetManager 的 WeakKeyDictionary 后主题失效（同 SUG 导出页的教训）。
@@ -1414,6 +1479,16 @@ class SubtitleRenderWindow(QWidget):
         self._export_caption_label = CaptionLabel("将当前字幕与背景合成为 MP4 视频。")
         layout.addWidget(self._export_title_label)
         layout.addWidget(self._export_caption_label)
+
+        # 主体两栏：左·设置卡片列（定宽），右·导出监视器（吃掉剩余空间）
+        body_row = QHBoxLayout()
+        body_row.setContentsMargins(0, 0, 0, 0)
+        body_row.setSpacing(16)
+        settings_col = QWidget()
+        settings_col.setFixedWidth(430)
+        settings_layout = QVBoxLayout(settings_col)
+        settings_layout.setContentsMargins(0, 0, 0, 0)
+        settings_layout.setSpacing(12)
 
         # 卡片 1：输出文件
         output_card, output_layout = self._make_export_card("输出文件")
@@ -1427,7 +1502,7 @@ class SubtitleRenderWindow(QWidget):
         output_row.addWidget(self._export_output_edit, 1)
         output_row.addWidget(self._export_browse_button)
         output_layout.addLayout(output_row)
-        layout.addWidget(output_card)
+        settings_layout.addWidget(output_card)
 
         # 卡片 2：画面与编码
         params_card, params_layout = self._make_export_card("画面与编码")
@@ -1474,16 +1549,43 @@ class SubtitleRenderWindow(QWidget):
         encode_row.addWidget(self._labeled_export_control("CPU preset", self._export_preset_combo))
         encode_row.addWidget(self._labeled_export_control("质量 (CRF)", self._export_crf_spin))
         params_layout.addLayout(encode_row)
-        layout.addWidget(params_card)
+        settings_layout.addWidget(params_card)
 
         self._export_native_check = CheckBox("实验：使用 native 字幕渲染器导出")
         self._export_native_check.setChecked(False)
         self._export_native_check.setEnabled(False)
         self._export_native_check.setVisible(False)
         self._export_native_check.setToolTip("native 字幕渲染器暂时停用。")
-        layout.addWidget(self._export_native_check)
+        settings_layout.addWidget(self._export_native_check)
+        settings_layout.addStretch(1)
 
-        # 操作区：进度 + 状态 + 开始/停止
+        # 右栏：导出监视器（仿 N3 出力预览——边导出边显示 ffmpeg 合成帧）
+        monitor_card = SimpleCardWidget()
+        monitor_layout = QVBoxLayout(monitor_card)
+        monitor_layout.setContentsMargins(20, 14, 20, 16)
+        monitor_layout.setSpacing(10)
+        monitor_header = QHBoxLayout()
+        monitor_header.setContentsMargins(0, 0, 0, 0)
+        monitor_title = StrongBodyLabel("导出监视器")
+        self._export_theme_labels.append(monitor_title)
+        self._export_eta_label = CaptionLabel("")
+        monitor_header.addWidget(monitor_title)
+        monitor_header.addStretch(1)
+        monitor_header.addWidget(self._export_eta_label)
+        monitor_layout.addLayout(monitor_header)
+        self._export_monitor_view = _ExportMonitorView()
+        # 画面高度封顶（导出画面多为 16:9），多余竖向空间留到卡片底部
+        self._export_monitor_view.setMaximumHeight(460)
+        monitor_layout.addWidget(self._export_monitor_view, 1)
+        self._export_format_label = CaptionLabel("输出格式: MP4 · H.264 (AVC)")
+        monitor_layout.addWidget(self._export_format_label)
+        monitor_layout.addStretch(1)
+
+        body_row.addWidget(settings_col)
+        body_row.addWidget(monitor_card, 1)
+        layout.addLayout(body_row, 1)
+
+        # 底部横贯操作区：进度 + 状态 + 开始/停止
         self._export_progress = FluentProgressBar()
         self._export_progress.setRange(0, 1)
         self._export_progress.setValue(0)
@@ -1506,6 +1608,15 @@ class SubtitleRenderWindow(QWidget):
         action_row.addWidget(self._export_start_button, 1)
         action_row.addWidget(self._export_stop_button)
         layout.addLayout(action_row)
+
+        # 导出监视器轮询：ffmpeg 持续覆盖写预览 JPG，定时读文件 mtime 变化后刷新
+        self._export_preview_timer = QTimer(self)
+        self._export_preview_timer.setInterval(500)
+        self._export_preview_timer.timeout.connect(self._poll_export_preview)
+        self._export_preview_dir: Optional[Path] = None
+        self._export_preview_file: Optional[Path] = None
+        self._export_preview_mtime_ns = 0
+        self._export_started_monotonic = 0.0
 
         self._update_export_preset_enabled()
         return page
@@ -3121,8 +3232,23 @@ class SubtitleRenderWindow(QWidget):
         self._export_progress.setRange(0, 0)
         self._export_status_label.setText("正在准备导出…")
 
+        # 导出监视器：临时目录承接 ffmpeg 持续覆盖写入的合成帧
+        self._cleanup_export_preview_dir()
+        try:
+            self._export_preview_dir = Path(tempfile.mkdtemp(prefix="krok_export_preview_"))
+            self._export_preview_file = self._export_preview_dir / "frame.jpg"
+        except OSError:
+            self._export_preview_dir = None
+            self._export_preview_file = None
+        self._export_preview_mtime_ns = 0
+        self._export_monitor_view.clear_frame()
+        self._export_eta_label.setText("正在准备…")
+        self._export_format_label.setText(self._export_format_text(job))
+        self._export_started_monotonic = time.monotonic()
+        self._export_preview_timer.start()
+
         thread = QThread(self)
-        worker = _RenderWorker(job, self._resolve_ffmpeg_dir())
+        worker = _RenderWorker(job, self._resolve_ffmpeg_dir(), self._export_preview_file)
         worker.moveToThread(thread)
         worker.progressChanged.connect(self._on_render_progress)
         worker.logMessage.connect(self._on_render_log)
@@ -3150,11 +3276,58 @@ class SubtitleRenderWindow(QWidget):
         self._export_progress.setRange(0, max(total, 1))
         self._export_progress.setValue(done)
         self._export_status_label.setText(f"正在导出… {done}/{total} 帧")
+        elapsed = time.monotonic() - self._export_started_monotonic
+        if done > 0 and elapsed >= 1.0:
+            rate = done / elapsed
+            remaining = max(total - done, 0) / max(rate, 1e-6)
+            self._export_eta_label.setText(
+                f"剩余约 {_format_eta_seconds(remaining)} · {rate:.0f} 帧/秒"
+            )
 
     def _on_render_log(self, message: str) -> None:
         self._export_status_label.setText(message)
 
+    def _export_format_text(self, job: RenderJob) -> str:
+        text = f"输出格式: MP4 · H.264 (AVC) · {job.width}×{job.height} @ {job.fps}fps"
+        try:
+            parent = job.output_path.parent
+            probe = parent if parent.exists() else Path(job.output_path.anchor or ".")
+            free_gb = shutil.disk_usage(probe).free / 1024**3
+            text += f" · 磁盘可用 {free_gb:.0f} GB"
+        except OSError:
+            pass
+        return text
+
+    def _poll_export_preview(self) -> None:
+        path = self._export_preview_file
+        if path is None:
+            return
+        try:
+            mtime_ns = path.stat().st_mtime_ns
+        except OSError:
+            return
+        if mtime_ns == self._export_preview_mtime_ns:
+            return
+        image = QImage(str(path))
+        if image.isNull():
+            return  # 极少数情况下文件尚未写完，下个周期再试
+        self._export_preview_mtime_ns = mtime_ns
+        self._export_monitor_view.set_frame(image)
+
+    def _stop_export_preview_polling(self) -> None:
+        self._export_preview_timer.stop()
+        self._poll_export_preview()  # 收尾再读一次，保住最后写入的帧
+
+    def _cleanup_export_preview_dir(self) -> None:
+        directory = self._export_preview_dir
+        self._export_preview_dir = None
+        self._export_preview_file = None
+        if directory is not None:
+            shutil.rmtree(directory, ignore_errors=True)
+
     def _finish_render_success(self, output_path: Path) -> None:
+        self._stop_export_preview_polling()
+        self._export_eta_label.setText("已完成")
         self._export_progress.setRange(0, 1)
         self._export_progress.setValue(1)
         self._export_status_label.setText(f"导出完成: {output_path}")
@@ -3184,6 +3357,8 @@ class SubtitleRenderWindow(QWidget):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
 
     def _finish_render_cancelled(self, message: str) -> None:
+        self._stop_export_preview_polling()
+        self._export_eta_label.setText("已停止")
         # 保留已完成的进度并转入「暂停」黄色态；若仍是忙碌态才重置。
         if self._export_progress.maximum() <= 0:
             self._export_progress.setRange(0, 1)
@@ -3194,6 +3369,8 @@ class SubtitleRenderWindow(QWidget):
         self._export_stop_button.setEnabled(False)
 
     def _finish_render_failure(self, message: str) -> None:
+        self._stop_export_preview_polling()
+        self._export_eta_label.setText("")
         if self._export_progress.maximum() <= 0:
             self._export_progress.setRange(0, 1)
             self._export_progress.setValue(0)
@@ -3206,6 +3383,7 @@ class SubtitleRenderWindow(QWidget):
     def _clear_render_thread(self) -> None:
         self._render_thread = None
         self._render_worker = None
+        self._cleanup_export_preview_dir()
 
     # ------------------------------------------------------------------ embed
 

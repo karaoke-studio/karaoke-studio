@@ -226,6 +226,28 @@ def test_build_render_command_strip_offsets_overlay_and_pipe_size(tmp_path):
     assert command[command.index("-s:v") + 1] == "320x40"  # pipe 只喂窄条
 
 
+def test_build_render_command_preview_taps_composited_stream(tmp_path):
+    preview = tmp_path / "frame.jpg"
+    command = build_render_command("ffmpeg", _job(tmp_path), preview_image_path=preview)
+
+    filter_graph = command[command.index("-filter_complex") + 1]
+    # 合成后的 [v] split 出编码路 + 降频缩宽的预览路
+    assert "[v]split=2[venc][vpin]" in filter_graph
+    assert "[vpin]fps=" in filter_graph and "[vprev]" in filter_graph
+    assert command[command.index("-map") + 1] == "[venc]"
+    # 预览输出：image2 持续覆盖 + 原子写，且排在主输出之后
+    assert command[-1] == str(preview)
+    assert command.index(str(_job(tmp_path).output_path)) < command.index("[vprev]")
+    assert "-update" in command and "-atomic_writing" in command
+
+
+def test_build_render_command_without_preview_keeps_single_output(tmp_path):
+    job = _job(tmp_path)
+    command = build_render_command("ffmpeg", job)
+    assert command[-1] == str(job.output_path)
+    assert "split=2" not in command[command.index("-filter_complex") + 1]
+
+
 def test_compute_subtitle_strip_returns_subband_for_centered_line(qapp, tmp_path):
     job = replace(_job(tmp_path), style=Style(font_size_px=24, line_y_position="center"))
     strip = _compute_subtitle_strip(job, 1000)

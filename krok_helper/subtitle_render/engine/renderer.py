@@ -50,6 +50,12 @@ _STRIP_MAX_SAMPLES = 200  # 纵向并集预扫的最大采样帧数
 _MULTIPROC_WORKER_CAP = 8  # 进程数上限（每个 worker 一份 QApplication）
 _MULTIPROC_MIN_FRAMES = 240  # 帧数低于此不值当 spawn，走单进程
 _CHUNK_TARGET_BYTES = 64 * 1024 * 1024  # 单个 chunk 目标字节（控内存 / IPC 粒度）
+
+# 导出监视器（仿 N3 出力预览）：把 ffmpeg 内合成后的成品流 split 一路，按视频时间
+# 降频 + 缩宽后持续覆盖写入单张 JPG（image2 -update，原子写），UI 轮询该文件即可
+# 边导出边看画面。fps=2 → 60fps 输出下约每 30 帧刷新一次。
+_PREVIEW_FPS = 2
+_PREVIEW_WIDTH = 640
 from krok_helper.types import Logger
 
 
@@ -86,6 +92,7 @@ def render_subtitle_video(
     should_cancel: Callable[[], bool] | None = None,
     on_process_started: Callable[[subprocess.Popen | None], None] | None = None,
     on_progress: Callable[[int, int], None] | None = None,
+    preview_image_path: Path | None = None,
 ) -> Path:
     """Render ``job`` to MP4 using a transparent rawvideo subtitle pipe."""
     logger = logger or (lambda _message: None)
@@ -114,12 +121,18 @@ def render_subtitle_video(
     if bands is not None:
         packed_h = sum(height for _top, height in bands)
         logger(f"多带渲染: {len(bands)} 条 打包高={packed_h}（全高 {job.height}）{bands}")
-        command = build_render_command(ffmpeg_path, job, duration_ms=duration_ms, bands=bands)
+        command = build_render_command(
+            ffmpeg_path, job, duration_ms=duration_ms, bands=bands,
+            preview_image_path=preview_image_path,
+        )
     else:
         strip_top, render_h = strip if strip is not None else (0, job.height)
         if strip is not None:
             logger(f"条带渲染: y={strip_top} 高={render_h}（全高 {job.height}）")
-        command = build_render_command(ffmpeg_path, job, duration_ms=duration_ms, strip=strip)
+        command = build_render_command(
+            ffmpeg_path, job, duration_ms=duration_ms, strip=strip,
+            preview_image_path=preview_image_path,
+        )
 
     job.output_path.parent.mkdir(parents=True, exist_ok=True)
     logger(f"导出字幕视频: {job.output_path.name}")
@@ -238,6 +251,7 @@ def build_render_command(
     duration_ms: int | None = None,
     strip: tuple[int, int] | None = None,
     bands: list[tuple[int, int]] | None = None,
+    preview_image_path: Path | None = None,
 ) -> list[str]:
     """Build the ffmpeg command used by :func:`render_subtitle_video`.
 
@@ -245,6 +259,8 @@ def build_render_command(
     贴回全幅背景；``None`` 时整帧输入、``overlay=0:0``（原行为）。
     ``bands`` = 多条 ``(y_top, height)``（方案 B）：竖向打包成一条 pipe，split/crop/overlay
     还原到各自原始 y；给定时优先于 ``strip``。
+    ``preview_image_path``：导出监视器 —— 把合成后的 ``[v]`` 再 split 一路，降频缩宽后
+    持续覆盖写入该 JPG（原子写），供 UI 边导出边轮询显示。
     """
     _validate_job(job)
     duration = _resolve_duration_ms(job) if duration_ms is None else duration_ms
@@ -264,6 +280,13 @@ def build_render_command(
             "[0:v:0]format=rgba,setpts=PTS-STARTPTS[ov];"
             f"[bg][ov]overlay=0:{overlay_y}:format=auto[v]"
         )
+    video_label = "[v]"
+    if preview_image_path is not None:
+        filter_graph += (
+            ";[v]split=2[venc][vpin];"
+            f"[vpin]fps={_PREVIEW_FPS},scale={_PREVIEW_WIDTH}:-2[vprev]"
+        )
+        video_label = "[venc]"
     background = _resolved_background(job)
     background_args = _background_input_args(background, job, duration_seconds)
     command = [
@@ -294,7 +317,7 @@ def build_render_command(
         "-filter_complex",
         filter_graph,
         "-map",
-        "[v]",
+        video_label,
     ])
     if audio_input_index is not None:
         command.extend(["-map", f"{audio_input_index}:a:0?"])
@@ -311,6 +334,15 @@ def build_render_command(
     if audio_input_index is not None:
         command.extend(["-c:a", "aac", "-b:a", "192k"])
     command.extend(["-movflags", "+faststart", str(job.output_path)])
+    if preview_image_path is not None:
+        command.extend([
+            "-map", "[vprev]",
+            "-f", "image2",
+            "-update", "1",
+            "-atomic_writing", "1",
+            "-q:v", "4",
+            str(preview_image_path),
+        ])
     return command
 
 
