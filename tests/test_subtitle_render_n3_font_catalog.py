@@ -1,0 +1,165 @@
+"""NicoKaraMaker3-compatible DirectWrite font catalog."""
+
+from __future__ import annotations
+
+import sys
+
+import pytest
+
+from krok_helper.subtitle_render.n3_font_catalog import (
+    N3FontCatalog,
+    _FamilyRecord,
+    _build_catalog,
+    get_n3_font_catalog,
+    normalize_scheme_font_families,
+    normalize_style_font_families,
+)
+from krok_helper.subtitle_render.models import Style, SubtitleStyleScheme, TitleOverlay
+
+
+def _compare(left: str, right: str) -> int:
+    return (left > right) - (left < right)
+
+
+def test_build_catalog_prefers_japanese_name_and_maps_every_alias():
+    catalog = _build_catalog(
+        [
+            _FamilyRecord(
+                names=(("en-us", "English Alias"), ("ja-jp", "日本語名")),
+                styles=(0, 2),
+            )
+        ],
+        compare=_compare,
+    )
+
+    assert catalog.families == ("日本語名",)
+    assert catalog.canonicalize("English Alias") == "日本語名"
+    assert catalog.canonicalize("日本語名") == "日本語名"
+    assert catalog.canonicalize("english alias") == "日本語名"
+
+
+def test_build_catalog_filters_families_without_normal_face():
+    catalog = _build_catalog(
+        [
+            _FamilyRecord(names=(("en-us", "Italic only"),), styles=(2,)),
+            _FamilyRecord(names=(("en-us", "Normal"),), styles=(0,)),
+        ],
+        compare=_compare,
+    )
+
+    assert catalog.families == ("Normal",)
+    assert catalog.canonicalize("Italic only") is None
+
+
+def test_build_catalog_sorts_japanese_name_group_before_fallback_name_group():
+    catalog = _build_catalog(
+        [
+            _FamilyRecord(names=(("en-us", "A Latin"),), styles=(0,)),
+            _FamilyRecord(names=(("ja-jp", "い"),), styles=(0,)),
+            _FamilyRecord(names=(("ja-jp", "あ"),), styles=(0,)),
+            _FamilyRecord(names=(("en-us", "B Latin"),), styles=(0,)),
+        ],
+        compare=_compare,
+    )
+
+    assert catalog.families == ("あ", "い", "A Latin", "B Latin")
+
+
+def test_non_authoritative_catalog_still_resolves_exact_fallback_names():
+    catalog = N3FontCatalog(
+        families=("Arial",), aliases={"arial": "Arial"}, authoritative=False
+    )
+
+    assert catalog.canonicalize("ARIAL") == "Arial"
+    assert catalog.canonicalize("Missing") is None
+
+
+def _normalization_catalog(*, authoritative: bool = True) -> N3FontCatalog:
+    return N3FontCatalog(
+        families=("游明朝", "UD デジタル 教科書体 N-B"),
+        aliases={
+            "游明朝".casefold(): "游明朝",
+            "ud digi kyokasho n-b": "UD デジタル 教科書体 N-B",
+            "UD デジタル 教科書体 N-B".casefold(): "UD デジタル 教科書体 N-B",
+        },
+        authoritative=authoritative,
+    )
+
+
+def test_normalize_style_canonicalizes_aliases_and_clears_missing_optional_fonts():
+    style = Style(
+        font_family="UD Digi Kyokasho N-B",
+        font_family_latin="Missing Latin",
+        ruby_font_family="Missing Ruby",
+        title_overlay=TitleOverlay(
+            font_family="UD Digi Kyokasho N-B",
+            font_family_latin="Missing Title Latin",
+        ),
+    )
+
+    normalized, changed = normalize_style_font_families(
+        style, _normalization_catalog()
+    )
+
+    assert changed is True
+    assert normalized.font_family == "UD デジタル 教科書体 N-B"
+    assert normalized.font_family_latin is None
+    assert normalized.ruby_font_family is None
+    assert normalized.title_overlay is not None
+    assert normalized.title_overlay.font_family == "UD デジタル 教科書体 N-B"
+    assert normalized.title_overlay.font_family_latin is None
+
+
+def test_normalize_style_normalizes_nested_schemes_without_mutating_input():
+    inherited = SubtitleStyleScheme(
+        font_family="Missing Root",
+        font_family_latin="UD Digi Kyokasho N-B",
+        n3_font_inheritance=True,
+    )
+    ordinary = SubtitleStyleScheme(
+        font_family="Missing Root", ruby_font_family="Missing Ruby"
+    )
+    style = Style(
+        custom_style_schemes={"N3": inherited},
+        singer_style_overrides={0: ordinary},
+    )
+
+    normalized, changed = normalize_style_font_families(
+        style, _normalization_catalog()
+    )
+
+    assert changed is True
+    assert style.custom_style_schemes["N3"].font_family == "Missing Root"
+    assert normalized.custom_style_schemes["N3"].font_family == "游明朝"
+    assert (
+        normalized.custom_style_schemes["N3"].font_family_latin
+        == "UD デジタル 教科書体 N-B"
+    )
+    assert normalized.singer_style_overrides[0].font_family is None
+    assert normalized.singer_style_overrides[0].ruby_font_family is None
+
+
+def test_normalize_scheme_keeps_saved_names_when_catalog_is_not_authoritative():
+    scheme = SubtitleStyleScheme(
+        font_family="Unverified Font", font_family_latin="Unverified Latin"
+    )
+
+    normalized, changed = normalize_scheme_font_families(
+        scheme, _normalization_catalog(authoritative=False)
+    )
+
+    assert normalized == scheme
+    assert changed is False
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="DirectWrite is Windows-only")
+def test_windows_catalog_canonicalizes_ud_kyokasho_alias_when_installed():
+    catalog = get_n3_font_catalog()
+    canonical = catalog.canonicalize("UD Digi Kyokasho N-B")
+    if canonical is None:
+        pytest.skip("UD Digi Kyokasho N-B is not installed")
+
+    assert catalog.authoritative is True
+    assert canonical == "UD デジタル 教科書体 N-B"
+    assert canonical in catalog.families
+    assert len(catalog.families) == len(set(catalog.families))

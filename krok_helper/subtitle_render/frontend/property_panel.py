@@ -27,7 +27,6 @@ from PyQt6.QtGui import (
     QColor,
     QCursor,
     QFont,
-    QFontDatabase,
     QIcon,
     QImage,
     QLinearGradient,
@@ -91,6 +90,10 @@ from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_warning,
 )
 from krok_helper.subtitle_render.frontend.theme import control_qss, palette, themed
+from krok_helper.subtitle_render.n3_font_catalog import (
+    canonicalize_n3_font_family,
+    n3_font_families,
+)
 from krok_helper.subtitle_render.models import (
     ColorLayerKey,
     ColorStateKey,
@@ -1743,7 +1746,7 @@ class _WheelFocusedFontComboBox(_WheelFocusedComboBox):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._inheritance_label: Optional[str] = None
-        self.addItems(QFontDatabase.families())
+        self.addItems(n3_font_families())
         self.currentIndexChanged.connect(
             lambda _index: self.currentFontChanged.emit(self.currentFont())
         )
@@ -1766,11 +1769,12 @@ class _WheelFocusedFontComboBox(_WheelFocusedComboBox):
         return QFont(self.currentText())
 
     def setCurrentFont(self, font: QFont) -> None:  # noqa: N802
-        family = font.family()
-        index = self.findText(family)
+        family = canonicalize_n3_font_family(font.family())
+        index = self.findText(family) if family is not None else -1
         if index < 0:
-            self.addItem(family)
-            index = self.count() - 1
+            if self._inheritance_label is not None:
+                self.setInherited()
+            return
         if index == self.currentIndex():
             self.currentFontChanged.emit(self.currentFont())
             return

@@ -717,7 +717,7 @@ class Style:
     """
 
     # 字体
-    font_family: str = "UD Digi Kyokasho N-B"
+    font_family: str = "UD デジタル 教科書体 N-B"
     font_family_latin: Optional[str] = None
     """英数（ASCII）字体；为空时英数与日文共用 ``font_family``。"""
     font_size_px: int = 100

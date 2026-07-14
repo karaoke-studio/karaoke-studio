@@ -10,7 +10,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QSize, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QImage, QMouseEvent, QWheelEvent  # noqa: E402
+from PyQt6.QtGui import QColor, QFont, QImage, QMouseEvent, QWheelEvent  # noqa: E402
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -64,6 +64,7 @@ from krok_helper.subtitle_render.n3_template_import import (  # noqa: E402
     N3TemplateBatchResult,
     N3TemplateLoadResult,
 )
+from krok_helper.subtitle_render.n3_font_catalog import N3FontCatalog  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -117,6 +118,131 @@ def test_property_panel_uses_fluent_form_controls(qapp):
     assert isinstance(panel._add_layout_btn, TransparentToolButton)
     assert isinstance(panel._rename_layout_btn, TransparentToolButton)
     assert isinstance(panel._delete_layout_btn, TransparentToolButton)
+
+
+def test_font_combo_uses_n3_catalog_and_never_appends_unknown(
+    monkeypatch, qapp
+):
+    monkeypatch.setattr(
+        pp, "n3_font_families", lambda: ("游明朝", "Comic Sans MS"), raising=False
+    )
+    monkeypatch.setattr(
+        pp, "canonicalize_n3_font_family", lambda _name: None, raising=False
+    )
+    combo = pp._WheelFocusedFontComboBox()
+    before = [combo.itemText(index) for index in range(combo.count())]
+
+    combo.setCurrentFont(QFont("Missing Font"))
+
+    assert [combo.itemText(index) for index in range(combo.count())] == before
+    assert "Missing Font" not in before
+
+
+def test_font_combo_selects_n3_canonical_name_for_saved_alias(monkeypatch, qapp):
+    monkeypatch.setattr(
+        pp, "n3_font_families", lambda: ("UD デジタル 教科書体 N-B",), raising=False
+    )
+    monkeypatch.setattr(
+        pp,
+        "canonicalize_n3_font_family",
+        lambda name: (
+            "UD デジタル 教科書体 N-B"
+            if name == "UD Digi Kyokasho N-B"
+            else name
+        ),
+        raising=False,
+    )
+    combo = pp._WheelFocusedFontComboBox()
+
+    combo.setCurrentFont(QFont("UD Digi Kyokasho N-B"))
+
+    assert combo.currentText() == "UD デジタル 教科書体 N-B"
+
+
+def test_font_combo_retains_chinese_inheritance_entry(monkeypatch, qapp):
+    monkeypatch.setattr(pp, "n3_font_families", lambda: ("游明朝",), raising=False)
+    combo = pp._WheelFocusedFontComboBox()
+
+    combo.enable_inheritance("跟随主文字（0）")
+
+    assert combo.itemText(0) == "跟随主文字（0）"
+    assert combo.itemText(1) == "游明朝"
+
+
+class _FontMigrationSettingsProvider:
+    def __init__(self, data: dict):
+        self.data = dict(data)
+
+    def load(self):
+        return dict(self.data)
+
+    def save(self, data):
+        self.data = dict(data)
+
+
+def _font_migration_catalog() -> N3FontCatalog:
+    return N3FontCatalog(
+        families=("游明朝", "标准名称"),
+        aliases={"游明朝": "游明朝", "old alias": "标准名称", "标准名称": "标准名称"},
+        authoritative=True,
+    )
+
+
+def test_startup_rewrites_persisted_font_alias(monkeypatch, qapp):
+    provider = _FontMigrationSettingsProvider(
+        {"style": style_to_dict(Style(font_family="Old Alias"))}
+    )
+    monkeypatch.setattr(
+        mw, "get_n3_font_catalog", _font_migration_catalog, raising=False
+    )
+
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+
+    assert win._style.font_family == "标准名称"
+    assert provider.data["style"]["font_family"] == "标准名称"
+
+
+def test_startup_normalizes_saved_style_presets(monkeypatch, qapp):
+    provider = _FontMigrationSettingsProvider(
+        {
+            "style": style_to_dict(Style(font_family="游明朝")),
+            "style_presets": {
+                "旧预设": {
+                    "group": "",
+                    "scheme": {"font_family": "Old Alias"},
+                    "source_type": "",
+                    "source_data": {},
+                }
+            },
+        }
+    )
+    monkeypatch.setattr(
+        mw, "get_n3_font_catalog", _font_migration_catalog, raising=False
+    )
+
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+
+    assert win._style_presets["旧预设"].scheme.font_family == "标准名称"
+    assert (
+        provider.data["style_presets"]["旧预设"]["scheme"]["font_family"]
+        == "标准名称"
+    )
+
+
+def test_project_load_normalizes_font_alias_in_memory(monkeypatch, qapp):
+    provider = _FontMigrationSettingsProvider(
+        {"style": style_to_dict(Style(font_family="游明朝"))}
+    )
+    monkeypatch.setattr(
+        mw, "get_n3_font_catalog", _font_migration_catalog, raising=False
+    )
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+
+    win._apply_project_data(
+        {"style": style_to_dict(Style(font_family="Old Alias"))}
+    )
+
+    assert win._style.font_family == "标准名称"
 
 
 def test_delete_layout_uses_fluent_confirmation(qapp, monkeypatch):
@@ -367,7 +493,7 @@ def test_property_panel_does_not_shadow_qwidget_style(qapp):
 def test_style_defaults_match_nicokara_layout_baseline():
     style = Style()
 
-    assert style.font_family == "UD Digi Kyokasho N-B"
+    assert style.font_family == "UD デジタル 教科書体 N-B"
     assert style.font_family_latin is None
     assert style.font_size_px == 100
     assert style.latin_font_size_px is None

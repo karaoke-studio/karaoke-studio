@@ -139,6 +139,11 @@ from krok_helper.subtitle_render.models import (
     style_to_dict,
     infer_image_sequence_pattern,
 )
+from krok_helper.subtitle_render.n3_font_catalog import (
+    get_n3_font_catalog,
+    normalize_scheme_font_families,
+    normalize_style_font_families,
+)
 from krok_helper.subtitle_render.n3proj_import import N3_PROJECT_FILTER, load_n3proj
 from krok_helper.subtitle_render.project_store import (
     background_payload,
@@ -1139,7 +1144,9 @@ class SubtitleRenderWindow(QWidget):
         # 项目内容整体替换，旧的样式/轨道撤销记录全部失效
         self._clear_undo_history()
         # 1) 样式 / 屏幕 / 配色方案
-        self._style = style_from_dict(data.get("style"))
+        self._style, _font_names_changed = normalize_style_font_families(
+            style_from_dict(data.get("style")), get_n3_font_catalog()
+        )
         self._screen_settings = screen_settings_from_dict(data.get("screen"))
         key = data.get("selected_scheme_key")
         if isinstance(key, str) and key:
@@ -3225,10 +3232,22 @@ class SubtitleRenderWindow(QWidget):
         # 应用级旧默认曾错误使用“游明朝 100px / 15px 描边”。只在加载
         # 应用默认时迁移到 N3「情報小」；打开 .yurika / .n3proj 时保留项目
         # 明确选择的标题方案。
-        self._style = migrate_legacy_app_title_default(
+        loaded_style = migrate_legacy_app_title_default(
             style_from_dict(data.get("style"))
         )
-        self._style_presets = _style_presets_from_dict(data.get("style_presets"))
+        catalog = get_n3_font_catalog()
+        self._style, style_changed = normalize_style_font_families(
+            loaded_style, catalog
+        )
+        loaded_presets = _style_presets_from_dict(data.get("style_presets"))
+        self._style_presets = {}
+        presets_changed = False
+        for name, preset in loaded_presets.items():
+            scheme, changed = normalize_scheme_font_families(preset.scheme, catalog)
+            self._style_presets[name] = (
+                replace(preset, scheme=scheme) if changed else preset
+            )
+            presets_changed |= changed
         self._screen_settings = screen_settings_from_dict(data.get("screen"))
         key = data.get("selected_scheme_key")
         if isinstance(key, str) and key:
@@ -3237,6 +3256,8 @@ class SubtitleRenderWindow(QWidget):
         if isinstance(ratio, (int, float)):
             # 钳到两侧都还能正常操作的区间，坏数据回落默认 4:6
             self._preview_splitter_ratio = min(max(float(ratio), 0.15), 0.85)
+        if style_changed or presets_changed:
+            self._save_persisted_state()
 
     def _on_preview_splitter_moved(self, _pos: int, _index: int) -> None:
         sizes = self._preview_splitter.sizes()
