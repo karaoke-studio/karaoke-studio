@@ -28,11 +28,12 @@ from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
 import subprocess
+import sys
 import time
 from typing import Any, Optional
 
-from PyQt6.QtCore import QObject, QPoint, QRect, QSize, QThread, QTimer, Qt, pyqtSignal as Signal
-from PyQt6.QtGui import QColor, QImage, QKeySequence, QShortcut
+from PyQt6.QtCore import QObject, QPoint, QRect, QSize, QThread, QTimer, QUrl, Qt, pyqtSignal as Signal
+from PyQt6.QtGui import QColor, QDesktopServices, QImage, QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QFileDialog,
     QColorDialog,
@@ -48,6 +49,7 @@ from PyQt6.QtWidgets import (
 )
 from qfluentwidgets import (
     Action,
+    CaptionLabel,
     CheckBox,
     ComboBox as FluentComboBox,
     DropDownPushButton,
@@ -60,7 +62,10 @@ from qfluentwidgets import (
     PushButton as FluentPushButton,
     RoundMenu,
     SegmentedWidget,
+    SimpleCardWidget,
     SpinBox as FluentSpinBox,
+    StrongBodyLabel,
+    TitleLabel,
 )
 
 from krok_helper.errors import ExportCancelled, ProcessingError
@@ -1380,36 +1385,62 @@ class SubtitleRenderWindow(QWidget):
             page,
             lambda: "#SubtitleExportPage { background: transparent; }",
         )
-        layout = QVBoxLayout(page)
-        layout.setContentsMargins(24, 4, 24, 16)
-        layout.setSpacing(10)
+        outer = QVBoxLayout(page)
+        outer.setContentsMargins(24, 4, 24, 16)
+        outer.setSpacing(10)
 
         # 顶部项目命令栏（同预览页）
-        layout.addWidget(self._make_project_bar())
+        outer.addWidget(self._make_project_bar())
 
-        title = QLabel("导出 MP4")
-        themed(
-            title,
-            lambda: f"color: {palette().title_text}; font-size: 16pt; font-weight: 700;",
-        )
-        layout.addWidget(title)
+        # 内容列限制最大宽度并水平居中，宽屏下表单不再拉满整行。
+        column = QWidget()
+        column.setMaximumWidth(760)
+        column.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout = QVBoxLayout(column)
+        layout.setContentsMargins(0, 8, 0, 0)
+        layout.setSpacing(12)
+        center_row = QHBoxLayout()
+        center_row.setContentsMargins(0, 0, 0, 0)
+        center_row.addStretch(1)
+        center_row.addWidget(column)
+        center_row.addStretch(1)
+        outer.addLayout(center_row)
+        outer.addStretch(1)
 
+        # qfluentwidgets 语义标签自行跟随主题；保留实例引用，防止被 GC 移出
+        # styleSheetManager 的 WeakKeyDictionary 后主题失效（同 SUG 导出页的教训）。
+        self._export_theme_labels: list[QWidget] = []
+        self._export_title_label = TitleLabel("导出 MP4")
+        self._export_caption_label = CaptionLabel("将当前字幕与背景合成为 MP4 视频。")
+        layout.addWidget(self._export_title_label)
+        layout.addWidget(self._export_caption_label)
+
+        # 卡片 1：输出文件
+        output_card, output_layout = self._make_export_card("输出文件")
         output_row = QHBoxLayout()
         output_row.setContentsMargins(0, 0, 0, 0)
         output_row.setSpacing(8)
         self._export_output_edit = FluentLineEdit()
         self._export_output_edit.setPlaceholderText("选择输出 MP4 路径")
-        self._export_browse_button = FluentPushButton("浏览")
+        self._export_browse_button = FluentPushButton(FIF.FOLDER, "浏览")
         self._export_browse_button.clicked.connect(self._browse_export_output)
         output_row.addWidget(self._export_output_edit, 1)
         output_row.addWidget(self._export_browse_button)
-        layout.addLayout(output_row)
+        output_layout.addLayout(output_row)
+        layout.addWidget(output_card)
+
+        # 卡片 2：画面与编码
+        params_card, params_layout = self._make_export_card("画面与编码")
+        sync_hint = CaptionLabel("宽度 / 高度 / 帧率与预览页的「画面」设置双向联动。")
+        self._export_theme_labels.append(sync_hint)
+        params_layout.addWidget(sync_hint)
 
         params_row = QHBoxLayout()
         params_row.setContentsMargins(0, 0, 0, 0)
         params_row.setSpacing(10)
-        self._export_width_spin = self._export_spin(160, 7680, 1920, " 宽")
-        self._export_height_spin = self._export_spin(90, 4320, 1080, " 高")
+        # 字段上方已有 CaptionLabel 标签，SpinBox 不再重复「宽/高」后缀
+        self._export_width_spin = self._export_spin(160, 7680, 1920, "")
+        self._export_height_spin = self._export_spin(90, 4320, 1080, "")
         self._export_fps_combo = FluentComboBox()
         self._export_fps_combo.setMinimumHeight(32)
         for fps in SCREEN_FPS_OPTIONS:
@@ -1417,7 +1448,7 @@ class SubtitleRenderWindow(QWidget):
         params_row.addWidget(self._labeled_export_control("宽度", self._export_width_spin))
         params_row.addWidget(self._labeled_export_control("高度", self._export_height_spin))
         params_row.addWidget(self._labeled_export_control("帧率", self._export_fps_combo))
-        layout.addLayout(params_row)
+        params_layout.addLayout(params_row)
 
         encode_row = QHBoxLayout()
         encode_row.setContentsMargins(0, 0, 0, 0)
@@ -1429,16 +1460,21 @@ class SubtitleRenderWindow(QWidget):
         self._export_encoder_combo.addItem("NVIDIA NVENC", userData=ENCODER_NVENC)
         self._export_encoder_combo.addItem("Intel QSV", userData=ENCODER_QSV)
         self._export_encoder_combo.addItem("AMD AMF", userData=ENCODER_AMF)
+        self._export_encoder_combo.currentIndexChanged.connect(
+            self._update_export_preset_enabled
+        )
         self._export_preset_combo = FluentComboBox()
         self._export_preset_combo.setMinimumHeight(32)
         for preset in CPU_PRESETS:
             self._export_preset_combo.addItem(preset, userData=preset)
         self._export_preset_combo.setCurrentText("veryfast")
-        self._export_crf_spin = self._export_spin(0, 51, 18, " CRF")
+        self._export_crf_spin = self._export_spin(0, 51, 18, "")
+        self._export_crf_spin.setToolTip("CRF 质量：数值越小画质越高、文件越大；18 约为视觉无损。")
         encode_row.addWidget(self._labeled_export_control("编码器", self._export_encoder_combo))
         encode_row.addWidget(self._labeled_export_control("CPU preset", self._export_preset_combo))
-        encode_row.addWidget(self._labeled_export_control("质量", self._export_crf_spin))
-        layout.addLayout(encode_row)
+        encode_row.addWidget(self._labeled_export_control("质量 (CRF)", self._export_crf_spin))
+        params_layout.addLayout(encode_row)
+        layout.addWidget(params_card)
 
         self._export_native_check = CheckBox("实验：使用 native 字幕渲染器导出")
         self._export_native_check.setChecked(False)
@@ -1447,22 +1483,23 @@ class SubtitleRenderWindow(QWidget):
         self._export_native_check.setToolTip("native 字幕渲染器暂时停用。")
         layout.addWidget(self._export_native_check)
 
+        # 操作区：进度 + 状态 + 开始/停止
         self._export_progress = FluentProgressBar()
         self._export_progress.setRange(0, 1)
         self._export_progress.setValue(0)
         layout.addWidget(self._export_progress)
 
-        self._export_status_label = QLabel("加载字幕和背景视频后即可导出。")
-        themed(self._export_status_label, lambda: f"color: {palette().text_hint}; font-size: 10pt;")
+        self._export_status_label = CaptionLabel("加载字幕和背景视频后即可导出。")
+        self._export_status_label.setWordWrap(True)
         layout.addWidget(self._export_status_label)
 
         action_row = QHBoxLayout()
         action_row.setContentsMargins(0, 0, 0, 0)
         action_row.setSpacing(8)
-        self._export_start_button = FluentPrimaryPushButton("开始导出")
+        self._export_start_button = FluentPrimaryPushButton(FIF.PLAY, "开始导出")
         self._export_start_button.setMinimumHeight(38)
         self._export_start_button.clicked.connect(self._start_render_export)
-        self._export_stop_button = FluentPushButton("停止导出")
+        self._export_stop_button = FluentPushButton(FIF.CLOSE, "停止导出")
         self._export_stop_button.setMinimumHeight(38)
         self._export_stop_button.setEnabled(False)
         self._export_stop_button.clicked.connect(self._stop_render_export)
@@ -1470,8 +1507,27 @@ class SubtitleRenderWindow(QWidget):
         action_row.addWidget(self._export_stop_button)
         layout.addLayout(action_row)
 
-        layout.addStretch(1)
+        self._update_export_preset_enabled()
         return page
+
+    def _make_export_card(self, title_text: str) -> tuple[SimpleCardWidget, QVBoxLayout]:
+        card = SimpleCardWidget()
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(20, 14, 20, 16)
+        layout.setSpacing(10)
+        header = StrongBodyLabel(title_text)
+        self._export_theme_labels.append(header)
+        layout.addWidget(header)
+        return card, layout
+
+    def _update_export_preset_enabled(self) -> None:
+        # CPU preset 只影响 libx264；「自动硬编」可能回退 CPU，保持可编辑。
+        mode = str(self._export_encoder_combo.currentData() or ENCODER_CPU)
+        cpu_possible = mode in (ENCODER_CPU, ENCODER_AUTO)
+        self._export_preset_combo.setEnabled(cpu_possible)
+        self._export_preset_combo.setToolTip(
+            "" if cpu_possible else "CPU preset 仅在 CPU / libx264 编码时生效。"
+        )
 
     @staticmethod
     def _export_spin(
@@ -1489,8 +1545,8 @@ class SubtitleRenderWindow(QWidget):
         layout = QVBoxLayout(box)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
-        label = QLabel(label_text)
-        themed(label, lambda: f"color: {palette().text_secondary}; font-size: 9.5pt;")
+        label = CaptionLabel(label_text)
+        self._export_theme_labels.append(label)
         layout.addWidget(label)
         layout.addWidget(control)
         return box
@@ -3060,6 +3116,8 @@ class SubtitleRenderWindow(QWidget):
 
         self._export_start_button.setEnabled(False)
         self._export_stop_button.setEnabled(True)
+        self._export_progress.setPaused(False)
+        self._export_progress.setError(False)
         self._export_progress.setRange(0, 0)
         self._export_status_label.setText("正在准备导出…")
 
@@ -3102,20 +3160,44 @@ class SubtitleRenderWindow(QWidget):
         self._export_status_label.setText(f"导出完成: {output_path}")
         self._export_start_button.setEnabled(True)
         self._export_stop_button.setEnabled(False)
+        bar = InfoBar.success(
+            title="导出完成",
+            content=output_path.name,
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=6000,
+        )
+        open_button = FluentPushButton("打开所在文件夹")
+        open_button.clicked.connect(
+            lambda _=False, p=output_path: self._open_export_folder(p)
+        )
+        bar.addWidget(open_button)
         context = self._workflow_context
         if context is not None and hasattr(context, "accept_subtitle_video"):
             context.accept_subtitle_video(output_path)
 
+    def _open_export_folder(self, output_path: Path) -> None:
+        # Windows 下用资源管理器直接选中导出文件，其余平台退回打开所在目录。
+        if sys.platform == "win32" and output_path.exists():
+            subprocess.Popen(["explorer", "/select,", str(output_path)])
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(output_path.parent)))
+
     def _finish_render_cancelled(self, message: str) -> None:
-        self._export_progress.setRange(0, 1)
-        self._export_progress.setValue(0)
+        # 保留已完成的进度并转入「暂停」黄色态；若仍是忙碌态才重置。
+        if self._export_progress.maximum() <= 0:
+            self._export_progress.setRange(0, 1)
+            self._export_progress.setValue(0)
+        self._export_progress.setPaused(True)
         self._export_status_label.setText("导出已停止，未完成文件已清理。" if message else "导出已停止。")
         self._export_start_button.setEnabled(True)
         self._export_stop_button.setEnabled(False)
 
     def _finish_render_failure(self, message: str) -> None:
-        self._export_progress.setRange(0, 1)
-        self._export_progress.setValue(0)
+        if self._export_progress.maximum() <= 0:
+            self._export_progress.setRange(0, 1)
+            self._export_progress.setValue(0)
+        self._export_progress.setError(True)
         self._export_status_label.setText("导出失败")
         self._export_start_button.setEnabled(True)
         self._export_stop_button.setEnabled(False)
