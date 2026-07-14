@@ -466,6 +466,7 @@ from krok_helper.subtitle_render.models import (
     KaraokeColors,
     KaraokeColorState,
     LYRICS_LAYOUT_FIELDS,
+    N3_FONT_INHERITANCE_FIELDS,
     PaintFill,
     RubyAnnotation,
     Style,
@@ -2431,12 +2432,12 @@ def _build_font(style: Style) -> QFont:
 def _latin_font_size(style: Style) -> int:
     """英数轨字号；``None`` 跟随日文轨。"""
     value = style.latin_font_size_px
-    return int(value) if value is not None else int(style.font_size_px)
+    return int(value) if value is not None and int(value) > 0 else int(style.font_size_px)
 
 
 def _latin_font_weight(style: Style) -> int:
     value = style.latin_font_weight
-    return int(value) if value is not None else int(style.font_weight)
+    return int(value) if value is not None and int(value) > 0 else int(style.font_weight)
 
 
 def _is_n3_latin_text(text: str) -> bool:
@@ -2453,6 +2454,7 @@ def _main_script_stroke_style(style: Style, text: str) -> Style:
         width = (
             style.stroke_width_px
             if style.latin_stroke_width_px is None
+            or int(style.latin_stroke_width_px) <= 0
             else int(style.latin_stroke_width_px)
         )
         enabled = (
@@ -2463,6 +2465,7 @@ def _main_script_stroke_style(style: Style, text: str) -> Style:
         width2 = (
             style.stroke2_width_px
             if style.latin_stroke2_width_px is None
+            or int(style.latin_stroke2_width_px) <= 0
             else int(style.latin_stroke2_width_px)
         )
     else:
@@ -2871,7 +2874,7 @@ def _build_ruby_font(style: Style) -> QFont:
     size = _ruby_font_size(style)
     weight = style.font_weight if _ruby_uses_main_font(style) else (
         style.ruby_font_weight
-        if style.ruby_font_weight is not None
+        if style.ruby_font_weight is not None and int(style.ruby_font_weight) > 0
         else style.font_weight
     )
     font = QFont(family, size)
@@ -3026,8 +3029,6 @@ def _glow_concentration_level(style: Style) -> int:
 
 def _glow_radius(style: Style, *, after: bool) -> int:
     value = style.glow_after_radius_px if after else style.glow_before_radius_px
-    if value == 10 and style.glow_radius_px != 10:
-        value = style.glow_radius_px
     return max(int(value), 1)
 
 
@@ -3058,6 +3059,7 @@ def _ruby_script_stroke_style(style: Style, reading: str) -> Style:
     width = (
         _ruby_stroke_width(style)
         if style.ruby_latin_stroke_width_px is None
+        or int(style.ruby_latin_stroke_width_px) <= 0
         else max(int(style.ruby_latin_stroke_width_px), 0)
     )
     enabled = (
@@ -3072,6 +3074,7 @@ def _ruby_script_stroke_style(style: Style, reading: str) -> Style:
     width2 = (
         _ruby_stroke2_width(style)
         if style.ruby_latin_stroke2_width_px is None
+        or int(style.ruby_latin_stroke2_width_px) <= 0
         else max(int(style.ruby_latin_stroke2_width_px), 0)
     )
     return replace(
@@ -4510,6 +4513,12 @@ def _style_for_role(style: Style, role_label: str | None) -> Style:
     if scheme is None:
         return style
     changes = _style_scheme_changes(scheme)
+    if scheme.n3_font_inheritance:
+        # These None values mean fallback to this scheme's Japanese/root slot,
+        # not inheritance from the outer global scheme.
+        changes.update(
+            {field: getattr(scheme, field) for field in N3_FONT_INHERITANCE_FIELDS}
+        )
     has_legacy_color_changes = any(
         getattr(scheme, field) is not None
         for field in (

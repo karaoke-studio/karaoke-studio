@@ -338,7 +338,13 @@ def test_style_defaults_match_nicokara_layout_baseline():
     style = Style()
 
     assert style.font_family == "UD Digi Kyokasho N-B"
+    assert style.font_family_latin is None
     assert style.font_size_px == 100
+    assert style.latin_font_size_px is None
+    assert style.latin_font_weight is None
+    assert style.latin_stroke_width_px is None
+    assert style.latin_stroke2_enabled is None
+    assert style.latin_stroke2_width_px is None
     assert style.letter_spacing_px == 0
     assert style.space_width_percent == 20
     assert style.allow_biting is False
@@ -348,6 +354,14 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.fill_gradient_end_color == "#0055FF"
     assert style.fill_gradient_angle_deg == 0
     assert style.ruby_font_size_px == 45
+    assert style.ruby_font_family is None
+    assert style.ruby_font_weight is None
+    assert style.ruby_font_family_latin is None
+    assert style.ruby_latin_font_size_px is None
+    assert style.ruby_latin_font_weight is None
+    assert style.ruby_latin_stroke_width_px is None
+    assert style.ruby_latin_stroke2_enabled is None
+    assert style.ruby_latin_stroke2_width_px is None
     assert style.ruby_gap_px == 0
     assert style.ruby_stroke_width_px == 10
     assert style.ruby_stroke2_width_px == 3
@@ -989,9 +1003,9 @@ def test_font_scripts_are_tabs_and_spacing_lives_on_layout_page(qapp):
     panel.set_style(
         Style(font_family="Yu Gothic UI", font_size_px=70, font_weight=800)
     )
-    assert panel._font_latin_combo.currentFont().family() == "Yu Gothic UI"
-    assert panel._font_latin_size_spin.value() == 70
-    assert panel._font_latin_weight_combo.currentData() == 800
+    assert panel._font_latin_combo.is_inherited()
+    assert panel._font_latin_size_spin.value() == 0
+    assert panel._font_latin_weight_combo.currentData() == 0
 
 
 def test_latin_font_overrides_round_trip_and_legacy_values_inherit():
@@ -1031,8 +1045,37 @@ def test_latin_font_overrides_round_trip_and_legacy_values_inherit():
     assert legacy.latin_stroke2_enabled is None
     assert legacy.latin_stroke2_width_px is None
 
+    zero_slots = style_from_dict(
+        {
+            "font_family_latin": 0,
+            "latin_font_size_px": 0,
+            "latin_font_weight": 0,
+            "latin_stroke_width_px": 0,
+            "latin_stroke2_width_px": 0,
+            "ruby_font_family": 0,
+            "ruby_font_weight": 0,
+            "ruby_font_family_latin": 0,
+            "ruby_latin_font_size_px": 0,
+            "ruby_latin_font_weight": 0,
+            "ruby_latin_stroke_width_px": 0,
+            "ruby_latin_stroke2_width_px": 0,
+        }
+    )
+    assert zero_slots.font_family_latin is None
+    assert zero_slots.latin_font_size_px is None
+    assert zero_slots.latin_font_weight is None
+    assert zero_slots.latin_stroke_width_px is None
+    assert zero_slots.latin_stroke2_width_px is None
+    assert zero_slots.ruby_font_family is None
+    assert zero_slots.ruby_font_weight is None
+    assert zero_slots.ruby_font_family_latin is None
+    assert zero_slots.ruby_latin_font_size_px is None
+    assert zero_slots.ruby_latin_font_weight is None
+    assert zero_slots.ruby_latin_stroke_width_px is None
+    assert zero_slots.ruby_latin_stroke2_width_px is None
 
-def test_ruby_font_defaults_follow_main_family_but_keep_own_size_until_edited(qapp):
+
+def test_ruby_font_defaults_show_zero_inheritance_but_keep_own_size(qapp):
     panel = PropertyPanel()
     panel.set_style(
         Style(
@@ -1045,12 +1088,12 @@ def test_ruby_font_defaults_follow_main_family_but_keep_own_size_until_edited(qa
         )
     )
 
-    assert panel._ruby_font_combo.currentFont().family() == "Arial"
+    assert panel._ruby_font_combo.is_inherited()
     assert panel._ruby_font_size_spin.value() == 45
-    assert panel._ruby_font_weight_combo.currentData() == 700
-    assert panel._ruby_font_latin_combo.currentFont().family() == "Courier New"
-    assert panel._ruby_font_latin_size_spin.value() == 45
-    assert panel._ruby_font_latin_weight_combo.currentData() == 600
+    assert panel._ruby_font_weight_combo.currentData() == 0
+    assert panel._ruby_font_latin_combo.is_inherited()
+    assert panel._ruby_font_latin_size_spin.value() == 0
+    assert panel._ruby_font_latin_weight_combo.currentData() == 0
 
     panel._font_size_spin.setValue(80)
     assert panel.subtitle_style.ruby_font_follow_main is True
@@ -1060,6 +1103,55 @@ def test_ruby_font_defaults_follow_main_family_but_keep_own_size_until_edited(qa
     assert panel.subtitle_style.ruby_font_follow_main is False
     panel._font_size_spin.setValue(90)
     assert panel._ruby_font_size_spin.value() == 34
+
+
+def test_default_latin_controls_keep_zero_until_user_adds_override(qapp):
+    panel = PropertyPanel()
+    panel.set_style(Style(font_family="Arial", font_weight=700, stroke_width_px=12))
+
+    assert panel._font_latin_combo.is_inherited()
+    assert panel._font_latin_size_spin.value() == 0
+    assert panel._font_latin_weight_combo.currentData() == 0
+    assert panel._latin_stroke_width_spin.value() == 0
+    assert (
+        panel._latin_stroke2_enabled_check.checkState()
+        == Qt.CheckState.PartiallyChecked
+    )
+    assert panel._latin_stroke2_width_spin.value() == 0
+    assert panel._ruby_font_combo.is_inherited()
+    assert panel._ruby_font_weight_combo.currentData() == 0
+    assert panel._ruby_font_latin_combo.is_inherited()
+    assert panel._ruby_font_latin_size_spin.value() == 0
+    assert panel._ruby_font_latin_weight_combo.currentData() == 0
+    assert panel._ruby_latin_stroke_width_spin.value() == 0
+    assert (
+        panel._ruby_latin_stroke2_enabled_check.checkState()
+        == Qt.CheckState.PartiallyChecked
+    )
+    assert panel._ruby_latin_stroke2_width_spin.value() == 0
+
+    panel._font_latin_size_spin.setValue(64)
+    panel._font_latin_weight_combo.setCurrentIndex(
+        panel._font_latin_weight_combo.findData(600)
+    )
+    panel._latin_stroke_width_spin.setValue(8)
+    assert panel.subtitle_style.latin_font_size_px == 64
+    assert panel.subtitle_style.latin_font_weight == 600
+    assert panel.subtitle_style.latin_stroke_width_px == 8
+
+    panel._font_latin_size_spin.setValue(0)
+    panel._font_latin_weight_combo.setCurrentIndex(
+        panel._font_latin_weight_combo.findData(0)
+    )
+    panel._latin_stroke_width_spin.setValue(0)
+    assert panel.subtitle_style.latin_font_size_px is None
+    assert panel.subtitle_style.latin_font_weight is None
+    assert panel.subtitle_style.latin_stroke_width_px is None
+
+    panel._latin_stroke2_enabled_check.setCheckState(Qt.CheckState.Checked)
+    assert panel.subtitle_style.latin_stroke2_enabled is True
+    panel._latin_stroke2_enabled_check.setCheckState(Qt.CheckState.PartiallyChecked)
+    assert panel.subtitle_style.latin_stroke2_enabled is None
 
 
 def test_new_project_global_font_sizes_are_main_100_and_ruby_45(qapp):
@@ -1634,10 +1726,12 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     ]
 
     panel._glow_radius_spin.setValue(28)
-    assert emitted[-1].glow_radius_px == 28
+    assert emitted[-1].glow_radius_px == 10
     assert emitted[-1].glow_before_radius_px == 28
+    assert emitted[-1].glow_after_radius_px == 10
 
     panel._glow_after_radius_spin.setValue(16)
+    assert emitted[-1].glow_before_radius_px == 28
     assert emitted[-1].glow_after_radius_px == 16
 
     panel._decoration_type_combo.setCurrentIndex(

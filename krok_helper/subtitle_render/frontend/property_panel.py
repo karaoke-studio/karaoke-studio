@@ -105,6 +105,7 @@ from krok_helper.subtitle_render.models import (
     LineYPosition,
     LYRICS_LAYOUT_FIELDS,
     LyricsLayout,
+    N3_FONT_INHERITANCE_FIELDS,
     PaintFill,
     StylePreset,
     SubtitleStyleScheme,
@@ -1741,10 +1742,25 @@ class _WheelFocusedFontComboBox(_WheelFocusedComboBox):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self._inheritance_label: Optional[str] = None
         self.addItems(QFontDatabase.families())
         self.currentIndexChanged.connect(
             lambda _index: self.currentFontChanged.emit(self.currentFont())
         )
+
+    def enable_inheritance(self, label: str) -> None:
+        """Add an explicit N3-style zero slot before installed families."""
+        if self._inheritance_label is not None:
+            return
+        self._inheritance_label = str(label)
+        self.insertItem(0, self._inheritance_label, 0)
+
+    def is_inherited(self) -> bool:
+        return self._inheritance_label is not None and self.currentIndex() == 0
+
+    def setInherited(self) -> None:  # noqa: N802 - Qt-style helper
+        if self._inheritance_label is not None:
+            self.setCurrentIndex(0)
 
     def currentFont(self) -> QFont:  # noqa: N802 - QFontComboBox compatibility
         return QFont(self.currentText())
@@ -3542,9 +3558,26 @@ class PropertyPanel(QWidget):
 
         font_combo = _WheelFocusedFontComboBox(page)
         _compact_control(font_combo)
-        size_spin = _spin(8 if subject == "ruby" else 12, 180, suffix=" px")
+        inherits_script = script == "latin"
+        if (subject, script) == ("main", "latin"):
+            font_combo.enable_inheritance("跟随主文字日文（0）")
+        elif (subject, script) == ("ruby", "japanese"):
+            font_combo.enable_inheritance("跟随主文字（0）")
+        elif (subject, script) == ("ruby", "latin"):
+            font_combo.enable_inheritance("跟随注音日文（0）")
+        size_spin = _spin(
+            0 if inherits_script else (8 if subject == "ruby" else 12),
+            180,
+            suffix=" px",
+        )
         weight_combo = _WheelFocusedComboBox(page)
         _compact_control(weight_combo)
+        if (subject, script) == ("main", "latin"):
+            weight_combo.addItem("跟随主文字日文（0）", 0)
+        elif (subject, script) == ("ruby", "japanese"):
+            weight_combo.addItem("跟随主文字（0）", 0)
+        elif (subject, script) == ("ruby", "latin"):
+            weight_combo.addItem("跟随注音日文（0）", 0)
         for label, value in [
             ("常规 400", 400), ("中等 500", 500), ("半粗 600", 600),
             ("粗体 700", 700), ("特粗 800", 800), ("黑体 900", 900),
@@ -3572,22 +3605,24 @@ class PropertyPanel(QWidget):
             self._font_latin_weight_combo = weight_combo
             font_combo.currentFontChanged.connect(self._on_font_latin_changed)
             size_spin.valueChanged.connect(
-                lambda value: self._update_style(latin_font_size_px=value)
+                lambda value: self._update_style(
+                    latin_font_size_px=None if value == 0 else value
+                )
             )
             weight_combo.currentIndexChanged.connect(
                 lambda _index: self._update_style(
-                    latin_font_weight=int(weight_combo.currentData())
+                    latin_font_weight=(
+                        None
+                        if int(weight_combo.currentData()) == 0
+                        else int(weight_combo.currentData())
+                    )
                 )
             )
         elif (subject, script) == ("ruby", "japanese"):
             self._ruby_font_combo = font_combo
             self._ruby_font_size_spin = size_spin
             self._ruby_font_weight_combo = weight_combo
-            font_combo.currentFontChanged.connect(
-                lambda font: self._update_ruby_font_override(
-                    ruby_font_family=font.family()
-                )
-            )
+            font_combo.currentFontChanged.connect(self._on_ruby_font_changed)
             size_spin.valueChanged.connect(
                 lambda value: self._update_ruby_font_override(
                     ruby_font_size_px=value
@@ -3595,26 +3630,30 @@ class PropertyPanel(QWidget):
             )
             weight_combo.currentIndexChanged.connect(
                 lambda _index: self._update_ruby_font_override(
-                    ruby_font_weight=int(weight_combo.currentData())
+                    ruby_font_weight=(
+                        None
+                        if int(weight_combo.currentData()) == 0
+                        else int(weight_combo.currentData())
+                    )
                 )
             )
         else:
             self._ruby_font_latin_combo = font_combo
             self._ruby_font_latin_size_spin = size_spin
             self._ruby_font_latin_weight_combo = weight_combo
-            font_combo.currentFontChanged.connect(
-                lambda font: self._update_ruby_font_override(
-                    ruby_font_family_latin=font.family()
-                )
-            )
+            font_combo.currentFontChanged.connect(self._on_ruby_latin_font_changed)
             size_spin.valueChanged.connect(
                 lambda value: self._update_ruby_font_override(
-                    ruby_latin_font_size_px=value
+                    ruby_latin_font_size_px=None if value == 0 else value
                 )
             )
             weight_combo.currentIndexChanged.connect(
                 lambda _index: self._update_ruby_font_override(
-                    ruby_latin_font_weight=int(weight_combo.currentData())
+                    ruby_latin_font_weight=(
+                        None
+                        if int(weight_combo.currentData()) == 0
+                        else int(weight_combo.currentData())
+                    )
                 )
             )
 
@@ -3642,20 +3681,32 @@ class PropertyPanel(QWidget):
         stroke_width_spin = _spin(0, 120, suffix=" px")
         stroke2_enabled_check = CheckBox("", page)
         stroke2_enabled_check.setToolTip("启用或关闭描边 2")
+        inherits_stroke2 = inherits_script or subject == "ruby"
+        if inherits_stroke2:
+            stroke2_enabled_check.setTristate(True)
+            stroke2_enabled_check.setToolTip("半选表示跟随上一级字体槽（0）")
         stroke2_enabled_check.setFixedWidth(28)
         stroke2_enabled_check.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
         )
         stroke2_width_spin = _spin(0, 120, suffix=" px")
         stroke_width_spin.valueChanged.connect(
-            lambda value, field=stroke_width_field: self._update_style(**{field: value})
+            lambda value, field=stroke_width_field, inherit=inherits_script:
+            self._update_style(**{field: None if inherit and value == 0 else value})
         )
-        stroke2_enabled_check.toggled.connect(
-            lambda checked, field=stroke2_enabled_field, spin=stroke2_width_spin:
-            self._on_font_stroke2_toggled(field, spin, checked)
-        )
+        if inherits_stroke2:
+            stroke2_enabled_check.stateChanged.connect(
+                lambda state, field=stroke2_enabled_field, spin=stroke2_width_spin:
+                self._on_font_stroke2_state_changed(field, spin, state)
+            )
+        else:
+            stroke2_enabled_check.toggled.connect(
+                lambda checked, field=stroke2_enabled_field, spin=stroke2_width_spin:
+                self._on_font_stroke2_toggled(field, spin, checked)
+            )
         stroke2_width_spin.valueChanged.connect(
-            lambda value, field=stroke2_width_field: self._update_style(**{field: value})
+            lambda value, field=stroke2_width_field, inherit=inherits_script:
+            self._update_style(**{field: None if inherit and value == 0 else value})
         )
         self._font_stroke_controls[(subject, script)] = (
             stroke_width_spin,
@@ -3718,6 +3769,15 @@ class PropertyPanel(QWidget):
         width_spin.setEnabled(checked)
         self._update_style(**{field_name: checked})
 
+    def _on_font_stroke2_state_changed(
+        self, field_name: str, width_spin: FluentSpinBox, state: int
+    ) -> None:
+        check_state = Qt.CheckState(state)
+        inherited = check_state == Qt.CheckState.PartiallyChecked
+        checked = check_state == Qt.CheckState.Checked
+        width_spin.setEnabled(inherited or checked)
+        self._update_style(**{field_name: None if inherited else checked})
+
     def _update_ruby_font_override(self, **changes) -> None:
         changes["ruby_font_follow_main"] = False
         self._update_style(**changes)
@@ -3725,7 +3785,25 @@ class PropertyPanel(QWidget):
     def _on_font_latin_changed(self, font: QFont) -> None:
         if self._syncing:
             return
-        self._update_style(font_family_latin=font.family())
+        self._update_style(
+            font_family_latin=(
+                None if self._font_latin_combo.is_inherited() else font.family()
+            )
+        )
+
+    def _on_ruby_font_changed(self, font: QFont) -> None:
+        self._update_ruby_font_override(
+            ruby_font_family=(
+                None if self._ruby_font_combo.is_inherited() else font.family()
+            )
+        )
+
+    def _on_ruby_latin_font_changed(self, font: QFont) -> None:
+        self._update_ruby_font_override(
+            ruby_font_family_latin=(
+                None if self._ruby_font_latin_combo.is_inherited() else font.family()
+            )
+        )
 
     def _make_character_layout_group(self, parent: QWidget) -> QWidget:
         """左侧紧凑字符排版组，与智能水平共享幕布侧边区域。"""
@@ -3957,7 +4035,6 @@ class PropertyPanel(QWidget):
         self._glow_before_radius_spin = _spin(1, 120, suffix=" px")
         self._glow_before_radius_spin.valueChanged.connect(
             lambda value: self._update_shared_decoration(
-                glow_radius_px=value,
                 glow_before_radius_px=value,
             )
         )
@@ -5716,9 +5793,6 @@ class PropertyPanel(QWidget):
         value = int(
             self._scheme_value("glow_after_radius_px" if after else "glow_before_radius_px")
         )
-        legacy = int(self._scheme_value("glow_radius_px"))
-        if value == 10 and legacy != 10:
-            value = legacy
         return max(value, 1)
 
     def _current_karaoke_colors(self) -> KaraokeColors:
@@ -6144,6 +6218,12 @@ class PropertyPanel(QWidget):
             if field_name == "ruby_karaoke_colors" and scheme is not None:
                 return scheme.ruby_karaoke_colors
             value = getattr(scheme, field_name, None) if scheme is not None else None
+            if (
+                scheme is not None
+                and scheme.n3_font_inheritance
+                and field_name in N3_FONT_INHERITANCE_FIELDS
+            ):
+                return value
             if value is not None:
                 return value
         return getattr(self._style, field_name)
@@ -6197,14 +6277,15 @@ class PropertyPanel(QWidget):
         self._syncing = True
         try:
             self._font_combo.setCurrentFont(QFont(str(self._scheme_value("font_family"))))
-            latin_family = self._scheme_value("font_family_latin") or self._scheme_value(
-                "font_family"
-            )
-            self._font_latin_combo.setCurrentFont(QFont(str(latin_family)))
+            latin_family = self._scheme_value("font_family_latin")
+            if latin_family is None:
+                self._font_latin_combo.setInherited()
+            else:
+                self._font_latin_combo.setCurrentFont(QFont(str(latin_family)))
             self._font_size_spin.setValue(int(self._scheme_value("font_size_px")))
             latin_size = self._scheme_value("latin_font_size_px")
             self._font_latin_size_spin.setValue(
-                int(latin_size if latin_size is not None else self._scheme_value("font_size_px"))
+                0 if latin_size is None else int(latin_size)
             )
             self._letter_spacing_spin.setValue(int(self._scheme_value("letter_spacing_px")))
             self._space_width_spin.setValue(int(self._scheme_value("space_width_percent")))
@@ -6216,65 +6297,43 @@ class PropertyPanel(QWidget):
                 max(
                     0,
                     self._font_latin_weight_combo.findData(
-                        int(
-                            latin_weight
-                            if latin_weight is not None
-                            else self._scheme_value("font_weight")
-                        )
+                        0 if latin_weight is None else int(latin_weight)
                     ),
                 )
             )
             self._italic_check.setChecked(bool(self._scheme_value("italic")))
             self._allow_biting_check.setChecked(bool(self._scheme_value("allow_biting")))
-            ruby_follow = bool(self._scheme_value("ruby_font_follow_main")) and all(
-                self._scheme_value(field) is None
-                for field in (
-                    "ruby_font_family",
-                    "ruby_font_family_latin",
-                    "ruby_font_weight",
-                    "ruby_latin_font_size_px",
-                    "ruby_latin_font_weight",
-                )
-            ) and int(self._scheme_value("ruby_font_size_px")) == 45
-            ruby_family = (
-                self._scheme_value("font_family")
-                if ruby_follow
-                else self._scheme_value("ruby_font_family")
-                or self._scheme_value("font_family")
-            )
-            # “跟随主文字”只用于没有独立覆盖时共享字体族/字重。
-            # 注音字号一直是独立参数；全局默认必须保持主文字 100、注音 45。
+            ruby_family = self._scheme_value("ruby_font_family")
             ruby_size = self._scheme_value("ruby_font_size_px")
-            ruby_weight = (
-                self._scheme_value("font_weight")
-                if ruby_follow
-                else self._scheme_value("ruby_font_weight")
-                or self._scheme_value("font_weight")
-            )
-            self._ruby_font_combo.setCurrentFont(QFont(str(ruby_family)))
+            ruby_weight = self._scheme_value("ruby_font_weight")
+            if ruby_family is None:
+                self._ruby_font_combo.setInherited()
+            else:
+                self._ruby_font_combo.setCurrentFont(QFont(str(ruby_family)))
             self._ruby_font_size_spin.setValue(int(ruby_size))
             self._ruby_font_weight_combo.setCurrentIndex(
-                max(0, self._ruby_font_weight_combo.findData(int(ruby_weight)))
+                max(
+                    0,
+                    self._ruby_font_weight_combo.findData(
+                        0 if ruby_weight is None else int(ruby_weight)
+                    ),
+                )
             )
-            ruby_latin_family = (
-                latin_family
-                if ruby_follow
-                else self._scheme_value("ruby_font_family_latin")
-                or ruby_family
+            ruby_latin_family = self._scheme_value("ruby_font_family_latin")
+            ruby_latin_size = self._scheme_value("ruby_latin_font_size_px")
+            ruby_latin_weight = self._scheme_value("ruby_latin_font_weight")
+            if ruby_latin_family is None:
+                self._ruby_font_latin_combo.setInherited()
+            else:
+                self._ruby_font_latin_combo.setCurrentFont(QFont(str(ruby_latin_family)))
+            self._ruby_font_latin_size_spin.setValue(
+                0 if ruby_latin_size is None else int(ruby_latin_size)
             )
-            ruby_latin_size = self._scheme_value("ruby_latin_font_size_px") or ruby_size
-            ruby_latin_weight = (
-                (latin_weight if latin_weight is not None else self._scheme_value("font_weight"))
-                if ruby_follow
-                else self._scheme_value("ruby_latin_font_weight") or ruby_weight
-            )
-            self._ruby_font_latin_combo.setCurrentFont(QFont(str(ruby_latin_family)))
-            self._ruby_font_latin_size_spin.setValue(int(ruby_latin_size))
             self._ruby_font_latin_weight_combo.setCurrentIndex(
                 max(
                     0,
                     self._ruby_font_latin_weight_combo.findData(
-                        int(ruby_latin_weight)
+                        0 if ruby_latin_weight is None else int(ruby_latin_weight)
                     ),
                 )
             )
@@ -6306,12 +6365,12 @@ class PropertyPanel(QWidget):
         latin_width_value = self._scheme_value("latin_stroke_width_px")
         latin_enabled_value = self._scheme_value("latin_stroke2_enabled")
         latin_width2_value = self._scheme_value("latin_stroke2_width_px")
-        latin_width = main_width if latin_width_value is None else int(latin_width_value)
+        latin_width = 0 if latin_width_value is None else int(latin_width_value)
         latin_enabled = (
-            main_enabled if latin_enabled_value is None else bool(latin_enabled_value)
+            False if latin_enabled_value is None else bool(latin_enabled_value)
         )
         latin_width2 = (
-            main_width2 if latin_width2_value is None else int(latin_width2_value)
+            0 if latin_width2_value is None else int(latin_width2_value)
         )
 
         ruby_width_value = self._scheme_value("ruby_stroke_width_px")
@@ -6342,23 +6401,30 @@ class PropertyPanel(QWidget):
             ("main", "latin"): (latin_width, latin_enabled, latin_width2),
             ("ruby", "japanese"): (ruby_width, ruby_enabled, ruby_width2),
             ("ruby", "latin"): (
-                ruby_width
-                if ruby_latin_width_value is None
-                else int(ruby_latin_width_value),
-                ruby_enabled
+                0 if ruby_latin_width_value is None else int(ruby_latin_width_value),
+                False
                 if ruby_latin_enabled_value is None
                 else bool(ruby_latin_enabled_value),
-                ruby_width2
+                0
                 if ruby_latin_width2_value is None
                 else int(ruby_latin_width2_value),
             ),
         }
+        inherited_enabled = {
+            ("main", "latin"): latin_enabled_value is None,
+            ("ruby", "japanese"): ruby_enabled_value is None,
+            ("ruby", "latin"): ruby_latin_enabled_value is None,
+        }
         for key, (width, enabled, width2) in values.items():
             width_spin, enabled_check, width2_spin = self._font_stroke_controls[key]
             width_spin.setValue(width)
-            enabled_check.setChecked(enabled)
+            inherited = inherited_enabled.get(key, False)
+            if inherited:
+                enabled_check.setCheckState(Qt.CheckState.PartiallyChecked)
+            else:
+                enabled_check.setChecked(enabled)
             width2_spin.setValue(width2)
-            width2_spin.setEnabled(enabled)
+            width2_spin.setEnabled(inherited or enabled)
 
     def _sync_lit_controls(self) -> None:
         if not hasattr(self, "_lit_enabled_switch"):
@@ -6709,6 +6775,12 @@ def _solid_fill(color: str) -> PaintFill:
 
 
 def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
+    current_name = panel._current_custom_scheme_name()
+    current_scheme = (
+        panel._style.custom_style_schemes.get(current_name)
+        if current_name is not None
+        else None
+    )
     return SubtitleStyleScheme(
         font_family=str(panel._scheme_value("font_family")),
         font_family_latin=panel._scheme_value("font_family_latin"),
@@ -6773,6 +6845,9 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         ruby_shadow_offset_y=panel._scheme_value("ruby_shadow_offset_y"),
         karaoke_colors=panel._current_karaoke_colors(),
         ruby_karaoke_colors=panel._scheme_value("ruby_karaoke_colors"),
+        n3_font_inheritance=bool(
+            current_scheme is not None and current_scheme.n3_font_inheritance
+        ),
     )
 
 

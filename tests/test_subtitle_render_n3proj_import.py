@@ -272,9 +272,11 @@ def test_import_global_style_font_and_colors(imported):
     # UseEdge2 全链 None → N3 不绘制二重描边
     assert style.stroke2_enabled is False
     assert style.stroke2_width_px == 5
-    assert style.latin_stroke_width_px == 15
-    assert style.latin_stroke2_enabled is False
-    assert style.latin_stroke2_width_px == 5
+    # 子槽的 0/null 保持为继承状态，不再物化成根槽的有效值。
+    assert style.latin_font_size_px is None
+    assert style.latin_stroke_width_px is None
+    assert style.latin_stroke2_enabled is None
+    assert style.latin_stroke2_width_px is None
     # DecorKind.Shadow → 右下偏移 DecorSize
     assert style.decoration_kind == "shadow"
     assert style.shadow_offset_x == 5
@@ -284,21 +286,20 @@ def test_import_global_style_font_and_colors(imported):
     assert colors.after.text.color == "#FF0000"
     assert colors.before.text.color == "#FFFFFF"
     assert colors.before.shadow.color == "#26386A"
-    # ルビ：字体/字号/描边独立解析（解除「跟随主文字」，否则注音会按主字号渲染），
-    # 配色与主文字一致
-    assert style.ruby_font_follow_main is False
-    assert style.ruby_font_family == "UD デジタル 教科書体 N-B"
-    assert style.ruby_font_weight == 700
-    assert style.ruby_font_family_latin == "UD デジタル 教科書体 N-B"
+    # ルビ：空字体/字面继续显示 0 并跟随主文字；字号与描边保留显式值。
+    assert style.ruby_font_follow_main is True
+    assert style.ruby_font_family is None
+    assert style.ruby_font_weight is None
+    assert style.ruby_font_family_latin is None
     assert style.ruby_font_size_px == 45
     assert style.ruby_stroke_width_px == 10
-    assert style.ruby_stroke2_enabled is False
+    assert style.ruby_stroke2_enabled is None
     assert style.ruby_stroke2_width_px == 3
-    assert style.ruby_latin_font_size_px == 45
-    assert style.ruby_latin_font_weight == 700
-    assert style.ruby_latin_stroke_width_px == 10
-    assert style.ruby_latin_stroke2_enabled is False
-    assert style.ruby_latin_stroke2_width_px == 3
+    assert style.ruby_latin_font_size_px is None
+    assert style.ruby_latin_font_weight is None
+    assert style.ruby_latin_stroke_width_px is None
+    assert style.ruby_latin_stroke2_enabled is None
+    assert style.ruby_latin_stroke2_width_px is None
     assert style.ruby_karaoke_colors is not None
 
 
@@ -351,14 +352,15 @@ def test_import_ignores_kana_slots_and_uses_japanese_settings(tmp_path):
     assert style.font_size_px == 100
     assert style.stroke_width_px == 15
     assert style.stroke2_enabled is False
-    assert style.ruby_font_family == "UD デジタル 教科書体 N-B"
+    assert style.ruby_font_family is None
+    assert style.ruby_font_weight is None
     assert style.ruby_font_size_px == 45
     assert style.ruby_stroke_width_px == 10
-    assert style.ruby_stroke2_enabled is False
+    assert style.ruby_stroke2_enabled is None
     assert not any("かな" in warning or "假名" in warning for warning in result.warnings)
 
 
-def test_import_materializes_custom_scheme_fallbacks(tmp_path):
+def test_import_preserves_custom_scheme_local_fallbacks(tmp_path):
     payload = _project_payload(tmp_path)
     infos = payload["LyricsFonts"][1]["FontInfos"]
     infos[0].update(FontName="游明朝", FontFaceName="Bold")
@@ -370,25 +372,26 @@ def test_import_materializes_custom_scheme_fallbacks(tmp_path):
     style = style_from_dict(result.project_data["style"])
     scheme = style.custom_style_schemes["青配色"]
 
-    # Empty Latin slots inherit inside this N3 scheme, never from the global
-    # scheme's Comic Sans MS.  Every effective value is serialized explicitly.
+    # Empty child slots remain visible as zero/empty while the marker tells the
+    # renderer to resolve them inside this scheme, never from global Comic Sans.
+    assert scheme.n3_font_inheritance is True
     assert scheme.font_family == "游明朝"
-    assert scheme.font_family_latin == "游明朝"
-    assert scheme.ruby_font_family == "游明朝"
-    assert scheme.ruby_font_family_latin == "游明朝"
+    assert scheme.font_family_latin is None
+    assert scheme.ruby_font_family is None
+    assert scheme.ruby_font_family_latin is None
     assert scheme.font_weight == 700
-    assert scheme.latin_font_weight == 700
-    assert scheme.ruby_font_weight == 700
-    assert scheme.ruby_latin_font_weight == 700
+    assert scheme.latin_font_weight is None
+    assert scheme.ruby_font_weight is None
+    assert scheme.ruby_latin_font_weight is None
     assert scheme.italic is False
     assert scheme.font_size_px == 100
-    assert scheme.latin_font_size_px == 100
+    assert scheme.latin_font_size_px is None
     assert scheme.ruby_font_size_px == 45
-    assert scheme.ruby_latin_font_size_px == 45
+    assert scheme.ruby_latin_font_size_px is None
     assert scheme.stroke_width_px == 15
-    assert scheme.latin_stroke_width_px == 15
+    assert scheme.latin_stroke_width_px is None
     assert scheme.ruby_stroke_width_px == 10
-    assert scheme.ruby_latin_stroke_width_px == 10
+    assert scheme.ruby_latin_stroke_width_px is None
 
 
 def test_import_layouts(imported):

@@ -1119,6 +1119,8 @@ def _glow_after_style() -> Style:
     return Style(
         decoration_kind="glow",
         glow_radius_px=12,
+        glow_before_radius_px=12,
+        glow_after_radius_px=12,
         karaoke_colors=KaraokeColors(
             before=KaraokeColorState(shadow=PaintFill(color="#000000")),
             after=KaraokeColorState(shadow=PaintFill(color="#FF8800")),
@@ -2054,12 +2056,16 @@ def test_paint_frame_glow_radius_changes_rendered_frame(qapp):
     small = Style(
         decoration_kind="glow",
         glow_radius_px=4,
+        glow_before_radius_px=4,
+        glow_after_radius_px=4,
         karaoke_colors=colors,
         line_y_position="center",
     )
     large = Style(
         decoration_kind="glow",
         glow_radius_px=28,
+        glow_before_radius_px=28,
+        glow_after_radius_px=28,
         karaoke_colors=colors,
         line_y_position="center",
     )
@@ -2068,6 +2074,50 @@ def test_paint_frame_glow_radius_changes_rendered_frame(qapp):
     paint_frame(img_large, _track(), 2400, large)
 
     assert _pixel_hash(img_small) != _pixel_hash(img_large)
+
+
+def test_glow_before_and_after_radii_are_independent_of_legacy_field():
+    style = Style(
+        glow_radius_px=99,
+        glow_before_radius_px=7,
+        glow_after_radius_px=23,
+    )
+
+    assert subtitle_painter._glow_radius(style, after=False) == 7
+    assert subtitle_painter._glow_radius(style, after=True) == 23
+
+
+def test_n3_role_scheme_empty_slots_fallback_inside_same_scheme(qapp):
+    scheme = SubtitleStyleScheme(
+        font_family="Yu Mincho",
+        font_family_latin=None,
+        font_size_px=80,
+        latin_font_size_px=None,
+        font_weight=700,
+        latin_font_weight=None,
+        stroke_width_px=12,
+        latin_stroke_width_px=None,
+        ruby_font_family=None,
+        ruby_font_weight=None,
+        n3_font_inheritance=True,
+    )
+    global_style = Style(
+        font_family="Arial",
+        font_family_latin="Courier New",
+        font_weight=400,
+        latin_font_weight=500,
+        custom_style_schemes={"N3": scheme},
+    )
+
+    merged = subtitle_painter._style_for_role(global_style, "N3")
+    assert merged.font_family == "Yu Mincho"
+    assert merged.font_family_latin is None
+    assert subtitle_painter._build_latin_font(merged).family() == "Yu Mincho"
+    assert subtitle_painter._latin_font_weight(merged) == 700
+    assert subtitle_painter._main_script_stroke_style(
+        merged, "ABC"
+    ).stroke_width_px == 12
+    assert subtitle_painter._build_ruby_font(merged).family() == "Yu Mincho"
 
 
 def test_n3_glow_blur_radii_match_three_concentration_levels():
