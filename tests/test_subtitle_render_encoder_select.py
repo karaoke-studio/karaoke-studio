@@ -25,4 +25,4 @@ def test_auto_encoder_falls_back_to_cpu(monkeypatch):
 def test_encoder_options_clamp_crf_and_normalize_bad_values():
     options = enc.video_encoder_options("ffmpeg", "bad", crf=99, preset="turbo")
 
-    assert options == ["-c:v", "libx264", "-preset", "veryfast", "-crf", "51"]
+    assert options == ["-c:v", "libx264", "-preset", "medium", "-crf", "51"]

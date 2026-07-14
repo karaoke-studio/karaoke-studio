@@ -74,7 +74,7 @@ class RenderJob:
     include_audio: bool = True
     encoder_mode: str = "cpu"
     crf: int = 18
-    preset: str = "veryfast"
+    preset: str = "medium"
     native_export_enabled: bool | None = None
     extra_tracks: tuple[TimingTrack, ...] = ()
     """副字幕源（N3 多歌词文件，如コーラス轨），与主轨同帧叠绘。"""

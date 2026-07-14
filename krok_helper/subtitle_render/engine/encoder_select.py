@@ -40,8 +40,8 @@ def normalize_encoder_mode(mode: str) -> str:
 
 
 def normalize_cpu_preset(preset: str) -> str:
-    """Return a supported x264 preset, falling back to ``veryfast``."""
-    return preset if preset in CPU_PRESETS else "veryfast"
+    """Return a supported x264 preset, falling back to ``medium``."""
+    return preset if preset in CPU_PRESETS else "medium"
 
 
 def video_encoder_options(

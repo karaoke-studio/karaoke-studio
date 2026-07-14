@@ -1040,7 +1040,7 @@ class SubtitleRenderWindow(QWidget):
             output=project_output_payload(
                 encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
                 crf=self._export_crf_spin.value(),
-                preset=str(self._export_preset_combo.currentData() or "veryfast"),
+                preset=str(self._export_preset_combo.currentData() or "medium"),
                 output_path=self._export_output_text(),
                 native_export_enabled=False,
             ),
@@ -1561,7 +1561,7 @@ class SubtitleRenderWindow(QWidget):
         self._export_preset_combo.setMinimumHeight(32)
         for preset in CPU_PRESETS:
             self._export_preset_combo.addItem(preset, userData=preset)
-        self._export_preset_combo.setCurrentText("veryfast")
+        self._export_preset_combo.setCurrentText("medium")
         self._export_crf_spin = self._export_spin(0, 51, 18, "")
         self._export_crf_spin.setToolTip("CRF 质量：数值越小画质越高、文件越大；18 约为视觉无损。")
         encode_row.addWidget(self._labeled_export_control("编码器", self._export_encoder_combo))
@@ -3254,7 +3254,7 @@ class SubtitleRenderWindow(QWidget):
             include_audio=bool(self._audio_info and self._audio_info.audio_streams > 0),
             encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
             crf=self._export_crf_spin.value(),
-            preset=str(self._export_preset_combo.currentData() or "veryfast"),
+            preset=str(self._export_preset_combo.currentData() or "medium"),
             native_export_enabled=False,
         )
 

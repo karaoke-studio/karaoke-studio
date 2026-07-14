@@ -1066,7 +1066,7 @@ class OutputConfig:
     fps: int = 60
     encoder_mode: str = "cpu"
     crf: int = 18
-    preset: str = "veryfast"
+    preset: str = "medium"
     output_path: str = ""
 
 
