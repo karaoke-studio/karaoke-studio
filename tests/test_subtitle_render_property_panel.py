@@ -671,6 +671,7 @@ def test_schematic_board_places_margin_controls_beside_and_below_screen(qapp):
     top_left = QWidget()
     top_center = QWidget()
     bottom_left = QWidget()
+    bottom_right = QWidget()
     center = QWidget()
     bottom = QWidget()
     right = QWidget()
@@ -678,6 +679,7 @@ def test_schematic_board_places_margin_controls_beside_and_below_screen(qapp):
     top_left.setFixedSize(100, 40)
     top_center.setFixedSize(120, 40)
     bottom_left.setFixedSize(120, 40)
+    bottom_right.setFixedSize(120, 24)
     center.setFixedSize(320, 180)
     bottom.setFixedSize(180, 32)
     right.setFixedSize(100, 60)
@@ -689,6 +691,7 @@ def test_schematic_board_places_margin_controls_beside_and_below_screen(qapp):
         top_left=top_left,
         top_center=top_center,
         bottom_left=bottom_left,
+        bottom_right=bottom_right,
     )
 
     board.resize(700, 240)
@@ -704,6 +707,8 @@ def test_schematic_board_places_margin_controls_beside_and_below_screen(qapp):
         center.geometry().center().x(), abs=1
     )
     assert bottom_left.geometry().bottom() == bottom.geometry().bottom()
+    assert bottom_right.geometry().center().y() == bottom.geometry().center().y()
+    assert bottom_right.geometry().right() == board.contentsRect().right()
     assert bottom_left.geometry().right() < center.geometry().left()
     assert left.geometry().center().y() == pytest.approx(
         center.geometry().center().y(), abs=1
@@ -752,6 +757,7 @@ def test_layout_schematic_stacks_cleanly_after_collision_breakpoint(qapp):
         panel._left_layout_controls,
         panel._character_layout_group,
         panel._line_alignments_box,
+        panel._allow_biting_check,
     ]
     tops = [widget.mapTo(board, QPoint()).y() for widget in ordered]
     assert tops == sorted(tops)
@@ -880,6 +886,16 @@ def test_layout_navigation_is_merged_above_row_structure(qapp):
     )
     assert space_top_left.y() + panel._space_width_spin.height() == (
         line_margin_bottom
+    )
+    biting_top_left = panel._allow_biting_check.mapTo(
+        panel._schematic_board, QPoint()
+    )
+    assert biting_top_left.y() + panel._allow_biting_check.height() / 2 == pytest.approx(
+        line_margin_top_left.y() + panel._line_margin_spin.height() / 2,
+        abs=1,
+    )
+    assert biting_top_left.x() + panel._allow_biting_check.width() - 1 == (
+        panel._schematic_board.contentsRect().right()
     )
 
 
@@ -1028,7 +1044,8 @@ def test_font_scripts_are_tabs_and_spacing_lives_on_layout_page(qapp):
     assert not panel._layout_section.isAncestorOf(panel._ruby_font_size_spin)
     assert not panel._font_tab_panel.isAncestorOf(panel._letter_spacing_spin)
     assert not panel._font_tab_panel.isAncestorOf(panel._space_width_spin)
-    assert panel._character_layout_section.isAncestorOf(panel._allow_biting_check)
+    assert not panel._character_layout_section.isAncestorOf(panel._allow_biting_check)
+    assert panel._schematic_board.isAncestorOf(panel._allow_biting_check)
 
     panel.set_style(
         Style(font_family="Yu Gothic UI", font_size_px=70, font_weight=800)

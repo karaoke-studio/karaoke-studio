@@ -2801,6 +2801,7 @@ class _SchematicBoard(QWidget):
         top_left: Optional[QWidget] = None,
         top_center: Optional[QWidget] = None,
         bottom_left: Optional[QWidget] = None,
+        bottom_right: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self._left = left
@@ -2812,6 +2813,7 @@ class _SchematicBoard(QWidget):
         self._top_left = top_left
         self._top_center = top_center
         self._bottom_left = bottom_left
+        self._bottom_right = bottom_right
         self._wide: Optional[bool] = None
         self._grid = QGridLayout(self)
         self._grid.setContentsMargins(0, 0, 0, 0)
@@ -2827,6 +2829,7 @@ class _SchematicBoard(QWidget):
             top_left,
             top_center,
             bottom_left,
+            bottom_right,
         ):
             if child is not None:
                 child.setParent(self)
@@ -2854,7 +2857,12 @@ class _SchematicBoard(QWidget):
                 self._side_width(self._left),
                 self._side_width(self._top_left) if self._top_left is not None else 0,
             )
-            + self._side_width(self._right)
+            + max(
+                self._side_width(self._right),
+                self._side_width(self._bottom_right)
+                if self._bottom_right is not None
+                else 0,
+            )
             + center_width
             + self._grid.horizontalSpacing() * 2
         )
@@ -2882,6 +2890,9 @@ class _SchematicBoard(QWidget):
             else 0,
             self._bottom_left.minimumSizeHint().width()
             if self._bottom_left is not None
+            else 0,
+            self._bottom_right.minimumSizeHint().width()
+            if self._bottom_right is not None
             else 0,
         )
         return QSize(width, base.height())
@@ -2958,6 +2969,13 @@ class _SchematicBoard(QWidget):
                 1,
                 Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop,
             )
+            if self._bottom_right is not None:
+                self._grid.addWidget(
+                    self._bottom_right,
+                    2,
+                    2,
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                )
             # 幕布是固定 16:9 的紧凑中心列；两侧列均分剩余空间。
             # 左右余白在左列右对齐，因而紧贴幕布而不是贴中间列边界。
             self._grid.setColumnStretch(0, 1)
@@ -3001,6 +3019,9 @@ class _SchematicBoard(QWidget):
                 self._grid.addWidget(self._bottom_left, next_row, 0)
                 next_row += 1
             self._grid.addWidget(self._right, next_row, 0)
+            next_row += 1
+            if self._bottom_right is not None:
+                self._grid.addWidget(self._bottom_right, next_row, 0)
             self._grid.setColumnStretch(0, 1)
             self._grid.setColumnStretch(1, 0)
             self._grid.setColumnStretch(2, 0)
@@ -3836,16 +3857,6 @@ class PropertyPanel(QWidget):
             lambda value: self._update_style(space_width_percent=value)
         )
         fields_layout.addWidget(_field("空格宽度", self._space_width_spin))
-
-        self._allow_biting_check = CheckBox("启用", fields)
-        self._allow_biting_check.setToolTip(
-            "允许斜体和部分标点使用负字形边距，效果更接近 NicokaraMaker3。"
-        )
-        self._allow_biting_check.toggled.connect(
-            lambda checked: self._update_layout_field(allow_biting=checked)
-        )
-        fields_layout.addWidget(_field("文字咬合", self._allow_biting_check))
-        fields_layout.addStretch(1)
 
         layout.addWidget(fields)
         return group
@@ -5132,6 +5143,14 @@ class PropertyPanel(QWidget):
         )
         self._character_layout_group = self._make_character_layout_group(section)
 
+        self._allow_biting_check = CheckBox("启用文字咬合", section)
+        self._allow_biting_check.setToolTip(
+            "允许斜体和部分标点使用负字形边距，效果更接近 NicokaraMaker3。"
+        )
+        self._allow_biting_check.toggled.connect(
+            lambda checked: self._update_layout_field(allow_biting=checked)
+        )
+
         # 中列：布局示意图；下方用单行表单贴上/下余白。
         self._layout_schematic = _LayoutSchematic(section)
         # 黑色幕布本身就是 16:9；不让 QWidget 横向膀胀后在内部
@@ -5179,6 +5198,7 @@ class PropertyPanel(QWidget):
             top_left=self._left_layout_controls,
             top_center=self._line_position_field,
             bottom_left=self._character_layout_group,
+            bottom_right=self._allow_biting_check,
         )
         layout.addWidget(self._schematic_board)
         return section
