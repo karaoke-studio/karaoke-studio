@@ -6111,6 +6111,23 @@ class KrokHelperQtApp(QMainWindow):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
 
+        header = QWidget(dialog)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(20, 20, 20, 0)
+        header_layout.setSpacing(10)
+
+        heading = QLabel("全局设置")
+        heading.setStyleSheet('font-family: "Microsoft YaHei UI"; font-size: 18pt; font-weight: 700;')
+        save_button = QPushButton("保存设置")
+        close_button = QPushButton("关闭")
+        close_button.clicked.connect(dialog.close)
+
+        header_layout.addWidget(heading, 0, Qt.AlignmentFlag.AlignVCenter)
+        header_layout.addStretch(1)
+        header_layout.addWidget(save_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        header_layout.addWidget(close_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        outer.addWidget(header)
+
         scroll = QScrollArea(dialog)
         scroll.setWidgetResizable(True)
         content = QWidget()
@@ -6118,12 +6135,8 @@ class KrokHelperQtApp(QMainWindow):
         outer.addWidget(scroll)
 
         shell = QVBoxLayout(content)
-        shell.setContentsMargins(20, 20, 20, 20)
+        shell.setContentsMargins(20, 18, 20, 20)
         shell.setSpacing(18)
-
-        heading = QLabel("全局设置")
-        heading.setStyleSheet('font-family: "Microsoft YaHei UI"; font-size: 18pt; font-weight: 700;')
-        shell.addWidget(heading)
 
         pivot = Pivot(dialog)
         pivot.setFixedHeight(40)
@@ -6527,17 +6540,17 @@ class KrokHelperQtApp(QMainWindow):
         sync_proxy_manual_enabled()
 
         update_layout.addWidget(update_title, 0, 0)
-        update_layout.addWidget(updater_enabled_check, 1, 1, 1, 2)
-        update_layout.addWidget(startup_check, 2, 1, 1, 2)
-        update_layout.addWidget(QLabel("启动检查间隔"), 3, 0)
-        update_layout.addWidget(interval_edit, 3, 1)
-        update_layout.addWidget(QLabel("小时"), 3, 2)
-        update_layout.addWidget(QLabel("更新源优先级"), 4, 0)
-        update_layout.addWidget(source_order_label, 4, 1, 1, 2)
-        update_layout.addWidget(edit_order_button, 4, 3)
-        update_layout.addWidget(QLabel("立即检查更新"), 5, 0)
-        update_layout.addWidget(update_status_label, 5, 1, 1, 2)
-        update_layout.addWidget(check_now_button, 5, 3)
+        update_layout.addWidget(updater_enabled_check, 1, 1)
+        update_layout.addWidget(startup_check, 1, 2, 1, 2)
+        update_layout.addWidget(QLabel("启动检查间隔"), 2, 0)
+        update_layout.addWidget(interval_edit, 2, 1)
+        update_layout.addWidget(QLabel("小时"), 2, 2)
+        update_layout.addWidget(QLabel("更新源优先级"), 3, 0)
+        update_layout.addWidget(source_order_label, 3, 1, 1, 2)
+        update_layout.addWidget(edit_order_button, 3, 3)
+        update_layout.addWidget(QLabel("立即检查更新"), 4, 0)
+        update_layout.addWidget(update_status_label, 4, 1, 1, 2)
+        update_layout.addWidget(check_now_button, 4, 3)
         update_layout.setColumnStretch(2, 1)
         network_layout.addWidget(update_panel)
         network_layout.addStretch(1)
@@ -6603,12 +6616,6 @@ class KrokHelperQtApp(QMainWindow):
         about_layout.addWidget(about_panel)
         about_layout.addStretch(1)
 
-        controls = QHBoxLayout()
-        controls.addStretch(1)
-        save_button = QPushButton("保存设置")
-        close_button = QPushButton("关闭")
-        close_button.clicked.connect(dialog.close)
-
         def save_global_settings() -> None:
             try:
                 ffmpeg_dir_text = ffmpeg_display.text().strip()
@@ -6644,9 +6651,6 @@ class KrokHelperQtApp(QMainWindow):
             update_status_label.setText("设置已保存到本地。")
 
         save_button.clicked.connect(save_global_settings)
-        controls.addWidget(save_button)
-        controls.addWidget(close_button)
-        shell.addLayout(controls)
         dialog.exec()
 
     def _check_for_workbench_update_on_startup(self) -> None:
