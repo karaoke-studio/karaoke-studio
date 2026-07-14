@@ -661,12 +661,12 @@ def test_unsupported_dest_format_warns(tmp_path):
     assert any("输出格式" in warning for warning in result.warnings)
 
 
-def test_unsupported_fps_falls_back(tmp_path):
+def test_unsupported_fps_falls_back_without_warning(tmp_path):
     payload = _project_payload(tmp_path)
     payload["SourceInfo"]["Fps"] = 30
     result = load_n3proj(_write_n3proj(tmp_path, payload))
     assert result.project_data["screen"]["fps"] == 60
-    assert any("帧率" in warning for warning in result.warnings)
+    assert not any("帧率" in warning for warning in result.warnings)
 
 
 def test_image_background_is_imported(tmp_path):

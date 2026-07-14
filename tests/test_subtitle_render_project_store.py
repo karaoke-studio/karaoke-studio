@@ -177,7 +177,7 @@ def test_n3_import_warnings_use_copyable_fluent_dialog(qapp, monkeypatch):
 
     class Result:
         project_data = {}
-        warnings = ["帧率已调整为 60 fps", "歌词间隔使用默认布局"]
+        warnings = ["输出格式已改为 MP4", "歌词间隔使用默认布局"]
 
     monkeypatch.setattr(mw, "load_n3proj", lambda _path: Result())
     monkeypatch.setattr(win, "_clear_loaded_media", lambda: None)
@@ -196,7 +196,7 @@ def test_n3_import_warnings_use_copyable_fluent_dialog(qapp, monkeypatch):
     assert captured["args"][1] == "导入完成（部分设置需注意）"
     assert captured["args"][2] == (
         "已导入 N3 项目，以下内容请检查：\n\n"
-        "• 帧率已调整为 60 fps\n"
+        "• 输出格式已改为 MP4\n"
         "• 歌词间隔使用默认布局"
     )
     assert captured["kwargs"] == {"copyable": True}

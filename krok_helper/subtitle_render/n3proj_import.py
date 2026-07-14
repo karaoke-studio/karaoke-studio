@@ -167,7 +167,8 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
     height = _int(source.get("BackgroundHeight"), 1080)
     fps = _int(source.get("Fps"), 60)
     if fps not in _SUPPORTED_FPS:
-        warnings.append(f"N3 项目帧率 {fps} fps 不在支持列表（60/120），已调整为 60 fps")
+        # The renderer only supports 60/120 fps. Unsupported N3 values are a
+        # hard compatibility boundary, so normalize to 60 without prompting.
         fps = 60
     screen = {"width": width, "height": height, "fps": fps, "par": "1:1"}
 
