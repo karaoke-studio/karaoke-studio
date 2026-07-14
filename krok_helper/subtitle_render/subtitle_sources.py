@@ -3,12 +3,11 @@
 输入：SUG ``NicokaraExporter`` 产物（``.lrc``，UTF-8-BOM + CRLF + 含 ``@Ruby`` /
 ``@Offset`` / ``@Title`` 等元数据），输出 :class:`TimingTrack` 中间表示。
 
-本模块照 ``nicokara_exporter.py`` 的格式规范实现，并对齐 SUG submodule 既有的权威
-解析器 ``strange_uta_game.backend.infrastructure.parsers.lyric_parser.NicokaraParser``
-的关键语义（尤其"绝不丢字"：行首/连读等无独立时间戳的字符必须保留）。本模块会保留
-``[start]多字[next]`` 的共享时间块元数据；解析阶段仍生成兼容旧消费者的
-等分 ``start_ms``，Python Painter 再按当前字体的字符布局宽度重新分时，以对齐 SUG
-``KaraokePreview`` 的无独立时间戳多字走字。
+本模块照 ``nicokara_exporter.py`` 的格式规范实现，并对齐 NicoKaraMaker3 的 LRC
+时间补全语义（尤其"绝不丢字"：行首/连读等无独立时间戳的字符必须保留）。
+``[start]多字[next]`` 按非空白 Unicode 文本元素的数量等分；显式定时空格保留完整
+区间，块内无独立时间的空格不消耗走字时间。这里直接产出最终字符起点，不把 LRC
+共享块交给 Painter 按字体宽度二次分配；SUG ``.sug`` 直读仍保留原有宽度加权语义。
 规范要点（详见导出器源码）：
 
 - 时间戳 ``[MM:SS:CC]`` 厘秒精度
@@ -24,6 +23,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
@@ -229,11 +229,18 @@ def _parse_body_line(
                     if singer_label is None:
                         singer_label = active_role
                     continue
-                for ch in value:
+                for ch in _text_elements(value):
                     leading_buffer.append((ch, active_role))
             continue
         next_ts = _next_token_ts(tokens, token_index)
-        visible_count = sum(len(value) for kind, value in parts if kind == "text")
+        text_entries: list[tuple[str, Optional[str]]] = []
+        role_for_entry = active_role
+        for kind, value in parts:
+            if kind == "role":
+                role_for_entry = value
+                continue
+            text_entries.extend((element, role_for_entry) for element in _text_elements(value))
+        visible_count = len(text_entries)
         if visible_count <= 0:
             for kind, value in parts:
                 if kind != "role":
@@ -244,26 +251,21 @@ def _parse_body_line(
             continue
         # 行首缓存字符补回：以本组的起点 ts 作为它们的起始（与本组首字共享时间）。
         if leading_buffer:
-            leading_count = len(leading_buffer)
-            for offset, (ch, role) in enumerate(leading_buffer):
+            for ch, role in leading_buffer:
                 chars.append(
                     TimingChar(
                         text=ch,
                         start_ms=pending_ts,
                         role_label=role,
-                        source_span_start_ms=pending_ts,
-                        source_span_end_ms=pending_ts,
-                        source_span_index=offset,
-                        source_span_count=leading_count,
                     )
                 )
             leading_buffer.clear()
-        char_starts = _spread_text_starts(pending_ts, next_ts, visible_count)
-        shared_span = (
-            visible_count > 1
-            and next_ts is not None
-            and next_ts > pending_ts
+        char_starts = _spread_text_starts(
+            pending_ts,
+            next_ts,
+            [element for element, _role in text_entries],
         )
+        unresolved_tail = visible_count > 1 and next_ts is None
         start_index = 0
         for kind, value in parts:
             if kind == "role":
@@ -271,16 +273,19 @@ def _parse_body_line(
                 if singer_label is None:
                     singer_label = active_role
                 continue
-            for ch in value:
+            for ch in _text_elements(value):
                 chars.append(
                     TimingChar(
                         text=ch,
                         start_ms=char_starts[start_index],
                         role_label=active_role,
-                        source_span_start_ms=pending_ts if shared_span else None,
-                        source_span_end_ms=next_ts if shared_span else None,
-                        source_span_index=start_index if shared_span else 0,
-                        source_span_count=visible_count if shared_span else 1,
+                        # Temporary parser marker. Cross-line completion uses
+                        # the following line start, then clears these fields so
+                        # Painter cannot apply SUG's width-weighted span logic.
+                        source_span_start_ms=pending_ts if unresolved_tail else None,
+                        source_span_end_ms=None,
+                        source_span_index=start_index if unresolved_tail else 0,
+                        source_span_count=visible_count if unresolved_tail else 1,
                     )
                 )
                 start_index += 1
@@ -292,17 +297,12 @@ def _parse_body_line(
     # 行内有时间戳、但行首缓存字符一直没机会补回（如 ` [ts]` 仅"行首文本 + 结束 ts"）：
     # 用行末 ts 作为起点补回，仍不丢字。完全无时间戳的纯文本行保持空行语义（丢弃缓存）。
     if leading_buffer and end_ms is not None:
-        leading_count = len(leading_buffer)
-        for offset, (ch, role) in enumerate(leading_buffer):
+        for ch, role in leading_buffer:
             chars.append(
                 TimingChar(
                     text=ch,
                     start_ms=end_ms,
                     role_label=role,
-                    source_span_start_ms=end_ms,
-                    source_span_end_ms=end_ms,
-                    source_span_index=offset,
-                    source_span_count=leading_count,
                 )
             )
         leading_buffer.clear()
@@ -322,132 +322,75 @@ def _parse_body_line(
 
 
 def _normalize_cross_line_anchors(lines: list[TimingLine]) -> None:
-    _normalize_space_release_anchors(lines)
-    _normalize_trailing_unclosed_blocks(lines)
     _borrow_missing_line_ends(lines)
-
-    previous_end_ms: Optional[int] = None
-    for line in lines:
-        if line.is_blank or not line.chars:
-            continue
-        leading_count = _leading_unanchored_count(line)
-        leader_ms = _line_leader_ms(line)
-        if (
-            leading_count > 0
-            and leader_ms is not None
-            and previous_end_ms is not None
-            and previous_end_ms < leader_ms
-        ):
-            starts = _spread_text_starts(previous_end_ms, leader_ms, leading_count)
-            for offset, ch in enumerate(line.chars[:leading_count]):
-                ch.start_ms = starts[offset]
-                ch.source_span_start_ms = previous_end_ms
-                ch.source_span_end_ms = leader_ms
-                ch.source_span_index = offset
-                ch.source_span_count = leading_count
-        if line.end_ms is not None:
-            previous_end_ms = line.end_ms
-
-
-def _normalize_space_release_anchors(lines: list[TimingLine]) -> None:
-    """Make exported LRC space-release anchors behave like direct SUG loading.
-
-    SUG stores a short phrase break as ``previous timed char`` + an untimed
-    space + ``next timed char``.  Nicokara LRC exports the same pause as a
-    timestamp before the space.  For rendering parity, merge the previous char
-    and the space into one shared span ending at the next non-space char.
-    """
-
-    for line in lines:
-        if line.is_blank or len(line.chars) < 3:
-            continue
-        chars = line.chars
-        for index in range(1, len(chars) - 1):
-            previous = chars[index - 1]
-            current = chars[index]
-            following = chars[index + 1]
-            if (
-                not current.text.isspace()
-                or previous.text.isspace()
-                or following.text.isspace()
-                or previous.role_label != current.role_label
-                or current.role_label != following.role_label
-                or not _is_plain_timing_char(previous)
-                or not _is_plain_timing_char(current)
-                or not (previous.start_ms < current.start_ms < following.start_ms)
-            ):
-                continue
-            _apply_shared_span(
-                [previous, current],
-                start_ms=previous.start_ms,
-                end_ms=following.start_ms,
-            )
+    _normalize_trailing_unclosed_blocks(lines)
 
 
 def _normalize_trailing_unclosed_blocks(lines: list[TimingLine]) -> None:
     """Spread a final multi-char block with no explicit line end to next line.
 
-    Direct SUG loading uses the next sentence's first timestamp as the final
-    untimed group end.  LRC export omits an explicit trailing timestamp for
-    some lines (for example ``[01:04:48]love``), so reproduce the SUG span
-    before the compatibility ``line.end_ms`` borrow runs.
+    N3 uses the next sentence's first timestamp as the final untimed group end.
+    LRC export omits an explicit trailing timestamp for some lines (for example
+    ``[01:04:48]love``), so apply the same count-based completion after the
+    compatibility ``line.end_ms`` borrow runs.
     """
 
-    for index, line in enumerate(lines):
-        if line.is_blank or not line.chars or line.end_ms is not None:
+    for line in lines:
+        if line.is_blank or not line.chars or line.end_ms is None:
             continue
-        end_ms = _next_line_leader_ms(lines, index + 1)
-        if end_ms is None:
-            continue
+        end_ms = line.end_ms
         chars = line.chars
-        group_start = len(chars) - 1
-        start_ms = chars[group_start].start_ms
-        while (
-            group_start > 0
-            and chars[group_start - 1].start_ms == start_ms
-            and _is_plain_timing_char(chars[group_start - 1])
+        last = chars[-1]
+        group_count = int(last.source_span_count)
+        if (
+            group_count <= 1
+            or group_count > len(chars)
+            or last.source_span_index != group_count - 1
+            or last.source_span_end_ms is not None
         ):
-            group_start -= 1
+            continue
+        group_start = len(chars) - group_count
         group = chars[group_start:]
-        if len(group) <= 1 or end_ms <= start_ms:
+        start_ms = last.source_span_start_ms
+        if start_ms is None or end_ms <= start_ms:
+            for ch in group:
+                _clear_source_span(ch)
             continue
-        if not all(_is_plain_timing_char(ch) for ch in group):
+        if any(
+            ch.source_span_start_ms != start_ms
+            or ch.source_span_end_ms is not None
+            or ch.source_span_index != offset
+            or ch.source_span_count != group_count
+            for offset, ch in enumerate(group)
+        ):
             continue
-        _apply_shared_span(group, start_ms=start_ms, end_ms=end_ms)
+        starts = _spread_text_starts(
+            start_ms,
+            end_ms,
+            [ch.text for ch in group],
+        )
+        for ch, resolved_start in zip(group, starts):
+            ch.start_ms = resolved_start
+            _clear_source_span(ch)
 
 
-def _apply_shared_span(
-    chars: list[TimingChar],
-    *,
-    start_ms: int,
-    end_ms: int,
-) -> None:
-    starts = _spread_text_starts(start_ms, end_ms, len(chars))
-    for offset, ch in enumerate(chars):
-        ch.start_ms = starts[offset]
-        ch.source_span_start_ms = start_ms
-        ch.source_span_end_ms = end_ms
-        ch.source_span_index = offset
-        ch.source_span_count = len(chars)
-
-
-def _is_plain_timing_char(ch: TimingChar) -> bool:
-    return (
-        ch.source_span_start_ms is None
-        and ch.source_span_end_ms is None
-        and ch.source_span_index == 0
-        and ch.source_span_count == 1
-    )
-
+def _clear_source_span(ch: TimingChar) -> None:
+    ch.source_span_start_ms = None
+    ch.source_span_end_ms = None
+    ch.source_span_index = 0
+    ch.source_span_count = 1
 
 def _borrow_missing_line_ends(lines: list[TimingLine]) -> None:
     for index, line in enumerate(lines):
         if line.is_blank or not line.chars or line.end_ms is not None:
             continue
         next_start = _next_line_leader_ms(lines, index + 1)
-        if next_start is None or next_start < line.chars[-1].start_ms:
+        if next_start is not None and next_start >= line.chars[-1].start_ms:
+            line.end_ms = next_start
             continue
-        line.end_ms = next_start
+        # N3 的最后一行没有后继锚点时，把末字符结束补为最后一个有效起点，
+        # 即未闭合尾组为零时长，而不是凭空延长到播放器末尾。
+        line.end_ms = line.chars[-1].start_ms
 
 
 def _next_line_leader_ms(lines: list[TimingLine], start_index: int) -> Optional[int]:
@@ -461,34 +404,7 @@ def _next_line_leader_ms(lines: list[TimingLine], start_index: int) -> Optional[
 def _line_leader_ms(line: TimingLine) -> Optional[int]:
     if not line.chars:
         return None
-    leading_count = _leading_unanchored_count(line)
-    if leading_count > 0:
-        end_ms = line.chars[0].source_span_end_ms
-        if end_ms is not None:
-            return end_ms
     return line.chars[0].start_ms
-
-
-def _leading_unanchored_count(line: TimingLine) -> int:
-    if not line.chars:
-        return 0
-    first = line.chars[0]
-    count = int(first.source_span_count)
-    start = first.source_span_start_ms
-    end = first.source_span_end_ms
-    if count <= 0 or start is None or end is None or start != end:
-        return 0
-    if count > len(line.chars):
-        return 0
-    for offset, ch in enumerate(line.chars[:count]):
-        if (
-            ch.source_span_start_ms != start
-            or ch.source_span_end_ms != end
-            or ch.source_span_index != offset
-            or ch.source_span_count != count
-        ):
-            return 0
-    return count
 
 
 def _split_role_labels(text: str) -> list[tuple[str, str]]:
@@ -518,20 +434,51 @@ def _next_token_ts(tokens: list[tuple[str, object]], token_index: int) -> Option
 def _spread_text_starts(
     start_ms: int,
     next_ts_ms: Optional[int],
-    char_count: int,
+    elements: list[str],
 ) -> list[int]:
-    """Generate compatibility starts for multiple chars in ``[start]text[next]``.
+    """Apply N3 ``ComplementTimes`` semantics to one timestamp-delimited block.
 
-    ``TimingChar.source_span_*`` preserves the original shared block. Horizontal
-    Python rendering uses those fields to redistribute the span by glyph layout
-    width; these equal starts remain for consumers that do not have font metrics.
+    Time is divided by the number of non-space text elements. Untimed spaces
+    share the following boundary and consume no duration; a standalone timed
+    space still retains the whole interval through the next character start.
     """
-    if char_count <= 0:
+    if not elements:
         return []
-    if char_count == 1 or next_ts_ms is None or next_ts_ms <= start_ms:
-        return [start_ms] * char_count
+    if next_ts_ms is None or next_ts_ms <= start_ms:
+        return [start_ms] * len(elements)
+    timed_count = sum(not element.isspace() for element in elements)
+    if timed_count <= 0:
+        return [start_ms] * len(elements)
     duration = next_ts_ms - start_ms
-    return [start_ms + (duration * i) // char_count for i in range(char_count)]
+    completed = 0
+    starts: list[int] = []
+    for element in elements:
+        starts.append(start_ms + (duration * completed) // timed_count)
+        if not element.isspace():
+            completed += 1
+    return starts
+
+
+def _text_elements(text: str) -> list[str]:
+    """Split text like .NET ``StringInfo`` instead of iterating code points.
+
+    N3 assigns time per Unicode text element. Python's standard library has no
+    full grapheme-break iterator, but combining marks, variation selectors,
+    emoji skin-tone modifiers and ZWJ sequences cover the forms used by LRC.
+    """
+    elements: list[str] = []
+    join_next = False
+    for char in text:
+        codepoint = ord(char)
+        combining = unicodedata.category(char) in {"Mn", "Mc", "Me"}
+        variation = 0xFE00 <= codepoint <= 0xFE0F or 0xE0100 <= codepoint <= 0xE01EF
+        emoji_modifier = 0x1F3FB <= codepoint <= 0x1F3FF
+        if elements and (combining or variation or emoji_modifier or join_next or char == "\u200d"):
+            elements[-1] += char
+        else:
+            elements.append(char)
+        join_next = char == "\u200d"
+    return elements
 
 
 # ---------------------------------------------------------------------------

@@ -137,6 +137,8 @@ class _FillSegment:
     end_ms: int = 0
     ruby: RubyAnnotation | None = None
     indices: tuple[int, ...] = ()
+    release_left: int | None = None
+    release_right: int | None = None
 
 
 @dataclass(frozen=True)
@@ -4435,6 +4437,7 @@ def _layout_plain_line(
     ink_x_ranges = _role_char_ink_ranges_by_index(line, text_layout, char_x_ranges)
     fill_segments = _karaoke_fill_segments(
         char_widths, intervals, ink_x_ranges, active_rubies, line,
+        release_x_ranges=char_x_ranges,
     )
     line_rect = QRectF(
         float(x0), float(y - metrics.ascent()), float(total_w), float(metrics.height()),
@@ -4916,6 +4919,7 @@ def _layout_role_line(
     ink_x_ranges = _role_char_ink_ranges_by_index(line, text_layout, char_x_ranges)
     fill_segments = _karaoke_fill_segments(
         char_widths, intervals, ink_x_ranges, active_rubies, line,
+        release_x_ranges=char_x_ranges,
     )
     ruby_layouts = tuple(
         _layout_rubies(
@@ -7555,20 +7559,26 @@ def _karaoke_fill_segments(
     ink_x_ranges: list[tuple[int, int]],
     active_rubies: list[RubyAnnotation],
     line: TimingLine,
+    *,
+    release_x_ranges: list[tuple[int, int]] | None = None,
 ) -> list[_FillSegment]:
     """构造走字分段。``ink_x_ranges`` 为各字符的墨水边界（非 advance 框），
     扫光锋面据此推进，确保不扫过字形两侧的透明空白（见 :func:`_char_ink_x_ranges`）。"""
     segments: list[_FillSegment] = []
+    release_x_ranges = release_x_ranges or ink_x_ranges
     index = 0
     while index < len(char_widths):
         ruby = _ruby_for_char_index(active_rubies, line, intervals, index)
         if ruby is None:
             left, right = ink_x_ranges[index]
+            release_left, release_right = release_x_ranges[index]
             start, end = intervals[index]
             segments.append(
                 _FillSegment(
                     left=left,
                     right=right,
+                    release_left=release_left,
+                    release_right=release_right,
                     start_ms=start,
                     end_ms=end,
                     indices=(index,),
@@ -7581,11 +7591,14 @@ def _karaoke_fill_segments(
         indices = [i for i in indices if 0 <= i < len(ink_x_ranges)]
         if not indices:
             left, right = ink_x_ranges[index]
+            release_left, release_right = release_x_ranges[index]
             start, end = intervals[index]
             segments.append(
                 _FillSegment(
                     left=left,
                     right=right,
+                    release_left=release_left,
+                    release_right=release_right,
                     start_ms=start,
                     end_ms=end,
                     indices=(index,),
@@ -7596,16 +7609,44 @@ def _karaoke_fill_segments(
 
         left = min(ink_x_ranges[i][0] for i in indices)
         right = max(ink_x_ranges[i][1] for i in indices)
+        release_left = min(release_x_ranges[i][0] for i in indices)
+        release_right = max(release_x_ranges[i][1] for i in indices)
         segments.append(
             _FillSegment(
                 left=left,
                 right=right,
+                release_left=release_left,
+                release_right=release_right,
                 ruby=_effective_ruby_for_target(ruby, indices, intervals),
                 indices=tuple(indices),
             )
         )
         index = max(indices) + 1
-    return segments
+    return _adjust_fill_release_edges(segments)
+
+
+def _adjust_fill_release_edges(segments: list[_FillSegment]) -> list[_FillSegment]:
+    """Apply N3 ``AdjustWipeEnd`` at overlapping character boxes.
+
+    N3 releases a completed character through its DrawRight. If that boundary
+    overlaps the following character's DrawLeft, it stops exactly at the next
+    DrawLeft instead. This keeps the completed outline from retaining a small
+    before-colour tail without colouring the following glyph early.
+    """
+    adjusted = list(segments)
+    for index in range(len(adjusted) - 1):
+        current = adjusted[index]
+        following = adjusted[index + 1]
+        current_left = current.release_left if current.release_left is not None else current.left
+        current_right = current.release_right if current.release_right is not None else current.right
+        following_left = following.release_left if following.release_left is not None else following.left
+        following_right = following.release_right if following.release_right is not None else following.right
+        if current_left <= following_left:
+            if current_right >= following_left:
+                adjusted[index] = replace(current, release_right=following_left)
+        elif current_left <= following_right:
+            adjusted[index] = replace(current, release_left=following_right)
+    return adjusted
 
 
 def _ruby_for_char_index(
@@ -7703,6 +7744,12 @@ def _offset_fill_segments(segments: list[_FillSegment], dx: int) -> list[_FillSe
         _FillSegment(
             left=segment.left + dx,
             right=segment.right + dx,
+            release_left=(
+                segment.release_left + dx if segment.release_left is not None else None
+            ),
+            release_right=(
+                segment.release_right + dx if segment.release_right is not None else None
+            ),
             start_ms=segment.start_ms,
             end_ms=segment.end_ms,
             ruby=segment.ruby,
@@ -7722,25 +7769,24 @@ def _fill_extent_end(
 ) -> int:
     """Return the current right edge of the continuous karaoke scan.
 
-    句中停顿（前一段唱完、下一段未开始）时前沿推进到两段墨水间隙的中点：
-    描边/发光比墨水各宽出半个外扩，前沿若停在已唱段墨水右缘，会把它的描边
-    尾巴留在走字前状态（用户可见的「wipe 不完全小尾巴」）；推进到间隙中点
-    既完整覆盖已唱段的视觉外扩，又不会提前染到未唱段的描边左缘。行尾停顿
-    由 ``_run_fill_complete`` 的整体裁剪释放处理，不走此分支。
+    Partial motion follows glyph ink. At a character end, release through its
+    N3-style DrawRight (the layout box including edge width), already clamped
+    by :func:`_adjust_fill_release_edges` when the next box overlaps.
     """
     if not segments:
         return 0
     fill_end = segments[0].left
-    previous_complete = False
     for segment in segments:
         ratio = _segment_fill_ratio(segment, t_ms)
         if ratio <= 0.0:
-            if previous_complete and segment.left > fill_end:
-                fill_end += (segment.left - fill_end) // 2
             break
         if ratio >= 1.0:
-            fill_end = max(fill_end, segment.right)
-            previous_complete = True
+            release_right = (
+                segment.release_right
+                if segment.release_right is not None
+                else segment.right
+            )
+            fill_end = max(fill_end, release_right)
             continue
         fill_end = max(
             fill_end,
@@ -7758,16 +7804,17 @@ def _fill_extent_left(segments: list[_FillSegment], t_ms: int) -> int:
     if not segments:
         return 0
     scanline = segments[0].right
-    previous_complete = False
     for segment in segments:
         ratio = _segment_fill_ratio(segment, t_ms)
         if ratio <= 0.0:
-            if previous_complete and segment.right < scanline:
-                scanline -= (scanline - segment.right) // 2
             break
         if ratio >= 1.0:
-            scanline = min(scanline, segment.left)
-            previous_complete = True
+            release_left = (
+                segment.release_left
+                if segment.release_left is not None
+                else segment.left
+            )
+            scanline = min(scanline, release_left)
             continue
         scanline = min(
             scanline,

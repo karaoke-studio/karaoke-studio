@@ -43,18 +43,7 @@ def test_multi_char_block_is_evenly_spread_until_next_timestamp():
 
     assert [c.text for c in line.chars] == ["ど", "う", "し"]
     assert [c.start_ms for c in line.chars] == [38_050, 38_185, 38_320]
-    assert [
-        (
-            c.source_span_start_ms,
-            c.source_span_end_ms,
-            c.source_span_index,
-            c.source_span_count,
-        )
-        for c in line.chars[:2]
-    ] == [
-        (38_050, 38_320, 0, 2),
-        (38_050, 38_320, 1, 2),
-    ]
+    assert all(c.source_span_start_ms is None for c in line.chars)
     assert line.chars[2].source_span_start_ms is None
     assert line.chars[2].source_span_count == 1
     assert line.end_ms == 38_370
@@ -409,7 +398,7 @@ def test_leading_text_before_first_timestamp_is_kept():
     assert line.chars[0].start_ms == 500  # 行首字符以第一个 ts 为起点
 
 
-def test_leading_text_borrows_previous_line_end_as_shared_span():
+def test_leading_text_starts_at_first_timestamp_like_n3():
     track = parse_nicokara_lrc(
         "[00:01:00]あ[00:02:00]\n"
         " い[00:03:00]う[00:04:00]\n"
@@ -417,19 +406,17 @@ def test_leading_text_borrows_previous_line_end_as_shared_span():
     line = track.lines[1]
 
     assert "".join(c.text for c in line.chars) == " いう"
-    assert [c.start_ms for c in line.chars[:2]] == [2_000, 2_500]
-    assert [
-        (
-            c.source_span_start_ms,
-            c.source_span_end_ms,
-            c.source_span_index,
-            c.source_span_count,
-        )
-        for c in line.chars[:2]
-    ] == [
-        (2_000, 3_000, 0, 2),
-        (2_000, 3_000, 1, 2),
-    ]
+    assert [c.start_ms for c in line.chars[:2]] == [3_000, 3_000]
+    assert all(c.source_span_start_ms is None for c in line.chars)
+
+
+def test_leading_text_is_not_mistaken_for_unclosed_trailing_block():
+    track = parse_nicokara_lrc("xy[00:03:00]う[00:04:00]\n")
+    line = track.lines[0]
+
+    assert [c.text for c in line.chars] == ["x", "y", "う"]
+    assert [c.start_ms for c in line.chars] == [3_000, 3_000, 3_000]
+    assert line.end_ms == 4_000
 
 
 def test_missing_line_end_borrows_next_line_start():
@@ -442,7 +429,7 @@ def test_missing_line_end_borrows_next_line_start():
     assert track.lines[0].end_ms == 3_000
 
 
-def test_trailing_multi_char_block_without_line_end_aligns_sug_span():
+def test_trailing_multi_char_block_without_line_end_uses_n3_count_split():
     track = parse_nicokara_lrc(
         "[00:01:00]This [00:01:20]love\n"
         "[00:02:00]Next[00:02:50]\n"
@@ -456,20 +443,17 @@ def test_trailing_multi_char_block_without_line_end_aligns_sug_span():
             ch.text,
             ch.start_ms,
             ch.source_span_start_ms,
-            ch.source_span_end_ms,
-            ch.source_span_index,
-            ch.source_span_count,
         )
         for ch in line.chars[-4:]
     ] == [
-        ("l", 1_200, 1_200, 2_000, 0, 4),
-        ("o", 1_400, 1_200, 2_000, 1, 4),
-        ("v", 1_600, 1_200, 2_000, 2, 4),
-        ("e", 1_800, 1_200, 2_000, 3, 4),
+        ("l", 1_200, None),
+        ("o", 1_400, None),
+        ("v", 1_600, None),
+        ("e", 1_800, None),
     ]
 
 
-def test_space_release_anchor_between_words_aligns_sug_span():
+def test_explicit_timed_space_keeps_its_own_n3_interval():
     track = parse_nicokara_lrc("[00:01:00]も[00:01:40] [00:02:00]憧[00:02:50]\n")
     line = track.lines[0]
 
@@ -479,16 +463,30 @@ def test_space_release_anchor_between_words_aligns_sug_span():
             ch.text,
             ch.start_ms,
             ch.source_span_start_ms,
-            ch.source_span_end_ms,
-            ch.source_span_index,
-            ch.source_span_count,
         )
         for ch in line.chars[:2]
     ] == [
-        ("も", 1_000, 1_000, 2_000, 0, 2),
-        (" ", 1_500, 1_000, 2_000, 1, 2),
+        ("も", 1_000, None),
+        (" ", 1_400, None),
     ]
     assert line.chars[2].start_ms == 2_000
+
+
+def test_untimed_space_inside_shared_block_consumes_no_n3_wipe_time():
+    track = parse_nicokara_lrc("[00:01:00]a b[00:02:00]\n")
+    line = track.lines[0]
+
+    assert [ch.text for ch in line.chars] == ["a", " ", "b"]
+    assert [ch.start_ms for ch in line.chars] == [1_000, 1_500, 1_500]
+    assert line.end_ms == 2_000
+
+
+def test_combining_sequence_is_one_n3_timed_text_element():
+    track = parse_nicokara_lrc("[00:01:00]か\u3099き[00:02:00]\n")
+    line = track.lines[0]
+
+    assert [ch.text for ch in line.chars] == ["か\u3099", "き"]
+    assert [ch.start_ms for ch in line.chars] == [1_000, 1_500]
 
 
 def test_emoji_tag_not_parsed_as_body_and_kept_in_custom():

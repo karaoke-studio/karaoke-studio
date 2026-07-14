@@ -1913,12 +1913,8 @@ def test_nicokara_space_width_uses_font_percentage_and_edge(qapp):
     assert layout.char_widths == [29]
 
 
-def test_shared_lrc_text_span_uses_rendered_char_widths_for_timing(qapp, monkeypatch):
-    """``[start]多字[next]`` 在横排 Painter 中按当前字体 advance 分时。
-
-    解析器保留等分 ``start_ms`` 供无字体消费者兼容；真正渲染 layout 必须覆盖为
-    SUG 同款的像素宽度加权区间。选 ``W`` / ``i`` 是为了确保比例明显不等于 1:1。
-    """
+def test_lrc_text_span_keeps_n3_count_timing_in_painter(qapp, monkeypatch):
+    """LRC 由解析器按 N3 字符数补时，Painter 不再按字体宽度二次分配。"""
     track = parse_nicokara_lrc("[00:01:00]Wi[00:02:00]\n")
     line = track.lines[0]
     from krok_helper.subtitle_render.engine import painter as painter_module  # noqa: PLC0415
@@ -1956,10 +1952,7 @@ def test_shared_lrc_text_span_uses_rendered_char_widths_for_timing(qapp, monkeyp
         / sum(layout.char_widths)
     )
     assert expected_boundary != 1500
-    assert layout.intervals == [
-        (1000, expected_boundary),
-        (expected_boundary, 2000),
-    ]
+    assert layout.intervals == [(1000, 1500), (1500, 2000)]
 
 
 def test_character_fill_ratio_honors_ink_ranges(qapp):
@@ -2838,12 +2831,8 @@ def test_ruby_timing_drives_main_text_fill_extent(qapp):
     assert _fill_extent_end(segments, 2400) == 146
 
 
-def test_fill_extent_rests_at_gap_midpoint_during_pause(qapp):
-    """句中停顿：前沿推进到墨水间隙中点，盖住已唱字符的描边/发光外扩。
-
-    前沿若停在已唱段墨水右缘，描边尾巴会留在走字前状态（wipe 不完全的
-    「小尾巴」）；行尾停顿由 run 级裁剪释放处理，不经此路径。
-    """
+def test_fill_extent_releases_completed_character_to_n3_draw_edge(qapp):
+    """句中停顿停在已唱字符 DrawRight，不用与下一字间隙中点猜边界。"""
     from krok_helper.subtitle_render.engine.painter import _fill_extent_left
 
     segments = [
@@ -2851,11 +2840,10 @@ def test_fill_extent_rests_at_gap_midpoint_during_pause(qapp):
         # 墨水间隙 200→240，时间停顿 2000→2500
         _FillSegment(240, 300, 2500, 3000, indices=(1,)),
     ]
-    # 唱到一半 / 恰好唱完瞬间：不受影响
+    # 没有单独 release 边界的合成 segment 回退到墨水边界。
     assert _fill_extent_end(segments, 1500) == 150
-    assert _fill_extent_end(segments, 2000) == 220  # 停顿开始即推进到中点
-    # 停顿中：前沿在间隙中点 (200+240)//2
-    assert _fill_extent_end(segments, 2300) == 220
+    assert _fill_extent_end(segments, 2000) == 200
+    assert _fill_extent_end(segments, 2300) == 200
     # 下一段开始后：正常从其墨水左缘继续，前沿单调不回退
     assert _fill_extent_end(segments, 2750) == 270
     # 未开始时不受 previous_complete 影响
@@ -2866,8 +2854,57 @@ def test_fill_extent_rests_at_gap_midpoint_during_pause(qapp):
         _FillSegment(240, 300, 1000, 2000, indices=(0,)),
         _FillSegment(100, 200, 2500, 3000, indices=(1,)),
     ]
-    assert _fill_extent_left(rtl_segments, 2300) == 220
+    assert _fill_extent_left(rtl_segments, 2300) == 240
     assert _fill_extent_left(rtl_segments, 500) == 300
+
+
+def test_n3_release_edge_clamps_to_following_overlapping_draw_left(qapp):
+    segments = subtitle_painter._adjust_fill_release_edges(
+        [
+            _FillSegment(
+                100, 200, 1000, 1300, indices=(0,),
+                release_left=92, release_right=218,
+            ),
+            _FillSegment(
+                220, 280, 1700, 2000, indices=(1,),
+                release_left=210, release_right=290,
+            ),
+        ]
+    )
+
+    assert segments[0].release_right == 210
+    assert _fill_extent_end(segments, 1300) == 210
+    assert _fill_extent_end(segments, 1500) == 210
+
+
+def test_explicit_timed_space_has_layout_time_but_no_wipe_geometry(qapp):
+    track = parse_nicokara_lrc(
+        "[01:25:07]週[01:25:37] [01:25:76]バー[01:26:20]\n"
+    )
+    line = track.lines[0]
+    style = Style(
+        font_size_px=100,
+        stroke_width_px=15,
+        stroke2_width_px=5,
+        space_width_percent=20,
+        line_y_position="center",
+    )
+
+    layout = _layout_line(track, line, style, 1200, 300)
+
+    assert layout is not None
+    assert layout.intervals[:2] == [(85_070, 85_370), (85_370, 85_760)]
+    assert layout.fill_segments[1].left == layout.fill_segments[1].right
+    week_release = layout.fill_segments[0].release_right
+    assert week_release is not None
+    assert _fill_extent_end(layout.fill_segments, 85_370) == week_release
+    assert _fill_extent_end(layout.fill_segments, 85_600) == week_release
+
+    at_week_end = _blank()
+    during_space = _blank()
+    paint_frame(at_week_end, track, 85_370, style)
+    paint_frame(during_space, track, 85_600, style)
+    assert _pixel_hash(at_week_end) == _pixel_hash(during_space)
 
 
 def test_main_text_uses_all_ruby_checkpoints_even_when_reading_units_are_missing(qapp):

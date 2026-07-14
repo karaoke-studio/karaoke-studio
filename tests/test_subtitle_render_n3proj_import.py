@@ -739,6 +739,7 @@ def test_sequence_and_solid_background_are_imported(tmp_path):
 REAL_N3PROJ = Path(r"D:\カラオケ\songs\Marginality\1.n3proj")
 TACTIC_N3PROJ = Path(r"D:\カラオケ\songs\TACTIC\1.n3proj")
 DARK_SPIRAL_N3PROJ = Path(r"D:\カラオケ\songs\Dark spiral journey\1.n3proj")
+ISEKAI_GIRLS_N3PROJ = Path(r"D:\カラオケ\songs\異世界ガールズ♡トーク\1.n3proj")
 
 
 @pytest.mark.skipif(not REAL_N3PROJ.is_file(), reason="本机样例工程不存在")
@@ -796,6 +797,28 @@ def test_import_dark_spiral_layout_character_spacing_parity():
     assert style.title_overlay is not None
     assert style.title_overlay.layout_index == 4
     assert style.title_overlay.letter_spacing_px == 0
+
+
+@pytest.mark.skipif(
+    not ISEKAI_GIRLS_N3PROJ.is_file(), reason="異世界ガールズ♡トーク样例工程不存在"
+)
+def test_import_isekai_girls_uses_lrc_space_timing_not_n3_char_snapshot():
+    result = load_n3proj(ISEKAI_GIRLS_N3PROJ)
+    track = load_nicokara_lrc(Path(result.project_data["subtitle_path"]))
+    line = next(
+        line
+        for line in track.lines
+        if "".join(ch.text for ch in line.chars) == "それじゃまたね来週 バーイバーイ"
+    )
+    week_index = next(index for index, ch in enumerate(line.chars) if ch.text == "週")
+
+    assert [ch.text for ch in line.chars[week_index:week_index + 3]] == ["週", " ", "バ"]
+    assert [ch.start_ms for ch in line.chars[week_index:week_index + 3]] == [
+        85_070,
+        85_370,
+        85_760,
+    ]
+    assert all(ch.source_span_start_ms is None for ch in line.chars)
 
 
 CHORUS_LRC_TEXT = "[00:10:00]ラ[00:11:00]ラ[00:12:00]\n"
