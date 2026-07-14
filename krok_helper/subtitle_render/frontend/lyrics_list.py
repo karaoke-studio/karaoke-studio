@@ -31,7 +31,6 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QInputDialog,
     QLabel,
-    QMessageBox,
     QScrollArea,
     QStyle,
     QStyledItemDelegate,
@@ -60,6 +59,7 @@ from krok_helper.subtitle_render.engine.timeline import (
     assign_lanes,
 )
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
+from krok_helper.subtitle_render.frontend.fluent_dialogs import fluent_question
 from krok_helper.subtitle_render.models import (
     LYRICS_LAYOUT_FIELDS,
     LineAnimationOverride,
@@ -1533,15 +1533,16 @@ class LyricsPanel(DropPanel):
         )
         if mixed_count:
             display = role_name or _DEFAULT_ROLE_TEXT
-            choice = QMessageBox.question(
+            confirmed = fluent_question(
                 self,
                 "整行覆盖角色",
                 f"所选行中有 {mixed_count} 行包含逐字符角色分配，"
                 f"确定全部整行覆盖为“{display}”吗？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+                yes_text="覆盖",
+                no_text="取消",
+                default_cancel=True,
             )
-            if choice != QMessageBox.StandardButton.Yes:
+            if not confirmed:
                 return
         if self._title_mode:
             self.roleChanged.emit(rows[0], role_name)
@@ -1652,14 +1653,15 @@ class LyricsPanel(DropPanel):
             display = role_name if role_name else (
                 "标题默认" if self._title_mode else _DEFAULT_ROLE_TEXT
             )
-            choice = QMessageBox.question(
+            confirmed = fluent_question(
                 self,
                 "整行覆盖角色",
                 f"该行包含逐字符角色分配，确定整行覆盖为“{display}”吗？",
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                QMessageBox.StandardButton.No,
+                yes_text="覆盖",
+                no_text="取消",
+                default_cancel=True,
             )
-            if choice != QMessageBox.StandardButton.Yes:
+            if not confirmed:
                 # 还原显示为混合态（数据未写回，行内标签保持原样）
                 self._refresh_presentation(rows=[row])
                 return

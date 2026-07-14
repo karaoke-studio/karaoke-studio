@@ -133,6 +133,40 @@ def test_window_save_new_open_round_trip(qapp, monkeypatch, tmp_path):
     assert win._project_dirty is False
 
 
+@pytest.mark.parametrize(
+    ("choice", "save_result", "expected", "save_calls"),
+    [
+        (0, True, True, 1),
+        (0, False, False, 1),
+        (1, True, True, 0),
+        (2, True, False, 0),
+        (-1, True, False, 0),
+    ],
+)
+def test_unsaved_project_uses_fluent_save_discard_cancel_confirmation(
+    qapp, monkeypatch, choice, save_result, expected, save_calls
+):
+    win = _make_window(qapp, monkeypatch)
+    win._project_dirty = True
+    captured: dict[str, object] = {}
+
+    def fake_choice(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return choice
+
+    calls: list[bool] = []
+    monkeypatch.setattr(mw, "fluent_choice", fake_choice)
+    monkeypatch.setattr(
+        win, "_save_project", lambda: calls.append(True) or save_result
+    )
+
+    assert win._confirm_discard_changes() is expected
+    assert len(calls) == save_calls
+    assert captured["args"][3] == ["保存", "放弃", "取消"]
+    assert captured["kwargs"] == {"default": 2}
+
+
 def test_apply_project_data_does_not_mark_dirty(qapp, monkeypatch):
     win = _make_window(qapp, monkeypatch)
     win._project_dirty = False
@@ -745,11 +779,7 @@ def test_line_role_overwrite_on_mixed_row_asks_confirmation(qapp, monkeypatch):
     emitted: list[tuple[int, str]] = []
     panel.roleChanged.connect(lambda row, name: emitted.append((row, name)))
 
-    monkeypatch.setattr(
-        lyrics_list.QMessageBox,
-        "question",
-        lambda *a, **k: lyrics_list.QMessageBox.StandardButton.No,
-    )
+    monkeypatch.setattr(lyrics_list, "fluent_question", lambda *a, **k: False)
     panel.table_widget.item(0, lyrics_list.COL_ROLE).setData(
         Qt.ItemDataRole.UserRole, "B"
     )
@@ -757,11 +787,7 @@ def test_line_role_overwrite_on_mixed_row_asks_confirmation(qapp, monkeypatch):
     # 取消后角色列还原混合显示
     assert panel.table_widget.item(0, lyrics_list.COL_ROLE).text() == "混合"
 
-    monkeypatch.setattr(
-        lyrics_list.QMessageBox,
-        "question",
-        lambda *a, **k: lyrics_list.QMessageBox.StandardButton.Yes,
-    )
+    monkeypatch.setattr(lyrics_list, "fluent_question", lambda *a, **k: True)
     panel.table_widget.item(0, lyrics_list.COL_ROLE).setData(
         Qt.ItemDataRole.UserRole, "A"
     )

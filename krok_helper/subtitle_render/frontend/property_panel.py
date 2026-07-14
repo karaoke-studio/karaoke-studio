@@ -5365,14 +5365,15 @@ class PropertyPanel(QWidget):
         if index <= 0:
             return
         name = self._style.layouts[index - 1].name
-        result = QMessageBox.question(
+        confirmed = fluent_question(
             self,
             "删除布局",
             f"确定要删除布局“{name}”吗？\n使用它的歌词行（和标题）会回到默认布局。",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
+            yes_text="删除",
+            no_text="取消",
+            default_cancel=True,
         )
-        if result != QMessageBox.StandardButton.Yes:
+        if not confirmed:
             return
         layouts = list(self._style.layouts)
         del layouts[index - 1]

@@ -52,6 +52,7 @@ from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
     KaraokeColors,
     KaraokeColorState,
+    LyricsLayout,
     PaintFill,
     StylePreset,
     SubtitleStyleScheme,
@@ -117,6 +118,36 @@ def test_property_panel_uses_fluent_form_controls(qapp):
     assert isinstance(panel._add_layout_btn, TransparentToolButton)
     assert isinstance(panel._rename_layout_btn, TransparentToolButton)
     assert isinstance(panel._delete_layout_btn, TransparentToolButton)
+
+
+def test_delete_layout_uses_fluent_confirmation(qapp, monkeypatch):
+    panel = PropertyPanel()
+    panel.set_style(Style(layouts=[LyricsLayout(name="副歌布局")]))
+    panel._layout_combo.setCurrentIndex(panel._layout_combo.findData(1))
+    captured: dict[str, object] = {}
+
+    def reject(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return False
+
+    monkeypatch.setattr(pp, "fluent_question", reject)
+    panel._on_delete_layout()
+
+    assert [layout.name for layout in panel.subtitle_style.layouts] == ["副歌布局"]
+    assert captured["args"][1:3] == (
+        "删除布局",
+        "确定要删除布局“副歌布局”吗？\n使用它的歌词行（和标题）会回到默认布局。",
+    )
+    assert captured["kwargs"] == {
+        "yes_text": "删除",
+        "no_text": "取消",
+        "default_cancel": True,
+    }
+
+    monkeypatch.setattr(pp, "fluent_question", lambda *args, **kwargs: True)
+    panel._on_delete_layout()
+    assert panel.subtitle_style.layouts == []
 
 
 def test_property_panel_set_style_populates_controls(qapp):

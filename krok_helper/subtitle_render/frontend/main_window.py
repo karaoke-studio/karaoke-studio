@@ -88,6 +88,10 @@ from krok_helper.subtitle_render.engine.painter import (
 from krok_helper.subtitle_render.engine.renderer import RenderJob, render_subtitle_video
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
+from krok_helper.subtitle_render.frontend.fluent_dialogs import (
+    fluent_choice,
+    fluent_question,
+)
 from krok_helper.subtitle_render.frontend.lyrics_list import LyricsPanel
 from krok_helper.subtitle_render.frontend.playback import (
     PlaybackController,
@@ -1067,17 +1071,16 @@ class SubtitleRenderWindow(QWidget):
         """有未保存改动时弹确认；返回 True 表示可以继续（已处理）。"""
         if not self._project_dirty:
             return True
-        choice = QMessageBox.question(
+        choice = fluent_choice(
             self,
             "未保存的改动",
             "当前项目有未保存的改动，是否先保存？",
-            QMessageBox.StandardButton.Save
-            | QMessageBox.StandardButton.Discard
-            | QMessageBox.StandardButton.Cancel,
+            ["保存", "放弃", "取消"],
+            default=2,
         )
-        if choice == QMessageBox.StandardButton.Cancel:
+        if choice not in (0, 1):
             return False
-        if choice == QMessageBox.StandardButton.Save:
+        if choice == 0:
             return self._save_project()
         return True
 
@@ -2422,13 +2425,15 @@ class SubtitleRenderWindow(QWidget):
         if not 0 <= extra_index < len(self._extra_sources):
             return
         source = self._extra_sources[extra_index]
-        choice = QMessageBox.question(
+        confirmed = fluent_question(
             self,
             "移除副字幕源",
             f"确定移除副字幕源「{source.name}」？\n（不会删除歌词文件本身）",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            yes_text="移除",
+            no_text="取消",
+            default_cancel=True,
         )
-        if choice != QMessageBox.StandardButton.Yes:
+        if not confirmed:
             return
         del self._extra_sources[extra_index]
         self._active_source_index = 0
