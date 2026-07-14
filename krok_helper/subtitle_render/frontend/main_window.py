@@ -1460,6 +1460,8 @@ class SubtitleRenderWindow(QWidget):
 
         # 内容列限制最大宽度并水平居中，宽屏下表单不再拉满整行。
         column = QWidget()
+        column.setObjectName("SrExportColumn")
+        themed(column, lambda: "#SrExportColumn { background: transparent; }")
         column.setMaximumWidth(1200)
         column.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         layout = QVBoxLayout(column)
@@ -1485,6 +1487,8 @@ class SubtitleRenderWindow(QWidget):
         body_row.setContentsMargins(0, 0, 0, 0)
         body_row.setSpacing(16)
         settings_col = QWidget()
+        settings_col.setObjectName("SrExportSettingsCol")
+        themed(settings_col, lambda: "#SrExportSettingsCol { background: transparent; }")
         settings_col.setFixedWidth(430)
         settings_layout = QVBoxLayout(settings_col)
         settings_layout.setContentsMargins(0, 0, 0, 0)
@@ -1653,6 +1657,9 @@ class SubtitleRenderWindow(QWidget):
 
     def _labeled_export_control(self, label_text: str, control: QWidget) -> QWidget:
         box = QWidget()
+        # 工作台全局 QSS 会给裸 QWidget 刷底色，在白色卡片里会显出灰块
+        box.setObjectName("SrExportFieldBox")
+        themed(box, lambda: "#SrExportFieldBox { background: transparent; }")
         layout = QVBoxLayout(box)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
