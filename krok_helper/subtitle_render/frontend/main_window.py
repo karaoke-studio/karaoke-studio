@@ -165,7 +165,6 @@ BACKGROUND_MEDIA_FILTER = (
     + VIDEO_FILTER + ";;" + IMAGE_FILTER
 )
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
-OUTPUT_FILTER = "MP4 视频 (*.mp4);;所有文件 (*.*)"
 PROJECT_FILTER = f"字幕渲染项目 (*{PROJECT_FILE_SUFFIX});;所有文件 (*.*)"
 
 
@@ -698,7 +697,7 @@ class _RenderWorker(QObject):
 
 
 class _ExportMonitorView(QLabel):
-    """导出监视器画面（仿 N3 出力预览）：保持纵横比缩放显示最近合成帧。
+    """导出预览画面（仿 N3 出力预览）：保持纵横比缩放显示最近合成帧。
 
     无帧时显示占位文案；有帧后 resize 会用原图重新缩放，避免累积模糊。
     """
@@ -1041,7 +1040,7 @@ class SubtitleRenderWindow(QWidget):
                 encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
                 crf=self._export_crf_spin.value(),
                 preset=str(self._export_preset_combo.currentData() or "veryfast"),
-                output_path=self._export_output_edit.text().strip(),
+                output_path=self._export_output_text(),
                 native_export_enabled=False,
             ),
         )
@@ -1133,7 +1132,9 @@ class SubtitleRenderWindow(QWidget):
             self._export_crf_spin.setValue(crf)
         out_path = output.get("output_path")
         if isinstance(out_path, str) and out_path.strip():
-            self._export_output_edit.setText(out_path.strip())
+            path = Path(out_path.strip())
+            self._export_dir_edit.setText(str(path.parent))
+            self._export_name_edit.setText(path.stem)
         blocked = self._export_native_check.blockSignals(True)
         try:
             self._export_native_check.setChecked(False)
@@ -1482,7 +1483,7 @@ class SubtitleRenderWindow(QWidget):
         layout.addWidget(self._export_title_label)
         layout.addWidget(self._export_caption_label)
 
-        # 主体两栏：左·设置卡片列（定宽），右·导出监视器（吃掉剩余空间）
+        # 主体两栏：左·设置卡片列（定宽），右·导出预览（吃掉剩余空间）
         body_row = QHBoxLayout()
         body_row.setContentsMargins(0, 0, 0, 0)
         body_row.setSpacing(16)
@@ -1494,18 +1495,31 @@ class SubtitleRenderWindow(QWidget):
         settings_layout.setContentsMargins(0, 0, 0, 0)
         settings_layout.setSpacing(12)
 
-        # 卡片 1：输出文件
+        # 卡片 1：输出文件（第一行选文件夹，第二行文件名，扩展名固定 .mp4）
         output_card, output_layout = self._make_export_card("输出文件")
-        output_row = QHBoxLayout()
-        output_row.setContentsMargins(0, 0, 0, 0)
-        output_row.setSpacing(8)
-        self._export_output_edit = FluentLineEdit()
-        self._export_output_edit.setPlaceholderText("选择输出 MP4 路径")
+        dir_row = QHBoxLayout()
+        dir_row.setContentsMargins(0, 0, 0, 0)
+        dir_row.setSpacing(8)
+        self._export_dir_edit = FluentLineEdit()
+        self._export_dir_edit.setPlaceholderText("选择输出文件夹")
         self._export_browse_button = FluentPushButton(FIF.FOLDER, "浏览")
         self._export_browse_button.clicked.connect(self._browse_export_output)
-        output_row.addWidget(self._export_output_edit, 1)
-        output_row.addWidget(self._export_browse_button)
-        output_layout.addLayout(output_row)
+        dir_row.addWidget(self._export_dir_edit, 1)
+        dir_row.addWidget(self._export_browse_button)
+        output_layout.addLayout(dir_row)
+
+        name_row = QHBoxLayout()
+        name_row.setContentsMargins(0, 0, 0, 0)
+        name_row.setSpacing(8)
+        self._export_name_edit = FluentLineEdit()
+        self._export_name_edit.setPlaceholderText("文件名（默认：视频文件名_yurika出力）")
+        name_suffix = CaptionLabel(".mp4")
+        self._export_theme_labels.append(name_suffix)
+        name_row.addWidget(self._export_name_edit, 1)
+        name_row.addWidget(name_suffix)
+        output_layout.addLayout(name_row)
+        # 最近一次自动生成的文件名——用户没改过就跟随视频切换更新
+        self._export_auto_name = ""
         settings_layout.addWidget(output_card)
 
         # 卡片 2：画面与编码
@@ -1563,14 +1577,14 @@ class SubtitleRenderWindow(QWidget):
         settings_layout.addWidget(self._export_native_check)
         settings_layout.addStretch(1)
 
-        # 右栏：导出监视器（仿 N3 出力预览——边导出边显示 ffmpeg 合成帧）
+        # 右栏：导出预览（仿 N3 出力预览——边导出边显示 ffmpeg 合成帧）
         monitor_card = SimpleCardWidget()
         monitor_layout = QVBoxLayout(monitor_card)
         monitor_layout.setContentsMargins(20, 14, 20, 16)
         monitor_layout.setSpacing(10)
         monitor_header = QHBoxLayout()
         monitor_header.setContentsMargins(0, 0, 0, 0)
-        monitor_title = StrongBodyLabel("导出监视器")
+        monitor_title = StrongBodyLabel("导出预览")
         self._export_theme_labels.append(monitor_title)
         self._export_eta_label = CaptionLabel("")
         monitor_header.addWidget(monitor_title)
@@ -1613,7 +1627,7 @@ class SubtitleRenderWindow(QWidget):
         action_row.addWidget(self._export_stop_button)
         layout.addLayout(action_row)
 
-        # 导出监视器轮询：ffmpeg 持续覆盖写预览 JPG，定时读文件 mtime 变化后刷新
+        # 导出预览轮询：ffmpeg 持续覆盖写预览 JPG，定时读文件 mtime 变化后刷新
         self._export_preview_timer = QTimer(self)
         self._export_preview_timer.setInterval(500)
         self._export_preview_timer.timeout.connect(self._poll_export_preview)
@@ -1747,13 +1761,10 @@ class SubtitleRenderWindow(QWidget):
             self.load_audio(Path(path_str))
 
     def _browse_export_output(self) -> None:
-        start = self._default_export_path()
-        path_str, _ = QFileDialog.getSaveFileName(self, "导出字幕视频", str(start), OUTPUT_FILTER)
+        start = self._export_dir_edit.text().strip() or str(self._default_export_dir())
+        path_str = QFileDialog.getExistingDirectory(self, "选择输出文件夹", start)
         if path_str:
-            path = Path(path_str)
-            if path.suffix.lower() != ".mp4":
-                path = path.with_suffix(".mp4")
-            self._export_output_edit.setText(str(path))
+            self._export_dir_edit.setText(path_str)
 
     # ------------------------------------------------------------------ public
 
@@ -1853,8 +1864,7 @@ class SubtitleRenderWindow(QWidget):
         self._video_settings_panel.set_populated(True)
         self._preview_window.set_media_title(path)
         self._preview_window.show_near_workspace()
-        if not self._export_output_edit.text().strip():
-            self._export_output_edit.setText(str(self._default_export_path()))
+        self._prefill_export_output()
         # 视频自带音频 → 喂给 TransportBar 走 QMediaPlayer 播放
         if info.audio_streams > 0:
             self._audio_path = path
@@ -1929,8 +1939,7 @@ class SubtitleRenderWindow(QWidget):
         if source.path:
             self._preview_window.set_media_title(Path(source.path))
         self._preview_window.show_near_workspace()
-        if not self._export_output_edit.text().strip():
-            self._export_output_edit.setText(str(self._default_export_path()))
+        self._prefill_export_output()
         self._refresh_transport_duration()
         self._mark_project_dirty()
 
@@ -3159,16 +3168,48 @@ class SubtitleRenderWindow(QWidget):
             self._export_height_spin.value(),
         )
 
-    def _default_export_path(self) -> Path:
+    def _export_output_base(self) -> Optional[Path]:
+        """默认输出目录 / 文件名的来源素材：视频 > 背景素材 > 字幕文件。"""
         background_path = (
             Path(self._background_source.path)
             if self._background_source is not None and self._background_source.path
             else None
         )
-        base = self._video_path or background_path or self._subtitle_path
-        if base is None:
-            return Path.cwd() / "subtitle_render.mp4"
-        return base.with_name(f"{base.stem}_subtitle.mp4")
+        return self._video_path or background_path or self._subtitle_path
+
+    def _default_export_dir(self) -> Path:
+        base = self._export_output_base()
+        return base.parent if base is not None else Path.cwd()
+
+    def _default_export_name(self) -> str:
+        base = self._export_output_base()
+        stem = base.stem if base is not None else "subtitle_render"
+        return f"{stem}_yurika出力"
+
+    def _normalized_export_name(self) -> str:
+        """文件名输入框内容（用户手滑带上 .mp4 时剥掉，扩展名由拼装统一补）。"""
+        name = self._export_name_edit.text().strip()
+        if name.lower().endswith(".mp4"):
+            name = name[:-4].strip()
+        return name
+
+    def _export_output_text(self) -> str:
+        """当前输出全路径文本；目录或文件名为空时返回空串（存项目用）。"""
+        directory = self._export_dir_edit.text().strip()
+        name = self._normalized_export_name()
+        if not directory or not name:
+            return ""
+        return str(Path(directory) / f"{name}.mp4")
+
+    def _prefill_export_output(self) -> None:
+        """素材就位后预填输出目录 / 文件名；用户自定义过的文件名不覆盖。"""
+        if not self._export_dir_edit.text().strip():
+            self._export_dir_edit.setText(str(self._default_export_dir()))
+        current = self._export_name_edit.text().strip()
+        if not current or current == self._export_auto_name:
+            name = self._default_export_name()
+            self._export_name_edit.setText(name)
+            self._export_auto_name = name
 
     def _resolve_ffmpeg_dir(self) -> Optional[Path]:
         try:
@@ -3183,13 +3224,15 @@ class SubtitleRenderWindow(QWidget):
             raise ProcessingError("请先加载字幕文件。")
         if self._background_source is None:
             raise ProcessingError("请先选择背景源。")
-        output_text = self._export_output_edit.text().strip()
-        if not output_text:
-            raise ProcessingError("请先选择输出路径。")
-        output_path = Path(output_text).expanduser()
-        if output_path.suffix.lower() != ".mp4":
-            output_path = output_path.with_suffix(".mp4")
-            self._export_output_edit.setText(str(output_path))
+        directory = self._export_dir_edit.text().strip()
+        if not directory:
+            raise ProcessingError("请先选择输出文件夹。")
+        name = self._normalized_export_name()
+        if not name:
+            name = self._default_export_name()
+            self._export_name_edit.setText(name)
+            self._export_auto_name = name
+        output_path = Path(directory).expanduser() / f"{name}.mp4"
         duration_ms = self._current_export_duration_ms()
         return RenderJob(
             track=self._timing_track,
@@ -3239,7 +3282,7 @@ class SubtitleRenderWindow(QWidget):
         self._export_progress.setRange(0, 0)
         self._export_status_label.setText("正在准备导出…")
 
-        # 导出监视器：临时目录承接 ffmpeg 持续覆盖写入的合成帧
+        # 导出预览：临时目录承接 ffmpeg 持续覆盖写入的合成帧
         self._cleanup_export_preview_dir()
         try:
             self._export_preview_dir = Path(tempfile.mkdtemp(prefix="krok_export_preview_"))

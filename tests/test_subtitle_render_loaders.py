@@ -323,7 +323,8 @@ def test_build_render_job_uses_independent_audio_with_static_background(
     )
     monkeypatch.setattr(mw, "probe_media", lambda probe, path: audio_info)
     win.load_audio(audio)
-    win._export_output_edit.setText(str(tmp_path / "out.mp4"))
+    win._export_dir_edit.setText(str(tmp_path))
+    win._export_name_edit.setText("out")
 
     job = win._build_render_job()
 
@@ -441,7 +442,8 @@ def test_export_tab_builds_render_job_from_loaded_media(qapp, monkeypatch, tmp_p
     win.load_video(video)
 
     output = tmp_path / "custom.mp4"
-    win._export_output_edit.setText(str(output))
+    win._export_dir_edit.setText(str(tmp_path))
+    win._export_name_edit.setText("custom")
     win._export_width_spin.setValue(1280)
     win._export_height_spin.setValue(720)
     win._export_fps_combo.setCurrentIndex(win._export_fps_combo.findData(120))
@@ -464,6 +466,31 @@ def test_export_tab_builds_render_job_from_loaded_media(qapp, monkeypatch, tmp_p
     assert job.preset == "slow"
     assert job.crf == 23
     assert job.native_export_enabled is False
+
+
+def test_export_output_prefills_dir_and_yurika_name(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+
+    def _info(path):
+        return MediaInfo(
+            path=path, duration=5.0, video_streams=1, audio_streams=0,
+            subtitle_streams=0, video_width=320, video_height=180, video_fps=60.0,
+        )
+
+    monkeypatch.setattr(mw, "probe_media", lambda probe, path: _info(path))
+
+    win.load_video(tmp_path / "Dark spiral journey.mp4")
+    assert win._export_dir_edit.text() == str(tmp_path)
+    assert win._export_name_edit.text() == "Dark spiral journey_yurika出力"
+
+    # 文件名未被用户改过 → 跟随视频切换更新
+    win.load_video(tmp_path / "second.mp4")
+    assert win._export_name_edit.text() == "second_yurika出力"
+
+    # 用户自定义文件名后，切换视频不再覆盖
+    win._export_name_edit.setText("my custom")
+    win.load_video(tmp_path / "third.mp4")
+    assert win._export_name_edit.text() == "my custom"
 
 
 def test_stop_render_export_requests_worker_cancel(qapp, monkeypatch):
@@ -519,7 +546,8 @@ def test_window_shell_components_present(qapp, monkeypatch):
     assert win._export_crf_spin.value() == 18
     assert win._export_native_check is not None
     assert isinstance(win._bottom_navigation, SegmentedWidget)
-    assert isinstance(win._export_output_edit, LineEdit)
+    assert isinstance(win._export_dir_edit, LineEdit)
+    assert isinstance(win._export_name_edit, LineEdit)
     assert isinstance(win._export_encoder_combo, ComboBox)
     assert isinstance(win._export_crf_spin, SpinBox)
     assert isinstance(win._export_progress, ProgressBar)

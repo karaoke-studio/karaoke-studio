@@ -51,7 +51,7 @@ _MULTIPROC_WORKER_CAP = 8  # 进程数上限（每个 worker 一份 QApplication
 _MULTIPROC_MIN_FRAMES = 240  # 帧数低于此不值当 spawn，走单进程
 _CHUNK_TARGET_BYTES = 64 * 1024 * 1024  # 单个 chunk 目标字节（控内存 / IPC 粒度）
 
-# 导出监视器（仿 N3 出力预览）：把 ffmpeg 内合成后的成品流 split 一路，按视频时间
+# 导出预览（仿 N3 出力预览）：把 ffmpeg 内合成后的成品流 split 一路，按视频时间
 # 降频 + 缩宽后持续覆盖写入单张 JPG（image2 -update，原子写），UI 轮询该文件即可
 # 边导出边看画面。fps=2 → 60fps 输出下约每 30 帧刷新一次。
 _PREVIEW_FPS = 2
@@ -259,7 +259,7 @@ def build_render_command(
     贴回全幅背景；``None`` 时整帧输入、``overlay=0:0``（原行为）。
     ``bands`` = 多条 ``(y_top, height)``（方案 B）：竖向打包成一条 pipe，split/crop/overlay
     还原到各自原始 y；给定时优先于 ``strip``。
-    ``preview_image_path``：导出监视器 —— 把合成后的 ``[v]`` 再 split 一路，降频缩宽后
+    ``preview_image_path``：导出预览 —— 把合成后的 ``[v]`` 再 split 一路，降频缩宽后
     持续覆盖写入该 JPG（原子写），供 UI 边导出边轮询显示。
     """
     _validate_job(job)
