@@ -2700,16 +2700,6 @@ class KrokHelperQtApp(QMainWindow):
             return
         previous_module = self.active_module
         if (
-            module_id == WORKFLOW_SUBTITLE_RENDER
-            and previous_module != WORKFLOW_SUBTITLE_RENDER
-            and not getattr(self, "_preparing_subtitle_render_workflow", False)
-        ):
-            self._preparing_subtitle_render_workflow = True
-            try:
-                self._prepare_subtitle_render_from_workflow()
-            finally:
-                self._preparing_subtitle_render_workflow = False
-        if (
             previous_module == WORKFLOW_WAVEFORM_ALIGN
             and module_id != WORKFLOW_WAVEFORM_ALIGN
             and getattr(self, "align_preview_process", None) is not None
@@ -2721,23 +2711,6 @@ class KrokHelperQtApp(QMainWindow):
         self.page_stack.setCurrentWidget(self.module_pages[module_id])
         self.workflow_stepper.setCurrentModule(module_id)
         self._sync_workflow_shortcut_scope()
-
-    def _prepare_subtitle_render_from_workflow(self) -> object | None:
-        store = getattr(getattr(self, "lyrics_timing_page", None), "_store", None)
-        project = getattr(store, "project", None)
-        if project is None:
-            return None
-
-        save_path = getattr(store, "save_path", None)
-        source_path = Path(save_path).expanduser() if save_path else None
-        if self.subtitle_render_page.load_from_sug_project(
-            project, source_path=source_path
-        ) is None:
-            return None
-
-        if not getattr(self, "_preparing_subtitle_render_workflow", False):
-            self._show_module(WORKFLOW_SUBTITLE_RENDER)
-        return project
 
     def accept_subtitle_video(self, path: Path) -> None:
         self.set_video_path(path)

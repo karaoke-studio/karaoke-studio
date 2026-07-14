@@ -10,7 +10,6 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
-from krok_helper import gui_qt  # noqa: E402
 from krok_helper.gui_qt import (  # noqa: E402
     KrokHelperQtApp,
     WORKFLOW_HIRES_MIX,
@@ -27,67 +26,7 @@ def qapp():
     yield app
 
 
-def test_prepare_subtitle_render_loads_sug_project_directly(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    calls: dict[str, object] = {}
-    project = SimpleNamespace(
-        metadata=SimpleNamespace(title="Song:Title"),
-        singers=[
-            SimpleNamespace(id="s1", name="主唱"),
-            SimpleNamespace(id="s2", name="和声"),
-        ],
-    )
-
-    class FakeExportService:
-        def export(self, project_arg, format_name, file_path, **kwargs):
-            raise AssertionError("workflow should not export an intermediate Nicokara LRC")
-
-    class FakeSubtitlePage:
-        def load_from_sug_project(self, project_arg, source_path=None):
-            calls["loaded_project"] = project_arg
-            calls["source_path"] = source_path
-            return object()
-
-    monkeypatch.setattr(gui_qt, "ExportService", FakeExportService, raising=False)
-    monkeypatch.setattr(gui_qt.QMessageBox, "information", lambda *args, **kwargs: None)
-    monkeypatch.setattr(gui_qt.QMessageBox, "critical", lambda *args, **kwargs: None)
-
-    app = SimpleNamespace(
-        lyrics_timing_page=SimpleNamespace(
-            _store=SimpleNamespace(project=project, save_path=Path("song.sug"))
-        ),
-        subtitle_render_page=FakeSubtitlePage(),
-        _show_module=lambda module_id: calls.setdefault("shown", module_id),
-    )
-
-    result = KrokHelperQtApp._prepare_subtitle_render_from_workflow(app)
-
-    assert result == project
-    assert calls["loaded_project"] is project
-    assert calls["source_path"] == Path("song.sug")
-    assert calls["shown"] == WORKFLOW_SUBTITLE_RENDER
-
-
-def test_prepare_subtitle_render_without_sug_project_is_silent(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    messages: list[object] = []
-    monkeypatch.setattr(
-        gui_qt.QMessageBox,
-        "information",
-        lambda *args, **kwargs: messages.append((args, kwargs)),
-    )
-
-    app = SimpleNamespace(
-        lyrics_timing_page=SimpleNamespace(_store=SimpleNamespace(project=None)),
-    )
-
-    assert KrokHelperQtApp._prepare_subtitle_render_from_workflow(app) is None
-    assert messages == []
-
-
-def test_entering_subtitle_render_prepares_workflow_once() -> None:
+def test_entering_subtitle_render_only_switches_page() -> None:
     calls: list[str] = []
     widget = object()
 
@@ -98,38 +37,12 @@ def test_entering_subtitle_render_prepares_workflow_once() -> None:
         workflow_stepper=SimpleNamespace(setCurrentModule=lambda module: calls.append(f"step:{module}")),
         _sync_page_stack_margins=lambda module: calls.append(f"margin:{module}"),
         _sync_workflow_shortcut_scope=lambda: calls.append("shortcuts"),
-        _prepare_subtitle_render_from_workflow=lambda: calls.append("prepare") or object(),
+        _prepare_subtitle_render_from_workflow=lambda: calls.append("prepare"),
     )
 
     KrokHelperQtApp._show_module(app, WORKFLOW_SUBTITLE_RENDER)
 
     assert calls == [
-        "prepare",
-        f"margin:{WORKFLOW_SUBTITLE_RENDER}",
-        "page:True",
-        f"step:{WORKFLOW_SUBTITLE_RENDER}",
-        "shortcuts",
-    ]
-
-
-def test_entering_subtitle_render_does_not_require_sug_project() -> None:
-    calls: list[str] = []
-    widget = object()
-
-    app = SimpleNamespace(
-        module_pages={WORKFLOW_SUBTITLE_RENDER: widget},
-        active_module="lyrics_timing",
-        page_stack=SimpleNamespace(setCurrentWidget=lambda page: calls.append(f"page:{page is widget}")),
-        workflow_stepper=SimpleNamespace(setCurrentModule=lambda module: calls.append(f"step:{module}")),
-        _sync_page_stack_margins=lambda module: calls.append(f"margin:{module}"),
-        _sync_workflow_shortcut_scope=lambda: calls.append("shortcuts"),
-        _prepare_subtitle_render_from_workflow=lambda: calls.append("prepare") or None,
-    )
-
-    KrokHelperQtApp._show_module(app, WORKFLOW_SUBTITLE_RENDER)
-
-    assert calls == [
-        "prepare",
         f"margin:{WORKFLOW_SUBTITLE_RENDER}",
         "page:True",
         f"step:{WORKFLOW_SUBTITLE_RENDER}",
