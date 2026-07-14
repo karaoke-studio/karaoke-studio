@@ -201,6 +201,18 @@ def test_build_render_command_honors_cpu_quality_settings(tmp_path):
     assert command[command.index("-crf") + 1] == "23"
 
 
+def test_build_render_command_honors_hevc_codec(tmp_path):
+    job = replace(_job(tmp_path), codec="hevc")
+    command = build_render_command("ffmpeg", job)
+    assert command[command.index("-c:v") + 1] == "libx265"
+    assert command[command.index("-tag:v") + 1] == "hvc1"
+
+
+def test_build_render_command_rejects_bad_codec(tmp_path):
+    with pytest.raises(ProcessingError, match="视频编码"):
+        build_render_command("ffmpeg", replace(_job(tmp_path), codec="av1"))
+
+
 def test_build_render_command_honors_nvenc_encoder(tmp_path):
     job = replace(_job(tmp_path), encoder_mode="nvenc", crf=20)
 

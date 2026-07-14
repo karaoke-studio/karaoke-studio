@@ -76,6 +76,8 @@ from krok_helper.models import MediaInfo
 from krok_helper.qfluent_compat import apply_qfluent_menu_lifetime_patch
 from krok_helper.settings import load_app_settings, save_app_settings
 from krok_helper.subtitle_render.engine.encoder_select import (
+    CODEC_H264,
+    CODEC_HEVC,
     CPU_PRESETS,
     ENCODER_AMF,
     ENCODER_AUTO,
@@ -1041,6 +1043,7 @@ class SubtitleRenderWindow(QWidget):
                 encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
                 crf=self._export_crf_spin.value(),
                 preset=str(self._export_preset_combo.currentData() or "medium"),
+                codec=self._export_codec_value(),
                 output_path=self._export_output_text(),
                 native_export_enabled=False,
             ),
@@ -1131,6 +1134,11 @@ class SubtitleRenderWindow(QWidget):
         crf = output.get("crf")
         if isinstance(crf, int):
             self._export_crf_spin.setValue(crf)
+        codec = output.get("codec")
+        if isinstance(codec, str):
+            c_idx = self._export_codec_combo.findData(codec)
+            if c_idx >= 0:
+                self._export_codec_combo.setCurrentIndex(c_idx)
         out_path = output.get("output_path")
         if isinstance(out_path, str) and out_path.strip():
             path = Path(out_path.strip())
@@ -1549,7 +1557,7 @@ class SubtitleRenderWindow(QWidget):
         encode_row.setSpacing(10)
         self._export_encoder_combo = FluentComboBox()
         self._export_encoder_combo.setMinimumHeight(32)
-        self._export_encoder_combo.addItem("CPU / libx264", userData=ENCODER_CPU)
+        self._export_encoder_combo.addItem("CPU 软编", userData=ENCODER_CPU)
         self._export_encoder_combo.addItem("自动硬编", userData=ENCODER_AUTO)
         self._export_encoder_combo.addItem("NVIDIA NVENC", userData=ENCODER_NVENC)
         self._export_encoder_combo.addItem("Intel QSV", userData=ENCODER_QSV)
@@ -1557,6 +1565,23 @@ class SubtitleRenderWindow(QWidget):
         self._export_encoder_combo.currentIndexChanged.connect(
             self._update_export_preset_enabled
         )
+        self._export_codec_combo = FluentComboBox()
+        self._export_codec_combo.setMinimumHeight(32)
+        self._export_codec_combo.addItem("H.264 (AVC)", userData=CODEC_H264)
+        self._export_codec_combo.addItem("H.265 (HEVC)", userData=CODEC_HEVC)
+        self._export_codec_combo.setToolTip(
+            "H.265 同画质体积更小，但编码更慢、老设备兼容性略差。"
+        )
+        self._export_codec_combo.currentIndexChanged.connect(
+            self._refresh_export_format_label
+        )
+        encode_row.addWidget(self._labeled_export_control("编码器", self._export_encoder_combo))
+        encode_row.addWidget(self._labeled_export_control("视频编码", self._export_codec_combo))
+        params_layout.addLayout(encode_row)
+
+        quality_row = QHBoxLayout()
+        quality_row.setContentsMargins(0, 0, 0, 0)
+        quality_row.setSpacing(10)
         self._export_preset_combo = FluentComboBox()
         self._export_preset_combo.setMinimumHeight(32)
         for preset in CPU_PRESETS:
@@ -1564,10 +1589,9 @@ class SubtitleRenderWindow(QWidget):
         self._export_preset_combo.setCurrentText("medium")
         self._export_crf_spin = self._export_spin(0, 51, 18, "")
         self._export_crf_spin.setToolTip("CRF 质量：数值越小画质越高、文件越大；18 约为视觉无损。")
-        encode_row.addWidget(self._labeled_export_control("编码器", self._export_encoder_combo))
-        encode_row.addWidget(self._labeled_export_control("CPU preset", self._export_preset_combo))
-        encode_row.addWidget(self._labeled_export_control("质量 (CRF)", self._export_crf_spin))
-        params_layout.addLayout(encode_row)
+        quality_row.addWidget(self._labeled_export_control("CPU preset", self._export_preset_combo))
+        quality_row.addWidget(self._labeled_export_control("质量 (CRF)", self._export_crf_spin))
+        params_layout.addLayout(quality_row)
         settings_layout.addWidget(params_card)
 
         self._export_native_check = CheckBox("实验：使用 native 字幕渲染器导出")
@@ -3255,6 +3279,7 @@ class SubtitleRenderWindow(QWidget):
             encoder_mode=str(self._export_encoder_combo.currentData() or ENCODER_CPU),
             crf=self._export_crf_spin.value(),
             preset=str(self._export_preset_combo.currentData() or "medium"),
+            codec=self._export_codec_value(),
             native_export_enabled=False,
         )
 
@@ -3338,8 +3363,26 @@ class SubtitleRenderWindow(QWidget):
     def _on_render_log(self, message: str) -> None:
         self._export_status_label.setText(message)
 
+    def _export_codec_value(self) -> str:
+        return str(self._export_codec_combo.currentData() or CODEC_H264)
+
+    @staticmethod
+    def _codec_display(codec: str) -> str:
+        return "H.265 (HEVC)" if codec == CODEC_HEVC else "H.264 (AVC)"
+
+    def _refresh_export_format_label(self) -> None:
+        # 导出进行中标签由 _export_format_text 的完整信息占据，不在此覆盖
+        if not self._export_start_button.isEnabled():
+            return
+        self._export_format_label.setText(
+            f"输出格式: MP4 · {self._codec_display(self._export_codec_value())}"
+        )
+
     def _export_format_text(self, job: RenderJob) -> str:
-        text = f"输出格式: MP4 · H.264 (AVC) · {job.width}×{job.height} @ {job.fps}fps"
+        text = (
+            f"输出格式: MP4 · {self._codec_display(job.codec)}"
+            f" · {job.width}×{job.height} @ {job.fps}fps"
+        )
         try:
             parent = job.output_path.parent
             probe = parent if parent.exists() else Path(job.output_path.anchor or ".")

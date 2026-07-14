@@ -1067,6 +1067,7 @@ class OutputConfig:
     encoder_mode: str = "cpu"
     crf: int = 18
     preset: str = "medium"
+    codec: str = "h264"
     output_path: str = ""
 
 

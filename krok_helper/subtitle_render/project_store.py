@@ -185,12 +185,14 @@ def project_output_payload(
     crf: int,
     preset: str,
     output_path: str,
+    codec: str = "h264",
     native_export_enabled: bool = False,
 ) -> dict[str, Any]:
     return {
         "encoder_mode": encoder_mode,
         "crf": int(crf),
         "preset": preset,
+        "codec": codec,
         "output_path": output_path,
         "native_export_enabled": bool(native_export_enabled),
     }

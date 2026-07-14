@@ -548,6 +548,8 @@ def test_window_shell_components_present(qapp, monkeypatch):
     assert isinstance(win._bottom_navigation, SegmentedWidget)
     assert isinstance(win._export_dir_edit, LineEdit)
     assert isinstance(win._export_name_edit, LineEdit)
+    assert isinstance(win._export_codec_combo, ComboBox)
+    assert win._export_codec_combo.currentData() == "h264"
     assert isinstance(win._export_encoder_combo, ComboBox)
     assert isinstance(win._export_crf_spin, SpinBox)
     assert isinstance(win._export_progress, ProgressBar)

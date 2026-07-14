@@ -22,6 +22,7 @@ from krok_helper.ffmpeg import _build_subprocess_kwargs, find_tool, terminate_pr
 from krok_helper.subtitle_render.engine.encoder_select import (
     CPU_PRESETS,
     ENCODER_MODES,
+    VIDEO_CODECS,
     resolved_encoder_label,
     video_encoder_options,
 )
@@ -75,6 +76,7 @@ class RenderJob:
     encoder_mode: str = "cpu"
     crf: int = 18
     preset: str = "medium"
+    codec: str = "h264"
     native_export_enabled: bool | None = None
     extra_tracks: tuple[TimingTrack, ...] = ()
     """副字幕源（N3 多歌词文件，如コーラス轨），与主轨同帧叠绘。"""
@@ -138,7 +140,7 @@ def render_subtitle_video(
     logger(f"导出字幕视频: {job.output_path.name}")
     logger(
         f"输出参数: {job.width}x{job.height} / {job.fps}fps / "
-        f"{duration_ms / 1000:.3f}s / {resolved_encoder_label(ffmpeg_path, job.encoder_mode)} / CRF {job.crf}"
+        f"{duration_ms / 1000:.3f}s / {resolved_encoder_label(ffmpeg_path, job.encoder_mode, job.codec)} / CRF {job.crf}"
     )
     logger("执行命令:")
     logger(" ".join(f'"{part}"' if " " in part else part for part in command))
@@ -328,6 +330,7 @@ def build_render_command(
             job.encoder_mode,
             crf=job.crf,
             preset=job.preset,
+            codec=job.codec,
         )
     )
     command.extend(["-pix_fmt", "yuv420p"])
@@ -370,6 +373,8 @@ def _validate_job(job: RenderJob) -> None:
         raise ProcessingError("输出 fps 无效。")
     if job.encoder_mode not in ENCODER_MODES:
         raise ProcessingError(f"不支持的编码器: {job.encoder_mode}")
+    if job.codec not in VIDEO_CODECS:
+        raise ProcessingError(f"不支持的视频编码: {job.codec}")
     if not 0 <= job.crf <= 51:
         raise ProcessingError("CRF 必须在 0 到 51 之间。")
     if job.preset not in CPU_PRESETS:
