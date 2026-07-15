@@ -5415,7 +5415,7 @@ class KrokHelperQtApp(QMainWindow):
 
     def _load_settings_into_ui(self) -> None:
         self._loading_settings_into_ui = True
-        self.set_ffmpeg_dir(Path(self.settings.ffmpeg_dir) if self.settings.ffmpeg_dir.strip() else Path())
+        self.set_ffmpeg_dir(Path(self.settings.ffmpeg_dir) if self.settings.ffmpeg_dir.strip() else None)
         self.set_output_name_mode(self.settings.output_name_mode)
         self.set_output_name_templates(self.settings.on_name_template, self.settings.off_name_template)
         self.align_video_name_template_value = self.settings.align_video_name_template or DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE
@@ -5612,8 +5612,8 @@ class KrokHelperQtApp(QMainWindow):
         self._invalidate_alignment_waveforms()
         self._refresh_alignment_material_inputs()
 
-    def set_ffmpeg_dir(self, path: Path) -> None:
-        self.ffmpeg_dir_text = str(path) if str(path).strip() else ""
+    def set_ffmpeg_dir(self, path: Path | None) -> None:
+        self.ffmpeg_dir_text = str(path) if path is not None else ""
         self._sync_ffmpeg_labels()
         self._sync_lyrics_timing_host_paths()
 
@@ -6632,7 +6632,7 @@ class KrokHelperQtApp(QMainWindow):
                 QMessageBox.critical(dialog, APP_TITLE, str(exc))
                 return
 
-            self.set_ffmpeg_dir(ffmpeg_dir or Path())
+            self.set_ffmpeg_dir(ffmpeg_dir)
             self.settings.ffmpeg_dir = self.ffmpeg_dir_text
             # 写入新选择的界面主题。``UpdaterSettings.save`` 内部
             # 会调 ``save_app_settings(self.settings)``，连同 ``ui_theme``

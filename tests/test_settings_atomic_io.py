@@ -129,6 +129,16 @@ def test_load_does_not_emit_backup_for_missing_file(tmp_path: Path):
     assert consume_corruption_backup() is None
 
 
+def test_load_migrates_legacy_dot_ffmpeg_directory_to_system_path(tmp_path: Path):
+    target = _settings_path(tmp_path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(json.dumps({"ffmpeg_dir": "."}), encoding="utf-8")
+
+    loaded = load_app_settings()
+
+    assert loaded.ffmpeg_dir == ""
+
+
 def test_settings_app_name_env_uses_separate_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_APP_NAME", "Karaoke Studio Dev")
 

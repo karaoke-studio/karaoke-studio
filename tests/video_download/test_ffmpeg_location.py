@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,9 @@ def test_python_backend_receives_configured_ffmpeg_location(tmp_path: Path, make
             raise RuntimeError("stop after capturing options")
 
     ffmpeg_dir = tmp_path / "ffmpeg"
+    ffmpeg_path = ffmpeg_dir / "bin" / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+    ffmpeg_path.parent.mkdir(parents=True)
+    ffmpeg_path.write_text("", encoding="utf-8")
     service = YtDlpService(app_settings=AppSettings(ffmpeg_dir=str(ffmpeg_dir)))
     task = make_download_task()
     options = DownloadOptions(save_dir=str(tmp_path))
@@ -43,7 +47,7 @@ def test_python_backend_receives_configured_ffmpeg_location(tmp_path: Path, make
             selected_format="video+audio",
         )
 
-    assert captured["ffmpeg_location"] == str(ffmpeg_dir)
+    assert captured["ffmpeg_location"] == str(ffmpeg_path)
 
 
 def test_cli_backend_receives_configured_ffmpeg_location(
@@ -74,6 +78,9 @@ def test_cli_backend_receives_configured_ffmpeg_location(
         return FakeProcess()
 
     ffmpeg_dir = tmp_path / "ffmpeg"
+    ffmpeg_path = ffmpeg_dir / "bin" / ("ffmpeg.exe" if os.name == "nt" else "ffmpeg")
+    ffmpeg_path.parent.mkdir(parents=True)
+    ffmpeg_path.write_text("", encoding="utf-8")
     service = YtDlpService(app_settings=AppSettings(ffmpeg_dir=str(ffmpeg_dir)))
     monkeypatch.setattr(service, "_find_ytdlp_cli", lambda: "yt-dlp")
     monkeypatch.setattr("krok_helper.video_download.ytdlp_service.subprocess.Popen", fake_popen)
@@ -91,4 +98,10 @@ def test_cli_backend_receives_configured_ffmpeg_location(
 
     command = captured["command"]
     location_index = command.index("--ffmpeg-location")
-    assert command[location_index + 1] == str(ffmpeg_dir)
+    assert command[location_index + 1] == str(ffmpeg_path)
+
+
+def test_legacy_dot_ffmpeg_location_uses_system_path() -> None:
+    service = YtDlpService(app_settings=AppSettings(ffmpeg_dir="."))
+
+    assert service._configured_ffmpeg_location() == ""

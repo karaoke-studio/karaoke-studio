@@ -16,6 +16,15 @@ class _SettingsHost(QWidget):
     def _install_single_click_combo_behavior(self, _combo: QWidget) -> None:
         pass
 
+    def set_ffmpeg_dir(self, path) -> None:
+        gui_qt.KrokHelperQtApp.set_ffmpeg_dir(self, path)
+
+    def _sync_ffmpeg_labels(self) -> None:
+        pass
+
+    def _sync_lyrics_timing_host_paths(self) -> None:
+        pass
+
 
 def _open_global_settings_dialog(monkeypatch):
     app = QApplication.instance() or QApplication([])
@@ -96,4 +105,29 @@ def test_application_update_controls_use_compact_rows(monkeypatch) -> None:
     assert grid_row(labels["立即检查更新"]) == 4
 
     dialog.close()
+    host.close()
+
+
+def test_using_system_path_saves_empty_ffmpeg_directory(monkeypatch) -> None:
+    app, dialog, host = _open_global_settings_dialog(monkeypatch)
+    monkeypatch.setattr(UpdaterSettings, "save", lambda self, settings: None)
+    buttons = {button.text(): button for button in dialog.findChildren(gui_qt.QPushButton)}
+
+    buttons["使用系统 PATH"].click()
+    buttons["保存设置"].click()
+    app.processEvents()
+
+    assert host.ffmpeg_dir_text == ""
+    assert host.settings.ffmpeg_dir == ""
+
+    dialog.close()
+    host.close()
+
+
+def test_set_ffmpeg_dir_accepts_none_as_system_path() -> None:
+    host = _SettingsHost()
+
+    host.set_ffmpeg_dir(None)
+
+    assert host.ffmpeg_dir_text == ""
     host.close()

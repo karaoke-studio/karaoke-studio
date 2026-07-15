@@ -198,6 +198,10 @@ def load_app_settings() -> AppSettings:
         )
         ui_theme_raw = UI_THEME_AUTO
 
+    ffmpeg_dir = str(payload.get("ffmpeg_dir", ""))
+    if ffmpeg_dir.strip() == ".":
+        ffmpeg_dir = ""
+
     return AppSettings(
         output_name_mode=str(payload.get("output_name_mode", OUTPUT_NAME_MODE_FIXED)),
         on_name_template=str(payload.get("on_name_template", DEFAULT_ON_NAME_TEMPLATE)),
@@ -208,7 +212,7 @@ def load_app_settings() -> AppSettings:
         align_audio_name_template=str(
             payload.get("align_audio_name_template", DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE)
         ),
-        ffmpeg_dir=str(payload.get("ffmpeg_dir", "")),
+        ffmpeg_dir=ffmpeg_dir,
         align_target=align_target,
         align_encode_mode=align_encode_mode,
         align_force_1080p60=bool(payload.get("align_force_1080p60", False)),

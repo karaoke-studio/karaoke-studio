@@ -12,6 +12,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Callable
 
+from krok_helper.ffmpeg import find_tool
 from krok_helper.network import (
     build_urllib_opener_for_app_settings,
     load_current_app_settings,
@@ -74,7 +75,9 @@ class YtDlpService:
 
     def _configured_ffmpeg_location(self) -> str:
         value = str(getattr(self._settings(), "ffmpeg_dir", "") or "").strip()
-        return str(Path(value).expanduser()) if value else ""
+        if not value or value == ".":
+            return ""
+        return find_tool("ffmpeg", Path(value).expanduser())
 
     def get_ytdlp_version(self) -> str:
         try:

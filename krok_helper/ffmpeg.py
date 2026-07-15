@@ -24,20 +24,20 @@ def _build_subprocess_kwargs() -> dict:
     }
 
 
-def _find_tool_in_dir(directory: Path, tool_name: str) -> str | None:
-    candidates = [
-        directory / tool_name,
-        directory / "bin" / tool_name,
-    ]
+def _tool_name_candidates(tool_name: str) -> tuple[str, ...]:
+    candidates = [tool_name]
     if os.name == "nt" and not Path(tool_name).suffix:
-        exe_name = f"{tool_name}.exe"
-        candidates.extend([
-            directory / exe_name,
-            directory / "bin" / exe_name,
-        ])
-    for candidate in candidates:
-        if candidate.exists():
-            return str(candidate)
+        candidates.append(f"{tool_name}.exe")
+    elif os.name != "nt" and tool_name.lower().endswith(".exe"):
+        candidates.append(tool_name[:-4])
+    return tuple(candidates)
+
+
+def _find_tool_in_dir(directory: Path, tool_name: str) -> str | None:
+    for candidate_name in _tool_name_candidates(tool_name):
+        for candidate in (directory / candidate_name, directory / "bin" / candidate_name):
+            if candidate.exists():
+                return str(candidate)
     return None
 
 
@@ -47,9 +47,10 @@ def find_tool(tool_name: str, ffmpeg_dir: Path | None = None) -> str:
         if candidate:
             return candidate
 
-    resolved = shutil.which(tool_name)
-    if resolved:
-        return resolved
+    for candidate_name in _tool_name_candidates(tool_name):
+        resolved = shutil.which(candidate_name)
+        if resolved:
+            return resolved
 
     raise ProcessingError(
         f"找不到 {tool_name}。请先确认系统环境变量 PATH 中可用，"
