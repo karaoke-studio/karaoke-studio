@@ -129,6 +129,7 @@ from krok_helper.subtitle_render.models import (
     Style,
     TITLE_SCHEME_NAME,
     TimingTrack,
+    background_sequence_frame_path,
     line_animation_override_from_dict,
     line_animation_override_to_dict,
     migrate_legacy_app_title_default,
@@ -1320,10 +1321,86 @@ class SubtitleRenderWindow(QWidget):
         except (OSError, ValueError) as exc:
             fluent_error(self, "打开项目失败", f"无法读取项目文件：\n{path_str}\n\n{exc}")
             return
+        missing_resources = self._missing_project_resources(data)
+        self._clear_loaded_media()
         self._apply_project_data(data)
         self._project_path = Path(path_str)
         self._project_dirty = False
         self._refresh_project_title()
+        if missing_resources:
+            fluent_warning(
+                self,
+                "项目已打开，但部分素材未找到",
+                "以下素材路径无效，已跳过加载：\n\n"
+                + "\n".join(
+                    f"• {label}：{path}" for label, path in missing_resources
+                ),
+                copyable=True,
+            )
+
+    @staticmethod
+    def _missing_project_resources(data: dict) -> list[tuple[str, Path]]:
+        """Collect missing project assets without blocking project loading."""
+        missing: list[tuple[str, Path]] = []
+        seen: set[str] = set()
+
+        def add(label: str, path: Optional[Path], *, exists: Optional[bool] = None) -> None:
+            if path is None:
+                return
+            key = str(path)
+            if key in seen or (path.is_file() if exists is None else exists):
+                return
+            seen.add(key)
+            missing.append((label, path))
+
+        paths = split_project_paths(data)
+        add("主字幕", paths["subtitle_path"])
+
+        background = (
+            data.get("background") if isinstance(data.get("background"), dict) else None
+        )
+        if background is not None:
+            kind = str(background.get("kind") or "solid")
+            raw_path = str(background.get("path") or "").strip()
+            path = Path(raw_path) if raw_path else None
+            if kind == "video":
+                add("背景视频", path)
+            elif kind == "image":
+                add("背景图片", path)
+            elif kind == "image_sequence" and path is not None:
+                try:
+                    sequence_start = max(
+                        int(background.get("sequence_start_number") or 0), 0
+                    )
+                except (TypeError, ValueError):
+                    sequence_start = 0
+                source = BackgroundSource(
+                    kind="image_sequence",
+                    path=str(path),
+                    sequence_start_number=sequence_start,
+                )
+                first_frame = background_sequence_frame_path(source, 0)
+                add(
+                    "背景图片序列",
+                    path,
+                    exists=first_frame is not None and first_frame.is_file(),
+                )
+        else:
+            add("背景视频", paths["video_path"])
+
+        add("独立音频", paths["audio_path"])
+
+        extras = data.get("extra_subtitle_sources")
+        if isinstance(extras, list):
+            for index, item in enumerate(extras, start=1):
+                if not isinstance(item, dict):
+                    continue
+                path_text = str(item.get("path") or "").strip()
+                if not path_text:
+                    continue
+                name = str(item.get("name") or "").strip() or str(index)
+                add(f"副字幕「{name}」", Path(path_text))
+        return missing
 
     def _import_n3_project(self) -> None:
         """导入 NicoKaraMaker3 项目（.n3proj）：素材 / 字体配色 / 布局 / 标题 / 输出。"""

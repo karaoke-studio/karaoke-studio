@@ -18,6 +18,7 @@ from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend import lyrics_list  # noqa: E402
 from krok_helper.subtitle_render import models as subtitle_models  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
+    BackgroundSource,
     LineAnimationOverride,
     Style,
     StylePreset,
@@ -131,6 +132,112 @@ def test_window_save_new_open_round_trip(qapp, monkeypatch, tmp_path):
     assert win._export_native_check.isChecked() is False
     # 加载过程中不应把项目标脏
     assert win._project_dirty is False
+
+
+def test_open_project_clears_previous_media_before_applying_snapshot(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    win._timing_track = TimingTrack(lines=[TimingLine()])
+    win._subtitle_path = tmp_path / "old.lrc"
+    win._video_path = tmp_path / "old.mp4"
+    win._audio_path = tmp_path / "old.wav"
+    win._background_source = BackgroundSource(
+        kind="video", path=str(tmp_path / "old.mp4")
+    )
+    win._extra_sources = [
+        mw.ExtraSubtitleSource(
+            name="旧副字幕",
+            path=tmp_path / "old-extra.lrc",
+            track=TimingTrack(lines=[TimingLine()]),
+        )
+    ]
+
+    project_path = tmp_path / "clean.yurika"
+    save_render_project(project_path, {"style": style_to_dict(Style())})
+    monkeypatch.setattr(
+        mw.QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (str(project_path), ""),
+    )
+
+    win._open_project()
+
+    assert win._timing_track is None
+    assert win._subtitle_path is None
+    assert win._video_path is None
+    assert win._audio_path is None
+    assert win._background_source is None
+    assert win._extra_sources == []
+
+
+def test_open_project_summarizes_all_missing_resources_once(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    project_path = tmp_path / "missing-assets.yurika"
+    main_subtitle = tmp_path / "missing-main.sug"
+    background = tmp_path / "missing-background.mp4"
+    audio = tmp_path / "missing-audio.flac"
+    chorus = tmp_path / "missing-chorus.lrc"
+    save_render_project(
+        project_path,
+        {
+            "subtitle_path": str(main_subtitle),
+            "audio_path": str(audio),
+            "background": {
+                "kind": "video",
+                "path": str(background),
+                "color": "#000000",
+            },
+            "extra_subtitle_sources": [
+                {"name": "和声", "path": str(chorus)},
+            ],
+            "style": style_to_dict(Style()),
+        },
+    )
+    monkeypatch.setattr(
+        mw.QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (str(project_path), ""),
+    )
+    warnings: list[tuple[tuple, dict]] = []
+    monkeypatch.setattr(
+        mw,
+        "fluent_warning",
+        lambda *args, **kwargs: warnings.append((args, kwargs)),
+    )
+
+    win._open_project()
+
+    assert len(warnings) == 1
+    args, kwargs = warnings[0]
+    assert args[1] == "项目已打开，但部分素材未找到"
+    assert "主字幕" in args[2] and str(main_subtitle) in args[2]
+    assert "背景视频" in args[2] and str(background) in args[2]
+    assert "独立音频" in args[2] and str(audio) in args[2]
+    assert "副字幕「和声」" in args[2] and str(chorus) in args[2]
+    assert kwargs == {"copyable": True}
+
+
+def test_missing_resource_scan_tolerates_invalid_image_sequence_metadata(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    pattern = tmp_path / "frame_%04d.png"
+
+    missing = win._missing_project_resources(
+        {
+            "background": {
+                "kind": "image_sequence",
+                "path": str(pattern),
+                "source_fps": "invalid",
+                "sequence_start_number": "invalid",
+            }
+        }
+    )
+
+    assert missing == [("背景图片序列", pattern)]
 
 
 @pytest.mark.parametrize(
