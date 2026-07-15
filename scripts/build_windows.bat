@@ -236,6 +236,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$required = @(" ^
     "  'krok_helper\assets\logo\logo.jpg'," ^
     "  'krok_helper\assets\logo\logo.ico'," ^
+    "  'krok_helper\assets\logo\start.jpg'," ^
     "  'krok_helper\assets\platforms\youtube.svg'," ^
     "  'strange_uta_game\config\config.json'," ^
     "  'strange_uta_game\config\dictionary.json'," ^

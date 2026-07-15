@@ -10,7 +10,6 @@ from krok_helper.stdio import configure_utf8_stdio
 configure_utf8_stdio()
 
 from krok_helper.errors import ProcessingError
-from krok_helper.gui_qt import KrokHelperQtApp, load_taskbar_icon
 from krok_helper.pipeline import (
     DEFAULT_OFF_NAME_TEMPLATE,
     DEFAULT_ON_NAME_TEMPLATE,
@@ -88,35 +87,52 @@ def run_gui(args: argparse.Namespace) -> int:
     enable_high_dpi_awareness()
     set_explicit_app_user_model_id("KaraokeStudio.Desktop")
     qt_app = QApplication.instance() or QApplication(sys.argv)
-    # 在 ``MainWindow()`` 构造**之前**就把主题 settle 到目标模式 ——
-    # 这样窗口首次绘制即正确颜色，避免"浅色闪一帧"。
-    # theme_workbench 必须在 QApplication 之后 import（SUG theme 单例
-    # 构造期会装平台监听器）。
-    from krok_helper.theme_workbench import apply_settings_theme
-    apply_settings_theme(load_app_settings())
-    app_icon = load_taskbar_icon()
-    if app_icon is not None:
-        qt_app.setWindowIcon(app_icon)
-    window = KrokHelperQtApp()
-    if args.video:
-        window.set_video_path(args.video.expanduser())
-    if args.on_audio:
-        window.set_on_vocal_path(args.on_audio.expanduser())
-    if args.off_audio:
-        window.set_off_vocal_path(args.off_audio.expanduser())
-    if args.ffmpeg_dir:
-        window.set_ffmpeg_dir(args.ffmpeg_dir.expanduser())
-    if args.output_name_mode:
-        window.set_output_name_mode(args.output_name_mode)
-    if args.on_name_template or args.off_name_template:
-        window.set_output_name_templates(
-            args.on_name_template or DEFAULT_ON_NAME_TEMPLATE,
-            args.off_name_template or DEFAULT_OFF_NAME_TEMPLATE,
-        )
-    window.show()
-    if args.project:
-        QTimer.singleShot(0, lambda: window.open_lyrics_timing_project(args.project.expanduser()))
-    return qt_app.exec()
+    from krok_helper.startup_splash import StartupSplashWindow
+
+    splash = StartupSplashWindow()
+    splash.show()
+    qt_app.processEvents()
+
+    try:
+        # 在 ``MainWindow()`` 构造**之前**就把主题 settle 到目标模式 ——
+        # 这样窗口首次绘制即正确颜色，避免"浅色闪一帧"。
+        # theme_workbench 必须在 QApplication 之后 import（SUG theme 单例
+        # 构造期会装平台监听器）。
+        from krok_helper.theme_workbench import apply_settings_theme
+
+        apply_settings_theme(load_app_settings())
+
+        # gui_qt is intentionally imported only after the splash is visible;
+        # importing it initializes most UI dependencies and can take noticeable time.
+        from krok_helper.gui_qt import KrokHelperQtApp, load_taskbar_icon
+
+        app_icon = load_taskbar_icon()
+        if app_icon is not None:
+            qt_app.setWindowIcon(app_icon)
+        window = KrokHelperQtApp()
+        if args.video:
+            window.set_video_path(args.video.expanduser())
+        if args.on_audio:
+            window.set_on_vocal_path(args.on_audio.expanduser())
+        if args.off_audio:
+            window.set_off_vocal_path(args.off_audio.expanduser())
+        if args.ffmpeg_dir:
+            window.set_ffmpeg_dir(args.ffmpeg_dir.expanduser())
+        if args.output_name_mode:
+            window.set_output_name_mode(args.output_name_mode)
+        if args.on_name_template or args.off_name_template:
+            window.set_output_name_templates(
+                args.on_name_template or DEFAULT_ON_NAME_TEMPLATE,
+                args.off_name_template or DEFAULT_OFF_NAME_TEMPLATE,
+            )
+        window.show()
+        splash.finish()
+        if args.project:
+            QTimer.singleShot(0, lambda: window.open_lyrics_timing_project(args.project.expanduser()))
+        return qt_app.exec()
+    except Exception:
+        splash.close()
+        raise
 
 
 def main() -> int:
