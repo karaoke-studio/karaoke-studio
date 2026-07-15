@@ -1513,6 +1513,90 @@ def test_property_panel_gradient_endpoint_stops_cannot_be_deleted(qapp):
     assert editor._stops[-1][0] == 100  # noqa: SLF001
 
 
+def _render_vertical_gradient_stop_editor(qapp):
+    editor = pp.GradientStopsEditor()
+    editor.set_orientation("gradient_vertical")
+    editor.resize(editor.sizeHint())
+    editor.set_stops(
+        [
+            (0, "#F8E599"),
+            (25, "#F8E599"),
+            (50, "#F8E599"),
+            (100, "#EDBD46"),
+        ]
+    )
+    editor._selected = 2  # noqa: SLF001
+    editor.show()
+    editor.update()
+    qapp.processEvents()
+    return editor, editor.grab().toImage().convertToFormat(QImage.Format.Format_ARGB32)
+
+
+def test_gradient_stop_markers_use_dark_inner_outline(qapp):
+    editor, image = _render_vertical_gradient_stop_editor(qapp)
+    center = editor._marker_center(25)  # noqa: SLF001
+
+    outline = image.pixelColor(round(center.x() + 8), round(center.y()))
+
+    assert outline == QColor("#46505F")
+
+
+def test_selected_gradient_stop_marker_has_larger_blue_outline(qapp):
+    editor, image = _render_vertical_gradient_stop_editor(qapp)
+    center = editor._marker_center(50)  # noqa: SLF001
+
+    enlarged_outline = image.pixelColor(round(center.x() + 10), round(center.y()))
+
+    assert enlarged_outline == QColor("#0B84FF")
+
+
+def test_gradient_stop_markers_do_not_have_white_outer_ring(qapp):
+    editor, image = _render_vertical_gradient_stop_editor(qapp)
+    regular = editor._marker_center(25)  # noqa: SLF001
+    selected = editor._marker_center(50)  # noqa: SLF001
+
+    regular_outer = image.pixelColor(round(regular.x() + 10), round(regular.y()))
+    regular_background = image.pixelColor(round(regular.x() + 12), round(regular.y()))
+    selected_outer = image.pixelColor(round(selected.x() + 13), round(selected.y()))
+    selected_background = image.pixelColor(round(selected.x() + 15), round(selected.y()))
+
+    assert regular_outer == regular_background
+    assert selected_outer == selected_background
+
+
+def test_selected_gradient_stop_marker_has_lower_right_shadow(qapp):
+    editor, image = _render_vertical_gradient_stop_editor(qapp)
+    center = editor._marker_center(50)  # noqa: SLF001
+    x = round(center.x())
+    y = round(center.y() + 12)
+
+    shadow = image.pixelColor(x + 2, y)
+    unshadowed = image.pixelColor(x - 2, y)
+
+    assert shadow != unshadowed
+    assert shadow.lightness() < unshadowed.lightness()
+
+
+def test_selected_gradient_endpoint_outline_is_not_clipped(qapp):
+    editor = pp.GradientStopsEditor()
+    editor.set_orientation("gradient_vertical")
+    editor.resize(editor.sizeHint())
+    editor.show()
+    editor.update()
+    qapp.processEvents()
+    image = editor.grab().toImage().convertToFormat(QImage.Format.Format_ARGB32)
+
+    blue_rows = [
+        y
+        for y in range(image.height())
+        for x in range(image.width())
+        if image.pixelColor(x, y) == QColor("#0B84FF")
+    ]
+
+    assert blue_rows
+    assert min(blue_rows) > 0
+
+
 def test_property_panel_dragging_endpoint_creates_mergeable_stop(qapp):
     panel = PropertyPanel()
     panel._fill_mode_combo.setCurrentIndex(
@@ -1604,6 +1688,19 @@ def test_vertical_gradient_and_split_use_compact_matching_bar_layout(qapp):
     )
     bar_position = layout.getItemPosition(layout.indexOf(panel._gradient_bar_field))
     assert bar_position == (0, 0, 1, 2)
+
+
+def test_gradient_and_split_editors_do_not_show_redundant_titles(qapp):
+    panel = PropertyPanel()
+
+    assert panel._gradient_bar_field is panel._gradient_editor
+    assert panel._split_bar_field is panel._split_editor
+
+
+def test_solid_fill_editor_does_not_show_color_title(qapp):
+    panel = PropertyPanel()
+
+    assert panel._paint_solid_btn.parent().objectName() != "SubtitlePropertyField"
 
 
 def test_property_panel_split_and_image_fill_controls_emit_style(qapp):

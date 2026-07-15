@@ -1468,8 +1468,6 @@ class GradientStopsEditor(QWidget):
             for index, (position, color) in enumerate(self._stops):
                 center = self._marker_center(position)
                 selected = index == self._selected
-                painter.setBrush(QColor(color))
-                painter.setPen(QColor("#0B84FF" if selected else palette().card_bg))
                 if self._hard_edges and self._orientation == "vertical":
                     # N3-style stop tag: arrow tip points at the exact band edge,
                     # while the rectangular body remains an easy click target.
@@ -1483,17 +1481,37 @@ class GradientStopsEditor(QWidget):
                         QPointF(body_right, center.y() + 7),
                         QPointF(body_left, center.y() + 7),
                     ]
+                    painter.setBrush(QColor(color))
+                    painter.setPen(QColor("#0B84FF" if selected else palette().card_bg))
+                    painter.drawPolygon(QPolygonF(points))
+                    painter.setBrush(Qt.BrushStyle.NoBrush)
+                    painter.setPen(QColor("#0B84FF" if selected else palette().card_border))
+                    painter.drawPolygon(QPolygonF(points))
                 else:
+                    radius = 11 if selected else 9
                     points = [
-                        QPointF(center.x(), center.y() - 8),
-                        QPointF(center.x() + 8, center.y()),
-                        QPointF(center.x(), center.y() + 8),
-                        QPointF(center.x() - 8, center.y()),
+                        QPointF(center.x(), center.y() - radius),
+                        QPointF(center.x() + radius, center.y()),
+                        QPointF(center.x(), center.y() + radius),
+                        QPointF(center.x() - radius, center.y()),
                     ]
-                painter.drawPolygon(QPolygonF(points))
-                painter.setBrush(Qt.BrushStyle.NoBrush)
-                painter.setPen(QColor("#0B84FF" if selected else palette().card_border))
-                painter.drawPolygon(QPolygonF(points))
+                    marker = QPolygonF(points)
+                    if selected:
+                        shadow = QPolygonF(
+                            [QPointF(point.x() + 2, point.y() + 2) for point in points]
+                        )
+                        painter.setPen(Qt.PenStyle.NoPen)
+                        painter.setBrush(QColor(11, 77, 137, 72))
+                        painter.drawPolygon(shadow)
+
+                    painter.setBrush(QColor(color))
+                    painter.setPen(
+                        QPen(
+                            QColor("#0B84FF" if selected else "#46505F"),
+                            3 if selected else 2,
+                        )
+                    )
+                    painter.drawPolygon(marker)
         finally:
             painter.end()
 
@@ -1525,13 +1543,13 @@ class GradientStopsEditor(QWidget):
 
     def _bar_rect(self) -> QRectF:
         if self._orientation == "horizontal":
-            return QRectF(8, 8, max(self.width() - 16, 1), 22)
-        return QRectF(12, 8, 48, max(self.height() - 16, 1))
+            return QRectF(15, 8, max(self.width() - 30, 1), 22)
+        return QRectF(12, 15, 48, max(self.height() - 30, 1))
 
     def _rail_rect(self) -> QRectF:
         if self._orientation == "horizontal":
-            return QRectF(8, 40, max(self.width() - 16, 1), 14)
-        return QRectF(72, 8, 14, max(self.height() - 16, 1))
+            return QRectF(15, 40, max(self.width() - 30, 1), 14)
+        return QRectF(72, 15, 14, max(self.height() - 30, 1))
 
     def _marker_center(self, position: float) -> QPointF:
         pos = max(0.0, min(1.0, position / 100.0))
@@ -4145,7 +4163,7 @@ class PropertyPanel(QWidget):
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         self._paint_solid_btn = self._paint_color_button("color", "#FFFFFF")
-        layout.addWidget(_field("颜色", self._paint_solid_btn))
+        layout.addWidget(self._paint_solid_btn)
         return page
 
     def _make_gradient_fill_page(self) -> QWidget:
@@ -4163,7 +4181,7 @@ class PropertyPanel(QWidget):
         self._gradient_editor.selectedChanged.connect(
             lambda _index: self._sync_gradient_stop_controls()
         )
-        self._gradient_bar_field = _field("渐变条", self._gradient_editor)
+        self._gradient_bar_field = self._gradient_editor
 
         self._gradient_stop_color_btn = ColorButton("#FFFFFF", page)
         self._gradient_stop_color_btn.clicked.connect(self._choose_gradient_stop_color)
@@ -4222,7 +4240,7 @@ class PropertyPanel(QWidget):
         self._split_editor.selectedChanged.connect(
             lambda _index: self._sync_split_stop_controls()
         )
-        self._split_bar_field = _field("拼色条", self._split_editor)
+        self._split_bar_field = self._split_editor
 
         self._split_stop_color_btn = ColorButton("#FFFFFF", page)
         self._split_stop_color_btn.clicked.connect(self._choose_split_stop_color)
