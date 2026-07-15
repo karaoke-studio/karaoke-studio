@@ -467,9 +467,10 @@ class PreviewPanel(DropPanel):
             extensions={
                 ".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv",
                 ".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff",
+                ".yurika",
             },
             empty_title="拖入背景素材",
-            empty_hint="支持视频或静态图片\n也可用下方按钮选择图片序列 / 纯色\n\n（仅加载字幕也可直接预览）",
+            empty_hint="拖入视频、静态图片或 Yurika 工程（.yurika）\n也可用下方按钮选择图片序列 / 纯色\n\n（仅加载字幕也可直接预览）",
             empty_icon="🎬",
             parent=parent,
         )

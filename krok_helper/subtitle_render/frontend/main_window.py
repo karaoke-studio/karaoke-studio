@@ -1316,15 +1316,26 @@ class SubtitleRenderWindow(QWidget):
         )
         if not path_str:
             return
+        self._open_project_path(Path(path_str), confirm_discard=False)
+
+    def _open_project_path(
+        self,
+        path: Path,
+        *,
+        confirm_discard: bool = True,
+    ) -> bool:
+        """Open a ``.yurika`` project selected from the menu or dropped."""
+        if confirm_discard and not self._confirm_discard_changes():
+            return False
         try:
-            data = load_render_project(Path(path_str))
+            data = load_render_project(path)
         except (OSError, ValueError) as exc:
-            fluent_error(self, "打开项目失败", f"无法读取项目文件：\n{path_str}\n\n{exc}")
-            return
+            fluent_error(self, "打开项目失败", f"无法读取项目文件：\n{path}\n\n{exc}")
+            return False
         missing_resources = self._missing_project_resources(data)
         self._clear_loaded_media()
         self._apply_project_data(data)
-        self._project_path = Path(path_str)
+        self._project_path = path
         self._project_dirty = False
         self._refresh_project_title()
         if missing_resources:
@@ -1337,6 +1348,7 @@ class SubtitleRenderWindow(QWidget):
                 ),
                 copyable=True,
             )
+        return True
 
     @staticmethod
     def _missing_project_resources(data: dict) -> list[tuple[str, Path]]:
@@ -1507,7 +1519,7 @@ class SubtitleRenderWindow(QWidget):
 
         self._lyrics_panel = LyricsPanel()
         self._lyrics_panel.set_style(self._style)
-        self._lyrics_panel.pathDropped.connect(self.load_subtitle_source)
+        self._lyrics_panel.pathDropped.connect(self._load_dropped_subtitle)
         self._lyrics_panel.browseRequested.connect(self._browse_subtitle)
         self._lyrics_panel.roleChanged.connect(self._on_lyrics_role_changed)
         self._lyrics_panel.roleChangeRequested.connect(
@@ -1559,9 +1571,10 @@ class SubtitleRenderWindow(QWidget):
             extensions={
                 ".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv",
                 *IMAGE_EXTENSIONS,
+                PROJECT_FILE_SUFFIX,
             },
             empty_title="拖入背景素材",
-            empty_hint="支持视频或静态图片\n图片序列与纯色请用下方按钮",
+            empty_hint="拖入视频、静态图片或 Yurika 工程（.yurika）\n图片序列与纯色请用下方按钮",
             empty_icon="🎬",
         )
         self._video_settings_panel.pathDropped.connect(self._load_dropped_background)
@@ -1914,10 +1927,19 @@ class SubtitleRenderWindow(QWidget):
             self._load_dropped_background(Path(path_str))
 
     def _load_dropped_background(self, path: Path) -> None:
+        if path.suffix.lower() == PROJECT_FILE_SUFFIX:
+            self._open_project_path(path)
+            return
         if path.suffix.lower() in IMAGE_EXTENSIONS:
             self.load_background_image(path)
         else:
             self.load_video(path)
+
+    def _load_dropped_subtitle(self, path: Path) -> None:
+        if path.suffix.lower() == PROJECT_FILE_SUFFIX:
+            self._open_project_path(path)
+            return
+        self.load_subtitle_source(path)
 
     def _add_background_empty_actions(self, panel: DropPanel) -> None:
         panel.add_empty_action("视频", self._browse_video)

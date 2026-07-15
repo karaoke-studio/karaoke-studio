@@ -171,6 +171,63 @@ def test_open_project_clears_previous_media_before_applying_snapshot(
     assert win._extra_sources == []
 
 
+@pytest.mark.parametrize(
+    "panel_name",
+    ["_lyrics_panel", "_preview_panel", "_video_settings_panel"],
+)
+def test_yurika_is_accepted_by_both_drop_regions(
+    qapp, monkeypatch, tmp_path, panel_name
+):
+    win = _make_window(qapp, monkeypatch)
+    project_path = tmp_path / "drop.yurika"
+    save_render_project(project_path, {"style": style_to_dict(Style())})
+
+    assert getattr(win, panel_name).accepts(project_path) is True
+
+
+@pytest.mark.parametrize(
+    "panel_name",
+    ["_lyrics_panel", "_preview_panel", "_video_settings_panel"],
+)
+def test_dropped_yurika_opens_complete_project_like_file_menu(
+    qapp, monkeypatch, tmp_path, panel_name
+):
+    win = _make_window(qapp, monkeypatch)
+    project_path = tmp_path / f"{panel_name}.yurika"
+    save_render_project(
+        project_path,
+        {"style": style_to_dict(Style(font_size_px=91))},
+    )
+
+    getattr(win, panel_name).pathDropped.emit(project_path)
+
+    assert win._project_path == project_path
+    assert win._style.font_size_px == 91
+    assert win._project_dirty is False
+
+
+def test_dropped_yurika_respects_unsaved_changes_confirmation(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    current_path = tmp_path / "current.yurika"
+    dropped_path = tmp_path / "dropped.yurika"
+    save_render_project(
+        dropped_path,
+        {"style": style_to_dict(Style(font_size_px=91))},
+    )
+    win._project_path = current_path
+    win._style = Style(font_size_px=77)
+    win._project_dirty = True
+    monkeypatch.setattr(win, "_confirm_discard_changes", lambda: False)
+
+    win._lyrics_panel.pathDropped.emit(dropped_path)
+
+    assert win._project_path == current_path
+    assert win._style.font_size_px == 77
+    assert win._project_dirty is True
+
+
 def test_open_project_summarizes_all_missing_resources_once(
     qapp, monkeypatch, tmp_path
 ):
