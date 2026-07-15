@@ -4297,6 +4297,150 @@ def test_utopia_mixes_outro_and_later_wipe_per_character(qapp):
     assert wiping_third == (1.0, 0.0, 0.0, 0.0, 1.15, 1.15, 0.0)
 
 
+def _utopia_multi_character_group_case():
+    line = TimingLine(
+        chars=[
+            TimingChar(text="A", start_ms=1000),
+            TimingChar(text="B", start_ms=1500),
+            TimingChar(text="C", start_ms=2000),
+        ],
+        end_ms=3000,
+    )
+    ruby = RubyAnnotation(
+        kanji="AB",
+        reading="ab",
+        pos_start_ms=1000,
+        pos_end_ms=2000,
+    )
+    style = Style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=72,
+        line_tail_ms=1500,
+        exit_anim="utopia",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+    )
+    intervals = [(1000, 1500), (1500, 2000), (2000, 3000)]
+    char_x_ranges = [(80, 130), (130, 180), (180, 230)]
+    transition = _LineCharTransition(
+        phase="utopia",
+        effect="utopia",
+        progress=1.0,
+        start_ms=1000,
+        end_ms=4500,
+    )
+    return line, ruby, style, intervals, char_x_ranges, transition
+
+
+def test_utopia_multi_character_group_transforms_each_main_glyph(qapp, monkeypatch):
+    line, ruby, style, intervals, char_x_ranges, transition = _utopia_multi_character_group_case()
+    font = _build_font(style)
+    metrics = QFontMetrics(font)
+    transformed_origins: list[float] = []
+    original_transform = subtitle_painter._character_transform
+
+    def record_transform(**kwargs):
+        if kwargs["rotation"] != 0.0:
+            transformed_origins.append(kwargs["scale_origin_x"])
+        return original_transform(**kwargs)
+
+    monkeypatch.setattr(subtitle_painter, "_character_transform", record_transform)
+    image = _blank(320, 220)
+    painter = QPainter(image)
+    try:
+        subtitle_painter._paint_line_with_character_transition(
+            painter,
+            line,
+            [50, 50, 50],
+            char_x_ranges,
+            intervals,
+            [ruby],
+            font,
+            150,
+            metrics,
+            style,
+            subtitle_painter._effective_karaoke_colors(style),
+            QRectF(80, 150 - metrics.ascent(), 150, metrics.height()),
+            3300,
+            transition,
+        )
+    finally:
+        painter.end()
+
+    assert transformed_origins == [80, 130]
+
+
+def test_utopia_multi_character_group_transforms_each_ruby_glyph(qapp, monkeypatch):
+    line, ruby, style, intervals, char_x_ranges, transition = _utopia_multi_character_group_case()
+    ruby_font = _build_ruby_font(style)
+    ruby_metrics = QFontMetrics(ruby_font)
+    transformed_origins: list[float] = []
+    original_transform = subtitle_painter._character_transform
+
+    def record_transform(**kwargs):
+        if kwargs["rotation"] != 0.0:
+            transformed_origins.append(kwargs["scale_origin_x"])
+        return original_transform(**kwargs)
+
+    monkeypatch.setattr(subtitle_painter, "_character_transform", record_transform)
+    image = _blank(320, 220)
+    painter = QPainter(image)
+    try:
+        subtitle_painter._paint_rubies(
+            painter,
+            ruby_font,
+            ruby_metrics,
+            line,
+            intervals,
+            char_x_ranges,
+            150,
+            3300,
+            [ruby],
+            style,
+            transition,
+        )
+    finally:
+        painter.end()
+
+    assert len(transformed_origins) == 2
+    assert transformed_origins[0] != transformed_origins[1]
+
+
+def test_utopia_multi_character_ruby_group_applies_exit_opacity_once(qapp, monkeypatch):
+    line, ruby, style, intervals, char_x_ranges, transition = _utopia_multi_character_group_case()
+    ruby_font = _build_ruby_font(style)
+    ruby_metrics = QFontMetrics(ruby_font)
+    observed_opacities: list[float] = []
+
+    def record_fragment(painter, *_args, **_kwargs):
+        observed_opacities.append(painter.opacity())
+
+    monkeypatch.setattr(subtitle_painter, "_paint_ruby_text_fragment", record_fragment)
+    image = _blank(320, 220)
+    painter = QPainter(image)
+    try:
+        subtitle_painter._paint_rubies(
+            painter,
+            ruby_font,
+            ruby_metrics,
+            line,
+            intervals,
+            char_x_ranges,
+            150,
+            3300,
+            [ruby],
+            style,
+            transition,
+        )
+    finally:
+        painter.end()
+
+    assert observed_opacities == pytest.approx([0.6, 0.6])
+
+
 def test_utopia_transform_scales_from_character_origin_for_extra_drift(qapp):
     center_img = _blank(160, 160)
     origin_img = _blank(160, 160)

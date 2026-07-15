@@ -6326,11 +6326,8 @@ def _paint_role_line_with_character_transition(
     fill_ranges = ink_x_ranges if ink_x_ranges is not None else char_x_ranges
     glyphs_by_index = _role_glyphs_by_index(line, layout)
     count = max(len(line.chars), 1)
-    handled_indices: set[int] = set()
     ruby_groups = _resolve_char_ruby_groups(active_rubies, line, intervals)
     for index in range(len(line.chars)):
-        if index in handled_indices:
-            continue
         if index >= len(intervals) or index >= len(char_x_ranges):
             continue
         if glyphs_by_index[index] is None:
@@ -6338,29 +6335,11 @@ def _paint_role_line_with_character_transition(
 
         group = _utopia_main_group_for_index(active_rubies, line, intervals, index, groups=ruby_groups) if transition.effect == "utopia" else None
         group_done_ms: int | None = None
-        group_exiting = False
         if group is not None:
-            group_indices, group_ruby = group
+            group_indices, _group_ruby = group
             group_done_ms = _utopia_following_done_time(line, intervals, group_indices[-1], style)
-            group_exiting = t_ms > group_done_ms
-            if group_exiting and index != group_indices[0]:
-                continue
-            if group_exiting:
-                indices = [
-                    i
-                    for i in group_indices
-                    if i < len(intervals)
-                    and i < len(char_x_ranges)
-                    and i < len(glyphs_by_index)
-                    and glyphs_by_index[i] is not None
-                ]
-                handled_indices.update(indices[1:])
-            else:
-                indices = [index]
-                group_ruby = None
-        else:
-            indices = [index]
-            group_ruby = None
+        indices = [index]
+        group_ruby = None
 
         if not indices:
             continue
@@ -6673,33 +6652,19 @@ def _paint_line_with_character_transition(
     # 走字 ratio 按墨水边界算（与静态路径一致）；缺省回退 advance 框。
     fill_ranges = ink_x_ranges if ink_x_ranges is not None else char_x_ranges
     count = max(len(line.chars), 1)
-    handled_indices: set[int] = set()
     ruby_groups = _resolve_char_ruby_groups(active_rubies, line, intervals)
     if glyphs_by_index is None:
         glyphs_by_index = [None for _ in line.chars]
     for index, (ch, width) in enumerate(zip(line.chars, char_widths)):
-        if index in handled_indices:
-            continue
         if index >= len(intervals) or index >= len(char_x_ranges):
             continue
         group = _utopia_main_group_for_index(active_rubies, line, intervals, index, groups=ruby_groups) if transition.effect == "utopia" else None
         group_done_ms: int | None = None
-        group_exiting = False
         if group is not None:
-            group_indices, group_ruby = group
+            group_indices, _group_ruby = group
             group_done_ms = _utopia_following_done_time(line, intervals, group_indices[-1], style)
-            group_exiting = t_ms > group_done_ms
-            if group_exiting and index != group_indices[0]:
-                continue
-            if group_exiting:
-                indices = [i for i in group_indices if i < len(intervals) and i < len(char_x_ranges)]
-                handled_indices.update(indices[1:])
-            else:
-                indices = [index]
-                group_ruby = None
-        else:
-            indices = [index]
-            group_ruby = None
+        indices = [index]
+        group_ruby = None
 
         left = min(char_x_ranges[i][0] for i in indices)
         right = max(char_x_ranges[i][1] for i in indices)
@@ -8987,73 +8952,27 @@ def _paint_rubies(
                 continue
             painter.save()
             try:
-                painter.setOpacity(painter.opacity() * opacity)
                 use_utopia_origin = transition is not None and transition.effect == "utopia"
                 if use_utopia_origin:
-                    group_exiting = (
-                        len(indices) > 1
-                        and following_done_ms is not None
-                        and t_ms > following_done_ms
+                    _paint_ruby_text_units_with_transition(
+                        painter,
+                        paint_ruby,
+                        ruby_font,
+                        ruby_metrics,
+                        x,
+                        ruby_baseline_y,
+                        t_ms,
+                        ruby_style,
+                        transition,
+                        first_index,
+                        max(len(line.chars), 1),
+                        following_done_ms,
+                        rtl,
+                        target_width=target_width,
+                        gradient_rect=layout.gradient_rect,
                     )
-                    if group_exiting:
-                        transform = _character_transform(
-                            center_x=x + reading_w / 2,
-                            center_y=ruby_baseline_y - ruby_metrics.ascent() + ruby_metrics.height() / 2,
-                            dx=dx,
-                            dy=dy,
-                            rotation=rotation,
-                            scale_x=scale_x,
-                            scale_y=scale_y,
-                            skew_y=skew_y,
-                            scale_origin_x=x,
-                            scale_origin_y=ruby_baseline_y,
-                        )
-                        reading = (
-                            "".join(reversed(_ruby_utopia_visual_units(paint_ruby.reading)))
-                            if rtl
-                            else paint_ruby.reading
-                        )
-                        ruby_path, ruby_rect = _ruby_text_path_and_rect(
-                            reading,
-                            ruby_font,
-                            ruby_metrics,
-                            x,
-                            ruby_baseline_y,
-                            target_width,
-                            ruby_style,
-                            base_text=paint_ruby.kanji,
-                        )
-                        ruby_path = transform.map(ruby_path)
-                        _paint_ruby_karaoke_path(
-                            painter,
-                            ruby_path,
-                            ruby_path.boundingRect(),
-                            paint_ruby,
-                            t_ms,
-                            ruby_style,
-                            rtl,
-                            ruby_metrics,
-                            gradient_rect=transform.mapRect(layout.gradient_rect),
-                        )
-                    else:
-                        _paint_ruby_text_units_with_transition(
-                            painter,
-                            paint_ruby,
-                            ruby_font,
-                            ruby_metrics,
-                            x,
-                            ruby_baseline_y,
-                            t_ms,
-                            ruby_style,
-                            transition,
-                            first_index,
-                            max(len(line.chars), 1),
-                            following_done_ms,
-                            rtl,
-                            target_width=target_width,
-                            gradient_rect=layout.gradient_rect,
-                        )
                 else:
+                    painter.setOpacity(painter.opacity() * opacity)
                     _apply_character_transform(
                         painter,
                         center_x=x + reading_w / 2,
