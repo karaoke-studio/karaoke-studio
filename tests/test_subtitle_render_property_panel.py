@@ -45,6 +45,7 @@ from krok_helper.subtitle_render.frontend.fluent_dialogs import (  # noqa: E402
 )
 from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
     _ColorDialog,
+    _LayoutSchematic,
     _SchematicBoard,
     _StylePresetDetailsDialog,
     ColorButton,
@@ -1084,6 +1085,33 @@ def test_subtitle_preview_frame_keeps_child_at_16_9(qapp):
     assert geometry.width() == 1000
     assert geometry.height() == pytest.approx(562, abs=1)
     assert geometry.width() / geometry.height() == pytest.approx(16 / 9, rel=0.003)
+
+
+def test_layout_schematic_tracks_output_resolution_and_aspect_ratio(qapp):
+    schematic = _LayoutSchematic()
+
+    assert (schematic._virtual_width, schematic._virtual_height) == (1920, 1080)
+    assert schematic.width() / schematic.height() == pytest.approx(16 / 9, rel=0.01)
+
+    # Same aspect ratio changes pixel mapping even though the widget shape is stable.
+    schematic.set_output_size(3840, 2160)
+    assert (schematic._virtual_width, schematic._virtual_height) == (3840, 2160)
+    assert schematic.width() / schematic.height() == pytest.approx(16 / 9, rel=0.01)
+
+    # A non-16:9 output also changes the visible curtain shape.
+    schematic.set_output_size(1024, 768)
+    assert (schematic._virtual_width, schematic._virtual_height) == (1024, 768)
+    assert schematic.width() / schematic.height() == pytest.approx(4 / 3, rel=0.01)
+
+
+def test_property_panel_forwards_output_size_to_layout_schematic(qapp):
+    panel = PropertyPanel()
+
+    panel.set_output_size(3840, 2160)
+
+    assert panel._n3_template_target_height == 2160
+    assert panel._layout_schematic._virtual_width == 3840
+    assert panel._layout_schematic._virtual_height == 2160
 
 
 def test_schematic_board_places_margin_controls_beside_and_below_screen(qapp):
@@ -4273,6 +4301,8 @@ def test_video_import_syncs_output_size_and_rescales_style(qapp, monkeypatch, tm
     assert win._style.line_gap_px == 180
     assert win._preview_panel.canvas._output_width == 3840
     assert win._preview_panel.canvas._output_height == 2160
+    assert win._property_panel._layout_schematic._virtual_width == 3840
+    assert win._property_panel._layout_schematic._virtual_height == 2160
 
     win.load_video(video_720p)
 
@@ -4283,6 +4313,8 @@ def test_video_import_syncs_output_size_and_rescales_style(qapp, monkeypatch, tm
     assert win._style.stroke_width_px == 10
     assert win._style.layout_reference_height == 720
     assert win._style.line_gap_px == 60
+    assert win._property_panel._layout_schematic._virtual_width == 1280
+    assert win._property_panel._layout_schematic._virtual_height == 720
     assert provider.data["screen"]["width"] == 1280
     assert provider.data["screen"]["height"] == 720
 
@@ -4354,6 +4386,8 @@ def test_main_window_export_screen_controls_update_and_persist(qapp, monkeypatch
     assert win._export_fps_combo.currentData() == 60
     assert win._preview_panel.canvas._output_width == 3840
     assert win._preview_panel.canvas._output_height == 2160
+    assert win._property_panel._layout_schematic._virtual_width == 3840
+    assert win._property_panel._layout_schematic._virtual_height == 2160
     assert provider.data["screen"] == {
         "preset_key": "uhd_4k",
         "par": "1:1",

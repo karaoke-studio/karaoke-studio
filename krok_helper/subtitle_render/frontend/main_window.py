@@ -1704,7 +1704,10 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel = PropertyPanel()
         self._property_panel.set_style(self._style)
         self._property_panel.set_preset_schemes(self._style_presets)
-        self._property_panel.set_n3_template_target_height(self._screen_settings.height)
+        self._property_panel.set_output_size(
+            self._screen_settings.width,
+            self._screen_settings.height,
+        )
         self._property_panel.styleChanged.connect(self._apply_style)
         self._property_panel.presetSchemesChanged.connect(self._apply_style_presets)
         self._property_panel.defaultSchemeSaveRequested.connect(
@@ -3309,7 +3312,10 @@ class SubtitleRenderWindow(QWidget):
         )
         self._transport_bar.set_preview_fps(self._screen_settings.fps)
         self._rescale_layout_for_height(self._screen_settings.height)
-        self._property_panel.set_n3_template_target_height(self._screen_settings.height)
+        self._property_panel.set_output_size(
+            self._screen_settings.width,
+            self._screen_settings.height,
+        )
         self._margin_check_timer.start()
         self._save_persisted_state()
 
@@ -3322,7 +3328,7 @@ class SubtitleRenderWindow(QWidget):
         finally:
             self._syncing_screen_controls = False
         if hasattr(self, "_property_panel"):
-            self._property_panel.set_n3_template_target_height(settings.height)
+            self._property_panel.set_output_size(settings.width, settings.height)
 
     def _export_fps_value(self) -> int:
         data = self._export_fps_combo.currentData()

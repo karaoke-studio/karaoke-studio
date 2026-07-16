@@ -2998,16 +2998,36 @@ class _LayoutSchematic(QWidget):
     """布局示意图（借鉴 N3）：微缩屏幕 + 色条，不读数字也能看懂当前布局的
     行数、对齐、锚定和余白。跟随属性修改实时刷新。"""
 
-    _VIRTUAL_W = 1920.0
-    _VIRTUAL_H = 1080.0
+    _DEFAULT_VIRTUAL_W = 1920.0
+    _DEFAULT_VIRTUAL_H = 1080.0
+    _DISPLAY_HEIGHT = 150
     # 色条宽度做些许长短变化，模拟真实歌词行（N3 同款处理）
     _BAR_RATIOS = (0.58, 0.46, 0.53, 0.42, 0.5, 0.44, 0.55, 0.47)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._state: dict = {}
-        self.setFixedHeight(150)
+        self._virtual_width = self._DEFAULT_VIRTUAL_W
+        self._virtual_height = self._DEFAULT_VIRTUAL_H
+        self.setFixedHeight(self._DISPLAY_HEIGHT)
+        self.setFixedWidth(
+            round(self._DISPLAY_HEIGHT * self._virtual_width / self._virtual_height)
+        )
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+
+    def set_output_size(self, width: int, height: int) -> None:
+        """Use the real output canvas for pixel mapping and screen aspect ratio."""
+        width = int(width)
+        height = int(height)
+        if width <= 0 or height <= 0:
+            return
+        if width == self._virtual_width and height == self._virtual_height:
+            return
+        self._virtual_width = float(width)
+        self._virtual_height = float(height)
+        self.setFixedWidth(round(self._DISPLAY_HEIGHT * width / height))
+        self.updateGeometry()
+        self.update()
 
     def set_state(self, **state: Any) -> None:
         if state != self._state:
@@ -3037,10 +3057,11 @@ class _LayoutSchematic(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
 
         scale = min(
-            self.width() / self._VIRTUAL_W, self.height() / self._VIRTUAL_H
+            self.width() / self._virtual_width,
+            self.height() / self._virtual_height,
         )
-        screen_w = self._VIRTUAL_W * scale
-        screen_h = self._VIRTUAL_H * scale
+        screen_w = self._virtual_width * scale
+        screen_h = self._virtual_height * scale
         screen = QRectF(
             (self.width() - screen_w) / 2,
             (self.height() - screen_h) / 2,
@@ -3090,20 +3111,20 @@ class _LayoutSchematic(QWidget):
         if y_position == "top":
             y0 = y_margin
         elif y_position == "center":
-            y0 = (self._VIRTUAL_H - block_h) / 2
+            y0 = (self._virtual_height - block_h) / 2
         else:
-            y0 = self._VIRTUAL_H - y_margin - block_h
+            y0 = self._virtual_height - y_margin - block_h
 
         painter.setPen(guide_pen)
         if h_margin > 0:
-            for x in (h_margin, self._VIRTUAL_W - h_margin):
+            for x in (h_margin, self._virtual_width - h_margin):
                 painter.drawLine(
                     QPointF(screen.left() + x * scale, screen.top()),
                     QPointF(screen.left() + x * scale, screen.bottom()),
                 )
         if y_margin > 0 and y_position != "center":
             guide_y = (
-                y_margin if y_position == "top" else self._VIRTUAL_H - y_margin
+                y_margin if y_position == "top" else self._virtual_height - y_margin
             )
             painter.drawLine(
                 QPointF(screen.left(), screen.top() + guide_y * scale),
@@ -3112,15 +3133,15 @@ class _LayoutSchematic(QWidget):
 
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(bar_color)
-        usable_w = max(100.0, self._VIRTUAL_W - 2 * h_margin)
+        usable_w = max(100.0, self._virtual_width - 2 * h_margin)
         for index, (align, dx, dy) in enumerate(specs):
             bar_w = usable_w * self._BAR_RATIOS[index % len(self._BAR_RATIOS)]
             if align == "left":
                 x = h_margin
             elif align == "right":
-                x = self._VIRTUAL_W - h_margin - bar_w
+                x = self._virtual_width - h_margin - bar_w
             else:
-                x = (self._VIRTUAL_W - bar_w) / 2
+                x = (self._virtual_width - bar_w) / 2
             y = y0 + index * (bar_h + gap)
             painter.drawRect(
                 QRectF(
@@ -3142,13 +3163,13 @@ class _LayoutSchematic(QWidget):
         if y_position == "top":
             x0 = y_margin
         elif y_position == "center":
-            x0 = (self._VIRTUAL_W - block_w) / 2
+            x0 = (self._virtual_width - block_w) / 2
         else:
-            x0 = self._VIRTUAL_W - y_margin - block_w
+            x0 = self._virtual_width - y_margin - block_w
 
         painter.setPen(guide_pen)
         if h_margin > 0:
-            for y in (h_margin, self._VIRTUAL_H - h_margin):
+            for y in (h_margin, self._virtual_height - h_margin):
                 painter.drawLine(
                     QPointF(screen.left(), screen.top() + y * scale),
                     QPointF(screen.right(), screen.top() + y * scale),
@@ -3156,15 +3177,15 @@ class _LayoutSchematic(QWidget):
 
         painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(bar_color)
-        usable_h = max(100.0, self._VIRTUAL_H - 2 * h_margin)
+        usable_h = max(100.0, self._virtual_height - 2 * h_margin)
         for index, (align, dx, dy) in enumerate(specs):
             col_h = usable_h * self._BAR_RATIOS[index % len(self._BAR_RATIOS)]
             if align == "left":
                 y = h_margin
             elif align == "right":
-                y = self._VIRTUAL_H - h_margin - col_h
+                y = self._virtual_height - h_margin - col_h
             else:
-                y = (self._VIRTUAL_H - col_h) / 2
+                y = (self._virtual_height - col_h) / 2
             # 第1行在最右（竖排从右往左读）
             x = x0 + (count - 1 - index) * (col_w + gap)
             painter.drawRect(
@@ -3822,6 +3843,19 @@ class PropertyPanel(QWidget):
     def set_n3_template_target_height(self, height: int) -> None:
         """Set the output height used when an N3 template preset is applied."""
         self._n3_template_target_height = max(1, int(height))
+
+    def set_output_size(self, width: int, height: int) -> None:
+        """Update output-dependent preset resolution and layout schematic."""
+        width = int(width)
+        height = int(height)
+        if width <= 0 or height <= 0:
+            return
+        self.set_n3_template_target_height(height)
+        if hasattr(self, "_layout_schematic"):
+            self._layout_schematic.set_output_size(width, height)
+        if hasattr(self, "_schematic_board"):
+            self._schematic_board._sync(force=True)
+            self._schematic_board.updateGeometry()
 
     def set_n3_template_lyrics_directory(self, path: Optional[Path]) -> None:
         """Set the project lyrics directory used for delayed bitmap lookup."""
@@ -5645,9 +5679,6 @@ class PropertyPanel(QWidget):
 
         # 中列：布局示意图；下方用单行表单贴上/下余白。
         self._layout_schematic = _LayoutSchematic(section)
-        # 黑色幕布本身就是 16:9；不让 QWidget 横向膀胀后在内部
-        # 留出透明空白，否则左侧控件看起来并没有贴着幕布。
-        self._layout_schematic.setFixedWidth(round(150 * 16 / 9))
 
         self._line_margin_spin = _spin(0, 400, suffix=" px")
         self._line_margin_spin.setFixedWidth(120)
