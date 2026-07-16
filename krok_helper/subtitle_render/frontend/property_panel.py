@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, replace
+import json
 import math
 from pathlib import Path
 from typing import Any, Optional
@@ -61,6 +62,7 @@ from PyQt6.QtWidgets import (
     QWIDGETSIZE_MAX,
 )
 from qfluentwidgets import (
+    Action,
     BodyLabel,
     CaptionLabel,
     CheckBox,
@@ -74,6 +76,7 @@ from qfluentwidgets import (
     PlainTextEdit as FluentPlainTextEdit,
     PrimaryPushButton as FluentPrimaryPushButton,
     PushButton as FluentPushButton,
+    RoundMenu,
     ScrollArea as FluentScrollArea,
     SegmentedWidget,
     SpinBox as FluentSpinBox,
@@ -1618,6 +1621,36 @@ class GradientStopsEditor(QWidget):
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802, ARG002
         self._dragging = False
 
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        if self._hard_edges:
+            super().contextMenuEvent(event)
+            return
+        menu = RoundMenu(parent=self)
+        copy_action = Action("复制渐变信息", menu)
+        copy_action.triggered.connect(self.copy_gradient_info)
+        menu.addAction(copy_action)
+        paste_action = Action("粘贴渐变信息…", menu)
+        paste_action.triggered.connect(self.paste_gradient_info)
+        menu.addAction(paste_action)
+        menu.exec(event.globalPos())
+        event.accept()
+
+    def copy_gradient_info(self) -> str:
+        text = _gradient_stops_to_json(self._stops)
+        QApplication.clipboard().setText(text)
+        return text
+
+    def paste_gradient_info(self) -> bool:
+        dialog = _GradientStopsPasteDialog(
+            QApplication.clipboard().text(),
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        self.set_stops(dialog.stops())
+        self.stopsChanged.emit(list(self._stops))
+        return True
+
     def _bar_rect(self) -> QRectF:
         if self._orientation == "horizontal":
             return QRectF(15, 8, max(self.width() - 30, 1), 22)
@@ -1783,6 +1816,62 @@ class GradientStopsEditor(QWidget):
         self.update()
         self.selectedChanged.emit(self._selected)
         self.stopsChanged.emit(list(self._stops))
+
+
+class _GradientStopsPasteDialog(QDialog):
+    """Import portable gradient-stop JSON into the current gradient bar."""
+
+    def __init__(self, text: str, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent.window() if parent is not None else None)
+        self.setWindowTitle("粘贴渐变信息")
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setMinimumSize(520, 360)
+        self._stops: list[tuple[float, str]] = []
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+
+        hint = CaptionLabel(
+            "粘贴 Karaoke Studio 渐变关键点 JSON。应用后仅替换当前渐变条的颜色和位置。",
+            self,
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self.text_edit = FluentPlainTextEdit(self)
+        self.text_edit.setPlaceholderText("在此粘贴渐变信息…")
+        self.text_edit.setPlainText(text)
+        layout.addWidget(self.text_edit, 1)
+
+        self.error_label = CaptionLabel("", self)
+        self.error_label.setWordWrap(True)
+        themed(self.error_label, lambda: "color: #D13438;")
+        layout.addWidget(self.error_label)
+
+        button_row, self.apply_button, _cancel_button = fluent_button_row(
+            self, ok_text="应用", cancel_text="取消"
+        )
+        layout.addLayout(button_row)
+        self.text_edit.textChanged.connect(self._validate)
+        self._validate()
+
+    def stops(self) -> list[tuple[float, str]]:
+        return list(self._stops)
+
+    def _validate(self) -> bool:
+        try:
+            self._stops = _gradient_stops_from_json(self.text_edit.toPlainText())
+        except ValueError as exc:
+            self._stops = []
+            self.error_label.setText(str(exc))
+            self.error_label.show()
+            self.apply_button.setEnabled(False)
+            return False
+        self.error_label.clear()
+        self.error_label.hide()
+        self.apply_button.setEnabled(True)
+        return True
 
 
 class _WheelFocusedSpinBox(FluentSpinBox):
@@ -7138,6 +7227,63 @@ def _normalized_stop_position(value: object) -> float:
         position = 0.0
     position = round(max(0.0, min(100.0, position)), 6)
     return int(position) if position.is_integer() else position
+
+
+_GRADIENT_STOPS_FORMAT = "karaoke-studio/gradient-stops"
+_GRADIENT_STOPS_VERSION = 1
+
+
+def _gradient_stops_to_json(stops: list[tuple[float, str]]) -> str:
+    normalized = _normalize_gradient_stops(stops)
+    payload = {
+        "format": _GRADIENT_STOPS_FORMAT,
+        "version": _GRADIENT_STOPS_VERSION,
+        "stops": [
+            {"position": position, "color": color}
+            for position, color in normalized
+        ],
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2)
+
+
+def _gradient_stops_from_json(text: str) -> list[tuple[float, str]]:
+    if not text.strip():
+        raise ValueError("请输入渐变信息。")
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"JSON 格式错误：第 {exc.lineno} 行，第 {exc.colno} 列。"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ValueError("渐变信息必须是 JSON 对象。")
+    if payload.get("format") != _GRADIENT_STOPS_FORMAT:
+        raise ValueError("无法识别该渐变信息格式。")
+    version = payload.get("version")
+    if type(version) is not int or version != _GRADIENT_STOPS_VERSION:
+        raise ValueError(f"不支持的渐变信息版本：{version!r}。")
+    raw_stops = payload.get("stops")
+    if not isinstance(raw_stops, list) or len(raw_stops) < 2:
+        raise ValueError("渐变信息至少需要两个关键点。")
+
+    stops: list[tuple[float, str]] = []
+    for index, item in enumerate(raw_stops, start=1):
+        if not isinstance(item, dict):
+            raise ValueError(f"第 {index} 个关键点必须是 JSON 对象。")
+        raw_position = item.get("position")
+        if isinstance(raw_position, bool) or not isinstance(
+            raw_position, (int, float)
+        ):
+            raise ValueError(f"第 {index} 个关键点的位置必须是数字。")
+        position = float(raw_position)
+        if not math.isfinite(position) or not 0 <= position <= 100:
+            raise ValueError(f"第 {index} 个关键点的位置必须在 0 到 100 之间。")
+        raw_color = item.get("color")
+        color = _parse_hex_color(raw_color) if isinstance(raw_color, str) else None
+        if color is None:
+            raise ValueError(f"第 {index} 个关键点的色号无效。")
+        stops.append((_normalized_stop_position(position), color))
+    return _normalize_gradient_stops(stops)
 
 
 def _normalize_gradient_stops(

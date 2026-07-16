@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -1671,6 +1672,130 @@ def test_property_panel_gradient_stop_editor_emits_style(qapp):
     assert (60.125, "#336699") in fill.gradient_stops
     assert fill.start_color == "#FF5A6F"
     assert fill.end_color == "#FF5A6F"
+
+
+def test_gradient_stop_json_round_trip_preserves_positions_and_colors():
+    stops = [
+        (0, "#112233"),
+        (40.125, "#804093E9"),
+        (40.125, "#AABBCC"),
+        (100, "#DDEEFF"),
+    ]
+
+    text = pp._gradient_stops_to_json(stops)
+    payload = json.loads(text)
+
+    assert payload["format"] == "karaoke-studio/gradient-stops"
+    assert payload["version"] == 1
+    assert "mode" not in payload
+    assert pp._gradient_stops_from_json(text) == stops
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        ({"format": "other", "version": 1, "stops": []}, "无法识别"),
+        (
+            {
+                "format": "karaoke-studio/gradient-stops",
+                "version": 2,
+                "stops": [],
+            },
+            "不支持",
+        ),
+        (
+            {
+                "format": "karaoke-studio/gradient-stops",
+                "version": 1,
+                "stops": [
+                    {"position": 0, "color": "#FFFFFF"},
+                    {"position": 101, "color": "#000000"},
+                ],
+            },
+            "0 到 100",
+        ),
+        (
+            {
+                "format": "karaoke-studio/gradient-stops",
+                "version": 1,
+                "stops": [
+                    {"position": 0, "color": "#FFFFFF"},
+                    {"position": 100, "color": "not-a-color"},
+                ],
+            },
+            "色号无效",
+        ),
+    ],
+)
+def test_gradient_stop_json_rejects_invalid_payload(payload, message):
+    with pytest.raises(ValueError, match=message):
+        pp._gradient_stops_from_json(json.dumps(payload))
+
+
+def test_gradient_stop_copy_and_paste_applies_to_current_layer(
+    qapp, monkeypatch
+):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+    source_stops = [
+        (0, "#112233"),
+        (37.5, "#804093E9"),
+        (100, "#DDEEFF"),
+    ]
+    panel._fill_mode_combo.setCurrentIndex(
+        panel._fill_mode_combo.findData("gradient_vertical")
+    )
+    panel._gradient_editor.set_stops(source_stops)
+    copied = panel._gradient_editor.copy_gradient_info()
+
+    assert QApplication.clipboard().text() == copied
+
+    panel._color_layer_combo.setCurrentIndex(
+        panel._color_layer_combo.findData("stroke2")
+    )
+    panel._fill_mode_combo.setCurrentIndex(
+        panel._fill_mode_combo.findData("gradient_horizontal")
+    )
+    monkeypatch.setattr(
+        pp._GradientStopsPasteDialog,
+        "exec",
+        lambda _self: QDialog.DialogCode.Accepted,
+    )
+
+    assert panel._gradient_editor.paste_gradient_info()
+
+    fill = emitted[-1].karaoke_colors.after.stroke2
+    assert fill.mode == "gradient_horizontal"
+    assert fill.gradient_stops == source_stops
+    assert fill.start_color == "#112233"
+    assert fill.end_color == "#DDEEFF"
+
+
+def test_gradient_bar_context_menu_exposes_copy_and_paste(qapp, monkeypatch):
+    editor = pp.GradientStopsEditor()
+    action_texts: list[str] = []
+
+    def fake_exec(menu, _pos):
+        action_texts.extend(action.text() for action in menu.actions())
+
+    monkeypatch.setattr(pp.RoundMenu, "exec", fake_exec)
+
+    class FakeContextMenuEvent:
+        accepted = False
+
+        @staticmethod
+        def globalPos():  # noqa: N802 - Qt API shape
+            return QPoint(10, 10)
+
+        def accept(self):
+            self.accepted = True
+
+    event = FakeContextMenuEvent()
+    editor.contextMenuEvent(event)
+
+    assert action_texts == ["复制渐变信息", "粘贴渐变信息…"]
+    assert event.accepted
 
 
 def test_property_panel_gradient_bar_click_adds_stop(qapp):
