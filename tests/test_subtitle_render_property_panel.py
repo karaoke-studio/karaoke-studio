@@ -3699,6 +3699,15 @@ def test_color_button_updates_text_and_color(qapp):
     assert button.text() == "#010203"
 
 
+def test_color_button_hover_keeps_neutral_border(qapp):
+    button = ColorButton("#39C5BB")
+    stylesheet = button._swatch.styleSheet()
+
+    hover_rule = stylesheet.split("QPushButton:hover", 1)[1]
+    assert f"border-color: {pp.palette().card_border}" in hover_rule
+    assert pp.palette().accent_primary not in hover_rule
+
+
 def test_color_button_click_edits_hex_without_opening_dialog(qapp):
     button = ColorButton("#4093E9")
     button.show()

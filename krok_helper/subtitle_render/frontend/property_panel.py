@@ -526,7 +526,8 @@ class _ColorSwatchButton(QPushButton):
                 font-size: 9pt;
             }}
             QPushButton:hover {{
-                border-color: {palette().accent_primary};
+                background: {background};
+                border-color: {palette().card_border};
             }}
             """
         )
