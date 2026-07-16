@@ -1075,6 +1075,12 @@ class SubtitleRenderWindow(QWidget):
         self._export_width_spin.valueChanged.connect(self._on_export_screen_changed)
         self._export_height_spin.valueChanged.connect(self._on_export_screen_changed)
         self._export_fps_combo.currentIndexChanged.connect(self._on_export_screen_changed)
+        self._export_width_spin.valueChanged.connect(self._refresh_export_format_label)
+        self._export_height_spin.valueChanged.connect(self._refresh_export_format_label)
+        self._export_fps_combo.currentIndexChanged.connect(
+            self._refresh_export_format_label
+        )
+        self._refresh_export_format_label()
 
         # 底部导航：两个水平按钮，距左/下边各 24px
         bottom_bar = QWidget(self)
@@ -4112,18 +4118,48 @@ class SubtitleRenderWindow(QWidget):
         # 导出进行中标签由 _export_format_text 的完整信息占据，不在此覆盖
         if not self._export_start_button.isEnabled():
             return
+        directory_text = self._export_dir_edit.text().strip()
+        directory = Path(directory_text).expanduser() if directory_text else None
         self._export_format_label.setText(
-            f"输出格式: MP4 · {self._codec_display(self._export_codec_value())}"
+            self._export_format_values_text(
+                codec=self._export_codec_value(),
+                width=self._export_width_spin.value(),
+                height=self._export_height_spin.value(),
+                fps=self._export_fps_value(),
+                output_directory=directory,
+            )
         )
 
     def _export_format_text(self, job: RenderJob) -> str:
-        text = (
-            f"输出格式: MP4 · {self._codec_display(job.codec)}"
-            f" · {job.width}×{job.height} @ {job.fps}fps"
+        return self._export_format_values_text(
+            codec=job.codec,
+            width=job.width,
+            height=job.height,
+            fps=job.fps,
+            output_directory=job.output_path.parent,
         )
+
+    def _export_format_values_text(
+        self,
+        *,
+        codec: str,
+        width: int,
+        height: int,
+        fps: int,
+        output_directory: Optional[Path],
+    ) -> str:
+        text = (
+            f"输出格式: MP4 · {self._codec_display(codec)}"
+            f" · {width}×{height} @ {fps}fps"
+        )
+        if output_directory is None:
+            return text
         try:
-            parent = job.output_path.parent
-            probe = parent if parent.exists() else Path(job.output_path.anchor or ".")
+            probe = (
+                output_directory
+                if output_directory.exists()
+                else Path(output_directory.anchor or ".")
+            )
             free_gb = shutil.disk_usage(probe).free / 1024**3
             text += f" · 磁盘可用 {free_gb:.0f} GB"
         except OSError:

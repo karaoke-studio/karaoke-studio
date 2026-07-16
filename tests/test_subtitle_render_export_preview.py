@@ -23,6 +23,17 @@ from krok_helper.subtitle_render.frontend.main_window import (  # noqa: E402
 )
 
 
+class _SettingsProvider:
+    def __init__(self):
+        self.data = {}
+
+    def load(self):
+        return dict(self.data)
+
+    def save(self, data):
+        self.data = dict(data)
+
+
 @pytest.fixture(scope="module")
 def qapp():
     app = QApplication.instance() or QApplication([])
@@ -159,11 +170,53 @@ def test_export_monitor_matches_settings_height_and_uses_card_width(qapp):
 
 
 def test_export_page_omits_title_block_and_initial_status(qapp):
-    window = SubtitleRenderWindow(embedded=True)
+    window = SubtitleRenderWindow(embedded=True, settings_provider=_SettingsProvider())
     try:
         assert not hasattr(window, "_export_title_label")
         assert not hasattr(window, "_export_caption_label")
         assert window._export_status_label.text() == ""
+        assert (
+            f"{window._export_width_spin.value()}×{window._export_height_spin.value()}"
+            f" @ {window._export_fps_value()}fps"
+            in window._export_format_label.text()
+        )
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+def test_export_format_label_tracks_idle_screen_controls_without_starting_export(qapp):
+    window = SubtitleRenderWindow(embedded=True, settings_provider=_SettingsProvider())
+    try:
+        window._export_width_spin.setValue(3840)
+        window._export_height_spin.setValue(2160)
+        fps_index = window._export_fps_combo.findData(120)
+        assert fps_index >= 0
+        window._export_fps_combo.setCurrentIndex(fps_index)
+        qapp.processEvents()
+
+        assert window._export_start_button.isEnabled()
+        assert "3840×2160 @ 120fps" in window._export_format_label.text()
+    finally:
+        window.close()
+        window.deleteLater()
+        qapp.processEvents()
+
+
+def test_export_format_label_keeps_active_job_snapshot(qapp):
+    window = SubtitleRenderWindow(embedded=True, settings_provider=_SettingsProvider())
+    try:
+        window._export_start_button.setEnabled(False)
+        window._export_format_label.setText(
+            "输出格式: MP4 · H.264 (AVC) · 1920×1080 @ 60fps"
+        )
+
+        window._export_width_spin.setValue(3840)
+        window._export_height_spin.setValue(2160)
+        qapp.processEvents()
+
+        assert "1920×1080 @ 60fps" in window._export_format_label.text()
     finally:
         window.close()
         window.deleteLater()
