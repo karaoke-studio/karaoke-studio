@@ -1091,7 +1091,6 @@ def test_layout_schematic_tracks_output_resolution_and_aspect_ratio(qapp):
     schematic = _LayoutSchematic()
 
     assert (schematic._virtual_width, schematic._virtual_height) == (1920, 1080)
-    assert schematic.width() / schematic.height() == pytest.approx(16 / 9, rel=0.01)
 
     # Same aspect ratio changes pixel mapping even though the widget shape is stable.
     schematic.set_output_size(3840, 2160)

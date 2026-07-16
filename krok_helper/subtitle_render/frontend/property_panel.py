@@ -3010,9 +3010,6 @@ class _LayoutSchematic(QWidget):
         self._virtual_width = self._DEFAULT_VIRTUAL_W
         self._virtual_height = self._DEFAULT_VIRTUAL_H
         self.setFixedHeight(self._DISPLAY_HEIGHT)
-        self.setFixedWidth(
-            round(self._DISPLAY_HEIGHT * self._virtual_width / self._virtual_height)
-        )
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
     def set_output_size(self, width: int, height: int) -> None:
@@ -5679,6 +5676,9 @@ class PropertyPanel(QWidget):
 
         # 中列：布局示意图；下方用单行表单贴上/下余白。
         self._layout_schematic = _LayoutSchematic(section)
+        # 初始固定宽度必须在父面板构建阶段设置；若提前到子控件构造器中，
+        # QScrollArea 会缓存过大的最小宽度，320px 窄面板将产生横向溢出。
+        self._layout_schematic.setFixedWidth(round(150 * 16 / 9))
 
         self._line_margin_spin = _spin(0, 400, suffix=" px")
         self._line_margin_spin.setFixedWidth(120)
@@ -5860,7 +5860,9 @@ class PropertyPanel(QWidget):
             ),
             default=0,
         )
-        self._layout_combo.setFixedWidth(max(120, min(280, text_width + 48)))
+        # Four management buttons share this row.  A 110px floor keeps the
+        # complete navigation inside the supported 320px panel width.
+        self._layout_combo.setFixedWidth(max(110, min(280, text_width + 32)))
 
     def _sync_layout_editor_controls(self) -> None:
         values = self._current_layout_values()
