@@ -4107,21 +4107,19 @@ class SubtitleRenderWindow(QWidget):
         self._export_status_label.setText(f"导出完成: {output_path}")
         self._export_start_button.setEnabled(True)
         self._export_stop_button.setEnabled(False)
-        bar = InfoBar.success(
-            title="导出完成",
-            content=output_path.name,
-            parent=self,
-            position=InfoBarPosition.BOTTOM_RIGHT,
-            duration=6000,
+        choice = fluent_choice(
+            self,
+            "视频导出完成",
+            f"视频已成功导出：\n{output_path}\n\n是否自动进入下一步？",
+            ("打开文件夹", "进入下一步", "取消"),
+            default=1,
         )
-        open_button = FluentPushButton("打开所在文件夹")
-        open_button.clicked.connect(
-            lambda _=False, p=output_path: self._open_export_folder(p)
-        )
-        bar.addWidget(open_button)
-        context = self._workflow_context
-        if context is not None and hasattr(context, "accept_subtitle_video"):
-            context.accept_subtitle_video(output_path)
+        if choice == 0:
+            self._open_export_folder(output_path)
+        elif choice == 1:
+            context = self._workflow_context
+            if context is not None and hasattr(context, "accept_subtitle_video"):
+                context.accept_subtitle_video(output_path)
 
     def _open_export_folder(self, output_path: Path) -> None:
         # Windows 下用资源管理器直接选中导出文件，其余平台退回打开所在目录。

@@ -50,21 +50,44 @@ def test_entering_subtitle_render_only_switches_page() -> None:
     ]
 
 
-def test_subtitle_render_success_passes_output_to_workflow_context(
-    qapp, tmp_path: Path
+def test_subtitle_render_success_prompts_for_post_export_action(
+    qapp, monkeypatch, tmp_path: Path
 ) -> None:
-    received: dict[str, Path] = {}
+    received: list[Path] = []
+    opened: list[Path] = []
+    prompts: list[tuple] = []
+    choices = iter((0, 1, 2))
 
     class Context:
         def accept_subtitle_video(self, path: Path) -> None:
-            received["path"] = path
+            received.append(path)
 
     window = SubtitleRenderWindow(embedded=True, workflow_context=Context())
     output = tmp_path / "subtitle.mp4"
+    monkeypatch.setattr(window, "_open_export_folder", opened.append)
+
+    def choose(*args, **kwargs):
+        prompts.append((args, kwargs))
+        return next(choices)
+
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.main_window.fluent_choice",
+        choose,
+    )
 
     window._finish_render_success(output)
+    window._finish_render_success(output)
+    window._finish_render_success(output)
 
-    assert received["path"] == output
+    assert opened == [output]
+    assert received == [output]
+    assert len(prompts) == 3
+    args, kwargs = prompts[0]
+    assert args[0] is window
+    assert args[1] == "视频导出完成"
+    assert str(output) in args[2]
+    assert args[3] == ("打开文件夹", "进入下一步", "取消")
+    assert kwargs == {"default": 1}
 
 
 def test_accept_subtitle_video_fills_hires_video_and_switches_page(tmp_path: Path) -> None:
