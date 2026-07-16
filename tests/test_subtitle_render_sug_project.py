@@ -270,3 +270,55 @@ def test_sug_ruby_without_sentence_end_borrows_next_line_start() -> None:
 
     assert track.rubies[0].pos_start_ms == 1000
     assert track.rubies[0].pos_end_ms == 2400
+
+
+def test_sug_mid_line_pause_does_not_truncate_line_or_later_ruby() -> None:
+    singer = Singer(id="main", name="主唱", color="#ff0000", is_default=True)
+    first = Sentence(
+        singer_id=singer.id,
+        characters=[
+            Character(
+                char="前",
+                ruby=Ruby(parts=[RubyPart("まえ")]),
+                check_count=1,
+                timestamps=[1000],
+                sentence_end_ts=1300,
+                is_sentence_end=True,
+                singer_id=singer.id,
+            ),
+            Character(
+                char="意",
+                ruby=Ruby(parts=[RubyPart("い")]),
+                check_count=1,
+                timestamps=[1600],
+                is_line_end=True,
+                singer_id=singer.id,
+            ),
+        ],
+    )
+    following = Sentence(
+        singer_id=singer.id,
+        characters=[
+            Character(
+                char="次",
+                check_count=1,
+                timestamps=[2400],
+                is_line_end=True,
+                singer_id=singer.id,
+            )
+        ],
+    )
+    project = Project(singers=[singer], sentences=[first, following])
+
+    track = timing_track_from_sug_project(project)
+
+    assert track.lines[0].chars[0].pause_release_ms == 1300
+    assert track.lines[0].end_ms == 2400
+    ruby_values = [
+        (ruby.kanji, ruby.reading, ruby.pos_start_ms, ruby.pos_end_ms)
+        for ruby in track.rubies[:2]
+    ]
+    assert ruby_values == [
+        ("前", "まえ", 1000, 1300),
+        ("意", "い", 1600, 2400),
+    ]

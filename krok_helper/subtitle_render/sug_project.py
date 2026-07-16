@@ -61,7 +61,6 @@ def timing_track_from_sug_project(project: Any) -> TimingTrack:
             continue
 
         line_chars: list[TimingChar] = []
-        line_end_ms: int | None = None
         line_singer_id = _effective_singer_id(
             getattr(sentence, "singer_id", ""), default_singer_id
         )
@@ -73,13 +72,6 @@ def timing_track_from_sug_project(project: Any) -> TimingTrack:
             else None
         )
 
-        for ch in chars:
-            sentence_end_ms = _offset_optional(
-                getattr(ch, "sentence_end_ts", None), offset_ms
-            )
-            if sentence_end_ms is not None:
-                line_end_ms = sentence_end_ms
-
         line_chars = _timing_chars_for_sentence(
             chars=chars,
             offset_ms=offset_ms,
@@ -88,6 +80,9 @@ def timing_track_from_sug_project(project: Any) -> TimingTrack:
             sentence_singer_id=getattr(sentence, "singer_id", ""),
             default_singer_id=default_singer_id,
             singer_by_id=singer_by_id,
+        )
+        line_end_ms = _group_end_ms(
+            chars, len(chars), offset_ms, project, sentence_index
         )
 
         rubies.extend(
