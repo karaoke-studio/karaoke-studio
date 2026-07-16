@@ -4036,6 +4036,11 @@ class SubtitleRenderWindow(QWidget):
         if self._suppress_next_render_command_log:
             self._suppress_next_render_command_log = False
             return
+        if "Late SEI is not implemented" in message or (
+            "If you want to help, upload a sample of this file" in message
+            and "ffmpeg-devel" in message
+        ):
+            return
         self._export_status_label.setText(message)
 
     def _export_codec_value(self) -> str:

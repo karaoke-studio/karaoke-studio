@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import os
 import subprocess
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -164,6 +165,18 @@ def render_subtitle_video(
     if on_process_started is not None:
         on_process_started(process)
 
+    # ffmpeg can emit recurring decoder warnings while it is still consuming
+    # rawvideo from stdin.  Drain its merged stdout/stderr concurrently;
+    # otherwise the small Windows pipe buffer can fill and deadlock both sides
+    # before all subtitle frames have been written.
+    output_drain_thread = threading.Thread(
+        target=_drain_process_output,
+        args=(process, logger),
+        name="subtitle-ffmpeg-output",
+        daemon=True,
+    )
+    output_drain_thread.start()
+
     try:
         assert process.stdin is not None
         # A3：帧数够多时多进程并行渲染（offscreen worker 池），主进程按序喂 ffmpeg；
@@ -198,8 +211,8 @@ def render_subtitle_video(
                 should_cancel, on_progress,
             )
         process.stdin.close()
-        _drain_process_output(process, logger)
         return_code = process.wait()
+        output_drain_thread.join()
     except ExportCancelled:
         terminate_process(process)
         _remove_incomplete_output(job.output_path, logger)
@@ -215,6 +228,8 @@ def render_subtitle_video(
             raise ExportCancelled("已停止导出。") from exc
         raise ProcessingError(f"ffmpeg 管道写入失败: {exc}") from exc
     finally:
+        if process.poll() is not None and output_drain_thread.is_alive():
+            output_drain_thread.join(timeout=1.0)
         if on_process_started is not None:
             on_process_started(None)
 

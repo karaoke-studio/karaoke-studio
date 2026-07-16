@@ -606,6 +606,24 @@ def test_render_log_does_not_flash_ffmpeg_command_in_status(qapp, monkeypatch):
     assert win._export_status_label.text() == "多进程导出: 8 个 worker"
 
 
+def test_render_log_does_not_flash_late_sei_warning_in_status(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+    progress = "正在导出… 3002/10079 帧"
+    win._export_status_label.setText(progress)
+
+    win._on_render_log(
+        "[h264 @ 000001b8440d22c0] Late SEI is not implemented. "
+        "Update your FFmpeg version to the newest one from Git."
+    )
+    assert win._export_status_label.text() == progress
+
+    win._on_render_log(
+        "[h264 @ 000001b8440d22c0] If you want to help, upload a sample of this file "
+        "to https://streams.videolan.org/upload/ and contact the ffmpeg-devel mailing list."
+    )
+    assert win._export_status_label.text() == progress
+
+
 # ---------------------------------------------------------------------------
 # 布局完整性
 # ---------------------------------------------------------------------------

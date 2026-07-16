@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 import os
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -578,6 +579,45 @@ def test_render_ignores_native_enable_and_uses_python(monkeypatch, tmp_path):
     assert writes == [(0, 1, 2)]
     assert bytes(fake_process.stdin.data) == b"p" * 16
     assert progress == [(2, 2)]
+
+
+def test_render_drains_ffmpeg_output_while_writing_frames(monkeypatch, tmp_path):
+    job = replace(
+        _job(tmp_path),
+        width=2,
+        height=1,
+        fps=2,
+        duration_ms=1000,
+    )
+    fake_process = _FakeRenderProcess(job.output_path)
+    drain_started = threading.Event()
+    allow_drain_to_finish = threading.Event()
+
+    def fake_drain(_process, _logger):
+        drain_started.set()
+        assert allow_drain_to_finish.wait(timeout=1.0)
+
+    def fake_write_frames_single(
+        process,
+        _job,
+        _strip_top,
+        render_h,
+        total_frames,
+        _should_cancel,
+        _on_progress,
+    ):
+        assert drain_started.wait(timeout=1.0)
+        process.stdin.write(b"p" * (_job.width * render_h * 4 * total_frames))
+        allow_drain_to_finish.set()
+
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STRIP", "0")
+    monkeypatch.setattr(renderer, "find_tool", lambda _name, _ffmpeg_dir=None: "ffmpeg")
+    monkeypatch.setattr(renderer, "_drain_process_output", fake_drain)
+    monkeypatch.setattr(renderer, "_write_frames_single", fake_write_frames_single)
+    monkeypatch.setattr(renderer.subprocess, "Popen", lambda *args, **kwargs: fake_process)
+
+    assert render_subtitle_video(job) == job.output_path
+    assert not fake_process.terminated
 
 
 def test_render_job_native_export_flag_and_environment_are_ignored(monkeypatch, tmp_path):
