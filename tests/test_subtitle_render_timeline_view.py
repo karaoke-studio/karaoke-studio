@@ -15,6 +15,8 @@ from krok_helper.subtitle_render.frontend.timeline_view import (  # noqa: E402
     build_lanes,
 )
 from krok_helper.subtitle_render.models import (  # noqa: E402
+    LineAnimationOverride,
+    Style,
     TimingChar,
     TimingLine,
     TimingTrack,
@@ -308,6 +310,71 @@ def test_click_block_selects_and_click_empty_deselects(qapp) -> None:
     _click(widget, widget._x_for_ms(8000), rect.center().y())  # 空白处
     assert widget._selected is None
     assert widget._handle_rects() is None
+
+
+def test_handle_hover_shows_effective_animation_name_and_duration(
+    qapp, monkeypatch
+) -> None:
+    track = _make_track()
+    track.lines[0].animation_override = LineAnimationOverride(
+        entry_anim="slide_in",
+        entry_duration_ms=650,
+        exit_anim="char_fade",
+        exit_duration_ms=900,
+    )
+    widget = TrackTimelineView()
+    widget.resize(800, 180)
+    widget.set_tracks([('主字幕', track)])
+    widget.set_style(Style(entry_anim="fade", exit_anim="slide_out"))
+    widget.set_duration(10_000)
+    widget.set_display_windows([{0: (500, 3200)}])
+    shown: list[str] = []
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.timeline_view.QToolTip.showText",
+        lambda _pos, text, *_args: shown.append(text),
+    )
+
+    _lane, lane_rect = widget._lane_geometry()[0]
+    _click(widget, widget._x_for_ms(1650), lane_rect.center().y())
+    left_rect, right_rect, _lane_index, _block = widget._handle_rects()
+
+    _move(widget, left_rect.center().x(), left_rect.center().y())
+    _move(widget, right_rect.center().x(), right_rect.center().y())
+
+    assert shown == ["入场：滑入（650 ms）", "退场：逐字淡出（900 ms）"]
+    assert all("本句" not in text and "全局" not in text for text in shown)
+
+
+def test_handle_hover_uses_global_animation_when_line_has_no_override(
+    qapp, monkeypatch
+) -> None:
+    widget = TrackTimelineView()
+    widget.resize(800, 180)
+    widget.set_tracks([('主字幕', _make_track())])
+    widget.set_style(
+        Style(
+            entry_anim="fade",
+            entry_lead_ms=300,
+            exit_anim="slide_out",
+            exit_fade_ms=500,
+        )
+    )
+    widget.set_duration(10_000)
+    widget.set_display_windows([{0: (500, 3200)}])
+    shown: list[str] = []
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.timeline_view.QToolTip.showText",
+        lambda _pos, text, *_args: shown.append(text),
+    )
+
+    _lane, lane_rect = widget._lane_geometry()[0]
+    _click(widget, widget._x_for_ms(1650), lane_rect.center().y())
+    left_rect, right_rect, _lane_index, _block = widget._handle_rects()
+
+    _move(widget, left_rect.center().x(), left_rect.center().y())
+    _move(widget, right_rect.center().x(), right_rect.center().y())
+
+    assert shown == ["入场：淡入（300 ms）", "退场：滑出（500 ms）"]
 
 
 def test_drag_left_handle_writes_show_override(qapp) -> None:

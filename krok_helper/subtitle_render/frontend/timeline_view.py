@@ -22,7 +22,12 @@ from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPixmap
 from PyQt6.QtWidgets import QStyle, QStyleOption, QToolTip, QWidget
 
 from krok_helper.subtitle_render.frontend.theme import palette, themed
-from krok_helper.subtitle_render.models import TimingLine, TimingTrack
+from krok_helper.subtitle_render.models import (
+    Style,
+    TimingLine,
+    TimingTrack,
+    style_with_line_animation,
+)
 
 _LABEL_GUTTER_W = 72
 """左侧轨道名列宽（"T1 主字幕"）。"""
@@ -54,6 +59,25 @@ _MIN_VIEW_SPAN_MS = 2_000
 
 _TICK_LADDER_MS = (1_000, 2_000, 5_000, 10_000, 15_000, 30_000, 60_000, 120_000, 300_000)
 """刻度主格挡位，按缩放自适应选择。"""
+
+_ENTRY_ANIMATION_LABELS = {
+    "none": "无",
+    "fade": "淡入",
+    "slide_in": "滑入",
+    "rise": "上升",
+    "char_fade": "逐字淡入",
+    "spin_flip": "翻转",
+    "utopia": "Utopia",
+}
+_EXIT_ANIMATION_LABELS = {
+    "none": "无",
+    "fade": "淡出",
+    "slide_out": "滑出",
+    "rise": "上升",
+    "char_fade": "逐字淡出",
+    "spin_flip": "翻转",
+    "utopia": "Utopia",
+}
 
 
 @dataclass(frozen=True)
@@ -159,6 +183,7 @@ class TrackTimelineView(QWidget):
         """与 ``_lanes`` 对齐的 TimingTrack 引用，把手拖动直接写覆盖字段。"""
         self._windows: list[dict[int, tuple[int, int]]] = []
         """宿主推送的显示窗口：每轨 ``行索引 → (上屏, 消失)``（含全局提前/延迟）。"""
+        self._style = Style()
         self._selected: Optional[tuple[int, int]] = None
         """当前选中句：(轨道序号, ``track.lines`` 行索引)。"""
         self._duration_ms = 0
@@ -207,6 +232,10 @@ class TrackTimelineView(QWidget):
         """宿主推送各轨道的行显示窗口（与预览同一套布局参数算出）。"""
         self._windows = [dict(item) for item in windows]
         self.update()
+
+    def set_style(self, style: Style) -> None:
+        """设置用于解析逐行有效入退场特效的当前样式。"""
+        self._style = style
 
     def set_duration(self, ms: int) -> None:
         self._duration_ms = max(int(ms), 0)
@@ -811,12 +840,21 @@ class TrackTimelineView(QWidget):
     def _update_hover(self, event, pos) -> None:
         handles = self._handle_rects()
         if handles is not None:
-            left_rect, right_rect, _lane_index, _block = handles
-            if left_rect.adjusted(-3, -3, 3, 3).contains(pos) or right_rect.adjusted(
-                -3, -3, 3, 3
-            ).contains(pos):
+            left_rect, right_rect, lane_index, block = handles
+            left_hovered = left_rect.adjusted(-3, -3, 3, 3).contains(pos)
+            right_hovered = right_rect.adjusted(-3, -3, 3, 3).contains(pos)
+            if left_hovered or right_hovered:
                 self.setCursor(Qt.CursorShape.SizeHorCursor)
-                QToolTip.hideText()
+                tooltip = self._animation_tooltip(
+                    lane_index,
+                    block,
+                    entry=left_hovered,
+                )
+                QToolTip.showText(
+                    event.globalPosition().toPoint(),
+                    tooltip,
+                    self,
+                )
                 return
         if self._zoombar_rect().contains(pos):
             x0, x1 = self._zoombar_thumb_span()
@@ -838,6 +876,25 @@ class TrackTimelineView(QWidget):
         else:
             self.unsetCursor()
             QToolTip.hideText()
+
+    def _animation_tooltip(
+        self, lane_index: int, block: LineBlock, *, entry: bool
+    ) -> str:
+        line = self._track_refs[lane_index].lines[block.line_index]
+        effective = style_with_line_animation(self._style, line)
+        if entry:
+            animation = effective.entry_anim
+            label = _ENTRY_ANIMATION_LABELS.get(animation, animation)
+            duration_ms = max(int(effective.entry_lead_ms), 0)
+            phase = "入场"
+        else:
+            animation = effective.exit_anim
+            label = _EXIT_ANIMATION_LABELS.get(animation, animation)
+            duration_ms = max(int(effective.exit_fade_ms), 0)
+            phase = "退场"
+        if animation == "none":
+            return f"{phase}：{label}"
+        return f"{phase}：{label}（{duration_ms} ms）"
 
     def _line_override_values(
         self, lane_index: int, line_index: int

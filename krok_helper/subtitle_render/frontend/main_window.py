@@ -2655,6 +2655,7 @@ class SubtitleRenderWindow(QWidget):
         """按当前样式重算各轨行显示窗口，推给字幕轨道（把手条数据源）。"""
         if self._timing_track is None:
             return
+        self._tracks_view.set_style(self._style)
         self._tracks_view.set_display_windows(
             [display_windows_for_style(track, self._style) for track in self._all_tracks()]
         )
