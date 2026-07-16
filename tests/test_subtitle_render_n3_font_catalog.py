@@ -13,6 +13,7 @@ from krok_helper.subtitle_render.n3_font_catalog import (
     get_n3_font_catalog,
     normalize_scheme_font_families,
     normalize_style_font_families,
+    resolve_qt_font_family,
 )
 from krok_helper.subtitle_render.models import Style, SubtitleStyleScheme, TitleOverlay
 
@@ -36,6 +37,65 @@ def test_build_catalog_prefers_japanese_name_and_maps_every_alias():
     assert catalog.canonicalize("English Alias") == "日本語名"
     assert catalog.canonicalize("日本語名") == "日本語名"
     assert catalog.canonicalize("english alias") == "日本語名"
+
+
+def test_build_catalog_keeps_display_name_but_resolves_qt_visible_alias():
+    catalog = _build_catalog(
+        [
+            _FamilyRecord(
+                names=(("en-us", "English Alias"), ("ja-jp", "Japanese Display")),
+                styles=(0,),
+            )
+        ],
+        compare=_compare,
+        qt_families=("English Alias",),
+    )
+
+    assert catalog.families == ("Japanese Display",)
+    assert catalog.canonicalize("English Alias") == "Japanese Display"
+    assert catalog.qt_family("Japanese Display") == "English Alias"
+    assert catalog.qt_family("English Alias") == "English Alias"
+    assert catalog.aliases_for("Japanese Display") == (
+        "Japanese Display",
+        "English Alias",
+    )
+
+
+def test_build_catalog_prefers_qt_canonical_spelling_when_both_are_visible():
+    catalog = _build_catalog(
+        [
+            _FamilyRecord(
+                names=(("en-us", "English Alias"), ("ja-jp", "Japanese Display")),
+                styles=(0,),
+            )
+        ],
+        compare=_compare,
+        qt_families=("English Alias", "Japanese Display"),
+    )
+
+    assert catalog.qt_family("English Alias") == "Japanese Display"
+
+
+def test_resolve_qt_font_family_uses_catalog_runtime_name(monkeypatch):
+    catalog = _build_catalog(
+        [
+            _FamilyRecord(
+                names=(("en-us", "Arial"), ("ja-jp", "Japanese Arial")),
+                styles=(0,),
+            )
+        ],
+        compare=_compare,
+        qt_families=("Arial",),
+    )
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.n3_font_catalog.get_n3_font_catalog",
+        lambda: catalog,
+    )
+    resolve_qt_font_family.cache_clear()
+    try:
+        assert resolve_qt_font_family("Japanese Arial") == "Arial"
+    finally:
+        resolve_qt_font_family.cache_clear()
 
 
 def test_build_catalog_filters_families_without_normal_face():

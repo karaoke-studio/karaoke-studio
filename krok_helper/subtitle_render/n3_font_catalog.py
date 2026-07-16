@@ -7,12 +7,12 @@ import logging
 import sys
 import uuid
 from ctypes import wintypes
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import cmp_to_key, lru_cache
 from types import MappingProxyType
 from typing import Callable, Mapping, Sequence
 
-from PyQt6.QtGui import QFontDatabase
+from PyQt6.QtGui import QFont, QFontDatabase, QFontInfo, QGuiApplication
 
 from krok_helper.subtitle_render.models import Style, SubtitleStyleScheme
 
@@ -37,9 +37,30 @@ class N3FontCatalog:
     families: tuple[str, ...]
     aliases: Mapping[str, str]
     authoritative: bool
+    family_aliases: Mapping[str, tuple[str, ...]] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
+    qt_families: Mapping[str, str] = field(
+        default_factory=lambda: MappingProxyType({})
+    )
 
     def canonicalize(self, name: str) -> str | None:
         return self.aliases.get(str(name or "").strip().casefold())
+
+    def aliases_for(self, name: str) -> tuple[str, ...]:
+        canonical = self.canonicalize(name)
+        if canonical is None:
+            return ()
+        return self.family_aliases.get(canonical.casefold(), (canonical,))
+
+    def qt_family(self, name: str) -> str:
+        """Return the spelling Qt exposes for an N3/localized family name."""
+
+        requested = str(name or "").strip()
+        canonical = self.canonicalize(requested)
+        if canonical is None:
+            return requested
+        return self.qt_families.get(canonical.casefold(), canonical)
 
 
 @dataclass(frozen=True)
@@ -61,6 +82,7 @@ def _build_catalog(
     records: Sequence[_FamilyRecord],
     *,
     compare: Callable[[str, str], int],
+    qt_families: Sequence[str] = (),
 ) -> N3FontCatalog:
     entries: list[_CatalogEntry] = []
     for record in records:
@@ -88,14 +110,29 @@ def _build_catalog(
 
     entries.sort(key=cmp_to_key(compare_entries))
     aliases: dict[str, str] = {}
+    family_aliases: dict[str, tuple[str, ...]] = {}
+    resolved_qt_families: dict[str, str] = {}
+    qt_names = {name.casefold(): name for name in qt_families if name}
     for entry in entries:
         aliases.setdefault(entry.canonical_name.casefold(), entry.canonical_name)
         for alias in entry.aliases:
             aliases.setdefault(alias.casefold(), entry.canonical_name)
+        canonical_key = entry.canonical_name.casefold()
+        ordered_aliases = tuple(
+            dict.fromkeys((entry.canonical_name, *entry.aliases))
+        )
+        family_aliases[canonical_key] = ordered_aliases
+        for alias in ordered_aliases:
+            qt_name = qt_names.get(alias.casefold())
+            if qt_name is not None:
+                resolved_qt_families[canonical_key] = qt_name
+                break
     return N3FontCatalog(
         families=tuple(entry.canonical_name for entry in entries),
         aliases=MappingProxyType(aliases),
         authoritative=True,
+        family_aliases=MappingProxyType(family_aliases),
+        qt_families=MappingProxyType(resolved_qt_families),
     )
 
 
@@ -275,10 +312,15 @@ def _compare_ja_jp(left: str, right: str) -> int:
 
 def _qt_fallback_catalog() -> N3FontCatalog:
     families = tuple(QFontDatabase.families())
+    aliases = {name.casefold(): name for name in families}
     return N3FontCatalog(
         families=families,
-        aliases=MappingProxyType({name.casefold(): name for name in families}),
+        aliases=MappingProxyType(aliases),
         authoritative=False,
+        family_aliases=MappingProxyType(
+            {name.casefold(): (name,) for name in families}
+        ),
+        qt_families=MappingProxyType(aliases),
     )
 
 
@@ -286,7 +328,11 @@ def _qt_fallback_catalog() -> N3FontCatalog:
 def get_n3_font_catalog() -> N3FontCatalog:
     if sys.platform == "win32":
         try:
-            return _build_catalog(_directwrite_records(), compare=_compare_ja_jp)
+            return _build_catalog(
+                _directwrite_records(),
+                compare=_compare_ja_jp,
+                qt_families=QFontDatabase.families(),
+            )
         except (OSError, RuntimeError, TypeError, ValueError):
             log.exception("DirectWrite 字体目录枚举失败，已回退 Qt 字体目录")
     return _qt_fallback_catalog()
@@ -298,6 +344,42 @@ def n3_font_families() -> tuple[str, ...]:
 
 def canonicalize_n3_font_family(name: str) -> str | None:
     return get_n3_font_catalog().canonicalize(name)
+
+
+@lru_cache(maxsize=512)
+def resolve_qt_font_family(name: str) -> str:
+    """Resolve a saved/display N3 name to the current Qt platform spelling.
+
+    DirectWrite exposes all localized family names while Qt may expose only the
+    spelling preferred by the current Windows locale.  The catalog performs the
+    cheap alias lookup.  ``QFontInfo`` is used only once per requested family as
+    a defensive check and its result is cached.
+    """
+
+    catalog = get_n3_font_catalog()
+    requested = str(name or "").strip()
+    candidate = catalog.qt_family(requested)
+    if not candidate or QGuiApplication.instance() is None:
+        return candidate
+
+    try:
+        actual = QFontInfo(QFont(candidate)).family().strip()
+    except (RuntimeError, TypeError, ValueError):
+        return candidate
+    if not actual:
+        return candidate
+
+    known_aliases = {alias.casefold() for alias in catalog.aliases_for(requested)}
+    if actual.casefold() in known_aliases:
+        return actual
+    if catalog.canonicalize(requested) is not None:
+        log.warning(
+            "Qt 字体回退：请求 %r（解析为 %r），实际匹配 %r",
+            requested,
+            candidate,
+            actual,
+        )
+    return candidate
 
 
 def _n3_default_family(catalog: N3FontCatalog, fallback: str) -> str:

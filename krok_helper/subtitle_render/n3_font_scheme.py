@@ -19,6 +19,7 @@ from krok_helper.subtitle_render.models import (
     normalize_glow_concentration_level,
 )
 from krok_helper.subtitle_render.n3_font_fallback import resolve_n3_font_slots
+from krok_helper.subtitle_render.n3_font_catalog import resolve_qt_font_family
 
 
 SizeResolver = Callable[[object], int]
@@ -222,9 +223,10 @@ def _font_face_weight(family: str, face_name: str) -> int:
         from PyQt6.QtGui import QFontDatabase, QGuiApplication
 
         if QGuiApplication.instance() is not None:
-            for style_name in QFontDatabase.styles(family):
+            qt_family = resolve_qt_font_family(family)
+            for style_name in QFontDatabase.styles(qt_family):
                 if style_name.casefold() == face_name.casefold():
-                    return int(QFontDatabase.weight(family, style_name))
+                    return int(QFontDatabase.weight(qt_family, style_name))
     except (ImportError, RuntimeError, TypeError, ValueError):
         pass
     return _face_weight_from_name(face_name)

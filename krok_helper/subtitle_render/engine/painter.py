@@ -61,6 +61,7 @@ from krok_helper.subtitle_render.engine.layers import (
     SCOPE_GROUP,
     SCOPE_LINE,
 )
+from krok_helper.subtitle_render.n3_font_catalog import resolve_qt_font_family
 
 
 _IMAGE_FILL_CACHE_MAX = 16
@@ -974,7 +975,9 @@ def _title_overlay_opacity(
 
 
 def _build_title_font(title: TitleOverlay) -> QFont:
-    font = QFont(title.font_family, max(title.font_size_px, 1))
+    font = QFont(
+        resolve_qt_font_family(title.font_family), max(title.font_size_px, 1)
+    )
     font.setPixelSize(max(title.font_size_px, 1))
     font.setWeight(_clamp_weight(title.font_weight))
     font.setItalic(title.italic)
@@ -983,7 +986,7 @@ def _build_title_font(title: TitleOverlay) -> QFont:
 
 def _build_title_latin_font(title: TitleOverlay) -> QFont:
     family = title.font_family_latin or title.font_family
-    font = QFont(family, max(title.font_size_px, 1))
+    font = QFont(resolve_qt_font_family(family), max(title.font_size_px, 1))
     font.setPixelSize(max(title.font_size_px, 1))
     font.setWeight(_clamp_weight(title.font_weight))
     font.setItalic(title.italic)
@@ -2453,7 +2456,9 @@ def _draw_lit_shape_raw(
     else:
         painter.drawEllipse(rect)
 def _build_font(style: Style) -> QFont:
-    font = QFont(style.font_family, max(style.font_size_px, 1))
+    font = QFont(
+        resolve_qt_font_family(style.font_family), max(style.font_size_px, 1)
+    )
     # QFont 用 PointSize 时 size 是 pt；这里我们当 px 用，强制 setPixelSize
     font.setPixelSize(max(style.font_size_px, 1))
     font.setWeight(_clamp_weight(style.font_weight))
@@ -2526,7 +2531,7 @@ def _build_latin_font(style: Style) -> QFont:
     """英数字体；未单独设置时各参数退回日文轨（行为与单字体一致）。"""
     family = style.font_family_latin or style.font_family
     size = max(_latin_font_size(style), 1)
-    font = QFont(family, size)
+    font = QFont(resolve_qt_font_family(family), size)
     font.setPixelSize(size)
     font.setWeight(_clamp_weight(_latin_font_weight(style)))
     font.setItalic(style.italic)
@@ -2909,7 +2914,7 @@ def _build_ruby_font(style: Style) -> QFont:
         if style.ruby_font_weight is not None and int(style.ruby_font_weight) > 0
         else style.font_weight
     )
-    font = QFont(family, size)
+    font = QFont(resolve_qt_font_family(family), size)
     font.setPixelSize(size)
     font.setWeight(_clamp_weight(int(weight)))
     font.setItalic(style.italic)

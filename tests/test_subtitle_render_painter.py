@@ -2249,12 +2249,53 @@ def test_n3_role_scheme_empty_slots_fallback_inside_same_scheme(qapp):
     merged = subtitle_painter._style_for_role(global_style, "N3")
     assert merged.font_family == "Yu Mincho"
     assert merged.font_family_latin is None
-    assert subtitle_painter._build_latin_font(merged).family() == "Yu Mincho"
+    qt_yu_mincho = subtitle_painter.resolve_qt_font_family("Yu Mincho")
+    assert subtitle_painter._build_latin_font(merged).family() == qt_yu_mincho
     assert subtitle_painter._latin_font_weight(merged) == 700
     assert subtitle_painter._main_script_stroke_style(
         merged, "ABC"
     ).stroke_width_px == 12
-    assert subtitle_painter._build_ruby_font(merged).family() == "Yu Mincho"
+    assert subtitle_painter._build_ruby_font(merged).family() == qt_yu_mincho
+
+
+def test_font_builders_use_runtime_qt_family_alias(monkeypatch):
+    monkeypatch.setattr(
+        subtitle_painter,
+        "resolve_qt_font_family",
+        lambda family: "Arial" if family == "N3 Japanese Display Name" else family,
+    )
+    style = Style(
+        font_family="N3 Japanese Display Name",
+        font_family_latin="N3 Japanese Display Name",
+        ruby_font_follow_main=False,
+        ruby_font_family="N3 Japanese Display Name",
+    )
+    title = TitleOverlay(
+        font_family="N3 Japanese Display Name",
+        font_family_latin="N3 Japanese Display Name",
+    )
+
+    assert subtitle_painter._build_font(style).family() == "Arial"
+    assert subtitle_painter._build_latin_font(style).family() == "Arial"
+    assert subtitle_painter._build_ruby_font(style).family() == "Arial"
+    assert subtitle_painter._build_title_font(title).family() == "Arial"
+    assert subtitle_painter._build_title_latin_font(title).family() == "Arial"
+
+
+def test_lead_symbol_ascii_character_uses_resolved_custom_latin_font(monkeypatch):
+    monkeypatch.setattr(
+        subtitle_painter,
+        "resolve_qt_font_family",
+        lambda family: "MyEmoji5 Qt Name" if family == "MyEmoji5" else family,
+    )
+    style = Style(font_family="Main Japanese", font_family_latin="MyEmoji5")
+    japanese = subtitle_painter._build_font(style)
+    latin = subtitle_painter._build_latin_font(style)
+    font_for = subtitle_painter._make_font_for(style, japanese, latin)
+
+    assert font_for is not None
+    assert font_for("h").family() == "MyEmoji5 Qt Name"
+    assert font_for("願").family() == "Main Japanese"
 
 
 def test_n3_glow_blur_radii_match_three_concentration_levels():
@@ -5119,7 +5160,9 @@ def test_title_overlay_latin_font_splits_ascii(qapp):
     font_for = _make_title_font_for(split, _build_title_font(split), _build_title_latin_font(split))
     assert font_for is not None
     assert font_for("A").family() == "Arial"
-    assert font_for("あ").family() == "Yu Mincho"
+    assert font_for("あ").family() == subtitle_painter.resolve_qt_font_family(
+        "Yu Mincho"
+    )
 
 
 # ---------------------------------------------------------------------------
