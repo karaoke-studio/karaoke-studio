@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import krok_helper  # noqa: F401 - ensures bundled SUG src is importable
+import pytest
 from strange_uta_game.backend.domain import (
     Character,
     Project,
@@ -114,6 +115,69 @@ def test_load_sug_timing_track_reads_sug_file(tmp_path: Path) -> None:
     assert track.meta.title == "曲名"
     assert [line.singer_label for line in track.lines] == ["主唱", "和声"]
     assert [line.chars[0].text for line in track.lines] == ["愛", "空"]
+
+
+@pytest.mark.parametrize("placeholder_name", ["未命名", "Untitled"])
+def test_default_sug_placeholder_singer_uses_global_style(
+    placeholder_name: str,
+) -> None:
+    singer = Singer(
+        id="placeholder",
+        name=placeholder_name,
+        color="#ff6b6b",
+        is_default=True,
+        is_placeholder=placeholder_name == "未命名",
+    )
+    char = Character(
+        char="歌",
+        check_count=1,
+        timestamps=[1000],
+        singer_id=singer.id,
+    )
+    project = Project(
+        singers=[singer],
+        sentences=[Sentence(singer_id=singer.id, characters=[char])],
+    )
+
+    track = timing_track_from_sug_project(project)
+
+    assert track.lines[0].singer_label is None
+    assert track.lines[0].singer_id is None
+    assert track.lines[0].chars[0].role_label is None
+    assert track.singer_options == []
+    assert track.role_options == []
+
+
+def test_non_default_singer_named_unnamed_remains_a_project_role() -> None:
+    default = Singer(
+        id="main",
+        name="主唱",
+        color="#ff0000",
+        is_default=True,
+    )
+    unnamed = Singer(
+        id="unnamed",
+        name="未命名",
+        color="#00ff00",
+        is_default=False,
+    )
+    char = Character(
+        char="歌",
+        check_count=1,
+        timestamps=[1000],
+        singer_id=unnamed.id,
+    )
+    project = Project(
+        singers=[default, unnamed],
+        sentences=[Sentence(singer_id=unnamed.id, characters=[char])],
+    )
+
+    track = timing_track_from_sug_project(project)
+
+    assert track.lines[0].singer_label == "未命名"
+    assert track.lines[0].singer_id == 1
+    assert track.lines[0].chars[0].role_label == "未命名"
+    assert track.role_options == ["未命名"]
 
 
 def test_sug_project_preserves_untimed_characters_in_timed_spans() -> None:

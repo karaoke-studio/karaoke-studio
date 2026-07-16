@@ -21,6 +21,8 @@ from krok_helper.subtitle_render.models import (
     TimingTrackMeta,
 )
 
+_DEFAULT_PLACEHOLDER_SINGER_NAMES = {"未命名", "Untitled"}
+
 
 def load_sug_timing_track(path: str | Path) -> TimingTrack:
     """Load a ``.sug`` file and convert it to :class:`TimingTrack`."""
@@ -66,7 +68,9 @@ def timing_track_from_sug_project(project: Any) -> TimingTrack:
         line_singer = singer_by_id.get(line_singer_id or "")
         line_singer_label = _singer_name(line_singer)
         line_singer_index = (
-            singer_index_by_id.get(line_singer_id or "") if line_singer_id else None
+            singer_index_by_id.get(line_singer_id or "")
+            if line_singer_id and line_singer_label is not None
+            else None
         )
 
         for ch in chars:
@@ -304,6 +308,11 @@ def _singer_name(singer: Any | None) -> str | None:
     if singer is None:
         return None
     name = str(getattr(singer, "name", "") or "").strip()
+    if bool(getattr(singer, "is_default", False)) and (
+        bool(getattr(singer, "is_placeholder", False))
+        or name in _DEFAULT_PLACEHOLDER_SINGER_NAMES
+    ):
+        return None
     return name or None
 
 
