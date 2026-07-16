@@ -816,8 +816,9 @@ def resolve_title_overlay(style: Style) -> Optional[TitleOverlay]:
     """把「标题」配色方案与布局引用解析成有效 ``TitleOverlay``。
 
     字体/颜色来自 ``custom_style_schemes[TITLE_SCHEME_NAME]`` 与全局样式的合并
-    结果（标题永不走字，取走字前配色）；位置/行距来自 ``layout_index`` 引用的
-    布局。方案或布局缺失（旧工程迁移前 / 引用悬空）时保留字段原值。
+    结果（标题永不走字，取走字前配色）；位置、行距和字间距来自
+    ``layout_index`` 引用的布局。方案或布局缺失（旧工程迁移前 / 引用悬空）
+    时保留字段原值。
     """
     title = style.title_overlay
     if title is None:
@@ -852,6 +853,9 @@ def resolve_title_overlay(style: Style) -> Optional[TitleOverlay]:
         alignments = list(source.line_alignments) or ["left"]
         horizontal = alignments[0]
         vertical = source.line_y_position
+        letter_spacing = getattr(source, "letter_spacing_px", None)
+        if letter_spacing is None:
+            letter_spacing = style.letter_spacing_px
         changes.update(
             anchor=(
                 "center"
@@ -862,6 +866,7 @@ def resolve_title_overlay(style: Style) -> Optional[TitleOverlay]:
             offset_x=int(source.horizontal_margin_px),
             offset_y=int(source.line_y_margin_px),
             line_gap_px=int(source.line_gap_px),
+            letter_spacing_px=int(letter_spacing),
         )
     if not changes:
         return title
@@ -876,6 +881,7 @@ def _resolve_title_role_overlay(
         return base
     merged = _style_for_role(style, role_label)
     colors = _effective_karaoke_colors(merged).before
+    layout_source = _title_layout_source(style, base.layout_index)
     return replace(
         base,
         font_family=merged.font_family,
@@ -883,7 +889,12 @@ def _resolve_title_role_overlay(
         font_size_px=int(merged.font_size_px),
         font_weight=int(merged.font_weight),
         italic=bool(merged.italic),
-        letter_spacing_px=int(merged.letter_spacing_px),
+        # 与普通歌词一致：角色方案决定字体/颜色，已应用布局的字符排版优先。
+        letter_spacing_px=(
+            int(base.letter_spacing_px)
+            if layout_source is not None
+            else int(merged.letter_spacing_px)
+        ),
         fill=colors.text,
         stroke=colors.stroke,
         stroke_width_px=int(merged.stroke_width_px),

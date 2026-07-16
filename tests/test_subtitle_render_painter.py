@@ -4768,6 +4768,7 @@ def test_resolve_title_overlay_uses_scheme_and_layout(qapp):
     assert resolved.anchor == "top_left" and resolved.align == "left"
     assert resolved.offset_x == 50 and resolved.offset_y == 50
     assert resolved.line_gap_px == 15
+    assert resolved.letter_spacing_px == 0
 
     # 编辑「标题」方案 → 标题外观跟随
     schemes = dict(style.custom_style_schemes)
@@ -4781,6 +4782,50 @@ def test_resolve_title_overlay_uses_scheme_and_layout(qapp):
         style, title_overlay=replace(style.title_overlay, layout_index=9)
     )
     assert resolve_title_overlay(dangling).anchor == "top_left"
+
+
+def test_title_layout_letter_spacing_overrides_title_and_character_schemes(qapp):
+    from krok_helper.subtitle_render.engine.painter import (
+        _layout_title_overlay,
+        resolve_title_overlay,
+    )
+
+    schemes = dict(Style().custom_style_schemes)
+    schemes["标题"] = replace(schemes["标题"], letter_spacing_px=37)
+    schemes["角色A"] = SubtitleStyleScheme(letter_spacing_px=81)
+    style = Style(
+        letter_spacing_px=12,
+        custom_style_schemes=schemes,
+        layouts=[
+            LyricsLayout(
+                name="标题布局",
+                letter_spacing_px=-8,
+            )
+        ],
+        title_overlay=TitleOverlay(
+            enabled=True,
+            text_template="AB",
+            char_role_labels=[["角色A", "角色A"]],
+            layout_index=1,
+        ),
+    )
+
+    resolved = resolve_title_overlay(style)
+    assert resolved is not None
+    assert resolved.letter_spacing_px == -8
+    layout = _layout_title_overlay(1920, 1080, _title_track(), resolved, style=style)
+    assert layout is not None
+    first, second = layout.glyph_rows[0]
+    assert first.title.letter_spacing_px == -8
+    assert second.x == first.advance - 8
+
+    inherited = replace(
+        style,
+        layouts=[LyricsLayout(name="继承全局字间距", letter_spacing_px=None)],
+    )
+    inherited_title = resolve_title_overlay(inherited)
+    assert inherited_title is not None
+    assert inherited_title.letter_spacing_px == 12
 
 
 def test_default_title_latin_font_does_not_inherit_global_lyrics_font(qapp):
