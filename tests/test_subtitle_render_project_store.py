@@ -967,6 +967,76 @@ def test_selected_rows_context_menu_exposes_role_schemes(qapp, monkeypatch):
     assert emitted == [([0, 1], "新导入配色")]
 
 
+def test_selected_rows_context_menu_marks_applied_layouts(qapp, monkeypatch):
+    panel = lyrics_list.LyricsPanel()
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("甲", 1000)],
+                end_ms=1500,
+                layout_index=1,
+            ),
+            TimingLine(
+                chars=[TimingChar("乙", 2000)],
+                end_ms=2500,
+                layout_index=2,
+            ),
+        ]
+    )
+    panel.set_style(
+        Style(
+            layouts=[
+                subtitle_models.LyricsLayout(name="下寄せ3行"),
+                subtitle_models.LyricsLayout(name="上寄せ2行"),
+            ]
+        )
+    )
+    panel.set_track(track)
+    for row in (0, 1):
+        for column in range(panel.table_widget.columnCount()):
+            panel.table_widget.item(row, column).setSelected(True)
+    captured: list[object] = []
+    monkeypatch.setattr(
+        lyrics_list._StableRoundMenu,
+        "exec",
+        lambda menu, *_args: captured.append(menu),
+    )
+    emitted: list[tuple[list[int], int]] = []
+    panel.layoutChangeRequested.connect(
+        lambda rows, index: emitted.append((list(rows), index))
+    )
+
+    panel._show_context_menu(QPoint(4, 4))
+
+    menu = captured[-1]
+    layout_menu = next(
+        submenu for submenu in menu._subMenus if submenu.title() == "应用布局"
+    )
+    actions = {action.text(): action for action in layout_menu.actions()}
+    assert actions["默认布局"].icon().isNull()
+    assert not actions["下寄せ3行"].icon().isNull()
+    assert not actions["上寄せ2行"].icon().isNull()
+
+    actions["上寄せ2行"].trigger()
+    assert emitted == [([0, 1], 2)]
+
+    panel.table_widget.clearSelection()
+    for column in range(panel.table_widget.columnCount()):
+        panel.table_widget.item(1, column).setSelected(True)
+    panel._show_context_menu(
+        QPoint(4, panel.table_widget.rowViewportPosition(1) + 4)
+    )
+    layout_menu = next(
+        submenu
+        for submenu in captured[-1]._subMenus
+        if submenu.title() == "应用布局"
+    )
+    actions = {action.text(): action for action in layout_menu.actions()}
+    assert actions["默认布局"].icon().isNull()
+    assert actions["下寄せ3行"].icon().isNull()
+    assert not actions["上寄せ2行"].icon().isNull()
+
+
 def test_batch_line_roles_apply_and_undo_as_one_command(
     qapp, monkeypatch, tmp_path
 ):

@@ -1509,9 +1509,11 @@ class LyricsPanel(DropPanel):
         }
         names = ["默认布局"] + [layout.name for layout in self._style.layouts]
         for index, name in enumerate(names):
-            action = Action(name, layout_menu)
-            action.setCheckable(True)
-            action.setChecked(current_indices == {index})
+            action = (
+                Action(_swatch_icon(QColor("#FF5A6F")), name, layout_menu)
+                if index in current_indices
+                else Action(name, layout_menu)
+            )
             action.triggered.connect(
                 lambda _checked=False, idx=index, rs=list(rows): (
                     self.layoutChangeRequested.emit(rs, idx)
