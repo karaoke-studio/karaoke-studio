@@ -457,6 +457,97 @@ def test_lyrics_panel_title_mode_reuses_character_role_picker(qapp, monkeypatch)
     assert dialog._role_buttons[0].text() == "标题默认"
 
 
+def test_title_context_menu_applies_role_scheme_and_layout(qapp, monkeypatch):
+    panel = lyrics_list.LyricsPanel()
+    panel.set_style(
+        Style(
+            layouts=[
+                subtitle_models.LyricsLayout(name="标题左上"),
+                subtitle_models.LyricsLayout(name="标题中央"),
+            ]
+        )
+    )
+    panel.set_role_options(["标题配色"])
+    panel.set_title(
+        TitleOverlay(
+            enabled=True,
+            text_template="标题甲\n标题乙",
+            layout_index=2,
+        )
+    )
+    for row in (0, 1):
+        for column in range(panel.table_widget.columnCount()):
+            panel.table_widget.item(row, column).setSelected(True)
+
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        lyrics_list._StableRoundMenu,
+        "exec",
+        lambda menu, *_args: captured.setdefault("menu", menu),
+    )
+    role_changes: list[tuple[list[int], str]] = []
+    layout_changes: list[tuple[list[int], int]] = []
+    panel.roleChangeRequested.connect(
+        lambda rows, name: role_changes.append((list(rows), name))
+    )
+    panel.layoutChangeRequested.connect(
+        lambda rows, index: layout_changes.append((list(rows), index))
+    )
+
+    panel._show_context_menu(QPoint(4, 4))
+
+    menu = captured["menu"]
+    submenus = {submenu.title(): submenu for submenu in menu._subMenus}
+    assert set(submenus) == {"应用角色方案", "应用布局"}
+    role_actions = {
+        action.text(): action for action in submenus["应用角色方案"].actions()
+    }
+    assert "标题默认" in role_actions
+    role_actions["标题配色"].trigger()
+    assert role_changes == [([0, 1], "标题配色")]
+
+    layout_actions = {
+        action.text(): action for action in submenus["应用布局"].actions()
+    }
+    assert layout_actions["标题左上"].icon().isNull()
+    assert not layout_actions["标题中央"].icon().isNull()
+    layout_actions["标题左上"].trigger()
+    assert layout_changes == [([0, 1], 1)]
+
+
+def test_title_context_actions_persist_role_scheme_and_layout(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+    win._timing_track = _mixed_track()
+    style = replace(
+        _role_style(),
+        layouts=[
+            subtitle_models.LyricsLayout(name="标题左上"),
+            subtitle_models.LyricsLayout(name="标题中央"),
+        ],
+        title_overlay=TitleOverlay(
+            enabled=True,
+            text_template="标题甲\n标题乙",
+            layout_index=1,
+        ),
+    )
+    win._style = style
+    win._property_panel.set_style(style)
+    win._title_source_active = True
+    win._refresh_lyrics_panel_source()
+
+    win._on_lyrics_roles_changed([0, 1], "A")
+    title = win._style.title_overlay
+    assert title is not None
+    assert title.char_role_labels == [["A", "A", "A"], ["A", "A", "A"]]
+
+    win._on_layout_change_requested([0, 1], 2)
+    title = win._style.title_overlay
+    assert title is not None
+    assert title.layout_index == 2
+    assert win._lyrics_panel._track is not None
+    assert {line.layout_index for line in win._lyrics_panel._track.lines} == {2}
+
+
 def test_role_cell_click_uses_fluent_menu_without_inline_editor(qapp, monkeypatch):
     panel = lyrics_list.LyricsPanel()
     panel.set_role_options(["京吹"])

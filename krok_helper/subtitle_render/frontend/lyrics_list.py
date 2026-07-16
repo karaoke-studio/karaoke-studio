@@ -959,6 +959,7 @@ class LyricsPanel(DropPanel):
                     for index, char in enumerate(text)
                 ],
                 end_ms=0,
+                layout_index=int(title.layout_index or 0),
             )
             for row, text in enumerate(title.text_template.split("\n"))
         ]
@@ -1467,15 +1468,13 @@ class LyricsPanel(DropPanel):
             )
             menu.addAction(char_role_action)
             menu.addSeparator()
-        if self._title_mode:
-            menu.exec(self._table.viewport().mapToGlobal(pos))
-            return
         role_menu = _StableRoundMenu("应用角色方案", menu)
         current_roles = {
             _dominant_role(self._track.lines[row]) for row in rows
         }
         has_mixed_rows = any(_line_role_mixed(self._track.lines[row]) for row in rows)
-        role_choices = [(_DEFAULT_ROLE_TEXT, "")] + [
+        default_role_text = "标题默认" if self._title_mode else _DEFAULT_ROLE_TEXT
+        role_choices = [(default_role_text, "")] + [
             (name, name) for name in self._role_options
         ]
         for display, name in role_choices:
@@ -1490,17 +1489,18 @@ class LyricsPanel(DropPanel):
             role_menu.addAction(action)
         menu.addMenu(role_menu)
         menu.addSeparator()
-        effect_action = Action("设置所选行特效…", menu)
-        effect_action.triggered.connect(
-            lambda _checked=False, rs=list(rows): self._edit_animation_rows(rs)
-        )
-        menu.addAction(effect_action)
-        reset_action = Action("所选行恢复全局特效", menu)
-        reset_action.triggered.connect(
-            lambda _checked=False, rs=list(rows): self.animationOverrideRequested.emit(rs, None)
-        )
-        menu.addAction(reset_action)
-        menu.addSeparator()
+        if not self._title_mode:
+            effect_action = Action("设置所选行特效…", menu)
+            effect_action.triggered.connect(
+                lambda _checked=False, rs=list(rows): self._edit_animation_rows(rs)
+            )
+            menu.addAction(effect_action)
+            reset_action = Action("所选行恢复全局特效", menu)
+            reset_action.triggered.connect(
+                lambda _checked=False, rs=list(rows): self.animationOverrideRequested.emit(rs, None)
+            )
+            menu.addAction(reset_action)
+            menu.addSeparator()
         layout_menu = _StableRoundMenu("应用布局", menu)
         current_indices = {
             int(getattr(self._track.lines[row], "layout_index", 0) or 0)
@@ -1534,7 +1534,9 @@ class LyricsPanel(DropPanel):
             and _line_role_mixed(self._track.lines[row])
         )
         if mixed_count:
-            display = role_name or _DEFAULT_ROLE_TEXT
+            display = role_name or (
+                "标题默认" if self._title_mode else _DEFAULT_ROLE_TEXT
+            )
             confirmed = fluent_question(
                 self,
                 "整行覆盖角色",
@@ -1547,9 +1549,8 @@ class LyricsPanel(DropPanel):
             if not confirmed:
                 return
         if self._title_mode:
-            self.roleChanged.emit(rows[0], role_name)
-        else:
-            self.roleChangeRequested.emit(list(rows), role_name)
+            self.titleEditRequested.emit()
+        self.roleChangeRequested.emit(list(rows), role_name)
 
     def _on_cell_clicked(self, row: int, column: int) -> None:
         """跳转到歌词行；角色列单击直接弹出 Fluent 角色菜单。"""

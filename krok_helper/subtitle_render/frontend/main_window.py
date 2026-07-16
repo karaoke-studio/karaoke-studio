@@ -135,6 +135,7 @@ from krok_helper.subtitle_render.models import (
     line_animation_override_from_dict,
     line_animation_override_to_dict,
     migrate_legacy_app_title_default,
+    normalize_title_char_role_labels,
     rescale_layout_sizes,
     subtitle_style_scheme_from_dict,
     subtitle_style_scheme_to_dict,
@@ -2904,6 +2905,21 @@ class SubtitleRenderWindow(QWidget):
 
     def _on_layout_change_requested(self, rows: list, layout_index: int) -> None:
         """歌词列表右键应用布局：对每个选中行按页联动写入（作用于当前选中源）。"""
+        if self._title_source_active:
+            title = self._style.title_overlay
+            if title is None:
+                return
+            index = max(0, min(int(layout_index), len(self._style.layouts)))
+            if int(title.layout_index or 0) == index:
+                return
+            self._property_panel.set_style(
+                replace(
+                    self._style,
+                    title_overlay=replace(title, layout_index=index),
+                ),
+                emit=True,
+            )
+            return
         track = self._active_track()
         if track is None:
             return
@@ -3151,6 +3167,41 @@ class SubtitleRenderWindow(QWidget):
     def _on_lyrics_roles_changed(self, rows: list[int], role_name: str) -> None:
         """把一个角色方案批量覆盖到所选歌词行，并作为一条命令撤销/重做。"""
         if self._title_source_active:
+            self._freeze_title_template_for_character_edit()
+            title = self._style.title_overlay
+            if title is None:
+                return
+            lines = title.text_template.split("\n")
+            valid_rows = sorted(
+                {
+                    int(row)
+                    for row in rows
+                    if 0 <= int(row) < len(lines) and lines[int(row)]
+                }
+            )
+            if not valid_rows:
+                return
+            label = role_name.strip() if role_name else None
+            labels = normalize_title_char_role_labels(
+                title.text_template, title.char_role_labels
+            )
+            changed = False
+            for row in valid_rows:
+                new_values = [label] * len(lines[row])
+                if labels[row] != new_values:
+                    labels[row] = new_values
+                    changed = True
+            if not changed:
+                return
+            if label:
+                self._materialize_role_schemes({label})
+            self._property_panel.set_style(
+                replace(
+                    self._style,
+                    title_overlay=replace(title, char_role_labels=labels),
+                ),
+                emit=True,
+            )
             return
         track_index = self._active_source_index
         track = self._track_by_index(track_index)
