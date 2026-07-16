@@ -34,9 +34,7 @@ from PyQt6.QtGui import (
     QImage,
     QMouseEvent,
     QPainter,
-    QPainterPath,
     QPen,
-    QPixmap,
 )
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PyQt6.QtWidgets import (
@@ -98,33 +96,15 @@ _FPS_REFRESH_MS = 500
 """FPS 读数刷新周期：固定节奏更新，避免「按 paint 事件更新」导致的忽高(>100)忽低(<10)。
 读数语义 = **字幕预览渲染帧率**（新字幕帧/秒，不含视频重绘触发的同帧重 blit）。"""
 
+_TRANSPORT_ICON_DIR = (
+    Path(__file__).resolve().parents[2] / "assets" / "subtitle_render"
+)
+
 
 def _transport_icon(*, playing: bool) -> QIcon:
-    """绘制透明底的播放/暂停图标，避免 Windows 将暂停符号渲染为彩色 Emoji。"""
-    icon = QIcon()
-    for scale in (1, 2):
-        pixmap = QPixmap(24 * scale, 24 * scale)
-        pixmap.setDevicePixelRatio(scale)
-        pixmap.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(pixmap)
-        try:
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            painter.setPen(Qt.PenStyle.NoPen)
-            painter.setBrush(QColor("#FFFFFF"))
-            if playing:
-                painter.drawRoundedRect(7, 5, 4, 14, 1, 1)
-                painter.drawRoundedRect(14, 5, 4, 14, 1, 1)
-            else:
-                path = QPainterPath()
-                path.moveTo(7, 4)
-                path.lineTo(19, 12)
-                path.lineTo(7, 20)
-                path.closeSubpath()
-                painter.drawPath(path)
-        finally:
-            painter.end()
-        icon.addPixmap(pixmap)
-    return icon
+    """Load the app-owned white SVG used by the video transport overlay."""
+    name = "pause.svg" if playing else "play.svg"
+    return QIcon(str(_TRANSPORT_ICON_DIR / name))
 
 
 def _audio_clock_enabled() -> bool:
@@ -644,21 +624,18 @@ class TransportBar(QWidget):
         themed(
             self._play_btn,
             lambda: (
-                f"""
-                QToolButton {{
-                    background: {palette().secondary_button_bg};
-                    color: {palette().text_primary};
-                    border: 1px solid {palette().secondary_button_border};
-                    border-radius: 6px;
-                    font-size: 12pt;
-                }}
-                QToolButton:hover {{
-                    background: {palette().secondary_button_hover_bg};
-                    border-color: {palette().secondary_button_hover_border};
-                }}
-                QToolButton:pressed {{
-                    background: {palette().secondary_button_pressed_bg};
-                }}
+                """
+                QToolButton {
+                    background: transparent;
+                    border: 0;
+                    border-radius: 16px;
+                }
+                QToolButton:hover {
+                    background: rgba(255, 255, 255, 40);
+                }
+                QToolButton:pressed {
+                    background: rgba(255, 255, 255, 64);
+                }
                 """
             ),
         )

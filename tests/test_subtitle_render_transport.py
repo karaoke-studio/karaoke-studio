@@ -22,7 +22,7 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import Qt, QUrl  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
+from PyQt6.QtGui import QColor, QImage, QPainter  # noqa: E402
 from PyQt6.QtMultimedia import QMediaPlayer  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
@@ -1029,11 +1029,63 @@ def test_seek_relative_clamps_to_timeline(qapp):
 
 def test_play_button_icon_reflects_state(qapp):
     bar = _bar(qapp)
+    play_icon = bar._play_btn.icon()
     assert bar._play_btn.accessibleName() == "播放"
+    assert not play_icon.isNull()
     bar.play()
+    pause_icon = bar._play_btn.icon()
     assert bar._play_btn.accessibleName() == "暂停"
+    assert not pause_icon.isNull()
+    assert pause_icon.cacheKey() != play_icon.cacheKey()
     bar.pause()
     assert bar._play_btn.accessibleName() == "播放"
+
+
+def test_play_button_uses_app_owned_svg_icons(qapp):
+    bar = _bar(qapp)
+    assert (pv._TRANSPORT_ICON_DIR / "play.svg").is_file()
+    assert (pv._TRANSPORT_ICON_DIR / "pause.svg").is_file()
+    assert not bar._play_btn.icon().isNull()
+
+
+def test_play_button_has_no_opaque_background(qapp):
+    bar = _bar(qapp)
+    button = bar._play_btn
+    base = QColor("#376A42")
+    image = QImage(button.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(base)
+
+    painter = QPainter(image)
+    button.render(painter)
+    painter.end()
+
+    assert image.pixelColor(0, 0) == base
+    assert image.pixelColor(image.width() - 1, image.height() - 1) == base
+    assert any(
+        image.pixelColor(x, y).red() >= 240
+        and image.pixelColor(x, y).green() >= 240
+        and image.pixelColor(x, y).blue() >= 240
+        for y in range(image.height())
+        for x in range(image.width())
+    )
+
+
+def test_play_button_hover_feedback_is_circular(qapp):
+    bar = _bar(qapp)
+    button = bar._play_btn
+    button.setAttribute(Qt.WidgetAttribute.WA_UnderMouse, True)
+    button.ensurePolished()
+    base = QColor("#376A42")
+    image = QImage(button.size(), QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(base)
+
+    painter = QPainter(image)
+    button.render(painter)
+    painter.end()
+
+    assert image.pixelColor(0, 0) == base
+    assert image.pixelColor(image.width() - 1, 0) == base
+    assert image.pixelColor(3, image.height() // 2) != base
 
 
 def test_volume_slider_controls_legacy_audio_output(qapp):
