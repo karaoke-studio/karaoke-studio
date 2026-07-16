@@ -129,6 +129,7 @@ from krok_helper.subtitle_render.models import (
     SubtitleStyleScheme,
     Style,
     TITLE_SCHEME_NAME,
+    TitleOverlay,
     TimingTrack,
     background_sequence_frame_path,
     line_animation_override_from_dict,
@@ -1156,8 +1157,11 @@ class SubtitleRenderWindow(QWidget):
         # 项目内容整体替换，旧的样式/轨道撤销记录全部失效
         self._clear_undo_history()
         # 1) 样式 / 屏幕 / 配色方案
+        project_style = style_from_dict(data.get("style"))
+        if project_style.title_overlay is None:
+            project_style = replace(project_style, title_overlay=TitleOverlay())
         self._style, _font_names_changed = normalize_style_font_families(
-            style_from_dict(data.get("style")), get_n3_font_catalog()
+            project_style, get_n3_font_catalog()
         )
         self._screen_settings = screen_settings_from_dict(data.get("screen"))
         key = data.get("selected_scheme_key")
@@ -3386,8 +3390,17 @@ class SubtitleRenderWindow(QWidget):
             normalized_style,
             custom_style_schemes={TITLE_SCHEME_NAME: deepcopy(title_scheme)},
             singer_style_overrides={},
+            title_overlay=TitleOverlay(),
         )
-        style_changed |= app_default_style != normalized_style
+        persisted_style = data.get("style")
+        had_persisted_title = (
+            isinstance(persisted_style, dict)
+            and "title_overlay" in persisted_style
+        )
+        style_changed |= had_persisted_title or replace(
+            app_default_style,
+            title_overlay=normalized_style.title_overlay,
+        ) != normalized_style
         self._app_default_style = deepcopy(app_default_style)
         self._style = deepcopy(app_default_style)
         loaded_presets = _style_presets_from_dict(data.get("style_presets"))
@@ -3436,7 +3449,9 @@ class SubtitleRenderWindow(QWidget):
             singer_style_overrides={},
         )
         data = self._load_subtitle_settings()
-        data["style"] = style_to_dict(self._app_default_style)
+        persisted_style = style_to_dict(self._app_default_style)
+        persisted_style.pop("title_overlay", None)
+        data["style"] = persisted_style
         data["style_presets"] = _style_presets_to_dict(self._style_presets)
         data["screen"] = screen_settings_to_dict(self._screen_settings)
         data["selected_scheme_key"] = (

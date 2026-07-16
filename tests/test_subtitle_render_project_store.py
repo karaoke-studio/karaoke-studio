@@ -102,6 +102,7 @@ def test_project_bar_present_in_both_modes(qapp, monkeypatch):
 
 def test_window_save_new_open_round_trip(qapp, monkeypatch, tmp_path):
     win = _make_window(qapp, monkeypatch)
+    default_font_size = win._app_default_style.font_size_px
 
     # 改样式 → 标脏
     win._style = Style(font_size_px=88, title_overlay=TitleOverlay(enabled=True))
@@ -119,7 +120,7 @@ def test_window_save_new_open_round_trip(qapp, monkeypatch, tmp_path):
 
     # 新建重置为默认
     win._new_project()
-    assert win._style.font_size_px == Style().font_size_px
+    assert win._style.font_size_px == default_font_size
     assert win._project_path is None
     assert win._project_dirty is False
 
@@ -132,6 +133,36 @@ def test_window_save_new_open_round_trip(qapp, monkeypatch, tmp_path):
     assert win._export_native_check.isChecked() is False
     # 加载过程中不应把项目标脏
     assert win._project_dirty is False
+
+
+def test_title_text_is_isolated_between_yurika_projects(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    first_path = tmp_path / "first.yurika"
+    second_path = tmp_path / "second.yurika"
+
+    first_style = replace(
+        win._style,
+        title_overlay=TitleOverlay(enabled=True, text_template="第一个项目"),
+    )
+    win._style = first_style
+    win._property_panel.set_style(first_style)
+    assert win._write_project(first_path) is True
+
+    second_style = replace(
+        win._style,
+        title_overlay=TitleOverlay(enabled=True, text_template="第二个项目"),
+    )
+    win._style = second_style
+    win._property_panel.set_style(second_style)
+    assert win._write_project(second_path) is True
+
+    win._apply_project_data(load_render_project(first_path))
+    assert win._style.title_overlay is not None
+    assert win._style.title_overlay.text_template == "第一个项目"
+
+    win._apply_project_data(load_render_project(second_path))
+    assert win._style.title_overlay is not None
+    assert win._style.title_overlay.text_template == "第二个项目"
 
 
 def test_open_project_clears_previous_media_before_applying_snapshot(

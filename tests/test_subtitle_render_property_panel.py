@@ -58,6 +58,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     SubtitleStyleScheme,
     Style,
     TITLE_SCHEME_NAME,
+    TitleOverlay,
     paint_fill_from_dict,
     style_from_dict,
     style_to_dict,
@@ -212,6 +213,50 @@ def test_live_scheme_edits_do_not_auto_save_as_app_defaults(qapp):
     assert saved.custom_style_schemes[TITLE_SCHEME_NAME].fill_color == "#222222"
     assert "初音" not in saved.custom_style_schemes
     assert provider.data["selected_scheme_key"] == "global"
+
+
+def test_title_overlay_is_project_only_and_app_default_is_hard_coded(qapp):
+    provider = _FontMigrationSettingsProvider(
+        {
+            "style": style_to_dict(
+                Style(
+                    title_overlay=TitleOverlay(
+                        enabled=True,
+                        text_template="上一个项目的标题",
+                    )
+                )
+            )
+        }
+    )
+
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+
+    assert win._style.title_overlay == TitleOverlay()
+    assert "title_overlay" not in provider.data["style"]
+    reloaded = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    assert reloaded._style.title_overlay == TitleOverlay()
+
+    current = Style(
+        title_overlay=TitleOverlay(enabled=True, text_template="当前项目标题")
+    )
+    win._apply_style(current)
+
+    assert "title_overlay" not in provider.data["style"]
+    reloaded = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    assert reloaded._style.title_overlay == TitleOverlay()
+    project_style = style_from_dict(win._current_project_data()["style"])
+    assert project_style.title_overlay is not None
+    assert project_style.title_overlay.enabled is True
+    assert project_style.title_overlay.text_template == "当前项目标题"
+
+    win._project_dirty = False
+    win._new_project()
+    assert win._style.title_overlay is not None
+    assert win._style.title_overlay.enabled is False
+    assert win._style.title_overlay.text_template == "{title} / {artist}"
+
+    win._apply_project_data({"style": style_to_dict(Style(title_overlay=None))})
+    assert win._style.title_overlay == TitleOverlay()
 
 
 def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
