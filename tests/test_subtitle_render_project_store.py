@@ -976,6 +976,30 @@ def test_char_role_dialog_returns_edited_labels(qapp):
     assert dialog.char_labels() == [None, "A"]
 
 
+def test_char_role_dialog_creates_role_with_fluent_input(qapp, monkeypatch):
+    dialog = lyrics_list._CharRoleDialog(
+        0, ["あ", "い"], [None, None], ["A"], _role_style()
+    )
+    dialog._chips._selected = {0}
+    captured: dict[str, object] = {}
+
+    def get_text(parent, title, label, **kwargs):
+        captured.update(parent=parent, title=title, label=label, kwargs=kwargs)
+        return "合唱", True
+
+    monkeypatch.setattr(lyrics_list, "fluent_get_text", get_text)
+    dialog._create_role()
+
+    assert captured == {
+        "parent": dialog,
+        "title": "新建角色",
+        "label": "角色名称",
+        "kwargs": {},
+    }
+    assert "合唱" in {button.text() for button in dialog._role_buttons}
+    assert dialog.char_labels() == ["合唱", None]
+
+
 def test_char_role_dialog_identifies_same_color_schemes_by_name(qapp):
     schemes = dict(Style().custom_style_schemes)
     schemes["同色A"] = SubtitleStyleScheme(fill_color="#336699")

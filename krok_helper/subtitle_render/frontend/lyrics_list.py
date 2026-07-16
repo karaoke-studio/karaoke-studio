@@ -29,7 +29,6 @@ from PyQt6.QtWidgets import (
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
-    QInputDialog,
     QLabel,
     QScrollArea,
     QStyle,
@@ -61,7 +60,10 @@ from krok_helper.subtitle_render.engine.timeline import (
     assign_lanes,
 )
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
-from krok_helper.subtitle_render.frontend.fluent_dialogs import fluent_question
+from krok_helper.subtitle_render.frontend.fluent_dialogs import (
+    fluent_get_text,
+    fluent_question,
+)
 from krok_helper.subtitle_render.models import (
     LYRICS_LAYOUT_FIELDS,
     LineAnimationOverride,
@@ -710,7 +712,7 @@ class _CharRoleDialog(QDialog):
             )
 
     def _create_role(self) -> None:
-        name, ok = QInputDialog.getText(self, "新建角色", "角色名称")
+        name, ok = fluent_get_text(self, "新建角色", "角色名称")
         if not ok:
             return
         name = name.strip()

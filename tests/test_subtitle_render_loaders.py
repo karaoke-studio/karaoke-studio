@@ -306,6 +306,43 @@ def test_static_sequence_and_solid_backgrounds_populate_preview(qapp, monkeypatc
     assert win._background_source.color == "#654321"
 
 
+def test_browse_background_sequence_uses_fluent_fps_input(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    image = tmp_path / "frame_0000.png"
+    frame = QImage(64, 36, QImage.Format.Format_RGB32)
+    frame.fill(QColor("#123456"))
+    assert frame.save(str(image))
+    monkeypatch.setattr(
+        mw.QFileDialog,
+        "getOpenFileName",
+        lambda *_args, **_kwargs: (str(image), ""),
+    )
+    captured: dict[str, object] = {}
+
+    def get_int(parent, title, label, **kwargs):
+        captured.update(parent=parent, title=title, label=label, kwargs=kwargs)
+        return 24, True
+
+    monkeypatch.setattr(mw, "fluent_get_int", get_int)
+    expected_default_fps = win._screen_settings.fps
+    win._browse_background_sequence()
+
+    assert captured == {
+        "parent": win,
+        "title": "图片序列帧率",
+        "label": "源帧率（每秒图片数）",
+        "kwargs": {
+            "value": expected_default_fps,
+            "minimum": 1,
+            "maximum": 240,
+        },
+    }
+    assert win._background_source.kind == "image_sequence"
+    assert win._background_source.source_fps == 24
+
+
 def test_build_render_job_uses_independent_audio_with_static_background(
     qapp, monkeypatch, tmp_path
 ):

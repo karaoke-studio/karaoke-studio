@@ -44,7 +44,6 @@ from PyQt6.QtWidgets import (
     QColorDialog,
     QDialog,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QPushButton,
     QSizePolicy,
@@ -105,6 +104,7 @@ from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
 from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_choice,
     fluent_error,
+    fluent_get_int,
     fluent_info,
     fluent_question,
     fluent_warning,
@@ -2159,14 +2159,17 @@ class SubtitleRenderWindow(QWidget):
         start_dir = str(Path(self._background_source.path).parent) if self._background_source and self._background_source.path else ""
         path_str, _ = QFileDialog.getOpenFileName(self, "选择图片序列首帧", start_dir, IMAGE_FILTER)
         if path_str:
-            fps, ok = QInputDialog.getInt(
+            fps, ok = fluent_get_int(
                 self,
                 "图片序列帧率",
                 "源帧率（每秒图片数）",
-                int(self._background_source.source_fps or self._screen_settings.fps)
-                if self._background_source is not None else self._screen_settings.fps,
-                1,
-                240,
+                value=(
+                    int(self._background_source.source_fps or self._screen_settings.fps)
+                    if self._background_source is not None
+                    else self._screen_settings.fps
+                ),
+                minimum=1,
+                maximum=240,
             )
             if ok:
                 self.load_background_sequence(Path(path_str), fps)

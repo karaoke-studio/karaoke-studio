@@ -49,7 +49,6 @@ from PyQt6.QtWidgets import (
     QFrame,
     QGridLayout,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QListWidgetItem,
     QPushButton,
@@ -5774,7 +5773,7 @@ class PropertyPanel(QWidget):
         if index <= 0:
             return
         old = self._style.layouts[index - 1].name
-        new, ok = QInputDialog.getText(self, "重命名布局", "布局名称", text=old)
+        new, ok = fluent_get_text(self, "重命名布局", "布局名称", text=old)
         if not ok:
             return
         new = new.strip()
@@ -6504,7 +6503,7 @@ class PropertyPanel(QWidget):
 
     def _add_custom_scheme(self, name: Optional[str] = None) -> None:
         if name is None or isinstance(name, bool):
-            name, ok = QInputDialog.getText(self, "新建角色", "角色名称")
+            name, ok = fluent_get_text(self, "新建角色", "角色名称")
             if not ok:
                 return
         name = name.strip()
@@ -6737,7 +6736,7 @@ class PropertyPanel(QWidget):
         old = self._current_custom_scheme_name()
         if old is None or old == TITLE_SCHEME_NAME:
             return  # 全局默认 / 内置「标题」方案不能重命名（标题按名字引用它）
-        new, ok = QInputDialog.getText(self, "重命名角色", "角色名称", text=old)
+        new, ok = fluent_get_text(self, "重命名角色", "角色名称", text=old)
         if not ok:
             return
         new = new.strip()

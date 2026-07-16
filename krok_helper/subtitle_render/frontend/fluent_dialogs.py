@@ -18,7 +18,7 @@ from qfluentwidgets import (
     LineEdit,
     PrimaryPushButton,
     PushButton,
-    SubtitleLabel,
+    SpinBox,
 )
 
 
@@ -209,7 +209,6 @@ class FluentTextInputDialog(QDialog):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(10)
-        layout.addWidget(SubtitleLabel(title, self))
         layout.addWidget(BodyLabel(label, self))
         if choices is None:
             control = LineEdit(self)
@@ -236,6 +235,41 @@ class FluentTextInputDialog(QDialog):
         return self.control.text().strip()
 
 
+class FluentIntInputDialog(QDialog):
+    """Small Fluent integer input dialog backed by a qfluentwidgets SpinBox."""
+
+    def __init__(
+        self,
+        title: str,
+        label: str,
+        *,
+        value: int = 0,
+        minimum: int = -2_147_483_648,
+        maximum: int = 2_147_483_647,
+        step: int = 1,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(_resolve_window(parent))
+        self.setWindowTitle(title)
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setMinimumWidth(400)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+        layout.addWidget(BodyLabel(label, self))
+        self.control = SpinBox(self)
+        self.control.setRange(int(minimum), int(maximum))
+        self.control.setSingleStep(max(int(step), 1))
+        self.control.setValue(int(value))
+        self.control.selectAll()
+        layout.addWidget(self.control)
+        button_row, self.ok_button, _cancel_button = fluent_button_row(self)
+        layout.addLayout(button_row)
+
+    def value(self) -> int:
+        return int(self.control.value())
+
+
 def fluent_get_text(
     parent: Optional[QWidget],
     title: str,
@@ -246,6 +280,29 @@ def fluent_get_text(
 ) -> tuple[str, bool]:
     dialog = FluentTextInputDialog(
         title, label, text=text, placeholder=placeholder, parent=parent
+    )
+    accepted = dialog.exec() == QDialog.DialogCode.Accepted
+    return dialog.value(), accepted
+
+
+def fluent_get_int(
+    parent: Optional[QWidget],
+    title: str,
+    label: str,
+    *,
+    value: int = 0,
+    minimum: int = -2_147_483_648,
+    maximum: int = 2_147_483_647,
+    step: int = 1,
+) -> tuple[int, bool]:
+    dialog = FluentIntInputDialog(
+        title,
+        label,
+        value=value,
+        minimum=minimum,
+        maximum=maximum,
+        step=step,
+        parent=parent,
     )
     accepted = dialog.exec() == QDialog.DialogCode.Accepted
     return dialog.value(), accepted

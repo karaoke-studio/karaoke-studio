@@ -15,7 +15,6 @@ from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
     QDialog,
-    QInputDialog,
     QLabel,
     QWidget,
 )
@@ -38,7 +37,9 @@ from qfluentwidgets import (  # noqa: E402
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend import property_panel as pp  # noqa: E402
 from krok_helper.subtitle_render.frontend.fluent_dialogs import (  # noqa: E402
+    FluentIntInputDialog,
     FluentMessageDialog,
+    FluentTextInputDialog,
 )
 from krok_helper.subtitle_render.frontend.property_panel import (  # noqa: E402
     _ColorDialog,
@@ -2962,6 +2963,34 @@ def test_style_preset_library_forms_use_fluent_controls(qapp):
     qapp.processEvents()
 
 
+def test_common_input_dialogs_use_qfluentwidgets_controls(qapp):
+    text_dialog = FluentTextInputDialog("新建角色", "角色名称", text="主唱")
+    int_dialog = FluentIntInputDialog(
+        "图片序列帧率",
+        "源帧率（每秒图片数）",
+        value=60,
+        minimum=1,
+        maximum=240,
+    )
+
+    assert isinstance(text_dialog.control, LineEdit)
+    assert text_dialog.value() == "主唱"
+    assert isinstance(int_dialog.control, SpinBox)
+    assert int_dialog.value() == 60
+    assert int_dialog.control.minimum() == 1
+    assert int_dialog.control.maximum() == 240
+    assert isinstance(text_dialog.ok_button, PrimaryPushButton)
+    assert isinstance(int_dialog.ok_button, PrimaryPushButton)
+    assert not text_dialog.findChildren(SubtitleLabel)
+    assert not int_dialog.findChildren(SubtitleLabel)
+
+    text_dialog.close()
+    int_dialog.close()
+    text_dialog.deleteLater()
+    int_dialog.deleteLater()
+    qapp.processEvents()
+
+
 def test_style_preset_manager_requires_explicit_exact_pair_overwrite(qapp):
     dialog = StylePresetManagerDialog(
         presets={
@@ -3433,7 +3462,7 @@ def test_property_panel_rejects_renaming_role_to_existing_project_name(
     )
     panel.set_roles(["A", "B"])
     panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:A"))
-    monkeypatch.setattr(pp.QInputDialog, "getText", lambda *_args, **_kwargs: ("B", True))
+    monkeypatch.setattr(pp, "fluent_get_text", lambda *_args, **_kwargs: ("B", True))
     warnings: list[tuple[str, str]] = []
     monkeypatch.setattr(
         pp.InfoBar,
@@ -3464,8 +3493,8 @@ def test_property_panel_scheme_selection_emits_current_key(qapp):
 def test_property_panel_add_scheme_button_ignores_clicked_checked_arg(qapp, monkeypatch):
     panel = PropertyPanel()
     monkeypatch.setattr(
-        QInputDialog,
-        "getText",
+        pp,
+        "fluent_get_text",
         lambda *args, **kwargs: ("按钮方案", True),
     )
 
@@ -4042,6 +4071,35 @@ def test_property_panel_layout_selector_edits_selected_layout(qapp):
     assert emitted[-1].letter_spacing_px == 8
     assert emitted[-1].layouts[base_count].line_gap_px == 33
     assert emitted[-1].layouts[base_count].letter_spacing_px == -6
+
+
+def test_property_panel_layout_rename_uses_fluent_input(qapp, monkeypatch):
+    panel = PropertyPanel()
+    panel._on_add_layout()
+    current = panel._current_layout_index()
+    captured: dict[str, object] = {}
+
+    def get_text(parent, title, label, *, text="", placeholder=""):
+        captured.update(
+            parent=parent,
+            title=title,
+            label=label,
+            text=text,
+            placeholder=placeholder,
+        )
+        return "主歌词布局", True
+
+    monkeypatch.setattr(pp, "fluent_get_text", get_text)
+    panel._on_rename_layout()
+
+    assert captured == {
+        "parent": panel,
+        "title": "重命名布局",
+        "label": "布局名称",
+        "text": f"布局 {current}",
+        "placeholder": "",
+    }
+    assert panel.subtitle_style.layouts[current - 1].name == "主歌词布局"
 
 
 def test_ruby_font_tab_edits_write_ruby_fields(qapp):
