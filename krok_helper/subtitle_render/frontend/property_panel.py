@@ -1385,6 +1385,13 @@ class GradientStopsEditor(QWidget):
     stopsChanged = Signal(list)
     selectedChanged = Signal(int)
 
+    _POINTER_BLUE = "#0B84FF"
+    _POINTER_OUTLINE = "#46505F"
+    _POINTER_GAP = 3
+    _POINTER_ARROW_LENGTH = 6
+    _POINTER_BODY_LENGTH = 18
+    _POINTER_HALF_THICKNESS = 5
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self._stops: list[tuple[float, str]] = [(0, "#FFFFFF"), (100, "#FF5A6F")]
@@ -1392,16 +1399,24 @@ class GradientStopsEditor(QWidget):
         self._orientation = "horizontal"
         self._hard_edges = False
         self._dragging = False
-        self.setMinimumHeight(64)
+        self.setMinimumHeight(52)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        height = 140 if self._orientation == "vertical" else 66
+        height = 140 if self._orientation == "vertical" else 52
         if self._orientation == "vertical":
-            # 12 left + 48 bar + 4 gap + 10 arrow + 34 tag + 4 right.
-            # Both smooth gradient and hard split editors share this geometry.
-            return QSize(12 + 48 + 4 + 10 + 34 + 4, height)
+            # 12 left + 48 bar + 3 gap + 6 arrow + 18 tag + 4 right.
+            # Every color bar uses the same external pointer geometry.
+            return QSize(
+                12
+                + 48
+                + self._POINTER_GAP
+                + self._POINTER_ARROW_LENGTH
+                + self._POINTER_BODY_LENGTH
+                + 4,
+                height,
+            )
         return QSize(220, height)
 
     @property
@@ -1423,7 +1438,7 @@ class GradientStopsEditor(QWidget):
             return
         self._orientation = orientation
         self._hard_edges = hard_edges
-        self.setMinimumHeight(132 if orientation == "vertical" else 64)
+        self.setMinimumHeight(132 if orientation == "vertical" else 52)
         self.updateGeometry()
         self.update()
 
@@ -1501,57 +1516,22 @@ class GradientStopsEditor(QWidget):
                 painter.setBrush(gradient)
                 painter.drawRoundedRect(rect, 4, 4)
 
-            rail = self._rail_rect()
-            if not self._hard_edges:
-                painter.setPen(QColor(palette().card_border))
-                painter.drawRoundedRect(rail, 3, 3)
-            for index, (position, color) in enumerate(self._stops):
-                center = self._marker_center(position)
+            # Draw the selected pointer last so clustered stops never cover it.
+            indices = [
+                index for index in range(len(self._stops)) if index != self._selected
+            ]
+            indices.append(self._selected)
+            for index in indices:
+                position, _color = self._stops[index]
                 selected = index == self._selected
-                if self._hard_edges and self._orientation == "vertical":
-                    # N3-style stop tag: arrow tip points at the exact band edge,
-                    # while the rectangular body remains an easy click target.
-                    tip_x = self._bar_rect().right() + 4
-                    body_left = tip_x + 10
-                    body_right = min(body_left + 34, self.width() - 4)
-                    points = [
-                        QPointF(tip_x, center.y()),
-                        QPointF(body_left, center.y() - 7),
-                        QPointF(body_right, center.y() - 7),
-                        QPointF(body_right, center.y() + 7),
-                        QPointF(body_left, center.y() + 7),
-                    ]
-                    painter.setBrush(QColor(color))
-                    painter.setPen(QColor("#0B84FF" if selected else palette().card_bg))
-                    painter.drawPolygon(QPolygonF(points))
-                    painter.setBrush(Qt.BrushStyle.NoBrush)
-                    painter.setPen(QColor("#0B84FF" if selected else palette().card_border))
-                    painter.drawPolygon(QPolygonF(points))
-                else:
-                    radius = 11 if selected else 9
-                    points = [
-                        QPointF(center.x(), center.y() - radius),
-                        QPointF(center.x() + radius, center.y()),
-                        QPointF(center.x(), center.y() + radius),
-                        QPointF(center.x() - radius, center.y()),
-                    ]
-                    marker = QPolygonF(points)
-                    if selected:
-                        shadow = QPolygonF(
-                            [QPointF(point.x() + 2, point.y() + 2) for point in points]
-                        )
-                        painter.setPen(Qt.PenStyle.NoPen)
-                        painter.setBrush(QColor(11, 77, 137, 72))
-                        painter.drawPolygon(shadow)
-
-                    painter.setBrush(QColor(color))
-                    painter.setPen(
-                        QPen(
-                            QColor("#0B84FF" if selected else "#46505F"),
-                            3 if selected else 2,
-                        )
-                    )
-                    painter.drawPolygon(marker)
+                marker = self._marker_polygon(position, selected=selected)
+                painter.setBrush(
+                    QColor(self._POINTER_BLUE if selected else palette().input_bg)
+                )
+                painter.setPen(
+                    QPen(QColor(self._POINTER_OUTLINE), 1.5)
+                )
+                painter.drawPolygon(marker)
         finally:
             painter.end()
 
@@ -1562,7 +1542,7 @@ class GradientStopsEditor(QWidget):
         nearest = self._nearest_marker_index(event.position())
         self._dragging = False
         hit_rect = self._bar_rect().adjusted(-8, -8, 8, 8).united(
-            self._rail_rect().adjusted(-10, -10, 10, 10)
+            self._pointer_lane_rect().adjusted(-10, -10, 10, 10)
         )
         if nearest is not None:
             self._selected = nearest
@@ -1586,18 +1566,70 @@ class GradientStopsEditor(QWidget):
             return QRectF(15, 8, max(self.width() - 30, 1), 22)
         return QRectF(12, 15, 48, max(self.height() - 30, 1))
 
-    def _rail_rect(self) -> QRectF:
+    def _pointer_lane_rect(self) -> QRectF:
         if self._orientation == "horizontal":
-            return QRectF(15, 40, max(self.width() - 30, 1), 14)
-        return QRectF(72, 15, 14, max(self.height() - 30, 1))
+            top = self._bar_rect().bottom() + self._POINTER_GAP + self._POINTER_ARROW_LENGTH
+            return QRectF(
+                15,
+                top,
+                max(self.width() - 30, 1),
+                self._POINTER_HALF_THICKNESS * 2,
+            )
+        left = self._bar_rect().right() + self._POINTER_GAP + self._POINTER_ARROW_LENGTH
+        return QRectF(
+            left,
+            15,
+            self._POINTER_BODY_LENGTH,
+            max(self.height() - 30, 1),
+        )
 
     def _marker_center(self, position: float) -> QPointF:
         pos = max(0.0, min(1.0, position / 100.0))
         if self._orientation == "horizontal":
-            rail = self._rail_rect()
-            return QPointF(rail.left() + rail.width() * pos, rail.center().y())
-        rail = self._rail_rect()
-        return QPointF(rail.center().x(), rail.top() + rail.height() * pos)
+            lane = self._pointer_lane_rect()
+            return QPointF(lane.left() + lane.width() * pos, lane.center().y())
+        lane = self._pointer_lane_rect()
+        return QPointF(lane.center().x(), lane.top() + lane.height() * pos)
+
+    def _marker_tip(self, position: float) -> QPointF:
+        pos = max(0.0, min(1.0, position / 100.0))
+        bar = self._bar_rect()
+        if self._orientation == "horizontal":
+            return QPointF(
+                bar.left() + bar.width() * pos,
+                bar.bottom() + self._POINTER_GAP,
+            )
+        return QPointF(
+            bar.right() + self._POINTER_GAP,
+            bar.top() + bar.height() * pos,
+        )
+
+    def _marker_polygon(self, position: float, *, selected: bool) -> QPolygonF:
+        """Return an external pointer aimed at the exact stop position."""
+        tip = self._marker_tip(position)
+        del selected
+        half_thickness = self._POINTER_HALF_THICKNESS
+        if self._orientation == "horizontal":
+            body_top = tip.y() + self._POINTER_ARROW_LENGTH
+            body_bottom = self._pointer_lane_rect().bottom()
+            points = [
+                tip,
+                QPointF(tip.x() - half_thickness, body_top),
+                QPointF(tip.x() - half_thickness, body_bottom),
+                QPointF(tip.x() + half_thickness, body_bottom),
+                QPointF(tip.x() + half_thickness, body_top),
+            ]
+        else:
+            body_left = tip.x() + self._POINTER_ARROW_LENGTH
+            body_right = self._pointer_lane_rect().right()
+            points = [
+                tip,
+                QPointF(body_left, tip.y() - half_thickness),
+                QPointF(body_right, tip.y() - half_thickness),
+                QPointF(body_right, tip.y() + half_thickness),
+                QPointF(body_left, tip.y() + half_thickness),
+            ]
+        return QPolygonF(points)
 
     def _position_from_point(self, point: QPointF) -> float:
         if self._orientation == "horizontal":
@@ -1616,8 +1648,17 @@ class GradientStopsEditor(QWidget):
     def _nearest_marker_index(self, point: QPointF) -> Optional[int]:
         if not self._stops:
             return None
+        containing = [
+            index
+            for index, (position, _color) in enumerate(self._stops)
+            if self._marker_polygon(
+                position,
+                selected=index == self._selected,
+            ).containsPoint(point, Qt.FillRule.WindingFill)
+        ]
+        candidates = containing or list(range(len(self._stops)))
         nearest = min(
-            range(len(self._stops)),
+            candidates,
             key=lambda index: (
                 self._marker_center(self._stops[index][0]).x() - point.x()
             )
@@ -1629,7 +1670,7 @@ class GradientStopsEditor(QWidget):
         )
         center = self._marker_center(self._stops[nearest][0])
         distance_sq = (center.x() - point.x()) ** 2 + (center.y() - point.y()) ** 2
-        return nearest if distance_sq <= 16**2 else None
+        return nearest if containing or distance_sq <= 20**2 else None
 
     def _index_for_position(self, position: float) -> int:
         return min(range(len(self._stops)), key=lambda index: abs(self._stops[index][0] - position))

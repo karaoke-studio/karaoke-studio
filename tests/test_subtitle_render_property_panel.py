@@ -1658,49 +1658,96 @@ def _render_vertical_gradient_stop_editor(qapp):
     return editor, editor.grab().toImage().convertToFormat(QImage.Format.Format_ARGB32)
 
 
-def test_gradient_stop_markers_use_dark_inner_outline(qapp):
+def test_gradient_stop_markers_are_external_pointers(qapp):
+    editor, image = _render_vertical_gradient_stop_editor(qapp)
+    del image
+    bar = editor._bar_rect()  # noqa: SLF001
+    tip = editor._marker_tip(25)  # noqa: SLF001
+    marker = editor._marker_polygon(25, selected=False)  # noqa: SLF001
+
+    assert tip.x() > bar.right()
+    assert tip.y() == pytest.approx(bar.top() + bar.height() * 0.25)
+    assert all(point.x() > bar.right() for point in marker)
+
+
+def test_selected_gradient_stop_pointer_keeps_size_and_uses_blue_fill(qapp):
+    editor, image = _render_vertical_gradient_stop_editor(qapp)
+    regular = editor._marker_polygon(50, selected=False)  # noqa: SLF001
+    selected = editor._marker_polygon(50, selected=True)  # noqa: SLF001
+    center = editor._marker_center(50)  # noqa: SLF001
+
+    fill = image.pixelColor(round(center.x()), round(center.y()))
+
+    assert selected.boundingRect() == regular.boundingRect()
+    assert fill == QColor(editor._POINTER_BLUE)  # noqa: SLF001
+
+
+def test_gradient_stop_pointer_uses_compact_geometry(qapp):
+    editor, image = _render_vertical_gradient_stop_editor(qapp)
+    del image
+    marker = editor._marker_polygon(25, selected=False)  # noqa: SLF001
+
+    assert marker.boundingRect().width() == pytest.approx(24)
+    assert marker.boundingRect().height() == pytest.approx(10)
+
+
+def test_unselected_gradient_stop_pointer_uses_neutral_fill(qapp):
     editor, image = _render_vertical_gradient_stop_editor(qapp)
     center = editor._marker_center(25)  # noqa: SLF001
+    fill = image.pixelColor(round(center.x()), round(center.y()))
 
-    outline = image.pixelColor(round(center.x() + 8), round(center.y()))
-
-    assert outline == QColor("#46505F")
+    assert fill == QColor(pp.palette().input_bg)
 
 
-def test_selected_gradient_stop_marker_has_larger_blue_outline(qapp):
+def test_gradient_editor_does_not_draw_a_secondary_rail(qapp):
     editor, image = _render_vertical_gradient_stop_editor(qapp)
-    center = editor._marker_center(50)  # noqa: SLF001
+    old_rail_point = QPoint(round(editor._bar_rect().right() + 19), 95)  # noqa: SLF001
+    background_point = QPoint(editor.width() - 2, 95)
 
-    enlarged_outline = image.pixelColor(round(center.x() + 10), round(center.y()))
-
-    assert enlarged_outline == QColor("#0B84FF")
-
-
-def test_gradient_stop_markers_do_not_have_white_outer_ring(qapp):
-    editor, image = _render_vertical_gradient_stop_editor(qapp)
-    regular = editor._marker_center(25)  # noqa: SLF001
-    selected = editor._marker_center(50)  # noqa: SLF001
-
-    regular_outer = image.pixelColor(round(regular.x() + 10), round(regular.y()))
-    regular_background = image.pixelColor(round(regular.x() + 12), round(regular.y()))
-    selected_outer = image.pixelColor(round(selected.x() + 13), round(selected.y()))
-    selected_background = image.pixelColor(round(selected.x() + 15), round(selected.y()))
-
-    assert regular_outer == regular_background
-    assert selected_outer == selected_background
+    assert image.pixelColor(old_rail_point) == image.pixelColor(background_point)
 
 
-def test_selected_gradient_stop_marker_has_lower_right_shadow(qapp):
-    editor, image = _render_vertical_gradient_stop_editor(qapp)
-    center = editor._marker_center(50)  # noqa: SLF001
-    x = round(center.x())
-    y = round(center.y() + 12)
+def test_gradient_and_split_bars_share_pointer_geometry(qapp):
+    editor = pp.GradientStopsEditor()
+    editor.resize(editor.sizeHint())
+    editor.set_orientation("gradient_vertical")
+    gradient_pointer = list(editor._marker_polygon(50, selected=True))  # noqa: SLF001
+    editor.set_orientation("split_vertical")
+    split_pointer = list(editor._marker_polygon(50, selected=True))  # noqa: SLF001
 
-    shadow = image.pixelColor(x + 2, y)
-    unshadowed = image.pixelColor(x - 2, y)
+    assert split_pointer == gradient_pointer
 
-    assert shadow != unshadowed
-    assert shadow.lightness() < unshadowed.lightness()
+
+def test_horizontal_gradient_pointer_sits_below_bar_and_points_up(qapp):
+    editor = pp.GradientStopsEditor()
+    editor.resize(editor.sizeHint())
+    bar = editor._bar_rect()  # noqa: SLF001
+    tip = editor._marker_tip(50)  # noqa: SLF001
+    marker = editor._marker_polygon(50, selected=False)  # noqa: SLF001
+
+    assert tip.y() > bar.bottom()
+    assert tip.x() == pytest.approx(bar.center().x())
+    assert all(point.y() > bar.bottom() for point in marker)
+
+
+def test_gradient_pointer_tip_selects_existing_stop(qapp):
+    editor = pp.GradientStopsEditor()
+    editor.resize(editor.sizeHint())
+    editor.set_stops([(0, "#FFFFFF"), (50, "#808080"), (100, "#000000")])
+    editor._selected = 0  # noqa: SLF001
+
+    editor.mousePressEvent(
+        QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            editor._marker_tip(50),  # noqa: SLF001
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+    )
+
+    assert editor.selected_stop[0] == 50
+    assert len(editor._stops) == 3  # noqa: SLF001
 
 
 def test_selected_gradient_endpoint_outline_is_not_clipped(qapp):
@@ -1716,7 +1763,7 @@ def test_selected_gradient_endpoint_outline_is_not_clipped(qapp):
         y
         for y in range(image.height())
         for x in range(image.width())
-        if image.pixelColor(x, y) == QColor("#0B84FF")
+        if image.pixelColor(x, y) == QColor(editor._POINTER_BLUE)  # noqa: SLF001
     ]
 
     assert blue_rows
