@@ -2728,6 +2728,74 @@ def test_single_centered_ruby_starts_at_its_visible_glyph(qapp):
     assert front > ink_left  # visible ink has begun immediately after pos_start
 
 
+def test_ruby_mora_boundary_uses_primary_stroke_draw_edges(qapp):
+    """199467ms 的「は→な」边界不能在 ratio=0 时提前露出「な」的左描边。"""
+    style = Style(
+        ruby_font_size_px=45,
+        ruby_stroke_width_px=10,
+        ruby_stroke2_width_px=3,
+        ruby_alignment="equal_space",
+    )
+    font = _build_ruby_font(style)
+    metrics = QFontMetrics(font)
+    ruby = RubyAnnotation(
+        kanji="離",
+        reading="はな",
+        reading_part_ms=[415],
+        reading_parts=["は", "な"],
+        pos_start_ms=199_052,
+        pos_end_ms=199_867,
+    )
+    x = 1184
+    target_width = 112
+    segments, wipe_left, wipe_right, _signature = (
+        subtitle_painter._ruby_wipe_geometry(
+            ruby, font, metrics, x, 200, target_width, style, rtl=False
+        )
+    )
+    unit_layouts = subtitle_painter._ruby_layout_units(
+        ["は", "な"],
+        metrics,
+        x,
+        target_width,
+        style=style,
+        base_text="離",
+    )
+    ink_bounds = []
+    for unit, unit_x, _unit_width in unit_layouts:
+        path = QPainterPath()
+        path.addText(float(unit_x), 200.0, font, unit)
+        ink_bounds.append(path.boundingRect())
+
+    edge_half = subtitle_painter._ruby_stroke_width(style) / 2.0
+    assert segments[0].axis_start == pytest.approx(ink_bounds[0].left() - edge_half)
+    assert segments[0].axis_end == pytest.approx(ink_bounds[0].right() + edge_half)
+    assert segments[1].axis_start == pytest.approx(ink_bounds[1].left() - edge_half)
+    assert segments[1].axis_end == pytest.approx(ink_bounds[1].right() + edge_half)
+    assert wipe_left == pytest.approx(segments[0].axis_start)
+    assert wipe_right == pytest.approx(segments[1].axis_end)
+
+    layout = subtitle_painter._RubyLayout(
+        ruby=ruby,
+        indices=[0],
+        style=style,
+        x=x,
+        baseline_y=200,
+        target_width=target_width,
+        reading_width=target_width,
+        gradient_rect=QRectF(x, 100, target_width, 100),
+        wipe_segments=segments,
+        wipe_left=wipe_left,
+        wipe_right=wipe_right,
+    )
+    # 60fps 恰好取到 199467ms：锋面位于「な」的完整绘制左缘，而不是
+    # 填充墨水左缘，因此下一字仍是严格 0%，其左半描边不会提前变色。
+    visible, complete, front = subtitle_painter._ruby_wipe_state(layout, 199_467)
+    assert visible and not complete
+    assert front == pytest.approx(segments[1].axis_start)
+    assert front < ink_bounds[1].left()
+
+
 def test_ruby_wipe_preserves_empty_part_pause_and_rtl_direction(qapp):
     ruby = RubyAnnotation(
         kanji="AB",

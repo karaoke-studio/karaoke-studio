@@ -9282,8 +9282,12 @@ def _ruby_wipe_geometry(
     """Build N3-style timed glyph geometry independently from the layout box.
 
     The target-width box is still used for Center/EqualSpace placement.  Wipe
-    fronts, however, follow each visible glyph's actual outline.  This avoids
-    consuming a centered ruby's leading/trailing blank area as singing time.
+    fronts follow each visible glyph's primary-stroke drawing bounds, matching
+    N3 ``WipeLeft`` (geometry bounds expanded by half ``EdgeSize``).  Using the
+    fill-only ink bounds makes the next ruby glyph's left half-stroke visible at
+    ratio zero and leaves the previous half-stroke unfinished until the exact
+    boundary frame, which reads as a jump.  The layout box's centered leading /
+    trailing blank area still does not consume singing time.
     """
     logical_units = _ruby_visual_units_and_intervals(ruby)
     if not logical_units:
@@ -9300,6 +9304,8 @@ def _ruby_wipe_geometry(
     segments: list[_RubyWipeSegment] = []
     signature: list[tuple] = []
     bounds: list[tuple[float, float]] = []
+    # N3 performs integer ``EdgeSize / 2`` before converting to float.
+    edge_half = float(max(int(_ruby_stroke_width(style)), 0) // 2)
     for (unit, interval), (_draw_unit, unit_x, unit_width) in zip(
         visual_units, unit_layouts
     ):
@@ -9314,16 +9320,18 @@ def _ruby_wipe_geometry(
             ink_right = float(ink.right())
         if ink_right < ink_left:
             ink_left, ink_right = ink_right, ink_left
+        draw_left = ink_left - edge_half
+        draw_right = ink_right + edge_half
         start_ms, end_ms = interval
         segments.append(
             _RubyWipeSegment(
                 int(start_ms),
                 max(int(start_ms), int(end_ms)),
-                ink_right if rtl else ink_left,
-                ink_left if rtl else ink_right,
+                draw_right if rtl else draw_left,
+                draw_left if rtl else draw_right,
             )
         )
-        bounds.append((ink_left, ink_right))
+        bounds.append((draw_left, draw_right))
         signature.append(
             (
                 unit,
@@ -9336,8 +9344,19 @@ def _ruby_wipe_geometry(
     if not bounds:
         return (), float(x), float(x), tuple(signature)
     segments.sort(key=lambda segment: (segment.start_ms, segment.end_ms))
+    adjusted = list(segments)
+    for index in range(len(adjusted) - 1):
+        current = adjusted[index]
+        following = adjusted[index + 1]
+        overlaps = (
+            current.axis_end <= following.axis_start
+            if rtl
+            else current.axis_end >= following.axis_start
+        )
+        if overlaps:
+            adjusted[index] = replace(current, axis_end=following.axis_start)
     return (
-        tuple(segments),
+        tuple(adjusted),
         min(left for left, _right in bounds),
         max(right for _left, right in bounds),
         tuple(signature),
