@@ -861,6 +861,10 @@ def test_property_panel_font_and_color_sections_are_side_by_side(qapp):
     assert abs(panel._font_section.width() - panel._color_section.width()) <= 1
     # 描边尺寸进入字体页后字体卡片更高；两张卡片仍只做顶部对齐。
     assert panel._font_section.height() > panel._color_section.height()
+    assert (
+        panel._font_tab_panel.mapTo(panel._font_section, QPoint()).y()
+        == panel._color_tab_panel.mapTo(panel._color_section, QPoint()).y()
+    )
     font_header_top = panel._font_section.mapTo(panel._font_color_row, QPoint()).y()
     color_header_top = panel._color_section.mapTo(panel._font_color_row, QPoint()).y()
     assert font_header_top == color_header_top
@@ -1515,6 +1519,71 @@ def test_property_panel_color_controls_preserve_alpha(qapp):
     assert emitted[-1].fill_color == "#80123ABC"
     assert emitted[-1].karaoke_colors.after.text.color == "#80123ABC"
     assert panel._paint_solid_btn.color == "#80123ABC"
+
+
+def test_property_panel_swaps_complete_before_after_color_states(qapp):
+    main_colors = KaraokeColors(
+        before=KaraokeColorState(text=PaintFill(color="#112233")),
+        after=KaraokeColorState(text=PaintFill(color="#AABBCC")),
+    )
+    ruby_colors = KaraokeColors(
+        before=KaraokeColorState(text=PaintFill(color="#334455")),
+        after=KaraokeColorState(text=PaintFill(color="#DDEEFF")),
+    )
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(karaoke_colors=main_colors, ruby_karaoke_colors=ruby_colors)
+    )
+    panel.resize(520, 900)
+    panel.show()
+    qapp.processEvents()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    tabs = panel._color_tab_panel
+    button = panel._color_state_swap_button
+    assert not button.icon().isNull()
+    assert button.toolTip() == "交换走字前后配色"
+    after_tab = tabs._buttons[("right", "after")]
+    before_tab = tabs._buttons[("right", "before")]
+    after_origin = after_tab.mapTo(panel._color_section, QPoint(0, 0))
+    before_origin = before_tab.mapTo(panel._color_section, QPoint(0, 0))
+    assert button.geometry().bottom() < after_origin.y()
+    seam_x = (after_origin.x() + after_tab.width() - 1 + before_origin.x()) / 2
+    assert button.geometry().center().x() == pytest.approx(seam_x, abs=1)
+
+    panel.resize(900, 900)
+    qapp.processEvents()
+    after_origin = after_tab.mapTo(panel._color_section, QPoint(0, 0))
+    before_origin = before_tab.mapTo(panel._color_section, QPoint(0, 0))
+    seam_x = (after_origin.x() + after_tab.width() - 1 + before_origin.x()) / 2
+    assert button.geometry().bottom() < after_origin.y()
+    assert button.geometry().center().x() == pytest.approx(seam_x, abs=1)
+
+    button.click()
+
+    assert emitted[-1].karaoke_colors == KaraokeColors(
+        before=main_colors.after,
+        after=main_colors.before,
+    )
+    assert emitted[-1].ruby_karaoke_colors == ruby_colors
+    assert panel._color_state_combo.currentData() == "after"
+    assert panel._paint_solid_btn.color == "#112233"
+
+    panel._color_subject_combo.setCurrentIndex(
+        panel._color_subject_combo.findData("ruby")
+    )
+    button.click()
+
+    assert emitted[-1].ruby_karaoke_colors == KaraokeColors(
+        before=ruby_colors.after,
+        after=ruby_colors.before,
+    )
+    assert emitted[-1].karaoke_colors == KaraokeColors(
+        before=main_colors.after,
+        after=main_colors.before,
+    )
+    panel.close()
 
 
 def test_color_dialog_alpha_slider_is_visible_and_updates_color(qapp):

@@ -15,6 +15,7 @@ from typing import Any, Optional
 from uuid import uuid4
 
 from PyQt6.QtCore import (
+    QEvent,
     QPoint,
     QPointF,
     QRect,
@@ -194,6 +195,12 @@ _PRESET_NO_GROUP = "\x00ungrouped"
 _COMPACT_CONTROL_HEIGHT = 32
 _FILL_MODE_ICON_DIR = (
     Path(__file__).resolve().parents[2] / "assets" / "subtitle_render" / "fill_modes"
+)
+_COLOR_STATE_SWAP_ICON = (
+    Path(__file__).resolve().parents[2]
+    / "assets"
+    / "subtitle_render"
+    / "swap-colors.svg"
 )
 _AUTO_ROLE_COLORS = (
     "#FF5A6F",
@@ -1377,6 +1384,56 @@ class _FolderTabPanel(QWidget):
                     )
         finally:
             painter.end()
+
+
+class _AnchoredTabActionButton(QToolButton):
+    """Overlay action whose bottom edge follows the top seam of two tabs."""
+
+    _REPOSITION_EVENTS = {
+        QEvent.Type.LayoutRequest,
+        QEvent.Type.Move,
+        QEvent.Type.Resize,
+        QEvent.Type.Show,
+    }
+
+    def __init__(
+        self,
+        panel: _FolderTabPanel,
+        first_tab: tuple[str, str],
+        second_tab: tuple[str, str],
+        parent: QWidget,
+    ) -> None:
+        super().__init__(parent)
+        self._panel = panel
+        self._first_tab = panel._buttons[first_tab]
+        self._second_tab = panel._buttons[second_tab]
+        for watched in (parent, panel, self._first_tab, self._second_tab):
+            watched.installEventFilter(self)
+        QTimer.singleShot(0, self.reposition)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802, ARG002
+        if event.type() in self._REPOSITION_EVENTS:
+            QTimer.singleShot(0, self.reposition)
+        return super().eventFilter(watched, event)
+
+    def reposition(self) -> None:
+        parent = self.parentWidget()
+        if parent is None:
+            return
+        first_origin = self._first_tab.mapTo(parent, QPoint(0, 0))
+        second_origin = self._second_tab.mapTo(parent, QPoint(0, 0))
+        seam_x = (
+            first_origin.x()
+            + self._first_tab.width()
+            - 1
+            + second_origin.x()
+        ) / 2
+        tab_top = min(first_origin.y(), second_origin.y())
+        self.move(
+            int(round(seam_x - (self.width() - 1) / 2)),
+            tab_top - self.height(),
+        )
+        self.raise_()
 
 
 class GradientStopsEditor(QWidget):
@@ -4251,6 +4308,35 @@ class PropertyPanel(QWidget):
         )
         self._color_tab_panel.leftChanged.connect(self._on_color_subject_tab_changed)
         self._color_tab_panel.rightChanged.connect(self._on_color_state_tab_changed)
+        self._color_state_swap_button = _AnchoredTabActionButton(
+            self._color_tab_panel,
+            ("right", "after"),
+            ("right", "before"),
+            section,
+        )
+        self._color_state_swap_button.setObjectName("ColorStateSwapButton")
+        self._color_state_swap_button.setIcon(QIcon(str(_COLOR_STATE_SWAP_ICON)))
+        self._color_state_swap_button.setIconSize(QSize(16, 16))
+        self._color_state_swap_button.setFixedSize(22, 22)
+        self._color_state_swap_button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._color_state_swap_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._color_state_swap_button.setToolTip("交换走字前后配色")
+        self._color_state_swap_button.clicked.connect(
+            self._swap_karaoke_color_states
+        )
+        themed(
+            self._color_state_swap_button,
+            lambda: (
+                "QToolButton#ColorStateSwapButton {"
+                f" background: {palette().card_bg};"
+                f" border: 1px solid {palette().input_border};"
+                " border-radius: 11px; padding: 2px; }"
+                "QToolButton#ColorStateSwapButton:hover {"
+                f" background: {palette().secondary_button_hover_bg}; }}"
+                "QToolButton#ColorStateSwapButton:pressed {"
+                f" background: {palette().secondary_button_pressed_bg}; }}"
+            ),
+        )
         layout.addWidget(self._color_tab_panel)
 
         self._color_layer_pill = _PillSelector(
@@ -6270,6 +6356,20 @@ class PropertyPanel(QWidget):
             self._update_style(ruby_karaoke_colors=colors)
         else:
             self._update_style(karaoke_colors=colors)
+
+    def _swap_karaoke_color_states(self) -> None:
+        if self._syncing:
+            return
+        colors = self._current_editing_karaoke_colors()
+        swapped = replace(
+            colors,
+            before=deepcopy(colors.after),
+            after=deepcopy(colors.before),
+        )
+        if self._current_color_subject_key() == "ruby":
+            self._update_style(ruby_karaoke_colors=swapped)
+        else:
+            self._update_style(karaoke_colors=swapped)
 
     def _update_gradient_stops(self, stops: list[tuple[float, str]]) -> None:
         if self._syncing:

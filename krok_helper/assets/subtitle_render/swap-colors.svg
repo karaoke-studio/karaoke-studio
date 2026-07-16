@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img">
+  <title>交换走字前后配色</title>
+  <g fill="none" stroke="#344054" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4 7.5h15"/>
+    <path d="m16 4.5 3 3-3 3"/>
+    <path d="M20 16.5H5"/>
+    <path d="m8 13.5-3 3 3 3"/>
+  </g>
+</svg>
