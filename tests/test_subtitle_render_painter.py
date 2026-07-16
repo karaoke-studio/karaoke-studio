@@ -3588,7 +3588,10 @@ def test_utopia_groups_main_characters_that_share_one_ruby(qapp):
     assert _utopia_main_group_for_index([ruby], line, intervals, 2) is None
 
 
-def test_utopia_linked_english_marker_keeps_syllable_wipe_timing(qapp):
+@pytest.mark.parametrize("marker_text", ["^", " "])
+def test_utopia_linked_english_marker_keeps_syllable_wipe_timing(
+    qapp, marker_text: str
+):
     line = TimingLine(
         chars=[
             TimingChar(text="D", start_ms=1000),
@@ -3611,8 +3614,8 @@ def test_utopia_linked_english_marker_keeps_syllable_wipe_timing(qapp):
     ranges = [(0, 20), (20, 40), (40, 50), (50, 70), (70, 90), (90, 110)]
     marker = RubyAnnotation(
         kanji="Do you",
-        reading="^",
-        reading_parts=["^"],
+        reading=marker_text,
+        reading_parts=[marker_text],
         pos_start_ms=1000,
         pos_end_ms=1800,
     )

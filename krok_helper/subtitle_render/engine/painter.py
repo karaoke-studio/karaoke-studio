@@ -7799,7 +7799,7 @@ def _karaoke_fill_segments(
     index = 0
     while index < len(char_widths):
         ruby = _ruby_for_char_index(active_rubies, line, intervals, index)
-        # SUG uses a single ``^`` ruby over a linked English phrase as a
+        # SUG uses a pause-only ruby over a linked English phrase as a
         # non-rendering group marker.  Utopia must still consume that ruby to
         # drop the whole phrase together, but it is not pronunciation data and
         # must not replace the phrase's real per-syllable TimingChar clock with
@@ -8182,7 +8182,7 @@ def _character_fill_ratio(
     else:
         ruby = _ruby_for_char_index(active_rubies, line, intervals, index)
         raw_indices = _ruby_target_indices(ruby, line, intervals) if ruby is not None else None
-    # Keep SUG's ``^`` linked-phrase marker available to
+    # Keep SUG's pause-only linked-phrase marker available to
     # ``_utopia_main_group_for_index`` while letting the main-text wipe follow
     # the underlying syllable/character intervals.
     if ruby is not None and _is_utopia_group_marker(ruby):
@@ -8211,8 +8211,8 @@ def _character_fill_ratio(
 
 
 def _is_utopia_group_marker(ruby: RubyAnnotation) -> bool:
-    """Return whether ``ruby`` is SUG's linked-phrase-only ``^`` marker."""
-    return ruby.reading.strip() == "^" and all(
+    """Return whether ``ruby`` is SUG's linked-phrase-only pause marker."""
+    return ruby.reading.strip() in {"", "^"} and all(
         not part.strip() or part.strip() == "^" for part in ruby.reading_parts
     )
 

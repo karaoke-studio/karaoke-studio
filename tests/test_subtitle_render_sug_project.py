@@ -15,6 +15,7 @@ from strange_uta_game.backend.domain import (
 )
 from strange_uta_game.backend.infrastructure.persistence.sug_io import SugProjectParser
 
+from krok_helper.subtitle_render import sug_project as sug_project_module
 from krok_helper.subtitle_render.sug_project import (
     load_sug_timing_track,
     timing_track_from_sug_project,
@@ -322,3 +323,52 @@ def test_sug_mid_line_pause_does_not_truncate_line_or_later_ruby() -> None:
         ("前", "まえ", 1000, 1300),
         ("意", "い", 1600, 2400),
     ]
+
+
+def test_sug_ruby_ignores_configured_pause_char_and_preserves_timing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sug_project_module, "get_ruby_pause_char", lambda: "~")
+    singer = Singer(id="main", name="主唱", color="#ff0000", is_default=True)
+    project = Project(
+        singers=[singer],
+        sentences=[
+            Sentence(
+                singer_id=singer.id,
+                characters=[
+                    Character(
+                        char="英",
+                        ruby=Ruby(parts=[RubyPart("~")]),
+                        check_count=1,
+                        timestamps=[1000],
+                        singer_id=singer.id,
+                    ),
+                    Character(
+                        char="意",
+                        ruby=Ruby(
+                            parts=[RubyPart("い"), RubyPart("~"), RubyPart("み")]
+                        ),
+                        check_count=3,
+                        timestamps=[1500, 1600, 1700],
+                        sentence_end_ts=1900,
+                        is_sentence_end=True,
+                        is_line_end=True,
+                        singer_id=singer.id,
+                    ),
+                ],
+            )
+        ],
+    )
+
+    track = timing_track_from_sug_project(project)
+
+    assert len(track.rubies) == 2
+    marker, ruby = track.rubies
+    assert marker.kanji == "英"
+    assert marker.reading == " "
+    assert marker.reading_parts == [" "]
+    assert ruby.kanji == "意"
+    assert ruby.reading == "いみ"
+    assert ruby.reading_parts == ["い", "", "み"]
+    assert ruby.reading_part_ms == [100, 200]
+    assert all("~" not in item.reading for item in track.rubies)

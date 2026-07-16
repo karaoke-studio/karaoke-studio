@@ -11,6 +11,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from strange_uta_game.backend.domain.models import (
+    RUBY_PAUSE_SENTINEL,
+    get_ruby_pause_char,
+    pause_char_variants,
+)
 from strange_uta_game.backend.infrastructure.persistence.sug_io import SugProjectParser
 
 from krok_helper.subtitle_render.models import (
@@ -50,6 +55,7 @@ def timing_track_from_sug_project(project: Any) -> TimingTrack:
         str(getattr(singer, "id")): index for index, singer in enumerate(singers)
     }
     default_singer_id = _default_singer_id(singers)
+    ruby_pause_texts = _ruby_pause_texts()
 
     lines: list[TimingLine] = []
     rubies: list[RubyAnnotation] = []
@@ -86,7 +92,13 @@ def timing_track_from_sug_project(project: Any) -> TimingTrack:
         )
 
         rubies.extend(
-            _ruby_annotations_for_sentence(chars, offset_ms, project, sentence_index)
+            _ruby_annotations_for_sentence(
+                chars,
+                offset_ms,
+                project,
+                sentence_index,
+                ruby_pause_texts,
+            )
         )
         lines.append(
             TimingLine(
@@ -185,7 +197,11 @@ def _timing_chars_for_sentence(
 
 
 def _ruby_annotations_for_sentence(
-    chars: list[Any], offset_ms: int, project: Any, sentence_index: int
+    chars: list[Any],
+    offset_ms: int,
+    project: Any,
+    sentence_index: int,
+    ruby_pause_texts: tuple[str, ...],
 ) -> list[RubyAnnotation]:
     result: list[RubyAnnotation] = []
     index = 0
@@ -200,7 +216,13 @@ def _ruby_annotations_for_sentence(
             index += 1
         end = index
         ruby = _ruby_annotation_for_group(
-            chars, start, end, offset_ms, project, sentence_index
+            chars,
+            start,
+            end,
+            offset_ms,
+            project,
+            sentence_index,
+            ruby_pause_texts,
         )
         if ruby is not None:
             result.append(ruby)
@@ -208,7 +230,13 @@ def _ruby_annotations_for_sentence(
 
 
 def _ruby_annotation_for_group(
-    chars: list[Any], start: int, end: int, offset_ms: int, project: Any, sentence_index: int
+    chars: list[Any],
+    start: int,
+    end: int,
+    offset_ms: int,
+    project: Any,
+    sentence_index: int,
+    ruby_pause_texts: tuple[str, ...],
 ) -> RubyAnnotation | None:
     group_chars = chars[start:end]
     start_ms = _first_timestamp(group_chars[0], offset_ms)
@@ -229,13 +257,19 @@ def _ruby_annotation_for_group(
             continue
         timestamps = _offset_timestamps(getattr(ch, "timestamps", []) or [], offset_ms)
         for part_index, part in enumerate(list(getattr(ruby, "parts", []) or [])):
-            reading_parts.append(str(getattr(part, "text", "")))
+            part_text = str(getattr(part, "text", ""))
+            for pause_text in ruby_pause_texts:
+                part_text = part_text.replace(pause_text, "")
+            reading_parts.append(part_text)
             if len(reading_parts) <= 1:
                 continue
             if part_index < len(timestamps):
                 part_offsets.append(max(0, timestamps[part_index] - start_ms))
 
     reading = "".join(reading_parts)
+    if not reading and reading_parts:
+        reading_parts = [" " for _part in reading_parts]
+        reading = "".join(reading_parts)
     if not reading:
         return None
     return RubyAnnotation(
@@ -246,6 +280,12 @@ def _ruby_annotation_for_group(
         pos_end_ms=end_ms,
         reading_parts=reading_parts,
     )
+
+
+def _ruby_pause_texts() -> tuple[str, ...]:
+    pause_char = get_ruby_pause_char()
+    values = pause_char_variants(pause_char) | {RUBY_PAUSE_SENTINEL}
+    return tuple(sorted((value for value in values if value), key=len, reverse=True))
 
 
 def _group_end_ms(
