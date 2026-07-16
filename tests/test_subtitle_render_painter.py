@@ -3021,6 +3021,45 @@ def test_n3_release_edge_clamps_to_following_overlapping_draw_left(qapp):
     assert _fill_extent_end(segments, 1500) == 210
 
 
+def test_n3_wipe_interpolates_to_adjusted_draw_edge_without_boundary_jump(qapp):
+    """N3 从首帧起就朝 AdjustWipeEnd 终点插值，不在字结束帧切换范围。"""
+    from krok_helper.subtitle_render.engine.painter import _fill_extent_left
+
+    ltr = subtitle_painter._adjust_fill_release_edges(
+        [
+            _FillSegment(
+                100, 160, 1000, 2000, indices=(0,),
+                release_left=80, release_right=220,
+            ),
+            _FillSegment(
+                210, 270, 2000, 3000, indices=(1,),
+                release_left=200, release_right=290,
+            ),
+        ]
+    )
+    assert ltr[0].release_right == 200
+    # 旧实现的中点是 ink 中点 130，且 1999→2000ms 会从 160 跳到 200。
+    assert _fill_extent_end(ltr, 1500) == 140
+    # 60fps 下结束前一帧约为 1983ms：新实现只再走 2px，旧实现会突跳 41px。
+    assert _fill_extent_end(ltr, 1983) == 198
+    assert _fill_extent_end(ltr, 1999) == 200
+    assert _fill_extent_end(ltr, 2000) == 200
+
+    rtl = [
+        _FillSegment(
+            210, 270, 1000, 2000, indices=(0,),
+            release_left=200, release_right=290,
+        ),
+        _FillSegment(
+            100, 160, 2000, 3000, indices=(1,),
+            release_left=80, release_right=170,
+        ),
+    ]
+    assert _fill_extent_left(rtl, 1500) == 245
+    assert _fill_extent_left(rtl, 1999) == 200
+    assert _fill_extent_left(rtl, 2000) == 200
+
+
 def test_explicit_timed_space_has_layout_time_but_no_wipe_geometry(qapp):
     track = parse_nicokara_lrc(
         "[01:25:07]週[01:25:37] [01:25:76]バー[01:26:20]\n"

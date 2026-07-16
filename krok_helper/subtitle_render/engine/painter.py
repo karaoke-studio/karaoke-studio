@@ -7993,7 +7993,33 @@ def _offset_fill_segments(segments: list[_FillSegment], dx: int) -> list[_FillSe
 
 
 def _fill_extent_start(segments: list[_FillSegment]) -> int | None:
-    return segments[0].left if segments else None
+    if not segments:
+        return None
+    first = segments[0]
+    return first.release_left if first.release_left is not None else first.left
+
+
+def _segment_wipe_edges(segment: _FillSegment) -> tuple[int, int]:
+    """Return the N3 drawing edges used by the moving wipe front.
+
+    ``left`` / ``right`` keep the glyph-ink bounds for layout and ruby mapping,
+    while ``release_*`` are the full DrawLeft/DrawRight-style bounds (including
+    the primary edge).  NicoKaraMaker3 interpolates across those full drawing
+    bounds for the *whole* character interval; ``AdjustWipeEnd`` only changes
+    the destination edge before interpolation.  Characters without drawable
+    ink (spaces) deliberately remain zero-width: their timing consumes time
+    without moving the visible front.  Falling back to ink bounds keeps
+    synthetic/legacy segments compatible.
+    """
+    if segment.right <= segment.left:
+        return segment.left, segment.left
+    left = (
+        segment.release_left if segment.release_left is not None else segment.left
+    )
+    right = (
+        segment.release_right if segment.release_right is not None else segment.right
+    )
+    return left, max(left, right)
 
 
 def _fill_extent_end(
@@ -8002,28 +8028,25 @@ def _fill_extent_end(
 ) -> int:
     """Return the current right edge of the continuous karaoke scan.
 
-    Partial motion follows glyph ink. At a character end, release through its
-    N3-style DrawRight (the layout box including edge width), already clamped
-    by :func:`_adjust_fill_release_edges` when the next box overlaps.
+    Motion follows the N3 drawing bounds for the complete interval.  In
+    particular, the destination is the AdjustWipeEnd-clamped DrawRight from
+    the first partial frame onward; switching from ink ``right`` to DrawRight
+    only on the completion frame causes a visible one-frame jump.
     """
     if not segments:
         return 0
-    fill_end = segments[0].left
+    fill_end, _ = _segment_wipe_edges(segments[0])
     for segment in segments:
         ratio = _segment_fill_ratio(segment, t_ms)
         if ratio <= 0.0:
             break
+        wipe_left, wipe_right = _segment_wipe_edges(segment)
         if ratio >= 1.0:
-            release_right = (
-                segment.release_right
-                if segment.release_right is not None
-                else segment.right
-            )
-            fill_end = max(fill_end, release_right)
+            fill_end = max(fill_end, wipe_right)
             continue
         fill_end = max(
             fill_end,
-            segment.left + int(round((segment.right - segment.left) * ratio)),
+            wipe_left + int(round((wipe_right - wipe_left) * ratio)),
         )
         break
     return fill_end
@@ -8036,22 +8059,18 @@ def _fill_extent_left(segments: list[_FillSegment], t_ms: int) -> int:
     """
     if not segments:
         return 0
-    scanline = segments[0].right
+    _, scanline = _segment_wipe_edges(segments[0])
     for segment in segments:
         ratio = _segment_fill_ratio(segment, t_ms)
         if ratio <= 0.0:
             break
+        wipe_left, wipe_right = _segment_wipe_edges(segment)
         if ratio >= 1.0:
-            release_left = (
-                segment.release_left
-                if segment.release_left is not None
-                else segment.left
-            )
-            scanline = min(scanline, release_left)
+            scanline = min(scanline, wipe_left)
             continue
         scanline = min(
             scanline,
-            segment.right - int(round((segment.right - segment.left) * ratio)),
+            wipe_right - int(round((wipe_right - wipe_left) * ratio)),
         )
         break
     return scanline
@@ -8071,7 +8090,7 @@ def _fill_clip_band(
         return None
     if rtl:
         left = _fill_extent_left(segments, t_ms)
-        right = max(segment.right for segment in segments)
+        right = max(_segment_wipe_edges(segment)[1] for segment in segments)
     else:
         left = _fill_extent_start(segments)
         right = _fill_extent_end(segments, t_ms)
