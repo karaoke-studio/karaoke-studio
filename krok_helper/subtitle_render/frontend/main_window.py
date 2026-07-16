@@ -1807,7 +1807,7 @@ class SubtitleRenderWindow(QWidget):
             self._open_export_location_settings
         )
         output_card, output_layout = self._make_export_card(
-            "输出文件", self._export_location_settings_button
+            "输出文件", self._export_location_settings_button, icon=FIF.SAVE_AS
         )
         dir_row = QHBoxLayout()
         dir_row.setContentsMargins(0, 0, 0, 0)
@@ -1828,8 +1828,23 @@ class SubtitleRenderWindow(QWidget):
         name_row.setSpacing(8)
         self._export_name_edit = FluentLineEdit()
         self._export_name_edit.setPlaceholderText("文件名（默认：视频文件名_yurika出力）")
-        name_suffix = CaptionLabel(".mp4")
-        self._export_theme_labels.append(name_suffix)
+        name_suffix = QLabel(".mp4")
+        name_suffix.setObjectName("SrExportExtBadge")
+        themed(
+            name_suffix,
+            lambda: (
+                "#SrExportExtBadge {{ color: {fg}; background: {bg};"
+                " border-radius: 6px; padding: 4px 8px;"
+                " font-size: 9pt; font-weight: 600; }}"
+            ).format(
+                fg=palette().accent_primary,
+                bg=(
+                    "rgba(255, 122, 140, 0.16)"
+                    if palette().is_dark
+                    else "rgba(255, 90, 111, 0.10)"
+                ),
+            ),
+        )
         name_row.addWidget(self._export_name_edit, 1)
         name_row.addWidget(name_suffix)
         output_layout.addLayout(name_row)
@@ -1838,9 +1853,22 @@ class SubtitleRenderWindow(QWidget):
         settings_layout.addWidget(output_card)
 
         # 卡片 2：画面与编码
-        params_card, params_layout = self._make_export_card("画面与编码")
-        sync_hint = CaptionLabel("宽度 / 高度 / 帧率与预览页的「画面」设置双向联动。")
-        self._export_theme_labels.append(sync_hint)
+        params_card, params_layout = self._make_export_card(
+            "画面与编码", icon=FIF.VIDEO
+        )
+        sync_hint = QLabel("宽度 / 高度 / 帧率与预览页的「画面」设置双向联动。")
+        sync_hint.setObjectName("SrExportSyncHint")
+        sync_hint.setWordWrap(True)
+        themed(
+            sync_hint,
+            lambda: (
+                "#SrExportSyncHint {{ background: {bg}; color: {fg};"
+                " border-radius: 6px; padding: 6px 10px; font-size: 9pt; }}"
+            ).format(
+                bg="#26313F" if palette().is_dark else "#EEF4FF",
+                fg="#A6C8FF" if palette().is_dark else "#3D6BBF",
+            ),
+        )
         params_layout.addWidget(sync_hint)
 
         params_row = QHBoxLayout()
@@ -1920,6 +1948,10 @@ class SubtitleRenderWindow(QWidget):
         monitor_title = StrongBodyLabel("导出预览")
         self._export_theme_labels.append(monitor_title)
         self._export_eta_label = CaptionLabel("")
+        monitor_header.setSpacing(8)
+        monitor_header.addWidget(
+            self._make_card_icon_badge(FIF.MOVIE), 0, Qt.AlignmentFlag.AlignVCenter
+        )
         monitor_header.addWidget(monitor_title)
         monitor_header.addStretch(1)
         monitor_header.addWidget(self._export_eta_label)
@@ -1989,6 +2021,7 @@ class SubtitleRenderWindow(QWidget):
         self,
         title_text: str,
         header_action: Optional[QWidget] = None,
+        icon: Optional[FIF] = None,
     ) -> tuple[SimpleCardWidget, QVBoxLayout]:
         card = SimpleCardWidget()
         layout = QVBoxLayout(card)
@@ -1999,12 +2032,36 @@ class SubtitleRenderWindow(QWidget):
         header_row = QHBoxLayout()
         header_row.setContentsMargins(0, 0, 0, 0)
         header_row.setSpacing(8)
+        if icon is not None:
+            header_row.addWidget(
+                self._make_card_icon_badge(icon), 0, Qt.AlignmentFlag.AlignVCenter
+            )
         header_row.addWidget(header)
         header_row.addStretch(1)
         if header_action is not None:
             header_row.addWidget(header_action, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addLayout(header_row)
         return card, layout
+
+    def _make_card_icon_badge(self, icon: FIF) -> QLabel:
+        badge = QLabel()
+        badge.setObjectName("SrExportCardBadge")
+        badge.setFixedSize(26, 26)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        def _qss() -> str:
+            # themed() 主题切换时重跑 factory，顺带把 pixmap 换成当前品牌色
+            p = palette()
+            badge.setPixmap(
+                icon.icon(color=QColor(p.accent_primary)).pixmap(QSize(14, 14))
+            )
+            tint = (
+                "rgba(255, 122, 140, 0.18)" if p.is_dark else "rgba(255, 90, 111, 0.12)"
+            )
+            return f"#SrExportCardBadge {{ background: {tint}; border-radius: 8px; }}"
+
+        themed(badge, _qss)
+        return badge
 
     def _update_export_preset_enabled(self) -> None:
         # CPU preset 只影响 libx264；「自动硬编」可能回退 CPU，保持可编辑。

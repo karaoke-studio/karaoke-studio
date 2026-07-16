@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import QApplication
 
 @dataclass(frozen=True)
 class _FallbackPalette:
+    is_dark: bool = False
     shell_bg: str = "#F4F7FB"
     text_primary: str = "#1f2937"
     text_secondary: str = "#667085"
