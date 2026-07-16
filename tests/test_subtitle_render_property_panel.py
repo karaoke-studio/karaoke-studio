@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 import os
 from pathlib import Path
@@ -125,6 +126,7 @@ def test_property_panel_uses_fluent_form_controls(qapp):
     assert isinstance(panel._add_layout_btn, TransparentToolButton)
     assert isinstance(panel._rename_layout_btn, TransparentToolButton)
     assert isinstance(panel._delete_layout_btn, TransparentToolButton)
+    assert isinstance(panel._save_layout_btn, TransparentToolButton)
 
 
 def test_font_combo_uses_n3_catalog_and_never_appends_unknown(
@@ -265,6 +267,8 @@ def test_title_overlay_is_project_only_and_app_default_is_hard_coded(qapp):
 def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
     initial_style = Style(
         fill_color="#111111",
+        line_gap_px=21,
+        layouts=[LyricsLayout(name="保留布局", line_gap_px=22)],
         custom_style_schemes={
             TITLE_SCHEME_NAME: SubtitleStyleScheme(fill_color="#222222")
         },
@@ -276,6 +280,8 @@ def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
     win._apply_style(
         Style(
             fill_color="#333333",
+            line_gap_px=99,
+            layouts=[LyricsLayout(name="项目布局", line_gap_px=98)],
             custom_style_schemes={
                 TITLE_SCHEME_NAME: SubtitleStyleScheme(fill_color="#444444"),
                 "初音": SubtitleStyleScheme(fill_color="#555555"),
@@ -286,6 +292,10 @@ def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
     win._save_builtin_scheme_default("global")
     saved = style_from_dict(provider.data["style"])
     assert saved.fill_color == "#333333"
+    assert saved.line_gap_px == 21
+    assert [(layout.name, layout.line_gap_px) for layout in saved.layouts] == [
+        ("保留布局", 22)
+    ]
     assert saved.custom_style_schemes[TITLE_SCHEME_NAME].fill_color == "#222222"
     assert "初音" not in saved.custom_style_schemes
 
@@ -309,6 +319,82 @@ def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
     assert win._style.fill_color == "#333333"
     assert win._style.custom_style_schemes[TITLE_SCHEME_NAME].fill_color == "#444444"
     assert "镜音" not in win._style.custom_style_schemes
+
+
+def test_layout_defaults_are_explicit_and_save_only_selected_layout(
+    qapp, monkeypatch
+):
+    initial_style = Style(
+        line_gap_px=21,
+        horizontal_margin_px=31,
+        layouts=[
+            LyricsLayout(name="副歌布局", line_y_margin_px=41),
+            LyricsLayout(name="保留布局", line_y_margin_px=51),
+        ],
+        layout_reference_height=1080,
+    )
+    provider = _FontMigrationSettingsProvider(
+        {"style": style_to_dict(initial_style)}
+    )
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    monkeypatch.setattr(mw.InfoBar, "success", lambda *args, **kwargs: None)
+    project_style = replace(
+        win._style,
+        line_gap_px=70,
+        horizontal_margin_px=80,
+        upper_line_left_margin_px=80,
+        lower_line_right_margin_px=80,
+        layouts=[
+            LyricsLayout(name="副歌布局", line_y_margin_px=72),
+            LyricsLayout(name="项目新增", line_y_margin_px=60),
+        ],
+        layout_reference_height=720,
+    )
+
+    # Ordinary project edits and settings flushes must not leak layouts into
+    # the software defaults before the explicit save action.
+    win._apply_style(project_style)
+    saved = style_from_dict(provider.data["style"])
+    assert saved.line_gap_px == 21
+    assert [layout.name for layout in saved.layouts] == ["副歌布局", "保留布局"]
+    assert saved.layouts[0].line_y_margin_px == 41
+
+    # The selected named layout overwrites by name and is normalized from
+    # 720p to the app default's 1080p reference height.
+    win._save_layout_default(1)
+    saved = style_from_dict(provider.data["style"])
+    assert [layout.name for layout in saved.layouts] == ["副歌布局", "保留布局"]
+    assert saved.layouts[0].line_y_margin_px == 108
+    assert saved.layouts[1].line_y_margin_px == 51
+
+    # A project-only name is appended without replacing unrelated defaults.
+    win._save_layout_default(2)
+    saved = style_from_dict(provider.data["style"])
+    assert [layout.name for layout in saved.layouts] == [
+        "副歌布局",
+        "保留布局",
+        "项目新增",
+    ]
+    assert saved.layouts[2].line_y_margin_px == 90
+
+    # Index zero updates only the root/default layout values, including the
+    # legacy mirrored margins, while retaining all named layouts.
+    win._save_layout_default(0)
+    saved = style_from_dict(provider.data["style"])
+    assert saved.line_gap_px == 105
+    assert saved.horizontal_margin_px == 120
+    assert saved.upper_line_left_margin_px == 120
+    assert saved.lower_line_right_margin_px == 120
+    assert len(saved.layouts) == 3
+
+    win._project_dirty = False
+    win._new_project()
+    assert win._style.line_gap_px == 105
+    assert [layout.name for layout in win._style.layouts] == [
+        "副歌布局",
+        "保留布局",
+        "项目新增",
+    ]
 
 
 def _font_migration_catalog() -> N3FontCatalog:
@@ -4189,6 +4275,52 @@ def _wheel_event(widget, delta: int = 120) -> QWheelEvent:
         Qt.ScrollPhase.ScrollUpdate,
         False,
     )
+
+
+def test_layout_save_button_is_after_delete_and_confirms_selected_layout(
+    qapp, monkeypatch
+):
+    panel = PropertyPanel()
+    panel.set_style(Style(layouts=[LyricsLayout(name="副歌布局")]))
+    panel._layout_combo.setCurrentIndex(panel._layout_combo.findData(1))
+    requested: list[int] = []
+    panel.defaultLayoutSaveRequested.connect(requested.append)
+    captured: dict[str, object] = {}
+
+    def confirm(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return True
+
+    monkeypatch.setattr(pp, "fluent_question", confirm)
+    panel._save_layout_btn.click()
+
+    button_layout = panel._save_layout_btn.parentWidget().layout()
+    assert button_layout.indexOf(panel._save_layout_btn) == (
+        button_layout.indexOf(panel._delete_layout_btn) + 1
+    )
+    assert requested == [1]
+    assert captured["args"][1:3] == (
+        "保存布局",
+        "是否将当前改动保存到布局“副歌布局”？\n"
+        "保存后，新建项目将使用此布局参数。",
+    )
+    assert captured["kwargs"] == {
+        "yes_text": "保存",
+        "no_text": "取消",
+        "default_cancel": True,
+    }
+
+
+def test_layout_save_cancel_does_not_request_persistence(qapp, monkeypatch):
+    panel = PropertyPanel()
+    requested: list[int] = []
+    panel.defaultLayoutSaveRequested.connect(requested.append)
+    monkeypatch.setattr(pp, "fluent_question", lambda *args, **kwargs: False)
+
+    panel._save_current_layout_default()
+
+    assert requested == []
 
 
 def test_property_panel_layout_selector_edits_selected_layout(qapp):

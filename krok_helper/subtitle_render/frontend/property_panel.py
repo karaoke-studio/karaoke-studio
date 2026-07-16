@@ -3650,6 +3650,7 @@ class PropertyPanel(QWidget):
     schemeSelectionChanged = Signal(str)
     presetSchemesChanged = Signal(dict)
     defaultSchemeSaveRequested = Signal(str)
+    defaultLayoutSaveRequested = Signal(int)
     layoutAssignAllRequested = Signal(int)
     """「应用到全部行」：参数为布局 index（0 = 默认布局）。"""
     layoutAutoAssignRequested = Signal()
@@ -5503,7 +5504,17 @@ class PropertyPanel(QWidget):
         self._delete_layout_btn.clicked.connect(
             lambda _checked=False: self._on_delete_layout()
         )
-        for btn in (self._add_layout_btn, self._rename_layout_btn, self._delete_layout_btn):
+        self._save_layout_btn = FluentTransparentToolButton(FIF.SAVE, nav)
+        self._save_layout_btn.setToolTip("保存当前布局为软件默认值")
+        self._save_layout_btn.clicked.connect(
+            lambda _checked=False: self._save_current_layout_default()
+        )
+        for btn in (
+            self._add_layout_btn,
+            self._rename_layout_btn,
+            self._delete_layout_btn,
+            self._save_layout_btn,
+        ):
             btn.setFixedSize(30, 30)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             # 图标按钮无文字，可访问名沿用中文提示
@@ -5913,6 +5924,23 @@ class PropertyPanel(QWidget):
         self.layoutDeleted.emit(index)
         self._refresh_layout_combo(selected=0)
         self._sync_layout_editor_controls()
+
+    def _save_current_layout_default(self) -> None:
+        """Ask before persisting the selected project layout as an app default."""
+
+        index = self._current_layout_index()
+        name = "默认布局" if index == 0 else self._style.layouts[index - 1].name
+        if not fluent_question(
+            self,
+            "保存布局",
+            f"是否将当前改动保存到布局“{name}”？\n"
+            "保存后，新建项目将使用此布局参数。",
+            yes_text="保存",
+            no_text="取消",
+            default_cancel=True,
+        ):
+            return
+        self.defaultLayoutSaveRequested.emit(index)
 
     def _make_line_alignments_box(self, parent: QWidget) -> QWidget:
         """行布局编辑器（示意图右侧列）：每行一个对齐按钮组，自上而下即

@@ -128,6 +128,7 @@ from krok_helper.subtitle_render.models import (
     BackgroundSource,
     DEFAULT_OUTPUT_NAME_SUFFIX,
     LineAnimationOverride,
+    LYRICS_LAYOUT_FIELDS,
     PROJECT_FILE_SUFFIX,
     StylePreset,
     SubtitleStyleScheme,
@@ -277,6 +278,13 @@ _BUILTIN_SCHEME_STYLE_FIELDS = frozenset(
     field.name
     for field in fields(SubtitleStyleScheme)
     if field.name in {style_field.name for style_field in fields(Style)}
+    and field.name not in LYRICS_LAYOUT_FIELDS
+)
+_LAYOUT_DEFAULT_VALUE_FIELDS = frozenset(
+    (*LYRICS_LAYOUT_FIELDS, "upper_line_left_margin_px", "lower_line_right_margin_px")
+)
+_LAYOUT_DEFAULT_STYLE_FIELDS = frozenset(
+    (*_LAYOUT_DEFAULT_VALUE_FIELDS, "layouts", "layout_reference_height")
 )
 _PROJECT_ONLY_STYLE_FIELDS = frozenset(
     {"custom_style_schemes", "singer_style_overrides", "title_overlay"}
@@ -1681,6 +1689,9 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.presetSchemesChanged.connect(self._apply_style_presets)
         self._property_panel.defaultSchemeSaveRequested.connect(
             self._save_builtin_scheme_default
+        )
+        self._property_panel.defaultLayoutSaveRequested.connect(
+            self._save_layout_default
         )
         self._property_panel.schemeSelectionChanged.connect(self._on_scheme_selection_changed)
         self._property_panel.layoutAssignAllRequested.connect(self._on_layout_assign_all)
@@ -3703,7 +3714,11 @@ class SubtitleRenderWindow(QWidget):
         self._splitter_save_timer.start()
 
     def _save_persisted_state(self) -> None:
-        protected_fields = _BUILTIN_SCHEME_STYLE_FIELDS | _PROJECT_ONLY_STYLE_FIELDS
+        protected_fields = (
+            _BUILTIN_SCHEME_STYLE_FIELDS
+            | _LAYOUT_DEFAULT_STYLE_FIELDS
+            | _PROJECT_ONLY_STYLE_FIELDS
+        )
         common_changes = {
             field.name: deepcopy(getattr(self._style, field.name))
             for field in fields(Style)
@@ -3773,6 +3788,49 @@ class SubtitleRenderWindow(QWidget):
         InfoBar.success(
             title="已保存软件默认值",
             content=f"新建项目时将使用当前“{target}”方案。",
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=2500,
+        )
+
+    def _save_layout_default(self, index: int) -> None:
+        """Persist one selected layout without leaking other project layouts."""
+
+        if not 0 <= int(index) <= len(self._style.layouts):
+            return
+        target_reference = max(int(self._app_default_style.layout_reference_height), 1)
+        source_style = rescale_layout_sizes(deepcopy(self._style), target_reference)
+        if index == 0:
+            changes = {
+                field_name: deepcopy(getattr(source_style, field_name))
+                for field_name in _LAYOUT_DEFAULT_VALUE_FIELDS
+            }
+            self._app_default_style = replace(self._app_default_style, **changes)
+            target = "默认布局"
+        else:
+            saved_layout = deepcopy(source_style.layouts[index - 1])
+            layouts = deepcopy(self._app_default_style.layouts)
+            matched = next(
+                (
+                    saved_index
+                    for saved_index, layout in enumerate(layouts)
+                    if layout.name == saved_layout.name
+                ),
+                None,
+            )
+            if matched is None:
+                layouts.append(saved_layout)
+            else:
+                layouts[matched] = saved_layout
+            self._app_default_style = replace(
+                self._app_default_style,
+                layouts=layouts,
+            )
+            target = saved_layout.name
+        self._save_persisted_state()
+        InfoBar.success(
+            title="已保存软件默认布局",
+            content=f"新建项目时将使用布局“{target}”的当前参数。",
             parent=self,
             position=InfoBarPosition.BOTTOM_RIGHT,
             duration=2500,
