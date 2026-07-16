@@ -199,7 +199,9 @@ def test_merge_conflict_policies(tmp_path, policy, expected_names, skipped, rena
     )
     existing = {
         "同名": StylePreset(
-            name="同名", scheme=SubtitleStyleScheme(fill_color="#010203")
+            name="同名",
+            group="N3",
+            scheme=SubtitleStyleScheme(fill_color="#010203"),
         )
     }
 
@@ -212,6 +214,29 @@ def test_merge_conflict_policies(tmp_path, policy, expected_names, skipped, rena
         assert result.presets["同名"].source_type == N3_TEMPLATE_SOURCE_TYPE
     elif policy == "skip":
         assert result.presets["同名"].scheme.fill_color == "#010203"
+
+
+def test_merge_allows_same_name_in_different_group(tmp_path):
+    incoming = load_n3_font_template(
+        _write_template(tmp_path, _payload("同名")), target_height=1080
+    )
+    existing = {
+        "custom-preset": StylePreset(
+            name="同名",
+            group="常用",
+            scheme=SubtitleStyleScheme(fill_color="#010203"),
+        )
+    }
+
+    result = merge_n3_template_presets(
+        existing, [incoming], conflict_policy="overwrite"
+    )
+
+    assert len(result.presets) == 2
+    assert {(preset.name, preset.group) for preset in result.presets.values()} == {
+        ("同名", "常用"),
+        ("同名", "N3"),
+    }
 
 
 @pytest.mark.skipif(not REAL_TEMPLATE_DIR.is_dir(), reason="本机没有 N3 TemplateFont")

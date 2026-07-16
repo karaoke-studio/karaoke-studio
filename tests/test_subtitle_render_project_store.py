@@ -576,6 +576,39 @@ def test_project_role_payload_applies_before_missing_schemes_are_materialized(
     assert "Aqua" not in win._style.custom_style_schemes
 
 
+def test_loading_lyrics_applies_each_selected_ambiguous_role_preset(
+    qapp, monkeypatch
+):
+    win = _make_window(qapp, monkeypatch)
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("初", 1000, role_label="初音"),
+                    TimingChar("镜", 1500, role_label="镜音"),
+                ],
+                end_ms=2000,
+            )
+        ]
+    )
+    requested: list[list[str]] = []
+
+    def choose(role_names):
+        requested.append(list(role_names))
+        return {
+            "初音": SubtitleStyleScheme(fill_color="#112233"),
+            "镜音": SubtitleStyleScheme(fill_color="#445566"),
+        }
+
+    monkeypatch.setattr(win._property_panel, "choose_role_presets_for_import", choose)
+
+    win._apply_timing_track(track, None)
+
+    assert requested == [["初音", "镜音"]]
+    assert win._style.custom_style_schemes["初音"].fill_color == "#112233"
+    assert win._style.custom_style_schemes["镜音"].fill_color == "#445566"
+
+
 def test_preview_canvas_does_not_swallow_drops(qapp, monkeypatch):
     # 预览画布（QGraphicsView）默认会吞拖拽；必须关掉它，让拖拽冒泡到 DropPanel，
     # 这样预览被填充后仍能往播放区拖入新视频。

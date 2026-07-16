@@ -558,13 +558,15 @@ N3_FONT_INHERITANCE_FIELDS: tuple[str, ...] = (
 class StylePreset:
     """应用级可复用的单目标字幕样式预设。
 
-    ``group`` 只负责整理与筛选，不参与角色解析；预设名称全局唯一。工程角色
-    使用时会深拷贝 ``scheme``，因此预设的重命名、分组或删除不会反向影响工程。
+    ``preset_id`` 是预设库中的稳定标识；``(group, name)`` 在库内唯一，因此
+    不同分组可以保存同名预设。工程角色使用时会深拷贝 ``scheme``，因此预设
+    的重命名、分组或删除不会反向影响工程。
     """
 
     name: str
     group: str = ""
     scheme: SubtitleStyleScheme = field(default_factory=SubtitleStyleScheme)
+    preset_id: str = ""
     # N3 templates retain their original payload so sizes can be resolved
     # again for the target project's output height when the preset is used.
     source_type: str = ""

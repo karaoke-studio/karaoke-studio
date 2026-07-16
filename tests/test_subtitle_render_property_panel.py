@@ -223,10 +223,8 @@ def test_startup_normalizes_saved_style_presets(monkeypatch, qapp):
     win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
 
     assert win._style_presets["旧预设"].scheme.font_family == "标准名称"
-    assert (
-        provider.data["style_presets"]["旧预设"]["scheme"]["font_family"]
-        == "标准名称"
-    )
+    assert provider.data["style_presets"][0]["name"] == "旧预设"
+    assert provider.data["style_presets"][0]["scheme"]["font_family"] == "标准名称"
 
 
 def test_project_load_normalizes_font_alias_in_memory(monkeypatch, qapp):
@@ -2483,6 +2481,121 @@ def test_property_panel_hides_presets_when_subtitle_has_no_roles(qapp):
     assert panel.preset_schemes["蓝色方案"].scheme.fill_color == "#123456"
 
 
+def test_property_panel_does_not_guess_between_cross_group_same_name_presets(qapp):
+    panel = PropertyPanel()
+    panel.set_preset_schemes(
+        {
+            "preset-a": StylePreset(
+                name="A",
+                group="作品一",
+                scheme=SubtitleStyleScheme(fill_color="#111111"),
+            ),
+            "preset-b": StylePreset(
+                name="A",
+                group="作品二",
+                scheme=SubtitleStyleScheme(fill_color="#222222"),
+            ),
+        }
+    )
+
+    panel.set_roles(["A"])
+
+    assert panel.subtitle_style.custom_style_schemes["A"].fill_color == "#FF5A6F"
+
+
+def test_property_panel_prompts_each_ambiguous_imported_role_for_group(
+    qapp, monkeypatch
+):
+    panel = PropertyPanel()
+    panel.set_preset_schemes(
+        {
+            "miku-common": StylePreset(
+                name="初音", group="常用", scheme=SubtitleStyleScheme(fill_color="#111111")
+            ),
+            "miku-sekai": StylePreset(
+                name="初音",
+                group="Project SEKAI",
+                scheme=SubtitleStyleScheme(fill_color="#222222"),
+            ),
+            "rin-common": StylePreset(
+                name="镜音", group="常用", scheme=SubtitleStyleScheme(fill_color="#333333")
+            ),
+            "rin-sekai": StylePreset(
+                name="镜音",
+                group="Project SEKAI",
+                scheme=SubtitleStyleScheme(fill_color="#444444"),
+            ),
+            "luka-only": StylePreset(
+                name="巡音", group="常用", scheme=SubtitleStyleScheme(fill_color="#555555")
+            ),
+        }
+    )
+    captured: dict[str, list[tuple[str, str]]] = {}
+
+    class FakeDialog:
+        def __init__(self, candidates, parent=None):
+            captured.update(
+                {
+                    role: [(preset.preset_id, preset.group) for preset in presets]
+                    for role, presets in candidates.items()
+                }
+            )
+
+        def exec(self):
+            return pp.QDialog.DialogCode.Accepted
+
+        def selected_preset_ids(self):
+            return {"初音": "miku-sekai", "镜音": "rin-common"}
+
+    monkeypatch.setattr(pp, "_RolePresetGroupDialog", FakeDialog)
+
+    selected = panel.choose_role_presets_for_import(["初音", "镜音", "巡音"])
+
+    assert captured == {
+        "初音": [("miku-common", "常用"), ("miku-sekai", "Project SEKAI")],
+        "镜音": [("rin-common", "常用"), ("rin-sekai", "Project SEKAI")],
+    }
+    assert selected["初音"].fill_color == "#222222"
+    assert selected["镜音"].fill_color == "#333333"
+    assert "巡音" not in selected
+
+
+def test_role_preset_group_dialog_requires_each_role_dropdown_selection(qapp):
+    dialog = pp._RolePresetGroupDialog(
+        {
+            "初音": [
+                StylePreset(name="初音", group="常用", preset_id="miku-common"),
+                StylePreset(name="初音", group="Project SEKAI", preset_id="miku-sekai"),
+            ],
+            "镜音": [
+                StylePreset(name="镜音", group="常用", preset_id="rin-common"),
+                StylePreset(name="镜音", group="Project SEKAI", preset_id="rin-sekai"),
+            ],
+        }
+    )
+
+    assert list(dialog._combos) == ["初音", "镜音"]
+    assert [dialog._combos["初音"].itemText(index) for index in range(3)] == [
+        "请选择分组",
+        "常用",
+        "Project SEKAI",
+    ]
+    assert not dialog.apply_button.isEnabled()
+
+    dialog._combos["初音"].setCurrentIndex(2)
+    assert not dialog.apply_button.isEnabled()
+    dialog._combos["镜音"].setCurrentIndex(1)
+
+    assert dialog.apply_button.isEnabled()
+    assert dialog.selected_preset_ids() == {
+        "初音": "miku-sekai",
+        "镜音": "rin-common",
+    }
+    dialog.close()
+    dialog.deleteLater()
+    qapp.processEvents()
+
+
 def test_property_panel_delete_role_keeps_same_named_preset(qapp):
     panel = PropertyPanel()
     panel.set_preset_schemes(
@@ -2589,7 +2702,7 @@ def test_style_preset_library_forms_use_fluent_controls(qapp):
     qapp.processEvents()
 
 
-def test_style_preset_manager_requires_explicit_same_name_overwrite(qapp):
+def test_style_preset_manager_requires_explicit_exact_pair_overwrite(qapp):
     dialog = StylePresetManagerDialog(
         presets={
             "蓝色方案": StylePreset(
@@ -2602,13 +2715,71 @@ def test_style_preset_manager_requires_explicit_same_name_overwrite(qapp):
         target_label="全局默认",
     )
 
-    assert not dialog.add_preset("蓝色方案", "新分组")
+    assert not dialog.add_preset("蓝色方案", "旧分组")
     assert dialog.preset_schemes()["蓝色方案"].scheme.fill_color == "#111111"
 
-    assert dialog.add_preset("蓝色方案", "新分组", overwrite=True)
+    assert dialog.add_preset("蓝色方案", "旧分组", overwrite=True)
     preset = dialog.preset_schemes()["蓝色方案"]
-    assert preset.group == "新分组"
+    assert preset.group == "旧分组"
     assert preset.scheme.fill_color == "#222222"
+
+
+def test_style_preset_manager_allows_same_name_in_different_groups(qapp):
+    dialog = StylePresetManagerDialog(
+        presets={
+            "preset-a": StylePreset(
+                name="蓝色方案",
+                group="作品一",
+                scheme=SubtitleStyleScheme(fill_color="#111111"),
+            )
+        },
+        current_scheme=SubtitleStyleScheme(fill_color="#222222"),
+        target_label="角色 A",
+    )
+
+    assert dialog.add_preset("蓝色方案", "作品二")
+
+    matches = [
+        preset
+        for preset in dialog.preset_schemes().values()
+        if preset.name == "蓝色方案"
+    ]
+    assert {(preset.group, preset.scheme.fill_color) for preset in matches} == {
+        ("作品一", "#111111"),
+        ("作品二", "#222222"),
+    }
+
+
+def test_style_preset_manager_overwrites_only_exact_name_and_group(qapp):
+    dialog = StylePresetManagerDialog(
+        presets={
+            "preset-a": StylePreset(
+                name="蓝色方案",
+                group="作品一",
+                scheme=SubtitleStyleScheme(fill_color="#111111"),
+            ),
+            "preset-b": StylePreset(
+                name="蓝色方案",
+                group="作品二",
+                scheme=SubtitleStyleScheme(fill_color="#222222"),
+            ),
+        },
+        current_scheme=SubtitleStyleScheme(fill_color="#333333"),
+        target_label="角色 A",
+    )
+
+    assert not dialog.add_preset("蓝色方案", "作品二")
+    assert dialog.add_preset("蓝色方案", "作品二", overwrite=True)
+
+    matches = [
+        preset
+        for preset in dialog.preset_schemes().values()
+        if preset.name == "蓝色方案"
+    ]
+    assert {(preset.group, preset.scheme.fill_color) for preset in matches} == {
+        ("作品一", "#111111"),
+        ("作品二", "#333333"),
+    }
 
 
 def test_style_preset_manager_same_name_save_respects_confirmation(qapp, monkeypatch):
@@ -2624,7 +2795,7 @@ def test_style_preset_manager_same_name_save_respects_confirmation(qapp, monkeyp
         target_label="角色 A",
     )
     monkeypatch.setattr(
-        dialog, "_prompt_preset_details", lambda *_args: ("蓝色方案", "新分组")
+        dialog, "_prompt_preset_details", lambda *_args: ("蓝色方案", "旧分组")
     )
     monkeypatch.setattr(dialog, "_confirm_overwrite", lambda _name: "cancel")
 
@@ -2634,7 +2805,7 @@ def test_style_preset_manager_same_name_save_respects_confirmation(qapp, monkeyp
     monkeypatch.setattr(dialog, "_confirm_overwrite", lambda _name: "overwrite")
     dialog._on_save_current()
     preset = dialog.preset_schemes()["蓝色方案"]
-    assert preset.group == "新分组"
+    assert preset.group == "旧分组"
     assert preset.scheme.fill_color == "#222222"
 
 
@@ -2658,12 +2829,44 @@ def test_style_preset_settings_migrate_legacy_entries_and_roundtrip_groups():
     assert loaded["新预设"].source_type == "n3_font_template"
     assert loaded["新预设"].source_data["guid"] == "demo"
 
-    payload = mw._style_presets_to_dict(loaded)
+    payload = {
+        item["name"]: item for item in mw._style_presets_to_dict(loaded)
+    }
     assert payload["旧预设"]["group"] == ""
     assert payload["旧预设"]["scheme"]["fill_color"] == "#123456"
     assert payload["新预设"]["group"] == "作品一"
     assert payload["新预设"]["source_type"] == "n3_font_template"
     assert payload["新预设"]["source_data"]["guid"] == "demo"
+
+
+def test_style_preset_settings_roundtrip_cross_group_duplicate_names():
+    loaded = mw._style_presets_from_dict(
+        [
+            {
+                "id": "preset-a",
+                "name": "蓝色方案",
+                "group": "作品一",
+                "scheme": {"fill_color": "#111111"},
+            },
+            {
+                "id": "preset-b",
+                "name": "蓝色方案",
+                "group": "作品二",
+                "scheme": {"fill_color": "#222222"},
+            },
+        ]
+    )
+
+    assert set(loaded) == {"preset-a", "preset-b"}
+    assert {preset.name for preset in loaded.values()} == {"蓝色方案"}
+    assert {preset.group for preset in loaded.values()} == {"作品一", "作品二"}
+
+    payload = mw._style_presets_to_dict(loaded)
+    assert isinstance(payload, list)
+    assert {(item["id"], item["name"], item["group"]) for item in payload} == {
+        ("preset-a", "蓝色方案", "作品一"),
+        ("preset-b", "蓝色方案", "作品二"),
+    }
 
 
 def test_style_preset_manager_dialog_imports_multiple_selected_schemes(qapp):
@@ -2688,6 +2891,34 @@ def test_style_preset_manager_dialog_imports_multiple_selected_schemes(qapp):
     assert set(imported) == {"A", "B"}
     assert imported["A"].scheme.fill_color == "#111111"
     assert imported["B"].scheme.fill_color == "#222222"
+
+
+def test_style_preset_manager_requires_one_choice_for_cross_group_same_name(
+    qapp, monkeypatch
+):
+    dialog = StylePresetManagerDialog(
+        presets={
+            "preset-a": StylePreset(name="A", group="作品一"),
+            "preset-b": StylePreset(name="A", group="作品二"),
+        },
+        current_scheme=SubtitleStyleScheme(),
+        target_label="全局默认",
+    )
+    for index in range(dialog._preset_list.count()):
+        dialog._preset_list.item(index).setCheckState(Qt.CheckState.Checked)
+    warnings: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        pp.InfoBar,
+        "warning",
+        lambda **kwargs: warnings.append((kwargs["title"], kwargs["content"])),
+    )
+
+    dialog._on_import_selected()
+
+    assert dialog.imported_schemes() == {}
+    assert warnings == [
+        ("存在同名预设", "同名预设不能同时导入为项目角色，请只选择其中一个：A")
+    ]
 
 
 def test_style_preset_manager_auto_checks_new_n3_templates_for_role_import(
@@ -2798,6 +3029,30 @@ def test_property_panel_imports_selected_presets_as_role_schemes(qapp):
     assert panel.subtitle_style.custom_style_schemes["B"].fill_color == "#222222"
 
 
+def test_property_panel_imports_only_one_cross_group_same_name_role(qapp):
+    panel = PropertyPanel()
+
+    panel._import_preset_schemes(
+        {
+            "preset-a": StylePreset(
+                name="A",
+                group="作品一",
+                scheme=SubtitleStyleScheme(fill_color="#111111"),
+            ),
+            "preset-b": StylePreset(
+                name="A",
+                group="作品二",
+                scheme=SubtitleStyleScheme(fill_color="#222222"),
+            ),
+        }
+    )
+
+    assert panel.role_names == ["A"]
+    assert set(panel.subtitle_style.custom_style_schemes) >= {"A"}
+    assert "preset-a" not in panel.subtitle_style.custom_style_schemes
+    assert "preset-b" not in panel.subtitle_style.custom_style_schemes
+
+
 def test_property_panel_batch_import_does_not_overwrite_existing_project_role(qapp):
     panel = PropertyPanel()
     panel.set_style(
@@ -2902,6 +3157,36 @@ def test_property_panel_can_add_custom_scheme(qapp):
 
     panel._font_size_spin.setValue(77)
     assert emitted[-1].custom_style_schemes["蓝色方案"].font_size_px == 77
+
+
+def test_property_panel_rejects_renaming_role_to_existing_project_name(
+    qapp, monkeypatch
+):
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            custom_style_schemes={
+                "A": SubtitleStyleScheme(fill_color="#111111"),
+                "B": SubtitleStyleScheme(fill_color="#222222"),
+            }
+        )
+    )
+    panel.set_roles(["A", "B"])
+    panel._singer_combo.setCurrentIndex(panel._singer_combo.findData("custom:A"))
+    monkeypatch.setattr(pp.QInputDialog, "getText", lambda *_args, **_kwargs: ("B", True))
+    warnings: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        pp.InfoBar,
+        "warning",
+        lambda **kwargs: warnings.append((kwargs["title"], kwargs["content"])),
+    )
+
+    panel._rename_current_role()
+
+    assert panel.role_names == ["A", "B"]
+    assert panel.subtitle_style.custom_style_schemes["A"].fill_color == "#111111"
+    assert panel.subtitle_style.custom_style_schemes["B"].fill_color == "#222222"
+    assert warnings == [("名称已存在", "项目中已经存在角色“B”。")]
 
 
 def test_property_panel_scheme_selection_emits_current_key(qapp):

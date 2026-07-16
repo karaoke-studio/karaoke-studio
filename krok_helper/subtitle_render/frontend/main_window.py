@@ -34,6 +34,7 @@ import sys
 import tempfile
 import time
 from typing import Any, Optional
+from uuid import uuid4
 
 from PyQt6.QtCore import QObject, QPoint, QRect, QSize, QThread, QTimer, QUrl, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QColor, QDesktopServices, QImage, QKeySequence, QPixmap, QShortcut
@@ -2049,6 +2050,7 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_source_ui()
         self._lyrics_panel.set_track(track)
         if not self._loading_project:
+            self._apply_imported_role_preset_choices(track.role_options)
             self._lyrics_panel.set_role_options(self._merged_role_options())
             self._property_panel.set_roles(self._content_role_options())
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
@@ -2059,6 +2061,25 @@ class SubtitleRenderWindow(QWidget):
         self._transport_bar.set_time(0)
         self._margin_check_timer.start()
         self._mark_project_dirty()
+
+    def _apply_imported_role_preset_choices(self, role_names: list[str]) -> None:
+        """Resolve cross-group preset collisions before roles are materialized."""
+
+        selected = self._property_panel.choose_role_presets_for_import(role_names)
+        if not selected:
+            return
+        schemes = dict(self._style.custom_style_schemes)
+        changed = False
+        for role_name, scheme in selected.items():
+            if role_name in schemes:
+                continue
+            schemes[role_name] = deepcopy(scheme)
+            changed = True
+        if not changed:
+            return
+        style = replace(self._style, custom_style_schemes=schemes)
+        self._property_panel.set_style(style)
+        self._apply_style(style)
 
     def load_video(self, path: Path) -> Optional[MediaInfo]:
         """加载背景视频，调用 ffprobe 读取分辨率 / 帧率 / 时长。
@@ -2810,12 +2831,14 @@ class SubtitleRenderWindow(QWidget):
                 self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"
             )
             return
+        self._apply_imported_role_preset_choices(track.role_options)
         self._extra_sources.append(
             ExtraSubtitleSource(name=path.stem, path=path, track=track)
         )
         self._active_source_index = len(self._extra_sources)
         self._refresh_source_ui()
         self._refresh_lyrics_panel_source()
+        self._property_panel.set_roles(self._content_role_options())
         self._sync_extra_tracks_to_preview()
         self._refresh_transport_duration()
         self._margin_check_timer.start()
@@ -3220,11 +3243,15 @@ class SubtitleRenderWindow(QWidget):
         missing = [label for label in labels if label not in self._style.custom_style_schemes]
         if not missing:
             return
-        from_presets = {
-            label: deepcopy(self._style_presets[label].scheme)
-            for label in missing
-            if label in self._style_presets
-        }
+        from_presets: dict[str, SubtitleStyleScheme] = {}
+        for label in missing:
+            matches = [
+                preset
+                for preset in self._style_presets.values()
+                if preset.name == label
+            ]
+            if len(matches) == 1:
+                from_presets[label] = deepcopy(matches[0].scheme)
         if from_presets:
             schemes = dict(self._style.custom_style_schemes)
             schemes.update(from_presets)
@@ -3760,26 +3787,37 @@ class SubtitleRenderWindow(QWidget):
 
 
 def _style_presets_from_dict(payload: object) -> dict[str, StylePreset]:
-    """Load grouped presets and migrate the legacy ``name -> scheme`` mapping."""
-    if not isinstance(payload, dict):
-        return {}
+    """Load stable-ID presets and migrate the legacy ``name -> scheme`` mapping."""
     result: dict[str, StylePreset] = {}
-    for raw_name, value in payload.items():
-        name = str(raw_name).strip()
+
+    def add(raw_id: object, raw_name: object, value: object) -> None:
+        name = str(raw_name or "").strip()
         if not name:
-            continue
+            return
+        preset_id = str(raw_id or "").strip()
+        if not preset_id or preset_id in result:
+            preset_id = uuid4().hex
         if isinstance(value, StylePreset):
-            result[name] = StylePreset(
-                name=name,
+            resolved_name = str(value.name).strip() or name
+            resolved_id = str(value.preset_id).strip() or preset_id
+            if resolved_id in result:
+                resolved_id = uuid4().hex
+            result[resolved_id] = StylePreset(
+                name=resolved_name,
                 group=str(value.group).strip(),
                 scheme=deepcopy(value.scheme),
+                preset_id=resolved_id,
                 source_type=str(value.source_type).strip(),
                 source_data=deepcopy(value.source_data),
             )
-            continue
+            return
         if isinstance(value, SubtitleStyleScheme):
-            result[name] = StylePreset(name=name, scheme=deepcopy(value))
-            continue
+            result[preset_id] = StylePreset(
+                name=name,
+                scheme=deepcopy(value),
+                preset_id=preset_id,
+            )
+            return
         source_type = ""
         source_data: dict = {}
         if isinstance(value, dict) and isinstance(value.get("scheme"), dict):
@@ -3791,26 +3829,43 @@ def _style_presets_from_dict(payload: object) -> dict[str, StylePreset]:
         else:
             group = ""
             scheme_payload = value
-        result[name] = StylePreset(
+        result[preset_id] = StylePreset(
             name=name,
             group=group,
             scheme=subtitle_style_scheme_from_dict(scheme_payload),
+            preset_id=preset_id,
             source_type=source_type,
             source_data=source_data,
         )
+
+    if isinstance(payload, list):
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            add(item.get("id"), item.get("name"), item)
+        return result
+    if not isinstance(payload, dict):
+        return result
+    for raw_key, value in payload.items():
+        if isinstance(value, StylePreset):
+            add(value.preset_id or raw_key, value.name or raw_key, value)
+        else:
+            add(raw_key, raw_key, value)
     return result
 
 
 def _style_presets_to_dict(
     presets: dict[str, StylePreset],
-) -> dict[str, dict]:
-    return {
-        str(name): {
+) -> list[dict]:
+    return [
+        {
+            "id": str(preset.preset_id or preset_id),
+            "name": str(preset.name).strip(),
             "group": str(preset.group).strip(),
             "scheme": subtitle_style_scheme_to_dict(preset.scheme),
             "source_type": str(preset.source_type).strip(),
             "source_data": deepcopy(preset.source_data),
         }
-        for name, preset in presets.items()
-        if str(name)
-    }
+        for preset_id, preset in presets.items()
+        if str(preset.name).strip()
+    ]

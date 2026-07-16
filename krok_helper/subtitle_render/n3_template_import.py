@@ -45,6 +45,7 @@ class N3TemplateBatchResult:
 class N3TemplateMergeResult:
     presets: dict[str, StylePreset]
     imported_names: tuple[str, ...]
+    imported_ids: tuple[str, ...]
     skipped_names: tuple[str, ...]
     renamed: tuple[tuple[str, str], ...]
 
@@ -263,6 +264,7 @@ def resolve_n3_template_preset(
             name=preset.name,
             group=preset.group,
             scheme=scheme,
+            preset_id=preset.preset_id,
             source_type=preset.source_type,
             source_data=deepcopy(preset.source_data),
         ),
@@ -310,30 +312,53 @@ def merge_n3_template_presets(
 
     if conflict_policy not in {"overwrite", "rename", "skip"}:
         raise ValueError(f"未知同名处理策略：{conflict_policy}")
-    presets = {name: deepcopy(preset) for name, preset in existing.items()}
+    presets = {preset_id: deepcopy(preset) for preset_id, preset in existing.items()}
+    for preset_id, preset in presets.items():
+        if not preset.preset_id:
+            preset.preset_id = preset_id
     imported: list[str] = []
+    imported_ids: list[str] = []
     skipped: list[str] = []
     renamed: list[tuple[str, str]] = []
     for item in incoming:
         name = item.name
-        if name in presets:
+        group = str(item.preset.group).strip()
+        conflicts = [
+            preset_id
+            for preset_id, preset in presets.items()
+            if preset.name == name and preset.group == group
+        ]
+        if conflicts:
             if conflict_policy == "skip":
                 skipped.append(name)
                 continue
             if conflict_policy == "rename":
                 base = name
                 suffix = 2
-                while name in presets:
+                while any(
+                    preset.name == name and preset.group == group
+                    for preset in presets.values()
+                ):
                     name = f"{base} ({suffix})"
                     suffix += 1
                 renamed.append((item.name, name))
         preset = deepcopy(item.preset)
         preset.name = name
-        presets[name] = preset
+        if conflicts and conflict_policy == "overwrite":
+            preset_id = conflicts[0]
+        else:
+            preferred_id = str(preset.preset_id).strip() or name
+            preset_id = preferred_id
+            while not preset_id or preset_id in presets:
+                preset_id = uuid.uuid4().hex
+        preset.preset_id = preset_id
+        presets[preset_id] = preset
         imported.append(name)
+        imported_ids.append(preset_id)
     return N3TemplateMergeResult(
         presets=presets,
         imported_names=tuple(imported),
+        imported_ids=tuple(imported_ids),
         skipped_names=tuple(skipped),
         renamed=tuple(renamed),
     )
