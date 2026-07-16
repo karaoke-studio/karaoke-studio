@@ -5829,6 +5829,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
 from krok_helper.subtitle_render.engine.timeline import assign_lanes  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
     LyricsLayout,
+    rescale_font_sizes,
     rescale_layout_sizes,
 )
 
@@ -6024,6 +6025,50 @@ def test_rescale_layout_sizes_matches_n3_size_and_ratio():
     assert rescale_layout_sizes(scaled, 720) is scaled
     zero = rescale_layout_sizes(replace(style, line_gap_px=0), 720)
     assert zero.line_gap_px == 0
+
+
+def test_rescale_font_sizes_scales_all_visual_font_slots():
+    scheme = SubtitleStyleScheme(
+        font_size_px=80,
+        latin_font_size_px=None,
+        stroke_width_px=12,
+        ruby_font_size_px=36,
+        ruby_shadow_offset_x=-4,
+    )
+    style = Style(
+        font_size_px=100,
+        latin_font_size_px=90,
+        stroke_width_px=15,
+        glow_radius_px=10,
+        shadow_offset_x=-8,
+        ruby_font_size_px=45,
+        letter_spacing_px=7,
+        ruby_gap_px=3,
+        font_reference_height=1080,
+        custom_style_schemes={"角色": scheme},
+        singer_style_overrides={1: scheme},
+        title_overlay=TitleOverlay(font_size_px=40, stroke_width_px=5),
+    )
+
+    scaled = rescale_font_sizes(style, 2160)
+
+    assert scaled.font_reference_height == 2160
+    assert scaled.font_size_px == 200
+    assert scaled.latin_font_size_px == 180
+    assert scaled.stroke_width_px == 30
+    assert scaled.glow_radius_px == 20
+    assert scaled.shadow_offset_x == -16
+    assert scaled.ruby_font_size_px == 90
+    assert scaled.letter_spacing_px == 7
+    assert scaled.ruby_gap_px == 3
+    assert scaled.custom_style_schemes["角色"].font_size_px == 160
+    assert scaled.custom_style_schemes["角色"].latin_font_size_px is None
+    assert scaled.custom_style_schemes["角色"].ruby_shadow_offset_x == -8
+    assert scaled.singer_style_overrides[1].stroke_width_px == 24
+    assert scaled.title_overlay is not None
+    assert scaled.title_overlay.font_size_px == 80
+    assert scaled.title_overlay.stroke_width_px == 10
+    assert rescale_font_sizes(scaled, 2160) is scaled
 
 
 # ---------------------------------------------------------------------------

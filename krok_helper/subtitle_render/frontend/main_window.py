@@ -141,6 +141,7 @@ from krok_helper.subtitle_render.models import (
     line_animation_override_to_dict,
     migrate_legacy_app_title_default,
     normalize_title_char_role_labels,
+    rescale_font_sizes,
     rescale_layout_sizes,
     subtitle_style_scheme_from_dict,
     subtitle_style_scheme_to_dict,
@@ -286,6 +287,7 @@ _LAYOUT_DEFAULT_VALUE_FIELDS = frozenset(
 _LAYOUT_DEFAULT_STYLE_FIELDS = frozenset(
     (*_LAYOUT_DEFAULT_VALUE_FIELDS, "layouts", "layout_reference_height")
 )
+_FONT_DEFAULT_STYLE_FIELDS = frozenset({"font_reference_height"})
 _PROJECT_ONLY_STYLE_FIELDS = frozenset(
     {"custom_style_schemes", "singer_style_overrides", "title_overlay"}
 )
@@ -1267,13 +1269,25 @@ class SubtitleRenderWindow(QWidget):
         # 项目内容整体替换，旧的样式/轨道撤销记录全部失效
         self._clear_undo_history()
         # 1) 样式 / 屏幕 / 配色方案
-        project_style = style_from_dict(data.get("style"))
+        style_payload = data.get("style")
+        project_style = style_from_dict(style_payload)
+        self._screen_settings = screen_settings_from_dict(data.get("screen"))
+        # Older projects stored already-resolved pixel sizes without a reference
+        # height.  Treat those values as belonging to the saved output height so
+        # the first later resize does not scale them from an incorrect 1080 base.
+        if (
+            not isinstance(style_payload, dict)
+            or "font_reference_height" not in style_payload
+        ):
+            project_style = replace(
+                project_style,
+                font_reference_height=max(int(self._screen_settings.height), 1),
+            )
         if project_style.title_overlay is None:
             project_style = replace(project_style, title_overlay=TitleOverlay())
         self._style, _font_names_changed = normalize_style_font_families(
             project_style, get_n3_font_catalog()
         )
-        self._screen_settings = screen_settings_from_dict(data.get("screen"))
         key = data.get("selected_scheme_key")
         if isinstance(key, str) and key:
             self._selected_scheme_key = key
@@ -2355,6 +2369,8 @@ class SubtitleRenderWindow(QWidget):
             self._audio_info = None
         self._video_path = path
         self._video_info = info
+        if not self._loading_project:
+            self._sync_output_size_to_video(info)
         self._background_source = BackgroundSource(kind="video", path=str(path))
         self._preview_panel.set_background_source(self._background_source)
         self._video_settings_panel.set_populated(True)
@@ -2387,6 +2403,24 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_transport_duration()
         self._mark_project_dirty()
         return info
+
+    def _sync_output_size_to_video(self, info: MediaInfo) -> None:
+        """Make a newly imported video's dimensions the current output size."""
+        width = int(info.video_width or 0)
+        height = int(info.video_height or 0)
+        if width <= 0 or height <= 0:
+            return
+        settings = ScreenSettings(
+            preset_key=match_screen_preset_key(width, height, self._screen_settings.par),
+            par=self._screen_settings.par,
+            width=width,
+            height=height,
+            fps=self._export_fps_value(),
+        )
+        self._set_export_screen_controls(settings)
+        self._sync_preview_output_size()
+        self._refresh_export_format_label()
+        self._on_export_screen_changed()
 
     def load_background_image(self, path: Path) -> bool:
         image = QImage(str(path))
@@ -3131,8 +3165,9 @@ class SubtitleRenderWindow(QWidget):
         self._mark_project_dirty()
 
     def _rescale_layout_for_height(self, new_height: int) -> None:
-        """输出高度变化时按 N3 SizeAndRatio 语义重算布局像素字段。"""
+        """按 N3 SizeAndRatio 语义重算字体与布局像素字段。"""
         rescaled = rescale_layout_sizes(self._style, new_height)
+        rescaled = rescale_font_sizes(rescaled, new_height)
         if rescaled is self._style:
             return
         self._style = rescaled
@@ -3701,6 +3736,14 @@ class SubtitleRenderWindow(QWidget):
             )
             presets_changed |= changed
         self._screen_settings = screen_settings_from_dict(data.get("screen"))
+        self._style = rescale_layout_sizes(
+            self._style,
+            self._screen_settings.height,
+        )
+        self._style = rescale_font_sizes(
+            self._style,
+            self._screen_settings.height,
+        )
         key = data.get("selected_scheme_key")
         if isinstance(key, str) and key:
             self._selected_scheme_key = key
@@ -3723,6 +3766,7 @@ class SubtitleRenderWindow(QWidget):
         protected_fields = (
             _BUILTIN_SCHEME_STYLE_FIELDS
             | _LAYOUT_DEFAULT_STYLE_FIELDS
+            | _FONT_DEFAULT_STYLE_FIELDS
             | _PROJECT_ONLY_STYLE_FIELDS
         )
         common_changes = {
@@ -3770,15 +3814,17 @@ class SubtitleRenderWindow(QWidget):
             return
 
     def _save_builtin_scheme_default(self, key: str) -> None:
+        target_reference = max(int(self._app_default_style.font_reference_height), 1)
+        source_style = rescale_font_sizes(deepcopy(self._style), target_reference)
         if key == "global":
             changes = {
-                field_name: deepcopy(getattr(self._style, field_name))
+                field_name: deepcopy(getattr(source_style, field_name))
                 for field_name in _BUILTIN_SCHEME_STYLE_FIELDS
             }
             self._app_default_style = replace(self._app_default_style, **changes)
             target = "全局默认"
         elif key == f"custom:{TITLE_SCHEME_NAME}":
-            scheme = self._style.custom_style_schemes.get(TITLE_SCHEME_NAME)
+            scheme = source_style.custom_style_schemes.get(TITLE_SCHEME_NAME)
             if scheme is None:
                 return
             schemes = dict(self._app_default_style.custom_style_schemes)

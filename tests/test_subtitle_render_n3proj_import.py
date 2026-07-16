@@ -415,6 +415,7 @@ def test_import_layouts(imported):
     assert style.horizontal_margin_px == 50
     assert style.smart_horizontal == "equal_margins"
     assert style.line_alignments == ["left", "right"]
+    assert style.font_reference_height == 1080
     assert style.layout_reference_height == 1080
     # LyricsLayouts[1:] → Style.layouts
     assert [layout.name for layout in style.layouts] == ["タイトル左上"]

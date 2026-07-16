@@ -784,6 +784,13 @@ class Style:
     """用户自行添加的配色方案。当前用于编辑/复用，后续可接入方案分配。
     内置「标题」方案（``TITLE_SCHEME_NAME``）描述标题外观，随字体页统一编辑。"""
 
+    font_reference_height: int = 1080
+    """字体视觉像素字段当前对应的输出高度。
+
+    与 N3 ``SizeAndRatio.Reference`` 一致：输出高度变化时，字号、描边、发光和
+    阴影偏移按比例重算；字体族、字重、颜色等非像素参数保持不变。
+    """
+
     # ふりがな / ruby（B1）
     ruby_font_size_px: int = 45
     ruby_font_family: Optional[str] = None
@@ -1218,6 +1225,7 @@ def style_from_dict(payload: object) -> Style:
             "line_y_margin_px",
             "line_gap_px",
             "horizontal_margin_px",
+            "font_reference_height",
             "layout_reference_height",
             "upper_line_left_margin_px",
             "lower_line_right_margin_px",
@@ -1535,6 +1543,92 @@ def rescale_layout_sizes(style: Style, new_height: int) -> Style:
         lower_line_right_margin_px=margin,
         layouts=layouts,
         layout_reference_height=new_height,
+    )
+
+
+_FONT_VISUAL_SIZE_FIELDS: tuple[str, ...] = (
+    "font_size_px",
+    "latin_font_size_px",
+    "stroke_width_px",
+    "latin_stroke_width_px",
+    "stroke2_width_px",
+    "latin_stroke2_width_px",
+    "glow_radius_px",
+    "glow_before_radius_px",
+    "glow_after_radius_px",
+    "shadow_offset_x",
+    "shadow_offset_y",
+    "ruby_font_size_px",
+    "ruby_latin_font_size_px",
+    "ruby_stroke_width_px",
+    "ruby_stroke2_width_px",
+    "ruby_latin_stroke_width_px",
+    "ruby_latin_stroke2_width_px",
+    "ruby_glow_radius_px",
+    "ruby_glow_before_radius_px",
+    "ruby_glow_after_radius_px",
+    "ruby_shadow_offset_x",
+    "ruby_shadow_offset_y",
+)
+
+_TITLE_FONT_VISUAL_SIZE_FIELDS: tuple[str, ...] = (
+    "font_size_px",
+    "stroke_width_px",
+    "stroke2_width_px",
+    "glow_radius_px",
+    "shadow_offset_x",
+    "shadow_offset_y",
+)
+
+
+def rescale_font_sizes(style: Style, new_height: int) -> Style:
+    """Scale font visual pixel fields when the output height changes.
+
+    This mirrors N3's ``SizeAndRatio`` arithmetic: values are multiplied by
+    ``new_height / font_reference_height`` and truncated toward zero. Optional
+    overrides remain ``None`` so their inheritance semantics are preserved.
+    Character/layout spacing is handled separately by ``rescale_layout_sizes``.
+    """
+    reference = max(int(style.font_reference_height), 1)
+    new_height = int(new_height)
+    if new_height <= 0 or new_height == reference:
+        return style
+
+    def scaled(value: Optional[int]) -> Optional[int]:
+        if value is None:
+            return None
+        return int(new_height * (int(value) / reference))
+
+    def scale_dataclass(value: object, names: tuple[str, ...]):
+        return replace(
+            value,
+            **{name: scaled(getattr(value, name)) for name in names},
+        )
+
+    custom_schemes = {
+        name: scale_dataclass(scheme, _FONT_VISUAL_SIZE_FIELDS)
+        for name, scheme in style.custom_style_schemes.items()
+    }
+    singer_overrides = {
+        singer: scale_dataclass(scheme, _FONT_VISUAL_SIZE_FIELDS)
+        for singer, scheme in style.singer_style_overrides.items()
+    }
+    title_overlay = style.title_overlay
+    if title_overlay is not None:
+        title_overlay = scale_dataclass(
+            title_overlay,
+            _TITLE_FONT_VISUAL_SIZE_FIELDS,
+        )
+    changes = {
+        name: scaled(getattr(style, name)) for name in _FONT_VISUAL_SIZE_FIELDS
+    }
+    return replace(
+        style,
+        **changes,
+        custom_style_schemes=custom_schemes,
+        singer_style_overrides=singer_overrides,
+        title_overlay=title_overlay,
+        font_reference_height=new_height,
     )
 
 

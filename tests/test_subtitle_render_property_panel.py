@@ -321,6 +321,79 @@ def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
     assert "镜音" not in win._style.custom_style_schemes
 
 
+def test_builtin_font_defaults_are_normalized_to_app_reference_height(qapp, monkeypatch):
+    initial_style = Style(
+        font_size_px=100,
+        stroke_width_px=15,
+        font_reference_height=1080,
+        custom_style_schemes={
+            TITLE_SCHEME_NAME: SubtitleStyleScheme(
+                font_size_px=40,
+                stroke_width_px=5,
+            )
+        },
+    )
+    provider = _FontMigrationSettingsProvider(
+        {"style": style_to_dict(initial_style)}
+    )
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    monkeypatch.setattr(mw.InfoBar, "success", lambda *args, **kwargs: None)
+    win._apply_style(
+        replace(
+            win._style,
+            font_size_px=200,
+            stroke_width_px=30,
+            font_reference_height=2160,
+            custom_style_schemes={
+                TITLE_SCHEME_NAME: SubtitleStyleScheme(
+                    font_size_px=80,
+                    stroke_width_px=10,
+                )
+            },
+        )
+    )
+
+    win._save_builtin_scheme_default("global")
+    win._save_builtin_scheme_default(f"custom:{TITLE_SCHEME_NAME}")
+
+    saved = style_from_dict(provider.data["style"])
+    assert saved.font_reference_height == 1080
+    assert saved.font_size_px == 100
+    assert saved.stroke_width_px == 15
+    assert saved.custom_style_schemes[TITLE_SCHEME_NAME].font_size_px == 40
+    assert saved.custom_style_schemes[TITLE_SCHEME_NAME].stroke_width_px == 5
+
+
+def test_current_style_is_resolved_for_persisted_output_height(qapp):
+    app_default = Style(
+        font_size_px=100,
+        line_gap_px=90,
+        font_reference_height=1080,
+        layout_reference_height=1080,
+    )
+    provider = _FontMigrationSettingsProvider(
+        {
+            "style": style_to_dict(app_default),
+            "screen": {
+                "preset_key": "uhd_4k",
+                "par": "1:1",
+                "width": 3840,
+                "height": 2160,
+                "fps": 60,
+            },
+        }
+    )
+
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+
+    assert win._app_default_style.font_size_px == 100
+    assert win._app_default_style.font_reference_height == 1080
+    assert win._style.font_size_px == 200
+    assert win._style.font_reference_height == 2160
+    assert win._style.line_gap_px == 180
+    assert win._style.layout_reference_height == 2160
+
+
 def test_layout_defaults_are_explicit_and_save_only_selected_layout(
     qapp, monkeypatch
 ):
@@ -4144,6 +4217,116 @@ def test_video_drop_region_becomes_property_panel_after_video_load(qapp, monkeyp
     assert win._video_settings_panel.is_populated() is True
     assert win._video_settings_panel._content_layout.itemAt(0).widget() is win._property_panel
     assert win._preview_panel.canvas.has_video_source is True
+
+
+def test_video_import_syncs_output_size_and_rescales_style(qapp, monkeypatch, tmp_path):
+    monkeypatch.setattr(mw, "unified_player_enabled", lambda: False)
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
+
+    class FakeSettingsProvider:
+        def __init__(self):
+            self.data = {}
+
+        def load(self):
+            return dict(self.data)
+
+        def save(self, data):
+            self.data = dict(data)
+
+    dimensions = {
+        "4k.mp4": (3840, 2160),
+        "720p.mp4": (1280, 720),
+    }
+
+    def fake_probe(self, path, label):
+        width, height = dimensions[path.name]
+        return mw.MediaInfo(
+            path=path,
+            duration=10.0,
+            video_streams=1,
+            audio_streams=0,
+            subtitle_streams=0,
+            video_width=width,
+            video_height=height,
+            video_fps=24.0,
+        )
+
+    monkeypatch.setattr(mw.SubtitleRenderWindow, "_probe", fake_probe)
+    provider = FakeSettingsProvider()
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    win._set_export_fps_value(120)
+
+    video_4k = tmp_path / "4k.mp4"
+    video_720p = tmp_path / "720p.mp4"
+    video_4k.write_bytes(b"fake")
+    video_720p.write_bytes(b"fake")
+
+    win.load_video(video_4k)
+
+    assert (win._screen_settings.width, win._screen_settings.height) == (3840, 2160)
+    assert win._export_fps_value() == 120
+    assert win._style.font_reference_height == 2160
+    assert win._style.font_size_px == 200
+    assert win._style.stroke_width_px == 30
+    assert win._style.layout_reference_height == 2160
+    assert win._style.line_gap_px == 180
+    assert win._preview_panel.canvas._output_width == 3840
+    assert win._preview_panel.canvas._output_height == 2160
+
+    win.load_video(video_720p)
+
+    assert (win._screen_settings.width, win._screen_settings.height) == (1280, 720)
+    assert win._export_fps_value() == 120
+    assert win._style.font_reference_height == 720
+    assert win._style.font_size_px == 66
+    assert win._style.stroke_width_px == 10
+    assert win._style.layout_reference_height == 720
+    assert win._style.line_gap_px == 60
+    assert provider.data["screen"]["width"] == 1280
+    assert provider.data["screen"]["height"] == 720
+
+    # Reopening a project must keep its explicitly saved output dimensions.
+    win._export_width_spin.setValue(1920)
+    win._export_height_spin.setValue(1080)
+    win._loading_project = True
+    try:
+        win.load_video(video_4k)
+    finally:
+        win._loading_project = False
+    assert (win._screen_settings.width, win._screen_settings.height) == (1920, 1080)
+
+
+def test_legacy_project_font_sizes_use_saved_screen_as_reference(qapp, monkeypatch):
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
+
+    class FakeSettingsProvider:
+        def __init__(self):
+            self.data = {}
+
+        def load(self):
+            return dict(self.data)
+
+        def save(self, data):
+            self.data = dict(data)
+
+    win = mw.SubtitleRenderWindow(
+        embedded=True,
+        settings_provider=FakeSettingsProvider(),
+    )
+    win._apply_project_data(
+        {
+            "style": {"font_size_px": 200, "stroke_width_px": 30},
+            "screen": {"width": 3840, "height": 2160, "fps": 60, "par": "1:1"},
+        }
+    )
+
+    assert win._style.font_reference_height == 2160
+    win._export_height_spin.setValue(1080)
+    assert win._style.font_reference_height == 1080
+    assert win._style.font_size_px == 100
+    assert win._style.stroke_width_px == 15
 
 
 def test_main_window_export_screen_controls_update_and_persist(qapp, monkeypatch):

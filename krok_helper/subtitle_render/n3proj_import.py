@@ -179,7 +179,10 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
     # ---------------------------------------------------------------- 样式
     fonts = [_dict(item) for item in _list(data.get("LyricsFonts"))]
     layouts = [_dict(item) for item in _list(data.get("LyricsLayouts"))]
-    changes: dict[str, Any] = {"layout_reference_height": height}
+    changes: dict[str, Any] = {
+        "font_reference_height": height,
+        "layout_reference_height": height,
+    }
 
     if layouts:
         geometry = _layout_geometry(layouts[0])
