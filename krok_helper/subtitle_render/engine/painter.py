@@ -7797,7 +7797,12 @@ def _karaoke_fill_segments(
     index = 0
     while index < len(char_widths):
         ruby = _ruby_for_char_index(active_rubies, line, intervals, index)
-        if ruby is None:
+        # SUG uses a single ``^`` ruby over a linked English phrase as a
+        # non-rendering group marker.  Utopia must still consume that ruby to
+        # drop the whole phrase together, but it is not pronunciation data and
+        # must not replace the phrase's real per-syllable TimingChar clock with
+        # one linear start-to-end wipe.
+        if ruby is None or _is_utopia_group_marker(ruby):
             left, right = ink_x_ranges[index]
             release_left, release_right = release_x_ranges[index]
             start, end = intervals[index]
@@ -8156,6 +8161,12 @@ def _character_fill_ratio(
     else:
         ruby = _ruby_for_char_index(active_rubies, line, intervals, index)
         raw_indices = _ruby_target_indices(ruby, line, intervals) if ruby is not None else None
+    # Keep SUG's ``^`` linked-phrase marker available to
+    # ``_utopia_main_group_for_index`` while letting the main-text wipe follow
+    # the underlying syllable/character intervals.
+    if ruby is not None and _is_utopia_group_marker(ruby):
+        ruby = None
+        raw_indices = None
     if ruby is not None:
         indices = [
             candidate
@@ -8176,6 +8187,13 @@ def _character_fill_ratio(
         return 0.0
     start, end = intervals[index]
     return char_fill_ratio(start, end, t_ms)
+
+
+def _is_utopia_group_marker(ruby: RubyAnnotation) -> bool:
+    """Return whether ``ruby`` is SUG's linked-phrase-only ``^`` marker."""
+    return ruby.reading.strip() == "^" and all(
+        not part.strip() or part.strip() == "^" for part in ruby.reading_parts
+    )
 
 
 def _brush_for_fill(fill: PaintFill, rect: QRectF) -> QBrush:

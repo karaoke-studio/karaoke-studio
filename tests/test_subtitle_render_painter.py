@@ -3481,6 +3481,54 @@ def test_utopia_groups_main_characters_that_share_one_ruby(qapp):
     assert _utopia_main_group_for_index([ruby], line, intervals, 2) is None
 
 
+def test_utopia_linked_english_marker_keeps_syllable_wipe_timing(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="D", start_ms=1000),
+            TimingChar(text="o", start_ms=1100),
+            TimingChar(text=" ", start_ms=1200),
+            TimingChar(text="y", start_ms=1500),
+            TimingChar(text="o", start_ms=1600),
+            TimingChar(text="u", start_ms=1700),
+        ],
+        end_ms=1800,
+    )
+    intervals = [
+        (1000, 1100),
+        (1100, 1200),
+        (1200, 1500),
+        (1500, 1600),
+        (1600, 1700),
+        (1700, 1800),
+    ]
+    ranges = [(0, 20), (20, 40), (40, 50), (50, 70), (70, 90), (90, 110)]
+    marker = RubyAnnotation(
+        kanji="Do you",
+        reading="^",
+        reading_parts=["^"],
+        pos_start_ms=1000,
+        pos_end_ms=1800,
+    )
+
+    # The marker still groups the full phrase for Utopia transitions.
+    assert _utopia_main_group_for_index([marker], line, intervals, 0)[0] == list(range(6))
+
+    # The wipe no longer interpolates uniformly over the whole phrase.  At the
+    # second syllable boundary, the first three timing units are complete and
+    # the following syllable has not started.
+    segments = _karaoke_fill_segments(
+        [20, 20, 10, 20, 20, 20],
+        intervals,
+        ranges,
+        [marker],
+        line,
+    )
+    assert [segment.ruby for segment in segments] == [None] * 6
+    assert _fill_extent_end(segments, 1500) == 50
+    assert _character_fill_ratio(line, intervals, ranges, [marker], 2, 1350) == 0.5
+    assert _character_fill_ratio(line, intervals, ranges, [marker], 3, 1350) == 0.0
+
+
 def test_utopia_scope_layers_group_shared_ruby_main_text(qapp):
     track = _track_with_ruby()
     line = track.lines[0]
