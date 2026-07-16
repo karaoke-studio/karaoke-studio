@@ -185,7 +185,7 @@ class PreviewCanvas(QWidget):
             lambda: (
                 f"PreviewCanvas {{ background: {stage_bg()}; "
                 "border: 0; "
-                "border-radius: 0; }}"
+                "border-radius: 0; }"
             ),
         )
 

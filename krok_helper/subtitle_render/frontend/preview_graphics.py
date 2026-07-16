@@ -212,7 +212,7 @@ class PreviewGraphicsView(QGraphicsView):
             self.setBackgroundBrush(QBrush(QColor(color)))
             return (
                 f"#PreviewGraphicsView {{ background: {color}; "
-                "border: 0; border-radius: 0; }}"
+                "border: 0; border-radius: 0; }"
             )
 
         themed(self, _stage_style)

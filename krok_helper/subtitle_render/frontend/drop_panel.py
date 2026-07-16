@@ -157,7 +157,7 @@ class DropPanel(QFrame):
             lambda: (
                 f"QPushButton {{ color: {palette().text_secondary}; "
                 f"background: {palette().input_bg}; border: 1px solid {palette().input_border}; "
-                "border-radius: 5px; padding: 4px 9px; }} "
+                "border-radius: 5px; padding: 4px 9px; } "
                 f"QPushButton:hover {{ background: {palette().input_hover_bg}; "
                 f"border-color: {palette().input_border_focus}; }}"
             ),
