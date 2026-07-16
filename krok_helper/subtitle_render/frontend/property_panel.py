@@ -144,6 +144,7 @@ _SCHEME_FIELDS = {
     "allow_biting",
     "font_weight",
     "italic",
+    "affects_ruby_anchor",
     "base_color",
     "fill_color",
     "fill_gradient_enabled",
@@ -3904,10 +3905,18 @@ class PropertyPanel(QWidget):
 
         self._italic_check = CheckBox("斜体", section)
         self._italic_check.toggled.connect(lambda checked: self._update_style(italic=checked))
+        self._ruby_anchor_check = CheckBox("参与注音高度计算", section)
+        self._ruby_anchor_check.setToolTip(
+            "关闭后，使用当前角色的字符仍正常绘制和占位，但不会把整行注音向上顶高。"
+        )
+        self._ruby_anchor_check.toggled.connect(
+            lambda checked: self._update_style(affects_ruby_anchor=checked)
+        )
         flags_row = QHBoxLayout()
         flags_row.setContentsMargins(0, 0, 0, 0)
         flags_row.setSpacing(12)
         flags_row.addWidget(self._italic_check)
+        flags_row.addWidget(self._ruby_anchor_check)
         flags_row.addStretch(1)
         layout.addLayout(flags_row)
 
@@ -6813,6 +6822,9 @@ class PropertyPanel(QWidget):
                 )
             )
             self._italic_check.setChecked(bool(self._scheme_value("italic")))
+            self._ruby_anchor_check.setChecked(
+                bool(self._scheme_value("affects_ruby_anchor"))
+            )
             ruby_family = self._scheme_value("ruby_font_family")
             ruby_size = self._scheme_value("ruby_font_size_px")
             ruby_weight = self._scheme_value("ruby_font_weight")
@@ -7297,6 +7309,7 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         allow_biting=bool(panel._scheme_value("allow_biting")),
         font_weight=int(panel._scheme_value("font_weight")),
         italic=bool(panel._scheme_value("italic")),
+        affects_ruby_anchor=bool(panel._scheme_value("affects_ruby_anchor")),
         base_color=str(panel._scheme_value("base_color")),
         fill_color=str(panel._scheme_value("fill_color")),
         fill_gradient_enabled=bool(panel._scheme_value("fill_gradient_enabled")),

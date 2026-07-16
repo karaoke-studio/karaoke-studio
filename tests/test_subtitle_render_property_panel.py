@@ -90,6 +90,7 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
 
     checkboxes = (
         panel._italic_check,
+        panel._ruby_anchor_check,
         panel._allow_biting_check,
         panel._lit_shadow_check,
         panel._vertical_check,
@@ -415,6 +416,7 @@ def test_property_panel_set_style_populates_controls(qapp):
         allow_biting=True,
         font_weight=900,
         italic=True,
+        affects_ruby_anchor=False,
         base_color="#102030",
         fill_color="#405060",
         fill_gradient_enabled=True,
@@ -512,6 +514,7 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._space_width_spin.value() == 35
     assert panel._font_weight_combo.currentData() == 900
     assert panel._italic_check.isChecked()
+    assert not panel._ruby_anchor_check.isChecked()
     assert panel._allow_biting_check.isChecked()
     assert panel._color_state_combo.currentData() == "after"
     assert panel._color_layer_combo.currentData() == "text"
@@ -1192,6 +1195,7 @@ def test_property_panel_font_controls_emit_style(qapp):
     panel._space_width_spin.setValue(30)
     panel._font_weight_combo.setCurrentIndex(panel._font_weight_combo.findData(500))
     panel._italic_check.setChecked(True)
+    panel._ruby_anchor_check.setChecked(False)
     panel._allow_biting_check.setChecked(True)
 
     assert emitted[-1].font_size_px == 88
@@ -1201,6 +1205,7 @@ def test_property_panel_font_controls_emit_style(qapp):
     assert emitted[-1].space_width_percent == 30
     assert emitted[-1].font_weight == 500
     assert emitted[-1].italic is True
+    assert emitted[-1].affects_ruby_anchor is False
     assert emitted[-1].allow_biting is True
 
 
@@ -2917,6 +2922,23 @@ def test_property_panel_can_apply_preset_to_global_and_role(qapp):
     panel._apply_preset_to_current_target(SubtitleStyleScheme(fill_color="#FFCC00"))
 
     assert panel.subtitle_style.custom_style_schemes["A"].fill_color == "#FFCC00"
+
+
+def test_property_panel_ruby_anchor_toggle_is_saved_per_role(qapp):
+    panel = PropertyPanel()
+    panel.set_roles(["导唱符"])
+    panel.set_current_scheme_key("custom:导唱符")
+
+    assert panel._ruby_anchor_check.isChecked()
+
+    panel._ruby_anchor_check.setChecked(False)
+
+    scheme = panel.subtitle_style.custom_style_schemes["导唱符"]
+    assert scheme.affects_ruby_anchor is False
+    assert panel.subtitle_style.affects_ruby_anchor is True
+
+    panel.set_current_scheme_key("global")
+    assert panel._ruby_anchor_check.isChecked()
 
 
 def test_style_preset_manager_dialog_saves_current_scheme(qapp):

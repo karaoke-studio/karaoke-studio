@@ -487,6 +487,8 @@ class SubtitleStyleScheme:
     allow_biting: Optional[bool] = None
     font_weight: Optional[int] = None
     italic: Optional[bool] = None
+    affects_ruby_anchor: Optional[bool] = None
+    """Whether glyphs using this scheme contribute to the shared ruby baseline."""
     base_color: Optional[str] = None
     fill_color: Optional[str] = None
     fill_gradient_enabled: Optional[bool] = None
@@ -741,6 +743,8 @@ class Style:
 
     font_weight: int = 400  # Qt 习惯 100-900
     italic: bool = False
+    affects_ruby_anchor: bool = True
+    """该样式字符是否参与整行统一 ruby 基线的高度计算。"""
 
     # 颜色（六位十六进制 #RRGGBB，含前缀 #）
     base_color: str = "#FFFFFF"
@@ -1265,6 +1269,7 @@ def style_from_dict(payload: object) -> Style:
             changes[key] = _float_value(value, getattr(defaults, key))
         elif key in {
             "italic",
+            "affects_ruby_anchor",
             "allow_biting",
             "stroke2_enabled",
             "ruby_font_follow_main",

@@ -6142,6 +6142,58 @@ def test_whitespace_glyphs_do_not_inflate_line_metrics(qapp, monkeypatch):
     assert all_blank.ascent > 0
 
 
+def test_tall_opted_out_glyph_does_not_raise_shared_ruby_baseline(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="♧", start_ms=0, role_label="导唱符"),
+            TimingChar(text="願", start_ms=500),
+        ],
+        end_ms=1000,
+    )
+    ruby = RubyAnnotation(
+        kanji="願",
+        reading="ねが",
+        pos_start_ms=500,
+        pos_end_ms=1000,
+    )
+    track = TimingTrack(lines=[line], rubies=[ruby])
+    base_scheme = SubtitleStyleScheme(font_size_px=220)
+    ignored_style = Style(
+        font_size_px=100,
+        ruby_font_size_px=30,
+        custom_style_schemes={
+            "导唱符": replace(base_scheme, affects_ruby_anchor=False),
+        },
+    )
+    included_style = replace(
+        ignored_style,
+        custom_style_schemes={
+            "导唱符": replace(base_scheme, affects_ruby_anchor=True),
+        },
+    )
+
+    ignored = _layout_line(track, line, ignored_style, 1000, 600, baseline_y=400)
+    included = _layout_line(track, line, included_style, 1000, 600, baseline_y=400)
+
+    assert ignored is not None and included is not None
+    assert ignored.text_layout.glyphs[0].style.font_size_px == 220
+    assert ignored.ruby_layouts[0].baseline_y > included.ruby_layouts[0].baseline_y
+
+
+def test_ruby_anchor_participation_round_trips_for_global_and_role():
+    style = Style(
+        affects_ruby_anchor=False,
+        custom_style_schemes={
+            "导唱符": SubtitleStyleScheme(affects_ruby_anchor=False),
+        },
+    )
+
+    restored = style_from_dict(style_to_dict(style))
+
+    assert restored.affects_ruby_anchor is False
+    assert restored.custom_style_schemes["导唱符"].affects_ruby_anchor is False
+
+
 def test_paint_frame_renders_extra_tracks(qapp):
     """副字幕源（N3 多歌词文件）与主轨同帧叠绘：副轨行出现在主轨行之外的区域。"""
     main = _track()

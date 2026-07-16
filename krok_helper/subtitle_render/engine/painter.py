@@ -4474,6 +4474,7 @@ def _layout_plain_line(
             y,
             active_rubies,
             style,
+            main_ascent_px=text_layout.ascent,
             text_layout=text_layout,
             ruby_font=ruby_font,
         )
@@ -4536,6 +4537,7 @@ _SUBTITLE_SCHEME_STYLE_FIELDS: tuple[str, ...] = (
     "allow_biting",
     "font_weight",
     "italic",
+    "affects_ruby_anchor",
     "base_color",
     "fill_color",
     "fill_gradient_enabled",
@@ -9196,13 +9198,31 @@ def _layout_rubies(
     )
     main_box_ascent: Optional[float] = None
     if main_ascent_px is not None and text_layout is not None and text_layout.glyphs:
-        # 分色行：N3 行盒顶 = 各字符盒顶最高者（字号/描边随角色方案；空白无墨水不算）。
+        # N3 行盒顶 = 参与注音高度计算的字符盒顶最高者；空白无墨水不算。
+        height_glyphs = [
+            glyph
+            for glyph in text_layout.glyphs
+            if glyph.text.strip() and glyph.style.affects_ruby_anchor
+        ]
+        if not height_glyphs:
+            # If every visible glyph opted out, keep ruby attached to its own
+            # base characters instead of falling back to an unrelated global
+            # font metric.  This also gives an all-decoration line a safe floor.
+            ruby_target_indices = {
+                index
+                for ruby in rubies
+                for index in _ruby_target_indices(ruby, line, intervals)
+            }
+            height_glyphs = [
+                glyph
+                for glyph in text_layout.glyphs
+                if glyph.text.strip() and glyph.index in ruby_target_indices
+            ]
         candidates = [
             _n3_char_box_ascent(
                 glyph.metrics, glyph.style.font_size_px, glyph.style.stroke_width_px
             )
-            for glyph in text_layout.glyphs
-            if glyph.text.strip()
+            for glyph in height_glyphs
         ]
         if candidates:
             main_box_ascent = max(candidates)
