@@ -6683,14 +6683,12 @@ def _line_char_transition_context(
 
     if style.entry_anim == "utopia" or style.exit_anim == "utopia":
         intervals = intervals if intervals is not None else compute_char_intervals(line)
-        in_intro = style.entry_anim == "utopia" and t_ms <= start + _UTOPIA_INTRO_TIME_MS
-        in_exit = (
-            style.exit_anim == "utopia"
-            and bool(intervals)
-            and _utopia_following_done_time(line, intervals, 0, style) <= t_ms <= end
-        )
-        in_wipe = any(_is_utopia_wiping(t_ms, char_start, char_end) for char_start, char_end in intervals)
-        if in_intro or in_exit or in_wipe:
+        # Utopia 的入场、唱中弹跳和退场原本只在各自的活动窗口切进逐字符
+        # 矢量路径，其余时刻回到整行静态路径。两条路径在发光叠加与边缘
+        # 抗锯齿上存在细微差异，切换瞬间即使配色完全相同也会产生色闪。
+        # 行可见期间始终保留 Utopia 上下文；无动画阶段
+        # ``_transition_char_state`` 返回恒等状态，因此只统一绘制路径，不新增运动。
+        if start <= t_ms <= end:
             return _LineCharTransition(
                 phase="utopia",
                 effect="utopia",

@@ -4381,6 +4381,67 @@ def test_utopia_entry_state_bounces_each_character_from_line_start(qapp):
     assert settled == (1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0)
 
 
+def test_utopia_keeps_one_render_path_before_and_during_wipe(qapp):
+    from krok_helper.subtitle_render.engine.painter import (
+        _line_char_transition_context,
+        display_windows_for_style,
+    )
+    from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
+
+    track = _track()
+    line = track.lines[0]
+    colors = KaraokeColors(
+        before=KaraokeColorState(
+            text=_solid_fill("#E8E8E8"),
+            stroke=_solid_fill("#202020"),
+            shadow=_solid_fill("#FF8800"),
+        ),
+        after=KaraokeColorState(
+            text=_solid_fill("#E8E8E8"),
+            stroke=_solid_fill("#202020"),
+            shadow=_solid_fill("#FF8800"),
+        ),
+    )
+    style = Style(
+        line_y_position="center",
+        font_size_px=90,
+        letter_spacing_px=80,
+        stroke_width_px=5,
+        decoration_kind="glow",
+        glow_before_radius_px=8,
+        glow_after_radius_px=8,
+        karaoke_colors=colors,
+        entry_anim="utopia",
+    )
+    windows = display_windows_for_style(track, style)
+    intervals = compute_char_intervals(line)
+
+    before = _line_char_transition_context(
+        style, line, 900, *windows[0], len(line.chars), intervals=intervals
+    )
+    at_boundary = _line_char_transition_context(
+        style, line, 1000, *windows[0], len(line.chars), intervals=intervals
+    )
+    assert before is not None and before.effect == "utopia"
+    assert at_boundary is not None and at_boundary.effect == "utopia"
+
+    resting = _blank()
+    bouncing = _blank()
+    paint_frame(resting, track, 900, style)
+    paint_frame(bouncing, track, 1200, style)
+    assert _pixel_hash(resting) != _pixel_hash(bouncing)
+
+    # 首字弹跳时，远离它的末字没有运动；持续使用同一绘制路径后，末字的
+    # 填充、描边和发光应逐像素保持不变，不再随唱中特效启动而变色。
+    layout = _layout_line(track, line, style, 800, 450)
+    assert layout is not None
+    left, right = layout.char_x_ranges[-1]
+    top = layout.baseline_y - 130
+    resting_tail = resting.copy(left - 25, top, right - left + 50, 175)
+    bouncing_tail = bouncing.copy(left - 25, top, right - left + 50, 175)
+    assert _pixel_hash(resting_tail) == _pixel_hash(bouncing_tail)
+
+
 def test_utopia_wipe_state_bounces_currently_sung_character(qapp):
     style = Style(font_size_px=72)
     transition = _LineCharTransition(phase="wipe", effect="utopia", progress=1.0)
