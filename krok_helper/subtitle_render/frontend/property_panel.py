@@ -4343,7 +4343,7 @@ class PropertyPanel(QWidget):
         self._shadow_y_field = _field("阴影 Y", self._shadow_y_spin)
         detail_layout.addWidget(self._shadow_y_field, 1, 1)
 
-        self._glow_before_radius_spin = _spin(1, 120, suffix=" px")
+        self._glow_before_radius_spin = _spin(0, 120, suffix=" px")
         self._glow_before_radius_spin.valueChanged.connect(
             lambda value: self._update_shared_decoration(
                 glow_before_radius_px=value,
@@ -4352,7 +4352,7 @@ class PropertyPanel(QWidget):
         self._glow_radius_spin = self._glow_before_radius_spin
         self._glow_radius_field = _field("走字前发光", self._glow_before_radius_spin)
 
-        self._glow_after_radius_spin = _spin(1, 120, suffix=" px")
+        self._glow_after_radius_spin = _spin(0, 120, suffix=" px")
         self._glow_after_radius_spin.valueChanged.connect(
             lambda value: self._update_shared_decoration(glow_after_radius_px=value)
         )
@@ -4360,7 +4360,7 @@ class PropertyPanel(QWidget):
 
         self._glow_concentration_combo = _WheelFocusedComboBox(section)
         _compact_control(self._glow_concentration_combo)
-        for label, value in [("低", 0), ("中", 1), ("高", 2)]:
+        for label, value in [("无", -1), ("低", 0), ("中", 1), ("高", 2)]:
             self._glow_concentration_combo.addItem(label, value)
         self._glow_concentration_combo.currentIndexChanged.connect(
             lambda _index: self._update_shared_decoration(
@@ -6133,7 +6133,7 @@ class PropertyPanel(QWidget):
         value = int(
             self._scheme_value("glow_after_radius_px" if after else "glow_before_radius_px")
         )
-        return max(value, 1)
+        return max(value, 0)
 
     def _current_karaoke_colors(self) -> KaraokeColors:
         value = self._scheme_value("karaoke_colors")

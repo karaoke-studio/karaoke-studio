@@ -2177,6 +2177,14 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     assert emitted[-1].glow_before_radius_px == 28
     assert emitted[-1].glow_after_radius_px == 16
 
+    panel._glow_radius_spin.setValue(0)
+    assert emitted[-1].glow_before_radius_px == 0
+    assert emitted[-1].glow_after_radius_px == 16
+
+    panel._glow_after_radius_spin.setValue(0)
+    assert emitted[-1].glow_before_radius_px == 0
+    assert emitted[-1].glow_after_radius_px == 0
+
     panel._decoration_type_combo.setCurrentIndex(
         panel._decoration_type_combo.findData("shadow")
     )
@@ -2209,6 +2217,14 @@ def test_property_panel_glow_concentration_is_shared_by_main_and_ruby(qapp):
 
     assert not panel._glow_concentration_field.isHidden()
     assert panel._glow_concentration_combo.currentData() == 0
+
+    panel._glow_concentration_combo.setCurrentIndex(
+        panel._glow_concentration_combo.findData(-1)
+    )
+    assert emitted[-1].glow_concentration_level == -1
+    assert emitted[-1].glow_before_radius_px == 10
+    assert emitted[-1].glow_after_radius_px == 10
+    assert emitted[-1].ruby_glow_concentration_level is None
 
     panel._glow_concentration_combo.setCurrentIndex(
         panel._glow_concentration_combo.findData(2)

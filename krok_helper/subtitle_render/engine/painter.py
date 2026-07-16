@@ -1346,7 +1346,7 @@ def _paint_title_text_stack(
             path,
             title.shadow,
             rect,
-            max(int(title.glow_radius_px), 1),
+            max(int(title.glow_radius_px), 0),
             title.stroke_width_px,
             title.stroke2_width_px,
             concentration_level=title.glow_concentration_level,
@@ -3029,18 +3029,25 @@ def _stroke2_pen_width(stroke_width: int, stroke2_width: int) -> int:
 
 
 def _glow_pen_width(stroke_width: int, stroke2_width: int, glow_radius: int) -> int:
+    if glow_radius <= 0:
+        return 0
     base_width = _stroke2_pen_width(stroke_width, stroke2_width) if stroke2_width > 0 else _stroke_pen_width(stroke_width)
-    return max(1, base_width + max(glow_radius, 1))
+    return max(1, base_width + glow_radius)
 
 
 def _glow_extent(stroke_width: int, stroke2_width: int, glow_radius: int) -> int:
-    return math.ceil(_glow_pen_width(stroke_width, stroke2_width, glow_radius) / 2 + max(glow_radius, 1) * 3)
+    if glow_radius <= 0:
+        return 0
+    return math.ceil(_glow_pen_width(stroke_width, stroke2_width, glow_radius) / 2 + glow_radius * 3)
 
 
 def _glow_blur_radii(radius: int, concentration_level: int) -> tuple[int, ...]:
     """N3 ``DrawOneLineDecorBlurMulti`` radii for low/medium/high density."""
-    radius = max(int(radius), 1)
-    passes = normalize_glow_concentration_level(concentration_level) + 1
+    radius = max(int(radius), 0)
+    level = normalize_glow_concentration_level(concentration_level)
+    if radius == 0 or level < 0:
+        return ()
+    passes = level + 1
     return tuple(radius - (index * radius // passes) for index in range(passes))
 
 
@@ -3049,8 +3056,10 @@ def _glow_concentration_level(style: Style) -> int:
 
 
 def _glow_radius(style: Style, *, after: bool) -> int:
+    if _glow_concentration_level(style) < 0:
+        return 0
     value = style.glow_after_radius_px if after else style.glow_before_radius_px
-    return max(int(value), 1)
+    return max(int(value), 0)
 
 
 def _ruby_stroke_width(style: Style) -> int:
@@ -3124,11 +3133,13 @@ def _ruby_shadow_dy(style: Style) -> int:
 
 
 def _ruby_glow_radius(style: Style, *, after: bool) -> int:
+    if _ruby_glow_concentration_level(style) < 0:
+        return 0
     value = style.ruby_glow_after_radius_px if after else style.ruby_glow_before_radius_px
     if value is None and style.ruby_glow_radius_px is not None:
         value = style.ruby_glow_radius_px
     if value is not None:
-        return max(int(value), 1)
+        return max(int(value), 0)
     return _scaled_glow_radius(style, _ruby_scale(style), after=after)
 
 
@@ -3198,7 +3209,7 @@ def _title_visual_padding(title: TitleOverlay) -> int:
             _glow_extent(
                 title.stroke_width_px,
                 title.stroke2_width_px,
-                max(int(title.glow_radius_px), 1),
+                max(int(title.glow_radius_px), 0),
             ),
         )
     else:
@@ -4976,6 +4987,25 @@ def _paint_line_direct(
     runs = [layout.text_layout.glyphs] if not layout.has_inline_styles else _glyph_runs(layout.text_layout)
     y = layout.baseline_y
     for run in runs:
+        role_style = run[0].style
+        if _before_glow_requires_state_clip(role_style):
+            before_band = _fill_clip_band_for_glyphs(
+                layout.fill_segments, run, t_ms, layout.rtl
+            )
+            if before_band is not None:
+                if _run_fill_complete(
+                    layout.fill_segments, {glyph.index for glyph in run}, t_ms
+                ):
+                    continue
+                painter.save()
+                try:
+                    painter.setClipRect(
+                        _horizontal_before_clip_rect(before_band, layout.rtl)
+                    )
+                    _paint_glyph_run_direct(painter, run, y, after=False)
+                finally:
+                    painter.restore()
+                continue
         _paint_glyph_run_direct(painter, run, y, after=False)
 
     for run in runs:
@@ -5074,6 +5104,24 @@ def _horizontal_after_clip_rect(band: tuple[int, int], rtl: bool) -> QRectF:
     if rtl:
         return QRectF(float(band_left), -1_000_000.0, 1_000_000.0, 2_000_000.0)
     return QRectF(-1_000_000.0, -1_000_000.0, float(band_right) + 1_000_000.0, 2_000_000.0)
+
+
+def _horizontal_before_clip_rect(band: tuple[int, int], rtl: bool) -> QRectF:
+    """Keep the before layer only on the unsung side of the wipe front."""
+    band_left, band_right = band
+    if rtl:
+        return QRectF(
+            -1_000_000.0,
+            -1_000_000.0,
+            float(band_left) + 1_000_000.0,
+            2_000_000.0,
+        )
+    return QRectF(
+        float(band_right),
+        -1_000_000.0,
+        1_000_000.0,
+        2_000_000.0,
+    )
 
 
 def _paint_glyph_run_direct(
@@ -5414,7 +5462,20 @@ class _GlyphRunLayer:
     def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
         run_left = min(glyph.left for glyph in self.glyphs)
         clip_rect = None
-        if self.after:
+        role_style = self.glyphs[0].style
+        if not self.after and _before_glow_requires_state_clip(role_style):
+            band = _fill_clip_band_for_glyphs(
+                self.fill_segments, self.glyphs, self.t_ms, self.rtl
+            )
+            if band is not None:
+                if _run_fill_complete(
+                    self.fill_segments,
+                    {glyph.index for glyph in self.glyphs},
+                    self.t_ms,
+                ):
+                    return LayerAnimation(opacity=0.0)
+                clip_rect = _horizontal_before_clip_rect(band, self.rtl)
+        elif self.after:
             band = self.clip_band or _fill_clip_band(self.fill_segments, self.t_ms, self.rtl)
             if band is None:
                 return LayerAnimation(opacity=0.0)
@@ -5473,6 +5534,8 @@ class _GlyphRunAfterGlowLayer:
             return None
         before_radius = _glow_radius(role_style, after=False)
         after_radius = _glow_radius(role_style, after=True)
+        if after_radius == 0:
+            return None
         need_after_glow = (
             _fill_signature(colors.before.shadow) != _fill_signature(colors.after.shadow)
             or before_radius != after_radius
@@ -6005,10 +6068,28 @@ def _glyph_run_needs_after_glow(glyphs: list[_GlyphLayout]) -> bool:
     role_style = glyphs[0].style
     if role_style.decoration_kind != "glow":
         return False
+    if _glow_radius(role_style, after=True) == 0:
+        return False
     colors = _effective_karaoke_colors(role_style)
     return (
         _fill_signature(colors.before.shadow) != _fill_signature(colors.after.shadow)
         or _glow_radius(role_style, after=False) != _glow_radius(role_style, after=True)
+    )
+
+
+def _before_glow_requires_state_clip(style: Style) -> bool:
+    return (
+        style.decoration_kind == "glow"
+        and _glow_radius(style, after=False) > 0
+        and _glow_radius(style, after=True) == 0
+    )
+
+
+def _ruby_before_glow_requires_state_clip(style: Style) -> bool:
+    return (
+        _ruby_decoration_kind(style) == "glow"
+        and _ruby_glow_radius(style, after=False) > 0
+        and _ruby_glow_radius(style, after=True) == 0
     )
 
 
@@ -6292,6 +6373,8 @@ def _blit_cached_run_glow(
     把它送到与逐帧矢量 body 相同的变换位置。调用方在贴前已设好设备空间 clip（扫光带），
     本函数 ``setTransform(combine=True)`` 不影响该 clip（Qt clip 存于设备坐标）。
     """
+    if _glow_radius(role_style, after=after) == 0:
+        return
     baked = _get_or_build_run_glow(glyphs, role_style, colors, after=after)
     if baked.image.isNull():
         return
@@ -7184,7 +7267,48 @@ def _paint_char_karaoke_stack(
         return
 
     if ratio < 1.0:
-        if use_cached_glow:
+        clip_bounds = clip_rect if clip_rect is not None else QRectF(
+            float(char_x),
+            float(baseline_y - metrics.ascent()),
+            float(char_width),
+            float(metrics.height()),
+        )
+        clip_before_glow = _before_glow_requires_state_clip(style)
+        if clip_before_glow:
+            glow_pad = _glow_extent(
+                style.stroke_width_px,
+                stroke2_width,
+                _glow_radius(style, after=False),
+            )
+            front = char_x + char_width * (1.0 - ratio if rtl else ratio)
+            glow_left = clip_bounds.left() - glow_pad if rtl else front
+            glow_right = front if rtl else clip_bounds.right() + glow_pad
+            painter.save()
+            try:
+                painter.setClipRect(
+                    QRectF(
+                        float(glow_left),
+                        float(clip_bounds.top() - glow_pad),
+                        float(max(glow_right - glow_left, 0.0)),
+                        float(clip_bounds.height() + glow_pad * 2),
+                    )
+                )
+                if use_cached_glow:
+                    _blit_glow(after=False)
+                else:
+                    _paint_glow_path(
+                        painter,
+                        path,
+                        colors.before.shadow,
+                        rect,
+                        _glow_radius(style, after=False),
+                        style.stroke_width_px,
+                        stroke2_width,
+                        concentration_level=_glow_concentration_level(style),
+                    )
+            finally:
+                painter.restore()
+        elif use_cached_glow:
             _blit_glow(after=False)
         _paint_text_layer_stack(
             painter,
@@ -7197,15 +7321,9 @@ def _paint_char_karaoke_stack(
             shadow_dx=style.shadow_offset_x,
             shadow_dy=style.shadow_offset_y,
             glow_radius=_glow_radius(style, after=False),
-            draw_glow=not use_cached_glow,
+            draw_glow=not use_cached_glow and not clip_before_glow,
         )
         stroke_pad = _visual_text_padding(style)
-        clip_bounds = clip_rect if clip_rect is not None else QRectF(
-            float(char_x),
-            float(baseline_y - metrics.ascent()),
-            float(char_width),
-            float(metrics.height()),
-        )
         # RTL：单字内扫光从右向左，已唱区贴字符右缘。
         clip_x = char_x + (char_width * (1.0 - ratio) if rtl else 0.0)
         # 已唱发光：发光是软晕，halo 远比字框大。若和描边/填充一样按字框（仅 stroke_pad）
@@ -7373,7 +7491,11 @@ def _paint_glow_path(
     concentration_level: int = 0,
     target_clip: QRectF | None = None,
 ) -> None:
-    radius = max(radius, 1)
+    if normalize_glow_concentration_level(concentration_level) < 0:
+        return
+    radius = max(int(radius), 0)
+    if radius == 0:
+        return
     width = _glow_pen_width(stroke_width, stroke2_width, radius)
     bounds = path.boundingRect()
     if bounds.isEmpty():
@@ -9377,6 +9499,8 @@ class _RubyGlowLayer:
     def static_key(self, ctx: LayerContext, layout: object) -> tuple | None:
         if _ruby_decoration_kind(self.style) != "glow":
             return None
+        if _ruby_glow_radius(self.style, after=self.after) == 0:
+            return None
         colors = _effective_ruby_karaoke_colors(self.style)
         if self.after:
             visible, _complete, _front = _ruby_wipe_state(
@@ -9415,7 +9539,21 @@ class _RubyGlowLayer:
 
     def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
         clip_rect = None
-        if self.after:
+        if not self.after and _ruby_before_glow_requires_state_clip(self.style):
+            visible, complete, _front = _ruby_wipe_state(
+                self.ruby_layout, self.t_ms
+            )
+            if complete:
+                return LayerAnimation(opacity=0.0)
+            if visible:
+                clip_rect = _ruby_before_clip_rect_at_time(
+                    self.ruby_layout,
+                    self.ruby_metrics,
+                    self.style,
+                    self.rtl,
+                    self.t_ms,
+                )
+        elif self.after:
             visible, complete, _front = _ruby_wipe_state(
                 self.ruby_layout, self.t_ms
             )
@@ -9900,6 +10038,45 @@ def _ruby_after_clip_rect_at_time(
         wipe_left - pad,
         rect.top() - pad,
         max(right - wipe_left, 0.0) + pad,
+        rect.height() + pad * 2,
+    )
+
+
+def _ruby_before_clip_rect_at_time(
+    layout: _RubyLayout,
+    ruby_metrics: QFontMetrics,
+    style: Style,
+    rtl: bool,
+    t_ms: int,
+) -> QRectF:
+    """Keep the before ruby glow only on the unsung side of the wipe front."""
+    _visible, _complete, front = _ruby_wipe_state(layout, t_ms)
+    rect = _ruby_text_rect(layout, ruby_metrics)
+    stroke_width = _ruby_stroke_width(style)
+    stroke2_width = _ruby_stroke2_width(style)
+    pad = max(
+        _visual_stroke_extent(stroke_width, stroke2_width),
+        _glow_extent(
+            stroke_width,
+            stroke2_width,
+            _ruby_glow_radius(style, after=False),
+        ),
+        2,
+    )
+    wipe_left = layout.wipe_left if layout.wipe_segments else rect.left()
+    wipe_right = layout.wipe_right if layout.wipe_segments else rect.right()
+    front = min(max(front, wipe_left), wipe_right)
+    if rtl:
+        return QRectF(
+            wipe_left - pad,
+            rect.top() - pad,
+            max(front - wipe_left, 0.0) + pad,
+            rect.height() + pad * 2,
+        )
+    return QRectF(
+        front,
+        rect.top() - pad,
+        max(wipe_right - front, 0.0) + pad,
         rect.height() + pad * 2,
     )
 
@@ -10493,19 +10670,52 @@ def _paint_ruby_karaoke_fragment(
     before_glow_radius = _ruby_glow_radius(style, after=False)
     after_glow_radius = _ruby_glow_radius(style, after=True)
 
-    _paint_text_layer_stack(
-        painter,
-        path,
-        rect,
-        colors.before,
-        paint_style,
-        stroke_width=stroke_width,
-        stroke2_width=stroke2_width,
-        shadow_dx=shadow_dx,
-        shadow_dy=shadow_dy,
-        glow_radius=before_glow_radius,
-        fill_rect=fill_rect,
+    clip_before_glow = (
+        ratio > 0.0 and _ruby_before_glow_requires_state_clip(style)
     )
+    if clip_before_glow and ratio < 1.0:
+        glow_pad = _glow_extent(stroke_width, stroke2_width, before_glow_radius)
+        front = rect.left() + rect.width() * (1.0 - ratio if rtl else ratio)
+        glow_left = rect.left() - glow_pad if rtl else front
+        glow_right = front if rtl else rect.right() + glow_pad
+        painter.save()
+        try:
+            painter.setClipRect(
+                QRectF(
+                    glow_left,
+                    rect.top() - glow_pad,
+                    max(glow_right - glow_left, 0.0),
+                    rect.height() + glow_pad * 2,
+                )
+            )
+            _paint_glow_path(
+                painter,
+                path,
+                colors.before.shadow,
+                fill_rect if fill_rect is not None else rect,
+                before_glow_radius,
+                stroke_width,
+                stroke2_width,
+                concentration_level=_glow_concentration_level(paint_style),
+            )
+        finally:
+            painter.restore()
+
+    if ratio < 1.0:
+        _paint_text_layer_stack(
+            painter,
+            path,
+            rect,
+            colors.before,
+            paint_style,
+            stroke_width=stroke_width,
+            stroke2_width=stroke2_width,
+            shadow_dx=shadow_dx,
+            shadow_dy=shadow_dy,
+            glow_radius=before_glow_radius,
+            draw_glow=not clip_before_glow,
+            fill_rect=fill_rect,
+        )
 
     if ratio <= 0.0:
         return
@@ -10577,7 +10787,7 @@ def _paint_text_layer_stack(
                 path,
                 colors.shadow,
                 brush_rect,
-                max(glow_radius, 1),
+                glow_radius,
                 stroke_width,
                 stroke2_width,
                 concentration_level=_glow_concentration_level(style),

@@ -394,7 +394,7 @@ class TitleOverlay:
     decoration_kind: DecorationKind = "glow"
     glow_radius_px: int = 2
     glow_concentration_level: int = 0
-    """NicoKaraMaker3 ``BlurLevel``: 0/1/2 = 低/中/高发光浓度。"""
+    """-1 disables glow; NicoKaraMaker3 ``BlurLevel`` 0/1/2 = low/medium/high."""
     shadow: PaintFill = field(default_factory=lambda: _paint_fill("#FFFFFF"))
     shadow_offset_x: int = 10
     shadow_offset_y: int = 10
@@ -763,7 +763,7 @@ class Style:
     glow_before_radius_px: int = 10
     glow_after_radius_px: int = 10
     glow_concentration_level: int = 0
-    """NicoKaraMaker3 ``BlurLevel``: 0/1/2 = 低/中/高发光浓度。"""
+    """-1 disables glow; NicoKaraMaker3 ``BlurLevel`` 0/1/2 = low/medium/high."""
     shadow_color: str = "#000000"
     shadow_offset_x: int = 10
     """阴影 X 偏移。N3 阴影偏移固定为 DecorSize（双轴同值），新建默认 10
@@ -1091,11 +1091,11 @@ class RenderProject:
 
 
 def normalize_glow_concentration_level(value: object, fallback: int = 0) -> int:
-    """Clamp NicoKaraMaker3 ``BlurLevel`` to its three supported levels."""
+    """Normalize -1 (disabled) plus the three NicoKaraMaker3 blur levels."""
     try:
-        return max(0, min(2, int(value)))  # type: ignore[arg-type]
+        return max(-1, min(2, int(value)))  # type: ignore[arg-type]
     except (TypeError, ValueError):
-        return max(0, min(2, int(fallback)))
+        return max(-1, min(2, int(fallback)))
 
 
 def line_animation_override_to_dict(

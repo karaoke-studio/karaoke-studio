@@ -2082,6 +2082,45 @@ def test_paint_frame_glow_radius_changes_rendered_frame(qapp):
     assert _pixel_hash(img_small) != _pixel_hash(img_large)
 
 
+@pytest.mark.parametrize(
+    ("t_ms", "before_radius", "after_radius"),
+    [
+        (500, 0, 18),
+        (3000, 18, 0),
+    ],
+)
+def test_zero_glow_radius_removes_glow_from_corresponding_state(
+    qapp, t_ms, before_radius, after_radius
+):
+    orange = _solid_fill("#FF8A00")
+    colors = KaraokeColors(
+        before=KaraokeColorState(shadow=orange),
+        after=KaraokeColorState(shadow=orange),
+    )
+    zero_state = Style(
+        decoration_kind="glow",
+        glow_before_radius_px=before_radius,
+        glow_after_radius_px=after_radius,
+        karaoke_colors=colors,
+        line_y_position="center",
+    )
+    transparent = _solid_fill("#00000000")
+    no_glow = replace(
+        zero_state,
+        karaoke_colors=KaraokeColors(
+            before=replace(colors.before, shadow=transparent),
+            after=replace(colors.after, shadow=transparent),
+        ),
+    )
+    actual = _blank()
+    expected = _blank()
+
+    paint_frame(actual, _track(), t_ms, zero_state)
+    paint_frame(expected, _track(), t_ms, no_glow)
+
+    assert _pixel_hash(actual) == _pixel_hash(expected)
+
+
 def test_glow_before_and_after_radii_are_independent_of_legacy_field():
     style = Style(
         glow_radius_px=99,
@@ -2091,6 +2130,98 @@ def test_glow_before_and_after_radii_are_independent_of_legacy_field():
 
     assert subtitle_painter._glow_radius(style, after=False) == 7
     assert subtitle_painter._glow_radius(style, after=True) == 23
+
+
+def test_zero_glow_radius_disables_each_state():
+    style = Style(
+        glow_radius_px=99,
+        glow_before_radius_px=0,
+        glow_after_radius_px=0,
+        ruby_glow_before_radius_px=0,
+        ruby_glow_after_radius_px=0,
+    )
+
+    assert subtitle_painter._glow_radius(style, after=False) == 0
+    assert subtitle_painter._glow_radius(style, after=True) == 0
+    assert subtitle_painter._ruby_glow_radius(style, after=False) == 0
+    assert subtitle_painter._ruby_glow_radius(style, after=True) == 0
+    assert subtitle_painter._glow_pen_width(15, 5, 0) == 0
+    assert subtitle_painter._glow_extent(15, 5, 0) == 0
+    assert subtitle_painter._glow_blur_radii(0, 2) == ()
+
+    restored = style_from_dict(style_to_dict(style))
+    assert restored.glow_before_radius_px == 0
+    assert restored.glow_after_radius_px == 0
+
+
+@pytest.mark.parametrize("t_ms", [500, 3000])
+def test_no_glow_concentration_disables_both_states(qapp, t_ms):
+    orange = _solid_fill("#FF8A00")
+    transparent = _solid_fill("#00000000")
+    colors = KaraokeColors(
+        before=KaraokeColorState(shadow=orange),
+        after=KaraokeColorState(shadow=orange),
+    )
+    disabled = Style(
+        decoration_kind="glow",
+        glow_before_radius_px=18,
+        glow_after_radius_px=24,
+        glow_concentration_level=-1,
+        karaoke_colors=colors,
+        line_y_position="center",
+    )
+    no_glow = replace(
+        disabled,
+        karaoke_colors=KaraokeColors(
+            before=replace(colors.before, shadow=transparent),
+            after=replace(colors.after, shadow=transparent),
+        ),
+    )
+    actual = _blank()
+    expected = _blank()
+
+    paint_frame(actual, _track(), t_ms, disabled)
+    paint_frame(expected, _track(), t_ms, no_glow)
+
+    assert subtitle_painter._glow_radius(disabled, after=False) == 0
+    assert subtitle_painter._glow_radius(disabled, after=True) == 0
+    assert subtitle_painter._glow_blur_radii(18, -1) == ()
+    assert _pixel_hash(actual) == _pixel_hash(expected)
+
+
+def test_zero_after_glow_removes_previous_glow_from_ruby(qapp):
+    orange = _solid_fill("#FF8A00")
+    transparent = _solid_fill("#00000000")
+    colors = KaraokeColors(
+        before=KaraokeColorState(shadow=orange),
+        after=KaraokeColorState(shadow=orange),
+    )
+    style = Style(
+        decoration_kind="glow",
+        glow_before_radius_px=18,
+        glow_after_radius_px=0,
+        karaoke_colors=colors,
+        line_y_position="center",
+    )
+    no_glow = replace(
+        style,
+        karaoke_colors=KaraokeColors(
+            before=replace(colors.before, shadow=transparent),
+            after=replace(colors.after, shadow=transparent),
+        ),
+    )
+    partial = _blank()
+    partial_no_glow = _blank()
+    actual = _blank()
+    expected = _blank()
+
+    paint_frame(partial, _track_with_timed_ruby(), 2400, style)
+    paint_frame(partial_no_glow, _track_with_timed_ruby(), 2400, no_glow)
+    paint_frame(actual, _track_with_timed_ruby(), 2500, style)
+    paint_frame(expected, _track_with_timed_ruby(), 2500, no_glow)
+
+    assert _pixel_hash(partial) != _pixel_hash(partial_no_glow)
+    assert _pixel_hash(actual) == _pixel_hash(expected)
 
 
 def test_n3_role_scheme_empty_slots_fallback_inside_same_scheme(qapp):
@@ -5012,9 +5143,13 @@ def test_style_dict_roundtrip_keeps_glow_concentration_levels():
     assert restored.title_overlay is not None
     assert restored.title_overlay.glow_concentration_level == 2
 
+    disabled = style_from_dict(style_to_dict(Style(glow_concentration_level=-1)))
+    assert disabled.glow_concentration_level == -1
+
 
 def test_glow_concentration_payloads_are_clamped():
-    assert style_from_dict({"glow_concentration_level": -1}).glow_concentration_level == 0
+    assert style_from_dict({"glow_concentration_level": -1}).glow_concentration_level == -1
+    assert style_from_dict({"glow_concentration_level": -2}).glow_concentration_level == -1
     assert style_from_dict({"glow_concentration_level": 8}).glow_concentration_level == 2
     assert style_from_dict({}).ruby_glow_concentration_level is None
     restored = style_from_dict(
@@ -5030,7 +5165,7 @@ def test_glow_concentration_payloads_are_clamped():
         }
     )
     assert restored.ruby_glow_concentration_level == 2
-    assert restored.custom_style_schemes["B"].glow_concentration_level == 0
+    assert restored.custom_style_schemes["B"].glow_concentration_level == -1
     assert restored.custom_style_schemes["B"].ruby_glow_concentration_level == 2
     assert restored.title_overlay is not None
     assert restored.title_overlay.glow_concentration_level == 2
