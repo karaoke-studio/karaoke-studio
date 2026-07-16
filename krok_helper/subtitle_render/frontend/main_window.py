@@ -25,7 +25,7 @@ UI 顶层结构（底部左下角 ``NavigationBar``，与工作流区域一致�
 from __future__ import annotations
 
 from copy import deepcopy
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 from math import isfinite
 from pathlib import Path
 import shutil
@@ -177,6 +177,15 @@ BACKGROUND_MEDIA_FILTER = (
 )
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 PROJECT_FILTER = f"字幕渲染项目 (*{PROJECT_FILE_SUFFIX});;所有文件 (*.*)"
+
+_BUILTIN_SCHEME_STYLE_FIELDS = frozenset(
+    field.name
+    for field in fields(SubtitleStyleScheme)
+    if field.name in {style_field.name for style_field in fields(Style)}
+)
+_PROJECT_ONLY_STYLE_FIELDS = frozenset(
+    {"custom_style_schemes", "singer_style_overrides", "title_overlay"}
+)
 
 
 class _AspectRatioBox(QWidget):
@@ -885,6 +894,7 @@ class SubtitleRenderWindow(QWidget):
         self._audio_path: Optional[Path] = None
         self._audio_info: Optional[MediaInfo] = None
         self._style: Style = Style()
+        self._app_default_style: Style = Style()
         self._style_presets: dict[str, StylePreset] = {}
         self._screen_settings: ScreenSettings = ScreenSettings()
         self._selected_scheme_key = "global"
@@ -1261,7 +1271,7 @@ class SubtitleRenderWindow(QWidget):
         self._clear_loaded_media()
         self._apply_project_data(
             {
-                "style": style_to_dict(Style()),
+                "style": style_to_dict(deepcopy(self._app_default_style)),
                 "screen": screen_settings_to_dict(ScreenSettings()),
                 "selected_scheme_key": "global",
             }
@@ -1561,6 +1571,9 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.set_n3_template_target_height(self._screen_settings.height)
         self._property_panel.styleChanged.connect(self._apply_style)
         self._property_panel.presetSchemesChanged.connect(self._apply_style_presets)
+        self._property_panel.defaultSchemeSaveRequested.connect(
+            self._save_builtin_scheme_default
+        )
         self._property_panel.schemeSelectionChanged.connect(self._on_scheme_selection_changed)
         self._property_panel.layoutAssignAllRequested.connect(self._on_layout_assign_all)
         self._property_panel.layoutAutoAssignRequested.connect(self._on_layout_auto_assign)
@@ -3362,9 +3375,21 @@ class SubtitleRenderWindow(QWidget):
             style_from_dict(data.get("style"))
         )
         catalog = get_n3_font_catalog()
-        self._style, style_changed = normalize_style_font_families(
+        normalized_style, style_changed = normalize_style_font_families(
             loaded_style, catalog
         )
+        title_scheme = normalized_style.custom_style_schemes.get(
+            TITLE_SCHEME_NAME,
+            Style().custom_style_schemes[TITLE_SCHEME_NAME],
+        )
+        app_default_style = replace(
+            normalized_style,
+            custom_style_schemes={TITLE_SCHEME_NAME: deepcopy(title_scheme)},
+            singer_style_overrides={},
+        )
+        style_changed |= app_default_style != normalized_style
+        self._app_default_style = deepcopy(app_default_style)
+        self._style = deepcopy(app_default_style)
         loaded_presets = _style_presets_from_dict(data.get("style_presets"))
         self._style_presets = {}
         presets_changed = False
@@ -3394,11 +3419,32 @@ class SubtitleRenderWindow(QWidget):
         self._splitter_save_timer.start()
 
     def _save_persisted_state(self) -> None:
+        protected_fields = _BUILTIN_SCHEME_STYLE_FIELDS | _PROJECT_ONLY_STYLE_FIELDS
+        common_changes = {
+            field.name: deepcopy(getattr(self._style, field.name))
+            for field in fields(Style)
+            if field.name not in protected_fields
+        }
+        title_scheme = self._app_default_style.custom_style_schemes.get(
+            TITLE_SCHEME_NAME,
+            Style().custom_style_schemes[TITLE_SCHEME_NAME],
+        )
+        self._app_default_style = replace(
+            self._app_default_style,
+            **common_changes,
+            custom_style_schemes={TITLE_SCHEME_NAME: deepcopy(title_scheme)},
+            singer_style_overrides={},
+        )
         data = self._load_subtitle_settings()
-        data["style"] = style_to_dict(self._style)
+        data["style"] = style_to_dict(self._app_default_style)
         data["style_presets"] = _style_presets_to_dict(self._style_presets)
         data["screen"] = screen_settings_to_dict(self._screen_settings)
-        data["selected_scheme_key"] = self._selected_scheme_key
+        data["selected_scheme_key"] = (
+            self._selected_scheme_key
+            if self._selected_scheme_key
+            in {"global", f"custom:{TITLE_SCHEME_NAME}"}
+            else "global"
+        )
         data["preview_splitter_ratio"] = round(self._preview_splitter_ratio, 4)
         if hasattr(self, "_export_native_check"):
             output = dict(data.get("output")) if isinstance(data.get("output"), dict) else {}
@@ -3413,6 +3459,36 @@ class SubtitleRenderWindow(QWidget):
             save_app_settings(settings)
         except Exception:
             return
+
+    def _save_builtin_scheme_default(self, key: str) -> None:
+        if key == "global":
+            changes = {
+                field_name: deepcopy(getattr(self._style, field_name))
+                for field_name in _BUILTIN_SCHEME_STYLE_FIELDS
+            }
+            self._app_default_style = replace(self._app_default_style, **changes)
+            target = "全局默认"
+        elif key == f"custom:{TITLE_SCHEME_NAME}":
+            scheme = self._style.custom_style_schemes.get(TITLE_SCHEME_NAME)
+            if scheme is None:
+                return
+            schemes = dict(self._app_default_style.custom_style_schemes)
+            schemes[TITLE_SCHEME_NAME] = deepcopy(scheme)
+            self._app_default_style = replace(
+                self._app_default_style,
+                custom_style_schemes=schemes,
+            )
+            target = "标题"
+        else:
+            return
+        self._save_persisted_state()
+        InfoBar.success(
+            title="已保存软件默认值",
+            content=f"新建项目时将使用当前“{target}”方案。",
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=2500,
+        )
 
     def _load_subtitle_settings(self) -> dict:
         try:

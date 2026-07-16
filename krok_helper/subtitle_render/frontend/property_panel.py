@@ -1893,13 +1893,15 @@ class _StylePresetDetailsDialog(QDialog):
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent.window() if parent is not None else None)
-        self.setWindowTitle("保存当前样式为预设")
+        self.setWindowTitle("保存到软件预设库")
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setMinimumWidth(440)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(10)
-        layout.addWidget(SubtitleLabel("保存当前样式为预设", self))
+        hint = CaptionLabel("保存后可在其他项目中复用该角色方案。", self)
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
 
         layout.addWidget(BodyLabel("预设名称", self))
         self.name_edit = FluentLineEdit(self)
@@ -3459,6 +3461,7 @@ class PropertyPanel(QWidget):
     styleChanged = Signal(Style)
     schemeSelectionChanged = Signal(str)
     presetSchemesChanged = Signal(dict)
+    defaultSchemeSaveRequested = Signal(str)
     layoutAssignAllRequested = Signal(int)
     """「应用到全部行」：参数为布局 index（0 = 默认布局）。"""
     layoutAutoAssignRequested = Signal()
@@ -4602,7 +4605,7 @@ class PropertyPanel(QWidget):
         row_layout.setContentsMargins(6, 6, 6, 6)
         row_layout.setSpacing(4)
 
-        # 单行排布：角色下拉吸收剩余宽度，四个操作收成紧凑图标按钮。
+        # 单行排布：角色下拉吸收剩余宽度，操作收成紧凑图标按钮。
         # 内部仍叫 _singer_combo（少改动），但现在装的是「角色」：全局默认 + 各角色名。
         self._singer_combo = _WheelFocusedComboBox(nav)
         _compact_control(self._singer_combo)
@@ -4621,11 +4624,17 @@ class PropertyPanel(QWidget):
         self._manage_presets_button = FluentTransparentToolButton(FIF.PALETTE, nav)
         self._manage_presets_button.setToolTip("管理样式预设库")
         self._manage_presets_button.clicked.connect(lambda _checked=False: self._open_preset_manager())
+        self._save_scheme_button = FluentTransparentToolButton(FIF.SAVE, nav)
+        self._save_scheme_button.setToolTip("保存当前方案")
+        self._save_scheme_button.clicked.connect(
+            lambda _checked=False: self._save_current_scheme()
+        )
         for btn in (
             self._add_scheme_button,
             self._rename_role_button,
             self._delete_role_button,
             self._manage_presets_button,
+            self._save_scheme_button,
         ):
             btn.setFixedSize(30, 30)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -6396,6 +6405,67 @@ class PropertyPanel(QWidget):
             self._apply_preset_to_current_target(applied)
         if imported:
             self._import_preset_schemes(imported)
+
+    def _save_current_scheme(self) -> None:
+        """Persist the selected built-in default or copy a project role to the library."""
+        key = self.current_scheme_key()
+        role_name = self._current_custom_scheme_name()
+        if key == _GLOBAL_SCHEME_KEY or role_name == TITLE_SCHEME_NAME:
+            target = "全局默认" if key == _GLOBAL_SCHEME_KEY else "标题"
+            if not fluent_question(
+                self,
+                f"保存{target}",
+                f"将当前“{target}”方案保存为软件默认值？\n"
+                "新建项目时将自动使用该方案。",
+            ):
+                return
+            self.defaultSchemeSaveRequested.emit(key)
+            return
+
+        if not role_name:
+            return
+        groups = sorted(
+            {preset.group for preset in self._preset_schemes.values() if preset.group}
+        )
+        dialog = _StylePresetDetailsDialog(
+            name=role_name,
+            group="",
+            groups=groups,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        name, group = dialog.details()
+        if not name:
+            return
+
+        presets = _normalize_style_presets(self._preset_schemes)
+        matching_ids = _preset_ids_for_pair(presets, name, group)
+        preset_id = matching_ids[0] if matching_ids else _new_preset_id(presets)
+        for duplicate_id in matching_ids[1:]:
+            presets.pop(duplicate_id, None)
+        presets[preset_id] = StylePreset(
+            name=name,
+            group=group,
+            scheme=deepcopy(_scheme_from_current(self)),
+            preset_id=preset_id,
+        )
+        self._preset_schemes = presets
+        self.presetSchemesChanged.emit(self.preset_schemes)
+        InfoBar.success(
+            title="已保存到预设库",
+            content=(
+                f"已更新“{group} / {name}”。"
+                if matching_ids and group
+                else f"已更新“{name}”。"
+                if matching_ids
+                else f"已保存“{group} / {name}”。"
+                if group
+                else f"已保存“{name}”。"
+            ),
+            parent=self,
+            duration=2500,
+        )
 
     def _set_preset_schemes_from_dialog(
         self, schemes: dict[str, StylePreset | SubtitleStyleScheme]

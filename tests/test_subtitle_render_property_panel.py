@@ -14,6 +14,7 @@ from PyQt6.QtGui import QColor, QFont, QImage, QMouseEvent, QWheelEvent  # noqa:
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
+    QDialog,
     QInputDialog,
     QLabel,
     QWidget,
@@ -56,6 +57,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     StylePreset,
     SubtitleStyleScheme,
     Style,
+    TITLE_SCHEME_NAME,
     paint_fill_from_dict,
     style_from_dict,
     style_to_dict,
@@ -109,11 +111,12 @@ def test_property_panel_uses_fluent_form_controls(qapp):
     assert isinstance(panel._paint_image_path_edit, LineEdit)
     assert isinstance(panel._title_text_edit, PlainTextEdit)
     assert isinstance(panel._pages[0], ScrollArea)
-    # 角色卡片的四个操作收成单行紧凑图标按钮（下拉框吸收剩余宽度）
+    # 角色卡片的操作收成单行紧凑图标按钮（下拉框吸收剩余宽度）
     assert isinstance(panel._add_scheme_button, TransparentToolButton)
     assert isinstance(panel._rename_role_button, TransparentToolButton)
     assert isinstance(panel._delete_role_button, TransparentToolButton)
     assert isinstance(panel._manage_presets_button, TransparentToolButton)
+    assert isinstance(panel._save_scheme_button, TransparentToolButton)
     # 布局方案的管理操作同款收成紧凑图标按钮
     assert isinstance(panel._add_layout_btn, TransparentToolButton)
     assert isinstance(panel._rename_layout_btn, TransparentToolButton)
@@ -178,6 +181,86 @@ class _FontMigrationSettingsProvider:
 
     def save(self, data):
         self.data = dict(data)
+
+
+def test_live_scheme_edits_do_not_auto_save_as_app_defaults(qapp):
+    initial_style = Style(
+        fill_color="#111111",
+        custom_style_schemes={
+            TITLE_SCHEME_NAME: SubtitleStyleScheme(fill_color="#222222")
+        },
+    )
+    provider = _FontMigrationSettingsProvider(
+        {"style": style_to_dict(initial_style)}
+    )
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+
+    win._apply_style(
+        Style(
+            fill_color="#333333",
+            custom_style_schemes={
+                TITLE_SCHEME_NAME: SubtitleStyleScheme(fill_color="#444444"),
+                "初音": SubtitleStyleScheme(fill_color="#555555"),
+            },
+        )
+    )
+    win._selected_scheme_key = "custom:初音"
+    win._save_persisted_state()
+
+    saved = style_from_dict(provider.data["style"])
+    assert saved.fill_color == "#111111"
+    assert saved.custom_style_schemes[TITLE_SCHEME_NAME].fill_color == "#222222"
+    assert "初音" not in saved.custom_style_schemes
+    assert provider.data["selected_scheme_key"] == "global"
+
+
+def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
+    initial_style = Style(
+        fill_color="#111111",
+        custom_style_schemes={
+            TITLE_SCHEME_NAME: SubtitleStyleScheme(fill_color="#222222")
+        },
+    )
+    provider = _FontMigrationSettingsProvider(
+        {"style": style_to_dict(initial_style)}
+    )
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    win._apply_style(
+        Style(
+            fill_color="#333333",
+            custom_style_schemes={
+                TITLE_SCHEME_NAME: SubtitleStyleScheme(fill_color="#444444"),
+                "初音": SubtitleStyleScheme(fill_color="#555555"),
+            },
+        )
+    )
+
+    win._save_builtin_scheme_default("global")
+    saved = style_from_dict(provider.data["style"])
+    assert saved.fill_color == "#333333"
+    assert saved.custom_style_schemes[TITLE_SCHEME_NAME].fill_color == "#222222"
+    assert "初音" not in saved.custom_style_schemes
+
+    win._save_builtin_scheme_default(f"custom:{TITLE_SCHEME_NAME}")
+    saved = style_from_dict(provider.data["style"])
+    assert saved.fill_color == "#333333"
+    assert saved.custom_style_schemes[TITLE_SCHEME_NAME].fill_color == "#444444"
+    assert "初音" not in saved.custom_style_schemes
+
+    win._apply_style(
+        Style(
+            fill_color="#666666",
+            custom_style_schemes={
+                TITLE_SCHEME_NAME: SubtitleStyleScheme(fill_color="#777777"),
+                "镜音": SubtitleStyleScheme(fill_color="#888888"),
+            },
+        )
+    )
+    win._project_dirty = False
+    win._new_project()
+    assert win._style.fill_color == "#333333"
+    assert win._style.custom_style_schemes[TITLE_SCHEME_NAME].fill_color == "#444444"
+    assert "镜音" not in win._style.custom_style_schemes
 
 
 def _font_migration_catalog() -> N3FontCatalog:
@@ -3683,7 +3766,9 @@ def test_main_window_native_export_is_hard_disabled(qapp, monkeypatch):
     assert provider.data["output"]["native_export_enabled"] is False
 
 
-def test_main_window_keeps_presets_but_falls_back_to_global_selection(qapp, monkeypatch):
+def test_main_window_drops_leaked_project_roles_and_falls_back_to_global_selection(
+    qapp, monkeypatch
+):
     monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
     monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
     initial_style = Style(
@@ -3719,12 +3804,13 @@ def test_main_window_keeps_presets_but_falls_back_to_global_selection(qapp, monk
     win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
 
     assert win._property_panel.current_scheme_key() == "global"
-    assert win._style.custom_style_schemes["图像方案"].karaoke_colors.after.text.image_path == r"D:\cover.png"
+    assert "图像方案" not in win._style.custom_style_schemes
 
     win._save_persisted_state()
 
     saved_style = style_from_dict(provider.data["style"])
-    assert saved_style.custom_style_schemes["图像方案"].karaoke_colors.after.text.image_scale_pct == 150
+    assert "图像方案" not in saved_style.custom_style_schemes
+    assert TITLE_SCHEME_NAME in saved_style.custom_style_schemes
     assert provider.data["selected_scheme_key"] == "global"
 
 
@@ -3835,6 +3921,75 @@ def test_role_navigation_selects_target_without_card_header(qapp):
 
     panel._singer_combo.setCurrentIndex(0)  # 回全局默认
     assert panel._singer_combo.currentText() == "全局默认"
+
+
+def test_save_button_confirms_builtin_defaults_without_touching_preset_library(
+    qapp, monkeypatch
+):
+    panel = PropertyPanel()
+    requested: list[str] = []
+    emitted_presets: list[dict] = []
+    panel.defaultSchemeSaveRequested.connect(requested.append)
+    panel.presetSchemesChanged.connect(emitted_presets.append)
+    monkeypatch.setattr(pp, "fluent_question", lambda *args, **kwargs: True)
+
+    panel._save_current_scheme()
+    panel.set_current_scheme_key(f"custom:{TITLE_SCHEME_NAME}")
+    panel._save_current_scheme()
+
+    assert requested == ["global", f"custom:{TITLE_SCHEME_NAME}"]
+    assert emitted_presets == []
+    assert panel.preset_schemes == {}
+
+
+def test_save_button_writes_project_role_to_software_preset_library(
+    qapp, monkeypatch
+):
+    panel = PropertyPanel()
+    panel.set_roles(["初音"])
+    panel.set_current_scheme_key("custom:初音")
+    panel.set_style(
+        Style(
+            custom_style_schemes={
+                TITLE_SCHEME_NAME: SubtitleStyleScheme(),
+                "初音": SubtitleStyleScheme(fill_color="#39C5BB"),
+            }
+        )
+    )
+    panel.set_preset_schemes(
+        {
+            "existing": StylePreset(
+                name="初音",
+                group="VOCALOID",
+                scheme=SubtitleStyleScheme(fill_color="#000000"),
+                preset_id="existing",
+            )
+        }
+    )
+    emitted: list[dict] = []
+    panel.presetSchemesChanged.connect(emitted.append)
+
+    class FakeDetailsDialog:
+        def __init__(self, **_kwargs):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def details(self):
+            return "初音", "VOCALOID"
+
+    monkeypatch.setattr(pp, "_StylePresetDetailsDialog", FakeDetailsDialog)
+    monkeypatch.setattr(pp.InfoBar, "success", lambda *args, **kwargs: None)
+
+    panel._save_current_scheme()
+
+    assert len(emitted) == 1
+    assert list(panel.preset_schemes) == ["existing"]
+    saved = next(iter(panel.preset_schemes.values()))
+    assert saved.name == "初音"
+    assert saved.group == "VOCALOID"
+    assert saved.scheme.fill_color == "#39C5BB"
 
 
 def test_role_combo_width_tracks_longest_option_with_cap(qapp):
