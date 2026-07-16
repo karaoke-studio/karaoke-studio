@@ -36,6 +36,7 @@ from PyQt6.QtWidgets import (
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableWidgetItem,
+    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -50,6 +51,7 @@ from qfluentwidgets import (
     PushButton as FluentPushButton,
     RoundMenu,
     SpinBox as FluentSpinBox,
+    ToggleButton as FluentToggleButton,
     TransparentToolButton,
 )
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
@@ -381,6 +383,7 @@ class _CharChipsView(QWidget):
     """
 
     selectionChanged = Signal()
+    assignmentChanged = Signal()
 
     _CHIP_W = 46
     _CHIP_H = 56
@@ -393,12 +396,15 @@ class _CharChipsView(QWidget):
         style: Style,
         default_swatch_role: str = "",
         parent: Optional[QWidget] = None,
+        *,
+        default_role_text: str = _DEFAULT_ROLE_TEXT,
     ) -> None:
         super().__init__(parent)
         self._texts = list(texts)
         self._labels: list[Optional[str]] = [label or None for label in labels]
         self._style = style
         self._default_swatch_role = default_swatch_role
+        self._default_role_text = default_role_text
         self._selected: set[int] = set()
         self._anchor: Optional[int] = None
         self._dragging = False
@@ -412,10 +418,23 @@ class _CharChipsView(QWidget):
     def selected_indices(self) -> set[int]:
         return set(self._selected)
 
+    def selected_role_labels(self) -> set[Optional[str]]:
+        return {
+            self._labels[index]
+            for index in self._selected
+            if 0 <= index < len(self._labels)
+        }
+
+    def role_tooltip_text(self, index: int) -> str:
+        if not 0 <= index < len(self._labels):
+            return ""
+        return f"角色方案：{self._labels[index] or self._default_role_text}"
+
     def apply_role(self, label: Optional[str]) -> None:
         for index in self._selected:
             if 0 <= index < len(self._labels):
                 self._labels[index] = label or None
+        self.assignmentChanged.emit()
         self.update()
 
     def select_all(self) -> None:
@@ -522,6 +541,17 @@ class _CharChipsView(QWidget):
             return
         super().keyPressEvent(event)
 
+    def event(self, event) -> bool:  # noqa: A003 - Qt API
+        if event.type() == QEvent.Type.ToolTip:
+            index = self._index_at(event.pos())
+            text = self.role_tooltip_text(index) if index is not None else ""
+            if text:
+                QToolTip.showText(event.globalPos(), text, self)
+            else:
+                QToolTip.hideText()
+            return True
+        return super().event(event)
+
     # ------------------------------------------------------------- 绘制
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
@@ -585,7 +615,8 @@ class _CharRoleDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(f"逐字符角色 · 第 {row + 1} 行")
         self._style = style
-        self._role_buttons: list[FluentPushButton] = []
+        self._role_buttons: list[FluentToggleButton] = []
+        self._default_role_text = default_role_text
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 12)
@@ -597,7 +628,12 @@ class _CharRoleDialog(QDialog):
         layout.addWidget(hint)
 
         self._chips = _CharChipsView(
-            texts, labels, style, default_swatch_role, self
+            texts,
+            labels,
+            style,
+            default_swatch_role,
+            self,
+            default_role_text=default_role_text,
         )
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
@@ -608,9 +644,12 @@ class _CharRoleDialog(QDialog):
         scroll.setMaximumHeight((self._chips._CHIP_H + self._chips._GAP) * 4)
         layout.addWidget(scroll, 1)
 
-        roles_label = QLabel("分配为：", self)
-        themed(roles_label, lambda: f"color: {palette().text_secondary}; font-size: 9pt;")
-        layout.addWidget(roles_label)
+        self._roles_label = QLabel("分配为：", self)
+        themed(
+            self._roles_label,
+            lambda: f"color: {palette().text_secondary}; font-size: 9pt;",
+        )
+        layout.addWidget(self._roles_label)
 
         roles_host = QWidget(self)
         self._roles_flow = FlowLayout(roles_host, needAni=False)
@@ -635,21 +674,40 @@ class _CharRoleDialog(QDialog):
         layout.addLayout(buttons)
 
         self._chips.selectionChanged.connect(self._sync_role_buttons_enabled)
+        self._chips.assignmentChanged.connect(self._sync_role_buttons_enabled)
         self._sync_role_buttons_enabled()
         self.resize(720, 380)
 
     def _add_role_button(self, label: str, text: str) -> None:
-        button = FluentPushButton(text, self)
+        button = FluentToggleButton(text, self)
+        button.setProperty("roleLabel", label)
         swatch_role = label or self._default_swatch_role
         button.setIcon(_swatch_icon(_scheme_swatch_color(self._style, swatch_role)))
-        button.clicked.connect(lambda _checked=False, l=label: self._chips.apply_role(l or None))
+        button.clicked.connect(
+            lambda _checked=False, l=label: self._chips.apply_role(l or None)
+        )
         self._roles_flow.insertWidget(len(self._role_buttons), button)
         self._role_buttons.append(button)
 
     def _sync_role_buttons_enabled(self) -> None:
         enabled = bool(self._chips.selected_indices())
+        assigned = self._chips.selected_role_labels()
+        current = next(iter(assigned)) if len(assigned) == 1 else None
+        if not enabled:
+            self._roles_label.setText("分配为：")
+        elif len(assigned) == 1:
+            self._roles_label.setText(
+                f"当前分配：{current or self._default_role_text}"
+            )
+        else:
+            self._roles_label.setText(f"当前分配：混合（{len(assigned)} 种方案）")
         for button in self._role_buttons:
             button.setEnabled(enabled)
+            button.setChecked(
+                enabled
+                and len(assigned) == 1
+                and str(button.property("roleLabel") or "") == str(current or "")
+            )
 
     def _create_role(self) -> None:
         name, ok = QInputDialog.getText(self, "新建角色", "角色名称")

@@ -921,6 +921,39 @@ def test_char_role_dialog_returns_edited_labels(qapp):
     assert dialog.char_labels() == [None, "A"]
 
 
+def test_char_role_dialog_identifies_same_color_schemes_by_name(qapp):
+    schemes = dict(Style().custom_style_schemes)
+    schemes["同色A"] = SubtitleStyleScheme(fill_color="#336699")
+    schemes["同色B"] = SubtitleStyleScheme(fill_color="#336699")
+    dialog = lyrics_list._CharRoleDialog(
+        0,
+        ["甲", "乙"],
+        ["同色A", "同色B"],
+        ["同色A", "同色B"],
+        Style(custom_style_schemes=schemes),
+    )
+    buttons = {button.text(): button for button in dialog._role_buttons}
+
+    dialog._chips._selected = {0}
+    dialog._chips.selectionChanged.emit()
+    assert dialog._roles_label.text() == "当前分配：同色A"
+    assert buttons["同色A"].isChecked()
+    assert not buttons["同色B"].isChecked()
+    assert dialog._chips.role_tooltip_text(0) == "角色方案：同色A"
+
+    dialog._chips._selected = {0, 1}
+    dialog._chips.selectionChanged.emit()
+    assert dialog._roles_label.text() == "当前分配：混合（2 种方案）"
+    assert not buttons["同色A"].isChecked()
+    assert not buttons["同色B"].isChecked()
+
+    buttons["同色B"].click()
+    assert dialog.char_labels() == ["同色B", "同色B"]
+    assert dialog._roles_label.text() == "当前分配：同色B"
+    assert not buttons["同色A"].isChecked()
+    assert buttons["同色B"].isChecked()
+
+
 def test_char_role_options_match_current_property_panel_roles(qapp, monkeypatch, tmp_path):
     """导入覆盖逐字标签后，不应把旧歌词标签留下的预设继续列为可分配角色。"""
     monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
