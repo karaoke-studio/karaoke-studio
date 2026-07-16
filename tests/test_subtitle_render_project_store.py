@@ -135,6 +135,61 @@ def test_window_save_new_open_round_trip(qapp, monkeypatch, tmp_path):
     assert win._project_dirty is False
 
 
+def test_export_location_dialog_offers_source_and_custom_modes(qapp, tmp_path):
+    dialog = mw._ExportLocationDialog(
+        mw.EXPORT_DIR_SOURCE_VIDEO,
+        "",
+        tmp_path,
+    )
+    assert dialog.source_radio.text() == "保存在字幕视频所在目录"
+    assert dialog.custom_radio.text() == "保存在指定目录"
+    assert dialog.source_radio.isChecked()
+    assert not dialog.directory_edit.isEnabled()
+
+    dialog.custom_radio.setChecked(True)
+    assert dialog.directory_edit.isEnabled()
+    assert not dialog.ok_button.isEnabled()
+    dialog.directory_edit.setText(str(tmp_path / "exports"))
+    dialog._sync_controls()
+    assert dialog.ok_button.isEnabled()
+    assert dialog.selection() == (mw.EXPORT_DIR_CUSTOM, str(tmp_path / "exports"))
+
+
+def test_export_location_preference_persists_and_overrides_project_path(
+    qapp, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    custom_dir = tmp_path / "exports"
+    win = _make_window(qapp, monkeypatch)
+    assert win._export_location_settings_button.toolTip() == "导出视频位置设置"
+
+    win._set_export_directory_settings(
+        mw.EXPORT_DIR_CUSTOM,
+        str(custom_dir),
+        persist=True,
+    )
+    assert win._export_dir_edit.text() == str(custom_dir)
+    win._apply_output_settings(
+        {"output_path": str(tmp_path / "old-project" / "旧文件名.mp4")}
+    )
+    assert win._export_dir_edit.text() == str(custom_dir)
+    assert win._export_name_edit.text() == "旧文件名"
+
+    restored = _make_window(qapp, monkeypatch)
+    assert restored._export_dir_mode == mw.EXPORT_DIR_CUSTOM
+    assert restored._export_custom_dir == str(custom_dir)
+    assert restored._export_dir_edit.text() == str(custom_dir)
+
+    source_video = tmp_path / "video" / "background.mp4"
+    restored._video_path = source_video
+    restored._set_export_directory_settings(
+        mw.EXPORT_DIR_SOURCE_VIDEO,
+        str(custom_dir),
+        persist=False,
+    )
+    assert restored._export_dir_edit.text() == str(source_video.parent)
+
+
 def test_title_text_is_isolated_between_yurika_projects(qapp, monkeypatch, tmp_path):
     win = _make_window(qapp, monkeypatch)
     first_path = tmp_path / "first.yurika"

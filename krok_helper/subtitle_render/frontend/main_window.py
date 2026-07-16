@@ -39,8 +39,10 @@ from uuid import uuid4
 from PyQt6.QtCore import QObject, QPoint, QRect, QSize, QThread, QTimer, QUrl, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QColor, QDesktopServices, QImage, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
+    QButtonGroup,
     QFileDialog,
     QColorDialog,
+    QDialog,
     QHBoxLayout,
     QInputDialog,
     QLabel,
@@ -64,11 +66,13 @@ from qfluentwidgets import (
     PrimaryPushButton as FluentPrimaryPushButton,
     ProgressBar as FluentProgressBar,
     PushButton as FluentPushButton,
+    RadioButton as FluentRadioButton,
     RoundMenu,
     SegmentedWidget,
     SimpleCardWidget,
     SpinBox as FluentSpinBox,
     StrongBodyLabel,
+    ToolButton as FluentToolButton,
     TitleLabel,
 )
 
@@ -179,6 +183,95 @@ BACKGROUND_MEDIA_FILTER = (
 )
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 PROJECT_FILTER = f"字幕渲染项目 (*{PROJECT_FILE_SUFFIX});;所有文件 (*.*)"
+EXPORT_DIR_SOURCE_VIDEO = "source_video"
+EXPORT_DIR_CUSTOM = "custom"
+
+
+class _ExportLocationDialog(QDialog):
+    """字幕视频导出目录偏好。"""
+
+    def __init__(
+        self,
+        mode: str,
+        custom_dir: str,
+        initial_dir: Path,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("导出视频位置")
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setMinimumWidth(480)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        title = StrongBodyLabel("导出视频位置", self)
+        layout.addWidget(title)
+        self.source_radio = FluentRadioButton("保存在字幕视频所在目录", self)
+        self.custom_radio = FluentRadioButton("保存在指定目录", self)
+        group = QButtonGroup(self)
+        group.addButton(self.source_radio)
+        group.addButton(self.custom_radio)
+        layout.addWidget(self.source_radio)
+        layout.addWidget(self.custom_radio)
+
+        directory_row = QHBoxLayout()
+        directory_row.setContentsMargins(24, 0, 0, 0)
+        directory_row.setSpacing(8)
+        self.directory_edit = FluentLineEdit(self)
+        self.directory_edit.setReadOnly(True)
+        self.directory_edit.setPlaceholderText("选择指定目录")
+        self.directory_edit.setText(custom_dir)
+        self.browse_button = FluentPushButton(FIF.FOLDER, "浏览", self)
+        directory_row.addWidget(self.directory_edit, 1)
+        directory_row.addWidget(self.browse_button)
+        layout.addLayout(directory_row)
+
+        hint = CaptionLabel(
+            "没有视频素材时，将使用背景素材或字幕文件所在目录。",
+            self,
+        )
+        layout.addWidget(hint)
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        cancel_button = FluentPushButton("取消", self)
+        self.ok_button = FluentPrimaryPushButton("确定", self)
+        cancel_button.clicked.connect(self.reject)
+        self.ok_button.clicked.connect(self.accept)
+        button_row.addWidget(cancel_button)
+        button_row.addWidget(self.ok_button)
+        layout.addLayout(button_row)
+
+        self._initial_dir = initial_dir
+        self.source_radio.setChecked(mode != EXPORT_DIR_CUSTOM)
+        self.custom_radio.setChecked(mode == EXPORT_DIR_CUSTOM)
+        self.source_radio.toggled.connect(self._sync_controls)
+        self.custom_radio.toggled.connect(self._sync_controls)
+        self.browse_button.clicked.connect(self._browse)
+        self._sync_controls()
+
+    def _browse(self) -> None:
+        start = self.directory_edit.text().strip() or str(self._initial_dir)
+        selected = QFileDialog.getExistingDirectory(
+            self, "选择字幕视频导出目录", start
+        )
+        if selected:
+            self.directory_edit.setText(selected)
+            self.custom_radio.setChecked(True)
+            self._sync_controls()
+
+    def _sync_controls(self) -> None:
+        custom = self.custom_radio.isChecked()
+        self.directory_edit.setEnabled(custom)
+        self.browse_button.setEnabled(custom)
+        self.ok_button.setEnabled(
+            not custom or bool(self.directory_edit.text().strip())
+        )
+
+    def selection(self) -> tuple[str, str]:
+        mode = EXPORT_DIR_CUSTOM if self.custom_radio.isChecked() else EXPORT_DIR_SOURCE_VIDEO
+        return mode, self.directory_edit.text().strip()
 
 _BUILTIN_SCHEME_STYLE_FIELDS = frozenset(
     field.name
@@ -900,6 +993,8 @@ class SubtitleRenderWindow(QWidget):
         self._style_presets: dict[str, StylePreset] = {}
         self._screen_settings: ScreenSettings = ScreenSettings()
         self._selected_scheme_key = "global"
+        self._export_dir_mode = EXPORT_DIR_SOURCE_VIDEO
+        self._export_custom_dir = ""
         self._project_path: Optional[Path] = None
         self._project_dirty = False
         self._loading_project = False
@@ -1224,6 +1319,14 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.set_role_options(self._merged_role_options())
 
     def _apply_output_settings(self, output: dict) -> None:
+        directory_mode = output.get("directory_mode")
+        custom_directory = output.get("custom_directory")
+        if directory_mode in {EXPORT_DIR_SOURCE_VIDEO, EXPORT_DIR_CUSTOM}:
+            if directory_mode != EXPORT_DIR_CUSTOM or (
+                isinstance(custom_directory, str) and custom_directory.strip()
+            ):
+                self._export_dir_mode = str(directory_mode)
+                self._export_custom_dir = str(custom_directory or "").strip()
         encoder = output.get("encoder_mode")
         if encoder is not None:
             idx = self._export_encoder_combo.findData(encoder)
@@ -1245,8 +1348,8 @@ class SubtitleRenderWindow(QWidget):
         out_path = output.get("output_path")
         if isinstance(out_path, str) and out_path.strip():
             path = Path(out_path.strip())
-            self._export_dir_edit.setText(str(path.parent))
             self._export_name_edit.setText(path.stem)
+        self._sync_export_directory()
         blocked = self._export_native_check.blockSignals(True)
         try:
             self._export_native_check.setChecked(False)
@@ -1696,12 +1799,24 @@ class SubtitleRenderWindow(QWidget):
         settings_layout.setSpacing(12)
 
         # 卡片 1：输出文件（第一行选文件夹，第二行文件名，扩展名固定 .mp4）
-        output_card, output_layout = self._make_export_card("输出文件")
+        self._export_location_settings_button = FluentToolButton(FIF.SETTING)
+        self._export_location_settings_button.setToolTip("导出视频位置设置")
+        self._export_location_settings_button.setFixedSize(30, 30)
+        self._export_location_settings_button.setIconSize(QSize(16, 16))
+        self._export_location_settings_button.clicked.connect(
+            self._open_export_location_settings
+        )
+        output_card, output_layout = self._make_export_card(
+            "输出文件", self._export_location_settings_button
+        )
         dir_row = QHBoxLayout()
         dir_row.setContentsMargins(0, 0, 0, 0)
         dir_row.setSpacing(8)
         self._export_dir_edit = FluentLineEdit()
         self._export_dir_edit.setPlaceholderText("选择输出文件夹")
+        self._export_dir_edit.editingFinished.connect(
+            self._on_export_directory_edited
+        )
         self._export_browse_button = FluentPushButton(FIF.FOLDER, "浏览")
         self._export_browse_button.clicked.connect(self._browse_export_output)
         dir_row.addWidget(self._export_dir_edit, 1)
@@ -1870,14 +1985,25 @@ class SubtitleRenderWindow(QWidget):
         self._update_export_preset_enabled()
         return page
 
-    def _make_export_card(self, title_text: str) -> tuple[SimpleCardWidget, QVBoxLayout]:
+    def _make_export_card(
+        self,
+        title_text: str,
+        header_action: Optional[QWidget] = None,
+    ) -> tuple[SimpleCardWidget, QVBoxLayout]:
         card = SimpleCardWidget()
         layout = QVBoxLayout(card)
         layout.setContentsMargins(20, 14, 20, 16)
         layout.setSpacing(10)
         header = StrongBodyLabel(title_text)
         self._export_theme_labels.append(header)
-        layout.addWidget(header)
+        header_row = QHBoxLayout()
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(8)
+        header_row.addWidget(header)
+        header_row.addStretch(1)
+        if header_action is not None:
+            header_row.addWidget(header_action, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addLayout(header_row)
         return card, layout
 
     def _update_export_preset_enabled(self) -> None:
@@ -2004,7 +2130,39 @@ class SubtitleRenderWindow(QWidget):
         start = self._export_dir_edit.text().strip() or str(self._default_export_dir())
         path_str = QFileDialog.getExistingDirectory(self, "选择输出文件夹", start)
         if path_str:
-            self._export_dir_edit.setText(path_str)
+            self._set_export_directory_settings(
+                EXPORT_DIR_CUSTOM, path_str, persist=True
+            )
+
+    def _on_export_directory_edited(self) -> None:
+        directory = self._export_dir_edit.text().strip()
+        if directory:
+            self._set_export_directory_settings(
+                EXPORT_DIR_CUSTOM, directory, persist=True
+            )
+
+    def _open_export_location_settings(self) -> None:
+        dialog = _ExportLocationDialog(
+            self._export_dir_mode,
+            self._export_custom_dir,
+            self._default_export_dir(),
+            self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        mode, custom_dir = dialog.selection()
+        self._set_export_directory_settings(mode, custom_dir, persist=True)
+        InfoBar.success(
+            title="导出位置已保存",
+            content=(
+                "将保存在指定目录。"
+                if mode == EXPORT_DIR_CUSTOM
+                else "将保存在字幕视频所在目录。"
+            ),
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=2500,
+        )
 
     # ------------------------------------------------------------------ public
 
@@ -2077,6 +2235,7 @@ class SubtitleRenderWindow(QWidget):
         self._sync_tracks_view()
         self._refresh_transport_duration()
         self._transport_bar.set_time(0)
+        self._prefill_export_output()
         self._margin_check_timer.start()
         self._mark_project_dirty()
 
@@ -3516,6 +3675,8 @@ class SubtitleRenderWindow(QWidget):
         if hasattr(self, "_export_native_check"):
             output = dict(data.get("output")) if isinstance(data.get("output"), dict) else {}
             output["native_export_enabled"] = False
+            output["directory_mode"] = self._export_dir_mode
+            output["custom_directory"] = self._export_custom_dir
             data["output"] = output
         try:
             if self._settings_provider is not None and hasattr(self._settings_provider, "save"):
@@ -3607,6 +3768,33 @@ class SubtitleRenderWindow(QWidget):
         base = self._export_output_base()
         return base.parent if base is not None else Path.cwd()
 
+    def _resolved_export_dir(self) -> Path:
+        if self._export_dir_mode == EXPORT_DIR_CUSTOM and self._export_custom_dir:
+            return Path(self._export_custom_dir).expanduser()
+        return self._default_export_dir()
+
+    def _sync_export_directory(self) -> None:
+        if hasattr(self, "_export_dir_edit"):
+            self._export_dir_edit.setText(str(self._resolved_export_dir()))
+
+    def _set_export_directory_settings(
+        self,
+        mode: str,
+        custom_dir: str,
+        *,
+        persist: bool,
+    ) -> None:
+        if mode not in {EXPORT_DIR_SOURCE_VIDEO, EXPORT_DIR_CUSTOM}:
+            raise ValueError(f"unsupported export directory mode: {mode}")
+        custom_dir = str(custom_dir or "").strip()
+        if mode == EXPORT_DIR_CUSTOM and not custom_dir:
+            raise ValueError("custom export directory is required")
+        self._export_dir_mode = mode
+        self._export_custom_dir = custom_dir
+        self._sync_export_directory()
+        if persist:
+            self._save_persisted_state()
+
     def _default_export_name(self) -> str:
         base = self._export_output_base()
         stem = base.stem if base is not None else "subtitle_render"
@@ -3629,8 +3817,7 @@ class SubtitleRenderWindow(QWidget):
 
     def _prefill_export_output(self) -> None:
         """素材就位后预填输出目录 / 文件名；用户自定义过的文件名不覆盖。"""
-        if not self._export_dir_edit.text().strip():
-            self._export_dir_edit.setText(str(self._default_export_dir()))
+        self._sync_export_directory()
         current = self._export_name_edit.text().strip()
         if not current or current == self._export_auto_name:
             name = self._default_export_name()
