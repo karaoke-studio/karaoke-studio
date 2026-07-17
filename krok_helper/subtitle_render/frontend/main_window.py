@@ -541,6 +541,8 @@ class _WindowEdgeGrip(QWidget):
 class PreviewPlayerWindow(QWidget):
     """独立预览窗口：只承载 16:9 的视频预览画面。"""
 
+    userClosed = Signal()
+
     def __init__(self, owner: QWidget) -> None:
         super().__init__(
             owner,
@@ -835,6 +837,7 @@ class PreviewPlayerWindow(QWidget):
     def closeEvent(self, event):  # noqa: N802
         self._hide_controls_timer.stop()
         self._transport_bar.stop()
+        self.userClosed.emit()
         super().closeEvent(event)
 
     def _is_expanded(self) -> bool:
@@ -1192,6 +1195,9 @@ class SubtitleRenderWindow(QWidget):
         self._last_auto_save_error = ""
         self._render_thread: Optional[QThread] = None
         self._render_worker: Optional[_RenderWorker] = None
+        self._preview_window_requested = False
+        self._preview_reposition_on_next_show = True
+        self._closing_window = False
         self._suppress_next_render_command_log = False
         # 左右余白检查：属性面板每个 SpinBox tick 都会触发样式变更，
         # 用单发定时器合并成一次检查，提示只在结果变化时弹出。
@@ -1234,7 +1240,16 @@ class SubtitleRenderWindow(QWidget):
         if hasattr(self, "_preview_window"):
             self._preview_window.apply_workspace_geometry()
 
+    def showEvent(self, event):  # noqa: N802
+        super().showEvent(event)
+        QTimer.singleShot(0, self._sync_preview_window_visibility)
+
+    def hideEvent(self, event):  # noqa: N802
+        self._hide_preview_window_for_context()
+        super().hideEvent(event)
+
     def closeEvent(self, event):  # noqa: N802
+        self._closing_window = True
         self._stop_auto_save_runtime(wait=True)
         if hasattr(self, "_preview_window"):
             self._preview_window.close()
@@ -1256,6 +1271,7 @@ class SubtitleRenderWindow(QWidget):
         self._export_tab = self._make_export_tab()
         self._stack.addWidget(self._preview_tab)
         self._stack.addWidget(self._export_tab)
+        self._stack.currentChanged.connect(self._on_workspace_tab_changed)
         persisted = self._load_subtitle_settings()
         output = persisted.get("output") if isinstance(persisted.get("output"), dict) else {}
         self._apply_output_settings(output)
@@ -1318,6 +1334,55 @@ class SubtitleRenderWindow(QWidget):
         idx = 0 if key == "preview" else 1
         self._stack.setCurrentIndex(idx)
         self._bottom_navigation.setCurrentItem(key)
+
+    def _on_workspace_tab_changed(self, _index: int) -> None:
+        self._sync_preview_window_visibility()
+
+    def _preview_window_context_allowed(self) -> bool:
+        return bool(
+            not self._closing_window
+            and self.isVisible()
+            and self._stack.currentWidget() is self._preview_tab
+            and self._render_thread is None
+        )
+
+    def _hide_preview_window_for_context(self) -> None:
+        """Pause and hide without treating the action as a user close."""
+        if not hasattr(self, "_preview_window"):
+            return
+        self._transport_bar.pause()
+        if self._preview_window.isVisible():
+            self._preview_window.hide()
+
+    def _sync_preview_window_visibility(self) -> None:
+        """Keep the top-level preview inside the preview-tab lifecycle."""
+        if not hasattr(self, "_preview_window"):
+            return
+        should_show = bool(
+            self._preview_window_requested
+            and self._preview_window_context_allowed()
+        )
+        if not should_show:
+            self._hide_preview_window_for_context()
+            return
+        if self._preview_window.isVisible():
+            return
+        if self._preview_reposition_on_next_show:
+            self._preview_window.show_near_workspace()
+            self._preview_reposition_on_next_show = False
+        else:
+            self._preview_window.show()
+            self._preview_window.show_controls()
+
+    def _request_preview_window(self) -> None:
+        self._preview_window_requested = True
+        self._sync_preview_window_visibility()
+
+    def _on_preview_window_user_closed(self) -> None:
+        if self._closing_window:
+            return
+        self._preview_window_requested = False
+        self._preview_reposition_on_next_show = True
 
     # ----------------------------------------------------------- 项目文件（A11）
 
@@ -1392,9 +1457,10 @@ class SubtitleRenderWindow(QWidget):
     def _show_preview_window(self) -> None:
         if not hasattr(self, "_preview_window"):
             return
-        self._preview_window.show_near_workspace()
-        self._preview_window.raise_()
-        self._preview_window.activateWindow()
+        self._request_preview_window()
+        if self._preview_window.isVisible():
+            self._preview_window.raise_()
+            self._preview_window.activateWindow()
 
     def _refresh_project_title(self) -> None:
         if not hasattr(self, "_project_name_label"):
@@ -2386,6 +2452,7 @@ class SubtitleRenderWindow(QWidget):
         self._preview_splitter = top
 
         self._preview_window = PreviewPlayerWindow(self)
+        self._preview_window.userClosed.connect(self._on_preview_window_user_closed)
         self._preview_panel = self._preview_window.preview_panel
         self._preview_panel.set_style(self._style)
         self._preview_panel.pathDropped.connect(self._load_dropped_background)
@@ -3113,7 +3180,7 @@ class SubtitleRenderWindow(QWidget):
         self._preview_panel.set_background_source(self._background_source)
         self._video_settings_panel.set_populated(True)
         self._preview_window.set_media_title(path)
-        self._preview_window.show_near_workspace()
+        self._request_preview_window()
         self._prefill_export_output()
         # 视频自带音频 → 喂给 TransportBar 走 QMediaPlayer 播放
         if info.audio_streams > 0:
@@ -3210,7 +3277,7 @@ class SubtitleRenderWindow(QWidget):
         self._sync_audio_action_enabled()
         if source.path:
             self._preview_window.set_media_title(Path(source.path))
-        self._preview_window.show_near_workspace()
+        self._request_preview_window()
         self._prefill_export_output()
         self._refresh_transport_duration()
         self._mark_project_dirty()
@@ -4885,6 +4952,7 @@ class SubtitleRenderWindow(QWidget):
         thread.started.connect(worker.run)
         self._render_thread = thread
         self._render_worker = worker
+        self._sync_preview_window_visibility()
         thread.start()
         self._refresh_project_title()
 
@@ -5075,6 +5143,7 @@ class SubtitleRenderWindow(QWidget):
         self._render_worker = None
         self._cleanup_export_preview_dir()
         self._refresh_project_title()
+        self._sync_preview_window_visibility()
 
     # ------------------------------------------------------------------ embed
 

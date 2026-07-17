@@ -688,6 +688,99 @@ def test_bottom_navigation_switches_export_and_back_to_preview(qapp, monkeypatch
     assert win._bottom_navigation.currentRouteKey() == "preview"
 
 
+def test_preview_window_is_visible_only_on_preview_tab_and_pauses(
+    qapp, monkeypatch
+):
+    win = _make_window(qapp, monkeypatch)
+    win.resize(1280, 720)
+    win.show()
+    qapp.processEvents()
+    paused: list[bool] = []
+    monkeypatch.setattr(win._transport_bar, "pause", lambda: paused.append(True))
+    win._transport_bar.set_time(1234)
+
+    win._show_preview_window()
+    qapp.processEvents()
+    preview_geometry = win._preview_window.geometry()
+    assert win._preview_window.isVisible() is True
+
+    win._nav_btns["export"].click()
+    qapp.processEvents()
+    assert win._preview_window.isVisible() is False
+    assert paused
+    assert win._transport_bar.current_time_ms == 1234
+
+    win._nav_btns["preview"].click()
+    qapp.processEvents()
+    assert win._preview_window.isVisible() is True
+    assert win._preview_window.geometry() == preview_geometry
+    assert win._transport_bar.current_time_ms == 1234
+    win.close()
+
+
+def test_preview_window_hides_across_workflow_visibility_and_restores_paused(
+    qapp, monkeypatch
+):
+    win = _make_window(qapp, monkeypatch)
+    win.show()
+    qapp.processEvents()
+    paused: list[bool] = []
+    monkeypatch.setattr(win._transport_bar, "pause", lambda: paused.append(True))
+    win._show_preview_window()
+    qapp.processEvents()
+    assert win._preview_window.isVisible() is True
+
+    win.hide()
+    qapp.processEvents()
+    assert win._preview_window.isVisible() is False
+    assert paused
+
+    win.show()
+    qapp.processEvents()
+    assert win._preview_window.isVisible() is True
+    win.close()
+
+
+def test_user_closed_preview_does_not_reopen_after_context_switch(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+    win.show()
+    qapp.processEvents()
+    win._show_preview_window()
+    qapp.processEvents()
+
+    win._preview_window._close_button.click()
+    qapp.processEvents()
+    assert win._preview_window_requested is False
+    assert win._preview_window.isVisible() is False
+
+    win._nav_btns["export"].click()
+    win._nav_btns["preview"].click()
+    qapp.processEvents()
+    assert win._preview_window.isVisible() is False
+    win.close()
+
+
+def test_preview_request_is_deferred_while_hidden_or_exporting(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+    win._request_preview_window()
+    assert win._preview_window.isVisible() is False
+
+    win.show()
+    qapp.processEvents()
+    assert win._preview_window.isVisible() is True
+
+    win._render_thread = object()
+    win._sync_preview_window_visibility()
+    qapp.processEvents()
+    assert win._preview_window.isVisible() is False
+
+    win._render_thread = None
+    win._sync_preview_window_visibility()
+    qapp.processEvents()
+    assert win._preview_window.isVisible() is True
+    win.close()
+
+
 def test_lyrics_list_centers_only_explicit_single_line_page(qapp, monkeypatch):
     win = _make_window(qapp, monkeypatch)
     lines = [
