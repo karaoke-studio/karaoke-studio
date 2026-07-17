@@ -74,6 +74,22 @@ def test_subtitle_project_state_is_mirrored_to_workflow_step(tmp_path: Path) -> 
     assert calls == [(WORKFLOW_SUBTITLE_RENDER, "song.yurika · 未保存")]
 
 
+def test_pending_subtitle_recovery_switches_module_before_prompt() -> None:
+    calls: list[str] = []
+    page = SimpleNamespace(
+        has_pending_crash_recovery=lambda: True,
+        check_crash_recovery=lambda **_kwargs: calls.append("prompt"),
+    )
+    app = SimpleNamespace(
+        subtitle_render_page=page,
+        _show_module=lambda module: calls.append(f"show:{module}"),
+    )
+
+    KrokHelperQtApp._check_subtitle_render_crash_recovery(app)
+
+    assert calls == [f"show:{WORKFLOW_SUBTITLE_RENDER}", "prompt"]
+
+
 def test_subtitle_render_success_prompts_for_post_export_action(
     qapp, monkeypatch, tmp_path: Path
 ) -> None:

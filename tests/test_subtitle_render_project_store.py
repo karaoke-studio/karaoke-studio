@@ -17,6 +17,7 @@ from qfluentwidgets.components.widgets.menu import MenuAnimationType  # noqa: E4
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend import lyrics_list  # noqa: E402
 from krok_helper.subtitle_render import models as subtitle_models  # noqa: E402
+from krok_helper.subtitle_render import project_store as project_store_module  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
     BackgroundSource,
     LineAnimationOverride,
@@ -34,8 +35,11 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
 from krok_helper.subtitle_render.project_store import (  # noqa: E402
     PROJECT_SCHEMA_VERSION,
     background_payload,
+    invalidate_recovery_project,
     load_render_project,
+    save_recovery_project,
     save_render_project,
+    scan_recovery_projects,
 )
 
 
@@ -87,6 +91,103 @@ def test_load_render_project_rejects_bad_json(tmp_path):
     path.write_text("not json {", encoding="utf-8")
     with pytest.raises(ValueError):
         load_render_project(path)
+
+
+def test_atomic_project_save_preserves_previous_file_on_replace_failure(
+    monkeypatch, tmp_path
+):
+    path = tmp_path / "atomic.yurika"
+    save_render_project(path, {"value": "old"})
+    monkeypatch.setattr(
+        project_store_module.os,
+        "replace",
+        lambda *_args: (_ for _ in ()).throw(OSError("replace failed")),
+    )
+
+    with pytest.raises(OSError, match="replace failed"):
+        save_render_project(path, {"value": "new"})
+
+    assert load_render_project(path)["value"] == "old"
+    assert list(tmp_path.glob(".*.tmp")) == []
+
+
+def test_recovery_writer_rejects_an_older_snapshot(tmp_path):
+    path = tmp_path / "song.yurika.recovery"
+    newer = {
+        "value": "newer",
+        "recovery": {
+            "created_at_unix": 2.0,
+            "snapshot_id": 2,
+            "source_project_path": None,
+        },
+    }
+    older = {
+        "value": "older",
+        "recovery": {
+            "created_at_unix": 1.0,
+            "snapshot_id": 1,
+            "source_project_path": None,
+        },
+    }
+
+    assert save_recovery_project(path, newer) is True
+    assert save_recovery_project(path, older) is False
+    assert load_render_project(path)["value"] == "newer"
+
+
+def test_recovery_invalidation_blocks_inflight_old_snapshot(tmp_path):
+    path = tmp_path / "discarded.yurika.recovery"
+    invalidate_recovery_project(path, snapshot_floor=10)
+
+    written = save_recovery_project(
+        path,
+        {
+            "recovery": {
+                "created_at_unix": 1.0,
+                "snapshot_id": 9,
+                "source_project_path": None,
+            }
+        },
+    )
+
+    assert written is False
+    assert not path.exists()
+
+
+def test_recovery_scan_separates_valid_stale_and_invalid_files(tmp_path):
+    root = tmp_path / "recovery"
+    source = tmp_path / "saved.yurika"
+    stale = root / "saved.yurika.stale.recovery"
+    valid = root / "untitled.yurika.recovery"
+    invalid = root / "broken.yurika.recovery"
+    save_recovery_project(
+        stale,
+        {
+            "recovery": {
+                "created_at_unix": 1.0,
+                "snapshot_id": 1,
+                "source_project_path": str(source),
+            }
+        },
+    )
+    save_render_project(source, {"saved": True})
+    save_recovery_project(
+        valid,
+        {
+            "recovery": {
+                "created_at_unix": 2.0,
+                "snapshot_id": 2,
+                "source_project_path": None,
+            }
+        },
+    )
+    invalid.write_text("broken", encoding="utf-8")
+
+    candidates, invalid_files, stale_files = scan_recovery_projects(root)
+
+    assert [candidate.path for candidate in candidates] == [valid]
+    assert invalid_files == [invalid]
+    assert stale_files == [stale]
 
 
 def test_project_bar_present_in_both_modes(qapp, monkeypatch):
@@ -535,6 +636,75 @@ def test_force_exit_flush_writes_subtitle_recovery(qapp, monkeypatch, tmp_path):
     assert state.recovery_path.is_file()
     recovered = load_render_project(state.recovery_path)
     assert recovered["recovery"]["source_project_path"] == str(win._project_path)
+    assert recovered["recovery"]["snapshot_id"] > 0
+
+
+def test_background_auto_save_uses_snapshot_and_keeps_project_dirty(
+    qapp, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    win = _make_window(qapp, monkeypatch)
+    win._project_path = tmp_path / "song.yurika"
+    win._mark_project_dirty()
+    assert win._auto_save_timer.isActive()
+    win._auto_save_timer.stop()
+
+    win._start_recovery_auto_save()
+    thread = win._auto_save_thread
+    assert thread is not None
+    assert thread.wait(3000)
+    qapp.processEvents()
+
+    state = win.project_state()
+    assert state.dirty is True
+    assert state.recovery_path is not None
+    recovered = load_render_project(state.recovery_path)
+    assert recovered["recovery"]["project_revision"] == win._project_revision
+    win.discard_unsaved()
+    win.close()
+
+
+def test_auto_save_configuration_persists(qapp, monkeypatch, tmp_path):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    win = _make_window(qapp, monkeypatch)
+
+    win._configure_auto_save(False, 7, persist=True)
+    restored = _make_window(qapp, monkeypatch)
+
+    assert restored._auto_save_enabled is False
+    assert restored._auto_save_interval_minutes == 7
+    assert not restored._periodic_auto_save_timer.isActive()
+    win.close()
+    restored.close()
+
+
+def test_crash_recovery_restores_dirty_project(qapp, monkeypatch, tmp_path):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    recovery_root = tmp_path / "settings" / "subtitle_render_recovery"
+    recovery_path = recovery_root / "untitled.yurika.recovery"
+    save_recovery_project(
+        recovery_path,
+        {
+            "style": style_to_dict(Style(font_size_px=93)),
+            "recovery": {
+                "created_at_unix": 2.0,
+                "snapshot_id": 2,
+                "source_project_path": None,
+            },
+        },
+    )
+    win = _make_window(qapp, monkeypatch)
+    monkeypatch.setattr(mw, "fluent_choice", lambda *_args, **_kwargs: 0)
+
+    assert win.has_pending_crash_recovery() is True
+    assert win.check_crash_recovery(dialog_parent=win) is True
+
+    assert win._style.font_size_px == 93
+    assert win._project_path is None
+    assert win.has_unsaved_changes() is True
+    assert recovery_path.is_file()
+    win.discard_unsaved()
+    win.close()
 
 
 def test_save_failure_keeps_dirty_and_reports_state(qapp, monkeypatch, tmp_path):

@@ -1,8 +1,8 @@
-"""``.yurika`` 项目文件读写（A11，standalone 专用）。
+"""``.yurika`` project persistence and crash-recovery helpers.
 
 项目文件是一份带 ``schema_version`` 的 JSON 快照，存放当前 standalone 会话的
 全部可复现状态：字幕 / 背景视频 / 音频路径、全局样式、屏幕设置、配色方案选择、
-导出参数。嵌入模式不用项目文件（由工作流上下文管理）。
+导出参数。standalone 与工作台嵌入模式共用同一格式和安全写入路径。
 
 序列化沿用字段驱动的 :func:`style_to_dict` 等——以后 ``Style`` 加字段，项目文件
 自动跟着长，且旧文件用新代码打开会缺字段取默认、新文件用旧代码打开会忽略未知
@@ -15,23 +15,48 @@ key（前后兼容）。
 from __future__ import annotations
 
 import json
+import os
+import threading
+import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
+from uuid import uuid4
 
 from krok_helper.subtitle_render.models import PROJECT_FILE_SUFFIX
 
 PROJECT_SCHEMA_VERSION = 1
+_RECOVERY_WRITE_LOCK = threading.Lock()
+_RECOVERY_SNAPSHOT_FLOORS: dict[Path, int] = {}
+
+
+@dataclass(frozen=True)
+class RecoveryCandidate:
+    path: Path
+    source_project_path: Optional[Path]
+    created_at_unix: float
+    snapshot_id: int
 
 
 def save_render_project(path: Path, data: dict) -> None:
-    """把项目快照 ``data`` 写入 ``path``（覆盖）。自动补 ``schema_version``。"""
+    """Atomically write a project snapshot without truncating the old file."""
     payload = {"schema_version": PROJECT_SCHEMA_VERSION}
     payload.update(data)
     path = Path(path)
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    serialized = json.dumps(payload, ensure_ascii=False, indent=2)
+    try:
+        with temp_path.open("w", encoding="utf-8", newline="\n") as stream:
+            stream.write(serialized)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp_path, path)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def load_render_project(path: Path) -> dict:
@@ -47,6 +72,99 @@ def load_render_project(path: Path) -> dict:
     if not isinstance(data, dict):
         raise ValueError("项目文件内容不是对象")
     return data
+
+
+def save_recovery_project(path: Path, data: dict) -> bool:
+    """Write a recovery snapshot unless a newer snapshot already won the race."""
+    recovery = data.get("recovery") if isinstance(data.get("recovery"), dict) else {}
+    try:
+        snapshot_id = int(recovery.get("snapshot_id") or 0)
+    except (TypeError, ValueError):
+        snapshot_id = 0
+    path = Path(path)
+    with _RECOVERY_WRITE_LOCK:
+        if snapshot_id < _RECOVERY_SNAPSHOT_FLOORS.get(path, 0):
+            return False
+        if path.is_file():
+            try:
+                existing = load_render_project(path)
+                existing_recovery = (
+                    existing.get("recovery")
+                    if isinstance(existing.get("recovery"), dict)
+                    else {}
+                )
+                existing_id = int(existing_recovery.get("snapshot_id") or 0)
+                if existing_id > snapshot_id:
+                    return False
+            except (OSError, TypeError, ValueError):
+                pass
+        save_render_project(path, data)
+    return True
+
+
+def invalidate_recovery_project(
+    path: Path,
+    snapshot_floor: Optional[int] = None,
+    *,
+    delete: bool = True,
+) -> int:
+    """Prevent in-flight older writers from recreating a discarded snapshot."""
+    path = Path(path)
+    floor = int(snapshot_floor or time.time_ns())
+    with _RECOVERY_WRITE_LOCK:
+        _RECOVERY_SNAPSHOT_FLOORS[path] = max(
+            floor,
+            _RECOVERY_SNAPSHOT_FLOORS.get(path, 0),
+        )
+        if delete:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+    return floor
+
+
+def scan_recovery_projects(
+    root: Path,
+) -> tuple[list[RecoveryCandidate], list[Path], list[Path]]:
+    """Return valid, invalid, and stale recovery files under ``root``."""
+    candidates: list[RecoveryCandidate] = []
+    invalid: list[Path] = []
+    stale: list[Path] = []
+    root = Path(root)
+    if not root.is_dir():
+        return candidates, invalid, stale
+    for path in sorted(root.glob("*.recovery")):
+        try:
+            data = load_render_project(path)
+            recovery = data.get("recovery")
+            if not isinstance(recovery, dict):
+                raise ValueError("缺少 recovery 元数据")
+            source_text = str(recovery.get("source_project_path") or "").strip()
+            source_path = Path(source_text) if source_text else None
+            created_at = float(recovery.get("created_at_unix") or 0.0)
+            snapshot_id = int(recovery.get("snapshot_id") or 0)
+            if created_at <= 0 or snapshot_id <= 0:
+                raise ValueError("recovery 元数据无效")
+            if (
+                source_path is not None
+                and source_path.is_file()
+                and path.stat().st_mtime_ns <= source_path.stat().st_mtime_ns
+            ):
+                stale.append(path)
+                continue
+            candidates.append(
+                RecoveryCandidate(
+                    path=path,
+                    source_project_path=source_path,
+                    created_at_unix=created_at,
+                    snapshot_id=snapshot_id,
+                )
+            )
+        except (OSError, TypeError, ValueError):
+            invalid.append(path)
+    candidates.sort(key=lambda item: item.snapshot_id, reverse=True)
+    return candidates, invalid, stale
 
 
 def _clean_path(value: object) -> Optional[str]:

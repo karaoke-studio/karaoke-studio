@@ -2411,6 +2411,7 @@ class KrokHelperQtApp(QMainWindow):
         self.preview_timer.setInterval(300)
         self.preview_timer.timeout.connect(self._poll_alignment_preview)
         QTimer.singleShot(800, self._check_lyrics_timing_crash_recovery)
+        QTimer.singleShot(1200, self._check_subtitle_render_crash_recovery)
         QTimer.singleShot(1500, self._notify_settings_corruption_if_any)
         QTimer.singleShot(2500, self._check_for_workbench_update_on_startup)
 
@@ -5685,6 +5686,31 @@ class KrokHelperQtApp(QMainWindow):
         except Exception:
             pass
 
+    def _check_subtitle_render_crash_recovery(self) -> None:
+        """Let the embedded subtitle module handle pending recovery snapshots."""
+        page = getattr(self, "subtitle_render_page", None)
+        if page is None or not hasattr(page, "check_crash_recovery"):
+            return
+        try:
+            has_pending = bool(
+                hasattr(page, "has_pending_crash_recovery")
+                and page.has_pending_crash_recovery()
+            )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "检查字幕项目恢复数据失败", exc_info=True
+            )
+            return
+        if not has_pending:
+            return
+        self._show_module(WORKFLOW_SUBTITLE_RENDER)
+        try:
+            page.check_crash_recovery(dialog_parent=self)
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "处理字幕项目恢复数据失败", exc_info=True
+            )
+
     def _sync_lyrics_timing_host_paths(self) -> None:
         """Inject host-managed runtime paths into the embedded timing module."""
         cache_dir = get_settings_path().parent / "lyrics_timing_cache"
@@ -8055,26 +8081,23 @@ class KrokHelperQtApp(QMainWindow):
         if not dirty_pages:
             return True
 
-        message = QMessageBox(self)
-        message.setIcon(QMessageBox.Icon.Question)
-        message.setWindowTitle("未保存的更改")
-        message.setText(
+        from krok_helper.subtitle_render.frontend.fluent_dialogs import fluent_choice
+
+        choice = fluent_choice(
+            self,
+            "未保存的更改",
             "以下项目有未保存的更改：\n\n"
             + "\n".join(f"• {label}" for label, _page in dirty_pages)
-            + "\n\n是否在退出前全部保存？"
+            + "\n\n是否在退出前全部保存？",
+            ("全部保存", "全部放弃", "取消"),
+            default=0,
         )
-        save_btn = message.addButton("全部保存", QMessageBox.ButtonRole.AcceptRole)
-        discard_btn = message.addButton("全部放弃", QMessageBox.ButtonRole.DestructiveRole)
-        cancel_btn = message.addButton("取消", QMessageBox.ButtonRole.RejectRole)
-        message.setDefaultButton(save_btn)
-        message.exec()
-        clicked = message.clickedButton()
 
-        if clicked is cancel_btn or clicked not in (save_btn, discard_btn):
+        if choice not in (0, 1):
             event.ignore()
             return False
 
-        if clicked is discard_btn:
+        if choice == 1:
             for _label, page in dirty_pages:
                 discard = getattr(page, "discard_unsaved", None)
                 if callable(discard):
@@ -8269,7 +8292,20 @@ def _install_global_excepthook() -> None:
         except Exception:
             pass
         try:
-            if QApplication.instance() is not None:
+            app = QApplication.instance()
+            if app is not None:
+                for widget in app.topLevelWidgets():
+                    if not isinstance(widget, KrokHelperQtApp):
+                        continue
+                    page = getattr(widget, "subtitle_render_page", None)
+                    flush_unsaved = getattr(page, "flush_unsaved", None)
+                    if callable(flush_unsaved):
+                        try:
+                            flush_unsaved()
+                        except Exception:
+                            logging.getLogger(__name__).warning(
+                                "未处理异常后写字幕恢复数据失败", exc_info=True
+                            )
                 QMessageBox.critical(
                     None,
                     APP_TITLE,

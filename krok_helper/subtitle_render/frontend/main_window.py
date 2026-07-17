@@ -26,13 +26,16 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
+from datetime import datetime
 import hashlib
+import logging
 from math import isfinite
 from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from typing import Any, Optional
 from uuid import uuid4
@@ -157,11 +160,15 @@ from krok_helper.subtitle_render.n3_font_catalog import (
 )
 from krok_helper.subtitle_render.n3proj_import import N3_PROJECT_FILTER, load_n3proj
 from krok_helper.subtitle_render.project_store import (
+    RecoveryCandidate,
     background_payload,
+    invalidate_recovery_project,
     load_render_project,
     project_output_payload,
     project_payload,
+    save_recovery_project,
     save_render_project,
+    scan_recovery_projects,
     split_project_paths,
 )
 from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
@@ -188,6 +195,9 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 PROJECT_FILTER = f"字幕渲染项目 (*{PROJECT_FILE_SUFFIX});;所有文件 (*.*)"
 EXPORT_DIR_SOURCE_VIDEO = "source_video"
 EXPORT_DIR_CUSTOM = "custom"
+AUTO_SAVE_DEBOUNCE_MS = 2_000
+DEFAULT_AUTO_SAVE_INTERVAL_MINUTES = 5
+AUTO_SAVE_THREAD_WAIT_MS = 3_000
 
 
 @dataclass(frozen=True)
@@ -303,6 +313,58 @@ class _ExportLocationDialog(QDialog):
     def selection(self) -> tuple[str, str]:
         mode = EXPORT_DIR_CUSTOM if self.custom_radio.isChecked() else EXPORT_DIR_SOURCE_VIDEO
         return mode, self.directory_edit.text().strip()
+
+
+class _AutoSaveSettingsDialog(QDialog):
+    """Small project-auto-save settings dialog exposed from the file menu."""
+
+    def __init__(
+        self,
+        enabled: bool,
+        interval_minutes: int,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("项目自动保存")
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setMinimumWidth(420)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        layout.addWidget(StrongBodyLabel("项目自动保存", self))
+        self.enabled_check = CheckBox("启用字幕项目自动保存", self)
+        self.enabled_check.setChecked(enabled)
+        layout.addWidget(self.enabled_check)
+
+        interval_row = QHBoxLayout()
+        interval_row.addWidget(CaptionLabel("周期保存间隔", self))
+        self.interval_spin = FluentSpinBox(self)
+        self.interval_spin.setRange(1, 60)
+        self.interval_spin.setSuffix(" 分钟")
+        self.interval_spin.setValue(max(1, min(60, int(interval_minutes))))
+        interval_row.addWidget(self.interval_spin)
+        interval_row.addStretch(1)
+        layout.addLayout(interval_row)
+        layout.addWidget(
+            CaptionLabel("编辑停止 2 秒后会先写一次恢复快照。", self)
+        )
+
+        button_row = QHBoxLayout()
+        button_row.addStretch(1)
+        cancel_button = FluentPushButton("取消", self)
+        ok_button = FluentPrimaryPushButton("保存设置", self)
+        cancel_button.clicked.connect(self.reject)
+        ok_button.clicked.connect(self.accept)
+        button_row.addWidget(cancel_button)
+        button_row.addWidget(ok_button)
+        layout.addLayout(button_row)
+
+        self.enabled_check.toggled.connect(self.interval_spin.setEnabled)
+        self.interval_spin.setEnabled(enabled)
+
+    def selection(self) -> tuple[bool, int]:
+        return self.enabled_check.isChecked(), self.interval_spin.value()
 
 _BUILTIN_SCHEME_STYLE_FIELDS = frozenset(
     field.name
@@ -872,6 +934,49 @@ def _scaled_preview_pixmap(
     return pixmap
 
 
+class _RecoverySaveWorker(QObject):
+    saved = Signal(object, int, int, int, bool)
+    failed = Signal(object, int, int, int, str)
+
+    def __init__(
+        self,
+        path: Path,
+        payload: dict,
+        generation: int,
+        revision: int,
+        snapshot_id: int,
+    ) -> None:
+        super().__init__()
+        self._path = path
+        self._payload = payload
+        self._generation = generation
+        self._revision = revision
+        self._snapshot_id = snapshot_id
+
+    def run(self) -> None:
+        try:
+            try:
+                written = save_recovery_project(self._path, self._payload)
+            except (OSError, TypeError, ValueError) as exc:
+                self.failed.emit(
+                    self._path,
+                    self._generation,
+                    self._revision,
+                    self._snapshot_id,
+                    str(exc),
+                )
+                return
+            self.saved.emit(
+                self._path,
+                self._generation,
+                self._revision,
+                self._snapshot_id,
+                written,
+            )
+        finally:
+            QThread.currentThread().quit()
+
+
 class _RenderWorker(QObject):
     progressChanged = Signal(int, int)
     logMessage = Signal(str)
@@ -1039,8 +1144,17 @@ class SubtitleRenderWindow(QWidget):
         self._project_dirty = False
         self._project_saving = False
         self._project_save_error: Optional[str] = None
+        self._project_generation = 0
+        self._project_revision = 0
+        self._saved_revision = 0
         self._loading_project = False
         self._syncing_screen_controls = False
+        self._auto_save_enabled = True
+        self._auto_save_interval_minutes = DEFAULT_AUTO_SAVE_INTERVAL_MINUTES
+        self._auto_save_thread: Optional[QThread] = None
+        self._auto_save_worker: Optional[_RecoverySaveWorker] = None
+        self._auto_save_pending = False
+        self._last_auto_save_error = ""
         self._render_thread: Optional[QThread] = None
         self._render_worker: Optional[_RenderWorker] = None
         self._suppress_next_render_command_log = False
@@ -1059,6 +1173,13 @@ class SubtitleRenderWindow(QWidget):
         self._splitter_save_timer.setInterval(400)
         self._splitter_save_timer.timeout.connect(self._save_persisted_state)
         self._load_persisted_state()
+        self._auto_save_timer = QTimer(self)
+        self._auto_save_timer.setSingleShot(True)
+        self._auto_save_timer.setInterval(AUTO_SAVE_DEBOUNCE_MS)
+        self._auto_save_timer.timeout.connect(self._start_recovery_auto_save)
+        self._periodic_auto_save_timer = QTimer(self)
+        self._periodic_auto_save_timer.timeout.connect(self._start_recovery_auto_save)
+        self._apply_auto_save_timer_config()
 
         themed(
             self,
@@ -1079,6 +1200,7 @@ class SubtitleRenderWindow(QWidget):
             self._preview_window.apply_workspace_geometry()
 
     def closeEvent(self, event):  # noqa: N802
+        self._stop_auto_save_runtime(wait=True)
         if hasattr(self, "_preview_window"):
             self._preview_window.close()
         super().closeEvent(event)
@@ -1182,6 +1304,10 @@ class SubtitleRenderWindow(QWidget):
         menu.addAction(Action(FIF.SAVE, "保存", triggered=self._save_project))
         menu.addAction(Action(FIF.SAVE_AS, "另存为", triggered=self._save_project_as))
         menu.addSeparator()
+        menu.addAction(
+            Action(FIF.HISTORY, "自动保存设置…", triggered=self._open_auto_save_settings)
+        )
+        menu.addSeparator()
         menu.addAction(Action(FIF.DOWNLOAD, "导入 N3 项目", triggered=self._import_n3_project))
         self._file_menu_btn.setMenu(menu)
         layout.addWidget(self._file_menu_btn)
@@ -1271,6 +1397,9 @@ class SubtitleRenderWindow(QWidget):
 
     def discard_unsaved(self) -> None:
         """Acknowledge that the current dirty state is intentionally discarded."""
+        self._auto_save_timer.stop()
+        self._auto_save_pending = False
+        self._wait_for_recovery_worker()
         self._set_project_dirty(False)
         self._cleanup_recovery_file()
 
@@ -1279,16 +1408,209 @@ class SubtitleRenderWindow(QWidget):
         return self._render_thread is not None
 
     def _set_project_dirty(self, dirty: bool) -> None:
+        was_dirty = self._project_dirty
         self._project_dirty = bool(dirty)
+        if dirty and not was_dirty:
+            self._project_revision += 1
         if dirty or not self._project_saving:
             self._project_save_error = None
+        if dirty:
+            self._schedule_recovery_auto_save()
+        elif hasattr(self, "_auto_save_timer"):
+            self._auto_save_timer.stop()
         self._refresh_project_title()
 
     def _mark_project_dirty(self) -> None:
         if self._loading_project:
             return
-        if not self._project_dirty:
-            self._set_project_dirty(True)
+        was_dirty = self._project_dirty
+        self._project_revision += 1
+        self._project_dirty = True
+        self._project_save_error = None
+        self._schedule_recovery_auto_save()
+        if not was_dirty:
+            self._refresh_project_title()
+
+    def _begin_project_generation(self) -> None:
+        """Invalidate recovery jobs belonging to the previously loaded project."""
+        self._project_generation += 1
+        self._project_revision = 0
+        self._saved_revision = 0
+        self._auto_save_pending = False
+        if hasattr(self, "_auto_save_timer"):
+            self._auto_save_timer.stop()
+
+    def _open_auto_save_settings(self) -> None:
+        dialog = _AutoSaveSettingsDialog(
+            self._auto_save_enabled,
+            self._auto_save_interval_minutes,
+            self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        enabled, interval = dialog.selection()
+        self._configure_auto_save(enabled, interval, persist=True)
+        InfoBar.success(
+            title="自动保存设置已更新",
+            content=(
+                f"已启用，每 {interval} 分钟保存一次恢复快照。"
+                if enabled
+                else "已关闭字幕项目自动保存。"
+            ),
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=2500,
+        )
+
+    def _configure_auto_save(
+        self,
+        enabled: bool,
+        interval_minutes: int,
+        *,
+        persist: bool,
+    ) -> None:
+        self._auto_save_enabled = bool(enabled)
+        self._auto_save_interval_minutes = max(1, min(60, int(interval_minutes)))
+        self._apply_auto_save_timer_config()
+        if persist:
+            self._save_persisted_state()
+        if self._auto_save_enabled and self._project_dirty:
+            self._schedule_recovery_auto_save()
+
+    def _apply_auto_save_timer_config(self) -> None:
+        if not hasattr(self, "_periodic_auto_save_timer"):
+            return
+        self._periodic_auto_save_timer.setInterval(
+            self._auto_save_interval_minutes * 60 * 1000
+        )
+        if self._auto_save_enabled:
+            self._periodic_auto_save_timer.start()
+        else:
+            self._periodic_auto_save_timer.stop()
+            self._auto_save_timer.stop()
+
+    def _schedule_recovery_auto_save(self) -> None:
+        if (
+            self._auto_save_enabled
+            and not self._loading_project
+            and hasattr(self, "_auto_save_timer")
+        ):
+            self._auto_save_timer.start()
+
+    def _recovery_payload_snapshot(self) -> tuple[dict, int]:
+        snapshot_id = time.time_ns()
+        payload = deepcopy(self._current_project_data())
+        payload["recovery"] = {
+            "source_project_path": str(self._project_path) if self._project_path else None,
+            "created_at_unix": time.time(),
+            "snapshot_id": snapshot_id,
+            "project_generation": self._project_generation,
+            "project_revision": self._project_revision,
+        }
+        return payload, snapshot_id
+
+    def _start_recovery_auto_save(self) -> None:
+        if not self._auto_save_enabled or not self._project_dirty or self._loading_project:
+            return
+        if self._auto_save_thread is not None:
+            self._auto_save_pending = True
+            return
+        payload, snapshot_id = self._recovery_payload_snapshot()
+        path = self._recovery_path()
+        generation = self._project_generation
+        revision = self._project_revision
+        worker = _RecoverySaveWorker(
+            path,
+            payload,
+            generation,
+            revision,
+            snapshot_id,
+        )
+        thread = QThread(self)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.saved.connect(self._on_recovery_auto_save_success)
+        worker.failed.connect(self._on_recovery_auto_save_failure)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(self._finish_recovery_auto_save)
+        self._auto_save_worker = worker
+        self._auto_save_thread = thread
+        thread.start()
+
+    def _on_recovery_auto_save_success(
+        self,
+        path: Path,
+        generation: int,
+        revision: int,
+        snapshot_id: int,
+        _written: bool,
+    ) -> None:
+        self._last_auto_save_error = ""
+        if generation != self._project_generation or revision <= self._saved_revision:
+            self._cleanup_recovery_snapshot(path, snapshot_id)
+            return
+        self._refresh_project_title()
+
+    def _on_recovery_auto_save_failure(
+        self,
+        _path: Path,
+        generation: int,
+        _revision: int,
+        _snapshot_id: int,
+        error: str,
+    ) -> None:
+        logging.getLogger(__name__).warning("字幕项目自动保存失败: %s", error)
+        if generation != self._project_generation or error == self._last_auto_save_error:
+            return
+        self._last_auto_save_error = error
+        InfoBar.warning(
+            title="自动保存失败",
+            content=error,
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=5000,
+        )
+
+    def _finish_recovery_auto_save(self) -> None:
+        self._auto_save_thread = None
+        self._auto_save_worker = None
+        if self._auto_save_pending:
+            self._auto_save_pending = False
+            if self._project_dirty and self._auto_save_enabled:
+                QTimer.singleShot(0, self._start_recovery_auto_save)
+
+    def _stop_auto_save_runtime(self, *, wait: bool) -> None:
+        if hasattr(self, "_auto_save_timer"):
+            self._auto_save_timer.stop()
+        if hasattr(self, "_periodic_auto_save_timer"):
+            self._periodic_auto_save_timer.stop()
+        self._auto_save_pending = False
+        if wait:
+            self._wait_for_recovery_worker()
+
+    def _wait_for_recovery_worker(self) -> bool:
+        thread = self._auto_save_thread
+        if thread is None or not thread.isRunning():
+            return True
+        if thread.wait(AUTO_SAVE_THREAD_WAIT_MS):
+            return True
+        logging.getLogger(__name__).warning("等待字幕项目自动保存线程退出超时")
+        return False
+
+    @staticmethod
+    def _cleanup_recovery_snapshot(path: Path, snapshot_id: int) -> None:
+        try:
+            data = load_render_project(path)
+            recovery = data.get("recovery")
+            current_id = (
+                int(recovery.get("snapshot_id") or 0)
+                if isinstance(recovery, dict)
+                else 0
+            )
+            if current_id == snapshot_id:
+                path.unlink(missing_ok=True)
+        except (OSError, TypeError, ValueError):
+            pass
 
     def _current_project_data(self) -> dict:
         independent_audio = (
@@ -1492,11 +1814,13 @@ class SubtitleRenderWindow(QWidget):
             return False
         if choice == 0:
             return self._save_project()
+        self.discard_unsaved()
         return True
 
     def _new_project(self) -> None:
         if not self._confirm_discard_changes():
             return
+        self._begin_project_generation()
         self._clear_loaded_media()
         self._apply_project_data(
             {
@@ -1572,6 +1896,7 @@ class SubtitleRenderWindow(QWidget):
             fluent_error(self, "打开项目失败", f"无法读取项目文件：\n{path}\n\n{exc}")
             return False
         missing_resources = self._missing_project_resources(data)
+        self._begin_project_generation()
         self._clear_loaded_media()
         self._apply_project_data(data)
         self._project_path = path
@@ -1669,6 +1994,7 @@ class SubtitleRenderWindow(QWidget):
                 self, "导入失败", f"无法读取 NicoKaraMaker3 项目文件：\n{path_str}\n\n{exc}"
             )
             return
+        self._begin_project_generation()
         self._clear_loaded_media()
         self._apply_project_data(result.project_data)
         # 导入的是外来工程：保存时必须另存为 .yurika，因此视为未命名 + 有改动。
@@ -1712,6 +2038,11 @@ class SubtitleRenderWindow(QWidget):
 
     def _write_project(self, path: Path) -> bool:
         previous_recovery_path = self._recovery_path()
+        invalidate_recovery_project(previous_recovery_path, delete=False)
+        self._auto_save_timer.stop()
+        self._auto_save_pending = False
+        self._wait_for_recovery_worker()
+        revision_at_save = self._project_revision
         self._project_saving = True
         self._project_save_error = None
         self._refresh_project_title()
@@ -1721,9 +2052,11 @@ class SubtitleRenderWindow(QWidget):
             self._project_saving = False
             self._project_save_error = str(exc)
             self._refresh_project_title()
+            self._schedule_recovery_auto_save()
             fluent_error(self, "保存项目失败", f"无法写入项目文件：\n{path}\n\n{exc}")
             return False
         self._project_path = path
+        self._saved_revision = revision_at_save
         self._project_saving = False
         self._project_save_error = None
         self._set_project_dirty(False)
@@ -3858,6 +4191,18 @@ class SubtitleRenderWindow(QWidget):
         if isinstance(ratio, (int, float)):
             # 钳到两侧都还能正常操作的区间，坏数据回落默认 4:6
             self._preview_splitter_ratio = min(max(float(ratio), 0.15), 0.85)
+        auto_save = data.get("auto_save")
+        if isinstance(auto_save, dict):
+            self._auto_save_enabled = bool(auto_save.get("enabled", True))
+            try:
+                interval = int(
+                    auto_save.get(
+                        "interval_minutes", DEFAULT_AUTO_SAVE_INTERVAL_MINUTES
+                    )
+                )
+            except (TypeError, ValueError):
+                interval = DEFAULT_AUTO_SAVE_INTERVAL_MINUTES
+            self._auto_save_interval_minutes = max(1, min(60, interval))
         if style_changed or presets_changed:
             self._save_persisted_state()
 
@@ -3904,6 +4249,10 @@ class SubtitleRenderWindow(QWidget):
             else "global"
         )
         data["preview_splitter_ratio"] = round(self._preview_splitter_ratio, 4)
+        data["auto_save"] = {
+            "enabled": bool(self._auto_save_enabled),
+            "interval_minutes": int(self._auto_save_interval_minutes),
+        }
         if hasattr(self, "_export_native_check"):
             output = dict(data.get("output")) if isinstance(data.get("output"), dict) else {}
             output["native_export_enabled"] = False
@@ -4424,21 +4773,137 @@ class SubtitleRenderWindow(QWidget):
         return instance
 
     def flush_unsaved(self) -> None:
-        """Synchronously persist dirty data for updater/forced-exit recovery."""
+        """Persist the latest dirty snapshot with a bounded forced-exit wait."""
         if not self._project_dirty:
             return
+        self._auto_save_timer.stop()
+        self._auto_save_pending = False
+        self._wait_for_recovery_worker()
         recovery_path = self._recovery_path()
-        recovery_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = self._current_project_data()
-        payload["recovery"] = {
-            "source_project_path": str(self._project_path) if self._project_path else None,
-            "created_at_unix": time.time(),
-        }
-        save_render_project(recovery_path, payload)
+        payload, _snapshot_id = self._recovery_payload_snapshot()
+        errors: list[Exception] = []
+
+        def write_snapshot() -> None:
+            try:
+                save_recovery_project(recovery_path, payload)
+            except (OSError, TypeError, ValueError) as exc:
+                errors.append(exc)
+
+        thread = threading.Thread(target=write_snapshot, daemon=True)
+        thread.start()
+        thread.join(AUTO_SAVE_THREAD_WAIT_MS / 1000)
+        if thread.is_alive():
+            logging.getLogger(__name__).warning(
+                "强制退出前写字幕恢复快照超时，保留上一次完整快照"
+            )
+            return
+        if errors:
+            logging.getLogger(__name__).warning(
+                "强制退出前写字幕恢复快照失败: %s", errors[0]
+            )
+            return
         self._refresh_project_title()
 
+    def has_pending_crash_recovery(self) -> bool:
+        candidates, invalid, stale = scan_recovery_projects(self._recovery_root())
+        for path in stale:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        return bool(candidates or invalid)
+
+    def check_crash_recovery(self, dialog_parent: Optional[QWidget] = None) -> bool:
+        """Prompt for valid and corrupt recovery files; return True if restored."""
+        parent = dialog_parent or self
+        candidates, invalid, stale = scan_recovery_projects(self._recovery_root())
+        for path in stale:
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        for path in invalid:
+            choice = fluent_choice(
+                parent,
+                "字幕项目恢复文件损坏",
+                f"无法读取以下恢复文件：\n{path}\n\n可以删除该文件，或保留以便手动检查。",
+                ("删除", "保留"),
+                default=1,
+            )
+            if choice == 0:
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError as exc:
+                    fluent_error(parent, "删除恢复文件失败", f"{path}\n\n{exc}")
+
+        for candidate in candidates:
+            source = candidate.source_project_path
+            source_text = str(source) if source is not None else "未命名字幕项目"
+            saved_at = datetime.fromtimestamp(candidate.created_at_unix).strftime(
+                "%Y-%m-%d %H:%M:%S"
+            )
+            choice = fluent_choice(
+                parent,
+                "发现字幕项目恢复数据",
+                f"项目：{source_text}\n恢复快照时间：{saved_at}\n\n是否恢复？",
+                ("恢复", "放弃", "稍后处理"),
+                default=2,
+            )
+            if choice == 1:
+                try:
+                    candidate.path.unlink(missing_ok=True)
+                except OSError as exc:
+                    fluent_error(parent, "删除恢复文件失败", f"{candidate.path}\n\n{exc}")
+                continue
+            if choice != 0:
+                continue
+            if self._restore_recovery_candidate(candidate):
+                return True
+        return False
+
+    def _restore_recovery_candidate(self, candidate: RecoveryCandidate) -> bool:
+        try:
+            data = load_render_project(candidate.path)
+        except (OSError, ValueError) as exc:
+            fluent_error(
+                self,
+                "恢复字幕项目失败",
+                f"无法读取恢复文件：\n{candidate.path}\n\n{exc}",
+            )
+            return False
+        data.pop("recovery", None)
+        missing_resources = self._missing_project_resources(data)
+        self._begin_project_generation()
+        self._clear_loaded_media()
+        self._apply_project_data(data)
+        self._project_path = candidate.source_project_path
+        self._set_project_dirty(True)
+        if missing_resources:
+            fluent_warning(
+                self,
+                "项目已恢复，但部分素材未找到",
+                "以下素材路径无效，已跳过加载：\n\n"
+                + "\n".join(
+                    f"• {label}：{path}" for label, path in missing_resources
+                ),
+                copyable=True,
+            )
+        InfoBar.success(
+            title="字幕项目已恢复",
+            content="恢复内容尚未写入正式项目，请及时保存。",
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=5000,
+        )
+        return True
+
+    @staticmethod
+    def _recovery_root() -> Path:
+        return get_settings_path().parent / "subtitle_render_recovery"
+
     def _recovery_path(self) -> Path:
-        root = get_settings_path().parent / "subtitle_render_recovery"
+        root = self._recovery_root()
         if self._project_path is None:
             return root / "untitled.yurika.recovery"
         identity = str(self._project_path.resolve()).encode("utf-8", errors="surrogatepass")
@@ -4447,10 +4912,7 @@ class SubtitleRenderWindow(QWidget):
 
     def _cleanup_recovery_file(self, path: Optional[Path] = None) -> None:
         target = path or self._recovery_path()
-        try:
-            target.unlink(missing_ok=True)
-        except OSError:
-            pass
+        invalidate_recovery_project(target)
 
 
 def _style_presets_from_dict(payload: object) -> dict[str, StylePreset]:

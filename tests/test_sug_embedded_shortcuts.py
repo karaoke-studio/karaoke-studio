@@ -215,40 +215,22 @@ def test_save_project_page_for_close_requires_dirty_state_to_clear() -> None:
 
 
 def test_unsaved_project_confirmation_saves_both_modules(monkeypatch) -> None:
-    real_message_box = gui_qt.QMessageBox
+    dialog_call: dict[str, object] = {}
 
-    class FakeMessageBox:
-        Icon = real_message_box.Icon
-        ButtonRole = real_message_box.ButtonRole
+    def fake_fluent_choice(parent, title, content, buttons, *, default):
+        dialog_call.update(
+            parent=parent,
+            title=title,
+            content=content,
+            buttons=tuple(buttons),
+            default=default,
+        )
+        return 0
 
-        def __init__(self, _parent=None) -> None:
-            self.buttons: dict[str, object] = {}
-            self.clicked = None
-
-        def setIcon(self, _icon) -> None:  # noqa: N802
-            pass
-
-        def setWindowTitle(self, _title: str) -> None:  # noqa: N802
-            pass
-
-        def setText(self, _text: str) -> None:  # noqa: N802
-            pass
-
-        def addButton(self, text: str, _role):  # noqa: N802
-            button = object()
-            self.buttons[text] = button
-            return button
-
-        def setDefaultButton(self, _button) -> None:  # noqa: N802
-            pass
-
-        def exec(self) -> None:
-            self.clicked = self.buttons["全部保存"]
-
-        def clickedButton(self):  # noqa: N802
-            return self.clicked
-
-    monkeypatch.setattr(gui_qt, "QMessageBox", FakeMessageBox)
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        fake_fluent_choice,
+    )
     timing_page = _FakeProjectPage()
     subtitle_page = _FakeProjectPage()
     app = SimpleNamespace(
@@ -261,6 +243,13 @@ def test_unsaved_project_confirmation_saves_both_modules(monkeypatch) -> None:
     assert timing_page.save_count == 1
     assert subtitle_page.save_count == 1
     assert event.ignored is False
+    assert dialog_call == {
+        "parent": app,
+        "title": "未保存的更改",
+        "content": "以下项目有未保存的更改：\n\n• 歌词打轴\n• 字幕视频生成\n\n是否在退出前全部保存？",
+        "buttons": ("全部保存", "全部放弃", "取消"),
+        "default": 0,
+    }
 
 
 def test_request_force_quit_closes_before_scheduling_hard_exit(monkeypatch) -> None:
