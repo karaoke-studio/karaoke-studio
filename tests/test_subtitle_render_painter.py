@@ -1143,7 +1143,10 @@ def _glow_after_style() -> Style:
 def test_after_glow_layer_clip_releases_line_edges_when_fully_sung(qapp):
     track = _track()
     line = track.lines[0]
-    layout = _layout_line(track, line, _glow_after_style(), 800, 450)
+    style = replace(
+        _glow_after_style(), glow_before_radius_px=10, glow_after_radius_px=12
+    )
+    layout = _layout_line(track, line, style, 800, 450)
     assert layout is not None
     ctx = LayerContext(t_ms=0, logical_w=800, logical_h=450)
 
@@ -1172,7 +1175,10 @@ def test_after_glow_layer_clip_releases_line_edges_when_fully_sung(qapp):
 def test_after_glow_layer_is_dynamic_until_run_is_complete(qapp):
     track = _track()
     line = track.lines[0]
-    layout = _layout_line(track, line, _glow_after_style(), 800, 450)
+    style = replace(
+        _glow_after_style(), glow_before_radius_px=10, glow_after_radius_px=12
+    )
+    layout = _layout_line(track, line, style, 800, 450)
     assert layout is not None
     ctx = LayerContext(t_ms=0, logical_w=800, logical_h=450)
 
@@ -1200,7 +1206,10 @@ def test_after_glow_layer_is_dynamic_until_run_is_complete(qapp):
 def test_after_glow_dynamic_paints_clipped_source_before_blur(qapp, monkeypatch):
     track = _track()
     line = track.lines[0]
-    layout = _layout_line(track, line, _glow_after_style(), 800, 450)
+    style = replace(
+        _glow_after_style(), glow_before_radius_px=10, glow_after_radius_px=12
+    )
+    layout = _layout_line(track, line, style, 800, 450)
     assert layout is not None
     layers = [
         item
@@ -1229,6 +1238,146 @@ def test_after_glow_dynamic_paints_clipped_source_before_blur(qapp, monkeypatch)
 
     assert seen
     assert seen[0] is not None
+
+
+def test_equal_radius_glow_combines_dynamic_front_and_reuses_full_cache(
+    qapp, monkeypatch
+):
+    track = _track()
+    line = track.lines[0]
+    layout = _layout_line(track, line, _glow_after_style(), 800, 450)
+    assert layout is not None
+    stack = _line_layer_stack(layout, 1700)
+    layers = [
+        item
+        for item in stack
+        if isinstance(item, subtitle_painter._GlyphRunSplitGlowLayer)
+    ]
+    assert len(layers) == 1
+    assert not any(isinstance(item, _GlyphRunAfterGlowLayer) for item in stack)
+
+    split_calls = 0
+    blit_states: list[bool] = []
+    original_split = subtitle_painter._paint_split_glow_path
+    original_blit = subtitle_painter._blit_cached_run_glow
+
+    def _count_split(*args, **kwargs):
+        nonlocal split_calls
+        split_calls += 1
+        assert kwargs.get("target_clip") is not None
+        return original_split(*args, **kwargs)
+
+    def _count_blit(*args, **kwargs):
+        blit_states.append(bool(kwargs["after"]))
+        return original_blit(*args, **kwargs)
+
+    monkeypatch.setattr(subtitle_painter, "_paint_split_glow_path", _count_split)
+    monkeypatch.setattr(subtitle_painter, "_blit_cached_run_glow", _count_blit)
+    clear_before_layer_cache()
+    image = _blank()
+    painter = QPainter(image)
+    try:
+        layers[0].paint_dynamic(
+            painter,
+            LayerContext(t_ms=1700, logical_w=800, logical_h=450),
+            layers[0],
+        )
+    finally:
+        painter.end()
+
+    assert split_calls == 1
+    assert blit_states == [False, True]
+    assert len(_RUN_GLOW_CACHE) == 2
+
+
+def test_equal_radius_ruby_glow_reuses_full_cache_around_dynamic_front(
+    qapp, monkeypatch
+):
+    track = _track_with_ruby()
+    line = track.lines[0]
+    style = replace(
+        _glow_after_style(),
+        font_size_px=64,
+        ruby_font_size_px=30,
+        ruby_decoration_kind="glow",
+        ruby_glow_before_radius_px=12,
+        ruby_glow_after_radius_px=12,
+    )
+    layout = _layout_line(track, line, style, 800, 450)
+    assert layout is not None
+    layers = subtitle_painter._ruby_glow_layers(
+        list(layout.ruby_layouts),
+        layout.ruby_font,
+        layout.ruby_metrics,
+        1500,
+        style,
+        layout.rtl,
+    )
+    assert len(layers) == 1
+    assert isinstance(layers[0], subtitle_painter._RubySplitGlowLayer)
+
+    split_calls = 0
+    blit_states: list[bool] = []
+    original_split = subtitle_painter._paint_split_glow_path
+    original_blit = subtitle_painter._blit_cached_ruby_glow
+
+    def _count_split(*args, **kwargs):
+        nonlocal split_calls
+        split_calls += 1
+        assert kwargs.get("target_clip") is not None
+        return original_split(*args, **kwargs)
+
+    def _count_blit(*args, **kwargs):
+        blit_states.append(bool(kwargs["after"]))
+        return original_blit(*args, **kwargs)
+
+    monkeypatch.setattr(subtitle_painter, "_paint_split_glow_path", _count_split)
+    monkeypatch.setattr(subtitle_painter, "_blit_cached_ruby_glow", _count_blit)
+    clear_before_layer_cache()
+    image = _blank()
+    painter = QPainter(image)
+    try:
+        layers[0].paint_dynamic(
+            painter,
+            LayerContext(t_ms=1500, logical_w=800, logical_h=450),
+            layers[0],
+        )
+    finally:
+        painter.end()
+
+    assert split_calls == 1
+    assert blit_states == [False, True]
+    assert len(_TEXT_RUN_LAYER_CACHE) == 2
+
+
+def test_split_glow_dynamic_result_is_limited_to_target_strip(qapp):
+    image = QImage(200, 100, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+    path = QPainterPath()
+    path.addRect(QRectF(20, 25, 160, 50))
+    target = QRectF(90, 0, 20, 100)
+    painter = QPainter(image)
+    try:
+        subtitle_painter._paint_split_glow_path(
+            painter,
+            path,
+            _solid_fill("#FF0000"),
+            _solid_fill("#0000FF"),
+            QRectF(20, 25, 160, 50),
+            10,
+            4,
+            0,
+            before_source_clip=QRectF(100, 0, 100, 100),
+            after_source_clip=QRectF(0, 0, 100, 100),
+            target_clip=target,
+        )
+    finally:
+        painter.end()
+
+    pixels = _image_rgba_array(image)
+    assert np.any(pixels[:, 90:110, 3] > 0)
+    assert not np.any(pixels[:, :90, 3] > 0)
+    assert not np.any(pixels[:, 110:, 3] > 0)
 
 
 def test_after_body_layer_unclipped_when_fully_sung(qapp):
