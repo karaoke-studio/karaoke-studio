@@ -1235,7 +1235,8 @@ def test_after_body_layer_unclipped_when_fully_sung(qapp):
         assert layers
         return [layer.animate(ctx, layer.layout(ctx)).clip_rect for layer in layers]
 
-    # N3 逐字符语义：前一字唱完立即完整释放，当前字仍按自己的扫光线裁切。
+    # N3 连续边界：前一字唱完后仍跟随下一字的扫光线，避免交接处
+    # 额外出现一个强制完整释放的视觉阶段。
     mid = body_clips(1700)
     assert mid[0] is not None
     assert any(clip is not None for clip in mid[1:])
