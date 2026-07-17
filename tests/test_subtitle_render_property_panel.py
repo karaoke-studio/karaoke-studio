@@ -99,9 +99,11 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
         panel._vertical_check,
         panel._rtl_check,
         panel._sync_ending_check,
+        panel._ruby_main_reading_units_check,
     )
 
     assert all(isinstance(checkbox, CheckBox) for checkbox in checkboxes)
+    assert not panel._ruby_main_reading_units_check.isChecked()
 
 
 def test_property_panel_uses_fluent_form_controls(qapp):
@@ -611,6 +613,7 @@ def test_property_panel_set_style_populates_controls(qapp):
         line_lead_in_ms=900,
         line_tail_ms=1100,
         timing_offset_ms=-120,
+        ruby_main_progress_mode="reading_units",
         section_gap_ms=5000,
         sync_ending=True,
         section_ending_mode="clear",
@@ -705,6 +708,7 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._line_lead_spin.value() == 900
     assert panel._line_tail_spin.value() == 1100
     assert panel._line_offset_spin.value() == -120
+    assert panel._ruby_main_reading_units_check.isChecked()
     assert panel._section_gap_spin.value() == 5000
     assert panel._sync_ending_check.isChecked()
     assert panel._section_ending_combo.currentData() == "clear"
@@ -2752,6 +2756,7 @@ def test_property_panel_timing_controls_emit_style(qapp):
         panel._section_ending_combo.findData("clear")
     )
     panel._sync_ending_check.setChecked(True)
+    panel._ruby_main_reading_units_check.setChecked(True)
 
     assert emitted[-1].line_lead_in_ms == 1500
     assert emitted[-1].line_tail_ms == 1200
@@ -2759,6 +2764,23 @@ def test_property_panel_timing_controls_emit_style(qapp):
     assert emitted[-1].section_gap_ms == 6000
     assert emitted[-1].section_ending_mode == "clear"
     assert emitted[-1].sync_ending is True
+    assert emitted[-1].ruby_main_progress_mode == "reading_units"
+
+
+def test_ruby_main_progress_mode_round_trips_and_rejects_unknown_values():
+    restored = style_from_dict(
+        style_to_dict(Style(ruby_main_progress_mode="reading_units"))
+    )
+
+    assert restored.ruby_main_progress_mode == "reading_units"
+    assert (
+        style_from_dict({"ruby_main_progress_mode": "unknown"}).ruby_main_progress_mode
+        == "checkpoint_segments"
+    )
+    assert (
+        style_from_dict({"ruby_main_progress_mode": []}).ruby_main_progress_mode
+        == "checkpoint_segments"
+    )
 
 
 def test_property_panel_animation_controls_emit_style(qapp):

@@ -3878,6 +3878,9 @@ class PropertyPanel(QWidget):
             self._line_lead_spin.setValue(self._style.line_lead_in_ms)
             self._line_tail_spin.setValue(self._style.line_tail_ms)
             self._line_offset_spin.setValue(self._style.timing_offset_ms)
+            self._ruby_main_reading_units_check.setChecked(
+                self._style.ruby_main_progress_mode == "reading_units"
+            )
             self._section_gap_spin.setValue(self._style.section_gap_ms)
             self._lane_gap_spin.setValue(self._style.line_lane_gap_ms)
             self._pair_delay_spin.setValue(self._style.line_pair_second_delay_ms)
@@ -6191,6 +6194,22 @@ class PropertyPanel(QWidget):
             lambda checked: self._update_style(sync_ending=checked)
         )
         layout.addWidget(self._sync_ending_check)
+
+        self._ruby_main_reading_units_check = CheckBox(
+            "正文按注音字符切分（N3 式）", section
+        )
+        self._ruby_main_reading_units_check.setToolTip(
+            "开启后，带注音正文按注音的可视字符数分配走字进度；"
+            "关闭时按注音内部时间点形成的时间段数均分正文。"
+        )
+        self._ruby_main_reading_units_check.toggled.connect(
+            lambda checked: self._update_style(
+                ruby_main_progress_mode=(
+                    "reading_units" if checked else "checkpoint_segments"
+                )
+            )
+        )
+        layout.addWidget(self._ruby_main_reading_units_check)
         return section
 
     def _color_button(self, field_name: str, color: str) -> ColorButton:

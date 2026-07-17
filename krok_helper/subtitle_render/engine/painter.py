@@ -140,6 +140,8 @@ class _FillSegment:
     indices: tuple[int, ...] = ()
     release_left: int | None = None
     release_right: int | None = None
+    ruby_base_index: int | None = None
+    ruby_base_count: int = 1
 
 
 @dataclass(frozen=True)
@@ -3600,7 +3602,14 @@ def _paint_line_vertical_direct(
 ) -> None:
     """竖排逐帧直绘（旧路径，A/B oracle + env 回退）。"""
     stroke2_width = _main_stroke2_width(style)
-    band = _vertical_fill_band(layout.cells, layout.intervals, t_ms)
+    band = _vertical_fill_band(
+        layout.cells,
+        layout.intervals,
+        t_ms,
+        line=line,
+        active_rubies=layout.active_rubies,
+        ruby_main_progress_mode=style.ruby_main_progress_mode,
+    )
     # 「未唱」层。N3 硬分割：发光存在且已唱层会覆盖已唱带时，未唱层整体裁到
     # 扫光线之下（见 _vertical_before_clip_rect 注释）。
     before_clip = None
@@ -3816,7 +3825,14 @@ def _vertical_layer_stack(
     layers: list = []
     stroke2_width = _main_stroke2_width(style)
     main_sig = _vertical_main_path_sig(line, style, layout)
-    band = _vertical_fill_band(layout.cells, layout.intervals, t_ms)
+    band = _vertical_fill_band(
+        layout.cells,
+        layout.intervals,
+        t_ms,
+        line=line,
+        active_rubies=layout.active_rubies,
+        ruby_main_progress_mode=style.ruby_main_progress_mode,
+    )
     # N3 硬分割：与 _paint_line_vertical_direct 同口径的未唱层互补裁剪。
     before_clip = None
     if (
@@ -4272,14 +4288,40 @@ def _vertical_fill_band(
     cells: list[tuple[int, int]],
     intervals: list[tuple[int, int]],
     t_ms: int,
+    *,
+    line: TimingLine | None = None,
+    active_rubies: list[RubyAnnotation] | None = None,
+    ruby_main_progress_mode: str = "checkpoint_segments",
 ) -> tuple[int, int] | None:
     """竖排已唱区 ``(y_top, y_scan)``：扫光从首字符顶向下推进；空带返回 None。"""
     if not cells:
         return None
     y_top = cells[0][0]
     scan = float(y_top)
-    for (cell_top, cell_bottom), (start, end) in zip(cells, intervals):
-        ratio = char_fill_ratio(start, end, t_ms)
+    ruby_groups = (
+        _resolve_char_ruby_groups(active_rubies, line, intervals)
+        if ruby_main_progress_mode == "reading_units"
+        and line is not None
+        and active_rubies
+        else None
+    )
+    for index, ((cell_top, cell_bottom), (start, end)) in enumerate(
+        zip(cells, intervals)
+    ):
+        ratio = (
+            _character_fill_ratio(
+                line,
+                intervals,
+                cells,
+                active_rubies or [],
+                index,
+                t_ms,
+                groups=ruby_groups,
+                ruby_main_progress_mode=ruby_main_progress_mode,
+            )
+            if ruby_groups is not None and line is not None
+            else char_fill_ratio(start, end, t_ms)
+        )
         if ratio <= 0.0:
             break
         if ratio >= 1.0:
@@ -4593,6 +4635,7 @@ def _layout_plain_line(
     fill_segments = _karaoke_fill_segments(
         char_widths, intervals, ink_x_ranges, active_rubies, line,
         release_x_ranges=wipe_x_ranges,
+        ruby_main_progress_mode=style.ruby_main_progress_mode,
     )
     line_rect = QRectF(
         float(x0), float(y - metrics.ascent()), float(total_w), float(metrics.height()),
@@ -5136,6 +5179,7 @@ def _layout_role_line(
     fill_segments = _karaoke_fill_segments(
         char_widths, intervals, ink_x_ranges, active_rubies, line,
         release_x_ranges=wipe_x_ranges,
+        ruby_main_progress_mode=style.ruby_main_progress_mode,
     )
     ruby_layouts = tuple(
         _layout_rubies(
@@ -7587,7 +7631,9 @@ def _paint_role_line_with_character_transition(
         if in_utopia_exit:
             ratio = 1.0
         elif group_ruby is not None:
-            ratio = _main_text_ruby_progress_ratio(group_ruby, t_ms)
+            ratio = _main_text_ruby_progress_ratio(
+                group_ruby, t_ms, mode=style.ruby_main_progress_mode
+            )
         else:
             ratio = _character_fill_ratio(
                 line,
@@ -7597,6 +7643,7 @@ def _paint_role_line_with_character_transition(
                 index,
                 t_ms,
                 groups=ruby_groups,
+                ruby_main_progress_mode=style.ruby_main_progress_mode,
             )
         for run in _glyph_runs_for_indices(glyphs_by_index, indices):
             role_style = run[0].style
@@ -7928,10 +7975,19 @@ def _paint_line_with_character_transition(
         if in_utopia_exit:
             fill_ratio = 1.0
         elif group_ruby is not None:
-            fill_ratio = _main_text_ruby_progress_ratio(group_ruby, t_ms)
+            fill_ratio = _main_text_ruby_progress_ratio(
+                group_ruby, t_ms, mode=style.ruby_main_progress_mode
+            )
         else:
             fill_ratio = _character_fill_ratio(
-                line, intervals, fill_ranges, active_rubies, index, t_ms, groups=ruby_groups
+                line,
+                intervals,
+                fill_ranges,
+                active_rubies,
+                index,
+                t_ms,
+                groups=ruby_groups,
+                ruby_main_progress_mode=style.ruby_main_progress_mode,
             )
 
         path = QPainterPath()
@@ -9061,6 +9117,7 @@ def _karaoke_fill_segments(
     line: TimingLine,
     *,
     release_x_ranges: list[tuple[int, int]] | None = None,
+    ruby_main_progress_mode: str = "checkpoint_segments",
 ) -> list[_FillSegment]:
     """构造走字分段。``ink_x_ranges`` 为各字符的墨水边界（非 advance 框），
     扫光锋面据此推进，确保不扫过字形两侧的透明空白（见 :func:`_char_ink_x_ranges`）。"""
@@ -9112,20 +9169,48 @@ def _karaoke_fill_segments(
             index += 1
             continue
 
-        left = min(ink_x_ranges[i][0] for i in indices)
-        right = max(ink_x_ranges[i][1] for i in indices)
-        release_left = min(release_x_ranges[i][0] for i in indices)
-        release_right = max(release_x_ranges[i][1] for i in indices)
-        segments.append(
-            _FillSegment(
-                left=left,
-                right=right,
-                release_left=release_left,
-                release_right=release_right,
-                ruby=_effective_ruby_for_target(ruby, indices, intervals),
-                indices=tuple(indices),
-            )
+        effective_ruby = _effective_ruby_for_target(ruby, indices, intervals)
+        reading_unit_mode = (
+            ruby_main_progress_mode == "reading_units"
+            and bool(_ruby_visual_units_and_intervals(effective_ruby))
         )
+        if reading_unit_mode:
+            base_count = len(indices)
+            for base_index, target_index in enumerate(indices):
+                left, right = ink_x_ranges[target_index]
+                release_left, release_right = release_x_ranges[target_index]
+                slot_start, slot_end = _ruby_main_text_slot_times(
+                    effective_ruby, base_index, base_count
+                )
+                segments.append(
+                    _FillSegment(
+                        left=left,
+                        right=right,
+                        release_left=release_left,
+                        release_right=release_right,
+                        start_ms=slot_start,
+                        end_ms=slot_end,
+                        ruby=effective_ruby,
+                        indices=(target_index,),
+                        ruby_base_index=base_index,
+                        ruby_base_count=base_count,
+                    )
+                )
+        else:
+            left = min(ink_x_ranges[i][0] for i in indices)
+            right = max(ink_x_ranges[i][1] for i in indices)
+            release_left = min(release_x_ranges[i][0] for i in indices)
+            release_right = max(release_x_ranges[i][1] for i in indices)
+            segments.append(
+                _FillSegment(
+                    left=left,
+                    right=right,
+                    release_left=release_left,
+                    release_right=release_right,
+                    ruby=effective_ruby,
+                    indices=tuple(indices),
+                )
+            )
         index = max(indices) + 1
     return _adjust_fill_release_edges(segments)
 
@@ -9296,6 +9381,8 @@ def _segment_wipe_edges(segment: _FillSegment) -> tuple[int, int]:
 
 def _segment_wipe_times(segment: _FillSegment) -> tuple[int, int]:
     """Return the effective N3 wipe window for one main-text segment."""
+    if segment.ruby_base_index is not None:
+        return int(segment.start_ms), int(segment.end_ms)
     if segment.ruby is not None:
         return int(segment.ruby.pos_start_ms), int(segment.ruby.pos_end_ms)
     return int(segment.start_ms), int(segment.end_ms)
@@ -9502,6 +9589,18 @@ def _run_fill_complete(
 def _segment_fill_ratio(segment: _FillSegment, t_ms: int) -> float:
     if segment.ruby is None:
         return char_fill_ratio(segment.start_ms, segment.end_ms, t_ms)
+    if segment.ruby_base_index is not None:
+        progress = _main_text_ruby_progress_ratio(
+            segment.ruby, t_ms, mode="reading_units"
+        )
+        return max(
+            0.0,
+            min(
+                1.0,
+                progress * max(segment.ruby_base_count, 1)
+                - segment.ruby_base_index,
+            ),
+        )
     return _main_text_ruby_progress_ratio(segment.ruby, t_ms)
 
 
@@ -9514,6 +9613,7 @@ def _character_fill_ratio(
     t_ms: int,
     *,
     groups: dict[int, tuple[list[int], RubyAnnotation]] | None = None,
+    ruby_main_progress_mode: str = "checkpoint_segments",
 ) -> float:
     # groups 由 _resolve_char_ruby_groups 预建（每行一次）；缺省回退逐字查找。
     if groups is not None:
@@ -9537,6 +9637,18 @@ def _character_fill_ratio(
         ]
         if indices:
             effective_ruby = _effective_ruby_for_target(ruby, indices, intervals)
+            if (
+                ruby_main_progress_mode == "reading_units"
+                and _ruby_visual_units_and_intervals(effective_ruby)
+            ):
+                base_index = indices.index(index)
+                progress = _main_text_ruby_progress_ratio(
+                    effective_ruby, t_ms, mode="reading_units"
+                )
+                return max(
+                    0.0,
+                    min(1.0, progress * len(indices) - base_index),
+                )
             group_left = min(char_x_ranges[candidate][0] for candidate in indices)
             group_right = max(char_x_ranges[candidate][1] for candidate in indices)
             fill_end = group_left + (group_right - group_left) * _main_text_ruby_progress_ratio(
@@ -12699,18 +12811,121 @@ def _ruby_visual_units_and_intervals(
     return result
 
 
-def _main_text_ruby_progress_ratio(ruby: RubyAnnotation, t_ms: int) -> float:
-    """Return SUG-style multi-checkpoint progress for the ruby's base text.
+def _ruby_reading_unit_progress_points(
+    ruby: RubyAnnotation,
+) -> list[tuple[int, float]]:
+    """Return time/progress points for visible ruby characters.
 
-    ``@Ruby`` stores every checkpoint after the first as a relative timestamp.
-    Ruby rendering interprets those timestamps against reading/mora units (and
-    can treat alternating timestamps as pauses).  SUG main text does something
-    deliberately different: ``char_part_anchors`` divides the base glyph's
-    horizontal progress equally by checkpoint segment, regardless of reading
-    unit count or width.  Keep that main-text clock separate from
-    :func:`_ruby_progress_ratio` so placeholder/empty ruby parts still advance
-    the base glyph exactly as SUG does.
+    Every visible text element owns one equal spatial share.  Both ends of
+    each element are retained so an empty exported part becomes a real
+    progress plateau instead of being smoothed across as if it were text.
     """
+    timed_units = _ruby_visual_units_and_intervals(ruby)
+    if not timed_units:
+        return []
+    count = len(timed_units)
+    raw_points: list[tuple[int, float]] = []
+    for index, (_unit, (start, end)) in enumerate(timed_units):
+        start = int(start)
+        end = max(start, int(end))
+        raw_points.append((start, index / count))
+        raw_points.append((end, (index + 1) / count))
+
+    # Zero-duration units can place multiple progress values at one time.
+    # Keep the furthest value so the unit completes instantaneously there.
+    points: list[tuple[int, float]] = []
+    for timestamp, progress in raw_points:
+        if points and timestamp == points[-1][0]:
+            points[-1] = (timestamp, max(points[-1][1], progress))
+        else:
+            points.append((timestamp, progress))
+    return points
+
+
+def _reading_unit_progress_ratio(ruby: RubyAnnotation, t_ms: int) -> float | None:
+    points = _ruby_reading_unit_progress_points(ruby)
+    if not points:
+        return None
+    if t_ms < points[0][0]:
+        return 0.0
+    if t_ms >= points[-1][0]:
+        return 1.0
+    for (start_ms, start_progress), (end_ms, end_progress) in zip(
+        points, points[1:]
+    ):
+        if t_ms < end_ms:
+            if end_ms <= start_ms or end_progress <= start_progress:
+                return start_progress
+            local = (t_ms - start_ms) / (end_ms - start_ms)
+            return start_progress + (end_progress - start_progress) * local
+    return 1.0
+
+
+def _ruby_progress_time_at_ratio(
+    ruby: RubyAnnotation,
+    target: float,
+    *,
+    plateau_side: str,
+) -> int:
+    """Invert reading-unit progress, choosing either side of a pause plateau."""
+    points = _ruby_reading_unit_progress_points(ruby)
+    if not points:
+        start = int(ruby.pos_start_ms)
+        end = max(start, int(ruby.pos_end_ms))
+        return int(round(start + (end - start) * max(0.0, min(1.0, target))))
+    target = max(0.0, min(1.0, target))
+    if target <= 0.0:
+        return points[0][0]
+    if target >= 1.0:
+        return points[-1][0]
+
+    exact_times = [timestamp for timestamp, progress in points if progress == target]
+    if exact_times:
+        return min(exact_times) if plateau_side == "left" else max(exact_times)
+    for (start_ms, start_progress), (end_ms, end_progress) in zip(
+        points, points[1:]
+    ):
+        if start_progress < target < end_progress:
+            local = (target - start_progress) / (end_progress - start_progress)
+            return int(round(start_ms + (end_ms - start_ms) * local))
+    return points[-1][0]
+
+
+def _ruby_main_text_slot_times(
+    ruby: RubyAnnotation,
+    base_index: int,
+    base_count: int,
+) -> tuple[int, int]:
+    count = max(int(base_count), 1)
+    start = _ruby_progress_time_at_ratio(
+        ruby, base_index / count, plateau_side="right"
+    )
+    end = _ruby_progress_time_at_ratio(
+        ruby, (base_index + 1) / count, plateau_side="left"
+    )
+    return start, max(start, end)
+
+
+def _main_text_ruby_progress_ratio(
+    ruby: RubyAnnotation,
+    t_ms: int,
+    *,
+    mode: str = "checkpoint_segments",
+) -> float:
+    """Return the selected progress clock for the ruby's base text.
+
+    The historical ``checkpoint_segments`` mode divides base-text progress
+    equally by checkpoint segment.  ``reading_units`` instead gives every
+    visible ruby text element one equal share and preserves empty-part pauses;
+    callers then map that normalized reading position across the covered base
+    characters.  Both clocks stay separate from :func:`_ruby_progress_ratio`,
+    whose spatial weights follow rendered ruby widths.
+    """
+    if mode == "reading_units":
+        reading_progress = _reading_unit_progress_ratio(ruby, t_ms)
+        if reading_progress is not None:
+            return reading_progress
+
     if not ruby.reading_part_ms:
         return char_fill_ratio(ruby.pos_start_ms, ruby.pos_end_ms, t_ms)
 

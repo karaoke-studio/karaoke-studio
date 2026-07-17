@@ -1472,6 +1472,33 @@ def test_vertical_fill_band_grows_downward(qapp):
     assert _vertical_fill_band(cells, intervals, 1500) == (100, 250)
 
 
+def test_vertical_reading_unit_mode_uses_same_base_character_mapping(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="一", start_ms=1_000),
+            TimingChar(text="滴", start_ms=2_000),
+        ],
+        end_ms=4_000,
+    )
+    ruby = RubyAnnotation(
+        kanji="一滴",
+        reading="いってき",
+        reading_part_ms=[1_000, 2_000],
+        reading_parts=["いっ", "て", "き"],
+        pos_start_ms=1_000,
+        pos_end_ms=4_000,
+    )
+
+    assert _vertical_fill_band(
+        [(100, 200), (200, 300)],
+        [(1_000, 2_000), (2_000, 4_000)],
+        3_000,
+        line=line,
+        active_rubies=[ruby],
+        ruby_main_progress_mode="reading_units",
+    ) == (100, 250)
+
+
 def test_layout_vertical_line_is_pure_t_independent_geometry(qapp):
     track = _track()
     style = Style(vertical=True, line_y_position="center")
@@ -3613,6 +3640,112 @@ def test_main_text_uses_all_ruby_checkpoints_even_when_reading_units_are_missing
         0,
         5200,
     ) == pytest.approx(4 / 9)
+
+
+def test_reading_unit_mode_tracks_visible_ruby_characters(qapp):
+    ruby = RubyAnnotation(
+        kanji="頁",
+        reading="ぺーじ",
+        reading_part_ms=[750],
+        reading_parts=["ぺー", "じ"],
+        pos_start_ms=69_080,
+        pos_end_ms=70_130,
+    )
+
+    # 69_642.5 ms is halfway through the long-vowel unit.  The historical
+    # two-checkpoint clock is only 3/8 through the base glyph, while the N3
+    # reading-unit clock is halfway through the three visible ruby units.
+    assert _main_text_ruby_progress_ratio(ruby, 69_643) == pytest.approx(
+        0.375,
+        abs=0.002,
+    )
+    assert _main_text_ruby_progress_ratio(
+        ruby, 69_643, mode="reading_units"
+    ) == pytest.approx(0.5, abs=0.002)
+
+
+def test_reading_unit_mode_maps_ruby_units_across_multiple_base_chars(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="一", start_ms=1_000),
+            TimingChar(text="滴", start_ms=2_000),
+        ],
+        end_ms=4_000,
+    )
+    intervals = [(1_000, 2_000), (2_000, 4_000)]
+    ranges = [(0, 100), (100, 200)]
+    ruby = RubyAnnotation(
+        kanji="一滴",
+        reading="いってき",
+        reading_part_ms=[1_000, 2_000],
+        reading_parts=["いっ", "て", "き"],
+        pos_start_ms=1_000,
+        pos_end_ms=4_000,
+    )
+
+    legacy = _karaoke_fill_segments(
+        [100, 100], intervals, ranges, [ruby], line
+    )
+    reading_units = _karaoke_fill_segments(
+        [100, 100],
+        intervals,
+        ranges,
+        [ruby],
+        line,
+        ruby_main_progress_mode="reading_units",
+    )
+
+    assert len(legacy) == 1
+    assert len(reading_units) == 2
+    assert _character_fill_ratio(
+        line,
+        intervals,
+        ranges,
+        [ruby],
+        0,
+        2_000,
+        ruby_main_progress_mode="reading_units",
+    ) == pytest.approx(1.0)
+    assert _character_fill_ratio(
+        line,
+        intervals,
+        ranges,
+        [ruby],
+        1,
+        2_000,
+        ruby_main_progress_mode="reading_units",
+    ) == pytest.approx(0.0)
+    assert _character_fill_ratio(
+        line,
+        intervals,
+        ranges,
+        [ruby],
+        1,
+        3_000,
+        ruby_main_progress_mode="reading_units",
+    ) == pytest.approx(0.5)
+    assert _fill_extent_end(reading_units, 3_000) == 150
+
+
+def test_reading_unit_mode_preserves_empty_part_pause(qapp):
+    ruby = RubyAnnotation(
+        kanji="字",
+        reading="あい",
+        reading_part_ms=[200, 500],
+        reading_parts=["あ", "", "い"],
+        pos_start_ms=1_000,
+        pos_end_ms=2_000,
+    )
+
+    assert _main_text_ruby_progress_ratio(
+        ruby, 1_200, mode="reading_units"
+    ) == pytest.approx(0.5)
+    assert _main_text_ruby_progress_ratio(
+        ruby, 1_350, mode="reading_units"
+    ) == pytest.approx(0.5)
+    assert _main_text_ruby_progress_ratio(
+        ruby, 1_499, mode="reading_units"
+    ) == pytest.approx(0.5)
 
 
 def test_ruby_progress_uses_rendered_part_widths(qapp):

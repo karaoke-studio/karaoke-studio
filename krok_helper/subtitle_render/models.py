@@ -28,6 +28,7 @@ from typing import Literal, Optional
 LineBreakKind = Literal["none", "page", "paragraph"]
 EntryAnimation = Literal["none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"]
 ExitAnimation = Literal["none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"]
+RubyMainProgressMode = Literal["checkpoint_segments", "reading_units"]
 
 SCHEMA_VERSION = 1
 PROJECT_FILE_SUFFIX = ".yurika"
@@ -926,6 +927,13 @@ class Style:
     timing_offset_ms: int = 0
     """字幕整体时间偏移。正值延后显示，负值提前显示。"""
 
+    ruby_main_progress_mode: RubyMainProgressMode = "checkpoint_segments"
+    """带注音正文的走字切分方式。
+
+    ``checkpoint_segments`` 按注音内部时间点形成的时间段数均分正文（历史行为）；
+    ``reading_units`` 按注音可视字符数映射正文字符（N3 式）。
+    """
+
     line_lane_gap_ms: int = 300
     """同一显示 lane 上相邻两句之间保留的时间间隔。"""
 
@@ -1309,6 +1317,13 @@ def style_from_dict(payload: object) -> Style:
             changes[key] = value if value in {"shadow", "glow"} else None
         elif key == "ruby_alignment":
             changes[key] = value if value in RUBY_ALIGNMENTS else defaults.ruby_alignment
+        elif key == "ruby_main_progress_mode":
+            changes[key] = (
+                value
+                if isinstance(value, str)
+                and value in {"checkpoint_segments", "reading_units"}
+                else defaults.ruby_main_progress_mode
+            )
         elif key == "smart_horizontal":
             changes[key] = value if value in SMART_HORIZONTALS else defaults.smart_horizontal
         elif key == "line_alignments":
