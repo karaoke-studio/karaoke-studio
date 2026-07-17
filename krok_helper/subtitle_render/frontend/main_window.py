@@ -26,6 +26,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, fields, replace
+import hashlib
 from math import isfinite
 from pathlib import Path
 import shutil
@@ -79,7 +80,7 @@ from krok_helper.errors import ExportCancelled, ProcessingError
 from krok_helper.ffmpeg import find_tool, probe_media, terminate_process
 from krok_helper.models import MediaInfo
 from krok_helper.qfluent_compat import apply_qfluent_menu_lifetime_patch
-from krok_helper.settings import load_app_settings, save_app_settings
+from krok_helper.settings import get_settings_path, load_app_settings, save_app_settings
 from krok_helper.subtitle_render.engine.encoder_select import (
     CODEC_H264,
     CODEC_HEVC,
@@ -187,6 +188,34 @@ IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
 PROJECT_FILTER = f"字幕渲染项目 (*{PROJECT_FILE_SUFFIX});;所有文件 (*.*)"
 EXPORT_DIR_SOURCE_VIDEO = "source_video"
 EXPORT_DIR_CUSTOM = "custom"
+
+
+@dataclass(frozen=True)
+class SubtitleProjectState:
+    """宿主可消费的字幕渲染项目状态。"""
+
+    display_name: str
+    path: Optional[Path]
+    has_project: bool
+    dirty: bool
+    saving: bool
+    save_error: Optional[str]
+    exporting: bool
+    recovery_path: Optional[Path]
+
+    def status_text(self) -> Optional[str]:
+        if not self.has_project:
+            return None
+        states: list[str] = []
+        if self.saving:
+            states.append("正在保存")
+        elif self.save_error:
+            states.append("保存失败")
+        elif self.dirty:
+            states.append("未保存")
+        if self.exporting:
+            states.append("导出中")
+        return f"{self.display_name} · {' · '.join(states)}" if states else self.display_name
 
 
 class _ExportLocationDialog(QDialog):
@@ -967,6 +996,7 @@ def _format_warning_lines(warnings: list) -> str:
 class SubtitleRenderWindow(QWidget):
     """字幕视频渲染模块主 widget。"""
 
+    projectStateChanged = Signal(object)
     _embedded: bool = False
 
     def __init__(
@@ -1007,6 +1037,8 @@ class SubtitleRenderWindow(QWidget):
         self._export_custom_dir = ""
         self._project_path: Optional[Path] = None
         self._project_dirty = False
+        self._project_saving = False
+        self._project_save_error: Optional[str] = None
         self._loading_project = False
         self._syncing_screen_controls = False
         self._render_thread: Optional[QThread] = None
@@ -1072,6 +1104,7 @@ class SubtitleRenderWindow(QWidget):
         self._apply_output_settings(output)
         self._set_export_screen_controls(self._screen_settings)
         self._sync_preview_output_size()
+        self._connect_project_output_signals()
         self._export_width_spin.valueChanged.connect(self._sync_preview_output_size)
         self._export_height_spin.valueChanged.connect(self._sync_preview_output_size)
         self._export_width_spin.valueChanged.connect(self._on_export_screen_changed)
@@ -1109,6 +1142,20 @@ class SubtitleRenderWindow(QWidget):
         self._bottom_navigation.setCurrentItem("preview")
         self._stack.setCurrentIndex(0)
         self._refresh_project_title()
+
+    def _connect_project_output_signals(self) -> None:
+        """Connect user-editable project output fields after initial state loading."""
+        self._export_encoder_combo.currentIndexChanged.connect(
+            self._on_output_settings_changed
+        )
+        self._export_codec_combo.currentIndexChanged.connect(
+            self._on_output_settings_changed
+        )
+        self._export_preset_combo.currentIndexChanged.connect(
+            self._on_output_settings_changed
+        )
+        self._export_crf_spin.valueChanged.connect(self._on_output_settings_changed)
+        self._export_name_edit.textEdited.connect(self._on_output_settings_changed)
 
     def _switch_tab(self, key: str) -> None:
         idx = 0 if key == "preview" else 1
@@ -1181,21 +1228,67 @@ class SubtitleRenderWindow(QWidget):
     def _refresh_project_title(self) -> None:
         if not hasattr(self, "_project_name_label"):
             return
-        name = self._project_path.name if self._project_path else "未命名项目"
-        full = f"{'● ' if self._project_dirty else ''}{name}"
+        state = self.project_state()
+        full = state.status_text() or state.display_name
         metrics = self._project_name_label.fontMetrics()
         elided = metrics.elidedText(
             full, Qt.TextElideMode.ElideRight, self._project_name_label.maximumWidth()
         )
         self._project_name_label.setText(elided)
         self._project_name_label.setToolTip(full if elided != full else "")
+        self.projectStateChanged.emit(state)
+
+    def project_state(self) -> SubtitleProjectState:
+        """Return a stable project-state snapshot for the host application."""
+        path = self._project_path
+        has_project = bool(
+            path is not None
+            or self._project_dirty
+            or self._timing_track is not None
+            or self._background_source is not None
+            or self._audio_path is not None
+            or self._extra_sources
+        )
+        recovery_path = self._recovery_path() if self._project_dirty else None
+        return SubtitleProjectState(
+            display_name=path.name if path is not None else "未命名项目",
+            path=path,
+            has_project=has_project,
+            dirty=bool(self._project_dirty),
+            saving=bool(self._project_saving),
+            save_error=self._project_save_error,
+            exporting=self._render_thread is not None,
+            recovery_path=recovery_path if recovery_path and recovery_path.is_file() else None,
+        )
+
+    def has_unsaved_changes(self) -> bool:
+        """Public embedding API used by the host close coordinator."""
+        return bool(self._project_dirty)
+
+    def trigger_save(self) -> bool:
+        """Public embedding API; return False when saving fails or is cancelled."""
+        return self._save_project()
+
+    def discard_unsaved(self) -> None:
+        """Acknowledge that the current dirty state is intentionally discarded."""
+        self._set_project_dirty(False)
+        self._cleanup_recovery_file()
+
+    def is_busy(self) -> bool:
+        """Return whether a render export is still running."""
+        return self._render_thread is not None
+
+    def _set_project_dirty(self, dirty: bool) -> None:
+        self._project_dirty = bool(dirty)
+        if dirty or not self._project_saving:
+            self._project_save_error = None
+        self._refresh_project_title()
 
     def _mark_project_dirty(self) -> None:
         if self._loading_project:
             return
         if not self._project_dirty:
-            self._project_dirty = True
-            self._refresh_project_title()
+            self._set_project_dirty(True)
 
     def _current_project_data(self) -> dict:
         independent_audio = (
@@ -1413,8 +1506,7 @@ class SubtitleRenderWindow(QWidget):
             }
         )
         self._project_path = None
-        self._project_dirty = False
-        self._refresh_project_title()
+        self._set_project_dirty(False)
 
     def _clear_loaded_media(self) -> None:
         """清空已加载的字幕 / 视频 / 音频，把各面板复位到空态（新建项目用）。"""
@@ -1483,8 +1575,7 @@ class SubtitleRenderWindow(QWidget):
         self._clear_loaded_media()
         self._apply_project_data(data)
         self._project_path = path
-        self._project_dirty = False
-        self._refresh_project_title()
+        self._set_project_dirty(False)
         if missing_resources:
             fluent_warning(
                 self,
@@ -1582,8 +1673,7 @@ class SubtitleRenderWindow(QWidget):
         self._apply_project_data(result.project_data)
         # 导入的是外来工程：保存时必须另存为 .yurika，因此视为未命名 + 有改动。
         self._project_path = None
-        self._project_dirty = True
-        self._refresh_project_title()
+        self._set_project_dirty(True)
         if result.warnings:
             fluent_info(
                 self,
@@ -1621,14 +1711,24 @@ class SubtitleRenderWindow(QWidget):
         return self._write_project(Path(path_str))
 
     def _write_project(self, path: Path) -> bool:
+        previous_recovery_path = self._recovery_path()
+        self._project_saving = True
+        self._project_save_error = None
+        self._refresh_project_title()
         try:
             save_render_project(path, self._current_project_data())
-        except OSError as exc:
+        except (OSError, TypeError, ValueError) as exc:
+            self._project_saving = False
+            self._project_save_error = str(exc)
+            self._refresh_project_title()
             fluent_error(self, "保存项目失败", f"无法写入项目文件：\n{path}\n\n{exc}")
             return False
         self._project_path = path
-        self._project_dirty = False
-        self._refresh_project_title()
+        self._project_saving = False
+        self._project_save_error = None
+        self._set_project_dirty(False)
+        self._cleanup_recovery_file(previous_recovery_path)
+        self._cleanup_recovery_file()
         InfoBar.success(
             title="项目已保存",
             content=str(path),
@@ -3318,6 +3418,7 @@ class SubtitleRenderWindow(QWidget):
         )
         self._margin_check_timer.start()
         self._save_persisted_state()
+        self._mark_project_dirty()
 
     def _set_export_screen_controls(self, settings: ScreenSettings) -> None:
         self._syncing_screen_controls = True
@@ -4115,6 +4216,7 @@ class SubtitleRenderWindow(QWidget):
         self._render_thread = thread
         self._render_worker = worker
         thread.start()
+        self._refresh_project_title()
 
     def _stop_render_export(self) -> None:
         if self._render_worker is None or self._render_thread is None or not self._render_thread.isRunning():
@@ -4302,6 +4404,7 @@ class SubtitleRenderWindow(QWidget):
         self._render_thread = None
         self._render_worker = None
         self._cleanup_export_preview_dir()
+        self._refresh_project_title()
 
     # ------------------------------------------------------------------ embed
 
@@ -4321,8 +4424,33 @@ class SubtitleRenderWindow(QWidget):
         return instance
 
     def flush_unsaved(self) -> None:
-        """宿主销毁本 widget 前调用的兜底（占位）。"""
-        return
+        """Synchronously persist dirty data for updater/forced-exit recovery."""
+        if not self._project_dirty:
+            return
+        recovery_path = self._recovery_path()
+        recovery_path.parent.mkdir(parents=True, exist_ok=True)
+        payload = self._current_project_data()
+        payload["recovery"] = {
+            "source_project_path": str(self._project_path) if self._project_path else None,
+            "created_at_unix": time.time(),
+        }
+        save_render_project(recovery_path, payload)
+        self._refresh_project_title()
+
+    def _recovery_path(self) -> Path:
+        root = get_settings_path().parent / "subtitle_render_recovery"
+        if self._project_path is None:
+            return root / "untitled.yurika.recovery"
+        identity = str(self._project_path.resolve()).encode("utf-8", errors="surrogatepass")
+        suffix = hashlib.sha256(identity).hexdigest()[:12]
+        return root / f"{self._project_path.name}.{suffix}.recovery"
+
+    def _cleanup_recovery_file(self, path: Optional[Path] = None) -> None:
+        target = path or self._recovery_path()
+        try:
+            target.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def _style_presets_from_dict(payload: object) -> dict[str, StylePreset]:

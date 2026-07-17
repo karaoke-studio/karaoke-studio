@@ -37,6 +37,31 @@ class _FakeTimingPage:
         self.flush_count += 1
 
 
+class _FakeProjectPage:
+    def __init__(self, *, dirty: bool = True, save_result: bool = True) -> None:
+        self.dirty = dirty
+        self.save_result = save_result
+        self.save_count = 0
+        self.discard_count = 0
+        self.flush_count = 0
+
+    def has_unsaved_changes(self) -> bool:
+        return self.dirty
+
+    def trigger_save(self) -> bool:
+        self.save_count += 1
+        if self.save_result:
+            self.dirty = False
+        return self.save_result
+
+    def discard_unsaved(self) -> None:
+        self.discard_count += 1
+        self.dirty = False
+
+    def flush_unsaved(self) -> None:
+        self.flush_count += 1
+
+
 class _FakeCloseEvent:
     def __init__(self) -> None:
         self.ignored = False
@@ -156,6 +181,86 @@ def test_force_update_exit_flushes_and_releases_sug_resources_once() -> None:
     assert calls == ["stop-preview", "save-settings"]
     assert timing_page.flush_count == 1
     assert timing_page.editorInterface.release_count == 1
+
+
+def test_force_update_exit_flushes_both_project_modules_once() -> None:
+    timing_page = _FakeTimingPage()
+    subtitle_page = _FakeProjectPage()
+    app = SimpleNamespace(
+        _update_exit_prepared=False,
+        lyrics_timing_page=timing_page,
+        subtitle_render_page=subtitle_page,
+        _stop_alignment_preview=lambda **_kwargs: None,
+        _save_all_settings=lambda: None,
+    )
+
+    KrokHelperQtApp._prepare_force_quit_for_update(app)
+    KrokHelperQtApp._prepare_force_quit_for_update(app)
+
+    assert timing_page.flush_count == 1
+    assert subtitle_page.flush_count == 1
+
+
+def test_save_project_page_for_close_requires_dirty_state_to_clear() -> None:
+    saved = _FakeProjectPage(save_result=True)
+    failed = _FakeProjectPage(save_result=False)
+    app = SimpleNamespace()
+
+    assert KrokHelperQtApp._save_project_page_for_close(app, "字幕视频生成", saved)
+    assert not KrokHelperQtApp._save_project_page_for_close(
+        app, "字幕视频生成", failed
+    )
+    assert saved.save_count == 1
+    assert failed.save_count == 1
+
+
+def test_unsaved_project_confirmation_saves_both_modules(monkeypatch) -> None:
+    real_message_box = gui_qt.QMessageBox
+
+    class FakeMessageBox:
+        Icon = real_message_box.Icon
+        ButtonRole = real_message_box.ButtonRole
+
+        def __init__(self, _parent=None) -> None:
+            self.buttons: dict[str, object] = {}
+            self.clicked = None
+
+        def setIcon(self, _icon) -> None:  # noqa: N802
+            pass
+
+        def setWindowTitle(self, _title: str) -> None:  # noqa: N802
+            pass
+
+        def setText(self, _text: str) -> None:  # noqa: N802
+            pass
+
+        def addButton(self, text: str, _role):  # noqa: N802
+            button = object()
+            self.buttons[text] = button
+            return button
+
+        def setDefaultButton(self, _button) -> None:  # noqa: N802
+            pass
+
+        def exec(self) -> None:
+            self.clicked = self.buttons["全部保存"]
+
+        def clickedButton(self):  # noqa: N802
+            return self.clicked
+
+    monkeypatch.setattr(gui_qt, "QMessageBox", FakeMessageBox)
+    timing_page = _FakeProjectPage()
+    subtitle_page = _FakeProjectPage()
+    app = SimpleNamespace(
+        lyrics_timing_page=timing_page,
+        subtitle_render_page=subtitle_page,
+    )
+    event = _FakeCloseEvent()
+
+    assert KrokHelperQtApp._confirm_unsaved_projects(app, event)
+    assert timing_page.save_count == 1
+    assert subtitle_page.save_count == 1
+    assert event.ignored is False
 
 
 def test_request_force_quit_closes_before_scheduling_hard_exit(monkeypatch) -> None:

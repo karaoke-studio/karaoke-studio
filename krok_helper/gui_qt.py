@@ -28,7 +28,7 @@ def _schedule_hard_process_exit(delay_seconds: float = 0.25) -> None:
     timer.daemon = True
     timer.start()
 
-from PyQt6.QtCore import QEvent, QSize, QThread, QTimer, Qt, QUrl, pyqtSignal as Signal
+from PyQt6.QtCore import QEvent, QEventLoop, QSize, QThread, QTimer, Qt, QUrl, pyqtSignal as Signal
 from PyQt6.QtGui import QColor, QBrush, QDesktopServices, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPalette, QPen, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -2672,6 +2672,15 @@ class KrokHelperQtApp(QMainWindow):
             settings_provider=self.subtitle_render_settings_bridge,
             workflow_context=self,
         )
+        try:
+            self.subtitle_render_page.projectStateChanged.connect(
+                self._on_subtitle_project_state_changed
+            )
+            self._on_subtitle_project_state_changed(
+                self.subtitle_render_page.project_state()
+            )
+        except Exception:
+            pass
         self.hires_page = self._build_hires_page()
         self.module_pages = {
             WORKFLOW_VIDEO_DOWNLOAD: self.video_download_page,
@@ -2729,6 +2738,18 @@ class KrokHelperQtApp(QMainWindow):
         stepper.setStepStatus(
             WORKFLOW_LYRICS_TIMING, self._parse_lyrics_timing_status(title)
         )
+
+    def _on_subtitle_project_state_changed(self, state: object) -> None:
+        """Mirror the explicit subtitle project state to workflow step 5."""
+        stepper = getattr(self, "workflow_stepper", None)
+        if stepper is None:
+            return
+        status_factory = getattr(state, "status_text", None)
+        try:
+            status = status_factory() if callable(status_factory) else None
+        except Exception:
+            status = None
+        stepper.setStepStatus(WORKFLOW_SUBTITLE_RENDER, status)
 
     @staticmethod
     def _parse_lyrics_timing_status(title: str) -> "str | None":
@@ -7962,28 +7983,42 @@ class KrokHelperQtApp(QMainWindow):
         except Exception:
             pass
 
-        page = getattr(self, "lyrics_timing_page", None)
-        if page is None:
-            return
-        flush_unsaved = getattr(page, "flush_unsaved", None)
-        if flush_unsaved is not None:
-            try:
-                flush_unsaved()
-            except Exception:
-                pass
-        KrokHelperQtApp._release_lyrics_timing_resources(page)
+        for attr_name in ("lyrics_timing_page", "subtitle_render_page"):
+            page = getattr(self, attr_name, None)
+            flush_unsaved = getattr(page, "flush_unsaved", None) if page is not None else None
+            if flush_unsaved is not None:
+                try:
+                    flush_unsaved()
+                except Exception:
+                    logging.getLogger(__name__).warning(
+                        "强制退出前保存 %s 恢复数据失败", attr_name, exc_info=True
+                    )
+
+        timing_page = getattr(self, "lyrics_timing_page", None)
+        if timing_page is not None:
+            KrokHelperQtApp._release_lyrics_timing_resources(timing_page)
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if getattr(self, "_force_quitting_for_update", False):
             self._prepare_force_quit_for_update()
             super().closeEvent(event)
             return
-        if self._running_background_tasks():
+        subtitle_page = getattr(self, "subtitle_render_page", None)
+        subtitle_busy = False
+        try:
+            subtitle_busy = bool(
+                subtitle_page is not None
+                and hasattr(subtitle_page, "is_busy")
+                and subtitle_page.is_busy()
+            )
+        except Exception:
+            subtitle_busy = False
+        if self._running_background_tasks() or subtitle_busy:
             QMessageBox.information(self, APP_TITLE, "当前后台任务仍在运行，请等待完成后再关闭窗口。")
             event.ignore()
             return
         self._stop_alignment_preview(log_message=False)
-        if not self._shutdown_lyrics_timing(event):
+        if not self._shutdown_project_modules(event):
             return
         try:
             self._save_all_settings()
@@ -7991,45 +8026,192 @@ class KrokHelperQtApp(QMainWindow):
             pass
         super().closeEvent(event)
 
+    def _shutdown_project_modules(self, event) -> bool:
+        """Confirm all dirty embedded projects, then release module resources."""
+        if not KrokHelperQtApp._confirm_unsaved_projects(self, event):
+            return False
+        KrokHelperQtApp._finalize_lyrics_timing_shutdown(self)
+        return True
+
+    def _confirm_unsaved_projects(self, event, pages=None) -> bool:
+        candidates = pages or (
+            ("歌词打轴", getattr(self, "lyrics_timing_page", None)),
+            ("字幕视频生成", getattr(self, "subtitle_render_page", None)),
+        )
+        dirty_pages: list[tuple[str, object]] = []
+        for label, page in candidates:
+            if page is None:
+                continue
+            try:
+                dirty = bool(
+                    hasattr(page, "has_unsaved_changes")
+                    and page.has_unsaved_changes()
+                )
+            except Exception:
+                dirty = False
+            if dirty:
+                dirty_pages.append((label, page))
+
+        if not dirty_pages:
+            return True
+
+        message = QMessageBox(self)
+        message.setIcon(QMessageBox.Icon.Question)
+        message.setWindowTitle("未保存的更改")
+        message.setText(
+            "以下项目有未保存的更改：\n\n"
+            + "\n".join(f"• {label}" for label, _page in dirty_pages)
+            + "\n\n是否在退出前全部保存？"
+        )
+        save_btn = message.addButton("全部保存", QMessageBox.ButtonRole.AcceptRole)
+        discard_btn = message.addButton("全部放弃", QMessageBox.ButtonRole.DestructiveRole)
+        cancel_btn = message.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+        message.setDefaultButton(save_btn)
+        message.exec()
+        clicked = message.clickedButton()
+
+        if clicked is cancel_btn or clicked not in (save_btn, discard_btn):
+            event.ignore()
+            return False
+
+        if clicked is discard_btn:
+            for _label, page in dirty_pages:
+                discard = getattr(page, "discard_unsaved", None)
+                if callable(discard):
+                    try:
+                        discard()
+                    except Exception:
+                        logging.getLogger(__name__).warning(
+                            "放弃嵌入项目更改失败", exc_info=True
+                        )
+                else:
+                    # SUG's current embedding contract has no public discard API.
+                    # Clear its dirty flag before the child closeEvent runs;
+                    # otherwise embedded closeEvent would recreate a recovery file
+                    # after the user explicitly chose to discard the changes.
+                    store = getattr(page, "_store", None)
+                    if store is not None and hasattr(store, "_dirty"):
+                        try:
+                            store._dirty = False
+                        except Exception:
+                            logging.getLogger(__name__).warning(
+                                "清除歌词打轴未保存状态失败", exc_info=True
+                            )
+            return True
+
+        for label, page in dirty_pages:
+            if not KrokHelperQtApp._save_project_page_for_close(self, label, page):
+                event.ignore()
+                return False
+        return True
+
+    def _save_project_page_for_close(self, label: str, page: object) -> bool:
+        """Save one embedded page and wait for SUG's asynchronous save result."""
+        trigger_save = getattr(page, "trigger_save", None)
+        if not callable(trigger_save):
+            QMessageBox.critical(self, APP_TITLE, f"{label}模块无法保存当前项目。")
+            return False
+
+        store = getattr(page, "_store", None)
+        started_signal = getattr(store, "save_started", None) if store is not None else None
+        finished_signal = getattr(store, "save_finished", None) if store is not None else None
+        error_signal = getattr(store, "save_error", None) if store is not None else None
+        supports_async_wait = all(
+            signal is not None
+            for signal in (started_signal, finished_signal, error_signal)
+        )
+
+        state = {"started": False, "finished": False, "error": None, "timeout": False}
+        loop = QEventLoop(self) if supports_async_wait else None
+
+        def on_started(_path: str) -> None:
+            state["started"] = True
+
+        def on_finished(_path: str) -> None:
+            state["finished"] = True
+            if loop is not None and loop.isRunning():
+                loop.quit()
+
+        def on_error(error: str) -> None:
+            state["error"] = error
+            if loop is not None and loop.isRunning():
+                loop.quit()
+
+        if supports_async_wait:
+            started_signal.connect(on_started)
+            finished_signal.connect(on_finished)
+            error_signal.connect(on_error)
+
+        try:
+            result = trigger_save()
+            if result is False:
+                return False
+
+            if supports_async_wait and state["started"] and not (
+                state["finished"] or state["error"]
+            ):
+                timeout = QTimer(self)
+                timeout.setSingleShot(True)
+
+                def on_timeout() -> None:
+                    state["timeout"] = True
+                    if loop is not None and loop.isRunning():
+                        loop.quit()
+
+                timeout.timeout.connect(on_timeout)
+                timeout.start(120_000)
+                loop.exec()
+                timeout.stop()
+
+            if state["timeout"]:
+                QMessageBox.critical(
+                    self,
+                    APP_TITLE,
+                    f"等待{label}项目保存完成超时，工作台将保持打开。",
+                )
+                return False
+            if state["error"]:
+                return False
+
+            try:
+                return not bool(
+                    hasattr(page, "has_unsaved_changes")
+                    and page.has_unsaved_changes()
+                )
+            except Exception:
+                return bool(state["finished"] or result is True)
+        except Exception as exc:
+            QMessageBox.critical(self, APP_TITLE, f"{label}项目保存失败：\n{exc}")
+            return False
+        finally:
+            if supports_async_wait:
+                for signal, slot in (
+                    (started_signal, on_started),
+                    (finished_signal, on_finished),
+                    (error_signal, on_error),
+                ):
+                    try:
+                        signal.disconnect(slot)
+                    except (TypeError, RuntimeError):
+                        pass
+
     def _shutdown_lyrics_timing(self, event) -> bool:
-        # SUG embedded 模式自身的 closeEvent 不跑 standalone 的「未保存对话框 +
-        # 清理临时文件」流程（按 lyrics_timing/docs/EMBEDDING.md 由宿主接管），
-        # 否则 .cache/*.sug.temp 与 *.autosave 会残留到下次启动并触发「上次异常
-        # 退出」恢复提示。这里复刻 standalone 的语义。
-        # TODO: 等 SUG 暴露 discard_autosave() 公开 API 后改用之，移除对 _store 的直接访问。
+        """Compatibility wrapper retained for existing host integration tests."""
         page = getattr(self, "lyrics_timing_page", None)
         if page is None:
             return True
+        if not KrokHelperQtApp._confirm_unsaved_projects(
+            self, event, (("歌词打轴", page),)
+        ):
+            return False
+        KrokHelperQtApp._finalize_lyrics_timing_shutdown(self)
+        return True
 
-        try:
-            has_unsaved = bool(
-                hasattr(page, "has_unsaved_changes") and page.has_unsaved_changes()
-            )
-        except Exception:
-            has_unsaved = False
-
-        if has_unsaved:
-            msg = QMessageBox(self)
-            msg.setIcon(QMessageBox.Icon.Question)
-            msg.setWindowTitle("未保存的更改")
-            msg.setText("打轴模块有未保存的更改，是否在退出前保存？")
-            save_btn = msg.addButton("保存", QMessageBox.ButtonRole.AcceptRole)
-            msg.addButton("放弃", QMessageBox.ButtonRole.DestructiveRole)
-            cancel_btn = msg.addButton("取消", QMessageBox.ButtonRole.RejectRole)
-            msg.setDefaultButton(save_btn)
-            msg.exec()
-            clicked = msg.clickedButton()
-            if clicked is cancel_btn:
-                event.ignore()
-                return False
-            if clicked is save_btn:
-                try:
-                    if hasattr(page, "trigger_save"):
-                        page.trigger_save()
-                except Exception:
-                    pass
-            # save / discard 均落到下面清理 autosave/temp
-
+    def _finalize_lyrics_timing_shutdown(self) -> None:
+        """Clean SUG recovery files only after save/discard has been resolved."""
+        page = getattr(self, "lyrics_timing_page", None)
+        if page is None:
+            return
         store = getattr(page, "_store", None)
         cleanup = getattr(store, "cleanup_temp_files", None) if store is not None else None
         if cleanup is not None:
@@ -8038,7 +8220,6 @@ class KrokHelperQtApp(QMainWindow):
             except Exception:
                 pass
         KrokHelperQtApp._release_lyrics_timing_resources(page)
-        return True
 
     @staticmethod
     def _release_lyrics_timing_resources(page) -> None:

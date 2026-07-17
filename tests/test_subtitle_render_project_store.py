@@ -460,6 +460,102 @@ def test_apply_project_data_does_not_mark_dirty(qapp, monkeypatch):
     assert win._style.font_size_px == 64
 
 
+def test_public_project_state_tracks_dirty_save_and_discard(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    states = []
+    win.projectStateChanged.connect(states.append)
+    win._project_path = tmp_path / "song.yurika"
+
+    win._mark_project_dirty()
+
+    assert win.has_unsaved_changes() is True
+    assert states[-1].display_name == "song.yurika"
+    assert states[-1].dirty is True
+    assert states[-1].status_text() == "song.yurika · 未保存"
+
+    win.discard_unsaved()
+
+    assert win.has_unsaved_changes() is False
+    assert states[-1].dirty is False
+    assert states[-1].status_text() == "song.yurika"
+
+
+def test_screen_and_encoder_project_fields_mark_dirty(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+
+    win._set_project_dirty(False)
+    win._export_width_spin.setValue(win._export_width_spin.value() + 2)
+    assert win.has_unsaved_changes() is True
+
+    win._set_project_dirty(False)
+    win._export_fps_combo.setCurrentIndex(
+        (win._export_fps_combo.currentIndex() + 1) % win._export_fps_combo.count()
+    )
+    assert win.has_unsaved_changes() is True
+
+    win._set_project_dirty(False)
+    win._export_crf_spin.setValue(win._export_crf_spin.value() + 1)
+    assert win.has_unsaved_changes() is True
+
+    win._set_project_dirty(False)
+    win._export_codec_combo.setCurrentIndex(
+        (win._export_codec_combo.currentIndex() + 1) % win._export_codec_combo.count()
+    )
+    assert win.has_unsaved_changes() is True
+
+    win._set_project_dirty(False)
+    win._export_encoder_combo.setCurrentIndex(
+        (win._export_encoder_combo.currentIndex() + 1)
+        % win._export_encoder_combo.count()
+    )
+    assert win.has_unsaved_changes() is True
+
+    win._set_project_dirty(False)
+    win._export_preset_combo.setCurrentIndex(
+        (win._export_preset_combo.currentIndex() + 1)
+        % win._export_preset_combo.count()
+    )
+    assert win.has_unsaved_changes() is True
+
+    win._set_project_dirty(False)
+    win._export_name_edit.textEdited.emit("custom-output")
+    assert win.has_unsaved_changes() is True
+
+
+def test_force_exit_flush_writes_subtitle_recovery(qapp, monkeypatch, tmp_path):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    win = _make_window(qapp, monkeypatch)
+    win._project_path = tmp_path / "song.yurika"
+    win._mark_project_dirty()
+
+    win.flush_unsaved()
+
+    state = win.project_state()
+    assert state.recovery_path is not None
+    assert state.recovery_path.is_file()
+    recovered = load_render_project(state.recovery_path)
+    assert recovered["recovery"]["source_project_path"] == str(win._project_path)
+
+
+def test_save_failure_keeps_dirty_and_reports_state(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    win._project_path = tmp_path / "song.yurika"
+    win._mark_project_dirty()
+    monkeypatch.setattr(
+        mw,
+        "save_render_project",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+
+    assert win.trigger_save() is False
+
+    state = win.project_state()
+    assert state.dirty is True
+    assert state.saving is False
+    assert state.save_error == "disk full"
+    assert state.status_text() == "song.yurika · 保存失败"
+
+
 def test_title_char_roles_round_trip_and_follow_text_edits():
     title = TitleOverlay(
         text_template="AB\nCD",

@@ -16,6 +16,7 @@ from krok_helper.gui_qt import (  # noqa: E402
     WORKFLOW_SUBTITLE_RENDER,
 )
 from krok_helper.subtitle_render.frontend.main_window import (  # noqa: E402
+    SubtitleProjectState,
     SubtitleRenderWindow,
 )
 
@@ -48,6 +49,29 @@ def test_entering_subtitle_render_only_switches_page() -> None:
         f"step:{WORKFLOW_SUBTITLE_RENDER}",
         "shortcuts",
     ]
+
+
+def test_subtitle_project_state_is_mirrored_to_workflow_step(tmp_path: Path) -> None:
+    calls: list[tuple[str, str | None]] = []
+    app = SimpleNamespace(
+        workflow_stepper=SimpleNamespace(
+            setStepStatus=lambda module, text: calls.append((module, text))
+        )
+    )
+    state = SubtitleProjectState(
+        display_name="song.yurika",
+        path=tmp_path / "song.yurika",
+        has_project=True,
+        dirty=True,
+        saving=False,
+        save_error=None,
+        exporting=False,
+        recovery_path=None,
+    )
+
+    KrokHelperQtApp._on_subtitle_project_state_changed(app, state)
+
+    assert calls == [(WORKFLOW_SUBTITLE_RENDER, "song.yurika · 未保存")]
 
 
 def test_subtitle_render_success_prompts_for_post_export_action(
