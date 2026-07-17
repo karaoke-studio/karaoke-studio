@@ -1946,6 +1946,16 @@ def test_n3_main_wipe_bounds_exclude_advance_side_bearings(qapp):
     ) == [(114, 166)]
 
 
+def test_n3_transformed_wipe_span_uses_ink_plus_half_primary_edge(qapp):
+    path = QPainterPath()
+    path.addRect(QRectF(10.2, 20.0, 20.2, 30.0))
+
+    left, width = subtitle_painter._n3_transformed_wipe_span(path, 5)
+
+    assert left == 8  # floor(10.2) - 5 // 2
+    assert left + width == 33  # ceil(30.4) + 5 // 2
+
+
 def test_nicokara_layout_width_includes_edge_and_optional_biting():
     from krok_helper.subtitle_render.engine.painter import _nicokara_layout_width
 
@@ -4726,8 +4736,8 @@ def _glow_split_style(*, before_radius: int = 12, after_radius: int = 12) -> Sty
     )
 
 
-def test_utopia_wipe_splits_before_after_glow_at_scanline(qapp, monkeypatch):
-    """N3 硬分割：唱中扫光线两侧各只有一个状态的发光，不得前后叠加混色。
+def test_utopia_wipe_source_splits_before_after_glow_at_scanline(qapp, monkeypatch):
+    """N3 在模糊前分割发光源；离锋线足够远时各自颜色应占主导。
 
     单字行唱到一半：字形左侧（已唱侧）halo 应为纯已唱发光色（蓝），右侧
     （未唱侧）应为纯未唱发光色（红）。修复前未唱发光整字铺满 → 已唱侧红蓝
@@ -4780,8 +4790,8 @@ def test_utopia_wipe_splits_before_after_glow_at_scanline(qapp, monkeypatch):
         )
 
 
-def test_static_wipe_splits_before_after_glow_at_scanline(qapp, monkeypatch):
-    """静态（无逐字过渡）路径同样遵守 N3 硬分割：layers 与 direct 两条子路径。"""
+def test_static_wipe_source_splits_before_after_glow_at_scanline(qapp, monkeypatch):
+    """静态路径同样在 blur 前互补裁剪两种发光源。"""
     track = TimingTrack(
         lines=[TimingLine(chars=[TimingChar(text="あ", start_ms=1000)], end_ms=2000)]
     )
@@ -4828,6 +4838,43 @@ def test_static_wipe_splits_before_after_glow_at_scanline(qapp, monkeypatch):
         assert right_b * 4 < right_r, (
             f"layer={layer_flag} 未唱侧 halo 混入已唱发光: r_sum={right_r} b_sum={right_b}"
         )
+
+
+def test_static_glow_front_blends_outside_ink_instead_of_forming_hard_seam(
+    qapp, monkeypatch
+):
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar(text="あ", start_ms=1000)], end_ms=2000)]
+    )
+    style = replace(_glow_split_style(), entry_anim="none", exit_anim="none")
+    body_style = replace(
+        _glow_split_style(before_radius=0, after_radius=0),
+        entry_anim="none",
+        exit_anim="none",
+    )
+    body = _blank()
+    paint_frame(body, track, 1500, body_style)
+    body_pixels = _image_rgba_array(body).astype(int)
+    ys, xs = np.nonzero(body_pixels[:, :, :3].max(axis=2) > 60)
+    assert xs.size > 0
+    front = (int(xs.min()) + int(xs.max())) // 2
+    sample_y = int(ys.min()) - 10
+    assert sample_y >= 0
+
+    for layer_flag in ("1", "0"):
+        monkeypatch.setenv("KROK_SUBTITLE_HORIZONTAL_LAYER", layer_flag)
+        clear_before_layer_cache()
+        glow = _blank()
+        paint_frame(glow, track, 1500, style)
+        pixels = _image_rgba_array(glow).astype(int)
+        samples = pixels[sample_y, front - 2 : front + 3, :3]
+
+        # N3 clips the red/blue outline sources at WipeLeft and then blurs the
+        # result.  Above the glyph ink both halos must cross the boundary
+        # smoothly; post-blur clipping would leave one channel at background
+        # level on either side and expose a hard vertical seam.
+        assert int(samples[:, 0].min()) > 25, f"layer={layer_flag} red halo was hard-clipped"
+        assert int(samples[:, 2].min()) > 25, f"layer={layer_flag} blue halo was hard-clipped"
 
 
 def test_ruby_keeps_unsung_reading_during_char_transition(qapp):
