@@ -537,6 +537,7 @@ class _ColorHexEdit(FluentLineEdit):
     """Inline hex editor that lets Escape cancel without changing the color."""
 
     cancelRequested = Signal()
+    finishRequested = Signal()
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:
@@ -547,15 +548,20 @@ class _ColorHexEdit(FluentLineEdit):
 
     def focusOutEvent(self, event) -> None:  # noqa: N802
         super().focusOutEvent(event)
-        self.cancelRequested.emit()
+        self.finishRequested.emit()
 
 
 class ColorButton(QWidget):
     """Compact color bar with dialog and direct screen-picker actions."""
 
+    _LIVE_APPLY_DELAY_MS = 180
+
     clicked = Signal()
     screenPickRequested = Signal()
     colorEntered = Signal(str)
+    editStarted = Signal()
+    editFinished = Signal()
+    editCancelled = Signal()
 
     def __init__(self, color: str, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -575,10 +581,18 @@ class ColorButton(QWidget):
         self._color_edit.setMaxLength(9)
         self._color_edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._color_edit.setPlaceholderText("RRGGBB / AARRGGBB")
+        self._color_edit.textEdited.connect(self._schedule_live_color_entry)
         self._color_edit.returnPressed.connect(self._commit_color_entry)
         self._color_edit.cancelRequested.connect(self._cancel_color_entry)
+        self._color_edit.finishRequested.connect(self._finish_color_entry)
         self._swatch_stack.addWidget(self._swatch)
         self._swatch_stack.addWidget(self._color_edit)
+        self._live_apply_timer = QTimer(self)
+        self._live_apply_timer.setSingleShot(True)
+        self._live_apply_timer.setInterval(self._LIVE_APPLY_DELAY_MS)
+        self._live_apply_timer.timeout.connect(self._apply_live_color_entry)
+        self._entry_original_color = self.color
+        self._ending_color_entry = False
 
         self.palette_button = FluentToolButton(FIF.PALETTE, self)
         self.palette_button.setFixedSize(30, 30)
@@ -613,25 +627,67 @@ class ColorButton(QWidget):
         self._swatch.click()
 
     def _begin_color_entry(self) -> None:
+        self._live_apply_timer.stop()
+        self._entry_original_color = self.color
+        self.editStarted.emit()
         self._color_edit.setText(self.color)
-        self._color_edit.setToolTip("输入 RGB 或 ARGB 色号，按回车应用")
+        self._color_edit.setToolTip("输入 RGB 或 ARGB 色号，完成后自动应用")
         self._swatch_stack.setCurrentWidget(self._color_edit)
         self._color_edit.setFocus(Qt.FocusReason.MouseFocusReason)
         self._color_edit.selectAll()
 
-    def _commit_color_entry(self) -> None:
+    def _schedule_live_color_entry(self, _text: str) -> None:
+        self._color_edit.setToolTip("输入 RGB 或 ARGB 色号，完成后自动应用")
+        self._live_apply_timer.start()
+
+    def _apply_color_entry(self) -> bool:
         color = _parse_hex_color(self._color_edit.text())
         if color is None:
             self._color_edit.setToolTip("色号无效，请输入 RGB 或 ARGB 十六进制色号")
+            return False
+        if color != self.color:
+            self.set_color(color)
+            self.colorEntered.emit(color)
+        self._color_edit.setToolTip("色号已自动应用")
+        return True
+
+    def _apply_live_color_entry(self) -> None:
+        if self._swatch_stack.currentWidget() is self._color_edit:
+            self._apply_color_entry()
+
+    def _commit_color_entry(self) -> None:
+        self._live_apply_timer.stop()
+        if not self._apply_color_entry():
             self._color_edit.selectAll()
             return
-        self.set_color(color)
-        self._swatch_stack.setCurrentWidget(self._swatch)
-        self.colorEntered.emit(color)
+        self._end_color_entry()
+        self.editFinished.emit()
+
+    def _finish_color_entry(self) -> None:
+        if self._ending_color_entry:
+            return
+        self._live_apply_timer.stop()
+        if self._swatch_stack.currentWidget() is self._color_edit:
+            self._apply_color_entry()
+            self._end_color_entry()
+            self.editFinished.emit()
+
+    def _end_color_entry(self) -> None:
+        self._ending_color_entry = True
+        try:
+            self._swatch_stack.setCurrentWidget(self._swatch)
+        finally:
+            self._ending_color_entry = False
 
     def _cancel_color_entry(self) -> None:
+        self._live_apply_timer.stop()
         if self._swatch_stack.currentWidget() is self._color_edit:
-            self._swatch_stack.setCurrentWidget(self._swatch)
+            original = self._entry_original_color
+            if self.color != original:
+                self.set_color(original)
+                self.colorEntered.emit(original)
+            self.editCancelled.emit()
+            self._end_color_entry()
 
 
 class ScreenColorPicker(QWidget):
@@ -3683,6 +3739,7 @@ class PropertyPanel(QWidget):
         self._role_names: list[str] = []
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
+        self._color_edit_style_snapshot: Optional[Style] = None
         self._screen_color_picker: Optional[ScreenColorPicker] = None
         self._n3_template_target_height = 1080
         self._n3_template_lyrics_dir: Optional[Path] = None
@@ -4672,6 +4729,7 @@ class PropertyPanel(QWidget):
         self._gradient_bar_field = self._gradient_editor
 
         self._gradient_stop_color_btn = ColorButton("#FFFFFF", page)
+        self._wire_color_edit_session(self._gradient_stop_color_btn)
         self._gradient_stop_color_btn.clicked.connect(self._choose_gradient_stop_color)
         self._gradient_stop_color_btn.colorEntered.connect(
             self._gradient_editor.set_selected_color
@@ -4731,6 +4789,7 @@ class PropertyPanel(QWidget):
         self._split_bar_field = self._split_editor
 
         self._split_stop_color_btn = ColorButton("#FFFFFF", page)
+        self._wire_color_edit_session(self._split_stop_color_btn)
         self._split_stop_color_btn.clicked.connect(self._choose_split_stop_color)
         self._split_stop_color_btn.colorEntered.connect(
             self._split_editor.set_selected_color
@@ -4837,6 +4896,7 @@ class PropertyPanel(QWidget):
 
     def _paint_color_button(self, field_name: str, color: str) -> ColorButton:
         button = ColorButton(color)
+        self._wire_color_edit_session(button)
         button.clicked.connect(
             lambda _checked=False, field=field_name: self._choose_paint_color(field)
         )
@@ -6214,6 +6274,7 @@ class PropertyPanel(QWidget):
 
     def _color_button(self, field_name: str, color: str) -> ColorButton:
         button = ColorButton(color)
+        self._wire_color_edit_session(button)
         button.clicked.connect(lambda _checked=False, field=field_name: self._choose_color(field))
         button.colorEntered.connect(
             lambda color, field=field_name: self._set_color(field, color)
@@ -6224,6 +6285,23 @@ class PropertyPanel(QWidget):
             )
         )
         return button
+
+    def _wire_color_edit_session(self, button: ColorButton) -> None:
+        button.editStarted.connect(self._begin_color_edit_session)
+        button.editFinished.connect(self._finish_color_edit_session)
+        button.editCancelled.connect(self._cancel_color_edit_session)
+
+    def _begin_color_edit_session(self) -> None:
+        self._color_edit_style_snapshot = deepcopy(self._style)
+
+    def _finish_color_edit_session(self) -> None:
+        self._color_edit_style_snapshot = None
+
+    def _cancel_color_edit_session(self) -> None:
+        snapshot = self._color_edit_style_snapshot
+        self._color_edit_style_snapshot = None
+        if snapshot is not None and snapshot != self._style:
+            self.set_style(snapshot, emit=True)
 
     # ------------------------------------------------------------------ update
 

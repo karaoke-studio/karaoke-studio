@@ -3455,7 +3455,10 @@ class SubtitleRenderWindow(QWidget):
             and now - top[4] <= self._STYLE_UNDO_MERGE_WINDOW_S
         ):
             # 合并：保留最早的旧值，滚动更新新值与时间戳。
-            self._undo_stack[-1] = ("style", top[1], new_payload, changed, now)
+            if top[1] == new_payload:
+                self._undo_stack.pop()
+            else:
+                self._undo_stack[-1] = ("style", top[1], new_payload, changed, now)
         else:
             self._undo_stack.append(("style", old_payload, new_payload, changed, now))
             del self._undo_stack[:-_UNDO_STACK_LIMIT]

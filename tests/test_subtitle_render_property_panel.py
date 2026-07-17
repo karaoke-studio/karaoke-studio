@@ -3939,6 +3939,74 @@ def test_color_button_click_edits_hex_without_opening_dialog(qapp):
     assert dialog_requests == []
 
 
+@pytest.mark.parametrize(
+    ("typed", "expected"),
+    [
+        ("abc", "#AABBCC"),
+        ("123456", "#123456"),
+        ("80123456", "#80123456"),
+    ],
+)
+def test_color_button_applies_valid_hex_without_enter(qapp, typed, expected):
+    button = ColorButton("#4093E9")
+    button.show()
+    entered: list[str] = []
+    button.colorEntered.connect(entered.append)
+
+    button.click()
+    QTest.keyClicks(button._color_edit, typed)
+    QTest.qWait(button._LIVE_APPLY_DELAY_MS + 30)
+
+    assert button.color == expected
+    assert entered == [expected]
+    assert button._swatch_stack.currentWidget() is button._color_edit
+
+
+def test_color_button_invalid_live_text_keeps_last_valid_color(qapp):
+    button = ColorButton("#4093E9")
+    button.show()
+    entered: list[str] = []
+    button.colorEntered.connect(entered.append)
+
+    button.click()
+    QTest.keyClicks(button._color_edit, "not-a-color")
+    QTest.qWait(button._LIVE_APPLY_DELAY_MS + 30)
+
+    assert button.color == "#4093E9"
+    assert entered == []
+    assert button._swatch_stack.currentWidget() is button._color_edit
+
+
+def test_color_button_focus_out_keeps_last_live_color(qapp):
+    button = ColorButton("#4093E9")
+    button.show()
+    button.click()
+    QTest.keyClicks(button._color_edit, "123456")
+    QTest.qWait(button._LIVE_APPLY_DELAY_MS + 30)
+
+    button._color_edit.finishRequested.emit()
+
+    assert button.color == "#123456"
+    assert button._swatch_stack.currentWidget() is button._swatch
+
+
+def test_color_button_escape_reverts_entire_live_edit(qapp):
+    button = ColorButton("#4093E9")
+    button.show()
+    entered: list[str] = []
+    button.colorEntered.connect(entered.append)
+    button.click()
+    QTest.keyClicks(button._color_edit, "123456")
+    QTest.qWait(button._LIVE_APPLY_DELAY_MS + 30)
+    assert button.color == "#123456"
+
+    QTest.keyClick(button._color_edit, Qt.Key.Key_Escape)
+
+    assert button.color == "#4093E9"
+    assert entered == ["#123456", "#4093E9"]
+    assert button._swatch_stack.currentWidget() is button._swatch
+
+
 def test_color_button_invalid_hex_or_escape_does_not_apply(qapp):
     button = ColorButton("#4093E9")
     button.show()
@@ -4091,6 +4159,47 @@ def test_main_window_style_panel_updates_preview(qapp, monkeypatch):
     assert win._preview_panel.canvas._style.ruby_font_size_px == 28
     assert win._preview_panel.canvas._style.line_gap_px == 77
     assert win._preview_panel.canvas._style.custom_style_schemes["A"].fill_color == "#FFCC00"
+
+
+def test_live_color_updates_merge_into_one_style_undo_step(qapp, monkeypatch):
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
+    win = mw.SubtitleRenderWindow(embedded=False)
+    button = win._property_panel._paint_solid_btn
+    original = button.color
+
+    button.click()
+    QTest.keyClicks(button._color_edit, "123456")
+    QTest.qWait(button._LIVE_APPLY_DELAY_MS + 30)
+    button._color_edit.selectAll()
+    QTest.keyClicks(button._color_edit, "ABCDEF")
+    QTest.qWait(button._LIVE_APPLY_DELAY_MS + 30)
+
+    assert button.color == "#ABCDEF"
+    assert len(win._undo_stack) == 1
+
+    win._undo_edit()
+    assert button.color == original
+    win.close()
+
+
+def test_escape_removes_noop_live_color_undo_step(qapp, monkeypatch):
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
+    win = mw.SubtitleRenderWindow(embedded=False)
+    button = win._property_panel._paint_solid_btn
+    original = button.color
+
+    button.click()
+    QTest.keyClicks(button._color_edit, "123456")
+    QTest.qWait(button._LIVE_APPLY_DELAY_MS + 30)
+    assert len(win._undo_stack) == 1
+
+    QTest.keyClick(button._color_edit, Qt.Key.Key_Escape)
+
+    assert button.color == original
+    assert win._undo_stack == []
+    win.close()
 
 
 def test_main_window_preview_tab_uses_two_top_regions_and_bottom_timeline(qapp):
