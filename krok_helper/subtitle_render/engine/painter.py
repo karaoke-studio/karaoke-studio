@@ -3596,22 +3596,47 @@ def _paint_line_vertical_direct(
 ) -> None:
     """竖排逐帧直绘（旧路径，A/B oracle + env 回退）。"""
     stroke2_width = _main_stroke2_width(style)
-    # 「未唱」层
-    _paint_text_layer_stack(
-        painter,
-        layout.text_path,
-        layout.line_rect,
-        layout.colors.before,
-        style,
-        stroke_width=style.stroke_width_px,
-        stroke2_width=stroke2_width,
-        shadow_dx=style.shadow_offset_x,
-        shadow_dy=style.shadow_offset_y,
-        glow_radius=_glow_radius(style, after=False),
-    )
+    band = _vertical_fill_band(layout.cells, layout.intervals, t_ms)
+    # 「未唱」层。N3 硬分割：发光存在且已唱层会覆盖已唱带时，未唱层整体裁到
+    # 扫光线之下（见 _vertical_before_clip_rect 注释）。
+    before_clip = None
+    if (
+        band is not None
+        and style.decoration_kind == "glow"
+        and _glow_radius(style, after=False) > 0
+    ):
+        before_clip = _vertical_before_clip_rect(
+            layout.column_x,
+            layout.cell_w,
+            band[1],
+            _vertical_before_clip_pad(
+                style.stroke_width_px,
+                stroke2_width,
+                _glow_radius(style, after=False),
+                style.shadow_offset_x,
+                style.shadow_offset_y,
+            ),
+        )
+    painter.save()
+    try:
+        if before_clip is not None:
+            painter.setClipRect(before_clip)
+        _paint_text_layer_stack(
+            painter,
+            layout.text_path,
+            layout.line_rect,
+            layout.colors.before,
+            style,
+            stroke_width=style.stroke_width_px,
+            stroke2_width=stroke2_width,
+            shadow_dx=style.shadow_offset_x,
+            shadow_dy=style.shadow_offset_y,
+            glow_radius=_glow_radius(style, after=False),
+        )
+    finally:
+        painter.restore()
 
     # 「已唱」层：纵向裁剪带 [y_top, scan]
-    band = _vertical_fill_band(layout.cells, layout.intervals, t_ms)
     if band is not None:
         y0, y_scan = band
         pad = _vertical_after_clip_pad(style)
@@ -3675,6 +3700,40 @@ def _vertical_after_clip_rect(
         float(y0 - pad),
         float(cell_w + pad * 2),
         float((y_scan - y0) + pad),
+    )
+
+
+def _vertical_before_clip_pad(
+    stroke_width: int,
+    stroke2_width: int,
+    before_glow_radius: int,
+    shadow_dx: int,
+    shadow_dy: int,
+) -> int:
+    stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
+    return max(
+        stroke_extent,
+        _glow_extent(stroke_width, stroke2_width, before_glow_radius),
+        stroke_extent + abs(shadow_dx),
+        stroke_extent + abs(shadow_dy),
+        2,
+    )
+
+
+def _vertical_before_clip_rect(
+    column_x: float, cell_w: float, y_scan: float, pad: int
+) -> QRectF:
+    """未唱层的互补裁剪带：扫光线以下（竖排扫光上→下）。
+
+    N3 硬分割：竖排发光烘在整层位图内、无法单独跳过已唱发光，所以只要未唱
+    发光存在就把未唱层整体裁到扫光线之下，已唱带交给已唱层。前后发光相同时
+    两层位图逐像素相同，互补裁剪恰好还原整条 halo（不再是此前的双份叠加）。
+    """
+    return QRectF(
+        float(column_x - cell_w / 2 - pad),
+        float(y_scan),
+        float(cell_w + pad * 2),
+        1_000_000.0,
     )
 
 
@@ -3753,6 +3812,26 @@ def _vertical_layer_stack(
     layers: list = []
     stroke2_width = _main_stroke2_width(style)
     main_sig = _vertical_main_path_sig(line, style, layout)
+    band = _vertical_fill_band(layout.cells, layout.intervals, t_ms)
+    # N3 硬分割：与 _paint_line_vertical_direct 同口径的未唱层互补裁剪。
+    before_clip = None
+    if (
+        band is not None
+        and style.decoration_kind == "glow"
+        and _glow_radius(style, after=False) > 0
+    ):
+        before_clip = _vertical_before_clip_rect(
+            layout.column_x,
+            layout.cell_w,
+            band[1],
+            _vertical_before_clip_pad(
+                style.stroke_width_px,
+                stroke2_width,
+                _glow_radius(style, after=False),
+                style.shadow_offset_x,
+                style.shadow_offset_y,
+            ),
+        )
     layers.append(
         _BakedPathStackLayer(
             path=layout.text_path,
@@ -3770,11 +3849,10 @@ def _vertical_layer_stack(
             shadow_dx=style.shadow_offset_x,
             shadow_dy=style.shadow_offset_y,
             glow_radius=_glow_radius(style, after=False),
-            clip_rect=None,
+            clip_rect=before_clip,
             z_index=0,
         )
     )
-    band = _vertical_fill_band(layout.cells, layout.intervals, t_ms)
     if band is not None:
         y0, y_scan = band
         pad = _vertical_after_clip_pad(style)
@@ -3908,24 +3986,40 @@ def _vertical_ruby_layers(
             "vruby", ruby.kanji, ruby.reading, tuple(units), ruby_font_sig,
             ruby_x, base_top, span_h, count,
         )
-        layers.append(
-            _BakedPathStackLayer(
-                path=ruby_path, rect=ruby_rect, state=colors.before, style=paint_style,
-                cache_key=_baked_stack_key(
-                    ruby_sig, ruby_rect, colors.before, paint_style,
-                    stroke_width=stroke_width, stroke2_width=stroke2_width,
-                    shadow_dx=shadow_dx, shadow_dy=shadow_dy,
-                    glow_radius=before_glow_radius, after=False,
-                ),
-                stroke_width=stroke_width, stroke2_width=stroke2_width,
-                shadow_dx=shadow_dx, shadow_dy=shadow_dy, glow_radius=before_glow_radius,
-                clip_rect=None, z_index=z,
-            )
-        )
-        z += 1
         visible, complete, scan_y = _ruby_segment_wipe_state(
             wipe_segments, ruby.pos_end_ms, t_ms
         )
+        # N3 硬分割：注音未唱层裁到扫光线之下；唱完后已唱层不再裁剪、整读音
+        # 由已唱层负责，未唱层直接省略（发光才有差异，body 本就被覆盖）。
+        glow_split = (
+            _ruby_decoration_kind(style) == "glow" and before_glow_radius > 0
+        )
+        before_clip = None
+        if glow_split and visible and not complete:
+            before_clip = _vertical_before_clip_rect(
+                ruby_x,
+                ruby_cell_w,
+                scan_y,
+                _vertical_before_clip_pad(
+                    stroke_width, stroke2_width, before_glow_radius, shadow_dx, shadow_dy
+                ),
+            )
+        if not (glow_split and visible and complete):
+            layers.append(
+                _BakedPathStackLayer(
+                    path=ruby_path, rect=ruby_rect, state=colors.before, style=paint_style,
+                    cache_key=_baked_stack_key(
+                        ruby_sig, ruby_rect, colors.before, paint_style,
+                        stroke_width=stroke_width, stroke2_width=stroke2_width,
+                        shadow_dx=shadow_dx, shadow_dy=shadow_dy,
+                        glow_radius=before_glow_radius, after=False,
+                    ),
+                    stroke_width=stroke_width, stroke2_width=stroke2_width,
+                    shadow_dx=shadow_dx, shadow_dy=shadow_dy, glow_radius=before_glow_radius,
+                    clip_rect=before_clip, z_index=z,
+                )
+            )
+        z += 1
         if not visible:
             continue
         stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
@@ -4091,22 +4185,46 @@ def _paint_rubies_vertical(
             float(ruby_cell_w),
             float(span_h),
         )
-        _paint_text_layer_stack(
-            painter,
-            ruby_path,
-            ruby_rect,
-            colors.before,
-            paint_style,
-            stroke_width=stroke_width,
-            stroke2_width=stroke2_width,
-            shadow_dx=shadow_dx,
-            shadow_dy=shadow_dy,
-            glow_radius=before_glow_radius,
-        )
-
         visible, complete, scan_y = _ruby_segment_wipe_state(
             wipe_segments, ruby.pos_end_ms, t_ms
         )
+        # N3 硬分割：与 _vertical_ruby_layers 同口径（direct 是像素一致 oracle）。
+        glow_split = (
+            _ruby_decoration_kind(style) == "glow" and before_glow_radius > 0
+        )
+        if not (glow_split and visible and complete):
+            painter.save()
+            try:
+                if glow_split and visible and not complete:
+                    painter.setClipRect(
+                        _vertical_before_clip_rect(
+                            ruby_x,
+                            ruby_cell_w,
+                            scan_y,
+                            _vertical_before_clip_pad(
+                                stroke_width,
+                                stroke2_width,
+                                before_glow_radius,
+                                shadow_dx,
+                                shadow_dy,
+                            ),
+                        )
+                    )
+                _paint_text_layer_stack(
+                    painter,
+                    ruby_path,
+                    ruby_rect,
+                    colors.before,
+                    paint_style,
+                    stroke_width=stroke_width,
+                    stroke2_width=stroke2_width,
+                    shadow_dx=shadow_dx,
+                    shadow_dy=shadow_dy,
+                    glow_radius=before_glow_radius,
+                )
+            finally:
+                painter.restore()
+
         if not visible:
             continue
         stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
@@ -5012,7 +5130,11 @@ def _paint_line_direct(
     y = layout.baseline_y
     for run in runs:
         role_style = run[0].style
-        if _before_glow_requires_state_clip(role_style):
+        # 与 _GlyphRunLayer.animate 同口径的 N3 硬分割（direct 是 layers 的
+        # 像素一致性 oracle）。
+        if _glow_radius(role_style, after=False) > 0 and _karaoke_glow_states_differ(
+            role_style, _effective_karaoke_colors(role_style)
+        ):
             before_band = _fill_clip_band_for_glyphs(
                 layout.fill_segments, run, t_ms, layout.rtl
             )
@@ -5493,7 +5615,16 @@ class _GlyphRunLayer:
         run_left = min(glyph.left for glyph in self.glyphs)
         clip_rect = None
         role_style = self.glyphs[0].style
-        if not self.after and _before_glow_requires_state_clip(role_style):
+        # N3 硬分割：前后发光不同（颜色或半径）时，未唱层（含发光）整体裁到
+        # 扫光线未唱侧，已唱侧由已唱层 + 已唱发光层负责；相同时未唱层整行铺满、
+        # 已唱发光层被跳过（结果等价）。
+        if (
+            not self.after
+            and _glow_radius(role_style, after=False) > 0
+            and _karaoke_glow_states_differ(
+                role_style, _effective_karaoke_colors(role_style)
+            )
+        ):
             band = _fill_clip_band_for_glyphs(
                 self.fill_segments, self.glyphs, self.t_ms, self.rtl
             )
@@ -6138,14 +6269,6 @@ def _glyph_run_needs_after_glow(glyphs: list[_GlyphLayout]) -> bool:
     if _glow_radius(role_style, after=True) == 0:
         return False
     return _karaoke_glow_states_differ(role_style, _effective_karaoke_colors(role_style))
-
-
-def _before_glow_requires_state_clip(style: Style) -> bool:
-    return (
-        style.decoration_kind == "glow"
-        and _glow_radius(style, after=False) > 0
-        and _glow_radius(style, after=True) == 0
-    )
 
 
 def _ruby_glow_states_differ(style: Style) -> bool:

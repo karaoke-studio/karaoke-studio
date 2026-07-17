@@ -4609,6 +4609,56 @@ def test_utopia_wipe_splits_before_after_glow_at_scanline(qapp, monkeypatch):
         )
 
 
+def test_static_wipe_splits_before_after_glow_at_scanline(qapp, monkeypatch):
+    """静态（无逐字过渡）路径同样遵守 N3 硬分割：layers 与 direct 两条子路径。"""
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar(text="あ", start_ms=1000)], end_ms=2000)]
+    )
+    t_mid = 1500
+    static_style = replace(_glow_split_style(), entry_anim="none", exit_anim="none")
+    static_body = replace(
+        _glow_split_style(before_radius=0, after_radius=0),
+        entry_anim="none",
+        exit_anim="none",
+    )
+
+    for layer_flag in ("1", "0"):
+        monkeypatch.setenv("KROK_SUBTITLE_HORIZONTAL_LAYER", layer_flag)
+        clear_before_layer_cache()
+
+        body = _blank()
+        paint_frame(body, track, t_mid, static_body)
+        arr_body = _image_rgba_array(body).astype(int)
+        ys, xs = np.nonzero(arr_body[:, :, :3].max(axis=2) > 60)
+        assert xs.size > 0
+        ink_left, ink_right = int(xs.min()), int(xs.max())
+
+        glow = _blank()
+        paint_frame(glow, track, t_mid, static_style)
+        arr = _image_rgba_array(glow).astype(int)
+
+        front = (ink_left + ink_right) // 2
+        reach = 30
+        y0 = max(int(ys.min()) - reach, 0)
+        y1 = min(int(ys.max()) + reach, arr.shape[0] - 1)
+
+        def _halo_sums(x0: int, x1: int) -> tuple[int, int]:
+            region = arr[y0 : y1 + 1, max(x0, 0) : x1 + 1]
+            r, g, b = region[:, :, 0], region[:, :, 1], region[:, :, 2]
+            halo = (g < 60) & ((r > 25) | (b > 25))
+            return int(r[halo].sum()), int(b[halo].sum())
+
+        left_r, left_b = _halo_sums(ink_left - reach, front - 8)
+        right_r, right_b = _halo_sums(front + 8, ink_right + reach)
+        assert left_b > 0 and right_r > 0
+        assert left_r * 4 < left_b, (
+            f"layer={layer_flag} 已唱侧 halo 混入未唱发光: r_sum={left_r} b_sum={left_b}"
+        )
+        assert right_b * 4 < right_r, (
+            f"layer={layer_flag} 未唱侧 halo 混入已唱发光: r_sum={right_r} b_sum={right_b}"
+        )
+
+
 def test_ruby_keeps_unsung_reading_during_char_transition(qapp):
     """入退场过渡窗口与走字重叠时，未唱读音不得消失。
 
