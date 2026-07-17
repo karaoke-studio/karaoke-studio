@@ -4462,9 +4462,12 @@ def _layout_plain_line(
         line, style, x0=x0, baseline_y=y, inline_styles=False, char_gaps=char_gaps
     )
     ink_x_ranges = _role_char_ink_ranges_by_index(line, text_layout, char_x_ranges)
+    wipe_x_ranges = _n3_char_wipe_ranges_by_index(
+        line, text_layout, char_x_ranges, ink_x_ranges
+    )
     fill_segments = _karaoke_fill_segments(
         char_widths, intervals, ink_x_ranges, active_rubies, line,
-        release_x_ranges=char_x_ranges,
+        release_x_ranges=wipe_x_ranges,
     )
     line_rect = QRectF(
         float(x0), float(y - metrics.ascent()), float(total_w), float(metrics.height()),
@@ -4946,9 +4949,12 @@ def _layout_role_line(
     char_widths, char_x_ranges = _role_char_geometry_by_index(line, text_layout)
     intervals = compute_char_intervals(line, char_widths)
     ink_x_ranges = _role_char_ink_ranges_by_index(line, text_layout, char_x_ranges)
+    wipe_x_ranges = _n3_char_wipe_ranges_by_index(
+        line, text_layout, char_x_ranges, ink_x_ranges
+    )
     fill_segments = _karaoke_fill_segments(
         char_widths, intervals, ink_x_ranges, active_rubies, line,
-        release_x_ranges=char_x_ranges,
+        release_x_ranges=wipe_x_ranges,
     )
     ruby_layouts = tuple(
         _layout_rubies(
@@ -5043,6 +5049,12 @@ def _paint_line_direct(
             glyph_complete = _run_fill_complete(
                 layout.fill_segments, {glyph.index}, t_ms
             )
+            following_band = _n3_following_wipe_band(
+                layout.fill_segments, {glyph.index}, t_ms, layout.rtl
+            )
+            if following_band is not None:
+                glyph_band = following_band
+            glyph_released = glyph_complete and following_band is None
             if _glyph_run_needs_after_glow(glyph_run):
                 _paint_glyph_run_after_glow_direct(
                     painter,
@@ -5050,10 +5062,10 @@ def _paint_line_direct(
                     y,
                     glyph_band,
                     rtl=layout.rtl,
-                    complete=glyph_complete,
+                    complete=glyph_released,
                     fill_rect=fill_rect,
                 )
-            if glyph_complete:
+            if glyph_released:
                 _paint_glyph_run_direct(
                     painter, glyph_run, y, after=True, fill_rect=fill_rect
                 )
@@ -5494,12 +5506,19 @@ class _GlyphRunLayer:
                     return LayerAnimation(opacity=0.0)
                 clip_rect = _horizontal_before_clip_rect(band, self.rtl)
         elif self.after:
-            band = self.clip_band or _fill_clip_band(self.fill_segments, self.t_ms, self.rtl)
+            indices = {glyph.index for glyph in self.glyphs}
+            following_band = _n3_following_wipe_band(
+                self.fill_segments, indices, self.t_ms, self.rtl
+            )
+            band = following_band or self.clip_band or _fill_clip_band(
+                self.fill_segments, self.t_ms, self.rtl
+            )
             if band is None:
                 return LayerAnimation(opacity=0.0)
             band_left, band_right = band
-            if _run_fill_complete(
-                self.fill_segments, {glyph.index for glyph in self.glyphs}, self.t_ms
+            if (
+                _run_fill_complete(self.fill_segments, indices, self.t_ms)
+                and following_band is None
             ):
                 # 唱完后不裁切：带缘停在墨水边界，再裁会把行缘的描边/阴影硬截掉。
                 clip_rect = None
@@ -5561,9 +5580,12 @@ class _GlyphRunAfterGlowLayer:
         band = self.clip_band or _fill_clip_band(self.fill_segments, self.t_ms, self.rtl)
         if not need_after_glow or band is None:
             return None
+        indices = {glyph.index for glyph in self.glyphs}
         if not _run_fill_complete(
-            self.fill_segments, {glyph.index for glyph in self.glyphs}, self.t_ms
-        ):
+            self.fill_segments, indices, self.t_ms
+        ) or _n3_following_wipe_band(
+            self.fill_segments, indices, self.t_ms, self.rtl
+        ) is not None:
             return None
         return (
             _glyph_run_after_glow_key(self.glyphs, role_style, colors),
@@ -5586,7 +5608,13 @@ class _GlyphRunAfterGlowLayer:
 
     def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
         run_left = min(glyph.left for glyph in self.glyphs)
-        band = self.clip_band or _fill_clip_band(self.fill_segments, self.t_ms, self.rtl)
+        indices = {glyph.index for glyph in self.glyphs}
+        following_band = _n3_following_wipe_band(
+            self.fill_segments, indices, self.t_ms, self.rtl
+        )
+        band = following_band or self.clip_band or _fill_clip_band(
+            self.fill_segments, self.t_ms, self.rtl
+        )
         if band is None:
             return LayerAnimation(opacity=0.0)
         rect = _glyph_run_rect(self.glyphs, self.baseline_y)
@@ -5596,8 +5624,9 @@ class _GlyphRunAfterGlowLayer:
             role_style.stroke2_width_px,
             _glow_radius(role_style, after=True),
         )
-        complete = _run_fill_complete(
-            self.fill_segments, {glyph.index for glyph in self.glyphs}, self.t_ms
+        complete = (
+            _run_fill_complete(self.fill_segments, indices, self.t_ms)
+            and following_band is None
         )
         clip_rect = None if complete else _after_glow_loose_clip_rect(
             band,
@@ -5614,14 +5643,21 @@ class _GlyphRunAfterGlowLayer:
         )
 
     def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
-        band = self.clip_band or _fill_clip_band(self.fill_segments, self.t_ms, self.rtl)
+        indices = {glyph.index for glyph in self.glyphs}
+        following_band = _n3_following_wipe_band(
+            self.fill_segments, indices, self.t_ms, self.rtl
+        )
+        band = following_band or self.clip_band or _fill_clip_band(
+            self.fill_segments, self.t_ms, self.rtl
+        )
         if band is None:
             return
         opacity = max(0.0, min(float(self.fade_opacity), 1.0))
         if opacity <= 0.0:
             return
-        complete = _run_fill_complete(
-            self.fill_segments, {glyph.index for glyph in self.glyphs}, self.t_ms
+        complete = (
+            _run_fill_complete(self.fill_segments, indices, self.t_ms)
+            and following_band is None
         )
         painter.save()
         try:
@@ -6649,6 +6685,34 @@ def _role_char_ink_ranges_by_index(
             ranges[glyph.index] = (left, left)
         else:
             ranges[glyph.index] = (int(math.floor(br.left())), int(math.ceil(br.right())))
+    return ranges
+
+
+def _n3_char_wipe_ranges_by_index(
+    line: TimingLine,
+    layout: _TextLayout,
+    char_x_ranges: list[tuple[int, int]],
+    ink_x_ranges: list[tuple[int, int]],
+) -> list[tuple[int, int]]:
+    """Return N3 ``WipeLeft`` bounds for each main-text glyph.
+
+    N3 interpolates across the transformed glyph geometry expanded by half of
+    the primary edge size.  The character advance box is only layout geometry;
+    using it as the wipe range spends singing time in transparent side bearings
+    and creates a visible pause at otherwise contiguous character timestamps.
+    Empty glyphs (notably timed spaces) deliberately keep zero-width geometry.
+    """
+    ranges = list(ink_x_ranges)
+    for glyph in layout.glyphs:
+        if not (0 <= glyph.index < len(ranges)):
+            continue
+        ink_left, ink_right = ranges[glyph.index]
+        if not glyph.text or glyph.text.isspace() or ink_right <= ink_left:
+            ranges[glyph.index] = (char_x_ranges[glyph.index][0],) * 2
+            continue
+        # N3 truncates the scaled EdgeSize first, then performs integer / 2.
+        edge_half = max(int(glyph.style.stroke_width_px), 0) // 2
+        ranges[glyph.index] = (ink_left - edge_half, ink_right + edge_half)
     return ranges
 
 
@@ -8027,6 +8091,77 @@ def _segment_wipe_edges(segment: _FillSegment) -> tuple[int, int]:
         segment.release_right if segment.release_right is not None else segment.right
     )
     return left, max(left, right)
+
+
+def _segment_wipe_times(segment: _FillSegment) -> tuple[int, int]:
+    """Return the effective N3 wipe window for one main-text segment."""
+    if segment.ruby is not None:
+        return int(segment.ruby.pos_start_ms), int(segment.ruby.pos_end_ms)
+    return int(segment.start_ms), int(segment.end_ms)
+
+
+def _segment_wipe_band_at(
+    segment: _FillSegment,
+    t_ms: int,
+    rtl: bool,
+) -> tuple[int, int]:
+    """Return one segment's wipe band, including its zero-progress boundary."""
+    wipe_left, wipe_right = _segment_wipe_edges(segment)
+    ratio = _segment_fill_ratio(segment, t_ms)
+    if rtl:
+        boundary = wipe_right - int(round((wipe_right - wipe_left) * ratio))
+        return boundary, wipe_right
+    boundary = wipe_left + int(round((wipe_right - wipe_left) * ratio))
+    return wipe_left, boundary
+
+
+def _n3_following_wipe_band(
+    segments: list[_FillSegment],
+    indices: set[int],
+    t_ms: int,
+    rtl: bool,
+) -> tuple[int, int] | None:
+    """Keep a completed glyph on N3's shared front until its successor ends.
+
+    N3 continues treating the preceding character as ``IsWiping`` while the
+    following character is active.  At the exact hand-off it still uses the
+    preceding segment's adjusted endpoint; afterwards it reuses the following
+    segment's moving boundary.  This is what releases overlapping outlines
+    continuously instead of fully opening each glyph at its own end.
+
+    N3's implementation is left-to-right.  Keep this compatibility behavior
+    scoped away from the application's independent RTL extension.
+    """
+    if rtl or not indices:
+        return None
+    positions = [
+        position
+        for position, segment in enumerate(segments)
+        if segment.indices and any(index in indices for index in segment.indices)
+    ]
+    if not positions:
+        return None
+    current_position = max(positions)
+    if current_position >= len(segments) - 1:
+        return None
+    current = segments[current_position]
+    following = segments[current_position + 1]
+    # N3 cannot reuse a following space/no-wipe glyph because it has no
+    # transformed geometry.  Its WipeLeft fallback leaves the completed glyph
+    # fully released instead of holding its outline/glow through the pause.
+    if following.right <= following.left:
+        return None
+    current_start, current_end = _segment_wipe_times(current)
+    _following_start, following_end = _segment_wipe_times(following)
+    if not (
+        current_start < t_ms < following_end
+        and current_start != following_end
+        and _segment_fill_ratio(current, t_ms) >= 1.0
+    ):
+        return None
+    if t_ms <= current_end:
+        return _segment_wipe_band_at(current, t_ms, rtl=False)
+    return _segment_wipe_band_at(following, t_ms, rtl=False)
 
 
 def _fill_extent_end(

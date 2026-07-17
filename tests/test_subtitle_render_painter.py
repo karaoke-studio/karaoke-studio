@@ -1237,7 +1237,7 @@ def test_after_body_layer_unclipped_when_fully_sung(qapp):
 
     # N3 逐字符语义：前一字唱完立即完整释放，当前字仍按自己的扫光线裁切。
     mid = body_clips(1700)
-    assert mid[0] is None
+    assert mid[0] is not None
     assert any(clip is not None for clip in mid[1:])
     # 全部唱完后每个字符都不再裁切，描边/阴影完整。
     assert all(clip is None for clip in body_clips(9000))
@@ -1826,6 +1826,48 @@ def test_static_wipe_segments_use_ink_bounds_not_advance(qapp):
         br = path.boundingRect()
         assert seg.left == int(math.floor(br.left()))
         assert seg.right == int(math.ceil(br.right()))
+
+
+def test_n3_main_wipe_bounds_exclude_advance_side_bearings(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="i", start_ms=1000),
+            TimingChar(text="W", start_ms=2000),
+        ],
+        end_ms=3000,
+    )
+    track = TimingTrack(lines=[line])
+    style = Style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=100,
+        line_y_position="center",
+        letter_spacing_px=30,
+        stroke_width_px=13,
+        stroke2_width_px=0,
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+    )
+
+    layout = _layout_line(track, line, style, 800, 240)
+
+    assert layout is not None
+    edge_half = style.stroke_width_px // 2
+    for index, segment in enumerate(layout.fill_segments):
+        ink_left, ink_right = layout.ink_x_ranges[index]
+        assert (segment.release_left, segment.release_right) == (
+            ink_left - edge_half,
+            ink_right + edge_half,
+        )
+    synthetic_layout = SimpleNamespace(
+        glyphs=[SimpleNamespace(index=0, text="A", style=style)]
+    )
+    assert subtitle_painter._n3_char_wipe_ranges_by_index(
+        TimingLine(chars=[TimingChar(text="A", start_ms=0)], end_ms=1000),
+        synthetic_layout,
+        [(100, 200)],
+        [(120, 160)],
+    ) == [(114, 166)]
 
 
 def test_nicokara_layout_width_includes_edge_and_optional_biting():
@@ -3128,6 +3170,35 @@ def test_n3_release_edge_clamps_to_following_overlapping_draw_left(qapp):
     assert segments[0].release_right == 210
     assert _fill_extent_end(segments, 1300) == 210
     assert _fill_extent_end(segments, 1500) == 210
+
+
+def test_n3_completed_glyph_follows_successor_wipe_boundary(qapp):
+    segments = subtitle_painter._adjust_fill_release_edges(
+        [
+            _FillSegment(
+                100, 200, 1000, 1300, indices=(0,),
+                release_left=92, release_right=218,
+            ),
+            _FillSegment(
+                220, 280, 1300, 1600, indices=(1,),
+                release_left=210, release_right=290,
+            ),
+        ]
+    )
+
+    # 精确交接时仍使用前一字的 AdjustWipeEnd 终点。
+    assert subtitle_painter._n3_following_wipe_band(
+        segments, {0}, 1300, rtl=False
+    ) == (92, 210)
+    # 下一采样时刻复用后一字的移动边界，而不是解除前一字裁剪。
+    following = subtitle_painter._n3_following_wipe_band(
+        segments, {0}, 1450, rtl=False
+    )
+    assert following == (210, 250)
+    # 后一字结束后，前一字才真正完整释放。
+    assert subtitle_painter._n3_following_wipe_band(
+        segments, {0}, 1600, rtl=False
+    ) is None
 
 
 def test_n3_wipe_interpolates_to_adjusted_draw_edge_without_boundary_jump(qapp):
