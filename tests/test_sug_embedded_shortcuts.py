@@ -252,6 +252,36 @@ def test_unsaved_project_confirmation_saves_both_modules(monkeypatch) -> None:
     }
 
 
+def test_unsaved_confirmation_uses_explicit_project_state(monkeypatch) -> None:
+    captured: dict[str, object] = {}
+
+    def cancel_dialog(_parent, _title, content, _buttons, **_kwargs):
+        captured["content"] = content
+        return 2
+
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        cancel_dialog,
+    )
+    page = SimpleNamespace(
+        project_state=lambda: SimpleNamespace(
+            dirty=True,
+            status_text=lambda: "song.yurika · 未保存 · 素材缺失 1 项",
+        ),
+        has_unsaved_changes=lambda: False,
+    )
+    app = SimpleNamespace(subtitle_render_page=page)
+    event = _FakeCloseEvent()
+
+    assert not KrokHelperQtApp._confirm_unsaved_projects(
+        app, event, (("字幕视频生成", page),)
+    )
+    assert event.ignored is True
+    assert "字幕视频生成（song.yurika · 未保存 · 素材缺失 1 项）" in str(
+        captured["content"]
+    )
+
+
 def test_request_force_quit_closes_before_scheduling_hard_exit(monkeypatch) -> None:
     calls: list[str] = []
     app = SimpleNamespace(

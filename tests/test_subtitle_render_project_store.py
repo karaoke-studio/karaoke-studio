@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import os
+import logging
+import tempfile
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtCore import QPoint, Qt  # noqa: E402
+from PyQt6.QtCore import QPoint, QUrl, Qt  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu  # noqa: E402
 from qfluentwidgets.components.widgets.menu import MenuAnimationType  # noqa: E402
@@ -34,9 +37,12 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
 )
 from krok_helper.subtitle_render.project_store import (  # noqa: E402
     PROJECT_SCHEMA_VERSION,
+    backup_project_file,
     background_payload,
+    inspect_project_file,
     invalidate_recovery_project,
     load_render_project,
+    save_discarded_project_backup,
     save_recovery_project,
     save_render_project,
     scan_recovery_projects,
@@ -50,6 +56,11 @@ def qapp():
 
 
 def _make_window(qapp, monkeypatch):
+    if not os.environ.get("KARAOKE_STUDIO_SETTINGS_DIR"):
+        monkeypatch.setenv(
+            "KARAOKE_STUDIO_SETTINGS_DIR",
+            tempfile.mkdtemp(prefix="karaoke-studio-test-settings-"),
+        )
     monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
     monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
     monkeypatch.setattr(
@@ -109,6 +120,68 @@ def test_atomic_project_save_preserves_previous_file_on_replace_failure(
 
     assert load_render_project(path)["value"] == "old"
     assert list(tmp_path.glob(".*.tmp")) == []
+
+
+def test_project_file_revision_detects_content_change_with_same_mtime(tmp_path):
+    path = tmp_path / "revision.yurika"
+    path.write_text("AAAA", encoding="utf-8")
+    original = inspect_project_file(path)
+
+    path.write_text("BBBB", encoding="utf-8")
+    os.utime(path, ns=(original.mtime_ns, original.mtime_ns))
+    changed = inspect_project_file(path)
+
+    assert changed.mtime_ns == original.mtime_ns
+    assert changed.size == original.size
+    assert changed.sha256 != original.sha256
+
+
+def test_manual_project_backups_rotate_to_configured_count(tmp_path):
+    project = tmp_path / "song.yurika"
+    backup_root = tmp_path / "backups"
+    for version in range(4):
+        save_render_project(project, {"version": version})
+        backup_project_file(project, backup_root, max_count=2)
+
+    backups = list(backup_root.rglob("*.manual-backup.yurika"))
+    assert len(backups) == 2
+    assert {load_render_project(path)["version"] for path in backups} == {2, 3}
+
+
+def test_discarded_backup_is_labelled_with_source_and_retention(tmp_path):
+    source = tmp_path / "song.yurika"
+    backup = save_discarded_project_backup(
+        tmp_path / "backups",
+        {"value": "unsaved"},
+        source_project_path=source,
+        retention_days=7,
+    )
+
+    restored = load_render_project(backup)
+    assert ".discarded-backup.yurika" in backup.name
+    assert restored["value"] == "unsaved"
+    assert restored["backup"]["kind"] == "discarded_changes"
+    assert restored["backup"]["source_project_path"] == str(source)
+    assert restored["backup"]["retention_days"] == 7
+
+
+def test_discard_unsaved_creates_emergency_backup_before_clearing_dirty(
+    qapp, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    win = _make_window(qapp, monkeypatch)
+    win._project_path = tmp_path / "discard-me.yurika"
+    win._style = Style(font_size_px=88)
+    win._mark_project_dirty()
+
+    win.discard_unsaved()
+
+    backups = list((tmp_path / "settings" / "subtitle_render_backups").rglob(
+        "*.discarded-backup.yurika"
+    ))
+    assert len(backups) == 1
+    assert load_render_project(backups[0])["style"]["font_size_px"] == 88
+    assert win.has_unsaved_changes() is False
 
 
 def test_recovery_writer_rejects_an_older_snapshot(tmp_path):
@@ -668,11 +741,12 @@ def test_auto_save_configuration_persists(qapp, monkeypatch, tmp_path):
     monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
     win = _make_window(qapp, monkeypatch)
 
-    win._configure_auto_save(False, 7, persist=True)
+    win._configure_auto_save(False, 7, backup_count=9, persist=True)
     restored = _make_window(qapp, monkeypatch)
 
     assert restored._auto_save_enabled is False
     assert restored._auto_save_interval_minutes == 7
+    assert restored._project_backup_count == 9
     assert not restored._periodic_auto_save_timer.isActive()
     win.close()
     restored.close()
@@ -724,6 +798,159 @@ def test_save_failure_keeps_dirty_and_reports_state(qapp, monkeypatch, tmp_path)
     assert state.saving is False
     assert state.save_error == "disk full"
     assert state.status_text() == "song.yurika · 保存失败"
+
+
+def test_save_failure_dialog_exposes_copyable_path_and_reason(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    path = tmp_path / "copyable-error.yurika"
+    win._project_path = path
+    win._mark_project_dirty()
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(
+        mw,
+        "save_render_project",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    monkeypatch.setattr(
+        mw,
+        "fluent_error",
+        lambda *args, **kwargs: captured.update(args=args, kwargs=kwargs),
+    )
+
+    assert win.trigger_save() is False
+
+    assert str(path) in captured["args"][2]
+    assert "disk full" in captured["args"][2]
+    assert captured["kwargs"] == {"copyable": True}
+
+
+def test_external_project_change_requires_explicit_conflict_choice(
+    qapp, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    project = tmp_path / "conflict.yurika"
+    save_render_project(project, {"value": "opened", "style": style_to_dict(Style())})
+    win = _make_window(qapp, monkeypatch)
+    assert win._open_project_path(project)
+    win._mark_project_dirty()
+    save_render_project(project, {"value": "external", "style": style_to_dict(Style())})
+    choices: list[tuple] = []
+
+    def cancel_conflict(*args, **kwargs):
+        choices.append((args, kwargs))
+        return 2
+
+    monkeypatch.setattr(mw, "fluent_choice", cancel_conflict)
+
+    assert win.trigger_save() is False
+    assert load_render_project(project)["value"] == "external"
+    assert choices[0][0][3] == ("覆盖", "另存为", "取消")
+    assert choices[0][1] == {"default": 2}
+    assert win.has_unsaved_changes() is True
+
+
+def test_overwriting_external_change_keeps_that_revision_as_backup(
+    qapp, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    project = tmp_path / "overwrite.yurika"
+    save_render_project(project, {"value": "opened", "style": style_to_dict(Style())})
+    win = _make_window(qapp, monkeypatch)
+    assert win._open_project_path(project)
+    win._style = Style(font_size_px=97)
+    win._property_panel.set_style(win._style)
+    win._mark_project_dirty()
+    save_render_project(project, {"value": "external", "style": style_to_dict(Style())})
+    monkeypatch.setattr(mw, "fluent_choice", lambda *_args, **_kwargs: 0)
+
+    assert win.trigger_save() is True
+
+    backups = list((tmp_path / "settings" / "subtitle_render_backups").rglob(
+        "*.manual-backup.yurika"
+    ))
+    assert len(backups) == 1
+    assert load_render_project(backups[0])["value"] == "external"
+    assert load_render_project(project)["style"]["font_size_px"] == 97
+
+
+def test_save_action_and_missing_asset_status_share_project_state(
+    qapp, monkeypatch, tmp_path
+):
+    project = tmp_path / "missing-state.yurika"
+    subtitle = tmp_path / "later.lrc"
+    save_render_project(
+        project,
+        {"subtitle_path": str(subtitle), "style": style_to_dict(Style())},
+    )
+    win = _make_window(qapp, monkeypatch)
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **_kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "info", lambda **_kwargs: None)
+
+    assert win._open_project_path(project)
+    state = win.project_state()
+    assert state.dirty is False
+    assert state.missing_resources == (("主字幕", subtitle),)
+    assert state.status_text() == "missing-state.yurika · 素材缺失 1 项"
+    assert win._save_project_action.isEnabled() is False
+
+    subtitle.write_text("[00:00.00]test", encoding="utf-8")
+    win._refresh_missing_resource_status()
+
+    refreshed = win.project_state()
+    assert refreshed.missing_resources == ()
+    assert refreshed.dirty is False
+    assert win._timing_track is None
+    assert win._current_project_data()["subtitle_path"] == str(subtitle)
+
+    win._mark_project_dirty()
+    assert win._save_project_action.isEnabled() is True
+
+
+def test_project_state_diagnostics_do_not_log_path_or_error_text(
+    qapp, monkeypatch, tmp_path, caplog
+):
+    win = _make_window(qapp, monkeypatch)
+    secret_name = "private-song-name.yurika"
+    secret_error = "secret filesystem detail"
+    win._project_path = tmp_path / secret_name
+    win._project_dirty = True
+    win._project_save_error = secret_error
+
+    with caplog.at_level(logging.INFO, logger=mw.__name__):
+        win._last_logged_project_state = None
+        win._refresh_project_title()
+
+    messages = [
+        record.getMessage()
+        for record in caplog.records
+        if record.getMessage().startswith("字幕项目状态变化:")
+    ]
+    assert messages
+    assert secret_name not in messages[-1]
+    assert secret_error not in messages[-1]
+
+
+def test_open_backup_directory_opens_shared_backup_root(
+    qapp, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    win = _make_window(qapp, monkeypatch)
+    win._project_path = tmp_path / "open-backups.yurika"
+    opened: list[QUrl] = []
+    monkeypatch.setattr(
+        mw.QDesktopServices,
+        "openUrl",
+        lambda url: opened.append(url) or True,
+    )
+
+    win._open_project_backup_directory()
+
+    assert len(opened) == 1
+    opened_path = Path(opened[0].toLocalFile())
+    assert opened_path.is_dir()
+    assert opened_path.name == "subtitle_render_backups"
 
 
 def test_title_char_roles_round_trip_and_follow_text_edits():

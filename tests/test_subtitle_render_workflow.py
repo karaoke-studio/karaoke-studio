@@ -74,6 +74,32 @@ def test_subtitle_project_state_is_mirrored_to_workflow_step(tmp_path: Path) -> 
     assert calls == [(WORKFLOW_SUBTITLE_RENDER, "song.yurika · 未保存")]
 
 
+def test_missing_asset_state_is_mirrored_to_workflow_step(tmp_path: Path) -> None:
+    calls: list[tuple[str, str | None]] = []
+    app = SimpleNamespace(
+        workflow_stepper=SimpleNamespace(
+            setStepStatus=lambda module, text: calls.append((module, text))
+        )
+    )
+    state = SubtitleProjectState(
+        display_name="song.yurika",
+        path=tmp_path / "song.yurika",
+        has_project=True,
+        dirty=False,
+        saving=False,
+        save_error=None,
+        exporting=False,
+        recovery_path=None,
+        missing_resources=(("主字幕", tmp_path / "missing.lrc"),),
+    )
+
+    KrokHelperQtApp._on_subtitle_project_state_changed(app, state)
+
+    assert calls == [
+        (WORKFLOW_SUBTITLE_RENDER, "song.yurika · 素材缺失 1 项")
+    ]
+
+
 def test_pending_subtitle_recovery_switches_module_before_prompt() -> None:
     calls: list[str] = []
     page = SimpleNamespace(

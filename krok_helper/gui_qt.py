@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import math
 import os
 import subprocess
@@ -8069,12 +8070,29 @@ class KrokHelperQtApp(QMainWindow):
             if page is None:
                 continue
             try:
-                dirty = bool(
-                    hasattr(page, "has_unsaved_changes")
-                    and page.has_unsaved_changes()
-                )
+                state_factory = getattr(page, "project_state", None)
+                state = state_factory() if callable(state_factory) else None
+                if state is not None and hasattr(state, "dirty"):
+                    dirty = bool(state.dirty)
+                    status_factory = getattr(state, "status_text", None)
+                    status = (
+                        status_factory() if callable(status_factory) else None
+                    )
+                    if status:
+                        label = f"{label}（{status}）"
+                else:
+                    dirty = bool(
+                        hasattr(page, "has_unsaved_changes")
+                        and page.has_unsaved_changes()
+                    )
             except Exception:
-                dirty = False
+                try:
+                    dirty = bool(
+                        hasattr(page, "has_unsaved_changes")
+                        and page.has_unsaved_changes()
+                    )
+                except Exception:
+                    dirty = False
             if dirty:
                 dirty_pages.append((label, page))
 

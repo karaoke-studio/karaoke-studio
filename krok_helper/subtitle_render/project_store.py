@@ -15,7 +15,9 @@ key（前后兼容）。
 from __future__ import annotations
 
 import json
+import hashlib
 import os
+import shutil
 import threading
 import time
 from dataclasses import dataclass
@@ -36,6 +38,124 @@ class RecoveryCandidate:
     source_project_path: Optional[Path]
     created_at_unix: float
     snapshot_id: int
+
+
+@dataclass(frozen=True)
+class ProjectFileRevision:
+    """Privacy-safe identity of one on-disk project revision."""
+
+    exists: bool
+    mtime_ns: int = 0
+    size: int = 0
+    sha256: str = ""
+
+
+def inspect_project_file(path: Path) -> ProjectFileRevision:
+    """Return mtime, size, and content digest for external-change detection."""
+    path = Path(path)
+    try:
+        stat_before = path.stat()
+    except FileNotFoundError:
+        return ProjectFileRevision(exists=False)
+    digest = hashlib.sha256()
+    try:
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        stat_after = path.stat()
+    except FileNotFoundError:
+        return ProjectFileRevision(exists=False)
+    if (
+        stat_before.st_mtime_ns != stat_after.st_mtime_ns
+        or stat_before.st_size != stat_after.st_size
+    ):
+        raise OSError("项目文件在检查期间发生了变化，请重试")
+    return ProjectFileRevision(
+        exists=True,
+        mtime_ns=stat_after.st_mtime_ns,
+        size=stat_after.st_size,
+        sha256=digest.hexdigest(),
+    )
+
+
+def project_backup_directory(root: Path, source_path: Path) -> Path:
+    """Return the stable per-project backup directory without exposing full paths."""
+    source = Path(source_path)
+    identity = str(source.resolve()).encode("utf-8", errors="surrogatepass")
+    suffix = hashlib.sha256(identity).hexdigest()[:12]
+    return Path(root) / f"{source.stem}-{suffix}"
+
+
+def backup_project_file(
+    source_path: Path,
+    root: Path,
+    *,
+    max_count: int,
+) -> Optional[Path]:
+    """Copy the current formal project revision and rotate older backups."""
+    source = Path(source_path)
+    limit = max(0, int(max_count))
+    if limit == 0 or not source.is_file():
+        return None
+    directory = project_backup_directory(root, source)
+    directory.mkdir(parents=True, exist_ok=True)
+    destination = directory / (
+        f"{source.stem}.{time.time_ns()}.manual-backup{PROJECT_FILE_SUFFIX}"
+    )
+    temp_path = destination.with_name(f".{destination.name}.{uuid4().hex}.tmp")
+    try:
+        shutil.copy2(source, temp_path)
+        os.replace(temp_path, destination)
+    finally:
+        try:
+            temp_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+    backups = sorted(
+        directory.glob(f"*.manual-backup{PROJECT_FILE_SUFFIX}"),
+        key=lambda item: item.stat().st_mtime_ns,
+        reverse=True,
+    )
+    for stale in backups[limit:]:
+        try:
+            stale.unlink(missing_ok=True)
+        except OSError:
+            pass
+    return destination
+
+
+def save_discarded_project_backup(
+    root: Path,
+    data: dict,
+    *,
+    source_project_path: Optional[Path],
+    retention_days: int = 7,
+) -> Path:
+    """Store an explicitly labelled short-term snapshot before discarding edits."""
+    directory = Path(root) / "discarded"
+    directory.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    cutoff = now - max(int(retention_days), 1) * 24 * 60 * 60
+    for stale in directory.glob(f"*.discarded-backup{PROJECT_FILE_SUFFIX}"):
+        try:
+            if stale.stat().st_mtime < cutoff:
+                stale.unlink(missing_ok=True)
+        except OSError:
+            pass
+    source = Path(source_project_path) if source_project_path is not None else None
+    stem = source.stem if source is not None else "untitled"
+    destination = directory / (
+        f"{stem}.{time.time_ns()}.discarded-backup{PROJECT_FILE_SUFFIX}"
+    )
+    payload = dict(data)
+    payload["backup"] = {
+        "kind": "discarded_changes",
+        "source_project_path": str(source) if source is not None else None,
+        "created_at_unix": now,
+        "retention_days": max(int(retention_days), 1),
+    }
+    save_render_project(destination, payload)
+    return destination
 
 
 def save_render_project(path: Path, data: dict) -> None:

@@ -160,12 +160,16 @@ from krok_helper.subtitle_render.n3_font_catalog import (
 )
 from krok_helper.subtitle_render.n3proj_import import N3_PROJECT_FILTER, load_n3proj
 from krok_helper.subtitle_render.project_store import (
+    ProjectFileRevision,
     RecoveryCandidate,
+    backup_project_file,
     background_payload,
+    inspect_project_file,
     invalidate_recovery_project,
     load_render_project,
     project_output_payload,
     project_payload,
+    save_discarded_project_backup,
     save_recovery_project,
     save_render_project,
     scan_recovery_projects,
@@ -198,6 +202,8 @@ EXPORT_DIR_CUSTOM = "custom"
 AUTO_SAVE_DEBOUNCE_MS = 2_000
 DEFAULT_AUTO_SAVE_INTERVAL_MINUTES = 5
 AUTO_SAVE_THREAD_WAIT_MS = 3_000
+DEFAULT_PROJECT_BACKUP_COUNT = 5
+DISCARDED_BACKUP_RETENTION_DAYS = 7
 
 
 @dataclass(frozen=True)
@@ -212,6 +218,7 @@ class SubtitleProjectState:
     save_error: Optional[str]
     exporting: bool
     recovery_path: Optional[Path]
+    missing_resources: tuple[tuple[str, Path], ...] = ()
 
     def status_text(self) -> Optional[str]:
         if not self.has_project:
@@ -225,6 +232,8 @@ class SubtitleProjectState:
             states.append("未保存")
         if self.exporting:
             states.append("导出中")
+        if self.missing_resources:
+            states.append(f"素材缺失 {len(self.missing_resources)} 项")
         return f"{self.display_name} · {' · '.join(states)}" if states else self.display_name
 
 
@@ -316,23 +325,24 @@ class _ExportLocationDialog(QDialog):
 
 
 class _AutoSaveSettingsDialog(QDialog):
-    """Small project-auto-save settings dialog exposed from the file menu."""
+    """Project auto-save and history-backup settings."""
 
     def __init__(
         self,
         enabled: bool,
         interval_minutes: int,
+        backup_count: int,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("项目自动保存")
+        self.setWindowTitle("项目保存与备份")
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setMinimumWidth(420)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(12)
 
-        layout.addWidget(StrongBodyLabel("项目自动保存", self))
+        layout.addWidget(StrongBodyLabel("项目保存与备份", self))
         self.enabled_check = CheckBox("启用字幕项目自动保存", self)
         self.enabled_check.setChecked(enabled)
         layout.addWidget(self.enabled_check)
@@ -350,6 +360,21 @@ class _AutoSaveSettingsDialog(QDialog):
             CaptionLabel("编辑停止 2 秒后会先写一次恢复快照。", self)
         )
 
+        backup_row = QHBoxLayout()
+        backup_row.addWidget(CaptionLabel("手动保存历史备份", self))
+        self.backup_count_spin = FluentSpinBox(self)
+        self.backup_count_spin.setRange(1, 20)
+        self.backup_count_spin.setSuffix(" 份")
+        self.backup_count_spin.setValue(
+            max(1, min(20, int(backup_count)))
+        )
+        backup_row.addWidget(self.backup_count_spin)
+        backup_row.addStretch(1)
+        layout.addLayout(backup_row)
+        layout.addWidget(
+            CaptionLabel("放弃未保存修改时，另保留 7 天紧急备份。", self)
+        )
+
         button_row = QHBoxLayout()
         button_row.addStretch(1)
         cancel_button = FluentPushButton("取消", self)
@@ -363,8 +388,12 @@ class _AutoSaveSettingsDialog(QDialog):
         self.enabled_check.toggled.connect(self.interval_spin.setEnabled)
         self.interval_spin.setEnabled(enabled)
 
-    def selection(self) -> tuple[bool, int]:
-        return self.enabled_check.isChecked(), self.interval_spin.value()
+    def selection(self) -> tuple[bool, int, int]:
+        return (
+            self.enabled_check.isChecked(),
+            self.interval_spin.value(),
+            self.backup_count_spin.value(),
+        )
 
 _BUILTIN_SCHEME_STYLE_FIELDS = frozenset(
     field.name
@@ -1147,10 +1176,16 @@ class SubtitleRenderWindow(QWidget):
         self._project_generation = 0
         self._project_revision = 0
         self._saved_revision = 0
+        self._project_disk_revision: Optional[ProjectFileRevision] = None
+        self._missing_resources: tuple[tuple[str, Path], ...] = ()
+        self._unresolved_resource_labels: set[str] = set()
+        self._missing_resource_source_data: Optional[dict] = None
+        self._last_logged_project_state: Optional[tuple[object, ...]] = None
         self._loading_project = False
         self._syncing_screen_controls = False
         self._auto_save_enabled = True
         self._auto_save_interval_minutes = DEFAULT_AUTO_SAVE_INTERVAL_MINUTES
+        self._project_backup_count = DEFAULT_PROJECT_BACKUP_COUNT
         self._auto_save_thread: Optional[QThread] = None
         self._auto_save_worker: Optional[_RecoverySaveWorker] = None
         self._auto_save_pending = False
@@ -1301,11 +1336,21 @@ class SubtitleRenderWindow(QWidget):
         menu = RoundMenu(parent=self._file_menu_btn)
         menu.addAction(Action(FIF.ADD, "新建", triggered=self._new_project))
         menu.addAction(Action(FIF.FOLDER, "打开", triggered=self._open_project))
-        menu.addAction(Action(FIF.SAVE, "保存", triggered=self._save_project))
-        menu.addAction(Action(FIF.SAVE_AS, "另存为", triggered=self._save_project_as))
+        self._save_project_action = Action(FIF.SAVE, "保存", triggered=self._save_project)
+        self._save_project_as_action = Action(
+            FIF.SAVE_AS, "另存为", triggered=self._save_project_as
+        )
+        menu.addAction(self._save_project_action)
+        menu.addAction(self._save_project_as_action)
         menu.addSeparator()
         menu.addAction(
-            Action(FIF.HISTORY, "自动保存设置…", triggered=self._open_auto_save_settings)
+            Action(FIF.HISTORY, "保存与备份设置…", triggered=self._open_auto_save_settings)
+        )
+        menu.addAction(
+            Action(FIF.FOLDER, "打开备份目录", triggered=self._open_project_backup_directory)
+        )
+        menu.addAction(
+            Action("刷新素材状态", triggered=self._refresh_missing_resource_status)
         )
         menu.addSeparator()
         menu.addAction(Action(FIF.DOWNLOAD, "导入 N3 项目", triggered=self._import_n3_project))
@@ -1362,6 +1407,29 @@ class SubtitleRenderWindow(QWidget):
         )
         self._project_name_label.setText(elided)
         self._project_name_label.setToolTip(full if elided != full else "")
+        if hasattr(self, "_save_project_action"):
+            idle = not state.saving and not state.exporting
+            self._save_project_action.setEnabled(
+                bool(state.has_project and state.dirty and idle)
+            )
+            self._save_project_as_action.setEnabled(bool(state.has_project and idle))
+        diagnostic_state = (
+            state.has_project,
+            state.path is not None,
+            state.dirty,
+            state.saving,
+            state.save_error is not None,
+            state.exporting,
+            state.recovery_path is not None,
+            len(state.missing_resources),
+        )
+        if diagnostic_state != self._last_logged_project_state:
+            logging.getLogger(__name__).info(
+                "字幕项目状态变化: has_project=%s named=%s dirty=%s "
+                "saving=%s save_failed=%s exporting=%s recovery=%s missing=%d",
+                *diagnostic_state,
+            )
+            self._last_logged_project_state = diagnostic_state
         self.projectStateChanged.emit(state)
 
     def project_state(self) -> SubtitleProjectState:
@@ -1385,11 +1453,12 @@ class SubtitleRenderWindow(QWidget):
             save_error=self._project_save_error,
             exporting=self._render_thread is not None,
             recovery_path=recovery_path if recovery_path and recovery_path.is_file() else None,
+            missing_resources=self._missing_resources,
         )
 
     def has_unsaved_changes(self) -> bool:
         """Public embedding API used by the host close coordinator."""
-        return bool(self._project_dirty)
+        return self.project_state().dirty
 
     def trigger_save(self) -> bool:
         """Public embedding API; return False when saving fails or is cancelled."""
@@ -1400,6 +1469,29 @@ class SubtitleRenderWindow(QWidget):
         self._auto_save_timer.stop()
         self._auto_save_pending = False
         self._wait_for_recovery_worker()
+        if self._project_dirty:
+            try:
+                backup = save_discarded_project_backup(
+                    self._backup_root(),
+                    self._current_project_data(),
+                    source_project_path=self._project_path,
+                    retention_days=DISCARDED_BACKUP_RETENTION_DAYS,
+                )
+                logging.getLogger(__name__).info(
+                    "已保留字幕项目已放弃修改备份: named=%s",
+                    self._project_path is not None,
+                )
+            except (OSError, TypeError, ValueError) as exc:
+                logging.getLogger(__name__).warning(
+                    "保留字幕项目已放弃修改备份失败: %s", exc
+                )
+                InfoBar.warning(
+                    title="紧急备份失败",
+                    content=str(exc),
+                    parent=self,
+                    position=InfoBarPosition.BOTTOM_RIGHT,
+                    duration=5000,
+                )
         self._set_project_dirty(False)
         self._cleanup_recovery_file()
 
@@ -1424,11 +1516,12 @@ class SubtitleRenderWindow(QWidget):
         if self._loading_project:
             return
         was_dirty = self._project_dirty
+        had_save_error = self._project_save_error is not None
         self._project_revision += 1
         self._project_dirty = True
         self._project_save_error = None
         self._schedule_recovery_auto_save()
-        if not was_dirty:
+        if not was_dirty or had_save_error:
             self._refresh_project_title()
 
     def _begin_project_generation(self) -> None:
@@ -1436,6 +1529,10 @@ class SubtitleRenderWindow(QWidget):
         self._project_generation += 1
         self._project_revision = 0
         self._saved_revision = 0
+        self._project_disk_revision = None
+        self._missing_resources = ()
+        self._unresolved_resource_labels = set()
+        self._missing_resource_source_data = None
         self._auto_save_pending = False
         if hasattr(self, "_auto_save_timer"):
             self._auto_save_timer.stop()
@@ -1444,18 +1541,22 @@ class SubtitleRenderWindow(QWidget):
         dialog = _AutoSaveSettingsDialog(
             self._auto_save_enabled,
             self._auto_save_interval_minutes,
+            self._project_backup_count,
             self,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
-        enabled, interval = dialog.selection()
-        self._configure_auto_save(enabled, interval, persist=True)
+        enabled, interval, backup_count = dialog.selection()
+        self._configure_auto_save(
+            enabled, interval, backup_count=backup_count, persist=True
+        )
         InfoBar.success(
             title="自动保存设置已更新",
             content=(
-                f"已启用，每 {interval} 分钟保存一次恢复快照。"
+                f"已启用，每 {interval} 分钟保存一次恢复快照；"
+                f"手动保存保留 {backup_count} 份历史备份。"
                 if enabled
-                else "已关闭字幕项目自动保存。"
+                else f"已关闭自动保存；手动保存保留 {backup_count} 份历史备份。"
             ),
             parent=self,
             position=InfoBarPosition.BOTTOM_RIGHT,
@@ -1467,10 +1568,13 @@ class SubtitleRenderWindow(QWidget):
         enabled: bool,
         interval_minutes: int,
         *,
+        backup_count: Optional[int] = None,
         persist: bool,
     ) -> None:
         self._auto_save_enabled = bool(enabled)
         self._auto_save_interval_minutes = max(1, min(60, int(interval_minutes)))
+        if backup_count is not None:
+            self._project_backup_count = max(1, min(20, int(backup_count)))
         self._apply_auto_save_timer_config()
         if persist:
             self._save_persisted_state()
@@ -1641,7 +1745,7 @@ class SubtitleRenderWindow(QWidget):
             }
             for source in self._extra_sources
         ] or None
-        return project_payload(
+        payload = project_payload(
             subtitle_path=self._subtitle_path,
             video_path=self._video_path,
             audio_path=independent_audio,
@@ -1672,6 +1776,53 @@ class SubtitleRenderWindow(QWidget):
                 native_export_enabled=False,
             ),
         )
+        return self._merge_unresolved_resource_references(payload)
+
+    def _merge_unresolved_resource_references(self, payload: dict) -> dict:
+        """Keep skipped missing paths in the project without loading or dirtying them."""
+        source = self._missing_resource_source_data
+        labels = self._unresolved_resource_labels
+        if not isinstance(source, dict) or not labels:
+            return payload
+        merged = deepcopy(payload)
+        source_paths = split_project_paths(source)
+        if "主字幕" in labels and not merged.get("subtitle_path"):
+            path = source_paths["subtitle_path"]
+            merged["subtitle_path"] = str(path) if path is not None else None
+        background_labels = {"背景视频", "背景图片", "背景图片序列"}
+        if labels & background_labels and not merged.get("background"):
+            source_background = source.get("background")
+            if isinstance(source_background, dict):
+                merged["background"] = deepcopy(source_background)
+            elif source_paths["video_path"] is not None:
+                merged["video_path"] = str(source_paths["video_path"])
+        if "独立音频" in labels and not merged.get("audio_path"):
+            path = source_paths["audio_path"]
+            merged["audio_path"] = str(path) if path is not None else None
+        source_extras = source.get("extra_subtitle_sources")
+        if isinstance(source_extras, list):
+            current_extras = (
+                list(merged.get("extra_subtitle_sources"))
+                if isinstance(merged.get("extra_subtitle_sources"), list)
+                else []
+            )
+            current_paths = {
+                str(item.get("path") or "")
+                for item in current_extras
+                if isinstance(item, dict)
+            }
+            for index, item in enumerate(source_extras, start=1):
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip() or str(index)
+                label = f"副字幕「{name}」"
+                path_text = str(item.get("path") or "").strip()
+                if label in labels and path_text and path_text not in current_paths:
+                    current_extras.append(deepcopy(item))
+                    current_paths.add(path_text)
+            if current_extras:
+                merged["extra_subtitle_sources"] = current_extras
+        return merged
 
     def _apply_project_data(self, data: dict) -> None:
         self._loading_project = True
@@ -1891,15 +2042,30 @@ class SubtitleRenderWindow(QWidget):
         if confirm_discard and not self._confirm_discard_changes():
             return False
         try:
+            revision_before = inspect_project_file(path)
             data = load_render_project(path)
+            revision_after = inspect_project_file(path)
+            if revision_before != revision_after:
+                raise OSError("项目文件在打开期间发生了变化，请重试")
         except (OSError, ValueError) as exc:
-            fluent_error(self, "打开项目失败", f"无法读取项目文件：\n{path}\n\n{exc}")
+            fluent_error(
+                self,
+                "打开项目失败",
+                f"无法读取项目文件：\n{path}\n\n{exc}",
+                copyable=True,
+            )
             return False
         missing_resources = self._missing_project_resources(data)
         self._begin_project_generation()
         self._clear_loaded_media()
         self._apply_project_data(data)
         self._project_path = path
+        self._project_disk_revision = revision_after
+        self._missing_resources = tuple(missing_resources)
+        self._unresolved_resource_labels = {
+            label for label, _path in missing_resources
+        }
+        self._missing_resource_source_data = deepcopy(data) if missing_resources else None
         self._set_project_dirty(False)
         if missing_resources:
             fluent_warning(
@@ -1977,6 +2143,81 @@ class SubtitleRenderWindow(QWidget):
                 add(f"副字幕「{name}」", Path(path_text))
         return missing
 
+    def _resolve_unresolved_resource_labels(self, labels: set[str]) -> None:
+        """Drop unresolved references replaced explicitly by the user."""
+        if not labels:
+            return
+        before = self._unresolved_resource_labels
+        self._unresolved_resource_labels = before - set(labels)
+        if self._missing_resources:
+            self._missing_resources = tuple(
+                item for item in self._missing_resources if item[0] not in labels
+            )
+        if not self._unresolved_resource_labels:
+            self._missing_resource_source_data = None
+        if before != self._unresolved_resource_labels and not self._loading_project:
+            self._refresh_project_title()
+
+    def _refresh_missing_resource_status(self, _checked: bool = False) -> None:
+        """Refresh availability only; never load assets or mark project dirty."""
+        if not self._missing_resources:
+            InfoBar.info(
+                title="素材状态",
+                content="当前项目没有已知的缺失素材。",
+                parent=self,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=2500,
+            )
+            return
+        current = self._missing_resources
+        source = self._missing_resource_source_data
+        if isinstance(source, dict):
+            still_missing = {
+                (label, str(path))
+                for label, path in self._missing_project_resources(source)
+            }
+            remaining = tuple(
+                item
+                for item in current
+                if (item[0], str(item[1])) in still_missing
+            )
+        else:
+            remaining = tuple(item for item in current if not item[1].is_file())
+        recovered_count = len(current) - len(remaining)
+        self._missing_resources = remaining
+        self._refresh_project_title()
+        InfoBar.success(
+            title="素材状态已刷新",
+            content=(
+                f"已恢复 {recovered_count} 项素材路径，项目内容未自动修改。"
+                if recovered_count
+                else f"仍有 {len(remaining)} 项素材缺失。"
+            ),
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=3500,
+        )
+
+    def _open_project_backup_directory(self, _checked: bool = False) -> None:
+        directory = self._backup_root()
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            fluent_error(
+                self,
+                "无法打开备份目录",
+                f"{directory}\n\n{exc}",
+                copyable=True,
+            )
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory))):
+            fluent_error(
+                self,
+                "无法打开备份目录",
+                str(directory),
+                copyable=True,
+            )
+
     def _import_n3_project(self) -> None:
         """导入 NicoKaraMaker3 项目（.n3proj）：素材 / 字体配色 / 布局 / 标题 / 输出。"""
         if not self._confirm_discard_changes():
@@ -1999,6 +2240,14 @@ class SubtitleRenderWindow(QWidget):
         self._apply_project_data(result.project_data)
         # 导入的是外来工程：保存时必须另存为 .yurika，因此视为未命名 + 有改动。
         self._project_path = None
+        missing_resources = self._missing_project_resources(result.project_data)
+        self._missing_resources = tuple(missing_resources)
+        self._unresolved_resource_labels = {
+            label for label, _path in missing_resources
+        }
+        self._missing_resource_source_data = (
+            deepcopy(result.project_data) if missing_resources else None
+        )
         self._set_project_dirty(True)
         if result.warnings:
             fluent_info(
@@ -2037,6 +2286,36 @@ class SubtitleRenderWindow(QWidget):
         return self._write_project(Path(path_str))
 
     def _write_project(self, path: Path) -> bool:
+        path = Path(path)
+        if self._project_path is not None and path == self._project_path:
+            try:
+                disk_revision = inspect_project_file(path)
+            except OSError as exc:
+                self._project_save_error = str(exc)
+                self._refresh_project_title()
+                fluent_error(
+                    self,
+                    "无法检查项目文件",
+                    f"保存前无法确认文件是否被外部修改：\n{path}\n\n{exc}",
+                    copyable=True,
+                )
+                return False
+            if (
+                self._project_disk_revision is not None
+                and disk_revision != self._project_disk_revision
+            ):
+                choice = fluent_choice(
+                    self,
+                    "项目文件已被外部修改",
+                    f"磁盘上的项目文件在打开或上次保存后发生了变化：\n"
+                    f"{path}\n\n直接覆盖可能丢失其他程序的修改。",
+                    ("覆盖", "另存为", "取消"),
+                    default=2,
+                )
+                if choice == 1:
+                    return self._save_project_as()
+                if choice != 0:
+                    return False
         previous_recovery_path = self._recovery_path()
         invalidate_recovery_project(previous_recovery_path, delete=False)
         self._auto_save_timer.stop()
@@ -2047,15 +2326,32 @@ class SubtitleRenderWindow(QWidget):
         self._project_save_error = None
         self._refresh_project_title()
         try:
+            backup_project_file(
+                path,
+                self._backup_root(),
+                max_count=self._project_backup_count,
+            )
             save_render_project(path, self._current_project_data())
+            saved_disk_revision = inspect_project_file(path)
         except (OSError, TypeError, ValueError) as exc:
             self._project_saving = False
             self._project_save_error = str(exc)
             self._refresh_project_title()
             self._schedule_recovery_auto_save()
-            fluent_error(self, "保存项目失败", f"无法写入项目文件：\n{path}\n\n{exc}")
+            logging.getLogger(__name__).warning(
+                "字幕项目保存失败: named=%s error_type=%s",
+                self._project_path is not None,
+                type(exc).__name__,
+            )
+            fluent_error(
+                self,
+                "保存项目失败",
+                f"无法写入项目文件：\n{path}\n\n{exc}",
+                copyable=True,
+            )
             return False
         self._project_path = path
+        self._project_disk_revision = saved_disk_revision
         self._saved_revision = revision_at_save
         self._project_saving = False
         self._project_save_error = None
@@ -2743,6 +3039,8 @@ class SubtitleRenderWindow(QWidget):
     ) -> None:
         self._timing_track = track
         self._subtitle_path = source_path
+        if not self._loading_project:
+            self._resolve_unresolved_resource_labels({"主字幕"})
         self._property_panel.set_n3_template_lyrics_directory(
             source_path.parent if source_path is not None else None
         )
@@ -2808,6 +3106,10 @@ class SubtitleRenderWindow(QWidget):
         if not self._loading_project:
             self._sync_output_size_to_video(info)
         self._background_source = BackgroundSource(kind="video", path=str(path))
+        if not self._loading_project:
+            self._resolve_unresolved_resource_labels(
+                {"背景视频", "背景图片", "背景图片序列", "独立音频"}
+            )
         self._preview_panel.set_background_source(self._background_source)
         self._video_settings_panel.set_populated(True)
         self._preview_window.set_media_title(path)
@@ -2899,6 +3201,10 @@ class SubtitleRenderWindow(QWidget):
             self._audio_info = None
             self._transport_bar.set_audio_source(None)
         self._background_source = source
+        if not self._loading_project:
+            self._resolve_unresolved_resource_labels(
+                {"背景视频", "背景图片", "背景图片序列"}
+            )
         self._preview_panel.set_background_source(source)
         self._video_settings_panel.set_populated(True)
         self._sync_audio_action_enabled()
@@ -2950,6 +3256,8 @@ class SubtitleRenderWindow(QWidget):
             fluent_warning(self, "音频不可用", f"该文件不含音频流：\n{path}")
             return None
         self._audio_path = path
+        if not self._loading_project:
+            self._resolve_unresolved_resource_labels({"独立音频"})
         self._audio_info = info
         self._transport_bar.set_audio_source(path)
         self._refresh_transport_duration()
@@ -4203,6 +4511,15 @@ class SubtitleRenderWindow(QWidget):
             except (TypeError, ValueError):
                 interval = DEFAULT_AUTO_SAVE_INTERVAL_MINUTES
             self._auto_save_interval_minutes = max(1, min(60, interval))
+        backup = data.get("backup")
+        if isinstance(backup, dict):
+            try:
+                backup_count = int(
+                    backup.get("history_count", DEFAULT_PROJECT_BACKUP_COUNT)
+                )
+            except (TypeError, ValueError):
+                backup_count = DEFAULT_PROJECT_BACKUP_COUNT
+            self._project_backup_count = max(1, min(20, backup_count))
         if style_changed or presets_changed:
             self._save_persisted_state()
 
@@ -4252,6 +4569,10 @@ class SubtitleRenderWindow(QWidget):
         data["auto_save"] = {
             "enabled": bool(self._auto_save_enabled),
             "interval_minutes": int(self._auto_save_interval_minutes),
+        }
+        data["backup"] = {
+            "history_count": int(self._project_backup_count),
+            "discarded_retention_days": DISCARDED_BACKUP_RETENTION_DAYS,
         }
         if hasattr(self, "_export_native_check"):
             output = dict(data.get("output")) if isinstance(data.get("output"), dict) else {}
@@ -4878,6 +5199,16 @@ class SubtitleRenderWindow(QWidget):
         self._clear_loaded_media()
         self._apply_project_data(data)
         self._project_path = candidate.source_project_path
+        if self._project_path is not None:
+            try:
+                self._project_disk_revision = inspect_project_file(self._project_path)
+            except OSError:
+                self._project_disk_revision = None
+        self._missing_resources = tuple(missing_resources)
+        self._unresolved_resource_labels = {
+            label for label, _path in missing_resources
+        }
+        self._missing_resource_source_data = deepcopy(data) if missing_resources else None
         self._set_project_dirty(True)
         if missing_resources:
             fluent_warning(
@@ -4901,6 +5232,10 @@ class SubtitleRenderWindow(QWidget):
     @staticmethod
     def _recovery_root() -> Path:
         return get_settings_path().parent / "subtitle_render_recovery"
+
+    @staticmethod
+    def _backup_root() -> Path:
+        return get_settings_path().parent / "subtitle_render_backups"
 
     def _recovery_path(self) -> Path:
         root = self._recovery_root()
