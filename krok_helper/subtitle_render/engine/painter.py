@@ -6945,7 +6945,7 @@ def _glyph_run_layer_key(
         role_style.shadow_offset_x,
         role_style.shadow_offset_y,
         role_style.stroke_width_px,
-        role_style.stroke2_width_px,
+        _main_stroke2_width(role_style),
         role_style.decoration_kind,
         _glow_radius(role_style, after=False),
         _glow_concentration_level(role_style),
@@ -6994,7 +6994,7 @@ def _glyph_run_after_glow_key(
         glyph_sig,
         _fill_signature(colors.after.shadow),
         role_style.stroke_width_px,
-        role_style.stroke2_width_px,
+        _main_stroke2_width(role_style),
         _glow_radius(role_style, after=True),
         _glow_concentration_level(role_style),
         role_style.decoration_kind,
@@ -7081,6 +7081,7 @@ def _build_glyph_run_layer(
     run_descent = max(glyph.metrics.descent() for glyph in glyphs)
     run_w = max(run_right - run_left, 1)
     run_h = max(run_ascent + run_descent, 1)
+    stroke2_width = _main_stroke2_width(role_style)
 
     is_glow = role_style.decoration_kind == "glow"
     bake_glow = (
@@ -7094,9 +7095,15 @@ def _build_glyph_run_layer(
         and bool(role_style.shadow_offset_x or role_style.shadow_offset_y)
     )
 
-    stroke_extent = _visual_stroke_extent(role_style.stroke_width_px, role_style.stroke2_width_px)
+    stroke_extent = _visual_stroke_extent(
+        role_style.stroke_width_px, stroke2_width
+    )
     glow_extra = (
-        _glow_extent(role_style.stroke_width_px, role_style.stroke2_width_px, _glow_radius(role_style, after=False))
+        _glow_extent(
+            role_style.stroke_width_px,
+            stroke2_width,
+            _glow_radius(role_style, after=False),
+        )
         if bake_glow
         else 0
     )
@@ -7151,7 +7158,7 @@ def _build_glyph_run_layer(
                 brush_rect,
                 _glow_radius(role_style, after=False),
                 role_style.stroke_width_px,
-                role_style.stroke2_width_px,
+                stroke2_width,
                 concentration_level=_glow_concentration_level(role_style),
             )
         elif has_shadow:
@@ -7163,16 +7170,16 @@ def _build_glyph_run_layer(
                 role_style.shadow_offset_x,
                 role_style.shadow_offset_y,
                 role_style.stroke_width_px,
-                role_style.stroke2_width_px,
+                stroke2_width,
             )
         # 2) stroke2
-        if role_style.stroke2_width_px > 0:
+        if stroke2_width > 0:
             _paint_stroke_path(
                 p,
                 path,
                 state.stroke2,
                 brush_rect,
-                _stroke2_pen_width(role_style.stroke_width_px, role_style.stroke2_width_px),
+                _stroke2_pen_width(role_style.stroke_width_px, stroke2_width),
             )
         # 3) stroke
         if role_style.stroke_color and role_style.stroke_width_px > 0:
@@ -7211,7 +7218,10 @@ def _build_glyph_run_glow_layer(
     run_w = max(run_right - run_left, 1)
     run_h = max(run_ascent + run_descent, 1)
     radius = _glow_radius(role_style, after=after)
-    extent = _glow_extent(role_style.stroke_width_px, role_style.stroke2_width_px, radius) + 4
+    stroke2_width = _main_stroke2_width(role_style)
+    extent = _glow_extent(
+        role_style.stroke_width_px, stroke2_width, radius
+    ) + 4
 
     img_w = max(extent + run_w + extent, 1)
     img_h = max(extent + run_h + extent, 1)
@@ -7244,7 +7254,7 @@ def _build_glyph_run_glow_layer(
             brush_rect,
             radius,
             role_style.stroke_width_px,
-            role_style.stroke2_width_px,
+            stroke2_width,
             concentration_level=_glow_concentration_level(role_style),
         )
     finally:

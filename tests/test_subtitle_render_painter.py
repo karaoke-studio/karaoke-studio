@@ -4970,6 +4970,30 @@ def test_utopia_transformed_glow_does_not_join_cached_far_halves(
     assert all(clip is None for clip in target_clips)
 
 
+def test_utopia_completed_glow_ignores_disabled_stroke2_saved_width(qapp):
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar(text="た", start_ms=1000)], end_ms=2000)]
+    )
+    zero_width = replace(
+        _glow_split_style(),
+        stroke2_enabled=False,
+        stroke2_width_px=0,
+    )
+    stale_width = replace(zero_width, stroke2_width_px=40)
+
+    clear_before_layer_cache()
+    stale_frame = _blank()
+    paint_frame(stale_frame, track, 2000, stale_width)
+    populated = len(_RUN_GLOW_CACHE)
+    assert populated > 0
+
+    zero_frame = _blank()
+    paint_frame(zero_frame, track, 2000, zero_width)
+
+    assert _pixel_hash(stale_frame) == _pixel_hash(zero_frame)
+    assert len(_RUN_GLOW_CACHE) == populated
+
+
 def test_utopia_shadow_splits_source_before_bitmap_offset(qapp, monkeypatch):
     colors = KaraokeColors(
         before=KaraokeColorState(shadow=_solid_fill("#CC9966")),
