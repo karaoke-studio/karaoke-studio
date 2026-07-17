@@ -19,7 +19,14 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QPointF, QRectF  # noqa: E402
-from PyQt6.QtGui import QColor, QFontMetrics, QImage, QPainter, QPainterPath  # noqa: E402
+from PyQt6.QtGui import (  # noqa: E402
+    QColor,
+    QFontMetrics,
+    QImage,
+    QPainter,
+    QPainterPath,
+    QTransform,
+)
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 import krok_helper.subtitle_render.engine.painter as subtitle_painter  # noqa: E402
@@ -104,7 +111,12 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _TEXT_RUN_LAYER_CACHE,
     _RUN_GLOW_CACHE,
 )
-from krok_helper.subtitle_render.engine.layers import LayerCompositor, LayerContext, SCOPE_GROUP  # noqa: E402
+from krok_helper.subtitle_render.engine.layers import (  # noqa: E402
+    BakedLayer,
+    LayerCompositor,
+    LayerContext,
+    SCOPE_GROUP,
+)
 from krok_helper.subtitle_render.engine.timeline import DisplayLine  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
     KaraokeColors,
@@ -1502,6 +1514,69 @@ def test_n3_vertical_gradient_uses_render_target_local_height(qapp):
     assert [position for position, _color in gradient.stops()] == pytest.approx(
         [0.0, 0.333333, 1.0]
     )
+
+
+def test_n3_main_fill_rect_uses_shared_integer_line_box(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="A", start_ms=1000, role_label="small"),
+            TimingChar(text="B", start_ms=1500),
+        ],
+        end_ms=2000,
+    )
+    style = Style(
+        font_size_px=72,
+        stroke_width_px=7,
+        stroke2_enabled=True,
+        stroke2_width_px=5,
+        custom_style_schemes={
+            "small": SubtitleStyleScheme(
+                font_size_px=48,
+                stroke_width_px=3,
+                stroke2_enabled=True,
+                stroke2_width_px=3,
+                latin_stroke_width_px=11,
+                latin_stroke2_enabled=False,
+                latin_stroke2_width_px=9,
+            )
+        },
+    )
+    layout = _layout_line(
+        TimingTrack(lines=[line]), line, style, 500, 280, baseline_y=180
+    )
+    assert layout is not None
+
+    fill_rect = subtitle_painter._n3_main_fill_rect(
+        layout.text_layout, layout.baseline_y
+    )
+    first = layout.text_layout.glyphs[0]
+    assert first.style.stroke_width_px == 11
+    assert first.brush_style is not None
+    assert first.brush_style.stroke_width_px == 3
+    font_size = first.font.pixelSize()
+    metric_total = first.metrics.ascent() + first.metrics.descent()
+    descent = font_size * first.metrics.descent() // metric_total
+    draw_bottom = layout.baseline_y + descent + first.style.stroke_width_px // 2
+    draw_height = max(
+        glyph.font.pixelSize() + glyph.style.stroke_width_px
+        for glyph in layout.text_layout.glyphs
+    )
+    inset = (
+        first.brush_style.stroke_width_px + first.brush_style.stroke2_width_px
+    ) // 2
+
+    assert fill_rect.top() == pytest.approx(draw_bottom - draw_height + inset)
+    assert fill_rect.bottom() == pytest.approx(draw_bottom - inset)
+    assert fill_rect.height() == pytest.approx(draw_height - inset * 2)
+
+    layers = _line_layer_stack(layout, 1750)
+    glyph_layers = [
+        layer
+        for layer in layers
+        if isinstance(layer, (_GlyphRunLayer, _GlyphRunAfterGlowLayer))
+    ]
+    assert glyph_layers
+    assert all(layer.fill_rect == fill_rect for layer in glyph_layers)
 
 
 def test_paint_frame_gradient_stops_change_rendered_frame(qapp):
@@ -3988,7 +4063,7 @@ def test_ruby_target_width_uses_main_draw_width_not_ink_bounds(qapp):
     assert ruby_layouts[0].reading_width > ruby_layouts[0].target_width
 
 
-def test_ruby_gradient_reference_uses_main_text_run(qapp):
+def test_ruby_gradient_reference_uses_n3_ruby_line_box(qapp):
     line = TimingLine(
         chars=[
             TimingChar(text="A", start_ms=1000),
@@ -4027,9 +4102,19 @@ def test_ruby_gradient_reference_uses_main_text_run(qapp):
     assert ruby_layers
     ruby_layout = ruby_layers[0].ruby_layout
 
-    assert ruby_layout.gradient_rect.left() == pytest.approx(layout.line_rect.left())
-    assert ruby_layout.gradient_rect.width() == pytest.approx(layout.line_rect.width())
-    assert ruby_layout.gradient_rect.width() > ruby_layout.target_width
+    expected = subtitle_painter._n3_ruby_fill_rect(
+        ruby_layout.x,
+        ruby_layout.target_width,
+        ruby_layout.baseline_y,
+        layout.ruby_metrics,
+        ruby_layout.style,
+    )
+    assert ruby_layout.gradient_rect == expected
+    assert ruby_layout.gradient_rect.left() == pytest.approx(ruby_layout.x)
+    assert ruby_layout.gradient_rect.width() == pytest.approx(
+        ruby_layout.target_width
+    )
+    assert ruby_layout.gradient_rect.height() < layout.line_rect.height()
 
 
 def test_role_ruby_defaults_to_role_main_colors_not_global_ruby(qapp):
@@ -4517,6 +4602,92 @@ def test_utopia_glow_uses_cached_run_glow(qapp):
     # 同帧再画一次：同一上正 glyph 身份 → 纯命中，缓存不增长。
     paint_frame(_blank(), _track(), 2200, style)
     assert len(_RUN_GLOW_CACHE) == populated
+
+
+def test_utopia_gradient_glow_caches_alpha_mask_not_coloured_bitmap(
+    qapp, monkeypatch
+):
+    gradient = PaintFill(
+        mode="gradient_vertical",
+        gradient_stops=[(0, "#FF0000"), (100, "#0000FF")],
+    )
+    colors = KaraokeColors(
+        before=KaraokeColorState(
+            text=gradient,
+            stroke=_solid_fill("#FFFFFF"),
+            shadow=gradient,
+        ),
+        after=KaraokeColorState(
+            text=_solid_fill("#FFFFFF"),
+            stroke=_solid_fill("#FFFFFF"),
+            shadow=gradient,
+        ),
+    )
+    style = Style(
+        decoration_kind="glow",
+        karaoke_colors=colors,
+        line_y_position="center",
+        entry_anim="utopia",
+        exit_anim="utopia",
+    )
+    blits = 0
+    original = subtitle_painter._blit_cached_run_glow
+
+    def _count_blits(*args, **kwargs):
+        nonlocal blits
+        blits += 1
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(subtitle_painter, "_blit_cached_run_glow", _count_blits)
+    clear_before_layer_cache()
+    paint_frame(_blank(), _track(), 1100, style)
+
+    # Utopia transforms glyph geometry only.  Baking a coloured gradient halo
+    # and then transforming the bitmap would incorrectly transform the brush;
+    # the cache therefore stores an uncoloured alpha mask and tints it after
+    # the transform in the fixed line coordinate system.
+    assert blits > 0
+    populated = len(_RUN_GLOW_CACHE)
+    assert populated > 0
+    paint_frame(_blank(), _track(), 1100, style)
+    assert len(_RUN_GLOW_CACHE) == populated
+
+
+def test_utopia_glow_mask_is_tinted_after_transform_in_fixed_line_space(
+    qapp, monkeypatch
+):
+    mask = QImage(10, 10, QImage.Format.Format_ARGB32_Premultiplied)
+    mask.fill(QColor("#FFFFFF"))
+    monkeypatch.setattr(
+        subtitle_painter,
+        "_get_or_build_run_glow_mask",
+        lambda *_args, **_kwargs: BakedLayer(mask, QPointF(0.0, 0.0)),
+    )
+    canvas = QImage(80, 100, QImage.Format.Format_ARGB32_Premultiplied)
+    canvas.fill(0)
+    painter = QPainter(canvas)
+    try:
+        subtitle_painter._blit_tinted_run_glow_mask(
+            painter,
+            [SimpleNamespace(left=10)],
+            10,
+            Style(),
+            PaintFill(
+                mode="gradient_vertical",
+                gradient_stops=[(0, "#FF0000"), (100, "#0000FF")],
+            ),
+            after=False,
+            transform=QTransform.fromTranslate(0.0, 50.0),
+            fill_rect=QRectF(0.0, 0.0, 80.0, 100.0),
+        )
+    finally:
+        painter.end()
+
+    # The mask started near y=10 but moved to y=60.  N3 keeps the gradient in
+    # line coordinates, so it must sample the blue-dominant lower half after
+    # the geometry transform instead of carrying the red source colour along.
+    colour = canvas.pixelColor(15, 65)
+    assert colour.blue() > colour.red()
 
 
 def _image_rgba_array(img: QImage) -> np.ndarray:

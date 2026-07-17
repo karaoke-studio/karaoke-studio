@@ -215,6 +215,10 @@ class _GlyphLayout:
     left: int
     width: int
     path_offset_x: float = 0.0
+    # N3's SetMultiColorAreas selects the first character's Japanese/main font
+    # slot even when that glyph itself is Latin.  Keep the pre-script style for
+    # the gradient inset while ``style`` retains the actual glyph stroke.
+    brush_style: Style | None = None
 
 
 @dataclass(frozen=True)
@@ -4439,6 +4443,9 @@ def _paint_line_static(
                 style, layout.colors, layout.line_rect, t_ms, transition,
                 rtl=layout.rtl, font_for=layout.font_for, ink_x_ranges=layout.ink_x_ranges,
                 glyphs_by_index=_role_glyphs_by_index(line, layout.text_layout),
+                fill_rect=_n3_main_fill_rect(
+                    layout.text_layout, layout.baseline_y
+                ),
             )
         paint_rubies_on_top()
         return
@@ -4777,7 +4784,20 @@ def _build_text_layout(
     char_gaps: list[int] | None = None,
 ) -> _TextLayout:
     rtl = style.right_to_left
-    measured: list[tuple[int, str, str | None, Style, QFont, QFontMetrics, int, int, float]] = []
+    measured: list[
+        tuple[
+            int,
+            str,
+            str | None,
+            Style,
+            Style,
+            QFont,
+            QFontMetrics,
+            int,
+            int,
+            float,
+        ]
+    ] = []
     total_w = 0
     max_ascent = 0
     max_descent = 0
@@ -4838,6 +4858,7 @@ def _build_text_layout(
                 ch.text,
                 role_label,
                 glyph_style,
+                role_style,
                 glyph_font,
                 glyph_metrics,
                 width,
@@ -4856,32 +4877,33 @@ def _build_text_layout(
 
     if measured and max_ascent == 0 and max_descent == 0:
         # 整行都是空白：退回第一个字符的 metrics，保证行高非零。
-        fallback_metrics = measured[0][5]
+        fallback_metrics = measured[0][6]
         max_ascent = fallback_metrics.ascent()
         max_descent = fallback_metrics.descent()
 
     glyphs: list[_GlyphLayout] = []
     if rtl:
         cursor = x0 + total_w
-        for index, text, role_label, role_style, glyph_font, metrics, width, spacing_after, path_offset_x in measured:
+        for index, text, role_label, glyph_style, brush_style, glyph_font, metrics, width, spacing_after, path_offset_x in measured:
             cursor -= width
             glyphs.append(
                 _GlyphLayout(
                     index=index,
                     text=text,
                     role_label=role_label,
-                    style=role_style,
+                    style=glyph_style,
                     font=glyph_font,
                     metrics=metrics,
                     left=cursor,
                     width=width,
                     path_offset_x=path_offset_x,
+                    brush_style=brush_style,
                 )
             )
             cursor -= spacing_after
     else:
         cursor = x0
-        for index, text, role_label, role_style, glyph_font, metrics, width, spacing_after, path_offset_x in measured:
+        for index, text, role_label, glyph_style, brush_style, glyph_font, metrics, width, spacing_after, path_offset_x in measured:
             if char_gaps is not None and index < len(char_gaps):
                 cursor += char_gaps[index]
             glyphs.append(
@@ -4889,12 +4911,13 @@ def _build_text_layout(
                     index=index,
                     text=text,
                     role_label=role_label,
-                    style=role_style,
+                    style=glyph_style,
                     font=glyph_font,
                     metrics=metrics,
                     left=cursor,
                     width=width,
                     path_offset_x=path_offset_x,
+                    brush_style=brush_style,
                 )
             )
             cursor += width + spacing_after
@@ -5029,6 +5052,46 @@ def _glyph_run_rect(glyphs: list[_GlyphLayout], baseline_y: int) -> QRectF:
     )
 
 
+def _n3_main_fill_rect(layout: _TextLayout, baseline_y: int) -> QRectF:
+    """Return N3's shared vertical brush area for one main-text line.
+
+    ``DrawLineInfo.DrawTop/DrawBottom`` use the tallest ``FontSize + EdgeSize``
+    character box.  ``SetMultiColorAreas`` then moves both gradient endpoints
+    inward by half of ``EdgeSize + EdgeSize2`` from the *first* character's
+    font slot.  All divisions in N3 are integer divisions.  The resulting
+    rectangle is shared by every character and visual layer in the line; it is
+    not the individual glyph ink/advance box.
+    """
+    glyphs = layout.glyphs
+    if not glyphs:
+        return QRectF(layout.line_rect)
+
+    first = glyphs[0]
+    font_size = max(int(first.font.pixelSize()), 1)
+    metric_total = max(first.metrics.ascent() + first.metrics.descent(), 1)
+    descent = font_size * max(first.metrics.descent(), 0) // metric_total
+    brush_style = first.brush_style or first.style
+    draw_edge = max(int(first.style.stroke_width_px), 0)
+    anchor_edge = max(int(brush_style.stroke_width_px), 0)
+    anchor_edge2 = _main_stroke2_width(brush_style)
+    draw_bottom = float(baseline_y + descent + draw_edge // 2)
+    draw_height = max(
+        max(int(glyph.font.pixelSize()), 1)
+        + max(int(glyph.style.stroke_width_px), 0)
+        for glyph in glyphs
+    )
+    draw_top = draw_bottom - float(draw_height)
+    inset = float((anchor_edge + anchor_edge2) // 2)
+    top = draw_top + inset
+    bottom = draw_bottom - inset
+    return QRectF(
+        float(layout.line_rect.left()),
+        top,
+        float(max(layout.line_rect.width(), 1.0)),
+        float(max(bottom - top, 1.0)),
+    )
+
+
 def _layout_role_line(
     track: TimingTrack,
     line: TimingLine,
@@ -5128,6 +5191,7 @@ def _paint_line_direct(
     """Vector oracle for horizontal static lines, sharing the baked path layout."""
     runs = [layout.text_layout.glyphs] if not layout.has_inline_styles else _glyph_runs(layout.text_layout)
     y = layout.baseline_y
+    fill_rect = _n3_main_fill_rect(layout.text_layout, y)
     for run in runs:
         role_style = run[0].style
         # 与 _GlyphRunLayer.animate 同口径的 N3 硬分割（direct 是 layers 的
@@ -5148,11 +5212,15 @@ def _paint_line_direct(
                     painter.setClipRect(
                         _horizontal_before_clip_rect(before_band, layout.rtl)
                     )
-                    _paint_glyph_run_direct(painter, run, y, after=False)
+                    _paint_glyph_run_direct(
+                        painter, run, y, after=False, fill_rect=fill_rect
+                    )
                 finally:
                     painter.restore()
                 continue
-        _paint_glyph_run_direct(painter, run, y, after=False)
+        _paint_glyph_run_direct(
+            painter, run, y, after=False, fill_rect=fill_rect
+        )
 
     for run in runs:
         after_band = _fill_clip_band_for_glyphs(
@@ -5160,7 +5228,6 @@ def _paint_line_direct(
         )
         if after_band is None:
             continue
-        fill_rect = _glyph_run_rect(run, y)
         for glyph in run:
             glyph_run = [glyph]
             glyph_band = _fill_clip_band_for_glyphs(
@@ -5205,14 +5272,22 @@ def _paint_line_direct(
 def _line_layer_stack(layout: _LineLayout, t_ms: int) -> list:
     runs = [layout.text_layout.glyphs] if not layout.has_inline_styles else _glyph_runs(layout.text_layout)
     y = layout.baseline_y
+    fill_rect = _n3_main_fill_rect(layout.text_layout, y)
     before_layers = [
-        _GlyphRunLayer(run, y, layout.fill_segments, t_ms, layout.rtl, after=False)
+        _GlyphRunLayer(
+            run,
+            y,
+            layout.fill_segments,
+            t_ms,
+            layout.rtl,
+            after=False,
+            fill_rect=fill_rect,
+        )
         for run in runs
     ]
     after_layers = []
     z_index = len(runs) * 2
     for run in runs:
-        fill_rect = _glyph_run_rect(run, y)
         for glyph in run:
             glyph_run = [glyph]
             after_band = _fill_clip_band_for_glyphs(
@@ -5526,6 +5601,7 @@ def _char_transition_layer_stack(
     """
     y = layout.baseline_y
     rtl = layout.rtl
+    fill_rect = _n3_main_fill_rect(layout.text_layout, y)
     is_spin = transition.effect == "spin_flip"
     layers: list = []
     z = 0
@@ -5541,6 +5617,7 @@ def _char_transition_layer_stack(
             _GlyphRunLayer(
                 run, y, layout.fill_segments, t_ms, rtl,
                 after=False, z_index=z, fade_opacity=opacity, transform=transform,
+                fill_rect=fill_rect,
             )
         )
         z += 1
@@ -5552,6 +5629,7 @@ def _char_transition_layer_stack(
                 _GlyphRunAfterGlowLayer(
                     run, y, layout.fill_segments, t_ms, rtl,
                     clip_band=after_band, z_index=z, fade_opacity=opacity, transform=transform,
+                    fill_rect=fill_rect,
                 )
             )
             z += 1
@@ -5559,6 +5637,7 @@ def _char_transition_layer_stack(
             _GlyphRunLayer(
                 run, y, layout.fill_segments, t_ms, rtl,
                 after=True, clip_band=after_band, z_index=z, fade_opacity=opacity, transform=transform,
+                fill_rect=fill_rect,
             )
         )
         z += 1
@@ -6547,6 +6626,98 @@ def _baked_run_glow(
     return BakedLayer(image=image, offset=QPointF(float(dx), float(dy)))
 
 
+def _get_or_build_run_glow_mask(
+    glyphs: list[_GlyphLayout],
+    role_style: Style,
+    *,
+    after: bool,
+) -> BakedLayer:
+    """Cache an opaque-white glow alpha mask for spatial brush fills."""
+    mask_fill = PaintFill(mode="solid", color="#FFFFFF")
+    mask_state = KaraokeColorState(shadow=mask_fill)
+    mask_colors = KaraokeColors(before=mask_state, after=mask_state)
+    key = (
+        _glyph_run_layer_key(
+            glyphs, role_style, mask_colors, after=after
+        ),
+        "glow-mask",
+        after,
+    )
+    return _RUN_GLOW_CACHE.get_or_build(
+        key,
+        lambda: _baked_run_glow(
+            glyphs,
+            role_style,
+            mask_colors,
+            after=after,
+        ),
+    )
+
+
+def _blit_tinted_run_glow_mask(
+    painter: QPainter,
+    glyphs: list[_GlyphLayout],
+    baseline_y: int,
+    role_style: Style,
+    fill: PaintFill,
+    *,
+    after: bool,
+    transform: QTransform | None,
+    fill_rect: QRectF,
+) -> None:
+    """Transform a cached glow mask, then colour it in fixed line space."""
+    baked = _get_or_build_run_glow_mask(
+        glyphs, role_style, after=after
+    )
+    if baked.image.isNull():
+        return
+    run_left = min(glyph.left for glyph in glyphs)
+    anchor = QPointF(
+        float(run_left) + baked.offset.x(),
+        float(baseline_y) + baked.offset.y(),
+    )
+    source_rect = QRectF(
+        anchor.x(),
+        anchor.y(),
+        float(baked.image.width()),
+        float(baked.image.height()),
+    )
+    effective_transform = transform or QTransform()
+    mapped = effective_transform.mapRect(source_rect)
+    left = math.floor(mapped.left())
+    top = math.floor(mapped.top())
+    right = math.ceil(mapped.right())
+    bottom = math.ceil(mapped.bottom())
+    width = max(right - left, 1)
+    height = max(bottom - top, 1)
+    tinted = QImage(
+        width, height, QImage.Format.Format_ARGB32_Premultiplied
+    )
+    tinted.fill(0)
+
+    mask_painter = QPainter(tinted)
+    try:
+        mask_painter.setRenderHint(
+            QPainter.RenderHint.SmoothPixmapTransform, True
+        )
+        local_transform = QTransform(effective_transform)
+        local_transform *= QTransform.fromTranslate(-float(left), -float(top))
+        mask_painter.setTransform(local_transform)
+        mask_painter.drawImage(anchor, baked.image)
+        mask_painter.resetTransform()
+        mask_painter.setCompositionMode(
+            QPainter.CompositionMode.CompositionMode_SourceIn
+        )
+        local_fill_rect = fill_rect.translated(-float(left), -float(top))
+        mask_painter.fillRect(
+            QRectF(0.0, 0.0, float(width), float(height)),
+            _brush_for_fill(fill, local_fill_rect),
+        )
+    finally:
+        mask_painter.end()
+    painter.drawImage(QPointF(float(left), float(top)), tinted)
+
+
 def _blit_cached_run_glow(
     painter: QPainter,
     glyphs: list[_GlyphLayout],
@@ -6556,16 +6727,40 @@ def _blit_cached_run_glow(
     *,
     after: bool,
     transform: QTransform | None,
+    fill_rect: QRectF | None = None,
 ) -> None:
     """A3：在 ``transform`` 下贴出缓存的上正 glow 位图（替代逐帧 ``_paint_glow_path``）。
 
     glow 在上正坐标烘焙、自然 anchor ``(run_left+dx, baseline_y+dy)`` 贴出；``transform``
     把它送到与逐帧矢量 body 相同的变换位置。调用方在贴前已设好设备空间 clip（扫光带），
     本函数 ``setTransform(combine=True)`` 不影响该 clip（Qt clip 存于设备坐标）。
+    ``fill_rect`` is the shared line brush area used by N3 gradients and
+    MilleFeuille fills.
     """
     if _glow_radius(role_style, after=after) == 0:
         return
-    baked = _get_or_build_run_glow(glyphs, role_style, colors, after=after)
+    state = colors.after if after else colors.before
+    if (
+        state.shadow.mode != "solid"
+        and fill_rect is not None
+        and transform is not None
+        and not transform.isIdentity()
+    ):
+        _blit_tinted_run_glow_mask(
+            painter,
+            glyphs,
+            baseline_y,
+            role_style,
+            state.shadow,
+            after=after,
+            transform=transform,
+            fill_rect=fill_rect,
+        )
+        return
+    baked = _get_or_build_run_glow(
+        glyphs, role_style, colors, after=after,
+        fill_rect=fill_rect, baseline_y=baseline_y,
+    )
     if baked.image.isNull():
         return
     run_left = min(glyph.left for glyph in glyphs)
@@ -6597,6 +6792,7 @@ def _paint_role_line_with_character_transition(
 ) -> None:
     # 走字 ratio 按墨水边界算（与静态路径一致）；缺省回退 advance 框。
     fill_ranges = ink_x_ranges if ink_x_ranges is not None else char_x_ranges
+    fill_rect = _n3_main_fill_rect(layout, baseline_y)
     glyphs_by_index = _role_glyphs_by_index(line, layout)
     count = max(len(line.chars), 1)
     ruby_groups = _resolve_char_ruby_groups(active_rubies, line, intervals)
@@ -6737,6 +6933,7 @@ def _paint_role_line_with_character_transition(
                     clip_rect=clip_rect,
                     glow_run=run if use_glow_cache else None,
                     glow_transform=group_transform if use_glow_cache else None,
+                    fill_rect=fill_rect,
                 )
             finally:
                 painter.restore()
@@ -6947,6 +7144,7 @@ def _paint_line_with_character_transition(
     font_for=None,
     ink_x_ranges: list[tuple[int, int]] | None = None,
     glyphs_by_index: list[_GlyphLayout | None] | None = None,
+    fill_rect: QRectF | None = None,
 ) -> None:
     # 走字 ratio 按墨水边界算（与静态路径一致）；缺省回退 advance 框。
     fill_ranges = ink_x_ranges if ink_x_ranges is not None else char_x_ranges
@@ -7097,6 +7295,7 @@ def _paint_line_with_character_transition(
                 clip_rect=paint_clip_rect,
                 glow_run=glow_run,
                 glow_transform=glow_transform,
+                fill_rect=fill_rect,
             )
         finally:
             painter.restore()
@@ -7451,20 +7650,24 @@ def _paint_char_karaoke_stack(
     clip_rect: QRectF | None = None,
     glow_run: list[_GlyphLayout] | None = None,
     glow_transform: QTransform | None = None,
+    fill_rect: QRectF | None = None,
 ) -> None:
     # A3（§9.7）：``glow_run`` 给定（utopia 路径）时，glow 走上正烘焙缓存 + 变换 blit，
     # 不再每帧 _paint_glow_path 重算高斯；body 仍逐帧矢量（锐利）。``glow_run`` 为 None
     # 时退回原逐帧 glow 路径（保留旧行为，可回退）。
-    use_cached_glow = glow_run is not None and style.decoration_kind == "glow"
+    def _use_cached_glow(after: bool) -> bool:
+        del after
+        return glow_run is not None and style.decoration_kind == "glow"
     stroke2_width = _main_stroke2_width(style)
 
     def _blit_glow(after: bool) -> None:
         _blit_cached_run_glow(
             painter, glow_run, baseline_y, style, colors,
-            after=after, transform=glow_transform,
+            after=after, transform=glow_transform, fill_rect=fill_rect,
         )
 
     if ratio <= 0.0:
+        use_cached_glow = _use_cached_glow(after=False)
         if use_cached_glow:
             _blit_glow(after=False)
         _paint_text_layer_stack(
@@ -7479,6 +7682,7 @@ def _paint_char_karaoke_stack(
             shadow_dy=style.shadow_offset_y,
             glow_radius=_glow_radius(style, after=False),
             draw_glow=not use_cached_glow,
+            fill_rect=fill_rect,
         )
         return
 
@@ -7497,6 +7701,7 @@ def _paint_char_karaoke_stack(
             _glow_radius(style, after=False) > 0
             and _karaoke_glow_states_differ(style, colors)
         )
+        use_cached_before_glow = _use_cached_glow(after=False)
         if clip_before_glow:
             glow_pad = _glow_extent(
                 style.stroke_width_px,
@@ -7516,14 +7721,14 @@ def _paint_char_karaoke_stack(
                         float(clip_bounds.height() + glow_pad * 2),
                     )
                 )
-                if use_cached_glow:
+                if use_cached_before_glow:
                     _blit_glow(after=False)
                 else:
                     _paint_glow_path(
                         painter,
                         path,
                         colors.before.shadow,
-                        rect,
+                        fill_rect if fill_rect is not None else rect,
                         _glow_radius(style, after=False),
                         style.stroke_width_px,
                         stroke2_width,
@@ -7531,7 +7736,7 @@ def _paint_char_karaoke_stack(
                     )
             finally:
                 painter.restore()
-        elif use_cached_glow:
+        elif use_cached_before_glow:
             _blit_glow(after=False)
         _paint_text_layer_stack(
             painter,
@@ -7544,7 +7749,8 @@ def _paint_char_karaoke_stack(
             shadow_dx=style.shadow_offset_x,
             shadow_dy=style.shadow_offset_y,
             glow_radius=_glow_radius(style, after=False),
-            draw_glow=not use_cached_glow and not clip_before_glow,
+            draw_glow=not use_cached_before_glow and not clip_before_glow,
+            fill_rect=fill_rect,
         )
         stroke_pad = _visual_text_padding(style)
         # RTL：单字内扫光从右向左，已唱区贴字符右缘。
@@ -7577,14 +7783,14 @@ def _paint_char_karaoke_stack(
                         float(clip_bounds.height() + glow_pad * 2),
                     )
                 )
-                if use_cached_glow:
+                if _use_cached_glow(after=True):
                     _blit_glow(after=True)
                 else:
                     _paint_glow_path(
                         painter,
                         path,
                         colors.after.shadow,
-                        rect,
+                        fill_rect if fill_rect is not None else rect,
                         _glow_radius(style, after=True),
                         style.stroke_width_px,
                         stroke2_width,
@@ -7615,11 +7821,13 @@ def _paint_char_karaoke_stack(
                 shadow_dy=style.shadow_offset_y,
                 glow_radius=_glow_radius(style, after=True),
                 draw_glow=False,
+                fill_rect=fill_rect,
             )
         finally:
             painter.restore()
         return
 
+    use_cached_glow = _use_cached_glow(after=True)
     if use_cached_glow:
         _blit_glow(after=True)
     _paint_text_layer_stack(
@@ -7634,6 +7842,7 @@ def _paint_char_karaoke_stack(
         shadow_dy=style.shadow_offset_y,
         glow_radius=_glow_radius(style, after=True),
         draw_glow=not use_cached_glow,
+        fill_rect=fill_rect,
     )
 
 
@@ -9472,12 +9681,6 @@ def _layout_rubies(
     """layout 段：算横排 ruby 的目标字符范围、基线与排布宽度。"""
     if not rubies:
         return []
-    # metric ascent：仍用于已唱渐变参考矩形（主文字整字高度）。
-    main_ascent = (
-        main_ascent_px
-        if main_ascent_px is not None
-        else QFontMetrics(_build_font(style)).ascent()
-    )
     main_box_ascent: Optional[float] = None
     if main_ascent_px is not None and text_layout is not None and text_layout.glyphs:
         # N3 行盒顶 = 参与注音高度计算的字符盒顶最高者；空白无墨水不算。
@@ -9522,17 +9725,19 @@ def _layout_rubies(
         target_range = _ruby_target_x_range(ruby, line, intervals, char_x_ranges)
         if target_range is None:
             continue
-        ruby_style = _ruby_style_for_target_indices(style, line, indices)
-        ruby_style = _ruby_script_stroke_style(ruby_style, paint_ruby.reading)
+        ruby_brush_style = _ruby_style_for_target_indices(style, line, indices)
+        ruby_style = _ruby_script_stroke_style(
+            ruby_brush_style, paint_ruby.reading
+        )
         left, right = target_range
         target_width = max(right - left, 1)
-        gradient_rect = _ruby_main_gradient_rect(
-            indices,
-            text_layout,
-            main_baseline_y,
+        gradient_rect = _n3_ruby_fill_rect(
             left,
             target_width,
-            main_ascent,
+            ruby_baseline_y,
+            ruby_metrics,
+            ruby_style,
+            brush_style=ruby_brush_style,
         )
         reading_width = _ruby_layout_width(
             paint_ruby.reading,
@@ -9678,31 +9883,33 @@ def _ruby_style_for_target_indices(
     return style
 
 
-def _ruby_main_gradient_rect(
-    indices: list[int],
-    text_layout: _TextLayout | None,
+def _n3_ruby_fill_rect(
+    left: int,
+    width: int,
     baseline_y: int,
-    fallback_left: int,
-    fallback_width: int,
-    fallback_ascent: int,
+    ruby_metrics: QFontMetrics,
+    style: Style,
+    *,
+    brush_style: Style | None = None,
 ) -> QRectF:
-    if text_layout is not None:
-        index_set = set(indices)
-        runs = [
-            run for run in _glyph_runs(text_layout)
-            if any(glyph.index in index_set for glyph in run)
-        ]
-        rect: QRectF | None = None
-        for run in runs:
-            run_rect = _glyph_run_rect(run, baseline_y)
-            rect = run_rect if rect is None else rect.united(run_rect)
-        if rect is not None and not rect.isEmpty():
-            return rect
+    """Return the ruby ``DrawLineInfo`` gradient area used by N3."""
+    font_size = _ruby_font_size(style)
+    metric_total = max(ruby_metrics.ascent() + ruby_metrics.descent(), 1)
+    descent = font_size * max(ruby_metrics.descent(), 0) // metric_total
+    draw_edge = _ruby_stroke_width(style)
+    anchor_style = brush_style or style
+    anchor_edge = _ruby_stroke_width(anchor_style)
+    anchor_edge2 = _ruby_stroke2_width(anchor_style)
+    draw_bottom = float(baseline_y + descent + draw_edge // 2)
+    draw_top = draw_bottom - float(font_size + draw_edge)
+    inset = float((anchor_edge + anchor_edge2) // 2)
+    top = draw_top + inset
+    bottom = draw_bottom - inset
     return QRectF(
-        float(fallback_left),
-        float(baseline_y - fallback_ascent),
-        float(max(fallback_width, 1)),
-        float(max(fallback_ascent, 1)),
+        float(left),
+        top,
+        float(max(width, 1)),
+        float(max(bottom - top, 1.0)),
     )
 
 
@@ -10040,7 +10247,6 @@ def _ruby_text_layer_key(
 ) -> tuple:
     colors = _effective_ruby_karaoke_colors(style)
     state = colors.after if after else colors.before
-    inherited_main_colors = style.ruby_karaoke_colors is None
     return (
         layout.ruby.reading,
         layout.target_width,
@@ -10051,9 +10257,7 @@ def _ruby_text_layer_key(
             round(layout.gradient_rect.top() - layout.baseline_y, 3),
             round(layout.gradient_rect.width(), 3),
             round(layout.gradient_rect.height(), 3),
-        )
-        if inherited_main_colors
-        else None,
+        ),
         rtl,
         ruby_font.family(),
         ruby_font.pixelSize(),
@@ -10088,6 +10292,12 @@ def _ruby_glow_layer_key(
         layout.target_width,
         round(layout.reading_width, 3),
         layout.geometry_signature,
+        (
+            round(layout.gradient_rect.left() - layout.x, 3),
+            round(layout.gradient_rect.top() - layout.baseline_y, 3),
+            round(layout.gradient_rect.width(), 3),
+            round(layout.gradient_rect.height(), 3),
+        ),
         rtl,
         ruby_font.family(),
         ruby_font.pixelSize(),
@@ -10168,12 +10378,10 @@ def _build_ruby_text_layer(
         style,
         base_text=layout.ruby.kanji,
     )
-    fill_rect = None
-    if style.ruby_karaoke_colors is None:
-        fill_rect = layout.gradient_rect.translated(
-            -float(layout.x) + float(pad_left),
-            -float(layout.baseline_y) + float(local_baseline),
-        )
+    fill_rect = layout.gradient_rect.translated(
+        -float(layout.x) + float(pad_left),
+        -float(layout.baseline_y) + float(local_baseline),
+    )
 
     p = QPainter(image)
     try:
@@ -10251,6 +10459,10 @@ def _build_ruby_glow_layer(
         style,
         base_text=layout.ruby.kanji,
     )
+    fill_rect = layout.gradient_rect.translated(
+        -float(layout.x) + float(pad_left),
+        -float(layout.baseline_y) + float(local_baseline),
+    )
 
     p = QPainter(image)
     try:
@@ -10262,7 +10474,7 @@ def _build_ruby_glow_layer(
             p,
             path,
             state.shadow,
-            rect,
+            fill_rect,
             glow_radius,
             stroke_width,
             stroke2_width,
@@ -10963,8 +11175,6 @@ def _paint_ruby_text_fragment(
     if transform is not None and not transform.isIdentity():
         path = transform.map(path)
         rect = path.boundingRect()
-        if gradient_rect is not None:
-            gradient_rect = transform.mapRect(gradient_rect)
     _paint_ruby_karaoke_fragment(
         painter,
         path,
@@ -11035,8 +11245,6 @@ def _paint_ruby_karaoke_fragment(
     after_clip_rect: QRectF | None = None,
     before_glow_clip_rect: QRectF | None = None,
 ) -> None:
-    if style.ruby_karaoke_colors is not None:
-        fill_rect = None
     colors = _effective_ruby_karaoke_colors(style)
     paint_style = _ruby_paint_style(style)
     stroke_width = _ruby_stroke_width(style)
