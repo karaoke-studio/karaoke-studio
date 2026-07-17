@@ -6116,19 +6116,28 @@ def _glyph_run_after_glow_key(
     )
 
 
+def _karaoke_glow_states_differ(style: Style, colors: KaraokeColors) -> bool:
+    """前后发光状态（颜色签名 + 半径）是否不同。
+
+    N3 的走字是硬分割（``DrawOneCharBody``/``DrawOneCharEdge`` 按 ``WipeLeft``
+    互补裁剪，decor 亦然）：扫光线两侧各只允许出现一个状态的发光。状态相同时
+    两侧发光等价，才可以整字画未唱发光并跳过已唱发光。
+    """
+    if style.decoration_kind != "glow":
+        return False
+    return (
+        _fill_signature(colors.before.shadow) != _fill_signature(colors.after.shadow)
+        or _glow_radius(style, after=False) != _glow_radius(style, after=True)
+    )
+
+
 def _glyph_run_needs_after_glow(glyphs: list[_GlyphLayout]) -> bool:
     if not glyphs:
         return False
     role_style = glyphs[0].style
-    if role_style.decoration_kind != "glow":
-        return False
     if _glow_radius(role_style, after=True) == 0:
         return False
-    colors = _effective_karaoke_colors(role_style)
-    return (
-        _fill_signature(colors.before.shadow) != _fill_signature(colors.after.shadow)
-        or _glow_radius(role_style, after=False) != _glow_radius(role_style, after=True)
-    )
+    return _karaoke_glow_states_differ(role_style, _effective_karaoke_colors(role_style))
 
 
 def _before_glow_requires_state_clip(style: Style) -> bool:
@@ -7353,7 +7362,14 @@ def _paint_char_karaoke_stack(
             float(char_width),
             float(metrics.height()),
         )
-        clip_before_glow = _before_glow_requires_state_clip(style)
+        # N3 硬分割：前后发光不同（颜色或半径）时，未唱发光只画扫光线右侧（未唱
+        # 侧），已唱侧完全交给已唱发光——否则已唱带内两种发光叠加混色（且字符唱完
+        # 切到纯已唱发光的瞬间光晕跳变）。前后发光相同时维持整字未唱发光 + 跳过
+        # 已唱发光的快路径，结果等价。
+        clip_before_glow = (
+            _glow_radius(style, after=False) > 0
+            and _karaoke_glow_states_differ(style, colors)
+        )
         if clip_before_glow:
             glow_pad = _glow_extent(
                 style.stroke_width_px,
@@ -7414,42 +7430,41 @@ def _paint_char_karaoke_stack(
         # 扫光线上，与填充的颜色边一致。并且——
         #   · 当已唱发光与未唱发光完全相同（颜色 + 半径）时，底下整字未唱发光已画满，
         #     再叠一遍只会在已唱区叠出更亮的方块，直接跳过即可。
-        if style.decoration_kind == "glow":
-            before_glow = (_fill_signature(colors.before.shadow), _glow_radius(style, after=False))
-            after_glow = (_fill_signature(colors.after.shadow), _glow_radius(style, after=True))
-            if before_glow != after_glow:
-                glow_pad = _glow_extent(
-                    style.stroke_width_px, stroke2_width, _glow_radius(style, after=True)
-                )
-                # 尾缘 + 上下外扩 glow_pad，前缘（扫光线）不外扩：
-                # LTR 扫光线在右缘，RTL 在左缘（clip_x 即扫光线左侧）。
-                glow_left = clip_x if rtl else clip_x - glow_pad
-                glow_width = char_width * ratio + glow_pad
-                painter.save()
-                try:
-                    painter.setClipRect(
-                        QRectF(
-                            float(glow_left),
-                            float(clip_bounds.top() - glow_pad),
-                            float(glow_width),
-                            float(clip_bounds.height() + glow_pad * 2),
-                        )
+        #   · 不同时未唱发光已被裁到扫光线右侧（见上方 clip_before_glow），此处
+        #     已唱发光补扫光线左侧——两侧互补，与 N3 的 WipeLeft 硬分割一致。
+        if _karaoke_glow_states_differ(style, colors):
+            glow_pad = _glow_extent(
+                style.stroke_width_px, stroke2_width, _glow_radius(style, after=True)
+            )
+            # 尾缘 + 上下外扩 glow_pad，前缘（扫光线）不外扩：
+            # LTR 扫光线在右缘，RTL 在左缘（clip_x 即扫光线左侧）。
+            glow_left = clip_x if rtl else clip_x - glow_pad
+            glow_width = char_width * ratio + glow_pad
+            painter.save()
+            try:
+                painter.setClipRect(
+                    QRectF(
+                        float(glow_left),
+                        float(clip_bounds.top() - glow_pad),
+                        float(glow_width),
+                        float(clip_bounds.height() + glow_pad * 2),
                     )
-                    if use_cached_glow:
-                        _blit_glow(after=True)
-                    else:
-                        _paint_glow_path(
-                            painter,
-                            path,
-                            colors.after.shadow,
-                            rect,
-                            _glow_radius(style, after=True),
-                            style.stroke_width_px,
-                            stroke2_width,
-                            concentration_level=_glow_concentration_level(style),
-                        )
-                finally:
-                    painter.restore()
+                )
+                if use_cached_glow:
+                    _blit_glow(after=True)
+                else:
+                    _paint_glow_path(
+                        painter,
+                        path,
+                        colors.after.shadow,
+                        rect,
+                        _glow_radius(style, after=True),
+                        style.stroke_width_px,
+                        stroke2_width,
+                        concentration_level=_glow_concentration_level(style),
+                    )
+            finally:
+                painter.restore()
         # 已唱描边 + 填充：保持卡拉ok 走字的硬边（按字框紧裁），发光已单独画过。
         painter.save()
         try:

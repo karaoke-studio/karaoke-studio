@@ -4519,6 +4519,96 @@ def test_utopia_glow_uses_cached_run_glow(qapp):
     assert len(_RUN_GLOW_CACHE) == populated
 
 
+def _image_rgba_array(img: QImage) -> np.ndarray:
+    rgba = img.convertToFormat(QImage.Format.Format_RGBA8888)
+    bits = rgba.constBits()
+    bits.setsize(rgba.sizeInBytes())
+    return (
+        np.frombuffer(bytes(bits), dtype=np.uint8)
+        .reshape(rgba.height(), rgba.width(), 4)
+        .copy()
+    )
+
+
+def _glow_split_style(*, before_radius: int = 12, after_radius: int = 12) -> Style:
+    colors = KaraokeColors(
+        before=KaraokeColorState(
+            text=_solid_fill("#FFFFFF"),
+            stroke=_solid_fill("#FFFFFF"),
+            shadow=_solid_fill("#FF0000"),
+        ),
+        after=KaraokeColorState(
+            text=_solid_fill("#FFFFFF"),
+            stroke=_solid_fill("#FFFFFF"),
+            shadow=_solid_fill("#0000FF"),
+        ),
+    )
+    return Style(
+        decoration_kind="glow",
+        glow_before_radius_px=before_radius,
+        glow_after_radius_px=after_radius,
+        karaoke_colors=colors,
+        stroke_width_px=0,
+        line_y_position="center",
+        entry_anim="utopia",
+        exit_anim="none",
+    )
+
+
+def test_utopia_wipe_splits_before_after_glow_at_scanline(qapp, monkeypatch):
+    """N3 硬分割：唱中扫光线两侧各只有一个状态的发光，不得前后叠加混色。
+
+    单字行唱到一半：字形左侧（已唱侧）halo 应为纯已唱发光色（蓝），右侧
+    （未唱侧）应为纯未唱发光色（红）。修复前未唱发光整字铺满 → 已唱侧红蓝
+    混色。缓存 blit 与逐帧矢量两条 glow 子路径都要满足。
+    """
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar(text="あ", start_ms=1000)], end_ms=2000)]
+    )
+    t_mid = 1500  # ratio=0.5，front 落在字形墨水中部
+
+    for cache_flag in ("1", "0"):
+        monkeypatch.setenv("KROK_SUBTITLE_GLOW_CACHE", cache_flag)
+        clear_before_layer_cache()
+
+        # 无发光渲染同帧同变换，取字形墨水包围盒（含 utopia 弹跳缩放）。
+        body = _blank()
+        paint_frame(body, track, t_mid, _glow_split_style(before_radius=0, after_radius=0))
+        arr_body = _image_rgba_array(body).astype(int)
+        lit = arr_body[:, :, :3].max(axis=2) > 60
+        ys, xs = np.nonzero(lit)
+        assert xs.size > 0, "字形必须有墨水"
+        ink_left, ink_right = int(xs.min()), int(xs.max())
+        cy = int(round((ys.min() + ys.max()) / 2))
+
+        glow = _blank()
+        paint_frame(glow, track, t_mid, _glow_split_style())
+        arr = _image_rgba_array(glow).astype(int)
+
+        # 扫光线 ≈ 墨水中线（ratio=0.5，front 按变换后墨水包围盒比例取）。
+        front = (ink_left + ink_right) // 2
+        reach = 30  # 半径 12 的 halo 外扩上界
+        y0 = max(int(ys.min()) - reach, 0)
+        y1 = min(int(ys.max()) + reach, arr.shape[0] - 1)
+
+        def _halo_sums(x0: int, x1: int) -> tuple[int, int]:
+            region = arr[y0 : y1 + 1, max(x0, 0) : x1 + 1]
+            r, g, b = region[:, :, 0], region[:, :, 1], region[:, :, 2]
+            # 纯红/纯蓝 halo 的 g≈0；白色字身/描边 g 高——用 g 通道剔除字身。
+            halo = (g < 60) & ((r > 25) | (b > 25))
+            return int(r[halo].sum()), int(b[halo].sum())
+
+        left_r, left_b = _halo_sums(ink_left - reach, front - 8)  # 已唱侧
+        right_r, right_b = _halo_sums(front + 8, ink_right + reach)  # 未唱侧
+        assert left_b > 0 and right_r > 0, "两侧都必须有 halo"
+        assert left_r * 4 < left_b, (
+            f"cache={cache_flag} 已唱侧 halo 混入未唱发光: r_sum={left_r} b_sum={left_b}"
+        )
+        assert right_b * 4 < right_r, (
+            f"cache={cache_flag} 未唱侧 halo 混入已唱发光: r_sum={right_r} b_sum={right_b}"
+        )
+
+
 def test_spin_flip_entry_uses_char_fade_timing_with_flip_transform(qapp):
     style = Style(entry_anim="spin_flip")
     transition = _LineCharTransition(phase="entry", effect="spin_flip", progress=1.0, start_ms=1000, end_ms=1600)
