@@ -6148,11 +6148,15 @@ def _before_glow_requires_state_clip(style: Style) -> bool:
     )
 
 
-def _ruby_before_glow_requires_state_clip(style: Style) -> bool:
+def _ruby_glow_states_differ(style: Style) -> bool:
+    """注音前后发光状态（颜色签名 + 半径）是否不同（语义同
+    :func:`_karaoke_glow_states_differ`，N3 走字硬分割判据）。"""
+    if _ruby_decoration_kind(style) != "glow":
+        return False
+    colors = _effective_ruby_karaoke_colors(style)
     return (
-        _ruby_decoration_kind(style) == "glow"
-        and _ruby_glow_radius(style, after=False) > 0
-        and _ruby_glow_radius(style, after=True) == 0
+        _fill_signature(colors.before.shadow) != _fill_signature(colors.after.shadow)
+        or _ruby_glow_radius(style, after=False) != _ruby_glow_radius(style, after=True)
     )
 
 
@@ -9741,22 +9745,13 @@ class _RubyGlowLayer:
             return None
         if _ruby_glow_radius(self.style, after=self.after) == 0:
             return None
-        colors = _effective_ruby_karaoke_colors(self.style)
         if self.after:
             visible, _complete, _front = _ruby_wipe_state(
                 self.ruby_layout, self.t_ms
             )
             if not visible:
                 return None
-            before_glow = (
-                _fill_signature(colors.before.shadow),
-                _ruby_glow_radius(self.style, after=False),
-            )
-            after_glow = (
-                _fill_signature(colors.after.shadow),
-                _ruby_glow_radius(self.style, after=True),
-            )
-            if before_glow == after_glow:
+            if not _ruby_glow_states_differ(self.style):
                 return None
         return _ruby_glow_layer_key(
             self.ruby_layout,
@@ -9779,7 +9774,10 @@ class _RubyGlowLayer:
 
     def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
         clip_rect = None
-        if not self.after and _ruby_before_glow_requires_state_clip(self.style):
+        # N3 硬分割：前后发光不同（颜色或半径）时，未唱发光只留在扫光线未唱侧，
+        # 已唱侧由已唱发光层负责；相同时未唱发光整读音铺满、已唱发光层被
+        # static_key 跳过（结果等价）。
+        if not self.after and _ruby_glow_states_differ(self.style):
             visible, complete, _front = _ruby_wipe_state(
                 self.ruby_layout, self.t_ms
             )
@@ -10868,13 +10866,26 @@ def _paint_ruby_karaoke_path(
     wipe_layout: _RubyLayout | None = None,
 ) -> None:
     after_clip_rect = None
+    before_glow_clip_rect = None
     if wipe_layout is not None and ruby_metrics is not None:
         visible, complete, _front = _ruby_wipe_state(wipe_layout, t_ms)
-        ratio = 1.0 if visible else 0.0
-        if visible and not complete:
+        if not visible:
+            ratio = 0.0
+        elif complete:
+            ratio = 1.0
+        else:
+            # 走字进行中：before / after 两层都要画（此前强制 ratio=1.0 会把
+            # before 层整个跳过，未唱读音在过渡窗口内消失）。实际几何完全由
+            # 段式 front 的两个 clip rect 决定，中间 ratio 只用于让 fragment
+            # 同时走两层的分支。
+            ratio = 0.5
             after_clip_rect = _ruby_after_clip_rect_at_time(
                 wipe_layout, ruby_metrics, style, rtl, t_ms
             )
+            if _ruby_glow_states_differ(style):
+                before_glow_clip_rect = _ruby_before_clip_rect_at_time(
+                    wipe_layout, ruby_metrics, style, rtl, t_ms
+                )
     else:
         ratio = _ruby_progress_ratio(ruby, t_ms, ruby_metrics)
     _paint_ruby_karaoke_fragment(
@@ -10886,6 +10897,7 @@ def _paint_ruby_karaoke_path(
         rtl,
         fill_rect=gradient_rect,
         after_clip_rect=after_clip_rect,
+        before_glow_clip_rect=before_glow_clip_rect,
     )
 
 
@@ -10898,6 +10910,7 @@ def _paint_ruby_karaoke_fragment(
     rtl: bool = False,
     fill_rect: QRectF | None = None,
     after_clip_rect: QRectF | None = None,
+    before_glow_clip_rect: QRectF | None = None,
 ) -> None:
     if style.ruby_karaoke_colors is not None:
         fill_rect = None
@@ -10909,25 +10922,32 @@ def _paint_ruby_karaoke_fragment(
     shadow_dy = _ruby_shadow_dy(style)
     before_glow_radius = _ruby_glow_radius(style, after=False)
     after_glow_radius = _ruby_glow_radius(style, after=True)
+    glow_states_differ = _ruby_glow_states_differ(style)
 
+    # N3 硬分割（同主文本 _paint_char_karaoke_stack）：前后发光不同时，未唱发光
+    # 只画扫光线未唱侧、已唱发光补已唱侧；相同时整读音画未唱发光 + 跳过已唱
+    # 发光（结果等价）。
     clip_before_glow = (
-        ratio > 0.0 and _ruby_before_glow_requires_state_clip(style)
+        ratio > 0.0 and before_glow_radius > 0 and glow_states_differ
     )
     if clip_before_glow and ratio < 1.0:
-        glow_pad = _glow_extent(stroke_width, stroke2_width, before_glow_radius)
-        front = rect.left() + rect.width() * (1.0 - ratio if rtl else ratio)
-        glow_left = rect.left() - glow_pad if rtl else front
-        glow_right = front if rtl else rect.right() + glow_pad
         painter.save()
         try:
-            painter.setClipRect(
-                QRectF(
-                    glow_left,
-                    rect.top() - glow_pad,
-                    max(glow_right - glow_left, 0.0),
-                    rect.height() + glow_pad * 2,
+            if before_glow_clip_rect is not None:
+                painter.setClipRect(before_glow_clip_rect)
+            else:
+                glow_pad = _glow_extent(stroke_width, stroke2_width, before_glow_radius)
+                front = rect.left() + rect.width() * (1.0 - ratio if rtl else ratio)
+                glow_left = rect.left() - glow_pad if rtl else front
+                glow_right = front if rtl else rect.right() + glow_pad
+                painter.setClipRect(
+                    QRectF(
+                        glow_left,
+                        rect.top() - glow_pad,
+                        max(glow_right - glow_left, 0.0),
+                        rect.height() + glow_pad * 2,
+                    )
                 )
-            )
             _paint_glow_path(
                 painter,
                 path,
@@ -10973,15 +10993,24 @@ def _paint_ruby_karaoke_fragment(
                 stroke_extent + abs(shadow_dy),
                 2,
             )
-            # RTL：已唱区贴读音右缘，左缘随进度左移。
+            # RTL：已唱区贴读音右缘，左缘（扫光线）随进度左移。前缘必须停在
+            # 扫光线本身，pad 只外扩尾缘/上下缘（LTR 尾缘在左，RTL 在右）。
             if after_clip_rect is None:
-                clip_left = rect.left() + (rect.width() * (1.0 - ratio) if rtl else 0.0) - pad
-                after_clip_rect = QRectF(
-                    clip_left,
-                    rect.top() - pad,
-                    rect.width() * ratio + pad,
-                    rect.height() + pad * 2,
-                )
+                if rtl:
+                    front = rect.left() + rect.width() * (1.0 - ratio)
+                    after_clip_rect = QRectF(
+                        front,
+                        rect.top() - pad,
+                        rect.width() * ratio + pad,
+                        rect.height() + pad * 2,
+                    )
+                else:
+                    after_clip_rect = QRectF(
+                        rect.left() - pad,
+                        rect.top() - pad,
+                        rect.width() * ratio + pad,
+                        rect.height() + pad * 2,
+                    )
             painter.setClipRect(after_clip_rect)
         # ratio >= 1.0：唱完不再裁剪——裁剪带右缘恰好压在字框右缘，
         # 会把末字形的描边外扩留在走字前状态。
@@ -10996,6 +11025,9 @@ def _paint_ruby_karaoke_fragment(
             shadow_dx=shadow_dx,
             shadow_dy=shadow_dy,
             glow_radius=after_glow_radius,
+            # 前后发光相同时未唱发光已铺满整读音，再叠只会加亮已唱带；
+            # ratio>=1 时未唱层未画，已唱发光必须自己画。
+            draw_glow=glow_states_differ or ratio >= 1.0,
             fill_rect=fill_rect,
         )
     finally:

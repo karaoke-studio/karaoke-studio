@@ -4609,6 +4609,46 @@ def test_utopia_wipe_splits_before_after_glow_at_scanline(qapp, monkeypatch):
         )
 
 
+def test_ruby_keeps_unsung_reading_during_char_transition(qapp):
+    """入退场过渡窗口与走字重叠时，未唱读音不得消失。
+
+    修复前 _paint_ruby_karaoke_path 在 wiping 时强制 ratio=1.0，fragment 跳过
+    before 层 → 只剩已唱裁剪带内的读音，未唱注音在过渡窗口内整体不可见。
+    """
+    line = TimingLine(
+        chars=[TimingChar(text="漢", start_ms=1000), TimingChar(text="字", start_ms=2000)],
+        end_ms=3000,
+    )
+    ruby = RubyAnnotation(kanji="漢字", reading="かんじ", pos_start_ms=1000, pos_end_ms=3000)
+    track = TimingTrack(lines=[line], rubies=[ruby])
+    track_no_ruby = TimingTrack(lines=[line])
+    # lead_in=0 让 char_fade 入场窗口与第一个字的走字重叠。
+    style = Style(
+        line_y_position="center",
+        line_lead_in_ms=0,
+        entry_anim="char_fade",
+        exit_anim="none",
+    )
+
+    def _ruby_ink_count(t_ms: int, base_style: Style) -> int:
+        with_ruby = _blank()
+        without_ruby = _blank()
+        paint_frame(with_ruby, track, t_ms, base_style)
+        paint_frame(without_ruby, track_no_ruby, t_ms, base_style)
+        a = _image_rgba_array(with_ruby).astype(int)
+        b = _image_rgba_array(without_ruby).astype(int)
+        return int((np.abs(a - b).sum(axis=2) > 30).sum())
+
+    # 参照：无逐字过渡（静态路径）下同帧的注音墨水量。
+    reference = _ruby_ink_count(1200, replace(style, entry_anim="none"))
+    transitioned = _ruby_ink_count(1200, style)
+    assert reference > 0
+    # char_fade 只影响透明度（该时刻首字透明度已接近 1），未唱读音必须仍然在。
+    assert transitioned > reference * 0.6, (
+        f"过渡窗口内注音墨水骤减: {transitioned} vs 参照 {reference}"
+    )
+
+
 def test_spin_flip_entry_uses_char_fade_timing_with_flip_transform(qapp):
     style = Style(entry_anim="spin_flip")
     transition = _LineCharTransition(phase="entry", effect="spin_flip", progress=1.0, start_ms=1000, end_ms=1600)
