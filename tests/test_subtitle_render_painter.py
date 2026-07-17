@@ -4939,6 +4939,86 @@ def test_utopia_wipe_source_splits_before_after_glow_at_scanline(qapp, monkeypat
         )
 
 
+def test_utopia_transformed_glow_does_not_join_cached_far_halves(
+    qapp, monkeypatch
+):
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar(text="た", start_ms=1000)], end_ms=2000)]
+    )
+    target_clips: list[QRectF | None] = []
+    original = subtitle_painter._paint_split_glow_path
+
+    def _record_split(*args, **kwargs):
+        target_clips.append(kwargs.get("target_clip"))
+        return original(*args, **kwargs)
+
+    def _unexpected_cached_join(*args, **kwargs):
+        raise AssertionError("transformed Utopia glow must not use strip/cache joins")
+
+    monkeypatch.setenv("KROK_SUBTITLE_GLOW_CACHE", "1")
+    monkeypatch.setattr(subtitle_painter, "_paint_split_glow_path", _record_split)
+    monkeypatch.setattr(
+        subtitle_painter,
+        "_paint_cached_run_split_glow_source_wipe",
+        _unexpected_cached_join,
+    )
+    clear_before_layer_cache()
+
+    paint_frame(_blank(), track, 1500, _glow_split_style())
+
+    assert target_clips
+    assert all(clip is None for clip in target_clips)
+
+
+def test_utopia_shadow_splits_source_before_bitmap_offset(qapp, monkeypatch):
+    colors = KaraokeColors(
+        before=KaraokeColorState(shadow=_solid_fill("#CC9966")),
+        after=KaraokeColorState(shadow=_solid_fill("#6699CC")),
+    )
+    style = Style(
+        decoration_kind="shadow",
+        shadow_offset_x=12,
+        shadow_offset_y=7,
+        stroke_width_px=0,
+    )
+    clips: list[tuple[str, QRectF]] = []
+
+    def _record_shadow(painter, _path, fill, *_args, **_kwargs):
+        clips.append((fill.color, painter.clipBoundingRect()))
+
+    monkeypatch.setattr(
+        subtitle_painter, "_paint_shadow_silhouette", _record_shadow
+    )
+    image = QImage(300, 180, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(0)
+    painter = QPainter(image)
+    path = QPainterPath()
+    path.addRect(QRectF(100, 40, 100, 80))
+    try:
+        subtitle_painter._paint_char_karaoke_stack(
+            painter,
+            path,
+            path.boundingRect(),
+            char_x=100,
+            char_width=100,
+            baseline_y=120,
+            metrics=QFontMetrics(_build_font(style)),
+            colors=colors,
+            style=style,
+            ratio=0.5,
+            clip_rect=QRectF(100, 40, 100, 80),
+            geometry_transform=QTransform.fromScale(1.1, 1.1),
+        )
+    finally:
+        painter.end()
+
+    assert [color for color, _clip in clips] == ["#CC9966", "#6699CC"]
+    # N3 clips the source at x=150, then offsets the completed shadow bitmap
+    # by +12.  The two shadow colours therefore meet at x=162, not x=150.
+    assert clips[0][1].left() == pytest.approx(162.0)
+    assert clips[1][1].right() == pytest.approx(162.0)
+
+
 def test_static_wipe_source_splits_before_after_glow_at_scanline(qapp, monkeypatch):
     """静态路径同样在 blur 前互补裁剪两种发光源。"""
     track = TimingTrack(

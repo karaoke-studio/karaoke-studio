@@ -5598,6 +5598,87 @@ def _paint_glyph_run_before_glow_direct(
     )
 
 
+def _paint_full_glow_source_wipe(
+    painter: QPainter,
+    path: QPainterPath,
+    rect: QRectF,
+    role_style: Style,
+    colors: KaraokeColors,
+    *,
+    front: float,
+    rtl: bool,
+    fill_rect: QRectF | None,
+) -> None:
+    """Paint an entire source-clipped glow after geometry transforms."""
+    before_radius = _glow_radius(role_style, after=False)
+    after_radius = _glow_radius(role_style, after=True)
+    stroke2_width = _main_stroke2_width(role_style)
+    if before_radius > 0 and before_radius == after_radius:
+        pad = _glow_extent(
+            role_style.stroke_width_px, stroke2_width, before_radius
+        )
+        top = rect.top() - pad
+        height = rect.height() + pad * 2
+        if rtl:
+            before_source_clip = QRectF(
+                -1_000_000.0, top, front + 1_000_000.0, height
+            )
+            after_source_clip = QRectF(front, top, 1_000_000.0, height)
+        else:
+            before_source_clip = QRectF(front, top, 1_000_000.0, height)
+            after_source_clip = QRectF(
+                -1_000_000.0, top, front + 1_000_000.0, height
+            )
+        _paint_split_glow_path(
+            painter,
+            path,
+            colors.before.shadow,
+            colors.after.shadow,
+            fill_rect if fill_rect is not None else rect,
+            before_radius,
+            role_style.stroke_width_px,
+            stroke2_width,
+            before_source_clip=before_source_clip,
+            after_source_clip=after_source_clip,
+            concentration_level=_glow_concentration_level(role_style),
+        )
+        return
+
+    for after in (False, True):
+        radius = _glow_radius(role_style, after=after)
+        pad = _glow_extent(
+            role_style.stroke_width_px, stroke2_width, radius
+        )
+        source_is_right = rtl == after
+        source_clip = (
+            QRectF(
+                front,
+                rect.top() - pad,
+                1_000_000.0,
+                rect.height() + pad * 2,
+            )
+            if source_is_right
+            else QRectF(
+                -1_000_000.0,
+                rect.top() - pad,
+                front + 1_000_000.0,
+                rect.height() + pad * 2,
+            )
+        )
+        state = colors.after if after else colors.before
+        _paint_glow_path(
+            painter,
+            path,
+            state.shadow,
+            fill_rect if fill_rect is not None else rect,
+            radius,
+            role_style.stroke_width_px,
+            stroke2_width,
+            source_clip=source_clip,
+            concentration_level=_glow_concentration_level(role_style),
+        )
+
+
 def _paint_cached_run_glow_source_wipe(
     painter: QPainter,
     path: QPainterPath,
@@ -7551,6 +7632,9 @@ def _paint_role_line_with_character_transition(
                     clip_rect=clip_rect,
                     glow_run=run if use_glow_cache else None,
                     glow_transform=group_transform if use_glow_cache else None,
+                    geometry_transform=(
+                        group_transform if transition.effect == "utopia" else None
+                    ),
                     fill_rect=fill_rect,
                 )
             finally:
@@ -7858,6 +7942,7 @@ def _paint_line_with_character_transition(
             paint_clip_rect: QRectF | None = None
             glow_run: list[_GlyphLayout] | None = None
             glow_transform: QTransform | None = None
+            geometry_transform: QTransform | None = None
             if transition.effect == "utopia":
                 transform = _character_transform(
                     center_x=left + width / 2,
@@ -7877,6 +7962,7 @@ def _paint_line_with_character_transition(
                     paint_path, style.stroke_width_px
                 )
                 paint_clip_rect = paint_rect
+                geometry_transform = transform
                 # 上正 glyph 列表：bake 路径与 A3 glow 缓存共用。
                 group_glyphs = []
                 for ci in indices:
@@ -7926,6 +8012,7 @@ def _paint_line_with_character_transition(
                 clip_rect=paint_clip_rect,
                 glow_run=glow_run,
                 glow_transform=glow_transform,
+                geometry_transform=geometry_transform,
                 fill_rect=fill_rect,
             )
         finally:
@@ -8281,6 +8368,7 @@ def _paint_char_karaoke_stack(
     clip_rect: QRectF | None = None,
     glow_run: list[_GlyphLayout] | None = None,
     glow_transform: QTransform | None = None,
+    geometry_transform: QTransform | None = None,
     fill_rect: QRectF | None = None,
 ) -> None:
     # A3（§9.7）：``glow_run`` 给定（utopia 路径）时，glow 走上正烘焙缓存 + 变换 blit，
@@ -8330,7 +8418,22 @@ def _paint_char_karaoke_stack(
         )
         front = char_x + char_width * (1.0 - ratio if rtl else ratio)
         if glow_states_differ:
-            if glow_run is not None and _glow_cache_enabled():
+            transformed_geometry = (
+                geometry_transform is not None
+                and not geometry_transform.isIdentity()
+            )
+            if transformed_geometry:
+                _paint_full_glow_source_wipe(
+                    painter,
+                    path,
+                    clip_bounds,
+                    style,
+                    colors,
+                    front=front,
+                    rtl=rtl,
+                    fill_rect=fill_rect,
+                )
+            elif glow_run is not None and _glow_cache_enabled():
                 combined = _paint_cached_run_split_glow_source_wipe(
                     painter,
                     path,
@@ -8361,41 +8464,74 @@ def _paint_char_karaoke_stack(
                             fill_rect=fill_rect,
                         )
             else:
+                _paint_full_glow_source_wipe(
+                    painter,
+                    path,
+                    clip_bounds,
+                    style,
+                    colors,
+                    front=front,
+                    rtl=rtl,
+                    fill_rect=fill_rect,
+                )
+        elif use_cached_before_glow:
+            _blit_glow(after=False)
+        utopia_shadow_split = (
+            geometry_transform is not None
+            and style.decoration_kind == "shadow"
+            and bool(style.shadow_offset_x or style.shadow_offset_y)
+        )
+        if utopia_shadow_split:
+            shadow_front = front + style.shadow_offset_x
+            shadow_states_differ = (
+                _fill_signature(colors.before.shadow)
+                != _fill_signature(colors.after.shadow)
+            )
+            if not shadow_states_differ:
+                _paint_shadow_silhouette(
+                    painter,
+                    path,
+                    colors.before.shadow,
+                    fill_rect if fill_rect is not None else rect,
+                    style.shadow_offset_x,
+                    style.shadow_offset_y,
+                    style.stroke_width_px,
+                    stroke2_width,
+                )
+            else:
                 for after in (False, True):
-                    radius = _glow_radius(style, after=after)
-                    pad = _glow_extent(
-                        style.stroke_width_px, stroke2_width, radius
-                    )
                     source_is_right = rtl == after
-                    source_clip = (
+                    output_clip = (
                         QRectF(
-                            front,
-                            clip_bounds.top() - pad,
+                            shadow_front,
+                            -1_000_000.0,
                             1_000_000.0,
-                            clip_bounds.height() + pad * 2,
+                            2_000_000.0,
                         )
                         if source_is_right
                         else QRectF(
                             -1_000_000.0,
-                            clip_bounds.top() - pad,
-                            front + 1_000_000.0,
-                            clip_bounds.height() + pad * 2,
+                            -1_000_000.0,
+                            shadow_front + 1_000_000.0,
+                            2_000_000.0,
                         )
                     )
-                    state = colors.after if after else colors.before
-                    _paint_glow_path(
-                        painter,
-                        path,
-                        state.shadow,
-                        fill_rect if fill_rect is not None else rect,
-                        radius,
-                        style.stroke_width_px,
-                        stroke2_width,
-                        source_clip=source_clip,
-                        concentration_level=_glow_concentration_level(style),
-                    )
-        elif use_cached_before_glow:
-            _blit_glow(after=False)
+                    painter.save()
+                    try:
+                        painter.setClipRect(output_clip)
+                        state = colors.after if after else colors.before
+                        _paint_shadow_silhouette(
+                            painter,
+                            path,
+                            state.shadow,
+                            fill_rect if fill_rect is not None else rect,
+                            style.shadow_offset_x,
+                            style.shadow_offset_y,
+                            style.stroke_width_px,
+                            stroke2_width,
+                        )
+                    finally:
+                        painter.restore()
         _paint_text_layer_stack(
             painter,
             path,
@@ -8409,6 +8545,7 @@ def _paint_char_karaoke_stack(
             glow_radius=_glow_radius(style, after=False),
             draw_glow=not use_cached_before_glow and not glow_states_differ,
             fill_rect=fill_rect,
+            draw_shadow=not utopia_shadow_split,
         )
         stroke_pad = _visual_text_padding(style)
         # RTL：单字内扫光从右向左，已唱区贴字符右缘。
@@ -8437,6 +8574,7 @@ def _paint_char_karaoke_stack(
                 glow_radius=_glow_radius(style, after=True),
                 draw_glow=False,
                 fill_rect=fill_rect,
+                draw_shadow=not utopia_shadow_split,
             )
         finally:
             painter.restore()
@@ -12382,6 +12520,7 @@ def _paint_text_layer_stack(
     glow_radius: int,
     draw_glow: bool = True,
     fill_rect: QRectF | None = None,
+    draw_shadow: bool = True,
 ) -> None:
     brush_rect = fill_rect if fill_rect is not None else rect
     if style.decoration_kind == "glow":
@@ -12398,7 +12537,7 @@ def _paint_text_layer_stack(
                 stroke2_width,
                 concentration_level=_glow_concentration_level(style),
             )
-    elif shadow_dx or shadow_dy:
+    elif draw_shadow and (shadow_dx or shadow_dy):
         _paint_shadow_silhouette(
             painter,
             path,
