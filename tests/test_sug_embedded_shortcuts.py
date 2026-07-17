@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal as Signal
+
 import krok_helper.gui_qt as gui_qt
 from krok_helper.gui_qt import (
     KrokHelperQtApp,
@@ -76,6 +79,38 @@ class _FakeStore:
 
     def cleanup_temp_files(self) -> None:
         self.cleanup_count += 1
+
+
+class _FakeAsyncStore(QObject):
+    save_started = Signal(str)
+    save_finished = Signal(str)
+    save_error = Signal(str)
+
+
+class _FakeAsyncProjectPage:
+    def __init__(self, *, error: str | None = None) -> None:
+        self._store = _FakeAsyncStore()
+        self.dirty = True
+        self.error = error
+        self.events: list[str] = []
+
+    def trigger_save(self) -> None:
+        self.events.append("started")
+        self._store.save_started.emit("song.sug")
+
+        def finish() -> None:
+            if self.error is not None:
+                self.events.append("error")
+                self._store.save_error.emit(self.error)
+                return
+            self.dirty = False
+            self.events.append("finished")
+            self._store.save_finished.emit("song.sug")
+
+        QTimer.singleShot(20, finish)
+
+    def has_unsaved_changes(self) -> bool:
+        return self.dirty
 
 
 class _FakeEditor:
@@ -250,6 +285,173 @@ def test_unsaved_project_confirmation_saves_both_modules(monkeypatch) -> None:
         "buttons": ("全部保存", "全部放弃", "取消"),
         "default": 0,
     }
+
+
+@pytest.mark.parametrize(
+    ("timing_dirty", "subtitle_dirty", "expected_labels"),
+    [
+        (True, False, ("歌词打轴",)),
+        (False, True, ("字幕视频生成",)),
+        (True, True, ("歌词打轴", "字幕视频生成")),
+    ],
+)
+def test_unsaved_exit_matrix_lists_only_dirty_modules(
+    monkeypatch, timing_dirty, subtitle_dirty, expected_labels
+) -> None:
+    captured: dict[str, str] = {}
+
+    def cancel_dialog(_parent, _title, content, _buttons, **_kwargs):
+        captured["content"] = content
+        return 2
+
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        cancel_dialog,
+    )
+    timing_page = _FakeProjectPage(dirty=timing_dirty)
+    subtitle_page = _FakeProjectPage(dirty=subtitle_dirty)
+    app = SimpleNamespace(
+        lyrics_timing_page=timing_page,
+        subtitle_render_page=subtitle_page,
+    )
+    event = _FakeCloseEvent()
+
+    assert not KrokHelperQtApp._confirm_unsaved_projects(app, event)
+    assert event.ignored is True
+    for label in ("歌词打轴", "字幕视频生成"):
+        assert (f"• {label}" in captured["content"]) is (label in expected_labels)
+
+
+def test_unsaved_project_confirmation_discards_both_modules(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        lambda *_args, **_kwargs: 1,
+    )
+    timing_page = _FakeProjectPage()
+    subtitle_page = _FakeProjectPage()
+    app = SimpleNamespace(
+        lyrics_timing_page=timing_page,
+        subtitle_render_page=subtitle_page,
+    )
+    event = _FakeCloseEvent()
+
+    assert KrokHelperQtApp._confirm_unsaved_projects(app, event)
+    assert timing_page.discard_count == 1
+    assert subtitle_page.discard_count == 1
+    assert timing_page.dirty is False
+    assert subtitle_page.dirty is False
+    assert event.ignored is False
+
+
+def test_unsaved_project_confirmation_cancels_without_touching_modules(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        lambda *_args, **_kwargs: 2,
+    )
+    timing_page = _FakeProjectPage()
+    subtitle_page = _FakeProjectPage()
+    app = SimpleNamespace(
+        lyrics_timing_page=timing_page,
+        subtitle_render_page=subtitle_page,
+    )
+    event = _FakeCloseEvent()
+
+    assert not KrokHelperQtApp._confirm_unsaved_projects(app, event)
+    assert timing_page.save_count == subtitle_page.save_count == 0
+    assert timing_page.discard_count == subtitle_page.discard_count == 0
+    assert timing_page.dirty is subtitle_page.dirty is True
+    assert event.ignored is True
+
+
+def test_exit_stays_open_when_save_as_is_cancelled(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        lambda *_args, **_kwargs: 0,
+    )
+    page = _FakeProjectPage(save_result=False)
+    app = SimpleNamespace(subtitle_render_page=page)
+    event = _FakeCloseEvent()
+
+    assert not KrokHelperQtApp._confirm_unsaved_projects(
+        app, event, (("字幕视频生成", page),)
+    )
+    assert page.save_count == 1
+    assert page.dirty is True
+    assert event.ignored is True
+
+
+def test_exit_stays_open_when_project_save_raises(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        lambda *_args, **_kwargs: 0,
+    )
+    errors: list[str] = []
+    monkeypatch.setattr(
+        gui_qt.QMessageBox,
+        "critical",
+        lambda _parent, _title, content: errors.append(content),
+    )
+    page = _FakeProjectPage()
+
+    def fail_save() -> None:
+        page.save_count += 1
+        raise OSError("disk full")
+
+    page.trigger_save = fail_save
+    app = SimpleNamespace(subtitle_render_page=page)
+    event = _FakeCloseEvent()
+
+    assert not KrokHelperQtApp._confirm_unsaved_projects(
+        app, event, (("字幕视频生成", page),)
+    )
+    assert page.save_count == 1
+    assert page.dirty is True
+    assert event.ignored is True
+    assert errors and "disk full" in errors[0]
+
+
+def test_close_waits_for_async_sug_save_completion() -> None:
+    page = _FakeAsyncProjectPage()
+    host = QObject()
+
+    assert KrokHelperQtApp._save_project_page_for_close(
+        host, "歌词打轴", page
+    )
+    assert page.events == ["started", "finished"]
+    assert page.dirty is False
+
+
+def test_async_sug_save_error_keeps_window_open() -> None:
+    page = _FakeAsyncProjectPage(error="write failed")
+    host = QObject()
+
+    assert not KrokHelperQtApp._save_project_page_for_close(
+        host, "歌词打轴", page
+    )
+    assert page.events == ["started", "error"]
+    assert page.dirty is True
+
+
+def test_subtitle_export_in_progress_blocks_host_close(monkeypatch) -> None:
+    notices: list[str] = []
+    monkeypatch.setattr(
+        gui_qt.QMessageBox,
+        "information",
+        lambda _parent, _title, content: notices.append(content),
+    )
+    app = SimpleNamespace(
+        _force_quitting_for_update=False,
+        subtitle_render_page=SimpleNamespace(is_busy=lambda: True),
+        _running_background_tasks=lambda: [],
+    )
+    event = _FakeCloseEvent()
+
+    KrokHelperQtApp.closeEvent(app, event)
+
+    assert event.ignored is True
+    assert notices == ["当前后台任务仍在运行，请等待完成后再关闭窗口。"]
 
 
 def test_unsaved_confirmation_uses_explicit_project_state(monkeypatch) -> None:
