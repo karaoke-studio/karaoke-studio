@@ -7148,6 +7148,118 @@ def test_layout_line_applies_ruby_gaps_to_boxes_and_glyphs(qapp):
     assert layout.x0 > 0
 
 
+def test_n3_adjacent_ruby_boxes_only_shift_the_colliding_third_group(
+    qapp, monkeypatch
+):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="展", start_ms=0),
+            TimingChar(text="開", start_ms=100),
+            TimingChar(text="中", start_ms=200),
+        ],
+        end_ms=300,
+    )
+    rubies = [
+        RubyAnnotation(kanji="展", reading="てん", pos_start_ms=0, pos_end_ms=100),
+        RubyAnnotation(kanji="開", reading="かい", pos_start_ms=100, pos_end_ms=200),
+        RubyAnnotation(kanji="中", reading="ちゅう", pos_start_ms=200, pos_end_ms=300),
+    ]
+    style = Style(ruby_alignment="equal_space", ruby_interval_px=0)
+
+    # The real N3 project resolves every ruby glyph to a 42 px geometry box
+    # plus its 10 px primary edge.  Keep this regression independent of the
+    # fonts installed on the test machine.
+    monkeypatch.setattr(
+        subtitle_painter,
+        "_ruby_unit_layouts",
+        lambda units, _metrics, _style: [
+            (unit, 52.0, 0.0) for unit in units
+        ],
+    )
+
+    gaps, _left, _right = _ruby_char_gaps(line, [112, 112, 112], rubies, style)
+
+    # てん and かい occupy 107 px after EqualSpace integer placement, so they
+    # do not collide.  ちゅう occupies 156 px and overlaps かい by exactly 19 px.
+    assert gaps == [0, 0, 19]
+
+
+def test_ruby_collision_box_does_not_shrink_the_paint_clip(qapp, monkeypatch):
+    style = Style(ruby_alignment="equal_space", ruby_interval_px=0)
+    metrics = QFontMetrics(_build_ruby_font(style))
+    ruby = RubyAnnotation(
+        kanji="展", reading="てん", pos_start_ms=0, pos_end_ms=100
+    )
+    monkeypatch.setattr(
+        subtitle_painter,
+        "_ruby_unit_layouts",
+        lambda units, _metrics, _style: [
+            (unit, 52.0, 0.0) for unit in units
+        ],
+    )
+    layout = subtitle_painter._RubyLayout(
+        ruby=ruby,
+        indices=[0],
+        style=style,
+        x=200,
+        baseline_y=100,
+        target_width=112,
+        reading_width=subtitle_painter._ruby_layout_width(
+            ruby.reading, metrics, 112, style, ruby.kanji
+        ),
+        gradient_rect=QRectF(200, 0, 112, 100),
+    )
+
+    # Collision uses the actual 107 px DrawLine box at x+2..x+109, while the
+    # paint/wipe clip retains the complete 112 px target box.
+    draw_left, draw_right = subtitle_painter._ruby_layout_draw_bounds(
+        ["て", "ん"], metrics, 200, 112, style=style, base_text="展"
+    )
+    paint_rect = subtitle_painter._ruby_text_rect(layout, metrics)
+
+    assert (draw_left, draw_right) == (202, 309)
+    assert paint_rect.left() == 200
+    assert paint_rect.width() == 112
+
+
+def test_inline_role_line_applies_ruby_collision_gaps(qapp):
+    line, rubies = _wide_ruby_line()
+    for char in line.chars:
+        char.role_label = "lead"
+    style = Style(
+        dual_line_layout=False,
+        ruby_stroke_width_px=10,
+        custom_style_schemes={
+            "lead": SubtitleStyleScheme(font_size_px=86),
+        },
+    )
+
+    layout = _layout_line(TimingTrack(lines=[line], rubies=rubies), line, style, 640, 300)
+
+    assert layout is not None
+    assert layout.has_inline_styles is True
+    assert layout.char_x_ranges[1][0] - layout.char_x_ranges[0][1] > 0
+    assert len(layout.ruby_layouts) == 2
+    first, second = layout.ruby_layouts
+    _first_left, first_right = subtitle_painter._ruby_layout_draw_bounds(
+        subtitle_painter._ruby_utopia_visual_units(first.ruby.reading),
+        layout.ruby_metrics,
+        first.x,
+        first.target_width,
+        style=first.style,
+        base_text=first.ruby.kanji,
+    )
+    second_left, _second_right = subtitle_painter._ruby_layout_draw_bounds(
+        subtitle_painter._ruby_utopia_visual_units(second.ruby.reading),
+        layout.ruby_metrics,
+        second.x,
+        second.target_width,
+        style=second.style,
+        base_text=second.ruby.kanji,
+    )
+    assert second_left - first_right >= _ruby_interval_px(style) - 1e-6
+
+
 def test_effective_ruby_clamps_but_never_stretches_wipe_clock(qapp):
     """ruby 走字时钟对齐基字区间只收窄不拉长（诉求：唱完即完整变色）。"""
     intervals = [(0, 1000), (1000, 2000)]  # 基字区间末端 = 下一字开始

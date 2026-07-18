@@ -1684,15 +1684,26 @@ def _resolve_sayatoo_line_layouts(
         latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
         active_rubies = _active_rubies_for_line(track.rubies, line)
         ruby_metrics = QFontMetrics(_build_ruby_font(line_style)) if active_rubies else None
-        char_widths = [
-            _char_layout_width(c.text, font, metrics, latin_metrics, font_for, line_style)
-            for c in line.chars
-        ]
+        if _line_has_role_labels(line):
+            measure_layout = _build_role_text_layout(
+                line, line_style, x0=0, baseline_y=0
+            )
+            char_widths, _measure_ranges = _role_char_geometry_by_index(
+                line, measure_layout
+            )
+            visual_pad = _role_visual_text_padding(measure_layout)
+        else:
+            char_widths = [
+                _char_layout_width(
+                    c.text, font, metrics, latin_metrics, font_for, line_style
+                )
+                for c in line.chars
+            ]
+            visual_pad = _visual_text_padding(line_style)
         char_gaps, ruby_left, ruby_right = _ruby_char_gaps(
             line, char_widths, active_rubies, line_style
         )
         text_w = _line_text_width(char_widths, line_style) + sum(char_gaps)
-        visual_pad = _visual_text_padding(line_style)
         left_ext = max(visual_pad, ruby_left)
         right_ext = max(visual_pad, ruby_right)
         text_line_w = max(int(round(text_w)) + left_ext + right_ext, 1)
@@ -5097,9 +5108,15 @@ def _build_text_layout(
         max_ascent = fallback_metrics.ascent()
         max_descent = fallback_metrics.descent()
 
+    gap_total = (
+        sum(char_gaps[: len(line.chars)])
+        if char_gaps is not None and not rtl
+        else 0
+    )
+    layout_total_w = total_w + gap_total
     glyphs: list[_GlyphLayout] = []
     if rtl:
-        cursor = x0 + total_w
+        cursor = x0 + layout_total_w
         for index, text, role_label, glyph_style, brush_style, glyph_font, metrics, width, spacing_after, path_offset_x, vector_glyph in measured:
             cursor -= width
             glyphs.append(
@@ -5144,12 +5161,12 @@ def _build_text_layout(
     line_rect = QRectF(
         float(x0),
         float(baseline_y - max_ascent),
-        float(max(total_w, 0)),
+        float(max(layout_total_w, 0)),
         float(max(height, 1)),
     )
     return _TextLayout(
         glyphs=glyphs,
-        total_width=max(total_w, 0),
+        total_width=max(layout_total_w, 0),
         ascent=max_ascent,
         descent=max_descent,
         height=max(height, 1),
@@ -5163,8 +5180,16 @@ def _build_role_text_layout(
     *,
     x0: int,
     baseline_y: int,
+    char_gaps: list[int] | None = None,
 ) -> _TextLayout:
-    return _build_text_layout(line, style, x0=x0, baseline_y=baseline_y, inline_styles=True)
+    return _build_text_layout(
+        line,
+        style,
+        x0=x0,
+        baseline_y=baseline_y,
+        inline_styles=True,
+        char_gaps=char_gaps,
+    )
 
 
 def _role_visual_text_padding(layout: _TextLayout) -> int:
@@ -5330,15 +5355,28 @@ def _layout_role_line(
     measure_layout = _build_role_text_layout(line, style, x0=0, baseline_y=0)
     if not measure_layout.glyphs:
         return None
+    char_widths, _measure_ranges = _role_char_geometry_by_index(line, measure_layout)
+    intervals = compute_char_intervals(line, char_widths)
+    char_gaps, ruby_left_ext, ruby_right_ext = _ruby_char_gaps(
+        line, char_widths, active_rubies, style, intervals
+    )
     visual_pad = _role_visual_text_padding(measure_layout)
+    left_ext = max(visual_pad, ruby_left_ext)
+    right_ext = max(visual_pad, ruby_right_ext)
+    total_w = measure_layout.total_width + sum(char_gaps)
     x0 = (
         line_x
         if line_x is not None
         else _resolve_line_x_smart(
-            img_w, measure_layout.total_width + visual_pad * 2, track, source_line, style, lane,
+            img_w,
+            total_w + left_ext + right_ext,
+            track,
+            source_line,
+            style,
+            lane,
             center_override=_line_center_override(track, source_line, style),
         )
-        + visual_pad
+        + left_ext
     )
     y = (
         baseline_y
@@ -5346,7 +5384,13 @@ def _layout_role_line(
         else _resolve_role_baseline_y(measure_layout, img_h, style, ruby_metrics)
     )
     y = _clamp_role_baseline_y(y, measure_layout, img_h, style, ruby_metrics)
-    text_layout = _build_role_text_layout(line, style, x0=x0, baseline_y=y)
+    text_layout = _build_role_text_layout(
+        line,
+        style,
+        x0=x0,
+        baseline_y=y,
+        char_gaps=char_gaps,
+    )
     char_widths, char_x_ranges = _role_char_geometry_by_index(line, text_layout)
     intervals = compute_char_intervals(line, char_widths)
     ink_x_ranges = _role_char_ink_ranges_by_index(line, text_layout, char_x_ranges)
@@ -10288,11 +10332,11 @@ def _ruby_char_gaps(
     style: Style,
     intervals: list[tuple[int, int]] | None = None,
 ) -> tuple[list[int], int, int]:
-    """相邻 ruby 避让（N3 无条件规则）+ 行缘 ruby 溢出。
+    """相邻 ruby 避让（N3 无条件规则）及行缘溢出。
 
     返回 ``(每字符前插入的间隙列表, 行首左溢出, 行末右溢出)``：
 
-    - 相邻两条 ruby 的排布缘间距 < ``RubyInterval`` 时，在当前 ruby 首字符
+    - 相邻两条 ruby 的视觉排布缘间距 < ``RubyInterval`` 时，在当前 ruby 首字符
       **之前**插入差值间隙——等价 N3「从当前正文字符开始整行向右移动」。
       间隙不加宽任何字符框，因此不会反过来加宽前一条 ruby 的标注范围；
     - 溢出 = ruby 排布缘超出正文行盒左/右边界的像素（≥ 0），供行锚定并入
@@ -10310,13 +10354,25 @@ def _ruby_char_gaps(
     spacing = _letter_spacing(style)
     interval = _ruby_interval_px(style)
 
-    entries: list[tuple[int, int, RubyAnnotation, RubyAnnotation]] = []
+    entries: list[tuple[int, int, RubyAnnotation, RubyAnnotation, Style]] = []
     for ruby in rubies:
         indices = _ruby_target_indices(ruby, line, intervals)
         if not indices:
             continue
         paint_ruby = _effective_ruby_for_target(ruby, indices, intervals)
-        entries.append((min(indices), max(indices), paint_ruby, ruby))
+        ruby_style = _ruby_script_stroke_style(
+            _ruby_style_for_target_indices(style, line, indices),
+            paint_ruby.reading,
+        )
+        entries.append(
+            (
+                min(indices),
+                max(indices),
+                paint_ruby,
+                ruby,
+                ruby_style,
+            )
+        )
     if not entries:
         return zero, 0, 0
     entries.sort(key=lambda item: item[0])
@@ -10335,17 +10391,19 @@ def _ruby_char_gaps(
     prev_right: float | None = None
     min_ruby_left = 0.0
     max_ruby_right = 0.0
-    for first, last, paint_ruby, ruby in entries:
+    for first, last, paint_ruby, ruby, ruby_style in entries:
         span_left, span_right = char_span(first, min(last, len(char_widths) - 1))
         target_w = max(span_right - span_left, 1.0)
-        offset = _ruby_layout_left_offset(
-            paint_ruby.reading, ruby_metrics, target_w, style, ruby.kanji
+        ruby_left, ruby_right = _ruby_layout_draw_bounds(
+            _ruby_utopia_visual_units(paint_ruby.reading),
+            ruby_metrics,
+            span_left,
+            target_w,
+            style=ruby_style,
+            base_text=ruby.kanji,
         )
-        width = _ruby_layout_width(
-            paint_ruby.reading, ruby_metrics, target_w, style, ruby.kanji
-        )
-        ruby_left = span_left + offset
-        ruby_right = ruby_left + width
+        # DrawWidth already includes N3's primary edge.  Adding another stroke
+        # extent here double-counts the outline and over-expands the main text.
         if prev_right is not None and first > 0:
             deficit = (prev_right + interval) - ruby_left
             if deficit > 0:
@@ -12519,33 +12577,92 @@ def _ruby_layout_units(
     style: Style | None = None,
     base_text: str | None = None,
 ) -> list[tuple[str, float, float]]:
+    origins = _ruby_layout_origins(
+        units,
+        ruby_metrics,
+        x,
+        target_width,
+        style=style,
+        base_text=base_text,
+    )
+    return [
+        (unit, origin + offset, width)
+        for unit, origin, width, offset in origins
+    ]
+
+
+def _ruby_layout_origins(
+    units: list[str],
+    ruby_metrics: QFontMetrics,
+    x: int | float,
+    target_width: int | float | None,
+    *,
+    style: Style | None = None,
+    base_text: str | None = None,
+) -> list[tuple[str, float, float, float]]:
+    """Return N3 ``CharPoint.X`` positions before path-bearing correction."""
     unit_layouts = _ruby_unit_layouts(units, ruby_metrics, style)
-    widths = [width for _unit, width, _offset in unit_layouts]
     if not units:
         return []
+    widths = [width for _unit, width, _offset in unit_layouts]
     natural = sum(widths)
+    interval = float(_ruby_interval_px(style))
     if target_width is None:
-        interval = float(_ruby_interval_px(style))
         cursor = float(x)
-        result: list[tuple[str, float, float]] = []
+        result: list[tuple[str, float, float, float]] = []
         for unit, width, offset in unit_layouts:
-            result.append((unit, cursor + offset, width))
+            result.append((unit, cursor, width, offset))
             cursor += width + interval
         return result
 
+    target = float(target_width)
     if len(units) <= 1:
         unit, width, offset = unit_layouts[0]
-        unit_left = float(x) + (float(target_width) - width) / 2.0
-        return [(unit, unit_left + offset, width)]
+        # N3's center calculation uses integer division.
+        unit_left = float(x) + float(_truncate_div(int(target - width), 2))
+        return [(unit, unit_left, width, offset)]
 
-    target = float(target_width)
-    gap = _ruby_layout_gap(natural, len(units), target, style, base_text, "".join(units))
-    cursor = float(x) + (target - (natural + gap * (len(units) - 1))) / 2.0
-    result = []
+    reading = "".join(units)
+    alignment = _resolve_ruby_alignment(style, base_text, reading)
+    gap = _ruby_layout_gap(natural, len(units), target, style, base_text, reading)
+    content_width = natural + gap * (len(units) - 1)
+    if alignment == "center":
+        cursor = float(x) + float(_truncate_div(int(target - content_width), 2))
+    else:
+        cursor = float(x) + (target - content_width) / 2.0
+    result: list[tuple[str, float, float, float]] = []
     for unit, width, offset in unit_layouts:
-        result.append((unit, cursor + offset, width))
+        # N3 casts each accumulated EqualSpace cursor to int independently.
+        origin = float(int(cursor)) if alignment == "equal_space" else cursor
+        result.append((unit, origin, width, offset))
         cursor += width + gap
     return result
+
+
+def _ruby_layout_draw_bounds(
+    units: list[str],
+    ruby_metrics: QFontMetrics,
+    x: int | float,
+    target_width: int | float | None,
+    *,
+    style: Style | None = None,
+    base_text: str | None = None,
+) -> tuple[float, float]:
+    """Return N3 ruby ``DrawLineLeft/DrawLineRight`` bounds."""
+    origins = _ruby_layout_origins(
+        units,
+        ruby_metrics,
+        x,
+        target_width,
+        style=style,
+        base_text=base_text,
+    )
+    if not origins:
+        return float(x), float(x)
+    return (
+        min(origin for _unit, origin, _width, _offset in origins),
+        max(origin + width for _unit, origin, width, _offset in origins),
+    )
 
 
 def _ruby_layout_gap(
