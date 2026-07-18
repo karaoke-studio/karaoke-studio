@@ -692,6 +692,28 @@ def test_bottom_navigation_switches_export_and_back_to_preview(qapp, monkeypatch
     assert win._bottom_navigation.currentRouteKey() == "preview"
 
 
+def test_playback_shortcut_is_disabled_outside_preview_tab(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+    toggles: list[bool] = []
+    monkeypatch.setattr(
+        win._transport_bar, "toggle_play", lambda: toggles.append(True)
+    )
+    assert win._space_shortcut.isEnabled() is True
+
+    win._nav_btns["export"].click()
+    qapp.processEvents()
+
+    assert win._space_shortcut.isEnabled() is False
+    win._space_shortcut.activated.emit()
+    assert toggles == []
+
+    win._nav_btns["preview"].click()
+    qapp.processEvents()
+    assert win._space_shortcut.isEnabled() is True
+    win._space_shortcut.activated.emit()
+    assert toggles == [True]
+
+
 def test_preview_window_is_visible_only_on_preview_tab_and_pauses(
     qapp, monkeypatch
 ):

@@ -1403,7 +1403,24 @@ class SubtitleRenderWindow(QWidget):
         self._bottom_navigation.setCurrentItem(key)
 
     def _on_workspace_tab_changed(self, _index: int) -> None:
+        self._sync_playback_shortcut_scope()
         self._sync_preview_window_visibility()
+
+    def _playback_shortcuts_allowed(self) -> bool:
+        return bool(
+            hasattr(self, "_stack")
+            and hasattr(self, "_preview_tab")
+            and self._stack.currentWidget() is self._preview_tab
+        )
+
+    def _sync_playback_shortcut_scope(self) -> None:
+        if hasattr(self, "_space_shortcut"):
+            self._space_shortcut.setEnabled(self._playback_shortcuts_allowed())
+
+    def _toggle_playback_from_shortcut(self) -> None:
+        if not self._playback_shortcuts_allowed():
+            return
+        self._transport_bar.toggle_play()
 
     def _preview_window_context_allowed(self) -> bool:
         return bool(
@@ -2670,7 +2687,8 @@ class SubtitleRenderWindow(QWidget):
         # 空格键播放 / 暂停（窗口范围内有效，避免误伤未来的文本输入）
         self._space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
         self._space_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self._space_shortcut.activated.connect(self._transport_bar.toggle_play)
+        self._space_shortcut.activated.connect(self._toggle_playback_from_shortcut)
+        self._sync_playback_shortcut_scope()
 
         # 项目文件快捷键。作用域限制在本模块内（WidgetWithChildrenShortcut），
         # 嵌入工作台时不会和宿主的全局快捷键打架。
