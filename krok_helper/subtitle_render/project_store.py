@@ -305,6 +305,7 @@ def project_payload(
     line_breaks_before: Optional[list[str]] = None,
     char_role_labels: Optional[list] = None,
     line_guide_symbols: Optional[list] = None,
+    line_inline_guide_symbols: Optional[list] = None,
     line_display_overrides: Optional[list] = None,
     line_animation_overrides: Optional[list] = None,
     extra_subtitle_sources: Optional[list] = None,
@@ -324,6 +325,9 @@ def project_payload(
 
     ``line_guide_symbols`` 同样与 ``track.lines`` 对齐：每项为 None 或已归一化
     的 SVG 导唱符轮廓、走字时长与角色。轮廓嵌入工程，不依赖原 SVG 路径。
+
+    ``line_inline_guide_symbols`` 同样与 ``track.lines`` 对齐：每项为 None 或
+    ``{源字符索引: SVG 导唱符}``，用于保持句中字符的原打轴时间与布局位置。
 
     ``line_display_overrides`` 同样与 ``track.lines`` 对齐：每项为 None（该行
     无手动覆盖）或 ``[上屏覆盖毫秒或 None, 消失覆盖毫秒或 None]``（字幕轨道
@@ -366,6 +370,17 @@ def project_payload(
         payload["line_guide_symbols"] = [
             dict(row) if isinstance(row, dict) else None
             for row in line_guide_symbols
+        ]
+    if line_inline_guide_symbols is not None:
+        payload["line_inline_guide_symbols"] = [
+            {
+                str(index): dict(symbol)
+                for index, symbol in row.items()
+                if isinstance(symbol, dict)
+            }
+            if isinstance(row, dict)
+            else None
+            for row in line_inline_guide_symbols
         ]
     if line_display_overrides is not None:
         payload["line_display_overrides"] = [

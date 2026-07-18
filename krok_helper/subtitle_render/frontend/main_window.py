@@ -141,6 +141,7 @@ from krok_helper.subtitle_render.frontend.timeline_view import TrackTimelineView
 from krok_helper.subtitle_render.models import (
     BackgroundSource,
     DEFAULT_OUTPUT_NAME_SUFFIX,
+    GuideSymbol,
     LineAnimationOverride,
     LYRICS_LAYOUT_FIELDS,
     PROJECT_FILE_SUFFIX,
@@ -1862,6 +1863,7 @@ class SubtitleRenderWindow(QWidget):
         line_breaks_before = self._line_break_rows(self._timing_track)
         char_role_labels = self._collect_char_role_labels()
         line_guide_symbols = self._guide_symbol_rows(self._timing_track)
+        line_inline_guide_symbols = self._inline_guide_symbol_rows(self._timing_track)
         line_display_overrides = self._display_override_rows(self._timing_track)
         line_animation_overrides = self._animation_override_rows(self._timing_track)
         extra_subtitle_sources = [
@@ -1874,6 +1876,7 @@ class SubtitleRenderWindow(QWidget):
                 "line_breaks_before": self._line_break_rows(source.track),
                 "char_role_labels": self._char_role_rows(source.track),
                 "line_guide_symbols": self._guide_symbol_rows(source.track),
+                "line_inline_guide_symbols": self._inline_guide_symbol_rows(source.track),
                 "line_display_overrides": self._display_override_rows(source.track),
                 "line_animation_overrides": self._animation_override_rows(source.track),
             }
@@ -1898,6 +1901,7 @@ class SubtitleRenderWindow(QWidget):
             line_breaks_before=line_breaks_before,
             char_role_labels=char_role_labels,
             line_guide_symbols=line_guide_symbols,
+            line_inline_guide_symbols=line_inline_guide_symbols,
             line_display_overrides=line_display_overrides,
             line_animation_overrides=line_animation_overrides,
             extra_subtitle_sources=extra_subtitle_sources,
@@ -2011,6 +2015,9 @@ class SubtitleRenderWindow(QWidget):
             self._apply_char_role_labels(data.get("char_role_labels"))
             guide_mismatches = self._apply_guide_symbol_rows(
                 self._timing_track, data.get("line_guide_symbols")
+            )
+            self._apply_inline_guide_symbol_rows(
+                self._timing_track, data.get("line_inline_guide_symbols")
             )
             if guide_mismatches:
                 rows = "、".join(str(row + 1) for row in guide_mismatches[:12])
@@ -2558,6 +2565,9 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.charRolesChanged.connect(self._on_lyrics_char_roles_changed)
         self._lyrics_panel.guideCharRolesChanged.connect(
             self._on_guide_char_roles_changed
+        )
+        self._lyrics_panel.inlineCharEditChanged.connect(
+            self._on_inline_char_edit_changed
         )
         self._lyrics_panel.guideSymbolImportRequested.connect(
             self._on_guide_symbol_import_requested
@@ -3728,6 +3738,21 @@ class SubtitleRenderWindow(QWidget):
         return rows if any(row is not None for row in rows) else None
 
     @staticmethod
+    def _inline_guide_symbol_rows(track: Optional[TimingTrack]) -> Optional[list]:
+        if track is None:
+            return None
+        rows = [
+            {
+                str(index): guide_symbol_to_dict(symbol)
+                for index, symbol in sorted(line.inline_guide_symbols.items())
+                if 0 <= index < len(line.chars) and symbol.path_commands
+            }
+            or None
+            for line in track.lines
+        ]
+        return rows if any(row is not None for row in rows) else None
+
+    @staticmethod
     def _apply_guide_symbol_rows(track: TimingTrack, payload: object) -> list[int]:
         if not isinstance(payload, list):
             return []
@@ -3744,6 +3769,27 @@ class SubtitleRenderWindow(QWidget):
                 continue
             line.guide_symbol = symbol
         return mismatches
+
+    @staticmethod
+    def _apply_inline_guide_symbol_rows(track: TimingTrack, payload: object) -> None:
+        if not isinstance(payload, list):
+            return
+        for line, value in zip(track.lines, payload):
+            symbols: dict[int, GuideSymbol] = {}
+            if isinstance(value, dict):
+                for raw_index, raw_symbol in value.items():
+                    try:
+                        index = int(raw_index)
+                    except (TypeError, ValueError):
+                        continue
+                    symbol = guide_symbol_from_dict(raw_symbol)
+                    if (
+                        0 <= index < len(line.chars)
+                        and symbol is not None
+                        and symbol.path_commands
+                    ):
+                        symbols[index] = symbol
+            line.inline_guide_symbols = symbols
 
     # ------------------------------------------------------- 副字幕源（N3 多歌词文件）
 
@@ -3791,6 +3837,9 @@ class SubtitleRenderWindow(QWidget):
                             ch.role_label = str(label) if label else None
                 self._apply_guide_symbol_rows(
                     track, item.get("line_guide_symbols")
+                )
+                self._apply_inline_guide_symbol_rows(
+                    track, item.get("line_inline_guide_symbols")
                 )
                 self._apply_display_override_rows(
                     track, item.get("line_display_overrides")
@@ -4021,6 +4070,48 @@ class SubtitleRenderWindow(QWidget):
             self._mark_project_dirty()
         return True
 
+    def _restore_inline_char_edit(
+        self, track_index: int, row: int, value: object
+    ) -> bool:
+        track = self._track_by_index(track_index)
+        if (
+            track is None
+            or not 0 <= row < len(track.lines)
+            or not isinstance(value, tuple)
+            or len(value) != 3
+        ):
+            return False
+        symbol, labels, inline_values = value
+        line = track.lines[row]
+        if (
+            not isinstance(labels, tuple)
+            or len(labels) != len(line.chars)
+            or not isinstance(inline_values, tuple)
+        ):
+            return False
+        inline_symbols: dict[int, GuideSymbol] = {}
+        for item in inline_values:
+            if (
+                not isinstance(item, tuple)
+                or len(item) != 2
+                or not isinstance(item[0], int)
+                or not 0 <= item[0] < len(line.chars)
+                or not isinstance(item[1], GuideSymbol)
+                or not item[1].path_commands
+            ):
+                return False
+            inline_symbols[item[0]] = item[1]
+        line.guide_symbol = symbol
+        line.inline_guide_symbols = inline_symbols
+        for char, label in zip(line.chars, labels):
+            char.role_label = label
+        if track_index == self._active_source_index:
+            self._refresh_after_guide_symbols_changed((row,))
+        else:
+            self._sync_extra_tracks_to_preview()
+            self._mark_project_dirty()
+        return True
+
     def _restore_inline_role_rows(
         self, track_index: int, rows: object, values: object
     ) -> bool:
@@ -4078,6 +4169,12 @@ class SubtitleRenderWindow(QWidget):
                     self._redo_stack.append(command)
                     return
                 continue
+            if command[0] == "inline_char_edit":
+                _kind, track_index, row, old_value, _new_value = command
+                if self._restore_inline_char_edit(track_index, row, old_value):
+                    self._redo_stack.append(command)
+                    return
+                continue
             if command[0] == "inline_roles_batch":
                 _kind, track_index, rows, old_values, _new_values = command
                 if self._restore_inline_role_rows(track_index, rows, old_values):
@@ -4128,6 +4225,12 @@ class SubtitleRenderWindow(QWidget):
             if command[0] == "guide_char_roles":
                 _kind, track_index, row, _old_value, new_value = command
                 if self._restore_guide_char_roles(track_index, row, new_value):
+                    self._undo_stack.append(command)
+                    return
+                continue
+            if command[0] == "inline_char_edit":
+                _kind, track_index, row, _old_value, new_value = command
+                if self._restore_inline_char_edit(track_index, row, new_value):
                     self._undo_stack.append(command)
                     return
                 continue
@@ -4814,6 +4917,82 @@ class SubtitleRenderWindow(QWidget):
         )
         self._undo_stack.append(
             ("guide_char_roles", self._active_source_index, row, old_value, new_value)
+        )
+        del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+        self._refresh_after_guide_symbols_changed((row,))
+
+    def _on_inline_char_edit_changed(
+        self, row: int, guide_labels: object, labels: list, vector_symbols: object
+    ) -> None:
+        """Commit SVG replacements selected in the per-character role dialog."""
+        if self._title_source_active:
+            return
+        track = self._active_track()
+        if track is None or not 0 <= row < len(track.lines):
+            return
+        line = track.lines[row]
+        symbol = line.guide_symbol
+        replacement_count = guide_symbol_replacement_count(line)
+        visible_chars = line.chars[replacement_count:]
+        if (
+            len(labels) != len(visible_chars)
+            or not isinstance(vector_symbols, list)
+            or len(vector_symbols) != len(visible_chars)
+        ):
+            return
+        if symbol is None:
+            if guide_labels is not None:
+                return
+            normalized_guides: list[Optional[str]] = []
+            new_symbol = None
+        else:
+            if (
+                not isinstance(guide_labels, list)
+                or len(guide_labels) != max(int(symbol.count), 1)
+            ):
+                return
+            normalized_guides = [
+                str(label).strip() or None if label else None
+                for label in guide_labels
+            ]
+            new_symbol = guide_symbol_with_role_labels(symbol, normalized_guides)
+        normalized = [
+            str(label).strip() or None if label else None for label in labels
+        ]
+        inline_symbols: dict[int, GuideSymbol] = {}
+        for offset, vector_symbol in enumerate(vector_symbols):
+            if vector_symbol is None:
+                continue
+            if not isinstance(vector_symbol, GuideSymbol) or not vector_symbol.path_commands:
+                return
+            inline_symbols[replacement_count + offset] = vector_symbol
+        new_char_labels = tuple(
+            [*normalized_guides[:replacement_count], *normalized]
+            if replacement_count
+            else normalized
+        )
+        old_value = (
+            symbol,
+            tuple(char.role_label for char in line.chars),
+            tuple(sorted(line.inline_guide_symbols.items())),
+        )
+        new_value = (
+            new_symbol,
+            new_char_labels,
+            tuple(sorted(inline_symbols.items())),
+        )
+        if old_value == new_value:
+            return
+        line.guide_symbol = new_symbol
+        line.inline_guide_symbols = inline_symbols
+        for char, label in zip(line.chars, new_char_labels):
+            char.role_label = label
+        self._materialize_role_schemes(
+            {label for label in [*normalized_guides, *normalized] if label}
+        )
+        self._undo_stack.append(
+            ("inline_char_edit", self._active_source_index, row, old_value, new_value)
         )
         del self._undo_stack[:-_UNDO_STACK_LIMIT]
         self._redo_stack.clear()

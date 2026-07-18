@@ -162,6 +162,8 @@ class TimingLine:
     """逐行动画覆盖；None = 继承全局 ``Style`` 的入场/退场设置。"""
     guide_symbol: Optional[GuideSymbol] = None
     """可选导唱符；可插在正文前或替代行首标记，但不改变源 ``chars`` 索引。"""
+    inline_guide_symbols: dict[int, GuideSymbol] = field(default_factory=dict)
+    """按源 ``chars`` 索引保存的行内 SVG 字形替换；原字符与打轴时间保持不变。"""
 
 
 def guide_symbol_replacement_count(

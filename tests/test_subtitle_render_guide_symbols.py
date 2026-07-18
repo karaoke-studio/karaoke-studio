@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import QAbstractItemView, QApplication, QDialog
 
 from krok_helper.subtitle_render.engine import painter as subtitle_painter
 from krok_helper.subtitle_render.frontend import guide_replacement as guide_replacement_module
+from krok_helper.subtitle_render.frontend import lyrics_list as lyrics_list_module
 from krok_helper.subtitle_render.frontend import main_window as main_window_module
 from krok_helper.subtitle_render.engine.painter import _layout_line_uncached, paint_frame
 from krok_helper.subtitle_render.engine.timeline import compute_display_lines, find_active_line
@@ -324,6 +325,95 @@ def test_char_role_dialog_exposes_guide_as_first_selectable_character(tmp_path):
     dialog.close()
 
 
+def test_char_role_dialog_replaces_only_selected_source_chars_with_svg(
+    tmp_path, monkeypatch
+):
+    prefix_symbol = _symbol(tmp_path)
+    replacement_path = tmp_path / "replacement.svg"
+    replacement_path.write_text(
+        '<svg viewBox="0 0 20 20"><path d="M2 2 L18 10 L2 18 Z"/></svg>',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        lyrics_list_module.QFileDialog,
+        "getOpenFileName",
+        lambda *_args, **_kwargs: (str(replacement_path), "SVG 文件 (*.svg)"),
+    )
+    dialog = _CharRoleDialog(
+        0,
+        ["导", "歌", "詞"],
+        [None, None, None],
+        [],
+        Style(),
+        vector_symbols=[prefix_symbol, None, None],
+        protected_prefix_count=1,
+    )
+    dialog._chips._selected = {0, 2}
+    dialog._chips.selectionChanged.emit()
+
+    dialog._replace_selected_with_svg()
+
+    symbols = dialog.char_vector_symbols()
+    assert symbols[0] == prefix_symbol
+    assert symbols[1] is None
+    assert symbols[2] is not None
+    assert symbols[2].name == "replacement"
+    dialog.close()
+
+
+def test_inline_svg_replacement_keeps_middle_character_timing_and_layout(tmp_path):
+    symbol = _symbol(tmp_path)
+    line = TimingLine(
+        chars=[
+            TimingChar("歌", 1000),
+            TimingChar("h", 1500, pause_release_ms=1750),
+            TimingChar("詞", 2000),
+        ],
+        end_ms=2500,
+        inline_guide_symbols={1: symbol},
+    )
+    track = TimingTrack(lines=[line])
+
+    layout = _layout_line_uncached(
+        track, line, Style(font_family="Arial", font_size_px=72), 900, 450
+    )
+
+    assert layout is not None and layout.render_line is not None
+    assert [char.start_ms for char in layout.render_line.chars] == [1000, 1500, 2000]
+    assert layout.render_line.chars[1].pause_release_ms == 1750
+    assert layout.render_line.chars[1].vector_glyph == symbol
+    assert layout.render_line.chars[0].text == "歌"
+    assert layout.render_line.chars[2].text == "詞"
+    assert layout.char_x_ranges[0][1] == layout.char_x_ranges[1][0]
+    assert layout.char_x_ranges[1][1] == layout.char_x_ranges[2][0]
+
+
+def test_inline_svg_replacement_coexists_with_prefix_marker_replacement(tmp_path):
+    prefix_symbol = replace(
+        _symbol(tmp_path), count=1, replacement_prefix=("h",), role_labels=(None,)
+    )
+    inline_symbol = replace(_symbol(tmp_path), name="inline")
+    line = TimingLine(
+        chars=[TimingChar("h", 1000), TimingChar("歌", 1500), TimingChar("x", 2000)],
+        end_ms=2500,
+        guide_symbol=prefix_symbol,
+        inline_guide_symbols={2: inline_symbol},
+    )
+
+    layout = _layout_line_uncached(
+        TimingTrack(lines=[line]),
+        line,
+        Style(font_family="Arial", font_size_px=72),
+        900,
+        450,
+    )
+
+    assert layout is not None and layout.render_line is not None
+    assert [char.start_ms for char in layout.render_line.chars] == [1000, 1500, 2000]
+    assert layout.render_line.chars[0].vector_glyph == prefix_symbol
+    assert layout.render_line.chars[2].vector_glyph == inline_symbol
+
+
 def test_guide_symbol_settings_dialog_returns_count_and_interval():
     dialog = _GuideSymbolSettingsDialog(count=3, interval_ms=750)
 
@@ -426,6 +516,25 @@ def test_lyrics_preview_hides_replaced_prefix_and_preserves_source_chars(tmp_pat
     panel.close()
 
 
+def test_lyrics_preview_marks_inline_svg_without_changing_source_text(tmp_path):
+    symbol = _symbol(tmp_path)
+    line = TimingLine(
+        chars=[TimingChar("歌", 1000), TimingChar("h", 1500), TimingChar("詞", 2000)],
+        end_ms=2500,
+        inline_guide_symbols={1: symbol},
+    )
+    panel = LyricsPanel()
+    panel.set_track(TimingTrack(lines=[line]))
+
+    item = panel.table_widget.item(0, COL_CONTENT)
+    assert item is not None
+    assert item.text() == "歌◆詞"
+    assert not item.icon().isNull()
+    assert "行内 SVG 导唱符：1 个" in item.toolTip()
+    assert "".join(char.text for char in line.chars) == "歌h詞"
+    panel.close()
+
+
 def test_project_reload_skips_replacement_when_source_prefix_changed(tmp_path):
     symbol = replace(_symbol(tmp_path), count=1, replacement_prefix=("h",))
     payload = guide_symbol_to_dict(symbol)
@@ -494,6 +603,36 @@ def test_batch_prefix_replacement_is_one_undoable_command(tmp_path, monkeypatch)
     window.close()
 
 
+def test_inline_char_replacement_is_one_undoable_command(tmp_path, monkeypatch):
+    symbol = _symbol(tmp_path)
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("歌", 1000), TimingChar("x", 1500)], end_ms=2000
+            )
+        ]
+    )
+    monkeypatch.setattr(
+        main_window_module.SubtitleRenderWindow,
+        "_resolve_ffprobe_path",
+        lambda self: "ffprobe",
+    )
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    window = main_window_module.SubtitleRenderWindow(embedded=False)
+    window._timing_track = track
+    window._lyrics_panel.set_track(track)
+
+    window._on_inline_char_edit_changed(0, None, [None, None], [None, symbol])
+
+    assert track.lines[0].inline_guide_symbols == {1: symbol}
+    assert len(window._undo_stack) == 1
+    window._undo_edit()
+    assert track.lines[0].inline_guide_symbols == {}
+    window._redo_edit()
+    assert track.lines[0].inline_guide_symbols == {1: symbol}
+    window.close()
+
+
 def test_project_payload_keeps_optional_line_guide_symbols(tmp_path):
     symbol = _symbol(tmp_path)
     row = guide_symbol_to_dict(replace(symbol, role_label="角色A"))
@@ -513,3 +652,32 @@ def test_project_payload_keeps_optional_line_guide_symbols(tmp_path):
         symbol, role_label="角色A"
     )
     assert payload["line_guide_symbols"][1] is None
+
+
+def test_project_payload_and_reload_keep_inline_guide_symbols(tmp_path):
+    symbol = _symbol(tmp_path)
+    row = {"1": guide_symbol_to_dict(symbol)}
+
+    payload = project_payload(
+        subtitle_path=None,
+        video_path=None,
+        audio_path=None,
+        style={},
+        screen={},
+        selected_scheme_key="default",
+        output={},
+        line_inline_guide_symbols=[row, None],
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("歌", 1000), TimingChar("h", 1500)]),
+            TimingLine(chars=[TimingChar("詞", 2000)]),
+        ]
+    )
+
+    SubtitleRenderWindow._apply_inline_guide_symbol_rows(
+        track, payload["line_inline_guide_symbols"]
+    )
+
+    assert track.lines[0].inline_guide_symbols == {1: symbol}
+    assert track.lines[1].inline_guide_symbols == {}

@@ -17,6 +17,7 @@ UI 设计：
 from __future__ import annotations
 
 from collections import Counter
+from pathlib import Path
 from typing import Optional
 
 from dataclasses import replace as _dataclass_replace
@@ -26,6 +27,7 @@ from PyQt6.QtGui import QBrush, QColor, QFont, QIcon, QKeySequence, QPainter, QP
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDialog,
+    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QHeaderView,
@@ -59,9 +61,14 @@ from qfluentwidgets.components.widgets.menu import MenuAnimationType
 from krok_helper.subtitle_render.engine.timeline import (
     assign_lanes,
 )
-from krok_helper.subtitle_render.guide_symbols import scaled_guide_symbol_path
+from krok_helper.subtitle_render.guide_symbols import (
+    GuideSymbolImportError,
+    import_svg_guide_symbol,
+    scaled_guide_symbol_path,
+)
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
 from krok_helper.subtitle_render.frontend.fluent_dialogs import (
+    fluent_error,
     fluent_get_text,
     fluent_question,
 )
@@ -340,6 +347,56 @@ def _line_role_labels(line) -> list[str]:
     return labels
 
 
+def _line_content_text(line: TimingLine) -> str:
+    """Preview source text while making persisted inline SVG replacements visible."""
+    start = guide_symbol_replacement_count(line)
+    return "".join(
+        "◆"
+        if (
+            (symbol := line.inline_guide_symbols.get(index)) is not None
+            and symbol.path_commands
+        )
+        else char.text
+        for index, char in enumerate(line.chars[start:], start=start)
+    )
+
+
+def _line_guide_tooltip(line: TimingLine) -> str:
+    parts: list[str] = []
+    if line.guide_symbol is not None:
+        if line.guide_symbol.replacement_prefix:
+            marker = "".join(line.guide_symbol.replacement_prefix)
+            parts.append(
+                f"行首标记替换：{marker} → {line.guide_symbol.name} · "
+                f"{line.guide_symbol.count} 个 · 保留原打轴时间"
+            )
+        else:
+            parts.append(
+                f"行前导唱符：{line.guide_symbol.name} · "
+                f"{line.guide_symbol.count} 个 · 间隔 {line.guide_symbol.duration_ms} ms"
+            )
+    inline_count = sum(
+        1
+        for index, symbol in line.inline_guide_symbols.items()
+        if 0 <= index < len(line.chars) and symbol.path_commands
+    )
+    if inline_count:
+        parts.append(f"行内 SVG 导唱符：{inline_count} 个 · 保留原字符打轴时间")
+    return "\n".join(parts)
+
+
+def _line_guide_icon_symbol(line: TimingLine) -> Optional[GuideSymbol]:
+    """Return the representative outline shown beside the lyrics preview text."""
+    if line.guide_symbol is not None and line.guide_symbol.path_commands:
+        return line.guide_symbol
+    start = guide_symbol_replacement_count(line)
+    for index in range(start, len(line.chars)):
+        symbol = line.inline_guide_symbols.get(index)
+        if symbol is not None and symbol.path_commands:
+            return symbol
+    return None
+
+
 def _line_role_mixed(line) -> bool:
     """行内是否存在 ≥2 种不同角色（含「无角色」与具名角色混合）。"""
     return len(set(_line_role_labels(line))) > 1
@@ -448,6 +505,9 @@ class _CharChipsView(QWidget):
     def labels(self) -> list[Optional[str]]:
         return list(self._labels)
 
+    def vector_symbols(self) -> list[Optional[GuideSymbol]]:
+        return list(self._vector_symbols[: len(self._texts)])
+
     def selected_indices(self) -> set[int]:
         return set(self._selected)
 
@@ -468,6 +528,15 @@ class _CharChipsView(QWidget):
         for index in self._selected:
             if 0 <= index < len(self._labels):
                 self._labels[index] = label or None
+        self.assignmentChanged.emit()
+        self.update()
+
+    def replace_selected_vector_symbol(
+        self, symbol: GuideSymbol, *, minimum_index: int = 0
+    ) -> None:
+        for index in self._selected:
+            if minimum_index <= index < len(self._vector_symbols):
+                self._vector_symbols[index] = symbol
         self.assignmentChanged.emit()
         self.update()
 
@@ -656,12 +725,15 @@ class _CharRoleDialog(QDialog):
         default_role_text: str = _DEFAULT_ROLE_TEXT,
         default_swatch_role: str = "",
         vector_symbols: Optional[list[Optional[GuideSymbol]]] = None,
+        protected_prefix_count: int = 0,
+        allow_svg_replacement: bool = True,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle(f"逐字符角色 · 第 {row + 1} 行")
         self._style = style
         self._role_buttons: list[FluentToggleButton] = []
         self._default_role_text = default_role_text
+        self._protected_prefix_count = max(int(protected_prefix_count), 0)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 12)
@@ -711,6 +783,11 @@ class _CharRoleDialog(QDialog):
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
+        self._replace_svg_button = FluentPushButton("替换为 SVG 导唱符…", self)
+        self._replace_svg_button.setAutoDefault(False)
+        self._replace_svg_button.clicked.connect(self._replace_selected_with_svg)
+        self._replace_svg_button.setVisible(bool(allow_svg_replacement))
+        buttons.addWidget(self._replace_svg_button)
         cancel = FluentPushButton("取消", self)
         cancel.clicked.connect(self.reject)
         buttons.addWidget(cancel)
@@ -754,6 +831,27 @@ class _CharRoleDialog(QDialog):
                 and len(assigned) == 1
                 and str(button.property("roleLabel") or "") == str(current or "")
             )
+        self._replace_svg_button.setEnabled(
+            any(
+                index >= self._protected_prefix_count
+                for index in self._chips.selected_indices()
+            )
+        )
+
+    def _replace_selected_with_svg(self) -> None:
+        path_text, _ = QFileDialog.getOpenFileName(
+            self, "选择 SVG 导唱符", "", "SVG 文件 (*.svg)"
+        )
+        if not path_text:
+            return
+        try:
+            symbol = import_svg_guide_symbol(Path(path_text), count=1)
+        except GuideSymbolImportError as exc:
+            fluent_error(self, "无法导入导唱符", str(exc))
+            return
+        self._chips.replace_selected_vector_symbol(
+            symbol, minimum_index=self._protected_prefix_count
+        )
 
     def _create_role(self) -> None:
         name, ok = fluent_get_text(self, "新建角色", "角色名称")
@@ -772,6 +870,9 @@ class _CharRoleDialog(QDialog):
     def char_labels(self) -> list[Optional[str]]:
         return self._chips.labels()
 
+    def char_vector_symbols(self) -> list[Optional[GuideSymbol]]:
+        return self._chips.vector_symbols()
+
 
 class LyricsPanel(DropPanel):
     """左侧歌词面板（含空态拖拽 + 已加载表格两态）。"""
@@ -783,6 +884,8 @@ class LyricsPanel(DropPanel):
     """逐字符角色编辑：track.lines 行号 + 与该行字符数等长的标签列表（str | None）。"""
     guideCharRolesChanged = Signal(int, object, list)
     """含导唱符行的逐字符结果：行号、各导唱符角色列表、可见歌词角色列表。"""
+    inlineCharEditChanged = Signal(int, object, list, object)
+    """逐字符 SVG/角色结果：行号、行前导唱角色、可见字符角色、可见字符 SVG。"""
     guideSymbolImportRequested = Signal(list)
     guideSymbolRemoveRequested = Signal(list)
     guidePrefixReplaceRequested = Signal()
@@ -1029,21 +1132,13 @@ class LyricsPanel(DropPanel):
                 self._table.setItem(row, COL_EFFECT, effect_item)
 
                 content_item = QTableWidgetItem(
-                    "".join(c.text for c in line_visible_chars(line)) if not blank else ""
+                    _line_content_text(line) if not blank else ""
                 )
-                if not blank and line.guide_symbol is not None:
-                    content_item.setIcon(_guide_symbol_icon(line.guide_symbol))
-                    if line.guide_symbol.replacement_prefix:
-                        marker = "".join(line.guide_symbol.replacement_prefix)
-                        content_item.setToolTip(
-                            f"行首标记替换：{marker} → {line.guide_symbol.name} · "
-                            f"{line.guide_symbol.count} 个 · 保留原打轴时间"
-                        )
-                    else:
-                        content_item.setToolTip(
-                            f"行前导唱符：{line.guide_symbol.name} · "
-                            f"{line.guide_symbol.count} 个 · 间隔 {line.guide_symbol.duration_ms} ms"
-                        )
+                icon_symbol = _line_guide_icon_symbol(line) if not blank else None
+                if icon_symbol is not None:
+                    content_item.setIcon(_guide_symbol_icon(icon_symbol))
+                if not blank:
+                    content_item.setToolTip(_line_guide_tooltip(line))
                 content_item.setFlags(
                     content_item.flags() & ~Qt.ItemFlag.ItemIsEditable
                 )
@@ -1461,22 +1556,16 @@ class LyricsPanel(DropPanel):
                     if self._title_mode
                     else self._content_alignment(line_style, lane, dual, single_line_page)
                 )
-                if line is not None and line.guide_symbol is not None:
-                    content_item.setIcon(_guide_symbol_icon(line.guide_symbol))
-                    if line.guide_symbol.replacement_prefix:
-                        marker = "".join(line.guide_symbol.replacement_prefix)
-                        content_item.setToolTip(
-                            f"行首标记替换：{marker} → {line.guide_symbol.name} · "
-                            f"{line.guide_symbol.count} 个 · 保留原打轴时间"
-                        )
-                    else:
-                        content_item.setToolTip(
-                            f"行前导唱符：{line.guide_symbol.name} · "
-                            f"{line.guide_symbol.count} 个 · 间隔 {line.guide_symbol.duration_ms} ms"
-                        )
+                if line is not None:
+                    content_item.setText(_line_content_text(line))
+                icon_symbol = _line_guide_icon_symbol(line) if line is not None else None
+                if icon_symbol is not None:
+                    content_item.setIcon(_guide_symbol_icon(icon_symbol))
                 else:
                     content_item.setIcon(QIcon())
-                    content_item.setToolTip("")
+                content_item.setToolTip(
+                    _line_guide_tooltip(line) if line is not None else ""
+                )
 
                 # ``role_label`` is the source of truth.  Whole-row/batch edits
                 # mutate the TimingTrack in place, so keeping the old item
@@ -1786,7 +1875,12 @@ class LyricsPanel(DropPanel):
         visible_chars = line.chars[replacement_count:]
         texts = [ch.text for ch in visible_chars]
         labels = [ch.role_label for ch in visible_chars]
-        vector_symbols: list[Optional[GuideSymbol]] = [None] * len(texts)
+        vector_symbols: list[Optional[GuideSymbol]] = [
+            line.inline_guide_symbols.get(index)
+            for index in range(replacement_count, len(line.chars))
+        ]
+        original_visible_vectors = list(vector_symbols)
+        guide_count = 0
         if guide is not None:
             guide_count = max(int(guide.count), 1)
             texts[0:0] = ["导"] * guide_count
@@ -1802,14 +1896,22 @@ class LyricsPanel(DropPanel):
             default_role_text="标题默认" if self._title_mode else _DEFAULT_ROLE_TEXT,
             default_swatch_role=TITLE_SCHEME_NAME if self._title_mode else "",
             vector_symbols=vector_symbols,
+            protected_prefix_count=guide_count,
+            allow_svg_replacement=not self._title_mode,
         )
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         labels = dialog.char_labels()
+        vectors = dialog.char_vector_symbols()
+        guide_labels = labels[:guide_count] if guide is not None else None
+        char_labels = labels[guide_count:]
+        char_vectors = vectors[guide_count:]
+        if char_vectors != original_visible_vectors:
+            self.inlineCharEditChanged.emit(
+                row, guide_labels, char_labels, char_vectors
+            )
+            return
         if guide is not None:
-            guide_count = max(int(guide.count), 1)
-            guide_labels = labels[:guide_count]
-            char_labels = labels[guide_count:]
             if guide_labels == list(guide_symbol_role_labels(guide)) and char_labels == [
                 ch.role_label for ch in visible_chars
             ]:

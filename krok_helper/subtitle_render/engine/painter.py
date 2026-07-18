@@ -437,6 +437,7 @@ def _track_layout_signature(track: TimingTrack) -> tuple:
                 line.break_before,
                 _value_signature(line.animation_override),
                 _value_signature(line.guide_symbol),
+                _value_signature(line.inline_guide_symbols),
             )
             for line in track.lines
         ),
@@ -479,6 +480,7 @@ def _line_layout_signature(line: TimingLine) -> tuple:
         line.display_start_override_ms,
         line.display_end_override_ms,
         _value_signature(line.guide_symbol),
+        _value_signature(line.inline_guide_symbols),
     )
 
 
@@ -4868,14 +4870,35 @@ def _line_has_role_labels(line: TimingLine) -> bool:
 
 
 def _line_with_guide_symbol(line: TimingLine) -> TimingLine:
-    """Return the painter-only line whose first TimingChar is the guide symbol."""
-    symbol = line.guide_symbol
-    if symbol is None or not symbol.path_commands or not line.chars:
+    """Return a painter-only line with prefix and inline SVG replacements applied."""
+    if not line.chars:
         return line
+    symbol = line.guide_symbol
     replacement_count = guide_symbol_replacement_count(line, symbol)
+    chars = list(line.chars)
+    inline_changed = False
+    for index, inline_symbol in line.inline_guide_symbols.items():
+        if (
+            isinstance(index, int)
+            and 0 <= index < len(chars)
+            and isinstance(inline_symbol, GuideSymbol)
+            and inline_symbol.path_commands
+        ):
+            chars[index] = replace(
+                chars[index], text="\uFFFC", vector_glyph=inline_symbol
+            )
+            inline_changed = True
+    render_line = (
+        replace(line, chars=chars, inline_guide_symbols={})
+        if inline_changed
+        else line
+    )
+    symbol = render_line.guide_symbol
+    if symbol is None or not symbol.path_commands:
+        return render_line
     if symbol.replacement_prefix:
         if replacement_count == 0:
-            return line
+            return render_line
         labels = guide_symbol_role_labels(symbol)
         guides = [
             TimingChar(
@@ -4887,14 +4910,15 @@ def _line_with_guide_symbol(line: TimingLine) -> TimingLine:
                 ),
                 vector_glyph=symbol,
             )
-            for index, source in enumerate(line.chars[:replacement_count])
+            for index, source in enumerate(render_line.chars[:replacement_count])
         ]
         return replace(
-            line,
-            chars=[*guides, *line.chars[replacement_count:]],
+            render_line,
+            chars=[*guides, *render_line.chars[replacement_count:]],
             guide_symbol=None,
+            inline_guide_symbols={},
         )
-    first_start = int(line.chars[0].start_ms)
+    first_start = int(render_line.chars[0].start_ms)
     interval = max(int(symbol.duration_ms), 0)
     labels = guide_symbol_role_labels(symbol)
     guides = [
@@ -4906,7 +4930,12 @@ def _line_with_guide_symbol(line: TimingLine) -> TimingLine:
         )
         for index, label in enumerate(labels)
     ]
-    return replace(line, chars=[*guides, *line.chars], guide_symbol=None)
+    return replace(
+        render_line,
+        chars=[*guides, *render_line.chars],
+        guide_symbol=None,
+        inline_guide_symbols={},
+    )
 
 
 def _vector_glyph_width(symbol, style: Style) -> int:
