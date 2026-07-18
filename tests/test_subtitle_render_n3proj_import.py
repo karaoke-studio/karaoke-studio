@@ -546,6 +546,28 @@ def test_import_preserves_dxcolor_alpha_for_all_font_brush_layers(tmp_path):
     ]
 
 
+@pytest.mark.parametrize(
+    ("bitmap_scale", "expected_scale"),
+    [(0, 100), (1, 1), (1000, 1000), (1200, 1000)],
+)
+def test_import_preserves_missing_bitmap_settings_and_clamps_scale(
+    tmp_path, bitmap_scale, expected_scale
+):
+    payload = _project_payload(tmp_path)
+    brush = payload["LyricsFonts"][0]["BrushInfos"][0]
+    brush["SelectedBrushTypeIndex"] = 3
+    brush["BitmapPath"] = "missing-texture.png"
+    brush["BitmapScale"] = bitmap_scale
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    fill = style_from_dict(result.project_data["style"]).karaoke_colors.after.text
+
+    assert fill.mode == "image"
+    assert Path(fill.image_path) == tmp_path / "missing-texture.png"
+    assert fill.image_scale_pct == expected_scale
+    assert any("已保留图片设置" in warning for warning in result.warnings)
+
+
 def test_import_blur_concentration_is_scheme_shared_and_reaches_title(tmp_path):
     payload = _project_payload(tmp_path)
     payload["LyricsFonts"][1]["BlurLevel"] = 2

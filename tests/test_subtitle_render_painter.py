@@ -69,6 +69,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _karaoke_fill_segments,
     _paint_ruby_text,
     _paint_ruby_text_units_with_transition,
+    _paint_text_layer_stack,
     _resolve_display_baselines,
     _resolve_line_x,
     _resolve_sayatoo_line_layouts,
@@ -4660,8 +4661,75 @@ def test_image_fill_brush_is_cached(qapp, tmp_path):
 
     assert first.style() == second.style()
     assert scaled.style() == first.style()
+    assert first.transform().m11() == pytest.approx(1.0)
+    assert scaled.transform().m11() == pytest.approx(1.5)
     assert len(_IMAGE_FILL_CACHE) == 1
     assert len(_IMAGE_BRUSH_CACHE) == 2
+
+
+def test_image_fill_wraps_from_the_canvas_origin(qapp, tmp_path):
+    clear_before_layer_cache()
+    image_path = tmp_path / "pattern.png"
+    source = QImage(2, 1, QImage.Format.Format_ARGB32_Premultiplied)
+    source.setPixelColor(0, 0, QColor("#FF0000"))
+    source.setPixelColor(1, 0, QColor("#0000FF"))
+    assert source.save(str(image_path))
+
+    fill = PaintFill(mode="image", image_path=str(image_path), image_scale_pct=100)
+    first = _brush_for_fill(fill, QRectF(7, 11, 20, 10))
+    second = _brush_for_fill(fill, QRectF(101, 203, 20, 10))
+    assert first.transform() == second.transform()
+
+    canvas = QImage(8, 1, QImage.Format.Format_ARGB32_Premultiplied)
+    canvas.fill(0)
+    painter = QPainter(canvas)
+    painter.fillRect(QRectF(0, 0, 8, 1), first)
+    painter.end()
+    assert [canvas.pixelColor(x, 0).name() for x in range(8)] == [
+        "#ff0000",
+        "#0000ff",
+    ] * 4
+
+
+def test_image_body_protects_primary_stroke_under_transparent_pixels(qapp, tmp_path):
+    image_path = tmp_path / "alpha.png"
+    source = QImage(1, 1, QImage.Format.Format_ARGB32_Premultiplied)
+    source.fill(QColor(255, 255, 255, 128))
+    assert source.save(str(image_path))
+    image_fill = PaintFill(
+        mode="image", image_path=str(image_path), image_scale_pct=100
+    )
+    state = KaraokeColorState(
+        text=image_fill,
+        stroke=PaintFill(color="#FF0000"),
+        stroke2=PaintFill(color="#000000"),
+        shadow=PaintFill(color="#000000"),
+    )
+    path = QPainterPath()
+    path.addRect(QRectF(10, 10, 20, 20))
+    canvas = QImage(40, 40, QImage.Format.Format_ARGB32_Premultiplied)
+    canvas.fill(0)
+    painter = QPainter(canvas)
+    _paint_text_layer_stack(
+        painter,
+        path,
+        QRectF(10, 10, 20, 20),
+        state,
+        Style(decoration_kind="none"),
+        stroke_width=8,
+        stroke2_width=0,
+        shadow_dx=0,
+        shadow_dy=0,
+        glow_radius=0,
+    )
+    painter.end()
+
+    # The translucent bitmap stays translucent white instead of blending with
+    # the red primary edge beneath it; the outside half remains visible.
+    inside = canvas.pixelColor(12, 20)
+    assert inside.red() == inside.green() == inside.blue() == 255
+    assert 120 <= inside.alpha() <= 136
+    assert canvas.pixelColor(8, 20).red() > 200
 
 
 def test_image_fill_before_and_after_layers_share_text_anchor(qapp, tmp_path):
@@ -4695,6 +4763,50 @@ def test_image_fill_before_and_after_layers_share_text_anchor(qapp, tmp_path):
     paint_frame(fully_sung, track, 2600, style)
 
     assert _pixel_hash(before_only) == _pixel_hash(fully_sung)
+
+
+def test_image_fill_cached_layer_matches_canvas_anchored_direct_path(
+    qapp, tmp_path, monkeypatch
+):
+    image_path = tmp_path / "canvas-pattern.png"
+    source = QImage(7, 5, QImage.Format.Format_ARGB32_Premultiplied)
+    for y in range(source.height()):
+        for x in range(source.width()):
+            source.setPixelColor(
+                x,
+                y,
+                QColor("#F04A4A") if (x + y) % 3 == 0 else QColor("#4A70F0"),
+            )
+    assert source.save(str(image_path))
+    fill = PaintFill(mode="image", image_path=str(image_path), image_scale_pct=175)
+    colors = KaraokeColors(
+        before=KaraokeColorState(text=fill),
+        after=KaraokeColorState(text=fill),
+    )
+    style = Style(
+        font_size_px=72,
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        decoration_kind="none",
+        line_y_position="center",
+        karaoke_colors=colors,
+    )
+
+    monkeypatch.setenv("KROK_SUBTITLE_HORIZONTAL_LAYER", "0")
+    clear_before_layer_cache()
+    direct = _blank()
+    paint_frame(direct, _track(), 1300, style)
+
+    monkeypatch.setenv("KROK_SUBTITLE_HORIZONTAL_LAYER", "1")
+    clear_before_layer_cache()
+    cached = _blank()
+    paint_frame(cached, _track(), 1300, style)
+    clear_before_layer_cache()
+
+    diff = np.abs(
+        _img_rows_rgba(direct).astype(int) - _img_rows_rgba(cached).astype(int)
+    )
+    assert diff.max() <= 1
 
 
 def test_paint_frame_entry_and_exit_animation_change_rendered_frame(qapp):

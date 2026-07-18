@@ -48,6 +48,7 @@ from PyQt6.QtGui import (
     QLinearGradient,
     QPainter,
     QPainterPath,
+    QPainterPathStroker,
     QPen,
     QTransform,
 )
@@ -1407,7 +1408,14 @@ def _paint_title_text_stack(
             _stroke2_pen_width(title.stroke_width_px, title.stroke2_width_px),
         )
     if title.stroke_width_px > 0:
-        _paint_stroke_path(painter, path, title.stroke, rect, _stroke_pen_width(title.stroke_width_px))
+        _paint_stroke_path(
+            painter,
+            path,
+            title.stroke,
+            rect,
+            _stroke_pen_width(title.stroke_width_px),
+            protect_body=_fill_is_alpha(title.fill),
+        )
     _paint_fill_path(painter, path, title.fill, rect)
 
 
@@ -3521,7 +3529,9 @@ def _build_baked_path_stack(
     p = QPainter(image)
     try:
         p.setRenderHints(
-            QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
         )
         p.translate(-ox, -oy)
         _paint_text_layer_stack(
@@ -6400,10 +6410,14 @@ class _GlyphRunLayer:
     def static_key(self, ctx: LayerContext, layout: object) -> tuple:
         role_style = self.glyphs[0].style
         colors = _effective_karaoke_colors(role_style)
+        state = colors.after if self.after else colors.before
         return (
             _glyph_run_layer_key(self.glyphs, role_style, colors, after=self.after),
             _relative_fill_rect_signature(
-                self.glyphs, self.baseline_y, self.fill_rect
+                self.glyphs,
+                self.baseline_y,
+                self.fill_rect,
+                global_anchor=_karaoke_state_uses_image(state),
             ),
         )
 
@@ -6527,7 +6541,10 @@ class _GlyphRunBeforeGlowLayer:
             _glyph_run_layer_key(self.glyphs, role_style, colors, after=False),
             "before-glow",
             _relative_fill_rect_signature(
-                self.glyphs, self.baseline_y, self.fill_rect
+                self.glyphs,
+                self.baseline_y,
+                self.fill_rect,
+                global_anchor=colors.before.shadow.mode == "image",
             ),
         )
 
@@ -6685,7 +6702,10 @@ class _GlyphRunAfterGlowLayer:
         return (
             _glyph_run_after_glow_key(self.glyphs, role_style, colors),
             _relative_fill_rect_signature(
-                self.glyphs, self.baseline_y, self.fill_rect
+                self.glyphs,
+                self.baseline_y,
+                self.fill_rect,
+                global_anchor=colors.after.shadow.mode == "image",
             ),
         )
 
@@ -7168,16 +7188,39 @@ def _relative_fill_rect_signature(
     glyphs: list[_GlyphLayout],
     baseline_y: int,
     fill_rect: QRectF | None,
+    *,
+    global_anchor: bool = False,
 ) -> tuple[float, float, float, float] | None:
-    """Cache-stable brush anchor relative to a glyph run's blit origin."""
+    """Return the brush coordinates that affect a cached glyph run."""
+    run_left = min(glyph.left for glyph in glyphs)
+    if global_anchor:
+        if fill_rect is None:
+            return (
+                round(float(run_left), 3),
+                round(float(baseline_y), 3),
+                0.0,
+                0.0,
+            )
+        return (
+            round(float(fill_rect.left()), 3),
+            round(float(fill_rect.top()), 3),
+            round(float(fill_rect.width()), 3),
+            round(float(fill_rect.height()), 3),
+        )
     if fill_rect is None:
         return None
-    run_left = min(glyph.left for glyph in glyphs)
     return (
         round(float(fill_rect.left()) - run_left, 3),
         round(float(fill_rect.top()) - baseline_y, 3),
         round(float(fill_rect.width()), 3),
         round(float(fill_rect.height()), 3),
+    )
+
+
+def _karaoke_state_uses_image(state: KaraokeColorState) -> bool:
+    return any(
+        fill.mode == "image"
+        for fill in (state.text, state.stroke, state.stroke2, state.shadow)
     )
 
 
@@ -7340,26 +7383,26 @@ def _build_glyph_run_layer(
     )
     image.fill(0)
 
-    local_baseline = pad_top + run_ascent
-    local_glyphs = [replace(glyph, left=glyph.left - run_left + pad_left) for glyph in glyphs]
-    path = _glyph_run_path(local_glyphs, local_baseline)
-    rect = QRectF(float(pad_left), float(local_baseline - run_ascent), float(run_w), float(run_h))
-    brush_rect = (
-        fill_rect.translated(
-            float(-run_left + pad_left),
-            float(-baseline_y + local_baseline),
-        )
-        if fill_rect is not None
-        else rect
+    target_origin_x = float(run_left - pad_left)
+    target_origin_y = float(baseline_y - run_ascent - pad_top)
+    path = _glyph_run_path(glyphs, baseline_y)
+    rect = QRectF(
+        float(run_left),
+        float(baseline_y - run_ascent),
+        float(run_w),
+        float(run_h),
     )
+    brush_rect = fill_rect if fill_rect is not None else rect
 
     p = QPainter(image)
     try:
         if s != 1.0:
             p.scale(s, s)
+        p.translate(-target_origin_x, -target_origin_y)
         p.setRenderHints(
             QPainter.RenderHint.Antialiasing
             | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
         )
         # 1) glow（仅未唱层）/ 阴影（仅非 glow）
         if bake_glow:
@@ -7401,6 +7444,7 @@ def _build_glyph_run_layer(
                 state.stroke,
                 brush_rect,
                 _stroke_pen_width(role_style.stroke_width_px),
+                protect_body=_fill_is_alpha(state.text),
             )
         # 4) 底色文字
         _paint_fill_path(p, path, state.text, brush_rect)
@@ -7440,24 +7484,24 @@ def _build_glyph_run_glow_layer(
     image = QImage(img_w, img_h, QImage.Format.Format_ARGB32_Premultiplied)
     image.fill(0)
 
-    local_baseline = extent + run_ascent
-    local_glyphs = [replace(glyph, left=glyph.left - run_left + extent) for glyph in glyphs]
-    path = _glyph_run_path(local_glyphs, local_baseline)
-    rect = QRectF(float(extent), float(local_baseline - run_ascent), float(run_w), float(run_h))
-    brush_rect = (
-        fill_rect.translated(
-            float(-run_left + extent),
-            float(-baseline_y + local_baseline),
-        )
-        if fill_rect is not None
-        else rect
+    target_origin_x = float(run_left - extent)
+    target_origin_y = float(baseline_y - run_ascent - extent)
+    path = _glyph_run_path(glyphs, baseline_y)
+    rect = QRectF(
+        float(run_left),
+        float(baseline_y - run_ascent),
+        float(run_w),
+        float(run_h),
     )
+    brush_rect = fill_rect if fill_rect is not None else rect
 
     p = QPainter(image)
     try:
+        p.translate(-target_origin_x, -target_origin_y)
         p.setRenderHints(
             QPainter.RenderHint.Antialiasing
             | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
         )
         _paint_glow_path(
             p,
@@ -7510,7 +7554,13 @@ def _get_or_build_run_glow(
         _glyph_run_layer_key(glyphs, role_style, colors, after=after),
         "glow",
         after,
-        _relative_fill_rect_signature(glyphs, baseline_y, fill_rect),
+        _relative_fill_rect_signature(
+            glyphs,
+            baseline_y,
+            fill_rect,
+            global_anchor=(colors.after if after else colors.before).shadow.mode
+            == "image",
+        ),
     )
     return _RUN_GLOW_CACHE.get_or_build(
         key,
@@ -8876,8 +8926,20 @@ def _paint_stroke_path(
     fill: PaintFill,
     rect: QRectF,
     width: int,
+    *,
+    protect_body: bool = False,
 ) -> None:
-    pen = QPen(_brush_for_fill(fill, rect), max(width, 1))
+    brush = _brush_for_fill(fill, rect)
+    pen_width = max(width, 1)
+    if protect_body:
+        stroker = QPainterPathStroker()
+        stroker.setWidth(float(pen_width))
+        stroker.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        stroker.setCapStyle(Qt.PenCapStyle.RoundCap)
+        outline = stroker.createStroke(path).subtracted(path)
+        painter.fillPath(outline, brush)
+        return
+    pen = QPen(brush, pen_width)
     pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
     pen.setCapStyle(Qt.PenCapStyle.RoundCap)
     painter.strokePath(path, pen)
@@ -8956,7 +9018,11 @@ def _paint_glow_path(
     local_rect = rect.translated(-layer_rect.left(), -layer_rect.top())
     p = QPainter(source)
     try:
-        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing)
+        p.setRenderHints(
+            QPainter.RenderHint.Antialiasing
+            | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
+        )
         if source_clip is not None:
             p.setClipRect(source_clip.translated(-layer_rect.left(), -layer_rect.top()))
         _paint_stroke_path(p, local_path, fill, local_rect, width)
@@ -9027,6 +9093,7 @@ def _paint_split_glow_path(
         source_painter.setRenderHints(
             QPainter.RenderHint.Antialiasing
             | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
         )
         for fill, clip in (
             (before_fill, before_source_clip),
@@ -9853,7 +9920,7 @@ def _is_utopia_group_marker(ruby: RubyAnnotation) -> bool:
 
 def _brush_for_fill(fill: PaintFill, rect: QRectF) -> QBrush:
     if fill.mode == "image" and fill.image_path:
-        brush = _cached_image_brush(fill.image_path, fill.image_scale_pct, rect)
+        brush = _cached_image_brush(fill.image_path, fill.image_scale_pct)
         if brush is not None:
             return brush
 
@@ -9866,30 +9933,50 @@ def _brush_for_fill(fill: PaintFill, rect: QRectF) -> QBrush:
     return QBrush(_valid_color(fill.color, "#FFFFFF"))
 
 
-def _cached_image_brush(path: str, scale_pct: int, rect: QRectF) -> QBrush | None:
+def _fill_is_alpha(fill: PaintFill) -> bool:
+    """Return whether N3 protects the glyph body from its primary edge."""
+    if fill.mode == "image":
+        # N3 treats bitmap brushes as alpha-capable unconditionally.  This is
+        # intentional even for opaque or temporarily missing image files.
+        return True
+    if fill.mode in {"gradient_horizontal", "gradient_vertical"}:
+        colors = [color for _position, color in _gradient_stops(fill)]
+    elif fill.mode == "split_vertical":
+        colors = [color for _position, color in _split_gradient_stops(fill)]
+    else:
+        colors = [fill.color]
+    return any(_valid_color(color, fill.color).alpha() < 255 for color in colors)
+
+
+def _cached_image_brush(path: str, scale_pct: int) -> QBrush | None:
     signature = _image_file_signature(path)
     if signature is None:
         return None
-    scale = max(scale_pct, 1)
+    scale = max(1, min(int(scale_pct), 1000))
     brush_key = (*signature, scale)
     with _IMAGE_FILL_LOCK:
         brush = _IMAGE_BRUSH_CACHE.get(brush_key)
         if brush is not None:
             _IMAGE_BRUSH_CACHE.move_to_end(brush_key)
-            return _anchor_texture_brush(brush, rect)
+            return QBrush(brush)
 
     image = _cached_fill_image(signature)
     if image is None or image.isNull():
         return None
     brush = QBrush(image)
     brush_scale = scale / 100.0
-    brush.setTransform(QTransform().scale(1.0 / brush_scale, 1.0 / brush_scale))
+    # N3 uses a Direct2D bitmap brush with Wrap/Wrap extension and applies
+    # BitmapScale directly.  QBrush texture patterns wrap in both directions
+    # as well; using the same direct transform keeps 200% visually twice as
+    # large instead of twice as dense.  No translation is applied here: the
+    # texture is anchored at the render target origin, not at each lyric line.
+    brush.setTransform(QTransform().scale(brush_scale, brush_scale))
 
     with _IMAGE_FILL_LOCK:
         _IMAGE_BRUSH_CACHE[brush_key] = brush
         while len(_IMAGE_BRUSH_CACHE) > _IMAGE_FILL_CACHE_MAX:
             _IMAGE_BRUSH_CACHE.popitem(last=False)
-    return _anchor_texture_brush(brush, rect)
+    return QBrush(brush)
 
 
 def _anchor_texture_brush(brush: QBrush, rect: QRectF) -> QBrush:
@@ -11801,6 +11888,7 @@ def _build_ruby_text_layer(
         p.setRenderHints(
             QPainter.RenderHint.Antialiasing
             | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
         )
         _paint_text_layer_stack(
             p,
@@ -11882,6 +11970,7 @@ def _build_ruby_glow_layer(
         p.setRenderHints(
             QPainter.RenderHint.Antialiasing
             | QPainter.RenderHint.TextAntialiasing
+            | QPainter.RenderHint.SmoothPixmapTransform
         )
         _paint_glow_path(
             p,
@@ -12873,6 +12962,7 @@ def _paint_text_layer_stack(
             colors.stroke,
             brush_rect,
             _stroke_pen_width(stroke_width),
+            protect_body=_fill_is_alpha(colors.text),
         )
     _paint_fill_path(painter, path, colors.text, brush_rect)
 

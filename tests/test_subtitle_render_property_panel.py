@@ -2421,6 +2421,9 @@ def test_property_panel_split_and_image_fill_controls_emit_style(qapp):
     emitted: list[Style] = []
     panel.styleChanged.connect(emitted.append)
 
+    assert panel._paint_image_scale_spin.minimum() == 1
+    assert panel._paint_image_scale_spin.maximum() == 1000
+
     panel._fill_mode_combo.setCurrentIndex(panel._fill_mode_combo.findData("split_vertical"))
     panel._update_split_stops(
         [(0, "#FFFFFF"), (30, "#FF0000"), (65, "#888888"), (100, "#888888")]

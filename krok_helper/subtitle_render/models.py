@@ -2178,7 +2178,9 @@ def paint_fill_from_dict(payload: object, *, fallback: str = "#FFFFFF") -> Paint
             split_stops_payload, split_top_color, split_bottom_color
         ),
         image_path=str(payload.get("image_path", "")),
-        image_scale_pct=max(1, _int_value(payload.get("image_scale_pct"), 100)),
+        image_scale_pct=max(
+            1, min(_int_value(payload.get("image_scale_pct"), 100), 1000)
+        ),
     )
 
 

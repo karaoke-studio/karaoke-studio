@@ -173,13 +173,19 @@ def _fill_from_brush(
         candidate = Path(image) if image else None
         if candidate is not None and not candidate.is_absolute():
             candidate = lyrics_dir / image
+        scale = _int(brush.get("BitmapScale"), 100)
+        if scale == 0:
+            scale = 100
+        scale = max(1, min(scale, 1000))
         if candidate is None or not candidate.is_file():
-            warnings.append(f"{context}：贴图填充素材不存在（{image or '未设置'}），已回退纯色")
-            return _paint_fill(solid)
+            warnings.append(
+                f"{context}：贴图填充素材不存在（{image or '未设置'}），"
+                "已保留图片设置并暂用底色显示"
+            )
         fill = _paint_fill(solid)
         fill.mode = "image"
-        fill.image_path = str(candidate)
-        fill.image_scale_pct = max(1, _int(brush.get("BitmapScale"), 100))
+        fill.image_path = str(candidate) if candidate is not None else image
+        fill.image_scale_pct = scale
         return fill
     warnings.append(f"{context}：未知笔刷类型（{brush_type}），已回退纯色")
     return _paint_fill(solid)

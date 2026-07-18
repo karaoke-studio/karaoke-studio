@@ -5115,7 +5115,7 @@ class PropertyPanel(QWidget):
         self._paint_image_browse_btn = FluentPushButton("浏览...", page)
         self._paint_image_browse_btn.setMinimumHeight(32)
         self._paint_image_browse_btn.clicked.connect(self._choose_paint_image)
-        self._paint_image_scale_spin = _spin(10, 400, suffix=" %")
+        self._paint_image_scale_spin = _spin(1, 1000, suffix=" %")
         self._paint_image_scale_spin.valueChanged.connect(
             lambda value: self._update_current_fill(image_scale_pct=value)
         )
@@ -6642,7 +6642,8 @@ class PropertyPanel(QWidget):
             self,
             "选择填充图像",
             self._paint_image_path_edit.text(),
-            "图像文件 (*.png *.jpg *.jpeg *.bmp *.webp);;所有文件 (*.*)",
+            "图像文件 (*.bmp *.gif *.ico *.jpeg *.jpg *.png *.tif *.tiff *.webp);;"
+            "所有文件 (*.*)",
         )
         if path:
             self._paint_image_path_edit.setText(path)
