@@ -98,6 +98,7 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
         panel._lit_shadow_check,
         panel._vertical_check,
         panel._rtl_check,
+        panel._sync_entry_check,
         panel._sync_ending_check,
         panel._ruby_main_reading_units_check,
     )
@@ -765,6 +766,7 @@ def test_property_panel_set_style_populates_controls(qapp):
         timing_offset_ms=-120,
         ruby_main_progress_mode="reading_units",
         section_gap_ms=5000,
+        sync_entry=True,
         sync_ending=True,
         section_ending_mode="clear",
         line_lane_gap_ms=250,
@@ -860,6 +862,7 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._line_offset_spin.value() == -120
     assert panel._ruby_main_reading_units_check.isChecked()
     assert panel._section_gap_spin.value() == 5000
+    assert panel._sync_entry_check.isChecked()
     assert panel._sync_ending_check.isChecked()
     assert panel._section_ending_combo.currentData() == "clear"
     assert panel._entry_anim_combo.currentData() == "utopia"
@@ -997,6 +1000,7 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.line_tail_ms == 1000
     assert style.timing_offset_ms == 0
     assert style.section_gap_ms == 4000
+    assert style.sync_entry is False
     assert style.sync_ending is False
     assert style.section_ending_mode == "hold"
     assert style.line_lane_gap_ms == 300
@@ -2908,6 +2912,7 @@ def test_property_panel_timing_controls_emit_style(qapp):
     panel._section_ending_combo.setCurrentIndex(
         panel._section_ending_combo.findData("clear")
     )
+    panel._sync_entry_check.setChecked(True)
     panel._sync_ending_check.setChecked(True)
     panel._ruby_main_reading_units_check.setChecked(True)
 
@@ -2916,6 +2921,7 @@ def test_property_panel_timing_controls_emit_style(qapp):
     assert emitted[-1].timing_offset_ms == -250
     assert emitted[-1].section_gap_ms == 6000
     assert emitted[-1].section_ending_mode == "clear"
+    assert emitted[-1].sync_entry is True
     assert emitted[-1].sync_ending is True
     assert emitted[-1].ruby_main_progress_mode == "reading_units"
 

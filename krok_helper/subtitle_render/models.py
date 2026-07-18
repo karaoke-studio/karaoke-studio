@@ -1036,10 +1036,13 @@ class Style:
     line_max_hold_ms: int = 12_000
     """单句显示窗口最长保留时间，避免长间奏时字幕过久挂屏。"""
 
-    # 段落 / 同步退场（对标 Sayatoo sync_ending / section_ending_mode）。
+    # 段落 / 同步入退场（对标 Sayatoo sync_ending / section_ending_mode）。
     # Sayatoo 用手动信号划段落；LRC 无信号，这里改为按间奏间隔自动分段。
     section_gap_ms: int = 4000
     """自动分段阈值：相邻两句演唱空隙（间奏）超过此值即开新段落。"""
+
+    sync_entry: bool = False
+    """同步入场：开启后同段落内各 lane 的首行按最早上屏时间同时入场。"""
 
     sync_ending: bool = False
     """同步退场：开启后同段落内一组两行在段末同时退场，而非逐行先后消失。"""
@@ -1448,6 +1451,7 @@ def style_from_dict(payload: object) -> Style:
             "dual_line_layout",
             "right_to_left",
             "vertical",
+            "sync_entry",
             "sync_ending",
             "lit_enabled",
             "lit_shadow",

@@ -447,6 +447,25 @@ def test_sync_ending_extends_earlier_lane_to_section_end():
     assert sync[1].display_end_ms == 3000
 
 
+def test_sync_entry_aligns_first_line_of_each_lane_in_section():
+    track = _sectioned_track()
+    nosync = _compute(track, sync_entry=False)
+    sync = _compute(track, sync_entry=True)
+
+    assert [item.display_start_ms for item in nosync] == [0, 1000, 2000, 9000]
+    assert [item.display_start_ms for item in sync] == [0, 0, 2000, 9000]
+
+
+def test_sync_entry_keeps_manual_start_override_authoritative():
+    track = _sectioned_track()
+    track.lines[1].display_start_override_ms = 750
+
+    sync = _compute(track, sync_entry=True)
+
+    assert sync[0].display_start_ms == 0
+    assert sync[1].display_start_ms == 750
+
+
 def test_second_lane_pair_delay_does_not_cross_auto_section():
     track = _sectioned_track()
     layouts = _compute(track, section_ending_mode="hold")

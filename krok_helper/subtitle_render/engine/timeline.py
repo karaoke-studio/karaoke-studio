@@ -134,6 +134,7 @@ def visible_display_lines(
     continuity_snap_ms: int,
     pair_second_delay_ms: int = 3000,
     section_gap_ms: int = 0,
+    sync_entry: bool = False,
     sync_ending: bool = False,
     section_ending_mode: str = "hold",
     protect_ms: int = 0,
@@ -162,6 +163,7 @@ def visible_display_lines(
         continuity_snap_ms=continuity_snap_ms,
         pair_second_delay_ms=pair_second_delay_ms,
         section_gap_ms=section_gap_ms,
+        sync_entry=sync_entry,
         sync_ending=sync_ending,
         section_ending_mode=section_ending_mode,
         lane_count=lane_count,
@@ -180,6 +182,7 @@ def compute_display_lines(
     continuity_snap_ms: int,
     pair_second_delay_ms: int = 3000,
     section_gap_ms: int = 0,
+    sync_entry: bool = False,
     sync_ending: bool = False,
     section_ending_mode: str = "hold",
     protect_ms: int = 0,
@@ -189,9 +192,10 @@ def compute_display_lines(
     """Compute NicoKara-style display windows for all renderable lines.
 
     段落（section）按间奏间隔自动划分：相邻两句演唱空隙 > ``section_gap_ms`` 即开
-    新段落。``sync_ending`` 时同段落内每个 lane 的末行延到段末一起退场；
+    新段落。``sync_entry`` 时同段落内每个 lane 的首行按最早上屏时间一起入场；
+    ``sync_ending`` 时同段落内每个 lane 的末行延到段末一起退场；
     ``section_ending_mode == "clear"`` 时把每行结束钳到段末（不拖进间奏）。
-    两项默认关闭时输出与原行为一致。
+    相关选项默认关闭时输出与原行为一致。
 
     ``row_count_of``（可选）按行返回其布局的行数：页从页首行的行数决定
     （N3 页级布局联动），未提供时全部页使用 ``lane_count``。
@@ -256,6 +260,9 @@ def compute_display_lines(
                 display_start = preferred_start
         starts.append(display_start)
         prev_lane_natural_end[lane] = natural_end
+
+    if sync_entry:
+        _synchronize_section_entry_starts(starts, lanes, section_ids)
 
     display_ends: list[int] = []
     for index, line in enumerate(render_lines):
@@ -417,6 +424,28 @@ def _is_last_in_lane_in_section(
         if lanes[candidate] == lane:
             return False
     return True
+
+
+def _synchronize_section_entry_starts(
+    starts: list[int],
+    lanes: list[int],
+    section_ids: list[int],
+) -> None:
+    """Set each section's first line per lane to its earliest automatic start."""
+    first_by_section_lane: dict[tuple[int, int], int] = {}
+    common_start_by_section: dict[int, int] = {}
+    for index, (lane, sid) in enumerate(zip(lanes, section_ids)):
+        key = (sid, lane)
+        if key in first_by_section_lane:
+            continue
+        first_by_section_lane[key] = index
+        common_start_by_section[sid] = min(
+            common_start_by_section.get(sid, starts[index]),
+            starts[index],
+        )
+
+    for (sid, _lane), index in first_by_section_lane.items():
+        starts[index] = common_start_by_section[sid]
 
 
 def paragraph_last_line_flags(

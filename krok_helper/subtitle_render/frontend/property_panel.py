@@ -4077,6 +4077,7 @@ class PropertyPanel(QWidget):
             self._section_ending_combo.setCurrentIndex(
                 max(0, self._section_ending_combo.findData(self._style.section_ending_mode))
             )
+            self._sync_entry_check.setChecked(self._style.sync_entry)
             self._sync_ending_check.setChecked(self._style.sync_ending)
             self._entry_anim_combo.setCurrentIndex(
                 max(0, self._entry_anim_combo.findData(self._style.entry_anim))
@@ -6486,11 +6487,21 @@ class PropertyPanel(QWidget):
 
         layout.addWidget(grid)
 
+        sync_row = QHBoxLayout()
+        sync_row.setContentsMargins(0, 0, 0, 0)
+        self._sync_entry_check = CheckBox("同步入场", section)
+        self._sync_entry_check.toggled.connect(
+            lambda checked: self._update_style(sync_entry=checked)
+        )
+        sync_row.addWidget(self._sync_entry_check)
+
         self._sync_ending_check = CheckBox("同步退场", section)
         self._sync_ending_check.toggled.connect(
             lambda checked: self._update_style(sync_ending=checked)
         )
-        layout.addWidget(self._sync_ending_check)
+        sync_row.addWidget(self._sync_ending_check)
+        sync_row.addStretch(1)
+        layout.addLayout(sync_row)
 
         self._ruby_main_reading_units_check = CheckBox(
             "正文按注音字符切分（N3 式）", section

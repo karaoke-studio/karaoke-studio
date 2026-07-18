@@ -6776,6 +6776,13 @@ def test_style_dict_roundtrip_keeps_line_alignments_and_margin():
     assert style_from_dict({"line_alignments": []}).line_alignments == ["left", "right"]
 
 
+def test_style_dict_roundtrip_keeps_sync_entry():
+    restored = style_from_dict(style_to_dict(Style(sync_entry=True)))
+
+    assert restored.sync_entry is True
+    assert style_from_dict({}).sync_entry is False
+
+
 def test_style_dict_migrates_legacy_margin_when_new_key_missing():
     payload = style_to_dict(Style())
     del payload["horizontal_margin_px"]
