@@ -10423,7 +10423,10 @@ def _renderable_page_lines(
     """
     render_lines = [item for item in track.lines if not item.is_blank and item.chars]
     lanes, page_starts, page_rows = assign_lanes(
-        render_lines, _lane_count(style), _row_count_resolver(style)
+        render_lines,
+        _lane_count(style),
+        _row_count_resolver(style),
+        section_gap_ms=style.section_gap_ms,
     )
     for index, item in enumerate(render_lines):
         if item is line:
@@ -10543,7 +10546,10 @@ def apply_layout_to_page(
     except ValueError:
         return []
     _lanes, page_starts, page_rows = assign_lanes(
-        render_lines, _lane_count(style), _row_count_resolver(style)
+        render_lines,
+        _lane_count(style),
+        _row_count_resolver(style),
+        section_gap_ms=style.section_gap_ms,
     )
     page_start = page_starts[render_index]
     page_end = min(page_start + page_rows[render_index], len(render_lines))
@@ -10598,7 +10604,10 @@ def auto_assign_layouts_by_page(track: TimingTrack, style: Style) -> bool:
     if not render_lines:
         return False
     _lanes, page_starts, _page_rows = assign_lanes(
-        render_lines, _lane_count(style), _row_count_resolver(style)
+        render_lines,
+        _lane_count(style),
+        _row_count_resolver(style),
+        section_gap_ms=style.section_gap_ms,
     )
     pages: dict[int, list[TimingLine]] = {}
     for line, page_start in zip(render_lines, page_starts):

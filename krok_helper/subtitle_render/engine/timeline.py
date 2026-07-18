@@ -40,13 +40,15 @@ def assign_lanes(
     render_lines: list[TimingLine],
     default_rows: int,
     row_count_of: Optional[Callable[[TimingLine], int]] = None,
+    *,
+    section_gap_ms: int = 0,
 ) -> tuple[list[int], list[int], list[int]]:
     """按页分配 lane（N3 页级布局联动）。
 
     页从页首行的布局行数决定：最多连续 ``rows`` 条可渲染行组成一页；若后续行
-    带 ``break_before``（N3 PageBreak / ParagraphBreak），则提前结束
-    当前页。页内行依次占 lane ``0..rows-1``。返回与 ``render_lines`` 对齐的
-    ``(lanes, page_starts, page_rows)``。
+    带 ``break_before``（N3 PageBreak / ParagraphBreak），或演唱间隔超过
+    ``section_gap_ms``，则提前结束当前页。页内行依次占 lane ``0..rows-1``。
+    返回与 ``render_lines`` 对齐的 ``(lanes, page_starts, page_rows)``。
     """
     lanes: list[int] = []
     page_starts: list[int] = []
@@ -57,13 +59,19 @@ def assign_lanes(
         getattr(line, "break_before", "none") != "none"
         for line in render_lines[1:]
     )
+    section_ids = _compute_section_ids(
+        render_lines, max(int(section_gap_ms), 0)
+    )
     while index < total:
         rows = max(int(default_rows), 1)
         if row_count_of is not None:
             rows = max(int(row_count_of(render_lines[index])), 1)
         page_end = total if has_explicit_breaks else min(index + rows, total)
         for candidate in range(index + 1, page_end):
-            if getattr(render_lines[candidate], "break_before", "none") != "none":
+            if (
+                getattr(render_lines[candidate], "break_before", "none") != "none"
+                or section_ids[candidate] != section_ids[index]
+            ):
                 page_end = candidate
                 break
         page_size = max(page_end - index, 1)
@@ -205,7 +213,10 @@ def compute_display_lines(
 
     lanes_total = max(int(lane_count), 1)
     lanes, page_starts, page_rows = assign_lanes(
-        render_lines, lanes_total, row_count_of
+        render_lines,
+        lanes_total,
+        row_count_of,
+        section_gap_ms=section_gap,
     )
 
     starts: list[int] = []
@@ -275,7 +286,7 @@ def compute_display_lines(
         # 段落 / 同步退场
         sid = section_ids[index]
         if sync_ending and _is_last_in_lane_in_section(lanes, section_ids, index):
-            display_end = max(display_end, section_end[sid])
+            display_end = max(floor_end, section_end[sid])
         if section_ending_mode == "clear":
             display_end = max(floor_end, min(display_end, section_end[sid]))
         # 逐行手动覆盖（字幕轨道拖动写入）优先于所有自动布局调整

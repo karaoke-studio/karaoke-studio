@@ -1464,7 +1464,10 @@ class LyricsPanel(DropPanel):
                 len(_effective_layout_style(style, line).line_alignments), 1
             )
         lanes, page_starts, _page_rows = assign_lanes(
-            render_lines, self._lane_count(), row_count_of
+            render_lines,
+            self._lane_count(),
+            row_count_of,
+            section_gap_ms=self._style.section_gap_ms,
         )
         self._render_lanes = lanes
         ordinal = -1

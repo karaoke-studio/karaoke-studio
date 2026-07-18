@@ -356,6 +356,23 @@ def test_assign_lanes_honors_explicit_n3_page_breaks():
     assert page_rows == [2, 2, 1, 1]
 
 
+def test_assign_lanes_ends_page_at_auto_section_boundary():
+    lines = [
+        _make_line([("a", 0)], end_ms=1000),
+        _make_line([("b", 1000)], end_ms=2000),
+        _make_line([("c", 2000)], end_ms=3000),
+        _make_line([("d", 9000)], end_ms=10000),
+    ]
+
+    lanes, page_starts, page_rows = assign_lanes(
+        lines, 2, section_gap_ms=4000
+    )
+
+    assert lanes == [0, 1, 0, 0]
+    assert page_starts == [0, 0, 2, 3]
+    assert page_rows == [2, 2, 1, 1]
+
+
 def test_n3_seq_line_breaker_matches_marginality_opening():
     """N3 10.74 SeqLinesBreaker 默认参数的真实项目回归。"""
     times = [
@@ -416,8 +433,8 @@ def test_section_ending_clear_caps_cross_section_linger():
     track = _sectioned_track()
     hold = _compute(track, section_ending_mode="hold")
     clear = _compute(track, section_ending_mode="clear")
-    # L2(lane0) 默认会因跨段配对挂屏到 section1（10000）；clear 把它钳到段末 3000
-    assert hold[2].display_end_ms > 3000
+    # An odd final line must end its page instead of pairing with section1.
+    assert hold[2].display_end_ms == 3000
     assert clear[2].display_end_ms == 3000
 
 
@@ -437,14 +454,44 @@ def test_second_lane_pair_delay_does_not_cross_auto_section():
     assert layouts[3].display_start_ms == 9000
 
 
-def test_sections_disabled_keep_legacy_windows():
+def test_auto_section_boundary_prevents_cross_section_pair_hold():
     track = _sectioned_track()
     legacy = compute_display_lines(
         track, lead_in_ms=0, tail_ms=0, lane_gap_ms=0, max_hold_ms=0,
         continuity_snap_ms=0,
     )
-    sectioned_off = _compute(track, sync_ending=False, section_ending_mode="hold")
-    assert [d.display_end_ms for d in legacy] == [d.display_end_ms for d in sectioned_off]
+    sectioned = _compute(track, sync_ending=False, section_ending_mode="hold")
+
+    assert legacy[2].display_end_ms == 10000
+    assert sectioned[2].display_end_ms == 3000
+    assert [item.lane for item in sectioned] == [0, 1, 0, 0]
+
+
+def test_red_fraction_odd_section_last_line_uses_own_page_end():
+    track = _track(
+        _make_line([("Do what you think", 65_085)], end_ms=66_365),
+        _make_line([("Give it with dedication", 66_585)], end_ms=68_315),
+        _make_line([("I'll put out your misery", 68_515)], end_ms=72_065),
+        _make_line([("Have no prayer", 84_715)], end_ms=86_915),
+    )
+    settings = dict(
+        lead_in_ms=1800,
+        tail_ms=1000,
+        lane_gap_ms=300,
+        max_hold_ms=12000,
+        continuity_snap_ms=800,
+        pair_second_delay_ms=3000,
+        section_gap_ms=4000,
+        section_ending_mode="hold",
+    )
+
+    nosync = compute_display_lines(track, sync_ending=False, **settings)
+    sync = compute_display_lines(track, sync_ending=True, **settings)
+
+    assert [item.lane for item in nosync] == [0, 1, 0, 0]
+    assert nosync[2].display_end_ms == 73_065
+    assert sync[1].display_end_ms == 73_065
+    assert sync[2].display_end_ms == 73_065
 
 
 # ---------------------------------------------------------------------------
