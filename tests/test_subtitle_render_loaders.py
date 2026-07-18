@@ -487,6 +487,9 @@ def test_export_tab_builds_render_job_from_loaded_media(qapp, monkeypatch, tmp_p
     win._export_encoder_combo.setCurrentIndex(win._export_encoder_combo.findData("nvenc"))
     win._export_preset_combo.setCurrentText("slow")
     win._export_crf_spin.setValue(23)
+    win._export_render_workers_combo.setCurrentIndex(
+        win._export_render_workers_combo.findData(16)
+    )
     blocked = win._export_native_check.blockSignals(True)
     win._export_native_check.setChecked(True)
     win._export_native_check.blockSignals(blocked)
@@ -502,6 +505,7 @@ def test_export_tab_builds_render_job_from_loaded_media(qapp, monkeypatch, tmp_p
     assert job.encoder_mode == "nvenc"
     assert job.preset == "slow"
     assert job.crf == 23
+    assert job.render_workers == 16
     assert job.native_export_enabled is False
 
 

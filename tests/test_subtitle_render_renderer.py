@@ -390,6 +390,17 @@ def test_resolve_worker_count_respects_env_and_min_frames(monkeypatch):
     assert _resolve_worker_count(10_000) == 1   # 显式 1 = 关闭
 
 
+def test_resolve_worker_count_keeps_auto_cap_and_allows_manual_16(monkeypatch):
+    monkeypatch.delenv("KROK_SUBTITLE_RENDER_WORKERS", raising=False)
+    monkeypatch.setattr(renderer.os, "cpu_count", lambda: 32)
+
+    assert _resolve_worker_count(10_000) == 8
+    assert _resolve_worker_count(10_000, 12) == 12
+    assert _resolve_worker_count(10_000, 16) == 16
+    assert _resolve_worker_count(10_000, 32) == 16
+    assert _resolve_worker_count(10, 16) == 1
+
+
 def test_resolve_chunk_size_is_positive_and_balanced(tmp_path):
     job = replace(_job(tmp_path), width=1920, height=1080)
     chunk = _resolve_chunk_size(job, 1080, total_frames=10_000, worker_count=4)

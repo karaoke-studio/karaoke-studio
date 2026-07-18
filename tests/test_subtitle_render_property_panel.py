@@ -4711,6 +4711,39 @@ def test_main_window_native_export_is_hard_disabled(qapp, monkeypatch):
     assert provider.data["output"]["native_export_enabled"] is False
 
 
+def test_render_worker_choice_is_local_and_not_saved_in_project(qapp, monkeypatch):
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
+
+    class FakeSettingsProvider:
+        def __init__(self):
+            self.data = {"output": {"render_workers": 16}}
+
+        def load(self):
+            return dict(self.data)
+
+        def save(self, data):
+            self.data = dict(data)
+
+    provider = FakeSettingsProvider()
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+
+    assert [
+        win._export_render_workers_combo.itemData(index)
+        for index in range(win._export_render_workers_combo.count())
+    ] == [0, 4, 8, 12, 16]
+    assert win._export_render_workers_combo.currentData() == 16
+    assert win._project_dirty is False
+
+    win._export_render_workers_combo.setCurrentIndex(
+        win._export_render_workers_combo.findData(12)
+    )
+
+    assert provider.data["output"]["render_workers"] == 12
+    assert win._project_dirty is False
+    assert "render_workers" not in win._current_project_data()["output"]
+
+
 def test_main_window_drops_leaked_project_roles_and_falls_back_to_global_selection(
     qapp, monkeypatch
 ):

@@ -204,6 +204,8 @@ DEFAULT_AUTO_SAVE_INTERVAL_MINUTES = 5
 AUTO_SAVE_THREAD_WAIT_MS = 3_000
 DEFAULT_PROJECT_BACKUP_COUNT = 5
 DISCARDED_BACKUP_RETENTION_DAYS = 7
+RENDER_WORKER_OPTIONS = (0, 4, 8, 12, 16)
+"""0 = 自动（最多 8）；其余值为用户显式选择的渲染进程数。"""
 
 
 @dataclass(frozen=True)
@@ -1329,6 +1331,9 @@ class SubtitleRenderWindow(QWidget):
         )
         self._export_crf_spin.valueChanged.connect(self._on_output_settings_changed)
         self._export_name_edit.textEdited.connect(self._on_output_settings_changed)
+        self._export_render_workers_combo.currentIndexChanged.connect(
+            self._on_render_workers_changed
+        )
 
     def _switch_tab(self, key: str) -> None:
         idx = 0 if key == "preview" else 1
@@ -2005,6 +2010,11 @@ class SubtitleRenderWindow(QWidget):
             c_idx = self._export_codec_combo.findData(codec)
             if c_idx >= 0:
                 self._export_codec_combo.setCurrentIndex(c_idx)
+        render_workers = output.get("render_workers")
+        if isinstance(render_workers, int) and render_workers in RENDER_WORKER_OPTIONS:
+            workers_idx = self._export_render_workers_combo.findData(render_workers)
+            if workers_idx >= 0:
+                self._export_render_workers_combo.setCurrentIndex(workers_idx)
         out_path = output.get("output_path")
         if isinstance(out_path, str) and out_path.strip():
             path = Path(out_path.strip())
@@ -2756,6 +2766,23 @@ class SubtitleRenderWindow(QWidget):
         quality_row.addWidget(self._labeled_export_control("CPU preset", self._export_preset_combo))
         quality_row.addWidget(self._labeled_export_control("质量 (CRF)", self._export_crf_spin))
         params_layout.addLayout(quality_row)
+
+        self._export_render_workers_combo = FluentComboBox()
+        self._export_render_workers_combo.setMinimumHeight(32)
+        self._export_render_workers_combo.addItem("自动（最多 8 进程）", userData=0)
+        for workers in RENDER_WORKER_OPTIONS[1:]:
+            self._export_render_workers_combo.addItem(
+                f"{workers} 进程", userData=workers
+            )
+        self._export_render_workers_combo.setToolTip(
+            "字幕帧渲染进程数。12/16 适合核心数较多且内存充足的电脑；"
+            "进程越多不一定越快，且会明显增加内存占用。"
+        )
+        params_layout.addWidget(
+            self._labeled_export_control(
+                "渲染进程", self._export_render_workers_combo
+            )
+        )
         settings_layout.addWidget(params_card)
 
         self._export_native_check = CheckBox("实验：使用 native 字幕渲染器导出")
@@ -4154,6 +4181,10 @@ class SubtitleRenderWindow(QWidget):
         self._save_persisted_state()
         self._mark_project_dirty()
 
+    def _on_render_workers_changed(self) -> None:
+        """Persist this hardware-specific preference without dirtying the project."""
+        self._save_persisted_state()
+
     def _on_scheme_selection_changed(self, key: str) -> None:
         self._selected_scheme_key = key
         self._save_persisted_state()
@@ -4649,6 +4680,9 @@ class SubtitleRenderWindow(QWidget):
             output["native_export_enabled"] = False
             output["directory_mode"] = self._export_dir_mode
             output["custom_directory"] = self._export_custom_dir
+            output["render_workers"] = int(
+                self._export_render_workers_combo.currentData() or 0
+            )
             data["output"] = output
         try:
             if self._settings_provider is not None and hasattr(self._settings_provider, "save"):
@@ -4886,7 +4920,12 @@ class SubtitleRenderWindow(QWidget):
             preset=str(self._export_preset_combo.currentData() or "medium"),
             codec=self._export_codec_value(),
             native_export_enabled=False,
+            render_workers=self._export_render_workers_value(),
         )
+
+    def _export_render_workers_value(self) -> Optional[int]:
+        value = int(self._export_render_workers_combo.currentData() or 0)
+        return value if value in RENDER_WORKER_OPTIONS[1:] else None
 
     def _current_export_duration_ms(self) -> int:
         candidates: list[int] = [track_duration_ms(track) for track in self._all_tracks()]

@@ -47,9 +47,10 @@ _STRIP_MIN_GAIN_RATIO = 0.85  # 并集 ≥ 全高的此比例则不值当，退�
 _STRIP_MAX_SAMPLES = 200  # 纵向并集预扫的最大采样帧数
 
 # A3 多进程导出：offscreen worker 池并行渲帧，主进程按序喂 ffmpeg。
-# KROK_SUBTITLE_RENDER_WORKERS=N 指定进程数（1=关闭，走单进程）。worker 不强制
-# offscreen——继承父进程 QT_QPA_PLATFORM，保证字体与预览/单进程一致。
-_MULTIPROC_WORKER_CAP = 8  # 进程数上限（每个 worker 一份 QApplication）
+# KROK_SUBTITLE_RENDER_WORKERS=N 指定自动模式进程数（1=关闭，走单进程）。worker
+# 不强制 offscreen——继承父进程 QT_QPA_PLATFORM，保证字体与预览/单进程一致。
+_MULTIPROC_AUTO_WORKER_CAP = 8  # 自动模式保持保守上限
+_MULTIPROC_WORKER_CAP = 16  # 手动 / 环境变量上限（每个 worker 一份 QApplication）
 _MULTIPROC_MIN_FRAMES = 240  # 帧数低于此不值当 spawn，走单进程
 _CHUNK_TARGET_BYTES = 64 * 1024 * 1024  # 单个 chunk 目标字节（控内存 / IPC 粒度）
 
@@ -80,6 +81,8 @@ class RenderJob:
     preset: str = "medium"
     codec: str = "h264"
     native_export_enabled: bool | None = None
+    render_workers: int | None = None
+    """帧渲染进程数；None 为自动（最多 8），手动最多 16。"""
     extra_tracks: tuple[TimingTrack, ...] = ()
     """副字幕源（N3 多歌词文件，如コーラス轨），与主轨同帧叠绘。"""
 
@@ -181,7 +184,7 @@ def render_subtitle_video(
         assert process.stdin is not None
         # A3：帧数够多时多进程并行渲染（offscreen worker 池），主进程按序喂 ffmpeg；
         # 否则走单进程。两条路径逐帧逻辑一致（A4 缓冲复用 + 空帧短路 + A2 条带/多带）。
-        worker_count = _resolve_worker_count(total_frames)
+        worker_count = _resolve_worker_count(total_frames, job.render_workers)
         if native_export_active:
             logger(f"native 导出: {native_renderer_path}")
             _write_frames_native(
@@ -829,17 +832,28 @@ def _write_frames_single(
             on_progress(index + 1, total_frames)
 
 
-def _resolve_worker_count(total_frames: int) -> int:
-    """决定导出 worker 进程数：env 优先，否则 CPU 核数（封顶）；帧数太少退回单进程。"""
-    env = os.environ.get("KROK_SUBTITLE_RENDER_WORKERS")
-    if env is not None and env.strip():
+def _resolve_worker_count(
+    total_frames: int, requested_workers: int | None = None
+) -> int:
+    """Resolve manual, environment, or automatic worker count safely."""
+    if requested_workers is not None:
         try:
-            count = int(env)
-        except ValueError:
+            count = int(requested_workers)
+        except (TypeError, ValueError):
             count = 1
+        cap = _MULTIPROC_WORKER_CAP
     else:
-        count = os.cpu_count() or 1
-    count = max(1, min(count, _MULTIPROC_WORKER_CAP))
+        env = os.environ.get("KROK_SUBTITLE_RENDER_WORKERS")
+        if env is not None and env.strip():
+            try:
+                count = int(env)
+            except ValueError:
+                count = 1
+            cap = _MULTIPROC_WORKER_CAP
+        else:
+            count = os.cpu_count() or 1
+            cap = _MULTIPROC_AUTO_WORKER_CAP
+    count = max(1, min(count, cap))
     if total_frames < _MULTIPROC_MIN_FRAMES:
         return 1
     return count
