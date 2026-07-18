@@ -4112,6 +4112,50 @@ class SubtitleRenderWindow(QWidget):
             self._mark_project_dirty()
         return True
 
+    def _restore_guide_replacement_rows(
+        self, track_index: int, rows: object, values: object
+    ) -> bool:
+        track = self._track_by_index(track_index)
+        if (
+            track is None
+            or not isinstance(rows, tuple)
+            or not isinstance(values, tuple)
+            or len(rows) != len(values)
+            or any(not 0 <= row < len(track.lines) for row in rows)
+        ):
+            return False
+        restored: list[tuple[object, dict[int, GuideSymbol]]] = []
+        for row, value in zip(rows, values):
+            if not isinstance(value, tuple) or len(value) != 2:
+                return False
+            guide, inline_values = value
+            if guide is not None and not isinstance(guide, GuideSymbol):
+                return False
+            if not isinstance(inline_values, tuple):
+                return False
+            inline_symbols: dict[int, GuideSymbol] = {}
+            for item in inline_values:
+                if (
+                    not isinstance(item, tuple)
+                    or len(item) != 2
+                    or not isinstance(item[0], int)
+                    or not 0 <= item[0] < len(track.lines[row].chars)
+                    or not isinstance(item[1], GuideSymbol)
+                    or not item[1].path_commands
+                ):
+                    return False
+                inline_symbols[item[0]] = item[1]
+            restored.append((guide, inline_symbols))
+        for row, (guide, inline_symbols) in zip(rows, restored):
+            track.lines[row].guide_symbol = guide
+            track.lines[row].inline_guide_symbols = inline_symbols
+        if track_index == self._active_source_index:
+            self._refresh_after_guide_symbols_changed(rows)
+        else:
+            self._sync_extra_tracks_to_preview()
+            self._mark_project_dirty()
+        return True
+
     def _restore_inline_role_rows(
         self, track_index: int, rows: object, values: object
     ) -> bool:
@@ -4175,6 +4219,14 @@ class SubtitleRenderWindow(QWidget):
                     self._redo_stack.append(command)
                     return
                 continue
+            if command[0] == "guide_replacements":
+                _kind, track_index, rows, old_values, _new_values = command
+                if self._restore_guide_replacement_rows(
+                    track_index, rows, old_values
+                ):
+                    self._redo_stack.append(command)
+                    return
+                continue
             if command[0] == "inline_roles_batch":
                 _kind, track_index, rows, old_values, _new_values = command
                 if self._restore_inline_role_rows(track_index, rows, old_values):
@@ -4231,6 +4283,14 @@ class SubtitleRenderWindow(QWidget):
             if command[0] == "inline_char_edit":
                 _kind, track_index, row, _old_value, new_value = command
                 if self._restore_inline_char_edit(track_index, row, new_value):
+                    self._undo_stack.append(command)
+                    return
+                continue
+            if command[0] == "guide_replacements":
+                _kind, track_index, rows, _old_values, new_values = command
+                if self._restore_guide_replacement_rows(
+                    track_index, rows, new_values
+                ):
                     self._undo_stack.append(command)
                     return
                 continue
@@ -4811,35 +4871,61 @@ class SubtitleRenderWindow(QWidget):
             fluent_error(self, "无法导入导唱符", str(exc))
             return
 
-        rows: list[int] = []
-        old_values: list[object] = []
-        new_values: list[object] = []
+        candidate_rows = tuple(
+            sorted({match.row for match in selected if 0 <= match.row < len(track.lines)})
+        )
+        old_by_row = {
+            row: (
+                track.lines[row].guide_symbol,
+                tuple(sorted(track.lines[row].inline_guide_symbols.items())),
+            )
+            for row in candidate_rows
+        }
+        applied_rows: set[int] = set()
         for match in selected:
             if not 0 <= match.row < len(track.lines):
                 continue
             line = track.lines[match.row]
-            symbol = replacement_symbol_for_match(base_symbol, line, match)
-            if symbol is None:
+            start = int(match.start_index)
+            end = start + int(match.count)
+            if (
+                start < 0
+                or end > len(line.chars)
+                or tuple(char.text for char in line.chars[start:end]) != match.prefix
+            ):
                 continue
-            rows.append(match.row)
-            old_values.append(line.guide_symbol)
-            new_values.append(symbol)
+            if match.is_prefix:
+                symbol = replacement_symbol_for_match(base_symbol, line, match)
+                if symbol is None:
+                    continue
+                line.guide_symbol = symbol
+            else:
+                if any(index in line.inline_guide_symbols for index in range(start, end)):
+                    continue
+                line.inline_guide_symbols = dict(line.inline_guide_symbols)
+                for index in range(start, end):
+                    line.inline_guide_symbols[index] = base_symbol
+            applied_rows.add(match.row)
 
-        if not rows:
+        if not applied_rows:
             fluent_warning(
                 self,
-                "没有可替换的行",
-                "候选歌词在窗口打开后已发生变化，或已经设置了导唱符。",
+                "没有可替换项",
+                "候选歌词在窗口打开后已发生变化，或对应位置已经设置了导唱符。",
             )
             return
-        row_tuple = tuple(rows)
-        old_tuple = tuple(old_values)
-        new_tuple = tuple(new_values)
-        for row, symbol in zip(row_tuple, new_tuple):
-            track.lines[row].guide_symbol = symbol
+        row_tuple = tuple(sorted(applied_rows))
+        old_tuple = tuple(old_by_row[row] for row in row_tuple)
+        new_tuple = tuple(
+            (
+                track.lines[row].guide_symbol,
+                tuple(sorted(track.lines[row].inline_guide_symbols.items())),
+            )
+            for row in row_tuple
+        )
         self._undo_stack.append(
             (
-                "guide_symbols",
+                "guide_replacements",
                 self._active_source_index,
                 row_tuple,
                 old_tuple,

@@ -1,4 +1,4 @@
-"""Batch detection UI for replacing timed line-prefix markers with SVG guides."""
+"""Batch detection UI for replacing timed marker runs with SVG guides."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
 from qfluentwidgets import (
     BodyLabel,
     CaptionLabel,
+    CheckBox,
     ComboBox,
     LineEdit,
     PushButton,
@@ -47,11 +48,17 @@ class GuidePrefixMatch:
     lyric_text: str
     start_ms: int
     intervals_ms: tuple[int, ...]
+    start_index: int = 0
+    replacement_text: str = ""
     has_guide_symbol: bool = False
 
     @property
     def count(self) -> int:
         return len(self.prefix)
+
+    @property
+    def is_prefix(self) -> bool:
+        return self.start_index == 0 and bool(self.lyric_text)
 
 
 def _prefix_run_count(line: TimingLine, marker: str) -> int:
@@ -63,38 +70,76 @@ def _prefix_run_count(line: TimingLine, marker: str) -> int:
     return count if count < len(line.chars) else 0
 
 
+def _marker_runs(
+    line: TimingLine, marker: str, *, include_non_prefix: bool
+) -> list[tuple[int, int]]:
+    if not include_non_prefix:
+        count = _prefix_run_count(line, marker)
+        return [(0, count)] if count > 0 else []
+    runs: list[tuple[int, int]] = []
+    index = 0
+    while index < len(line.chars):
+        if line.chars[index].text != marker:
+            index += 1
+            continue
+        end = index + 1
+        while end < len(line.chars) and line.chars[end].text == marker:
+            end += 1
+        runs.append((index, end))
+        index = end
+    return runs
+
+
 def detect_guide_prefix_matches(
-    track: TimingTrack, marker: str
+    track: TimingTrack, marker: str, *, include_non_prefix: bool = False
 ) -> list[GuidePrefixMatch]:
-    """Find exact consecutive timed units at the start of non-empty lines."""
+    """Find consecutive marker runs at line start, or anywhere when requested."""
     marker = str(marker).strip()
     if not marker:
         return []
     matches: list[GuidePrefixMatch] = []
     for row, line in enumerate(track.lines):
-        if line.is_blank or len(line.chars) < 2:
+        if line.is_blank or not line.chars:
             continue
-        count = _prefix_run_count(line, marker)
-        if count <= 0:
-            continue
-        prefix_chars = line.chars[:count]
-        remaining = line.chars[count:]
-        intervals = tuple(
-            max(int(line.chars[index + 1].start_ms) - int(char.start_ms), 0)
-            for index, char in enumerate(prefix_chars)
-        )
-        matches.append(
-            GuidePrefixMatch(
-                row=row,
-                marker=marker,
-                prefix=tuple(char.text for char in prefix_chars),
-                source_text="".join(char.text for char in line.chars),
-                lyric_text="".join(char.text for char in remaining),
-                start_ms=int(prefix_chars[0].start_ms),
-                intervals_ms=intervals,
-                has_guide_symbol=line.guide_symbol is not None,
+        for start, end in _marker_runs(
+            line, marker, include_non_prefix=include_non_prefix
+        ):
+            marker_chars = line.chars[start:end]
+            remaining = [*line.chars[:start], *line.chars[end:]]
+            intervals = tuple(
+                max(
+                    int(line.chars[index + 1].start_ms) - int(char.start_ms),
+                    0,
+                )
+                if index + 1 < len(line.chars)
+                else max(int(line.end_ms or char.start_ms) - int(char.start_ms), 0)
+                for index, char in enumerate(marker_chars, start=start)
             )
-        )
+            target_indices = range(start, end)
+            is_prefix = start == 0 and end < len(line.chars)
+            has_replacement = (
+                (is_prefix and line.guide_symbol is not None)
+                or any(index in line.inline_guide_symbols for index in target_indices)
+            )
+            source_text = "".join(char.text for char in line.chars)
+            matches.append(
+                GuidePrefixMatch(
+                    row=row,
+                    marker=marker,
+                    prefix=tuple(char.text for char in marker_chars),
+                    source_text=source_text,
+                    lyric_text="".join(char.text for char in remaining),
+                    start_ms=int(marker_chars[0].start_ms),
+                    intervals_ms=intervals,
+                    start_index=start,
+                    replacement_text=(
+                        "".join(char.text for char in line.chars[:start])
+                        + "◆" * len(marker_chars)
+                        + "".join(char.text for char in line.chars[end:])
+                    ),
+                    has_guide_symbol=has_replacement,
+                )
+            )
     return matches
 
 
@@ -106,7 +151,8 @@ def replacement_symbol_for_match(
     """Build a replacement placement after revalidating the live source line."""
     prefix_count = len(match.prefix)
     if (
-        line.guide_symbol is not None
+        match.start_index != 0
+        or line.guide_symbol is not None
         or prefix_count <= 0
         or len(line.chars) <= prefix_count
         or tuple(char.text for char in line.chars[:prefix_count]) != match.prefix
@@ -199,16 +245,16 @@ class GuidePrefixReplaceDialog(QDialog):
         self._start_dir = start_dir
         self._matches: list[GuidePrefixMatch] = []
         self._row_checks: list[QTableWidgetItem] = []
-        self.setWindowTitle("行首导唱符替换")
+        self.setWindowTitle("批量识别导唱标记")
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setMinimumSize(820, 560)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 18, 20, 18)
         layout.setSpacing(10)
-        layout.addWidget(StrongBodyLabel("批量识别行首导唱标记", self))
+        layout.addWidget(StrongBodyLabel("批量识别导唱标记", self))
         hint = CaptionLabel(
-            "仅识别歌词行开头的连续同名打轴单元；原始字幕文件不会被修改，导唱符会保留每个标记的原始时间。",
+            "默认识别歌词行开头的连续同名打轴单元；可选择搜索句中标记。原始字幕文件不会被修改，导唱符会保留每个标记的原始时间。",
             self,
         )
         hint.setWordWrap(True)
@@ -232,9 +278,11 @@ class GuidePrefixReplaceDialog(QDialog):
         detect_row.addWidget(BodyLabel("标记字符：", self))
         self.marker_edit = LineEdit(self)
         self.marker_edit.setPlaceholderText("例如 h")
-        self.marker_edit.setMaximumWidth(160)
+        self.marker_edit.setFixedWidth(105)
+        self.non_prefix_check = CheckBox("允许搜索非行首字符", self)
         self.detect_button = PushButton("检测", self)
         detect_row.addWidget(self.marker_edit)
+        detect_row.addWidget(self.non_prefix_check)
         detect_row.addWidget(self.detect_button)
         detect_row.addStretch(1)
         layout.addLayout(detect_row)
@@ -258,7 +306,7 @@ class GuidePrefixReplaceDialog(QDialog):
         layout.addWidget(self.table, 1)
 
         selection_row = QHBoxLayout()
-        self.select_all_button = PushButton("全选可替换行", self)
+        self.select_all_button = PushButton("全选可替换项", self)
         self.select_none_button = PushButton("取消全选", self)
         selection_row.addWidget(self.select_all_button)
         selection_row.addWidget(self.select_none_button)
@@ -285,6 +333,7 @@ class GuidePrefixReplaceDialog(QDialog):
         self.svg_browse_button.clicked.connect(self._browse_svg)
         self.candidate_combo.currentIndexChanged.connect(self._candidate_changed)
         self.detect_button.clicked.connect(self.refresh_matches)
+        self.non_prefix_check.toggled.connect(self.refresh_matches)
         self.marker_edit.returnPressed.connect(self._detect_from_marker_input)
         self.marker_edit.textChanged.connect(self._sync_ok_button)
         self.svg_path_edit.textChanged.connect(self._sync_ok_button)
@@ -303,7 +352,7 @@ class GuidePrefixReplaceDialog(QDialog):
             self.marker_edit.setText(options[0][0])
             self.refresh_matches()
         else:
-            self.summary_label.setText("没有自动发现明显标记；可以手动输入行首字符检测。")
+            self.summary_label.setText("没有自动发现明显标记；可以手动输入标记字符检测。")
 
     def _candidate_changed(self, index: int) -> None:
         marker = self.candidate_combo.itemData(index)
@@ -331,7 +380,9 @@ class GuidePrefixReplaceDialog(QDialog):
 
     def refresh_matches(self) -> None:
         self._matches = detect_guide_prefix_matches(
-            self._track, self.marker_edit.text()
+            self._track,
+            self.marker_edit.text(),
+            include_non_prefix=self.non_prefix_check.isChecked(),
         )
         self._row_checks = []
         self.table.setRowCount(len(self._matches))
@@ -358,17 +409,18 @@ class GuidePrefixReplaceDialog(QDialog):
                 _format_time(match.start_ms),
                 f"{match.marker} × {match.count}",
                 match.source_text,
-                f"◆{match.lyric_text}",
+                match.replacement_text,
                 f"{interval_text} ms",
                 "已有导唱符，已跳过" if match.has_guide_symbol else "可替换",
             )
             for column, value in enumerate(values, start=1):
                 self.table.setItem(table_row, column, QTableWidgetItem(value))
         marker = self.marker_edit.text().strip()
+        matched_rows = len({match.row for match in self._matches})
         self.summary_label.setText(
-            f"检测到的带导唱候选行：{len(self._matches)} 行；可替换 {replaceable} 行"
+            f"检测到导唱候选：{len(self._matches)} 处（{matched_rows} 行）；可替换 {replaceable} 处"
             if marker
-            else "请输入要检测的行首标记字符。"
+            else "请输入要检测的标记字符。"
         )
         self._sync_ok_button()
 

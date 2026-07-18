@@ -169,6 +169,37 @@ def test_detects_one_or_more_consecutive_timed_prefix_markers():
     assert guide_marker_options(track)[0] == ("h", 2)
 
 
+def test_detection_can_include_consecutive_markers_inside_a_line():
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("歌", 1000),
+                    TimingChar("h", 1500),
+                    TimingChar("h", 1800),
+                    TimingChar("詞", 2300),
+                    TimingChar("h", 2800),
+                ],
+                end_ms=3200,
+            )
+        ]
+    )
+
+    assert detect_guide_prefix_matches(track, "h") == []
+    matches = detect_guide_prefix_matches(
+        track, "h", include_non_prefix=True
+    )
+
+    assert [match.start_index for match in matches] == [1, 4]
+    assert [match.count for match in matches] == [2, 1]
+    assert [match.replacement_text for match in matches] == [
+        "歌◆◆詞h",
+        "歌hh詞◆",
+    ]
+    assert matches[0].intervals_ms == (300, 500)
+    assert matches[1].intervals_ms == (400,)
+
+
 def test_prefix_replacement_reuses_original_timing_and_hides_marker(tmp_path):
     line = TimingLine(
         chars=[
@@ -434,7 +465,9 @@ def test_prefix_replace_dialog_lists_candidates_and_keeps_ambiguous_rows_selecta
     dialog = GuidePrefixReplaceDialog(track)
     dialog.set_svg_path(tmp_path / "lead.svg")
 
-    assert dialog.windowTitle() == "行首导唱符替换"
+    assert dialog.windowTitle() == "批量识别导唱标记"
+    assert dialog.non_prefix_check.text() == "允许搜索非行首字符"
+    assert dialog.marker_edit.width() == 105
     assert "2 行" in dialog.summary_label.text()
     assert [match.row for match in dialog.selected_matches()] == [0, 1]
     dialog._row_checks[1].setCheckState(Qt.CheckState.Unchecked)
@@ -471,6 +504,33 @@ def test_marker_enter_only_refreshes_results_and_table_has_no_row_selection(
     assert "0 行" in dialog.summary_label.text()
     assert dialog.table.selectionMode() == QAbstractItemView.SelectionMode.NoSelection
     assert not dialog.table.selectedItems()
+    dialog.close()
+
+
+def test_dialog_checkbox_enables_non_prefix_detection():
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("歌", 1000),
+                    TimingChar("h", 1500),
+                    TimingChar("詞", 2000),
+                ],
+                end_ms=2500,
+            )
+        ]
+    )
+    dialog = GuidePrefixReplaceDialog(track)
+    dialog.marker_edit.setText("h")
+    dialog.refresh_matches()
+    assert dialog.table.rowCount() == 0
+
+    dialog.non_prefix_check.setChecked(True)
+    QApplication.processEvents()
+
+    assert dialog.table.rowCount() == 1
+    assert dialog.selected_matches()[0].start_index == 1
+    assert "1 处" in dialog.summary_label.text()
     dialog.close()
 
 
@@ -600,6 +660,65 @@ def test_batch_prefix_replacement_is_one_undoable_command(tmp_path, monkeypatch)
     assert all(line.guide_symbol is None for line in track.lines)
     window._redo_edit()
     assert all(line.guide_symbol is not None for line in track.lines)
+    window.close()
+
+
+def test_batch_non_prefix_replacement_uses_inline_svg_and_is_undoable(
+    tmp_path, monkeypatch
+):
+    _symbol(tmp_path)
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("歌", 1000),
+                    TimingChar("h", 1500),
+                    TimingChar("h", 1800),
+                    TimingChar("詞", 2300),
+                ],
+                end_ms=2800,
+            )
+        ]
+    )
+    matches = detect_guide_prefix_matches(
+        track, "h", include_non_prefix=True
+    )
+
+    class AcceptedDialog:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def svg_path(self):
+            return tmp_path / "lead.svg"
+
+        def selected_matches(self):
+            return matches
+
+    monkeypatch.setattr(
+        main_window_module, "GuidePrefixReplaceDialog", AcceptedDialog
+    )
+    monkeypatch.setattr(
+        main_window_module.SubtitleRenderWindow,
+        "_resolve_ffprobe_path",
+        lambda self: "ffprobe",
+    )
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    window = main_window_module.SubtitleRenderWindow(embedded=False)
+    window._timing_track = track
+    window._lyrics_panel.set_track(track)
+
+    window._on_guide_prefix_replace_requested()
+
+    assert set(track.lines[0].inline_guide_symbols) == {1, 2}
+    assert track.lines[0].guide_symbol is None
+    assert len(window._undo_stack) == 1
+    window._undo_edit()
+    assert track.lines[0].inline_guide_symbols == {}
+    window._redo_edit()
+    assert set(track.lines[0].inline_guide_symbols) == {1, 2}
     window.close()
 
 

@@ -1701,7 +1701,7 @@ class LyricsPanel(DropPanel):
                 lambda _checked=False, rs=list(rows): self.guideSymbolImportRequested.emit(rs)
             )
             menu.addAction(guide_action)
-            replace_prefix_action = Action("批量识别行首导唱标记…", menu)
+            replace_prefix_action = Action("批量识别导唱标记…", menu)
             replace_prefix_action.triggered.connect(
                 lambda _checked=False: self.guidePrefixReplaceRequested.emit()
             )
