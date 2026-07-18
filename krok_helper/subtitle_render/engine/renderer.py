@@ -36,7 +36,12 @@ from krok_helper.subtitle_render.engine.painter import (
     paint_frame_to_painter,
 )
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
-from krok_helper.subtitle_render.models import BackgroundSource, Style, TimingTrack
+from krok_helper.subtitle_render.models import (
+    BackgroundSource,
+    Style,
+    TimingTrack,
+    timing_line_start_ms,
+)
 from krok_helper.subtitle_render.native_backend import NativeRendererError, resolve_native_renderer_path
 
 # A2 条带渲染：只把字幕所在窄条喂给 ffmpeg pipe，省每帧 8MB 拷贝 / pipe 带宽。
@@ -528,7 +533,7 @@ def _strip_sample_times(
     for line in [line for track in tracks for line in track.lines]:
         if not line.chars:
             continue
-        start = line.chars[0].start_ms
+        start = timing_line_start_ms(line)
         end = line.end_ms or start
         for tt in (start - lead, start, end, end + tail):
             times.add(tt)

@@ -104,6 +104,10 @@ from krok_helper.subtitle_render.engine.painter import (
 )
 from krok_helper.subtitle_render.engine.renderer import RenderJob, render_subtitle_video
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
+from krok_helper.subtitle_render.guide_symbols import (
+    GuideSymbolImportError,
+    import_svg_guide_symbol,
+)
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
 from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_choice,
@@ -141,6 +145,8 @@ from krok_helper.subtitle_render.models import (
     TitleOverlay,
     TimingTrack,
     background_sequence_frame_path,
+    guide_symbol_from_dict,
+    guide_symbol_to_dict,
     line_animation_override_from_dict,
     line_animation_override_to_dict,
     migrate_legacy_app_title_default,
@@ -151,6 +157,7 @@ from krok_helper.subtitle_render.models import (
     subtitle_style_scheme_to_dict,
     style_from_dict,
     style_to_dict,
+    timing_line_start_ms,
     infer_image_sequence_pattern,
 )
 from krok_helper.subtitle_render.n3_font_catalog import (
@@ -1800,6 +1807,7 @@ class SubtitleRenderWindow(QWidget):
         )
         line_breaks_before = self._line_break_rows(self._timing_track)
         char_role_labels = self._collect_char_role_labels()
+        line_guide_symbols = self._guide_symbol_rows(self._timing_track)
         line_display_overrides = self._display_override_rows(self._timing_track)
         line_animation_overrides = self._animation_override_rows(self._timing_track)
         extra_subtitle_sources = [
@@ -1811,6 +1819,7 @@ class SubtitleRenderWindow(QWidget):
                 ],
                 "line_breaks_before": self._line_break_rows(source.track),
                 "char_role_labels": self._char_role_rows(source.track),
+                "line_guide_symbols": self._guide_symbol_rows(source.track),
                 "line_display_overrides": self._display_override_rows(source.track),
                 "line_animation_overrides": self._animation_override_rows(source.track),
             }
@@ -1834,6 +1843,7 @@ class SubtitleRenderWindow(QWidget):
             line_layout_indices=line_layout_indices,
             line_breaks_before=line_breaks_before,
             char_role_labels=char_role_labels,
+            line_guide_symbols=line_guide_symbols,
             line_display_overrides=line_display_overrides,
             line_animation_overrides=line_animation_overrides,
             extra_subtitle_sources=extra_subtitle_sources,
@@ -1945,6 +1955,11 @@ class SubtitleRenderWindow(QWidget):
             self._apply_line_breaks_before(data.get("line_breaks_before"))
             self._apply_line_layout_indices(data.get("line_layout_indices"))
             self._apply_char_role_labels(data.get("char_role_labels"))
+            self._apply_guide_symbol_rows(
+                self._timing_track, data.get("line_guide_symbols")
+            )
+            self._lyrics_panel.set_track(self._timing_track)
+            self._preview_panel.set_track(self._timing_track)
             if self._timing_track is not None:
                 self._apply_display_override_rows(
                     self._timing_track, data.get("line_display_overrides")
@@ -2479,6 +2494,15 @@ class SubtitleRenderWindow(QWidget):
             self._on_lyrics_roles_changed
         )
         self._lyrics_panel.charRolesChanged.connect(self._on_lyrics_char_roles_changed)
+        self._lyrics_panel.guideCharRolesChanged.connect(
+            self._on_guide_char_roles_changed
+        )
+        self._lyrics_panel.guideSymbolImportRequested.connect(
+            self._on_guide_symbol_import_requested
+        )
+        self._lyrics_panel.guideSymbolRemoveRequested.connect(
+            self._on_guide_symbol_remove_requested
+        )
         self._lyrics_panel.titleEditRequested.connect(
             self._freeze_title_template_for_character_edit
         )
@@ -3631,6 +3655,20 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.set_roles(self._content_role_options())
         self._preview_panel.set_track(track)
 
+    @staticmethod
+    def _guide_symbol_rows(track: Optional[TimingTrack]) -> Optional[list]:
+        if track is None:
+            return None
+        rows = [guide_symbol_to_dict(line.guide_symbol) for line in track.lines]
+        return rows if any(row is not None for row in rows) else None
+
+    @staticmethod
+    def _apply_guide_symbol_rows(track: TimingTrack, payload: object) -> None:
+        if not isinstance(payload, list):
+            return
+        for line, value in zip(track.lines, payload):
+            line.guide_symbol = guide_symbol_from_dict(value)
+
     # ------------------------------------------------------- 副字幕源（N3 多歌词文件）
 
     def _apply_extra_subtitle_sources(self, payload: object) -> None:
@@ -3675,6 +3713,9 @@ class SubtitleRenderWindow(QWidget):
                             continue
                         for ch, label in zip(line.chars, labels):
                             ch.role_label = str(label) if label else None
+                self._apply_guide_symbol_rows(
+                    track, item.get("line_guide_symbols")
+                )
                 self._apply_display_override_rows(
                     track, item.get("line_display_overrides")
                 )
@@ -3862,6 +3903,72 @@ class SubtitleRenderWindow(QWidget):
                 self._lyrics_panel.refresh_row_effect(row)
         return True
 
+    def _restore_guide_symbols(
+        self, track_index: int, rows: object, values: object
+    ) -> bool:
+        track = self._track_by_index(track_index)
+        if track is None or not isinstance(rows, tuple) or not isinstance(values, tuple):
+            return False
+        if len(rows) != len(values) or any(not 0 <= row < len(track.lines) for row in rows):
+            return False
+        for row, value in zip(rows, values):
+            track.lines[row].guide_symbol = value
+        if track_index == self._active_source_index:
+            self._refresh_after_guide_symbols_changed(rows)
+        else:
+            self._sync_extra_tracks_to_preview()
+            self._mark_project_dirty()
+        return True
+
+    def _restore_guide_char_roles(
+        self, track_index: int, row: int, value: object
+    ) -> bool:
+        track = self._track_by_index(track_index)
+        if (
+            track is None
+            or not 0 <= row < len(track.lines)
+            or not isinstance(value, tuple)
+            or len(value) != 2
+        ):
+            return False
+        symbol, labels = value
+        line = track.lines[row]
+        if not isinstance(labels, tuple) or len(labels) != len(line.chars):
+            return False
+        line.guide_symbol = symbol
+        for char, label in zip(line.chars, labels):
+            char.role_label = label
+        if track_index == self._active_source_index:
+            self._refresh_after_guide_symbols_changed((row,))
+        else:
+            self._sync_extra_tracks_to_preview()
+            self._mark_project_dirty()
+        return True
+
+    def _restore_inline_role_rows(
+        self, track_index: int, rows: object, values: object
+    ) -> bool:
+        track = self._track_by_index(track_index)
+        if track is None or not isinstance(rows, tuple) or not isinstance(values, tuple):
+            return False
+        if len(rows) != len(values) or any(not 0 <= row < len(track.lines) for row in rows):
+            return False
+        for row, value in zip(rows, values):
+            if not isinstance(value, tuple) or len(value) != 2:
+                return False
+            symbol, labels = value
+            if not isinstance(labels, tuple) or len(labels) != len(track.lines[row].chars):
+                return False
+            track.lines[row].guide_symbol = symbol
+            for char, label in zip(track.lines[row].chars, labels):
+                char.role_label = label
+        if track_index == self._active_source_index:
+            self._refresh_after_guide_symbols_changed(rows)
+        else:
+            self._sync_extra_tracks_to_preview()
+            self._mark_project_dirty()
+        return True
+
     def _undo_edit(self) -> None:
         """Ctrl+Z：撤销最近一次样式（字体/布局等）、轨道时间或逐行特效编辑。"""
         while self._undo_stack:
@@ -3880,6 +3987,24 @@ class SubtitleRenderWindow(QWidget):
             if command[0] == "char_roles_batch":
                 _kind, track_index, rows, old_values, _new_values = command
                 if self._restore_char_role_rows(track_index, rows, old_values):
+                    self._redo_stack.append(command)
+                    return
+                continue
+            if command[0] == "guide_symbols":
+                _kind, track_index, rows, old_values, _new_values = command
+                if self._restore_guide_symbols(track_index, rows, old_values):
+                    self._redo_stack.append(command)
+                    return
+                continue
+            if command[0] == "guide_char_roles":
+                _kind, track_index, row, old_value, _new_value = command
+                if self._restore_guide_char_roles(track_index, row, old_value):
+                    self._redo_stack.append(command)
+                    return
+                continue
+            if command[0] == "inline_roles_batch":
+                _kind, track_index, rows, old_values, _new_values = command
+                if self._restore_inline_role_rows(track_index, rows, old_values):
                     self._redo_stack.append(command)
                     return
                 continue
@@ -3915,6 +4040,24 @@ class SubtitleRenderWindow(QWidget):
             if command[0] == "char_roles_batch":
                 _kind, track_index, rows, _old_values, new_values = command
                 if self._restore_char_role_rows(track_index, rows, new_values):
+                    self._undo_stack.append(command)
+                    return
+                continue
+            if command[0] == "guide_symbols":
+                _kind, track_index, rows, _old_values, new_values = command
+                if self._restore_guide_symbols(track_index, rows, new_values):
+                    self._undo_stack.append(command)
+                    return
+                continue
+            if command[0] == "guide_char_roles":
+                _kind, track_index, row, _old_value, new_value = command
+                if self._restore_guide_char_roles(track_index, row, new_value):
+                    self._undo_stack.append(command)
+                    return
+                continue
+            if command[0] == "inline_roles_batch":
+                _kind, track_index, rows, _old_values, new_values = command
+                if self._restore_inline_role_rows(track_index, rows, new_values):
                     self._undo_stack.append(command)
                     return
                 continue
@@ -4341,23 +4484,58 @@ class SubtitleRenderWindow(QWidget):
         if not valid_rows:
             return
         label = role_name.strip() if role_name else None
+        has_guides = any(
+            track.lines[row].guide_symbol is not None for row in valid_rows
+        )
+        if not has_guides:
+            old_values = tuple(
+                tuple(ch.role_label for ch in track.lines[row].chars)
+                for row in valid_rows
+            )
+            new_values = tuple(
+                tuple(label for _ch in track.lines[row].chars)
+                for row in valid_rows
+            )
+            if old_values == new_values:
+                return
+            for row, labels in zip(valid_rows, new_values):
+                for ch, value in zip(track.lines[row].chars, labels):
+                    ch.role_label = value
+            if label:
+                self._materialize_role_schemes({label})
+            self._undo_stack.append(
+                ("char_roles_batch", track_index, valid_rows, old_values, new_values)
+            )
+            del self._undo_stack[:-_UNDO_STACK_LIMIT]
+            self._redo_stack.clear()
+            self._refresh_after_role_labels_changed(valid_rows)
+            return
         old_values = tuple(
-            tuple(ch.role_label for ch in track.lines[row].chars)
+            (
+                track.lines[row].guide_symbol,
+                tuple(ch.role_label for ch in track.lines[row].chars),
+            )
             for row in valid_rows
         )
         new_values = tuple(
-            tuple(label for _ch in track.lines[row].chars)
+            (
+                replace(track.lines[row].guide_symbol, role_label=label)
+                if track.lines[row].guide_symbol is not None
+                else None,
+                tuple(label for _ch in track.lines[row].chars),
+            )
             for row in valid_rows
         )
         if old_values == new_values:
             return
-        for row, labels in zip(valid_rows, new_values):
+        for row, (symbol, labels) in zip(valid_rows, new_values):
+            track.lines[row].guide_symbol = symbol
             for ch, value in zip(track.lines[row].chars, labels):
                 ch.role_label = value
         if label:
             self._materialize_role_schemes({label})
         self._undo_stack.append(
-            ("char_roles_batch", track_index, valid_rows, old_values, new_values)
+            ("inline_roles_batch", track_index, valid_rows, old_values, new_values)
         )
         del self._undo_stack[:-_UNDO_STACK_LIMIT]
         self._redo_stack.clear()
@@ -4378,6 +4556,130 @@ class SubtitleRenderWindow(QWidget):
             return
         normalized = [str(label).strip() or None if label else None for label in labels]
         self._set_line_role_labels(track, row, normalized)
+
+    def _on_guide_symbol_import_requested(self, rows: list[int]) -> None:
+        track = self._active_track()
+        if track is None or self._title_source_active:
+            return
+        valid_rows = tuple(
+            sorted(
+                {
+                    int(row)
+                    for row in rows
+                    if 0 <= int(row) < len(track.lines)
+                    and track.lines[int(row)].chars
+                    and not track.lines[int(row)].is_blank
+                }
+            )
+        )
+        if not valid_rows:
+            return
+        start_dir = str(self._subtitle_path.parent) if self._subtitle_path else ""
+        path_str, _ = QFileDialog.getOpenFileName(
+            self, "选择 SVG 导唱符", start_dir, "SVG 文件 (*.svg)"
+        )
+        if not path_str:
+            return
+        duration_ms, accepted = fluent_get_int(
+            self,
+            "导唱符时长",
+            "导唱符从走字前多少毫秒开始：",
+            value=1000,
+            minimum=0,
+            maximum=10000,
+            step=50,
+        )
+        if not accepted:
+            return
+        try:
+            symbol = import_svg_guide_symbol(
+                Path(path_str), duration_ms=duration_ms
+            )
+        except GuideSymbolImportError as exc:
+            fluent_error(self, "无法导入导唱符", str(exc))
+            return
+        old_values = tuple(track.lines[row].guide_symbol for row in valid_rows)
+        new_values = tuple(symbol for _row in valid_rows)
+        if old_values == new_values:
+            return
+        for row in valid_rows:
+            track.lines[row].guide_symbol = symbol
+        self._undo_stack.append(
+            ("guide_symbols", self._active_source_index, valid_rows, old_values, new_values)
+        )
+        del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+        self._refresh_after_guide_symbols_changed(valid_rows)
+
+    def _on_guide_symbol_remove_requested(self, rows: list[int]) -> None:
+        track = self._active_track()
+        if track is None or self._title_source_active:
+            return
+        valid_rows = tuple(
+            sorted(
+                {
+                    int(row)
+                    for row in rows
+                    if 0 <= int(row) < len(track.lines)
+                    and track.lines[int(row)].guide_symbol is not None
+                }
+            )
+        )
+        if not valid_rows:
+            return
+        old_values = tuple(track.lines[row].guide_symbol for row in valid_rows)
+        new_values = tuple(None for _row in valid_rows)
+        for row in valid_rows:
+            track.lines[row].guide_symbol = None
+        self._undo_stack.append(
+            ("guide_symbols", self._active_source_index, valid_rows, old_values, new_values)
+        )
+        del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+        self._refresh_after_guide_symbols_changed(valid_rows)
+
+    def _on_guide_char_roles_changed(
+        self, row: int, guide_label: object, labels: list
+    ) -> None:
+        track = self._active_track()
+        if track is None or not 0 <= row < len(track.lines):
+            return
+        line = track.lines[row]
+        symbol = line.guide_symbol
+        if symbol is None or len(labels) != len(line.chars):
+            return
+        normalized_guide = str(guide_label).strip() or None if guide_label else None
+        normalized = [str(label).strip() or None if label else None for label in labels]
+        old_value = (symbol, tuple(ch.role_label for ch in line.chars))
+        new_symbol = replace(symbol, role_label=normalized_guide)
+        new_value = (new_symbol, tuple(normalized))
+        if old_value == new_value:
+            return
+        line.guide_symbol = new_symbol
+        for char, label in zip(line.chars, normalized):
+            char.role_label = label
+        self._materialize_role_schemes(
+            {label for label in [normalized_guide, *normalized] if label}
+        )
+        self._undo_stack.append(
+            ("guide_char_roles", self._active_source_index, row, old_value, new_value)
+        )
+        del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+        self._refresh_after_guide_symbols_changed((row,))
+
+    def _refresh_after_guide_symbols_changed(self, rows: tuple[int, ...]) -> None:
+        track = self._active_track()
+        if track is None:
+            return
+        self._lyrics_panel.set_track(track)
+        self._lyrics_panel.set_role_options(self._merged_role_options())
+        if self._active_source_index == 0:
+            self._preview_panel.set_track(track)
+        else:
+            self._sync_extra_tracks_to_preview()
+        self._margin_check_timer.start()
+        self._mark_project_dirty()
 
     def _set_title_role_labels(self, row: int, labels: list) -> None:
         """写回标题某行逐字符角色，作为 Style 修改进入统一撤销栈。"""
@@ -4410,14 +4712,32 @@ class SubtitleRenderWindow(QWidget):
         line = track.lines[row]
         old_labels = tuple(ch.role_label for ch in line.chars)
         new_labels = tuple(labels)
-        if new_labels == old_labels:
+        old_symbol = line.guide_symbol
+        new_symbol = (
+            replace(old_symbol, role_label=labels[0] if labels else None)
+            if old_symbol is not None
+            else None
+        )
+        if new_labels == old_labels and new_symbol == old_symbol:
             return
         for ch, label in zip(line.chars, labels):
             ch.role_label = label
+        line.guide_symbol = new_symbol
         self._materialize_role_schemes({label for label in labels if label})
-        self._undo_stack.append(
-            ("char_roles", self._active_source_index, row, old_labels, new_labels)
-        )
+        if old_symbol is not None:
+            self._undo_stack.append(
+                (
+                    "guide_char_roles",
+                    self._active_source_index,
+                    row,
+                    (old_symbol, old_labels),
+                    (new_symbol, new_labels),
+                )
+            )
+        else:
+            self._undo_stack.append(
+                ("char_roles", self._active_source_index, row, old_labels, new_labels)
+            )
         del self._undo_stack[:-_UNDO_STACK_LIMIT]
         self._redo_stack.clear()
         self._refresh_after_role_labels_changed(row)
@@ -4539,7 +4859,7 @@ class SubtitleRenderWindow(QWidget):
         line = track.lines[row]
         if line.is_blank or not line.chars:
             return
-        start_ms = line.chars[0].start_ms
+        start_ms = timing_line_start_ms(line)
         self._transport_bar.set_time(start_ms)
 
     def _load_persisted_state(self) -> None:

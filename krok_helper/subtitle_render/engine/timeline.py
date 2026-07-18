@@ -18,7 +18,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional, Sequence
 
-from krok_helper.subtitle_render.models import TimingChar, TimingLine, TimingTrack
+from krok_helper.subtitle_render.models import (
+    TimingChar,
+    TimingLine,
+    TimingTrack,
+    timing_line_start_ms,
+)
 
 
 @dataclass(frozen=True)
@@ -78,7 +83,8 @@ def find_active_line(
 ) -> Optional[TimingLine]:
     """返回 ``t_ms`` 时刻正在演唱的行；无则返回 ``None``。
 
-    判定区间 = ``[line.chars[0].start_ms - lead_in_ms, line_end_ms]``，闭区间。
+    判定区间 = ``[行内首个可唱元素 - lead_in_ms, line_end_ms]``，闭区间；存在
+    导唱符时，它的开始时刻优先于首个歌词字符。
     ``line_end_ms`` 取 ``line.end_ms`` 或末字符 ``start_ms`` + 1000 ms 作为安全兜底。
     ``lead_in_ms`` 只影响显示时机，不改变字符填充时间。
     """
@@ -86,11 +92,11 @@ def find_active_line(
     for line in track.lines:
         if line.is_blank or not line.chars:
             continue
-        start = line.chars[0].start_ms
+        start = timing_line_start_ms(line)
         end = _line_end_ms(line)
         if start <= t_ms <= end:
             # 多行重叠时取最靠后开始的（合唱叠唱场景，更贴近"刚发声"那条）
-            if best_live is None or start >= best_live.chars[0].start_ms:
+            if best_live is None or start >= timing_line_start_ms(best_live):
                 best_live = line
     if best_live is not None:
         return best_live
@@ -100,11 +106,11 @@ def find_active_line(
     for line in track.lines:
         if line.is_blank or not line.chars:
             continue
-        start = line.chars[0].start_ms - lead
+        start = timing_line_start_ms(line) - lead
         end = _line_end_ms(line)
         if start <= t_ms <= end:
             # 多行重叠时取最靠后开始的（合唱叠唱场景，更贴近"刚发声"那条）
-            if best is None or line.chars[0].start_ms >= best.chars[0].start_ms:
+            if best is None or timing_line_start_ms(line) >= timing_line_start_ms(best):
                 best = line
     return best
 
@@ -208,7 +214,7 @@ def compute_display_lines(
 
     for index, line in enumerate(render_lines):
         lane = lanes[index]
-        preferred_start = max(line.chars[0].start_ms - lead, 0)
+        preferred_start = max(timing_line_start_ms(line) - lead, 0)
         if (
             lane != 0
             and starts
@@ -365,7 +371,7 @@ def _compute_section_ids(render_lines: list[TimingLine], section_gap: int) -> li
     current = 0
     for index, line in enumerate(render_lines):
         if index > 0 and section_gap > 0:
-            gap = line.chars[0].start_ms - _line_end_ms(render_lines[index - 1])
+            gap = timing_line_start_ms(line) - _line_end_ms(render_lines[index - 1])
             if gap > section_gap:
                 current += 1
         section_ids.append(current)
@@ -524,7 +530,7 @@ def find_upcoming_line(track: TimingTrack, t_ms: int) -> Optional[TimingLine]:
     for line in track.lines:
         if line.is_blank or not line.chars:
             continue
-        start = line.chars[0].start_ms
+        start = timing_line_start_ms(line)
         if start <= t_ms:
             continue
         if candidate_start is None or start < candidate_start:
@@ -655,9 +661,7 @@ def _line_end_ms(line: TimingLine) -> int:
 
 
 def _line_start_ms(line: TimingLine) -> int:
-    if line.chars:
-        return line.chars[0].start_ms
-    return 0
+    return timing_line_start_ms(line)
 
 
 def _pair_sing_end_ms(lines: list[TimingLine], index: int, lane_count: int = 2) -> int:

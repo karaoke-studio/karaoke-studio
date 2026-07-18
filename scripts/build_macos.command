@@ -130,6 +130,7 @@ fi
 
 ensure_pkg PyInstaller pyinstaller
 ensure_pkg PyQt6 PyQt6
+ensure_pkg fontTools fonttools
 ensure_pkg qfluentwidgets "PyQt6-Fluent-Widgets"
 ensure_pkg yt_dlp yt-dlp
 ensure_pkg requests requests

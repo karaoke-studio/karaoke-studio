@@ -61,6 +61,7 @@ from krok_helper.subtitle_render.engine.layers import (
     SCOPE_GROUP,
     SCOPE_LINE,
 )
+from krok_helper.subtitle_render.guide_symbols import scaled_guide_symbol_path
 from krok_helper.subtitle_render.n3_font_catalog import resolve_qt_font_family
 
 
@@ -221,6 +222,7 @@ class _GlyphLayout:
     # slot even when that glyph itself is Latin.  Keep the pre-script style for
     # the gradient inset while ``style`` retains the actual glyph stroke.
     brush_style: Style | None = None
+    vector_glyph: object | None = None
 
 
 @dataclass(frozen=True)
@@ -267,6 +269,7 @@ class _LineLayout:
     # Ruby geometry is frame-independent.  Keep it with the line layout so the
     # per-character wipe paths are not measured again for every preview frame.
     ruby_layouts: tuple["_RubyLayout", ...] = ()
+    render_line: TimingLine | None = None
 
 
 @dataclass(frozen=True)
@@ -427,6 +430,7 @@ def _track_layout_signature(track: TimingTrack) -> tuple:
                 line.layout_index,
                 line.break_before,
                 _value_signature(line.animation_override),
+                _value_signature(line.guide_symbol),
             )
             for line in track.lines
         ),
@@ -468,6 +472,7 @@ def _line_layout_signature(line: TimingLine) -> tuple:
         line.end_ms,
         line.display_start_override_ms,
         line.display_end_override_ms,
+        _value_signature(line.guide_symbol),
     )
 
 
@@ -500,12 +505,14 @@ from krok_helper.subtitle_render.models import (
     Style,
     SubtitleStyleScheme,
     TITLE_SCHEME_NAME,
+    TimingChar,
     TimingLine,
     TimingTrack,
     TitleOverlay,
     normalize_title_char_role_labels,
     normalize_glow_concentration_level,
     style_with_line_animation,
+    timing_line_start_ms,
 )
 
 
@@ -3372,8 +3379,22 @@ def _vertical_glyph_path(
     cell_w: int,
     cell_h: int,
     ascent: int,
+    *,
+    vector_glyph=None,
 ) -> QPainterPath:
     """单个竖排字形的 path：旋转类绕字格中心转 90°，其余直立（标点/小假名偏移）。"""
+    if vector_glyph is not None:
+        path = scaled_guide_symbol_path(
+            vector_glyph,
+            pixel_size=max(int(font.pixelSize()), 1),
+            left=float(column_x - max(int(font.pixelSize()), 1) / 2),
+            baseline_y=float(cell_top + ascent),
+        )
+        bounds = path.boundingRect()
+        return QTransform.fromTranslate(
+            float(column_x) - bounds.center().x(),
+            float(cell_top + cell_h / 2) - bounds.center().y(),
+        ).map(path)
     advance = metrics.horizontalAdvance(ch_text)
     baseline = cell_top + ascent
     glyph_x = column_x - advance / 2
@@ -3584,7 +3605,12 @@ def _paint_line_vertical(
     与横排一致）；``KROK_SUBTITLE_VERTICAL_LAYER=0`` 回退到 :func:`_paint_line_vertical_direct`
     逐帧直绘（亦作像素一致性 oracle）。两条路径像素一致。
     """
-    layout = _layout_vertical_line(track, line, style, img_w, img_h, column_x=column_x)
+    source_line = line
+    line = _line_with_guide_symbol(line)
+    layout = _layout_vertical_line(
+        track, line, style, img_w, img_h,
+        column_x=column_x, source_line=source_line,
+    )
     if layout is None:
         return
     if _vertical_layer_enabled():
@@ -3771,6 +3797,7 @@ def _vertical_main_path_sig(line: TimingLine, style: Style, layout: _VerticalLin
     return (
         "vmain",
         tuple(ch.text for ch in line.chars),
+        tuple(_value_signature(ch.vector_glyph) for ch in line.chars),
         style.font_family,
         style.font_family_latin,
         style.font_size_px,
@@ -4078,6 +4105,7 @@ def _layout_vertical_line(
     img_h: int,
     *,
     column_x: int | None,
+    source_line: TimingLine | None = None,
 ) -> _VerticalLineLayout | None:
     """layout 段：算竖排行的列几何 / 字符格 / 字形路径（不依赖 t_ms）。"""
     chars = line.chars
@@ -4123,6 +4151,7 @@ def _layout_vertical_line(
                 cell_w,
                 cell_h,
                 ascent,
+                vector_glyph=ch.vector_glyph,
             )
         )
 
@@ -4146,7 +4175,7 @@ def _layout_vertical_line(
         line_rect=line_rect,
         text_path=text_path,
         colors=colors,
-        active_rubies=_active_rubies_for_line(track.rubies, line),
+        active_rubies=_active_rubies_for_line(track.rubies, source_line or line),
     )
 
 
@@ -4422,9 +4451,10 @@ def _paint_line_static(
     )
     if layout is None:
         return
+    render_line = layout.render_line or line
     # animation 段（依赖 t_ms）：逐字入退场上下文。
     transition = _line_char_transition_context(
-        style, line, t_ms, display_start_ms, display_end_ms, len(line.chars),
+        style, render_line, t_ms, display_start_ms, display_end_ms, len(render_line.chars),
         intervals=layout.intervals,
     )
     def paint_ruby_glow_under_main() -> None:
@@ -4451,7 +4481,7 @@ def _paint_line_static(
         # ruby before the main glyphs lets a large main glow bleed over the
         # reading stroke/fill, which makes ruby look submerged.
         _paint_rubies(
-            painter, layout.ruby_font, layout.ruby_metrics, line,
+            painter, layout.ruby_font, layout.ruby_metrics, render_line,
             layout.intervals, layout.char_x_ranges, layout.baseline_y,
             t_ms, layout.active_rubies, style, transition,
             main_ascent_px=layout.text_layout.ascent if layout.has_inline_styles else None,
@@ -4468,23 +4498,23 @@ def _paint_line_static(
             _TEXT_RUN_COMPOSITOR.paint_ordered(
                 painter,
                 LayerContext(t_ms=t_ms, logical_w=0, logical_h=0),
-                _char_transition_layer_stack(layout, t_ms, transition, max(len(line.chars), 1)),
+                _char_transition_layer_stack(layout, t_ms, transition, max(len(render_line.chars), 1)),
             )
             paint_rubies_on_top()
             return
         if layout.has_inline_styles:
             _paint_role_line_with_character_transition(
-                painter, line, layout.text_layout, layout.char_x_ranges, layout.intervals,
+                painter, render_line, layout.text_layout, layout.char_x_ranges, layout.intervals,
                 layout.active_rubies, layout.baseline_y, t_ms, transition, style,
                 rtl=layout.rtl, ink_x_ranges=layout.ink_x_ranges,
             )
         else:
             _paint_line_with_character_transition(
-                painter, line, layout.char_widths, layout.char_x_ranges, layout.intervals,
+                painter, render_line, layout.char_widths, layout.char_x_ranges, layout.intervals,
                 layout.active_rubies, layout.font, layout.baseline_y, layout.metrics,
                 style, layout.colors, layout.line_rect, t_ms, transition,
                 rtl=layout.rtl, font_for=layout.font_for, ink_x_ranges=layout.ink_x_ranges,
-                glyphs_by_index=_role_glyphs_by_index(line, layout.text_layout),
+                glyphs_by_index=_role_glyphs_by_index(render_line, layout.text_layout),
                 fill_rect=_n3_main_fill_rect(
                     layout.text_layout, layout.baseline_y
                 ),
@@ -4558,14 +4588,17 @@ def _layout_line_uncached(
     line_x: int | None = None,
     lane: int | None = None,
 ) -> _LineLayout | None:
-    if _line_has_role_labels(line):
+    render_line = _line_with_guide_symbol(line)
+    if _line_has_role_labels(render_line):
         return _layout_role_line(
-            track, line, style, img_w, img_h,
+            track, render_line, style, img_w, img_h,
             baseline_y=baseline_y, line_x=line_x, lane=lane,
+            source_line=line,
         )
     return _layout_plain_line(
-        track, line, style, img_w, img_h,
+        track, render_line, style, img_w, img_h,
         baseline_y=baseline_y, line_x=line_x, lane=lane,
+        source_line=line,
     )
 
 
@@ -4579,6 +4612,7 @@ def _layout_plain_line(
     baseline_y: int | None = None,
     line_x: int | None = None,
     lane: int | None = None,
+    source_line: TimingLine | None = None,
 ) -> _LineLayout:
     """layout 段：算普通行的纯几何 + 字体资源（不依赖 t_ms，可缓存）。"""
     font = _build_font(style)
@@ -4586,14 +4620,19 @@ def _layout_plain_line(
     latin_font = _build_latin_font(style)
     font_for = _make_font_for(style, font, latin_font)
     latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
-    active_rubies = _active_rubies_for_line(track.rubies, line)
+    source_line = source_line or line
+    active_rubies = _active_rubies_for_line(track.rubies, source_line)
     ruby_font = _build_ruby_font(style)
     ruby_metrics = QFontMetrics(ruby_font) if active_rubies else None
 
     # 整行宽度 → 水平居中起点（英数字符用英数字体的步进）。
     # 演唱计时用原始字宽；ruby 避让间隙只改几何。
     char_widths = [
-        _char_layout_width(c.text, font, metrics, latin_metrics, font_for, style)
+        (
+            _vector_glyph_width(c.vector_glyph, style)
+            if c.vector_glyph is not None
+            else _char_layout_width(c.text, font, metrics, latin_metrics, font_for, style)
+        )
         for c in line.chars
     ]
     intervals = compute_char_intervals(line, char_widths)
@@ -4608,8 +4647,8 @@ def _layout_plain_line(
         line_x
         if line_x is not None
         else _resolve_line_x_smart(
-            img_w, total_w + left_ext + right_ext, track, line, style, lane,
-            center_override=_line_center_override(track, line, style),
+            img_w, total_w + left_ext + right_ext, track, source_line, style, lane,
+            center_override=_line_center_override(track, source_line, style),
         )
         + left_ext
     )
@@ -4666,6 +4705,7 @@ def _layout_plain_line(
         fill_segments=fill_segments, line_rect=line_rect, colors=colors, rtl=rtl,
         has_inline_styles=False, ink_x_ranges=ink_x_ranges,
         ruby_layouts=ruby_layouts,
+        render_line=line,
     )
 
 
@@ -4817,6 +4857,52 @@ def _line_has_role_labels(line: TimingLine) -> bool:
     return any(bool(ch.role_label) for ch in line.chars)
 
 
+def _line_with_guide_symbol(line: TimingLine) -> TimingLine:
+    """Return the painter-only line whose first TimingChar is the guide symbol."""
+    symbol = line.guide_symbol
+    if symbol is None or not symbol.path_commands or not line.chars:
+        return line
+    first_start = int(line.chars[0].start_ms)
+    guide = TimingChar(
+        text="\uFFFC",
+        start_ms=first_start - max(int(symbol.duration_ms), 0),
+        role_label=symbol.role_label,
+        vector_glyph=symbol,
+    )
+    return replace(line, chars=[guide, *line.chars], guide_symbol=None)
+
+
+def _vector_glyph_width(symbol, style: Style) -> int:
+    return max(
+        int(
+            round(
+                max(int(style.font_size_px), 1)
+                * max(float(symbol.advance_width), 0.0)
+                / max(int(symbol.units_per_em), 1)
+            )
+        ),
+        1,
+    )
+
+
+def _glyph_path(glyph: _GlyphLayout, baseline_y: int) -> QPainterPath:
+    if glyph.vector_glyph is not None:
+        return scaled_guide_symbol_path(
+            glyph.vector_glyph,
+            pixel_size=max(int(glyph.font.pixelSize()), 1),
+            left=float(glyph.left),
+            baseline_y=float(baseline_y),
+        )
+    path = QPainterPath()
+    path.addText(
+        float(glyph.left + glyph.path_offset_x),
+        float(baseline_y),
+        glyph.font,
+        glyph.text,
+    )
+    return path
+
+
 def _build_text_layout(
     line: TimingLine,
     style: Style,
@@ -4839,6 +4925,7 @@ def _build_text_layout(
             int,
             int,
             float,
+            object | None,
         ]
     ] = []
     total_w = 0
@@ -4884,15 +4971,20 @@ def _build_text_layout(
             latin_metrics = plain_latin_metrics
             if font is None or metrics is None or latin_metrics is None:
                 continue
-        glyph_style = _main_script_stroke_style(role_style, ch.text)
-        glyph_font = font_for(ch.text) if font_for is not None else font
+        is_vector = ch.vector_glyph is not None
+        glyph_style = role_style if is_vector else _main_script_stroke_style(role_style, ch.text)
+        glyph_font = font if is_vector else (font_for(ch.text) if font_for is not None else font)
         glyph_metrics = (
             latin_metrics
-            if font_for is not None and _is_n3_latin_text(ch.text)
+            if not is_vector and font_for is not None and _is_n3_latin_text(ch.text)
             else metrics
         )
-        width = _char_layout_width(
-            ch.text, font, metrics, latin_metrics, font_for, glyph_style,
+        width = (
+            _vector_glyph_width(ch.vector_glyph, role_style)
+            if is_vector
+            else _char_layout_width(
+                ch.text, font, metrics, latin_metrics, font_for, glyph_style,
+            )
         )
         spacing_after = _letter_spacing(role_style) if index < len(line.chars) - 1 else 0
         measured.append(
@@ -4906,9 +4998,12 @@ def _build_text_layout(
                 glyph_metrics,
                 width,
                 spacing_after,
-                _char_path_left_offset(
+                0.0
+                if is_vector
+                else _char_path_left_offset(
                     ch.text, font, metrics, latin_metrics, font_for, glyph_style,
                 ),
+                ch.vector_glyph,
             )
         )
         total_w += width + spacing_after
@@ -4927,7 +5022,7 @@ def _build_text_layout(
     glyphs: list[_GlyphLayout] = []
     if rtl:
         cursor = x0 + total_w
-        for index, text, role_label, glyph_style, brush_style, glyph_font, metrics, width, spacing_after, path_offset_x in measured:
+        for index, text, role_label, glyph_style, brush_style, glyph_font, metrics, width, spacing_after, path_offset_x, vector_glyph in measured:
             cursor -= width
             glyphs.append(
                 _GlyphLayout(
@@ -4941,12 +5036,13 @@ def _build_text_layout(
                     width=width,
                     path_offset_x=path_offset_x,
                     brush_style=brush_style,
+                    vector_glyph=vector_glyph,
                 )
             )
             cursor -= spacing_after
     else:
         cursor = x0
-        for index, text, role_label, glyph_style, brush_style, glyph_font, metrics, width, spacing_after, path_offset_x in measured:
+        for index, text, role_label, glyph_style, brush_style, glyph_font, metrics, width, spacing_after, path_offset_x, vector_glyph in measured:
             if char_gaps is not None and index < len(char_gaps):
                 cursor += char_gaps[index]
             glyphs.append(
@@ -4961,6 +5057,7 @@ def _build_text_layout(
                     width=width,
                     path_offset_x=path_offset_x,
                     brush_style=brush_style,
+                    vector_glyph=vector_glyph,
                 )
             )
             cursor += width + spacing_after
@@ -5078,7 +5175,7 @@ def _glyph_runs(layout: _TextLayout) -> list[list[_GlyphLayout]]:
 def _glyph_run_path(glyphs: list[_GlyphLayout], baseline_y: int) -> QPainterPath:
     path = QPainterPath()
     for glyph in glyphs:
-        path.addText(float(glyph.left + glyph.path_offset_x), float(baseline_y), glyph.font, glyph.text)
+        path.addPath(_glyph_path(glyph, baseline_y))
     return path
 
 
@@ -5145,9 +5242,11 @@ def _layout_role_line(
     baseline_y: int | None = None,
     line_x: int | None = None,
     lane: int | None = None,
+    source_line: TimingLine | None = None,
 ) -> _LineLayout | None:
     """layout 段：算分色行的纯几何（逐段多字体）+ 基线 + fill_segments（不依赖 t_ms）。"""
-    active_rubies = _active_rubies_for_line(track.rubies, line)
+    source_line = source_line or line
+    active_rubies = _active_rubies_for_line(track.rubies, source_line)
     ruby_font = _build_ruby_font(style)
     ruby_metrics = QFontMetrics(ruby_font) if active_rubies else None
     measure_layout = _build_role_text_layout(line, style, x0=0, baseline_y=0)
@@ -5158,8 +5257,8 @@ def _layout_role_line(
         line_x
         if line_x is not None
         else _resolve_line_x_smart(
-            img_w, measure_layout.total_width + visual_pad * 2, track, line, style, lane,
-            center_override=_line_center_override(track, line, style),
+            img_w, measure_layout.total_width + visual_pad * 2, track, source_line, style, lane,
+            center_override=_line_center_override(track, source_line, style),
         )
         + visual_pad
     )
@@ -5211,6 +5310,7 @@ def _layout_role_line(
         colors=_effective_karaoke_colors(style), rtl=style.right_to_left,
         has_inline_styles=True, ink_x_ranges=ink_x_ranges,
         ruby_layouts=ruby_layouts,
+        render_line=line,
     )
 
 
@@ -6979,6 +7079,7 @@ def _glyph_run_layer_key(
             glyph.left - run_left,
             round(float(glyph.path_offset_x), 3),
             glyph.width,
+            _value_signature(glyph.vector_glyph),
         )
         for glyph in glyphs
     )
@@ -7030,6 +7131,7 @@ def _glyph_run_after_glow_key(
             glyph.left - run_left,
             round(float(glyph.path_offset_x), 3),
             glyph.width,
+            _value_signature(glyph.vector_glyph),
         )
         for glyph in glyphs
     )
@@ -7770,8 +7872,7 @@ def _role_char_ink_ranges_by_index(
         if not text or text.isspace():
             ranges[glyph.index] = (left, left)
             continue
-        path = QPainterPath()
-        path.addText(float(left + glyph.path_offset_x), 0.0, glyph.font, text)
+        path = _glyph_path(glyph, 0)
         br = path.boundingRect()
         if br.isEmpty():
             ranges[glyph.index] = (left, left)
@@ -7994,10 +8095,23 @@ def _paint_line_with_character_transition(
         for char_index in indices:
             layout_glyph = glyphs_by_index[char_index] if char_index < len(glyphs_by_index) else None
             glyph = line.chars[char_index]
+            if layout_glyph is not None:
+                path.addPath(_glyph_path(layout_glyph, baseline_y))
+                continue
             glyph_font = layout_glyph.font if layout_glyph is not None else (font_for(glyph.text) if font_for is not None else font)
             glyph_left = layout_glyph.left if layout_glyph is not None else char_x_ranges[char_index][0]
             path_offset_x = layout_glyph.path_offset_x if layout_glyph is not None else 0.0
-            path.addText(float(glyph_left + path_offset_x), float(baseline_y), glyph_font, glyph.text)
+            if glyph.vector_glyph is not None:
+                path.addPath(
+                    scaled_guide_symbol_path(
+                        glyph.vector_glyph,
+                        pixel_size=max(int(glyph_font.pixelSize()), 1),
+                        left=float(glyph_left),
+                        baseline_y=float(baseline_y),
+                    )
+                )
+            else:
+                path.addText(float(glyph_left + path_offset_x), float(baseline_y), glyph_font, glyph.text)
         painter.save()
         try:
             painter.setOpacity(painter.opacity() * opacity)
@@ -8046,6 +8160,7 @@ def _paint_line_with_character_transition(
                             metrics=metrics,
                             left=char_x_ranges[ci][0],
                             width=char_x_ranges[ci][1] - char_x_ranges[ci][0],
+                            vector_glyph=line.chars[ci].vector_glyph,
                         )
                     )
                 if _glow_cache_enabled():
@@ -10104,20 +10219,26 @@ def _line_total_width(
 
     与绘制路径同一套测量，供 SmartHorizon 页宽与余白警告使用。
     """
+    source_line = line
+    line = _line_with_guide_symbol(line)
     font = _build_font(style)
     metrics = QFontMetrics(font)
     latin_font = _build_latin_font(style)
     font_for = _make_font_for(style, font, latin_font)
     latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
     char_widths = [
-        _char_layout_width(c.text, font, metrics, latin_metrics, font_for, style)
+        (
+            _vector_glyph_width(c.vector_glyph, _style_for_role_in_layout(style, c.role_label))
+            if c.vector_glyph is not None
+            else _char_layout_width(c.text, font, metrics, latin_metrics, font_for, style)
+        )
         for c in line.chars
     ]
     pad = _visual_text_padding(style)
     left_ext = right_ext = pad
     gap_total = 0
     if rubies:
-        active = _active_rubies_for_line(rubies, line)
+        active = _active_rubies_for_line(rubies, source_line)
         if active:
             gaps, ruby_left, ruby_right = _ruby_char_gaps(
                 line, char_widths, active, style
@@ -10429,7 +10550,7 @@ def check_layout_margins(
 
 
 def _line_start_ms(line: TimingLine) -> int:
-    return line.chars[0].start_ms if line.chars else 0
+    return timing_line_start_ms(line)
 
 
 def _line_end_ms(line: TimingLine) -> int:

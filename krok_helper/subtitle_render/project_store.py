@@ -304,6 +304,7 @@ def project_payload(
     line_layout_indices: Optional[list[int]] = None,
     line_breaks_before: Optional[list[str]] = None,
     char_role_labels: Optional[list] = None,
+    line_guide_symbols: Optional[list] = None,
     line_display_overrides: Optional[list] = None,
     line_animation_overrides: Optional[list] = None,
     extra_subtitle_sources: Optional[list] = None,
@@ -320,6 +321,9 @@ def project_payload(
     ``char_role_labels`` 同样与 ``track.lines`` 对齐：每项为 None（整行无角色）
     或与该行字符对齐的角色名列表。覆盖 UI 手动分配与 N3 导入的逐字配色
     （LRC 内的 ``【N配色】`` 标签解析后也会落到这里，重复应用无害）。
+
+    ``line_guide_symbols`` 同样与 ``track.lines`` 对齐：每项为 None 或已归一化
+    的 SVG 导唱符轮廓、走字时长与角色。轮廓嵌入工程，不依赖原 SVG 路径。
 
     ``line_display_overrides`` 同样与 ``track.lines`` 对齐：每项为 None（该行
     无手动覆盖）或 ``[上屏覆盖毫秒或 None, 消失覆盖毫秒或 None]``（字幕轨道
@@ -357,6 +361,11 @@ def project_payload(
         payload["char_role_labels"] = [
             [str(label) if label else None for label in row] if isinstance(row, list) else None
             for row in char_role_labels
+        ]
+    if line_guide_symbols is not None:
+        payload["line_guide_symbols"] = [
+            dict(row) if isinstance(row, dict) else None
+            for row in line_guide_symbols
         ]
     if line_display_overrides is not None:
         payload["line_display_overrides"] = [

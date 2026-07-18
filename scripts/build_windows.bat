@@ -27,6 +27,7 @@ if errorlevel 1 (
 
 call :ensure_pkg PyInstaller pyinstaller || exit /b 1
 call :ensure_pkg PyQt6 PyQt6 || exit /b 1
+call :ensure_pkg fontTools fonttools || exit /b 1
 call :ensure_pkg qfluentwidgets "PyQt6-Fluent-Widgets" || exit /b 1
 call :ensure_pkg yt_dlp yt-dlp || exit /b 1
 call :ensure_pkg requests requests || exit /b 1

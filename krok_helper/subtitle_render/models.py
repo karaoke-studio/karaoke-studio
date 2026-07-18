@@ -44,6 +44,23 @@ DEFAULT_OUTPUT_NAME_SUFFIX = "_yurika出力"
 # ---------------------------------------------------------------------------
 
 
+@dataclass(frozen=True)
+class GuideSymbol:
+    """嵌入工程的行前导唱符轮廓及其逐行显示设置。
+
+    ``path_commands`` 使用 QPainterPath 等价的 M/L/C/Z 命令，坐标位于
+    ``units_per_em`` 字形坐标系内，基线为 y=0。它是渲染层的行内虚拟字符，
+    不进入歌词正文，也不占用 ``TimingLine.chars`` 的用户可见索引。
+    """
+
+    name: str = "导唱符"
+    path_commands: tuple[tuple[object, ...], ...] = ()
+    units_per_em: int = 1000
+    advance_width: float = 1000.0
+    duration_ms: int = 1000
+    role_label: Optional[str] = None
+
+
 @dataclass
 class TimingChar:
     """单个字符 + 它在歌曲时间轴上的起点 / 行内停顿释放点。"""
@@ -73,6 +90,9 @@ class TimingChar:
 
     source_span_count: int = 1
     """共享时间块内的字符总数；1 表示普通独立字符。"""
+
+    vector_glyph: Optional[GuideSymbol] = None
+    """仅供渲染层生成的行内虚拟字符使用；字幕源解析出的真实字符恒为 None。"""
 
 
 @dataclass(frozen=True)
@@ -116,6 +136,8 @@ class TimingLine:
     """本行「消失时刻」手动覆盖（毫秒）。None = 按全局延迟退场自动计算。"""
     animation_override: Optional[LineAnimationOverride] = None
     """逐行动画覆盖；None = 继承全局 ``Style`` 的入场/退场设置。"""
+    guide_symbol: Optional[GuideSymbol] = None
+    """可选的行前导唱符；作为虚拟首字符参与布局，但不改变 ``chars`` 索引。"""
 
 
 @dataclass
@@ -190,12 +212,29 @@ class TimingTrack:
         seen: set[str] = set()
         options: list[str] = []
         for line in self.lines:
+            if (
+                line.guide_symbol is not None
+                and line.guide_symbol.role_label
+                and line.guide_symbol.role_label not in seen
+            ):
+                seen.add(line.guide_symbol.role_label)
+                options.append(line.guide_symbol.role_label)
             for ch in line.chars:
                 label = ch.role_label
                 if label and label not in seen:
                     seen.add(label)
                     options.append(label)
         return options
+
+
+def timing_line_start_ms(line: TimingLine) -> int:
+    """行内首个可唱元素的时刻；导唱符存在时它就是虚拟首字符。"""
+    if not line.chars:
+        return 0
+    start = int(line.chars[0].start_ms)
+    if line.guide_symbol is not None:
+        start -= max(int(line.guide_symbol.duration_ms), 0)
+    return start
 
 
 # ---------------------------------------------------------------------------
@@ -1151,6 +1190,53 @@ def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOv
         entry_duration_ms=duration("entry_duration_ms", 300),
         exit_anim=exit_,
         exit_duration_ms=duration("exit_duration_ms", 300),
+    )
+
+
+def guide_symbol_to_dict(symbol: Optional[GuideSymbol]) -> Optional[dict[str, object]]:
+    if symbol is None:
+        return None
+    return {
+        "name": symbol.name,
+        "path_commands": [list(command) for command in symbol.path_commands],
+        "units_per_em": max(int(symbol.units_per_em), 1),
+        "advance_width": max(float(symbol.advance_width), 0.0),
+        "duration_ms": max(int(symbol.duration_ms), 0),
+        "role_label": symbol.role_label or None,
+    }
+
+
+def guide_symbol_from_dict(value: object) -> Optional[GuideSymbol]:
+    if not isinstance(value, dict):
+        return None
+    raw_commands = value.get("path_commands")
+    if not isinstance(raw_commands, list):
+        return None
+    commands: list[tuple[object, ...]] = []
+    expected_lengths = {"M": 3, "L": 3, "C": 7, "Q": 5, "Z": 1}
+    try:
+        for raw in raw_commands:
+            if not isinstance(raw, (list, tuple)) or not raw:
+                return None
+            kind = str(raw[0]).upper()
+            if len(raw) != expected_lengths.get(kind, -1):
+                return None
+            commands.append((kind, *(float(item) for item in raw[1:])))
+        units_per_em = max(int(value.get("units_per_em", 1000)), 1)
+        advance_width = max(float(value.get("advance_width", units_per_em)), 0.0)
+        duration_ms = max(int(value.get("duration_ms", 1000)), 0)
+    except (TypeError, ValueError):
+        return None
+    if not commands:
+        return None
+    role = value.get("role_label")
+    return GuideSymbol(
+        name=str(value.get("name") or "导唱符"),
+        path_commands=tuple(commands),
+        units_per_em=units_per_em,
+        advance_width=advance_width,
+        duration_ms=duration_ms,
+        role_label=str(role).strip() or None if role else None,
     )
 
 
