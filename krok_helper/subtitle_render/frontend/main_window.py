@@ -119,6 +119,10 @@ from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_question,
     fluent_warning,
 )
+from krok_helper.subtitle_render.frontend.guide_replacement import (
+    GuidePrefixReplaceDialog,
+    replacement_symbol_for_match,
+)
 from krok_helper.subtitle_render.frontend.lyrics_list import LyricsPanel
 from krok_helper.subtitle_render.frontend.playback import (
     PlaybackController,
@@ -148,6 +152,7 @@ from krok_helper.subtitle_render.models import (
     TimingTrack,
     background_sequence_frame_path,
     guide_symbol_from_dict,
+    guide_symbol_replacement_count,
     guide_symbol_role_labels,
     guide_symbol_with_role_labels,
     guide_symbol_to_dict,
@@ -2004,9 +2009,17 @@ class SubtitleRenderWindow(QWidget):
             self._apply_line_breaks_before(data.get("line_breaks_before"))
             self._apply_line_layout_indices(data.get("line_layout_indices"))
             self._apply_char_role_labels(data.get("char_role_labels"))
-            self._apply_guide_symbol_rows(
+            guide_mismatches = self._apply_guide_symbol_rows(
                 self._timing_track, data.get("line_guide_symbols")
             )
+            if guide_mismatches:
+                rows = "、".join(str(row + 1) for row in guide_mismatches[:12])
+                suffix = "…" if len(guide_mismatches) > 12 else ""
+                fluent_warning(
+                    self,
+                    "部分导唱符替换未应用",
+                    f"源字幕的行首标记已经变化，以下歌词行保持原文：{rows}{suffix}",
+                )
             self._lyrics_panel.set_track(self._timing_track)
             self._preview_panel.set_track(self._timing_track)
             if self._timing_track is not None:
@@ -2551,6 +2564,9 @@ class SubtitleRenderWindow(QWidget):
         )
         self._lyrics_panel.guideSymbolRemoveRequested.connect(
             self._on_guide_symbol_remove_requested
+        )
+        self._lyrics_panel.guidePrefixReplaceRequested.connect(
+            self._on_guide_prefix_replace_requested
         )
         self._lyrics_panel.titleEditRequested.connect(
             self._freeze_title_template_for_character_edit
@@ -3712,11 +3728,22 @@ class SubtitleRenderWindow(QWidget):
         return rows if any(row is not None for row in rows) else None
 
     @staticmethod
-    def _apply_guide_symbol_rows(track: TimingTrack, payload: object) -> None:
+    def _apply_guide_symbol_rows(track: TimingTrack, payload: object) -> list[int]:
         if not isinstance(payload, list):
-            return
-        for line, value in zip(track.lines, payload):
-            line.guide_symbol = guide_symbol_from_dict(value)
+            return []
+        mismatches: list[int] = []
+        for row, (line, value) in enumerate(zip(track.lines, payload)):
+            symbol = guide_symbol_from_dict(value)
+            if (
+                symbol is not None
+                and symbol.replacement_prefix
+                and guide_symbol_replacement_count(line, symbol) == 0
+            ):
+                line.guide_symbol = None
+                mismatches.append(row)
+                continue
+            line.guide_symbol = symbol
+        return mismatches
 
     # ------------------------------------------------------- 副字幕源（N3 多歌词文件）
 
@@ -4661,6 +4688,65 @@ class SubtitleRenderWindow(QWidget):
         self._redo_stack.clear()
         self._refresh_after_guide_symbols_changed(valid_rows)
 
+    def _on_guide_prefix_replace_requested(self) -> None:
+        track = self._active_track()
+        if track is None or self._title_source_active:
+            return
+        start_dir = str(self._subtitle_path.parent) if self._subtitle_path else ""
+        dialog = GuidePrefixReplaceDialog(
+            track, start_dir=start_dir, parent=self
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        svg_path = dialog.svg_path()
+        selected = dialog.selected_matches()
+        if svg_path is None or not selected:
+            return
+        try:
+            base_symbol = import_svg_guide_symbol(svg_path)
+        except GuideSymbolImportError as exc:
+            fluent_error(self, "无法导入导唱符", str(exc))
+            return
+
+        rows: list[int] = []
+        old_values: list[object] = []
+        new_values: list[object] = []
+        for match in selected:
+            if not 0 <= match.row < len(track.lines):
+                continue
+            line = track.lines[match.row]
+            symbol = replacement_symbol_for_match(base_symbol, line, match)
+            if symbol is None:
+                continue
+            rows.append(match.row)
+            old_values.append(line.guide_symbol)
+            new_values.append(symbol)
+
+        if not rows:
+            fluent_warning(
+                self,
+                "没有可替换的行",
+                "候选歌词在窗口打开后已发生变化，或已经设置了导唱符。",
+            )
+            return
+        row_tuple = tuple(rows)
+        old_tuple = tuple(old_values)
+        new_tuple = tuple(new_values)
+        for row, symbol in zip(row_tuple, new_tuple):
+            track.lines[row].guide_symbol = symbol
+        self._undo_stack.append(
+            (
+                "guide_symbols",
+                self._active_source_index,
+                row_tuple,
+                old_tuple,
+                new_tuple,
+            )
+        )
+        del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+        self._refresh_after_guide_symbols_changed(row_tuple)
+
     def _on_guide_symbol_remove_requested(self, rows: list[int]) -> None:
         track = self._active_track()
         if track is None or self._title_source_active:
@@ -4696,9 +4782,11 @@ class SubtitleRenderWindow(QWidget):
             return
         line = track.lines[row]
         symbol = line.guide_symbol
+        replacement_count = guide_symbol_replacement_count(line)
+        visible_chars = line.chars[replacement_count:]
         if (
             symbol is None
-            or len(labels) != len(line.chars)
+            or len(labels) != len(visible_chars)
             or not isinstance(guide_labels, list)
             or len(guide_labels) != max(int(symbol.count), 1)
         ):
@@ -4710,11 +4798,16 @@ class SubtitleRenderWindow(QWidget):
         normalized = [str(label).strip() or None if label else None for label in labels]
         old_value = (symbol, tuple(ch.role_label for ch in line.chars))
         new_symbol = guide_symbol_with_role_labels(symbol, normalized_guides)
-        new_value = (new_symbol, tuple(normalized))
+        new_char_labels = tuple(
+            [*normalized_guides[:replacement_count], *normalized]
+            if replacement_count
+            else normalized
+        )
+        new_value = (new_symbol, new_char_labels)
         if old_value == new_value:
             return
         line.guide_symbol = new_symbol
-        for char, label in zip(line.chars, normalized):
+        for char, label in zip(line.chars, new_char_labels):
             char.role_label = label
         self._materialize_role_schemes(
             {label for label in [*normalized_guides, *normalized] if label}

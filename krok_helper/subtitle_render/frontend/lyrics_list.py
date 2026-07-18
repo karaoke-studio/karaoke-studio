@@ -75,7 +75,9 @@ from krok_helper.subtitle_render.models import (
     TimingLine,
     TimingTrack,
     TitleOverlay,
+    guide_symbol_replacement_count,
     guide_symbol_role_labels,
+    line_visible_chars,
     normalize_title_char_role_labels,
 )
 from krok_helper.subtitle_render.frontend.theme import palette, themed
@@ -332,7 +334,9 @@ def _line_role_labels(line) -> list[str]:
         labels.extend(
             str(label or "") for label in guide_symbol_role_labels(line.guide_symbol)
         )
-    labels.extend(str(ch.role_label or "") for ch in line.chars if ch.text.strip())
+    labels.extend(
+        str(ch.role_label or "") for ch in line_visible_chars(line) if ch.text.strip()
+    )
     return labels
 
 
@@ -778,9 +782,10 @@ class LyricsPanel(DropPanel):
     charRolesChanged = Signal(int, list)
     """逐字符角色编辑：track.lines 行号 + 与该行字符数等长的标签列表（str | None）。"""
     guideCharRolesChanged = Signal(int, object, list)
-    """含导唱符行的逐字符结果：行号、导唱符角色、真实歌词角色列表。"""
+    """含导唱符行的逐字符结果：行号、各导唱符角色列表、可见歌词角色列表。"""
     guideSymbolImportRequested = Signal(list)
     guideSymbolRemoveRequested = Signal(list)
+    guidePrefixReplaceRequested = Signal()
     titleEditRequested = Signal()
     """标题模式打开逐字符编辑器前，请宿主把动态模板固定为当前实际文字。"""
     animationOverrideRequested = Signal(list, object)
@@ -1024,14 +1029,21 @@ class LyricsPanel(DropPanel):
                 self._table.setItem(row, COL_EFFECT, effect_item)
 
                 content_item = QTableWidgetItem(
-                    "".join(c.text for c in line.chars) if not blank else ""
+                    "".join(c.text for c in line_visible_chars(line)) if not blank else ""
                 )
                 if not blank and line.guide_symbol is not None:
                     content_item.setIcon(_guide_symbol_icon(line.guide_symbol))
-                    content_item.setToolTip(
-                        f"行前导唱符：{line.guide_symbol.name} · "
-                        f"{line.guide_symbol.count} 个 · 间隔 {line.guide_symbol.duration_ms} ms"
-                    )
+                    if line.guide_symbol.replacement_prefix:
+                        marker = "".join(line.guide_symbol.replacement_prefix)
+                        content_item.setToolTip(
+                            f"行首标记替换：{marker} → {line.guide_symbol.name} · "
+                            f"{line.guide_symbol.count} 个 · 保留原打轴时间"
+                        )
+                    else:
+                        content_item.setToolTip(
+                            f"行前导唱符：{line.guide_symbol.name} · "
+                            f"{line.guide_symbol.count} 个 · 间隔 {line.guide_symbol.duration_ms} ms"
+                        )
                 content_item.setFlags(
                     content_item.flags() & ~Qt.ItemFlag.ItemIsEditable
                 )
@@ -1451,10 +1463,17 @@ class LyricsPanel(DropPanel):
                 )
                 if line is not None and line.guide_symbol is not None:
                     content_item.setIcon(_guide_symbol_icon(line.guide_symbol))
-                    content_item.setToolTip(
-                        f"行前导唱符：{line.guide_symbol.name} · "
-                        f"{line.guide_symbol.count} 个 · 间隔 {line.guide_symbol.duration_ms} ms"
-                    )
+                    if line.guide_symbol.replacement_prefix:
+                        marker = "".join(line.guide_symbol.replacement_prefix)
+                        content_item.setToolTip(
+                            f"行首标记替换：{marker} → {line.guide_symbol.name} · "
+                            f"{line.guide_symbol.count} 个 · 保留原打轴时间"
+                        )
+                    else:
+                        content_item.setToolTip(
+                            f"行前导唱符：{line.guide_symbol.name} · "
+                            f"{line.guide_symbol.count} 个 · 间隔 {line.guide_symbol.duration_ms} ms"
+                        )
                 else:
                     content_item.setIcon(QIcon())
                     content_item.setToolTip("")
@@ -1593,6 +1612,11 @@ class LyricsPanel(DropPanel):
                 lambda _checked=False, rs=list(rows): self.guideSymbolImportRequested.emit(rs)
             )
             menu.addAction(guide_action)
+            replace_prefix_action = Action("批量识别行首导唱标记…", menu)
+            replace_prefix_action.triggered.connect(
+                lambda _checked=False: self.guidePrefixReplaceRequested.emit()
+            )
+            menu.addAction(replace_prefix_action)
             if any(self._track.lines[row].guide_symbol is not None for row in rows):
                 remove_guide_action = Action("移除所选行导唱符", menu)
                 remove_guide_action.triggered.connect(
@@ -1758,8 +1782,10 @@ class LyricsPanel(DropPanel):
         if line.is_blank or not line.chars:
             return
         guide = line.guide_symbol if not self._title_mode else None
-        texts = [ch.text for ch in line.chars]
-        labels = [ch.role_label for ch in line.chars]
+        replacement_count = guide_symbol_replacement_count(line)
+        visible_chars = line.chars[replacement_count:]
+        texts = [ch.text for ch in visible_chars]
+        labels = [ch.role_label for ch in visible_chars]
         vector_symbols: list[Optional[GuideSymbol]] = [None] * len(texts)
         if guide is not None:
             guide_count = max(int(guide.count), 1)
@@ -1785,7 +1811,7 @@ class LyricsPanel(DropPanel):
             guide_labels = labels[:guide_count]
             char_labels = labels[guide_count:]
             if guide_labels == list(guide_symbol_role_labels(guide)) and char_labels == [
-                ch.role_label for ch in line.chars
+                ch.role_label for ch in visible_chars
             ]:
                 return
             self.guideCharRolesChanged.emit(row, guide_labels, char_labels)
@@ -1836,7 +1862,7 @@ def _dominant_role(line) -> str:
         roles.extend(
             label for label in guide_symbol_role_labels(line.guide_symbol) if label
         )
-    roles.extend(ch.role_label for ch in line.chars if ch.role_label)
+    roles.extend(ch.role_label for ch in line_visible_chars(line) if ch.role_label)
     if not roles:
         return ""
     return Counter(roles).most_common(1)[0][0]

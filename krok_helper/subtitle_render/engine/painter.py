@@ -518,7 +518,9 @@ from krok_helper.subtitle_render.models import (
     TitleOverlay,
     normalize_title_char_role_labels,
     normalize_glow_concentration_level,
+    guide_symbol_replacement_count,
     guide_symbol_role_labels,
+    line_visible_chars,
     style_with_line_animation,
     timing_line_start_ms,
 )
@@ -4870,6 +4872,28 @@ def _line_with_guide_symbol(line: TimingLine) -> TimingLine:
     symbol = line.guide_symbol
     if symbol is None or not symbol.path_commands or not line.chars:
         return line
+    replacement_count = guide_symbol_replacement_count(line, symbol)
+    if symbol.replacement_prefix:
+        if replacement_count == 0:
+            return line
+        labels = guide_symbol_role_labels(symbol)
+        guides = [
+            TimingChar(
+                text="\uFFFC",
+                start_ms=int(source.start_ms),
+                pause_release_ms=source.pause_release_ms,
+                role_label=(
+                    labels[index] if index < len(labels) else source.role_label
+                ),
+                vector_glyph=symbol,
+            )
+            for index, source in enumerate(line.chars[:replacement_count])
+        ]
+        return replace(
+            line,
+            chars=[*guides, *line.chars[replacement_count:]],
+            guide_symbol=None,
+        )
     first_start = int(line.chars[0].start_ms)
     interval = max(int(symbol.duration_ms), 0)
     labels = guide_symbol_role_labels(symbol)
@@ -10553,7 +10577,7 @@ def check_layout_margins(
         warnings.append(
             LayoutMarginWarning(
                 line_index=line_indices.get(id(line), -1),
-                text="".join(ch.text for ch in line.chars),
+                text="".join(ch.text for ch in line_visible_chars(line)),
                 level=level,
                 left=left,
                 right=right,

@@ -61,6 +61,8 @@ class GuideSymbol:
     count: int = 1
     role_label: Optional[str] = None
     role_labels: tuple[Optional[str], ...] = ()
+    replacement_prefix: tuple[str, ...] = ()
+    """被导唱符替代的原始行首打轴单元；空元组表示在正文前额外插入。"""
 
 
 def guide_symbol_role_labels(symbol: GuideSymbol) -> tuple[Optional[str], ...]:
@@ -159,7 +161,29 @@ class TimingLine:
     animation_override: Optional[LineAnimationOverride] = None
     """逐行动画覆盖；None = 继承全局 ``Style`` 的入场/退场设置。"""
     guide_symbol: Optional[GuideSymbol] = None
-    """可选的行前导唱符；作为虚拟首字符参与布局，但不改变 ``chars`` 索引。"""
+    """可选导唱符；可插在正文前或替代行首标记，但不改变源 ``chars`` 索引。"""
+
+
+def guide_symbol_replacement_count(
+    line: TimingLine, symbol: Optional[GuideSymbol] = None
+) -> int:
+    """返回可安全替换的行首打轴单元数；源歌词变化时返回 0。"""
+    guide = symbol if symbol is not None else line.guide_symbol
+    if guide is None or not guide.replacement_prefix:
+        return 0
+    prefix = tuple(guide.replacement_prefix)
+    if max(int(guide.count), 1) != len(prefix):
+        return 0
+    if len(line.chars) <= len(prefix):
+        return 0
+    if tuple(char.text for char in line.chars[: len(prefix)]) != prefix:
+        return 0
+    return len(prefix)
+
+
+def line_visible_chars(line: TimingLine) -> list[TimingChar]:
+    """歌词预览/角色编辑中可见的真实字符（排除已被导唱符替代的前缀）。"""
+    return line.chars[guide_symbol_replacement_count(line) :]
 
 
 @dataclass
@@ -239,7 +263,7 @@ class TimingTrack:
                     if label and label not in seen:
                         seen.add(label)
                         options.append(label)
-            for ch in line.chars:
+            for ch in line_visible_chars(line):
                 label = ch.role_label
                 if label and label not in seen:
                     seen.add(label)
@@ -253,6 +277,8 @@ def timing_line_start_ms(line: TimingLine) -> int:
         return 0
     start = int(line.chars[0].start_ms)
     if line.guide_symbol is not None:
+        if line.guide_symbol.replacement_prefix:
+            return start
         start -= (
             max(int(line.guide_symbol.duration_ms), 0)
             * max(int(line.guide_symbol.count), 1)
@@ -1228,6 +1254,7 @@ def guide_symbol_to_dict(symbol: Optional[GuideSymbol]) -> Optional[dict[str, ob
         "count": max(int(symbol.count), 1),
         "role_label": symbol.role_label or None,
         "role_labels": [label or None for label in symbol.role_labels],
+        "replacement_prefix": list(symbol.replacement_prefix),
     }
 
 
@@ -1262,6 +1289,12 @@ def guide_symbol_from_dict(value: object) -> Optional[GuideSymbol]:
         if isinstance(raw_role_labels, list)
         else ()
     )
+    raw_replacement_prefix = value.get("replacement_prefix")
+    replacement_prefix = (
+        tuple(str(text) for text in raw_replacement_prefix if str(text))
+        if isinstance(raw_replacement_prefix, list)
+        else ()
+    )
     return GuideSymbol(
         name=str(value.get("name") or "导唱符"),
         path_commands=tuple(commands),
@@ -1271,6 +1304,7 @@ def guide_symbol_from_dict(value: object) -> Optional[GuideSymbol]:
         count=count,
         role_label=str(role).strip() or None if role else None,
         role_labels=role_labels,
+        replacement_prefix=replacement_prefix,
     )
 
 
