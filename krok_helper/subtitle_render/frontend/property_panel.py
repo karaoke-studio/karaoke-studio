@@ -4108,7 +4108,7 @@ class PropertyPanel(QWidget):
             self.styleChanged.emit(self._style)
 
     def set_roles(self, role_names: list[str]) -> None:
-        """喂入字幕里出现过的角色名（来自 ``track.role_options``），刷新角色下拉。"""
+        """Replace the current project's role registry and refresh navigation."""
         self._role_names = [str(n) for n in role_names if n]
         self._ensure_role_schemes()
         current_key = self._current_scheme_key()
@@ -4118,6 +4118,18 @@ class PropertyPanel(QWidget):
         finally:
             self._syncing = False
         self._sync_subtitle_scheme_controls()
+
+    def merge_roles(self, role_names: list[str]) -> None:
+        """Add newly discovered roles without dropping earlier project roles."""
+        merged = list(self._role_names)
+        seen = set(merged)
+        for value in role_names:
+            name = str(value or "").strip()
+            if not name or name in seen:
+                continue
+            seen.add(name)
+            merged.append(name)
+        self.set_roles(merged)
 
     # ------------------------------------------------------------------ layout
 

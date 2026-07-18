@@ -3263,8 +3263,8 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.set_track(track)
         if not self._loading_project:
             self._apply_imported_role_preset_choices(track.role_options)
+            self._property_panel.merge_roles(self._content_role_options())
             self._lyrics_panel.set_role_options(self._merged_role_options())
-            self._property_panel.set_roles(self._content_role_options())
         self._property_panel.set_current_scheme_key(self._selected_scheme_key)
         self._selected_scheme_key = self._property_panel.current_scheme_key()
         self._preview_panel.set_track(track)
@@ -4368,7 +4368,8 @@ class SubtitleRenderWindow(QWidget):
         self._active_source_index = len(self._extra_sources)
         self._refresh_source_ui()
         self._refresh_lyrics_panel_source()
-        self._property_panel.set_roles(self._content_role_options())
+        self._property_panel.merge_roles(self._content_role_options())
+        self._lyrics_panel.set_role_options(self._merged_role_options())
         self._sync_extra_tracks_to_preview()
         self._refresh_transport_duration()
         self._margin_check_timer.start()
@@ -5210,7 +5211,7 @@ class SubtitleRenderWindow(QWidget):
             track = self._active_track()
             if track is not None:
                 # 触发属性面板为新角色自动建方案（styleChanged 回流 _apply_style）
-                self._property_panel.set_roles(
+                self._property_panel.merge_roles(
                     self._content_role_options()
                     + [label for label in missing if label not in self._content_role_options()]
                 )

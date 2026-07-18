@@ -340,8 +340,10 @@ def project_payload(
     每项为 ``{"name", "path", "line_layout_indices", "char_role_labels",
     "line_display_overrides", "line_animation_overrides"}``。
 
-    ``project_role_names`` 保存已导入为项目角色、但尚未分配到歌词的方案名；
-    它与应用级预设库分离，避免历史预设污染当前项目的角色菜单。
+    ``project_role_names`` 保存当前项目的完整角色注册表，包括当前歌词引用的角色、
+    旧字幕曾引用的角色，以及用户新建但尚未分配的角色。它与应用级预设库分离，
+    避免历史预设污染当前项目的角色菜单；只有用户显式删除角色或切换完整项目时
+    才会从注册表移除。
     """
     payload = {
         "subtitle_path": str(subtitle_path) if subtitle_path else None,

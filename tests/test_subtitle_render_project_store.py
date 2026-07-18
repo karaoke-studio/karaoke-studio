@@ -1606,6 +1606,44 @@ def test_unassigned_imported_project_role_round_trips_in_project_data(
     assert restored._style.custom_style_schemes["尚未分配"].fill_color == "#654321"
 
 
+def test_replacing_lrc_preserves_all_existing_project_roles(
+    qapp, monkeypatch, tmp_path
+):
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    win = _make_window(qapp, monkeypatch)
+    win._property_panel._add_custom_scheme("手动角色")
+
+    tagged_lrc = tmp_path / "tagged.lrc"
+    tagged_lrc.write_text(
+        "【旧 LRC 角色】[00:01:00]甲[00:02:00]\n",
+        encoding="utf-8-sig",
+    )
+    assert win.load_from_lrc(tagged_lrc) is not None
+    assert win._property_panel.role_names == ["手动角色", "旧 LRC 角色"]
+
+    plain_lrc = tmp_path / "plain.lrc"
+    plain_lrc.write_text(
+        "[00:01:00]乙[00:02:00]\n",
+        encoding="utf-8-sig",
+    )
+    assert win.load_from_lrc(plain_lrc) is not None
+
+    assert win._property_panel.role_names == ["手动角色", "旧 LRC 角色"]
+    assert win._merged_role_options() == ["手动角色", "旧 LRC 角色"]
+    assert {"手动角色", "旧 LRC 角色"} <= set(
+        win._style.custom_style_schemes
+    )
+
+    data = win._current_project_data()
+    assert data["project_role_names"] == ["手动角色", "旧 LRC 角色"]
+
+    restored = _make_window(qapp, monkeypatch)
+    restored._apply_project_data(data)
+
+    assert restored._property_panel.role_names == ["手动角色", "旧 LRC 角色"]
+    assert restored._lyrics_panel._role_options == ["手动角色", "旧 LRC 角色"]
+
+
 def test_lyrics_panel_requests_one_role_for_multiple_selected_rows(qapp):
     panel = lyrics_list.LyricsPanel()
     track = TimingTrack(
