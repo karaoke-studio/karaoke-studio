@@ -2379,6 +2379,8 @@ class _RolePresetGroupDialog(QDialog):
 class StylePresetManagerDialog(QDialog):
     """Manage independent, grouped subtitle style presets."""
 
+    presetLibraryChanged = Signal(dict)
+
     def __init__(
         self,
         presets: dict[str, StylePreset | SubtitleStyleScheme],
@@ -2506,6 +2508,10 @@ class StylePresetManagerDialog(QDialog):
     def preset_schemes(self) -> dict[str, StylePreset]:
         return _normalize_style_presets(self._presets)
 
+    def _emit_preset_library_changed(self) -> None:
+        """Publish library edits immediately instead of waiting for dialog close."""
+        self.presetLibraryChanged.emit(self.preset_schemes())
+
     def applied_scheme(self) -> Optional[SubtitleStyleScheme]:
         if self._applied_scheme is None:
             return None
@@ -2530,6 +2536,7 @@ class StylePresetManagerDialog(QDialog):
             preset_id=preset_id,
         )
         self._populate_list(selected=preset_id)
+        self._emit_preset_library_changed()
         return True
 
     def _populate_list(
@@ -2810,6 +2817,8 @@ class StylePresetManagerDialog(QDialog):
             selected=selected_id,
             checked_names=set(merged.imported_ids),
         )
+        if merged.imported_ids:
+            self._emit_preset_library_changed()
 
         warning_count = sum(len(item.warnings) for item in batch.templates)
         summary = (
@@ -2967,6 +2976,7 @@ class StylePresetManagerDialog(QDialog):
             source_data=deepcopy(preset.source_data),
         )
         self._populate_list(selected=preset_id)
+        self._emit_preset_library_changed()
 
     def _on_set_group(self) -> None:
         preset_ids = self._batch_names()
@@ -3015,6 +3025,7 @@ class StylePresetManagerDialog(QDialog):
             if preset is not None:
                 preset.group = group
         self._populate_list(selected=preset_ids[0])
+        self._emit_preset_library_changed()
 
     def _on_delete(self) -> None:
         preset_ids = self._batch_names()
@@ -3038,6 +3049,7 @@ class StylePresetManagerDialog(QDialog):
         for preset_id in preset_ids:
             self._presets.pop(preset_id, None)
         self._populate_list()
+        self._emit_preset_library_changed()
 
 
 class _GlyphToggleButton(QToolButton):
@@ -7042,11 +7054,13 @@ class PropertyPanel(QWidget):
             lyrics_dir=self._n3_template_lyrics_dir,
             parent=self,
         )
+        dialog.presetLibraryChanged.connect(self._set_preset_schemes_from_dialog)
         dialog.exec()
         schemes = dialog.preset_schemes()
         imported = dialog.imported_schemes()
         applied = dialog.applied_scheme()
-        self._set_preset_schemes_from_dialog(schemes)
+        if schemes != self._preset_schemes:
+            self._set_preset_schemes_from_dialog(schemes)
         if applied is not None:
             self._apply_preset_to_current_target(applied)
         if imported:

@@ -3769,6 +3769,48 @@ def test_style_preset_manager_auto_checks_new_n3_templates_for_role_import(
     assert set(dialog.imported_schemes()) == {"N3 角色 A", "N3 角色 B"}
 
 
+def test_style_preset_manager_publishes_n3_import_before_dialog_closes(
+    qapp, monkeypatch
+):
+    imported = N3TemplateLoadResult(
+        path=Path("n3-template.tpl"),
+        guid="guid-n3-template",
+        name="N3 模板",
+        preset=StylePreset(
+            name="N3 模板",
+            group="N3",
+            scheme=SubtitleStyleScheme(fill_color="#123456"),
+            source_type="n3_font_template",
+            source_data={"payload": {"SettingsName": "N3 模板"}},
+        ),
+    )
+    monkeypatch.setattr(pp, "find_n3_template_files", lambda: [imported.path])
+    monkeypatch.setattr(pp, "fluent_choice", lambda *_args, **_kwargs: 0)
+    monkeypatch.setattr(
+        pp,
+        "load_n3_font_templates",
+        lambda *_args, **_kwargs: N3TemplateBatchResult(
+            templates=(imported,), skipped=(), failed=()
+        ),
+    )
+    monkeypatch.setattr(pp.InfoBar, "success", lambda **_kwargs: None)
+    dialog = StylePresetManagerDialog(
+        presets={},
+        current_scheme=SubtitleStyleScheme(),
+        target_label="全局默认",
+    )
+    published: list[dict[str, StylePreset]] = []
+    dialog.presetLibraryChanged.connect(published.append)
+
+    dialog._on_import_n3()
+
+    assert len(published) == 1
+    saved = next(iter(published[0].values()))
+    assert saved.name == "N3 模板"
+    assert saved.source_type == "n3_font_template"
+    assert dialog.result() == 0
+
+
 def test_style_preset_manager_filters_groups_without_losing_checks(qapp):
     dialog = StylePresetManagerDialog(
         presets={
@@ -3918,9 +3960,13 @@ def test_property_panel_dialog_library_changes_do_not_remove_project_roles(qapp,
     )
     panel.set_roles(["A"])
 
+    class FakeSignal:
+        def connect(self, _callback):
+            pass
+
     class FakeDialog:
         def __init__(self, *args, **kwargs):
-            pass
+            self.presetLibraryChanged = FakeSignal()
 
         def exec(self):
             return 0
@@ -3944,6 +3990,55 @@ def test_property_panel_dialog_library_changes_do_not_remove_project_roles(qapp,
     assert "A" not in panel.preset_schemes
     assert panel.subtitle_style.custom_style_schemes["A"].fill_color == "#111111"
     assert panel._singer_combo.findData("custom:A") >= 0
+
+
+def test_n3_preset_import_is_persisted_before_manager_dialog_closes(qapp, monkeypatch):
+    provider = _FontMigrationSettingsProvider({})
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    imported = StylePreset(
+        name="N3 模板",
+        group="N3",
+        scheme=SubtitleStyleScheme(fill_color="#123456"),
+        preset_id="n3-template",
+        source_type="n3_font_template",
+        source_data={"payload": {"SettingsName": "N3 模板"}},
+    )
+
+    class FakeSignal:
+        def connect(self, callback):
+            self._callback = callback
+
+        def emit(self, payload):
+            self._callback(payload)
+
+    class FakeDialog:
+        def __init__(self, *args, **kwargs):
+            self.presetLibraryChanged = FakeSignal()
+
+        def exec(self):
+            self.presetLibraryChanged.emit({"n3-template": imported})
+            saved = provider.data["style_presets"]
+            assert [(item["id"], item["source_type"]) for item in saved] == [
+                ("n3-template", "n3_font_template")
+            ]
+            return 0
+
+        def preset_schemes(self):
+            return {"n3-template": imported}
+
+        def imported_schemes(self):
+            return {}
+
+        def applied_scheme(self):
+            return None
+
+    monkeypatch.setattr(pp, "StylePresetManagerDialog", FakeDialog)
+
+    win._property_panel._open_preset_manager()
+
+    reloaded = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    assert reloaded._style_presets["n3-template"].name == "N3 模板"
+    assert reloaded._style_presets["n3-template"].source_data == imported.source_data
 
 
 def test_property_panel_can_add_custom_scheme(qapp):
