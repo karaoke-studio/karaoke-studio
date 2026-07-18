@@ -132,6 +132,56 @@ def test_property_panel_uses_fluent_form_controls(qapp):
     assert isinstance(panel._save_layout_btn, TransparentToolButton)
 
 
+@pytest.mark.parametrize(
+    ("factory", "value", "suffix", "expected"),
+    (
+        (lambda: pp._spin(0, 200, suffix=" px"), 75, "px", "75"),
+        (
+            lambda: pp._double_spin(0, 100, decimals=3, suffix=" %"),
+            12.5,
+            "%",
+            "12.500",
+        ),
+    ),
+)
+def test_unit_spin_boxes_select_only_the_numeric_value(
+    qapp, factory, value, suffix, expected
+):
+    spin = factory()
+    spin.setValue(value)
+    spin.show()
+    editor = spin.lineEdit()
+    editor.setFocus()
+
+    QTest.keyClick(
+        editor, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier
+    )
+    qapp.processEvents()
+
+    assert editor.selectedText() == expected
+    assert suffix not in editor.selectedText()
+
+
+def test_unit_spin_box_keeps_mouse_selection_and_cursor_out_of_suffix(qapp):
+    spin = pp._spin(0, 200, suffix=" px")
+    spin.setValue(75)
+    editor = spin.lineEdit()
+    value_end = editor.text().index(" px")
+
+    editor.setSelection(0, len(editor.text()))
+    qapp.processEvents()
+    assert editor.selectedText() == "75"
+
+    editor.setSelection(value_end, len(" px"))
+    qapp.processEvents()
+    assert not editor.hasSelectedText()
+    assert editor.cursorPosition() == value_end
+
+    editor.setCursorPosition(len(editor.text()))
+    qapp.processEvents()
+    assert editor.cursorPosition() == value_end
+
+
 def test_font_combo_uses_n3_catalog_and_never_appends_unknown(
     monkeypatch, qapp
 ):

@@ -1931,7 +1931,81 @@ class _GradientStopsPasteDialog(QDialog):
         return True
 
 
-class _WheelFocusedSpinBox(FluentSpinBox):
+class _UnitProtectedSpinBoxMixin:
+    """Keep spin-box prefixes and suffixes outside the editable selection."""
+
+    def _install_unit_selection_guard(self) -> None:
+        self._protecting_unit_selection = False
+        editor = self.lineEdit()
+        editor.selectionChanged.connect(self._keep_units_out_of_selection)
+        editor.cursorPositionChanged.connect(self._keep_cursor_out_of_units)
+
+    def _editable_text_bounds(self) -> tuple[int, int]:
+        editor_text = self.lineEdit().text()
+        prefix = self.prefix()
+        suffix = self.suffix()
+        start = len(prefix) if prefix and editor_text.startswith(prefix) else 0
+        end = (
+            len(editor_text) - len(suffix)
+            if suffix and editor_text.endswith(suffix)
+            else len(editor_text)
+        )
+        return start, max(start, end)
+
+    def _keep_units_out_of_selection(self) -> None:
+        if self._protecting_unit_selection:
+            return
+        editor = self.lineEdit()
+        selection_start = editor.selectionStart()
+        if selection_start < 0:
+            return
+        selection_end = selection_start + len(editor.selectedText())
+        value_start, value_end = self._editable_text_bounds()
+        protected_start = max(selection_start, value_start)
+        protected_end = min(selection_end, value_end)
+        if (
+            protected_start == selection_start
+            and protected_end == selection_end
+        ):
+            return
+
+        self._protecting_unit_selection = True
+        try:
+            if protected_start >= protected_end:
+                editor.deselect()
+                editor.setCursorPosition(
+                    value_start if selection_end <= value_start else value_end
+                )
+            elif editor.cursorPosition() <= selection_start:
+                # Preserve the anchor/cursor direction for a backwards drag.
+                editor.setSelection(
+                    protected_end, protected_start - protected_end
+                )
+            else:
+                editor.setSelection(
+                    protected_start, protected_end - protected_start
+                )
+        finally:
+            self._protecting_unit_selection = False
+
+    def _keep_cursor_out_of_units(self, _old: int, current: int) -> None:
+        if self._protecting_unit_selection:
+            return
+        editor = self.lineEdit()
+        if editor.hasSelectedText():
+            return
+        value_start, value_end = self._editable_text_bounds()
+        protected_position = min(max(current, value_start), value_end)
+        if protected_position == current:
+            return
+        self._protecting_unit_selection = True
+        try:
+            editor.setCursorPosition(protected_position)
+        finally:
+            self._protecting_unit_selection = False
+
+
+class _WheelFocusedSpinBox(_UnitProtectedSpinBoxMixin, FluentSpinBox):
     """Direct-entry Fluent spin box without overlapping step controls."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -1946,6 +2020,7 @@ class _WheelFocusedSpinBox(FluentSpinBox):
         self.valueChanged.connect(
             lambda _value: QTimer.singleShot(0, self._sync_text_minimum)
         )
+        self._install_unit_selection_guard()
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt API
         super().showEvent(event)
@@ -1979,7 +2054,7 @@ class _WheelFocusedSpinBox(FluentSpinBox):
         super().wheelEvent(event)
 
 
-class _WheelFocusedDoubleSpinBox(FluentDoubleSpinBox):
+class _WheelFocusedDoubleSpinBox(_UnitProtectedSpinBoxMixin, FluentDoubleSpinBox):
     """Floating-point counterpart used for exact gradient stop positions."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
@@ -1991,6 +2066,7 @@ class _WheelFocusedDoubleSpinBox(FluentDoubleSpinBox):
         self.valueChanged.connect(
             lambda _value: QTimer.singleShot(0, self._sync_text_minimum)
         )
+        self._install_unit_selection_guard()
 
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
