@@ -8,6 +8,7 @@ from krok_helper.subtitle_render.engine.painter import _layout_line_uncached, pa
 from krok_helper.subtitle_render.engine.timeline import compute_display_lines, find_active_line
 from krok_helper.subtitle_render.frontend.lyrics_list import _CharRoleDialog
 from krok_helper.subtitle_render.frontend.lyrics_list import COL_CONTENT, LyricsPanel
+from krok_helper.subtitle_render.frontend.main_window import _GuideSymbolSettingsDialog
 from krok_helper.subtitle_render.guide_symbols import (
     guide_symbol_path,
     import_svg_guide_symbol,
@@ -19,12 +20,14 @@ from krok_helper.subtitle_render.models import (
     TimingLine,
     TimingTrack,
     guide_symbol_from_dict,
+    guide_symbol_role_labels,
     guide_symbol_to_dict,
+    guide_symbol_with_role_labels,
 )
 from krok_helper.subtitle_render.project_store import project_payload
 
 
-def _symbol(tmp_path, *, duration_ms: int = 1000) -> GuideSymbol:
+def _symbol(tmp_path, *, duration_ms: int = 1000, count: int = 1) -> GuideSymbol:
     path = tmp_path / "lead.svg"
     path.write_text(
         '<svg viewBox="0 0 100 100">'
@@ -33,7 +36,7 @@ def _symbol(tmp_path, *, duration_ms: int = 1000) -> GuideSymbol:
         "</g></svg>",
         encoding="utf-8",
     )
-    return import_svg_guide_symbol(path, duration_ms=duration_ms)
+    return import_svg_guide_symbol(path, duration_ms=duration_ms, count=count)
 
 
 def test_svg_import_becomes_embedded_glyph_outline(tmp_path):
@@ -80,6 +83,61 @@ def test_guide_symbol_is_first_timed_inline_glyph(tmp_path):
         continuity_snap_ms=0,
     )
     assert display[0].display_start_ms == 1000
+
+
+def test_multiple_guides_are_independent_evenly_timed_inline_glyphs(tmp_path):
+    symbol = _symbol(tmp_path, duration_ms=1000, count=3)
+    line = TimingLine(
+        chars=[TimingChar("歌", 5000), TimingChar("詞", 5500)],
+        end_ms=6000,
+        guide_symbol=symbol,
+    )
+    track = TimingTrack(lines=[line])
+
+    layout = _layout_line_uncached(
+        track, line, Style(font_family="Arial", font_size_px=72), 900, 450
+    )
+
+    assert layout is not None and layout.render_line is not None
+    assert len(layout.render_line.chars) == 5
+    assert [char.start_ms for char in layout.render_line.chars] == [
+        2000,
+        3000,
+        4000,
+        5000,
+        5500,
+    ]
+    assert layout.intervals[:3] == [(2000, 3000), (3000, 4000), (4000, 5000)]
+    assert all(char.vector_glyph == symbol for char in layout.render_line.chars[:3])
+    assert find_active_line(track, 2500) is line
+
+
+def test_multiple_guides_keep_independent_role_labels_in_project(tmp_path):
+    symbol = guide_symbol_with_role_labels(
+        _symbol(tmp_path, count=3), ["角色A", "角色B", None]
+    )
+
+    restored = guide_symbol_from_dict(guide_symbol_to_dict(symbol))
+
+    assert restored == symbol
+    assert guide_symbol_role_labels(restored) == ("角色A", "角色B", None)
+    assert TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("歌", 5000)], guide_symbol=restored)]
+    ).role_options == ["角色A", "角色B"]
+
+
+def test_legacy_guide_symbol_payload_defaults_to_one_glyph(tmp_path):
+    legacy = guide_symbol_to_dict(_symbol(tmp_path))
+    assert legacy is not None
+    legacy.pop("count")
+    legacy.pop("role_labels")
+    legacy["role_label"] = "角色A"
+
+    restored = guide_symbol_from_dict(legacy)
+
+    assert restored is not None
+    assert restored.count == 1
+    assert guide_symbol_role_labels(restored) == ("角色A",)
 
 
 def test_guide_symbol_renders_during_its_own_karaoke_interval(tmp_path):
@@ -136,6 +194,14 @@ def test_char_role_dialog_exposes_guide_as_first_selectable_character(tmp_path):
 
     assert dialog.char_labels() == ["导唱", None]
     assert dialog._chips.role_tooltip_text(0) == "导唱符 · 角色方案：导唱"
+    dialog.close()
+
+
+def test_guide_symbol_settings_dialog_returns_count_and_interval():
+    dialog = _GuideSymbolSettingsDialog(count=3, interval_ms=750)
+
+    assert dialog.windowTitle() == "导唱符设置"
+    assert dialog.settings() == (3, 750)
     dialog.close()
 
 

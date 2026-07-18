@@ -58,7 +58,29 @@ class GuideSymbol:
     units_per_em: int = 1000
     advance_width: float = 1000.0
     duration_ms: int = 1000
+    count: int = 1
     role_label: Optional[str] = None
+    role_labels: tuple[Optional[str], ...] = ()
+
+
+def guide_symbol_role_labels(symbol: GuideSymbol) -> tuple[Optional[str], ...]:
+    """Return one role label per inline guide glyph, preserving V1 fallback."""
+    count = max(int(symbol.count), 1)
+    labels = [label or None for label in symbol.role_labels[:count]]
+    labels.extend([symbol.role_label or None] * (count - len(labels)))
+    return tuple(labels)
+
+
+def guide_symbol_with_role_labels(
+    symbol: GuideSymbol, labels: list[Optional[str]] | tuple[Optional[str], ...]
+) -> GuideSymbol:
+    count = max(int(symbol.count), 1)
+    normalized = tuple(
+        (labels[index] or None) if index < len(labels) else None
+        for index in range(count)
+    )
+    shared = normalized[0] if normalized and len(set(normalized)) == 1 else None
+    return replace(symbol, role_label=shared, role_labels=normalized)
 
 
 @dataclass
@@ -212,13 +234,11 @@ class TimingTrack:
         seen: set[str] = set()
         options: list[str] = []
         for line in self.lines:
-            if (
-                line.guide_symbol is not None
-                and line.guide_symbol.role_label
-                and line.guide_symbol.role_label not in seen
-            ):
-                seen.add(line.guide_symbol.role_label)
-                options.append(line.guide_symbol.role_label)
+            if line.guide_symbol is not None:
+                for label in guide_symbol_role_labels(line.guide_symbol):
+                    if label and label not in seen:
+                        seen.add(label)
+                        options.append(label)
             for ch in line.chars:
                 label = ch.role_label
                 if label and label not in seen:
@@ -233,7 +253,10 @@ def timing_line_start_ms(line: TimingLine) -> int:
         return 0
     start = int(line.chars[0].start_ms)
     if line.guide_symbol is not None:
-        start -= max(int(line.guide_symbol.duration_ms), 0)
+        start -= (
+            max(int(line.guide_symbol.duration_ms), 0)
+            * max(int(line.guide_symbol.count), 1)
+        )
     return start
 
 
@@ -1202,7 +1225,9 @@ def guide_symbol_to_dict(symbol: Optional[GuideSymbol]) -> Optional[dict[str, ob
         "units_per_em": max(int(symbol.units_per_em), 1),
         "advance_width": max(float(symbol.advance_width), 0.0),
         "duration_ms": max(int(symbol.duration_ms), 0),
+        "count": max(int(symbol.count), 1),
         "role_label": symbol.role_label or None,
+        "role_labels": [label or None for label in symbol.role_labels],
     }
 
 
@@ -1225,18 +1250,27 @@ def guide_symbol_from_dict(value: object) -> Optional[GuideSymbol]:
         units_per_em = max(int(value.get("units_per_em", 1000)), 1)
         advance_width = max(float(value.get("advance_width", units_per_em)), 0.0)
         duration_ms = max(int(value.get("duration_ms", 1000)), 0)
+        count = max(int(value.get("count", 1)), 1)
     except (TypeError, ValueError):
         return None
     if not commands:
         return None
     role = value.get("role_label")
+    raw_role_labels = value.get("role_labels")
+    role_labels = (
+        tuple(str(label).strip() or None if label else None for label in raw_role_labels[:count])
+        if isinstance(raw_role_labels, list)
+        else ()
+    )
     return GuideSymbol(
         name=str(value.get("name") or "导唱符"),
         path_commands=tuple(commands),
         units_per_em=units_per_em,
         advance_width=advance_width,
         duration_ms=duration_ms,
+        count=count,
         role_label=str(role).strip() or None if role else None,
+        role_labels=role_labels,
     )
 
 

@@ -75,6 +75,7 @@ from krok_helper.subtitle_render.models import (
     TimingLine,
     TimingTrack,
     TitleOverlay,
+    guide_symbol_role_labels,
     normalize_title_char_role_labels,
 )
 from krok_helper.subtitle_render.frontend.theme import palette, themed
@@ -328,7 +329,9 @@ def _line_role_labels(line) -> list[str]:
     """行内非空白字符的角色标签序列（无角色为空串）。"""
     labels = []
     if line.guide_symbol is not None:
-        labels.append(str(line.guide_symbol.role_label or ""))
+        labels.extend(
+            str(label or "") for label in guide_symbol_role_labels(line.guide_symbol)
+        )
     labels.extend(str(ch.role_label or "") for ch in line.chars if ch.text.strip())
     return labels
 
@@ -1027,7 +1030,7 @@ class LyricsPanel(DropPanel):
                     content_item.setIcon(_guide_symbol_icon(line.guide_symbol))
                     content_item.setToolTip(
                         f"行前导唱符：{line.guide_symbol.name} · "
-                        f"{line.guide_symbol.duration_ms} ms"
+                        f"{line.guide_symbol.count} 个 · 间隔 {line.guide_symbol.duration_ms} ms"
                     )
                 content_item.setFlags(
                     content_item.flags() & ~Qt.ItemFlag.ItemIsEditable
@@ -1450,7 +1453,7 @@ class LyricsPanel(DropPanel):
                     content_item.setIcon(_guide_symbol_icon(line.guide_symbol))
                     content_item.setToolTip(
                         f"行前导唱符：{line.guide_symbol.name} · "
-                        f"{line.guide_symbol.duration_ms} ms"
+                        f"{line.guide_symbol.count} 个 · 间隔 {line.guide_symbol.duration_ms} ms"
                     )
                 else:
                     content_item.setIcon(QIcon())
@@ -1759,9 +1762,10 @@ class LyricsPanel(DropPanel):
         labels = [ch.role_label for ch in line.chars]
         vector_symbols: list[Optional[GuideSymbol]] = [None] * len(texts)
         if guide is not None:
-            texts.insert(0, "导")
-            labels.insert(0, guide.role_label)
-            vector_symbols.insert(0, guide)
+            guide_count = max(int(guide.count), 1)
+            texts[0:0] = ["导"] * guide_count
+            labels[0:0] = list(guide_symbol_role_labels(guide))
+            vector_symbols[0:0] = [guide] * guide_count
         dialog = _CharRoleDialog(
             row,
             texts,
@@ -1777,13 +1781,14 @@ class LyricsPanel(DropPanel):
             return
         labels = dialog.char_labels()
         if guide is not None:
-            guide_label = labels[0]
-            char_labels = labels[1:]
-            if guide_label == guide.role_label and char_labels == [
+            guide_count = max(int(guide.count), 1)
+            guide_labels = labels[:guide_count]
+            char_labels = labels[guide_count:]
+            if guide_labels == list(guide_symbol_role_labels(guide)) and char_labels == [
                 ch.role_label for ch in line.chars
             ]:
                 return
-            self.guideCharRolesChanged.emit(row, guide_label, char_labels)
+            self.guideCharRolesChanged.emit(row, guide_labels, char_labels)
             return
         if labels == [ch.role_label for ch in line.chars]:
             return
@@ -1827,8 +1832,10 @@ class LyricsPanel(DropPanel):
 def _dominant_role(line) -> str:
     """返回本行出现次数最多的角色标签；无角色时返回空字符串。"""
     roles = []
-    if line.guide_symbol is not None and line.guide_symbol.role_label:
-        roles.append(line.guide_symbol.role_label)
+    if line.guide_symbol is not None:
+        roles.extend(
+            label for label in guide_symbol_role_labels(line.guide_symbol) if label
+        )
     roles.extend(ch.role_label for ch in line.chars if ch.role_label)
     if not roles:
         return ""

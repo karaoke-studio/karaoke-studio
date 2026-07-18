@@ -511,6 +511,7 @@ from krok_helper.subtitle_render.models import (
     TitleOverlay,
     normalize_title_char_role_labels,
     normalize_glow_concentration_level,
+    guide_symbol_role_labels,
     style_with_line_animation,
     timing_line_start_ms,
 )
@@ -4863,13 +4864,18 @@ def _line_with_guide_symbol(line: TimingLine) -> TimingLine:
     if symbol is None or not symbol.path_commands or not line.chars:
         return line
     first_start = int(line.chars[0].start_ms)
-    guide = TimingChar(
-        text="\uFFFC",
-        start_ms=first_start - max(int(symbol.duration_ms), 0),
-        role_label=symbol.role_label,
-        vector_glyph=symbol,
-    )
-    return replace(line, chars=[guide, *line.chars], guide_symbol=None)
+    interval = max(int(symbol.duration_ms), 0)
+    labels = guide_symbol_role_labels(symbol)
+    guides = [
+        TimingChar(
+            text="\uFFFC",
+            start_ms=first_start - interval * (len(labels) - index),
+            role_label=label,
+            vector_glyph=symbol,
+        )
+        for index, label in enumerate(labels)
+    ]
+    return replace(line, chars=[*guides, *line.chars], guide_symbol=None)
 
 
 def _vector_glyph_width(symbol, style: Style) -> int:

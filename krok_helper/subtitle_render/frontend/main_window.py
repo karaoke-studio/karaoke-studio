@@ -58,6 +58,7 @@ from PyQt6.QtWidgets import (
 )
 from qfluentwidgets import (
     Action,
+    BodyLabel,
     CaptionLabel,
     CheckBox,
     ComboBox as FluentComboBox,
@@ -110,6 +111,7 @@ from krok_helper.subtitle_render.guide_symbols import (
 )
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
 from krok_helper.subtitle_render.frontend.fluent_dialogs import (
+    fluent_button_row,
     fluent_choice,
     fluent_error,
     fluent_get_int,
@@ -146,6 +148,8 @@ from krok_helper.subtitle_render.models import (
     TimingTrack,
     background_sequence_frame_path,
     guide_symbol_from_dict,
+    guide_symbol_role_labels,
+    guide_symbol_with_role_labels,
     guide_symbol_to_dict,
     line_animation_override_from_dict,
     line_animation_override_to_dict,
@@ -331,6 +335,51 @@ class _ExportLocationDialog(QDialog):
     def selection(self) -> tuple[str, str]:
         mode = EXPORT_DIR_CUSTOM if self.custom_radio.isChecked() else EXPORT_DIR_SOURCE_VIDEO
         return mode, self.directory_edit.text().strip()
+
+
+class _GuideSymbolSettingsDialog(QDialog):
+    """Configure how many inline guide glyphs precede a lyric line."""
+
+    def __init__(
+        self,
+        *,
+        count: int = 1,
+        interval_ms: int = 1000,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent.window() if parent is not None else None)
+        self.setWindowTitle("导唱符设置")
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setMinimumWidth(460)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+
+        layout.addWidget(BodyLabel("插入的导唱符数量：", self))
+        self.count_spin = FluentSpinBox(self)
+        self.count_spin.setRange(1, 32)
+        self.count_spin.setValue(max(1, min(int(count), 32)))
+        layout.addWidget(self.count_spin)
+
+        layout.addWidget(BodyLabel("每个导唱符距离后一个字符多少毫秒：", self))
+        self.interval_spin = FluentSpinBox(self)
+        self.interval_spin.setRange(0, 10_000)
+        self.interval_spin.setSingleStep(50)
+        self.interval_spin.setValue(max(0, min(int(interval_ms), 10_000)))
+        self.interval_spin.selectAll()
+        layout.addWidget(self.interval_spin)
+
+        hint = CaptionLabel(
+            "例如数量为 3、间隔为 1000ms，会在歌词首字前 3000、2000、1000ms 依次走字。",
+            self,
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        button_row, self.ok_button, _cancel_button = fluent_button_row(self)
+        layout.addLayout(button_row)
+
+    def settings(self) -> tuple[int, int]:
+        return int(self.count_spin.value()), int(self.interval_spin.value())
 
 
 class _AutoSaveSettingsDialog(QDialog):
@@ -4519,7 +4568,10 @@ class SubtitleRenderWindow(QWidget):
         )
         new_values = tuple(
             (
-                replace(track.lines[row].guide_symbol, role_label=label)
+                guide_symbol_with_role_labels(
+                    track.lines[row].guide_symbol,
+                    [label] * max(int(track.lines[row].guide_symbol.count), 1),
+                )
                 if track.lines[row].guide_symbol is not None
                 else None,
                 tuple(label for _ch in track.lines[row].chars),
@@ -4580,20 +4632,18 @@ class SubtitleRenderWindow(QWidget):
         )
         if not path_str:
             return
-        duration_ms, accepted = fluent_get_int(
-            self,
-            "导唱符时长",
-            "导唱符从走字前多少毫秒开始：",
-            value=1000,
-            minimum=0,
-            maximum=10000,
-            step=50,
+        current = track.lines[valid_rows[0]].guide_symbol
+        settings_dialog = _GuideSymbolSettingsDialog(
+            count=current.count if current is not None else 1,
+            interval_ms=current.duration_ms if current is not None else 1000,
+            parent=self,
         )
-        if not accepted:
+        if settings_dialog.exec() != QDialog.DialogCode.Accepted:
             return
+        count, duration_ms = settings_dialog.settings()
         try:
             symbol = import_svg_guide_symbol(
-                Path(path_str), duration_ms=duration_ms
+                Path(path_str), duration_ms=duration_ms, count=count
             )
         except GuideSymbolImportError as exc:
             fluent_error(self, "无法导入导唱符", str(exc))
@@ -4639,19 +4689,27 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_after_guide_symbols_changed(valid_rows)
 
     def _on_guide_char_roles_changed(
-        self, row: int, guide_label: object, labels: list
+        self, row: int, guide_labels: object, labels: list
     ) -> None:
         track = self._active_track()
         if track is None or not 0 <= row < len(track.lines):
             return
         line = track.lines[row]
         symbol = line.guide_symbol
-        if symbol is None or len(labels) != len(line.chars):
+        if (
+            symbol is None
+            or len(labels) != len(line.chars)
+            or not isinstance(guide_labels, list)
+            or len(guide_labels) != max(int(symbol.count), 1)
+        ):
             return
-        normalized_guide = str(guide_label).strip() or None if guide_label else None
+        normalized_guides = [
+            str(label).strip() or None if label else None
+            for label in guide_labels
+        ]
         normalized = [str(label).strip() or None if label else None for label in labels]
         old_value = (symbol, tuple(ch.role_label for ch in line.chars))
-        new_symbol = replace(symbol, role_label=normalized_guide)
+        new_symbol = guide_symbol_with_role_labels(symbol, normalized_guides)
         new_value = (new_symbol, tuple(normalized))
         if old_value == new_value:
             return
@@ -4659,7 +4717,7 @@ class SubtitleRenderWindow(QWidget):
         for char, label in zip(line.chars, normalized):
             char.role_label = label
         self._materialize_role_schemes(
-            {label for label in [normalized_guide, *normalized] if label}
+            {label for label in [*normalized_guides, *normalized] if label}
         )
         self._undo_stack.append(
             ("guide_char_roles", self._active_source_index, row, old_value, new_value)
@@ -4714,7 +4772,10 @@ class SubtitleRenderWindow(QWidget):
         new_labels = tuple(labels)
         old_symbol = line.guide_symbol
         new_symbol = (
-            replace(old_symbol, role_label=labels[0] if labels else None)
+            guide_symbol_with_role_labels(
+                old_symbol,
+                [labels[0] if labels else None] * max(int(old_symbol.count), 1),
+            )
             if old_symbol is not None
             else None
         )

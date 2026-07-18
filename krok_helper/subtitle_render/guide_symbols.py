@@ -45,6 +45,7 @@ def import_svg_guide_symbol(
     path: Path,
     *,
     duration_ms: int = 1000,
+    count: int = 1,
     role_label: str | None = None,
 ) -> GuideSymbol:
     """把常见 SVG path/shape 展开并归一化为 1000 em 的行内字形。"""
@@ -55,7 +56,7 @@ def import_svg_guide_symbol(
 
     outline = QPainterPath()
     pen = _PainterPathPen(outline)
-    count = 0
+    drawable_count = 0
     for element, transform in _iter_drawables(root):
         path_data = _element_to_path_data(element)
         if not path_data:
@@ -64,9 +65,9 @@ def import_svg_guide_symbol(
             parse_path(path_data, TransformPen(pen, transform))
         except Exception as exc:  # fontTools exposes parser-specific exceptions
             raise GuideSymbolImportError(f"{path.name} 的轮廓解析失败：{exc}") from exc
-        count += 1
+        drawable_count += 1
     bounds = outline.boundingRect()
-    if count == 0 or outline.isEmpty() or bounds.width() <= 0 or bounds.height() <= 0:
+    if drawable_count == 0 or outline.isEmpty() or bounds.width() <= 0 or bounds.height() <= 0:
         raise GuideSymbolImportError(
             "SVG 中没有可用的 path/shape；仅描边图形请先在矢量软件中扩展描边。"
         )
@@ -97,6 +98,7 @@ def import_svg_guide_symbol(
         units_per_em=units_per_em,
         advance_width=float(units_per_em),
         duration_ms=max(int(duration_ms), 0),
+        count=max(int(count), 1),
         role_label=role_label or None,
     )
 
