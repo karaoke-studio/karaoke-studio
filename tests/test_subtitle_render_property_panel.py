@@ -132,6 +132,106 @@ def test_property_panel_uses_fluent_form_controls(qapp):
     assert isinstance(panel._save_layout_btn, TransparentToolButton)
 
 
+def test_font_weight_menu_only_shows_selected_font_weights(
+    monkeypatch, qapp
+):
+    families = ("Demo Sans", "MyEmoji5", "Variable Font")
+    available = {
+        "Demo Sans": (400, 700),
+        "MyEmoji5": (400,),
+        "Variable Font": (100, 400, 700, 900),
+    }
+    monkeypatch.setattr(pp, "n3_font_families", lambda: families)
+    monkeypatch.setattr(
+        pp,
+        "canonicalize_n3_font_family",
+        lambda family: family if family in families else None,
+    )
+    monkeypatch.setattr(
+        pp,
+        "_available_font_weights",
+        lambda family: available.get(family, pp._DEFAULT_FONT_WEIGHTS),
+    )
+    monkeypatch.setattr(
+        pp,
+        "_supports_synthetic_bold",
+        lambda family, _weights: family == "MyEmoji5",
+    )
+    panel = PropertyPanel()
+    panel.set_style(Style(font_family="Variable Font", font_weight=900))
+
+    assert [
+        panel._font_weight_combo.itemData(index)
+        for index in range(panel._font_weight_combo.count())
+    ] == [100, 400, 700, 900]
+    assert panel._font_weight_combo.itemText(0) == "极细 100"
+
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+    panel._font_combo.setCurrentFont(QFont("MyEmoji5"))
+
+    assert [
+        panel._font_weight_combo.itemData(index)
+        for index in range(panel._font_weight_combo.count())
+    ] == [400, 700]
+    assert panel._font_weight_combo.currentText() == "粗体 700（合成）"
+    assert panel.subtitle_style.font_family == "MyEmoji5"
+    assert panel.subtitle_style.font_weight == 700
+    assert emitted[-1].font_weight == 700
+
+
+def test_inherited_font_weight_menu_tracks_effective_parent_font(
+    monkeypatch, qapp
+):
+    families = ("Demo Sans", "MyEmoji5")
+    monkeypatch.setattr(pp, "n3_font_families", lambda: families)
+    monkeypatch.setattr(
+        pp,
+        "canonicalize_n3_font_family",
+        lambda family: family if family in families else None,
+    )
+    monkeypatch.setattr(
+        pp,
+        "_available_font_weights",
+        lambda family: (400,) if family == "MyEmoji5" else (400, 700),
+    )
+    monkeypatch.setattr(
+        pp,
+        "_supports_synthetic_bold",
+        lambda family, _weights: family == "MyEmoji5",
+    )
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            font_family="Demo Sans",
+            font_weight=700,
+            font_family_latin=None,
+            latin_font_weight=None,
+        )
+    )
+
+    assert [
+        panel._font_latin_weight_combo.itemData(index)
+        for index in range(panel._font_latin_weight_combo.count())
+    ] == [0, 400, 700]
+    assert panel._font_latin_weight_combo.currentData() == 0
+
+    panel._font_combo.setCurrentFont(QFont("MyEmoji5"))
+
+    assert [
+        panel._font_latin_weight_combo.itemData(index)
+        for index in range(panel._font_latin_weight_combo.count())
+    ] == [0, 400, 700]
+    assert (
+        panel._font_latin_weight_combo.itemText(
+            panel._font_latin_weight_combo.findData(700)
+        )
+        == "粗体 700（合成）"
+    )
+    assert panel._font_latin_weight_combo.currentData() == 0
+    assert panel.subtitle_style.latin_font_weight is None
+
+
 @pytest.mark.parametrize(
     ("factory", "value", "suffix", "expected"),
     (

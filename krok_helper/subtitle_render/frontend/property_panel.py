@@ -30,6 +30,8 @@ from PyQt6.QtGui import (
     QColor,
     QCursor,
     QFont,
+    QFontDatabase,
+    QFontInfo,
     QIcon,
     QImage,
     QLinearGradient,
@@ -215,6 +217,60 @@ _AUTO_ROLE_COLORS = (
     "#14B8A6",
     "#EC4899",
 )
+_DEFAULT_FONT_WEIGHTS = (400, 500, 600, 700, 800, 900)
+_FONT_WEIGHT_LABELS = {
+    100: "极细",
+    200: "特细",
+    300: "细体",
+    400: "常规",
+    500: "中等",
+    600: "半粗",
+    700: "粗体",
+    800: "特粗",
+    900: "黑体",
+}
+
+
+def _available_font_weights(family: str) -> tuple[int, ...]:
+    """Return the distinct weights Qt can actually resolve for a font family."""
+    try:
+        styles = QFontDatabase.styles(str(family))
+        weights = {
+            int(QFontDatabase.weight(str(family), style))
+            for style in styles
+        }
+    except (RuntimeError, TypeError, ValueError):
+        weights = set()
+    normalized = tuple(sorted(weight for weight in weights if 1 <= weight <= 1000))
+    # Missing project fonts and headless Qt platforms expose no style metadata.
+    # Keep the legacy choices in that case instead of forcing an arbitrary value.
+    return normalized or _DEFAULT_FONT_WEIGHTS
+
+
+def _font_weight_label(weight: int) -> str:
+    label = _FONT_WEIGHT_LABELS.get(int(weight), "字重")
+    return f"{label} {int(weight)}"
+
+
+def _supports_synthetic_bold(family: str, physical_weights: tuple[int, ...]) -> bool:
+    """Whether Qt resolves a non-physical 700 face as synthetic bold."""
+    if 700 in physical_weights:
+        return False
+    try:
+        physical_styles = {
+            style.casefold() for style in QFontDatabase.styles(str(family))
+        }
+        if not physical_styles:
+            return False
+        requested = QFont(str(family))
+        requested.setWeight(QFont.Weight.Bold)
+        resolved = QFontInfo(requested)
+    except (RuntimeError, TypeError, ValueError):
+        return False
+    if resolved.family().casefold() != str(family).casefold():
+        return False
+    resolved_style = resolved.styleName().casefold()
+    return "bold" in resolved_style and resolved_style not in physical_styles
 
 
 def _normalize_style_presets(
@@ -4143,6 +4199,14 @@ class PropertyPanel(QWidget):
         self._font_stroke_controls: dict[
             tuple[str, str], tuple[FluentSpinBox, CheckBox, FluentSpinBox]
         ] = {}
+        self._font_controls: dict[
+            tuple[str, str],
+            tuple[
+                _WheelFocusedFontComboBox,
+                _WheelFocusedComboBox,
+                Optional[str],
+            ],
+        ] = {}
         for subject, script in (
             ("main", "japanese"),
             ("main", "latin"),
@@ -4191,12 +4255,15 @@ class PropertyPanel(QWidget):
         font_combo = _WheelFocusedFontComboBox(page)
         _compact_control(font_combo)
         inherits_script = script == "latin"
+        inheritance_label: Optional[str] = None
         if (subject, script) == ("main", "latin"):
-            font_combo.enable_inheritance("跟随主文字日文（0）")
+            inheritance_label = "跟随主文字日文（0）"
         elif (subject, script) == ("ruby", "japanese"):
-            font_combo.enable_inheritance("跟随主文字（0）")
+            inheritance_label = "跟随主文字（0）"
         elif (subject, script) == ("ruby", "latin"):
-            font_combo.enable_inheritance("跟随注音日文（0）")
+            inheritance_label = "跟随注音日文（0）"
+        if inheritance_label is not None:
+            font_combo.enable_inheritance(inheritance_label)
         size_spin = _spin(
             0 if inherits_script else (8 if subject == "ruby" else 12),
             180,
@@ -4204,25 +4271,25 @@ class PropertyPanel(QWidget):
         )
         weight_combo = _WheelFocusedComboBox(page)
         _compact_control(weight_combo)
-        if (subject, script) == ("main", "latin"):
-            weight_combo.addItem("跟随主文字日文（0）", 0)
-        elif (subject, script) == ("ruby", "japanese"):
-            weight_combo.addItem("跟随主文字（0）", 0)
-        elif (subject, script) == ("ruby", "latin"):
-            weight_combo.addItem("跟随注音日文（0）", 0)
-        for label, value in [
-            ("常规 400", 400), ("中等 500", 500), ("半粗 600", 600),
-            ("粗体 700", 700), ("特粗 800", 800), ("黑体 900", 900),
-        ]:
-            weight_combo.addItem(label, value)
+        slot = (subject, script)
+        self._font_controls[slot] = (
+            font_combo,
+            weight_combo,
+            inheritance_label,
+        )
+        self._refresh_font_weight_combo(
+            slot, preferred_weight=0 if inheritance_label is not None else 400
+        )
+        font_combo.currentFontChanged.connect(
+            lambda font, current_slot=slot: self._on_font_family_changed(
+                current_slot, font
+            )
+        )
 
         if (subject, script) == ("main", "japanese"):
             self._font_combo = font_combo
             self._font_size_spin = size_spin
             self._font_weight_combo = weight_combo
-            font_combo.currentFontChanged.connect(
-                lambda font: self._update_style(font_family=font.family())
-            )
             size_spin.valueChanged.connect(
                 lambda value: self._update_style(font_size_px=value)
             )
@@ -4235,7 +4302,6 @@ class PropertyPanel(QWidget):
             self._font_latin_combo = font_combo
             self._font_latin_size_spin = size_spin
             self._font_latin_weight_combo = weight_combo
-            font_combo.currentFontChanged.connect(self._on_font_latin_changed)
             size_spin.valueChanged.connect(
                 lambda value: self._update_style(
                     latin_font_size_px=None if value == 0 else value
@@ -4254,7 +4320,6 @@ class PropertyPanel(QWidget):
             self._ruby_font_combo = font_combo
             self._ruby_font_size_spin = size_spin
             self._ruby_font_weight_combo = weight_combo
-            font_combo.currentFontChanged.connect(self._on_ruby_font_changed)
             size_spin.valueChanged.connect(
                 lambda value: self._update_ruby_font_override(
                     ruby_font_size_px=value
@@ -4273,7 +4338,6 @@ class PropertyPanel(QWidget):
             self._ruby_font_latin_combo = font_combo
             self._ruby_font_latin_size_spin = size_spin
             self._ruby_font_latin_weight_combo = weight_combo
-            font_combo.currentFontChanged.connect(self._on_ruby_latin_font_changed)
             size_spin.valueChanged.connect(
                 lambda value: self._update_ruby_font_override(
                     ruby_latin_font_size_px=None if value == 0 else value
@@ -4414,28 +4478,125 @@ class PropertyPanel(QWidget):
         changes["ruby_font_follow_main"] = False
         self._update_style(**changes)
 
-    def _on_font_latin_changed(self, font: QFont) -> None:
+    def _effective_font_family(self, slot: tuple[str, str]) -> str:
+        font_combo, _weight_combo, _inheritance_label = self._font_controls[slot]
+        if not font_combo.is_inherited():
+            return font_combo.currentFont().family()
+        parent_slot = {
+            ("main", "latin"): ("main", "japanese"),
+            ("ruby", "japanese"): ("main", "japanese"),
+            ("ruby", "latin"): ("ruby", "japanese"),
+        }.get(slot)
+        if parent_slot is None:
+            return font_combo.currentFont().family()
+        return self._effective_font_family(parent_slot)
+
+    def _refresh_font_weight_combo(
+        self,
+        slot: tuple[str, str],
+        *,
+        preferred_weight: Optional[int] = None,
+    ) -> int:
+        _font_combo, weight_combo, inheritance_label = self._font_controls[slot]
+        if preferred_weight is None:
+            current_data = weight_combo.currentData()
+            preferred_weight = int(current_data) if current_data is not None else 400
+        family = self._effective_font_family(slot)
+        physical_weights = _available_font_weights(family)
+        synthetic_bold = _supports_synthetic_bold(family, physical_weights)
+        weights = tuple(
+            sorted(set(physical_weights) | ({700} if synthetic_bold else set()))
+        )
+        if preferred_weight == 0 and inheritance_label is not None:
+            selected_weight = 0
+        else:
+            selected_weight = min(
+                weights,
+                key=lambda candidate: (abs(candidate - int(preferred_weight)), candidate),
+            )
+
+        was_blocked = weight_combo.blockSignals(True)
+        try:
+            weight_combo.clear()
+            if inheritance_label is not None:
+                weight_combo.addItem(inheritance_label, 0)
+            for weight in weights:
+                label = _font_weight_label(weight)
+                if synthetic_bold and weight == 700:
+                    label += "（合成）"
+                weight_combo.addItem(label, weight)
+            weight_combo.setCurrentIndex(
+                max(0, weight_combo.findData(selected_weight))
+            )
+        finally:
+            weight_combo.blockSignals(was_blocked)
+        return selected_weight
+
+    def _refresh_font_weight_combos(
+        self,
+        preferred_weights: Optional[dict[tuple[str, str], int]] = None,
+    ) -> dict[tuple[str, str], int]:
+        preferred_weights = preferred_weights or {}
+        resolved: dict[tuple[str, str], int] = {}
+        for slot in (
+            ("main", "japanese"),
+            ("main", "latin"),
+            ("ruby", "japanese"),
+            ("ruby", "latin"),
+        ):
+            resolved[slot] = self._refresh_font_weight_combo(
+                slot,
+                preferred_weight=preferred_weights.get(slot),
+            )
+        return resolved
+
+    @staticmethod
+    def _font_weight_change(slot: tuple[str, str], weight: int) -> tuple[str, object]:
+        field_name = {
+            ("main", "japanese"): "font_weight",
+            ("main", "latin"): "latin_font_weight",
+            ("ruby", "japanese"): "ruby_font_weight",
+            ("ruby", "latin"): "ruby_latin_font_weight",
+        }[slot]
+        value: object = int(weight)
+        if slot != ("main", "japanese") and weight == 0:
+            value = None
+        return field_name, value
+
+    def _on_font_family_changed(
+        self, slot: tuple[str, str], font: QFont
+    ) -> None:
+        previous_weights = {
+            current_slot: int(controls[1].currentData())
+            for current_slot, controls in self._font_controls.items()
+            if controls[1].currentData() is not None
+        }
+        resolved_weights = self._refresh_font_weight_combos(previous_weights)
         if self._syncing:
             return
-        self._update_style(
-            font_family_latin=(
-                None if self._font_latin_combo.is_inherited() else font.family()
-            )
-        )
 
-    def _on_ruby_font_changed(self, font: QFont) -> None:
-        self._update_ruby_font_override(
-            ruby_font_family=(
-                None if self._ruby_font_combo.is_inherited() else font.family()
-            )
-        )
-
-    def _on_ruby_latin_font_changed(self, font: QFont) -> None:
-        self._update_ruby_font_override(
-            ruby_font_family_latin=(
-                None if self._ruby_font_latin_combo.is_inherited() else font.family()
-            )
-        )
+        font_combo, _weight_combo, _inheritance_label = self._font_controls[slot]
+        family_field = {
+            ("main", "japanese"): "font_family",
+            ("main", "latin"): "font_family_latin",
+            ("ruby", "japanese"): "ruby_font_family",
+            ("ruby", "latin"): "ruby_font_family_latin",
+        }[slot]
+        changes: dict[str, object] = {
+            family_field: None if font_combo.is_inherited() else font.family()
+        }
+        for current_slot, resolved_weight in resolved_weights.items():
+            if (
+                current_slot == slot
+                or resolved_weight != previous_weights.get(current_slot)
+            ):
+                field_name, value = self._font_weight_change(
+                    current_slot, resolved_weight
+                )
+                changes[field_name] = value
+        if slot[0] == "ruby":
+            changes["ruby_font_follow_main"] = False
+        self._update_style(**changes)
 
     def _make_character_layout_group(self, parent: QWidget) -> QWidget:
         """左侧紧凑字符排版组，与智能水平共享幕布侧边区域。"""
@@ -7133,18 +7294,7 @@ class PropertyPanel(QWidget):
                 0 if latin_size is None else int(latin_size)
             )
             self._space_width_spin.setValue(int(self._scheme_value("space_width_percent")))
-            self._font_weight_combo.setCurrentIndex(
-                max(0, self._font_weight_combo.findData(int(self._scheme_value("font_weight"))))
-            )
             latin_weight = self._scheme_value("latin_font_weight")
-            self._font_latin_weight_combo.setCurrentIndex(
-                max(
-                    0,
-                    self._font_latin_weight_combo.findData(
-                        0 if latin_weight is None else int(latin_weight)
-                    ),
-                )
-            )
             self._italic_check.setChecked(bool(self._scheme_value("italic")))
             self._ruby_anchor_check.setChecked(
                 bool(self._scheme_value("affects_ruby_anchor"))
@@ -7157,14 +7307,6 @@ class PropertyPanel(QWidget):
             else:
                 self._ruby_font_combo.setCurrentFont(QFont(str(ruby_family)))
             self._ruby_font_size_spin.setValue(int(ruby_size))
-            self._ruby_font_weight_combo.setCurrentIndex(
-                max(
-                    0,
-                    self._ruby_font_weight_combo.findData(
-                        0 if ruby_weight is None else int(ruby_weight)
-                    ),
-                )
-            )
             ruby_latin_family = self._scheme_value("ruby_font_family_latin")
             ruby_latin_size = self._scheme_value("ruby_latin_font_size_px")
             ruby_latin_weight = self._scheme_value("ruby_latin_font_weight")
@@ -7175,13 +7317,19 @@ class PropertyPanel(QWidget):
             self._ruby_font_latin_size_spin.setValue(
                 0 if ruby_latin_size is None else int(ruby_latin_size)
             )
-            self._ruby_font_latin_weight_combo.setCurrentIndex(
-                max(
-                    0,
-                    self._ruby_font_latin_weight_combo.findData(
+            self._refresh_font_weight_combos(
+                {
+                    ("main", "japanese"): int(self._scheme_value("font_weight")),
+                    ("main", "latin"): (
+                        0 if latin_weight is None else int(latin_weight)
+                    ),
+                    ("ruby", "japanese"): (
+                        0 if ruby_weight is None else int(ruby_weight)
+                    ),
+                    ("ruby", "latin"): (
                         0 if ruby_latin_weight is None else int(ruby_latin_weight)
                     ),
-                )
+                }
             )
             self._sync_font_stroke_controls()
             self._sync_color_subject_style_controls()
