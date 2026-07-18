@@ -390,6 +390,12 @@ def _value_signature(value) -> Hashable:
     所以 key 必须完全由当前值构成，不掺对象 id。"""
     if value is None or isinstance(value, (str, int, float, bool)):
         return value
+    # GuideSymbol is the only frozen model carrying a potentially very large
+    # immutable tuple (the complete SVG outline).  Reusing the frozen value as
+    # the key preserves value-based invalidation while avoiding a Python-level
+    # recursive copy of every path command for every layout/layer cache lookup.
+    if isinstance(value, GuideSymbol):
+        return value
     if isinstance(value, (list, tuple)):
         return tuple(_value_signature(item) for item in value)
     if isinstance(value, dict):
@@ -495,6 +501,7 @@ from krok_helper.subtitle_render.engine.timeline import (
 from krok_helper.subtitle_render.engine.animator import line_animation_state
 from krok_helper.subtitle_render.models import (
     DecorationKind,
+    GuideSymbol,
     KaraokeColors,
     KaraokeColorState,
     LYRICS_LAYOUT_CHAR_FIELDS,

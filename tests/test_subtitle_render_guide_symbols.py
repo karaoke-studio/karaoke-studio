@@ -4,6 +4,7 @@ from dataclasses import replace
 
 from PyQt6.QtGui import QImage
 
+from krok_helper.subtitle_render.engine import painter as subtitle_painter
 from krok_helper.subtitle_render.engine.painter import _layout_line_uncached, paint_frame
 from krok_helper.subtitle_render.engine.timeline import compute_display_lines, find_active_line
 from krok_helper.subtitle_render.frontend.lyrics_list import _CharRoleDialog
@@ -51,6 +52,14 @@ def test_svg_import_becomes_embedded_glyph_outline(tmp_path):
 
     restored = guide_symbol_from_dict(guide_symbol_to_dict(symbol))
     assert restored == symbol
+
+
+def test_guide_symbol_cache_signature_reuses_frozen_outline_model(tmp_path):
+    symbol = _symbol(tmp_path)
+
+    signature = subtitle_painter._value_signature(symbol)
+
+    assert signature is symbol
 
 
 def test_guide_symbol_is_first_timed_inline_glyph(tmp_path):
@@ -110,6 +119,37 @@ def test_multiple_guides_are_independent_evenly_timed_inline_glyphs(tmp_path):
     assert layout.intervals[:3] == [(2000, 3000), (3000, 4000), (4000, 5000)]
     assert all(char.vector_glyph == symbol for char in layout.render_line.chars[:3])
     assert find_active_line(track, 2500) is line
+
+
+def test_multiple_guide_line_hits_layout_and_layer_caches(tmp_path):
+    symbol = _symbol(tmp_path, duration_ms=1000, count=3)
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("歌", 5000), TimingChar("詞", 5500)],
+                end_ms=6000,
+                guide_symbol=symbol,
+            )
+        ]
+    )
+    style = Style(font_family="Arial", font_size_px=72)
+    image = QImage(900, 450, QImage.Format.Format_ARGB32_Premultiplied)
+    subtitle_painter.clear_before_layer_cache()
+
+    paint_frame(image, track, 2500, style)
+    warm_sizes = (
+        len(subtitle_painter._LINE_LAYOUT_CACHE),
+        len(subtitle_painter._TEXT_RUN_LAYER_CACHE),
+    )
+    paint_frame(image, track, 2600, style)
+
+    assert warm_sizes[0] == 1
+    assert warm_sizes[1] > 0
+    assert (
+        len(subtitle_painter._LINE_LAYOUT_CACHE),
+        len(subtitle_painter._TEXT_RUN_LAYER_CACHE),
+    ) == warm_sizes
+    subtitle_painter.clear_before_layer_cache()
 
 
 def test_multiple_guides_keep_independent_role_labels_in_project(tmp_path):
