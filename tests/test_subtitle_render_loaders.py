@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import time
 
 import pytest
 
@@ -26,9 +27,20 @@ from qfluentwidgets import (  # noqa: E402
     SpinBox,
     TransparentToolButton,
 )
+import krok_helper  # noqa: E402, F401 - registers the bundled SUG source path
+from strange_uta_game.backend.domain import (  # noqa: E402
+    Character,
+    Project,
+    Sentence,
+    Singer,
+)
+from strange_uta_game.backend.infrastructure.persistence.sug_io import (  # noqa: E402
+    SugProjectParser,
+)
 
 from krok_helper.models import MediaInfo  # noqa: E402
 from krok_helper.subtitle_render.models import (  # noqa: E402
+    GuideSymbol,
     TimingChar,
     TimingLine,
     TimingTrack,
@@ -86,6 +98,163 @@ def test_load_subtitle_wires_preview_and_transport(qapp, monkeypatch, tmp_path):
     # 滑块拖动 → preview canvas 同步时间
     win._transport_bar.set_time(1700)
     assert win._preview_panel.canvas.current_time_ms == 1700
+
+
+def test_external_lrc_timestamp_change_hot_reloads_without_confirmation(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    lrc = tmp_path / "watched.lrc"
+    lrc.write_text(
+        "[00:01:00]a[00:01:50]b[00:02:00]\n",
+        encoding="utf-8-sig",
+    )
+    assert win.load_from_lrc(lrc) is not None
+    line = win._timing_track.lines[0]
+    line.layout_index = 2
+    line.guide_symbol = GuideSymbol(
+        path_commands=(("M", 0.0, 0.0), ("L", 1.0, 1.0)),
+    )
+    line.inline_guide_symbols = {1: line.guide_symbol}
+    line.chars[0].role_label = "手工角色"
+    win._undo_stack.append(("keep",))
+    win._transport_bar.set_time(1200)
+    win._project_dirty = False
+    notices: list[str] = []
+    monkeypatch.setattr(
+        mw.InfoBar,
+        "success",
+        lambda **kwargs: notices.append(kwargs["content"]),
+    )
+    monkeypatch.setattr(
+        mw,
+        "fluent_question",
+        lambda *args, **kwargs: pytest.fail("纯时间变化不应要求确认"),
+    )
+
+    lrc.write_text(
+        "[00:02:00]a[00:02:50]b[00:03:00]\n",
+        encoding="utf-8-sig",
+    )
+    win._reload_external_subtitle_source(win._subtitle_source_key(lrc))
+
+    line = win._timing_track.lines[0]
+    assert [char.start_ms for char in line.chars] == [2000, 2500]
+    assert line.end_ms == 3000
+    assert line.layout_index == 2
+    assert line.guide_symbol is not None
+    assert 1 in line.inline_guide_symbols
+    assert line.chars[0].role_label == "手工角色"
+    assert win._undo_stack[0] == ("keep",)
+    assert win._transport_bar.current_time_ms == 1200
+    assert win._project_dirty is True
+    assert notices == ["已自动载入 watched.lrc 的最新时间轴。"]
+
+
+def test_external_sug_timestamp_change_uses_same_hot_reload_path(
+    qapp, monkeypatch, tmp_path
+):
+    singer = Singer(id="main", name="主唱", color="#ff0000", is_default=True)
+    char = Character(
+        char="歌",
+        check_count=1,
+        timestamps=[1000],
+        sentence_end_ts=1800,
+        is_sentence_end=True,
+        is_line_end=True,
+        singer_id=singer.id,
+    )
+    project = Project(
+        singers=[singer],
+        sentences=[Sentence(singer_id=singer.id, characters=[char])],
+    )
+    sug = tmp_path / "watched.sug"
+    SugProjectParser.save(project, str(sug))
+    win = _make_window(qapp, monkeypatch)
+    assert win.load_from_sug(sug) is not None
+    win._timing_track.lines[0].layout_index = 3
+    win._project_dirty = False
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(
+        mw,
+        "fluent_question",
+        lambda *args, **kwargs: pytest.fail("纯时间变化不应要求确认"),
+    )
+
+    char.timestamps = [2300]
+    char.sentence_end_ts = 3100
+    SugProjectParser.save(project, str(sug))
+    win._reload_external_subtitle_source(win._subtitle_source_key(sug))
+
+    line = win._timing_track.lines[0]
+    assert line.chars[0].start_ms == 2300
+    assert line.end_ms == 3100
+    assert line.layout_index == 3
+    assert win._project_dirty is True
+
+
+def test_in_memory_sug_handoff_does_not_enable_file_watching(
+    qapp, monkeypatch, tmp_path
+):
+    singer = Singer(id="main", name="主唱", color="#ff0000", is_default=True)
+    project = Project(
+        singers=[singer],
+        sentences=[
+            Sentence(
+                singer_id=singer.id,
+                characters=[
+                    Character(
+                        char="歌",
+                        check_count=1,
+                        timestamps=[1000],
+                        singer_id=singer.id,
+                    )
+                ],
+            )
+        ],
+    )
+    source_path = tmp_path / "workflow.sug"
+    SugProjectParser.save(project, str(source_path))
+    win = _make_window(qapp, monkeypatch)
+
+    assert win.load_from_sug_project(project, source_path) is not None
+
+    assert win._watch_primary_subtitle_source is False
+    assert win._subtitle_source_key(source_path) not in win._source_watch_states
+    assert str(source_path.resolve()) not in win._source_watcher.files()
+
+
+def test_external_lrc_filesystem_watcher_detects_change(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+    monkeypatch.setattr(mw.InfoBar, "warning", lambda **kwargs: None)
+    monkeypatch.setattr(
+        mw,
+        "fluent_question",
+        lambda *args, **kwargs: pytest.fail("纯时间变化不应要求确认"),
+    )
+    lrc = tmp_path / "watch-event.lrc"
+    lrc.write_text(
+        "[00:01:00]a[00:01:50]b[00:02:00]\n",
+        encoding="utf-8-sig",
+    )
+    assert win.load_from_lrc(lrc) is not None
+    assert str(lrc.resolve()) in win._source_watcher.files()
+
+    lrc.write_text(
+        "[00:04:00]a[00:04:50]b[00:05:00]\n",
+        encoding="utf-8-sig",
+    )
+    deadline = time.monotonic() + 3.0
+    while win._timing_track.lines[0].chars[0].start_ms != 4000:
+        qapp.processEvents()
+        if time.monotonic() >= deadline:
+            break
+        QTest.qWait(50)
+
+    assert win._timing_track.lines[0].chars[0].start_ms == 4000
 
 
 def test_load_subtitle_populates_lyrics_panel(qapp, monkeypatch, tmp_path):

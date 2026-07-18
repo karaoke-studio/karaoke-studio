@@ -1219,6 +1219,7 @@ def test_new_project_clears_loaded_media(qapp, monkeypatch, tmp_path):
     win._new_project()
     assert win._timing_track is None
     assert win._subtitle_path is None and win._video_path is None
+    assert win._source_watch_states == {}
     assert not win._lyrics_panel.is_populated()
     assert not win._preview_panel.is_populated()
 
@@ -1342,6 +1343,8 @@ def test_extra_subtitle_sources_round_trip(qapp, monkeypatch, tmp_path):
     if win2._style.title_overlay is not None and win2._style.title_overlay.enabled:
         expected_sources.append("标题")
     assert [combo.itemText(i) for i in range(combo.count())] == expected_sources
+    assert win2._subtitle_source_key(main_lrc) in win2._source_watch_states
+    assert win2._subtitle_source_key(chorus_lrc) in win2._source_watch_states
 
 
 def test_line_animation_overrides_round_trip(qapp, monkeypatch, tmp_path):

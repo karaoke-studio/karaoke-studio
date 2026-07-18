@@ -40,7 +40,18 @@ import time
 from typing import Any, Optional
 from uuid import uuid4
 
-from PyQt6.QtCore import QObject, QPoint, QRect, QSize, QThread, QTimer, QUrl, Qt, pyqtSignal as Signal
+from PyQt6.QtCore import (
+    QFileSystemWatcher,
+    QObject,
+    QPoint,
+    QRect,
+    QSize,
+    QThread,
+    QTimer,
+    QUrl,
+    Qt,
+    pyqtSignal as Signal,
+)
 from PyQt6.QtGui import QColor, QDesktopServices, QImage, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QButtonGroup,
@@ -196,6 +207,10 @@ from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 from krok_helper.subtitle_render.sug_project import (
     load_sug_timing_track,
     timing_track_from_sug_project,
+)
+from krok_helper.subtitle_render.source_reload import (
+    TrackReloadMerge,
+    merge_reloaded_track,
 )
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
 
@@ -532,6 +547,14 @@ class ExtraSubtitleSource:
     name: str
     path: Path
     track: TimingTrack
+
+
+@dataclass
+class _WatchedSubtitleState:
+    path: Path
+    baseline: TimingTrack
+    seen_digest: str
+    missing_notified: bool = False
 
 
 class _WindowEdgeGrip(QWidget):
@@ -1259,6 +1282,19 @@ class SubtitleRenderWindow(QWidget):
         self._last_auto_save_error = ""
         self._render_thread: Optional[QThread] = None
         self._render_worker: Optional[_RenderWorker] = None
+        self._watch_primary_subtitle_source = False
+        self._source_watch_states: dict[str, _WatchedSubtitleState] = {}
+        self._pending_source_reload_keys: set[str] = set()
+        self._source_reload_retries: dict[str, int] = {}
+        self._source_watcher = QFileSystemWatcher(self)
+        self._source_watcher.fileChanged.connect(self._on_subtitle_source_file_changed)
+        self._source_watcher.directoryChanged.connect(
+            self._on_subtitle_source_directory_changed
+        )
+        self._source_change_timer = QTimer(self)
+        self._source_change_timer.setSingleShot(True)
+        self._source_change_timer.setInterval(450)
+        self._source_change_timer.timeout.connect(self._process_subtitle_source_changes)
         self._preview_window_requested = False
         self._preview_reposition_on_next_show = True
         self._closing_window = False
@@ -2170,6 +2206,7 @@ class SubtitleRenderWindow(QWidget):
             self._title_source_active = False
             self._clear_undo_history()
             self._subtitle_path = None
+            self._watch_primary_subtitle_source = False
             self._property_panel.set_n3_template_lyrics_directory(None)
             self._video_path = None
             self._video_info = None
@@ -2197,6 +2234,7 @@ class SubtitleRenderWindow(QWidget):
             self._tracks_view.set_time(0)
         finally:
             self._loading_project = False
+            self._sync_subtitle_source_watcher()
 
     def _open_project(self) -> None:
         if not self._confirm_discard_changes():
@@ -3216,7 +3254,7 @@ class SubtitleRenderWindow(QWidget):
                 self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"
             )
             return None
-        self._apply_timing_track(track, path)
+        self._apply_timing_track(track, path, watch_source=True)
         return track
 
     def load_from_sug(self, path: Path) -> Optional[TimingTrack]:
@@ -3228,7 +3266,7 @@ class SubtitleRenderWindow(QWidget):
                 self, "加载字幕失败", f"无法解析 SUG 项目：\n{path}\n\n错误：{exc}"
             )
             return None
-        self._apply_timing_track(track, path)
+        self._apply_timing_track(track, path, watch_source=True)
         return track
 
     def load_from_sug_project(
@@ -3242,12 +3280,21 @@ class SubtitleRenderWindow(QWidget):
                 self, "加载字幕失败", f"无法读取打轴项目：\n{exc}"
             )
             return None
-        self._apply_timing_track(track, source_path)
+        # In-memory workflow handoff is intentionally not coupled to the SUG
+        # editor.  Only files explicitly imported from disk are watched.
+        self._apply_timing_track(track, source_path, watch_source=False)
         return track
 
     def _apply_timing_track(
-        self, track: TimingTrack, source_path: Optional[Path]
+        self,
+        track: TimingTrack,
+        source_path: Optional[Path],
+        *,
+        watch_source: bool = False,
     ) -> None:
+        self._watch_primary_subtitle_source = bool(watch_source and source_path)
+        if self._watch_primary_subtitle_source and source_path is not None:
+            self._set_subtitle_source_baseline(source_path, track)
         self._timing_track = track
         self._subtitle_path = source_path
         if not self._loading_project:
@@ -3273,7 +3320,240 @@ class SubtitleRenderWindow(QWidget):
         self._transport_bar.set_time(0)
         self._prefill_export_output()
         self._margin_check_timer.start()
+        self._sync_subtitle_source_watcher()
         self._mark_project_dirty()
+
+    @staticmethod
+    def _subtitle_source_key(path: Path) -> str:
+        resolved = str(Path(path).resolve(strict=False))
+        return resolved.casefold() if sys.platform == "win32" else resolved
+
+    @staticmethod
+    def _subtitle_source_digest(path: Path) -> str:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def _set_subtitle_source_baseline(self, path: Path, track: TimingTrack) -> None:
+        source_path = Path(path).resolve(strict=False)
+        try:
+            digest = self._subtitle_source_digest(source_path)
+        except OSError:
+            digest = ""
+        self._source_watch_states[self._subtitle_source_key(source_path)] = (
+            _WatchedSubtitleState(
+                path=source_path,
+                baseline=deepcopy(track),
+                seen_digest=digest,
+            )
+        )
+
+    def _referenced_subtitle_sources(self) -> dict[str, tuple[Path, TimingTrack]]:
+        referenced: dict[str, tuple[Path, TimingTrack]] = {}
+        if (
+            self._watch_primary_subtitle_source
+            and self._subtitle_path is not None
+            and self._timing_track is not None
+        ):
+            path = self._subtitle_path.resolve(strict=False)
+            referenced[self._subtitle_source_key(path)] = (path, self._timing_track)
+        for source in self._extra_sources:
+            path = source.path.resolve(strict=False)
+            referenced.setdefault(self._subtitle_source_key(path), (path, source.track))
+        return referenced
+
+    def _sync_subtitle_source_watcher(self) -> None:
+        referenced = self._referenced_subtitle_sources()
+        for key in list(self._source_watch_states):
+            if key not in referenced:
+                self._source_watch_states.pop(key, None)
+                self._pending_source_reload_keys.discard(key)
+                self._source_reload_retries.pop(key, None)
+        for key, (path, track) in referenced.items():
+            if key not in self._source_watch_states:
+                self._set_subtitle_source_baseline(path, track)
+
+        watched_files = self._source_watcher.files()
+        watched_directories = self._source_watcher.directories()
+        if watched_files:
+            self._source_watcher.removePaths(watched_files)
+        if watched_directories:
+            self._source_watcher.removePaths(watched_directories)
+
+        files = sorted(
+            {str(state.path) for state in self._source_watch_states.values() if state.path.is_file()}
+        )
+        directories = sorted(
+            {
+                str(state.path.parent)
+                for state in self._source_watch_states.values()
+                if state.path.parent.is_dir()
+            }
+        )
+        if files:
+            self._source_watcher.addPaths(files)
+        if directories:
+            self._source_watcher.addPaths(directories)
+
+    def _on_subtitle_source_file_changed(self, path_text: str) -> None:
+        key = self._subtitle_source_key(Path(path_text))
+        if key in self._source_watch_states:
+            self._queue_subtitle_source_reload(key)
+        # Editors may replace a file atomically, which removes Qt's file watch.
+        self._sync_subtitle_source_watcher()
+
+    def _on_subtitle_source_directory_changed(self, path_text: str) -> None:
+        directory_key = self._subtitle_source_key(Path(path_text))
+        for key, state in self._source_watch_states.items():
+            if self._subtitle_source_key(state.path.parent) == directory_key:
+                self._queue_subtitle_source_reload(key)
+        self._sync_subtitle_source_watcher()
+
+    def _queue_subtitle_source_reload(self, key: str) -> None:
+        self._pending_source_reload_keys.add(key)
+        if self._render_thread is None:
+            self._source_change_timer.start()
+
+    def _process_subtitle_source_changes(self) -> None:
+        if self._render_thread is not None:
+            return
+        pending = tuple(self._pending_source_reload_keys)
+        self._pending_source_reload_keys.clear()
+        for key in pending:
+            self._reload_external_subtitle_source(key)
+
+    def _retry_subtitle_source_reload(self, key: str, error: Exception) -> None:
+        attempt = self._source_reload_retries.get(key, 0) + 1
+        if attempt <= 5:
+            self._source_reload_retries[key] = attempt
+            self._pending_source_reload_keys.add(key)
+            self._source_change_timer.start(400)
+            return
+        self._source_reload_retries.pop(key, None)
+        state = self._source_watch_states.get(key)
+        if state is None:
+            return
+        logging.getLogger(__name__).warning(
+            "外部字幕源重新解析失败: path=%s error=%s", state.path, error
+        )
+        InfoBar.warning(
+            title="字幕源更新失败",
+            content=f"无法读取更新后的字幕文件，已保留当前内容：\n{state.path}",
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=5000,
+        )
+
+    def _reload_external_subtitle_source(self, key: str) -> None:
+        state = self._source_watch_states.get(key)
+        if state is None:
+            return
+        path = state.path
+        if not path.is_file():
+            if not state.missing_notified:
+                state.missing_notified = True
+                InfoBar.warning(
+                    title="字幕源不可用",
+                    content=f"外部字幕文件已被删除或移动，当前内容将继续保留：\n{path}",
+                    parent=self,
+                    position=InfoBarPosition.BOTTOM_RIGHT,
+                    duration=5000,
+                )
+            return
+
+        try:
+            before = path.stat()
+            digest = self._subtitle_source_digest(path)
+            if digest == state.seen_digest:
+                state.missing_notified = False
+                self._source_reload_retries.pop(key, None)
+                self._sync_subtitle_source_watcher()
+                return
+            candidate = self._load_timing_track_file(path)
+            after = path.stat()
+            if (before.st_mtime_ns, before.st_size) != (after.st_mtime_ns, after.st_size):
+                raise OSError("字幕文件仍在写入")
+        except Exception as exc:  # noqa: BLE001 - partial external writes are retried
+            self._retry_subtitle_source_reload(key, exc)
+            return
+
+        state.missing_notified = False
+        self._source_reload_retries.pop(key, None)
+        if state.baseline == candidate:
+            state.seen_digest = digest
+            self._sync_subtitle_source_watcher()
+            return
+
+        primary_merge: Optional[TrackReloadMerge] = None
+        if (
+            self._watch_primary_subtitle_source
+            and self._subtitle_path is not None
+            and self._timing_track is not None
+            and self._subtitle_source_key(self._subtitle_path) == key
+        ):
+            primary_merge = merge_reloaded_track(
+                self._timing_track, state.baseline, candidate
+            )
+
+        extra_merges: dict[int, TrackReloadMerge] = {}
+        for index, source in enumerate(self._extra_sources):
+            if self._subtitle_source_key(source.path) == key:
+                extra_merges[index] = merge_reloaded_track(
+                    source.track, state.baseline, candidate
+                )
+
+        merges = ([primary_merge] if primary_merge is not None else []) + list(
+            extra_merges.values()
+        )
+        conflicts = list(dict.fromkeys(item for merge in merges for item in merge.conflicts))
+        if conflicts:
+            details = "\n".join(f"• {item}" for item in conflicts[:8])
+            suffix = "\n• 还有其他冲突……" if len(conflicts) > 8 else ""
+            accepted = fluent_question(
+                self,
+                "字幕源结构已变化",
+                "更新后的歌词结构与当前项目不同，以下设置无法自动迁移：\n"
+                f"{details}{suffix}\n\n是否仍然载入新字幕？",
+                yes_text="载入新字幕",
+                no_text="保留当前内容",
+                default_cancel=True,
+            )
+            if not accepted:
+                state.seen_digest = digest
+                self._sync_subtitle_source_watcher()
+                return
+
+        if primary_merge is not None:
+            self._timing_track = primary_merge.track
+        for index, merge in extra_merges.items():
+            self._extra_sources[index].track = merge.track
+
+        structure_changed = any(merge.structure_changed for merge in merges)
+        timing_only = bool(merges) and all(merge.timing_only for merge in merges)
+        if structure_changed:
+            self._clear_undo_history()
+        state.baseline = deepcopy(candidate)
+        state.seen_digest = digest
+        self._refresh_source_ui()
+        self._refresh_lyrics_panel_source()
+        self._property_panel.merge_roles(self._content_role_options())
+        self._lyrics_panel.set_role_options(self._merged_role_options())
+        if self._timing_track is not None:
+            self._preview_panel.set_track(self._timing_track)
+        self._sync_extra_tracks_to_preview()
+        self._refresh_transport_duration()
+        self._margin_check_timer.start()
+        self._mark_project_dirty()
+        InfoBar.success(
+            title="字幕源已更新",
+            content=(
+                f"已自动载入 {path.name} 的最新时间轴。"
+                if timing_only
+                else f"已自动载入 {path.name} 的最新内容。"
+            ),
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=3000,
+        )
+        self._sync_subtitle_source_watcher()
 
     def _apply_imported_role_preset_choices(self, role_names: list[str]) -> None:
         """Resolve cross-group preset collisions before roles are materialized."""
@@ -3831,6 +4111,7 @@ class SubtitleRenderWindow(QWidget):
                     track = self._load_timing_track_file(path)
                 except Exception:  # noqa: BLE001 — 单个副源坏了不阻塞项目打开
                     continue
+                self._set_subtitle_source_baseline(path, track)
                 layout_indices = item.get("line_layout_indices")
                 if isinstance(layout_indices, list):
                     for line, value in zip(track.lines, layout_indices):
@@ -3874,6 +4155,7 @@ class SubtitleRenderWindow(QWidget):
         self._property_panel.set_roles(self._content_role_options())
         self._sync_extra_tracks_to_preview()
         self._refresh_transport_duration()
+        self._sync_subtitle_source_watcher()
 
     def _all_tracks(self) -> list[TimingTrack]:
         tracks = [] if self._timing_track is None else [self._timing_track]
@@ -4362,6 +4644,7 @@ class SubtitleRenderWindow(QWidget):
             )
             return
         self._apply_imported_role_preset_choices(track.role_options)
+        self._set_subtitle_source_baseline(path, track)
         self._extra_sources.append(
             ExtraSubtitleSource(name=path.stem, path=path, track=track)
         )
@@ -4373,6 +4656,7 @@ class SubtitleRenderWindow(QWidget):
         self._sync_extra_tracks_to_preview()
         self._refresh_transport_duration()
         self._margin_check_timer.start()
+        self._sync_subtitle_source_watcher()
         self._mark_project_dirty()
 
     @staticmethod
@@ -4404,6 +4688,7 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_lyrics_panel_source()
         self._sync_extra_tracks_to_preview()
         self._refresh_transport_duration()
+        self._sync_subtitle_source_watcher()
         self._mark_project_dirty()
 
     def _rescale_layout_for_height(self, new_height: int) -> None:
@@ -5944,6 +6229,8 @@ class SubtitleRenderWindow(QWidget):
         self._cleanup_export_preview_dir()
         self._refresh_project_title()
         self._sync_preview_window_visibility()
+        if self._pending_source_reload_keys:
+            self._source_change_timer.start(0)
 
     # ------------------------------------------------------------------ embed
 
