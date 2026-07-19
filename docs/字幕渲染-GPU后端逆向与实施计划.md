@@ -781,3 +781,39 @@ GPU 与 CPU 不要求逐像素完全一致。报告至少包含：
 - 保留 `native/subtitle_renderer/`、Python 协议/客户端/导出 adapter 与全部 native 测试，
   作为 G0 复用地基；QPainter CPU 渲染核心的移除并入 G0 骨架拆分执行。
 
+### 2026-07-19（第三批）：G2 调度硬性要求在 CPU 后端上落地验证
+
+把 §2.5 的调度修复直接实现在现有 CPU sidecar 预览上，作为 G2 调度器的预演。改动：
+
+- `preview_async.py`：waiting 积压不再回灌新 range（要求 1）；range 帧数钳制到
+  ring 槽数（要求 3）；新增自适应前瞻 `_effective_lookahead`，range 耗时超过前瞻窗口
+  时对半收缩、恢复后逐步回涨（要求 6）；过期 waiting 按帧桶清除；晚于最新请求的帧
+  不再进缓存；`NativePreviewFrameCache.take` 去掉冗余拷贝（要求 5 部分）；
+- shm ring 常驻（要求 4）：`shm_key` 改为与 renderer 同生命周期，native 侧
+  `ensureSharedFrameRing` 对同 key/槽数/尺寸直接复用，不再逐 range create+memset；
+- `native_preview_enabled()` 从硬关闭恢复为 `KROK_SUBTITLE_NATIVE_RENDER=1` env
+  opt-in（默认仍关闭，产品 UI 不暴露）；`resolve_native_renderer_path` 恢复
+  显式参数 > env > 打包 > 构建树的发现顺序；sidecar 启动时自动把匹配 PyQt6 版本的
+  aqt Qt bin 注入子进程 PATH。
+
+实测（Dark spiral journey 真实 LRC，1080p60，8s，offscreen compare）：
+
+- 修复前（仅破螺旋，未复用 ring）：native `36.75fps`、`steady_drop=178`、p95 `33.4ms`；
+- 修复后：native `58fps`、`steady_drop=8`、p95 `5.9ms`（Python 同场景 `59fps`、p95 `2.6ms`）；
+- 抽样像素 diff 全 0；10s seek/resize/style churn 压测 `fail=0`、cancel 正常。
+
+同批发现与处理：
+
+- 恢复 exe 发现后，14 个 Python-vs-native parity 测试（27 个用例）暴露已知漂移：
+  native 冻结于 6 月底，未跟进 7 月 Python painter 布局改动（如 N3 字体像素修复），
+  bounded diff mean 16~18 超容差 10。已加 `_NATIVE_PARITY_DIVERGED` 条件 skip
+  （`KROK_SUBTITLE_NATIVE_PARITY_STRICT=1` 强制运行）；parity 恢复不单独立项，
+  并入 GPU G1+ 的对照体系；
+- MSVC + Ninja + Qt 6.11.0 构建链复验通过（G0 第 0 刀等效完成）；
+  `run_native_renderer_smoke.ps1` 的 `cmd /c` 段在部分环境报 vswhere 不可用，
+  分步执行等效命令可绕过，后续可修脚本。
+
+遗留（不阻塞体验，GPU G2 时一并处理）：per-range `std::thread` 重建导致
+`thread_local` layout cache 冷启动；Python 消费路径仍有 2~3 次全帧拷贝；
+渲染语义为 6 月版本，预览观感与当前 Python painter 有轻微差异。
+

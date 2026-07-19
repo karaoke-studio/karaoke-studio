@@ -271,17 +271,19 @@ def resolve_native_renderer_path(
     *,
     root: Path | None = None,
 ) -> Path | None:
-    """Resolve a sidecar only for explicit protocol/test use.
+    """Resolve the sidecar executable: explicit arg > env > bundled > build tree.
 
-    Runtime auto-discovery is intentionally disabled.  Passing an explicit
-    executable keeps the protocol harness usable without allowing preview or
-    export code to activate native rendering through environment variables or
-    a bundled binary.
+    发现顺序恢复为实验期语义（2026-07-19）：路径发现本身不激活任何 native 路径，
+    激活仍由 ``native_preview_enabled()`` / export 侧各自的显式开关把关，默认关闭。
     """
-    if executable_path is None:
-        return None
     candidates: list[Path] = []
-    candidates.append(Path(executable_path))
+    if executable_path is not None:
+        candidates.append(Path(executable_path))
+    env_path = os.environ.get("KROK_SUBTITLE_NATIVE_RENDERER")
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.append(bundled_native_renderer_path(root))
+    candidates.append(default_native_renderer_path(root))
 
     seen: set[Path] = set()
     for candidate in candidates:
@@ -291,6 +293,30 @@ def resolve_native_renderer_path(
         seen.add(resolved)
         if resolved.is_file():
             return resolved
+    return None
+
+
+def _sidecar_qt_bin_dir(executable_path: Path) -> Path | None:
+    """Return the aqt-installed Qt bin dir the sidecar needs on PATH, if any.
+
+    构建树里的 sidecar exe 旁没有 Qt DLL；它链接的是与 PyQt6 同版本、由
+    ``run_native_renderer_smoke.ps1`` 安装到 %LOCALAPPDATA% 的 Qt。打包（frozen）
+    形态下 DLL 应随包分发在 exe 旁，此时不注入，避免遮蔽打包 DLL。
+    """
+    if os.name != "nt":
+        return None
+    if (executable_path.parent / "Qt6Core.dll").is_file():
+        return None
+    try:
+        from PyQt6.QtCore import QT_VERSION_STR
+    except ImportError:
+        return None
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if not local_app_data:
+        return None
+    qt_bin = Path(local_app_data) / "krok-helper" / "qt" / QT_VERSION_STR / "msvc2022_64" / "bin"
+    if (qt_bin / "Qt6Core.dll").is_file():
+        return qt_bin
     return None
 
 
@@ -327,6 +353,11 @@ class NativeRendererProcess:
     def start(self) -> dict[str, Any]:
         if self.is_running:
             return {"ok": True, "event": "already_running"}
+        env = None
+        qt_bin = _sidecar_qt_bin_dir(self.executable_path)
+        if qt_bin is not None:
+            env = dict(os.environ)
+            env["PATH"] = str(qt_bin) + os.pathsep + env.get("PATH", "")
         self._process = subprocess.Popen(
             [str(self.executable_path)],
             stdin=subprocess.PIPE,
@@ -336,6 +367,7 @@ class NativeRendererProcess:
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=env,
         )
         self._start_pipe_threads(self._process)
         ready = self._read_response()

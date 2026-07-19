@@ -246,14 +246,14 @@ def test_async_preview_enabled_defaults_on_and_env_can_disable(monkeypatch):
         assert async_preview_enabled() is False
 
 
-def test_native_preview_is_hard_disabled(monkeypatch):
+def test_native_preview_defaults_off_and_env_can_opt_in(monkeypatch):
     from krok_helper.subtitle_render.frontend import preview_async as pa
 
     monkeypatch.delenv("KROK_SUBTITLE_NATIVE_RENDER", raising=False)
     assert pa.native_preview_enabled() is False
 
     monkeypatch.setenv("KROK_SUBTITLE_NATIVE_RENDER", "1")
-    assert pa.native_preview_enabled() is False
+    assert pa.native_preview_enabled() is True
 
     monkeypatch.setenv("KROK_SUBTITLE_NATIVE_RENDER", "0")
     assert pa.native_preview_enabled() is False
@@ -560,19 +560,51 @@ def test_native_async_renderer_marks_restart_on_render_target_change(qapp):
         renderer.stop()
 
 
-def test_native_async_renderer_includes_waiting_timestamps_during_playback(qapp):
+def test_native_async_renderer_purges_stale_waiting_requests(qapp):
+    """G2 硬性要求 1：过期 waiting 请求被丢弃，不回灌新 range（§2.5 死亡螺旋修复）。"""
     from krok_helper.subtitle_render.frontend import preview_async as pa
 
     renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
     try:
         renderer.set_playing(True)
+        stale_key = renderer._frame_cache.key_for(1_017)
+        current_key = renderer._frame_cache.key_for(1_034)
         with renderer._condition:
-            renderer._waiting_request_by_key[renderer._frame_cache.key_for(1_017)] = 1_017
-            renderer._waiting_request_by_key[renderer._frame_cache.key_for(1_034)] = 1_034
+            renderer._waiting_request_by_key[stale_key] = 1_017
+            renderer._waiting_request_by_key[renderer._frame_cache.key_for(1_033)] = 1_033
+            renderer._purge_stale_waiting_locked(current_key)
+            # 早于当前帧桶的请求被清除；同帧桶的毫秒抖动条目保留。
+            assert stale_key not in renderer._waiting_request_by_key
+            assert current_key in renderer._waiting_request_by_key
+        assert renderer.stats_snapshot()["stale_frames_dropped"] == 1
+    finally:
+        renderer.stop()
 
-        timestamps = renderer._include_waiting_timestamps([1_034, 1_050], t_ms=1_034)
 
-        assert timestamps == [1_017, 1_034, 1_050]
+def test_native_async_renderer_adaptive_lookahead_shrinks_and_recovers(qapp):
+    """G2 硬性要求 6：range 耗时超过前瞻窗口时收缩前瞻，恢复后逐步回涨。"""
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+
+    renderer = pa.NativeAsyncSubtitleRenderer(320, 180)
+    try:
+        assert renderer._effective_lookahead == renderer._lookahead_frames
+
+        # 60fps、前瞻 6：窗口 ≈ 116.7ms。慢 range 连续对半收缩，最低到 0（纯 latest-wins）。
+        renderer._adapt_lookahead(500.0, playing=True)
+        assert renderer._effective_lookahead == 3
+        renderer._adapt_lookahead(500.0, playing=True)
+        assert renderer._effective_lookahead == 1
+        renderer._adapt_lookahead(500.0, playing=True)
+        assert renderer._effective_lookahead == 0
+
+        # 快 range 每次 +1 回涨，封顶在配置值。
+        for _ in range(10):
+            renderer._adapt_lookahead(5.0, playing=True)
+        assert renderer._effective_lookahead == renderer._lookahead_frames
+
+        # 暂停态不调整。
+        renderer._adapt_lookahead(500.0, playing=False)
+        assert renderer._effective_lookahead == renderer._lookahead_frames
     finally:
         renderer.stop()
 

@@ -819,6 +819,15 @@ bool ensureSharedFrameRing(
     const int totalBytes = slotBytes * safeSlots;
 
     std::lock_guard<std::mutex> lock(runtime->sharedMemoryMutex);
+    // 资源常驻（GPU 计划 G2 硬性要求 4）：同 key/槽数/尺寸的 ring 直接复用，
+    // 避免预览每个 range 重新 create+memset 一块数十 MB 的共享内存段。
+    if (runtime->sharedMemory != nullptr && runtime->sharedMemory->isAttached()
+        && runtime->sharedRing.key == key
+        && runtime->sharedRing.slotCount == safeSlots
+        && runtime->sharedRing.width == probe.width()
+        && runtime->sharedRing.height == probe.height()) {
+        return true;
+    }
     if (runtime->sharedMemory != nullptr && runtime->sharedMemory->isAttached()) {
         runtime->sharedMemory->detach();
     }

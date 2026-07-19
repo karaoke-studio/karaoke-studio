@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 import uuid
 from collections import OrderedDict
 from typing import Optional
@@ -57,8 +58,12 @@ def async_preview_enabled() -> bool:
 
 
 def native_preview_enabled() -> bool:
-    """Native preview is temporarily hard-disabled for layout consistency."""
-    return False
+    """实验开关：显式 ``KROK_SUBTITLE_NATIVE_RENDER=1`` 才启用 native 预览，默认关闭。
+
+    2026-07-19 起从硬关闭恢复为 env opt-in，用于验证修复后的调度器
+    （见 GPU 计划文档 §2.5 与 G2 调度硬性要求）；产品 UI 不暴露该开关。
+    """
+    return _env_enabled("KROK_SUBTITLE_NATIVE_RENDER", "0")
 
 
 def native_preview_timestamps(
@@ -110,10 +115,8 @@ class NativePreviewFrameCache:
 
     def take(self, t_ms: int) -> Optional[QImage]:
         with self._lock:
-            image = self._images.pop(self._key(t_ms), None)
-        if image is None:
-            return None
-        return image.copy()
+            # store() 已复制一份私有拷贝；pop 后缓存不再持有引用，直接移交即可。
+            return self._images.pop(self._key(t_ms), None)
 
     def clear(self) -> None:
         with self._lock:
@@ -384,6 +387,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         self._needs_configure = True
         self._restart_renderer = False
         self._renderer: Optional[NativeRendererProcess] = None
+        self._shm_key = ""
         self._renderer_failed = False
         self._playing = False
         self._last_t: Optional[int] = None
@@ -393,6 +397,9 @@ class NativeAsyncSubtitleRenderer(QObject):
             6,
             minimum=0,
         )
+        # 自适应前瞻（G2 硬性要求 6"失控自愈"）：range 端到端耗时超过前瞻窗口时收缩，
+        # 恢复后逐步回涨到配置值；仅 worker 线程读写。
+        self._effective_lookahead = self._lookahead_frames
         self._threads = _env_int(
             "KROK_SUBTITLE_NATIVE_THREADS",
             _default_native_preview_threads(),
@@ -482,6 +489,7 @@ class NativeAsyncSubtitleRenderer(QObject):
             self._pending_skip_current = cached is not None
             if cached is None:
                 self._waiting_request_by_key[requested_key] = requested_t
+            self._purge_stale_waiting_locked(requested_key)
             self._condition.notify()
 
     def set_playing(self, playing: bool) -> None:
@@ -603,12 +611,16 @@ class NativeAsyncSubtitleRenderer(QObject):
             t_ms,
             playing=playing,
             fps=self._fps,
-            lookahead_frames=self._lookahead_frames,
+            lookahead_frames=self._effective_lookahead,
             include_current=not skip_current,
         )
-        timestamps = self._include_waiting_timestamps(timestamps, t_ms=t_ms)
+        # 调度硬性要求（GPU 计划 §2.5 / G2）：
+        # 1. 不回灌积压——过期的 waiting 请求绝不加入新 range 重新渲染；
+        # 3. 单次在途帧数 ≤ ring 槽数，杜绝发射端覆写未读槽。
+        timestamps = timestamps[: self._ring_slots]
         if not timestamps:
             return
+        range_started = time.monotonic()
         with self._process_lock:
             if restart_renderer and self._renderer is not None:
                 self._renderer.close()
@@ -618,7 +630,9 @@ class NativeAsyncSubtitleRenderer(QObject):
             renderer = self._ensure_renderer()
             if renderer_was_missing or needs_configure:
                 renderer.configure(track, style, width=width, height=height, fps=60)
-            shm_key = f"krok-preview-{os.getpid()}-{uuid.uuid4().hex}"
+            # 资源常驻（G2 硬性要求 4）：shm_key 与 renderer 同生命周期，
+            # sidecar 端据此跨 range 复用同一块 ring，不再逐 range 重建。
+            shm_key = self._shm_key
             with self._condition:
                 if not self._stopped and self._generation == generation:
                     self._active_generation = generation
@@ -653,6 +667,9 @@ class NativeAsyncSubtitleRenderer(QObject):
                                 self.frame_ready.emit(image, slot.t_ms)
                             elif self._was_emitted(slot.t_ms):
                                 continue
+                            elif self._is_behind_latest_request(slot.t_ms):
+                                # 早于最新请求的帧没有未来消费者，缓存只会污染 LRU。
+                                self._stats.note_stale_frame_dropped()
                             else:
                                 self._stats.note_future_frame_cached()
                                 self._frame_cache.store(slot.t_ms, image)
@@ -660,6 +677,9 @@ class NativeAsyncSubtitleRenderer(QObject):
                             self._stats.note_stale_frame_dropped()
                     elif event.get("event") == "range_done":
                         self._stats.note_range_done_event()
+                        self._adapt_lookahead(
+                            (time.monotonic() - range_started) * 1000.0, playing=playing
+                        )
                         return
                     elif event.get("event") == "generation_cancelled":
                         self._stats.note_native_generation_cancelled_event()
@@ -676,6 +696,7 @@ class NativeAsyncSubtitleRenderer(QObject):
             self._renderer = NativeRendererProcess(response_timeout_s=2.0, close_timeout_s=1.0)
             self._renderer.start()
             self._needs_configure = True
+            self._shm_key = f"krok-preview-{os.getpid()}-{uuid.uuid4().hex}"
         return self._renderer
 
     def _close_renderer(self) -> None:
@@ -731,16 +752,39 @@ class NativeAsyncSubtitleRenderer(QObject):
         with self._condition:
             return key in self._emitted_request_keys
 
-    def _include_waiting_timestamps(self, timestamps: list[int], *, t_ms: int) -> list[int]:
-        if not self._playing:
-            return timestamps
+    def _purge_stale_waiting_locked(self, current_key: int) -> None:
+        """丢弃早于当前帧桶的未兑现请求（G2 硬性要求 1"积压有上限"）。
+
+        过期请求既不回灌新 range 重新渲染，也不再等待兑现——它们对应的画面
+        已经过时，唯一正确的结局是作为丢帧统计掉。同帧桶内的毫秒抖动兑现
+        （1033ms/1034ms）不受影响。
+        """
+        stale_keys = [key for key in self._waiting_request_by_key if key < current_key]
+        for key in stale_keys:
+            del self._waiting_request_by_key[key]
+            self._stats.note_stale_frame_dropped()
+
+    def _is_behind_latest_request(self, t_ms: int) -> bool:
         with self._condition:
-            waiting = sorted(
-                int(value)
-                for key, value in self._waiting_request_by_key.items()
-                if key not in self._emitted_request_keys and int(value) <= int(t_ms)
-            )
-        return list(dict.fromkeys([*waiting, *timestamps]))
+            latest_t = self._last_t
+        if latest_t is None:
+            return False
+        return self._frame_cache.key_for(int(t_ms)) < self._frame_cache.key_for(int(latest_t))
+
+    def _adapt_lookahead(self, elapsed_ms: float, *, playing: bool) -> None:
+        """按 range 端到端耗时收缩/恢复前瞻（G2 硬性要求 6"失控自愈"）。
+
+        range 耗时超过前瞻窗口意味着产出注定过期（§2.5 死亡螺旋的临界条件），
+        此时对半收缩前瞻，最低退化为纯 latest-wins 单帧；耗时回落后逐步涨回配置值。
+        """
+        if not playing or self._lookahead_frames <= 0:
+            return
+        frame_ms = max(1000.0 / max(self._fps, 1), 1.0)
+        window_ms = frame_ms * (self._effective_lookahead + 1)
+        if elapsed_ms > window_ms:
+            self._effective_lookahead = self._effective_lookahead // 2
+        elif elapsed_ms < window_ms * 0.5 and self._effective_lookahead < self._lookahead_frames:
+            self._effective_lookahead += 1
 
     def _should_advance_generation_for_request_locked(self, requested_t: int) -> bool:
         if not self._playing:
