@@ -1067,3 +1067,24 @@ G2 的本机实现、NVIDIA 硬件、WARP、Painter fallback、kill/restart、20
 
 G3 下一刀：角色/歌手覆盖与行内混合字体、字号、配色；随后依次处理
 gradient/split/image fill、标题/多字幕源与 strip/bands readback。
+
+### 2026-07-19（第十二批）：G3 歌手级整行样式覆盖
+
+- `RenderScene` 增加与有效歌词行一一对应的 `lineStyles`；GPU configure 不再假定所有行
+  共用一套字体资源，而是按行解析 DirectWrite 正文/拉丁/ruby 字体并缓存完整 N3 glyph
+  geometry。未设置覆盖时仍回落全局样式。
+- 直接复用 native/Painter 既有的 `resolvedStyleForLine()` 合并结果；歌手方案现在可以覆盖
+  正文与 ruby 的字体、字号、字重、间距、before/after 配色、stroke/stroke2、装饰与 glow，
+  不在 GPU 侧另造一套合并规则。
+- render 阶段从当前有效行取得样式，brush、描边宽度、ruby 独立 glow 和布局参数均随行切换；
+  scene cache key 已包含逐行样式，歌手方案变化会产生可观察的 cache miss，不会错误复用旧
+  geometry。
+- 新门禁同时验证字号/描边使可见几何变大、歌手 before 绿色实际出现在 GPU 像素中、缓存
+  正确失效，并以 Painter 约束宽高与中心位置。DirectWrite N3 outline origin 与 Qt Meiryo
+  font engine 的纵向原点存在约 10px 固有差异，测试保留 N3 glyph 几何并把 Painter 垂直中心
+  漂移限制在 14px；这与 G1 确立的“Painter 管布局、N3 管字形”双 oracle 边界一致。
+- 硬件/WARP build smoke 通过；GPU/transport `94 passed`，native
+  protocol/export/benchmark `56 passed, 27 skipped`。产品 GPU 开关仍默认关闭。
+
+下一刀继续把同一套 resolved style 从“每行”下沉到“逐字 run”，完成角色标签、行内混合
+字体/字号/配色及对应 ruby anchor 规则。

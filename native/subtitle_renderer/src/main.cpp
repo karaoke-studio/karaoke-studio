@@ -5533,30 +5533,115 @@ krok::subtitle::native::RgbaColor gpuColor(const QString &value, const QString &
     };
 }
 
+void applyGpuResolvedStyle(
+    krok::subtitle::native::TextStyle &target,
+    const ResolvedStyle &source,
+    double scale
+) {
+    target.fontFamily = source.fontFamily.toStdWString();
+    target.latinFontFamily = source.fontFamilyLatin.isEmpty()
+        ? std::nullopt
+        : std::optional<std::wstring>(source.fontFamilyLatin.toStdWString());
+    target.fontSize = static_cast<float>(source.fontSizePx * scale);
+    target.latinFontSize = source.latinFontSizePx.has_value()
+        ? std::optional<float>(static_cast<float>(*source.latinFontSizePx * scale))
+        : std::nullopt;
+    target.fontWeight = source.fontWeight;
+    target.latinFontWeight = source.latinFontWeight;
+    target.italic = source.italic;
+    target.allowBiting = source.allowBiting;
+    target.spaceWidthPercent = source.spaceWidthPercent;
+    target.letterSpacing = static_cast<float>(source.letterSpacingPx * scale);
+    target.beforeFill = gpuColor(source.baseFill.color, source.baseColor);
+    target.afterFill = gpuColor(source.afterFill.color, source.fillColor);
+    target.beforeStroke = gpuColor(source.beforeStrokeFill.color, source.beforeStrokeColor);
+    target.afterStroke = gpuColor(source.afterStrokeFill.color, source.afterStrokeColor);
+    target.beforeStroke2 = gpuColor(source.beforeStroke2Fill.color, source.beforeStroke2Color);
+    target.afterStroke2 = gpuColor(source.afterStroke2Fill.color, source.afterStroke2Color);
+    target.beforeDecor = gpuColor(source.beforeShadowFill.color, source.beforeShadowColor);
+    target.afterDecor = gpuColor(source.afterShadowFill.color, source.afterShadowColor);
+    target.strokeWidth = static_cast<float>(source.strokeWidthPx * scale);
+    target.stroke2Width = static_cast<float>(source.stroke2WidthPx * scale);
+    target.decorationKind = source.decorationKind.toStdString();
+    target.glowBeforeRadius = static_cast<float>(source.glowBeforeRadiusPx * scale);
+    target.glowAfterRadius = static_cast<float>(source.glowAfterRadiusPx * scale);
+    target.glowConcentrationLevel = source.glowConcentrationLevel;
+
+    const bool rubyUsesMainFont = source.rubyFontFollowMain
+        && source.rubyFontFamily.isEmpty()
+        && source.rubyFontFamilyLatin.isEmpty()
+        && !source.rubyFontWeight.has_value()
+        && !source.rubyLatinFontSizePx.has_value()
+        && !source.rubyLatinFontWeight.has_value()
+        && source.rubyFontSizePx == 45;
+    target.rubyFontFamily = (
+        rubyUsesMainFont || source.rubyFontFamily.isEmpty()
+            ? source.fontFamily
+            : source.rubyFontFamily
+    ).toStdWString();
+    const QString rubyLatinFamily = source.rubyFontFamilyLatin.isEmpty()
+        ? (source.fontFamilyLatin.isEmpty()
+            ? QString::fromStdWString(target.rubyFontFamily)
+            : source.fontFamilyLatin)
+        : source.rubyFontFamilyLatin;
+    target.rubyLatinFontFamily = rubyLatinFamily.isEmpty()
+        ? std::nullopt
+        : std::optional<std::wstring>(rubyLatinFamily.toStdWString());
+    target.rubyFontSize = static_cast<float>(source.rubyFontSizePx * scale);
+    target.rubyLatinFontSize = source.rubyLatinFontSizePx.has_value()
+        ? std::optional<float>(static_cast<float>(*source.rubyLatinFontSizePx * scale))
+        : std::nullopt;
+    target.rubyFontWeight = rubyUsesMainFont
+        ? source.fontWeight
+        : source.rubyFontWeight.value_or(source.fontWeight);
+    target.rubyLatinFontWeight = source.rubyLatinFontWeight;
+    target.rubyGap = static_cast<float>(source.rubyGapPx * scale);
+    target.rubyInterval = static_cast<float>(source.rubyIntervalPx * scale);
+    target.rubyAlignment = source.rubyAlignment.toStdString();
+    target.rubyBeforeFill = gpuColor(source.rubyBaseFill.color, source.rubyBaseColor);
+    target.rubyAfterFill = gpuColor(source.rubyAfterFill.color, source.rubyFillColor);
+    target.rubyBeforeStroke = gpuColor(
+        source.rubyBeforeStrokeFill.color, source.rubyBeforeStrokeColor
+    );
+    target.rubyAfterStroke = gpuColor(
+        source.rubyAfterStrokeFill.color, source.rubyAfterStrokeColor
+    );
+    target.rubyBeforeStroke2 = gpuColor(
+        source.rubyBeforeStroke2Fill.color, source.rubyBeforeStroke2Color
+    );
+    target.rubyAfterStroke2 = gpuColor(
+        source.rubyAfterStroke2Fill.color, source.rubyAfterStroke2Color
+    );
+    target.rubyBeforeDecor = gpuColor(
+        source.rubyBeforeShadowFill.color, source.rubyBeforeShadowColor
+    );
+    target.rubyAfterDecor = gpuColor(
+        source.rubyAfterShadowFill.color, source.rubyAfterShadowColor
+    );
+    target.rubyStrokeWidth = static_cast<float>(source.rubyStrokeWidthPx * scale);
+    target.rubyStroke2Width = static_cast<float>(source.rubyStroke2WidthPx * scale);
+    target.rubyDecorationKind = (
+        source.rubyDecorationKind.isEmpty()
+            ? source.decorationKind
+            : source.rubyDecorationKind
+    ).toStdString();
+    target.rubyGlowBeforeRadius = static_cast<float>(source.rubyGlowBeforeRadiusPx * scale);
+    target.rubyGlowAfterRadius = static_cast<float>(source.rubyGlowAfterRadiusPx * scale);
+    target.rubyGlowConcentrationLevel = source.rubyGlowConcentrationLevel;
+}
+
 krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &config) {
     using krok::subtitle::native::RenderScene;
     using krok::subtitle::native::TextChar;
     using krok::subtitle::native::TextLine;
+    using krok::subtitle::native::TextStyle;
 
     const double scale = std::max(config.dpr, 0.01);
     const ResolvedStyle &sourceStyle = config.baseStyle;
     RenderScene scene;
     scene.width = config.physicalWidth();
     scene.height = config.physicalHeight();
-    scene.style.fontFamily = sourceStyle.fontFamily.toStdWString();
-    if (!sourceStyle.fontFamilyLatin.isEmpty()) {
-        scene.style.latinFontFamily = sourceStyle.fontFamilyLatin.toStdWString();
-    }
-    scene.style.fontSize = static_cast<float>(sourceStyle.fontSizePx * scale);
-    if (sourceStyle.latinFontSizePx.has_value()) {
-        scene.style.latinFontSize = static_cast<float>(*sourceStyle.latinFontSizePx * scale);
-    }
-    scene.style.fontWeight = sourceStyle.fontWeight;
-    scene.style.latinFontWeight = sourceStyle.latinFontWeight;
-    scene.style.italic = sourceStyle.italic;
-    scene.style.allowBiting = sourceStyle.allowBiting;
-    scene.style.spaceWidthPercent = sourceStyle.spaceWidthPercent;
-    scene.style.letterSpacing = static_cast<float>(sourceStyle.letterSpacingPx * scale);
+    applyGpuResolvedStyle(scene.style, sourceStyle, scale);
     scene.style.horizontalMargin = static_cast<float>(config.horizontalMarginPx * scale);
     scene.style.bottomMargin = static_cast<float>(config.lineYMarginPx * scale);
     scene.style.lineGap = static_cast<float>(config.lineGapPx * scale);
@@ -5574,93 +5659,17 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
     } else {
         scene.style.alignment = "left";
     }
-    scene.style.beforeFill = gpuColor(sourceStyle.baseFill.color, sourceStyle.baseColor);
-    scene.style.afterFill = gpuColor(sourceStyle.afterFill.color, sourceStyle.fillColor);
-    scene.style.beforeStroke = gpuColor(sourceStyle.beforeStrokeFill.color, sourceStyle.beforeStrokeColor);
-    scene.style.afterStroke = gpuColor(sourceStyle.afterStrokeFill.color, sourceStyle.afterStrokeColor);
-    scene.style.beforeStroke2 = gpuColor(sourceStyle.beforeStroke2Fill.color, sourceStyle.beforeStroke2Color);
-    scene.style.afterStroke2 = gpuColor(sourceStyle.afterStroke2Fill.color, sourceStyle.afterStroke2Color);
-    scene.style.beforeDecor = gpuColor(sourceStyle.beforeShadowFill.color, sourceStyle.beforeShadowColor);
-    scene.style.afterDecor = gpuColor(sourceStyle.afterShadowFill.color, sourceStyle.afterShadowColor);
-    scene.style.strokeWidth = static_cast<float>(sourceStyle.strokeWidthPx * scale);
-    scene.style.stroke2Width = static_cast<float>(sourceStyle.stroke2WidthPx * scale);
-    scene.style.decorationKind = sourceStyle.decorationKind.toStdString();
-    scene.style.glowBeforeRadius = static_cast<float>(sourceStyle.glowBeforeRadiusPx * scale);
-    scene.style.glowAfterRadius = static_cast<float>(sourceStyle.glowAfterRadiusPx * scale);
-    scene.style.glowConcentrationLevel = sourceStyle.glowConcentrationLevel;
-    const bool rubyUsesMainFont = sourceStyle.rubyFontFollowMain
-        && sourceStyle.rubyFontFamily.isEmpty()
-        && sourceStyle.rubyFontFamilyLatin.isEmpty()
-        && !sourceStyle.rubyFontWeight.has_value()
-        && !sourceStyle.rubyLatinFontSizePx.has_value()
-        && !sourceStyle.rubyLatinFontWeight.has_value()
-        && sourceStyle.rubyFontSizePx == 45;
-    scene.style.rubyFontFamily = (
-        rubyUsesMainFont || sourceStyle.rubyFontFamily.isEmpty()
-            ? sourceStyle.fontFamily
-            : sourceStyle.rubyFontFamily
-    ).toStdWString();
-    const QString rubyLatinFamily = sourceStyle.rubyFontFamilyLatin.isEmpty()
-        ? (sourceStyle.fontFamilyLatin.isEmpty()
-            ? QString::fromStdWString(scene.style.rubyFontFamily)
-            : sourceStyle.fontFamilyLatin)
-        : sourceStyle.rubyFontFamilyLatin;
-    if (!rubyLatinFamily.isEmpty()) {
-        scene.style.rubyLatinFontFamily = rubyLatinFamily.toStdWString();
-    }
-    scene.style.rubyFontSize = static_cast<float>(sourceStyle.rubyFontSizePx * scale);
-    if (sourceStyle.rubyLatinFontSizePx.has_value()) {
-        scene.style.rubyLatinFontSize = static_cast<float>(
-            *sourceStyle.rubyLatinFontSizePx * scale
-        );
-    }
-    scene.style.rubyFontWeight = rubyUsesMainFont
-        ? sourceStyle.fontWeight
-        : sourceStyle.rubyFontWeight.value_or(sourceStyle.fontWeight);
-    scene.style.rubyLatinFontWeight = sourceStyle.rubyLatinFontWeight;
-    scene.style.rubyGap = static_cast<float>(sourceStyle.rubyGapPx * scale);
-    scene.style.rubyInterval = static_cast<float>(sourceStyle.rubyIntervalPx * scale);
-    scene.style.rubyAlignment = sourceStyle.rubyAlignment.toStdString();
-    scene.style.rubyBeforeFill = gpuColor(sourceStyle.rubyBaseFill.color, sourceStyle.rubyBaseColor);
-    scene.style.rubyAfterFill = gpuColor(sourceStyle.rubyAfterFill.color, sourceStyle.rubyFillColor);
-    scene.style.rubyBeforeStroke = gpuColor(
-        sourceStyle.rubyBeforeStrokeFill.color, sourceStyle.rubyBeforeStrokeColor
-    );
-    scene.style.rubyAfterStroke = gpuColor(
-        sourceStyle.rubyAfterStrokeFill.color, sourceStyle.rubyAfterStrokeColor
-    );
-    scene.style.rubyBeforeStroke2 = gpuColor(
-        sourceStyle.rubyBeforeStroke2Fill.color, sourceStyle.rubyBeforeStroke2Color
-    );
-    scene.style.rubyAfterStroke2 = gpuColor(
-        sourceStyle.rubyAfterStroke2Fill.color, sourceStyle.rubyAfterStroke2Color
-    );
-    scene.style.rubyBeforeDecor = gpuColor(
-        sourceStyle.rubyBeforeShadowFill.color, sourceStyle.rubyBeforeShadowColor
-    );
-    scene.style.rubyAfterDecor = gpuColor(
-        sourceStyle.rubyAfterShadowFill.color, sourceStyle.rubyAfterShadowColor
-    );
-    scene.style.rubyStrokeWidth = static_cast<float>(sourceStyle.rubyStrokeWidthPx * scale);
-    scene.style.rubyStroke2Width = static_cast<float>(sourceStyle.rubyStroke2WidthPx * scale);
-    scene.style.rubyDecorationKind = (
-        sourceStyle.rubyDecorationKind.isEmpty()
-            ? sourceStyle.decorationKind
-            : sourceStyle.rubyDecorationKind
-    ).toStdString();
-    scene.style.rubyGlowBeforeRadius = static_cast<float>(
-        sourceStyle.rubyGlowBeforeRadiusPx * scale
-    );
-    scene.style.rubyGlowAfterRadius = static_cast<float>(
-        sourceStyle.rubyGlowAfterRadiusPx * scale
-    );
-    scene.style.rubyGlowConcentrationLevel = sourceStyle.rubyGlowConcentrationLevel;
-
     scene.lines.reserve(config.lines.size());
+    scene.lineStyles.reserve(config.lines.size());
     for (const TimingLine &sourceLine : config.lines) {
         if (sourceLine.chars.empty()) {
             continue;
         }
+        TextStyle lineStyle = scene.style;
+        applyGpuResolvedStyle(
+            lineStyle, resolvedStyleForLine(config, sourceLine), scale
+        );
+        scene.lineStyles.push_back(std::move(lineStyle));
         TextLine line;
         line.startMs = lineStartMs(sourceLine) + config.timingOffsetMs;
         line.endMs = lineEndMs(sourceLine) + config.timingOffsetMs;

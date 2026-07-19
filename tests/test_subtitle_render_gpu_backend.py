@@ -15,8 +15,12 @@ from krok_helper.subtitle_render.native_backend import (
     resolve_native_renderer_path,
 )
 from krok_helper.subtitle_render.models import (
+    KaraokeColors,
+    KaraokeColorState,
+    PaintFill,
     RubyAnnotation,
     Style,
+    SubtitleStyleScheme,
     TimingChar,
     TimingLine,
     TimingTrack,
@@ -111,6 +115,16 @@ def _g3_ruby_track() -> TimingTrack:
                 pos_end_ms=2_000,
                 reading_parts=["か", "", "んじ"],
             )
+        ],
+    )
+
+
+def _g3_singer_track() -> TimingTrack:
+    track = _g3_ruby_track()
+    return replace(
+        track,
+        lines=[
+            replace(track.lines[0], singer_id=1, singer_label="主唱")
         ],
     )
 
@@ -489,6 +503,7 @@ def test_gpu_g3_ruby_has_independent_geometry_and_wipe(monkeypatch) -> None:
         shadow_color="#00000000",
         shadow_offset_x=0,
         shadow_offset_y=0,
+        dual_line_layout=False,
     )
     with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
         configured, frames = _render_g1_frames(
@@ -661,6 +676,95 @@ def test_gpu_g3_real_n3_ruby_frame_is_bounded_by_painter_oracle(monkeypatch) -> 
         abs(actual - expected) <= 7
         for actual, expected in zip(gpu_bounds, painter_bounds)
     ), (gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_singer_override_matches_painter_geometry(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    base = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=54,
+        ruby_font_size_px=28,
+        ruby_gap_px=4,
+        stroke_width_px=2,
+        stroke2_enabled=False,
+        decoration_kind="shadow",
+        shadow_color="#00000000",
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        dual_line_layout=False,
+    )
+    singer_colors = KaraokeColors(
+        before=KaraokeColorState(
+            text=PaintFill(mode="solid", color="#00FF40"),
+            stroke=PaintFill(mode="solid", color="#101010"),
+        ),
+        after=KaraokeColorState(
+            text=PaintFill(mode="solid", color="#FF2040"),
+            stroke=PaintFill(mode="solid", color="#202020"),
+        ),
+    )
+    style = replace(
+        base,
+        singer_style_overrides={
+            1: SubtitleStyleScheme(
+                font_family="Meiryo",
+                font_family_latin="Meiryo",
+                font_size_px=84,
+                stroke_width_px=5,
+                ruby_font_size_px=42,
+                ruby_stroke_width_px=3,
+                ruby_gap_px=7,
+                karaoke_colors=singer_colors,
+                ruby_karaoke_colors=singer_colors,
+            )
+        },
+    )
+    track = _g3_singer_track()
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        base_configured, base_frames = _render_g1_frames(
+            renderer,
+            base,
+            (1_000,),
+            force_warp=True,
+            track=track,
+        )
+        singer_configured, singer_frames = _render_g1_frames(
+            renderer,
+            style,
+            (1_000,),
+            force_warp=True,
+            track=track,
+        )
+    painter = _render_painter_oracle(style, t_ms=1_000, track=track)
+
+    assert singer_configured["cache_misses"] == base_configured["cache_misses"] + 1
+    base_bounds = _payload_alpha_bounds(base_frames[0])
+    singer_bounds = _payload_alpha_bounds(singer_frames[0])
+    painter_bounds = _payload_alpha_bounds(painter)
+    assert singer_bounds[2] - singer_bounds[0] > base_bounds[2] - base_bounds[0]
+    singer_width = singer_bounds[2] - singer_bounds[0]
+    painter_width = painter_bounds[2] - painter_bounds[0]
+    singer_height = singer_bounds[3] - singer_bounds[1]
+    painter_height = painter_bounds[3] - painter_bounds[1]
+    assert abs(singer_width - painter_width) <= 3
+    assert abs(singer_height - painter_height) <= 12
+    assert abs(
+        (singer_bounds[0] + singer_bounds[2]) / 2
+        - (painter_bounds[0] + painter_bounds[2]) / 2
+    ) <= 3
+    # DirectWrite's N3 outline origin and Qt's font-engine origin differ for
+    # this Meiryo weight; retain N3 geometry while bounding Painter placement.
+    assert abs(
+        (singer_bounds[1] + singer_bounds[3]) / 2
+        - (painter_bounds[1] + painter_bounds[3]) / 2
+    ) <= 14
+    assert any(
+        payload[index + 1] > payload[index] + 40 and payload[index + 3] > 0
+        for payload in singer_frames
+        for index in range(0, len(payload), 4)
+    )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

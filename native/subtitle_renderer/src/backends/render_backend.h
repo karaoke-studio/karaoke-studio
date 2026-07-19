@@ -156,6 +156,7 @@ struct RenderScene {
     int width = 1920;
     int height = 1080;
     TextStyle style;
+    std::vector<TextStyle> lineStyles;
     std::vector<TextLine> lines;
     bool operator==(const RenderScene &) const = default;
 };

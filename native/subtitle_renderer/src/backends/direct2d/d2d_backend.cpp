@@ -221,6 +221,7 @@ struct Direct2DGpuBackend::Impl {
         int startMs = 0;
         int endMs = 0;
         int lane = 0;
+        TextStyle style;
         float ascent = 0.0f;
         float descent = 0.0f;
         float boxAscent = 0.0f;
@@ -414,7 +415,6 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
     impl_->lines.clear();
     impl_->lines.reserve(scene.lines.size());
 
-    const TextStyle &style = scene.style;
     Microsoft::WRL::ComPtr<IDWriteFontCollection> fontCollection;
     checkHr(
         device_.dwriteFactory()->GetSystemFontCollection(
@@ -423,32 +423,6 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         ),
         "IDWriteFactory::GetSystemFontCollection",
         device_
-    );
-    auto resolveFace = [&](const std::wstring &family, int weight) {
-        const std::wstring resolvedFamily = family.empty() ? L"Segoe UI" : family;
-        auto face = createFontFace(fontCollection.Get(), resolvedFamily, weight, style.italic);
-        if (!face && resolvedFamily != L"Segoe UI") {
-            face = createFontFace(fontCollection.Get(), L"Segoe UI", weight, style.italic);
-        }
-        if (!face) {
-            throw BackendError("DirectWrite could not resolve a usable font face");
-        }
-        return face;
-    };
-    const auto mainFace = resolveFace(style.fontFamily, style.fontWeight);
-    const auto latinFace = resolveFace(
-        style.latinFontFamily.value_or(style.fontFamily),
-        style.latinFontWeight.value_or(style.fontWeight)
-    );
-    const auto rubyFace = resolveFace(
-        style.rubyFontFamily.empty() ? style.fontFamily : style.rubyFontFamily,
-        style.rubyFontWeight
-    );
-    const auto rubyLatinFace = resolveFace(
-        style.rubyLatinFontFamily.value_or(
-            style.rubyFontFamily.empty() ? style.fontFamily : style.rubyFontFamily
-        ),
-        style.rubyLatinFontWeight.value_or(style.rubyFontWeight)
     );
     std::vector<Microsoft::WRL::ComPtr<IDWriteFontFace>> fallbackFaces;
 
@@ -466,7 +440,41 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
 
     for (std::size_t lineIndex = 0; lineIndex < scene.lines.size(); ++lineIndex) {
         const TextLine &sourceLine = scene.lines[lineIndex];
+        const TextStyle &style = lineIndex < scene.lineStyles.size()
+            ? scene.lineStyles[lineIndex]
+            : scene.style;
+        auto resolveFace = [&](const std::wstring &family, int weight) {
+            const std::wstring resolvedFamily = family.empty() ? L"Segoe UI" : family;
+            auto face = createFontFace(
+                fontCollection.Get(), resolvedFamily, weight, style.italic
+            );
+            if (!face && resolvedFamily != L"Segoe UI") {
+                face = createFontFace(
+                    fontCollection.Get(), L"Segoe UI", weight, style.italic
+                );
+            }
+            if (!face) {
+                throw BackendError("DirectWrite could not resolve a usable font face");
+            }
+            return face;
+        };
+        const auto mainFace = resolveFace(style.fontFamily, style.fontWeight);
+        const auto latinFace = resolveFace(
+            style.latinFontFamily.value_or(style.fontFamily),
+            style.latinFontWeight.value_or(style.fontWeight)
+        );
+        const auto rubyFace = resolveFace(
+            style.rubyFontFamily.empty() ? style.fontFamily : style.rubyFontFamily,
+            style.rubyFontWeight
+        );
+        const auto rubyLatinFace = resolveFace(
+            style.rubyLatinFontFamily.value_or(
+                style.rubyFontFamily.empty() ? style.fontFamily : style.rubyFontFamily
+            ),
+            style.rubyLatinFontWeight.value_or(style.rubyFontWeight)
+        );
         Impl::CachedLine cached;
+        cached.style = style;
         cached.startMs = sourceLine.startMs;
         cached.endMs = sourceLine.endMs;
         cached.lane = style.dualLineLayout
@@ -899,7 +907,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
         throw BackendError("GPU backend is not configured");
     }
     const RenderScene &scene = impl_->scene;
-    const TextStyle &style = scene.style;
+    const TextStyle &baseStyle = scene.style;
 
     D3D11_TEXTURE2D_DESC targetDesc{};
     targetDesc.Width = static_cast<UINT>(scene.width);
@@ -966,13 +974,14 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
 
     const Impl::CachedLine *line = nullptr;
     for (const Impl::CachedLine &candidate : impl_->lines) {
-        if (tMs >= candidate.startMs - std::max(style.leadInMs, 0)
-            && tMs <= candidate.endMs + std::max(style.tailMs, 0)) {
+        if (tMs >= candidate.startMs - std::max(baseStyle.leadInMs, 0)
+            && tMs <= candidate.endMs + std::max(baseStyle.tailMs, 0)) {
             line = &candidate;
             break;
         }
     }
     if (line != nullptr && !line->geometries.empty()) {
+        const TextStyle &style = line->style;
         const float inkWidth = line->bounds.right - line->bounds.left;
         float dx = (static_cast<float>(scene.width) - inkWidth) * 0.5f - line->bounds.left;
         if (style.alignment == "left") {
@@ -985,32 +994,35 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
         );
         const float ascent = line->ascent > 0.0f ? line->ascent : -line->bounds.top;
         const float descent = line->descent > 0.0f ? line->descent : line->bounds.bottom;
-        float topExtent = ascent;
-        float combinedTop = line->bounds.top;
-        float combinedBottom = line->bounds.bottom;
-        for (const Impl::CachedRuby &ruby : line->rubies) {
-            topExtent = std::max(topExtent, -ruby.bounds.top);
-            combinedTop = std::min(combinedTop, ruby.bounds.top);
-            combinedBottom = std::max(combinedBottom, ruby.bounds.bottom);
-        }
         const int lanes = style.dualLineLayout ? std::max(style.laneCount, 1) : 1;
-        const float mainHeight = topExtent + descent + visualPad * 2.0f;
+        const float rubyExtra = line->rubies.empty()
+            ? 0.0f
+            : std::max(
+                style.rubyGap + style.rubyFontSize
+                    + std::max(style.rubyStrokeWidth, 0.0f),
+                0.0f
+            );
+        const float mainHeight = ascent + descent + visualPad * 2.0f;
         const float step = mainHeight + style.lineGap;
         float firstBaseline = static_cast<float>(scene.height) - style.bottomMargin
             - descent - visualPad - step * static_cast<float>(lanes - 1);
         if (style.verticalPosition == "top") {
-            firstBaseline = style.bottomMargin + topExtent + visualPad;
+            firstBaseline = style.bottomMargin + rubyExtra + ascent + visualPad;
         } else if (style.verticalPosition == "center") {
             const float totalHeight = mainHeight * static_cast<float>(lanes)
                 + style.lineGap * static_cast<float>(lanes - 1);
             firstBaseline = (static_cast<float>(scene.height) - totalHeight) * 0.5f
-                + topExtent + visualPad;
+                + ascent + visualPad;
             if (lanes == 1) {
-                // Single-line center alignment is defined by visible ink, just
-                // like horizontal centering. This avoids font-leading drift.
-                firstBaseline = (static_cast<float>(scene.height)
-                    - (combinedBottom - combinedTop)) * 0.5f
-                    - combinedTop;
+                if (line->rubies.empty()) {
+                    firstBaseline = (static_cast<float>(scene.height)
+                        - (line->bounds.bottom - line->bounds.top)) * 0.5f
+                        - line->bounds.top;
+                } else {
+                    const float blockHeight = mainHeight + rubyExtra;
+                    firstBaseline = (static_cast<float>(scene.height) - blockHeight) * 0.5f
+                        + rubyExtra + visualPad + ascent;
+                }
             }
         }
         const float dy = firstBaseline + step * static_cast<float>(line->lane);
