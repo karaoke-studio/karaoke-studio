@@ -499,6 +499,7 @@ struct Direct2DGpuBackend::Impl {
         int endMs = 0;
         float baselineOffset = 0.0f;
         int styleIndex = -1;
+        int transitionCharIndex = 0;
         D2D1_RECT_F bounds{};
         D2D1_RECT_F fillBounds{};
         std::vector<CachedChar> chars;
@@ -1321,6 +1322,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             ruby.startMs = sourceRuby.startMs;
             ruby.endMs = sourceRuby.endMs;
             ruby.styleIndex = sourceRuby.styleIndex;
+            ruby.transitionCharIndex = sourceRuby.firstCharIndex;
             // Painter anchors every ruby run with the line-level ruby font and
             // gap; target-role styling changes paint/measurement, not baseline.
             ruby.baselineOffset = -cached.boxAscent - style.rubyGap - rubyBoxDescent;
@@ -1686,6 +1688,55 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         }
         const float globalOpacity = overlayOpacityAt(*line) * animation.opacity;
         const TextStyle &style = line->style;
+        const bool hasCharacterFade = line->entryAnimation == "char_fade"
+            || line->exitAnimation == "char_fade";
+        auto charFadeOpacityAt = [&](std::size_t charIndex) {
+            if (!hasCharacterFade || line->displayWindows.empty()) {
+                return 1.0f;
+            }
+            const int count = std::max(static_cast<int>(line->chars.size()), 1);
+            const int index = std::clamp(
+                static_cast<int>(charIndex), 0, count - 1
+            );
+            const int delayStep = count <= 1 ? 0 : 350 / (count - 1);
+            const DisplayWindow &window = line->displayWindows.front();
+            if (line->exitAnimation == "char_fade" && line->exitDurationMs > 0) {
+                const int exitStart = std::max(line->endMs, window.endMs - 600);
+                if (tMs >= exitStart) {
+                    const int endMs = window.endMs
+                        - delayStep * (count - index - 1);
+                    return std::clamp(
+                        static_cast<float>(endMs - tMs) / 250.0f,
+                        0.0f,
+                        1.0f
+                    );
+                }
+            }
+            if (line->entryAnimation == "char_fade" && line->entryDurationMs > 0
+                && tMs <= window.startMs + 600) {
+                const int startMs = window.startMs + delayStep * index;
+                return std::clamp(
+                    static_cast<float>(tMs - startMs) / 250.0f,
+                    0.0f,
+                    1.0f
+                );
+            }
+            return 1.0f;
+        };
+        auto rubyFadeOpacityAt = [&](const Impl::CachedRuby &ruby) {
+            return charFadeOpacityAt(static_cast<std::size_t>(std::max(
+                ruby.transitionCharIndex, 0
+            )));
+        };
+        if (hasCharacterFade) {
+            float maxOpacity = 0.0f;
+            for (std::size_t index = 0; index < line->chars.size(); ++index) {
+                maxOpacity = std::max(maxOpacity, charFadeOpacityAt(index));
+            }
+            if (maxOpacity <= 0.0f) {
+                continue;
+            }
+        }
         const float inkWidth = line->bounds.right - line->bounds.left;
         float dx = (static_cast<float>(scene.width) - inkWidth) * 0.5f - line->bounds.left;
         dx += style.centerOffsetX;
@@ -1910,7 +1961,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         Microsoft::WRL::ComPtr<ID2D1Bitmap1> glowSource;
         Microsoft::WRL::ComPtr<ID2D1Effect> blur;
         std::vector<int> glowSigmas;
-        if (style.decorationKind == "glow" && !line->hasInlineStyles) {
+        if (style.decorationKind == "glow"
+            && !line->hasInlineStyles
+            && !hasCharacterFade) {
             checkHr(
                 context->CreateBitmap(
                     D2D1::SizeU(static_cast<UINT32>(scene.width), static_cast<UINT32>(scene.height)),
@@ -2028,6 +2081,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     ruby.fillBounds,
                     after ? rubyStyle.rubyAfterDecor : rubyStyle.rubyBeforeDecor
                 );
+                brush->SetOpacity(globalOpacity * rubyFadeOpacityAt(ruby));
                 const float edge = rubyWipeEdgeAt(ruby);
                 if ((after && edge <= ruby.bounds.left)
                     || (!after && edge >= ruby.bounds.right)) {
@@ -2139,12 +2193,14 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
             context->BeginDraw();
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
-            for (const Impl::CachedChar &ch : line->chars) {
+            for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
+                const Impl::CachedChar &ch = line->chars[charIndex];
                 if (ch.styleIndex != styleIndex || !ch.geometry
                     || (after && wipeEdge <= ch.left)
                     || (!after && wipeEdge >= ch.right)) {
                     continue;
                 }
+                brush->SetOpacity(globalOpacity * charFadeOpacityAt(charIndex));
                 const D2D1_RECT_F clip = after
                     ? D2D1::RectF(
                         ch.left - pad, line->bounds.top - pad,
@@ -2170,7 +2226,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             }
             inlineGlowLayers.push_back(std::move(layer));
         };
-        if (line->hasInlineStyles) {
+        if (line->hasInlineStyles || hasCharacterFade) {
             std::vector<int> styleIndices;
             for (const Impl::CachedChar &ch : line->chars) {
                 if (std::find(styleIndices.begin(), styleIndices.end(), ch.styleIndex)
@@ -2240,8 +2296,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             context->FillGeometry(geometry, brush);
         };
         auto drawLineShadowPhase = [&](bool after) {
-            if (line->hasInlineStyles) {
-                for (const Impl::CachedChar &ch : line->chars) {
+            if (line->hasInlineStyles || hasCharacterFade) {
+                for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
+                    const Impl::CachedChar &ch = line->chars[charIndex];
                     if (!ch.geometry) {
                         continue;
                     }
@@ -2259,6 +2316,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         charStyle.shadowOffsetX,
                         charStyle.shadowOffsetY
                     );
+                    brush->SetOpacity(globalOpacity * charFadeOpacityAt(charIndex));
                     context->SetTransform(D2D1::Matrix3x2F::Translation(
                         dx + charStyle.shadowOffsetX,
                         dy + charStyle.shadowOffsetY
@@ -2338,6 +2396,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     rubyStyle.rubyShadowOffsetX,
                     rubyStyle.rubyShadowOffsetY
                 );
+                brush->SetOpacity(globalOpacity * rubyFadeOpacityAt(ruby));
                 context->SetTransform(D2D1::Matrix3x2F::Translation(
                     dx + rubyStyle.rubyShadowOffsetX,
                     dy + rubyStyle.rubyShadowOffsetY
@@ -2405,7 +2464,8 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             }
         };
         auto drawInlineStack = [&](bool after) {
-            for (const Impl::CachedChar &ch : line->chars) {
+            for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
+                const Impl::CachedChar &ch = line->chars[charIndex];
                 if (!ch.geometry) {
                     continue;
                 }
@@ -2437,6 +2497,11 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     line->fillBounds,
                     stroke2Color
                 );
+                const float charOpacity = globalOpacity
+                    * charFadeOpacityAt(charIndex);
+                fillBrush->SetOpacity(charOpacity);
+                strokeBrush->SetOpacity(charOpacity);
+                stroke2Brush->SetOpacity(charOpacity);
                 if (charStyle.stroke2Width > 0.0f) {
                     context->DrawGeometry(
                         ch.geometry.Get(),
@@ -2461,7 +2526,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 context->FillGeometry(ch.geometry.Get(), fillBrush.Get());
             }
         };
-        if (line->hasInlineStyles) {
+        if (line->hasInlineStyles || hasCharacterFade) {
             drawInlineStack(false);
             if (wipeEdge > line->bounds.left) {
                 context->PushAxisAlignedClip(
@@ -2497,6 +2562,10 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 ruby.fillBounds,
                 after ? rubyStyle.rubyAfterStroke2 : rubyStyle.rubyBeforeStroke2
             );
+            const float rubyOpacity = globalOpacity * rubyFadeOpacityAt(ruby);
+            fill->SetOpacity(rubyOpacity);
+            stroke->SetOpacity(rubyOpacity);
+            stroke2->SetOpacity(rubyOpacity);
             if (rubyStyle.rubyStroke2Width > 0.0f) {
                 for (const auto &geometry : ruby.geometries) {
                     context->DrawGeometry(

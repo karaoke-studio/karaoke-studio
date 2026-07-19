@@ -1302,3 +1302,24 @@ G3 下一刀继续做组合 corpus 的 raw overlay diff，以及重复 configure
   `62 passed, 27 skipped`。
 
 G4 下一刀迁移逐字符 `char_fade`；随后再处理带 per-glyph transform 的 `spin_flip`，两者不合并验收。
+
+### 2026-07-19（第二十三批）：G4 逐字符 char-fade
+
+- Direct2D 按 Painter/N3 固定常数实现逐字透明度：总错峰窗口 `350ms`，单字淡入/淡出 `250ms`，
+  `delayStep = 350 // (charCount - 1)`；入场从左至右，退场按 Painter 的字符 end 公式逐个移除，
+  且退场上下文仍从 `max(lineEnd, displayEnd - 600ms)` 才开始。全局与逐行 `char_fade` 均通过
+  resolved animation IR，未设置时长的路径继续不启动动画。
+- opacity 不是只乘正文 fill：stroke/stroke2、shadow、before/after glow source、行内角色 brush 都按
+  glyph 独立透明度生成；ruby 整组使用 Painter 相同的首个目标正文索引，ruby fill/stroke/shadow/glow
+  同步淡入淡出。完全透明的逐字帧直接跳过绘制和 band 回读。
+- 自动门禁使用 4 字正文 + 双字 ruby + 双 glow，在入场两点、完整帧、退场两点和终点比较 Painter：
+  各抽帧相对完整帧 alpha 比例偏差不超过 `0.09`；ruby 洋红像素在相同时间点出现/消失；终点双方
+  均为空。`spin_flip`/`utopia` 仍由 capability gate 整场回退。
+- 基准新增 `--animation`。RTX 3070 Ti、1920×1080、18 字、中档 glow、packed bands、600 帧
+  char-fade：`146.56fps`，render/readback/roundtrip p95 `2.54/2.31/7.84ms`；local 显存增长 0，
+  sidecar RSS 波动 `585,728B`，明显低于 60fps 帧预算。
+- hardware/WARP build smoke 通过；GPU/transport 回归 `119 passed`，native
+  protocol/export/benchmark 独立回归 `62 passed, 27 skipped`。
+
+G4 下一刀进入 `spin_flip` 的 per-glyph scale/skew transform；该变换必须同时覆盖正文所有视觉层与
+ruby 组，并继续使用 Painter 的 char-fade 时间轴。

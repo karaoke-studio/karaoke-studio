@@ -39,8 +39,8 @@ def gpu_unsupported_features(
         reasons.append("per_row_layout")
     if style.lit_enabled:
         reasons.append("signal_lits")
-    if style.entry_anim not in {"none", "fade", "slide_in", "rise"} or (
-        style.exit_anim not in {"none", "fade", "slide_out", "rise"}
+    if style.entry_anim not in {"none", "fade", "slide_in", "rise", "char_fade"} or (
+        style.exit_anim not in {"none", "fade", "slide_out", "rise", "char_fade"}
     ):
         reasons.append("line_animation")
     if (
@@ -60,11 +60,13 @@ def gpu_unsupported_features(
                     "fade",
                     "slide_in",
                     "rise",
+                    "char_fade",
                 } or line.animation_override.exit_anim not in {
                     "none",
                     "fade",
                     "slide_out",
                     "rise",
+                    "char_fade",
                 }:
                     reasons.append("line_animation_override")
             if line.guide_symbol is not None or line.inline_guide_symbols:

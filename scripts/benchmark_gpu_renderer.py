@@ -33,7 +33,9 @@ def _percentile(values: list[float], fraction: float) -> float:
     return ordered[min(len(ordered) - 1, int(len(ordered) * fraction))]
 
 
-def _scene(duration_ms: int, *, glow: bool) -> tuple[TimingTrack, Style]:
+def _scene(
+    duration_ms: int, *, glow: bool, animation: str = "none"
+) -> tuple[TimingTrack, Style]:
     text = "Karaoke Studio GPU"
     chars = [
         TimingChar(char, index * duration_ms // len(text))
@@ -64,6 +66,10 @@ def _scene(duration_ms: int, *, glow: bool) -> tuple[TimingTrack, Style]:
         dual_line_layout=False,
         line_lead_in_ms=0,
         line_tail_ms=0,
+        entry_anim=animation,
+        entry_lead_ms=1_000,
+        exit_anim=animation,
+        exit_fade_ms=1_000,
     )
     return track, style
 
@@ -78,13 +84,14 @@ def run_benchmark(
     glow: bool,
     bands: bool = False,
     reconfigure_cycles: int = 0,
+    animation: str = "none",
 ) -> tuple[dict, list[dict]]:
     import psutil
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     frames = max(1, int(round(seconds * fps)))
     duration_ms = max(1, int(round(seconds * 1000.0)))
-    track, style = _scene(duration_ms, glow=glow)
+    track, style = _scene(duration_ms, glow=glow, animation=animation)
     shm_key = f"krok_gpu_g1_benchmark_{os.getpid()}_{uuid.uuid4().hex}"
     rows: list[dict] = []
     reader: SharedFrameRingReader | None = None
@@ -175,6 +182,7 @@ def run_benchmark(
         "fps": round(frames / elapsed, 3),
         "frames": frames,
         "glow": glow,
+        "animation": animation,
         "bands": bands,
         "height": height,
         "readback_mean_ms": round(statistics.fmean(readback_times), 4),
@@ -232,6 +240,12 @@ def main() -> int:
     parser.add_argument("--both", action="store_true", help="run hardware then WARP")
     parser.add_argument("--glow", action="store_true", help="enable N3 medium glow")
     parser.add_argument(
+        "--animation",
+        choices=("none", "fade", "char_fade"),
+        default="none",
+        help="exercise a supported entry/exit animation",
+    )
+    parser.add_argument(
         "--bands",
         action="store_true",
         help="read back only packed subtitle bands and reconstruct the full frame",
@@ -256,6 +270,7 @@ def main() -> int:
             glow=bool(args.glow),
             bands=bool(args.bands),
             reconfigure_cycles=max(args.reconfigure_cycles, 0),
+            animation=args.animation,
         )
         all_rows.extend(rows)
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
