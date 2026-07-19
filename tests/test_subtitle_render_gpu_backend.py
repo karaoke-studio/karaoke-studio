@@ -189,6 +189,12 @@ def _g3_role_ruby_track() -> TimingTrack:
     )
 
 
+def _g3_fill_track() -> TimingTrack:
+    return TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("█", 0)], end_ms=1_000)]
+    )
+
+
 def _alpha_count(payload: bytes) -> int:
     return sum(alpha > 0 for alpha in payload[3::4])
 
@@ -1201,6 +1207,128 @@ def test_gpu_g3_role_ruby_uses_independent_n3_glow(monkeypatch) -> None:
         and glow[0][index + 3] > 0
         for index in range(0, len(glow[0]), 4)
     )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_vertical_gradient_tracks_painter_fill_direction(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    fill = PaintFill(
+        mode="gradient_vertical",
+        color="#FF0000",
+        gradient_stops=[(0, "#FF0000"), (50, "#20FF20"), (100, "#0000FF")],
+    )
+    state = KaraokeColorState(text=fill)
+    style = _g1_style(
+        font_family="Meiryo",
+        font_size_px=140,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+        karaoke_colors=KaraokeColors(before=state, after=state),
+    )
+    track = _g3_fill_track()
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, (700,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=700, track=track)
+
+    def row_colors(payload: bytes) -> list[tuple[float, float, float]]:
+        bounds = _payload_alpha_bounds(payload)
+        rows: list[tuple[float, float, float]] = []
+        for y in range(bounds[1], bounds[3] + 1):
+            pixels = [
+                payload[y * 640 * 4 + x * 4 : y * 640 * 4 + x * 4 + 4]
+                for x in range(bounds[0], bounds[2] + 1)
+                if payload[y * 640 * 4 + x * 4 + 3] >= 240
+            ]
+            if pixels:
+                rows.append(tuple(sum(pixel[channel] for pixel in pixels) / len(pixels) for channel in range(3)))
+        assert len(rows) > 20
+        return rows
+
+    gpu_rows = row_colors(frames[0])
+    painter_rows = row_colors(painter)
+    for rows in (gpu_rows, painter_rows):
+        top = rows[len(rows) // 8]
+        middle = rows[len(rows) // 2]
+        bottom = rows[len(rows) * 7 // 8]
+        assert top[0] > top[2] + 80
+        assert middle[1] > middle[0] + 50 and middle[1] > middle[2] + 50
+        assert bottom[2] > bottom[0] + 80
+    for ratio in (0.125, 0.5, 0.875):
+        gpu = gpu_rows[min(int(len(gpu_rows) * ratio), len(gpu_rows) - 1)]
+        cpu = painter_rows[min(int(len(painter_rows) * ratio), len(painter_rows) - 1)]
+        assert max(abs(gpu[channel] - cpu[channel]) for channel in range(3)) <= 42
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_split_vertical_preserves_painter_hard_bands(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    colors = ((255, 255, 255), (255, 32, 32), (32, 64, 255))
+    fill = PaintFill(
+        mode="split_vertical",
+        color="#FFFFFF",
+        split_stops=[
+            (0, "#FFFFFF"),
+            (30, "#FF2020"),
+            (65, "#2040FF"),
+            (100, "#2040FF"),
+        ],
+    )
+    state = KaraokeColorState(text=fill)
+    style = _g1_style(
+        font_family="Meiryo",
+        font_size_px=140,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+        karaoke_colors=KaraokeColors(before=state, after=state),
+    )
+    track = _g3_fill_track()
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, (700,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=700, track=track)
+
+    def band_rows(payload: bytes) -> list[int]:
+        bounds = _payload_alpha_bounds(payload)
+        rows: list[int] = []
+        for y in range(bounds[1], bounds[3] + 1):
+            pixels = [
+                tuple(payload[y * 640 * 4 + x * 4 + channel] for channel in range(3))
+                for x in range(bounds[0], bounds[2] + 1)
+                if payload[y * 640 * 4 + x * 4 + 3] >= 240
+            ]
+            if not pixels:
+                continue
+            mean = tuple(sum(pixel[channel] for pixel in pixels) / len(pixels) for channel in range(3))
+            rows.append(min(range(3), key=lambda index: sum((mean[c] - colors[index][c]) ** 2 for c in range(3))))
+        assert len(rows) > 20
+        return rows
+
+    gpu_rows = band_rows(frames[0])
+    painter_rows = band_rows(painter)
+    gpu_transitions = [
+        index for index in range(1, len(gpu_rows))
+        if gpu_rows[index] != gpu_rows[index - 1]
+    ]
+    painter_transitions = [
+        index for index in range(1, len(painter_rows))
+        if painter_rows[index] != painter_rows[index - 1]
+    ]
+    # Painter's one-pixel hard-band texture and N3's bitmap brush both wrap
+    # outside the shared fill rectangle. Direct2D must begin in the same tail
+    # band and hit the three visible boundaries at the same scanlines.
+    assert gpu_rows[0] == painter_rows[0] == 2
+    assert len(gpu_transitions) >= 3
+    assert len(painter_transitions) >= 3
+    assert gpu_transitions[:3] == pytest.approx(painter_transitions[:3], abs=1)
+    assert [gpu_rows[index] for index in gpu_transitions[:3]] == [0, 1, 2]
+    assert [painter_rows[index] for index in painter_transitions[:3]] == [0, 1, 2]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

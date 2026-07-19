@@ -1131,3 +1131,25 @@ image fill 仍待下一刀；产品 GPU 开关继续默认关闭，Painter 继�
 
 角色/ruby 基础切片至此收口。G3 下一刀进入 gradient/split/image fill；产品 GPU 开关继续默认
 关闭，Painter 永久保留为 oracle/fallback。
+
+### 2026-07-19（第十五批）：G3 Direct2D 渐变与硬色带填充
+
+- GPU `TextStyle` 不再只携带退化后的单色，完整传递正文与 ruby 的 before/after
+  text/stroke/stroke2/decor `PaintFill`；保留浮点 stop 位置，角色/歌手 resolved style 继续使用同一套
+  IR，不在 Direct2D 侧另建项目字段。
+- horizontal/vertical gradient 使用共享 N3 fill rect 创建 Direct2D linear-gradient brush；正文 fill rect
+  按首字符整数 descent、整行最大 `FontSize + EdgeSize` 和首字符 edge/edge2 inset 计算，ruby 则按
+  目标宽度与 Painter 的独立 ruby fill rect 计算，所有文字、描边和 glow 源共享同一坐标系。
+- `split_vertical` 按 Painter/N3 的 MilleFeuille 语义展开为同位置的前后颜色 stop，形成无过渡硬边；
+  extend mode 使用 wrap 而不是 clamp，因此字形超出 fill rect 时继续循环色带。三段测试的前三个可见
+  换色扫描线与 Painter 相差不超过 `1px`。
+- 自动门禁另以红/绿/蓝三段 vertical gradient 比较 GPU 与 Painter 的方向、中点和归一化取样，
+  关键通道差限制在 `42/255`；硬件/WARP build smoke 通过。GPU/transport `101 passed`，native
+  protocol/export/benchmark `56 passed, 27 skipped`。
+- RTX 3070 Ti 上 1920×1080、18 字、五 stop gradient 连续 600 帧：render mean/p95
+  `1.15/1.48ms`，readback p95 `5.76ms`，同步 roundtrip p95 `17.19ms`，含 Python QImage 交付的
+  总吞吐 `64.45fps`；render 核心仍显著低于 60fps 帧预算，正式预览继续由 G2 latest-wins 调度吸收
+  个别回读长尾。
+
+G3 下一刀补 image fill 的 Direct2D bitmap brush、全局画布锚点、wrap/scale 与透明纹理 body
+protection；产品 GPU 开关继续默认关闭。

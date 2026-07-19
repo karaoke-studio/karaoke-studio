@@ -85,10 +85,11 @@ struct PaintFillSpec {
     QString color = QStringLiteral("#FFFFFF");
     QString startColor = QStringLiteral("#FFFFFF");
     QString endColor = QStringLiteral("#FFFFFF");
-    std::vector<std::pair<int, QString>> gradientStops;
+    std::vector<std::pair<double, QString>> gradientStops;
     QString splitTopColor = QStringLiteral("#FFFFFF");
     QString splitBottomColor = QStringLiteral("#FFFFFF");
     int splitPositionPct = 50;
+    std::vector<std::pair<double, QString>> splitStops;
     QString imagePath;
     int imageScalePct = 100;
 };
@@ -466,12 +467,12 @@ PaintFillSpec solidPaintFill(const QString &color) {
     return fill;
 }
 
-std::vector<std::pair<int, QString>> parseGradientStops(
+std::vector<std::pair<double, QString>> parseGradientStops(
     const QJsonValue &value,
     const QString &startColor,
     const QString &endColor
 ) {
-    std::vector<std::pair<int, QString>> stops;
+    std::vector<std::pair<double, QString>> stops;
     const QJsonArray items = value.toArray();
     for (const auto &item : items) {
         const QJsonArray pair = item.toArray();
@@ -479,7 +480,7 @@ std::vector<std::pair<int, QString>> parseGradientStops(
             continue;
         }
         stops.push_back({
-            std::clamp(pair.at(0).toInt(), 0, 100),
+            std::clamp(pair.at(0).toDouble(), 0.0, 100.0),
             pair.at(1).toString(),
         });
     }
@@ -527,6 +528,20 @@ PaintFillSpec paintFillSpec(const QJsonObject &object, const QString &fallback) 
         0,
         100
     );
+    const QJsonValue splitStopsValue = object.value(QStringLiteral("split_stops"));
+    if (splitStopsValue.toArray().isEmpty()) {
+        fill.splitStops = {
+            {0.0, fill.splitTopColor},
+            {static_cast<double>(fill.splitPositionPct), fill.splitBottomColor},
+            {100.0, fill.splitBottomColor},
+        };
+    } else {
+        fill.splitStops = parseGradientStops(
+            splitStopsValue,
+            fill.splitTopColor,
+            fill.splitBottomColor
+        );
+    }
     fill.imagePath = stringValue(object, QStringLiteral("image_path"), fill.imagePath);
     fill.imageScalePct = std::max(
         1,
@@ -5654,6 +5669,51 @@ krok::subtitle::native::RgbaColor gpuColor(const QString &value, const QString &
     };
 }
 
+krok::subtitle::native::PaintStyle gpuPaint(
+    const PaintFillSpec &source,
+    const QString &fallback
+) {
+    using krok::subtitle::native::PaintStop;
+    using krok::subtitle::native::PaintStyle;
+    PaintStyle paint;
+    paint.mode = source.mode.toStdString();
+    paint.color = gpuColor(source.color, fallback);
+    paint.imagePath = source.imagePath.toStdWString();
+    paint.imageScale = static_cast<float>(
+        std::clamp(source.imageScalePct, 1, 1000) / 100.0
+    );
+    const auto &sourceStops = source.mode == QStringLiteral("split_vertical")
+        ? source.splitStops
+        : source.gradientStops;
+    paint.stops.reserve(sourceStops.size());
+    for (const auto &[position, color] : sourceStops) {
+        paint.stops.push_back(PaintStop{
+            static_cast<float>(std::clamp(position / 100.0, 0.0, 1.0)),
+            gpuColor(color, source.color),
+        });
+    }
+    if (paint.stops.empty()) {
+        if (source.mode == QStringLiteral("split_vertical")) {
+            paint.stops = {
+                {0.0f, gpuColor(source.splitTopColor, source.color)},
+                {
+                    static_cast<float>(std::clamp(
+                        source.splitPositionPct / 100.0, 0.0, 1.0
+                    )),
+                    gpuColor(source.splitBottomColor, source.color),
+                },
+                {1.0f, gpuColor(source.splitBottomColor, source.color)},
+            };
+        } else {
+            paint.stops = {
+                {0.0f, gpuColor(source.startColor, source.color)},
+                {1.0f, gpuColor(source.endColor, source.color)},
+            };
+        }
+    }
+    return paint;
+}
+
 void applyGpuResolvedStyle(
     krok::subtitle::native::TextStyle &target,
     const ResolvedStyle &source,
@@ -5682,6 +5742,14 @@ void applyGpuResolvedStyle(
     target.afterStroke2 = gpuColor(source.afterStroke2Fill.color, source.afterStroke2Color);
     target.beforeDecor = gpuColor(source.beforeShadowFill.color, source.beforeShadowColor);
     target.afterDecor = gpuColor(source.afterShadowFill.color, source.afterShadowColor);
+    target.beforeFillPaint = gpuPaint(source.baseFill, source.baseColor);
+    target.afterFillPaint = gpuPaint(source.afterFill, source.fillColor);
+    target.beforeStrokePaint = gpuPaint(source.beforeStrokeFill, source.beforeStrokeColor);
+    target.afterStrokePaint = gpuPaint(source.afterStrokeFill, source.afterStrokeColor);
+    target.beforeStroke2Paint = gpuPaint(source.beforeStroke2Fill, source.beforeStroke2Color);
+    target.afterStroke2Paint = gpuPaint(source.afterStroke2Fill, source.afterStroke2Color);
+    target.beforeDecorPaint = gpuPaint(source.beforeShadowFill, source.beforeShadowColor);
+    target.afterDecorPaint = gpuPaint(source.afterShadowFill, source.afterShadowColor);
     target.strokeWidth = static_cast<float>(source.strokeWidthPx * scale);
     target.stroke2Width = static_cast<float>(source.stroke2WidthPx * scale);
     target.decorationKind = source.decorationKind.toStdString();
@@ -5739,6 +5807,26 @@ void applyGpuResolvedStyle(
     );
     target.rubyAfterDecor = gpuColor(
         source.rubyAfterShadowFill.color, source.rubyAfterShadowColor
+    );
+    target.rubyBeforeFillPaint = gpuPaint(source.rubyBaseFill, source.rubyBaseColor);
+    target.rubyAfterFillPaint = gpuPaint(source.rubyAfterFill, source.rubyFillColor);
+    target.rubyBeforeStrokePaint = gpuPaint(
+        source.rubyBeforeStrokeFill, source.rubyBeforeStrokeColor
+    );
+    target.rubyAfterStrokePaint = gpuPaint(
+        source.rubyAfterStrokeFill, source.rubyAfterStrokeColor
+    );
+    target.rubyBeforeStroke2Paint = gpuPaint(
+        source.rubyBeforeStroke2Fill, source.rubyBeforeStroke2Color
+    );
+    target.rubyAfterStroke2Paint = gpuPaint(
+        source.rubyAfterStroke2Fill, source.rubyAfterStroke2Color
+    );
+    target.rubyBeforeDecorPaint = gpuPaint(
+        source.rubyBeforeShadowFill, source.rubyBeforeShadowColor
+    );
+    target.rubyAfterDecorPaint = gpuPaint(
+        source.rubyAfterShadowFill, source.rubyAfterShadowColor
     );
     target.rubyStrokeWidth = static_cast<float>(source.rubyStrokeWidthPx * scale);
     target.rubyStroke2Width = static_cast<float>(source.rubyStroke2WidthPx * scale);

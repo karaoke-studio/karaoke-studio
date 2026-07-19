@@ -203,6 +203,99 @@ Microsoft::WRL::ComPtr<IDWriteFontFace> findFallbackFontFace(
     return {};
 }
 
+Microsoft::WRL::ComPtr<ID2D1Brush> createPaintBrush(
+    ID2D1DeviceContext *context,
+    const PaintStyle &paint,
+    const D2D1_RECT_F &rect,
+    const RgbaColor &fallback,
+    const D2DDevice &device
+) {
+    const bool gradient = paint.mode == "gradient_horizontal"
+        || paint.mode == "gradient_vertical"
+        || paint.mode == "split_vertical";
+    if (!gradient || paint.stops.empty()) {
+        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> solid;
+        checkHr(
+            context->CreateSolidColorBrush(
+                d2dColor(paint.mode.empty() ? fallback : paint.color),
+                solid.ReleaseAndGetAddressOf()
+            ),
+            "Create paint solid brush",
+            device
+        );
+        Microsoft::WRL::ComPtr<ID2D1Brush> brush;
+        checkHr(solid.As(&brush), "Query paint solid brush", device);
+        return brush;
+    }
+
+    std::vector<PaintStop> ordered = paint.stops;
+    std::stable_sort(ordered.begin(), ordered.end(), [](const auto &left, const auto &right) {
+        return left.position < right.position;
+    });
+    std::vector<D2D1_GRADIENT_STOP> stops;
+    if (paint.mode == "split_vertical") {
+        stops.reserve(ordered.size() * 2);
+        stops.push_back(D2D1::GradientStop(
+            std::clamp(ordered.front().position, 0.0f, 1.0f),
+            d2dColor(ordered.front().color)
+        ));
+        for (std::size_t index = 1; index < ordered.size(); ++index) {
+            const float position = std::clamp(ordered[index].position, 0.0f, 1.0f);
+            stops.push_back(D2D1::GradientStop(
+                position, d2dColor(ordered[index - 1].color)
+            ));
+            stops.push_back(D2D1::GradientStop(
+                position, d2dColor(ordered[index].color)
+            ));
+        }
+    } else {
+        stops.reserve(ordered.size());
+        for (const PaintStop &stop : ordered) {
+            stops.push_back(D2D1::GradientStop(
+                std::clamp(stop.position, 0.0f, 1.0f),
+                d2dColor(stop.color)
+            ));
+        }
+    }
+    if (stops.size() == 1) {
+        stops.push_back(D2D1::GradientStop(1.0f, stops.front().color));
+    }
+    Microsoft::WRL::ComPtr<ID2D1GradientStopCollection> collection;
+    checkHr(
+        context->CreateGradientStopCollection(
+            stops.data(),
+            static_cast<UINT32>(stops.size()),
+            D2D1_GAMMA_2_2,
+            paint.mode == "split_vertical"
+                ? D2D1_EXTEND_MODE_WRAP
+                : D2D1_EXTEND_MODE_CLAMP,
+            collection.ReleaseAndGetAddressOf()
+        ),
+        "Create paint gradient stops",
+        device
+    );
+    const bool horizontal = paint.mode == "gradient_horizontal";
+    const D2D1_POINT_2F start = horizontal
+        ? D2D1::Point2F(rect.left, (rect.top + rect.bottom) * 0.5f)
+        : D2D1::Point2F((rect.left + rect.right) * 0.5f, rect.top);
+    const D2D1_POINT_2F end = horizontal
+        ? D2D1::Point2F(rect.right, (rect.top + rect.bottom) * 0.5f)
+        : D2D1::Point2F((rect.left + rect.right) * 0.5f, rect.bottom);
+    Microsoft::WRL::ComPtr<ID2D1LinearGradientBrush> linear;
+    checkHr(
+        context->CreateLinearGradientBrush(
+            D2D1::LinearGradientBrushProperties(start, end),
+            collection.Get(),
+            linear.ReleaseAndGetAddressOf()
+        ),
+        "Create paint linear gradient brush",
+        device
+    );
+    Microsoft::WRL::ComPtr<ID2D1Brush> brush;
+    checkHr(linear.As(&brush), "Query paint gradient brush", device);
+    return brush;
+}
+
 }  // namespace
 
 struct Direct2DGpuBackend::Impl {
@@ -224,6 +317,7 @@ struct Direct2DGpuBackend::Impl {
         float baselineOffset = 0.0f;
         int styleIndex = -1;
         D2D1_RECT_F bounds{};
+        D2D1_RECT_F fillBounds{};
         std::vector<CachedChar> chars;
         std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> geometries;
     };
@@ -240,6 +334,7 @@ struct Direct2DGpuBackend::Impl {
         float maxVisualPad = 0.0f;
         bool hasInlineStyles = false;
         D2D1_RECT_F bounds{};
+        D2D1_RECT_F fillBounds{};
         std::vector<CachedChar> chars;
         std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> geometries;
         std::vector<CachedRuby> rubies;
@@ -500,6 +595,11 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         cached.chars.reserve(sourceLine.chars.size());
         bool lineHasBounds = false;
         float cursor = 0.0f;
+        int firstSlotDescent = 0;
+        int firstSlotEdge = 0;
+        int firstSlotEdge2 = 0;
+        int maxDrawHeight = 1;
+        bool hasFirstSlot = false;
 
         for (std::size_t charIndex = 0; charIndex < sourceLine.chars.size(); ++charIndex) {
             const TextChar &sourceChar = sourceLine.chars[charIndex];
@@ -539,6 +639,21 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
 
             DWRITE_FONT_METRICS fontMetrics{};
             requestedFace->GetMetrics(&fontMetrics);
+            if (!hasFirstSlot) {
+                const int metricTotal = std::max(
+                    static_cast<int>(fontMetrics.ascent)
+                        + static_cast<int>(fontMetrics.descent),
+                    1
+                );
+                firstSlotDescent = unit * static_cast<int>(fontMetrics.descent)
+                    / metricTotal;
+                firstSlotEdge = edgeSize;
+                firstSlotEdge2 = std::max(
+                    static_cast<int>(charStyle.stroke2Width), 0
+                );
+                hasFirstSlot = true;
+            }
+            maxDrawHeight = std::max(maxDrawHeight, unit + edgeSize);
             // The product's lane boxes remain Painter-compatible. N3's exact
             // glyph bearings/outline are used inside those boxes, while the
             // face's em scale keeps mixed-font baselines close to QFontMetrics.
@@ -693,6 +808,21 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             if (charIndex + 1 < sourceLine.chars.size()) {
                 cursor += charStyle.letterSpacing;
             }
+        }
+
+        if (hasFirstSlot) {
+            const float drawBottom = static_cast<float>(
+                firstSlotDescent + firstSlotEdge / 2
+            );
+            const float inset = static_cast<float>(
+                (firstSlotEdge + firstSlotEdge2) / 2
+            );
+            cached.fillBounds = D2D1::RectF(
+                0.0f,
+                drawBottom - static_cast<float>(maxDrawHeight) + inset,
+                std::max(cursor, 1.0f),
+                std::max(drawBottom - inset, drawBottom - static_cast<float>(maxDrawHeight) + inset + 1.0f)
+            );
         }
 
         if (!cached.hasRubyAnchor) {
@@ -936,6 +1066,40 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             // Painter anchors every ruby run with the line-level ruby font and
             // gap; target-role styling changes paint/measurement, not baseline.
             ruby.baselineOffset = -cached.boxAscent - style.rubyGap - rubyBoxDescent;
+            DWRITE_FONT_METRICS rubyFillMetrics{};
+            rubyFace->GetMetrics(&rubyFillMetrics);
+            const int rubyMetricTotal = std::max(
+                static_cast<int>(rubyFillMetrics.ascent)
+                    + static_cast<int>(rubyFillMetrics.descent),
+                1
+            );
+            const int rubyFillSize = std::max(
+                static_cast<int>(rubyStyle.rubyFontSize), 1
+            );
+            const int rubyFillDescent = rubyFillSize
+                * static_cast<int>(rubyFillMetrics.descent) / rubyMetricTotal;
+            const int rubyDrawEdge = std::max(
+                static_cast<int>(rubyStyle.rubyStrokeWidth), 0
+            );
+            const int rubyDrawEdge2 = std::max(
+                static_cast<int>(rubyStyle.rubyStroke2Width), 0
+            );
+            const float rubyDrawBottom = ruby.baselineOffset
+                + static_cast<float>(rubyFillDescent + rubyDrawEdge / 2);
+            const float rubyInset = static_cast<float>(
+                (rubyDrawEdge + rubyDrawEdge2) / 2
+            );
+            ruby.fillBounds = D2D1::RectF(
+                targetLeft,
+                rubyDrawBottom - static_cast<float>(rubyFillSize + rubyDrawEdge)
+                    + rubyInset,
+                targetRight,
+                std::max(
+                    rubyDrawBottom - rubyInset,
+                    rubyDrawBottom - static_cast<float>(rubyFillSize + rubyDrawEdge)
+                        + rubyInset + 1.0f
+                )
+            );
             bool rubyHasBounds = false;
             for (std::size_t unitIndex = 0; unitIndex < rubyGlyphs.size(); ++unitIndex) {
                 RubyGlyph &glyph = rubyGlyphs[unitIndex];
@@ -1153,22 +1317,30 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
             }
         }
         const float dy = firstBaseline + step * static_cast<float>(line->lane);
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> beforeFill;
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> afterFill;
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> beforeStroke;
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> afterStroke;
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> beforeStroke2;
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> afterStroke2;
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> beforeDecor;
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> afterDecor;
-        checkHr(context->CreateSolidColorBrush(d2dColor(style.beforeFill), beforeFill.ReleaseAndGetAddressOf()), "Create before fill brush", device_);
-        checkHr(context->CreateSolidColorBrush(d2dColor(style.afterFill), afterFill.ReleaseAndGetAddressOf()), "Create after fill brush", device_);
-        checkHr(context->CreateSolidColorBrush(d2dColor(style.beforeStroke), beforeStroke.ReleaseAndGetAddressOf()), "Create before stroke brush", device_);
-        checkHr(context->CreateSolidColorBrush(d2dColor(style.afterStroke), afterStroke.ReleaseAndGetAddressOf()), "Create after stroke brush", device_);
-        checkHr(context->CreateSolidColorBrush(d2dColor(style.beforeStroke2), beforeStroke2.ReleaseAndGetAddressOf()), "Create before stroke2 brush", device_);
-        checkHr(context->CreateSolidColorBrush(d2dColor(style.afterStroke2), afterStroke2.ReleaseAndGetAddressOf()), "Create after stroke2 brush", device_);
-        checkHr(context->CreateSolidColorBrush(d2dColor(style.beforeDecor), beforeDecor.ReleaseAndGetAddressOf()), "Create before decor brush", device_);
-        checkHr(context->CreateSolidColorBrush(d2dColor(style.afterDecor), afterDecor.ReleaseAndGetAddressOf()), "Create after decor brush", device_);
+        Microsoft::WRL::ComPtr<ID2D1Brush> beforeFill = createPaintBrush(
+            context, style.beforeFillPaint, line->fillBounds, style.beforeFill, device_
+        );
+        Microsoft::WRL::ComPtr<ID2D1Brush> afterFill = createPaintBrush(
+            context, style.afterFillPaint, line->fillBounds, style.afterFill, device_
+        );
+        Microsoft::WRL::ComPtr<ID2D1Brush> beforeStroke = createPaintBrush(
+            context, style.beforeStrokePaint, line->fillBounds, style.beforeStroke, device_
+        );
+        Microsoft::WRL::ComPtr<ID2D1Brush> afterStroke = createPaintBrush(
+            context, style.afterStrokePaint, line->fillBounds, style.afterStroke, device_
+        );
+        Microsoft::WRL::ComPtr<ID2D1Brush> beforeStroke2 = createPaintBrush(
+            context, style.beforeStroke2Paint, line->fillBounds, style.beforeStroke2, device_
+        );
+        Microsoft::WRL::ComPtr<ID2D1Brush> afterStroke2 = createPaintBrush(
+            context, style.afterStroke2Paint, line->fillBounds, style.afterStroke2, device_
+        );
+        Microsoft::WRL::ComPtr<ID2D1Brush> beforeDecor = createPaintBrush(
+            context, style.beforeDecorPaint, line->fillBounds, style.beforeDecor, device_
+        );
+        Microsoft::WRL::ComPtr<ID2D1Brush> afterDecor = createPaintBrush(
+            context, style.afterDecorPaint, line->fillBounds, style.afterDecor, device_
+        );
 
         float wipeEdge = line->bounds.left;
         for (const Impl::CachedChar &ch : line->chars) {
@@ -1324,15 +1496,6 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 "ID2D1DeviceContext::CreateEffect(ruby GaussianBlur)",
                 device_
             );
-            Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
-            checkHr(
-                context->CreateSolidColorBrush(
-                    d2dColor(after ? rubyStyle.rubyAfterDecor : rubyStyle.rubyBeforeDecor),
-                    brush.ReleaseAndGetAddressOf()
-                ),
-                "Create role ruby decor brush",
-                device_
-            );
             const float sourceWidth = std::max(0.0f, rubyStyle.rubyStrokeWidth)
                 + (rubyStyle.rubyStroke2Width > 0.0f
                     ? rubyStyle.rubyStroke2Width
@@ -1347,6 +1510,15 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 if (ruby.styleIndex != styleIndex) {
                     continue;
                 }
+                Microsoft::WRL::ComPtr<ID2D1Brush> brush = createPaintBrush(
+                    context,
+                    after
+                        ? rubyStyle.rubyAfterDecorPaint
+                        : rubyStyle.rubyBeforeDecorPaint,
+                    ruby.fillBounds,
+                    after ? rubyStyle.rubyAfterDecor : rubyStyle.rubyBeforeDecor,
+                    device_
+                );
                 const float edge = rubyWipeEdgeAt(ruby);
                 if ((after && edge <= ruby.bounds.left)
                     || (!after && edge >= ruby.bounds.right)) {
@@ -1445,13 +1617,11 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 "ID2D1DeviceContext::CreateEffect(inline GaussianBlur)",
                 device_
             );
-            Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
-            checkHr(
-                context->CreateSolidColorBrush(
-                    d2dColor(after ? charStyle.afterDecor : charStyle.beforeDecor),
-                    brush.ReleaseAndGetAddressOf()
-                ),
-                "Create inline decor brush",
+            Microsoft::WRL::ComPtr<ID2D1Brush> brush = createPaintBrush(
+                context,
+                after ? charStyle.afterDecorPaint : charStyle.beforeDecorPaint,
+                line->fillBounds,
+                after ? charStyle.afterDecor : charStyle.beforeDecor,
                 device_
             );
             const float sourceWidth = std::max(charStyle.strokeWidth, 0.0f)
@@ -1587,28 +1757,25 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 const RgbaColor &stroke2Color = after
                     ? charStyle.afterStroke2
                     : charStyle.beforeStroke2;
-                Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> fillBrush;
-                Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> strokeBrush;
-                Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> stroke2Brush;
-                checkHr(
-                    context->CreateSolidColorBrush(
-                        d2dColor(fillColor), fillBrush.ReleaseAndGetAddressOf()
-                    ),
-                    "Create inline fill brush",
+                Microsoft::WRL::ComPtr<ID2D1Brush> fillBrush = createPaintBrush(
+                    context,
+                    after ? charStyle.afterFillPaint : charStyle.beforeFillPaint,
+                    line->fillBounds,
+                    fillColor,
                     device_
                 );
-                checkHr(
-                    context->CreateSolidColorBrush(
-                        d2dColor(strokeColor), strokeBrush.ReleaseAndGetAddressOf()
-                    ),
-                    "Create inline stroke brush",
+                Microsoft::WRL::ComPtr<ID2D1Brush> strokeBrush = createPaintBrush(
+                    context,
+                    after ? charStyle.afterStrokePaint : charStyle.beforeStrokePaint,
+                    line->fillBounds,
+                    strokeColor,
                     device_
                 );
-                checkHr(
-                    context->CreateSolidColorBrush(
-                        d2dColor(stroke2Color), stroke2Brush.ReleaseAndGetAddressOf()
-                    ),
-                    "Create inline stroke2 brush",
+                Microsoft::WRL::ComPtr<ID2D1Brush> stroke2Brush = createPaintBrush(
+                    context,
+                    after ? charStyle.afterStroke2Paint : charStyle.beforeStroke2Paint,
+                    line->fillBounds,
+                    stroke2Color,
                     device_
                 );
                 if (charStyle.stroke2Width > 0.0f) {
@@ -1645,31 +1812,27 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
         }
         auto drawRubyStack = [&](const Impl::CachedRuby &ruby, bool after) {
             const TextStyle &rubyStyle = rubyStyleFor(ruby.styleIndex);
-            Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> fill;
-            Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> stroke;
-            Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> stroke2;
-            checkHr(
-                context->CreateSolidColorBrush(
-                    d2dColor(after ? rubyStyle.rubyAfterFill : rubyStyle.rubyBeforeFill),
-                    fill.ReleaseAndGetAddressOf()
-                ),
-                "Create role ruby fill brush",
+            Microsoft::WRL::ComPtr<ID2D1Brush> fill = createPaintBrush(
+                context,
+                after ? rubyStyle.rubyAfterFillPaint : rubyStyle.rubyBeforeFillPaint,
+                ruby.fillBounds,
+                after ? rubyStyle.rubyAfterFill : rubyStyle.rubyBeforeFill,
                 device_
             );
-            checkHr(
-                context->CreateSolidColorBrush(
-                    d2dColor(after ? rubyStyle.rubyAfterStroke : rubyStyle.rubyBeforeStroke),
-                    stroke.ReleaseAndGetAddressOf()
-                ),
-                "Create role ruby stroke brush",
+            Microsoft::WRL::ComPtr<ID2D1Brush> stroke = createPaintBrush(
+                context,
+                after ? rubyStyle.rubyAfterStrokePaint : rubyStyle.rubyBeforeStrokePaint,
+                ruby.fillBounds,
+                after ? rubyStyle.rubyAfterStroke : rubyStyle.rubyBeforeStroke,
                 device_
             );
-            checkHr(
-                context->CreateSolidColorBrush(
-                    d2dColor(after ? rubyStyle.rubyAfterStroke2 : rubyStyle.rubyBeforeStroke2),
-                    stroke2.ReleaseAndGetAddressOf()
-                ),
-                "Create role ruby stroke2 brush",
+            Microsoft::WRL::ComPtr<ID2D1Brush> stroke2 = createPaintBrush(
+                context,
+                after
+                    ? rubyStyle.rubyAfterStroke2Paint
+                    : rubyStyle.rubyBeforeStroke2Paint,
+                ruby.fillBounds,
+                after ? rubyStyle.rubyAfterStroke2 : rubyStyle.rubyBeforeStroke2,
                 device_
             );
             if (rubyStyle.rubyStroke2Width > 0.0f) {

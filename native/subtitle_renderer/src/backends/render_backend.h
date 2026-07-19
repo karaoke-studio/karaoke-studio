@@ -59,6 +59,21 @@ struct RgbaColor {
     bool operator==(const RgbaColor &) const = default;
 };
 
+struct PaintStop {
+    float position = 0.0f;
+    RgbaColor color;
+    bool operator==(const PaintStop &) const = default;
+};
+
+struct PaintStyle {
+    std::string mode = "solid";
+    RgbaColor color;
+    std::vector<PaintStop> stops;
+    std::wstring imagePath;
+    float imageScale = 1.0f;
+    bool operator==(const PaintStyle &) const = default;
+};
+
 struct TextChar {
     std::wstring text;
     int startMs = 0;
@@ -123,6 +138,14 @@ struct TextStyle {
     RgbaColor afterStroke2{0, 0, 0, 255};
     RgbaColor beforeDecor{0, 0, 0, 255};
     RgbaColor afterDecor{0, 0, 0, 255};
+    PaintStyle beforeFillPaint;
+    PaintStyle afterFillPaint;
+    PaintStyle beforeStrokePaint;
+    PaintStyle afterStrokePaint;
+    PaintStyle beforeStroke2Paint;
+    PaintStyle afterStroke2Paint;
+    PaintStyle beforeDecorPaint;
+    PaintStyle afterDecorPaint;
     float strokeWidth = 0.0f;
     float stroke2Width = 0.0f;
     std::string decorationKind = "none";
@@ -146,6 +169,14 @@ struct TextStyle {
     RgbaColor rubyAfterStroke2{0, 0, 0, 255};
     RgbaColor rubyBeforeDecor{0, 0, 0, 255};
     RgbaColor rubyAfterDecor{0, 0, 0, 255};
+    PaintStyle rubyBeforeFillPaint;
+    PaintStyle rubyAfterFillPaint;
+    PaintStyle rubyBeforeStrokePaint;
+    PaintStyle rubyAfterStrokePaint;
+    PaintStyle rubyBeforeStroke2Paint;
+    PaintStyle rubyAfterStroke2Paint;
+    PaintStyle rubyBeforeDecorPaint;
+    PaintStyle rubyAfterDecorPaint;
     float rubyStrokeWidth = 0.0f;
     float rubyStroke2Width = 0.0f;
     std::string rubyDecorationKind = "none";
