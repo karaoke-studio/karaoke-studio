@@ -244,6 +244,21 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
     assert gpu_unsupported_features(track, Style(entry_anim="fade")) == ()
     assert gpu_unsupported_features(track, Style(entry_anim="char_fade")) == ()
     assert gpu_unsupported_features(track, Style(entry_anim="spin_flip")) == ()
+    assert gpu_unsupported_features(track, Style(entry_anim="utopia")) == ()
+    ruby_track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("漢", 0)], end_ms=500)],
+        rubies=[
+            RubyAnnotation(
+                kanji="漢",
+                reading="かん",
+                pos_start_ms=0,
+                pos_end_ms=500,
+            )
+        ],
+    )
+    assert gpu_unsupported_features(
+        ruby_track, Style(entry_anim="utopia")
+    ) == ("utopia_ruby_group",)
     span_track = TimingTrack(
         lines=[
             TimingLine(

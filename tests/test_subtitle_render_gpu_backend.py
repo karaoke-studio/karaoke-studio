@@ -259,6 +259,45 @@ def _g4_spin_scene() -> tuple[TimingTrack, Style]:
     return track, style
 
 
+def _g4_utopia_main_scene() -> tuple[TimingTrack, Style]:
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("A", 1_200),
+                    TimingChar("夢", 1_700),
+                    TimingChar("想", 2_200),
+                    TimingChar("B", 2_700),
+                ],
+                end_ms=3_200,
+                display_start_override_ms=0,
+                display_end_override_ms=4_400,
+            )
+        ]
+    )
+    state = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#30D0FF"),
+        stroke=PaintFill(mode="solid", color="#202040"),
+    )
+    return track, _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=72,
+        stroke_width_px=3,
+        stroke2_enabled=False,
+        decoration_kind="glow",
+        glow_before_radius_px=8,
+        glow_after_radius_px=8,
+        glow_concentration_level=1,
+        dual_line_layout=False,
+        line_horizontal_layout="center",
+        karaoke_colors=KaraokeColors(before=state, after=state),
+        entry_anim="utopia",
+        exit_anim="utopia",
+        line_tail_ms=1_000,
+    )
+
+
 def _alpha_count(payload: bytes) -> int:
     return sum(alpha > 0 for alpha in payload[3::4])
 
@@ -1534,6 +1573,42 @@ def test_gpu_g4_spin_flip_transforms_all_character_layers_like_painter(monkeypat
                 _payload_alpha_bounds(gpu_frame),
                 _payload_alpha_bounds(painter_frame),
             )
+        )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g4_utopia_main_intro_wipe_and_outro_follow_painter(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track, style = _g4_utopia_main_scene()
+    timestamps = (100, 350, 700, 1_250, 2_400, 3_600, 4_300)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+
+    assert _alpha_count(gpu[-1]) == _alpha_count(painter[-1]) == 0
+    settled_gpu_alpha = sum(gpu[2][3::4])
+    settled_painter_alpha = sum(painter[2][3::4])
+    for index in range(len(timestamps) - 1):
+        gpu_ratio = sum(gpu[index][3::4]) / settled_gpu_alpha
+        painter_ratio = sum(painter[index][3::4]) / settled_painter_alpha
+        assert abs(gpu_ratio - painter_ratio) <= 0.14, (
+            timestamps[index], gpu_ratio, painter_ratio
+        )
+        assert all(
+            abs(actual - expected) <= 14
+            for actual, expected in zip(
+                _payload_alpha_bounds(gpu[index]),
+                _payload_alpha_bounds(painter[index]),
+            )
+        ), (
+            timestamps[index],
+            _payload_alpha_bounds(gpu[index]),
+            _payload_alpha_bounds(painter[index]),
         )
 
 

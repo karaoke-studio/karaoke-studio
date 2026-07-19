@@ -1775,7 +1775,11 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         const bool hasCharacterTransition = line->entryAnimation == "char_fade"
             || line->exitAnimation == "char_fade"
             || line->entryAnimation == "spin_flip"
-            || line->exitAnimation == "spin_flip";
+            || line->exitAnimation == "spin_flip"
+            || line->entryAnimation == "utopia"
+            || line->exitAnimation == "utopia";
+        const bool hasUtopiaTransition = line->entryAnimation == "utopia"
+            || line->exitAnimation == "utopia";
         auto charFadeOpacityAt = [&](std::size_t charIndex) {
             if (!hasCharacterTransition || line->displayWindows.empty()) {
                 return 1.0f;
@@ -1813,20 +1817,6 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             }
             return 1.0f;
         };
-        auto rubyFadeOpacityAt = [&](const Impl::CachedRuby &ruby) {
-            return charFadeOpacityAt(static_cast<std::size_t>(std::max(
-                ruby.transitionCharIndex, 0
-            )));
-        };
-        if (hasCharacterTransition) {
-            float maxOpacity = 0.0f;
-            for (std::size_t index = 0; index < line->chars.size(); ++index) {
-                maxOpacity = std::max(maxOpacity, charFadeOpacityAt(index));
-            }
-            if (maxOpacity <= 0.0f) {
-                continue;
-            }
-        }
         int spinDirection = 0;
         if (!line->displayWindows.empty()) {
             const DisplayWindow &window = line->displayWindows.front();
@@ -1862,6 +1852,153 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 centerY * (1.0f - clamped) - clamped * skew * centerX
             );
         };
+        struct CharacterAnimationState {
+            float opacity = 1.0f;
+            D2D1_MATRIX_3X2_F matrix = D2D1::Matrix3x2F::Identity();
+            bool transformed = false;
+            bool utopiaExit = false;
+        };
+        auto utopiaFollowingDoneAt = [&](std::size_t charIndex) {
+            const int count = static_cast<int>(line->chars.size());
+            const int index = std::clamp(static_cast<int>(charIndex), 0, count - 1);
+            const int currentEnd = line->chars[static_cast<std::size_t>(index)].endMs;
+            for (int next = index + 1; next < count; ++next) {
+                const Impl::CachedChar &candidate = line->chars[
+                    static_cast<std::size_t>(next)
+                ];
+                if (candidate.geometry != nullptr) {
+                    return currentEnd <= candidate.endMs
+                        ? candidate.endMs
+                        : currentEnd;
+                }
+            }
+            return currentEnd + std::max(line->style.tailMs - 750, 0);
+        };
+        auto utopiaMatrix = [&](float dxValue, float dyValue, float rotation,
+                                float scaleX, float scaleY,
+                                float left, float baseline,
+                                float centerX, float centerY) {
+            // QTransform mutators pre-multiply in row-vector space. Reverse
+            // the call order from _character_transform's scale-origin branch.
+            return D2D1::Matrix3x2F::Translation(-centerX, -centerY)
+                * D2D1::Matrix3x2F::Rotation(rotation)
+                * D2D1::Matrix3x2F::Translation(
+                    centerX - left, centerY - baseline
+                )
+                * D2D1::Matrix3x2F::Scale(scaleX, scaleY)
+                * D2D1::Matrix3x2F::Translation(
+                    left + dxValue, baseline + dyValue
+                );
+        };
+        auto characterAnimationAt = [&](std::size_t charIndex) {
+            CharacterAnimationState state;
+            if (charIndex >= line->chars.size()) {
+                state.opacity = 0.0f;
+                return state;
+            }
+            const Impl::CachedChar &ch = line->chars[charIndex];
+            if (!hasUtopiaTransition) {
+                state.opacity = charFadeOpacityAt(charIndex);
+                state.matrix = spinMatrix(state.opacity, ch.pivotX, ch.pivotY);
+                state.transformed = spinDirection != 0 && state.opacity < 1.0f;
+                return state;
+            }
+            if (line->displayWindows.empty()) {
+                return state;
+            }
+            constexpr float pi = 3.14159265358979323846f;
+            const DisplayWindow &window = line->displayWindows.front();
+            float dxValue = 0.0f;
+            float dyValue = 0.0f;
+            float rotation = 0.0f;
+            float scaleX = 1.0f;
+            float scaleY = 1.0f;
+            if (line->entryAnimation == "utopia"
+                && tMs <= window.startMs + 700) {
+                const int count = std::max(static_cast<int>(line->chars.size()), 1);
+                const int delayStep = count <= 1 ? 0 : 200 / (count - 1);
+                const int elapsed = tMs - window.startMs
+                    - delayStep * static_cast<int>(charIndex);
+                if (elapsed < 0) {
+                    state.opacity = 0.0f;
+                    scaleX = scaleY = 0.0f;
+                } else {
+                    state.opacity = std::min(
+                        static_cast<float>(elapsed) / 400.0f, 1.0f
+                    );
+                    if (elapsed < 400) {
+                        scaleX = scaleY = 1.3f
+                            * static_cast<float>(elapsed) / 400.0f;
+                    } else if (elapsed < 500) {
+                        const float remaining = static_cast<float>(500 - elapsed);
+                        scaleX = scaleY = 1.0f + 0.3f * remaining / 100.0f;
+                    }
+                }
+            } else if (line->exitAnimation == "utopia"
+                && tMs > utopiaFollowingDoneAt(charIndex)) {
+                const float local = std::clamp(
+                    static_cast<float>(tMs - utopiaFollowingDoneAt(charIndex))
+                        / 750.0f,
+                    0.0f,
+                    1.0f
+                );
+                state.opacity = 1.0f - local;
+                state.utopiaExit = true;
+                const float shrink = 1.0f - local;
+                const float amplitude = static_cast<float>(scene.height) / 15.0f;
+                const float xTravel = local <= 0.5f
+                    ? std::sin(pi * local) * amplitude
+                    : amplitude + std::sin((local - 0.5f) * pi) * amplitude;
+                const float yTravel = std::sin(pi * local * 0.5f) * amplitude;
+                dxValue = -xTravel;
+                dyValue = yTravel;
+                rotation = -180.0f * local;
+                scaleX = shrink * std::cos(pi * local);
+                scaleY = shrink;
+            } else if (tMs > ch.startMs && tMs < ch.endMs
+                && ch.startMs != ch.endMs) {
+                const int overMs = std::min(
+                    static_cast<int>((ch.endMs - ch.startMs) * 0.25f), 100
+                );
+                if (overMs > 0) {
+                    const int peakMs = ch.startMs + overMs;
+                    const float progress = tMs <= peakMs
+                        ? static_cast<float>(tMs - ch.startMs)
+                            / static_cast<float>(overMs)
+                        : static_cast<float>(ch.endMs - tMs)
+                            / static_cast<float>(std::max(ch.endMs - peakMs, 1));
+                    scaleX = scaleY = 1.0f
+                        + 0.15f * std::clamp(progress, 0.0f, 1.0f);
+                }
+            }
+            if (state.opacity <= 0.0f) {
+                return state;
+            }
+            state.matrix = utopiaMatrix(
+                dxValue, dyValue, rotation, scaleX, scaleY,
+                ch.layoutLeft, 0.0f, ch.pivotX, ch.pivotY
+            );
+            state.transformed = dxValue != 0.0f || dyValue != 0.0f
+                || rotation != 0.0f || scaleX != 1.0f || scaleY != 1.0f;
+            return state;
+        };
+        auto characterOpacityAt = [&](std::size_t charIndex) {
+            return characterAnimationAt(charIndex).opacity;
+        };
+        auto rubyFadeOpacityAt = [&](const Impl::CachedRuby &ruby) {
+            return characterOpacityAt(static_cast<std::size_t>(std::max(
+                ruby.transitionCharIndex, 0
+            )));
+        };
+        if (hasCharacterTransition) {
+            float maxOpacity = 0.0f;
+            for (std::size_t index = 0; index < line->chars.size(); ++index) {
+                maxOpacity = std::max(maxOpacity, characterOpacityAt(index));
+            }
+            if (maxOpacity <= 0.0f) {
+                continue;
+            }
+        }
         std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> frameCharGeometries(
             line->chars.size()
         );
@@ -1876,20 +2013,19 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         );
         for (std::size_t index = 0; index < line->chars.size(); ++index) {
             const Impl::CachedChar &ch = line->chars[index];
-            const float opacity = charFadeOpacityAt(index);
+            const CharacterAnimationState charAnimation = characterAnimationAt(index);
+            const float opacity = charAnimation.opacity;
             if (!ch.geometry || opacity <= 0.0f) {
                 continue;
             }
-            if (spinDirection == 0 || opacity >= 1.0f) {
+            if (!charAnimation.transformed) {
                 frameCharGeometries[index] = ch.geometry;
                 frameProtectedGeometries[index] = ch.protectedStrokeGeometry;
                 frameStrokeGeometries[index] = ch.strokeGeometry;
                 frameStroke2Geometries[index] = ch.stroke2Geometry;
                 continue;
             }
-            const D2D1_MATRIX_3X2_F matrix = spinMatrix(
-                opacity, ch.pivotX, ch.pivotY
-            );
+            const D2D1_MATRIX_3X2_F matrix = charAnimation.matrix;
             Microsoft::WRL::ComPtr<ID2D1TransformedGeometry> transformed;
             checkHr(
                 device_.d2dFactory()->CreateTransformedGeometry(
@@ -2301,6 +2437,45 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             break;
         }
 
+        auto utopiaCharWipe = [&](std::size_t charIndex) {
+            D2D1_RECT_F bounds{};
+            ID2D1Geometry *geometry = charGeometryAt(charIndex);
+            if (geometry == nullptr) {
+                return std::pair<D2D1_RECT_F, float>{bounds, 0.0f};
+            }
+            checkHr(
+                geometry->GetBounds(nullptr, &bounds),
+                "ID2D1Geometry::GetBounds(utopia wipe)",
+                device_
+            );
+            const Impl::CachedChar &ch = line->chars[charIndex];
+            const TextStyle &charStyle = ch.styleIndex >= 0
+                && ch.styleIndex < static_cast<int>(scene.charStyles.size())
+                ? scene.charStyles[static_cast<std::size_t>(ch.styleIndex)]
+                : style;
+            const float edgeHalf = static_cast<float>(
+                std::max(static_cast<int>(charStyle.strokeWidth), 0) / 2
+            );
+            const float left = std::floor(bounds.left) - edgeHalf;
+            const float right = std::ceil(bounds.right) + edgeHalf;
+            float ratio = 0.0f;
+            const CharacterAnimationState animationState = characterAnimationAt(charIndex);
+            if (animationState.utopiaExit || tMs >= ch.endMs) {
+                ratio = 1.0f;
+            } else if (tMs > ch.startMs && ch.endMs > ch.startMs) {
+                ratio = std::clamp(
+                    static_cast<float>(tMs - ch.startMs)
+                        / static_cast<float>(ch.endMs - ch.startMs),
+                    0.0f,
+                    1.0f
+                );
+            }
+            return std::pair<D2D1_RECT_F, float>{
+                bounds,
+                left + std::max(right - left, 1.0f) * ratio
+            };
+        };
+
         const float geometryPad = std::max(style.strokeWidth + style.stroke2Width, 2.0f) + 4.0f;
         const D2D1_RECT_F afterClip = D2D1::RectF(
             line->bounds.left - geometryPad,
@@ -2572,17 +2747,18 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 return;
             }
             InlineGlowLayer layer;
-            if (spinDirection != 0 && charOnly >= 0) {
+            if ((spinDirection != 0 || hasUtopiaTransition) && charOnly >= 0) {
                 const Impl::CachedChar &ch = line->chars[
                     static_cast<std::size_t>(charOnly)
                 ];
-                const float opacity = charFadeOpacityAt(
+                const CharacterAnimationState animationState = characterAnimationAt(
                     static_cast<std::size_t>(charOnly)
                 );
-                layer.transform = spinMatrix(
-                    opacity, ch.pivotX + dx, ch.pivotY + dy
-                );
-                layer.hasTransform = opacity < 1.0f;
+                (void)ch;
+                layer.transform = D2D1::Matrix3x2F::Translation(-dx, -dy)
+                    * animationState.matrix
+                    * D2D1::Matrix3x2F::Translation(dx, dy);
+                layer.hasTransform = animationState.transformed;
             }
             checkHr(
                 context->CreateBitmap(
@@ -2621,7 +2797,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     || (!after && wipeEdge >= ch.right)) {
                     continue;
                 }
-                brush->SetOpacity(globalOpacity * charFadeOpacityAt(charIndex));
+                brush->SetOpacity(globalOpacity * characterOpacityAt(charIndex));
                 const D2D1_RECT_F clip = after
                     ? D2D1::RectF(
                         ch.left - pad, line->bounds.top - pad,
@@ -2647,7 +2823,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             }
             inlineGlowLayers.push_back(std::move(layer));
         };
-        if (spinDirection != 0) {
+        if (spinDirection != 0 || hasUtopiaTransition) {
             for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
                 const int styleIndex = line->chars[charIndex].styleIndex;
                 appendInlineGlowLayer(styleIndex, false, static_cast<int>(charIndex));
@@ -2726,7 +2902,8 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             const float outerWidth = stroke2Width > 0.0f
                 ? std::max(strokeWidth, 0.0f) + stroke2Width
                 : std::max(strokeWidth, 0.0f);
-            if (spinDirection != 0 && animatedOuterGeometry != nullptr) {
+            if ((spinDirection != 0 || hasUtopiaTransition)
+                && animatedOuterGeometry != nullptr) {
                 context->FillGeometry(animatedOuterGeometry, brush);
             } else if (outerWidth > 0.0f) {
                 context->DrawGeometry(geometry, brush, outerWidth);
@@ -2755,16 +2932,16 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         charStyle.shadowOffsetX,
                         charStyle.shadowOffsetY
                     );
-                    brush->SetOpacity(globalOpacity * charFadeOpacityAt(charIndex));
-                    const float charOpacity = charFadeOpacityAt(charIndex);
-                    const D2D1_MATRIX_3X2_F charMatrix = spinMatrix(
-                        charOpacity, ch.pivotX, ch.pivotY
-                    );
-                    const float shadowX = spinDirection != 0
+                    brush->SetOpacity(globalOpacity * characterOpacityAt(charIndex));
+                    const float charOpacity = characterOpacityAt(charIndex);
+                    const CharacterAnimationState animationState =
+                        characterAnimationAt(charIndex);
+                    const D2D1_MATRIX_3X2_F charMatrix = animationState.matrix;
+                    const float shadowX = animationState.transformed
                         ? charStyle.shadowOffsetX * charMatrix._11
                             + charStyle.shadowOffsetY * charMatrix._21
                         : charStyle.shadowOffsetX;
-                    const float shadowY = spinDirection != 0
+                    const float shadowY = animationState.transformed
                         ? charStyle.shadowOffsetX * charMatrix._12
                             + charStyle.shadowOffsetY * charMatrix._22
                         : charStyle.shadowOffsetY;
@@ -2978,13 +3155,34 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     stroke2Color
                 );
                 const float charOpacity = globalOpacity
-                    * charFadeOpacityAt(charIndex);
+                    * characterOpacityAt(charIndex);
                 fillBrush->SetOpacity(charOpacity);
                 strokeBrush->SetOpacity(charOpacity);
                 stroke2Brush->SetOpacity(charOpacity);
+                bool pushedUtopiaClip = false;
+                if (after && hasUtopiaTransition) {
+                    const auto [animatedBounds, animatedEdge] = utopiaCharWipe(charIndex);
+                    if (animatedEdge <= animatedBounds.left) {
+                        continue;
+                    }
+                    const float pad = std::max(
+                        charStyle.strokeWidth + charStyle.stroke2Width, 2.0f
+                    ) + 4.0f;
+                    context->PushAxisAlignedClip(
+                        D2D1::RectF(
+                            animatedBounds.left - pad,
+                            animatedBounds.top - pad,
+                            animatedEdge,
+                            animatedBounds.bottom + pad
+                        ),
+                        D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                    );
+                    pushedUtopiaClip = true;
+                }
                 if (charStyle.stroke2Width > 0.0f) {
                     ID2D1Geometry *animatedStroke2 = stroke2GeometryAt(charIndex);
-                    if (spinDirection != 0 && animatedStroke2 != nullptr) {
+                    if ((spinDirection != 0 || hasUtopiaTransition)
+                        && animatedStroke2 != nullptr) {
                         context->FillGeometry(animatedStroke2, stroke2Brush.Get());
                     } else {
                         context->DrawGeometry(
@@ -3001,7 +3199,8 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     );
                     ID2D1Geometry *protectedGeometry = protectedGeometryAt(charIndex);
                     ID2D1Geometry *animatedStroke = strokeGeometryAt(charIndex);
-                    if (spinDirection != 0 && !protect && animatedStroke != nullptr) {
+                    if ((spinDirection != 0 || hasUtopiaTransition)
+                        && !protect && animatedStroke != nullptr) {
                         context->FillGeometry(animatedStroke, strokeBrush.Get());
                     } else if (protect && protectedGeometry != nullptr) {
                         context->FillGeometry(
@@ -3014,16 +3213,23 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     }
                 }
                 context->FillGeometry(geometry, fillBrush.Get());
+                if (pushedUtopiaClip) {
+                    context->PopAxisAlignedClip();
+                }
             }
         };
         if (line->hasInlineStyles || hasCharacterTransition) {
             drawInlineStack(false);
             if (wipeEdge > line->bounds.left) {
-                context->PushAxisAlignedClip(
-                    afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
-                );
+                if (!hasUtopiaTransition) {
+                    context->PushAxisAlignedClip(
+                        afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                    );
+                }
                 drawInlineStack(true);
-                context->PopAxisAlignedClip();
+                if (!hasUtopiaTransition) {
+                    context->PopAxisAlignedClip();
+                }
             }
         } else {
             drawStack(false, beforeFill.Get(), beforeStroke.Get(), beforeStroke2.Get());

@@ -1332,3 +1332,13 @@ ruby 组，并继续使用 Painter 的 char-fade 时间轴。
 - RTX 3070 Ti、1920×1080、60fps、18 字、中档 glow、packed bands、600 帧 `spin_flip`：`138.22fps`，render/readback/roundtrip p95 分别为 `4.82/2.31/10.57ms`；local 显存增长 0，sidecar RSS 波动 `491,520B`。硬件/WARP build smoke 通过；GPU/transport 回归 `120 passed`，native protocol/export/benchmark 独立回归 `62 passed, 27 skipped`。
 
 G4 下一刀进入 `utopia`。它同时包含逐字入场、演唱中 over-scale、ruby 分组与退场位移/旋转，仍按 capability 逐项迁移；产品 GPU 开关继续默认关闭，Painter 永久保留为 oracle 与 fallback。
+
+### 2026-07-19（第二十五批）：G4 Utopia 正文
+
+- Utopia 不按普通 entry/exit 短窗口处理：只要任一端选择 Utopia，整段显示窗口都统一走逐字仿射路径，消除静态/动态路径切换色闪。Direct2D 已对齐 Painter 固定状态机：`700ms` 入场总窗、`200ms` 字间错峰、`400ms` 放大、`100ms` 从 `1.3×` 回落，演唱中前 25% 且最多 `100ms` 的 `1.15×` over-scale，以及 `750ms` 退场。
+- 退场起点按 Painter `_utopia_following_done_time()`：当前字等待后一个有效字的完成时间，末字再叠加 `max(lineTail - 750ms, 0)`；轨迹使用画面高度 `/15` 的振幅、横纵正弦位移、`-180°` 旋转、余弦 X 翻转与同步收缩。矩阵严格复刻 `_character_transform()` 的 scale-origin 分支，缩放原点为字符 advance 左下角，旋转中心为字符框中心。
+- Utopia 走字按变换后的 ink bounds 加半个主描边计算水平 wipe；退场字强制为完整 after 色。正文 fill、stroke/stroke2、shadow/glow、角色样式与 band 范围共用同一逐字矩阵，其中 glow 仍遵守“先烘焙再仿射”的 Painter 顺序。
+- capability 先只放行无 ruby 的 Utopia；存在 ruby 时返回明确的 `utopia_ruby_group` 并整场回退，等待下一批 group 语义完成。自动门禁覆盖入场、恒等、演唱 over-scale、分批退场和全空终点，正文 + glow 的 alpha 轨迹相对 Painter 偏差不超过 `0.14`、四边偏差不超过 `14px`。
+- RTX 3070 Ti、1920×1080、60fps、18 字、中档 glow、packed bands、600 帧 Utopia：`92.92fps`，render/readback/roundtrip p95 `5.33/3.84/11.64ms`；local 显存增长 0，sidecar RSS 波动 `1,032,192B`。GPU/transport 回归 `121 passed`；native protocol/export/benchmark 独立回归 `62 passed, 27 skipped`。
+
+下一批补齐 Utopia ruby/group/transformed glow；完成前带 ruby 的项目不会进入 GPU。

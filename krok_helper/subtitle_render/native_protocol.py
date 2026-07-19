@@ -31,6 +31,7 @@ def gpu_unsupported_features(
 ) -> tuple[str, ...]:
     """Return project features that require whole-frame Painter fallback."""
     reasons: list[str] = []
+    has_utopia = style.entry_anim == "utopia" or style.exit_anim == "utopia"
     if style.vertical:
         reasons.append("vertical")
     if style.right_to_left:
@@ -40,10 +41,10 @@ def gpu_unsupported_features(
     if style.lit_enabled:
         reasons.append("signal_lits")
     if style.entry_anim not in {
-        "none", "fade", "slide_in", "rise", "char_fade", "spin_flip"
+        "none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"
     } or (
         style.exit_anim not in {
-            "none", "fade", "slide_out", "rise", "char_fade", "spin_flip"
+            "none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"
         }
     ):
         reasons.append("line_animation")
@@ -55,10 +56,18 @@ def gpu_unsupported_features(
     ):
         reasons.append("viewport_transform")
     for source in [track, *(extra_tracks or ())]:
+        if has_utopia and source.rubies:
+            reasons.append("utopia_ruby_group")
         for line in source.lines:
             if line.layout_index != 0:
                 reasons.append("line_layout_override")
             if line.animation_override is not None:
+                line_has_utopia = (
+                    line.animation_override.entry_anim == "utopia"
+                    or line.animation_override.exit_anim == "utopia"
+                )
+                if line_has_utopia and source.rubies:
+                    reasons.append("utopia_ruby_group")
                 if line.animation_override.entry_anim not in {
                     "none",
                     "fade",
@@ -66,6 +75,7 @@ def gpu_unsupported_features(
                     "rise",
                     "char_fade",
                     "spin_flip",
+                    "utopia",
                 } or line.animation_override.exit_anim not in {
                     "none",
                     "fade",
@@ -73,6 +83,7 @@ def gpu_unsupported_features(
                     "rise",
                     "char_fade",
                     "spin_flip",
+                    "utopia",
                 }:
                     reasons.append("line_animation_override")
             if line.guide_symbol is not None or line.inline_guide_symbols:
