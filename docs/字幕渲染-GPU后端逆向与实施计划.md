@@ -1,6 +1,6 @@
 # 字幕渲染 GPU 后端：NicoKaraMaker3 逆向结论与实施计划
 
-> 状态：G0 最小 GPU 探针已完成，G1 横排字幕核心待开始
+> 状态：G0/G1 已完成，下一阶段为 G2 实验预览接线
 > 最后更新：2026-07-19  
 > 逆向基准：NicoKaraMaker3 10.74.80.0 x64  
 > 产品基线：Python QPainter 仍是唯一正式字幕渲染路径；本文不改变当前产品开关
@@ -473,7 +473,7 @@ LayerKey(fill/stroke/glow/state) -> reusable GPU bitmap/effect input
 - 输出尺寸、stride、alpha、颜色通道测试通过；
 - sidecar 异常退出时 Python 获得明确错误。
 
-### G1：横排字幕核心（1～2 周）
+### G1：横排字幕核心（1～2 周，已完成）
 
 覆盖：
 
@@ -746,7 +746,7 @@ GPU 与 CPU 不要求逐像素完全一致。报告至少包含：
 10. 运行 native smoke、相关 pytest 和 1000-frame 稳定性测试；
 11. 在本文 §11 更新日期、提交、测试结果、已知差异和下一刀。
 
-如果用户只说“继续 GPU 工作”但没有指定阶段，默认从尚未完成的最早阶段开始；当前是 **G1**。
+如果用户只说“继续 GPU 工作”但没有指定阶段，默认从尚未完成的最早阶段开始；当前是 **G2**。
 
 ---
 
@@ -936,3 +936,26 @@ render/readback CSV，以及 geometry/layout cache 的 hit/miss/bytes 诊断。�
 并在 15.2s 抽帧对照了走字位置。该帧同时含标题、signal、ruby、渐变和角色样式，属于 G3
 组合场景，不能冒充 G1 的纯 solid 固定参考。因此 **G1 尚余且只余“隔离后的 N3 固定关键帧”
 这一项视觉门禁**；在生成/固化该 fixture 前保持 G1 未完成、产品开关硬关闭。
+
+### 2026-07-19（第七批）：G1 收口——N3 原生 glyph metrics 与双 oracle 门禁
+
+- 去掉逐字符 `IDWriteTextLayout` 反推 bearing 的近似路径，改为与 N3 相同的
+  `IDWriteFontFace.GetGlyphIndices()` → `GetGlyphRunOutline()` →
+  `GetDesignGlyphMetrics()`；宽度与 `CharGeometryLeftOffset` 使用 N3 的整数公式，
+  path sink 固定 round line join；
+- 缺字 fallback 同步 N3 策略：先复用已经成功的 fallback face，再尝试
+  `Microsoft JhengHei Bold`，最后以 Bold 扫描系统字体集合；与 N3 一致，只以首个
+  UTF-16 glyph index 判断有效性，fallback outline 仍用原请求 face 查询 design metrics；
+- 保留“双 oracle”边界：绝对 lane/基线/位置由现有 Painter 门禁负责，glyph 几何、描边和
+  glow 由 N3 实帧负责。这样不会为了贴 N3 的独立布局锚点而破坏现有 Painter 产品输出；
+- 新增 `scripts/compare_gpu_n3_reference.py`：从 N3 输出帧减去原视频恢复字幕 mask，GPU
+  重建工程标题首行，并在有限平移搜索后比较字形 mask；平移只消除布局锚点差异，不参与宽度；
+- `Dark spiral journey` 5.0s、1080p60 实帧门禁结果：阈值 24，N3 bbox
+  `(48,45)-(1019,104)`，GPU bbox `(43,57)-(1016,104)`，宽度差 `2px`，最佳平移
+  `(4,-12)`，mask IoU `0.782841`（门槛 `0.72`），通过；此前 TextLayout 近似路径的
+  标题右边界约停在 `x=981`，精确 metrics 已消除累计宽度漂移；
+- 精确 DirectWrite bearing 下，Painter solid 整帧平均通道差约 `0.86/255`，glow 约
+  `1.24/255`，alpha 边界仍各边 `≤2px`；GPU 专项 `13 passed`。
+
+至此 G1 的功能、Painter bounded diff、hardware/WARP、600 帧稳态性能/诊断和真实 N3
+固定关键帧门禁全部完成，**G1 宣告完成**。下一阶段进入 G2；正式产品 GPU 开关仍保持硬关闭。

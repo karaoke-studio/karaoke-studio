@@ -2,14 +2,13 @@
 
 #include <d2d1helper.h>
 #include <d2d1effects.h>
-#include <dwrite_1.h>
+#include <dwrite.h>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <iomanip>
 #include <sstream>
-#include <atomic>
 #include <limits>
 
 namespace krok::subtitle::native {
@@ -62,156 +61,123 @@ bool isLatinText(const std::wstring &text) {
     });
 }
 
-class GeometryRenderer final : public IDWriteTextRenderer {
-public:
-    struct RunGeometry {
-        Microsoft::WRL::ComPtr<ID2D1Geometry> geometry;
-        float baselineOriginX = 0.0f;
-        float baselineOriginY = 0.0f;
+Microsoft::WRL::ComPtr<IDWriteFontFace> createFontFace(
+    IDWriteFontCollection *collection,
+    const std::wstring &familyName,
+    int weight,
+    bool italic
+) {
+    UINT32 familyIndex = 0;
+    BOOL exists = FALSE;
+    if (familyName.empty()
+        || FAILED(collection->FindFamilyName(familyName.c_str(), &familyIndex, &exists))
+        || !exists) {
+        return {};
+    }
+    Microsoft::WRL::ComPtr<IDWriteFontFamily> family;
+    if (FAILED(collection->GetFontFamily(familyIndex, family.ReleaseAndGetAddressOf()))) {
+        return {};
+    }
+    Microsoft::WRL::ComPtr<IDWriteFont> font;
+    if (FAILED(family->GetFirstMatchingFont(
+            static_cast<DWRITE_FONT_WEIGHT>(std::clamp(weight, 1, 999)),
+            DWRITE_FONT_STRETCH_NORMAL,
+            italic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL,
+            font.ReleaseAndGetAddressOf()))) {
+        return {};
+    }
+    Microsoft::WRL::ComPtr<IDWriteFontFace> face;
+    if (FAILED(font->CreateFontFace(face.ReleaseAndGetAddressOf()))) {
+        return {};
+    }
+    return face;
+}
+
+std::vector<UINT32> utf16CodeUnits(const std::wstring &text) {
+    std::vector<UINT32> values;
+    values.reserve(text.size());
+    for (wchar_t value : text) {
+        // N3 converts each UTF-16 System.Char independently instead of
+        // decoding a Unicode scalar. wchar_t has the same 16-bit width here.
+        values.push_back(static_cast<UINT32>(static_cast<std::uint16_t>(value)));
+    }
+    return values;
+}
+
+std::vector<UINT16> glyphIndices(IDWriteFontFace *face, const std::wstring &text) {
+    const std::vector<UINT32> codeUnits = utf16CodeUnits(text);
+    std::vector<UINT16> glyphs(codeUnits.size());
+    if (!codeUnits.empty()
+        && FAILED(face->GetGlyphIndices(
+            codeUnits.data(),
+            static_cast<UINT32>(codeUnits.size()),
+            glyphs.data()))) {
+        glyphs.clear();
+    }
+    return glyphs;
+}
+
+bool validGlyphIndices(const std::vector<UINT16> &glyphs) {
+    // This intentionally mirrors N3: only the first glyph controls fallback.
+    return !glyphs.empty() && glyphs.front() != 0;
+}
+
+Microsoft::WRL::ComPtr<IDWriteFontFace> findFallbackFontFace(
+    IDWriteFontCollection *collection,
+    const std::wstring &text,
+    std::vector<Microsoft::WRL::ComPtr<IDWriteFontFace>> &successfulFaces,
+    std::vector<UINT16> &glyphs
+) {
+    for (const auto &face : successfulFaces) {
+        glyphs = glyphIndices(face.Get(), text);
+        if (validGlyphIndices(glyphs)) {
+            return face;
+        }
+    }
+
+    auto tryFace = [&](Microsoft::WRL::ComPtr<IDWriteFontFace> face) {
+        if (!face) {
+            return Microsoft::WRL::ComPtr<IDWriteFontFace>{};
+        }
+        std::vector<UINT16> candidate = glyphIndices(face.Get(), text);
+        if (!validGlyphIndices(candidate)) {
+            return Microsoft::WRL::ComPtr<IDWriteFontFace>{};
+        }
+        glyphs = std::move(candidate);
+        successfulFaces.push_back(face);
+        return face;
     };
 
-    explicit GeometryRenderer(ID2D1Factory1 *factory)
-        : factory_(factory) {}
-
-    const std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> &geometries() const noexcept {
-        return geometries_;
+    // N3 gives this bold face priority before scanning the system collection.
+    if (auto face = tryFace(createFontFace(
+            collection, L"Microsoft JhengHei", DWRITE_FONT_WEIGHT_BOLD, false))) {
+        return face;
     }
-
-    const std::vector<RunGeometry> &runs() const noexcept {
-        return runs_;
+    const UINT32 familyCount = collection->GetFontFamilyCount();
+    for (UINT32 index = 0; index < familyCount; ++index) {
+        Microsoft::WRL::ComPtr<IDWriteFontFamily> family;
+        if (FAILED(collection->GetFontFamily(index, family.ReleaseAndGetAddressOf()))) {
+            continue;
+        }
+        Microsoft::WRL::ComPtr<IDWriteFont> font;
+        if (FAILED(family->GetFirstMatchingFont(
+                DWRITE_FONT_WEIGHT_BOLD,
+                DWRITE_FONT_STRETCH_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                font.ReleaseAndGetAddressOf()))) {
+            continue;
+        }
+        Microsoft::WRL::ComPtr<IDWriteFontFace> candidate;
+        if (FAILED(font->CreateFontFace(candidate.ReleaseAndGetAddressOf()))) {
+            continue;
+        }
+        if (auto face = tryFace(std::move(candidate))) {
+            return face;
+        }
     }
-
-    HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **object) override {
-        if (object == nullptr) {
-            return E_POINTER;
-        }
-        *object = nullptr;
-        if (iid == __uuidof(IUnknown) || iid == __uuidof(IDWritePixelSnapping)
-            || iid == __uuidof(IDWriteTextRenderer)) {
-            *object = static_cast<IDWriteTextRenderer *>(this);
-            AddRef();
-            return S_OK;
-        }
-        return E_NOINTERFACE;
-    }
-
-    ULONG STDMETHODCALLTYPE AddRef() override {
-        return ++refCount_;
-    }
-
-    ULONG STDMETHODCALLTYPE Release() override {
-        const ULONG value = --refCount_;
-        if (value == 0) {
-            delete this;
-        }
-        return value;
-    }
-
-    HRESULT STDMETHODCALLTYPE IsPixelSnappingDisabled(void *, BOOL *disabled) override {
-        if (disabled == nullptr) {
-            return E_POINTER;
-        }
-        *disabled = FALSE;
-        return S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE GetCurrentTransform(void *, DWRITE_MATRIX *transform) override {
-        if (transform == nullptr) {
-            return E_POINTER;
-        }
-        *transform = DWRITE_MATRIX{1.0f, 0.0f, 0.0f, 1.0f, 0.0f, 0.0f};
-        return S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE GetPixelsPerDip(void *, FLOAT *pixelsPerDip) override {
-        if (pixelsPerDip == nullptr) {
-            return E_POINTER;
-        }
-        *pixelsPerDip = 1.0f;
-        return S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE DrawGlyphRun(
-        void *,
-        FLOAT baselineOriginX,
-        FLOAT baselineOriginY,
-        DWRITE_MEASURING_MODE,
-        const DWRITE_GLYPH_RUN *glyphRun,
-        const DWRITE_GLYPH_RUN_DESCRIPTION *,
-        IUnknown *
-    ) override {
-        if (glyphRun == nullptr || glyphRun->fontFace == nullptr || glyphRun->glyphCount == 0) {
-            return S_OK;
-        }
-        Microsoft::WRL::ComPtr<ID2D1PathGeometry> path;
-        HRESULT result = factory_->CreatePathGeometry(path.ReleaseAndGetAddressOf());
-        if (FAILED(result)) {
-            return result;
-        }
-        Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
-        result = path->Open(sink.ReleaseAndGetAddressOf());
-        if (FAILED(result)) {
-            return result;
-        }
-        sink->SetFillMode(D2D1_FILL_MODE_WINDING);
-        result = glyphRun->fontFace->GetGlyphRunOutline(
-            glyphRun->fontEmSize,
-            glyphRun->glyphIndices,
-            glyphRun->glyphAdvances,
-            glyphRun->glyphOffsets,
-            glyphRun->glyphCount,
-            glyphRun->isSideways,
-            (glyphRun->bidiLevel & 1u) != 0,
-            sink.Get()
-        );
-        const HRESULT closeResult = sink->Close();
-        if (FAILED(result)) {
-            return result;
-        }
-        if (FAILED(closeResult)) {
-            return closeResult;
-        }
-        const D2D1_MATRIX_3X2_F translation = D2D1::Matrix3x2F::Translation(
-            baselineOriginX,
-            baselineOriginY
-        );
-        Microsoft::WRL::ComPtr<ID2D1TransformedGeometry> transformed;
-        result = factory_->CreateTransformedGeometry(
-            path.Get(),
-            &translation,
-            transformed.ReleaseAndGetAddressOf()
-        );
-        if (SUCCEEDED(result)) {
-            geometries_.push_back(transformed);
-            runs_.push_back(RunGeometry{transformed, baselineOriginX, baselineOriginY});
-        }
-        return result;
-    }
-
-    HRESULT STDMETHODCALLTYPE DrawUnderline(
-        void *, FLOAT, FLOAT, const DWRITE_UNDERLINE *, IUnknown *
-    ) override {
-        return S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE DrawStrikethrough(
-        void *, FLOAT, FLOAT, const DWRITE_STRIKETHROUGH *, IUnknown *
-    ) override {
-        return S_OK;
-    }
-
-    HRESULT STDMETHODCALLTYPE DrawInlineObject(
-        void *, FLOAT, FLOAT, IDWriteInlineObject *, BOOL, BOOL, IUnknown *
-    ) override {
-        return S_OK;
-    }
-
-private:
-    std::atomic<ULONG> refCount_{1};
-    Microsoft::WRL::ComPtr<ID2D1Factory1> factory_;
-    std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> geometries_;
-    std::vector<RunGeometry> runs_;
-};
+    glyphs.clear();
+    return {};
+}
 
 }  // namespace
 
@@ -407,32 +373,32 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
     impl_->lines.reserve(scene.lines.size());
 
     const TextStyle &style = scene.style;
-    auto createFormat = [&](const std::wstring &family, float size, int weight) {
-        Microsoft::WRL::ComPtr<IDWriteTextFormat> result;
+    Microsoft::WRL::ComPtr<IDWriteFontCollection> fontCollection;
+    checkHr(
+        device_.dwriteFactory()->GetSystemFontCollection(
+            fontCollection.ReleaseAndGetAddressOf(),
+            FALSE
+        ),
+        "IDWriteFactory::GetSystemFontCollection",
+        device_
+    );
+    auto resolveFace = [&](const std::wstring &family, int weight) {
         const std::wstring resolvedFamily = family.empty() ? L"Segoe UI" : family;
-        checkHr(
-            device_.dwriteFactory()->CreateTextFormat(
-                resolvedFamily.c_str(),
-                nullptr,
-                static_cast<DWRITE_FONT_WEIGHT>(std::clamp(weight, 1, 999)),
-                style.italic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL,
-                std::max(size, 1.0f),
-                L"ja-jp",
-                result.ReleaseAndGetAddressOf()
-            ),
-            "IDWriteFactory::CreateTextFormat(scene)",
-            device_
-        );
-        checkHr(result->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP), "IDWriteTextFormat::SetWordWrapping", device_);
-        return result;
+        auto face = createFontFace(fontCollection.Get(), resolvedFamily, weight, style.italic);
+        if (!face && resolvedFamily != L"Segoe UI") {
+            face = createFontFace(fontCollection.Get(), L"Segoe UI", weight, style.italic);
+        }
+        if (!face) {
+            throw BackendError("DirectWrite could not resolve a usable font face");
+        }
+        return face;
     };
-    const auto mainFormat = createFormat(style.fontFamily, style.fontSize, style.fontWeight);
-    const auto latinFormat = createFormat(
+    const auto mainFace = resolveFace(style.fontFamily, style.fontWeight);
+    const auto latinFace = resolveFace(
         style.latinFontFamily.value_or(style.fontFamily),
-        style.latinFontSize.value_or(style.fontSize),
         style.latinFontWeight.value_or(style.fontWeight)
     );
+    std::vector<Microsoft::WRL::ComPtr<IDWriteFontFace>> fallbackFaces;
 
     auto extendBounds = [](D2D1_RECT_F &target, bool &hasBounds, const D2D1_RECT_F &value) {
         if (!hasBounds) {
@@ -461,118 +427,120 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         for (std::size_t charIndex = 0; charIndex < sourceLine.chars.size(); ++charIndex) {
             const TextChar &sourceChar = sourceLine.chars[charIndex];
             const bool latin = isLatinText(sourceChar.text);
-            const auto &format = latin ? latinFormat : mainFormat;
+            const auto &requestedFace = latin ? latinFace : mainFace;
             const float fontSize = latin
                 ? style.latinFontSize.value_or(style.fontSize)
                 : style.fontSize;
+            const int unit = std::max(static_cast<int>(fontSize), 1);
+            const int edgeSize = std::max(static_cast<int>(style.strokeWidth), 0);
 
-            if (sourceChar.text == L" ") {
-                const float width = std::max(fontSize, 1.0f)
-                    * static_cast<float>(std::clamp(style.spaceWidthPercent, 10, 100))
-                    / 100.0f
-                    + std::max(style.strokeWidth, 0.0f);
-                cached.chars.push_back(Impl::CachedChar{
-                    sourceChar.startMs,
-                    sourceChar.endMs,
-                    cursor,
-                    cursor + width,
-                });
-                cursor += width;
-                if (charIndex + 1 < sourceLine.chars.size()) {
-                    cursor += style.letterSpacing;
-                }
-                continue;
-            }
-
-            Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
-            checkHr(
-                device_.dwriteFactory()->CreateTextLayout(
-                    sourceChar.text.c_str(),
-                    static_cast<UINT32>(sourceChar.text.size()),
-                    format.Get(),
-                    std::max(1024.0f, static_cast<float>(scene.width) * 2.0f),
-                    std::max(1024.0f, static_cast<float>(scene.height) * 2.0f),
-                    layout.ReleaseAndGetAddressOf()
-                ),
-                "IDWriteFactory::CreateTextLayout(character)",
-                device_
+            DWRITE_FONT_METRICS fontMetrics{};
+            requestedFace->GetMetrics(&fontMetrics);
+            // The product's lane boxes remain Painter-compatible. N3's exact
+            // glyph bearings/outline are used inside those boxes, while the
+            // face's em scale keeps mixed-font baselines close to QFontMetrics.
+            const float verticalUnits = static_cast<float>(std::max<UINT16>(
+                fontMetrics.designUnitsPerEm,
+                1
+            ));
+            cached.ascent = std::max(
+                cached.ascent,
+                static_cast<float>(unit) * static_cast<float>(fontMetrics.ascent) / verticalUnits
             );
-            auto *renderer = new GeometryRenderer(device_.d2dFactory());
-            const HRESULT drawResult = layout->Draw(nullptr, renderer, 0.0f, 0.0f);
-            if (FAILED(drawResult)) {
-                renderer->Release();
-                checkHr(drawResult, "IDWriteTextLayout::Draw(character geometry)", device_);
+            cached.descent = std::max(
+                cached.descent,
+                static_cast<float>(unit) * static_cast<float>(fontMetrics.descent) / verticalUnits
+            );
+
+            std::vector<UINT16> glyphs = glyphIndices(requestedFace.Get(), sourceChar.text);
+            Microsoft::WRL::ComPtr<IDWriteFontFace> outlineFace = requestedFace;
+            if (!validGlyphIndices(glyphs)) {
+                outlineFace = findFallbackFontFace(
+                    fontCollection.Get(), sourceChar.text, fallbackFaces, glyphs
+                );
             }
 
-            std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> normalizedRuns;
-            D2D1_RECT_F charBounds{};
-            bool charHasBounds = false;
-            for (const GeometryRenderer::RunGeometry &run : renderer->runs()) {
-                const D2D1_MATRIX_3X2_F normalizeBaseline = D2D1::Matrix3x2F::Translation(
-                    0.0f,
-                    -run.baselineOriginY
-                );
-                Microsoft::WRL::ComPtr<ID2D1TransformedGeometry> normalized;
+            Microsoft::WRL::ComPtr<ID2D1PathGeometry> path;
+            if (outlineFace && !glyphs.empty()) {
                 checkHr(
-                    device_.d2dFactory()->CreateTransformedGeometry(
-                        run.geometry.Get(),
-                        &normalizeBaseline,
-                        normalized.ReleaseAndGetAddressOf()
-                    ),
-                    "ID2D1Factory::CreateTransformedGeometry(normalize baseline)",
+                    device_.d2dFactory()->CreatePathGeometry(path.ReleaseAndGetAddressOf()),
+                    "ID2D1Factory::CreatePathGeometry(character)",
                     device_
                 );
-                D2D1_RECT_F bounds{};
-                checkHr(normalized->GetBounds(nullptr, &bounds), "ID2D1Geometry::GetBounds(character)", device_);
-                extendBounds(charBounds, charHasBounds, bounds);
-                normalizedRuns.push_back(normalized);
-            }
-            renderer->Release();
-
-            DWRITE_TEXT_METRICS metrics{};
-            checkHr(layout->GetMetrics(&metrics), "IDWriteTextLayout::GetMetrics(character)", device_);
-            DWRITE_LINE_METRICS lineMetrics{};
-            UINT32 actualLineCount = 0;
-            checkHr(
-                layout->GetLineMetrics(&lineMetrics, 1, &actualLineCount),
-                "IDWriteTextLayout::GetLineMetrics(character)",
-                device_
-            );
-            if (actualLineCount > 0) {
-                cached.ascent = std::max(cached.ascent, lineMetrics.baseline);
-                cached.descent = std::max(
-                    cached.descent,
-                    std::max(lineMetrics.height - lineMetrics.baseline, 0.0f)
+                Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
+                checkHr(path->Open(sink.ReleaseAndGetAddressOf()), "ID2D1PathGeometry::Open(character)", device_);
+                sink->SetFillMode(D2D1_FILL_MODE_WINDING);
+                sink->SetSegmentFlags(D2D1_PATH_SEGMENT_FORCE_ROUND_LINE_JOIN);
+                const HRESULT outlineResult = outlineFace->GetGlyphRunOutline(
+                    static_cast<float>(unit),
+                    glyphs.data(),
+                    nullptr,
+                    nullptr,
+                    static_cast<UINT32>(glyphs.size()),
+                    FALSE,
+                    FALSE,
+                    sink.Get()
                 );
+                const HRESULT closeResult = sink->Close();
+                checkHr(outlineResult, "IDWriteFontFace::GetGlyphRunOutline", device_);
+                checkHr(closeResult, "ID2D1GeometrySink::Close(character)", device_);
             }
-            const int advance = std::max(
-                static_cast<int>(std::lround(metrics.widthIncludingTrailingWhitespace)),
-                1
-            );
-            float layoutWidth = static_cast<float>(advance) + std::max(style.strokeWidth, 0.0f);
+
+            D2D1_RECT_F charBounds{};
+            bool charHasBounds = path != nullptr;
+            if (path) {
+                checkHr(path->GetBounds(nullptr, &charBounds), "ID2D1Geometry::GetBounds(character)", device_);
+                charHasBounds = std::isfinite(charBounds.left)
+                    && std::isfinite(charBounds.top)
+                    && std::isfinite(charBounds.right)
+                    && std::isfinite(charBounds.bottom)
+                    && charBounds.right > charBounds.left;
+            }
+
+            float layoutWidth = 0.0f;
             float pathOffset = 0.0f;
             if (charHasBounds) {
+                std::vector<DWRITE_GLYPH_METRICS> metrics(glyphs.size());
+                // N3 deliberately asks the originally requested face for
+                // metrics even when the outline came from a fallback face.
+                checkHr(
+                    requestedFace->GetDesignGlyphMetrics(
+                        glyphs.data(),
+                        static_cast<UINT32>(glyphs.size()),
+                        metrics.data(),
+                        FALSE
+                    ),
+                    "IDWriteFontFace::GetDesignGlyphMetrics(character)",
+                    device_
+                );
                 const int inkWidth = std::max(static_cast<int>(charBounds.right - charBounds.left), 0);
-                int leftBearing = static_cast<int>(charBounds.left);
-                int rightBearing = static_cast<int>(static_cast<float>(advance) - charBounds.right);
+                int leftBearing = metrics.front().leftSideBearing;
+                int rightBearing = metrics.front().rightSideBearing;
                 if (!style.allowBiting) {
                     leftBearing = std::max(leftBearing, 0);
                     rightBearing = std::max(rightBearing, 0);
                 }
-                const int bodyWidth = std::max(
-                    inkWidth * (leftBearing + advance + rightBearing) / advance,
-                    0
-                );
-                layoutWidth = static_cast<float>(bodyWidth) + std::max(style.strokeWidth, 0.0f);
+                const int advance = std::max(static_cast<int>(metrics.front().advanceWidth), 1);
+                const int bodyWidth = inkWidth * (leftBearing + advance + rightBearing) / advance;
+                layoutWidth = static_cast<float>(std::max(bodyWidth, 0) + edgeSize);
                 const int geometryLeft = inkWidth * leftBearing / advance;
                 pathOffset = -charBounds.left
                     + static_cast<float>(geometryLeft)
-                    + std::max(style.strokeWidth, 0.0f) * 0.5f;
+                    + static_cast<float>(edgeSize) * 0.5f;
+            } else if (sourceChar.text == L" ") {
+                layoutWidth = static_cast<float>(
+                    unit * std::clamp(style.spaceWidthPercent, 10, 100) / 100 + edgeSize
+                );
+            } else {
+                layoutWidth = static_cast<float>(
+                    unit * std::clamp(style.spaceWidthPercent, 10, 100) * 25 / 100 / 10
+                    + edgeSize
+                );
             }
 
             D2D1_RECT_F positionedCharBounds{};
             bool positionedHasBounds = false;
-            for (const auto &geometry : normalizedRuns) {
+            if (path && charHasBounds) {
                 const D2D1_MATRIX_3X2_F position = D2D1::Matrix3x2F::Translation(
                     cursor + pathOffset,
                     0.0f
@@ -580,7 +548,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 Microsoft::WRL::ComPtr<ID2D1TransformedGeometry> positioned;
                 checkHr(
                     device_.d2dFactory()->CreateTransformedGeometry(
-                        geometry.Get(),
+                        path.Get(),
                         &position,
                         positioned.ReleaseAndGetAddressOf()
                     ),
@@ -707,6 +675,13 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 + style.lineGap * static_cast<float>(lanes - 1);
             firstBaseline = (static_cast<float>(scene.height) - totalHeight) * 0.5f
                 + ascent + visualPad;
+            if (lanes == 1) {
+                // Single-line center alignment is defined by visible ink, just
+                // like horizontal centering. This avoids font-leading drift.
+                firstBaseline = (static_cast<float>(scene.height)
+                    - (line->bounds.bottom - line->bounds.top)) * 0.5f
+                    - line->bounds.top;
+            }
         }
         const float dy = firstBaseline + step * static_cast<float>(line->lane);
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> beforeFill;
