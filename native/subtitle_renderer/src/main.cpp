@@ -179,6 +179,42 @@ struct ResolvedStyle {
     int rubyGlowBeforeRadiusPx = 0;
     int rubyGlowAfterRadiusPx = 0;
     int rubyGlowConcentrationLevel = 0;
+    bool litEnabled = false;
+    QString litStyle = QStringLiteral("volume");
+    int litNumber = 4;
+    int litSize = 32;
+    int litOffsetX = 0;
+    int litOffsetY = -24;
+    int litTracking = 0;
+    QString litFillColor = QStringLiteral("#0000FF");
+    QString litStrokeColor = QStringLiteral("#FFFFFF");
+    int litStrokeWidth = 2;
+    int litStrokeSoften = 0;
+    int litOpacityPct = 100;
+    int litEdgeBrightnessPct = 60;
+    bool litShadow = true;
+    int litTimeOffsetMs = 0;
+    int litWaitingTimeMs = 0;
+    QString litTransitionMode = QStringLiteral("fade");
+    int litTransitionRatioPct = 67;
+    int litTransitionAngleDeg = 0;
+    int litTransitionDistance = 0;
+    int signalsDurationMs = 4000;
+    int volumeSize = 48;
+    int volumeOffsetX = 0;
+    int volumeOffsetY = 0;
+    int volumeColumnWidth = 12;
+    int volumeColumnCount = 4;
+    int volumeColumnSpacing = 0;
+    int volumeAlign = 1;
+    double volumeRatio = 3.0;
+    QString volumeFillColor = QStringLiteral("#FFFFFF");
+    QString volumeStrokeColor = QStringLiteral("#0000FF");
+    QString volumeOverlayFillColor = QStringLiteral("#0000FF");
+    QString volumeOverlayStrokeColor = QStringLiteral("#FFFFFF");
+    int volumeFlashTimes = 3;
+    double volumeFlashDurationRatio = 1.0;
+    int volumeTransitionRatioPct = 67;
     bool hasMainKaraokeColors = false;
     bool hasRubyKaraokeColors = false;
 };
@@ -697,7 +733,53 @@ void applyRubyKaraokeColors(ResolvedStyle &cfg, const QJsonObject &colors) {
     cfg.rubyAfterShadowFill = karaokeLayerFillFromColors(colors, QStringLiteral("after"), QStringLiteral("shadow"), cfg.rubyAfterShadowColor);
 }
 
+void applySignalStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
+    if (hasNonNull(style, QStringLiteral("lit_enabled"))) {
+        cfg.litEnabled = style.value(QStringLiteral("lit_enabled")).toBool(cfg.litEnabled);
+    }
+    if (hasNonNull(style, QStringLiteral("lit_style"))) {
+        cfg.litStyle = stringValue(style, QStringLiteral("lit_style"), cfg.litStyle);
+    }
+    cfg.litNumber = std::clamp(intValue(style, QStringLiteral("lit_number"), cfg.litNumber), 1, 8);
+    cfg.litSize = std::max(1, intValue(style, QStringLiteral("lit_size"), cfg.litSize));
+    cfg.litOffsetX = intValue(style, QStringLiteral("lit_offset_x"), cfg.litOffsetX);
+    cfg.litOffsetY = intValue(style, QStringLiteral("lit_offset_y"), cfg.litOffsetY);
+    cfg.litTracking = std::max(0, intValue(style, QStringLiteral("lit_tracking"), cfg.litTracking));
+    cfg.litFillColor = stringValue(style, QStringLiteral("lit_fill_color"), cfg.litFillColor);
+    cfg.litStrokeColor = stringValue(style, QStringLiteral("lit_stroke_color"), cfg.litStrokeColor);
+    cfg.litStrokeWidth = std::max(0, intValue(style, QStringLiteral("lit_stroke_width"), cfg.litStrokeWidth));
+    cfg.litStrokeSoften = std::max(0, intValue(style, QStringLiteral("lit_stroke_soften"), cfg.litStrokeSoften));
+    cfg.litOpacityPct = std::clamp(intValue(style, QStringLiteral("lit_opacity_pct"), cfg.litOpacityPct), 0, 100);
+    cfg.litEdgeBrightnessPct = std::clamp(intValue(style, QStringLiteral("lit_edge_brightness_pct"), cfg.litEdgeBrightnessPct), 0, 100);
+    if (hasNonNull(style, QStringLiteral("lit_shadow"))) {
+        cfg.litShadow = style.value(QStringLiteral("lit_shadow")).toBool(cfg.litShadow);
+    }
+    cfg.litTimeOffsetMs = intValue(style, QStringLiteral("lit_time_offset_ms"), cfg.litTimeOffsetMs);
+    cfg.litWaitingTimeMs = std::max(0, intValue(style, QStringLiteral("lit_waiting_time_ms"), cfg.litWaitingTimeMs));
+    cfg.litTransitionMode = stringValue(style, QStringLiteral("lit_transition_mode"), cfg.litTransitionMode);
+    cfg.litTransitionRatioPct = std::clamp(intValue(style, QStringLiteral("lit_transition_ratio_pct"), cfg.litTransitionRatioPct), 0, 100);
+    cfg.litTransitionAngleDeg = intValue(style, QStringLiteral("lit_transition_angle_deg"), cfg.litTransitionAngleDeg);
+    cfg.litTransitionDistance = std::max(0, intValue(style, QStringLiteral("lit_transition_distance"), cfg.litTransitionDistance));
+    cfg.signalsDurationMs = std::max(0, intValue(style, QStringLiteral("signals_duration_ms"), cfg.signalsDurationMs));
+    cfg.volumeSize = std::max(1, intValue(style, QStringLiteral("volume_size"), cfg.volumeSize));
+    cfg.volumeOffsetX = intValue(style, QStringLiteral("volume_offset_x"), cfg.volumeOffsetX);
+    cfg.volumeOffsetY = intValue(style, QStringLiteral("volume_offset_y"), cfg.volumeOffsetY);
+    cfg.volumeColumnWidth = std::max(1, intValue(style, QStringLiteral("volume_column_width"), cfg.volumeColumnWidth));
+    cfg.volumeColumnCount = std::clamp(intValue(style, QStringLiteral("volume_column_count"), cfg.volumeColumnCount), 1, 16);
+    cfg.volumeColumnSpacing = std::max(0, intValue(style, QStringLiteral("volume_column_spacing"), cfg.volumeColumnSpacing));
+    cfg.volumeAlign = intValue(style, QStringLiteral("volume_align"), cfg.volumeAlign);
+    cfg.volumeRatio = std::max(style.value(QStringLiteral("volume_ratio")).toDouble(cfg.volumeRatio), 0.01);
+    cfg.volumeFillColor = stringValue(style, QStringLiteral("volume_fill_color"), cfg.volumeFillColor);
+    cfg.volumeStrokeColor = stringValue(style, QStringLiteral("volume_stroke_color"), cfg.volumeStrokeColor);
+    cfg.volumeOverlayFillColor = stringValue(style, QStringLiteral("volume_overlay_fill_color"), cfg.volumeOverlayFillColor);
+    cfg.volumeOverlayStrokeColor = stringValue(style, QStringLiteral("volume_overlay_stroke_color"), cfg.volumeOverlayStrokeColor);
+    cfg.volumeFlashTimes = std::max(0, intValue(style, QStringLiteral("volume_flash_times"), cfg.volumeFlashTimes));
+    cfg.volumeFlashDurationRatio = std::max(style.value(QStringLiteral("volume_flash_duration_ratio")).toDouble(cfg.volumeFlashDurationRatio), 0.0);
+    cfg.volumeTransitionRatioPct = std::clamp(intValue(style, QStringLiteral("volume_transition_ratio_pct"), cfg.volumeTransitionRatioPct), 0, 100);
+}
+
 void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
+    applySignalStyleOverrides(cfg, style);
     if (hasNonNull(style, QStringLiteral("font_family"))) {
         cfg.fontFamily = stringValue(style, QStringLiteral("font_family"), cfg.fontFamily);
     }
@@ -1551,6 +1633,7 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
 
     const QJsonObject style = ir.value(QStringLiteral("style")).toObject();
     ResolvedStyle &base = cfg.baseStyle;
+    applySignalStyleOverrides(base, style);
     base.fontFamily = stringValue(style, QStringLiteral("font_family"), base.fontFamily);
     base.fontFamilyLatin = stringValue(style, QStringLiteral("font_family_latin"), base.fontFamilyLatin);
     base.fontSizePx = std::max(1, intValue(style, QStringLiteral("font_size_px"), base.fontSizePx));
@@ -6083,6 +6166,42 @@ void applyGpuResolvedStyle(
     target.rubyShadowOffsetY = static_cast<float>(
         source.rubyShadowOffsetY.value_or(source.shadowOffsetY) * scale
     );
+    target.litEnabled = source.litEnabled;
+    target.litStyle = source.litStyle.toStdString();
+    target.litNumber = source.litNumber;
+    target.litSize = static_cast<float>(source.litSize * scale);
+    target.litOffsetX = static_cast<float>(source.litOffsetX * scale);
+    target.litOffsetY = static_cast<float>(source.litOffsetY * scale);
+    target.litTracking = static_cast<float>(source.litTracking * scale);
+    target.litFill = gpuColor(source.litFillColor, QStringLiteral("#0000FF"));
+    target.litStroke = gpuColor(source.litStrokeColor, QStringLiteral("#FFFFFF"));
+    target.litStrokeWidth = static_cast<float>(source.litStrokeWidth * scale);
+    target.litStrokeSoften = static_cast<float>(source.litStrokeSoften * scale);
+    target.litOpacity = static_cast<float>(source.litOpacityPct) / 100.0f;
+    target.litEdgeBrightness = static_cast<float>(source.litEdgeBrightnessPct) / 100.0f;
+    target.litShadow = source.litShadow;
+    target.litTimeOffsetMs = source.litTimeOffsetMs;
+    target.litWaitingTimeMs = source.litWaitingTimeMs;
+    target.litTransitionMode = source.litTransitionMode.toStdString();
+    target.litTransitionRatioPct = source.litTransitionRatioPct;
+    target.litTransitionAngleDeg = static_cast<float>(source.litTransitionAngleDeg);
+    target.litTransitionDistance = static_cast<float>(source.litTransitionDistance * scale);
+    target.signalsDurationMs = source.signalsDurationMs;
+    target.volumeSize = static_cast<float>(source.volumeSize * scale);
+    target.volumeOffsetX = static_cast<float>(source.volumeOffsetX * scale);
+    target.volumeOffsetY = static_cast<float>(source.volumeOffsetY * scale);
+    target.volumeColumnWidth = static_cast<float>(source.volumeColumnWidth * scale);
+    target.volumeColumnCount = source.volumeColumnCount;
+    target.volumeColumnSpacing = static_cast<float>(source.volumeColumnSpacing * scale);
+    target.volumeAlign = source.volumeAlign;
+    target.volumeRatio = static_cast<float>(source.volumeRatio);
+    target.volumeFill = gpuColor(source.volumeFillColor, QStringLiteral("#FFFFFF"));
+    target.volumeStroke = gpuColor(source.volumeStrokeColor, QStringLiteral("#0000FF"));
+    target.volumeOverlayFill = gpuColor(source.volumeOverlayFillColor, QStringLiteral("#0000FF"));
+    target.volumeOverlayStroke = gpuColor(source.volumeOverlayStrokeColor, QStringLiteral("#FFFFFF"));
+    target.volumeFlashTimes = source.volumeFlashTimes;
+    target.volumeFlashDurationRatio = static_cast<float>(source.volumeFlashDurationRatio);
+    target.volumeTransitionRatioPct = source.volumeTransitionRatioPct;
 }
 
 krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &config) {

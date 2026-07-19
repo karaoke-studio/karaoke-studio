@@ -1352,3 +1352,13 @@ G4 下一刀进入 `utopia`。它同时包含逐字入场、演唱中 over-scale
 - 基准新增 `--ruby`。RTX 3070 Ti、1920×1080、60fps、18 字 + 4 reading units、中档正文/ruby glow、packed bands、600 帧 Utopia：`80.64fps`，render/readback/roundtrip p95 `9.71/3.95/15.49ms`；local 显存增长 0，sidecar RSS 波动 `1,413,120B`。GPU/transport 回归 `122 passed`；native protocol/export/benchmark 独立回归 `62 passed, 27 skipped`。
 
 Utopia 横排主路径至此收口。G4 下一项进入 Sayatoo signal；产品 GPU 开关继续默认关闭，Painter 继续作为 oracle 与全部未迁移 feature 的整场 fallback。
+
+### 2026-07-19（第二十七批）：G4 Sayatoo 横排 volume signal
+
+- Render IR 构建显示窗口时复用 Painter `_display_style_for_signal_window()`，因此 `signals.duration + waiting - time_offset` 的完整引导时段会提前保留；Direct2D 不再只按普通歌词 lead 截掉倒计时前段。`lit.*` 与 `volume.*` 参数进入 resolved style，歌手方案仍按 Painter 的继承顺序解析。
+- Direct2D 对齐 Painter `_volume_signal_geometry()`：柱数、尺寸、柱宽/间隔、描边外扩、`volume_ratio` 透视高度和三档纵向对齐均使用同一公式。信号与歌词的 offset-free 联合盒参与 left/center/right 布局，`volume_offset_x/y` 只移动信号本体，不反向拖动歌词。
+- 时间状态覆盖闪烁阶段、最终填充阶段以及演唱期间保持最后一柱；`flash_times`、`flash_duration_ratio`、`transition_ratio`、waiting/time offset、整体透明度、before/overlay 填充与描边全部进入 GPU 绘制。信号纵向范围同时并入 packed-band readback。
+- capability gate 只为横排 `lit_style=volume` 放行，circle/square/rounded 和竖排仍整场回退 Painter。自动门槛覆盖 8 个倒计时/填充/演唱时刻：四边界相对 Painter 最大偏差 `12px`；剔除 DirectWrite/Qt 字体光栅差异后，独立 signal 层 alpha 偏差低于 `5%`，闪烁灭灯时刻与蓝色覆盖推进一致。
+- 基准新增 `--signals`。RTX 3070 Ti、1920×1080、60fps、packed bands、600 帧 volume signal：`220.28fps`，render/readback/roundtrip p95 `1.84/1.62/5.63ms`；local 显存增长 0，sidecar RSS 波动 `823,296B`。hardware/WARP build smoke 通过；GPU/transport `123 passed`，native protocol/export/benchmark `63 passed, 27 skipped`。
+
+下一批补齐横排 circle/square/rounded 的阴影、soften、高光与 fade/slide 熄灭过渡；完成前非 volume signal 继续由 capability gate 回退 Painter。

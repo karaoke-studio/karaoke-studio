@@ -1742,6 +1742,98 @@ def test_gpu_g4_utopia_ruby_units_and_group_outro_follow_painter(monkeypatch) ->
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g4_volume_signal_timing_union_layout_and_colors_follow_painter(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("Signal", 4_000)],
+                end_ms=5_000,
+            )
+        ]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=64,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+        line_horizontal_layout="center",
+        line_lead_in_ms=500,
+        line_tail_ms=500,
+        lit_enabled=True,
+        lit_style="volume",
+        signals_duration_ms=4_000,
+        lit_waiting_time_ms=0,
+        lit_time_offset_ms=0,
+        lit_opacity_pct=80,
+        lit_stroke_width=3,
+        volume_size=52,
+        volume_column_width=14,
+        volume_column_count=4,
+        volume_column_spacing=3,
+        volume_align=1,
+        volume_ratio=3.0,
+        volume_offset_x=-8,
+        volume_offset_y=4,
+        volume_fill_color="#F8F8F8",
+        volume_stroke_color="#1040FF",
+        volume_overlay_fill_color="#1040FF",
+        volume_overlay_stroke_color="#FFFFFF",
+        volume_flash_times=3,
+        volume_flash_duration_ratio=1.0,
+        volume_transition_ratio_pct=67,
+    )
+    timestamps = (0, 500, 1_000, 2_500, 3_000, 3_500, 3_999, 4_500)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+
+    for t_ms, gpu_frame, painter_frame in zip(timestamps, gpu, painter):
+        assert all(
+            abs(actual - expected) <= 12
+            for actual, expected in zip(
+                _payload_alpha_bounds(gpu_frame),
+                _payload_alpha_bounds(painter_frame),
+            )
+        ), (
+            t_ms,
+            _payload_alpha_bounds(gpu_frame),
+            _payload_alpha_bounds(painter_frame),
+        )
+    # The flash phase disappears at 500 ms in both implementations, then the
+    # overlay advances left-to-right during the final fill phase.
+    assert sum(gpu[1][3::4]) < sum(gpu[0][3::4])
+    assert sum(painter[1][3::4]) < sum(painter[0][3::4])
+    gpu_text_alpha = sum(gpu[1][3::4])
+    painter_text_alpha = sum(painter[1][3::4])
+    for index in (0, 2, 4, 5, 6):
+        gpu_signal_alpha = sum(gpu[index][3::4]) - gpu_text_alpha
+        painter_signal_alpha = sum(painter[index][3::4]) - painter_text_alpha
+        assert abs(gpu_signal_alpha / painter_signal_alpha - 1.0) <= 0.05
+
+    def blue_pixels(payload: bytes) -> int:
+        return sum(
+            payload[index + 2] > payload[index] + 40
+            and payload[index + 2] > payload[index + 1] + 20
+            and payload[index + 3] > 16
+            for index in range(0, len(payload), 4)
+        )
+
+    assert blue_pixels(gpu[4]) < blue_pixels(gpu[6])
+    assert blue_pixels(painter[4]) < blue_pixels(painter[6])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g3_dual_lane_alignments_follow_painter_schedule(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
 

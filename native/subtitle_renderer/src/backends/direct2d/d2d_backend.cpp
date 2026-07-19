@@ -56,6 +56,148 @@ D2D1_COLOR_F d2dColor(const RgbaColor &color) {
     );
 }
 
+struct VolumeSignalGeometry {
+    int count = 1;
+    float size = 1.0f;
+    float columnWidth = 1.0f;
+    float columnSpacing = 0.0f;
+    float strokeExtent = 0.0f;
+    float pitch = 1.0f;
+    float groupWidth = 1.0f;
+    float frontHeight = 1.0f;
+    float heightDelta = 0.0f;
+    float alignBaseShift = 0.0f;
+    float alignDeltaShift = 0.0f;
+};
+
+VolumeSignalGeometry volumeSignalGeometry(const TextStyle &style) {
+    VolumeSignalGeometry geometry;
+    geometry.count = std::clamp(style.volumeColumnCount, 1, 16);
+    geometry.size = std::max(style.volumeSize, 1.0f);
+    geometry.columnWidth = std::max(style.volumeColumnWidth, 1.0f);
+    geometry.columnSpacing = std::max(style.volumeColumnSpacing, 0.0f);
+    geometry.strokeExtent = std::max(style.litStrokeWidth, 0.0f);
+    geometry.pitch = geometry.columnWidth + geometry.columnSpacing
+        + geometry.strokeExtent * 2.0f;
+    geometry.groupWidth = geometry.count * geometry.pitch
+        - geometry.columnSpacing;
+    const float ratio = std::max(style.volumeRatio, 0.01f);
+    float baseFactor = ratio;
+    float depthFactor = 1.0f;
+    if (ratio > 1.0f) {
+        depthFactor = 1.0f / ratio;
+        baseFactor = 1.0f;
+    }
+    geometry.frontHeight = baseFactor * geometry.size;
+    geometry.heightDelta = geometry.count < 2
+        ? 0.0f
+        : ((depthFactor - baseFactor) * geometry.size)
+            / static_cast<float>(geometry.count - 1);
+    if (style.volumeAlign == 1) {
+        geometry.alignBaseShift = (1.0f - baseFactor) * geometry.size * 0.5f;
+        geometry.alignDeltaShift = -geometry.heightDelta * 0.5f;
+    } else if (style.volumeAlign == 2) {
+        geometry.alignBaseShift = (1.0f - baseFactor) * geometry.size;
+        geometry.alignDeltaShift = -geometry.heightDelta;
+    }
+    return geometry;
+}
+
+float volumeFlashAlpha(int elapsed, int duration, const TextStyle &style) {
+    if (duration <= 0 || elapsed < 0) {
+        return 0.0f;
+    }
+    const int times = std::max(style.volumeFlashTimes, 0);
+    if (times == 0) {
+        return 1.0f;
+    }
+    const float perFlash = static_cast<float>(duration) / static_cast<float>(times);
+    if (perFlash <= 0.0f) {
+        return 1.0f;
+    }
+    float phase = std::fmod(static_cast<float>(elapsed) / perFlash, 1.0f) * 2.0f;
+    if (phase > 1.0f) {
+        phase = 2.0f - phase;
+    }
+    const float transition = std::clamp(
+        static_cast<float>(style.volumeTransitionRatioPct) / 100.0f,
+        0.0f,
+        1.0f
+    );
+    if (transition <= 0.0f) {
+        return 1.0f - ((phase * 2.0f - 1.0f) > 0.0f ? 1.0f : 0.0f);
+    }
+    const float fade = std::clamp(
+        ((phase * 3.0f - 1.0f) * 0.67f) / transition,
+        0.0f,
+        1.0f
+    );
+    return 1.0f - fade;
+}
+
+struct VolumeSignalState {
+    bool visible = false;
+    int activeIndex = -1;
+    float opacity = 0.0f;
+};
+
+VolumeSignalState volumeSignalState(
+    int lineStartMs,
+    const TextStyle &style,
+    int tMs,
+    int displayEndMs
+) {
+    VolumeSignalState state;
+    if (!style.litEnabled || style.litStyle != "volume") {
+        return state;
+    }
+    const int duration = std::max(style.signalsDurationMs, 0);
+    const int activeDuration = std::max(
+        duration - std::max(style.litWaitingTimeMs, 0), 0
+    );
+    if (activeDuration <= 0) {
+        return state;
+    }
+    const int signalEnd = lineStartMs + style.litTimeOffsetMs;
+    const int activeStart = signalEnd - activeDuration;
+    if (tMs < activeStart || tMs > displayEndMs) {
+        return state;
+    }
+    const int elapsed = std::min(
+        std::max(tMs - activeStart, 0),
+        std::max(activeDuration - 1, 0)
+    );
+    const int count = std::clamp(style.volumeColumnCount, 1, 16);
+    const int times = std::max(style.volumeFlashTimes, 0);
+    const float flashRatio = std::max(style.volumeFlashDurationRatio, 0.0f);
+    state.visible = true;
+    state.opacity = 1.0f;
+    int fillElapsed = elapsed;
+    int fillDuration = activeDuration;
+    if (times > 0 && flashRatio > 0.0f) {
+        const float fillDurationFloat = static_cast<float>(activeDuration)
+            / (static_cast<float>(times) * flashRatio + 1.0f);
+        const float flashDuration = std::max(
+            static_cast<float>(activeDuration) - fillDurationFloat, 0.0f
+        );
+        if (static_cast<float>(elapsed) < flashDuration) {
+            state.activeIndex = -1;
+            state.opacity = volumeFlashAlpha(
+                elapsed,
+                std::max(static_cast<int>(flashDuration), 1),
+                style
+            );
+            return state;
+        }
+        fillElapsed = std::max(static_cast<int>(elapsed - flashDuration), 0);
+        fillDuration = std::max(static_cast<int>(fillDurationFloat), 1);
+    }
+    const float raw = static_cast<float>(count * fillElapsed)
+        / static_cast<float>(std::max(fillDuration, 1));
+    state.activeIndex = std::clamp(static_cast<int>(raw), 0, count - 1);
+    return state;
+}
+
 bool isLatinText(const std::wstring &text) {
     if (text.empty()) {
         return false;
@@ -2356,13 +2498,32 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 ? frameRubyStroke2Geometries[rubyIndex][geometryIndex].Get()
                 : nullptr;
         };
-        const float inkWidth = line->bounds.right - line->bounds.left;
-        float dx = (static_cast<float>(scene.width) - inkWidth) * 0.5f - line->bounds.left;
+        int displayEndMs = line->endMs + std::max(style.tailMs, 0);
+        for (const DisplayWindow &window : line->displayWindows) {
+            if (tMs >= window.startMs && tMs <= window.endMs) {
+                displayEndMs = window.endMs;
+                break;
+            }
+        }
+        const VolumeSignalState signalState = volumeSignalState(
+            line->startMs, style, tMs, displayEndMs
+        );
+        const VolumeSignalGeometry signalGeometry = volumeSignalGeometry(style);
+        float unionLeft = line->bounds.left;
+        float unionRight = line->bounds.right;
+        if (signalState.visible) {
+            // Painter aligns the offset-free union of the text and signal
+            // module.  The volume offset moves only the bars afterwards.
+            unionLeft = std::min(unionLeft, -signalGeometry.groupWidth);
+            unionRight = std::max(unionRight, 0.0f);
+        }
+        const float inkWidth = unionRight - unionLeft;
+        float dx = (static_cast<float>(scene.width) - inkWidth) * 0.5f - unionLeft;
         dx += style.centerOffsetX;
         if (style.alignment == "left") {
-            dx = style.horizontalMargin - line->bounds.left;
+            dx = style.horizontalMargin - unionLeft;
         } else if (style.alignment == "right") {
-            dx = static_cast<float>(scene.width) - style.horizontalMargin - line->bounds.right;
+            dx = static_cast<float>(scene.width) - style.horizontalMargin - unionRight;
         }
         dx += animation.dx;
         const float visualPad = line->hasInlineStyles
@@ -2481,6 +2642,30 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             const auto padding = visualVerticalPadding(rubyStyle, true);
             topPad = std::max(topPad, padding.first);
             bottomPad = std::max(bottomPad, padding.second);
+        }
+        const float signalTextMetric = (ascent - descent) * 0.5f;
+        const float signalGroupY = style.volumeOffsetY
+            - signalGeometry.strokeExtent
+            - signalGeometry.size * 0.5f
+            - signalTextMetric;
+        if (signalState.visible) {
+            for (int index = 0; index < signalGeometry.count; ++index) {
+                const float top = signalGroupY + signalGeometry.strokeExtent
+                    + signalGeometry.alignBaseShift
+                    + static_cast<float>(index) * signalGeometry.alignDeltaShift;
+                const float height = std::max(
+                    signalGeometry.frontHeight
+                        + static_cast<float>(index) * signalGeometry.heightDelta,
+                    1.0f
+                );
+                contentTop = std::min(
+                    contentTop, top - signalGeometry.strokeExtent - 2.0f
+                );
+                contentBottom = std::max(
+                    contentBottom,
+                    top + height + signalGeometry.strokeExtent + 2.0f
+                );
+            }
         }
         const int intervalTop = std::clamp(
             static_cast<int>(std::floor(dy + contentTop - topPad)),
@@ -3621,6 +3806,77 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 if (!hasUtopiaTransition) {
                     context->PopAxisAlignedClip();
                 }
+            }
+        }
+        if (signalState.visible
+            && style.litOpacity > 0.0f
+            && signalState.opacity > 0.0f) {
+            context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
+            auto signalBrush = [&](const RgbaColor &color) {
+                Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
+                checkHr(
+                    context->CreateSolidColorBrush(
+                        d2dColor(color), brush.ReleaseAndGetAddressOf()
+                    ),
+                    "Create volume signal brush",
+                    device_
+                );
+                brush->SetOpacity(
+                    std::clamp(style.litOpacity * signalState.opacity, 0.0f, 1.0f)
+                );
+                return brush;
+            };
+            auto normalFill = signalBrush(style.volumeFill);
+            auto normalStroke = signalBrush(style.volumeStroke);
+            auto overlayFill = signalBrush(style.volumeOverlayFill);
+            auto overlayStroke = signalBrush(style.volumeOverlayStroke);
+            const float groupX = style.volumeOffsetX - signalGeometry.groupWidth;
+            auto drawColumn = [&](int index, bool overlay) {
+                const float left = groupX + signalGeometry.strokeExtent
+                    + static_cast<float>(index) * signalGeometry.pitch;
+                const float top = signalGroupY + signalGeometry.strokeExtent
+                    + signalGeometry.alignBaseShift
+                    + static_cast<float>(index) * signalGeometry.alignDeltaShift;
+                const float height = std::max(
+                    signalGeometry.frontHeight
+                        + static_cast<float>(index) * signalGeometry.heightDelta,
+                    1.0f
+                );
+                const D2D1_ROUNDED_RECT rect = D2D1::RoundedRect(
+                    D2D1::RectF(
+                        left,
+                        top,
+                        left + signalGeometry.columnWidth,
+                        top + height
+                    ),
+                    std::max(
+                        std::min(signalGeometry.columnWidth, height) * 0.22f,
+                        1.0f
+                    ),
+                    std::max(
+                        std::min(signalGeometry.columnWidth, height) * 0.22f,
+                        1.0f
+                    )
+                );
+                ID2D1Brush *fill = overlay ? overlayFill.Get() : normalFill.Get();
+                ID2D1Brush *stroke = overlay ? overlayStroke.Get() : normalStroke.Get();
+                context->FillRoundedRectangle(rect, fill);
+                const RgbaColor &strokeColor = overlay
+                    ? style.volumeOverlayStroke
+                    : style.volumeStroke;
+                if (style.litStrokeWidth > 0.0f && strokeColor.alpha > 0) {
+                    context->DrawRoundedRectangle(
+                        rect, stroke, style.litStrokeWidth
+                    );
+                }
+            };
+            for (int index = signalState.activeIndex + 1;
+                 index < signalGeometry.count;
+                 ++index) {
+                drawColumn(index, false);
+            }
+            for (int index = 0; index <= signalState.activeIndex; ++index) {
+                drawColumn(index, true);
             }
         }
         checkHr(context->EndDraw(), "ID2D1DeviceContext::EndDraw(frame layers)", device_);

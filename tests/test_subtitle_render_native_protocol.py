@@ -245,6 +245,10 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
     assert gpu_unsupported_features(track, Style(entry_anim="char_fade")) == ()
     assert gpu_unsupported_features(track, Style(entry_anim="spin_flip")) == ()
     assert gpu_unsupported_features(track, Style(entry_anim="utopia")) == ()
+    assert gpu_unsupported_features(track, Style(lit_enabled=True)) == ()
+    assert gpu_unsupported_features(
+        track, Style(lit_enabled=True, lit_style="circle")
+    ) == ("signal_lits",)
     ruby_track = TimingTrack(
         lines=[TimingLine(chars=[TimingChar("漢", 0)], end_ms=500)],
         rubies=[
@@ -274,6 +278,28 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
         ]
     )
     assert gpu_unsupported_features(span_track, Style()) == ("shared_timing_span",)
+
+
+def test_build_render_ir_expands_display_window_for_volume_signal_lead_in():
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("A", 10_000)], end_ms=11_000)]
+    )
+    style = Style(
+        dual_line_layout=False,
+        line_lead_in_ms=500,
+        lit_enabled=True,
+        signals_duration_ms=4_000,
+        lit_waiting_time_ms=500,
+        lit_time_offset_ms=-250,
+    )
+
+    line = build_render_ir(track, style, width=640, height=360, fps=60)["track"][
+        "lines"
+    ][0]
+
+    # Painter reserves duration + waiting - offset = 4750 ms for the complete
+    # Sayatoo signal window (the waiting portion is part of the display lead).
+    assert line["display_start_ms"] == 5_250
 
 
 def test_build_render_ir_resolves_global_and_per_line_basic_animations():

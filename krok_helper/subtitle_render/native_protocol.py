@@ -37,7 +37,7 @@ def gpu_unsupported_features(
         reasons.append("right_to_left")
     if style.line_horizontal_layout == "per_row":
         reasons.append("per_row_layout")
-    if style.lit_enabled:
+    if style.lit_enabled and style.lit_style != "volume":
         reasons.append("signal_lits")
     if style.entry_anim not in {
         "none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"
@@ -177,12 +177,14 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
     schedule: dict[int, tuple[int, int, int]] = {}
     if style is not None:
         from krok_helper.subtitle_render.engine.painter import (
+            _display_style_for_signal_window,
             _line_center_override,
             display_schedule_for_style,
         )
         from krok_helper.subtitle_render.models import style_with_line_animation
 
-        schedule = display_schedule_for_style(track, style)
+        display_style = _display_style_for_signal_window(style)
+        schedule = display_schedule_for_style(track, display_style)
         center_overrides = {
             index: _line_center_override(track, line, style)
             for index, line in enumerate(track.lines)
