@@ -531,6 +531,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                 style,
                 width,
                 height,
+                dpr,
                 t_ms,
                 generation,
                 needs_configure,
@@ -541,7 +542,7 @@ class NativeAsyncSubtitleRenderer(QObject):
             if track is None or style is None:
                 continue
             if self._renderer_failed:
-                self._emit_python_fallback(track, style, width, height, t_ms, generation)
+                self._emit_python_fallback(track, style, width, height, dpr, t_ms, generation)
                 continue
             try:
                 self._render_native(
@@ -549,6 +550,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                     style,
                     width=width,
                     height=height,
+                    dpr=dpr,
                     t_ms=t_ms,
                     generation=generation,
                     needs_configure=needs_configure,
@@ -562,11 +564,11 @@ class NativeAsyncSubtitleRenderer(QObject):
                     print(f"native preview failed: {exc}")
                 self._renderer_failed = True
                 self._close_renderer()
-                self._emit_python_fallback(track, style, width, height, t_ms, generation)
+                self._emit_python_fallback(track, style, width, height, dpr, t_ms, generation)
 
     def _take_next_request(
         self,
-    ) -> tuple[TimingTrack | None, Style | None, int, int, int, int, bool, bool, bool, bool] | None:
+    ) -> tuple[TimingTrack | None, Style | None, int, int, float, int, int, bool, bool, bool, bool] | None:
         with self._condition:
             while not self._stopped and self._pending_t is None:
                 self._condition.wait()
@@ -585,6 +587,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                 self._style,
                 self._logical_w,
                 self._logical_h,
+                self._device_pixel_ratio,
                 t_ms,
                 self._generation,
                 needs_configure,
@@ -600,6 +603,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         *,
         width: int,
         height: int,
+        dpr: float,
         t_ms: int,
         generation: int,
         needs_configure: bool,
@@ -629,7 +633,9 @@ class NativeAsyncSubtitleRenderer(QObject):
             renderer_was_missing = self._renderer is None
             renderer = self._ensure_renderer()
             if renderer_was_missing or needs_configure:
-                renderer.configure(track, style, width=width, height=height, fps=60)
+                # dpr 让 native 按显示分辨率光栅化（布局仍在逻辑坐标系），
+                # 与 Python 预览路径一致；4K 工程预览不再渲染全分辨率帧。
+                renderer.configure(track, style, width=width, height=height, fps=60, dpr=dpr)
             # 资源常驻（G2 硬性要求 4）：shm_key 与 renderer 同生命周期，
             # sidecar 端据此跨 range 复用同一块 ring，不再逐 range 重建。
             shm_key = self._shm_key
@@ -657,6 +663,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                                     reader = SharedFrameRingReader.from_event(event)
                                 slot = reader.read_frame(event)
                                 image = slot.to_qimage()
+                                image.setDevicePixelRatio(dpr)
                             except NativeRendererError:
                                 self._stats.note_stale_frame_dropped()
                                 continue
@@ -711,12 +718,15 @@ class NativeAsyncSubtitleRenderer(QObject):
         style: Style,
         width: int,
         height: int,
+        dpr: float,
         t_ms: int,
         generation: int,
     ) -> None:
         if not self._is_current_generation(generation):
             return
-        image = QImage(width, height, QImage.Format.Format_ARGB32_Premultiplied)
+        physical_w, physical_h, dpr = preview_render_target_size(width, height, dpr)
+        image = QImage(physical_w, physical_h, QImage.Format.Format_ARGB32_Premultiplied)
+        image.setDevicePixelRatio(dpr)
         image.fill(0)
         painter = QPainter(image)
         try:

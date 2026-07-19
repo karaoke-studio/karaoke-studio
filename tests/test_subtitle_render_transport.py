@@ -866,6 +866,7 @@ def test_native_async_renderer_reuses_shared_reader_for_range(qapp, monkeypatch)
             Style(),
             width=320,
             height=180,
+            dpr=1.0,
             t_ms=1_000,
             generation=renderer._generation,
             needs_configure=True,

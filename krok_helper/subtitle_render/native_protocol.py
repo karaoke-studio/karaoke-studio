@@ -77,14 +77,21 @@ def build_render_ir(
     width: int,
     height: int,
     fps: int,
+    dpr: float = 1.0,
 ) -> dict[str, Any]:
-    """Build a JSON-friendly Render IR v1 snapshot for the native sidecar."""
+    """Build a JSON-friendly Render IR v1 snapshot for the native sidecar.
+
+    ``dpr`` 是预览缩放系数：布局仍在 ``width``/``height`` 逻辑坐标系计算，
+    native 光栅化画布为 ``round(width*dpr) x round(height*dpr)``,
+    与 Python 预览 ``preview_render_target_size`` + ``setDevicePixelRatio`` 语义一致。
+    """
     return {
         "schema": RENDER_IR_SCHEMA,
         "screen": {
             "width": max(int(width), 1),
             "height": max(int(height), 1),
             "fps": max(int(fps), 1),
+            "dpr": max(float(dpr or 1.0), 0.01),
         },
         "style": style_to_dict(style),
         "track": track_to_ir(track),

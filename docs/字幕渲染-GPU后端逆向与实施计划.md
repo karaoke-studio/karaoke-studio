@@ -817,3 +817,26 @@ GPU 与 CPU 不要求逐像素完全一致。报告至少包含：
 `thread_local` layout cache 冷启动；Python 消费路径仍有 2~3 次全帧拷贝；
 渲染语义为 6 月版本，预览观感与当前 Python painter 有轻微差异。
 
+### 2026-07-19（第四批）：native 预览接入显示分辨率渲染（DPR）
+
+用户实测 4K 工程 native 预览仅 20+fps。根因：Python 预览路径按
+`DPR × 场景缩放` 渲染显示分辨率（4K 工程在普通窗口实际只渲 ~1150px 宽），
+而 native 接线忽略 DPR、渲染真 4K 并回读 33MB/帧——像素量差 6~11 倍。
+这与 N3 的预览质量档位（§1.7，低档 4K 只渲 540p）是同一个问题。
+
+改动：Render IR `screen` 新增 `dpr` 字段（0 视为未设置，钳制 [0.01, 4]）；
+native `RenderConfig` 增加 `dpr` 与物理尺寸换算，布局仍在逻辑坐标系、
+`QPainter::scale` 缩放光栅化画布；shm ring 按物理尺寸分配；Python 侧
+把已存的 `_device_pixel_ratio` 传入 configure，交付 QImage 设置
+`setDevicePixelRatio`；fallback 渲染同样按显示分辨率。
+`compare_preview_backends.py` 新增 `--dpr` 参数。
+
+实测（Dark spiral journey，utopia+glow，3840×2160，8s，offscreen）：
+
+- `--dpr 0.3`（模拟 4K 工程在普通窗口）：native `58.62fps`、`steady_drop=3`、
+  p95 `0.07ms`；Python `59fps`、p95 `2.15ms`；
+- `--dpr 1.0` 对照（全 4K 渲染）：native `57.5fps` 但 p95 `30ms`（帧预算边缘）；
+- 单帧回读体量从 33MB 降到 ~3MB。
+
+该 `dpr` 协议字段即 G2 预览质量档位的地基；GPU backend 直接沿用。
+

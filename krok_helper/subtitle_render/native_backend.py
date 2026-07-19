@@ -414,8 +414,9 @@ class NativeRendererProcess:
         width: int,
         height: int,
         fps: int,
+        dpr: float = 1.0,
     ) -> dict[str, Any]:
-        ir = build_render_ir(track, style, width=width, height=height, fps=fps)
+        ir = build_render_ir(track, style, width=width, height=height, fps=fps, dpr=dpr)
         self._send({"cmd": "configure", "ir": ir})
         return self._expect_ok(self._read_response())
 

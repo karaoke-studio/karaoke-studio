@@ -145,6 +145,12 @@ struct RenderConfig {
     int width = 1920;
     int height = 1080;
     int fps = 60;
+    // 预览缩放：布局仍在 width/height 逻辑坐标系计算，光栅化画布按 dpr 缩放
+    // （对应 Python 侧 preview_render_target_size + setDevicePixelRatio 的语义）。
+    double dpr = 1.0;
+
+    int physicalWidth() const { return std::max(1, static_cast<int>(std::lround(width * dpr))); }
+    int physicalHeight() const { return std::max(1, static_cast<int>(std::lround(height * dpr))); }
     ResolvedStyle baseStyle;
     int lineYMarginPx = 80;
     int lineGapPx = 90;
@@ -957,6 +963,7 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.width = std::max(1, intValue(screen, QStringLiteral("width"), cfg.width));
     cfg.height = std::max(1, intValue(screen, QStringLiteral("height"), cfg.height));
     cfg.fps = std::max(1, intValue(screen, QStringLiteral("fps"), cfg.fps));
+    cfg.dpr = std::clamp(screen.value(QStringLiteral("dpr")).toDouble(1.0), 0.01, 4.0);
 
     const QJsonObject style = ir.value(QStringLiteral("style")).toObject();
     ResolvedStyle &base = cfg.baseStyle;
@@ -4602,13 +4609,16 @@ void paintLine(QPainter &painter, const RenderConfig &cfg, const TimingLine &lin
 
 RenderResult renderFrame(const RenderConfig &cfg, int tMs) {
     RenderResult result{
-        QImage(cfg.width, cfg.height, QImage::Format_ARGB32_Premultiplied),
+        QImage(cfg.physicalWidth(), cfg.physicalHeight(), QImage::Format_ARGB32_Premultiplied),
         RenderDiagnostics{},
     };
     result.image.fill(Qt::transparent);
 
     QPainter painter(&result.image);
     painter.setRenderHints(QPainter::Antialiasing | QPainter::TextAntialiasing | QPainter::SmoothPixmapTransform);
+    if (cfg.dpr != 1.0) {
+        painter.scale(cfg.dpr, cfg.dpr);
+    }
 
     const std::vector<DisplayLineRef> visibleLines = visibleDisplayLines(cfg, tMs);
     result.diagnostics.visibleLines = static_cast<int>(visibleLines.size());
@@ -4648,6 +4658,9 @@ QJsonObject handleConfigure(const QJsonObject &request, std::optional<RenderConf
     out.insert(QStringLiteral("width"), parsed->width);
     out.insert(QStringLiteral("height"), parsed->height);
     out.insert(QStringLiteral("fps"), parsed->fps);
+    out.insert(QStringLiteral("dpr"), parsed->dpr);
+    out.insert(QStringLiteral("physical_width"), parsed->physicalWidth());
+    out.insert(QStringLiteral("physical_height"), parsed->physicalHeight());
     out.insert(QStringLiteral("line_count"), static_cast<int>(parsed->lines.size()));
     out.insert(QStringLiteral("ruby_count"), static_cast<int>(parsed->rubies.size()));
     return out;
@@ -5046,7 +5059,7 @@ QJsonObject handleRenderRange(const QJsonObject &request, const std::optional<Re
     );
     const int ringSlots = std::max(1, intValue(request, QStringLiteral("ring_slots"), 3));
     QString shmError;
-    if (!ensureSharedFrameRing(runtime, shmKey, ringSlots, config->width, config->height, &shmError)) {
+    if (!ensureSharedFrameRing(runtime, shmKey, ringSlots, config->physicalWidth(), config->physicalHeight(), &shmError)) {
         QJsonObject out = response(false, QStringLiteral("render_range"));
         out.insert(QStringLiteral("generation"), generation);
         out.insert(QStringLiteral("error"), QStringLiteral("failed to create shared memory: ") + shmError);

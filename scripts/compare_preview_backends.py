@@ -228,6 +228,12 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--fps", type=int, default=60, help="Preview request FPS")
     parser.add_argument("--width", type=int, default=1920, help="Preview render width")
     parser.add_argument("--height", type=int, default=1080, help="Preview render height")
+    parser.add_argument(
+        "--dpr",
+        type=float,
+        default=1.0,
+        help="Display scale (DPR x scene scale); e.g. 0.3 simulates a 4K project in a small window",
+    )
     parser.add_argument("--sample-images", type=int, default=5, help="Images to retain per backend for diff")
     parser.add_argument("--settle-ms", type=int, default=1500, help="Extra wait after last request")
     parser.add_argument("--native-renderer", type=Path, default=None, help="Optional native sidecar executable")
@@ -244,6 +250,7 @@ def _run_backend(
     style,
     width: int,
     height: int,
+    dpr: float = 1.0,
     times: list[int],
     fps: int,
     sample_images: int,
@@ -283,7 +290,7 @@ def _run_backend(
 
     renderer.frame_ready.connect(on_frame_ready)
     renderer.set_state(track, style)
-    renderer.set_render_target(width, height, 1.0)
+    renderer.set_render_target(width, height, dpr)
     renderer.set_playing(True)
 
     state_index = {"value": 0}
@@ -358,6 +365,7 @@ def main(argv: list[str] | None = None) -> int:
             style=style,
             width=args.width,
             height=args.height,
+            dpr=args.dpr,
             times=times,
             fps=args.fps,
             sample_images=args.sample_images,
