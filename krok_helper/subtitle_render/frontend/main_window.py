@@ -1569,14 +1569,15 @@ class SubtitleRenderWindow(QWidget):
         )
         layout.addWidget(self._project_name_label)
         layout.addStretch(1)
-
-        # 预览窗口是独立浮窗，被用户关掉后需要一个固定入口重新打开。
-        self._show_preview_btn = FluentPushButton("预览窗口", bar)
-        self._show_preview_btn.setFixedHeight(30)
-        self._show_preview_btn.setToolTip("打开 / 唤起字幕预览窗口")
-        self._show_preview_btn.clicked.connect(self._show_preview_window)
-        layout.addWidget(self._show_preview_btn)
         return bar
+
+    def _make_preview_window_button(self, parent: QWidget) -> FluentPushButton:
+        """Create the preview-only entry anchored above the preview workspace."""
+        button = FluentPushButton("预览窗口", parent)
+        button.setFixedHeight(30)
+        button.setToolTip("打开 / 唤起字幕预览窗口")
+        button.clicked.connect(self._show_preview_window)
+        return button
 
     def _show_preview_window(self) -> None:
         if not hasattr(self, "_preview_window"):
@@ -2667,7 +2668,8 @@ class SubtitleRenderWindow(QWidget):
         outer.setSpacing(4)
 
         # 顶部项目命令栏（新建 / 打开 / 保存 / 另存为 + 当前项目名）
-        outer.addWidget(self._make_project_bar())
+        self._preview_project_bar = self._make_project_bar()
+        outer.addWidget(self._preview_project_bar)
 
         body = QSplitter(Qt.Orientation.Vertical)
         body.setChildrenCollapsible(False)
@@ -2740,6 +2742,10 @@ class SubtitleRenderWindow(QWidget):
                 self._transport_bar.attach_playback_controller(controller)
 
         self._property_panel = PropertyPanel()
+        self._show_preview_btn = self._make_preview_window_button(
+            self._property_panel
+        )
+        self._property_panel.set_navigation_action(self._show_preview_btn)
         self._property_panel.set_style(self._style)
         self._property_panel.set_preset_schemes(self._style_presets)
         self._property_panel.set_output_size(
@@ -2837,8 +2843,9 @@ class SubtitleRenderWindow(QWidget):
         outer.setContentsMargins(24, 4, 24, 16)
         outer.setSpacing(10)
 
-        # 顶部项目命令栏（同预览页）
-        outer.addWidget(self._make_project_bar())
+        # 顶部项目命令栏（同预览页，但不包含预览浮窗入口）
+        self._export_project_bar = self._make_project_bar()
+        outer.addWidget(self._export_project_bar)
 
         # 内容列限制最大宽度并水平居中，宽屏下表单不再拉满整行。
         column = QWidget()

@@ -3901,6 +3901,9 @@ class PropertyPanel(QWidget):
         navigation_layout = QHBoxLayout(navigation_row)
         navigation_layout.setContentsMargins(8, 4, 8, 4)
         navigation_layout.setSpacing(0)
+        self._navigation_row = navigation_row
+        self._navigation_layout = navigation_layout
+        self._navigation_action: Optional[QWidget] = None
 
         self._navigation = SegmentedWidget(navigation_row)
         self._navigation.setObjectName("PropertyNavigation")
@@ -3939,6 +3942,28 @@ class PropertyPanel(QWidget):
         self.setCurrentIndex(0)
         self.set_roles([])
         self.set_style(self._style, emit=False)
+
+    def set_navigation_action(self, widget: Optional[QWidget]) -> None:
+        """Place one host action at the far right of the property tab row."""
+        previous = self._navigation_action
+        if previous is widget:
+            return
+        if previous is not None:
+            self._navigation_layout.removeWidget(previous)
+            previous.setParent(None)
+        self._navigation_action = widget
+        if widget is None:
+            return
+        widget.setParent(self._navigation_row)
+        first_route = self._PAGE_SPECS[0][0]
+        first_tab = self._navigation.widget(first_route)
+        if first_tab is not None:
+            widget.setFixedHeight(max(first_tab.sizeHint().height(), 1))
+        self._navigation_layout.addWidget(
+            widget,
+            0,
+            Qt.AlignmentFlag.AlignVCenter,
+        )
 
     def _add_navigation_page(
         self,

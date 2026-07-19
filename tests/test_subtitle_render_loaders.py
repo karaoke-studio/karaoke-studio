@@ -918,6 +918,43 @@ def test_bottom_navigation_switches_export_and_back_to_preview(qapp, monkeypatch
     assert win._bottom_navigation.currentRouteKey() == "preview"
 
 
+def test_preview_window_button_is_anchored_to_preview_tab_only(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+    win.resize(1280, 720)
+    win._video_settings_panel.set_populated(True)
+    win.show()
+    qapp.processEvents()
+
+    button = win._show_preview_btn
+    font_tab = win._property_panel._navigation.widget("font")
+    assert button.parentWidget() is win._property_panel._navigation_row
+    assert win._preview_tab.isAncestorOf(button)
+    assert not win._export_tab.isAncestorOf(button)
+    assert button.isVisible() is True
+    assert button.height() == font_tab.height()
+    font_tab_top = font_tab.mapTo(
+        win._property_panel._navigation_row,
+        QPoint(0, 0),
+    ).y()
+    assert button.geometry().top() == font_tab_top
+    right_margin = (
+        win._property_panel._navigation_layout.contentsMargins().right()
+    )
+    assert (
+        button.geometry().right()
+        == win._property_panel._navigation_row.width() - right_margin - 1
+    )
+
+    win._nav_btns["export"].click()
+    qapp.processEvents()
+    assert button.isVisible() is False
+
+    win._nav_btns["preview"].click()
+    qapp.processEvents()
+    assert button.isVisible() is True
+    win.close()
+
+
 def test_playback_shortcut_is_disabled_outside_preview_tab(qapp, monkeypatch):
     win = _make_window(qapp, monkeypatch)
     toggles: list[bool] = []
