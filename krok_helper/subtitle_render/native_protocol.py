@@ -79,6 +79,7 @@ def build_render_ir(
     height: int,
     fps: int,
     dpr: float = 1.0,
+    extra_tracks: list[TimingTrack] | None = None,
 ) -> dict[str, Any]:
     """Build a JSON-friendly Render IR v1 snapshot for the native sidecar.
 
@@ -96,4 +97,7 @@ def build_render_ir(
         },
         "style": style_to_dict(style),
         "track": track_to_ir(track),
+        # Keep each source separate.  Painter schedules lanes/display windows
+        # independently per source and then composites primary -> extras.
+        "extra_tracks": [track_to_ir(item) for item in extra_tracks or ()],
     }

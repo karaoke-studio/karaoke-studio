@@ -108,6 +108,8 @@ struct TextLine {
     std::vector<TextRuby> rubies;
     int startMs = 0;
     int endMs = 0;
+    int sourceIndex = 0;
+    int sourceLineIndex = 0;
     bool operator==(const TextLine &) const = default;
 };
 

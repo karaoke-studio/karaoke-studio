@@ -69,6 +69,8 @@ struct TimingLine {
     int endMs = 0;
     QString singerLabel;
     int singerId = -1;
+    int sourceIndex = 0;
+    int sourceLineIndex = 0;
 };
 
 struct RubyAnnotation {
@@ -78,6 +80,7 @@ struct RubyAnnotation {
     std::vector<QString> readingParts;
     int posStartMs = 0;
     int posEndMs = 0;
+    int sourceIndex = 0;
 };
 
 struct PaintFillSpec {
@@ -1591,50 +1594,66 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
         refreshLegacyRubyFills(base);
     }
 
-    const QJsonObject track = ir.value(QStringLiteral("track")).toObject();
-    const QJsonArray lines = track.value(QStringLiteral("lines")).toArray();
-    cfg.lines.reserve(static_cast<std::size_t>(lines.size()));
-    for (const auto &lineValue : lines) {
-        const QJsonObject lineObject = lineValue.toObject();
-        TimingLine line;
-        line.endMs = intValue(lineObject, QStringLiteral("end_ms"), 0);
-        line.singerLabel = stringValue(lineObject, QStringLiteral("singer_label"));
-        line.singerId = intValue(lineObject, QStringLiteral("singer_id"), -1);
-
-        const QJsonArray chars = lineObject.value(QStringLiteral("chars")).toArray();
-        line.chars.reserve(static_cast<std::size_t>(chars.size()));
-        for (const auto &charValue : chars) {
-            const QJsonObject charObject = charValue.toObject();
-            TimingChar ch;
-            ch.text = stringValue(charObject, QStringLiteral("text"));
-            ch.startMs = intValue(charObject, QStringLiteral("start_ms"), 0);
-            if (charObject.value(QStringLiteral("pause_release_ms")).isDouble()) {
-                ch.pauseReleaseMs = charObject.value(QStringLiteral("pause_release_ms")).toInt();
-            }
-            ch.roleLabel = stringValue(charObject, QStringLiteral("role_label"));
-            line.chars.push_back(ch);
+    std::vector<QJsonObject> sourceTracks;
+    sourceTracks.push_back(ir.value(QStringLiteral("track")).toObject());
+    const QJsonArray extraTracks = ir.value(QStringLiteral("extra_tracks")).toArray();
+    sourceTracks.reserve(1 + static_cast<std::size_t>(extraTracks.size()));
+    for (const auto &trackValue : extraTracks) {
+        if (trackValue.isObject()) {
+            sourceTracks.push_back(trackValue.toObject());
         }
-        cfg.lines.push_back(line);
     }
+    for (std::size_t sourceIndex = 0; sourceIndex < sourceTracks.size(); ++sourceIndex) {
+        const QJsonObject &track = sourceTracks[sourceIndex];
+        const QJsonArray lines = track.value(QStringLiteral("lines")).toArray();
+        for (int sourceLineIndex = 0; sourceLineIndex < lines.size(); ++sourceLineIndex) {
+            const QJsonObject lineObject = lines.at(sourceLineIndex).toObject();
+            TimingLine line;
+            line.endMs = intValue(lineObject, QStringLiteral("end_ms"), 0);
+            line.singerLabel = stringValue(lineObject, QStringLiteral("singer_label"));
+            line.singerId = intValue(lineObject, QStringLiteral("singer_id"), -1);
+            line.sourceIndex = static_cast<int>(sourceIndex);
+            line.sourceLineIndex = sourceLineIndex;
 
-    const QJsonArray rubies = track.value(QStringLiteral("rubies")).toArray();
-    cfg.rubies.reserve(static_cast<std::size_t>(rubies.size()));
-    for (const auto &rubyValue : rubies) {
-        const QJsonObject rubyObject = rubyValue.toObject();
-        RubyAnnotation ruby;
-        ruby.kanji = stringValue(rubyObject, QStringLiteral("kanji"));
-        ruby.reading = stringValue(rubyObject, QStringLiteral("reading"));
-        ruby.readingPartMs = parseIntArray(rubyObject.value(QStringLiteral("reading_part_ms")).toArray());
-        const QJsonArray readingParts = rubyObject.value(QStringLiteral("reading_parts")).toArray();
-        ruby.readingParts.reserve(static_cast<std::size_t>(readingParts.size()));
-        for (const auto &part : readingParts) {
-            if (part.isString()) {
-                ruby.readingParts.push_back(part.toString());
+            const QJsonArray chars = lineObject.value(QStringLiteral("chars")).toArray();
+            line.chars.reserve(static_cast<std::size_t>(chars.size()));
+            for (const auto &charValue : chars) {
+                const QJsonObject charObject = charValue.toObject();
+                TimingChar ch;
+                ch.text = stringValue(charObject, QStringLiteral("text"));
+                ch.startMs = intValue(charObject, QStringLiteral("start_ms"), 0);
+                if (charObject.value(QStringLiteral("pause_release_ms")).isDouble()) {
+                    ch.pauseReleaseMs = charObject.value(QStringLiteral("pause_release_ms")).toInt();
+                }
+                ch.roleLabel = stringValue(charObject, QStringLiteral("role_label"));
+                line.chars.push_back(ch);
             }
+            cfg.lines.push_back(std::move(line));
         }
-        ruby.posStartMs = intValue(rubyObject, QStringLiteral("pos_start_ms"), 0);
-        ruby.posEndMs = intValue(rubyObject, QStringLiteral("pos_end_ms"), 0);
-        cfg.rubies.push_back(ruby);
+
+        const QJsonArray rubies = track.value(QStringLiteral("rubies")).toArray();
+        for (const auto &rubyValue : rubies) {
+            const QJsonObject rubyObject = rubyValue.toObject();
+            RubyAnnotation ruby;
+            ruby.kanji = stringValue(rubyObject, QStringLiteral("kanji"));
+            ruby.reading = stringValue(rubyObject, QStringLiteral("reading"));
+            ruby.readingPartMs = parseIntArray(
+                rubyObject.value(QStringLiteral("reading_part_ms")).toArray()
+            );
+            const QJsonArray readingParts = rubyObject.value(
+                QStringLiteral("reading_parts")
+            ).toArray();
+            ruby.readingParts.reserve(static_cast<std::size_t>(readingParts.size()));
+            for (const auto &part : readingParts) {
+                if (part.isString()) {
+                    ruby.readingParts.push_back(part.toString());
+                }
+            }
+            ruby.posStartMs = intValue(rubyObject, QStringLiteral("pos_start_ms"), 0);
+            ruby.posEndMs = intValue(rubyObject, QStringLiteral("pos_end_ms"), 0);
+            ruby.sourceIndex = static_cast<int>(sourceIndex);
+            cfg.rubies.push_back(std::move(ruby));
+        }
     }
 
     buildResolvedStyleCache(cfg);
@@ -5921,6 +5940,8 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         TextLine line;
         line.startMs = lineStartMs(sourceLine) + config.timingOffsetMs;
         line.endMs = lineEndMs(sourceLine) + config.timingOffsetMs;
+        line.sourceIndex = sourceLine.sourceIndex;
+        line.sourceLineIndex = sourceLine.sourceLineIndex;
         line.chars.reserve(sourceLine.chars.size());
         for (std::size_t index = 0; index < sourceLine.chars.size(); ++index) {
             int styleIndex = -1;
@@ -5954,6 +5975,9 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         const int sourceLineStart = lineStartMs(sourceLine);
         const int sourceLineEnd = lineEndMs(sourceLine);
         for (const RubyAnnotation &sourceRuby : config.rubies) {
+            if (sourceRuby.sourceIndex != sourceLine.sourceIndex) {
+                continue;
+            }
             const bool globalPosition = sourceRuby.posStartMs == 0 && sourceRuby.posEndMs == 0;
             if (!globalPosition && (
                 sourceRuby.posEndMs < sourceLineStart || sourceRuby.posStartMs > sourceLineEnd

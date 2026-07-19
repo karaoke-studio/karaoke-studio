@@ -599,6 +599,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                             fps=60,
                             dpr=dpr,
                             force_warp=self._force_warp,
+                            extra_tracks=extra_tracks,
                         )
                         self._note("configure_count")
                     event = renderer.render_gpu_frame(

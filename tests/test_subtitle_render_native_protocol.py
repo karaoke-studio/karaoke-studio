@@ -162,6 +162,24 @@ def test_build_render_ir_contains_screen_style_track_and_ruby():
     assert ir["track"]["rubies"][0]["reading"] == "きみ"
     assert ir["track"]["rubies"][0]["reading_part_ms"] == [100, 250]
     assert ir["track"]["rubies"][0]["reading_parts"] == ["き", "", "み"]
+    assert ir["extra_tracks"] == []
+
+
+def test_build_render_ir_preserves_extra_track_boundaries():
+    primary = TimingTrack(lines=[TimingLine(chars=[TimingChar("主", 0)], end_ms=500)])
+    extra = TimingTrack(lines=[TimingLine(chars=[TimingChar("副", 100)], end_ms=600)])
+
+    ir = build_render_ir(
+        primary,
+        Style(),
+        width=640,
+        height=360,
+        fps=60,
+        extra_tracks=[extra],
+    )
+
+    assert ir["track"]["lines"][0]["chars"][0]["text"] == "主"
+    assert ir["extra_tracks"][0]["lines"][0]["chars"][0]["text"] == "副"
 
 
 def test_build_render_ir_clamps_screen_values():

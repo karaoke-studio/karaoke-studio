@@ -509,6 +509,7 @@ struct Direct2DGpuBackend::Impl {
     struct CachedLine {
         int startMs = 0;
         int endMs = 0;
+        int sourceIndex = 0;
         int lane = 0;
         TextStyle style;
         float ascent = 0.0f;
@@ -815,8 +816,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         cached.style = style;
         cached.startMs = sourceLine.startMs;
         cached.endMs = sourceLine.endMs;
+        cached.sourceIndex = sourceLine.sourceIndex;
         cached.lane = style.dualLineLayout
-            ? static_cast<int>(lineIndex % static_cast<std::size_t>(std::max(style.laneCount, 1)))
+            ? sourceLine.sourceLineIndex % std::max(style.laneCount, 1)
             : 0;
         cached.chars.reserve(sourceLine.chars.size());
         bool lineHasBounds = false;
@@ -1532,15 +1534,25 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
     context->SetTransform(D2D1::Matrix3x2F::Identity());
     context->SetTarget(nullptr);
 
-    const Impl::CachedLine *line = nullptr;
+    std::vector<const Impl::CachedLine *> activeLines;
     for (const Impl::CachedLine &candidate : impl_->lines) {
         if (tMs >= candidate.startMs - std::max(baseStyle.leadInMs, 0)
             && tMs <= candidate.endMs + std::max(baseStyle.tailMs, 0)) {
-            line = &candidate;
-            break;
+            const bool laneAlreadyActive = std::any_of(
+                activeLines.begin(), activeLines.end(),
+                [&](const Impl::CachedLine *line) {
+                    return line->sourceIndex == candidate.sourceIndex
+                        && line->lane == candidate.lane;
+                }
+            );
+            if (!laneAlreadyActive) {
+                activeLines.push_back(&candidate);
+            }
         }
     }
-    if (line != nullptr && !line->geometries.empty()) {
+    bool renderedAnyLine = false;
+    for (const Impl::CachedLine *line : activeLines) {
+      if (line != nullptr && !line->geometries.empty()) {
         const TextStyle &style = line->style;
         const float inkWidth = line->bounds.right - line->bounds.left;
         float dx = (static_cast<float>(scene.width) - inkWidth) * 0.5f - line->bounds.left;
@@ -1971,7 +1983,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
         context->SetTarget(targetBitmap);
         context->SetTransform(D2D1::Matrix3x2F::Identity());
         context->BeginDraw();
-        context->Clear(D2D1::ColorF(0.0f, 0.0f));
+        if (!renderedAnyLine) {
+            context->Clear(D2D1::ColorF(0.0f, 0.0f));
+        }
         for (RubyGlowLayer &layer : rubyGlowLayers) {
             for (int sigma : layer.sigmas) {
                 checkHr(
@@ -2336,6 +2350,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
             }
         }
         checkHr(context->EndDraw(), "ID2D1DeviceContext::EndDraw(frame layers)", device_);
+        renderedAnyLine = true;
         if (blur) {
             blur->SetInput(0, nullptr);
         }
@@ -2345,9 +2360,10 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
         for (InlineGlowLayer &layer : inlineGlowLayers) {
             layer.blur->SetInput(0, nullptr);
         }
+      }
     }
 
-    if (line == nullptr || line->geometries.empty()) {
+    if (!renderedAnyLine) {
         context->SetTarget(targetBitmap);
         context->SetTransform(D2D1::Matrix3x2F::Identity());
         context->BeginDraw();

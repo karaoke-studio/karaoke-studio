@@ -535,8 +535,17 @@ class NativeRendererProcess:
         height: int,
         fps: int,
         dpr: float = 1.0,
+        extra_tracks: list[TimingTrack] | None = None,
     ) -> dict[str, Any]:
-        ir = build_render_ir(track, style, width=width, height=height, fps=fps, dpr=dpr)
+        ir = build_render_ir(
+            track,
+            style,
+            width=width,
+            height=height,
+            fps=fps,
+            dpr=dpr,
+            extra_tracks=extra_tracks,
+        )
         self._send({"cmd": "configure", "ir": ir})
         return self._expect_ok(self._read_response())
 
@@ -555,9 +564,18 @@ class NativeRendererProcess:
         fps: int,
         dpr: float = 1.0,
         force_warp: bool = False,
+        extra_tracks: list[TimingTrack] | None = None,
     ) -> dict[str, Any]:
         """Configure the G1 DirectWrite scene without enabling the product path."""
-        self.configure(track, style, width=width, height=height, fps=fps, dpr=dpr)
+        self.configure(
+            track,
+            style,
+            width=width,
+            height=height,
+            fps=fps,
+            dpr=dpr,
+            extra_tracks=extra_tracks,
+        )
         self._send({"cmd": "gpu_configure", "force_warp": bool(force_warp)})
         return self._expect_ok(self._read_response())
 

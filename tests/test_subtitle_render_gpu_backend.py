@@ -231,6 +231,7 @@ def _render_g1_frames(
     track: TimingTrack | None = None,
     width: int = 640,
     height: int = 360,
+    extra_tracks: list[TimingTrack] | None = None,
 ) -> tuple[dict, list[bytes]]:
     configured = renderer.configure_gpu(
         track or _g1_track(),
@@ -239,6 +240,7 @@ def _render_g1_frames(
         height=height,
         fps=60,
         force_warp=force_warp,
+        extra_tracks=extra_tracks,
     )
     reader: SharedFrameRingReader | None = None
     frames: list[bytes] = []
@@ -269,6 +271,7 @@ def _render_painter_oracle(
     track: TimingTrack | None = None,
     width: int = 640,
     height: int = 360,
+    extra_tracks: list[TimingTrack] | None = None,
 ) -> bytes:
     from PyQt6.QtGui import QFontDatabase, QImage
     from PyQt6.QtWidgets import QApplication
@@ -287,7 +290,7 @@ def _render_painter_oracle(
     image = QImage(width, height, QImage.Format.Format_RGBA8888)
     image.fill(0)
     clear_before_layer_cache()
-    paint_frame(image, track or _g1_track(), t_ms, style)
+    paint_frame(image, track or _g1_track(), t_ms, style, extra_tracks)
     bits = image.constBits()
     bits.setsize(image.sizeInBytes())
     return bytes(bits)
@@ -831,6 +834,87 @@ def test_gpu_g3_singer_override_matches_painter_geometry(monkeypatch) -> None:
         for payload in singer_frames
         for index in range(0, len(payload), 4)
     )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_composites_active_lines_from_multiple_subtitle_sources(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    def role_scheme(color: str) -> SubtitleStyleScheme:
+        colors = KaraokeColors(
+            before=KaraokeColorState(text=PaintFill(mode="solid", color=color)),
+            after=KaraokeColorState(text=PaintFill(mode="solid", color=color)),
+        )
+        return SubtitleStyleScheme(
+            font_family="Meiryo",
+            font_family_latin="Meiryo",
+            font_size_px=92,
+            stroke_width_px=0,
+            decoration_kind="none",
+            karaoke_colors=colors,
+        )
+
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=92,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+        custom_style_schemes={
+            "primary": role_scheme("#FF2020"),
+            "extra": role_scheme("#20FF40"),
+        },
+    )
+    primary = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar(ch, 0, role_label="primary") for ch in "WWWW"],
+                end_ms=1_000,
+            )
+        ]
+    )
+    extra = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar(ch, 0, role_label="extra") for ch in "II"],
+                end_ms=1_000,
+            )
+        ]
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured, frames = _render_g1_frames(
+            renderer,
+            style,
+            (500,),
+            force_warp=True,
+            track=primary,
+            extra_tracks=[extra],
+        )
+    painter = _render_painter_oracle(
+        style,
+        t_ms=500,
+        track=primary,
+        extra_tracks=[extra],
+    )
+
+    assert configured["line_count"] == 2
+    gpu = frames[0]
+    assert any(
+        gpu[index] > gpu[index + 1] + 80 and gpu[index + 3] > 0
+        for index in range(0, len(gpu), 4)
+    )
+    assert any(
+        gpu[index + 1] > gpu[index] + 80 and gpu[index + 3] > 0
+        for index in range(0, len(gpu), 4)
+    )
+    gpu_bounds = _payload_alpha_bounds(gpu)
+    painter_bounds = _payload_alpha_bounds(painter)
+    assert all(
+        abs(actual - expected) <= 12
+        for actual, expected in zip(gpu_bounds, painter_bounds)
+    ), (gpu_bounds, painter_bounds)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
