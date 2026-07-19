@@ -56,6 +56,12 @@ MSVC Release 构建下重跑。默认重负载（2400×1350、utopia+glow+ruby�
 **当前策略**：native 渲染核心暂时搁置，作为实验路径保留；默认预览切回 Python 侧。后续如果恢复该任务，先按
 C5.1 的缓存 parity 清单继续，而不是直接把 native 重新设为默认。
 
+> **2026-07-19 更正**：真实应用中 native 预览"播放只有 2～3fps"的主因已复盘定位为
+> **预览调度策略的积压失控**（range 阻塞消费 + waiting 无界回灌 + 播放态 generation 永不推进），
+> 缓存 parity 不足只是把 range 耗时推过临界点的诱因之一。完整机制与对策见
+> [`字幕渲染-GPU后端逆向与实施计划.md`](字幕渲染-GPU后端逆向与实施计划.md) §2.5 与 G2 调度硬性要求。
+> C5.1 的缓存清单仍然有效，但单独补缓存救不回该调度器。
+
 ---
 
 ## 1. 背景与已确认事实
@@ -296,6 +302,8 @@ payload:
 - [`native/subtitle_renderer_probe/CMakeLists.txt`](../native/subtitle_renderer_probe/CMakeLists.txt)
 - [`native/subtitle_renderer_probe/src/main.cpp`](../native/subtitle_renderer_probe/src/main.cpp)
 - [`scripts/run_native_qpainter_probe.ps1`](../scripts/run_native_qpainter_probe.ps1)
+
+> 注：C0 探针已于 2026-07-19 清理删除（一次性用途，结论保留在本节）；以上路径仅存于 git 历史。
 
 本机环境：
 
@@ -797,6 +805,10 @@ C:\Python314\python.exe -m pytest tests\test_subtitle_render_transport.py tests\
 - 可选增强：补内存占用统计或 per-window 可视化诊断，用于后续调优 look-ahead 缓存大小。
 
 #### C5.1：native 缓存 parity 接手清单（2026-06-27）
+
+> **2026-07-19 更正**：本节当时把预览卡死主要归因于缓存 parity 不足，复盘后确认这只是诱因；
+> 主因是调度器的积压失控（详见文首"当前策略"更正注记与 GPU 计划文档 §2.5）。本节缓存清单
+> 对后续 GPU backend 仍有参考价值，但不应再作为"救回 CPU native 预览"的路线图使用。
 
 本轮排查 `D:\カラオケ\songs\A stain\A stain.lrc` 预览卡死、跳字、帧率明显低于预期后，结论是：
 

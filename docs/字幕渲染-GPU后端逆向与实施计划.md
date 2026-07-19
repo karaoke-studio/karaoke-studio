@@ -210,7 +210,8 @@ multiprocessing 可以绕开 GIL，但预览用多进程会增加调度、shared
 
 - 当前 native 核心仍是 QImage + QPainter CPU raster；
 - 其缓存 parity 不完整，且 vertical/title/signal 等没有达到当前 Python 功能全集；
-- 2026-07-11 后产品策略已硬关闭 native 路径。
+- 2026-07-11 后产品策略已硬关闭 native 路径；
+- `NativeAsyncSubtitleRenderer` 的 range 调度策略存在积压失控缺陷（§2.5），G2 不得原样照搬。
 
 ### 2.4 当前性能参考
 
@@ -223,6 +224,49 @@ multiprocessing 可以绕开 GIL，但预览用多进程会增加调度、shared
 
 这不是端到端视频预览/导出速度。GPU 项目必须证明它改善的不是一个已经足够快的微基准，而是
 真实重工程中的预览刷新、主线程响应、4K/120fps 或动态重特效瓶颈。
+
+### 2.5 CPU native 预览 2～3fps 崩溃的根因（2026-07-19 复盘）
+
+历史事实：CPU native 预览在真实应用中播放只有 2～3fps、几乎不可用，这是当时放弃 native
+路径的直接原因。2026-07-19 代码复盘的结论是：**底层基础设施（JSON-lines 协议、shared memory
+slot 校验、进程封装、generation/取消原语）健康；崩溃来自预览调度策略层的结构性缺陷。**
+QPainter 渲染慢只是把系统推过临界点的诱因；把约 1.5x 的慢放大成约 20x 崩溃的是调度器。
+
+失控机制（死亡螺旋，三个设计的交互）：
+
+1. `NativeAsyncSubtitleRenderer._render_native` 以「当前帧 + 6 帧前瞻」为一个 range，
+   **阻塞消费**整个 range 直到 `range_done`。前瞻窗口固定 7 帧 ≈ 117ms（60fps）。
+   一旦 range 端到端耗时超过该窗口，range 完成时 GUI 当前时间已跑出缓存覆盖范围，
+   整个 range 的产出全部作废。
+2. miss 的请求进入 `_waiting_request_by_key`，`_include_waiting_timestamps` 会把所有未兑现
+   的旧请求追加进下一个 range，**没有上限、没有过期淘汰**。range 越滚越大，每轮更慢。
+3. 唯一清空积压的途径是 generation 推进，但连续播放的 tick（+16ms）永远不满足
+   `_should_advance_generation_for_request_locked` 的推进条件——播放不停，螺旋不退出。
+
+稳态表现：每个 range 花数百毫秒渲十几个陈旧时间戳，只有少数帧作为迟到的 waiting 请求
+发给 UI（内容已过期数百毫秒），用户看到 2～3fps 的过期画面。
+
+四个放大器：
+
+- **ring 覆写丢帧**：sidecar 发射器按 `nextEmit % slotCount` 写槽，从不等 Python 读完；
+  积压使 range 超过槽数后覆写未读槽 → Python 一致性校验失败 → 帧被当 stale 丢弃 →
+  waiting 永远兑现不了，反哺螺旋。
+- **每个 range 新建一批 `std::thread`**，而 layout cache 是 `thread_local`——预览每
+  ~100ms 一个 range，布局缓存随线程死亡永远是冷的。benchmark 用单个 range 跑 60 帧，
+  因此测不出来。
+- **每个 range 新建整块 shared memory**：`shm_key` 带 uuid，每次 create + memset 一块
+  ~66MB（1080p × 8 槽）段，Python 侧反复 attach/detach。
+- **Python 消费路径每帧拷贝 3～4 次** 8MB（shm→bytes→QImage→copy→缓存 store/take copy），
+  且消费与渲染串行。
+
+为什么当时探针全绿、真实应用崩溃：这是一个**双稳态系统**。720p 离屏探针单帧快、无视频
+解码争核，range 耗时始终小于前瞻窗口，螺旋不启动，命中率 0.9594；真实应用 1080p + 真实
+样式 + Qt Multimedia 解码争核 + 上述放大器，一旦越过临界点即单向失控且无法自愈。
+离屏探针测到的是好的那个稳态。
+
+结论：当时「native 比 Python 还卡」**不构成 native 渲染能力不行的证据**（render-only
+benchmark 达标，range:8 约 1.67ms/帧）；作废的是调度策略。该复盘转化为 §5 G2 的调度硬性
+要求。
 
 ---
 
@@ -463,13 +507,29 @@ LayerKey(fill/stroke/glow/state) -> reusable GPU bitmap/effect input
 
 首期允许 GPU readback -> shared memory -> QImage。此阶段测量读回是否吞掉 GPU 收益。
 
+调度硬性要求（源自 §2.5 CPU 预览崩溃复盘，逐条必须满足，不满足不得进入验收）：
+
+1. **积压有上限**：永远不渲染早于当前请求时间的帧；waiting/backlog 必须有容量上限和
+   过期淘汰，任何情况下 range/队列长度不得无界增长；
+2. **最新优先**：调度以最新请求时间戳为最高优先级，不得按 range 顺序阻塞消费旧帧；
+3. **ring 流控**：单次在途帧数 ≤ ring 槽数，或发射端等待消费确认后才可覆写槽位；
+   不允许"覆写未读槽 → 校验失败 → 当 stale 丢弃"作为常态路径；
+4. **资源常驻**：worker 池、shared memory 段、（GPU 侧）device/context 跨 range 常驻，
+   不随单次请求重建；所有缓存不得绑定在短命线程的 `thread_local` 上；
+5. **消费轻量**：Python 侧每帧从 shared memory 到可显示 QImage 至多一次完整像素拷贝；
+6. **失控自愈**：若端到端 ready latency 连续超过前瞻窗口，调度器必须能主动降级
+   （缩小前瞻/丢弃积压/推进 generation），不得进入不可自愈的慢稳态。
+
 验收：
 
 - 1080p60 普通横排稳定 60fps；
 - 重 glow 场景字幕 ready rate、p95 latency、steady drop 优于 Python；
 - 连续播放 30 分钟、seek 500 次、resize/style churn 无崩溃；
 - Python GUI 主线程响应不随字幕 paint 增长；
-- renderer kill/restart/fallback 可恢复。
+- renderer kill/restart/fallback 可恢复；
+- **以上指标必须在真实 GUI + 真实视频播放下测量**；离屏探针只作回归信号，不作验收
+  依据（§2.5：C5 离屏探针全绿但真实应用 2～3fps 的教训）；
+- 人为注入慢帧（如强制单帧 sleep 200ms）后，恢复时间有界，不进入 §2.5 式慢稳态。
 
 ### G3：常用功能达到可用 MVP（2～4 周）
 
@@ -650,7 +710,9 @@ GPU 与 CPU 不要求逐像素完全一致。报告至少包含：
 - device lost 后资源和 shared handle 未完全重建；
 - Qt/sidecar/shared memory 销毁顺序导致退出崩溃；
 - 预览 GPU、导出 CPU 时的观感差异；
-- 把硬件编码速度误算为 GPU 字幕渲染收益。
+- 把硬件编码速度误算为 GPU 字幕渲染收益；
+- 预览调度积压失控（已在 CPU native 路径实际发生并导致 2～3fps，见 §2.5；G2 硬性要求
+  就是为堵住它设立的）。
 
 ### 9.2 禁区
 
@@ -703,4 +765,19 @@ GPU 与 CPU 不要求逐像素完全一致。报告至少包含：
 - 尚未修改任何产品代码。
 
 下一步：**G0 环境与最小 GPU 探针**。
+
+### 2026-07-19（补充）：CPU 预览崩溃根因复盘与探针清理
+
+已完成：
+
+- 复盘 CPU native 预览"播放只有 2～3fps"的历史问题，定位为预览调度策略层的积压失控
+  （死亡螺旋），底层协议/shared memory/进程管理原语确认健康；完整结论见 §2.5；
+- 据此为 G2 新增 6 条调度硬性要求，并把"真实 GUI + 真实视频播放下测量"写入 G2 验收；
+- 确认「native 比 Python 卡」不构成 native 渲染能力不行的证据，GPU 路线的预期起点上调；
+- 清理已完结的 C0 探针：删除 `native/subtitle_renderer_probe/`、
+  `scripts/run_native_qpainter_probe.ps1` 与本机 `build/native-probe/` 产物
+  （C0 结论仍保留在 `字幕渲染核心C++化方案.md`）；`.vscode/settings.json` 的 CMake
+  源目录改指 `native/subtitle_renderer`；
+- 保留 `native/subtitle_renderer/`、Python 协议/客户端/导出 adapter 与全部 native 测试，
+  作为 G0 复用地基；QPainter CPU 渲染核心的移除并入 G0 骨架拆分执行。
 
