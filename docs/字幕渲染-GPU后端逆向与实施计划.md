@@ -1175,3 +1175,21 @@ protection；产品 GPU 开关继续默认关闭。
 
 gradient/split/image fill 基础切片至此收口。G3 下一刀进入标题、多字幕源及 Painter 已支持的常用
 行特效覆盖；产品 GPU 开关继续默认关闭。
+
+### 2026-07-19（第十七批）：G3 Direct2D 阴影剪影
+
+- 补齐此前仅存在于 resolved style、但 GPU 没有消费的 `shadow_offset_x/y`；角色方案可独立覆盖，
+  ruby 另支持 `ruby_shadow_offset_x/y`，未设置时与 Painter 一样继承正文偏移。
+- shadow 不是平移一份裸字 fill，而是先按 `stroke + enabled stroke2` 外缘绘制整字剪影，再填充字身，
+  对齐 N3 `DrawOneLineDecorShadow` 与 Painter `_paint_shadow_silhouette`。shadow brush 完整支持本阶段的
+  solid/gradient/split/image fill；图片阴影仍固定画布原点，不因偏移重新起纹理相位。
+- before shadow 先绘制完整源，after shadow 再按正文/ruby wipe 边界覆盖。常用横排路径的颜色分界
+  保持在未偏移的 wipe x，而阴影几何本身按 offset 平移；after clip 的纵向范围随阴影移动，避免底部
+  残留 before 色。逐字角色 run 使用各自偏移、颜色与描边外缘。
+- 自动门禁覆盖角色正文绿色阴影、角色 ruby 洋红阴影的 Painter 中心方向，以及 18px/8px 偏移下
+  before 绿/after 蓝 shadow 的左右边界；两种颜色边界与 Painter 相差不超过 `5px`。硬件/WARP
+  build smoke 通过；GPU/transport `106 passed`，native protocol/export/benchmark
+  `56 passed, 27 skipped`。
+
+G3 的 solid/gradient/split/image、stroke/stroke2、shadow/glow、ruby 与角色常用基础层已齐。下一刀
+进入标题与多字幕源横排路径；产品 GPU 开关继续默认关闭。

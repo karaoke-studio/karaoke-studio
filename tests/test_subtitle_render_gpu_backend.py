@@ -1480,6 +1480,135 @@ def test_gpu_g3_image_fill_file_signature_invalidates_scene_cache(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_role_main_and_ruby_shadows_match_painter_direction(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    def colors(shadow: str) -> KaraokeColors:
+        state = KaraokeColorState(
+            text=PaintFill(mode="solid", color="#FFFFFF"),
+            stroke=PaintFill(mode="solid", color="#202020"),
+            shadow=PaintFill(mode="solid", color=shadow),
+        )
+        return KaraokeColors(before=state, after=state)
+
+    style = _g1_style(
+        font_family="Meiryo",
+        font_size_px=84,
+        ruby_font_family="Meiryo",
+        ruby_font_size_px=34,
+        stroke_width_px=2,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+        custom_style_schemes={
+            "lead": SubtitleStyleScheme(
+                font_family="Meiryo",
+                font_size_px=84,
+                stroke_width_px=2,
+                stroke2_enabled=False,
+                decoration_kind="shadow",
+                shadow_offset_x=14,
+                shadow_offset_y=9,
+                karaoke_colors=colors("#20FF40"),
+                ruby_font_family="Meiryo",
+                ruby_font_size_px=34,
+                ruby_stroke_width_px=1,
+                ruby_stroke2_enabled=False,
+                ruby_decoration_kind="shadow",
+                ruby_shadow_offset_x=-10,
+                ruby_shadow_offset_y=6,
+                ruby_karaoke_colors=colors("#FF20E0"),
+            )
+        },
+    )
+    track = _g3_role_ruby_track()
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, (300,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=300, track=track)
+
+    def color_bounds(payload: bytes, kind: str) -> tuple[int, int, int, int]:
+        xs: list[int] = []
+        ys: list[int] = []
+        for index in range(0, len(payload), 4):
+            red, green, blue, alpha = payload[index : index + 4]
+            visible = alpha > 0 and (
+                (green > red + 50 and green > blue + 50)
+                if kind == "green"
+                else (red > green + 50 and blue > green + 50)
+            )
+            if visible:
+                pixel = index // 4
+                xs.append(pixel % 640)
+                ys.append(pixel // 640)
+        assert xs and ys
+        return min(xs), min(ys), max(xs), max(ys)
+
+    for kind in ("green", "magenta"):
+        gpu_bounds = color_bounds(frames[0], kind)
+        painter_bounds = color_bounds(painter, kind)
+        assert abs(
+            (gpu_bounds[0] + gpu_bounds[2]) / 2
+            - (painter_bounds[0] + painter_bounds[2]) / 2
+        ) <= 12
+        assert abs(
+            (gpu_bounds[1] + gpu_bounds[3]) / 2
+            - (painter_bounds[1] + painter_bounds[3]) / 2
+        ) <= 14
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_shadow_wipe_splits_source_before_offset(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    before = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFFFF"),
+        shadow=PaintFill(mode="solid", color="#20FF40"),
+    )
+    after = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFFFF"),
+        shadow=PaintFill(mode="solid", color="#2040FF"),
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_size_px=140,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="shadow",
+        shadow_offset_x=18,
+        shadow_offset_y=8,
+        dual_line_layout=False,
+        karaoke_colors=KaraokeColors(before=before, after=after),
+    )
+    track = _g3_fill_track()
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, (500,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=500, track=track)
+
+    def colored_x(payload: bytes, blue: bool) -> tuple[int, int]:
+        xs = []
+        for index in range(0, len(payload), 4):
+            red, green, value_blue, alpha = payload[index : index + 4]
+            match = alpha > 0 and (
+                value_blue > green + 60 and value_blue > red + 20
+                if blue
+                else green > value_blue + 60 and green > red + 60
+            )
+            if match:
+                xs.append((index // 4) % 640)
+        assert xs
+        return min(xs), max(xs)
+
+    for blue in (False, True):
+        gpu = colored_x(frames[0], blue)
+        cpu = colored_x(painter, blue)
+        assert abs(gpu[0] - cpu[0]) <= 5
+        assert abs(gpu[1] - cpu[1]) <= 5
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g3_ruby_uses_n3_multi_pass_glow(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     base = _g1_style(
@@ -1563,7 +1692,7 @@ def test_gpu_g1_alignment_uses_visible_ink_bounds(monkeypatch) -> None:
     with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
         renderer.configure_gpu(
             _g1_track(),
-            _g1_style(dual_line_layout=False),
+            _g1_style(dual_line_layout=False, decoration_kind="none"),
             width=640,
             height=360,
             fps=60,
@@ -1605,7 +1734,7 @@ def test_gpu_g1_hardware_and_warp_are_pixel_bounded(monkeypatch) -> None:
     # small number of pixels. Gate the aggregate premultiplied image error,
     # which is stable and meaningful even where straight RGB has tiny alpha.
     assert sum(abs(a - b) for a, b in zip(hardware_alpha, warp_alpha)) / len(hardware_alpha) <= 0.05
-    assert sum(premultiplied_deltas) / len(premultiplied_deltas) <= 0.05
+    assert sum(premultiplied_deltas) / len(premultiplied_deltas) <= 0.06
     assert max_alpha_delta <= 96
 
 

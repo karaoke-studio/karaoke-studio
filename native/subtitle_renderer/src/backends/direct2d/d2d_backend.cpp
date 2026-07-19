@@ -1600,12 +1600,17 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
             );
             return found == impl_->images.end() ? nullptr : found->bitmap.Get();
         };
-        auto paintBrush = [&](const PaintStyle &paint, const D2D1_RECT_F &rect,
-                              const RgbaColor &fallback) {
+        auto paintBrushAt = [&](const PaintStyle &paint, const D2D1_RECT_F &rect,
+                                const RgbaColor &fallback,
+                                float offsetX, float offsetY) {
             return createPaintBrush(
                 context, paint, rect, fallback, device_,
-                imageForPaint(paint), dx, dy
+                imageForPaint(paint), dx + offsetX, dy + offsetY
             );
+        };
+        auto paintBrush = [&](const PaintStyle &paint, const D2D1_RECT_F &rect,
+                              const RgbaColor &fallback) {
+            return paintBrushAt(paint, rect, fallback, 0.0f, 0.0f);
         };
         Microsoft::WRL::ComPtr<ID2D1Brush> beforeFill = paintBrush(
             style.beforeFillPaint, line->fillBounds, style.beforeFill
@@ -2003,6 +2008,152 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 device_
             );
             context->DrawImage(blur.Get());
+        }
+        context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
+
+        auto drawShadowSilhouette = [&](ID2D1Geometry *geometry, ID2D1Brush *brush,
+                                        float strokeWidth, float stroke2Width) {
+            const float outerWidth = stroke2Width > 0.0f
+                ? std::max(strokeWidth, 0.0f) + stroke2Width
+                : std::max(strokeWidth, 0.0f);
+            if (outerWidth > 0.0f) {
+                context->DrawGeometry(geometry, brush, outerWidth);
+            }
+            context->FillGeometry(geometry, brush);
+        };
+        auto drawLineShadowPhase = [&](bool after) {
+            if (line->hasInlineStyles) {
+                for (const Impl::CachedChar &ch : line->chars) {
+                    if (!ch.geometry) {
+                        continue;
+                    }
+                    const TextStyle &charStyle = ch.styleIndex >= 0
+                        && ch.styleIndex < static_cast<int>(scene.charStyles.size())
+                        ? scene.charStyles[static_cast<std::size_t>(ch.styleIndex)]
+                        : style;
+                    if (charStyle.decorationKind != "shadow") {
+                        continue;
+                    }
+                    Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrushAt(
+                        after ? charStyle.afterDecorPaint : charStyle.beforeDecorPaint,
+                        line->fillBounds,
+                        after ? charStyle.afterDecor : charStyle.beforeDecor,
+                        charStyle.shadowOffsetX,
+                        charStyle.shadowOffsetY
+                    );
+                    context->SetTransform(D2D1::Matrix3x2F::Translation(
+                        dx + charStyle.shadowOffsetX,
+                        dy + charStyle.shadowOffsetY
+                    ));
+                    if (after) {
+                        context->PushAxisAlignedClip(
+                            D2D1::RectF(
+                                afterClip.left - charStyle.shadowOffsetX,
+                                afterClip.top,
+                                afterClip.right - charStyle.shadowOffsetX,
+                                afterClip.bottom
+                            ),
+                            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                        );
+                    }
+                    drawShadowSilhouette(
+                        ch.geometry.Get(), brush.Get(),
+                        charStyle.strokeWidth, charStyle.stroke2Width
+                    );
+                    if (after) {
+                        context->PopAxisAlignedClip();
+                    }
+                }
+            } else if (style.decorationKind == "shadow") {
+                Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrushAt(
+                    after ? style.afterDecorPaint : style.beforeDecorPaint,
+                    line->fillBounds,
+                    after ? style.afterDecor : style.beforeDecor,
+                    style.shadowOffsetX,
+                    style.shadowOffsetY
+                );
+                context->SetTransform(D2D1::Matrix3x2F::Translation(
+                    dx + style.shadowOffsetX,
+                    dy + style.shadowOffsetY
+                ));
+                if (after) {
+                    context->PushAxisAlignedClip(
+                        D2D1::RectF(
+                            afterClip.left - style.shadowOffsetX,
+                            afterClip.top,
+                            afterClip.right - style.shadowOffsetX,
+                            afterClip.bottom
+                        ),
+                        D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                    );
+                }
+                for (const auto &geometry : line->geometries) {
+                    drawShadowSilhouette(
+                        geometry.Get(), brush.Get(),
+                        style.strokeWidth, style.stroke2Width
+                    );
+                }
+                if (after) {
+                    context->PopAxisAlignedClip();
+                }
+            }
+            context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
+        };
+        drawLineShadowPhase(false);
+        if (wipeEdge > line->bounds.left) {
+            drawLineShadowPhase(true);
+        }
+
+        for (const Impl::CachedRuby &ruby : line->rubies) {
+            const TextStyle &rubyStyle = rubyStyleFor(ruby.styleIndex);
+            if (rubyStyle.rubyDecorationKind != "shadow") {
+                continue;
+            }
+            const float edge = rubyWipeEdgeAt(ruby);
+            auto drawRubyShadowPhase = [&](bool after) {
+                Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrushAt(
+                    after
+                        ? rubyStyle.rubyAfterDecorPaint
+                        : rubyStyle.rubyBeforeDecorPaint,
+                    ruby.fillBounds,
+                    after ? rubyStyle.rubyAfterDecor : rubyStyle.rubyBeforeDecor,
+                    rubyStyle.rubyShadowOffsetX,
+                    rubyStyle.rubyShadowOffsetY
+                );
+                context->SetTransform(D2D1::Matrix3x2F::Translation(
+                    dx + rubyStyle.rubyShadowOffsetX,
+                    dy + rubyStyle.rubyShadowOffsetY
+                ));
+                if (after) {
+                    const float pad = std::max(
+                        rubyStyle.rubyStrokeWidth + rubyStyle.rubyStroke2Width,
+                        2.0f
+                    ) + 4.0f;
+                    context->PushAxisAlignedClip(
+                        D2D1::RectF(
+                            ruby.bounds.left - pad - rubyStyle.rubyShadowOffsetX,
+                            ruby.bounds.top - pad,
+                            edge - rubyStyle.rubyShadowOffsetX,
+                            ruby.bounds.bottom + pad
+                        ),
+                        D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                    );
+                }
+                for (const auto &geometry : ruby.geometries) {
+                    drawShadowSilhouette(
+                        geometry.Get(), brush.Get(),
+                        rubyStyle.rubyStrokeWidth,
+                        rubyStyle.rubyStroke2Width
+                    );
+                }
+                if (after) {
+                    context->PopAxisAlignedClip();
+                }
+            };
+            drawRubyShadowPhase(false);
+            if (edge > ruby.bounds.left) {
+                drawRubyShadowPhase(true);
+            }
         }
         context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
 

@@ -148,6 +148,8 @@ struct ResolvedStyle {
     int glowConcentrationLevel = 0;
     int shadowOffsetX = 0;
     int shadowOffsetY = 1;
+    std::optional<int> rubyShadowOffsetX;
+    std::optional<int> rubyShadowOffsetY;
     int rubyFontSizePx = 30;
     QString rubyFontFamily;
     QString rubyFontFamilyLatin;
@@ -881,6 +883,16 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
             2
         );
     }
+    if (hasNonNull(style, QStringLiteral("ruby_shadow_offset_x"))) {
+        cfg.rubyShadowOffsetX = intValue(
+            style, QStringLiteral("ruby_shadow_offset_x"), cfg.shadowOffsetX
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_shadow_offset_y"))) {
+        cfg.rubyShadowOffsetY = intValue(
+            style, QStringLiteral("ruby_shadow_offset_y"), cfg.shadowOffsetY
+        );
+    }
 }
 
 ResolvedStyle styleWithOverrides(const ResolvedStyle &base, const QJsonObject &scheme) {
@@ -1438,6 +1450,12 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     );
     base.shadowOffsetX = intValue(style, QStringLiteral("shadow_offset_x"), base.shadowOffsetX);
     base.shadowOffsetY = intValue(style, QStringLiteral("shadow_offset_y"), base.shadowOffsetY);
+    if (style.value(QStringLiteral("ruby_shadow_offset_x")).isDouble()) {
+        base.rubyShadowOffsetX = style.value(QStringLiteral("ruby_shadow_offset_x")).toInt();
+    }
+    if (style.value(QStringLiteral("ruby_shadow_offset_y")).isDouble()) {
+        base.rubyShadowOffsetY = style.value(QStringLiteral("ruby_shadow_offset_y")).toInt();
+    }
     base.rubyFontSizePx = std::max(1, intValue(style, QStringLiteral("ruby_font_size_px"), base.rubyFontSizePx));
     base.rubyFontFamily = stringValue(style, QStringLiteral("ruby_font_family"), base.rubyFontFamily);
     base.rubyFontFamilyLatin = stringValue(
@@ -5767,6 +5785,8 @@ void applyGpuResolvedStyle(
     target.glowBeforeRadius = static_cast<float>(source.glowBeforeRadiusPx * scale);
     target.glowAfterRadius = static_cast<float>(source.glowAfterRadiusPx * scale);
     target.glowConcentrationLevel = source.glowConcentrationLevel;
+    target.shadowOffsetX = static_cast<float>(source.shadowOffsetX * scale);
+    target.shadowOffsetY = static_cast<float>(source.shadowOffsetY * scale);
 
     const bool rubyUsesMainFont = source.rubyFontFollowMain
         && source.rubyFontFamily.isEmpty()
@@ -5849,6 +5869,12 @@ void applyGpuResolvedStyle(
     target.rubyGlowBeforeRadius = static_cast<float>(source.rubyGlowBeforeRadiusPx * scale);
     target.rubyGlowAfterRadius = static_cast<float>(source.rubyGlowAfterRadiusPx * scale);
     target.rubyGlowConcentrationLevel = source.rubyGlowConcentrationLevel;
+    target.rubyShadowOffsetX = static_cast<float>(
+        source.rubyShadowOffsetX.value_or(source.shadowOffsetX) * scale
+    );
+    target.rubyShadowOffsetY = static_cast<float>(
+        source.rubyShadowOffsetY.value_or(source.shadowOffsetY) * scale
+    );
 }
 
 krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &config) {

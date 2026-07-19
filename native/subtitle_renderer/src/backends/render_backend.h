@@ -154,6 +154,8 @@ struct TextStyle {
     float glowBeforeRadius = 10.0f;
     float glowAfterRadius = 10.0f;
     int glowConcentrationLevel = 0;
+    float shadowOffsetX = 0.0f;
+    float shadowOffsetY = 1.0f;
     std::wstring rubyFontFamily;
     std::optional<std::wstring> rubyLatinFontFamily;
     float rubyFontSize = 45.0f;
@@ -185,6 +187,8 @@ struct TextStyle {
     float rubyGlowBeforeRadius = 0.0f;
     float rubyGlowAfterRadius = 0.0f;
     int rubyGlowConcentrationLevel = 0;
+    float rubyShadowOffsetX = 0.0f;
+    float rubyShadowOffsetY = 1.0f;
     bool operator==(const TextStyle &) const = default;
 };
 
