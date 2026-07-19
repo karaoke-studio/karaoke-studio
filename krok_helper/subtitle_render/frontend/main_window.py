@@ -186,7 +186,11 @@ from krok_helper.subtitle_render.n3_font_catalog import (
     normalize_scheme_font_families,
     normalize_style_font_families,
 )
-from krok_helper.subtitle_render.n3proj_import import N3_PROJECT_FILTER, load_n3proj
+from krok_helper.subtitle_render.n3proj_import import (
+    N3_PROJECT_FILE_SUFFIX,
+    N3_PROJECT_FILTER,
+    load_n3proj,
+)
 from krok_helper.subtitle_render.project_store import (
     ProjectFileRevision,
     RecoveryCandidate,
@@ -2443,13 +2447,25 @@ class SubtitleRenderWindow(QWidget):
         )
         if not path_str:
             return
+        self._import_n3_project_path(Path(path_str), confirm_discard=False)
+
+    def _import_n3_project_path(
+        self,
+        path: Path,
+        *,
+        confirm_discard: bool = True,
+    ) -> bool:
+        """Import an N3 project selected from the menu or dropped onto a panel."""
+        path = Path(path)
+        if confirm_discard and not self._confirm_discard_changes():
+            return False
         try:
-            result = load_n3proj(Path(path_str))
+            result = load_n3proj(path)
         except (OSError, ValueError) as exc:
             fluent_error(
-                self, "导入失败", f"无法读取 NicoKaraMaker3 项目文件：\n{path_str}\n\n{exc}"
+                self, "导入失败", f"无法读取 NicoKaraMaker3 项目文件：\n{path}\n\n{exc}"
             )
-            return
+            return False
         self._begin_project_generation()
         self._clear_loaded_media()
         self._apply_project_data(result.project_data)
@@ -2492,11 +2508,12 @@ class SubtitleRenderWindow(QWidget):
         else:
             InfoBar.success(
                 title="N3 项目导入完成",
-                content=Path(path_str).name,
+                content=path.name,
                 parent=self,
                 position=InfoBarPosition.BOTTOM_RIGHT,
                 duration=2500,
             )
+        return True
 
     def _save_project(self) -> bool:
         if self._project_path is None:
@@ -2705,9 +2722,10 @@ class SubtitleRenderWindow(QWidget):
                 ".mp4", ".mkv", ".mov", ".webm", ".avi", ".flv",
                 *IMAGE_EXTENSIONS,
                 PROJECT_FILE_SUFFIX,
+                N3_PROJECT_FILE_SUFFIX,
             },
             empty_title="拖入背景素材",
-            empty_hint="拖入视频、静态图片或 Yurika 工程（.yurika）\n图片序列与纯色请用下方按钮",
+            empty_hint="拖入视频、静态图片、Yurika 工程（.yurika）\n或 N3 项目（.n3proj）；图片序列与纯色请用下方按钮",
             empty_icon="🎬",
         )
         self._video_settings_panel.pathDropped.connect(self._load_dropped_background)
@@ -3158,17 +3176,25 @@ class SubtitleRenderWindow(QWidget):
             self._load_dropped_background(Path(path_str))
 
     def _load_dropped_background(self, path: Path) -> None:
-        if path.suffix.lower() == PROJECT_FILE_SUFFIX:
+        suffix = path.suffix.lower()
+        if suffix == PROJECT_FILE_SUFFIX:
             self._open_project_path(path)
             return
-        if path.suffix.lower() in IMAGE_EXTENSIONS:
+        if suffix == N3_PROJECT_FILE_SUFFIX:
+            self._import_n3_project_path(path)
+            return
+        if suffix in IMAGE_EXTENSIONS:
             self.load_background_image(path)
         else:
             self.load_video(path)
 
     def _load_dropped_subtitle(self, path: Path) -> None:
-        if path.suffix.lower() == PROJECT_FILE_SUFFIX:
+        suffix = path.suffix.lower()
+        if suffix == PROJECT_FILE_SUFFIX:
             self._open_project_path(path)
+            return
+        if suffix == N3_PROJECT_FILE_SUFFIX:
+            self._import_n3_project_path(path)
             return
         self.load_subtitle_source(path)
 

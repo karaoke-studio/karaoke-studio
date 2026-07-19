@@ -449,6 +449,20 @@ def test_yurika_is_accepted_by_both_drop_regions(
     "panel_name",
     ["_lyrics_panel", "_preview_panel", "_video_settings_panel"],
 )
+def test_n3proj_is_accepted_by_all_drop_regions(
+    qapp, monkeypatch, tmp_path, panel_name
+):
+    win = _make_window(qapp, monkeypatch)
+    project_path = tmp_path / "drop.n3proj"
+    project_path.write_bytes(b"fake")
+
+    assert getattr(win, panel_name).accepts(project_path) is True
+
+
+@pytest.mark.parametrize(
+    "panel_name",
+    ["_lyrics_panel", "_preview_panel", "_video_settings_panel"],
+)
 def test_dropped_yurika_opens_complete_project_like_file_menu(
     qapp, monkeypatch, tmp_path, panel_name
 ):
@@ -464,6 +478,38 @@ def test_dropped_yurika_opens_complete_project_like_file_menu(
     assert win._project_path == project_path
     assert win._style.font_size_px == 91
     assert win._project_dirty is False
+
+
+@pytest.mark.parametrize(
+    "panel_name",
+    ["_lyrics_panel", "_preview_panel", "_video_settings_panel"],
+)
+def test_dropped_n3proj_imports_complete_project_like_file_menu(
+    qapp, monkeypatch, tmp_path, panel_name
+):
+    win = _make_window(qapp, monkeypatch)
+    project_path = tmp_path / f"{panel_name}.n3proj"
+    project_path.write_bytes(b"fake")
+
+    class Result:
+        project_data = {"style": style_to_dict(Style(font_size_px=91))}
+        warnings = []
+
+    loaded_paths: list[Path] = []
+
+    def fake_load(path):
+        loaded_paths.append(path)
+        return Result()
+
+    monkeypatch.setattr(mw, "load_n3proj", fake_load)
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+
+    getattr(win, panel_name).pathDropped.emit(project_path)
+
+    assert loaded_paths == [project_path]
+    assert win._project_path is None
+    assert win._style.font_size_px == 91
+    assert win._project_dirty is True
 
 
 def test_dropped_yurika_respects_unsaved_changes_confirmation(
@@ -484,6 +530,25 @@ def test_dropped_yurika_respects_unsaved_changes_confirmation(
     win._lyrics_panel.pathDropped.emit(dropped_path)
 
     assert win._project_path == current_path
+    assert win._style.font_size_px == 77
+    assert win._project_dirty is True
+
+
+def test_dropped_n3proj_respects_unsaved_changes_confirmation(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    project_path = tmp_path / "dropped.n3proj"
+    project_path.write_bytes(b"fake")
+    win._style = Style(font_size_px=77)
+    win._project_dirty = True
+    monkeypatch.setattr(win, "_confirm_discard_changes", lambda: False)
+    load_calls: list[Path] = []
+    monkeypatch.setattr(mw, "load_n3proj", lambda path: load_calls.append(path))
+
+    win._lyrics_panel.pathDropped.emit(project_path)
+
+    assert load_calls == []
     assert win._style.font_size_px == 77
     assert win._project_dirty is True
 

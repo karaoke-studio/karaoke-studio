@@ -905,9 +905,9 @@ class LyricsPanel(DropPanel):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(
-            extensions={".sug", ".lrc", ".yurika"},
+            extensions={".sug", ".lrc", ".yurika", ".n3proj"},
             empty_title="拖入字幕文件",
-            empty_hint="拖入 SUG 项目（.sug）、Nicokara 逐字 LRC（.lrc）\n或 Yurika 工程（.yurika）",
+            empty_hint="拖入 SUG 项目（.sug）、Nicokara 逐字 LRC（.lrc）\nYurika 工程（.yurika）或 N3 项目（.n3proj）",
             empty_icon="📝",
             parent=parent,
         )
