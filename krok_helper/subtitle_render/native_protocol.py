@@ -17,6 +17,7 @@ from krok_helper.subtitle_render.models import (
     TimingChar,
     TimingLine,
     TimingTrack,
+    guide_symbol_to_dict,
     style_to_dict,
     title_overlay_to_dict,
 )
@@ -61,8 +62,6 @@ def gpu_unsupported_features(
                     "utopia",
                 }:
                     reasons.append("line_animation_override")
-            if line.guide_symbol is not None or line.inline_guide_symbols:
-                reasons.append("guide_symbol")
     return tuple(dict.fromkeys(reasons))
 
 
@@ -107,14 +106,17 @@ def timing_char_to_ir(ch: TimingChar) -> dict[str, Any]:
             int(ch.pause_release_ms) if ch.pause_release_ms is not None else None
         ),
         "role_label": ch.role_label,
+        "vector_glyph": guide_symbol_to_dict(ch.vector_glyph),
     }
 
 
 def timing_line_to_ir(
     line: TimingLine,
     *,
+    render_line: TimingLine | None = None,
     layout_style: Style | None = None,
     resolved_intervals: list[tuple[int, int]] | None = None,
+    guide_anchor_bounds: tuple[int, int] | None = None,
     lane: int = 0,
     display_start_ms: int | None = None,
     display_end_ms: int | None = None,
@@ -124,8 +126,9 @@ def timing_line_to_ir(
     exit_anim: str = "none",
     exit_duration_ms: int = 0,
 ) -> dict[str, Any]:
+    render_line = render_line or line
     return {
-        "chars": [timing_char_to_ir(ch) for ch in line.chars],
+        "chars": [timing_char_to_ir(ch) for ch in render_line.chars],
         "end_ms": int(line.end_ms) if line.end_ms is not None else None,
         "singer_label": line.singer_label,
         "singer_id": line.singer_id,
@@ -170,6 +173,11 @@ def timing_line_to_ir(
             if resolved_intervals is not None
             else None
         ),
+        "guide_anchor_bounds": (
+            [int(guide_anchor_bounds[0]), int(guide_anchor_bounds[1])]
+            if guide_anchor_bounds is not None
+            else None
+        ),
     }
 
 
@@ -189,18 +197,25 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
     if style is not None:
         from krok_helper.subtitle_render.engine.painter import (
             _display_style_for_signal_window,
+            _line_with_guide_symbol,
             _line_center_override,
             _style_for_line,
             display_schedule_for_style,
             resolved_char_intervals_for_line,
+            resolved_guide_anchor_bounds_for_line,
         )
         from krok_helper.subtitle_render.models import style_with_line_animation
 
         display_style = _display_style_for_signal_window(style)
         schedule = display_schedule_for_style(track, display_style)
+        render_lines = [_line_with_guide_symbol(line) for line in track.lines]
         layout_styles = [_style_for_line(style, line) for line in track.lines]
         resolved_intervals = [
-            resolved_char_intervals_for_line(line, style) for line in track.lines
+            resolved_char_intervals_for_line(line, style) for line in render_lines
+        ]
+        guide_anchor_bounds = [
+            resolved_guide_anchor_bounds_for_line(track, line, style)
+            for line in track.lines
         ]
         center_overrides = {
             index: _line_center_override(track, line, layout_styles[index])
@@ -211,7 +226,9 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
         center_overrides = {}
         animation_styles = []
         layout_styles = []
+        render_lines = []
         resolved_intervals = []
+        guide_anchor_bounds = []
     return {
         "meta": {
             "title": track.meta.title,
@@ -225,9 +242,13 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
         "lines": [
             timing_line_to_ir(
                 line,
+                render_line=(render_lines[index] if style is not None else None),
                 layout_style=(layout_styles[index] if style is not None else None),
                 resolved_intervals=(
                     resolved_intervals[index] if style is not None else None
+                ),
+                guide_anchor_bounds=(
+                    guide_anchor_bounds[index] if style is not None else None
                 ),
                 lane=schedule.get(index, (0, 0, 0))[0],
                 display_start_ms=(schedule[index][1] if index in schedule else None),

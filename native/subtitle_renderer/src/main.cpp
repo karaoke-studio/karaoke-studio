@@ -63,6 +63,7 @@ struct TimingChar {
     std::optional<int> resolvedEndMs;
     std::optional<int> pauseReleaseMs;
     QString roleLabel;
+    std::optional<krok::subtitle::native::VectorGlyph> vectorGlyph;
 };
 
 struct ResolvedLineLayout {
@@ -99,6 +100,8 @@ struct TimingLine {
     int lane = 0;
     std::optional<int> displayStartMs;
     std::optional<int> displayEndMs;
+    std::optional<double> guideAnchorLeft;
+    std::optional<double> guideAnchorRight;
     bool centerOverride = false;
     QString entryAnimation = QStringLiteral("none");
     int entryDurationMs = 0;
@@ -807,6 +810,68 @@ void applySignalStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     cfg.volumeFlashTimes = std::max(0, intValue(style, QStringLiteral("volume_flash_times"), cfg.volumeFlashTimes));
     cfg.volumeFlashDurationRatio = std::max(style.value(QStringLiteral("volume_flash_duration_ratio")).toDouble(cfg.volumeFlashDurationRatio), 0.0);
     cfg.volumeTransitionRatioPct = std::clamp(intValue(style, QStringLiteral("volume_transition_ratio_pct"), cfg.volumeTransitionRatioPct), 0, 100);
+}
+
+std::optional<krok::subtitle::native::VectorGlyph> parseVectorGlyph(
+    const QJsonValue &value
+) {
+    if (!value.isObject()) {
+        return std::nullopt;
+    }
+    const QJsonObject object = value.toObject();
+    const QJsonArray sourceCommands = object.value(
+        QStringLiteral("path_commands")
+    ).toArray();
+    if (sourceCommands.isEmpty()) {
+        return std::nullopt;
+    }
+    krok::subtitle::native::VectorGlyph glyph;
+    glyph.unitsPerEm = static_cast<float>(std::max(
+        object.value(QStringLiteral("units_per_em")).toDouble(1000.0),
+        1.0
+    ));
+    glyph.advanceWidth = static_cast<float>(std::max(
+        object.value(QStringLiteral("advance_width")).toDouble(glyph.unitsPerEm),
+        0.0
+    ));
+    for (const QJsonValue &commandValue : sourceCommands) {
+        const QJsonArray commandArray = commandValue.toArray();
+        if (commandArray.isEmpty() || !commandArray.first().isString()) {
+            return std::nullopt;
+        }
+        const QString kindText = commandArray.first().toString().toUpper();
+        if (kindText.size() != 1) {
+            return std::nullopt;
+        }
+        const char kind = kindText.at(0).toLatin1();
+        int expectedValues = -1;
+        if (kind == 'M' || kind == 'L') {
+            expectedValues = 2;
+        } else if (kind == 'C') {
+            expectedValues = 6;
+        } else if (kind == 'Q') {
+            expectedValues = 4;
+        } else if (kind == 'Z') {
+            expectedValues = 0;
+        }
+        if (expectedValues < 0 || commandArray.size() != expectedValues + 1) {
+            return std::nullopt;
+        }
+        krok::subtitle::native::VectorPathCommand command;
+        command.kind = kind;
+        command.values.reserve(static_cast<std::size_t>(expectedValues));
+        for (int index = 0; index < expectedValues; ++index) {
+            const QJsonValue coordinate = commandArray.at(index + 1);
+            if (!coordinate.isDouble() || !std::isfinite(coordinate.toDouble())) {
+                return std::nullopt;
+            }
+            command.values.push_back(static_cast<float>(coordinate.toDouble()));
+        }
+        glyph.commands.push_back(std::move(command));
+    }
+    return glyph.commands.empty()
+        ? std::nullopt
+        : std::optional<krok::subtitle::native::VectorGlyph>(std::move(glyph));
 }
 
 void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
@@ -2037,6 +2102,9 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
                     ch.pauseReleaseMs = charObject.value(QStringLiteral("pause_release_ms")).toInt();
                 }
                 ch.roleLabel = stringValue(charObject, QStringLiteral("role_label"));
+                ch.vectorGlyph = parseVectorGlyph(
+                    charObject.value(QStringLiteral("vector_glyph"))
+                );
                 line.chars.push_back(ch);
             }
             const QJsonArray resolvedIntervals = lineObject.value(
@@ -2055,6 +2123,19 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
                     ch.resolvedEndMs = std::max(
                         ch.startMs, interval.at(1).toInt(ch.startMs)
                     );
+                }
+            }
+            const QJsonArray guideAnchorBounds = lineObject.value(
+                QStringLiteral("guide_anchor_bounds")
+            ).toArray();
+            if (guideAnchorBounds.size() == 2
+                && guideAnchorBounds.at(0).isDouble()
+                && guideAnchorBounds.at(1).isDouble()) {
+                const double left = guideAnchorBounds.at(0).toDouble();
+                const double right = guideAnchorBounds.at(1).toDouble();
+                if (std::isfinite(left) && std::isfinite(right) && right > left) {
+                    line.guideAnchorLeft = left;
+                    line.guideAnchorRight = right;
                 }
             }
             cfg.lines.push_back(std::move(line));
@@ -6505,6 +6586,15 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         line.compositeOrder = sourceLine.sourceIndex == 0
             ? 0
             : sourceLine.sourceIndex + 1;
+        if (sourceLine.guideAnchorLeft.has_value()
+            && sourceLine.guideAnchorRight.has_value()) {
+            line.guideAnchorLeft = static_cast<float>(
+                *sourceLine.guideAnchorLeft * scale
+            );
+            line.guideAnchorRight = static_cast<float>(
+                *sourceLine.guideAnchorRight * scale
+            );
+        }
         const auto verticalCharacterAnimation = [&](const QString &animation) {
             return config.vertical && (
                 animation == QStringLiteral("char_fade")
@@ -6573,6 +6663,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 sourceLine.chars[index].startMs + sourceTimingOffset,
                 charEndMs(sourceLine, index) + sourceTimingOffset,
                 styleIndex,
+                sourceLine.chars[index].vectorGlyph,
             });
         }
         const auto intervals = lineIntervals(sourceLine);

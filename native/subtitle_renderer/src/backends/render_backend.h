@@ -83,11 +83,25 @@ struct PaintStyle {
     bool operator==(const PaintStyle &) const = default;
 };
 
+struct VectorPathCommand {
+    char kind = 'M';
+    std::vector<float> values;
+    bool operator==(const VectorPathCommand &) const = default;
+};
+
+struct VectorGlyph {
+    std::vector<VectorPathCommand> commands;
+    float unitsPerEm = 1000.0f;
+    float advanceWidth = 1000.0f;
+    bool operator==(const VectorGlyph &) const = default;
+};
+
 struct TextChar {
     std::wstring text;
     int startMs = 0;
     int endMs = 0;
     int styleIndex = -1;
+    std::optional<VectorGlyph> vectorGlyph;
     bool operator==(const TextChar &) const = default;
 };
 
@@ -125,6 +139,8 @@ struct TextLine {
     int sourceLineIndex = 0;
     int lane = 0;
     int compositeOrder = 0;
+    std::optional<float> guideAnchorLeft;
+    std::optional<float> guideAnchorRight;
     bool staticOverlay = false;
     int fadeInMs = 0;
     int fadeOutMs = 0;

@@ -10870,6 +10870,7 @@ def resolved_char_intervals_for_line(
     shared-span path.
     """
     line_style = _style_for_line(style, line)
+    line = _line_with_guide_symbol(line)
     if line_style.vertical:
         return compute_char_intervals(line)
     if _line_has_role_labels(line):
@@ -10899,6 +10900,47 @@ def resolved_char_intervals_for_line(
             for ch in line.chars
         ]
     return compute_char_intervals(line, char_widths)
+
+
+def resolved_guide_anchor_bounds_for_line(
+    track: TimingTrack,
+    line: TimingLine,
+    style: Style,
+) -> tuple[int, int] | None:
+    """Return Painter's source-line horizontal anchor box for guide glyphs.
+
+    Sayatoo row layout measures the unmodified source line before Painter
+    inserts/replaces guide glyphs.  The rendered vector glyphs therefore grow
+    from that source text origin.  Role-run and vertical lines take their own
+    rendered geometry path and do not use this pre-resolved anchor.
+    """
+    line_style = _style_for_line(style, line)
+    if (
+        line_style.vertical
+        or _line_has_role_labels(line)
+        or (line.guide_symbol is None and not line.inline_guide_symbols)
+    ):
+        return None
+    font = _build_font(line_style)
+    metrics = QFontMetrics(font)
+    latin_font = _build_latin_font(line_style)
+    font_for = _make_font_for(line_style, font, latin_font)
+    latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
+    char_widths = [
+        _char_layout_width(
+            ch.text, font, metrics, latin_metrics, font_for, line_style
+        )
+        for ch in line.chars
+    ]
+    active_rubies = _active_rubies_for_line(track.rubies, line)
+    char_gaps, ruby_left, ruby_right = _ruby_char_gaps(
+        line, char_widths, active_rubies, line_style
+    )
+    visual_pad = _visual_text_padding(line_style)
+    left_ext = max(visual_pad, ruby_left)
+    right_ext = max(visual_pad, ruby_right)
+    text_width = _line_text_width(char_widths, line_style) + sum(char_gaps)
+    return -left_ext, int(round(text_width)) + right_ext
 
 
 def _active_rubies_for_line(

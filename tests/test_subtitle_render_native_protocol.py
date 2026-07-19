@@ -26,6 +26,7 @@ from krok_helper.subtitle_render.engine.painter import (
     paint_frame,
 )
 from krok_helper.subtitle_render.models import (
+    GuideSymbol,
     KaraokeColors,
     KaraokeColorState,
     LyricsLayout,
@@ -237,10 +238,65 @@ def test_build_render_ir_carries_painter_display_schedule():
     assert ir["track"]["lines"][1]["lane"] == 1
 
 
+def test_build_render_ir_resolves_guide_symbols_with_painter_semantics():
+    symbol = GuideSymbol(
+        path_commands=(
+            ("M", 100.0, 0.0),
+            ("L", 500.0, -800.0),
+            ("L", 900.0, 0.0),
+            ("Z",),
+        ),
+        duration_ms=400,
+        count=2,
+        role_labels=("lead-a", "lead-b"),
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("A", 1_000)],
+                end_ms=1_500,
+                guide_symbol=symbol,
+            )
+        ]
+    )
+
+    line = build_render_ir(track, Style(), width=640, height=360, fps=60)[
+        "track"
+    ]["lines"][0]
+
+    assert [ch["text"] for ch in line["chars"]] == ["\uFFFC", "\uFFFC", "A"]
+    assert [ch["start_ms"] for ch in line["chars"]] == [200, 600, 1_000]
+    assert [ch["role_label"] for ch in line["chars"][:2]] == [
+        "lead-a",
+        "lead-b",
+    ]
+    assert line["chars"][0]["vector_glyph"]["advance_width"] == 1_000.0
+    assert line["resolved_intervals"][0][0] == 200
+    assert len(line["resolved_intervals"]) == 3
+    assert gpu_unsupported_features(track, Style()) == ()
+
+
 def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
     track = TimingTrack(lines=[TimingLine(chars=[TimingChar("A", 0)], end_ms=500)])
 
     assert gpu_unsupported_features(track, Style()) == ()
+    assert gpu_unsupported_features(
+        track, Style(entry_anim="future_effect")
+    ) == ("line_animation",)
+    unknown_override = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("A", 0)],
+                end_ms=500,
+                animation_override=LineAnimationOverride(
+                    entry_anim="future_effect"
+                ),
+            )
+        ]
+    )
+    assert gpu_unsupported_features(
+        unknown_override, Style()
+    ) == ("line_animation_override",)
     assert gpu_unsupported_features(
         track, Style(vertical=True, decoration_kind="shadow")
     ) == ()

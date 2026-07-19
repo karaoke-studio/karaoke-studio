@@ -15,6 +15,7 @@ from krok_helper.subtitle_render.native_backend import (
     resolve_native_renderer_path,
 )
 from krok_helper.subtitle_render.models import (
+    GuideSymbol,
     KaraokeColors,
     KaraokeColorState,
     LyricsLayout,
@@ -862,6 +863,143 @@ def test_gpu_g4_shared_timing_span_uses_painter_resolved_intervals(
             _payload_alpha_bounds(painter[-1]),
         )
     )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("mode", ["prefix", "replacement", "inline"])
+@pytest.mark.parametrize(
+    "direction_changes",
+    [{}, {"right_to_left": True}, {"vertical": True}],
+)
+def test_gpu_g4_guide_symbols_follow_painter_vector_glyphs(
+    monkeypatch,
+    mode: str,
+    direction_changes: dict[str, object],
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    symbol = GuideSymbol(
+        path_commands=(
+            ("M", 100.0, 0.0),
+            ("L", 500.0, -820.0),
+            ("L", 900.0, 0.0),
+            ("Z",),
+        ),
+        duration_ms=400,
+        count=2,
+        role_labels=("lead", None),
+        replacement_prefix=(("3", "2") if mode == "replacement" else ()),
+    )
+    if mode == "prefix":
+        line = TimingLine(
+            chars=[TimingChar(" ", 1_200)],
+            end_ms=1_600,
+            guide_symbol=symbol,
+        )
+        timestamps = (400, 600, 800, 1_000, 1_600)
+    elif mode == "replacement":
+        line = TimingLine(
+            chars=[
+                TimingChar("3", 400),
+                TimingChar("2", 800),
+                TimingChar(" ", 1_200),
+            ],
+            end_ms=1_600,
+            guide_symbol=symbol,
+        )
+        timestamps = (400, 600, 800, 1_000, 1_600)
+    else:
+        line = TimingLine(
+            chars=[TimingChar("*", 400, role_label="lead")],
+            end_ms=800,
+            inline_guide_symbols={0: replace(symbol, count=1)},
+        )
+        timestamps = (400, 600, 800)
+    before = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFF2020"),
+        stroke=PaintFill(mode="solid", color="#00000000"),
+        shadow=PaintFill(mode="solid", color="#00000000"),
+    )
+    after = KaraokeColorState(text=PaintFill(mode="solid", color="#FF2040FF"))
+    role_before = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFFE020"),
+        stroke=PaintFill(mode="solid", color="#00000000"),
+        shadow=PaintFill(mode="solid", color="#00000000"),
+    )
+    role_after = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FF8040FF"),
+        stroke=PaintFill(mode="solid", color="#00000000"),
+        shadow=PaintFill(mode="solid", color="#00000000"),
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=80,
+        dual_line_layout=False,
+        line_horizontal_layout="center",
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        karaoke_colors=KaraokeColors(before=before, after=after),
+        custom_style_schemes={
+            "lead": SubtitleStyleScheme(
+                font_size_px=80,
+                karaoke_colors=KaraokeColors(
+                    before=role_before,
+                    after=role_after,
+                ),
+            )
+        },
+        **direction_changes,
+    )
+    track = TimingTrack(lines=[line])
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+
+    def blue_progress(payload: bytes) -> int:
+        return sum(
+            max(int(payload[index + 2]) - int(payload[index]), 0)
+            for index in range(0, len(payload), 4)
+        )
+
+    gpu_full = blue_progress(gpu[-1])
+    painter_full = blue_progress(painter[-1])
+    assert gpu_full > 0 and painter_full > 0
+    for t_ms, gpu_frame, painter_frame in zip(timestamps, gpu, painter):
+        gpu_ratio = blue_progress(gpu_frame) / gpu_full
+        painter_ratio = blue_progress(painter_frame) / painter_full
+        assert abs(gpu_ratio - painter_ratio) <= 0.06, (
+            mode,
+            direction_changes,
+            t_ms,
+            gpu_ratio,
+            painter_ratio,
+        )
+    if not style.vertical:
+        def role_after_pixels(payload: bytes) -> int:
+            return sum(
+                payload[index] > 90
+                and payload[index + 2] > 180
+                and payload[index + 3] > 0
+                for index in range(0, len(payload), 4)
+            )
+
+        assert role_after_pixels(gpu[-1]) > 0
+        assert role_after_pixels(painter[-1]) > 0
+    gpu_bounds = _payload_alpha_bounds(gpu[-1])
+    painter_bounds = _payload_alpha_bounds(painter[-1])
+    assert all(
+        abs(actual - expected) <= 12
+        for actual, expected in zip(
+            gpu_bounds,
+            painter_bounds,
+        )
+    ), (mode, direction_changes, gpu_bounds, painter_bounds)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

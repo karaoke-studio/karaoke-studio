@@ -56,6 +56,67 @@ D2D1_COLOR_F d2dColor(const RgbaColor &color) {
     );
 }
 
+Microsoft::WRL::ComPtr<ID2D1PathGeometry> vectorGlyphGeometry(
+    ID2D1Factory1 *factory,
+    const VectorGlyph &glyph,
+    float pixelSize,
+    const D2DDevice &device
+) {
+    Microsoft::WRL::ComPtr<ID2D1PathGeometry> path;
+    checkHr(
+        factory->CreatePathGeometry(path.ReleaseAndGetAddressOf()),
+        "ID2D1Factory::CreatePathGeometry(vector glyph)",
+        device
+    );
+    Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
+    checkHr(
+        path->Open(sink.ReleaseAndGetAddressOf()),
+        "ID2D1PathGeometry::Open(vector glyph)",
+        device
+    );
+    sink->SetFillMode(D2D1_FILL_MODE_WINDING);
+    sink->SetSegmentFlags(D2D1_PATH_SEGMENT_FORCE_ROUND_LINE_JOIN);
+    const float scale = std::max(pixelSize, 1.0f)
+        / std::max(glyph.unitsPerEm, 1.0f);
+    bool figureOpen = false;
+    for (const VectorPathCommand &command : glyph.commands) {
+        const auto point = [&](std::size_t index) {
+            return D2D1::Point2F(
+                command.values[index] * scale,
+                command.values[index + 1] * scale
+            );
+        };
+        if (command.kind == 'M' && command.values.size() == 2) {
+            if (figureOpen) {
+                sink->EndFigure(D2D1_FIGURE_END_OPEN);
+            }
+            sink->BeginFigure(point(0), D2D1_FIGURE_BEGIN_FILLED);
+            figureOpen = true;
+        } else if (command.kind == 'L' && command.values.size() == 2
+                   && figureOpen) {
+            sink->AddLine(point(0));
+        } else if (command.kind == 'C' && command.values.size() == 6
+                   && figureOpen) {
+            sink->AddBezier(D2D1::BezierSegment(
+                point(0), point(2), point(4)
+            ));
+        } else if (command.kind == 'Q' && command.values.size() == 4
+                   && figureOpen) {
+            sink->AddQuadraticBezier(D2D1::QuadraticBezierSegment(
+                point(0), point(2)
+            ));
+        } else if (command.kind == 'Z' && figureOpen) {
+            sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+            figureOpen = false;
+        }
+    }
+    if (figureOpen) {
+        sink->EndFigure(D2D1_FIGURE_END_OPEN);
+    }
+    checkHr(sink->Close(), "ID2D1GeometrySink::Close(vector glyph)", device);
+    return path;
+}
+
 struct VolumeSignalGeometry {
     int count = 1;
     float size = 1.0f;
@@ -846,6 +907,8 @@ struct Direct2DGpuBackend::Impl {
         float verticalRubyAllowance = 0.0f;
         float maxVisualPad = 0.0f;
         bool hasInlineStyles = false;
+        std::optional<float> guideAnchorLeft;
+        std::optional<float> guideAnchorRight;
         D2D1_RECT_F bounds{};
         D2D1_RECT_F fillBounds{};
         std::vector<CachedChar> chars;
@@ -1148,6 +1211,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         cached.endMs = sourceLine.endMs;
         cached.sourceIndex = sourceLine.sourceIndex;
         cached.compositeOrder = sourceLine.compositeOrder;
+        cached.guideAnchorLeft = sourceLine.guideAnchorLeft;
+        cached.guideAnchorRight = sourceLine.guideAnchorRight;
         cached.staticOverlay = sourceLine.staticOverlay;
         cached.fadeInMs = sourceLine.fadeInMs;
         cached.fadeOutMs = sourceLine.fadeOutMs;
@@ -1194,7 +1259,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 ? scene.charStyles[static_cast<std::size_t>(sourceChar.styleIndex)]
                 : style;
             cached.hasInlineStyles = cached.hasInlineStyles || hasCharStyle;
-            const bool latin = isLatinText(sourceChar.text);
+            const bool vectorGlyph = sourceChar.vectorGlyph.has_value();
+            const bool latin = !vectorGlyph && isLatinText(sourceChar.text);
             Microsoft::WRL::ComPtr<IDWriteFontFace> requestedFace = latin
                 ? latinFace
                 : mainFace;
@@ -1264,16 +1330,24 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 cached.hasRubyAnchor = true;
             }
 
-            std::vector<UINT16> glyphs = glyphIndices(requestedFace.Get(), sourceChar.text);
-            Microsoft::WRL::ComPtr<IDWriteFontFace> outlineFace = requestedFace;
-            if (!validGlyphIndices(glyphs)) {
-                outlineFace = findFallbackFontFace(
-                    fontCollection.Get(), sourceChar.text, fallbackFaces, glyphs
-                );
-            }
-
+            std::vector<UINT16> glyphs;
+            Microsoft::WRL::ComPtr<IDWriteFontFace> outlineFace;
             Microsoft::WRL::ComPtr<ID2D1PathGeometry> path;
-            if (outlineFace && !glyphs.empty()) {
+            if (vectorGlyph) {
+                path = vectorGlyphGeometry(
+                    device_.d2dFactory(), *sourceChar.vectorGlyph,
+                    static_cast<float>(unit), device_
+                );
+            } else {
+                glyphs = glyphIndices(requestedFace.Get(), sourceChar.text);
+                outlineFace = requestedFace;
+                if (!validGlyphIndices(glyphs)) {
+                    outlineFace = findFallbackFontFace(
+                        fontCollection.Get(), sourceChar.text, fallbackFaces, glyphs
+                    );
+                }
+            }
+            if (!vectorGlyph && outlineFace && !glyphs.empty()) {
                 checkHr(
                     device_.d2dFactory()->CreatePathGeometry(path.ReleaseAndGetAddressOf()),
                     "ID2D1Factory::CreatePathGeometry(character)",
@@ -1311,7 +1385,12 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
 
             float layoutWidth = 0.0f;
             float pathOffset = 0.0f;
-            if (charHasBounds) {
+            if (vectorGlyph) {
+                layoutWidth = static_cast<float>(unit)
+                    * std::max(sourceChar.vectorGlyph->advanceWidth, 0.0f)
+                    / std::max(sourceChar.vectorGlyph->unitsPerEm, 1.0f);
+                layoutWidth = std::max(layoutWidth, 1.0f);
+            } else if (charHasBounds) {
                 std::vector<DWRITE_GLYPH_METRICS> metrics(glyphs.size());
                 // N3 deliberately asks the originally requested face for
                 // metrics even when the outline came from a fallback face.
@@ -1530,11 +1609,27 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 const auto [offsetX, offsetY] = verticalGlyphOffset(
                     sourceLine.chars[index].text, cellWidth, cellHeight
                 );
-                D2D1_MATRIX_3X2_F matrix = D2D1::Matrix3x2F::Translation(
-                    -ch.pivotX + offsetX,
-                    cellTop + verticalAscent + offsetY
-                );
-                if (verticalRotates(sourceLine.chars[index].text)) {
+                const bool vectorGlyph = sourceLine.chars[index].vectorGlyph.has_value();
+                D2D1_MATRIX_3X2_F matrix{};
+                if (vectorGlyph && ch.geometry) {
+                    D2D1_RECT_F vectorBounds{};
+                    checkHr(
+                        ch.geometry->GetBounds(nullptr, &vectorBounds),
+                        "ID2D1Geometry::GetBounds(vertical vector glyph)",
+                        device_
+                    );
+                    matrix = D2D1::Matrix3x2F::Translation(
+                        -(vectorBounds.left + vectorBounds.right) * 0.5f,
+                        cellTop + cellHeight * 0.5f
+                            - (vectorBounds.top + vectorBounds.bottom) * 0.5f
+                    );
+                } else {
+                    matrix = D2D1::Matrix3x2F::Translation(
+                        -ch.pivotX + offsetX,
+                        cellTop + verticalAscent + offsetY
+                    );
+                }
+                if (!vectorGlyph && verticalRotates(sourceLine.chars[index].text)) {
                     matrix = matrix * D2D1::Matrix3x2F::Rotation(
                         90.0f, D2D1::Point2F(0.0f, cellTop + cellHeight * 0.5f)
                     );
@@ -2999,7 +3094,12 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             && tMs <= displayEndMs;
         float lyricLeft = line->bounds.left;
         float lyricRight = line->bounds.right;
-        if (line->hasInlineStyles) {
+        if (line->guideAnchorLeft.has_value()
+            && line->guideAnchorRight.has_value()
+            && !style.vertical) {
+            lyricLeft = *line->guideAnchorLeft;
+            lyricRight = *line->guideAnchorRight;
+        } else if (line->hasInlineStyles) {
             // Painter anchors mixed-role lines by their layout box plus the
             // largest role visual pad, not by the asymmetric glyph ink box.
             lyricLeft = std::min(

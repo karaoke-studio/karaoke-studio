@@ -546,7 +546,6 @@ def test_gpu_async_renderer_failure_falls_back_to_painter(qapp, monkeypatch):
 def test_gpu_async_renderer_capability_fallback_skips_sidecar(qapp, monkeypatch):
     from krok_helper.subtitle_render.frontend import preview_async as pa
     from krok_helper.subtitle_render.models import (
-        GuideSymbol,
         Style,
         TimingChar,
         TimingLine,
@@ -572,18 +571,10 @@ def test_gpu_async_renderer_capability_fallback_skips_sidecar(qapp, monkeypatch)
                         TimingLine(
                             chars=[TimingChar("A", 0)],
                             end_ms=500,
-                            guide_symbol=GuideSymbol(
-                                path_commands=(
-                                    ("M", 0.0, 0.0),
-                                    ("L", 500.0, -1000.0),
-                                    ("L", 1000.0, 0.0),
-                                    ("Z",),
-                                )
-                            ),
                         )
                     ],
             ),
-                Style(),
+                Style(entry_anim="future_effect"),
         )
         renderer.request(1_000)
         deadline = time.monotonic() + 2.0

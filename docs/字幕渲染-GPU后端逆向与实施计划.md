@@ -1507,3 +1507,13 @@ G4 下一批进入 guide symbol 与 shared timing span；两者完成后审计 c
 - 独立回归：GPU `101 passed`，transport `71 passed`，native protocol/export/benchmark `63 passed, 27 skipped`。当前 capability gate 只剩 guide symbol 与未知行动画名；产品 GPU 开关继续默认关闭，Painter 永久保留为 oracle 与 fallback。
 
 G4 下一批迁移 guide symbol（前缀插入、前缀替换、行内替换、角色着色与矢量路径），随后完成 capability gate 审计并进入 G5。
+
+### 2026-07-19（第三十八批）：G4 guide symbol 与 capability 收口
+
+- Python 在构建 Render IR 时直接复用 Painter `_line_with_guide_symbol()`：额外前缀按 `duration × count` 生成虚拟打轴字符，安全匹配的 `replacement_prefix` 原位替换，行内映射保留源字符时间和角色标签。IR 中每个虚拟字符携带已校验的 M/L/C/Q/Z 路径、units-per-em、advance width 与最终角色标签；native 不再解释项目级 guide 配置。
+- Direct2D 新增原生矢量字形 geometry：路径按有效字号缩放到基线坐标，advance 严格使用 Painter `_vector_glyph_width()` 的同源参数，随后与普通字形共用 fill、stroke/stroke2、shadow/glow、角色配色、逐字动画和 karaoke wipe。竖排不套 UTR#50 文本旋转，而是像 Painter 一样按实际矢量 bounds 居中字格；RTL 只反转字格顺序，不镜像路径。
+- 对齐了 Painter 的源行锚定兼容语义：普通行由 Sayatoo row layout 先测量未替换歌词，再从该 text origin 插入 guide；角色 run 与竖排则按最终渲染 geometry 自行布局。Python 预解析 `guide_anchor_bounds`，Direct2D 在普通横排/RTL 及 signal 联合布局时消费该锚框，避免额外前缀被错误地整体重新居中。
+- 自动门槛覆盖前缀插入、前缀替换、行内替换 × 横排/RTL/竖排共 9 组，验证最终路径边界、逐字 before/after 色进度与角色方案颜色；GPU/Painter 对照全部通过。`guide_symbol` capability fallback 已移除。
+- capability 审计后只剩未知全局/逐行动画名会整场回退 Painter，这是面向未来字段的安全闸，不是当前产品功能缺口。独立回归：GPU `110 passed`，transport `71 passed`，native protocol/export/benchmark `64 passed, 27 skipped`。Painter 继续永久作为 oracle/fallback，产品 GPU 开关仍默认关闭。
+
+G4 功能迁移至此收口。下一阶段进入 G5 产品集成：审计预览/导出开关、配置持久化、sidecar 打包与用户可见回退诊断，再进入 G6 稳态和故障恢复门槛。
