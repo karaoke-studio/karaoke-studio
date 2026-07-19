@@ -256,9 +256,7 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
             )
         ],
     )
-    assert gpu_unsupported_features(
-        ruby_track, Style(entry_anim="utopia")
-    ) == ("utopia_ruby_group",)
+    assert gpu_unsupported_features(ruby_track, Style(entry_anim="utopia")) == ()
     span_track = TimingTrack(
         lines=[
             TimingLine(

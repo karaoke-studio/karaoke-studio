@@ -298,6 +298,37 @@ def _g4_utopia_main_scene() -> tuple[TimingTrack, Style]:
     )
 
 
+def _g4_utopia_ruby_scene() -> tuple[TimingTrack, Style]:
+    track, style = _g4_utopia_main_scene()
+    track.rubies = [
+        RubyAnnotation(
+            kanji="夢想",
+            reading="ゆめ",
+            reading_parts=["ゆ", "め"],
+            reading_part_ms=[2_200],
+            pos_start_ms=1_700,
+            pos_end_ms=2_700,
+        )
+    ]
+    ruby_state = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FF30D0"),
+        stroke=PaintFill(mode="solid", color="#301030"),
+        shadow=PaintFill(mode="solid", color="#FF30D0"),
+    )
+    return track, replace(
+        style,
+        ruby_font_family="Meiryo",
+        ruby_font_family_latin="Meiryo",
+        ruby_font_follow_main=False,
+        ruby_font_size_px=32,
+        ruby_stroke_width_px=2,
+        ruby_stroke2_enabled=False,
+        ruby_decoration_kind="glow",
+        ruby_glow_before_radius_px=6,
+        ruby_glow_after_radius_px=6,
+        ruby_glow_concentration_level=1,
+        ruby_karaoke_colors=KaraokeColors(before=ruby_state, after=ruby_state),
+    )
 def _alpha_count(payload: bytes) -> int:
     return sum(alpha > 0 for alpha in payload[3::4])
 
@@ -1609,6 +1640,104 @@ def test_gpu_g4_utopia_main_intro_wipe_and_outro_follow_painter(monkeypatch) -> 
             timestamps[index],
             _payload_alpha_bounds(gpu[index]),
             _payload_alpha_bounds(painter[index]),
+        )
+
+    shadow_style = replace(
+        style,
+        decoration_kind="shadow",
+        shadow_offset_x=12,
+        shadow_offset_y=10,
+        ruby_decoration_kind="shadow",
+        ruby_shadow_offset_x=6,
+        ruby_shadow_offset_y=5,
+    )
+    shadow_timestamps = (350, 2_300, 3_600)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, shadow_gpu = _render_g1_frames(
+            renderer,
+            shadow_style,
+            shadow_timestamps,
+            force_warp=True,
+            track=track,
+        )
+    shadow_painter = [
+        _render_painter_oracle(shadow_style, t_ms=t_ms, track=track)
+        for t_ms in shadow_timestamps
+    ]
+    for gpu_frame, painter_frame in zip(shadow_gpu, shadow_painter):
+        assert all(
+            abs(actual - expected) <= 12
+            for actual, expected in zip(
+                _payload_alpha_bounds(gpu_frame),
+                _payload_alpha_bounds(painter_frame),
+            )
+        )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g4_utopia_ruby_units_and_group_outro_follow_painter(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track, style = _g4_utopia_ruby_scene()
+    timestamps = (350, 700, 1_800, 2_300, 3_300, 3_600, 4_300)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+
+    assert _alpha_count(gpu[-1]) == _alpha_count(painter[-1]) == 0
+    full_gpu_alpha = sum(gpu[1][3::4])
+    full_painter_alpha = sum(painter[1][3::4])
+    for index in range(len(timestamps) - 1):
+        gpu_ratio = sum(gpu[index][3::4]) / full_gpu_alpha
+        painter_ratio = sum(painter[index][3::4]) / full_painter_alpha
+        assert abs(gpu_ratio - painter_ratio) <= 0.15, (
+            timestamps[index], gpu_ratio, painter_ratio
+        )
+        assert all(
+            abs(actual - expected) <= 16
+            for actual, expected in zip(
+                _payload_alpha_bounds(gpu[index]),
+                _payload_alpha_bounds(painter[index]),
+            )
+        ), (
+            timestamps[index],
+            _payload_alpha_bounds(gpu[index]),
+            _payload_alpha_bounds(painter[index]),
+        )
+
+    shadow_style = replace(
+        style,
+        decoration_kind="shadow",
+        shadow_offset_x=12,
+        shadow_offset_y=10,
+        ruby_decoration_kind="shadow",
+        ruby_shadow_offset_x=6,
+        ruby_shadow_offset_y=5,
+    )
+    shadow_timestamps = (350, 2_300, 3_600)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, shadow_gpu = _render_g1_frames(
+            renderer,
+            shadow_style,
+            shadow_timestamps,
+            force_warp=True,
+            track=track,
+        )
+    shadow_painter = [
+        _render_painter_oracle(shadow_style, t_ms=t_ms, track=track)
+        for t_ms in shadow_timestamps
+    ]
+    for gpu_frame, painter_frame in zip(shadow_gpu, shadow_painter):
+        assert all(
+            abs(actual - expected) <= 12
+            for actual, expected in zip(
+                _payload_alpha_bounds(gpu_frame),
+                _payload_alpha_bounds(painter_frame),
+            )
         )
 
 

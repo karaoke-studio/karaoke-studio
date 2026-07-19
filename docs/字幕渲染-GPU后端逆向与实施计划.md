@@ -1342,3 +1342,13 @@ G4 下一刀进入 `utopia`。它同时包含逐字入场、演唱中 over-scale
 - RTX 3070 Ti、1920×1080、60fps、18 字、中档 glow、packed bands、600 帧 Utopia：`92.92fps`，render/readback/roundtrip p95 `5.33/3.84/11.64ms`；local 显存增长 0，sidecar RSS 波动 `1,032,192B`。GPU/transport 回归 `121 passed`；native protocol/export/benchmark 独立回归 `62 passed, 27 skipped`。
 
 下一批补齐 Utopia ruby/group/transformed glow；完成前带 ruby 的项目不会进入 GPU。
+
+### 2026-07-19（第二十六批）：G4 Utopia ruby/group/transformed glow
+
+- native scene 为每个 ruby 保留正文目标首尾索引，并为每个 reading unit 缓存独立 advance、枢轴、描边轮廓和时间段。多字 ruby 目标内的所有正文字符共享 Painter 的 group following-done 时刻；演唱中正文仍逐字 over-scale，不错误地把整组当成一个 glyph。
+- ruby 入场使用目标首字的错峰索引，全部 reading unit 同步出现；演唱中各 unit 使用自己的起止时间做 `1.15×` over-scale 与 transformed wipe；退场按目标末字的 following-done 同步启动，但每个 unit 保持自己的左下缩放原点和字心旋转枢轴。这与当前 Painter `_paint_ruby_text_units_with_transition()` 的实际绘制语义一致。
+- ruby fill、stroke/stroke2、透明填充保护、shadow offset、before/after glow 与 packed-band 范围全部消费 unit 级矩阵。glow 按 unit 先在上正坐标生成再仿射，shadow offset 先通过矩阵线性部分变换；after 色裁切使用变换后 ink bounds，而退场强制完整 after 色。
+- `utopia_ruby_group` capability 回退已移除，全局与逐行 Utopia 现在都可覆盖带 ruby 的横排场景。自动门禁使用四字正文、双字目标、双 reading unit、正文/ruby 双 glow，覆盖入场、两段 ruby 演唱、共享退场与终点；alpha 轨迹偏差不超过 `0.15`、边界偏差不超过 `16px`。另以正文/ruby shadow 验证变换后偏移，边界偏差不超过 `12px`。
+- 基准新增 `--ruby`。RTX 3070 Ti、1920×1080、60fps、18 字 + 4 reading units、中档正文/ruby glow、packed bands、600 帧 Utopia：`80.64fps`，render/readback/roundtrip p95 `9.71/3.95/15.49ms`；local 显存增长 0，sidecar RSS 波动 `1,413,120B`。GPU/transport 回归 `122 passed`；native protocol/export/benchmark 独立回归 `62 passed, 27 skipped`。
+
+Utopia 横排主路径至此收口。G4 下一项进入 Sayatoo signal；产品 GPU 开关继续默认关闭，Painter 继续作为 oracle 与全部未迁移 feature 的整场 fallback。

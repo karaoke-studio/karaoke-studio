@@ -17,6 +17,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from krok_helper.subtitle_render.models import (  # noqa: E402
+    RubyAnnotation,
     Style,
     TimingChar,
     TimingLine,
@@ -34,7 +35,7 @@ def _percentile(values: list[float], fraction: float) -> float:
 
 
 def _scene(
-    duration_ms: int, *, glow: bool, animation: str = "none"
+    duration_ms: int, *, glow: bool, animation: str = "none", ruby: bool = False
 ) -> tuple[TimingTrack, Style]:
     text = "Karaoke Studio GPU"
     chars = [
@@ -42,6 +43,21 @@ def _scene(
         for index, char in enumerate(text)
     ]
     track = TimingTrack(lines=[TimingLine(chars=chars, end_ms=duration_ms)])
+    if ruby:
+        track.rubies = [
+            RubyAnnotation(
+                kanji="Karaoke",
+                reading="カラオケ",
+                reading_parts=["カ", "ラ", "オ", "ケ"],
+                reading_part_ms=[
+                    duration_ms * 2 // len(text),
+                    duration_ms * 4 // len(text),
+                    duration_ms * 6 // len(text),
+                ],
+                pos_start_ms=0,
+                pos_end_ms=duration_ms * 7 // len(text),
+            )
+        ]
     style = Style(
         font_family="Meiryo",
         font_family_latin="Segoe UI",
@@ -70,6 +86,10 @@ def _scene(
         entry_lead_ms=1_000,
         exit_anim=animation,
         exit_fade_ms=1_000,
+        ruby_decoration_kind="glow" if glow else "shadow",
+        ruby_glow_before_radius_px=6,
+        ruby_glow_after_radius_px=6,
+        ruby_glow_concentration_level=1,
     )
     return track, style
 
@@ -85,13 +105,16 @@ def run_benchmark(
     bands: bool = False,
     reconfigure_cycles: int = 0,
     animation: str = "none",
+    ruby: bool = False,
 ) -> tuple[dict, list[dict]]:
     import psutil
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     frames = max(1, int(round(seconds * fps)))
     duration_ms = max(1, int(round(seconds * 1000.0)))
-    track, style = _scene(duration_ms, glow=glow, animation=animation)
+    track, style = _scene(
+        duration_ms, glow=glow, animation=animation, ruby=ruby
+    )
     shm_key = f"krok_gpu_g1_benchmark_{os.getpid()}_{uuid.uuid4().hex}"
     rows: list[dict] = []
     reader: SharedFrameRingReader | None = None
@@ -183,6 +206,7 @@ def run_benchmark(
         "frames": frames,
         "glow": glow,
         "animation": animation,
+        "ruby": ruby,
         "bands": bands,
         "height": height,
         "readback_mean_ms": round(statistics.fmean(readback_times), 4),
@@ -239,6 +263,7 @@ def main() -> int:
     parser.add_argument("--warp", action="store_true", help="force Microsoft WARP")
     parser.add_argument("--both", action="store_true", help="run hardware then WARP")
     parser.add_argument("--glow", action="store_true", help="enable N3 medium glow")
+    parser.add_argument("--ruby", action="store_true", help="include timed ruby units")
     parser.add_argument(
         "--animation",
         choices=("none", "fade", "char_fade", "spin_flip", "utopia"),
@@ -271,6 +296,7 @@ def main() -> int:
             bands=bool(args.bands),
             reconfigure_cycles=max(args.reconfigure_cycles, 0),
             animation=args.animation,
+            ruby=bool(args.ruby),
         )
         all_rows.extend(rows)
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True))

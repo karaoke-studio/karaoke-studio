@@ -549,6 +549,8 @@ struct Direct2DGpuBackend::Impl {
         float baselineOffset = 0.0f;
         int styleIndex = -1;
         int transitionCharIndex = 0;
+        int firstCharIndex = 0;
+        int lastCharIndex = 0;
         float pivotX = 0.0f;
         float pivotY = 0.0f;
         D2D1_RECT_F bounds{};
@@ -1391,6 +1393,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             ruby.endMs = sourceRuby.endMs;
             ruby.styleIndex = sourceRuby.styleIndex;
             ruby.transitionCharIndex = sourceRuby.firstCharIndex;
+            ruby.firstCharIndex = sourceRuby.firstCharIndex;
+            ruby.lastCharIndex = sourceRuby.lastCharIndex;
             // Painter anchors every ruby run with the line-level ruby font and
             // gap; target-role styling changes paint/measurement, not baseline.
             ruby.baselineOffset = -cached.boxAscent - style.rubyGap - rubyBoxDescent;
@@ -1503,6 +1507,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     origin,
                     origin + glyph.layoutWidth,
                 });
+                ruby.chars.back().pivotX = origin + glyph.layoutWidth * 0.5f;
+                ruby.chars.back().pivotY = ruby.pivotY;
                 rubyCursor += glyph.layoutWidth;
                 if (unitIndex + 1 < rubyGlyphs.size()) {
                     rubyCursor += gap;
@@ -1860,7 +1866,15 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         };
         auto utopiaFollowingDoneAt = [&](std::size_t charIndex) {
             const int count = static_cast<int>(line->chars.size());
-            const int index = std::clamp(static_cast<int>(charIndex), 0, count - 1);
+            int index = std::clamp(static_cast<int>(charIndex), 0, count - 1);
+            for (const Impl::CachedRuby &ruby : line->rubies) {
+                if (ruby.lastCharIndex > ruby.firstCharIndex
+                    && index >= ruby.firstCharIndex
+                    && index <= ruby.lastCharIndex) {
+                    index = std::clamp(ruby.lastCharIndex, 0, count - 1);
+                    break;
+                }
+            }
             const int currentEnd = line->chars[static_cast<std::size_t>(index)].endMs;
             for (int next = index + 1; next < count; ++next) {
                 const Impl::CachedChar &candidate = line->chars[
@@ -1985,10 +1999,108 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         auto characterOpacityAt = [&](std::size_t charIndex) {
             return characterAnimationAt(charIndex).opacity;
         };
+        auto rubyUnitAnimationAt = [&](const Impl::CachedRuby &ruby,
+                                       std::size_t unitIndex) {
+            CharacterAnimationState state;
+            if (!hasUtopiaTransition || unitIndex >= ruby.chars.size()
+                || line->displayWindows.empty()) {
+                state.opacity = characterOpacityAt(static_cast<std::size_t>(std::max(
+                    ruby.transitionCharIndex, 0
+                )));
+                return state;
+            }
+            constexpr float pi = 3.14159265358979323846f;
+            const Impl::CachedChar &unit = ruby.chars[unitIndex];
+            const DisplayWindow &window = line->displayWindows.front();
+            float dxValue = 0.0f;
+            float dyValue = 0.0f;
+            float rotation = 0.0f;
+            float scaleX = 1.0f;
+            float scaleY = 1.0f;
+            if (line->entryAnimation == "utopia"
+                && tMs <= window.startMs + 700) {
+                const int count = std::max(static_cast<int>(line->chars.size()), 1);
+                const int delayStep = count <= 1 ? 0 : 200 / (count - 1);
+                const int staggerIndex = std::clamp(
+                    ruby.firstCharIndex, 0, count - 1
+                );
+                const int elapsed = tMs - window.startMs
+                    - delayStep * staggerIndex;
+                if (elapsed < 0) {
+                    state.opacity = 0.0f;
+                    scaleX = scaleY = 0.0f;
+                } else {
+                    state.opacity = std::min(
+                        static_cast<float>(elapsed) / 400.0f, 1.0f
+                    );
+                    if (elapsed < 400) {
+                        scaleX = scaleY = 1.3f
+                            * static_cast<float>(elapsed) / 400.0f;
+                    } else if (elapsed < 500) {
+                        scaleX = scaleY = 1.0f
+                            + 0.3f * static_cast<float>(500 - elapsed) / 100.0f;
+                    }
+                }
+            } else if (line->exitAnimation == "utopia"
+                && tMs > utopiaFollowingDoneAt(static_cast<std::size_t>(std::max(
+                    ruby.lastCharIndex, 0
+                )))) {
+                const int doneMs = utopiaFollowingDoneAt(
+                    static_cast<std::size_t>(std::max(ruby.lastCharIndex, 0))
+                );
+                const float local = std::clamp(
+                    static_cast<float>(tMs - doneMs) / 750.0f, 0.0f, 1.0f
+                );
+                state.opacity = 1.0f - local;
+                state.utopiaExit = true;
+                const float shrink = 1.0f - local;
+                const float amplitude = static_cast<float>(scene.height) / 15.0f;
+                const float xTravel = local <= 0.5f
+                    ? std::sin(pi * local) * amplitude
+                    : amplitude + std::sin((local - 0.5f) * pi) * amplitude;
+                dxValue = -xTravel;
+                dyValue = std::sin(pi * local * 0.5f) * amplitude;
+                rotation = -180.0f * local;
+                scaleX = shrink * std::cos(pi * local);
+                scaleY = shrink;
+            } else if (tMs > unit.startMs && tMs < unit.endMs
+                && unit.startMs != unit.endMs) {
+                const int overMs = std::min(
+                    static_cast<int>((unit.endMs - unit.startMs) * 0.25f), 100
+                );
+                if (overMs > 0) {
+                    const int peakMs = unit.startMs + overMs;
+                    const float progress = tMs <= peakMs
+                        ? static_cast<float>(tMs - unit.startMs)
+                            / static_cast<float>(overMs)
+                        : static_cast<float>(unit.endMs - tMs)
+                            / static_cast<float>(std::max(unit.endMs - peakMs, 1));
+                    scaleX = scaleY = 1.0f
+                        + 0.15f * std::clamp(progress, 0.0f, 1.0f);
+                }
+            }
+            if (state.opacity <= 0.0f) {
+                return state;
+            }
+            state.matrix = utopiaMatrix(
+                dxValue, dyValue, rotation, scaleX, scaleY,
+                unit.layoutLeft, ruby.baselineOffset,
+                unit.pivotX, unit.pivotY
+            );
+            state.transformed = dxValue != 0.0f || dyValue != 0.0f
+                || rotation != 0.0f || scaleX != 1.0f || scaleY != 1.0f;
+            return state;
+        };
         auto rubyFadeOpacityAt = [&](const Impl::CachedRuby &ruby) {
             return characterOpacityAt(static_cast<std::size_t>(std::max(
                 ruby.transitionCharIndex, 0
             )));
+        };
+        auto rubyUnitOpacityAt = [&](const Impl::CachedRuby &ruby,
+                                     std::size_t unitIndex) {
+            return hasUtopiaTransition
+                ? rubyUnitAnimationAt(ruby, unitIndex).opacity
+                : rubyFadeOpacityAt(ruby);
         };
         if (hasCharacterTransition) {
             float maxOpacity = 0.0f;
@@ -2085,8 +2197,16 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             frameRubyStroke2Geometries(line->rubies.size());
         for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
             const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
-            const float opacity = rubyFadeOpacityAt(ruby);
-            if (opacity <= 0.0f) {
+            float maxRubyOpacity = 0.0f;
+            for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {
+                maxRubyOpacity = std::max(
+                    maxRubyOpacity,
+                    hasUtopiaTransition
+                        ? rubyUnitAnimationAt(ruby, index).opacity
+                        : rubyFadeOpacityAt(ruby)
+                );
+            }
+            if (maxRubyOpacity <= 0.0f) {
                 continue;
             }
             frameRubyGeometries[rubyIndex].resize(ruby.geometries.size());
@@ -2095,11 +2215,20 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             );
             frameRubyStrokeGeometries[rubyIndex].resize(ruby.strokeGeometries.size());
             frameRubyStroke2Geometries[rubyIndex].resize(ruby.stroke2Geometries.size());
-            const D2D1_MATRIX_3X2_F matrix = spinMatrix(
-                opacity, ruby.pivotX, ruby.pivotY
-            );
             for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {
-                if (spinDirection == 0 || opacity >= 1.0f) {
+                const CharacterAnimationState rubyAnimation = hasUtopiaTransition
+                    ? rubyUnitAnimationAt(ruby, index)
+                    : CharacterAnimationState{
+                        rubyFadeOpacityAt(ruby),
+                        spinMatrix(rubyFadeOpacityAt(ruby), ruby.pivotX, ruby.pivotY),
+                        spinDirection != 0 && rubyFadeOpacityAt(ruby) < 1.0f,
+                        false,
+                    };
+                if (rubyAnimation.opacity <= 0.0f) {
+                    continue;
+                }
+                const D2D1_MATRIX_3X2_F matrix = rubyAnimation.matrix;
+                if (!rubyAnimation.transformed) {
                     frameRubyGeometries[rubyIndex][index] = ruby.geometries[index];
                     if (index < ruby.protectedStrokeGeometries.size()) {
                         frameRubyProtectedGeometries[rubyIndex][index]
@@ -2475,6 +2604,45 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 left + std::max(right - left, 1.0f) * ratio
             };
         };
+        auto utopiaRubyUnitWipe = [&](const Impl::CachedRuby &ruby,
+                                      std::size_t rubyIndex,
+                                      std::size_t unitIndex,
+                                      const TextStyle &rubyStyle) {
+            D2D1_RECT_F bounds{};
+            ID2D1Geometry *geometry = rubyGeometryAt(rubyIndex, unitIndex);
+            if (geometry == nullptr || unitIndex >= ruby.chars.size()) {
+                return std::pair<D2D1_RECT_F, float>{bounds, 0.0f};
+            }
+            checkHr(
+                geometry->GetBounds(nullptr, &bounds),
+                "ID2D1Geometry::GetBounds(utopia ruby wipe)",
+                device_
+            );
+            const Impl::CachedChar &unit = ruby.chars[unitIndex];
+            const float edgeHalf = static_cast<float>(
+                std::max(static_cast<int>(rubyStyle.rubyStrokeWidth), 0) / 2
+            );
+            const float left = std::floor(bounds.left) - edgeHalf;
+            const float right = std::ceil(bounds.right) + edgeHalf;
+            float ratio = 0.0f;
+            const CharacterAnimationState animationState = rubyUnitAnimationAt(
+                ruby, unitIndex
+            );
+            if (animationState.utopiaExit || tMs >= unit.endMs) {
+                ratio = 1.0f;
+            } else if (tMs > unit.startMs && unit.endMs > unit.startMs) {
+                ratio = std::clamp(
+                    static_cast<float>(tMs - unit.startMs)
+                        / static_cast<float>(unit.endMs - unit.startMs),
+                    0.0f,
+                    1.0f
+                );
+            }
+            return std::pair<D2D1_RECT_F, float>{
+                bounds,
+                left + std::max(right - left, 1.0f) * ratio
+            };
+        };
 
         const float geometryPad = std::max(style.strokeWidth + style.stroke2Width, 2.0f) + 4.0f;
         const D2D1_RECT_F afterClip = D2D1::RectF(
@@ -2575,7 +2743,8 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             bool hasTransform = false;
         };
         std::vector<RubyGlowLayer> rubyGlowLayers;
-        auto appendRubyGlowLayer = [&](int styleIndex, bool after, int rubyOnly) {
+        auto appendRubyGlowLayer = [&](int styleIndex, bool after,
+                                       int rubyOnly, int unitOnly) {
             const TextStyle &rubyStyle = rubyStyleFor(styleIndex);
             const float requestedRadius = after
                 ? rubyStyle.rubyGlowAfterRadius
@@ -2588,7 +2757,13 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 [&](const Impl::CachedRuby &ruby) {
                     const int rubyIndex = static_cast<int>(&ruby - line->rubies.data());
                     const float edge = rubyWipeEdgeAt(ruby);
-                    return (rubyOnly < 0 || rubyIndex == rubyOnly)
+                    const bool selected = (rubyOnly < 0 || rubyIndex == rubyOnly);
+                    const bool unitVisible = unitOnly < 0
+                        || (unitOnly < static_cast<int>(ruby.geometries.size())
+                            && rubyUnitOpacityAt(
+                                ruby, static_cast<std::size_t>(unitOnly)
+                            ) > 0.0f);
+                    return selected && unitVisible
                         && ruby.styleIndex == styleIndex
                         && !((after && edge <= ruby.bounds.left)
                             || (!after && edge >= ruby.bounds.right));
@@ -2600,17 +2775,26 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 return;
             }
             RubyGlowLayer layer;
-            if (spinDirection != 0 && rubyOnly >= 0) {
+            if ((spinDirection != 0 || hasUtopiaTransition)
+                && rubyOnly >= 0) {
                 const Impl::CachedRuby &ruby = line->rubies[
                     static_cast<std::size_t>(rubyOnly)
                 ];
-                const float opacity = rubyFadeOpacityAt(ruby);
-                layer.transform = spinMatrix(
-                    opacity,
-                    ruby.pivotX + dx,
-                    ruby.pivotY + dy
-                );
-                layer.hasTransform = opacity < 1.0f;
+                const CharacterAnimationState animationState =
+                    hasUtopiaTransition && unitOnly >= 0
+                    ? rubyUnitAnimationAt(ruby, static_cast<std::size_t>(unitOnly))
+                    : CharacterAnimationState{
+                        rubyFadeOpacityAt(ruby),
+                        spinMatrix(
+                            rubyFadeOpacityAt(ruby), ruby.pivotX, ruby.pivotY
+                        ),
+                        spinDirection != 0 && rubyFadeOpacityAt(ruby) < 1.0f,
+                        false,
+                    };
+                layer.transform = D2D1::Matrix3x2F::Translation(-dx, -dy)
+                    * animationState.matrix
+                    * D2D1::Matrix3x2F::Translation(dx, dy);
+                layer.hasTransform = animationState.transformed;
             }
             checkHr(
                 context->CreateBitmap(
@@ -2651,7 +2835,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     ruby.fillBounds,
                     after ? rubyStyle.rubyAfterDecor : rubyStyle.rubyBeforeDecor
                 );
-                brush->SetOpacity(globalOpacity * rubyFadeOpacityAt(ruby));
+                brush->SetOpacity(globalOpacity);
                 const float edge = rubyWipeEdgeAt(ruby);
                 if ((after && edge <= ruby.bounds.left)
                     || (!after && edge >= ruby.bounds.right)) {
@@ -2671,9 +2855,20 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         ruby.bounds.bottom + pad
                     );
                 context->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-                for (const auto &geometry : ruby.geometries) {
-                    if (geometry != nullptr) {
-                        context->DrawGeometry(geometry.Get(), brush.Get(), sourceWidth);
+                for (std::size_t geometryIndex = 0;
+                     geometryIndex < ruby.geometries.size(); ++geometryIndex) {
+                    const auto &geometry = ruby.geometries[geometryIndex];
+                    if ((unitOnly < 0
+                            || static_cast<int>(geometryIndex) == unitOnly)
+                        && geometry != nullptr) {
+                        brush->SetOpacity(
+                            globalOpacity * rubyUnitOpacityAt(
+                                ruby, geometryIndex
+                            )
+                        );
+                        context->DrawGeometry(
+                            geometry.Get(), brush.Get(), sourceWidth
+                        );
                     }
                 }
                 context->PopAxisAlignedClip();
@@ -2700,16 +2895,31 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 rubyStyleIndices.push_back(ruby.styleIndex);
             }
         }
-        if (spinDirection != 0) {
+        if (hasUtopiaTransition) {
+            for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
+                const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
+                for (std::size_t unitIndex = 0;
+                     unitIndex < ruby.geometries.size(); ++unitIndex) {
+                    appendRubyGlowLayer(
+                        ruby.styleIndex, false,
+                        static_cast<int>(rubyIndex), static_cast<int>(unitIndex)
+                    );
+                    appendRubyGlowLayer(
+                        ruby.styleIndex, true,
+                        static_cast<int>(rubyIndex), static_cast<int>(unitIndex)
+                    );
+                }
+            }
+        } else if (spinDirection != 0) {
             for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
                 const int styleIndex = line->rubies[rubyIndex].styleIndex;
-                appendRubyGlowLayer(styleIndex, false, static_cast<int>(rubyIndex));
-                appendRubyGlowLayer(styleIndex, true, static_cast<int>(rubyIndex));
+                appendRubyGlowLayer(styleIndex, false, static_cast<int>(rubyIndex), -1);
+                appendRubyGlowLayer(styleIndex, true, static_cast<int>(rubyIndex), -1);
             }
         } else {
             for (int styleIndex : rubyStyleIndices) {
-                appendRubyGlowLayer(styleIndex, false, -1);
-                appendRubyGlowLayer(styleIndex, true, -1);
+                appendRubyGlowLayer(styleIndex, false, -1, -1);
+                appendRubyGlowLayer(styleIndex, true, -1, -1);
             }
         }
 
@@ -2933,7 +3143,6 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         charStyle.shadowOffsetY
                     );
                     brush->SetOpacity(globalOpacity * characterOpacityAt(charIndex));
-                    const float charOpacity = characterOpacityAt(charIndex);
                     const CharacterAnimationState animationState =
                         characterAnimationAt(charIndex);
                     const D2D1_MATRIX_3X2_F charMatrix = animationState.matrix;
@@ -2950,15 +3159,36 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         dy + shadowY
                     ));
                     if (after) {
-                        context->PushAxisAlignedClip(
-                            D2D1::RectF(
-                                afterClip.left - charStyle.shadowOffsetX,
-                                afterClip.top,
-                                afterClip.right - charStyle.shadowOffsetX,
-                                afterClip.bottom
-                            ),
-                            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
-                        );
+                        if (hasUtopiaTransition) {
+                            const auto [animatedBounds, animatedEdge]
+                                = utopiaCharWipe(charIndex);
+                            if (animatedEdge <= animatedBounds.left) {
+                                continue;
+                            }
+                            const float pad = std::max(
+                                charStyle.strokeWidth + charStyle.stroke2Width,
+                                2.0f
+                            ) + 4.0f;
+                            context->PushAxisAlignedClip(
+                                D2D1::RectF(
+                                    animatedBounds.left - pad - shadowX,
+                                    animatedBounds.top - pad,
+                                    animatedEdge - shadowX,
+                                    animatedBounds.bottom + pad
+                                ),
+                                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                            );
+                        } else {
+                            context->PushAxisAlignedClip(
+                                D2D1::RectF(
+                                    afterClip.left - charStyle.shadowOffsetX,
+                                    afterClip.top,
+                                    afterClip.right - charStyle.shadowOffsetX,
+                                    afterClip.bottom
+                                ),
+                                D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                            );
+                        }
                     }
                     ID2D1Geometry *animatedOuter = charStyle.stroke2Width > 0.0f
                         ? stroke2GeometryAt(charIndex)
@@ -3028,26 +3258,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     rubyStyle.rubyShadowOffsetX,
                     rubyStyle.rubyShadowOffsetY
                 );
-                brush->SetOpacity(globalOpacity * rubyFadeOpacityAt(ruby));
-                const float rubyOpacity = rubyFadeOpacityAt(ruby);
-                const D2D1_MATRIX_3X2_F rubyMatrix = spinMatrix(
-                    rubyOpacity,
-                    ruby.pivotX,
-                    ruby.pivotY
-                );
-                const float shadowX = spinDirection != 0
-                    ? rubyStyle.rubyShadowOffsetX * rubyMatrix._11
-                        + rubyStyle.rubyShadowOffsetY * rubyMatrix._21
-                    : rubyStyle.rubyShadowOffsetX;
-                const float shadowY = spinDirection != 0
-                    ? rubyStyle.rubyShadowOffsetX * rubyMatrix._12
-                        + rubyStyle.rubyShadowOffsetY * rubyMatrix._22
-                    : rubyStyle.rubyShadowOffsetY;
-                context->SetTransform(D2D1::Matrix3x2F::Translation(
-                    dx + shadowX,
-                    dy + shadowY
-                ));
-                if (after) {
+                if (after && !hasUtopiaTransition) {
                     const float pad = std::max(
                         rubyStyle.rubyStrokeWidth + rubyStyle.rubyStroke2Width,
                         2.0f
@@ -3070,6 +3281,54 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     if (geometry == nullptr) {
                         continue;
                     }
+                    const CharacterAnimationState animationState =
+                        hasUtopiaTransition
+                        ? rubyUnitAnimationAt(ruby, geometryIndex)
+                        : CharacterAnimationState{
+                            rubyFadeOpacityAt(ruby),
+                            spinMatrix(
+                                rubyFadeOpacityAt(ruby), ruby.pivotX, ruby.pivotY
+                            ),
+                            spinDirection != 0 && rubyFadeOpacityAt(ruby) < 1.0f,
+                            false,
+                        };
+                    brush->SetOpacity(globalOpacity * animationState.opacity);
+                    const float shadowX = animationState.transformed
+                        ? rubyStyle.rubyShadowOffsetX * animationState.matrix._11
+                            + rubyStyle.rubyShadowOffsetY * animationState.matrix._21
+                        : rubyStyle.rubyShadowOffsetX;
+                    const float shadowY = animationState.transformed
+                        ? rubyStyle.rubyShadowOffsetX * animationState.matrix._12
+                            + rubyStyle.rubyShadowOffsetY * animationState.matrix._22
+                        : rubyStyle.rubyShadowOffsetY;
+                    context->SetTransform(D2D1::Matrix3x2F::Translation(
+                        dx + shadowX, dy + shadowY
+                    ));
+                    bool pushedUtopiaClip = false;
+                    if (after && hasUtopiaTransition) {
+                        const auto [animatedBounds, animatedEdge] =
+                            utopiaRubyUnitWipe(
+                                ruby, rubyIndex, geometryIndex, rubyStyle
+                            );
+                        if (animatedEdge <= animatedBounds.left) {
+                            continue;
+                        }
+                        const float pad = std::max(
+                            rubyStyle.rubyStrokeWidth
+                                + rubyStyle.rubyStroke2Width,
+                            2.0f
+                        ) + 4.0f;
+                        context->PushAxisAlignedClip(
+                            D2D1::RectF(
+                                animatedBounds.left - pad - shadowX,
+                                animatedBounds.top - pad,
+                                animatedEdge - shadowX,
+                                animatedBounds.bottom + pad
+                            ),
+                            D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                        );
+                        pushedUtopiaClip = true;
+                    }
                     ID2D1Geometry *animatedOuter = rubyStyle.rubyStroke2Width > 0.0f
                         ? rubyStroke2GeometryAt(rubyIndex, geometryIndex)
                         : rubyStrokeGeometryAt(rubyIndex, geometryIndex);
@@ -3078,8 +3337,11 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         rubyStyle.rubyStrokeWidth,
                         rubyStyle.rubyStroke2Width
                     );
+                    if (pushedUtopiaClip) {
+                        context->PopAxisAlignedClip();
+                    }
                 }
-                if (after) {
+                if (after && !hasUtopiaTransition) {
                     context->PopAxisAlignedClip();
                 }
             };
@@ -3258,65 +3520,80 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 ruby.fillBounds,
                 after ? rubyStyle.rubyAfterStroke2 : rubyStyle.rubyBeforeStroke2
             );
-            const float rubyOpacity = globalOpacity * rubyFadeOpacityAt(ruby);
-            fill->SetOpacity(rubyOpacity);
-            stroke->SetOpacity(rubyOpacity);
-            stroke2->SetOpacity(rubyOpacity);
-            if (rubyStyle.rubyStroke2Width > 0.0f) {
-                for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {
-                    ID2D1Geometry *geometry = rubyGeometryAt(rubyIndex, index);
-                    if (geometry == nullptr) {
+            for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {
+                ID2D1Geometry *geometry = rubyGeometryAt(rubyIndex, index);
+                if (geometry == nullptr) {
+                    continue;
+                }
+                const float rubyOpacity = globalOpacity
+                    * rubyUnitOpacityAt(ruby, index);
+                fill->SetOpacity(rubyOpacity);
+                stroke->SetOpacity(rubyOpacity);
+                stroke2->SetOpacity(rubyOpacity);
+                bool pushedUtopiaClip = false;
+                if (after && hasUtopiaTransition) {
+                    const auto [animatedBounds, animatedEdge] = utopiaRubyUnitWipe(
+                        ruby, rubyIndex, index, rubyStyle
+                    );
+                    if (animatedEdge <= animatedBounds.left) {
                         continue;
                     }
-                    ID2D1Geometry *animatedStroke2 = rubyStroke2GeometryAt(
-                        rubyIndex, index
+                    const float pad = std::max(
+                        rubyStyle.rubyStrokeWidth + rubyStyle.rubyStroke2Width,
+                        2.0f
+                    ) + 4.0f;
+                    context->PushAxisAlignedClip(
+                        D2D1::RectF(
+                            animatedBounds.left - pad,
+                            animatedBounds.top - pad,
+                            animatedEdge,
+                            animatedBounds.bottom + pad
+                        ),
+                        D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
-                    if (spinDirection != 0 && animatedStroke2 != nullptr) {
+                    pushedUtopiaClip = true;
+                }
+                ID2D1Geometry *animatedStroke2 = rubyStroke2GeometryAt(
+                    rubyIndex, index
+                );
+                if (rubyStyle.rubyStroke2Width > 0.0f) {
+                    if ((spinDirection != 0 || hasUtopiaTransition)
+                        && animatedStroke2 != nullptr) {
                         context->FillGeometry(animatedStroke2, stroke2.Get());
                     } else {
                         context->DrawGeometry(
-                            geometry,
-                            stroke2.Get(),
+                            geometry, stroke2.Get(),
                             std::max(0.0f, rubyStyle.rubyStrokeWidth)
                                 + rubyStyle.rubyStroke2Width
                         );
                     }
                 }
-            }
-            if (rubyStyle.rubyStrokeWidth > 0.0f) {
-                const bool protect = paintNeedsBodyProtection(
-                    after
-                        ? rubyStyle.rubyAfterFillPaint
-                        : rubyStyle.rubyBeforeFillPaint
-                );
-                for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {
-                    ID2D1Geometry *geometry = rubyGeometryAt(rubyIndex, index);
+                if (rubyStyle.rubyStrokeWidth > 0.0f) {
+                    const bool protect = paintNeedsBodyProtection(
+                        after
+                            ? rubyStyle.rubyAfterFillPaint
+                            : rubyStyle.rubyBeforeFillPaint
+                    );
                     ID2D1Geometry *protectedGeometry = rubyProtectedGeometryAt(
                         rubyIndex, index
                     );
-                    if (geometry == nullptr) {
-                        continue;
-                    }
                     ID2D1Geometry *animatedStroke = rubyStrokeGeometryAt(
                         rubyIndex, index
                     );
-                    if (spinDirection != 0 && !protect && animatedStroke != nullptr) {
+                    if ((spinDirection != 0 || hasUtopiaTransition)
+                        && !protect && animatedStroke != nullptr) {
                         context->FillGeometry(animatedStroke, stroke.Get());
                     } else if (protect && protectedGeometry != nullptr) {
                         context->FillGeometry(protectedGeometry, stroke.Get());
                     } else {
                         context->DrawGeometry(
-                            geometry,
-                            stroke.Get(),
-                            rubyStyle.rubyStrokeWidth
+                            geometry, stroke.Get(), rubyStyle.rubyStrokeWidth
                         );
                     }
                 }
-            }
-            for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {
-                ID2D1Geometry *geometry = rubyGeometryAt(rubyIndex, index);
-                if (geometry != nullptr) {
-                    context->FillGeometry(geometry, fill.Get());
+                context->FillGeometry(geometry, fill.Get());
+                if (pushedUtopiaClip) {
+                    context->PopAxisAlignedClip();
                 }
             }
         };
@@ -3335,11 +3612,15 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             );
             drawRubyStack(rubyIndex, ruby, false);
             if (rubyWipeEdge > ruby.bounds.left) {
-                context->PushAxisAlignedClip(
-                    rubyAfterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
-                );
+                if (!hasUtopiaTransition) {
+                    context->PushAxisAlignedClip(
+                        rubyAfterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                    );
+                }
                 drawRubyStack(rubyIndex, ruby, true);
-                context->PopAxisAlignedClip();
+                if (!hasUtopiaTransition) {
+                    context->PopAxisAlignedClip();
+                }
             }
         }
         checkHr(context->EndDraw(), "ID2D1DeviceContext::EndDraw(frame layers)", device_);
