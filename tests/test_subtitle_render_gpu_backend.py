@@ -1834,6 +1834,106 @@ def test_gpu_g4_volume_signal_timing_union_layout_and_colors_follow_painter(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("lit_style", ["circle", "square", "rounded"])
+@pytest.mark.parametrize("transition_mode", ["fade", "slide"])
+def test_gpu_g4_shape_signal_geometry_and_extinguish_transition_follow_painter(
+    monkeypatch, lit_style: str, transition_mode: str
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("Signal", 4_000)], end_ms=5_000)]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=64,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+        line_horizontal_layout="center",
+        line_lead_in_ms=500,
+        line_tail_ms=500,
+        lit_enabled=True,
+        lit_style=lit_style,
+        lit_number=4,
+        lit_size=34,
+        lit_offset_x=-6,
+        lit_offset_y=-12,
+        lit_tracking=5,
+        lit_fill_color="#2040FF",
+        lit_stroke_color="#FFFFFF",
+        lit_stroke_width=3,
+        lit_stroke_soften=2,
+        lit_opacity_pct=85,
+        lit_edge_brightness_pct=70,
+        lit_shadow=True,
+        signals_duration_ms=4_000,
+        lit_waiting_time_ms=0,
+        lit_time_offset_ms=0,
+        lit_transition_mode=transition_mode,
+        lit_transition_ratio_pct=67,
+        lit_transition_angle_deg=35,
+        lit_transition_distance=28,
+    )
+    timestamps = (0, 500, 1_000, 1_500, 2_000, 2_500, 3_000, 3_500, 4_000)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+
+    for t_ms, gpu_frame, painter_frame in zip(timestamps, gpu, painter):
+        assert all(
+            abs(actual - expected) <= 13
+            for actual, expected in zip(
+                _payload_alpha_bounds(gpu_frame),
+                _payload_alpha_bounds(painter_frame),
+            )
+        ), (
+            lit_style,
+            transition_mode,
+            t_ms,
+            _payload_alpha_bounds(gpu_frame),
+            _payload_alpha_bounds(painter_frame),
+        )
+
+    def blue_pixels(payload: bytes) -> int:
+        return sum(
+            payload[index + 2] > payload[index] + 50
+            and payload[index + 2] > payload[index + 1] + 20
+            and payload[index + 3] > 16
+            for index in range(0, len(payload), 4)
+        )
+
+    gpu_counts = [blue_pixels(frame) for frame in gpu[:-1]]
+    painter_counts = [blue_pixels(frame) for frame in painter[:-1]]
+    assert gpu_counts[0] > gpu_counts[-1] > 0
+    assert painter_counts[0] > painter_counts[-1] > 0
+    assert blue_pixels(gpu[-1]) == blue_pixels(painter[-1]) == 0
+    gpu_text_alpha = sum(gpu[-1][3::4])
+    painter_text_alpha = sum(painter[-1][3::4])
+    gpu_full_signal = sum(gpu[0][3::4]) - gpu_text_alpha
+    painter_full_signal = sum(painter[0][3::4]) - painter_text_alpha
+    assert gpu_full_signal > 0 and painter_full_signal > 0
+    for index in range(1, len(timestamps) - 1):
+        gpu_ratio = (sum(gpu[index][3::4]) - gpu_text_alpha) / gpu_full_signal
+        painter_ratio = (
+            sum(painter[index][3::4]) - painter_text_alpha
+        ) / painter_full_signal
+        assert abs(gpu_ratio - painter_ratio) <= 0.08, (
+            lit_style,
+            transition_mode,
+            timestamps[index],
+            gpu_ratio,
+            painter_ratio,
+        )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g3_dual_lane_alignments_follow_painter_schedule(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
 

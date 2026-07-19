@@ -246,9 +246,10 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
     assert gpu_unsupported_features(track, Style(entry_anim="spin_flip")) == ()
     assert gpu_unsupported_features(track, Style(entry_anim="utopia")) == ()
     assert gpu_unsupported_features(track, Style(lit_enabled=True)) == ()
-    assert gpu_unsupported_features(
-        track, Style(lit_enabled=True, lit_style="circle")
-    ) == ("signal_lits",)
+    for lit_style in ("circle", "square", "rounded"):
+        assert gpu_unsupported_features(
+            track, Style(lit_enabled=True, lit_style=lit_style)
+        ) == ()
     ruby_track = TimingTrack(
         lines=[TimingLine(chars=[TimingChar("漢", 0)], end_ms=500)],
         rubies=[

@@ -141,6 +141,98 @@ struct VolumeSignalState {
     float opacity = 0.0f;
 };
 
+struct ShapeSignalGeometry {
+    int count = 1;
+    float size = 1.0f;
+    float tracking = 0.0f;
+    float strokeExtent = 0.0f;
+    float groupWidth = 1.0f;
+};
+
+ShapeSignalGeometry shapeSignalGeometry(const TextStyle &style) {
+    ShapeSignalGeometry geometry;
+    geometry.count = std::clamp(style.litNumber, 1, 8);
+    geometry.size = std::max(style.litSize, 1.0f);
+    geometry.tracking = std::max(style.litTracking, 0.0f);
+    geometry.strokeExtent = std::max(style.litStrokeWidth, 0.0f)
+        + std::max(style.litStrokeSoften, 0.0f);
+    geometry.groupWidth = geometry.count * geometry.size
+        + std::max(geometry.count - 1, 0)
+            * (geometry.size * 0.5f + geometry.tracking);
+    return geometry;
+}
+
+struct ShapeSignalState {
+    bool visible = false;
+    int activeIndex = -1;
+    float activeOpacity = 1.0f;
+    float dx = 0.0f;
+    float dy = 0.0f;
+};
+
+ShapeSignalState shapeSignalState(
+    int lineStartMs,
+    const TextStyle &style,
+    int tMs,
+    int displayEndMs
+) {
+    ShapeSignalState state;
+    if (!style.litEnabled || style.litStyle == "volume") {
+        return state;
+    }
+    const int duration = std::max(style.signalsDurationMs, 0);
+    const int activeDuration = std::max(
+        duration - std::max(style.litWaitingTimeMs, 0), 0
+    );
+    if (activeDuration <= 0) {
+        return state;
+    }
+    const int signalEnd = lineStartMs + style.litTimeOffsetMs;
+    const int activeStart = signalEnd - activeDuration;
+    if (tMs < activeStart || tMs > displayEndMs) {
+        return state;
+    }
+    state.visible = true;
+    const int elapsed = std::max(tMs - activeStart, 0);
+    const int count = std::clamp(style.litNumber, 1, 8);
+    if (activeDuration <= 0 || count <= 1) {
+        state.activeIndex = 0;
+    } else if (elapsed >= activeDuration) {
+        state.activeIndex = -1;
+        return state;
+    } else {
+        const float raw = static_cast<float>((activeDuration - elapsed) * count)
+            / static_cast<float>(activeDuration);
+        state.activeIndex = std::clamp(static_cast<int>(raw), 0, count - 1);
+        const float phase = std::clamp(
+            raw - static_cast<float>(state.activeIndex), 0.0f, 1.0f
+        );
+        const float ratio = std::clamp(
+            static_cast<float>(style.litTransitionRatioPct) / 100.0f,
+            0.0f,
+            1.0f
+        );
+        const float transitionPhase = 1.0f - phase;
+        const float progress = ratio <= 0.0f
+            ? 1.0f
+            : std::clamp(
+                (transitionPhase - (1.0f - ratio)) / ratio, 0.0f, 1.0f
+            );
+        if (style.litTransitionMode == "fade") {
+            state.activeOpacity = 1.0f - progress;
+        } else if (style.litTransitionMode == "slide") {
+            state.activeOpacity = progress;
+            const float distance = std::max(style.litTransitionDistance, 0.0f)
+                * (1.0f - progress);
+            constexpr float pi = 3.14159265358979323846f;
+            const float radians = style.litTransitionAngleDeg * pi / 180.0f;
+            state.dx = -std::cos(radians) * distance;
+            state.dy = -std::sin(radians) * distance;
+        }
+    }
+    return state;
+}
+
 VolumeSignalState volumeSignalState(
     int lineStartMs,
     const TextStyle &style,
@@ -2509,6 +2601,10 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             line->startMs, style, tMs, displayEndMs
         );
         const VolumeSignalGeometry signalGeometry = volumeSignalGeometry(style);
+        const ShapeSignalState shapeState = shapeSignalState(
+            line->startMs, style, tMs, displayEndMs
+        );
+        const ShapeSignalGeometry shapeGeometry = shapeSignalGeometry(style);
         float unionLeft = line->bounds.left;
         float unionRight = line->bounds.right;
         if (signalState.visible) {
@@ -2516,6 +2612,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             // module.  The volume offset moves only the bars afterwards.
             unionLeft = std::min(unionLeft, -signalGeometry.groupWidth);
             unionRight = std::max(unionRight, 0.0f);
+        } else if (shapeState.visible) {
+            unionLeft = std::min(unionLeft, 0.0f);
+            unionRight = std::max(unionRight, shapeGeometry.groupWidth);
         }
         const float inkWidth = unionRight - unionLeft;
         float dx = (static_cast<float>(scene.width) - inkWidth) * 0.5f - unionLeft;
@@ -2664,6 +2763,26 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 contentBottom = std::max(
                     contentBottom,
                     top + height + signalGeometry.strokeExtent + 2.0f
+                );
+            }
+        }
+        const float shapeGroupY = style.litOffsetY - ascent - shapeGeometry.size;
+        if (shapeState.visible && shapeState.activeIndex >= 0) {
+            for (int index = 0; index <= shapeState.activeIndex; ++index) {
+                const bool active = index == shapeState.activeIndex;
+                const float offsetY = active ? shapeState.dy : 0.0f;
+                const float top = shapeGroupY + offsetY;
+                const float shadowOffset = style.litShadow
+                    ? std::max(shapeGeometry.size * 0.08f, 1.0f)
+                    : 0.0f;
+                contentTop = std::min(
+                    contentTop,
+                    top - shapeGeometry.strokeExtent - 2.0f
+                );
+                contentBottom = std::max(
+                    contentBottom,
+                    top + shapeGeometry.size + shadowOffset
+                        + shapeGeometry.strokeExtent + 2.0f
                 );
             }
         }
@@ -3877,6 +3996,133 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             }
             for (int index = 0; index <= signalState.activeIndex; ++index) {
                 drawColumn(index, true);
+            }
+        }
+        if (shapeState.visible
+            && shapeState.activeIndex >= 0
+            && style.litOpacity > 0.0f) {
+            context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
+            auto shapeBrush = [&](const RgbaColor &color, float opacity) {
+                Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
+                checkHr(
+                    context->CreateSolidColorBrush(
+                        d2dColor(color), brush.ReleaseAndGetAddressOf()
+                    ),
+                    "Create shape signal brush",
+                    device_
+                );
+                brush->SetOpacity(std::clamp(opacity, 0.0f, 1.0f));
+                return brush;
+            };
+            auto drawRawShape = [&](const D2D1_RECT_F &rect,
+                                    const RgbaColor &fillColor,
+                                    const RgbaColor &strokeColor,
+                                    float strokeWidth,
+                                    float opacity) {
+                auto fill = shapeBrush(fillColor, opacity);
+                auto stroke = shapeBrush(strokeColor, opacity);
+                if (style.litStyle == "square") {
+                    context->FillRectangle(rect, fill.Get());
+                    if (strokeWidth > 0.0f && strokeColor.alpha > 0) {
+                        context->DrawRectangle(rect, stroke.Get(), strokeWidth);
+                    }
+                } else if (style.litStyle == "rounded") {
+                    const float radius = std::max(
+                        (rect.right - rect.left) * 0.22f, 1.0f
+                    );
+                    const D2D1_ROUNDED_RECT rounded = D2D1::RoundedRect(
+                        rect, radius, radius
+                    );
+                    context->FillRoundedRectangle(rounded, fill.Get());
+                    if (strokeWidth > 0.0f && strokeColor.alpha > 0) {
+                        context->DrawRoundedRectangle(
+                            rounded, stroke.Get(), strokeWidth
+                        );
+                    }
+                } else {
+                    const D2D1_ELLIPSE ellipse = D2D1::Ellipse(
+                        D2D1::Point2F(
+                            (rect.left + rect.right) * 0.5f,
+                            (rect.top + rect.bottom) * 0.5f
+                        ),
+                        (rect.right - rect.left) * 0.5f,
+                        (rect.bottom - rect.top) * 0.5f
+                    );
+                    context->FillEllipse(ellipse, fill.Get());
+                    if (strokeWidth > 0.0f && strokeColor.alpha > 0) {
+                        context->DrawEllipse(ellipse, stroke.Get(), strokeWidth);
+                    }
+                }
+            };
+            for (int index = 0; index <= shapeState.activeIndex; ++index) {
+                const bool active = index == shapeState.activeIndex;
+                const float itemOpacity = style.litOpacity
+                    * (active ? shapeState.activeOpacity : 1.0f);
+                const float itemX = style.litOffsetX
+                    + static_cast<float>(index)
+                        * (shapeGeometry.size * 1.5f + shapeGeometry.tracking)
+                    + (active ? shapeState.dx : 0.0f);
+                const float itemY = shapeGroupY + (active ? shapeState.dy : 0.0f);
+                const D2D1_RECT_F rect = D2D1::RectF(
+                    itemX,
+                    itemY,
+                    itemX + shapeGeometry.size,
+                    itemY + shapeGeometry.size
+                );
+                if (style.litShadow) {
+                    const float shadowOffset = std::max(
+                        shapeGeometry.size * 0.08f, 1.0f
+                    );
+                    drawRawShape(
+                        D2D1::RectF(
+                            rect.left + shadowOffset,
+                            rect.top + shadowOffset,
+                            rect.right + shadowOffset,
+                            rect.bottom + shadowOffset
+                        ),
+                        RgbaColor{0, 0, 0, 89},
+                        RgbaColor{0, 0, 0, 0},
+                        0.0f,
+                        itemOpacity
+                    );
+                }
+                if (style.litStrokeSoften > 0.0f
+                    && style.litStrokeWidth > 0.0f) {
+                    RgbaColor softStroke = style.litStroke;
+                    softStroke.alpha = 71;
+                    drawRawShape(
+                        rect,
+                        style.litFill,
+                        softStroke,
+                        style.litStrokeWidth + style.litStrokeSoften,
+                        itemOpacity
+                    );
+                }
+                drawRawShape(
+                    rect,
+                    style.litFill,
+                    style.litStroke,
+                    style.litStrokeWidth,
+                    itemOpacity
+                );
+                if (active && style.litEdgeBrightness > 0.0f) {
+                    const float inset = shapeGeometry.size * 0.18f;
+                    const D2D1_ELLIPSE highlight = D2D1::Ellipse(
+                        D2D1::Point2F(
+                            rect.left + inset + shapeGeometry.size * 0.16f,
+                            rect.top + inset + shapeGeometry.size * 0.16f
+                        ),
+                        shapeGeometry.size * 0.16f,
+                        shapeGeometry.size * 0.16f
+                    );
+                    auto brush = shapeBrush(
+                        RgbaColor{255, 255, 255, 255},
+                        itemOpacity * std::min(
+                            style.litEdgeBrightness * 0.55f, 1.0f
+                        )
+                    );
+                    context->FillEllipse(highlight, brush.Get());
+                }
             }
         }
         checkHr(context->EndDraw(), "ID2D1DeviceContext::EndDraw(frame layers)", device_);

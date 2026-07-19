@@ -1362,3 +1362,13 @@ Utopia 横排主路径至此收口。G4 下一项进入 Sayatoo signal；产品 
 - 基准新增 `--signals`。RTX 3070 Ti、1920×1080、60fps、packed bands、600 帧 volume signal：`220.28fps`，render/readback/roundtrip p95 `1.84/1.62/5.63ms`；local 显存增长 0，sidecar RSS 波动 `823,296B`。hardware/WARP build smoke 通过；GPU/transport `123 passed`，native protocol/export/benchmark `63 passed, 27 skipped`。
 
 下一批补齐横排 circle/square/rounded 的阴影、soften、高光与 fade/slide 熄灭过渡；完成前非 volume signal 继续由 capability gate 回退 Painter。
+
+### 2026-07-19（第二十八批）：G4 Sayatoo 横排 shape signals
+
+- Direct2D 补齐 circle/square/rounded 三种普通灯形，严格复制 Painter 的 `count/size/tracking/offset` 几何、文字与 signal 的 offset-free 联合布局，以及“初始全亮、从右向左逐个熄灭”的索引/phase 状态机。倒计时结束后灯形消失，但同一显示窗口内仍保留联合布局，避免歌词在开唱瞬间横向跳动。
+- 普通灯形完整覆盖 `lit_fill/stroke`、stroke width、soften 外圈、35% 黑色投影、整体 opacity 和 active 灯的白色高光；square 使用直角矩形，rounded 使用 22% 半径，circle 使用椭圆，与 Painter `_draw_lit_shape_raw()` 一致。
+- active 灯的 `fade` 按 transition ratio 熄灭；`slide` 同时对齐 opacity、角度和距离向量。移动、投影、soften、主体和高光共享 active opacity，packed-band 纵向范围包含 slide 与投影外扩。
+- capability gate 已为全部四种横排 signal 放行；竖排仍由 `vertical` 能力门槛整场回退 Painter。自动门槛参数化覆盖 3 种形状 × 2 种过渡 × 9 个时刻：边界相对 Painter 最大偏差 `13px`，剔除文字层并归一化后的 signal alpha 轨迹偏差不超过 `0.08`，开唱时双方蓝色 signal 像素均严格为 0。
+- 基准新增 `--signal-style`。RTX 3070 Ti、1920×1080、60fps、packed bands、600 帧 rounded signal：`220.29fps`，render/readback/roundtrip p95 `1.85/0.87/5.23ms`；local 显存增长 0，sidecar RSS 波动 `450,560B`。
+
+横排 Sayatoo signal 至此收口。下一批进入 G4 竖排文本/信号布局；在竖排能力整体对齐 Painter 前，`vertical` 继续保持明确 fallback。

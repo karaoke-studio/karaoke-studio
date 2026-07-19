@@ -41,6 +41,7 @@ def _scene(
     animation: str = "none",
     ruby: bool = False,
     signals: bool = False,
+    signal_style: str = "volume",
 ) -> tuple[TimingTrack, Style]:
     text = "Karaoke Studio GPU"
     chars = [
@@ -96,7 +97,7 @@ def _scene(
         ruby_glow_after_radius_px=6,
         ruby_glow_concentration_level=1,
         lit_enabled=signals,
-        lit_style="volume",
+        lit_style=signal_style,
         signals_duration_ms=4_000,
         lit_opacity_pct=85,
         lit_stroke_width=3,
@@ -126,6 +127,7 @@ def run_benchmark(
     animation: str = "none",
     ruby: bool = False,
     signals: bool = False,
+    signal_style: str = "volume",
 ) -> tuple[dict, list[dict]]:
     import psutil
 
@@ -138,6 +140,7 @@ def run_benchmark(
         animation=animation,
         ruby=ruby,
         signals=signals,
+        signal_style=signal_style,
     )
     shm_key = f"krok_gpu_g1_benchmark_{os.getpid()}_{uuid.uuid4().hex}"
     rows: list[dict] = []
@@ -232,6 +235,7 @@ def run_benchmark(
         "animation": animation,
         "ruby": ruby,
         "signals": signals,
+        "signal_style": signal_style if signals else "none",
         "bands": bands,
         "height": height,
         "readback_mean_ms": round(statistics.fmean(readback_times), 4),
@@ -290,7 +294,13 @@ def main() -> int:
     parser.add_argument("--glow", action="store_true", help="enable N3 medium glow")
     parser.add_argument("--ruby", action="store_true", help="include timed ruby units")
     parser.add_argument(
-        "--signals", action="store_true", help="include Sayatoo volume signal bars"
+        "--signals", action="store_true", help="include Sayatoo signal indicators"
+    )
+    parser.add_argument(
+        "--signal-style",
+        choices=("volume", "circle", "square", "rounded"),
+        default="volume",
+        help="signal geometry used with --signals",
     )
     parser.add_argument(
         "--animation",
@@ -326,6 +336,7 @@ def main() -> int:
             animation=args.animation,
             ruby=bool(args.ruby),
             signals=bool(args.signals),
+            signal_style=args.signal_style,
         )
         all_rows.extend(rows)
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True))

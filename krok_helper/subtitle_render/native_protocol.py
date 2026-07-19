@@ -37,8 +37,6 @@ def gpu_unsupported_features(
         reasons.append("right_to_left")
     if style.line_horizontal_layout == "per_row":
         reasons.append("per_row_layout")
-    if style.lit_enabled and style.lit_style != "volume":
-        reasons.append("signal_lits")
     if style.entry_anim not in {
         "none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"
     } or (
