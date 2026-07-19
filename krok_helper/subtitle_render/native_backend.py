@@ -198,6 +198,95 @@ class SharedFrameRingReader:
             payload=payload,
         )
 
+    def read_qimage(self, frame_ready_event: dict[str, Any]):
+        """Copy a ready RGBA slot directly into one detached ``QImage``.
+
+        Unlike ``read_frame(...).to_qimage()``, this path performs one full-frame
+        copy (shared memory -> QImage) instead of staging through a Python
+        ``bytes`` object. It is the G2 preview consumption path.
+        """
+        from PyQt6.QtGui import QImage
+
+        self._validate_event_payload(frame_ready_event)
+        self.attach()
+        assert self._shared is not None
+
+        slot_offset = _event_int(frame_ready_event, "slot_offset")
+        header_bytes = _event_int(frame_ready_event, "header_bytes")
+        payload_offset = _event_int(frame_ready_event, "payload_offset")
+        payload_bytes = _event_int(frame_ready_event, "payload_bytes")
+        slot_bytes = _event_int(frame_ready_event, "slot_bytes")
+        if header_bytes < _SHARED_FRAME_HEADER.size:
+            raise NativeRendererError(f"shared frame header is too small: {header_bytes}")
+        if slot_offset < 0 or payload_offset < 0 or payload_bytes < 0 or slot_bytes <= 0:
+            raise NativeRendererError("shared frame event contains invalid slot bounds")
+        if payload_offset < slot_offset + header_bytes:
+            raise NativeRendererError("shared frame payload overlaps slot header")
+        shared_size = int(self._shared.size())
+        if slot_offset + slot_bytes > shared_size or payload_offset + payload_bytes > shared_size:
+            raise NativeRendererError("shared frame slot exceeds shared memory size")
+
+        if not self._shared.lock():
+            raise NativeRendererError(
+                f"failed to lock native shared memory {self.shm_key!r}: "
+                f"{self._shared.errorString()}"
+            )
+        try:
+            pointer = self._shared.constData()
+            pointer.setsize(shared_size)
+            source = memoryview(pointer)
+            header = _SHARED_FRAME_HEADER.unpack_from(source, slot_offset)
+            (
+                state,
+                generation,
+                _frame_index,
+                t_ms,
+                width,
+                height,
+                stride,
+                format_id,
+                header_payload_offset,
+                header_payload_bytes,
+            ) = header
+            if state != _SHARED_FRAME_READY:
+                raise NativeRendererError(f"shared frame slot is not ready: state={state}")
+            pixel_format = _SHARED_FRAME_PIXEL_FORMATS.get(format_id)
+            if pixel_format != "rgba8888":
+                raise NativeRendererError(f"unsupported shared frame pixel format id: {format_id}")
+            if slot_offset + header_payload_offset != payload_offset:
+                raise NativeRendererError("shared frame payload offset does not match slot header")
+            if header_payload_bytes != payload_bytes:
+                raise NativeRendererError("shared frame payload byte count does not match slot header")
+            self._validate_header_matches_event(
+                frame_ready_event,
+                generation=generation,
+                frame_index=_frame_index,
+                t_ms=t_ms,
+                width=width,
+                height=height,
+                stride=stride,
+                pixel_format=pixel_format,
+            )
+            if width <= 0 or height <= 0 or stride < width * 4 or payload_bytes < stride * height:
+                raise NativeRendererError("shared frame contains invalid RGBA dimensions")
+
+            image = QImage(width, height, QImage.Format.Format_RGBA8888)
+            if image.isNull():
+                raise NativeRendererError("failed to allocate QImage for shared frame")
+            destination_pointer = image.bits()
+            destination_pointer.setsize(image.sizeInBytes())
+            destination = memoryview(destination_pointer)
+            destination_stride = image.bytesPerLine()
+            for row in range(height):
+                source_start = payload_offset + row * stride
+                destination_start = row * destination_stride
+                destination[destination_start : destination_start + width * 4] = source[
+                    source_start : source_start + width * 4
+                ]
+            return image
+        finally:
+            self._shared.unlock()
+
     def _validate_event_payload(self, frame_ready_event: dict[str, Any]) -> None:
         if frame_ready_event.get("event") not in {
             "frame_ready",

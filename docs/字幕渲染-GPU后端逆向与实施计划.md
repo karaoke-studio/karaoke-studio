@@ -1,6 +1,6 @@
 # 字幕渲染 GPU 后端：NicoKaraMaker3 逆向结论与实施计划
 
-> 状态：G0/G1 已完成，下一阶段为 G2 实验预览接线
+> 状态：G0/G1 已完成，G2 实验预览接线进行中
 > 最后更新：2026-07-19  
 > 逆向基准：NicoKaraMaker3 10.74.80.0 x64  
 > 产品基线：Python QPainter 仍是唯一正式字幕渲染路径；本文不改变当前产品开关
@@ -959,3 +959,30 @@ render/readback CSV，以及 geometry/layout cache 的 hit/miss/bytes 诊断。�
 
 至此 G1 的功能、Painter bounded diff、hardware/WARP、600 帧稳态性能/诊断和真实 N3
 固定关键帧门禁全部完成，**G1 宣告完成**。下一阶段进入 G2；正式产品 GPU 开关仍保持硬关闭。
+
+### 2026-07-19（第八批）：G2 第一刀——有界 latest-wins GPU 预览 worker
+
+- 新增 `GpuAsyncSubtitleRenderer`，仅显式设置 `KROK_SUBTITLE_GPU_PREVIEW=1` 时由
+  `PreviewGraphicsView` 选用；该开关独立于历史 CPU native 实验开关，产品设置中不暴露，
+  默认仍走 `AsyncSubtitleRenderer`/Painter；
+- 调度器固定为“1 个同步在途 + 1 个 pending”，pending 新请求直接覆盖旧请求，不存在 range、
+  waiting 字典或无界队列；单测在首帧阻塞期间连续投入 100 个时间戳，实际只渲染首帧和
+  最后一帧，`max_pending=1`；
+- 播放时只允许一个下一帧 speculative look-ahead，占用同一个 pending 槽；完成后进入两帧
+  上限的时间桶缓存，不会自行无限向前渲染；cache hit 可直接交付并继续维持单帧前瞻；
+- state/style/viewport generation 变化使旧结果失效；暂停要求时间戳精确一致，播放态只接收
+  120ms 有界迟到帧。GPU 创建、configure、逐帧渲染或 shared-memory 读取异常后，worker
+  永久降级到同线程 Painter fallback，不把异常带入 GUI；
+- `SharedFrameRingReader.read_qimage()` 直接把锁定的 shared-memory RGBA 行复制进最终
+  `QImage`，预览消费由 `shm → bytes → QImage.copy()` 两次全帧拷贝降为一次；
+- renderer/Direct2D device 和 shared reader 跨普通帧常驻。resize 因 QSharedMemory 命名段
+  不能原地改大小而轮换 shm generation key，但不重启 sidecar；真实 WARP worker smoke 已连续
+  输出 `640×360` 和 resize 后 `320×180` 两帧，configure 两次、failure/fallback 均为 0，
+  stop 后线程正常退出；
+- G2/transport + GPU 专项 `83 passed`；未受改动的 native export/protocol 独立回归
+  `33 passed, 27 skipped`。若把两组用例反常地放在同一 pytest 进程且 transport 先运行，
+  Qt offscreen 字体库初始化顺序会令历史 CPU-native Utopia bounded-diff 用例把 Arial 回退成
+  Meiryo；按正常文件顺序/独立进程均通过，本批没有放宽这些历史阈值。
+
+G2 尚未完成：下一刀补 render/readback/ready latency 与 pending replacement 诊断导出，随后跑
+真实 GUI + 视频的连续播放、seek、resize/style churn、kill/restart/fallback 和慢帧自愈门禁。

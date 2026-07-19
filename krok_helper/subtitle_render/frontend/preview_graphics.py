@@ -27,8 +27,10 @@ from PyQt6.QtWidgets import (
 from krok_helper.subtitle_render.engine.painter import frame_vertical_bounds, paint_frame_to_painter
 from krok_helper.subtitle_render.frontend.preview_async import (
     AsyncSubtitleRenderer,
+    GpuAsyncSubtitleRenderer,
     NativeAsyncSubtitleRenderer,
     async_preview_enabled,
+    gpu_preview_enabled,
     native_preview_enabled,
 )
 from krok_helper.subtitle_render.frontend.preview_media import qt_playback_source
@@ -251,7 +253,12 @@ class PreviewGraphicsView(QGraphicsView):
         # 单帧 14ms paint 阻塞（§9 A4 解耦）。默认开，env KROK_SUBTITLE_ASYNC_PREVIEW=0 回退。
         self._async_renderer: Optional[AsyncSubtitleRenderer] = None
         if async_preview_enabled():
-            renderer_cls = NativeAsyncSubtitleRenderer if native_preview_enabled() else AsyncSubtitleRenderer
+            if gpu_preview_enabled():
+                renderer_cls = GpuAsyncSubtitleRenderer
+            elif native_preview_enabled():
+                renderer_cls = NativeAsyncSubtitleRenderer
+            else:
+                renderer_cls = AsyncSubtitleRenderer
             self._async_renderer = renderer_cls(self._output_w, self._output_h, self)
             self._async_renderer.frame_ready.connect(
                 self._on_async_frame, Qt.ConnectionType.QueuedConnection

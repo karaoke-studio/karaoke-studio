@@ -207,6 +207,29 @@ def test_gpu_probe_rejects_invalid_dimensions(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_preview_readback_copies_shared_slot_directly_to_qimage(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=10.0) as renderer:
+        event = renderer.render_probe(
+            width=64,
+            height=48,
+            force_warp=True,
+            draw_glyph=False,
+            rgba=(51, 102, 204, 128),
+        )
+        with SharedFrameRingReader.from_event(event) as reader:
+            image = reader.read_qimage(event)
+
+    assert image.size().width() == 64
+    assert image.size().height() == 48
+    assert image.pixelColor(0, 0).getRgb() == (0, 0, 0, 0)
+    assert all(
+        abs(actual - expected) <= 1
+        for actual, expected in zip(image.pixelColor(16, 24).getRgb(), (51, 102, 204, 128))
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_probe_1000_frames_reuses_device_and_shared_ring(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     shm_key = f"krok_gpu_pytest_{os.getpid()}_{uuid.uuid4().hex}"

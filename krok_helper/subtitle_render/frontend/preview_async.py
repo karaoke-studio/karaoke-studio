@@ -66,6 +66,11 @@ def native_preview_enabled() -> bool:
     return _env_enabled("KROK_SUBTITLE_NATIVE_RENDER", "0")
 
 
+def gpu_preview_enabled() -> bool:
+    """G2 developer opt-in; never enabled by product settings or by default."""
+    return _env_enabled("KROK_SUBTITLE_GPU_PREVIEW", "0")
+
+
 def native_preview_timestamps(
     t_ms: int,
     *,
@@ -365,6 +370,352 @@ class AsyncSubtitleRenderer(QObject):
         if not self._thread.wait(2000):
             self._thread.quit()
             self._thread.wait(1000)
+
+
+class GpuAsyncSubtitleRenderer(QObject):
+    """Bounded latest-wins G2 preview scheduler for the Direct2D backend.
+
+    There is exactly one in-flight synchronous sidecar request and at most one
+    pending request. A pending timestamp can be replaced, never appended. One
+    speculative frame may occupy that pending slot while playback is active.
+    """
+
+    frame_ready = Signal(QImage, int)
+
+    _STALE_TOLERANCE_MS = 120
+
+    def __init__(self, width: int, height: int, parent: Optional[QObject] = None) -> None:
+        super().__init__(parent)
+        self._logical_w = max(int(width), 1)
+        self._logical_h = max(int(height), 1)
+        self._device_pixel_ratio = 1.0
+        self._track: Optional[TimingTrack] = None
+        self._style: Optional[Style] = None
+        self._extra_tracks: list[TimingTrack] = []
+        self._generation = 0
+        self._request_serial = 0
+        self._latest_t: Optional[int] = None
+        self._pending: Optional[tuple[int, int, bool]] = None
+        self._needs_configure = True
+        self._playing = False
+        self._stopped = False
+        self._renderer_failed = False
+        self._force_warp = _env_enabled("KROK_SUBTITLE_GPU_FORCE_WARP", "0")
+        self._lookahead_frames = _env_int(
+            "KROK_SUBTITLE_GPU_LOOKAHEAD_FRAMES", 1, minimum=0
+        )
+        self._frame_cache = NativePreviewFrameCache(max(self._lookahead_frames + 1, 1))
+        self._renderer: Optional[NativeRendererProcess] = None
+        self._reader: Optional[SharedFrameRingReader] = None
+        self._shm_key = f"krok-gpu-preview-{os.getpid()}-{uuid.uuid4().hex}"
+        self._frame_index = 0
+        self._condition = threading.Condition()
+        self._stats_lock = threading.Lock()
+        self._stats = {
+            "requests": 0,
+            "pending_replaced": 0,
+            "frames_emitted": 0,
+            "future_frames_cached": 0,
+            "stale_frames_dropped": 0,
+            "configure_count": 0,
+            "renderer_failures": 0,
+            "fallback_frames": 0,
+            "max_pending": 0,
+        }
+        self._thread = threading.Thread(
+            target=self._run,
+            name="subtitle-preview-gpu-render",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def set_state(
+        self,
+        track: Optional[TimingTrack],
+        style: Optional[Style],
+        extra_tracks: Optional[list[TimingTrack]] = None,
+    ) -> None:
+        with self._condition:
+            if self._stopped:
+                return
+            self._track = track
+            self._style = style
+            self._extra_tracks = list(extra_tracks or ())
+            self._generation += 1
+            self._needs_configure = True
+            self._pending = None
+            self._frame_cache.clear()
+            self._condition.notify_all()
+
+    def set_size(self, width: int, height: int) -> None:
+        self.set_render_target(width, height, self._device_pixel_ratio)
+
+    def set_render_target(
+        self,
+        width: int,
+        height: int,
+        device_pixel_ratio: float = 1.0,
+    ) -> None:
+        with self._condition:
+            if self._stopped:
+                return
+            target = (
+                max(int(width), 1),
+                max(int(height), 1),
+                max(float(device_pixel_ratio or 1.0), 0.01),
+            )
+            if target != (self._logical_w, self._logical_h, self._device_pixel_ratio):
+                self._logical_w, self._logical_h, self._device_pixel_ratio = target
+                self._generation += 1
+                self._needs_configure = True
+                self._pending = None
+                self._frame_cache.clear()
+                # QSharedMemory cannot resize an existing named segment. Give
+                # each render-target generation its own key while preserving
+                # the sidecar/GPU device across ordinary frame requests.
+                self._shm_key = f"krok-gpu-preview-{os.getpid()}-{uuid.uuid4().hex}"
+            self._condition.notify_all()
+
+    def request(self, t_ms: int) -> None:
+        requested_t = int(t_ms)
+        cached = self._frame_cache.take(requested_t)
+        with self._condition:
+            if self._stopped:
+                return
+            self._request_serial += 1
+            serial = self._request_serial
+            self._latest_t = requested_t
+            self._note("requests")
+            if cached is not None:
+                self._note("frames_emitted")
+                self.frame_ready.emit(cached, requested_t)
+                if self._playing and self._lookahead_frames > 0:
+                    self._replace_pending_locked(
+                        self._next_frame_timestamp(requested_t), serial, True
+                    )
+            else:
+                self._replace_pending_locked(requested_t, serial, False)
+            self._condition.notify()
+
+    def set_playing(self, playing: bool) -> None:
+        with self._condition:
+            self._playing = bool(playing)
+            if not self._playing and self._pending is not None and self._pending[2]:
+                self._pending = None
+            self._condition.notify_all()
+
+    def stop(self) -> None:
+        with self._condition:
+            if self._stopped:
+                return
+            self._stopped = True
+            self._pending = None
+            self._condition.notify_all()
+        self._thread.join(timeout=3.0)
+
+    def _replace_pending_locked(self, t_ms: int, serial: int, speculative: bool) -> None:
+        if self._pending is not None:
+            self._note("pending_replaced")
+        self._pending = (int(t_ms), int(serial), bool(speculative))
+        self._note_max_pending(1)
+
+    def _take_next_request(self):
+        with self._condition:
+            while not self._stopped and self._pending is None:
+                self._condition.wait()
+            if self._stopped:
+                return None
+            t_ms, serial, speculative = self._pending
+            self._pending = None
+            needs_configure = self._needs_configure
+            self._needs_configure = False
+            return (
+                self._track,
+                self._style,
+                list(self._extra_tracks),
+                self._logical_w,
+                self._logical_h,
+                self._device_pixel_ratio,
+                t_ms,
+                serial,
+                speculative,
+                self._generation,
+                needs_configure,
+                self._shm_key,
+            )
+
+    def _run(self) -> None:
+        try:
+            while True:
+                snapshot = self._take_next_request()
+                if snapshot is None:
+                    return
+                (
+                    track,
+                    style,
+                    extra_tracks,
+                    width,
+                    height,
+                    dpr,
+                    t_ms,
+                    serial,
+                    speculative,
+                    generation,
+                    needs_configure,
+                    shm_key,
+                ) = snapshot
+                if track is None or style is None:
+                    continue
+                if self._renderer_failed:
+                    if not speculative:
+                        self._emit_python_fallback(
+                            track, style, extra_tracks, width, height, dpr, t_ms, generation
+                        )
+                    continue
+                try:
+                    renderer = self._ensure_renderer()
+                    if needs_configure:
+                        renderer.configure_gpu(
+                            track,
+                            style,
+                            width=width,
+                            height=height,
+                            fps=60,
+                            dpr=dpr,
+                            force_warp=self._force_warp,
+                        )
+                        self._note("configure_count")
+                    event = renderer.render_gpu_frame(
+                        t_ms,
+                        force_warp=self._force_warp,
+                        generation=generation,
+                        frame_index=self._frame_index,
+                        shm_key=shm_key,
+                    )
+                    self._frame_index += 1
+                    event_key = str(event.get("shm_key") or "")
+                    if self._reader is None or self._reader.shm_key != event_key:
+                        if self._reader is not None:
+                            self._reader.close()
+                        self._reader = SharedFrameRingReader.from_event(event)
+                    image = self._reader.read_qimage(event)
+                    image.setDevicePixelRatio(dpr)
+                    if speculative:
+                        self._cache_speculative(image, t_ms, generation)
+                    elif self._may_emit(t_ms, generation):
+                        self._note("frames_emitted")
+                        self.frame_ready.emit(image, int(t_ms))
+                        self._schedule_lookahead(t_ms, serial, generation)
+                    else:
+                        self._note("stale_frames_dropped")
+                except (NativeRendererError, RuntimeError) as exc:
+                    if _env_enabled("KROK_SUBTITLE_NATIVE_DEBUG_FAILURES", "0"):
+                        print(f"GPU preview failed: {exc}")
+                    self._renderer_failed = True
+                    self._note("renderer_failures")
+                    self._close_renderer()
+                    if not speculative:
+                        self._emit_python_fallback(
+                            track, style, extra_tracks, width, height, dpr, t_ms, generation
+                        )
+        finally:
+            self._close_renderer()
+
+    def _ensure_renderer(self) -> NativeRendererProcess:
+        if self._renderer is None:
+            self._renderer = NativeRendererProcess(
+                response_timeout_s=2.0,
+                close_timeout_s=1.0,
+            )
+            self._renderer.start()
+        return self._renderer
+
+    def _close_renderer(self) -> None:
+        if self._reader is not None:
+            self._reader.close()
+            self._reader = None
+        if self._renderer is not None:
+            self._renderer.close()
+            self._renderer = None
+
+    def _may_emit(self, t_ms: int, generation: int) -> bool:
+        with self._condition:
+            if self._stopped or generation != self._generation or self._latest_t is None:
+                return False
+            tolerance = self._STALE_TOLERANCE_MS if self._playing else 0
+            return abs(int(t_ms) - int(self._latest_t)) <= tolerance
+
+    def _cache_speculative(self, image: QImage, t_ms: int, generation: int) -> None:
+        with self._condition:
+            if self._stopped or generation != self._generation or self._latest_t is None:
+                self._note("stale_frames_dropped")
+                return
+            if self._frame_cache.key_for(t_ms) < self._frame_cache.key_for(self._latest_t):
+                self._note("stale_frames_dropped")
+                return
+        self._frame_cache.store(t_ms, image)
+        self._note("future_frames_cached")
+
+    def _schedule_lookahead(self, t_ms: int, serial: int, generation: int) -> None:
+        with self._condition:
+            if (
+                self._stopped
+                or not self._playing
+                or self._lookahead_frames <= 0
+                or generation != self._generation
+                or self._pending is not None
+                or serial != self._request_serial
+            ):
+                return
+            self._pending = (self._next_frame_timestamp(t_ms), serial, True)
+            self._note_max_pending(1)
+            self._condition.notify()
+
+    @staticmethod
+    def _next_frame_timestamp(t_ms: int) -> int:
+        return int(round(int(t_ms) + 1000.0 / 60.0))
+
+    def _emit_python_fallback(
+        self,
+        track: TimingTrack,
+        style: Style,
+        extra_tracks: list[TimingTrack],
+        width: int,
+        height: int,
+        dpr: float,
+        t_ms: int,
+        generation: int,
+    ) -> None:
+        if not self._may_emit(t_ms, generation):
+            self._note("stale_frames_dropped")
+            return
+        physical_w, physical_h, dpr = preview_render_target_size(width, height, dpr)
+        image = QImage(physical_w, physical_h, QImage.Format.Format_ARGB32_Premultiplied)
+        image.setDevicePixelRatio(dpr)
+        image.fill(0)
+        painter = QPainter(image)
+        try:
+            paint_frame_to_painter(
+                painter, width, height, track, int(t_ms), style, extra_tracks
+            )
+        finally:
+            painter.end()
+        if self._may_emit(t_ms, generation):
+            self._note("fallback_frames")
+            self._note("frames_emitted")
+            self.frame_ready.emit(image, int(t_ms))
+
+    def _note(self, key: str) -> None:
+        with self._stats_lock:
+            self._stats[key] += 1
+
+    def _note_max_pending(self, value: int) -> None:
+        with self._stats_lock:
+            self._stats["max_pending"] = max(self._stats["max_pending"], int(value))
+
+    def stats_snapshot(self) -> dict[str, int]:
+        with self._stats_lock:
+            return dict(self._stats)
 
 
 class NativeAsyncSubtitleRenderer(QObject):
