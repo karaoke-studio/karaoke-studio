@@ -1488,3 +1488,13 @@ G4 下一批继续处理 `per_row`/逐行布局覆盖、竖排标题/行内角�
 - benchmark 新增 `--per-row`。RTX 3070 Ti、1920×1080、60fps、双行独立锚点/偏移、中档 glow、packed bands、600 帧：`91.09fps`，render/readback/roundtrip p95 `4.93/4.55/13.64ms`，平均 band 覆盖率 `28.33%`，local 显存增长 0。
 
 G4 下一批处理当前剩余的组合门槛：竖排标题/行内角色/动画，以及 RTL signal/行内角色/动画；随后进入 guide/shared-span 等剩余 Painter 语义和 G5 集成。
+
+### 2026-07-19（第三十六批）：G4 竖排/RTL 组合门槛收口
+
+- 竖排标题继续走独立 `staticOverlay` 屏幕坐标路径，开启 `vertical` 不会改变标题位置或像素；GPU 以同场景 vertical 开/关输出逐字节相等作为门槛。DirectWrite 与 Qt 的长拉丁标题宽度差仍控制在既有字体引擎容差内。
+- 对齐 Painter 当前兼容边界：竖排正文忽略行内角色标签，统一使用有效行样式；竖排的 `char_fade`、`spin_flip`、`utopia` 也按 Painter 视为无效并静态显示整列。fade/slide/rise 整行动画仍正常执行。GPU 不在 CPU oracle 尚未实现这些组合时擅自输出另一套视觉语义。
+- RTL 的行内混合字号此前使用文字+signal 联合盒平移正文，而 Painter 对带角色 run 的正文独立锚定、只让 signal 使用联合盒。Direct2D 现分别计算 `dx` 与 `signalDx`；灭灯帧仍保留联合盒，避免 flash phase 期间歌词横跳。普通 volume/shape signal 与非 RTL 路径保持原行为。
+- 组合门槛覆盖：竖排标题、竖排角色兼容边界、RTL+角色+volume signal、RTL+vertical，以及 vertical/RTL × fade/slide/rise、vertical/RTL × char-fade/spin/Utopia。共 16 组新增 GPU/Painter 对照通过，所有 `vertical_*`/`rtl_*` capability fallback 已移除；当前只剩真实未迁移的 guide symbol、shared timing span 和未知动画名。
+- GPU 独立回归 `98 passed`，transport `71 passed`，native protocol/export/benchmark `63 passed, 27 skipped`。RTX 3070 Ti、1920×1080、60fps、RTL + Utopia + 中档 glow、packed bands、600 帧：`81.98fps`，render/readback/roundtrip p95 `7.57/4.31/14.62ms`，平均 band 覆盖率 `14.05%`，local 显存增长 0。
+
+G4 下一批进入 guide symbol 与 shared timing span；两者完成后审计 capability gate，并转入 G5 产品集成与 G6 稳态/故障恢复验收。

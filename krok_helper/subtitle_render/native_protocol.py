@@ -32,44 +32,6 @@ def gpu_unsupported_features(
     """Return project features that require whole-frame Painter fallback."""
     reasons: list[str] = []
     sources = [track, *(extra_tracks or ())]
-    if style.vertical:
-        if style.title_overlay is not None and style.title_overlay.enabled:
-            reasons.append("vertical_title")
-        if style.entry_anim != "none" or style.exit_anim != "none":
-            reasons.append("vertical_animation")
-        for source in sources:
-            for line in source.lines:
-                if line.animation_override is not None and (
-                    line.animation_override.entry_anim != "none"
-                    or line.animation_override.exit_anim != "none"
-                ):
-                    reasons.append("vertical_animation")
-                if any(ch.role_label for ch in line.chars):
-                    reasons.append("vertical_inline_style")
-    if style.right_to_left:
-        if style.vertical:
-            reasons.append("rtl_vertical")
-        if style.lit_enabled:
-            reasons.append("rtl_signal")
-        if any(
-            ch.role_label
-            for source in sources
-            for line in source.lines
-            for ch in line.chars
-        ):
-            reasons.append("rtl_inline_style")
-        if style.entry_anim != "none" or style.exit_anim != "none":
-            reasons.append("rtl_animation")
-        for source in sources:
-            if any(
-                line.animation_override is not None
-                and (
-                    line.animation_override.entry_anim != "none"
-                    or line.animation_override.exit_anim != "none"
-                )
-                for line in source.lines
-            ):
-                reasons.append("rtl_animation")
     if style.entry_anim not in {
         "none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"
     } or (

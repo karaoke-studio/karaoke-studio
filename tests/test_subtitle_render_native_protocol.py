@@ -294,7 +294,32 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
     assert gpu_unsupported_features(ruby_track, Style(vertical=True)) == ()
     assert gpu_unsupported_features(
         ruby_track, Style(vertical=True, entry_anim="fade")
-    ) == ("vertical_animation",)
+    ) == ()
+    assert gpu_unsupported_features(
+        ruby_track, Style(vertical=True, entry_anim="utopia")
+    ) == ()
+    assert gpu_unsupported_features(
+        ruby_track, Style(right_to_left=True, entry_anim="slide_in")
+    ) == ()
+    assert gpu_unsupported_features(
+        ruby_track, Style(right_to_left=True, entry_anim="spin_flip")
+    ) == ()
+    combo_track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("A", 0, role_label="role")], end_ms=500
+            )
+        ]
+    )
+    assert gpu_unsupported_features(
+        combo_track,
+        Style(
+            vertical=True,
+            right_to_left=True,
+            lit_enabled=True,
+            title_overlay=TitleOverlay(enabled=True, text_template="Title"),
+        ),
+    ) == ()
     span_track = TimingTrack(
         lines=[
             TimingLine(

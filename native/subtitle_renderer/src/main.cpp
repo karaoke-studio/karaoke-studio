@@ -6483,10 +6483,25 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         line.compositeOrder = sourceLine.sourceIndex == 0
             ? 0
             : sourceLine.sourceIndex + 1;
-        line.entryAnimation = sourceLine.entryAnimation.toStdString();
-        line.entryDurationMs = sourceLine.entryDurationMs;
-        line.exitAnimation = sourceLine.exitAnimation.toStdString();
-        line.exitDurationMs = sourceLine.exitDurationMs;
+        const auto verticalCharacterAnimation = [&](const QString &animation) {
+            return config.vertical && (
+                animation == QStringLiteral("char_fade")
+                || animation == QStringLiteral("spin_flip")
+                || animation == QStringLiteral("utopia")
+            );
+        };
+        line.entryAnimation = verticalCharacterAnimation(sourceLine.entryAnimation)
+            ? "none"
+            : sourceLine.entryAnimation.toStdString();
+        line.entryDurationMs = verticalCharacterAnimation(sourceLine.entryAnimation)
+            ? 0
+            : sourceLine.entryDurationMs;
+        line.exitAnimation = verticalCharacterAnimation(sourceLine.exitAnimation)
+            ? "none"
+            : sourceLine.exitAnimation.toStdString();
+        line.exitDurationMs = verticalCharacterAnimation(sourceLine.exitAnimation)
+            ? 0
+            : sourceLine.exitDurationMs;
         if (sourceLine.displayStartMs.has_value()
             && sourceLine.displayEndMs.has_value()) {
             line.displayWindows.push_back(krok::subtitle::native::DisplayWindow{
@@ -6497,7 +6512,10 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         line.chars.reserve(sourceLine.chars.size());
         for (std::size_t index = 0; index < sourceLine.chars.size(); ++index) {
             int styleIndex = -1;
-            if (!sourceLine.chars[index].roleLabel.isEmpty()) {
+            // Painter's vertical path currently uses the resolved line style
+            // for every glyph; inline role styles are a horizontal-only
+            // contract until the CPU oracle itself gains vertical runs.
+            if (!config.vertical && !sourceLine.chars[index].roleLabel.isEmpty()) {
                 QString key = resolvedStyleKey(
                     sourceLine.singerId, sourceLine.chars[index].roleLabel
                 );

@@ -2986,29 +2986,58 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             line->startMs, style, tMs, displayEndMs
         );
         const ShapeSignalGeometry shapeGeometry = shapeSignalGeometry(style);
-        float unionLeft = line->bounds.left;
-        float unionRight = line->bounds.right;
-        if (signalState.visible) {
+        const int signalActiveDuration = std::max(
+            style.signalsDurationMs - std::max(style.litWaitingTimeMs, 0), 0
+        );
+        const int signalEndMs = line->startMs + style.litTimeOffsetMs;
+        const bool signalLayoutActive = style.litEnabled
+            && !style.vertical
+            && signalActiveDuration > 0
+            && tMs >= signalEndMs - signalActiveDuration
+            && tMs <= displayEndMs;
+        float lyricLeft = line->bounds.left;
+        float lyricRight = line->bounds.right;
+        if (line->hasInlineStyles) {
+            // Painter anchors mixed-role lines by their layout box plus the
+            // largest role visual pad, not by the asymmetric glyph ink box.
+            lyricLeft = std::min(
+                lyricLeft, line->fillBounds.left - line->maxVisualPad
+            );
+            lyricRight = std::max(
+                lyricRight, line->fillBounds.right + line->maxVisualPad
+            );
+        }
+        float unionLeft = lyricLeft;
+        float unionRight = lyricRight;
+        if (signalLayoutActive && style.litStyle == "volume") {
             // Painter aligns the offset-free union of the text and signal
-            // module.  The volume offset moves only the bars afterwards.
+            // module throughout the guide window, including flash-off frames.
+            // The volume offset moves only the bars afterwards.
             unionLeft = std::min(unionLeft, -signalGeometry.groupWidth);
             unionRight = std::max(unionRight, 0.0f);
-        } else if (shapeState.visible) {
+        } else if (signalLayoutActive) {
             unionLeft = std::min(unionLeft, 0.0f);
             unionRight = std::max(unionRight, shapeGeometry.groupWidth);
         }
-        const float inkWidth = unionRight - unionLeft;
-        float dx = (static_cast<float>(scene.width) - inkWidth) * 0.5f - unionLeft;
-        dx += style.centerOffsetX;
-        if (style.alignment == "left") {
-            dx = style.horizontalMargin - unionLeft;
-        } else if (style.alignment == "right") {
-            dx = static_cast<float>(scene.width) - style.horizontalMargin - unionRight;
-        }
-        if (!style.vertical) {
-            dx += style.layoutOffsetX;
-        }
-        dx += animation.dx;
+        auto alignedDx = [&](float left, float right) {
+            const float inkWidth = right - left;
+            float value = (static_cast<float>(scene.width) - inkWidth) * 0.5f
+                - left + style.centerOffsetX;
+            if (style.alignment == "left") {
+                value = style.horizontalMargin - left;
+            } else if (style.alignment == "right") {
+                value = static_cast<float>(scene.width) - style.horizontalMargin - right;
+            }
+            if (!style.vertical) {
+                value += style.layoutOffsetX;
+            }
+            return value + animation.dx;
+        };
+        float dx = alignedDx(
+            line->hasInlineStyles ? lyricLeft : unionLeft,
+            line->hasInlineStyles ? lyricRight : unionRight
+        );
+        const float signalDx = alignedDx(unionLeft, unionRight);
         const float visualPad = line->hasInlineStyles
             ? line->maxVisualPad
             : std::ceil(
@@ -4505,7 +4534,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         if (signalState.visible
             && style.litOpacity > 0.0f
             && signalState.opacity > 0.0f) {
-            context->SetTransform(withViewport(D2D1::Matrix3x2F::Translation(dx, dy)));
+            context->SetTransform(withViewport(D2D1::Matrix3x2F::Translation(signalDx, dy)));
             auto signalBrush = [&](const RgbaColor &color) {
                 Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
                 checkHr(
@@ -4576,7 +4605,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         if (shapeState.visible
             && shapeState.activeIndex >= 0
             && style.litOpacity > 0.0f) {
-            context->SetTransform(withViewport(D2D1::Matrix3x2F::Translation(dx, dy)));
+            context->SetTransform(withViewport(D2D1::Matrix3x2F::Translation(signalDx, dy)));
             auto shapeBrush = [&](const RgbaColor &color, float opacity) {
                 Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
                 checkHr(
