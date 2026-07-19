@@ -62,6 +62,11 @@ def main() -> int:
     parser.add_argument("--resize-churn", type=int, default=0)
     parser.add_argument("--style-churn", type=int, default=0)
     parser.add_argument(
+        "--kill-sidecar",
+        action="store_true",
+        help="Kill the live sidecar once and verify Painter fallback plus GPU restart.",
+    )
+    parser.add_argument(
         "--inject-slow-frame-ms",
         type=int,
         default=0,
@@ -191,6 +196,66 @@ def main() -> int:
             renderer.request(latest_requested)
             _wait_until(app, lambda: len(rows) > before, 3.0)
 
+        kill_recovery: dict[str, float | int | bool] = {
+            "requested": bool(args.kill_sidecar),
+            "pid": 0,
+            "fallback_delivered": False,
+            "gpu_restarted": False,
+            "recovery_ms": 0.0,
+            "passed": not args.kill_sidecar,
+        }
+        if args.kill_sidecar:
+            import psutil
+
+            current_phase = "kill_recovery"
+            renderer.set_playing(False)
+            native = renderer._renderer  # noqa: SLF001 - deliberate fault injection
+            pid = native.process_id if native is not None else None
+            if pid is None:
+                raise RuntimeError("GPU sidecar was not running before kill injection")
+            sidecar_process = psutil.Process(pid)
+            sidecar_process.kill()
+            sidecar_process.wait(timeout=3.0)
+            failure_t = duration_ms + 30_000
+            latest_requested = failure_t
+            renderer.request(failure_t)
+            fallback_delivered = _wait_until(
+                app,
+                lambda: (
+                    failure_t in delivered_at
+                    and renderer.stats_snapshot()["renderer_failures"] >= 1
+                    and renderer.stats_snapshot()["fallback_frames"] >= 1
+                ),
+                3.0,
+            )
+            # The product worker uses a one-second bounded retry cooldown.
+            cooldown_deadline = time.monotonic() + 1.05
+            while time.monotonic() < cooldown_deadline:
+                app.processEvents()
+                time.sleep(0.005)
+            recovery_t = failure_t + 1_000
+            latest_requested = recovery_t
+            recovery_started = time.monotonic()
+            renderer.request(recovery_t)
+            gpu_restarted = _wait_until(
+                app,
+                lambda: (
+                    recovery_t in delivered_at
+                    and renderer.stats_snapshot()["renderer_restarts"] >= 1
+                    and renderer.stats_snapshot()["configure_count"] >= 2
+                ),
+                3.0,
+            )
+            recovery_ms = (time.monotonic() - recovery_started) * 1000.0
+            kill_recovery = {
+                "requested": True,
+                "pid": int(pid),
+                "fallback_delivered": fallback_delivered,
+                "gpu_restarted": gpu_restarted,
+                "recovery_ms": round(recovery_ms, 3),
+                "passed": bool(fallback_delivered and gpu_restarted),
+            }
+
         slow_recovery: dict[str, float | int | bool] = {
             "requested_delay_ms": slow_frame_ms,
             "delay_consumed": False,
@@ -267,6 +332,7 @@ def main() -> int:
         "playback_delivery_rate": delivered_by_phase.get("playback", 0) / frame_count,
         "stats": renderer.stats_snapshot(),
         "timings": renderer.timing_snapshot(),
+        "kill_recovery": kill_recovery,
         "slow_recovery": slow_recovery,
         "csv": str(args.output),
     }
@@ -278,7 +344,8 @@ def main() -> int:
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return (
         0
-        if summary["stats"]["renderer_failures"] == 0
+        if summary["stats"]["renderer_failures"] == (1 if args.kill_sidecar else 0)
+        and summary["kill_recovery"]["passed"]
         and summary["slow_recovery"]["passed"]
         else 1
     )

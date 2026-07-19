@@ -486,6 +486,30 @@ def test_preview_graphics_switches_gpu_backend_at_runtime(qapp, monkeypatch):
         qapp.processEvents()
 
 
+def test_preview_graphics_repeated_gpu_toggles_stop_worker_threads(qapp, monkeypatch):
+    import threading
+
+    from krok_helper.subtitle_render.frontend import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+
+    monkeypatch.setattr(pg, "async_preview_enabled", lambda: True)
+    monkeypatch.setattr(pg, "gpu_preview_enabled", lambda: False)
+    monkeypatch.setattr(pg, "native_preview_enabled", lambda: False)
+    graphics = PreviewGraphicsView()
+    try:
+        for _ in range(12):
+            graphics.set_gpu_preview_enabled(True)
+            graphics.set_gpu_preview_enabled(False)
+        assert not any(
+            thread.is_alive() and thread.name == "subtitle-preview-gpu-render"
+            for thread in threading.enumerate()
+        )
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
 def test_gpu_async_renderer_queue_is_capacity_one_latest_wins(qapp, monkeypatch):
     from krok_helper.subtitle_render.frontend import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack

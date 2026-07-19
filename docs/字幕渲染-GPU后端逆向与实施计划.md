@@ -495,7 +495,7 @@ LayerKey(fill/stroke/glow/state) -> reusable GPU bitmap/effect input
 - 1080p60 连续 10 秒无 frame protocol 错误；
 - render/readback 分项计时可导出 CSV。
 
-### G2：实验预览接线（1～2 周）
+### G2：实验预览接线（1～2 周，已完成）
 
 覆盖：
 
@@ -532,7 +532,7 @@ LayerKey(fill/stroke/glow/state) -> reusable GPU bitmap/effect input
   依据（§2.5：C5 离屏探针全绿但真实应用 2～3fps 的教训）；
 - 人为注入慢帧（如强制单帧 sleep 200ms）后，恢复时间有界，不进入 §2.5 式慢稳态。
 
-### G3：常用功能达到可用 MVP（2～4 周）
+### G3：常用功能达到可用 MVP（2～4 周，已完成）
 
 覆盖：
 
@@ -551,7 +551,7 @@ LayerKey(fill/stroke/glow/state) -> reusable GPU bitmap/effect input
 - cache hit/miss/bytes 和 GPU memory 稳态；
 - 4K60 common path 达到本文性能门槛。
 
-### G4：高级功能 parity（1～3 个月）
+### G4：高级功能 parity（1～3 个月，已完成）
 
 按风险顺序逐个迁移：
 
@@ -567,7 +567,7 @@ LayerKey(fill/stroke/glow/state) -> reusable GPU bitmap/effect input
 每项必须单独有 feature capability；未实现项让整个 frame/project 回退 CPU，禁止 GPU/CPU 在同一字幕层里
 悄悄混画造成顺序和 alpha 差异。
 
-### G5：GPU 导出实验（2～4 周）
+### G5：GPU 导出实验（2～4 周，已完成；默认关闭）
 
 - GPU 只渲染透明 subtitle strip/bands；
 - staging readback 后仍交现有 ffmpeg overlay/encoder；
@@ -746,7 +746,7 @@ GPU 与 CPU 不要求逐像素完全一致。报告至少包含：
 10. 运行 native smoke、相关 pytest 和 1000-frame 稳定性测试；
 11. 在本文 §11 更新日期、提交、测试结果、已知差异和下一刀。
 
-如果用户只说“继续 GPU 工作”但没有指定阶段，默认从尚未完成的最早阶段开始；当前是 **G2**。
+如果用户只说“继续 GPU 工作”但没有指定阶段，先复核最新性能数据；G0～G5 已完成，G6 共享纹理/原生预览仍是独立可选项目，当前因重场景和 4K/120fps 门槛未达标而保持默认关闭。
 
 ---
 
@@ -1527,3 +1527,13 @@ G4 功能迁移至此收口。下一阶段进入 G5 产品集成：审计预览/
 - 本机完整 `scripts/build_windows.bat` 通过：包内容、multiprocessing spawn、成包 Direct2D/WARP smoke、全量 zip 与增量 app/runtime 资产均成功。另以 320×180、60fps、15 帧纯色背景实测 GPU→共享内存→ffmpeg/libx264，生成有效 MP4；GPU 独立回归 `110 passed`，transport `72 passed`，native protocol `34 passed, 27 skipped`，native export/renderer `54 passed`，loaders `39 passed`。
 
 G5 产品接入与 Windows 分发链路至此具备可验收形态，开关仍默认关闭，Painter 永久作为 oracle/fallback。下一阶段进入 G6：长时预览/导出、设备丢失、sidecar kill/restart、取消与重复切换、显存/RSS 增长和 60/120fps 性能门槛。
+
+### 2026-07-19（第四十批）：稳定性/故障门禁与 G6 决策
+
+- 修正独立 GPU benchmark 在构建 Painter 对齐字体度量前未创建 `QApplication` 的问题；命令行基准现在能在没有 pytest/主窗口的环境中稳定运行。预览调度基准新增 `--kill-sidecar`，会杀掉真实运行中的 sidecar，验证 Painter 当前帧回退、一秒冷却和重新 configure 后的 GPU 恢复。
+- 30 秒 1080p60 实时预览压力测试覆盖 1800 帧播放、500 次突发 seek、20 次 resize、20 次 style churn 和一次 200ms 慢帧：播放交付 `1800/1800`，`max_pending=1`，无 renderer failure/fallback；慢帧释放后 `118.861ms` 交付最新帧。render/readback/roundtrip p95 为 `5.42/6.45/13.46ms`，GPU 路径保持最新优先且没有进入慢稳态。
+- 真实 kill sidecar 后，预览先交付 Painter fallback 帧，再在下一次重试中重建进程/device/cache；`renderer_failures/restarts/fallback_frames=1/1/1`，GPU 恢复请求耗时 `162.731ms`。连续 12 次 GPU↔Painter 切换后没有遗留 `subtitle-preview-gpu-render` 线程。真实 WARP 导出在第 10 帧取消，抛出 `ExportCancelled` 且半成品已删除。
+- 性能审计明确了当前边界。常用 1080p ruby+glow+packed bands 为 `110.46fps`，render/readback/roundtrip p95 `3.36/4.57/11.21ms`；4K60 同场景为 `55.59fps`，其中 GPU render p95 仅 `3.73ms`，但 readback/roundtrip p95 达 `7.89/20.84ms`。重组合（ruby+glow+Utopia+signal+双行+viewport）1080p 仅 `35.25fps`，render/readback/roundtrip p95 `16.65/4.59/31.15ms`。三场景显存增长均为 0，sidecar RSS 仅有约 0.8～1.6MB 波动。
+- 结论：G0～G5 的功能、产品回退和分发链路已完成，但 1080p120、4K60 和重组合尚未达到默认启用门槛。瓶颈已主要落在 staging readback、IPC 和 QImage，而非 Direct2D 字形绘制；因此不再继续以迁移更多绘制功能掩盖瓶颈。GPU 保持实验/默认关闭，Painter 永久保留。若继续追求这些档位，应单独启动 G6 的 D3D 共享纹理/原生 HWND 预览设计与真实视频时钟验收，不能在本批中冒险塞入产品路径。
+
+稳定性自动回归目前为 transport `73 passed`；G6 共享纹理属于新的高风险架构项目，不因 G0～G5 完成而自动授权或默认开启。

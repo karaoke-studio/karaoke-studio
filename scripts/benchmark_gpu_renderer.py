@@ -171,8 +171,10 @@ def run_benchmark(
     per_row: bool = False,
 ) -> tuple[dict, list[dict]]:
     import psutil
+    from PyQt6.QtWidgets import QApplication
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance() or QApplication([])
     frames = max(1, int(round(seconds * fps)))
     duration_ms = max(1, int(round(seconds * 1000.0)))
     track, style = _scene(
@@ -262,6 +264,7 @@ def run_benchmark(
         end_diagnostics = renderer.gpu_diagnostics(force_warp=force_warp)
         end_rss_bytes = sidecar_process.memory_info().rss
         elapsed = time.perf_counter() - start
+    app.processEvents()
 
     render_times = [row["render_ms"] for row in rows]
     readback_times = [row["readback_ms"] for row in rows]
