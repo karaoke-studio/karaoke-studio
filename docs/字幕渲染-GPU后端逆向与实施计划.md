@@ -1391,3 +1391,32 @@ Utopia 横排主路径至此收口。G4 下一项进入 Sayatoo signal；产品 
 - `vertical_glow` capability fallback 已移除。自动门槛覆盖直立字、旋转长音符、两档颜色、双描边、中档 glow 与 5 个纵向走字时刻：四边界相对 Painter 最大偏差 `12px`，相对完整帧的 alpha 轨迹偏差不超过 `0.09`。GPU/transport `134 passed`，native protocol/export/benchmark `63 passed, 27 skipped`；竖排 ruby 仍明确回退。
 
 下一批进入竖排 ruby 的右侧列布局、reading-unit 时间轴和纵向 after wipe。
+
+### 2026-07-19（第三十一批）：G4 竖排 ruby
+
+- Direct2D 在 configure 阶段把 ruby reading unit 转成正文右侧的纵排字格：目标范围沿用正文
+  首尾字符格，reading unit 在目标纵向跨度内等分；直立/旋转集合、句读点和小假名偏移继续复用
+  正文的 UTR#50 简化规则。ruby 字格宽取全角 advance，右侧预留宽度则严格按
+  `QFontMetrics.height() + ruby_gap_px` 对齐；native 从 DirectWrite face 的 ascent + descent
+  计算并取整，因此 Meiryo 28px 会得到 Painter 相同的 42px，而不是误用 28px 字号。
+- reading unit 时间轴完整保留空 part。空 part 不创建 geometry，但仍占自己的纵向字格与 wipe
+  时间段，后续 unit 不会提前填入空槽；before/after fill、stroke/stroke2 与 shadow 都按自上而下
+  的 ruby scan edge 裁切，shadow after clip 抵消 Y 偏移。
+- ruby glow 继续使用独立的 before/after 半径、浓度与多 pass source，只把 source clip 切换为
+  纵向；模糊在裁切后的源上执行。`vertical_ruby` capability fallback 已移除，竖排动画、标题和
+  行内角色样式仍保持明确整场 Painter fallback。
+- 自动门槛覆盖双字目标、三 reading unit（含中间空 part）与 6 个时刻：四边界相对 Painter
+  最大偏差 `10px`，归一化 after 色轨迹偏差不超过 `0.05`，空 part 两端走字像素严格不变。
+  shadow 边界偏差不超过 `2px`、alpha 轨迹偏差不超过 `0.02`；glow 边界偏差不超过 `8px`、
+  alpha 轨迹偏差不超过 `0.03`。
+- benchmark 的 `--vertical --ruby` 场景已改为真正匹配竖排正文的 ruby，不再空测。RTX 3070 Ti、
+  1920×1080、60fps、中档正文/ruby glow、packed bands、600 帧：render p95 `3.42ms`，
+  readback/roundtrip p95 `8.89/21.46ms`，同步吞吐 `56.26fps`，local 显存增长 0。平均 band
+  覆盖率 `85.46%`，同步端到端长尾来自全高竖列的 readback/QImage copy，进一步收益留给 G6
+  共享纹理；GPU 绘制核心仍明显低于 60fps 帧预算。
+- hardware benchmark 与 WARP Painter 门槛均通过；GPU/transport 独立回归 `137 passed`，native
+  protocol/export/benchmark 独立回归 `63 passed, 27 skipped`。
+
+竖排正文、glow 与 ruby 基础组合至此收口。G4 下一刀继续处理 RTL、viewport transform、
+`per_row`、竖排标题/行内角色和竖排行动画；产品 GPU 开关继续默认关闭，Painter 永久保留为
+oracle 与 fallback。

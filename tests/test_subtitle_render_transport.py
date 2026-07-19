@@ -575,7 +575,7 @@ def test_gpu_async_renderer_capability_fallback_skips_sidecar(qapp, monkeypatch)
                     )
                 ],
             ),
-            Style(vertical=True),
+            Style(vertical=True, entry_anim="fade"),
         )
         renderer.request(1_000)
         deadline = time.monotonic() + 2.0

@@ -1934,6 +1934,202 @@ def test_gpu_g4_shape_signal_geometry_and_extinguish_transition_follow_painter(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g4_vertical_ruby_geometry_and_empty_timing_slot_follow_painter(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("\u6f22", 0), TimingChar("\u5b57", 1_000)],
+                end_ms=2_000,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="\u6f22\u5b57",
+                reading="\u304b\u3093\u3058",
+                reading_parts=["\u304b", "", "\u3093\u3058"],
+                reading_part_ms=[650, 1_300],
+                pos_start_ms=0,
+                pos_end_ms=2_000,
+            )
+        ],
+    )
+    transparent = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#00000000"),
+        stroke=PaintFill(mode="solid", color="#00000000"),
+        shadow=PaintFill(mode="solid", color="#00000000"),
+    )
+    ruby_before = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFF2020")
+    )
+    ruby_after = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FF2040FF")
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=64,
+        vertical=True,
+        dual_line_layout=False,
+        line_y_position="center",
+        line_y_margin_px=22,
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        karaoke_colors=KaraokeColors(before=transparent, after=transparent),
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        ruby_font_family="Meiryo",
+        ruby_font_family_latin="Meiryo",
+        ruby_font_follow_main=False,
+        ruby_font_size_px=28,
+        ruby_gap_px=4,
+        ruby_stroke_width_px=0,
+        ruby_stroke2_enabled=False,
+        ruby_decoration_kind="none",
+        ruby_karaoke_colors=KaraokeColors(before=ruby_before, after=ruby_after),
+    )
+    timestamps = (0, 300, 800, 1_200, 1_600, 2_000)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+
+    def blue_pixels(payload: bytes) -> int:
+        return sum(
+            payload[index + 2] > payload[index] + 40
+            and payload[index + 2] > payload[index + 1] + 20
+            and payload[index + 3] > 16
+            for index in range(0, len(payload), 4)
+        )
+
+    for gpu_frame, painter_frame in zip(gpu, painter):
+        assert all(
+            abs(actual - expected) <= 10
+            for actual, expected in zip(
+                _payload_alpha_bounds(gpu_frame),
+                _payload_alpha_bounds(painter_frame),
+            )
+        )
+    gpu_full = blue_pixels(gpu[-1])
+    painter_full = blue_pixels(painter[-1])
+    assert gpu_full > 0 and painter_full > 0
+    for gpu_frame, painter_frame in zip(gpu, painter):
+        assert abs(
+            blue_pixels(gpu_frame) / gpu_full
+            - blue_pixels(painter_frame) / painter_full
+        ) <= 0.05
+    # The empty middle reading part still owns its interval, so neither oracle
+    # advances the visible wipe between these two samples.
+    assert blue_pixels(gpu[2]) == blue_pixels(gpu[3])
+    assert blue_pixels(painter[2]) == blue_pixels(painter[3])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize(
+    ("decoration_kind", "bounds_tolerance", "trajectory_tolerance"),
+    [("shadow", 2, 0.02), ("glow", 8, 0.03)],
+)
+def test_gpu_g4_vertical_ruby_shadow_and_glow_follow_painter(
+    monkeypatch,
+    decoration_kind: str,
+    bounds_tolerance: int,
+    trajectory_tolerance: float,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("\u6f22", 0), TimingChar("\u5b57", 1_000)],
+                end_ms=2_000,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="\u6f22\u5b57",
+                reading="\u304b\u3093\u3058",
+                reading_parts=["\u304b\u3093", "\u3058"],
+                reading_part_ms=[1_000],
+                pos_start_ms=0,
+                pos_end_ms=2_000,
+            )
+        ],
+    )
+    transparent = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#00000000"),
+        stroke=PaintFill(mode="solid", color="#00000000"),
+        shadow=PaintFill(mode="solid", color="#00000000"),
+    )
+    ruby_state = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFFFFFF"),
+        stroke=PaintFill(mode="solid", color="#101010"),
+        shadow=PaintFill(mode="solid", color="#20FF40"),
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=64,
+        vertical=True,
+        dual_line_layout=False,
+        line_y_position="center",
+        line_y_margin_px=22,
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        karaoke_colors=KaraokeColors(before=transparent, after=transparent),
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        ruby_font_family="Meiryo",
+        ruby_font_family_latin="Meiryo",
+        ruby_font_follow_main=False,
+        ruby_font_size_px=28,
+        ruby_gap_px=4,
+        ruby_stroke_width_px=2,
+        ruby_stroke2_enabled=True,
+        ruby_stroke2_width_px=1,
+        ruby_decoration_kind=decoration_kind,
+        ruby_shadow_offset_x=7,
+        ruby_shadow_offset_y=9,
+        ruby_glow_before_radius_px=8,
+        ruby_glow_after_radius_px=8,
+        ruby_glow_concentration_level=1,
+        ruby_karaoke_colors=KaraokeColors(before=ruby_state, after=ruby_state),
+    )
+    timestamps = (0, 500, 1_500, 2_000)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+
+    for gpu_frame, painter_frame in zip(gpu, painter):
+        assert all(
+            abs(actual - expected) <= bounds_tolerance
+            for actual, expected in zip(
+                _payload_alpha_bounds(gpu_frame),
+                _payload_alpha_bounds(painter_frame),
+            )
+        )
+    gpu_full = sum(gpu[-1][3::4])
+    painter_full = sum(painter[-1][3::4])
+    assert gpu_full > 0 and painter_full > 0
+    for gpu_frame, painter_frame in zip(gpu, painter):
+        assert abs(
+            sum(gpu_frame[3::4]) / gpu_full
+            - sum(painter_frame[3::4]) / painter_full
+        ) <= trajectory_tolerance
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize("line_y_position", ["top", "center", "bottom"])
 def test_gpu_g4_vertical_main_glyph_orientation_wipe_and_shadow_follow_painter(
     monkeypatch, line_y_position: str

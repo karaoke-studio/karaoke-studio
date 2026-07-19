@@ -44,15 +44,24 @@ def _scene(
     signal_style: str = "volume",
     vertical: bool = False,
 ) -> tuple[TimingTrack, Style]:
-    text = "GPU縦書き" if vertical else "Karaoke Studio GPU"
+    text = "縦書きGPU" if vertical else "Karaoke Studio GPU"
     chars = [
         TimingChar(char, index * duration_ms // len(text))
         for index, char in enumerate(text)
     ]
     track = TimingTrack(lines=[TimingLine(chars=chars, end_ms=duration_ms)])
     if ruby:
-        track.rubies = [
-            RubyAnnotation(
+        if vertical:
+            ruby_annotation = RubyAnnotation(
+                kanji=text[:2],
+                reading="たてがき",
+                reading_parts=["たて", "がき"],
+                reading_part_ms=[duration_ms // len(text)],
+                pos_start_ms=0,
+                pos_end_ms=duration_ms * 2 // len(text),
+            )
+        else:
+            ruby_annotation = RubyAnnotation(
                 kanji="Karaoke",
                 reading="カラオケ",
                 reading_parts=["カ", "ラ", "オ", "ケ"],
@@ -64,7 +73,7 @@ def _scene(
                 pos_start_ms=0,
                 pos_end_ms=duration_ms * 7 // len(text),
             )
-        ]
+        track.rubies = [ruby_annotation]
     style = Style(
         font_family="Meiryo",
         font_family_latin="Segoe UI",

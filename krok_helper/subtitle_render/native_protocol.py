@@ -33,8 +33,6 @@ def gpu_unsupported_features(
     reasons: list[str] = []
     sources = [track, *(extra_tracks or ())]
     if style.vertical:
-        if any(source.rubies for source in sources):
-            reasons.append("vertical_ruby")
         if style.title_overlay is not None and style.title_overlay.enabled:
             reasons.append("vertical_title")
         if style.entry_anim != "none" or style.exit_anim != "none":
