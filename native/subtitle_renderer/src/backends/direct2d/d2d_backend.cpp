@@ -3452,6 +3452,14 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     : ch.left + (ch.right - ch.left) * ratio);
             break;
         }
+        // Painter releases the wipe once every timing segment is complete.
+        // Keeping the final clip would leave before-colour pixels in outer
+        // antialiasing, stroke2, shadow and glow extents.
+        const bool mainWipeComplete = !line->chars.empty()
+            && std::all_of(
+                line->chars.begin(), line->chars.end(),
+                [&](const Impl::CachedChar &ch) { return tMs >= ch.endMs; }
+            );
 
         auto utopiaCharWipe = [&](std::size_t charIndex) {
             D2D1_RECT_F bounds{};
@@ -3584,6 +3592,13 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             }
             return edge;
         };
+        auto rubyWipeComplete = [&](const Impl::CachedRuby &ruby) {
+            return !ruby.chars.empty()
+                && std::all_of(
+                    ruby.chars.begin(), ruby.chars.end(),
+                    [&](const Impl::CachedChar &ch) { return tMs >= ch.endMs; }
+                );
+        };
         auto rubyPhaseVisible = [&](const Impl::CachedRuby &ruby,
                                     float edge, bool after) {
             if (style.vertical) {
@@ -3635,15 +3650,23 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
             context->BeginDraw();
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
-            for (const auto &geometry : line->geometries) {
-                context->DrawGeometry(geometry.Get(), beforeDecor.Get(), sourceWidth);
+            if (!mainWipeComplete) {
+                for (const auto &geometry : line->geometries) {
+                    context->DrawGeometry(geometry.Get(), beforeDecor.Get(), sourceWidth);
+                }
             }
             if (hasAfterWipe) {
-                context->PushAxisAlignedClip(afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                if (!mainWipeComplete) {
+                    context->PushAxisAlignedClip(
+                        afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                    );
+                }
                 for (const auto &geometry : line->geometries) {
                     context->DrawGeometry(geometry.Get(), afterDecor.Get(), sourceWidth);
                 }
-                context->PopAxisAlignedClip();
+                if (!mainWipeComplete) {
+                    context->PopAxisAlignedClip();
+                }
             }
             checkHr(context->EndDraw(), "ID2D1DeviceContext::EndDraw(glow source)", device_);
             blur->SetInput(0, glowSource.Get());
@@ -3758,6 +3781,10 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 );
                 brush->SetOpacity(globalOpacity);
                 const float edge = rubyWipeEdgeAt(ruby);
+                const bool complete = rubyWipeComplete(ruby);
+                if (complete && !after) {
+                    continue;
+                }
                 if (!rubyPhaseVisible(ruby, edge, after)) {
                     continue;
                 }
@@ -3790,7 +3817,11 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                                 edge, ruby.bounds.top - pad,
                                 ruby.bounds.right + pad, ruby.bounds.bottom + pad
                             )));
-                context->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                if (!complete) {
+                    context->PushAxisAlignedClip(
+                        clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                    );
+                }
                 for (std::size_t geometryIndex = 0;
                      geometryIndex < ruby.geometries.size(); ++geometryIndex) {
                     const auto &geometry = ruby.geometries[geometryIndex];
@@ -3807,7 +3838,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         );
                     }
                 }
-                context->PopAxisAlignedClip();
+                if (!complete) {
+                    context->PopAxisAlignedClip();
+                }
             }
             checkHr(
                 context->EndDraw(),
@@ -3969,9 +4002,15 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                             wipeEdge, line->bounds.top - pad,
                             ch.right + pad, line->bounds.bottom + pad
                         ));
-                context->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                if (!mainWipeComplete) {
+                    context->PushAxisAlignedClip(
+                        clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                    );
+                }
                 context->DrawGeometry(ch.geometry.Get(), brush.Get(), sourceWidth);
-                context->PopAxisAlignedClip();
+                if (!mainWipeComplete) {
+                    context->PopAxisAlignedClip();
+                }
             }
             checkHr(
                 context->EndDraw(),
@@ -4120,7 +4159,8 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                             dy + shadowY
                         )
                     ));
-                    if (after) {
+                    bool pushedAfterClip = false;
+                    if (after && !mainWipeComplete) {
                         if (hasUtopiaTransition) {
                             const auto [animatedBounds, animatedEdge]
                                 = utopiaCharWipe(charIndex);
@@ -4140,6 +4180,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                                 ),
                                 D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                             );
+                            pushedAfterClip = true;
                         } else {
                             context->PushAxisAlignedClip(
                                 style.vertical
@@ -4157,6 +4198,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                                     ),
                                 D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                             );
+                            pushedAfterClip = true;
                         }
                     }
                     ID2D1Geometry *animatedOuter = charStyle.stroke2Width > 0.0f
@@ -4166,7 +4208,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         geometry, animatedOuter, brush.Get(),
                         charStyle.strokeWidth, charStyle.stroke2Width
                     );
-                    if (after) {
+                    if (pushedAfterClip) {
                         context->PopAxisAlignedClip();
                     }
                 }
@@ -4184,7 +4226,8 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         dy + style.shadowOffsetY
                     )
                 ));
-                if (after) {
+                const bool pushedAfterClip = after && !mainWipeComplete;
+                if (pushedAfterClip) {
                     context->PushAxisAlignedClip(
                         style.vertical
                             ? D2D1::RectF(
@@ -4208,7 +4251,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         style.strokeWidth, style.stroke2Width
                     );
                 }
-                if (after) {
+                if (pushedAfterClip) {
                     context->PopAxisAlignedClip();
                 }
             }
@@ -4226,6 +4269,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 continue;
             }
             const float edge = rubyWipeEdgeAt(ruby);
+            const bool complete = rubyWipeComplete(ruby);
             auto drawRubyShadowPhase = [&](bool after) {
                 Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrushAt(
                     after
@@ -4236,7 +4280,10 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     rubyStyle.rubyShadowOffsetX,
                     rubyStyle.rubyShadowOffsetY
                 );
-                if (after && !hasUtopiaTransition) {
+                const bool pushedStaticClip = after
+                    && !hasUtopiaTransition
+                    && !complete;
+                if (pushedStaticClip) {
                     const float pad = std::max(
                         rubyStyle.rubyStrokeWidth + rubyStyle.rubyStroke2Width,
                         2.0f
@@ -4301,7 +4348,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         )
                     ));
                     bool pushedUtopiaClip = false;
-                    if (after && hasUtopiaTransition) {
+                    if (after && hasUtopiaTransition && !complete) {
                         const auto [animatedBounds, animatedEdge] =
                             utopiaRubyUnitWipe(
                                 ruby, rubyIndex, geometryIndex, rubyStyle
@@ -4337,7 +4384,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         context->PopAxisAlignedClip();
                     }
                 }
-                if (after && !hasUtopiaTransition) {
+                if (pushedStaticClip) {
                     context->PopAxisAlignedClip();
                 }
             };
@@ -4418,7 +4465,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 strokeBrush->SetOpacity(charOpacity);
                 stroke2Brush->SetOpacity(charOpacity);
                 bool pushedUtopiaClip = false;
-                if (after && hasUtopiaTransition) {
+                if (after && hasUtopiaTransition && !mainWipeComplete) {
                     const auto [animatedBounds, animatedEdge] = utopiaCharWipe(charIndex);
                     if (animatedEdge <= animatedBounds.left) {
                         continue;
@@ -4479,22 +4526,28 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         if (line->hasInlineStyles || hasCharacterTransition) {
             drawInlineStack(false);
             if (hasAfterWipe) {
-                if (!hasUtopiaTransition) {
+                if (!hasUtopiaTransition && !mainWipeComplete) {
                     context->PushAxisAlignedClip(
                         afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
                 }
                 drawInlineStack(true);
-                if (!hasUtopiaTransition) {
+                if (!hasUtopiaTransition && !mainWipeComplete) {
                     context->PopAxisAlignedClip();
                 }
             }
         } else {
             drawStack(false, beforeFill.Get(), beforeStroke.Get(), beforeStroke2.Get());
             if (hasAfterWipe) {
-                context->PushAxisAlignedClip(afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                if (!mainWipeComplete) {
+                    context->PushAxisAlignedClip(
+                        afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                    );
+                }
                 drawStack(true, afterFill.Get(), afterStroke.Get(), afterStroke2.Get());
-                context->PopAxisAlignedClip();
+                if (!mainWipeComplete) {
+                    context->PopAxisAlignedClip();
+                }
             }
         }
         auto drawRubyStack = [&](std::size_t rubyIndex, const Impl::CachedRuby &ruby, bool after) {
@@ -4527,7 +4580,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 stroke->SetOpacity(rubyOpacity);
                 stroke2->SetOpacity(rubyOpacity);
                 bool pushedUtopiaClip = false;
-                if (after && hasUtopiaTransition) {
+                if (after
+                    && hasUtopiaTransition
+                    && !rubyWipeComplete(ruby)) {
                     const auto [animatedBounds, animatedEdge] = utopiaRubyUnitWipe(
                         ruby, rubyIndex, index, rubyStyle
                     );
@@ -4597,6 +4652,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
             const TextStyle &rubyStyle = rubyStyleFor(ruby.styleIndex);
             const float rubyWipeEdge = rubyWipeEdgeAt(ruby);
+            const bool rubyComplete = rubyWipeComplete(ruby);
             const float rubyPad = std::max(
                 rubyStyle.rubyStrokeWidth + rubyStyle.rubyStroke2Width, 2.0f
             ) + 4.0f;
@@ -4622,13 +4678,13 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     ));
             drawRubyStack(rubyIndex, ruby, false);
             if (rubyPhaseVisible(ruby, rubyWipeEdge, true)) {
-                if (!hasUtopiaTransition) {
+                if (!hasUtopiaTransition && !rubyComplete) {
                     context->PushAxisAlignedClip(
                         rubyAfterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
                 }
                 drawRubyStack(rubyIndex, ruby, true);
-                if (!hasUtopiaTransition) {
+                if (!hasUtopiaTransition && !rubyComplete) {
                     context->PopAxisAlignedClip();
                 }
             }

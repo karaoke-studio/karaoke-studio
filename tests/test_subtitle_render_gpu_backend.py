@@ -609,6 +609,173 @@ def test_gpu_g1_directwrite_wipe_progresses_monotonically(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("decoration_kind", ["none", "shadow", "glow"])
+def test_gpu_completed_main_wipe_releases_outer_layers(
+    monkeypatch, decoration_kind: str
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    before = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFF2020"),
+        stroke=PaintFill(mode="solid", color="#FFFF2020"),
+        stroke2=PaintFill(mode="solid", color="#FFFF2020"),
+        shadow=PaintFill(mode="solid", color="#FFFF2020"),
+    )
+    after = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FF2040FF"),
+        stroke=PaintFill(mode="solid", color="#FF2040FF"),
+        stroke2=PaintFill(mode="solid", color="#FF2040FF"),
+        shadow=PaintFill(mode="solid", color="#FF2040FF"),
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("\u5186", 0)],
+                end_ms=1_000,
+                display_end_override_ms=2_000,
+            )
+        ]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=120,
+        stroke_width_px=7,
+        stroke2_enabled=True,
+        stroke2_width_px=7,
+        decoration_kind=decoration_kind,
+        shadow_offset_x=8,
+        shadow_offset_y=7,
+        glow_before_radius_px=8,
+        glow_after_radius_px=8,
+        karaoke_colors=KaraokeColors(before=before, after=after),
+        line_tail_ms=1_000,
+    )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer,
+            style,
+            (1_200,),
+            force_warp=True,
+            track=track,
+        )
+
+    payload = frames[0]
+    before_pixels = sum(
+        payload[index] > payload[index + 2] + 40
+        and payload[index] > payload[index + 1] + 40
+        and payload[index + 3] > 16
+        for index in range(0, len(payload), 4)
+    )
+    after_pixels = sum(
+        payload[index + 2] > payload[index] + 40
+        and payload[index + 2] > payload[index + 1] + 20
+        and payload[index + 3] > 16
+        for index in range(0, len(payload), 4)
+    )
+    assert after_pixels > 0
+    assert before_pixels == 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("decoration_kind", ["none", "shadow", "glow"])
+def test_gpu_completed_ruby_wipe_releases_outer_layers(
+    monkeypatch, decoration_kind: str
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    transparent = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#00000000"),
+        stroke=PaintFill(mode="solid", color="#00000000"),
+        stroke2=PaintFill(mode="solid", color="#00000000"),
+        shadow=PaintFill(mode="solid", color="#00000000"),
+    )
+    before = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFF2020"),
+        stroke=PaintFill(mode="solid", color="#FFFF2020"),
+        stroke2=PaintFill(mode="solid", color="#FFFF2020"),
+        shadow=PaintFill(mode="solid", color="#FFFF2020"),
+    )
+    after = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FF2040FF"),
+        stroke=PaintFill(mode="solid", color="#FF2040FF"),
+        stroke2=PaintFill(mode="solid", color="#FF2040FF"),
+        shadow=PaintFill(mode="solid", color="#FF2040FF"),
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("\u6f22", 0), TimingChar("\u5b57", 1_000)],
+                end_ms=2_000,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="\u6f22\u5b57",
+                reading="\u304d\u3083\u304b\u3099",
+                reading_parts=["\u304d\u3083", "", "\u304b\u3099"],
+                reading_part_ms=[650, 1_300],
+                pos_start_ms=0,
+                pos_end_ms=2_000,
+            )
+        ],
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=64,
+        dual_line_layout=False,
+        line_y_position="center",
+        line_horizontal_layout="center",
+        line_y_margin_px=22,
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        karaoke_colors=KaraokeColors(before=transparent, after=transparent),
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        ruby_font_family="Meiryo",
+        ruby_font_family_latin="Meiryo",
+        ruby_font_follow_main=False,
+        ruby_font_size_px=28,
+        ruby_gap_px=4,
+        ruby_stroke_width_px=5,
+        ruby_stroke2_enabled=True,
+        ruby_stroke2_width_px=5,
+        ruby_decoration_kind=decoration_kind,
+        ruby_shadow_offset_x=6,
+        ruby_shadow_offset_y=5,
+        ruby_glow_before_radius_px=6,
+        ruby_glow_after_radius_px=6,
+        ruby_karaoke_colors=KaraokeColors(before=before, after=after),
+    )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer,
+            style,
+            (2_000,),
+            force_warp=True,
+            track=track,
+        )
+
+    payload = frames[0]
+    before_pixels = sum(
+        payload[index] > payload[index + 2] + 40
+        and payload[index] > payload[index + 1] + 40
+        and payload[index + 3] > 16
+        for index in range(0, len(payload), 4)
+    )
+    after_pixels = sum(
+        payload[index + 2] > payload[index] + 40
+        and payload[index + 2] > payload[index + 1] + 20
+        and payload[index + 3] > 16
+        for index in range(0, len(payload), 4)
+    )
+    assert after_pixels > 0
+    assert before_pixels == 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g1_layers_outer_stroke_stroke_and_body(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
