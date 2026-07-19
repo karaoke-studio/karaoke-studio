@@ -159,6 +159,8 @@ struct TextStyle {
     bool rightToLeft = false;
     float centerOffsetX = 0.0f;
     float centerOffsetY = 0.0f;
+    float layoutOffsetX = 0.0f;
+    float layoutOffsetY = 0.0f;
     int leadInMs = 1800;
     int tailMs = 1000;
     RgbaColor beforeFill;

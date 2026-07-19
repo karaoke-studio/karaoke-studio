@@ -64,6 +64,29 @@ struct TimingChar {
     QString roleLabel;
 };
 
+struct ResolvedLineLayout {
+    bool present = false;
+    QString lineYPosition = QStringLiteral("bottom");
+    int lineYMarginPx = 80;
+    int lineGapPx = 90;
+    QString smartHorizontal = QStringLiteral("equal_margins");
+    int horizontalMarginPx = 50;
+    std::vector<QString> lineAlignments{QStringLiteral("left"), QStringLiteral("right")};
+    bool dualLineLayout = true;
+    QString lineHorizontalLayout = QStringLiteral("asymmetric");
+    QString row1Align = QStringLiteral("left");
+    int row1OffsetX = 50;
+    int row1OffsetY = 0;
+    QString row2Align = QStringLiteral("right");
+    int row2OffsetX = -50;
+    int row2OffsetY = 0;
+    int letterSpacingPx = 0;
+    bool allowBiting = false;
+    int rubyIntervalPx = 0;
+    QString rubyAlignment = QStringLiteral("auto");
+    int rubyGapPx = 0;
+};
+
 struct TimingLine {
     std::vector<TimingChar> chars;
     int endMs = 0;
@@ -80,6 +103,7 @@ struct TimingLine {
     int entryDurationMs = 0;
     QString exitAnimation = QStringLiteral("none");
     int exitDurationMs = 0;
+    ResolvedLineLayout layout;
 };
 
 struct RubyAnnotation {
@@ -1907,6 +1931,99 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
             line.exitDurationMs = std::max(
                 0, intValue(lineObject, QStringLiteral("exit_duration_ms"), 0)
             );
+            const QJsonObject layoutObject = lineObject.value(
+                QStringLiteral("layout")
+            ).toObject();
+            if (!layoutObject.isEmpty()) {
+                line.layout.present = true;
+                line.layout.lineYPosition = stringValue(
+                    layoutObject, QStringLiteral("line_y_position"),
+                    line.layout.lineYPosition
+                );
+                line.layout.lineYMarginPx = std::max(
+                    0, intValue(
+                        layoutObject, QStringLiteral("line_y_margin_px"),
+                        line.layout.lineYMarginPx
+                    )
+                );
+                line.layout.lineGapPx = intValue(
+                    layoutObject, QStringLiteral("line_gap_px"),
+                    line.layout.lineGapPx
+                );
+                line.layout.smartHorizontal = stringValue(
+                    layoutObject, QStringLiteral("smart_horizontal"),
+                    line.layout.smartHorizontal
+                );
+                line.layout.horizontalMarginPx = std::max(
+                    0, intValue(
+                        layoutObject, QStringLiteral("horizontal_margin_px"),
+                        line.layout.horizontalMarginPx
+                    )
+                );
+                const QJsonArray layoutAlignments = layoutObject.value(
+                    QStringLiteral("line_alignments")
+                ).toArray();
+                if (!layoutAlignments.isEmpty()) {
+                    line.layout.lineAlignments.clear();
+                    for (const QJsonValue &alignment : layoutAlignments) {
+                        if (alignment.isString()) {
+                            line.layout.lineAlignments.push_back(alignment.toString());
+                        }
+                    }
+                }
+                line.layout.dualLineLayout = layoutObject.value(
+                    QStringLiteral("dual_line_layout")
+                ).toBool(line.layout.dualLineLayout);
+                line.layout.lineHorizontalLayout = stringValue(
+                    layoutObject, QStringLiteral("line_horizontal_layout"),
+                    line.layout.lineHorizontalLayout
+                );
+                line.layout.row1Align = stringValue(
+                    layoutObject, QStringLiteral("row1_align"),
+                    line.layout.row1Align
+                );
+                line.layout.row1OffsetX = intValue(
+                    layoutObject, QStringLiteral("row1_offset_x"),
+                    line.layout.row1OffsetX
+                );
+                line.layout.row1OffsetY = intValue(
+                    layoutObject, QStringLiteral("row1_offset_y"),
+                    line.layout.row1OffsetY
+                );
+                line.layout.row2Align = stringValue(
+                    layoutObject, QStringLiteral("row2_align"),
+                    line.layout.row2Align
+                );
+                line.layout.row2OffsetX = intValue(
+                    layoutObject, QStringLiteral("row2_offset_x"),
+                    line.layout.row2OffsetX
+                );
+                line.layout.row2OffsetY = intValue(
+                    layoutObject, QStringLiteral("row2_offset_y"),
+                    line.layout.row2OffsetY
+                );
+                line.layout.letterSpacingPx = intValue(
+                    layoutObject, QStringLiteral("letter_spacing_px"),
+                    line.layout.letterSpacingPx
+                );
+                line.layout.allowBiting = layoutObject.value(
+                    QStringLiteral("allow_biting")
+                ).toBool(line.layout.allowBiting);
+                line.layout.rubyIntervalPx = std::max(
+                    0, intValue(
+                        layoutObject, QStringLiteral("ruby_interval_px"),
+                        line.layout.rubyIntervalPx
+                    )
+                );
+                line.layout.rubyAlignment = stringValue(
+                    layoutObject, QStringLiteral("ruby_alignment"),
+                    line.layout.rubyAlignment
+                );
+                line.layout.rubyGapPx = intValue(
+                    layoutObject, QStringLiteral("ruby_gap_px"),
+                    line.layout.rubyGapPx
+                );
+            }
 
             const QJsonArray chars = lineObject.value(QStringLiteral("chars")).toArray();
             line.chars.reserve(static_cast<std::size_t>(chars.size()));
@@ -6228,6 +6345,63 @@ void applyGpuResolvedStyle(
     target.volumeTransitionRatioPct = source.volumeTransitionRatioPct;
 }
 
+void applyGpuLineLayout(
+    krok::subtitle::native::TextStyle &target,
+    const ResolvedLineLayout &layout,
+    int lane,
+    bool centerOverride,
+    double scale
+) {
+    if (!layout.present) {
+        return;
+    }
+    target.bottomMargin = static_cast<float>(layout.lineYMarginPx * scale);
+    target.lineGap = static_cast<float>(layout.lineGapPx * scale);
+    target.dualLineLayout = layout.dualLineLayout;
+    target.laneCount = layout.dualLineLayout
+        ? std::max(static_cast<int>(layout.lineAlignments.size()), 1)
+        : 1;
+    target.verticalPosition = layout.lineYPosition.toStdString();
+    target.letterSpacing = static_cast<float>(layout.letterSpacingPx * scale);
+    target.allowBiting = layout.allowBiting;
+    target.rubyInterval = static_cast<float>(layout.rubyIntervalPx * scale);
+    target.rubyAlignment = layout.rubyAlignment.toStdString();
+    target.rubyGap = static_cast<float>(layout.rubyGapPx * scale);
+    target.layoutOffsetX = 0.0f;
+    target.layoutOffsetY = 0.0f;
+
+    if (centerOverride || layout.lineHorizontalLayout == QStringLiteral("center")) {
+        target.alignment = "center";
+    } else if (layout.lineHorizontalLayout == QStringLiteral("per_row")) {
+        const bool secondRow = lane == 1;
+        target.alignment = (
+            secondRow ? layout.row2Align : layout.row1Align
+        ).toStdString();
+        target.horizontalMargin = 0.0f;
+        target.layoutOffsetX = static_cast<float>(
+            (secondRow ? layout.row2OffsetX : layout.row1OffsetX) * scale
+        );
+    } else if (!layout.lineAlignments.empty()) {
+        const int alignmentIndex = std::clamp(
+            lane, 0, static_cast<int>(layout.lineAlignments.size()) - 1
+        );
+        target.alignment = layout.lineAlignments[
+            static_cast<std::size_t>(alignmentIndex)
+        ].toStdString();
+        target.horizontalMargin = static_cast<float>(
+            layout.horizontalMarginPx * scale
+        );
+    }
+
+    if (layout.lineHorizontalLayout == QStringLiteral("per_row")) {
+        if (lane == 0) {
+            target.layoutOffsetY = static_cast<float>(layout.row1OffsetY * scale);
+        } else if (lane == 1) {
+            target.layoutOffsetY = static_cast<float>(layout.row2OffsetY * scale);
+        }
+    }
+}
+
 krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &config) {
     using krok::subtitle::native::RenderScene;
     using krok::subtitle::native::TextChar;
@@ -6275,21 +6449,28 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         applyGpuResolvedStyle(
             lineStyle, resolvedStyleForLine(config, sourceLine), scale
         );
-        lineStyle.horizontalMargin = static_cast<float>(
-            config.horizontalMarginPx * scale
-        );
-        if (sourceLine.centerOverride
-            || config.lineHorizontalLayout == QStringLiteral("center")) {
-            lineStyle.alignment = "center";
-        } else if (!config.lineAlignments.empty()) {
-            const int alignmentIndex = std::clamp(
-                sourceLine.lane,
-                0,
-                static_cast<int>(config.lineAlignments.size()) - 1
+        if (sourceLine.layout.present) {
+            applyGpuLineLayout(
+                lineStyle, sourceLine.layout, sourceLine.lane,
+                sourceLine.centerOverride, scale
             );
-            lineStyle.alignment = config.lineAlignments[
-                static_cast<std::size_t>(alignmentIndex)
-            ].toStdString();
+        } else {
+            lineStyle.horizontalMargin = static_cast<float>(
+                config.horizontalMarginPx * scale
+            );
+            if (sourceLine.centerOverride
+                || config.lineHorizontalLayout == QStringLiteral("center")) {
+                lineStyle.alignment = "center";
+            } else if (!config.lineAlignments.empty()) {
+                const int alignmentIndex = std::clamp(
+                    sourceLine.lane,
+                    0,
+                    static_cast<int>(config.lineAlignments.size()) - 1
+                );
+                lineStyle.alignment = config.lineAlignments[
+                    static_cast<std::size_t>(alignmentIndex)
+                ].toStdString();
+            }
         }
         scene.lineStyles.push_back(std::move(lineStyle));
         TextLine line;
@@ -6317,9 +6498,17 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         for (std::size_t index = 0; index < sourceLine.chars.size(); ++index) {
             int styleIndex = -1;
             if (!sourceLine.chars[index].roleLabel.isEmpty()) {
-                const QString key = resolvedStyleKey(
+                QString key = resolvedStyleKey(
                     sourceLine.singerId, sourceLine.chars[index].roleLabel
                 );
+                if (sourceLine.layout.present) {
+                    key += QStringLiteral("|layout:%1:%2:%3:%4:%5")
+                        .arg(sourceLine.layout.letterSpacingPx)
+                        .arg(sourceLine.layout.allowBiting ? 1 : 0)
+                        .arg(sourceLine.layout.rubyIntervalPx)
+                        .arg(sourceLine.layout.rubyAlignment)
+                        .arg(sourceLine.layout.rubyGapPx);
+                }
                 const auto existing = charStyleIndices.constFind(key);
                 if (existing != charStyleIndices.constEnd()) {
                     styleIndex = existing.value();
@@ -6329,6 +6518,10 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                         charStyle,
                         resolvedStyleForCharacter(config, sourceLine, sourceLine.chars[index]),
                         scale
+                    );
+                    applyGpuLineLayout(
+                        charStyle, sourceLine.layout, sourceLine.lane,
+                        sourceLine.centerOverride, scale
                     );
                     styleIndex = static_cast<int>(scene.charStyles.size());
                     scene.charStyles.push_back(std::move(charStyle));

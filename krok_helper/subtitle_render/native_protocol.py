@@ -70,8 +70,6 @@ def gpu_unsupported_features(
                 for line in source.lines
             ):
                 reasons.append("rtl_animation")
-    if style.line_horizontal_layout == "per_row":
-        reasons.append("per_row_layout")
     if style.entry_anim not in {
         "none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"
     } or (
@@ -82,8 +80,6 @@ def gpu_unsupported_features(
         reasons.append("line_animation")
     for source in sources:
         for line in source.lines:
-            if line.layout_index != 0:
-                reasons.append("line_layout_override")
             if line.animation_override is not None:
                 if line.animation_override.entry_anim not in {
                     "none",
@@ -160,6 +156,7 @@ def timing_char_to_ir(ch: TimingChar) -> dict[str, Any]:
 def timing_line_to_ir(
     line: TimingLine,
     *,
+    layout_style: Style | None = None,
     lane: int = 0,
     display_start_ms: int | None = None,
     display_end_ms: int | None = None,
@@ -185,6 +182,31 @@ def timing_line_to_ir(
         "entry_duration_ms": max(int(entry_duration_ms), 0),
         "exit_anim": str(exit_anim),
         "exit_duration_ms": max(int(exit_duration_ms), 0),
+        "layout": (
+            {
+                "line_y_position": layout_style.line_y_position,
+                "line_y_margin_px": int(layout_style.line_y_margin_px),
+                "line_gap_px": int(layout_style.line_gap_px),
+                "smart_horizontal": layout_style.smart_horizontal,
+                "horizontal_margin_px": int(layout_style.horizontal_margin_px),
+                "line_alignments": list(layout_style.line_alignments),
+                "dual_line_layout": bool(layout_style.dual_line_layout),
+                "line_horizontal_layout": layout_style.line_horizontal_layout,
+                "row1_align": layout_style.row1_align,
+                "row1_offset_x": int(layout_style.row1_offset_x),
+                "row1_offset_y": int(layout_style.row1_offset_y),
+                "row2_align": layout_style.row2_align,
+                "row2_offset_x": int(layout_style.row2_offset_x),
+                "row2_offset_y": int(layout_style.row2_offset_y),
+                "letter_spacing_px": int(layout_style.letter_spacing_px),
+                "allow_biting": bool(layout_style.allow_biting),
+                "ruby_interval_px": int(layout_style.ruby_interval_px),
+                "ruby_alignment": layout_style.ruby_alignment,
+                "ruby_gap_px": int(layout_style.ruby_gap_px),
+            }
+            if layout_style is not None
+            else None
+        ),
     }
 
 
@@ -205,20 +227,23 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
         from krok_helper.subtitle_render.engine.painter import (
             _display_style_for_signal_window,
             _line_center_override,
+            _style_for_line,
             display_schedule_for_style,
         )
         from krok_helper.subtitle_render.models import style_with_line_animation
 
         display_style = _display_style_for_signal_window(style)
         schedule = display_schedule_for_style(track, display_style)
+        layout_styles = [_style_for_line(style, line) for line in track.lines]
         center_overrides = {
-            index: _line_center_override(track, line, style)
+            index: _line_center_override(track, line, layout_styles[index])
             for index, line in enumerate(track.lines)
         }
         animation_styles = [style_with_line_animation(style, line) for line in track.lines]
     else:
         center_overrides = {}
         animation_styles = []
+        layout_styles = []
     return {
         "meta": {
             "title": track.meta.title,
@@ -232,6 +257,7 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
         "lines": [
             timing_line_to_ir(
                 line,
+                layout_style=(layout_styles[index] if style is not None else None),
                 lane=schedule.get(index, (0, 0, 0))[0],
                 display_start_ms=(schedule[index][1] if index in schedule else None),
                 display_end_ms=(schedule[index][2] if index in schedule else None),

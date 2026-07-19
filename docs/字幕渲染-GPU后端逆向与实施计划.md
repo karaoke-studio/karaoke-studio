@@ -1478,3 +1478,13 @@ RTL 正文与 ruby 基础路径至此收口。下一批按 G4 顺序处理 viewp
 - benchmark 新增 `--viewport`。RTX 3070 Ti、1920×1080、60fps、正文中档 glow、115% 缩放、12° 旋转、平移、packed bands、600 帧：`74.31fps`，render/readback/roundtrip p95 `2.98/5.63/15.32ms`，平均 band 覆盖率 `58.89%`，local 显存增长 0。该常用变换路径仍高于 60fps 门槛；产品 GPU 开关继续默认关闭，Painter 永久保留为 oracle/fallback。
 
 G4 下一批继续处理 `per_row`/逐行布局覆盖、竖排标题/行内角色/动画以及 RTL signal/行内角色/动画的独立组合门槛。
+
+### 2026-07-19（第三十五批）：G4 `per_row` 与逐行布局覆盖
+
+- Python 在构建 Render IR 时对每行调用 Painter `_style_for_line()`，把布局卡、歌手方案和行动画按现有继承顺序解析，再随行固化几何快照。GPU 不再只看到全局布局，也不在 C++ 侧重复解释 `layout_index`；越界布局自然由 Painter 回退默认布局。
+- 随行快照覆盖纵向锚点/边距/行距、行数与逐 lane 对齐、`per_row` 两行独立 X/Y 偏移，以及布局卡可覆盖的字间距、`allow_biting`、ruby interval/alignment/gap。角色 run 在套用角色外观后重新施加布局字符字段，与 Painter“布局字段最终覆盖”的顺序一致；char-style cache key 也加入布局字符签名，避免同一角色跨布局误复用 geometry。
+- Direct2D 新增独立 `layoutOffsetX/Y`，在文字、stroke/stroke2、shadow/glow、ruby 与 signal 联合盒完成锚定后统一平移。`center_override` 与 Painter 一样优先于行级 X 偏移，Y 偏移仍保留；额外布局的 `smart_horizontal` 也在 Python 计算 center override 时使用该行的有效样式，而不是错误读取全局样式。
+- 自动门槛覆盖红/绿双行的 left/right 锚点与正负 X/Y 偏移、`per_row` + volume signal 联合布局，以及额外布局卡的 top/right/margin/letter-spacing/ruby interval/gap。三组 GPU/Painter 对照通过，`per_row_layout` 与 `line_layout_override` capability fallback 已移除。GPU 独立回归 `82 passed`，transport `71 passed`，native protocol/export/benchmark `63 passed, 27 skipped`。
+- benchmark 新增 `--per-row`。RTX 3070 Ti、1920×1080、60fps、双行独立锚点/偏移、中档 glow、packed bands、600 帧：`91.09fps`，render/readback/roundtrip p95 `4.93/4.55/13.64ms`，平均 band 覆盖率 `28.33%`，local 显存增长 0。
+
+G4 下一批处理当前剩余的组合门槛：竖排标题/行内角色/动画，以及 RTL signal/行内角色/动画；随后进入 guide/shared-span 等剩余 Painter 语义和 G5 集成。

@@ -45,6 +45,7 @@ def _scene(
     vertical: bool = False,
     rtl: bool = False,
     viewport: bool = False,
+    per_row: bool = False,
 ) -> tuple[TimingTrack, Style]:
     text = "縦書きGPU" if vertical else "Karaoke Studio GPU"
     chars = [
@@ -52,6 +53,16 @@ def _scene(
         for index, char in enumerate(text)
     ]
     track = TimingTrack(lines=[TimingLine(chars=chars, end_ms=duration_ms)])
+    if per_row:
+        track.lines.append(
+            TimingLine(
+                chars=[
+                    TimingChar(char, index * duration_ms // len(text))
+                    for index, char in enumerate(reversed(text))
+                ],
+                end_ms=duration_ms,
+            )
+        )
     if ruby:
         if vertical:
             ruby_annotation = RubyAnnotation(
@@ -96,8 +107,15 @@ def _scene(
         glow_after_radius_px=10,
         glow_concentration_level=1,
         line_y_position="center",
-        line_horizontal_layout="center",
-        dual_line_layout=False,
+        line_horizontal_layout="per_row" if per_row else "center",
+        line_alignments=["left", "right"],
+        dual_line_layout=per_row,
+        row1_align="left",
+        row1_offset_x=72,
+        row1_offset_y=-18,
+        row2_align="right",
+        row2_offset_x=-84,
+        row2_offset_y=22,
         line_lead_in_ms=0,
         line_tail_ms=0,
         entry_anim=animation,
@@ -150,6 +168,7 @@ def run_benchmark(
     vertical: bool = False,
     rtl: bool = False,
     viewport: bool = False,
+    per_row: bool = False,
 ) -> tuple[dict, list[dict]]:
     import psutil
 
@@ -166,6 +185,7 @@ def run_benchmark(
         vertical=vertical,
         rtl=rtl,
         viewport=viewport,
+        per_row=per_row,
     )
     shm_key = f"krok_gpu_g1_benchmark_{os.getpid()}_{uuid.uuid4().hex}"
     rows: list[dict] = []
@@ -263,6 +283,7 @@ def run_benchmark(
         "signal_style": signal_style if signals else "none",
         "vertical": vertical,
         "rtl": rtl,
+        "per_row": per_row,
         "bands": bands,
         "height": height,
         "readback_mean_ms": round(statistics.fmean(readback_times), 4),
@@ -337,6 +358,11 @@ def main() -> int:
         help="apply scale, rotation, offset, and center-pivot viewport transform",
     )
     parser.add_argument(
+        "--per-row",
+        action="store_true",
+        help="render two rows with independent alignment and offsets",
+    )
+    parser.add_argument(
         "--animation",
         choices=("none", "fade", "char_fade", "spin_flip", "utopia"),
         default="none",
@@ -374,6 +400,7 @@ def main() -> int:
             vertical=bool(args.vertical),
             rtl=bool(args.rtl),
             viewport=bool(args.viewport),
+            per_row=bool(args.per_row),
         )
         all_rows.extend(rows)
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True))

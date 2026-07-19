@@ -28,6 +28,7 @@ from krok_helper.subtitle_render.engine.painter import (
 from krok_helper.subtitle_render.models import (
     KaraokeColors,
     KaraokeColorState,
+    LyricsLayout,
     LineAnimationOverride,
     PaintFill,
     RubyAnnotation,
@@ -255,6 +256,15 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
     assert gpu_unsupported_features(
         track,
         Style(
+            line_horizontal_layout="per_row",
+            row1_align="right",
+            row1_offset_x=-45,
+            row1_offset_y=18,
+        ),
+    ) == ()
+    assert gpu_unsupported_features(
+        track,
+        Style(
             viewport_scale_pct=125,
             viewport_rotation_deg=-20,
             viewport_offset_x=30,
@@ -302,6 +312,34 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
         ]
     )
     assert gpu_unsupported_features(span_track, Style()) == ("shared_timing_span",)
+
+    layout_track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("L", 0)], end_ms=500, layout_index=1
+            )
+        ]
+    )
+    layout_style = Style(
+        layouts=[
+            LyricsLayout(
+                line_y_position="top",
+                line_y_margin_px=33,
+                line_alignments=["right"],
+                letter_spacing_px=9,
+                ruby_gap_px=7,
+            )
+        ]
+    )
+    assert gpu_unsupported_features(layout_track, layout_style) == ()
+    line_layout = build_render_ir(
+        layout_track, layout_style, width=640, height=360, fps=60
+    )["track"]["lines"][0]["layout"]
+    assert line_layout["line_y_position"] == "top"
+    assert line_layout["line_y_margin_px"] == 33
+    assert line_layout["line_alignments"] == ["right"]
+    assert line_layout["letter_spacing_px"] == 9
+    assert line_layout["ruby_gap_px"] == 7
 
 
 def test_build_render_ir_expands_display_window_for_volume_signal_lead_in():

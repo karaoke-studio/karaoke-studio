@@ -3005,6 +3005,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         } else if (style.alignment == "right") {
             dx = static_cast<float>(scene.width) - style.horizontalMargin - unionRight;
         }
+        if (!style.vertical) {
+            dx += style.layoutOffsetX;
+        }
         dx += animation.dx;
         const float visualPad = line->hasInlineStyles
             ? line->maxVisualPad
@@ -3075,6 +3078,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     - blockHeight;
             }
             dy += animation.dy;
+        }
+        if (!style.vertical) {
+            dy += style.layoutOffsetY;
         }
         auto visualVerticalPadding = [](const TextStyle &item, bool ruby) {
             const float stroke = ruby
