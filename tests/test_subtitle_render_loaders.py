@@ -676,6 +676,7 @@ def test_export_tab_builds_render_job_from_loaded_media(qapp, monkeypatch, tmp_p
     assert job.crf == 23
     assert job.render_workers == 16
     assert job.native_export_enabled is False
+    assert job.gpu_export_enabled is False
 
 
 def test_export_output_prefills_dir_and_yurika_name(qapp, monkeypatch, tmp_path):

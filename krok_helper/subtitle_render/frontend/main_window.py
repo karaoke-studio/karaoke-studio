@@ -1436,6 +1436,8 @@ class SubtitleRenderWindow(QWidget):
         self._export_render_workers_combo.currentIndexChanged.connect(
             self._on_render_workers_changed
         )
+        self._gpu_preview_check.toggled.connect(self._on_gpu_preview_changed)
+        self._gpu_export_check.toggled.connect(self._on_gpu_export_changed)
 
     def _switch_tab(self, key: str) -> None:
         idx = 0 if key == "preview" else 1
@@ -2157,6 +2159,15 @@ class SubtitleRenderWindow(QWidget):
             workers_idx = self._export_render_workers_combo.findData(render_workers)
             if workers_idx >= 0:
                 self._export_render_workers_combo.setCurrentIndex(workers_idx)
+        gpu_preview_enabled = sys.platform == "win32" and bool(
+            output.get("gpu_preview_enabled", False)
+        )
+        gpu_export_enabled = sys.platform == "win32" and bool(
+            output.get("gpu_export_enabled", False)
+        )
+        self._gpu_preview_check.setChecked(gpu_preview_enabled)
+        self._gpu_export_check.setChecked(gpu_export_enabled)
+        self._preview_panel.set_gpu_preview_enabled(gpu_preview_enabled)
         if self._loading_project:
             # Project output names are authoritative.  Forget the previous
             # project's auto-generated name before its media starts loading.
@@ -2730,6 +2741,7 @@ class SubtitleRenderWindow(QWidget):
         self._transport_bar.timeChanged.connect(self._preview_panel.set_time)
         self._transport_bar.playbackStateChanged.connect(self._preview_panel.set_playing)
         self._preview_panel.canvas.framePainted.connect(self._transport_bar.note_preview_frame_painted)
+        self._preview_panel.gpuFallback.connect(self._on_gpu_preview_fallback)
         # 单播放器统一（步骤2，§10.9，flag KROK_SUBTITLE_UNIFIED_PLAYER 默认关）：
         # 视频自带音频时同一文件本不该被音频/视频两个 QMediaPlayer 各自解码。开启后用一个
         # 共享 PlaybackController 同时驱动音视频（A/V 天然锁帧），预览不再自建视频 player。
@@ -3031,6 +3043,21 @@ class SubtitleRenderWindow(QWidget):
         self._export_native_check.setEnabled(False)
         self._export_native_check.setVisible(False)
         self._export_native_check.setToolTip("native 字幕渲染器暂时停用。")
+        self._gpu_preview_check = CheckBox("实验：使用 GPU 渲染字幕预览")
+        self._gpu_preview_check.setChecked(False)
+        self._gpu_preview_check.setVisible(sys.platform == "win32")
+        self._gpu_preview_check.setToolTip(
+            "仅加速字幕透明层，不改变视频解码；不可用或失败时自动回退 Painter。"
+        )
+        self._gpu_export_check = CheckBox("实验：使用 GPU 渲染字幕导出")
+        self._gpu_export_check.setChecked(False)
+        self._gpu_export_check.setVisible(sys.platform == "win32")
+        self._gpu_export_check.setToolTip(
+            "仅用 Direct2D 渲染字幕条带，仍由当前 ffmpeg 编码器输出；"
+            "失败时会删除半成品并从头回退 Painter。"
+        )
+        settings_layout.addWidget(self._gpu_preview_check)
+        settings_layout.addWidget(self._gpu_export_check)
         settings_layout.addWidget(self._export_native_check)
         settings_layout.addStretch(1)
 
@@ -3969,7 +3996,7 @@ class SubtitleRenderWindow(QWidget):
         if (
             top is not None
             and top[0] == "style"
-            and top[3] == changed
+            and self._style_change_paths_mergeable(top[3], changed)
             and now - top[4] <= self._STYLE_UNDO_MERGE_WINDOW_S
         ):
             # 合并：保留最早的旧值，滚动更新新值与时间戳。
@@ -4965,6 +4992,34 @@ class SubtitleRenderWindow(QWidget):
         """Persist this hardware-specific preference without dirtying the project."""
         self._save_persisted_state()
 
+    def _on_gpu_preview_changed(self, enabled: bool) -> None:
+        """Apply and persist the experimental subtitle-preview backend."""
+        if not self._preview_panel.set_gpu_preview_enabled(bool(enabled)):
+            blocked = self._gpu_preview_check.blockSignals(True)
+            try:
+                self._gpu_preview_check.setChecked(False)
+            finally:
+                self._gpu_preview_check.blockSignals(blocked)
+            fluent_warning(
+                self,
+                "GPU 预览不可用",
+                "当前预览模式不支持 GPU 字幕层，已继续使用 Painter。",
+            )
+        self._save_persisted_state()
+
+    def _on_gpu_export_changed(self, _enabled: bool) -> None:
+        """Persist GPU subtitle export independently from encoder selection."""
+        self._save_persisted_state()
+
+    def _on_gpu_preview_fallback(self, message: str) -> None:
+        InfoBar.warning(
+            title="GPU 预览已回退",
+            content=str(message),
+            parent=self,
+            position=InfoBarPosition.BOTTOM_RIGHT,
+            duration=6000,
+        )
+
     def _on_scheme_selection_changed(self, key: str) -> None:
         self._selected_scheme_key = key
         self._save_persisted_state()
@@ -5247,6 +5302,19 @@ class SubtitleRenderWindow(QWidget):
         )
         del self._undo_stack[:-_UNDO_STACK_LIMIT]
         self._redo_stack.clear()
+
+    @staticmethod
+    def _style_change_paths_mergeable(
+        previous: frozenset[str], current: frozenset[str]
+    ) -> bool:
+        """Treat a newly materialized mapping and its leaf edit as one action."""
+        if previous == current:
+            return True
+        if len(previous) != 1 or len(current) != 1:
+            return False
+        old_path = next(iter(previous))
+        new_path = next(iter(current))
+        return old_path.startswith(new_path + ".") or new_path.startswith(old_path + ".")
         self._refresh_after_guide_symbols_changed(valid_rows)
 
     def _on_guide_prefix_replace_requested(self) -> None:
@@ -5815,6 +5883,12 @@ class SubtitleRenderWindow(QWidget):
         if hasattr(self, "_export_native_check"):
             output = dict(data.get("output")) if isinstance(data.get("output"), dict) else {}
             output["native_export_enabled"] = False
+            output["gpu_preview_enabled"] = bool(
+                self._gpu_preview_check.isChecked()
+            )
+            output["gpu_export_enabled"] = bool(
+                self._gpu_export_check.isChecked()
+            )
             output["directory_mode"] = self._export_dir_mode
             output["custom_directory"] = self._export_custom_dir
             output["render_workers"] = int(
@@ -6057,6 +6131,7 @@ class SubtitleRenderWindow(QWidget):
             preset=str(self._export_preset_combo.currentData() or "medium"),
             codec=self._export_codec_value(),
             native_export_enabled=False,
+            gpu_export_enabled=self._gpu_export_check.isChecked(),
             render_workers=self._export_render_workers_value(),
         )
 

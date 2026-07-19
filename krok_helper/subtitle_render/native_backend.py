@@ -505,8 +505,16 @@ def _sidecar_qt_bin_dir(executable_path: Path) -> Path | None:
     """
     if os.name != "nt":
         return None
-    if (executable_path.parent / "Qt6Core.dll").is_file():
-        return None
+    package_roots = [executable_path.parent]
+    if getattr(sys, "frozen", False):
+        package_roots.append(Path(sys.executable).resolve().parent / "_internal")
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            package_roots.append(Path(meipass))
+    for root in package_roots:
+        for candidate in (root, root / "PyQt6" / "Qt6" / "bin"):
+            if (candidate / "Qt6Core.dll").is_file():
+                return candidate
     try:
         from PyQt6.QtCore import QT_VERSION_STR
     except ImportError:
@@ -518,6 +526,28 @@ def _sidecar_qt_bin_dir(executable_path: Path) -> Path | None:
     if (qt_bin / "Qt6Core.dll").is_file():
         return qt_bin
     return None
+
+
+def _sidecar_environment(executable_path: Path) -> dict[str, str] | None:
+    """Build the child environment for local and PyInstaller Qt layouts."""
+    if os.name != "nt":
+        return None
+    env = dict(os.environ)
+    changed = False
+    qt_bin = _sidecar_qt_bin_dir(executable_path)
+    if qt_bin is not None:
+        env["PATH"] = str(qt_bin) + os.pathsep + env.get("PATH", "")
+        changed = True
+        plugin_candidates = [
+            qt_bin.parent / "plugins",
+            qt_bin / "plugins",
+        ]
+        for plugin_root in plugin_candidates:
+            if (plugin_root / "platforms" / "qwindows.dll").is_file():
+                env["QT_PLUGIN_PATH"] = str(plugin_root)
+                changed = True
+                break
+    return env if changed else None
 
 
 class NativeRendererProcess:
@@ -558,11 +588,7 @@ class NativeRendererProcess:
     def start(self) -> dict[str, Any]:
         if self.is_running:
             return {"ok": True, "event": "already_running"}
-        env = None
-        qt_bin = _sidecar_qt_bin_dir(self.executable_path)
-        if qt_bin is not None:
-            env = dict(os.environ)
-            env["PATH"] = str(qt_bin) + os.pathsep + env.get("PATH", "")
+        env = _sidecar_environment(self.executable_path)
         self._process = subprocess.Popen(
             [str(self.executable_path)],
             stdin=subprocess.PIPE,

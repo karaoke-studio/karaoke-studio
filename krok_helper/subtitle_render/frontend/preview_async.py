@@ -383,6 +383,7 @@ class GpuAsyncSubtitleRenderer(QObject):
     """
 
     frame_ready = Signal(QImage, int)
+    fallback_occurred = Signal(str)
 
     _STALE_TOLERANCE_MS = 120
 
@@ -402,6 +403,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._playing = False
         self._stopped = False
         self._renderer_failed = False
+        self._fallback_reported = False
         self._retry_after = 0.0
         self._force_warp = _env_enabled("KROK_SUBTITLE_GPU_FORCE_WARP", "0")
         self._lookahead_frames = _env_int(
@@ -583,6 +585,10 @@ class GpuAsyncSubtitleRenderer(QObject):
                 if unsupported:
                     if not speculative:
                         self._note("capability_fallbacks")
+                        self._report_fallback(
+                            "当前工程包含 GPU 尚不支持的功能，字幕预览已回退 Painter："
+                            + ", ".join(unsupported)
+                        )
                         self._emit_python_fallback(
                             track,
                             style,
@@ -660,6 +666,9 @@ class GpuAsyncSubtitleRenderer(QObject):
                     with self._condition:
                         self._needs_configure = True
                     self._note("renderer_failures")
+                    self._report_fallback(
+                        f"GPU 字幕预览异常，当前帧已回退 Painter，稍后会自动重试：{exc}"
+                    )
                     self._close_renderer()
                     if not speculative:
                         self._emit_python_fallback(
@@ -667,6 +676,12 @@ class GpuAsyncSubtitleRenderer(QObject):
                         )
         finally:
             self._close_renderer()
+
+    def _report_fallback(self, message: str) -> None:
+        if self._fallback_reported:
+            return
+        self._fallback_reported = True
+        self.fallback_occurred.emit(str(message))
 
     def _ensure_renderer(self) -> NativeRendererProcess:
         if self._renderer is None:

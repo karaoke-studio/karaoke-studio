@@ -4813,6 +4813,40 @@ def test_main_window_native_export_is_hard_disabled(qapp, monkeypatch):
     assert win._export_native_check.isHidden() is True
     win._save_persisted_state()
     assert provider.data["output"]["native_export_enabled"] is False
+    assert provider.data["output"]["gpu_preview_enabled"] is False
+    assert provider.data["output"]["gpu_export_enabled"] is False
+
+
+def test_main_window_gpu_preferences_are_local_and_persisted(qapp, monkeypatch):
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
+
+    class FakeSettingsProvider:
+        def __init__(self):
+            self.data = {"output": {}}
+
+        def load(self):
+            return dict(self.data)
+
+        def save(self, data):
+            self.data = dict(data)
+
+    provider = FakeSettingsProvider()
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    calls = []
+    monkeypatch.setattr(
+        win._preview_panel,
+        "set_gpu_preview_enabled",
+        lambda enabled: calls.append(bool(enabled)) or True,
+    )
+
+    win._gpu_preview_check.setChecked(True)
+    win._gpu_export_check.setChecked(True)
+
+    assert calls == [True]
+    assert provider.data["output"]["gpu_preview_enabled"] is True
+    assert provider.data["output"]["gpu_export_enabled"] is True
+    assert win._project_dirty is False
 
 
 def test_render_worker_choice_is_local_and_not_saved_in_project(qapp, monkeypatch):

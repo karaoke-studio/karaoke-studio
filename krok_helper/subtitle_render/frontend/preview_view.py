@@ -442,6 +442,8 @@ class PreviewPanel(DropPanel):
     内部 canvas 默认是 :class:`PreviewGraphicsView`（档2 QGraphicsView 路径）。
     """
 
+    gpuFallback = Signal(str)
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(
             extensions={
@@ -464,6 +466,9 @@ class PreviewPanel(DropPanel):
             self._canvas = PreviewGraphicsView()
         else:
             self._canvas = PreviewCanvas()
+        gpu_fallback = getattr(self._canvas, "gpuFallback", None)
+        if gpu_fallback is not None:
+            gpu_fallback.connect(self.gpuFallback.emit)
         self.set_content(self._canvas)
 
     # ------------------------------------------------------------------ public
@@ -485,6 +490,13 @@ class PreviewPanel(DropPanel):
 
     def set_style(self, style: Style) -> None:
         self._canvas.set_style(style)
+
+    def set_gpu_preview_enabled(self, enabled: bool) -> bool:
+        setter = getattr(self._canvas, "set_gpu_preview_enabled", None)
+        if setter is None:
+            return False
+        setter(bool(enabled))
+        return True
 
     def set_output_size(self, width: int, height: int) -> None:
         self._canvas.set_output_size(width, height)

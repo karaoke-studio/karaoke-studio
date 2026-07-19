@@ -426,6 +426,66 @@ def test_preview_graphics_gpu_opt_in_takes_precedence(qapp, monkeypatch):
         qapp.processEvents()
 
 
+def test_preview_graphics_switches_gpu_backend_at_runtime(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+
+    class FakeSignal:
+        def connect(self, *args, **kwargs):
+            pass
+
+    class FakeRenderer:
+        instances = []
+
+        def __init__(self, width, height, parent=None):
+            self.frame_ready = FakeSignal()
+            self.stopped = False
+            type(self).instances.append(self)
+
+        def set_render_target(self, *args):
+            pass
+
+        def set_state(self, *args):
+            pass
+
+        def set_playing(self, *args):
+            pass
+
+        def request(self, *args):
+            pass
+
+        def stop(self):
+            self.stopped = True
+
+    class FakePainterRenderer(FakeRenderer):
+        instances = []
+
+    class FakeGpuRenderer(FakeRenderer):
+        instances = []
+
+    monkeypatch.setattr(pg, "async_preview_enabled", lambda: True)
+    monkeypatch.setattr(pg, "gpu_preview_enabled", lambda: False)
+    monkeypatch.setattr(pg, "native_preview_enabled", lambda: False)
+    monkeypatch.setattr(pg, "AsyncSubtitleRenderer", FakePainterRenderer)
+    monkeypatch.setattr(pg, "GpuAsyncSubtitleRenderer", FakeGpuRenderer)
+
+    graphics = PreviewGraphicsView()
+    try:
+        first_painter = FakePainterRenderer.instances[-1]
+        graphics.set_gpu_preview_enabled(True)
+        assert first_painter.stopped is True
+        gpu = FakeGpuRenderer.instances[-1]
+        assert graphics._async_renderer is gpu
+
+        graphics.set_gpu_preview_enabled(False)
+        assert gpu.stopped is True
+        assert graphics._async_renderer is FakePainterRenderer.instances[-1]
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
 def test_gpu_async_renderer_queue_is_capacity_one_latest_wins(qapp, monkeypatch):
     from krok_helper.subtitle_render.frontend import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
@@ -526,7 +586,9 @@ def test_gpu_async_renderer_failure_falls_back_to_painter(qapp, monkeypatch):
     monkeypatch.setattr(pa, "NativeRendererProcess", FailingGpuProcess)
     renderer = pa.GpuAsyncSubtitleRenderer(320, 180)
     frames: list[tuple[QImage, int]] = []
+    fallbacks: list[str] = []
     renderer.frame_ready.connect(lambda image, t_ms: frames.append((image, t_ms)))
+    renderer.fallback_occurred.connect(fallbacks.append)
     try:
         renderer.set_state(TimingTrack(), Style())
         renderer.request(1_000)
@@ -539,6 +601,9 @@ def test_gpu_async_renderer_failure_falls_back_to_painter(qapp, monkeypatch):
         stats = renderer.stats_snapshot()
         assert stats["renderer_failures"] == 1
         assert stats["fallback_frames"] == 1
+        assert len(fallbacks) == 1
+        assert "injected GPU failure" in fallbacks[0]
+        assert "Painter" in fallbacks[0]
     finally:
         renderer.stop()
 
@@ -563,7 +628,9 @@ def test_gpu_async_renderer_capability_fallback_skips_sidecar(qapp, monkeypatch)
     monkeypatch.setattr(pa, "NativeRendererProcess", UnexpectedGpuProcess)
     renderer = pa.GpuAsyncSubtitleRenderer(320, 180)
     frames: list[int] = []
+    fallbacks: list[str] = []
     renderer.frame_ready.connect(lambda _image, t_ms: frames.append(int(t_ms)))
+    renderer.fallback_occurred.connect(fallbacks.append)
     try:
         renderer.set_state(
                 TimingTrack(
@@ -588,6 +655,9 @@ def test_gpu_async_renderer_capability_fallback_skips_sidecar(qapp, monkeypatch)
         assert stats["capability_fallbacks"] == 1
         assert stats["fallback_frames"] == 1
         assert stats["renderer_failures"] == 0
+        assert len(fallbacks) == 1
+        assert "line_animation" in fallbacks[0]
+        assert "Painter" in fallbacks[0]
     finally:
         renderer.stop()
 

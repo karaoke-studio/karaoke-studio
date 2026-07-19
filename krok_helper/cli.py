@@ -46,6 +46,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--off-name-template", help="伴奏输出模板，支持 {video_name}，不需要写 .mkv")
     parser.add_argument("--gui", action="store_true", help="强制启动图形界面")
     parser.add_argument("--package-spawn-smoke", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--package-gpu-smoke", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args(argv)
 
 
@@ -141,6 +142,10 @@ def main() -> int:
         from krok_helper.package_smoke import run_spawn_smoke
 
         return run_spawn_smoke()
+    if args.package_gpu_smoke:
+        from krok_helper.package_smoke import run_gpu_subtitle_smoke
+
+        return run_gpu_subtitle_smoke()
     cli_requested = args.video is not None and (args.on_audio is not None or args.off_audio is not None)
 
     if cli_requested and not args.gui:

@@ -45,6 +45,8 @@ from krok_helper.subtitle_render.native_backend import (
     NativeRendererError,
     NativeRendererProcess,
     SharedFrameRingReader,
+    _sidecar_environment,
+    _sidecar_qt_bin_dir,
     default_native_renderer_path,
     resolve_native_renderer_path,
 )
@@ -542,6 +544,29 @@ def test_resolve_native_renderer_path_prefers_explicit_existing_path(tmp_path, m
 def test_resolve_native_renderer_path_returns_none_when_missing(tmp_path, monkeypatch):
     monkeypatch.delenv("KROK_SUBTITLE_NATIVE_RENDERER", raising=False)
     assert resolve_native_renderer_path(root=tmp_path) is None
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows PyInstaller layout")
+def test_sidecar_environment_uses_frozen_pyqt_runtime(tmp_path, monkeypatch):
+    package_root = tmp_path / "Karaoke Studio"
+    qt_bin = package_root / "_internal" / "PyQt6" / "Qt6" / "bin"
+    plugin_root = qt_bin.parent / "plugins"
+    qt_bin.mkdir(parents=True)
+    (plugin_root / "platforms").mkdir(parents=True)
+    (qt_bin / "Qt6Core.dll").write_bytes(b"")
+    (plugin_root / "platforms" / "qwindows.dll").write_bytes(b"")
+    app_exe = package_root / "Karaoke Studio.exe"
+    sidecar_exe = package_root / "krok_subtitle_renderer.exe"
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(app_exe))
+    monkeypatch.delattr(sys, "_MEIPASS", raising=False)
+    monkeypatch.setenv("PATH", "existing")
+
+    assert _sidecar_qt_bin_dir(sidecar_exe) == qt_bin
+    env = _sidecar_environment(sidecar_exe)
+    assert env is not None
+    assert env["PATH"] == f"{qt_bin}{os.pathsep}existing"
+    assert env["QT_PLUGIN_PATH"] == str(plugin_root)
 
 
 def _write_fake_sidecar(tmp_path: Path, *, mode: str = "normal") -> Path:

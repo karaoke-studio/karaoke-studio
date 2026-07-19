@@ -182,6 +182,7 @@ class PreviewGraphicsView(QGraphicsView):
     """Graphics View preview with native video plus a QPainter subtitle layer."""
 
     framePainted = Signal()
+    gpuFallback = Signal(str)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -263,6 +264,7 @@ class PreviewGraphicsView(QGraphicsView):
             self._async_renderer.frame_ready.connect(
                 self._on_async_frame, Qt.ConnectionType.QueuedConnection
             )
+            self._connect_gpu_fallback_signal()
             self._subtitle_item.set_async_mode(True)
             self._refresh_async_target()
 
@@ -307,6 +309,32 @@ class PreviewGraphicsView(QGraphicsView):
         self._subtitle_item.set_style(style)
         self._subtitle_item.clear_async_image()
         self._refresh_async_state()
+
+    def set_gpu_preview_enabled(self, enabled: bool) -> None:
+        """Switch the subtitle worker between GPU and Painter at runtime."""
+        target_cls = GpuAsyncSubtitleRenderer if enabled else AsyncSubtitleRenderer
+        if type(self._async_renderer) is target_cls:
+            return
+        self._stop_async_renderer()
+        if not enabled and not async_preview_enabled():
+            self._subtitle_item.set_async_mode(False)
+            self._subtitle_item.set_time(self._t_ms)
+            return
+        self._async_renderer = target_cls(self._output_w, self._output_h, self)
+        self._async_renderer.frame_ready.connect(
+            self._on_async_frame, Qt.ConnectionType.QueuedConnection
+        )
+        self._connect_gpu_fallback_signal()
+        self._subtitle_item.set_async_mode(True)
+        if hasattr(self._async_renderer, "set_playing"):
+            self._async_renderer.set_playing(self._video_playing)
+        self._refresh_async_target()
+        self._refresh_async_state()
+
+    def _connect_gpu_fallback_signal(self) -> None:
+        signal = getattr(self._async_renderer, "fallback_occurred", None)
+        if signal is not None:
+            signal.connect(self.gpuFallback.emit, Qt.ConnectionType.QueuedConnection)
 
     def set_time(self, t_ms: int) -> None:
         self._t_ms = t_ms

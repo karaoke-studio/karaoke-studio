@@ -45,6 +45,15 @@ call :ensure_pkg sudachidict_small sudachidict_small || exit /b 1
 echo Checking bundled SUG source path...
 %PYTHON_BIN% -c "import sys; from pathlib import Path; src=Path(r'%SUG_SRC%').resolve(); sys.path.insert(0, str(src)); import strange_uta_game; actual=Path(strange_uta_game.__file__).resolve(); expected=src/'strange_uta_game'/'__init__.py'; print('  strange_uta_game:', actual); raise SystemExit(0 if actual == expected else f'Expected {expected}, got {actual}')" || exit /b 1
 
+echo Building and validating Direct2D subtitle renderer...
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_native_renderer_smoke.ps1 -InstallQtIfMissing
+if errorlevel 1 (
+    echo.
+    echo Direct2D subtitle renderer build or WARP smoke failed.
+    if not defined IS_CI pause
+    exit /b 1
+)
+
 echo Building GUI Updater.exe...
 %PYTHON_BIN% krok_helper\updater_app\build_updater.py
 if errorlevel 1 (
@@ -222,10 +231,12 @@ echo Copying Updater.exe...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$targetDir = Resolve-Path '%APP_DIST%';" ^
     "$updater = Resolve-Path 'krok_helper\updater_app\dist\Updater.exe';" ^
-    "Copy-Item -LiteralPath $updater -Destination (Join-Path $targetDir 'Updater.exe') -Force"
+    "$renderer = Resolve-Path 'build\native-renderer\krok_subtitle_renderer.exe';" ^
+    "Copy-Item -LiteralPath $updater -Destination (Join-Path $targetDir 'Updater.exe') -Force;" ^
+    "Copy-Item -LiteralPath $renderer -Destination (Join-Path $targetDir 'krok_subtitle_renderer.exe') -Force"
 if errorlevel 1 (
     echo.
-    echo Failed to copy Updater.exe.
+    echo Failed to copy Updater.exe or the Direct2D subtitle renderer.
     if not defined IS_CI pause
     exit /b 1
 )
@@ -248,10 +259,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "  'strange_uta_game\resource\sounds\press.wav'," ^
     "  'strange_uta_game\bass\x64\bass.dll'," ^
     "  'strange_uta_game\bass\x64\bass_fx.dll'," ^
-    "  'Updater.exe'" ^
+    "  'Updater.exe'," ^
+    "  'krok_subtitle_renderer.exe'" ^
     ");" ^
     "$missing = @();" ^
-    "foreach ($rel in $required) { $base = if ($rel -eq 'Updater.exe') { $targetDir } else { $internal }; $path = Join-Path $base $rel; if (-not (Test-Path $path -PathType Leaf)) { $missing += $path } };" ^
+    "foreach ($rel in $required) { $base = if ($rel -in @('Updater.exe','krok_subtitle_renderer.exe')) { $targetDir } else { $internal }; $path = Join-Path $base $rel; if (-not (Test-Path $path -PathType Leaf)) { $missing += $path } };" ^
     "$multimediaRequired = @('QtMultimedia.pyd','QtMultimediaWidgets.pyd','Qt6Multimedia.dll','Qt6MultimediaWidgets.dll','ffmpegmediaplugin.dll');" ^
     "foreach ($name in $multimediaRequired) { if (-not (Get-ChildItem -LiteralPath $internal -Recurse -File -Filter $name -ErrorAction SilentlyContinue | Select-Object -First 1)) { $missing += ('Qt Multimedia component: ' + $name) } };" ^
     "if ($missing.Count) { Write-Host 'Missing package files:'; $missing | ForEach-Object { Write-Host ('  ' + $_) }; exit 1 };" ^
@@ -275,6 +287,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command ^
 if errorlevel 1 (
     echo.
     echo Packaged multiprocessing validation failed.
+    if not defined IS_CI pause
+    exit /b 1
+)
+
+echo Validating packaged Direct2D subtitle renderer...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$exe = Resolve-Path '%APP_DIST%\%APP_NAME%.exe';" ^
+    "$process = Start-Process -FilePath $exe -ArgumentList '--package-gpu-smoke' -WindowStyle Hidden -Wait -PassThru;" ^
+    "if ($process.ExitCode -ne 0) { Write-Host ('Packaged GPU subtitle smoke failed with exit code ' + $process.ExitCode); exit 1 };" ^
+    "Write-Host 'Packaged Direct2D subtitle renderer passed.'"
+if errorlevel 1 (
+    echo.
+    echo Packaged Direct2D subtitle renderer validation failed.
     if not defined IS_CI pause
     exit /b 1
 )

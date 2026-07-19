@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
+from PyQt6.QtGui import QColor, QImage
 
 from krok_helper.errors import ExportCancelled
 from krok_helper.subtitle_render.engine import native_export as ne
@@ -225,3 +226,85 @@ def test_iter_native_rgba_frames_at_times_uses_explicit_timestamps(monkeypatch) 
     ]
     process = _FakeNativeRendererProcess.instances[-1]
     assert process.ranges[0]["timestamps"] == [167, 500, 833]
+
+
+class _FakeGpuRingReader:
+    instances = []
+
+    def __init__(self, event):
+        self.event = event
+        self.attached = False
+        self.closed = False
+        _FakeGpuRingReader.instances.append(self)
+
+    @classmethod
+    def from_event(cls, event):
+        return cls(event)
+
+    def attach(self):
+        self.attached = True
+
+    def close(self):
+        self.closed = True
+
+    def read_qimage(self, event):
+        image = QImage(1, 1, QImage.Format.Format_ARGB32_Premultiplied)
+        image.fill(QColor(20 + int(event["frame_index"]), 40, 60, 128))
+        return image
+
+
+class _FakeGpuRendererProcess:
+    instances = []
+
+    def __init__(self, *args, **kwargs):
+        self.configures = []
+        self.frames = []
+        _FakeGpuRendererProcess.instances.append(self)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return None
+
+    def configure_gpu(self, *args, **kwargs):
+        self.configures.append((args, kwargs))
+        return {"ok": True, "event": "gpu_configured"}
+
+    def render_gpu_frame(self, t_ms, **kwargs):
+        self.frames.append((t_ms, kwargs))
+        return {
+            "ok": True,
+            "event": "gpu_frame_ready",
+            "frame_index": kwargs["frame_index"],
+            "shm_key": kwargs["shm_key"],
+        }
+
+
+def test_iter_gpu_rgba_frames_uses_banded_readback_and_straight_rgba(monkeypatch) -> None:
+    _FakeGpuRendererProcess.instances.clear()
+    _FakeGpuRingReader.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _FakeGpuRendererProcess)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+
+    frames = list(
+        ne.iter_gpu_rgba_frames(
+            _track(),
+            Style(),
+            width=1,
+            height=1,
+            fps=2,
+            total_frames=2,
+            extra_tracks=[_track()],
+            force_warp=True,
+        )
+    )
+
+    assert frames == [bytes([20, 40, 60, 128]), bytes([22, 40, 60, 128])]
+    process = _FakeGpuRendererProcess.instances[-1]
+    assert process.configures[0][1]["extra_tracks"] == [_track()]
+    assert [item[0] for item in process.frames] == [0, 500]
+    assert all(item[1]["readback_bands"] is True for item in process.frames)
+    assert all(item[1]["include_checksum"] is False for item in process.frames)
+    assert _FakeGpuRingReader.instances[-1].attached is True
+    assert _FakeGpuRingReader.instances[-1].closed is True

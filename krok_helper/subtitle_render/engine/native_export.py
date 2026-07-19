@@ -200,3 +200,76 @@ def iter_native_rgba_frames_at_times(
             finally:
                 generation += 1
             start_frame += count
+
+
+def iter_gpu_rgba_frames(
+    track: TimingTrack,
+    style: Style,
+    *,
+    width: int,
+    height: int,
+    fps: int,
+    total_frames: int,
+    renderer_path: str | os.PathLike[str] | None = None,
+    extra_tracks: list[TimingTrack] | None = None,
+    force_warp: bool = False,
+    should_cancel: Callable[[], bool] | None = None,
+) -> Iterator[bytes]:
+    """Yield straight RGBA frames from the Direct2D GPU export path.
+
+    Direct2D reads back only the renderer's conservative subtitle bands.  The
+    shared-memory reader expands those bands into a transparent QImage before
+    converting premultiplied BGRA to ffmpeg's straight RGBA input format.
+    """
+    from PyQt6.QtGui import QImage
+
+    frame_total = max(int(total_frames), 0)
+    if frame_total <= 0:
+        return
+    shm_key = f"krok-gpu-export-{os.getpid()}-{uuid.uuid4().hex}"
+    reader: SharedFrameRingReader | None = None
+    try:
+        with NativeRendererProcess(
+            renderer_path,
+            response_timeout_s=15.0,
+            close_timeout_s=1.0,
+        ) as renderer:
+            renderer.configure_gpu(
+                track,
+                style,
+                width=width,
+                height=height,
+                fps=fps,
+                force_warp=force_warp,
+                extra_tracks=extra_tracks,
+            )
+            for frame_index in range(frame_total):
+                if should_cancel is not None and should_cancel():
+                    raise ExportCancelled("已停止导出。")
+                t_ms = int(round(frame_index * 1000 / max(int(fps), 1)))
+                event = renderer.render_gpu_frame(
+                    t_ms,
+                    force_warp=force_warp,
+                    generation=1,
+                    frame_index=frame_index,
+                    shm_key=shm_key,
+                    include_checksum=False,
+                    readback_bands=True,
+                )
+                if reader is None:
+                    reader = SharedFrameRingReader.from_event(event)
+                    reader.attach()
+                try:
+                    image = reader.read_qimage(event).convertToFormat(
+                        QImage.Format.Format_RGBA8888
+                    )
+                except RuntimeError as exc:
+                    raise NativeRendererError(
+                        f"failed to consume GPU subtitle frame {frame_index}: {exc}"
+                    ) from exc
+                bits = image.constBits()
+                bits.setsize(image.sizeInBytes())
+                yield bytes(bits)
+    finally:
+        if reader is not None:
+            reader.close()

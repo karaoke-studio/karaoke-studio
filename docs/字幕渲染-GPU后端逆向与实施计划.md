@@ -1517,3 +1517,13 @@ G4 下一批迁移 guide symbol（前缀插入、前缀替换、行内替换、�
 - capability 审计后只剩未知全局/逐行动画名会整场回退 Painter，这是面向未来字段的安全闸，不是当前产品功能缺口。独立回归：GPU `110 passed`，transport `71 passed`，native protocol/export/benchmark `64 passed, 27 skipped`。Painter 继续永久作为 oracle/fallback，产品 GPU 开关仍默认关闭。
 
 G4 功能迁移至此收口。下一阶段进入 G5 产品集成：审计预览/导出开关、配置持久化、sidecar 打包与用户可见回退诊断，再进入 G6 稳态和故障恢复门槛。
+
+### 2026-07-19（第三十九批）：G5 产品开关、GPU 导出与 Windows 打包
+
+- 输出页新增彼此独立的“GPU 字幕预览”和“GPU 字幕导出”实验开关，仅在 Windows 显示并默认关闭；二者保存为本机输出偏好，不写入工程撤销历史。GPU 字幕导出不改动 `encoder_mode`，视频仍由用户当前选择的 libx264/NVENC/QSV/AMF 等 ffmpeg 编码器输出。
+- 预览开关可在运行时安全替换 `AsyncSubtitleRenderer` / `GpuAsyncSubtitleRenderer`，切换前停止旧 worker，保留播放状态并刷新当前时间。能力门槛或 sidecar 异常时仍交付 Painter 帧；首次回退会向主窗口发送中文诊断，异常路径保持一秒有界冷却和自动重启。
+- 导出新增常驻 sidecar 的逐帧 Direct2D 路径：每帧使用 packed-band staging readback，经共享内存展开成透明图像并转换为 ffmpeg 要求的 straight RGBA。取消沿用现有 `ExportCancelled`；sidecar/共享内存失败会终止 ffmpeg、删除半成品，并从第 0 帧用 Painter 完整重启，避免输出混合两种渲染器。
+- Windows 构建脚本现在先编译并 WARP 冒烟 `krok_subtitle_renderer.exe`，再把 sidecar 放到主程序 exe 同级。frozen 启动会从 `_internal/PyQt6/Qt6/bin` 发现 Qt DLL，并为 sidecar 注入对应 PATH/QT_PLUGIN_PATH；成包后通过隐藏的 `--package-gpu-smoke` 实测 WARP、GPU configure、条带共享内存读回和非透明字幕像素。
+- 本机完整 `scripts/build_windows.bat` 通过：包内容、multiprocessing spawn、成包 Direct2D/WARP smoke、全量 zip 与增量 app/runtime 资产均成功。另以 320×180、60fps、15 帧纯色背景实测 GPU→共享内存→ffmpeg/libx264，生成有效 MP4；GPU 独立回归 `110 passed`，transport `72 passed`，native protocol `34 passed, 27 skipped`，native export/renderer `54 passed`，loaders `39 passed`。
+
+G5 产品接入与 Windows 分发链路至此具备可验收形态，开关仍默认关闭，Painter 永久作为 oracle/fallback。下一阶段进入 G6：长时预览/导出、设备丢失、sidecar kill/restart、取消与重复切换、显存/RSS 增长和 60/120fps 性能门槛。

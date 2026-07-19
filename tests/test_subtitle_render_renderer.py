@@ -640,6 +640,100 @@ def test_render_job_native_export_flag_and_environment_are_ignored(monkeypatch, 
     monkeypatch.setenv("KROK_SUBTITLE_NATIVE_EXPORT", "0")
 
     assert renderer._native_export_requested(replace(_job(tmp_path), native_export_enabled=None)) is False
+
+
+def test_gpu_export_request_is_explicit_and_defaults_off(monkeypatch, tmp_path):
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT", raising=False)
+
+    assert renderer._gpu_export_requested(
+        replace(_job(tmp_path), gpu_export_enabled=None)
+    ) is False
+    assert renderer._gpu_export_requested(
+        replace(_job(tmp_path), gpu_export_enabled=True)
+    ) is True
+    assert renderer._gpu_export_requested(
+        replace(_job(tmp_path), gpu_export_enabled=False)
+    ) is False
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT", "1")
+    assert renderer._gpu_export_requested(
+        replace(_job(tmp_path), gpu_export_enabled=None)
+    ) is True
+
+
+def test_render_uses_gpu_subtitle_export_without_changing_encoder(monkeypatch, tmp_path):
+    job = replace(
+        _job(tmp_path),
+        width=2,
+        height=1,
+        fps=2,
+        duration_ms=1_000,
+        gpu_export_enabled=True,
+        encoder_mode="cpu",
+    )
+    gpu_path = tmp_path / "krok_subtitle_renderer.exe"
+    gpu_path.write_bytes(b"exe")
+    writes = []
+    fake_process = _FakeRenderProcess(job.output_path)
+
+    def fake_gpu(process, active_job, total_frames, path, should_cancel, on_progress):
+        writes.append((active_job.encoder_mode, total_frames, path))
+        process.stdin.write(b"g" * (active_job.width * active_job.height * 4 * total_frames))
+
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STRIP", "1")
+    monkeypatch.setattr(renderer, "find_tool", lambda _name, _ffmpeg_dir=None: "ffmpeg")
+    monkeypatch.setattr(renderer, "resolve_native_renderer_path", lambda: gpu_path)
+    monkeypatch.setattr(renderer, "_write_frames_gpu", fake_gpu)
+    monkeypatch.setattr(
+        renderer,
+        "_write_frames_single",
+        lambda *_args, **_kwargs: pytest.fail("Painter writer must not run"),
+    )
+    monkeypatch.setattr(renderer.subprocess, "Popen", lambda *args, **kwargs: fake_process)
+
+    assert render_subtitle_video(job) == job.output_path
+    assert writes == [("cpu", 2, gpu_path)]
+    assert bytes(fake_process.stdin.data) == b"g" * 16
+
+
+def test_gpu_export_runtime_failure_restarts_with_painter(monkeypatch, tmp_path):
+    job = replace(
+        _job(tmp_path),
+        width=2,
+        height=1,
+        fps=2,
+        duration_ms=1_000,
+        gpu_export_enabled=True,
+    )
+    gpu_path = tmp_path / "krok_subtitle_renderer.exe"
+    gpu_path.write_bytes(b"exe")
+    processes = [_FakeRenderProcess(job.output_path), _FakeRenderProcess(job.output_path)]
+    logs = []
+    painter_writes = []
+
+    def fail_gpu(*_args, **_kwargs):
+        raise renderer.NativeRendererError("device removed")
+
+    def fake_painter(process, active_job, strip_top, render_h, total_frames, should_cancel, on_progress):
+        painter_writes.append((active_job.gpu_export_enabled, strip_top, render_h))
+        process.stdin.write(b"p" * (active_job.width * render_h * 4 * total_frames))
+
+    monkeypatch.setenv("KROK_SUBTITLE_RENDER_STRIP", "0")
+    monkeypatch.setattr(renderer, "find_tool", lambda _name, _ffmpeg_dir=None: "ffmpeg")
+    monkeypatch.setattr(renderer, "resolve_native_renderer_path", lambda: gpu_path)
+    monkeypatch.setattr(renderer, "_write_frames_gpu", fail_gpu)
+    monkeypatch.setattr(renderer, "_write_frames_single", fake_painter)
+    monkeypatch.setattr(
+        renderer.subprocess,
+        "Popen",
+        lambda *args, **kwargs: processes.pop(0),
+    )
+
+    assert render_subtitle_video(job, logger=logs.append) == job.output_path
+    assert painter_writes == [(False, 0, 1)]
+    assert any("从头回退到 Painter" in message for message in logs)
+
+
 def test_render_falls_back_to_python_when_native_export_sidecar_missing(monkeypatch, tmp_path):
     job = replace(_job(tmp_path), width=2, height=1, fps=2, duration_ms=1000)
     fake_process = _FakeRenderProcess(job.output_path)

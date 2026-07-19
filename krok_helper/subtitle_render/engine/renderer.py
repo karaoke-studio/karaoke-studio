@@ -11,7 +11,7 @@ import math
 import os
 import subprocess
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -27,7 +27,10 @@ from krok_helper.subtitle_render.engine.encoder_select import (
     resolved_encoder_label,
     video_encoder_options,
 )
-from krok_helper.subtitle_render.engine.native_export import iter_native_rgba_frames
+from krok_helper.subtitle_render.engine.native_export import (
+    iter_gpu_rgba_frames,
+    iter_native_rgba_frames,
+)
 from krok_helper.subtitle_render.engine.painter import (
     frame_content_intervals,
     frame_vertical_bounds,
@@ -43,6 +46,7 @@ from krok_helper.subtitle_render.models import (
     timing_line_start_ms,
 )
 from krok_helper.subtitle_render.native_backend import NativeRendererError, resolve_native_renderer_path
+from krok_helper.subtitle_render.native_protocol import gpu_unsupported_features
 
 # A2 条带渲染：只把字幕所在窄条喂给 ffmpeg pipe，省每帧 8MB 拷贝 / pipe 带宽。
 # 条带 = 整段渲染里所有可见内容纵向范围的并集（单条覆盖，方案 A）。可用环境变量
@@ -86,6 +90,7 @@ class RenderJob:
     preset: str = "medium"
     codec: str = "h264"
     native_export_enabled: bool | None = None
+    gpu_export_enabled: bool | None = None
     render_workers: int | None = None
     """帧渲染进程数；None 为自动（最多 8），手动最多 16。"""
     extra_tracks: tuple[TimingTrack, ...] = ()
@@ -124,13 +129,37 @@ def render_subtitle_video(
     native_export_active = native_renderer_path is not None
     if native_export_requested and native_renderer_path is None:
         logger("native 导出 sidecar 未找到，已回退到 Python 渲染器")
+    gpu_export_requested = _gpu_export_requested(job)
+    gpu_renderer_path = resolve_native_renderer_path() if gpu_export_requested else None
+    gpu_fallback_reasons = (
+        gpu_unsupported_features(job.track, job.style, list(job.extra_tracks))
+        if gpu_export_requested
+        else ()
+    )
+    gpu_export_active = (
+        gpu_export_requested
+        and gpu_renderer_path is not None
+        and not gpu_fallback_reasons
+    )
+    if gpu_export_requested and gpu_renderer_path is None:
+        logger("GPU 字幕渲染器未找到，已回退到 Painter 导出")
+    elif gpu_fallback_reasons:
+        logger(
+            "当前工程包含 GPU 尚不识别的功能，已回退到 Painter 导出："
+            + ", ".join(gpu_fallback_reasons)
+        )
 
     # A2：预扫字幕纵向范围只渲染窄条（取消 / 关闭 / 无收益时退回整帧）。
     # 优先方案 B（多条分离带），不适用时退回方案 A（单条并集）。
     cancelled = should_cancel is not None and should_cancel()
     strip: tuple[int, int] | None = None
     bands: list[tuple[int, int]] | None = None
-    if _strip_enabled() and not cancelled and not native_export_active:
+    if (
+        _strip_enabled()
+        and not cancelled
+        and not native_export_active
+        and not gpu_export_active
+    ):
         if _bands_enabled():
             bands = _compute_content_bands(job, duration_ms, should_cancel=should_cancel)
         if bands is None:
@@ -190,7 +219,17 @@ def render_subtitle_video(
         # A3：帧数够多时多进程并行渲染（offscreen worker 池），主进程按序喂 ffmpeg；
         # 否则走单进程。两条路径逐帧逻辑一致（A4 缓冲复用 + 空帧短路 + A2 条带/多带）。
         worker_count = _resolve_worker_count(total_frames, job.render_workers)
-        if native_export_active:
+        if gpu_export_active:
+            logger(f"GPU 字幕导出: {gpu_renderer_path}（Direct2D 条带回读）")
+            _write_frames_gpu(
+                process,
+                job,
+                total_frames,
+                gpu_renderer_path,
+                should_cancel,
+                on_progress,
+            )
+        elif native_export_active:
             logger(f"native 导出: {native_renderer_path}")
             _write_frames_native(
                 process, job, total_frames, native_renderer_path,
@@ -228,6 +267,18 @@ def render_subtitle_video(
     except NativeRendererError as exc:
         terminate_process(process)
         _remove_incomplete_output(job.output_path, logger)
+        if gpu_export_active and not (should_cancel is not None and should_cancel()):
+            logger(f"GPU 字幕导出失败，正在从头回退到 Painter：{exc}")
+            return render_subtitle_video(
+                replace(job, gpu_export_enabled=False),
+                ffmpeg_dir=ffmpeg_dir,
+                logger=logger,
+                should_cancel=should_cancel,
+                on_process_started=on_process_started,
+                on_progress=on_progress,
+                preview_image_path=preview_image_path,
+                preview_width=preview_width,
+            )
         raise ProcessingError(f"native 字幕渲染器导出失败: {exc}") from exc
     except (BrokenPipeError, OSError) as exc:
         terminate_process(process)
@@ -488,6 +539,32 @@ def _native_export_requested(job: RenderJob) -> bool:
     # Keep the job field for project-file compatibility, but never activate the
     # sidecar until its layout matches the Python renderer again.
     return False
+
+
+def _gpu_export_enabled() -> bool:
+    return os.environ.get("KROK_SUBTITLE_GPU_EXPORT", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _gpu_export_requested(job: RenderJob) -> bool:
+    if os.name != "nt":
+        return False
+    if job.gpu_export_enabled is not None:
+        return bool(job.gpu_export_enabled)
+    return _gpu_export_enabled()
+
+
+def _gpu_force_warp() -> bool:
+    return os.environ.get("KROK_SUBTITLE_GPU_FORCE_WARP", "0").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
 
 
 def _paint_overlay_strip(
@@ -804,6 +881,36 @@ def _write_frames_native(
         fps=job.fps,
         total_frames=total_frames,
         renderer_path=renderer_path,
+        should_cancel=should_cancel,
+    ):
+        if should_cancel is not None and should_cancel():
+            raise ExportCancelled("已停止导出。")
+        process.stdin.write(frame)
+        written += 1
+        if on_progress is not None:
+            on_progress(written, total_frames)
+
+
+def _write_frames_gpu(
+    process: subprocess.Popen,
+    job: RenderJob,
+    total_frames: int,
+    renderer_path: Path,
+    should_cancel: Callable[[], bool] | None,
+    on_progress: Callable[[int, int], None] | None,
+) -> None:
+    """Write Direct2D band-readback frames to the existing ffmpeg pipe."""
+    written = 0
+    for frame in iter_gpu_rgba_frames(
+        job.track,
+        job.style,
+        width=job.width,
+        height=job.height,
+        fps=job.fps,
+        total_frames=total_frames,
+        renderer_path=renderer_path,
+        extra_tracks=list(job.extra_tracks),
+        force_warp=_gpu_force_warp(),
         should_cancel=should_cancel,
     ):
         if should_cancel is not None and should_cancel():
