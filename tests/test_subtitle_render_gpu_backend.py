@@ -144,6 +144,51 @@ def _g3_inline_role_track() -> TimingTrack:
     )
 
 
+def _g3_ruby_anchor_track() -> TimingTrack:
+    return TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("♧", 0, role_label="decor"),
+                    TimingChar("項", 500),
+                ],
+                end_ms=1_200,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="項",
+                reading="こう",
+                pos_start_ms=500,
+                pos_end_ms=1_200,
+                reading_parts=["こ", "う"],
+                reading_part_ms=[350],
+            )
+        ],
+    )
+
+
+def _g3_role_ruby_track() -> TimingTrack:
+    return TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("項", 0, role_label="lead")],
+                end_ms=1_200,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="項",
+                reading="こう",
+                pos_start_ms=0,
+                pos_end_ms=1_200,
+                reading_parts=["こ", "う"],
+                reading_part_ms=[600],
+            )
+        ],
+    )
+
+
 def _alpha_count(payload: bytes) -> int:
     return sum(alpha > 0 for alpha in payload[3::4])
 
@@ -950,6 +995,211 @@ def test_gpu_g3_inline_roles_use_independent_n3_glow(monkeypatch) -> None:
         and payload[index + 2] > payload[index + 1] + 30
         and payload[index + 3] > 0
         for index in range(0, len(payload), 4)
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_affects_ruby_anchor_matches_painter_direction(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    white = KaraokeColors(
+        before=KaraokeColorState(text=PaintFill(color="#FFFFFF")),
+        after=KaraokeColorState(text=PaintFill(color="#FFFFFF")),
+    )
+    red = KaraokeColors(
+        before=KaraokeColorState(text=PaintFill(color="#FF0000")),
+        after=KaraokeColorState(text=PaintFill(color="#FF0000")),
+    )
+    base = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=72,
+        ruby_font_size_px=30,
+        ruby_gap_px=4,
+        stroke_width_px=0,
+        ruby_stroke_width_px=0,
+        decoration_kind="shadow",
+        shadow_color="#00000000",
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        dual_line_layout=False,
+        karaoke_colors=white,
+        ruby_karaoke_colors=red,
+    )
+    ignored = replace(
+        base,
+        custom_style_schemes={
+            "decor": SubtitleStyleScheme(
+                font_family="Meiryo",
+                font_size_px=190,
+                affects_ruby_anchor=False,
+                karaoke_colors=white,
+            )
+        },
+    )
+    included = replace(
+        ignored,
+        custom_style_schemes={
+            "decor": replace(
+                ignored.custom_style_schemes["decor"],
+                affects_ruby_anchor=True,
+            )
+        },
+    )
+    track = _g3_ruby_anchor_track()
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu_ignored = _render_g1_frames(
+            renderer, ignored, (700,), force_warp=True, track=track
+        )
+        _, gpu_included = _render_g1_frames(
+            renderer, included, (700,), force_warp=True, track=track
+        )
+    painter_ignored = _render_painter_oracle(ignored, t_ms=700, track=track)
+    painter_included = _render_painter_oracle(included, t_ms=700, track=track)
+
+    def ruby_top(payload: bytes) -> int:
+        ys = [
+            index // (640 * 4)
+            for index in range(0, len(payload), 4)
+            if payload[index] > 180
+            and payload[index + 1] < 80
+            and payload[index + 2] < 80
+            and payload[index + 3] > 0
+        ]
+        assert ys
+        return min(ys)
+
+    gpu_delta = ruby_top(gpu_ignored[0]) - ruby_top(gpu_included[0])
+    painter_delta = ruby_top(painter_ignored) - ruby_top(painter_included)
+    assert gpu_delta > 20
+    assert painter_delta > 20
+    assert abs(gpu_delta - painter_delta) <= 6
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_role_ruby_font_colors_and_outline_match_painter(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    def solid_colors(color: str, stroke: str = "#000000") -> KaraokeColors:
+        state = KaraokeColorState(
+            text=PaintFill(mode="solid", color=color),
+            stroke=PaintFill(mode="solid", color=stroke),
+        )
+        return KaraokeColors(before=state, after=state)
+
+    style = _g1_style(
+        font_family="Meiryo",
+        font_size_px=72,
+        ruby_font_family="Meiryo",
+        ruby_font_size_px=24,
+        ruby_gap_px=4,
+        ruby_stroke_width_px=1,
+        ruby_stroke2_enabled=False,
+        decoration_kind="shadow",
+        shadow_color="#00000000",
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        dual_line_layout=False,
+        karaoke_colors=solid_colors("#FFFFFF"),
+        ruby_karaoke_colors=solid_colors("#FF2020"),
+        custom_style_schemes={
+            "lead": SubtitleStyleScheme(
+                font_family="Meiryo",
+                font_size_px=72,
+                karaoke_colors=solid_colors("#2040FF"),
+                ruby_font_family="Meiryo",
+                ruby_font_size_px=46,
+                ruby_gap_px=7,
+                ruby_stroke_width_px=5,
+                ruby_stroke2_enabled=False,
+                ruby_karaoke_colors=solid_colors("#20FF40", "#101010"),
+            )
+        },
+    )
+    track = _g3_role_ruby_track()
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, (1_000,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=1_000, track=track)
+
+    def green_bounds(payload: bytes) -> tuple[int, int, int, int]:
+        xs: list[int] = []
+        ys: list[int] = []
+        for index in range(0, len(payload), 4):
+            if (
+                payload[index + 1] > 160
+                and payload[index + 1] > payload[index] + 70
+                and payload[index + 1] > payload[index + 2] + 70
+                and payload[index + 3] > 0
+            ):
+                pixel = index // 4
+                xs.append(pixel % 640)
+                ys.append(pixel // 640)
+        assert xs and ys
+        return min(xs), min(ys), max(xs), max(ys)
+
+    gpu_bounds = green_bounds(frames[0])
+    painter_bounds = green_bounds(painter)
+    assert abs((gpu_bounds[2] - gpu_bounds[0]) - (painter_bounds[2] - painter_bounds[0])) <= 8
+    assert abs((gpu_bounds[3] - gpu_bounds[1]) - (painter_bounds[3] - painter_bounds[1])) <= 8
+    assert abs(gpu_bounds[1] - painter_bounds[1]) <= 12
+    assert not any(
+        frames[0][index] > frames[0][index + 1] + 80
+        and frames[0][index + 1] < 100
+        and frames[0][index + 3] > 0
+        for index in range(0, len(frames[0]), 4)
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_role_ruby_uses_independent_n3_glow(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    ruby_state = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFFFF"),
+        stroke=PaintFill(mode="solid", color="#202020"),
+        shadow=PaintFill(mode="solid", color="#FF20E0"),
+    )
+    role = SubtitleStyleScheme(
+        font_family="Meiryo",
+        font_size_px=72,
+        ruby_font_family="Meiryo",
+        ruby_font_size_px=42,
+        ruby_stroke_width_px=3,
+        ruby_stroke2_enabled=False,
+        ruby_decoration_kind="glow",
+        ruby_glow_before_radius_px=11,
+        ruby_glow_after_radius_px=6,
+        ruby_glow_concentration_level=2,
+        ruby_karaoke_colors=KaraokeColors(before=ruby_state, after=ruby_state),
+    )
+    glow_style = _g1_style(
+        font_family="Meiryo",
+        decoration_kind="shadow",
+        shadow_color="#00000000",
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        dual_line_layout=False,
+        custom_style_schemes={"lead": role},
+    )
+    no_glow_style = replace(
+        glow_style,
+        custom_style_schemes={"lead": replace(role, ruby_decoration_kind="none")},
+    )
+    track = _g3_role_ruby_track()
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, no_glow = _render_g1_frames(
+            renderer, no_glow_style, (300,), force_warp=True, track=track
+        )
+        _, glow = _render_g1_frames(
+            renderer, glow_style, (300,), force_warp=True, track=track
+        )
+
+    assert sum(glow[0][3::4]) > sum(no_glow[0][3::4]) * 1.12
+    assert any(
+        glow[0][index] > glow[0][index + 1] + 20
+        and glow[0][index + 2] > glow[0][index + 1] + 20
+        and glow[0][index + 3] > 0
+        for index in range(0, len(glow[0]), 4)
     )
 
 

@@ -1110,3 +1110,24 @@ gradient/split/image fill、标题/多字幕源与 strip/bands readback。
 
 当前角色切片尚未宣告完整：ruby 的角色专属外观与 `affects_ruby_anchor` 选择规则、渐变/split/
 image fill 仍待下一刀；产品 GPU 开关继续默认关闭，Painter 继续作为 oracle/fallback。
+
+### 2026-07-19（第十四批）：G3 角色 ruby 与锚点参与规则
+
+- `TextStyle`/resolved style 补齐 `affects_ruby_anchor`。DirectWrite 只让非空白且明确参与的
+  混合 run 抬高整行共享 ruby 基线；若全员退出，则与 Painter 一样只回退到实际 ruby 目标字，
+  避免无关装饰字符把注音顶出画面。
+- `TextRuby` 增加角色样式索引，选择规则严格复用 Painter 语义：按 ruby 的真实目标索引顺序，
+  采用第一个带角色标签字符的 resolved style。角色 ruby 的 before/after 配色、stroke/stroke2、
+  decoration 和独立 glow 半径/浓度均不再泄漏全局 ruby 样式。
+- 保留现有 Painter 的兼容边界：角色方案参与 ruby 排版测量和绘制外观，但最终字形与共享基线
+  仍使用行级 ruby font/gap。GPU 因此把角色测量尺寸与行级 DirectWrite outline 分离，未擅自改变
+  CPU oracle 已有输出。
+- ruby glow 按“角色样式 + before/after”分组，分别在自身 wipe 边界裁切并执行 N3 multi-pass；
+  sharp 层也逐 ruby 创建匹配的 fill/stroke brush。角色主配色在没有显式角色 ruby 配色时会覆盖
+  全局 ruby 配色，与 Painter 的默认继承规则一致。
+- 新门禁覆盖高装饰字符 opt-in/opt-out 的 ruby 位移方向和幅度、角色 ruby 的字体测量/颜色/描边
+  Painter 边界，以及角色专属洋红 glow；硬件/WARP build smoke 通过。GPU/transport
+  `99 passed`，native protocol/export/benchmark `56 passed, 27 skipped`。
+
+角色/ruby 基础切片至此收口。G3 下一刀进入 gradient/split/image fill；产品 GPU 开关继续默认
+关闭，Painter 永久保留为 oracle/fallback。

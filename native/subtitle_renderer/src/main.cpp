@@ -102,6 +102,7 @@ struct ResolvedStyle {
     std::optional<int> latinFontWeight;
     bool italic = false;
     bool allowBiting = false;
+    bool affectsRubyAnchor = true;
     int spaceWidthPercent = 20;
     int letterSpacingPx = 0;
     QString baseColor = QStringLiteral("#FFFFFF");
@@ -668,11 +669,29 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     if (hasNonNull(style, QStringLiteral("font_family"))) {
         cfg.fontFamily = stringValue(style, QStringLiteral("font_family"), cfg.fontFamily);
     }
+    if (hasNonNull(style, QStringLiteral("font_family_latin"))) {
+        cfg.fontFamilyLatin = stringValue(
+            style, QStringLiteral("font_family_latin"), cfg.fontFamilyLatin
+        );
+    }
     if (hasNonNull(style, QStringLiteral("font_size_px"))) {
         cfg.fontSizePx = std::max(1, intValue(style, QStringLiteral("font_size_px"), cfg.fontSizePx));
     }
     if (hasNonNull(style, QStringLiteral("font_weight"))) {
         cfg.fontWeight = std::clamp(intValue(style, QStringLiteral("font_weight"), cfg.fontWeight), 1, 999);
+    }
+    if (hasNonNull(style, QStringLiteral("latin_font_size_px"))) {
+        cfg.latinFontSizePx = std::max(
+            1, intValue(style, QStringLiteral("latin_font_size_px"), cfg.fontSizePx)
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("latin_font_weight"))) {
+        cfg.latinFontWeight = std::clamp(
+            intValue(style, QStringLiteral("latin_font_weight"), cfg.fontWeight), 1, 999
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("italic"))) {
+        cfg.italic = style.value(QStringLiteral("italic")).toBool(cfg.italic);
     }
     if (hasNonNull(style, QStringLiteral("letter_spacing_px"))) {
         cfg.letterSpacingPx = intValue(style, QStringLiteral("letter_spacing_px"), cfg.letterSpacingPx);
@@ -703,7 +722,10 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     if (hasNonNull(style, QStringLiteral("stroke_width_px"))) {
         cfg.strokeWidthPx = std::max(0, intValue(style, QStringLiteral("stroke_width_px"), cfg.strokeWidthPx));
     }
-    if (hasNonNull(style, QStringLiteral("stroke2_width_px"))) {
+    if (hasNonNull(style, QStringLiteral("stroke2_enabled"))
+        && !style.value(QStringLiteral("stroke2_enabled")).toBool()) {
+        cfg.stroke2WidthPx = 0;
+    } else if (hasNonNull(style, QStringLiteral("stroke2_width_px"))) {
         cfg.stroke2WidthPx = std::max(0, intValue(style, QStringLiteral("stroke2_width_px"), cfg.stroke2WidthPx));
     }
     if (hasNonNull(style, QStringLiteral("decoration_kind"))) {
@@ -726,6 +748,11 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     }
     if (hasNonNull(style, QStringLiteral("allow_biting"))) {
         cfg.allowBiting = style.value(QStringLiteral("allow_biting")).toBool(cfg.allowBiting);
+    }
+    if (hasNonNull(style, QStringLiteral("affects_ruby_anchor"))) {
+        cfg.affectsRubyAnchor = style.value(
+            QStringLiteral("affects_ruby_anchor")
+        ).toBool(cfg.affectsRubyAnchor);
     }
     if (hasNonNull(style, QStringLiteral("space_width_percent"))) {
         cfg.spaceWidthPercent = std::clamp(
@@ -750,8 +777,94 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     if (hasNonNull(style, QStringLiteral("ruby_font_size_px"))) {
         cfg.rubyFontSizePx = std::max(1, intValue(style, QStringLiteral("ruby_font_size_px"), cfg.rubyFontSizePx));
     }
+    if (hasNonNull(style, QStringLiteral("ruby_font_family"))) {
+        cfg.rubyFontFamily = stringValue(
+            style, QStringLiteral("ruby_font_family"), cfg.rubyFontFamily
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_font_family_latin"))) {
+        cfg.rubyFontFamilyLatin = stringValue(
+            style, QStringLiteral("ruby_font_family_latin"), cfg.rubyFontFamilyLatin
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_font_weight"))) {
+        cfg.rubyFontWeight = std::clamp(
+            intValue(style, QStringLiteral("ruby_font_weight"), cfg.fontWeight), 1, 999
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_latin_font_size_px"))) {
+        cfg.rubyLatinFontSizePx = std::max(
+            1, intValue(style, QStringLiteral("ruby_latin_font_size_px"), cfg.rubyFontSizePx)
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_latin_font_weight"))) {
+        cfg.rubyLatinFontWeight = std::clamp(
+            intValue(style, QStringLiteral("ruby_latin_font_weight"), cfg.fontWeight), 1, 999
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_font_follow_main"))) {
+        cfg.rubyFontFollowMain = style.value(
+            QStringLiteral("ruby_font_follow_main")
+        ).toBool(cfg.rubyFontFollowMain);
+    }
     if (hasNonNull(style, QStringLiteral("ruby_gap_px"))) {
-        cfg.rubyGapPx = std::max(0, intValue(style, QStringLiteral("ruby_gap_px"), cfg.rubyGapPx));
+        cfg.rubyGapPx = intValue(style, QStringLiteral("ruby_gap_px"), cfg.rubyGapPx);
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_stroke_width_px"))) {
+        cfg.rubyStrokeWidthPx = std::max(
+            0, intValue(style, QStringLiteral("ruby_stroke_width_px"), cfg.rubyStrokeWidthPx)
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_stroke2_enabled"))
+        && !style.value(QStringLiteral("ruby_stroke2_enabled")).toBool()) {
+        cfg.rubyStroke2WidthPx = 0;
+    } else if (hasNonNull(style, QStringLiteral("ruby_stroke2_width_px"))) {
+        cfg.rubyStroke2WidthPx = std::max(
+            0, intValue(style, QStringLiteral("ruby_stroke2_width_px"), cfg.rubyStroke2WidthPx)
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_decoration_kind"))) {
+        cfg.rubyDecorationKind = stringValue(
+            style, QStringLiteral("ruby_decoration_kind"), cfg.rubyDecorationKind
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_glow_radius_px"))) {
+        const int radius = std::max(
+            0, intValue(style, QStringLiteral("ruby_glow_radius_px"), 0)
+        );
+        cfg.rubyGlowBeforeRadiusPx = radius;
+        cfg.rubyGlowAfterRadiusPx = radius;
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_glow_before_radius_px"))) {
+        cfg.rubyGlowBeforeRadiusPx = std::max(
+            0,
+            intValue(
+                style,
+                QStringLiteral("ruby_glow_before_radius_px"),
+                cfg.rubyGlowBeforeRadiusPx
+            )
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_glow_after_radius_px"))) {
+        cfg.rubyGlowAfterRadiusPx = std::max(
+            0,
+            intValue(
+                style,
+                QStringLiteral("ruby_glow_after_radius_px"),
+                cfg.rubyGlowAfterRadiusPx
+            )
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_glow_concentration_level"))) {
+        cfg.rubyGlowConcentrationLevel = std::clamp(
+            intValue(
+                style,
+                QStringLiteral("ruby_glow_concentration_level"),
+                cfg.rubyGlowConcentrationLevel
+            ),
+            0,
+            2
+        );
     }
 }
 
@@ -769,6 +882,11 @@ ResolvedStyle styleWithOverrides(const ResolvedStyle &base, const QJsonObject &s
     if (hasObject(scheme, QStringLiteral("ruby_karaoke_colors"))) {
         cfg.hasRubyKaraokeColors = true;
         applyRubyKaraokeColors(cfg, scheme.value(QStringLiteral("ruby_karaoke_colors")).toObject());
+    } else if (hasObject(scheme, QStringLiteral("karaoke_colors"))) {
+        // Painter treats a role's main colors as that role's implicit ruby
+        // colors. A global explicit ruby palette must not leak into it.
+        cfg.hasRubyKaraokeColors = true;
+        copyMainColorsToRuby(cfg);
     } else if (!cfg.hasRubyKaraokeColors) {
         if (cfg.hasMainKaraokeColors) {
             copyMainColorsToRuby(cfg);
@@ -1264,6 +1382,9 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     }
     base.italic = style.value(QStringLiteral("italic")).toBool(base.italic);
     base.allowBiting = style.value(QStringLiteral("allow_biting")).toBool(base.allowBiting);
+    base.affectsRubyAnchor = style.value(
+        QStringLiteral("affects_ruby_anchor")
+    ).toBool(base.affectsRubyAnchor);
     base.spaceWidthPercent = std::clamp(
         intValue(style, QStringLiteral("space_width_percent"), base.spaceWidthPercent),
         10,
@@ -5550,6 +5671,7 @@ void applyGpuResolvedStyle(
     target.latinFontWeight = source.latinFontWeight;
     target.italic = source.italic;
     target.allowBiting = source.allowBiting;
+    target.affectsRubyAnchor = source.affectsRubyAnchor;
     target.spaceWidthPercent = source.spaceWidthPercent;
     target.letterSpacing = static_cast<float>(source.letterSpacingPx * scale);
     target.beforeFill = gpuColor(source.baseFill.color, source.baseColor);
@@ -5733,6 +5855,17 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             sceneRuby.lastCharIndex = *maximum;
             sceneRuby.startMs = ruby.posStartMs + config.timingOffsetMs;
             sceneRuby.endMs = ruby.posEndMs + config.timingOffsetMs;
+            for (int targetIndex : targetIndices) {
+                if (targetIndex < 0
+                    || targetIndex >= static_cast<int>(sourceLine.chars.size())
+                    || sourceLine.chars[static_cast<std::size_t>(targetIndex)].roleLabel.isEmpty()) {
+                    continue;
+                }
+                sceneRuby.styleIndex = line.chars[
+                    static_cast<std::size_t>(targetIndex)
+                ].styleIndex;
+                break;
+            }
             for (const auto &unit : rubyUtopiaReadingUnitsAndIntervals(ruby)) {
                 sceneRuby.units.push_back(krok::subtitle::native::RubyUnit{
                     unit.first.toStdWString(),

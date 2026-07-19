@@ -8,6 +8,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <cwctype>
 #include <iomanip>
 #include <sstream>
 #include <limits>
@@ -76,6 +77,12 @@ bool isAsciiAlnumText(const std::wstring &text) {
         }
     }
     return seen;
+}
+
+bool isWhitespaceText(const std::wstring &text) {
+    return !text.empty() && std::all_of(text.begin(), text.end(), [](wchar_t value) {
+        return std::iswspace(static_cast<wint_t>(value)) != 0;
+    });
 }
 
 Microsoft::WRL::ComPtr<IDWriteFontFace> createFontFace(
@@ -207,6 +214,7 @@ struct Direct2DGpuBackend::Impl {
         float layoutLeft = 0.0f;
         float layoutRight = 0.0f;
         int styleIndex = -1;
+        float boxAscent = 0.0f;
         Microsoft::WRL::ComPtr<ID2D1Geometry> geometry;
     };
 
@@ -214,6 +222,7 @@ struct Direct2DGpuBackend::Impl {
         int startMs = 0;
         int endMs = 0;
         float baselineOffset = 0.0f;
+        int styleIndex = -1;
         D2D1_RECT_F bounds{};
         std::vector<CachedChar> chars;
         std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> geometries;
@@ -227,6 +236,7 @@ struct Direct2DGpuBackend::Impl {
         float ascent = 0.0f;
         float descent = 0.0f;
         float boxAscent = 0.0f;
+        bool hasRubyAnchor = false;
         float maxVisualPad = 0.0f;
         bool hasInlineStyles = false;
         D2D1_RECT_F bounds{};
@@ -447,14 +457,14 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         const TextStyle &style = lineIndex < scene.lineStyles.size()
             ? scene.lineStyles[lineIndex]
             : scene.style;
-        auto resolveFace = [&](const std::wstring &family, int weight) {
+        auto resolveFace = [&](const std::wstring &family, int weight, bool italic) {
             const std::wstring resolvedFamily = family.empty() ? L"Segoe UI" : family;
             auto face = createFontFace(
-                fontCollection.Get(), resolvedFamily, weight, style.italic
+                fontCollection.Get(), resolvedFamily, weight, italic
             );
             if (!face && resolvedFamily != L"Segoe UI") {
                 face = createFontFace(
-                    fontCollection.Get(), L"Segoe UI", weight, style.italic
+                    fontCollection.Get(), L"Segoe UI", weight, italic
                 );
             }
             if (!face) {
@@ -462,20 +472,23 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             }
             return face;
         };
-        const auto mainFace = resolveFace(style.fontFamily, style.fontWeight);
+        const auto mainFace = resolveFace(style.fontFamily, style.fontWeight, style.italic);
         const auto latinFace = resolveFace(
             style.latinFontFamily.value_or(style.fontFamily),
-            style.latinFontWeight.value_or(style.fontWeight)
+            style.latinFontWeight.value_or(style.fontWeight),
+            style.italic
         );
         const auto rubyFace = resolveFace(
             style.rubyFontFamily.empty() ? style.fontFamily : style.rubyFontFamily,
-            style.rubyFontWeight
+            style.rubyFontWeight,
+            style.italic
         );
         const auto rubyLatinFace = resolveFace(
             style.rubyLatinFontFamily.value_or(
                 style.rubyFontFamily.empty() ? style.fontFamily : style.rubyFontFamily
             ),
-            style.rubyLatinFontWeight.value_or(style.rubyFontWeight)
+            style.rubyLatinFontWeight.value_or(style.rubyFontWeight),
+            style.italic
         );
         Impl::CachedLine cached;
         cached.style = style;
@@ -507,7 +520,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         : charStyle.fontFamily,
                     latin
                         ? charStyle.latinFontWeight.value_or(charStyle.fontWeight)
-                        : charStyle.fontWeight
+                        : charStyle.fontWeight,
+                    charStyle.italic
                 );
             }
             const float fontSize = latin
@@ -544,11 +558,13 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 static_cast<int>(fontMetrics.ascent) + static_cast<int>(fontMetrics.descent),
                 1
             ));
-            cached.boxAscent = std::max(
-                cached.boxAscent,
+            const float charBoxAscent =
                 static_cast<float>(unit) * static_cast<float>(fontMetrics.ascent) / boxMetricTotal
-                    + static_cast<float>(edgeSize) * 0.5f
-            );
+                + static_cast<float>(edgeSize) * 0.5f;
+            if (!isWhitespaceText(sourceChar.text) && charStyle.affectsRubyAnchor) {
+                cached.boxAscent = std::max(cached.boxAscent, charBoxAscent);
+                cached.hasRubyAnchor = true;
+            }
 
             std::vector<UINT16> glyphs = glyphIndices(requestedFace.Get(), sourceChar.text);
             Microsoft::WRL::ComPtr<IDWriteFontFace> outlineFace = requestedFace;
@@ -669,12 +685,29 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 cursor + layoutWidth,
             });
             cached.chars.back().styleIndex = sourceChar.styleIndex;
+            cached.chars.back().boxAscent = charBoxAscent;
             if (positionedHasBounds) {
                 cached.chars.back().geometry = cached.geometries.back();
             }
             cursor += layoutWidth;
             if (charIndex + 1 < sourceLine.chars.size()) {
                 cursor += charStyle.letterSpacing;
+            }
+        }
+
+        if (!cached.hasRubyAnchor) {
+            for (const TextRuby &ruby : sourceLine.rubies) {
+                const int first = std::max(ruby.firstCharIndex, 0);
+                const int last = std::min(
+                    ruby.lastCharIndex,
+                    static_cast<int>(cached.chars.size()) - 1
+                );
+                for (int index = first; index <= last; ++index) {
+                    cached.boxAscent = std::max(
+                        cached.boxAscent,
+                        cached.chars[static_cast<std::size_t>(index)].boxAscent
+                    );
+                }
             }
         }
 
@@ -685,6 +718,31 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 || sourceRuby.lastCharIndex >= static_cast<int>(cached.chars.size())) {
                 continue;
             }
+            const bool hasRubyStyle = sourceRuby.styleIndex >= 0
+                && sourceRuby.styleIndex < static_cast<int>(scene.charStyles.size());
+            const TextStyle &rubyStyle = hasRubyStyle
+                ? scene.charStyles[static_cast<std::size_t>(sourceRuby.styleIndex)]
+                : style;
+            const auto selectedRubyFace = hasRubyStyle
+                ? resolveFace(
+                    rubyStyle.rubyFontFamily.empty()
+                        ? rubyStyle.fontFamily
+                        : rubyStyle.rubyFontFamily,
+                    rubyStyle.rubyFontWeight,
+                    rubyStyle.italic
+                )
+                : rubyFace;
+            const auto selectedRubyLatinFace = hasRubyStyle
+                ? resolveFace(
+                    rubyStyle.rubyLatinFontFamily.value_or(
+                        rubyStyle.rubyFontFamily.empty()
+                            ? rubyStyle.fontFamily
+                            : rubyStyle.rubyFontFamily
+                    ),
+                    rubyStyle.rubyLatinFontWeight.value_or(rubyStyle.rubyFontWeight),
+                    rubyStyle.italic
+                )
+                : rubyLatinFace;
             struct RubyGlyph {
                 const RubyUnit *source = nullptr;
                 Microsoft::WRL::ComPtr<ID2D1Geometry> geometry;
@@ -696,29 +754,42 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             rubyGlyphs.reserve(sourceRuby.units.size());
             float naturalWidth = 0.0f;
             float rubyBoxDescent = 0.0f;
-            const int rubyEdgeSize = std::max(static_cast<int>(style.rubyStrokeWidth), 0);
+            const int rubyEdgeSize = std::max(
+                static_cast<int>(rubyStyle.rubyStrokeWidth), 0
+            );
+            const int rubyAnchorEdgeSize = std::max(
+                static_cast<int>(style.rubyStrokeWidth), 0
+            );
 
             for (const RubyUnit &sourceUnit : sourceRuby.units) {
                 const bool latin = isLatinText(sourceUnit.text);
-                const auto &requestedFace = latin ? rubyLatinFace : rubyFace;
-                const float fontSize = latin
+                const auto &measureFace = latin
+                    ? selectedRubyLatinFace
+                    : selectedRubyFace;
+                const auto &drawingFace = latin ? rubyLatinFace : rubyFace;
+                const float measureFontSize = latin
+                    ? rubyStyle.rubyLatinFontSize.value_or(rubyStyle.rubyFontSize)
+                    : rubyStyle.rubyFontSize;
+                const float drawingFontSize = latin
                     ? style.rubyLatinFontSize.value_or(style.rubyFontSize)
                     : style.rubyFontSize;
-                const int unit = std::max(static_cast<int>(fontSize), 1);
+                const int measureUnit = std::max(static_cast<int>(measureFontSize), 1);
+                const int drawingUnit = std::max(static_cast<int>(drawingFontSize), 1);
                 DWRITE_FONT_METRICS fontMetrics{};
-                requestedFace->GetMetrics(&fontMetrics);
+                drawingFace->GetMetrics(&fontMetrics);
                 const float boxMetricTotal = static_cast<float>(std::max(
                     static_cast<int>(fontMetrics.ascent) + static_cast<int>(fontMetrics.descent),
                     1
                 ));
                 rubyBoxDescent = std::max(
                     rubyBoxDescent,
-                    static_cast<float>(unit) * static_cast<float>(fontMetrics.descent) / boxMetricTotal
-                        + static_cast<float>(rubyEdgeSize) * 0.5f
+                    static_cast<float>(drawingUnit)
+                        * static_cast<float>(fontMetrics.descent) / boxMetricTotal
+                        + static_cast<float>(rubyAnchorEdgeSize) * 0.5f
                 );
 
-                std::vector<UINT16> glyphs = glyphIndices(requestedFace.Get(), sourceUnit.text);
-                Microsoft::WRL::ComPtr<IDWriteFontFace> outlineFace = requestedFace;
+                std::vector<UINT16> glyphs = glyphIndices(drawingFace.Get(), sourceUnit.text);
+                Microsoft::WRL::ComPtr<IDWriteFontFace> outlineFace = drawingFace;
                 if (!validGlyphIndices(glyphs)) {
                     outlineFace = findFallbackFontFace(
                         fontCollection.Get(), sourceUnit.text, fallbackFaces, glyphs
@@ -740,7 +811,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     sink->SetFillMode(D2D1_FILL_MODE_WINDING);
                     sink->SetSegmentFlags(D2D1_PATH_SEGMENT_FORCE_ROUND_LINE_JOIN);
                     const HRESULT outlineResult = outlineFace->GetGlyphRunOutline(
-                        static_cast<float>(unit),
+                        static_cast<float>(drawingUnit),
                         glyphs.data(),
                         nullptr,
                         nullptr,
@@ -769,23 +840,35 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         && glyph.bounds.right > glyph.bounds.left;
                 }
                 if (hasBounds) {
-                    std::vector<DWRITE_GLYPH_METRICS> metrics(glyphs.size());
+                    std::vector<UINT16> measureGlyphs = glyphIndices(
+                        measureFace.Get(), sourceUnit.text
+                    );
+                    Microsoft::WRL::ComPtr<IDWriteFontFace> metricFace = measureFace;
+                    if (!validGlyphIndices(measureGlyphs)) {
+                        metricFace = findFallbackFontFace(
+                            fontCollection.Get(), sourceUnit.text, fallbackFaces, measureGlyphs
+                        );
+                    }
+                    std::vector<DWRITE_GLYPH_METRICS> metrics(measureGlyphs.size());
                     checkHr(
-                        requestedFace->GetDesignGlyphMetrics(
-                            glyphs.data(),
-                            static_cast<UINT32>(glyphs.size()),
+                        metricFace->GetDesignGlyphMetrics(
+                            measureGlyphs.data(),
+                            static_cast<UINT32>(measureGlyphs.size()),
                             metrics.data(),
                             FALSE
                         ),
                         "IDWriteFontFace::GetDesignGlyphMetrics(ruby character)",
                         device_
                     );
-                    const int inkWidth = std::max(
+                    const int drawingInkWidth = std::max(
                         static_cast<int>(glyph.bounds.right - glyph.bounds.left), 0
                     );
+                    const int inkWidth = drawingUnit > 0
+                        ? drawingInkWidth * measureUnit / drawingUnit
+                        : drawingInkWidth;
                     int leftBearing = metrics.front().leftSideBearing;
                     int rightBearing = metrics.front().rightSideBearing;
-                    if (!style.allowBiting) {
+                    if (!rubyStyle.allowBiting) {
                         leftBearing = std::max(leftBearing, 0);
                         rightBearing = std::max(rightBearing, 0);
                     }
@@ -800,12 +883,12 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         + static_cast<float>(rubyEdgeSize) * 0.5f;
                 } else if (sourceUnit.text == L" ") {
                     glyph.layoutWidth = static_cast<float>(
-                        unit * std::clamp(style.spaceWidthPercent, 10, 100) / 100
+                        measureUnit * std::clamp(rubyStyle.spaceWidthPercent, 10, 100) / 100
                             + rubyEdgeSize
                     );
                 } else {
                     glyph.layoutWidth = static_cast<float>(
-                        unit * std::clamp(style.spaceWidthPercent, 10, 100) * 25 / 100 / 10
+                        measureUnit * std::clamp(rubyStyle.spaceWidthPercent, 10, 100) * 25 / 100 / 10
                             + rubyEdgeSize
                     );
                 }
@@ -823,19 +906,19 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 static_cast<std::size_t>(sourceRuby.lastCharIndex)
             ].layoutRight;
             const float targetWidth = std::max(targetRight - targetLeft, 1.0f);
-            const bool centered = style.rubyAlignment == "center"
-                || (style.rubyAlignment != "equal_space" && (
+            const bool centered = rubyStyle.rubyAlignment == "center"
+                || (rubyStyle.rubyAlignment != "equal_space" && (
                     isAsciiAlnumText(sourceRuby.baseText)
                     || isAsciiAlnumText(sourceRuby.reading)
                 ));
-            float gap = style.rubyInterval;
+            float gap = rubyStyle.rubyInterval;
             if (!centered && rubyGlyphs.size() > 1) {
                 const float slots = targetWidth <= naturalWidth
                     ? static_cast<float>(rubyGlyphs.size() - 1)
                     : static_cast<float>(rubyGlyphs.size() + 1);
                 gap = std::max(
                     (targetWidth - naturalWidth) / std::max(slots, 1.0f),
-                    style.rubyInterval
+                    rubyStyle.rubyInterval
                 );
             }
             const float contentWidth = naturalWidth
@@ -849,6 +932,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             Impl::CachedRuby ruby;
             ruby.startMs = sourceRuby.startMs;
             ruby.endMs = sourceRuby.endMs;
+            ruby.styleIndex = sourceRuby.styleIndex;
+            // Painter anchors every ruby run with the line-level ruby font and
+            // gap; target-role styling changes paint/measurement, not baseline.
             ruby.baselineOffset = -cached.boxAscent - style.rubyGap - rubyBoxDescent;
             bool rubyHasBounds = false;
             for (std::size_t unitIndex = 0; unitIndex < rubyGlyphs.size(); ++unitIndex) {
@@ -884,7 +970,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     }
                     ruby.geometries.push_back(positioned);
                 }
-                const float wipePad = std::max(style.rubyStrokeWidth, 0.0f) * 0.5f;
+                const float wipePad = std::max(rubyStyle.rubyStrokeWidth, 0.0f) * 0.5f;
                 ruby.chars.push_back(Impl::CachedChar{
                     glyph.source->startMs,
                     glyph.source->endMs,
@@ -1075,14 +1161,6 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> afterStroke2;
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> beforeDecor;
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> afterDecor;
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> rubyBeforeFill;
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> rubyAfterFill;
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> rubyBeforeStroke;
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> rubyAfterStroke;
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> rubyBeforeStroke2;
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> rubyAfterStroke2;
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> rubyBeforeDecor;
-        Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> rubyAfterDecor;
         checkHr(context->CreateSolidColorBrush(d2dColor(style.beforeFill), beforeFill.ReleaseAndGetAddressOf()), "Create before fill brush", device_);
         checkHr(context->CreateSolidColorBrush(d2dColor(style.afterFill), afterFill.ReleaseAndGetAddressOf()), "Create after fill brush", device_);
         checkHr(context->CreateSolidColorBrush(d2dColor(style.beforeStroke), beforeStroke.ReleaseAndGetAddressOf()), "Create before stroke brush", device_);
@@ -1091,14 +1169,6 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
         checkHr(context->CreateSolidColorBrush(d2dColor(style.afterStroke2), afterStroke2.ReleaseAndGetAddressOf()), "Create after stroke2 brush", device_);
         checkHr(context->CreateSolidColorBrush(d2dColor(style.beforeDecor), beforeDecor.ReleaseAndGetAddressOf()), "Create before decor brush", device_);
         checkHr(context->CreateSolidColorBrush(d2dColor(style.afterDecor), afterDecor.ReleaseAndGetAddressOf()), "Create after decor brush", device_);
-        checkHr(context->CreateSolidColorBrush(d2dColor(style.rubyBeforeFill), rubyBeforeFill.ReleaseAndGetAddressOf()), "Create ruby before fill brush", device_);
-        checkHr(context->CreateSolidColorBrush(d2dColor(style.rubyAfterFill), rubyAfterFill.ReleaseAndGetAddressOf()), "Create ruby after fill brush", device_);
-        checkHr(context->CreateSolidColorBrush(d2dColor(style.rubyBeforeStroke), rubyBeforeStroke.ReleaseAndGetAddressOf()), "Create ruby before stroke brush", device_);
-        checkHr(context->CreateSolidColorBrush(d2dColor(style.rubyAfterStroke), rubyAfterStroke.ReleaseAndGetAddressOf()), "Create ruby after stroke brush", device_);
-        checkHr(context->CreateSolidColorBrush(d2dColor(style.rubyBeforeStroke2), rubyBeforeStroke2.ReleaseAndGetAddressOf()), "Create ruby before stroke2 brush", device_);
-        checkHr(context->CreateSolidColorBrush(d2dColor(style.rubyAfterStroke2), rubyAfterStroke2.ReleaseAndGetAddressOf()), "Create ruby after stroke2 brush", device_);
-        checkHr(context->CreateSolidColorBrush(d2dColor(style.rubyBeforeDecor), rubyBeforeDecor.ReleaseAndGetAddressOf()), "Create ruby before decor brush", device_);
-        checkHr(context->CreateSolidColorBrush(d2dColor(style.rubyAfterDecor), rubyAfterDecor.ReleaseAndGetAddressOf()), "Create ruby after decor brush", device_);
 
         float wipeEdge = line->bounds.left;
         for (const Impl::CachedChar &ch : line->chars) {
@@ -1146,6 +1216,12 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 break;
             }
             return edge;
+        };
+        auto rubyStyleFor = [&](int styleIndex) -> const TextStyle & {
+            return styleIndex >= 0
+                && styleIndex < static_cast<int>(scene.charStyles.size())
+                ? scene.charStyles[static_cast<std::size_t>(styleIndex)]
+                : style;
         };
 
         Microsoft::WRL::ComPtr<ID2D1Bitmap1> glowSource;
@@ -1208,13 +1284,27 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
             std::vector<int> sigmas;
         };
         std::vector<RubyGlowLayer> rubyGlowLayers;
-        auto appendRubyGlowLayer = [&](bool after, float requestedRadius, ID2D1Brush *brush) {
+        auto appendRubyGlowLayer = [&](int styleIndex, bool after) {
+            const TextStyle &rubyStyle = rubyStyleFor(styleIndex);
+            const float requestedRadius = after
+                ? rubyStyle.rubyGlowAfterRadius
+                : rubyStyle.rubyGlowBeforeRadius;
             const int radius = std::max(
                 0, static_cast<int>(std::lround(requestedRadius))
             );
-            if (style.rubyDecorationKind != "glow"
+            const bool hasVisibleSource = std::any_of(
+                line->rubies.begin(),
+                line->rubies.end(),
+                [&](const Impl::CachedRuby &ruby) {
+                    const float edge = rubyWipeEdgeAt(ruby);
+                    return ruby.styleIndex == styleIndex
+                        && !((after && edge <= ruby.bounds.left)
+                            || (!after && edge >= ruby.bounds.right));
+                }
+            );
+            if (rubyStyle.rubyDecorationKind != "glow"
                 || radius <= 0
-                || line->rubies.empty()) {
+                || !hasVisibleSource) {
                 return;
             }
             RubyGlowLayer layer;
@@ -1234,8 +1324,19 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 "ID2D1DeviceContext::CreateEffect(ruby GaussianBlur)",
                 device_
             );
-            const float sourceWidth = std::max(0.0f, style.rubyStrokeWidth)
-                + (style.rubyStroke2Width > 0.0f ? style.rubyStroke2Width : 0.0f)
+            Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
+            checkHr(
+                context->CreateSolidColorBrush(
+                    d2dColor(after ? rubyStyle.rubyAfterDecor : rubyStyle.rubyBeforeDecor),
+                    brush.ReleaseAndGetAddressOf()
+                ),
+                "Create role ruby decor brush",
+                device_
+            );
+            const float sourceWidth = std::max(0.0f, rubyStyle.rubyStrokeWidth)
+                + (rubyStyle.rubyStroke2Width > 0.0f
+                    ? rubyStyle.rubyStroke2Width
+                    : 0.0f)
                 + static_cast<float>(radius);
             const float pad = sourceWidth * 0.5f + radius * 3.0f + 2.0f;
             context->SetTarget(layer.source.Get());
@@ -1243,6 +1344,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
             context->BeginDraw();
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
             for (const Impl::CachedRuby &ruby : line->rubies) {
+                if (ruby.styleIndex != styleIndex) {
+                    continue;
+                }
                 const float edge = rubyWipeEdgeAt(ruby);
                 if ((after && edge <= ruby.bounds.left)
                     || (!after && edge >= ruby.bounds.right)) {
@@ -1263,7 +1367,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                     );
                 context->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                 for (const auto &geometry : ruby.geometries) {
-                    context->DrawGeometry(geometry.Get(), brush, sourceWidth);
+                    context->DrawGeometry(geometry.Get(), brush.Get(), sourceWidth);
                 }
                 context->PopAxisAlignedClip();
             }
@@ -1273,14 +1377,26 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 device_
             );
             layer.blur->SetInput(0, layer.source.Get());
-            const int passes = std::clamp(style.rubyGlowConcentrationLevel, 0, 2) + 1;
+            const int passes = std::clamp(
+                rubyStyle.rubyGlowConcentrationLevel, 0, 2
+            ) + 1;
             for (int index = 0; index < passes; ++index) {
                 layer.sigmas.push_back(radius - index * radius / passes);
             }
             rubyGlowLayers.push_back(std::move(layer));
         };
-        appendRubyGlowLayer(false, style.rubyGlowBeforeRadius, rubyBeforeDecor.Get());
-        appendRubyGlowLayer(true, style.rubyGlowAfterRadius, rubyAfterDecor.Get());
+        std::vector<int> rubyStyleIndices;
+        for (const Impl::CachedRuby &ruby : line->rubies) {
+            if (std::find(
+                    rubyStyleIndices.begin(), rubyStyleIndices.end(), ruby.styleIndex
+                ) == rubyStyleIndices.end()) {
+                rubyStyleIndices.push_back(ruby.styleIndex);
+            }
+        }
+        for (int styleIndex : rubyStyleIndices) {
+            appendRubyGlowLayer(styleIndex, false);
+            appendRubyGlowLayer(styleIndex, true);
+        }
 
         struct InlineGlowLayer {
             Microsoft::WRL::ComPtr<ID2D1Bitmap1> source;
@@ -1527,29 +1643,61 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 context->PopAxisAlignedClip();
             }
         }
-        auto drawRubyStack = [&](const Impl::CachedRuby &ruby, ID2D1Brush *fill, ID2D1Brush *stroke, ID2D1Brush *stroke2) {
-            if (style.rubyStroke2Width > 0.0f) {
+        auto drawRubyStack = [&](const Impl::CachedRuby &ruby, bool after) {
+            const TextStyle &rubyStyle = rubyStyleFor(ruby.styleIndex);
+            Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> fill;
+            Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> stroke;
+            Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> stroke2;
+            checkHr(
+                context->CreateSolidColorBrush(
+                    d2dColor(after ? rubyStyle.rubyAfterFill : rubyStyle.rubyBeforeFill),
+                    fill.ReleaseAndGetAddressOf()
+                ),
+                "Create role ruby fill brush",
+                device_
+            );
+            checkHr(
+                context->CreateSolidColorBrush(
+                    d2dColor(after ? rubyStyle.rubyAfterStroke : rubyStyle.rubyBeforeStroke),
+                    stroke.ReleaseAndGetAddressOf()
+                ),
+                "Create role ruby stroke brush",
+                device_
+            );
+            checkHr(
+                context->CreateSolidColorBrush(
+                    d2dColor(after ? rubyStyle.rubyAfterStroke2 : rubyStyle.rubyBeforeStroke2),
+                    stroke2.ReleaseAndGetAddressOf()
+                ),
+                "Create role ruby stroke2 brush",
+                device_
+            );
+            if (rubyStyle.rubyStroke2Width > 0.0f) {
                 for (const auto &geometry : ruby.geometries) {
                     context->DrawGeometry(
                         geometry.Get(),
-                        stroke2,
-                        std::max(0.0f, style.rubyStrokeWidth) + style.rubyStroke2Width
+                        stroke2.Get(),
+                        std::max(0.0f, rubyStyle.rubyStrokeWidth)
+                            + rubyStyle.rubyStroke2Width
                     );
                 }
             }
-            if (style.rubyStrokeWidth > 0.0f) {
+            if (rubyStyle.rubyStrokeWidth > 0.0f) {
                 for (const auto &geometry : ruby.geometries) {
-                    context->DrawGeometry(geometry.Get(), stroke, style.rubyStrokeWidth);
+                    context->DrawGeometry(
+                        geometry.Get(), stroke.Get(), rubyStyle.rubyStrokeWidth
+                    );
                 }
             }
             for (const auto &geometry : ruby.geometries) {
-                context->FillGeometry(geometry.Get(), fill);
+                context->FillGeometry(geometry.Get(), fill.Get());
             }
         };
         for (const Impl::CachedRuby &ruby : line->rubies) {
+            const TextStyle &rubyStyle = rubyStyleFor(ruby.styleIndex);
             const float rubyWipeEdge = rubyWipeEdgeAt(ruby);
             const float rubyPad = std::max(
-                style.rubyStrokeWidth + style.rubyStroke2Width, 2.0f
+                rubyStyle.rubyStrokeWidth + rubyStyle.rubyStroke2Width, 2.0f
             ) + 4.0f;
             const D2D1_RECT_F rubyAfterClip = D2D1::RectF(
                 ruby.bounds.left - rubyPad,
@@ -1557,22 +1705,12 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 rubyWipeEdge,
                 ruby.bounds.bottom + rubyPad
             );
-            drawRubyStack(
-                ruby,
-                rubyBeforeFill.Get(),
-                rubyBeforeStroke.Get(),
-                rubyBeforeStroke2.Get()
-            );
+            drawRubyStack(ruby, false);
             if (rubyWipeEdge > ruby.bounds.left) {
                 context->PushAxisAlignedClip(
                     rubyAfterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                 );
-                drawRubyStack(
-                    ruby,
-                    rubyAfterFill.Get(),
-                    rubyAfterStroke.Get(),
-                    rubyAfterStroke2.Get()
-                );
+                drawRubyStack(ruby, true);
                 context->PopAxisAlignedClip();
             }
         }

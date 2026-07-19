@@ -82,6 +82,7 @@ struct TextRuby {
     int lastCharIndex = 0;
     int startMs = 0;
     int endMs = 0;
+    int styleIndex = -1;
     bool operator==(const TextRuby &) const = default;
 };
 
@@ -102,6 +103,7 @@ struct TextStyle {
     std::optional<int> latinFontWeight;
     bool italic = false;
     bool allowBiting = false;
+    bool affectsRubyAnchor = true;
     int spaceWidthPercent = 20;
     float letterSpacing = 0.0f;
     float horizontalMargin = 50.0f;
