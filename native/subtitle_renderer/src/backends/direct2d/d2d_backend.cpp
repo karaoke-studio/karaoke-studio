@@ -864,6 +864,7 @@ struct Direct2DGpuBackend::Impl {
         Microsoft::WRL::ComPtr<ID2D1Geometry> protectedStrokeGeometry;
         Microsoft::WRL::ComPtr<ID2D1Geometry> strokeGeometry;
         Microsoft::WRL::ComPtr<ID2D1Geometry> stroke2Geometry;
+        std::vector<WipePoint> wipePoints;
     };
 
     struct CachedRuby {
@@ -1462,6 +1463,13 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 cursor + layoutWidth,
             });
             cached.chars.back().styleIndex = sourceChar.styleIndex;
+            cached.chars.back().wipePoints = sourceChar.wipePoints;
+            if (cached.chars.back().wipePoints.empty()) {
+                cached.chars.back().wipePoints = {
+                    WipePoint{sourceChar.startMs, 0.0f},
+                    WipePoint{sourceChar.endMs, 1.0f},
+                };
+            }
             cached.chars.back().boxAscent = charBoxAscent;
             cached.chars.back().pivotX = cursor + layoutWidth * 0.5f;
             cached.chars.back().pivotY = (charDescent - charAscent) * 0.5f;
@@ -2064,6 +2072,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 });
                 ruby.chars.back().pivotX = origin + glyph.layoutWidth * 0.5f;
                 ruby.chars.back().pivotY = ruby.pivotY;
+                ruby.chars.back().wipePoints = {
+                    WipePoint{glyph.source->startMs, 0.0f},
+                    WipePoint{glyph.source->endMs, 1.0f},
+                };
             }
             if (style.vertical && rubyHasBounds && !ruby.geometries.empty()) {
                 const float mainCellWidth = std::max(style.fontSize, 1.0f);
@@ -2191,6 +2203,41 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             }
             if (rubyHasBounds && !ruby.geometries.empty()) {
                 cached.rubies.push_back(std::move(ruby));
+            }
+        }
+        const auto adjustWipeEnd = [](Impl::CachedChar &current,
+                                      const Impl::CachedChar &following,
+                                      bool rtl) {
+            if (current.wipePoints.empty()) {
+                return;
+            }
+            const float width = std::max(current.right - current.left + 1.0f, 1.0f);
+            if (!rtl && current.right >= following.left) {
+                current.wipePoints.back().position = std::clamp(
+                    (following.left - current.left) / width, 0.0f, 1.0f
+                );
+            } else if (rtl && current.left <= following.right) {
+                current.wipePoints.back().position = std::clamp(
+                    (current.right - following.right) / width, 0.0f, 1.0f
+                );
+            }
+        };
+        if (!style.vertical) {
+            const bool rtl = style.rightToLeft;
+            for (std::size_t index = 0; index + 1 < cached.chars.size(); ++index) {
+                adjustWipeEnd(cached.chars[index], cached.chars[index + 1], rtl);
+            }
+            Impl::CachedChar *previousRubyChar = nullptr;
+            for (Impl::CachedRuby &ruby : cached.rubies) {
+                if (previousRubyChar != nullptr && !ruby.chars.empty()) {
+                    adjustWipeEnd(*previousRubyChar, ruby.chars.front(), rtl);
+                }
+                for (std::size_t index = 0; index + 1 < ruby.chars.size(); ++index) {
+                    adjustWipeEnd(ruby.chars[index], ruby.chars[index + 1], rtl);
+                }
+                if (!ruby.chars.empty()) {
+                    previousRubyChar = &ruby.chars.back();
+                }
             }
         }
         if (!lineHasBounds) {
@@ -3426,31 +3473,68 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         );
 
         const bool rtl = style.rightToLeft && !style.vertical;
+        const auto wipeStartMs = [](const Impl::CachedChar &ch) {
+            return ch.wipePoints.empty() ? ch.startMs : ch.wipePoints.front().timeMs;
+        };
+        const auto wipeEndMs = [](const Impl::CachedChar &ch) {
+            return ch.wipePoints.empty() ? ch.endMs : ch.wipePoints.back().timeMs;
+        };
+        const auto wipePositionAt = [&](const Impl::CachedChar &ch) {
+            if (ch.wipePoints.empty()) {
+                const int duration = std::max(ch.endMs - ch.startMs, 1);
+                return std::clamp(
+                    static_cast<float>(tMs - ch.startMs) / static_cast<float>(duration),
+                    0.0f, 1.0f
+                );
+            }
+            if (tMs <= ch.wipePoints.front().timeMs) {
+                return ch.wipePoints.front().position;
+            }
+            if (tMs >= ch.wipePoints.back().timeMs) {
+                return ch.wipePoints.back().position;
+            }
+            for (std::size_t index = 1; index < ch.wipePoints.size(); ++index) {
+                const WipePoint &previous = ch.wipePoints[index - 1];
+                const WipePoint &following = ch.wipePoints[index];
+                if (tMs >= following.timeMs) {
+                    continue;
+                }
+                const int duration = following.timeMs - previous.timeMs;
+                if (duration <= 0) {
+                    return following.position;
+                }
+                const float local = std::clamp(
+                    static_cast<float>(tMs - previous.timeMs)
+                        / static_cast<float>(duration),
+                    0.0f, 1.0f
+                );
+                return previous.position
+                    + (following.position - previous.position) * local;
+            }
+            return ch.wipePoints.back().position;
+        };
+        const auto wipeCoordinateAt = [&](const Impl::CachedChar &ch) {
+            const float position = wipePositionAt(ch);
+            return style.vertical
+                ? ch.top + (ch.bottom - ch.top) * position
+                : (rtl
+                    ? ch.right - (ch.right - ch.left) * position
+                    : ch.left + (ch.right - ch.left) * position);
+        };
         float wipeEdge = style.vertical
             ? line->fillBounds.top
             : (rtl ? line->bounds.right : line->bounds.left);
         for (const Impl::CachedChar &ch : line->chars) {
-            if (tMs >= ch.endMs) {
-                wipeEdge = rtl
-                    ? std::min(wipeEdge, ch.left)
-                    : std::max(wipeEdge, style.vertical ? ch.bottom : ch.right);
-                continue;
-            }
-            if (tMs <= ch.startMs) {
+            if (tMs < wipeStartMs(ch)) {
                 break;
             }
-            const int duration = std::max(ch.endMs - ch.startMs, 1);
-            const float ratio = std::clamp(
-                static_cast<float>(tMs - ch.startMs) / static_cast<float>(duration),
-                0.0f,
-                1.0f
-            );
-            wipeEdge = style.vertical
-                ? ch.top + (ch.bottom - ch.top) * ratio
-                : (rtl
-                    ? ch.right - (ch.right - ch.left) * ratio
-                    : ch.left + (ch.right - ch.left) * ratio);
-            break;
+            wipeEdge = wipeCoordinateAt(ch);
+            // At the exact hand-off frame N3 still uses this character's
+            // AdjustWipeEnd endpoint. The following scanline takes over on
+            // the next sample.
+            if (tMs <= wipeEndMs(ch)) {
+                break;
+            }
         }
         // Painter releases the wipe once every timing segment is complete.
         // Keeping the final clip would leave before-colour pixels in outer
@@ -3458,14 +3542,14 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         const bool mainWipeComplete = !line->chars.empty()
             && std::all_of(
                 line->chars.begin(), line->chars.end(),
-                [&](const Impl::CachedChar &ch) { return tMs >= ch.endMs; }
+                [&](const Impl::CachedChar &ch) { return tMs >= wipeEndMs(ch); }
             );
         auto charWipeComplete = [&](std::size_t charIndex) {
             // N3 classifies every transformed glyph independently as before,
             // wiping or after. Utopia therefore cannot inherit the static
             // path's whole-line completion gate.
             return charIndex < line->chars.size()
-                && tMs >= line->chars[charIndex].endMs;
+                && tMs >= wipeEndMs(line->chars[charIndex]);
         };
 
         auto utopiaCharWipe = [&](std::size_t charIndex) {
@@ -3491,15 +3575,10 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             const float right = std::ceil(bounds.right) + edgeHalf;
             float ratio = 0.0f;
             const CharacterAnimationState animationState = characterAnimationAt(charIndex);
-            if (animationState.utopiaExit || tMs >= ch.endMs) {
+            if (animationState.utopiaExit || tMs >= wipeEndMs(ch)) {
                 ratio = 1.0f;
-            } else if (tMs > ch.startMs && ch.endMs > ch.startMs) {
-                ratio = std::clamp(
-                    static_cast<float>(tMs - ch.startMs)
-                        / static_cast<float>(ch.endMs - ch.startMs),
-                    0.0f,
-                    1.0f
-                );
+            } else if (tMs > wipeStartMs(ch)) {
+                ratio = wipePositionAt(ch);
             }
             return std::pair<D2D1_RECT_F, float>{
                 bounds,
@@ -3530,15 +3609,10 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             const CharacterAnimationState animationState = rubyUnitAnimationAt(
                 ruby, unitIndex
             );
-            if (animationState.utopiaExit || tMs >= unit.endMs) {
+            if (animationState.utopiaExit || tMs >= wipeEndMs(unit)) {
                 ratio = 1.0f;
-            } else if (tMs > unit.startMs && unit.endMs > unit.startMs) {
-                ratio = std::clamp(
-                    static_cast<float>(tMs - unit.startMs)
-                        / static_cast<float>(unit.endMs - unit.startMs),
-                    0.0f,
-                    1.0f
-                );
+            } else if (tMs > wipeStartMs(unit)) {
+                ratio = wipePositionAt(unit);
             }
             return std::pair<D2D1_RECT_F, float>{
                 bounds,
@@ -3575,27 +3649,13 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 ? ruby.bounds.top
                 : (rtl ? ruby.bounds.right : ruby.bounds.left);
             for (const Impl::CachedChar &ch : ruby.chars) {
-                if (tMs >= ch.endMs) {
-                    edge = rtl
-                        ? std::min(edge, ch.left)
-                        : std::max(edge, style.vertical ? ch.bottom : ch.right);
-                    continue;
-                }
-                if (tMs <= ch.startMs) {
+                if (tMs < wipeStartMs(ch)) {
                     break;
                 }
-                const int duration = std::max(ch.endMs - ch.startMs, 1);
-                const float ratio = std::clamp(
-                    static_cast<float>(tMs - ch.startMs) / static_cast<float>(duration),
-                    0.0f,
-                    1.0f
-                );
-                edge = style.vertical
-                    ? ch.top + (ch.bottom - ch.top) * ratio
-                    : (rtl
-                        ? ch.right - (ch.right - ch.left) * ratio
-                        : ch.left + (ch.right - ch.left) * ratio);
-                break;
+                edge = wipeCoordinateAt(ch);
+                if (tMs <= wipeEndMs(ch)) {
+                    break;
+                }
             }
             return edge;
         };
@@ -3603,13 +3663,13 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             return !ruby.chars.empty()
                 && std::all_of(
                     ruby.chars.begin(), ruby.chars.end(),
-                    [&](const Impl::CachedChar &ch) { return tMs >= ch.endMs; }
+                    [&](const Impl::CachedChar &ch) { return tMs >= wipeEndMs(ch); }
                 );
         };
         auto rubyUnitWipeComplete = [&](const Impl::CachedRuby &ruby,
                                         std::size_t unitIndex) {
             return unitIndex < ruby.chars.size()
-                && tMs >= ruby.chars[unitIndex].endMs;
+                && tMs >= wipeEndMs(ruby.chars[unitIndex]);
         };
         auto rubyPhaseVisible = [&](const Impl::CachedRuby &ruby,
                                     float edge, bool after) {

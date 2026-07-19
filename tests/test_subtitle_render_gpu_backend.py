@@ -609,6 +609,151 @@ def test_gpu_g1_directwrite_wipe_progresses_monotonically(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_main_ruby_progress_modes_follow_painter_and_preserve_empty_pause(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("M", 0),
+                    TimingChar("M", 500),
+                    TimingChar("M", 1_000),
+                    TimingChar("M", 1_500),
+                ],
+                end_ms=2_000,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="MMMM",
+                reading="ab",
+                reading_parts=["a", "", "b"],
+                reading_part_ms=[100, 1_900],
+                pos_start_ms=0,
+                pos_end_ms=2_000,
+            )
+        ],
+    )
+    before = KaraokeColorState(text=PaintFill(mode="solid", color="#FFFF2020"))
+    after = KaraokeColorState(text=PaintFill(mode="solid", color="#FF2040FF"))
+    transparent = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#00000000"),
+        stroke=PaintFill(mode="solid", color="#00000000"),
+        stroke2=PaintFill(mode="solid", color="#00000000"),
+        shadow=PaintFill(mode="solid", color="#00000000"),
+    )
+    base_style = _g1_style(
+        font_family="Times New Roman",
+        font_family_latin="Times New Roman",
+        font_size_px=96,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        karaoke_colors=KaraokeColors(before=before, after=after),
+        ruby_font_family="Times New Roman",
+        ruby_font_family_latin="Times New Roman",
+        ruby_font_follow_main=False,
+        ruby_font_size_px=24,
+        ruby_stroke_width_px=0,
+        ruby_stroke2_enabled=False,
+        ruby_decoration_kind="none",
+        ruby_karaoke_colors=KaraokeColors(before=transparent, after=transparent),
+    )
+
+    def after_ratio(payload: bytes, full: bytes) -> float:
+        def count(frame: bytes) -> int:
+            return sum(
+                1
+                for index in range(0, len(frame), 4)
+                if frame[index + 2] > frame[index] + 40
+                and frame[index + 2] > frame[index + 1] + 20
+                and frame[index + 3] > 16
+            )
+
+        return count(payload) / max(count(full), 1)
+
+    gpu_ratios: dict[str, float] = {}
+    painter_ratios: dict[str, float] = {}
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        for mode in ("checkpoint_segments", "reading_units"):
+            style = replace(base_style, ruby_main_progress_mode=mode)
+            _, gpu = _render_g1_frames(
+                renderer, style, (300, 2_000), force_warp=True, track=track
+            )
+            painter = [
+                _render_painter_oracle(style, t_ms=t_ms, track=track)
+                for t_ms in (300, 2_000)
+            ]
+            gpu_ratios[mode] = after_ratio(gpu[0], gpu[1])
+            painter_ratios[mode] = after_ratio(painter[0], painter[1])
+
+    for mode in ("checkpoint_segments", "reading_units"):
+        assert abs(gpu_ratios[mode] - painter_ratios[mode]) <= 0.08, (
+            mode, gpu_ratios, painter_ratios
+        )
+    assert gpu_ratios["reading_units"] > gpu_ratios["checkpoint_segments"] + 0.08
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_overlapping_char_wipe_hands_off_at_following_draw_left(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("W", 0), TimingChar("W", 1_000)],
+                end_ms=2_000,
+                display_end_override_ms=2_500,
+            )
+        ]
+    )
+    before = KaraokeColorState(text=PaintFill(mode="solid", color="#FFFF2020"))
+    after = KaraokeColorState(text=PaintFill(mode="solid", color="#FF2040FF"))
+    style = _g1_style(
+        font_family="Times New Roman",
+        font_family_latin="Times New Roman",
+        font_size_px=120,
+        letter_spacing_px=-55,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        karaoke_colors=KaraokeColors(before=before, after=after),
+    )
+    timestamps = (1_000, 1_001, 2_000)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+
+    def after_count(payload: bytes) -> int:
+        return sum(
+            1
+            for index in range(0, len(payload), 4)
+            if payload[index + 2] > payload[index] + 40
+            and payload[index + 2] > payload[index + 1] + 20
+            and payload[index + 3] > 16
+        )
+
+    gpu_full = after_count(gpu[-1])
+    painter_full = after_count(painter[-1])
+    assert gpu_full > 0 and painter_full > 0
+    for gpu_frame, painter_frame in zip(gpu[:-1], painter[:-1]):
+        assert abs(
+            after_count(gpu_frame) / gpu_full
+            - after_count(painter_frame) / painter_full
+        ) <= 0.05
+    # The exact hand-off frame retains the first character's adjusted end;
+    # the following scanline starts moving on the next sample.
+    assert after_count(gpu[0]) <= after_count(gpu[1])
+    assert after_count(painter[0]) <= after_count(painter[1])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize("decoration_kind", ["none", "shadow", "glow"])
 def test_gpu_completed_main_wipe_releases_outer_layers(
     monkeypatch, decoration_kind: str

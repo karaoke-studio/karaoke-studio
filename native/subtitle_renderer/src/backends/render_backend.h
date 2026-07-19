@@ -96,12 +96,19 @@ struct VectorGlyph {
     bool operator==(const VectorGlyph &) const = default;
 };
 
+struct WipePoint {
+    int timeMs = 0;
+    float position = 0.0f;
+    bool operator==(const WipePoint &) const = default;
+};
+
 struct TextChar {
     std::wstring text;
     int startMs = 0;
     int endMs = 0;
     int styleIndex = -1;
     std::optional<VectorGlyph> vectorGlyph;
+    std::vector<WipePoint> wipePoints;
     bool operator==(const TextChar &) const = default;
 };
 
@@ -212,6 +219,7 @@ struct TextStyle {
     float rubyGap = 0.0f;
     float rubyInterval = 0.0f;
     std::string rubyAlignment = "auto";
+    std::string rubyMainProgressMode = "checkpoint_segments";
     RgbaColor rubyBeforeFill;
     RgbaColor rubyAfterFill{255, 90, 111, 255};
     RgbaColor rubyBeforeStroke{34, 34, 34, 255};

@@ -201,6 +201,7 @@ struct ResolvedStyle {
     int rubyGapPx = 8;
     int rubyIntervalPx = 0;
     QString rubyAlignment = QStringLiteral("auto");
+    QString rubyMainProgressMode = QStringLiteral("checkpoint_segments");
     int rubyStrokeWidthPx = 0;
     int rubyStroke2WidthPx = 0;
     QString rubyDecorationKind;
@@ -1020,6 +1021,14 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     if (hasNonNull(style, QStringLiteral("ruby_gap_px"))) {
         cfg.rubyGapPx = intValue(style, QStringLiteral("ruby_gap_px"), cfg.rubyGapPx);
     }
+    if (hasNonNull(style, QStringLiteral("ruby_main_progress_mode"))) {
+        cfg.rubyMainProgressMode = stringValue(
+            style, QStringLiteral("ruby_main_progress_mode"), cfg.rubyMainProgressMode
+        );
+        if (cfg.rubyMainProgressMode != QStringLiteral("reading_units")) {
+            cfg.rubyMainProgressMode = QStringLiteral("checkpoint_segments");
+        }
+    }
     if (hasNonNull(style, QStringLiteral("ruby_stroke_width_px"))) {
         cfg.rubyStrokeWidthPx = std::max(
             0, intValue(style, QStringLiteral("ruby_stroke_width_px"), cfg.rubyStrokeWidthPx)
@@ -1820,6 +1829,12 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     if (base.rubyAlignment != QStringLiteral("center")
         && base.rubyAlignment != QStringLiteral("equal_space")) {
         base.rubyAlignment = QStringLiteral("auto");
+    }
+    base.rubyMainProgressMode = stringValue(
+        style, QStringLiteral("ruby_main_progress_mode"), base.rubyMainProgressMode
+    );
+    if (base.rubyMainProgressMode != QStringLiteral("reading_units")) {
+        base.rubyMainProgressMode = QStringLiteral("checkpoint_segments");
     }
     const double rubyScale = static_cast<double>(base.rubyFontSizePx)
         / static_cast<double>(std::max(base.fontSizePx, 1));
@@ -3597,6 +3612,140 @@ std::vector<std::pair<QString, std::pair<int, int>>> rubyUtopiaReadingUnitsAndIn
         }
     }
     return out;
+}
+
+bool isUtopiaGroupMarker(const RubyAnnotation &ruby) {
+    const QString reading = ruby.reading.trimmed();
+    if (!reading.isEmpty() && reading != QStringLiteral("^")) {
+        return false;
+    }
+    return std::all_of(
+        ruby.readingParts.begin(), ruby.readingParts.end(),
+        [](const QString &part) {
+            const QString trimmed = part.trimmed();
+            return trimmed.isEmpty() || trimmed == QStringLiteral("^");
+        }
+    );
+}
+
+std::vector<std::pair<int, int>> rubyMainWipeIntervals(
+    const RubyAnnotation &ruby, const std::string &mode
+) {
+    if (mode == "reading_units") {
+        const auto units = rubyUtopiaReadingUnitsAndIntervals(ruby);
+        if (!units.empty()) {
+            std::vector<std::pair<int, int>> out;
+            out.reserve(units.size());
+            for (const auto &unit : units) {
+                out.push_back(unit.second);
+            }
+            return out;
+        }
+    }
+
+    const int start = ruby.posStartMs;
+    const int end = std::max(start, ruby.posEndMs);
+    std::vector<int> anchors{start};
+    for (int relativeMs : ruby.readingPartMs) {
+        anchors.push_back(std::max(
+            anchors.back(), std::min(end, start + relativeMs)
+        ));
+    }
+    anchors.push_back(std::max(anchors.back(), end));
+    std::vector<std::pair<int, int>> out;
+    out.reserve(anchors.size() - 1);
+    for (std::size_t index = 0; index + 1 < anchors.size(); ++index) {
+        out.push_back({anchors[index], anchors[index + 1]});
+    }
+    return out;
+}
+
+void applyRubyMainWipePoints(
+    krok::subtitle::native::TextLine &line,
+    int firstCharIndex,
+    int lastCharIndex,
+    const std::vector<std::pair<int, int>> &unitIntervals,
+    int timingOffsetMs
+) {
+    using krok::subtitle::native::WipePoint;
+    if (unitIntervals.empty()
+        || firstCharIndex < 0
+        || lastCharIndex < firstCharIndex
+        || lastCharIndex >= static_cast<int>(line.chars.size())) {
+        return;
+    }
+    const int baseCount = lastCharIndex - firstCharIndex + 1;
+    const int unitCount = static_cast<int>(unitIntervals.size());
+    std::vector<WipePoint> progressPoints;
+    progressPoints.reserve(static_cast<std::size_t>(unitCount * 2));
+    for (int unitIndex = 0; unitIndex < unitCount; ++unitIndex) {
+        progressPoints.push_back(WipePoint{
+            unitIntervals[static_cast<std::size_t>(unitIndex)].first + timingOffsetMs,
+            static_cast<float>(unitIndex) / static_cast<float>(unitCount),
+        });
+        progressPoints.push_back(WipePoint{
+            unitIntervals[static_cast<std::size_t>(unitIndex)].second + timingOffsetMs,
+            static_cast<float>(unitIndex + 1) / static_cast<float>(unitCount),
+        });
+    }
+    const auto timeAtProgress = [&](float target, bool rightSide) {
+        std::optional<int> exact;
+        for (const WipePoint &point : progressPoints) {
+            if (std::abs(point.position - target) < 0.0001f) {
+                exact = exact.has_value()
+                    ? (rightSide ? std::max(*exact, point.timeMs)
+                                 : std::min(*exact, point.timeMs))
+                    : point.timeMs;
+            }
+        }
+        if (exact.has_value()) {
+            return *exact;
+        }
+        for (std::size_t index = 1; index < progressPoints.size(); ++index) {
+            const WipePoint &previous = progressPoints[index - 1];
+            const WipePoint &following = progressPoints[index];
+            if (previous.position < target && target < following.position) {
+                const float local = (target - previous.position)
+                    / (following.position - previous.position);
+                return previous.timeMs + static_cast<int>(std::round(
+                    static_cast<float>(following.timeMs - previous.timeMs) * local
+                ));
+            }
+        }
+        return target <= 0.0f
+            ? progressPoints.front().timeMs
+            : progressPoints.back().timeMs;
+    };
+    for (int baseIndex = 0; baseIndex < baseCount; ++baseIndex) {
+        auto &target = line.chars[static_cast<std::size_t>(firstCharIndex + baseIndex)];
+        const float progressStart = static_cast<float>(baseIndex)
+            / static_cast<float>(baseCount);
+        const float progressEnd = static_cast<float>(baseIndex + 1)
+            / static_cast<float>(baseCount);
+        target.wipePoints.clear();
+        target.wipePoints.push_back(WipePoint{
+            timeAtProgress(progressStart, true), 0.0f,
+        });
+        for (const WipePoint &point : progressPoints) {
+            if (point.position > progressStart + 0.0001f
+                && point.position < progressEnd - 0.0001f) {
+                target.wipePoints.push_back(WipePoint{
+                    point.timeMs,
+                    (point.position - progressStart)
+                        / (progressEnd - progressStart),
+                });
+            }
+        }
+        target.wipePoints.push_back(WipePoint{
+            timeAtProgress(progressEnd, false), 1.0f,
+        });
+        std::stable_sort(
+            target.wipePoints.begin(), target.wipePoints.end(),
+            [](const WipePoint &left, const WipePoint &right) {
+                return left.timeMs < right.timeMs;
+            }
+        );
+    }
 }
 
 double rubyProgressRatio(const RubyAnnotation &ruby, int tMs) {
@@ -6354,6 +6503,7 @@ void applyGpuResolvedStyle(
     target.rubyGap = static_cast<float>(source.rubyGapPx * scale);
     target.rubyInterval = static_cast<float>(source.rubyIntervalPx * scale);
     target.rubyAlignment = source.rubyAlignment.toStdString();
+    target.rubyMainProgressMode = source.rubyMainProgressMode.toStdString();
     target.rubyBeforeFill = gpuColor(source.rubyBaseFill.color, source.rubyBaseColor);
     target.rubyAfterFill = gpuColor(source.rubyAfterFill.color, source.rubyFillColor);
     target.rubyBeforeStroke = gpuColor(
@@ -6665,10 +6815,15 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 styleIndex,
                 sourceLine.chars[index].vectorGlyph,
             });
+            line.chars.back().wipePoints = {
+                krok::subtitle::native::WipePoint{line.chars.back().startMs, 0.0f},
+                krok::subtitle::native::WipePoint{line.chars.back().endMs, 1.0f},
+            };
         }
         const auto intervals = lineIntervals(sourceLine);
         const int sourceLineStart = lineStartMs(sourceLine);
         const int sourceLineEnd = lineEndMs(sourceLine);
+        std::vector<bool> rubyMainWipeAssigned(line.chars.size(), false);
         for (const RubyAnnotation &sourceRuby : config.rubies) {
             if (sourceRuby.sourceIndex != sourceLine.sourceIndex) {
                 continue;
@@ -6699,6 +6854,29 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             sceneRuby.lastCharIndex = *maximum;
             sceneRuby.startMs = ruby.posStartMs + sourceTimingOffset;
             sceneRuby.endMs = ruby.posEndMs + sourceTimingOffset;
+            const bool mainWipeAlreadyAssigned = std::any_of(
+                targetIndices.begin(), targetIndices.end(),
+                [&](int targetIndex) {
+                    return targetIndex >= 0
+                        && targetIndex < static_cast<int>(rubyMainWipeAssigned.size())
+                        && rubyMainWipeAssigned[static_cast<std::size_t>(targetIndex)];
+                }
+            );
+            if (!mainWipeAlreadyAssigned && !isUtopiaGroupMarker(ruby)) {
+                applyRubyMainWipePoints(
+                    line, *minimum, *maximum,
+                    rubyMainWipeIntervals(
+                        ruby, scene.lineStyles.back().rubyMainProgressMode
+                    ),
+                    sourceTimingOffset
+                );
+                for (int targetIndex : targetIndices) {
+                    if (targetIndex >= 0
+                        && targetIndex < static_cast<int>(rubyMainWipeAssigned.size())) {
+                        rubyMainWipeAssigned[static_cast<std::size_t>(targetIndex)] = true;
+                    }
+                }
+            }
             for (int targetIndex : targetIndices) {
                 if (targetIndex < 0
                     || targetIndex >= static_cast<int>(sourceLine.chars.size())
