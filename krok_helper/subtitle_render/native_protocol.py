@@ -80,13 +80,6 @@ def gpu_unsupported_features(
         }
     ):
         reasons.append("line_animation")
-    if (
-        style.viewport_scale_pct != 100
-        or style.viewport_rotation_deg != 0
-        or style.viewport_offset_x != 0
-        or style.viewport_offset_y != 0
-    ):
-        reasons.append("viewport_transform")
     for source in sources:
         for line in source.lines:
             if line.layout_index != 0:

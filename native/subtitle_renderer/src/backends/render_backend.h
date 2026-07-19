@@ -260,6 +260,11 @@ struct TextStyle {
 struct RenderScene {
     int width = 1920;
     int height = 1080;
+    float viewportScale = 1.0f;
+    float viewportRotation = 0.0f;
+    float viewportOffsetX = 0.0f;
+    float viewportOffsetY = 0.0f;
+    std::string viewportAlign = "center";
     TextStyle style;
     std::vector<TextStyle> lineStyles;
     std::vector<TextStyle> charStyles;

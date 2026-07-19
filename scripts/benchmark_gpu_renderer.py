@@ -44,6 +44,7 @@ def _scene(
     signal_style: str = "volume",
     vertical: bool = False,
     rtl: bool = False,
+    viewport: bool = False,
 ) -> tuple[TimingTrack, Style]:
     text = "縦書きGPU" if vertical else "Karaoke Studio GPU"
     chars = [
@@ -123,6 +124,11 @@ def _scene(
         volume_overlay_stroke_color="#FFFFFF",
         vertical=vertical,
         right_to_left=rtl,
+        viewport_scale_pct=115 if viewport else 100,
+        viewport_rotation_deg=12 if viewport else 0,
+        viewport_offset_x=24 if viewport else 0,
+        viewport_offset_y=-18 if viewport else 0,
+        viewport_align="center",
     )
     return track, style
 
@@ -143,6 +149,7 @@ def run_benchmark(
     signal_style: str = "volume",
     vertical: bool = False,
     rtl: bool = False,
+    viewport: bool = False,
 ) -> tuple[dict, list[dict]]:
     import psutil
 
@@ -158,6 +165,7 @@ def run_benchmark(
         signal_style=signal_style,
         vertical=vertical,
         rtl=rtl,
+        viewport=viewport,
     )
     shm_key = f"krok_gpu_g1_benchmark_{os.getpid()}_{uuid.uuid4().hex}"
     rows: list[dict] = []
@@ -324,6 +332,11 @@ def main() -> int:
     parser.add_argument("--vertical", action="store_true", help="stack main glyphs vertically")
     parser.add_argument("--rtl", action="store_true", help="lay out and wipe text right-to-left")
     parser.add_argument(
+        "--viewport",
+        action="store_true",
+        help="apply scale, rotation, offset, and center-pivot viewport transform",
+    )
+    parser.add_argument(
         "--animation",
         choices=("none", "fade", "char_fade", "spin_flip", "utopia"),
         default="none",
@@ -360,6 +373,7 @@ def main() -> int:
             signal_style=args.signal_style,
             vertical=bool(args.vertical),
             rtl=bool(args.rtl),
+            viewport=bool(args.viewport),
         )
         all_rows.extend(rows)
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True))

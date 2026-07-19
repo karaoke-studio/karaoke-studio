@@ -1467,3 +1467,14 @@ oracle 与 fallback。
 
 RTL 正文与 ruby 基础路径至此收口。下一批按 G4 顺序处理 viewport transform、跨行 scope 与全部
 标题路径；RTL 的 signal、行内角色和动画继续保持 capability fallback，待对应组合单独验收。
+
+### 2026-07-19（第三十四批）：G4 viewport transform
+
+- Render IR 中既有的 `viewport_scale_pct`、`viewport_rotation_deg`、`viewport_offset_x/y` 与九宫格 `viewport_align` 已进入 native scene。Direct2D 按 Painter `_apply_viewport_transform()` 的顺序围绕逻辑画布锚点执行平移、等比缩放和旋转；高 DPI 下只把逻辑位移换算为物理像素，比例与角度保持不变。
+- sharp 正文/ruby、stroke/stroke2、shadow 与 Sayatoo signal 直接在同一最终矩阵下绘制。glow 则先在未变换坐标生成与 Painter 相同的裁切后高斯源，再把模糊结果整体变换，因此缩放会同时改变发光的可见半径，旋转也不会把 after wipe 硬切成画布轴向边缘。
+- Painter 的标题契约经过像素对照重新确认：歌词与 signal 随 viewport 变化，但标题在 `painter.restore()` 后以屏幕坐标单独绘制。GPU 用 `staticOverlay` 明确绕过 viewport，避免标题跟随旋转或缩放；这不是近似处理，而是现有 Painter 输出的严格兼容边界。
+- packed bands 不再因 viewport 非默认值直接退化为整帧。每条非标题区间用 viewport 矩阵变换覆盖全宽条带的四角，生成保守的纵向回读范围；标题保留原区间。旋转场景仍会扩大 band，但不会裁掉变换后的像素。
+- 自动门槛覆盖 4 组单独 offset/scale/rotation/组合锚点，以及横排、竖排、RTL ruby、shadow/glow、标题与 volume signal：8 组 GPU/Painter 对照全部通过；`viewport_transform` capability fallback 已移除。GPU 独立回归 `79 passed`，transport `71 passed`，native protocol/export/benchmark `63 passed, 27 skipped`。
+- benchmark 新增 `--viewport`。RTX 3070 Ti、1920×1080、60fps、正文中档 glow、115% 缩放、12° 旋转、平移、packed bands、600 帧：`74.31fps`，render/readback/roundtrip p95 `2.98/5.63/15.32ms`，平均 band 覆盖率 `58.89%`，local 显存增长 0。该常用变换路径仍高于 60fps 门槛；产品 GPU 开关继续默认关闭，Painter 永久保留为 oracle/fallback。
+
+G4 下一批继续处理 `per_row`/逐行布局覆盖、竖排标题/行内角色/动画以及 RTL signal/行内角色/动画的独立组合门槛。

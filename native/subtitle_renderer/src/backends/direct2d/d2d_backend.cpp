@@ -2224,6 +2224,35 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
     context->SetTransform(D2D1::Matrix3x2F::Identity());
     context->SetTarget(nullptr);
 
+    const bool hasViewportTransform = scene.viewportScale != 1.0f
+        || scene.viewportRotation != 0.0f
+        || scene.viewportOffsetX != 0.0f
+        || scene.viewportOffsetY != 0.0f;
+    float viewportFractionX = 0.5f;
+    float viewportFractionY = 0.5f;
+    if (scene.viewportAlign.find("left") != std::string::npos) {
+        viewportFractionX = 0.0f;
+    } else if (scene.viewportAlign.find("right") != std::string::npos) {
+        viewportFractionX = 1.0f;
+    }
+    if (scene.viewportAlign.find("top") != std::string::npos) {
+        viewportFractionY = 0.0f;
+    } else if (scene.viewportAlign.find("bottom") != std::string::npos) {
+        viewportFractionY = 1.0f;
+    }
+    const D2D1_POINT_2F viewportPivot = D2D1::Point2F(
+        static_cast<float>(scene.width) * viewportFractionX,
+        static_cast<float>(scene.height) * viewportFractionY
+    );
+    const D2D1_MATRIX_3X2_F viewportTransform = hasViewportTransform
+        ? D2D1::Matrix3x2F::Translation(-viewportPivot.x, -viewportPivot.y)
+            * D2D1::Matrix3x2F::Scale(scene.viewportScale, scene.viewportScale)
+            * D2D1::Matrix3x2F::Rotation(scene.viewportRotation)
+            * D2D1::Matrix3x2F::Translation(
+                viewportPivot.x + scene.viewportOffsetX,
+                viewportPivot.y + scene.viewportOffsetY
+            )
+        : D2D1::Matrix3x2F::Identity();
     auto overlayOpacityAt = [&](const Impl::CachedLine &line) {
         if (!line.staticOverlay) {
             return 1.0f;
@@ -2356,6 +2385,14 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         }
         const float globalOpacity = overlayOpacityAt(*line) * animation.opacity;
         const TextStyle &style = line->style;
+        // Painter restores the viewport transform before drawing the title
+        // overlay, so static title lines stay in screen coordinates.
+        const D2D1_MATRIX_3X2_F lineViewportTransform = line->staticOverlay
+            ? D2D1::Matrix3x2F::Identity()
+            : viewportTransform;
+        auto withViewport = [&](const D2D1_MATRIX_3X2_F &local) {
+            return local * lineViewportTransform;
+        };
         const bool hasCharacterTransition = line->entryAnimation == "char_fade"
             || line->exitAnimation == "char_fade"
             || line->entryAnimation == "spin_flip"
@@ -3156,16 +3193,46 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 );
             }
         }
-        const int intervalTop = std::clamp(
+        int intervalTop = std::clamp(
             static_cast<int>(std::floor(dy + contentTop - topPad)),
             0,
             scene.height
         );
-        const int intervalBottom = std::clamp(
+        int intervalBottom = std::clamp(
             static_cast<int>(std::ceil(dy + contentBottom + bottomPad)),
             0,
             scene.height
         );
+        if (hasViewportTransform && !line->staticOverlay
+            && intervalBottom > intervalTop) {
+            auto transformedY = [&](float x, float y) {
+                return x * lineViewportTransform._12
+                    + y * lineViewportTransform._22
+                    + lineViewportTransform._32;
+            };
+            const float transformedTop = std::min({
+                transformedY(0.0f, static_cast<float>(intervalTop)),
+                transformedY(static_cast<float>(scene.width), static_cast<float>(intervalTop)),
+                transformedY(0.0f, static_cast<float>(intervalBottom)),
+                transformedY(static_cast<float>(scene.width), static_cast<float>(intervalBottom)),
+            });
+            const float transformedBottom = std::max({
+                transformedY(0.0f, static_cast<float>(intervalTop)),
+                transformedY(static_cast<float>(scene.width), static_cast<float>(intervalTop)),
+                transformedY(0.0f, static_cast<float>(intervalBottom)),
+                transformedY(static_cast<float>(scene.width), static_cast<float>(intervalBottom)),
+            });
+            intervalTop = std::clamp(
+                static_cast<int>(std::floor(transformedTop)) - 2,
+                0,
+                scene.height
+            );
+            intervalBottom = std::clamp(
+                static_cast<int>(std::ceil(transformedBottom)) + 2,
+                0,
+                scene.height
+            );
+        }
         if (intervalBottom > intervalTop) {
             readbackIntervals.emplace_back(intervalTop, intervalBottom);
         }
@@ -3809,7 +3876,11 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         }
         for (RubyGlowLayer &layer : rubyGlowLayers) {
             context->SetTransform(
-                layer.hasTransform ? layer.transform : D2D1::Matrix3x2F::Identity()
+                withViewport(
+                    layer.hasTransform
+                        ? layer.transform
+                        : D2D1::Matrix3x2F::Identity()
+                )
             );
             for (int sigma : layer.sigmas) {
                 checkHr(
@@ -3825,7 +3896,11 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         }
         for (InlineGlowLayer &layer : inlineGlowLayers) {
             context->SetTransform(
-                layer.hasTransform ? layer.transform : D2D1::Matrix3x2F::Identity()
+                withViewport(
+                    layer.hasTransform
+                        ? layer.transform
+                        : D2D1::Matrix3x2F::Identity()
+                )
             );
             for (int sigma : layer.sigmas) {
                 checkHr(
@@ -3840,7 +3915,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             }
         }
         for (int sigma : glowSigmas) {
-            context->SetTransform(D2D1::Matrix3x2F::Identity());
+            context->SetTransform(lineViewportTransform);
             checkHr(
                 blur->SetValue(
                     D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION,
@@ -3851,7 +3926,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             );
             context->DrawImage(blur.Get());
         }
-        context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
+        context->SetTransform(withViewport(D2D1::Matrix3x2F::Translation(dx, dy)));
 
         auto drawShadowSilhouette = [&](ID2D1Geometry *geometry,
                                         ID2D1Geometry *animatedOuterGeometry,
@@ -3902,9 +3977,11 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         ? charStyle.shadowOffsetX * charMatrix._12
                             + charStyle.shadowOffsetY * charMatrix._22
                         : charStyle.shadowOffsetY;
-                    context->SetTransform(D2D1::Matrix3x2F::Translation(
-                        dx + shadowX,
-                        dy + shadowY
+                    context->SetTransform(withViewport(
+                        D2D1::Matrix3x2F::Translation(
+                            dx + shadowX,
+                            dy + shadowY
+                        )
                     ));
                     if (after) {
                         if (hasUtopiaTransition) {
@@ -3964,9 +4041,11 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     style.shadowOffsetX,
                     style.shadowOffsetY
                 );
-                context->SetTransform(D2D1::Matrix3x2F::Translation(
-                    dx + style.shadowOffsetX,
-                    dy + style.shadowOffsetY
+                context->SetTransform(withViewport(
+                    D2D1::Matrix3x2F::Translation(
+                        dx + style.shadowOffsetX,
+                        dy + style.shadowOffsetY
+                    )
                 ));
                 if (after) {
                     context->PushAxisAlignedClip(
@@ -3996,7 +4075,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     context->PopAxisAlignedClip();
                 }
             }
-            context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
+            context->SetTransform(withViewport(D2D1::Matrix3x2F::Translation(dx, dy)));
         };
         drawLineShadowPhase(false);
         if (hasAfterWipe) {
@@ -4079,8 +4158,10 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         ? rubyStyle.rubyShadowOffsetX * animationState.matrix._12
                             + rubyStyle.rubyShadowOffsetY * animationState.matrix._22
                         : rubyStyle.rubyShadowOffsetY;
-                    context->SetTransform(D2D1::Matrix3x2F::Translation(
-                        dx + shadowX, dy + shadowY
+                    context->SetTransform(withViewport(
+                        D2D1::Matrix3x2F::Translation(
+                            dx + shadowX, dy + shadowY
+                        )
                     ));
                     bool pushedUtopiaClip = false;
                     if (after && hasUtopiaTransition) {
@@ -4128,7 +4209,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 drawRubyShadowPhase(true);
             }
         }
-        context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
+        context->SetTransform(withViewport(D2D1::Matrix3x2F::Translation(dx, dy)));
 
         auto drawStack = [&](bool after, ID2D1Brush *fill, ID2D1Brush *stroke, ID2D1Brush *stroke2) {
             if (style.stroke2Width > 0.0f) {
@@ -4418,7 +4499,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         if (signalState.visible
             && style.litOpacity > 0.0f
             && signalState.opacity > 0.0f) {
-            context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
+            context->SetTransform(withViewport(D2D1::Matrix3x2F::Translation(dx, dy)));
             auto signalBrush = [&](const RgbaColor &color) {
                 Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
                 checkHr(
@@ -4489,7 +4570,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         if (shapeState.visible
             && shapeState.activeIndex >= 0
             && style.litOpacity > 0.0f) {
-            context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
+            context->SetTransform(withViewport(D2D1::Matrix3x2F::Translation(dx, dy)));
             auto shapeBrush = [&](const RgbaColor &color, float opacity) {
                 Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
                 checkHr(

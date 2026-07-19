@@ -252,6 +252,16 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
     assert gpu_unsupported_features(track, Style(entry_anim="utopia")) == ()
     assert gpu_unsupported_features(track, Style(lit_enabled=True)) == ()
     assert gpu_unsupported_features(track, Style(right_to_left=True)) == ()
+    assert gpu_unsupported_features(
+        track,
+        Style(
+            viewport_scale_pct=125,
+            viewport_rotation_deg=-20,
+            viewport_offset_x=30,
+            viewport_offset_y=-15,
+            viewport_align="bottom_right",
+        ),
+    ) == ()
     for lit_style in ("circle", "square", "rounded"):
         assert gpu_unsupported_features(
             track, Style(lit_enabled=True, lit_style=lit_style)

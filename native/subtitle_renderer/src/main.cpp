@@ -252,6 +252,11 @@ struct RenderConfig {
     bool dualLineLayout = true;
     bool rightToLeft = false;
     bool vertical = false;
+    int viewportScalePct = 100;
+    int viewportRotationDeg = 0;
+    int viewportOffsetX = 0;
+    int viewportOffsetY = 0;
+    QString viewportAlign = QStringLiteral("center");
     QString entryAnim = QStringLiteral("none");
     int entryLeadMs = 300;
     QString exitAnim = QStringLiteral("none");
@@ -1808,6 +1813,21 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.vertical = style.value(QStringLiteral("vertical")).isBool()
         ? style.value(QStringLiteral("vertical")).toBool()
         : cfg.vertical;
+    cfg.viewportScalePct = std::max(
+        intValue(style, QStringLiteral("viewport_scale_pct"), cfg.viewportScalePct), 1
+    );
+    cfg.viewportRotationDeg = intValue(
+        style, QStringLiteral("viewport_rotation_deg"), cfg.viewportRotationDeg
+    );
+    cfg.viewportOffsetX = intValue(
+        style, QStringLiteral("viewport_offset_x"), cfg.viewportOffsetX
+    );
+    cfg.viewportOffsetY = intValue(
+        style, QStringLiteral("viewport_offset_y"), cfg.viewportOffsetY
+    );
+    cfg.viewportAlign = stringValue(
+        style, QStringLiteral("viewport_align"), cfg.viewportAlign
+    );
     cfg.entryAnim = stringValue(style, QStringLiteral("entry_anim"), cfg.entryAnim);
     cfg.entryLeadMs = std::max(0, intValue(style, QStringLiteral("entry_lead_ms"), cfg.entryLeadMs));
     cfg.exitAnim = stringValue(style, QStringLiteral("exit_anim"), cfg.exitAnim);
@@ -6219,6 +6239,11 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
     RenderScene scene;
     scene.width = config.physicalWidth();
     scene.height = config.physicalHeight();
+    scene.viewportScale = static_cast<float>(config.viewportScalePct) / 100.0f;
+    scene.viewportRotation = static_cast<float>(config.viewportRotationDeg);
+    scene.viewportOffsetX = static_cast<float>(config.viewportOffsetX * scale);
+    scene.viewportOffsetY = static_cast<float>(config.viewportOffsetY * scale);
+    scene.viewportAlign = config.viewportAlign.toStdString();
     applyGpuResolvedStyle(scene.style, sourceStyle, scale);
     scene.style.horizontalMargin = static_cast<float>(config.horizontalMarginPx * scale);
     scene.style.bottomMargin = static_cast<float>(config.lineYMarginPx * scale);
