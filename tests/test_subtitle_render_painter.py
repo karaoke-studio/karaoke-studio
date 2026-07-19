@@ -3422,17 +3422,20 @@ def test_n3_release_edge_clamps_to_following_overlapping_draw_left(qapp):
             _FillSegment(
                 100, 200, 1000, 1300, indices=(0,),
                 release_left=92, release_right=218,
+                layout_left=100, layout_right=200,
             ),
             _FillSegment(
                 220, 280, 1700, 2000, indices=(1,),
                 release_left=210, release_right=290,
+                layout_left=190, layout_right=250,
             ),
         ]
     )
 
-    assert segments[0].release_right == 210
-    assert _fill_extent_end(segments, 1300) == 210
-    assert _fill_extent_end(segments, 1500) == 210
+    expected = 92 + (218 - 92) * ((190 - 100) / (200 - 100 + 1))
+    assert segments[0].release_right == pytest.approx(expected)
+    assert _fill_extent_end(segments, 1300) == pytest.approx(expected)
+    assert _fill_extent_end(segments, 1500) == pytest.approx(expected)
 
 
 def test_n3_completed_glyph_follows_successor_wipe_boundary(qapp):
@@ -3441,10 +3444,12 @@ def test_n3_completed_glyph_follows_successor_wipe_boundary(qapp):
             _FillSegment(
                 100, 200, 1000, 1300, indices=(0,),
                 release_left=92, release_right=218,
+                layout_left=100, layout_right=200,
             ),
             _FillSegment(
                 220, 280, 1300, 1600, indices=(1,),
                 release_left=210, release_right=290,
+                layout_left=190, layout_right=250,
             ),
         ]
     )
@@ -3452,7 +3457,7 @@ def test_n3_completed_glyph_follows_successor_wipe_boundary(qapp):
     # 精确交接时仍使用前一字的 AdjustWipeEnd 终点。
     assert subtitle_painter._n3_following_wipe_band(
         segments, {0}, 1300, rtl=False
-    ) == (92, 210)
+    ) == (92, 204)
     # 下一采样时刻复用后一字的移动边界，而不是解除前一字裁剪。
     following = subtitle_painter._n3_following_wipe_band(
         segments, {0}, 1450, rtl=False
@@ -3473,20 +3478,23 @@ def test_n3_wipe_interpolates_to_adjusted_draw_edge_without_boundary_jump(qapp):
             _FillSegment(
                 100, 160, 1000, 2000, indices=(0,),
                 release_left=80, release_right=220,
+                layout_left=100, layout_right=160,
             ),
             _FillSegment(
                 210, 270, 2000, 3000, indices=(1,),
                 release_left=200, release_right=290,
+                layout_left=150, layout_right=210,
             ),
         ]
     )
-    assert ltr[0].release_right == 200
+    expected = 80 + (220 - 80) * ((150 - 100) / (160 - 100 + 1))
+    assert ltr[0].release_right == pytest.approx(expected)
     # 旧实现的中点是 ink 中点 130，且 1999→2000ms 会从 160 跳到 200。
-    assert _fill_extent_end(ltr, 1500) == 140
+    assert _fill_extent_end(ltr, 1500) == 137
     # 60fps 下结束前一帧约为 1983ms：新实现只再走 2px，旧实现会突跳 41px。
-    assert _fill_extent_end(ltr, 1983) == 198
-    assert _fill_extent_end(ltr, 1999) == 200
-    assert _fill_extent_end(ltr, 2000) == 200
+    assert _fill_extent_end(ltr, 1983) == 193
+    assert _fill_extent_end(ltr, 1999) == 195
+    assert _fill_extent_end(ltr, 2000) == pytest.approx(expected)
 
     rtl = [
         _FillSegment(
@@ -3524,7 +3532,7 @@ def test_explicit_timed_space_has_layout_time_but_no_wipe_geometry(qapp):
     week_release = layout.fill_segments[0].release_right
     assert week_release is not None
     assert _fill_extent_end(layout.fill_segments, 85_370) == week_release
-    assert _fill_extent_end(layout.fill_segments, 85_600) == week_release
+    assert _fill_extent_end(layout.fill_segments, 85_600) == pytest.approx(week_release)
 
     at_week_end = _blank()
     at_space_end = _blank()
@@ -4115,7 +4123,11 @@ def test_utopia_linked_english_marker_keeps_syllable_wipe_timing(
         line,
     )
     assert [segment.ruby for segment in segments] == [None] * 6
-    assert _fill_extent_end(segments, 1500) == 50
+    # N3 treats touching DrawRight/DrawLeft boxes as overlap (>=) and keeps
+    # its +1 denominator, so the completed third unit stops fractionally short.
+    assert _fill_extent_end(segments, 1500) == pytest.approx(
+        40 + 10 * (10 / 11)
+    )
     assert _character_fill_ratio(line, intervals, ranges, [marker], 2, 1350) == 0.5
     assert _character_fill_ratio(line, intervals, ranges, [marker], 3, 1350) == 0.0
 

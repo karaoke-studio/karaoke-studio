@@ -1418,7 +1418,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 const int geometryLeft = inkWidth * leftBearing / advance;
                 pathOffset = -charBounds.left
                     + static_cast<float>(geometryLeft)
-                    + static_cast<float>(edgeSize) * 0.5f;
+                    + static_cast<float>(edgeSize / 2);
             } else if (sourceChar.text == L" ") {
                 layoutWidth = static_cast<float>(
                     unit * std::clamp(charStyle.spaceWidthPercent, 10, 100) / 100 + edgeSize
@@ -1453,7 +1453,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 extendBounds(cached.bounds, lineHasBounds, bounds);
                 cached.geometries.push_back(positioned);
             }
-            const float wipePad = std::max(charStyle.strokeWidth, 0.0f) * 0.5f;
+            const float wipePad = static_cast<float>(edgeSize / 2);
             cached.chars.push_back(Impl::CachedChar{
                 sourceChar.startMs,
                 sourceChar.endMs,
@@ -1501,9 +1501,12 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     );
                 }
             }
-            cursor += layoutWidth;
             if (charIndex + 1 < sourceLine.chars.size()) {
-                cursor += charStyle.letterSpacing;
+                // N3's AlignOneLine never lets a sufficiently negative
+                // LyricsInterval move the next character back past this one.
+                cursor += std::max(layoutWidth + charStyle.letterSpacing, 0.0f);
+            } else {
+                cursor += layoutWidth;
             }
         }
 
@@ -1670,7 +1673,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         && ch.styleIndex < static_cast<int>(scene.charStyles.size())
                         ? scene.charStyles[static_cast<std::size_t>(ch.styleIndex)]
                         : style;
-                    const float wipePad = std::max(charStyle.strokeWidth, 0.0f) * 0.5f;
+                    const float wipePad = static_cast<float>(
+                        std::max(static_cast<int>(charStyle.strokeWidth), 0) / 2
+                    );
                     ch.left = bounds.left - wipePad;
                     ch.right = bounds.right + wipePad;
                     extendBounds(cached.bounds, lineHasBounds, bounds);
@@ -1887,7 +1892,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     const int geometryLeft = inkWidth * leftBearing / advance;
                     glyph.pathOffset = -glyph.bounds.left
                         + static_cast<float>(geometryLeft)
-                        + static_cast<float>(rubyEdgeSize) * 0.5f;
+                        + static_cast<float>(rubyEdgeSize / 2);
                 } else if (sourceUnit.text == L" ") {
                     glyph.layoutWidth = static_cast<float>(
                         measureUnit * std::clamp(rubyStyle.spaceWidthPercent, 10, 100) / 100
@@ -2059,7 +2064,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         ruby.protectedStrokeGeometries.push_back({});
                     }
                 }
-                const float wipePad = std::max(rubyStyle.rubyStrokeWidth, 0.0f) * 0.5f;
+                const float wipePad = static_cast<float>(rubyEdgeSize / 2);
                 ruby.chars.push_back(Impl::CachedChar{
                     glyph.source->startMs,
                     glyph.source->endMs,
@@ -2211,14 +2216,18 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             if (current.wipePoints.empty()) {
                 return;
             }
-            const float width = std::max(current.right - current.left + 1.0f, 1.0f);
-            if (!rtl && current.right >= following.left) {
+            const float width = std::max(
+                current.layoutRight - current.layoutLeft + 1.0f, 1.0f
+            );
+            if (!rtl && current.layoutRight >= following.layoutLeft) {
                 current.wipePoints.back().position = std::clamp(
-                    (following.left - current.left) / width, 0.0f, 1.0f
+                    (following.layoutLeft - current.layoutLeft) / width,
+                    0.0f, 1.0f
                 );
-            } else if (rtl && current.left <= following.right) {
+            } else if (rtl && current.layoutLeft <= following.layoutRight) {
                 current.wipePoints.back().position = std::clamp(
-                    (current.right - following.right) / width, 0.0f, 1.0f
+                    (current.layoutRight - following.layoutRight) / width,
+                    0.0f, 1.0f
                 );
             }
         };
@@ -3519,7 +3528,75 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 ? ch.top + (ch.bottom - ch.top) * position
                 : (rtl
                     ? ch.right - (ch.right - ch.left) * position
+                     : ch.left + (ch.right - ch.left) * position);
+        };
+        const auto unclampedWipePositionAt = [&](const Impl::CachedChar &ch) {
+            if (ch.wipePoints.size() < 2) {
+                const int duration = std::max(ch.endMs - ch.startMs, 1);
+                return static_cast<float>(tMs - ch.startMs)
+                    / static_cast<float>(duration);
+            }
+            if (tMs < ch.wipePoints.front().timeMs) {
+                return ch.wipePoints.front().position;
+            }
+            std::size_t begin = 0;
+            for (std::size_t index = ch.wipePoints.size() - 1; index > 0; --index) {
+                if (ch.wipePoints[index - 1].timeMs <= tMs) {
+                    begin = index - 1;
+                    break;
+                }
+            }
+            const WipePoint &previous = ch.wipePoints[begin];
+            const WipePoint &following = ch.wipePoints[begin + 1];
+            const int duration = following.timeMs - previous.timeMs;
+            if (duration == 0) {
+                return following.position;
+            }
+            return previous.position
+                + (following.position - previous.position)
+                    * static_cast<float>(tMs - previous.timeMs)
+                    / static_cast<float>(duration);
+        };
+        const auto unclampedWipeCoordinateAt = [&](const Impl::CachedChar &ch) {
+            const float position = unclampedWipePositionAt(ch);
+            return style.vertical
+                ? ch.top + (ch.bottom - ch.top) * position
+                : (rtl
+                    ? ch.right - (ch.right - ch.left) * position
                     : ch.left + (ch.right - ch.left) * position);
+        };
+        enum class N3WipePhase { Before, After, Wiping };
+        const auto wipePhaseAt = [&](const std::vector<Impl::CachedChar> &chars,
+                                     std::size_t index) {
+            const Impl::CachedChar &ch = chars[index];
+            const int start = wipeStartMs(ch);
+            const int end = wipeEndMs(ch);
+            bool wiping = start < tMs && tMs < end && start != end;
+            if (!wiping && index + 1 < chars.size()) {
+                const int followingEnd = wipeEndMs(chars[index + 1]);
+                wiping = start < tMs && tMs < followingEnd
+                    && start != followingEnd;
+            }
+            if (wiping) {
+                return N3WipePhase::Wiping;
+            }
+            return tMs <= start ? N3WipePhase::Before : N3WipePhase::After;
+        };
+        const auto delegatedWipeCoordinateAt = [&](
+            const std::vector<Impl::CachedChar> &chars, std::size_t index
+        ) {
+            const Impl::CachedChar &ch = chars[index];
+            if (tMs > wipeEndMs(ch) && index + 1 < chars.size()
+                && chars[index + 1].geometry != nullptr) {
+                return wipeCoordinateAt(chars[index + 1]);
+            }
+            return tMs > wipeEndMs(ch)
+                ? unclampedWipeCoordinateAt(ch)
+                : wipeCoordinateAt(ch);
+        };
+        const auto charWipeComplete = [&](std::size_t charIndex) {
+            return charIndex < line->chars.size()
+                && wipePhaseAt(line->chars, charIndex) == N3WipePhase::After;
         };
         float wipeEdge = style.vertical
             ? line->fillBounds.top
@@ -3544,17 +3621,16 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 line->chars.begin(), line->chars.end(),
                 [&](const Impl::CachedChar &ch) { return tMs >= wipeEndMs(ch); }
             );
-        auto charWipeComplete = [&](std::size_t charIndex) {
-            // N3 classifies every transformed glyph independently as before,
-            // wiping or after. Utopia therefore cannot inherit the static
-            // path's whole-line completion gate.
-            return charIndex < line->chars.size()
-                && tMs >= wipeEndMs(line->chars[charIndex]);
-        };
-
         auto utopiaCharWipe = [&](std::size_t charIndex) {
             D2D1_RECT_F bounds{};
-            ID2D1Geometry *geometry = charGeometryAt(charIndex);
+            std::size_t wipeIndex = charIndex;
+            if (charIndex < line->chars.size()
+                && tMs > wipeEndMs(line->chars[charIndex])
+                && charIndex + 1 < line->chars.size()
+                && line->chars[charIndex + 1].geometry != nullptr) {
+                wipeIndex = charIndex + 1;
+            }
+            ID2D1Geometry *geometry = charGeometryAt(wipeIndex);
             if (geometry == nullptr) {
                 return std::pair<D2D1_RECT_F, float>{bounds, 0.0f};
             }
@@ -3563,7 +3639,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 "ID2D1Geometry::GetBounds(utopia wipe)",
                 device_
             );
-            const Impl::CachedChar &ch = line->chars[charIndex];
+            const Impl::CachedChar &ch = line->chars[wipeIndex];
             const TextStyle &charStyle = ch.styleIndex >= 0
                 && ch.styleIndex < static_cast<int>(scene.charStyles.size())
                 ? scene.charStyles[static_cast<std::size_t>(ch.styleIndex)]
@@ -3574,11 +3650,13 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             const float left = std::floor(bounds.left) - edgeHalf;
             const float right = std::ceil(bounds.right) + edgeHalf;
             float ratio = 0.0f;
-            const CharacterAnimationState animationState = characterAnimationAt(charIndex);
-            if (animationState.utopiaExit || tMs >= wipeEndMs(ch)) {
+            const CharacterAnimationState animationState = characterAnimationAt(wipeIndex);
+            if (animationState.utopiaExit) {
                 ratio = 1.0f;
             } else if (tMs > wipeStartMs(ch)) {
-                ratio = wipePositionAt(ch);
+                ratio = tMs > wipeEndMs(ch)
+                    ? unclampedWipePositionAt(ch)
+                    : wipePositionAt(ch);
             }
             return std::pair<D2D1_RECT_F, float>{
                 bounds,
@@ -3722,22 +3800,80 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
             context->BeginDraw();
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
-            if (!mainWipeComplete) {
-                for (const auto &geometry : line->geometries) {
-                    context->DrawGeometry(geometry.Get(), beforeDecor.Get(), sourceWidth);
-                }
-            }
-            if (hasAfterWipe) {
-                if (!mainWipeComplete) {
-                    context->PushAxisAlignedClip(
-                        afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+            const auto drawGlowPart = [&](std::size_t index, bool after) {
+                ID2D1Geometry *geometry = charGeometryAt(index);
+                if (geometry != nullptr) {
+                    context->DrawGeometry(
+                        geometry, after ? afterDecor.Get() : beforeDecor.Get(),
+                        sourceWidth
                     );
                 }
-                for (const auto &geometry : line->geometries) {
-                    context->DrawGeometry(geometry.Get(), afterDecor.Get(), sourceWidth);
+            };
+            const auto pushGlowClip = [&](std::size_t index, bool after) {
+                const float edge = delegatedWipeCoordinateAt(line->chars, index);
+                const float pad = sourceWidth + 4.0f;
+                D2D1_RECT_F clip{};
+                if (style.vertical) {
+                    clip = after
+                        ? D2D1::RectF(
+                            line->bounds.left - pad, line->bounds.top - pad,
+                            line->bounds.right + pad, edge
+                        )
+                        : D2D1::RectF(
+                            line->bounds.left - pad, edge,
+                            line->bounds.right + pad, line->bounds.bottom + pad
+                        );
+                } else if (rtl) {
+                    clip = after
+                        ? D2D1::RectF(
+                            edge, line->bounds.top - pad,
+                            line->bounds.right + pad, line->bounds.bottom + pad
+                        )
+                        : D2D1::RectF(
+                            line->bounds.left - pad, line->bounds.top - pad,
+                            edge, line->bounds.bottom + pad
+                        );
+                } else {
+                    clip = after
+                        ? D2D1::RectF(
+                            line->bounds.left - pad, line->bounds.top - pad,
+                            edge, line->bounds.bottom + pad
+                        )
+                        : D2D1::RectF(
+                            edge, line->bounds.top - pad,
+                            line->bounds.right + pad, line->bounds.bottom + pad
+                        );
                 }
-                if (!mainWipeComplete) {
-                    context->PopAxisAlignedClip();
+                context->PushAxisAlignedClip(
+                    clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                );
+            };
+            const auto drawGlowPhase = [&](std::size_t index, N3WipePhase phase) {
+                if (phase != N3WipePhase::Wiping) {
+                    drawGlowPart(index, phase == N3WipePhase::After);
+                    return;
+                }
+                pushGlowClip(index, false);
+                drawGlowPart(index, false);
+                context->PopAxisAlignedClip();
+                pushGlowClip(index, true);
+                drawGlowPart(index, true);
+                context->PopAxisAlignedClip();
+            };
+            for (std::size_t reverse = line->chars.size(); reverse > 0; --reverse) {
+                const std::size_t index = reverse - 1;
+                if (wipePhaseAt(line->chars, index) == N3WipePhase::Before) {
+                    drawGlowPhase(index, N3WipePhase::Before);
+                }
+            }
+            for (std::size_t index = 0; index < line->chars.size(); ++index) {
+                if (wipePhaseAt(line->chars, index) == N3WipePhase::After) {
+                    drawGlowPhase(index, N3WipePhase::After);
+                }
+            }
+            for (std::size_t index = 0; index < line->chars.size(); ++index) {
+                if (wipePhaseAt(line->chars, index) == N3WipePhase::Wiping) {
+                    drawGlowPhase(index, N3WipePhase::Wiping);
                 }
             }
             checkHr(context->EndDraw(), "ID2D1DeviceContext::EndDraw(glow source)", device_);
@@ -4486,162 +4622,222 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         }
         context->SetTransform(withViewport(D2D1::Matrix3x2F::Translation(dx, dy)));
 
-        auto drawStack = [&](bool after, ID2D1Brush *fill, ID2D1Brush *stroke, ID2D1Brush *stroke2) {
-            if (style.stroke2Width > 0.0f) {
-                for (const auto &geometry : line->geometries) {
-                    context->DrawGeometry(
-                        geometry.Get(),
-                        stroke2,
-                        std::max(0.0f, style.strokeWidth) + style.stroke2Width
-                    );
-                }
+        const bool hasVisualOverlap = !style.vertical && !rtl && std::adjacent_find(
+            line->chars.begin(), line->chars.end(),
+            [&](const Impl::CachedChar &current,
+                const Impl::CachedChar &following) {
+                return current.right >= following.left;
             }
-            if (style.strokeWidth > 0.0f) {
-                const bool protect = paintNeedsBodyProtection(
-                    after ? style.afterFillPaint : style.beforeFillPaint
-                );
-                for (const Impl::CachedChar &ch : line->chars) {
-                    if (!ch.geometry) {
-                        continue;
-                    }
-                    if (protect && ch.protectedStrokeGeometry) {
-                        context->FillGeometry(ch.protectedStrokeGeometry.Get(), stroke);
-                    } else {
-                        context->DrawGeometry(ch.geometry.Get(), stroke, style.strokeWidth);
-                    }
-                }
-            }
-            for (const auto &geometry : line->geometries) {
-                context->FillGeometry(geometry.Get(), fill);
-            }
-        };
-        auto drawInlineStack = [&](bool after) {
-            for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
-                const Impl::CachedChar &ch = line->chars[charIndex];
-                ID2D1Geometry *geometry = charGeometryAt(charIndex);
-                if (geometry == nullptr) {
-                    continue;
-                }
-                const TextStyle &charStyle = ch.styleIndex >= 0
-                    && ch.styleIndex < static_cast<int>(scene.charStyles.size())
-                    ? scene.charStyles[static_cast<std::size_t>(ch.styleIndex)]
-                    : style;
-                const RgbaColor &fillColor = after
-                    ? charStyle.afterFill
-                    : charStyle.beforeFill;
-                const RgbaColor &strokeColor = after
-                    ? charStyle.afterStroke
-                    : charStyle.beforeStroke;
-                const RgbaColor &stroke2Color = after
-                    ? charStyle.afterStroke2
-                    : charStyle.beforeStroke2;
-                Microsoft::WRL::ComPtr<ID2D1Brush> fillBrush = paintBrush(
-                    after ? charStyle.afterFillPaint : charStyle.beforeFillPaint,
-                    line->fillBounds,
-                    fillColor
-                );
-                Microsoft::WRL::ComPtr<ID2D1Brush> strokeBrush = paintBrush(
-                    after ? charStyle.afterStrokePaint : charStyle.beforeStrokePaint,
-                    line->fillBounds,
-                    strokeColor
-                );
-                Microsoft::WRL::ComPtr<ID2D1Brush> stroke2Brush = paintBrush(
-                    after ? charStyle.afterStroke2Paint : charStyle.beforeStroke2Paint,
-                    line->fillBounds,
-                    stroke2Color
-                );
-                const float charOpacity = globalOpacity
-                    * characterOpacityAt(charIndex);
-                fillBrush->SetOpacity(charOpacity);
-                strokeBrush->SetOpacity(charOpacity);
-                stroke2Brush->SetOpacity(charOpacity);
-                bool pushedUtopiaClip = false;
-                if (after
-                    && hasUtopiaTransition
-                    && !charWipeComplete(charIndex)) {
-                    const auto [animatedBounds, animatedEdge] = utopiaCharWipe(charIndex);
-                    if (animatedEdge <= animatedBounds.left) {
-                        continue;
-                    }
-                    const float pad = std::max(
-                        charStyle.strokeWidth + charStyle.stroke2Width, 2.0f
-                    ) + 4.0f;
-                    context->PushAxisAlignedClip(
-                        D2D1::RectF(
-                            animatedBounds.left - pad,
-                            animatedBounds.top - pad,
-                            animatedEdge,
-                            animatedBounds.bottom + pad
-                        ),
-                        D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
-                    );
-                    pushedUtopiaClip = true;
-                }
-                if (charStyle.stroke2Width > 0.0f) {
-                    ID2D1Geometry *animatedStroke2 = stroke2GeometryAt(charIndex);
-                    if ((spinDirection != 0 || hasUtopiaTransition)
-                        && animatedStroke2 != nullptr) {
-                        context->FillGeometry(animatedStroke2, stroke2Brush.Get());
-                    } else {
+        ) != line->chars.end();
+        const bool useN3PhaseOrdering = hasVisualOverlap
+            || line->hasInlineStyles || hasCharacterTransition;
+        if (!useN3PhaseOrdering) {
+            const auto drawLegacyStack = [&](bool after, ID2D1Brush *fill,
+                                             ID2D1Brush *stroke,
+                                             ID2D1Brush *stroke2) {
+                if (style.stroke2Width > 0.0f) {
+                    for (const auto &geometry : line->geometries) {
                         context->DrawGeometry(
-                            geometry,
-                            stroke2Brush.Get(),
-                            std::max(0.0f, charStyle.strokeWidth)
-                                + charStyle.stroke2Width
+                            geometry.Get(), stroke2,
+                            std::max(0.0f, style.strokeWidth)
+                                + style.stroke2Width
                         );
                     }
                 }
-                if (charStyle.strokeWidth > 0.0f) {
+                if (style.strokeWidth > 0.0f) {
                     const bool protect = paintNeedsBodyProtection(
-                        after ? charStyle.afterFillPaint : charStyle.beforeFillPaint
+                        after ? style.afterFillPaint : style.beforeFillPaint
                     );
-                    ID2D1Geometry *protectedGeometry = protectedGeometryAt(charIndex);
-                    ID2D1Geometry *animatedStroke = strokeGeometryAt(charIndex);
-                    if ((spinDirection != 0 || hasUtopiaTransition)
-                        && !protect && animatedStroke != nullptr) {
-                        context->FillGeometry(animatedStroke, strokeBrush.Get());
-                    } else if (protect && protectedGeometry != nullptr) {
-                        context->FillGeometry(
-                            protectedGeometry, strokeBrush.Get()
-                        );
-                    } else {
-                        context->DrawGeometry(
-                            geometry, strokeBrush.Get(), charStyle.strokeWidth
-                        );
+                    for (const Impl::CachedChar &ch : line->chars) {
+                        if (!ch.geometry) {
+                            continue;
+                        }
+                        if (protect && ch.protectedStrokeGeometry) {
+                            context->FillGeometry(
+                                ch.protectedStrokeGeometry.Get(), stroke
+                            );
+                        } else {
+                            context->DrawGeometry(
+                                ch.geometry.Get(), stroke, style.strokeWidth
+                            );
+                        }
                     }
                 }
-                context->FillGeometry(geometry, fillBrush.Get());
-                if (pushedUtopiaClip) {
-                    context->PopAxisAlignedClip();
+                for (const auto &geometry : line->geometries) {
+                    context->FillGeometry(geometry.Get(), fill);
                 }
-            }
-        };
-        if (line->hasInlineStyles || hasCharacterTransition) {
-            drawInlineStack(false);
+            };
+            drawLegacyStack(
+                false, beforeFill.Get(), beforeStroke.Get(), beforeStroke2.Get()
+            );
             if (hasAfterWipe) {
-                if (!hasUtopiaTransition && !mainWipeComplete) {
+                if (!mainWipeComplete) {
                     context->PushAxisAlignedClip(
                         afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
                 }
-                drawInlineStack(true);
-                if (!hasUtopiaTransition && !mainWipeComplete) {
+                drawLegacyStack(
+                    true, afterFill.Get(), afterStroke.Get(), afterStroke2.Get()
+                );
+                if (!mainWipeComplete) {
                     context->PopAxisAlignedClip();
                 }
             }
         } else {
-            drawStack(false, beforeFill.Get(), beforeStroke.Get(), beforeStroke2.Get());
-            if (hasAfterWipe) {
-                if (!mainWipeComplete) {
-                    context->PushAxisAlignedClip(
-                        afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+        // All three N3 layers share this character classification and clip.
+        const auto pushMainWipeClip = [&](std::size_t charIndex, bool after) {
+            const Impl::CachedChar &ch = line->chars[charIndex];
+            const TextStyle &charStyle = ch.styleIndex >= 0
+                && ch.styleIndex < static_cast<int>(scene.charStyles.size())
+                ? scene.charStyles[static_cast<std::size_t>(ch.styleIndex)]
+                : style;
+            float edge = delegatedWipeCoordinateAt(line->chars, charIndex);
+            D2D1_RECT_F bounds = line->bounds;
+            if (hasUtopiaTransition) {
+                const auto animated = utopiaCharWipe(charIndex);
+                bounds = animated.first;
+                edge = animated.second;
+            }
+            const float pad = std::max(
+                charStyle.strokeWidth + charStyle.stroke2Width, 2.0f
+            ) + 4.0f;
+            D2D1_RECT_F clip{};
+            if (style.vertical) {
+                clip = after
+                    ? D2D1::RectF(
+                        bounds.left - pad, bounds.top - pad,
+                        bounds.right + pad, edge
+                    )
+                    : D2D1::RectF(
+                        bounds.left - pad, edge,
+                        bounds.right + pad, bounds.bottom + pad
+                    );
+            } else if (rtl) {
+                clip = after
+                    ? D2D1::RectF(
+                        edge, bounds.top - pad,
+                        bounds.right + pad, bounds.bottom + pad
+                    )
+                    : D2D1::RectF(
+                        bounds.left - pad, bounds.top - pad,
+                        edge, bounds.bottom + pad
+                    );
+            } else {
+                clip = after
+                    ? D2D1::RectF(
+                        bounds.left - pad, bounds.top - pad,
+                        edge, bounds.bottom + pad
+                    )
+                    : D2D1::RectF(
+                        edge, bounds.top - pad,
+                        bounds.right + pad, bounds.bottom + pad
+                    );
+            }
+            context->PushAxisAlignedClip(
+                clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+            );
+        };
+        const auto drawMainLayerPart = [&](std::size_t charIndex,
+                                           bool after, int layer) {
+            const Impl::CachedChar &ch = line->chars[charIndex];
+            ID2D1Geometry *geometry = charGeometryAt(charIndex);
+            if (geometry == nullptr) {
+                return;
+            }
+            const TextStyle &charStyle = ch.styleIndex >= 0
+                && ch.styleIndex < static_cast<int>(scene.charStyles.size())
+                ? scene.charStyles[static_cast<std::size_t>(ch.styleIndex)]
+                : style;
+            const PaintStyle &paint = layer == 0
+                ? (after ? charStyle.afterStroke2Paint : charStyle.beforeStroke2Paint)
+                : (layer == 1
+                    ? (after ? charStyle.afterStrokePaint : charStyle.beforeStrokePaint)
+                    : (after ? charStyle.afterFillPaint : charStyle.beforeFillPaint));
+            const RgbaColor &color = layer == 0
+                ? (after ? charStyle.afterStroke2 : charStyle.beforeStroke2)
+                : (layer == 1
+                    ? (after ? charStyle.afterStroke : charStyle.beforeStroke)
+                    : (after ? charStyle.afterFill : charStyle.beforeFill));
+            Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrush(
+                paint, line->fillBounds, color
+            );
+            brush->SetOpacity(globalOpacity * characterOpacityAt(charIndex));
+            const bool animated = spinDirection != 0 || hasUtopiaTransition;
+            if (layer == 0) {
+                if (charStyle.stroke2Width <= 0.0f) {
+                    return;
+                }
+                ID2D1Geometry *animatedStroke2 = stroke2GeometryAt(charIndex);
+                if (animated && animatedStroke2 != nullptr) {
+                    context->FillGeometry(animatedStroke2, brush.Get());
+                } else {
+                    context->DrawGeometry(
+                        geometry, brush.Get(),
+                        std::max(0.0f, charStyle.strokeWidth)
+                            + charStyle.stroke2Width
                     );
                 }
-                drawStack(true, afterFill.Get(), afterStroke.Get(), afterStroke2.Get());
-                if (!mainWipeComplete) {
-                    context->PopAxisAlignedClip();
+                return;
+            }
+            if (layer == 1) {
+                if (charStyle.strokeWidth <= 0.0f) {
+                    return;
+                }
+                const bool protect = paintNeedsBodyProtection(
+                    after ? charStyle.afterFillPaint : charStyle.beforeFillPaint
+                );
+                ID2D1Geometry *protectedGeometry = protectedGeometryAt(charIndex);
+                ID2D1Geometry *animatedStroke = strokeGeometryAt(charIndex);
+                if (animated && !protect && animatedStroke != nullptr) {
+                    context->FillGeometry(animatedStroke, brush.Get());
+                } else if (protect && protectedGeometry != nullptr) {
+                    context->FillGeometry(protectedGeometry, brush.Get());
+                } else {
+                    context->DrawGeometry(
+                        geometry, brush.Get(), charStyle.strokeWidth
+                    );
+                }
+                return;
+            }
+            context->FillGeometry(geometry, brush.Get());
+        };
+        const auto drawMainLayer = [&](int layer) {
+            const auto drawPhasePart = [&](std::size_t charIndex,
+                                           N3WipePhase phase) {
+                if (phase != N3WipePhase::Wiping) {
+                    drawMainLayerPart(
+                        charIndex, phase == N3WipePhase::After, layer
+                    );
+                    return;
+                }
+                pushMainWipeClip(charIndex, false);
+                drawMainLayerPart(charIndex, false, layer);
+                context->PopAxisAlignedClip();
+                pushMainWipeClip(charIndex, true);
+                drawMainLayerPart(charIndex, true, layer);
+                context->PopAxisAlignedClip();
+            };
+            for (std::size_t reverse = line->chars.size(); reverse > 0; --reverse) {
+                const std::size_t index = reverse - 1;
+                if (wipePhaseAt(line->chars, index) == N3WipePhase::Before) {
+                    drawPhasePart(index, N3WipePhase::Before);
                 }
             }
+            for (std::size_t index = 0; index < line->chars.size(); ++index) {
+                if (wipePhaseAt(line->chars, index) == N3WipePhase::After) {
+                    drawPhasePart(index, N3WipePhase::After);
+                }
+            }
+            for (std::size_t index = 0; index < line->chars.size(); ++index) {
+                if (wipePhaseAt(line->chars, index) == N3WipePhase::Wiping) {
+                    drawPhasePart(index, N3WipePhase::Wiping);
+                }
+            }
+        };
+        // N3 performs phase ordering independently for edge2, edge and body.
+        drawMainLayer(0);
+        drawMainLayer(1);
+        drawMainLayer(2);
         }
         auto drawRubyStack = [&](std::size_t rubyIndex, const Impl::CachedRuby &ruby, bool after) {
             const TextStyle &rubyStyle = rubyStyleFor(ruby.styleIndex);

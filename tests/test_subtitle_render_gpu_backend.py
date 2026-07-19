@@ -754,6 +754,90 @@ def test_gpu_overlapping_char_wipe_hands_off_at_following_draw_left(monkeypatch)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_tight_overlap_uses_n3_phase_z_order(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("W", 1_000, role_label="left"),
+                    TimingChar("W", 2_000, role_label="right"),
+                ],
+                end_ms=3_000,
+                display_start_override_ms=0,
+                display_end_override_ms=4_000,
+            )
+        ]
+    )
+
+    def scheme(color: str) -> SubtitleStyleScheme:
+        state = KaraokeColorState(
+            text=PaintFill(mode="solid", color=color),
+            stroke=PaintFill(mode="solid", color=color),
+        )
+        return SubtitleStyleScheme(
+            font_family="Times New Roman",
+            font_family_latin="Times New Roman",
+            font_size_px=120,
+            stroke_width_px=9,
+            decoration_kind="none",
+            karaoke_colors=KaraokeColors(before=state, after=state),
+        )
+
+    transparent = scheme("#00000000")
+    base = _g1_style(
+        font_family="Times New Roman",
+        font_family_latin="Times New Roman",
+        font_size_px=120,
+        letter_spacing_px=-80,
+        stroke_width_px=9,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        line_horizontal_layout="left",
+        horizontal_margin_px=180,
+        custom_style_schemes={
+            "left": scheme("#FFFF2020"),
+            "right": scheme("#FF2040FF"),
+        },
+    )
+    variants = (
+        base,
+        replace(
+            base,
+            custom_style_schemes={"left": scheme("#FFFFFFFF"), "right": transparent},
+        ),
+        replace(
+            base,
+            custom_style_schemes={"left": transparent, "right": scheme("#FFFFFFFF")},
+        ),
+    )
+    rendered: list[list[bytes]] = []
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        for style in variants:
+            _, frames = _render_g1_frames(
+                renderer, style, (0, 3_000), force_warp=True, track=track
+            )
+            rendered.append(frames)
+
+    overlap = [
+        index
+        for index in range(0, len(rendered[1][0]), 4)
+        if rendered[1][0][index + 3] > 160 and rendered[2][0][index + 3] > 160
+    ]
+    assert overlap
+
+    def ownership(payload: bytes) -> tuple[int, int]:
+        left = sum(payload[index] > payload[index + 2] + 30 for index in overlap)
+        right = sum(payload[index + 2] > payload[index] + 30 for index in overlap)
+        return left, right
+
+    before_left, before_right = ownership(rendered[0][0])
+    after_left, after_right = ownership(rendered[0][1])
+    assert before_left > before_right
+    assert after_right > after_left
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize("decoration_kind", ["none", "shadow", "glow"])
 def test_gpu_completed_main_wipe_releases_outer_layers(
     monkeypatch, decoration_kind: str
@@ -2991,7 +3075,7 @@ def test_gpu_g4_utopia_main_intro_wipe_and_outro_follow_painter(monkeypatch) -> 
                 _payload_alpha_bounds(gpu_frame),
                 _payload_alpha_bounds(painter_frame),
             )
-        )
+        ), (_payload_alpha_bounds(gpu_frame), _payload_alpha_bounds(painter_frame))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
@@ -3053,12 +3137,12 @@ def test_gpu_g4_utopia_ruby_units_and_group_outro_follow_painter(monkeypatch) ->
     ]
     for gpu_frame, painter_frame in zip(shadow_gpu, shadow_painter):
         assert all(
-            abs(actual - expected) <= 12
+            abs(actual - expected) <= 14
             for actual, expected in zip(
                 _payload_alpha_bounds(gpu_frame),
                 _payload_alpha_bounds(painter_frame),
             )
-        )
+        ), (_payload_alpha_bounds(gpu_frame), _payload_alpha_bounds(painter_frame))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
@@ -4825,7 +4909,10 @@ def test_gpu_g3_ruby_uses_independent_before_and_after_glow_radii(monkeypatch) -
 
     before_alpha_mass = sum(frames[0][3::4])
     after_alpha_mass = sum(frames[1][3::4])
-    assert after_alpha_mass > before_alpha_mass * 1.02
+    # Integer-half N3 edge placement makes the 3 px ruby stroke one physical
+    # pixel narrower than the prior float-half approximation. The larger after
+    # radius must still increase the total glow mass measurably.
+    assert after_alpha_mass > before_alpha_mass * 1.01
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

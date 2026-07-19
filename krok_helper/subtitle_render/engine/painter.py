@@ -140,8 +140,10 @@ class _FillSegment:
     end_ms: int = 0
     ruby: RubyAnnotation | None = None
     indices: tuple[int, ...] = ()
-    release_left: int | None = None
-    release_right: int | None = None
+    release_left: float | None = None
+    release_right: float | None = None
+    layout_left: int | None = None
+    layout_right: int | None = None
     ruby_base_index: int | None = None
     ruby_base_count: int = 1
 
@@ -4750,6 +4752,7 @@ def _layout_plain_line(
     fill_segments = _karaoke_fill_segments(
         char_widths, intervals, ink_x_ranges, active_rubies, line,
         release_x_ranges=wipe_x_ranges,
+        layout_x_ranges=char_x_ranges,
         ruby_main_progress_mode=style.ruby_main_progress_mode,
     )
     line_rect = QRectF(
@@ -5441,6 +5444,7 @@ def _layout_role_line(
     fill_segments = _karaoke_fill_segments(
         char_widths, intervals, ink_x_ranges, active_rubies, line,
         release_x_ranges=wipe_x_ranges,
+        layout_x_ranges=char_x_ranges,
         ruby_main_progress_mode=style.ruby_main_progress_mode,
     )
     ruby_layouts = tuple(
@@ -9452,12 +9456,14 @@ def _karaoke_fill_segments(
     line: TimingLine,
     *,
     release_x_ranges: list[tuple[int, int]] | None = None,
+    layout_x_ranges: list[tuple[int, int]] | None = None,
     ruby_main_progress_mode: str = "checkpoint_segments",
 ) -> list[_FillSegment]:
     """构造走字分段。``ink_x_ranges`` 为各字符的墨水边界（非 advance 框），
     扫光锋面据此推进，确保不扫过字形两侧的透明空白（见 :func:`_char_ink_x_ranges`）。"""
     segments: list[_FillSegment] = []
     release_x_ranges = release_x_ranges or ink_x_ranges
+    layout_x_ranges = layout_x_ranges or release_x_ranges
     index = 0
     while index < len(char_widths):
         ruby = _ruby_for_char_index(active_rubies, line, intervals, index)
@@ -9469,6 +9475,7 @@ def _karaoke_fill_segments(
         if ruby is None or _is_utopia_group_marker(ruby):
             left, right = ink_x_ranges[index]
             release_left, release_right = release_x_ranges[index]
+            layout_left, layout_right = layout_x_ranges[index]
             start, end = intervals[index]
             segments.append(
                 _FillSegment(
@@ -9476,6 +9483,8 @@ def _karaoke_fill_segments(
                     right=right,
                     release_left=release_left,
                     release_right=release_right,
+                    layout_left=layout_left,
+                    layout_right=layout_right,
                     start_ms=start,
                     end_ms=end,
                     indices=(index,),
@@ -9489,6 +9498,7 @@ def _karaoke_fill_segments(
         if not indices:
             left, right = ink_x_ranges[index]
             release_left, release_right = release_x_ranges[index]
+            layout_left, layout_right = layout_x_ranges[index]
             start, end = intervals[index]
             segments.append(
                 _FillSegment(
@@ -9496,6 +9506,8 @@ def _karaoke_fill_segments(
                     right=right,
                     release_left=release_left,
                     release_right=release_right,
+                    layout_left=layout_left,
+                    layout_right=layout_right,
                     start_ms=start,
                     end_ms=end,
                     indices=(index,),
@@ -9514,6 +9526,7 @@ def _karaoke_fill_segments(
             for base_index, target_index in enumerate(indices):
                 left, right = ink_x_ranges[target_index]
                 release_left, release_right = release_x_ranges[target_index]
+                layout_left, layout_right = layout_x_ranges[target_index]
                 slot_start, slot_end = _ruby_main_text_slot_times(
                     effective_ruby, base_index, base_count
                 )
@@ -9523,6 +9536,8 @@ def _karaoke_fill_segments(
                         right=right,
                         release_left=release_left,
                         release_right=release_right,
+                        layout_left=layout_left,
+                        layout_right=layout_right,
                         start_ms=slot_start,
                         end_ms=slot_end,
                         ruby=effective_ruby,
@@ -9536,12 +9551,16 @@ def _karaoke_fill_segments(
             right = max(ink_x_ranges[i][1] for i in indices)
             release_left = min(release_x_ranges[i][0] for i in indices)
             release_right = max(release_x_ranges[i][1] for i in indices)
+            layout_left = min(layout_x_ranges[i][0] for i in indices)
+            layout_right = max(layout_x_ranges[i][1] for i in indices)
             segments.append(
                 _FillSegment(
                     left=left,
                     right=right,
                     release_left=release_left,
                     release_right=release_right,
+                    layout_left=layout_left,
+                    layout_right=layout_right,
                     ruby=effective_ruby,
                     indices=tuple(indices),
                 )
@@ -9553,24 +9572,43 @@ def _karaoke_fill_segments(
 def _adjust_fill_release_edges(segments: list[_FillSegment]) -> list[_FillSegment]:
     """Apply N3 ``AdjustWipeEnd`` at overlapping character boxes.
 
-    N3 releases a completed character through its DrawRight. If that boundary
-    overlaps the following character's DrawLeft, it stops exactly at the next
-    DrawLeft instead. This keeps the completed outline from retaining a small
-    before-colour tail without colouring the following glyph early.
+    N3 calculates the adjusted *position ratio* in DrawLeft/DrawRight layout-box
+    coordinates, then applies that ratio to the transformed ink geometry used by
+    WipeLeft.  Bearings and the primary edge therefore affect the visible end
+    point without changing the overlap decision itself.
     """
     adjusted = list(segments)
     for index in range(len(adjusted) - 1):
         current = adjusted[index]
         following = adjusted[index + 1]
-        current_left = current.release_left if current.release_left is not None else current.left
-        current_right = current.release_right if current.release_right is not None else current.right
-        following_left = following.release_left if following.release_left is not None else following.left
-        following_right = following.release_right if following.release_right is not None else following.right
-        if current_left <= following_left:
-            if current_right >= following_left:
-                adjusted[index] = replace(current, release_right=following_left)
-        elif current_left <= following_right:
-            adjusted[index] = replace(current, release_left=following_right)
+        release_left = current.release_left if current.release_left is not None else current.left
+        release_right = current.release_right if current.release_right is not None else current.right
+        layout_left = current.layout_left if current.layout_left is not None else release_left
+        layout_right = current.layout_right if current.layout_right is not None else release_right
+        following_left = (
+            following.layout_left
+            if following.layout_left is not None
+            else (following.release_left if following.release_left is not None else following.left)
+        )
+        following_right = (
+            following.layout_right
+            if following.layout_right is not None
+            else (following.release_right if following.release_right is not None else following.right)
+        )
+        layout_width = max(layout_right - layout_left + 1, 1)
+        if layout_left <= following_left:
+            if layout_right >= following_left:
+                pose = max(0.0, min(1.0, (following_left - layout_left) / layout_width))
+                adjusted[index] = replace(
+                    current,
+                    release_right=release_left + (release_right - release_left) * pose,
+                )
+        elif layout_left <= following_right:
+            pose = max(0.0, min(1.0, (layout_right - following_right) / layout_width))
+            adjusted[index] = replace(
+                current,
+                release_left=release_right - (release_right - release_left) * pose,
+            )
     return adjusted
 
 
@@ -9675,6 +9713,12 @@ def _offset_fill_segments(segments: list[_FillSegment], dx: int) -> list[_FillSe
             release_right=(
                 segment.release_right + dx if segment.release_right is not None else None
             ),
+            layout_left=(
+                segment.layout_left + dx if segment.layout_left is not None else None
+            ),
+            layout_right=(
+                segment.layout_right + dx if segment.layout_right is not None else None
+            ),
             start_ms=segment.start_ms,
             end_ms=segment.end_ms,
             ruby=segment.ruby,
@@ -9684,14 +9728,14 @@ def _offset_fill_segments(segments: list[_FillSegment], dx: int) -> list[_FillSe
     ]
 
 
-def _fill_extent_start(segments: list[_FillSegment]) -> int | None:
+def _fill_extent_start(segments: list[_FillSegment]) -> float | None:
     if not segments:
         return None
     first = segments[0]
     return first.release_left if first.release_left is not None else first.left
 
 
-def _segment_wipe_edges(segment: _FillSegment) -> tuple[int, int]:
+def _segment_wipe_edges(segment: _FillSegment) -> tuple[float, float]:
     """Return the N3 drawing edges used by the moving wipe front.
 
     ``left`` / ``right`` keep the glyph-ink bounds for layout and ruby mapping,
@@ -9790,7 +9834,7 @@ def _n3_following_wipe_band(
 def _fill_extent_end(
     segments: list[_FillSegment],
     t_ms: int,
-) -> int:
+) -> float:
     """Return the current right edge of the continuous karaoke scan.
 
     Motion follows the N3 drawing bounds for the complete interval.  In
@@ -9805,6 +9849,10 @@ def _fill_extent_end(
         ratio = _segment_fill_ratio(segment, t_ms)
         if ratio <= 0.0:
             break
+        if segment.right <= segment.left:
+            if ratio < 1.0:
+                break
+            continue
         wipe_left, wipe_right = _segment_wipe_edges(segment)
         if ratio >= 1.0:
             fill_end = max(fill_end, wipe_right)
@@ -9817,7 +9865,7 @@ def _fill_extent_end(
     return fill_end
 
 
-def _fill_extent_left(segments: list[_FillSegment], t_ms: int) -> int:
+def _fill_extent_left(segments: list[_FillSegment], t_ms: int) -> float:
     """RTL：返回已唱区的左缘 x（扫光从右向左推进时的移动边）。
 
     句中停顿的间隙中点推进与 :func:`_fill_extent_end` 镜像。
@@ -9829,6 +9877,10 @@ def _fill_extent_left(segments: list[_FillSegment], t_ms: int) -> int:
         ratio = _segment_fill_ratio(segment, t_ms)
         if ratio <= 0.0:
             break
+        if segment.right <= segment.left:
+            if ratio < 1.0:
+                break
+            continue
         wipe_left, wipe_right = _segment_wipe_edges(segment)
         if ratio >= 1.0:
             scanline = min(scanline, wipe_left)
@@ -10906,7 +10958,7 @@ def resolved_guide_anchor_bounds_for_line(
     track: TimingTrack,
     line: TimingLine,
     style: Style,
-) -> tuple[int, int] | None:
+) -> tuple[float, float] | None:
     """Return Painter's source-line horizontal anchor box for guide glyphs.
 
     Sayatoo row layout measures the unmodified source line before Painter
