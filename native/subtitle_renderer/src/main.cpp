@@ -60,6 +60,7 @@ constexpr int kUtopiaFadeOutTimeMs = 750;
 struct TimingChar {
     QString text;
     int startMs = 0;
+    std::optional<int> resolvedEndMs;
     std::optional<int> pauseReleaseMs;
     QString roleLabel;
 };
@@ -2038,6 +2039,24 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
                 ch.roleLabel = stringValue(charObject, QStringLiteral("role_label"));
                 line.chars.push_back(ch);
             }
+            const QJsonArray resolvedIntervals = lineObject.value(
+                QStringLiteral("resolved_intervals")
+            ).toArray();
+            if (resolvedIntervals.size() == static_cast<int>(line.chars.size())) {
+                for (int index = 0; index < resolvedIntervals.size(); ++index) {
+                    const QJsonArray interval = resolvedIntervals.at(index).toArray();
+                    if (interval.size() < 2
+                        || !interval.at(0).isDouble()
+                        || !interval.at(1).isDouble()) {
+                        continue;
+                    }
+                    TimingChar &ch = line.chars[static_cast<std::size_t>(index)];
+                    ch.startMs = interval.at(0).toInt(ch.startMs);
+                    ch.resolvedEndMs = std::max(
+                        ch.startMs, interval.at(1).toInt(ch.startMs)
+                    );
+                }
+            }
             cfg.lines.push_back(std::move(line));
         }
 
@@ -2445,6 +2464,9 @@ int charEndMs(const TimingLine &line, std::size_t index) {
         return 0;
     }
     const TimingChar &ch = line.chars[index];
+    if (ch.resolvedEndMs.has_value()) {
+        return std::max(ch.startMs, ch.resolvedEndMs.value());
+    }
     if (ch.pauseReleaseMs.has_value()) {
         return std::max(ch.startMs, ch.pauseReleaseMs.value());
     }

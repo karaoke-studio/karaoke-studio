@@ -63,11 +63,6 @@ def gpu_unsupported_features(
                     reasons.append("line_animation_override")
             if line.guide_symbol is not None or line.inline_guide_symbols:
                 reasons.append("guide_symbol")
-            if any(
-                ch.source_span_count != 1 or ch.source_span_start_ms is not None
-                for ch in line.chars
-            ):
-                reasons.append("shared_timing_span")
     return tuple(dict.fromkeys(reasons))
 
 
@@ -119,6 +114,7 @@ def timing_line_to_ir(
     line: TimingLine,
     *,
     layout_style: Style | None = None,
+    resolved_intervals: list[tuple[int, int]] | None = None,
     lane: int = 0,
     display_start_ms: int | None = None,
     display_end_ms: int | None = None,
@@ -169,6 +165,11 @@ def timing_line_to_ir(
             if layout_style is not None
             else None
         ),
+        "resolved_intervals": (
+            [[int(start), int(end)] for start, end in resolved_intervals]
+            if resolved_intervals is not None
+            else None
+        ),
     }
 
 
@@ -191,12 +192,16 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
             _line_center_override,
             _style_for_line,
             display_schedule_for_style,
+            resolved_char_intervals_for_line,
         )
         from krok_helper.subtitle_render.models import style_with_line_animation
 
         display_style = _display_style_for_signal_window(style)
         schedule = display_schedule_for_style(track, display_style)
         layout_styles = [_style_for_line(style, line) for line in track.lines]
+        resolved_intervals = [
+            resolved_char_intervals_for_line(line, style) for line in track.lines
+        ]
         center_overrides = {
             index: _line_center_override(track, line, layout_styles[index])
             for index, line in enumerate(track.lines)
@@ -206,6 +211,7 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
         center_overrides = {}
         animation_styles = []
         layout_styles = []
+        resolved_intervals = []
     return {
         "meta": {
             "title": track.meta.title,
@@ -220,6 +226,9 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
             timing_line_to_ir(
                 line,
                 layout_style=(layout_styles[index] if style is not None else None),
+                resolved_intervals=(
+                    resolved_intervals[index] if style is not None else None
+                ),
                 lane=schedule.get(index, (0, 0, 0))[0],
                 display_start_ms=(schedule[index][1] if index in schedule else None),
                 display_end_ms=(schedule[index][2] if index in schedule else None),

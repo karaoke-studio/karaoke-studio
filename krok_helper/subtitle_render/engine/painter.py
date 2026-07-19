@@ -10859,6 +10859,48 @@ def _style_for_line(style: Style, line: TimingLine) -> Style:
     return style_with_line_animation(style, line)
 
 
+def resolved_char_intervals_for_line(
+    line: TimingLine, style: Style
+) -> list[tuple[int, int]]:
+    """Resolve Painter's final per-character timing intervals for Render IR.
+
+    Shared source spans are weighted by the same effective glyph advances used
+    by horizontal layout.  Vertical Painter intentionally keeps the parser's
+    existing intervals because its fixed cells do not run the width-weighted
+    shared-span path.
+    """
+    line_style = _style_for_line(style, line)
+    if line_style.vertical:
+        return compute_char_intervals(line)
+    if _line_has_role_labels(line):
+        measure_layout = _build_role_text_layout(
+            line, line_style, x0=0, baseline_y=0
+        )
+        char_widths, _ranges = _role_char_geometry_by_index(line, measure_layout)
+    else:
+        font = _build_font(line_style)
+        metrics = QFontMetrics(font)
+        latin_font = _build_latin_font(line_style)
+        font_for = _make_font_for(line_style, font, latin_font)
+        latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
+        char_widths = [
+            (
+                _vector_glyph_width(ch.vector_glyph, line_style)
+                if ch.vector_glyph is not None
+                else _char_layout_width(
+                    ch.text,
+                    font,
+                    metrics,
+                    latin_metrics,
+                    font_for,
+                    line_style,
+                )
+            )
+            for ch in line.chars
+        ]
+    return compute_char_intervals(line, char_widths)
+
+
 def _active_rubies_for_line(
     rubies: list[RubyAnnotation],
     line: TimingLine,

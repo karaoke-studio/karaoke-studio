@@ -760,6 +760,111 @@ def test_gpu_g3_ruby_has_independent_geometry_and_wipe(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize(
+    "direction_changes",
+    [{}, {"right_to_left": True}, {"vertical": True}],
+)
+def test_gpu_g4_shared_timing_span_uses_painter_resolved_intervals(
+    monkeypatch,
+    direction_changes: dict[str, object],
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    span = {
+        "source_span_start_ms": 0,
+        "source_span_end_ms": 3_000,
+        "source_span_count": 3,
+    }
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("W", 0, source_span_index=0, **span),
+                    TimingChar(" ", 1_000, source_span_index=1, **span),
+                    TimingChar("M", 2_000, source_span_index=2, **span),
+                ],
+                end_ms=3_000,
+            )
+        ]
+    )
+    before = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFF2020"),
+        stroke=PaintFill(mode="solid", color="#00000000"),
+        shadow=PaintFill(mode="solid", color="#00000000"),
+    )
+    after = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FF2040FF")
+    )
+    style = _g1_style(
+        font_family="Times New Roman",
+        font_family_latin="Times New Roman",
+        font_size_px=82,
+        dual_line_layout=False,
+        line_horizontal_layout="center",
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        karaoke_colors=KaraokeColors(before=before, after=after),
+        **direction_changes,
+    )
+    from krok_helper.subtitle_render.engine.painter import (
+        resolved_char_intervals_for_line,
+    )
+
+    intervals = resolved_char_intervals_for_line(track.lines[0], style)
+    if style.vertical:
+        assert intervals == [(0, 1_000), (1_000, 2_000), (2_000, 3_000)]
+    else:
+        assert intervals != [(0, 1_000), (1_000, 2_000), (2_000, 3_000)]
+    timestamps = tuple(
+        sorted(
+            {
+                0,
+                500,
+                intervals[0][1] - 1,
+                intervals[0][1] + 1,
+                intervals[1][1] - 1,
+                intervals[1][1] + 1,
+                3_000,
+            }
+        )
+    )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+
+    def blue_progress(payload: bytes) -> int:
+        return sum(
+            max(int(payload[index + 2]) - int(payload[index]), 0)
+            for index in range(0, len(payload), 4)
+        )
+
+    gpu_full = blue_progress(gpu[-1])
+    painter_full = blue_progress(painter[-1])
+    for t_ms, gpu_frame, painter_frame in zip(timestamps, gpu, painter):
+        gpu_ratio = blue_progress(gpu_frame) / gpu_full
+        painter_ratio = blue_progress(painter_frame) / painter_full
+        assert abs(gpu_ratio - painter_ratio) <= 0.06, (
+            direction_changes,
+            t_ms,
+            intervals,
+            gpu_ratio,
+            painter_ratio,
+        )
+    assert all(
+        abs(actual - expected) <= 12
+        for actual, expected in zip(
+            _payload_alpha_bounds(gpu[-1]),
+            _payload_alpha_bounds(painter[-1]),
+        )
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g4_vertical_title_remains_in_screen_coordinates(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     track = TimingTrack(

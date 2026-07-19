@@ -1523,6 +1523,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             for (std::size_t index = 0; index < cached.chars.size(); ++index) {
                 Impl::CachedChar &ch = cached.chars[index];
                 const float cellTop = static_cast<float>(index) * cellHeight;
+                // Painter advances the vertical wipe through every fixed cell,
+                // including spaces and other glyphs with no outline geometry.
+                ch.top = cellTop;
+                ch.bottom = cellTop + cellHeight;
                 const auto [offsetX, offsetY] = verticalGlyphOffset(
                     sourceLine.chars[index].text, cellWidth, cellHeight
                 );
@@ -1566,8 +1570,6 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     const float wipePad = std::max(charStyle.strokeWidth, 0.0f) * 0.5f;
                     ch.left = bounds.left - wipePad;
                     ch.right = bounds.right + wipePad;
-                    ch.top = cellTop;
-                    ch.bottom = cellTop + cellHeight;
                     extendBounds(cached.bounds, lineHasBounds, bounds);
                     cached.geometries.push_back(ch.geometry);
                 }

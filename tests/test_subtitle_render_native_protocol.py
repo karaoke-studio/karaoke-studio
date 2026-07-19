@@ -325,18 +325,49 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
             TimingLine(
                 chars=[
                     TimingChar(
-                        "A",
+                        "W",
                         0,
                         source_span_start_ms=0,
-                        source_span_end_ms=500,
-                        source_span_count=2,
-                    )
+                        source_span_end_ms=1_500,
+                        source_span_count=3,
+                        source_span_index=0,
+                    ),
+                    TimingChar(
+                        " ",
+                        500,
+                        source_span_start_ms=0,
+                        source_span_end_ms=1_500,
+                        source_span_count=3,
+                        source_span_index=1,
+                    ),
+                    TimingChar(
+                        "M",
+                        1_000,
+                        source_span_start_ms=0,
+                        source_span_end_ms=1_500,
+                        source_span_count=3,
+                        source_span_index=2,
+                    ),
                 ],
-                end_ms=500,
+                end_ms=1_500,
             )
         ]
     )
-    assert gpu_unsupported_features(span_track, Style()) == ("shared_timing_span",)
+    assert gpu_unsupported_features(span_track, Style()) == ()
+    span_line = build_render_ir(
+        span_track,
+        Style(font_family="Times New Roman", font_family_latin="Times New Roman"),
+        width=640,
+        height=360,
+        fps=60,
+    )["track"]["lines"][0]
+    assert span_line["resolved_intervals"][0][0] == 0
+    assert span_line["resolved_intervals"][-1][1] == 1_500
+    assert span_line["resolved_intervals"] != [
+        [0, 500],
+        [500, 1_000],
+        [1_000, 1_500],
+    ]
 
     layout_track = TimingTrack(
         lines=[

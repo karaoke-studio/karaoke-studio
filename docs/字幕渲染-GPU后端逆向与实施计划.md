@@ -1498,3 +1498,12 @@ G4 下一批处理当前剩余的组合门槛：竖排标题/行内角色/动画
 - GPU 独立回归 `98 passed`，transport `71 passed`，native protocol/export/benchmark `63 passed, 27 skipped`。RTX 3070 Ti、1920×1080、60fps、RTL + Utopia + 中档 glow、packed bands、600 帧：`81.98fps`，render/readback/roundtrip p95 `7.57/4.31/14.62ms`，平均 band 覆盖率 `14.05%`，local 显存增长 0。
 
 G4 下一批进入 guide symbol 与 shared timing span；两者完成后审计 capability gate，并转入 G5 产品集成与 G6 稳态/故障恢复验收。
+
+### 2026-07-19（第三十七批）：G4 shared timing span
+
+- Render IR 不再让 native 根据原始打轴点自行猜测共享时间段。Python 对每行复用 Painter 的有效行样式、字体分流、N3 字宽规则、角色 run 与矢量字形宽度，调用同一 `compute_char_intervals()` 固化最终逐字区间；竖排继续沿用 Painter 的固定字格原始区间。C++ 只消费 `resolved_intervals`，因此共享源片段的宽度加权、暂停释放与行尾边界保持 CPU oracle 的现有语义。
+- Direct2D 竖排扫光同时修正了空白字格：空格没有 outline geometry，但 Painter 仍会让它占固定高度并推进扫描边缘；native 现在无论 geometry 是否为空都会保存字格 top/bottom，不再在空格时间段把 after clip 回退到列顶。
+- 自动门槛用宽度差显著的 `W / 空格 / M` 覆盖横排、RTL 与竖排，直接比较 before/after 蓝色推进比例以及最终边界。横排与 RTL 验证宽度加权区间，竖排验证固定字格时间；三组均通过，`shared_timing_span` capability fallback 已移除。
+- 独立回归：GPU `101 passed`，transport `71 passed`，native protocol/export/benchmark `63 passed, 27 skipped`。当前 capability gate 只剩 guide symbol 与未知行动画名；产品 GPU 开关继续默认关闭，Painter 永久保留为 oracle 与 fallback。
+
+G4 下一批迁移 guide symbol（前缀插入、前缀替换、行内替换、角色着色与矢量路径），随后完成 capability gate 审计并进入 G5。
