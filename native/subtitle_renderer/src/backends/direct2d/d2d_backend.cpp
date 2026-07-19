@@ -552,7 +552,9 @@ BackendCaps Direct2DGpuBackend::capabilities() const {
 }
 
 BackendDiagnostics Direct2DGpuBackend::diagnostics() const {
-    return impl_->diagnostics;
+    BackendDiagnostics result = impl_->diagnostics;
+    device_.appendVideoMemoryDiagnostics(&result);
+    return result;
 }
 
 ProbeResult Direct2DGpuBackend::renderProbe(const ProbeOptions &options) {

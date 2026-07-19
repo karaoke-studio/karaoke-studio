@@ -533,6 +533,32 @@ def test_gpu_g1_repeated_configure_hits_geometry_layout_cache(monkeypatch) -> No
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_diagnostics_report_cache_and_dxgi_memory_without_rendering(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured = renderer.configure_gpu(
+            _g1_track(),
+            _g1_style(),
+            width=640,
+            height=360,
+            fps=60,
+            force_warp=True,
+        )
+        diagnostics = renderer.gpu_diagnostics(force_warp=True)
+
+    assert diagnostics["event"] == "gpu_diagnostics"
+    assert diagnostics["cache_hits"] == configured["cache_hits"]
+    assert diagnostics["cache_misses"] == configured["cache_misses"]
+    assert diagnostics["estimated_cache_bytes"] == configured["estimated_cache_bytes"]
+    assert diagnostics["video_memory_info_available"] is True
+    for segment in ("local", "non_local"):
+        usage = diagnostics[f"{segment}_video_memory_usage_bytes"]
+        budget = diagnostics[f"{segment}_video_memory_budget_bytes"]
+        assert usage >= 0
+        assert budget >= usage
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g1_n3_glow_concentration_adds_blur_passes(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     low = _g1_style(

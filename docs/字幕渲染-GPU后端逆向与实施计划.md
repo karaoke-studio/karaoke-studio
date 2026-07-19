@@ -1258,3 +1258,29 @@ GPU 开关暴露给普通用户。
 
 G3 下一刀继续做组合 corpus 的 raw overlay diff，以及重复 configure/render 下 cache 和 GPU/进程
 内存稳态门禁；能力门禁中的高级项目留到 G4 逐项消除。
+
+### 2026-07-19（第二十一批）：G3 corpus 与显存稳态收口
+
+- 新增 `scripts/compare_gpu_painter_corpus.py`，固定三类 1080p raw subtitle overlay corpus：
+  普通双行 + ruby + glow、TACTIC-like 三档 glow + 蓝白走字 + `UseEdge2=false` + 7px 字距，
+  以及角色混合字号/渐变/图片填充/ruby/标题/多字幕源的 G3 重组合。每个时间点保存 Painter/GPU
+  两张透明层，并输出无平移修正的 alpha IoU、四边 bbox 偏差、union 像素 premultiplied channel
+  MAE/p95；Painter 与 GPU 同时为空的帧也作为有效等价结果处理。
+- 本机存在的 `Dark spiral journey/1.n3proj` 自动加入真实 N3 公共路径切片，保留真实歌词、ruby、
+  时间和效果，只把未安装字体归一到双方都可解析的 Meiryo，并隔离 G4 能力。12 个抽帧全部通过：
+  普通样本 alpha IoU `0.9413+`、最大边缘差 `5px`；TACTIC-like 为 `0.8888+` / `8px`；
+  G3 重组合为 `0.8981+` / `11px`；Dark Spiral 两个有效帧为 `0.9546+` / `4px`。
+  本机确实没有 TACTIC 与 A stain 原工程，结果 JSON 明确列为缺失样本，合成 TACTIC-like 不冒充原工程。
+- Direct2D backend 通过 `IDXGIAdapter3::QueryVideoMemoryInfo()` 暴露 local/non-local usage 与 budget；
+  新增独立 `gpu_diagnostics` 命令，读取 cache/显存时不进入逐帧热路径。基准同步记录 sidecar RSS、
+  warmup/end cache bytes、显存用量以及相同场景重复 configure 的 hit 增量。
+- RTX 3070 Ti、3840×2160、600 帧、中档 glow、packed bands、100 次相同 configure：100 次全部
+  cache hit，cache 始终 `12,936B`；local video memory 始终 `88,408,064B`，增长 0；sidecar RSS
+  `121,229,312 → 122,093,568B`，仅波动 `864,256B`；non-local 增长 `692,224B`。端到端
+  `73.32fps`，render/readback/roundtrip p95 分别 `2.85/5.24/16.16ms`，4K60 继续达标。
+- hardware/WARP corpus 与 build smoke 均通过；GPU/transport 回归 `115 passed`，native
+  protocol/export/benchmark 独立回归 `61 passed, 27 skipped`。
+
+至此 G3 在本机可得 corpus、Painter raw overlay、cache/显存稳态和 4K60 common path 的门禁均已完成，
+**G3 宣告完成**。TACTIC/A stain 原工程复测以及 AMD/Intel 仍是外部样本/硬件矩阵项；产品 GPU 开关
+继续默认关闭。下一阶段进入 G4，并始终按 capability 逐项迁移，未实现语义整场回退 Painter。

@@ -77,7 +77,10 @@ def run_benchmark(
     force_warp: bool,
     glow: bool,
     bands: bool = False,
+    reconfigure_cycles: int = 0,
 ) -> tuple[dict, list[dict]]:
+    import psutil
+
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     frames = max(1, int(round(seconds * fps)))
     duration_ms = max(1, int(round(seconds * 1000.0)))
@@ -85,6 +88,8 @@ def run_benchmark(
     shm_key = f"krok_gpu_g1_benchmark_{os.getpid()}_{uuid.uuid4().hex}"
     rows: list[dict] = []
     reader: SharedFrameRingReader | None = None
+    warm_diagnostics: dict | None = None
+    warm_rss_bytes = 0
 
     with NativeRendererProcess(response_timeout_s=30.0, close_timeout_s=2.0) as renderer:
         configured = renderer.configure_gpu(
@@ -95,6 +100,19 @@ def run_benchmark(
             fps=fps,
             force_warp=force_warp,
         )
+        assert renderer.process_id is not None
+        sidecar_process = psutil.Process(renderer.process_id)
+        cache_hits_before_reconfigure = int(configured["cache_hits"])
+        for _ in range(max(int(reconfigure_cycles), 0)):
+            configured = renderer.configure_gpu(
+                track,
+                style,
+                width=width,
+                height=height,
+                fps=fps,
+                force_warp=force_warp,
+            )
+        cache_hits_after_reconfigure = int(configured["cache_hits"])
         start = time.perf_counter()
         try:
             for frame_index in range(frames):
@@ -130,9 +148,17 @@ def run_benchmark(
                         "readback_ratio": float(event.get("readback_ratio", 1.0)),
                     }
                 )
+                if warm_diagnostics is None and frame_index >= min(fps, frames - 1):
+                    warm_diagnostics = renderer.gpu_diagnostics(force_warp=force_warp)
+                    warm_rss_bytes = sidecar_process.memory_info().rss
         finally:
             if reader is not None:
                 reader.close()
+        if warm_diagnostics is None:
+            warm_diagnostics = renderer.gpu_diagnostics(force_warp=force_warp)
+            warm_rss_bytes = sidecar_process.memory_info().rss
+        end_diagnostics = renderer.gpu_diagnostics(force_warp=force_warp)
+        end_rss_bytes = sidecar_process.memory_info().rss
         elapsed = time.perf_counter() - start
 
     render_times = [row["render_ms"] for row in rows]
@@ -161,6 +187,37 @@ def run_benchmark(
         "roundtrip_mean_ms": round(statistics.fmean(roundtrip_times), 4),
         "roundtrip_p95_ms": round(_percentile(roundtrip_times, 0.95), 4),
         "width": width,
+        "cache_hits_reconfigure_delta": (
+            cache_hits_after_reconfigure - cache_hits_before_reconfigure
+        ),
+        "cache_bytes_warmup": int(warm_diagnostics["estimated_cache_bytes"]),
+        "cache_bytes_end": int(end_diagnostics["estimated_cache_bytes"]),
+        "sidecar_rss_warmup_bytes": warm_rss_bytes,
+        "sidecar_rss_end_bytes": end_rss_bytes,
+        "sidecar_rss_growth_bytes": end_rss_bytes - warm_rss_bytes,
+        "video_memory_info_available": bool(
+            end_diagnostics["video_memory_info_available"]
+        ),
+        "local_video_memory_warmup_bytes": int(
+            warm_diagnostics["local_video_memory_usage_bytes"]
+        ),
+        "local_video_memory_end_bytes": int(
+            end_diagnostics["local_video_memory_usage_bytes"]
+        ),
+        "local_video_memory_growth_bytes": int(
+            end_diagnostics["local_video_memory_usage_bytes"]
+        )
+        - int(warm_diagnostics["local_video_memory_usage_bytes"]),
+        "non_local_video_memory_warmup_bytes": int(
+            warm_diagnostics["non_local_video_memory_usage_bytes"]
+        ),
+        "non_local_video_memory_end_bytes": int(
+            end_diagnostics["non_local_video_memory_usage_bytes"]
+        ),
+        "non_local_video_memory_growth_bytes": int(
+            end_diagnostics["non_local_video_memory_usage_bytes"]
+        )
+        - int(warm_diagnostics["non_local_video_memory_usage_bytes"]),
     }
     return summary, rows
 
@@ -179,6 +236,12 @@ def main() -> int:
         action="store_true",
         help="read back only packed subtitle bands and reconstruct the full frame",
     )
+    parser.add_argument(
+        "--reconfigure-cycles",
+        type=int,
+        default=0,
+        help="repeat identical configure calls to verify bounded cache hits",
+    )
     parser.add_argument("--output-csv", type=Path)
     args = parser.parse_args()
 
@@ -192,6 +255,7 @@ def main() -> int:
             force_warp=force_warp,
             glow=bool(args.glow),
             bands=bool(args.bands),
+            reconfigure_cycles=max(args.reconfigure_cycles, 0),
         )
         all_rows.extend(rows)
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True))

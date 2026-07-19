@@ -690,6 +690,11 @@ class NativeRendererProcess:
         self._send(payload)
         return self._expect_ok(self._read_response())
 
+    def gpu_diagnostics(self, *, force_warp: bool = False) -> dict[str, Any]:
+        """Read cache and DXGI memory counters without entering the frame hot path."""
+        self._send({"cmd": "gpu_diagnostics", "force_warp": bool(force_warp)})
+        return self._expect_ok(self._read_response())
+
     def render_probe(
         self,
         *,

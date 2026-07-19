@@ -6363,6 +6363,46 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
     return scene;
 }
 
+void appendGpuDiagnostics(
+    QJsonObject *out,
+    const krok::subtitle::native::BackendDiagnostics &diagnostics
+) {
+    out->insert(QStringLiteral("cache_hits"), static_cast<qint64>(diagnostics.cacheHits));
+    out->insert(QStringLiteral("cache_misses"), static_cast<qint64>(diagnostics.cacheMisses));
+    out->insert(
+        QStringLiteral("estimated_cache_bytes"),
+        static_cast<qint64>(diagnostics.estimatedCacheBytes)
+    );
+    out->insert(QStringLiteral("cached_lines"), static_cast<qint64>(diagnostics.lineCount));
+    out->insert(QStringLiteral("cached_chars"), static_cast<qint64>(diagnostics.charCount));
+    out->insert(
+        QStringLiteral("cached_geometries"),
+        static_cast<qint64>(diagnostics.geometryCount)
+    );
+    out->insert(QStringLiteral("cached_rubies"), static_cast<qint64>(diagnostics.rubyCount));
+    out->insert(QStringLiteral("cached_styles"), static_cast<qint64>(diagnostics.styleCount));
+    out->insert(
+        QStringLiteral("video_memory_info_available"),
+        diagnostics.videoMemoryInfoAvailable
+    );
+    out->insert(
+        QStringLiteral("local_video_memory_usage_bytes"),
+        static_cast<qint64>(diagnostics.localVideoMemoryUsageBytes)
+    );
+    out->insert(
+        QStringLiteral("local_video_memory_budget_bytes"),
+        static_cast<qint64>(diagnostics.localVideoMemoryBudgetBytes)
+    );
+    out->insert(
+        QStringLiteral("non_local_video_memory_usage_bytes"),
+        static_cast<qint64>(diagnostics.nonLocalVideoMemoryUsageBytes)
+    );
+    out->insert(
+        QStringLiteral("non_local_video_memory_budget_bytes"),
+        static_cast<qint64>(diagnostics.nonLocalVideoMemoryBudgetBytes)
+    );
+}
+
 QJsonObject handleConfigureGpu(
     const QJsonObject &request,
     const std::optional<RenderConfig> &config,
@@ -6400,24 +6440,38 @@ QJsonObject handleConfigureGpu(
         for (auto it = caps.begin(); it != caps.end(); ++it) {
             out.insert(it.key(), it.value());
         }
-        const auto diagnostics = backend->diagnostics();
-        out.insert(QStringLiteral("cache_hits"), static_cast<qint64>(diagnostics.cacheHits));
-        out.insert(QStringLiteral("cache_misses"), static_cast<qint64>(diagnostics.cacheMisses));
-        out.insert(
-            QStringLiteral("estimated_cache_bytes"),
-            static_cast<qint64>(diagnostics.estimatedCacheBytes)
-        );
-        out.insert(QStringLiteral("cached_lines"), static_cast<qint64>(diagnostics.lineCount));
-        out.insert(QStringLiteral("cached_chars"), static_cast<qint64>(diagnostics.charCount));
-        out.insert(QStringLiteral("cached_geometries"), static_cast<qint64>(diagnostics.geometryCount));
-        out.insert(QStringLiteral("cached_rubies"), static_cast<qint64>(diagnostics.rubyCount));
-        out.insert(QStringLiteral("cached_styles"), static_cast<qint64>(diagnostics.styleCount));
+        appendGpuDiagnostics(&out, backend->diagnostics());
         return out;
     } catch (const std::exception &exception) {
         QJsonObject out = response(false, QStringLiteral("gpu_configure"));
         out.insert(QStringLiteral("error"), QString::fromUtf8(exception.what()));
         return out;
     }
+}
+
+QJsonObject handleGpuDiagnostics(
+    const QJsonObject &request,
+    RenderRuntime *runtime
+) {
+    const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
+    const bool configured = forceWarp
+        ? runtime->warpGpuConfigured
+        : runtime->hardwareGpuConfigured;
+    if (!configured) {
+        QJsonObject out = response(false, QStringLiteral("gpu_diagnostics"));
+        out.insert(QStringLiteral("error"), QStringLiteral("GPU backend is not configured"));
+        return out;
+    }
+    QString error;
+    auto *backend = ensureGpuBackend(runtime, forceWarp, &error);
+    if (backend == nullptr) {
+        QJsonObject out = response(false, QStringLiteral("gpu_diagnostics"));
+        out.insert(QStringLiteral("error"), error);
+        return out;
+    }
+    QJsonObject out = response(true, QStringLiteral("gpu_diagnostics"));
+    appendGpuDiagnostics(&out, backend->diagnostics());
+    return out;
 }
 
 QJsonObject handleRenderGpuFrame(
@@ -6606,6 +6660,8 @@ int main(int argc, char **argv) {
             writeJson(handleConfigureGpu(request, config, &runtime));
         } else if (command == QStringLiteral("gpu_render_frame")) {
             writeJson(handleRenderGpuFrame(request, config, &runtime));
+        } else if (command == QStringLiteral("gpu_diagnostics")) {
+            writeJson(handleGpuDiagnostics(request, &runtime));
         } else if (command == QStringLiteral("configure")) {
             writeJson(handleConfigure(request, &config));
         } else if (command == QStringLiteral("render_frame")) {

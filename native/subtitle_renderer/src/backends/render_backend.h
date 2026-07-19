@@ -234,6 +234,11 @@ struct BackendDiagnostics {
     std::uint64_t geometryCount = 0;
     std::uint64_t rubyCount = 0;
     std::uint64_t styleCount = 0;
+    bool videoMemoryInfoAvailable = false;
+    std::uint64_t localVideoMemoryUsageBytes = 0;
+    std::uint64_t localVideoMemoryBudgetBytes = 0;
+    std::uint64_t nonLocalVideoMemoryUsageBytes = 0;
+    std::uint64_t nonLocalVideoMemoryBudgetBytes = 0;
 };
 
 class BackendError : public std::runtime_error {

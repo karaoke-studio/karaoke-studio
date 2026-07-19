@@ -20,6 +20,7 @@ public:
     ID2D1Factory1 *d2dFactory() const noexcept { return d2dFactory_.Get(); }
     ID2D1DeviceContext *d2dContext() const noexcept { return d2dContext_.Get(); }
     IDWriteFactory *dwriteFactory() const noexcept { return dwriteFactory_.Get(); }
+    void appendVideoMemoryDiagnostics(BackendDiagnostics *diagnostics) const noexcept;
     std::string deviceRemovedReason() const;
 
 private:

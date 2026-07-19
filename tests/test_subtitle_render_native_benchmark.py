@@ -19,6 +19,11 @@ from scripts.compare_preview_backends import (
     _image_diff_summary,
     _summarize_backend_samples,
 )
+from scripts.compare_gpu_painter_corpus import (
+    CorpusScenario,
+    _frame_passed as _gpu_corpus_frame_passed,
+    overlay_diff_metrics,
+)
 from scripts.compare_export_backends import (
     ExportRunResult,
     _build_parser as _build_export_parser,
@@ -38,9 +43,29 @@ from scripts.probe_native_preview_stats import (
     _playback_times,
     _summary_row,
 )
-from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.models import Style, TimingTrack
 from pathlib import Path
 from PyQt6.QtGui import QColor, QImage
+
+
+def test_gpu_corpus_raw_overlay_metrics_cover_equal_and_empty_frames() -> None:
+    equal_a = QImage(8, 6, QImage.Format.Format_ARGB32_Premultiplied)
+    equal_a.fill(0)
+    equal_a.setPixelColor(3, 2, QColor(20, 80, 160, 220))
+    equal_b = equal_a.copy()
+    metrics = overlay_diff_metrics(equal_a, equal_b)
+
+    assert metrics["alpha_iou"] == 1.0
+    assert metrics["bbox_edge_delta_px"] == 0
+    assert metrics["union_channel_mae"] == 0.0
+
+    empty = QImage(8, 6, QImage.Format.Format_ARGB32_Premultiplied)
+    empty.fill(0)
+    empty_metrics = overlay_diff_metrics(empty, empty)
+    scenario = CorpusScenario("empty", TimingTrack(), Style(), (0,))
+    assert empty_metrics["painter_bbox"] is None
+    assert empty_metrics["gpu_bbox"] is None
+    assert _gpu_corpus_frame_passed(scenario, empty_metrics) is True
 
 
 def test_sample_timestamps_covers_window_endpoints() -> None:
