@@ -1,7 +1,7 @@
 # 字幕渲染 GPU 后端：NicoKaraMaker3 逆向结论与实施计划
 
-> 状态：G0～G5 已完成；G6 DirectComposition 原生预览首批已完成，仍为实验/默认关闭
-> 最后更新：2026-07-19  
+> 状态：G0～G5 已完成；G6 DirectComposition 原生预览首批已完成，仍为实验/默认关闭；G7 render-core 性能专项已立项
+> 最后更新：2026-07-20  
 > 逆向基准：NicoKaraMaker3 10.74.80.0 x64  
 > 产品基线：Python QPainter 仍是唯一正式字幕渲染路径；本文不改变当前产品开关
 
@@ -35,6 +35,8 @@
 
 - G6 原生预览尚未默认启用，也未替代 G5 的 shared-memory/QImage 回读 fallback；
 - 尚未完成 AMD/Intel、多显示器/DPR 切换、真实 device-removed 与 30 分钟视频播放矩阵；
+- G7 render-core 性能专项尚未实施：4K utopia×发光当前约 20fps（根因见 §5 G7），发光 scratch
+  每帧重建、导出 readback 串行、预览质量档位缺失；
 - 尚未承诺 GPU 与 CPU 逐像素完全一致；
 - 尚未改变“QPainter 离屏 + ffmpeg rawvideo pipe”为当前唯一正式路径的产品事实；
 - 尚未选择跨平台 GPU 方案；首期明确 Windows-only，macOS 继续 CPU。
@@ -597,8 +599,53 @@ tick 只提交最新 `t_ms`。使用 `KROK_SUBTITLE_GPU_NATIVE_PREVIEW=1` 显式
 - 独立记录 render/present/roundtrip，原生路径 `readback_ms` 必须恒为 0。
 
 剩余验收：真实视频 30 分钟连续播放、多显示器/DPR/最小化恢复、AMD/Intel、真实 device removed/reset，
-以及复杂 Utopia/signal/viewport 组合的 render-core 优化。G6 只移除了回读/QImage 瓶颈，不会掩盖复杂
-场景本身超过帧预算的问题。
+以及复杂 Utopia/signal/viewport 组合的 render-core 优化（后者已单独立项为 G7）。G6 只移除了回读/QImage
+瓶颈，不会掩盖复杂场景本身超过帧预算的问题。
+
+### G7：render-core 性能专项（进行中，2026-07-20 立项）
+
+背景：4K + utopia + 发光在真实工程中约 20fps、几乎不可播放。2026-07-20 的隔离基准
+（RTX 3070 Ti 硬件、bands 回读、`scripts/benchmark_gpu_renderer.py`）把差距精确拆开：
+
+| 4K 场景 | fps | render mean/p95 |
+|---|---|---|
+| 仅 utopia | 57.7 | 2.19 / 7.45ms |
+| 仅发光 | 54.8 | 3.59 / 6.51ms |
+| utopia + 发光 | 23.6 | 21.73 / 43.91ms |
+| utopia + 发光 + ruby | 20.5 | 23.87 / 50.50ms |
+| 普通走字 + ruby | 79.7 | 1.95 / 2.40ms |
+| 普通走字 + ruby + 发光 | 54.0 | 3.15 / 3.72ms |
+
+根因（与 N3 逆向对照，均已在反编译源中核实）：
+
+- **我们**：utopia/spin × 发光组合走 per-char `InlineGlowLayer`——每字符 × {before, after} 每帧
+  `CreateBitmap`（4K 单张 33MB）+ `CreateEffect` + 全画布 Clear + 至多 3 次全画布高斯模糊；一行
+  10 字 + ruby 即每帧 30～60 次 4K 模糊与 20+ 次显存分配（warmup 本地显存峰值 759MB 即此洪流）。
+  行级 glow source / ruby glow source 在普通路径同样每帧重建（`renderFrame` 内约 3803/3979/4191 行）。
+- **N3**：每 worker 启动时 `CreateCompatibleRenderTarget` 一张**常驻** work bitmap（尺寸为预览缩放后的
+  `ScaledMovieInfo`），全帧全行复用；utopia 逐字符动画只是 `CreateTransformedGeometry` 把变换烘进几何、
+  `PushOpacityLayer` 控透明度，零位图成本；发光按**整行**处理（`DrawOneLineDecorBlurMulti`），每行
+  `BlurLevel+1`（≤3）次模糊，与字符数无关。同一行我们做 30～60 次模糊 + 20+ 次分配，N3 做 3 次 + 0 次。
+
+普通走字结论：render 核心 4K 已达标（1.9～3.2ms，120fps 预算内），与 N3 无实质差距；基准环路
+18.5ms/帧中约 9ms 是 JSON IPC/共享内存消费/Python 拷贝，预览侧已被 G6 绕过，仅导出（G5 串行
+render→readback→展开→ffmpeg）仍受其约束。
+
+目标与顺序（clean-room 对齐 N3，不复制反编译源码）：
+
+1. **utopia/spin 发光行级化**：复用既有相位排序机制（`pushGlowClip`/`drawGlowPhase`）与逐字符已变换
+   几何（`strokeGeometryAt`/`stroke2GeometryAt`），把整行（含动画字符）的轮廓 + 每字符透明度 + 相位
+   clip 画进单一行级 glow source，每行只跑一组 sigma（≤3 次模糊）。验收：4K utopia+发光+ruby
+   render mean ≤6ms、基准 ≥55fps；全部 utopia Painter oracle 用例保持通过（发光是视觉语义，不许只看速度）。
+2. **glow source / GaussianBlur effect 常驻化**：scratch 位图与 effect 挂在 impl_ 上按 scene 尺寸分配一次，
+   resize/configure 失效重建，消灭每帧 `CreateBitmap`/`CreateEffect`。验收：显存稳态零分配洪流，
+   普通发光路径 p95 收敛（≤5ms）。
+3. **导出 readback 流水线化**：双 staging buffer，渲染第 N+1 帧与回读/展开第 N 帧重叠。
+   验收：4K GPU 导出吞吐 ≥1.5x 现状。
+4. **预览质量档位**（产品功能，可独立排期）：对齐 N3 的 0.25/0.5/1.0 预览缩放，4K 工程低档只渲 540p；
+   与渲染优化正交，是弱 GPU 用户成本最低的收益。
+
+1、2 同一批实施；3 单独一批；4 待产品侧确认交互后排期。
 
 ---
 
@@ -1582,3 +1629,19 @@ G5 产品接入与 Windows 分发链路至此具备可验收形态，开关仍�
 
 G6 首批架构与本机性能门槛已落地，仍不得默认开启。下一批继续做真实视频 30 分钟播放、多显示器/DPR/
 最小化恢复、真实 device removed/reset，以及 AMD/Intel 矩阵；Painter 永久保留为 oracle/fallback。
+
+### 2026-07-20（第四十二批）：utopia 委托裁剪修复与 G7 性能专项立项
+
+- 修复 463389d 引入的 utopia 回归：`utopiaCharWipe` 在"本字唱完、下一字仍在唱"的委托窗口把裁剪
+  bounds 也取自下一字几何，导致刚唱完的字正文/描边被整体裁掉、只剩发光剪影（用户可见为粉色 blob）。
+  修法：裁剪矩形恒用本字自身包围盒，仅 wipe edge 沿委托字形区间推进；委托目标几何缺失时回退本字
+  unclamped 行为。shadow/正文/描边三条调用路径同时修复，ruby 路径无委托不受影响。
+- 新增回归用例 `test_gpu_utopia_keeps_finished_char_body_while_next_char_wipes`：双字 track 取
+  t=1500ms 落在委托窗口，统计首字区域实心 after 像素并对照 Painter oracle。红绿验证：旧逻辑下
+  GPU 实心像素为 0（精确复现 blob），修复后通过。GPU backend + transport 回归 `202 passed, 1 skipped`。
+- 顺带发现独立 parity 缺口：utopia 唱字期间 GPU 与 Painter 字形缩放差约 1.2x（Painter 更大），在现有
+  14px 包围盒容差下未被门禁捕获，待单独对齐。
+- 完成 4K render-core 性能审计与 N3 发光架构逆向（`SubtitleAction.DrawOneLineDecorBlurMulti`、
+  `Utopia.CreateUtopiaTransform`、`VideoPlayer` 常驻 work bitmap），确认 utopia×发光 20fps 的根因是
+  per-char 全画布发光层，而非 Direct2D 矢量绘制能力；普通走字 render 4K 已达标。结论与目标持久化为
+  §5 G7 专项（发光行级化、scratch 常驻化、导出流水线化、预览质量档位）。
