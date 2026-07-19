@@ -198,6 +198,7 @@ _GLOBAL_SCHEME_KEY = "global"
 _CUSTOM_SCHEME_PREFIX = "custom:"
 _PRESET_NO_GROUP = "\x00ungrouped"
 _COMPACT_CONTROL_HEIGHT = 32
+_FONT_SIZE_MAX_PX = 4096
 _FILL_MODE_ICON_DIR = (
     Path(__file__).resolve().parents[2] / "assets" / "subtitle_render" / "fill_modes"
 )
@@ -4291,7 +4292,7 @@ class PropertyPanel(QWidget):
             font_combo.enable_inheritance(inheritance_label)
         size_spin = _spin(
             0 if inherits_script else (8 if subject == "ruby" else 12),
-            180,
+            _FONT_SIZE_MAX_PX,
             suffix=" px",
         )
         weight_combo = _WheelFocusedComboBox(page)

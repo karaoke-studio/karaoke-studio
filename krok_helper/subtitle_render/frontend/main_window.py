@@ -2453,6 +2453,23 @@ class SubtitleRenderWindow(QWidget):
         self._begin_project_generation()
         self._clear_loaded_media()
         self._apply_project_data(result.project_data)
+        # Opening a saved .yurika project must preserve its explicit canvas,
+        # but a direct N3 import uses the referenced video's actual dimensions.
+        # N3 visual fields are already absolute target pixels, so rebase their
+        # reference heights before changing the canvas instead of scaling the
+        # values a second time (for example, 180 px must stay 180 px at 4K).
+        if self._video_info is not None:
+            video_height = int(self._video_info.video_height or 0)
+            if video_height > 0:
+                self._style = replace(
+                    self._style,
+                    font_reference_height=video_height,
+                    layout_reference_height=video_height,
+                )
+                self._property_panel.set_style(self._style)
+                self._preview_panel.set_style(self._style)
+                self._lyrics_panel.set_style(self._style)
+            self._sync_output_size_to_video(self._video_info)
         # 导入的是外来工程：保存时必须另存为 .yurika，因此视为未命名 + 有改动。
         self._project_path = None
         missing_resources = self._missing_project_resources(result.project_data)

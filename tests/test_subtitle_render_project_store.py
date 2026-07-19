@@ -826,6 +826,87 @@ def test_save_failure_dialog_exposes_copyable_path_and_reason(
     assert captured["kwargs"] == {"copyable": True}
 
 
+def test_direct_n3_import_uses_video_resolution_and_rebases_style_without_scaling(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    video = tmp_path / "4k.mp4"
+    video.write_bytes(b"fake")
+    monkeypatch.setattr(
+        mw.QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (str(tmp_path / "demo.n3proj"), ""),
+    )
+    monkeypatch.setattr(
+        mw.SubtitleRenderWindow,
+        "_probe",
+        lambda self, path, label: mw.MediaInfo(
+            path=path,
+            duration=10.0,
+            video_streams=1,
+            audio_streams=0,
+            subtitle_streams=0,
+            video_width=3840,
+            video_height=2160,
+            video_fps=60.0,
+        ),
+    )
+
+    class Result:
+        project_data = {
+            "style": style_to_dict(
+                Style(
+                    font_size_px=100,
+                    stroke_width_px=10,
+                    line_gap_px=90,
+                    font_reference_height=1080,
+                    layout_reference_height=1080,
+                    custom_style_schemes={
+                        "瑞": SubtitleStyleScheme(
+                            font_size_px=100,
+                            stroke_width_px=10,
+                        )
+                    },
+                )
+            ),
+            "screen": {"width": 1920, "height": 1080, "fps": 60, "par": "1:1"},
+            "selected_scheme_key": "custom:瑞",
+            "project_role_names": ["瑞"],
+            "video_path": str(video),
+            "background": {
+                "kind": "video",
+                "path": str(video),
+                "color": "#000000",
+                "source_fps": None,
+                "sequence_start_number": 0,
+                "video_offset_ms": 0,
+            },
+        }
+        warnings = []
+
+    monkeypatch.setattr(mw, "load_n3proj", lambda _path: Result())
+    monkeypatch.setattr(mw.InfoBar, "success", lambda **kwargs: None)
+
+    win._import_n3_project()
+
+    assert (win._screen_settings.width, win._screen_settings.height) == (3840, 2160)
+    assert (win._export_width_spin.value(), win._export_height_spin.value()) == (
+        3840,
+        2160,
+    )
+    assert win._preview_panel.canvas._output_width == 3840
+    assert win._preview_panel.canvas._output_height == 2160
+    assert win._style.font_reference_height == 2160
+    assert win._style.font_size_px == 100
+    assert win._style.stroke_width_px == 10
+    assert win._style.layout_reference_height == 2160
+    assert win._style.line_gap_px == 90
+    assert win._style.custom_style_schemes["瑞"].font_size_px == 100
+    win._property_panel.set_current_scheme_key("custom:瑞")
+    assert win._property_panel.current_scheme_key() == "custom:瑞"
+    assert win._property_panel._font_size_spin.value() == 100
+
+
 def test_external_project_change_requires_explicit_conflict_choice(
     qapp, monkeypatch, tmp_path
 ):
