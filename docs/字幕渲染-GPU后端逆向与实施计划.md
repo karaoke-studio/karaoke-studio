@@ -1088,3 +1088,25 @@ gradient/split/image fill、标题/多字幕源与 strip/bands readback。
 
 下一刀继续把同一套 resolved style 从“每行”下沉到“逐字 run”，完成角色标签、行内混合
 字体/字号/配色及对应 ruby anchor 规则。
+
+### 2026-07-19（第十三批）：G3 逐字角色 run 与混合样式
+
+- `TextChar` 增加角色样式索引，scene 按“歌手 + 角色标签”去重缓存 `charStyles`；逐字配置
+  直接消费既有 `resolvedStyleForCharacter()` 结果，因此角色方案与 Painter 使用同一套继承顺序。
+- DirectWrite configure 逐字选择日文/拉丁字体、字号、字重、描边宽度、咬字、空格宽度与字间距；
+  行 ascent/descent、visual pad 和 ruby 正文锚点宽度取混合 run 的真实最大值，不再按全局字体估算。
+- sharp 层逐字绘制各自 before/after fill、stroke、严格遵守开关的 stroke2，并继续共享整行逐字
+  wipe；角色切换不会拆散时间轴或重建前缀字符串。
+- glow 按“角色样式 + before/after”分组创建轮廓源，先在 wipe 边界裁切，再按各自半径与三档
+  concentration 执行 N3 multi-pass；同角色的多个字共用一组全帧 effect source，避免退化为
+  每字两张纹理。缓存诊断新增 `cached_styles` 并把行/角色样式计入 bytes 估算。
+- 自动门禁覆盖同一行 Meiryo 92px/6px 描边与 Times New Roman 50px/3px 描边混排、两套
+  before/after 配色、Painter 宽高边界，以及角色独立绿色/蓝色 glow。
+- RTX 3070 Ti 的 1920×1080、18 字交替双角色、两套重 glow、600 帧压力结果：render
+  mean/p95 `2.11/2.49ms`，readback p95 `4.75ms`，roundtrip p95 `8.98ms`，同步吞吐
+  `122.46fps`，仍在 60fps 预算内。
+- 硬件/WARP build smoke 通过；GPU/transport `96 passed`，native
+  protocol/export/benchmark `56 passed, 27 skipped`。
+
+当前角色切片尚未宣告完整：ruby 的角色专属外观与 `affects_ruby_anchor` 选择规则、渐变/split/
+image fill 仍待下一刀；产品 GPU 开关继续默认关闭，Painter 继续作为 oracle/fallback。

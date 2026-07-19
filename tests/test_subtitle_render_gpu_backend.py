@@ -129,6 +129,21 @@ def _g3_singer_track() -> TimingTrack:
     )
 
 
+def _g3_inline_role_track() -> TimingTrack:
+    return TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("A", 0, role_label="lead"),
+                    TimingChar("B", 800, role_label="back"),
+                    TimingChar("C", 1_600, role_label="back"),
+                ],
+                end_ms=2_400,
+            )
+        ]
+    )
+
+
 def _alpha_count(payload: bytes) -> int:
     return sum(alpha > 0 for alpha in payload[3::4])
 
@@ -763,6 +778,177 @@ def test_gpu_g3_singer_override_matches_painter_geometry(monkeypatch) -> None:
     assert any(
         payload[index + 1] > payload[index] + 40 and payload[index + 3] > 0
         for payload in singer_frames
+        for index in range(0, len(payload), 4)
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_inline_role_fonts_sizes_colors_and_strokes_match_painter(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    def colors(before: str, after: str, stroke: str) -> KaraokeColors:
+        return KaraokeColors(
+            before=KaraokeColorState(
+                text=PaintFill(mode="solid", color=before),
+                stroke=PaintFill(mode="solid", color=stroke),
+            ),
+            after=KaraokeColorState(
+                text=PaintFill(mode="solid", color=after),
+                stroke=PaintFill(mode="solid", color=stroke),
+            ),
+        )
+
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=60,
+        stroke_width_px=2,
+        stroke2_enabled=False,
+        decoration_kind="shadow",
+        shadow_color="#00000000",
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        dual_line_layout=False,
+        custom_style_schemes={
+            "lead": SubtitleStyleScheme(
+                font_family="Meiryo",
+                font_family_latin="Meiryo",
+                font_size_px=92,
+                latin_font_size_px=92,
+                stroke_width_px=6,
+                stroke2_enabled=False,
+                karaoke_colors=colors("#2040FF", "#FF2040", "#101010"),
+            ),
+            "back": SubtitleStyleScheme(
+                font_family="Times New Roman",
+                font_family_latin="Times New Roman",
+                font_size_px=50,
+                latin_font_size_px=50,
+                stroke_width_px=3,
+                stroke2_enabled=False,
+                karaoke_colors=colors("#20FF40", "#FFE020", "#202020"),
+            ),
+        },
+    )
+    track = _g3_inline_role_track()
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured, frames = _render_g1_frames(
+            renderer,
+            style,
+            (1_200,),
+            force_warp=True,
+            track=track,
+        )
+    painter = _render_painter_oracle(style, t_ms=1_200, track=track)
+
+    gpu_bounds = _payload_alpha_bounds(frames[0])
+    painter_bounds = _payload_alpha_bounds(painter)
+    assert configured["cached_chars"] == 3
+    assert configured["cached_styles"] == 4
+    assert abs(
+        (gpu_bounds[2] - gpu_bounds[0])
+        - (painter_bounds[2] - painter_bounds[0])
+    ) <= 7
+    assert abs(
+        (gpu_bounds[3] - gpu_bounds[1])
+        - (painter_bounds[3] - painter_bounds[1])
+    ) <= 8
+    payload = frames[0]
+    assert any(
+        payload[index] > payload[index + 1] + 50 and payload[index + 3] > 0
+        for index in range(0, len(payload), 4)
+    )
+    assert any(
+        payload[index + 1] > payload[index] + 50 and payload[index + 3] > 0
+        for index in range(0, len(payload), 4)
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_inline_roles_use_independent_n3_glow(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    def glow_colors(color: str) -> KaraokeColors:
+        state = KaraokeColorState(
+            text=PaintFill(mode="solid", color="#FFFFFF"),
+            stroke=PaintFill(mode="solid", color="#202020"),
+            shadow=PaintFill(mode="solid", color=color),
+        )
+        return KaraokeColors(before=state, after=state)
+
+    schemes = {
+        "lead": SubtitleStyleScheme(
+            font_family="Meiryo",
+            font_family_latin="Meiryo",
+            font_size_px=82,
+            latin_font_size_px=82,
+            stroke_width_px=4,
+            decoration_kind="glow",
+            glow_before_radius_px=10,
+            glow_after_radius_px=10,
+            glow_concentration_level=2,
+            karaoke_colors=glow_colors("#00FF40"),
+        ),
+        "back": SubtitleStyleScheme(
+            font_family="Times New Roman",
+            font_family_latin="Times New Roman",
+            font_size_px=52,
+            latin_font_size_px=52,
+            stroke_width_px=3,
+            decoration_kind="glow",
+            glow_before_radius_px=3,
+            glow_after_radius_px=6,
+            glow_concentration_level=0,
+            karaoke_colors=glow_colors("#2040FF"),
+        ),
+    }
+    glow_style = _g1_style(
+        font_family="Meiryo",
+        decoration_kind="shadow",
+        shadow_color="#00000000",
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        dual_line_layout=False,
+        custom_style_schemes=schemes,
+    )
+    no_glow_style = replace(
+        glow_style,
+        custom_style_schemes={
+            name: replace(scheme, decoration_kind="none")
+            for name, scheme in schemes.items()
+        },
+    )
+    track = _g3_inline_role_track()
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, no_glow_frames = _render_g1_frames(
+            renderer,
+            no_glow_style,
+            (1_200,),
+            force_warp=True,
+            track=track,
+        )
+        _, glow_frames = _render_g1_frames(
+            renderer,
+            glow_style,
+            (1_200,),
+            force_warp=True,
+            track=track,
+        )
+
+    assert sum(glow_frames[0][3::4]) > sum(no_glow_frames[0][3::4]) * 1.05
+    payload = glow_frames[0]
+    assert any(
+        payload[index + 1] > payload[index] + 30
+        and payload[index + 1] > payload[index + 2] + 30
+        and payload[index + 3] > 0
+        for index in range(0, len(payload), 4)
+    )
+    assert any(
+        payload[index + 2] > payload[index] + 30
+        and payload[index + 2] > payload[index + 1] + 30
+        and payload[index + 3] > 0
         for index in range(0, len(payload), 4)
     )
 

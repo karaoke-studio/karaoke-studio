@@ -206,6 +206,8 @@ struct Direct2DGpuBackend::Impl {
         float right = 0.0f;
         float layoutLeft = 0.0f;
         float layoutRight = 0.0f;
+        int styleIndex = -1;
+        Microsoft::WRL::ComPtr<ID2D1Geometry> geometry;
     };
 
     struct CachedRuby {
@@ -225,6 +227,8 @@ struct Direct2DGpuBackend::Impl {
         float ascent = 0.0f;
         float descent = 0.0f;
         float boxAscent = 0.0f;
+        float maxVisualPad = 0.0f;
+        bool hasInlineStyles = false;
         D2D1_RECT_F bounds{};
         std::vector<CachedChar> chars;
         std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> geometries;
@@ -486,13 +490,38 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
 
         for (std::size_t charIndex = 0; charIndex < sourceLine.chars.size(); ++charIndex) {
             const TextChar &sourceChar = sourceLine.chars[charIndex];
+            const bool hasCharStyle = sourceChar.styleIndex >= 0
+                && sourceChar.styleIndex < static_cast<int>(scene.charStyles.size());
+            const TextStyle &charStyle = hasCharStyle
+                ? scene.charStyles[static_cast<std::size_t>(sourceChar.styleIndex)]
+                : style;
+            cached.hasInlineStyles = cached.hasInlineStyles || hasCharStyle;
             const bool latin = isLatinText(sourceChar.text);
-            const auto &requestedFace = latin ? latinFace : mainFace;
+            Microsoft::WRL::ComPtr<IDWriteFontFace> requestedFace = latin
+                ? latinFace
+                : mainFace;
+            if (hasCharStyle) {
+                requestedFace = resolveFace(
+                    latin
+                        ? charStyle.latinFontFamily.value_or(charStyle.fontFamily)
+                        : charStyle.fontFamily,
+                    latin
+                        ? charStyle.latinFontWeight.value_or(charStyle.fontWeight)
+                        : charStyle.fontWeight
+                );
+            }
             const float fontSize = latin
-                ? style.latinFontSize.value_or(style.fontSize)
-                : style.fontSize;
+                ? charStyle.latinFontSize.value_or(charStyle.fontSize)
+                : charStyle.fontSize;
             const int unit = std::max(static_cast<int>(fontSize), 1);
-            const int edgeSize = std::max(static_cast<int>(style.strokeWidth), 0);
+            const int edgeSize = std::max(static_cast<int>(charStyle.strokeWidth), 0);
+            cached.maxVisualPad = std::max(
+                cached.maxVisualPad,
+                std::ceil((
+                    std::max(charStyle.strokeWidth, 0.0f)
+                    + std::max(charStyle.stroke2Width, 0.0f)
+                ) * 0.5f)
+            );
 
             DWRITE_FONT_METRICS fontMetrics{};
             requestedFace->GetMetrics(&fontMetrics);
@@ -585,7 +614,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 const int inkWidth = std::max(static_cast<int>(charBounds.right - charBounds.left), 0);
                 int leftBearing = metrics.front().leftSideBearing;
                 int rightBearing = metrics.front().rightSideBearing;
-                if (!style.allowBiting) {
+                if (!charStyle.allowBiting) {
                     leftBearing = std::max(leftBearing, 0);
                     rightBearing = std::max(rightBearing, 0);
                 }
@@ -598,11 +627,11 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     + static_cast<float>(edgeSize) * 0.5f;
             } else if (sourceChar.text == L" ") {
                 layoutWidth = static_cast<float>(
-                    unit * std::clamp(style.spaceWidthPercent, 10, 100) / 100 + edgeSize
+                    unit * std::clamp(charStyle.spaceWidthPercent, 10, 100) / 100 + edgeSize
                 );
             } else {
                 layoutWidth = static_cast<float>(
-                    unit * std::clamp(style.spaceWidthPercent, 10, 100) * 25 / 100 / 10
+                    unit * std::clamp(charStyle.spaceWidthPercent, 10, 100) * 25 / 100 / 10
                     + edgeSize
                 );
             }
@@ -630,7 +659,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 extendBounds(cached.bounds, lineHasBounds, bounds);
                 cached.geometries.push_back(positioned);
             }
-            const float wipePad = std::max(style.strokeWidth, 0.0f) * 0.5f;
+            const float wipePad = std::max(charStyle.strokeWidth, 0.0f) * 0.5f;
             cached.chars.push_back(Impl::CachedChar{
                 sourceChar.startMs,
                 sourceChar.endMs,
@@ -639,9 +668,13 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 cursor,
                 cursor + layoutWidth,
             });
+            cached.chars.back().styleIndex = sourceChar.styleIndex;
+            if (positionedHasBounds) {
+                cached.chars.back().geometry = cached.geometries.back();
+            }
             cursor += layoutWidth;
             if (charIndex + 1 < sourceLine.chars.size()) {
-                cursor += style.letterSpacing;
+                cursor += charStyle.letterSpacing;
             }
         }
 
@@ -880,7 +913,12 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
     impl_->diagnostics.charCount = 0;
     impl_->diagnostics.geometryCount = 0;
     impl_->diagnostics.rubyCount = 0;
-    impl_->diagnostics.estimatedCacheBytes = sizeof(Impl);
+    impl_->diagnostics.styleCount = 1
+        + scene.lineStyles.size()
+        + scene.charStyles.size();
+    impl_->diagnostics.estimatedCacheBytes = sizeof(Impl)
+        + scene.lineStyles.capacity() * sizeof(TextStyle)
+        + scene.charStyles.capacity() * sizeof(TextStyle);
     for (const Impl::CachedLine &line : impl_->lines) {
         impl_->diagnostics.charCount += line.chars.size();
         impl_->diagnostics.geometryCount += line.geometries.size();
@@ -989,9 +1027,12 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
         } else if (style.alignment == "right") {
             dx = static_cast<float>(scene.width) - style.horizontalMargin - line->bounds.right;
         }
-        const float visualPad = std::ceil(
-            (std::max(style.strokeWidth, 0.0f) + std::max(style.stroke2Width, 0.0f)) * 0.5f
-        );
+        const float visualPad = line->hasInlineStyles
+            ? line->maxVisualPad
+            : std::ceil(
+                (std::max(style.strokeWidth, 0.0f)
+                    + std::max(style.stroke2Width, 0.0f)) * 0.5f
+            );
         const float ascent = line->ascent > 0.0f ? line->ascent : -line->bounds.top;
         const float descent = line->descent > 0.0f ? line->descent : line->bounds.bottom;
         const int lanes = style.dualLineLayout ? std::max(style.laneCount, 1) : 1;
@@ -1110,7 +1151,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
         Microsoft::WRL::ComPtr<ID2D1Bitmap1> glowSource;
         Microsoft::WRL::ComPtr<ID2D1Effect> blur;
         std::vector<int> glowSigmas;
-        if (style.decorationKind == "glow") {
+        if (style.decorationKind == "glow" && !line->hasInlineStyles) {
             checkHr(
                 context->CreateBitmap(
                     D2D1::SizeU(static_cast<UINT32>(scene.width), static_cast<UINT32>(scene.height)),
@@ -1241,6 +1282,115 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
         appendRubyGlowLayer(false, style.rubyGlowBeforeRadius, rubyBeforeDecor.Get());
         appendRubyGlowLayer(true, style.rubyGlowAfterRadius, rubyAfterDecor.Get());
 
+        struct InlineGlowLayer {
+            Microsoft::WRL::ComPtr<ID2D1Bitmap1> source;
+            Microsoft::WRL::ComPtr<ID2D1Effect> blur;
+            std::vector<int> sigmas;
+        };
+        std::vector<InlineGlowLayer> inlineGlowLayers;
+        auto appendInlineGlowLayer = [&](int styleIndex, bool after) {
+            const TextStyle &charStyle = styleIndex >= 0
+                && styleIndex < static_cast<int>(scene.charStyles.size())
+                ? scene.charStyles[static_cast<std::size_t>(styleIndex)]
+                : style;
+            const int radius = std::max(
+                0,
+                static_cast<int>(std::lround(
+                    after ? charStyle.glowAfterRadius : charStyle.glowBeforeRadius
+                ))
+            );
+            const bool hasVisibleSource = std::any_of(
+                line->chars.begin(),
+                line->chars.end(),
+                [&](const Impl::CachedChar &ch) {
+                    return ch.styleIndex == styleIndex
+                        && ch.geometry
+                        && !((after && wipeEdge <= ch.left)
+                            || (!after && wipeEdge >= ch.right));
+                }
+            );
+            if (charStyle.decorationKind != "glow" || radius <= 0 || !hasVisibleSource) {
+                return;
+            }
+            InlineGlowLayer layer;
+            checkHr(
+                context->CreateBitmap(
+                    D2D1::SizeU(static_cast<UINT32>(scene.width), static_cast<UINT32>(scene.height)),
+                    nullptr,
+                    0,
+                    &bitmapProperties,
+                    layer.source.ReleaseAndGetAddressOf()
+                ),
+                "ID2D1DeviceContext::CreateBitmap(inline glow source)",
+                device_
+            );
+            checkHr(
+                context->CreateEffect(CLSID_D2D1GaussianBlur, layer.blur.ReleaseAndGetAddressOf()),
+                "ID2D1DeviceContext::CreateEffect(inline GaussianBlur)",
+                device_
+            );
+            Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
+            checkHr(
+                context->CreateSolidColorBrush(
+                    d2dColor(after ? charStyle.afterDecor : charStyle.beforeDecor),
+                    brush.ReleaseAndGetAddressOf()
+                ),
+                "Create inline decor brush",
+                device_
+            );
+            const float sourceWidth = std::max(charStyle.strokeWidth, 0.0f)
+                + std::max(charStyle.stroke2Width, 0.0f)
+                + static_cast<float>(radius);
+            const float pad = sourceWidth * 0.5f + radius * 3.0f + 2.0f;
+            context->SetTarget(layer.source.Get());
+            context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
+            context->BeginDraw();
+            context->Clear(D2D1::ColorF(0.0f, 0.0f));
+            for (const Impl::CachedChar &ch : line->chars) {
+                if (ch.styleIndex != styleIndex || !ch.geometry
+                    || (after && wipeEdge <= ch.left)
+                    || (!after && wipeEdge >= ch.right)) {
+                    continue;
+                }
+                const D2D1_RECT_F clip = after
+                    ? D2D1::RectF(
+                        ch.left - pad, line->bounds.top - pad,
+                        wipeEdge, line->bounds.bottom + pad
+                    )
+                    : D2D1::RectF(
+                        wipeEdge, line->bounds.top - pad,
+                        ch.right + pad, line->bounds.bottom + pad
+                    );
+                context->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                context->DrawGeometry(ch.geometry.Get(), brush.Get(), sourceWidth);
+                context->PopAxisAlignedClip();
+            }
+            checkHr(
+                context->EndDraw(),
+                "ID2D1DeviceContext::EndDraw(inline glow source)",
+                device_
+            );
+            layer.blur->SetInput(0, layer.source.Get());
+            const int passes = std::clamp(charStyle.glowConcentrationLevel, 0, 2) + 1;
+            for (int index = 0; index < passes; ++index) {
+                layer.sigmas.push_back(radius - index * radius / passes);
+            }
+            inlineGlowLayers.push_back(std::move(layer));
+        };
+        if (line->hasInlineStyles) {
+            std::vector<int> styleIndices;
+            for (const Impl::CachedChar &ch : line->chars) {
+                if (std::find(styleIndices.begin(), styleIndices.end(), ch.styleIndex)
+                    == styleIndices.end()) {
+                    styleIndices.push_back(ch.styleIndex);
+                }
+            }
+            for (int styleIndex : styleIndices) {
+                appendInlineGlowLayer(styleIndex, false);
+                appendInlineGlowLayer(styleIndex, true);
+            }
+        }
+
         context->SetTarget(targetBitmap);
         context->SetTransform(D2D1::Matrix3x2F::Identity());
         context->BeginDraw();
@@ -1253,6 +1403,19 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                         static_cast<float>(sigma)
                     ),
                     "ID2D1Effect::SetValue(ruby StandardDeviation)",
+                    device_
+                );
+                context->DrawImage(layer.blur.Get());
+            }
+        }
+        for (InlineGlowLayer &layer : inlineGlowLayers) {
+            for (int sigma : layer.sigmas) {
+                checkHr(
+                    layer.blur->SetValue(
+                        D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION,
+                        static_cast<float>(sigma)
+                    ),
+                    "ID2D1Effect::SetValue(inline StandardDeviation)",
                     device_
                 );
                 context->DrawImage(layer.blur.Get());
@@ -1290,11 +1453,79 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 context->FillGeometry(geometry.Get(), fill);
             }
         };
-        drawStack(beforeFill.Get(), beforeStroke.Get(), beforeStroke2.Get());
-        if (wipeEdge > line->bounds.left) {
-            context->PushAxisAlignedClip(afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-            drawStack(afterFill.Get(), afterStroke.Get(), afterStroke2.Get());
-            context->PopAxisAlignedClip();
+        auto drawInlineStack = [&](bool after) {
+            for (const Impl::CachedChar &ch : line->chars) {
+                if (!ch.geometry) {
+                    continue;
+                }
+                const TextStyle &charStyle = ch.styleIndex >= 0
+                    && ch.styleIndex < static_cast<int>(scene.charStyles.size())
+                    ? scene.charStyles[static_cast<std::size_t>(ch.styleIndex)]
+                    : style;
+                const RgbaColor &fillColor = after
+                    ? charStyle.afterFill
+                    : charStyle.beforeFill;
+                const RgbaColor &strokeColor = after
+                    ? charStyle.afterStroke
+                    : charStyle.beforeStroke;
+                const RgbaColor &stroke2Color = after
+                    ? charStyle.afterStroke2
+                    : charStyle.beforeStroke2;
+                Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> fillBrush;
+                Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> strokeBrush;
+                Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> stroke2Brush;
+                checkHr(
+                    context->CreateSolidColorBrush(
+                        d2dColor(fillColor), fillBrush.ReleaseAndGetAddressOf()
+                    ),
+                    "Create inline fill brush",
+                    device_
+                );
+                checkHr(
+                    context->CreateSolidColorBrush(
+                        d2dColor(strokeColor), strokeBrush.ReleaseAndGetAddressOf()
+                    ),
+                    "Create inline stroke brush",
+                    device_
+                );
+                checkHr(
+                    context->CreateSolidColorBrush(
+                        d2dColor(stroke2Color), stroke2Brush.ReleaseAndGetAddressOf()
+                    ),
+                    "Create inline stroke2 brush",
+                    device_
+                );
+                if (charStyle.stroke2Width > 0.0f) {
+                    context->DrawGeometry(
+                        ch.geometry.Get(),
+                        stroke2Brush.Get(),
+                        std::max(0.0f, charStyle.strokeWidth) + charStyle.stroke2Width
+                    );
+                }
+                if (charStyle.strokeWidth > 0.0f) {
+                    context->DrawGeometry(
+                        ch.geometry.Get(), strokeBrush.Get(), charStyle.strokeWidth
+                    );
+                }
+                context->FillGeometry(ch.geometry.Get(), fillBrush.Get());
+            }
+        };
+        if (line->hasInlineStyles) {
+            drawInlineStack(false);
+            if (wipeEdge > line->bounds.left) {
+                context->PushAxisAlignedClip(
+                    afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                );
+                drawInlineStack(true);
+                context->PopAxisAlignedClip();
+            }
+        } else {
+            drawStack(beforeFill.Get(), beforeStroke.Get(), beforeStroke2.Get());
+            if (wipeEdge > line->bounds.left) {
+                context->PushAxisAlignedClip(afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
+                drawStack(afterFill.Get(), afterStroke.Get(), afterStroke2.Get());
+                context->PopAxisAlignedClip();
+            }
         }
         auto drawRubyStack = [&](const Impl::CachedRuby &ruby, ID2D1Brush *fill, ID2D1Brush *stroke, ID2D1Brush *stroke2) {
             if (style.rubyStroke2Width > 0.0f) {
@@ -1350,6 +1581,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
             blur->SetInput(0, nullptr);
         }
         for (RubyGlowLayer &layer : rubyGlowLayers) {
+            layer.blur->SetInput(0, nullptr);
+        }
+        for (InlineGlowLayer &layer : inlineGlowLayers) {
             layer.blur->SetInput(0, nullptr);
         }
     }

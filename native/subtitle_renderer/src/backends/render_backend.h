@@ -63,6 +63,7 @@ struct TextChar {
     std::wstring text;
     int startMs = 0;
     int endMs = 0;
+    int styleIndex = -1;
     bool operator==(const TextChar &) const = default;
 };
 
@@ -157,6 +158,7 @@ struct RenderScene {
     int height = 1080;
     TextStyle style;
     std::vector<TextStyle> lineStyles;
+    std::vector<TextStyle> charStyles;
     std::vector<TextLine> lines;
     bool operator==(const RenderScene &) const = default;
 };
@@ -169,6 +171,7 @@ struct BackendDiagnostics {
     std::uint64_t charCount = 0;
     std::uint64_t geometryCount = 0;
     std::uint64_t rubyCount = 0;
+    std::uint64_t styleCount = 0;
 };
 
 class BackendError : public std::runtime_error {

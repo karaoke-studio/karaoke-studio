@@ -5661,6 +5661,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
     }
     scene.lines.reserve(config.lines.size());
     scene.lineStyles.reserve(config.lines.size());
+    QHash<QString, int> charStyleIndices;
     for (const TimingLine &sourceLine : config.lines) {
         if (sourceLine.chars.empty()) {
             continue;
@@ -5675,10 +5676,31 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         line.endMs = lineEndMs(sourceLine) + config.timingOffsetMs;
         line.chars.reserve(sourceLine.chars.size());
         for (std::size_t index = 0; index < sourceLine.chars.size(); ++index) {
+            int styleIndex = -1;
+            if (!sourceLine.chars[index].roleLabel.isEmpty()) {
+                const QString key = resolvedStyleKey(
+                    sourceLine.singerId, sourceLine.chars[index].roleLabel
+                );
+                const auto existing = charStyleIndices.constFind(key);
+                if (existing != charStyleIndices.constEnd()) {
+                    styleIndex = existing.value();
+                } else {
+                    TextStyle charStyle = scene.lineStyles.back();
+                    applyGpuResolvedStyle(
+                        charStyle,
+                        resolvedStyleForCharacter(config, sourceLine, sourceLine.chars[index]),
+                        scale
+                    );
+                    styleIndex = static_cast<int>(scene.charStyles.size());
+                    scene.charStyles.push_back(std::move(charStyle));
+                    charStyleIndices.insert(key, styleIndex);
+                }
+            }
             line.chars.push_back(TextChar{
                 sourceLine.chars[index].text.toStdWString(),
                 sourceLine.chars[index].startMs + config.timingOffsetMs,
                 charEndMs(sourceLine, index) + config.timingOffsetMs,
+                styleIndex,
             });
         }
         const auto intervals = lineIntervals(sourceLine);
@@ -5775,6 +5797,7 @@ QJsonObject handleConfigureGpu(
         out.insert(QStringLiteral("cached_chars"), static_cast<qint64>(diagnostics.charCount));
         out.insert(QStringLiteral("cached_geometries"), static_cast<qint64>(diagnostics.geometryCount));
         out.insert(QStringLiteral("cached_rubies"), static_cast<qint64>(diagnostics.rubyCount));
+        out.insert(QStringLiteral("cached_styles"), static_cast<qint64>(diagnostics.styleCount));
         return out;
     } catch (const std::exception &exception) {
         QJsonObject out = response(false, QStringLiteral("gpu_configure"));
