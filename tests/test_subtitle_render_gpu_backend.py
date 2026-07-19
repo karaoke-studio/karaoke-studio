@@ -679,6 +679,87 @@ def test_gpu_completed_main_wipe_releases_outer_layers(
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize("decoration_kind", ["none", "shadow", "glow"])
+def test_gpu_utopia_releases_each_completed_character_wipe(
+    monkeypatch, decoration_kind: str
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    before = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFF2020"),
+        stroke=PaintFill(mode="solid", color="#FFFF2020"),
+        stroke2=PaintFill(mode="solid", color="#FFFF2020"),
+        shadow=PaintFill(mode="solid", color="#FFFF2020"),
+    )
+    after = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FF2040FF"),
+        stroke=PaintFill(mode="solid", color="#FF2040FF"),
+        stroke2=PaintFill(mode="solid", color="#FF2040FF"),
+        shadow=PaintFill(mode="solid", color="#FF2040FF"),
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("\u5186", 0),
+                    TimingChar("            ", 1_000),
+                    TimingChar("\u5186", 2_000),
+                ],
+                end_ms=3_000,
+                display_start_override_ms=0,
+                display_end_override_ms=4_000,
+            )
+        ]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=120,
+        stroke_width_px=7,
+        stroke2_enabled=True,
+        stroke2_width_px=7,
+        decoration_kind=decoration_kind,
+        shadow_offset_x=8,
+        shadow_offset_y=7,
+        glow_before_radius_px=8,
+        glow_after_radius_px=8,
+        karaoke_colors=KaraokeColors(before=before, after=after),
+        entry_anim="utopia",
+        exit_anim="utopia",
+        line_tail_ms=1_000,
+    )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer,
+            style,
+            (1_200,),
+            force_warp=True,
+            track=track,
+        )
+
+    payload = frames[0]
+    left_half = [
+        payload[y * 640 * 4 + x * 4 : y * 640 * 4 + x * 4 + 4]
+        for y in range(360)
+        for x in range(320)
+    ]
+    before_pixels = sum(
+        pixel[0] > pixel[2] + 40
+        and pixel[0] > pixel[1] + 40
+        and pixel[3] > 16
+        for pixel in left_half
+    )
+    after_pixels = sum(
+        pixel[2] > pixel[0] + 40
+        and pixel[2] > pixel[1] + 20
+        and pixel[3] > 16
+        for pixel in left_half
+    )
+    assert after_pixels > 0
+    assert before_pixels == 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("decoration_kind", ["none", "shadow", "glow"])
 def test_gpu_completed_ruby_wipe_releases_outer_layers(
     monkeypatch, decoration_kind: str
 ) -> None:
@@ -770,6 +851,112 @@ def test_gpu_completed_ruby_wipe_releases_outer_layers(
         and payload[index + 2] > payload[index + 1] + 20
         and payload[index + 3] > 16
         for index in range(0, len(payload), 4)
+    )
+    assert after_pixels > 0
+    assert before_pixels == 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("decoration_kind", ["none", "shadow", "glow"])
+def test_gpu_utopia_releases_each_completed_ruby_unit_wipe(
+    monkeypatch, decoration_kind: str
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    transparent = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#00000000"),
+        stroke=PaintFill(mode="solid", color="#00000000"),
+        stroke2=PaintFill(mode="solid", color="#00000000"),
+        shadow=PaintFill(mode="solid", color="#00000000"),
+    )
+    before = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFF2020"),
+        stroke=PaintFill(mode="solid", color="#FFFF2020"),
+        stroke2=PaintFill(mode="solid", color="#FFFF2020"),
+        shadow=PaintFill(mode="solid", color="#FFFF2020"),
+    )
+    after = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FF2040FF"),
+        stroke=PaintFill(mode="solid", color="#FF2040FF"),
+        stroke2=PaintFill(mode="solid", color="#FF2040FF"),
+        shadow=PaintFill(mode="solid", color="#FF2040FF"),
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("A", 1_200),
+                    TimingChar("\u6f22", 1_700),
+                    TimingChar("\u5b57", 2_200),
+                    TimingChar("B", 2_700),
+                ],
+                end_ms=3_200,
+                display_start_override_ms=0,
+                display_end_override_ms=4_400,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="\u6f22\u5b57",
+                reading="\u304b\u306a",
+                reading_parts=["\u304b", "\u306a"],
+                reading_part_ms=[500],
+                pos_start_ms=1_700,
+                pos_end_ms=2_700,
+            )
+        ],
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=72,
+        karaoke_colors=KaraokeColors(before=transparent, after=transparent),
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        ruby_font_family="Meiryo",
+        ruby_font_family_latin="Meiryo",
+        ruby_font_follow_main=False,
+        ruby_font_size_px=64,
+        ruby_stroke_width_px=7,
+        ruby_stroke2_enabled=True,
+        ruby_stroke2_width_px=7,
+        ruby_decoration_kind=decoration_kind,
+        ruby_shadow_offset_x=8,
+        ruby_shadow_offset_y=7,
+        ruby_glow_before_radius_px=8,
+        ruby_glow_after_radius_px=8,
+        ruby_karaoke_colors=KaraokeColors(before=before, after=after),
+        entry_anim="utopia",
+        exit_anim="utopia",
+        line_tail_ms=1_000,
+    )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer,
+            style,
+            (2_300,),
+            force_warp=True,
+            track=track,
+        )
+
+    payload = frames[0]
+    left_half = [
+        payload[y * 640 * 4 + x * 4 : y * 640 * 4 + x * 4 + 4]
+        for y in range(360)
+        for x in range(320)
+    ]
+    before_pixels = sum(
+        pixel[0] > pixel[2] + 40
+        and pixel[0] > pixel[1] + 40
+        and pixel[3] > 16
+        for pixel in left_half
+    )
+    after_pixels = sum(
+        pixel[2] > pixel[0] + 40
+        and pixel[2] > pixel[1] + 20
+        and pixel[3] > 16
+        for pixel in left_half
     )
     assert after_pixels > 0
     assert before_pixels == 0

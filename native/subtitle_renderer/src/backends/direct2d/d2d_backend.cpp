@@ -3460,6 +3460,13 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 line->chars.begin(), line->chars.end(),
                 [&](const Impl::CachedChar &ch) { return tMs >= ch.endMs; }
             );
+        auto charWipeComplete = [&](std::size_t charIndex) {
+            // N3 classifies every transformed glyph independently as before,
+            // wiping or after. Utopia therefore cannot inherit the static
+            // path's whole-line completion gate.
+            return charIndex < line->chars.size()
+                && tMs >= line->chars[charIndex].endMs;
+        };
 
         auto utopiaCharWipe = [&](std::size_t charIndex) {
             D2D1_RECT_F bounds{};
@@ -3598,6 +3605,11 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     ruby.chars.begin(), ruby.chars.end(),
                     [&](const Impl::CachedChar &ch) { return tMs >= ch.endMs; }
                 );
+        };
+        auto rubyUnitWipeComplete = [&](const Impl::CachedRuby &ruby,
+                                        std::size_t unitIndex) {
+            return unitIndex < ruby.chars.size()
+                && tMs >= ruby.chars[unitIndex].endMs;
         };
         auto rubyPhaseVisible = [&](const Impl::CachedRuby &ruby,
                                     float edge, bool after) {
@@ -3781,11 +3793,15 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 );
                 brush->SetOpacity(globalOpacity);
                 const float edge = rubyWipeEdgeAt(ruby);
-                const bool complete = rubyWipeComplete(ruby);
+                const bool complete = hasUtopiaTransition && unitOnly >= 0
+                    ? rubyUnitWipeComplete(
+                        ruby, static_cast<std::size_t>(unitOnly)
+                    )
+                    : rubyWipeComplete(ruby);
                 if (complete && !after) {
                     continue;
                 }
-                if (!rubyPhaseVisible(ruby, edge, after)) {
+                if (!complete && !rubyPhaseVisible(ruby, edge, after)) {
                     continue;
                 }
                 const D2D1_RECT_F clip = style.vertical
@@ -3915,10 +3931,16 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 line->chars.begin(), line->chars.end(),
                 [&](const Impl::CachedChar &ch) {
                     const int charIndex = static_cast<int>(&ch - line->chars.data());
-                    return (charOnly < 0 || charIndex == charOnly)
-                        && ch.styleIndex == styleIndex
-                        && ch.geometry
-                        && !(rtl
+                    if ((charOnly >= 0 && charIndex != charOnly)
+                        || ch.styleIndex != styleIndex
+                        || !ch.geometry) {
+                        return false;
+                    }
+                    const bool complete = hasUtopiaTransition && charOnly >= 0
+                        && charWipeComplete(static_cast<std::size_t>(charIndex));
+                    return complete
+                        ? after
+                        : !(rtl
                             ? ((after && wipeEdge >= ch.right)
                                 || (!after && wipeEdge <= ch.left))
                             : ((after && wipeEdge <= ch.left)
@@ -3973,13 +3995,16 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
             for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
                 const Impl::CachedChar &ch = line->chars[charIndex];
+                const bool complete = hasUtopiaTransition && charOnly >= 0
+                    && charWipeComplete(charIndex);
                 if ((charOnly >= 0 && static_cast<int>(charIndex) != charOnly)
                     || ch.styleIndex != styleIndex || ch.geometry == nullptr
-                    || (rtl
+                    || (complete && !after)
+                    || (!complete && (rtl
                         ? ((after && wipeEdge >= ch.right)
                             || (!after && wipeEdge <= ch.left))
                         : ((after && wipeEdge <= ch.left)
-                            || (!after && wipeEdge >= ch.right)))) {
+                            || (!after && wipeEdge >= ch.right))))) {
                     continue;
                 }
                 brush->SetOpacity(globalOpacity * characterOpacityAt(charIndex));
@@ -4002,13 +4027,13 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                             wipeEdge, line->bounds.top - pad,
                             ch.right + pad, line->bounds.bottom + pad
                         ));
-                if (!mainWipeComplete) {
+                if (!complete && !mainWipeComplete) {
                     context->PushAxisAlignedClip(
                         clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
                 }
                 context->DrawGeometry(ch.geometry.Get(), brush.Get(), sourceWidth);
-                if (!mainWipeComplete) {
+                if (!complete && !mainWipeComplete) {
                     context->PopAxisAlignedClip();
                 }
             }
@@ -4160,7 +4185,10 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         )
                     ));
                     bool pushedAfterClip = false;
-                    if (after && !mainWipeComplete) {
+                    const bool wipeComplete = hasUtopiaTransition
+                        ? charWipeComplete(charIndex)
+                        : mainWipeComplete;
+                    if (after && !wipeComplete) {
                         if (hasUtopiaTransition) {
                             const auto [animatedBounds, animatedEdge]
                                 = utopiaCharWipe(charIndex);
@@ -4348,7 +4376,10 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         )
                     ));
                     bool pushedUtopiaClip = false;
-                    if (after && hasUtopiaTransition && !complete) {
+                    const bool unitComplete = hasUtopiaTransition
+                        ? rubyUnitWipeComplete(ruby, geometryIndex)
+                        : complete;
+                    if (after && hasUtopiaTransition && !unitComplete) {
                         const auto [animatedBounds, animatedEdge] =
                             utopiaRubyUnitWipe(
                                 ruby, rubyIndex, geometryIndex, rubyStyle
@@ -4465,7 +4496,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 strokeBrush->SetOpacity(charOpacity);
                 stroke2Brush->SetOpacity(charOpacity);
                 bool pushedUtopiaClip = false;
-                if (after && hasUtopiaTransition && !mainWipeComplete) {
+                if (after
+                    && hasUtopiaTransition
+                    && !charWipeComplete(charIndex)) {
                     const auto [animatedBounds, animatedEdge] = utopiaCharWipe(charIndex);
                     if (animatedEdge <= animatedBounds.left) {
                         continue;
@@ -4582,7 +4615,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 bool pushedUtopiaClip = false;
                 if (after
                     && hasUtopiaTransition
-                    && !rubyWipeComplete(ruby)) {
+                    && !rubyUnitWipeComplete(ruby, index)) {
                     const auto [animatedBounds, animatedEdge] = utopiaRubyUnitWipe(
                         ruby, rubyIndex, index, rubyStyle
                     );
