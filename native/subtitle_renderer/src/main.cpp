@@ -94,8 +94,12 @@ struct PaintFillSpec {
 
 struct ResolvedStyle {
     QString fontFamily = QStringLiteral("UD Digi Kyokasho N-B");
+    QString fontFamilyLatin;
     int fontSizePx = 100;
+    std::optional<int> latinFontSizePx;
     int fontWeight = 400;
+    std::optional<int> latinFontWeight;
+    bool italic = false;
     int letterSpacingPx = 0;
     QString baseColor = QStringLiteral("#FFFFFF");
     QString fillColor = QStringLiteral("#FF5A6F");
@@ -136,6 +140,7 @@ struct ResolvedStyle {
     int glowRadiusPx = 10;
     int glowBeforeRadiusPx = 10;
     int glowAfterRadiusPx = 10;
+    int glowConcentrationLevel = 0;
     int shadowOffsetX = 0;
     int shadowOffsetY = 1;
     int rubyFontSizePx = 30;
@@ -171,12 +176,16 @@ struct RenderConfig {
     bool syncEnding = false;
     int upperLineLeftMarginPx = 50;
     int lowerLineRightMarginPx = 50;
+    int horizontalMarginPx = 50;
+    QString smartHorizontal = QStringLiteral("equal_margins");
+    std::vector<QString> lineAlignments{QStringLiteral("left"), QStringLiteral("right")};
     bool dualLineLayout = true;
     bool rightToLeft = false;
     QString entryAnim = QStringLiteral("none");
     int entryLeadMs = 300;
     QString exitAnim = QStringLiteral("none");
     int exitFadeMs = 300;
+    int timingOffsetMs = 0;
     QJsonObject singerStyleOverrides;
     QJsonObject customStyleSchemes;
     // Built during configure. render_frame must not insert here because LineLayout stores pointers into this QHash.
@@ -402,6 +411,8 @@ struct RenderRuntime {
     std::mutex gpuBackendMutex;
     std::unique_ptr<krok::subtitle::native::RenderBackend> hardwareGpuBackend;
     std::unique_ptr<krok::subtitle::native::RenderBackend> warpGpuBackend;
+    bool hardwareGpuConfigured = false;
+    bool warpGpuConfigured = false;
 };
 
 QString fontCacheKey(const QFont &font);
@@ -695,6 +706,13 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     }
     if (hasNonNull(style, QStringLiteral("glow_after_radius_px"))) {
         cfg.glowAfterRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_after_radius_px"), cfg.glowAfterRadiusPx));
+    }
+    if (hasNonNull(style, QStringLiteral("glow_concentration_level"))) {
+        cfg.glowConcentrationLevel = std::clamp(
+            intValue(style, QStringLiteral("glow_concentration_level"), cfg.glowConcentrationLevel),
+            0,
+            2
+        );
     }
     if (hasNonNull(style, QStringLiteral("shadow_offset_x"))) {
         cfg.shadowOffsetX = intValue(style, QStringLiteral("shadow_offset_x"), cfg.shadowOffsetX);
@@ -1203,8 +1221,16 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     const QJsonObject style = ir.value(QStringLiteral("style")).toObject();
     ResolvedStyle &base = cfg.baseStyle;
     base.fontFamily = stringValue(style, QStringLiteral("font_family"), base.fontFamily);
+    base.fontFamilyLatin = stringValue(style, QStringLiteral("font_family_latin"), base.fontFamilyLatin);
     base.fontSizePx = std::max(1, intValue(style, QStringLiteral("font_size_px"), base.fontSizePx));
+    if (style.value(QStringLiteral("latin_font_size_px")).isDouble()) {
+        base.latinFontSizePx = std::max(1, intValue(style, QStringLiteral("latin_font_size_px"), base.fontSizePx));
+    }
     base.fontWeight = std::clamp(intValue(style, QStringLiteral("font_weight"), base.fontWeight), 1, 999);
+    if (style.value(QStringLiteral("latin_font_weight")).isDouble()) {
+        base.latinFontWeight = std::clamp(intValue(style, QStringLiteral("latin_font_weight"), base.fontWeight), 1, 999);
+    }
+    base.italic = style.value(QStringLiteral("italic")).toBool(base.italic);
     base.letterSpacingPx = intValue(style, QStringLiteral("letter_spacing_px"), base.letterSpacingPx);
     base.baseColor = stringValue(style, QStringLiteral("base_color"), base.baseColor);
     base.fillColor = stringValue(style, QStringLiteral("fill_color"), base.fillColor);
@@ -1223,10 +1249,19 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     refreshLegacyRubyFills(base);
     base.strokeWidthPx = std::max(0, intValue(style, QStringLiteral("stroke_width_px"), base.strokeWidthPx));
     base.stroke2WidthPx = std::max(0, intValue(style, QStringLiteral("stroke2_width_px"), base.stroke2WidthPx));
+    if (style.value(QStringLiteral("stroke2_enabled")).isBool()
+        && !style.value(QStringLiteral("stroke2_enabled")).toBool()) {
+        base.stroke2WidthPx = 0;
+    }
     base.decorationKind = stringValue(style, QStringLiteral("decoration_kind"), base.decorationKind);
     base.glowRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_radius_px"), base.glowRadiusPx));
     base.glowBeforeRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_before_radius_px"), base.glowBeforeRadiusPx));
     base.glowAfterRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_after_radius_px"), base.glowAfterRadiusPx));
+    base.glowConcentrationLevel = std::clamp(
+        intValue(style, QStringLiteral("glow_concentration_level"), base.glowConcentrationLevel),
+        0,
+        2
+    );
     base.shadowOffsetX = intValue(style, QStringLiteral("shadow_offset_x"), base.shadowOffsetX);
     base.shadowOffsetY = intValue(style, QStringLiteral("shadow_offset_y"), base.shadowOffsetY);
     base.rubyFontSizePx = std::max(1, intValue(style, QStringLiteral("ruby_font_size_px"), base.rubyFontSizePx));
@@ -1249,6 +1284,18 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
         : cfg.syncEnding;
     cfg.upperLineLeftMarginPx = std::max(0, intValue(style, QStringLiteral("upper_line_left_margin_px"), cfg.upperLineLeftMarginPx));
     cfg.lowerLineRightMarginPx = std::max(0, intValue(style, QStringLiteral("lower_line_right_margin_px"), cfg.lowerLineRightMarginPx));
+    cfg.horizontalMarginPx = std::max(0, intValue(style, QStringLiteral("horizontal_margin_px"), cfg.horizontalMarginPx));
+    cfg.smartHorizontal = stringValue(style, QStringLiteral("smart_horizontal"), cfg.smartHorizontal);
+    const QJsonArray lineAlignments = style.value(QStringLiteral("line_alignments")).toArray();
+    if (!lineAlignments.isEmpty()) {
+        cfg.lineAlignments.clear();
+        cfg.lineAlignments.reserve(static_cast<std::size_t>(lineAlignments.size()));
+        for (const auto &alignment : lineAlignments) {
+            if (alignment.isString()) {
+                cfg.lineAlignments.push_back(alignment.toString());
+            }
+        }
+    }
     cfg.dualLineLayout = style.value(QStringLiteral("dual_line_layout")).isBool()
         ? style.value(QStringLiteral("dual_line_layout")).toBool()
         : cfg.dualLineLayout;
@@ -1259,6 +1306,7 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.entryLeadMs = std::max(0, intValue(style, QStringLiteral("entry_lead_ms"), cfg.entryLeadMs));
     cfg.exitAnim = stringValue(style, QStringLiteral("exit_anim"), cfg.exitAnim);
     cfg.exitFadeMs = std::max(0, intValue(style, QStringLiteral("exit_fade_ms"), cfg.exitFadeMs));
+    cfg.timingOffsetMs = intValue(style, QStringLiteral("timing_offset_ms"), cfg.timingOffsetMs);
     const bool hasMainKaraokeColors = style.value(QStringLiteral("karaoke_colors")).isObject();
     const bool hasRubyKaraokeColors = style.value(QStringLiteral("ruby_karaoke_colors")).isObject();
     base.hasMainKaraokeColors = hasMainKaraokeColors;
@@ -5312,6 +5360,217 @@ QJsonObject handleRenderRange(const QJsonObject &request, const std::optional<Re
     return out;
 }
 
+krok::subtitle::native::RgbaColor gpuColor(const QString &value, const QString &fallback) {
+    QColor color(value);
+    if (!color.isValid()) {
+        color = QColor(fallback);
+    }
+    return krok::subtitle::native::RgbaColor{
+        static_cast<std::uint8_t>(color.red()),
+        static_cast<std::uint8_t>(color.green()),
+        static_cast<std::uint8_t>(color.blue()),
+        static_cast<std::uint8_t>(color.alpha()),
+    };
+}
+
+krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &config) {
+    using krok::subtitle::native::RenderScene;
+    using krok::subtitle::native::TextChar;
+    using krok::subtitle::native::TextLine;
+
+    const double scale = std::max(config.dpr, 0.01);
+    const ResolvedStyle &sourceStyle = config.baseStyle;
+    RenderScene scene;
+    scene.width = config.physicalWidth();
+    scene.height = config.physicalHeight();
+    scene.style.fontFamily = sourceStyle.fontFamily.toStdWString();
+    if (!sourceStyle.fontFamilyLatin.isEmpty()) {
+        scene.style.latinFontFamily = sourceStyle.fontFamilyLatin.toStdWString();
+    }
+    scene.style.fontSize = static_cast<float>(sourceStyle.fontSizePx * scale);
+    if (sourceStyle.latinFontSizePx.has_value()) {
+        scene.style.latinFontSize = static_cast<float>(*sourceStyle.latinFontSizePx * scale);
+    }
+    scene.style.fontWeight = sourceStyle.fontWeight;
+    scene.style.latinFontWeight = sourceStyle.latinFontWeight;
+    scene.style.italic = sourceStyle.italic;
+    scene.style.letterSpacing = static_cast<float>(sourceStyle.letterSpacingPx * scale);
+    scene.style.horizontalMargin = static_cast<float>(config.horizontalMarginPx * scale);
+    scene.style.bottomMargin = static_cast<float>(config.lineYMarginPx * scale);
+    scene.style.verticalPosition = config.lineYPosition.toStdString();
+    scene.style.leadInMs = config.lineLeadInMs;
+    scene.style.tailMs = config.lineTailMs;
+    if (config.lineHorizontalLayout == QStringLiteral("center")) {
+        scene.style.alignment = "center";
+    } else if (!config.lineAlignments.empty()) {
+        scene.style.alignment = config.lineAlignments.front().toStdString();
+    } else {
+        scene.style.alignment = "left";
+    }
+    scene.style.beforeFill = gpuColor(sourceStyle.baseFill.color, sourceStyle.baseColor);
+    scene.style.afterFill = gpuColor(sourceStyle.afterFill.color, sourceStyle.fillColor);
+    scene.style.beforeStroke = gpuColor(sourceStyle.beforeStrokeFill.color, sourceStyle.beforeStrokeColor);
+    scene.style.afterStroke = gpuColor(sourceStyle.afterStrokeFill.color, sourceStyle.afterStrokeColor);
+    scene.style.beforeStroke2 = gpuColor(sourceStyle.beforeStroke2Fill.color, sourceStyle.beforeStroke2Color);
+    scene.style.afterStroke2 = gpuColor(sourceStyle.afterStroke2Fill.color, sourceStyle.afterStroke2Color);
+    scene.style.beforeDecor = gpuColor(sourceStyle.beforeShadowFill.color, sourceStyle.beforeShadowColor);
+    scene.style.afterDecor = gpuColor(sourceStyle.afterShadowFill.color, sourceStyle.afterShadowColor);
+    scene.style.strokeWidth = static_cast<float>(sourceStyle.strokeWidthPx * scale);
+    scene.style.stroke2Width = static_cast<float>(sourceStyle.stroke2WidthPx * scale);
+    scene.style.decorationKind = sourceStyle.decorationKind.toStdString();
+    scene.style.glowBeforeRadius = static_cast<float>(sourceStyle.glowBeforeRadiusPx * scale);
+    scene.style.glowAfterRadius = static_cast<float>(sourceStyle.glowAfterRadiusPx * scale);
+    scene.style.glowConcentrationLevel = sourceStyle.glowConcentrationLevel;
+
+    scene.lines.reserve(config.lines.size());
+    for (const TimingLine &sourceLine : config.lines) {
+        if (sourceLine.chars.empty()) {
+            continue;
+        }
+        TextLine line;
+        line.startMs = lineStartMs(sourceLine) + config.timingOffsetMs;
+        line.endMs = lineEndMs(sourceLine) + config.timingOffsetMs;
+        line.chars.reserve(sourceLine.chars.size());
+        for (std::size_t index = 0; index < sourceLine.chars.size(); ++index) {
+            line.chars.push_back(TextChar{
+                sourceLine.chars[index].text.toStdWString(),
+                sourceLine.chars[index].startMs + config.timingOffsetMs,
+                charEndMs(sourceLine, index) + config.timingOffsetMs,
+            });
+        }
+        scene.lines.push_back(std::move(line));
+    }
+    return scene;
+}
+
+QJsonObject handleConfigureGpu(
+    const QJsonObject &request,
+    const std::optional<RenderConfig> &config,
+    RenderRuntime *runtime
+) {
+    if (!config.has_value()) {
+        QJsonObject out = response(false, QStringLiteral("gpu_configure"));
+        out.insert(QStringLiteral("error"), QStringLiteral("renderer is not configured"));
+        return out;
+    }
+    const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
+    QString error;
+    auto *backend = ensureGpuBackend(runtime, forceWarp, &error);
+    if (backend == nullptr) {
+        QJsonObject out = response(false, QStringLiteral("gpu_configure"));
+        out.insert(QStringLiteral("error"), error);
+        return out;
+    }
+    QElapsedTimer timer;
+    timer.start();
+    try {
+        const auto scene = gpuSceneFromConfig(*config);
+        backend->configure(scene);
+        if (forceWarp) {
+            runtime->warpGpuConfigured = true;
+        } else {
+            runtime->hardwareGpuConfigured = true;
+        }
+        QJsonObject out = response(true, QStringLiteral("gpu_configured"));
+        out.insert(QStringLiteral("width"), scene.width);
+        out.insert(QStringLiteral("height"), scene.height);
+        out.insert(QStringLiteral("line_count"), static_cast<int>(scene.lines.size()));
+        out.insert(QStringLiteral("configure_ms"), static_cast<double>(timer.nsecsElapsed()) / 1000000.0);
+        const QJsonObject caps = backendCapsJson(backend->capabilities());
+        for (auto it = caps.begin(); it != caps.end(); ++it) {
+            out.insert(it.key(), it.value());
+        }
+        return out;
+    } catch (const std::exception &exception) {
+        QJsonObject out = response(false, QStringLiteral("gpu_configure"));
+        out.insert(QStringLiteral("error"), QString::fromUtf8(exception.what()));
+        return out;
+    }
+}
+
+QJsonObject handleRenderGpuFrame(
+    const QJsonObject &request,
+    const std::optional<RenderConfig> &config,
+    RenderRuntime *runtime
+) {
+    if (!config.has_value()) {
+        QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
+        out.insert(QStringLiteral("error"), QStringLiteral("renderer is not configured"));
+        return out;
+    }
+    const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
+    const bool configured = forceWarp ? runtime->warpGpuConfigured : runtime->hardwareGpuConfigured;
+    if (!configured) {
+        QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
+        out.insert(QStringLiteral("error"), QStringLiteral("GPU backend is not configured"));
+        return out;
+    }
+    QString error;
+    auto *backend = ensureGpuBackend(runtime, forceWarp, &error);
+    if (backend == nullptr) {
+        QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
+        out.insert(QStringLiteral("error"), error);
+        return out;
+    }
+    const int generation = intValue(request, QStringLiteral("generation"), 0);
+    const int frameIndex = intValue(request, QStringLiteral("frame_index"), 0);
+    const int tMs = intValue(request, QStringLiteral("t_ms"), 0);
+    const QString shmKey = stringValue(
+        request,
+        QStringLiteral("shm_key"),
+        defaultSharedMemoryKey(generation) + QStringLiteral("_gpu_frame")
+    );
+    QString shmError;
+    if (!ensureSharedFrameRing(
+            runtime,
+            shmKey,
+            1,
+            config->physicalWidth(),
+            config->physicalHeight(),
+            &shmError
+        )) {
+        QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
+        out.insert(QStringLiteral("error"), QStringLiteral("failed to create shared memory: ") + shmError);
+        return out;
+    }
+    try {
+        const auto result = backend->renderFrame(tMs);
+        SharedFrameRing ring;
+        if (!writeSharedRgbaSlot(
+                runtime,
+                result.surface.bytes.data(),
+                result.surface.width,
+                result.surface.height,
+                result.surface.stride,
+                generation,
+                frameIndex,
+                tMs,
+                0,
+                &ring
+            )) {
+            QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
+            out.insert(QStringLiteral("error"), QStringLiteral("failed to write GPU frame shared-memory slot"));
+            return out;
+        }
+        QJsonObject out = response(true, QStringLiteral("gpu_frame_ready"));
+        out.insert(QStringLiteral("generation"), generation);
+        out.insert(QStringLiteral("frame_index"), frameIndex);
+        out.insert(QStringLiteral("t_ms"), tMs);
+        out.insert(QStringLiteral("render_ms"), result.renderMs);
+        out.insert(QStringLiteral("readback_ms"), result.readbackMs);
+        out.insert(
+            QStringLiteral("checksum"),
+            QString::number(bytesChecksum(result.surface.bytes.data(), result.surface.bytes.size()))
+        );
+        appendSharedRingMetadata(out, ring, 0);
+        return out;
+    } catch (const std::exception &exception) {
+        QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
+        out.insert(QStringLiteral("error"), QString::fromUtf8(exception.what()));
+        return out;
+    }
+}
+
 QJsonObject handleCancelGeneration(const QJsonObject &request, RenderRuntime *runtime) {
     const int generation = intValue(request, QStringLiteral("generation"), 0);
     cancelGeneration(runtime, generation);
@@ -5362,6 +5621,10 @@ int main(int argc, char **argv) {
             writeJson(handleBackendInfo(request, &runtime));
         } else if (command == QStringLiteral("render_probe")) {
             writeJson(handleRenderProbe(request, &runtime));
+        } else if (command == QStringLiteral("gpu_configure")) {
+            writeJson(handleConfigureGpu(request, config, &runtime));
+        } else if (command == QStringLiteral("gpu_render_frame")) {
+            writeJson(handleRenderGpuFrame(request, config, &runtime));
         } else if (command == QStringLiteral("configure")) {
             writeJson(handleConfigure(request, &config));
         } else if (command == QStringLiteral("render_frame")) {

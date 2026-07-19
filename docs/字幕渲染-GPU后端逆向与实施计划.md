@@ -873,3 +873,29 @@ native `RenderConfig` 增加 `dpr` 与物理尺寸换算，布局仍在逻辑坐
 
 下一步：**G1 横排字幕核心**。先建立 DirectWrite 字体/fallback 与 glyph geometry cache，
 再迁移 solid before/after、stroke/stroke2 和逐字 wipe；不提前接产品 UI。
+
+### 2026-07-19（第六批）：G1 第一刀——DirectWrite 轮廓、走字与 N3 glow
+
+实现（仍未接产品 UI）：
+
+- Render IR 经 `gpu_configure` 物化为独立 `RenderScene`，configure 阶段用 DirectWrite
+  shaping/fallback 生成并缓存 Direct2D glyph geometry 与逐字 hit-test 范围；
+- `gpu_render_frame` 按现有 shared-memory ring 返回 straight RGBA，Python client 新增
+  `configure_gpu()` / `render_gpu_frame()`；
+- 横排 solid before/after、stroke、严格受 `UseEdge2` 控制的 stroke2、逐字 wipe、
+  墨水边界 left/center/right 与 top/center/bottom 已出帧；
+- 重新用用户指定的 N3 10.74.80.0 程序集反编译复核
+  `SubtitleAction.DrawOneLineDecorBlurMulti()`：发光源只画装饰轮廓，宽度为
+  `EdgeSize + DecorSize`，启用二重描边时为 `EdgeSize + EdgeSize2 + DecorSize`；
+  Direct2D `GaussianBlur.StandardDeviation` 使用
+  `R - floor(i * R / (BlurLevel + 1))`，默认 `Balanced`，各 pass SourceOver；GPU backend
+  已按该层序和公式实现；
+- G1 GPU 专项 `10 passed`；native CPU/protocol/GPU 联合回归 `43 passed, 27 skipped`。
+  hardware/WARP 的差异仅集中于少量抗锯齿边缘，整帧 premultiplied 平均通道误差
+  约 `0.038/255`。
+
+本批尚不宣告 G1 完成。首个 GPU↔Python Painter 对照暴露了需要继续收敛的真实差异：
+GPU 当前 whole-line DirectWrite shaping 尚未复刻 Painter/N3 的逐字符 outline bounds、
+side bearing、advance、`CharGeometryLeftOffset` 和首描边计入步进规则；默认双行布局的 lane
+基线也尚未进入 GPU scene。因此下一刀先改为逐字符 glyph geometry/layout cache，并加入
+GPU↔Painter 非空帧、边界、wipe 与 premultiplied 像素 bounded-diff 门禁，再继续 ruby/角色。

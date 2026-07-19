@@ -199,8 +199,14 @@ class SharedFrameRingReader:
         )
 
     def _validate_event_payload(self, frame_ready_event: dict[str, Any]) -> None:
-        if frame_ready_event.get("event") not in {"frame_ready", "probe_ready"}:
-            raise NativeRendererError("shared frame reader expects a frame_ready or probe_ready event")
+        if frame_ready_event.get("event") not in {
+            "frame_ready",
+            "probe_ready",
+            "gpu_frame_ready",
+        }:
+            raise NativeRendererError(
+                "shared frame reader expects a frame_ready, probe_ready, or gpu_frame_ready event"
+            )
         if frame_ready_event.get("payload") != "shared_memory":
             raise NativeRendererError("frame_ready event does not describe a shared memory payload")
         event_key = str(frame_ready_event.get("shm_key") or "")
@@ -428,6 +434,44 @@ class NativeRendererProcess:
     def backend_info(self, *, force_warp: bool = False) -> dict[str, Any]:
         """Return Direct2D/D3D11 adapter capabilities without touching product UI."""
         self._send({"cmd": "backend_info", "force_warp": bool(force_warp)})
+        return self._expect_ok(self._read_response())
+
+    def configure_gpu(
+        self,
+        track: TimingTrack,
+        style: Style,
+        *,
+        width: int,
+        height: int,
+        fps: int,
+        dpr: float = 1.0,
+        force_warp: bool = False,
+    ) -> dict[str, Any]:
+        """Configure the G1 DirectWrite scene without enabling the product path."""
+        self.configure(track, style, width=width, height=height, fps=fps, dpr=dpr)
+        self._send({"cmd": "gpu_configure", "force_warp": bool(force_warp)})
+        return self._expect_ok(self._read_response())
+
+    def render_gpu_frame(
+        self,
+        t_ms: int,
+        *,
+        force_warp: bool = False,
+        generation: int = 0,
+        frame_index: int = 0,
+        shm_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Render one configured G1 frame into a shared-memory RGBA slot."""
+        payload: dict[str, Any] = {
+            "cmd": "gpu_render_frame",
+            "t_ms": int(t_ms),
+            "force_warp": bool(force_warp),
+            "generation": int(generation),
+            "frame_index": int(frame_index),
+        }
+        if shm_key:
+            payload["shm_key"] = str(shm_key)
+        self._send(payload)
         return self._expect_ok(self._read_response())
 
     def render_probe(

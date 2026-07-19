@@ -17,6 +17,7 @@ public:
     const BackendCaps &capabilities() const noexcept { return caps_; }
     ID3D11Device *d3dDevice() const noexcept { return d3dDevice_.Get(); }
     ID3D11DeviceContext *d3dContext() const noexcept { return d3dContext_.Get(); }
+    ID2D1Factory1 *d2dFactory() const noexcept { return d2dFactory_.Get(); }
     ID2D1DeviceContext *d2dContext() const noexcept { return d2dContext_.Get(); }
     IDWriteFactory *dwriteFactory() const noexcept { return dwriteFactory_.Get(); }
     std::string deviceRemovedReason() const;

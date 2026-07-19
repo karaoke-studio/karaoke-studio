@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 import uuid
 
@@ -12,6 +13,7 @@ from krok_helper.subtitle_render.native_backend import (
     SharedFrameRingReader,
     resolve_native_renderer_path,
 )
+from krok_helper.subtitle_render.models import Style, TimingChar, TimingLine, TimingTrack
 
 
 def _renderer_path() -> Path:
@@ -24,6 +26,94 @@ def _renderer_path() -> Path:
 def _pixel(slot, x: int, y: int) -> tuple[int, int, int, int]:
     offset = y * slot.stride + x * 4
     return tuple(slot.payload[offset : offset + 4])  # type: ignore[return-value]
+
+
+def _g1_track() -> TimingTrack:
+    return TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("K", 0),
+                    TimingChar("a", 500),
+                    TimingChar("歌", 1000),
+                ],
+                end_ms=1500,
+            )
+        ]
+    )
+
+
+def _g1_style(**changes) -> Style:
+    style = Style(
+        font_family="Arial",
+        font_family_latin="Times New Roman",
+        font_size_px=64,
+        font_reference_height=360,
+        base_color="#FFFFFF",
+        fill_color="#FF2030",
+        stroke_color="#101010",
+        stroke_width_px=3,
+        stroke2_enabled=True,
+        stroke2_width_px=2,
+        decoration_kind="shadow",
+        shadow_color="#00FF40",
+        line_y_position="center",
+        line_horizontal_layout="center",
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+    )
+    return replace(style, **changes)
+
+
+def _alpha_count(payload: bytes) -> int:
+    return sum(alpha > 0 for alpha in payload[3::4])
+
+
+def _alpha_bounds(slot) -> tuple[int, int, int, int]:
+    xs: list[int] = []
+    ys: list[int] = []
+    for y in range(slot.height):
+        row = y * slot.stride
+        for x in range(slot.width):
+            if slot.payload[row + x * 4 + 3] > 0:
+                xs.append(x)
+                ys.append(y)
+    assert xs and ys
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _render_g1_frames(
+    renderer: NativeRendererProcess,
+    style: Style,
+    timestamps_ms: tuple[int, ...],
+    *,
+    force_warp: bool,
+) -> tuple[dict, list[bytes]]:
+    configured = renderer.configure_gpu(
+        _g1_track(),
+        style,
+        width=640,
+        height=360,
+        fps=60,
+        force_warp=force_warp,
+    )
+    reader: SharedFrameRingReader | None = None
+    frames: list[bytes] = []
+    try:
+        for frame_index, t_ms in enumerate(timestamps_ms):
+            event = renderer.render_gpu_frame(
+                t_ms,
+                force_warp=force_warp,
+                frame_index=frame_index,
+            )
+            if reader is None:
+                reader = SharedFrameRingReader.from_event(event)
+                reader.attach()
+            frames.append(reader.read_frame(event).payload)
+    finally:
+        if reader is not None:
+            reader.close()
+    return configured, frames
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
@@ -122,3 +212,135 @@ def test_gpu_probe_1000_frames_reuses_device_and_shared_ring(monkeypatch) -> Non
             if reader is not None:
                 reader.close()
     assert len(checksums) == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g1_directwrite_wipe_progresses_monotonically(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured, frames = _render_g1_frames(
+            renderer,
+            _g1_style(),
+            (0, 750, 1500),
+            force_warp=True,
+        )
+
+    assert configured["event"] == "gpu_configured"
+    assert configured["backend"] == "direct2d"
+    assert configured["line_count"] == 1
+    red_counts = [
+        sum(
+            1
+            for index in range(0, len(payload), 4)
+            if payload[index] > 180
+            and payload[index + 1] < 100
+            and payload[index + 3] > 0
+        )
+        for payload in frames
+    ]
+    assert red_counts[0] < red_counts[1] < red_counts[2]
+    assert len({_alpha_count(payload) for payload in frames}) == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g1_layers_outer_stroke_stroke_and_body(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, body = _render_g1_frames(
+            renderer,
+            _g1_style(stroke_width_px=0, stroke2_enabled=False, stroke2_width_px=0),
+            (750,),
+            force_warp=True,
+        )
+        _, stroke = _render_g1_frames(
+            renderer,
+            _g1_style(stroke_width_px=5, stroke2_enabled=False, stroke2_width_px=0),
+            (750,),
+            force_warp=True,
+        )
+        _, stroke2 = _render_g1_frames(
+            renderer,
+            _g1_style(stroke_width_px=5, stroke2_enabled=True, stroke2_width_px=5),
+            (750,),
+            force_warp=True,
+        )
+
+    assert _alpha_count(body[0]) < _alpha_count(stroke[0]) < _alpha_count(stroke2[0])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g1_n3_glow_concentration_adds_blur_passes(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    low = _g1_style(
+        decoration_kind="glow",
+        glow_radius_px=10,
+        glow_before_radius_px=10,
+        glow_after_radius_px=10,
+        glow_concentration_level=0,
+    )
+    high = replace(low, glow_concentration_level=2)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, low_frames = _render_g1_frames(renderer, low, (750,), force_warp=True)
+        _, high_frames = _render_g1_frames(renderer, high, (750,), force_warp=True)
+
+    low_alpha = low_frames[0][3::4]
+    high_alpha = high_frames[0][3::4]
+    assert sum(high_alpha) > sum(low_alpha)
+    assert _alpha_count(high_frames[0]) >= _alpha_count(low_frames[0])
+    assert any(
+        payload[index + 1] > payload[index] + 20 and payload[index + 3] > 0
+        for payload in high_frames
+        for index in range(0, len(payload), 4)
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g1_alignment_uses_visible_ink_bounds(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        renderer.configure_gpu(
+            _g1_track(),
+            _g1_style(),
+            width=640,
+            height=360,
+            fps=60,
+            force_warp=True,
+        )
+        event = renderer.render_gpu_frame(750, force_warp=True)
+        with SharedFrameRingReader.from_event(event) as reader:
+            slot = reader.read_frame(event)
+
+    left, top, right, bottom = _alpha_bounds(slot)
+    assert abs((left + right) / 2.0 - slot.width / 2.0) <= 2.0
+    assert abs((top + bottom) / 2.0 - slot.height / 2.0) <= 2.0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g1_hardware_and_warp_are_pixel_bounded(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        info = renderer.backend_info()
+        if not info.get("available"):
+            pytest.skip("hardware Direct2D adapter is unavailable")
+        _, hardware = _render_g1_frames(renderer, _g1_style(), (750,), force_warp=False)
+        _, warp = _render_g1_frames(renderer, _g1_style(), (750,), force_warp=True)
+
+    hardware_alpha = hardware[0][3::4]
+    warp_alpha = warp[0][3::4]
+    differing_alpha = sum(a != b for a, b in zip(hardware_alpha, warp_alpha))
+    max_alpha_delta = max(abs(a - b) for a, b in zip(hardware_alpha, warp_alpha))
+    premultiplied_deltas = [
+        abs(
+            hardware[0][index + channel] * hardware[0][index + 3] // 255
+            - warp[0][index + channel] * warp[0][index + 3] // 255
+        )
+        for index in range(0, len(hardware[0]), 4)
+        for channel in range(3)
+    ]
+    assert differing_alpha <= len(hardware_alpha) * 0.01
+    # Direct2D hardware and WARP use slightly different edge antialiasing at a
+    # small number of pixels. Gate the aggregate premultiplied image error,
+    # which is stable and meaningful even where straight RGB has tiny alpha.
+    assert sum(abs(a - b) for a, b in zip(hardware_alpha, warp_alpha)) / len(hardware_alpha) <= 0.05
+    assert sum(premultiplied_deltas) / len(premultiplied_deltas) <= 0.05
+    assert max_alpha_delta <= 80
