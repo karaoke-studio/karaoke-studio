@@ -73,6 +73,11 @@ def gpu_preview_enabled() -> bool:
     return _env_enabled("KROK_SUBTITLE_GPU_PREVIEW", "0")
 
 
+def gpu_native_preview_enabled() -> bool:
+    """G6 developer opt-in for zero-readback DirectComposition preview."""
+    return os.name == "nt" and _env_enabled("KROK_SUBTITLE_GPU_NATIVE_PREVIEW", "0")
+
+
 def native_preview_timestamps(
     t_ms: int,
     *,
@@ -383,6 +388,7 @@ class GpuAsyncSubtitleRenderer(QObject):
     """
 
     frame_ready = Signal(QImage, int)
+    frame_presented = Signal(int)
     fallback_occurred = Signal(str)
 
     _STALE_TOLERANCE_MS = 120
@@ -406,9 +412,13 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._fallback_reported = False
         self._retry_after = 0.0
         self._force_warp = _env_enabled("KROK_SUBTITLE_GPU_FORCE_WARP", "0")
+        self._native_preview = gpu_native_preview_enabled()
+        self._native_target: Optional[tuple[int, int, int, int, int]] = None
         self._lookahead_frames = _env_int(
             "KROK_SUBTITLE_GPU_LOOKAHEAD_FRAMES", 1, minimum=0
         )
+        if self._native_preview:
+            self._lookahead_frames = 0
         self._frame_cache = NativePreviewFrameCache(max(self._lookahead_frames + 1, 1))
         self._renderer: Optional[NativeRendererProcess] = None
         self._reader: Optional[SharedFrameRingReader] = None
@@ -432,6 +442,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._timings: dict[str, deque[float]] = {
             "render_ms": deque(maxlen=4096),
             "readback_ms": deque(maxlen=4096),
+            "present_ms": deque(maxlen=4096),
             "roundtrip_ms": deque(maxlen=4096),
             "ready_latency_ms": deque(maxlen=4096),
         }
@@ -489,9 +500,43 @@ class GpuAsyncSubtitleRenderer(QObject):
                 self._shm_key = f"krok-gpu-preview-{os.getpid()}-{uuid.uuid4().hex}"
             self._condition.notify_all()
 
+    @property
+    def uses_native_preview(self) -> bool:
+        return self._native_preview
+
+    def set_native_target(
+        self,
+        parent_hwnd: int,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+    ) -> None:
+        """Update the sidecar child HWND parent and physical target geometry."""
+        target = (
+            int(parent_hwnd),
+            int(x),
+            int(y),
+            max(int(width), 1),
+            max(int(height), 1),
+        )
+        with self._condition:
+            if self._stopped or not self._native_preview:
+                return
+            if target == self._native_target:
+                return
+            self._native_target = target
+            if self._latest_t is not None:
+                self._replace_pending_locked(
+                    self._latest_t,
+                    self._request_serial,
+                    False,
+                )
+            self._condition.notify_all()
+
     def request(self, t_ms: int) -> None:
         requested_t = int(t_ms)
-        cached = self._frame_cache.take(requested_t)
+        cached = None if self._native_preview else self._frame_cache.take(requested_t)
         with self._condition:
             if self._stopped:
                 return
@@ -556,6 +601,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                 needs_configure,
                 self._shm_key,
                 submitted_at,
+                self._native_target,
             )
 
     def _run(self) -> None:
@@ -578,12 +624,15 @@ class GpuAsyncSubtitleRenderer(QObject):
                     needs_configure,
                     shm_key,
                     submitted_at,
+                    native_target,
                 ) = snapshot
                 if track is None or style is None:
                     continue
                 unsupported = gpu_unsupported_features(track, style, extra_tracks)
                 if unsupported:
                     if not speculative:
+                        if self._native_preview:
+                            self._close_renderer()
                         self._note("capability_fallbacks")
                         self._report_fallback(
                             "当前工程包含 GPU 尚不支持的功能，字幕预览已回退 Painter："
@@ -625,16 +674,46 @@ class GpuAsyncSubtitleRenderer(QObject):
                             extra_tracks=extra_tracks,
                         )
                         self._note("configure_count")
-                    event = renderer.render_gpu_frame(
-                        t_ms,
-                        force_warp=self._force_warp,
-                        generation=generation,
-                        frame_index=self._frame_index,
-                        shm_key=shm_key,
-                        include_checksum=False,
-                        readback_bands=True,
-                    )
+                    if self._native_preview and native_target is not None:
+                        parent_hwnd, target_x, target_y, target_width, target_height = native_target
+                        event = renderer.present_gpu_frame(
+                            t_ms,
+                            parent_hwnd=parent_hwnd,
+                            x=target_x,
+                            y=target_y,
+                            width=target_width,
+                            height=target_height,
+                            force_warp=self._force_warp,
+                            generation=generation,
+                            frame_index=self._frame_index,
+                        )
+                    else:
+                        event = renderer.render_gpu_frame(
+                            t_ms,
+                            force_warp=self._force_warp,
+                            generation=generation,
+                            frame_index=self._frame_index,
+                            shm_key=shm_key,
+                            include_checksum=False,
+                            readback_bands=True,
+                        )
                     self._frame_index += 1
+                    completed_at = time.monotonic()
+                    self._record_timing("roundtrip_ms", (completed_at - work_started) * 1000.0)
+                    self._record_event_timing("render_ms", event.get("render_ms"))
+                    self._record_event_timing("readback_ms", event.get("readback_ms"))
+                    self._record_event_timing("present_ms", event.get("present_ms"))
+                    if not speculative:
+                        self._record_timing(
+                            "ready_latency_ms", (completed_at - submitted_at) * 1000.0
+                        )
+                    if self._native_preview and native_target is not None:
+                        if self._may_emit(t_ms, generation):
+                            self._note("frames_emitted")
+                            self.frame_presented.emit(int(t_ms))
+                        else:
+                            self._note("stale_frames_dropped")
+                        continue
                     event_key = str(event.get("shm_key") or "")
                     if self._reader is None or self._reader.shm_key != event_key:
                         if self._reader is not None:
@@ -642,14 +721,6 @@ class GpuAsyncSubtitleRenderer(QObject):
                         self._reader = SharedFrameRingReader.from_event(event)
                     image = self._reader.read_qimage(event)
                     image.setDevicePixelRatio(dpr)
-                    completed_at = time.monotonic()
-                    self._record_timing("roundtrip_ms", (completed_at - work_started) * 1000.0)
-                    self._record_event_timing("render_ms", event.get("render_ms"))
-                    self._record_event_timing("readback_ms", event.get("readback_ms"))
-                    if not speculative:
-                        self._record_timing(
-                            "ready_latency_ms", (completed_at - submitted_at) * 1000.0
-                        )
                     if speculative:
                         self._cache_speculative(image, t_ms, generation)
                     elif self._may_emit(t_ms, generation):

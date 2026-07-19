@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import os
+import ctypes
 from dataclasses import replace
 from pathlib import Path
+import threading
+import time
 import uuid
 
 import pytest
+from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtGui import QColor, QImage
 
 from krok_helper.subtitle_render.native_backend import (
@@ -78,6 +82,87 @@ def _g1_track() -> TimingTrack:
             )
         ]
     )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="DirectComposition preview is Windows-only")
+def test_gpu_g6_direct_composition_child_window_has_zero_readback(qapp, monkeypatch) -> None:
+    if QApplication.platformName().lower() != "windows":
+        pytest.skip("G6 native HWND smoke requires the Windows Qt platform plugin")
+    renderer_path = _renderer_path()
+    monkeypatch.setenv("KROK_SUBTITLE_NATIVE_RENDERER", str(renderer_path))
+
+    parent = QWidget()
+    parent.resize(320, 180)
+    parent.show()
+    qapp.processEvents()
+    parent_hwnd = int(parent.winId())
+    result: dict[str, dict] = {}
+    failures: list[BaseException] = []
+    presented = threading.Event()
+    release = threading.Event()
+
+    def render() -> None:
+        try:
+            with NativeRendererProcess(response_timeout_s=15.0) as process:
+                configured = process.configure_gpu(
+                    _g1_track(),
+                    Style(font_size_px=48, line_lead_in_ms=0),
+                    width=320,
+                    height=180,
+                    fps=60,
+                    force_warp=True,
+                )
+                event = process.present_gpu_frame(
+                    500,
+                    parent_hwnd=parent_hwnd,
+                    x=0,
+                    y=0,
+                    width=320,
+                    height=180,
+                    force_warp=True,
+                )
+                result.update(configured=configured, event=event)
+                presented.set()
+                release.wait(timeout=5.0)
+                closed = process.close_gpu_preview(force_warp=True)
+                result["closed"] = closed
+        except BaseException as exc:  # pragma: no cover - surfaced on the GUI thread
+            failures.append(exc)
+
+    worker = threading.Thread(target=render, name="g6-native-preview-smoke")
+    worker.start()
+    deadline = time.monotonic() + 30.0
+    while not presented.is_set() and worker.is_alive() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.005)
+    assert presented.is_set()
+    child_hwnd = int(result["event"]["child_hwnd"])
+    user32 = ctypes.windll.user32
+    assert user32.IsWindow(child_hwnd)
+    assert user32.GetParent(child_hwnd) == parent_hwnd
+    child_rect = ctypes.wintypes.RECT()
+    assert user32.GetWindowRect(child_hwnd, ctypes.byref(child_rect))
+    assert child_rect.right - child_rect.left == 320
+    assert child_rect.bottom - child_rect.top == 180
+    release.set()
+    while worker.is_alive() and time.monotonic() < deadline:
+        qapp.processEvents()
+        time.sleep(0.005)
+    worker.join(timeout=1.0)
+    parent.close()
+    parent.deleteLater()
+    qapp.processEvents()
+
+    assert not worker.is_alive()
+    assert failures == []
+    assert result["configured"]["native_preview"] is True
+    assert result["event"]["event"] == "gpu_frame_presented"
+    assert result["event"]["transport"] == "direct_composition"
+    assert result["event"]["readback_ms"] == 0.0
+    assert float(result["event"]["present_ms"]) >= 0.0
+    assert child_hwnd > 0
+    assert result["closed"]["event"] == "gpu_preview_closed"
+    assert not user32.IsWindow(child_hwnd)
 
 
 def _g1_style(**changes) -> Style:

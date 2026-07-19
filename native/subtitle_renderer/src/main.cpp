@@ -1555,6 +1555,7 @@ QJsonObject backendCapsJson(const krok::subtitle::native::BackendCaps &caps) {
     out.insert(QStringLiteral("transparent_surface"), caps.supportsTransparentSurface);
     out.insert(QStringLiteral("staging_readback"), caps.supportsStagingReadback);
     out.insert(QStringLiteral("glyphs"), caps.supportsGlyphs);
+    out.insert(QStringLiteral("native_preview"), caps.supportsNativePreview);
     return out;
 }
 
@@ -7278,6 +7279,92 @@ QJsonObject handleRenderGpuFrame(
     }
 }
 
+QJsonObject handlePresentGpuFrame(
+    const QJsonObject &request,
+    const std::optional<RenderConfig> &config,
+    RenderRuntime *runtime
+) {
+    if (!config.has_value()) {
+        QJsonObject out = response(false, QStringLiteral("gpu_present_frame"));
+        out.insert(QStringLiteral("error"), QStringLiteral("renderer is not configured"));
+        return out;
+    }
+    const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
+    const bool configured = forceWarp
+        ? runtime->warpGpuConfigured
+        : runtime->hardwareGpuConfigured;
+    if (!configured) {
+        QJsonObject out = response(false, QStringLiteral("gpu_present_frame"));
+        out.insert(QStringLiteral("error"), QStringLiteral("GPU backend is not configured"));
+        return out;
+    }
+    QString error;
+    auto *backend = ensureGpuBackend(runtime, forceWarp, &error);
+    if (backend == nullptr) {
+        QJsonObject out = response(false, QStringLiteral("gpu_present_frame"));
+        out.insert(QStringLiteral("error"), error);
+        return out;
+    }
+    bool parentOk = false;
+    const qulonglong parentWindow = stringValue(
+        request, QStringLiteral("parent_hwnd")
+    ).toULongLong(&parentOk, 10);
+    if (!parentOk || parentWindow == 0) {
+        QJsonObject out = response(false, QStringLiteral("gpu_present_frame"));
+        out.insert(QStringLiteral("error"), QStringLiteral("parent_hwnd must be a non-zero decimal string"));
+        return out;
+    }
+    krok::subtitle::native::NativePreviewTarget target;
+    target.parentWindow = static_cast<std::uintptr_t>(parentWindow);
+    target.x = intValue(request, QStringLiteral("x"), 0);
+    target.y = intValue(request, QStringLiteral("y"), 0);
+    target.width = intValue(request, QStringLiteral("width"), 0);
+    target.height = intValue(request, QStringLiteral("height"), 0);
+    if (target.width != config->physicalWidth()
+        || target.height != config->physicalHeight()) {
+        QJsonObject out = response(false, QStringLiteral("gpu_present_frame"));
+        out.insert(
+            QStringLiteral("error"),
+            QStringLiteral("native preview dimensions must match the configured physical render target")
+        );
+        return out;
+    }
+    try {
+        const int tMs = intValue(request, QStringLiteral("t_ms"), 0);
+        const auto result = backend->presentFrame(tMs, target);
+        QJsonObject out = response(true, QStringLiteral("gpu_frame_presented"));
+        out.insert(QStringLiteral("generation"), intValue(request, QStringLiteral("generation"), 0));
+        out.insert(QStringLiteral("frame_index"), intValue(request, QStringLiteral("frame_index"), 0));
+        out.insert(QStringLiteral("t_ms"), tMs);
+        out.insert(QStringLiteral("render_ms"), result.renderMs);
+        out.insert(QStringLiteral("present_ms"), result.presentMs);
+        out.insert(QStringLiteral("readback_ms"), 0.0);
+        out.insert(QStringLiteral("child_hwnd"), QString::number(result.childWindow));
+        out.insert(QStringLiteral("transport"), QStringLiteral("direct_composition"));
+        return out;
+    } catch (const std::exception &exception) {
+        QJsonObject out = response(false, QStringLiteral("gpu_present_frame"));
+        out.insert(QStringLiteral("error"), QString::fromUtf8(exception.what()));
+        return out;
+    }
+}
+
+QJsonObject handleCloseGpuPreview(
+    const QJsonObject &request,
+    RenderRuntime *runtime
+) {
+    const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
+    QString error;
+    auto *backend = ensureGpuBackend(runtime, forceWarp, &error);
+    if (backend == nullptr) {
+        QJsonObject out = response(false, QStringLiteral("gpu_preview_close"));
+        out.insert(QStringLiteral("error"), error);
+        return out;
+    }
+    backend->closeNativePreview();
+    return response(true, QStringLiteral("gpu_preview_closed"));
+}
+
 QJsonObject handleCancelGeneration(const QJsonObject &request, RenderRuntime *runtime) {
     const int generation = intValue(request, QStringLiteral("generation"), 0);
     cancelGeneration(runtime, generation);
@@ -7303,6 +7390,7 @@ int main(int argc, char **argv) {
     QJsonObject ready = response(true, QStringLiteral("ready"));
     ready.insert(QStringLiteral("schema"), kProtocolSchema);
     ready.insert(QStringLiteral("gpu_protocol"), 1);
+    ready.insert(QStringLiteral("native_preview_protocol"), 1);
     ready.insert(QStringLiteral("qt"), QString::fromLatin1(qVersion()));
     writeJson(ready);
 
@@ -7332,6 +7420,10 @@ int main(int argc, char **argv) {
             writeJson(handleConfigureGpu(request, config, &runtime));
         } else if (command == QStringLiteral("gpu_render_frame")) {
             writeJson(handleRenderGpuFrame(request, config, &runtime));
+        } else if (command == QStringLiteral("gpu_present_frame")) {
+            writeJson(handlePresentGpuFrame(request, config, &runtime));
+        } else if (command == QStringLiteral("gpu_preview_close")) {
+            writeJson(handleCloseGpuPreview(request, &runtime));
         } else if (command == QStringLiteral("gpu_diagnostics")) {
             writeJson(handleGpuDiagnostics(request, &runtime));
         } else if (command == QStringLiteral("configure")) {

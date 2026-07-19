@@ -155,6 +155,7 @@ void D2DDevice::populateAdapterCaps(bool forceWarp) {
     caps_.supportsTransparentSurface = true;
     caps_.supportsStagingReadback = true;
     caps_.supportsGlyphs = true;
+    caps_.supportsNativePreview = true;
 }
 
 void D2DDevice::createD2DDevice() {

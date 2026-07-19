@@ -274,6 +274,19 @@ def test_gpu_preview_defaults_off_and_requires_separate_opt_in(monkeypatch):
     monkeypatch.setenv("KROK_SUBTITLE_GPU_PREVIEW", "0")
     assert pa.gpu_preview_enabled() is False
 
+
+def test_gpu_native_preview_defaults_off_and_requires_windows_opt_in(monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_NATIVE_PREVIEW", raising=False)
+    assert pa.gpu_native_preview_enabled() is False
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_NATIVE_PREVIEW", "1")
+    assert pa.gpu_native_preview_enabled() is (os.name == "nt")
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_NATIVE_PREVIEW", "0")
+    assert pa.gpu_native_preview_enabled() is False
+
 def test_async_preview_renderer_stops_qthread(qapp):
     from krok_helper.subtitle_render.frontend.preview_async import AsyncSubtitleRenderer
 
@@ -510,6 +523,71 @@ def test_preview_graphics_repeated_gpu_toggles_stop_worker_threads(qapp, monkeyp
         qapp.processEvents()
 
 
+def test_preview_graphics_g6_passes_native_hwnd_and_physical_scene_geometry(
+    qapp, monkeypatch
+):
+    from krok_helper.subtitle_render.frontend import preview_graphics as pg
+    from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
+
+    class FakeSignal:
+        def connect(self, *args, **kwargs):
+            pass
+
+    class FakeNativePreviewRenderer:
+        instances = []
+
+        def __init__(self, width, height, parent=None):
+            self.frame_ready = FakeSignal()
+            self.frame_presented = FakeSignal()
+            self.fallback_occurred = FakeSignal()
+            self.uses_native_preview = True
+            self.render_targets = []
+            self.native_targets = []
+            FakeNativePreviewRenderer.instances.append(self)
+
+        def set_render_target(self, width, height, device_pixel_ratio=1.0):
+            self.render_targets.append((width, height, device_pixel_ratio))
+
+        def set_native_target(self, parent_hwnd, x, y, width, height):
+            self.native_targets.append((parent_hwnd, x, y, width, height))
+
+        def set_state(self, *args, **kwargs):
+            pass
+
+        def request(self, t_ms):
+            pass
+
+        def set_playing(self, playing):
+            pass
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(pg, "async_preview_enabled", lambda: True)
+    monkeypatch.setattr(pg, "gpu_preview_enabled", lambda: True)
+    monkeypatch.setattr(pg, "GpuAsyncSubtitleRenderer", FakeNativePreviewRenderer)
+    graphics = PreviewGraphicsView()
+    try:
+        graphics.resize(800, 500)
+        graphics.show()
+        qapp.processEvents()
+        graphics._refresh_async_target()  # noqa: SLF001
+
+        renderer = FakeNativePreviewRenderer.instances[-1]
+        logical_w, logical_h, render_dpr = renderer.render_targets[-1]
+        parent_hwnd, _x, _y, physical_w, physical_h = renderer.native_targets[-1]
+        expected_w, expected_h, _ = pg.preview_render_target_size(
+            logical_w, logical_h, render_dpr
+        )
+        assert parent_hwnd == int(graphics.viewport().winId())
+        assert (physical_w, physical_h) == (expected_w, expected_h)
+        assert physical_w > 0 and physical_h > 0
+    finally:
+        graphics.close()
+        graphics.deleteLater()
+        qapp.processEvents()
+
+
 def test_gpu_async_renderer_queue_is_capacity_one_latest_wins(qapp, monkeypatch):
     from krok_helper.subtitle_render.frontend import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack
@@ -587,6 +665,88 @@ def test_gpu_async_renderer_queue_is_capacity_one_latest_wins(qapp, monkeypatch)
         assert stats["stale_frames_dropped"] == 1
     finally:
         unblock.set()
+        renderer.stop()
+
+
+def test_gpu_native_preview_presents_without_shared_memory_or_qimage(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.models import Style, TimingTrack
+
+    presented_calls: list[tuple[int, dict]] = []
+    presented_signal: list[int] = []
+    finished = threading.Event()
+
+    class FakeGpuProcess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return {"ok": True, "event": "ready", "native_preview_protocol": 1}
+
+        def configure_gpu(self, *args, **kwargs):
+            return {"ok": True, "event": "gpu_configured", "native_preview": True}
+
+        def present_gpu_frame(self, t_ms, **kwargs):
+            presented_calls.append((int(t_ms), dict(kwargs)))
+            finished.set()
+            return {
+                "ok": True,
+                "event": "gpu_frame_presented",
+                "t_ms": int(t_ms),
+                "render_ms": 1.25,
+                "present_ms": 0.2,
+                "readback_ms": 0.0,
+                "transport": "direct_composition",
+            }
+
+        def render_gpu_frame(self, *args, **kwargs):
+            raise AssertionError("G6 native preview must not use shared-memory readback")
+
+        def close(self):
+            pass
+
+    class UnexpectedReader:
+        @classmethod
+        def from_event(cls, event):
+            raise AssertionError("G6 native preview must not construct a QImage reader")
+
+    monkeypatch.setattr(pa, "gpu_native_preview_enabled", lambda: True)
+    monkeypatch.setattr(pa, "NativeRendererProcess", FakeGpuProcess)
+    monkeypatch.setattr(pa, "SharedFrameRingReader", UnexpectedReader)
+    renderer = pa.GpuAsyncSubtitleRenderer(320, 180)
+    renderer.frame_presented.connect(presented_signal.append)
+    try:
+        renderer.set_native_target(12345, -10, 5, 320, 180)
+        renderer.set_state(TimingTrack(), Style())
+        renderer.request(1_000)
+        assert finished.wait(timeout=2.0)
+        deadline = time.monotonic() + 2.0
+        while not presented_signal and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+
+        assert presented_signal == [1_000]
+        assert presented_calls == [
+            (
+                1_000,
+                {
+                    "parent_hwnd": 12345,
+                    "x": -10,
+                    "y": 5,
+                    "width": 320,
+                    "height": 180,
+                    "force_warp": False,
+                    "generation": 1,
+                    "frame_index": 0,
+                },
+            )
+        ]
+        timings = renderer.timing_snapshot()
+        assert timings["render_ms"]["mean"] == 1.25
+        assert timings["present_ms"]["mean"] == 0.2
+        assert timings["readback_ms"]["mean"] == 0.0
+        assert renderer.stats_snapshot()["max_pending"] == 1
+    finally:
         renderer.stop()
 
 

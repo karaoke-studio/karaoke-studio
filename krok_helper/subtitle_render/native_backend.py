@@ -716,6 +716,41 @@ class NativeRendererProcess:
         self._send(payload)
         return self._expect_ok(self._read_response())
 
+    def present_gpu_frame(
+        self,
+        t_ms: int,
+        *,
+        parent_hwnd: int,
+        x: int,
+        y: int,
+        width: int,
+        height: int,
+        force_warp: bool = False,
+        generation: int = 0,
+        frame_index: int = 0,
+    ) -> dict[str, Any]:
+        """Present one GPU frame in a DirectComposition child HWND without readback."""
+        self._send(
+            {
+                "cmd": "gpu_present_frame",
+                "t_ms": int(t_ms),
+                "force_warp": bool(force_warp),
+                "generation": int(generation),
+                "frame_index": int(frame_index),
+                "parent_hwnd": str(int(parent_hwnd)),
+                "x": int(x),
+                "y": int(y),
+                "width": int(width),
+                "height": int(height),
+            }
+        )
+        return self._expect_ok(self._read_response())
+
+    def close_gpu_preview(self, *, force_warp: bool = False) -> dict[str, Any]:
+        """Destroy the sidecar-owned native preview child window."""
+        self._send({"cmd": "gpu_preview_close", "force_warp": bool(force_warp)})
+        return self._expect_ok(self._read_response())
+
     def gpu_diagnostics(self, *, force_warp: bool = False) -> dict[str, Any]:
         """Read cache and DXGI memory counters without entering the frame hot path."""
         self._send({"cmd": "gpu_diagnostics", "force_warp": bool(force_warp)})

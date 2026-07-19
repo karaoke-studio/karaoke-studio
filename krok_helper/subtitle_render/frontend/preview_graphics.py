@@ -32,6 +32,7 @@ from krok_helper.subtitle_render.frontend.preview_async import (
     async_preview_enabled,
     gpu_preview_enabled,
     native_preview_enabled,
+    preview_render_target_size,
 )
 from krok_helper.subtitle_render.frontend.preview_media import qt_playback_source
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
@@ -264,6 +265,7 @@ class PreviewGraphicsView(QGraphicsView):
             self._async_renderer.frame_ready.connect(
                 self._on_async_frame, Qt.ConnectionType.QueuedConnection
             )
+            self._connect_native_preview_signal()
             self._connect_gpu_fallback_signal()
             self._subtitle_item.set_async_mode(True)
             self._refresh_async_target()
@@ -324,6 +326,7 @@ class PreviewGraphicsView(QGraphicsView):
         self._async_renderer.frame_ready.connect(
             self._on_async_frame, Qt.ConnectionType.QueuedConnection
         )
+        self._connect_native_preview_signal()
         self._connect_gpu_fallback_signal()
         self._subtitle_item.set_async_mode(True)
         if hasattr(self._async_renderer, "set_playing"):
@@ -335,6 +338,14 @@ class PreviewGraphicsView(QGraphicsView):
         signal = getattr(self._async_renderer, "fallback_occurred", None)
         if signal is not None:
             signal.connect(self.gpuFallback.emit, Qt.ConnectionType.QueuedConnection)
+
+    def _connect_native_preview_signal(self) -> None:
+        signal = getattr(self._async_renderer, "frame_presented", None)
+        if signal is not None:
+            signal.connect(
+                self._on_native_frame_presented,
+                Qt.ConnectionType.QueuedConnection,
+            )
 
     def set_time(self, t_ms: int) -> None:
         self._t_ms = t_ms
@@ -360,6 +371,14 @@ class PreviewGraphicsView(QGraphicsView):
             if tolerance <= 0 or abs(int(t_ms) - int(self._t_ms)) > tolerance:
                 return
         self._subtitle_item.set_async_image(image)
+
+    def _on_native_frame_presented(self, t_ms: int) -> None:
+        if int(t_ms) != int(self._t_ms):
+            tolerance = _ASYNC_PLAYBACK_STALE_TOLERANCE_MS if self._video_playing else 0
+            if tolerance <= 0 or abs(int(t_ms) - int(self._t_ms)) > tolerance:
+                return
+        self._subtitle_item.clear_async_image()
+        self.framePainted.emit()
 
     def set_output_size(self, width: int, height: int) -> None:
         w = max(int(width), 1)
@@ -413,11 +432,29 @@ class PreviewGraphicsView(QGraphicsView):
     def _refresh_async_target(self) -> None:
         if self._async_renderer is None:
             return
+        render_dpr = self._scene_device_pixel_ratio()
         self._async_renderer.set_render_target(
             self._output_w,
             self._output_h,
-            self._scene_device_pixel_ratio(),
+            render_dpr,
         )
+        if getattr(self._async_renderer, "uses_native_preview", False):
+            viewport = self.viewport()
+            viewport.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+            mapped_scene = self.mapFromScene(self._scene.sceneRect()).boundingRect()
+            screen_dpr = max(float(viewport.devicePixelRatioF() or 1.0), 0.01)
+            physical_w, physical_h, _ = preview_render_target_size(
+                self._output_w,
+                self._output_h,
+                render_dpr,
+            )
+            self._async_renderer.set_native_target(
+                int(viewport.winId()),
+                int(round(mapped_scene.left() * screen_dpr)),
+                int(round(mapped_scene.top() * screen_dpr)),
+                physical_w,
+                physical_h,
+            )
         self._async_renderer.request(self._t_ms)
 
     def _stop_async_renderer(self) -> None:

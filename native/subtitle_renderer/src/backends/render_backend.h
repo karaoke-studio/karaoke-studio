@@ -25,6 +25,21 @@ struct BackendCaps {
     bool supportsTransparentSurface = false;
     bool supportsStagingReadback = false;
     bool supportsGlyphs = false;
+    bool supportsNativePreview = false;
+};
+
+struct NativePreviewTarget {
+    std::uintptr_t parentWindow = 0;
+    int x = 0;
+    int y = 0;
+    int width = 0;
+    int height = 0;
+};
+
+struct NativePreviewResult {
+    double renderMs = 0.0;
+    double presentMs = 0.0;
+    std::uintptr_t childWindow = 0;
 };
 
 struct ProbeOptions {
@@ -327,6 +342,11 @@ public:
     virtual BackendDiagnostics diagnostics() const = 0;
     virtual void configure(const RenderScene &scene) = 0;
     virtual ProbeResult renderFrame(int tMs, bool compactBands = false) = 0;
+    virtual NativePreviewResult presentFrame(
+        int tMs,
+        const NativePreviewTarget &target
+    ) = 0;
+    virtual void closeNativePreview() = 0;
 };
 
 }  // namespace krok::subtitle::native

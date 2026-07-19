@@ -2308,6 +2308,14 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
 }
 
 ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
+    return renderFrameInternal(tMs, compactBands, true);
+}
+
+ProbeResult Direct2DGpuBackend::renderFrameInternal(
+    int tMs,
+    bool compactBands,
+    bool readback
+) {
     if (!impl_->configured) {
         throw BackendError("GPU backend is not configured");
     }
@@ -2330,7 +2338,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         96.0f,
         96.0f
     );
-    if (!impl_->frameTargetTexture || !impl_->frameTargetBitmap || !impl_->frameStagingTexture) {
+    if (!impl_->frameTargetTexture || !impl_->frameTargetBitmap) {
         checkHr(
             device_.d3dDevice()->CreateTexture2D(
                 &targetDesc,
@@ -2355,6 +2363,8 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             "ID2D1DeviceContext::CreateBitmapFromDxgiSurface(frame)",
             device_
         );
+    }
+    if (readback && !impl_->frameStagingTexture) {
         D3D11_TEXTURE2D_DESC stagingDesc = targetDesc;
         stagingDesc.Usage = D3D11_USAGE_STAGING;
         stagingDesc.BindFlags = 0;
@@ -5202,6 +5212,16 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
     context->SetTransform(D2D1::Matrix3x2F::Identity());
     const double renderMs = elapsedMs(renderStart);
 
+    if (!readback) {
+        ProbeResult result;
+        result.renderMs = renderMs;
+        result.surface.width = scene.width;
+        result.surface.height = scene.height;
+        result.surface.stride = scene.width * 4;
+        result.surface.pixelFormat = PixelFormat::Bgra8888Premultiplied;
+        return result;
+    }
+
     const auto readbackStart = Clock::now();
     ID3D11Texture2D *stagingTexture = impl_->frameStagingTexture.Get();
     std::vector<std::pair<int, int>> mergedIntervals;
@@ -5291,6 +5311,24 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
     device_.d3dContext()->Unmap(stagingTexture, 0);
     result.readbackMs = elapsedMs(readbackStart);
     return result;
+}
+
+NativePreviewResult Direct2DGpuBackend::presentFrame(
+    int tMs,
+    const NativePreviewTarget &target
+) {
+    const auto rendered = renderFrameInternal(tMs, false, false);
+    return previewSurface_.present(
+        device_.d3dDevice(),
+        device_.d3dContext(),
+        impl_->frameTargetTexture.Get(),
+        rendered.renderMs,
+        target
+    );
+}
+
+void Direct2DGpuBackend::closeNativePreview() {
+    previewSurface_.close();
 }
 
 }  // namespace krok::subtitle::native

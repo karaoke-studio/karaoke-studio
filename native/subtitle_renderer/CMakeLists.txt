@@ -33,6 +33,8 @@ add_executable(krok_subtitle_renderer
     src/backends/direct2d/d2d_backend.h
     src/backends/direct2d/d2d_device.cpp
     src/backends/direct2d/d2d_device.h
+    src/backends/direct2d/native_preview_surface.cpp
+    src/backends/direct2d/native_preview_surface.h
 )
 
 target_link_libraries(krok_subtitle_renderer
@@ -54,6 +56,7 @@ if(WIN32)
             d2d1
             d3d11
             dwrite
+            dcomp
             dxgi
             ole32
             windowscodecs

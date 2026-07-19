@@ -2,6 +2,7 @@
 
 #include "../render_backend.h"
 #include "d2d_device.h"
+#include "native_preview_surface.h"
 
 #include <memory>
 
@@ -17,11 +18,19 @@ public:
     ProbeResult renderProbe(const ProbeOptions &options) override;
     void configure(const RenderScene &scene) override;
     ProbeResult renderFrame(int tMs, bool compactBands = false) override;
+    NativePreviewResult presentFrame(
+        int tMs,
+        const NativePreviewTarget &target
+    ) override;
+    void closeNativePreview() override;
 
 private:
+    ProbeResult renderFrameInternal(int tMs, bool compactBands, bool readback);
+
     struct Impl;
     D2DDevice device_;
     std::unique_ptr<Impl> impl_;
+    NativePreviewSurface previewSurface_;
 };
 
 }  // namespace krok::subtitle::native

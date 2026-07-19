@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import multiprocessing as mp
+import threading
+import time
 
 
 def _square(value: int) -> int:
@@ -18,8 +20,8 @@ def run_spawn_smoke() -> int:
 
 
 def run_gpu_subtitle_smoke() -> int:
-    """Exercise the bundled Direct2D sidecar and shared-memory band readback."""
-    from PyQt6.QtWidgets import QApplication
+    """Exercise bundled Direct2D G5 readback and G6 native presentation."""
+    from PyQt6.QtWidgets import QApplication, QWidget
 
     from krok_helper.subtitle_render.models import (
         Style,
@@ -51,6 +53,8 @@ def run_gpu_subtitle_smoke() -> int:
         info = renderer.backend_info(force_warp=True)
         if not info.get("available") or not info.get("warp"):
             return 2
+        if not info.get("native_preview"):
+            return 5
         renderer.configure_gpu(
             track,
             style,
@@ -72,5 +76,61 @@ def run_gpu_subtitle_smoke() -> int:
         bits = image.constBits()
         bits.setsize(image.sizeInBytes())
         result = 0 if any(bits[index] for index in range(3, len(bits), 4)) else 4
+    if result != 0:
+        return result
+
+    parent = QWidget()
+    parent.resize(320, 180)
+    parent.show()
     app.processEvents()
-    return result
+    parent_hwnd = int(parent.winId())
+    native_result: dict[str, object] = {}
+
+    def present_native() -> None:
+        try:
+            with NativeRendererProcess(response_timeout_s=20.0) as renderer:
+                renderer.configure_gpu(
+                    track,
+                    style,
+                    width=320,
+                    height=180,
+                    fps=60,
+                    force_warp=True,
+                )
+                native_result["event"] = renderer.present_gpu_frame(
+                    500,
+                    parent_hwnd=parent_hwnd,
+                    x=0,
+                    y=0,
+                    width=320,
+                    height=180,
+                    force_warp=True,
+                )
+                native_result["closed"] = renderer.close_gpu_preview(force_warp=True)
+        except BaseException as exc:  # pragma: no cover - packaged diagnostic path
+            native_result["error"] = exc
+
+    worker = threading.Thread(target=present_native, name="package-g6-preview-smoke")
+    worker.start()
+    deadline = time.monotonic() + 30.0
+    while worker.is_alive() and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.005)
+    worker.join(timeout=1.0)
+    parent.close()
+    parent.deleteLater()
+    app.processEvents()
+    if worker.is_alive() or "error" in native_result:
+        return 6
+    event = native_result.get("event")
+    closed = native_result.get("closed")
+    if not isinstance(event, dict) or not isinstance(closed, dict):
+        return 7
+    if (
+        event.get("event") != "gpu_frame_presented"
+        or event.get("transport") != "direct_composition"
+        or float(event.get("readback_ms", -1.0)) != 0.0
+        or closed.get("event") != "gpu_preview_closed"
+    ):
+        return 8
+    return 0

@@ -1,6 +1,6 @@
 # 字幕渲染 GPU 后端：NicoKaraMaker3 逆向结论与实施计划
 
-> 状态：G0/G1 已完成，G2 实验预览接线进行中
+> 状态：G0～G5 已完成；G6 DirectComposition 原生预览首批已完成，仍为实验/默认关闭
 > 最后更新：2026-07-19  
 > 逆向基准：NicoKaraMaker3 10.74.80.0 x64  
 > 产品基线：Python QPainter 仍是唯一正式字幕渲染路径；本文不改变当前产品开关
@@ -31,10 +31,10 @@
   D3D11 shared texture / 原生 SwapChain 零回读预览。
 - 正式产品默认不开启 GPU；只有达到本文验收门槛并完成显卡矩阵验证后，才讨论默认开关。
 
-### 0.2 当前没有做的事情
+### 0.2 当前仍未完成的事情
 
-- 尚未把 Direct2D backend 接入正式 Render IR、预览/导出选择逻辑或产品设置项；
-- 尚未修改 Python 预览/导出选择逻辑；
+- G6 原生预览尚未默认启用，也未替代 G5 的 shared-memory/QImage 回读 fallback；
+- 尚未完成 AMD/Intel、多显示器/DPR 切换、真实 device-removed 与 30 分钟视频播放矩阵；
 - 尚未承诺 GPU 与 CPU 逐像素完全一致；
 - 尚未改变“QPainter 离屏 + ffmpeg rawvideo pipe”为当前唯一正式路径的产品事实；
 - 尚未选择跨平台 GPU 方案；首期明确 Windows-only，macOS 继续 CPU。
@@ -581,6 +581,24 @@ LayerKey(fill/stroke/glow/state) -> reusable GPU bitmap/effect input
 
 目标是去掉 G2 的 GPU readback/QImage blit，接近 N3 的 SwapChain 路径。必须单独立项，因为它会涉及
 PyQt/native HWND、Qt Multimedia、统一视频时钟和 teardown，不是 Direct2D 字幕 backend 的必要前置。
+
+首批实现采用 **sidecar-owned DirectComposition child HWND**：Qt viewport 只提供父 HWND 与物理几何，
+Direct2D frame target 通过同一 D3D11 device GPU→GPU copy 到 premultiplied composition swap chain，
+不经过 staging texture、shared memory 或 QImage。现有统一播放器/音频时钟仍是唯一时间源，Python 每个
+tick 只提交最新 `t_ms`。使用 `KROK_SUBTITLE_GPU_NATIVE_PREVIEW=1` 显式启用；GPU 产品开关和该环境
+变量均未开启时，正式路径不变。
+
+首批验收覆盖：
+
+- 跨进程父子 HWND、resize、负坐标裁切、透明 premultiplied swap chain 与显式 teardown；
+- 单在途 + 单 pending latest-wins；原生呈现不创建 shared-memory reader/QImage；
+- sidecar kill 后 Painter 当前帧回退、一秒有界冷却、GPU device/window/cache 重建；
+- GPU↔Painter 重复切换不遗留 worker/child HWND；
+- 独立记录 render/present/roundtrip，原生路径 `readback_ms` 必须恒为 0。
+
+剩余验收：真实视频 30 分钟连续播放、多显示器/DPR/最小化恢复、AMD/Intel、真实 device removed/reset，
+以及复杂 Utopia/signal/viewport 组合的 render-core 优化。G6 只移除了回读/QImage 瓶颈，不会掩盖复杂
+场景本身超过帧预算的问题。
 
 ---
 
@@ -1537,3 +1555,30 @@ G5 产品接入与 Windows 分发链路至此具备可验收形态，开关仍�
 - 结论：G0～G5 的功能、产品回退和分发链路已完成，但 1080p120、4K60 和重组合尚未达到默认启用门槛。瓶颈已主要落在 staging readback、IPC 和 QImage，而非 Direct2D 字形绘制；因此不再继续以迁移更多绘制功能掩盖瓶颈。GPU 保持实验/默认关闭，Painter 永久保留。若继续追求这些档位，应单独启动 G6 的 D3D 共享纹理/原生 HWND 预览设计与真实视频时钟验收，不能在本批中冒险塞入产品路径。
 
 稳定性自动回归目前为 transport `73 passed`；G6 共享纹理属于新的高风险架构项目，不因 G0～G5 完成而自动授权或默认开启。
+
+### 2026-07-19（第四十一批）：G6 DirectComposition 原生预览首批
+
+- sidecar 新增 `NativePreviewSurface`：在 Qt viewport 的父 HWND 下创建无输入、透明的 child HWND，使用
+  premultiplied `CreateSwapChainForComposition` + DirectComposition visual 呈现。Direct2D frame target 与
+  swap-chain back buffer 在同一 D3D11 device 内 `CopyResource`，`gpu_present_frame` 不创建 staging texture、
+  shared-memory slot 或 QImage；`gpu_preview_close` 显式销毁 visual、swap chain 和 child HWND。
+- Python `GpuAsyncSubtitleRenderer` 新增 G6 模式，仍维持单在途 + 单 pending latest-wins。Qt GUI 线程只解析
+  viewport 父 HWND、scene 裁切后的物理几何与 DPR，worker 继续消费统一播放器/音频时钟给出的 `t_ms`。
+  native 帧通过 `frame_presented` 计数，Painter fallback 仍通过原有 `frame_ready(QImage)` 交付；实验入口为
+  `KROK_SUBTITLE_GPU_NATIVE_PREVIEW=1`，产品 GPU 开关仍默认关闭。
+- 自动门槛新增：协议能力、父子 HWND/尺寸/销毁、零 readback、无 shared-memory reader/QImage、resize、seek、
+  style churn、GPU↔Painter teardown。`scripts/benchmark_gpu_preview_scheduler.py --native-preview` 可输出
+  `render/present/readback/roundtrip`，并复用 `--kill-sidecar` 与慢帧自愈注入。
+- Windows onedir 完整构建通过；成包 `--package-gpu-smoke` 现同时实测 G5 packed-band 回读与 G6 WARP
+  DirectComposition child HWND 创建/呈现/关闭，而不只检查 capability。Direct2D GPU + transport 回归为
+  `201 passed, 1 skipped`，真实 windows-platform G6 冒烟另为 `1 passed`。
+- WARP 故障门禁（640×360、60fps）覆盖 60 帧播放、20 次 seek、2 次 resize、2 次 style churn、sidecar kill
+  和 100ms 慢帧：播放 `60/60`，`max_pending=1`，kill 后 Painter 回退并在 `72.389ms` 重建 GPU；慢帧释放后
+  `119.042ms` 交付最新帧；render/present p95 `1.80/0.25ms`，readback 全程 `0`。
+- RTX 3070 Ti 常用单行 glow 原生预览门槛：4K60 连续 300 帧交付 `300/300`，render/present/roundtrip p95
+  `4.43/0.10/5.01ms`；1080p120 连续 600 帧交付 `600/600`，p95 `4.19/0.10/4.73ms`；两组均无 stale、
+  failure 或 fallback。相比 G5 的 4K60 roundtrip p95 `20.84ms`，G6 已确认移除 staging/readback/QImage
+  瓶颈，但复杂 Utopia/signal/viewport 组合仍需继续优化 Direct2D render core。
+
+G6 首批架构与本机性能门槛已落地，仍不得默认开启。下一批继续做真实视频 30 分钟播放、多显示器/DPR/
+最小化恢复、真实 device removed/reset，以及 AMD/Intel 矩阵；Painter 永久保留为 oracle/fallback。

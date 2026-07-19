@@ -14,7 +14,7 @@ import random
 import sys
 import time
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QWidget
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -57,6 +57,11 @@ def main() -> int:
     parser.add_argument("--fps", type=int, default=60)
     parser.add_argument("--duration", type=float, default=10.0)
     parser.add_argument("--force-warp", action="store_true")
+    parser.add_argument(
+        "--native-preview",
+        action="store_true",
+        help="Use the G6 DirectComposition child HWND instead of readback/QImage.",
+    )
     parser.add_argument("--glow", action="store_true")
     parser.add_argument("--seek-burst", type=int, default=0)
     parser.add_argument("--resize-churn", type=int, default=0)
@@ -75,7 +80,14 @@ def main() -> int:
     parser.add_argument("--output", type=Path, default=Path("build/gpu-preview-benchmark.csv"))
     args = parser.parse_args()
 
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    if args.native_preview:
+        if os.name != "nt":
+            parser.error("--native-preview is Windows-only")
+        os.environ.setdefault("QT_QPA_PLATFORM", "windows")
+        os.environ["KROK_SUBTITLE_GPU_NATIVE_PREVIEW"] = "1"
+    else:
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        os.environ["KROK_SUBTITLE_GPU_NATIVE_PREVIEW"] = "0"
     os.environ["KROK_SUBTITLE_GPU_FORCE_WARP"] = "1" if args.force_warp else "0"
     app = QApplication.instance() or QApplication([])
     slow_state: dict[str, float | bool] = {
@@ -92,6 +104,13 @@ def main() -> int:
                     time.sleep(slow_frame_ms / 1000.0)
                     slow_state["released_at"] = time.monotonic()
                 return super().render_gpu_frame(*render_args, **render_kwargs)
+
+            def present_gpu_frame(self, *render_args, **render_kwargs):
+                if slow_state["armed"] and not slow_state["consumed"]:
+                    slow_state["consumed"] = True
+                    time.sleep(slow_frame_ms / 1000.0)
+                    slow_state["released_at"] = time.monotonic()
+                return super().present_gpu_frame(*render_args, **render_kwargs)
 
         preview_async_module.NativeRendererProcess = DelayedNativeRendererProcess
     duration_ms = max(int(args.duration * 1000), 1000)
@@ -114,13 +133,24 @@ def main() -> int:
         line_tail_ms=0,
     )
     renderer = GpuAsyncSubtitleRenderer(args.width, args.height)
+    native_host: QWidget | None = None
+    if args.native_preview:
+        native_host = QWidget()
+        native_host.setWindowTitle("Karaoke Studio G6 Preview Benchmark")
+        native_host.setStyleSheet("background: #101010")
+        native_host.resize(args.width, args.height)
+        native_host.show()
+        app.processEvents()
+        renderer.set_native_target(
+            int(native_host.winId()), 0, 0, args.width, args.height
+        )
     rows: list[dict[str, float | int | str]] = []
     delivered_at: dict[int, float] = {}
     latest_requested = 0
     current_phase = "playback"
     start = time.monotonic()
 
-    def on_frame(_image, rendered_t_ms: int) -> None:
+    def note_frame(rendered_t_ms: int) -> None:
         delivered_at[int(rendered_t_ms)] = time.monotonic()
         now_ms = (time.monotonic() - start) * 1000.0
         rows.append(
@@ -133,7 +163,8 @@ def main() -> int:
             }
         )
 
-    renderer.frame_ready.connect(on_frame)
+    renderer.frame_ready.connect(lambda _image, rendered_t_ms: note_frame(rendered_t_ms))
+    renderer.frame_presented.connect(note_frame)
     try:
         renderer.set_state(track, style)
         # Real preview configures and shows a paused frame before playback.
@@ -182,6 +213,12 @@ def main() -> int:
             current_phase = "resize"
             width, height = ((1280, 720) if index % 2 == 0 else (args.width, args.height))
             renderer.set_render_target(width, height, 1.0)
+            if native_host is not None:
+                native_host.resize(width, height)
+                app.processEvents()
+                renderer.set_native_target(
+                    int(native_host.winId()), 0, 0, width, height
+                )
             latest_requested = (index * 97) % duration_ms
             before = len(rows)
             renderer.request(latest_requested)
@@ -309,6 +346,10 @@ def main() -> int:
             }
     finally:
         renderer.stop()
+        if native_host is not None:
+            native_host.close()
+            native_host.deleteLater()
+            app.processEvents()
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", encoding="utf-8", newline="") as handle:
@@ -327,6 +368,7 @@ def main() -> int:
     delivered_by_phase = Counter(str(row["phase"]) for row in rows)
     summary = {
         "requested_playback_frames": frame_count,
+        "transport": "direct_composition" if args.native_preview else "shared_memory_qimage",
         "delivered_frames": len(rows),
         "delivered_by_phase": dict(delivered_by_phase),
         "playback_delivery_rate": delivered_by_phase.get("playback", 0) / frame_count,
