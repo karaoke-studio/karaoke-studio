@@ -75,6 +75,7 @@ struct RubyAnnotation {
     QString kanji;
     QString reading;
     std::vector<int> readingPartMs;
+    std::vector<QString> readingParts;
     int posStartMs = 0;
     int posEndMs = 0;
 };
@@ -146,7 +147,21 @@ struct ResolvedStyle {
     int shadowOffsetX = 0;
     int shadowOffsetY = 1;
     int rubyFontSizePx = 30;
+    QString rubyFontFamily;
+    QString rubyFontFamilyLatin;
+    std::optional<int> rubyFontWeight;
+    std::optional<int> rubyLatinFontSizePx;
+    std::optional<int> rubyLatinFontWeight;
+    bool rubyFontFollowMain = true;
     int rubyGapPx = 8;
+    int rubyIntervalPx = 0;
+    QString rubyAlignment = QStringLiteral("auto");
+    int rubyStrokeWidthPx = 0;
+    int rubyStroke2WidthPx = 0;
+    QString rubyDecorationKind;
+    int rubyGlowBeforeRadiusPx = 0;
+    int rubyGlowAfterRadiusPx = 0;
+    int rubyGlowConcentrationLevel = 0;
     bool hasMainKaraokeColors = false;
     bool hasRubyKaraokeColors = false;
 };
@@ -1288,7 +1303,80 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     base.shadowOffsetX = intValue(style, QStringLiteral("shadow_offset_x"), base.shadowOffsetX);
     base.shadowOffsetY = intValue(style, QStringLiteral("shadow_offset_y"), base.shadowOffsetY);
     base.rubyFontSizePx = std::max(1, intValue(style, QStringLiteral("ruby_font_size_px"), base.rubyFontSizePx));
-    base.rubyGapPx = std::max(0, intValue(style, QStringLiteral("ruby_gap_px"), base.rubyGapPx));
+    base.rubyFontFamily = stringValue(style, QStringLiteral("ruby_font_family"), base.rubyFontFamily);
+    base.rubyFontFamilyLatin = stringValue(
+        style, QStringLiteral("ruby_font_family_latin"), base.rubyFontFamilyLatin
+    );
+    if (style.value(QStringLiteral("ruby_font_weight")).isDouble()) {
+        base.rubyFontWeight = std::clamp(
+            intValue(style, QStringLiteral("ruby_font_weight"), base.fontWeight), 1, 999
+        );
+    }
+    if (style.value(QStringLiteral("ruby_latin_font_size_px")).isDouble()) {
+        base.rubyLatinFontSizePx = std::max(
+            1, intValue(style, QStringLiteral("ruby_latin_font_size_px"), base.rubyFontSizePx)
+        );
+    }
+    if (style.value(QStringLiteral("ruby_latin_font_weight")).isDouble()) {
+        base.rubyLatinFontWeight = std::clamp(
+            intValue(style, QStringLiteral("ruby_latin_font_weight"), base.fontWeight), 1, 999
+        );
+    }
+    base.rubyFontFollowMain = style.value(QStringLiteral("ruby_font_follow_main")).isBool()
+        ? style.value(QStringLiteral("ruby_font_follow_main")).toBool()
+        : base.rubyFontFollowMain;
+    base.rubyGapPx = intValue(style, QStringLiteral("ruby_gap_px"), base.rubyGapPx);
+    base.rubyIntervalPx = intValue(style, QStringLiteral("ruby_interval_px"), base.rubyIntervalPx);
+    base.rubyAlignment = stringValue(
+        style, QStringLiteral("ruby_alignment"), base.rubyAlignment
+    );
+    if (base.rubyAlignment != QStringLiteral("center")
+        && base.rubyAlignment != QStringLiteral("equal_space")) {
+        base.rubyAlignment = QStringLiteral("auto");
+    }
+    const double rubyScale = static_cast<double>(base.rubyFontSizePx)
+        / static_cast<double>(std::max(base.fontSizePx, 1));
+    base.rubyStrokeWidthPx = style.value(QStringLiteral("ruby_stroke_width_px")).isDouble()
+        ? std::max(0, intValue(style, QStringLiteral("ruby_stroke_width_px"), 0))
+        : std::max(0, static_cast<int>(std::lround(base.strokeWidthPx * rubyScale)));
+    const bool rubyStroke2Enabled = style.value(QStringLiteral("ruby_stroke2_enabled")).isBool()
+        ? style.value(QStringLiteral("ruby_stroke2_enabled")).toBool()
+        : base.stroke2WidthPx > 0;
+    base.rubyStroke2WidthPx = rubyStroke2Enabled
+        ? (
+            style.value(QStringLiteral("ruby_stroke2_width_px")).isDouble()
+                ? std::max(0, intValue(style, QStringLiteral("ruby_stroke2_width_px"), 0))
+                : std::max(0, static_cast<int>(std::lround(base.stroke2WidthPx * rubyScale)))
+        )
+        : 0;
+    base.rubyDecorationKind = stringValue(
+        style, QStringLiteral("ruby_decoration_kind"), base.decorationKind
+    );
+    auto rubyGlowRadius = [&](const QString &field, int mainValue) {
+        return style.value(field).isDouble()
+            ? std::max(0, intValue(style, field, 0))
+            : std::max(0, static_cast<int>(std::lround(mainValue * rubyScale)));
+    };
+    const int rubyGlowCommon = style.value(QStringLiteral("ruby_glow_radius_px")).isDouble()
+        ? std::max(0, intValue(style, QStringLiteral("ruby_glow_radius_px"), 0))
+        : -1;
+    base.rubyGlowBeforeRadiusPx = style.value(QStringLiteral("ruby_glow_before_radius_px")).isDouble()
+        ? std::max(0, intValue(style, QStringLiteral("ruby_glow_before_radius_px"), 0))
+        : (rubyGlowCommon >= 0 ? rubyGlowCommon : rubyGlowRadius(
+            QStringLiteral("ruby_glow_before_radius_px"), base.glowBeforeRadiusPx
+        ));
+    base.rubyGlowAfterRadiusPx = style.value(QStringLiteral("ruby_glow_after_radius_px")).isDouble()
+        ? std::max(0, intValue(style, QStringLiteral("ruby_glow_after_radius_px"), 0))
+        : (rubyGlowCommon >= 0 ? rubyGlowCommon : rubyGlowRadius(
+            QStringLiteral("ruby_glow_after_radius_px"), base.glowAfterRadiusPx
+        ));
+    base.rubyGlowConcentrationLevel = style.value(
+        QStringLiteral("ruby_glow_concentration_level")
+    ).isDouble()
+        ? std::clamp(
+            intValue(style, QStringLiteral("ruby_glow_concentration_level"), 0), 0, 2
+        )
+        : base.glowConcentrationLevel;
     cfg.lineYMarginPx = std::max(0, intValue(style, QStringLiteral("line_y_margin_px"), cfg.lineYMarginPx));
     cfg.lineGapPx = std::max(0, intValue(style, QStringLiteral("line_gap_px"), cfg.lineGapPx));
     cfg.lineLeadInMs = std::max(0, intValue(style, QStringLiteral("line_lead_in_ms"), cfg.lineLeadInMs));
@@ -1383,6 +1471,13 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
         ruby.kanji = stringValue(rubyObject, QStringLiteral("kanji"));
         ruby.reading = stringValue(rubyObject, QStringLiteral("reading"));
         ruby.readingPartMs = parseIntArray(rubyObject.value(QStringLiteral("reading_part_ms")).toArray());
+        const QJsonArray readingParts = rubyObject.value(QStringLiteral("reading_parts")).toArray();
+        ruby.readingParts.reserve(static_cast<std::size_t>(readingParts.size()));
+        for (const auto &part : readingParts) {
+            if (part.isString()) {
+                ruby.readingParts.push_back(part.toString());
+            }
+        }
         ruby.posStartMs = intValue(rubyObject, QStringLiteral("pos_start_ms"), 0);
         ruby.posEndMs = intValue(rubyObject, QStringLiteral("pos_end_ms"), 0);
         cfg.rubies.push_back(ruby);
@@ -2748,25 +2843,67 @@ std::vector<QString> rubyUtopiaVisualUnits(const QString &text) {
     return units;
 }
 
+std::vector<std::pair<QString, std::pair<int, int>>> rubyProgressPartsAndIntervals(
+    const RubyAnnotation &ruby
+) {
+    QString joined;
+    for (const QString &part : ruby.readingParts) {
+        joined += part;
+    }
+    if (!ruby.readingParts.empty()
+        && ruby.readingParts.size() == ruby.readingPartMs.size() + 1
+        && joined == ruby.reading) {
+        std::vector<int> anchors{ruby.posStartMs};
+        for (int relativeMs : ruby.readingPartMs) {
+            const int timestamp = ruby.posStartMs + relativeMs;
+            anchors.push_back(std::max(
+                anchors.back(), std::min(ruby.posEndMs, timestamp)
+            ));
+        }
+        anchors.push_back(std::max(anchors.back(), ruby.posEndMs));
+        std::vector<std::pair<QString, std::pair<int, int>>> out;
+        out.reserve(ruby.readingParts.size());
+        for (std::size_t index = 0; index < ruby.readingParts.size(); ++index) {
+            out.push_back({
+                ruby.readingParts[index],
+                {anchors[index], anchors[index + 1]},
+            });
+        }
+        return out;
+    }
+    const auto units = rubyReadingUnits(ruby.reading);
+    const auto intervals = rubyReadingIntervals(ruby);
+    std::vector<std::pair<QString, std::pair<int, int>>> out;
+    const std::size_t count = std::min(units.size(), intervals.size());
+    out.reserve(count);
+    for (std::size_t index = 0; index < count; ++index) {
+        out.push_back({units[index], intervals[index]});
+    }
+    return out;
+}
+
 std::vector<std::pair<QString, std::pair<int, int>>> rubyUtopiaReadingUnitsAndIntervals(
     const RubyAnnotation &ruby
 ) {
-    const auto moraUnits = rubyReadingUnits(ruby.reading);
-    const auto moraIntervals = rubyReadingIntervals(ruby);
+    const auto parts = rubyProgressPartsAndIntervals(ruby);
     std::vector<std::pair<QString, std::pair<int, int>>> out;
-    const std::size_t count = std::min(moraUnits.size(), moraIntervals.size());
-    for (std::size_t i = 0; i < count; ++i) {
-        const auto visualUnits = rubyUtopiaVisualUnits(moraUnits[i]);
-        if (visualUnits.size() <= 1) {
-            out.push_back({moraUnits[i], moraIntervals[i]});
+    for (const auto &part : parts) {
+        const auto visualUnits = rubyUtopiaVisualUnits(part.first);
+        if (visualUnits.empty()) {
             continue;
         }
-        const int start = moraIntervals[i].first;
-        const int end = moraIntervals[i].second;
+        if (visualUnits.size() == 1) {
+            out.push_back({visualUnits.front(), part.second});
+            continue;
+        }
+        const int start = part.second.first;
+        const int end = part.second.second;
         const int duration = std::max(end - start, 0);
         for (std::size_t j = 0; j < visualUnits.size(); ++j) {
-            const int unitStart = start + static_cast<int>(std::round(duration * static_cast<double>(j) / visualUnits.size()));
-            const int unitEnd = start + static_cast<int>(std::round(duration * static_cast<double>(j + 1) / visualUnits.size()));
+            const int unitStart = start + duration * static_cast<int>(j)
+                / static_cast<int>(visualUnits.size());
+            const int unitEnd = start + duration * static_cast<int>(j + 1)
+                / static_cast<int>(visualUnits.size());
             out.push_back({visualUnits[j], {unitStart, std::max(unitStart, unitEnd)}});
         }
     }
@@ -5451,6 +5588,73 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
     scene.style.glowBeforeRadius = static_cast<float>(sourceStyle.glowBeforeRadiusPx * scale);
     scene.style.glowAfterRadius = static_cast<float>(sourceStyle.glowAfterRadiusPx * scale);
     scene.style.glowConcentrationLevel = sourceStyle.glowConcentrationLevel;
+    const bool rubyUsesMainFont = sourceStyle.rubyFontFollowMain
+        && sourceStyle.rubyFontFamily.isEmpty()
+        && sourceStyle.rubyFontFamilyLatin.isEmpty()
+        && !sourceStyle.rubyFontWeight.has_value()
+        && !sourceStyle.rubyLatinFontSizePx.has_value()
+        && !sourceStyle.rubyLatinFontWeight.has_value()
+        && sourceStyle.rubyFontSizePx == 45;
+    scene.style.rubyFontFamily = (
+        rubyUsesMainFont || sourceStyle.rubyFontFamily.isEmpty()
+            ? sourceStyle.fontFamily
+            : sourceStyle.rubyFontFamily
+    ).toStdWString();
+    const QString rubyLatinFamily = sourceStyle.rubyFontFamilyLatin.isEmpty()
+        ? (sourceStyle.fontFamilyLatin.isEmpty()
+            ? QString::fromStdWString(scene.style.rubyFontFamily)
+            : sourceStyle.fontFamilyLatin)
+        : sourceStyle.rubyFontFamilyLatin;
+    if (!rubyLatinFamily.isEmpty()) {
+        scene.style.rubyLatinFontFamily = rubyLatinFamily.toStdWString();
+    }
+    scene.style.rubyFontSize = static_cast<float>(sourceStyle.rubyFontSizePx * scale);
+    if (sourceStyle.rubyLatinFontSizePx.has_value()) {
+        scene.style.rubyLatinFontSize = static_cast<float>(
+            *sourceStyle.rubyLatinFontSizePx * scale
+        );
+    }
+    scene.style.rubyFontWeight = rubyUsesMainFont
+        ? sourceStyle.fontWeight
+        : sourceStyle.rubyFontWeight.value_or(sourceStyle.fontWeight);
+    scene.style.rubyLatinFontWeight = sourceStyle.rubyLatinFontWeight;
+    scene.style.rubyGap = static_cast<float>(sourceStyle.rubyGapPx * scale);
+    scene.style.rubyInterval = static_cast<float>(sourceStyle.rubyIntervalPx * scale);
+    scene.style.rubyAlignment = sourceStyle.rubyAlignment.toStdString();
+    scene.style.rubyBeforeFill = gpuColor(sourceStyle.rubyBaseFill.color, sourceStyle.rubyBaseColor);
+    scene.style.rubyAfterFill = gpuColor(sourceStyle.rubyAfterFill.color, sourceStyle.rubyFillColor);
+    scene.style.rubyBeforeStroke = gpuColor(
+        sourceStyle.rubyBeforeStrokeFill.color, sourceStyle.rubyBeforeStrokeColor
+    );
+    scene.style.rubyAfterStroke = gpuColor(
+        sourceStyle.rubyAfterStrokeFill.color, sourceStyle.rubyAfterStrokeColor
+    );
+    scene.style.rubyBeforeStroke2 = gpuColor(
+        sourceStyle.rubyBeforeStroke2Fill.color, sourceStyle.rubyBeforeStroke2Color
+    );
+    scene.style.rubyAfterStroke2 = gpuColor(
+        sourceStyle.rubyAfterStroke2Fill.color, sourceStyle.rubyAfterStroke2Color
+    );
+    scene.style.rubyBeforeDecor = gpuColor(
+        sourceStyle.rubyBeforeShadowFill.color, sourceStyle.rubyBeforeShadowColor
+    );
+    scene.style.rubyAfterDecor = gpuColor(
+        sourceStyle.rubyAfterShadowFill.color, sourceStyle.rubyAfterShadowColor
+    );
+    scene.style.rubyStrokeWidth = static_cast<float>(sourceStyle.rubyStrokeWidthPx * scale);
+    scene.style.rubyStroke2Width = static_cast<float>(sourceStyle.rubyStroke2WidthPx * scale);
+    scene.style.rubyDecorationKind = (
+        sourceStyle.rubyDecorationKind.isEmpty()
+            ? sourceStyle.decorationKind
+            : sourceStyle.rubyDecorationKind
+    ).toStdString();
+    scene.style.rubyGlowBeforeRadius = static_cast<float>(
+        sourceStyle.rubyGlowBeforeRadiusPx * scale
+    );
+    scene.style.rubyGlowAfterRadius = static_cast<float>(
+        sourceStyle.rubyGlowAfterRadiusPx * scale
+    );
+    scene.style.rubyGlowConcentrationLevel = sourceStyle.rubyGlowConcentrationLevel;
 
     scene.lines.reserve(config.lines.size());
     for (const TimingLine &sourceLine : config.lines) {
@@ -5467,6 +5671,47 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 sourceLine.chars[index].startMs + config.timingOffsetMs,
                 charEndMs(sourceLine, index) + config.timingOffsetMs,
             });
+        }
+        const auto intervals = lineIntervals(sourceLine);
+        const int sourceLineStart = lineStartMs(sourceLine);
+        const int sourceLineEnd = lineEndMs(sourceLine);
+        for (const RubyAnnotation &sourceRuby : config.rubies) {
+            const bool globalPosition = sourceRuby.posStartMs == 0 && sourceRuby.posEndMs == 0;
+            if (!globalPosition && (
+                sourceRuby.posEndMs < sourceLineStart || sourceRuby.posStartMs > sourceLineEnd
+            )) {
+                continue;
+            }
+            const auto targetIndices = rubyTargetIndices(sourceRuby, sourceLine, intervals);
+            if (targetIndices.empty()) {
+                continue;
+            }
+            const auto [minimum, maximum] = std::minmax_element(
+                targetIndices.begin(), targetIndices.end()
+            );
+            if (*minimum < 0 || *maximum >= static_cast<int>(sourceLine.chars.size())) {
+                continue;
+            }
+            const RubyAnnotation ruby = effectiveRubyForTarget(
+                sourceRuby, targetIndices, intervals
+            );
+            krok::subtitle::native::TextRuby sceneRuby;
+            sceneRuby.baseText = ruby.kanji.toStdWString();
+            sceneRuby.reading = ruby.reading.toStdWString();
+            sceneRuby.firstCharIndex = *minimum;
+            sceneRuby.lastCharIndex = *maximum;
+            sceneRuby.startMs = ruby.posStartMs + config.timingOffsetMs;
+            sceneRuby.endMs = ruby.posEndMs + config.timingOffsetMs;
+            for (const auto &unit : rubyUtopiaReadingUnitsAndIntervals(ruby)) {
+                sceneRuby.units.push_back(krok::subtitle::native::RubyUnit{
+                    unit.first.toStdWString(),
+                    unit.second.first + config.timingOffsetMs,
+                    unit.second.second + config.timingOffsetMs,
+                });
+            }
+            if (!sceneRuby.units.empty()) {
+                line.rubies.push_back(std::move(sceneRuby));
+            }
         }
         scene.lines.push_back(std::move(line));
     }
@@ -5520,6 +5765,7 @@ QJsonObject handleConfigureGpu(
         out.insert(QStringLiteral("cached_lines"), static_cast<qint64>(diagnostics.lineCount));
         out.insert(QStringLiteral("cached_chars"), static_cast<qint64>(diagnostics.charCount));
         out.insert(QStringLiteral("cached_geometries"), static_cast<qint64>(diagnostics.geometryCount));
+        out.insert(QStringLiteral("cached_rubies"), static_cast<qint64>(diagnostics.rubyCount));
         return out;
     } catch (const std::exception &exception) {
         QJsonObject out = response(false, QStringLiteral("gpu_configure"));

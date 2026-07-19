@@ -141,6 +141,7 @@ def test_build_render_ir_contains_screen_style_track_and_ruby():
                 kanji="君",
                 reading="きみ",
                 reading_part_ms=[100, 250],
+                reading_parts=["き", "", "み"],
                 pos_start_ms=100,
                 pos_end_ms=300,
             )
@@ -160,6 +161,7 @@ def test_build_render_ir_contains_screen_style_track_and_ruby():
     assert ir["track"]["lines"][0]["chars"][1]["pause_release_ms"] == 450
     assert ir["track"]["rubies"][0]["reading"] == "きみ"
     assert ir["track"]["rubies"][0]["reading_part_ms"] == [100, 250]
+    assert ir["track"]["rubies"][0]["reading_parts"] == ["き", "", "み"]
 
 
 def test_build_render_ir_clamps_screen_values():

@@ -14,7 +14,21 @@ from krok_helper.subtitle_render.native_backend import (
     SharedFrameRingReader,
     resolve_native_renderer_path,
 )
-from krok_helper.subtitle_render.models import Style, TimingChar, TimingLine, TimingTrack
+from krok_helper.subtitle_render.models import (
+    RubyAnnotation,
+    Style,
+    TimingChar,
+    TimingLine,
+    TimingTrack,
+    style_from_dict,
+)
+from krok_helper.subtitle_render.n3proj_import import load_n3proj
+from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
+
+
+DARK_SPIRAL_N3PROJ = (
+    Path.cwd().parent / "songs" / "Dark spiral journey" / "1.n3proj"
+)
 
 
 def test_shared_frame_reader_close_tolerates_deleted_qt_wrapper():
@@ -80,17 +94,48 @@ def _g1_style(**changes) -> Style:
     return replace(style, **changes)
 
 
+def _g3_ruby_track() -> TimingTrack:
+    return TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("漢", 0), TimingChar("字", 1_000)],
+                end_ms=2_000,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="漢字",
+                reading="かんじ",
+                reading_part_ms=[650, 1_300],
+                pos_start_ms=0,
+                pos_end_ms=2_000,
+                reading_parts=["か", "", "んじ"],
+            )
+        ],
+    )
+
+
 def _alpha_count(payload: bytes) -> int:
     return sum(alpha > 0 for alpha in payload[3::4])
 
 
 def _alpha_bounds(slot) -> tuple[int, int, int, int]:
+    return _payload_alpha_bounds(slot.payload, slot.width, slot.height, slot.stride)
+
+
+def _payload_alpha_bounds(
+    payload: bytes,
+    width: int = 640,
+    height: int = 360,
+    stride: int | None = None,
+) -> tuple[int, int, int, int]:
+    stride = stride or width * 4
     xs: list[int] = []
     ys: list[int] = []
-    for y in range(slot.height):
-        row = y * slot.stride
-        for x in range(slot.width):
-            if slot.payload[row + x * 4 + 3] > 0:
+    for y in range(height):
+        row = y * stride
+        for x in range(width):
+            if payload[row + x * 4 + 3] > 0:
                 xs.append(x)
                 ys.append(y)
     assert xs and ys
@@ -103,12 +148,15 @@ def _render_g1_frames(
     timestamps_ms: tuple[int, ...],
     *,
     force_warp: bool,
+    track: TimingTrack | None = None,
+    width: int = 640,
+    height: int = 360,
 ) -> tuple[dict, list[bytes]]:
     configured = renderer.configure_gpu(
-        _g1_track(),
+        track or _g1_track(),
         style,
-        width=640,
-        height=360,
+        width=width,
+        height=height,
         fps=60,
         force_warp=force_warp,
     )
@@ -134,7 +182,14 @@ def _render_g1_frames(
     return configured, frames
 
 
-def _render_painter_oracle(style: Style, *, t_ms: int = 750) -> bytes:
+def _render_painter_oracle(
+    style: Style,
+    *,
+    t_ms: int = 750,
+    track: TimingTrack | None = None,
+    width: int = 640,
+    height: int = 360,
+) -> bytes:
     from PyQt6.QtGui import QFontDatabase, QImage
     from PyQt6.QtWidgets import QApplication
 
@@ -149,10 +204,10 @@ def _render_painter_oracle(style: Style, *, t_ms: int = 750) -> bytes:
     # Load deterministic files that DirectWrite resolves to the same families.
     assert QFontDatabase.addApplicationFont(r"C:\Windows\Fonts\times.ttf") >= 0
     assert QFontDatabase.addApplicationFont(r"C:\Windows\Fonts\meiryo.ttc") >= 0
-    image = QImage(640, 360, QImage.Format.Format_RGBA8888)
+    image = QImage(width, height, QImage.Format.Format_RGBA8888)
     image.fill(0)
     clear_before_layer_cache()
-    paint_frame(image, _g1_track(), t_ms, style)
+    paint_frame(image, track or _g1_track(), t_ms, style)
     bits = image.constBits()
     bits.setsize(image.sizeInBytes())
     return bytes(bits)
@@ -416,6 +471,274 @@ def test_gpu_g1_n3_glow_concentration_adds_blur_passes(monkeypatch) -> None:
         for payload in high_frames
         for index in range(0, len(payload), 4)
     )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_ruby_has_independent_geometry_and_wipe(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _g1_style(
+        font_family="Meiryo",
+        base_color="#FFFFFF",
+        fill_color="#FFFFFF",
+        ruby_color="#FF2030",
+        ruby_font_size_px=36,
+        ruby_gap_px=4,
+        ruby_stroke_width_px=3,
+        ruby_stroke2_enabled=False,
+        decoration_kind="shadow",
+        shadow_color="#00000000",
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured, frames = _render_g1_frames(
+            renderer,
+            style,
+            (0, 700, 1_200, 2_000),
+            force_warp=True,
+            track=_g3_ruby_track(),
+        )
+
+    red_counts = [
+        sum(
+            payload[index] > 180
+            and payload[index + 1] < 100
+            and payload[index + 3] > 0
+            for index in range(0, len(payload), 4)
+        )
+        for payload in frames
+    ]
+    assert configured["cached_rubies"] == 1
+    assert configured["cached_chars"] == 5
+    assert red_counts[0] < red_counts[1] == red_counts[2] < red_counts[3]
+    assert len({_alpha_count(payload) for payload in frames}) == 1
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize(
+    ("ruby_alignment", "ruby_interval_px", "ruby_gap_px"),
+    [
+        ("auto", 0, 4),
+        ("center", 8, 4),
+        ("equal_space", -4, -4),
+    ],
+)
+def test_gpu_g3_ruby_layout_is_bounded_by_painter_oracle(
+    monkeypatch,
+    ruby_alignment: str,
+    ruby_interval_px: int,
+    ruby_gap_px: int,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _g1_style(
+        font_family="Meiryo",
+        base_color="#FFFFFF",
+        fill_color="#FFFFFF",
+        ruby_color="#FF2030",
+        ruby_font_size_px=36,
+        ruby_gap_px=ruby_gap_px,
+        ruby_interval_px=ruby_interval_px,
+        ruby_alignment=ruby_alignment,
+        ruby_stroke_width_px=3,
+        ruby_stroke2_enabled=False,
+        decoration_kind="shadow",
+        shadow_color="#00000000",
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer,
+            style,
+            (1_000,),
+            force_warp=True,
+            track=_g3_ruby_track(),
+        )
+    painter = _render_painter_oracle(style, t_ms=1_000, track=_g3_ruby_track())
+
+    gpu_bounds = _payload_alpha_bounds(gpu[0])
+    painter_bounds = _payload_alpha_bounds(painter)
+    assert all(
+        abs(actual - expected) <= 5
+        for actual, expected in zip(gpu_bounds, painter_bounds)
+    ), (gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.skipif(
+    not DARK_SPIRAL_N3PROJ.is_file(),
+    reason="Dark Spiral N3 reference project is unavailable",
+)
+def test_gpu_g3_real_n3_ruby_frame_is_bounded_by_painter_oracle(monkeypatch) -> None:
+    """Gate real N3 ruby segmentation while isolating later G3 features."""
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    project = load_n3proj(DARK_SPIRAL_N3PROJ)
+    source_track = load_nicokara_lrc(
+        DARK_SPIRAL_N3PROJ.with_name("Dark spiral journey.lrc")
+    )
+    line = source_track.lines[3]
+    line_start_ms = line.chars[0].start_ms
+    line_end_ms = line.end_ms or line_start_ms
+    track = TimingTrack(
+        meta=source_track.meta,
+        lines=[line],
+        rubies=[
+            ruby
+            for ruby in source_track.rubies
+            if ruby.pos_start_ms < line_end_ms and ruby.pos_end_ms > line_start_ms
+        ],
+    )
+
+    def solid(fill):
+        return replace(fill, mode="solid", gradient_stops=[])
+
+    def solid_state(state):
+        return replace(
+            state,
+            text=solid(state.text),
+            stroke=solid(state.stroke),
+            stroke2=solid(state.stroke2),
+            shadow=solid(state.shadow),
+        )
+
+    def solid_colors(colors):
+        return replace(
+            colors,
+            before=solid_state(colors.before),
+            after=solid_state(colors.after),
+        )
+
+    imported_style = style_from_dict(project.project_data["style"])
+    style = replace(
+        imported_style,
+        # The reference project's UD font is not installed on every test host.
+        # Meiryo keeps DirectWrite and QPainter on the same physical font while
+        # retaining the real N3 text, ruby parts, timings, sizes and effects.
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        ruby_font_family="Meiryo",
+        ruby_font_family_latin="Meiryo",
+        ruby_font_follow_main=False,
+        karaoke_colors=solid_colors(imported_style.karaoke_colors),
+        ruby_karaoke_colors=solid_colors(imported_style.ruby_karaoke_colors),
+        title_overlay=None,
+        custom_style_schemes={},
+        singer_style_overrides={},
+        dual_line_layout=False,
+        line_y_position="center",
+        line_horizontal_layout="center",
+        smart_horizontal="none",
+        line_alignments=["center"],
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        entry_anim="none",
+        exit_anim="none",
+    )
+    t_ms = 24_900
+    width, height = 1_920, 1_080
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=20.0) as renderer:
+        configured, gpu = _render_g1_frames(
+            renderer,
+            style,
+            (t_ms,),
+            force_warp=False,
+            track=track,
+            width=width,
+            height=height,
+        )
+    painter = _render_painter_oracle(
+        style,
+        t_ms=t_ms,
+        track=track,
+        width=width,
+        height=height,
+    )
+
+    assert configured["cached_rubies"] == 5
+    gpu_bounds = _payload_alpha_bounds(gpu[0], width, height)
+    painter_bounds = _payload_alpha_bounds(painter, width, height)
+    assert all(
+        abs(actual - expected) <= 7
+        for actual, expected in zip(gpu_bounds, painter_bounds)
+    ), (gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_ruby_uses_n3_multi_pass_glow(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    base = _g1_style(
+        font_family="Meiryo",
+        base_color="#FFFFFF",
+        fill_color="#FFFFFF",
+        ruby_color="#FF2030",
+        ruby_font_size_px=36,
+        ruby_gap_px=4,
+        ruby_stroke_width_px=3,
+        ruby_stroke2_enabled=False,
+        decoration_kind="shadow",
+        ruby_decoration_kind="glow",
+        shadow_color="#00FF40",
+        ruby_glow_before_radius_px=8,
+        ruby_glow_after_radius_px=8,
+        ruby_glow_concentration_level=0,
+    )
+    high = replace(base, ruby_glow_concentration_level=2)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, low_frames = _render_g1_frames(
+            renderer,
+            base,
+            (1_000,),
+            force_warp=True,
+            track=_g3_ruby_track(),
+        )
+        _, high_frames = _render_g1_frames(
+            renderer,
+            high,
+            (1_000,),
+            force_warp=True,
+            track=_g3_ruby_track(),
+        )
+
+    low_alpha = low_frames[0][3::4]
+    high_alpha = high_frames[0][3::4]
+    assert sum(high_alpha) > sum(low_alpha)
+    assert _alpha_count(high_frames[0]) >= _alpha_count(low_frames[0])
+    assert any(
+        payload[index + 1] > payload[index] + 20 and payload[index + 3] > 0
+        for payload in high_frames
+        for index in range(0, len(payload), 4)
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_ruby_uses_independent_before_and_after_glow_radii(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _g1_style(
+        font_family="Meiryo",
+        decoration_kind="shadow",
+        shadow_color="#00000000",
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        ruby_font_size_px=36,
+        ruby_stroke_width_px=3,
+        ruby_stroke2_enabled=False,
+        ruby_decoration_kind="glow",
+        ruby_glow_before_radius_px=2,
+        ruby_glow_after_radius_px=12,
+        ruby_glow_concentration_level=1,
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer,
+            style,
+            (0, 1_999),
+            force_warp=True,
+            track=_g3_ruby_track(),
+        )
+
+    before_alpha_mass = sum(frames[0][3::4])
+    after_alpha_mass = sum(frames[1][3::4])
+    assert after_alpha_mass > before_alpha_mass * 1.02
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

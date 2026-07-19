@@ -66,8 +66,27 @@ struct TextChar {
     bool operator==(const TextChar &) const = default;
 };
 
+struct RubyUnit {
+    std::wstring text;
+    int startMs = 0;
+    int endMs = 0;
+    bool operator==(const RubyUnit &) const = default;
+};
+
+struct TextRuby {
+    std::wstring baseText;
+    std::wstring reading;
+    std::vector<RubyUnit> units;
+    int firstCharIndex = 0;
+    int lastCharIndex = 0;
+    int startMs = 0;
+    int endMs = 0;
+    bool operator==(const TextRuby &) const = default;
+};
+
 struct TextLine {
     std::vector<TextChar> chars;
+    std::vector<TextRuby> rubies;
     int startMs = 0;
     int endMs = 0;
     bool operator==(const TextLine &) const = default;
@@ -107,6 +126,29 @@ struct TextStyle {
     float glowBeforeRadius = 10.0f;
     float glowAfterRadius = 10.0f;
     int glowConcentrationLevel = 0;
+    std::wstring rubyFontFamily;
+    std::optional<std::wstring> rubyLatinFontFamily;
+    float rubyFontSize = 45.0f;
+    std::optional<float> rubyLatinFontSize;
+    int rubyFontWeight = 400;
+    std::optional<int> rubyLatinFontWeight;
+    float rubyGap = 0.0f;
+    float rubyInterval = 0.0f;
+    std::string rubyAlignment = "auto";
+    RgbaColor rubyBeforeFill;
+    RgbaColor rubyAfterFill{255, 90, 111, 255};
+    RgbaColor rubyBeforeStroke{34, 34, 34, 255};
+    RgbaColor rubyAfterStroke{34, 34, 34, 255};
+    RgbaColor rubyBeforeStroke2{0, 0, 0, 255};
+    RgbaColor rubyAfterStroke2{0, 0, 0, 255};
+    RgbaColor rubyBeforeDecor{0, 0, 0, 255};
+    RgbaColor rubyAfterDecor{0, 0, 0, 255};
+    float rubyStrokeWidth = 0.0f;
+    float rubyStroke2Width = 0.0f;
+    std::string rubyDecorationKind = "none";
+    float rubyGlowBeforeRadius = 0.0f;
+    float rubyGlowAfterRadius = 0.0f;
+    int rubyGlowConcentrationLevel = 0;
     bool operator==(const TextStyle &) const = default;
 };
 
@@ -125,6 +167,7 @@ struct BackendDiagnostics {
     std::uint64_t lineCount = 0;
     std::uint64_t charCount = 0;
     std::uint64_t geometryCount = 0;
+    std::uint64_t rubyCount = 0;
 };
 
 class BackendError : public std::runtime_error {

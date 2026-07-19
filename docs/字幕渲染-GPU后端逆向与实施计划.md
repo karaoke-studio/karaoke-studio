@@ -1040,3 +1040,30 @@ NVIDIA/AMD/Intel 硬件矩阵。产品开关继续默认关闭，Painter 仍是 
 G2 的本机实现、NVIDIA 硬件、WARP、Painter fallback、kill/restart、200ms 慢帧与
 30 分钟真实 GUI 门禁已全部完成。AMD/Intel 矩阵属外部硬件验证，不阻塞进入 G3；
 产品 GPU 开关仍默认关闭，Painter 仍为 oracle 与 fallback。
+
+### 2026-07-19（第十一批）：G3 第一刀——ruby 布局、走字与独立发光
+
+- Render IR 为 ruby 增加原始 `reading_parts`，保留连续时间戳形成的空 part；native
+  侧据此复刻 Painter 的逐假名区间，空 part 期间 wipe 保持平台，不再把停顿错误均分进
+  相邻假名。
+- GPU scene 在 configure 阶段把 ruby 映射到正文目标字，分别缓存日文/英数字体的 N3
+  原生 glyph geometry、墨水边界、advance 与计时区间；支持
+  `auto/center/equal_space` 排列、`ruby_interval_px`、独立字号/字重/间距与拉丁字体。
+- ruby 基线按正文 N3 box ascent、ruby box descent 与 `ruby_gap_px` 计算；lane 顶部范围
+  把 ruby 纳入，避免居中/顶端布局时正文正确而 ruby 越界。
+- sharp 层已覆盖 ruby before/after fill、stroke、严格受开关约束的 stroke2 与独立 wipe；
+  glow 层把 before/after 轮廓先分别裁切再按各自半径模糊，支持三档 concentration 和
+  N3 多 pass 顺序，不借用正文进度；不同前后半径有独立自动门禁。
+- 合成与真实工程的 Painter oracle 均已进入自动门禁：合成 Meiryo 帧四边偏差不超过
+  5px；`Dark spiral journey` 24.9s 的真实歌词/ruby 分段帧在 1920×1080 下缓存 5 组
+  ruby，四边最大偏差 7px。真实工程原 UD 字体并非测试机系统字体，因此门禁只替换为双方
+  均可解析的 Meiryo，保留真实文本、时间、字号、描边和发光。
+- RTX 3070 Ti 上对上述真实帧循环 600 帧：render mean/p95 `3.77/4.39ms`，readback
+  `3.95/4.76ms`，roundtrip `9.79/10.90ms`，同步吞吐 `102.14fps`；ruby 双发光源
+  没有突破 1080p60 帧预算。
+- GPU/transport 回归 `93 passed`；native protocol/export/benchmark 单独回归
+  `56 passed, 27 skipped`。产品 GPU 开关继续默认关闭，Painter 继续作为正式输出、
+  oracle 与异常 fallback。
+
+G3 下一刀：角色/歌手覆盖与行内混合字体、字号、配色；随后依次处理
+gradient/split/image fill、标题/多字幕源与 strip/bands readback。

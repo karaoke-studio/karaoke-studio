@@ -49,6 +49,7 @@ def ruby_to_ir(ruby: RubyAnnotation) -> dict[str, Any]:
         "kanji": ruby.kanji,
         "reading": ruby.reading,
         "reading_part_ms": [int(item) for item in ruby.reading_part_ms],
+        "reading_parts": list(ruby.reading_parts),
         "pos_start_ms": int(ruby.pos_start_ms),
         "pos_end_ms": int(ruby.pos_end_ms),
     }
