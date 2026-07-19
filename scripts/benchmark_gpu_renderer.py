@@ -1,0 +1,195 @@
+"""Benchmark the configured G1 Direct2D subtitle path and optionally emit CSV."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+import os
+from pathlib import Path
+import statistics
+import sys
+import time
+import uuid
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+from krok_helper.subtitle_render.models import (  # noqa: E402
+    Style,
+    TimingChar,
+    TimingLine,
+    TimingTrack,
+)
+from krok_helper.subtitle_render.native_backend import (  # noqa: E402
+    NativeRendererProcess,
+    SharedFrameRingReader,
+)
+
+
+def _percentile(values: list[float], fraction: float) -> float:
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, int(len(ordered) * fraction))]
+
+
+def _scene(duration_ms: int, *, glow: bool) -> tuple[TimingTrack, Style]:
+    text = "Karaoke Studio GPU"
+    chars = [
+        TimingChar(char, index * duration_ms // len(text))
+        for index, char in enumerate(text)
+    ]
+    track = TimingTrack(lines=[TimingLine(chars=chars, end_ms=duration_ms)])
+    style = Style(
+        font_family="Meiryo",
+        font_family_latin="Segoe UI",
+        font_size_px=100,
+        font_reference_height=1080,
+        base_color="#FFFFFF",
+        fill_color="#2F8BFF",
+        stroke_color="#181818",
+        stroke_width_px=5,
+        stroke2_enabled=True,
+        stroke2_width_px=5,
+        decoration_kind="glow" if glow else "shadow",
+        shadow_color="#2F8BFF" if glow else "#00000000",
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        glow_radius_px=10,
+        glow_before_radius_px=10,
+        glow_after_radius_px=10,
+        glow_concentration_level=1,
+        line_y_position="center",
+        line_horizontal_layout="center",
+        dual_line_layout=False,
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+    )
+    return track, style
+
+
+def run_benchmark(
+    *,
+    width: int,
+    height: int,
+    fps: int,
+    seconds: float,
+    force_warp: bool,
+    glow: bool,
+) -> tuple[dict, list[dict]]:
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    frames = max(1, int(round(seconds * fps)))
+    duration_ms = max(1, int(round(seconds * 1000.0)))
+    track, style = _scene(duration_ms, glow=glow)
+    shm_key = f"krok_gpu_g1_benchmark_{os.getpid()}_{uuid.uuid4().hex}"
+    rows: list[dict] = []
+    reader: SharedFrameRingReader | None = None
+
+    with NativeRendererProcess(response_timeout_s=30.0, close_timeout_s=2.0) as renderer:
+        configured = renderer.configure_gpu(
+            track,
+            style,
+            width=width,
+            height=height,
+            fps=fps,
+            force_warp=force_warp,
+        )
+        start = time.perf_counter()
+        try:
+            for frame_index in range(frames):
+                t_ms = frame_index * 1000 // fps
+                request_start = time.perf_counter()
+                event = renderer.render_gpu_frame(
+                    t_ms,
+                    force_warp=force_warp,
+                    generation=1,
+                    frame_index=frame_index,
+                    shm_key=shm_key,
+                )
+                if reader is None:
+                    reader = SharedFrameRingReader.from_event(event)
+                    reader.attach()
+                slot = reader.read_frame(event)
+                if slot.frame_index != frame_index or slot.t_ms != t_ms:
+                    raise AssertionError(
+                        f"frame metadata mismatch: {slot.frame_index}/{slot.t_ms} != "
+                        f"{frame_index}/{t_ms}"
+                    )
+                rows.append(
+                    {
+                        "backend": "warp" if force_warp else "hardware",
+                        "frame_index": frame_index,
+                        "t_ms": t_ms,
+                        "render_ms": float(event["render_ms"]),
+                        "readback_ms": float(event["readback_ms"]),
+                        "roundtrip_ms": (time.perf_counter() - request_start) * 1000.0,
+                        "checksum": str(event["checksum"]),
+                    }
+                )
+        finally:
+            if reader is not None:
+                reader.close()
+        elapsed = time.perf_counter() - start
+
+    render_times = [row["render_ms"] for row in rows]
+    readback_times = [row["readback_ms"] for row in rows]
+    roundtrip_times = [row["roundtrip_ms"] for row in rows]
+    summary = {
+        "adapter": configured["adapter"],
+        "backend": "warp" if force_warp else "hardware",
+        "cached_chars": configured["cached_chars"],
+        "cached_geometries": configured["cached_geometries"],
+        "elapsed_ms": round(elapsed * 1000.0, 3),
+        "estimated_cache_bytes": configured["estimated_cache_bytes"],
+        "feature_level": configured["feature_level"],
+        "fps": round(frames / elapsed, 3),
+        "frames": frames,
+        "glow": glow,
+        "height": height,
+        "readback_mean_ms": round(statistics.fmean(readback_times), 4),
+        "readback_p95_ms": round(_percentile(readback_times, 0.95), 4),
+        "render_mean_ms": round(statistics.fmean(render_times), 4),
+        "render_p95_ms": round(_percentile(render_times, 0.95), 4),
+        "roundtrip_mean_ms": round(statistics.fmean(roundtrip_times), 4),
+        "roundtrip_p95_ms": round(_percentile(roundtrip_times, 0.95), 4),
+        "width": width,
+    }
+    return summary, rows
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="G1 Direct2D subtitle stability benchmark")
+    parser.add_argument("--width", type=int, default=1920)
+    parser.add_argument("--height", type=int, default=1080)
+    parser.add_argument("--fps", type=int, default=60)
+    parser.add_argument("--seconds", type=float, default=10.0)
+    parser.add_argument("--warp", action="store_true", help="force Microsoft WARP")
+    parser.add_argument("--both", action="store_true", help="run hardware then WARP")
+    parser.add_argument("--glow", action="store_true", help="enable N3 medium glow")
+    parser.add_argument("--output-csv", type=Path)
+    args = parser.parse_args()
+
+    all_rows: list[dict] = []
+    for force_warp in ([False, True] if args.both else [bool(args.warp)]):
+        summary, rows = run_benchmark(
+            width=max(args.width, 1),
+            height=max(args.height, 1),
+            fps=max(args.fps, 1),
+            seconds=max(args.seconds, 0.001),
+            force_warp=force_warp,
+            glow=bool(args.glow),
+        )
+        all_rows.extend(rows)
+        print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
+
+    if args.output_csv is not None:
+        args.output_csv.parent.mkdir(parents=True, exist_ok=True)
+        with args.output_csv.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(all_rows[0]))
+            writer.writeheader()
+            writer.writerows(all_rows)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

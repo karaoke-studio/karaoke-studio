@@ -5505,6 +5505,16 @@ QJsonObject handleConfigureGpu(
         for (auto it = caps.begin(); it != caps.end(); ++it) {
             out.insert(it.key(), it.value());
         }
+        const auto diagnostics = backend->diagnostics();
+        out.insert(QStringLiteral("cache_hits"), static_cast<qint64>(diagnostics.cacheHits));
+        out.insert(QStringLiteral("cache_misses"), static_cast<qint64>(diagnostics.cacheMisses));
+        out.insert(
+            QStringLiteral("estimated_cache_bytes"),
+            static_cast<qint64>(diagnostics.estimatedCacheBytes)
+        );
+        out.insert(QStringLiteral("cached_lines"), static_cast<qint64>(diagnostics.lineCount));
+        out.insert(QStringLiteral("cached_chars"), static_cast<qint64>(diagnostics.charCount));
+        out.insert(QStringLiteral("cached_geometries"), static_cast<qint64>(diagnostics.geometryCount));
         return out;
     } catch (const std::exception &exception) {
         QJsonObject out = response(false, QStringLiteral("gpu_configure"));

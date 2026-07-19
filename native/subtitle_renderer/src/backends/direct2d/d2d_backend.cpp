@@ -236,6 +236,7 @@ struct Direct2DGpuBackend::Impl {
 
     RenderScene scene;
     std::vector<CachedLine> lines;
+    BackendDiagnostics diagnostics;
     bool configured = false;
 };
 
@@ -246,6 +247,10 @@ Direct2DGpuBackend::~Direct2DGpuBackend() = default;
 
 BackendCaps Direct2DGpuBackend::capabilities() const {
     return device_.capabilities();
+}
+
+BackendDiagnostics Direct2DGpuBackend::diagnostics() const {
+    return impl_->diagnostics;
 }
 
 ProbeResult Direct2DGpuBackend::renderProbe(const ProbeOptions &options) {
@@ -392,6 +397,11 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
     if (scene.width <= 0 || scene.height <= 0 || scene.width > 8192 || scene.height > 8192) {
         throw BackendError("GPU scene dimensions must be within 1..8192");
     }
+    if (impl_->configured && impl_->scene == scene) {
+        ++impl_->diagnostics.cacheHits;
+        return;
+    }
+    ++impl_->diagnostics.cacheMisses;
     impl_->scene = scene;
     impl_->lines.clear();
     impl_->lines.reserve(scene.lines.size());
@@ -600,6 +610,20 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         }
         impl_->lines.push_back(std::move(cached));
     }
+    impl_->diagnostics.lineCount = impl_->lines.size();
+    impl_->diagnostics.charCount = 0;
+    impl_->diagnostics.geometryCount = 0;
+    impl_->diagnostics.estimatedCacheBytes = sizeof(Impl);
+    for (const Impl::CachedLine &line : impl_->lines) {
+        impl_->diagnostics.charCount += line.chars.size();
+        impl_->diagnostics.geometryCount += line.geometries.size();
+        impl_->diagnostics.estimatedCacheBytes += sizeof(Impl::CachedLine)
+            + line.chars.capacity() * sizeof(Impl::CachedChar)
+            + line.geometries.capacity() * sizeof(Microsoft::WRL::ComPtr<ID2D1Geometry>);
+    }
+    // Direct2D does not expose path allocation bytes. Keep a conservative
+    // diagnostic estimate so cache growth/churn remains observable.
+    impl_->diagnostics.estimatedCacheBytes += impl_->diagnostics.geometryCount * 256;
     impl_->configured = true;
 }
 

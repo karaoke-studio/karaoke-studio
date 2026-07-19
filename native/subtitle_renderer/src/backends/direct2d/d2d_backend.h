@@ -13,6 +13,7 @@ public:
     ~Direct2DGpuBackend() override;
 
     BackendCaps capabilities() const override;
+    BackendDiagnostics diagnostics() const override;
     ProbeResult renderProbe(const ProbeOptions &options) override;
     void configure(const RenderScene &scene) override;
     ProbeResult renderFrame(int tMs) override;

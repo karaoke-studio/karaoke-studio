@@ -293,6 +293,38 @@ def test_gpu_g1_layers_outer_stroke_stroke_and_body(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g1_repeated_configure_hits_geometry_layout_cache(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        first = renderer.configure_gpu(
+            _g1_track(),
+            _g1_style(),
+            width=640,
+            height=360,
+            fps=60,
+            force_warp=True,
+        )
+        second = renderer.configure_gpu(
+            _g1_track(),
+            _g1_style(),
+            width=640,
+            height=360,
+            fps=60,
+            force_warp=True,
+        )
+
+    assert first["cache_hits"] == 0
+    assert first["cache_misses"] == 1
+    assert second["cache_hits"] == 1
+    assert second["cache_misses"] == 1
+    assert second["cached_lines"] == 1
+    assert second["cached_chars"] == 3
+    assert second["cached_geometries"] >= 3
+    assert second["estimated_cache_bytes"] > 0
+    assert second["configure_ms"] < first["configure_ms"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g1_n3_glow_concentration_adds_blur_passes(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     low = _g1_style(

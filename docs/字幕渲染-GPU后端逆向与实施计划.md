@@ -916,3 +916,23 @@ GPU↔Painter 非空帧、边界、wipe 与 premultiplied 像素 bounded-diff �
 G1 剩余门槛：固定 N3 工程关键帧（不能只用合成文字）、1080p60 连续 10 秒协议稳态、
 render/readback CSV，以及 geometry/layout cache 的 hit/miss/bytes 诊断。未完成这些门槛前
 仍不接产品预览开关。
+
+同日第三刀补齐工程诊断与稳态探针：
+
+- 相同 RenderScene 重复 configure 直接命中常驻 geometry/layout cache；
+  `gpu_configured` 返回 hit/miss、line/char/geometry 数与保守 bytes 估算，专项测试固定
+  首次 miss、第二次 hit；
+- 新增 `scripts/benchmark_gpu_renderer.py`，可选择 hardware/WARP、solid/glow，逐帧导出
+  render/readback/roundtrip/checksum CSV；
+- 1920×1080、60fps 时间轴、连续 600 帧均无协议错误：hardware solid `56.52fps`
+  （render/readback mean `1.14/6.05ms`，roundtrip p95 `20.77ms`），hardware 中档 glow
+  `55.42fps`（`2.01/6.05ms`，roundtrip p95 `21.85ms`），WARP solid `60.50fps`
+  （`0.73/5.52ms`，roundtrip p95 `17.68ms`）。本阶段同步 request + 全 1080p readback +
+  Python slot copy 已明确是端到端瓶颈；GPU render 本身仍在帧预算内，G2 必须用 latest-wins/
+  look-ahead 与显示分辨率/strip readback，不能把这组同步吞吐误当最终预览性能；
+- 专项现为 `13 passed`，native CPU/protocol/GPU 联合回归 `46 passed, 27 skipped`。
+
+本机还确认 `Dark spiral journey/出力/off_vocal.mkv` 是可用的 N3 真实 1080p60 参考输出，
+并在 15.2s 抽帧对照了走字位置。该帧同时含标题、signal、ruby、渐变和角色样式，属于 G3
+组合场景，不能冒充 G1 的纯 solid 固定参考。因此 **G1 尚余且只余“隔离后的 N3 固定关键帧”
+这一项视觉门禁**；在生成/固化该 fixture 前保持 G1 未完成、产品开关硬关闭。

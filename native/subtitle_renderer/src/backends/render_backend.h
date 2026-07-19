@@ -55,18 +55,21 @@ struct RgbaColor {
     std::uint8_t green = 255;
     std::uint8_t blue = 255;
     std::uint8_t alpha = 255;
+    bool operator==(const RgbaColor &) const = default;
 };
 
 struct TextChar {
     std::wstring text;
     int startMs = 0;
     int endMs = 0;
+    bool operator==(const TextChar &) const = default;
 };
 
 struct TextLine {
     std::vector<TextChar> chars;
     int startMs = 0;
     int endMs = 0;
+    bool operator==(const TextLine &) const = default;
 };
 
 struct TextStyle {
@@ -103,6 +106,7 @@ struct TextStyle {
     float glowBeforeRadius = 10.0f;
     float glowAfterRadius = 10.0f;
     int glowConcentrationLevel = 0;
+    bool operator==(const TextStyle &) const = default;
 };
 
 struct RenderScene {
@@ -110,6 +114,16 @@ struct RenderScene {
     int height = 1080;
     TextStyle style;
     std::vector<TextLine> lines;
+    bool operator==(const RenderScene &) const = default;
+};
+
+struct BackendDiagnostics {
+    std::uint64_t cacheHits = 0;
+    std::uint64_t cacheMisses = 0;
+    std::uint64_t estimatedCacheBytes = 0;
+    std::uint64_t lineCount = 0;
+    std::uint64_t charCount = 0;
+    std::uint64_t geometryCount = 0;
 };
 
 class BackendError : public std::runtime_error {
@@ -122,6 +136,7 @@ public:
     virtual ~RenderBackend() = default;
     virtual BackendCaps capabilities() const = 0;
     virtual ProbeResult renderProbe(const ProbeOptions &options) = 0;
+    virtual BackendDiagnostics diagnostics() const = 0;
     virtual void configure(const RenderScene &scene) = 0;
     virtual ProbeResult renderFrame(int tMs) = 0;
 };
