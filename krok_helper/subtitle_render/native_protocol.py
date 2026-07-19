@@ -18,9 +18,43 @@ from krok_helper.subtitle_render.models import (
     TimingLine,
     TimingTrack,
     style_to_dict,
+    title_overlay_to_dict,
 )
 
 RENDER_IR_SCHEMA = 1
+
+
+def title_to_ir(track: TimingTrack, style: Style) -> dict[str, Any] | None:
+    """Resolve the Painter title contract into a renderer-ready snapshot."""
+    # Keep the resolution logic shared with the CPU oracle.  In particular,
+    # title schemes/layout references and metadata template cleanup must not be
+    # reimplemented independently in the sidecar.
+    from krok_helper.subtitle_render.engine.painter import (
+        _resolve_title_role_overlay,
+        _resolve_title_text,
+        _title_show_window,
+        resolve_title_overlay,
+    )
+    from krok_helper.subtitle_render.models import normalize_title_char_role_labels
+
+    title = resolve_title_overlay(style)
+    if title is None or not title.enabled:
+        return None
+    text = _resolve_title_text(title, track)
+    if not any(line.strip() for line in text.split("\n")):
+        return None
+    payload = title_overlay_to_dict(title)
+    payload["text"] = text
+    payload["windows"] = [list(window) for window in _title_show_window(title, track)]
+    labels = normalize_title_char_role_labels(text, title.char_role_labels)
+    payload["resolved_role_labels"] = labels
+    payload["role_styles"] = {
+        label: title_overlay_to_dict(_resolve_title_role_overlay(style, title, label))
+        for row in labels
+        for label in row
+        if label
+    }
+    return payload
 
 
 def timing_char_to_ir(ch: TimingChar) -> dict[str, Any]:
@@ -100,4 +134,5 @@ def build_render_ir(
         # Keep each source separate.  Painter schedules lanes/display windows
         # independently per source and then composites primary -> extras.
         "extra_tracks": [track_to_ir(item) for item in extra_tracks or ()],
+        "title": title_to_ir(track, style),
     }

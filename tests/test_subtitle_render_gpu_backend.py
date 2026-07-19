@@ -24,6 +24,8 @@ from krok_helper.subtitle_render.models import (
     TimingChar,
     TimingLine,
     TimingTrack,
+    TimingTrackMeta,
+    TitleOverlay,
     style_from_dict,
 )
 from krok_helper.subtitle_render.n3proj_import import load_n3proj
@@ -915,6 +917,183 @@ def test_gpu_g3_composites_active_lines_from_multiple_subtitle_sources(monkeypat
         abs(actual - expected) <= 12
         for actual, expected in zip(gpu_bounds, painter_bounds)
     ), (gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_title_overlay_matches_painter_window_fade_and_anchor(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        meta=TimingTrackMeta(title="星空", artist="歌手"),
+        lines=[TimingLine(chars=[TimingChar("尾", 3_000)], end_ms=4_000)],
+    )
+    title = TitleOverlay(
+        enabled=True,
+        text_template="{title} / {artist}",
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=48,
+        font_weight=700,
+        fill=PaintFill(mode="solid", color="#40FF60"),
+        stroke=PaintFill(mode="solid", color="#102010"),
+        stroke_width_px=3,
+        stroke2_width_px=0,
+        decoration_kind="shadow",
+        shadow=PaintFill(mode="solid", color="#00000000"),
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        anchor="top_left",
+        align="left",
+        offset_x=37,
+        offset_y=29,
+        layout_index=None,
+        show_mode="head",
+        head_offset_ms=0,
+        duration_ms=2_000,
+        fade_in_ms=500,
+        fade_out_ms=500,
+    )
+    style = _g1_style(
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        custom_style_schemes={},
+        title_overlay=title,
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured, frames = _render_g1_frames(
+            renderer,
+            style,
+            (0, 250, 1_000, 2_001),
+            force_warp=True,
+            track=track,
+        )
+    painter = _render_painter_oracle(style, t_ms=1_000, track=track)
+
+    assert configured["line_count"] == 2
+    assert _alpha_count(frames[0]) == 0
+    assert _alpha_count(frames[3]) == 0
+    assert 0 < sum(frames[1][3::4]) < sum(frames[2][3::4])
+    gpu_bounds = _payload_alpha_bounds(frames[2])
+    painter_bounds = _payload_alpha_bounds(painter)
+    assert all(
+        abs(actual - expected) <= 12
+        for actual, expected in zip(gpu_bounds, painter_bounds)
+    ), (gpu_bounds, painter_bounds)
+    assert any(
+        frames[2][index + 1] > frames[2][index] + 50
+        and frames[2][index + 3] > 0
+        for index in range(0, len(frames[2]), 4)
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_multiline_title_role_styles_match_painter(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    def role_scheme(color: str, size: int) -> SubtitleStyleScheme:
+        colors = KaraokeColors(
+            before=KaraokeColorState(text=PaintFill(mode="solid", color=color)),
+            after=KaraokeColorState(text=PaintFill(mode="solid", color=color)),
+        )
+        return SubtitleStyleScheme(
+            font_family="Meiryo",
+            font_family_latin="Meiryo",
+            font_size_px=size,
+            stroke_width_px=0,
+            decoration_kind="none",
+            karaoke_colors=colors,
+        )
+
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("尾", 3_000)], end_ms=4_000)]
+    )
+    title = TitleOverlay(
+        enabled=True,
+        text_template="AB\n日C",
+        char_role_labels=[["red", "green"], [None, "red"]],
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=44,
+        fill=PaintFill(mode="solid", color="#E8E8E8"),
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        decoration_kind="shadow",
+        shadow=PaintFill(mode="solid", color="#00000000"),
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+        anchor="top_left",
+        align="left",
+        offset_x=32,
+        offset_y=24,
+        line_gap_px=11,
+        layout_index=None,
+        show_mode="whole",
+        fade_in_ms=0,
+        fade_out_ms=0,
+    )
+    style = _g1_style(
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        custom_style_schemes={
+            "red": role_scheme("#FF2020", 52),
+            "green": role_scheme("#20FF40", 38),
+        },
+        title_overlay=title,
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, (1_000,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=1_000, track=track)
+    gpu = frames[0]
+
+    assert any(
+        gpu[index] > gpu[index + 1] + 70 and gpu[index + 3] > 0
+        for index in range(0, len(gpu), 4)
+    )
+    assert any(
+        gpu[index + 1] > gpu[index] + 70 and gpu[index + 3] > 0
+        for index in range(0, len(gpu), 4)
+    )
+    gpu_bounds = _payload_alpha_bounds(gpu)
+    painter_bounds = _payload_alpha_bounds(painter)
+    assert all(
+        abs(actual - expected) <= 24
+        for actual, expected in zip(gpu_bounds, painter_bounds)
+    ), (gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_applies_each_source_track_offset_like_painter(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _g1_style(
+        font_family="Meiryo",
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+    )
+    primary = TimingTrack(
+        meta=TimingTrackMeta(offset_ms=1_000),
+        lines=[TimingLine(chars=[TimingChar("主", 0)], end_ms=800)],
+    )
+    extra = TimingTrack(
+        meta=TimingTrackMeta(offset_ms=2_000),
+        lines=[TimingLine(chars=[TimingChar("副", 0)], end_ms=800)],
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer,
+            style,
+            (500, 1_500, 2_500),
+            force_warp=True,
+            track=primary,
+            extra_tracks=[extra],
+        )
+
+    assert _alpha_count(frames[0]) == 0
+    assert _alpha_count(frames[1]) > 0
+    assert _alpha_count(frames[2]) > 0
+    assert frames[1] != frames[2]
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

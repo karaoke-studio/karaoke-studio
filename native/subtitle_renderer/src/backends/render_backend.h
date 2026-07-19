@@ -103,6 +103,12 @@ struct TextRuby {
     bool operator==(const TextRuby &) const = default;
 };
 
+struct DisplayWindow {
+    int startMs = 0;
+    int endMs = 0;
+    bool operator==(const DisplayWindow &) const = default;
+};
+
 struct TextLine {
     std::vector<TextChar> chars;
     std::vector<TextRuby> rubies;
@@ -110,6 +116,11 @@ struct TextLine {
     int endMs = 0;
     int sourceIndex = 0;
     int sourceLineIndex = 0;
+    int compositeOrder = 0;
+    bool staticOverlay = false;
+    int fadeInMs = 0;
+    int fadeOutMs = 0;
+    std::vector<DisplayWindow> displayWindows;
     bool operator==(const TextLine &) const = default;
 };
 
@@ -132,6 +143,8 @@ struct TextStyle {
     int laneCount = 2;
     std::string alignment = "center";
     std::string verticalPosition = "bottom";
+    float centerOffsetX = 0.0f;
+    float centerOffsetY = 0.0f;
     int leadInMs = 1800;
     int tailMs = 1000;
     RgbaColor beforeFill;

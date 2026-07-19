@@ -35,6 +35,8 @@ from krok_helper.subtitle_render.models import (
     TimingChar,
     TimingLine,
     TimingTrack,
+    TimingTrackMeta,
+    TitleOverlay,
 )
 from krok_helper.subtitle_render.native_backend import (
     NativeRendererError,
@@ -180,6 +182,29 @@ def test_build_render_ir_preserves_extra_track_boundaries():
 
     assert ir["track"]["lines"][0]["chars"][0]["text"] == "主"
     assert ir["extra_tracks"][0]["lines"][0]["chars"][0]["text"] == "副"
+
+
+def test_build_render_ir_resolves_title_metadata_and_windows():
+    track = TimingTrack(
+        meta=TimingTrackMeta(title="曲名", artist="歌手"),
+        lines=[TimingLine(chars=[TimingChar("終", 3_000)], end_ms=4_000)],
+    )
+    style = Style(
+        custom_style_schemes={},
+        title_overlay=TitleOverlay(
+            enabled=True,
+            text_template="{title} / {artist}",
+            layout_index=None,
+            show_mode="head",
+            head_offset_ms=100,
+            duration_ms=1_500,
+        ),
+    )
+
+    ir = build_render_ir(track, style, width=640, height=360, fps=60)
+
+    assert ir["title"]["text"] == "曲名 / 歌手"
+    assert ir["title"]["windows"] == [[100, 1_600]]
 
 
 def test_build_render_ir_clamps_screen_values():

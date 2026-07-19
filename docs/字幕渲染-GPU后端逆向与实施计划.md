@@ -1193,3 +1193,23 @@ gradient/split/image fill 基础切片至此收口。G3 下一刀进入标题、
 
 G3 的 solid/gradient/split/image、stroke/stroke2、shadow/glow、ruby 与角色常用基础层已齐。下一刀
 进入标题与多字幕源横排路径；产品 GPU 开关继续默认关闭。
+
+### 2026-07-19（第十八批）：G3 标题与多字幕源横排合成
+
+- Render IR 显式保留 `track` 与 `extra_tracks` 的源边界；native scene 为每行携带源号与源内行号，
+  lane 从每个源的第 0 行独立计算，ruby 也按源隔离，避免相同时间段的副轨注音误绑定主轨正文。
+- Direct2D 每帧按“源 + lane”选择活动行，并按 Painter 的主轨歌词 → 标题 → 各副轨顺序执行
+  SourceOver 合成；不再把全部来源摊平后只画第一条活动行。主/副轨各自的 `@Offset` 与全局
+  `timing_offset_ms` 已同时进入正文、走字和 ruby 时间轴。
+- 标题的方案/布局引用、`{title}`/`{artist}` 模板清理、显示窗口和逐字符角色方案直接复用
+  Painter 解析函数生成 renderer-ready snapshot；Direct2D 继续复用正文的精确 glyph geometry、
+  stroke/stroke2、shadow/glow 与 solid/gradient/split/image brush，不维护第二套简化标题绘制器。
+- 常用横排标题覆盖多行、角色混合字体/字号/配色、九宫格 anchor、offset、head/tail/whole/
+  head-tail 窗口以及淡入淡出；透明度直接施加到所有 sharp/decor brush，标题只跟主轨绘制一次。
+- 自动门禁覆盖多字幕源红/绿叠绘与 Painter 几何、每源独立 offset、标题元数据窗口、0/50/100%
+  淡入、窗口外透明、左上锚点，以及多行角色红/绿样式。硬件/WARP build smoke 通过；GPU/transport
+  `110 passed`，native protocol 独立回归 `28 passed, 27 skipped`。历史 CPU-native Utopia 像素
+  用例仍须按既有约定与 GPU 文件分进程运行，避免 Qt offscreen 字体初始化顺序改变 Arial 回退。
+
+G3 下一刀进入 strip/bands readback、4K60 性能与组合 corpus 门禁；产品 GPU 开关继续默认关闭，
+Painter 永久保留为 oracle 与任何不支持路径的整帧 fallback。

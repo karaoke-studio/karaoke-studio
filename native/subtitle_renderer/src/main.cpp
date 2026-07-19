@@ -71,6 +71,7 @@ struct TimingLine {
     int singerId = -1;
     int sourceIndex = 0;
     int sourceLineIndex = 0;
+    int sourceOffsetMs = 0;
 };
 
 struct RubyAnnotation {
@@ -81,6 +82,7 @@ struct RubyAnnotation {
     int posStartMs = 0;
     int posEndMs = 0;
     int sourceIndex = 0;
+    int sourceOffsetMs = 0;
 };
 
 struct PaintFillSpec {
@@ -210,12 +212,14 @@ struct RenderConfig {
     QString exitAnim = QStringLiteral("none");
     int exitFadeMs = 300;
     int timingOffsetMs = 0;
+    int primaryTrackOffsetMs = 0;
     QJsonObject singerStyleOverrides;
     QJsonObject customStyleSchemes;
     // Built during configure. render_frame must not insert here because LineLayout stores pointers into this QHash.
     QHash<QString, ResolvedStyle> resolvedStyles;
     std::vector<TimingLine> lines;
     std::vector<RubyAnnotation> rubies;
+    QJsonObject title;
 };
 
 struct LineLayout {
@@ -927,6 +931,84 @@ ResolvedStyle styleWithOverrides(const ResolvedStyle &base, const QJsonObject &s
     return cfg;
 }
 
+ResolvedStyle resolvedStyleFromTitle(
+    const ResolvedStyle &base,
+    const QJsonObject &title
+) {
+    ResolvedStyle cfg = base;
+    cfg.fontFamily = stringValue(title, QStringLiteral("font_family"), cfg.fontFamily);
+    cfg.fontFamilyLatin = stringValue(
+        title, QStringLiteral("font_family_latin"), cfg.fontFamilyLatin
+    );
+    cfg.fontSizePx = std::max(
+        1, intValue(title, QStringLiteral("font_size_px"), cfg.fontSizePx)
+    );
+    cfg.fontWeight = std::clamp(
+        intValue(title, QStringLiteral("font_weight"), cfg.fontWeight), 1, 999
+    );
+    cfg.italic = title.value(QStringLiteral("italic")).toBool(cfg.italic);
+    cfg.letterSpacingPx = intValue(
+        title, QStringLiteral("letter_spacing_px"), cfg.letterSpacingPx
+    );
+
+    cfg.baseFill = paintFillSpec(
+        title.value(QStringLiteral("fill")).toObject(), cfg.baseColor
+    );
+    cfg.baseColor = cfg.baseFill.color;
+    cfg.afterFill = cfg.baseFill;
+    cfg.fillColor = cfg.baseColor;
+    cfg.beforeStrokeFill = paintFillSpec(
+        title.value(QStringLiteral("stroke")).toObject(), cfg.beforeStrokeColor
+    );
+    cfg.beforeStrokeColor = cfg.beforeStrokeFill.color;
+    cfg.afterStrokeFill = cfg.beforeStrokeFill;
+    cfg.afterStrokeColor = cfg.beforeStrokeColor;
+    cfg.beforeStroke2Fill = paintFillSpec(
+        title.value(QStringLiteral("stroke2")).toObject(), cfg.beforeStroke2Color
+    );
+    cfg.beforeStroke2Color = cfg.beforeStroke2Fill.color;
+    cfg.afterStroke2Fill = cfg.beforeStroke2Fill;
+    cfg.afterStroke2Color = cfg.beforeStroke2Color;
+    cfg.beforeShadowFill = paintFillSpec(
+        title.value(QStringLiteral("shadow")).toObject(), cfg.beforeShadowColor
+    );
+    cfg.beforeShadowColor = cfg.beforeShadowFill.color;
+    cfg.afterShadowFill = cfg.beforeShadowFill;
+    cfg.afterShadowColor = cfg.beforeShadowColor;
+    cfg.strokeWidthPx = std::max(
+        0, intValue(title, QStringLiteral("stroke_width_px"), cfg.strokeWidthPx)
+    );
+    cfg.stroke2WidthPx = std::max(
+        0, intValue(title, QStringLiteral("stroke2_width_px"), cfg.stroke2WidthPx)
+    );
+    cfg.decorationKind = stringValue(
+        title, QStringLiteral("decoration_kind"), cfg.decorationKind
+    );
+    const int glowRadius = std::max(
+        0, intValue(title, QStringLiteral("glow_radius_px"), cfg.glowRadiusPx)
+    );
+    cfg.glowRadiusPx = glowRadius;
+    cfg.glowBeforeRadiusPx = glowRadius;
+    cfg.glowAfterRadiusPx = glowRadius;
+    cfg.glowConcentrationLevel = std::clamp(
+        intValue(
+            title,
+            QStringLiteral("glow_concentration_level"),
+            cfg.glowConcentrationLevel
+        ),
+        0,
+        2
+    );
+    cfg.shadowOffsetX = intValue(
+        title, QStringLiteral("shadow_offset_x"), cfg.shadowOffsetX
+    );
+    cfg.shadowOffsetY = intValue(
+        title, QStringLiteral("shadow_offset_y"), cfg.shadowOffsetY
+    );
+    cfg.hasMainKaraokeColors = true;
+    return cfg;
+}
+
 QJsonObject response(bool ok, const QString &event) {
     QJsonObject out;
     out.insert(QStringLiteral("ok"), ok);
@@ -1605,6 +1687,14 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     }
     for (std::size_t sourceIndex = 0; sourceIndex < sourceTracks.size(); ++sourceIndex) {
         const QJsonObject &track = sourceTracks[sourceIndex];
+        const int sourceOffsetMs = intValue(
+            track.value(QStringLiteral("meta")).toObject(),
+            QStringLiteral("offset_ms"),
+            0
+        );
+        if (sourceIndex == 0) {
+            cfg.primaryTrackOffsetMs = sourceOffsetMs;
+        }
         const QJsonArray lines = track.value(QStringLiteral("lines")).toArray();
         for (int sourceLineIndex = 0; sourceLineIndex < lines.size(); ++sourceLineIndex) {
             const QJsonObject lineObject = lines.at(sourceLineIndex).toObject();
@@ -1614,6 +1704,7 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
             line.singerId = intValue(lineObject, QStringLiteral("singer_id"), -1);
             line.sourceIndex = static_cast<int>(sourceIndex);
             line.sourceLineIndex = sourceLineIndex;
+            line.sourceOffsetMs = sourceOffsetMs;
 
             const QJsonArray chars = lineObject.value(QStringLiteral("chars")).toArray();
             line.chars.reserve(static_cast<std::size_t>(chars.size()));
@@ -1652,9 +1743,12 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
             ruby.posStartMs = intValue(rubyObject, QStringLiteral("pos_start_ms"), 0);
             ruby.posEndMs = intValue(rubyObject, QStringLiteral("pos_end_ms"), 0);
             ruby.sourceIndex = static_cast<int>(sourceIndex);
+            ruby.sourceOffsetMs = sourceOffsetMs;
             cfg.rubies.push_back(std::move(ruby));
         }
     }
+
+    cfg.title = ir.value(QStringLiteral("title")).toObject();
 
     buildResolvedStyleCache(cfg);
     return cfg;
@@ -5938,10 +6032,14 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         );
         scene.lineStyles.push_back(std::move(lineStyle));
         TextLine line;
-        line.startMs = lineStartMs(sourceLine) + config.timingOffsetMs;
-        line.endMs = lineEndMs(sourceLine) + config.timingOffsetMs;
+        const int sourceTimingOffset = config.timingOffsetMs + sourceLine.sourceOffsetMs;
+        line.startMs = lineStartMs(sourceLine) + sourceTimingOffset;
+        line.endMs = lineEndMs(sourceLine) + sourceTimingOffset;
         line.sourceIndex = sourceLine.sourceIndex;
         line.sourceLineIndex = sourceLine.sourceLineIndex;
+        line.compositeOrder = sourceLine.sourceIndex == 0
+            ? 0
+            : sourceLine.sourceIndex + 1;
         line.chars.reserve(sourceLine.chars.size());
         for (std::size_t index = 0; index < sourceLine.chars.size(); ++index) {
             int styleIndex = -1;
@@ -5966,8 +6064,8 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             }
             line.chars.push_back(TextChar{
                 sourceLine.chars[index].text.toStdWString(),
-                sourceLine.chars[index].startMs + config.timingOffsetMs,
-                charEndMs(sourceLine, index) + config.timingOffsetMs,
+                sourceLine.chars[index].startMs + sourceTimingOffset,
+                charEndMs(sourceLine, index) + sourceTimingOffset,
                 styleIndex,
             });
         }
@@ -6002,8 +6100,8 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             sceneRuby.reading = ruby.reading.toStdWString();
             sceneRuby.firstCharIndex = *minimum;
             sceneRuby.lastCharIndex = *maximum;
-            sceneRuby.startMs = ruby.posStartMs + config.timingOffsetMs;
-            sceneRuby.endMs = ruby.posEndMs + config.timingOffsetMs;
+            sceneRuby.startMs = ruby.posStartMs + sourceTimingOffset;
+            sceneRuby.endMs = ruby.posEndMs + sourceTimingOffset;
             for (int targetIndex : targetIndices) {
                 if (targetIndex < 0
                     || targetIndex >= static_cast<int>(sourceLine.chars.size())
@@ -6018,8 +6116,8 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             for (const auto &unit : rubyUtopiaReadingUnitsAndIntervals(ruby)) {
                 sceneRuby.units.push_back(krok::subtitle::native::RubyUnit{
                     unit.first.toStdWString(),
-                    unit.second.first + config.timingOffsetMs,
-                    unit.second.second + config.timingOffsetMs,
+                    unit.second.first + sourceTimingOffset,
+                    unit.second.second + sourceTimingOffset,
                 });
             }
             if (!sceneRuby.units.empty()) {
@@ -6027,6 +6125,136 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             }
         }
         scene.lines.push_back(std::move(line));
+    }
+
+    if (!config.title.isEmpty()
+        && config.title.value(QStringLiteral("enabled")).toBool(false)) {
+        const QString text = stringValue(config.title, QStringLiteral("text"));
+        const QStringList rows = text.split(u'\n', Qt::KeepEmptyParts);
+        std::vector<krok::subtitle::native::DisplayWindow> windows;
+        const int titleTimingOffset = config.timingOffsetMs + config.primaryTrackOffsetMs;
+        for (const auto &windowValue : config.title.value(
+                 QStringLiteral("windows")
+             ).toArray()) {
+            const QJsonArray window = windowValue.toArray();
+            if (window.size() < 2) {
+                continue;
+            }
+            const int start = window.at(0).toInt() + titleTimingOffset;
+            const int end = window.at(1).toInt() + titleTimingOffset;
+            if (end > start) {
+                windows.push_back({start, end});
+            }
+        }
+        if (!windows.empty() && std::any_of(
+                rows.begin(), rows.end(), [](const QString &row) {
+                    return !row.trimmed().isEmpty();
+                }
+            )) {
+            TextStyle titleStyle;
+            applyGpuResolvedStyle(
+                titleStyle,
+                resolvedStyleFromTitle(sourceStyle, config.title),
+                scale
+            );
+            titleStyle.lineGap = static_cast<float>(std::max(
+                0, intValue(config.title, QStringLiteral("line_gap_px"), 0)
+            ) * scale);
+            titleStyle.dualLineLayout = rows.size() > 1;
+            titleStyle.laneCount = std::max(static_cast<int>(rows.size()), 1);
+            titleStyle.leadInMs = 0;
+            titleStyle.tailMs = 0;
+            const QString anchor = stringValue(
+                config.title, QStringLiteral("anchor"), QStringLiteral("top_left")
+            );
+            const float offsetX = static_cast<float>(
+                intValue(config.title, QStringLiteral("offset_x"), 0) * scale
+            );
+            const float offsetY = static_cast<float>(
+                intValue(config.title, QStringLiteral("offset_y"), 0) * scale
+            );
+            if (anchor.endsWith(QStringLiteral("left"))) {
+                titleStyle.alignment = "left";
+                titleStyle.horizontalMargin = offsetX;
+            } else if (anchor.endsWith(QStringLiteral("right"))) {
+                titleStyle.alignment = "right";
+                titleStyle.horizontalMargin = offsetX;
+            } else {
+                titleStyle.alignment = "center";
+                titleStyle.centerOffsetX = offsetX;
+            }
+            if (anchor.startsWith(QStringLiteral("top"))) {
+                titleStyle.verticalPosition = "top";
+                titleStyle.bottomMargin = offsetY;
+            } else if (anchor.startsWith(QStringLiteral("bottom"))) {
+                titleStyle.verticalPosition = "bottom";
+                titleStyle.bottomMargin = offsetY;
+            } else {
+                titleStyle.verticalPosition = "center";
+                titleStyle.centerOffsetY = offsetY;
+            }
+
+            const QJsonObject titleRoleStyles = config.title.value(
+                QStringLiteral("role_styles")
+            ).toObject();
+            const QJsonArray titleRoleRows = config.title.value(
+                QStringLiteral("resolved_role_labels")
+            ).toArray();
+            QHash<QString, int> titleRoleStyleIndices;
+            for (auto it = titleRoleStyles.begin(); it != titleRoleStyles.end(); ++it) {
+                if (!it.value().isObject()) {
+                    continue;
+                }
+                TextStyle roleStyle = titleStyle;
+                applyGpuResolvedStyle(
+                    roleStyle,
+                    resolvedStyleFromTitle(sourceStyle, it.value().toObject()),
+                    scale
+                );
+                const int styleIndex = static_cast<int>(scene.charStyles.size());
+                scene.charStyles.push_back(std::move(roleStyle));
+                titleRoleStyleIndices.insert(it.key(), styleIndex);
+            }
+
+            for (int rowIndex = 0; rowIndex < rows.size(); ++rowIndex) {
+                const QString &row = rows.at(rowIndex);
+                if (row.isEmpty()) {
+                    continue;
+                }
+                TextLine titleLine;
+                titleLine.startMs = windows.front().startMs;
+                titleLine.endMs = windows.back().endMs;
+                titleLine.sourceIndex = -1;
+                titleLine.sourceLineIndex = rowIndex;
+                titleLine.compositeOrder = 1;
+                titleLine.staticOverlay = true;
+                titleLine.fadeInMs = std::max(
+                    0, intValue(config.title, QStringLiteral("fade_in_ms"), 0)
+                );
+                titleLine.fadeOutMs = std::max(
+                    0, intValue(config.title, QStringLiteral("fade_out_ms"), 0)
+                );
+                titleLine.displayWindows = windows;
+                titleLine.chars.reserve(static_cast<std::size_t>(row.size()));
+                const QJsonArray roleLabels = rowIndex < titleRoleRows.size()
+                    ? titleRoleRows.at(rowIndex).toArray()
+                    : QJsonArray{};
+                for (int charIndex = 0; charIndex < row.size(); ++charIndex) {
+                    const QString roleLabel = charIndex < roleLabels.size()
+                        ? roleLabels.at(charIndex).toString()
+                        : QString{};
+                    const int styleIndex = titleRoleStyleIndices.value(roleLabel, -1);
+                    titleLine.chars.push_back(TextChar{
+                        QString(row.at(charIndex)).toStdWString(),
+                        1000000000,
+                        1000000001,
+                        styleIndex,
+                    });
+                }
+                scene.lineStyles.push_back(titleStyle);
+                scene.lines.push_back(std::move(titleLine));
+            }
+        }
     }
     return scene;
 }

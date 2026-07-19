@@ -510,7 +510,12 @@ struct Direct2DGpuBackend::Impl {
         int startMs = 0;
         int endMs = 0;
         int sourceIndex = 0;
+        int compositeOrder = 0;
         int lane = 0;
+        bool staticOverlay = false;
+        int fadeInMs = 0;
+        int fadeOutMs = 0;
+        std::vector<DisplayWindow> displayWindows;
         TextStyle style;
         float ascent = 0.0f;
         float descent = 0.0f;
@@ -817,6 +822,11 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         cached.startMs = sourceLine.startMs;
         cached.endMs = sourceLine.endMs;
         cached.sourceIndex = sourceLine.sourceIndex;
+        cached.compositeOrder = sourceLine.compositeOrder;
+        cached.staticOverlay = sourceLine.staticOverlay;
+        cached.fadeInMs = sourceLine.fadeInMs;
+        cached.fadeOutMs = sourceLine.fadeOutMs;
+        cached.displayWindows = sourceLine.displayWindows;
         cached.lane = style.dualLineLayout
             ? sourceLine.sourceLineIndex % std::max(style.laneCount, 1)
             : 0;
@@ -1534,10 +1544,45 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
     context->SetTransform(D2D1::Matrix3x2F::Identity());
     context->SetTarget(nullptr);
 
+    auto overlayOpacityAt = [&](const Impl::CachedLine &line) {
+        if (!line.staticOverlay) {
+            return 1.0f;
+        }
+        float best = 0.0f;
+        for (const DisplayWindow &window : line.displayWindows) {
+            if (window.endMs <= window.startMs
+                || tMs < window.startMs
+                || tMs > window.endMs) {
+                continue;
+            }
+            float opacity = 1.0f;
+            if (line.fadeInMs > 0 && tMs < window.startMs + line.fadeInMs) {
+                opacity = std::min(
+                    opacity,
+                    static_cast<float>(tMs - window.startMs)
+                        / static_cast<float>(line.fadeInMs)
+                );
+            }
+            if (line.fadeOutMs > 0 && tMs > window.endMs - line.fadeOutMs) {
+                opacity = std::min(
+                    opacity,
+                    static_cast<float>(window.endMs - tMs)
+                        / static_cast<float>(line.fadeOutMs)
+                );
+            }
+            best = std::max(best, std::clamp(opacity, 0.0f, 1.0f));
+        }
+        return best;
+    };
     std::vector<const Impl::CachedLine *> activeLines;
     for (const Impl::CachedLine &candidate : impl_->lines) {
-        if (tMs >= candidate.startMs - std::max(baseStyle.leadInMs, 0)
-            && tMs <= candidate.endMs + std::max(baseStyle.tailMs, 0)) {
+        const bool visible = candidate.staticOverlay
+            ? overlayOpacityAt(candidate) > 0.0f
+            : (
+                tMs >= candidate.startMs - std::max(baseStyle.leadInMs, 0)
+                && tMs <= candidate.endMs + std::max(baseStyle.tailMs, 0)
+            );
+        if (visible) {
             const bool laneAlreadyActive = std::any_of(
                 activeLines.begin(), activeLines.end(),
                 [&](const Impl::CachedLine *line) {
@@ -1550,12 +1595,20 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
             }
         }
     }
+    std::stable_sort(
+        activeLines.begin(), activeLines.end(),
+        [](const Impl::CachedLine *left, const Impl::CachedLine *right) {
+            return left->compositeOrder < right->compositeOrder;
+        }
+    );
     bool renderedAnyLine = false;
     for (const Impl::CachedLine *line : activeLines) {
       if (line != nullptr && !line->geometries.empty()) {
+        const float globalOpacity = overlayOpacityAt(*line);
         const TextStyle &style = line->style;
         const float inkWidth = line->bounds.right - line->bounds.left;
         float dx = (static_cast<float>(scene.width) - inkWidth) * 0.5f - line->bounds.left;
+        dx += style.centerOffsetX;
         if (style.alignment == "left") {
             dx = style.horizontalMargin - line->bounds.left;
         } else if (style.alignment == "right") {
@@ -1600,6 +1653,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 }
             }
         }
+        if (style.verticalPosition == "center") {
+            firstBaseline += style.centerOffsetY;
+        }
         const float dy = firstBaseline + step * static_cast<float>(line->lane);
         auto imageForPaint = [&](const PaintStyle &paint) -> ID2D1Bitmap1 * {
             const auto found = std::find_if(
@@ -1615,10 +1671,14 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
         auto paintBrushAt = [&](const PaintStyle &paint, const D2D1_RECT_F &rect,
                                 const RgbaColor &fallback,
                                 float offsetX, float offsetY) {
-            return createPaintBrush(
+            auto brush = createPaintBrush(
                 context, paint, rect, fallback, device_,
                 imageForPaint(paint), dx + offsetX, dy + offsetY
             );
+            if (brush) {
+                brush->SetOpacity(globalOpacity);
+            }
+            return brush;
         };
         auto paintBrush = [&](const PaintStyle &paint, const D2D1_RECT_F &rect,
                               const RgbaColor &fallback) {
