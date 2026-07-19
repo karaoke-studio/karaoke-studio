@@ -47,7 +47,31 @@ def gpu_unsupported_features(
                 if any(ch.role_label for ch in line.chars):
                     reasons.append("vertical_inline_style")
     if style.right_to_left:
-        reasons.append("right_to_left")
+        if style.vertical:
+            reasons.append("rtl_vertical")
+        if any(source.rubies for source in sources):
+            reasons.append("rtl_ruby")
+        if style.lit_enabled:
+            reasons.append("rtl_signal")
+        if any(
+            ch.role_label
+            for source in sources
+            for line in source.lines
+            for ch in line.chars
+        ):
+            reasons.append("rtl_inline_style")
+        if style.entry_anim != "none" or style.exit_anim != "none":
+            reasons.append("rtl_animation")
+        for source in sources:
+            if any(
+                line.animation_override is not None
+                and (
+                    line.animation_override.entry_anim != "none"
+                    or line.animation_override.exit_anim != "none"
+                )
+                for line in source.lines
+            ):
+                reasons.append("rtl_animation")
     if style.line_horizontal_layout == "per_row":
         reasons.append("per_row_layout")
     if style.entry_anim not in {

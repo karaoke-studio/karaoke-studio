@@ -6229,6 +6229,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         : 1;
     scene.style.verticalPosition = config.lineYPosition.toStdString();
     scene.style.vertical = config.vertical;
+    scene.style.rightToLeft = config.rightToLeft;
     scene.style.leadInMs = config.lineLeadInMs;
     scene.style.tailMs = config.lineTailMs;
     if (config.lineHorizontalLayout == QStringLiteral("center")) {

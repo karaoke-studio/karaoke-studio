@@ -156,6 +156,7 @@ struct TextStyle {
     std::string alignment = "center";
     std::string verticalPosition = "bottom";
     bool vertical = false;
+    bool rightToLeft = false;
     float centerOffsetX = 0.0f;
     float centerOffsetY = 0.0f;
     int leadInMs = 1800;

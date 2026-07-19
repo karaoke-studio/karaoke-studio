@@ -1420,3 +1420,26 @@ Utopia 横排主路径至此收口。G4 下一项进入 Sayatoo signal；产品 
 竖排正文、glow 与 ruby 基础组合至此收口。G4 下一刀继续处理 RTL、viewport transform、
 `per_row`、竖排标题/行内角色和竖排行动画；产品 GPU 开关继续默认关闭，Painter 永久保留为
 oracle 与 fallback。
+
+### 2026-07-19（第三十二批）：G4 RTL 正文布局与走字
+
+- GPU `TextStyle` 新增 RTL 方向标记。configure 仍按逻辑顺序生成 DirectWrite glyph，随后把每个
+  glyph 独立平移到反向字符槽：首字符位于最右，后续字符依次向左；只移动 outline、描边轮廓和
+  pivot，不对 glyph 本身做水平镜像。总宽、字距、left/center/right 锚点和 fill rect 因此继续与
+  Painter `_char_left_positions()` 共用同一语义。
+- 主字 wipe 从行右缘开始，按逻辑字符时间自右向左推进；before/after fill、stroke/stroke2、shadow
+  和 glow source 都切换为 RTL clip。gradient/split/image fill 仍使用整行固定 fill rect，不随字符
+  或走字重新起相位。
+- capability 只放行非竖排、无 ruby、无 signal、无行内角色、无行动画的 RTL 正文；其余组合分别
+  返回 `rtl_vertical`、`rtl_ruby`、`rtl_signal`、`rtl_inline_style`、`rtl_animation`，继续整场
+  Painter fallback，避免正文完成后误放行尚未反转 visual units 的 ruby。
+- 自动门槛使用不同宽度的 `W/i/M/.` 和 9 个走字时刻，分别覆盖 shadow/glow：四边界相对 Painter
+  最大偏差 `10px`，归一化 after 色推进偏差不超过 `0.08`。WARP Painter 门槛与硬件 benchmark
+  均通过。
+- benchmark 新增 `--rtl`。RTX 3070 Ti、1920×1080、60fps、中档 glow、packed bands、600 帧：
+  `156.29fps`，render/readback/roundtrip p95 `2.58/2.39/7.91ms`，平均 band 覆盖率 `14.07%`，
+  local 显存增长 0。GPU/transport 独立回归 `139 passed`，native protocol/export/benchmark
+  独立回归 `63 passed, 27 skipped`。
+
+下一批继续 RTL ruby：visual reading units 反向排列但保持各自逻辑时间，小假名翻转与浊点组合需
+严格复用 Painter 的 `_rtl_reverse_ruby_reading()` 语义；完成前 `rtl_ruby` 不移除。

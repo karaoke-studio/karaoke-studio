@@ -1420,6 +1420,70 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             }
         }
 
+        if (style.rightToLeft && !style.vertical && !cached.chars.empty()) {
+            auto translateGeometry = [&](ID2D1Geometry *source, float offsetX,
+                                         Microsoft::WRL::ComPtr<ID2D1Geometry> &target,
+                                         const char *operation) {
+                if (source == nullptr) {
+                    target.Reset();
+                    return;
+                }
+                const D2D1_MATRIX_3X2_F matrix = D2D1::Matrix3x2F::Translation(
+                    offsetX, 0.0f
+                );
+                Microsoft::WRL::ComPtr<ID2D1TransformedGeometry> transformed;
+                checkHr(
+                    device_.d2dFactory()->CreateTransformedGeometry(
+                        source, &matrix, transformed.ReleaseAndGetAddressOf()
+                    ),
+                    operation,
+                    device_
+                );
+                target = transformed;
+            };
+            cached.bounds = {};
+            cached.geometries.clear();
+            lineHasBounds = false;
+            for (Impl::CachedChar &ch : cached.chars) {
+                const float oldLayoutLeft = ch.layoutLeft;
+                const float oldLayoutRight = ch.layoutRight;
+                const float newLayoutLeft = cursor - oldLayoutRight;
+                const float offsetX = newLayoutLeft - oldLayoutLeft;
+                ch.left += offsetX;
+                ch.right += offsetX;
+                ch.layoutLeft = newLayoutLeft;
+                ch.layoutRight = cursor - oldLayoutLeft;
+                ch.pivotX += offsetX;
+                translateGeometry(
+                    ch.geometry.Get(), offsetX, ch.geometry,
+                    "ID2D1Factory::CreateTransformedGeometry(RTL character)"
+                );
+                translateGeometry(
+                    ch.protectedStrokeGeometry.Get(), offsetX,
+                    ch.protectedStrokeGeometry,
+                    "ID2D1Factory::CreateTransformedGeometry(RTL protected stroke)"
+                );
+                translateGeometry(
+                    ch.strokeGeometry.Get(), offsetX, ch.strokeGeometry,
+                    "ID2D1Factory::CreateTransformedGeometry(RTL stroke)"
+                );
+                translateGeometry(
+                    ch.stroke2Geometry.Get(), offsetX, ch.stroke2Geometry,
+                    "ID2D1Factory::CreateTransformedGeometry(RTL stroke2)"
+                );
+                if (ch.geometry) {
+                    D2D1_RECT_F bounds{};
+                    checkHr(
+                        ch.geometry->GetBounds(nullptr, &bounds),
+                        "ID2D1Geometry::GetBounds(RTL character)",
+                        device_
+                    );
+                    extendBounds(cached.bounds, lineHasBounds, bounds);
+                    cached.geometries.push_back(ch.geometry);
+                }
+            }
+        }
+
         if (style.vertical && !cached.chars.empty()) {
             DWRITE_FONT_METRICS verticalMetrics{};
             mainFace->GetMetrics(&verticalMetrics);
@@ -1737,12 +1801,14 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 continue;
             }
 
-            const float targetLeft = cached.chars[
-                static_cast<std::size_t>(sourceRuby.firstCharIndex)
-            ].layoutLeft;
-            const float targetRight = cached.chars[
-                static_cast<std::size_t>(sourceRuby.lastCharIndex)
-            ].layoutRight;
+            const float targetLeft = std::min(
+                cached.chars[static_cast<std::size_t>(sourceRuby.firstCharIndex)].layoutLeft,
+                cached.chars[static_cast<std::size_t>(sourceRuby.lastCharIndex)].layoutLeft
+            );
+            const float targetRight = std::max(
+                cached.chars[static_cast<std::size_t>(sourceRuby.firstCharIndex)].layoutRight,
+                cached.chars[static_cast<std::size_t>(sourceRuby.lastCharIndex)].layoutRight
+            );
             const float targetWidth = std::max(targetRight - targetLeft, 1.0f);
             const bool centered = rubyStyle.rubyAlignment == "center"
                 || (rubyStyle.rubyAlignment != "equal_space" && (
@@ -3146,10 +3212,15 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             style.afterDecorPaint, line->fillBounds, style.afterDecor
         );
 
-        float wipeEdge = style.vertical ? line->fillBounds.top : line->bounds.left;
+        const bool rtl = style.rightToLeft && !style.vertical;
+        float wipeEdge = style.vertical
+            ? line->fillBounds.top
+            : (rtl ? line->bounds.right : line->bounds.left);
         for (const Impl::CachedChar &ch : line->chars) {
             if (tMs >= ch.endMs) {
-                wipeEdge = std::max(wipeEdge, style.vertical ? ch.bottom : ch.right);
+                wipeEdge = rtl
+                    ? std::min(wipeEdge, ch.left)
+                    : std::max(wipeEdge, style.vertical ? ch.bottom : ch.right);
                 continue;
             }
             if (tMs <= ch.startMs) {
@@ -3163,7 +3234,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             );
             wipeEdge = style.vertical
                 ? ch.top + (ch.bottom - ch.top) * ratio
-                : ch.left + (ch.right - ch.left) * ratio;
+                : (rtl
+                    ? ch.right - (ch.right - ch.left) * ratio
+                    : ch.left + (ch.right - ch.left) * ratio);
             break;
         }
 
@@ -3253,15 +3326,22 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 line->bounds.right + geometryPad,
                 wipeEdge
             )
-            : D2D1::RectF(
-                line->bounds.left - geometryPad,
-                line->bounds.top - geometryPad,
-                wipeEdge,
-                line->bounds.bottom + geometryPad
-            );
-        const bool hasAfterWipe = wipeEdge > (
-            style.vertical ? line->fillBounds.top : line->bounds.left
-        );
+            : (rtl
+                ? D2D1::RectF(
+                    wipeEdge,
+                    line->bounds.top - geometryPad,
+                    line->bounds.right + geometryPad,
+                    line->bounds.bottom + geometryPad
+                )
+                : D2D1::RectF(
+                    line->bounds.left - geometryPad,
+                    line->bounds.top - geometryPad,
+                    wipeEdge,
+                    line->bounds.bottom + geometryPad
+                ));
+        const bool hasAfterWipe = style.vertical
+            ? wipeEdge > line->fillBounds.top
+            : (rtl ? wipeEdge < line->bounds.right : wipeEdge > line->bounds.left);
         auto rubyWipeEdgeAt = [&](const Impl::CachedRuby &ruby) {
             float edge = style.vertical ? ruby.bounds.top : ruby.bounds.left;
             for (const Impl::CachedChar &ch : ruby.chars) {
@@ -3568,8 +3648,11 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     return (charOnly < 0 || charIndex == charOnly)
                         && ch.styleIndex == styleIndex
                         && ch.geometry
-                        && !((after && wipeEdge <= ch.left)
-                            || (!after && wipeEdge >= ch.right));
+                        && !(rtl
+                            ? ((after && wipeEdge >= ch.right)
+                                || (!after && wipeEdge <= ch.left))
+                            : ((after && wipeEdge <= ch.left)
+                                || (!after && wipeEdge >= ch.right)));
                 }
             );
             if (charStyle.decorationKind != "glow" || radius <= 0 || !hasVisibleSource) {
@@ -3622,20 +3705,33 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 const Impl::CachedChar &ch = line->chars[charIndex];
                 if ((charOnly >= 0 && static_cast<int>(charIndex) != charOnly)
                     || ch.styleIndex != styleIndex || ch.geometry == nullptr
-                    || (after && wipeEdge <= ch.left)
-                    || (!after && wipeEdge >= ch.right)) {
+                    || (rtl
+                        ? ((after && wipeEdge >= ch.right)
+                            || (!after && wipeEdge <= ch.left))
+                        : ((after && wipeEdge <= ch.left)
+                            || (!after && wipeEdge >= ch.right)))) {
                     continue;
                 }
                 brush->SetOpacity(globalOpacity * characterOpacityAt(charIndex));
-                const D2D1_RECT_F clip = after
-                    ? D2D1::RectF(
-                        ch.left - pad, line->bounds.top - pad,
-                        wipeEdge, line->bounds.bottom + pad
-                    )
-                    : D2D1::RectF(
-                        wipeEdge, line->bounds.top - pad,
-                        ch.right + pad, line->bounds.bottom + pad
-                    );
+                const D2D1_RECT_F clip = rtl
+                    ? (after
+                        ? D2D1::RectF(
+                            wipeEdge, line->bounds.top - pad,
+                            ch.right + pad, line->bounds.bottom + pad
+                        )
+                        : D2D1::RectF(
+                            ch.left - pad, line->bounds.top - pad,
+                            wipeEdge, line->bounds.bottom + pad
+                        ))
+                    : (after
+                        ? D2D1::RectF(
+                            ch.left - pad, line->bounds.top - pad,
+                            wipeEdge, line->bounds.bottom + pad
+                        )
+                        : D2D1::RectF(
+                            wipeEdge, line->bounds.top - pad,
+                            ch.right + pad, line->bounds.bottom + pad
+                        ));
                 context->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                 context->DrawGeometry(ch.geometry.Get(), brush.Get(), sourceWidth);
                 context->PopAxisAlignedClip();

@@ -43,6 +43,7 @@ def _scene(
     signals: bool = False,
     signal_style: str = "volume",
     vertical: bool = False,
+    rtl: bool = False,
 ) -> tuple[TimingTrack, Style]:
     text = "縦書きGPU" if vertical else "Karaoke Studio GPU"
     chars = [
@@ -121,6 +122,7 @@ def _scene(
         volume_overlay_fill_color="#2F8BFF",
         volume_overlay_stroke_color="#FFFFFF",
         vertical=vertical,
+        right_to_left=rtl,
     )
     return track, style
 
@@ -140,6 +142,7 @@ def run_benchmark(
     signals: bool = False,
     signal_style: str = "volume",
     vertical: bool = False,
+    rtl: bool = False,
 ) -> tuple[dict, list[dict]]:
     import psutil
 
@@ -154,6 +157,7 @@ def run_benchmark(
         signals=signals,
         signal_style=signal_style,
         vertical=vertical,
+        rtl=rtl,
     )
     shm_key = f"krok_gpu_g1_benchmark_{os.getpid()}_{uuid.uuid4().hex}"
     rows: list[dict] = []
@@ -250,6 +254,7 @@ def run_benchmark(
         "signals": signals,
         "signal_style": signal_style if signals else "none",
         "vertical": vertical,
+        "rtl": rtl,
         "bands": bands,
         "height": height,
         "readback_mean_ms": round(statistics.fmean(readback_times), 4),
@@ -317,6 +322,7 @@ def main() -> int:
         help="signal geometry used with --signals",
     )
     parser.add_argument("--vertical", action="store_true", help="stack main glyphs vertically")
+    parser.add_argument("--rtl", action="store_true", help="lay out and wipe text right-to-left")
     parser.add_argument(
         "--animation",
         choices=("none", "fade", "char_fade", "spin_flip", "utopia"),
@@ -353,6 +359,7 @@ def main() -> int:
             signals=bool(args.signals),
             signal_style=args.signal_style,
             vertical=bool(args.vertical),
+            rtl=bool(args.rtl),
         )
         all_rows.extend(rows)
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True))

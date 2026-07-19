@@ -1934,6 +1934,81 @@ def test_gpu_g4_shape_signal_geometry_and_extinguish_transition_follow_painter(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("decoration_kind", ["shadow", "glow"])
+def test_gpu_g4_rtl_main_layout_and_right_to_left_wipe_follow_painter(
+    monkeypatch, decoration_kind: str
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("W", 0),
+                    TimingChar("i", 500),
+                    TimingChar("M", 1_000),
+                    TimingChar(".", 1_500),
+                ],
+                end_ms=2_000,
+            )
+        ]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=72,
+        right_to_left=True,
+        dual_line_layout=False,
+        line_y_position="center",
+        line_horizontal_layout="center",
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        stroke_width_px=3,
+        stroke2_enabled=True,
+        stroke2_width_px=2,
+        decoration_kind=decoration_kind,
+        shadow_offset_x=7,
+        shadow_offset_y=6,
+        glow_before_radius_px=8,
+        glow_after_radius_px=8,
+        glow_concentration_level=1,
+    )
+    timestamps = (0, 250, 500, 750, 1_000, 1_250, 1_500, 1_750, 2_000)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+
+    def after_pixels(payload: bytes) -> int:
+        return sum(
+            payload[index] > payload[index + 1] + 60
+            and payload[index] > payload[index + 2] + 30
+            and payload[index + 3] > 16
+            for index in range(0, len(payload), 4)
+        )
+
+    for gpu_frame, painter_frame in zip(gpu, painter):
+        assert all(
+            abs(actual - expected) <= 10
+            for actual, expected in zip(
+                _payload_alpha_bounds(gpu_frame),
+                _payload_alpha_bounds(painter_frame),
+            )
+        )
+    gpu_full = after_pixels(gpu[-1])
+    painter_full = after_pixels(painter[-1])
+    assert gpu_full > 0 and painter_full > 0
+    for gpu_frame, painter_frame in zip(gpu, painter):
+        assert abs(
+            after_pixels(gpu_frame) / gpu_full
+            - after_pixels(painter_frame) / painter_full
+        ) <= 0.08
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g4_vertical_ruby_geometry_and_empty_timing_slot_follow_painter(
     monkeypatch,
 ) -> None:

@@ -251,6 +251,7 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
     assert gpu_unsupported_features(track, Style(entry_anim="spin_flip")) == ()
     assert gpu_unsupported_features(track, Style(entry_anim="utopia")) == ()
     assert gpu_unsupported_features(track, Style(lit_enabled=True)) == ()
+    assert gpu_unsupported_features(track, Style(right_to_left=True)) == ()
     for lit_style in ("circle", "square", "rounded"):
         assert gpu_unsupported_features(
             track, Style(lit_enabled=True, lit_style=lit_style)
@@ -267,6 +268,9 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
         ],
     )
     assert gpu_unsupported_features(ruby_track, Style(entry_anim="utopia")) == ()
+    assert gpu_unsupported_features(
+        ruby_track, Style(right_to_left=True)
+    ) == ("rtl_ruby",)
     assert gpu_unsupported_features(ruby_track, Style(vertical=True)) == ()
     assert gpu_unsupported_features(
         ruby_track, Style(vertical=True, entry_anim="fade")
