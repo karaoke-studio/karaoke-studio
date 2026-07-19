@@ -24,6 +24,49 @@ from krok_helper.subtitle_render.models import (
 RENDER_IR_SCHEMA = 1
 
 
+def gpu_unsupported_features(
+    track: TimingTrack,
+    style: Style,
+    extra_tracks: list[TimingTrack] | None = None,
+) -> tuple[str, ...]:
+    """Return project features that require whole-frame Painter fallback."""
+    reasons: list[str] = []
+    if style.vertical:
+        reasons.append("vertical")
+    if style.right_to_left:
+        reasons.append("right_to_left")
+    if style.line_horizontal_layout == "per_row":
+        reasons.append("per_row_layout")
+    if style.lit_enabled:
+        reasons.append("signal_lits")
+    if style.entry_anim != "none" or style.exit_anim != "none":
+        reasons.append("line_animation")
+    if (
+        style.viewport_scale_pct != 100
+        or style.viewport_rotation_deg != 0
+        or style.viewport_offset_x != 0
+        or style.viewport_offset_y != 0
+    ):
+        reasons.append("viewport_transform")
+    for source in [track, *(extra_tracks or ())]:
+        for line in source.lines:
+            if line.layout_index != 0:
+                reasons.append("line_layout_override")
+            if line.animation_override is not None and (
+                line.animation_override.entry_anim != "none"
+                or line.animation_override.exit_anim != "none"
+            ):
+                reasons.append("line_animation_override")
+            if line.guide_symbol is not None or line.inline_guide_symbols:
+                reasons.append("guide_symbol")
+            if any(
+                ch.source_span_count != 1 or ch.source_span_start_ms is not None
+                for ch in line.chars
+            ):
+                reasons.append("shared_timing_span")
+    return tuple(dict.fromkeys(reasons))
+
+
 def title_to_ir(track: TimingTrack, style: Style) -> dict[str, Any] | None:
     """Resolve the Painter title contract into a renderer-ready snapshot."""
     # Keep the resolution logic shared with the CPU oracle.  In particular,
@@ -68,13 +111,26 @@ def timing_char_to_ir(ch: TimingChar) -> dict[str, Any]:
     }
 
 
-def timing_line_to_ir(line: TimingLine) -> dict[str, Any]:
+def timing_line_to_ir(
+    line: TimingLine,
+    *,
+    lane: int = 0,
+    display_start_ms: int | None = None,
+    display_end_ms: int | None = None,
+    center_override: bool = False,
+) -> dict[str, Any]:
     return {
         "chars": [timing_char_to_ir(ch) for ch in line.chars],
         "end_ms": int(line.end_ms) if line.end_ms is not None else None,
         "singer_label": line.singer_label,
         "singer_id": line.singer_id,
         "is_blank": bool(line.is_blank),
+        "lane": int(lane),
+        "display_start_ms": (
+            int(display_start_ms) if display_start_ms is not None else None
+        ),
+        "display_end_ms": int(display_end_ms) if display_end_ms is not None else None,
+        "center_override": bool(center_override),
     }
 
 
@@ -89,7 +145,21 @@ def ruby_to_ir(ruby: RubyAnnotation) -> dict[str, Any]:
     }
 
 
-def track_to_ir(track: TimingTrack) -> dict[str, Any]:
+def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any]:
+    schedule: dict[int, tuple[int, int, int]] = {}
+    if style is not None:
+        from krok_helper.subtitle_render.engine.painter import (
+            _line_center_override,
+            display_schedule_for_style,
+        )
+
+        schedule = display_schedule_for_style(track, style)
+        center_overrides = {
+            index: _line_center_override(track, line, style)
+            for index, line in enumerate(track.lines)
+        }
+    else:
+        center_overrides = {}
     return {
         "meta": {
             "title": track.meta.title,
@@ -100,7 +170,16 @@ def track_to_ir(track: TimingTrack) -> dict[str, Any]:
             "offset_ms": int(track.meta.offset_ms),
             "custom": list(track.meta.custom),
         },
-        "lines": [timing_line_to_ir(line) for line in track.lines],
+        "lines": [
+            timing_line_to_ir(
+                line,
+                lane=schedule.get(index, (0, 0, 0))[0],
+                display_start_ms=(schedule[index][1] if index in schedule else None),
+                display_end_ms=(schedule[index][2] if index in schedule else None),
+                center_override=center_overrides.get(index, False),
+            )
+            for index, line in enumerate(track.lines)
+        ],
         "rubies": [ruby_to_ir(ruby) for ruby in track.rubies],
     }
 
@@ -130,9 +209,9 @@ def build_render_ir(
             "dpr": max(float(dpr or 1.0), 0.01),
         },
         "style": style_to_dict(style),
-        "track": track_to_ir(track),
+        "track": track_to_ir(track, style),
         # Keep each source separate.  Painter schedules lanes/display windows
         # independently per source and then composites primary -> extras.
-        "extra_tracks": [track_to_ir(item) for item in extra_tracks or ()],
+        "extra_tracks": [track_to_ir(item, style) for item in extra_tracks or ()],
         "title": title_to_ir(track, style),
     }

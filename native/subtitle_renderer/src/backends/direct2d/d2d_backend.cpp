@@ -828,7 +828,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         cached.fadeOutMs = sourceLine.fadeOutMs;
         cached.displayWindows = sourceLine.displayWindows;
         cached.lane = style.dualLineLayout
-            ? sourceLine.sourceLineIndex % std::max(style.laneCount, 1)
+            ? sourceLine.lane % std::max(style.laneCount, 1)
             : 0;
         cached.chars.reserve(sourceLine.chars.size());
         bool lineHasBounds = false;
@@ -1576,12 +1576,21 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
     };
     std::vector<const Impl::CachedLine *> activeLines;
     for (const Impl::CachedLine &candidate : impl_->lines) {
+        const bool resolvedWindowVisible = !candidate.displayWindows.empty()
+            && std::any_of(
+                candidate.displayWindows.begin(), candidate.displayWindows.end(),
+                [&](const DisplayWindow &window) {
+                    return window.endMs > window.startMs
+                        && tMs >= window.startMs
+                        && tMs <= window.endMs;
+                }
+            );
         const bool visible = candidate.staticOverlay
             ? overlayOpacityAt(candidate) > 0.0f
-            : (
+            : (!candidate.displayWindows.empty() ? resolvedWindowVisible : (
                 tMs >= candidate.startMs - std::max(baseStyle.leadInMs, 0)
                 && tMs <= candidate.endMs + std::max(baseStyle.tailMs, 0)
-            );
+            ));
         if (visible) {
             const bool laneAlreadyActive = std::any_of(
                 activeLines.begin(), activeLines.end(),

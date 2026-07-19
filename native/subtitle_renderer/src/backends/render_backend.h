@@ -123,6 +123,7 @@ struct TextLine {
     int endMs = 0;
     int sourceIndex = 0;
     int sourceLineIndex = 0;
+    int lane = 0;
     int compositeOrder = 0;
     bool staticOverlay = false;
     int fadeInMs = 0;

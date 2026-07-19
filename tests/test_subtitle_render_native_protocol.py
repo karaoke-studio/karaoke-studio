@@ -45,7 +45,11 @@ from krok_helper.subtitle_render.native_backend import (
     default_native_renderer_path,
     resolve_native_renderer_path,
 )
-from krok_helper.subtitle_render.native_protocol import RENDER_IR_SCHEMA, build_render_ir
+from krok_helper.subtitle_render.native_protocol import (
+    RENDER_IR_SCHEMA,
+    build_render_ir,
+    gpu_unsupported_features,
+)
 
 _NATIVE_PARITY_DIVERGED = pytest.mark.skipif(
     os.environ.get("KROK_SUBTITLE_NATIVE_PARITY_STRICT") != "1",
@@ -205,6 +209,57 @@ def test_build_render_ir_resolves_title_metadata_and_windows():
 
     assert ir["title"]["text"] == "曲名 / 歌手"
     assert ir["title"]["windows"] == [[100, 1_600]]
+
+
+def test_build_render_ir_carries_painter_display_schedule():
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("A", 1_000)],
+                end_ms=1_500,
+                display_start_override_ms=200,
+                display_end_override_ms=400,
+            ),
+            TimingLine(chars=[TimingChar("B", 2_000)], end_ms=2_500),
+        ]
+    )
+    style = Style(dual_line_layout=True, line_lead_in_ms=900, line_tail_ms=700)
+
+    ir = build_render_ir(track, style, width=640, height=360, fps=60)
+
+    first = ir["track"]["lines"][0]
+    assert first["lane"] == 0
+    assert first["display_start_ms"] == 200
+    # Dual-line protection never lets a manual window cut off the sung span.
+    assert first["display_end_ms"] == 1_500
+    assert ir["track"]["lines"][1]["lane"] == 1
+
+
+def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("A", 0)], end_ms=500)])
+
+    assert gpu_unsupported_features(track, Style()) == ()
+    assert gpu_unsupported_features(track, Style(vertical=True)) == ("vertical",)
+    assert gpu_unsupported_features(track, Style(entry_anim="fade")) == (
+        "line_animation",
+    )
+    span_track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar(
+                        "A",
+                        0,
+                        source_span_start_ms=0,
+                        source_span_end_ms=500,
+                        source_span_count=2,
+                    )
+                ],
+                end_ms=500,
+            )
+        ]
+    )
+    assert gpu_unsupported_features(span_track, Style()) == ("shared_timing_span",)
 
 
 def test_build_render_ir_clamps_screen_values():

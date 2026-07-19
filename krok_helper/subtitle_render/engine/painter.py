@@ -2872,6 +2872,47 @@ def display_windows_for_style(
     return windows
 
 
+def display_schedule_for_style(
+    track: TimingTrack, style: Style
+) -> dict[int, tuple[int, int, int]]:
+    """Return ``line index -> (lane, display start, display end)``.
+
+    Native/GPU backends consume this resolved schedule so pagination, manual
+    display overrides and lane protection remain owned by the Painter oracle.
+    """
+    if not style.dual_line_layout:
+        return {
+            index: (0, start, end)
+            for index, (start, end) in display_windows_for_style(track, style).items()
+        }
+    items = compute_display_lines(
+        track,
+        lead_in_ms=style.line_lead_in_ms,
+        tail_ms=style.line_tail_ms,
+        lane_gap_ms=style.line_lane_gap_ms,
+        max_hold_ms=style.line_max_hold_ms,
+        continuity_snap_ms=style.line_continuity_snap_ms,
+        pair_second_delay_ms=style.line_pair_second_delay_ms,
+        section_gap_ms=style.section_gap_ms,
+        sync_entry=style.sync_entry,
+        sync_ending=style.sync_ending,
+        section_ending_mode=style.section_ending_mode,
+        protect_ms=_effective_line_protect_ms(style),
+        lane_count=_lane_count(style),
+        row_count_of=_row_count_resolver(style),
+    )
+    index_of = {id(line): index for index, line in enumerate(track.lines)}
+    return {
+        index_of[id(item.line)]: (
+            int(item.lane),
+            int(item.display_start_ms),
+            int(item.display_end_ms),
+        )
+        for item in items
+        if id(item.line) in index_of
+    }
+
+
 def _single_visible_display_line(
     track: TimingTrack,
     t_ms: int,

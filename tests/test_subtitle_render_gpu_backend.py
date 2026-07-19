@@ -1176,6 +1176,117 @@ def test_gpu_g3_banded_readback_reconstructs_full_frame_exactly(monkeypatch) -> 
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_uses_painter_resolved_display_overrides(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("A", 1_000)],
+                end_ms=1_500,
+                display_start_override_ms=200,
+                display_end_override_ms=400,
+            )
+        ]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+        line_lead_in_ms=900,
+        line_tail_ms=900,
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer,
+            style,
+            (199, 300, 1_501, 2_000),
+            force_warp=True,
+            track=track,
+        )
+
+    assert _alpha_count(frames[0]) == 0
+    assert _alpha_count(frames[1]) > 0
+    assert _alpha_count(frames[2]) == 0
+    assert _alpha_count(frames[3]) == 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_dual_lane_alignments_follow_painter_schedule(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    def role_scheme(color: str) -> SubtitleStyleScheme:
+        colors = KaraokeColors(
+            before=KaraokeColorState(text=PaintFill(mode="solid", color=color)),
+            after=KaraokeColorState(text=PaintFill(mode="solid", color=color)),
+        )
+        return SubtitleStyleScheme(
+            font_family="Meiryo",
+            font_family_latin="Meiryo",
+            font_size_px=70,
+            stroke_width_px=0,
+            decoration_kind="none",
+            karaoke_colors=colors,
+        )
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar(ch, 0, role_label="left") for ch in "AAA"],
+                end_ms=1_000,
+            ),
+            TimingLine(
+                chars=[TimingChar(ch, 0, role_label="right") for ch in "BBBB"],
+                end_ms=1_000,
+            ),
+        ]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=70,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=True,
+        line_horizontal_layout="asymmetric",
+        line_alignments=["left", "right"],
+        horizontal_margin_px=44,
+        smart_horizontal="none",
+        custom_style_schemes={
+            "left": role_scheme("#FF2020"),
+            "right": role_scheme("#20FF40"),
+        },
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, (500,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=500, track=track)
+
+    def color_bounds(payload: bytes, *, green: bool) -> tuple[int, int]:
+        xs = []
+        for index in range(0, len(payload), 4):
+            red, value_green, _blue, alpha = payload[index : index + 4]
+            matches_color = (
+                value_green > red + 80 if green else red > value_green + 80
+            )
+            if alpha > 0 and matches_color:
+                xs.append((index // 4) % 640)
+        assert xs
+        return min(xs), max(xs)
+
+    for green in (False, True):
+        gpu_bounds = color_bounds(frames[0], green=green)
+        painter_bounds = color_bounds(painter, green=green)
+        assert all(
+            abs(actual - expected) <= 8
+            for actual, expected in zip(gpu_bounds, painter_bounds)
+        ), (gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g3_inline_role_fonts_sizes_colors_and_strokes_match_painter(
     monkeypatch,
 ) -> None:

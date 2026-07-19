@@ -543,6 +543,40 @@ def test_gpu_async_renderer_failure_falls_back_to_painter(qapp, monkeypatch):
         renderer.stop()
 
 
+def test_gpu_async_renderer_capability_fallback_skips_sidecar(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.models import Style, TimingTrack
+
+    constructed = 0
+
+    class UnexpectedGpuProcess:
+        def __init__(self, *args, **kwargs):
+            nonlocal constructed
+            constructed += 1
+            raise AssertionError("unsupported scene must not start the GPU sidecar")
+
+    monkeypatch.setattr(pa, "NativeRendererProcess", UnexpectedGpuProcess)
+    renderer = pa.GpuAsyncSubtitleRenderer(320, 180)
+    frames: list[int] = []
+    renderer.frame_ready.connect(lambda _image, t_ms: frames.append(int(t_ms)))
+    try:
+        renderer.set_state(TimingTrack(), Style(vertical=True))
+        renderer.request(1_000)
+        deadline = time.monotonic() + 2.0
+        while not frames and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+
+        assert frames == [1_000]
+        assert constructed == 0
+        stats = renderer.stats_snapshot()
+        assert stats["capability_fallbacks"] == 1
+        assert stats["fallback_frames"] == 1
+        assert stats["renderer_failures"] == 0
+    finally:
+        renderer.stop()
+
+
 def test_gpu_async_renderer_one_frame_lookahead_uses_bounded_cache(qapp, monkeypatch):
     from krok_helper.subtitle_render.frontend import preview_async as pa
     from krok_helper.subtitle_render.models import Style, TimingTrack

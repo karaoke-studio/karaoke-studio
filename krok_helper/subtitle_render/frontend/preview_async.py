@@ -31,6 +31,7 @@ from krok_helper.subtitle_render.native_backend import (
     NativeRendererProcess,
     SharedFrameRingReader,
 )
+from krok_helper.subtitle_render.native_protocol import gpu_unsupported_features
 
 
 def _env_enabled(name: str, default: str) -> bool:
@@ -423,6 +424,7 @@ class GpuAsyncSubtitleRenderer(QObject):
             "renderer_failures": 0,
             "renderer_restarts": 0,
             "fallback_frames": 0,
+            "capability_fallbacks": 0,
             "max_pending": 0,
         }
         self._timings: dict[str, deque[float]] = {
@@ -576,6 +578,21 @@ class GpuAsyncSubtitleRenderer(QObject):
                     submitted_at,
                 ) = snapshot
                 if track is None or style is None:
+                    continue
+                unsupported = gpu_unsupported_features(track, style, extra_tracks)
+                if unsupported:
+                    if not speculative:
+                        self._note("capability_fallbacks")
+                        self._emit_python_fallback(
+                            track,
+                            style,
+                            extra_tracks,
+                            width,
+                            height,
+                            dpr,
+                            t_ms,
+                            generation,
+                        )
                     continue
                 if self._renderer_failed:
                     if time.monotonic() < self._retry_after:

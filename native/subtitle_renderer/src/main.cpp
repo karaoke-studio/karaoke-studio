@@ -72,6 +72,10 @@ struct TimingLine {
     int sourceIndex = 0;
     int sourceLineIndex = 0;
     int sourceOffsetMs = 0;
+    int lane = 0;
+    std::optional<int> displayStartMs;
+    std::optional<int> displayEndMs;
+    bool centerOverride = false;
 };
 
 struct RubyAnnotation {
@@ -1766,6 +1770,20 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
             line.sourceIndex = static_cast<int>(sourceIndex);
             line.sourceLineIndex = sourceLineIndex;
             line.sourceOffsetMs = sourceOffsetMs;
+            line.lane = std::max(0, intValue(lineObject, QStringLiteral("lane"), 0));
+            if (lineObject.value(QStringLiteral("display_start_ms")).isDouble()) {
+                line.displayStartMs = lineObject.value(
+                    QStringLiteral("display_start_ms")
+                ).toInt();
+            }
+            if (lineObject.value(QStringLiteral("display_end_ms")).isDouble()) {
+                line.displayEndMs = lineObject.value(
+                    QStringLiteral("display_end_ms")
+                ).toInt();
+            }
+            line.centerOverride = lineObject.value(
+                QStringLiteral("center_override")
+            ).toBool(false);
 
             const QJsonArray chars = lineObject.value(QStringLiteral("chars")).toArray();
             line.chars.reserve(static_cast<std::size_t>(chars.size()));
@@ -6091,6 +6109,22 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         applyGpuResolvedStyle(
             lineStyle, resolvedStyleForLine(config, sourceLine), scale
         );
+        lineStyle.horizontalMargin = static_cast<float>(
+            config.horizontalMarginPx * scale
+        );
+        if (sourceLine.centerOverride
+            || config.lineHorizontalLayout == QStringLiteral("center")) {
+            lineStyle.alignment = "center";
+        } else if (!config.lineAlignments.empty()) {
+            const int alignmentIndex = std::clamp(
+                sourceLine.lane,
+                0,
+                static_cast<int>(config.lineAlignments.size()) - 1
+            );
+            lineStyle.alignment = config.lineAlignments[
+                static_cast<std::size_t>(alignmentIndex)
+            ].toStdString();
+        }
         scene.lineStyles.push_back(std::move(lineStyle));
         TextLine line;
         const int sourceTimingOffset = config.timingOffsetMs + sourceLine.sourceOffsetMs;
@@ -6098,9 +6132,17 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         line.endMs = lineEndMs(sourceLine) + sourceTimingOffset;
         line.sourceIndex = sourceLine.sourceIndex;
         line.sourceLineIndex = sourceLine.sourceLineIndex;
+        line.lane = sourceLine.lane;
         line.compositeOrder = sourceLine.sourceIndex == 0
             ? 0
             : sourceLine.sourceIndex + 1;
+        if (sourceLine.displayStartMs.has_value()
+            && sourceLine.displayEndMs.has_value()) {
+            line.displayWindows.push_back(krok::subtitle::native::DisplayWindow{
+                *sourceLine.displayStartMs + sourceTimingOffset,
+                *sourceLine.displayEndMs + sourceTimingOffset,
+            });
+        }
         line.chars.reserve(sourceLine.chars.size());
         for (std::size_t index = 0; index < sourceLine.chars.size(); ++index) {
             int styleIndex = -1;
@@ -6287,6 +6329,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 titleLine.endMs = windows.back().endMs;
                 titleLine.sourceIndex = -1;
                 titleLine.sourceLineIndex = rowIndex;
+                titleLine.lane = rowIndex;
                 titleLine.compositeOrder = 1;
                 titleLine.staticOverlay = true;
                 titleLine.fadeInMs = std::max(

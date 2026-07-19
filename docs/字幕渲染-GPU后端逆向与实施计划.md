@@ -1238,3 +1238,23 @@ Painter 永久保留为 oracle 与任何不支持路径的整帧 fallback。
 
 G3 还剩 TACTIC/A stain 组合 corpus 的 raw overlay diff 与 cache/GPU memory 稳态门禁；完成前仍不把
 GPU 开关暴露给普通用户。
+
+### 2026-07-19（第二十批）：Painter 解析排版与能力门禁
+
+- GPU 不再自行用相邻行时间近似分页。Python 在构建 Render IR 时直接调用 Painter 的
+  `compute_display_lines()` / `display_windows_for_style()`，把每行最终 `lane`、显示起止时间以及
+  智能居中结果固化进场景；Direct2D 只消费解析后的排版快照。手工显示窗口也继续遵守 Painter
+  “不能截断实际演唱区间”的既有约束。
+- 双行非对称布局、每 lane 左/右/居中和水平边距均由 Painter 的最终 schedule 驱动。新增红/绿双行
+  自动门禁，分别扫描 GPU 与 Painter 的颜色边界，四个水平边缘偏差均不超过 `8px`；显示覆盖窗口
+  另覆盖边界前、区间内、演唱结束后和 tail 外四个时间点。
+- 新增集中式 GPU capability gate。竖排、RTL、逐行布局、signal、行进入/退出动画、viewport
+  变换、guide symbols 与共享 timing span 等尚未迁移的语义，统一在创建 sidecar 之前整场回退
+  Painter；不允许一部分 GPU、一部分 CPU 的混合合成，也不把“能力未实现”计作 renderer failure。
+  统计新增 `capability_fallbacks`，便于后续逐项迁移和产品诊断。
+- 硬件/WARP build smoke 通过；GPU/transport 回归 `114 passed`，native
+  protocol/export/benchmark 独立回归 `60 passed, 27 skipped`。GPU 产品开关继续默认关闭，
+  Painter 仍是布局、时序、兼容性与整帧 fallback 的唯一 oracle。
+
+G3 下一刀继续做组合 corpus 的 raw overlay diff，以及重复 configure/render 下 cache 和 GPU/进程
+内存稳态门禁；能力门禁中的高级项目留到 G4 逐项消除。
