@@ -71,6 +71,8 @@ struct PaintStyle {
     std::vector<PaintStop> stops;
     std::wstring imagePath;
     float imageScale = 1.0f;
+    std::uint64_t imageModifiedMs = 0;
+    std::uint64_t imageSize = 0;
     bool operator==(const PaintStyle &) const = default;
 };
 

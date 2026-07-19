@@ -6,7 +6,7 @@ from pathlib import Path
 import uuid
 
 import pytest
-from PyQt6.QtGui import QImage
+from PyQt6.QtGui import QColor, QImage
 
 from krok_helper.subtitle_render.native_backend import (
     NativeRendererError,
@@ -1329,6 +1329,154 @@ def test_gpu_g3_split_vertical_preserves_painter_hard_bands(monkeypatch) -> None
     assert gpu_transitions[:3] == pytest.approx(painter_transitions[:3], abs=1)
     assert [gpu_rows[index] for index in gpu_transitions[:3]] == [0, 1, 2]
     assert [painter_rows[index] for index in painter_transitions[:3]] == [0, 1, 2]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_image_fill_wrap_scale_and_canvas_anchor_match_painter(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    pattern_path = tmp_path / "gpu-fill-pattern.png"
+    pattern = QImage(8, 8, QImage.Format.Format_RGBA8888)
+    palette = ("#FF2020", "#20FF40", "#2040FF", "#FFE020")
+    for y in range(pattern.height()):
+        for x in range(pattern.width()):
+            pattern.setPixelColor(x, y, QColor(palette[(x // 4) + 2 * (y // 4)]))
+    assert pattern.save(str(pattern_path))
+
+    def render(scale_pct: int) -> tuple[list[bytes], bytes]:
+        fill = PaintFill(
+            mode="image",
+            color="#FFFFFF",
+            image_path=str(pattern_path),
+            image_scale_pct=scale_pct,
+        )
+        state = KaraokeColorState(text=fill)
+        style = _g1_style(
+            font_family="Meiryo",
+            font_size_px=140,
+            stroke_width_px=0,
+            stroke2_enabled=False,
+            decoration_kind="none",
+            dual_line_layout=False,
+            karaoke_colors=KaraokeColors(before=state, after=state),
+        )
+        track = _g3_fill_track()
+        with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+            _, frames = _render_g1_frames(
+                renderer, style, (100, 900), force_warp=True, track=track
+            )
+        return frames, _render_painter_oracle(style, t_ms=900, track=track)
+
+    frames_100, painter_100 = render(100)
+    frames_200, painter_200 = render(200)
+    assert frames_100[0] == frames_100[1]
+    assert frames_200[0] == frames_200[1]
+    assert frames_100[0] != frames_200[0]
+
+    def overlapping_diffs(gpu: bytes, painter: bytes) -> list[int]:
+        diffs: list[int] = []
+        for index in range(0, len(gpu), 4):
+            if gpu[index + 3] >= 250 and painter[index + 3] >= 250:
+                diffs.append(max(abs(gpu[index + c] - painter[index + c]) for c in range(3)))
+        assert len(diffs) > 2_000
+        return sorted(diffs)
+
+    for gpu, painter in ((frames_100[1], painter_100), (frames_200[1], painter_200)):
+        diffs = overlapping_diffs(gpu, painter)
+        assert diffs[len(diffs) // 2] <= 12
+        assert diffs[int(len(diffs) * 0.90)] <= 70
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_alpha_image_fill_protects_body_from_primary_stroke(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    image_path = tmp_path / "gpu-alpha-fill.png"
+    source = QImage(1, 1, QImage.Format.Format_RGBA8888)
+    source.fill(0)
+    source.setPixelColor(0, 0, QColor(255, 255, 255, 128))
+    assert source.save(str(image_path))
+    image_fill = PaintFill(
+        mode="image", image_path=str(image_path), image_scale_pct=100
+    )
+    state = KaraokeColorState(
+        text=image_fill,
+        stroke=PaintFill(mode="solid", color="#FF0000"),
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_size_px=140,
+        stroke_width_px=12,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+        karaoke_colors=KaraokeColors(before=state, after=state),
+    )
+    track = _g3_fill_track()
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, (100,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=100, track=track)
+    bounds = _payload_alpha_bounds(painter)
+    center_y = (bounds[1] + bounds[3]) // 2
+    outer_index = (center_y * 640 + bounds[0] + 2) * 4
+    inside_index = (center_y * 640 + bounds[0] + 8) * 4
+    gpu_outer = tuple(frames[0][outer_index : outer_index + 4])
+    gpu_inside = tuple(frames[0][inside_index : inside_index + 4])
+    painter_inside = tuple(painter[inside_index : inside_index + 4])
+
+    assert gpu_outer[0] > gpu_outer[1] + 150
+    assert abs(gpu_inside[0] - gpu_inside[1]) <= 5
+    assert abs(painter_inside[0] - painter_inside[1]) <= 5
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_image_fill_file_signature_invalidates_scene_cache(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    image_path = tmp_path / "gpu-hot-image.png"
+
+    def save(width: int, color: str) -> None:
+        image = QImage(width, 4, QImage.Format.Format_RGBA8888)
+        image.fill(QColor(color))
+        assert image.save(str(image_path))
+
+    save(4, "#FF2020")
+    fill = PaintFill(mode="image", image_path=str(image_path), image_scale_pct=100)
+    state = KaraokeColorState(text=fill)
+    style = _g1_style(
+        font_family="Meiryo",
+        font_size_px=140,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+        karaoke_colors=KaraokeColors(before=state, after=state),
+    )
+    track = _g3_fill_track()
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        first_configured, first = _render_g1_frames(
+            renderer, style, (100,), force_warp=True, track=track
+        )
+        save(5, "#2040FF")
+        second_configured, second = _render_g1_frames(
+            renderer, style, (100,), force_warp=True, track=track
+        )
+
+    assert second_configured["cache_misses"] == first_configured["cache_misses"] + 1
+    assert first[0] != second[0]
+    assert any(
+        first[0][index] > first[0][index + 2] + 100 and first[0][index + 3] > 0
+        for index in range(0, len(first[0]), 4)
+    )
+    assert any(
+        second[0][index + 2] > second[0][index] + 100 and second[0][index + 3] > 0
+        for index in range(0, len(second[0]), 4)
+    )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

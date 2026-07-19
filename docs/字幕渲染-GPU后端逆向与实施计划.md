@@ -1153,3 +1153,25 @@ image fill 仍待下一刀；产品 GPU 开关继续默认关闭，Painter 继�
 
 G3 下一刀补 image fill 的 Direct2D bitmap brush、全局画布锚点、wrap/scale 与透明纹理 body
 protection；产品 GPU 开关继续默认关闭。
+
+### 2026-07-19（第十六批）：G3 WIC/Direct2D 图片填充
+
+- image fill 在 configure 阶段经 WIC 解码为 `32bppPBGRA`，立即复制到独立 Direct2D bitmap，
+  不保留 decoder/frame 对源文件的句柄；同一 scene 内按路径、修改时间和文件大小去重，图片覆盖后会
+  触发 cache miss、重新解码并立即换色，不需要重启 sidecar。
+- bitmap brush 使用双轴 wrap 与 linear interpolation，`image_scale_pct` 按 Painter/N3 的方向直接
+  放大纹理；brush transform 抵消当前歌词行的 `dx/dy`，所以纹理固定锚定渲染目标原点，不会在
+  before/after wipe、角色 run 或 ruby 间重新起相位。
+- 图片填充无条件按 alpha-capable 处理。configure 预生成“主描边 widened geometry 减去字身”的
+  外侧轮廓，sharp 层只在字身外绘制 primary stroke；同一规则覆盖正文、行内角色与 ruby，避免
+  半透明纹理把内部描边混成脏色。缓存诊断计入图片像素与额外保护 geometry。
+- 自动门禁覆盖 8×8 四色纹理的 100%/200% wrap/scale、before/after 帧逐字节同相位、与 Painter
+  重叠区域的像素差，另覆盖半透明白图的红色主描边 body protection，以及同路径文件热更新。
+  硬件/WARP build smoke 通过；GPU/transport `104 passed`，native protocol/export/benchmark
+  `56 passed, 27 skipped`。
+- RTX 3070 Ti 上 1920×1080、18 字、175% image fill、4px 描边连续 600 帧：render mean/p95
+  `0.53/0.68ms`，readback p95 `7.19ms`，同步 roundtrip p95 `18.11ms`，含 QImage 交付的总吞吐
+  `62.44fps`。图片只在 configure 解码，逐帧没有 WIC 或磁盘 I/O；长尾仍来自全帧 readback/copy。
+
+gradient/split/image fill 基础切片至此收口。G3 下一刀进入标题、多字幕源及 Painter 已支持的常用
+行特效覆盖；产品 GPU 开关继续默认关闭。

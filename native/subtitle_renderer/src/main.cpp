@@ -5682,6 +5682,17 @@ krok::subtitle::native::PaintStyle gpuPaint(
     paint.imageScale = static_cast<float>(
         std::clamp(source.imageScalePct, 1, 1000) / 100.0
     );
+    if (!source.imagePath.isEmpty()) {
+        const QFileInfo info(source.imagePath);
+        if (info.exists() && info.isFile()) {
+            paint.imageModifiedMs = static_cast<std::uint64_t>(
+                std::max<qint64>(info.lastModified().toMSecsSinceEpoch(), 0)
+            );
+            paint.imageSize = static_cast<std::uint64_t>(
+                std::max<qint64>(info.size(), 0)
+            );
+        }
+    }
     const auto &sourceStops = source.mode == QStringLiteral("split_vertical")
         ? source.splitStops
         : source.gradientStops;

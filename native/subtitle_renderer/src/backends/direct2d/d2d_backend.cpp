@@ -3,6 +3,7 @@
 #include <d2d1helper.h>
 #include <d2d1effects.h>
 #include <dwrite.h>
+#include <wincodec.h>
 
 #include <algorithm>
 #include <chrono>
@@ -12,6 +13,7 @@
 #include <iomanip>
 #include <sstream>
 #include <limits>
+#include <tuple>
 
 namespace krok::subtitle::native {
 namespace {
@@ -83,6 +85,74 @@ bool isWhitespaceText(const std::wstring &text) {
     return !text.empty() && std::all_of(text.begin(), text.end(), [](wchar_t value) {
         return std::iswspace(static_cast<wint_t>(value)) != 0;
     });
+}
+
+bool paintNeedsBodyProtection(const PaintStyle &paint) {
+    if (paint.mode == "image") {
+        return true;
+    }
+    if (paint.mode == "gradient_horizontal"
+        || paint.mode == "gradient_vertical"
+        || paint.mode == "split_vertical") {
+        return std::any_of(paint.stops.begin(), paint.stops.end(), [](const PaintStop &stop) {
+            return stop.color.alpha < 255;
+        });
+    }
+    return paint.color.alpha < 255;
+}
+
+Microsoft::WRL::ComPtr<ID2D1Geometry> outsideStrokeGeometry(
+    ID2D1Factory1 *factory,
+    ID2D1Geometry *body,
+    float width,
+    const D2DDevice &device
+) {
+    if (body == nullptr || width <= 0.0f) {
+        return {};
+    }
+    D2D1_STROKE_STYLE_PROPERTIES properties = D2D1::StrokeStyleProperties();
+    properties.startCap = D2D1_CAP_STYLE_ROUND;
+    properties.endCap = D2D1_CAP_STYLE_ROUND;
+    properties.dashCap = D2D1_CAP_STYLE_ROUND;
+    properties.lineJoin = D2D1_LINE_JOIN_ROUND;
+    Microsoft::WRL::ComPtr<ID2D1StrokeStyle> strokeStyle;
+    checkHr(
+        factory->CreateStrokeStyle(
+            properties, nullptr, 0, strokeStyle.ReleaseAndGetAddressOf()
+        ),
+        "Create protected body stroke style",
+        device
+    );
+    Microsoft::WRL::ComPtr<ID2D1PathGeometry> widened;
+    checkHr(
+        factory->CreatePathGeometry(widened.ReleaseAndGetAddressOf()),
+        "Create protected widened geometry",
+        device
+    );
+    Microsoft::WRL::ComPtr<ID2D1GeometrySink> widenedSink;
+    checkHr(widened->Open(widenedSink.ReleaseAndGetAddressOf()), "Open protected widened geometry", device);
+    checkHr(body->Widen(width, strokeStyle.Get(), nullptr, widenedSink.Get()), "Widen protected body stroke", device);
+    checkHr(widenedSink->Close(), "Close protected widened geometry", device);
+
+    Microsoft::WRL::ComPtr<ID2D1PathGeometry> outside;
+    checkHr(
+        factory->CreatePathGeometry(outside.ReleaseAndGetAddressOf()),
+        "Create protected outside geometry",
+        device
+    );
+    Microsoft::WRL::ComPtr<ID2D1GeometrySink> outsideSink;
+    checkHr(outside->Open(outsideSink.ReleaseAndGetAddressOf()), "Open protected outside geometry", device);
+    checkHr(
+        widened->CombineWithGeometry(
+            body, D2D1_COMBINE_MODE_EXCLUDE, nullptr, outsideSink.Get()
+        ),
+        "Subtract protected glyph body",
+        device
+    );
+    checkHr(outsideSink->Close(), "Close protected outside geometry", device);
+    Microsoft::WRL::ComPtr<ID2D1Geometry> geometry;
+    checkHr(outside.As(&geometry), "Query protected outside geometry", device);
+    return geometry;
 }
 
 Microsoft::WRL::ComPtr<IDWriteFontFace> createFontFace(
@@ -208,8 +278,39 @@ Microsoft::WRL::ComPtr<ID2D1Brush> createPaintBrush(
     const PaintStyle &paint,
     const D2D1_RECT_F &rect,
     const RgbaColor &fallback,
-    const D2DDevice &device
+    const D2DDevice &device,
+    ID2D1Bitmap1 *image = nullptr,
+    float canvasDx = 0.0f,
+    float canvasDy = 0.0f
 ) {
+    if (paint.mode == "image" && image != nullptr) {
+        Microsoft::WRL::ComPtr<ID2D1BitmapBrush1> bitmapBrush;
+        const D2D1_BITMAP_BRUSH_PROPERTIES1 bitmapProperties =
+            D2D1::BitmapBrushProperties1(
+                D2D1_EXTEND_MODE_WRAP,
+                D2D1_EXTEND_MODE_WRAP,
+                D2D1_INTERPOLATION_MODE_LINEAR
+            );
+        const D2D1_BRUSH_PROPERTIES brushProperties = D2D1::BrushProperties();
+        checkHr(
+            context->CreateBitmapBrush(
+                image,
+                bitmapProperties,
+                brushProperties,
+                bitmapBrush.ReleaseAndGetAddressOf()
+            ),
+            "Create image fill bitmap brush",
+            device
+        );
+        const float scale = std::clamp(paint.imageScale, 0.01f, 10.0f);
+        bitmapBrush->SetTransform(
+            D2D1::Matrix3x2F::Scale(scale, scale)
+                * D2D1::Matrix3x2F::Translation(-canvasDx, -canvasDy)
+        );
+        Microsoft::WRL::ComPtr<ID2D1Brush> brush;
+        checkHr(bitmapBrush.As(&brush), "Query image fill bitmap brush", device);
+        return brush;
+    }
     const bool gradient = paint.mode == "gradient_horizontal"
         || paint.mode == "gradient_vertical"
         || paint.mode == "split_vertical";
@@ -296,9 +397,90 @@ Microsoft::WRL::ComPtr<ID2D1Brush> createPaintBrush(
     return brush;
 }
 
+Microsoft::WRL::ComPtr<ID2D1Bitmap1> loadWicBitmap(
+    ID2D1DeviceContext *context,
+    const std::wstring &path
+) {
+    if (path.empty()) {
+        return {};
+    }
+    const HRESULT initialized = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(initialized) && initialized != RPC_E_CHANGED_MODE) {
+        return {};
+    }
+    Microsoft::WRL::ComPtr<IWICImagingFactory> factory;
+    if (FAILED(CoCreateInstance(
+            CLSID_WICImagingFactory,
+            nullptr,
+            CLSCTX_INPROC_SERVER,
+            IID_PPV_ARGS(factory.ReleaseAndGetAddressOf())))) {
+        return {};
+    }
+    Microsoft::WRL::ComPtr<IWICBitmapDecoder> decoder;
+    if (FAILED(factory->CreateDecoderFromFilename(
+            path.c_str(),
+            nullptr,
+            GENERIC_READ,
+            WICDecodeMetadataCacheOnLoad,
+            decoder.ReleaseAndGetAddressOf()))) {
+        return {};
+    }
+    Microsoft::WRL::ComPtr<IWICBitmapFrameDecode> frame;
+    if (FAILED(decoder->GetFrame(0, frame.ReleaseAndGetAddressOf()))) {
+        return {};
+    }
+    Microsoft::WRL::ComPtr<IWICFormatConverter> converter;
+    if (FAILED(factory->CreateFormatConverter(converter.ReleaseAndGetAddressOf()))
+        || FAILED(converter->Initialize(
+            frame.Get(),
+            GUID_WICPixelFormat32bppPBGRA,
+            WICBitmapDitherTypeNone,
+            nullptr,
+            0.0,
+            WICBitmapPaletteTypeMedianCut))) {
+        return {};
+    }
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+    UINT width = 0;
+    UINT height = 0;
+    if (FAILED(converter->GetSize(&width, &height)) || width == 0 || height == 0) {
+        return {};
+    }
+    const UINT stride = width * 4;
+    std::vector<std::uint8_t> pixels(static_cast<std::size_t>(stride) * height);
+    if (FAILED(converter->CopyPixels(
+            nullptr, stride, static_cast<UINT>(pixels.size()), pixels.data()))) {
+        return {};
+    }
+    const D2D1_BITMAP_PROPERTIES1 properties = D2D1::BitmapProperties1(
+        D2D1_BITMAP_OPTIONS_NONE,
+        D2D1::PixelFormat(
+            DXGI_FORMAT_B8G8R8A8_UNORM,
+            D2D1_ALPHA_MODE_PREMULTIPLIED
+        ),
+        96.0f,
+        96.0f
+    );
+    if (FAILED(context->CreateBitmap(
+            D2D1::SizeU(width, height),
+            pixels.data(),
+            stride,
+            &properties,
+            bitmap.ReleaseAndGetAddressOf()))) {
+        return {};
+    }
+    return bitmap;
+}
+
 }  // namespace
 
 struct Direct2DGpuBackend::Impl {
+    struct CachedImage {
+        std::wstring path;
+        std::uint64_t modifiedMs = 0;
+        std::uint64_t size = 0;
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+    };
     struct CachedChar {
         int startMs = 0;
         int endMs = 0;
@@ -309,6 +491,7 @@ struct Direct2DGpuBackend::Impl {
         int styleIndex = -1;
         float boxAscent = 0.0f;
         Microsoft::WRL::ComPtr<ID2D1Geometry> geometry;
+        Microsoft::WRL::ComPtr<ID2D1Geometry> protectedStrokeGeometry;
     };
 
     struct CachedRuby {
@@ -320,6 +503,7 @@ struct Direct2DGpuBackend::Impl {
         D2D1_RECT_F fillBounds{};
         std::vector<CachedChar> chars;
         std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> geometries;
+        std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> protectedStrokeGeometries;
     };
 
     struct CachedLine {
@@ -342,6 +526,7 @@ struct Direct2DGpuBackend::Impl {
 
     RenderScene scene;
     std::vector<CachedLine> lines;
+    std::vector<CachedImage> images;
     BackendDiagnostics diagnostics;
     bool configured = false;
     int frameSurfaceWidth = 0;
@@ -523,6 +708,47 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
     impl_->scene = scene;
     impl_->lines.clear();
     impl_->lines.reserve(scene.lines.size());
+    impl_->images.clear();
+    auto cacheStyleImages = [&](const TextStyle &style) {
+        const PaintStyle *paints[] = {
+            &style.beforeFillPaint, &style.afterFillPaint,
+            &style.beforeStrokePaint, &style.afterStrokePaint,
+            &style.beforeStroke2Paint, &style.afterStroke2Paint,
+            &style.beforeDecorPaint, &style.afterDecorPaint,
+            &style.rubyBeforeFillPaint, &style.rubyAfterFillPaint,
+            &style.rubyBeforeStrokePaint, &style.rubyAfterStrokePaint,
+            &style.rubyBeforeStroke2Paint, &style.rubyAfterStroke2Paint,
+            &style.rubyBeforeDecorPaint, &style.rubyAfterDecorPaint,
+        };
+        for (const PaintStyle *paint : paints) {
+            if (paint->mode != "image" || paint->imagePath.empty()) {
+                continue;
+            }
+            const bool cached = std::any_of(
+                impl_->images.begin(), impl_->images.end(),
+                [&](const Impl::CachedImage &image) {
+                    return image.path == paint->imagePath
+                        && image.modifiedMs == paint->imageModifiedMs
+                        && image.size == paint->imageSize;
+                }
+            );
+            if (!cached) {
+                impl_->images.push_back(Impl::CachedImage{
+                    paint->imagePath,
+                    paint->imageModifiedMs,
+                    paint->imageSize,
+                    loadWicBitmap(device_.d2dContext(), paint->imagePath),
+                });
+            }
+        }
+    };
+    cacheStyleImages(scene.style);
+    for (const TextStyle &style : scene.lineStyles) {
+        cacheStyleImages(style);
+    }
+    for (const TextStyle &style : scene.charStyles) {
+        cacheStyleImages(style);
+    }
 
     Microsoft::WRL::ComPtr<IDWriteFontCollection> fontCollection;
     checkHr(
@@ -803,6 +1029,16 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             cached.chars.back().boxAscent = charBoxAscent;
             if (positionedHasBounds) {
                 cached.chars.back().geometry = cached.geometries.back();
+                if (charStyle.strokeWidth > 0.0f
+                    && (paintNeedsBodyProtection(charStyle.beforeFillPaint)
+                        || paintNeedsBodyProtection(charStyle.afterFillPaint))) {
+                    cached.chars.back().protectedStrokeGeometry = outsideStrokeGeometry(
+                        device_.d2dFactory(),
+                        cached.chars.back().geometry.Get(),
+                        charStyle.strokeWidth,
+                        device_
+                    );
+                }
             }
             cursor += layoutWidth;
             if (charIndex + 1 < sourceLine.chars.size()) {
@@ -1133,6 +1369,20 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         extendBounds(ruby.bounds, rubyHasBounds, positionedBounds);
                     }
                     ruby.geometries.push_back(positioned);
+                    if (rubyStyle.rubyStrokeWidth > 0.0f
+                        && (paintNeedsBodyProtection(rubyStyle.rubyBeforeFillPaint)
+                            || paintNeedsBodyProtection(rubyStyle.rubyAfterFillPaint))) {
+                        ruby.protectedStrokeGeometries.push_back(
+                            outsideStrokeGeometry(
+                                device_.d2dFactory(),
+                                positioned.Get(),
+                                rubyStyle.rubyStrokeWidth,
+                                device_
+                            )
+                        );
+                    } else {
+                        ruby.protectedStrokeGeometries.push_back({});
+                    }
                 }
                 const float wipePad = std::max(rubyStyle.rubyStrokeWidth, 0.0f) * 0.5f;
                 ruby.chars.push_back(Impl::CachedChar{
@@ -1169,9 +1419,24 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
     impl_->diagnostics.estimatedCacheBytes = sizeof(Impl)
         + scene.lineStyles.capacity() * sizeof(TextStyle)
         + scene.charStyles.capacity() * sizeof(TextStyle);
+    for (const Impl::CachedImage &image : impl_->images) {
+        impl_->diagnostics.estimatedCacheBytes += sizeof(Impl::CachedImage)
+            + image.path.capacity() * sizeof(wchar_t);
+        if (image.bitmap) {
+            const D2D1_SIZE_U size = image.bitmap->GetPixelSize();
+            impl_->diagnostics.estimatedCacheBytes += static_cast<std::uint64_t>(
+                size.width
+            ) * static_cast<std::uint64_t>(size.height) * 4;
+        }
+    }
     for (const Impl::CachedLine &line : impl_->lines) {
         impl_->diagnostics.charCount += line.chars.size();
         impl_->diagnostics.geometryCount += line.geometries.size();
+        impl_->diagnostics.geometryCount += static_cast<std::uint64_t>(std::count_if(
+            line.chars.begin(), line.chars.end(), [](const Impl::CachedChar &ch) {
+                return ch.protectedStrokeGeometry != nullptr;
+            }
+        ));
         impl_->diagnostics.estimatedCacheBytes += sizeof(Impl::CachedLine)
             + line.chars.capacity() * sizeof(Impl::CachedChar)
             + line.geometries.capacity() * sizeof(Microsoft::WRL::ComPtr<ID2D1Geometry>);
@@ -1179,9 +1444,16 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         for (const Impl::CachedRuby &ruby : line.rubies) {
             impl_->diagnostics.charCount += ruby.chars.size();
             impl_->diagnostics.geometryCount += ruby.geometries.size();
+            impl_->diagnostics.geometryCount += static_cast<std::uint64_t>(std::count_if(
+                ruby.protectedStrokeGeometries.begin(),
+                ruby.protectedStrokeGeometries.end(),
+                [](const auto &geometry) { return geometry != nullptr; }
+            ));
             impl_->diagnostics.estimatedCacheBytes += sizeof(Impl::CachedRuby)
                 + ruby.chars.capacity() * sizeof(Impl::CachedChar)
-                + ruby.geometries.capacity() * sizeof(Microsoft::WRL::ComPtr<ID2D1Geometry>);
+                + ruby.geometries.capacity() * sizeof(Microsoft::WRL::ComPtr<ID2D1Geometry>)
+                + ruby.protectedStrokeGeometries.capacity()
+                    * sizeof(Microsoft::WRL::ComPtr<ID2D1Geometry>);
         }
     }
     // Direct2D does not expose path allocation bytes. Keep a conservative
@@ -1317,29 +1589,47 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
             }
         }
         const float dy = firstBaseline + step * static_cast<float>(line->lane);
-        Microsoft::WRL::ComPtr<ID2D1Brush> beforeFill = createPaintBrush(
-            context, style.beforeFillPaint, line->fillBounds, style.beforeFill, device_
+        auto imageForPaint = [&](const PaintStyle &paint) -> ID2D1Bitmap1 * {
+            const auto found = std::find_if(
+                impl_->images.begin(), impl_->images.end(),
+                [&](const Impl::CachedImage &image) {
+                    return image.path == paint.imagePath
+                        && image.modifiedMs == paint.imageModifiedMs
+                        && image.size == paint.imageSize;
+                }
+            );
+            return found == impl_->images.end() ? nullptr : found->bitmap.Get();
+        };
+        auto paintBrush = [&](const PaintStyle &paint, const D2D1_RECT_F &rect,
+                              const RgbaColor &fallback) {
+            return createPaintBrush(
+                context, paint, rect, fallback, device_,
+                imageForPaint(paint), dx, dy
+            );
+        };
+        Microsoft::WRL::ComPtr<ID2D1Brush> beforeFill = paintBrush(
+            style.beforeFillPaint, line->fillBounds, style.beforeFill
         );
-        Microsoft::WRL::ComPtr<ID2D1Brush> afterFill = createPaintBrush(
-            context, style.afterFillPaint, line->fillBounds, style.afterFill, device_
+        Microsoft::WRL::ComPtr<ID2D1Brush> afterFill = paintBrush(
+            style.afterFillPaint, line->fillBounds, style.afterFill
         );
-        Microsoft::WRL::ComPtr<ID2D1Brush> beforeStroke = createPaintBrush(
-            context, style.beforeStrokePaint, line->fillBounds, style.beforeStroke, device_
+        Microsoft::WRL::ComPtr<ID2D1Brush> beforeStroke = paintBrush(
+            style.beforeStrokePaint, line->fillBounds, style.beforeStroke
         );
-        Microsoft::WRL::ComPtr<ID2D1Brush> afterStroke = createPaintBrush(
-            context, style.afterStrokePaint, line->fillBounds, style.afterStroke, device_
+        Microsoft::WRL::ComPtr<ID2D1Brush> afterStroke = paintBrush(
+            style.afterStrokePaint, line->fillBounds, style.afterStroke
         );
-        Microsoft::WRL::ComPtr<ID2D1Brush> beforeStroke2 = createPaintBrush(
-            context, style.beforeStroke2Paint, line->fillBounds, style.beforeStroke2, device_
+        Microsoft::WRL::ComPtr<ID2D1Brush> beforeStroke2 = paintBrush(
+            style.beforeStroke2Paint, line->fillBounds, style.beforeStroke2
         );
-        Microsoft::WRL::ComPtr<ID2D1Brush> afterStroke2 = createPaintBrush(
-            context, style.afterStroke2Paint, line->fillBounds, style.afterStroke2, device_
+        Microsoft::WRL::ComPtr<ID2D1Brush> afterStroke2 = paintBrush(
+            style.afterStroke2Paint, line->fillBounds, style.afterStroke2
         );
-        Microsoft::WRL::ComPtr<ID2D1Brush> beforeDecor = createPaintBrush(
-            context, style.beforeDecorPaint, line->fillBounds, style.beforeDecor, device_
+        Microsoft::WRL::ComPtr<ID2D1Brush> beforeDecor = paintBrush(
+            style.beforeDecorPaint, line->fillBounds, style.beforeDecor
         );
-        Microsoft::WRL::ComPtr<ID2D1Brush> afterDecor = createPaintBrush(
-            context, style.afterDecorPaint, line->fillBounds, style.afterDecor, device_
+        Microsoft::WRL::ComPtr<ID2D1Brush> afterDecor = paintBrush(
+            style.afterDecorPaint, line->fillBounds, style.afterDecor
         );
 
         float wipeEdge = line->bounds.left;
@@ -1510,14 +1800,12 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 if (ruby.styleIndex != styleIndex) {
                     continue;
                 }
-                Microsoft::WRL::ComPtr<ID2D1Brush> brush = createPaintBrush(
-                    context,
+                Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrush(
                     after
                         ? rubyStyle.rubyAfterDecorPaint
                         : rubyStyle.rubyBeforeDecorPaint,
                     ruby.fillBounds,
-                    after ? rubyStyle.rubyAfterDecor : rubyStyle.rubyBeforeDecor,
-                    device_
+                    after ? rubyStyle.rubyAfterDecor : rubyStyle.rubyBeforeDecor
                 );
                 const float edge = rubyWipeEdgeAt(ruby);
                 if ((after && edge <= ruby.bounds.left)
@@ -1617,12 +1905,10 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 "ID2D1DeviceContext::CreateEffect(inline GaussianBlur)",
                 device_
             );
-            Microsoft::WRL::ComPtr<ID2D1Brush> brush = createPaintBrush(
-                context,
+            Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrush(
                 after ? charStyle.afterDecorPaint : charStyle.beforeDecorPaint,
                 line->fillBounds,
-                after ? charStyle.afterDecor : charStyle.beforeDecor,
-                device_
+                after ? charStyle.afterDecor : charStyle.beforeDecor
             );
             const float sourceWidth = std::max(charStyle.strokeWidth, 0.0f)
                 + std::max(charStyle.stroke2Width, 0.0f)
@@ -1720,7 +2006,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
         }
         context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
 
-        auto drawStack = [&](ID2D1Brush *fill, ID2D1Brush *stroke, ID2D1Brush *stroke2) {
+        auto drawStack = [&](bool after, ID2D1Brush *fill, ID2D1Brush *stroke, ID2D1Brush *stroke2) {
             if (style.stroke2Width > 0.0f) {
                 for (const auto &geometry : line->geometries) {
                     context->DrawGeometry(
@@ -1731,8 +2017,18 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 }
             }
             if (style.strokeWidth > 0.0f) {
-                for (const auto &geometry : line->geometries) {
-                    context->DrawGeometry(geometry.Get(), stroke, style.strokeWidth);
+                const bool protect = paintNeedsBodyProtection(
+                    after ? style.afterFillPaint : style.beforeFillPaint
+                );
+                for (const Impl::CachedChar &ch : line->chars) {
+                    if (!ch.geometry) {
+                        continue;
+                    }
+                    if (protect && ch.protectedStrokeGeometry) {
+                        context->FillGeometry(ch.protectedStrokeGeometry.Get(), stroke);
+                    } else {
+                        context->DrawGeometry(ch.geometry.Get(), stroke, style.strokeWidth);
+                    }
                 }
             }
             for (const auto &geometry : line->geometries) {
@@ -1757,26 +2053,20 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 const RgbaColor &stroke2Color = after
                     ? charStyle.afterStroke2
                     : charStyle.beforeStroke2;
-                Microsoft::WRL::ComPtr<ID2D1Brush> fillBrush = createPaintBrush(
-                    context,
+                Microsoft::WRL::ComPtr<ID2D1Brush> fillBrush = paintBrush(
                     after ? charStyle.afterFillPaint : charStyle.beforeFillPaint,
                     line->fillBounds,
-                    fillColor,
-                    device_
+                    fillColor
                 );
-                Microsoft::WRL::ComPtr<ID2D1Brush> strokeBrush = createPaintBrush(
-                    context,
+                Microsoft::WRL::ComPtr<ID2D1Brush> strokeBrush = paintBrush(
                     after ? charStyle.afterStrokePaint : charStyle.beforeStrokePaint,
                     line->fillBounds,
-                    strokeColor,
-                    device_
+                    strokeColor
                 );
-                Microsoft::WRL::ComPtr<ID2D1Brush> stroke2Brush = createPaintBrush(
-                    context,
+                Microsoft::WRL::ComPtr<ID2D1Brush> stroke2Brush = paintBrush(
                     after ? charStyle.afterStroke2Paint : charStyle.beforeStroke2Paint,
                     line->fillBounds,
-                    stroke2Color,
-                    device_
+                    stroke2Color
                 );
                 if (charStyle.stroke2Width > 0.0f) {
                     context->DrawGeometry(
@@ -1786,9 +2076,18 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                     );
                 }
                 if (charStyle.strokeWidth > 0.0f) {
-                    context->DrawGeometry(
-                        ch.geometry.Get(), strokeBrush.Get(), charStyle.strokeWidth
+                    const bool protect = paintNeedsBodyProtection(
+                        after ? charStyle.afterFillPaint : charStyle.beforeFillPaint
                     );
+                    if (protect && ch.protectedStrokeGeometry) {
+                        context->FillGeometry(
+                            ch.protectedStrokeGeometry.Get(), strokeBrush.Get()
+                        );
+                    } else {
+                        context->DrawGeometry(
+                            ch.geometry.Get(), strokeBrush.Get(), charStyle.strokeWidth
+                        );
+                    }
                 }
                 context->FillGeometry(ch.geometry.Get(), fillBrush.Get());
             }
@@ -1803,37 +2102,31 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 context->PopAxisAlignedClip();
             }
         } else {
-            drawStack(beforeFill.Get(), beforeStroke.Get(), beforeStroke2.Get());
+            drawStack(false, beforeFill.Get(), beforeStroke.Get(), beforeStroke2.Get());
             if (wipeEdge > line->bounds.left) {
                 context->PushAxisAlignedClip(afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
-                drawStack(afterFill.Get(), afterStroke.Get(), afterStroke2.Get());
+                drawStack(true, afterFill.Get(), afterStroke.Get(), afterStroke2.Get());
                 context->PopAxisAlignedClip();
             }
         }
         auto drawRubyStack = [&](const Impl::CachedRuby &ruby, bool after) {
             const TextStyle &rubyStyle = rubyStyleFor(ruby.styleIndex);
-            Microsoft::WRL::ComPtr<ID2D1Brush> fill = createPaintBrush(
-                context,
+            Microsoft::WRL::ComPtr<ID2D1Brush> fill = paintBrush(
                 after ? rubyStyle.rubyAfterFillPaint : rubyStyle.rubyBeforeFillPaint,
                 ruby.fillBounds,
-                after ? rubyStyle.rubyAfterFill : rubyStyle.rubyBeforeFill,
-                device_
+                after ? rubyStyle.rubyAfterFill : rubyStyle.rubyBeforeFill
             );
-            Microsoft::WRL::ComPtr<ID2D1Brush> stroke = createPaintBrush(
-                context,
+            Microsoft::WRL::ComPtr<ID2D1Brush> stroke = paintBrush(
                 after ? rubyStyle.rubyAfterStrokePaint : rubyStyle.rubyBeforeStrokePaint,
                 ruby.fillBounds,
-                after ? rubyStyle.rubyAfterStroke : rubyStyle.rubyBeforeStroke,
-                device_
+                after ? rubyStyle.rubyAfterStroke : rubyStyle.rubyBeforeStroke
             );
-            Microsoft::WRL::ComPtr<ID2D1Brush> stroke2 = createPaintBrush(
-                context,
+            Microsoft::WRL::ComPtr<ID2D1Brush> stroke2 = paintBrush(
                 after
                     ? rubyStyle.rubyAfterStroke2Paint
                     : rubyStyle.rubyBeforeStroke2Paint,
                 ruby.fillBounds,
-                after ? rubyStyle.rubyAfterStroke2 : rubyStyle.rubyBeforeStroke2,
-                device_
+                after ? rubyStyle.rubyAfterStroke2 : rubyStyle.rubyBeforeStroke2
             );
             if (rubyStyle.rubyStroke2Width > 0.0f) {
                 for (const auto &geometry : ruby.geometries) {
@@ -1846,10 +2139,24 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
                 }
             }
             if (rubyStyle.rubyStrokeWidth > 0.0f) {
-                for (const auto &geometry : ruby.geometries) {
-                    context->DrawGeometry(
-                        geometry.Get(), stroke.Get(), rubyStyle.rubyStrokeWidth
-                    );
+                const bool protect = paintNeedsBodyProtection(
+                    after
+                        ? rubyStyle.rubyAfterFillPaint
+                        : rubyStyle.rubyBeforeFillPaint
+                );
+                for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {
+                    const auto &protectedGeometry = index < ruby.protectedStrokeGeometries.size()
+                        ? ruby.protectedStrokeGeometries[index]
+                        : Microsoft::WRL::ComPtr<ID2D1Geometry>{};
+                    if (protect && protectedGeometry) {
+                        context->FillGeometry(protectedGeometry.Get(), stroke.Get());
+                    } else {
+                        context->DrawGeometry(
+                            ruby.geometries[index].Get(),
+                            stroke.Get(),
+                            rubyStyle.rubyStrokeWidth
+                        );
+                    }
                 }
             }
             for (const auto &geometry : ruby.geometries) {

@@ -55,6 +55,8 @@ if(WIN32)
             d3d11
             dwrite
             dxgi
+            ole32
+            windowscodecs
     )
 else()
     message(FATAL_ERROR "The Direct2D GPU subtitle renderer probe is Windows-only")
