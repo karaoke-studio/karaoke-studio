@@ -10,6 +10,7 @@ namespace krok::subtitle::native {
 
 enum class PixelFormat {
     Rgba8888Straight,
+    Bgra8888Premultiplied,
 };
 
 struct BackendCaps {

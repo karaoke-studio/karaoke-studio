@@ -13,11 +13,12 @@ Background (§9 A4 诊断)：预览预览的真实帧率天花板**不是单帧�
 
 from __future__ import annotations
 
+import math
 import os
 import threading
 import time
 import uuid
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from typing import Optional
 
 from PyQt6.QtCore import QObject, QThread, QTimer, pyqtSignal as Signal, pyqtSlot as Slot
@@ -395,11 +396,12 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._generation = 0
         self._request_serial = 0
         self._latest_t: Optional[int] = None
-        self._pending: Optional[tuple[int, int, bool]] = None
+        self._pending: Optional[tuple[int, int, bool, float]] = None
         self._needs_configure = True
         self._playing = False
         self._stopped = False
         self._renderer_failed = False
+        self._retry_after = 0.0
         self._force_warp = _env_enabled("KROK_SUBTITLE_GPU_FORCE_WARP", "0")
         self._lookahead_frames = _env_int(
             "KROK_SUBTITLE_GPU_LOOKAHEAD_FRAMES", 1, minimum=0
@@ -419,8 +421,15 @@ class GpuAsyncSubtitleRenderer(QObject):
             "stale_frames_dropped": 0,
             "configure_count": 0,
             "renderer_failures": 0,
+            "renderer_restarts": 0,
             "fallback_frames": 0,
             "max_pending": 0,
+        }
+        self._timings: dict[str, deque[float]] = {
+            "render_ms": deque(maxlen=4096),
+            "readback_ms": deque(maxlen=4096),
+            "roundtrip_ms": deque(maxlen=4096),
+            "ready_latency_ms": deque(maxlen=4096),
         }
         self._thread = threading.Thread(
             target=self._run,
@@ -516,7 +525,7 @@ class GpuAsyncSubtitleRenderer(QObject):
     def _replace_pending_locked(self, t_ms: int, serial: int, speculative: bool) -> None:
         if self._pending is not None:
             self._note("pending_replaced")
-        self._pending = (int(t_ms), int(serial), bool(speculative))
+        self._pending = (int(t_ms), int(serial), bool(speculative), time.monotonic())
         self._note_max_pending(1)
 
     def _take_next_request(self):
@@ -525,7 +534,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                 self._condition.wait()
             if self._stopped:
                 return None
-            t_ms, serial, speculative = self._pending
+            t_ms, serial, speculative, submitted_at = self._pending
             self._pending = None
             needs_configure = self._needs_configure
             self._needs_configure = False
@@ -542,6 +551,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                 self._generation,
                 needs_configure,
                 self._shm_key,
+                submitted_at,
             )
 
     def _run(self) -> None:
@@ -563,15 +573,21 @@ class GpuAsyncSubtitleRenderer(QObject):
                     generation,
                     needs_configure,
                     shm_key,
+                    submitted_at,
                 ) = snapshot
                 if track is None or style is None:
                     continue
                 if self._renderer_failed:
-                    if not speculative:
-                        self._emit_python_fallback(
-                            track, style, extra_tracks, width, height, dpr, t_ms, generation
-                        )
-                    continue
+                    if time.monotonic() < self._retry_after:
+                        if not speculative:
+                            self._emit_python_fallback(
+                                track, style, extra_tracks, width, height, dpr, t_ms, generation
+                            )
+                        continue
+                    self._renderer_failed = False
+                    needs_configure = True
+                    self._note("renderer_restarts")
+                work_started = time.monotonic()
                 try:
                     renderer = self._ensure_renderer()
                     if needs_configure:
@@ -591,6 +607,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                         generation=generation,
                         frame_index=self._frame_index,
                         shm_key=shm_key,
+                        include_checksum=False,
                     )
                     self._frame_index += 1
                     event_key = str(event.get("shm_key") or "")
@@ -600,6 +617,14 @@ class GpuAsyncSubtitleRenderer(QObject):
                         self._reader = SharedFrameRingReader.from_event(event)
                     image = self._reader.read_qimage(event)
                     image.setDevicePixelRatio(dpr)
+                    completed_at = time.monotonic()
+                    self._record_timing("roundtrip_ms", (completed_at - work_started) * 1000.0)
+                    self._record_event_timing("render_ms", event.get("render_ms"))
+                    self._record_event_timing("readback_ms", event.get("readback_ms"))
+                    if not speculative:
+                        self._record_timing(
+                            "ready_latency_ms", (completed_at - submitted_at) * 1000.0
+                        )
                     if speculative:
                         self._cache_speculative(image, t_ms, generation)
                     elif self._may_emit(t_ms, generation):
@@ -612,6 +637,9 @@ class GpuAsyncSubtitleRenderer(QObject):
                     if _env_enabled("KROK_SUBTITLE_NATIVE_DEBUG_FAILURES", "0"):
                         print(f"GPU preview failed: {exc}")
                     self._renderer_failed = True
+                    self._retry_after = time.monotonic() + 1.0
+                    with self._condition:
+                        self._needs_configure = True
                     self._note("renderer_failures")
                     self._close_renderer()
                     if not speculative:
@@ -667,7 +695,12 @@ class GpuAsyncSubtitleRenderer(QObject):
                 or serial != self._request_serial
             ):
                 return
-            self._pending = (self._next_frame_timestamp(t_ms), serial, True)
+            self._pending = (
+                self._next_frame_timestamp(t_ms),
+                serial,
+                True,
+                time.monotonic(),
+            )
             self._note_max_pending(1)
             self._condition.notify()
 
@@ -713,9 +746,40 @@ class GpuAsyncSubtitleRenderer(QObject):
         with self._stats_lock:
             self._stats["max_pending"] = max(self._stats["max_pending"], int(value))
 
+    def _record_event_timing(self, key: str, value: object) -> None:
+        try:
+            normalized = float(value)
+        except (TypeError, ValueError):
+            return
+        self._record_timing(key, normalized)
+
+    def _record_timing(self, key: str, value: float) -> None:
+        with self._stats_lock:
+            self._timings[key].append(max(float(value), 0.0))
+
     def stats_snapshot(self) -> dict[str, int]:
         with self._stats_lock:
             return dict(self._stats)
+
+    def timing_snapshot(self) -> dict[str, dict[str, float | int]]:
+        with self._stats_lock:
+            result: dict[str, dict[str, float | int]] = {}
+            for key, samples in self._timings.items():
+                values = sorted(samples)
+                if not values:
+                    result[key] = {"count": 0, "mean": 0.0, "p95": 0.0, "max": 0.0}
+                    continue
+                p95_index = min(
+                    max(math.ceil(len(values) * 0.95) - 1, 0),
+                    len(values) - 1,
+                )
+                result[key] = {
+                    "count": len(values),
+                    "mean": sum(values) / len(values),
+                    "p95": values[p95_index],
+                    "max": values[-1],
+                }
+            return result
 
 
 class NativeAsyncSubtitleRenderer(QObject):

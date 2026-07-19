@@ -986,3 +986,34 @@ render/readback CSV，以及 geometry/layout cache 的 hit/miss/bytes 诊断。�
 
 G2 尚未完成：下一刀补 render/readback/ready latency 与 pending replacement 诊断导出，随后跑
 真实 GUI + 视频的连续播放、seek、resize/style churn、kill/restart/fallback 和慢帧自愈门禁。
+
+### 2026-07-19（第九批）：G2 第二刀——60fps 稳态传输、自愈与真实组件烟测
+
+- `GpuAsyncSubtitleRenderer` 新增 render/readback/roundtrip/ready-latency 的 mean/p95/max 有界滑动窗口，
+  以及 request、pending replacement、stale、fallback、restart 计数；新增
+  `scripts/benchmark_gpu_preview_scheduler.py`，可用真实 60Hz 驱动导出 CSV/JSON，并覆盖
+  seek burst、resize 和 style churn。
+- renderer 异常后立即交付 Painter 回退帧，1 秒有界冷却后自动重建 sidecar/device 并
+  configure 当前 generation。实机强制终止子进程后，第二帧走 Painter，第三帧换新 PID
+  恢复 GPU：`failures=1`、`restarts=1`、`fallback=1`。
+- Direct2D frame target texture/bitmap/staging texture 改为跨帧常驻，仅在物理尺寸变化时重建。
+  回读不再逐像素 unpremultiply 为 straight RGBA，而是保留 Direct2D 原生
+  `bgra8888_premultiplied`，通过 shared-memory format id 2 交付
+  `QImage.Format_ARGB32_Premultiplied`；Painter/CPU 旧协议仍保留 format id 1。
+- 产品预览请求关闭每帧 8MiB 全量 checksum，专项 probe/benchmark 默认仍保留 checksum。
+  1080p solid 稳态 600/600 帧交付，`render p95=2.82ms`、`readback p95=7.45ms`、
+  `roundtrip p95=13.11ms`；中档 glow 为 599/600，`render p95=4.89ms`、
+  `roundtrip p95=15.53ms`。
+- churn 探针：播放 180/180，500 次 seek burst 只交付最新帧，resize 20/20、style 20/20，
+  `requests=721`、`pending_replaced=499`、`max_pending=1`、`failures=0`，
+  `roundtrip p95=12.84ms`。premultiplied BGRA 改造后重跑 N3 真实帧，mask IoU 仍为
+  `0.782841`、宽度差 `2px`，未以性能换取字形偏差。
+- 真实组件链路已用 `PreviewGraphicsView` + Dark Spiral N3 导入样式/LRC + 真实
+  1920×1080@60fps MP4 驱动 240 帧：Qt Multimedia `LoadedMedia/NoError`，GPU 交付
+  241 帧，`failures=0`、`fallback=0`、`max_pending=1`；稳态 `render p95=2.88ms`、
+  `readback p95=5.05ms`、`roundtrip p95=15.69ms`。烟测的 Qt 异常退出还暴露并修复了
+  `QSharedMemory` wrapper 先于 worker finally 销毁时的幂等 close 边角。
+- 本批回归：GPU/transport `86 passed`；native export/protocol `33 passed, 27 skipped`。
+
+G2 仍保持“进行中”：还需完成 30 分钟真实可见 GUI 连续播放、人工 200ms 慢帧注入后的
+恢复时间门禁，以及 NVIDIA/AMD/Intel 硬件矩阵。产品开关继续默认关闭，Painter 仍是 oracle 和回退。

@@ -28,6 +28,7 @@ _SHARED_FRAME_HEADER = struct.Struct("<10i")
 _SHARED_FRAME_READY = 2
 _SHARED_FRAME_PIXEL_FORMATS = {
     1: "rgba8888",
+    2: "bgra8888_premultiplied",
 }
 
 
@@ -52,16 +53,21 @@ class SharedFrameSlot:
 
     def to_qimage(self):
         """Return a detached ``QImage`` backed by this slot payload copy."""
-        if self.pixel_format != "rgba8888":
+        if self.pixel_format not in {"rgba8888", "bgra8888_premultiplied"}:
             raise NativeRendererError(f"unsupported shared frame pixel format: {self.pixel_format}")
         from PyQt6.QtGui import QImage
 
+        image_format = (
+            QImage.Format.Format_RGBA8888
+            if self.pixel_format == "rgba8888"
+            else QImage.Format.Format_ARGB32_Premultiplied
+        )
         image = QImage(
             self.payload,
             self.width,
             self.height,
             self.stride,
-            QImage.Format.Format_RGBA8888,
+            image_format,
         )
         if image.isNull():
             raise NativeRendererError("failed to construct QImage from shared frame payload")
@@ -98,9 +104,18 @@ class SharedFrameRingReader:
         self._shared = shared
 
     def close(self) -> None:
-        if self._shared is not None and self._shared.isAttached():
-            self._shared.detach()
+        shared = self._shared
         self._shared = None
+        if shared is None:
+            return
+        try:
+            if shared.isAttached():
+                shared.detach()
+        except RuntimeError:
+            # During exceptional QApplication teardown Qt may delete the
+            # QSharedMemory wrapper before the preview worker reaches its
+            # finally block. Closing must remain idempotent in that order.
+            pass
 
     def __enter__(self) -> "SharedFrameRingReader":
         self.attach()
@@ -251,7 +266,7 @@ class SharedFrameRingReader:
             if state != _SHARED_FRAME_READY:
                 raise NativeRendererError(f"shared frame slot is not ready: state={state}")
             pixel_format = _SHARED_FRAME_PIXEL_FORMATS.get(format_id)
-            if pixel_format != "rgba8888":
+            if pixel_format not in {"rgba8888", "bgra8888_premultiplied"}:
                 raise NativeRendererError(f"unsupported shared frame pixel format id: {format_id}")
             if slot_offset + header_payload_offset != payload_offset:
                 raise NativeRendererError("shared frame payload offset does not match slot header")
@@ -270,7 +285,12 @@ class SharedFrameRingReader:
             if width <= 0 or height <= 0 or stride < width * 4 or payload_bytes < stride * height:
                 raise NativeRendererError("shared frame contains invalid RGBA dimensions")
 
-            image = QImage(width, height, QImage.Format.Format_RGBA8888)
+            image_format = (
+                QImage.Format.Format_RGBA8888
+                if pixel_format == "rgba8888"
+                else QImage.Format.Format_ARGB32_Premultiplied
+            )
+            image = QImage(width, height, image_format)
             if image.isNull():
                 raise NativeRendererError("failed to allocate QImage for shared frame")
             destination_pointer = image.bits()
@@ -549,6 +569,7 @@ class NativeRendererProcess:
         generation: int = 0,
         frame_index: int = 0,
         shm_key: str | None = None,
+        include_checksum: bool = True,
     ) -> dict[str, Any]:
         """Render one configured G1 frame into a shared-memory RGBA slot."""
         payload: dict[str, Any] = {
@@ -557,6 +578,7 @@ class NativeRendererProcess:
             "force_warp": bool(force_warp),
             "generation": int(generation),
             "frame_index": int(frame_index),
+            "include_checksum": bool(include_checksum),
         }
         if shm_key:
             payload["shm_key"] = str(shm_key)

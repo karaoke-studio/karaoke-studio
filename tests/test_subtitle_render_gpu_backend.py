@@ -6,6 +6,7 @@ from pathlib import Path
 import uuid
 
 import pytest
+from PyQt6.QtGui import QImage
 
 from krok_helper.subtitle_render.native_backend import (
     NativeRendererError,
@@ -14,6 +15,20 @@ from krok_helper.subtitle_render.native_backend import (
     resolve_native_renderer_path,
 )
 from krok_helper.subtitle_render.models import Style, TimingChar, TimingLine, TimingTrack
+
+
+def test_shared_frame_reader_close_tolerates_deleted_qt_wrapper():
+    class DeletedSharedMemory:
+        def isAttached(self):
+            raise RuntimeError("wrapped C/C++ object has been deleted")
+
+    reader = SharedFrameRingReader("deleted-wrapper")
+    reader._shared = DeletedSharedMemory()  # noqa: SLF001
+
+    reader.close()
+    reader.close()
+
+    assert reader._shared is None  # noqa: SLF001
 
 
 def _renderer_path() -> Path:
@@ -109,7 +124,10 @@ def _render_g1_frames(
             if reader is None:
                 reader = SharedFrameRingReader.from_event(event)
                 reader.attach()
-            frames.append(reader.read_frame(event).payload)
+            image = reader.read_qimage(event).convertToFormat(QImage.Format.Format_RGBA8888)
+            bits = image.constBits()
+            bits.setsize(image.sizeInBytes())
+            frames.append(bytes(bits))
     finally:
         if reader is not None:
             reader.close()
@@ -227,6 +245,33 @@ def test_gpu_preview_readback_copies_shared_slot_directly_to_qimage(monkeypatch)
         abs(actual - expected) <= 1
         for actual, expected in zip(image.pixelColor(16, 24).getRgb(), (51, 102, 204, 128))
     )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_preview_uses_native_premultiplied_bgra_without_checksum(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=10.0) as renderer:
+        renderer.configure_gpu(
+            _g1_track(),
+            _g1_style(),
+            width=320,
+            height=180,
+            fps=60,
+            force_warp=True,
+        )
+        event = renderer.render_gpu_frame(
+            750,
+            force_warp=True,
+            include_checksum=False,
+        )
+        with SharedFrameRingReader.from_event(event) as reader:
+            image = reader.read_qimage(event)
+
+    assert event["pixel_format"] == "bgra8888_premultiplied"
+    assert "checksum" not in event
+    assert image.format() == QImage.Format.Format_ARGB32_Premultiplied
+    assert image.width() == 320
+    assert image.height() == 180
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

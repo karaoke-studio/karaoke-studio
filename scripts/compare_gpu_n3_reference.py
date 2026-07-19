@@ -172,14 +172,7 @@ def _render_gpu(
         )
         event = renderer.render_gpu_frame(timestamp_ms, force_warp=force_warp)
         with SharedFrameRingReader.from_event(event) as reader:
-            slot = reader.read_frame(event)
-            return QImage(
-                slot.payload,
-                slot.width,
-                slot.height,
-                slot.stride,
-                QImage.Format.Format_RGBA8888,
-            ).copy()
+            return reader.read_qimage(event)
 
 
 def main() -> int:

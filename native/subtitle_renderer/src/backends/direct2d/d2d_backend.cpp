@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstring>
 #include <iomanip>
 #include <sstream>
 #include <limits>
@@ -204,6 +205,11 @@ struct Direct2DGpuBackend::Impl {
     std::vector<CachedLine> lines;
     BackendDiagnostics diagnostics;
     bool configured = false;
+    int frameSurfaceWidth = 0;
+    int frameSurfaceHeight = 0;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> frameTargetTexture;
+    Microsoft::WRL::ComPtr<ID2D1Bitmap1> frameTargetBitmap;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> frameStagingTexture;
 };
 
 Direct2DGpuBackend::Direct2DGpuBackend(bool forceWarp)
@@ -368,6 +374,13 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         return;
     }
     ++impl_->diagnostics.cacheMisses;
+    if (impl_->frameSurfaceWidth != scene.width || impl_->frameSurfaceHeight != scene.height) {
+        impl_->frameTargetBitmap.Reset();
+        impl_->frameTargetTexture.Reset();
+        impl_->frameStagingTexture.Reset();
+        impl_->frameSurfaceWidth = scene.width;
+        impl_->frameSurfaceHeight = scene.height;
+    }
     impl_->scene = scene;
     impl_->lines.clear();
     impl_->lines.reserve(scene.lines.size());
@@ -612,30 +625,53 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
     targetDesc.Usage = D3D11_USAGE_DEFAULT;
     targetDesc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
 
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> targetTexture;
-    checkHr(
-        device_.d3dDevice()->CreateTexture2D(&targetDesc, nullptr, targetTexture.ReleaseAndGetAddressOf()),
-        "ID3D11Device::CreateTexture2D(frame target)",
-        device_
-    );
-    Microsoft::WRL::ComPtr<IDXGISurface> targetSurface;
-    checkHr(targetTexture.As(&targetSurface), "Query frame target IDXGISurface", device_);
     const D2D1_BITMAP_PROPERTIES1 bitmapProperties = D2D1::BitmapProperties1(
         D2D1_BITMAP_OPTIONS_TARGET,
         D2D1::PixelFormat(DXGI_FORMAT_B8G8R8A8_UNORM, D2D1_ALPHA_MODE_PREMULTIPLIED),
         96.0f,
         96.0f
     );
-    Microsoft::WRL::ComPtr<ID2D1Bitmap1> targetBitmap;
-    checkHr(
-        device_.d2dContext()->CreateBitmapFromDxgiSurface(
-            targetSurface.Get(),
-            &bitmapProperties,
-            targetBitmap.ReleaseAndGetAddressOf()
-        ),
-        "ID2D1DeviceContext::CreateBitmapFromDxgiSurface(frame)",
-        device_
-    );
+    if (!impl_->frameTargetTexture || !impl_->frameTargetBitmap || !impl_->frameStagingTexture) {
+        checkHr(
+            device_.d3dDevice()->CreateTexture2D(
+                &targetDesc,
+                nullptr,
+                impl_->frameTargetTexture.ReleaseAndGetAddressOf()
+            ),
+            "ID3D11Device::CreateTexture2D(frame target)",
+            device_
+        );
+        Microsoft::WRL::ComPtr<IDXGISurface> targetSurface;
+        checkHr(
+            impl_->frameTargetTexture.As(&targetSurface),
+            "Query frame target IDXGISurface",
+            device_
+        );
+        checkHr(
+            device_.d2dContext()->CreateBitmapFromDxgiSurface(
+                targetSurface.Get(),
+                &bitmapProperties,
+                impl_->frameTargetBitmap.ReleaseAndGetAddressOf()
+            ),
+            "ID2D1DeviceContext::CreateBitmapFromDxgiSurface(frame)",
+            device_
+        );
+        D3D11_TEXTURE2D_DESC stagingDesc = targetDesc;
+        stagingDesc.Usage = D3D11_USAGE_STAGING;
+        stagingDesc.BindFlags = 0;
+        stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        checkHr(
+            device_.d3dDevice()->CreateTexture2D(
+                &stagingDesc,
+                nullptr,
+                impl_->frameStagingTexture.ReleaseAndGetAddressOf()
+            ),
+            "ID3D11Device::CreateTexture2D(frame staging)",
+            device_
+        );
+    }
+    ID3D11Texture2D *targetTexture = impl_->frameTargetTexture.Get();
+    ID2D1Bitmap1 *targetBitmap = impl_->frameTargetBitmap.Get();
 
     const auto renderStart = Clock::now();
     ID2D1DeviceContext *context = device_.d2dContext();
@@ -782,7 +818,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
             }
         }
 
-        context->SetTarget(targetBitmap.Get());
+        context->SetTarget(targetBitmap);
         context->SetTransform(D2D1::Matrix3x2F::Identity());
         context->BeginDraw();
         context->Clear(D2D1::ColorF(0.0f, 0.0f));
@@ -831,7 +867,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
     }
 
     if (line == nullptr || line->geometries.empty()) {
-        context->SetTarget(targetBitmap.Get());
+        context->SetTarget(targetBitmap);
         context->SetTransform(D2D1::Matrix3x2F::Identity());
         context->BeginDraw();
         context->Clear(D2D1::ColorF(0.0f, 0.0f));
@@ -843,20 +879,11 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
     const double renderMs = elapsedMs(renderStart);
 
     const auto readbackStart = Clock::now();
-    D3D11_TEXTURE2D_DESC stagingDesc = targetDesc;
-    stagingDesc.Usage = D3D11_USAGE_STAGING;
-    stagingDesc.BindFlags = 0;
-    stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> stagingTexture;
-    checkHr(
-        device_.d3dDevice()->CreateTexture2D(&stagingDesc, nullptr, stagingTexture.ReleaseAndGetAddressOf()),
-        "ID3D11Device::CreateTexture2D(frame staging)",
-        device_
-    );
-    device_.d3dContext()->CopyResource(stagingTexture.Get(), targetTexture.Get());
+    ID3D11Texture2D *stagingTexture = impl_->frameStagingTexture.Get();
+    device_.d3dContext()->CopyResource(stagingTexture, targetTexture);
     D3D11_MAPPED_SUBRESOURCE mapped{};
     checkHr(
-        device_.d3dContext()->Map(stagingTexture.Get(), 0, D3D11_MAP_READ, 0, &mapped),
+        device_.d3dContext()->Map(stagingTexture, 0, D3D11_MAP_READ, 0, &mapped),
         "ID3D11DeviceContext::Map(frame)",
         device_
     );
@@ -866,25 +893,16 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
     result.surface.width = scene.width;
     result.surface.height = scene.height;
     result.surface.stride = scene.width * 4;
-    result.surface.pixelFormat = PixelFormat::Rgba8888Straight;
+    result.surface.pixelFormat = PixelFormat::Bgra8888Premultiplied;
     result.surface.bytes.resize(static_cast<std::size_t>(result.surface.stride) * scene.height);
     for (int y = 0; y < scene.height; ++y) {
         const auto *source = static_cast<const std::uint8_t *>(mapped.pData)
             + static_cast<std::size_t>(mapped.RowPitch) * y;
         auto *destination = result.surface.bytes.data()
             + static_cast<std::size_t>(result.surface.stride) * y;
-        for (int x = 0; x < scene.width; ++x) {
-            const std::uint8_t blue = source[x * 4 + 0];
-            const std::uint8_t green = source[x * 4 + 1];
-            const std::uint8_t red = source[x * 4 + 2];
-            const std::uint8_t alpha = source[x * 4 + 3];
-            destination[x * 4 + 0] = unpremultiply(red, alpha);
-            destination[x * 4 + 1] = unpremultiply(green, alpha);
-            destination[x * 4 + 2] = unpremultiply(blue, alpha);
-            destination[x * 4 + 3] = alpha;
-        }
+        std::memcpy(destination, source, static_cast<std::size_t>(result.surface.stride));
     }
-    device_.d3dContext()->Unmap(stagingTexture.Get(), 0);
+    device_.d3dContext()->Unmap(stagingTexture, 0);
     result.readbackMs = elapsedMs(readbackStart);
     return result;
 }

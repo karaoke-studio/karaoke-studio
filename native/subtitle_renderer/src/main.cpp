@@ -915,7 +915,9 @@ bool writeSharedRgbaSlot(
     int frameIndex,
     int tMs,
     int slotIndex,
-    SharedFrameRing *ringOut
+    SharedFrameRing *ringOut,
+    int formatId = 1,
+    const QString &pixelFormat = QStringLiteral("rgba8888")
 );
 
 bool writeSharedFrameSlot(
@@ -954,7 +956,9 @@ bool writeSharedRgbaSlot(
     int frameIndex,
     int tMs,
     int slotIndex,
-    SharedFrameRing *ringOut
+    SharedFrameRing *ringOut,
+    int formatId,
+    const QString &pixelFormat
 ) {
     if (runtime == nullptr || rgba == nullptr || width <= 0 || height <= 0 || stride < width * 4) {
         return false;
@@ -981,7 +985,7 @@ bool writeSharedRgbaSlot(
     writeSlotInt(slot, 16, ring.width);
     writeSlotInt(slot, 20, ring.height);
     writeSlotInt(slot, 24, ring.stride);
-    writeSlotInt(slot, 28, 1);  // rgba8888
+    writeSlotInt(slot, 28, formatId);
     writeSlotInt(slot, 32, ring.headerBytes);
     writeSlotInt(slot, 36, ring.pixelBytes);
     char *payload = slot + ring.headerBytes;
@@ -999,6 +1003,7 @@ bool writeSharedRgbaSlot(
     writeSlotInt(slot, 0, 2);  // ready
     runtime->sharedMemory->unlock();
     if (ringOut != nullptr) {
+        ring.pixelFormat = pixelFormat;
         *ringOut = ring;
     }
     return true;
@@ -5581,7 +5586,13 @@ QJsonObject handleRenderGpuFrame(
                 frameIndex,
                 tMs,
                 0,
-                &ring
+                &ring,
+                result.surface.pixelFormat
+                    == krok::subtitle::native::PixelFormat::Bgra8888Premultiplied ? 2 : 1,
+                result.surface.pixelFormat
+                    == krok::subtitle::native::PixelFormat::Bgra8888Premultiplied
+                    ? QStringLiteral("bgra8888_premultiplied")
+                    : QStringLiteral("rgba8888")
             )) {
             QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
             out.insert(QStringLiteral("error"), QStringLiteral("failed to write GPU frame shared-memory slot"));
@@ -5593,10 +5604,12 @@ QJsonObject handleRenderGpuFrame(
         out.insert(QStringLiteral("t_ms"), tMs);
         out.insert(QStringLiteral("render_ms"), result.renderMs);
         out.insert(QStringLiteral("readback_ms"), result.readbackMs);
-        out.insert(
-            QStringLiteral("checksum"),
-            QString::number(bytesChecksum(result.surface.bytes.data(), result.surface.bytes.size()))
-        );
+        if (request.value(QStringLiteral("include_checksum")).toBool(true)) {
+            out.insert(
+                QStringLiteral("checksum"),
+                QString::number(bytesChecksum(result.surface.bytes.data(), result.surface.bytes.size()))
+            );
+        }
         appendSharedRingMetadata(out, ring, 0);
         return out;
     } catch (const std::exception &exception) {
