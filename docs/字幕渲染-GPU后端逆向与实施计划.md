@@ -1021,3 +1021,22 @@ G2 尚未完成：下一刀补 render/readback/ready latency 与 pending replace
 
 G2 仍保持“进行中”：还需完成 30 分钟真实可见 GUI 连续播放，以及
 NVIDIA/AMD/Intel 硬件矩阵。产品开关继续默认关闭，Painter 仍是 oracle 和回退。
+
+### 2026-07-19（第十批）：G2 本机收口——30 分钟真实可见 GUI
+
+- 新增 `scripts/stress_gpu_preview_gui.py`，使用真实 `PreviewGraphicsView`、Qt Multimedia、
+  N3 导入样式/LRC 和 MP4，可见窗口内按实时视频时钟驱动，每 30 秒输出
+  queue/failure/latency/RSS，并在结束时导出 JSON。timer-gap 诊断改为 4096 项固定窗口，
+  避免验收工具自身因长时间运行增长内存。
+- RTX 3070 Ti 本机可见窗口连续运行 `1800.006s`，Dark Spiral 真实
+  1920×1080@60fps 视频每 120 秒回绕：`requests=107945`、`ready=106712`，
+  平均交付约 `59.28fps`；`pending_replaced=1228`、`stale=101`、`max_pending=1`。
+- 最后 4096 帧窗口：`render p95=4.44ms`、`readback p95=4.49ms`、
+  `roundtrip p95=16.27ms`、`ready latency p95=33.14ms`；全程
+  `renderer_failures=0`、`renderer_restarts=0`、`fallback_frames=0`，Qt Multimedia
+  `LoadedMedia/NoError`。sidecar 全程保持同一 PID，工作集约 89–94MiB 往返波动，
+  无单调泄漏或重启迹象。
+
+G2 的本机实现、NVIDIA 硬件、WARP、Painter fallback、kill/restart、200ms 慢帧与
+30 分钟真实 GUI 门禁已全部完成。AMD/Intel 矩阵属外部硬件验证，不阻塞进入 G3；
+产品 GPU 开关仍默认关闭，Painter 仍为 oracle 与 fallback。

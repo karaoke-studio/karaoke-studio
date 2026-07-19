@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 import json
 import math
 import os
@@ -16,7 +17,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 
-def _percentile(values: list[float], ratio: float) -> float:
+def _percentile(values: list[float] | deque[float], ratio: float) -> float:
     if not values:
         return 0.0
     ordered = sorted(values)
@@ -92,7 +93,8 @@ def main() -> int:
     rss_start = process.memory_info().rss
     ready_count = 0
     latest_ready_ms = -1
-    tick_gaps_ms: list[float] = []
+    tick_gaps_ms: deque[float] = deque(maxlen=4096)
+    drive_tick_count = 0
     started_at = 0.0
     last_tick_at = 0.0
     last_frame_index = -1
@@ -115,10 +117,11 @@ def main() -> int:
     progress_timer.setInterval(max(int(args.progress_seconds * 1000), 1_000))
 
     def drive() -> None:
-        nonlocal last_tick_at, last_frame_index, last_loop_index
+        nonlocal drive_tick_count, last_tick_at, last_frame_index, last_loop_index
         now = time.monotonic()
         if last_tick_at > 0.0:
             tick_gaps_ms.append((now - last_tick_at) * 1000.0)
+            drive_tick_count += 1
         last_tick_at = now
         elapsed = max(now - started_at, 0.0)
         frame_index = int(elapsed * fps)
@@ -184,7 +187,8 @@ def main() -> int:
             "stats": stats,
             "timings": timings,
             "drive_gap_ms": {
-                "count": len(tick_gaps_ms),
+                "count": drive_tick_count,
+                "sample_count": len(tick_gaps_ms),
                 "p95": round(_percentile(tick_gaps_ms, 0.95), 3),
                 "max": round(max(tick_gaps_ms, default=0.0), 3),
             },
