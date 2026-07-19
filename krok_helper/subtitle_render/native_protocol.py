@@ -49,8 +49,6 @@ def gpu_unsupported_features(
     if style.right_to_left:
         if style.vertical:
             reasons.append("rtl_vertical")
-        if any(source.rubies for source in sources):
-            reasons.append("rtl_ruby")
         if style.lit_enabled:
             reasons.append("rtl_signal")
         if any(

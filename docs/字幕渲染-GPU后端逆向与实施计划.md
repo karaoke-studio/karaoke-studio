@@ -1441,5 +1441,29 @@ oracle 与 fallback。
   local 显存增长 0。GPU/transport 独立回归 `139 passed`，native protocol/export/benchmark
   独立回归 `63 passed, 27 skipped`。
 
-下一批继续 RTL ruby：visual reading units 反向排列但保持各自逻辑时间，小假名翻转与浊点组合需
-严格复用 Painter 的 `_rtl_reverse_ruby_reading()` 语义；完成前 `rtl_ruby` 不移除。
+下一批继续 RTL ruby：visual reading units 反向排列但保持各自逻辑时间，小假名反序与浊点组合需
+严格复用 Painter `_ruby_wipe_geometry()` / `_ruby_utopia_visual_units()` 的实际语义；完成前
+`rtl_ruby` 不移除。
+
+### 2026-07-19（第三十三批）：G4 RTL ruby
+
+- ruby 先保留逻辑 reading unit 与各自时间段，再单独计算反向 visual slot：最后一个可见 unit
+  放在最左，首个逻辑 unit 放在最右；geometry 本身不镜像。Painter
+  `_ruby_utopia_visual_units()` 已把组合浊点/半浊点与前字合为一个 unit，IR/native 继续消费该边界，
+  小假名则保持独立 unit 后参与整体反序。
+- RTL 正文目标字符槽已经反向，因此 ruby target box 改为首尾目标槽的 min/max，避免直接使用
+  `first.layoutLeft → last.layoutRight` 得到负宽。center/equal-space、ruby interval、fill rect 和全局
+  gradient 相位继续复用横排实现。
+- ruby wipe 按逻辑时间从右向左推进；空 reading part 保留时间平台。sharp fill/stroke/stroke2、shadow
+  after clip 与 before/after glow source 全部切换为 RTL 裁剪，shadow 前沿额外抵消 X 偏移。
+  `rtl_ruby` capability fallback 已移除；RTL + animation/signal/inline-style/vertical 仍保持独立回退。
+- 自动门槛覆盖小假名、组合浊点、空 part 与 6 个时间点：整体边界相对 Painter 最大偏差 `5px`，
+  after 色走字前沿偏差不超过 `10px`，归一化颜色面积轨迹偏差不超过 `0.12`，空 part 两端严格
+  不推进。shadow/glow 边界分别不超过 `6/7px`，归一化 alpha 轨迹偏差不超过 `0.03`。
+- RTX 3070 Ti、1920×1080、60fps、RTL + ruby + 中档正文/ruby glow、packed bands、600 帧：
+  `107.84fps`，render/readback/roundtrip p95 `3.44/4.13/11.36ms`，平均 band 覆盖率 `20.00%`，
+  local 显存增长 0。GPU/transport 独立回归 `142 passed`，native protocol/export/benchmark 独立
+  回归 `63 passed, 27 skipped`。
+
+RTL 正文与 ruby 基础路径至此收口。下一批按 G4 顺序处理 viewport transform、跨行 scope 与全部
+标题路径；RTL 的 signal、行内角色和动画继续保持 capability fallback，待对应组合单独验收。

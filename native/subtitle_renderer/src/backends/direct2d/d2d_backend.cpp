@@ -1832,6 +1832,21 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 rubyCursor = targetLeft
                     + static_cast<float>(static_cast<int>(targetWidth - contentWidth) / 2);
             }
+            std::vector<float> rubyOrigins(rubyGlyphs.size(), rubyCursor);
+            float layoutCursor = rubyCursor;
+            for (std::size_t visualIndex = 0;
+                 visualIndex < rubyGlyphs.size(); ++visualIndex) {
+                const std::size_t logicalIndex = style.rightToLeft
+                    ? rubyGlyphs.size() - visualIndex - 1
+                    : visualIndex;
+                rubyOrigins[logicalIndex] = (centered || rubyGlyphs.size() == 1)
+                    ? layoutCursor
+                    : static_cast<float>(static_cast<int>(layoutCursor));
+                layoutCursor += rubyGlyphs[logicalIndex].layoutWidth;
+                if (visualIndex + 1 < rubyGlyphs.size()) {
+                    layoutCursor += gap;
+                }
+            }
 
             Impl::CachedRuby ruby;
             ruby.startMs = sourceRuby.startMs;
@@ -1884,9 +1899,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             bool rubyHasBounds = false;
             for (std::size_t unitIndex = 0; unitIndex < rubyGlyphs.size(); ++unitIndex) {
                 RubyGlyph &glyph = rubyGlyphs[unitIndex];
-                const float origin = (centered || rubyGlyphs.size() == 1)
-                    ? rubyCursor
-                    : static_cast<float>(static_cast<int>(rubyCursor));
+                const float origin = rubyOrigins[unitIndex];
                 D2D1_RECT_F positionedBounds{};
                 bool positionedHasBounds = false;
                 if (glyph.geometry) {
@@ -1954,10 +1967,6 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 });
                 ruby.chars.back().pivotX = origin + glyph.layoutWidth * 0.5f;
                 ruby.chars.back().pivotY = ruby.pivotY;
-                rubyCursor += glyph.layoutWidth;
-                if (unitIndex + 1 < rubyGlyphs.size()) {
-                    rubyCursor += gap;
-                }
             }
             if (style.vertical && rubyHasBounds && !ruby.geometries.empty()) {
                 const float mainCellWidth = std::max(style.fontSize, 1.0f);
@@ -3343,10 +3352,14 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             ? wipeEdge > line->fillBounds.top
             : (rtl ? wipeEdge < line->bounds.right : wipeEdge > line->bounds.left);
         auto rubyWipeEdgeAt = [&](const Impl::CachedRuby &ruby) {
-            float edge = style.vertical ? ruby.bounds.top : ruby.bounds.left;
+            float edge = style.vertical
+                ? ruby.bounds.top
+                : (rtl ? ruby.bounds.right : ruby.bounds.left);
             for (const Impl::CachedChar &ch : ruby.chars) {
                 if (tMs >= ch.endMs) {
-                    edge = std::max(edge, style.vertical ? ch.bottom : ch.right);
+                    edge = rtl
+                        ? std::min(edge, ch.left)
+                        : std::max(edge, style.vertical ? ch.bottom : ch.right);
                     continue;
                 }
                 if (tMs <= ch.startMs) {
@@ -3360,10 +3373,22 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 );
                 edge = style.vertical
                     ? ch.top + (ch.bottom - ch.top) * ratio
-                    : ch.left + (ch.right - ch.left) * ratio;
+                    : (rtl
+                        ? ch.right - (ch.right - ch.left) * ratio
+                        : ch.left + (ch.right - ch.left) * ratio);
                 break;
             }
             return edge;
+        };
+        auto rubyPhaseVisible = [&](const Impl::CachedRuby &ruby,
+                                    float edge, bool after) {
+            if (style.vertical) {
+                return after ? edge > ruby.bounds.top : edge < ruby.bounds.bottom;
+            }
+            if (rtl) {
+                return after ? edge < ruby.bounds.right : edge > ruby.bounds.left;
+            }
+            return after ? edge > ruby.bounds.left : edge < ruby.bounds.right;
         };
         auto rubyStyleFor = [&](int styleIndex) -> const TextStyle & {
             return styleIndex >= 0
@@ -3458,8 +3483,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                             ) > 0.0f);
                     return selected && unitVisible
                         && ruby.styleIndex == styleIndex
-                        && !((after && edge <= (style.vertical ? ruby.bounds.top : ruby.bounds.left))
-                            || (!after && edge >= (style.vertical ? ruby.bounds.bottom : ruby.bounds.right)));
+                        && rubyPhaseVisible(ruby, edge, after);
                 }
             );
             if (rubyStyle.rubyDecorationKind != "glow"
@@ -3530,8 +3554,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 );
                 brush->SetOpacity(globalOpacity);
                 const float edge = rubyWipeEdgeAt(ruby);
-                if ((after && edge <= (style.vertical ? ruby.bounds.top : ruby.bounds.left))
-                    || (!after && edge >= (style.vertical ? ruby.bounds.bottom : ruby.bounds.right))) {
+                if (!rubyPhaseVisible(ruby, edge, after)) {
                     continue;
                 }
                 const D2D1_RECT_F clip = style.vertical
@@ -3544,15 +3567,25 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                             ruby.bounds.left - pad, edge,
                             ruby.bounds.right + pad, ruby.bounds.bottom + pad
                         ))
-                    : (after
-                        ? D2D1::RectF(
-                            ruby.bounds.left - pad, ruby.bounds.top - pad,
-                            edge, ruby.bounds.bottom + pad
-                        )
-                        : D2D1::RectF(
-                            edge, ruby.bounds.top - pad,
-                            ruby.bounds.right + pad, ruby.bounds.bottom + pad
-                        ));
+                    : (rtl
+                        ? (after
+                            ? D2D1::RectF(
+                                edge, ruby.bounds.top - pad,
+                                ruby.bounds.right + pad, ruby.bounds.bottom + pad
+                            )
+                            : D2D1::RectF(
+                                ruby.bounds.left - pad, ruby.bounds.top - pad,
+                                edge, ruby.bounds.bottom + pad
+                            ))
+                        : (after
+                            ? D2D1::RectF(
+                                ruby.bounds.left - pad, ruby.bounds.top - pad,
+                                edge, ruby.bounds.bottom + pad
+                            )
+                            : D2D1::RectF(
+                                edge, ruby.bounds.top - pad,
+                                ruby.bounds.right + pad, ruby.bounds.bottom + pad
+                            )));
                 context->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                 for (std::size_t geometryIndex = 0;
                      geometryIndex < ruby.geometries.size(); ++geometryIndex) {
@@ -4000,12 +4033,21 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                                 ruby.bounds.right + pad,
                                 edge - rubyStyle.rubyShadowOffsetY
                             )
-                            : D2D1::RectF(
-                                ruby.bounds.left - pad - rubyStyle.rubyShadowOffsetX,
-                                ruby.bounds.top - pad,
-                                edge - rubyStyle.rubyShadowOffsetX,
-                                ruby.bounds.bottom + pad
-                            ),
+                            : (rtl
+                                ? D2D1::RectF(
+                                    edge - rubyStyle.rubyShadowOffsetX,
+                                    ruby.bounds.top - pad,
+                                    ruby.bounds.right + pad
+                                        - rubyStyle.rubyShadowOffsetX,
+                                    ruby.bounds.bottom + pad
+                                )
+                                : D2D1::RectF(
+                                    ruby.bounds.left - pad
+                                        - rubyStyle.rubyShadowOffsetX,
+                                    ruby.bounds.top - pad,
+                                    edge - rubyStyle.rubyShadowOffsetX,
+                                    ruby.bounds.bottom + pad
+                                )),
                         D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
                 }
@@ -4082,7 +4124,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 }
             };
             drawRubyShadowPhase(false);
-            if (edge > (style.vertical ? ruby.bounds.top : ruby.bounds.left)) {
+            if (rubyPhaseVisible(ruby, edge, true)) {
                 drawRubyShadowPhase(true);
             }
         }
@@ -4347,14 +4389,21 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     ruby.bounds.right + rubyPad,
                     rubyWipeEdge
                 )
-                : D2D1::RectF(
-                    ruby.bounds.left - rubyPad,
-                    ruby.bounds.top - rubyPad,
-                    rubyWipeEdge,
-                    ruby.bounds.bottom + rubyPad
-                );
+                : (rtl
+                    ? D2D1::RectF(
+                        rubyWipeEdge,
+                        ruby.bounds.top - rubyPad,
+                        ruby.bounds.right + rubyPad,
+                        ruby.bounds.bottom + rubyPad
+                    )
+                    : D2D1::RectF(
+                        ruby.bounds.left - rubyPad,
+                        ruby.bounds.top - rubyPad,
+                        rubyWipeEdge,
+                        ruby.bounds.bottom + rubyPad
+                    ));
             drawRubyStack(rubyIndex, ruby, false);
-            if (rubyWipeEdge > (style.vertical ? ruby.bounds.top : ruby.bounds.left)) {
+            if (rubyPhaseVisible(ruby, rubyWipeEdge, true)) {
                 if (!hasUtopiaTransition) {
                     context->PushAxisAlignedClip(
                         rubyAfterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
