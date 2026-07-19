@@ -151,12 +151,15 @@ git submodule status
 `feat/subtitle-render` 整体合入 `main`。后续修复直接按工作台流程 A 在 `main` 开发，
 不再继续使用该长线分支。
 
-### 接手前必读（2026-07-11 校准）
+### 接手前必读（2026-07-19 校准）
 
 1. [`docs/字幕渲染模块-需求设计.md`](docs/字幕渲染模块-需求设计.md)：总体状态、产品决策和剩余主线。
 2. [`docs/N3项目导入兼容性与实施计划.md`](docs/N3项目导入兼容性与实施计划.md)：N3 字段矩阵、明确不做项、下一步 TDD 顺序。
 3. [`docs/字幕布局-N3对齐改造计划.md`](docs/字幕布局-N3对齐改造计划.md)：布局 P1-P4 历史、字符排版参数现状与兼容边界。
 4. [`docs/SUG与字幕渲染模块-Python走字差异.md`](docs/SUG与字幕渲染模块-Python走字差异.md)：SUG/LRC 数据保真边界。
+5. 若任务涉及 GIL、GPU、Direct2D 或 native 预览，读
+   [`docs/字幕渲染-GPU后端逆向与实施计划.md`](docs/字幕渲染-GPU后端逆向与实施计划.md)：
+   N3 10.74.80.0 逆向证据、Windows C++ Direct2D 决策、G0-G6 实施与验收门槛。
 
 ### 当前现状
 
@@ -166,6 +169,8 @@ git submodule status
 - 逐行特效（四列表格、批量编辑、N3 行动作、持久化、撤销/重做、Painter）已合入。
 - `BackgroundSource` 已支持视频、静态图、图片序列和纯色；独立音频已接入预览、项目保存与 MP4 导出，但仅允许用于非视频背景。视频背景只使用内嵌音轨，避免双时钟。
 - native C++ sidecar 产品路径硬关闭，Python QPainter 是唯一正式路径。
+- 2026-07-19 已完成 N3 GPU 预览管线逆向和 Direct2D GPU sidecar 方案持久化，
+  **尚未开始产品代码实现**；若用户要求继续，默认从上述 GPU 文档的 G0 最小探针开始。
 
 ### 下一步顺序
 
@@ -179,6 +184,8 @@ multiprocessing spawn 冒烟；完整测试基线为 `916 passed, 50 skipped`。
 ### 关键约束
 
 - **引擎选型已定**：QPainter 离屏 + ffmpeg rawvideo pipe，不改成 ASS/libass 主路径。
+- GPU 属于新增的 Windows 可选后端，不推翻上条约束；未达到 GPU 文档验收门槛前，
+  不得恢复/默认开启 native 产品路径，CPU QPainter 必须永久保留为 oracle 与 fallback。
 - **不要改 SUG submodule 源码**：优先直接消费 SUG `Project`/`.sug`；`.lrc` 仅为兼容入口。
 - **只输出 MP4、只支持 60/120fps**；不做 30fps 原样输出、AVI 或 ARGB/透明 PNG 序列。
 - **不支持假名独立字体族**；假名沿用日文字体，英数字体仍可独立。
