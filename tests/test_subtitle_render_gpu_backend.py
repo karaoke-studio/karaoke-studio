@@ -992,6 +992,84 @@ def test_gpu_completed_main_wipe_releases_outer_layers(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_utopia_keeps_finished_char_body_while_next_char_wipes(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    before = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFF2020"),
+        stroke=PaintFill(mode="solid", color="#FFFF2020"),
+        stroke2=PaintFill(mode="solid", color="#FFFF2020"),
+        shadow=PaintFill(mode="solid", color="#FFFF2020"),
+    )
+    after = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FF2040FF"),
+        stroke=PaintFill(mode="solid", color="#FF2040FF"),
+        stroke2=PaintFill(mode="solid", color="#FF2040FF"),
+        shadow=PaintFill(mode="solid", color="#FF2040FF"),
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("円", 0), TimingChar("円", 1_000)],
+                end_ms=2_000,
+                display_start_override_ms=0,
+                display_end_override_ms=4_000,
+            )
+        ]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=120,
+        stroke_width_px=7,
+        stroke2_enabled=True,
+        stroke2_width_px=7,
+        decoration_kind="none",
+        karaoke_colors=KaraokeColors(before=before, after=after),
+        entry_anim="utopia",
+        exit_anim="utopia",
+        line_tail_ms=1_000,
+    )
+
+    # 1500ms sits in the wipe delegation window: the first character finished
+    # at 1000ms while the second keeps wiping until 2000ms, so the first
+    # character's after clip follows the second character's edge. Its own
+    # solid body must stay visible instead of being clipped down to the
+    # following character's bounds.
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, (1_500,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=1_500, track=track)
+
+    # x < 280 covers only the first character's glyph; the second character
+    # (and its utopia entry transform) stays right of it. With the delegation
+    # bug the region is empty because the after clip collapses onto the
+    # second character's bounds.
+    def solid_after_first_char(payload: bytes) -> int:
+        count = 0
+        for y in range(360):
+            row = y * 640 * 4
+            for x in range(280):
+                offset = row + x * 4
+                if (
+                    payload[offset + 3] > 200
+                    and payload[offset + 2] > payload[offset] + 40
+                ):
+                    count += 1
+        return count
+
+    gpu_solid = solid_after_first_char(frames[0])
+    painter_solid = solid_after_first_char(painter)
+    assert painter_solid > 1_000
+    # Lower bound only: GPU and Painter currently disagree on the utopia
+    # glyph scale by ~1.2x, which is a separate parity gap. The delegation
+    # bug drops this to ~0.
+    assert gpu_solid > painter_solid * 0.5
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize("decoration_kind", ["none", "shadow", "glow"])
 def test_gpu_utopia_releases_each_completed_character_wipe(
     monkeypatch, decoration_kind: str

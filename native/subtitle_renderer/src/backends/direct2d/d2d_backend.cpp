@@ -3640,7 +3640,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 && line->chars[charIndex + 1].geometry != nullptr) {
                 wipeIndex = charIndex + 1;
             }
-            ID2D1Geometry *geometry = charGeometryAt(wipeIndex);
+            ID2D1Geometry *geometry = charGeometryAt(charIndex);
             if (geometry == nullptr) {
                 return std::pair<D2D1_RECT_F, float>{bounds, 0.0f};
             }
@@ -3649,6 +3649,23 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 "ID2D1Geometry::GetBounds(utopia wipe)",
                 device_
             );
+            // The wipe edge delegates to the following character while that
+            // character is still wiping, but the clip rect must keep covering
+            // this character's own glyph; only the edge travels across the
+            // delegated extent.
+            D2D1_RECT_F wipeBounds = bounds;
+            if (wipeIndex != charIndex) {
+                ID2D1Geometry *wipeGeometry = charGeometryAt(wipeIndex);
+                if (wipeGeometry == nullptr) {
+                    wipeIndex = charIndex;
+                } else {
+                    checkHr(
+                        wipeGeometry->GetBounds(nullptr, &wipeBounds),
+                        "ID2D1Geometry::GetBounds(utopia wipe)",
+                        device_
+                    );
+                }
+            }
             const Impl::CachedChar &ch = line->chars[wipeIndex];
             const TextStyle &charStyle = ch.styleIndex >= 0
                 && ch.styleIndex < static_cast<int>(scene.charStyles.size())
@@ -3657,8 +3674,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const float edgeHalf = static_cast<float>(
                 std::max(static_cast<int>(charStyle.strokeWidth), 0) / 2
             );
-            const float left = std::floor(bounds.left) - edgeHalf;
-            const float right = std::ceil(bounds.right) + edgeHalf;
+            const float left = std::floor(wipeBounds.left) - edgeHalf;
+            const float right = std::ceil(wipeBounds.right) + edgeHalf;
             float ratio = 0.0f;
             const CharacterAnimationState animationState = characterAnimationAt(wipeIndex);
             if (animationState.utopiaExit) {
