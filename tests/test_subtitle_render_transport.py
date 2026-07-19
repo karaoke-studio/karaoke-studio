@@ -487,10 +487,14 @@ def test_gpu_async_renderer_queue_is_capacity_one_latest_wins(qapp, monkeypatch)
         assert first_started.wait(timeout=2.0)
         for t_ms in range(2_000, 2_100):
             renderer.request(t_ms)
+        time.sleep(0.2)
+        released_at = time.monotonic()
         unblock.set()
         assert latest_finished.wait(timeout=2.0)
+        recovery_ms = (time.monotonic() - released_at) * 1000.0
 
         assert rendered == [1_000, 2_099]
+        assert recovery_ms < 250.0
         stats = renderer.stats_snapshot()
         assert stats["requests"] == 101
         assert stats["pending_replaced"] == 99

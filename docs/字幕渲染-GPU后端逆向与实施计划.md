@@ -1014,6 +1014,10 @@ G2 尚未完成：下一刀补 render/readback/ready latency 与 pending replace
   `readback p95=5.05ms`、`roundtrip p95=15.69ms`。烟测的 Qt 异常退出还暴露并修复了
   `QSharedMemory` wrapper 先于 worker finally 销毁时的幂等 close 边角。
 - 本批回归：GPU/transport `86 passed`；native export/protocol `33 passed, 27 skipped`。
+- 人工慢帧门禁已加入同一 scheduler benchmark 与单测：在 1080p 链路内注入一次
+  200ms worker 阻塞，阻塞期间继续以 60Hz 提交时间戳；结果旧帧淘汰 2 张、
+  `pending_replaced=11`、`max_pending=1`，阻塞解除后 123.08ms 交付最新帧，低于
+  250ms 恢复门槛，无 renderer failure/fallback。
 
-G2 仍保持“进行中”：还需完成 30 分钟真实可见 GUI 连续播放、人工 200ms 慢帧注入后的
-恢复时间门禁，以及 NVIDIA/AMD/Intel 硬件矩阵。产品开关继续默认关闭，Painter 仍是 oracle 和回退。
+G2 仍保持“进行中”：还需完成 30 分钟真实可见 GUI 连续播放，以及
+NVIDIA/AMD/Intel 硬件矩阵。产品开关继续默认关闭，Painter 仍是 oracle 和回退。

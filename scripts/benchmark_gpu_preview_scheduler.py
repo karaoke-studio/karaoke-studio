@@ -7,6 +7,7 @@ from collections import Counter
 import csv
 from dataclasses import replace
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -19,8 +20,10 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from krok_helper.subtitle_render.frontend import preview_async as preview_async_module
 from krok_helper.subtitle_render.frontend.preview_async import GpuAsyncSubtitleRenderer
 from krok_helper.subtitle_render.models import Style, TimingChar, TimingLine, TimingTrack
+from krok_helper.subtitle_render.native_backend import NativeRendererProcess
 
 
 def _track(duration_ms: int) -> TimingTrack:
@@ -58,12 +61,34 @@ def main() -> int:
     parser.add_argument("--seek-burst", type=int, default=0)
     parser.add_argument("--resize-churn", type=int, default=0)
     parser.add_argument("--style-churn", type=int, default=0)
+    parser.add_argument(
+        "--inject-slow-frame-ms",
+        type=int,
+        default=0,
+        help="Inject one end-to-end worker stall and measure latest-frame recovery.",
+    )
     parser.add_argument("--output", type=Path, default=Path("build/gpu-preview-benchmark.csv"))
     args = parser.parse_args()
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     os.environ["KROK_SUBTITLE_GPU_FORCE_WARP"] = "1" if args.force_warp else "0"
     app = QApplication.instance() or QApplication([])
+    slow_state: dict[str, float | bool] = {
+        "armed": False,
+        "consumed": False,
+        "released_at": 0.0,
+    }
+    slow_frame_ms = max(int(args.inject_slow_frame_ms), 0)
+    if slow_frame_ms:
+        class DelayedNativeRendererProcess(NativeRendererProcess):
+            def render_gpu_frame(self, *render_args, **render_kwargs):
+                if slow_state["armed"] and not slow_state["consumed"]:
+                    slow_state["consumed"] = True
+                    time.sleep(slow_frame_ms / 1000.0)
+                    slow_state["released_at"] = time.monotonic()
+                return super().render_gpu_frame(*render_args, **render_kwargs)
+
+        preview_async_module.NativeRendererProcess = DelayedNativeRendererProcess
     duration_ms = max(int(args.duration * 1000), 1000)
     track = _track(duration_ms + 10_000)
     style = Style(
@@ -85,11 +110,13 @@ def main() -> int:
     )
     renderer = GpuAsyncSubtitleRenderer(args.width, args.height)
     rows: list[dict[str, float | int | str]] = []
+    delivered_at: dict[int, float] = {}
     latest_requested = 0
     current_phase = "playback"
     start = time.monotonic()
 
     def on_frame(_image, rendered_t_ms: int) -> None:
+        delivered_at[int(rendered_t_ms)] = time.monotonic()
         now_ms = (time.monotonic() - start) * 1000.0
         rows.append(
             {
@@ -163,6 +190,58 @@ def main() -> int:
             before = len(rows)
             renderer.request(latest_requested)
             _wait_until(app, lambda: len(rows) > before, 3.0)
+
+        slow_recovery: dict[str, float | int | bool] = {
+            "requested_delay_ms": slow_frame_ms,
+            "delay_consumed": False,
+            "latest_delivered": False,
+            "after_release_ms": 0.0,
+            "passed": slow_frame_ms == 0,
+        }
+        if slow_frame_ms:
+            current_phase = "slow_recovery"
+            renderer.set_playing(False)
+            settle_t = duration_ms + 20_000
+            latest_requested = settle_t
+            renderer.request(settle_t)
+            _wait_until(app, lambda: settle_t in delivered_at, 3.0)
+
+            slow_state["armed"] = True
+            burst_frames = max(
+                int(math.ceil((slow_frame_ms + 120) / (1000.0 / max(args.fps, 1)))),
+                4,
+            )
+            burst_start = time.monotonic()
+            for index in range(burst_frames):
+                deadline = burst_start + index / max(args.fps, 1)
+                while time.monotonic() < deadline:
+                    app.processEvents()
+                    time.sleep(min(max(deadline - time.monotonic(), 0.0), 0.002))
+                latest_requested = settle_t + 1_000 + int(
+                    round(index * 1000.0 / max(args.fps, 1))
+                )
+                renderer.request(latest_requested)
+                app.processEvents()
+            latest_delivered = _wait_until(
+                app, lambda: latest_requested in delivered_at, 3.0
+            )
+            released_at = float(slow_state["released_at"])
+            after_release_ms = (
+                (delivered_at[latest_requested] - released_at) * 1000.0
+                if latest_delivered and released_at > 0.0
+                else 0.0
+            )
+            slow_recovery = {
+                "requested_delay_ms": slow_frame_ms,
+                "delay_consumed": bool(slow_state["consumed"]),
+                "latest_delivered": latest_delivered,
+                "after_release_ms": round(after_release_ms, 3),
+                "passed": bool(
+                    slow_state["consumed"]
+                    and latest_delivered
+                    and after_release_ms <= 250.0
+                ),
+            }
     finally:
         renderer.stop()
 
@@ -188,6 +267,7 @@ def main() -> int:
         "playback_delivery_rate": delivered_by_phase.get("playback", 0) / frame_count,
         "stats": renderer.stats_snapshot(),
         "timings": renderer.timing_snapshot(),
+        "slow_recovery": slow_recovery,
         "csv": str(args.output),
     }
     summary_path = args.output.with_suffix(".json")
@@ -196,7 +276,12 @@ def main() -> int:
         encoding="utf-8",
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-    return 0 if summary["stats"]["renderer_failures"] == 0 else 1
+    return (
+        0
+        if summary["stats"]["renderer_failures"] == 0
+        and summary["slow_recovery"]["passed"]
+        else 1
+    )
 
 
 if __name__ == "__main__":
