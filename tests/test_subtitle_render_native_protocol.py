@@ -28,6 +28,7 @@ from krok_helper.subtitle_render.engine.painter import (
 from krok_helper.subtitle_render.models import (
     KaraokeColors,
     KaraokeColorState,
+    LineAnimationOverride,
     PaintFill,
     RubyAnnotation,
     Style,
@@ -240,7 +241,8 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
 
     assert gpu_unsupported_features(track, Style()) == ()
     assert gpu_unsupported_features(track, Style(vertical=True)) == ("vertical",)
-    assert gpu_unsupported_features(track, Style(entry_anim="fade")) == (
+    assert gpu_unsupported_features(track, Style(entry_anim="fade")) == ()
+    assert gpu_unsupported_features(track, Style(entry_anim="char_fade")) == (
         "line_animation",
     )
     span_track = TimingTrack(
@@ -260,6 +262,44 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
         ]
     )
     assert gpu_unsupported_features(span_track, Style()) == ("shared_timing_span",)
+
+
+def test_build_render_ir_resolves_global_and_per_line_basic_animations():
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("A", 1_000)], end_ms=2_000),
+            TimingLine(
+                chars=[TimingChar("B", 2_500)],
+                end_ms=3_500,
+                animation_override=LineAnimationOverride(
+                    entry_anim="slide_in",
+                    entry_duration_ms=700,
+                    exit_anim="rise",
+                    exit_duration_ms=600,
+                ),
+            ),
+        ]
+    )
+    style = Style(
+        entry_anim="fade",
+        entry_lead_ms=900,
+        exit_anim="slide_out",
+        exit_fade_ms=800,
+    )
+
+    lines = build_render_ir(track, style, width=640, height=360, fps=60)["track"][
+        "lines"
+    ]
+
+    assert lines[0]["entry_anim"] == "fade"
+    assert lines[0]["entry_duration_ms"] == 900
+    assert lines[0]["exit_anim"] == "slide_out"
+    assert lines[0]["exit_duration_ms"] == 800
+    assert lines[1]["entry_anim"] == "slide_in"
+    assert lines[1]["entry_duration_ms"] == 700
+    assert lines[1]["exit_anim"] == "rise"
+    assert lines[1]["exit_duration_ms"] == 600
+    assert gpu_unsupported_features(track, style) == ()
 
 
 def test_build_render_ir_clamps_screen_values():

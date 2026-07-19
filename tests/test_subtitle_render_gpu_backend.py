@@ -1239,6 +1239,71 @@ def test_gpu_g3_uses_painter_resolved_display_overrides(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize(
+    ("entry_anim", "exit_anim", "axis"),
+    [
+        ("fade", "fade", None),
+        ("slide_in", "slide_out", "x"),
+        ("rise", "rise", "y"),
+    ],
+)
+def test_gpu_g4_basic_line_animations_follow_painter(
+    monkeypatch, entry_anim: str, exit_anim: str, axis: str | None
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("动画", 1_000)],
+                end_ms=2_000,
+                display_start_override_ms=0,
+                display_end_override_ms=3_000,
+            )
+        ]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+        line_horizontal_layout="center",
+        entry_anim=entry_anim,
+        entry_lead_ms=1_000,
+        exit_anim=exit_anim,
+        exit_fade_ms=1_000,
+    )
+    timestamps = (500, 1_000, 2_500, 3_000)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+
+    assert _alpha_count(gpu[3]) == _alpha_count(painter[3]) == 0
+    for animated_index in (0, 2):
+        gpu_ratio = sum(gpu[animated_index][3::4]) / sum(gpu[1][3::4])
+        painter_ratio = sum(painter[animated_index][3::4]) / sum(painter[1][3::4])
+        assert abs(gpu_ratio - painter_ratio) <= 0.06
+
+    if axis is not None:
+        coordinate = 0 if axis == "x" else 1
+
+        def center(payload: bytes) -> float:
+            bounds = _payload_alpha_bounds(payload)
+            return (bounds[coordinate] + bounds[coordinate + 2]) / 2.0
+
+        for animated_index in (0, 2):
+            gpu_shift = center(gpu[animated_index]) - center(gpu[1])
+            painter_shift = center(painter[animated_index]) - center(painter[1])
+            assert abs(gpu_shift - painter_shift) <= 3.0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g3_dual_lane_alignments_follow_painter_schedule(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
 

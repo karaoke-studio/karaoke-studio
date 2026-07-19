@@ -39,7 +39,9 @@ def gpu_unsupported_features(
         reasons.append("per_row_layout")
     if style.lit_enabled:
         reasons.append("signal_lits")
-    if style.entry_anim != "none" or style.exit_anim != "none":
+    if style.entry_anim not in {"none", "fade", "slide_in", "rise"} or (
+        style.exit_anim not in {"none", "fade", "slide_out", "rise"}
+    ):
         reasons.append("line_animation")
     if (
         style.viewport_scale_pct != 100
@@ -52,11 +54,19 @@ def gpu_unsupported_features(
         for line in source.lines:
             if line.layout_index != 0:
                 reasons.append("line_layout_override")
-            if line.animation_override is not None and (
-                line.animation_override.entry_anim != "none"
-                or line.animation_override.exit_anim != "none"
-            ):
-                reasons.append("line_animation_override")
+            if line.animation_override is not None:
+                if line.animation_override.entry_anim not in {
+                    "none",
+                    "fade",
+                    "slide_in",
+                    "rise",
+                } or line.animation_override.exit_anim not in {
+                    "none",
+                    "fade",
+                    "slide_out",
+                    "rise",
+                }:
+                    reasons.append("line_animation_override")
             if line.guide_symbol is not None or line.inline_guide_symbols:
                 reasons.append("guide_symbol")
             if any(
@@ -118,6 +128,10 @@ def timing_line_to_ir(
     display_start_ms: int | None = None,
     display_end_ms: int | None = None,
     center_override: bool = False,
+    entry_anim: str = "none",
+    entry_duration_ms: int = 0,
+    exit_anim: str = "none",
+    exit_duration_ms: int = 0,
 ) -> dict[str, Any]:
     return {
         "chars": [timing_char_to_ir(ch) for ch in line.chars],
@@ -131,6 +145,10 @@ def timing_line_to_ir(
         ),
         "display_end_ms": int(display_end_ms) if display_end_ms is not None else None,
         "center_override": bool(center_override),
+        "entry_anim": str(entry_anim),
+        "entry_duration_ms": max(int(entry_duration_ms), 0),
+        "exit_anim": str(exit_anim),
+        "exit_duration_ms": max(int(exit_duration_ms), 0),
     }
 
 
@@ -152,14 +170,17 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
             _line_center_override,
             display_schedule_for_style,
         )
+        from krok_helper.subtitle_render.models import style_with_line_animation
 
         schedule = display_schedule_for_style(track, style)
         center_overrides = {
             index: _line_center_override(track, line, style)
             for index, line in enumerate(track.lines)
         }
+        animation_styles = [style_with_line_animation(style, line) for line in track.lines]
     else:
         center_overrides = {}
+        animation_styles = []
     return {
         "meta": {
             "title": track.meta.title,
@@ -177,6 +198,26 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
                 display_start_ms=(schedule[index][1] if index in schedule else None),
                 display_end_ms=(schedule[index][2] if index in schedule else None),
                 center_override=center_overrides.get(index, False),
+                entry_anim=(
+                    animation_styles[index].entry_anim
+                    if style is not None
+                    else "none"
+                ),
+                entry_duration_ms=(
+                    animation_styles[index].entry_lead_ms
+                    if style is not None
+                    else 0
+                ),
+                exit_anim=(
+                    animation_styles[index].exit_anim
+                    if style is not None
+                    else "none"
+                ),
+                exit_duration_ms=(
+                    animation_styles[index].exit_fade_ms
+                    if style is not None
+                    else 0
+                ),
             )
             for index, line in enumerate(track.lines)
         ],

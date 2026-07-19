@@ -1284,3 +1284,21 @@ G3 下一刀继续做组合 corpus 的 raw overlay diff，以及重复 configure
 至此 G3 在本机可得 corpus、Painter raw overlay、cache/显存稳态和 4K60 common path 的门禁均已完成，
 **G3 宣告完成**。TACTIC/A stain 原工程复测以及 AMD/Intel 仍是外部样本/硬件矩阵项；产品 GPU 开关
 继续默认关闭。下一阶段进入 G4，并始终按 capability 逐项迁移，未实现语义整场回退 Painter。
+
+### 2026-07-19（第二十二批）：G4 基础行动画
+
+- Render IR 为每行固化 `style_with_line_animation()` 合并后的 entry/exit 类型与时长，因此全局动画和
+  逐行 override 继续遵守 Painter 的继承顺序；显示起止点直接使用上一批由 Painter 解析的 display
+  schedule，不在 Direct2D 侧重新判断分页窗口。
+- Direct2D 实现与 `engine/animator.py` 同式的 `fade`、`slide_in`、`slide_out` 和双向 `rise`：入场用
+  quadratic ease-out，退场用 quadratic ease-in；slide 距离为 `max(fontSize×0.9, 36)`，rise 距离为
+  `max(fontSize×0.35, 18)`，双 lane 的水平移动方向也与 Painter 一致。最终 opacity/translation 统一
+  作用到正文、ruby、stroke/stroke2、shadow/glow、角色 brush 和 packed-band 纵向范围。
+- capability gate 只为上述基础动画放行。`char_fade`、`spin_flip`、`utopia` 以及包含这些类型的逐行
+  override 仍整场回退 Painter；不存在半行 GPU、半行 CPU 的混画。
+- 自动门禁分别覆盖 fade、slide 和 rise 的入/退场：半程 alpha 相对完整帧的比例与 Painter 偏差不超过
+  `0.06`，水平/垂直中心位移偏差不超过 `3px`，窗口终点双方都严格为空。hardware/WARP build smoke
+  通过；GPU/transport 回归 `118 passed`，native protocol/export/benchmark 独立回归
+  `62 passed, 27 skipped`。
+
+G4 下一刀迁移逐字符 `char_fade`；随后再处理带 per-glyph transform 的 `spin_flip`，两者不合并验收。

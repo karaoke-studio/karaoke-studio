@@ -128,6 +128,10 @@ struct TextLine {
     bool staticOverlay = false;
     int fadeInMs = 0;
     int fadeOutMs = 0;
+    std::string entryAnimation = "none";
+    int entryDurationMs = 0;
+    std::string exitAnimation = "none";
+    int exitDurationMs = 0;
     std::vector<DisplayWindow> displayWindows;
     bool operator==(const TextLine &) const = default;
 };

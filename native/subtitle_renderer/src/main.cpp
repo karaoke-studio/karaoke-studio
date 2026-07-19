@@ -76,6 +76,10 @@ struct TimingLine {
     std::optional<int> displayStartMs;
     std::optional<int> displayEndMs;
     bool centerOverride = false;
+    QString entryAnimation = QStringLiteral("none");
+    int entryDurationMs = 0;
+    QString exitAnimation = QStringLiteral("none");
+    int exitDurationMs = 0;
 };
 
 struct RubyAnnotation {
@@ -1784,6 +1788,18 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
             line.centerOverride = lineObject.value(
                 QStringLiteral("center_override")
             ).toBool(false);
+            line.entryAnimation = stringValue(
+                lineObject, QStringLiteral("entry_anim"), QStringLiteral("none")
+            );
+            line.entryDurationMs = std::max(
+                0, intValue(lineObject, QStringLiteral("entry_duration_ms"), 0)
+            );
+            line.exitAnimation = stringValue(
+                lineObject, QStringLiteral("exit_anim"), QStringLiteral("none")
+            );
+            line.exitDurationMs = std::max(
+                0, intValue(lineObject, QStringLiteral("exit_duration_ms"), 0)
+            );
 
             const QJsonArray chars = lineObject.value(QStringLiteral("chars")).toArray();
             line.chars.reserve(static_cast<std::size_t>(chars.size()));
@@ -6136,6 +6152,10 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         line.compositeOrder = sourceLine.sourceIndex == 0
             ? 0
             : sourceLine.sourceIndex + 1;
+        line.entryAnimation = sourceLine.entryAnimation.toStdString();
+        line.entryDurationMs = sourceLine.entryDurationMs;
+        line.exitAnimation = sourceLine.exitAnimation.toStdString();
+        line.exitDurationMs = sourceLine.exitDurationMs;
         if (sourceLine.displayStartMs.has_value()
             && sourceLine.displayEndMs.has_value()) {
             line.displayWindows.push_back(krok::subtitle::native::DisplayWindow{

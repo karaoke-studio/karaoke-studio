@@ -515,6 +515,10 @@ struct Direct2DGpuBackend::Impl {
         bool staticOverlay = false;
         int fadeInMs = 0;
         int fadeOutMs = 0;
+        std::string entryAnimation = "none";
+        int entryDurationMs = 0;
+        std::string exitAnimation = "none";
+        int exitDurationMs = 0;
         std::vector<DisplayWindow> displayWindows;
         TextStyle style;
         float ascent = 0.0f;
@@ -828,6 +832,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         cached.staticOverlay = sourceLine.staticOverlay;
         cached.fadeInMs = sourceLine.fadeInMs;
         cached.fadeOutMs = sourceLine.fadeOutMs;
+        cached.entryAnimation = sourceLine.entryAnimation;
+        cached.entryDurationMs = sourceLine.entryDurationMs;
+        cached.exitAnimation = sourceLine.exitAnimation;
+        cached.exitDurationMs = sourceLine.exitDurationMs;
         cached.displayWindows = sourceLine.displayWindows;
         cached.lane = style.dualLineLayout
             ? sourceLine.lane % std::max(style.laneCount, 1)
@@ -1576,6 +1584,62 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         }
         return best;
     };
+    struct LineAnimationState {
+        float opacity = 1.0f;
+        float dx = 0.0f;
+        float dy = 0.0f;
+    };
+    auto lineAnimationAt = [&](const Impl::CachedLine &line) {
+        LineAnimationState state;
+        if (line.staticOverlay || line.displayWindows.empty()) {
+            return state;
+        }
+        const DisplayWindow &window = line.displayWindows.front();
+        const auto progress = [](int elapsedMs, int durationMs) {
+            if (durationMs <= 0) {
+                return 1.0f;
+            }
+            return std::clamp(
+                static_cast<float>(elapsedMs) / static_cast<float>(durationMs),
+                0.0f,
+                1.0f
+            );
+        };
+        if (line.entryAnimation != "none" && line.entryDurationMs > 0) {
+            const float linear = progress(tMs - window.startMs, line.entryDurationMs);
+            const float eased = 1.0f - (1.0f - linear) * (1.0f - linear);
+            if (line.entryAnimation == "fade") {
+                state.opacity *= eased;
+            } else if (line.entryAnimation == "slide_in") {
+                state.opacity *= eased;
+                const float direction = line.lane == 0 ? -1.0f : 1.0f;
+                state.dx += direction * (1.0f - eased)
+                    * std::max(line.style.fontSize * 0.9f, 36.0f);
+            } else if (line.entryAnimation == "rise") {
+                state.opacity *= eased;
+                state.dy += (1.0f - eased)
+                    * std::max(line.style.fontSize * 0.35f, 18.0f);
+            }
+        }
+        if (line.exitAnimation != "none" && line.exitDurationMs > 0) {
+            const float linear = progress(window.endMs - tMs, line.exitDurationMs);
+            const float eased = linear * linear;
+            if (line.exitAnimation == "fade") {
+                state.opacity *= eased;
+            } else if (line.exitAnimation == "slide_out") {
+                state.opacity *= eased;
+                const float direction = line.lane == 0 ? -1.0f : 1.0f;
+                state.dx += direction * (1.0f - eased)
+                    * std::max(line.style.fontSize * 0.9f, 36.0f);
+            } else if (line.exitAnimation == "rise") {
+                state.opacity *= eased;
+                state.dy -= (1.0f - eased)
+                    * std::max(line.style.fontSize * 0.35f, 18.0f);
+            }
+        }
+        state.opacity = std::clamp(state.opacity, 0.0f, 1.0f);
+        return state;
+    };
     std::vector<const Impl::CachedLine *> activeLines;
     for (const Impl::CachedLine &candidate : impl_->lines) {
         const bool resolvedWindowVisible = !candidate.displayWindows.empty()
@@ -1616,7 +1680,11 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
     std::vector<std::pair<int, int>> readbackIntervals;
     for (const Impl::CachedLine *line : activeLines) {
       if (line != nullptr && !line->geometries.empty()) {
-        const float globalOpacity = overlayOpacityAt(*line);
+        const LineAnimationState animation = lineAnimationAt(*line);
+        if (animation.opacity <= 0.0f) {
+            continue;
+        }
+        const float globalOpacity = overlayOpacityAt(*line) * animation.opacity;
         const TextStyle &style = line->style;
         const float inkWidth = line->bounds.right - line->bounds.left;
         float dx = (static_cast<float>(scene.width) - inkWidth) * 0.5f - line->bounds.left;
@@ -1626,6 +1694,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         } else if (style.alignment == "right") {
             dx = static_cast<float>(scene.width) - style.horizontalMargin - line->bounds.right;
         }
+        dx += animation.dx;
         const float visualPad = line->hasInlineStyles
             ? line->maxVisualPad
             : std::ceil(
@@ -1668,7 +1737,8 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         if (style.verticalPosition == "center") {
             firstBaseline += style.centerOffsetY;
         }
-        const float dy = firstBaseline + step * static_cast<float>(line->lane);
+        const float dy = firstBaseline + step * static_cast<float>(line->lane)
+            + animation.dy;
         auto visualVerticalPadding = [](const TextStyle &item, bool ruby) {
             const float stroke = ruby
                 ? std::max(item.rubyStrokeWidth, 0.0f)
