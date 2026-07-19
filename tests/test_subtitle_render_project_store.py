@@ -309,6 +309,73 @@ def test_window_save_new_open_round_trip(qapp, monkeypatch, tmp_path):
     assert win._project_dirty is False
 
 
+def test_new_project_resets_export_settings_but_keeps_fixed_directory(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    fixed_dir = tmp_path / "fixed-exports"
+    win._set_export_directory_settings(
+        mw.EXPORT_DIR_CUSTOM,
+        str(fixed_dir),
+        persist=False,
+    )
+    win._export_name_edit.setText("旧项目输出")
+    win._export_encoder_combo.setCurrentIndex(
+        win._export_encoder_combo.findData(mw.ENCODER_NVENC)
+    )
+    win._export_codec_combo.setCurrentIndex(
+        win._export_codec_combo.findData(mw.CODEC_HEVC)
+    )
+    win._export_preset_combo.setCurrentIndex(
+        win._export_preset_combo.findData("slow")
+    )
+    win._export_crf_spin.setValue(27)
+    win._export_render_workers_combo.setCurrentIndex(
+        win._export_render_workers_combo.findData(16)
+    )
+    win._project_dirty = False
+
+    win._new_project()
+
+    assert win._export_dir_mode == mw.EXPORT_DIR_CUSTOM
+    assert win._export_custom_dir == str(fixed_dir)
+    assert win._export_dir_edit.text() == str(fixed_dir)
+    assert win._export_name_edit.text() == "subtitle_render_yurika出力"
+    assert win._export_auto_name == "subtitle_render_yurika出力"
+    assert win._export_encoder_combo.currentData() == mw.ENCODER_CPU
+    assert win._export_codec_combo.currentData() == mw.CODEC_H264
+    assert win._export_preset_combo.currentData() == "medium"
+    assert win._export_crf_spin.value() == 18
+    assert win._export_render_workers_combo.currentData() == 0
+    assert (win._export_width_spin.value(), win._export_height_spin.value()) == (
+        1920,
+        1080,
+    )
+    assert win._export_fps_value() == 60
+    assert win._project_dirty is False
+
+
+def test_new_project_clears_old_source_video_export_directory(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    old_video = tmp_path / "old-project" / "source.mp4"
+    win._video_path = old_video
+    win._set_export_directory_settings(
+        mw.EXPORT_DIR_SOURCE_VIDEO,
+        "",
+        persist=False,
+    )
+    assert win._export_dir_edit.text() == str(old_video.parent)
+    win._project_dirty = False
+
+    win._new_project()
+
+    assert win._export_dir_mode == mw.EXPORT_DIR_SOURCE_VIDEO
+    assert win._export_dir_edit.text() == str(Path.cwd())
+    assert win._export_name_edit.text() == "subtitle_render_yurika出力"
+
+
 def test_export_location_dialog_offers_source_and_custom_modes(qapp, tmp_path):
     dialog = mw._ExportLocationDialog(
         mw.EXPORT_DIR_SOURCE_VIDEO,

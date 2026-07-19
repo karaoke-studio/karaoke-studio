@@ -680,6 +680,11 @@ def test_export_tab_builds_render_job_from_loaded_media(qapp, monkeypatch, tmp_p
 
 def test_export_output_prefills_dir_and_yurika_name(qapp, monkeypatch, tmp_path):
     win = _make_window(qapp, monkeypatch)
+    win._set_export_directory_settings(
+        mw.EXPORT_DIR_SOURCE_VIDEO,
+        "",
+        persist=False,
+    )
 
     def _info(path):
         return MediaInfo(
@@ -689,18 +694,70 @@ def test_export_output_prefills_dir_and_yurika_name(qapp, monkeypatch, tmp_path)
 
     monkeypatch.setattr(mw, "probe_media", lambda probe, path: _info(path))
 
-    win.load_video(tmp_path / "Dark spiral journey.mp4")
-    assert win._export_dir_edit.text() == str(tmp_path)
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    win.load_video(first_dir / "Dark spiral journey.mp4")
+    assert win._export_dir_edit.text() == str(first_dir)
     assert win._export_name_edit.text() == "Dark spiral journey_yurika出力"
 
-    # 文件名未被用户改过 → 跟随视频切换更新
-    win.load_video(tmp_path / "second.mp4")
+    # 新视频会同时更新来源目录与输出文件名。
+    win.load_video(second_dir / "second.mp4")
+    assert win._export_dir_edit.text() == str(second_dir)
     assert win._export_name_edit.text() == "second_yurika出力"
 
-    # 用户自定义文件名后，切换视频不再覆盖
+    # 即使旧项目手工改过文件名，主动换视频也要按新视频重新命名。
     win._export_name_edit.setText("my custom")
     win.load_video(tmp_path / "third.mp4")
-    assert win._export_name_edit.text() == "my custom"
+    assert win._export_name_edit.text() == "third_yurika出力"
+
+    # 固定导出文件夹是应用偏好；换视频只更新文件名，不覆盖该目录。
+    fixed_dir = tmp_path / "fixed-exports"
+    win._set_export_directory_settings(
+        mw.EXPORT_DIR_CUSTOM,
+        str(fixed_dir),
+        persist=False,
+    )
+    win.load_video(tmp_path / "fourth.mp4")
+    assert win._export_dir_edit.text() == str(fixed_dir)
+    assert win._export_name_edit.text() == "fourth_yurika出力"
+
+
+def test_loading_project_video_keeps_saved_output_name(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    video = tmp_path / "source.mp4"
+    video.write_bytes(b"fake")
+    win._export_name_edit.setText("工程保存的输出名")
+    win._export_auto_name = "工程保存的输出名"
+
+    monkeypatch.setattr(
+        mw,
+        "probe_media",
+        lambda probe, path: MediaInfo(
+            path=path,
+            duration=5.0,
+            video_streams=1,
+            audio_streams=0,
+            subtitle_streams=0,
+            video_width=1920,
+            video_height=1080,
+            video_fps=60.0,
+        ),
+    )
+
+    win._apply_project_data(
+        {
+            "background": {
+                "kind": "video",
+                "path": str(video),
+                "color": "#000000",
+            },
+            "output": {
+                "output_path": str(tmp_path / "工程保存的输出名.mp4"),
+            },
+        }
+    )
+
+    assert win._export_name_edit.text() == "工程保存的输出名"
 
 
 def _install_active_render(win):

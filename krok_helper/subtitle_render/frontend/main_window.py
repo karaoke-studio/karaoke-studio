@@ -2156,6 +2156,11 @@ class SubtitleRenderWindow(QWidget):
             workers_idx = self._export_render_workers_combo.findData(render_workers)
             if workers_idx >= 0:
                 self._export_render_workers_combo.setCurrentIndex(workers_idx)
+        if self._loading_project:
+            # Project output names are authoritative.  Forget the previous
+            # project's auto-generated name before its media starts loading.
+            self._export_name_edit.clear()
+            self._export_auto_name = ""
         out_path = output.get("output_path")
         if isinstance(out_path, str) and out_path.strip():
             path = Path(out_path.strip())
@@ -2166,6 +2171,44 @@ class SubtitleRenderWindow(QWidget):
             self._export_native_check.setChecked(False)
         finally:
             self._export_native_check.blockSignals(blocked)
+
+    def _reset_export_settings_for_new_project(self) -> None:
+        """Restore export defaults while preserving the app-level folder policy."""
+        controls = (
+            self._export_encoder_combo,
+            self._export_codec_combo,
+            self._export_preset_combo,
+            self._export_crf_spin,
+            self._export_render_workers_combo,
+            self._export_name_edit,
+            self._export_native_check,
+        )
+        previous_signal_states = [control.blockSignals(True) for control in controls]
+        try:
+            self._export_encoder_combo.setCurrentIndex(
+                max(self._export_encoder_combo.findData(ENCODER_CPU), 0)
+            )
+            self._export_codec_combo.setCurrentIndex(
+                max(self._export_codec_combo.findData(CODEC_H264), 0)
+            )
+            self._export_preset_combo.setCurrentIndex(
+                max(self._export_preset_combo.findData("medium"), 0)
+            )
+            self._export_crf_spin.setValue(18)
+            self._export_render_workers_combo.setCurrentIndex(
+                max(self._export_render_workers_combo.findData(0), 0)
+            )
+            self._export_native_check.setChecked(False)
+            name = self._default_export_name()
+            self._export_name_edit.setText(name)
+            self._export_auto_name = name
+        finally:
+            for control, was_blocked in zip(controls, previous_signal_states):
+                control.blockSignals(was_blocked)
+        # Directory mode/custom path is an app preference, not project state.
+        self._sync_export_directory()
+        self._update_export_preset_enabled()
+        self._refresh_export_format_label()
 
     def _confirm_discard_changes(self) -> bool:
         """有未保存改动时弹确认；返回 True 表示可以继续（已处理）。"""
@@ -2197,6 +2240,7 @@ class SubtitleRenderWindow(QWidget):
                 "selected_scheme_key": "global",
             }
         )
+        self._reset_export_settings_for_new_project()
         self._project_path = None
         self._set_project_dirty(False)
 
@@ -3648,7 +3692,7 @@ class SubtitleRenderWindow(QWidget):
         self._video_settings_panel.set_populated(True)
         self._preview_window.set_media_title(path)
         self._request_preview_window()
-        self._prefill_export_output()
+        self._prefill_export_output(force_name=not self._loading_project)
         # 视频自带音频 → 喂给 TransportBar 走 QMediaPlayer 播放
         if info.audio_streams > 0:
             self._audio_path = path
@@ -5952,11 +5996,11 @@ class SubtitleRenderWindow(QWidget):
             return ""
         return str(Path(directory) / f"{name}.mp4")
 
-    def _prefill_export_output(self) -> None:
-        """素材就位后预填输出目录 / 文件名；用户自定义过的文件名不覆盖。"""
+    def _prefill_export_output(self, *, force_name: bool = False) -> None:
+        """Prefill output location/name, optionally rebasing the name to new media."""
         self._sync_export_directory()
         current = self._export_name_edit.text().strip()
-        if not current or current == self._export_auto_name:
+        if force_name or not current or current == self._export_auto_name:
             name = self._default_export_name()
             self._export_name_edit.setText(name)
             self._export_auto_name = name
