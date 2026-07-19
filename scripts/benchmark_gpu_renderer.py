@@ -42,8 +42,9 @@ def _scene(
     ruby: bool = False,
     signals: bool = False,
     signal_style: str = "volume",
+    vertical: bool = False,
 ) -> tuple[TimingTrack, Style]:
-    text = "Karaoke Studio GPU"
+    text = "GPU縦書き" if vertical else "Karaoke Studio GPU"
     chars = [
         TimingChar(char, index * duration_ms // len(text))
         for index, char in enumerate(text)
@@ -110,6 +111,7 @@ def _scene(
         volume_stroke_color="#2F8BFF",
         volume_overlay_fill_color="#2F8BFF",
         volume_overlay_stroke_color="#FFFFFF",
+        vertical=vertical,
     )
     return track, style
 
@@ -128,6 +130,7 @@ def run_benchmark(
     ruby: bool = False,
     signals: bool = False,
     signal_style: str = "volume",
+    vertical: bool = False,
 ) -> tuple[dict, list[dict]]:
     import psutil
 
@@ -141,6 +144,7 @@ def run_benchmark(
         ruby=ruby,
         signals=signals,
         signal_style=signal_style,
+        vertical=vertical,
     )
     shm_key = f"krok_gpu_g1_benchmark_{os.getpid()}_{uuid.uuid4().hex}"
     rows: list[dict] = []
@@ -236,6 +240,7 @@ def run_benchmark(
         "ruby": ruby,
         "signals": signals,
         "signal_style": signal_style if signals else "none",
+        "vertical": vertical,
         "bands": bands,
         "height": height,
         "readback_mean_ms": round(statistics.fmean(readback_times), 4),
@@ -302,6 +307,7 @@ def main() -> int:
         default="volume",
         help="signal geometry used with --signals",
     )
+    parser.add_argument("--vertical", action="store_true", help="stack main glyphs vertically")
     parser.add_argument(
         "--animation",
         choices=("none", "fade", "char_fade", "spin_flip", "utopia"),
@@ -337,6 +343,7 @@ def main() -> int:
             ruby=bool(args.ruby),
             signals=bool(args.signals),
             signal_style=args.signal_style,
+            vertical=bool(args.vertical),
         )
         all_rows.extend(rows)
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True))

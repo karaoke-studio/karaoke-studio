@@ -1372,3 +1372,14 @@ Utopia 横排主路径至此收口。G4 下一项进入 Sayatoo signal；产品 
 - 基准新增 `--signal-style`。RTX 3070 Ti、1920×1080、60fps、packed bands、600 帧 rounded signal：`220.29fps`，render/readback/roundtrip p95 `1.85/0.87/5.23ms`；local 显存增长 0，sidecar RSS 波动 `450,560B`。
 
 横排 Sayatoo signal 至此收口。下一批进入 G4 竖排文本/信号布局；在竖排能力整体对齐 Painter 前，`vertical` 继续保持明确 fallback。
+
+### 2026-07-19（第二十九批）：G4 竖排正文、走字与双列
+
+- RenderScene/TextStyle 新增 vertical 布局标记。configure 阶段把既有 N3/DirectWrite glyph outline 转换为逐格竖排 geometry：字格高度取字体 ascent+descent，列宽按全角字号；汉字与拉丁字符直立，长音符/括号等 UTR#50 简化集合绕字格中心旋转 90°，句读点和小假名使用与 Painter 相同的右上偏移。
+- 竖排坐标完全对齐 Painter：lane 0 位于最右列，后续 lane 按 `cellWidth + lineGap` 向左；`line_y_margin_px` 同时作为右边距和 top/bottom 纵向边距，top/center/bottom 三种锚点按整列高度解析。竖排不绘制 Sayatoo signal，与 Painter 的现有兼容边界一致。
+- 走字从横向 ink wipe 切换为逐字格自上而下的纵向扫描；before/after fill、stroke/stroke2 与 shadow 共用纵向 clip，shadow 的 after clip 额外抵消 Y 偏移。packed-band 使用转换后 glyph、描边和阴影范围。
+- capability 按组合逐项放行：无 ruby、无 glow、无逐字角色样式、无行/标题动画的竖排正文现可进 GPU；`vertical_ruby`、`vertical_glow`、`vertical_title`、`vertical_animation`、`vertical_inline_style` 仍整场回退 Painter。这样不会因正文已实现而误放行半成品组合。
+- 自动门槛使用“縦/A/ー/。”覆盖直立、旋转、角标、双描边、阴影及 6 个走字时刻，top/center/bottom 的四边界相对 Painter 最大偏差 `3px`，alpha 总量偏差低于 `1.5%`；双列右→左布局边界偏差不超过 `4px`。hardware/WARP build smoke 通过；GPU/transport `133 passed`，native protocol/export/benchmark `63 passed, 27 skipped`。
+- 基准新增 `--vertical`。RTX 3070 Ti、1920×1080、60fps、6 字竖排、packed bands、600 帧：`71.73fps`，render/readback/roundtrip p95 `1.60/5.73/15.97ms`；local 显存增长 0。当前竖列覆盖画面高度较大，平均 readback ratio 为 `77.96%`，后续 G6 可进一步减少读回成本。
+
+下一批补齐竖排 ruby 与 glow；完成后再移除对应 capability fallback，并补真实 N3 竖排组合 corpus。

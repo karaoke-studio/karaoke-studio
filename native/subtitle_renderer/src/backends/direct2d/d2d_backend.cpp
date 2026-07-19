@@ -177,7 +177,7 @@ ShapeSignalState shapeSignalState(
     int displayEndMs
 ) {
     ShapeSignalState state;
-    if (!style.litEnabled || style.litStyle == "volume") {
+    if (style.vertical || !style.litEnabled || style.litStyle == "volume") {
         return state;
     }
     const int duration = std::max(style.signalsDurationMs, 0);
@@ -240,7 +240,7 @@ VolumeSignalState volumeSignalState(
     int displayEndMs
 ) {
     VolumeSignalState state;
-    if (!style.litEnabled || style.litStyle != "volume") {
+    if (style.vertical || !style.litEnabled || style.litStyle != "volume") {
         return state;
     }
     const int duration = std::max(style.signalsDurationMs, 0);
@@ -319,6 +319,32 @@ bool isWhitespaceText(const std::wstring &text) {
     return !text.empty() && std::all_of(text.begin(), text.end(), [](wchar_t value) {
         return std::iswspace(static_cast<wint_t>(value)) != 0;
     });
+}
+
+bool verticalRotates(const std::wstring &text) {
+    static const std::wstring rotated =
+        L"\u2190\u2192\u2010\u2011\u2012\u2013\u2014\u2015\u301c\uff5e"
+        L"\u3008\u3009\u300a\u300b\u300c\u300d\u300e\u300f\u3010\u3011"
+        L"\u3014\u3015\uff08\uff09\uff3b\uff3d\uff5b\uff5d\u30fc\uff70"
+        L"<>()[]{}";
+    return text.size() == 1 && rotated.find(text.front()) != std::wstring::npos;
+}
+
+std::pair<float, float> verticalGlyphOffset(
+    const std::wstring &text, float cellWidth, float cellHeight
+) {
+    static const std::wstring corner = L"\u3001\u3002\uff0c\uff0e";
+    static const std::wstring smallKana =
+        L"\u3041\u3043\u3045\u3047\u3049\u3063\u3083\u3085\u3087\u308e"
+        L"\u30a1\u30a3\u30a5\u30a7\u30a9\u30c3\u30e3\u30e5\u30e7\u30ee"
+        L"\u30f5\u30f6";
+    if (text.size() == 1 && corner.find(text.front()) != std::wstring::npos) {
+        return {cellWidth * 0.28f, -cellHeight * 0.28f};
+    }
+    if (text.size() == 1 && smallKana.find(text.front()) != std::wstring::npos) {
+        return {cellWidth * 0.10f, -cellHeight * 0.10f};
+    }
+    return {0.0f, 0.0f};
 }
 
 bool paintNeedsBodyProtection(const PaintStyle &paint) {
@@ -767,6 +793,8 @@ struct Direct2DGpuBackend::Impl {
         float right = 0.0f;
         float layoutLeft = 0.0f;
         float layoutRight = 0.0f;
+        float top = 0.0f;
+        float bottom = 0.0f;
         int styleIndex = -1;
         float boxAscent = 0.0f;
         float pivotX = 0.0f;
@@ -1373,7 +1401,105 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             }
         }
 
-        if (hasFirstSlot) {
+        if (style.vertical && !cached.chars.empty()) {
+            DWRITE_FONT_METRICS verticalMetrics{};
+            mainFace->GetMetrics(&verticalMetrics);
+            const float designUnits = static_cast<float>(std::max<UINT16>(
+                verticalMetrics.designUnitsPerEm, 1
+            ));
+            const float cellWidth = std::max(style.fontSize, 1.0f);
+            const float cellHeight = std::max(
+                style.fontSize
+                    * static_cast<float>(verticalMetrics.ascent + verticalMetrics.descent)
+                    / designUnits,
+                1.0f
+            );
+            const float verticalAscent = style.fontSize
+                * static_cast<float>(verticalMetrics.ascent) / designUnits;
+            cached.geometries.clear();
+            cached.bounds = {};
+            lineHasBounds = false;
+            auto transformVertical = [&](ID2D1Geometry *source,
+                                         const D2D1_MATRIX_3X2_F &matrix,
+                                         Microsoft::WRL::ComPtr<ID2D1Geometry> &target,
+                                         const char *operation) {
+                if (source == nullptr) {
+                    target.Reset();
+                    return;
+                }
+                Microsoft::WRL::ComPtr<ID2D1TransformedGeometry> transformed;
+                checkHr(
+                    device_.d2dFactory()->CreateTransformedGeometry(
+                        source, &matrix, transformed.ReleaseAndGetAddressOf()
+                    ),
+                    operation,
+                    device_
+                );
+                target = transformed;
+            };
+            for (std::size_t index = 0; index < cached.chars.size(); ++index) {
+                Impl::CachedChar &ch = cached.chars[index];
+                const float cellTop = static_cast<float>(index) * cellHeight;
+                const auto [offsetX, offsetY] = verticalGlyphOffset(
+                    sourceLine.chars[index].text, cellWidth, cellHeight
+                );
+                D2D1_MATRIX_3X2_F matrix = D2D1::Matrix3x2F::Translation(
+                    -ch.pivotX + offsetX,
+                    cellTop + verticalAscent + offsetY
+                );
+                if (verticalRotates(sourceLine.chars[index].text)) {
+                    matrix = matrix * D2D1::Matrix3x2F::Rotation(
+                        90.0f, D2D1::Point2F(0.0f, cellTop + cellHeight * 0.5f)
+                    );
+                }
+                transformVertical(
+                    ch.geometry.Get(), matrix, ch.geometry,
+                    "ID2D1Factory::CreateTransformedGeometry(vertical character)"
+                );
+                transformVertical(
+                    ch.protectedStrokeGeometry.Get(), matrix,
+                    ch.protectedStrokeGeometry,
+                    "ID2D1Factory::CreateTransformedGeometry(vertical protected stroke)"
+                );
+                transformVertical(
+                    ch.strokeGeometry.Get(), matrix, ch.strokeGeometry,
+                    "ID2D1Factory::CreateTransformedGeometry(vertical stroke)"
+                );
+                transformVertical(
+                    ch.stroke2Geometry.Get(), matrix, ch.stroke2Geometry,
+                    "ID2D1Factory::CreateTransformedGeometry(vertical stroke2)"
+                );
+                if (ch.geometry) {
+                    D2D1_RECT_F bounds{};
+                    checkHr(
+                        ch.geometry->GetBounds(nullptr, &bounds),
+                        "ID2D1Geometry::GetBounds(vertical character)",
+                        device_
+                    );
+                    const TextStyle &charStyle = ch.styleIndex >= 0
+                        && ch.styleIndex < static_cast<int>(scene.charStyles.size())
+                        ? scene.charStyles[static_cast<std::size_t>(ch.styleIndex)]
+                        : style;
+                    const float wipePad = std::max(charStyle.strokeWidth, 0.0f) * 0.5f;
+                    ch.left = bounds.left - wipePad;
+                    ch.right = bounds.right + wipePad;
+                    ch.top = cellTop;
+                    ch.bottom = cellTop + cellHeight;
+                    extendBounds(cached.bounds, lineHasBounds, bounds);
+                    cached.geometries.push_back(ch.geometry);
+                }
+                ch.layoutLeft = -cellWidth * 0.5f;
+                ch.layoutRight = cellWidth * 0.5f;
+                ch.pivotX = 0.0f;
+                ch.pivotY = cellTop + cellHeight * 0.5f;
+            }
+            cached.fillBounds = D2D1::RectF(
+                -cellWidth * 0.5f,
+                0.0f,
+                cellWidth * 0.5f,
+                cellHeight * static_cast<float>(cached.chars.size())
+            );
+        } else if (hasFirstSlot) {
             const float drawBottom = static_cast<float>(
                 firstSlotDescent + firstSlotEdge / 2
             );
@@ -2667,8 +2793,32 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         if (style.verticalPosition == "center") {
             firstBaseline += style.centerOffsetY;
         }
-        const float dy = firstBaseline + step * static_cast<float>(line->lane)
+        float dy = firstBaseline + step * static_cast<float>(line->lane)
             + animation.dy;
+        if (style.vertical) {
+            const float cellWidth = std::max(
+                line->fillBounds.right - line->fillBounds.left, 1.0f
+            );
+            const float blockHeight = std::max(
+                line->fillBounds.bottom - line->fillBounds.top, 1.0f
+            );
+            dx = static_cast<float>(scene.width) - style.bottomMargin
+                - cellWidth * 0.5f
+                - static_cast<float>(line->lane) * (cellWidth + style.lineGap)
+                + animation.dx;
+            if (style.verticalPosition == "top") {
+                dy = style.bottomMargin;
+            } else if (style.verticalPosition == "center") {
+                dy = std::max(
+                    (static_cast<float>(scene.height) - blockHeight) * 0.5f,
+                    0.0f
+                );
+            } else {
+                dy = static_cast<float>(scene.height) - style.bottomMargin
+                    - blockHeight;
+            }
+            dy += animation.dy;
+        }
         auto visualVerticalPadding = [](const TextStyle &item, bool ruby) {
             const float stroke = ruby
                 ? std::max(item.rubyStrokeWidth, 0.0f)
@@ -2851,10 +3001,10 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             style.afterDecorPaint, line->fillBounds, style.afterDecor
         );
 
-        float wipeEdge = line->bounds.left;
+        float wipeEdge = style.vertical ? line->fillBounds.top : line->bounds.left;
         for (const Impl::CachedChar &ch : line->chars) {
             if (tMs >= ch.endMs) {
-                wipeEdge = std::max(wipeEdge, ch.right);
+                wipeEdge = std::max(wipeEdge, style.vertical ? ch.bottom : ch.right);
                 continue;
             }
             if (tMs <= ch.startMs) {
@@ -2866,7 +3016,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 0.0f,
                 1.0f
             );
-            wipeEdge = ch.left + (ch.right - ch.left) * ratio;
+            wipeEdge = style.vertical
+                ? ch.top + (ch.bottom - ch.top) * ratio
+                : ch.left + (ch.right - ch.left) * ratio;
             break;
         }
 
@@ -2949,11 +3101,21 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         };
 
         const float geometryPad = std::max(style.strokeWidth + style.stroke2Width, 2.0f) + 4.0f;
-        const D2D1_RECT_F afterClip = D2D1::RectF(
-            line->bounds.left - geometryPad,
-            line->bounds.top - geometryPad,
-            wipeEdge,
-            line->bounds.bottom + geometryPad
+        const D2D1_RECT_F afterClip = style.vertical
+            ? D2D1::RectF(
+                line->bounds.left - geometryPad,
+                line->fillBounds.top - geometryPad,
+                line->bounds.right + geometryPad,
+                wipeEdge
+            )
+            : D2D1::RectF(
+                line->bounds.left - geometryPad,
+                line->bounds.top - geometryPad,
+                wipeEdge,
+                line->bounds.bottom + geometryPad
+            );
+        const bool hasAfterWipe = wipeEdge > (
+            style.vertical ? line->fillBounds.top : line->bounds.left
         );
         auto rubyWipeEdgeAt = [&](const Impl::CachedRuby &ruby) {
             float edge = ruby.bounds.left;
@@ -3020,7 +3182,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             for (const auto &geometry : line->geometries) {
                 context->DrawGeometry(geometry.Get(), beforeDecor.Get(), sourceWidth);
             }
-            if (wipeEdge > line->bounds.left) {
+            if (hasAfterWipe) {
                 context->PushAxisAlignedClip(afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                 for (const auto &geometry : line->geometries) {
                     context->DrawGeometry(geometry.Get(), afterDecor.Get(), sourceWidth);
@@ -3484,12 +3646,19 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                             );
                         } else {
                             context->PushAxisAlignedClip(
-                                D2D1::RectF(
-                                    afterClip.left - charStyle.shadowOffsetX,
-                                    afterClip.top,
-                                    afterClip.right - charStyle.shadowOffsetX,
-                                    afterClip.bottom
-                                ),
+                                style.vertical
+                                    ? D2D1::RectF(
+                                        afterClip.left,
+                                        afterClip.top - charStyle.shadowOffsetY,
+                                        afterClip.right,
+                                        afterClip.bottom - charStyle.shadowOffsetY
+                                    )
+                                    : D2D1::RectF(
+                                        afterClip.left - charStyle.shadowOffsetX,
+                                        afterClip.top,
+                                        afterClip.right - charStyle.shadowOffsetX,
+                                        afterClip.bottom
+                                    ),
                                 D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                             );
                         }
@@ -3519,12 +3688,19 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 ));
                 if (after) {
                     context->PushAxisAlignedClip(
-                        D2D1::RectF(
-                            afterClip.left - style.shadowOffsetX,
-                            afterClip.top,
-                            afterClip.right - style.shadowOffsetX,
-                            afterClip.bottom
-                        ),
+                        style.vertical
+                            ? D2D1::RectF(
+                                afterClip.left,
+                                afterClip.top - style.shadowOffsetY,
+                                afterClip.right,
+                                afterClip.bottom - style.shadowOffsetY
+                            )
+                            : D2D1::RectF(
+                                afterClip.left - style.shadowOffsetX,
+                                afterClip.top,
+                                afterClip.right - style.shadowOffsetX,
+                                afterClip.bottom
+                            ),
                         D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
                 }
@@ -3541,7 +3717,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
         };
         drawLineShadowPhase(false);
-        if (wipeEdge > line->bounds.left) {
+        if (hasAfterWipe) {
             drawLineShadowPhase(true);
         }
 
@@ -3786,7 +3962,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         };
         if (line->hasInlineStyles || hasCharacterTransition) {
             drawInlineStack(false);
-            if (wipeEdge > line->bounds.left) {
+            if (hasAfterWipe) {
                 if (!hasUtopiaTransition) {
                     context->PushAxisAlignedClip(
                         afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
@@ -3799,7 +3975,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             }
         } else {
             drawStack(false, beforeFill.Get(), beforeStroke.Get(), beforeStroke2.Get());
-            if (wipeEdge > line->bounds.left) {
+            if (hasAfterWipe) {
                 context->PushAxisAlignedClip(afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                 drawStack(true, afterFill.Get(), afterStroke.Get(), afterStroke2.Get());
                 context->PopAxisAlignedClip();

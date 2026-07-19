@@ -155,6 +155,7 @@ struct TextStyle {
     int laneCount = 2;
     std::string alignment = "center";
     std::string verticalPosition = "bottom";
+    bool vertical = false;
     float centerOffsetX = 0.0f;
     float centerOffsetY = 0.0f;
     int leadInMs = 1800;

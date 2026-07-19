@@ -31,8 +31,28 @@ def gpu_unsupported_features(
 ) -> tuple[str, ...]:
     """Return project features that require whole-frame Painter fallback."""
     reasons: list[str] = []
+    sources = [track, *(extra_tracks or ())]
     if style.vertical:
-        reasons.append("vertical")
+        if any(source.rubies for source in sources):
+            reasons.append("vertical_ruby")
+        if style.decoration_kind == "glow":
+            reasons.append("vertical_glow")
+        if style.title_overlay is not None and style.title_overlay.enabled:
+            reasons.append("vertical_title")
+        if style.entry_anim != "none" or style.exit_anim != "none":
+            reasons.append("vertical_animation")
+        for source in sources:
+            for line in source.lines:
+                if line.animation_override is not None and (
+                    line.animation_override.entry_anim != "none"
+                    or line.animation_override.exit_anim != "none"
+                ):
+                    reasons.append("vertical_animation")
+                if any(ch.role_label for ch in line.chars):
+                    reasons.append("vertical_inline_style")
+                scheme = style.singer_style_overrides.get(line.singer_id)
+                if scheme is not None and scheme.decoration_kind == "glow":
+                    reasons.append("vertical_glow")
     if style.right_to_left:
         reasons.append("right_to_left")
     if style.line_horizontal_layout == "per_row":
@@ -52,7 +72,7 @@ def gpu_unsupported_features(
         or style.viewport_offset_y != 0
     ):
         reasons.append("viewport_transform")
-    for source in [track, *(extra_tracks or ())]:
+    for source in sources:
         for line in source.lines:
             if line.layout_index != 0:
                 reasons.append("line_layout_override")

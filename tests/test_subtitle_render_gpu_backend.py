@@ -1934,6 +1934,116 @@ def test_gpu_g4_shape_signal_geometry_and_extinguish_transition_follow_painter(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("line_y_position", ["top", "center", "bottom"])
+def test_gpu_g4_vertical_main_glyph_orientation_wipe_and_shadow_follow_painter(
+    monkeypatch, line_y_position: str
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("縦", 0),
+                    TimingChar("A", 500),
+                    TimingChar("ー", 1_000),
+                    TimingChar("。", 1_500),
+                ],
+                end_ms=2_000,
+            )
+        ]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=64,
+        vertical=True,
+        dual_line_layout=False,
+        line_y_position=line_y_position,
+        line_y_margin_px=22,
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        stroke_width_px=3,
+        stroke2_enabled=True,
+        stroke2_width_px=2,
+        decoration_kind="shadow",
+        shadow_offset_x=7,
+        shadow_offset_y=6,
+    )
+    timestamps = (0, 250, 750, 1_250, 1_750, 2_000)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+
+    for t_ms, gpu_frame, painter_frame in zip(timestamps, gpu, painter):
+        assert all(
+            abs(actual - expected) <= 3
+            for actual, expected in zip(
+                _payload_alpha_bounds(gpu_frame),
+                _payload_alpha_bounds(painter_frame),
+            )
+        ), (
+            line_y_position,
+            t_ms,
+            _payload_alpha_bounds(gpu_frame),
+            _payload_alpha_bounds(painter_frame),
+        )
+        gpu_alpha = sum(gpu_frame[3::4])
+        painter_alpha = sum(painter_frame[3::4])
+        assert abs(gpu_alpha / painter_alpha - 1.0) <= 0.015
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g4_vertical_dual_columns_flow_right_to_left_like_painter(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar(char, 0) for char in "右列"],
+                end_ms=1_000,
+            ),
+            TimingLine(
+                chars=[TimingChar(char, 0) for char in "左列"],
+                end_ms=1_000,
+            ),
+        ]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=60,
+        vertical=True,
+        dual_line_layout=True,
+        line_y_position="center",
+        line_y_margin_px=28,
+        line_gap_px=24,
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        stroke_width_px=2,
+        stroke2_enabled=False,
+        decoration_kind="shadow",
+        shadow_offset_x=5,
+        shadow_offset_y=4,
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, (500,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=500, track=track)
+
+    assert all(
+        abs(actual - expected) <= 4
+        for actual, expected in zip(
+            _payload_alpha_bounds(gpu[0]), _payload_alpha_bounds(painter)
+        )
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g3_dual_lane_alignments_follow_painter_schedule(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
 

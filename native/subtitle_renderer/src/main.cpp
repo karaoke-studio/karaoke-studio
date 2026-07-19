@@ -251,6 +251,7 @@ struct RenderConfig {
     std::vector<QString> lineAlignments{QStringLiteral("left"), QStringLiteral("right")};
     bool dualLineLayout = true;
     bool rightToLeft = false;
+    bool vertical = false;
     QString entryAnim = QStringLiteral("none");
     int entryLeadMs = 300;
     QString exitAnim = QStringLiteral("none");
@@ -1804,6 +1805,9 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.rightToLeft = style.value(QStringLiteral("right_to_left")).isBool()
         ? style.value(QStringLiteral("right_to_left")).toBool()
         : cfg.rightToLeft;
+    cfg.vertical = style.value(QStringLiteral("vertical")).isBool()
+        ? style.value(QStringLiteral("vertical")).toBool()
+        : cfg.vertical;
     cfg.entryAnim = stringValue(style, QStringLiteral("entry_anim"), cfg.entryAnim);
     cfg.entryLeadMs = std::max(0, intValue(style, QStringLiteral("entry_lead_ms"), cfg.entryLeadMs));
     cfg.exitAnim = stringValue(style, QStringLiteral("exit_anim"), cfg.exitAnim);
@@ -6224,6 +6228,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         ? std::max(static_cast<int>(config.lineAlignments.size()), 1)
         : 1;
     scene.style.verticalPosition = config.lineYPosition.toStdString();
+    scene.style.vertical = config.vertical;
     scene.style.leadInMs = config.lineLeadInMs;
     scene.style.tailMs = config.lineTailMs;
     if (config.lineHorizontalLayout == QStringLiteral("center")) {

@@ -560,7 +560,9 @@ def test_gpu_async_renderer_capability_fallback_skips_sidecar(qapp, monkeypatch)
     frames: list[int] = []
     renderer.frame_ready.connect(lambda _image, t_ms: frames.append(int(t_ms)))
     try:
-        renderer.set_state(TimingTrack(), Style(vertical=True))
+        renderer.set_state(
+            TimingTrack(), Style(vertical=True, decoration_kind="glow")
+        )
         renderer.request(1_000)
         deadline = time.monotonic() + 2.0
         while not frames and time.monotonic() < deadline:
