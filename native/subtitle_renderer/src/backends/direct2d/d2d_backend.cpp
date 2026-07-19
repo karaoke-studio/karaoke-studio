@@ -155,6 +155,51 @@ Microsoft::WRL::ComPtr<ID2D1Geometry> outsideStrokeGeometry(
     return geometry;
 }
 
+Microsoft::WRL::ComPtr<ID2D1Geometry> widenedStrokeGeometry(
+    ID2D1Factory1 *factory,
+    ID2D1Geometry *body,
+    float width,
+    const D2DDevice &device
+) {
+    if (body == nullptr || width <= 0.0f) {
+        return {};
+    }
+    D2D1_STROKE_STYLE_PROPERTIES properties = D2D1::StrokeStyleProperties();
+    properties.startCap = D2D1_CAP_STYLE_ROUND;
+    properties.endCap = D2D1_CAP_STYLE_ROUND;
+    properties.dashCap = D2D1_CAP_STYLE_ROUND;
+    properties.lineJoin = D2D1_LINE_JOIN_ROUND;
+    Microsoft::WRL::ComPtr<ID2D1StrokeStyle> strokeStyle;
+    checkHr(
+        factory->CreateStrokeStyle(
+            properties, nullptr, 0, strokeStyle.ReleaseAndGetAddressOf()
+        ),
+        "Create animated stroke style",
+        device
+    );
+    Microsoft::WRL::ComPtr<ID2D1PathGeometry> widened;
+    checkHr(
+        factory->CreatePathGeometry(widened.ReleaseAndGetAddressOf()),
+        "Create animated widened geometry",
+        device
+    );
+    Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
+    checkHr(
+        widened->Open(sink.ReleaseAndGetAddressOf()),
+        "Open animated widened geometry",
+        device
+    );
+    checkHr(
+        body->Widen(width, strokeStyle.Get(), nullptr, sink.Get()),
+        "Widen animated stroke",
+        device
+    );
+    checkHr(sink->Close(), "Close animated widened geometry", device);
+    Microsoft::WRL::ComPtr<ID2D1Geometry> geometry;
+    checkHr(widened.As(&geometry), "Query animated widened geometry", device);
+    return geometry;
+}
+
 Microsoft::WRL::ComPtr<IDWriteFontFace> createFontFace(
     IDWriteFontCollection *collection,
     const std::wstring &familyName,
@@ -490,8 +535,12 @@ struct Direct2DGpuBackend::Impl {
         float layoutRight = 0.0f;
         int styleIndex = -1;
         float boxAscent = 0.0f;
+        float pivotX = 0.0f;
+        float pivotY = 0.0f;
         Microsoft::WRL::ComPtr<ID2D1Geometry> geometry;
         Microsoft::WRL::ComPtr<ID2D1Geometry> protectedStrokeGeometry;
+        Microsoft::WRL::ComPtr<ID2D1Geometry> strokeGeometry;
+        Microsoft::WRL::ComPtr<ID2D1Geometry> stroke2Geometry;
     };
 
     struct CachedRuby {
@@ -500,11 +549,15 @@ struct Direct2DGpuBackend::Impl {
         float baselineOffset = 0.0f;
         int styleIndex = -1;
         int transitionCharIndex = 0;
+        float pivotX = 0.0f;
+        float pivotY = 0.0f;
         D2D1_RECT_F bounds{};
         D2D1_RECT_F fillBounds{};
         std::vector<CachedChar> chars;
         std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> geometries;
         std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> protectedStrokeGeometries;
+        std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> strokeGeometries;
+        std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> stroke2Geometries;
     };
 
     struct CachedLine {
@@ -910,14 +963,12 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 fontMetrics.designUnitsPerEm,
                 1
             ));
-            cached.ascent = std::max(
-                cached.ascent,
-                static_cast<float>(unit) * static_cast<float>(fontMetrics.ascent) / verticalUnits
-            );
-            cached.descent = std::max(
-                cached.descent,
-                static_cast<float>(unit) * static_cast<float>(fontMetrics.descent) / verticalUnits
-            );
+            const float charAscent = static_cast<float>(unit)
+                * static_cast<float>(fontMetrics.ascent) / verticalUnits;
+            const float charDescent = static_cast<float>(unit)
+                * static_cast<float>(fontMetrics.descent) / verticalUnits;
+            cached.ascent = std::max(cached.ascent, charAscent);
+            cached.descent = std::max(cached.descent, charDescent);
             const float boxMetricTotal = static_cast<float>(std::max(
                 static_cast<int>(fontMetrics.ascent) + static_cast<int>(fontMetrics.descent),
                 1
@@ -1050,8 +1101,25 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             });
             cached.chars.back().styleIndex = sourceChar.styleIndex;
             cached.chars.back().boxAscent = charBoxAscent;
+            cached.chars.back().pivotX = cursor + layoutWidth * 0.5f;
+            cached.chars.back().pivotY = (charDescent - charAscent) * 0.5f;
             if (positionedHasBounds) {
                 cached.chars.back().geometry = cached.geometries.back();
+                cached.chars.back().strokeGeometry = widenedStrokeGeometry(
+                    device_.d2dFactory(),
+                    cached.chars.back().geometry.Get(),
+                    charStyle.strokeWidth,
+                    device_
+                );
+                cached.chars.back().stroke2Geometry = widenedStrokeGeometry(
+                    device_.d2dFactory(),
+                    cached.chars.back().geometry.Get(),
+                    charStyle.stroke2Width > 0.0f
+                        ? std::max(charStyle.strokeWidth, 0.0f)
+                            + charStyle.stroke2Width
+                        : 0.0f,
+                    device_
+                );
                 if (charStyle.strokeWidth > 0.0f
                     && (paintNeedsBodyProtection(charStyle.beforeFillPaint)
                         || paintNeedsBodyProtection(charStyle.afterFillPaint))) {
@@ -1338,6 +1406,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             );
             const int rubyFillDescent = rubyFillSize
                 * static_cast<int>(rubyFillMetrics.descent) / rubyMetricTotal;
+            ruby.pivotX = rubyCursor + contentWidth * 0.5f;
+            ruby.pivotY = ruby.baselineOffset
+                + static_cast<float>(rubyFillDescent)
+                - static_cast<float>(rubyFillSize) * 0.5f;
             const int rubyDrawEdge = std::max(
                 static_cast<int>(rubyStyle.rubyStrokeWidth), 0
             );
@@ -1393,6 +1465,18 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         extendBounds(ruby.bounds, rubyHasBounds, positionedBounds);
                     }
                     ruby.geometries.push_back(positioned);
+                    ruby.strokeGeometries.push_back(widenedStrokeGeometry(
+                        device_.d2dFactory(), positioned.Get(),
+                        rubyStyle.rubyStrokeWidth, device_
+                    ));
+                    ruby.stroke2Geometries.push_back(widenedStrokeGeometry(
+                        device_.d2dFactory(), positioned.Get(),
+                        rubyStyle.rubyStroke2Width > 0.0f
+                            ? std::max(rubyStyle.rubyStrokeWidth, 0.0f)
+                                + rubyStyle.rubyStroke2Width
+                            : 0.0f,
+                        device_
+                    ));
                     if (rubyStyle.rubyStrokeWidth > 0.0f
                         && (paintNeedsBodyProtection(rubyStyle.rubyBeforeFillPaint)
                             || paintNeedsBodyProtection(rubyStyle.rubyAfterFillPaint))) {
@@ -1688,10 +1772,12 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         }
         const float globalOpacity = overlayOpacityAt(*line) * animation.opacity;
         const TextStyle &style = line->style;
-        const bool hasCharacterFade = line->entryAnimation == "char_fade"
-            || line->exitAnimation == "char_fade";
+        const bool hasCharacterTransition = line->entryAnimation == "char_fade"
+            || line->exitAnimation == "char_fade"
+            || line->entryAnimation == "spin_flip"
+            || line->exitAnimation == "spin_flip";
         auto charFadeOpacityAt = [&](std::size_t charIndex) {
-            if (!hasCharacterFade || line->displayWindows.empty()) {
+            if (!hasCharacterTransition || line->displayWindows.empty()) {
                 return 1.0f;
             }
             const int count = std::max(static_cast<int>(line->chars.size()), 1);
@@ -1700,7 +1786,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             );
             const int delayStep = count <= 1 ? 0 : 350 / (count - 1);
             const DisplayWindow &window = line->displayWindows.front();
-            if (line->exitAnimation == "char_fade" && line->exitDurationMs > 0) {
+            if ((line->exitAnimation == "char_fade"
+                    || line->exitAnimation == "spin_flip")
+                && line->exitDurationMs > 0) {
                 const int exitStart = std::max(line->endMs, window.endMs - 600);
                 if (tMs >= exitStart) {
                     const int endMs = window.endMs
@@ -1712,7 +1800,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     );
                 }
             }
-            if (line->entryAnimation == "char_fade" && line->entryDurationMs > 0
+            if ((line->entryAnimation == "char_fade"
+                    || line->entryAnimation == "spin_flip")
+                && line->entryDurationMs > 0
                 && tMs <= window.startMs + 600) {
                 const int startMs = window.startMs + delayStep * index;
                 return std::clamp(
@@ -1728,7 +1818,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 ruby.transitionCharIndex, 0
             )));
         };
-        if (hasCharacterFade) {
+        if (hasCharacterTransition) {
             float maxOpacity = 0.0f;
             for (std::size_t index = 0; index < line->chars.size(); ++index) {
                 maxOpacity = std::max(maxOpacity, charFadeOpacityAt(index));
@@ -1737,6 +1827,270 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 continue;
             }
         }
+        int spinDirection = 0;
+        if (!line->displayWindows.empty()) {
+            const DisplayWindow &window = line->displayWindows.front();
+            if (line->exitAnimation == "spin_flip" && line->exitDurationMs > 0
+                && tMs >= std::max(line->endMs, window.endMs - 600)) {
+                spinDirection = 1;
+            } else if (line->entryAnimation == "spin_flip"
+                && line->entryDurationMs > 0
+                && tMs <= window.startMs + 600) {
+                spinDirection = -1;
+            }
+        }
+        auto spinMatrix = [&](float opacity, float centerX, float centerY) {
+            const float clamped = std::clamp(opacity, 0.0f, 1.0f);
+            if (spinDirection == 0 || clamped >= 1.0f) {
+                return D2D1::Matrix3x2F::Identity();
+            }
+            constexpr float pi = 3.14159265358979323846f;
+            const float angle = std::min(
+                (pi * 0.5f) * (1.0f - clamped),
+                pi * 89.0f / 180.0f
+            );
+            const float skew = static_cast<float>(spinDirection) * std::tan(angle);
+            // QTransform: translate(center), shear(0, skew), scale(opacity),
+            // translate(-center). Direct2D uses the same row-vector matrix
+            // layout, so write the resulting coefficients explicitly.
+            return D2D1::Matrix3x2F(
+                clamped,
+                clamped * skew,
+                0.0f,
+                clamped,
+                centerX * (1.0f - clamped),
+                centerY * (1.0f - clamped) - clamped * skew * centerX
+            );
+        };
+        std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> frameCharGeometries(
+            line->chars.size()
+        );
+        std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> frameProtectedGeometries(
+            line->chars.size()
+        );
+        std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> frameStrokeGeometries(
+            line->chars.size()
+        );
+        std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> frameStroke2Geometries(
+            line->chars.size()
+        );
+        for (std::size_t index = 0; index < line->chars.size(); ++index) {
+            const Impl::CachedChar &ch = line->chars[index];
+            const float opacity = charFadeOpacityAt(index);
+            if (!ch.geometry || opacity <= 0.0f) {
+                continue;
+            }
+            if (spinDirection == 0 || opacity >= 1.0f) {
+                frameCharGeometries[index] = ch.geometry;
+                frameProtectedGeometries[index] = ch.protectedStrokeGeometry;
+                frameStrokeGeometries[index] = ch.strokeGeometry;
+                frameStroke2Geometries[index] = ch.stroke2Geometry;
+                continue;
+            }
+            const D2D1_MATRIX_3X2_F matrix = spinMatrix(
+                opacity, ch.pivotX, ch.pivotY
+            );
+            Microsoft::WRL::ComPtr<ID2D1TransformedGeometry> transformed;
+            checkHr(
+                device_.d2dFactory()->CreateTransformedGeometry(
+                    ch.geometry.Get(), &matrix,
+                    transformed.ReleaseAndGetAddressOf()
+                ),
+                "ID2D1Factory::CreateTransformedGeometry(spin character)",
+                device_
+            );
+            frameCharGeometries[index] = transformed;
+            if (ch.protectedStrokeGeometry) {
+                Microsoft::WRL::ComPtr<ID2D1TransformedGeometry>
+                    transformedProtected;
+                checkHr(
+                    device_.d2dFactory()->CreateTransformedGeometry(
+                        ch.protectedStrokeGeometry.Get(), &matrix,
+                        transformedProtected.ReleaseAndGetAddressOf()
+                    ),
+                    "ID2D1Factory::CreateTransformedGeometry(spin protected stroke)",
+                    device_
+                );
+                frameProtectedGeometries[index] = transformedProtected;
+            }
+            auto transformStroke = [&](ID2D1Geometry *source,
+                                       Microsoft::WRL::ComPtr<ID2D1Geometry> &target,
+                                       const char *operation) {
+                if (source == nullptr) {
+                    return;
+                }
+                Microsoft::WRL::ComPtr<ID2D1TransformedGeometry> transformedStroke;
+                checkHr(
+                    device_.d2dFactory()->CreateTransformedGeometry(
+                        source, &matrix,
+                        transformedStroke.ReleaseAndGetAddressOf()
+                    ),
+                    operation,
+                    device_
+                );
+                target = transformedStroke;
+            };
+            transformStroke(
+                ch.strokeGeometry.Get(), frameStrokeGeometries[index],
+                "ID2D1Factory::CreateTransformedGeometry(spin stroke)"
+            );
+            transformStroke(
+                ch.stroke2Geometry.Get(), frameStroke2Geometries[index],
+                "ID2D1Factory::CreateTransformedGeometry(spin stroke2)"
+            );
+        }
+        std::vector<std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>>>
+            frameRubyGeometries(line->rubies.size());
+        std::vector<std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>>>
+            frameRubyProtectedGeometries(line->rubies.size());
+        std::vector<std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>>>
+            frameRubyStrokeGeometries(line->rubies.size());
+        std::vector<std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>>>
+            frameRubyStroke2Geometries(line->rubies.size());
+        for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
+            const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
+            const float opacity = rubyFadeOpacityAt(ruby);
+            if (opacity <= 0.0f) {
+                continue;
+            }
+            frameRubyGeometries[rubyIndex].resize(ruby.geometries.size());
+            frameRubyProtectedGeometries[rubyIndex].resize(
+                ruby.protectedStrokeGeometries.size()
+            );
+            frameRubyStrokeGeometries[rubyIndex].resize(ruby.strokeGeometries.size());
+            frameRubyStroke2Geometries[rubyIndex].resize(ruby.stroke2Geometries.size());
+            const D2D1_MATRIX_3X2_F matrix = spinMatrix(
+                opacity, ruby.pivotX, ruby.pivotY
+            );
+            for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {
+                if (spinDirection == 0 || opacity >= 1.0f) {
+                    frameRubyGeometries[rubyIndex][index] = ruby.geometries[index];
+                    if (index < ruby.protectedStrokeGeometries.size()) {
+                        frameRubyProtectedGeometries[rubyIndex][index]
+                            = ruby.protectedStrokeGeometries[index];
+                    }
+                    if (index < ruby.strokeGeometries.size()) {
+                        frameRubyStrokeGeometries[rubyIndex][index]
+                            = ruby.strokeGeometries[index];
+                    }
+                    if (index < ruby.stroke2Geometries.size()) {
+                        frameRubyStroke2Geometries[rubyIndex][index]
+                            = ruby.stroke2Geometries[index];
+                    }
+                } else {
+                    Microsoft::WRL::ComPtr<ID2D1TransformedGeometry> transformed;
+                    checkHr(
+                        device_.d2dFactory()->CreateTransformedGeometry(
+                            ruby.geometries[index].Get(), &matrix,
+                            transformed.ReleaseAndGetAddressOf()
+                        ),
+                        "ID2D1Factory::CreateTransformedGeometry(spin ruby)",
+                        device_
+                    );
+                    frameRubyGeometries[rubyIndex][index] = transformed;
+                    if (index < ruby.protectedStrokeGeometries.size()
+                        && ruby.protectedStrokeGeometries[index]) {
+                        Microsoft::WRL::ComPtr<ID2D1TransformedGeometry>
+                            transformedProtected;
+                        checkHr(
+                            device_.d2dFactory()->CreateTransformedGeometry(
+                                ruby.protectedStrokeGeometries[index].Get(), &matrix,
+                                transformedProtected.ReleaseAndGetAddressOf()
+                            ),
+                            "ID2D1Factory::CreateTransformedGeometry(spin ruby protected stroke)",
+                            device_
+                        );
+                        frameRubyProtectedGeometries[rubyIndex][index]
+                            = transformedProtected;
+                    }
+                    auto transformRubyStroke = [&] (
+                        ID2D1Geometry *source,
+                        Microsoft::WRL::ComPtr<ID2D1Geometry> &target,
+                        const char *operation
+                    ) {
+                        if (source == nullptr) {
+                            return;
+                        }
+                        Microsoft::WRL::ComPtr<ID2D1TransformedGeometry> transformedStroke;
+                        checkHr(
+                            device_.d2dFactory()->CreateTransformedGeometry(
+                                source, &matrix,
+                                transformedStroke.ReleaseAndGetAddressOf()
+                            ),
+                            operation,
+                            device_
+                        );
+                        target = transformedStroke;
+                    };
+                    if (index < ruby.strokeGeometries.size()) {
+                        transformRubyStroke(
+                            ruby.strokeGeometries[index].Get(),
+                            frameRubyStrokeGeometries[rubyIndex][index],
+                            "ID2D1Factory::CreateTransformedGeometry(spin ruby stroke)"
+                        );
+                    }
+                    if (index < ruby.stroke2Geometries.size()) {
+                        transformRubyStroke(
+                            ruby.stroke2Geometries[index].Get(),
+                            frameRubyStroke2Geometries[rubyIndex][index],
+                            "ID2D1Factory::CreateTransformedGeometry(spin ruby stroke2)"
+                        );
+                    }
+                }
+            }
+        }
+        auto charGeometryAt = [&](std::size_t index) -> ID2D1Geometry * {
+            return index < frameCharGeometries.size()
+                ? frameCharGeometries[index].Get()
+                : nullptr;
+        };
+        auto protectedGeometryAt = [&](std::size_t index) -> ID2D1Geometry * {
+            return index < frameProtectedGeometries.size()
+                ? frameProtectedGeometries[index].Get()
+                : nullptr;
+        };
+        auto strokeGeometryAt = [&](std::size_t index) -> ID2D1Geometry * {
+            return index < frameStrokeGeometries.size()
+                ? frameStrokeGeometries[index].Get()
+                : nullptr;
+        };
+        auto stroke2GeometryAt = [&](std::size_t index) -> ID2D1Geometry * {
+            return index < frameStroke2Geometries.size()
+                ? frameStroke2Geometries[index].Get()
+                : nullptr;
+        };
+        auto rubyGeometryAt = [&](
+            std::size_t rubyIndex, std::size_t geometryIndex
+        ) -> ID2D1Geometry * {
+            return rubyIndex < frameRubyGeometries.size()
+                && geometryIndex < frameRubyGeometries[rubyIndex].size()
+                ? frameRubyGeometries[rubyIndex][geometryIndex].Get()
+                : nullptr;
+        };
+        auto rubyProtectedGeometryAt = [&](
+            std::size_t rubyIndex, std::size_t geometryIndex
+        ) -> ID2D1Geometry * {
+            return rubyIndex < frameRubyProtectedGeometries.size()
+                && geometryIndex < frameRubyProtectedGeometries[rubyIndex].size()
+                ? frameRubyProtectedGeometries[rubyIndex][geometryIndex].Get()
+                : nullptr;
+        };
+        auto rubyStrokeGeometryAt = [&] (
+            std::size_t rubyIndex, std::size_t geometryIndex
+        ) -> ID2D1Geometry * {
+            return rubyIndex < frameRubyStrokeGeometries.size()
+                && geometryIndex < frameRubyStrokeGeometries[rubyIndex].size()
+                ? frameRubyStrokeGeometries[rubyIndex][geometryIndex].Get()
+                : nullptr;
+        };
+        auto rubyStroke2GeometryAt = [&] (
+            std::size_t rubyIndex, std::size_t geometryIndex
+        ) -> ID2D1Geometry * {
+            return rubyIndex < frameRubyStroke2Geometries.size()
+                && geometryIndex < frameRubyStroke2Geometries[rubyIndex].size()
+                ? frameRubyStroke2Geometries[rubyIndex][geometryIndex].Get()
+                : nullptr;
+        };
         const float inkWidth = line->bounds.right - line->bounds.left;
         float dx = (static_cast<float>(scene.width) - inkWidth) * 0.5f - line->bounds.left;
         dx += style.centerOffsetX;
@@ -1816,6 +2170,29 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         };
         float contentTop = line->bounds.top;
         float contentBottom = line->bounds.bottom;
+        if (spinDirection != 0) {
+            auto extendAnimatedVerticalBounds = [&](ID2D1Geometry *geometry) {
+                if (geometry == nullptr) {
+                    return;
+                }
+                D2D1_RECT_F bounds{};
+                checkHr(
+                    geometry->GetBounds(nullptr, &bounds),
+                    "ID2D1Geometry::GetBounds(animated band)",
+                    device_
+                );
+                contentTop = std::min(contentTop, bounds.top);
+                contentBottom = std::max(contentBottom, bounds.bottom);
+            };
+            for (const auto &geometry : frameCharGeometries) {
+                extendAnimatedVerticalBounds(geometry.Get());
+            }
+            for (const auto &rubyGeometries : frameRubyGeometries) {
+                for (const auto &geometry : rubyGeometries) {
+                    extendAnimatedVerticalBounds(geometry.Get());
+                }
+            }
+        }
         auto [topPad, bottomPad] = visualVerticalPadding(style, false);
         for (const Impl::CachedChar &ch : line->chars) {
             if (ch.styleIndex < 0
@@ -1828,7 +2205,8 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             topPad = std::max(topPad, padding.first);
             bottomPad = std::max(bottomPad, padding.second);
         }
-        for (const Impl::CachedRuby &ruby : line->rubies) {
+        for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
+            const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
             contentTop = std::min(contentTop, ruby.bounds.top);
             contentBottom = std::max(contentBottom, ruby.bounds.bottom);
             const TextStyle &rubyStyle = ruby.styleIndex >= 0
@@ -1963,7 +2341,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         std::vector<int> glowSigmas;
         if (style.decorationKind == "glow"
             && !line->hasInlineStyles
-            && !hasCharacterFade) {
+            && !hasCharacterTransition) {
             checkHr(
                 context->CreateBitmap(
                     D2D1::SizeU(static_cast<UINT32>(scene.width), static_cast<UINT32>(scene.height)),
@@ -2018,9 +2396,11 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             Microsoft::WRL::ComPtr<ID2D1Bitmap1> source;
             Microsoft::WRL::ComPtr<ID2D1Effect> blur;
             std::vector<int> sigmas;
+            D2D1_MATRIX_3X2_F transform = D2D1::Matrix3x2F::Identity();
+            bool hasTransform = false;
         };
         std::vector<RubyGlowLayer> rubyGlowLayers;
-        auto appendRubyGlowLayer = [&](int styleIndex, bool after) {
+        auto appendRubyGlowLayer = [&](int styleIndex, bool after, int rubyOnly) {
             const TextStyle &rubyStyle = rubyStyleFor(styleIndex);
             const float requestedRadius = after
                 ? rubyStyle.rubyGlowAfterRadius
@@ -2029,11 +2409,12 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 0, static_cast<int>(std::lround(requestedRadius))
             );
             const bool hasVisibleSource = std::any_of(
-                line->rubies.begin(),
-                line->rubies.end(),
+                line->rubies.begin(), line->rubies.end(),
                 [&](const Impl::CachedRuby &ruby) {
+                    const int rubyIndex = static_cast<int>(&ruby - line->rubies.data());
                     const float edge = rubyWipeEdgeAt(ruby);
-                    return ruby.styleIndex == styleIndex
+                    return (rubyOnly < 0 || rubyIndex == rubyOnly)
+                        && ruby.styleIndex == styleIndex
                         && !((after && edge <= ruby.bounds.left)
                             || (!after && edge >= ruby.bounds.right));
                 }
@@ -2044,6 +2425,18 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 return;
             }
             RubyGlowLayer layer;
+            if (spinDirection != 0 && rubyOnly >= 0) {
+                const Impl::CachedRuby &ruby = line->rubies[
+                    static_cast<std::size_t>(rubyOnly)
+                ];
+                const float opacity = rubyFadeOpacityAt(ruby);
+                layer.transform = spinMatrix(
+                    opacity,
+                    ruby.pivotX + dx,
+                    ruby.pivotY + dy
+                );
+                layer.hasTransform = opacity < 1.0f;
+            }
             checkHr(
                 context->CreateBitmap(
                     D2D1::SizeU(static_cast<UINT32>(scene.width), static_cast<UINT32>(scene.height)),
@@ -2070,8 +2463,10 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
             context->BeginDraw();
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
-            for (const Impl::CachedRuby &ruby : line->rubies) {
-                if (ruby.styleIndex != styleIndex) {
+            for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
+                const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
+                if ((rubyOnly >= 0 && static_cast<int>(rubyIndex) != rubyOnly)
+                    || ruby.styleIndex != styleIndex) {
                     continue;
                 }
                 Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrush(
@@ -2102,7 +2497,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     );
                 context->PushAxisAlignedClip(clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE);
                 for (const auto &geometry : ruby.geometries) {
-                    context->DrawGeometry(geometry.Get(), brush.Get(), sourceWidth);
+                    if (geometry != nullptr) {
+                        context->DrawGeometry(geometry.Get(), brush.Get(), sourceWidth);
+                    }
                 }
                 context->PopAxisAlignedClip();
             }
@@ -2128,18 +2525,28 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 rubyStyleIndices.push_back(ruby.styleIndex);
             }
         }
-        for (int styleIndex : rubyStyleIndices) {
-            appendRubyGlowLayer(styleIndex, false);
-            appendRubyGlowLayer(styleIndex, true);
+        if (spinDirection != 0) {
+            for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
+                const int styleIndex = line->rubies[rubyIndex].styleIndex;
+                appendRubyGlowLayer(styleIndex, false, static_cast<int>(rubyIndex));
+                appendRubyGlowLayer(styleIndex, true, static_cast<int>(rubyIndex));
+            }
+        } else {
+            for (int styleIndex : rubyStyleIndices) {
+                appendRubyGlowLayer(styleIndex, false, -1);
+                appendRubyGlowLayer(styleIndex, true, -1);
+            }
         }
 
         struct InlineGlowLayer {
             Microsoft::WRL::ComPtr<ID2D1Bitmap1> source;
             Microsoft::WRL::ComPtr<ID2D1Effect> blur;
             std::vector<int> sigmas;
+            D2D1_MATRIX_3X2_F transform = D2D1::Matrix3x2F::Identity();
+            bool hasTransform = false;
         };
         std::vector<InlineGlowLayer> inlineGlowLayers;
-        auto appendInlineGlowLayer = [&](int styleIndex, bool after) {
+        auto appendInlineGlowLayer = [&](int styleIndex, bool after, int charOnly) {
             const TextStyle &charStyle = styleIndex >= 0
                 && styleIndex < static_cast<int>(scene.charStyles.size())
                 ? scene.charStyles[static_cast<std::size_t>(styleIndex)]
@@ -2151,10 +2558,11 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 ))
             );
             const bool hasVisibleSource = std::any_of(
-                line->chars.begin(),
-                line->chars.end(),
+                line->chars.begin(), line->chars.end(),
                 [&](const Impl::CachedChar &ch) {
-                    return ch.styleIndex == styleIndex
+                    const int charIndex = static_cast<int>(&ch - line->chars.data());
+                    return (charOnly < 0 || charIndex == charOnly)
+                        && ch.styleIndex == styleIndex
                         && ch.geometry
                         && !((after && wipeEdge <= ch.left)
                             || (!after && wipeEdge >= ch.right));
@@ -2164,6 +2572,18 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 return;
             }
             InlineGlowLayer layer;
+            if (spinDirection != 0 && charOnly >= 0) {
+                const Impl::CachedChar &ch = line->chars[
+                    static_cast<std::size_t>(charOnly)
+                ];
+                const float opacity = charFadeOpacityAt(
+                    static_cast<std::size_t>(charOnly)
+                );
+                layer.transform = spinMatrix(
+                    opacity, ch.pivotX + dx, ch.pivotY + dy
+                );
+                layer.hasTransform = opacity < 1.0f;
+            }
             checkHr(
                 context->CreateBitmap(
                     D2D1::SizeU(static_cast<UINT32>(scene.width), static_cast<UINT32>(scene.height)),
@@ -2195,7 +2615,8 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
             for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
                 const Impl::CachedChar &ch = line->chars[charIndex];
-                if (ch.styleIndex != styleIndex || !ch.geometry
+                if ((charOnly >= 0 && static_cast<int>(charIndex) != charOnly)
+                    || ch.styleIndex != styleIndex || ch.geometry == nullptr
                     || (after && wipeEdge <= ch.left)
                     || (!after && wipeEdge >= ch.right)) {
                     continue;
@@ -2226,7 +2647,13 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             }
             inlineGlowLayers.push_back(std::move(layer));
         };
-        if (line->hasInlineStyles || hasCharacterFade) {
+        if (spinDirection != 0) {
+            for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
+                const int styleIndex = line->chars[charIndex].styleIndex;
+                appendInlineGlowLayer(styleIndex, false, static_cast<int>(charIndex));
+                appendInlineGlowLayer(styleIndex, true, static_cast<int>(charIndex));
+            }
+        } else if (line->hasInlineStyles || hasCharacterTransition) {
             std::vector<int> styleIndices;
             for (const Impl::CachedChar &ch : line->chars) {
                 if (std::find(styleIndices.begin(), styleIndices.end(), ch.styleIndex)
@@ -2235,8 +2662,8 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 }
             }
             for (int styleIndex : styleIndices) {
-                appendInlineGlowLayer(styleIndex, false);
-                appendInlineGlowLayer(styleIndex, true);
+                appendInlineGlowLayer(styleIndex, false, -1);
+                appendInlineGlowLayer(styleIndex, true, -1);
             }
         }
 
@@ -2247,6 +2674,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
         }
         for (RubyGlowLayer &layer : rubyGlowLayers) {
+            context->SetTransform(
+                layer.hasTransform ? layer.transform : D2D1::Matrix3x2F::Identity()
+            );
             for (int sigma : layer.sigmas) {
                 checkHr(
                     layer.blur->SetValue(
@@ -2260,6 +2690,9 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             }
         }
         for (InlineGlowLayer &layer : inlineGlowLayers) {
+            context->SetTransform(
+                layer.hasTransform ? layer.transform : D2D1::Matrix3x2F::Identity()
+            );
             for (int sigma : layer.sigmas) {
                 checkHr(
                     layer.blur->SetValue(
@@ -2273,6 +2706,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             }
         }
         for (int sigma : glowSigmas) {
+            context->SetTransform(D2D1::Matrix3x2F::Identity());
             checkHr(
                 blur->SetValue(
                     D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION,
@@ -2285,21 +2719,26 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         }
         context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
 
-        auto drawShadowSilhouette = [&](ID2D1Geometry *geometry, ID2D1Brush *brush,
+        auto drawShadowSilhouette = [&](ID2D1Geometry *geometry,
+                                        ID2D1Geometry *animatedOuterGeometry,
+                                        ID2D1Brush *brush,
                                         float strokeWidth, float stroke2Width) {
             const float outerWidth = stroke2Width > 0.0f
                 ? std::max(strokeWidth, 0.0f) + stroke2Width
                 : std::max(strokeWidth, 0.0f);
-            if (outerWidth > 0.0f) {
+            if (spinDirection != 0 && animatedOuterGeometry != nullptr) {
+                context->FillGeometry(animatedOuterGeometry, brush);
+            } else if (outerWidth > 0.0f) {
                 context->DrawGeometry(geometry, brush, outerWidth);
             }
             context->FillGeometry(geometry, brush);
         };
         auto drawLineShadowPhase = [&](bool after) {
-            if (line->hasInlineStyles || hasCharacterFade) {
+            if (line->hasInlineStyles || hasCharacterTransition) {
                 for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
                     const Impl::CachedChar &ch = line->chars[charIndex];
-                    if (!ch.geometry) {
+                    ID2D1Geometry *geometry = charGeometryAt(charIndex);
+                    if (geometry == nullptr) {
                         continue;
                     }
                     const TextStyle &charStyle = ch.styleIndex >= 0
@@ -2317,9 +2756,21 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         charStyle.shadowOffsetY
                     );
                     brush->SetOpacity(globalOpacity * charFadeOpacityAt(charIndex));
+                    const float charOpacity = charFadeOpacityAt(charIndex);
+                    const D2D1_MATRIX_3X2_F charMatrix = spinMatrix(
+                        charOpacity, ch.pivotX, ch.pivotY
+                    );
+                    const float shadowX = spinDirection != 0
+                        ? charStyle.shadowOffsetX * charMatrix._11
+                            + charStyle.shadowOffsetY * charMatrix._21
+                        : charStyle.shadowOffsetX;
+                    const float shadowY = spinDirection != 0
+                        ? charStyle.shadowOffsetX * charMatrix._12
+                            + charStyle.shadowOffsetY * charMatrix._22
+                        : charStyle.shadowOffsetY;
                     context->SetTransform(D2D1::Matrix3x2F::Translation(
-                        dx + charStyle.shadowOffsetX,
-                        dy + charStyle.shadowOffsetY
+                        dx + shadowX,
+                        dy + shadowY
                     ));
                     if (after) {
                         context->PushAxisAlignedClip(
@@ -2332,8 +2783,11 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                             D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                         );
                     }
+                    ID2D1Geometry *animatedOuter = charStyle.stroke2Width > 0.0f
+                        ? stroke2GeometryAt(charIndex)
+                        : strokeGeometryAt(charIndex);
                     drawShadowSilhouette(
-                        ch.geometry.Get(), brush.Get(),
+                        geometry, animatedOuter, brush.Get(),
                         charStyle.strokeWidth, charStyle.stroke2Width
                     );
                     if (after) {
@@ -2365,7 +2819,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 }
                 for (const auto &geometry : line->geometries) {
                     drawShadowSilhouette(
-                        geometry.Get(), brush.Get(),
+                        geometry.Get(), nullptr, brush.Get(),
                         style.strokeWidth, style.stroke2Width
                     );
                 }
@@ -2380,7 +2834,8 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             drawLineShadowPhase(true);
         }
 
-        for (const Impl::CachedRuby &ruby : line->rubies) {
+        for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
+            const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
             const TextStyle &rubyStyle = rubyStyleFor(ruby.styleIndex);
             if (rubyStyle.rubyDecorationKind != "shadow") {
                 continue;
@@ -2397,9 +2852,23 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                     rubyStyle.rubyShadowOffsetY
                 );
                 brush->SetOpacity(globalOpacity * rubyFadeOpacityAt(ruby));
+                const float rubyOpacity = rubyFadeOpacityAt(ruby);
+                const D2D1_MATRIX_3X2_F rubyMatrix = spinMatrix(
+                    rubyOpacity,
+                    ruby.pivotX,
+                    ruby.pivotY
+                );
+                const float shadowX = spinDirection != 0
+                    ? rubyStyle.rubyShadowOffsetX * rubyMatrix._11
+                        + rubyStyle.rubyShadowOffsetY * rubyMatrix._21
+                    : rubyStyle.rubyShadowOffsetX;
+                const float shadowY = spinDirection != 0
+                    ? rubyStyle.rubyShadowOffsetX * rubyMatrix._12
+                        + rubyStyle.rubyShadowOffsetY * rubyMatrix._22
+                    : rubyStyle.rubyShadowOffsetY;
                 context->SetTransform(D2D1::Matrix3x2F::Translation(
-                    dx + rubyStyle.rubyShadowOffsetX,
-                    dy + rubyStyle.rubyShadowOffsetY
+                    dx + shadowX,
+                    dy + shadowY
                 ));
                 if (after) {
                     const float pad = std::max(
@@ -2416,9 +2885,19 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
                 }
-                for (const auto &geometry : ruby.geometries) {
+                for (std::size_t geometryIndex = 0;
+                     geometryIndex < ruby.geometries.size(); ++geometryIndex) {
+                    ID2D1Geometry *geometry = rubyGeometryAt(
+                        rubyIndex, geometryIndex
+                    );
+                    if (geometry == nullptr) {
+                        continue;
+                    }
+                    ID2D1Geometry *animatedOuter = rubyStyle.rubyStroke2Width > 0.0f
+                        ? rubyStroke2GeometryAt(rubyIndex, geometryIndex)
+                        : rubyStrokeGeometryAt(rubyIndex, geometryIndex);
                     drawShadowSilhouette(
-                        geometry.Get(), brush.Get(),
+                        geometry, animatedOuter, brush.Get(),
                         rubyStyle.rubyStrokeWidth,
                         rubyStyle.rubyStroke2Width
                     );
@@ -2466,7 +2945,8 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
         auto drawInlineStack = [&](bool after) {
             for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
                 const Impl::CachedChar &ch = line->chars[charIndex];
-                if (!ch.geometry) {
+                ID2D1Geometry *geometry = charGeometryAt(charIndex);
+                if (geometry == nullptr) {
                     continue;
                 }
                 const TextStyle &charStyle = ch.styleIndex >= 0
@@ -2503,30 +2983,40 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 strokeBrush->SetOpacity(charOpacity);
                 stroke2Brush->SetOpacity(charOpacity);
                 if (charStyle.stroke2Width > 0.0f) {
-                    context->DrawGeometry(
-                        ch.geometry.Get(),
-                        stroke2Brush.Get(),
-                        std::max(0.0f, charStyle.strokeWidth) + charStyle.stroke2Width
-                    );
+                    ID2D1Geometry *animatedStroke2 = stroke2GeometryAt(charIndex);
+                    if (spinDirection != 0 && animatedStroke2 != nullptr) {
+                        context->FillGeometry(animatedStroke2, stroke2Brush.Get());
+                    } else {
+                        context->DrawGeometry(
+                            geometry,
+                            stroke2Brush.Get(),
+                            std::max(0.0f, charStyle.strokeWidth)
+                                + charStyle.stroke2Width
+                        );
+                    }
                 }
                 if (charStyle.strokeWidth > 0.0f) {
                     const bool protect = paintNeedsBodyProtection(
                         after ? charStyle.afterFillPaint : charStyle.beforeFillPaint
                     );
-                    if (protect && ch.protectedStrokeGeometry) {
+                    ID2D1Geometry *protectedGeometry = protectedGeometryAt(charIndex);
+                    ID2D1Geometry *animatedStroke = strokeGeometryAt(charIndex);
+                    if (spinDirection != 0 && !protect && animatedStroke != nullptr) {
+                        context->FillGeometry(animatedStroke, strokeBrush.Get());
+                    } else if (protect && protectedGeometry != nullptr) {
                         context->FillGeometry(
-                            ch.protectedStrokeGeometry.Get(), strokeBrush.Get()
+                            protectedGeometry, strokeBrush.Get()
                         );
                     } else {
                         context->DrawGeometry(
-                            ch.geometry.Get(), strokeBrush.Get(), charStyle.strokeWidth
+                            geometry, strokeBrush.Get(), charStyle.strokeWidth
                         );
                     }
                 }
-                context->FillGeometry(ch.geometry.Get(), fillBrush.Get());
+                context->FillGeometry(geometry, fillBrush.Get());
             }
         };
-        if (line->hasInlineStyles || hasCharacterFade) {
+        if (line->hasInlineStyles || hasCharacterTransition) {
             drawInlineStack(false);
             if (wipeEdge > line->bounds.left) {
                 context->PushAxisAlignedClip(
@@ -2543,7 +3033,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 context->PopAxisAlignedClip();
             }
         }
-        auto drawRubyStack = [&](const Impl::CachedRuby &ruby, bool after) {
+        auto drawRubyStack = [&](std::size_t rubyIndex, const Impl::CachedRuby &ruby, bool after) {
             const TextStyle &rubyStyle = rubyStyleFor(ruby.styleIndex);
             Microsoft::WRL::ComPtr<ID2D1Brush> fill = paintBrush(
                 after ? rubyStyle.rubyAfterFillPaint : rubyStyle.rubyBeforeFillPaint,
@@ -2567,13 +3057,24 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
             stroke->SetOpacity(rubyOpacity);
             stroke2->SetOpacity(rubyOpacity);
             if (rubyStyle.rubyStroke2Width > 0.0f) {
-                for (const auto &geometry : ruby.geometries) {
-                    context->DrawGeometry(
-                        geometry.Get(),
-                        stroke2.Get(),
-                        std::max(0.0f, rubyStyle.rubyStrokeWidth)
-                            + rubyStyle.rubyStroke2Width
+                for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {
+                    ID2D1Geometry *geometry = rubyGeometryAt(rubyIndex, index);
+                    if (geometry == nullptr) {
+                        continue;
+                    }
+                    ID2D1Geometry *animatedStroke2 = rubyStroke2GeometryAt(
+                        rubyIndex, index
                     );
+                    if (spinDirection != 0 && animatedStroke2 != nullptr) {
+                        context->FillGeometry(animatedStroke2, stroke2.Get());
+                    } else {
+                        context->DrawGeometry(
+                            geometry,
+                            stroke2.Get(),
+                            std::max(0.0f, rubyStyle.rubyStrokeWidth)
+                                + rubyStyle.rubyStroke2Width
+                        );
+                    }
                 }
             }
             if (rubyStyle.rubyStrokeWidth > 0.0f) {
@@ -2583,25 +3084,38 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                         : rubyStyle.rubyBeforeFillPaint
                 );
                 for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {
-                    const auto &protectedGeometry = index < ruby.protectedStrokeGeometries.size()
-                        ? ruby.protectedStrokeGeometries[index]
-                        : Microsoft::WRL::ComPtr<ID2D1Geometry>{};
-                    if (protect && protectedGeometry) {
-                        context->FillGeometry(protectedGeometry.Get(), stroke.Get());
+                    ID2D1Geometry *geometry = rubyGeometryAt(rubyIndex, index);
+                    ID2D1Geometry *protectedGeometry = rubyProtectedGeometryAt(
+                        rubyIndex, index
+                    );
+                    if (geometry == nullptr) {
+                        continue;
+                    }
+                    ID2D1Geometry *animatedStroke = rubyStrokeGeometryAt(
+                        rubyIndex, index
+                    );
+                    if (spinDirection != 0 && !protect && animatedStroke != nullptr) {
+                        context->FillGeometry(animatedStroke, stroke.Get());
+                    } else if (protect && protectedGeometry != nullptr) {
+                        context->FillGeometry(protectedGeometry, stroke.Get());
                     } else {
                         context->DrawGeometry(
-                            ruby.geometries[index].Get(),
+                            geometry,
                             stroke.Get(),
                             rubyStyle.rubyStrokeWidth
                         );
                     }
                 }
             }
-            for (const auto &geometry : ruby.geometries) {
-                context->FillGeometry(geometry.Get(), fill.Get());
+            for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {
+                ID2D1Geometry *geometry = rubyGeometryAt(rubyIndex, index);
+                if (geometry != nullptr) {
+                    context->FillGeometry(geometry, fill.Get());
+                }
             }
         };
-        for (const Impl::CachedRuby &ruby : line->rubies) {
+        for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
+            const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
             const TextStyle &rubyStyle = rubyStyleFor(ruby.styleIndex);
             const float rubyWipeEdge = rubyWipeEdgeAt(ruby);
             const float rubyPad = std::max(
@@ -2613,12 +3127,12 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
                 rubyWipeEdge,
                 ruby.bounds.bottom + rubyPad
             );
-            drawRubyStack(ruby, false);
+            drawRubyStack(rubyIndex, ruby, false);
             if (rubyWipeEdge > ruby.bounds.left) {
                 context->PushAxisAlignedClip(
                     rubyAfterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                 );
-                drawRubyStack(ruby, true);
+                drawRubyStack(rubyIndex, ruby, true);
                 context->PopAxisAlignedClip();
             }
         }

@@ -197,6 +197,68 @@ def _g3_fill_track() -> TimingTrack:
     )
 
 
+def _g4_spin_scene() -> tuple[TimingTrack, Style]:
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("A", 500),
+                    TimingChar("漢", 900),
+                    TimingChar("字", 1_300),
+                    TimingChar("B", 1_700),
+                ],
+                end_ms=2_100,
+                display_start_override_ms=0,
+                display_end_override_ms=3_000,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="漢字",
+                reading="かんじ",
+                reading_parts=["かん", "じ"],
+                reading_part_ms=[1_100],
+                pos_start_ms=900,
+                pos_end_ms=1_700,
+            )
+        ],
+    )
+    ruby_state = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FF20E0"),
+        stroke=PaintFill(mode="solid", color="#301030"),
+        shadow=PaintFill(mode="solid", color="#FF20E0"),
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=72,
+        ruby_font_family="Meiryo",
+        ruby_font_family_latin="Meiryo",
+        ruby_font_follow_main=False,
+        ruby_font_size_px=32,
+        ruby_stroke_width_px=2,
+        ruby_stroke2_enabled=False,
+        ruby_decoration_kind="glow",
+        ruby_glow_before_radius_px=6,
+        ruby_glow_after_radius_px=6,
+        ruby_glow_concentration_level=1,
+        ruby_karaoke_colors=KaraokeColors(before=ruby_state, after=ruby_state),
+        stroke_width_px=3,
+        stroke2_enabled=False,
+        decoration_kind="glow",
+        glow_before_radius_px=8,
+        glow_after_radius_px=8,
+        glow_concentration_level=1,
+        dual_line_layout=False,
+        line_horizontal_layout="center",
+        entry_anim="spin_flip",
+        entry_lead_ms=1_000,
+        exit_anim="spin_flip",
+        exit_fade_ms=1_000,
+    )
+    return track, style
+
+
 def _alpha_count(payload: bytes) -> int:
     return sum(alpha > 0 for alpha in payload[3::4])
 
@@ -1393,6 +1455,86 @@ def test_gpu_g4_char_fade_staggers_main_ruby_and_glow_like_painter(monkeypatch) 
     assert magenta_count(gpu[0]) == magenta_count(painter[0]) == 0
     assert magenta_count(gpu[1]) > 0 and magenta_count(painter[1]) > 0
     assert magenta_count(gpu[4]) == magenta_count(painter[4]) == 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g4_spin_flip_transforms_all_character_layers_like_painter(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track, style = _g4_spin_scene()
+    timestamps = (100, 350, 600, 2_750, 2_900, 3_000)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+        _, fade_only = _render_g1_frames(
+            renderer,
+            replace(style, entry_anim="char_fade", exit_anim="char_fade"),
+            timestamps,
+            force_warp=True,
+            track=track,
+        )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+
+    assert _alpha_count(gpu[-1]) == _alpha_count(painter[-1]) == 0
+    assert gpu[0] != fade_only[0]
+    assert gpu[1] != fade_only[1]
+    assert gpu[3] != fade_only[3]
+    full_gpu_alpha = sum(gpu[2][3::4])
+    full_painter_alpha = sum(painter[2][3::4])
+    for index in (0, 1, 3, 4):
+        gpu_ratio = sum(gpu[index][3::4]) / full_gpu_alpha
+        painter_ratio = sum(painter[index][3::4]) / full_painter_alpha
+        assert abs(gpu_ratio - painter_ratio) <= 0.12
+        gpu_bounds = _payload_alpha_bounds(gpu[index])
+        painter_bounds = _payload_alpha_bounds(painter[index])
+        assert all(
+            abs(actual - expected) <= 18
+            for actual, expected in zip(gpu_bounds, painter_bounds)
+        ), (index, gpu_bounds, painter_bounds)
+
+    # At the settled point all residual transforms are identity.
+    settled_gpu_bounds = _payload_alpha_bounds(gpu[2])
+    settled_painter_bounds = _payload_alpha_bounds(painter[2])
+    assert all(
+        abs(actual - expected) <= 8
+        for actual, expected in zip(settled_gpu_bounds, settled_painter_bounds)
+    )
+
+    # Painter bakes the shadow (including its stroke silhouette and offset)
+    # before applying the per-character affine transform.
+    shadow_style = replace(
+        style,
+        decoration_kind="shadow",
+        shadow_offset_x=12,
+        shadow_offset_y=10,
+        ruby_decoration_kind="shadow",
+        ruby_shadow_offset_x=6,
+        ruby_shadow_offset_y=5,
+    )
+    shadow_timestamps = (100, 350, 2_750, 2_900)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, shadow_gpu = _render_g1_frames(
+            renderer,
+            shadow_style,
+            shadow_timestamps,
+            force_warp=True,
+            track=track,
+        )
+    shadow_painter = [
+        _render_painter_oracle(shadow_style, t_ms=t_ms, track=track)
+        for t_ms in shadow_timestamps
+    ]
+    for gpu_frame, painter_frame in zip(shadow_gpu, shadow_painter):
+        assert all(
+            abs(actual - expected) <= 8
+            for actual, expected in zip(
+                _payload_alpha_bounds(gpu_frame),
+                _payload_alpha_bounds(painter_frame),
+            )
+        )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

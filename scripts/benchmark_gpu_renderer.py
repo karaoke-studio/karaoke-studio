@@ -241,7 +241,7 @@ def main() -> int:
     parser.add_argument("--glow", action="store_true", help="enable N3 medium glow")
     parser.add_argument(
         "--animation",
-        choices=("none", "fade", "char_fade"),
+        choices=("none", "fade", "char_fade", "spin_flip"),
         default="none",
         help="exercise a supported entry/exit animation",
     )

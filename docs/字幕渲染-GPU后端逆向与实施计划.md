@@ -1323,3 +1323,12 @@ G4 下一刀迁移逐字符 `char_fade`；随后再处理带 per-glyph transform
 
 G4 下一刀进入 `spin_flip` 的 per-glyph scale/skew transform；该变换必须同时覆盖正文所有视觉层与
 ruby 组，并继续使用 Painter 的 char-fade 时间轴。
+
+### 2026-07-19（第二十四批）：G4 逐字符 spin-flip
+
+- Direct2D 复用 Painter `char_fade` 的 `350ms` 总错峰、`250ms` 单字窗口与退场次序；每个正文 glyph 按自身 advance 框中心、ruby 按整组中心执行 `scale(opacity)` 与纵向 shear，入场/退场方向分别为负/正。矩阵系数直接对照 Qt `QTransform.translate → shear → scale → translate` 的结果，避免 Direct2D/Qt 乘法顺序歧义。
+- Painter 的实际语义是先烘焙字形视觉栈、再做残差仿射。GPU 因此不能对已变换轮廓继续使用固定宽度 `DrawGeometry` 或固定半径 blur：stroke/stroke2 在 configure 阶段预扩成填充轮廓，再逐帧仿射；before/after glow 按正文逐字、ruby 逐组先生成未变换高斯层，再整体仿射；shadow 的描边轮廓和 offset 向量同样随矩阵变换。正文/ruby fill、保护描边、角色样式与 packed-band 纵向范围全部使用同一变换结果。
+- capability gate 已为全局与逐行 `spin_flip` 放行；`utopia` 仍整场回退 Painter。自动门禁覆盖四字正文、双字 ruby、正文/ruby glow、stroke、shadow 与入场/退场共六个时间点：过渡帧相对完整帧的 alpha 比例与 Painter 偏差不超过 `0.12`，glow 边界不超过 `18px`，shadow 边界不超过 `8px`，恒等帧不超过 `8px`，终点双方均严格为空。
+- RTX 3070 Ti、1920×1080、60fps、18 字、中档 glow、packed bands、600 帧 `spin_flip`：`138.22fps`，render/readback/roundtrip p95 分别为 `4.82/2.31/10.57ms`；local 显存增长 0，sidecar RSS 波动 `491,520B`。硬件/WARP build smoke 通过；GPU/transport 回归 `120 passed`，native protocol/export/benchmark 独立回归 `62 passed, 27 skipped`。
+
+G4 下一刀进入 `utopia`。它同时包含逐字入场、演唱中 over-scale、ruby 分组与退场位移/旋转，仍按 capability 逐项迁移；产品 GPU 开关继续默认关闭，Painter 永久保留为 oracle 与 fallback。

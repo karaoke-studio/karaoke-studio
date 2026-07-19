@@ -243,9 +243,7 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
     assert gpu_unsupported_features(track, Style(vertical=True)) == ("vertical",)
     assert gpu_unsupported_features(track, Style(entry_anim="fade")) == ()
     assert gpu_unsupported_features(track, Style(entry_anim="char_fade")) == ()
-    assert gpu_unsupported_features(track, Style(entry_anim="spin_flip")) == (
-        "line_animation",
-    )
+    assert gpu_unsupported_features(track, Style(entry_anim="spin_flip")) == ()
     span_track = TimingTrack(
         lines=[
             TimingLine(
