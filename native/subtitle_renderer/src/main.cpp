@@ -27,6 +27,8 @@
 #include <QtWidgets/QGraphicsPixmapItem>
 #include <QtWidgets/QGraphicsScene>
 
+#include "backends/direct2d/d2d_backend.h"
+
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
@@ -34,6 +36,7 @@
 #include <cmath>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <cstring>
@@ -396,6 +399,9 @@ struct RenderRuntime {
     std::mutex sharedMemoryMutex;
     std::unique_ptr<QSharedMemory> sharedMemory;
     SharedFrameRing sharedRing;
+    std::mutex gpuBackendMutex;
+    std::unique_ptr<krok::subtitle::native::RenderBackend> hardwareGpuBackend;
+    std::unique_ptr<krok::subtitle::native::RenderBackend> warpGpuBackend;
 };
 
 QString fontCacheKey(const QFont &font);
@@ -869,6 +875,19 @@ void writeSlotInt(char *base, int offset, int value) {
     std::memcpy(base + offset, &stored, sizeof(stored));
 }
 
+bool writeSharedRgbaSlot(
+    RenderRuntime *runtime,
+    const std::uint8_t *rgba,
+    int width,
+    int height,
+    int stride,
+    int generation,
+    int frameIndex,
+    int tMs,
+    int slotIndex,
+    SharedFrameRing *ringOut
+);
+
 bool writeSharedFrameSlot(
     RenderRuntime *runtime,
     const RangeFrameResult &result,
@@ -880,16 +899,45 @@ bool writeSharedFrameSlot(
     if (runtime == nullptr) {
         return false;
     }
+    QImage image = result.image.convertToFormat(QImage::Format_RGBA8888);
+    return writeSharedRgbaSlot(
+        runtime,
+        image.constBits(),
+        image.width(),
+        image.height(),
+        image.bytesPerLine(),
+        generation,
+        frameIndex,
+        result.tMs,
+        slotIndex,
+        ringOut
+    );
+}
+
+bool writeSharedRgbaSlot(
+    RenderRuntime *runtime,
+    const std::uint8_t *rgba,
+    int width,
+    int height,
+    int stride,
+    int generation,
+    int frameIndex,
+    int tMs,
+    int slotIndex,
+    SharedFrameRing *ringOut
+) {
+    if (runtime == nullptr || rgba == nullptr || width <= 0 || height <= 0 || stride < width * 4) {
+        return false;
+    }
     std::lock_guard<std::mutex> lock(runtime->sharedMemoryMutex);
     if (runtime->sharedMemory == nullptr || !runtime->sharedMemory->isAttached() || runtime->sharedRing.slotCount <= 0) {
         return false;
     }
     SharedFrameRing ring = runtime->sharedRing;
-    const int safeSlot = ((slotIndex % ring.slotCount) + ring.slotCount) % ring.slotCount;
-    QImage image = result.image.convertToFormat(QImage::Format_RGBA8888);
-    if (image.width() != ring.width || image.height() != ring.height || image.bytesPerLine() != ring.stride) {
-        image = image.scaled(ring.width, ring.height).convertToFormat(QImage::Format_RGBA8888);
+    if (width != ring.width || height != ring.height) {
+        return false;
     }
+    const int safeSlot = ((slotIndex % ring.slotCount) + ring.slotCount) % ring.slotCount;
     if (!runtime->sharedMemory->lock()) {
         return false;
     }
@@ -899,15 +947,25 @@ bool writeSharedFrameSlot(
     writeSlotInt(slot, 0, 1);  // writing
     writeSlotInt(slot, 4, generation);
     writeSlotInt(slot, 8, frameIndex);
-    writeSlotInt(slot, 12, result.tMs);
+    writeSlotInt(slot, 12, tMs);
     writeSlotInt(slot, 16, ring.width);
     writeSlotInt(slot, 20, ring.height);
     writeSlotInt(slot, 24, ring.stride);
     writeSlotInt(slot, 28, 1);  // rgba8888
     writeSlotInt(slot, 32, ring.headerBytes);
     writeSlotInt(slot, 36, ring.pixelBytes);
-    const uchar *bits = image.constBits();
-    std::memcpy(slot + ring.headerBytes, bits, static_cast<std::size_t>(ring.pixelBytes));
+    char *payload = slot + ring.headerBytes;
+    if (stride == ring.stride) {
+        std::memcpy(payload, rgba, static_cast<std::size_t>(ring.pixelBytes));
+    } else {
+        for (int y = 0; y < height; ++y) {
+            std::memcpy(
+                payload + static_cast<std::size_t>(ring.stride) * y,
+                rgba + static_cast<std::size_t>(stride) * y,
+                static_cast<std::size_t>(width * 4)
+            );
+        }
+    }
     writeSlotInt(slot, 0, 2);  // ready
     runtime->sharedMemory->unlock();
     if (ringOut != nullptr) {
@@ -937,6 +995,183 @@ std::uint64_t imageFullChecksum(const QImage &image) {
         hash *= 1099511628211ull;
     }
     return hash;
+}
+
+std::uint64_t bytesChecksum(const std::uint8_t *data, std::size_t size) {
+    std::uint64_t hash = 1469598103934665603ull;
+    for (std::size_t index = 0; index < size; ++index) {
+        hash ^= static_cast<std::uint64_t>(data[index]);
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+QJsonObject backendCapsJson(const krok::subtitle::native::BackendCaps &caps) {
+    QJsonObject out;
+    out.insert(QStringLiteral("backend"), QString::fromStdString(caps.backend));
+    out.insert(QStringLiteral("adapter"), QString::fromStdString(caps.adapterName));
+    out.insert(QStringLiteral("feature_level"), QString::fromStdString(caps.featureLevel));
+    out.insert(QStringLiteral("vendor_id"), static_cast<qint64>(caps.adapterVendorId));
+    out.insert(QStringLiteral("device_id"), static_cast<qint64>(caps.adapterDeviceId));
+    out.insert(QStringLiteral("dedicated_video_memory"), static_cast<qint64>(caps.dedicatedVideoMemory));
+    out.insert(QStringLiteral("hardware"), caps.hardware);
+    out.insert(QStringLiteral("warp"), caps.warp);
+    out.insert(QStringLiteral("transparent_surface"), caps.supportsTransparentSurface);
+    out.insert(QStringLiteral("staging_readback"), caps.supportsStagingReadback);
+    out.insert(QStringLiteral("glyphs"), caps.supportsGlyphs);
+    return out;
+}
+
+krok::subtitle::native::RenderBackend *ensureGpuBackend(
+    RenderRuntime *runtime,
+    bool forceWarp,
+    QString *error
+) {
+    if (runtime == nullptr) {
+        if (error != nullptr) {
+            *error = QStringLiteral("render runtime is unavailable");
+        }
+        return nullptr;
+    }
+    std::lock_guard<std::mutex> lock(runtime->gpuBackendMutex);
+    auto &backend = forceWarp ? runtime->warpGpuBackend : runtime->hardwareGpuBackend;
+    if (backend == nullptr) {
+        try {
+            backend = std::make_unique<krok::subtitle::native::Direct2DGpuBackend>(forceWarp);
+            const auto caps = backend->capabilities();
+            std::cerr
+                << "gpu_backend=direct2d adapter=\"" << caps.adapterName
+                << "\" feature_level=" << caps.featureLevel
+                << " warp=" << (caps.warp ? 1 : 0) << std::endl;
+        } catch (const std::exception &exception) {
+            if (error != nullptr) {
+                *error = QString::fromUtf8(exception.what());
+            }
+            return nullptr;
+        }
+    }
+    return backend.get();
+}
+
+void appendSharedRingMetadata(QJsonObject &out, const SharedFrameRing &ring, int slotIndex) {
+    out.insert(QStringLiteral("payload"), QStringLiteral("shared_memory"));
+    out.insert(QStringLiteral("shm_key"), ring.key);
+    out.insert(QStringLiteral("slot_index"), slotIndex);
+    out.insert(QStringLiteral("slot_count"), ring.slotCount);
+    out.insert(QStringLiteral("slot_offset"), slotIndex * ring.slotBytes);
+    out.insert(QStringLiteral("slot_bytes"), ring.slotBytes);
+    out.insert(QStringLiteral("header_bytes"), ring.headerBytes);
+    out.insert(QStringLiteral("payload_offset"), slotIndex * ring.slotBytes + ring.headerBytes);
+    out.insert(QStringLiteral("payload_bytes"), ring.pixelBytes);
+    out.insert(QStringLiteral("width"), ring.width);
+    out.insert(QStringLiteral("height"), ring.height);
+    out.insert(QStringLiteral("stride"), ring.stride);
+    out.insert(QStringLiteral("pixel_format"), ring.pixelFormat);
+}
+
+QJsonObject handleBackendInfo(const QJsonObject &request, RenderRuntime *runtime) {
+    const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
+    QString error;
+    auto *backend = ensureGpuBackend(runtime, forceWarp, &error);
+    QJsonObject out = response(true, QStringLiteral("backend_info"));
+    out.insert(QStringLiteral("available"), backend != nullptr);
+    out.insert(QStringLiteral("requested_warp"), forceWarp);
+    if (backend == nullptr) {
+        out.insert(QStringLiteral("error"), error);
+        return out;
+    }
+    const QJsonObject caps = backendCapsJson(backend->capabilities());
+    for (auto it = caps.begin(); it != caps.end(); ++it) {
+        out.insert(it.key(), it.value());
+    }
+    return out;
+}
+
+QJsonObject handleRenderProbe(const QJsonObject &request, RenderRuntime *runtime) {
+    const int width = intValue(request, QStringLiteral("width"), 256);
+    const int height = intValue(request, QStringLiteral("height"), 144);
+    if (width <= 0 || height <= 0 || width > 8192 || height > 8192) {
+        QJsonObject out = response(false, QStringLiteral("render_probe"));
+        out.insert(QStringLiteral("error"), QStringLiteral("render probe dimensions must be within 1..8192"));
+        return out;
+    }
+    const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
+    QString error;
+    auto *backend = ensureGpuBackend(runtime, forceWarp, &error);
+    if (backend == nullptr) {
+        QJsonObject out = response(false, QStringLiteral("render_probe"));
+        out.insert(QStringLiteral("error"), error);
+        return out;
+    }
+
+    krok::subtitle::native::ProbeOptions options;
+    options.width = width;
+    options.height = height;
+    options.red = static_cast<std::uint8_t>(std::clamp(intValue(request, QStringLiteral("red"), 51), 0, 255));
+    options.green = static_cast<std::uint8_t>(std::clamp(intValue(request, QStringLiteral("green"), 102), 0, 255));
+    options.blue = static_cast<std::uint8_t>(std::clamp(intValue(request, QStringLiteral("blue"), 204), 0, 255));
+    options.alpha = static_cast<std::uint8_t>(std::clamp(intValue(request, QStringLiteral("alpha"), 128), 0, 255));
+    options.drawGlyph = request.value(QStringLiteral("draw_glyph")).toBool(true);
+
+    const int generation = intValue(request, QStringLiteral("generation"), 0);
+    const int frameIndex = intValue(request, QStringLiteral("frame_index"), 0);
+    const int slotIndex = 0;
+    const QString shmKey = stringValue(
+        request,
+        QStringLiteral("shm_key"),
+        defaultSharedMemoryKey(generation) + QStringLiteral("_gpu_probe")
+    );
+    QString shmError;
+    if (!ensureSharedFrameRing(runtime, shmKey, 1, width, height, &shmError)) {
+        QJsonObject out = response(false, QStringLiteral("render_probe"));
+        out.insert(QStringLiteral("error"), QStringLiteral("failed to create shared memory: ") + shmError);
+        return out;
+    }
+
+    QElapsedTimer totalTimer;
+    totalTimer.start();
+    try {
+        const auto result = backend->renderProbe(options);
+        SharedFrameRing ring;
+        const bool wrote = writeSharedRgbaSlot(
+            runtime,
+            result.surface.bytes.data(),
+            result.surface.width,
+            result.surface.height,
+            result.surface.stride,
+            generation,
+            frameIndex,
+            0,
+            slotIndex,
+            &ring
+        );
+        if (!wrote) {
+            QJsonObject out = response(false, QStringLiteral("render_probe"));
+            out.insert(QStringLiteral("error"), QStringLiteral("failed to write GPU probe shared-memory slot"));
+            return out;
+        }
+        QJsonObject out = response(true, QStringLiteral("probe_ready"));
+        out.insert(QStringLiteral("generation"), generation);
+        out.insert(QStringLiteral("frame_index"), frameIndex);
+        out.insert(QStringLiteral("t_ms"), 0);
+        out.insert(QStringLiteral("render_ms"), result.renderMs);
+        out.insert(QStringLiteral("readback_ms"), result.readbackMs);
+        out.insert(QStringLiteral("total_ms"), static_cast<double>(totalTimer.nsecsElapsed()) / 1000000.0);
+        out.insert(
+            QStringLiteral("checksum"),
+            QString::number(bytesChecksum(result.surface.bytes.data(), result.surface.bytes.size()))
+        );
+        const QJsonObject caps = backendCapsJson(backend->capabilities());
+        for (auto it = caps.begin(); it != caps.end(); ++it) {
+            out.insert(it.key(), it.value());
+        }
+        appendSharedRingMetadata(out, ring, slotIndex);
+        return out;
+    } catch (const std::exception &exception) {
+        QJsonObject out = response(false, QStringLiteral("render_probe"));
+        out.insert(QStringLiteral("error"), QString::fromUtf8(exception.what()));
+        return out;
+    }
 }
 
 std::vector<int> parseIntArray(const QJsonArray &items) {
@@ -5101,6 +5336,7 @@ int main(int argc, char **argv) {
 
     QJsonObject ready = response(true, QStringLiteral("ready"));
     ready.insert(QStringLiteral("schema"), kProtocolSchema);
+    ready.insert(QStringLiteral("gpu_protocol"), 1);
     ready.insert(QStringLiteral("qt"), QString::fromLatin1(qVersion()));
     writeJson(ready);
 
@@ -5122,7 +5358,11 @@ int main(int argc, char **argv) {
 
         const QJsonObject request = doc.object();
         const QString command = stringValue(request, QStringLiteral("cmd"));
-        if (command == QStringLiteral("configure")) {
+        if (command == QStringLiteral("backend_info")) {
+            writeJson(handleBackendInfo(request, &runtime));
+        } else if (command == QStringLiteral("render_probe")) {
+            writeJson(handleRenderProbe(request, &runtime));
+        } else if (command == QStringLiteral("configure")) {
             writeJson(handleConfigure(request, &config));
         } else if (command == QStringLiteral("render_frame")) {
             writeJson(handleRenderFrame(request, config));

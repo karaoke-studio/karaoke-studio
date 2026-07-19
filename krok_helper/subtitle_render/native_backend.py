@@ -199,8 +199,8 @@ class SharedFrameRingReader:
         )
 
     def _validate_event_payload(self, frame_ready_event: dict[str, Any]) -> None:
-        if frame_ready_event.get("event") != "frame_ready":
-            raise NativeRendererError("shared frame reader expects a frame_ready event")
+        if frame_ready_event.get("event") not in {"frame_ready", "probe_ready"}:
+            raise NativeRendererError("shared frame reader expects a frame_ready or probe_ready event")
         if frame_ready_event.get("payload") != "shared_memory":
             raise NativeRendererError("frame_ready event does not describe a shared memory payload")
         event_key = str(frame_ready_event.get("shm_key") or "")
@@ -350,6 +350,11 @@ class NativeRendererProcess:
     def is_running(self) -> bool:
         return self._process is not None and self._process.poll() is None
 
+    @property
+    def process_id(self) -> int | None:
+        """Return the live sidecar PID for diagnostics and stability probes."""
+        return self._process.pid if self.is_running and self._process is not None else None
+
     def start(self) -> dict[str, Any]:
         if self.is_running:
             return {"ok": True, "event": "already_running"}
@@ -418,6 +423,43 @@ class NativeRendererProcess:
     ) -> dict[str, Any]:
         ir = build_render_ir(track, style, width=width, height=height, fps=fps, dpr=dpr)
         self._send({"cmd": "configure", "ir": ir})
+        return self._expect_ok(self._read_response())
+
+    def backend_info(self, *, force_warp: bool = False) -> dict[str, Any]:
+        """Return Direct2D/D3D11 adapter capabilities without touching product UI."""
+        self._send({"cmd": "backend_info", "force_warp": bool(force_warp)})
+        return self._expect_ok(self._read_response())
+
+    def render_probe(
+        self,
+        *,
+        width: int = 256,
+        height: int = 144,
+        force_warp: bool = False,
+        draw_glyph: bool = True,
+        rgba: tuple[int, int, int, int] = (51, 102, 204, 128),
+        generation: int = 0,
+        frame_index: int = 0,
+        shm_key: str | None = None,
+    ) -> dict[str, Any]:
+        """Render the G0 transparent Direct2D probe and expose its shared-memory slot."""
+        red, green, blue, alpha = (max(0, min(int(value), 255)) for value in rgba)
+        payload: dict[str, Any] = {
+            "cmd": "render_probe",
+            "width": int(width),
+            "height": int(height),
+            "force_warp": bool(force_warp),
+            "draw_glyph": bool(draw_glyph),
+            "red": red,
+            "green": green,
+            "blue": blue,
+            "alpha": alpha,
+            "generation": int(generation),
+            "frame_index": int(frame_index),
+        }
+        if shm_key:
+            payload["shm_key"] = str(shm_key)
+        self._send(payload)
         return self._expect_ok(self._read_response())
 
     def render_frame_png(self, t_ms: int, output_path: str | os.PathLike[str]) -> dict[str, Any]:

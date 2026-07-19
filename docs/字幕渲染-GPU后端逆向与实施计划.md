@@ -1,6 +1,6 @@
 # 字幕渲染 GPU 后端：NicoKaraMaker3 逆向结论与实施计划
 
-> 状态：设计完成，尚未开始实现  
+> 状态：G0 最小 GPU 探针已完成，G1 横排字幕核心待开始
 > 最后更新：2026-07-19  
 > 逆向基准：NicoKaraMaker3 10.74.80.0 x64  
 > 产品基线：Python QPainter 仍是唯一正式字幕渲染路径；本文不改变当前产品开关
@@ -33,7 +33,7 @@
 
 ### 0.2 当前没有做的事情
 
-- 尚未创建 Direct2D backend 源码、CMake target 或产品设置项；
+- 尚未把 Direct2D backend 接入正式 Render IR、预览/导出选择逻辑或产品设置项；
 - 尚未修改 Python 预览/导出选择逻辑；
 - 尚未承诺 GPU 与 CPU 逐像素完全一致；
 - 尚未改变“QPainter 离屏 + ffmpeg rawvideo pipe”为当前唯一正式路径的产品事实；
@@ -188,7 +188,7 @@ GPU 完整视频帧
 - 导出：Python QPainter 产生透明 RGBA 字幕帧，经 rawvideo pipe 交给 ffmpeg；
 - 导出已有空帧短路、buffer 复用、单条 strip、多 bands 和 multiprocessing；
 - 视频解码/播放由 Qt Multimedia，导出背景缩放/overlay/编码由 ffmpeg；
-- native preview/export 开关在产品代码中硬返回 false。
+- native preview 仅有环境变量实验入口且默认关闭；native export 在产品代码中硬返回 false。
 
 ### 2.2 已证明的 GIL 边界
 
@@ -203,12 +203,13 @@ multiprocessing 可以绕开 GIL，但预览用多进程会增加调度、shared
 - `krok_helper/subtitle_render/native_backend.py`：JSON-lines sidecar client；
 - `krok_helper/subtitle_render/engine/native_export.py`：range render/shared-memory adapter；
 - `native/subtitle_renderer/`：CMake、Qt C++ sidecar、共享内存 frame ring；
+- `native/subtitle_renderer/src/backends/`：`RenderBackend` 合同与 G0 Direct2D/D3D11 backend；
 - native protocol/benchmark/export/transport 测试；
 - generation、取消、乱序 frame ready 重排、超时和进程退出诊断。
 
-不可直接复用为 GPU 实现：
+仍不可直接复用为正式 GPU 字幕实现：
 
-- 当前 native 核心仍是 QImage + QPainter CPU raster；
+- 历史字幕语义核心仍是 QImage + QPainter CPU raster；G0 Direct2D 当前只画固定探针；
 - 其缓存 parity 不完整，且 vertical/title/signal 等没有达到当前 Python 功能全集；
 - 2026-07-11 后产品策略已硬关闭 native 路径；
 - `NativeAsyncSubtitleRenderer` 的 range 调度策略存在积压失控缺陷（§2.5），G2 不得原样照搬。
@@ -450,7 +451,7 @@ LayerKey(fill/stroke/glow/state) -> reusable GPU bitmap/effect input
 
 所有阶段都必须保持 CPU 产品路径可运行。每阶段完成后更新本文“进度日志”。
 
-### G0：环境与最小 GPU 探针（3～5 天）
+### G0：环境与最小 GPU 探针（3～5 天，已完成）
 
 目标：证明当前构建机、PyInstaller 目录和 RTX/AMD/Intel 环境能稳定启动 Direct2D sidecar。
 
@@ -745,7 +746,7 @@ GPU 与 CPU 不要求逐像素完全一致。报告至少包含：
 10. 运行 native smoke、相关 pytest 和 1000-frame 稳定性测试；
 11. 在本文 §11 更新日期、提交、测试结果、已知差异和下一刀。
 
-如果用户只说“继续 GPU 工作”但没有指定阶段，默认从尚未完成的最早阶段开始；当前是 **G0**。
+如果用户只说“继续 GPU 工作”但没有指定阶段，默认从尚未完成的最早阶段开始；当前是 **G1**。
 
 ---
 
@@ -840,3 +841,35 @@ native `RenderConfig` 增加 `dpr` 与物理尺寸换算，布局仍在逻辑坐
 
 该 `dpr` 协议字段即 G2 预览质量档位的地基；GPU backend 直接沿用。
 
+### 2026-07-19（第五批）：G0 Direct2D 最小 GPU 探针完成
+
+实现：
+
+- 新建 `backends/render_backend.h` 与 `backends/direct2d/`，把 GPU backend 与历史
+  `main.cpp` 内的 CPU QPainter 渲染语义隔离；
+- 按高性能偏好枚举 DXGI adapter，创建 BGRA-capable D3D11 FL 11.1/11.0 device；
+  支持显式 WARP，硬件与 WARP 均启用 `ID3D11Multithread` 保护；
+- 创建 multithreaded Direct2D factory/device/context 与 DirectWrite factory；
+- 在透明 `B8G8R8A8_UNorm` premultiplied GPU texture 上绘制半透明矩形和固定 glyph；
+- staging texture `CopyResource + Map` 回读，转换为 straight-alpha RGBA8888 后写入
+  现有 `QSharedMemory` ring；
+- 新增 `backend_info` / `render_probe` 协议、Python client、adapter/feature level/
+  render/readback 诊断；更新 native smoke，并新增 `scripts/probe_gpu_renderer.py`；
+- 未修改产品预览/导出选择逻辑，Python QPainter 仍是唯一正式路径。
+
+本机验收（RTX 3070 Ti Laptop GPU，Windows 11，Qt 6.11.0）：
+
+- hardware：NVIDIA RTX 3070 Ti，D3D FL 11.1；WARP：Microsoft Basic Render Driver，FL 11.1；
+- 两条路径的透明像素为 `(0,0,0,0)`；输入 `(51,102,204,128)` 回读为
+  `(52,102,203,128)`，误差在 premultiply/unpremultiply 允许的 1 LSB 内；
+- 256×144、1000 帧：hardware `1792.74fps`，render/readback mean
+  `0.0720/0.1717ms`，warmup 后工作集增长 `0.45MiB`；
+- 256×144、1000 帧：WARP `1720.65fps`，render/readback mean
+  `0.0570/0.1869ms`，工作集增长 `0.53MiB`；
+- 相关回归：`167 passed, 27 skipped`；27 项为已有 CPU native/Python parity 漂移，
+  与本次 G0 无关且仍由 G1 对照体系接手；
+- `run_native_renderer_smoke.ps1 -RequireHardware` 通过，异常响应/进程退出诊断沿用并通过
+  native protocol/transport 测试。
+
+下一步：**G1 横排字幕核心**。先建立 DirectWrite 字体/fallback 与 glyph geometry cache，
+再迁移 solid before/after、stroke/stroke2 和逐字 wipe；不提前接产品 UI。

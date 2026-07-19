@@ -28,6 +28,11 @@ endif()
 
 add_executable(krok_subtitle_renderer
     src/main.cpp
+    src/backends/render_backend.h
+    src/backends/direct2d/d2d_backend.cpp
+    src/backends/direct2d/d2d_backend.h
+    src/backends/direct2d/d2d_device.cpp
+    src/backends/direct2d/d2d_device.h
 )
 
 target_link_libraries(krok_subtitle_renderer
@@ -36,6 +41,24 @@ target_link_libraries(krok_subtitle_renderer
         Qt6::Gui
         Qt6::Widgets
 )
+
+target_compile_definitions(krok_subtitle_renderer
+    PRIVATE
+        NOMINMAX
+        WIN32_LEAN_AND_MEAN
+)
+
+if(WIN32)
+    target_link_libraries(krok_subtitle_renderer
+        PRIVATE
+            d2d1
+            d3d11
+            dwrite
+            dxgi
+    )
+else()
+    message(FATAL_ERROR "The Direct2D GPU subtitle renderer probe is Windows-only")
+endif()
 
 if(MSVC)
     target_compile_options(krok_subtitle_renderer PRIVATE /utf-8 /O2)

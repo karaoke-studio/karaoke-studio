@@ -169,8 +169,9 @@ git submodule status
 - 逐行特效（四列表格、批量编辑、N3 行动作、持久化、撤销/重做、Painter）已合入。
 - `BackgroundSource` 已支持视频、静态图、图片序列和纯色；独立音频已接入预览、项目保存与 MP4 导出，但仅允许用于非视频背景。视频背景只使用内嵌音轨，避免双时钟。
 - native C++ sidecar 产品路径硬关闭，Python QPainter 是唯一正式路径。
-- 2026-07-19 已完成 N3 GPU 预览管线逆向和 Direct2D GPU sidecar 方案持久化，
-  **尚未开始产品代码实现**；若用户要求继续，默认从上述 GPU 文档的 G0 最小探针开始。
+- 2026-07-19 已完成 N3 GPU 预览管线逆向、Direct2D sidecar 方案持久化与 G0 最小
+  GPU 探针（硬件/WARP、透明 texture、staging RGBA readback、shared-memory ring）；
+  若用户要求继续，默认从上述 GPU 文档的 G1 横排字幕核心开始。
 
 ### 下一步顺序
 
