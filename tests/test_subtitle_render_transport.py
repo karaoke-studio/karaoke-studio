@@ -545,7 +545,13 @@ def test_gpu_async_renderer_failure_falls_back_to_painter(qapp, monkeypatch):
 
 def test_gpu_async_renderer_capability_fallback_skips_sidecar(qapp, monkeypatch):
     from krok_helper.subtitle_render.frontend import preview_async as pa
-    from krok_helper.subtitle_render.models import Style, TimingTrack
+    from krok_helper.subtitle_render.models import (
+        RubyAnnotation,
+        Style,
+        TimingChar,
+        TimingLine,
+        TimingTrack,
+    )
 
     constructed = 0
 
@@ -561,7 +567,15 @@ def test_gpu_async_renderer_capability_fallback_skips_sidecar(qapp, monkeypatch)
     renderer.frame_ready.connect(lambda _image, t_ms: frames.append(int(t_ms)))
     try:
         renderer.set_state(
-            TimingTrack(), Style(vertical=True, decoration_kind="glow")
+            TimingTrack(
+                lines=[TimingLine(chars=[TimingChar("A", 0)], end_ms=500)],
+                rubies=[
+                    RubyAnnotation(
+                        kanji="A", reading="a", pos_start_ms=0, pos_end_ms=500
+                    )
+                ],
+            ),
+            Style(vertical=True),
         )
         renderer.request(1_000)
         deadline = time.monotonic() + 2.0

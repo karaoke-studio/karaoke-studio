@@ -35,8 +35,6 @@ def gpu_unsupported_features(
     if style.vertical:
         if any(source.rubies for source in sources):
             reasons.append("vertical_ruby")
-        if style.decoration_kind == "glow":
-            reasons.append("vertical_glow")
         if style.title_overlay is not None and style.title_overlay.enabled:
             reasons.append("vertical_title")
         if style.entry_anim != "none" or style.exit_anim != "none":
@@ -50,9 +48,6 @@ def gpu_unsupported_features(
                     reasons.append("vertical_animation")
                 if any(ch.role_label for ch in line.chars):
                     reasons.append("vertical_inline_style")
-                scheme = style.singer_style_overrides.get(line.singer_id)
-                if scheme is not None and scheme.decoration_kind == "glow":
-                    reasons.append("vertical_glow")
     if style.right_to_left:
         reasons.append("right_to_left")
     if style.line_horizontal_layout == "per_row":

@@ -1383,3 +1383,11 @@ Utopia 横排主路径至此收口。G4 下一项进入 Sayatoo signal；产品 
 - 基准新增 `--vertical`。RTX 3070 Ti、1920×1080、60fps、6 字竖排、packed bands、600 帧：`71.73fps`，render/readback/roundtrip p95 `1.60/5.73/15.97ms`；local 显存增长 0。当前竖列覆盖画面高度较大，平均 readback ratio 为 `77.96%`，后续 G6 可进一步减少读回成本。
 
 下一批补齐竖排 ruby 与 glow；完成后再移除对应 capability fallback，并补真实 N3 竖排组合 corpus。
+
+### 2026-07-19（第三十批）：G4 竖排 glow
+
+- 竖排正文复用已经验收的 Direct2D 全帧 glow source 与 N3 多 pass 高斯模糊，只把 before/after 源的走字裁剪切换为自上而下的纵向 clip；blur 仍在裁剪后的合成源上执行，避免对模糊结果硬切产生清晰横线。
+- glow 的 stroke/stroke2 轮廓宽度、半径、concentration 和 before/after 颜色继续复用横排 resolved style；转换后的竖排 glyph bounds 与 blur 三倍半径一并进入 packed-band 范围。
+- `vertical_glow` capability fallback 已移除。自动门槛覆盖直立字、旋转长音符、两档颜色、双描边、中档 glow 与 5 个纵向走字时刻：四边界相对 Painter 最大偏差 `12px`，相对完整帧的 alpha 轨迹偏差不超过 `0.09`。GPU/transport `134 passed`，native protocol/export/benchmark `63 passed, 27 skipped`；竖排 ruby 仍明确回退。
+
+下一批进入竖排 ruby 的右侧列布局、reading-unit 时间轴和纵向 after wipe。

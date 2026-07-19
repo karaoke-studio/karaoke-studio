@@ -2044,6 +2044,68 @@ def test_gpu_g4_vertical_dual_columns_flow_right_to_left_like_painter(monkeypatc
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g4_vertical_glow_before_after_clip_follows_painter(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("光", 0),
+                    TimingChar("ー", 600),
+                    TimingChar("彩", 1_200),
+                ],
+                end_ms=1_800,
+            )
+        ]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=68,
+        vertical=True,
+        dual_line_layout=False,
+        line_y_position="center",
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        stroke_width_px=3,
+        stroke2_enabled=True,
+        stroke2_width_px=2,
+        decoration_kind="glow",
+        glow_before_radius_px=10,
+        glow_after_radius_px=10,
+        glow_concentration_level=1,
+    )
+    timestamps = (0, 300, 900, 1_500, 1_800)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+
+    for t_ms, gpu_frame, painter_frame in zip(timestamps, gpu, painter):
+        assert all(
+            abs(actual - expected) <= 12
+            for actual, expected in zip(
+                _payload_alpha_bounds(gpu_frame),
+                _payload_alpha_bounds(painter_frame),
+            )
+        ), (
+            t_ms,
+            _payload_alpha_bounds(gpu_frame),
+            _payload_alpha_bounds(painter_frame),
+        )
+    full_gpu = sum(gpu[-1][3::4])
+    full_painter = sum(painter[-1][3::4])
+    for index in range(len(timestamps) - 1):
+        gpu_ratio = sum(gpu[index][3::4]) / full_gpu
+        painter_ratio = sum(painter[index][3::4]) / full_painter
+        assert abs(gpu_ratio - painter_ratio) <= 0.09
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g3_dual_lane_alignments_follow_painter_schedule(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
 
