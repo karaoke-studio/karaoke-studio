@@ -609,6 +609,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                         frame_index=self._frame_index,
                         shm_key=shm_key,
                         include_checksum=False,
+                        readback_bands=True,
                     )
                     self._frame_index += 1
                     event_key = str(event.get("shm_key") or "")

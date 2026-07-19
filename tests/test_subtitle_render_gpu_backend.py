@@ -1097,6 +1097,85 @@ def test_gpu_g3_applies_each_source_track_offset_like_painter(monkeypatch) -> No
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_banded_readback_reconstructs_full_frame_exactly(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        meta=TimingTrackMeta(title="Band"),
+        lines=[TimingLine(chars=[TimingChar("歌词", 0)], end_ms=1_500)],
+    )
+    title = TitleOverlay(
+        enabled=True,
+        text_template="{title}",
+        font_family="Meiryo",
+        font_size_px=42,
+        anchor="top_left",
+        offset_x=30,
+        offset_y=24,
+        layout_index=None,
+        show_mode="head",
+        duration_ms=1_500,
+        fade_in_ms=0,
+        fade_out_ms=0,
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        line_y_position="bottom",
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        glow_radius_px=10,
+        glow_before_radius_px=10,
+        glow_after_radius_px=10,
+        dual_line_layout=False,
+        custom_style_schemes={},
+        title_overlay=title,
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        renderer.configure_gpu(
+            track,
+            style,
+            width=640,
+            height=360,
+            fps=60,
+            force_warp=True,
+        )
+        full_event = renderer.render_gpu_frame(
+            750,
+            force_warp=True,
+            shm_key=f"krok-gpu-full-{uuid.uuid4().hex}",
+        )
+        with SharedFrameRingReader.from_event(full_event) as reader:
+            full_slot = reader.read_frame(full_event)
+        band_event = renderer.render_gpu_frame(
+            750,
+            force_warp=True,
+            shm_key=f"krok-gpu-bands-{uuid.uuid4().hex}",
+            readback_bands=True,
+        )
+        with SharedFrameRingReader.from_event(band_event) as reader:
+            band_slot = reader.read_frame(band_event)
+        empty_event = renderer.render_gpu_frame(
+            2_500,
+            force_warp=True,
+            shm_key=f"krok-gpu-empty-bands-{uuid.uuid4().hex}",
+            readback_bands=True,
+        )
+        with SharedFrameRingReader.from_event(empty_event) as reader:
+            empty_image = reader.read_qimage(empty_event)
+
+    assert band_event["pixel_format"] == "bgra8888_premultiplied_bands"
+    assert len(band_event["bands"]) == 2
+    assert band_event["payload_bytes"] < full_event["payload_bytes"] * 0.7
+    assert band_event["readback_ratio"] < 0.7
+    assert band_slot.pixel_format == "bgra8888_premultiplied"
+    assert band_slot.payload == full_slot.payload
+    assert empty_event["bands"] == []
+    assert empty_event["payload_bytes"] == 0
+    empty_bits = empty_image.constBits()
+    empty_bits.setsize(empty_image.sizeInBytes())
+    assert not any(bytes(empty_bits))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g3_inline_role_fonts_sizes_colors_and_strokes_match_painter(
     monkeypatch,
 ) -> None:

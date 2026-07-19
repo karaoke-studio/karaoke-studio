@@ -1474,7 +1474,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
     impl_->configured = true;
 }
 
-ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
+ProbeResult Direct2DGpuBackend::renderFrame(int tMs, bool compactBands) {
     if (!impl_->configured) {
         throw BackendError("GPU backend is not configured");
     }
@@ -1602,6 +1602,7 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
         }
     );
     bool renderedAnyLine = false;
+    std::vector<std::pair<int, int>> readbackIntervals;
     for (const Impl::CachedLine *line : activeLines) {
       if (line != nullptr && !line->geometries.empty()) {
         const float globalOpacity = overlayOpacityAt(*line);
@@ -1657,6 +1658,68 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
             firstBaseline += style.centerOffsetY;
         }
         const float dy = firstBaseline + step * static_cast<float>(line->lane);
+        auto visualVerticalPadding = [](const TextStyle &item, bool ruby) {
+            const float stroke = ruby
+                ? std::max(item.rubyStrokeWidth, 0.0f)
+                    + std::max(item.rubyStroke2Width, 0.0f)
+                : std::max(item.strokeWidth, 0.0f)
+                    + std::max(item.stroke2Width, 0.0f);
+            const std::string &decoration = ruby
+                ? item.rubyDecorationKind
+                : item.decorationKind;
+            const float glow = ruby
+                ? std::max(item.rubyGlowBeforeRadius, item.rubyGlowAfterRadius)
+                : std::max(item.glowBeforeRadius, item.glowAfterRadius);
+            const float shadowY = ruby ? item.rubyShadowOffsetY : item.shadowOffsetY;
+            float top = stroke * 0.5f + 3.0f;
+            float bottom = top;
+            if (decoration == "glow") {
+                top += std::max(glow, 0.0f) * 3.0f;
+                bottom += std::max(glow, 0.0f) * 3.0f;
+            } else if (decoration == "shadow") {
+                top += std::max(-shadowY, 0.0f);
+                bottom += std::max(shadowY, 0.0f);
+            }
+            return std::pair<float, float>{top, bottom};
+        };
+        float contentTop = line->bounds.top;
+        float contentBottom = line->bounds.bottom;
+        auto [topPad, bottomPad] = visualVerticalPadding(style, false);
+        for (const Impl::CachedChar &ch : line->chars) {
+            if (ch.styleIndex < 0
+                || ch.styleIndex >= static_cast<int>(scene.charStyles.size())) {
+                continue;
+            }
+            const auto padding = visualVerticalPadding(
+                scene.charStyles[static_cast<std::size_t>(ch.styleIndex)], false
+            );
+            topPad = std::max(topPad, padding.first);
+            bottomPad = std::max(bottomPad, padding.second);
+        }
+        for (const Impl::CachedRuby &ruby : line->rubies) {
+            contentTop = std::min(contentTop, ruby.bounds.top);
+            contentBottom = std::max(contentBottom, ruby.bounds.bottom);
+            const TextStyle &rubyStyle = ruby.styleIndex >= 0
+                && ruby.styleIndex < static_cast<int>(scene.charStyles.size())
+                ? scene.charStyles[static_cast<std::size_t>(ruby.styleIndex)]
+                : style;
+            const auto padding = visualVerticalPadding(rubyStyle, true);
+            topPad = std::max(topPad, padding.first);
+            bottomPad = std::max(bottomPad, padding.second);
+        }
+        const int intervalTop = std::clamp(
+            static_cast<int>(std::floor(dy + contentTop - topPad)),
+            0,
+            scene.height
+        );
+        const int intervalBottom = std::clamp(
+            static_cast<int>(std::ceil(dy + contentBottom + bottomPad)),
+            0,
+            scene.height
+        );
+        if (intervalBottom > intervalTop) {
+            readbackIntervals.emplace_back(intervalTop, intervalBottom);
+        }
         auto imageForPaint = [&](const PaintStyle &paint) -> ID2D1Bitmap1 * {
             const auto found = std::find_if(
                 impl_->images.begin(), impl_->images.end(),
@@ -2437,7 +2500,55 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
 
     const auto readbackStart = Clock::now();
     ID3D11Texture2D *stagingTexture = impl_->frameStagingTexture.Get();
-    device_.d3dContext()->CopyResource(stagingTexture, targetTexture);
+    std::vector<std::pair<int, int>> mergedIntervals;
+    if (compactBands) {
+        std::sort(readbackIntervals.begin(), readbackIntervals.end());
+        for (const auto &interval : readbackIntervals) {
+            if (mergedIntervals.empty()
+                || interval.first > mergedIntervals.back().second + 2) {
+                mergedIntervals.push_back(interval);
+            } else {
+                mergedIntervals.back().second = std::max(
+                    mergedIntervals.back().second, interval.second
+                );
+            }
+        }
+    }
+    if (compactBands && mergedIntervals.empty()) {
+        ProbeResult result;
+        result.renderMs = renderMs;
+        result.readbackMs = elapsedMs(readbackStart);
+        result.surface.width = scene.width;
+        result.surface.height = scene.height;
+        result.surface.stride = scene.width * 4;
+        result.surface.pixelFormat = PixelFormat::Bgra8888Premultiplied;
+        return result;
+    }
+    if (compactBands) {
+        int packedTop = 0;
+        for (const auto &[top, bottom] : mergedIntervals) {
+            D3D11_BOX sourceBox{};
+            sourceBox.left = 0;
+            sourceBox.right = static_cast<UINT>(scene.width);
+            sourceBox.top = static_cast<UINT>(top);
+            sourceBox.bottom = static_cast<UINT>(bottom);
+            sourceBox.front = 0;
+            sourceBox.back = 1;
+            device_.d3dContext()->CopySubresourceRegion(
+                stagingTexture,
+                0,
+                0,
+                static_cast<UINT>(packedTop),
+                0,
+                targetTexture,
+                0,
+                &sourceBox
+            );
+            packedTop += bottom - top;
+        }
+    } else {
+        device_.d3dContext()->CopyResource(stagingTexture, targetTexture);
+    }
     D3D11_MAPPED_SUBRESOURCE mapped{};
     checkHr(
         device_.d3dContext()->Map(stagingTexture, 0, D3D11_MAP_READ, 0, &mapped),
@@ -2451,8 +2562,22 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
     result.surface.height = scene.height;
     result.surface.stride = scene.width * 4;
     result.surface.pixelFormat = PixelFormat::Bgra8888Premultiplied;
-    result.surface.bytes.resize(static_cast<std::size_t>(result.surface.stride) * scene.height);
-    for (int y = 0; y < scene.height; ++y) {
+    int packedHeight = scene.height;
+    if (compactBands) {
+        packedHeight = 0;
+        for (const auto &[top, bottom] : mergedIntervals) {
+            result.surface.bands.push_back(RenderSurface::Band{
+                top,
+                bottom - top,
+                packedHeight,
+            });
+            packedHeight += bottom - top;
+        }
+    }
+    result.surface.bytes.resize(
+        static_cast<std::size_t>(result.surface.stride) * packedHeight
+    );
+    for (int y = 0; y < packedHeight; ++y) {
         const auto *source = static_cast<const std::uint8_t *>(mapped.pData)
             + static_cast<std::size_t>(mapped.RowPitch) * y;
         auto *destination = result.surface.bytes.data()

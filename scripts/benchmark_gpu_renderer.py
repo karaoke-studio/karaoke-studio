@@ -76,6 +76,7 @@ def run_benchmark(
     seconds: float,
     force_warp: bool,
     glow: bool,
+    bands: bool = False,
 ) -> tuple[dict, list[dict]]:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     frames = max(1, int(round(seconds * fps)))
@@ -105,15 +106,16 @@ def run_benchmark(
                     generation=1,
                     frame_index=frame_index,
                     shm_key=shm_key,
+                    readback_bands=bands,
                 )
                 if reader is None:
                     reader = SharedFrameRingReader.from_event(event)
                     reader.attach()
-                slot = reader.read_frame(event)
-                if slot.frame_index != frame_index or slot.t_ms != t_ms:
+                image = reader.read_qimage(event)
+                if image.width() != width or image.height() != height:
                     raise AssertionError(
-                        f"frame metadata mismatch: {slot.frame_index}/{slot.t_ms} != "
-                        f"{frame_index}/{t_ms}"
+                        f"frame dimensions mismatch: {image.width()}x{image.height()} != "
+                        f"{width}x{height}"
                     )
                 rows.append(
                     {
@@ -124,6 +126,8 @@ def run_benchmark(
                         "readback_ms": float(event["readback_ms"]),
                         "roundtrip_ms": (time.perf_counter() - request_start) * 1000.0,
                         "checksum": str(event["checksum"]),
+                        "payload_bytes": int(event["payload_bytes"]),
+                        "readback_ratio": float(event.get("readback_ratio", 1.0)),
                     }
                 )
         finally:
@@ -145,9 +149,13 @@ def run_benchmark(
         "fps": round(frames / elapsed, 3),
         "frames": frames,
         "glow": glow,
+        "bands": bands,
         "height": height,
         "readback_mean_ms": round(statistics.fmean(readback_times), 4),
         "readback_p95_ms": round(_percentile(readback_times, 0.95), 4),
+        "readback_ratio_mean": round(
+            statistics.fmean(row["readback_ratio"] for row in rows), 4
+        ),
         "render_mean_ms": round(statistics.fmean(render_times), 4),
         "render_p95_ms": round(_percentile(render_times, 0.95), 4),
         "roundtrip_mean_ms": round(statistics.fmean(roundtrip_times), 4),
@@ -166,6 +174,11 @@ def main() -> int:
     parser.add_argument("--warp", action="store_true", help="force Microsoft WARP")
     parser.add_argument("--both", action="store_true", help="run hardware then WARP")
     parser.add_argument("--glow", action="store_true", help="enable N3 medium glow")
+    parser.add_argument(
+        "--bands",
+        action="store_true",
+        help="read back only packed subtitle bands and reconstruct the full frame",
+    )
     parser.add_argument("--output-csv", type=Path)
     args = parser.parse_args()
 
@@ -178,6 +191,7 @@ def main() -> int:
             seconds=max(args.seconds, 0.001),
             force_warp=force_warp,
             glow=bool(args.glow),
+            bands=bool(args.bands),
         )
         all_rows.extend(rows)
         print(json.dumps(summary, ensure_ascii=False, sort_keys=True))

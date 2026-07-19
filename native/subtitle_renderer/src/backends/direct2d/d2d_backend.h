@@ -16,7 +16,7 @@ public:
     BackendDiagnostics diagnostics() const override;
     ProbeResult renderProbe(const ProbeOptions &options) override;
     void configure(const RenderScene &scene) override;
-    ProbeResult renderFrame(int tMs) override;
+    ProbeResult renderFrame(int tMs, bool compactBands = false) override;
 
 private:
     struct Impl;

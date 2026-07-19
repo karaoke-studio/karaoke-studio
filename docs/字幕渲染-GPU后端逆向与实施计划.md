@@ -1213,3 +1213,28 @@ G3 的 solid/gradient/split/image、stroke/stroke2、shadow/glow、ruby 与角�
 
 G3 下一刀进入 strip/bands readback、4K60 性能与组合 corpus 门禁；产品 GPU 开关继续默认关闭，
 Painter 永久保留为 oracle 与任何不支持路径的整帧 fallback。
+
+### 2026-07-19（第十九批）：G3 packed bands 回读与 4K60 门禁
+
+- Direct2D render 阶段按活动行、ruby、标题和各角色的 stroke/glow/shadow 外扩计算保守纵向区间，
+  相交区间合并；readback 不再固定 `CopyResource` 全帧，而是用多个
+  `CopySubresourceRegion` 把 band 紧密排入常驻 staging texture 顶部后只 Map/复制有效行。
+- shared-memory 增加 `bgra8888_premultiplied_bands` 格式和 `top/height/packed_top` 元数据。
+  Python `read_qimage()` 先清透明目标，再把 packed 行直接复制到最终 QImage；没有活动内容时 payload
+  为 0 字节。`read_frame()` 诊断路径也会展开为传统全帧 slot，旧调用方不需要理解 band 格式。
+- 自动门禁同时显示顶部标题与底部 glow 歌词，确认生成两个不相邻 band、payload 小于全帧 70%，
+  展开后与同一帧全量 `CopyResource` 输出逐字节相等；另覆盖空帧 0-byte payload。产品 GPU 预览已默认
+  对 sidecar 请求 bands，实验开关本身仍默认关闭。
+- RTX 3070 Ti、3840×2160、18 字中档 glow、600 帧、最终 QImage 消费：bands 平均只回读画面高度
+  `7.04%`，render mean/p95 `2.34/2.81ms`，readback `3.62/6.15ms`，roundtrip
+  `14.30/16.83ms`，同步吞吐 `69.87fps`；同场景全帧回读为 readback `22.64/34.35ms`、
+  roundtrip `64.89/76.85ms`、`15.41fps`。bands 将端到端吞吐提升 `4.54x`，4K60 common path
+  达标。1080p 同场景为 `159.27fps`、roundtrip p95 `7.79ms`。
+- Dark Spiral 真实 `PreviewGraphicsView` + MP4 离屏 10 秒烟测交付 572 帧，GPU/sidecar failure、
+  restart、Painter fallback 均为 0，`max_pending=1`，readback p95 `4.12ms`；组合场景 render p95
+  `10.11ms`，继续在 60fps GPU 帧预算内。
+- 硬件/WARP build smoke 通过；GPU/transport `111 passed`，native protocol/export/benchmark 独立
+  回归 `58 passed, 27 skipped`。
+
+G3 还剩 TACTIC/A stain 组合 corpus 的 raw overlay diff 与 cache/GPU memory 稳态门禁；完成前仍不把
+GPU 开关暴露给普通用户。

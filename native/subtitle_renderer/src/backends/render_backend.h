@@ -43,6 +43,13 @@ struct RenderSurface {
     int stride = 0;
     PixelFormat pixelFormat = PixelFormat::Rgba8888Straight;
     std::vector<std::uint8_t> bytes;
+    struct Band {
+        int top = 0;
+        int height = 0;
+        int packedTop = 0;
+        bool operator==(const Band &) const = default;
+    };
+    std::vector<Band> bands;
 };
 
 struct ProbeResult {
@@ -240,7 +247,7 @@ public:
     virtual ProbeResult renderProbe(const ProbeOptions &options) = 0;
     virtual BackendDiagnostics diagnostics() const = 0;
     virtual void configure(const RenderScene &scene) = 0;
-    virtual ProbeResult renderFrame(int tMs) = 0;
+    virtual ProbeResult renderFrame(int tMs, bool compactBands = false) = 0;
 };
 
 }  // namespace krok::subtitle::native

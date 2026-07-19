@@ -29,6 +29,7 @@ _SHARED_FRAME_READY = 2
 _SHARED_FRAME_PIXEL_FORMATS = {
     1: "rgba8888",
     2: "bgra8888_premultiplied",
+    3: "bgra8888_premultiplied_bands",
 }
 
 
@@ -200,6 +201,25 @@ class SharedFrameRingReader:
             pixel_format=pixel_format,
         )
 
+        if pixel_format == "bgra8888_premultiplied_bands":
+            bands = _validated_readback_bands(
+                frame_ready_event,
+                width=width,
+                height=height,
+                stride=stride,
+                payload_bytes=payload_bytes,
+            )
+            expanded = bytearray(stride * height)
+            for top, band_height, packed_top in bands:
+                source_start = packed_top * stride
+                source_end = source_start + band_height * stride
+                destination_start = top * stride
+                expanded[
+                    destination_start : destination_start + band_height * stride
+                ] = payload[source_start:source_end]
+            payload = bytes(expanded)
+            pixel_format = "bgra8888_premultiplied"
+
         return SharedFrameSlot(
             shm_key=self.shm_key,
             slot_index=slot_index,
@@ -266,7 +286,11 @@ class SharedFrameRingReader:
             if state != _SHARED_FRAME_READY:
                 raise NativeRendererError(f"shared frame slot is not ready: state={state}")
             pixel_format = _SHARED_FRAME_PIXEL_FORMATS.get(format_id)
-            if pixel_format not in {"rgba8888", "bgra8888_premultiplied"}:
+            if pixel_format not in {
+                "rgba8888",
+                "bgra8888_premultiplied",
+                "bgra8888_premultiplied_bands",
+            }:
                 raise NativeRendererError(f"unsupported shared frame pixel format id: {format_id}")
             if slot_offset + header_payload_offset != payload_offset:
                 raise NativeRendererError("shared frame payload offset does not match slot header")
@@ -282,8 +306,22 @@ class SharedFrameRingReader:
                 stride=stride,
                 pixel_format=pixel_format,
             )
-            if width <= 0 or height <= 0 or stride < width * 4 or payload_bytes < stride * height:
+            banded = pixel_format == "bgra8888_premultiplied_bands"
+            if width <= 0 or height <= 0 or stride < width * 4:
                 raise NativeRendererError("shared frame contains invalid RGBA dimensions")
+            bands = (
+                _validated_readback_bands(
+                    frame_ready_event,
+                    width=width,
+                    height=height,
+                    stride=stride,
+                    payload_bytes=payload_bytes,
+                )
+                if banded
+                else [(0, height, 0)]
+            )
+            if not banded and payload_bytes < stride * height:
+                raise NativeRendererError("shared frame contains truncated RGBA payload")
 
             image_format = (
                 QImage.Format.Format_RGBA8888
@@ -293,16 +331,19 @@ class SharedFrameRingReader:
             image = QImage(width, height, image_format)
             if image.isNull():
                 raise NativeRendererError("failed to allocate QImage for shared frame")
+            if banded:
+                image.fill(0)
             destination_pointer = image.bits()
             destination_pointer.setsize(image.sizeInBytes())
             destination = memoryview(destination_pointer)
             destination_stride = image.bytesPerLine()
-            for row in range(height):
-                source_start = payload_offset + row * stride
-                destination_start = row * destination_stride
-                destination[destination_start : destination_start + width * 4] = source[
-                    source_start : source_start + width * 4
-                ]
+            for top, band_height, packed_top in bands:
+                for row in range(band_height):
+                    source_start = payload_offset + (packed_top + row) * stride
+                    destination_start = (top + row) * destination_stride
+                    destination[destination_start : destination_start + width * 4] = source[
+                        source_start : source_start + width * 4
+                    ]
             return image
         finally:
             self._shared.unlock()
@@ -362,6 +403,50 @@ def _event_int(event: dict[str, Any], key: str) -> int:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise NativeRendererError(f"shared frame event field {key!r} is not an integer") from exc
+
+
+def _validated_readback_bands(
+    event: dict[str, Any],
+    *,
+    width: int,
+    height: int,
+    stride: int,
+    payload_bytes: int,
+) -> list[tuple[int, int, int]]:
+    raw_bands = event.get("bands")
+    if not isinstance(raw_bands, list):
+        raise NativeRendererError("banded shared frame is missing bands metadata")
+    bands: list[tuple[int, int, int]] = []
+    occupied_payload_end = 0
+    previous_bottom = 0
+    for raw in raw_bands:
+        if not isinstance(raw, dict):
+            raise NativeRendererError("banded shared frame contains invalid band metadata")
+        try:
+            top = int(raw["top"])
+            band_height = int(raw["height"])
+            packed_top = int(raw["packed_top"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise NativeRendererError(
+                "banded shared frame contains invalid band coordinates"
+            ) from exc
+        if (
+            top < 0
+            or band_height <= 0
+            or top + band_height > height
+            or packed_top < 0
+            or top < previous_bottom
+        ):
+            raise NativeRendererError("banded shared frame band is outside the target")
+        packed_end = (packed_top + band_height) * stride
+        if packed_top * stride < occupied_payload_end or packed_end > payload_bytes:
+            raise NativeRendererError("banded shared frame band exceeds packed payload")
+        bands.append((top, band_height, packed_top))
+        previous_bottom = top + band_height
+        occupied_payload_end = packed_end
+    if occupied_payload_end != payload_bytes:
+        raise NativeRendererError("banded shared frame payload size does not match bands")
+    return bands
 
 
 def repository_root() -> Path:
@@ -588,6 +673,7 @@ class NativeRendererProcess:
         frame_index: int = 0,
         shm_key: str | None = None,
         include_checksum: bool = True,
+        readback_bands: bool = False,
     ) -> dict[str, Any]:
         """Render one configured G1 frame into a shared-memory RGBA slot."""
         payload: dict[str, Any] = {
@@ -597,6 +683,7 @@ class NativeRendererProcess:
             "generation": int(generation),
             "frame_index": int(frame_index),
             "include_checksum": bool(include_checksum),
+            "readback_bands": bool(readback_bands),
         }
         if shm_key:
             payload["shm_key"] = str(shm_key)
