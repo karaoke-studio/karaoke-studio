@@ -77,9 +77,14 @@ struct TextStyle {
     int fontWeight = 400;
     std::optional<int> latinFontWeight;
     bool italic = false;
+    bool allowBiting = false;
+    int spaceWidthPercent = 20;
     float letterSpacing = 0.0f;
     float horizontalMargin = 50.0f;
     float bottomMargin = 80.0f;
+    float lineGap = 90.0f;
+    bool dualLineLayout = true;
+    int laneCount = 2;
     std::string alignment = "center";
     std::string verticalPosition = "bottom";
     int leadInMs = 1800;

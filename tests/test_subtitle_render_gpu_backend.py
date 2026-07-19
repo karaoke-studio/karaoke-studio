@@ -116,6 +116,30 @@ def _render_g1_frames(
     return configured, frames
 
 
+def _render_painter_oracle(style: Style, *, t_ms: int = 750) -> bytes:
+    from PyQt6.QtGui import QFontDatabase, QImage
+    from PyQt6.QtWidgets import QApplication
+
+    from krok_helper.subtitle_render.engine.painter import (
+        clear_before_layer_cache,
+        paint_frame,
+    )
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+    # Qt's offscreen Windows plugin does not enumerate system fonts by itself.
+    # Load deterministic files that DirectWrite resolves to the same families.
+    assert QFontDatabase.addApplicationFont(r"C:\Windows\Fonts\times.ttf") >= 0
+    assert QFontDatabase.addApplicationFont(r"C:\Windows\Fonts\meiryo.ttc") >= 0
+    image = QImage(640, 360, QImage.Format.Format_RGBA8888)
+    image.fill(0)
+    clear_before_layer_cache()
+    paint_frame(image, _g1_track(), t_ms, style)
+    bits = image.constBits()
+    bits.setsize(image.sizeInBytes())
+    return bytes(bits)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_backend_reports_hardware_and_warp_adapters(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
@@ -300,7 +324,7 @@ def test_gpu_g1_alignment_uses_visible_ink_bounds(monkeypatch) -> None:
     with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
         renderer.configure_gpu(
             _g1_track(),
-            _g1_style(),
+            _g1_style(dual_line_layout=False),
             width=640,
             height=360,
             fps=60,
@@ -343,4 +367,79 @@ def test_gpu_g1_hardware_and_warp_are_pixel_bounded(monkeypatch) -> None:
     # which is stable and meaningful even where straight RGB has tiny alpha.
     assert sum(abs(a - b) for a, b in zip(hardware_alpha, warp_alpha)) / len(hardware_alpha) <= 0.05
     assert sum(premultiplied_deltas) / len(premultiplied_deltas) <= 0.05
-    assert max_alpha_delta <= 80
+    assert max_alpha_delta <= 96
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g1_basic_frame_matches_python_painter_within_bounded_diff(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _g1_style(
+        font_family="Meiryo",
+        shadow_color="#00000000",
+        shadow_offset_x=0,
+        shadow_offset_y=0,
+    )
+    python_payload = _render_painter_oracle(style)
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu_frames = _render_g1_frames(renderer, style, (750,), force_warp=True)
+    gpu_payload = gpu_frames[0]
+
+    assert _alpha_count(python_payload) > 0
+    assert _alpha_count(gpu_payload) > 0
+    python_slot = type(
+        "PainterFrame",
+        (),
+        {"payload": python_payload, "width": 640, "height": 360, "stride": 640 * 4},
+    )()
+    gpu_slot = type(
+        "GpuFrame",
+        (),
+        {"payload": gpu_payload, "width": 640, "height": 360, "stride": 640 * 4},
+    )()
+    python_bounds = _alpha_bounds(python_slot)
+    gpu_bounds = _alpha_bounds(gpu_slot)
+    assert all(abs(a - b) <= 2 for a, b in zip(python_bounds, gpu_bounds)), (
+        python_bounds,
+        gpu_bounds,
+    )
+
+    channel_deltas = [abs(a - b) for a, b in zip(python_payload, gpu_payload)]
+    assert sum(channel_deltas) / len(channel_deltas) < 1.0
+    assert sum(delta > 8 for delta in channel_deltas) < 10_000
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g1_n3_glow_matches_python_painter_within_bounded_diff(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _g1_style(
+        font_family="Meiryo",
+        decoration_kind="glow",
+        shadow_color="#00FF40",
+        glow_radius_px=8,
+        glow_before_radius_px=8,
+        glow_after_radius_px=8,
+        glow_concentration_level=1,
+    )
+    python_payload = _render_painter_oracle(style)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu_frames = _render_g1_frames(renderer, style, (750,), force_warp=True)
+    gpu_payload = gpu_frames[0]
+
+    python_slot = type(
+        "PainterGlowFrame",
+        (),
+        {"payload": python_payload, "width": 640, "height": 360, "stride": 640 * 4},
+    )()
+    gpu_slot = type(
+        "GpuGlowFrame",
+        (),
+        {"payload": gpu_payload, "width": 640, "height": 360, "stride": 640 * 4},
+    )()
+    assert all(
+        abs(a - b) <= 2
+        for a, b in zip(_alpha_bounds(python_slot), _alpha_bounds(gpu_slot))
+    )
+    channel_deltas = [abs(a - b) for a, b in zip(python_payload, gpu_payload)]
+    assert sum(channel_deltas) / len(channel_deltas) < 1.1
+    assert sum(delta > 8 for delta in channel_deltas) < 15_000

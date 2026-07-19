@@ -899,3 +899,20 @@ GPU 当前 whole-line DirectWrite shaping 尚未复刻 Painter/N3 的逐字符 o
 side bearing、advance、`CharGeometryLeftOffset` 和首描边计入步进规则；默认双行布局的 lane
 基线也尚未进入 GPU scene。因此下一刀先改为逐字符 glyph geometry/layout cache，并加入
 GPU↔Painter 非空帧、边界、wipe 与 premultiplied 像素 bounded-diff 门禁，再继续 ruby/角色。
+
+随后同日完成上述第二刀：
+
+- configure 改为逐 `TimingChar` 建立 DirectWrite layout/fallback，归一不同字体的 baseline，
+  按 glyph outline bounds、advance、左右 bearing、`AllowBiting`、`SpaceWidth`、首描边宽度和
+  `CharGeometryLeftOffset` 生成 positioned geometry；letter spacing 只加在 timing char 之间；
+- 缓存每字符实际墨水 wipe 范围与每行 DirectWrite ascent/descent；单行和默认多 lane 的
+  top/center/bottom 基线均按 Painter 行盒公式计算；
+- 加入真实系统字体（Meiryo + Times New Roman）的 GPU↔Painter 自动对照：默认双 lane
+  solid 帧 alpha 边界各边误差 ≤2px、整帧平均通道差约 `0.56/255`；N3 中档 glow
+  alpha 边界误差 ≤2px、平均通道差约 `0.90/255`；
+- G1 GPU 专项现为 `12 passed`，native CPU/protocol/GPU 联合回归
+  `45 passed, 27 skipped`。
+
+G1 剩余门槛：固定 N3 工程关键帧（不能只用合成文字）、1080p60 连续 10 秒协议稳态、
+render/readback CSV，以及 geometry/layout cache 的 hit/miss/bytes 诊断。未完成这些门槛前
+仍不接产品预览开关。

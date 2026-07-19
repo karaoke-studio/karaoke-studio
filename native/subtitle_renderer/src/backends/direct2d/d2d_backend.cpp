@@ -64,11 +64,21 @@ bool isLatinText(const std::wstring &text) {
 
 class GeometryRenderer final : public IDWriteTextRenderer {
 public:
+    struct RunGeometry {
+        Microsoft::WRL::ComPtr<ID2D1Geometry> geometry;
+        float baselineOriginX = 0.0f;
+        float baselineOriginY = 0.0f;
+    };
+
     explicit GeometryRenderer(ID2D1Factory1 *factory)
         : factory_(factory) {}
 
     const std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> &geometries() const noexcept {
         return geometries_;
+    }
+
+    const std::vector<RunGeometry> &runs() const noexcept {
+        return runs_;
     }
 
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID iid, void **object) override {
@@ -173,6 +183,7 @@ public:
         );
         if (SUCCEEDED(result)) {
             geometries_.push_back(transformed);
+            runs_.push_back(RunGeometry{transformed, baselineOriginX, baselineOriginY});
         }
         return result;
     }
@@ -199,6 +210,7 @@ private:
     std::atomic<ULONG> refCount_{1};
     Microsoft::WRL::ComPtr<ID2D1Factory1> factory_;
     std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> geometries_;
+    std::vector<RunGeometry> runs_;
 };
 
 }  // namespace
@@ -214,6 +226,9 @@ struct Direct2DGpuBackend::Impl {
     struct CachedLine {
         int startMs = 0;
         int endMs = 0;
+        int lane = 0;
+        float ascent = 0.0f;
+        float descent = 0.0f;
         D2D1_RECT_F bounds{};
         std::vector<CachedChar> chars;
         std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> geometries;
@@ -382,165 +397,206 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
     impl_->lines.reserve(scene.lines.size());
 
     const TextStyle &style = scene.style;
-    const std::wstring fontFamily = style.fontFamily.empty() ? L"Segoe UI" : style.fontFamily;
-    Microsoft::WRL::ComPtr<IDWriteTextFormat> format;
-    checkHr(
-        device_.dwriteFactory()->CreateTextFormat(
-            fontFamily.c_str(),
-            nullptr,
-            static_cast<DWRITE_FONT_WEIGHT>(std::clamp(style.fontWeight, 1, 999)),
-            style.italic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            std::max(style.fontSize, 1.0f),
-            L"ja-jp",
-            format.ReleaseAndGetAddressOf()
-        ),
-        "IDWriteFactory::CreateTextFormat(scene)",
-        device_
-    );
-    checkHr(format->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP), "IDWriteTextFormat::SetWordWrapping", device_);
-
-    for (const TextLine &sourceLine : scene.lines) {
-        std::wstring text;
-        std::vector<DWRITE_TEXT_RANGE> ranges;
-        ranges.reserve(sourceLine.chars.size());
-        for (const TextChar &ch : sourceLine.chars) {
-            const UINT32 start = static_cast<UINT32>(text.size());
-            text += ch.text;
-            ranges.push_back(DWRITE_TEXT_RANGE{start, static_cast<UINT32>(ch.text.size())});
-        }
-        if (text.empty()) {
-            continue;
-        }
-
-        Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
+    auto createFormat = [&](const std::wstring &family, float size, int weight) {
+        Microsoft::WRL::ComPtr<IDWriteTextFormat> result;
+        const std::wstring resolvedFamily = family.empty() ? L"Segoe UI" : family;
         checkHr(
-            device_.dwriteFactory()->CreateTextLayout(
-                text.c_str(),
-                static_cast<UINT32>(text.size()),
-                format.Get(),
-                std::max(4096.0f, static_cast<float>(scene.width) * 4.0f),
-                std::max(1024.0f, static_cast<float>(scene.height) * 2.0f),
-                layout.ReleaseAndGetAddressOf()
+            device_.dwriteFactory()->CreateTextFormat(
+                resolvedFamily.c_str(),
+                nullptr,
+                static_cast<DWRITE_FONT_WEIGHT>(std::clamp(weight, 1, 999)),
+                style.italic ? DWRITE_FONT_STYLE_ITALIC : DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                std::max(size, 1.0f),
+                L"ja-jp",
+                result.ReleaseAndGetAddressOf()
             ),
-            "IDWriteFactory::CreateTextLayout",
+            "IDWriteFactory::CreateTextFormat(scene)",
             device_
         );
-        for (std::size_t index = 0; index < sourceLine.chars.size(); ++index) {
-            if (!isLatinText(sourceLine.chars[index].text)) {
-                continue;
-            }
-            const DWRITE_TEXT_RANGE range = ranges[index];
-            if (style.latinFontFamily.has_value() && !style.latinFontFamily->empty()) {
-                checkHr(
-                    layout->SetFontFamilyName(style.latinFontFamily->c_str(), range),
-                    "IDWriteTextLayout::SetFontFamilyName(latin)",
-                    device_
-                );
-            }
-            if (style.latinFontSize.has_value()) {
-                checkHr(
-                    layout->SetFontSize(std::max(*style.latinFontSize, 1.0f), range),
-                    "IDWriteTextLayout::SetFontSize(latin)",
-                    device_
-                );
-            }
-            if (style.latinFontWeight.has_value()) {
-                checkHr(
-                    layout->SetFontWeight(
-                        static_cast<DWRITE_FONT_WEIGHT>(std::clamp(*style.latinFontWeight, 1, 999)),
-                        range
-                    ),
-                    "IDWriteTextLayout::SetFontWeight(latin)",
-                    device_
-                );
-            }
-        }
-        if (std::abs(style.letterSpacing) > 0.001f) {
-            Microsoft::WRL::ComPtr<IDWriteTextLayout1> layout1;
-            checkHr(layout.As(&layout1), "Query IDWriteTextLayout1", device_);
-            checkHr(
-                layout1->SetCharacterSpacing(
-                    0.0f,
-                    style.letterSpacing,
-                    0.0f,
-                    DWRITE_TEXT_RANGE{0, static_cast<UINT32>(text.size())}
-                ),
-                "IDWriteTextLayout1::SetCharacterSpacing",
-                device_
-            );
-        }
+        checkHr(result->SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP), "IDWriteTextFormat::SetWordWrapping", device_);
+        return result;
+    };
+    const auto mainFormat = createFormat(style.fontFamily, style.fontSize, style.fontWeight);
+    const auto latinFormat = createFormat(
+        style.latinFontFamily.value_or(style.fontFamily),
+        style.latinFontSize.value_or(style.fontSize),
+        style.latinFontWeight.value_or(style.fontWeight)
+    );
 
-        auto *renderer = new GeometryRenderer(device_.d2dFactory());
-        const HRESULT drawResult = layout->Draw(nullptr, renderer, 0.0f, 0.0f);
-        if (FAILED(drawResult)) {
-            renderer->Release();
-            checkHr(drawResult, "IDWriteTextLayout::Draw(geometry)", device_);
+    auto extendBounds = [](D2D1_RECT_F &target, bool &hasBounds, const D2D1_RECT_F &value) {
+        if (!hasBounds) {
+            target = value;
+            hasBounds = true;
+            return;
         }
+        target.left = std::min(target.left, value.left);
+        target.top = std::min(target.top, value.top);
+        target.right = std::max(target.right, value.right);
+        target.bottom = std::max(target.bottom, value.bottom);
+    };
 
+    for (std::size_t lineIndex = 0; lineIndex < scene.lines.size(); ++lineIndex) {
+        const TextLine &sourceLine = scene.lines[lineIndex];
         Impl::CachedLine cached;
         cached.startMs = sourceLine.startMs;
         cached.endMs = sourceLine.endMs;
-        cached.geometries = renderer->geometries();
-        renderer->Release();
-
-        bool hasBounds = false;
-        for (const auto &geometry : cached.geometries) {
-            D2D1_RECT_F bounds{};
-            checkHr(geometry->GetBounds(nullptr, &bounds), "ID2D1Geometry::GetBounds", device_);
-            if (!hasBounds) {
-                cached.bounds = bounds;
-                hasBounds = true;
-            } else {
-                cached.bounds.left = std::min(cached.bounds.left, bounds.left);
-                cached.bounds.top = std::min(cached.bounds.top, bounds.top);
-                cached.bounds.right = std::max(cached.bounds.right, bounds.right);
-                cached.bounds.bottom = std::max(cached.bounds.bottom, bounds.bottom);
-            }
-        }
-        if (!hasBounds) {
-            cached.bounds = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
-        }
-
+        cached.lane = style.dualLineLayout
+            ? static_cast<int>(lineIndex % static_cast<std::size_t>(std::max(style.laneCount, 1)))
+            : 0;
         cached.chars.reserve(sourceLine.chars.size());
-        for (std::size_t index = 0; index < sourceLine.chars.size(); ++index) {
-            const DWRITE_TEXT_RANGE range = ranges[index];
-            FLOAT leadingX = 0.0f;
-            FLOAT leadingY = 0.0f;
-            FLOAT trailingX = 0.0f;
-            FLOAT trailingY = 0.0f;
-            DWRITE_HIT_TEST_METRICS leadingMetrics{};
-            DWRITE_HIT_TEST_METRICS trailingMetrics{};
-            if (range.length > 0) {
+        bool lineHasBounds = false;
+        float cursor = 0.0f;
+
+        for (std::size_t charIndex = 0; charIndex < sourceLine.chars.size(); ++charIndex) {
+            const TextChar &sourceChar = sourceLine.chars[charIndex];
+            const bool latin = isLatinText(sourceChar.text);
+            const auto &format = latin ? latinFormat : mainFormat;
+            const float fontSize = latin
+                ? style.latinFontSize.value_or(style.fontSize)
+                : style.fontSize;
+
+            if (sourceChar.text == L" ") {
+                const float width = std::max(fontSize, 1.0f)
+                    * static_cast<float>(std::clamp(style.spaceWidthPercent, 10, 100))
+                    / 100.0f
+                    + std::max(style.strokeWidth, 0.0f);
+                cached.chars.push_back(Impl::CachedChar{
+                    sourceChar.startMs,
+                    sourceChar.endMs,
+                    cursor,
+                    cursor + width,
+                });
+                cursor += width;
+                if (charIndex + 1 < sourceLine.chars.size()) {
+                    cursor += style.letterSpacing;
+                }
+                continue;
+            }
+
+            Microsoft::WRL::ComPtr<IDWriteTextLayout> layout;
+            checkHr(
+                device_.dwriteFactory()->CreateTextLayout(
+                    sourceChar.text.c_str(),
+                    static_cast<UINT32>(sourceChar.text.size()),
+                    format.Get(),
+                    std::max(1024.0f, static_cast<float>(scene.width) * 2.0f),
+                    std::max(1024.0f, static_cast<float>(scene.height) * 2.0f),
+                    layout.ReleaseAndGetAddressOf()
+                ),
+                "IDWriteFactory::CreateTextLayout(character)",
+                device_
+            );
+            auto *renderer = new GeometryRenderer(device_.d2dFactory());
+            const HRESULT drawResult = layout->Draw(nullptr, renderer, 0.0f, 0.0f);
+            if (FAILED(drawResult)) {
+                renderer->Release();
+                checkHr(drawResult, "IDWriteTextLayout::Draw(character geometry)", device_);
+            }
+
+            std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> normalizedRuns;
+            D2D1_RECT_F charBounds{};
+            bool charHasBounds = false;
+            for (const GeometryRenderer::RunGeometry &run : renderer->runs()) {
+                const D2D1_MATRIX_3X2_F normalizeBaseline = D2D1::Matrix3x2F::Translation(
+                    0.0f,
+                    -run.baselineOriginY
+                );
+                Microsoft::WRL::ComPtr<ID2D1TransformedGeometry> normalized;
                 checkHr(
-                    layout->HitTestTextPosition(
-                        range.startPosition,
-                        FALSE,
-                        &leadingX,
-                        &leadingY,
-                        &leadingMetrics
+                    device_.d2dFactory()->CreateTransformedGeometry(
+                        run.geometry.Get(),
+                        &normalizeBaseline,
+                        normalized.ReleaseAndGetAddressOf()
                     ),
-                    "IDWriteTextLayout::HitTestTextPosition(leading)",
+                    "ID2D1Factory::CreateTransformedGeometry(normalize baseline)",
                     device_
                 );
-                checkHr(
-                    layout->HitTestTextPosition(
-                        range.startPosition + range.length - 1,
-                        TRUE,
-                        &trailingX,
-                        &trailingY,
-                        &trailingMetrics
-                    ),
-                    "IDWriteTextLayout::HitTestTextPosition(trailing)",
-                    device_
+                D2D1_RECT_F bounds{};
+                checkHr(normalized->GetBounds(nullptr, &bounds), "ID2D1Geometry::GetBounds(character)", device_);
+                extendBounds(charBounds, charHasBounds, bounds);
+                normalizedRuns.push_back(normalized);
+            }
+            renderer->Release();
+
+            DWRITE_TEXT_METRICS metrics{};
+            checkHr(layout->GetMetrics(&metrics), "IDWriteTextLayout::GetMetrics(character)", device_);
+            DWRITE_LINE_METRICS lineMetrics{};
+            UINT32 actualLineCount = 0;
+            checkHr(
+                layout->GetLineMetrics(&lineMetrics, 1, &actualLineCount),
+                "IDWriteTextLayout::GetLineMetrics(character)",
+                device_
+            );
+            if (actualLineCount > 0) {
+                cached.ascent = std::max(cached.ascent, lineMetrics.baseline);
+                cached.descent = std::max(
+                    cached.descent,
+                    std::max(lineMetrics.height - lineMetrics.baseline, 0.0f)
                 );
             }
+            const int advance = std::max(
+                static_cast<int>(std::lround(metrics.widthIncludingTrailingWhitespace)),
+                1
+            );
+            float layoutWidth = static_cast<float>(advance) + std::max(style.strokeWidth, 0.0f);
+            float pathOffset = 0.0f;
+            if (charHasBounds) {
+                const int inkWidth = std::max(static_cast<int>(charBounds.right - charBounds.left), 0);
+                int leftBearing = static_cast<int>(charBounds.left);
+                int rightBearing = static_cast<int>(static_cast<float>(advance) - charBounds.right);
+                if (!style.allowBiting) {
+                    leftBearing = std::max(leftBearing, 0);
+                    rightBearing = std::max(rightBearing, 0);
+                }
+                const int bodyWidth = std::max(
+                    inkWidth * (leftBearing + advance + rightBearing) / advance,
+                    0
+                );
+                layoutWidth = static_cast<float>(bodyWidth) + std::max(style.strokeWidth, 0.0f);
+                const int geometryLeft = inkWidth * leftBearing / advance;
+                pathOffset = -charBounds.left
+                    + static_cast<float>(geometryLeft)
+                    + std::max(style.strokeWidth, 0.0f) * 0.5f;
+            }
+
+            D2D1_RECT_F positionedCharBounds{};
+            bool positionedHasBounds = false;
+            for (const auto &geometry : normalizedRuns) {
+                const D2D1_MATRIX_3X2_F position = D2D1::Matrix3x2F::Translation(
+                    cursor + pathOffset,
+                    0.0f
+                );
+                Microsoft::WRL::ComPtr<ID2D1TransformedGeometry> positioned;
+                checkHr(
+                    device_.d2dFactory()->CreateTransformedGeometry(
+                        geometry.Get(),
+                        &position,
+                        positioned.ReleaseAndGetAddressOf()
+                    ),
+                    "ID2D1Factory::CreateTransformedGeometry(position character)",
+                    device_
+                );
+                D2D1_RECT_F bounds{};
+                checkHr(positioned->GetBounds(nullptr, &bounds), "ID2D1Geometry::GetBounds(positioned character)", device_);
+                extendBounds(positionedCharBounds, positionedHasBounds, bounds);
+                extendBounds(cached.bounds, lineHasBounds, bounds);
+                cached.geometries.push_back(positioned);
+            }
+            const float wipePad = std::max(style.strokeWidth, 0.0f) * 0.5f;
             cached.chars.push_back(Impl::CachedChar{
-                sourceLine.chars[index].startMs,
-                sourceLine.chars[index].endMs,
-                std::min(leadingX, trailingX),
-                std::max(leadingX, trailingX),
+                sourceChar.startMs,
+                sourceChar.endMs,
+                positionedHasBounds ? positionedCharBounds.left - wipePad : cursor,
+                positionedHasBounds ? positionedCharBounds.right + wipePad : cursor + layoutWidth,
             });
+            cursor += layoutWidth;
+            if (charIndex + 1 < sourceLine.chars.size()) {
+                cursor += style.letterSpacing;
+            }
+        }
+        if (!lineHasBounds) {
+            cached.bounds = D2D1::RectF(0.0f, 0.0f, 0.0f, 0.0f);
         }
         impl_->lines.push_back(std::move(cached));
     }
@@ -610,13 +666,25 @@ ProbeResult Direct2DGpuBackend::renderFrame(int tMs) {
         } else if (style.alignment == "right") {
             dx = static_cast<float>(scene.width) - style.horizontalMargin - line->bounds.right;
         }
-        float dy = static_cast<float>(scene.height) - style.bottomMargin - line->bounds.bottom;
+        const float visualPad = std::ceil(
+            (std::max(style.strokeWidth, 0.0f) + std::max(style.stroke2Width, 0.0f)) * 0.5f
+        );
+        const float ascent = line->ascent > 0.0f ? line->ascent : -line->bounds.top;
+        const float descent = line->descent > 0.0f ? line->descent : line->bounds.bottom;
+        const int lanes = style.dualLineLayout ? std::max(style.laneCount, 1) : 1;
+        const float mainHeight = ascent + descent + visualPad * 2.0f;
+        const float step = mainHeight + style.lineGap;
+        float firstBaseline = static_cast<float>(scene.height) - style.bottomMargin
+            - descent - visualPad - step * static_cast<float>(lanes - 1);
         if (style.verticalPosition == "top") {
-            dy = style.bottomMargin - line->bounds.top;
+            firstBaseline = style.bottomMargin + ascent + visualPad;
         } else if (style.verticalPosition == "center") {
-            dy = (static_cast<float>(scene.height) - (line->bounds.bottom - line->bounds.top)) * 0.5f
-                - line->bounds.top;
+            const float totalHeight = mainHeight * static_cast<float>(lanes)
+                + style.lineGap * static_cast<float>(lanes - 1);
+            firstBaseline = (static_cast<float>(scene.height) - totalHeight) * 0.5f
+                + ascent + visualPad;
         }
+        const float dy = firstBaseline + step * static_cast<float>(line->lane);
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> beforeFill;
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> afterFill;
         Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> beforeStroke;

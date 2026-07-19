@@ -100,6 +100,8 @@ struct ResolvedStyle {
     int fontWeight = 400;
     std::optional<int> latinFontWeight;
     bool italic = false;
+    bool allowBiting = false;
+    int spaceWidthPercent = 20;
     int letterSpacingPx = 0;
     QString baseColor = QStringLiteral("#FFFFFF");
     QString fillColor = QStringLiteral("#FF5A6F");
@@ -707,6 +709,16 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     if (hasNonNull(style, QStringLiteral("glow_after_radius_px"))) {
         cfg.glowAfterRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_after_radius_px"), cfg.glowAfterRadiusPx));
     }
+    if (hasNonNull(style, QStringLiteral("allow_biting"))) {
+        cfg.allowBiting = style.value(QStringLiteral("allow_biting")).toBool(cfg.allowBiting);
+    }
+    if (hasNonNull(style, QStringLiteral("space_width_percent"))) {
+        cfg.spaceWidthPercent = std::clamp(
+            intValue(style, QStringLiteral("space_width_percent"), cfg.spaceWidthPercent),
+            10,
+            100
+        );
+    }
     if (hasNonNull(style, QStringLiteral("glow_concentration_level"))) {
         cfg.glowConcentrationLevel = std::clamp(
             intValue(style, QStringLiteral("glow_concentration_level"), cfg.glowConcentrationLevel),
@@ -1231,6 +1243,12 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
         base.latinFontWeight = std::clamp(intValue(style, QStringLiteral("latin_font_weight"), base.fontWeight), 1, 999);
     }
     base.italic = style.value(QStringLiteral("italic")).toBool(base.italic);
+    base.allowBiting = style.value(QStringLiteral("allow_biting")).toBool(base.allowBiting);
+    base.spaceWidthPercent = std::clamp(
+        intValue(style, QStringLiteral("space_width_percent"), base.spaceWidthPercent),
+        10,
+        100
+    );
     base.letterSpacingPx = intValue(style, QStringLiteral("letter_spacing_px"), base.letterSpacingPx);
     base.baseColor = stringValue(style, QStringLiteral("base_color"), base.baseColor);
     base.fillColor = stringValue(style, QStringLiteral("fill_color"), base.fillColor);
@@ -5394,9 +5412,16 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
     scene.style.fontWeight = sourceStyle.fontWeight;
     scene.style.latinFontWeight = sourceStyle.latinFontWeight;
     scene.style.italic = sourceStyle.italic;
+    scene.style.allowBiting = sourceStyle.allowBiting;
+    scene.style.spaceWidthPercent = sourceStyle.spaceWidthPercent;
     scene.style.letterSpacing = static_cast<float>(sourceStyle.letterSpacingPx * scale);
     scene.style.horizontalMargin = static_cast<float>(config.horizontalMarginPx * scale);
     scene.style.bottomMargin = static_cast<float>(config.lineYMarginPx * scale);
+    scene.style.lineGap = static_cast<float>(config.lineGapPx * scale);
+    scene.style.dualLineLayout = config.dualLineLayout;
+    scene.style.laneCount = config.dualLineLayout
+        ? std::max(static_cast<int>(config.lineAlignments.size()), 1)
+        : 1;
     scene.style.verticalPosition = config.lineYPosition.toStdString();
     scene.style.leadInMs = config.lineLeadInMs;
     scene.style.tailMs = config.lineTailMs;
