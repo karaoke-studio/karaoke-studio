@@ -94,6 +94,7 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
     checkboxes = (
         panel._italic_check,
         panel._ruby_anchor_check,
+        panel._ruby_colors_follow_main_check,
         panel._allow_biting_check,
         panel._lit_shadow_check,
         panel._vertical_check,
@@ -1624,18 +1625,18 @@ def test_font_scripts_are_tabs_and_spacing_lives_on_layout_page(qapp):
 
     assert not hasattr(panel, "_font_latin_check")
     assert panel._font_tab_stack.count() == 4
-    assert panel._font_tab_panel._buttons[("left", "main")].text() == "主文字"
-    assert panel._font_tab_panel._buttons[("left", "ruby")].text() == "注音"
-    assert panel._font_tab_panel._buttons[("right", "japanese")].text() == "日文"
-    assert panel._font_tab_panel._buttons[("right", "latin")].text() == "英数"
+    assert panel._font_tab_panel._buttons[("left", "japanese")].text() == "日文"
+    assert panel._font_tab_panel._buttons[("left", "latin")].text() == "英数"
+    assert panel._font_tab_panel._buttons[("right", "main")].text() == "主文字"
+    assert panel._font_tab_panel._buttons[("right", "ruby")].text() == "注音"
     assert panel._font_tab_stack.currentIndex() == 0
 
-    panel._font_tab_panel._buttons[("right", "latin")].click()
+    panel._font_tab_panel._buttons[("left", "latin")].click()
     qapp.processEvents()
     assert panel._font_tab_stack.currentIndex() == 1
     assert panel._font_latin_combo.isEnabled()
 
-    panel._font_tab_panel._buttons[("left", "ruby")].click()
+    panel._font_tab_panel._buttons[("right", "ruby")].click()
     qapp.processEvents()
     assert panel._font_tab_stack.currentIndex() == 3
     assert panel._ruby_font_latin_combo.isEnabled()
@@ -1883,7 +1884,11 @@ def test_property_panel_swaps_complete_before_after_color_states(qapp):
     )
     panel = PropertyPanel()
     panel.set_style(
-        Style(karaoke_colors=main_colors, ruby_karaoke_colors=ruby_colors)
+        Style(
+            karaoke_colors=main_colors,
+            ruby_colors_follow_main=False,
+            ruby_karaoke_colors=ruby_colors,
+        )
     )
     panel.resize(520, 900)
     panel.show()
@@ -1895,8 +1900,8 @@ def test_property_panel_swaps_complete_before_after_color_states(qapp):
     button = panel._color_state_swap_button
     assert not button.icon().isNull()
     assert button.toolTip() == "交换走字前后配色"
-    after_tab = tabs._buttons[("right", "after")]
-    before_tab = tabs._buttons[("right", "before")]
+    after_tab = tabs._buttons[("left", "after")]
+    before_tab = tabs._buttons[("left", "before")]
     after_origin = after_tab.mapTo(panel._color_section, QPoint(0, 0))
     before_origin = before_tab.mapTo(panel._color_section, QPoint(0, 0))
     assert button.geometry().bottom() < after_origin.y()
@@ -1934,6 +1939,29 @@ def test_property_panel_swaps_complete_before_after_color_states(qapp):
         before=main_colors.after,
         after=main_colors.before,
     )
+    panel.close()
+
+
+def test_color_tabs_put_karaoke_state_left_and_subject_right(qapp):
+    panel = PropertyPanel()
+    panel.resize(520, 900)
+    panel.show()
+    qapp.processEvents()
+
+    tabs = panel._color_tab_panel
+    assert tabs._buttons[("left", "after")].text() == "走字后"
+    assert tabs._buttons[("left", "before")].text() == "走字前"
+    assert tabs._buttons[("right", "main")].text() == "主文字"
+    assert tabs._buttons[("right", "ruby")].text() == "注音"
+    assert tabs.current_left() == "after"
+    assert tabs.current_right() == "main"
+
+    tabs._buttons[("left", "before")].click()
+    tabs._buttons[("right", "ruby")].click()
+    qapp.processEvents()
+
+    assert panel._color_state_combo.currentData() == "before"
+    assert panel._color_subject_combo.currentData() == "ruby"
     panel.close()
 
 
@@ -3132,12 +3160,103 @@ def test_property_panel_apply_main_colors_button_only_shows_for_ruby_colors(qapp
 
     assert panel._color_subject_combo.currentData() == "main"
     assert panel._ruby_apply_main_btn.isHidden()
+    assert panel._ruby_colors_follow_main_check.isHidden()
 
     panel._color_subject_combo.setCurrentIndex(
         panel._color_subject_combo.findData("ruby")
     )
 
     assert not panel._ruby_apply_main_btn.isHidden()
+    assert not panel._ruby_colors_follow_main_check.isHidden()
+    assert panel._ruby_colors_follow_main_check.isChecked()
+    assert not panel._ruby_apply_main_btn.isEnabled()
+
+
+def test_ruby_colors_follow_every_main_color_layer_and_fill_setting(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    for index, layer in enumerate(("text", "stroke", "stroke2", "shadow")):
+        panel._color_layer_combo.setCurrentIndex(
+            panel._color_layer_combo.findData(layer)
+        )
+        panel._update_current_fill(
+            mode="gradient_horizontal",
+            color=f"#FF{index + 1:02X}2233",
+            start_color=f"#FF{index + 1:02X}4455",
+            end_color=f"#FF{index + 1:02X}6677",
+            gradient_stops=[
+                (0, f"#FF{index + 1:02X}4455"),
+                (100, f"#FF{index + 1:02X}6677"),
+            ],
+        )
+
+        assert emitted[-1].ruby_karaoke_colors is None
+        assert emitted[-1].ruby_colors_follow_main is True
+        assert panel._current_ruby_karaoke_colors() == emitted[-1].karaoke_colors
+
+
+def test_ruby_color_follow_toggle_detaches_and_restores_live_inheritance(qapp):
+    panel = PropertyPanel()
+    panel._color_subject_combo.setCurrentIndex(
+        panel._color_subject_combo.findData("ruby")
+    )
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._ruby_colors_follow_main_check.setChecked(False)
+    detached = emitted[-1].ruby_karaoke_colors
+    assert detached is not None
+    assert emitted[-1].ruby_colors_follow_main is False
+    assert detached == panel._current_karaoke_colors()
+    assert panel._ruby_apply_main_btn.isEnabled()
+
+    panel._color_subject_combo.setCurrentIndex(
+        panel._color_subject_combo.findData("main")
+    )
+    panel._update_current_fill(color="#FF123456")
+    assert emitted[-1].ruby_karaoke_colors == detached
+    assert emitted[-1].ruby_karaoke_colors != emitted[-1].karaoke_colors
+
+    panel._color_subject_combo.setCurrentIndex(
+        panel._color_subject_combo.findData("ruby")
+    )
+    panel._ruby_colors_follow_main_check.setChecked(True)
+    assert emitted[-1].ruby_karaoke_colors is None
+    assert emitted[-1].ruby_colors_follow_main is True
+    assert panel._current_ruby_karaoke_colors() == emitted[-1].karaoke_colors
+    assert not panel._ruby_apply_main_btn.isEnabled()
+
+
+def test_ruby_color_follow_state_is_saved_per_role_scheme(qapp):
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            custom_style_schemes={
+                "主唱": SubtitleStyleScheme(
+                    ruby_colors_follow_main=False,
+                    ruby_karaoke_colors=KaraokeColors(),
+                )
+            }
+        )
+    )
+    panel.set_roles(["主唱"])
+    panel.set_current_scheme_key("custom:主唱")
+    panel._color_subject_combo.setCurrentIndex(
+        panel._color_subject_combo.findData("ruby")
+    )
+    assert not panel._ruby_colors_follow_main_check.isChecked()
+
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+    panel._ruby_colors_follow_main_check.setChecked(True)
+
+    scheme = emitted[-1].custom_style_schemes["主唱"]
+    assert scheme.ruby_colors_follow_main is True
+    assert scheme.ruby_karaoke_colors is None
+    restored = style_from_dict(style_to_dict(emitted[-1]))
+    assert restored.custom_style_schemes["主唱"].ruby_colors_follow_main is True
 
 
 def test_property_panel_ruby_font_tab_controls_emit_ruby_strokes(qapp):

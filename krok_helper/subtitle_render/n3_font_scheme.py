@@ -397,6 +397,7 @@ def convert_n3_font_scheme(
             else ruby_alnum.edge2_size
         ),
         ruby_color=colors.after.text.color,
+        ruby_colors_follow_main=True,
         ruby_karaoke_colors=deepcopy(colors),
     )
     return changes
