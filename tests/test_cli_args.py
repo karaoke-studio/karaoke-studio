@@ -12,6 +12,13 @@ def test_parse_args_accepts_sug_project_path() -> None:
     assert args.video is None
 
 
+def test_parse_args_accepts_yurika_project_path() -> None:
+    args = parse_args(["D:/songs/subtitle project.yurika"])
+
+    assert args.project == Path("D:/songs/subtitle project.yurika")
+    assert args.video is None
+
+
 def test_parse_args_keeps_project_optional_for_default_gui() -> None:
     args = parse_args([])
 

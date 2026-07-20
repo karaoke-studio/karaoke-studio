@@ -27,7 +27,12 @@ from PyQt6.QtWidgets import QApplication
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="卡拉 OK 字幕视频一键 Hi-Res 生成工具")
-    parser.add_argument("project", nargs="?", type=Path, help="StrangeUtaGame .sug project file")
+    parser.add_argument(
+        "project",
+        nargs="?",
+        type=Path,
+        help="项目文件（支持 .sug 和 .yurika）",
+    )
     parser.add_argument("--video", type=Path, help="字幕视频路径")
     parser.add_argument("--on-audio", type=Path, help="原唱无损音频路径")
     parser.add_argument("--off-audio", type=Path, help="伴奏无损音频路径")
@@ -129,7 +134,11 @@ def run_gui(args: argparse.Namespace) -> int:
         window.show()
         splash.finish()
         if args.project:
-            QTimer.singleShot(0, lambda: window.open_lyrics_timing_project(args.project.expanduser()))
+            startup_project = args.project.expanduser()
+            QTimer.singleShot(
+                0,
+                lambda path=startup_project: window.open_project_file(path),
+            )
         return qt_app.exec()
     except Exception:
         splash.close()

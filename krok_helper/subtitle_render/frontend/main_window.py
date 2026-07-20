@@ -2487,6 +2487,13 @@ class SubtitleRenderWindow(QWidget):
             self._loading_project = False
             self._sync_subtitle_source_watcher()
 
+    def open_initial_project(self, project_path: Path | str) -> bool:
+        """Open a project supplied by the host application at startup."""
+        return self._open_project_path(
+            Path(project_path).expanduser(),
+            confirm_discard=False,
+        )
+
     def _open_project(self) -> None:
         if not self._confirm_discard_changes():
             return

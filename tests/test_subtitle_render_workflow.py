@@ -116,6 +116,31 @@ def test_pending_subtitle_recovery_switches_module_before_prompt() -> None:
     assert calls == [f"show:{WORKFLOW_SUBTITLE_RENDER}", "prompt"]
 
 
+def test_yurika_startup_project_opens_in_subtitle_render_module(tmp_path: Path) -> None:
+    project_path = tmp_path / "subtitle project.yurika"
+    project_path.write_text("{}", encoding="utf-8")
+    opened: list[Path] = []
+    shown_modules: list[str] = []
+    page = SimpleNamespace(open_initial_project=opened.append)
+    app = SimpleNamespace(
+        subtitle_render_page=page,
+        _show_module=shown_modules.append,
+    )
+
+    KrokHelperQtApp.open_subtitle_render_project(app, project_path)
+
+    assert shown_modules == [WORKFLOW_SUBTITLE_RENDER]
+    assert opened == [project_path]
+
+    dispatched: list[Path] = []
+    dispatcher = SimpleNamespace(
+        open_lyrics_timing_project=lambda _path: None,
+        open_subtitle_render_project=dispatched.append,
+    )
+    KrokHelperQtApp.open_project_file(dispatcher, project_path)
+    assert dispatched == [project_path]
+
+
 def test_subtitle_render_success_prompts_for_post_export_action(
     qapp, monkeypatch, tmp_path: Path
 ) -> None:

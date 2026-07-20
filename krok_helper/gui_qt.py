@@ -2779,6 +2779,21 @@ class KrokHelperQtApp(QMainWindow):
             return None
         return f"{core} · 未保存" if dirty else core
 
+    def open_project_file(self, project_path: Path) -> None:
+        """Open a project path received from the command line or Windows shell."""
+        suffix = project_path.suffix.lower()
+        if suffix == ".sug":
+            self.open_lyrics_timing_project(project_path)
+            return
+        if suffix == ".yurika":
+            self.open_subtitle_render_project(project_path)
+            return
+        QMessageBox.critical(
+            self,
+            APP_TITLE,
+            f"不支持的项目文件：\n{project_path}\n\n支持 .sug 和 .yurika 项目。",
+        )
+
     def open_lyrics_timing_project(self, project_path: Path) -> None:
         project_path = project_path.expanduser()
         if project_path.suffix.lower() != ".sug":
@@ -2795,6 +2810,29 @@ class KrokHelperQtApp(QMainWindow):
 
         self._show_module(WORKFLOW_LYRICS_TIMING)
         lyrics_timing_page.open_initial_project(str(project_path))
+
+    def open_subtitle_render_project(self, project_path: Path) -> None:
+        project_path = project_path.expanduser()
+        if project_path.suffix.lower() != ".yurika":
+            QMessageBox.critical(self, APP_TITLE, f"不支持的项目文件:\n{project_path}")
+            return
+        if not project_path.is_file():
+            QMessageBox.critical(self, APP_TITLE, f"项目文件不存在:\n{project_path}")
+            return
+
+        subtitle_render_page = getattr(self, "subtitle_render_page", None)
+        if subtitle_render_page is None or not hasattr(
+            subtitle_render_page, "open_initial_project"
+        ):
+            QMessageBox.critical(
+                self,
+                APP_TITLE,
+                "字幕渲染模块尚未准备好，无法打开 .yurika 项目。",
+            )
+            return
+
+        self._show_module(WORKFLOW_SUBTITLE_RENDER)
+        subtitle_render_page.open_initial_project(project_path)
 
     def _sync_page_stack_margins(self, module_id: str) -> None:
         layout = getattr(self, "_page_stack_container_layout", None)
