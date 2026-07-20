@@ -185,8 +185,9 @@ multiprocessing spawn 冒烟；完整测试基线为 `916 passed, 50 skipped`。
 ### 关键约束
 
 - **引擎选型已定**：QPainter 离屏 + ffmpeg rawvideo pipe，不改成 ASS/libass 主路径。
-- GPU 属于新增的 Windows 可选后端，不推翻上条约束；未达到 GPU 文档验收门槛前，
-  不得恢复/默认开启 native 产品路径，CPU QPainter 必须永久保留为 oracle 与 fallback。
+- GPU 属于新增的 Windows 可选后端，不推翻上条约束；Windows 交互会话默认使用 G5
+  shared-memory/QImage 预览并默认启用 GPU 字幕导出。G6 DirectComposition 已按用户决定停止且产品
+  入口硬关闭，后续不得继续或重新开放；CPU QPainter 必须永久保留为 oracle 与 fallback。
 - **不要改 SUG submodule 源码**：优先直接消费 SUG `Project`/`.sug`；`.lrc` 仅为兼容入口。
 - **只输出 MP4、只支持 60/120fps**；不做 30fps 原样输出、AVI 或 ARGB/透明 PNG 序列。
 - **不支持假名独立字体族**；假名沿用日文字体，英数字体仍可独立。

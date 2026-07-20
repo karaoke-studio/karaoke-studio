@@ -1,10 +1,10 @@
 # 字幕渲染 GPU 后端：NicoKaraMaker3 逆向结论与实施计划
 
-> 状态：G0～G5 已完成；G6 DirectComposition 原生预览首批已完成，仍为实验/默认关闭；G7 render-core 性能专项
+> 状态：G0～G5 已完成，Windows 交互会话默认使用 G5；G6 DirectComposition 已停止且产品入口硬关闭；G7 render-core 性能专项
 > 第 1～3 项（发光行级化、scratch 常驻化、导出流水线化）已完成并达标，第 4 项预览质量档位待产品排期
 > 最后更新：2026-07-20  
 > 逆向基准：NicoKaraMaker3 10.74.80.0 x64  
-> 产品基线：Python QPainter 仍是唯一正式字幕渲染路径；本文不改变当前产品开关
+> 产品基线：Windows 默认启用 G5 shared-memory/QImage 预览与 GPU 字幕导出，Python QPainter 永久作为 oracle 与 fallback
 
 本文用于把 2026-07-18～2026-07-19 对 NicoKaraMaker3（下称 N3）GPU
 预览/导出管线的逆向结论，以及 Karaoke Studio 后续 C++ Direct2D 后端的实施方法持久化。
@@ -30,11 +30,13 @@
 - CPU QPainter 永久保留为正确性 oracle、无 GPU 环境 fallback 和 macOS 正式路径。
 - 第一阶段只做“透明 GPU 字幕层 + CPU 回读到已有 shared-memory ring”，验证收益后才做
   D3D11 shared texture / 原生 SwapChain 零回读预览。
-- 正式产品默认不开启 GPU；只有达到本文验收门槛并完成显卡矩阵验证后，才讨论默认开关。
+- Windows 交互会话默认开启稳定的 G5 shared-memory/QImage GPU 预览与 GPU 字幕导出；G6 DirectComposition
+  不再继续，`gpu_native_preview_enabled()` 硬返回 `False`，旧环境变量也不能进入 G6。
+  `KROK_SUBTITLE_GPU_PREVIEW=0` 可关闭 G5，能力检查或运行失败时自动回退 Painter。
 
 ### 0.2 当前仍未完成的事情
 
-- G6 原生预览尚未默认启用，也未替代 G5 的 shared-memory/QImage 回读 fallback；
+- G6 原生预览已停止且硬关闭；后续预览优化只在 G5/Painter 路径进行；
 - 尚未完成 AMD/Intel、多显示器/DPR 切换、真实 device-removed 与 30 分钟视频播放矩阵；
 - G7 第 4 项预览质量档位（0.25/0.5/1.0 预览缩放）尚未实施，待产品侧确认交互后排期；
   第 1～3 项已完成：4K utopia+发光+ruby render mean 23.87ms→2.74ms（60.3fps），4K GPU
@@ -589,8 +591,7 @@ PyQt/native HWND、Qt Multimedia、统一视频时钟和 teardown，不是 Direc
 首批实现采用 **sidecar-owned DirectComposition child HWND**：Qt viewport 只提供父 HWND 与物理几何，
 Direct2D frame target 通过同一 D3D11 device GPU→GPU copy 到 premultiplied composition swap chain，
 不经过 staging texture、shared memory 或 QImage。现有统一播放器/音频时钟仍是唯一时间源，Python 每个
-tick 只提交最新 `t_ms`。使用 `KROK_SUBTITLE_GPU_NATIVE_PREVIEW=1` 显式启用；GPU 产品开关和该环境
-变量均未开启时，正式路径不变。
+tick 只提交最新 `t_ms`。本节保留历史实现记录；产品入口现已硬关闭，环境变量不能重新启用 G6。
 
 首批验收覆盖：
 
@@ -819,7 +820,7 @@ GPU 与 CPU 不要求逐像素完全一致。报告至少包含：
 10. 运行 native smoke、相关 pytest 和 1000-frame 稳定性测试；
 11. 在本文 §11 更新日期、提交、测试结果、已知差异和下一刀。
 
-如果用户只说“继续 GPU 工作”但没有指定阶段，先复核最新性能数据；G0～G5 已完成，G6 共享纹理/原生预览仍是独立可选项目，当前因重场景和 4K/120fps 门槛未达标而保持默认关闭。
+如果用户只说“继续 GPU 工作”但没有指定阶段，先复核最新性能数据；G0～G5 已完成并默认使用 G5，G6 已停止且不得继续，后续只考虑 G5/Painter 与导出管线优化。
 
 ---
 
@@ -1619,8 +1620,8 @@ G5 产品接入与 Windows 分发链路至此具备可验收形态，开关仍�
   shared-memory slot 或 QImage；`gpu_preview_close` 显式销毁 visual、swap chain 和 child HWND。
 - Python `GpuAsyncSubtitleRenderer` 新增 G6 模式，仍维持单在途 + 单 pending latest-wins。Qt GUI 线程只解析
   viewport 父 HWND、scene 裁切后的物理几何与 DPR，worker 继续消费统一播放器/音频时钟给出的 `t_ms`。
-  native 帧通过 `frame_presented` 计数，Painter fallback 仍通过原有 `frame_ready(QImage)` 交付；实验入口为
-  `KROK_SUBTITLE_GPU_NATIVE_PREVIEW=1`，产品 GPU 开关仍默认关闭。
+  native 帧通过 `frame_presented` 计数，Painter fallback 仍通过原有 `frame_ready(QImage)` 交付；当时的
+  实验入口为 `KROK_SUBTITLE_GPU_NATIVE_PREVIEW=1`。该入口现已硬关闭，本段仅保留历史记录。
 - 自动门槛新增：协议能力、父子 HWND/尺寸/销毁、零 readback、无 shared-memory reader/QImage、resize、seek、
   style churn、GPU↔Painter teardown。`scripts/benchmark_gpu_preview_scheduler.py --native-preview` 可输出
   `render/present/readback/roundtrip`，并复用 `--kill-sidecar` 与慢帧自愈注入。
@@ -1702,3 +1703,11 @@ G6 首批架构与本机性能门槛已落地，仍不得默认开启。下一�
 - 排除了“把 glow scratch 常驻上限从 8 提到 64”的临时假设：同场景 render mean `18.67→22.06ms`，
   进程 RSS 增长约 `428→562MiB`，既变慢又增压，未保留该改动。`stress_gpu_preview_gui.py` 新增
   `--animation` 覆盖项，后续可在不改用户工程的情况下做 `project/none/.../utopia` 同场景 A/B。
+
+### 2026-07-20（第四十五批）：默认 G5，停止 G6
+
+- 经用户最终决定，Windows 交互会话默认使用稳定的 G5 shared-memory/QImage GPU 预览，并默认启用
+  GPU 字幕导出；两项旧配置分别执行一次版本迁移，之后仍尊重用户手动关闭。
+- G6 DirectComposition 不再继续，产品判定函数硬返回关闭；即使遗留环境中存在
+  `KROK_SUBTITLE_GPU_NATIVE_PREVIEW=1` 也不会进入 G6。
+- Painter 永久保留为无 GPU、能力检查失败和运行异常时的 fallback；离屏测试环境默认不开启 GPU。

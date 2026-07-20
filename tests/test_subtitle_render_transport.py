@@ -262,10 +262,14 @@ def test_native_preview_defaults_off_and_env_can_opt_in(monkeypatch):
     assert pa.native_preview_enabled() is False
 
 
-def test_gpu_preview_defaults_off_and_requires_separate_opt_in(monkeypatch):
+def test_gpu_preview_defaults_to_g5_on_interactive_windows(monkeypatch):
     from krok_helper.subtitle_render.frontend import preview_async as pa
 
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
     monkeypatch.delenv("KROK_SUBTITLE_GPU_PREVIEW", raising=False)
+    assert pa.gpu_preview_enabled() is (os.name == "nt")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     assert pa.gpu_preview_enabled() is False
 
     monkeypatch.setenv("KROK_SUBTITLE_GPU_PREVIEW", "1")
@@ -275,17 +279,31 @@ def test_gpu_preview_defaults_off_and_requires_separate_opt_in(monkeypatch):
     assert pa.gpu_preview_enabled() is False
 
 
-def test_gpu_native_preview_defaults_off_and_requires_windows_opt_in(monkeypatch):
+def test_gpu_native_preview_is_hard_disabled(monkeypatch):
     from krok_helper.subtitle_render.frontend import preview_async as pa
 
     monkeypatch.delenv("KROK_SUBTITLE_GPU_NATIVE_PREVIEW", raising=False)
     assert pa.gpu_native_preview_enabled() is False
 
     monkeypatch.setenv("KROK_SUBTITLE_GPU_NATIVE_PREVIEW", "1")
-    assert pa.gpu_native_preview_enabled() is (os.name == "nt")
+    assert pa.gpu_native_preview_enabled() is False
 
     monkeypatch.setenv("KROK_SUBTITLE_GPU_NATIVE_PREVIEW", "0")
     assert pa.gpu_native_preview_enabled() is False
+
+
+def test_gpu_renderer_never_enters_g6_even_with_legacy_env_opt_in(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend.preview_async import (
+        GpuAsyncSubtitleRenderer,
+    )
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_NATIVE_PREVIEW", "1")
+    renderer = GpuAsyncSubtitleRenderer(320, 180)
+    try:
+        assert renderer.uses_native_preview is False
+    finally:
+        renderer.stop()
+
 
 def test_async_preview_renderer_stops_qthread(qapp):
     from krok_helper.subtitle_render.frontend.preview_async import AsyncSubtitleRenderer

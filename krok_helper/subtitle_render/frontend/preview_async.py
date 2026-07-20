@@ -68,14 +68,21 @@ def native_preview_enabled() -> bool:
     return _env_enabled("KROK_SUBTITLE_NATIVE_RENDER", "0")
 
 
+def _gpu_preview_default_enabled() -> bool:
+    """Enable G5 by default only for interactive Windows sessions."""
+    qpa_platform = os.environ.get("QT_QPA_PLATFORM", "").strip().lower()
+    return os.name == "nt" and qpa_platform not in {"offscreen", "minimal"}
+
+
 def gpu_preview_enabled() -> bool:
-    """G2 developer opt-in; never enabled by product settings or by default."""
-    return _env_enabled("KROK_SUBTITLE_GPU_PREVIEW", "0")
+    """Enable the stable G5 shared-memory preview by default on Windows."""
+    default = "1" if _gpu_preview_default_enabled() else "0"
+    return _env_enabled("KROK_SUBTITLE_GPU_PREVIEW", default)
 
 
 def gpu_native_preview_enabled() -> bool:
-    """G6 developer opt-in for zero-readback DirectComposition preview."""
-    return os.name == "nt" and _env_enabled("KROK_SUBTITLE_GPU_NATIVE_PREVIEW", "0")
+    """G6 DirectComposition is retired from the product path."""
+    return False
 
 
 def native_preview_timestamps(

@@ -30,6 +30,7 @@ from datetime import datetime
 import hashlib
 import logging
 from math import isfinite
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -140,6 +141,7 @@ from krok_helper.subtitle_render.frontend.playback import (
     unified_player_enabled,
 )
 from krok_helper.subtitle_render.frontend.preview_view import PreviewPanel, TransportBar
+from krok_helper.subtitle_render.frontend.preview_async import gpu_preview_enabled
 from krok_helper.subtitle_render.frontend.property_panel import (
     PropertyPanel,
     ScreenSettings,
@@ -238,6 +240,8 @@ EXPORT_DIR_CUSTOM = "custom"
 AUTO_SAVE_DEBOUNCE_MS = 2_000
 DEFAULT_AUTO_SAVE_INTERVAL_MINUTES = 5
 AUTO_SAVE_THREAD_WAIT_MS = 3_000
+GPU_PREVIEW_DEFAULT_VERSION = 2
+GPU_EXPORT_DEFAULT_VERSION = 1
 DEFAULT_PROJECT_BACKUP_COUNT = 5
 DISCARDED_BACKUP_RETENTION_DAYS = 7
 RENDER_WORKER_OPTIONS = (0, 4, 8, 12, 16)
@@ -2159,15 +2163,37 @@ class SubtitleRenderWindow(QWidget):
             workers_idx = self._export_render_workers_combo.findData(render_workers)
             if workers_idx >= 0:
                 self._export_render_workers_combo.setCurrentIndex(workers_idx)
-        gpu_preview_enabled = sys.platform == "win32" and bool(
-            output.get("gpu_preview_enabled", False)
-        )
-        gpu_export_enabled = sys.platform == "win32" and bool(
-            output.get("gpu_export_enabled", False)
-        )
-        self._gpu_preview_check.setChecked(gpu_preview_enabled)
-        self._gpu_export_check.setChecked(gpu_export_enabled)
-        self._preview_panel.set_gpu_preview_enabled(gpu_preview_enabled)
+        try:
+            gpu_default_version = int(
+                output.get("gpu_preview_default_version", 0) or 0
+            )
+        except (TypeError, ValueError):
+            gpu_default_version = 0
+        gpu_env_override = os.environ.get("KROK_SUBTITLE_GPU_PREVIEW")
+        if gpu_env_override is not None or gpu_default_version < GPU_PREVIEW_DEFAULT_VERSION:
+            gpu_preview_on = gpu_preview_enabled()
+        else:
+            gpu_preview_on = sys.platform == "win32" and bool(
+                output.get("gpu_preview_enabled", True)
+            )
+        try:
+            gpu_export_default_version = int(
+                output.get("gpu_export_default_version", 0) or 0
+            )
+        except (TypeError, ValueError):
+            gpu_export_default_version = 0
+        if gpu_export_default_version < GPU_EXPORT_DEFAULT_VERSION:
+            gpu_export_enabled = sys.platform == "win32"
+        else:
+            gpu_export_enabled = sys.platform == "win32" and bool(
+                output.get("gpu_export_enabled", True)
+            )
+        # GPU preferences are local application settings and are intentionally
+        # absent from project files. Loading a project must not reset them.
+        if not self._loading_project:
+            self._gpu_preview_check.setChecked(gpu_preview_on)
+            self._preview_panel.set_gpu_preview_enabled(gpu_preview_on)
+            self._gpu_export_check.setChecked(gpu_export_enabled)
         if self._loading_project:
             # Project output names are authoritative.  Forget the previous
             # project's auto-generated name before its media starts loading.
@@ -3043,14 +3069,14 @@ class SubtitleRenderWindow(QWidget):
         self._export_native_check.setEnabled(False)
         self._export_native_check.setVisible(False)
         self._export_native_check.setToolTip("native 字幕渲染器暂时停用。")
-        self._gpu_preview_check = CheckBox("实验：使用 GPU 渲染字幕预览")
-        self._gpu_preview_check.setChecked(False)
+        self._gpu_preview_check = CheckBox("使用 GPU 渲染字幕预览")
+        self._gpu_preview_check.setChecked(gpu_preview_enabled())
         self._gpu_preview_check.setVisible(sys.platform == "win32")
         self._gpu_preview_check.setToolTip(
-            "仅加速字幕透明层，不改变视频解码；不可用或失败时自动回退 Painter。"
+            "使用稳定的 G5 shared-memory/QImage 路径加速字幕透明层；不可用或失败时自动回退 Painter。"
         )
-        self._gpu_export_check = CheckBox("实验：使用 GPU 渲染字幕导出")
-        self._gpu_export_check.setChecked(False)
+        self._gpu_export_check = CheckBox("使用 GPU 渲染字幕导出")
+        self._gpu_export_check.setChecked(sys.platform == "win32")
         self._gpu_export_check.setVisible(sys.platform == "win32")
         self._gpu_export_check.setToolTip(
             "仅用 Direct2D 渲染字幕条带，仍由当前 ffmpeg 编码器输出；"
@@ -5886,9 +5912,11 @@ class SubtitleRenderWindow(QWidget):
             output["gpu_preview_enabled"] = bool(
                 self._gpu_preview_check.isChecked()
             )
+            output["gpu_preview_default_version"] = GPU_PREVIEW_DEFAULT_VERSION
             output["gpu_export_enabled"] = bool(
                 self._gpu_export_check.isChecked()
             )
+            output["gpu_export_default_version"] = GPU_EXPORT_DEFAULT_VERSION
             output["directory_mode"] = self._export_dir_mode
             output["custom_directory"] = self._export_custom_dir
             output["render_workers"] = int(
