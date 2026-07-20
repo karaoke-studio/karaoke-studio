@@ -1329,6 +1329,16 @@ def _format_eta_seconds(seconds: float) -> str:
     return f"{total} 秒"
 
 
+def _format_elapsed_seconds(seconds: float) -> str:
+    """Format a completed export duration with minutes and seconds."""
+    total = max(int(round(seconds)), 0)
+    hours, remainder = divmod(total, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours} 小时 {minutes} 分 {seconds} 秒"
+    return f"{minutes} 分 {seconds} 秒"
+
+
 def _format_warning_lines(warnings: list) -> str:
     """把余白警告压成「第 1、3 行」式的短文案，最多点名 4 行。"""
     numbers = [str(w.line_index + 1) for w in warnings[:4]]
@@ -6558,6 +6568,12 @@ class SubtitleRenderWindow(QWidget):
 
     def _finish_render_success(self, output_path: Path) -> None:
         self._stop_export_preview_polling()
+        elapsed = (
+            time.monotonic() - self._export_started_monotonic
+            if self._export_started_monotonic > 0
+            else 0.0
+        )
+        elapsed_text = _format_elapsed_seconds(elapsed)
         self._export_eta_label.setText("已完成")
         self._export_progress.setRange(0, 1)
         self._export_progress.setValue(1)
@@ -6568,7 +6584,11 @@ class SubtitleRenderWindow(QWidget):
         choice = fluent_choice(
             self,
             "视频导出完成",
-            f"视频已成功导出：\n{output_path}\n\n是否自动进入下一步？",
+            (
+                f"视频已成功导出：\n{output_path}"
+                f"\n\n本次导出耗时：{elapsed_text}"
+                "\n\n是否自动进入下一步？"
+            ),
             ("打开文件夹", "进入下一步", "取消"),
             default=1,
         )

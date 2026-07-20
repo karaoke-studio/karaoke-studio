@@ -145,6 +145,11 @@ def test_subtitle_render_success_prompts_for_post_export_action(
         "krok_helper.subtitle_render.frontend.main_window.play_completion_sound",
         lambda: sounds.append(True),
     )
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.main_window.time",
+        SimpleNamespace(monotonic=lambda: 185.0),
+    )
+    window._export_started_monotonic = 60.0
 
     window._finish_render_success(output)
     window._finish_render_success(output)
@@ -158,6 +163,7 @@ def test_subtitle_render_success_prompts_for_post_export_action(
     assert args[0] is window
     assert args[1] == "视频导出完成"
     assert str(output) in args[2]
+    assert "本次导出耗时：2 分 5 秒" in args[2]
     assert args[3] == ("打开文件夹", "进入下一步", "取消")
     assert kwargs == {"default": 1}
 
