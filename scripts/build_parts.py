@@ -4,8 +4,9 @@
 ``dist/windows/``：
 
 * ``KaraokeStudio-windows-app.zip``（+ ``.sha256``）——
-  EXE + Updater.exe + ``_internal/krok_helper`` + ``_internal/strange_uta_game``，
-  每次发版都变化，日常 bugfix 用户只需下载这个（约 35 MB）。
+  EXE + Updater.exe + GPU sidecar + ``_internal/krok_helper`` +
+  ``_internal/strange_uta_game``，
+  每次发版都变化，日常 bugfix 用户只需下载这个（约 65 MB）。
 * ``KaraokeStudio-windows-runtime.zip``（+ ``.sha256``）——
   ``_internal/`` 其余全部内容（约 150 MB），依赖不变时跨版本复用同一份 zip，
   保证内容哈希稳定、老用户不重复下载。
@@ -63,6 +64,7 @@ DIST_ROOT = ROOT / "dist" / "windows"
 APP_DIR_NAME = "Karaoke Studio"
 APP_EXE_NAME = "Karaoke Studio.exe"
 UPDATER_EXE_NAME = "Updater.exe"
+NATIVE_RENDERER_EXE_NAME = "krok_subtitle_renderer.exe"
 ASSET_BASE = "KaraokeStudio-windows"
 MANIFEST_SCHEMA = 1
 LOCAL_MANIFEST_FILENAME = ".installed_manifest.json"
@@ -81,6 +83,7 @@ INTERNAL_NON_RUNTIME_NAMES = {
 APP_TARGETS = [
     APP_EXE_NAME,
     UPDATER_EXE_NAME,
+    NATIVE_RENDERER_EXE_NAME,
     "_internal/krok_helper",
     "_internal/strange_uta_game",
 ]
@@ -218,14 +221,16 @@ def compute_runtime_targets(app_dir: Path) -> List[str]:
 
 def pack_part_zip(zip_path: Path, app_dir: Path, targets: List[str]) -> None:
     """把 app 根目录下 targets 列出的内容打成一个 zip（arcname = 相对 app 根路径）。"""
+    missing = [target for target in targets if not (app_dir / target).exists()]
+    if missing:
+        raise SystemExit(
+            "app part 缺少必需 target：" + "、".join(missing)
+        )
     if zip_path.exists():
         zip_path.unlink()
     with zipfile.ZipFile(str(zip_path), "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
         for target in targets:
             src = app_dir / target
-            if not src.exists():
-                print(f"  ! 跳过不存在的 target: {target}")
-                continue
             if src.is_file():
                 zf.write(src, arcname=target)
             else:

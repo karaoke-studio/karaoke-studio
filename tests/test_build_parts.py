@@ -60,6 +60,7 @@ def _make_app_dir(tmp_path: Path) -> Path:
     (app / "_internal" / "PyQt6").mkdir(parents=True)
     (app / "Karaoke Studio.exe").write_bytes(b"EXE")
     (app / "Updater.exe").write_bytes(b"UPD")
+    (app / "krok_subtitle_renderer.exe").write_bytes(b"GPU")
     (app / "_internal" / "base_library.zip").write_bytes(b"LIB")
     (app / "_internal" / "PyQt6" / "Qt6Core.dll").write_bytes(b"QT")
     (app / "_internal" / "krok_helper" / "assets" / "logo.ico").write_bytes(b"ICO")
@@ -86,8 +87,21 @@ def test_pack_part_zip_uses_app_relative_arcnames(tmp_path) -> None:
         names = set(zf.namelist())
     assert "Karaoke Studio.exe" in names
     assert "Updater.exe" in names
+    assert "krok_subtitle_renderer.exe" in names
     assert "_internal/krok_helper/assets/logo.ico" in names
     assert not any(n.startswith("Karaoke Studio/") for n in names)
+
+
+def test_pack_app_part_rejects_missing_native_renderer(tmp_path) -> None:
+    app = _make_app_dir(tmp_path)
+    (app / "krok_subtitle_renderer.exe").unlink()
+
+    with pytest.raises(SystemExit, match="krok_subtitle_renderer.exe"):
+        build_parts.pack_part_zip(
+            tmp_path / "app-part.zip",
+            app,
+            build_parts.APP_TARGETS,
+        )
 
 
 def test_pack_full_zip_keeps_single_top_dir(tmp_path) -> None:

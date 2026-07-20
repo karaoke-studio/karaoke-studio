@@ -16,7 +16,8 @@
    manifest 不可用或 part 失败时自动回退全量 zip。
 6. 替换前会备份，失败则回滚；成功后重启 `Karaoke Studio.exe`。
 
-更新器只管理安装目录中的 `Karaoke Studio.exe`、`Updater.exe` 与 `_internal/`。
+更新器只管理安装目录中的 `Karaoke Studio.exe`、`Updater.exe`、
+`krok_subtitle_renderer.exe` 与 `_internal/`。
 用户设置和工作文件不在更新范围内。日志位于
 `%TEMP%\KaraokeStudioUpdater\updater.log`。
 
@@ -91,7 +92,7 @@ manifest 协议。
 | `KaraokeStudio-windows.zip` | 完整 onedir 包，全量兜底；内含出厂 `.installed_manifest.json` |
 | `KaraokeStudio-windows.zip.sha256` | 全量 zip 校验 |
 | `KaraokeStudio-windows.json` | schema 1 manifest；名字由存量 Updater 从 zip 名派生，不可改 |
-| `KaraokeStudio-windows-app.zip` | `Karaoke Studio.exe`、`Updater.exe`、`_internal/krok_helper`、`_internal/strange_uta_game` |
+| `KaraokeStudio-windows-app.zip` | `Karaoke Studio.exe`、`Updater.exe`、`krok_subtitle_renderer.exe`、`_internal/krok_helper`、`_internal/strange_uta_game` |
 | `KaraokeStudio-windows-app.zip.sha256` | app part 文件校验 |
 | `KaraokeStudio-windows-runtime.zip` | `_internal/` 中除应用代码和本地清单外的运行库 |
 | `KaraokeStudio-windows-runtime.zip.sha256` | runtime part 文件校验 |

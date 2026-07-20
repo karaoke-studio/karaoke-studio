@@ -187,7 +187,7 @@ git push origin vX.Y.Z[.N]
   |---|---|
   | `KaraokeStudio-windows.zip` (+`.sha256`) | 全量包（含出厂 `_internal/.installed_manifest.json`），旧客户端全量兜底路径 |
   | `KaraokeStudio-windows.json` | 增量清单（schema=1）。**文件名不可改**：存量客户端按 `zip 名 → .json` 派生 |
-  | `KaraokeStudio-windows-app.zip` (+`.sha256`) | EXE + Updater + `_internal/{krok_helper,strange_uta_game}`，每版必变（约 35 MB） |
+  | `KaraokeStudio-windows-app.zip` (+`.sha256`) | EXE + Updater + GPU sidecar + `_internal/{krok_helper,strange_uta_game}`，每版必变（约 65 MB） |
   | `KaraokeStudio-windows-runtime.zip` (+`.sha256`) | 其余 `_internal/`，依赖未变时跨版本复用同一文件（约 60 MB） |
 
 - **Build macOS**：跑 `scripts/build_macos.command` 后用 `ditto` 打包成 `KaraokeStudio-macos.zip`（无增量）。
@@ -227,7 +227,7 @@ gh release view vX.Y.Z[.N] --json body --jq .body   # 验证一下
 1. 打开全局设置 → 「应用更新」，关于页应显示旧版本号。
 2. 点「检查更新」，弹窗应显示 §8 覆盖好的中文 release notes（跨版本升级时聚合展示中间所有版本）。
 3. 点「立即更新」，`Updater.exe` 接管：
-   - 本地有 `.installed_manifest.json` 且仅 app part 变化 → 只下载 `-app.zip`（约 35 MB）；
+   - 本地有 `.installed_manifest.json` 且仅 app part 变化 → 只下载 `-app.zip`（约 65 MB）；
    - 本地无清单（首次增量）→ 下载 app + runtime 两个 part 并写入清单；
    - manifest 拉取失败 → 自动回退全量 zip。
 4. 重启后关于页应显示新版本号。
