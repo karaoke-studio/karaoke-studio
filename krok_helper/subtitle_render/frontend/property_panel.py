@@ -199,6 +199,7 @@ _CUSTOM_SCHEME_PREFIX = "custom:"
 _PRESET_NO_GROUP = "\x00ungrouped"
 _COMPACT_CONTROL_HEIGHT = 32
 _FONT_SIZE_MAX_PX = 4096
+_LAYOUT_SIZE_MAX_PX = 16_384
 _FILL_MODE_ICON_DIR = (
     Path(__file__).resolve().parents[2] / "assets" / "subtitle_render" / "fill_modes"
 )
@@ -4664,7 +4665,9 @@ class PropertyPanel(QWidget):
         fields_layout.setContentsMargins(0, 0, 0, 0)
         fields_layout.setSpacing(8)
 
-        self._letter_spacing_spin = _spin(-120, 120, suffix=" px")
+        self._letter_spacing_spin = _spin(
+            -_LAYOUT_SIZE_MAX_PX, _LAYOUT_SIZE_MAX_PX, suffix=" px"
+        )
         self._letter_spacing_spin.setFixedWidth(120)
         self._letter_spacing_spin.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
@@ -4695,13 +4698,17 @@ class PropertyPanel(QWidget):
         # 三个控件都很窄（数值框 / 短下拉），列宽阈值放低让常规面板宽度下单行放下。
         grid = _ResponsiveFieldGrid(section, min_column_width=90, max_columns=3)
 
-        self._ruby_gap_spin = _spin(-40, 40, suffix=" px")
+        self._ruby_gap_spin = _spin(
+            -_LAYOUT_SIZE_MAX_PX, _LAYOUT_SIZE_MAX_PX, suffix=" px"
+        )
         self._ruby_gap_spin.valueChanged.connect(
             lambda value: self._update_layout_field(ruby_gap_px=value)
         )
         grid.add_field("与正文间距", self._ruby_gap_spin)
 
-        self._ruby_interval_spin = _spin(-40, 40, suffix=" px")
+        self._ruby_interval_spin = _spin(
+            -_LAYOUT_SIZE_MAX_PX, _LAYOUT_SIZE_MAX_PX, suffix=" px"
+        )
         self._ruby_interval_spin.setToolTip(
             "注音字符之间的最小间距（N3 ルビ間隔），可为负让注音字符收紧。\n"
             "注意这是「下限」：注音比正文窄、均等分布摊出的间距大于此值时，"
@@ -5983,7 +5990,9 @@ class PropertyPanel(QWidget):
             "上下配置", self._line_position_seg
         )
 
-        self._horizontal_margin_spin = _spin(0, 800, suffix=" px")
+        self._horizontal_margin_spin = _spin(
+            0, _LAYOUT_SIZE_MAX_PX, suffix=" px"
+        )
         # 三位数 + 单位足够；必须改回 Fixed 策略——_compact_control 的
         # Ignored 策略在带对齐的网格单元里会让 sizeHint 归零挤扁控件
         self._horizontal_margin_spin.setFixedWidth(120)
@@ -6031,7 +6040,7 @@ class PropertyPanel(QWidget):
         # QScrollArea 会缓存过大的最小宽度，320px 窄面板将产生横向溢出。
         self._layout_schematic.setFixedWidth(round(150 * 16 / 9))
 
-        self._line_margin_spin = _spin(0, 400, suffix=" px")
+        self._line_margin_spin = _spin(0, _LAYOUT_SIZE_MAX_PX, suffix=" px")
         self._line_margin_spin.setFixedWidth(120)
         self._line_margin_spin.setSizePolicy(
             QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed
@@ -6085,7 +6094,9 @@ class PropertyPanel(QWidget):
         """
         section, layout = _section("垂直与方向")
 
-        self._line_gap_spin = _spin(-400, 400, suffix=" px")
+        self._line_gap_spin = _spin(
+            -_LAYOUT_SIZE_MAX_PX, _LAYOUT_SIZE_MAX_PX, suffix=" px"
+        )
         self._line_gap_spin.setFixedWidth(120)
         # _spin 默认水平 Ignored，会被 HBox 压到最小宽把「px」单位裁掉。
         self._line_gap_spin.setSizePolicy(

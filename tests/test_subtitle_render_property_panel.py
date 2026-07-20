@@ -2843,6 +2843,27 @@ def test_property_panel_layout_controls_emit_style(qapp):
     assert emitted[-1].lower_line_right_margin_px == 31
 
 
+def test_property_panel_preserves_high_resolution_n3_layout_values(qapp):
+    panel = PropertyPanel()
+    style = Style(
+        line_y_margin_px=1_010,
+        line_gap_px=-620,
+        horizontal_margin_px=1_234,
+        letter_spacing_px=-240,
+        ruby_interval_px=300,
+        ruby_gap_px=-180,
+    )
+
+    panel.set_style(style)
+
+    assert panel._line_margin_spin.value() == 1_010
+    assert panel._line_gap_spin.value() == -620
+    assert panel._horizontal_margin_spin.value() == 1_234
+    assert panel._letter_spacing_spin.value() == -240
+    assert panel._ruby_interval_spin.value() == 300
+    assert panel._ruby_gap_spin.value() == -180
+
+
 def test_property_panel_line_layout_directly_controls_rows(qapp):
     panel = PropertyPanel()
     emitted: list[Style] = []
