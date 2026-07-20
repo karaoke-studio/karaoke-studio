@@ -3993,8 +3993,17 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 line->chars.begin(), line->chars.end(),
                 [&](const Impl::CachedChar &ch) { return tMs >= wipeEndMs(ch); }
             );
+        using UtopiaWipe = std::pair<D2D1_RECT_F, float>;
+        std::vector<UtopiaWipe> utopiaCharWipeCache(line->chars.size());
+        std::vector<bool> utopiaCharWipeReady(line->chars.size(), false);
         auto utopiaCharWipe = [&](std::size_t charIndex) {
             D2D1_RECT_F bounds{};
+            if (charIndex >= line->chars.size()) {
+                return UtopiaWipe{bounds, 0.0f};
+            }
+            if (utopiaCharWipeReady[charIndex]) {
+                return utopiaCharWipeCache[charIndex];
+            }
             std::size_t wipeIndex = charIndex;
             if (charIndex < line->chars.size()
                 && tMs > wipeEndMs(line->chars[charIndex])
@@ -4004,7 +4013,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
             ID2D1Geometry *geometry = charGeometryAt(charIndex);
             if (geometry == nullptr) {
-                return std::pair<D2D1_RECT_F, float>{bounds, 0.0f};
+                utopiaCharWipeReady[charIndex] = true;
+                utopiaCharWipeCache[charIndex] = UtopiaWipe{bounds, 0.0f};
+                return utopiaCharWipeCache[charIndex];
             }
             checkHr(
                 geometry->GetBounds(nullptr, &bounds),
@@ -4047,19 +4058,38 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     ? unclampedWipePositionAt(ch)
                     : wipePositionAt(ch);
             }
-            return std::pair<D2D1_RECT_F, float>{
+            utopiaCharWipeReady[charIndex] = true;
+            utopiaCharWipeCache[charIndex] = UtopiaWipe{
                 bounds,
                 left + std::max(right - left, 1.0f) * ratio
             };
+            return utopiaCharWipeCache[charIndex];
         };
+        std::vector<std::vector<UtopiaWipe>> utopiaRubyWipeCache;
+        std::vector<std::vector<bool>> utopiaRubyWipeReady;
+        utopiaRubyWipeCache.reserve(line->rubies.size());
+        utopiaRubyWipeReady.reserve(line->rubies.size());
+        for (const Impl::CachedRuby &ruby : line->rubies) {
+            utopiaRubyWipeCache.emplace_back(ruby.chars.size());
+            utopiaRubyWipeReady.emplace_back(ruby.chars.size(), false);
+        }
         auto utopiaRubyUnitWipe = [&](const Impl::CachedRuby &ruby,
                                       std::size_t rubyIndex,
                                       std::size_t unitIndex,
                                       const TextStyle &rubyStyle) {
             D2D1_RECT_F bounds{};
+            if (rubyIndex >= utopiaRubyWipeCache.size()
+                || unitIndex >= utopiaRubyWipeCache[rubyIndex].size()) {
+                return UtopiaWipe{bounds, 0.0f};
+            }
+            if (utopiaRubyWipeReady[rubyIndex][unitIndex]) {
+                return utopiaRubyWipeCache[rubyIndex][unitIndex];
+            }
             ID2D1Geometry *geometry = rubyGeometryAt(rubyIndex, unitIndex);
             if (geometry == nullptr || unitIndex >= ruby.chars.size()) {
-                return std::pair<D2D1_RECT_F, float>{bounds, 0.0f};
+                utopiaRubyWipeReady[rubyIndex][unitIndex] = true;
+                utopiaRubyWipeCache[rubyIndex][unitIndex] = UtopiaWipe{bounds, 0.0f};
+                return utopiaRubyWipeCache[rubyIndex][unitIndex];
             }
             checkHr(
                 geometry->GetBounds(nullptr, &bounds),
@@ -4081,10 +4111,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             } else if (tMs > wipeStartMs(unit)) {
                 ratio = wipePositionAt(unit);
             }
-            return std::pair<D2D1_RECT_F, float>{
+            utopiaRubyWipeReady[rubyIndex][unitIndex] = true;
+            utopiaRubyWipeCache[rubyIndex][unitIndex] = UtopiaWipe{
                 bounds,
                 left + std::max(right - left, 1.0f) * ratio
             };
+            return utopiaRubyWipeCache[rubyIndex][unitIndex];
         };
 
         const float geometryPad = std::max(style.strokeWidth + style.stroke2Width, 2.0f) + 4.0f;
@@ -4133,10 +4165,37 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     [&](const Impl::CachedChar &ch) { return tMs >= wipeEndMs(ch); }
                 );
         };
+        auto rubyWipePhaseAt = [&](const Impl::CachedRuby &ruby) {
+            if (ruby.chars.empty()) {
+                return N3WipePhase::Before;
+            }
+            const bool allBefore = std::all_of(
+                ruby.chars.begin(), ruby.chars.end(),
+                [&](const Impl::CachedChar &ch) { return tMs <= wipeStartMs(ch); }
+            );
+            if (allBefore) {
+                return N3WipePhase::Before;
+            }
+            return rubyWipeComplete(ruby)
+                ? N3WipePhase::After
+                : N3WipePhase::Wiping;
+        };
         auto rubyUnitWipeComplete = [&](const Impl::CachedRuby &ruby,
                                         std::size_t unitIndex) {
             return unitIndex < ruby.chars.size()
                 && tMs >= wipeEndMs(ruby.chars[unitIndex]);
+        };
+        auto rubyUnitWipePhaseAt = [&](const Impl::CachedRuby &ruby,
+                                       std::size_t unitIndex) {
+            if (unitIndex >= ruby.chars.size()) {
+                return N3WipePhase::Before;
+            }
+            const Impl::CachedChar &unit = ruby.chars[unitIndex];
+            return tMs <= wipeStartMs(unit)
+                ? N3WipePhase::Before
+                : (tMs >= wipeEndMs(unit)
+                    ? N3WipePhase::After
+                    : N3WipePhase::Wiping);
         };
         auto rubyPhaseVisible = [&](const Impl::CachedRuby &ruby,
                                     float edge, bool after) {
@@ -4320,7 +4379,6 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 line->rubies.begin(), line->rubies.end(),
                 [&](const Impl::CachedRuby &ruby) {
                     const int rubyIndex = static_cast<int>(&ruby - line->rubies.data());
-                    const float edge = rubyWipeEdgeAt(ruby);
                     const bool selected = (rubyOnly < 0 || rubyIndex == rubyOnly);
                     bool unitVisible = false;
                     if (unitOnly >= 0) {
@@ -4341,9 +4399,18 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             }
                         }
                     }
+                    N3WipePhase phase = rubyWipePhaseAt(ruby);
+                    if (useUtopiaTransition && unitOnly >= 0
+                        && unitOnly < static_cast<int>(ruby.chars.size())) {
+                        phase = rubyUnitWipePhaseAt(
+                            ruby, static_cast<std::size_t>(unitOnly)
+                        );
+                    }
                     return selected && unitVisible
                         && ruby.styleIndex == styleIndex
-                        && rubyPhaseVisible(ruby, edge, after);
+                        && (after
+                            ? phase != N3WipePhase::Before
+                            : phase != N3WipePhase::After);
                 }
             );
             if (rubyStyle.rubyDecorationKind != "glow"
@@ -4421,48 +4488,53 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     after ? rubyStyle.rubyAfterDecor : rubyStyle.rubyBeforeDecor
                 );
                 brush->SetOpacity(globalOpacity);
-                const float edge = rubyWipeEdgeAt(ruby);
-                const bool complete = useUtopiaTransition && unitOnly >= 0
-                    ? rubyUnitWipeComplete(
-                        ruby, static_cast<std::size_t>(unitOnly)
-                    )
-                    : rubyWipeComplete(ruby);
-                if (complete && !after) {
-                    continue;
+                D2D1_RECT_F phaseBounds = ruby.bounds;
+                float edge = rubyWipeEdgeAt(ruby);
+                N3WipePhase phase = rubyWipePhaseAt(ruby);
+                if (useUtopiaTransition && unitOnly >= 0
+                    && unitOnly < static_cast<int>(ruby.chars.size())) {
+                    const std::size_t unitIndex = static_cast<std::size_t>(unitOnly);
+                    phase = rubyUnitWipePhaseAt(ruby, unitIndex);
+                    const auto animated = utopiaRubyUnitWipe(
+                        ruby, rubyIndex, unitIndex, rubyStyle
+                    );
+                    phaseBounds = animated.first;
+                    edge = animated.second;
                 }
-                if (!complete && !rubyPhaseVisible(ruby, edge, after)) {
+                if ((phase == N3WipePhase::Before && after)
+                    || (phase == N3WipePhase::After && !after)) {
                     continue;
                 }
                 const D2D1_RECT_F clip = style.vertical
                     ? (after
                         ? D2D1::RectF(
-                            ruby.bounds.left - pad, ruby.bounds.top - pad,
-                            ruby.bounds.right + pad, edge
+                            phaseBounds.left - pad, phaseBounds.top - pad,
+                            phaseBounds.right + pad, edge
                         )
                         : D2D1::RectF(
-                            ruby.bounds.left - pad, edge,
-                            ruby.bounds.right + pad, ruby.bounds.bottom + pad
+                            phaseBounds.left - pad, edge,
+                            phaseBounds.right + pad, phaseBounds.bottom + pad
                         ))
                     : (rtl
                         ? (after
                             ? D2D1::RectF(
-                                edge, ruby.bounds.top - pad,
-                                ruby.bounds.right + pad, ruby.bounds.bottom + pad
+                                edge, phaseBounds.top - pad,
+                                phaseBounds.right + pad, phaseBounds.bottom + pad
                             )
                             : D2D1::RectF(
-                                ruby.bounds.left - pad, ruby.bounds.top - pad,
-                                edge, ruby.bounds.bottom + pad
+                                phaseBounds.left - pad, phaseBounds.top - pad,
+                                edge, phaseBounds.bottom + pad
                             ))
                         : (after
                             ? D2D1::RectF(
-                                ruby.bounds.left - pad, ruby.bounds.top - pad,
-                                edge, ruby.bounds.bottom + pad
+                                phaseBounds.left - pad, phaseBounds.top - pad,
+                                edge, phaseBounds.bottom + pad
                             )
                             : D2D1::RectF(
-                                edge, ruby.bounds.top - pad,
-                                ruby.bounds.right + pad, ruby.bounds.bottom + pad
+                                edge, phaseBounds.top - pad,
+                                phaseBounds.right + pad, phaseBounds.bottom + pad
                             )));
-                if (!complete) {
+                if (phase == N3WipePhase::Wiping) {
                     context->PushAxisAlignedClip(
                         clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
@@ -4486,7 +4558,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         geometry.Get(), brush.Get(), sourceWidth
                     );
                 }
-                if (!complete) {
+                if (phase == N3WipePhase::Wiping) {
                     context->PopAxisAlignedClip();
                 }
             }
@@ -4590,15 +4662,19 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         if (!ch.geometry) {
                             return false;
                         }
-                        const bool complete = useUtopiaTransition
-                            && charWipeComplete(charIndex);
-                        return complete
-                            ? after
-                            : !(rtl
-                                ? ((after && wipeEdge >= ch.right)
-                                    || (!after && wipeEdge <= ch.left))
-                                : ((after && wipeEdge <= ch.left)
-                                    || (!after && wipeEdge >= ch.right)));
+                        if (useUtopiaTransition) {
+                            const N3WipePhase phase = wipePhaseAt(
+                                line->chars, charIndex
+                            );
+                            return after
+                                ? phase != N3WipePhase::Before
+                                : phase != N3WipePhase::After;
+                        }
+                        return !(rtl
+                            ? ((after && wipeEdge >= ch.right)
+                                || (!after && wipeEdge <= ch.left))
+                            : ((after && wipeEdge <= ch.left)
+                                || (!after && wipeEdge >= ch.right)));
                     }
                     if (charTransformedAt(charIndex)
                         || charGeometryAt(charIndex) == nullptr) {
@@ -4678,11 +4754,15 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 if (charOnly >= 0) {
                     // Per-character layer: draw the upright cached glyph and
                     // apply the animation matrix to the blurred result.
-                    const bool complete = useUtopiaTransition
-                        && charWipeComplete(charIndex);
+                    N3WipePhase phase = N3WipePhase::Wiping;
+                    if (useUtopiaTransition) {
+                        phase = wipePhaseAt(line->chars, charIndex);
+                    }
                     if (ch.geometry == nullptr
-                        || (complete && !after)
-                        || (!complete && (rtl
+                        || (useUtopiaTransition
+                            && ((phase == N3WipePhase::Before && after)
+                                || (phase == N3WipePhase::After && !after)))
+                        || (!useUtopiaTransition && (rtl
                             ? ((after && wipeEdge >= ch.right)
                                 || (!after && wipeEdge <= ch.left))
                             : ((after && wipeEdge <= ch.left)
@@ -4692,26 +4772,50 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     brush->SetOpacity(
                         globalOpacity * characterOpacityAt(charIndex)
                     );
-                    const D2D1_RECT_F clip = rtl
-                        ? (after
-                            ? D2D1::RectF(
-                                wipeEdge, line->bounds.top - pad,
-                                ch.right + pad, line->bounds.bottom + pad
-                            )
-                            : D2D1::RectF(
-                                ch.left - pad, line->bounds.top - pad,
-                                wipeEdge, line->bounds.bottom + pad
-                            ))
-                        : (after
-                            ? D2D1::RectF(
-                                ch.left - pad, line->bounds.top - pad,
-                                wipeEdge, line->bounds.bottom + pad
-                            )
-                            : D2D1::RectF(
-                                wipeEdge, line->bounds.top - pad,
-                                ch.right + pad, line->bounds.bottom + pad
-                            ));
-                    if (!complete && !mainWipeComplete) {
+                    D2D1_RECT_F clip{};
+                    bool needClip = false;
+                    if (useUtopiaTransition) {
+                        if (phase == N3WipePhase::Wiping) {
+                            const auto [animatedBounds, animatedEdge] =
+                                utopiaCharWipe(charIndex);
+                            clip = after
+                                ? D2D1::RectF(
+                                    animatedBounds.left - pad,
+                                    animatedBounds.top - pad,
+                                    animatedEdge,
+                                    animatedBounds.bottom + pad
+                                )
+                                : D2D1::RectF(
+                                    animatedEdge,
+                                    animatedBounds.top - pad,
+                                    animatedBounds.right + pad,
+                                    animatedBounds.bottom + pad
+                                );
+                            needClip = true;
+                        }
+                    } else if (!mainWipeComplete) {
+                        clip = rtl
+                            ? (after
+                                ? D2D1::RectF(
+                                    wipeEdge, line->bounds.top - pad,
+                                    ch.right + pad, line->bounds.bottom + pad
+                                )
+                                : D2D1::RectF(
+                                    ch.left - pad, line->bounds.top - pad,
+                                    wipeEdge, line->bounds.bottom + pad
+                                ))
+                            : (after
+                                ? D2D1::RectF(
+                                    ch.left - pad, line->bounds.top - pad,
+                                    wipeEdge, line->bounds.bottom + pad
+                                )
+                                : D2D1::RectF(
+                                    wipeEdge, line->bounds.top - pad,
+                                    ch.right + pad, line->bounds.bottom + pad
+                                ));
+                        needClip = true;
+                    }
+                    if (needClip) {
                         context->PushAxisAlignedClip(
                             clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                         );
@@ -4719,7 +4823,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     context->DrawGeometry(
                         ch.geometry.Get(), brush.Get(), sourceWidth
                     );
-                    if (!complete && !mainWipeComplete) {
+                    if (needClip) {
                         context->PopAxisAlignedClip();
                     }
                     continue;

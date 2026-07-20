@@ -5432,6 +5432,125 @@ def test_gpu_g3_ruby_uses_independent_before_and_after_glow_radii(monkeypatch) -
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_ruby_before_glow_keeps_full_leading_halo(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    transparent = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#00000000"),
+        stroke=PaintFill(mode="solid", color="#00000000"),
+        shadow=PaintFill(mode="solid", color="#00000000"),
+    )
+    before = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFFFFFF"),
+        stroke=PaintFill(mode="solid", color="#FF101010"),
+        shadow=PaintFill(mode="solid", color="#FF2040FF"),
+    )
+    after = replace(before, shadow=PaintFill(mode="solid", color="#FFFF2040"))
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("星", 1_000)],
+                end_ms=2_000,
+                display_start_override_ms=0,
+                display_end_override_ms=2_500,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="星",
+                reading="ほし",
+                reading_parts=["ほ", "し"],
+                reading_part_ms=[1_500],
+                pos_start_ms=1_000,
+                pos_end_ms=2_000,
+            )
+        ],
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_size_px=96,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        karaoke_colors=KaraokeColors(before=transparent, after=transparent),
+        ruby_font_family="Meiryo",
+        ruby_font_family_latin="Meiryo",
+        ruby_font_follow_main=False,
+        ruby_font_size_px=42,
+        ruby_stroke_width_px=2,
+        ruby_stroke2_enabled=False,
+        ruby_decoration_kind="glow",
+        ruby_glow_before_radius_px=12,
+        ruby_glow_after_radius_px=12,
+        ruby_glow_concentration_level=1,
+        ruby_karaoke_colors=KaraokeColors(before=before, after=after),
+        dual_line_layout=False,
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, (500,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=500, track=track)
+
+    def blue_profile(payload: bytes) -> tuple[int, int, int, int]:
+        xs: list[int] = []
+        alpha_mass = 0
+        for index in range(0, len(payload), 4):
+            red, green, blue, alpha = payload[index : index + 4]
+            if blue > red + 30 and blue > green + 15 and alpha > 0:
+                xs.append((index // 4) % 640)
+                alpha_mass += alpha
+        assert xs
+        return min(xs), max(xs), len(xs), alpha_mass
+
+    gpu_profile = blue_profile(gpu[0])
+    painter_profile = blue_profile(painter)
+    assert abs(gpu_profile[0] - painter_profile[0]) <= 8
+    assert abs(gpu_profile[1] - painter_profile[1]) <= 8
+    assert gpu_profile[2] >= painter_profile[2] * 0.85
+    assert gpu_profile[3] >= painter_profile[3] * 0.90
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_utopia_before_glow_uses_character_local_wipe_scope(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track, style = _g4_utopia_main_scene()
+    before = KaraokeColorState(
+        text=PaintFill(mode="solid", color="#FFFFFFFF"),
+        stroke=PaintFill(mode="solid", color="#FF101010"),
+        shadow=PaintFill(mode="solid", color="#FF2040FF"),
+    )
+    after = replace(before, shadow=PaintFill(mode="solid", color="#FFFF2040"))
+    style = replace(
+        style,
+        glow_before_radius_px=12,
+        glow_after_radius_px=12,
+        karaoke_colors=KaraokeColors(before=before, after=after),
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, (350,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=350, track=track)
+
+    def blue_bounds(payload: bytes) -> tuple[int, int, int, int]:
+        xs: list[int] = []
+        ys: list[int] = []
+        for index in range(0, len(payload), 4):
+            red, green, blue, alpha = payload[index : index + 4]
+            if blue > red + 30 and blue > green + 15 and alpha > 0:
+                pixel = index // 4
+                xs.append(pixel % 640)
+                ys.append(pixel // 640)
+        assert xs and ys
+        return min(xs), min(ys), max(xs), max(ys)
+
+    gpu_bounds = blue_bounds(gpu[0])
+    painter_bounds = blue_bounds(painter)
+    assert abs(gpu_bounds[0] - painter_bounds[0]) <= 8
+    assert abs(gpu_bounds[2] - painter_bounds[2]) <= 12
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g1_alignment_uses_visible_ink_bounds(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
