@@ -2768,6 +2768,45 @@ def test_dual_line_gap_uses_main_text_bounds_not_ruby_block(qapp):
     assert lower_main_top - upper_main_bottom == style.line_gap_px
 
 
+def test_n3_top_margin_anchors_main_box_without_ruby_height(qapp):
+    line = TimingLine(chars=[TimingChar(text="A", start_ms=0)], end_ms=1000)
+    ruby = RubyAnnotation(
+        kanji="A",
+        reading="WWWW",
+        pos_start_ms=0,
+        pos_end_ms=1000,
+    )
+    display = DisplayLine(
+        line=line,
+        lane=0,
+        display_start_ms=0,
+        display_end_ms=1000,
+    )
+    style = Style(
+        layout_semantics="n3_1074",
+        dual_line_layout=False,
+        line_y_position="top",
+        line_y_margin_px=47,
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=64,
+        stroke_width_px=6,
+        ruby_font_family="Arial",
+        ruby_font_family_latin="Arial",
+        ruby_font_size_px=42,
+        ruby_gap_px=9,
+    )
+
+    without_ruby = _resolve_display_baselines(
+        360, TimingTrack(lines=[line]), [display], style
+    )
+    with_ruby = _resolve_display_baselines(
+        360, TimingTrack(lines=[line], rubies=[ruby]), [display], style
+    )
+
+    assert with_ruby == without_ruby
+
+
 def test_glow_does_not_expand_dual_line_gap(qapp):
     track = _two_line_track()
     plain = Style(font_size_px=100, ruby_font_size_px=35, ruby_gap_px=24, line_gap_px=90)

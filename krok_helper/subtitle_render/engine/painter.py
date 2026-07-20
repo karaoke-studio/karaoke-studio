@@ -3380,7 +3380,9 @@ def _fixed_line_geometry(style: Style) -> tuple[int, int, int, int]:
         main_descent = font_size * max(metrics.descent(), 0) // metric_total + edge // 2
         main_descent = min(max(main_descent, 0), main_h)
         main_ascent = main_h - main_descent
-        return main_h, main_ascent, main_descent, ruby_extra
+        # N3 anchors top/middle/bottom against the main DrawLine box. Ruby is
+        # positioned above DrawTop afterwards and may extend into the margin.
+        return main_h, main_ascent, main_descent, 0
     pad = _visual_text_padding(style)
     main_h = metrics.ascent() + metrics.descent() + pad * 2
     return main_h, metrics.ascent() + pad, metrics.descent() + pad, ruby_extra

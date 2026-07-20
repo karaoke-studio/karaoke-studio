@@ -2431,6 +2431,60 @@ def test_gpu_n3_center_lane_uses_main_text_anchor_like_painter(monkeypatch) -> N
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_n3_top_margin_ignores_ruby_height_like_painter(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    line = TimingLine(
+        chars=[TimingChar("A", 0)],
+        end_ms=2_000,
+        display_start_override_ms=0,
+        display_end_override_ms=2_000,
+    )
+    track = TimingTrack(
+        lines=[line],
+        rubies=[
+            RubyAnnotation(
+                kanji="A",
+                reading="WWWW",
+                pos_start_ms=0,
+                pos_end_ms=2_000,
+            )
+        ],
+    )
+    style = _g1_style(
+        layout_semantics="n3_1074",
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=64,
+        ruby_font_family="Arial",
+        ruby_font_family_latin="Arial",
+        ruby_font_size_px=42,
+        ruby_gap_px=9,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+        line_horizontal_layout="center",
+        line_y_position="top",
+        line_y_margin_px=47,
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+    )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, (1_000,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=1_000, track=track)
+
+    gpu_bounds = _payload_alpha_bounds(gpu[0])
+    painter_bounds = _payload_alpha_bounds(painter)
+    assert all(
+        abs(actual - expected) <= 16
+        for actual, expected in zip(gpu_bounds, painter_bounds)
+    ), (gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize(
     ("ruby_alignment", "ruby_interval_px", "ruby_gap_px"),
     [

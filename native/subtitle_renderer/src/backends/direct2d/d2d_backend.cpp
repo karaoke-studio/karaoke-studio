@@ -3410,7 +3410,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             : (line->descent > 0.0f ? line->descent : line->bounds.bottom) + visualPad;
         const float ascent = mainHeight - descent;
         const int lanes = style.dualLineLayout ? std::max(style.laneCount, 1) : 1;
-        const float rubyExtra = line->rubies.empty()
+        const float rubyExtra = n3Layout || line->rubies.empty()
             ? 0.0f
             : std::max(
                 style.rubyGap + style.rubyFontSize
