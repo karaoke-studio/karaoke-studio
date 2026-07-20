@@ -3463,6 +3463,50 @@ def test_gpu_g4_spin_flip_transforms_all_character_layers_like_painter(monkeypat
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("effect", ["char_fade", "spin_flip"])
+@pytest.mark.parametrize("utopia_phase", ["entry", "exit"])
+def test_gpu_g4_utopia_does_not_override_opposite_character_transition(
+    monkeypatch,
+    effect: str,
+    utopia_phase: str,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track, base = _g4_utopia_main_scene()
+    base = replace(
+        base,
+        stroke_width_px=0,
+        decoration_kind="none",
+        glow_before_radius_px=0,
+        glow_after_radius_px=0,
+    )
+    if utopia_phase == "entry":
+        style = replace(base, entry_anim="utopia", exit_anim=effect)
+        reference = replace(base, entry_anim="utopia", exit_anim="none")
+        t_ms = 4_000
+    else:
+        style = replace(base, entry_anim=effect, exit_anim="utopia")
+        reference = replace(base, entry_anim="none", exit_anim="utopia")
+        t_ms = 200
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, (t_ms,), force_warp=True, track=track
+        )
+        _, gpu_reference = _render_g1_frames(
+            renderer, reference, (t_ms,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=t_ms, track=track)
+    painter_reference = _render_painter_oracle(
+        reference, t_ms=t_ms, track=track
+    )
+
+    assert gpu[0] != gpu_reference[0]
+    gpu_ratio = sum(gpu[0][3::4]) / max(sum(gpu_reference[0][3::4]), 1)
+    painter_ratio = sum(painter[3::4]) / max(sum(painter_reference[3::4]), 1)
+    assert abs(gpu_ratio - painter_ratio) <= 0.15
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g4_utopia_main_intro_wipe_and_outro_follow_painter(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     track, style = _g4_utopia_main_scene()

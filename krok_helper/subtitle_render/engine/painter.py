@@ -8248,22 +8248,6 @@ def _line_char_transition_context(
     start = display_start_ms if display_start_ms is not None else _line_start_ms(line)
     end = display_end_ms if display_end_ms is not None else _line_end_ms(line)
 
-    if style.entry_anim == "utopia" or style.exit_anim == "utopia":
-        intervals = intervals if intervals is not None else compute_char_intervals(line)
-        # Utopia 的入场、唱中弹跳和退场原本只在各自的活动窗口切进逐字符
-        # 矢量路径，其余时刻回到整行静态路径。两条路径在发光叠加与边缘
-        # 抗锯齿上存在细微差异，切换瞬间即使配色完全相同也会产生色闪。
-        # 行可见期间始终保留 Utopia 上下文；无动画阶段
-        # ``_transition_char_state`` 返回恒等状态，因此只统一绘制路径，不新增运动。
-        if start <= t_ms <= end:
-            return _LineCharTransition(
-                phase="utopia",
-                effect="utopia",
-                progress=1.0,
-                start_ms=start,
-                end_ms=end,
-            )
-
     if style.exit_anim in {"char_fade", "spin_flip"} and style.exit_fade_ms > 0:
         exit_start = max(_line_end_ms(line), end - _CHAR_FADE_INTRO_DELAY_MS - _CHAR_FADE_OUT_TIME_MS)
         if t_ms >= exit_start:
@@ -8284,6 +8268,22 @@ def _line_char_transition_context(
                 progress=1.0,
                 start_ms=start,
                 end_ms=entry_end,
+            )
+
+    if style.entry_anim == "utopia" or style.exit_anim == "utopia":
+        intervals = intervals if intervals is not None else compute_char_intervals(line)
+        # Utopia 的入场、唱中弹跳和退场原本只在各自的活动窗口切进逐字符
+        # 矢量路径，其余时刻回到整行静态路径。两条路径在发光叠加与边缘
+        # 抗锯齿上存在细微差异，切换瞬间即使配色完全相同也会产生色闪。
+        # 行可见期间始终保留 Utopia 上下文；但若另一侧正在执行逐字
+        # 入/退场，上面的活动过渡必须优先，避免 Utopia 吞掉其效果。
+        if start <= t_ms <= end:
+            return _LineCharTransition(
+                phase="utopia",
+                effect="utopia",
+                progress=1.0,
+                start_ms=start,
+                end_ms=end,
             )
     return None
 
