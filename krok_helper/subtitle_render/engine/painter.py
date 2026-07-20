@@ -321,6 +321,8 @@ class _RubyLayout:
     wipe_left: float = 0.0
     wipe_right: float = 0.0
     geometry_signature: tuple = ()
+    font: QFont | None = field(default=None, compare=False)
+    metrics: QFontMetrics | None = field(default=None, compare=False)
 
 
 @dataclass(frozen=True)
@@ -3023,6 +3025,40 @@ def _build_ruby_font(style: Style) -> QFont:
     return font
 
 
+def _build_ruby_font_for_text(style: Style, reading: str) -> QFont:
+    """Build the effective Japanese or Latin ruby font for one reading."""
+    if not _is_n3_latin_text(reading):
+        return _build_ruby_font(style)
+    if _ruby_uses_main_font(style):
+        family = style.font_family_latin or style.font_family
+        weight = _latin_font_weight(style)
+    else:
+        family = (
+            style.ruby_font_family_latin
+            or style.ruby_font_family
+            or style.font_family
+        )
+        weight = (
+            int(style.ruby_latin_font_weight)
+            if style.ruby_latin_font_weight is not None
+            and int(style.ruby_latin_font_weight) > 0
+            else int(style.ruby_font_weight)
+            if style.ruby_font_weight is not None and int(style.ruby_font_weight) > 0
+            else int(style.font_weight)
+        )
+    size = (
+        int(style.ruby_latin_font_size_px)
+        if style.ruby_latin_font_size_px is not None
+        and int(style.ruby_latin_font_size_px) > 0
+        else _ruby_font_size(style)
+    )
+    font = QFont(resolve_qt_font_family(family), max(size, 1))
+    font.setPixelSize(max(size, 1))
+    font.setWeight(_clamp_weight(weight))
+    font.setItalic(style.italic)
+    return font
+
+
 def _ruby_uses_main_font(style: Style) -> bool:
     """旧工程显式保存了非默认注音字号时，视为已经解除跟随。"""
     return bool(style.ruby_font_follow_main) and all(
@@ -3100,17 +3136,27 @@ def _n3_char_box_descent(metrics: QFontMetrics, font_size_px: int, stroke_width:
     return max(font_size_px, 1) * descent / total + max(stroke_width, 0) / 2.0
 
 
-def _ruby_vertical_extra(style: Style, ruby_metrics: QFontMetrics) -> int:
+def _ruby_vertical_extra(
+    style: Style,
+    ruby_metrics: QFontMetrics,
+    *,
+    font_size_px: int | None = None,
+) -> int:
     """主文字上方为注音预留的高度（N3：间隔 + ruby 盒高 = 注音字号 + 注音描边宽）。
 
     间距可为负（ruby 咬进正文），但预留高度不能倒扣。``ruby_metrics`` 保留在签名里
     以兼容调用方（N3 盒高与 metric 无关）。
     """
     del ruby_metrics
+    effective_size = (
+        _ruby_font_size(style)
+        if font_size_px is None
+        else max(int(font_size_px), 1)
+    )
     return max(
         int(round(
             int(style.ruby_gap_px)
-            + _ruby_font_size(style)
+            + effective_size
             + max(_ruby_stroke_width(style), 0)
         )),
         0,
@@ -3122,6 +3168,8 @@ def _ruby_baseline_y(
     main_box_ascent: float,
     ruby_metrics: QFontMetrics,
     style: Style,
+    *,
+    font_size_px: int | None = None,
 ) -> int:
     """N3 语义的注音基线：ruby 盒底 = 主行盒顶 − 歌詞とルビの間隔。
 
@@ -3129,11 +3177,16 @@ def _ruby_baseline_y(
     ruby 基线在 ruby 盒底之上「字号归一化 descent + 描边半宽」处。
     """
     main_top = main_baseline_y - main_box_ascent
+    effective_size = (
+        _ruby_font_size(style)
+        if font_size_px is None
+        else max(int(font_size_px), 1)
+    )
     return int(round(
         main_top
         - int(style.ruby_gap_px)
         - _n3_char_box_descent(
-            ruby_metrics, _ruby_font_size(style), _ruby_stroke_width(style)
+            ruby_metrics, effective_size, _ruby_stroke_width(style)
         )
     ))
 
@@ -5324,14 +5377,12 @@ def _resolve_role_baseline_y(
     layout: _TextLayout,
     img_h: int,
     style: Style,
-    ruby_metrics: QFontMetrics | None = None,
+    ruby_extra: int = 0,
 ) -> int:
     pos = style.line_y_position
     margin = max(style.line_y_margin_px, 0)
     pad = _role_visual_text_padding(layout)
-    ruby_extra = 0
-    if ruby_metrics is not None:
-        ruby_extra = _ruby_vertical_extra(style, ruby_metrics)
+    ruby_extra = max(int(ruby_extra), 0)
     if pos == "top":
         return margin + ruby_extra + pad + layout.ascent
     if pos == "center":
@@ -5345,12 +5396,10 @@ def _clamp_role_baseline_y(
     layout: _TextLayout,
     img_h: int,
     style: Style,
-    ruby_metrics: QFontMetrics | None = None,
+    ruby_extra: int = 0,
 ) -> int:
     pad = _role_visual_text_padding(layout)
-    ruby_extra = 0
-    if ruby_metrics is not None:
-        ruby_extra = _ruby_vertical_extra(style, ruby_metrics)
+    ruby_extra = max(int(ruby_extra), 0)
     min_y = ruby_extra + pad + layout.ascent
     max_y = img_h - pad - layout.descent
     if max_y < min_y:
@@ -5479,6 +5528,9 @@ def _layout_role_line(
         return None
     char_widths, _measure_ranges = _role_char_geometry_by_index(line, measure_layout)
     intervals = compute_char_intervals(line, char_widths)
+    ruby_extra = _role_ruby_vertical_extra(
+        line, active_rubies, intervals, style
+    )
     char_gaps, ruby_left_ext, ruby_right_ext = _ruby_char_gaps(
         line, char_widths, active_rubies, style, intervals
     )
@@ -5517,9 +5569,9 @@ def _layout_role_line(
     y = (
         baseline_y
         if baseline_y is not None
-        else _resolve_role_baseline_y(measure_layout, img_h, style, ruby_metrics)
+        else _resolve_role_baseline_y(measure_layout, img_h, style, ruby_extra)
     )
-    y = _clamp_role_baseline_y(y, measure_layout, img_h, style, ruby_metrics)
+    y = _clamp_role_baseline_y(y, measure_layout, img_h, style, ruby_extra)
     text_layout = _build_role_text_layout(
         line,
         style,
@@ -7156,21 +7208,26 @@ def _utopia_ruby_scope_layers(
     for index, ruby_layout in enumerate(layout.ruby_layouts):
         if not ruby_layout.indices:
             continue
+        target_ruby_font = ruby_layout.font or layout.ruby_font
+        target_ruby_metrics = ruby_layout.metrics or layout.ruby_metrics
         rect = _utopia_ruby_scope_rect(
             ruby_layout,
-            layout.ruby_font,
-            layout.ruby_metrics,
+            target_ruby_font,
+            target_ruby_metrics,
             line,
             layout.intervals,
             layout.rtl,
-            style,
+            ruby_layout.style,
             t_ms,
             transition,
             frame_height,
         )
         if rect is None:
             continue
-        pad = max(_ruby_visual_padding(style, after=False), _ruby_visual_padding(style, after=True))
+        pad = max(
+            _ruby_visual_padding(ruby_layout.style, after=False),
+            _ruby_visual_padding(ruby_layout.style, after=True),
+        )
         layers.append(
             _ScopeBoundsLayer(
                 _inflate_rect(rect, pad),
@@ -10528,14 +10585,13 @@ def _ruby_char_gaps(
       行盒（N3 ``DrawLineLeft/Right`` 语义）。
 
     演唱计时用**原始**字宽（间隙只影响几何）。竖排 / RTL 几何互为镜像，
-    不做推移。ruby 宽度按行级注音样式测量（角色级注音字号差异忽略）。
+    不做推移。每条 ruby 按其目标角色的注音字体与字号独立测量。
     """
     zero = [0] * len(char_widths)
     if not rubies or not line.chars or style.vertical or style.right_to_left:
         return zero, 0, 0
     if intervals is None:
         intervals = compute_char_intervals(line, char_widths)
-    ruby_metrics = QFontMetrics(_build_ruby_font(style))
     spacing = _letter_spacing(style)
     interval = _ruby_interval_px(style)
 
@@ -10581,6 +10637,9 @@ def _ruby_char_gaps(
     for first, last, paint_ruby, ruby, ruby_style in entries:
         span_left, span_right = char_span(first, min(last, len(char_widths) - 1))
         target_w = max(span_right - span_left, 1.0)
+        ruby_metrics = QFontMetrics(
+            _build_ruby_font_for_text(ruby_style, paint_ruby.reading)
+        )
         ruby_left, ruby_right = _ruby_layout_draw_bounds(
             _ruby_utopia_visual_units(paint_ruby.reading),
             ruby_metrics,
@@ -11214,6 +11273,8 @@ def _paint_rubies(
             return
         for layout in layouts:
             ruby_style = layout.style
+            target_ruby_font = layout.font or ruby_font
+            target_ruby_metrics = layout.metrics or ruby_metrics
             indices = layout.indices
             paint_ruby = layout.ruby
             x = layout.x
@@ -11249,8 +11310,8 @@ def _paint_rubies(
                     _paint_ruby_text_units_with_transition(
                         painter,
                         paint_ruby,
-                        ruby_font,
-                        ruby_metrics,
+                        target_ruby_font,
+                        target_ruby_metrics,
                         x,
                         ruby_baseline_y,
                         t_ms,
@@ -11268,7 +11329,11 @@ def _paint_rubies(
                     _apply_character_transform(
                         painter,
                         center_x=x + reading_w / 2,
-                        center_y=ruby_baseline_y - ruby_metrics.ascent() + ruby_metrics.height() / 2,
+                        center_y=(
+                            ruby_baseline_y
+                            - target_ruby_metrics.ascent()
+                            + target_ruby_metrics.height() / 2
+                        ),
                         dx=dx,
                         dy=dy,
                         rotation=rotation,
@@ -11279,8 +11344,8 @@ def _paint_rubies(
                     _paint_ruby_text(
                         painter,
                         paint_ruby,
-                        ruby_font,
-                        ruby_metrics,
+                        target_ruby_font,
+                        target_ruby_metrics,
                         x,
                         ruby_baseline_y,
                         t_ms,
@@ -11346,7 +11411,6 @@ def _layout_rubies(
         main_box_ascent = _n3_char_box_ascent(
             QFontMetrics(_build_font(style)), style.font_size_px, style.stroke_width_px
         )
-    ruby_baseline_y = _ruby_baseline_y(main_baseline_y, main_box_ascent, ruby_metrics, style)
     layouts: list[_RubyLayout] = []
     for ruby in rubies:
         indices = _ruby_target_indices(ruby, line, intervals)
@@ -11360,27 +11424,40 @@ def _layout_rubies(
         ruby_style = _ruby_script_stroke_style(
             ruby_brush_style, paint_ruby.reading
         )
+        target_ruby_font = _build_ruby_font_for_text(
+            ruby_style, paint_ruby.reading
+        )
+        target_ruby_metrics = QFontMetrics(target_ruby_font)
+        target_ruby_size = max(target_ruby_font.pixelSize(), 1)
+        ruby_baseline_y = _ruby_baseline_y(
+            main_baseline_y,
+            main_box_ascent,
+            target_ruby_metrics,
+            ruby_style,
+            font_size_px=target_ruby_size,
+        )
         left, right = target_range
         target_width = max(right - left, 1)
         gradient_rect = _n3_ruby_fill_rect(
             left,
             target_width,
             ruby_baseline_y,
-            ruby_metrics,
+            target_ruby_metrics,
             ruby_style,
             brush_style=ruby_brush_style,
+            font_size_px=target_ruby_size,
         )
         reading_width = _ruby_layout_width(
             paint_ruby.reading,
-            ruby_metrics,
+            target_ruby_metrics,
             target_width,
             style=ruby_style,
             base_text=paint_ruby.kanji,
         )
         wipe_segments, wipe_left, wipe_right, geometry_signature = _ruby_wipe_geometry(
             paint_ruby,
-            ruby_font or _build_ruby_font(ruby_style),
-            ruby_metrics,
+            target_ruby_font,
+            target_ruby_metrics,
             left,
             ruby_baseline_y,
             target_width,
@@ -11401,6 +11478,8 @@ def _layout_rubies(
                 wipe_left=wipe_left,
                 wipe_right=wipe_right,
                 geometry_signature=geometry_signature,
+                font=target_ruby_font,
+                metrics=target_ruby_metrics,
             )
         )
     return layouts
@@ -11514,6 +11593,36 @@ def _ruby_style_for_target_indices(
     return style
 
 
+def _role_ruby_vertical_extra(
+    line: TimingLine,
+    rubies: list[RubyAnnotation],
+    intervals: list[tuple[int, int]],
+    style: Style,
+) -> int:
+    """Reserve enough vertical space for the largest role-specific ruby."""
+    extra = 0
+    for ruby in rubies:
+        indices = _ruby_target_indices(ruby, line, intervals)
+        if not indices:
+            continue
+        paint_ruby = _effective_ruby_for_target(ruby, indices, intervals)
+        ruby_style = _ruby_script_stroke_style(
+            _ruby_style_for_target_indices(style, line, indices),
+            paint_ruby.reading,
+        )
+        font = _build_ruby_font_for_text(ruby_style, paint_ruby.reading)
+        metrics = QFontMetrics(font)
+        extra = max(
+            extra,
+            _ruby_vertical_extra(
+                ruby_style,
+                metrics,
+                font_size_px=max(font.pixelSize(), 1),
+            ),
+        )
+    return extra
+
+
 def _n3_ruby_fill_rect(
     left: int,
     width: int,
@@ -11522,9 +11631,14 @@ def _n3_ruby_fill_rect(
     style: Style,
     *,
     brush_style: Style | None = None,
+    font_size_px: int | None = None,
 ) -> QRectF:
     """Return the ruby ``DrawLineInfo`` gradient area used by N3."""
-    font_size = _ruby_font_size(style)
+    font_size = (
+        _ruby_font_size(style)
+        if font_size_px is None
+        else max(int(font_size_px), 1)
+    )
     metric_total = max(ruby_metrics.ascent() + ruby_metrics.descent(), 1)
     descent = font_size * max(ruby_metrics.descent(), 0) // metric_total
     draw_edge = _ruby_stroke_width(style)
@@ -11592,11 +11706,13 @@ def _ruby_text_layers(
 ) -> list:
     layers = []
     for index, layout in enumerate(layouts):
+        target_ruby_font = layout.font or ruby_font
+        target_ruby_metrics = layout.metrics or ruby_metrics
         layers.append(
             _RubyTextLayer(
                 layout,
-                ruby_font,
-                ruby_metrics,
+                target_ruby_font,
+                target_ruby_metrics,
                 t_ms,
                 layout.style,
                 rtl,
@@ -11608,8 +11724,8 @@ def _ruby_text_layers(
         layers.append(
             _RubyTextLayer(
                 layout,
-                ruby_font,
-                ruby_metrics,
+                target_ruby_font,
+                target_ruby_metrics,
                 t_ms,
                 layout.style,
                 rtl,
@@ -11631,12 +11747,14 @@ def _ruby_glow_layers(
 ) -> list:
     layers = []
     for index, layout in enumerate(layouts):
+        target_ruby_font = layout.font or ruby_font
+        target_ruby_metrics = layout.metrics or ruby_metrics
         if _ruby_glow_can_combine_split(layout.style):
             layers.append(
                 _RubySplitGlowLayer(
                     layout,
-                    ruby_font,
-                    ruby_metrics,
+                    target_ruby_font,
+                    target_ruby_metrics,
                     t_ms,
                     layout.style,
                     rtl,
@@ -11647,8 +11765,8 @@ def _ruby_glow_layers(
         layers.append(
             _RubyGlowLayer(
                 layout,
-                ruby_font,
-                ruby_metrics,
+                target_ruby_font,
+                target_ruby_metrics,
                 t_ms,
                 layout.style,
                 rtl,
@@ -11659,8 +11777,8 @@ def _ruby_glow_layers(
         layers.append(
             _RubyGlowLayer(
                 layout,
-                ruby_font,
-                ruby_metrics,
+                target_ruby_font,
+                target_ruby_metrics,
                 t_ms,
                 layout.style,
                 rtl,

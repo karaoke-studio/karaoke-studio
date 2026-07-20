@@ -4540,6 +4540,68 @@ def test_role_ruby_layer_uses_target_role_style(qapp):
     assert _effective_ruby_karaoke_colors(after_layer.style).after.text.color == "#0088FF"
 
 
+@pytest.mark.parametrize(
+    ("reading", "expected_family", "expected_size", "expected_weight"),
+    [
+        ("こう", "Times New Roman", 46, 700),
+        ("abc", "Courier New", 34, 500),
+    ],
+)
+def test_role_ruby_layout_uses_target_role_font_resources(
+    qapp, reading, expected_family, expected_size, expected_weight
+):
+    line = TimingLine(
+        chars=[TimingChar(text="項", start_ms=0, role_label="lead")],
+        end_ms=1_200,
+    )
+    ruby = RubyAnnotation(
+        kanji="項",
+        reading=reading,
+        pos_start_ms=0,
+        pos_end_ms=1_200,
+    )
+    style = Style(
+        ruby_font_follow_main=False,
+        ruby_font_family="Arial",
+        ruby_font_family_latin="Arial",
+        ruby_font_size_px=24,
+        ruby_font_weight=400,
+        custom_style_schemes={
+            "lead": SubtitleStyleScheme(
+                ruby_font_follow_main=False,
+                ruby_font_family="Times New Roman",
+                ruby_font_family_latin="Courier New",
+                ruby_font_size_px=46,
+                ruby_font_weight=700,
+                ruby_latin_font_size_px=34,
+                ruby_latin_font_weight=500,
+                ruby_stroke_width_px=7,
+                ruby_decoration_kind="shadow",
+                ruby_shadow_offset_x=4,
+                ruby_shadow_offset_y=5,
+            )
+        },
+    )
+    layout = _layout_line(
+        TimingTrack(lines=[line], rubies=[ruby]), line, style, 640, 360
+    )
+    assert layout is not None
+    ruby_layout = layout.ruby_layouts[0]
+    assert ruby_layout.font is not None
+    assert ruby_layout.metrics is not None
+    assert ruby_layout.font.family() == expected_family
+    assert ruby_layout.font.pixelSize() == expected_size
+    assert ruby_layout.font.weight() == subtitle_painter._clamp_weight(expected_weight)
+    assert ruby_layout.style.ruby_stroke_width_px == 7
+    assert ruby_layout.style.ruby_shadow_offset_x == 4
+    assert ruby_layout.style.ruby_shadow_offset_y == 5
+
+    layers = _ruby_layer_stack(layout, line, 600, style)
+    assert layers
+    assert all(layer.ruby_font.family() == expected_family for layer in layers)
+    assert all(layer.ruby_font.pixelSize() == expected_size for layer in layers)
+
+
 def test_role_line_simultaneous_wipe_uses_scoped_after_band(qapp):
     line = TimingLine(
         chars=[

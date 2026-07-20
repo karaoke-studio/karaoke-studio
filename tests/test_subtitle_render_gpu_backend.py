@@ -4817,6 +4817,7 @@ def test_gpu_g3_role_ruby_font_colors_and_outline_match_painter(monkeypatch) -> 
         font_family="Meiryo",
         font_size_px=72,
         ruby_font_family="Meiryo",
+        ruby_font_family_latin="Arial",
         ruby_font_size_px=24,
         ruby_gap_px=4,
         ruby_stroke_width_px=1,
@@ -4834,7 +4835,10 @@ def test_gpu_g3_role_ruby_font_colors_and_outline_match_painter(monkeypatch) -> 
                 font_size_px=72,
                 karaoke_colors=solid_colors("#2040FF"),
                 ruby_font_family="Meiryo",
+                ruby_font_family_latin="Times New Roman",
                 ruby_font_size_px=46,
+                ruby_latin_font_size_px=40,
+                ruby_latin_font_weight=700,
                 ruby_gap_px=7,
                 ruby_stroke_width_px=5,
                 ruby_stroke2_enabled=False,
@@ -4842,7 +4846,24 @@ def test_gpu_g3_role_ruby_font_colors_and_outline_match_painter(monkeypatch) -> 
             )
         },
     )
-    track = _g3_role_ruby_track()
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("A", 0, role_label="lead")],
+                end_ms=1_200,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="A",
+                reading="abc",
+                pos_start_ms=0,
+                pos_end_ms=1_200,
+                reading_parts=["a", "b", "c"],
+                reading_part_ms=[400, 800],
+            )
+        ],
+    )
     with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
         _, frames = _render_g1_frames(
             renderer, style, (1_000,), force_warp=True, track=track

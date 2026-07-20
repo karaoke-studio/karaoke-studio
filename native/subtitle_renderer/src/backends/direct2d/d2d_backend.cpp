@@ -1766,6 +1766,11 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             const TextStyle &rubyStyle = hasRubyStyle
                 ? scene.charStyles[static_cast<std::size_t>(sourceRuby.styleIndex)]
                 : style;
+            const bool rubyIsLatin = std::all_of(
+                sourceRuby.units.begin(),
+                sourceRuby.units.end(),
+                [](const RubyUnit &unit) { return isLatinText(unit.text); }
+            );
             const auto selectedRubyFace = hasRubyStyle
                 ? resolveFace(
                     rubyStyle.rubyFontFamily.empty()
@@ -1801,7 +1806,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 static_cast<int>(rubyStyle.rubyStrokeWidth), 0
             );
             const int rubyAnchorEdgeSize = std::max(
-                static_cast<int>(style.rubyStrokeWidth), 0
+                static_cast<int>(rubyStyle.rubyStrokeWidth), 0
             );
 
             for (const RubyUnit &sourceUnit : sourceRuby.units) {
@@ -1809,13 +1814,11 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 const auto &measureFace = latin
                     ? selectedRubyLatinFace
                     : selectedRubyFace;
-                const auto &drawingFace = latin ? rubyLatinFace : rubyFace;
+                const auto &drawingFace = measureFace;
                 const float measureFontSize = latin
                     ? rubyStyle.rubyLatinFontSize.value_or(rubyStyle.rubyFontSize)
                     : rubyStyle.rubyFontSize;
-                const float drawingFontSize = latin
-                    ? style.rubyLatinFontSize.value_or(style.rubyFontSize)
-                    : style.rubyFontSize;
+                const float drawingFontSize = measureFontSize;
                 const int measureUnit = std::max(static_cast<int>(measureFontSize), 1);
                 const int drawingUnit = std::max(static_cast<int>(drawingFontSize), 1);
                 DWRITE_FONT_METRICS fontMetrics{};
@@ -1996,19 +1999,22 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             ruby.transitionCharIndex = sourceRuby.firstCharIndex;
             ruby.firstCharIndex = sourceRuby.firstCharIndex;
             ruby.lastCharIndex = sourceRuby.lastCharIndex;
-            // Painter anchors every ruby run with the line-level ruby font and
-            // gap; target-role styling changes paint/measurement, not baseline.
             ruby.baselineOffset = -cached.boxAscent - style.rubyGap - rubyBoxDescent;
             DWRITE_FONT_METRICS rubyFillMetrics{};
-            rubyFace->GetMetrics(&rubyFillMetrics);
+            const auto &rubyFillFace = rubyIsLatin
+                ? selectedRubyLatinFace
+                : selectedRubyFace;
+            rubyFillFace->GetMetrics(&rubyFillMetrics);
             const int rubyMetricTotal = std::max(
                 static_cast<int>(rubyFillMetrics.ascent)
                     + static_cast<int>(rubyFillMetrics.descent),
                 1
             );
-            const int rubyFillSize = std::max(
-                static_cast<int>(rubyStyle.rubyFontSize), 1
-            );
+            const int rubyFillSize = std::max(static_cast<int>(
+                rubyIsLatin
+                    ? rubyStyle.rubyLatinFontSize.value_or(rubyStyle.rubyFontSize)
+                    : rubyStyle.rubyFontSize
+            ), 1);
             const int rubyFillDescent = rubyFillSize
                 * static_cast<int>(rubyFillMetrics.descent) / rubyMetricTotal;
             ruby.pivotX = rubyCursor + contentWidth * 0.5f;
