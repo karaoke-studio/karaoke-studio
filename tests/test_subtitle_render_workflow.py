@@ -122,6 +122,7 @@ def test_subtitle_render_success_prompts_for_post_export_action(
     received: list[Path] = []
     opened: list[Path] = []
     prompts: list[tuple] = []
+    sounds: list[bool] = []
     choices = iter((0, 1, 2))
 
     class Context:
@@ -140,6 +141,10 @@ def test_subtitle_render_success_prompts_for_post_export_action(
         "krok_helper.subtitle_render.frontend.main_window.fluent_choice",
         choose,
     )
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.main_window.play_completion_sound",
+        lambda: sounds.append(True),
+    )
 
     window._finish_render_success(output)
     window._finish_render_success(output)
@@ -147,6 +152,7 @@ def test_subtitle_render_success_prompts_for_post_export_action(
 
     assert opened == [output]
     assert received == [output]
+    assert sounds == [True, True, True]
     assert len(prompts) == 3
     args, kwargs = prompts[0]
     assert args[0] is window
@@ -154,6 +160,59 @@ def test_subtitle_render_success_prompts_for_post_export_action(
     assert str(output) in args[2]
     assert args[3] == ("打开文件夹", "进入下一步", "取消")
     assert kwargs == {"default": 1}
+
+
+def test_hires_success_plays_sound_and_uses_fluent_dialog(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[tuple] = []
+    output = tmp_path / "hires.mp4"
+
+    class ValueWidget:
+        def setRange(self, minimum: int, maximum: int) -> None:
+            calls.append(("range", minimum, maximum))
+
+        def setValue(self, value: int) -> None:
+            calls.append(("value", value))
+
+        def setEnabled(self, enabled: bool) -> None:
+            calls.append(("enabled", enabled))
+
+        def setText(self, text: str) -> None:
+            calls.append(("text", text))
+
+    app = SimpleNamespace(
+        _hires_cancel_requested=False,
+        _hires_process=object(),
+        hires_progress=ValueWidget(),
+        hires_start_button=ValueWidget(),
+        hires_cancel_button=ValueWidget(),
+        hires_status_label=ValueWidget(),
+        _set_hires_status_color=lambda color: calls.append(("color", color)),
+        _reset_hires_cancel_state=lambda: calls.append(("reset",)),
+    )
+    monkeypatch.setattr(
+        "krok_helper.gui_qt.play_completion_sound",
+        lambda: calls.append(("sound",)),
+    )
+
+    def show_info(*args, **kwargs) -> None:
+        calls.append(("dialog", args, kwargs))
+
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_info",
+        show_info,
+    )
+
+    KrokHelperQtApp._finish_hires_success(app, [output])
+
+    assert ("sound",) in calls
+    dialog_call = next(call for call in calls if call[0] == "dialog")
+    args, kwargs = dialog_call[1], dialog_call[2]
+    assert args[0] is app
+    assert args[1] == "Hi-Res 导出完成"
+    assert str(output) in args[2]
+    assert kwargs == {"ok_text": "确定", "copyable": True}
 
 
 def test_accept_subtitle_video_fills_hires_video_and_switches_page(tmp_path: Path) -> None:
