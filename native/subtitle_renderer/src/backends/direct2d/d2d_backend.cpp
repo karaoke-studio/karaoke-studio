@@ -3466,12 +3466,26 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
                 return std::max(right - left, 1.0f);
             };
+            const auto firstCharFontSize = [&](const Impl::CachedLine &candidate) {
+                if (!candidate.chars.empty()) {
+                    const int styleIndex = candidate.chars.front().styleIndex;
+                    if (styleIndex >= 0
+                        && styleIndex < static_cast<int>(scene.charStyles.size())) {
+                        return std::max(
+                            scene.charStyles[static_cast<std::size_t>(styleIndex)].fontSize,
+                            1.0f
+                        );
+                    }
+                }
+                return std::max(candidate.style.fontSize, 1.0f);
+            };
             const float ownWidth = layoutWidth(*line);
+            const float ownFontSize = firstCharFontSize(*line);
             float smartDx = 0.0f;
             if (style.smartHorizontal == "center_position") {
                 const float threshold = std::floor(
                     static_cast<float>(scene.width) * 0.5f
-                    + style.fontSize * 0.5f
+                    + ownFontSize * 0.5f
                     - ownWidth
                 );
                 if (threshold > style.horizontalMargin) {
@@ -3480,7 +3494,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             - style.horizontalMargin - ownWidth;
                         smartDx = std::floor(
                             static_cast<float>(scene.width) * 0.5f
-                            - style.fontSize * 0.5f
+                            - ownFontSize * 0.5f
                         ) - currentLeft;
                     } else {
                         smartDx = threshold - style.horizontalMargin;
@@ -3490,10 +3504,16 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 float maxLeft = 0.0f;
                 float maxCenter = 0.0f;
                 float maxRight = 0.0f;
+                float pageHeadFontSize = style.fontSize;
+                bool foundPageHead = false;
                 for (const Impl::CachedLine &candidate : impl_->lines) {
                     if (candidate.sourceIndex != line->sourceIndex
                         || candidate.pageIndex != line->pageIndex) {
                         continue;
+                    }
+                    if (!foundPageHead) {
+                        pageHeadFontSize = firstCharFontSize(candidate);
+                        foundPageHead = true;
                     }
                     const float width = layoutWidth(candidate);
                     if (candidate.style.alignment == "right") {
@@ -3508,7 +3528,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     const float slack = static_cast<float>(scene.width)
                         - style.horizontalMargin * 2.0f
                         - maxLeft - maxCenter - maxRight
-                        + style.fontSize;
+                        + pageHeadFontSize;
                     if (slack > 0.0f) {
                         const float halfSlack = std::floor(slack * 0.5f);
                         smartDx = style.alignment == "right"

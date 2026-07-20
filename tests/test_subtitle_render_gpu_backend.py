@@ -2371,7 +2371,7 @@ def test_gpu_n3_smart_horizontal_measures_inline_role_fonts(monkeypatch) -> None
     track = TimingTrack(
         lines=[
             TimingLine(
-                chars=[TimingChar("L", 0)],
+                chars=[TimingChar("L", 0, role_label="head")],
                 end_ms=2_000,
                 display_start_override_ms=0,
                 display_end_override_ms=2_000,
@@ -2403,6 +2403,12 @@ def test_gpu_n3_smart_horizontal_measures_inline_role_fonts(monkeypatch) -> None
         line_lead_in_ms=0,
         line_tail_ms=0,
         custom_style_schemes={
+            "head": SubtitleStyleScheme(
+                font_family="Arial",
+                font_family_latin="Arial",
+                font_size_px=84,
+                stroke_width_px=0,
+            ),
             "wide": SubtitleStyleScheme(
                 font_family="Arial",
                 font_family_latin="Arial",

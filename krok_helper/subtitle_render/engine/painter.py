@@ -10728,7 +10728,7 @@ def _smart_horizontal_dx(
     if own_align == "center":
         return 0
     margin = max(style.horizontal_margin_px, 0)
-    font = max(style.font_size_px, 1)
+    font = _n3_smart_font_size(line, style)
     base_x = _resolve_line_x(img_w, total_w, style, lane, center_override=False)
     page = _renderable_page_lines(track, line, style)
     if page is not None and len(page) <= 1:
@@ -10746,6 +10746,11 @@ def _smart_horizontal_dx(
     # equal_margins：按页内 Left / Center / Right 各自最大宽度计算空隙。
     if page is None:
         return 0
+    if style.layout_semantics == "n3_1074" and page:
+        page_head, _page_head_lane = page[0]
+        font = _n3_smart_font_size(
+            page_head, _style_for_line(style, page_head)
+        )
     max_widths = {"left": 0, "center": 0, "right": 0}
     for page_line, page_lane in page:
         page_style = _style_for_line(style, page_line)
@@ -10772,6 +10777,23 @@ def _smart_horizontal_dx(
     if slack <= 0:
         return 0
     return -(slack // 2) if own_align == "right" else slack // 2
+
+
+def _n3_smart_font_size(line: TimingLine, style: Style) -> int:
+    """Font-size term used by N3's SmartHorizon formulas.
+
+    N3 reads the Japanese font slot belonging to the first rendered character,
+    even when that character is assigned a non-default color/font scheme.
+    """
+    if style.layout_semantics != "n3_1074":
+        return max(int(style.font_size_px), 1)
+    render_line = _line_with_guide_symbol(line)
+    if not render_line.chars:
+        return max(int(style.font_size_px), 1)
+    first_style = _style_for_role_in_layout(
+        style, render_line.chars[0].role_label
+    )
+    return max(int(first_style.font_size_px), 1)
 
 
 def _resolve_line_x_smart(
