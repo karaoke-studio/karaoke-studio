@@ -140,6 +140,7 @@ def visible_display_lines(
     protect_ms: int = 0,
     lane_count: int = 2,
     row_count_of: Optional[Callable[[TimingLine], int]] = None,
+    bottom_align_of: Optional[Callable[[TimingLine], bool]] = None,
 ) -> list[DisplayLine]:
     """Return lines whose display window contains ``t_ms``.
 
@@ -168,6 +169,7 @@ def visible_display_lines(
         section_ending_mode=section_ending_mode,
         lane_count=lane_count,
         row_count_of=row_count_of,
+        bottom_align_of=bottom_align_of,
     )
     return [item for item in layouts if item.display_start_ms <= t_ms <= item.display_end_ms]
 
@@ -188,6 +190,7 @@ def compute_display_lines(
     protect_ms: int = 0,
     lane_count: int = 2,
     row_count_of: Optional[Callable[[TimingLine], int]] = None,
+    bottom_align_of: Optional[Callable[[TimingLine], bool]] = None,
 ) -> list[DisplayLine]:
     """Compute NicoKara-style display windows for all renderable lines.
 
@@ -222,6 +225,18 @@ def compute_display_lines(
         row_count_of,
         section_gap_ms=section_gap,
     )
+    if bottom_align_of is not None:
+        _apply_n3_bottom_page_lanes(
+            render_lines,
+            lanes,
+            page_starts,
+            page_rows,
+            lanes_total,
+            row_count_of,
+            bottom_align_of,
+            lead=lead,
+            tail=tail,
+        )
 
     starts: list[int] = []
     natural_ends: list[int] = []
@@ -311,6 +326,74 @@ def compute_display_lines(
             )
         )
     return result
+
+
+def _apply_n3_bottom_page_lanes(
+    render_lines: list[TimingLine],
+    lanes: list[int],
+    page_starts: list[int],
+    page_rows: list[int],
+    default_rows: int,
+    row_count_of: Optional[Callable[[TimingLine], int]],
+    bottom_align_of: Callable[[TimingLine], bool],
+    *,
+    lead: int,
+    tail: int,
+) -> None:
+    """Map short bottom pages from the bottom and reproduce N3 ForceBottom.
+
+    A one-line page normally occupies the bottom row.  If the immediately
+    preceding page still displays in that same row, N3 moves it up by one row;
+    the following overlapping single page can use the bottom row again.
+    """
+
+    previous_page: list[tuple[int, int, int]] = []  # lane, show begin, show end
+    index = 0
+    total = len(render_lines)
+    while index < total:
+        page_size = max(int(page_rows[index]), 1)
+        page_end = min(index + page_size, total)
+        first = render_lines[index]
+        configured_rows = max(
+            int(row_count_of(first)) if row_count_of is not None else int(default_rows),
+            1,
+        )
+        is_bottom = bool(bottom_align_of(first))
+        if is_bottom and page_size < configured_rows:
+            shift = configured_rows - page_size
+            for item_index in range(index, page_end):
+                lanes[item_index] += shift
+
+        page_entries: list[tuple[int, int, int]] = []
+        for item_index in range(index, page_end):
+            line = render_lines[item_index]
+            begin_override = getattr(line, "display_start_override_ms", None)
+            end_override = getattr(line, "display_end_override_ms", None)
+            show_begin = (
+                max(0, int(begin_override))
+                if begin_override is not None
+                else max(timing_line_start_ms(line) - lead, 0)
+            )
+            show_end = (
+                int(end_override)
+                if end_override is not None
+                else _line_end_ms(line) + tail
+            )
+            page_entries.append((lanes[item_index], show_begin, show_end))
+
+        if is_bottom and page_size == 1 and configured_rows > 1:
+            lane, show_begin, show_end = page_entries[0]
+            overlaps_bottom = any(
+                previous_lane == lane and previous_end >= show_begin
+                for previous_lane, _previous_begin, previous_end in previous_page
+            )
+            if overlaps_bottom:
+                lane = max(lane - 1, 0)
+                lanes[index] = lane
+                page_entries[0] = (lane, show_begin, show_end)
+
+        previous_page = page_entries
+        index = page_end
 
 
 def apply_display_overrides(

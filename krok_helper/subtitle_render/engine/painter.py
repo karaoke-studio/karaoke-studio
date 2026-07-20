@@ -2831,6 +2831,7 @@ def _visible_lines_for_style(
             protect_ms=_effective_line_protect_ms(style),
             lane_count=_lane_count(style),
             row_count_of=_row_count_resolver(style),
+            bottom_align_of=_bottom_align_resolver(style),
         )
     display_line = _single_visible_display_line(track, t_ms, style)
     if display_line is None:
@@ -2863,6 +2864,7 @@ def display_windows_for_style(
             protect_ms=_effective_line_protect_ms(style),
             lane_count=_lane_count(style),
             row_count_of=_row_count_resolver(style),
+            bottom_align_of=_bottom_align_resolver(style),
         )
         index_of = {id(line): i for i, line in enumerate(track.lines)}
         for item in items:
@@ -2909,6 +2911,7 @@ def display_schedule_for_style(
         protect_ms=_effective_line_protect_ms(style),
         lane_count=_lane_count(style),
         row_count_of=_row_count_resolver(style),
+        bottom_align_of=_bottom_align_resolver(style),
     )
     index_of = {id(line): index for index, line in enumerate(track.lines)}
     return {
@@ -10871,6 +10874,7 @@ def check_layout_margins(
             protect_ms=_effective_line_protect_ms(style),
             lane_count=_lane_count(style),
             row_count_of=_row_count_resolver(style),
+            bottom_align_of=_bottom_align_resolver(style),
         )
     else:
         display_lines = [
@@ -10947,6 +10951,12 @@ def _row_count_resolver(style: Style):
     if not style.layouts:
         return None  # 没有额外布局 → 全部页用全局行数，走快路径
     return lambda line: _lane_count(_layout_style_for_line(style, line))
+
+
+def _bottom_align_resolver(style: Style):
+    if style.layout_semantics != "n3_1074":
+        return None
+    return lambda line: _layout_style_for_line(style, line).line_y_position == "bottom"
 
 
 def _style_for_line(style: Style, line: TimingLine) -> Style:

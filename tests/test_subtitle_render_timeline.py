@@ -632,3 +632,36 @@ def test_display_overrides_clamped_to_singing_interval():
 
     assert items[0].display_start_ms == 5000
     assert items[0].display_end_ms == 6000
+
+
+def test_n3_bottom_single_pages_alternate_only_against_immediate_page():
+    lines = [
+        _make_line([("a", 1000)], end_ms=2000),
+        _make_line([("b", 4000)], end_ms=5000),
+        _make_line([("c", 6000)], end_ms=7000),
+    ]
+    for line in lines[1:]:
+        line.break_before = "page"
+    lines[0].display_start_override_ms = 0
+    lines[0].display_end_override_ms = 10000
+    lines[1].display_start_override_ms = 3000
+    lines[1].display_end_override_ms = 8000
+    lines[2].display_start_override_ms = 5000
+    lines[2].display_end_override_ms = 9000
+    settings = dict(
+        lead_in_ms=500,
+        tail_ms=500,
+        lane_gap_ms=0,
+        max_hold_ms=0,
+        continuity_snap_ms=0,
+        lane_count=2,
+        row_count_of=lambda _line: 2,
+    )
+
+    legacy = compute_display_lines(_track(*lines), **settings)
+    n3 = compute_display_lines(
+        _track(*lines), bottom_align_of=lambda _line: True, **settings
+    )
+
+    assert [item.lane for item in legacy] == [0, 0, 0]
+    assert [item.lane for item in n3] == [1, 0, 1]
