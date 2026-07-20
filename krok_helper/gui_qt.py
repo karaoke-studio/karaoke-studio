@@ -131,6 +131,7 @@ from krok_helper.lyrics import (
     build_lyrics_preview,
     extract_lyrics_query_from_file,
 )
+from krok_helper.notifications import play_completion_sound
 from krok_helper.pipeline import (
     DEFAULT_OFF_NAME_TEMPLATE,
     DEFAULT_ON_NAME_TEMPLATE,
@@ -7224,7 +7225,16 @@ class KrokHelperQtApp(QMainWindow):
         self._set_hires_status_color("#10B981")
         self._reset_hires_cancel_state()
         lines = "\n".join(str(path) for path in outputs) if isinstance(outputs, list) else str(outputs)
-        QMessageBox.information(self, APP_TITLE, f"输出完成:\n{lines}")
+        play_completion_sound()
+        from krok_helper.subtitle_render.frontend.fluent_dialogs import fluent_info
+
+        fluent_info(
+            self,
+            "Hi-Res 导出完成",
+            f"文件已成功导出：\n{lines}",
+            ok_text="确定",
+            copyable=True,
+        )
 
     def _finish_hires_failure(self, message: str) -> None:
         was_cancelled = self._hires_cancel_requested

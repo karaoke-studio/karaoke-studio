@@ -95,6 +95,7 @@ from qfluentwidgets import (
 from krok_helper.errors import ExportCancelled, ProcessingError
 from krok_helper.ffmpeg import find_tool, probe_media, terminate_process
 from krok_helper.models import MediaInfo
+from krok_helper.notifications import play_completion_sound
 from krok_helper.qfluent_compat import apply_qfluent_menu_lifetime_patch
 from krok_helper.settings import get_settings_path, load_app_settings, save_app_settings
 from krok_helper.subtitle_render.engine.encoder_select import (
@@ -6375,6 +6376,7 @@ class SubtitleRenderWindow(QWidget):
         self._export_status_label.setText(f"导出完成: {output_path}")
         self._export_start_button.setEnabled(True)
         self._export_stop_button.setEnabled(False)
+        play_completion_sound()
         choice = fluent_choice(
             self,
             "视频导出完成",
