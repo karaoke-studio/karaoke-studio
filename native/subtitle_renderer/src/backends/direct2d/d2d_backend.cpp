@@ -2241,6 +2241,134 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 cached.rubies.push_back(std::move(ruby));
             }
         }
+        if (!style.vertical && !style.rightToLeft && cached.rubies.size() > 1) {
+            auto translateGeometryX = [&](Microsoft::WRL::ComPtr<ID2D1Geometry> &geometry,
+                                          float offsetX,
+                                          const char *operation) {
+                if (!geometry || offsetX == 0.0f) {
+                    return;
+                }
+                const D2D1_MATRIX_3X2_F matrix = D2D1::Matrix3x2F::Translation(
+                    offsetX, 0.0f
+                );
+                Microsoft::WRL::ComPtr<ID2D1TransformedGeometry> transformed;
+                checkHr(
+                    device_.d2dFactory()->CreateTransformedGeometry(
+                        geometry.Get(), &matrix, transformed.ReleaseAndGetAddressOf()
+                    ),
+                    operation,
+                    device_
+                );
+                geometry = transformed;
+            };
+            auto translateCharX = [&](Impl::CachedChar &ch, float offsetX) {
+                ch.left += offsetX;
+                ch.right += offsetX;
+                ch.layoutLeft += offsetX;
+                ch.layoutRight += offsetX;
+                ch.pivotX += offsetX;
+                translateGeometryX(
+                    ch.geometry, offsetX,
+                    "ID2D1Factory::CreateTransformedGeometry(ruby interference character)"
+                );
+                translateGeometryX(
+                    ch.protectedStrokeGeometry, offsetX,
+                    "ID2D1Factory::CreateTransformedGeometry(ruby interference protected stroke)"
+                );
+                translateGeometryX(
+                    ch.strokeGeometry, offsetX,
+                    "ID2D1Factory::CreateTransformedGeometry(ruby interference stroke)"
+                );
+                translateGeometryX(
+                    ch.stroke2Geometry, offsetX,
+                    "ID2D1Factory::CreateTransformedGeometry(ruby interference stroke2)"
+                );
+            };
+            auto translateRubyX = [&](Impl::CachedRuby &ruby, float offsetX) {
+                ruby.bounds.left += offsetX;
+                ruby.bounds.right += offsetX;
+                ruby.fillBounds.left += offsetX;
+                ruby.fillBounds.right += offsetX;
+                ruby.pivotX += offsetX;
+                for (Impl::CachedChar &ch : ruby.chars) {
+                    ch.left += offsetX;
+                    ch.right += offsetX;
+                    ch.layoutLeft += offsetX;
+                    ch.layoutRight += offsetX;
+                    ch.pivotX += offsetX;
+                }
+                for (auto &geometry : ruby.geometries) {
+                    translateGeometryX(
+                        geometry, offsetX,
+                        "ID2D1Factory::CreateTransformedGeometry(ruby interference ruby)"
+                    );
+                }
+                for (auto &geometry : ruby.protectedStrokeGeometries) {
+                    translateGeometryX(
+                        geometry, offsetX,
+                        "ID2D1Factory::CreateTransformedGeometry(ruby interference ruby protected stroke)"
+                    );
+                }
+                for (auto &geometry : ruby.strokeGeometries) {
+                    translateGeometryX(
+                        geometry, offsetX,
+                        "ID2D1Factory::CreateTransformedGeometry(ruby interference ruby stroke)"
+                    );
+                }
+                for (auto &geometry : ruby.stroke2Geometries) {
+                    translateGeometryX(
+                        geometry, offsetX,
+                        "ID2D1Factory::CreateTransformedGeometry(ruby interference ruby stroke2)"
+                    );
+                }
+            };
+
+            for (std::size_t rubyIndex = 1; rubyIndex < cached.rubies.size(); ++rubyIndex) {
+                const Impl::CachedRuby &previous = cached.rubies[rubyIndex - 1];
+                Impl::CachedRuby &current = cached.rubies[rubyIndex];
+                if (previous.chars.empty() || current.chars.empty()) {
+                    continue;
+                }
+                const float deficit = previous.chars.back().layoutRight
+                    + style.rubyInterval - current.chars.front().layoutLeft;
+                if (deficit <= 0.0f) {
+                    continue;
+                }
+                const float push = std::ceil(deficit);
+                const std::size_t firstChar = static_cast<std::size_t>(std::clamp(
+                    current.firstCharIndex,
+                    0,
+                    static_cast<int>(cached.chars.size())
+                ));
+                for (std::size_t charIndex = firstChar;
+                     charIndex < cached.chars.size(); ++charIndex) {
+                    translateCharX(cached.chars[charIndex], push);
+                }
+                for (std::size_t followingIndex = rubyIndex;
+                     followingIndex < cached.rubies.size(); ++followingIndex) {
+                    translateRubyX(cached.rubies[followingIndex], push);
+                }
+                cursor += push;
+            }
+
+            cached.geometries.clear();
+            cached.bounds = {};
+            lineHasBounds = false;
+            for (const Impl::CachedChar &ch : cached.chars) {
+                if (!ch.geometry) {
+                    continue;
+                }
+                D2D1_RECT_F bounds{};
+                checkHr(
+                    ch.geometry->GetBounds(nullptr, &bounds),
+                    "ID2D1Geometry::GetBounds(ruby interference character)",
+                    device_
+                );
+                extendBounds(cached.bounds, lineHasBounds, bounds);
+                cached.geometries.push_back(ch.geometry);
+            }
+            cached.fillBounds.right = std::max(cursor, 1.0f);
+        }
         const auto adjustWipeEnd = [](Impl::CachedChar &current,
                                       const Impl::CachedChar &following,
                                       bool rtl) {

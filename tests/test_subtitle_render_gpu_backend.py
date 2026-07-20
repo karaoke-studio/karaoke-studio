@@ -2485,6 +2485,68 @@ def test_gpu_n3_top_margin_ignores_ruby_height_like_painter(monkeypatch) -> None
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_n3_adjacent_ruby_interference_shifts_following_text(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    line = TimingLine(
+        chars=[
+            TimingChar("A", 0),
+            TimingChar("B", 1_000),
+            TimingChar("C", 2_000),
+        ],
+        end_ms=3_000,
+        display_start_override_ms=0,
+        display_end_override_ms=3_000,
+    )
+    track = TimingTrack(
+        lines=[line],
+        rubies=[
+            RubyAnnotation(
+                kanji=char,
+                reading="WWWW",
+                pos_start_ms=start,
+                pos_end_ms=start + 1_000,
+            )
+            for char, start in (("A", 0), ("B", 1_000), ("C", 2_000))
+        ],
+    )
+    style = _g1_style(
+        layout_semantics="n3_1074",
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=54,
+        ruby_font_family="Arial",
+        ruby_font_family_latin="Arial",
+        ruby_font_size_px=28,
+        ruby_alignment="center",
+        ruby_interval_px=8,
+        letter_spacing_px=-70,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        ruby_stroke_width_px=0,
+        ruby_stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=False,
+        line_horizontal_layout="center",
+        line_y_position="center",
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+    )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, (1_500,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=1_500, track=track)
+
+    gpu_bounds = _payload_alpha_bounds(gpu[0])
+    painter_bounds = _payload_alpha_bounds(painter)
+    assert all(
+        abs(actual - expected) <= 16
+        for actual, expected in zip(gpu_bounds, painter_bounds)
+    ), (gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize(
     ("ruby_alignment", "ruby_interval_px", "ruby_gap_px"),
     [
