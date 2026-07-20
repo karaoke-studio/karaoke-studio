@@ -271,6 +271,10 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
     extra_sources: list[dict[str, Any]] = []
     if lyrics_with_source:
         layout_limit = len(changes.get("layouts") or [])
+        layout_row_counts = [
+            max(len(_list(layout.get("HorizontalAlignments"))), 1)
+            for layout in layouts
+        ]
         font_names = [
             _n3_scheme_name(font.get("SettingsName"), f"配色{index}")
             for index, font in enumerate(fonts)
@@ -288,7 +292,13 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
                 line_animation_overrides,
                 line_display_overrides,
             ) = _per_line_payloads(
-                line_infos, track, layout_limit, font_names, default_animation, warnings
+                line_infos,
+                track,
+                layout_limit,
+                layout_row_counts,
+                font_names,
+                default_animation,
+                warnings,
             )
 
         # 副字幕源（コーラス等）：与主字幕同时渲染，逐源导入路径 / 每行布局 / 逐字配色。
@@ -314,7 +324,13 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
                     extra_animations,
                     extra_display,
                 ) = _per_line_payloads(
-                    extra_line_infos, extra_track, layout_limit, font_names, default_animation, warnings
+                    extra_line_infos,
+                    extra_track,
+                    layout_limit,
+                    layout_row_counts,
+                    font_names,
+                    default_animation,
+                    warnings,
                 )
                 if extra_layouts is not None:
                     extra_payload["line_layout_indices"] = extra_layouts
@@ -773,6 +789,7 @@ def _per_line_payloads(
     line_infos: list[dict],
     track: TimingTrack,
     layout_limit: int,
+    layout_row_counts: list[int],
     font_names: list[str],
     default_animation: tuple[str, int, str, int],
     warnings: list[str],
@@ -810,14 +827,42 @@ def _per_line_payloads(
         )
         return None, None, None, None, None
 
+    raw_layout_indices = [
+        index if 0 <= index <= layout_limit else 0
+        for line in n3_lines
+        for index in [_int(line.get("LayoutIndex"), 0)]
+    ]
+    page_layout_indices = list(raw_layout_indices)
+    has_explicit_breaks = any(value != "none" for value in n3_breaks_before[1:])
+    page_start = 0
+    while page_start < len(n3_lines):
+        head_layout = raw_layout_indices[page_start]
+        rows = (
+            layout_row_counts[head_layout]
+            if 0 <= head_layout < len(layout_row_counts)
+            else 1
+        )
+        page_end = (
+            len(n3_lines)
+            if has_explicit_breaks
+            else min(page_start + max(rows, 1), len(n3_lines))
+        )
+        for candidate in range(page_start + 1, page_end):
+            if n3_breaks_before[candidate] != "none":
+                page_end = candidate
+                break
+        for index in range(page_start, page_end):
+            page_layout_indices[index] = head_layout
+        page_start = page_end
+
     layout_payload = [0] * len(track.lines)
     break_payload = ["none"] * len(track.lines)
     role_payload: list[Optional[list[Optional[str]]]] = [None] * len(track.lines)
     animation_payload: list[Optional[dict[str, object]]] = [None] * len(track.lines)
     display_payload: list[Optional[list[Optional[int]]]] = [None] * len(track.lines)
     mismatched = 0
-    for (line_index, our_line), n3_line, break_before in zip(
-        our_indexed, n3_lines, n3_breaks_before
+    for (line_index, our_line), n3_line, break_before, page_layout_index in zip(
+        our_indexed, n3_lines, n3_breaks_before, page_layout_indices
     ):
         break_payload[line_index] = break_before
         n3_chars = _stripped_n3_chars(n3_line)
@@ -826,8 +871,7 @@ def _per_line_payloads(
         if n3_text != our_text:
             mismatched += 1
             continue
-        layout_index = _int(n3_line.get("LayoutIndex"), 0)
-        layout_payload[line_index] = layout_index if 0 <= layout_index <= layout_limit else 0
+        layout_payload[line_index] = page_layout_index
         show_begin = n3_line.get("ShowBeginTime")
         show_end = n3_line.get("ShowEndTime")
         if isinstance(show_begin, (int, float)) or isinstance(show_end, (int, float)):

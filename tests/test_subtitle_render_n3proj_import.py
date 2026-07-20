@@ -481,6 +481,18 @@ def test_import_layout_character_spacing_per_layout(tmp_path):
     assert not any("全局设置" in warning for warning in result.warnings)
 
 
+def test_import_uses_page_head_layout_for_all_lines_on_n3_page(tmp_path):
+    payload = _project_payload(tmp_path)
+    line_infos = payload["SourceLyricsInfos"][0]["LineInfos"]
+    del line_infos[1]  # remove the explicit PageBreak
+    line_infos[0]["LayoutIndex"] = 0  # two-row page
+    line_infos[1]["LayoutIndex"] = 1  # ignored by N3 SetOneLineX/Y
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+
+    assert result.project_data["line_layout_indices"] == [0, 0, 0]
+
+
 def test_import_preserves_n3_line_display_windows(tmp_path):
     payload = _project_payload(tmp_path)
     first = payload["SourceLyricsInfos"][0]["LineInfos"][0]
