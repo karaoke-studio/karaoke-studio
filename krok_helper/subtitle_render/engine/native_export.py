@@ -220,6 +220,11 @@ def iter_gpu_rgba_frames(
     Direct2D reads back only the renderer's conservative subtitle bands.  The
     shared-memory reader expands those bands into a transparent QImage before
     converting premultiplied BGRA to ffmpeg's straight RGBA input format.
+
+    The request stream is pipelined one frame deep over a two-slot ring (G7):
+    frame N+1 is already rendering in the sidecar while this process expands
+    and converts frame N, so the GPU render/readback overlaps the Python-side
+    band expansion instead of strictly serialising with it.
     """
     from PyQt6.QtGui import QImage
 
@@ -227,6 +232,7 @@ def iter_gpu_rgba_frames(
     if frame_total <= 0:
         return
     shm_key = f"krok-gpu-export-{os.getpid()}-{uuid.uuid4().hex}"
+    slot_count = 2
     reader: SharedFrameRingReader | None = None
     try:
         with NativeRendererProcess(
@@ -243,11 +249,10 @@ def iter_gpu_rgba_frames(
                 force_warp=force_warp,
                 extra_tracks=extra_tracks,
             )
-            for frame_index in range(frame_total):
-                if should_cancel is not None and should_cancel():
-                    raise ExportCancelled("已停止导出。")
+
+            def begin_frame(frame_index: int) -> None:
                 t_ms = int(round(frame_index * 1000 / max(int(fps), 1)))
-                event = renderer.render_gpu_frame(
+                renderer.begin_render_gpu_frame(
                     t_ms,
                     force_warp=force_warp,
                     generation=1,
@@ -255,7 +260,16 @@ def iter_gpu_rgba_frames(
                     shm_key=shm_key,
                     include_checksum=False,
                     readback_bands=True,
+                    slot_count=slot_count,
                 )
+
+            begin_frame(0)
+            for frame_index in range(frame_total):
+                if should_cancel is not None and should_cancel():
+                    raise ExportCancelled("已停止导出。")
+                event = renderer.finish_render_gpu_frame()
+                if frame_index + 1 < frame_total:
+                    begin_frame(frame_index + 1)
                 if reader is None:
                     reader = SharedFrameRingReader.from_event(event)
                     reader.attach()

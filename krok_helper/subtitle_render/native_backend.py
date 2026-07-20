@@ -690,6 +690,43 @@ class NativeRendererProcess:
         self._send({"cmd": "gpu_configure", "force_warp": bool(force_warp)})
         return self._expect_ok(self._read_response())
 
+    def begin_render_gpu_frame(
+        self,
+        t_ms: int,
+        *,
+        force_warp: bool = False,
+        generation: int = 0,
+        frame_index: int = 0,
+        shm_key: str | None = None,
+        include_checksum: bool = True,
+        readback_bands: bool = False,
+        slot_count: int = 1,
+    ) -> None:
+        """Send a gpu_render_frame request without waiting for its response.
+
+        With ``slot_count`` > 1 the sidecar writes ``frame_index % slot_count``
+        into a multi-slot ring, so the caller may keep consuming the previous
+        frame's slot while this one renders (G7 export pipelining). Collect the
+        response with :meth:`finish_render_gpu_frame`.
+        """
+        payload: dict[str, Any] = {
+            "cmd": "gpu_render_frame",
+            "t_ms": int(t_ms),
+            "force_warp": bool(force_warp),
+            "generation": int(generation),
+            "frame_index": int(frame_index),
+            "include_checksum": bool(include_checksum),
+            "readback_bands": bool(readback_bands),
+            "slot_count": max(1, int(slot_count)),
+        }
+        if shm_key:
+            payload["shm_key"] = str(shm_key)
+        self._send(payload)
+
+    def finish_render_gpu_frame(self) -> dict[str, Any]:
+        """Collect the response for a pending begin_render_gpu_frame call."""
+        return self._expect_ok(self._read_response())
+
     def render_gpu_frame(
         self,
         t_ms: int,
@@ -700,21 +737,20 @@ class NativeRendererProcess:
         shm_key: str | None = None,
         include_checksum: bool = True,
         readback_bands: bool = False,
+        slot_count: int = 1,
     ) -> dict[str, Any]:
         """Render one configured G1 frame into a shared-memory RGBA slot."""
-        payload: dict[str, Any] = {
-            "cmd": "gpu_render_frame",
-            "t_ms": int(t_ms),
-            "force_warp": bool(force_warp),
-            "generation": int(generation),
-            "frame_index": int(frame_index),
-            "include_checksum": bool(include_checksum),
-            "readback_bands": bool(readback_bands),
-        }
-        if shm_key:
-            payload["shm_key"] = str(shm_key)
-        self._send(payload)
-        return self._expect_ok(self._read_response())
+        self.begin_render_gpu_frame(
+            t_ms,
+            force_warp=force_warp,
+            generation=generation,
+            frame_index=frame_index,
+            shm_key=shm_key,
+            include_checksum=include_checksum,
+            readback_bands=readback_bands,
+            slot_count=slot_count,
+        )
+        return self.finish_render_gpu_frame()
 
     def present_gpu_frame(
         self,

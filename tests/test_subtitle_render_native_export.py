@@ -259,6 +259,8 @@ class _FakeGpuRendererProcess:
     def __init__(self, *args, **kwargs):
         self.configures = []
         self.frames = []
+        self.pending = []
+        self.max_pending = 0
         _FakeGpuRendererProcess.instances.append(self)
 
     def __enter__(self):
@@ -271,14 +273,24 @@ class _FakeGpuRendererProcess:
         self.configures.append((args, kwargs))
         return {"ok": True, "event": "gpu_configured"}
 
-    def render_gpu_frame(self, t_ms, **kwargs):
+    def begin_render_gpu_frame(self, t_ms, **kwargs):
         self.frames.append((t_ms, kwargs))
-        return {
-            "ok": True,
-            "event": "gpu_frame_ready",
-            "frame_index": kwargs["frame_index"],
-            "shm_key": kwargs["shm_key"],
-        }
+        self.pending.append(
+            {
+                "ok": True,
+                "event": "gpu_frame_ready",
+                "frame_index": kwargs["frame_index"],
+                "shm_key": kwargs["shm_key"],
+            }
+        )
+        self.max_pending = max(self.max_pending, len(self.pending))
+
+    def finish_render_gpu_frame(self):
+        return self.pending.pop(0)
+
+    def render_gpu_frame(self, t_ms, **kwargs):
+        self.begin_render_gpu_frame(t_ms, **kwargs)
+        return self.finish_render_gpu_frame()
 
 
 def test_iter_gpu_rgba_frames_uses_banded_readback_and_straight_rgba(monkeypatch) -> None:
@@ -306,5 +318,10 @@ def test_iter_gpu_rgba_frames_uses_banded_readback_and_straight_rgba(monkeypatch
     assert [item[0] for item in process.frames] == [0, 500]
     assert all(item[1]["readback_bands"] is True for item in process.frames)
     assert all(item[1]["include_checksum"] is False for item in process.frames)
+    # G7 pipelining: two-slot ring, at most one request in flight beyond the
+    # frame currently being consumed, and no leftover pending responses.
+    assert all(item[1]["slot_count"] == 2 for item in process.frames)
+    assert process.max_pending == 1
+    assert process.pending == []
     assert _FakeGpuRingReader.instances[-1].attached is True
     assert _FakeGpuRingReader.instances[-1].closed is True

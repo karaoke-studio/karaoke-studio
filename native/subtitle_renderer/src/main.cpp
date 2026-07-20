@@ -7174,6 +7174,12 @@ QJsonObject handleRenderGpuFrame(
     const int generation = intValue(request, QStringLiteral("generation"), 0);
     const int frameIndex = intValue(request, QStringLiteral("frame_index"), 0);
     const int tMs = intValue(request, QStringLiteral("t_ms"), 0);
+    // G7 export pipelining: with slot_count > 1 the consumer may still be
+    // expanding frame N while this call renders frame N+1 into another slot.
+    const int slotCount = std::clamp(
+        intValue(request, QStringLiteral("slot_count"), 1), 1, 4
+    );
+    const int slotIndex = ((frameIndex % slotCount) + slotCount) % slotCount;
     const QString shmKey = stringValue(
         request,
         QStringLiteral("shm_key"),
@@ -7183,7 +7189,7 @@ QJsonObject handleRenderGpuFrame(
     if (!ensureSharedFrameRing(
             runtime,
             shmKey,
-            1,
+            slotCount,
             config->physicalWidth(),
             config->physicalHeight(),
             &shmError
@@ -7209,7 +7215,7 @@ QJsonObject handleRenderGpuFrame(
                 generation,
                 frameIndex,
                 tMs,
-                0,
+                slotIndex,
                 &ring
             )
             : writeSharedRgbaSlot(
@@ -7221,7 +7227,7 @@ QJsonObject handleRenderGpuFrame(
                 generation,
                 frameIndex,
                 tMs,
-                0,
+                slotIndex,
                 &ring,
                 result.surface.pixelFormat
                     == krok::subtitle::native::PixelFormat::Bgra8888Premultiplied ? 2 : 1,
@@ -7247,7 +7253,7 @@ QJsonObject handleRenderGpuFrame(
                 QString::number(bytesChecksum(result.surface.bytes.data(), result.surface.bytes.size()))
             );
         }
-        appendSharedRingMetadata(out, ring, 0);
+        appendSharedRingMetadata(out, ring, slotIndex);
         if (readbackBands) {
             QJsonArray bands;
             int packedHeight = 0;

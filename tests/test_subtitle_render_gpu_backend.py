@@ -5413,3 +5413,69 @@ def test_gpu_g1_n3_glow_matches_python_painter_within_bounded_diff(monkeypatch) 
     # remain tightly bounded.
     assert sum(channel_deltas) / len(channel_deltas) < 1.3
     assert sum(delta > 8 for delta in channel_deltas) < 15_000
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_export_pipeline_matches_serial_frames(monkeypatch) -> None:
+    """G7: the two-slot pipelined export yields the same bytes as serial renders."""
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QImage
+
+    from krok_helper.subtitle_render.engine.native_export import iter_gpu_rgba_frames
+
+    track = _g1_track()
+    style = _g1_style(
+        decoration_kind="glow",
+        glow_before_radius_px=6,
+        glow_after_radius_px=6,
+        glow_concentration_level=1,
+    )
+    width, height, fps, total = 320, 180, 30, 8
+
+    pipelined = list(
+        iter_gpu_rgba_frames(
+            track,
+            style,
+            width=width,
+            height=height,
+            fps=fps,
+            total_frames=total,
+            renderer_path=_renderer_path(),
+            force_warp=True,
+        )
+    )
+
+    serial: list[bytes] = []
+    shm_key = f"test-gpu-serial-{uuid.uuid4().hex}"
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        renderer.configure_gpu(
+            track, style, width=width, height=height, fps=fps, force_warp=True
+        )
+        reader = None
+        try:
+            for frame_index in range(total):
+                event = renderer.render_gpu_frame(
+                    int(round(frame_index * 1000 / fps)),
+                    force_warp=True,
+                    generation=1,
+                    frame_index=frame_index,
+                    shm_key=shm_key,
+                    include_checksum=False,
+                    readback_bands=True,
+                )
+                if reader is None:
+                    reader = SharedFrameRingReader.from_event(event)
+                    reader.attach()
+                image = reader.read_qimage(event).convertToFormat(
+                    QImage.Format.Format_RGBA8888
+                )
+                bits = image.constBits()
+                bits.setsize(image.sizeInBytes())
+                serial.append(bytes(bits))
+        finally:
+            if reader is not None:
+                reader.close()
+
+    assert len(pipelined) == total
+    assert sum(frame[3::4].count(0) < len(frame) // 4 for frame in pipelined) > 0
+    assert pipelined == serial
