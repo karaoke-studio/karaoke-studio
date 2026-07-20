@@ -1,4 +1,4 @@
-"""字幕视频渲染主窗口（Sayatoo 风格 + 底部 NavigationBar + 拖拽加载）。
+"""字幕视频渲染主窗口（Sayatoo 风格 + 顶部工作区导航 + 拖拽加载）。
 
 照搬 SUG（lyrics_timing/.../frontend/main_window.py）的双模式骨架：
 
@@ -6,17 +6,16 @@
 - ``SubtitleRenderWindow.for_embedding(parent, settings_provider, workflow_context)``
   — 嵌入工作台
 
-UI 顶层结构（底部左下角 ``NavigationBar``，与工作流区域一致的 24px 左右 margin）：
+UI 顶层结构（工作区导航居中放在项目命令栏）：
 
   ┌──────────────────────────────────────────────────────┐
-  │  项目命令栏                                           │
+  │  项目命令栏             [预览] [导出]                 │
   │  ┌─────────┬──────────────┬──────────────┐          │
   │  │ 左·歌词 │ 中·预览       │ 右·属性 tab │          │
   │  │(拖.sug/.lrc) + transport│              │          │
   │  ├─────────┴──────────────┴──────────────┤          │
   │  │ 底·字幕轨道                            │          │
   │  └─────────────────────────────────────────┘          │
-  │  [预览] [导出]                                         │
   └──────────────────────────────────────────────────────┘
 
 三个素材区均接受拖拽 + 点击浏览（详见 :mod:`drop_panel`）。
@@ -1367,20 +1366,27 @@ class SubtitleRenderWindow(QWidget):
     # ------------------------------------------------------------------ layout
 
     def _init_layout(self) -> None:
-        # 主布局：内容区 + 底部导航条（水平按钮靠左下角）
+        # 主布局：共用项目命令栏 + 内容区。工作区导航放在命令栏正中间，
+        # 不再单独占用字幕轨道下方的高度。
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
         # QStackedWidget 承载各页内容
         self._stack = QStackedWidget(self)
-        root.addWidget(self._stack, 1)
-
         self._preview_tab = self._make_preview_tab()
         self._export_tab = self._make_export_tab()
         self._stack.addWidget(self._preview_tab)
         self._stack.addWidget(self._export_tab)
         self._stack.currentChanged.connect(self._on_workspace_tab_changed)
+
+        self._project_bar = self._make_project_bar()
+        # Compatibility aliases: the command bar is now shared by both pages.
+        self._preview_project_bar = self._project_bar
+        self._export_project_bar = self._project_bar
+        root.addWidget(self._project_bar)
+        root.addWidget(self._stack, 1)
+
         persisted = self._load_subtitle_settings()
         output = persisted.get("output") if isinstance(persisted.get("output"), dict) else {}
         self._apply_output_settings(output)
@@ -1398,28 +1404,6 @@ class SubtitleRenderWindow(QWidget):
             self._refresh_export_format_label
         )
         self._refresh_export_format_label()
-
-        # 底部导航：两个水平按钮，距左/下边各 24px
-        bottom_bar = QWidget(self)
-        bottom_layout = QHBoxLayout(bottom_bar)
-        bottom_layout.setContentsMargins(24, 4, 24, 24)
-        bottom_layout.setSpacing(8)
-
-        self._bottom_navigation = SegmentedWidget(bottom_bar)
-        self._nav_btns: dict[str, QWidget] = {}
-        for key, text in [("preview", "预览"), ("export", "导出")]:
-            btn = self._bottom_navigation.addItem(
-                key,
-                text,
-                onClick=lambda _checked=False, k=key: self._switch_tab(k),
-            )
-            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedHeight(32)
-            self._nav_btns[key] = btn
-        bottom_layout.addWidget(self._bottom_navigation)
-        bottom_layout.addStretch(1)
-        root.addWidget(bottom_bar)
 
         self._bottom_navigation.setCurrentItem("preview")
         self._stack.setCurrentIndex(0)
@@ -1519,12 +1503,19 @@ class SubtitleRenderWindow(QWidget):
 
     def _make_project_bar(self) -> QWidget:
         bar = QWidget()
-        self._project_bar = bar
         bar.setObjectName("SrProjectBar")
         themed(bar, lambda: "#SrProjectBar { background: transparent; }")
         layout = QHBoxLayout(bar)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(24, 4, 24, 0)
         layout.setSpacing(8)
+
+        left = QWidget(bar)
+        left.setObjectName("SrProjectBarLeft")
+        themed(left, lambda: "#SrProjectBarLeft { background: transparent; }")
+        left_layout = QHBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(8)
+        self._project_bar_left = left
 
         # 「文件管理 ▾」单个下拉，菜单含 新建/打开/保存/另存为（仿 SUG，省横向空间）。
         self._file_menu_btn = DropDownPushButton(FIF.FOLDER, "文件管理")
@@ -1551,7 +1542,7 @@ class SubtitleRenderWindow(QWidget):
         menu.addSeparator()
         menu.addAction(Action(FIF.DOWNLOAD, "导入 N3 项目", triggered=self._import_n3_project))
         self._file_menu_btn.setMenu(menu)
-        layout.addWidget(self._file_menu_btn)
+        left_layout.addWidget(self._file_menu_btn)
 
         self._background_menu_btn = DropDownPushButton("背景与音频")
         self._background_menu_btn.setFixedHeight(30)
@@ -1565,7 +1556,7 @@ class SubtitleRenderWindow(QWidget):
         background_menu.addAction(audio_action)
         self._audio_menu_actions.append(audio_action)
         self._background_menu_btn.setMenu(background_menu)
-        layout.addWidget(self._background_menu_btn)
+        left_layout.addWidget(self._background_menu_btn)
 
         # 项目名：超长用 … 截断（完整名放 tooltip）。
         self._project_name_label = QLabel("")
@@ -1574,9 +1565,40 @@ class SubtitleRenderWindow(QWidget):
             self._project_name_label,
             lambda: f"color: {palette().text_secondary}; font-size: 9.5pt;",
         )
-        layout.addWidget(self._project_name_label)
+        left_layout.addWidget(self._project_name_label)
+
+        layout.addWidget(left)
         layout.addStretch(1)
+
+        self._bottom_navigation = SegmentedWidget(bar)
+        self._nav_btns: dict[str, QWidget] = {}
+        for key, text in [("preview", "预览"), ("export", "导出")]:
+            btn = self._bottom_navigation.addItem(
+                key,
+                text,
+                onClick=lambda _checked=False, k=key: self._switch_tab(k),
+            )
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn.setFixedHeight(32)
+            self._nav_btns[key] = btn
+        layout.addWidget(self._bottom_navigation)
+        layout.addStretch(1)
+
+        # Match the left controls on the right so navigation is centered in the
+        # entire command bar, not just in the remaining horizontal space.
+        self._project_bar_right_balance = QWidget(bar)
+        self._project_bar_right_balance.setFixedWidth(left.sizeHint().width())
+        layout.addWidget(self._project_bar_right_balance)
         return bar
+
+    def _balance_project_bar(self) -> None:
+        if not hasattr(self, "_project_bar_left"):
+            return
+        self._project_bar_left.layout().invalidate()
+        self._project_bar_right_balance.setFixedWidth(
+            self._project_bar_left.sizeHint().width()
+        )
 
     def _make_preview_window_button(self, parent: QWidget) -> FluentPushButton:
         """Create the preview-only entry anchored above the preview workspace."""
@@ -1605,6 +1627,7 @@ class SubtitleRenderWindow(QWidget):
         )
         self._project_name_label.setText(elided)
         self._project_name_label.setToolTip(full if elided != full else "")
+        self._balance_project_bar()
         if hasattr(self, "_save_project_action"):
             idle = not state.saving and not state.exporting
             self._save_project_action.setEnabled(
@@ -2705,10 +2728,6 @@ class SubtitleRenderWindow(QWidget):
         outer.setContentsMargins(24, 4, 24, 4)
         outer.setSpacing(4)
 
-        # 顶部项目命令栏（新建 / 打开 / 保存 / 另存为 + 当前项目名）
-        self._preview_project_bar = self._make_project_bar()
-        outer.addWidget(self._preview_project_bar)
-
         body = QSplitter(Qt.Orientation.Vertical)
         body.setChildrenCollapsible(False)
         self._preview_body_splitter = body
@@ -2881,10 +2900,6 @@ class SubtitleRenderWindow(QWidget):
         outer = QVBoxLayout(page)
         outer.setContentsMargins(24, 4, 24, 16)
         outer.setSpacing(10)
-
-        # 顶部项目命令栏（同预览页，但不包含预览浮窗入口）
-        self._export_project_bar = self._make_project_bar()
-        outer.addWidget(self._export_project_bar)
 
         # 内容列限制最大宽度并水平居中，宽屏下表单不再拉满整行。
         column = QWidget()

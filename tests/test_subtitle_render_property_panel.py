@@ -4614,7 +4614,16 @@ def test_main_window_preview_tab_uses_two_top_regions_and_bottom_timeline(qapp):
     qapp.processEvents()
 
     left_width, right_width = win._preview_splitter.sizes()
+    navigation_center = win._bottom_navigation.mapTo(
+        win._project_bar,
+        win._bottom_navigation.rect().center(),
+    ).x()
 
+    assert win.layout().count() == 2
+    assert win.layout().itemAt(0).widget() is win._project_bar
+    assert win.layout().itemAt(1).widget() is win._stack
+    assert win._project_bar.isAncestorOf(win._bottom_navigation)
+    assert abs(navigation_center - win._project_bar.rect().center().x()) <= 1
     assert win._preview_body_splitter.orientation() == Qt.Orientation.Vertical
     assert win._preview_body_splitter.widget(0) is win._preview_splitter
     assert win._preview_body_splitter.widget(1) is win._tracks_view

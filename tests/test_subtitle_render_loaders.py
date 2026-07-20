@@ -863,7 +863,7 @@ def test_render_log_does_not_flash_late_sei_warning_in_status(qapp, monkeypatch)
 def test_window_shell_components_present(qapp, monkeypatch):
     win = _make_window(qapp, monkeypatch)
 
-    # 底部导航按钮 + stack
+    # 顶部命令栏中的工作区导航 + stack
     assert win._nav_btns is not None
     assert len(win._nav_btns) == 2
     assert win._stack.count() == 2
@@ -905,7 +905,7 @@ def test_window_shell_components_present(qapp, monkeypatch):
     ]
 
 
-def test_bottom_navigation_switches_export_and_back_to_preview(qapp, monkeypatch):
+def test_workspace_navigation_switches_export_and_back_to_preview(qapp, monkeypatch):
     win = _make_window(qapp, monkeypatch)
 
     win._nav_btns["export"].click()
