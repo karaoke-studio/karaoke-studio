@@ -28,6 +28,11 @@ _OPTIONAL_FONT_FIELDS = (
     "ruby_font_family",
     "ruby_font_family_latin",
 )
+_OPTIONAL_FONT_WEIGHT_FIELDS = {
+    "font_family_latin": "latin_font_weight",
+    "ruby_font_family": "ruby_font_weight",
+    "ruby_font_family_latin": "ruby_latin_font_weight",
+}
 
 
 @dataclass(frozen=True)
@@ -390,6 +395,21 @@ def _n3_default_family(catalog: N3FontCatalog, fallback: str) -> str:
     return catalog.families[0] if catalog.families else fallback
 
 
+def _canonicalize_family_with_weight(
+    catalog: N3FontCatalog, name: str, weight: int | None
+) -> str | None:
+    """Resolve physical bold/regular families saved by N3 as family + face."""
+
+    canonical = catalog.canonicalize(name)
+    if canonical is not None:
+        return canonical
+    requested = str(name or "").strip()
+    if not requested:
+        return None
+    suffix = "-B" if weight is not None and int(weight) >= 600 else "-R"
+    return catalog.canonicalize(f"{requested}{suffix}")
+
+
 def normalize_scheme_font_families(
     scheme: SubtitleStyleScheme,
     catalog: N3FontCatalog | None = None,
@@ -402,7 +422,9 @@ def normalize_scheme_font_families(
 
     changes: dict[str, str | None] = {}
     if scheme.font_family:
-        canonical = catalog.canonicalize(scheme.font_family)
+        canonical = _canonicalize_family_with_weight(
+            catalog, scheme.font_family, scheme.font_weight
+        )
         normalized_root = canonical or (
             _n3_default_family(catalog, scheme.font_family)
             if scheme.n3_font_inheritance
@@ -413,7 +435,9 @@ def normalize_scheme_font_families(
     for field in _OPTIONAL_FONT_FIELDS:
         value = getattr(scheme, field)
         if value:
-            canonical = catalog.canonicalize(value)
+            canonical = _canonicalize_family_with_weight(
+                catalog, value, getattr(scheme, _OPTIONAL_FONT_WEIGHT_FIELDS[field])
+            )
             if canonical != value:
                 changes[field] = canonical
 
@@ -433,7 +457,9 @@ def normalize_style_font_families(
         return style, False
 
     changes: dict[str, object] = {}
-    root = catalog.canonicalize(style.font_family) or _n3_default_family(
+    root = _canonicalize_family_with_weight(
+        catalog, style.font_family, style.font_weight
+    ) or _n3_default_family(
         catalog, style.font_family
     )
     if root != style.font_family:
@@ -441,7 +467,9 @@ def normalize_style_font_families(
     for field in _OPTIONAL_FONT_FIELDS:
         value = getattr(style, field)
         if value:
-            canonical = catalog.canonicalize(value)
+            canonical = _canonicalize_family_with_weight(
+                catalog, value, getattr(style, _OPTIONAL_FONT_WEIGHT_FIELDS[field])
+            )
             if canonical != value:
                 changes[field] = canonical
 
@@ -466,13 +494,17 @@ def normalize_style_font_families(
     title = style.title_overlay
     if title is not None:
         title_changes: dict[str, str | None] = {}
-        title_root = catalog.canonicalize(title.font_family) or _n3_default_family(
+        title_root = _canonicalize_family_with_weight(
+            catalog, title.font_family, title.font_weight
+        ) or _n3_default_family(
             catalog, title.font_family
         )
         if title_root != title.font_family:
             title_changes["font_family"] = title_root
         if title.font_family_latin:
-            title_latin = catalog.canonicalize(title.font_family_latin)
+            title_latin = _canonicalize_family_with_weight(
+                catalog, title.font_family_latin, title.font_weight
+            )
             if title_latin != title.font_family_latin:
                 title_changes["font_family_latin"] = title_latin
         if title_changes:

@@ -2799,7 +2799,14 @@ def _letter_spacing(style: Style) -> int:
 def _line_text_width(char_widths: list[int], style: Style) -> int:
     if not char_widths:
         return 0
-    return max(0, sum(char_widths) + _letter_spacing(style) * (len(char_widths) - 1))
+    spacing = _letter_spacing(style)
+    if style.layout_semantics == "n3_1074":
+        return max(
+            0,
+            sum(max(int(width) + spacing, 0) for width in char_widths[:-1])
+            + int(char_widths[-1]),
+        )
+    return max(0, sum(char_widths) + spacing * (len(char_widths) - 1))
 
 
 def _visible_lines_for_style(
@@ -4719,6 +4726,10 @@ def _layout_plain_line(
     )
     total_w = _line_text_width(char_widths, style) + sum(char_gaps)
     visual_pad = _visual_text_padding(style)
+    if style.layout_semantics == "n3_1074":
+        # N3 anchors the logical DrawLineLeft/Right.  Secondary stroke, glow
+        # and shadow may extend outside the requested horizontal margin.
+        visual_pad = 0
     left_ext = max(visual_pad, ruby_left_ext)
     right_ext = max(visual_pad, ruby_right_ext)
     x0 = (
@@ -4737,7 +4748,12 @@ def _layout_plain_line(
     )
     rtl = style.right_to_left
     char_lefts = _char_left_positions(
-        char_widths, x0, rtl, _letter_spacing(style), char_gaps=char_gaps
+        char_widths,
+        x0,
+        rtl,
+        _letter_spacing(style),
+        char_gaps=char_gaps,
+        n3_no_backtracking=style.layout_semantics == "n3_1074",
     )
     char_x_ranges: list[tuple[int, int]] = [
         (left, left + w) for left, w in zip(char_lefts, char_widths)
@@ -4794,6 +4810,7 @@ def _char_left_positions(
     rtl: bool,
     letter_spacing_px: int = 0,
     char_gaps: list[int] | None = None,
+    n3_no_backtracking: bool = False,
 ) -> list[int]:
     """每个字符左缘的 x 坐标。``rtl`` 时第一个字符排在最右、依次向左。
 
@@ -4807,14 +4824,16 @@ def _char_left_positions(
         for w in char_widths:
             cursor -= w
             lefts.append(cursor)
-            cursor -= letter_spacing_px
+            advance = w + letter_spacing_px
+            cursor -= max(advance, 0) - w if n3_no_backtracking else letter_spacing_px
     else:
         cursor = base_x
         for index, w in enumerate(char_widths):
             if char_gaps is not None and index < len(char_gaps):
                 cursor += char_gaps[index]
             lefts.append(cursor)
-            cursor += w + letter_spacing_px
+            advance = w + letter_spacing_px
+            cursor += max(advance, 0) if n3_no_backtracking else advance
     return lefts
 
 
@@ -5139,7 +5158,12 @@ def _build_text_layout(
                 ch.vector_glyph,
             )
         )
-        total_w += width + spacing_after
+        advance = width + spacing_after
+        total_w += (
+            max(advance, 0)
+            if style.layout_semantics == "n3_1074" and spacing_after
+            else advance
+        )
         # 空白字符无墨水，不参与行高（N3 按墨水轮廓求行盒）。否则半角空格走
         # 英数字体时，其超高 metrics（如 Comic Sans）会把注音顶离正文。
         if ch.text.strip():
@@ -5178,7 +5202,12 @@ def _build_text_layout(
                     vector_glyph=vector_glyph,
                 )
             )
-            cursor -= spacing_after
+            advance = width + spacing_after
+            cursor -= (
+                max(advance, 0) - width
+                if style.layout_semantics == "n3_1074" and spacing_after
+                else spacing_after
+            )
     else:
         cursor = x0
         for index, text, role_label, glyph_style, brush_style, glyph_font, metrics, width, spacing_after, path_offset_x, vector_glyph in measured:
@@ -5199,7 +5228,12 @@ def _build_text_layout(
                     vector_glyph=vector_glyph,
                 )
             )
-            cursor += width + spacing_after
+            advance = width + spacing_after
+            cursor += (
+                max(advance, 0)
+                if style.layout_semantics == "n3_1074" and spacing_after
+                else advance
+            )
 
     height = max_ascent + max_descent
     line_rect = QRectF(

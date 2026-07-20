@@ -170,6 +170,29 @@ def test_normalize_style_canonicalizes_aliases_and_clears_missing_optional_fonts
     assert normalized.title_overlay.font_family_latin is None
 
 
+def test_normalize_style_resolves_physical_family_from_n3_face_weight():
+    catalog = N3FontCatalog(
+        families=("Fallback", "UD Kyokasho N-B", "UD Kyokasho N-R"),
+        aliases={
+            "fallback": "Fallback",
+            "ud kyokasho n-b": "UD Kyokasho N-B",
+            "ud kyokasho n-r": "UD Kyokasho N-R",
+        },
+        authoritative=True,
+    )
+
+    bold, changed = normalize_style_font_families(
+        Style(font_family="UD Kyokasho N", font_weight=700), catalog
+    )
+    regular, _ = normalize_style_font_families(
+        Style(font_family="UD Kyokasho N", font_weight=400), catalog
+    )
+
+    assert changed is True
+    assert bold.font_family == "UD Kyokasho N-B"
+    assert regular.font_family == "UD Kyokasho N-R"
+
+
 def test_normalize_style_normalizes_nested_schemes_without_mutating_input():
     inherited = SubtitleStyleScheme(
         font_family="Missing Root",

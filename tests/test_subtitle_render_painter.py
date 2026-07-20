@@ -7377,6 +7377,18 @@ def test_layout_semantics_defaults_to_legacy_and_round_trips():
     assert restored.layout_semantics == "n3_1074"
 
 
+def test_n3_character_advance_never_backtracks_but_legacy_is_unchanged():
+    widths = [20, 20, 20]
+    assert _char_left_positions(widths, 100, False, -30) == [100, 90, 80]
+    assert _char_left_positions(
+        widths, 100, False, -30, n3_no_backtracking=True
+    ) == [100, 100, 100]
+    assert _line_text_width(widths, Style(letter_spacing_px=-30)) == 0
+    assert _line_text_width(
+        widths, Style(letter_spacing_px=-30, layout_semantics="n3_1074")
+    ) == 20
+
+
 def test_ruby_anchor_participation_round_trips_for_global_and_role():
     style = Style(
         affects_ruby_anchor=False,
