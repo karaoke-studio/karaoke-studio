@@ -1390,6 +1390,7 @@ class SubtitleRenderWindow(QWidget):
         persisted = self._load_subtitle_settings()
         output = persisted.get("output") if isinstance(persisted.get("output"), dict) else {}
         self._apply_output_settings(output)
+        self._remember_local_export_defaults()
         self._set_export_screen_controls(self._screen_settings)
         self._sync_preview_output_size()
         self._connect_project_output_signals()
@@ -2183,7 +2184,11 @@ class SubtitleRenderWindow(QWidget):
             if c_idx >= 0:
                 self._export_codec_combo.setCurrentIndex(c_idx)
         render_workers = output.get("render_workers")
-        if isinstance(render_workers, int) and render_workers in RENDER_WORKER_OPTIONS:
+        if (
+            not self._loading_project
+            and isinstance(render_workers, int)
+            and render_workers in RENDER_WORKER_OPTIONS
+        ):
             workers_idx = self._export_render_workers_combo.findData(render_workers)
             if workers_idx >= 0:
                 self._export_render_workers_combo.setCurrentIndex(workers_idx)
@@ -2235,7 +2240,8 @@ class SubtitleRenderWindow(QWidget):
             self._export_native_check.blockSignals(blocked)
 
     def _reset_export_settings_for_new_project(self) -> None:
-        """Restore export defaults while preserving the app-level folder policy."""
+        """Restore the last local export choices for a newly created project."""
+        local_output = self._local_output_preferences
         controls = (
             self._export_encoder_combo,
             self._export_codec_combo,
@@ -2247,18 +2253,28 @@ class SubtitleRenderWindow(QWidget):
         )
         previous_signal_states = [control.blockSignals(True) for control in controls]
         try:
+            encoder = local_output.get("encoder_mode", ENCODER_CPU)
             self._export_encoder_combo.setCurrentIndex(
-                max(self._export_encoder_combo.findData(ENCODER_CPU), 0)
+                max(self._export_encoder_combo.findData(encoder), 0)
             )
+            codec = local_output.get("codec", CODEC_H264)
             self._export_codec_combo.setCurrentIndex(
-                max(self._export_codec_combo.findData(CODEC_H264), 0)
+                max(self._export_codec_combo.findData(codec), 0)
             )
+            preset = local_output.get("preset", "medium")
+            preset_index = self._export_preset_combo.findData(preset)
+            if preset_index < 0:
+                preset_index = self._export_preset_combo.findData("medium")
             self._export_preset_combo.setCurrentIndex(
-                max(self._export_preset_combo.findData("medium"), 0)
+                max(preset_index, 0)
             )
-            self._export_crf_spin.setValue(18)
+            crf = local_output.get("crf", 18)
+            self._export_crf_spin.setValue(
+                crf if isinstance(crf, int) and 0 <= crf <= 51 else 18
+            )
+            render_workers = local_output.get("render_workers", 0)
             self._export_render_workers_combo.setCurrentIndex(
-                max(self._export_render_workers_combo.findData(0), 0)
+                max(self._export_render_workers_combo.findData(render_workers), 0)
             )
             self._export_native_check.setChecked(False)
             name = self._default_export_name()
@@ -5027,12 +5043,33 @@ class SubtitleRenderWindow(QWidget):
         self._export_fps_combo.setCurrentIndex(index if index >= 0 else 0)
 
     def _on_output_settings_changed(self) -> None:
+        if self._loading_project:
+            return
+        self._remember_local_export_defaults()
         self._save_persisted_state()
         self._mark_project_dirty()
 
     def _on_render_workers_changed(self) -> None:
         """Persist this hardware-specific preference without dirtying the project."""
+        self._remember_local_export_defaults()
         self._save_persisted_state()
+
+    def _remember_local_export_defaults(self) -> None:
+        self._local_output_preferences.update(
+            {
+                "encoder_mode": str(
+                    self._export_encoder_combo.currentData() or ENCODER_CPU
+                ),
+                "codec": self._export_codec_value(),
+                "preset": str(
+                    self._export_preset_combo.currentData() or "medium"
+                ),
+                "crf": int(self._export_crf_spin.value()),
+                "render_workers": int(
+                    self._export_render_workers_combo.currentData() or 0
+                ),
+            }
+        )
 
     def _on_gpu_preview_changed(self, enabled: bool) -> None:
         """Apply and persist the experimental subtitle-preview backend."""
@@ -5791,6 +5828,11 @@ class SubtitleRenderWindow(QWidget):
 
     def _load_persisted_state(self) -> None:
         data = self._load_subtitle_settings()
+        self._local_output_preferences = (
+            dict(data.get("output"))
+            if isinstance(data.get("output"), dict)
+            else {}
+        )
         # 应用级旧默认曾错误使用“游明朝 100px / 15px 描边”。只在加载
         # 应用默认时迁移到 N3「情報小」；打开 .yurika / .n3proj 时保留项目
         # 明确选择的标题方案。
@@ -5935,8 +5977,24 @@ class SubtitleRenderWindow(QWidget):
             output["gpu_export_default_version"] = GPU_EXPORT_DEFAULT_VERSION
             output["directory_mode"] = self._export_dir_mode
             output["custom_directory"] = self._export_custom_dir
-            output["render_workers"] = int(
-                self._export_render_workers_combo.currentData() or 0
+            local_output = self._local_output_preferences
+            output["encoder_mode"] = str(
+                local_output.get("encoder_mode") or ENCODER_CPU
+            )
+            output["codec"] = str(local_output.get("codec") or CODEC_H264)
+            output["preset"] = str(local_output.get("preset") or "medium")
+            local_crf = local_output.get("crf", 18)
+            output["crf"] = (
+                int(local_crf)
+                if isinstance(local_crf, int) and 0 <= local_crf <= 51
+                else 18
+            )
+            local_workers = local_output.get("render_workers", 0)
+            output["render_workers"] = (
+                int(local_workers)
+                if isinstance(local_workers, int)
+                and local_workers in RENDER_WORKER_OPTIONS
+                else 0
             )
             data["output"] = output
         try:

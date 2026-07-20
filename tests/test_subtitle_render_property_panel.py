@@ -5094,6 +5094,77 @@ def test_render_worker_choice_is_local_and_not_saved_in_project(qapp, monkeypatc
     assert "render_workers" not in win._current_project_data()["output"]
 
 
+def test_export_encoding_choices_persist_as_local_new_project_defaults(
+    qapp, monkeypatch
+):
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
+
+    class FakeSettingsProvider:
+        def __init__(self):
+            self.data = {"output": {}}
+
+        def load(self):
+            return dict(self.data)
+
+        def save(self, data):
+            self.data = dict(data)
+
+    provider = FakeSettingsProvider()
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    win._export_encoder_combo.setCurrentIndex(
+        win._export_encoder_combo.findData(mw.ENCODER_NVENC)
+    )
+    win._export_codec_combo.setCurrentIndex(
+        win._export_codec_combo.findData(mw.CODEC_HEVC)
+    )
+    win._export_preset_combo.setCurrentIndex(
+        win._export_preset_combo.findData("slow")
+    )
+    win._export_crf_spin.setValue(24)
+    win._export_render_workers_combo.setCurrentIndex(
+        win._export_render_workers_combo.findData(12)
+    )
+
+    assert provider.data["output"]["encoder_mode"] == mw.ENCODER_NVENC
+    assert provider.data["output"]["codec"] == mw.CODEC_HEVC
+    assert provider.data["output"]["preset"] == "slow"
+    assert provider.data["output"]["crf"] == 24
+    assert provider.data["output"]["render_workers"] == 12
+
+    reopened = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    assert reopened._export_encoder_combo.currentData() == mw.ENCODER_NVENC
+    assert reopened._export_codec_combo.currentData() == mw.CODEC_HEVC
+    assert reopened._export_preset_combo.currentData() == "slow"
+    assert reopened._export_crf_spin.value() == 24
+    assert reopened._export_render_workers_combo.currentData() == 12
+
+    # Existing projects retain their own encoding settings without replacing
+    # the last local choices used to seed a future new project.
+    win._apply_project_data(
+        {
+            "output": {
+                "encoder_mode": mw.ENCODER_CPU,
+                "codec": mw.CODEC_H264,
+                "preset": "medium",
+                "crf": 18,
+            }
+        }
+    )
+    assert win._export_encoder_combo.currentData() == mw.ENCODER_CPU
+    assert provider.data["output"]["encoder_mode"] == mw.ENCODER_NVENC
+    win._save_persisted_state()
+    assert provider.data["output"]["encoder_mode"] == mw.ENCODER_NVENC
+
+    win._set_project_dirty(False)
+    win._new_project()
+    assert win._export_encoder_combo.currentData() == mw.ENCODER_NVENC
+    assert win._export_codec_combo.currentData() == mw.CODEC_HEVC
+    assert win._export_preset_combo.currentData() == "slow"
+    assert win._export_crf_spin.value() == 24
+    assert win._export_render_workers_combo.currentData() == 12
+
+
 def test_main_window_drops_leaked_project_roles_and_falls_back_to_global_selection(
     qapp, monkeypatch
 ):
