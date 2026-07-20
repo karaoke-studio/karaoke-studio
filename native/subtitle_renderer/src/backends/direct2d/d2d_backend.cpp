@@ -913,6 +913,7 @@ struct Direct2DGpuBackend::Impl {
         bool hasInlineStyles = false;
         std::optional<float> guideAnchorLeft;
         std::optional<float> guideAnchorRight;
+        bool centerOverride = false;
         D2D1_RECT_F bounds{};
         D2D1_RECT_F fillBounds{};
         std::vector<CachedChar> chars;
@@ -1229,6 +1230,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         cached.compositeOrder = sourceLine.compositeOrder;
         cached.guideAnchorLeft = sourceLine.guideAnchorLeft;
         cached.guideAnchorRight = sourceLine.guideAnchorRight;
+        cached.centerOverride = sourceLine.centerOverride;
         cached.staticOverlay = sourceLine.staticOverlay;
         cached.fadeInMs = sourceLine.fadeInMs;
         cached.fadeOutMs = sourceLine.fadeOutMs;
@@ -3265,13 +3267,19 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         if (n3Layout && !style.vertical) {
             lyricLeft = line->fillBounds.left;
             lyricRight = line->fillBounds.right;
+            if (style.alignment != "center" || line->centerOverride) {
+                for (const Impl::CachedRuby &ruby : line->rubies) {
+                    lyricLeft = std::min(lyricLeft, ruby.fillBounds.left);
+                    lyricRight = std::max(lyricRight, ruby.fillBounds.right);
+                }
+            }
         }
         if (line->guideAnchorLeft.has_value()
             && line->guideAnchorRight.has_value()
             && !style.vertical) {
             lyricLeft = *line->guideAnchorLeft;
             lyricRight = *line->guideAnchorRight;
-        } else if (line->hasInlineStyles) {
+        } else if (line->hasInlineStyles && !n3Layout) {
             // Painter anchors mixed-role lines by their layout box plus the
             // largest role visual pad, not by the asymmetric glyph ink box.
             lyricLeft = std::min(

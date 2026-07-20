@@ -6682,6 +6682,63 @@ def test_smart_single_page_line_is_centered(qapp):
     assert x == (img_w - w) // 2
 
 
+def test_n3_center_lane_centers_main_text_without_ruby_overhang(qapp):
+    lines = [
+        TimingLine(chars=[TimingChar("L", 0)], end_ms=500),
+        TimingLine(chars=[TimingChar("I", 500)], end_ms=1_000),
+        TimingLine(chars=[TimingChar("R", 1_000)], end_ms=1_500),
+    ]
+    ruby = RubyAnnotation(
+        kanji="I", reading="WWWWWW", pos_start_ms=500, pos_end_ms=1_000
+    )
+    track = TimingTrack(lines=lines, rubies=[ruby])
+    style = Style(
+        layout_semantics="n3_1074",
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=60,
+        ruby_font_family="Arial",
+        ruby_font_family_latin="Arial",
+        ruby_font_size_px=60,
+        ruby_alignment="center",
+        smart_horizontal="none",
+        line_alignments=["left", "center", "right"],
+    )
+
+    layout = _layout_line(track, lines[1], style, 640, 360, lane=1)
+
+    assert layout is not None
+    main_left, main_right = layout.char_x_ranges[0]
+    assert abs((main_left + main_right) / 2 - 320) <= 1
+    assert layout.ruby_layouts[0].reading_width > main_right - main_left
+
+
+def test_n3_inline_role_left_anchor_ignores_secondary_visual_padding(qapp):
+    line = TimingLine(
+        chars=[TimingChar("A", 0, role_label="lead")], end_ms=1_000
+    )
+    track = TimingTrack(lines=[line])
+    style = Style(
+        layout_semantics="n3_1074",
+        smart_horizontal="none",
+        horizontal_margin_px=73,
+        custom_style_schemes={
+            "lead": SubtitleStyleScheme(
+                font_family="Arial",
+                font_size_px=64,
+                stroke_width_px=4,
+                stroke2_enabled=True,
+                stroke2_width_px=28,
+            )
+        },
+    )
+
+    layout = _layout_line(track, line, style, 640, 360, lane=0)
+
+    assert layout is not None
+    assert layout.char_x_ranges[0][0] == 73
+
+
 def test_style_dict_roundtrip_keeps_smart_horizontal():
     restored = style_from_dict(style_to_dict(Style(smart_horizontal="center_position")))
     assert restored.smart_horizontal == "center_position"

@@ -6749,6 +6749,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         line.sourceLineIndex = sourceLine.sourceLineIndex;
         line.pageIndex = sourceLine.pageIndex;
         line.lane = sourceLine.lane;
+        line.centerOverride = sourceLine.centerOverride;
         line.compositeOrder = sourceLine.sourceIndex == 0
             ? 0
             : sourceLine.sourceIndex + 1;

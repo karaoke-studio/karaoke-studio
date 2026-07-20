@@ -4754,12 +4754,24 @@ def _layout_plain_line(
         visual_pad = 0
     left_ext = max(visual_pad, ruby_left_ext)
     right_ext = max(visual_pad, ruby_right_ext)
+    center_override = _line_center_override(track, source_line, style)
+    n3_main_center = (
+        style.layout_semantics == "n3_1074"
+        and not center_override
+        and style.line_horizontal_layout == "asymmetric"
+        and _lane_alignment(style, lane) == "center"
+    )
     x0 = (
         line_x
         if line_x is not None
         else _resolve_line_x_smart(
+            img_w, total_w, track, source_line, style, lane,
+            center_override=False,
+        )
+        if n3_main_center
+        else _resolve_line_x_smart(
             img_w, total_w + left_ext + right_ext, track, source_line, style, lane,
-            center_override=_line_center_override(track, source_line, style),
+            center_override=center_override,
         )
         + left_ext
     )
@@ -5461,12 +5473,26 @@ def _layout_role_line(
         line, char_widths, active_rubies, style, intervals
     )
     visual_pad = _role_visual_text_padding(measure_layout)
+    if style.layout_semantics == "n3_1074":
+        visual_pad = 0
     left_ext = max(visual_pad, ruby_left_ext)
     right_ext = max(visual_pad, ruby_right_ext)
     total_w = measure_layout.total_width + sum(char_gaps)
+    center_override = _line_center_override(track, source_line, style)
+    n3_main_center = (
+        style.layout_semantics == "n3_1074"
+        and not center_override
+        and style.line_horizontal_layout == "asymmetric"
+        and _lane_alignment(style, lane) == "center"
+    )
     x0 = (
         line_x
         if line_x is not None
+        else _resolve_line_x_smart(
+            img_w, total_w, track, source_line, style, lane,
+            center_override=False,
+        )
+        if n3_main_center
         else _resolve_line_x_smart(
             img_w,
             total_w + left_ext + right_ext,
@@ -5474,7 +5500,7 @@ def _layout_role_line(
             source_line,
             style,
             lane,
-            center_override=_line_center_override(track, source_line, style),
+            center_override=center_override,
         )
         + left_ext
     )

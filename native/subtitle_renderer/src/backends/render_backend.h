@@ -164,6 +164,7 @@ struct TextLine {
     int compositeOrder = 0;
     std::optional<float> guideAnchorLeft;
     std::optional<float> guideAnchorRight;
+    bool centerOverride = false;
     bool staticOverlay = false;
     int fadeInMs = 0;
     int fadeOutMs = 0;
