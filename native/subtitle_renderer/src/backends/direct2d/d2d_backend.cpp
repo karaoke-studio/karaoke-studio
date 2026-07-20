@@ -927,6 +927,13 @@ struct Direct2DGpuBackend::Impl {
     Microsoft::WRL::ComPtr<ID3D11Texture2D> frameTargetTexture;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> frameTargetBitmap;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> frameStagingTexture;
+    // Persistent scene-sized glow scratch targets and GaussianBlur effects.
+    // Reused across lines and frames; a per-line cursor hands out entries in
+    // order and rewinds after the line's composite is flushed.
+    std::vector<Microsoft::WRL::ComPtr<ID2D1Bitmap1>> glowScratchPool;
+    std::vector<Microsoft::WRL::ComPtr<ID2D1Effect>> glowEffectPool;
+    std::size_t glowScratchInUse = 0;
+    std::size_t glowEffectInUse = 0;
 };
 
 Direct2DGpuBackend::Direct2DGpuBackend(bool forceWarp)
@@ -1097,6 +1104,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         impl_->frameTargetBitmap.Reset();
         impl_->frameTargetTexture.Reset();
         impl_->frameStagingTexture.Reset();
+        impl_->glowScratchPool.clear();
+        impl_->glowEffectPool.clear();
+        impl_->glowScratchInUse = 0;
+        impl_->glowEffectInUse = 0;
         impl_->frameSurfaceWidth = scene.width;
         impl_->frameSurfaceHeight = scene.height;
     }
@@ -2387,6 +2398,51 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
     context->SetTransform(D2D1::Matrix3x2F::Identity());
     context->SetTarget(nullptr);
 
+    // Glow scratch bitmaps and GaussianBlur effects live on impl_ so steady
+    // state playback allocates nothing; entries rewind per line once the
+    // line's composite has been flushed to the frame target.
+    impl_->glowScratchInUse = 0;
+    impl_->glowEffectInUse = 0;
+    auto acquireGlowScratch = [&]() -> ID2D1Bitmap1 * {
+        if (impl_->glowScratchInUse < impl_->glowScratchPool.size()) {
+            return impl_->glowScratchPool[impl_->glowScratchInUse++].Get();
+        }
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+        checkHr(
+            context->CreateBitmap(
+                D2D1::SizeU(
+                    static_cast<UINT32>(scene.width),
+                    static_cast<UINT32>(scene.height)
+                ),
+                nullptr,
+                0,
+                &bitmapProperties,
+                bitmap.ReleaseAndGetAddressOf()
+            ),
+            "ID2D1DeviceContext::CreateBitmap(glow scratch)",
+            device_
+        );
+        impl_->glowScratchPool.push_back(bitmap);
+        ++impl_->glowScratchInUse;
+        return impl_->glowScratchPool.back().Get();
+    };
+    auto acquireGlowEffect = [&]() -> ID2D1Effect * {
+        if (impl_->glowEffectInUse < impl_->glowEffectPool.size()) {
+            return impl_->glowEffectPool[impl_->glowEffectInUse++].Get();
+        }
+        Microsoft::WRL::ComPtr<ID2D1Effect> effect;
+        checkHr(
+            context->CreateEffect(
+                CLSID_D2D1GaussianBlur, effect.ReleaseAndGetAddressOf()
+            ),
+            "ID2D1DeviceContext::CreateEffect(GaussianBlur)",
+            device_
+        );
+        impl_->glowEffectPool.push_back(effect);
+        ++impl_->glowEffectInUse;
+        return impl_->glowEffectPool.back().Get();
+    };
+
     const bool hasViewportTransform = scene.viewportScale != 1.0f
         || scene.viewportRotation != 0.0f
         || scene.viewportOffsetX != 0.0f
@@ -3134,6 +3190,33 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 ? frameRubyStroke2Geometries[rubyIndex][geometryIndex].Get()
                 : nullptr;
         };
+        // A character/ruby unit counts as "transformed" only on frames where
+        // its animation matrix is non-identity. Glow for those glyphs keeps
+        // the Painter per-glyph blur-then-transform semantics; every other
+        // glyph shares the line-level glow sources.
+        auto charTransformedAt = [&](std::size_t index) {
+            return (spinDirection != 0 || hasUtopiaTransition)
+                && characterAnimationAt(index).transformed;
+        };
+        auto rubyUnitTransformed = [&](const Impl::CachedRuby &ruby,
+                                       std::size_t unitIndex) {
+            if (hasUtopiaTransition) {
+                return rubyUnitAnimationAt(ruby, unitIndex).transformed;
+            }
+            return spinDirection != 0 && rubyFadeOpacityAt(ruby) < 1.0f;
+        };
+        const auto expandedRect = [](const D2D1_RECT_F &rect, float amount) {
+            return D2D1::RectF(
+                rect.left - amount, rect.top - amount,
+                rect.right + amount, rect.bottom + amount
+            );
+        };
+        const auto unionRect = [](const D2D1_RECT_F &a, const D2D1_RECT_F &b) {
+            return D2D1::RectF(
+                std::min(a.left, b.left), std::min(a.top, b.top),
+                std::max(a.right, b.right), std::max(a.bottom, b.bottom)
+            );
+        };
         int displayEndMs = line->endMs + std::max(style.tailMs, 0);
         for (const DisplayWindow &window : line->displayWindows) {
             if (tMs >= window.startMs && tMs <= window.endMs) {
@@ -3793,28 +3876,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 : style;
         };
 
-        Microsoft::WRL::ComPtr<ID2D1Bitmap1> glowSource;
-        Microsoft::WRL::ComPtr<ID2D1Effect> blur;
+        ID2D1Bitmap1 *glowSource = nullptr;
+        ID2D1Effect *blur = nullptr;
         std::vector<int> glowSigmas;
+        D2D1_RECT_F glowSourceRect{};
         if (style.decorationKind == "glow"
-            && !line->hasInlineStyles
-            && !hasCharacterTransition) {
-            checkHr(
-                context->CreateBitmap(
-                    D2D1::SizeU(static_cast<UINT32>(scene.width), static_cast<UINT32>(scene.height)),
-                    nullptr,
-                    0,
-                    &bitmapProperties,
-                    glowSource.ReleaseAndGetAddressOf()
-                ),
-                "ID2D1DeviceContext::CreateBitmap(glow source)",
-                device_
-            );
-            checkHr(
-                context->CreateEffect(CLSID_D2D1GaussianBlur, blur.ReleaseAndGetAddressOf()),
-                "ID2D1DeviceContext::CreateEffect(GaussianBlur)",
-                device_
-            );
+            && !line->hasInlineStyles) {
+            glowSource = acquireGlowScratch();
+            blur = acquireGlowEffect();
 
             const int radius = std::max(
                 1,
@@ -3823,52 +3892,82 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const float sourceWidth = std::max(0.0f, style.strokeWidth)
                 + (style.stroke2Width > 0.0f ? style.stroke2Width : 0.0f)
                 + static_cast<float>(radius);
-            context->SetTarget(glowSource.Get());
+            // Restrict the scratch clear and, at composite time, the blur
+            // evaluation to the line's neighbourhood; Direct2D effects only
+            // process the input needed for the requested output rectangle.
+            const float glowExpand = sourceWidth + 3.0f * radius + 16.0f;
+            const D2D1_RECT_F glowContent = unionRect(
+                line->bounds, line->fillBounds
+            );
+            glowSourceRect = expandedRect(glowContent, glowExpand);
+            const D2D1_RECT_F glowClearRect = expandedRect(
+                glowSourceRect, 3.0f * radius + 16.0f
+            );
+            context->SetTarget(glowSource);
             context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
             context->BeginDraw();
+            context->PushAxisAlignedClip(
+                glowClearRect, D2D1_ANTIALIAS_MODE_ALIASED
+            );
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
             const auto drawGlowPart = [&](std::size_t index, bool after) {
+                // Characters animating this frame keep the Painter semantics
+                // of blurring the upright glyph and transforming the blurred
+                // result; they render through dedicated per-character layers.
+                if (charTransformedAt(index)) {
+                    return;
+                }
                 ID2D1Geometry *geometry = charGeometryAt(index);
-                if (geometry != nullptr) {
-                    context->DrawGeometry(
-                        geometry, after ? afterDecor.Get() : beforeDecor.Get(),
-                        sourceWidth
+                if (geometry == nullptr) {
+                    return;
+                }
+                ID2D1Brush *brush = after ? afterDecor.Get() : beforeDecor.Get();
+                if (hasCharacterTransition) {
+                    brush->SetOpacity(
+                        globalOpacity * characterOpacityAt(index)
                     );
                 }
+                context->DrawGeometry(geometry, brush, sourceWidth);
             };
             const auto pushGlowClip = [&](std::size_t index, bool after) {
-                const float edge = delegatedWipeCoordinateAt(line->chars, index);
+                float edge = delegatedWipeCoordinateAt(line->chars, index);
+                D2D1_RECT_F bounds = line->bounds;
+                if (hasUtopiaTransition) {
+                    const auto animated = utopiaCharWipe(index);
+                    bounds = animated.first;
+                    edge = animated.second;
+                }
                 const float pad = sourceWidth + 4.0f;
                 D2D1_RECT_F clip{};
                 if (style.vertical) {
                     clip = after
                         ? D2D1::RectF(
-                            line->bounds.left - pad, line->bounds.top - pad,
-                            line->bounds.right + pad, edge
+                            bounds.left - pad, bounds.top - pad,
+                            bounds.right + pad, edge
                         )
                         : D2D1::RectF(
-                            line->bounds.left - pad, edge,
-                            line->bounds.right + pad, line->bounds.bottom + pad
+                            bounds.left - pad, edge,
+                            bounds.right + pad, bounds.bottom + pad
                         );
                 } else if (rtl) {
                     clip = after
                         ? D2D1::RectF(
-                            edge, line->bounds.top - pad,
-                            line->bounds.right + pad, line->bounds.bottom + pad
+                            edge, bounds.top - pad,
+                            bounds.right + pad, bounds.bottom + pad
                         )
                         : D2D1::RectF(
-                            line->bounds.left - pad, line->bounds.top - pad,
-                            edge, line->bounds.bottom + pad
+                            bounds.left - pad, bounds.top - pad,
+                            edge, bounds.bottom + pad
                         );
                 } else {
                     clip = after
                         ? D2D1::RectF(
-                            line->bounds.left - pad, line->bounds.top - pad,
-                            edge, line->bounds.bottom + pad
+                            bounds.left - pad, bounds.top - pad,
+                            edge, bounds.bottom + pad
                         )
                         : D2D1::RectF(
-                            edge, line->bounds.top - pad,
-                            line->bounds.right + pad, line->bounds.bottom + pad
+                            edge, bounds.top - pad,
+                            bounds.right + pad, bounds.bottom + pad
                         );
                 }
                 context->PushAxisAlignedClip(
@@ -3903,8 +4002,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     drawGlowPhase(index, N3WipePhase::Wiping);
                 }
             }
+            context->PopAxisAlignedClip();
             checkHr(context->EndDraw(), "ID2D1DeviceContext::EndDraw(glow source)", device_);
-            blur->SetInput(0, glowSource.Get());
+            blur->SetInput(0, glowSource);
 
             // N3 DrawOneLineDecorBlurMulti: N = BlurLevel + 1 and
             // sigma_i = R - floor(i * R / N). The common N3 path has one
@@ -3916,13 +4016,18 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         }
 
         struct RubyGlowLayer {
-            Microsoft::WRL::ComPtr<ID2D1Bitmap1> source;
-            Microsoft::WRL::ComPtr<ID2D1Effect> blur;
+            ID2D1Bitmap1 *source = nullptr;
+            ID2D1Effect *blur = nullptr;
             std::vector<int> sigmas;
             D2D1_MATRIX_3X2_F transform = D2D1::Matrix3x2F::Identity();
             bool hasTransform = false;
+            D2D1_RECT_F sourceRect{};
         };
         std::vector<RubyGlowLayer> rubyGlowLayers;
+        // Grouped layers (rubyOnly < 0) collect every unit whose animation is
+        // identity this frame into one source per ruby style and wipe colour.
+        // Units animating this frame keep the Painter blur-then-transform
+        // semantics through dedicated per-ruby/per-unit layers.
         auto appendRubyGlowLayer = [&](int styleIndex, bool after,
                                        int rubyOnly, int unitOnly) {
             const TextStyle &rubyStyle = rubyStyleFor(styleIndex);
@@ -3938,11 +4043,25 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     const int rubyIndex = static_cast<int>(&ruby - line->rubies.data());
                     const float edge = rubyWipeEdgeAt(ruby);
                     const bool selected = (rubyOnly < 0 || rubyIndex == rubyOnly);
-                    const bool unitVisible = unitOnly < 0
-                        || (unitOnly < static_cast<int>(ruby.geometries.size())
+                    bool unitVisible = false;
+                    if (unitOnly >= 0) {
+                        unitVisible = unitOnly < static_cast<int>(ruby.geometries.size())
                             && rubyUnitOpacityAt(
                                 ruby, static_cast<std::size_t>(unitOnly)
-                            ) > 0.0f);
+                            ) > 0.0f;
+                    } else {
+                        for (std::size_t unitIndex = 0;
+                             unitIndex < ruby.geometries.size(); ++unitIndex) {
+                            if (rubyOnly < 0
+                                && rubyUnitTransformed(ruby, unitIndex)) {
+                                continue;
+                            }
+                            if (rubyUnitOpacityAt(ruby, unitIndex) > 0.0f) {
+                                unitVisible = true;
+                                break;
+                            }
+                        }
+                    }
                     return selected && unitVisible
                         && ruby.styleIndex == styleIndex
                         && rubyPhaseVisible(ruby, edge, after);
@@ -3975,31 +4094,39 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     * D2D1::Matrix3x2F::Translation(dx, dy);
                 layer.hasTransform = animationState.transformed;
             }
-            checkHr(
-                context->CreateBitmap(
-                    D2D1::SizeU(static_cast<UINT32>(scene.width), static_cast<UINT32>(scene.height)),
-                    nullptr,
-                    0,
-                    &bitmapProperties,
-                    layer.source.ReleaseAndGetAddressOf()
-                ),
-                "ID2D1DeviceContext::CreateBitmap(ruby glow source)",
-                device_
-            );
-            checkHr(
-                context->CreateEffect(CLSID_D2D1GaussianBlur, layer.blur.ReleaseAndGetAddressOf()),
-                "ID2D1DeviceContext::CreateEffect(ruby GaussianBlur)",
-                device_
-            );
+            layer.source = acquireGlowScratch();
+            layer.blur = acquireGlowEffect();
             const float sourceWidth = std::max(0.0f, rubyStyle.rubyStrokeWidth)
                 + (rubyStyle.rubyStroke2Width > 0.0f
                     ? rubyStyle.rubyStroke2Width
                     : 0.0f)
                 + static_cast<float>(radius);
             const float pad = sourceWidth * 0.5f + radius * 3.0f + 2.0f;
-            context->SetTarget(layer.source.Get());
+            bool hasContent = false;
+            D2D1_RECT_F content{};
+            for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
+                const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
+                if ((rubyOnly >= 0 && static_cast<int>(rubyIndex) != rubyOnly)
+                    || ruby.styleIndex != styleIndex) {
+                    continue;
+                }
+                content = hasContent
+                    ? unionRect(content, ruby.bounds)
+                    : ruby.bounds;
+                hasContent = true;
+            }
+            layer.sourceRect = expandedRect(
+                content, sourceWidth + 3.0f * radius + 16.0f
+            );
+            const D2D1_RECT_F clearRect = expandedRect(
+                layer.sourceRect, 3.0f * radius + 16.0f
+            );
+            context->SetTarget(layer.source);
             context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
             context->BeginDraw();
+            context->PushAxisAlignedClip(
+                clearRect, D2D1_ANTIALIAS_MODE_ALIASED
+            );
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
             for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
                 const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
@@ -4064,29 +4191,33 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 for (std::size_t geometryIndex = 0;
                      geometryIndex < ruby.geometries.size(); ++geometryIndex) {
                     const auto &geometry = ruby.geometries[geometryIndex];
-                    if ((unitOnly < 0
-                            || static_cast<int>(geometryIndex) == unitOnly)
-                        && geometry != nullptr) {
-                        brush->SetOpacity(
-                            globalOpacity * rubyUnitOpacityAt(
-                                ruby, geometryIndex
-                            )
-                        );
-                        context->DrawGeometry(
-                            geometry.Get(), brush.Get(), sourceWidth
-                        );
+                    if ((unitOnly >= 0
+                            && static_cast<int>(geometryIndex) != unitOnly)
+                        || geometry == nullptr
+                        || (rubyOnly < 0
+                            && rubyUnitTransformed(ruby, geometryIndex))) {
+                        continue;
                     }
+                    brush->SetOpacity(
+                        globalOpacity * rubyUnitOpacityAt(
+                            ruby, geometryIndex
+                        )
+                    );
+                    context->DrawGeometry(
+                        geometry.Get(), brush.Get(), sourceWidth
+                    );
                 }
                 if (!complete) {
                     context->PopAxisAlignedClip();
                 }
             }
+            context->PopAxisAlignedClip();
             checkHr(
                 context->EndDraw(),
                 "ID2D1DeviceContext::EndDraw(ruby glow source)",
                 device_
             );
-            layer.blur->SetInput(0, layer.source.Get());
+            layer.blur->SetInput(0, layer.source);
             const int passes = std::clamp(
                 rubyStyle.rubyGlowConcentrationLevel, 0, 2
             ) + 1;
@@ -4103,11 +4234,18 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 rubyStyleIndices.push_back(ruby.styleIndex);
             }
         }
+        for (int styleIndex : rubyStyleIndices) {
+            appendRubyGlowLayer(styleIndex, false, -1, -1);
+            appendRubyGlowLayer(styleIndex, true, -1, -1);
+        }
         if (hasUtopiaTransition) {
             for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
                 const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
                 for (std::size_t unitIndex = 0;
                      unitIndex < ruby.geometries.size(); ++unitIndex) {
+                    if (!rubyUnitTransformed(ruby, unitIndex)) {
+                        continue;
+                    }
                     appendRubyGlowLayer(
                         ruby.styleIndex, false,
                         static_cast<int>(rubyIndex), static_cast<int>(unitIndex)
@@ -4120,25 +4258,33 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
         } else if (spinDirection != 0) {
             for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
-                const int styleIndex = line->rubies[rubyIndex].styleIndex;
-                appendRubyGlowLayer(styleIndex, false, static_cast<int>(rubyIndex), -1);
-                appendRubyGlowLayer(styleIndex, true, static_cast<int>(rubyIndex), -1);
-            }
-        } else {
-            for (int styleIndex : rubyStyleIndices) {
-                appendRubyGlowLayer(styleIndex, false, -1, -1);
-                appendRubyGlowLayer(styleIndex, true, -1, -1);
+                const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
+                if (rubyFadeOpacityAt(ruby) >= 1.0f
+                    || rubyFadeOpacityAt(ruby) <= 0.0f) {
+                    continue;
+                }
+                appendRubyGlowLayer(
+                    ruby.styleIndex, false, static_cast<int>(rubyIndex), -1
+                );
+                appendRubyGlowLayer(
+                    ruby.styleIndex, true, static_cast<int>(rubyIndex), -1
+                );
             }
         }
 
         struct InlineGlowLayer {
-            Microsoft::WRL::ComPtr<ID2D1Bitmap1> source;
-            Microsoft::WRL::ComPtr<ID2D1Effect> blur;
+            ID2D1Bitmap1 *source = nullptr;
+            ID2D1Effect *blur = nullptr;
             std::vector<int> sigmas;
             D2D1_MATRIX_3X2_F transform = D2D1::Matrix3x2F::Identity();
             bool hasTransform = false;
+            D2D1_RECT_F sourceRect{};
         };
         std::vector<InlineGlowLayer> inlineGlowLayers;
+        // Grouped layers (charOnly < 0) collect every character whose
+        // animation is identity this frame into one source per inline style
+        // and wipe colour. Characters animating this frame keep the Painter
+        // blur-then-transform semantics through per-character layers.
         auto appendInlineGlowLayer = [&](int styleIndex, bool after, int charOnly) {
             const TextStyle &charStyle = styleIndex >= 0
                 && styleIndex < static_cast<int>(scene.charStyles.size())
@@ -4153,21 +4299,45 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const bool hasVisibleSource = std::any_of(
                 line->chars.begin(), line->chars.end(),
                 [&](const Impl::CachedChar &ch) {
-                    const int charIndex = static_cast<int>(&ch - line->chars.data());
-                    if ((charOnly >= 0 && charIndex != charOnly)
-                        || ch.styleIndex != styleIndex
-                        || !ch.geometry) {
+                    const std::size_t charIndex = static_cast<std::size_t>(
+                        &ch - line->chars.data()
+                    );
+                    if ((charOnly >= 0
+                            && static_cast<int>(charIndex) != charOnly)
+                        || ch.styleIndex != styleIndex) {
                         return false;
                     }
-                    const bool complete = hasUtopiaTransition && charOnly >= 0
-                        && charWipeComplete(static_cast<std::size_t>(charIndex));
-                    return complete
-                        ? after
-                        : !(rtl
-                            ? ((after && wipeEdge >= ch.right)
-                                || (!after && wipeEdge <= ch.left))
-                            : ((after && wipeEdge <= ch.left)
-                                || (!after && wipeEdge >= ch.right)));
+                    if (charOnly >= 0) {
+                        if (!ch.geometry) {
+                            return false;
+                        }
+                        const bool complete = hasUtopiaTransition
+                            && charWipeComplete(charIndex);
+                        return complete
+                            ? after
+                            : !(rtl
+                                ? ((after && wipeEdge >= ch.right)
+                                    || (!after && wipeEdge <= ch.left))
+                                : ((after && wipeEdge <= ch.left)
+                                    || (!after && wipeEdge >= ch.right)));
+                    }
+                    if (charTransformedAt(charIndex)
+                        || charGeometryAt(charIndex) == nullptr) {
+                        return false;
+                    }
+                    if (hasUtopiaTransition) {
+                        const N3WipePhase phase = wipePhaseAt(
+                            line->chars, charIndex
+                        );
+                        return after
+                            ? phase != N3WipePhase::Before
+                            : phase != N3WipePhase::After;
+                    }
+                    return !(rtl
+                        ? ((after && wipeEdge >= ch.right)
+                            || (!after && wipeEdge <= ch.left))
+                        : ((after && wipeEdge <= ch.left)
+                            || (!after && wipeEdge >= ch.right)));
                 }
             );
             if (charStyle.decorationKind != "glow" || radius <= 0 || !hasVisibleSource) {
@@ -4175,34 +4345,16 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
             InlineGlowLayer layer;
             if ((spinDirection != 0 || hasUtopiaTransition) && charOnly >= 0) {
-                const Impl::CachedChar &ch = line->chars[
-                    static_cast<std::size_t>(charOnly)
-                ];
                 const CharacterAnimationState animationState = characterAnimationAt(
                     static_cast<std::size_t>(charOnly)
                 );
-                (void)ch;
                 layer.transform = D2D1::Matrix3x2F::Translation(-dx, -dy)
                     * animationState.matrix
                     * D2D1::Matrix3x2F::Translation(dx, dy);
                 layer.hasTransform = animationState.transformed;
             }
-            checkHr(
-                context->CreateBitmap(
-                    D2D1::SizeU(static_cast<UINT32>(scene.width), static_cast<UINT32>(scene.height)),
-                    nullptr,
-                    0,
-                    &bitmapProperties,
-                    layer.source.ReleaseAndGetAddressOf()
-                ),
-                "ID2D1DeviceContext::CreateBitmap(inline glow source)",
-                device_
-            );
-            checkHr(
-                context->CreateEffect(CLSID_D2D1GaussianBlur, layer.blur.ReleaseAndGetAddressOf()),
-                "ID2D1DeviceContext::CreateEffect(inline GaussianBlur)",
-                device_
-            );
+            layer.source = acquireGlowScratch();
+            layer.blur = acquireGlowEffect();
             Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrush(
                 after ? charStyle.afterDecorPaint : charStyle.beforeDecorPaint,
                 line->fillBounds,
@@ -4212,73 +4364,175 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 + std::max(charStyle.stroke2Width, 0.0f)
                 + static_cast<float>(radius);
             const float pad = sourceWidth * 0.5f + radius * 3.0f + 2.0f;
-            context->SetTarget(layer.source.Get());
+            D2D1_RECT_F content = unionRect(line->bounds, line->fillBounds);
+            if (charOnly >= 0) {
+                const Impl::CachedChar &only = line->chars[
+                    static_cast<std::size_t>(charOnly)
+                ];
+                if (only.geometry != nullptr) {
+                    checkHr(
+                        only.geometry->GetBounds(nullptr, &content),
+                        "ID2D1Geometry::GetBounds(inline glow content)",
+                        device_
+                    );
+                }
+            }
+            layer.sourceRect = expandedRect(
+                content, sourceWidth + 3.0f * radius + 16.0f
+            );
+            const D2D1_RECT_F clearRect = expandedRect(
+                layer.sourceRect, 3.0f * radius + 16.0f
+            );
+            context->SetTarget(layer.source);
             context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
             context->BeginDraw();
+            context->PushAxisAlignedClip(
+                clearRect, D2D1_ANTIALIAS_MODE_ALIASED
+            );
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
             for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
                 const Impl::CachedChar &ch = line->chars[charIndex];
-                const bool complete = hasUtopiaTransition && charOnly >= 0
-                    && charWipeComplete(charIndex);
                 if ((charOnly >= 0 && static_cast<int>(charIndex) != charOnly)
-                    || ch.styleIndex != styleIndex || ch.geometry == nullptr
-                    || (complete && !after)
-                    || (!complete && (rtl
+                    || ch.styleIndex != styleIndex) {
+                    continue;
+                }
+                if (charOnly >= 0) {
+                    // Per-character layer: draw the upright cached glyph and
+                    // apply the animation matrix to the blurred result.
+                    const bool complete = hasUtopiaTransition
+                        && charWipeComplete(charIndex);
+                    if (ch.geometry == nullptr
+                        || (complete && !after)
+                        || (!complete && (rtl
+                            ? ((after && wipeEdge >= ch.right)
+                                || (!after && wipeEdge <= ch.left))
+                            : ((after && wipeEdge <= ch.left)
+                                || (!after && wipeEdge >= ch.right))))) {
+                        continue;
+                    }
+                    brush->SetOpacity(
+                        globalOpacity * characterOpacityAt(charIndex)
+                    );
+                    const D2D1_RECT_F clip = rtl
+                        ? (after
+                            ? D2D1::RectF(
+                                wipeEdge, line->bounds.top - pad,
+                                ch.right + pad, line->bounds.bottom + pad
+                            )
+                            : D2D1::RectF(
+                                ch.left - pad, line->bounds.top - pad,
+                                wipeEdge, line->bounds.bottom + pad
+                            ))
+                        : (after
+                            ? D2D1::RectF(
+                                ch.left - pad, line->bounds.top - pad,
+                                wipeEdge, line->bounds.bottom + pad
+                            )
+                            : D2D1::RectF(
+                                wipeEdge, line->bounds.top - pad,
+                                ch.right + pad, line->bounds.bottom + pad
+                            ));
+                    if (!complete && !mainWipeComplete) {
+                        context->PushAxisAlignedClip(
+                            clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                        );
+                    }
+                    context->DrawGeometry(
+                        ch.geometry.Get(), brush.Get(), sourceWidth
+                    );
+                    if (!complete && !mainWipeComplete) {
+                        context->PopAxisAlignedClip();
+                    }
+                    continue;
+                }
+                if (charTransformedAt(charIndex)) {
+                    continue;
+                }
+                ID2D1Geometry *geometry = charGeometryAt(charIndex);
+                if (geometry == nullptr) {
+                    continue;
+                }
+                bool needClip = false;
+                if (hasUtopiaTransition) {
+                    const N3WipePhase phase = wipePhaseAt(line->chars, charIndex);
+                    if ((phase == N3WipePhase::Before && after)
+                        || (phase == N3WipePhase::After && !after)) {
+                        continue;
+                    }
+                    needClip = phase == N3WipePhase::Wiping;
+                } else {
+                    if (rtl
                         ? ((after && wipeEdge >= ch.right)
                             || (!after && wipeEdge <= ch.left))
                         : ((after && wipeEdge <= ch.left)
-                            || (!after && wipeEdge >= ch.right))))) {
-                    continue;
+                            || (!after && wipeEdge >= ch.right))) {
+                        continue;
+                    }
+                    needClip = !mainWipeComplete;
                 }
                 brush->SetOpacity(globalOpacity * characterOpacityAt(charIndex));
-                const D2D1_RECT_F clip = rtl
-                    ? (after
-                        ? D2D1::RectF(
-                            wipeEdge, line->bounds.top - pad,
-                            ch.right + pad, line->bounds.bottom + pad
-                        )
-                        : D2D1::RectF(
-                            ch.left - pad, line->bounds.top - pad,
-                            wipeEdge, line->bounds.bottom + pad
-                        ))
-                    : (after
-                        ? D2D1::RectF(
-                            ch.left - pad, line->bounds.top - pad,
-                            wipeEdge, line->bounds.bottom + pad
-                        )
-                        : D2D1::RectF(
-                            wipeEdge, line->bounds.top - pad,
-                            ch.right + pad, line->bounds.bottom + pad
-                        ));
-                if (!complete && !mainWipeComplete) {
+                if (needClip) {
+                    D2D1_RECT_F clip{};
+                    if (hasUtopiaTransition) {
+                        const auto [animatedBounds, animatedEdge] =
+                            utopiaCharWipe(charIndex);
+                        clip = after
+                            ? D2D1::RectF(
+                                animatedBounds.left - pad,
+                                animatedBounds.top - pad,
+                                animatedEdge,
+                                animatedBounds.bottom + pad
+                            )
+                            : D2D1::RectF(
+                                animatedEdge,
+                                animatedBounds.top - pad,
+                                animatedBounds.right + pad,
+                                animatedBounds.bottom + pad
+                            );
+                    } else {
+                        clip = rtl
+                            ? (after
+                                ? D2D1::RectF(
+                                    wipeEdge, line->bounds.top - pad,
+                                    ch.right + pad, line->bounds.bottom + pad
+                                )
+                                : D2D1::RectF(
+                                    ch.left - pad, line->bounds.top - pad,
+                                    wipeEdge, line->bounds.bottom + pad
+                                ))
+                            : (after
+                                ? D2D1::RectF(
+                                    ch.left - pad, line->bounds.top - pad,
+                                    wipeEdge, line->bounds.bottom + pad
+                                )
+                                : D2D1::RectF(
+                                    wipeEdge, line->bounds.top - pad,
+                                    ch.right + pad, line->bounds.bottom + pad
+                                ));
+                    }
                     context->PushAxisAlignedClip(
                         clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
                 }
-                context->DrawGeometry(ch.geometry.Get(), brush.Get(), sourceWidth);
-                if (!complete && !mainWipeComplete) {
+                context->DrawGeometry(geometry, brush.Get(), sourceWidth);
+                if (needClip) {
                     context->PopAxisAlignedClip();
                 }
             }
+            context->PopAxisAlignedClip();
             checkHr(
                 context->EndDraw(),
                 "ID2D1DeviceContext::EndDraw(inline glow source)",
                 device_
             );
-            layer.blur->SetInput(0, layer.source.Get());
+            layer.blur->SetInput(0, layer.source);
             const int passes = std::clamp(charStyle.glowConcentrationLevel, 0, 2) + 1;
             for (int index = 0; index < passes; ++index) {
                 layer.sigmas.push_back(radius - index * radius / passes);
             }
             inlineGlowLayers.push_back(std::move(layer));
         };
-        if (spinDirection != 0 || hasUtopiaTransition) {
-            for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
-                const int styleIndex = line->chars[charIndex].styleIndex;
-                appendInlineGlowLayer(styleIndex, false, static_cast<int>(charIndex));
-                appendInlineGlowLayer(styleIndex, true, static_cast<int>(charIndex));
-            }
-        } else if (line->hasInlineStyles || hasCharacterTransition) {
+        if (line->hasInlineStyles) {
             std::vector<int> styleIndices;
             for (const Impl::CachedChar &ch : line->chars) {
                 if (std::find(styleIndices.begin(), styleIndices.end(), ch.styleIndex)
@@ -4289,6 +4543,16 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             for (int styleIndex : styleIndices) {
                 appendInlineGlowLayer(styleIndex, false, -1);
                 appendInlineGlowLayer(styleIndex, true, -1);
+            }
+        }
+        if (spinDirection != 0 || hasUtopiaTransition) {
+            for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
+                if (!charTransformedAt(charIndex)) {
+                    continue;
+                }
+                const int styleIndex = line->chars[charIndex].styleIndex;
+                appendInlineGlowLayer(styleIndex, false, static_cast<int>(charIndex));
+                appendInlineGlowLayer(styleIndex, true, static_cast<int>(charIndex));
             }
         }
 
@@ -4306,6 +4570,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         : D2D1::Matrix3x2F::Identity()
                 )
             );
+            const D2D1_RECT_F imageRect = D2D1::RectF(
+                layer.sourceRect.left + dx, layer.sourceRect.top + dy,
+                layer.sourceRect.right + dx, layer.sourceRect.bottom + dy
+            );
             for (int sigma : layer.sigmas) {
                 checkHr(
                     layer.blur->SetValue(
@@ -4315,7 +4583,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     "ID2D1Effect::SetValue(ruby StandardDeviation)",
                     device_
                 );
-                context->DrawImage(layer.blur.Get());
+                context->DrawImage(
+                    layer.blur,
+                    D2D1::Point2F(imageRect.left, imageRect.top),
+                    imageRect
+                );
             }
         }
         for (InlineGlowLayer &layer : inlineGlowLayers) {
@@ -4326,6 +4598,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         : D2D1::Matrix3x2F::Identity()
                 )
             );
+            const D2D1_RECT_F imageRect = D2D1::RectF(
+                layer.sourceRect.left + dx, layer.sourceRect.top + dy,
+                layer.sourceRect.right + dx, layer.sourceRect.bottom + dy
+            );
             for (int sigma : layer.sigmas) {
                 checkHr(
                     layer.blur->SetValue(
@@ -4335,20 +4611,34 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     "ID2D1Effect::SetValue(inline StandardDeviation)",
                     device_
                 );
-                context->DrawImage(layer.blur.Get());
+                context->DrawImage(
+                    layer.blur,
+                    D2D1::Point2F(imageRect.left, imageRect.top),
+                    imageRect
+                );
             }
         }
-        for (int sigma : glowSigmas) {
-            context->SetTransform(lineViewportTransform);
-            checkHr(
-                blur->SetValue(
-                    D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION,
-                    static_cast<float>(sigma)
-                ),
-                "ID2D1Effect::SetValue(StandardDeviation)",
-                device_
+        if (!glowSigmas.empty()) {
+            const D2D1_RECT_F glowImageRect = D2D1::RectF(
+                glowSourceRect.left + dx, glowSourceRect.top + dy,
+                glowSourceRect.right + dx, glowSourceRect.bottom + dy
             );
-            context->DrawImage(blur.Get());
+            for (int sigma : glowSigmas) {
+                context->SetTransform(lineViewportTransform);
+                checkHr(
+                    blur->SetValue(
+                        D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION,
+                        static_cast<float>(sigma)
+                    ),
+                    "ID2D1Effect::SetValue(StandardDeviation)",
+                    device_
+                );
+                context->DrawImage(
+                    blur,
+                    D2D1::Point2F(glowImageRect.left, glowImageRect.top),
+                    glowImageRect
+                );
+            }
         }
         context->SetTransform(withViewport(D2D1::Matrix3x2F::Translation(dx, dy)));
 
@@ -5205,7 +5495,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         }
         checkHr(context->EndDraw(), "ID2D1DeviceContext::EndDraw(frame layers)", device_);
         renderedAnyLine = true;
-        if (blur) {
+        if (blur != nullptr) {
             blur->SetInput(0, nullptr);
         }
         for (RubyGlowLayer &layer : rubyGlowLayers) {
@@ -5213,6 +5503,19 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         }
         for (InlineGlowLayer &layer : inlineGlowLayers) {
             layer.blur->SetInput(0, nullptr);
+        }
+        // This line's composite is flushed; scratches can serve the next line.
+        // Bursts (e.g. whole-line utopia outros) may allocate past the cap;
+        // those extra entries are released here so steady state keeps at most
+        // the cap's worth of scene-sized scratch memory resident.
+        constexpr std::size_t kGlowPoolCap = 8;
+        impl_->glowScratchInUse = 0;
+        impl_->glowEffectInUse = 0;
+        if (impl_->glowScratchPool.size() > kGlowPoolCap) {
+            impl_->glowScratchPool.resize(kGlowPoolCap);
+        }
+        if (impl_->glowEffectPool.size() > kGlowPoolCap) {
+            impl_->glowEffectPool.resize(kGlowPoolCap);
         }
       }
     }
