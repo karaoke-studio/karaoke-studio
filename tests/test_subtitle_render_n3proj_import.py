@@ -276,6 +276,7 @@ def test_video_background_ignores_independent_sound_path(tmp_path):
 
 def test_import_global_style_font_and_colors(imported):
     style = style_from_dict(imported.project_data["style"])
+    assert style.layout_semantics == "n3_1074"
     assert style.font_family == "UD デジタル 教科書体 N-B"
     assert style.font_family_latin == "Comic Sans MS"
     assert style.font_size_px == 100

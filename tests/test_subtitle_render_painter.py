@@ -7370,6 +7370,13 @@ def test_tall_opted_out_glyph_does_not_raise_shared_ruby_baseline(qapp):
     assert ignored.ruby_layouts[0].baseline_y > included.ruby_layouts[0].baseline_y
 
 
+def test_layout_semantics_defaults_to_legacy_and_round_trips():
+    assert style_from_dict({}).layout_semantics == "legacy"
+    assert style_from_dict({"layout_semantics": "unknown"}).layout_semantics == "legacy"
+    restored = style_from_dict(style_to_dict(Style(layout_semantics="n3_1074")))
+    assert restored.layout_semantics == "n3_1074"
+
+
 def test_ruby_anchor_participation_round_trips_for_global_and_role():
     style = Style(
         affects_ruby_anchor=False,

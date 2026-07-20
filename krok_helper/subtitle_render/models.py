@@ -29,6 +29,7 @@ LineBreakKind = Literal["none", "page", "paragraph"]
 EntryAnimation = Literal["none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"]
 ExitAnimation = Literal["none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"]
 RubyMainProgressMode = Literal["checkpoint_segments", "reading_units"]
+LayoutSemantics = Literal["legacy", "n3_1074"]
 
 SCHEMA_VERSION = 1
 PROJECT_FILE_SUFFIX = ".yurika"
@@ -811,6 +812,11 @@ class Style:
     后续 A5 / A6 / B3 等任务在此基础上扩字段（渐变 / 发光 / 注音 / 动画）。
     """
 
+    # Internal layout contract.  Existing projects deliberately keep the
+    # product's established geometry; direct N3 imports opt into the isolated
+    # 10.74-compatible path without exposing an engine label in the UI.
+    layout_semantics: LayoutSemantics = "legacy"
+
     # 字体
     font_family: str = "UD デジタル 教科書体 N-B"
     font_family_latin: Optional[str] = None
@@ -1463,6 +1469,8 @@ def style_from_dict(payload: object) -> Style:
             changes[key] = value if value in {"none", "fade", "slide"} else defaults.lit_transition_mode
         elif key == "section_ending_mode":
             changes[key] = value if value in {"hold", "clear"} else defaults.section_ending_mode
+        elif key == "layout_semantics":
+            changes[key] = value if value in {"legacy", "n3_1074"} else defaults.layout_semantics
         elif key == "line_y_position":
             changes[key] = value if value in {"top", "center", "bottom"} else defaults.line_y_position
         elif key == "line_horizontal_layout":
