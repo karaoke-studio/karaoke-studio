@@ -2544,12 +2544,8 @@ class StylePresetManagerDialog(QDialog):
     def _populate_list(
         self,
         selected: Optional[str] = None,
-        *,
-        checked_names: Optional[set[str]] = None,
     ) -> None:
         checked = set(self._checked_names()) if self._preset_list.count() else set()
-        if checked_names:
-            checked.update(checked_names)
         current = selected or self._selected_name()
         self._refresh_group_filter()
         self._preset_list.blockSignals(True)
@@ -2813,12 +2809,9 @@ class StylePresetManagerDialog(QDialog):
         )
         self._presets = merged.presets
         selected_id = merged.imported_ids[-1] if merged.imported_ids else None
-        # N3 批量导入后直接勾选本批新增项。用户只需点击一次
-        # “导入选中项为项目角色”，不必在几十个模板中逐项重新勾选。
-        self._populate_list(
-            selected=selected_id,
-            checked_names=set(merged.imported_ids),
-        )
+        # Keep newly imported templates unchecked. Importing templates updates the
+        # reusable preset library; creating project roles remains an explicit choice.
+        self._populate_list(selected=selected_id)
         if merged.imported_ids:
             self._emit_preset_library_changed()
 
