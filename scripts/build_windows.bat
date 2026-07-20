@@ -209,6 +209,39 @@ if errorlevel 1 (
     exit /b 1
 )
 
+REM Qt 官方 Windows 二进制（如 6.10.2）在 Qt6\bin 自带 VS2019 时代的
+REM MSVC 运行时（MSVCP140/VCRUNTIME140 14.26 vcwrkspc）。Qt6 按同目录优先
+REM 加载这份旧运行时后，全进程同名唯一，VS2022 编译的 pedalboard_native 等
+REM C++ 扩展在运行新代码路径（如 MP3 编码）时会在旧 MSVCP140.dll 内访问冲突
+REM （0xc0000005，windowed 应用表现为无声闪退）。这里用构建机 System32 的
+REM 新版运行时覆盖，并设版本下限防止未来 PyQt6 升级再次带入旧文件。
+echo Refreshing bundled MSVC runtime DLLs...
+powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+    "$qtBin = '%BUILD_DIST%\_internal\PyQt6\Qt6\bin';" ^
+    "if (-not (Test-Path -LiteralPath $qtBin -PathType Container)) { Write-Host 'Qt6 bin not found, skipping MSVC runtime refresh.'; exit 0 };" ^
+    "$minVersion = [version]'14.38.0.0';" ^
+    "$names = @('MSVCP140.dll','MSVCP140_1.dll','MSVCP140_2.dll','VCRUNTIME140.dll','VCRUNTIME140_1.dll');" ^
+    "foreach ($name in $names) {" ^
+    "  $dst = Join-Path $qtBin $name;" ^
+    "  if (-not (Test-Path -LiteralPath $dst -PathType Leaf)) { continue };" ^
+    "  $oldRaw = (Get-Item -LiteralPath $dst).VersionInfo.FileVersion;" ^
+    "  $oldVer = [version][regex]::Match($oldRaw, '^\d+(\.\d+)+').Value;" ^
+    "  if ($oldVer -ge $minVersion) { continue };" ^
+    "  $sys = Join-Path $env:SystemRoot ('System32\' + $name.ToLower());" ^
+    "  if (-not (Test-Path -LiteralPath $sys -PathType Leaf)) { Write-Host ('System MSVC runtime missing: ' + $sys); exit 1 };" ^
+    "  Copy-Item -LiteralPath $sys -Destination $dst -Force;" ^
+    "  $newRaw = (Get-Item -LiteralPath $dst).VersionInfo.FileVersion;" ^
+    "  $newVer = [version][regex]::Match($newRaw, '^\d+(\.\d+)+').Value;" ^
+    "  Write-Host ('  ' + $name + ': ' + $oldVer + ' -> ' + $newVer);" ^
+    "  if ($newVer -lt $minVersion) { Write-Host ('MSVC runtime still below floor after refresh: ' + $name); exit 1 }" ^
+    "}"
+if errorlevel 1 (
+    echo.
+    echo MSVC runtime refresh failed.
+    if not defined IS_CI pause
+    exit /b 1
+)
+
 echo Renaming Windows package...
 powershell -NoProfile -ExecutionPolicy Bypass -Command ^
     "$distRoot = Resolve-Path '%DIST_PATH%';" ^

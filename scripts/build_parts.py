@@ -71,7 +71,9 @@ LOCAL_MANIFEST_FILENAME = ".installed_manifest.json"
 # 发布端 runtime 收集策略版本。改变 PyInstaller 的模块/插件收集规则不一定会
 # 改变包版本或 pip freeze；显式 profile 用来阻止错误复用缺少新组件的旧 runtime。
 # Updater 不读取 build 字段，因此该值不影响存量客户端协议。
-RUNTIME_PROFILE = "qt-multimedia-v1"
+# v2: build_windows.bat 新增 Qt6\bin MSVC 运行时刷新（替换 14.26 旧 DLL），
+#     必须阻止复用仍携带旧运行时的 v1 runtime zip。
+RUNTIME_PROFILE = "qt-multimedia-v2"
 
 # _internal 下不属于 runtime 的顶层条目（属于 app part 或本地状态）。
 INTERNAL_NON_RUNTIME_NAMES = {
