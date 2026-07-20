@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import stat
+import subprocess
 import sys
 import textwrap
 import uuid
@@ -47,6 +48,7 @@ from krok_helper.subtitle_render.native_backend import (
     SharedFrameRingReader,
     _sidecar_environment,
     _sidecar_qt_bin_dir,
+    _sidecar_subprocess_kwargs,
     default_native_renderer_path,
     resolve_native_renderer_path,
 )
@@ -562,6 +564,13 @@ def test_build_render_ir_clamps_screen_values():
 def test_default_native_renderer_path_uses_build_tree():
     root = Path("D:/repo")
     assert default_native_renderer_path(root) == root / "build" / "native-renderer" / "krok_subtitle_renderer.exe"
+
+
+def test_sidecar_subprocess_hides_console_on_windows_only():
+    assert _sidecar_subprocess_kwargs("win32") == {
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+    }
+    assert _sidecar_subprocess_kwargs("linux") == {}
 
 
 def test_resolve_native_renderer_path_prefers_explicit_existing_path(tmp_path, monkeypatch):

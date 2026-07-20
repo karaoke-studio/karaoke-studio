@@ -33,6 +33,15 @@ _SHARED_FRAME_PIXEL_FORMATS = {
 }
 
 
+def _sidecar_subprocess_kwargs(platform: str | None = None) -> dict[str, Any]:
+    """Return platform-specific flags for launching the renderer sidecar."""
+    if (platform or sys.platform) != "win32":
+        return {}
+    return {
+        "creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000),
+    }
+
+
 class NativeRendererError(RuntimeError):
     """Raised when the native sidecar reports an error or exits unexpectedly."""
 
@@ -599,6 +608,7 @@ class NativeRendererProcess:
             encoding="utf-8",
             errors="replace",
             env=env,
+            **_sidecar_subprocess_kwargs(),
         )
         self._start_pipe_threads(self._process)
         ready = self._read_response()
