@@ -637,6 +637,8 @@ class PreviewPlayerWindow(QWidget):
     """独立预览窗口：只承载 16:9 的视频预览画面。"""
 
     userClosed = Signal()
+    _COLLAPSED_SIZE = QSize(220, 44)
+    _COLLAPSED_CENTER_Y_RATIO = 0.70
 
     def __init__(self, owner: QWidget) -> None:
         super().__init__(
@@ -646,6 +648,8 @@ class PreviewPlayerWindow(QWidget):
         self._owner = owner
         self._drag_origin: Optional[QPoint] = None
         self._suppress_control_show = False
+        self._collapsed = False
+        self._media_title = "字幕视频预览"
         self.setWindowTitle("字幕视频预览")
         self.setObjectName("SubtitlePreviewPlayerWindow")
         self.setMouseTracking(True)
@@ -674,7 +678,7 @@ class PreviewPlayerWindow(QWidget):
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             top_layout.addWidget(button)
-        self._minimize_button.clicked.connect(self.showMinimized)
+        self._minimize_button.clicked.connect(self._collapse_window)
         self._maximize_button.clicked.connect(self._toggle_maximized)
         self._close_button.clicked.connect(self.close)
 
@@ -755,6 +759,9 @@ class PreviewPlayerWindow(QWidget):
         return self._transport_bar
 
     def apply_workspace_geometry(self) -> None:
+        if self._collapsed:
+            self._apply_collapsed_geometry()
+            return
         workspace_size = self._owner.size()
         width = max(426, workspace_size.width() // 2)
         height = max(240, int(round(width * 9 / 16)))
@@ -765,7 +772,21 @@ class PreviewPlayerWindow(QWidget):
         top_left = self._owner.mapToGlobal(QPoint(0, 0))
         self.setGeometry(QRect(top_left, QSize(width, height)))
 
+    def _apply_collapsed_geometry(self) -> None:
+        size = self._COLLAPSED_SIZE
+        owner_size = self._owner.size()
+        owner_top_left = self._owner.mapToGlobal(QPoint(0, 0))
+        left = owner_top_left.x() + (owner_size.width() - size.width()) // 2
+        center_y = owner_top_left.y() + round(
+            owner_size.height() * self._COLLAPSED_CENTER_Y_RATIO
+        )
+        top = center_y - size.height() // 2
+        self.setGeometry(left, top, size.width(), size.height())
+
     def show_near_workspace(self) -> None:
+        if self._collapsed:
+            self._restore_from_collapsed()
+            return
         if self._is_expanded():
             self._restore_windowed()
         self.apply_workspace_geometry()
@@ -773,7 +794,9 @@ class PreviewPlayerWindow(QWidget):
         self.show_controls()
 
     def set_media_title(self, path: Optional[Path]) -> None:
-        self._title_label.setText(path.name if path is not None else "字幕视频预览")
+        self._media_title = path.name if path is not None else "字幕视频预览"
+        if not self._collapsed:
+            self._title_label.setText(self._media_title)
 
     def _init_playback_shortcuts(self) -> None:
         self._space_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
@@ -798,6 +821,12 @@ class PreviewPlayerWindow(QWidget):
         self.show_controls()
 
     def show_controls(self) -> None:
+        if self._collapsed:
+            self._hide_controls_timer.stop()
+            self._top_controls.show()
+            self._bottom_controls.hide()
+            self._top_controls.raise_()
+            return
         if self._suppress_control_show:
             return
         self._top_controls.show()
@@ -810,9 +839,17 @@ class PreviewPlayerWindow(QWidget):
         self._hide_controls_timer.start()
 
     def _on_controls_idle_timeout(self) -> None:
+        if self._collapsed:
+            self._top_controls.show()
+            return
         self.hide_controls(force=False)
 
     def hide_controls(self, *, force: bool = False) -> None:
+        if self._collapsed:
+            self._hide_controls_timer.stop()
+            self._top_controls.show()
+            self._bottom_controls.hide()
+            return
         if self.underMouse() and not force:
             self._hide_controls_timer.start()
             return
@@ -827,7 +864,8 @@ class PreviewPlayerWindow(QWidget):
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
         self._preview_frame.setGeometry(0, 0, self.width(), self.height())
-        self._top_controls.setGeometry(0, 0, self.width(), 42)
+        top_height = self.height() if self._collapsed else 42
+        self._top_controls.setGeometry(0, 0, self.width(), top_height)
         self._bottom_controls.setGeometry(0, max(0, self.height() - 58), self.width(), 58)
         self._top_controls.raise_()
         self._bottom_controls.raise_()
@@ -851,7 +889,7 @@ class PreviewPlayerWindow(QWidget):
         maximized = self._is_expanded()
         for grip in self._edge_grips:
             grip.setGeometry(rects[grip._edges.value])
-            grip.setVisible(not maximized)
+            grip.setVisible(not maximized and not self._collapsed)
         self._raise_edge_grips()
 
     def _raise_edge_grips(self) -> None:
@@ -939,7 +977,49 @@ class PreviewPlayerWindow(QWidget):
         expanded = Qt.WindowState.WindowMaximized | Qt.WindowState.WindowFullScreen
         return bool(self.windowState() & expanded) or self.isMaximized() or self.isFullScreen()
 
+    def is_collapsed(self) -> bool:
+        return self._collapsed
+
+    def _collapse_window(self) -> None:
+        if self._collapsed:
+            return
+        self._collapsed = True
+        self._hide_controls_timer.stop()
+        self.setWindowState(Qt.WindowState.WindowNoState)
+        self.showNormal()
+        self.setMinimumSize(self._COLLAPSED_SIZE)
+        self._preview_frame.hide()
+        self._bottom_controls.hide()
+        self._minimize_button.hide()
+        self._maximize_button.setToolTip("恢复预览窗口")
+        self._title_label.setText("预览窗口")
+        self.setWindowTitle("预览窗口")
+        self._apply_collapsed_geometry()
+        self._top_controls.show()
+        self._top_controls.raise_()
+        self._layout_edge_grips()
+        self.show()
+        self.raise_()
+
+    def _restore_from_collapsed(self) -> None:
+        if not self._collapsed:
+            return
+        self._collapsed = False
+        self.setMinimumSize(QSize(426, 240))
+        self._minimize_button.show()
+        self._maximize_button.setToolTip("")
+        self._title_label.setText(self._media_title)
+        self.setWindowTitle("字幕视频预览")
+        self._preview_frame.show()
+        self.showNormal()
+        self.apply_workspace_geometry()
+        self._layout_edge_grips()
+        self.show_controls()
+
     def _restore_windowed(self) -> None:
+        if self._collapsed:
+            self._restore_from_collapsed()
+            return
         self.setWindowState(Qt.WindowState.WindowNoState)
         self.showNormal()
         self.apply_workspace_geometry()
@@ -947,6 +1027,9 @@ class PreviewPlayerWindow(QWidget):
         self.show_controls()
 
     def _toggle_maximized(self) -> None:
+        if self._collapsed:
+            self._restore_from_collapsed()
+            return
         if self._is_expanded():
             self._restore_windowed()
         else:
@@ -1614,6 +1697,8 @@ class SubtitleRenderWindow(QWidget):
             return
         self._request_preview_window()
         if self._preview_window.isVisible():
+            if self._preview_window.is_collapsed():
+                self._preview_window._restore_from_collapsed()
             self._preview_window.raise_()
             self._preview_window.activateWindow()
 

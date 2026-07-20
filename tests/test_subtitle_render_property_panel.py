@@ -4673,6 +4673,51 @@ def test_preview_player_maximize_button_restores_from_fullscreen_state(qapp):
     assert preview.geometry().topLeft() == win.mapToGlobal(QPoint(0, 0))
 
 
+def test_preview_player_collapses_to_labeled_bar_inside_workspace(qapp):
+    win = mw.SubtitleRenderWindow(embedded=False)
+    win.resize(1600, 900)
+    win.move(120, 80)
+    win.show()
+    qapp.processEvents()
+
+    preview = win._preview_window
+    preview.set_media_title(Path("demo.mp4"))
+    preview.show()
+    preview._minimize_button.click()
+    qapp.processEvents()
+
+    owner_top_left = win.mapToGlobal(QPoint(0, 0))
+    expected_left = owner_top_left.x() + (
+        win.width() - preview._COLLAPSED_SIZE.width()
+    ) // 2
+    expected_top = (
+        owner_top_left.y()
+        + round(win.height() * preview._COLLAPSED_CENTER_Y_RATIO)
+        - preview._COLLAPSED_SIZE.height() // 2
+    )
+    assert preview.is_collapsed() is True
+    assert preview.isMinimized() is False
+    assert preview.geometry() == QRect(
+        expected_left,
+        expected_top,
+        preview._COLLAPSED_SIZE.width(),
+        preview._COLLAPSED_SIZE.height(),
+    )
+    assert preview._title_label.text() == "预览窗口"
+    assert preview._top_controls.isVisible() is True
+    assert preview._bottom_controls.isVisible() is False
+
+    preview.hide_controls(force=True)
+    assert preview._title_label.text() == "预览窗口"
+    assert preview._top_controls.isVisible() is True
+
+    win._show_preview_window()
+    qapp.processEvents()
+    assert preview.is_collapsed() is False
+    assert preview.geometry().size() == QSize(800, 450)
+    assert preview._title_label.text() == "demo.mp4"
+
+
 def test_preview_player_controls_auto_hide_and_restore(qapp):
     win = mw.SubtitleRenderWindow(embedded=False)
     preview = win._preview_window
