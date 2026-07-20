@@ -96,6 +96,7 @@ struct TimingLine {
     int singerId = -1;
     int sourceIndex = 0;
     int sourceLineIndex = 0;
+    int pageIndex = -1;
     int sourceOffsetMs = 0;
     int lane = 0;
     std::optional<int> displayStartMs;
@@ -259,6 +260,7 @@ struct RenderConfig {
     int physicalWidth() const { return std::max(1, static_cast<int>(std::lround(width * dpr))); }
     int physicalHeight() const { return std::max(1, static_cast<int>(std::lround(height * dpr))); }
     ResolvedStyle baseStyle;
+    QString layoutSemantics = QStringLiteral("legacy");
     int lineYMarginPx = 80;
     int lineGapPx = 90;
     int lineLeadInMs = 1800;
@@ -1881,6 +1883,12 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
         )
         : base.glowConcentrationLevel;
     cfg.lineYMarginPx = std::max(0, intValue(style, QStringLiteral("line_y_margin_px"), cfg.lineYMarginPx));
+    cfg.layoutSemantics = stringValue(
+        style, QStringLiteral("layout_semantics"), cfg.layoutSemantics
+    );
+    if (cfg.layoutSemantics != QStringLiteral("n3_1074")) {
+        cfg.layoutSemantics = QStringLiteral("legacy");
+    }
     cfg.lineGapPx = std::max(0, intValue(style, QStringLiteral("line_gap_px"), cfg.lineGapPx));
     cfg.lineLeadInMs = std::max(0, intValue(style, QStringLiteral("line_lead_in_ms"), cfg.lineLeadInMs));
     cfg.lineTailMs = std::max(0, intValue(style, QStringLiteral("line_tail_ms"), cfg.lineTailMs));
@@ -1986,6 +1994,7 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
             line.singerId = intValue(lineObject, QStringLiteral("singer_id"), -1);
             line.sourceIndex = static_cast<int>(sourceIndex);
             line.sourceLineIndex = sourceLineIndex;
+            line.pageIndex = intValue(lineObject, QStringLiteral("page_index"), -1);
             line.sourceOffsetMs = sourceOffsetMs;
             line.lane = std::max(0, intValue(lineObject, QStringLiteral("lane"), 0));
             if (lineObject.value(QStringLiteral("display_start_ms")).isDouble()) {
@@ -2091,11 +2100,9 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
                 line.layout.allowBiting = layoutObject.value(
                     QStringLiteral("allow_biting")
                 ).toBool(line.layout.allowBiting);
-                line.layout.rubyIntervalPx = std::max(
-                    0, intValue(
-                        layoutObject, QStringLiteral("ruby_interval_px"),
-                        line.layout.rubyIntervalPx
-                    )
+                line.layout.rubyIntervalPx = intValue(
+                    layoutObject, QStringLiteral("ruby_interval_px"),
+                    line.layout.rubyIntervalPx
                 );
                 line.layout.rubyAlignment = stringValue(
                     layoutObject, QStringLiteral("ruby_alignment"),
@@ -6616,6 +6623,9 @@ void applyGpuLineLayout(
         ? std::max(static_cast<int>(layout.lineAlignments.size()), 1)
         : 1;
     target.verticalPosition = layout.lineYPosition.toStdString();
+    target.smartHorizontal = layout.lineHorizontalLayout == QStringLiteral("asymmetric")
+        ? layout.smartHorizontal.toStdString()
+        : "none";
     target.letterSpacing = static_cast<float>(layout.letterSpacingPx * scale);
     target.allowBiting = layout.allowBiting;
     target.rubyInterval = static_cast<float>(layout.rubyIntervalPx * scale);
@@ -6673,6 +6683,10 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
     scene.viewportOffsetY = static_cast<float>(config.viewportOffsetY * scale);
     scene.viewportAlign = config.viewportAlign.toStdString();
     applyGpuResolvedStyle(scene.style, sourceStyle, scale);
+    scene.style.layoutSemantics = config.layoutSemantics.toStdString();
+    scene.style.smartHorizontal = config.lineHorizontalLayout == QStringLiteral("asymmetric")
+        ? config.smartHorizontal.toStdString()
+        : "none";
     scene.style.horizontalMargin = static_cast<float>(config.horizontalMarginPx * scale);
     scene.style.bottomMargin = static_cast<float>(config.lineYMarginPx * scale);
     scene.style.lineGap = static_cast<float>(config.lineGapPx * scale);
@@ -6733,6 +6747,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         line.endMs = lineEndMs(sourceLine) + sourceTimingOffset;
         line.sourceIndex = sourceLine.sourceIndex;
         line.sourceLineIndex = sourceLine.sourceLineIndex;
+        line.pageIndex = sourceLine.pageIndex;
         line.lane = sourceLine.lane;
         line.compositeOrder = sourceLine.sourceIndex == 0
             ? 0

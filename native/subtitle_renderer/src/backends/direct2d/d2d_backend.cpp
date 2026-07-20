@@ -890,6 +890,7 @@ struct Direct2DGpuBackend::Impl {
         int startMs = 0;
         int endMs = 0;
         int sourceIndex = 0;
+        int pageIndex = -1;
         int compositeOrder = 0;
         int lane = 0;
         bool staticOverlay = false;
@@ -907,6 +908,8 @@ struct Direct2DGpuBackend::Impl {
         bool hasRubyAnchor = false;
         float verticalRubyAllowance = 0.0f;
         float maxVisualPad = 0.0f;
+        float n3DrawHeight = 1.0f;
+        float n3Descent = 0.0f;
         bool hasInlineStyles = false;
         std::optional<float> guideAnchorLeft;
         std::optional<float> guideAnchorRight;
@@ -1222,6 +1225,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         cached.startMs = sourceLine.startMs;
         cached.endMs = sourceLine.endMs;
         cached.sourceIndex = sourceLine.sourceIndex;
+        cached.pageIndex = sourceLine.pageIndex;
         cached.compositeOrder = sourceLine.compositeOrder;
         cached.guideAnchorLeft = sourceLine.guideAnchorLeft;
         cached.guideAnchorRight = sourceLine.guideAnchorRight;
@@ -1233,6 +1237,20 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         cached.exitAnimation = sourceLine.exitAnimation;
         cached.exitDurationMs = sourceLine.exitDurationMs;
         cached.displayWindows = sourceLine.displayWindows;
+        if (style.layoutSemantics == "n3_1074") {
+            DWRITE_FONT_METRICS n3Metrics{};
+            mainFace->GetMetrics(&n3Metrics);
+            const int fontSize = std::max(static_cast<int>(style.fontSize), 1);
+            const int edgeSize = std::max(static_cast<int>(style.strokeWidth), 0);
+            const int metricTotal = std::max(
+                static_cast<int>(n3Metrics.ascent) + static_cast<int>(n3Metrics.descent), 1
+            );
+            cached.n3DrawHeight = static_cast<float>(fontSize + edgeSize);
+            cached.n3Descent = static_cast<float>(
+                fontSize * static_cast<int>(n3Metrics.descent) / metricTotal
+                + edgeSize / 2
+            );
+        }
         if (style.vertical && !sourceLine.rubies.empty()) {
             DWRITE_FONT_METRICS rubyMetrics{};
             rubyFace->GetMetrics(&rubyMetrics);
@@ -3243,6 +3261,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             && tMs <= displayEndMs;
         float lyricLeft = line->bounds.left;
         float lyricRight = line->bounds.right;
+        const bool n3Layout = style.layoutSemantics == "n3_1074";
+        if (n3Layout && !style.vertical) {
+            lyricLeft = line->fillBounds.left;
+            lyricRight = line->fillBounds.right;
+        }
         if (line->guideAnchorLeft.has_value()
             && line->guideAnchorRight.has_value()
             && !style.vertical) {
@@ -3288,15 +3311,96 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             line->hasInlineStyles ? lyricLeft : unionLeft,
             line->hasInlineStyles ? lyricRight : unionRight
         );
-        const float signalDx = alignedDx(unionLeft, unionRight);
-        const float visualPad = line->hasInlineStyles
+        float signalDx = alignedDx(unionLeft, unionRight);
+        // N3 applies SmartHorizon after ordinary lane alignment.  Page ids
+        // come from the same assign_lanes result used by the Painter oracle,
+        // so invisible siblings still contribute to page-wide width maxima.
+        if (n3Layout
+            && !style.vertical
+            && style.dualLineLayout
+            && style.smartHorizontal != "none"
+            && style.alignment != "center"
+            && line->pageIndex >= 0) {
+            const auto layoutWidth = [](const Impl::CachedLine &candidate) {
+                float left = candidate.fillBounds.left;
+                float right = candidate.fillBounds.right;
+                for (const Impl::CachedRuby &ruby : candidate.rubies) {
+                    left = std::min(left, ruby.fillBounds.left);
+                    right = std::max(right, ruby.fillBounds.right);
+                }
+                return std::max(right - left, 1.0f);
+            };
+            const float ownWidth = layoutWidth(*line);
+            float smartDx = 0.0f;
+            if (style.smartHorizontal == "center_position") {
+                const float threshold = std::floor(
+                    static_cast<float>(scene.width) * 0.5f
+                    + style.fontSize * 0.5f
+                    - ownWidth
+                );
+                if (threshold > style.horizontalMargin) {
+                    if (style.alignment == "right") {
+                        const float currentLeft = static_cast<float>(scene.width)
+                            - style.horizontalMargin - ownWidth;
+                        smartDx = std::floor(
+                            static_cast<float>(scene.width) * 0.5f
+                            - style.fontSize * 0.5f
+                        ) - currentLeft;
+                    } else {
+                        smartDx = threshold - style.horizontalMargin;
+                    }
+                }
+            } else if (style.smartHorizontal == "equal_margins") {
+                float maxLeft = 0.0f;
+                float maxCenter = 0.0f;
+                float maxRight = 0.0f;
+                for (const Impl::CachedLine &candidate : impl_->lines) {
+                    if (candidate.sourceIndex != line->sourceIndex
+                        || candidate.pageIndex != line->pageIndex) {
+                        continue;
+                    }
+                    const float width = layoutWidth(candidate);
+                    if (candidate.style.alignment == "right") {
+                        maxRight = std::max(maxRight, width);
+                    } else if (candidate.style.alignment == "center") {
+                        maxCenter = std::max(maxCenter, width);
+                    } else {
+                        maxLeft = std::max(maxLeft, width);
+                    }
+                }
+                if (maxLeft > 0.0f && maxRight > 0.0f) {
+                    const float slack = static_cast<float>(scene.width)
+                        - style.horizontalMargin * 2.0f
+                        - maxLeft - maxCenter - maxRight
+                        + style.fontSize;
+                    if (slack > 0.0f) {
+                        const float halfSlack = std::floor(slack * 0.5f);
+                        smartDx = style.alignment == "right"
+                            ? -halfSlack
+                            : halfSlack;
+                    }
+                }
+            }
+            dx += smartDx;
+            signalDx += smartDx;
+        }
+        const float visualPad = n3Layout
+            ? 0.0f
+            : (line->hasInlineStyles
             ? line->maxVisualPad
             : std::ceil(
                 (std::max(style.strokeWidth, 0.0f)
                     + std::max(style.stroke2Width, 0.0f)) * 0.5f
-            );
-        const float ascent = line->ascent > 0.0f ? line->ascent : -line->bounds.top;
-        const float descent = line->descent > 0.0f ? line->descent : line->bounds.bottom;
+            ));
+        const float mainHeight = n3Layout
+            ? line->n3DrawHeight
+            : (line->ascent > 0.0f ? line->ascent : -line->bounds.top)
+                + (line->descent > 0.0f ? line->descent : line->bounds.bottom)
+                + visualPad * 2.0f;
+        const float descent = n3Layout
+            ? line->n3Descent
+            : (line->descent > 0.0f ? line->descent : line->bounds.bottom) + visualPad;
+        const float ascent = mainHeight - descent;
         const int lanes = style.dualLineLayout ? std::max(style.laneCount, 1) : 1;
         const float rubyExtra = line->rubies.empty()
             ? 0.0f
@@ -3305,18 +3409,17 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     + std::max(style.rubyStrokeWidth, 0.0f),
                 0.0f
             );
-        const float mainHeight = ascent + descent + visualPad * 2.0f;
         const float step = mainHeight + style.lineGap;
         float firstBaseline = static_cast<float>(scene.height) - style.bottomMargin
-            - descent - visualPad - step * static_cast<float>(lanes - 1);
+            - descent - step * static_cast<float>(lanes - 1);
         if (style.verticalPosition == "top") {
-            firstBaseline = style.bottomMargin + rubyExtra + ascent + visualPad;
+            firstBaseline = style.bottomMargin + rubyExtra + ascent;
         } else if (style.verticalPosition == "center") {
             const float totalHeight = mainHeight * static_cast<float>(lanes)
                 + style.lineGap * static_cast<float>(lanes - 1);
             firstBaseline = (static_cast<float>(scene.height) - totalHeight) * 0.5f
-                + ascent + visualPad;
-            if (lanes == 1) {
+                + ascent;
+            if (lanes == 1 && !n3Layout) {
                 if (line->rubies.empty()) {
                     firstBaseline = (static_cast<float>(scene.height)
                         - (line->bounds.bottom - line->bounds.top)) * 0.5f
@@ -3324,7 +3427,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 } else {
                     const float blockHeight = mainHeight + rubyExtra;
                     firstBaseline = (static_cast<float>(scene.height) - blockHeight) * 0.5f
-                        + rubyExtra + visualPad + ascent;
+                        + rubyExtra + ascent;
                 }
             }
         }

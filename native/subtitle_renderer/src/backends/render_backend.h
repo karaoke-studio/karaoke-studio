@@ -159,6 +159,7 @@ struct TextLine {
     int endMs = 0;
     int sourceIndex = 0;
     int sourceLineIndex = 0;
+    int pageIndex = -1;
     int lane = 0;
     int compositeOrder = 0;
     std::optional<float> guideAnchorLeft;
@@ -175,6 +176,8 @@ struct TextLine {
 };
 
 struct TextStyle {
+    std::string layoutSemantics = "legacy";
+    std::string smartHorizontal = "none";
     std::wstring fontFamily;
     std::optional<std::wstring> latinFontFamily;
     float fontSize = 100.0f;

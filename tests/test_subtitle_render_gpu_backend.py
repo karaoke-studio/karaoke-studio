@@ -2326,6 +2326,46 @@ def test_gpu_g4_line_layout_override_geometry_and_ruby_follow_painter(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_n3_smart_horizontal_uses_painter_page_geometry(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("LEFT", 1_000)], end_ms=2_000),
+            TimingLine(chars=[TimingChar("R", 1_500)], end_ms=2_500),
+        ]
+    )
+    style = _g1_style(
+        layout_semantics="n3_1074",
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=52,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=True,
+        line_horizontal_layout="asymmetric",
+        line_alignments=["left", "right"],
+        smart_horizontal="equal_margins",
+        horizontal_margin_px=24,
+        line_lead_in_ms=1_000,
+        line_tail_ms=500,
+    )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, (1_600,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=1_600, track=track)
+
+    gpu_bounds = _payload_alpha_bounds(gpu[0])
+    painter_bounds = _payload_alpha_bounds(painter)
+    assert all(
+        abs(actual - expected) <= 12
+        for actual, expected in zip(gpu_bounds, painter_bounds)
+    ), (gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize(
     ("ruby_alignment", "ruby_interval_px", "ruby_gap_px"),
     [

@@ -238,6 +238,35 @@ def test_build_render_ir_carries_painter_display_schedule():
     # Dual-line protection never lets a manual window cut off the sung span.
     assert first["display_end_ms"] == 1_500
     assert ir["track"]["lines"][1]["lane"] == 1
+    assert first["page_index"] == 0
+    assert ir["track"]["lines"][1]["page_index"] == 0
+
+
+def test_build_render_ir_carries_painter_page_groups_for_native_smart_horizon():
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("L", 1_000)], end_ms=1_400),
+            TimingLine(chars=[TimingChar("R", 2_000)], end_ms=2_400),
+            TimingLine(chars=[TimingChar("N", 3_000)], end_ms=3_400),
+        ]
+    )
+    style = Style(
+        layout_semantics="n3_1074",
+        dual_line_layout=True,
+        line_alignments=["left", "right"],
+        smart_horizontal="equal_margins",
+    )
+
+    lines = build_render_ir(track, style, width=1920, height=1080, fps=60)["track"][
+        "lines"
+    ]
+
+    assert [(line["page_index"], line["lane"]) for line in lines] == [
+        (0, 0),
+        (0, 1),
+        (2, 0),
+    ]
+    assert lines[0]["layout"]["smart_horizontal"] == "equal_margins"
 
 
 def test_build_render_ir_resolves_guide_symbols_with_painter_semantics():
