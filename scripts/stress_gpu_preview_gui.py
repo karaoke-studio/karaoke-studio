@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections import deque
+from dataclasses import replace
 import json
 import math
 import os
@@ -37,6 +38,12 @@ def main() -> int:
     parser.add_argument("--progress-seconds", type=float, default=30.0)
     parser.add_argument("--force-warp", action="store_true")
     parser.add_argument("--offscreen", action="store_true")
+    parser.add_argument(
+        "--animation",
+        choices=("project", "none", "fade", "slide", "char_fade", "spin_flip", "utopia"),
+        default="project",
+        help="override the imported global entry/exit animation for diagnostics",
+    )
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
@@ -64,6 +71,8 @@ def main() -> int:
     video_path = Path(str(data["video_path"]))
     track = load_nicokara_lrc(subtitle_path)
     style = style_from_dict(data["style"])
+    if args.animation != "project":
+        style = replace(style, entry_anim=args.animation, exit_anim=args.animation)
     screen = data.get("screen") if isinstance(data.get("screen"), dict) else {}
     output_width = max(int(screen.get("width", 1920)), 1)
     output_height = max(int(screen.get("height", 1080)), 1)

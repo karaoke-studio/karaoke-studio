@@ -4645,12 +4645,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         auto drawShadowSilhouette = [&](ID2D1Geometry *geometry,
                                         ID2D1Geometry *animatedOuterGeometry,
                                         ID2D1Brush *brush,
-                                        float strokeWidth, float stroke2Width) {
+                                        float strokeWidth, float stroke2Width,
+                                        bool transformed) {
             const float outerWidth = stroke2Width > 0.0f
                 ? std::max(strokeWidth, 0.0f) + stroke2Width
                 : std::max(strokeWidth, 0.0f);
-            if ((spinDirection != 0 || hasUtopiaTransition)
-                && animatedOuterGeometry != nullptr) {
+            if (transformed && animatedOuterGeometry != nullptr) {
                 context->FillGeometry(animatedOuterGeometry, brush);
             } else if (outerWidth > 0.0f) {
                 context->DrawGeometry(geometry, brush, outerWidth);
@@ -4747,7 +4747,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         : strokeGeometryAt(charIndex);
                     drawShadowSilhouette(
                         geometry, animatedOuter, brush.Get(),
-                        charStyle.strokeWidth, charStyle.stroke2Width
+                        charStyle.strokeWidth, charStyle.stroke2Width,
+                        charTransformedAt(charIndex)
                     );
                     if (pushedAfterClip) {
                         context->PopAxisAlignedClip();
@@ -4789,7 +4790,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 for (const auto &geometry : line->geometries) {
                     drawShadowSilhouette(
                         geometry.Get(), nullptr, brush.Get(),
-                        style.strokeWidth, style.stroke2Width
+                        style.strokeWidth, style.stroke2Width, false
                     );
                 }
                 if (pushedAfterClip) {
@@ -4922,7 +4923,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     drawShadowSilhouette(
                         geometry, animatedOuter, brush.Get(),
                         rubyStyle.rubyStrokeWidth,
-                        rubyStyle.rubyStroke2Width
+                        rubyStyle.rubyStroke2Width,
+                        rubyUnitTransformed(ruby, geometryIndex)
                     );
                     if (pushedUtopiaClip) {
                         context->PopAxisAlignedClip();
@@ -5075,21 +5077,41 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 : (layer == 1
                     ? (after ? charStyle.afterStroke : charStyle.beforeStroke)
                     : (after ? charStyle.afterFill : charStyle.beforeFill));
-            Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrush(
-                paint, line->fillBounds, color
-            );
+            // The common (non-role) Utopia path used to recreate one D2D
+            // brush for every character and every visual layer.  A long line
+            // therefore allocated dozens of COM brush objects per frame even
+            // though all characters share the six line-level brushes above.
+            // Reuse those brushes; role-specific brushes still retain their
+            // own paint definition and are handled by the fallback below.
+            Microsoft::WRL::ComPtr<ID2D1Brush> ownedBrush;
+            ID2D1Brush *brush = nullptr;
+            if (ch.styleIndex < 0) {
+                brush = layer == 0
+                    ? (after ? afterStroke2.Get() : beforeStroke2.Get())
+                    : (layer == 1
+                        ? (after ? afterStroke.Get() : beforeStroke.Get())
+                        : (after ? afterFill.Get() : beforeFill.Get()));
+            } else {
+                ownedBrush = paintBrush(paint, line->fillBounds, color);
+                brush = ownedBrush.Get();
+            }
             brush->SetOpacity(globalOpacity * characterOpacityAt(charIndex));
-            const bool animated = spinDirection != 0 || hasUtopiaTransition;
+            // Only glyphs whose matrix is non-identity need the pre-expanded
+            // stroke geometry.  Treating the whole Utopia line as animated
+            // makes every settled glyph fill a complex widened path on every
+            // frame, which is dramatically slower than Direct2D's native
+            // DrawGeometry stroke on long real-world lines.
+            const bool animated = charTransformedAt(charIndex);
             if (layer == 0) {
                 if (charStyle.stroke2Width <= 0.0f) {
                     return;
                 }
                 ID2D1Geometry *animatedStroke2 = stroke2GeometryAt(charIndex);
                 if (animated && animatedStroke2 != nullptr) {
-                    context->FillGeometry(animatedStroke2, brush.Get());
+                    context->FillGeometry(animatedStroke2, brush);
                 } else {
                     context->DrawGeometry(
-                        geometry, brush.Get(),
+                        geometry, brush,
                         std::max(0.0f, charStyle.strokeWidth)
                             + charStyle.stroke2Width
                     );
@@ -5106,17 +5128,17 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 ID2D1Geometry *protectedGeometry = protectedGeometryAt(charIndex);
                 ID2D1Geometry *animatedStroke = strokeGeometryAt(charIndex);
                 if (animated && !protect && animatedStroke != nullptr) {
-                    context->FillGeometry(animatedStroke, brush.Get());
+                    context->FillGeometry(animatedStroke, brush);
                 } else if (protect && protectedGeometry != nullptr) {
-                    context->FillGeometry(protectedGeometry, brush.Get());
+                    context->FillGeometry(protectedGeometry, brush);
                 } else {
                     context->DrawGeometry(
-                        geometry, brush.Get(), charStyle.strokeWidth
+                        geometry, brush, charStyle.strokeWidth
                     );
                 }
                 return;
             }
-            context->FillGeometry(geometry, brush.Get());
+            context->FillGeometry(geometry, brush);
         };
         const auto drawMainLayer = [&](int layer) {
             const auto drawPhasePart = [&](std::size_t charIndex,
@@ -5214,7 +5236,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     rubyIndex, index
                 );
                 if (rubyStyle.rubyStroke2Width > 0.0f) {
-                    if ((spinDirection != 0 || hasUtopiaTransition)
+                    if (rubyUnitTransformed(ruby, index)
                         && animatedStroke2 != nullptr) {
                         context->FillGeometry(animatedStroke2, stroke2.Get());
                     } else {
@@ -5237,7 +5259,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     ID2D1Geometry *animatedStroke = rubyStrokeGeometryAt(
                         rubyIndex, index
                     );
-                    if ((spinDirection != 0 || hasUtopiaTransition)
+                    if (rubyUnitTransformed(ruby, index)
                         && !protect && animatedStroke != nullptr) {
                         context->FillGeometry(animatedStroke, stroke.Get());
                     } else if (protect && protectedGeometry != nullptr) {

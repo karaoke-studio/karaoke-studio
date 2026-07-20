@@ -1683,3 +1683,22 @@ G6 首批架构与本机性能门槛已落地，仍不得默认开启。下一�
   先后运行时，protocol 的 utopia 像素对照测试（CPU sidecar vs Painter）会因进程内 QApplication
   平台插件被先创建的 GPU 测试固定而超差；两文件各自单独运行全绿，已登记为独立修复任务。
 - G7 第 4 项预览质量档位仍待产品侧确认交互后排期；GPU 产品开关与 G6 原生预览默认状态不变。
+
+### 2026-07-20（第四十四批）：真实 N3 工程 Utopia 恒等描边快路径
+
+- 用用户工程 `25 m.n3proj`（1920×1080@60、47 行/537 字/109 组 ruby、全局 24px 中档 glow）复现了
+  隔离基准遗漏的退化：20～25 秒密集段无动画 render mean `5.20ms`，强制全局 Utopia 后升到
+  `26.71ms`，300/300 帧超过 16.67ms；把 glow 从 24px 降至 10px 仍为 `26.50ms`，完全关闭 glow
+  仍为 `25.60ms`，证明本轮根因不是 G7-1/2 的发光路径。
+- 根因是正文与 ruby 描边选择预扩轮廓时使用了“本行是否启用 Utopia/spin”的全局判断。Utopia 稳态
+  实际通常只有当前唱字/注音单元的矩阵非恒等，但整行所有已稳定字符仍每帧 `FillGeometry` 复杂的
+  widened stroke path；长行因此承担几十次不必要的预扩轮廓填充。现在正文、ruby 和 shadow silhouette
+  均按**该字本帧是否真实 transformed**分流：只有非恒等矩阵使用预扩轮廓，恒等字恢复 Direct2D
+  `DrawGeometry` 描边。全局无角色行同时复用已经创建的六个 line-level brush，避免逐字重复创建 COM brush。
+- 修复后同一 300 帧密集段 Utopia+24px glow render mean `11.46ms`（`2.33x`），超过 16.67ms 的帧由
+  `300/300` 降到 `53/300`；关闭 glow 为 `9.29ms`。真实 GUI 反复播放 23 字最密集行时 render mean/p95
+  `9.08/15.78ms`，核心重新进入 60fps 预算。离屏端到端 FPS 仍受 4K 视频解码、JSON/共享内存/QImage
+  与 Qt 主线程调度影响且复跑波动较大，因此继续按 §6.2 拆分指标，不用单一 FPS 代替 render 结论。
+- 排除了“把 glow scratch 常驻上限从 8 提到 64”的临时假设：同场景 render mean `18.67→22.06ms`，
+  进程 RSS 增长约 `428→562MiB`，既变慢又增压，未保留该改动。`stress_gpu_preview_gui.py` 新增
+  `--animation` 覆盖项，后续可在不改用户工程的情况下做 `project/none/.../utopia` 同场景 A/B。
