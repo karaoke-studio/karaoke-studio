@@ -10624,20 +10624,34 @@ def _line_total_width(
     """
     source_line = line
     line = _line_with_guide_symbol(line)
-    font = _build_font(style)
-    metrics = QFontMetrics(font)
-    latin_font = _build_latin_font(style)
-    font_for = _make_font_for(style, font, latin_font)
-    latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
-    char_widths = [
-        (
-            _vector_glyph_width(c.vector_glyph, _style_for_role_in_layout(style, c.role_label))
-            if c.vector_glyph is not None
-            else _char_layout_width(c.text, font, metrics, latin_metrics, font_for, style)
-        )
-        for c in line.chars
-    ]
-    pad = 0 if style.layout_semantics == "n3_1074" else _visual_text_padding(style)
+    if _line_has_role_labels(line):
+        role_layout = _build_role_text_layout(line, style, x0=0, baseline_y=0)
+        char_widths, _ranges = _role_char_geometry_by_index(line, role_layout)
+        text_width = role_layout.total_width
+        pad = _role_visual_text_padding(role_layout)
+    else:
+        font = _build_font(style)
+        metrics = QFontMetrics(font)
+        latin_font = _build_latin_font(style)
+        font_for = _make_font_for(style, font, latin_font)
+        latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
+        char_widths = [
+            (
+                _vector_glyph_width(
+                    char.vector_glyph,
+                    _style_for_role_in_layout(style, char.role_label),
+                )
+                if char.vector_glyph is not None
+                else _char_layout_width(
+                    char.text, font, metrics, latin_metrics, font_for, style
+                )
+            )
+            for char in line.chars
+        ]
+        text_width = _line_text_width(char_widths, style)
+        pad = _visual_text_padding(style)
+    if style.layout_semantics == "n3_1074":
+        pad = 0
     left_ext = right_ext = pad
     gap_total = 0
     if rubies:
@@ -10652,7 +10666,7 @@ def _line_total_width(
     return max(
         int(
             round(
-                _line_text_width(char_widths, style)
+                text_width
                 + gap_total
                 + left_ext
                 + right_ext

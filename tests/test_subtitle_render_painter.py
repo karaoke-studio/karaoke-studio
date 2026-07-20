@@ -7544,6 +7544,41 @@ def test_n3_logical_line_width_does_not_add_visual_stroke_padding(qapp):
     assert _line_total_width(line, style) == _line_text_width(widths, style)
 
 
+def test_n3_page_width_measurement_uses_inline_role_font_geometry(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar("W", 0, role_label="wide"),
+            TimingChar("W", 500, role_label="wide"),
+        ],
+        end_ms=1000,
+    )
+    style = Style(
+        layout_semantics="n3_1074",
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=32,
+        stroke_width_px=0,
+        custom_style_schemes={
+            "wide": SubtitleStyleScheme(
+                font_family="Arial",
+                font_family_latin="Arial",
+                font_size_px=128,
+                stroke_width_px=0,
+            )
+        },
+    )
+
+    rendered = _layout_line(TimingTrack(lines=[line]), line, style, 1920, 1080)
+    plain = replace(
+        line,
+        chars=[replace(char, role_label=None) for char in line.chars],
+    )
+
+    assert rendered is not None
+    assert _line_total_width(line, style) == rendered.total_w
+    assert _line_total_width(line, style) > _line_total_width(plain, style)
+
+
 def test_n3_lane_box_uses_font_size_and_primary_edge_only(qapp):
     legacy = Style(font_size_px=100, stroke_width_px=12, stroke2_width_px=40)
     n3 = replace(legacy, layout_semantics="n3_1074")
