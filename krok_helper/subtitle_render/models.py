@@ -337,7 +337,7 @@ ColorFillMode = Literal[
 ]
 ColorStateKey = Literal["before", "after"]
 ColorLayerKey = Literal["text", "stroke", "stroke2", "shadow"]
-DecorationKind = Literal["shadow", "glow"]
+DecorationKind = Literal["none", "shadow", "glow"]
 RubyAlignment = Literal["auto", "center", "equal_space"]
 RUBY_ALIGNMENTS: tuple[RubyAlignment, ...] = ("auto", "center", "equal_space")
 SmartHorizontal = Literal["none", "center_position", "equal_margins"]
@@ -1486,9 +1486,9 @@ def style_from_dict(payload: object) -> Style:
         elif key == "viewport_align":
             changes[key] = value if value in VIEWPORT_ALIGNS else defaults.viewport_align
         elif key == "decoration_kind":
-            changes[key] = value if value in {"shadow", "glow"} else defaults.decoration_kind
+            changes[key] = value if value in {"none", "shadow", "glow"} else defaults.decoration_kind
         elif key == "ruby_decoration_kind":
-            changes[key] = value if value in {"shadow", "glow"} else None
+            changes[key] = value if value in {"none", "shadow", "glow"} else None
         elif key == "ruby_alignment":
             changes[key] = value if value in RUBY_ALIGNMENTS else defaults.ruby_alignment
         elif key == "ruby_main_progress_mode":
@@ -2016,7 +2016,7 @@ def title_overlay_from_dict(payload: object) -> Optional[TitleOverlay]:
     if show_mode not in TITLE_SHOW_MODES:
         show_mode = defaults.show_mode
     decoration = payload.get("decoration_kind", defaults.decoration_kind)
-    if decoration not in {"shadow", "glow"}:
+    if decoration not in {"none", "shadow", "glow"}:
         decoration = defaults.decoration_kind
     text_template = str(payload.get("text_template", defaults.text_template))
     return TitleOverlay(

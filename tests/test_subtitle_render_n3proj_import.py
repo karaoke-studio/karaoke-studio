@@ -302,6 +302,16 @@ def test_video_background_ignores_independent_sound_path(tmp_path):
     assert any("视频背景不使用独立音频" in warning for warning in result.warnings)
 
 
+def test_import_decor_kind_none_as_explicit_no_decoration(tmp_path):
+    payload = _project_payload(tmp_path)
+    payload["LyricsFonts"][0]["DecorKind"] = 0
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+
+    assert style.decoration_kind == "none"
+
+
 def test_import_global_style_font_and_colors(imported):
     style = style_from_dict(imported.project_data["style"])
     assert style.layout_semantics == "n3_1074"

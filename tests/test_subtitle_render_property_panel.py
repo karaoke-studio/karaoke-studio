@@ -2761,6 +2761,16 @@ def test_property_panel_decoration_controls_visibility_and_emit_style(qapp):
     assert emitted[-1].glow_after_radius_px == 0
 
     panel._decoration_type_combo.setCurrentIndex(
+        panel._decoration_type_combo.findData("none")
+    )
+    assert emitted[-1].decoration_kind == "none"
+    assert panel._shadow_x_field.isHidden()
+    assert panel._shadow_y_field.isHidden()
+    assert panel._glow_radius_field.isHidden()
+    assert panel._glow_after_radius_field.isHidden()
+    assert panel._glow_controls_row.isHidden()
+
+    panel._decoration_type_combo.setCurrentIndex(
         panel._decoration_type_combo.findData("shadow")
     )
     assert emitted[-1].decoration_kind == "shadow"

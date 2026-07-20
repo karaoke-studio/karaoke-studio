@@ -4783,6 +4783,43 @@ def test_image_body_protects_primary_stroke_under_transparent_pixels(qapp, tmp_p
     assert canvas.pixelColor(8, 20).red() > 200
 
 
+def test_none_decoration_draws_neither_shadow_nor_glow(qapp):
+    state = KaraokeColorState(
+        text=PaintFill(color="#FFFFFF"),
+        stroke=PaintFill(color="#00000000"),
+        stroke2=PaintFill(color="#00000000"),
+        shadow=PaintFill(color="#FF0000"),
+    )
+    path = QPainterPath()
+    path.addRect(QRectF(16, 16, 20, 20))
+
+    def render(kind: str, offset: int) -> QImage:
+        canvas = QImage(64, 64, QImage.Format.Format_ARGB32_Premultiplied)
+        canvas.fill(0)
+        painter = QPainter(canvas)
+        _paint_text_layer_stack(
+            painter,
+            path,
+            QRectF(16, 16, 20, 20),
+            state,
+            Style(decoration_kind=kind),
+            stroke_width=0,
+            stroke2_width=0,
+            shadow_dx=offset,
+            shadow_dy=offset,
+            glow_radius=16,
+        )
+        painter.end()
+        return canvas
+
+    no_decoration = render("none", 8)
+    plain = render("none", 0)
+    shadow = render("shadow", 8)
+
+    assert _pixel_hash(no_decoration) == _pixel_hash(plain)
+    assert _pixel_hash(no_decoration) != _pixel_hash(shadow)
+
+
 def test_image_fill_before_and_after_layers_share_text_anchor(qapp, tmp_path):
     clear_before_layer_cache()
     image_path = tmp_path / "pattern.png"

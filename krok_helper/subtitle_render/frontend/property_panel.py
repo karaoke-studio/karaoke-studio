@@ -4905,6 +4905,7 @@ class PropertyPanel(QWidget):
 
         self._decoration_type_combo = _WheelFocusedComboBox(section)
         _compact_control(self._decoration_type_combo)
+        self._decoration_type_combo.addItem("无", "none")
         self._decoration_type_combo.addItem("阴影", "shadow")
         self._decoration_type_combo.addItem("发光", "glow")
         self._decoration_type_combo.currentIndexChanged.connect(
@@ -7685,7 +7686,7 @@ def _normalize_viewport_align(value: object) -> ViewportAlign:
 
 
 def _normalize_decoration_kind(value: object) -> DecorationKind:
-    if value in {"shadow", "glow"}:
+    if value in {"none", "shadow", "glow"}:
         return value  # type: ignore[return-value]
     return "shadow"
 

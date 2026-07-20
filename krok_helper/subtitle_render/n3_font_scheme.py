@@ -356,7 +356,7 @@ def convert_n3_font_scheme(
             shadow_offset_y=decor_size,
         )
     else:
-        changes.update(decoration_kind="shadow", shadow_offset_x=0, shadow_offset_y=0)
+        changes.update(decoration_kind="none", shadow_offset_x=0, shadow_offset_y=0)
 
     changes.update(
         ruby_font_follow_main=(

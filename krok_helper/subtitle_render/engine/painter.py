@@ -1393,7 +1393,10 @@ def _paint_title_text_stack(
             title.stroke2_width_px,
             concentration_level=title.glow_concentration_level,
         )
-    elif title.shadow_offset_x or title.shadow_offset_y:
+    elif (
+        title.decoration_kind == "shadow"
+        and (title.shadow_offset_x or title.shadow_offset_y)
+    ):
         _paint_shadow_silhouette(
             painter,
             path,
@@ -3232,16 +3235,20 @@ def _ruby_script_stroke_style(style: Style, reading: str) -> Style:
 
 def _ruby_decoration_kind(style: Style) -> DecorationKind:
     value = style.ruby_decoration_kind
-    return value if value in {"shadow", "glow"} else style.decoration_kind
+    return value if value in {"none", "shadow", "glow"} else style.decoration_kind
 
 
 def _ruby_shadow_dx(style: Style) -> int:
+    if _ruby_decoration_kind(style) != "shadow":
+        return 0
     if style.ruby_shadow_offset_x is not None:
         return int(style.ruby_shadow_offset_x)
     return _scaled_signed_px(style.shadow_offset_x, _ruby_scale(style))
 
 
 def _ruby_shadow_dy(style: Style) -> int:
+    if _ruby_decoration_kind(style) != "shadow":
+        return 0
     if style.ruby_shadow_offset_y is not None:
         return int(style.ruby_shadow_offset_y)
     return _scaled_signed_px(style.shadow_offset_y, _ruby_scale(style))
@@ -3292,7 +3299,7 @@ def _text_visual_padding(style: Style, *, after: bool) -> int:
                 _glow_radius(style, after=after),
             ),
         )
-    else:
+    elif style.decoration_kind == "shadow":
         # 阴影是含描边的整字剪影：足迹 = 描边半宽 + 偏移。
         pad = pad + abs(style.shadow_offset_y)
     return max(pad, 2)
@@ -3327,7 +3334,7 @@ def _title_visual_padding(title: TitleOverlay) -> int:
                 max(int(title.glow_radius_px), 0),
             ),
         )
-    else:
+    elif title.decoration_kind == "shadow":
         pad = pad + abs(title.shadow_offset_y)
     return max(pad, 2)
 
@@ -7521,7 +7528,7 @@ def _build_glyph_run_layer(
         and not _karaoke_glow_states_differ(role_style, colors)
     )
     has_shadow = (
-        (not is_glow)
+        role_style.decoration_kind == "shadow"
         and bool(role_style.shadow_color)
         and bool(role_style.shadow_offset_x or role_style.shadow_offset_y)
     )
@@ -13382,7 +13389,11 @@ def _paint_text_layer_stack(
                 stroke2_width,
                 concentration_level=_glow_concentration_level(style),
             )
-    elif draw_shadow and (shadow_dx or shadow_dy):
+    elif (
+        style.decoration_kind == "shadow"
+        and draw_shadow
+        and (shadow_dx or shadow_dy)
+    ):
         _paint_shadow_silhouette(
             painter,
             path,

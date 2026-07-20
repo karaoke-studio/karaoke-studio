@@ -4515,7 +4515,8 @@ void paintTextLayerStackWithWidths(
             stroke2Width,
             glowScope
         );
-    } else if (shadowOffsetX != 0 || shadowOffsetY != 0) {
+    } else if (style.decorationKind == QStringLiteral("shadow")
+               && (shadowOffsetX != 0 || shadowOffsetY != 0)) {
         QPainterPath shadowPath(path);
         shadowPath.translate(shadowOffsetX, shadowOffsetY);
         painter.fillPath(shadowPath, brushForFill(shadow, rect.translated(shadowOffsetX, shadowOffsetY)));
