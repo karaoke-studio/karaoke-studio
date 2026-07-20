@@ -5599,6 +5599,52 @@ def test_utopia_entry_state_bounces_each_character_from_line_start(qapp):
     assert settled == (1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0)
 
 
+@pytest.mark.parametrize("exit_effect", ["char_fade", "spin_flip"])
+def test_utopia_entry_does_not_override_active_character_exit(exit_effect):
+    line = _track().lines[0]
+    style = Style(
+        entry_anim="utopia",
+        exit_anim=exit_effect,
+        exit_fade_ms=1000,
+    )
+
+    transition = subtitle_painter._line_char_transition_context(
+        style,
+        line,
+        3000,
+        0,
+        3500,
+        len(line.chars),
+    )
+
+    assert transition is not None
+    assert transition.phase == "exit"
+    assert transition.effect == exit_effect
+
+
+@pytest.mark.parametrize("entry_effect", ["char_fade", "spin_flip"])
+def test_utopia_exit_does_not_override_active_character_entry(entry_effect):
+    line = _track().lines[0]
+    style = Style(
+        entry_anim=entry_effect,
+        entry_lead_ms=1000,
+        exit_anim="utopia",
+    )
+
+    transition = subtitle_painter._line_char_transition_context(
+        style,
+        line,
+        300,
+        0,
+        3500,
+        len(line.chars),
+    )
+
+    assert transition is not None
+    assert transition.phase == "entry"
+    assert transition.effect == entry_effect
+
+
 def test_utopia_keeps_one_render_path_before_and_during_wipe(qapp):
     from krok_helper.subtitle_render.engine.painter import (
         _line_char_transition_context,

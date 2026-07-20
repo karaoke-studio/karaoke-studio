@@ -2768,6 +2768,29 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             || line->exitAnimation == "utopia";
         const bool hasUtopiaTransition = line->entryAnimation == "utopia"
             || line->exitAnimation == "utopia";
+        std::string activeCharacterTransition;
+        int activeCharacterDirection = 0;
+        if (!line->displayWindows.empty()) {
+            const DisplayWindow &window = line->displayWindows.front();
+            if ((line->exitAnimation == "char_fade"
+                    || line->exitAnimation == "spin_flip")
+                && line->exitDurationMs > 0
+                && tMs >= std::max(line->endMs, window.endMs - 600)) {
+                activeCharacterTransition = line->exitAnimation;
+                activeCharacterDirection = 1;
+            } else if ((line->entryAnimation == "char_fade"
+                    || line->entryAnimation == "spin_flip")
+                && line->entryDurationMs > 0
+                && tMs <= window.startMs + 600) {
+                activeCharacterTransition = line->entryAnimation;
+                activeCharacterDirection = -1;
+            }
+        }
+        // Painter owns one per-character transition context at a time.  Utopia
+        // remains the steady-state path, but an active char fade/spin on the
+        // opposite side must temporarily take precedence.
+        const bool useUtopiaTransition = hasUtopiaTransition
+            && activeCharacterTransition.empty();
         auto charFadeOpacityAt = [&](std::size_t charIndex) {
             if (!hasCharacterTransition || line->displayWindows.empty()) {
                 return 1.0f;
@@ -2805,18 +2828,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
             return 1.0f;
         };
-        int spinDirection = 0;
-        if (!line->displayWindows.empty()) {
-            const DisplayWindow &window = line->displayWindows.front();
-            if (line->exitAnimation == "spin_flip" && line->exitDurationMs > 0
-                && tMs >= std::max(line->endMs, window.endMs - 600)) {
-                spinDirection = 1;
-            } else if (line->entryAnimation == "spin_flip"
-                && line->entryDurationMs > 0
-                && tMs <= window.startMs + 600) {
-                spinDirection = -1;
-            }
-        }
+        const int spinDirection = activeCharacterTransition == "spin_flip"
+            ? activeCharacterDirection
+            : 0;
         auto spinMatrix = [&](float opacity, float centerX, float centerY) {
             const float clamped = std::clamp(opacity, 0.0f, 1.0f);
             if (spinDirection == 0 || clamped >= 1.0f) {
@@ -2893,7 +2907,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 return state;
             }
             const Impl::CachedChar &ch = line->chars[charIndex];
-            if (!hasUtopiaTransition) {
+            if (!useUtopiaTransition) {
                 state.opacity = charFadeOpacityAt(charIndex);
                 state.matrix = spinMatrix(state.opacity, ch.pivotX, ch.pivotY);
                 state.transformed = spinDirection != 0 && state.opacity < 1.0f;
@@ -2984,7 +2998,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         auto rubyUnitAnimationAt = [&](const Impl::CachedRuby &ruby,
                                        std::size_t unitIndex) {
             CharacterAnimationState state;
-            if (!hasUtopiaTransition || unitIndex >= ruby.chars.size()
+            if (!useUtopiaTransition || unitIndex >= ruby.chars.size()
                 || line->displayWindows.empty()) {
                 state.opacity = characterOpacityAt(static_cast<std::size_t>(std::max(
                     ruby.transitionCharIndex, 0
@@ -3080,7 +3094,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         };
         auto rubyUnitOpacityAt = [&](const Impl::CachedRuby &ruby,
                                      std::size_t unitIndex) {
-            return hasUtopiaTransition
+            return useUtopiaTransition
                 ? rubyUnitAnimationAt(ruby, unitIndex).opacity
                 : rubyFadeOpacityAt(ruby);
         };
@@ -3183,7 +3197,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {
                 maxRubyOpacity = std::max(
                     maxRubyOpacity,
-                    hasUtopiaTransition
+                    useUtopiaTransition
                         ? rubyUnitAnimationAt(ruby, index).opacity
                         : rubyFadeOpacityAt(ruby)
                 );
@@ -3198,7 +3212,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             frameRubyStrokeGeometries[rubyIndex].resize(ruby.strokeGeometries.size());
             frameRubyStroke2Geometries[rubyIndex].resize(ruby.stroke2Geometries.size());
             for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {
-                const CharacterAnimationState rubyAnimation = hasUtopiaTransition
+                const CharacterAnimationState rubyAnimation = useUtopiaTransition
                     ? rubyUnitAnimationAt(ruby, index)
                     : CharacterAnimationState{
                         rubyFadeOpacityAt(ruby),
@@ -3343,12 +3357,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         // the Painter per-glyph blur-then-transform semantics; every other
         // glyph shares the line-level glow sources.
         auto charTransformedAt = [&](std::size_t index) {
-            return (spinDirection != 0 || hasUtopiaTransition)
+            return (spinDirection != 0 || useUtopiaTransition)
                 && characterAnimationAt(index).transformed;
         };
         auto rubyUnitTransformed = [&](const Impl::CachedRuby &ruby,
                                        std::size_t unitIndex) {
-            if (hasUtopiaTransition) {
+            if (useUtopiaTransition) {
                 return rubyUnitAnimationAt(ruby, unitIndex).transformed;
             }
             return spinDirection != 0 && rubyFadeOpacityAt(ruby) < 1.0f;
@@ -4191,7 +4205,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const auto pushGlowClip = [&](std::size_t index, bool after) {
                 float edge = delegatedWipeCoordinateAt(line->chars, index);
                 D2D1_RECT_F bounds = line->bounds;
-                if (hasUtopiaTransition) {
+                if (useUtopiaTransition) {
                     const auto animated = utopiaCharWipe(index);
                     bounds = animated.first;
                     edge = animated.second;
@@ -4332,13 +4346,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 return;
             }
             RubyGlowLayer layer;
-            if ((spinDirection != 0 || hasUtopiaTransition)
+            if ((spinDirection != 0 || useUtopiaTransition)
                 && rubyOnly >= 0) {
                 const Impl::CachedRuby &ruby = line->rubies[
                     static_cast<std::size_t>(rubyOnly)
                 ];
                 const CharacterAnimationState animationState =
-                    hasUtopiaTransition && unitOnly >= 0
+                    useUtopiaTransition && unitOnly >= 0
                     ? rubyUnitAnimationAt(ruby, static_cast<std::size_t>(unitOnly))
                     : CharacterAnimationState{
                         rubyFadeOpacityAt(ruby),
@@ -4402,7 +4416,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 );
                 brush->SetOpacity(globalOpacity);
                 const float edge = rubyWipeEdgeAt(ruby);
-                const bool complete = hasUtopiaTransition && unitOnly >= 0
+                const bool complete = useUtopiaTransition && unitOnly >= 0
                     ? rubyUnitWipeComplete(
                         ruby, static_cast<std::size_t>(unitOnly)
                     )
@@ -4497,7 +4511,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             appendRubyGlowLayer(styleIndex, false, -1, -1);
             appendRubyGlowLayer(styleIndex, true, -1, -1);
         }
-        if (hasUtopiaTransition) {
+        if (useUtopiaTransition) {
             for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
                 const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
                 for (std::size_t unitIndex = 0;
@@ -4570,7 +4584,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         if (!ch.geometry) {
                             return false;
                         }
-                        const bool complete = hasUtopiaTransition
+                        const bool complete = useUtopiaTransition
                             && charWipeComplete(charIndex);
                         return complete
                             ? after
@@ -4584,7 +4598,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         || charGeometryAt(charIndex) == nullptr) {
                         return false;
                     }
-                    if (hasUtopiaTransition) {
+                    if (useUtopiaTransition) {
                         const N3WipePhase phase = wipePhaseAt(
                             line->chars, charIndex
                         );
@@ -4603,7 +4617,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 return;
             }
             InlineGlowLayer layer;
-            if ((spinDirection != 0 || hasUtopiaTransition) && charOnly >= 0) {
+            if ((spinDirection != 0 || useUtopiaTransition) && charOnly >= 0) {
                 const CharacterAnimationState animationState = characterAnimationAt(
                     static_cast<std::size_t>(charOnly)
                 );
@@ -4658,7 +4672,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 if (charOnly >= 0) {
                     // Per-character layer: draw the upright cached glyph and
                     // apply the animation matrix to the blurred result.
-                    const bool complete = hasUtopiaTransition
+                    const bool complete = useUtopiaTransition
                         && charWipeComplete(charIndex);
                     if (ch.geometry == nullptr
                         || (complete && !after)
@@ -4712,7 +4726,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     continue;
                 }
                 bool needClip = false;
-                if (hasUtopiaTransition) {
+                if (useUtopiaTransition) {
                     const N3WipePhase phase = wipePhaseAt(line->chars, charIndex);
                     if ((phase == N3WipePhase::Before && after)
                         || (phase == N3WipePhase::After && !after)) {
@@ -4732,7 +4746,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 brush->SetOpacity(globalOpacity * characterOpacityAt(charIndex));
                 if (needClip) {
                     D2D1_RECT_F clip{};
-                    if (hasUtopiaTransition) {
+                    if (useUtopiaTransition) {
                         const auto [animatedBounds, animatedEdge] =
                             utopiaCharWipe(charIndex);
                         clip = after
@@ -4804,7 +4818,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 appendInlineGlowLayer(styleIndex, true, -1);
             }
         }
-        if (spinDirection != 0 || hasUtopiaTransition) {
+        if (spinDirection != 0 || useUtopiaTransition) {
             for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
                 if (!charTransformedAt(charIndex)) {
                     continue;
@@ -4957,11 +4971,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         )
                     ));
                     bool pushedAfterClip = false;
-                    const bool wipeComplete = hasUtopiaTransition
+                    const bool wipeComplete = useUtopiaTransition
                         ? charWipeComplete(charIndex)
                         : mainWipeComplete;
                     if (after && !wipeComplete) {
-                        if (hasUtopiaTransition) {
+                        if (useUtopiaTransition) {
                             const auto [animatedBounds, animatedEdge]
                                 = utopiaCharWipe(charIndex);
                             if (animatedEdge <= animatedBounds.left) {
@@ -5082,7 +5096,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     rubyStyle.rubyShadowOffsetY
                 );
                 const bool pushedStaticClip = after
-                    && !hasUtopiaTransition
+                    && !useUtopiaTransition
                     && !complete;
                 if (pushedStaticClip) {
                     const float pad = std::max(
@@ -5124,7 +5138,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         continue;
                     }
                     const CharacterAnimationState animationState =
-                        hasUtopiaTransition
+                        useUtopiaTransition
                         ? rubyUnitAnimationAt(ruby, geometryIndex)
                         : CharacterAnimationState{
                             rubyFadeOpacityAt(ruby),
@@ -5149,10 +5163,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         )
                     ));
                     bool pushedUtopiaClip = false;
-                    const bool unitComplete = hasUtopiaTransition
+                    const bool unitComplete = useUtopiaTransition
                         ? rubyUnitWipeComplete(ruby, geometryIndex)
                         : complete;
-                    if (after && hasUtopiaTransition && !unitComplete) {
+                    if (after && useUtopiaTransition && !unitComplete) {
                         const auto [animatedBounds, animatedEdge] =
                             utopiaRubyUnitWipe(
                                 ruby, rubyIndex, geometryIndex, rubyStyle
@@ -5271,7 +5285,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 : style;
             float edge = delegatedWipeCoordinateAt(line->chars, charIndex);
             D2D1_RECT_F bounds = line->bounds;
-            if (hasUtopiaTransition) {
+            if (useUtopiaTransition) {
                 const auto animated = utopiaCharWipe(charIndex);
                 bounds = animated.first;
                 edge = animated.second;
@@ -5468,7 +5482,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 stroke2->SetOpacity(rubyOpacity);
                 bool pushedUtopiaClip = false;
                 if (after
-                    && hasUtopiaTransition
+                    && useUtopiaTransition
                     && !rubyUnitWipeComplete(ruby, index)) {
                     const auto [animatedBounds, animatedEdge] = utopiaRubyUnitWipe(
                         ruby, rubyIndex, index, rubyStyle
@@ -5565,13 +5579,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     ));
             drawRubyStack(rubyIndex, ruby, false);
             if (rubyPhaseVisible(ruby, rubyWipeEdge, true)) {
-                if (!hasUtopiaTransition && !rubyComplete) {
+                if (!useUtopiaTransition && !rubyComplete) {
                     context->PushAxisAlignedClip(
                         rubyAfterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
                 }
                 drawRubyStack(rubyIndex, ruby, true);
-                if (!hasUtopiaTransition && !rubyComplete) {
+                if (!useUtopiaTransition && !rubyComplete) {
                     context->PopAxisAlignedClip();
                 }
             }
