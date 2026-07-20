@@ -1142,9 +1142,22 @@ ResolvedStyle resolvedStyleFromTitle(
     cfg.fontSizePx = std::max(
         1, intValue(title, QStringLiteral("font_size_px"), cfg.fontSizePx)
     );
+    cfg.latinFontSizePx = hasNonNull(title, QStringLiteral("latin_font_size_px"))
+        ? std::max(
+            1,
+            intValue(title, QStringLiteral("latin_font_size_px"), cfg.fontSizePx)
+        )
+        : cfg.fontSizePx;
     cfg.fontWeight = std::clamp(
         intValue(title, QStringLiteral("font_weight"), cfg.fontWeight), 1, 999
     );
+    cfg.latinFontWeight = hasNonNull(title, QStringLiteral("latin_font_weight"))
+        ? std::clamp(
+            intValue(title, QStringLiteral("latin_font_weight"), cfg.fontWeight),
+            1,
+            999
+        )
+        : cfg.fontWeight;
     cfg.italic = title.value(QStringLiteral("italic")).toBool(cfg.italic);
     cfg.letterSpacingPx = intValue(
         title, QStringLiteral("letter_spacing_px"), cfg.letterSpacingPx

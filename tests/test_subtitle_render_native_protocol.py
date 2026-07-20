@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import os
 from pathlib import Path
 import stat
@@ -41,6 +42,7 @@ from krok_helper.subtitle_render.models import (
     TimingTrack,
     TimingTrackMeta,
     TitleOverlay,
+    default_title_scheme,
 )
 from krok_helper.subtitle_render.native_backend import (
     NativeRendererError,
@@ -218,6 +220,33 @@ def test_build_render_ir_resolves_title_metadata_and_windows():
 
     assert ir["title"]["text"] == "曲名 / 歌手"
     assert ir["title"]["windows"] == [[100, 1_600]]
+
+
+def test_build_render_ir_keeps_title_latin_metrics_out_of_global_lyrics_style():
+    track = TimingTrack(
+        meta=TimingTrackMeta(title="Title / 01"),
+        lines=[TimingLine(chars=[TimingChar("終", 3_000)], end_ms=4_000)],
+    )
+    title_scheme = replace(
+        default_title_scheme(),
+        font_size_px=36,
+        latin_font_size_px=28,
+        font_weight=500,
+        latin_font_weight=600,
+    )
+    style = Style(
+        latin_font_size_px=140,
+        latin_font_weight=900,
+        custom_style_schemes={"标题": title_scheme},
+        title_overlay=TitleOverlay(enabled=True),
+    )
+
+    title = build_render_ir(track, style, width=640, height=360, fps=60)["title"]
+
+    assert title["font_size_px"] == 36
+    assert title["latin_font_size_px"] == 28
+    assert title["font_weight"] == 500
+    assert title["latin_font_weight"] == 600
 
 
 def test_build_render_ir_carries_painter_display_schedule():
@@ -840,6 +869,91 @@ def test_native_render_range_respects_preview_dpr_when_exe_exists(monkeypatch):
         rows = np.frombuffer(slot.payload, dtype=np.uint8).reshape(slot.height, slot.stride)
         assert int(rows[:, 3 : slot.width * 4 : 4].max()) > 0
         assert renderer.read_event()["event"] == "range_done"
+
+
+def test_native_gpu_title_uses_title_latin_size_and_reconfigures_when_exe_exists(
+    monkeypatch,
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        meta=TimingTrackMeta(title="A/A"),
+        lines=[TimingLine(chars=[TimingChar("終", 5_000)], end_ms=6_000)],
+    )
+
+    def title_style(size: int) -> Style:
+        scheme = replace(
+            default_title_scheme(),
+            font_family="Arial",
+            font_family_latin="Arial",
+            font_size_px=size,
+            latin_font_size_px=size,
+            font_weight=400,
+            latin_font_weight=400,
+            stroke_width_px=0,
+            latin_stroke_width_px=0,
+            stroke2_enabled=False,
+            decoration_kind="none",
+        )
+        return Style(
+            font_family="Arial",
+            font_family_latin="Arial",
+            font_size_px=40,
+            latin_font_size_px=120,
+            line_lead_in_ms=0,
+            stroke_width_px=0,
+            stroke2_width_px=0,
+            decoration_kind="none",
+            custom_style_schemes={"标题": scheme},
+            title_overlay=TitleOverlay(
+                enabled=True,
+                text_template="{title}",
+                layout_index=None,
+                offset_x=10,
+                offset_y=10,
+                fade_in_ms=0,
+                fade_out_ms=0,
+            ),
+        )
+
+    def alpha_height(slot) -> int:
+        rows = np.frombuffer(slot.payload, dtype=np.uint8).reshape(
+            slot.height, slot.stride
+        )
+        alpha = rows[:, 3 : slot.width * 4 : 4]
+        y, _ = np.where(alpha > 0)
+        assert y.size > 0
+        return int(y.max() - y.min() + 1)
+
+    with NativeRendererProcess(
+        renderer_path, response_timeout_s=5.0, close_timeout_s=1.0
+    ) as renderer:
+        heights = []
+        for generation, size in enumerate((20, 48), start=1):
+            renderer.configure_gpu(
+                track,
+                title_style(size),
+                width=320,
+                height=180,
+                fps=60,
+                force_warp=True,
+            )
+            event = renderer.render_gpu_frame(
+                1_000,
+                force_warp=True,
+                generation=generation,
+                shm_key=f"krok-title-size-{os.getpid()}-{uuid.uuid4().hex}",
+                readback_bands=False,
+            )
+            with SharedFrameRingReader.from_event(event) as reader:
+                heights.append(alpha_height(reader.read_frame(event)))
+
+    small_height, large_height = heights
+    assert small_height < 40
+    assert large_height > small_height * 1.5
 
 
 def test_native_renderer_process_times_out_when_sidecar_stalls(tmp_path):

@@ -14,15 +14,46 @@ from typing import Any
 from krok_helper.subtitle_render.models import (
     RubyAnnotation,
     Style,
+    SubtitleStyleScheme,
+    TITLE_SCHEME_NAME,
     TimingChar,
     TimingLine,
     TimingTrack,
+    TitleOverlay,
     guide_symbol_to_dict,
     style_to_dict,
     title_overlay_to_dict,
 )
 
 RENDER_IR_SCHEMA = 1
+
+
+def _title_overlay_to_ir(
+    title: TitleOverlay,
+    scheme: SubtitleStyleScheme | None,
+) -> dict[str, Any]:
+    """Serialize a resolved title without inheriting Latin metrics from lyrics."""
+    payload = title_overlay_to_dict(title)
+    payload["latin_font_size_px"] = max(
+        int(
+            scheme.latin_font_size_px
+            if scheme is not None and scheme.latin_font_size_px is not None
+            else title.font_size_px
+        ),
+        1,
+    )
+    payload["latin_font_weight"] = max(
+        1,
+        min(
+            int(
+                scheme.latin_font_weight
+                if scheme is not None and scheme.latin_font_weight is not None
+                else title.font_weight
+            ),
+            999,
+        ),
+    )
+    return payload
 
 
 def gpu_unsupported_features(
@@ -84,13 +115,19 @@ def title_to_ir(track: TimingTrack, style: Style) -> dict[str, Any] | None:
     text = _resolve_title_text(title, track)
     if not any(line.strip() for line in text.split("\n")):
         return None
-    payload = title_overlay_to_dict(title)
+    payload = _title_overlay_to_ir(
+        title,
+        style.custom_style_schemes.get(TITLE_SCHEME_NAME),
+    )
     payload["text"] = text
     payload["windows"] = [list(window) for window in _title_show_window(title, track)]
     labels = normalize_title_char_role_labels(text, title.char_role_labels)
     payload["resolved_role_labels"] = labels
     payload["role_styles"] = {
-        label: title_overlay_to_dict(_resolve_title_role_overlay(style, title, label))
+        label: _title_overlay_to_ir(
+            _resolve_title_role_overlay(style, title, label),
+            style.custom_style_schemes.get(label),
+        )
         for row in labels
         for label in row
         if label
