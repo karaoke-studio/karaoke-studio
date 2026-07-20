@@ -255,6 +255,28 @@ def test_import_media_and_screen(imported, tmp_path):
     assert data["line_breaks_before"] == ["none", "none", "page"]
 
 
+def test_movie_canvas_uses_n3_size_reference_instead_of_background_placeholder(
+    tmp_path,
+):
+    payload = _project_payload(tmp_path)
+    payload["LyricsFonts"][0]["FontInfos"][0]["CharSize"] = _size(180, 2160)
+    payload["LyricsLayouts"][0]["VerticalMargin"] = _size(40, 2160)
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+
+    assert result.project_data["screen"] == {
+        "width": 3840,
+        "height": 2160,
+        "fps": 60,
+        "par": "1:1",
+    }
+    assert style.font_size_px == 180
+    assert style.font_reference_height == 2160
+    assert style.line_y_margin_px == 40
+    assert style.layout_reference_height == 2160
+
+
 def test_import_maps_n3_auto_output_name_to_yurika_suffix(tmp_path):
     payload = _project_payload(tmp_path)
     payload["DestPath"] = str(tmp_path / "demo_ニコカラメーカー3出力.mp4")

@@ -167,8 +167,21 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
     lyrics_dir = subtitle_path.parent if subtitle_path is not None else base_dir
 
     # ---------------------------------------------------------------- 画面
+    fonts = [_dict(item) for item in _list(data.get("LyricsFonts"))]
+    layouts = [_dict(item) for item in _list(data.get("LyricsLayouts"))]
     width = _int(source.get("BackgroundWidth"), 1920)
     height = _int(source.get("BackgroundHeight"), 1080)
+    font_reference_height = _font_reference_height(fonts, height)
+    layout_reference_height = _layout_reference_height(layouts, height)
+    # For movie projects these dimensions belong to the optional solid
+    # background. N3 updates SizeAndRatio.Reference from MovieInfo.Height, so
+    # the shared reference is the reliable saved video height when the media
+    # file itself cannot be probed.
+    if source_kind == 0:
+        inferred_height = font_reference_height or layout_reference_height
+        if inferred_height > 0 and height > 0 and inferred_height != height:
+            width = max(int(round(width * inferred_height / height)), 1)
+            height = inferred_height
     fps = _int(source.get("Fps"), 60)
     if fps not in _SUPPORTED_FPS:
         # The renderer only supports 60/120 fps. Unsupported N3 values are a
@@ -177,12 +190,10 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
     screen = {"width": width, "height": height, "fps": fps, "par": "1:1"}
 
     # ---------------------------------------------------------------- 样式
-    fonts = [_dict(item) for item in _list(data.get("LyricsFonts"))]
-    layouts = [_dict(item) for item in _list(data.get("LyricsLayouts"))]
     changes: dict[str, Any] = {
         "layout_semantics": "n3_1074",
-        "font_reference_height": height,
-        "layout_reference_height": height,
+        "font_reference_height": font_reference_height,
+        "layout_reference_height": layout_reference_height,
     }
 
     if layouts:
@@ -426,6 +437,26 @@ def _int(value: object, fallback: int) -> int:
 def _size(value: object) -> int:
     """``SizeAndRatio`` → 当前像素值（N3 渲染同样直接用 ``Size``）。"""
     return _int(_dict(value).get("Size"), 0)
+
+
+def _size_reference(value: object, fallback: int) -> int:
+    """Return N3's current media-height reference for a ``SizeAndRatio``."""
+    reference = _int(_dict(value).get("Reference"), 0)
+    return reference if reference > 0 else max(int(fallback), 1)
+
+
+def _font_reference_height(fonts: list[dict], fallback: int) -> int:
+    if fonts:
+        infos = _list(fonts[0].get("FontInfos"))
+        if infos:
+            return _size_reference(_dict(infos[0]).get("CharSize"), fallback)
+    return max(int(fallback), 1)
+
+
+def _layout_reference_height(layouts: list[dict], fallback: int) -> int:
+    if layouts:
+        return _size_reference(layouts[0].get("VerticalMargin"), fallback)
+    return max(int(fallback), 1)
 
 
 def _resolve_media(
