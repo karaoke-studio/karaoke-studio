@@ -1,6 +1,7 @@
 # 字幕渲染 GPU 后端：NicoKaraMaker3 逆向结论与实施计划
 
-> 状态：G0～G5 已完成；G6 DirectComposition 原生预览首批已完成，仍为实验/默认关闭；G7 render-core 性能专项已立项
+> 状态：G0～G5 已完成；G6 DirectComposition 原生预览首批已完成，仍为实验/默认关闭；G7 render-core 性能专项
+> 第 1～3 项（发光行级化、scratch 常驻化、导出流水线化）已完成并达标，第 4 项预览质量档位待产品排期
 > 最后更新：2026-07-20  
 > 逆向基准：NicoKaraMaker3 10.74.80.0 x64  
 > 产品基线：Python QPainter 仍是唯一正式字幕渲染路径；本文不改变当前产品开关
@@ -35,8 +36,9 @@
 
 - G6 原生预览尚未默认启用，也未替代 G5 的 shared-memory/QImage 回读 fallback；
 - 尚未完成 AMD/Intel、多显示器/DPR 切换、真实 device-removed 与 30 分钟视频播放矩阵；
-- G7 render-core 性能专项尚未实施：4K utopia×发光当前约 20fps（根因见 §5 G7），发光 scratch
-  每帧重建、导出 readback 串行、预览质量档位缺失；
+- G7 第 4 项预览质量档位（0.25/0.5/1.0 预览缩放）尚未实施，待产品侧确认交互后排期；
+  第 1～3 项已完成：4K utopia+发光+ruby render mean 23.87ms→2.74ms（60.3fps），4K GPU
+  导出吞吐 1.54x（见 §5 G7 与进度日志第四十三批）；
 - 尚未承诺 GPU 与 CPU 逐像素完全一致；
 - 尚未改变“QPainter 离屏 + ffmpeg rawvideo pipe”为当前唯一正式路径的产品事实；
 - 尚未选择跨平台 GPU 方案；首期明确 Windows-only，macOS 继续 CPU。
@@ -602,7 +604,7 @@ tick 只提交最新 `t_ms`。使用 `KROK_SUBTITLE_GPU_NATIVE_PREVIEW=1` 显式
 以及复杂 Utopia/signal/viewport 组合的 render-core 优化（后者已单独立项为 G7）。G6 只移除了回读/QImage
 瓶颈，不会掩盖复杂场景本身超过帧预算的问题。
 
-### G7：render-core 性能专项（进行中，2026-07-20 立项）
+### G7：render-core 性能专项（2026-07-20 立项；第 1～3 项已完成，第 4 项待产品排期）
 
 背景：4K + utopia + 发光在真实工程中约 20fps、几乎不可播放。2026-07-20 的隔离基准
 （RTX 3070 Ti 硬件、bands 回读、`scripts/benchmark_gpu_renderer.py`）把差距精确拆开：
@@ -633,19 +635,25 @@ render→readback→展开→ffmpeg）仍受其约束。
 
 目标与顺序（clean-room 对齐 N3，不复制反编译源码）：
 
-1. **utopia/spin 发光行级化**：复用既有相位排序机制（`pushGlowClip`/`drawGlowPhase`）与逐字符已变换
-   几何（`strokeGeometryAt`/`stroke2GeometryAt`），把整行（含动画字符）的轮廓 + 每字符透明度 + 相位
-   clip 画进单一行级 glow source，每行只跑一组 sigma（≤3 次模糊）。验收：4K utopia+发光+ruby
-   render mean ≤6ms、基准 ≥55fps；全部 utopia Painter oracle 用例保持通过（发光是视觉语义，不许只看速度）。
-2. **glow source / GaussianBlur effect 常驻化**：scratch 位图与 effect 挂在 impl_ 上按 scene 尺寸分配一次，
-   resize/configure 失效重建，消灭每帧 `CreateBitmap`/`CreateEffect`。验收：显存稳态零分配洪流，
-   普通发光路径 p95 收敛（≤5ms）。
-3. **导出 readback 流水线化**：双 staging buffer，渲染第 N+1 帧与回读/展开第 N 帧重叠。
-   验收：4K GPU 导出吞吐 ≥1.5x 现状。
+1. **utopia/spin 发光行级化**（已完成，2026-07-20）：实施中发现"把动画变换烘进几何后整行统一模糊"
+   会改变缩放动画期的发光外扩（Painter 语义是"先模糊上正字形、再变换模糊结果"，oracle 18px 容差
+   下 spin/utopia 入出场均越界），因此最终架构为：**本帧动画矩阵为恒等的字符共享行级 glow source**
+   （普通行走合并源，行内混排/ruby 按样式分组），**仅本帧确实带变换的字符/ruby 单元**（通常是正在
+   bounce 的 1～2 个，入出场窗口内更多）保留逐字符"模糊后变换"层。稳态唱字帧因此不再逐字符摊开。
+   验收达成：4K utopia+发光+ruby render mean 2.74ms/p95 5.82ms、60.3fps（门槛 ≤6ms/≥55fps）；
+   GPU oracle 套件 126 passed 全绿。
+2. **glow source / GaussianBlur effect 常驻化**（已完成，2026-07-20）：scratch 位图与 blur effect
+   池挂在 impl_ 上（上限 8 张，逐行回卷复用，突发超额帧后释放），scene 尺寸变化时失效重建；同时
+   scratch Clear 用裁剪限定、合成用 `DrawImage(effect, targetOffset, imageRectangle)` 只请求内容
+   矩形，利用 Direct2D effect 图按需求值把每次模糊成本从全画布降到行/字符邻域。验收达成：显存
+   稳态增长归零（基准 growth 0～33MB 即至多一张突发 scratch），普通发光 p95 2.68ms（门槛 ≤5ms）。
+3. **导出 readback 流水线化**（已完成，2026-07-20）：`gpu_render_frame` 协议新增 `slot_count`
+   （1～4，按 `frame_index % slot_count` 写槽并回报真实槽位），Python 客户端拆分 begin/finish，
+   `iter_gpu_rgba_frames` 在双槽 ring 上一帧深度流水——sidecar 渲染/回读第 N+1 帧与 Python 侧
+   band 展开/RGBA 转换第 N 帧重叠，并有真实 sidecar 逐字节一致性测试钉住语义。验收达成：4K
+   utopia+发光+ruby 导出 34.5→53.0fps（1.54x ≥ 1.5x 门槛）。
 4. **预览质量档位**（产品功能，可独立排期）：对齐 N3 的 0.25/0.5/1.0 预览缩放，4K 工程低档只渲 540p；
-   与渲染优化正交，是弱 GPU 用户成本最低的收益。
-
-1、2 同一批实施；3 单独一批；4 待产品侧确认交互后排期。
+   与渲染优化正交，是弱 GPU 用户成本最低的收益。待产品侧确认交互后排期。
 
 ---
 
@@ -1645,3 +1653,33 @@ G6 首批架构与本机性能门槛已落地，仍不得默认开启。下一�
   `Utopia.CreateUtopiaTransform`、`VideoPlayer` 常驻 work bitmap），确认 utopia×发光 20fps 的根因是
   per-char 全画布发光层，而非 Direct2D 矢量绘制能力；普通走字 render 4K 已达标。结论与目标持久化为
   §5 G7 专项（发光行级化、scratch 常驻化、导出流水线化、预览质量档位）。
+
+### 2026-07-20（第四十三批）：G7 第 1～3 项落地——发光行级化、scratch 常驻化与导出流水线
+
+- **发光行级化（f8dea29）**：首刀"全量烘焙变换 + 行级统一模糊"虽是 N3 语义，但在 Painter oracle
+  18px 容差下失败——Painter 对 spin/utopia 的语义是"模糊上正字形、再对模糊结果施加变换"，缩放动画
+  期发光外扩会差出约 3σ（实测 spin 入场右边界差 36px、utopia 入场四边差 13～19px）。最终架构改为
+  按"本帧动画矩阵是否恒等"分流：恒等字符共享行级 glow source（普通行合并 before/after 单源 + 相位
+  排序；行内混排与 ruby 按样式分组，utopia 行沿用 `wipePhaseAt` 逐字符相位与 `utopiaCharWipe`/
+  `utopiaRubyUnitWipe` 动画裁剪），仅变换中的字符/ruby 单元保留旧的逐字符"模糊后变换"层。稳态唱字
+  帧从每帧 30～60 次全画布模糊降到每行一组 sigma，动画突发窗口（入出场 ≤750ms）自动回落逐字符层
+  保证视觉语义。
+- **scratch/effect 常驻化（f8dea29）**：glow scratch 位图与 GaussianBlur effect 池挂 impl_（上限 8，
+  每行合成 flush 后回卷，突发超额条目随帧释放），configure 尺寸变化/设备重建时清池；scratch Clear
+  用 aliased 裁剪限定到内容矩形，合成 `DrawImage` 传 targetOffset+imageRectangle 只求值行/字符邻域，
+  借 Direct2D effect 图按需求值把单次模糊成本与画布尺寸解耦（这一步同时把仅发光场景 p95 从 6.5ms
+  压到 2.7ms）。
+- **4K RTX 3070 Ti bands 基准（对照 §5 G7 立项表）**：utopia+发光+ruby 20.5fps/23.87ms →
+  **60.3fps/2.74ms（p95 5.82ms）**；utopia+发光 23.6→78.9fps；仅发光 54.8→81.9fps（p95 2.68ms）；
+  仅 utopia 57.7→100.3fps；普通走字+ruby+发光 54.0→71.8fps。显存稳态增长 0～33MB（至多一张突发
+  scratch），无分配洪流。GPU backend oracle 套件 126 passed, 1 skipped；transport+export 84 passed。
+- **导出流水线化（98fa4da）**：`gpu_render_frame` 新增 `slot_count`（clamp 1～4），按
+  `frame_index % slot_count` 写共享 ring 并在响应元数据回报真实槽位；Python 客户端拆分
+  `begin_render_gpu_frame`/`finish_render_gpu_frame`，`iter_gpu_rgba_frames` 双槽一帧深度流水
+  （先收第 N 帧响应、立即发第 N+1 帧请求、再展开第 N 帧），sidecar GPU 渲染/回读与 Python band
+  展开/RGBA 转换重叠。新增真实 sidecar 测试钉住"流水线输出与串行单槽逐字节一致"。4K
+  utopia+发光+ruby 180 帧导出 34.5→53.0fps（1.54x，达 ≥1.5x 门槛）。
+- 顺带发现（与 G7 无关、未修）：gpu_backend 与 native_protocol 两个测试文件在同一 pytest 进程中
+  先后运行时，protocol 的 utopia 像素对照测试（CPU sidecar vs Painter）会因进程内 QApplication
+  平台插件被先创建的 GPU 测试固定而超差；两文件各自单独运行全绿，已登记为独立修复任务。
+- G7 第 4 项预览质量档位仍待产品侧确认交互后排期；GPU 产品开关与 G6 原生预览默认状态不变。
