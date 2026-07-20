@@ -4637,7 +4637,7 @@ def test_main_window_preview_tab_uses_two_top_regions_and_bottom_timeline(qapp):
     assert win._transport_bar.parentWidget() is win._preview_window
 
 
-def test_preview_player_window_defaults_to_workspace_quarter_at_top_left(qapp):
+def test_preview_player_window_keeps_full_16_9_canvas_below_title_bar(qapp):
     win = mw.SubtitleRenderWindow(embedded=False)
     win.resize(1600, 900)
     win.move(120, 80)
@@ -4645,10 +4645,14 @@ def test_preview_player_window_defaults_to_workspace_quarter_at_top_left(qapp):
     qapp.processEvents()
 
     preview = win._preview_window
+    preview.show()
+    qapp.processEvents()
     geometry = preview.geometry()
 
-    assert geometry.size() == QSize(800, 450)
+    assert geometry.size() == QSize(800, 492)
     assert geometry.topLeft() == win.mapToGlobal(QPoint(0, 0))
+    assert preview._top_controls.geometry() == QRect(0, 0, 800, 42)
+    assert preview._preview_frame.geometry() == QRect(0, 42, 800, 450)
     assert preview.windowFlags() & Qt.WindowType.FramelessWindowHint
     assert preview.findChild(mw.TransportBar) is win._transport_bar
 
@@ -4669,7 +4673,7 @@ def test_preview_player_maximize_button_restores_from_fullscreen_state(qapp):
     qapp.processEvents()
 
     assert preview._is_expanded() is False
-    assert preview.geometry().size() == QSize(800, 450)
+    assert preview.geometry().size() == QSize(800, 492)
     assert preview.geometry().topLeft() == win.mapToGlobal(QPoint(0, 0))
 
 
@@ -4714,7 +4718,7 @@ def test_preview_player_collapses_to_labeled_bar_inside_workspace(qapp):
     win._show_preview_window()
     qapp.processEvents()
     assert preview.is_collapsed() is False
-    assert preview.geometry().size() == QSize(800, 450)
+    assert preview.geometry().size() == QSize(800, 492)
     assert preview._title_label.text() == "demo.mp4"
 
 
@@ -4730,7 +4734,7 @@ def test_preview_player_controls_auto_hide_and_restore(qapp):
 
     preview.hide_controls(force=True)
     qapp.processEvents()
-    assert preview._top_controls.isVisible() is False
+    assert preview._top_controls.isVisible() is True
     assert preview._bottom_controls.isVisible() is False
 
     preview.show_controls()

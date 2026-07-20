@@ -637,6 +637,8 @@ class PreviewPlayerWindow(QWidget):
     """独立预览窗口：只承载 16:9 的视频预览画面。"""
 
     userClosed = Signal()
+    _TITLE_BAR_HEIGHT = 42
+    _MIN_VIDEO_SIZE = QSize(426, 240)
     _COLLAPSED_SIZE = QSize(220, 44)
     _COLLAPSED_CENTER_Y_RATIO = 0.70
 
@@ -693,7 +695,12 @@ class PreviewPlayerWindow(QWidget):
         self._hide_controls_timer.timeout.connect(self._on_controls_idle_timeout)
         self._apply_player_transport_style()
 
-        self.setMinimumSize(QSize(426, 240))
+        self.setMinimumSize(
+            QSize(
+                self._MIN_VIDEO_SIZE.width(),
+                self._MIN_VIDEO_SIZE.height() + self._TITLE_BAR_HEIGHT,
+            )
+        )
 
         # 无边框窗口的八向拖拽调整手柄（边 + 角），叠在最上层。
         edge = Qt.Edge
@@ -763,12 +770,23 @@ class PreviewPlayerWindow(QWidget):
             self._apply_collapsed_geometry()
             return
         workspace_size = self._owner.size()
-        width = max(426, workspace_size.width() // 2)
-        height = max(240, int(round(width * 9 / 16)))
-        max_height = max(240, workspace_size.height() // 2)
+        width = max(self._MIN_VIDEO_SIZE.width(), workspace_size.width() // 2)
+        video_height = max(
+            self._MIN_VIDEO_SIZE.height(), int(round(width * 9 / 16))
+        )
+        height = video_height + self._TITLE_BAR_HEIGHT
+        max_height = max(
+            self._MIN_VIDEO_SIZE.height() + self._TITLE_BAR_HEIGHT,
+            workspace_size.height() // 2 + self._TITLE_BAR_HEIGHT,
+        )
         if height > max_height:
             height = max_height
-            width = max(426, int(round(height * 16 / 9)))
+            video_height = max(
+                self._MIN_VIDEO_SIZE.height(), height - self._TITLE_BAR_HEIGHT
+            )
+            width = max(
+                self._MIN_VIDEO_SIZE.width(), int(round(video_height * 16 / 9))
+            )
         top_left = self._owner.mapToGlobal(QPoint(0, 0))
         self.setGeometry(QRect(top_left, QSize(width, height)))
 
@@ -856,15 +874,22 @@ class PreviewPlayerWindow(QWidget):
         self._hide_controls_timer.stop()
         self._suppress_control_show = True
         try:
-            self._top_controls.setVisible(False)
+            self._top_controls.setVisible(True)
+            self._top_controls.raise_()
             self._bottom_controls.setVisible(False)
         finally:
             self._suppress_control_show = False
 
     def resizeEvent(self, event):  # noqa: N802
         super().resizeEvent(event)
-        self._preview_frame.setGeometry(0, 0, self.width(), self.height())
-        top_height = self.height() if self._collapsed else 42
+        top_height = self.height() if self._collapsed else self._TITLE_BAR_HEIGHT
+        video_top = 0 if self._collapsed else top_height
+        self._preview_frame.setGeometry(
+            0,
+            video_top,
+            self.width(),
+            max(0, self.height() - video_top),
+        )
         self._top_controls.setGeometry(0, 0, self.width(), top_height)
         self._bottom_controls.setGeometry(0, max(0, self.height() - 58), self.width(), 58)
         self._top_controls.raise_()
@@ -1005,7 +1030,12 @@ class PreviewPlayerWindow(QWidget):
         if not self._collapsed:
             return
         self._collapsed = False
-        self.setMinimumSize(QSize(426, 240))
+        self.setMinimumSize(
+            QSize(
+                self._MIN_VIDEO_SIZE.width(),
+                self._MIN_VIDEO_SIZE.height() + self._TITLE_BAR_HEIGHT,
+            )
+        )
         self._minimize_button.show()
         self._maximize_button.setToolTip("")
         self._title_label.setText(self._media_title)
