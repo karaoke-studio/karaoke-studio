@@ -14,6 +14,7 @@ set "APP_DIST=%DIST_PATH%\%APP_NAME%"
 set "BUILD_DIST=%DIST_PATH%\%BUILD_NAME%"
 set "SUG_SRC=%CD%\krok_helper\lyrics_timing\src"
 set "SUG_PACKAGE=%SUG_SRC%\strange_uta_game"
+set "PYQT6_QT_VERSION=6.10.2"
 set "IS_CI="
 if defined CI set "IS_CI=1"
 
@@ -26,7 +27,7 @@ if errorlevel 1 (
 )
 
 call :ensure_pkg PyInstaller pyinstaller || exit /b 1
-call :ensure_pkg PyQt6 PyQt6 || exit /b 1
+call :ensure_pyqt6 || exit /b 1
 call :ensure_pkg fontTools fonttools || exit /b 1
 call :ensure_pkg qfluentwidgets "PyQt6-Fluent-Widgets" || exit /b 1
 call :ensure_pkg yt_dlp yt-dlp || exit /b 1
@@ -322,6 +323,20 @@ echo Build complete:
 echo %CD%\%APP_DIST%
 echo %CD%\%DIST_PATH%\KaraokeStudio-windows.zip
 if not defined IS_CI pause
+exit /b 0
+
+:ensure_pyqt6
+echo Checking PyQt6 Qt %PYQT6_QT_VERSION%...
+%PYTHON_BIN% -c "from PyQt6.QtCore import QT_VERSION_STR; raise SystemExit(0 if QT_VERSION_STR == '%PYQT6_QT_VERSION%' else 1)" >nul 2>&1
+if errorlevel 1 (
+    echo Installing PyQt6 with Qt %PYQT6_QT_VERSION%...
+    %PYTHON_BIN% -m pip install --upgrade "PyQt6==%PYQT6_QT_VERSION%" "PyQt6-Qt6==%PYQT6_QT_VERSION%"
+    if errorlevel 1 (
+        echo Failed to install PyQt6 Qt %PYQT6_QT_VERSION%.
+        if not defined IS_CI pause
+        exit /b 1
+    )
+)
 exit /b 0
 
 :ensure_pkg
