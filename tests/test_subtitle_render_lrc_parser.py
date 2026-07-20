@@ -49,6 +49,29 @@ def test_multi_char_block_is_evenly_spread_until_next_timestamp():
     assert line.end_ms == 38_370
 
 
+def test_parser_preserves_explicit_n3_main_text_boundaries():
+    """N3 only lets ruby retime the base text when its inner boundaries are absent."""
+    text = "[00:06:22]メ[00:06:47]ロ[00:06:74]デ[00:06:92]ィー[00:07:61]\n"
+
+    line = parse_nicokara_lrc(text).lines[0]
+
+    assert [char.text for char in line.chars] == list("メロディー")
+    assert [char.explicit_start for char in line.chars] == [
+        True,
+        True,
+        True,
+        True,
+        False,
+    ]
+    assert [char.explicit_end for char in line.chars] == [
+        True,
+        True,
+        True,
+        False,
+        True,
+    ]
+
+
 def test_blank_lines_preserved():
     text = "[00:01:00]あ[00:01:50]\n\n[00:02:00]い[00:02:50]\n"
     track = parse_nicokara_lrc(text)

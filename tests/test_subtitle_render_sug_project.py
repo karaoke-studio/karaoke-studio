@@ -118,6 +118,87 @@ def test_load_sug_timing_track_reads_sug_file(tmp_path: Path) -> None:
     assert [line.chars[0].text for line in track.lines] == ["愛", "空"]
 
 
+def test_sug_adapter_preserves_n3_main_text_boundary_provenance() -> None:
+    """Keep the self-contained メロディー/melody N3 regression after fixtures move."""
+    singer = Singer(id="main", name="主唱", color="#ff0000", is_default=True)
+    chars = [
+        Character(
+            char="メ",
+            ruby=Ruby(parts=[RubyPart("me")]),
+            check_count=1,
+            timestamps=[6_220],
+            linked_to_next=True,
+            singer_id=singer.id,
+        ),
+        Character(
+            char="ロ",
+            ruby=Ruby(parts=[RubyPart("lo")]),
+            check_count=1,
+            timestamps=[6_470],
+            linked_to_next=True,
+            singer_id=singer.id,
+        ),
+        Character(
+            char="デ",
+            ruby=Ruby(parts=[RubyPart("d")]),
+            check_count=1,
+            timestamps=[6_740],
+            linked_to_next=True,
+            singer_id=singer.id,
+        ),
+        Character(
+            char="ィ",
+            ruby=Ruby(parts=[RubyPart("y")]),
+            check_count=1,
+            timestamps=[6_920],
+            linked_to_next=True,
+            singer_id=singer.id,
+        ),
+        Character(
+            char="ー",
+            check_count=0,
+            sentence_end_ts=7_610,
+            is_sentence_end=True,
+            is_line_end=True,
+            singer_id=singer.id,
+        ),
+    ]
+    track = timing_track_from_sug_project(
+        Project(
+            singers=[singer],
+            sentences=[Sentence(singer_id=singer.id, characters=chars)],
+        )
+    )
+
+    line = track.lines[0]
+    assert [char.text for char in line.chars] == list("メロディー")
+    assert [char.start_ms for char in line.chars] == [
+        6_220,
+        6_470,
+        6_740,
+        6_920,
+        7_265,
+    ]
+    assert [char.explicit_start for char in line.chars] == [
+        True,
+        True,
+        True,
+        True,
+        False,
+    ]
+    assert [char.explicit_end for char in line.chars] == [
+        True,
+        True,
+        True,
+        False,
+        True,
+    ]
+    ruby = track.rubies[0]
+    assert (ruby.kanji, ruby.reading) == ("メロディー", "melody")
+    assert ruby.reading_parts == ["me", "lo", "d", "y"]
+    assert ruby.reading_part_ms == [250, 520, 700]
+
+
 @pytest.mark.parametrize("placeholder_name", ["未命名", "Untitled"])
 def test_default_sug_placeholder_singer_uses_global_style(
     placeholder_name: str,

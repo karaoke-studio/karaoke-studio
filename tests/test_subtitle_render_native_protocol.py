@@ -139,7 +139,7 @@ def test_build_render_ir_contains_screen_style_track_and_ruby():
         lines=[
             TimingLine(
                 chars=[
-                    TimingChar("君", 100, role_label="A"),
+                    TimingChar("君", 100, role_label="A", explicit_start=True),
                     TimingChar("へ", 300, pause_release_ms=450),
                 ],
                 end_ms=600,
@@ -169,6 +169,8 @@ def test_build_render_ir_contains_screen_style_track_and_ruby():
     assert ir["track"]["lines"][0]["singer_id"] == 2
     assert ir["track"]["lines"][0]["chars"][0]["text"] == "君"
     assert ir["track"]["lines"][0]["chars"][0]["role_label"] == "A"
+    assert ir["track"]["lines"][0]["chars"][0]["explicit_start"] is True
+    assert ir["track"]["lines"][0]["chars"][0]["explicit_end"] is False
     assert ir["track"]["lines"][0]["chars"][1]["pause_release_ms"] == 450
     assert ir["track"]["rubies"][0]["reading"] == "きみ"
     assert ir["track"]["rubies"][0]["reading_part_ms"] == [100, 250]

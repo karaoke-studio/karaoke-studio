@@ -116,6 +116,17 @@ class TimingChar:
     source_span_count: int = 1
     """共享时间块内的字符总数；1 表示普通独立字符。"""
 
+    explicit_start: bool = False
+    """源字幕是否在本字符前显式写了时间戳。
+
+    N3 仅在 ruby 覆盖的正文内部没有显式边界时，才用注音字符重新切分正文；因此不能
+    只保留归一化后的 ``start_ms``，还必须保留这个来源信息。手工构造的兼容数据默认
+    为 ``False``，继续走旧的 ruby 推导路径。
+    """
+
+    explicit_end: bool = False
+    """源字幕是否在本字符后显式写了结束/释放时间戳。"""
+
     vector_glyph: Optional[GuideSymbol] = None
     """仅供渲染层生成的行内虚拟字符使用；字幕源解析出的真实字符恒为 None。"""
 
@@ -1032,7 +1043,8 @@ class Style:
     """带注音正文的走字切分方式。
 
     ``checkpoint_segments`` 按注音内部时间点形成的时间段数均分正文（历史行为）；
-    ``reading_units`` 按注音可视字符数映射正文字符（N3 式）。
+    ``reading_units`` 使用 N3 自动分支：正文组内有显式时间边界时保留正文逐字时钟，
+    仅在内部边界缺失时按注音可视字符数映射正文字符。
     """
 
     line_lane_gap_ms: int = 300

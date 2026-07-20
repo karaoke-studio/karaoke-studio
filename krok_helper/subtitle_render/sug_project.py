@@ -167,6 +167,7 @@ def _timing_chars_for_sentence(
             and span_end_ms is not None
             and span_end_ms > anchor_start_ms
         )
+        has_following_anchor = timed_index_position + 1 < len(timed_indices)
 
         for local_index, (_index, ch, text) in enumerate(group_items):
             sentence_end_ms = _offset_optional(
@@ -181,6 +182,16 @@ def _timing_chars_for_sentence(
                 TimingChar(
                     text=text,
                     start_ms=starts[local_index],
+                    explicit_start=bool(
+                        _offset_timestamps(
+                            getattr(ch, "timestamps", []) or [], offset_ms
+                        )
+                    ),
+                    explicit_end=(
+                        bool(getattr(ch, "is_sentence_end", False))
+                        and sentence_end_ms is not None
+                    )
+                    or (local_index == len(group_items) - 1 and has_following_anchor),
                     pause_release_ms=(
                         sentence_end_ms
                         if bool(getattr(ch, "is_sentence_end", False))

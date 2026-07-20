@@ -3775,6 +3775,66 @@ def test_reading_unit_mode_maps_ruby_units_across_multiple_base_chars(qapp):
     assert _fill_extent_end(reading_units, 3_000) == 150
 
 
+def test_n3_reading_unit_mode_keeps_explicit_main_text_timing(qapp):
+    """Regression for メロディー/melody: explicit base checkpoints win in N3."""
+    from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
+
+    track = parse_nicokara_lrc(
+        "[00:06:22]メ[00:06:47]ロ[00:06:74]デ[00:06:92]ィー[00:07:61]\n"
+        "\n"
+        "@Ruby1=メロディー,me[00:00:25]lo[00:00:52]d[00:00:70]y,"
+        "[00:06:22],[00:07:61]\n"
+    )
+    line = track.lines[0]
+    intervals = compute_char_intervals(line)
+    ranges = [(index * 100, (index + 1) * 100) for index in range(5)]
+
+    segments = _karaoke_fill_segments(
+        [100] * 5,
+        intervals,
+        ranges,
+        track.rubies,
+        line,
+        ruby_main_progress_mode="reading_units",
+    )
+
+    assert len(segments) == 5
+    assert [(segment.start_ms, segment.end_ms) for segment in segments] == [
+        (6_220, 6_470),
+        (6_470, 6_740),
+        (6_740, 6_920),
+        (6_920, 7_265),
+        (7_265, 7_610),
+    ]
+    assert _character_fill_ratio(
+        line,
+        intervals,
+        ranges,
+        track.rubies,
+        2,
+        6_740,
+        ruby_main_progress_mode="reading_units",
+    ) == 0.0  # d starts with デ
+    assert _character_fill_ratio(
+        line,
+        intervals,
+        ranges,
+        track.rubies,
+        3,
+        6_920,
+        ruby_main_progress_mode="reading_units",
+    ) == 0.0  # y starts with ィ
+    assert _character_fill_ratio(
+        line,
+        intervals,
+        ranges,
+        track.rubies,
+        2,
+        6_830,
+        ruby_main_progress_mode="reading_units",
+    ) == pytest.approx(0.5)
+
+
 def test_reading_unit_mode_preserves_empty_part_pause(qapp):
     ruby = RubyAnnotation(
         kanji="字",

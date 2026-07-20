@@ -62,6 +62,8 @@ struct TimingChar {
     int startMs = 0;
     std::optional<int> resolvedEndMs;
     std::optional<int> pauseReleaseMs;
+    bool explicitStart = false;
+    bool explicitEnd = false;
     QString roleLabel;
     std::optional<krok::subtitle::native::VectorGlyph> vectorGlyph;
 };
@@ -2121,6 +2123,12 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
                 TimingChar ch;
                 ch.text = stringValue(charObject, QStringLiteral("text"));
                 ch.startMs = intValue(charObject, QStringLiteral("start_ms"), 0);
+                ch.explicitStart = charObject.value(
+                    QStringLiteral("explicit_start")
+                ).toBool(false);
+                ch.explicitEnd = charObject.value(
+                    QStringLiteral("explicit_end")
+                ).toBool(false);
                 if (charObject.value(QStringLiteral("pause_release_ms")).isDouble()) {
                     ch.pauseReleaseMs = charObject.value(QStringLiteral("pause_release_ms")).toInt();
                 }
@@ -3666,6 +3674,32 @@ std::vector<std::pair<int, int>> rubyMainWipeIntervals(
         out.push_back({anchors[index], anchors[index + 1]});
     }
     return out;
+}
+
+bool n3RubyMainUsesBaseTiming(
+    const TimingLine &line,
+    const std::vector<int> &indices
+) {
+    std::vector<int> valid;
+    valid.reserve(indices.size());
+    for (int index : indices) {
+        if (index >= 0 && index < static_cast<int>(line.chars.size())) {
+            valid.push_back(index);
+        }
+    }
+    if (valid.size() <= 1) {
+        return false;
+    }
+    for (std::size_t offset = 0; offset < valid.size(); ++offset) {
+        const TimingChar &ch = line.chars[static_cast<std::size_t>(valid[offset])];
+        if (offset > 0 && ch.explicitStart) {
+            return true;
+        }
+        if (offset + 1 < valid.size() && ch.explicitEnd) {
+            return true;
+        }
+    }
+    return false;
 }
 
 void applyRubyMainWipePoints(
@@ -6881,13 +6915,18 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 }
             );
             if (!mainWipeAlreadyAssigned && !isUtopiaGroupMarker(ruby)) {
-                applyRubyMainWipePoints(
-                    line, *minimum, *maximum,
-                    rubyMainWipeIntervals(
-                        ruby, scene.lineStyles.back().rubyMainProgressMode
-                    ),
-                    sourceTimingOffset
-                );
+                const bool preserveBaseTiming =
+                    scene.lineStyles.back().rubyMainProgressMode == "reading_units"
+                    && n3RubyMainUsesBaseTiming(sourceLine, targetIndices);
+                if (!preserveBaseTiming) {
+                    applyRubyMainWipePoints(
+                        line, *minimum, *maximum,
+                        rubyMainWipeIntervals(
+                            ruby, scene.lineStyles.back().rubyMainProgressMode
+                        ),
+                        sourceTimingOffset
+                    );
+                }
                 for (int targetIndex : targetIndices) {
                     if (targetIndex >= 0
                         && targetIndex < static_cast<int>(rubyMainWipeAssigned.size())) {

@@ -205,6 +205,7 @@ def _parse_body_line(
             if pending_ts is not None and chars:
                 # 两个连续 [ts] 且前面已有字符 → 前一个 [ts] 是上一字的释放点
                 chars[-1].pause_release_ms = pending_ts
+                chars[-1].explicit_end = True
             pending_ts = ts
             continue
         # text token
@@ -278,6 +279,10 @@ def _parse_body_line(
                     TimingChar(
                         text=ch,
                         start_ms=char_starts[start_index],
+                        explicit_start=start_index == 0,
+                        explicit_end=(
+                            start_index == visible_count - 1 and next_ts is not None
+                        ),
                         role_label=active_role,
                         # Temporary parser marker. Cross-line completion uses
                         # the following line start, then clears these fields so
@@ -293,6 +298,8 @@ def _parse_body_line(
 
     # tokens 用完后仍剩 pending_ts → 是行末结束时间戳
     end_ms = pending_ts
+    if end_ms is not None and chars:
+        chars[-1].explicit_end = True
 
     # 行内有时间戳、但行首缓存字符一直没机会补回（如 ` [ts]` 仅"行首文本 + 结束 ts"）：
     # 用行末 ts 作为起点补回，仍不丢字。完全无时间戳的纯文本行保持空行语义（丢弃缓存）。

@@ -343,8 +343,19 @@ Nicokara LRC 不保留完整的 `check_count` 与“应该有但尚未打”的�
 没有 ruby 的字符只有 `(start_ms, end_ms)`，整字线性；Nicokara 正文没有携带额外
 checkpoint，Painter 无从恢复。
 
-有 `RubyAnnotation` 时，`_karaoke_fill_segments()` 会把 ruby 命中的主文字索引合为
-segment，并使用 `_main_text_ruby_progress_ratio()` 驱动主文字锋面。其锚点为：
+2026-07-20 重新核对 N3 10.74.80.0 的 `DrawDataGenerator.SetOneLineWipe()` 后，
+`reading_units`（UI「正文按注音字符切分（N3 式）」）已改为与 N3 相同的自动分支：
+
+- ruby 目标正文的非首字符存在显式 begin，或非末字符存在显式 end：整组保留正文
+  自己的逐字 `(start_ms, end_ms)`，ruby 只控制注音；
+- 正文组内没有任何显式边界：才执行 N3 `RubyTimesToKanjiTimes()` 等价映射，把注音
+  可视字符位置投影到正文逻辑字符位置；
+- 组首 begin 与组尾 end 是合法外边界，不会单独阻止映射。
+
+为此 `TimingChar` 新增 `explicit_start` / `explicit_end` 来源语义；LRC 解析和 SUG
+直读都会保留它，不能只从归一化后的整数 `start_ms` 反推。
+
+历史 `checkpoint_segments` 模式仍按下列 ruby 锚点把整组正文总进度等分：
 
 ```text
 [ruby.pos_start_ms,
@@ -354,15 +365,16 @@ segment，并使用 `_main_text_ruby_progress_ratio()` 驱动主文字锋面。�
  ruby.pos_end_ms]
 ```
 
-各相邻 checkpoint 时间段等分主文字总进度，与 SUG 普通
-`char_part_anchors → _anchor_ratio()` 一致。重复/越界相对时间会按有效区间单调钳制。
+它是兼容模式，不是 N3 通用算法。各相邻 checkpoint 时间段等分主文字总进度；重复/
+越界相对时间会按有效区间单调钳制。
 
 Ruby 自身仍走独立的 `_ruby_progress_ratio()`：它按原始 `reading_parts` 的实际像素宽度
-累计；主文字则按 checkpoint 段等分。两套 ratio 有意分离，因此 part 宽度只改变 ruby
-锋面，不会误改主文字的多 checkpoint 节奏。
+累计；标准 ruby 图层实际使用 §11.3 的逐字符几何段。正文是否被 ruby 重切由上述 N3
+分支独立决定。
 
-因此当前范围是：**能被 `@Ruby` 映射覆盖的主文字支持全部可恢复 checkpoint；无 ruby
-多 checkpoint 仍需额外 IR/WorkflowContext 才能无损支持。**
+实测回归 `メロディー / melody`：正文含 `[6.22]メ[6.47]ロ[6.74]デ[6.92]ィー[7.61]`，
+所以 `d` 开始时正文在 `デ` 起点（逻辑 2/5），而不是按 6 个注音字符映射到 4/6，
+也不是历史四 checkpoint 模式的 2/4。
 
 ### 9.3 分组条件不同
 
@@ -389,13 +401,16 @@ SUG 特殊合并主文字轴要求：
 
 - 通过 `@Ruby.kanji` 在当前行文本中定位字符范围；
 - 有重复词时优先选择与 `pos_start/pos_end` 时间重叠最多、距离最近的 occurrence；
-- 多字 ruby 对应的主文字 segment 从组内最左墨水坐标到最右墨水坐标；
-- 这段几何宽度包含字符间距和字形之间的透明空隙。
+- N3 模式且正文有内部显式边界时，每个正文字符保持独立墨水 segment；
+- N3 模式且正文无内部边界时，按注音可视字符位置映射到各正文字符的独立墨水 segment；
+- 仅历史 checkpoint 模式把多字 ruby 合成从组内最左到最右的整体 segment，其中会包含
+  字符间距和字形之间的透明空隙。
 
 所以多字 ruby 主文字的扫光空间轴也不同：
 
 - SUG 特殊组：拼接“纯墨水宽度”；
-- 字幕模块 ruby 组：使用“最左到最右的整体几何跨度”。
+- 字幕模块 N3 模式：显式正文边界优先，否则按逻辑字符位置映射后在各字实际墨水内 wipe；
+- 字幕模块历史 checkpoint 模式：使用“最左到最右的整体几何跨度”。
 
 ## 11. Ruby 时间轴差异
 

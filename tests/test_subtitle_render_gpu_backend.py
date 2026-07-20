@@ -780,6 +780,59 @@ def test_gpu_main_ruby_progress_modes_follow_painter_and_preserve_empty_pause(
         )
     assert gpu_ratios["reading_units"] > gpu_ratios["checkpoint_segments"] + 0.08
 
+    explicit_track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("M", 6_220, explicit_start=True, explicit_end=True),
+                    TimingChar("M", 6_470, explicit_start=True, explicit_end=True),
+                    TimingChar("M", 6_740, explicit_start=True, explicit_end=True),
+                    TimingChar("M", 6_920, explicit_start=True),
+                    TimingChar("M", 7_265, explicit_end=True),
+                ],
+                end_ms=7_610,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="MMMMM",
+                reading="melody",
+                reading_parts=["me", "lo", "d", "y"],
+                reading_part_ms=[250, 520, 700],
+                pos_start_ms=6_220,
+                pos_end_ms=7_610,
+            )
+        ],
+    )
+    explicit_style = replace(base_style, ruby_main_progress_mode="reading_units")
+    timestamps = (6_740, 6_920, 7_610)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, explicit_gpu_frames = _render_g1_frames(
+            renderer,
+            explicit_style,
+            timestamps,
+            force_warp=True,
+            track=explicit_track,
+        )
+    explicit_painter_frames = [
+        _render_painter_oracle(explicit_style, t_ms=t_ms, track=explicit_track)
+        for t_ms in timestamps
+    ]
+    explicit_gpu_ratios = [
+        after_ratio(frame, explicit_gpu_frames[-1]) for frame in explicit_gpu_frames[:-1]
+    ]
+    explicit_painter_ratios = [
+        after_ratio(frame, explicit_painter_frames[-1])
+        for frame in explicit_painter_frames[:-1]
+    ]
+
+    assert all(
+        abs(gpu - painter) <= 0.08
+        for gpu, painter in zip(explicit_gpu_ratios, explicit_painter_ratios)
+    ), (explicit_gpu_ratios, explicit_painter_ratios)
+    assert 0.30 <= explicit_gpu_ratios[0] <= 0.50  # d starts with the third base char
+    assert 0.50 <= explicit_gpu_ratios[1] <= 0.70  # y starts with the fourth base char
+
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_overlapping_char_wipe_hands_off_at_following_draw_left(monkeypatch) -> None:

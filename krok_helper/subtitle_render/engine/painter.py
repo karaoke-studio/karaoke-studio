@@ -481,6 +481,11 @@ def _line_layout_signature(line: TimingLine) -> tuple:
             for index, c in enumerate(line.chars)
             if c.source_span_count != 1 or c.source_span_start_ms is not None
         ),
+        tuple(
+            (index, c.explicit_start, c.explicit_end)
+            for index, c in enumerate(line.chars)
+            if c.explicit_start or c.explicit_end
+        ),
         line.end_ms,
         line.display_start_override_ms,
         line.display_end_override_ms,
@@ -5088,6 +5093,8 @@ def _line_with_guide_symbol(line: TimingLine) -> TimingLine:
                 text="\uFFFC",
                 start_ms=int(source.start_ms),
                 pause_release_ms=source.pause_release_ms,
+                explicit_start=source.explicit_start,
+                explicit_end=source.explicit_end,
                 role_label=(
                     labels[index] if index < len(labels) else source.role_label
                 ),
@@ -9616,12 +9623,22 @@ def _karaoke_fill_segments(
     index = 0
     while index < len(char_widths):
         ruby = _ruby_for_char_index(active_rubies, line, intervals, index)
+        ruby_indices = (
+            _ruby_target_indices(ruby, line, intervals) if ruby is not None else []
+        )
         # SUG uses a pause-only ruby over a linked English phrase as a
         # non-rendering group marker.  Utopia must still consume that ruby to
         # drop the whole phrase together, but it is not pronunciation data and
         # must not replace the phrase's real per-syllable TimingChar clock with
         # one linear start-to-end wipe.
-        if ruby is None or _is_utopia_group_marker(ruby):
+        if (
+            ruby is None
+            or _is_utopia_group_marker(ruby)
+            or (
+                ruby_main_progress_mode == "reading_units"
+                and _n3_ruby_main_uses_base_timing(line, ruby_indices)
+            )
+        ):
             left, right = ink_x_ranges[index]
             release_left, release_right = release_x_ranges[index]
             layout_left, layout_right = layout_x_ranges[index]
@@ -9642,8 +9659,7 @@ def _karaoke_fill_segments(
             index += 1
             continue
 
-        indices = _ruby_target_indices(ruby, line, intervals)
-        indices = [i for i in indices if 0 <= i < len(ink_x_ranges)]
+        indices = [i for i in ruby_indices if 0 <= i < len(ink_x_ranges)]
         if not indices:
             left, right = ink_x_ranges[index]
             release_left, release_right = release_x_ranges[index]
@@ -9804,6 +9820,29 @@ def _resolve_char_ruby_groups(
         for index in indices:
             groups.setdefault(index, (indices, ruby))
     return groups
+
+
+def _n3_ruby_main_uses_base_timing(
+    line: TimingLine,
+    indices: list[int],
+) -> bool:
+    """N3 是否保留 ruby 目标正文已有的逐字时间边界。
+
+    ``DrawDataGenerator.SetOneLineWipe`` 只在 ruby 组内部没有显式正文边界时调用
+    ``RubyTimesToKanjiTimes``。组首的 begin 和组尾的 end 不算内部边界；任一后续正文
+    字符有显式 begin，或任一非末正文字符有显式 end，整组都改用正文自己的时钟。
+    """
+    valid = [index for index in indices if 0 <= index < len(line.chars)]
+    if len(valid) <= 1:
+        return False
+    last_offset = len(valid) - 1
+    for offset, index in enumerate(valid):
+        char = line.chars[index]
+        if offset > 0 and char.explicit_start:
+            return True
+        if offset < last_offset and char.explicit_end:
+            return True
+    return False
 
 
 def _ruby_time_indices(
@@ -10171,7 +10210,10 @@ def _character_fill_ratio(
             for candidate in raw_indices
             if 0 <= candidate < len(char_x_ranges)
         ]
-        if indices:
+        if indices and not (
+            ruby_main_progress_mode == "reading_units"
+            and _n3_ruby_main_uses_base_timing(line, indices)
+        ):
             effective_ruby = _effective_ruby_for_target(ruby, indices, intervals)
             if (
                 ruby_main_progress_mode == "reading_units"

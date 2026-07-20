@@ -102,6 +102,8 @@ def timing_char_to_ir(ch: TimingChar) -> dict[str, Any]:
     return {
         "text": ch.text,
         "start_ms": int(ch.start_ms),
+        "explicit_start": bool(ch.explicit_start),
+        "explicit_end": bool(ch.explicit_end),
         "pause_release_ms": (
             int(ch.pause_release_ms) if ch.pause_release_ms is not None else None
         ),
