@@ -3341,6 +3341,13 @@ def _resolve_baseline_y(
 ) -> int:
     pos = style.line_y_position
     margin = max(style.line_y_margin_px, 0)
+    if style.layout_semantics == "n3_1074":
+        main_h, main_ascent, main_descent, ruby_extra = _fixed_line_geometry(style)
+        if pos == "top":
+            return margin + ruby_extra + main_ascent
+        if pos == "center":
+            return (img_h - main_h) // 2 + main_ascent
+        return img_h - margin - main_descent
     pad = _visual_text_padding(style)
     ruby_extra = 0
     if ruby_metrics is not None:
@@ -3359,6 +3366,18 @@ def _fixed_line_geometry(style: Style) -> tuple[int, int, int, int]:
     metrics = QFontMetrics(font)
     ruby_metrics = QFontMetrics(_build_ruby_font(style))
     ruby_extra = _ruby_vertical_extra(style, ruby_metrics)
+    if style.layout_semantics == "n3_1074":
+        # N3 DrawCharInfo.Height is font size + the first edge only.  Keep the
+        # product's larger guide/role glyphs out of the shared lane box; their
+        # visual geometry and ruby-anchor participation remain independent.
+        font_size = max(int(style.font_size_px), 1)
+        edge = max(int(style.stroke_width_px), 0)
+        main_h = font_size + edge
+        metric_total = max(metrics.ascent() + metrics.descent(), 1)
+        main_descent = font_size * max(metrics.descent(), 0) // metric_total + edge // 2
+        main_descent = min(max(main_descent, 0), main_h)
+        main_ascent = main_h - main_descent
+        return main_h, main_ascent, main_descent, ruby_extra
     pad = _visual_text_padding(style)
     main_h = metrics.ascent() + metrics.descent() + pad * 2
     return main_h, metrics.ascent() + pad, metrics.descent() + pad, ruby_extra

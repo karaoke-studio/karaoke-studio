@@ -6305,8 +6305,10 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     LayoutMarginWarning,
     _build_latin_font,
     _char_layout_width,
+    _fixed_line_geometry,
     _line_text_width,
     _make_font_for,
+    _resolve_baseline_y,
     _resolve_ruby_alignment,
     check_layout_margins,
 )
@@ -7387,6 +7389,37 @@ def test_n3_character_advance_never_backtracks_but_legacy_is_unchanged():
     assert _line_text_width(
         widths, Style(letter_spacing_px=-30, layout_semantics="n3_1074")
     ) == 20
+
+
+def test_n3_lane_box_uses_font_size_and_primary_edge_only(qapp):
+    legacy = Style(font_size_px=100, stroke_width_px=12, stroke2_width_px=40)
+    n3 = replace(legacy, layout_semantics="n3_1074")
+
+    legacy_h, *_ = _fixed_line_geometry(legacy)
+    n3_h, n3_ascent, n3_descent, _ = _fixed_line_geometry(n3)
+
+    assert n3_h == 112
+    assert n3_ascent + n3_descent == n3_h
+    assert legacy_h != n3_h
+
+
+def test_n3_bottom_baseline_ignores_secondary_edge_in_lane_position(qapp):
+    base = Style(
+        layout_semantics="n3_1074",
+        font_size_px=100,
+        stroke_width_px=12,
+        stroke2_enabled=True,
+        stroke2_width_px=2,
+        line_y_position="bottom",
+        line_y_margin_px=60,
+    )
+    expanded = replace(base, stroke2_width_px=80)
+
+    assert _resolve_baseline_y(
+        QFontMetrics(_build_font(base)), 1080, base
+    ) == _resolve_baseline_y(
+        QFontMetrics(_build_font(expanded)), 1080, expanded
+    )
 
 
 def test_ruby_anchor_participation_round_trips_for_global_and_role():
