@@ -83,7 +83,6 @@ from qfluentwidgets import (
     PushButton as FluentPushButton,
     RadioButton as FluentRadioButton,
     RoundMenu,
-    SegmentedWidget,
     SimpleCardWidget,
     SpinBox as FluentSpinBox,
     StrongBodyLabel,
@@ -151,6 +150,7 @@ from krok_helper.subtitle_render.frontend.property_panel import (
     screen_settings_to_dict,
 )
 from krok_helper.subtitle_render.frontend.timeline_view import TrackTimelineView
+from krok_helper.subtitle_render.frontend.workspace_switcher import WorkspaceSwitcher
 from krok_helper.subtitle_render.models import (
     BackgroundSource,
     DEFAULT_OUTPUT_NAME_SUFFIX,
@@ -1694,17 +1694,18 @@ class SubtitleRenderWindow(QWidget):
         layout.addWidget(left)
         layout.addStretch(1)
 
-        self._bottom_navigation = SegmentedWidget(bar)
+        self._bottom_navigation = WorkspaceSwitcher(bar)
         self._nav_btns: dict[str, QWidget] = {}
-        for key, text in [("preview", "预览"), ("export", "导出")]:
+        for key, text, icon in [
+            ("preview", "预览", FIF.VIEW),
+            ("export", "导出", FIF.VIDEO),
+        ]:
             btn = self._bottom_navigation.addItem(
                 key,
                 text,
                 onClick=lambda _checked=False, k=key: self._switch_tab(k),
+                icon=icon,
             )
-            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-            btn.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn.setFixedHeight(32)
             self._nav_btns[key] = btn
         layout.addWidget(self._bottom_navigation)
         layout.addStretch(1)

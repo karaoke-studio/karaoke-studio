@@ -23,7 +23,6 @@ from qfluentwidgets import (  # noqa: E402
     PrimaryPushButton,
     ProgressBar,
     PushButton,
-    SegmentedWidget,
     SpinBox,
     TransparentToolButton,
 )
@@ -47,6 +46,9 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
 )
 from krok_helper.subtitle_render.frontend import main_window as mw  # noqa: E402
 from krok_helper.subtitle_render.frontend.lyrics_list import COL_CONTENT  # noqa: E402
+from krok_helper.subtitle_render.frontend.workspace_switcher import (  # noqa: E402
+    WorkspaceSwitcher,
+)
 
 
 @pytest.fixture(scope="module")
@@ -881,7 +883,7 @@ def test_window_shell_components_present(qapp, monkeypatch):
     assert win._export_preset_combo is not None
     assert win._export_crf_spin.value() == 18
     assert win._export_native_check is not None
-    assert isinstance(win._bottom_navigation, SegmentedWidget)
+    assert isinstance(win._bottom_navigation, WorkspaceSwitcher)
     assert isinstance(win._export_dir_edit, LineEdit)
     assert isinstance(win._export_name_edit, LineEdit)
     assert isinstance(win._export_codec_combo, ComboBox)
