@@ -3745,7 +3745,7 @@ def test_style_preset_manager_requires_one_choice_for_cross_group_same_name(
     ]
 
 
-def test_style_preset_manager_auto_checks_new_n3_templates_for_role_import(
+def test_style_preset_manager_leaves_new_n3_templates_unchecked_after_import(
     qapp, monkeypatch
 ):
     imported_templates = tuple(
@@ -3785,9 +3785,10 @@ def test_style_preset_manager_auto_checks_new_n3_templates_for_role_import(
 
     dialog._on_import_n3()
 
-    assert set(dialog._checked_names()) == {"N3 角色 A", "N3 角色 B"}
+    assert dialog._checked_names() == []
+    assert not dialog._import_btn.isEnabled()
     dialog._on_import_selected()
-    assert set(dialog.imported_schemes()) == {"N3 角色 A", "N3 角色 B"}
+    assert dialog.imported_schemes() == {}
 
 
 def test_style_preset_manager_publishes_n3_import_before_dialog_closes(
