@@ -10557,13 +10557,15 @@ def _ruby_char_gaps(
     gaps = [0] * len(char_widths)
 
     def char_span(first: int, last: int) -> tuple[float, float]:
-        left = float(
-            sum(char_widths[:first]) + spacing * first + sum(gaps[: first + 1])
+        lefts = _char_left_positions(
+            char_widths,
+            0,
+            False,
+            spacing,
+            char_gaps=gaps,
+            n3_no_backtracking=style.layout_semantics == "n3_1074",
         )
-        right = float(
-            sum(char_widths[: last + 1]) + spacing * last + sum(gaps[: last + 1])
-        )
-        return left, right
+        return float(lefts[first]), float(lefts[last] + char_widths[last])
 
     prev_right: float | None = None
     min_ruby_left = 0.0
@@ -10592,9 +10594,20 @@ def _ruby_char_gaps(
         min_ruby_left = min(min_ruby_left, ruby_left)
         max_ruby_right = max(max_ruby_right, ruby_right)
 
-    text_w = float(
-        sum(char_widths) + spacing * max(len(char_widths) - 1, 0) + sum(gaps)
-    )
+    if style.layout_semantics == "n3_1074":
+        lefts = _char_left_positions(
+            char_widths,
+            0,
+            False,
+            spacing,
+            char_gaps=gaps,
+            n3_no_backtracking=True,
+        )
+        text_w = float(lefts[-1] + char_widths[-1])
+    else:
+        text_w = float(
+            sum(char_widths) + spacing * max(len(char_widths) - 1, 0) + sum(gaps)
+        )
     left_ext = max(0, int(math.ceil(-min_ruby_left)))
     right_ext = max(0, int(math.ceil(max_ruby_right - text_w)))
     return gaps, left_ext, right_ext
@@ -10624,7 +10637,7 @@ def _line_total_width(
         )
         for c in line.chars
     ]
-    pad = _visual_text_padding(style)
+    pad = 0 if style.layout_semantics == "n3_1074" else _visual_text_padding(style)
     left_ext = right_ext = pad
     gap_total = 0
     if rubies:

@@ -7487,6 +7487,63 @@ def test_n3_character_advance_never_backtracks_but_legacy_is_unchanged():
     ) == 20
 
 
+def test_n3_negative_spacing_ruby_boxes_follow_non_backtracking_advance(
+    qapp, monkeypatch
+):
+    line = TimingLine(
+        chars=[
+            TimingChar("A", 0),
+            TimingChar("B", 100),
+            TimingChar("C", 200),
+        ],
+        end_ms=300,
+    )
+    rubies = [
+        RubyAnnotation(
+            kanji=char,
+            reading=char.lower(),
+            pos_start_ms=start,
+            pos_end_ms=start + 100,
+        )
+        for char, start in (("A", 0), ("B", 100), ("C", 200))
+    ]
+    style = Style(
+        layout_semantics="n3_1074",
+        letter_spacing_px=-30,
+        ruby_interval_px=0,
+    )
+    monkeypatch.setattr(
+        subtitle_painter,
+        "_ruby_layout_draw_bounds",
+        lambda _units, _metrics, left, width, **_kwargs: (left, left + width),
+    )
+
+    gaps, _left_ext, _right_ext = _ruby_char_gaps(
+        line, [20, 20, 20], rubies, style
+    )
+
+    # Every 20 px character initially shares x=0 because -30 px spacing may
+    # not move N3's cursor backwards. Ruby collision resolution then shifts
+    # the second and third character by exactly one character box each.
+    assert gaps == [0, 20, 20]
+
+
+def test_n3_logical_line_width_does_not_add_visual_stroke_padding(qapp):
+    line = TimingLine(chars=[TimingChar("A", 0)], end_ms=1000)
+    style = Style(
+        layout_semantics="n3_1074",
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=64,
+        stroke_width_px=8,
+        stroke2_enabled=True,
+        stroke2_width_px=40,
+    )
+    widths = _base_char_widths(line, style)
+
+    assert _line_total_width(line, style) == _line_text_width(widths, style)
+
+
 def test_n3_lane_box_uses_font_size_and_primary_edge_only(qapp):
     legacy = Style(font_size_px=100, stroke_width_px=12, stroke2_width_px=40)
     n3 = replace(legacy, layout_semantics="n3_1074")
