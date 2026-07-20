@@ -256,6 +256,7 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
     line_breaks_before: Optional[list[str]] = None
     char_role_labels: Optional[list[Optional[list[Optional[str]]]]] = None
     line_animation_overrides: Optional[list[Optional[dict[str, object]]]] = None
+    line_display_overrides: Optional[list[Optional[list[Optional[int]]]]] = None
     extra_sources: list[dict[str, Any]] = []
     if lyrics_with_source:
         layout_limit = len(changes.get("layouts") or [])
@@ -269,7 +270,13 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
         changes.update(animation_changes)
         track = _load_track(subtitle_path, warnings)
         if track is not None:
-            line_layout_indices, line_breaks_before, char_role_labels, line_animation_overrides = _per_line_payloads(
+            (
+                line_layout_indices,
+                line_breaks_before,
+                char_role_labels,
+                line_animation_overrides,
+                line_display_overrides,
+            ) = _per_line_payloads(
                 line_infos, track, layout_limit, font_names, default_animation, warnings
             )
 
@@ -289,7 +296,13 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
             extra_track = _load_track(extra_path, warnings)
             if extra_track is not None:
                 extra_line_infos = [_dict(item) for item in _list(info.get("LineInfos"))]
-                extra_layouts, extra_breaks, extra_roles, extra_animations = _per_line_payloads(
+                (
+                    extra_layouts,
+                    extra_breaks,
+                    extra_roles,
+                    extra_animations,
+                    extra_display,
+                ) = _per_line_payloads(
                     extra_line_infos, extra_track, layout_limit, font_names, default_animation, warnings
                 )
                 if extra_layouts is not None:
@@ -300,6 +313,8 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
                     extra_payload["char_role_labels"] = extra_roles
                 if extra_animations is not None:
                     extra_payload["line_animation_overrides"] = extra_animations
+                if extra_display is not None:
+                    extra_payload["line_display_overrides"] = extra_display
             extra_sources.append(extra_payload)
 
     style = replace(Style(), **changes)
@@ -341,6 +356,8 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
         project_data["char_role_labels"] = char_role_labels
     if line_animation_overrides is not None:
         project_data["line_animation_overrides"] = line_animation_overrides
+    if line_display_overrides is not None:
+        project_data["line_display_overrides"] = line_display_overrides
     if extra_sources:
         project_data["extra_subtitle_sources"] = extra_sources
     return N3ImportResult(project_data=project_data, warnings=warnings)
@@ -733,6 +750,7 @@ def _per_line_payloads(
     Optional[list[str]],
     Optional[list[Optional[list[Optional[str]]]]],
     Optional[list[Optional[dict[str, object]]]],
+    Optional[list[Optional[list[Optional[int]]]]],
 ]:
     """对齐 N3 歌词行与本模块解析行，导出布局、分页与逐字配色。
 
@@ -753,18 +771,19 @@ def _per_line_payloads(
             pending_break = "none"
     our_indexed = [(index, line) for index, line in enumerate(track.lines) if not line.is_blank]
     if not n3_lines:
-        return None, None, None, None
+        return None, None, None, None, None
     if len(n3_lines) != len(our_indexed):
         warnings.append(
             "歌词行数与 N3 项目记录不一致（歌词文件可能已改动），"
             "已跳过每行布局、分页与逐字配色导入"
         )
-        return None, None, None, None
+        return None, None, None, None, None
 
     layout_payload = [0] * len(track.lines)
     break_payload = ["none"] * len(track.lines)
     role_payload: list[Optional[list[Optional[str]]]] = [None] * len(track.lines)
     animation_payload: list[Optional[dict[str, object]]] = [None] * len(track.lines)
+    display_payload: list[Optional[list[Optional[int]]]] = [None] * len(track.lines)
     mismatched = 0
     for (line_index, our_line), n3_line, break_before in zip(
         our_indexed, n3_lines, n3_breaks_before
@@ -778,6 +797,13 @@ def _per_line_payloads(
             continue
         layout_index = _int(n3_line.get("LayoutIndex"), 0)
         layout_payload[line_index] = layout_index if 0 <= layout_index <= layout_limit else 0
+        show_begin = n3_line.get("ShowBeginTime")
+        show_end = n3_line.get("ShowEndTime")
+        if isinstance(show_begin, (int, float)) or isinstance(show_end, (int, float)):
+            display_payload[line_index] = [
+                int(show_begin) if isinstance(show_begin, (int, float)) else None,
+                int(show_end) if isinstance(show_end, (int, float)) else None,
+            ]
         signature = _line_animation_signature(n3_line)
         if signature is not None and signature != default_animation:
             animation_payload[line_index] = line_animation_override_to_dict(
@@ -817,4 +843,5 @@ def _per_line_payloads(
         break_payload,
         role_payload,
         animation_payload if any(item is not None for item in animation_payload) else None,
+        display_payload if any(item is not None for item in display_payload) else None,
     )

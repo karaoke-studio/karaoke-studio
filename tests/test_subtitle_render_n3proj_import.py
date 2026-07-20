@@ -113,8 +113,9 @@ LRC_TEXT = (
 
 
 def _line_info(chars: list[dict], layout_index: int = 0,
-               action_id: str = "SHINTA.LineFadeInFadeOut") -> dict:
-    return {
+               action_id: str = "SHINTA.LineFadeInFadeOut", *,
+               show_begin: int | None = None, show_end: int | None = None) -> dict:
+    result = {
         "Kind": 1,
         "LyricsCharInfos": chars,
         "SubtitleActionId": action_id,
@@ -122,6 +123,11 @@ def _line_info(chars: list[dict], layout_index: int = 0,
         "LayoutIndex": layout_index,
         "Raw": "",
     }
+    if show_begin is not None:
+        result["ShowBeginTime"] = show_begin
+    if show_end is not None:
+        result["ShowEndTime"] = show_end
+    return result
 
 
 def _project_payload(tmp_path: Path) -> dict:
@@ -451,6 +457,21 @@ def test_import_layout_character_spacing_per_layout(tmp_path):
     assert layout.ruby_gap_px == -2
     assert result.project_data["line_layout_indices"][0] == 1
     assert not any("全局设置" in warning for warning in result.warnings)
+
+
+def test_import_preserves_n3_line_display_windows(tmp_path):
+    payload = _project_payload(tmp_path)
+    first = payload["SourceLyricsInfos"][0]["LineInfos"][0]
+    first["ShowBeginTime"] = 250
+    first["ShowEndTime"] = 3400
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+
+    assert result.project_data["line_display_overrides"] == [
+        [250, 3400],
+        None,
+        None,
+    ]
 
 
 def test_import_custom_scheme_with_gradient(imported):
