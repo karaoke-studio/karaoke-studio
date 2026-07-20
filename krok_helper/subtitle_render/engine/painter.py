@@ -4928,6 +4928,7 @@ _SUBTITLE_SCHEME_STYLE_FIELDS: tuple[str, ...] = (
     "ruby_glow_concentration_level",
     "ruby_shadow_offset_x",
     "ruby_shadow_offset_y",
+    "ruby_colors_follow_main",
     "karaoke_colors",
     "ruby_karaoke_colors",
 )

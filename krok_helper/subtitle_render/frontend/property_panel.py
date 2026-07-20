@@ -190,6 +190,7 @@ _SCHEME_FIELDS = {
     "ruby_glow_concentration_level",
     "ruby_shadow_offset_x",
     "ruby_shadow_offset_y",
+    "ruby_colors_follow_main",
     "karaoke_colors",
     "ruby_karaoke_colors",
 }
@@ -1355,8 +1356,7 @@ class _PillSelector(QWidget):
 class _FolderTabPanel(QWidget):
     """文件夹式 tab 面板：上圆角 tab，选中 tab 底色与灰色内容区连成一片。
 
-    左组 = 编辑对象（主文字/注音），右组 = 走字时机（走字后/走字前）——
-    两组都是「点一下切换」，不再用下拉。tab 普通态白底、选中态与内容区
+    左右两组都是「点一下切换」，不再用下拉。tab 普通态白底、选中态与内容区
     同灰底且底边不画线，面板轮廓用灰描边连贯勾出（对应用户手绘的路径）。
     tab 形状与底色全部在 paintEvent 里画，按钮本体透明、只出文字和点击。
     """
@@ -4235,9 +4235,10 @@ class PropertyPanel(QWidget):
     ) -> QWidget:
         section, layout = _inline_section("字体", parent) if inline else _section("字体")
 
+        # 与颜色面板保持一致：变化维度放左侧，编辑对象放右侧。
         self._font_tab_panel = _FolderTabPanel(
-            (("main", "主文字"), ("ruby", "注音")),
             (("japanese", "日文"), ("latin", "英数")),
+            (("main", "主文字"), ("ruby", "注音")),
             section,
         )
         self._font_tab_stack = QStackedWidget(self._font_tab_panel)
@@ -4500,8 +4501,8 @@ class PropertyPanel(QWidget):
         return page
 
     def _sync_font_settings_page(self) -> None:
-        subject_index = 0 if self._font_tab_panel.current_left() == "main" else 1
-        script_index = 0 if self._font_tab_panel.current_right() == "japanese" else 1
+        subject_index = 0 if self._font_tab_panel.current_right() == "main" else 1
+        script_index = 0 if self._font_tab_panel.current_left() == "japanese" else 1
         self._font_tab_stack.setCurrentIndex(subject_index * 2 + script_index)
 
     def _on_font_stroke2_toggled(
@@ -4740,8 +4741,40 @@ class PropertyPanel(QWidget):
         # 只复制颜色和填充。字体卡片里的描边尺寸、以及方案共用的装饰参数
         # 都不属于这个按钮的职责。
         self._update_style(
+            ruby_colors_follow_main=False,
             ruby_karaoke_colors=deepcopy(self._current_karaoke_colors()),
         )
+
+    def _on_ruby_colors_follow_main_toggled(self, checked: bool) -> None:
+        if self._syncing:
+            return
+        # None 是模型层的完整继承语义：文字、描边、描边2、装饰及其填充
+        # 参数都会实时读取主文字矩阵。关闭时复制当前值，保证外观不跳变。
+        self._update_style(
+            ruby_colors_follow_main=checked,
+            ruby_karaoke_colors=(
+                None if checked else deepcopy(self._current_karaoke_colors())
+            )
+        )
+
+    def _sync_ruby_color_follow_controls(self) -> None:
+        if not hasattr(self, "_ruby_colors_follow_main_check"):
+            return
+        follows_main = bool(self._scheme_value("ruby_colors_follow_main"))
+        self._ruby_colors_follow_main_check.blockSignals(True)
+        try:
+            self._ruby_colors_follow_main_check.setChecked(follows_main)
+        finally:
+            self._ruby_colors_follow_main_check.blockSignals(False)
+        # 跟随时已经是实时同步；一次性复制按钮只在独立配色时有意义。
+        self._ruby_apply_main_btn.setEnabled(not follows_main)
+
+    def _set_ruby_color_controls_visible(self, visible: bool) -> None:
+        if not hasattr(self, "_ruby_color_actions_row"):
+            return
+        self._ruby_color_actions_row.setVisible(visible)
+        self._ruby_colors_follow_main_check.setVisible(visible)
+        self._ruby_apply_main_btn.setVisible(visible)
 
     def _make_color_section(
         self, parent: Optional[QWidget] = None, *, inline: bool = False
@@ -4778,18 +4811,18 @@ class PropertyPanel(QWidget):
             lambda _index: self._on_color_target_combo_changed()
         )
 
-        # 文件夹式 tab 面板：左上主文字/注音，右上走字后/走字前
+        # 文件夹式 tab 面板：左上走字后/走字前，右上主文字/注音。
         self._color_tab_panel = _FolderTabPanel(
-            (("main", "主文字"), ("ruby", "注音")),
             (("after", "走字后"), ("before", "走字前")),
+            (("main", "主文字"), ("ruby", "注音")),
             section,
         )
-        self._color_tab_panel.leftChanged.connect(self._on_color_subject_tab_changed)
-        self._color_tab_panel.rightChanged.connect(self._on_color_state_tab_changed)
+        self._color_tab_panel.leftChanged.connect(self._on_color_state_tab_changed)
+        self._color_tab_panel.rightChanged.connect(self._on_color_subject_tab_changed)
         self._color_state_swap_button = _AnchoredTabActionButton(
             self._color_tab_panel,
-            ("right", "after"),
-            ("right", "before"),
+            ("left", "after"),
+            ("left", "before"),
             section,
         )
         self._color_state_swap_button.setObjectName("ColorStateSwapButton")
@@ -4950,10 +4983,28 @@ class PropertyPanel(QWidget):
         detail_layout.setColumnStretch(0, 1)
         detail_layout.setColumnStretch(1, 1)
 
-        self._ruby_apply_main_btn = FluentPushButton("应用主文字配色", section)
+        self._ruby_color_actions_row = QWidget(section)
+        ruby_color_actions_layout = QHBoxLayout(self._ruby_color_actions_row)
+        ruby_color_actions_layout.setContentsMargins(0, 0, 0, 0)
+        ruby_color_actions_layout.setSpacing(10)
+        self._ruby_colors_follow_main_check = CheckBox(
+            "默认跟随主文字", self._ruby_color_actions_row
+        )
+        self._ruby_colors_follow_main_check.setChecked(True)
+        self._ruby_colors_follow_main_check.setToolTip(
+            "勾选后，注音的文字、描边、描边2、装饰及全部填充参数实时跟随主文字配色。"
+        )
+        self._ruby_colors_follow_main_check.toggled.connect(
+            self._on_ruby_colors_follow_main_toggled
+        )
+        self._ruby_apply_main_btn = FluentPushButton(
+            "应用主文字配色", self._ruby_color_actions_row
+        )
         self._ruby_apply_main_btn.setMinimumHeight(32)
         self._ruby_apply_main_btn.clicked.connect(self._apply_main_colors_to_ruby)
-        self._ruby_apply_main_btn.hide()
+        ruby_color_actions_layout.addWidget(self._ruby_colors_follow_main_check, 0)
+        ruby_color_actions_layout.addWidget(self._ruby_apply_main_btn, 1)
+        self._set_ruby_color_controls_visible(False)
 
         # tab 内容区：左·图层列 + 填充方式列（竖排按钮），右·填充编辑和
         # 整个配色方案共用的装饰参数。描边尺寸已经归入字体卡片。
@@ -4971,7 +5022,7 @@ class PropertyPanel(QWidget):
         editors.addStretch(1)
         columns.addLayout(editors, 1)
         self._color_tab_panel.content_layout.addLayout(columns)
-        self._color_tab_panel.content_layout.addWidget(self._ruby_apply_main_btn)
+        self._color_tab_panel.content_layout.addWidget(self._ruby_color_actions_row)
         return section
 
     def _update_shared_decoration(self, **changes) -> None:
@@ -6665,6 +6716,7 @@ class PropertyPanel(QWidget):
         changes = {field_name: normalized}
         if field_name == "ruby_color":
             # 选了单色就退出"跟随主文字"模式，让单色重新生效。
+            changes["ruby_colors_follow_main"] = False
             changes["ruby_karaoke_colors"] = None
         else:
             colors = _apply_legacy_color_to_matrix(
@@ -6672,6 +6724,8 @@ class PropertyPanel(QWidget):
             )
             if colors is not None:
                 changes["karaoke_colors"] = colors
+                if bool(self._scheme_value("ruby_colors_follow_main")):
+                    changes["ruby_karaoke_colors"] = None
         self._update_style(**changes)
 
     def _choose_paint_color(
@@ -6743,17 +6797,17 @@ class PropertyPanel(QWidget):
 
     def _on_color_subject_changed(self) -> None:
         if hasattr(self, "_color_tab_panel"):
-            self._color_tab_panel.set_left(self._current_color_subject_key())
-        if hasattr(self, "_ruby_apply_main_btn"):
-            self._ruby_apply_main_btn.setVisible(
-                self._current_color_subject_key() == "ruby"
-            )
+            self._color_tab_panel.set_right(self._current_color_subject_key())
+        self._set_ruby_color_controls_visible(
+            self._current_color_subject_key() == "ruby"
+        )
+        self._sync_ruby_color_follow_controls()
         self._sync_color_subject_style_controls()
         self._sync_color_fill_controls()
 
     def _on_color_target_combo_changed(self) -> None:
         if hasattr(self, "_color_tab_panel"):
-            self._color_tab_panel.set_right(self._current_color_state_key())
+            self._color_tab_panel.set_left(self._current_color_state_key())
         if hasattr(self, "_color_layer_pill"):
             self._color_layer_pill.set_current(self._current_color_layer_key())
         self._sync_color_fill_controls()
@@ -6787,6 +6841,8 @@ class PropertyPanel(QWidget):
         return _legacy_colors_from_panel(self)
 
     def _current_ruby_karaoke_colors(self) -> KaraokeColors:
+        if bool(self._scheme_value("ruby_colors_follow_main")):
+            return self._current_karaoke_colors()
         value = self._scheme_value("ruby_karaoke_colors")
         if isinstance(value, KaraokeColors):
             return deepcopy(value)
@@ -6912,9 +6968,15 @@ class PropertyPanel(QWidget):
         state = replace(state, **{layer_key: fill})
         colors = replace(colors, **{state_key: state})
         if self._current_color_subject_key() == "ruby":
-            self._update_style(ruby_karaoke_colors=colors)
+            self._update_style(
+                ruby_colors_follow_main=False,
+                ruby_karaoke_colors=colors,
+            )
         else:
-            self._update_style(karaoke_colors=colors)
+            style_changes: dict[str, object] = {"karaoke_colors": colors}
+            if bool(self._scheme_value("ruby_colors_follow_main")):
+                style_changes["ruby_karaoke_colors"] = None
+            self._update_style(**style_changes)
 
     def _swap_karaoke_color_states(self) -> None:
         if self._syncing:
@@ -6926,9 +6988,15 @@ class PropertyPanel(QWidget):
             after=deepcopy(colors.before),
         )
         if self._current_color_subject_key() == "ruby":
-            self._update_style(ruby_karaoke_colors=swapped)
+            self._update_style(
+                ruby_colors_follow_main=False,
+                ruby_karaoke_colors=swapped,
+            )
         else:
-            self._update_style(karaoke_colors=swapped)
+            style_changes: dict[str, object] = {"karaoke_colors": swapped}
+            if bool(self._scheme_value("ruby_colors_follow_main")):
+                style_changes["ruby_karaoke_colors"] = None
+            self._update_style(**style_changes)
 
     def _update_gradient_stops(self, stops: list[tuple[float, str]]) -> None:
         if self._syncing:
@@ -7401,10 +7469,10 @@ class PropertyPanel(QWidget):
             )
             self._sync_font_stroke_controls()
             self._sync_color_subject_style_controls()
-            if hasattr(self, "_ruby_apply_main_btn"):
-                self._ruby_apply_main_btn.setVisible(
-                    self._current_color_subject_key() == "ruby"
-                )
+            self._set_ruby_color_controls_visible(
+                self._current_color_subject_key() == "ruby"
+            )
+            self._sync_ruby_color_follow_controls()
             self._sync_color_fill_controls()
         finally:
             self._syncing = was_syncing
@@ -7955,6 +8023,9 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         ),
         ruby_shadow_offset_x=panel._scheme_value("ruby_shadow_offset_x"),
         ruby_shadow_offset_y=panel._scheme_value("ruby_shadow_offset_y"),
+        ruby_colors_follow_main=bool(
+            panel._scheme_value("ruby_colors_follow_main")
+        ),
         karaoke_colors=panel._current_karaoke_colors(),
         ruby_karaoke_colors=panel._scheme_value("ruby_karaoke_colors"),
         n3_font_inheritance=bool(

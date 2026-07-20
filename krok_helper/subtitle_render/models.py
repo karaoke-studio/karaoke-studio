@@ -622,6 +622,8 @@ class SubtitleStyleScheme:
     ruby_shadow_offset_x: Optional[int] = None
     ruby_shadow_offset_y: Optional[int] = None
     karaoke_colors: Optional[KaraokeColors] = None
+    ruby_colors_follow_main: Optional[bool] = None
+    """注音配色是否实时跟随本角色方案的主文字配色。"""
     ruby_karaoke_colors: Optional[KaraokeColors] = None
     n3_font_inheritance: bool = False
     """N3 子字体槽的 ``None`` 属于方案内 fallback，不继承外部全局方案。"""
@@ -773,6 +775,7 @@ def default_title_scheme() -> SubtitleStyleScheme:
         ruby_latin_stroke_width_px=10,
         ruby_latin_stroke2_enabled=False,
         ruby_latin_stroke2_width_px=3,
+        ruby_colors_follow_main=False,
         karaoke_colors=deepcopy(colors),
         ruby_karaoke_colors=deepcopy(colors),
     )
@@ -919,6 +922,8 @@ class Style:
     """Optional ruby override; ``None`` inherits ``glow_concentration_level``."""
     ruby_shadow_offset_x: Optional[int] = None
     ruby_shadow_offset_y: Optional[int] = None
+    ruby_colors_follow_main: bool = True
+    """注音整套配色默认实时跟随主文字；角色方案可独立覆盖。"""
     ruby_karaoke_colors: Optional[KaraokeColors] = None
     """注音独立配色矩阵；为空时退回 ``ruby_color`` / 主文字配色。可由「应用主文字
     配色」一键从主文字矩阵复制（颜色照搬，描边宽度/阴影偏移在渲染时按注音字号比例缩放）。"""
@@ -1454,6 +1459,7 @@ def style_from_dict(payload: object) -> Style:
             "allow_biting",
             "stroke2_enabled",
             "ruby_font_follow_main",
+            "ruby_colors_follow_main",
             "dual_line_layout",
             "right_to_left",
             "vertical",
@@ -1550,6 +1556,11 @@ def style_from_dict(payload: object) -> Style:
     # 旧工程迁移：没有 horizontal_margin_px 时沿用旧的上排左边距（默认双双为 50）。
     if "horizontal_margin_px" not in changes and "upper_line_left_margin_px" in changes:
         changes["horizontal_margin_px"] = changes["upper_line_left_margin_px"]
+    if "ruby_colors_follow_main" not in payload:
+        # 旧工程没有显式开关：已有独立注音矩阵继续独立，否则采用新默认跟随。
+        changes["ruby_colors_follow_main"] = (
+            changes.get("ruby_karaoke_colors") is None
+        )
     _migrate_title_references(changes)
     return Style(**changes)
 
@@ -1941,8 +1952,16 @@ def subtitle_style_scheme_from_dict(payload: object) -> SubtitleStyleScheme:
         }:
             parsed = _int_value(value, 0)
             changes[key] = parsed if parsed > 0 else None
+        elif key == "ruby_colors_follow_main":
+            changes[key] = bool(value) if value is not None else None
         else:
             changes[key] = value
+    if (
+        "ruby_colors_follow_main" not in payload
+        and changes.get("ruby_karaoke_colors") is not None
+    ):
+        # 旧角色方案保存过独立注音矩阵时，保留原行为。
+        changes["ruby_colors_follow_main"] = False
     return SubtitleStyleScheme(**changes)
 
 

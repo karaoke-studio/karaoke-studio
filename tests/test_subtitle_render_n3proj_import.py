@@ -341,6 +341,7 @@ def test_import_global_style_font_and_colors(imported):
     assert style.ruby_latin_stroke_width_px is None
     assert style.ruby_latin_stroke2_enabled is None
     assert style.ruby_latin_stroke2_width_px is None
+    assert style.ruby_colors_follow_main is True
     assert style.ruby_karaoke_colors is not None
 
 
