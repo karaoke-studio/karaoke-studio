@@ -1888,6 +1888,44 @@ def test_gpu_realization_prewarms_off_frame_and_hits_on_steady_frame(monkeypatch
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_realization_finishes_during_continuous_60fps_playback(monkeypatch) -> None:
+    """Prewarm must make progress without a 100ms paused/idle window."""
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.delenv("KROK_GPU_REALIZATION", raising=False)
+    style = _g1_style(
+        stroke_width_px=14,
+        stroke2_width_px=7,
+        decoration_kind="none",
+    )
+    recent_hits: list[int] = []
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        renderer.configure_gpu(
+            _g1_track(), style, width=640, height=360, fps=60,
+            force_warp=False, prewarm_t_ms=750, worker_count=1,
+        )
+        next_frame_at = time.monotonic()
+        for frame_index in range(120):
+            frame = renderer.render_gpu_frame(
+                750,
+                force_warp=False,
+                generation=1,
+                frame_index=frame_index,
+            )
+            if frame_index >= 90:
+                recent_hits.append(int(frame["realization_hit"]))
+            next_frame_at += 1.0 / 60.0
+            remaining = next_frame_at - time.monotonic()
+            if remaining > 0:
+                time.sleep(remaining)
+        diagnostics = renderer.gpu_diagnostics()
+
+    assert diagnostics["realization_prewarm_tasks"] > 0
+    assert diagnostics["realization_prewarm_complete"] is True
+    assert diagnostics["realization_count"] > 0
+    assert any(hit > 0 for hit in recent_hits)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_realization_rapid_style_churn_discards_stale_prewarm(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     monkeypatch.delenv("KROK_GPU_REALIZATION", raising=False)
@@ -2091,17 +2129,19 @@ def test_gpu_realization_utopia_dynamic_units_fall_back_without_visual_jump(
 
     assert all(event["realization_miss"] == 0 for event in realized_events)
     assert any(event["realization_hit"] > 0 for event in realized_events)
-    for realized_frame, fallback_frame in zip(realized, fallback):
+    for t_ms, realized_frame, fallback_frame in zip(timestamps, realized, fallback):
         deltas = [abs(a - b) for a, b in zip(realized_frame, fallback_frame)]
         assert sum(deltas) / len(deltas) < 1.2
         if any(realized_frame[3::4]) and any(fallback_frame[3::4]):
+            actual_bounds = _payload_alpha_bounds(realized_frame)
+            expected_bounds = _payload_alpha_bounds(fallback_frame)
             assert all(
                 abs(actual - expected) <= 2
                 for actual, expected in zip(
-                    _payload_alpha_bounds(realized_frame),
-                    _payload_alpha_bounds(fallback_frame),
+                    actual_bounds,
+                    expected_bounds,
                 )
-            )
+            ), (t_ms, actual_bounds, expected_bounds)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

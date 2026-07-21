@@ -58,6 +58,11 @@ def main() -> int:
     parser.add_argument("--duration", type=float, default=10.0)
     parser.add_argument("--force-warp", action="store_true")
     parser.add_argument(
+        "--auto-warp-wide-stroke",
+        action="store_true",
+        help="exercise the product's measured wide-outline WARP selector",
+    )
+    parser.add_argument(
         "--native-preview",
         action="store_true",
         help="Use the G6 DirectComposition child HWND instead of readback/QImage.",
@@ -98,6 +103,9 @@ def main() -> int:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         os.environ["KROK_SUBTITLE_GPU_NATIVE_PREVIEW"] = "0"
     os.environ["KROK_SUBTITLE_GPU_FORCE_WARP"] = "1" if args.force_warp else "0"
+    os.environ["KROK_SUBTITLE_GPU_AUTO_WARP_WIDE_STROKE"] = (
+        "1" if args.auto_warp_wide_stroke else "0"
+    )
     os.environ["KROK_SUBTITLE_GPU_WORKERS"] = str(args.worker_count)
     app = QApplication.instance() or QApplication([])
     slow_state: dict[str, float | bool] = {
@@ -362,10 +370,18 @@ def main() -> int:
                     and after_release_ms <= 250.0
                 ),
             }
+        renderer.set_playing(False)
+        settle_deadline = time.monotonic() + 0.25
+        while time.monotonic() < settle_deadline:
+            app.processEvents()
+            time.sleep(0.005)
         process = renderer._renderer
         if process is not None and process.is_running:
+            selected_warp = bool(
+                renderer.stats_snapshot().get("warp_selected", args.force_warp)
+            )
             native_diagnostics = process.gpu_diagnostics(
-                force_warp=args.force_warp
+                force_warp=selected_warp
             )
             try:
                 import psutil

@@ -1,6 +1,7 @@
 # GPU 预览宽描边性能优化执行计划书
 
-> 状态:已完成(2026-07-21；阶段 0～5 全部通过，阶段 6 质量档位按上游定义独立排期)
+> 状态:已完成(2026-07-21；阶段 0～5 全部通过，宽描边预览按实测自动选择
+> WARP，阶段 6 质量档位按上游定义独立排期)
 >
 > 建立日期:2026-07-21
 >
@@ -15,6 +16,10 @@
 **北极星指标**:固定工程(`C:\Users\18007\Downloads\芽吹の唄 - 大原ゆい子.yurika`,
 1080p60,107px 正文 + 14px 主描边 + 7px 二重描边 + 5px 发光)稳定播放段
 render p95 < 16.67ms,争取 12~14ms。
+
+最终产品预览按 8px 阈值自动选择 Direct2D WARP：固定工程 1280×720 显示目标
+render p95 约 6.0ms，15 秒真实视频交付率 97.9%；固定 1080p WARP 基准 p95
+9.166ms，均满足北极星。硬件 Direct2D 仍保留为细描边默认和显式 A/B 路径。
 
 **每个阶段必须遵守的五条规则**(直接回应"修了宽描边不能冒出新慢点"):
 
@@ -228,8 +233,8 @@ DrawGeometryRealization,消除宽描边逐帧 tessellation。
 ### 阶段 2 实测结果(2026-07-21)
 
 正文与注音字符均增加 filled/stroked/stroked2（以及图片/渐变正文保护层）
-realization。预热使用同一 D2D device 的独立 DeviceContext，只在前台渲染空闲
-100ms 后运行，每约 50ms 主动让出调度；队列按 `prewarm_t_ms` 邻近行排序，逐帧路径
+realization。预热使用同一 D2D device 的独立 DeviceContext，在连续播放的帧间空隙
+每次只启动一个任务，并在每约 50ms 主动让出调度；队列按 `prewarm_t_ms` 邻近行排序，逐帧路径
 只消费已发布资源，动态矩阵字符与 glow 永远回退 DrawGeometry。样式 churn 使用代际
 取消：旧 worker 不等待昂贵调用结束即可退役，其任务持有独立 geometry 引用，发布时
 校验 generation，绝不写入新场景。0.25 起始容差全工程 14px 预热约 35.0s；在
@@ -421,18 +426,35 @@ Python 调度器自动二次配置为 1（阈值可用
 221.3ms 完成 Painter fallback + 自动重启；注入 180ms 慢帧后 105.6ms 交付最新帧。
 WARP 请求 8 worker 的功能门禁交付率 100%、实际 worker=1、failure=0。
 
-10 分钟真实 GUI 固定工程长跑 `passed=true`：34,874 次请求、11,125 帧交付，
-failure/restart/fallback 均为 0，`max_pending=1`、`max_in_flight=2`；sidecar RSS
-135.35→148.95MiB、峰值 152.96MiB，预热后在约 145～153MiB 横盘；结束时本地显存
-30.75MiB，无持续增长。父 GUI 的媒体缓存工作集增长不归入 sidecar 池泄漏判据。
+收口复核发现，上述 3 秒合成调度样例不能代表真实工程：第一轮 10 分钟结果虽然稳定，
+但 34,874 次请求只交付 11,125 帧，不能称为“接近 60fps”。最终调度改为按
+roundtrip p95 自适应提前 12～24 帧填充有界未来帧缓存，缓存命中时才按媒体时钟
+交付；同时依据阶段 0/4 的同机数据，在主/Latin 描边达到 8px 时自动选择
+Direct2D WARP。WARP 本工程 render p95 显著低于硬件路径，且不需要 realization
+预热；实际 worker 自动收缩为 1。样式连续修改时，后端选择在 renderer 生命周期内
+只允许从硬件升级到 WARP、不反向抖动，避免反复重建两套 device/cache。
+
+产品自动选择可用 `KROK_SUBTITLE_GPU_AUTO_WARP_WIDE_STROKE=0` 回退；阈值可用
+`KROK_SUBTITLE_GPU_AUTO_WARP_THRESHOLD_PX` 调整，`KROK_SUBTITLE_GPU_FORCE_WARP=1`
+仍保留为显式诊断开关。15 秒真实 GUI 门禁交付 881/900 帧（97.9%），render
+mean/p95 4.23/6.02ms、roundtrip mean/p95 13.54/17.46ms，failure/restart/fallback
+均为 0，严格时间戳落后帧为 0。3 秒自动选择调度门禁交付率 90.6%（启动前瞻窗口占
+约 12 帧），稳态后接近 60fps；kill/restart 在 63.7ms 恢复，180ms 慢帧注入后
+106.0ms 交付最新帧。最终 10 分钟真实 GUI 长跑交付 35,707/36,000 帧
+（99.19%），render mean/p95 4.20/5.93ms、roundtrip mean/p95 14.32/17.11ms；
+failure/restart/fallback=0，`max_pending=1`、落后帧仅启动期 1 帧。sidecar RSS
+78.69→83.92MiB、峰值 84.75MiB，无持续增长；WARP 不占本地显存。
+
+父 GUI 的媒体缓存工作集增长不归入 sidecar 池泄漏判据。
 收口时同时修复了阶段 0 登记的三条历史边界基线：RTL ruby 单元先做 NFC 归一化、
 volume signal 行盒不再给每个柱间距重复计入描边、N3 居中行把超出正文目标框的 ruby
-layout box 纳入整行锚定。最终 GPU backend 为 `163 passed, 1 skipped`；native protocol +
-transport + GPU backend 合并回归为 `280 passed, 28 skipped`。
+layout box 纳入整行锚定。最终 transport + GPU backend 为 `245 passed, 1 skipped`；
+加上 native protocol 后合并回归为 `283 passed, 28 skipped`。
 最终 Painter corpus（含真实 Dark Spiral `.n3proj`）`passed=true`，真实切片在 24,900ms 的
-包围盒最大边差由旧基线的 8px 收敛为 3px。独立 N3 视频差分工具
-因本机只有 N3 工程与源视频、没有 N3 已烧录输出视频而无法运行，未伪造输入；真实 N3
-工程由 Painter corpus 和已通过的 ruby 边界基线覆盖。
+包围盒最大边差由旧基线的 8px 收敛为 3px。独立 N3 视频差分使用本机
+`Dark spiral journey/出力/off_vocal.mkv` 与源视频在 5,000ms 做减法恢复标题遮罩，
+IoU 0.796927、宽度差 1px、`passed=true`；工具同时补齐了无 `QApplication` 时静默
+退出的问题。
 
 归档文件：
 
@@ -442,6 +464,14 @@ transport + GPU backend 合并回归为 `280 passed, 28 skipped`。
 - `build/gpu-stage5-workers-2-monotonic-hardware-20260721.{csv,json}`；
 - `build/gpu-stage5-workers-2-stress-10min-hardware-20260721.json`。
 - `build/gpu-stage5-final-painter-corpus/result.json`。
+- `build/gpu-stage5-final-auto-warp-scheduler-20260721.{csv,json}`；
+- `build/gpu-stage5-final-auto-warp-failure-20260721.{csv,json}`；
+- `build/gpu-stage5-final-auto-warp-stress-10min-20260721.json`；
+- `build/gpu-stage5-final-auto-warp-painter-corpus/result.json`；
+- `build/gpu-stage5-final-auto-warp-n3-reference/result.json`。
+- `build/gpu-stage5-final-auto-warp-painter-corpus-warp/result.json`；
+- `build/gpu-stage5-final-auto-warp-n3-reference-warp/result.json`；
+- `build/gpu-stage5-final-auto-warp-fine-stroke-hardware-20260721.{csv,json}`。
 
 **验收门禁**:
 
@@ -450,9 +480,10 @@ transport + GPU backend 合并回归为 `280 passed, 28 skipped`。
 - 连续播放、快速 seek、样式 churn 无延迟累积,停止播放后不再交付大量旧帧;
 - 默认 worker 数由 1/2/3/4/8 实测数据决定并写回本文档,不预设 8 最快
   (G5 仍需回读,worker 上限受带宽与显存约束);
-- 10 分钟 RSS/显存无泄漏;WARP 功能门禁通过(不强求 60fps)。
+- 10 分钟 RSS/显存无泄漏；显式 WARP 功能门禁通过，宽描边自动选择路径交付率 ≥90%。
 
-**回退开关**:`gpu_configure` 增加 `worker_count`(1 = 现行为,默认值待实测)。
+**回退开关**:`gpu_configure.worker_count=1` 回退单 worker；
+`KROK_SUBTITLE_GPU_AUTO_WARP_WIDE_STROKE=0` 回退自动后端选择。
 
 **新风险与防护**:
 

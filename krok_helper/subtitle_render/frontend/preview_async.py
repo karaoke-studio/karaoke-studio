@@ -85,6 +85,24 @@ def gpu_native_preview_enabled() -> bool:
     return False
 
 
+def _wide_stroke_prefers_warp(style: Optional[Style], threshold_px: int) -> bool:
+    """Return whether software Direct2D is the measured faster preview path.
+
+    On current Windows drivers the hardware rasterizer scales poorly for wide
+    outline geometry, while WARP stays below a frame at preview resolution.
+    Keep the decision limited to main/Latin outlines; ruby uses a much smaller
+    effective font size and does not justify switching the whole scene.
+    """
+    if style is None:
+        return False
+    widths = [style.stroke_width_px, style.latin_stroke_width_px]
+    for scheme in style.singer_style_overrides.values():
+        widths.extend((scheme.stroke_width_px, scheme.latin_stroke_width_px))
+    return max((int(value) for value in widths if value is not None), default=0) >= max(
+        int(threshold_px), 0
+    )
+
+
 def native_preview_timestamps(
     t_ms: int,
     *,
@@ -122,6 +140,9 @@ class NativePreviewFrameCache:
 
     def key_for(self, t_ms: int) -> int:
         return self._key(t_ms)
+
+    def timestamp_for_key(self, key: int) -> int:
+        return int(round(int(key) * 1000.0 / self._fps))
 
     def store(self, t_ms: int, image: QImage) -> None:
         copied = image.copy()
@@ -389,9 +410,10 @@ class AsyncSubtitleRenderer(QObject):
 class GpuAsyncSubtitleRenderer(QObject):
     """Bounded latest-wins G2 preview scheduler for the Direct2D backend.
 
-    There is exactly one in-flight synchronous sidecar request and at most one
-    pending request. A pending timestamp can be replaced, never appended. One
-    speculative frame may occupy that pending slot while playback is active.
+    There is one bounded sidecar batch and at most one pending batch anchor. A
+    pending timestamp can be replaced, never appended. During playback the
+    workers render ahead of the media clock; a frame is emitted only when the
+    matching media-clock request consumes it from the bounded cache.
     """
 
     frame_ready = Signal(QImage, int)
@@ -419,22 +441,42 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._renderer_failed = False
         self._fallback_reported = False
         self._retry_after = 0.0
-        self._force_warp = _env_enabled("KROK_SUBTITLE_GPU_FORCE_WARP", "0")
+        self._force_warp_requested = _env_enabled(
+            "KROK_SUBTITLE_GPU_FORCE_WARP", "0"
+        )
+        self._auto_warp_wide_stroke = _env_enabled(
+            "KROK_SUBTITLE_GPU_AUTO_WARP_WIDE_STROKE", "1"
+        )
+        self._auto_warp_threshold_px = _env_int(
+            "KROK_SUBTITLE_GPU_AUTO_WARP_THRESHOLD_PX", 8, minimum=0
+        )
+        self._force_warp = self._force_warp_requested
         self._native_preview = gpu_native_preview_enabled()
         self._worker_count_requested = _env_int(
             "KROK_SUBTITLE_GPU_WORKERS", 2, minimum=1
         )
         self._worker_count_requested = min(self._worker_count_requested, 8)
-        if self._force_warp or self._native_preview:
+        if self._force_warp_requested or self._native_preview:
             self._worker_count_requested = 1
         self._active_worker_count = 1
         self._native_target: Optional[tuple[int, int, int, int, int]] = None
         self._lookahead_frames = _env_int(
-            "KROK_SUBTITLE_GPU_LOOKAHEAD_FRAMES", 1, minimum=0
+            "KROK_SUBTITLE_GPU_LOOKAHEAD_FRAMES", 12, minimum=0
         )
         if self._native_preview:
             self._lookahead_frames = 0
-        self._frame_cache = NativePreviewFrameCache(max(self._lookahead_frames + 1, 1))
+        self._max_lookahead_frames = max(
+            self._lookahead_frames,
+            _env_int(
+                "KROK_SUBTITLE_GPU_MAX_LOOKAHEAD_FRAMES",
+                24,
+                minimum=0,
+            ),
+        )
+        self._effective_lookahead_frames = self._lookahead_frames
+        self._frame_cache = NativePreviewFrameCache(
+            max(self._max_lookahead_frames + self._worker_count_requested + 1, 1)
+        )
         self._renderer: Optional[NativeRendererProcess] = None
         self._reader: Optional[SharedFrameRingReader] = None
         self._shm_key = f"krok-gpu-preview-{os.getpid()}-{uuid.uuid4().hex}"
@@ -443,6 +485,8 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._stats_lock = threading.Lock()
         self._stats = {
             "requests": 0,
+            "cache_hits": 0,
+            "cache_misses": 0,
             "pending_replaced": 0,
             "frames_emitted": 0,
             "future_frames_cached": 0,
@@ -455,6 +499,8 @@ class GpuAsyncSubtitleRenderer(QObject):
             "max_pending": 0,
             "max_in_flight": 0,
             "worker_count": self._worker_count_requested,
+            "warp_selected": int(self._force_warp),
+            "pipeline_lead_frames": self._effective_lookahead_frames,
             "generations_cancelled": 0,
         }
         self._timings: dict[str, deque[float]] = {
@@ -484,6 +530,19 @@ class GpuAsyncSubtitleRenderer(QObject):
             self._track = track
             self._style = style
             self._extra_tracks = list(extra_tracks or ())
+            # Backend selection is monotonic for the renderer lifetime.  A
+            # wide-to-fine style edit must not bounce between two device
+            # pools (and synchronously rebuild both caches) on every slider
+            # tick; recreating the preview renderer resets the choice.
+            self._force_warp = self._force_warp_requested or self._force_warp or (
+                self._auto_warp_wide_stroke
+                and not self._native_preview
+                and _wide_stroke_prefers_warp(
+                    style, self._auto_warp_threshold_px
+                )
+            )
+            with self._stats_lock:
+                self._stats["warp_selected"] = int(self._force_warp)
             self._generation += 1
             self._needs_configure = True
             self._pending = None
@@ -572,17 +631,21 @@ class GpuAsyncSubtitleRenderer(QObject):
                 self._generation += 1
                 self._pending = None
                 self._frame_cache.clear()
+                cached = None
                 self._cancel_native_generation_locked(previous_generation)
             self._latest_t = requested_t
             self._note("requests")
             if cached is not None:
+                self._note("cache_hits")
                 self._note("frames_emitted")
                 self.frame_ready.emit(cached, requested_t)
-                if self._playing and self._lookahead_frames > 0:
-                    self._replace_pending_locked(
-                        self._next_frame_timestamp(requested_t), serial, True
-                    )
             else:
+                self._note("cache_misses")
+            if self._playing and self._lookahead_frames > 0:
+                self._replace_pending_locked(
+                    self._pipeline_anchor_timestamp(requested_t), serial, True
+                )
+            elif cached is None:
                 self._replace_pending_locked(requested_t, serial, False)
             self._condition.notify()
 
@@ -645,6 +708,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                 self._shm_key,
                 submitted_at,
                 self._native_target,
+                self._force_warp,
             )
 
     def _run(self) -> None:
@@ -668,6 +732,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                     shm_key,
                     submitted_at,
                     native_target,
+                    force_warp,
                 ) = snapshot
                 if track is None or style is None:
                     continue
@@ -713,7 +778,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                             height=height,
                             fps=60,
                             dpr=dpr,
-                            force_warp=self._force_warp,
+                            force_warp=force_warp,
                             extra_tracks=extra_tracks,
                             prewarm_t_ms=t_ms,
                             worker_count=self._worker_count_requested,
@@ -741,7 +806,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                                 height=height,
                                 fps=60,
                                 dpr=dpr,
-                                force_warp=self._force_warp,
+                                force_warp=force_warp,
                                 extra_tracks=extra_tracks,
                                 prewarm_t_ms=t_ms,
                                 worker_count=1,
@@ -764,6 +829,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                             shm_key=shm_key,
                             dpr=dpr,
                             submitted_at=submitted_at,
+                            force_warp=force_warp,
                         )
                         continue
                     if self._native_preview and native_target is not None:
@@ -775,14 +841,14 @@ class GpuAsyncSubtitleRenderer(QObject):
                             y=target_y,
                             width=target_width,
                             height=target_height,
-                            force_warp=self._force_warp,
+                            force_warp=force_warp,
                             generation=generation,
                             frame_index=self._frame_index,
                         )
                     else:
                         event = renderer.render_gpu_frame(
                             t_ms,
-                            force_warp=self._force_warp,
+                            force_warp=force_warp,
                             generation=generation,
                             frame_index=self._frame_index,
                             shm_key=shm_key,
@@ -792,6 +858,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                     self._frame_index += 1
                     completed_at = time.monotonic()
                     self._record_timing("roundtrip_ms", (completed_at - work_started) * 1000.0)
+                    self._adapt_pipeline_lookahead()
                     self._record_event_timing("render_ms", event.get("render_ms"))
                     self._record_event_timing("readback_ms", event.get("readback_ms"))
                     self._record_event_timing("present_ms", event.get("present_ms"))
@@ -851,16 +918,19 @@ class GpuAsyncSubtitleRenderer(QObject):
         shm_key: str,
         dpr: float,
         submitted_at: float,
+        force_warp: bool,
     ) -> None:
-        """Submit one current frame plus bounded playback lookahead to the pool."""
+        """Submit a bounded current or media-clock-ahead batch to the pool."""
         with self._condition:
             playing = self._playing
         requests = [(int(t_ms), int(serial), bool(speculative), float(submitted_at))]
-        if playing and not speculative:
+        if playing:
             future_t = int(t_ms)
             for _ in range(1, self._active_worker_count):
                 future_t = self._next_frame_timestamp(future_t)
-                requests.append((future_t, int(serial), True, time.monotonic()))
+                requests.append(
+                    (future_t, int(serial), bool(speculative), time.monotonic())
+                )
 
         metadata: dict[int, tuple[int, int, bool, float]] = {}
         batch_started = time.monotonic()
@@ -876,7 +946,7 @@ class GpuAsyncSubtitleRenderer(QObject):
             )
             renderer.begin_render_gpu_frame(
                 request_t,
-                force_warp=self._force_warp,
+                force_warp=force_warp,
                 generation=generation,
                 frame_index=frame_index,
                 request_serial=wire_serial,
@@ -895,6 +965,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._record_timing(
             "roundtrip_ms", (completed_at - batch_started) * 1000.0
         )
+        self._adapt_pipeline_lookahead()
         completed.sort(key=lambda event: int(event.get("t_ms", -1)))
         for event in completed:
             if event.get("event") == "gpu_frame_dropped":
@@ -982,7 +1053,7 @@ class GpuAsyncSubtitleRenderer(QObject):
             ):
                 return
             self._pending = (
-                self._next_frame_timestamp(t_ms),
+                self._pipeline_anchor_timestamp(t_ms),
                 serial,
                 True,
                 time.monotonic(),
@@ -993,6 +1064,35 @@ class GpuAsyncSubtitleRenderer(QObject):
     @staticmethod
     def _next_frame_timestamp(t_ms: int) -> int:
         return int(round(int(t_ms) + 1000.0 / 60.0))
+
+    def _pipeline_anchor_timestamp(self, t_ms: int) -> int:
+        current_key = self._frame_cache.key_for(int(t_ms))
+        return self._frame_cache.timestamp_for_key(
+            current_key + self._effective_lookahead_frames
+        )
+
+    def _adapt_pipeline_lookahead(self) -> None:
+        if self._lookahead_frames <= 0:
+            return
+        with self._stats_lock:
+            samples = list(self._timings["roundtrip_ms"])
+            if samples:
+                samples.sort()
+                p95_index = min(
+                    max(math.ceil(len(samples) * 0.95) - 1, 0),
+                    len(samples) - 1,
+                )
+                p95_ms = samples[p95_index]
+            else:
+                p95_ms = 0.0
+            recommended = max(
+                self._lookahead_frames,
+                int(math.ceil(p95_ms / (1000.0 / 60.0))) + 2,
+            )
+            self._effective_lookahead_frames = min(
+                recommended, self._max_lookahead_frames
+            )
+            self._stats["pipeline_lead_frames"] = self._effective_lookahead_frames
 
     def _emit_python_fallback(
         self,

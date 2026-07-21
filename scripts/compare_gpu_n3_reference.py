@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import replace
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -18,6 +19,7 @@ import sys
 
 import numpy as np
 from PyQt6.QtGui import QImage, QPainter
+from PyQt6.QtWidgets import QApplication
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -191,6 +193,14 @@ def main() -> int:
     parser.add_argument("--renderer", type=Path)
     parser.add_argument("--output-dir", type=Path, default=Path("build/n3-gpu-reference"))
     args = parser.parse_args()
+
+    # Font/style resolution in build_render_ir requires a live GUI
+    # application.  Without it Qt terminates the process before Python can
+    # report an exception, leaving only the two ffmpeg-extracted frames.
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    app = QApplication.instance() or QApplication(sys.argv)
+    if app is None:
+        raise RuntimeError("QApplication initialization failed")
 
     ffmpeg_value = args.ffmpeg or shutil.which("ffmpeg")
     if ffmpeg_value is None:

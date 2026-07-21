@@ -37,6 +37,12 @@ def main() -> int:
     parser.add_argument("--window-width", type=int, default=1280)
     parser.add_argument("--window-height", type=int, default=720)
     parser.add_argument("--progress-seconds", type=float, default=30.0)
+    parser.add_argument(
+        "--minimum-delivery-rate",
+        type=float,
+        default=0.9,
+        help="minimum frame_ready / requested 60fps clock ratio",
+    )
     parser.add_argument("--force-warp", action="store_true")
     parser.add_argument("--offscreen", action="store_true")
     parser.add_argument(
@@ -223,7 +229,7 @@ def main() -> int:
                     sidecar_rss_end = 0
             try:
                 gpu_diagnostics = native_process.gpu_diagnostics(
-                    force_warp=bool(args.force_warp)
+                    force_warp=bool(stats.get("warp_selected", args.force_warp))
                 )
             except Exception as exc:  # diagnostic failure must not mask stability
                 gpu_diagnostics = {"error": str(exc)}
@@ -237,6 +243,7 @@ def main() -> int:
             "window_size": [view.width(), view.height()],
             "fps": fps,
             "ready_frames": ready_count,
+            "playback_delivery_rate": ready_count / max(duration_s * fps, 1.0),
             "latest_ready_ms": latest_ready_ms,
             "stats": stats,
             "timings": timings,
@@ -269,6 +276,8 @@ def main() -> int:
         }
         passed = bool(
             ready_count > 0
+            and final_summary["playback_delivery_rate"]
+                >= max(float(args.minimum_delivery_rate), 0.0)
             and stats["renderer_failures"] == 0
             and stats["fallback_frames"] == 0
             and stats["max_pending"] <= 1

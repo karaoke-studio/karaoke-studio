@@ -162,6 +162,58 @@ def test_native_preview_lookahead_timestamps_only_expand_while_playing():
     ) == []
 
 
+def test_gpu_preview_auto_warp_only_selects_wide_main_outlines():
+    from dataclasses import replace
+
+    from krok_helper.subtitle_render.frontend.preview_async import (
+        _wide_stroke_prefers_warp,
+    )
+    from krok_helper.subtitle_render.models import Style, SubtitleStyleScheme
+
+    fine = replace(
+        Style(),
+        stroke_width_px=5,
+        latin_stroke_width_px=5,
+        singer_style_overrides={},
+    )
+    assert _wide_stroke_prefers_warp(fine, 8) is False
+    assert _wide_stroke_prefers_warp(replace(fine, stroke_width_px=14), 8) is True
+    assert _wide_stroke_prefers_warp(
+        replace(
+            fine,
+            singer_style_overrides={
+                1: SubtitleStyleScheme(stroke_width_px=12)
+            },
+        ),
+        8,
+    ) is True
+
+
+def test_gpu_preview_auto_warp_selection_is_monotonic_during_style_churn(
+    qapp, monkeypatch
+):
+    from dataclasses import replace
+
+    from krok_helper.subtitle_render.frontend.preview_async import (
+        GpuAsyncSubtitleRenderer,
+    )
+    from krok_helper.subtitle_render.models import Style, TimingTrack
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_FORCE_WARP", "0")
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_AUTO_WARP_WIDE_STROKE", "1")
+    renderer = GpuAsyncSubtitleRenderer(320, 180)
+    try:
+        wide = replace(Style(), stroke_width_px=14, latin_stroke_width_px=14)
+        fine = replace(Style(), stroke_width_px=5, latin_stroke_width_px=5)
+        renderer.set_state(TimingTrack(), wide)
+        assert renderer._force_warp is True
+        renderer.set_state(TimingTrack(), fine)
+        assert renderer._force_warp is True
+        assert renderer.stats_snapshot()["warp_selected"] == 1
+    finally:
+        renderer.stop()
+
+
 def test_native_preview_frame_cache_detaches_and_evicts_oldest():
     from krok_helper.subtitle_render.frontend.preview_async import NativePreviewFrameCache
 
@@ -913,6 +965,8 @@ def test_gpu_async_renderer_one_frame_lookahead_uses_bounded_cache(qapp, monkeyp
 
     monkeypatch.setattr(pa, "NativeRendererProcess", FakeGpuProcess)
     monkeypatch.setattr(pa, "SharedFrameRingReader", FakeGpuReader)
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_LOOKAHEAD_FRAMES", "1")
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_MAX_LOOKAHEAD_FRAMES", "1")
     renderer = pa.GpuAsyncSubtitleRenderer(320, 180)
     try:
         renderer.set_state(TimingTrack(), Style())
@@ -926,10 +980,11 @@ def test_gpu_async_renderer_one_frame_lookahead_uses_bounded_cache(qapp, monkeyp
         renderer.set_playing(False)
         renderer.request(1_017)
 
-        assert rendered == [1_000, 1_017]
+        assert rendered == [1_017]
         stats = renderer.stats_snapshot()
         assert stats["future_frames_cached"] == 1
-        assert stats["frames_emitted"] == 2
+        assert stats["frames_emitted"] == 1
+        assert stats["cache_hits"] == 1
         assert stats["max_pending"] == 1
     finally:
         renderer.stop()
@@ -1106,14 +1161,18 @@ def test_gpu_async_renderer_pooled_batch_accepts_out_of_order_completion(qapp, m
         renderer.set_playing(True)
         renderer.request(1_000)
         deadline = time.monotonic() + 2.0
+        while renderer.stats_snapshot()["future_frames_cached"] < 2 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        renderer.set_playing(False)
+        renderer.request(1_200)
         while not emitted and time.monotonic() < deadline:
             qapp.processEvents()
             time.sleep(0.01)
-        assert emitted == [1_000]
+        assert emitted == [1_200]
         stats = renderer.stats_snapshot()
         assert stats["worker_count"] == 2
         assert stats["max_in_flight"] == 2
-        assert stats["future_frames_cached"] == 1
+        assert stats["future_frames_cached"] == 2
     finally:
         renderer.stop()
 

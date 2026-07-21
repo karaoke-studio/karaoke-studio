@@ -2692,6 +2692,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         }
     }
     impl_->diagnostics.realizationPrewarmSkipped = 0;
+    impl_->diagnostics.realizationPrewarmTasks = 0;
     impl_->diagnostics.realizationPrewarmMs = 0.0;
     impl_->lastRenderCompletedMs.store(steadyNowMs(), std::memory_order_release);
     if (impl_->realizationEnabled && impl_->realizationContext) {
@@ -2823,6 +2824,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             }
         }
         impl_->diagnostics.realizationPrewarmSkipped = capacitySkipped;
+        impl_->diagnostics.realizationPrewarmTasks = tasks.size();
         auto control = std::make_shared<Impl::RealizationControl>();
         control->generation = impl_->realizationGeneration;
         impl_->realizationControl = control;
@@ -2869,7 +2871,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             const auto shouldStop = [&]() {
                 return control->stop.load(std::memory_order_acquire);
             };
-            const auto waitForIdle = [&]() {
+            const auto waitForFrameGap = [&]() {
                 while (!shouldStop()) {
                     const bool active = impl_->renderActive.load(
                         std::memory_order_acquire
@@ -2878,10 +2880,16 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         - impl_->lastRenderCompletedMs.load(
                             std::memory_order_acquire
                         );
-                    if (!active && idleMs >= 100) {
+                    // Continuous 60fps playback never has a 100ms idle
+                    // window.  Waiting for that long left the real project
+                    // permanently on DrawGeometry.  Start at most one task
+                    // in each inter-frame gap after a short foreground grace
+                    // period; publishing still waits on realizationMutex, so
+                    // a completed resource cannot race the active frame.
+                    if (!active && idleMs >= 2) {
                         return true;
                     }
-                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
                 return false;
             };
@@ -2936,7 +2944,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 }
             };
             for (const Impl::RealizationTask &task : tasks) {
-                if (!waitForIdle()) {
+                if (!waitForFrameGap()) {
                     break;
                 }
                 Microsoft::WRL::ComPtr<ID2D1GeometryRealization> created;

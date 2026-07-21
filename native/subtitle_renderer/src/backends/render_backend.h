@@ -379,6 +379,7 @@ struct BackendDiagnostics {
     bool realizationPrewarmComplete = true;
     std::uint64_t realizationCount = 0;
     std::uint64_t realizationCapacity = 0;
+    std::uint64_t realizationPrewarmTasks = 0;
     std::uint64_t realizationPrewarmSkipped = 0;
     double realizationPrewarmMs = 0.0;
     bool glowDirtyRectEnabled = true;

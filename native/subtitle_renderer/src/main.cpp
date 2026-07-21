@@ -7377,6 +7377,10 @@ void appendGpuDiagnostics(
         static_cast<qint64>(diagnostics.realizationCapacity)
     );
     out->insert(
+        QStringLiteral("realization_prewarm_tasks"),
+        static_cast<qint64>(diagnostics.realizationPrewarmTasks)
+    );
+    out->insert(
         QStringLiteral("realization_prewarm_skipped"),
         static_cast<qint64>(diagnostics.realizationPrewarmSkipped)
     );

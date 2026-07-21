@@ -242,7 +242,8 @@ min(Environment.ProcessorCount / 2, 8)
 ### P4：正式 GPU 预览多 worker 流水线
 
 - [x] sidecar 新建常驻 `GpuPreviewWorkerPool`；共享 D3D11/D2D device 试作未通过
-  配置期稳定性门禁，最终采用默认 2 worker、每 worker 独立 device/context；
+  配置期稳定性门禁，硬件池采用默认 2 worker、每 worker 独立 device/context；
+  8px 以上宽描边按实测自动选择 WARP 并收缩为 1 worker；
 - [x] 画刷缓存与 realization 缓存按 worker(per-DeviceContext)隔离,禁止跨 worker
   共享可变 D2D 资源;worker 启动后先渲染 warmup 帧填充各自缓存,避免首帧抖动；
 - [x] 每个 worker 独立持有 DeviceContext、frame target、staging/readback texture、glow scratch、
@@ -305,7 +306,8 @@ worker，可能只是让同一 GPU command queue、staging readback 和内存带
 - 记录 1/2/3/4/8 worker 的 render throughput、ready p50/p95/max、readback、stale/drop、
   sidecar RSS 和本地显存，默认值必须来自数据；
 - 连续播放、快速 seek 和样式 churn 下不得出现明显延迟累积或播放停止后继续交付大量旧帧；
-- 硬件 Direct2D 与 WARP 都需通过功能门禁，WARP 不强求 60fps，但必须稳定回退且不泄漏。
+- 硬件 Direct2D 与 WARP 都需通过功能门禁；若同机实测 WARP 在宽描边下明显更快，
+  产品可按描边阈值自动选择，但必须保留显式回退、稳定样式 churn 且不泄漏。
 
 ### 7.3 建议自动化
 
@@ -340,12 +342,16 @@ worker，可能只是让同一 GPU command queue、staging readback 和内存带
    视觉门禁；
 - [x] 文档回填最终性能数据、采用的 worker 默认值、缓存容量和未采用方案的原因。
 
-最终结论摘要：固定工程 14px+7px 单 worker render mean 从 22.299ms 降至
+最终结论摘要：固定工程 14px+7px 单 worker 硬件 render mean 从 22.299ms 降至
 16.885ms（-24.3%），p95 27.400ms，剩余尾延迟可由 GPU wait/glow 与真实动态字符
-解释；默认 2 worker，1/2/3/4/8 的 1080p 调度对照确认 2 的 batch roundtrip mean
-最低（6.766ms），3/4 开始负收益，8 出现超时回退。双 worker 10 分钟真实 GUI 长跑
-failure/restart/fallback=0、`max_in_flight=2`、`max_pending=1`，sidecar RSS 预热后
-横盘，结束本地显存 30.75MiB。最终 GPU backend `163 passed, 1 skipped`，协议、传输与
-GPU 合并回归 `280 passed, 28 skipped`；真实 Dark Spiral Painter corpus 通过，
-24,900ms 包围盒最大边差为 3px。所有阈值、缓存容量、CSV/JSON 路径和未采用方案详见
-`docs/GPU预览宽描边性能优化执行计划书.md`。
+稳定复现；1/2/3/4/8 的硬件对照确认 2 worker 最优，但真实长跑只有约 18～32fps，
+因此没有用短合成样例冒充完成。阶段 0/4 同机数据同时证明 WARP 在 8px 以上宽描边
+显著更快，产品最终按 8px 阈值自动选择 WARP（renderer 生命周期内单向选择，避免
+样式滑块反复重建设备），实际 worker 收缩为 1。固定工程 15 秒真实视频交付率 97.9%，
+render mean/p95 4.23/6.02ms；10 分钟最终门禁交付 35,707/36,000 帧（99.19%），
+render mean/p95 4.20/5.93ms，failure/restart/fallback=0，sidecar RSS 仅增长 5.23MiB；
+硬件细描边路径、双 worker 池和所有显式回退仍保留。最终 transport + GPU backend
+`245 passed, 1 skipped`；协议合并回归 `283 passed, 28 skipped`；
+Painter corpus 通过，真实 Dark Spiral 24,900ms 包围盒最大边差 3px，N3 成品视频
+减法门禁 IoU 0.796927、宽度差 1px。所有阈值、缓存容量、CSV/JSON 路径和未采用方案
+详见 `docs/GPU预览宽描边性能优化执行计划书.md`。
