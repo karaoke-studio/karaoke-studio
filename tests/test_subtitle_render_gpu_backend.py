@@ -2021,6 +2021,24 @@ def test_gpu_realization_prewarms_off_frame_and_hits_on_steady_frame(monkeypatch
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_realization_accepts_export_capacity_override(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _g1_style(stroke_width_px=14, stroke2_width_px=7)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured = renderer.configure_gpu(
+            _g1_track(),
+            style,
+            width=640,
+            height=360,
+            fps=60,
+            force_warp=False,
+            realization_capacity=65_536,
+        )
+
+    assert configured["realization_capacity"] == 65_536
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_realization_finishes_during_continuous_60fps_playback(monkeypatch) -> None:
     """Prewarm must make progress without a 100ms paused/idle window."""
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")

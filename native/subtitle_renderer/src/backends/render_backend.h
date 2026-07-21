@@ -325,6 +325,7 @@ struct RenderScene {
     int width = 1920;
     int height = 1080;
     int prewarmTimeMs = 0;
+    std::uint64_t realizationCapacity = 8192;
     float viewportScale = 1.0f;
     float viewportRotation = 0.0f;
     float viewportOffsetX = 0.0f;

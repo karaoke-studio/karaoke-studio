@@ -7440,6 +7440,13 @@ QJsonObject handleConfigureGpu(
     const int requestedWorkers = std::clamp(
         intValue(request, QStringLiteral("worker_count"), 1), 1, 8
     );
+    const std::uint64_t realizationCapacity = static_cast<std::uint64_t>(
+        std::clamp(
+            intValue(request, QStringLiteral("realization_capacity"), 8192),
+            8192,
+            262144
+        )
+    );
     const int workerCount = forceWarp ? 1 : requestedWorkers;
     if (workerCount > 1) {
         QElapsedTimer timer;
@@ -7449,6 +7456,7 @@ QJsonObject handleConfigureGpu(
             scene.prewarmTimeMs = std::max(
                 intValue(request, QStringLiteral("prewarm_t_ms"), 0), 0
             );
+            scene.realizationCapacity = realizationCapacity;
             auto &pool = runtime->hardwareGpuPreviewPool;
             if (pool == nullptr || pool->workerCount() != workerCount) {
                 pool = std::make_unique<GpuPreviewWorkerPool>(false, workerCount);
@@ -7497,6 +7505,7 @@ QJsonObject handleConfigureGpu(
         scene.prewarmTimeMs = std::max(
             intValue(request, QStringLiteral("prewarm_t_ms"), 0), 0
         );
+        scene.realizationCapacity = realizationCapacity;
         backend->configure(scene);
         if (forceWarp) {
             runtime->warpGpuConfigured = true;

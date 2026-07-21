@@ -688,6 +688,7 @@ class NativeRendererProcess:
         extra_tracks: list[TimingTrack] | None = None,
         prewarm_t_ms: int = 0,
         worker_count: int = 1,
+        realization_capacity: int | None = None,
     ) -> dict[str, Any]:
         """Configure the G1 DirectWrite scene without enabling the product path."""
         self.configure(
@@ -699,14 +700,15 @@ class NativeRendererProcess:
             dpr=dpr,
             extra_tracks=extra_tracks,
         )
-        self._send(
-            {
-                "cmd": "gpu_configure",
-                "force_warp": bool(force_warp),
-                "prewarm_t_ms": max(int(prewarm_t_ms), 0),
-                "worker_count": max(1, min(int(worker_count), 8)),
-            }
-        )
+        payload: dict[str, Any] = {
+            "cmd": "gpu_configure",
+            "force_warp": bool(force_warp),
+            "prewarm_t_ms": max(int(prewarm_t_ms), 0),
+            "worker_count": max(1, min(int(worker_count), 8)),
+        }
+        if realization_capacity is not None:
+            payload["realization_capacity"] = max(int(realization_capacity), 8192)
+        self._send(payload)
         return self._expect_ok(self._read_until_event("gpu_configured"))
 
     def begin_render_gpu_frame(

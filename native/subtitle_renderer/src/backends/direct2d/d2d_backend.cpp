@@ -1069,7 +1069,7 @@ struct Direct2DGpuBackend::Impl {
     Microsoft::WRL::ComPtr<ID2D1DeviceContext1> realizationContext;
     std::uint64_t realizationCount = 0;
     std::uint64_t realizationGeneration = 0;
-    static constexpr std::size_t realizationCapacity = 8192;
+    static constexpr std::size_t defaultRealizationCapacity = 8192;
     static constexpr float realizationStrokeThreshold = 8.0f;
     std::shared_ptr<RealizationControl> realizationControl;
     std::thread realizationThread;
@@ -1117,7 +1117,7 @@ Direct2DGpuBackend::Direct2DGpuBackend(bool forceWarp)
     impl_->diagnostics.resourceCacheEnabled = impl_->resourceCacheEnabled;
     impl_->diagnostics.brushCacheCapacity = Impl::brushCapacity;
     impl_->diagnostics.realizationEnabled = impl_->realizationEnabled;
-    impl_->diagnostics.realizationCapacity = Impl::realizationCapacity;
+    impl_->diagnostics.realizationCapacity = Impl::defaultRealizationCapacity;
     impl_->diagnostics.glowDirtyRectEnabled = impl_->glowDirtyRectEnabled;
     if (impl_->realizationEnabled) {
         device_.d2dContext()->QueryInterface(IID_PPV_ARGS(
@@ -2769,7 +2769,14 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             }
         );
         std::vector<Impl::RealizationTask> tasks;
-        tasks.reserve(Impl::realizationCapacity);
+        const std::size_t realizationCapacity = static_cast<std::size_t>(
+            std::max<std::uint64_t>(
+                impl_->scene.realizationCapacity,
+                Impl::defaultRealizationCapacity
+            )
+        );
+        impl_->diagnostics.realizationCapacity = realizationCapacity;
+        tasks.reserve(realizationCapacity);
         std::uint64_t capacitySkipped = 0;
         const auto appendTask = [&] (
             std::size_t lineIndex,
@@ -2784,7 +2791,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             if (geometry == nullptr || (isStroke && strokeWidth <= 0.0f)) {
                 return;
             }
-            if (tasks.size() >= Impl::realizationCapacity) {
+            if (tasks.size() >= realizationCapacity) {
                 ++capacitySkipped;
                 return;
             }

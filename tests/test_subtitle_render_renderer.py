@@ -676,7 +676,9 @@ def test_render_uses_gpu_subtitle_export_without_changing_encoder(monkeypatch, t
     writes = []
     fake_process = _FakeRenderProcess(job.output_path)
 
-    def fake_gpu(process, active_job, total_frames, path, should_cancel, on_progress):
+    def fake_gpu(
+        process, active_job, total_frames, path, should_cancel, on_progress, logger
+    ):
         writes.append((active_job.encoder_mode, total_frames, path))
         process.stdin.write(b"g" * (active_job.width * active_job.height * 4 * total_frames))
 

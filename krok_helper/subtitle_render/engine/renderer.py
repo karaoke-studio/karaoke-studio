@@ -228,6 +228,7 @@ def render_subtitle_video(
                 gpu_renderer_path,
                 should_cancel,
                 on_progress,
+                logger,
             )
         elif native_export_active:
             logger(f"native 导出: {native_renderer_path}")
@@ -898,9 +899,21 @@ def _write_frames_gpu(
     renderer_path: Path,
     should_cancel: Callable[[], bool] | None,
     on_progress: Callable[[int, int], None] | None,
+    logger: Logger,
 ) -> None:
     """Write Direct2D band-readback frames to the existing ffmpeg pipe."""
     written = 0
+    last_prepare_bucket = -1
+
+    def on_prepare_progress(done: int, total: int) -> None:
+        nonlocal last_prepare_bucket
+        percent = 100 if total <= 0 else min(100, max(0, done * 100 // total))
+        bucket = percent // 5
+        if bucket == last_prepare_bucket:
+            return
+        last_prepare_bucket = bucket
+        logger(f"正在准备 GPU 字幕资源… {done}/{total}（{percent}%）")
+
     for frame in iter_gpu_rgba_frames(
         job.track,
         job.style,
@@ -912,6 +925,7 @@ def _write_frames_gpu(
         extra_tracks=list(job.extra_tracks),
         force_warp=_gpu_force_warp(),
         should_cancel=should_cancel,
+        on_prepare_progress=on_prepare_progress,
     ):
         if should_cancel is not None and should_cancel():
             raise ExportCancelled("已停止导出。")

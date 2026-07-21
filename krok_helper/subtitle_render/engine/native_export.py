@@ -9,6 +9,7 @@ until the full-frame path is proven stable.
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from collections.abc import Callable, Iterator
 
@@ -23,6 +24,10 @@ from krok_helper.subtitle_render.native_backend import (
 
 _DEFAULT_TARGET_CHUNK_BYTES = 128 * 1024 * 1024
 _DEFAULT_RING_SLOTS_CAP = 64
+_DEFAULT_GPU_EXPORT_REALIZATION_MEMORY_MB = 256
+_GPU_REALIZATION_ESTIMATED_BYTES_PER_TASK = 4096
+_GPU_REALIZATION_MIN_TASKS = 8192
+_GPU_REALIZATION_MAX_TASKS = 262144
 
 
 def native_export_timestamps(
@@ -69,6 +74,56 @@ def native_export_threads() -> int:
         return max(int(raw), 1)
     except ValueError:
         return 4
+
+
+def gpu_export_realization_capacity() -> int:
+    """Return the export realization cap derived from a bounded memory budget."""
+
+    raw = os.environ.get(
+        "KROK_SUBTITLE_GPU_EXPORT_REALIZATION_MEMORY_MB",
+        str(_DEFAULT_GPU_EXPORT_REALIZATION_MEMORY_MB),
+    )
+    try:
+        budget_mb = max(int(raw), 32)
+    except ValueError:
+        budget_mb = _DEFAULT_GPU_EXPORT_REALIZATION_MEMORY_MB
+    capacity = budget_mb * 1024 * 1024 // _GPU_REALIZATION_ESTIMATED_BYTES_PER_TASK
+    return max(
+        _GPU_REALIZATION_MIN_TASKS,
+        min(int(capacity), _GPU_REALIZATION_MAX_TASKS),
+    )
+
+
+def _wait_for_gpu_export_realizations(
+    renderer: NativeRendererProcess,
+    configured: dict[str, object],
+    *,
+    force_warp: bool,
+    should_cancel: Callable[[], bool] | None,
+    on_progress: Callable[[int, int], None] | None,
+) -> None:
+    """Wait for export-wide realization prewarm before submitting frame zero."""
+
+    diagnostics = configured
+    total = max(int(diagnostics.get("realization_prewarm_tasks", 0) or 0), 0)
+    completed = max(int(diagnostics.get("realization_count", 0) or 0), 0)
+    if on_progress is not None:
+        on_progress(min(completed, total), total)
+    while not bool(diagnostics.get("realization_prewarm_complete", True)):
+        if should_cancel is not None and should_cancel():
+            raise ExportCancelled("已停止导出。")
+        time.sleep(0.05)
+        diagnostics = renderer.gpu_diagnostics(force_warp=force_warp)
+        total = max(
+            int(diagnostics.get("realization_prewarm_tasks", total) or total), 0
+        )
+        completed = max(
+            int(diagnostics.get("realization_count", completed) or completed), 0
+        )
+        if on_progress is not None:
+            on_progress(min(completed, total), total)
+    if on_progress is not None:
+        on_progress(total, total)
 
 
 def shared_slot_rgba_bytes(slot: SharedFrameSlot) -> bytes:
@@ -214,6 +269,7 @@ def iter_gpu_rgba_frames(
     extra_tracks: list[TimingTrack] | None = None,
     force_warp: bool = False,
     should_cancel: Callable[[], bool] | None = None,
+    on_prepare_progress: Callable[[int, int], None] | None = None,
 ) -> Iterator[bytes]:
     """Yield straight RGBA frames from the Direct2D GPU export path.
 
@@ -240,7 +296,7 @@ def iter_gpu_rgba_frames(
             response_timeout_s=15.0,
             close_timeout_s=1.0,
         ) as renderer:
-            renderer.configure_gpu(
+            configured = renderer.configure_gpu(
                 track,
                 style,
                 width=width,
@@ -248,6 +304,14 @@ def iter_gpu_rgba_frames(
                 fps=fps,
                 force_warp=force_warp,
                 extra_tracks=extra_tracks,
+                realization_capacity=gpu_export_realization_capacity(),
+            )
+            _wait_for_gpu_export_realizations(
+                renderer,
+                configured,
+                force_warp=force_warp,
+                should_cancel=should_cancel,
+                on_progress=on_prepare_progress,
             )
 
             def begin_frame(frame_index: int) -> None:

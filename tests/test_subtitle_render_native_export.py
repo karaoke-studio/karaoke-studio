@@ -30,6 +30,87 @@ def test_native_export_chunk_frames_ignores_invalid_env(monkeypatch) -> None:
     assert ne.native_export_chunk_frames(width=100, height=100, total_frames=100) == 64
 
 
+def test_gpu_export_realization_capacity_uses_bounded_memory_budget(monkeypatch) -> None:
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_REALIZATION_MEMORY_MB", raising=False)
+    assert ne.gpu_export_realization_capacity() == 65_536
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_REALIZATION_MEMORY_MB", "32")
+    assert ne.gpu_export_realization_capacity() == 8_192
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_REALIZATION_MEMORY_MB", "4096")
+    assert ne.gpu_export_realization_capacity() == 262_144
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_REALIZATION_MEMORY_MB", "invalid")
+    assert ne.gpu_export_realization_capacity() == 65_536
+
+
+class _FakeRealizationRenderer:
+    def __init__(self, diagnostics: list[dict[str, object]]) -> None:
+        self.diagnostics = list(diagnostics)
+        self.force_warp: list[bool] = []
+
+    def gpu_diagnostics(self, *, force_warp: bool = False) -> dict[str, object]:
+        self.force_warp.append(force_warp)
+        return self.diagnostics.pop(0)
+
+
+def test_gpu_export_waits_for_realization_prewarm_and_reports_progress(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(ne.time, "sleep", lambda _seconds: None)
+    renderer = _FakeRealizationRenderer(
+        [
+            {
+                "realization_prewarm_complete": False,
+                "realization_prewarm_tasks": 10,
+                "realization_count": 4,
+            },
+            {
+                "realization_prewarm_complete": True,
+                "realization_prewarm_tasks": 10,
+                "realization_count": 10,
+            },
+        ]
+    )
+    progress: list[tuple[int, int]] = []
+
+    ne._wait_for_gpu_export_realizations(
+        renderer,
+        {
+            "realization_prewarm_complete": False,
+            "realization_prewarm_tasks": 10,
+            "realization_count": 0,
+        },
+        force_warp=False,
+        should_cancel=lambda: False,
+        on_progress=lambda done, total: progress.append((done, total)),
+    )
+
+    assert progress == [(0, 10), (4, 10), (10, 10), (10, 10)]
+    assert renderer.force_warp == [False, False]
+
+
+def test_gpu_export_realization_wait_is_cancellable(monkeypatch) -> None:
+    monkeypatch.setattr(
+        ne.time,
+        "sleep",
+        lambda _seconds: pytest.fail("cancel must be checked before sleeping"),
+    )
+
+    with pytest.raises(ExportCancelled):
+        ne._wait_for_gpu_export_realizations(
+            _FakeRealizationRenderer([]),
+            {
+                "realization_prewarm_complete": False,
+                "realization_prewarm_tasks": 10,
+                "realization_count": 0,
+            },
+            force_warp=False,
+            should_cancel=lambda: True,
+            on_progress=None,
+        )
+
+
 @dataclass(frozen=True)
 class _FakeSlot:
     width: int
@@ -271,7 +352,13 @@ class _FakeGpuRendererProcess:
 
     def configure_gpu(self, *args, **kwargs):
         self.configures.append((args, kwargs))
-        return {"ok": True, "event": "gpu_configured"}
+        return {
+            "ok": True,
+            "event": "gpu_configured",
+            "realization_prewarm_complete": True,
+            "realization_prewarm_tasks": 0,
+            "realization_count": 0,
+        }
 
     def begin_render_gpu_frame(self, t_ms, **kwargs):
         self.frames.append((t_ms, kwargs))
@@ -315,6 +402,7 @@ def test_iter_gpu_rgba_frames_uses_banded_readback_and_straight_rgba(monkeypatch
     assert frames == [bytes([20, 40, 60, 128]), bytes([22, 40, 60, 128])]
     process = _FakeGpuRendererProcess.instances[-1]
     assert process.configures[0][1]["extra_tracks"] == [_track()]
+    assert process.configures[0][1]["realization_capacity"] == 65_536
     assert [item[0] for item in process.frames] == [0, 500]
     assert all(item[1]["readback_bands"] is True for item in process.frames)
     assert all(item[1]["include_checksum"] is False for item in process.frames)
