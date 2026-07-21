@@ -142,14 +142,17 @@ git submodule status
 5. **`generate_release_notes: true` 会在 release 创建时立刻生成英文 body**，所以 `gh release edit` 必须在 CI 跑完后**立刻**做，免得用户先看到英文。
 6. **不要 `--force` push 已经发布过 release 的 tag**——已经下载过的用户的客户端不会重拉。
 7. **README 版本号容易漏改**——`APP_VERSION` 与 README 顶部「当前版本」必须同步。
-8. **Qt6\bin 自带的旧 MSVC 运行时会让打包应用无声闪退**——PyQt6-Qt6 6.10.2 wheel 在
+8. **Qt6\bin 自带的旧 MSVC 运行时会让打包应用无声闪退**——某些 PyQt6-Qt6 wheel 在
    `Qt6\bin` 捆绑 VS2019 时代的 `MSVCP140*.dll`/`VCRUNTIME140*.dll`（14.26 vcwrkspc）。
    Qt6 按同目录优先加载后全进程同名唯一，VS2022 编译的 pedalboard_native 等扩展在新代码
-   路径（如 TSM「准备变速缓存」的 MP3 编码）会在旧 MSVCP140.dll 内 0xc0000005 访问冲突
-   （v4.1.0 引入 Qt pin 后首发，v4.0.x 用的是当时最新 PyQt6 自带 14.44 运行时所以正常）。
-   `scripts/build_windows.bat` 的「Refreshing bundled MSVC runtime DLLs」步骤会用构建机
-   System32 的新运行时覆盖并设 14.38 版本下限；改收集规则时同步 bump
-   `scripts/build_parts.py` 的 `RUNTIME_PROFILE`，否则 CI 会复用含旧运行时的 runtime zip。
+   路径（如 TSM「准备变速缓存」的 MP3 编码）会在旧 MSVCP140.dll 内 0xc0000005 访问冲突。
+   首发于 v4.1.0：`build_windows.bat` 曾把 `PYQT6_QT_VERSION` pin 成 6.10.2，而该 wheel 恰好
+   带 14.26 旧运行时（v4.0.x 未 pin，装到的 6.11.0 wheel 自带 14.44 所以正常）。**根因已修**：
+   pin 值改回 6.11.0，与 [requirements.txt](krok_helper/lyrics_timing/requirements.txt) 及 native
+   渲染器的 `KROK_EXPECTED_QT_VERSION` 指纹对齐（6.11 编的 sidecar exe 也不能加载 6.10 的 Qt DLL）。
+   `scripts/build_windows.bat` 的「Refreshing bundled MSVC runtime DLLs」步骤保留作为防御纵深：
+   用构建机 System32 的新运行时覆盖 Qt6\bin 里低于 14.38 下限的副本，防止将来 PyQt6 升级再次带入
+   旧文件；改收集规则时同步 bump `scripts/build_parts.py` 的 `RUNTIME_PROFILE`，否则 CI 会复用含旧运行时的 runtime zip。
    排查此类闪退：`Get-WinEvent -FilterHashtable @{LogName='Application'; ProviderName='Application Error'}` 看故障模块。
 
 ---

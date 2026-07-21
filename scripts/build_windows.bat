@@ -14,7 +14,7 @@ set "APP_DIST=%DIST_PATH%\%APP_NAME%"
 set "BUILD_DIST=%DIST_PATH%\%BUILD_NAME%"
 set "SUG_SRC=%CD%\krok_helper\lyrics_timing\src"
 set "SUG_PACKAGE=%SUG_SRC%\strange_uta_game"
-set "PYQT6_QT_VERSION=6.10.2"
+set "PYQT6_QT_VERSION=6.11.0"
 set "IS_CI="
 if defined CI set "IS_CI=1"
 
