@@ -7246,6 +7246,10 @@ void appendGpuDiagnostics(
         QStringLiteral("realization_prewarm_ms"),
         diagnostics.realizationPrewarmMs
     );
+    out->insert(
+        QStringLiteral("glow_dirty_rect_enabled"),
+        diagnostics.glowDirtyRectEnabled
+    );
 }
 
 void appendGpuFrameDiagnostics(

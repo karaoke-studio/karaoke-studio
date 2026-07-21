@@ -1044,6 +1044,12 @@ struct Direct2DGpuBackend::Impl {
         std::thread thread;
     };
 
+    struct GlowScratch {
+        Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+        UINT32 width = 0;
+        UINT32 height = 0;
+    };
+
     RenderScene scene;
     std::vector<CachedLine> lines;
     std::vector<CachedImage> images;
@@ -1069,10 +1075,10 @@ struct Direct2DGpuBackend::Impl {
     Microsoft::WRL::ComPtr<ID3D11Texture2D> frameTargetTexture;
     Microsoft::WRL::ComPtr<ID2D1Bitmap1> frameTargetBitmap;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> frameStagingTexture;
-    // Persistent scene-sized glow scratch targets and GaussianBlur effects.
-    // Reused across lines and frames; a per-line cursor hands out entries in
-    // order and rewinds after the line's composite is flushed.
-    std::vector<Microsoft::WRL::ComPtr<ID2D1Bitmap1>> glowScratchPool;
+    // Persistent glow scratch targets and GaussianBlur effects. Dirty-rect
+    // mode grows each scratch slot only to its largest requested region;
+    // entries rewind per line after the composite is flushed.
+    std::vector<GlowScratch> glowScratchPool;
     std::vector<Microsoft::WRL::ComPtr<ID2D1Effect>> glowEffectPool;
     std::size_t glowScratchInUse = 0;
     std::size_t glowEffectInUse = 0;
@@ -1087,6 +1093,9 @@ struct Direct2DGpuBackend::Impl {
     bool realizationEnabled = environmentFlagEnabled(
         "KROK_GPU_REALIZATION", true
     );
+    bool glowDirtyRectEnabled = environmentFlagEnabled(
+        "KROK_GPU_GLOW_DIRTY_RECT", true
+    );
 };
 
 Direct2DGpuBackend::Direct2DGpuBackend(bool forceWarp)
@@ -1099,6 +1108,7 @@ Direct2DGpuBackend::Direct2DGpuBackend(bool forceWarp)
     impl_->diagnostics.brushCacheCapacity = Impl::brushCapacity;
     impl_->diagnostics.realizationEnabled = impl_->realizationEnabled;
     impl_->diagnostics.realizationCapacity = Impl::realizationCapacity;
+    impl_->diagnostics.glowDirtyRectEnabled = impl_->glowDirtyRectEnabled;
     if (impl_->realizationEnabled) {
         device_.d2dContext()->QueryInterface(IID_PPV_ARGS(
             impl_->realizationContext.ReleaseAndGetAddressOf()
@@ -1142,6 +1152,10 @@ BackendDiagnostics Direct2DGpuBackend::diagnostics() const {
         * sizeof(Impl::CachedBrush);
     result.realizationCount = impl_->realizationCount;
     result.estimatedCacheBytes += impl_->realizationCount * 512;
+    for (const Impl::GlowScratch &scratch : impl_->glowScratchPool) {
+        result.estimatedCacheBytes += static_cast<std::uint64_t>(scratch.width)
+            * static_cast<std::uint64_t>(scratch.height) * 4;
+    }
     device_.appendVideoMemoryDiagnostics(&result);
     return result;
 }
@@ -3138,28 +3152,46 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
     // line's composite has been flushed to the frame target.
     impl_->glowScratchInUse = 0;
     impl_->glowEffectInUse = 0;
-    auto acquireGlowScratch = [&]() -> ID2D1Bitmap1 * {
-        if (impl_->glowScratchInUse < impl_->glowScratchPool.size()) {
-            return impl_->glowScratchPool[impl_->glowScratchInUse++].Get();
+    auto acquireGlowScratch = [&](float requestedWidth,
+                                  float requestedHeight) -> ID2D1Bitmap1 * {
+        const UINT32 width = impl_->glowDirtyRectEnabled
+            ? static_cast<UINT32>(std::max(
+                std::ceil(static_cast<double>(requestedWidth)), 1.0
+            ))
+            : static_cast<UINT32>(scene.width);
+        const UINT32 height = impl_->glowDirtyRectEnabled
+            ? static_cast<UINT32>(std::max(
+                std::ceil(static_cast<double>(requestedHeight)), 1.0
+            ))
+            : static_cast<UINT32>(scene.height);
+        const std::size_t index = impl_->glowScratchInUse++;
+        if (index >= impl_->glowScratchPool.size()) {
+            impl_->glowScratchPool.emplace_back();
         }
-        Microsoft::WRL::ComPtr<ID2D1Bitmap1> bitmap;
+        Impl::GlowScratch &scratch = impl_->glowScratchPool[index];
+        if (scratch.bitmap
+            && scratch.width >= width
+            && scratch.height >= height) {
+            return scratch.bitmap.Get();
+        }
+        scratch.width = std::max(scratch.width, width);
+        scratch.height = std::max(scratch.height, height);
+        scratch.bitmap.Reset();
         checkHr(
             context->CreateBitmap(
                 D2D1::SizeU(
-                    static_cast<UINT32>(scene.width),
-                    static_cast<UINT32>(scene.height)
+                    scratch.width,
+                    scratch.height
                 ),
                 nullptr,
                 0,
                 &bitmapProperties,
-                bitmap.ReleaseAndGetAddressOf()
+                scratch.bitmap.ReleaseAndGetAddressOf()
             ),
             "ID2D1DeviceContext::CreateBitmap(glow scratch)",
             device_
         );
-        impl_->glowScratchPool.push_back(bitmap);
-        ++impl_->glowScratchInUse;
-        return impl_->glowScratchPool.back().Get();
+        return scratch.bitmap.Get();
     };
     auto acquireGlowEffect = [&]() -> ID2D1Effect * {
         if (impl_->glowEffectInUse < impl_->glowEffectPool.size()) {
@@ -4956,16 +4988,64 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 : style;
         };
 
+        // Glow sources are authored in line-local coordinates and written to
+        // the scene-sized scratch after the line translation. Clamp requested
+        // effect output to the scratch in the same local coordinate system.
+        const D2D1_RECT_F glowCanvasRect = D2D1::RectF(
+            -dx,
+            -dy,
+            static_cast<float>(scene.width) - dx,
+            static_cast<float>(scene.height) - dy
+        );
+        const auto clampGlowRect = [&](const D2D1_RECT_F &rect) {
+            return D2D1::RectF(
+                std::max(rect.left, glowCanvasRect.left),
+                std::max(rect.top, glowCanvasRect.top),
+                std::min(rect.right, glowCanvasRect.right),
+                std::min(rect.bottom, glowCanvasRect.bottom)
+            );
+        };
+        const auto glowOutputRect = [&] (
+            const D2D1_RECT_F &content,
+            float sourceWidth,
+            int radius
+        ) {
+            const float expansion = sourceWidth + 3.0f * radius + 16.0f;
+            const D2D1_RECT_F expanded = expandedRect(content, expansion);
+            return impl_->glowDirtyRectEnabled
+                ? clampGlowRect(expanded)
+                : expanded;
+        };
+        const auto glowClearBounds = [&] (
+            const D2D1_RECT_F &sourceRect,
+            int radius
+        ) {
+            const float expansion = 3.0f * radius + 16.0f;
+            const D2D1_RECT_F expanded = expandedRect(sourceRect, expansion);
+            if (!impl_->glowDirtyRectEnabled) {
+                return expanded;
+            }
+            const D2D1_RECT_F clamped = clampGlowRect(expanded);
+            // Keep the cropped target origin on the same device-pixel grid as
+            // the full-scene scratch. Otherwise a fractional crop origin can
+            // shift Direct2D antialias coverage even when the algebraic
+            // source/destination rectangles cancel out.
+            return D2D1::RectF(
+                std::floor(clamped.left + dx) - dx,
+                std::floor(clamped.top + dy) - dy,
+                std::ceil(clamped.right + dx) - dx,
+                std::ceil(clamped.bottom + dy) - dy
+            );
+        };
+
         const auto glowStart = Clock::now();
         ID2D1Bitmap1 *glowSource = nullptr;
         ID2D1Effect *blur = nullptr;
         std::vector<int> glowSigmas;
         D2D1_RECT_F glowSourceRect{};
+        D2D1_RECT_F glowEffectRect{};
         if (style.decorationKind == "glow"
             && !line->hasInlineStyles) {
-            glowSource = acquireGlowScratch();
-            blur = acquireGlowEffect();
-
             const int radius = std::max(
                 1,
                 static_cast<int>(std::lround(std::max(style.glowBeforeRadius, style.glowAfterRadius)))
@@ -4976,20 +5056,45 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             // Restrict the scratch clear and, at composite time, the blur
             // evaluation to the line's neighbourhood; Direct2D effects only
             // process the input needed for the requested output rectangle.
-            const float glowExpand = sourceWidth + 3.0f * radius + 16.0f;
             const D2D1_RECT_F glowContent = unionRect(
                 line->bounds, line->fillBounds
             );
-            glowSourceRect = expandedRect(glowContent, glowExpand);
+            glowSourceRect = glowOutputRect(
+                glowContent, sourceWidth, radius
+            );
             count(
                 frameDiagnostics.glowSourceAreaPx,
                 rectAreaPx(glowSourceRect)
             );
-            const D2D1_RECT_F glowClearRect = expandedRect(
-                glowSourceRect, 3.0f * radius + 16.0f
+            const D2D1_RECT_F glowClearRect = glowClearBounds(
+                glowSourceRect, radius
             );
+            glowSource = acquireGlowScratch(
+                glowClearRect.right - glowClearRect.left,
+                glowClearRect.bottom - glowClearRect.top
+            );
+            blur = acquireGlowEffect();
+            glowEffectRect = impl_->glowDirtyRectEnabled
+                ? D2D1::RectF(
+                    glowSourceRect.left - glowClearRect.left,
+                    glowSourceRect.top - glowClearRect.top,
+                    glowSourceRect.right - glowClearRect.left,
+                    glowSourceRect.bottom - glowClearRect.top
+                )
+                : D2D1::RectF(
+                    glowSourceRect.left + dx,
+                    glowSourceRect.top + dy,
+                    glowSourceRect.right + dx,
+                    glowSourceRect.bottom + dy
+                );
             context->SetTarget(glowSource);
-            context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
+            context->SetTransform(
+                impl_->glowDirtyRectEnabled
+                    ? D2D1::Matrix3x2F::Translation(
+                        -glowClearRect.left, -glowClearRect.top
+                    )
+                    : D2D1::Matrix3x2F::Translation(dx, dy)
+            );
             context->BeginDraw();
             pushAxisAlignedClip(
                 glowClearRect, D2D1_ANTIALIAS_MODE_ALIASED
@@ -5107,6 +5212,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             D2D1_MATRIX_3X2_F transform = D2D1::Matrix3x2F::Identity();
             bool hasTransform = false;
             D2D1_RECT_F sourceRect{};
+            D2D1_RECT_F effectRect{};
         };
         std::vector<RubyGlowLayer> rubyGlowLayers;
         // Grouped layers (rubyOnly < 0) collect every unit whose animation is
@@ -5187,8 +5293,6 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     * D2D1::Matrix3x2F::Translation(dx, dy);
                 layer.hasTransform = animationState.transformed;
             }
-            layer.source = acquireGlowScratch();
-            layer.blur = acquireGlowEffect();
             const float sourceWidth = std::max(0.0f, rubyStyle.rubyStrokeWidth)
                 + (rubyStyle.rubyStroke2Width > 0.0f
                     ? rubyStyle.rubyStroke2Width
@@ -5208,18 +5312,45 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     : ruby.bounds;
                 hasContent = true;
             }
-            layer.sourceRect = expandedRect(
-                content, sourceWidth + 3.0f * radius + 16.0f
+            if (!hasContent) {
+                return;
+            }
+            layer.sourceRect = glowOutputRect(
+                content, sourceWidth, radius
             );
             count(
                 frameDiagnostics.glowSourceAreaPx,
                 rectAreaPx(layer.sourceRect)
             );
-            const D2D1_RECT_F clearRect = expandedRect(
-                layer.sourceRect, 3.0f * radius + 16.0f
+            const D2D1_RECT_F clearRect = glowClearBounds(
+                layer.sourceRect, radius
             );
+            layer.source = acquireGlowScratch(
+                clearRect.right - clearRect.left,
+                clearRect.bottom - clearRect.top
+            );
+            layer.blur = acquireGlowEffect();
+            layer.effectRect = impl_->glowDirtyRectEnabled
+                ? D2D1::RectF(
+                    layer.sourceRect.left - clearRect.left,
+                    layer.sourceRect.top - clearRect.top,
+                    layer.sourceRect.right - clearRect.left,
+                    layer.sourceRect.bottom - clearRect.top
+                )
+                : D2D1::RectF(
+                    layer.sourceRect.left + dx,
+                    layer.sourceRect.top + dy,
+                    layer.sourceRect.right + dx,
+                    layer.sourceRect.bottom + dy
+                );
             context->SetTarget(layer.source);
-            context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
+            context->SetTransform(
+                impl_->glowDirtyRectEnabled
+                    ? D2D1::Matrix3x2F::Translation(
+                        -clearRect.left, -clearRect.top
+                    )
+                    : D2D1::Matrix3x2F::Translation(dx, dy)
+            );
             context->BeginDraw();
             pushAxisAlignedClip(
                 clearRect, D2D1_ANTIALIAS_MODE_ALIASED
@@ -5381,6 +5512,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             D2D1_MATRIX_3X2_F transform = D2D1::Matrix3x2F::Identity();
             bool hasTransform = false;
             D2D1_RECT_F sourceRect{};
+            D2D1_RECT_F effectRect{};
         };
         std::vector<InlineGlowLayer> inlineGlowLayers;
         // Grouped layers (charOnly < 0) collect every character whose
@@ -5459,8 +5591,6 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     * D2D1::Matrix3x2F::Translation(dx, dy);
                 layer.hasTransform = animationState.transformed;
             }
-            layer.source = acquireGlowScratch();
-            layer.blur = acquireGlowEffect();
             Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrush(
                 after ? charStyle.afterDecorPaint : charStyle.beforeDecorPaint,
                 line->fillBounds,
@@ -5470,29 +5600,104 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 + std::max(charStyle.stroke2Width, 0.0f)
                 + static_cast<float>(radius);
             const float pad = sourceWidth * 0.5f + radius * 3.0f + 2.0f;
+            bool hasContent = !impl_->glowDirtyRectEnabled;
             D2D1_RECT_F content = unionRect(line->bounds, line->fillBounds);
-            if (charOnly >= 0) {
-                const Impl::CachedChar &only = line->chars[
-                    static_cast<std::size_t>(charOnly)
-                ];
-                if (only.geometry != nullptr) {
-                    content = D2D1::RectF(
-                        only.left, only.top, only.right, only.bottom
+            if (impl_->glowDirtyRectEnabled) {
+                for (std::size_t charIndex = 0;
+                     charIndex < line->chars.size(); ++charIndex) {
+                    const Impl::CachedChar &ch = line->chars[charIndex];
+                    if ((charOnly >= 0
+                            && static_cast<int>(charIndex) != charOnly)
+                        || ch.styleIndex != styleIndex
+                        || characterOpacityAt(charIndex) <= 0.0f) {
+                        continue;
+                    }
+                    bool visible = false;
+                    if (charOnly >= 0) {
+                        if (ch.geometry != nullptr) {
+                            if (useUtopiaTransition) {
+                                const N3WipePhase phase = wipePhaseAt(
+                                    line->chars, charIndex
+                                );
+                                visible = after
+                                    ? phase != N3WipePhase::Before
+                                    : phase != N3WipePhase::After;
+                            } else {
+                                visible = !(rtl
+                                    ? ((after && wipeEdge >= ch.right)
+                                        || (!after && wipeEdge <= ch.left))
+                                    : ((after && wipeEdge <= ch.left)
+                                        || (!after && wipeEdge >= ch.right)));
+                            }
+                        }
+                    } else if (!charTransformedAt(charIndex)
+                               && charGeometryAt(charIndex) != nullptr) {
+                        if (useUtopiaTransition) {
+                            const N3WipePhase phase = wipePhaseAt(
+                                line->chars, charIndex
+                            );
+                            visible = after
+                                ? phase != N3WipePhase::Before
+                                : phase != N3WipePhase::After;
+                        } else {
+                            visible = !(rtl
+                                ? ((after && wipeEdge >= ch.right)
+                                    || (!after && wipeEdge <= ch.left))
+                                : ((after && wipeEdge <= ch.left)
+                                    || (!after && wipeEdge >= ch.right)));
+                        }
+                    }
+                    if (!visible) {
+                        continue;
+                    }
+                    const D2D1_RECT_F charBounds = D2D1::RectF(
+                        ch.left, ch.top, ch.right, ch.bottom
                     );
+                    content = hasContent
+                        ? unionRect(content, charBounds)
+                        : charBounds;
+                    hasContent = true;
                 }
             }
-            layer.sourceRect = expandedRect(
-                content, sourceWidth + 3.0f * radius + 16.0f
+            if (!hasContent) {
+                return;
+            }
+            layer.sourceRect = glowOutputRect(
+                content, sourceWidth, radius
             );
             count(
                 frameDiagnostics.glowSourceAreaPx,
                 rectAreaPx(layer.sourceRect)
             );
-            const D2D1_RECT_F clearRect = expandedRect(
-                layer.sourceRect, 3.0f * radius + 16.0f
+            const D2D1_RECT_F clearRect = glowClearBounds(
+                layer.sourceRect, radius
             );
+            layer.source = acquireGlowScratch(
+                clearRect.right - clearRect.left,
+                clearRect.bottom - clearRect.top
+            );
+            layer.blur = acquireGlowEffect();
+            layer.effectRect = impl_->glowDirtyRectEnabled
+                ? D2D1::RectF(
+                    layer.sourceRect.left - clearRect.left,
+                    layer.sourceRect.top - clearRect.top,
+                    layer.sourceRect.right - clearRect.left,
+                    layer.sourceRect.bottom - clearRect.top
+                )
+                : D2D1::RectF(
+                    layer.sourceRect.left + dx,
+                    layer.sourceRect.top + dy,
+                    layer.sourceRect.right + dx,
+                    layer.sourceRect.bottom + dy
+                );
             context->SetTarget(layer.source);
-            context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
+            context->SetTransform(
+                impl_->glowDirtyRectEnabled
+                    ? D2D1::Matrix3x2F::Translation(
+                        -clearRect.left, -clearRect.top
+                    )
+                    : D2D1::Matrix3x2F::Translation(dx, dy)
+            );
             context->BeginDraw();
             pushAxisAlignedClip(
                 clearRect, D2D1_ANTIALIAS_MODE_ALIASED
@@ -5723,7 +5928,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 context->DrawImage(
                     layer.blur,
                     D2D1::Point2F(imageRect.left, imageRect.top),
-                    imageRect
+                    layer.effectRect
                 );
             }
         }
@@ -5751,7 +5956,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 context->DrawImage(
                     layer.blur,
                     D2D1::Point2F(imageRect.left, imageRect.top),
-                    imageRect
+                    layer.effectRect
                 );
             }
         }
@@ -5773,7 +5978,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 context->DrawImage(
                     blur,
                     D2D1::Point2F(glowImageRect.left, glowImageRect.top),
-                    glowImageRect
+                    glowEffectRect
                 );
             }
         }

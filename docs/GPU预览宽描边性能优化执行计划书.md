@@ -278,13 +278,13 @@ Painter corpus（含本机真实 Dark Spiral `.n3proj` 切片）通过。60 秒�
 
 **任务**:
 
-- [ ] glow scratch bitmap / GaussianBlur effect / 目标纹理常驻复用
+- [x] glow scratch bitmap / GaussianBlur effect / 目标纹理常驻复用
   (现有池化基础上按未来 worker 隔离);
-- [ ] glow source 边界 = 行内实际字符包围盒 ∪ 主描边 ∪ stroke2 ∪ blur padding,
+- [x] glow source 边界 = 行内实际字符包围盒 ∪ 主描边 ∪ stroke2 ∪ blur padding,
   不用整画布(N3 用整画布,此处超越 N3;包围盒复用阶段 1 缓存);
-- [ ] 稳定字符合并进行级 glow source,动态字符单独动态层;
-- [ ] before/after、ruby、正文、标题、角色样式的 glow key 不得串色;
-- [ ] 验证 Utopia 开场最左侧无多余 before 蓝光、注音开头不丢发光
+- [x] 稳定字符合并进行级 glow source,动态字符单独动态层;
+- [x] before/after、ruby、正文、标题、角色样式的 glow key 不得串色;
+- [x] 验证 Utopia 开场最左侧无多余 before 蓝光、注音开头不丢发光
   (历史回归点,进视觉对照集)。
 
 **验收门禁**:glow_source_area_px 计数显著下降;三档 glow 视觉门禁通过;
@@ -294,6 +294,43 @@ Painter corpus（含本机真实 Dark Spiral `.n3proj` 切片）通过。60 秒�
 
 **新风险与防护**:脏矩形算小 → 发光被裁边:padding 公式进单元测试,
 视觉对照集加 50px 描边 + 大 glow 组合。
+
+### 阶段 3 实测结果(2026-07-21)
+
+`KROK_GPU_GLOW_DIRTY_RECT=1` 时，scratch pool 从固定 1920×1080 改为按每层脏区
+尺寸单调增长并复用（每行复位游标、最多保留 8 个槽位），GaussianBlur effect 和最终
+frame target 继续常驻。每个裁剪原点对齐到原整画布的设备像素网格；正文/标题沿用完整
+行几何包围盒，ruby 沿用完整注音包围盒，行内角色样式只合并本样式当前可见的稳定字符，
+Utopia/spin 动态字符仍保持独立的“先 blur 后 transform”层。输出和输入依赖区继续保留
+`3σ + 16px` 安全尾部；曾尝试更小 padding，但 viewport 回归能捕获 4~7px 低透明度
+尾部裁切，因此没有以画质换面积。
+
+最终固定工程成对 80 帧 A/B（dirty off→on，realization 全热）：
+
+| 指标 | 关闭 | 开启 | 变化 |
+|---|---:|---:|---:|
+| render mean | 16.120ms | 16.011ms | -0.68% |
+| render p95 | 28.653ms | 26.373ms | -7.96% |
+| 诊断缓存估算（含 glow） | 34.11MB | 4.43MB | -87.0% |
+| D3D 本地显存占用 | 60.49MB | 31.92MB | -47.2% |
+
+四时间点 `glow_source_area_px` 分别下降 34.4% / 34.4% / 44.0% / 1.2%，合计
+下降约 33%；T4 只有短行且原边界已紧，故收益很小。最终 14px+7px 均值进入
+16.67ms 预算，但 p95 仍为 26.37ms，阶段 4 必须按硬关卡重新复验，不能据单次均值
+直接进入多 worker。
+
+三档 glow × 50px 主描边 × 7px 二重描边 × Utopia × ruby 的 dirty/full A/B
+`3 passed`，边界差 ≤2px、全通道 MAE <0.5；关 glow 开关 A/B checksum 完全一致。
+全部 glow 定向用例 `24 passed`，Painter corpus（含真实 Dark Spiral `.n3proj`）通过。
+60 秒真实 GUI 压测 `passed=true`，renderer failure/restart/fallback 均为 0，sidecar
+RSS +2.40MiB，结束时 D3D 本地显存 24.90MB。GPU backend 全文件为
+`159 passed, 1 skipped, 3 failed`，仍仅为阶段 0 登记的三个 Painter/GPU 边界基线。
+
+归档文件：
+
+- `build/gpu-widestroke-stage3-final2-dirty-{off,on}-hardware-20260721.csv`；
+- `build/gpu-widestroke-stage3-stress-hardware-20260721.json`；
+- `build/gpu-stage3-painter-corpus/result.json`。
 
 ## 5. 阶段 4:单 worker 复验关卡(硬关卡)
 

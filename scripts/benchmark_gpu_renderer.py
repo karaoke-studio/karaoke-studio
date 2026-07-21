@@ -599,6 +599,9 @@ def run_benchmark(
         "realization_prewarm_ms": round(
             float(end_diagnostics.get("realization_prewarm_ms", 0.0)), 4
         ),
+        "glow_dirty_rect_enabled": bool(
+            end_diagnostics.get("glow_dirty_rect_enabled", False)
+        ),
         "sidecar_rss_warmup_bytes": warm_rss_bytes,
         "sidecar_rss_end_bytes": end_rss_bytes,
         "sidecar_rss_growth_bytes": end_rss_bytes - warm_rss_bytes,

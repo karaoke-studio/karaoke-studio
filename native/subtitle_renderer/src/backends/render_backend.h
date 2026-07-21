@@ -381,6 +381,7 @@ struct BackendDiagnostics {
     std::uint64_t realizationCapacity = 0;
     std::uint64_t realizationPrewarmSkipped = 0;
     double realizationPrewarmMs = 0.0;
+    bool glowDirtyRectEnabled = true;
 };
 
 class BackendError : public std::runtime_error {

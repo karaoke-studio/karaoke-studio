@@ -2065,6 +2065,124 @@ def test_gpu_g1_n3_glow_concentration_adds_blur_passes(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("concentration", [0, 1, 2])
+def test_gpu_glow_dirty_scratch_matches_full_surface_for_wide_utopia_ruby(
+    monkeypatch,
+    concentration: int,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("KROK_GPU_REALIZATION", "0")
+    track, base_style = _g4_utopia_ruby_scene()
+    style = replace(
+        base_style,
+        stroke_width_px=50,
+        latin_stroke_width_px=50,
+        stroke2_enabled=True,
+        stroke2_width_px=7,
+        latin_stroke2_enabled=True,
+        latin_stroke2_width_px=7,
+        glow_before_radius_px=12,
+        glow_after_radius_px=12,
+        glow_concentration_level=concentration,
+        ruby_stroke_width_px=10,
+        ruby_stroke2_enabled=True,
+        ruby_stroke2_width_px=5,
+        ruby_glow_before_radius_px=8,
+        ruby_glow_after_radius_px=8,
+        ruby_glow_concentration_level=concentration,
+    )
+    timestamps = (100, 350, 700, 1_250, 2_400, 3_600)
+
+    def render(enabled: bool) -> tuple[list[dict], list[bytes]]:
+        monkeypatch.setenv(
+            "KROK_GPU_GLOW_DIRTY_RECT", "1" if enabled else "0"
+        )
+        events: list[dict] = []
+        payloads: list[bytes] = []
+        with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+            renderer.configure_gpu(
+                track, style, width=640, height=360, fps=60,
+                force_warp=False,
+            )
+            reader: SharedFrameRingReader | None = None
+            try:
+                for frame_index, t_ms in enumerate(timestamps):
+                    event = renderer.render_gpu_frame(
+                        t_ms, force_warp=False, frame_index=frame_index
+                    )
+                    events.append(event)
+                    if reader is None:
+                        reader = SharedFrameRingReader.from_event(event)
+                        reader.attach()
+                    image = reader.read_qimage(event).convertToFormat(
+                        QImage.Format.Format_RGBA8888
+                    )
+                    bits = image.constBits()
+                    bits.setsize(image.sizeInBytes())
+                    payloads.append(bytes(bits))
+            finally:
+                if reader is not None:
+                    reader.close()
+        return events, payloads
+
+    dirty_events, dirty_frames = render(True)
+    full_events, full_frames = render(False)
+
+    assert sum(event["glow_source_area_px"] for event in dirty_events) < (
+        sum(event["glow_source_area_px"] for event in full_events) * 0.75
+    )
+    for t_ms, dirty, full in zip(timestamps, dirty_frames, full_frames):
+        dirty_bounds = _payload_alpha_bounds(dirty)
+        full_bounds = _payload_alpha_bounds(full)
+        assert all(
+            abs(actual - expected) <= 2
+            for actual, expected in zip(
+                dirty_bounds,
+                full_bounds,
+            )
+        ), (t_ms, dirty_bounds, full_bounds)
+        deltas = [abs(a - b) for a, b in zip(dirty, full)]
+        mean_delta = sum(deltas) / len(deltas)
+        large_delta_count = sum(delta > 8 for delta in deltas)
+        assert mean_delta < 0.5, (t_ms, mean_delta)
+        assert large_delta_count < 5_000, (t_ms, large_delta_count)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_glow_dirty_rect_switch_is_zero_cost_when_glow_is_disabled(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("KROK_GPU_REALIZATION", "0")
+    style = _g1_style(
+        stroke_width_px=14,
+        stroke2_width_px=7,
+        decoration_kind="none",
+    )
+
+    def render(enabled: bool) -> tuple[dict, dict]:
+        monkeypatch.setenv(
+            "KROK_GPU_GLOW_DIRTY_RECT", "1" if enabled else "0"
+        )
+        with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+            configured = renderer.configure_gpu(
+                _g1_track(), style, width=640, height=360, fps=60,
+                force_warp=False,
+            )
+            frame = renderer.render_gpu_frame(750, force_warp=False)
+        return configured, frame
+
+    dirty_config, dirty_frame = render(True)
+    full_config, full_frame = render(False)
+
+    assert dirty_config["glow_dirty_rect_enabled"] is True
+    assert full_config["glow_dirty_rect_enabled"] is False
+    assert dirty_frame["glow_source_area_px"] == 0
+    assert full_frame["glow_source_area_px"] == 0
+    assert dirty_frame["checksum"] == full_frame["checksum"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g3_ruby_has_independent_geometry_and_wipe(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     style = _g1_style(
