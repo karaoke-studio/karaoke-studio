@@ -958,6 +958,83 @@ def test_preview_window_button_is_anchored_to_preview_tab_only(qapp, monkeypatch
     win.close()
 
 
+def test_layout_issue_button_lists_and_jumps_to_problem_line(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar(text="短句", start_ms=1_000)], end_ms=2_000),
+            TimingLine(
+                chars=[TimingChar(text="这是一句超长歌词", start_ms=4_200)],
+                end_ms=5_000,
+            ),
+        ]
+    )
+    warning = mw.LayoutMarginWarning(
+        line_index=1,
+        text="这是一句超长歌词",
+        level="overflow",
+        left=-20,
+        right=1940,
+    )
+    monkeypatch.setattr(
+        mw,
+        "check_layout_margins",
+        lambda _track, _style, _width: [warning],
+    )
+    toast_calls: list[dict] = []
+    monkeypatch.setattr(
+        mw.InfoBar,
+        "warning",
+        lambda **kwargs: toast_calls.append(kwargs),
+    )
+    preview_calls: list[bool] = []
+    monkeypatch.setattr(
+        win,
+        "_show_preview_window",
+        lambda: preview_calls.append(True),
+    )
+
+    win._apply_timing_track(track, None)
+    win._check_layout_margins()
+    win.resize(1280, 720)
+    win._video_settings_panel.set_populated(True)
+    win.show()
+    qapp.processEvents()
+
+    assert toast_calls
+    assert win._layout_issues_button.isVisible() is True
+    assert (
+        win._layout_issues_button.geometry().right()
+        < win._show_preview_btn.geometry().left()
+    )
+    assert win._layout_issues_button.toolTip() == "当前歌词问题（1 条）"
+
+    win._show_layout_issues()
+    qapp.processEvents()
+    dialog = win._layout_issues_dialog
+    assert dialog is not None
+    assert dialog._list_widget.count() == 1
+    item = dialog._list_widget.item(0)
+    assert "主字幕 · 第 2 行" in item.text()
+    assert "字幕溢出画面" in item.text()
+
+    dialog._list_widget.itemClicked.emit(item)
+    qapp.processEvents()
+    assert win._lyrics_panel.table_widget.currentRow() == 1
+    assert win._transport_bar.current_time_ms == 4_200
+    assert preview_calls == [True]
+
+    monkeypatch.setattr(
+        mw,
+        "check_layout_margins",
+        lambda _track, _style, _width: [],
+    )
+    win._check_layout_margins()
+    assert win._layout_issues_button.isHidden() is True
+    assert dialog._summary_label.text().startswith("未发现歌词布局问题")
+    win.close()
+
+
 def test_playback_shortcut_is_disabled_outside_preview_tab(qapp, monkeypatch):
     win = _make_window(qapp, monkeypatch)
     toggles: list[bool] = []

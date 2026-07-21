@@ -1203,6 +1203,23 @@ class LyricsPanel(DropPanel):
     def table_widget(self) -> FluentTableWidget:
         return self._table
 
+    def select_row(self, row: int) -> bool:
+        """Select and reveal one lyrics row without emitting a click action."""
+        if not 0 <= int(row) < self._table.rowCount():
+            return False
+        row = int(row)
+        item = self._table.item(row, COL_CONTENT) or self._table.item(row, COL_LANE)
+        if item is None:
+            return False
+        self._table.clearSelection()
+        self._table.selectRow(row)
+        self._table.setCurrentItem(item)
+        self._table.scrollToItem(
+            item,
+            QAbstractItemView.ScrollHint.PositionAtCenter,
+        )
+        return True
+
     # ------------------------------------------------------------------ private
 
     def _visible_rows(self) -> range:

@@ -3898,6 +3898,7 @@ class PropertyPanel(QWidget):
         self._navigation_row = navigation_row
         self._navigation_layout = navigation_layout
         self._navigation_action: Optional[QWidget] = None
+        self._navigation_actions: list[QWidget] = []
 
         self._navigation = SegmentedWidget(navigation_row)
         self._navigation.setObjectName("PropertyNavigation")
@@ -3939,25 +3940,36 @@ class PropertyPanel(QWidget):
 
     def set_navigation_action(self, widget: Optional[QWidget]) -> None:
         """Place one host action at the far right of the property tab row."""
-        previous = self._navigation_action
-        if previous is widget:
+        self.set_navigation_actions([] if widget is None else [widget])
+
+    def set_navigation_actions(self, widgets: list[QWidget]) -> None:
+        """Place host actions at the far right of the property tab row.
+
+        Actions are laid out from left to right in the supplied order.  The
+        singular ``set_navigation_action`` API remains available for existing
+        embedders.
+        """
+        if self._navigation_actions == widgets:
             return
-        if previous is not None:
+        for previous in self._navigation_actions:
             self._navigation_layout.removeWidget(previous)
-            previous.setParent(None)
-        self._navigation_action = widget
-        if widget is None:
+            if previous not in widgets:
+                previous.setParent(None)
+        self._navigation_actions = list(widgets)
+        self._navigation_action = widgets[-1] if widgets else None
+        if not widgets:
             return
-        widget.setParent(self._navigation_row)
         first_route = self._PAGE_SPECS[0][0]
         first_tab = self._navigation.widget(first_route)
-        if first_tab is not None:
-            widget.setFixedHeight(max(first_tab.sizeHint().height(), 1))
-        self._navigation_layout.addWidget(
-            widget,
-            0,
-            Qt.AlignmentFlag.AlignVCenter,
-        )
+        height = max(first_tab.sizeHint().height(), 1) if first_tab is not None else 1
+        for widget in widgets:
+            widget.setParent(self._navigation_row)
+            widget.setFixedHeight(height)
+            self._navigation_layout.addWidget(
+                widget,
+                0,
+                Qt.AlignmentFlag.AlignVCenter,
+            )
 
     def _add_navigation_page(
         self,
