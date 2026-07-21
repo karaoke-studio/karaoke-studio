@@ -1733,3 +1733,10 @@ G6 首批架构与本机性能门槛已落地，仍不得默认开启。下一�
   Painter 与 Direct2D `reading_units` 路径使用同一自动分支。历史 `checkpoint_segments` 保持不变。
 - 回归钉住 `d` 起点对应正文 `デ` 起点（2/5）和 `y` 起点对应 `ィ` 起点（3/5），并保留“正文
   无内部边界时按注音字符映射”的既有覆盖；真实 WARP GPU 帧与 Painter 比例差门禁通过。
+
+### 2026-07-21（第四十八批）：导出全量 realization 屏障与有界多 worker
+
+- GPU 导出不再复用预览的 8192 项 realization 容量：第一帧前按 256 MiB 默认预算把容量扩到 65536，等待所有主字幕/副字幕的 fill、protected stroke、stroke、stroke2 任务完成，并以 5% 粒度报告准备进度；等待过程可取消，超大工程仍受 8192～262144 动态上限约束。真实 4K 工程共 2117 项任务在 `1.82s` 内完成，首帧诊断为 realization miss 0。
+- sidecar 硬件导出新增 2/4 worker 独立 Direct2D context 与有界共享环。完成事件可乱序返回，但 Python 仅保留一个 ring window，按 `frame_index` 严格顺序交付 ffmpeg；释放在途 credit 后才回写响应，避免消费者立即复用槽位时误报 queue full。产品硬上限为 4，WARP 固定为 1。
+- 真实 `25 m.n3proj` 4K60、30 秒背景解码 + overlay + NVENC 端到端结果：1/2/4 worker 分别为 `82.46/80.45/83.88s`（`21.83/22.37/21.46fps`）；ffmpeg 管道累计等待 `24.66/17.50/15.27s`，sidecar 峰值 RSS `208/330/548 MiB`，DXGI 本地显存占用 `177/354/709 MiB`。2 worker 仅快约 2.5%，但连续两轮都优于 1；4 worker 因重复 realization、额外 context 和下游瓶颈反而变慢，因此硬件默认 2、保留环境变量选择 1～4，不照搬 N3 的 8 worker。
+- 顺序/资源门禁覆盖乱序完成、ring window 上限、取消和诊断回收。1/2/4 输出均为 1800 帧；独立 context 首次命中新内容存在 Direct2D 栅格缓存的微小非位级差异（同一 4K 帧 19 像素、最大通道差 2），会改变有损编码 GOP 哈希，但不是丢帧或错序。Python 导出测试 `61 passed`，真实 native worker/流水线/realization 定向测试 `3 passed`。

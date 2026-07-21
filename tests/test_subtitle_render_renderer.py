@@ -661,6 +661,28 @@ def test_gpu_export_request_is_explicit_and_defaults_off(monkeypatch, tmp_path):
     ) is True
 
 
+def test_gpu_export_worker_count_is_bounded_and_warp_stays_serial(monkeypatch):
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_WORKERS", raising=False)
+    assert renderer._gpu_export_worker_count(force_warp=False) == 2
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_WORKERS", "2")
+    assert renderer._gpu_export_worker_count(force_warp=False) == 2
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_WORKERS", "8")
+    assert renderer._gpu_export_worker_count(force_warp=False) == 4
+    assert renderer._gpu_export_worker_count(force_warp=True) == 1
+
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_WORKERS", "invalid")
+    assert renderer._gpu_export_worker_count(force_warp=False) == 2
+
+
+def test_gpu_export_diagnostics_flag(monkeypatch):
+    monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_DIAGNOSTICS", raising=False)
+    assert renderer._gpu_export_diagnostics_enabled() is False
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_DIAGNOSTICS", "true")
+    assert renderer._gpu_export_diagnostics_enabled() is True
+
+
 def test_render_uses_gpu_subtitle_export_without_changing_encoder(monkeypatch, tmp_path):
     job = replace(
         _job(tmp_path),

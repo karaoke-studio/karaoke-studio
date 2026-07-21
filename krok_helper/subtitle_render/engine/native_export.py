@@ -101,7 +101,7 @@ def _wait_for_gpu_export_realizations(
     force_warp: bool,
     should_cancel: Callable[[], bool] | None,
     on_progress: Callable[[int, int], None] | None,
-) -> None:
+) -> dict[str, object]:
     """Wait for export-wide realization prewarm before submitting frame zero."""
 
     diagnostics = configured
@@ -124,6 +124,7 @@ def _wait_for_gpu_export_realizations(
             on_progress(min(completed, total), total)
     if on_progress is not None:
         on_progress(total, total)
+    return diagnostics
 
 
 def shared_slot_rgba_bytes(slot: SharedFrameSlot) -> bytes:
@@ -268,8 +269,10 @@ def iter_gpu_rgba_frames(
     renderer_path: str | os.PathLike[str] | None = None,
     extra_tracks: list[TimingTrack] | None = None,
     force_warp: bool = False,
+    worker_count: int = 1,
     should_cancel: Callable[[], bool] | None = None,
     on_prepare_progress: Callable[[int, int], None] | None = None,
+    on_diagnostics: Callable[[dict[str, object]], None] | None = None,
 ) -> Iterator[bytes]:
     """Yield straight RGBA frames from the Direct2D GPU export path.
 
@@ -277,10 +280,10 @@ def iter_gpu_rgba_frames(
     shared-memory reader expands those bands into a transparent QImage before
     converting premultiplied BGRA to ffmpeg's straight RGBA input format.
 
-    The request stream is pipelined one frame deep over a two-slot ring (G7):
-    frame N+1 is already rendering in the sidecar while this process expands
-    and converts frame N, so the GPU render/readback overlaps the Python-side
-    band expansion instead of strictly serialising with it.
+    One worker keeps the original one-frame-deep two-slot pipeline. Hardware
+    exports may use up to four independent Direct2D workers; completed frames
+    are held in a ring-sized reorder window and yielded strictly in timestamp
+    order, so ffmpeg never observes out-of-order input.
     """
     from PyQt6.QtGui import QImage
 
@@ -304,15 +307,23 @@ def iter_gpu_rgba_frames(
                 fps=fps,
                 force_warp=force_warp,
                 extra_tracks=extra_tracks,
+                worker_count=max(1, min(int(worker_count), 4)),
                 realization_capacity=gpu_export_realization_capacity(),
             )
-            _wait_for_gpu_export_realizations(
+            diagnostics = _wait_for_gpu_export_realizations(
                 renderer,
                 configured,
                 force_warp=force_warp,
                 should_cancel=should_cancel,
                 on_progress=on_prepare_progress,
             )
+            if on_diagnostics is not None:
+                on_diagnostics(diagnostics)
+
+            active_workers = max(
+                1, min(int(configured.get("worker_count", 1) or 1), 4)
+            )
+            slot_count = 2 if active_workers == 1 else active_workers
 
             def begin_frame(frame_index: int) -> None:
                 t_ms = int(round(frame_index * 1000 / max(int(fps), 1)))
@@ -325,15 +336,16 @@ def iter_gpu_rgba_frames(
                     include_checksum=False,
                     readback_bands=True,
                     slot_count=slot_count,
+                    request_serial=frame_index,
                 )
 
-            begin_frame(0)
-            for frame_index in range(frame_total):
-                if should_cancel is not None and should_cancel():
-                    raise ExportCancelled("已停止导出。")
-                event = renderer.finish_render_gpu_frame()
-                if frame_index + 1 < frame_total:
-                    begin_frame(frame_index + 1)
+            def consume_event(event: dict[str, object], frame_index: int) -> bytes:
+                nonlocal reader
+                if event.get("event") != "gpu_frame_ready":
+                    raise NativeRendererError(
+                        "GPU export frame was not delivered: "
+                        f"{event.get('event', 'unknown')}"
+                    )
                 if reader is None:
                     reader = SharedFrameRingReader.from_event(event)
                     reader.attach()
@@ -347,7 +359,67 @@ def iter_gpu_rgba_frames(
                     ) from exc
                 bits = image.constBits()
                 bits.setsize(image.sizeInBytes())
-                yield bytes(bits)
+                return bytes(bits)
+
+            if active_workers == 1:
+                begin_frame(0)
+                for frame_index in range(frame_total):
+                    if should_cancel is not None and should_cancel():
+                        raise ExportCancelled("已停止导出。")
+                    event = renderer.finish_render_gpu_frame()
+                    if frame_index + 1 < frame_total:
+                        begin_frame(frame_index + 1)
+                    yield consume_event(event, frame_index)
+            else:
+                # Each slot owns the arithmetic sequence ``slot + n * slots``.
+                # A slot is reused only after its previous QImage has been
+                # copied, while a one-window reorder bound prevents a fast
+                # worker from buffering an unbounded number of 4K frames.
+                in_flight: set[int] = set()
+                free_slots: set[int] = set()
+                next_for_slot = [slot for slot in range(slot_count)]
+                pending: dict[int, bytes] = {}
+                next_emit = 0
+
+                def submit_slot(slot: int) -> None:
+                    frame_index = next_for_slot[slot]
+                    begin_frame(frame_index)
+                    in_flight.add(frame_index)
+                    next_for_slot[slot] += slot_count
+
+                for slot in range(min(slot_count, frame_total)):
+                    submit_slot(slot)
+
+                while next_emit < frame_total:
+                    if should_cancel is not None and should_cancel():
+                        raise ExportCancelled("已停止导出。")
+                    event = renderer.finish_render_gpu_frame()
+                    frame_index = int(event.get("frame_index", -1) or 0)
+                    if frame_index not in in_flight or frame_index in pending:
+                        raise NativeRendererError(
+                            f"unexpected GPU export frame index: {frame_index}"
+                        )
+                    in_flight.remove(frame_index)
+                    slot = frame_index % slot_count
+                    pending[frame_index] = consume_event(event, frame_index)
+                    free_slots.add(slot)
+
+                    while next_emit in pending:
+                        yield pending.pop(next_emit)
+                        next_emit += 1
+
+                    reorder_limit = next_emit + slot_count
+                    for free_slot in sorted(tuple(free_slots)):
+                        candidate = next_for_slot[free_slot]
+                        if candidate >= frame_total:
+                            free_slots.remove(free_slot)
+                            continue
+                        if candidate >= reorder_limit:
+                            continue
+                        submit_slot(free_slot)
+                        free_slots.remove(free_slot)
+            if on_diagnostics is not None:
+                on_diagnostics(renderer.gpu_diagnostics(force_warp=force_warp))
     finally:
         if reader is not None:
             reader.close()

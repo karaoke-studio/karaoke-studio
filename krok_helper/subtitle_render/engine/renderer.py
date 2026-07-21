@@ -11,6 +11,7 @@ import math
 import os
 import subprocess
 import threading
+import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
@@ -568,6 +569,25 @@ def _gpu_force_warp() -> bool:
     )
 
 
+def _gpu_export_worker_count(*, force_warp: bool) -> int:
+    if force_warp:
+        return 1
+    raw = os.environ.get("KROK_SUBTITLE_GPU_EXPORT_WORKERS", "2")
+    try:
+        return max(1, min(int(raw), 4))
+    except ValueError:
+        return 2
+
+
+def _gpu_export_diagnostics_enabled() -> bool:
+    return os.environ.get("KROK_SUBTITLE_GPU_EXPORT_DIAGNOSTICS", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _paint_overlay_strip(
     buffer: QImage,
     track: TimingTrack,
@@ -904,6 +924,12 @@ def _write_frames_gpu(
     """Write Direct2D band-readback frames to the existing ffmpeg pipe."""
     written = 0
     last_prepare_bucket = -1
+    force_warp = _gpu_force_warp()
+    worker_count = _gpu_export_worker_count(force_warp=force_warp)
+    logger(f"GPU 字幕导出流水线: {worker_count} 个 worker")
+    diagnostics_enabled = _gpu_export_diagnostics_enabled()
+    ffmpeg_wait_seconds = 0.0
+    gpu_diagnostics: dict[str, object] = {}
 
     def on_prepare_progress(done: int, total: int) -> None:
         nonlocal last_prepare_bucket
@@ -914,6 +940,9 @@ def _write_frames_gpu(
         last_prepare_bucket = bucket
         logger(f"正在准备 GPU 字幕资源… {done}/{total}（{percent}%）")
 
+    def on_diagnostics(values: dict[str, object]) -> None:
+        gpu_diagnostics.update(values)
+
     for frame in iter_gpu_rgba_frames(
         job.track,
         job.style,
@@ -923,16 +952,32 @@ def _write_frames_gpu(
         total_frames=total_frames,
         renderer_path=renderer_path,
         extra_tracks=list(job.extra_tracks),
-        force_warp=_gpu_force_warp(),
+        force_warp=force_warp,
+        worker_count=worker_count,
         should_cancel=should_cancel,
         on_prepare_progress=on_prepare_progress,
+        on_diagnostics=on_diagnostics if diagnostics_enabled else None,
     ):
         if should_cancel is not None and should_cancel():
             raise ExportCancelled("已停止导出。")
+        write_started = time.perf_counter()
         process.stdin.write(frame)
+        ffmpeg_wait_seconds += time.perf_counter() - write_started
         written += 1
         if on_progress is not None:
             on_progress(written, total_frames)
+    if diagnostics_enabled:
+        local_usage_mb = int(
+            gpu_diagnostics.get("local_video_memory_usage_bytes", 0) or 0
+        ) / (1024 * 1024)
+        local_budget_mb = int(
+            gpu_diagnostics.get("local_video_memory_budget_bytes", 0) or 0
+        ) / (1024 * 1024)
+        logger(
+            "GPU 导出诊断: "
+            f"ffmpeg 管道等待 {ffmpeg_wait_seconds:.3f}s；"
+            f"本地显存 {local_usage_mb:.1f}/{local_budget_mb:.1f} MiB"
+        )
 
 
 def _write_frames_single(

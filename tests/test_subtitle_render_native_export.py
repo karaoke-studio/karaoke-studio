@@ -336,6 +336,7 @@ class _FakeGpuRingReader:
 
 class _FakeGpuRendererProcess:
     instances = []
+    reverse_completions = False
 
     def __init__(self, *args, **kwargs):
         self.configures = []
@@ -358,6 +359,7 @@ class _FakeGpuRendererProcess:
             "realization_prewarm_complete": True,
             "realization_prewarm_tasks": 0,
             "realization_count": 0,
+            "worker_count": int(kwargs.get("worker_count", 1)),
         }
 
     def begin_render_gpu_frame(self, t_ms, **kwargs):
@@ -373,7 +375,15 @@ class _FakeGpuRendererProcess:
         self.max_pending = max(self.max_pending, len(self.pending))
 
     def finish_render_gpu_frame(self):
-        return self.pending.pop(0)
+        return self.pending.pop(-1 if self.reverse_completions else 0)
+
+    def gpu_diagnostics(self, *, force_warp=False):
+        return {
+            "ok": True,
+            "event": "gpu_diagnostics",
+            "force_warp": force_warp,
+            "local_video_memory_usage_bytes": 123,
+        }
 
     def render_gpu_frame(self, t_ms, **kwargs):
         self.begin_render_gpu_frame(t_ms, **kwargs)
@@ -413,3 +423,68 @@ def test_iter_gpu_rgba_frames_uses_banded_readback_and_straight_rgba(monkeypatch
     assert process.pending == []
     assert _FakeGpuRingReader.instances[-1].attached is True
     assert _FakeGpuRingReader.instances[-1].closed is True
+
+
+def test_iter_gpu_rgba_frames_reorders_bounded_multiworker_results(monkeypatch) -> None:
+    _FakeGpuRendererProcess.instances.clear()
+    _FakeGpuRingReader.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _FakeGpuRendererProcess)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+
+    _FakeGpuRendererProcess.reverse_completions = False
+    serial = list(
+        ne.iter_gpu_rgba_frames(
+            _track(), Style(), width=1, height=1, fps=4, total_frames=6
+        )
+    )
+    _FakeGpuRendererProcess.reverse_completions = True
+    diagnostics = []
+    try:
+        parallel = list(
+            ne.iter_gpu_rgba_frames(
+                _track(),
+                Style(),
+                width=1,
+                height=1,
+                fps=4,
+                total_frames=6,
+                worker_count=2,
+                on_diagnostics=diagnostics.append,
+            )
+        )
+    finally:
+        _FakeGpuRendererProcess.reverse_completions = False
+
+    assert parallel == serial
+    process = _FakeGpuRendererProcess.instances[-1]
+    assert process.configures[0][1]["worker_count"] == 2
+    assert process.max_pending <= 2
+    assert process.pending == []
+    assert all(item[1]["slot_count"] == 2 for item in process.frames)
+    assert [item[1]["request_serial"] for item in process.frames] == list(range(6))
+    assert diagnostics[-1]["local_video_memory_usage_bytes"] == 123
+
+
+def test_iter_gpu_rgba_frames_multiworker_cancel_closes_transport(monkeypatch) -> None:
+    _FakeGpuRendererProcess.instances.clear()
+    _FakeGpuRingReader.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _FakeGpuRendererProcess)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+
+    with pytest.raises(ExportCancelled):
+        list(
+            ne.iter_gpu_rgba_frames(
+                _track(),
+                Style(),
+                width=1,
+                height=1,
+                fps=4,
+                total_frames=6,
+                worker_count=4,
+                should_cancel=lambda: True,
+            )
+        )
+
+    process = _FakeGpuRendererProcess.instances[-1]
+    assert process.max_pending == 4
+    assert _FakeGpuRingReader.instances == []

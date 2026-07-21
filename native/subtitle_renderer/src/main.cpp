@@ -513,9 +513,13 @@ struct SharedFrameRing {
     QString pixelFormat = QStringLiteral("rgba8888");
 };
 
+void writeJson(const QJsonObject &object);
+
 class GpuPreviewWorkerPool {
 public:
-    using Work = std::function<void(krok::subtitle::native::RenderBackend &, int)>;
+    using Work = std::function<QJsonObject(
+        krok::subtitle::native::RenderBackend &, int
+    )>;
 
     GpuPreviewWorkerPool(bool forceWarp, int workerCount)
         : forceWarp_(forceWarp), workerCount_(std::clamp(workerCount, 1, 8)) {
@@ -597,7 +601,23 @@ public:
         std::unique_lock<std::mutex> lock(mutex_);
         drained_.wait(lock, [this]() { return outstanding_ == 0; });
         lock.unlock();
-        return backends_.front()->diagnostics();
+        auto aggregate = backends_.front()->diagnostics();
+        for (std::size_t index = 1; index < backends_.size(); ++index) {
+            const auto current = backends_[index]->diagnostics();
+            aggregate.estimatedCacheBytes += current.estimatedCacheBytes;
+            aggregate.realizationPrewarmComplete =
+                aggregate.realizationPrewarmComplete
+                && current.realizationPrewarmComplete;
+            aggregate.realizationCount += current.realizationCount;
+            aggregate.realizationCapacity += current.realizationCapacity;
+            aggregate.realizationPrewarmTasks += current.realizationPrewarmTasks;
+            aggregate.realizationPrewarmSkipped += current.realizationPrewarmSkipped;
+            aggregate.realizationPrewarmMs = std::max(
+                aggregate.realizationPrewarmMs,
+                current.realizationPrewarmMs
+            );
+        }
+        return aggregate;
     }
 
 private:
@@ -613,7 +633,9 @@ private:
                 work = std::move(queue_.front());
                 queue_.pop_front();
             }
-            work(*backends_[static_cast<std::size_t>(workerIndex)], workerIndex);
+            QJsonObject result = work(
+                *backends_[static_cast<std::size_t>(workerIndex)], workerIndex
+            );
             {
                 std::lock_guard<std::mutex> lock(mutex_);
                 --outstanding_;
@@ -621,6 +643,10 @@ private:
                     drained_.notify_all();
                 }
             }
+            // Publish only after releasing one in-flight credit.  An export
+            // consumer may immediately submit the next frame for the freed
+            // ring slot as soon as it receives this response.
+            writeJson(result);
         }
     }
 
@@ -7758,8 +7784,7 @@ std::optional<QJsonObject> handleRenderGpuFrame(
                 dropped.insert(QStringLiteral("generation"), generation);
                 dropped.insert(QStringLiteral("request_serial"), requestSerial);
                 dropped.insert(QStringLiteral("reason"), QStringLiteral("generation_cancelled"));
-                writeJson(dropped);
-                return;
+                return dropped;
             }
             QJsonObject workerRequest = requestSnapshot;
             workerRequest.insert(QStringLiteral("worker_index"), workerIndex);
@@ -7772,7 +7797,7 @@ std::optional<QJsonObject> handleRenderGpuFrame(
                 out.insert(QStringLiteral("request_serial"), requestSerial);
                 out.insert(QStringLiteral("reason"), QStringLiteral("generation_cancelled"));
             }
-            writeJson(out);
+            return out;
         }
     );
     if (!accepted) {
