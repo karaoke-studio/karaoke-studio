@@ -826,6 +826,8 @@ class TransportBar(QWidget):
 
     def play(self) -> None:
         """开始播放。有音频用 ``QMediaPlayer``；无音频走视觉 tick。"""
+        if self._playback_is_at_end():
+            self.set_time(0)
         self._tick_anchor_ms = self._slider.value()
         self._tick_anchor_real.start()
         if self._use_controller():
@@ -883,6 +885,27 @@ class TransportBar(QWidget):
                 == QMediaPlayer.PlaybackState.PlayingState
             )
         return self._tick_timer.isActive()
+
+    def _playback_is_at_end(self) -> bool:
+        """Return whether a new play action should restart from the beginning."""
+        if self.current_time_ms >= self._slider.maximum():
+            return True
+
+        player = None
+        if self._use_controller():
+            player = getattr(self._controller, "media_player", None)
+        elif self._has_audio:
+            player = self._player
+        if player is None:
+            return False
+
+        try:
+            duration = int(player.duration())
+            if duration > 0:
+                return int(player.position()) >= duration - 1
+            return player.mediaStatus() == QMediaPlayer.MediaStatus.EndOfMedia
+        except (AttributeError, RuntimeError, TypeError):
+            return False
 
     @property
     def current_time_ms(self) -> int:
