@@ -1527,6 +1527,7 @@ class SubtitleRenderWindow(QWidget):
         self._style_presets: dict[str, StylePreset] = {}
         self._screen_settings: ScreenSettings = ScreenSettings()
         self._selected_scheme_key = "global"
+        self._layout_assignment_preference: Optional[dict[str, object]] = None
         self._export_dir_mode = EXPORT_DIR_SOURCE_VIDEO
         self._export_custom_dir = ""
         self._project_path: Optional[Path] = None
@@ -3773,6 +3774,7 @@ class SubtitleRenderWindow(QWidget):
         self._timing_track = track
         self._subtitle_path = source_path
         if not self._loading_project:
+            self._apply_remembered_layout_assignment(track)
             self._resolve_unresolved_resource_labels({"主字幕"})
         self._property_panel.set_n3_template_lyrics_directory(
             source_path.parent if source_path is not None else None
@@ -4292,6 +4294,7 @@ class SubtitleRenderWindow(QWidget):
     def _apply_style(self, style: Style) -> None:
         previous = self._style
         self._style = style
+        self._remember_style_preferences(previous, style)
         self._preview_panel.set_style(style)
         self._lyrics_panel.set_style(style)
         # 角色在属性面板中新建 / 重命名 / 删除时，同步逐字符编辑器的可选项。
@@ -4368,7 +4371,9 @@ class SubtitleRenderWindow(QWidget):
         if not isinstance(payload, dict):
             return False
         style = style_from_dict(payload)
+        previous = self._style
         self._style = style
+        self._remember_style_preferences(previous, style)
         self._property_panel.set_style(style)
         self._preview_panel.set_style(style)
         self._lyrics_panel.set_style(style)
@@ -5118,6 +5123,7 @@ class SubtitleRenderWindow(QWidget):
                 self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"
             )
             return
+        self._apply_remembered_layout_assignment(track)
         self._apply_imported_role_preset_choices(track.role_options)
         self._set_subtitle_source_baseline(path, track)
         self._extra_sources.append(
@@ -5210,6 +5216,7 @@ class SubtitleRenderWindow(QWidget):
         track = self._active_track()
         if track is None:
             return
+        self._remember_layout_assignment("all", int(layout_index))
         if assign_layout_to_all(track, int(layout_index)):
             self._refresh_after_layout_assignment()
 
@@ -5217,6 +5224,7 @@ class SubtitleRenderWindow(QWidget):
         track = self._active_track()
         if track is None:
             return
+        self._remember_layout_assignment("auto")
         if auto_assign_layouts_by_page(track, self._style):
             self._refresh_after_layout_assignment()
 
@@ -6212,6 +6220,111 @@ class SubtitleRenderWindow(QWidget):
         start_ms = timing_line_start_ms(line)
         self._transport_bar.set_time(start_ms)
 
+    @staticmethod
+    def _layout_name_for_index(style: Style, index: object) -> Optional[str]:
+        try:
+            resolved = int(index)
+        except (TypeError, ValueError):
+            resolved = 0
+        if 1 <= resolved <= len(style.layouts):
+            return style.layouts[resolved - 1].name
+        return None
+
+    @staticmethod
+    def _layout_index_for_name(style: Style, name: object) -> int:
+        if not isinstance(name, str) or not name:
+            return 0
+        return next(
+            (
+                index
+                for index, layout in enumerate(style.layouts, start=1)
+                if layout.name == name
+            ),
+            0,
+        )
+
+    def _sync_app_layout_defaults(self, style: Style) -> None:
+        """Remember the current layout catalog at the app-default reference size."""
+
+        target_reference = max(int(self._app_default_style.layout_reference_height), 1)
+        source = rescale_layout_sizes(deepcopy(style), target_reference)
+        changes = {
+            field_name: deepcopy(getattr(source, field_name))
+            for field_name in _LAYOUT_DEFAULT_STYLE_FIELDS
+        }
+        self._app_default_style = replace(self._app_default_style, **changes)
+
+    def _remember_style_preferences(self, previous: Style, current: Style) -> None:
+        """Copy user-edited title/layout habits into new-project defaults."""
+
+        layout_changed = any(
+            getattr(previous, field_name) != getattr(current, field_name)
+            for field_name in _LAYOUT_DEFAULT_STYLE_FIELDS
+        )
+        previous_title = previous.title_overlay or TitleOverlay()
+        current_title = current.title_overlay or TitleOverlay()
+        title_preference_changed = (
+            bool(previous_title.enabled), int(previous_title.layout_index or 0)
+        ) != (
+            bool(current_title.enabled), int(current_title.layout_index or 0)
+        )
+        app_title = self._app_default_style.title_overlay or TitleOverlay()
+        remembered_layout_name = self._layout_name_for_index(
+            self._app_default_style, app_title.layout_index
+        )
+        if layout_changed or title_preference_changed:
+            self._sync_app_layout_defaults(current)
+            layout_name = (
+                self._layout_name_for_index(current, current_title.layout_index)
+                if title_preference_changed
+                else remembered_layout_name
+            )
+            app_layout_index = self._layout_index_for_name(
+                self._app_default_style, layout_name
+            )
+            self._app_default_style = replace(
+                self._app_default_style,
+                title_overlay=replace(
+                    TitleOverlay(),
+                    enabled=(
+                        bool(current_title.enabled)
+                        if title_preference_changed
+                        else bool(app_title.enabled)
+                    ),
+                    layout_index=app_layout_index,
+                ),
+            )
+
+    def _remember_layout_assignment(
+        self, mode: str, layout_index: Optional[int] = None
+    ) -> None:
+        """Remember an explicit batch-assignment action for future subtitle sources."""
+
+        self._sync_app_layout_defaults(self._style)
+        if mode == "auto":
+            self._layout_assignment_preference = {"mode": "auto"}
+        else:
+            self._layout_assignment_preference = {
+                "mode": "all",
+                "layout_name": self._layout_name_for_index(
+                    self._style, layout_index
+                ),
+            }
+        self._save_persisted_state()
+
+    def _apply_remembered_layout_assignment(self, track: TimingTrack) -> None:
+        preference = self._layout_assignment_preference
+        if not isinstance(preference, dict):
+            return
+        mode = preference.get("mode")
+        if mode == "auto":
+            auto_assign_layouts_by_page(track, self._style)
+        elif mode == "all":
+            index = self._layout_index_for_name(
+                self._style, preference.get("layout_name")
+            )
+            assign_layout_to_all(track, index)
+
     def _load_persisted_state(self) -> None:
         data = self._load_subtitle_settings()
         self._local_output_preferences = (
@@ -6233,16 +6346,39 @@ class SubtitleRenderWindow(QWidget):
             TITLE_SCHEME_NAME,
             Style().custom_style_schemes[TITLE_SCHEME_NAME],
         )
-        app_default_style = replace(
-            normalized_style,
-            custom_style_schemes={TITLE_SCHEME_NAME: deepcopy(title_scheme)},
-            singer_style_overrides={},
-            title_overlay=TitleOverlay(),
-        )
         persisted_style = data.get("style")
         had_persisted_title = (
             isinstance(persisted_style, dict)
             and "title_overlay" in persisted_style
+        )
+        defaults = (
+            dict(data.get("new_project_defaults"))
+            if isinstance(data.get("new_project_defaults"), dict)
+            else {}
+        )
+        legacy_title = normalized_style.title_overlay or TitleOverlay()
+        title_enabled = (
+            bool(defaults.get("title_enabled"))
+            if "title_enabled" in defaults
+            else bool(legacy_title.enabled) if had_persisted_title else False
+        )
+        if "title_layout_name" in defaults:
+            title_layout_index = self._layout_index_for_name(
+                normalized_style, defaults.get("title_layout_name")
+            )
+        elif had_persisted_title:
+            title_layout_index = int(legacy_title.layout_index or 0)
+        else:
+            title_layout_index = int(TitleOverlay().layout_index or 0)
+        app_default_style = replace(
+            normalized_style,
+            custom_style_schemes={TITLE_SCHEME_NAME: deepcopy(title_scheme)},
+            singer_style_overrides={},
+            title_overlay=replace(
+                TitleOverlay(),
+                enabled=title_enabled,
+                layout_index=title_layout_index,
+            ),
         )
         style_changed |= had_persisted_title or replace(
             app_default_style,
@@ -6250,6 +6386,11 @@ class SubtitleRenderWindow(QWidget):
         ) != normalized_style
         self._app_default_style = deepcopy(app_default_style)
         self._style = deepcopy(app_default_style)
+        assignment = defaults.get("layout_assignment")
+        if isinstance(assignment, dict) and assignment.get("mode") in {"all", "auto"}:
+            self._layout_assignment_preference = deepcopy(assignment)
+        else:
+            self._layout_assignment_preference = None
         loaded_presets = _style_presets_from_dict(data.get("style_presets"))
         self._style_presets = {}
         presets_changed = False
@@ -6333,6 +6474,23 @@ class SubtitleRenderWindow(QWidget):
         persisted_style = style_to_dict(self._app_default_style)
         persisted_style.pop("title_overlay", None)
         data["style"] = persisted_style
+        default_title = self._app_default_style.title_overlay or TitleOverlay()
+        new_project_defaults = (
+            dict(data.get("new_project_defaults"))
+            if isinstance(data.get("new_project_defaults"), dict)
+            else {}
+        )
+        new_project_defaults["title_enabled"] = bool(default_title.enabled)
+        new_project_defaults["title_layout_name"] = self._layout_name_for_index(
+            self._app_default_style, default_title.layout_index
+        )
+        if self._layout_assignment_preference is None:
+            new_project_defaults.pop("layout_assignment", None)
+        else:
+            new_project_defaults["layout_assignment"] = deepcopy(
+                self._layout_assignment_preference
+            )
+        data["new_project_defaults"] = new_project_defaults
         data["style_presets"] = _style_presets_to_dict(self._style_presets)
         data["screen"] = screen_settings_to_dict(self._screen_settings)
         data["selected_scheme_key"] = (

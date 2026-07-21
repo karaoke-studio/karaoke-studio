@@ -62,6 +62,9 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     SubtitleStyleScheme,
     Style,
     TITLE_SCHEME_NAME,
+    TimingChar,
+    TimingLine,
+    TimingTrack,
     TitleOverlay,
     paint_fill_from_dict,
     style_from_dict,
@@ -376,48 +379,66 @@ def test_live_scheme_edits_do_not_auto_save_as_app_defaults(qapp):
     assert provider.data["selected_scheme_key"] == "global"
 
 
-def test_title_overlay_is_project_only_and_app_default_is_hard_coded(qapp):
+def test_title_enabled_and_layout_are_remembered_without_leaking_project_text(qapp):
     provider = _FontMigrationSettingsProvider(
-        {
-            "style": style_to_dict(
-                Style(
-                    title_overlay=TitleOverlay(
-                        enabled=True,
-                        text_template="上一个项目的标题",
-                    )
-                )
-            )
-        }
+        {"style": style_to_dict(Style())}
     )
 
     win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
-
-    assert win._style.title_overlay == TitleOverlay()
-    assert "title_overlay" not in provider.data["style"]
-    reloaded = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
-    assert reloaded._style.title_overlay == TitleOverlay()
-
     current = Style(
-        title_overlay=TitleOverlay(enabled=True, text_template="当前项目标题")
+        layouts=[LyricsLayout(name="用户标题布局")],
+        title_overlay=TitleOverlay(
+            enabled=True,
+            text_template="当前项目标题",
+            layout_index=1,
+        ),
     )
     win._apply_style(current)
 
     assert "title_overlay" not in provider.data["style"]
+    assert provider.data["new_project_defaults"] == {
+        "title_enabled": True,
+        "title_layout_name": "用户标题布局",
+    }
     reloaded = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
-    assert reloaded._style.title_overlay == TitleOverlay()
+    assert reloaded._style.title_overlay is not None
+    assert reloaded._style.title_overlay.enabled is True
+    assert reloaded._style.title_overlay.text_template == "{title} / {artist}"
+    assert reloaded._style.title_overlay.layout_index == 1
+    assert [layout.name for layout in reloaded._style.layouts] == ["用户标题布局"]
     project_style = style_from_dict(win._current_project_data()["style"])
     assert project_style.title_overlay is not None
     assert project_style.title_overlay.enabled is True
     assert project_style.title_overlay.text_template == "当前项目标题"
 
-    win._project_dirty = False
-    win._new_project()
-    assert win._style.title_overlay is not None
-    assert win._style.title_overlay.enabled is False
-    assert win._style.title_overlay.text_template == "{title} / {artist}"
+    # Opening a project uses its own state and does not overwrite the user's
+    # new-project preference merely because the project was loaded.
+    reloaded._apply_project_data(
+        {
+            "style": style_to_dict(
+                Style(title_overlay=TitleOverlay(enabled=False, text_template="项目值"))
+            )
+        }
+    )
+    assert reloaded._style.title_overlay is not None
+    assert reloaded._style.title_overlay.enabled is False
+    reloaded._project_dirty = False
+    reloaded._new_project()
+    assert reloaded._style.title_overlay is not None
+    assert reloaded._style.title_overlay.enabled is True
+    assert reloaded._style.title_overlay.text_template == "{title} / {artist}"
 
-    win._apply_project_data({"style": style_to_dict(Style(title_overlay=None))})
-    assert win._style.title_overlay == TitleOverlay()
+    reloaded._apply_style(
+        replace(
+            reloaded._style,
+            title_overlay=replace(reloaded._style.title_overlay, enabled=False),
+        )
+    )
+    disabled_reload = mw.SubtitleRenderWindow(
+        embedded=True, settings_provider=provider
+    )
+    assert disabled_reload._style.title_overlay is not None
+    assert disabled_reload._style.title_overlay.enabled is False
 
 
 def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
@@ -448,9 +469,11 @@ def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
     win._save_builtin_scheme_default("global")
     saved = style_from_dict(provider.data["style"])
     assert saved.fill_color == "#333333"
-    assert saved.line_gap_px == 21
+    # Layout preferences are remembered automatically; the explicit font/color
+    # save action still updates only its requested scheme target.
+    assert saved.line_gap_px == 99
     assert [(layout.name, layout.line_gap_px) for layout in saved.layouts] == [
-        ("保留布局", 22)
+        ("项目布局", 98)
     ]
     assert saved.custom_style_schemes[TITLE_SCHEME_NAME].fill_color == "#222222"
     assert "初音" not in saved.custom_style_schemes
@@ -462,7 +485,8 @@ def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
     assert "初音" not in saved.custom_style_schemes
 
     win._apply_style(
-        Style(
+        replace(
+            win._style,
             fill_color="#666666",
             custom_style_schemes={
                 TITLE_SCHEME_NAME: SubtitleStyleScheme(fill_color="#777777"),
@@ -475,6 +499,8 @@ def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
     assert win._style.fill_color == "#333333"
     assert win._style.custom_style_schemes[TITLE_SCHEME_NAME].fill_color == "#444444"
     assert "镜音" not in win._style.custom_style_schemes
+    assert win._style.line_gap_px == 99
+    assert [layout.name for layout in win._style.layouts] == ["项目布局"]
 
 
 def test_builtin_font_defaults_are_normalized_to_app_reference_height(qapp, monkeypatch):
@@ -550,7 +576,7 @@ def test_current_style_is_resolved_for_persisted_output_height(qapp):
     assert win._style.layout_reference_height == 2160
 
 
-def test_layout_defaults_are_explicit_and_save_only_selected_layout(
+def test_layout_defaults_follow_live_user_edits_at_app_reference_height(
     qapp, monkeypatch
 ):
     initial_style = Style(
@@ -580,50 +606,71 @@ def test_layout_defaults_are_explicit_and_save_only_selected_layout(
         layout_reference_height=720,
     )
 
-    # Ordinary project edits and settings flushes must not leak layouts into
-    # the software defaults before the explicit save action.
+    # User layout edits automatically become the next new project's defaults,
+    # normalized from the current 720p project to the app's 1080p reference.
     win._apply_style(project_style)
-    saved = style_from_dict(provider.data["style"])
-    assert saved.line_gap_px == 21
-    assert [layout.name for layout in saved.layouts] == ["副歌布局", "保留布局"]
-    assert saved.layouts[0].line_y_margin_px == 41
-
-    # The selected named layout overwrites by name and is normalized from
-    # 720p to the app default's 1080p reference height.
-    win._save_layout_default(1)
-    saved = style_from_dict(provider.data["style"])
-    assert [layout.name for layout in saved.layouts] == ["副歌布局", "保留布局"]
-    assert saved.layouts[0].line_y_margin_px == 108
-    assert saved.layouts[1].line_y_margin_px == 51
-
-    # A project-only name is appended without replacing unrelated defaults.
-    win._save_layout_default(2)
-    saved = style_from_dict(provider.data["style"])
-    assert [layout.name for layout in saved.layouts] == [
-        "副歌布局",
-        "保留布局",
-        "项目新增",
-    ]
-    assert saved.layouts[2].line_y_margin_px == 90
-
-    # Index zero updates only the root/default layout values, including the
-    # legacy mirrored margins, while retaining all named layouts.
-    win._save_layout_default(0)
     saved = style_from_dict(provider.data["style"])
     assert saved.line_gap_px == 105
     assert saved.horizontal_margin_px == 120
-    assert saved.upper_line_left_margin_px == 120
-    assert saved.lower_line_right_margin_px == 120
-    assert len(saved.layouts) == 3
+    assert [layout.name for layout in saved.layouts] == ["副歌布局", "项目新增"]
+    assert saved.layouts[0].line_y_margin_px == 108
+    assert saved.layouts[1].line_y_margin_px == 90
 
     win._project_dirty = False
     win._new_project()
     assert win._style.line_gap_px == 105
     assert [layout.name for layout in win._style.layouts] == [
         "副歌布局",
-        "保留布局",
         "项目新增",
     ]
+
+
+def test_batch_layout_assignment_is_remembered_for_new_subtitle_sources(qapp):
+    provider = _FontMigrationSettingsProvider(
+        {
+            "style": style_to_dict(
+                Style(layouts=[LyricsLayout(name="常用布局")])
+            )
+        }
+    )
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    first_track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("一", 0)], end_ms=500),
+            TimingLine(chars=[TimingChar("二", 500)], end_ms=1000),
+        ]
+    )
+    win._timing_track = first_track
+
+    win._on_layout_assign_all(1)
+
+    assert [line.layout_index for line in first_track.lines] == [1, 1]
+    assert provider.data["new_project_defaults"]["layout_assignment"] == {
+        "mode": "all",
+        "layout_name": "常用布局",
+    }
+
+    reloaded = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    next_track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("三", 0)], end_ms=500),
+            TimingLine(chars=[TimingChar("四", 500)], end_ms=1000),
+        ]
+    )
+    reloaded._apply_timing_track(next_track, None)
+    assert [line.layout_index for line in next_track.lines] == [1, 1]
+
+    # Project loading bypasses the app preference; its saved row assignments
+    # remain authoritative and are applied later by the project loader.
+    project_track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("五", 0)], end_ms=500, layout_index=0)]
+    )
+    reloaded._loading_project = True
+    try:
+        reloaded._apply_timing_track(project_track, None)
+    finally:
+        reloaded._loading_project = False
+    assert project_track.lines[0].layout_index == 0
 
 
 def _font_migration_catalog() -> N3FontCatalog:
