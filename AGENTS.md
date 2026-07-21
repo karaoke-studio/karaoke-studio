@@ -4,6 +4,15 @@
 
 ---
 
+## 0. 用户持久化偏好（最高优先级）
+
+以下规则适用于本仓库的所有新会话，除非用户在当前请求中主动、明确地要求例外：
+
+1. **禁止创建新分支**：始终在当前分支（通常为 `main`）工作、提交和推送。不得因 agent、skill、插件或通用 Git 工作流的默认建议自行创建功能分支；只有用户明确要求“创建分支”时才允许创建。
+2. **禁止新建文档**：不得自行新增计划、说明、报告、设计稿、Markdown 或其他文档文件。只有用户明确要求“新建文档”时才允许创建；现有文档仅在任务确有必要时原地更新。
+
+---
+
 ## 1. 这是什么
 
 **Karaoke Studio（卡拉OK工作台）**——面向卡拉 OK / B 站投稿制作的 Windows 桌面工具，Python + PyQt6 + PyInstaller，仓库主体是 `karaoke-studio/karaoke-studio`，由 [Myosotis11037](https://github.com/Myosotis11037)（原 karaoke-helper 作者）与 [Xuan-cc](https://github.com/Xuan-cc)（原 StrangeUtaGame 作者）于 2026-06 合并而成。详情见 [AUTHORS.md](AUTHORS.md) / [NOTICE](NOTICE)。
