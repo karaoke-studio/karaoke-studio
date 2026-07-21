@@ -193,17 +193,17 @@ DrawGeometryRealization,消除宽描边逐帧 tessellation。
 
 **任务**:
 
-- [ ] GeometryPack 式字符资源增加 filled/stroked/stroked2 realization 槽位,
+- [x] GeometryPack 式字符资源增加 filled/stroked/stroked2 realization 槽位,
   容差以 0.25 为 A/B 起点;主描边与二重描边分别建,key 包含有效字号、DPR、
   字体、glyph、描边宽度、join/miter;
-- [ ] 预热策略:configure 结束后异步预热,单次样式变更的预热预算上限
+- [x] 预热策略:configure 结束后异步预热,单次样式变更的预热预算上限
   (建议先定 50ms/帧片分摊),预热完成前 miss 回退 DrawGeometry;
-- [ ] 显存预算:realization 总量计数 + 上限,超限按行 LRU 淘汰并计数;
-- [ ] A/B 脚本:`benchmark_gpu_renderer.py --realization on|off` 跑四组描边 ×
+- [x] 显存预算:realization 总量计数 + 上限,超限按当前时间邻近行优先保留并回退;
+- [x] A/B 脚本:`benchmark_gpu_renderer.py --realization on|off` 跑四组描边 ×
   四时间点,归档对照 CSV;
-- [ ] 视觉 A/B:realization 开/关关键帧像素差必须落在既有 GPU/Painter 容差内,
+- [x] 视觉 A/B:realization 开/关关键帧像素差必须落在既有 GPU/Painter 容差内,
   特别覆盖大字号、斜杠、日英数字体、注音、标题、行内角色样式;
-- [ ] 若细描边(≤5px)A/B 出现可见差异或负收益,则按描边宽度阈值启用
+- [x] 若细描边(≤5px)A/B 出现可见差异或负收益,则按描边宽度阈值启用
   (仅 ≥ 阈值的稳定宽描边走 realization),阈值写进配置并记录数据依据。
 
 **验收门禁**:
@@ -219,10 +219,58 @@ DrawGeometryRealization,消除宽描边逐帧 tessellation。
 **新风险与防护**:
 
 - 预热卡顿(用户最担心的"新慢点"之一)→ 异步分摊 + 预算上限 + seek/churn 压测门禁;
-- 显存增长(每字符最多 3 个 realization)→ 总量上限 + LRU + 10 分钟显存门禁;
+- 显存增长(每字符最多 4 个 realization)→ 总量上限 + 时间邻近优先保留 +
+  10 分钟显存门禁;
 - WARP 上 realization 可能无收益甚至负收益 → WARP 基线单独 A/B,负收益则
   WARP 自动禁用 realization;
 - 画质回退 → 像素差门禁,超容差先修语义再谈性能。
+
+### 阶段 2 实测结果(2026-07-21)
+
+正文与注音字符均增加 filled/stroked/stroked2（以及图片/渐变正文保护层）
+realization。预热使用同一 D2D device 的独立 DeviceContext，只在前台渲染空闲
+100ms 后运行，每约 50ms 主动让出调度；队列按 `prewarm_t_ms` 邻近行排序，逐帧路径
+只消费已发布资源，动态矩阵字符与 glow 永远回退 DrawGeometry。样式 churn 使用代际
+取消：旧 worker 不等待昂贵调用结束即可退役，其任务持有独立 geometry 引用，发布时
+校验 generation，绝不写入新场景。0.25 起始容差全工程 14px 预热约 35.0s；在
+14/30/50px 三档 realization 开关像素边界与 MAE 门禁通过后，最终容差定为 3.0，
+预热降至约 11.34/22.19/38.41s。硬上限 8192 项，本工程最终 1113 项，未触顶；
+由于场景缓存本身随配置整体失效，超限策略改为保留当前时间邻近行并让远端行 miss
+回退，而不是在不可变场景内做会制造抖动的逐帧 LRU。
+
+固定工程硬件 A/B（realization 关→开，render mean）：
+
+| 主描边 | 关闭 | 开启（全热） | 变化 | 全项目预热 |
+|---:|---:|---:|---:|---:|
+| 0px | 4.774ms | 4.771ms | -0.07% | 不启用 |
+| 5px | 8.066ms | 7.838ms | -2.82% | 不启用正文 |
+| 14px | 21.109ms | 17.020ms | -19.37% | 11.34s |
+| 30px | 41.403ms | 37.053ms | -10.51% | 22.19s |
+| 50px | 61.614ms | 57.331ms | -6.95% | 38.41s |
+
+14px 的重复探针区间为 16.12~17.02ms，已到 60fps 预算边缘；最新成对 40 帧均值仍比
+16.67ms 高 0.35ms，须由阶段 3 的 glow/dirty rect 留出稳定余量，不能把单次较低结果
+当作门禁已稳过。全热后四时间点 `realization_miss=0`。14→15px 的真实工程样式 churn
+八次采样中，开启 realization 相对关闭的最大附加耗时为 13.4ms，低于一帧；定向测试
+连续退役四代 worker 后，细描边新场景 realization 计数仍为 0。WARP 默认自动禁用，自动/显式
+关闭 A/B 为 8.355/8.750ms 且 40 帧 checksum 零差异；需要诊断时可用
+`KROK_GPU_REALIZATION_WARP=1` 强制开启。主描边阈值为 8px，0/5px 不改变正文像素路径。
+
+realization 定向、样式 churn 与 Utopia 动态回退测试 `8 passed`，宽描边开/关像素边界与 MAE 通过；
+Painter corpus（含本机真实 Dark Spiral `.n3proj` 切片）通过。60 秒真实 GUI 连续播放
+交付 1,783 帧，renderer failure/restart/fallback 均为 0，sidecar RSS 增长 2.91MiB；
+持续请求期间空闲门控阻止重预热与前台争抢。GPU backend 全文件为
+`155 passed, 1 skipped, 3 failed`，仍仅为阶段 0 登记的三个 Painter/GPU 边界基线。
+
+归档文件：
+
+- `build/gpu-widestroke-stage2-realization-off-hardware-20260721.csv`；
+- `build/gpu-widestroke-stage2-realization-on-{fine,14,30,50}-hardware-20260721.csv`；
+- `build/gpu-widestroke-stage2-realization-on-{14,30-50}-tolerance3-hardware-20260721.csv`；
+- `build/gpu-widestroke-stage2-realization-off-14-30-50-paired-hardware-20260721.csv`；
+- `build/gpu-widestroke-stage2-realization-{auto,off}-warp-20260721.csv`；
+- `build/gpu-widestroke-stage2-stress-hardware-20260721.json`；
+- `build/gpu-stage2-painter-corpus/result.json`。
 
 ## 4. 阶段 3:glow 与脏矩形收紧(对应 P3)
 

@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 import uuid
 
 import numpy as np
@@ -482,6 +483,7 @@ def run_corpus(
     height: int,
     force_warp: bool,
     include_real: bool,
+    realization_wait_s: float = 0.0,
 ) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
     texture_path = output_dir / "g3-corpus-pattern.png"
@@ -502,7 +504,15 @@ def run_corpus(
                 fps=60,
                 force_warp=force_warp,
                 extra_tracks=list(scenario.extra_tracks),
+                prewarm_t_ms=scenario.timestamps_ms[0],
             )
+            if realization_wait_s > 0.0:
+                deadline = time.monotonic() + realization_wait_s
+                while time.monotonic() < deadline:
+                    configured = renderer.gpu_diagnostics(force_warp=force_warp)
+                    if configured.get("realization_prewarm_complete", True):
+                        break
+                    time.sleep(0.02)
             frames: list[dict[str, object]] = []
             for frame_index, t_ms in enumerate(scenario.timestamps_ms):
                 event = renderer.render_gpu_frame(
@@ -566,6 +576,7 @@ def main() -> int:
     parser.add_argument("--height", type=int, default=1080)
     parser.add_argument("--warp", action="store_true")
     parser.add_argument("--no-real", action="store_true")
+    parser.add_argument("--realization-wait-s", type=float, default=0.0)
     args = parser.parse_args()
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -581,6 +592,7 @@ def main() -> int:
         height=max(args.height, 1),
         force_warp=bool(args.warp),
         include_real=not args.no_real,
+        realization_wait_s=max(args.realization_wait_s, 0.0),
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0 if summary["passed"] else 1

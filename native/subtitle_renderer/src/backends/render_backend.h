@@ -323,6 +323,7 @@ struct TextStyle {
 struct RenderScene {
     int width = 1920;
     int height = 1080;
+    int prewarmTimeMs = 0;
     float viewportScale = 1.0f;
     float viewportRotation = 0.0f;
     float viewportOffsetX = 0.0f;
@@ -373,6 +374,13 @@ struct BackendDiagnostics {
     std::uint64_t brushCacheInvalidations = 0;
     std::uint64_t brushCacheSize = 0;
     std::uint64_t brushCacheCapacity = 0;
+    bool realizationEnabled = true;
+    bool realizationSupported = false;
+    bool realizationPrewarmComplete = true;
+    std::uint64_t realizationCount = 0;
+    std::uint64_t realizationCapacity = 0;
+    std::uint64_t realizationPrewarmSkipped = 0;
+    double realizationPrewarmMs = 0.0;
 };
 
 class BackendError : public std::runtime_error {

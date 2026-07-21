@@ -371,6 +371,7 @@ def run_benchmark(
     fixed_font_size: int | None = None,
     fixed_stroke2_width: int | None = None,
     fixed_glow_radius: int | None = None,
+    realization_wait_s: float = 0.0,
 ) -> tuple[dict, list[dict]]:
     import psutil
     from PyQt6.QtWidgets import QApplication
@@ -436,6 +437,7 @@ def run_benchmark(
             height=height,
             fps=fps,
             force_warp=force_warp,
+            prewarm_t_ms=samples[0][1],
         )
         assert renderer.process_id is not None
         sidecar_process = psutil.Process(renderer.process_id)
@@ -448,8 +450,16 @@ def run_benchmark(
                 height=height,
                 fps=fps,
                 force_warp=force_warp,
+                prewarm_t_ms=samples[0][1],
             )
         cache_hits_after_reconfigure = int(configured["cache_hits"])
+        if realization_wait_s > 0.0:
+            deadline = time.monotonic() + realization_wait_s
+            while time.monotonic() < deadline:
+                prewarm = renderer.gpu_diagnostics(force_warp=force_warp)
+                if bool(prewarm.get("realization_prewarm_complete", True)):
+                    break
+                time.sleep(0.05)
         try:
             for warmup_index in range(max(int(warmup_frames), 0)):
                 warm_event = renderer.render_gpu_frame(
@@ -574,6 +584,21 @@ def run_benchmark(
         ),
         "cache_bytes_warmup": int(warm_diagnostics["estimated_cache_bytes"]),
         "cache_bytes_end": int(end_diagnostics["estimated_cache_bytes"]),
+        "realization_enabled": bool(end_diagnostics.get("realization_enabled", False)),
+        "realization_supported": bool(
+            end_diagnostics.get("realization_supported", False)
+        ),
+        "realization_prewarm_complete": bool(
+            end_diagnostics.get("realization_prewarm_complete", True)
+        ),
+        "realization_count": int(end_diagnostics.get("realization_count", 0)),
+        "realization_capacity": int(end_diagnostics.get("realization_capacity", 0)),
+        "realization_prewarm_skipped": int(
+            end_diagnostics.get("realization_prewarm_skipped", 0)
+        ),
+        "realization_prewarm_ms": round(
+            float(end_diagnostics.get("realization_prewarm_ms", 0.0)), 4
+        ),
         "sidecar_rss_warmup_bytes": warm_rss_bytes,
         "sidecar_rss_end_bytes": end_rss_bytes,
         "sidecar_rss_growth_bytes": end_rss_bytes - warm_rss_bytes,
@@ -689,8 +714,22 @@ def main() -> int:
         default=30,
         help="记录前用于填充稳定资源的帧数",
     )
+    parser.add_argument(
+        "--realization",
+        choices=("on", "off"),
+        default="on",
+        help="切换 Direct2D geometry realization，便于同进程参数做 A/B",
+    )
+    parser.add_argument(
+        "--realization-wait-s",
+        type=float,
+        default=0.0,
+        help="采样前最多等待 realization 后台预热完成的秒数",
+    )
     parser.add_argument("--output-csv", type=Path)
     args = parser.parse_args()
+
+    os.environ["KROK_GPU_REALIZATION"] = "1" if args.realization == "on" else "0"
 
     all_rows: list[dict] = []
     duration_ms = max(1, int(round(max(args.seconds, 0.001) * 1000.0)))
@@ -730,6 +769,7 @@ def main() -> int:
                 fixed_font_size=args.font_size,
                 fixed_stroke2_width=args.stroke2_width,
                 fixed_glow_radius=args.glow_radius,
+                realization_wait_s=max(args.realization_wait_s, 0.0),
             )
             all_rows.extend(rows)
             print(json.dumps(summary, ensure_ascii=False, sort_keys=True))

@@ -679,6 +679,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                             dpr=dpr,
                             force_warp=self._force_warp,
                             extra_tracks=extra_tracks,
+                            prewarm_t_ms=t_ms,
                         )
                         self._note("configure_count")
                     if self._native_preview and native_target is not None:

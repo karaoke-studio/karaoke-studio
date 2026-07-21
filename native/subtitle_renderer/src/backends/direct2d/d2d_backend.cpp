@@ -1,11 +1,13 @@
 #include "d2d_backend.h"
 
+#include <d2d1_2.h>
 #include <d2d1helper.h>
 #include <d2d1effects.h>
 #include <dwrite.h>
 #include <wincodec.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -14,7 +16,9 @@
 #include <iomanip>
 #include <sstream>
 #include <limits>
+#include <mutex>
 #include <tuple>
+#include <thread>
 
 namespace krok::subtitle::native {
 namespace {
@@ -23,6 +27,12 @@ using Clock = std::chrono::steady_clock;
 
 double elapsedMs(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+}
+
+std::int64_t steadyNowMs() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        Clock::now().time_since_epoch()
+    ).count();
 }
 
 bool environmentFlagEnabled(const char *name, bool defaultValue) {
@@ -938,6 +948,10 @@ struct Direct2DGpuBackend::Impl {
         Microsoft::WRL::ComPtr<ID2D1Geometry> protectedStrokeGeometry;
         Microsoft::WRL::ComPtr<ID2D1Geometry> strokeGeometry;
         Microsoft::WRL::ComPtr<ID2D1Geometry> stroke2Geometry;
+        Microsoft::WRL::ComPtr<ID2D1GeometryRealization> fillRealization;
+        Microsoft::WRL::ComPtr<ID2D1GeometryRealization> protectedStrokeRealization;
+        Microsoft::WRL::ComPtr<ID2D1GeometryRealization> strokeRealization;
+        Microsoft::WRL::ComPtr<ID2D1GeometryRealization> stroke2Realization;
         std::vector<WipePoint> wipePoints;
     };
 
@@ -1003,12 +1017,51 @@ struct Direct2DGpuBackend::Impl {
         std::uint64_t lastUse = 0;
     };
 
+    enum class RealizationKind {
+        Fill,
+        ProtectedStroke,
+        Stroke,
+        Stroke2,
+    };
+
+    struct RealizationTask {
+        std::size_t lineIndex = 0;
+        int rubyIndex = -1;
+        std::size_t charIndex = 0;
+        RealizationKind kind = RealizationKind::Fill;
+        Microsoft::WRL::ComPtr<ID2D1Geometry> geometry;
+        float strokeWidth = 0.0f;
+    };
+
+    struct RealizationControl {
+        std::atomic<bool> stop{false};
+        std::atomic<bool> done{false};
+        std::uint64_t generation = 0;
+    };
+
+    struct RetiredRealizationWorker {
+        std::shared_ptr<RealizationControl> control;
+        std::thread thread;
+    };
+
     RenderScene scene;
     std::vector<CachedLine> lines;
     std::vector<CachedImage> images;
     std::vector<CachedBrush> brushes;
     std::uint64_t brushUseSerial = 0;
     static constexpr std::size_t brushCapacity = 512;
+    Microsoft::WRL::ComPtr<ID2D1DeviceContext1> realizationContext;
+    std::uint64_t realizationCount = 0;
+    std::uint64_t realizationGeneration = 0;
+    static constexpr std::size_t realizationCapacity = 8192;
+    static constexpr float realizationStrokeThreshold = 8.0f;
+    std::shared_ptr<RealizationControl> realizationControl;
+    std::thread realizationThread;
+    std::vector<RetiredRealizationWorker> retiredRealizationWorkers;
+    std::atomic<bool> realizationPrewarmComplete{true};
+    std::atomic<bool> renderActive{false};
+    std::atomic<std::int64_t> lastRenderCompletedMs{0};
+    mutable std::mutex realizationMutex;
     BackendDiagnostics diagnostics;
     bool configured = false;
     int frameSurfaceWidth = 0;
@@ -1031,26 +1084,64 @@ struct Direct2DGpuBackend::Impl {
     bool resourceCacheEnabled = environmentFlagEnabled(
         "KROK_GPU_RESOURCE_CACHE", true
     );
+    bool realizationEnabled = environmentFlagEnabled(
+        "KROK_GPU_REALIZATION", true
+    );
 };
 
 Direct2DGpuBackend::Direct2DGpuBackend(bool forceWarp)
     : device_(forceWarp), impl_(std::make_unique<Impl>()) {
+    if (forceWarp && !environmentFlagEnabled("KROK_GPU_REALIZATION_WARP", false)) {
+        impl_->realizationEnabled = false;
+    }
     impl_->diagnostics.countersEnabled = impl_->countersEnabled;
     impl_->diagnostics.resourceCacheEnabled = impl_->resourceCacheEnabled;
     impl_->diagnostics.brushCacheCapacity = Impl::brushCapacity;
+    impl_->diagnostics.realizationEnabled = impl_->realizationEnabled;
+    impl_->diagnostics.realizationCapacity = Impl::realizationCapacity;
+    if (impl_->realizationEnabled) {
+        device_.d2dContext()->QueryInterface(IID_PPV_ARGS(
+            impl_->realizationContext.ReleaseAndGetAddressOf()
+        ));
+    }
+    impl_->diagnostics.realizationSupported =
+        impl_->realizationContext != nullptr;
 }
 
-Direct2DGpuBackend::~Direct2DGpuBackend() = default;
+Direct2DGpuBackend::~Direct2DGpuBackend() {
+    if (impl_->realizationControl) {
+        impl_->realizationControl->stop.store(true, std::memory_order_release);
+    }
+    for (Impl::RetiredRealizationWorker &worker
+         : impl_->retiredRealizationWorkers) {
+        worker.control->stop.store(true, std::memory_order_release);
+    }
+    if (impl_->realizationThread.joinable()) {
+        impl_->realizationThread.join();
+    }
+    for (Impl::RetiredRealizationWorker &worker
+         : impl_->retiredRealizationWorkers) {
+        if (worker.thread.joinable()) {
+            worker.thread.join();
+        }
+    }
+}
 
 BackendCaps Direct2DGpuBackend::capabilities() const {
     return device_.capabilities();
 }
 
 BackendDiagnostics Direct2DGpuBackend::diagnostics() const {
+    std::lock_guard<std::mutex> realizationLock(impl_->realizationMutex);
     BackendDiagnostics result = impl_->diagnostics;
+    result.realizationPrewarmComplete = impl_->realizationPrewarmComplete.load(
+        std::memory_order_acquire
+    );
     result.brushCacheSize = impl_->brushes.size();
     result.estimatedCacheBytes += impl_->brushes.size()
         * sizeof(Impl::CachedBrush);
+    result.realizationCount = impl_->realizationCount;
+    result.estimatedCacheBytes += impl_->realizationCount * 512;
     device_.appendVideoMemoryDiagnostics(&result);
     return result;
 }
@@ -1204,6 +1295,38 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         return;
     }
     ++impl_->diagnostics.cacheMisses;
+    if (impl_->realizationControl) {
+        impl_->realizationControl->stop.store(true, std::memory_order_release);
+    }
+    if (impl_->realizationThread.joinable()) {
+        if (impl_->realizationControl
+            && impl_->realizationControl->done.load(std::memory_order_acquire)) {
+            impl_->realizationThread.join();
+        } else {
+            impl_->retiredRealizationWorkers.push_back({
+                impl_->realizationControl,
+                std::move(impl_->realizationThread),
+            });
+        }
+    }
+    for (auto worker = impl_->retiredRealizationWorkers.begin();
+         worker != impl_->retiredRealizationWorkers.end();) {
+        if (!worker->control->done.load(std::memory_order_acquire)) {
+            ++worker;
+            continue;
+        }
+        if (worker->thread.joinable()) {
+            worker->thread.join();
+        }
+        worker = impl_->retiredRealizationWorkers.erase(worker);
+    }
+    {
+        std::lock_guard<std::mutex> realizationLock(impl_->realizationMutex);
+        ++impl_->realizationGeneration;
+        impl_->realizationCount = 0;
+    }
+    impl_->realizationControl.reset();
+    impl_->realizationPrewarmComplete.store(true, std::memory_order_release);
     if (!impl_->brushes.empty()) {
         impl_->brushes.clear();
         impl_->brushUseSerial = 0;
@@ -2530,6 +2653,305 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         }
         impl_->lines.push_back(std::move(cached));
     }
+    // Ruby drawing keeps geometry arrays for historical phase ordering. Mirror
+    // their final post-layout/post-interference geometry into CachedChar so the
+    // realization pack is indexed exactly like the main-character pack.
+    for (Impl::CachedLine &line : impl_->lines) {
+        for (Impl::CachedRuby &ruby : line.rubies) {
+            for (std::size_t index = 0; index < ruby.chars.size(); ++index) {
+                Impl::CachedChar &ch = ruby.chars[index];
+                if (index < ruby.geometries.size()) {
+                    ch.geometry = ruby.geometries[index];
+                }
+                if (index < ruby.protectedStrokeGeometries.size()) {
+                    ch.protectedStrokeGeometry =
+                        ruby.protectedStrokeGeometries[index];
+                }
+                if (index < ruby.strokeGeometries.size()) {
+                    ch.strokeGeometry = ruby.strokeGeometries[index];
+                }
+                if (index < ruby.stroke2Geometries.size()) {
+                    ch.stroke2Geometry = ruby.stroke2Geometries[index];
+                }
+            }
+        }
+    }
+    impl_->diagnostics.realizationPrewarmSkipped = 0;
+    impl_->diagnostics.realizationPrewarmMs = 0.0;
+    impl_->lastRenderCompletedMs.store(steadyNowMs(), std::memory_order_release);
+    if (impl_->realizationEnabled && impl_->realizationContext) {
+        std::vector<std::size_t> lineOrder(impl_->lines.size());
+        for (std::size_t index = 0; index < lineOrder.size(); ++index) {
+            lineOrder[index] = index;
+        }
+        const int prewarmTimeMs = impl_->scene.prewarmTimeMs;
+        const auto distanceFromPrewarm = [&](const Impl::CachedLine &line) {
+            int distance = std::min(
+                std::abs(prewarmTimeMs - line.startMs),
+                std::abs(prewarmTimeMs - line.endMs)
+            );
+            if (prewarmTimeMs >= line.startMs && prewarmTimeMs <= line.endMs) {
+                distance = 0;
+            }
+            for (const DisplayWindow &window : line.displayWindows) {
+                if (prewarmTimeMs >= window.startMs
+                    && prewarmTimeMs <= window.endMs) {
+                    return 0;
+                }
+                distance = std::min(
+                    distance,
+                    std::min(
+                        std::abs(prewarmTimeMs - window.startMs),
+                        std::abs(prewarmTimeMs - window.endMs)
+                    )
+                );
+            }
+            return distance;
+        };
+        std::stable_sort(
+            lineOrder.begin(), lineOrder.end(),
+            [&](std::size_t left, std::size_t right) {
+                return distanceFromPrewarm(impl_->lines[left])
+                    < distanceFromPrewarm(impl_->lines[right]);
+            }
+        );
+        std::vector<Impl::RealizationTask> tasks;
+        tasks.reserve(Impl::realizationCapacity);
+        std::uint64_t capacitySkipped = 0;
+        const auto appendTask = [&] (
+            std::size_t lineIndex,
+            int rubyIndex,
+            std::size_t charIndex,
+            Impl::RealizationKind kind,
+            ID2D1Geometry *geometry,
+            float strokeWidth
+        ) {
+            const bool isStroke = kind == Impl::RealizationKind::Stroke
+                || kind == Impl::RealizationKind::Stroke2;
+            if (geometry == nullptr || (isStroke && strokeWidth <= 0.0f)) {
+                return;
+            }
+            if (tasks.size() >= Impl::realizationCapacity) {
+                ++capacitySkipped;
+                return;
+            }
+            Impl::RealizationTask task;
+            task.lineIndex = lineIndex;
+            task.rubyIndex = rubyIndex;
+            task.charIndex = charIndex;
+            task.kind = kind;
+            task.geometry = geometry;
+            task.strokeWidth = strokeWidth;
+            tasks.push_back(std::move(task));
+        };
+        const auto appendCharTasks = [&] (
+            std::size_t lineIndex,
+            int rubyIndex,
+            std::size_t charIndex,
+            const Impl::CachedChar &ch,
+            float strokeWidth,
+            float stroke2Width
+        ) {
+            const float mainWidth = std::max(strokeWidth, 0.0f);
+            if (mainWidth < Impl::realizationStrokeThreshold) {
+                return;
+            }
+            appendTask(
+                lineIndex, rubyIndex, charIndex,
+                Impl::RealizationKind::Fill, ch.geometry.Get(), 0.0f
+            );
+            appendTask(
+                lineIndex, rubyIndex, charIndex,
+                Impl::RealizationKind::ProtectedStroke,
+                ch.protectedStrokeGeometry.Get(), 0.0f
+            );
+            appendTask(
+                lineIndex, rubyIndex, charIndex,
+                Impl::RealizationKind::Stroke, ch.geometry.Get(), mainWidth
+            );
+            appendTask(
+                lineIndex, rubyIndex, charIndex,
+                Impl::RealizationKind::Stroke2, ch.geometry.Get(),
+                stroke2Width > 0.0f ? mainWidth + stroke2Width : 0.0f
+            );
+        };
+        for (std::size_t lineIndex : lineOrder) {
+            const Impl::CachedLine &line = impl_->lines[lineIndex];
+            for (std::size_t charIndex = 0;
+                 charIndex < line.chars.size(); ++charIndex) {
+                const Impl::CachedChar &ch = line.chars[charIndex];
+                const TextStyle &charStyle = ch.styleIndex >= 0
+                    && ch.styleIndex < static_cast<int>(impl_->scene.charStyles.size())
+                    ? impl_->scene.charStyles[static_cast<std::size_t>(ch.styleIndex)]
+                    : line.style;
+                appendCharTasks(
+                    lineIndex, -1, charIndex, ch,
+                    charStyle.strokeWidth, charStyle.stroke2Width
+                );
+            }
+            for (std::size_t rubyIndex = 0;
+                 rubyIndex < line.rubies.size(); ++rubyIndex) {
+                const Impl::CachedRuby &ruby = line.rubies[rubyIndex];
+                const TextStyle &rubyStyle = ruby.styleIndex >= 0
+                    && ruby.styleIndex < static_cast<int>(impl_->scene.charStyles.size())
+                    ? impl_->scene.charStyles[static_cast<std::size_t>(ruby.styleIndex)]
+                    : line.style;
+                for (std::size_t charIndex = 0;
+                     charIndex < ruby.chars.size(); ++charIndex) {
+                    appendCharTasks(
+                        lineIndex, static_cast<int>(rubyIndex), charIndex,
+                        ruby.chars[charIndex],
+                        rubyStyle.rubyStrokeWidth,
+                        rubyStyle.rubyStroke2Width
+                    );
+                }
+            }
+        }
+        impl_->diagnostics.realizationPrewarmSkipped = capacitySkipped;
+        auto control = std::make_shared<Impl::RealizationControl>();
+        control->generation = impl_->realizationGeneration;
+        impl_->realizationControl = control;
+        impl_->realizationPrewarmComplete.store(false, std::memory_order_release);
+        impl_->realizationThread = std::thread([
+            this,
+            control,
+            tasks = std::move(tasks)
+        ]() mutable {
+            // Keep individual background realization chunks short enough for
+            // seek/style churn while staying inside the wide-stroke A/B gate.
+            constexpr float flatteningTolerance = 3.0f;
+            const auto prewarmStart = Clock::now();
+            auto sliceStart = prewarmStart;
+            std::uint64_t failed = 0;
+            const auto isCurrent = [&]() {
+                return control->generation == impl_->realizationGeneration;
+            };
+            const auto finish = [&]() {
+                std::lock_guard<std::mutex> lock(impl_->realizationMutex);
+                if (isCurrent()) {
+                    impl_->diagnostics.realizationPrewarmSkipped += failed;
+                    impl_->diagnostics.realizationPrewarmMs = elapsedMs(prewarmStart);
+                    impl_->realizationPrewarmComplete.store(
+                        true, std::memory_order_release
+                    );
+                }
+                control->done.store(true, std::memory_order_release);
+            };
+            Microsoft::WRL::ComPtr<ID2D1DeviceContext> workerBaseContext;
+            Microsoft::WRL::ComPtr<ID2D1DeviceContext1> workerContext;
+            HRESULT contextResult = device_.d2dDevice()->CreateDeviceContext(
+                D2D1_DEVICE_CONTEXT_OPTIONS_ENABLE_MULTITHREADED_OPTIMIZATIONS,
+                workerBaseContext.ReleaseAndGetAddressOf()
+            );
+            if (SUCCEEDED(contextResult)) {
+                contextResult = workerBaseContext.As(&workerContext);
+            }
+            if (FAILED(contextResult) || !workerContext) {
+                ++failed;
+                finish();
+                return;
+            }
+            const auto shouldStop = [&]() {
+                return control->stop.load(std::memory_order_acquire);
+            };
+            const auto waitForIdle = [&]() {
+                while (!shouldStop()) {
+                    const bool active = impl_->renderActive.load(
+                        std::memory_order_acquire
+                    );
+                    const std::int64_t idleMs = steadyNowMs()
+                        - impl_->lastRenderCompletedMs.load(
+                            std::memory_order_acquire
+                        );
+                    if (!active && idleMs >= 100) {
+                        return true;
+                    }
+                    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+                }
+                return false;
+            };
+            const auto publish = [&] (
+                const Impl::RealizationTask &task,
+                Microsoft::WRL::ComPtr<ID2D1GeometryRealization> created
+            ) {
+                std::lock_guard<std::mutex> lock(impl_->realizationMutex);
+                if (shouldStop() || !isCurrent()
+                    || task.lineIndex >= impl_->lines.size()) {
+                    return false;
+                }
+                Impl::CachedLine &line = impl_->lines[task.lineIndex];
+                Impl::CachedChar *targetChar = nullptr;
+                if (task.rubyIndex < 0) {
+                    if (task.charIndex < line.chars.size()) {
+                        targetChar = &line.chars[task.charIndex];
+                    }
+                } else if (static_cast<std::size_t>(task.rubyIndex)
+                           < line.rubies.size()) {
+                    Impl::CachedRuby &ruby = line.rubies[
+                        static_cast<std::size_t>(task.rubyIndex)
+                    ];
+                    if (task.charIndex < ruby.chars.size()) {
+                        targetChar = &ruby.chars[task.charIndex];
+                    }
+                }
+                if (targetChar == nullptr) {
+                    return false;
+                }
+                switch (task.kind) {
+                case Impl::RealizationKind::Fill:
+                    targetChar->fillRealization = std::move(created);
+                    break;
+                case Impl::RealizationKind::ProtectedStroke:
+                    targetChar->protectedStrokeRealization = std::move(created);
+                    break;
+                case Impl::RealizationKind::Stroke:
+                    targetChar->strokeRealization = std::move(created);
+                    break;
+                case Impl::RealizationKind::Stroke2:
+                    targetChar->stroke2Realization = std::move(created);
+                    break;
+                }
+                ++impl_->realizationCount;
+                return true;
+            };
+            const auto yieldSlice = [&]() {
+                if (elapsedMs(sliceStart) >= 50.0) {
+                    std::this_thread::yield();
+                    sliceStart = Clock::now();
+                }
+            };
+            for (const Impl::RealizationTask &task : tasks) {
+                if (!waitForIdle()) {
+                    break;
+                }
+                Microsoft::WRL::ComPtr<ID2D1GeometryRealization> created;
+                HRESULT result = E_FAIL;
+                if (task.kind == Impl::RealizationKind::Stroke
+                    || task.kind == Impl::RealizationKind::Stroke2) {
+                    result = workerContext->CreateStrokedGeometryRealization(
+                        task.geometry.Get(),
+                        flatteningTolerance,
+                        task.strokeWidth,
+                        nullptr,
+                        created.ReleaseAndGetAddressOf()
+                    );
+                } else {
+                    result = workerContext->CreateFilledGeometryRealization(
+                        task.geometry.Get(),
+                        flatteningTolerance,
+                        created.ReleaseAndGetAddressOf()
+                    );
+                }
+                if (SUCCEEDED(result)) {
+                    publish(task, std::move(created));
+                } else {
+                    ++failed;
+                }
+                yieldSlice();
+            }
+            finish();
+        });
+    }
     impl_->diagnostics.lineCount = impl_->lines.size();
     impl_->diagnostics.charCount = 0;
     impl_->diagnostics.geometryCount = 0;
@@ -2598,6 +3020,21 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
     if (!impl_->configured) {
         throw BackendError("GPU backend is not configured");
     }
+    impl_->renderActive.store(true, std::memory_order_release);
+    struct RenderActivityGuard {
+        Impl *impl = nullptr;
+        ~RenderActivityGuard() {
+            impl->lastRenderCompletedMs.store(
+                steadyNowMs(), std::memory_order_release
+            );
+            impl->renderActive.store(false, std::memory_order_release);
+        }
+    } renderActivityGuard{impl_.get()};
+    // The prewarmer builds realizations on a second DeviceContext and only
+    // publishes completed COM resources between frames. Holding this lock for
+    // the frame keeps CachedChar realization slots race-free without blocking
+    // the expensive creation work itself.
+    std::lock_guard<std::mutex> realizationLock(impl_->realizationMutex);
     const RenderScene &scene = impl_->scene;
     const TextStyle &baseStyle = scene.style;
     ProbeResult::FrameDiagnostics frameDiagnostics;
@@ -2924,6 +3361,65 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
     ) {
         const auto start = Clock::now();
         context->FillGeometry(geometry, brush);
+        frameDiagnostics.strokeMs += elapsedMs(start);
+        count(
+            secondStroke
+                ? frameDiagnostics.stroke2Draw
+                : frameDiagnostics.strokeDraw
+        );
+    };
+    const auto fillWithRealization = [&] (
+        ID2D1GeometryRealization *realization,
+        ID2D1Geometry *geometry,
+        ID2D1Brush *brush,
+        bool eligible
+    ) {
+        if (eligible && impl_->realizationEnabled
+            && impl_->realizationContext && realization != nullptr) {
+            impl_->realizationContext->DrawGeometryRealization(realization, brush);
+            count(frameDiagnostics.realizationHit);
+            return;
+        }
+        if (impl_->realizationEnabled && impl_->realizationContext && eligible) {
+            count(frameDiagnostics.realizationMiss);
+        }
+        context->FillGeometry(geometry, brush);
+    };
+    const auto strokeWithRealization = [&] (
+        ID2D1GeometryRealization *realization,
+        ID2D1Geometry *geometry,
+        ID2D1Brush *brush,
+        float width,
+        bool secondStroke,
+        bool eligible
+    ) {
+        const auto start = Clock::now();
+        if (eligible && impl_->realizationEnabled
+            && impl_->realizationContext && realization != nullptr) {
+            impl_->realizationContext->DrawGeometryRealization(realization, brush);
+            count(frameDiagnostics.realizationHit);
+        } else {
+            if (impl_->realizationEnabled && impl_->realizationContext && eligible) {
+                count(frameDiagnostics.realizationMiss);
+            }
+            context->DrawGeometry(geometry, brush, width);
+        }
+        frameDiagnostics.strokeMs += elapsedMs(start);
+        count(
+            secondStroke
+                ? frameDiagnostics.stroke2Draw
+                : frameDiagnostics.strokeDraw
+        );
+    };
+    const auto fillStrokeWithRealization = [&] (
+        ID2D1GeometryRealization *realization,
+        ID2D1Geometry *geometry,
+        ID2D1Brush *brush,
+        bool secondStroke,
+        bool eligible
+    ) {
+        const auto start = Clock::now();
+        fillWithRealization(realization, geometry, brush, eligible);
         frameDiagnostics.strokeMs += elapsedMs(start);
         count(
             secondStroke
@@ -5595,13 +6091,20 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const auto drawLegacyStack = [&](bool after, ID2D1Brush *fill,
                                              ID2D1Brush *stroke,
                                              ID2D1Brush *stroke2) {
+                const bool realizationEligible =
+                    std::max(style.strokeWidth, 0.0f)
+                    >= Impl::realizationStrokeThreshold;
                 if (style.stroke2Width > 0.0f) {
-                    for (const auto &geometry : line->geometries) {
-                        drawCountedStroke(
-                            geometry.Get(), stroke2,
+                    for (const Impl::CachedChar &ch : line->chars) {
+                        if (!ch.geometry) {
+                            continue;
+                        }
+                        strokeWithRealization(
+                            ch.stroke2Realization.Get(), ch.geometry.Get(), stroke2,
                             std::max(0.0f, style.strokeWidth)
                                 + style.stroke2Width,
-                            true
+                            true,
+                            realizationEligible
                         );
                     }
                 }
@@ -5614,19 +6117,26 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             continue;
                         }
                         if (protect && ch.protectedStrokeGeometry) {
-                            fillCountedStroke(
-                                ch.protectedStrokeGeometry.Get(), stroke, false
+                            fillStrokeWithRealization(
+                                ch.protectedStrokeRealization.Get(),
+                                ch.protectedStrokeGeometry.Get(), stroke, false,
+                                realizationEligible
                             );
                         } else {
-                            drawCountedStroke(
-                                ch.geometry.Get(), stroke, style.strokeWidth,
-                                false
+                            strokeWithRealization(
+                                ch.strokeRealization.Get(), ch.geometry.Get(), stroke,
+                                style.strokeWidth, false, realizationEligible
                             );
                         }
                     }
                 }
-                for (const auto &geometry : line->geometries) {
-                    context->FillGeometry(geometry.Get(), fill);
+                for (const Impl::CachedChar &ch : line->chars) {
+                    if (ch.geometry) {
+                        fillWithRealization(
+                            ch.fillRealization.Get(), ch.geometry.Get(), fill,
+                            realizationEligible
+                        );
+                    }
                 }
             };
             drawLegacyStack(
@@ -5745,6 +6255,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             // frame, which is dramatically slower than Direct2D's native
             // DrawGeometry stroke on long real-world lines.
             const bool animated = charTransformedAt(charIndex);
+            const bool realizationEligible = !animated
+                && std::max(charStyle.strokeWidth, 0.0f)
+                    >= Impl::realizationStrokeThreshold;
             if (layer == 0) {
                 if (charStyle.stroke2Width <= 0.0f) {
                     return;
@@ -5753,11 +6266,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 if (animated && animatedStroke2 != nullptr) {
                     fillCountedStroke(animatedStroke2, brush, true);
                 } else {
-                    drawCountedStroke(
-                        geometry, brush,
+                    strokeWithRealization(
+                        ch.stroke2Realization.Get(), geometry, brush,
                         std::max(0.0f, charStyle.strokeWidth)
                             + charStyle.stroke2Width,
-                        true
+                        true,
+                        realizationEligible
                     );
                 }
                 return;
@@ -5774,16 +6288,26 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 if (animated && !protect && animatedStroke != nullptr) {
                     fillCountedStroke(animatedStroke, brush, false);
                 } else if (protect && protectedGeometry != nullptr) {
-                    fillCountedStroke(protectedGeometry, brush, false);
+                    if (animated) {
+                        fillCountedStroke(protectedGeometry, brush, false);
+                    } else {
+                        fillStrokeWithRealization(
+                            ch.protectedStrokeRealization.Get(),
+                            protectedGeometry, brush, false,
+                            realizationEligible
+                        );
+                    }
                 } else {
-                    drawCountedStroke(
-                        geometry, brush, charStyle.strokeWidth,
-                        false
+                    strokeWithRealization(
+                        ch.strokeRealization.Get(), geometry, brush,
+                        charStyle.strokeWidth, false, realizationEligible
                     );
                 }
                 return;
             }
-            context->FillGeometry(geometry, brush);
+            fillWithRealization(
+                ch.fillRealization.Get(), geometry, brush, realizationEligible
+            );
         };
         const auto drawMainLayer = [&](int layer) {
             const auto drawPhasePart = [&](std::size_t charIndex,
@@ -5880,18 +6404,28 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 ID2D1Geometry *animatedStroke2 = rubyStroke2GeometryAt(
                     rubyIndex, index
                 );
+                const Impl::CachedChar *rubyChar = index < ruby.chars.size()
+                    ? &ruby.chars[index]
+                    : nullptr;
+                const bool rubyTransformed = rubyUnitTransformed(ruby, index);
+                const bool realizationEligible = !rubyTransformed
+                    && std::max(rubyStyle.rubyStrokeWidth, 0.0f)
+                        >= Impl::realizationStrokeThreshold;
                 if (rubyStyle.rubyStroke2Width > 0.0f) {
-                    if (rubyUnitTransformed(ruby, index)
-                        && animatedStroke2 != nullptr) {
+                    if (rubyTransformed && animatedStroke2 != nullptr) {
                         fillCountedStroke(
                             animatedStroke2, stroke2.Get(), true
                         );
                     } else {
-                        drawCountedStroke(
+                        strokeWithRealization(
+                            rubyChar != nullptr
+                                ? rubyChar->stroke2Realization.Get()
+                                : nullptr,
                             geometry, stroke2.Get(),
                             std::max(0.0f, rubyStyle.rubyStrokeWidth)
                                 + rubyStyle.rubyStroke2Width,
-                            true
+                            true,
+                            realizationEligible
                         );
                     }
                 }
@@ -5907,23 +6441,39 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     ID2D1Geometry *animatedStroke = rubyStrokeGeometryAt(
                         rubyIndex, index
                     );
-                    if (rubyUnitTransformed(ruby, index)
-                        && !protect && animatedStroke != nullptr) {
+                    if (rubyTransformed && !protect && animatedStroke != nullptr) {
                         fillCountedStroke(
                             animatedStroke, stroke.Get(), false
                         );
                     } else if (protect && protectedGeometry != nullptr) {
-                        fillCountedStroke(
-                            protectedGeometry, stroke.Get(), false
-                        );
+                        if (rubyTransformed) {
+                            fillCountedStroke(
+                                protectedGeometry, stroke.Get(), false
+                            );
+                        } else {
+                            fillStrokeWithRealization(
+                                rubyChar != nullptr
+                                    ? rubyChar->protectedStrokeRealization.Get()
+                                    : nullptr,
+                                protectedGeometry, stroke.Get(), false,
+                                realizationEligible
+                            );
+                        }
                     } else {
-                        drawCountedStroke(
+                        strokeWithRealization(
+                            rubyChar != nullptr
+                                ? rubyChar->strokeRealization.Get()
+                                : nullptr,
                             geometry, stroke.Get(), rubyStyle.rubyStrokeWidth,
-                            false
+                            false,
+                            realizationEligible
                         );
                     }
                 }
-                context->FillGeometry(geometry, fill.Get());
+                fillWithRealization(
+                    rubyChar != nullptr ? rubyChar->fillRealization.Get() : nullptr,
+                    geometry, fill.Get(), realizationEligible
+                );
                 if (pushedUtopiaClip) {
                     context->PopAxisAlignedClip();
                 }

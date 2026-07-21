@@ -7218,6 +7218,34 @@ void appendGpuDiagnostics(
         QStringLiteral("brush_cache_capacity"),
         static_cast<qint64>(diagnostics.brushCacheCapacity)
     );
+    out->insert(
+        QStringLiteral("realization_enabled"),
+        diagnostics.realizationEnabled
+    );
+    out->insert(
+        QStringLiteral("realization_supported"),
+        diagnostics.realizationSupported
+    );
+    out->insert(
+        QStringLiteral("realization_prewarm_complete"),
+        diagnostics.realizationPrewarmComplete
+    );
+    out->insert(
+        QStringLiteral("realization_count"),
+        static_cast<qint64>(diagnostics.realizationCount)
+    );
+    out->insert(
+        QStringLiteral("realization_capacity"),
+        static_cast<qint64>(diagnostics.realizationCapacity)
+    );
+    out->insert(
+        QStringLiteral("realization_prewarm_skipped"),
+        static_cast<qint64>(diagnostics.realizationPrewarmSkipped)
+    );
+    out->insert(
+        QStringLiteral("realization_prewarm_ms"),
+        diagnostics.realizationPrewarmMs
+    );
 }
 
 void appendGpuFrameDiagnostics(
@@ -7263,7 +7291,10 @@ QJsonObject handleConfigureGpu(
     QElapsedTimer timer;
     timer.start();
     try {
-        const auto scene = gpuSceneFromConfig(*config);
+        auto scene = gpuSceneFromConfig(*config);
+        scene.prewarmTimeMs = std::max(
+            intValue(request, QStringLiteral("prewarm_t_ms"), 0), 0
+        );
         backend->configure(scene);
         if (forceWarp) {
             runtime->warpGpuConfigured = true;

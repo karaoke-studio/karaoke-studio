@@ -1778,6 +1778,266 @@ def test_gpu_brush_cache_is_bounded_and_reports_evictions(monkeypatch) -> None:
     assert diagnostics["brush_cache_evictions"] > 0
 
 
+def _wait_for_realization_prewarm(
+    renderer: NativeRendererProcess,
+    *,
+    force_warp: bool = False,
+    timeout_s: float = 10.0,
+) -> dict:
+    deadline = time.monotonic() + timeout_s
+    diagnostics = renderer.gpu_diagnostics(force_warp=force_warp)
+    while (
+        not diagnostics.get("realization_prewarm_complete", True)
+        and time.monotonic() < deadline
+    ):
+        time.sleep(0.02)
+        diagnostics = renderer.gpu_diagnostics(force_warp=force_warp)
+    assert diagnostics["realization_prewarm_complete"] is True
+    return diagnostics
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_realization_prewarms_off_frame_and_hits_on_steady_frame(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.delenv("KROK_GPU_REALIZATION", raising=False)
+    style = _g1_style(
+        stroke_width_px=14,
+        stroke2_width_px=7,
+        decoration_kind="none",
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured = renderer.configure_gpu(
+            _g1_track(), style, width=640, height=360, fps=60,
+            force_warp=False, prewarm_t_ms=750,
+        )
+        diagnostics = _wait_for_realization_prewarm(renderer)
+        frame = renderer.render_gpu_frame(750, force_warp=False)
+
+    assert configured["realization_enabled"] is True
+    assert configured["realization_supported"] is True
+    assert diagnostics["realization_count"] > 0
+    assert diagnostics["realization_prewarm_skipped"] == 0
+    assert frame["realization_hit"] > 0
+    assert frame["realization_miss"] == 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_realization_rapid_style_churn_discards_stale_prewarm(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.delenv("KROK_GPU_REALIZATION", raising=False)
+    track = _g1_track()
+    wide_style = _g1_style(
+        stroke_width_px=14,
+        latin_stroke_width_px=14,
+        stroke2_width_px=7,
+        latin_stroke2_width_px=7,
+        decoration_kind="none",
+    )
+    fine_style = replace(
+        wide_style,
+        stroke_width_px=5,
+        latin_stroke_width_px=5,
+    )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        renderer.configure_gpu(
+            track, wide_style, width=640, height=360, fps=60,
+            force_warp=False, prewarm_t_ms=750,
+        )
+        time.sleep(0.11)
+        for stroke_width in (15, 16, 17):
+            renderer.configure_gpu(
+                track,
+                replace(
+                    wide_style,
+                    stroke_width_px=stroke_width,
+                    latin_stroke_width_px=stroke_width,
+                ),
+                width=640,
+                height=360,
+                fps=60,
+                force_warp=False,
+                prewarm_t_ms=750,
+            )
+        renderer.configure_gpu(
+            track, fine_style, width=640, height=360, fps=60,
+            force_warp=False, prewarm_t_ms=750,
+        )
+        diagnostics = _wait_for_realization_prewarm(renderer)
+        time.sleep(0.05)
+        frame = renderer.render_gpu_frame(750, force_warp=False)
+
+    assert diagnostics["realization_count"] == 0
+    assert frame["realization_hit"] == 0
+    assert frame["realization_miss"] == 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_realization_threshold_preserves_fine_stroke_pixels(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _g1_style(
+        stroke_width_px=5,
+        latin_stroke_width_px=5,
+        stroke2_enabled=True,
+        stroke2_width_px=7,
+        latin_stroke2_width_px=7,
+        decoration_kind="none",
+    )
+
+    def render(enabled: bool) -> tuple[dict, dict]:
+        monkeypatch.setenv("KROK_GPU_REALIZATION", "1" if enabled else "0")
+        with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+            configured = renderer.configure_gpu(
+                _g1_track(), style, width=640, height=360, fps=60,
+                force_warp=False, prewarm_t_ms=750,
+            )
+            if enabled:
+                configured = _wait_for_realization_prewarm(renderer)
+            frame = renderer.render_gpu_frame(750, force_warp=False)
+        return configured, frame
+
+    enabled_diagnostics, enabled_frame = render(True)
+    _, disabled_frame = render(False)
+
+    assert enabled_diagnostics["realization_count"] == 0
+    assert enabled_frame["realization_hit"] == 0
+    assert enabled_frame["checksum"] == disabled_frame["checksum"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_realization_is_disabled_for_warp_by_default(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.delenv("KROK_GPU_REALIZATION_WARP", raising=False)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured = renderer.configure_gpu(
+            _g1_track(), _g1_style(stroke_width_px=14),
+            width=640, height=360, fps=60, force_warp=True,
+        )
+        frame = renderer.render_gpu_frame(750, force_warp=True)
+
+    assert configured["realization_enabled"] is False
+    assert configured["realization_count"] == 0
+    assert frame["realization_hit"] == 0
+    assert frame["realization_miss"] == 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("stroke_width", [14, 30, 50])
+def test_gpu_realization_wide_stroke_pixels_stay_within_bounded_diff(
+    monkeypatch,
+    stroke_width: int,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _g1_style(
+        stroke_width_px=stroke_width,
+        latin_stroke_width_px=stroke_width,
+        stroke2_width_px=7,
+        latin_stroke2_width_px=7,
+        decoration_kind="none",
+    )
+
+    def render(enabled: bool) -> bytes:
+        monkeypatch.setenv("KROK_GPU_REALIZATION", "1" if enabled else "0")
+        with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+            renderer.configure_gpu(
+                _g1_track(), style, width=640, height=360, fps=60,
+                force_warp=False, prewarm_t_ms=750,
+            )
+            if enabled:
+                _wait_for_realization_prewarm(renderer)
+            event = renderer.render_gpu_frame(750, force_warp=False)
+            reader = SharedFrameRingReader.from_event(event)
+            reader.attach()
+            try:
+                image = reader.read_qimage(event).convertToFormat(
+                    QImage.Format.Format_RGBA8888
+                )
+                bits = image.constBits()
+                bits.setsize(image.sizeInBytes())
+                return bytes(bits)
+            finally:
+                reader.close()
+
+    realized = render(True)
+    fallback = render(False)
+    realized_bounds = _payload_alpha_bounds(realized)
+    fallback_bounds = _payload_alpha_bounds(fallback)
+    assert all(
+        abs(actual - expected) <= 2
+        for actual, expected in zip(realized_bounds, fallback_bounds)
+    )
+    channel_deltas = [abs(a - b) for a, b in zip(realized, fallback)]
+    assert sum(channel_deltas) / len(channel_deltas) < 1.0
+    assert sum(delta > 8 for delta in channel_deltas) < 12_000
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_realization_utopia_dynamic_units_fall_back_without_visual_jump(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track, base_style = _g4_utopia_main_scene()
+    style = replace(
+        base_style,
+        stroke_width_px=14,
+        latin_stroke_width_px=14,
+        stroke2_enabled=True,
+        stroke2_width_px=7,
+        latin_stroke2_width_px=7,
+        decoration_kind="none",
+    )
+    timestamps = (100, 350, 700, 1_250, 2_400, 3_600)
+
+    def render(enabled: bool) -> tuple[list[dict], list[bytes]]:
+        monkeypatch.setenv("KROK_GPU_REALIZATION", "1" if enabled else "0")
+        events: list[dict] = []
+        payloads: list[bytes] = []
+        with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+            renderer.configure_gpu(
+                track, style, width=640, height=360, fps=60,
+                force_warp=False, prewarm_t_ms=350,
+            )
+            if enabled:
+                _wait_for_realization_prewarm(renderer)
+            reader: SharedFrameRingReader | None = None
+            try:
+                for frame_index, t_ms in enumerate(timestamps):
+                    event = renderer.render_gpu_frame(
+                        t_ms, force_warp=False, frame_index=frame_index
+                    )
+                    events.append(event)
+                    if reader is None:
+                        reader = SharedFrameRingReader.from_event(event)
+                        reader.attach()
+                    image = reader.read_qimage(event).convertToFormat(
+                        QImage.Format.Format_RGBA8888
+                    )
+                    bits = image.constBits()
+                    bits.setsize(image.sizeInBytes())
+                    payloads.append(bytes(bits))
+            finally:
+                if reader is not None:
+                    reader.close()
+        return events, payloads
+
+    realized_events, realized = render(True)
+    _, fallback = render(False)
+
+    assert all(event["realization_miss"] == 0 for event in realized_events)
+    assert any(event["realization_hit"] > 0 for event in realized_events)
+    for realized_frame, fallback_frame in zip(realized, fallback):
+        deltas = [abs(a - b) for a, b in zip(realized_frame, fallback_frame)]
+        assert sum(deltas) / len(deltas) < 1.2
+        if any(realized_frame[3::4]) and any(fallback_frame[3::4]):
+            assert all(
+                abs(actual - expected) <= 2
+                for actual, expected in zip(
+                    _payload_alpha_bounds(realized_frame),
+                    _payload_alpha_bounds(fallback_frame),
+                )
+            )
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g1_n3_glow_concentration_adds_blur_passes(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
