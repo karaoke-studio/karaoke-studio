@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import json
 import os
 from pathlib import Path
 import threading
@@ -663,7 +664,7 @@ def test_gpu_export_request_is_explicit_and_defaults_off(monkeypatch, tmp_path):
 
 def test_gpu_export_worker_count_is_bounded_and_warp_stays_serial(monkeypatch):
     monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT_WORKERS", raising=False)
-    assert renderer._gpu_export_worker_count(force_warp=False) == 2
+    assert renderer._gpu_export_worker_count(force_warp=False) == 3
 
     monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_WORKERS", "2")
     assert renderer._gpu_export_worker_count(force_warp=False) == 2
@@ -673,7 +674,7 @@ def test_gpu_export_worker_count_is_bounded_and_warp_stays_serial(monkeypatch):
     assert renderer._gpu_export_worker_count(force_warp=True) == 1
 
     monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_WORKERS", "invalid")
-    assert renderer._gpu_export_worker_count(force_warp=False) == 2
+    assert renderer._gpu_export_worker_count(force_warp=False) == 3
 
 
 def test_gpu_export_diagnostics_flag(monkeypatch):
@@ -681,6 +682,40 @@ def test_gpu_export_diagnostics_flag(monkeypatch):
     assert renderer._gpu_export_diagnostics_enabled() is False
     monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_DIAGNOSTICS", "true")
     assert renderer._gpu_export_diagnostics_enabled() is True
+
+
+def test_persist_gpu_export_diagnostics_writes_summary_and_frames(
+    monkeypatch, tmp_path
+):
+    output_dir = tmp_path / "diagnostics"
+    monkeypatch.setenv(
+        "KROK_SUBTITLE_GPU_EXPORT_DIAGNOSTICS_DIR", str(output_dir)
+    )
+    messages = []
+
+    renderer._persist_gpu_export_diagnostics(
+        _job(tmp_path),
+        export_run_id="run-1",
+        total_wall_ms=42.0,
+        worker_count=2,
+        force_warp=False,
+        gpu_diagnostics={"adapter": "test gpu"},
+        frame_diagnostics=[
+            {"frame_index": 0, "native_render_ms": 2.0, "stdin_block_ms": 3.0},
+            {"frame_index": 1, "native_render_ms": 4.0, "stdin_block_ms": 5.0},
+        ],
+        crop=(10, 20),
+        bands=None,
+        logger=messages.append,
+    )
+
+    summary = json.loads((output_dir / "run-1-summary.json").read_text("utf-8"))
+    assert summary["export_run_id"] == "run-1"
+    assert summary["frames"] == 2
+    assert summary["crop"] == [10, 20]
+    assert summary["aggregates"]["native_render_ms"]["mean"] == 3.0
+    assert (output_dir / "run-1-frames.csv").is_file()
+    assert messages and "run-1-summary.json" in messages[-1]
 
 
 def test_render_uses_gpu_subtitle_export_without_changing_encoder(monkeypatch, tmp_path):
@@ -699,12 +734,24 @@ def test_render_uses_gpu_subtitle_export_without_changing_encoder(monkeypatch, t
     fake_process = _FakeRenderProcess(job.output_path)
 
     def fake_gpu(
-        process, active_job, total_frames, path, should_cancel, on_progress, logger
+        process,
+        active_job,
+        total_frames,
+        path,
+        should_cancel,
+        on_progress,
+        logger,
+        crop=None,
+        bands=None,
     ):
-        writes.append((active_job.encoder_mode, total_frames, path))
+        writes.append((active_job.encoder_mode, total_frames, path, crop, bands))
         process.stdin.write(b"g" * (active_job.width * active_job.height * 4 * total_frames))
 
     monkeypatch.setenv("KROK_SUBTITLE_RENDER_STRIP", "1")
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT_PACKED", "1")
+    monkeypatch.setattr(
+        renderer, "_compute_subtitle_strip", lambda *_args, **_kwargs: (0, 1)
+    )
     monkeypatch.setattr(renderer, "find_tool", lambda _name, _ffmpeg_dir=None: "ffmpeg")
     monkeypatch.setattr(renderer, "resolve_native_renderer_path", lambda: gpu_path)
     monkeypatch.setattr(renderer, "_write_frames_gpu", fake_gpu)
@@ -716,7 +763,7 @@ def test_render_uses_gpu_subtitle_export_without_changing_encoder(monkeypatch, t
     monkeypatch.setattr(renderer.subprocess, "Popen", lambda *args, **kwargs: fake_process)
 
     assert render_subtitle_video(job) == job.output_path
-    assert writes == [("cpu", 2, gpu_path)]
+    assert writes == [("cpu", 2, gpu_path, (0, 1), None)]
     assert bytes(fake_process.stdin.data) == b"g" * 16
 
 

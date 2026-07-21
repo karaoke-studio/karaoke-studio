@@ -86,6 +86,18 @@ struct ProbeResult {
         double geometryMs = 0.0;
         double strokeMs = 0.0;
         double glowMs = 0.0;
+        double endDrawWaitMs = 0.0;
+        double endDrawGlowSourceMs = 0.0;
+        double endDrawRubyGlowSourceMs = 0.0;
+        double endDrawInlineGlowSourceMs = 0.0;
+        double endDrawFrameLayersMs = 0.0;
+        double endDrawEmptyFrameMs = 0.0;
+        std::uint64_t endDrawCount = 0;
+        std::uint64_t endDrawGlowSourceCount = 0;
+        std::uint64_t endDrawRubyGlowSourceCount = 0;
+        std::uint64_t endDrawInlineGlowSourceCount = 0;
+        std::uint64_t endDrawFrameLayersCount = 0;
+        std::uint64_t endDrawEmptyFrameCount = 0;
         double gpuWaitMs = 0.0;
         double readbackCopyMs = 0.0;
     } frameDiagnostics;
@@ -324,7 +336,11 @@ struct TextStyle {
 struct RenderScene {
     int width = 1920;
     int height = 1080;
+    int exportCropTop = 0;
+    int exportCropHeight = 0;
+    std::vector<std::pair<int, int>> exportBands;
     int prewarmTimeMs = 0;
+    bool realizationEnabled = true;
     std::uint64_t realizationCapacity = 8192;
     float viewportScale = 1.0f;
     float viewportRotation = 0.0f;

@@ -94,6 +94,15 @@ def gpu_export_realization_capacity() -> int:
     )
 
 
+def gpu_export_packed_enabled() -> bool:
+    return os.environ.get("KROK_SUBTITLE_GPU_EXPORT_PACKED", "0").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def _wait_for_gpu_export_realizations(
     renderer: NativeRendererProcess,
     configured: dict[str, object],
@@ -270,17 +279,24 @@ def iter_gpu_rgba_frames(
     extra_tracks: list[TimingTrack] | None = None,
     force_warp: bool = False,
     worker_count: int = 1,
+    packed_rgba: bool | None = None,
+    crop: tuple[int, int] | None = None,
+    bands: list[tuple[int, int]] | None = None,
     should_cancel: Callable[[], bool] | None = None,
     on_prepare_progress: Callable[[int, int], None] | None = None,
     on_diagnostics: Callable[[dict[str, object]], None] | None = None,
-) -> Iterator[bytes]:
+    on_frame_diagnostics: Callable[[dict[str, object]], None] | None = None,
+) -> Iterator[bytes | memoryview]:
     """Yield straight RGBA frames from the Direct2D GPU export path.
 
     Direct2D reads back only the renderer's conservative subtitle bands.  The
     shared-memory reader expands those bands into a transparent QImage before
     converting premultiplied BGRA to ffmpeg's straight RGBA input format.
 
-    One worker keeps the original one-frame-deep two-slot pipeline. Hardware
+    One worker keeps the original one-frame-deep two-slot pipeline. The
+    opt-in packed path converts full-frame premultiplied BGRA to straight RGBA
+    in the sidecar and lends the shared-memory slot directly to ffmpeg without
+    constructing a QImage. Hardware
     exports may use up to four independent Direct2D workers; completed frames
     are held in a ring-sized reorder window and yielded strictly in timestamp
     order, so ffmpeg never observes out-of-order input.
@@ -292,6 +308,21 @@ def iter_gpu_rgba_frames(
         return
     shm_key = f"krok-gpu-export-{os.getpid()}-{uuid.uuid4().hex}"
     slot_count = 2
+    packed = gpu_export_packed_enabled() if packed_rgba is None else bool(packed_rgba)
+    packed_bands: list[tuple[int, int]] = []
+    if packed:
+        for raw_top, raw_height in bands or []:
+            top = max(0, min(int(raw_top), max(int(height) - 1, 0)))
+            band_height = max(1, min(int(raw_height), int(height) - top))
+            packed_bands.append((top, band_height))
+    crop_top, crop_height = crop if packed and crop is not None else (0, height)
+    crop_top = max(0, min(int(crop_top), max(int(height) - 1, 0)))
+    crop_height = max(1, min(int(crop_height), int(height) - crop_top))
+    packed_height = (
+        sum(max(int(band_height), 1) for _top, band_height in packed_bands)
+        if packed_bands
+        else crop_height
+    )
     reader: SharedFrameRingReader | None = None
     try:
         with NativeRendererProcess(
@@ -299,6 +330,7 @@ def iter_gpu_rgba_frames(
             response_timeout_s=15.0,
             close_timeout_s=1.0,
         ) as renderer:
+            configure_started = time.perf_counter()
             configured = renderer.configure_gpu(
                 track,
                 style,
@@ -308,25 +340,28 @@ def iter_gpu_rgba_frames(
                 force_warp=force_warp,
                 extra_tracks=extra_tracks,
                 worker_count=max(1, min(int(worker_count), 4)),
-                realization_capacity=gpu_export_realization_capacity(),
+                realization_enabled=False,
+                export_crop_top=crop_top if packed else 0,
+                export_crop_height=crop_height if packed and not packed_bands else 0,
+                export_bands=packed_bands,
             )
-            diagnostics = _wait_for_gpu_export_realizations(
-                renderer,
-                configured,
-                force_warp=force_warp,
-                should_cancel=should_cancel,
-                on_progress=on_prepare_progress,
-            )
+            configured = dict(configured)
+            configured["prepare_layout_ms"] = (
+                time.perf_counter() - configure_started
+            ) * 1000.0
             if on_diagnostics is not None:
-                on_diagnostics(diagnostics)
+                on_diagnostics(configured)
 
             active_workers = max(
                 1, min(int(configured.get("worker_count", 1) or 1), 4)
             )
             slot_count = 2 if active_workers == 1 else active_workers
 
+            request_started: dict[int, float] = {}
+
             def begin_frame(frame_index: int) -> None:
                 t_ms = int(round(frame_index * 1000 / max(int(fps), 1)))
+                request_started[frame_index] = time.perf_counter()
                 renderer.begin_render_gpu_frame(
                     t_ms,
                     force_warp=force_warp,
@@ -334,9 +369,110 @@ def iter_gpu_rgba_frames(
                     frame_index=frame_index,
                     shm_key=shm_key,
                     include_checksum=False,
-                    readback_bands=True,
+                    readback_bands=not packed,
+                    packed_rgba=packed,
+                    packed_height=packed_height if packed else 0,
                     slot_count=slot_count,
                     request_serial=frame_index,
+                )
+
+            def record_frame_diagnostics(
+                event: dict[str, object],
+                frame_index: int,
+                *,
+                expand_ms: float,
+                convert_ms: float,
+                bytes_ms: float,
+                frame_bytes: int,
+                copies_per_frame: int,
+            ) -> None:
+                if on_frame_diagnostics is None:
+                    return
+                roundtrip_ms = (
+                    time.perf_counter()
+                    - request_started.pop(frame_index, time.perf_counter())
+                ) * 1000.0
+                native_accounted_ms = sum(
+                    float(event.get(field, 0.0) or 0.0)
+                    for field in (
+                        "render_ms",
+                        "readback_ms",
+                        "native_pack_ms",
+                        "shm_copy_ms",
+                    )
+                )
+                on_frame_diagnostics(
+                    {
+                        "frame_index": frame_index,
+                        "t_ms": int(event.get("t_ms", 0) or 0),
+                        "worker_index": int(event.get("worker_index", 0) or 0),
+                        "native_render_ms": float(event.get("render_ms", 0.0) or 0.0),
+                        "animation_layout_ms": float(
+                            event.get("animation_layout_ms", 0.0) or 0.0
+                        ),
+                        "geometry_ms": float(event.get("geometry_ms", 0.0) or 0.0),
+                        "stroke_ms": float(event.get("stroke_ms", 0.0) or 0.0),
+                        "glow_ms": float(event.get("glow_ms", 0.0) or 0.0),
+                        "end_draw_wait_ms": float(
+                            event.get("end_draw_wait_ms", 0.0) or 0.0
+                        ),
+                        "end_draw_glow_source_ms": float(
+                            event.get("end_draw_glow_source_ms", 0.0) or 0.0
+                        ),
+                        "end_draw_ruby_glow_source_ms": float(
+                            event.get("end_draw_ruby_glow_source_ms", 0.0) or 0.0
+                        ),
+                        "end_draw_inline_glow_source_ms": float(
+                            event.get("end_draw_inline_glow_source_ms", 0.0) or 0.0
+                        ),
+                        "end_draw_frame_layers_ms": float(
+                            event.get("end_draw_frame_layers_ms", 0.0) or 0.0
+                        ),
+                        "end_draw_empty_frame_ms": float(
+                            event.get("end_draw_empty_frame_ms", 0.0) or 0.0
+                        ),
+                        "end_draw_count": int(event.get("end_draw_count", 0) or 0),
+                        "end_draw_glow_source_count": int(
+                            event.get("end_draw_glow_source_count", 0) or 0
+                        ),
+                        "end_draw_ruby_glow_source_count": int(
+                            event.get("end_draw_ruby_glow_source_count", 0) or 0
+                        ),
+                        "end_draw_inline_glow_source_count": int(
+                            event.get("end_draw_inline_glow_source_count", 0) or 0
+                        ),
+                        "end_draw_frame_layers_count": int(
+                            event.get("end_draw_frame_layers_count", 0) or 0
+                        ),
+                        "end_draw_empty_frame_count": int(
+                            event.get("end_draw_empty_frame_count", 0) or 0
+                        ),
+                        "glow_source_area_px": int(
+                            event.get("glow_source_area_px", 0) or 0
+                        ),
+                        "layer_push": int(event.get("layer_push", 0) or 0),
+                        "gpu_wait_ms": float(event.get("gpu_wait_ms", 0.0) or 0.0),
+                        "readback_copy_ms": float(
+                            event.get("readback_copy_ms", 0.0) or 0.0
+                        ),
+                        "readback_ms": float(event.get("readback_ms", 0.0) or 0.0),
+                        "native_pack_ms": float(
+                            event.get("native_pack_ms", 0.0) or 0.0
+                        ),
+                        "shm_copy_ms": float(event.get("shm_copy_ms", 0.0) or 0.0),
+                        "protocol_roundtrip_ms": roundtrip_ms,
+                        "protocol_wait_ms": max(
+                            roundtrip_ms - native_accounted_ms, 0.0
+                        ),
+                        "python_expand_ms": expand_ms,
+                        "python_convert_ms": convert_ms,
+                        "python_bytes_ms": bytes_ms,
+                        "bytes_per_frame": frame_bytes,
+                        "copies_per_frame": copies_per_frame,
+                        "readback_ratio": float(
+                            event.get("readback_ratio", 1.0) or 0.0
+                        ),
+                    }
                 )
 
             def consume_event(event: dict[str, object], frame_index: int) -> bytes:
@@ -349,17 +485,32 @@ def iter_gpu_rgba_frames(
                 if reader is None:
                     reader = SharedFrameRingReader.from_event(event)
                     reader.attach()
+                expand_started = time.perf_counter()
                 try:
-                    image = reader.read_qimage(event).convertToFormat(
-                        QImage.Format.Format_RGBA8888
-                    )
+                    image = reader.read_qimage(event)
                 except RuntimeError as exc:
                     raise NativeRendererError(
                         f"failed to consume GPU subtitle frame {frame_index}: {exc}"
                     ) from exc
+                expand_ms = (time.perf_counter() - expand_started) * 1000.0
+                convert_started = time.perf_counter()
+                image = image.convertToFormat(QImage.Format.Format_RGBA8888)
+                convert_ms = (time.perf_counter() - convert_started) * 1000.0
+                bytes_started = time.perf_counter()
                 bits = image.constBits()
                 bits.setsize(image.sizeInBytes())
-                return bytes(bits)
+                frame = bytes(bits)
+                bytes_ms = (time.perf_counter() - bytes_started) * 1000.0
+                record_frame_diagnostics(
+                    event,
+                    frame_index,
+                    expand_ms=expand_ms,
+                    convert_ms=convert_ms,
+                    bytes_ms=bytes_ms,
+                    frame_bytes=len(frame),
+                    copies_per_frame=4,
+                )
+                return frame
 
             if active_workers == 1:
                 begin_frame(0)
@@ -369,7 +520,23 @@ def iter_gpu_rgba_frames(
                     event = renderer.finish_render_gpu_frame()
                     if frame_index + 1 < frame_total:
                         begin_frame(frame_index + 1)
-                    yield consume_event(event, frame_index)
+                    if packed:
+                        if reader is None:
+                            reader = SharedFrameRingReader.from_event(event)
+                            reader.attach()
+                        with reader.borrow_packed_rgba_view(event) as frame:
+                            record_frame_diagnostics(
+                                event,
+                                frame_index,
+                                expand_ms=0.0,
+                                convert_ms=0.0,
+                                bytes_ms=0.0,
+                                frame_bytes=len(frame),
+                                copies_per_frame=2,
+                            )
+                            yield frame
+                    else:
+                        yield consume_event(event, frame_index)
             else:
                 # Each slot owns the arithmetic sequence ``slot + n * slots``.
                 # A slot is reused only after its previous QImage has been
@@ -378,7 +545,7 @@ def iter_gpu_rgba_frames(
                 in_flight: set[int] = set()
                 free_slots: set[int] = set()
                 next_for_slot = [slot for slot in range(slot_count)]
-                pending: dict[int, bytes] = {}
+                pending: dict[int, bytes | dict[str, object]] = {}
                 next_emit = 0
 
                 def submit_slot(slot: int) -> None:
@@ -401,11 +568,40 @@ def iter_gpu_rgba_frames(
                         )
                     in_flight.remove(frame_index)
                     slot = frame_index % slot_count
-                    pending[frame_index] = consume_event(event, frame_index)
-                    free_slots.add(slot)
+                    if packed:
+                        if reader is None:
+                            reader = SharedFrameRingReader.from_event(event)
+                            reader.attach()
+                        # Keep the slot reserved until its borrowed view has
+                        # been consumed by ffmpeg. This allows out-of-order GPU
+                        # completion without copying packed RGBA in Python or
+                        # letting a worker overwrite a still-pending slot.
+                        pending[frame_index] = event
+                    else:
+                        pending[frame_index] = consume_event(event, frame_index)
+                        free_slots.add(slot)
 
                     while next_emit in pending:
-                        yield pending.pop(next_emit)
+                        completed = pending.pop(next_emit)
+                        completed_slot = next_emit % slot_count
+                        if packed:
+                            assert isinstance(completed, dict)
+                            assert reader is not None
+                            with reader.borrow_packed_rgba_view(completed) as frame:
+                                record_frame_diagnostics(
+                                    completed,
+                                    next_emit,
+                                    expand_ms=0.0,
+                                    convert_ms=0.0,
+                                    bytes_ms=0.0,
+                                    frame_bytes=len(frame),
+                                    copies_per_frame=2,
+                                )
+                                yield frame
+                            free_slots.add(completed_slot)
+                        else:
+                            assert isinstance(completed, bytes)
+                            yield completed
                         next_emit += 1
 
                     reorder_limit = next_emit + slot_count

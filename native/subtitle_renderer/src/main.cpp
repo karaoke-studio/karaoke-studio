@@ -1627,6 +1627,78 @@ bool writeSharedRgbaSlot(
     return true;
 }
 
+bool writeSharedPackedRgbaSlot(
+    RenderRuntime *runtime,
+    const std::uint8_t *premultipliedBgra,
+    int width,
+    int height,
+    int stride,
+    int generation,
+    int frameIndex,
+    int tMs,
+    int slotIndex,
+    SharedFrameRing *ringOut
+) {
+    if (runtime == nullptr || premultipliedBgra == nullptr || width <= 0
+        || height <= 0 || stride < width * 4) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(runtime->sharedMemoryMutex);
+    if (runtime->sharedMemory == nullptr || !runtime->sharedMemory->isAttached()
+        || runtime->sharedRing.slotCount <= 0) {
+        return false;
+    }
+    SharedFrameRing ring = runtime->sharedRing;
+    if (width != ring.width || height != ring.height
+        || ring.stride != width * 4) {
+        return false;
+    }
+    const int safeSlot = ((slotIndex % ring.slotCount) + ring.slotCount)
+        % ring.slotCount;
+    if (!runtime->sharedMemory->lock()) {
+        return false;
+    }
+    char *base = static_cast<char *>(runtime->sharedMemory->data());
+    const int slotOffset = safeSlot * ring.slotBytes;
+    char *slot = base + slotOffset;
+    writeSlotInt(slot, 0, 1);
+    writeSlotInt(slot, 4, generation);
+    writeSlotInt(slot, 8, frameIndex);
+    writeSlotInt(slot, 12, tMs);
+    writeSlotInt(slot, 16, width);
+    writeSlotInt(slot, 20, height);
+    writeSlotInt(slot, 24, ring.stride);
+    writeSlotInt(slot, 28, 1);
+    writeSlotInt(slot, 32, ring.headerBytes);
+    writeSlotInt(slot, 36, ring.pixelBytes);
+    QImage premultiplied(
+        const_cast<std::uint8_t *>(premultipliedBgra),
+        width,
+        height,
+        stride,
+        QImage::Format_ARGB32_Premultiplied
+    );
+    const QImage straight = premultiplied.convertToFormat(QImage::Format_RGBA8888);
+    if (straight.isNull()) {
+        runtime->sharedMemory->unlock();
+        return false;
+    }
+    auto *payload = reinterpret_cast<std::uint8_t *>(slot + ring.headerBytes);
+    const int rowBytes = width * 4;
+    for (int y = 0; y < height; ++y) {
+        auto *destination = payload
+            + static_cast<std::size_t>(y) * ring.stride;
+        std::memcpy(destination, straight.constScanLine(y), rowBytes);
+    }
+    writeSlotInt(slot, 0, 2);
+    runtime->sharedMemory->unlock();
+    if (ringOut != nullptr) {
+        ring.pixelFormat = QStringLiteral("rgba8888");
+        *ringOut = ring;
+    }
+    return true;
+}
+
 bool writeSharedBandSlot(
     RenderRuntime *runtime,
     const std::uint8_t *payloadData,
@@ -7447,6 +7519,18 @@ void appendGpuFrameDiagnostics(
     out->insert(QStringLiteral("geometry_ms"), diagnostics.geometryMs);
     out->insert(QStringLiteral("stroke_ms"), diagnostics.strokeMs);
     out->insert(QStringLiteral("glow_ms"), diagnostics.glowMs);
+    out->insert(QStringLiteral("end_draw_wait_ms"), diagnostics.endDrawWaitMs);
+    out->insert(QStringLiteral("end_draw_glow_source_ms"), diagnostics.endDrawGlowSourceMs);
+    out->insert(QStringLiteral("end_draw_ruby_glow_source_ms"), diagnostics.endDrawRubyGlowSourceMs);
+    out->insert(QStringLiteral("end_draw_inline_glow_source_ms"), diagnostics.endDrawInlineGlowSourceMs);
+    out->insert(QStringLiteral("end_draw_frame_layers_ms"), diagnostics.endDrawFrameLayersMs);
+    out->insert(QStringLiteral("end_draw_empty_frame_ms"), diagnostics.endDrawEmptyFrameMs);
+    out->insert(QStringLiteral("end_draw_count"), static_cast<qint64>(diagnostics.endDrawCount));
+    out->insert(QStringLiteral("end_draw_glow_source_count"), static_cast<qint64>(diagnostics.endDrawGlowSourceCount));
+    out->insert(QStringLiteral("end_draw_ruby_glow_source_count"), static_cast<qint64>(diagnostics.endDrawRubyGlowSourceCount));
+    out->insert(QStringLiteral("end_draw_inline_glow_source_count"), static_cast<qint64>(diagnostics.endDrawInlineGlowSourceCount));
+    out->insert(QStringLiteral("end_draw_frame_layers_count"), static_cast<qint64>(diagnostics.endDrawFrameLayersCount));
+    out->insert(QStringLiteral("end_draw_empty_frame_count"), static_cast<qint64>(diagnostics.endDrawEmptyFrameCount));
     out->insert(QStringLiteral("gpu_wait_ms"), diagnostics.gpuWaitMs);
     out->insert(QStringLiteral("readback_copy_ms"), diagnostics.readbackCopyMs);
 }
@@ -7462,6 +7546,32 @@ QJsonObject handleConfigureGpu(
         return out;
     }
     const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
+    const bool realizationEnabled = request.value(
+        QStringLiteral("realization_enabled")
+    ).toBool(true);
+    const int exportCropTop = std::max(
+        intValue(request, QStringLiteral("export_crop_top"), 0), 0
+    );
+    const int exportCropHeight = std::max(
+        intValue(request, QStringLiteral("export_crop_height"), 0), 0
+    );
+    std::vector<std::pair<int, int>> exportBands;
+    const QJsonArray exportBandsJson = request.value(
+        QStringLiteral("export_bands")
+    ).toArray();
+    exportBands.reserve(static_cast<std::size_t>(exportBandsJson.size()));
+    for (const QJsonValue &value : exportBandsJson) {
+        const QJsonObject item = value.toObject();
+        const int top = std::max(
+            intValue(item, QStringLiteral("top"), 0), 0
+        );
+        const int bandHeight = std::max(
+            intValue(item, QStringLiteral("height"), 0), 0
+        );
+        if (bandHeight > 0) {
+            exportBands.emplace_back(top, bandHeight);
+        }
+    }
     const int requestedWorkers = std::clamp(
         intValue(request, QStringLiteral("worker_count"), 1), 1, 8
     );
@@ -7481,6 +7591,10 @@ QJsonObject handleConfigureGpu(
             scene.prewarmTimeMs = std::max(
                 intValue(request, QStringLiteral("prewarm_t_ms"), 0), 0
             );
+            scene.realizationEnabled = realizationEnabled;
+            scene.exportCropTop = exportCropTop;
+            scene.exportCropHeight = exportCropHeight;
+            scene.exportBands = exportBands;
             scene.realizationCapacity = realizationCapacity;
             auto &pool = runtime->hardwareGpuPreviewPool;
             if (pool == nullptr || pool->workerCount() != workerCount) {
@@ -7530,6 +7644,10 @@ QJsonObject handleConfigureGpu(
         scene.prewarmTimeMs = std::max(
             intValue(request, QStringLiteral("prewarm_t_ms"), 0), 0
         );
+        scene.realizationEnabled = realizationEnabled;
+        scene.exportCropTop = exportCropTop;
+        scene.exportCropHeight = exportCropHeight;
+        scene.exportBands = exportBands;
         scene.realizationCapacity = realizationCapacity;
         backend->configure(scene);
         if (forceWarp) {
@@ -7612,6 +7730,20 @@ QJsonObject renderGpuFrameWithBackend(
         intValue(request, QStringLiteral("slot_count"), 1), 1, 4
     );
     const int slotIndex = ((frameIndex % slotCount) + slotCount) % slotCount;
+    const bool packedRgba = request.value(
+        QStringLiteral("packed_rgba")
+    ).toBool(false);
+    const int packedHeight = packedRgba
+        ? std::clamp(
+            intValue(
+                request,
+                QStringLiteral("packed_height"),
+                config.physicalHeight()
+            ),
+            1,
+            config.physicalHeight()
+        )
+        : config.physicalHeight();
     const QString shmKey = stringValue(
         request,
         QStringLiteral("shm_key"),
@@ -7623,7 +7755,7 @@ QJsonObject renderGpuFrameWithBackend(
             shmKey,
             slotCount,
             config.physicalWidth(),
-            config.physicalHeight(),
+            packedHeight,
             &shmError
         )) {
         QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
@@ -7631,15 +7763,27 @@ QJsonObject renderGpuFrameWithBackend(
         return out;
     }
     try {
-        const bool readbackBands = request.value(
+        const bool readbackBands = !packedRgba && request.value(
             QStringLiteral("readback_bands")
         ).toBool(false);
         const auto result = backend->renderFrame(tMs, readbackBands);
         SharedFrameRing ring;
         QElapsedTimer sharedMemoryTimer;
         sharedMemoryTimer.start();
-        const bool wrote = readbackBands
-            ? writeSharedBandSlot(
+        const bool wrote = packedRgba
+            ? writeSharedPackedRgbaSlot(
+                runtime,
+                result.surface.bytes.data(),
+                result.surface.width,
+                result.surface.height,
+                result.surface.stride,
+                generation,
+                frameIndex,
+                tMs,
+                slotIndex,
+                &ring
+            )
+            : (readbackBands ? writeSharedBandSlot(
                 runtime,
                 result.surface.bytes.data(),
                 static_cast<int>(result.surface.bytes.size()),
@@ -7651,8 +7795,7 @@ QJsonObject renderGpuFrameWithBackend(
                 tMs,
                 slotIndex,
                 &ring
-            )
-            : writeSharedRgbaSlot(
+            ) : writeSharedRgbaSlot(
                 runtime,
                 result.surface.bytes.data(),
                 result.surface.width,
@@ -7669,7 +7812,7 @@ QJsonObject renderGpuFrameWithBackend(
                     == krok::subtitle::native::PixelFormat::Bgra8888Premultiplied
                     ? QStringLiteral("bgra8888_premultiplied")
                     : QStringLiteral("rgba8888")
-            );
+            ));
         const double sharedMemoryCopyMs =
             static_cast<double>(sharedMemoryTimer.nsecsElapsed()) / 1000000.0;
         if (!wrote) {
@@ -7693,7 +7836,11 @@ QJsonObject renderGpuFrameWithBackend(
         out.insert(QStringLiteral("readback_ms"), result.readbackMs);
         out.insert(
             QStringLiteral("shm_copy_ms"),
-            sharedMemoryCopyMs
+            packedRgba ? 0.0 : sharedMemoryCopyMs
+        );
+        out.insert(
+            QStringLiteral("native_pack_ms"),
+            packedRgba ? sharedMemoryCopyMs : 0.0
         );
         appendGpuFrameDiagnostics(&out, result.frameDiagnostics);
         if (request.value(QStringLiteral("include_checksum")).toBool(true)) {
@@ -7703,6 +7850,15 @@ QJsonObject renderGpuFrameWithBackend(
             );
         }
         appendSharedRingMetadata(out, ring, slotIndex);
+        if (packedRgba) {
+            out.insert(
+                QStringLiteral("readback_ratio"),
+                config.physicalHeight() > 0
+                    ? static_cast<double>(packedHeight)
+                        / static_cast<double>(config.physicalHeight())
+                    : 0.0
+            );
+        }
         if (readbackBands) {
             QJsonArray bands;
             int packedHeight = 0;

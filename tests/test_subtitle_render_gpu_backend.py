@@ -1671,6 +1671,73 @@ def test_gpu_preview_worker_pool_bounds_in_flight_and_tags_out_of_order_frames(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_glow_scratch_reuse_is_worker_history_independent(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar(char, index * 100)
+                    for index, char in enumerate("WIDE GLOW SOURCE")
+                ],
+                end_ms=700,
+                display_start_override_ms=0,
+                display_end_override_ms=750,
+            ),
+            TimingLine(
+                chars=[TimingChar("I", 800), TimingChar("I", 1_100)],
+                end_ms=1_400,
+                display_start_override_ms=800,
+                display_end_override_ms=1_600,
+            ),
+        ]
+    )
+    style = _g1_style(
+        decoration_kind="glow",
+        glow_radius_px=18,
+        line_horizontal_layout="right",
+    )
+    times = (500, 1_000)
+    shm_key = f"test-gpu-glow-history-{uuid.uuid4().hex}"
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30.0) as renderer:
+        renderer.configure_gpu(
+            track, style, width=640, height=360, fps=60, worker_count=1,
+            realization_enabled=False,
+        )
+        serial = {}
+        for frame_index, t_ms in enumerate(times):
+            event = renderer.render_gpu_frame(
+                t_ms,
+                frame_index=frame_index,
+                shm_key=f"{shm_key}-serial",
+                include_checksum=False,
+            )
+            with SharedFrameRingReader.from_event(event) as reader:
+                serial[t_ms] = bytes(reader.read_frame(event).payload)
+
+        renderer.configure_gpu(
+            track, style, width=640, height=360, fps=60, worker_count=2,
+            realization_enabled=False,
+        )
+        for frame_index, t_ms in enumerate(times):
+            renderer.begin_render_gpu_frame(
+                t_ms,
+                frame_index=frame_index,
+                shm_key=f"{shm_key}-pooled",
+                slot_count=2,
+                include_checksum=False,
+            )
+        pooled = {}
+        for _ in times:
+            event = renderer.finish_render_gpu_frame()
+            with SharedFrameRingReader.from_event(event) as reader:
+                pooled[int(event["t_ms"])] = bytes(reader.read_frame(event).payload)
+
+    assert pooled == serial
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_diagnostics_report_cache_and_dxgi_memory_without_rendering(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
@@ -1728,11 +1795,39 @@ def test_gpu_frame_diagnostics_expose_resource_timing_and_glow_counters(monkeypa
         "geometry_ms",
         "stroke_ms",
         "glow_ms",
+        "end_draw_wait_ms",
+        "end_draw_glow_source_ms",
+        "end_draw_ruby_glow_source_ms",
+        "end_draw_inline_glow_source_ms",
+        "end_draw_frame_layers_ms",
+        "end_draw_empty_frame_ms",
         "gpu_wait_ms",
         "readback_copy_ms",
         "shm_copy_ms",
     ):
         assert event[field] >= 0.0
+    assert event["end_draw_count"] == sum(
+        event[field]
+        for field in (
+            "end_draw_glow_source_count",
+            "end_draw_ruby_glow_source_count",
+            "end_draw_inline_glow_source_count",
+            "end_draw_frame_layers_count",
+            "end_draw_empty_frame_count",
+        )
+    )
+    assert event["end_draw_wait_ms"] == pytest.approx(
+        sum(
+            event[field]
+            for field in (
+                "end_draw_glow_source_ms",
+                "end_draw_ruby_glow_source_ms",
+                "end_draw_inline_glow_source_ms",
+                "end_draw_frame_layers_ms",
+                "end_draw_empty_frame_ms",
+            )
+        )
+    )
     assert diagnostics["frames_rendered"] == 1
     assert diagnostics["brush_created"] == event["brush_created"]
     assert diagnostics["glow_source_area_px"] == event["glow_source_area_px"]
@@ -2042,6 +2137,38 @@ def test_gpu_realization_accepts_export_capacity_override(monkeypatch) -> None:
         )
 
     assert configured["realization_capacity"] == 65_536
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_realization_can_be_disabled_per_configuration(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.delenv("KROK_GPU_REALIZATION", raising=False)
+    style = _g1_style(
+        stroke_width_px=14,
+        stroke2_width_px=7,
+        decoration_kind="none",
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured = renderer.configure_gpu(
+            _g1_track(),
+            style,
+            width=640,
+            height=360,
+            fps=60,
+            force_warp=False,
+            prewarm_t_ms=750,
+            worker_count=2,
+            realization_enabled=False,
+        )
+        frame = renderer.render_gpu_frame(750, force_warp=False)
+
+    assert configured["realization_enabled"] is False
+    assert configured["worker_count"] == 2
+    assert configured["realization_prewarm_complete"] is True
+    assert configured["realization_prewarm_tasks"] == 0
+    assert configured["realization_count"] == 0
+    assert frame["realization_hit"] == 0
+    assert frame["realization_miss"] == 0
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
@@ -4175,6 +4302,103 @@ def test_gpu_g3_banded_readback_reconstructs_full_frame_exactly(monkeypatch) -> 
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_export_packed_rgba_matches_qimage_unpremultiply(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = _g1_track()
+    style = _g1_style(
+        base_color="#80FF40",
+        fill_color="#2040FF",
+        decoration_kind="glow",
+        glow_radius_px=6,
+    )
+    shm_key = f"krok-gpu-packed-{uuid.uuid4().hex}"
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        renderer.configure_gpu(
+            track,
+            style,
+            width=160,
+            height=90,
+            fps=60,
+            force_warp=True,
+            realization_enabled=False,
+        )
+        full_event = renderer.render_gpu_frame(
+            750,
+            force_warp=True,
+            shm_key=shm_key,
+        )
+        with SharedFrameRingReader.from_event(full_event) as reader:
+            expected_image = reader.read_qimage(full_event).convertToFormat(
+                QImage.Format.Format_RGBA8888
+            )
+            expected_bits = expected_image.constBits()
+            expected_bits.setsize(expected_image.sizeInBytes())
+            full_expected = bytes(expected_bits)
+
+        crop_top = 20
+        crop_height = 40
+        row_bytes = 160 * 4
+        expected = full_expected[
+            crop_top * row_bytes : (crop_top + crop_height) * row_bytes
+        ]
+        renderer.configure_gpu(
+            track,
+            style,
+            width=160,
+            height=90,
+            fps=60,
+            force_warp=True,
+            realization_enabled=False,
+            export_crop_top=crop_top,
+            export_crop_height=crop_height,
+        )
+
+        packed_event = renderer.render_gpu_frame(
+            750,
+            force_warp=True,
+            shm_key=shm_key,
+            packed_rgba=True,
+            packed_height=crop_height,
+            include_checksum=False,
+        )
+        with SharedFrameRingReader.from_event(packed_event) as reader:
+            with reader.borrow_packed_rgba_view(packed_event) as view:
+                actual = bytes(view)
+
+        export_bands = [(10, 10), (60, 10)]
+        renderer.configure_gpu(
+            track,
+            style,
+            width=160,
+            height=90,
+            fps=60,
+            force_warp=True,
+            realization_enabled=False,
+            export_bands=export_bands,
+        )
+        bands_event = renderer.render_gpu_frame(
+            750,
+            force_warp=True,
+            shm_key=shm_key,
+            packed_rgba=True,
+            packed_height=20,
+            include_checksum=False,
+        )
+        with SharedFrameRingReader.from_event(bands_event) as reader:
+            with reader.borrow_packed_rgba_view(bands_event) as view:
+                actual_bands = bytes(view)
+
+    assert packed_event["pixel_format"] == "rgba8888"
+    assert packed_event["native_pack_ms"] >= 0.0
+    assert packed_event["shm_copy_ms"] == 0.0
+    assert actual == expected
+    assert actual_bands == b"".join(
+        full_expected[top * row_bytes : (top + height) * row_bytes]
+        for top, height in export_bands
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g3_uses_painter_resolved_display_overrides(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     track = TimingTrack(
@@ -5991,6 +6215,105 @@ def test_gpu_g3_vertical_gradient_tracks_painter_fill_direction(monkeypatch) -> 
         gpu = gpu_rows[min(int(len(gpu_rows) * ratio), len(gpu_rows) - 1)]
         cpu = painter_rows[min(int(len(painter_rows) * ratio), len(painter_rows) - 1)]
         assert max(abs(gpu[channel] - cpu[channel]) for channel in range(3)) <= 42
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_vertical_gradient_is_not_retargeted_by_matching_ruby_glow(
+    monkeypatch,
+) -> None:
+    """A ruby brush must not mutate an already-held main-text brush.
+
+    N3 projects can use the same vertical gradient for the sung body and glow,
+    with ruby colors following the main text.  The brush cache used to return
+    one mutable D2D brush for both the main and ruby bounds; preparing the ruby
+    glow then moved the main gradient into the ruby box and clamped the body to
+    one end color.
+    """
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    gradient = PaintFill(
+        mode="gradient_vertical",
+        color="#FF0000",
+        gradient_stops=[(0, "#FF0000"), (50, "#20FF20"), (100, "#0000FF")],
+    )
+    transparent = PaintFill(mode="solid", color="#00000000")
+    state = KaraokeColorState(
+        text=gradient,
+        stroke=transparent,
+        stroke2=transparent,
+        shadow=gradient,
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=140,
+        dual_line_layout=False,
+        line_y_position="center",
+        line_horizontal_layout="center",
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="glow",
+        glow_before_radius_px=4,
+        glow_after_radius_px=4,
+        karaoke_colors=KaraokeColors(before=state, after=state),
+        ruby_font_family="Meiryo",
+        ruby_font_family_latin="Meiryo",
+        ruby_font_follow_main=False,
+        ruby_font_size_px=48,
+        ruby_gap_px=5,
+        ruby_stroke_width_px=0,
+        ruby_stroke2_enabled=False,
+        ruby_decoration_kind="glow",
+        ruby_glow_before_radius_px=4,
+        ruby_glow_after_radius_px=4,
+        ruby_colors_follow_main=True,
+        ruby_karaoke_colors=KaraokeColors(before=state, after=state),
+        layout_semantics="n3_1074",
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("\u6f22", 0), TimingChar("\u5b57", 500)],
+                end_ms=1_000,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="\u6f22\u5b57",
+                reading="\u304b\u3093\u3058",
+                reading_part_ms=[0, 500],
+                pos_start_ms=0,
+                pos_end_ms=1_000,
+                reading_parts=["\u304b\u3093", "\u3058"],
+            )
+        ],
+    )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames = _render_g1_frames(
+            renderer, style, (1_000,), force_warp=True, track=track
+        )
+
+    payload = frames[0]
+    bounds = _payload_alpha_bounds(payload)
+    main_top = (bounds[1] + bounds[3]) // 2
+    opaque_main_pixels = [
+        payload[y * 640 * 4 + x * 4 : y * 640 * 4 + x * 4 + 4]
+        for y in range(main_top, bounds[3] + 1)
+        for x in range(bounds[0], bounds[2] + 1)
+        if payload[y * 640 * 4 + x * 4 + 3] >= 240
+    ]
+    red_pixels = sum(
+        pixel[0] > pixel[1] + 80 and pixel[0] > pixel[2] + 80
+        for pixel in opaque_main_pixels
+    )
+    green_pixels = sum(
+        pixel[1] > pixel[0] + 50 and pixel[1] > pixel[2] + 50
+        for pixel in opaque_main_pixels
+    )
+    assert red_pixels > 100
+    assert green_pixels > 1_000
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

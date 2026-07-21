@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -357,6 +358,97 @@ class SharedFrameRingReader:
         finally:
             self._shared.unlock()
 
+    @contextmanager
+    def borrow_packed_rgba_view(self, frame_ready_event: dict[str, Any]):
+        """Borrow one tightly packed RGBA slot until the caller resumes.
+
+        The export scheduler owns a slot until its synchronous ffmpeg write
+        returns. Other workers may fill other slots while this view is
+        borrowed, but this slot is not submitted again until the generator
+        resumes.
+        """
+        self._validate_event_payload(frame_ready_event)
+        self.attach()
+        assert self._shared is not None
+
+        slot_offset = _event_int(frame_ready_event, "slot_offset")
+        payload_offset = _event_int(frame_ready_event, "payload_offset")
+        payload_bytes = _event_int(frame_ready_event, "payload_bytes")
+        slot_bytes = _event_int(frame_ready_event, "slot_bytes")
+        shared_size = int(self._shared.size())
+        if (
+            slot_offset < 0
+            or payload_offset < 0
+            or payload_bytes < 0
+            or slot_bytes <= 0
+            or slot_offset + slot_bytes > shared_size
+            or payload_offset + payload_bytes > shared_size
+        ):
+            raise NativeRendererError("shared frame slot exceeds shared memory size")
+        if not self._shared.lock():
+            raise NativeRendererError(
+                f"failed to lock native shared memory {self.shm_key!r}: "
+                f"{self._shared.errorString()}"
+            )
+
+        source = None
+        payload = None
+        try:
+            pointer = self._shared.constData()
+            pointer.setsize(shared_size)
+            source = memoryview(pointer)
+            header = _SHARED_FRAME_HEADER.unpack_from(source, slot_offset)
+            (
+                state,
+                generation,
+                frame_index,
+                t_ms,
+                width,
+                height,
+                stride,
+                format_id,
+                header_payload_offset,
+                header_payload_bytes,
+            ) = header
+            pixel_format = _SHARED_FRAME_PIXEL_FORMATS.get(format_id)
+            if state != _SHARED_FRAME_READY or pixel_format != "rgba8888":
+                raise NativeRendererError(
+                    "packed export slot is not ready straight RGBA data"
+                )
+            if slot_offset + header_payload_offset != payload_offset:
+                raise NativeRendererError(
+                    "shared frame payload offset does not match slot header"
+                )
+            if header_payload_bytes != payload_bytes:
+                raise NativeRendererError(
+                    "shared frame payload byte count does not match slot header"
+                )
+            self._validate_header_matches_event(
+                frame_ready_event,
+                generation=generation,
+                frame_index=frame_index,
+                t_ms=t_ms,
+                width=width,
+                height=height,
+                stride=stride,
+                pixel_format=pixel_format,
+            )
+            if stride != width * 4 or payload_bytes != stride * height:
+                raise NativeRendererError(
+                    "packed export slot is not tightly packed full-frame RGBA"
+                )
+            payload = source[payload_offset : payload_offset + payload_bytes]
+        finally:
+            self._shared.unlock()
+
+        try:
+            assert payload is not None
+            yield payload
+        finally:
+            payload.release()
+            assert source is not None
+            source.release()
+
     def _validate_event_payload(self, frame_ready_event: dict[str, Any]) -> None:
         if frame_ready_event.get("event") not in {
             "frame_ready",
@@ -695,7 +787,11 @@ class NativeRendererProcess:
         extra_tracks: list[TimingTrack] | None = None,
         prewarm_t_ms: int = 0,
         worker_count: int = 1,
+        realization_enabled: bool = True,
         realization_capacity: int | None = None,
+        export_crop_top: int = 0,
+        export_crop_height: int = 0,
+        export_bands: list[tuple[int, int]] | None = None,
     ) -> dict[str, Any]:
         """Configure the G1 DirectWrite scene without enabling the product path."""
         self.configure(
@@ -712,6 +808,13 @@ class NativeRendererProcess:
             "force_warp": bool(force_warp),
             "prewarm_t_ms": max(int(prewarm_t_ms), 0),
             "worker_count": max(1, min(int(worker_count), 8)),
+            "realization_enabled": bool(realization_enabled),
+            "export_crop_top": max(int(export_crop_top), 0),
+            "export_crop_height": max(int(export_crop_height), 0),
+            "export_bands": [
+                {"top": max(int(top), 0), "height": max(int(band_height), 1)}
+                for top, band_height in (export_bands or [])
+            ],
         }
         if realization_capacity is not None:
             payload["realization_capacity"] = max(int(realization_capacity), 8192)
@@ -728,6 +831,8 @@ class NativeRendererProcess:
         shm_key: str | None = None,
         include_checksum: bool = True,
         readback_bands: bool = False,
+        packed_rgba: bool = False,
+        packed_height: int = 0,
         slot_count: int = 1,
         request_serial: int | None = None,
     ) -> None:
@@ -746,8 +851,11 @@ class NativeRendererProcess:
             "frame_index": int(frame_index),
             "include_checksum": bool(include_checksum),
             "readback_bands": bool(readback_bands),
+            "packed_rgba": bool(packed_rgba),
             "slot_count": max(1, int(slot_count)),
         }
+        if packed_height > 0:
+            payload["packed_height"] = int(packed_height)
         if request_serial is not None:
             payload["request_serial"] = int(request_serial)
         if shm_key:
@@ -776,6 +884,8 @@ class NativeRendererProcess:
         shm_key: str | None = None,
         include_checksum: bool = True,
         readback_bands: bool = False,
+        packed_rgba: bool = False,
+        packed_height: int = 0,
         slot_count: int = 1,
         request_serial: int | None = None,
     ) -> dict[str, Any]:
@@ -788,6 +898,8 @@ class NativeRendererProcess:
             shm_key=shm_key,
             include_checksum=include_checksum,
             readback_bands=readback_bands,
+            packed_rgba=packed_rgba,
+            packed_height=packed_height,
             slot_count=slot_count,
             request_serial=request_serial,
         )

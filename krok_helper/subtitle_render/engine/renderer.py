@@ -7,11 +7,16 @@ when present.
 
 from __future__ import annotations
 
+import csv
+import json
 import math
 import os
+import platform
+import statistics
 import subprocess
 import threading
 import time
+import uuid
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
@@ -29,6 +34,7 @@ from krok_helper.subtitle_render.engine.encoder_select import (
     video_encoder_options,
 )
 from krok_helper.subtitle_render.engine.native_export import (
+    gpu_export_packed_enabled,
     iter_gpu_rgba_frames,
     iter_native_rgba_frames,
 )
@@ -142,6 +148,7 @@ def render_subtitle_video(
         and gpu_renderer_path is not None
         and not gpu_fallback_reasons
     )
+    gpu_packed_active = gpu_export_active and gpu_export_packed_enabled()
     if gpu_export_requested and gpu_renderer_path is None:
         logger("GPU 字幕渲染器未找到，已回退到 Painter 导出")
     elif gpu_fallback_reasons:
@@ -159,7 +166,7 @@ def render_subtitle_video(
         _strip_enabled()
         and not cancelled
         and not native_export_active
-        and not gpu_export_active
+        and (not gpu_export_active or gpu_packed_active)
     ):
         if _bands_enabled():
             bands = _compute_content_bands(job, duration_ms, should_cancel=should_cancel)
@@ -230,6 +237,8 @@ def render_subtitle_video(
                 should_cancel,
                 on_progress,
                 logger,
+                strip if gpu_packed_active else None,
+                bands if gpu_packed_active else None,
             )
         elif native_export_active:
             logger(f"native 导出: {native_renderer_path}")
@@ -572,11 +581,11 @@ def _gpu_force_warp() -> bool:
 def _gpu_export_worker_count(*, force_warp: bool) -> int:
     if force_warp:
         return 1
-    raw = os.environ.get("KROK_SUBTITLE_GPU_EXPORT_WORKERS", "2")
+    raw = os.environ.get("KROK_SUBTITLE_GPU_EXPORT_WORKERS", "3")
     try:
         return max(1, min(int(raw), 4))
     except ValueError:
-        return 2
+        return 3
 
 
 def _gpu_export_diagnostics_enabled() -> bool:
@@ -920,16 +929,25 @@ def _write_frames_gpu(
     should_cancel: Callable[[], bool] | None,
     on_progress: Callable[[int, int], None] | None,
     logger: Logger,
+    crop: tuple[int, int] | None = None,
+    bands: list[tuple[int, int]] | None = None,
 ) -> None:
     """Write Direct2D band-readback frames to the existing ffmpeg pipe."""
     written = 0
     last_prepare_bucket = -1
     force_warp = _gpu_force_warp()
+    packed_rgba = gpu_export_packed_enabled()
     worker_count = _gpu_export_worker_count(force_warp=force_warp)
-    logger(f"GPU 字幕导出流水线: {worker_count} 个 worker")
+    logger(
+        f"GPU 字幕导出流水线: {worker_count} 个 worker"
+        + ("（packed RGBA）" if packed_rgba else "")
+    )
     diagnostics_enabled = _gpu_export_diagnostics_enabled()
+    export_run_id = uuid.uuid4().hex
+    export_started = time.perf_counter()
     ffmpeg_wait_seconds = 0.0
     gpu_diagnostics: dict[str, object] = {}
+    frame_diagnostics_by_index: dict[int, dict[str, object]] = {}
 
     def on_prepare_progress(done: int, total: int) -> None:
         nonlocal last_prepare_bucket
@@ -943,6 +961,11 @@ def _write_frames_gpu(
     def on_diagnostics(values: dict[str, object]) -> None:
         gpu_diagnostics.update(values)
 
+    def on_frame_diagnostics(values: dict[str, object]) -> None:
+        frame_diagnostics_by_index[int(values.get("frame_index", -1) or 0)] = dict(
+            values
+        )
+
     for frame in iter_gpu_rgba_frames(
         job.track,
         job.style,
@@ -954,15 +977,22 @@ def _write_frames_gpu(
         extra_tracks=list(job.extra_tracks),
         force_warp=force_warp,
         worker_count=worker_count,
+        packed_rgba=packed_rgba,
+        crop=crop,
+        bands=bands,
         should_cancel=should_cancel,
         on_prepare_progress=on_prepare_progress,
         on_diagnostics=on_diagnostics if diagnostics_enabled else None,
+        on_frame_diagnostics=on_frame_diagnostics if diagnostics_enabled else None,
     ):
         if should_cancel is not None and should_cancel():
             raise ExportCancelled("已停止导出。")
         write_started = time.perf_counter()
         process.stdin.write(frame)
-        ffmpeg_wait_seconds += time.perf_counter() - write_started
+        stdin_block_ms = (time.perf_counter() - write_started) * 1000.0
+        ffmpeg_wait_seconds += stdin_block_ms / 1000.0
+        if diagnostics_enabled and written in frame_diagnostics_by_index:
+            frame_diagnostics_by_index[written]["stdin_block_ms"] = stdin_block_ms
         written += 1
         if on_progress is not None:
             on_progress(written, total_frames)
@@ -978,6 +1008,116 @@ def _write_frames_gpu(
             f"ffmpeg 管道等待 {ffmpeg_wait_seconds:.3f}s；"
             f"本地显存 {local_usage_mb:.1f}/{local_budget_mb:.1f} MiB"
         )
+        _persist_gpu_export_diagnostics(
+            job,
+            export_run_id=export_run_id,
+            total_wall_ms=(time.perf_counter() - export_started) * 1000.0,
+            worker_count=worker_count,
+            force_warp=force_warp,
+            gpu_diagnostics=gpu_diagnostics,
+            frame_diagnostics=[
+                frame_diagnostics_by_index[index]
+                for index in sorted(frame_diagnostics_by_index)
+            ],
+            crop=crop,
+            bands=bands,
+            logger=logger,
+        )
+
+
+def _persist_gpu_export_diagnostics(
+    job: RenderJob,
+    *,
+    export_run_id: str,
+    total_wall_ms: float,
+    worker_count: int,
+    force_warp: bool,
+    gpu_diagnostics: dict[str, object],
+    frame_diagnostics: list[dict[str, object]],
+    crop: tuple[int, int] | None,
+    bands: list[tuple[int, int]] | None,
+    logger: Logger,
+) -> None:
+    raw_dir = os.environ.get("KROK_SUBTITLE_GPU_EXPORT_DIAGNOSTICS_DIR", "").strip()
+    if not raw_dir:
+        return
+    output_dir = Path(raw_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = output_dir / f"{export_run_id}-frames.csv"
+    json_path = output_dir / f"{export_run_id}-summary.json"
+    if frame_diagnostics:
+        fieldnames: list[str] = []
+        for row in frame_diagnostics:
+            for key in row:
+                if key not in fieldnames:
+                    fieldnames.append(key)
+        with csv_path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(frame_diagnostics)
+
+    aggregates: dict[str, dict[str, float]] = {}
+    numeric_fields = {
+        key
+        for row in frame_diagnostics
+        for key, value in row.items()
+        if isinstance(value, (int, float)) and key not in {"frame_index", "t_ms"}
+    }
+    for field in sorted(numeric_fields):
+        values = [float(row[field]) for row in frame_diagnostics if field in row]
+        if not values:
+            continue
+        ordered = sorted(values)
+        p95_index = min(len(ordered) - 1, int(len(ordered) * 0.95))
+        aggregates[field] = {
+            "mean": statistics.fmean(values),
+            "p50": statistics.median(values),
+            "p95": ordered[p95_index],
+            "min": min(values),
+            "max": max(values),
+        }
+    summary = {
+        "export_run_id": export_run_id,
+        "git_commit": _git_commit_for_diagnostics(),
+        "platform": platform.platform(),
+        "python": platform.python_version(),
+        "width": job.width,
+        "height": job.height,
+        "fps": job.fps,
+        "duration_ms": job.duration_ms,
+        "encoder_mode": job.encoder_mode,
+        "codec": job.codec,
+        "preset": job.preset,
+        "crf": job.crf,
+        "background_kind": _resolved_background(job).kind,
+        "preview_enabled": False,
+        "worker_count": worker_count,
+        "force_warp": force_warp,
+        "crop": list(crop) if crop is not None else None,
+        "bands": [list(band) for band in bands] if bands is not None else None,
+        "frames": len(frame_diagnostics),
+        "total_wall_ms": total_wall_ms,
+        "gpu": gpu_diagnostics,
+        "aggregates": aggregates,
+        "frame_csv": str(csv_path),
+    }
+    json_path.write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2, default=str),
+        encoding="utf-8",
+    )
+    logger(f"GPU 导出诊断已写入: {json_path}")
+
+
+def _git_commit_for_diagnostics() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=Path(__file__).resolve().parents[3],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
 
 
 def _write_frames_single(

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import contextmanager
 
 import pytest
 from PyQt6.QtGui import QColor, QImage
@@ -333,6 +334,15 @@ class _FakeGpuRingReader:
         image.fill(QColor(20 + int(event["frame_index"]), 40, 60, 128))
         return image
 
+    @contextmanager
+    def borrow_packed_rgba_view(self, event):
+        frame_index = int(event["frame_index"])
+        payload = memoryview(bytes([20 + frame_index, 40, 60, 128]))
+        try:
+            yield payload
+        finally:
+            payload.release()
+
 
 class _FakeGpuRendererProcess:
     instances = []
@@ -395,6 +405,8 @@ def test_iter_gpu_rgba_frames_uses_banded_readback_and_straight_rgba(monkeypatch
     _FakeGpuRingReader.instances.clear()
     monkeypatch.setattr(ne, "NativeRendererProcess", _FakeGpuRendererProcess)
     monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+    prepare_progress: list[tuple[int, int]] = []
+    frame_diagnostics: list[dict[str, object]] = []
 
     frames = list(
         ne.iter_gpu_rgba_frames(
@@ -406,13 +418,18 @@ def test_iter_gpu_rgba_frames_uses_banded_readback_and_straight_rgba(monkeypatch
             total_frames=2,
             extra_tracks=[_track()],
             force_warp=True,
+            on_prepare_progress=lambda done, total: prepare_progress.append(
+                (done, total)
+            ),
+            on_frame_diagnostics=frame_diagnostics.append,
         )
     )
 
     assert frames == [bytes([20, 40, 60, 128]), bytes([22, 40, 60, 128])]
     process = _FakeGpuRendererProcess.instances[-1]
     assert process.configures[0][1]["extra_tracks"] == [_track()]
-    assert process.configures[0][1]["realization_capacity"] == 65_536
+    assert process.configures[0][1]["realization_enabled"] is False
+    assert prepare_progress == []
     assert [item[0] for item in process.frames] == [0, 500]
     assert all(item[1]["readback_bands"] is True for item in process.frames)
     assert all(item[1]["include_checksum"] is False for item in process.frames)
@@ -423,6 +440,9 @@ def test_iter_gpu_rgba_frames_uses_banded_readback_and_straight_rgba(monkeypatch
     assert process.pending == []
     assert _FakeGpuRingReader.instances[-1].attached is True
     assert _FakeGpuRingReader.instances[-1].closed is True
+    assert [row["frame_index"] for row in frame_diagnostics] == [0, 1]
+    assert all(row["bytes_per_frame"] == 4 for row in frame_diagnostics)
+    assert all(row["copies_per_frame"] == 4 for row in frame_diagnostics)
 
 
 def test_iter_gpu_rgba_frames_reorders_bounded_multiworker_results(monkeypatch) -> None:
@@ -458,11 +478,86 @@ def test_iter_gpu_rgba_frames_reorders_bounded_multiworker_results(monkeypatch) 
     assert parallel == serial
     process = _FakeGpuRendererProcess.instances[-1]
     assert process.configures[0][1]["worker_count"] == 2
+    assert process.configures[0][1]["realization_enabled"] is False
     assert process.max_pending <= 2
     assert process.pending == []
     assert all(item[1]["slot_count"] == 2 for item in process.frames)
     assert [item[1]["request_serial"] for item in process.frames] == list(range(6))
     assert diagnostics[-1]["local_video_memory_usage_bytes"] == 123
+
+
+def test_iter_gpu_rgba_frames_packed_path_borrows_rgba_without_qimage(
+    monkeypatch,
+) -> None:
+    _FakeGpuRendererProcess.instances.clear()
+    _FakeGpuRingReader.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _FakeGpuRendererProcess)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+    rows = []
+
+    frames = [
+        bytes(frame)
+        for frame in ne.iter_gpu_rgba_frames(
+            _track(),
+            Style(),
+            width=1,
+            height=1,
+            fps=2,
+            total_frames=2,
+            worker_count=4,
+            packed_rgba=True,
+            bands=[(0, 1)],
+            on_frame_diagnostics=rows.append,
+        )
+    ]
+
+    assert frames == [bytes([20, 40, 60, 128]), bytes([21, 40, 60, 128])]
+    process = _FakeGpuRendererProcess.instances[-1]
+    assert process.configures[0][1]["worker_count"] == 4
+    assert process.configures[0][1]["export_bands"] == [(0, 1)]
+    assert all(item[1]["packed_rgba"] is True for item in process.frames)
+    assert all(item[1]["readback_bands"] is False for item in process.frames)
+    assert all(row["python_expand_ms"] == 0.0 for row in rows)
+    assert all(row["python_convert_ms"] == 0.0 for row in rows)
+    assert all(row["python_bytes_ms"] == 0.0 for row in rows)
+    assert all(row["copies_per_frame"] == 2 for row in rows)
+
+
+def test_iter_gpu_rgba_frames_packed_multiworker_reorders_without_python_copy(
+    monkeypatch,
+) -> None:
+    _FakeGpuRendererProcess.instances.clear()
+    _FakeGpuRingReader.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _FakeGpuRendererProcess)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+    _FakeGpuRendererProcess.reverse_completions = True
+    rows = []
+    try:
+        frames = [
+            bytes(frame)
+            for frame in ne.iter_gpu_rgba_frames(
+                _track(),
+                Style(),
+                width=1,
+                height=1,
+                fps=4,
+                total_frames=6,
+                worker_count=2,
+                packed_rgba=True,
+                bands=[(0, 1)],
+                on_frame_diagnostics=rows.append,
+            )
+        ]
+    finally:
+        _FakeGpuRendererProcess.reverse_completions = False
+
+    assert frames == [bytes([20 + index, 40, 60, 128]) for index in range(6)]
+    process = _FakeGpuRendererProcess.instances[-1]
+    assert process.configures[0][1]["worker_count"] == 2
+    assert process.max_pending <= 2
+    assert process.pending == []
+    assert [row["frame_index"] for row in rows] == list(range(6))
+    assert all(row["copies_per_frame"] == 2 for row in rows)
 
 
 def test_iter_gpu_rgba_frames_multiworker_cancel_closes_transport(monkeypatch) -> None:

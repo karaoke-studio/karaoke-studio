@@ -1023,6 +1023,9 @@ struct Direct2DGpuBackend::Impl {
         PaintStyle paint;
         RgbaColor fallback;
         ID2D1Bitmap1 *imageIdentity = nullptr;
+        D2D1_RECT_F rect{};
+        float canvasDx = 0.0f;
+        float canvasDy = 0.0f;
         Microsoft::WRL::ComPtr<ID2D1Brush> brush;
         std::uint64_t lastUse = 0;
     };
@@ -1103,6 +1106,7 @@ struct Direct2DGpuBackend::Impl {
     bool realizationEnabled = environmentFlagEnabled(
         "KROK_GPU_REALIZATION", true
     );
+    bool realizationActive = false;
     bool glowDirtyRectEnabled = environmentFlagEnabled(
         "KROK_GPU_GLOW_DIRTY_RECT", true
     );
@@ -1113,10 +1117,11 @@ Direct2DGpuBackend::Direct2DGpuBackend(bool forceWarp)
     if (forceWarp && !environmentFlagEnabled("KROK_GPU_REALIZATION_WARP", false)) {
         impl_->realizationEnabled = false;
     }
+    impl_->realizationActive = impl_->realizationEnabled;
     impl_->diagnostics.countersEnabled = impl_->countersEnabled;
     impl_->diagnostics.resourceCacheEnabled = impl_->resourceCacheEnabled;
     impl_->diagnostics.brushCacheCapacity = Impl::brushCapacity;
-    impl_->diagnostics.realizationEnabled = impl_->realizationEnabled;
+    impl_->diagnostics.realizationEnabled = impl_->realizationActive;
     impl_->diagnostics.realizationCapacity = Impl::defaultRealizationCapacity;
     impl_->diagnostics.glowDirtyRectEnabled = impl_->glowDirtyRectEnabled;
     if (impl_->realizationEnabled) {
@@ -1370,6 +1375,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         impl_->frameSurfaceHeight = scene.height;
     }
     impl_->scene = scene;
+    impl_->realizationActive = impl_->realizationEnabled
+        && scene.realizationEnabled
+        && impl_->realizationContext;
+    impl_->diagnostics.realizationEnabled = impl_->realizationActive;
     impl_->lines.clear();
     impl_->lines.reserve(scene.lines.size());
     impl_->images.clear();
@@ -2732,7 +2741,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
     impl_->diagnostics.realizationPrewarmTasks = 0;
     impl_->diagnostics.realizationPrewarmMs = 0.0;
     impl_->lastRenderCompletedMs.store(steadyNowMs(), std::memory_order_release);
-    if (impl_->realizationEnabled && impl_->realizationContext) {
+    if (impl_->realizationActive) {
         std::vector<std::size_t> lineOrder(impl_->lines.size());
         for (std::size_t index = 0; index < lineOrder.size(); ++index) {
             lineOrder[index] = index;
@@ -3199,6 +3208,20 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
 
     const auto renderStart = Clock::now();
     ID2D1DeviceContext *context = device_.d2dContext();
+    auto endDrawMeasured = [&](
+        const char *operation,
+        double &phaseMs,
+        std::uint64_t &phaseCount
+    ) {
+        const auto started = Clock::now();
+        const HRESULT result = context->EndDraw();
+        const double durationMs = elapsedMs(started);
+        frameDiagnostics.endDrawWaitMs += durationMs;
+        phaseMs += durationMs;
+        ++frameDiagnostics.endDrawCount;
+        ++phaseCount;
+        checkHr(result, operation, device_);
+    };
     context->SetTransform(D2D1::Matrix3x2F::Identity());
     context->SetTarget(nullptr);
 
@@ -3461,13 +3484,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         ID2D1Brush *brush,
         bool eligible
     ) {
-        if (eligible && impl_->realizationEnabled
-            && impl_->realizationContext && realization != nullptr) {
+        if (eligible && impl_->realizationActive && realization != nullptr) {
             impl_->realizationContext->DrawGeometryRealization(realization, brush);
             count(frameDiagnostics.realizationHit);
             return;
         }
-        if (impl_->realizationEnabled && impl_->realizationContext && eligible) {
+        if (impl_->realizationActive && eligible) {
             count(frameDiagnostics.realizationMiss);
         }
         context->FillGeometry(geometry, brush);
@@ -3481,12 +3503,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         bool eligible
     ) {
         const auto start = Clock::now();
-        if (eligible && impl_->realizationEnabled
-            && impl_->realizationContext && realization != nullptr) {
+        if (eligible && impl_->realizationActive && realization != nullptr) {
             impl_->realizationContext->DrawGeometryRealization(realization, brush);
             count(frameDiagnostics.realizationHit);
         } else {
-            if (impl_->realizationEnabled && impl_->realizationContext && eligible) {
+            if (impl_->realizationActive && eligible) {
                 count(frameDiagnostics.realizationMiss);
             }
             context->DrawGeometry(geometry, brush, width);
@@ -4593,6 +4614,24 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 const RgbaColor &fallback,
                                 float offsetX, float offsetY) {
             ID2D1Bitmap1 *image = imageForPaint(paint);
+            const float canvasDx = dx + offsetX;
+            const float canvasDy = dy + offsetY;
+            const bool gradientPositionDependent = paint.mode == "gradient_horizontal"
+                || paint.mode == "gradient_vertical"
+                || paint.mode == "split_vertical";
+            const auto samePosition = [&](const Impl::CachedBrush &entry) {
+                if (gradientPositionDependent) {
+                    return entry.rect.left == rect.left
+                        && entry.rect.top == rect.top
+                        && entry.rect.right == rect.right
+                        && entry.rect.bottom == rect.bottom;
+                }
+                if (paint.mode == "image") {
+                    return entry.canvasDx == canvasDx
+                        && entry.canvasDy == canvasDy;
+                }
+                return true;
+            };
             Microsoft::WRL::ComPtr<ID2D1Brush> brush;
             if (impl_->resourceCacheEnabled) {
                 const auto found = std::find_if(
@@ -4600,7 +4639,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     [&](const Impl::CachedBrush &entry) {
                         return entry.paint == paint
                             && entry.fallback == fallback
-                            && entry.imageIdentity == image;
+                            && entry.imageIdentity == image
+                            && samePosition(entry);
                     }
                 );
                 if (found != impl_->brushes.end()) {
@@ -4615,7 +4655,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     }
                     brush = createPaintBrush(
                         context, paint, rect, fallback, device_, image,
-                        dx + offsetX, dy + offsetY,
+                        canvasDx, canvasDy,
                         impl_->countersEnabled
                             ? &frameDiagnostics.brushCreated
                             : nullptr
@@ -4637,6 +4677,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         paint,
                         fallback,
                         image,
+                        rect,
+                        canvasDx,
+                        canvasDy,
                         brush,
                         ++impl_->brushUseSerial,
                     });
@@ -4644,7 +4687,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             } else {
                 brush = createPaintBrush(
                     context, paint, rect, fallback, device_, image,
-                    dx + offsetX, dy + offsetY,
+                    canvasDx, canvasDy,
                     impl_->countersEnabled
                         ? &frameDiagnostics.brushCreated
                         : nullptr
@@ -4652,7 +4695,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
             if (brush) {
                 updatePaintBrush(
-                    brush.Get(), paint, rect, dx + offsetX, dy + offsetY
+                    brush.Get(), paint, rect, canvasDx, canvasDy
                 );
                 brush->SetOpacity(globalOpacity);
             }
@@ -5156,10 +5199,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     : D2D1::Matrix3x2F::Translation(dx, dy)
             );
             context->BeginDraw();
+            // The pooled bitmap can be larger than this frame's requested
+            // crop. Clear the whole target before installing the local clip;
+            // otherwise GaussianBlur may sample stale pixels just outside the
+            // crop and make output depend on this worker's previous frame.
+            context->Clear(D2D1::ColorF(0.0f, 0.0f));
             pushAxisAlignedClip(
                 glowClearRect, D2D1_ANTIALIAS_MODE_ALIASED
             );
-            context->Clear(D2D1::ColorF(0.0f, 0.0f));
             const auto drawGlowPart = [&](std::size_t index, bool after) {
                 // Characters animating this frame keep the Painter semantics
                 // of blurring the upright glyph and transforming the blurred
@@ -5253,7 +5300,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
             }
             context->PopAxisAlignedClip();
-            checkHr(context->EndDraw(), "ID2D1DeviceContext::EndDraw(glow source)", device_);
+            endDrawMeasured(
+                "ID2D1DeviceContext::EndDraw(glow source)",
+                frameDiagnostics.endDrawGlowSourceMs,
+                frameDiagnostics.endDrawGlowSourceCount
+            );
             blur->SetInput(0, glowSource);
 
             // N3 DrawOneLineDecorBlurMulti: N = BlurLevel + 1 and
@@ -5412,10 +5463,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     : D2D1::Matrix3x2F::Translation(dx, dy)
             );
             context->BeginDraw();
+            context->Clear(D2D1::ColorF(0.0f, 0.0f));
             pushAxisAlignedClip(
                 clearRect, D2D1_ANTIALIAS_MODE_ALIASED
             );
-            context->Clear(D2D1::ColorF(0.0f, 0.0f));
             for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
                 const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
                 if ((rubyOnly >= 0 && static_cast<int>(rubyIndex) != rubyOnly)
@@ -5511,10 +5562,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
             }
             context->PopAxisAlignedClip();
-            checkHr(
-                context->EndDraw(),
+            endDrawMeasured(
                 "ID2D1DeviceContext::EndDraw(ruby glow source)",
-                device_
+                frameDiagnostics.endDrawRubyGlowSourceMs,
+                frameDiagnostics.endDrawRubyGlowSourceCount
             );
             layer.blur->SetInput(0, layer.source);
             const int passes = std::clamp(
@@ -5765,10 +5816,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     : D2D1::Matrix3x2F::Translation(dx, dy)
             );
             context->BeginDraw();
+            context->Clear(D2D1::ColorF(0.0f, 0.0f));
             pushAxisAlignedClip(
                 clearRect, D2D1_ANTIALIAS_MODE_ALIASED
             );
-            context->Clear(D2D1::ColorF(0.0f, 0.0f));
             for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
                 const Impl::CachedChar &ch = line->chars[charIndex];
                 if ((charOnly >= 0 && static_cast<int>(charIndex) != charOnly)
@@ -5927,10 +5978,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
             }
             context->PopAxisAlignedClip();
-            checkHr(
-                context->EndDraw(),
+            endDrawMeasured(
                 "ID2D1DeviceContext::EndDraw(inline glow source)",
-                device_
+                frameDiagnostics.endDrawInlineGlowSourceMs,
+                frameDiagnostics.endDrawInlineGlowSourceCount
             );
             layer.blur->SetInput(0, layer.source);
             const int passes = std::clamp(charStyle.glowConcentrationLevel, 0, 2) + 1;
@@ -7005,7 +7056,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
             }
         }
-        checkHr(context->EndDraw(), "ID2D1DeviceContext::EndDraw(frame layers)", device_);
+        endDrawMeasured(
+            "ID2D1DeviceContext::EndDraw(frame layers)",
+            frameDiagnostics.endDrawFrameLayersMs,
+            frameDiagnostics.endDrawFrameLayersCount
+        );
         renderedAnyLine = true;
         if (blur != nullptr) {
             blur->SetInput(0, nullptr);
@@ -7037,7 +7092,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         context->SetTransform(D2D1::Matrix3x2F::Identity());
         context->BeginDraw();
         context->Clear(D2D1::ColorF(0.0f, 0.0f));
-        checkHr(context->EndDraw(), "ID2D1DeviceContext::EndDraw(empty frame)", device_);
+        endDrawMeasured(
+            "ID2D1DeviceContext::EndDraw(empty frame)",
+            frameDiagnostics.endDrawEmptyFrameMs,
+            frameDiagnostics.endDrawEmptyFrameCount
+        );
     }
 
     context->SetTarget(nullptr);
@@ -7057,6 +7116,32 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
 
     const auto readbackStart = Clock::now();
     ID3D11Texture2D *stagingTexture = impl_->frameStagingTexture.Get();
+    const int fixedCropTop = std::clamp(
+        scene.exportCropTop, 0, std::max(scene.height - 1, 0)
+    );
+    const int fixedCropHeight = std::clamp(
+        scene.exportCropHeight,
+        0,
+        std::max(scene.height - fixedCropTop, 0)
+    );
+    const bool fixedCrop = !compactBands
+        && fixedCropHeight > 0
+        && (fixedCropTop > 0 || fixedCropHeight < scene.height);
+    std::vector<std::pair<int, int>> fixedBands;
+    int fixedBandsHeight = 0;
+    if (!compactBands) {
+        fixedBands.reserve(scene.exportBands.size());
+        for (const auto &[rawTop, rawHeight] : scene.exportBands) {
+            const int top = std::clamp(rawTop, 0, std::max(scene.height - 1, 0));
+            const int height = std::clamp(
+                rawHeight, 0, std::max(scene.height - top, 0)
+            );
+            if (height > 0) {
+                fixedBands.emplace_back(top, height);
+                fixedBandsHeight += height;
+            }
+        }
+    }
     std::vector<std::pair<int, int>> mergedIntervals;
     if (compactBands) {
         std::sort(readbackIntervals.begin(), readbackIntervals.end());
@@ -7104,6 +7189,46 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             );
             packedTop += bottom - top;
         }
+    } else if (!fixedBands.empty()) {
+        int packedTop = 0;
+        for (const auto &[top, height] : fixedBands) {
+            D3D11_BOX sourceBox{};
+            sourceBox.left = 0;
+            sourceBox.right = static_cast<UINT>(scene.width);
+            sourceBox.top = static_cast<UINT>(top);
+            sourceBox.bottom = static_cast<UINT>(top + height);
+            sourceBox.front = 0;
+            sourceBox.back = 1;
+            device_.d3dContext()->CopySubresourceRegion(
+                stagingTexture,
+                0,
+                0,
+                static_cast<UINT>(packedTop),
+                0,
+                targetTexture,
+                0,
+                &sourceBox
+            );
+            packedTop += height;
+        }
+    } else if (fixedCrop) {
+        D3D11_BOX sourceBox{};
+        sourceBox.left = 0;
+        sourceBox.right = static_cast<UINT>(scene.width);
+        sourceBox.top = static_cast<UINT>(fixedCropTop);
+        sourceBox.bottom = static_cast<UINT>(fixedCropTop + fixedCropHeight);
+        sourceBox.front = 0;
+        sourceBox.back = 1;
+        device_.d3dContext()->CopySubresourceRegion(
+            stagingTexture,
+            0,
+            0,
+            0,
+            0,
+            targetTexture,
+            0,
+            &sourceBox
+        );
     } else {
         device_.d3dContext()->CopyResource(stagingTexture, targetTexture);
     }
@@ -7119,10 +7244,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
     ProbeResult result;
     result.renderMs = renderMs;
     result.surface.width = scene.width;
-    result.surface.height = scene.height;
+    result.surface.height = !fixedBands.empty()
+        ? fixedBandsHeight
+        : (fixedCrop ? fixedCropHeight : scene.height);
     result.surface.stride = scene.width * 4;
     result.surface.pixelFormat = PixelFormat::Bgra8888Premultiplied;
-    int packedHeight = scene.height;
+    int packedHeight = !fixedBands.empty()
+        ? fixedBandsHeight
+        : (fixedCrop ? fixedCropHeight : scene.height);
     if (compactBands) {
         packedHeight = 0;
         for (const auto &[top, bottom] : mergedIntervals) {
