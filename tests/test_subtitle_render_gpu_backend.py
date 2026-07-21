@@ -2228,8 +2228,13 @@ def test_gpu_realization_wide_stroke_pixels_stay_within_bounded_diff(
         for actual, expected in zip(realized_bounds, fallback_bounds)
     )
     channel_deltas = [abs(a - b) for a, b in zip(realized, fallback)]
-    assert sum(channel_deltas) / len(channel_deltas) < 1.0
-    assert sum(delta > 8 for delta in channel_deltas) < 12_000
+    mean_channel_delta = sum(channel_deltas) / len(channel_deltas)
+    large_channel_delta_count = sum(delta > 8 for delta in channel_deltas)
+    assert mean_channel_delta < 0.2, (stroke_width, mean_channel_delta)
+    assert large_channel_delta_count < 3_000, (
+        stroke_width,
+        large_channel_delta_count,
+    )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

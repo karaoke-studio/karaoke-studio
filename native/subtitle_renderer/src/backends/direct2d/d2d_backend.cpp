@@ -2880,7 +2880,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         ]() mutable {
             // Keep individual background realization chunks short enough for
             // seek/style churn while staying inside the wide-stroke A/B gate.
-            constexpr float flatteningTolerance = 3.0f;
+            // Match N3's export precision. Export uses these cached realizations
+            // directly, so a coarse tolerance becomes visible as faceted curves.
+            constexpr float flatteningTolerance = 0.25f;
             const auto prewarmStart = Clock::now();
             auto sliceStart = prewarmStart;
             std::uint64_t failed = 0;
