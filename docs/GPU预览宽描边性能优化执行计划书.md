@@ -1,6 +1,6 @@
 # GPU 预览宽描边性能优化执行计划书
 
-> 状态:执行中(阶段 0 已完成,阶段 1 待执行)
+> 状态:已完成(2026-07-21；阶段 0～5 全部通过，阶段 6 质量档位按上游定义独立排期)
 >
 > 建立日期:2026-07-21
 >
@@ -375,24 +375,73 @@ worker 池)、`krok_helper/subtitle_render/native_backend.py`(协议)、
 
 **任务**:
 
-- [ ] sidecar 内新建常驻 GpuPreviewWorkerPool:共享 D3D11/D2D device;
-  每 worker 独立 DeviceContext + frame target + staging/readback +
+- [x] sidecar 内新建常驻 GpuPreviewWorkerPool；原计划共享 D3D11/D2D device，
+  实测共享 device 的配置期稳定性不满足门禁，最终采用每 worker 独立 device +
+  DeviceContext + frame target + staging/readback +
   glow scratch + shm ring slot,常驻线程不按批重建(N3 同构:
   常驻线程 + 事件唤醒 + ring);
-- [ ] 画刷/realization 缓存按 worker 隔离(阶段 1 已保证 per-context),
+- [x] 画刷/realization 缓存按 worker 隔离(阶段 1 已保证 per-context),
   worker 启动后渲染 warmup 帧;
-- [ ] 配置生成不可变 scene snapshot + generation;请求携带时间戳、serial、
+- [x] 配置生成不可变 scene snapshot + generation;请求携带时间戳、serial、
   generation、frame index;GUI 只接收当前 generation 且不落后播放时钟的帧
   (保留 latest-wins,增加 PTS/serial 丢弃,对齐 N3 音频主时钟丢帧);
-- [ ] 有界 in-flight 集合;seek/暂停/尺寸变化/样式修改/关窗时丢弃旧结果并
+- [x] 有界 in-flight 集合;seek/暂停/尺寸变化/样式修改/关窗时丢弃旧结果并
   安全回收 worker;
-- [ ] 从 2 worker 起依次实测 1/2/3/4/8(`scripts/benchmark_gpu_preview_scheduler.py`
+- [x] 从 2 worker 起依次实测 1/2/3/4/8(`scripts/benchmark_gpu_preview_scheduler.py`
   扩展多 worker、慢帧注入、generation 失效、sidecar kill/restart),
   以吞吐、ready p50/p95/max、stale/drop、显存、RSS 选默认值;
-- [ ] 弱 GPU/WARP 自动收缩到 1;保留 sidecar 异常后 Painter fallback、
+- [x] 弱 GPU/WARP 自动收缩到 1;保留 sidecar 异常后 Painter fallback、
   冷却与自动重启;
-- [ ] 不复用旧 `NativeAsyncSubtitleRenderer` 的整批 range 调度
+- [x] 不复用旧 `NativeAsyncSubtitleRenderer` 的整批 range 调度
   (历史上出现过缓存窗口追不上播放时钟的 2~3fps 失控)。
+
+2026-07-21 选型结果（1920×1080@60、14px+7px、glow、3 秒播放并穿插
+seek/resize/style churn）：
+
+| worker | 播放交付率 | render p95 | readback p95 | batch roundtrip mean / p95 | sidecar RSS | 本地显存 |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 100% | 5.020ms | 2.973ms | 8.525 / 8.111ms | 76.7MiB | 31.4MiB |
+| 2 | 100% | 4.875ms | 2.557ms | 6.766 / 8.647ms | 122.2MiB | 81.5MiB |
+| 3 | 100% | 5.432ms | 2.652ms | 7.011 / 8.728ms | 154.9MiB | 111.0MiB |
+| 4 | 99.44% | 6.677ms | 4.352ms | 7.600 / 10.466ms | 187.4MiB | 142.4MiB |
+| 8 | 53.33% | 43.962ms | 18.230ms | 53.323 / 72.674ms | 超时重启 | 未稳定 |
+
+默认值据此定为 **2 worker**（`KROK_SUBTITLE_GPU_WORKERS=1` 可回退单 worker）。
+3/4 已无吞吐收益且放大回读与内存，8 发生 3 次 failure、2 次 restart 和 Painter
+fallback，明确不启用。WARP 即使请求 8 也由协议钳制为 1；独显显存低于 2GiB 时
+Python 调度器自动二次配置为 1（阈值可用
+`KROK_SUBTITLE_GPU_MIN_MULTIWORKER_VRAM_MB` 调整）。
+
+共享 D3D11/D2D device 的试作在第二个 Direct2D backend 配置时触发进程级异常，未通过
+稳定性门禁；最终每 worker 隔离 device/context。代价已由上表 RSS/显存量化，2 worker
+仍处于可接受范围，并避免跨 context 可变资源竞争。这也是未采用原共享方案的原因。
+
+调度门禁结果：双 worker 120 帧复验交付率 100%、播放时间戳单调违规 0、
+`max_in_flight=2`、`max_pending=1`；双 worker 与串行帧逐字节一致。sidecar kill 后
+221.3ms 完成 Painter fallback + 自动重启；注入 180ms 慢帧后 105.6ms 交付最新帧。
+WARP 请求 8 worker 的功能门禁交付率 100%、实际 worker=1、failure=0。
+
+10 分钟真实 GUI 固定工程长跑 `passed=true`：34,874 次请求、11,125 帧交付，
+failure/restart/fallback 均为 0，`max_pending=1`、`max_in_flight=2`；sidecar RSS
+135.35→148.95MiB、峰值 152.96MiB，预热后在约 145～153MiB 横盘；结束时本地显存
+30.75MiB，无持续增长。父 GUI 的媒体缓存工作集增长不归入 sidecar 池泄漏判据。
+收口时同时修复了阶段 0 登记的三条历史边界基线：RTL ruby 单元先做 NFC 归一化、
+volume signal 行盒不再给每个柱间距重复计入描边、N3 居中行把超出正文目标框的 ruby
+layout box 纳入整行锚定。最终 GPU backend 为 `163 passed, 1 skipped`；native protocol +
+transport + GPU backend 合并回归为 `280 passed, 28 skipped`。
+最终 Painter corpus（含真实 Dark Spiral `.n3proj`）`passed=true`，真实切片在 24,900ms 的
+包围盒最大边差由旧基线的 8px 收敛为 3px。独立 N3 视频差分工具
+因本机只有 N3 工程与源视频、没有 N3 已烧录输出视频而无法运行，未伪造输入；真实 N3
+工程由 Painter corpus 和已通过的 ruby 边界基线覆盖。
+
+归档文件：
+
+- `build/gpu-stage5-workers-{1,2,3,4,8}-hardware-20260721.{csv,json}`；
+- `build/gpu-stage5-workers-2-failure-churn-hardware-20260721.{csv,json}`；
+- `build/gpu-stage5-workers-8-requested-warp-20260721.{csv,json}`；
+- `build/gpu-stage5-workers-2-monotonic-hardware-20260721.{csv,json}`；
+- `build/gpu-stage5-workers-2-stress-10min-hardware-20260721.json`。
+- `build/gpu-stage5-final-painter-corpus/result.json`。
 
 **验收门禁**:
 
@@ -413,12 +462,18 @@ worker 池)、`krok_helper/subtitle_render/native_backend.py`(协议)、
 
 ## 7. 阶段 6:可选质量档位与收口(对应 P5 + 完成定义)
 
-- [ ] 评估 0.25/0.5/1.0 渲染倍率:对齐 N3 做法,倍率在 configure 阶段烘进
+- [x] 评估 0.25/0.5/1.0 渲染倍率:对齐 N3 做法,倍率在 configure 阶段烘进
   几何与 target 尺寸,不做逐帧 transform;字幕与视频用同一显示坐标,
   DPR/最小化恢复/跨屏不得改布局;仅作为弱 GPU 降载,不替代阶段 1~3;
-- [ ] 回填最终数据:各阶段基线/结果 CSV 路径、realization 容差与阈值、
+- [x] 回填最终数据:各阶段基线/结果 CSV 路径、realization 容差与阈值、
   worker 默认值、缓存容量、未采用方案及原因;
-- [ ] 上游计划文档"完成定义"7 条逐条对勾后,两份文档状态改为"已完成"。
+- [x] 上游计划文档"完成定义"7 条逐条对勾后,两份文档状态改为"已完成"。
+
+质量档位评估结论：P5 在上游 §6 已明确定义为独立产品功能，不阻塞本专项。0.25/0.5
+档必须同时改变视频与字幕 target、显示坐标和 DPR/跨屏恢复语义，不能仅给字幕 backend
+乘缩放矩阵；在缺少产品交互决策时实现会形成半套功能。因此本专项不新增 UI 或协议倍率，
+保留 1.0 原画质，并把三档质量作为后续独立产品排期。弱 GPU 本次先以 worker 自动收缩到 1
+提供稳定回退。
 
 ## 8. 全局回归门禁(每阶段提交前必跑)
 

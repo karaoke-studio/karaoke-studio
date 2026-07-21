@@ -63,6 +63,15 @@ def main() -> int:
         help="Use the G6 DirectComposition child HWND instead of readback/QImage.",
     )
     parser.add_argument("--glow", action="store_true")
+    parser.add_argument("--stroke-width", type=int, default=14)
+    parser.add_argument("--stroke2-width", type=int, default=7)
+    parser.add_argument(
+        "--worker-count",
+        type=int,
+        default=2,
+        choices=(1, 2, 3, 4, 8),
+        help="Bounded sidecar GPU preview workers (WARP is always clamped to 1).",
+    )
     parser.add_argument("--seek-burst", type=int, default=0)
     parser.add_argument("--resize-churn", type=int, default=0)
     parser.add_argument("--style-churn", type=int, default=0)
@@ -89,6 +98,7 @@ def main() -> int:
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         os.environ["KROK_SUBTITLE_GPU_NATIVE_PREVIEW"] = "0"
     os.environ["KROK_SUBTITLE_GPU_FORCE_WARP"] = "1" if args.force_warp else "0"
+    os.environ["KROK_SUBTITLE_GPU_WORKERS"] = str(args.worker_count)
     app = QApplication.instance() or QApplication([])
     slow_state: dict[str, float | bool] = {
         "armed": False,
@@ -98,6 +108,13 @@ def main() -> int:
     slow_frame_ms = max(int(args.inject_slow_frame_ms), 0)
     if slow_frame_ms:
         class DelayedNativeRendererProcess(NativeRendererProcess):
+            def begin_render_gpu_frame(self, *render_args, **render_kwargs):
+                if slow_state["armed"] and not slow_state["consumed"]:
+                    slow_state["consumed"] = True
+                    time.sleep(slow_frame_ms / 1000.0)
+                    slow_state["released_at"] = time.monotonic()
+                return super().begin_render_gpu_frame(*render_args, **render_kwargs)
+
             def render_gpu_frame(self, *render_args, **render_kwargs):
                 if slow_state["armed"] and not slow_state["consumed"]:
                     slow_state["consumed"] = True
@@ -119,9 +136,9 @@ def main() -> int:
         font_family="Meiryo",
         font_family_latin="Times New Roman",
         font_size_px=100,
-        stroke_width_px=8,
+        stroke_width_px=max(int(args.stroke_width), 0),
         stroke2_enabled=True,
-        stroke2_width_px=4,
+        stroke2_width_px=max(int(args.stroke2_width), 0),
         decoration_kind="glow" if args.glow else "shadow",
         glow_radius_px=10,
         glow_before_radius_px=10,
@@ -165,6 +182,7 @@ def main() -> int:
 
     renderer.frame_ready.connect(lambda _image, rendered_t_ms: note_frame(rendered_t_ms))
     renderer.frame_presented.connect(note_frame)
+    native_diagnostics: dict[str, object] = {}
     try:
         renderer.set_state(track, style)
         # Real preview configures and shows a paused frame before playback.
@@ -344,6 +362,22 @@ def main() -> int:
                     and after_release_ms <= 250.0
                 ),
             }
+        process = renderer._renderer
+        if process is not None and process.is_running:
+            native_diagnostics = process.gpu_diagnostics(
+                force_warp=args.force_warp
+            )
+            try:
+                import psutil
+            except ImportError:
+                pass
+            else:
+                try:
+                    native_diagnostics["sidecar_rss_bytes"] = psutil.Process(
+                        int(process.process_id or 0)
+                    ).memory_info().rss
+                except (OSError, psutil.Error):
+                    pass
     finally:
         renderer.stop()
         if native_host is not None:
@@ -366,14 +400,33 @@ def main() -> int:
         writer.writeheader()
         writer.writerows(rows)
     delivered_by_phase = Counter(str(row["phase"]) for row in rows)
+    playback_timestamps = [
+        int(row["rendered_t_ms"])
+        for row in rows
+        if str(row["phase"]) == "playback"
+    ]
+    monotonic_violations = sum(
+        current < previous
+        for previous, current in zip(playback_timestamps, playback_timestamps[1:])
+    )
+    stats = renderer.stats_snapshot()
+    scheduler_gate_passed = (
+        monotonic_violations == 0
+        and int(stats["max_in_flight"]) <= int(stats["worker_count"])
+        and int(stats["max_pending"]) <= 1
+    )
     summary = {
         "requested_playback_frames": frame_count,
+        "worker_count_requested": args.worker_count,
         "transport": "direct_composition" if args.native_preview else "shared_memory_qimage",
         "delivered_frames": len(rows),
         "delivered_by_phase": dict(delivered_by_phase),
         "playback_delivery_rate": delivered_by_phase.get("playback", 0) / frame_count,
-        "stats": renderer.stats_snapshot(),
+        "stats": stats,
+        "playback_monotonic_violations": monotonic_violations,
+        "scheduler_gate_passed": scheduler_gate_passed,
         "timings": renderer.timing_snapshot(),
+        "native_diagnostics": native_diagnostics,
         "kill_recovery": kill_recovery,
         "slow_recovery": slow_recovery,
         "csv": str(args.output),
@@ -387,6 +440,7 @@ def main() -> int:
     return (
         0
         if summary["stats"]["renderer_failures"] == (1 if args.kill_sidecar else 0)
+        and summary["scheduler_gate_passed"]
         and summary["kill_recovery"]["passed"]
         and summary["slow_recovery"]["passed"]
         else 1

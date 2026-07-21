@@ -1466,6 +1466,72 @@ def test_gpu_g1_repeated_configure_hits_geometry_layout_cache(monkeypatch) -> No
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_preview_worker_pool_bounds_in_flight_and_tags_out_of_order_frames(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    shm_key = f"test-gpu-preview-pool-{uuid.uuid4().hex}"
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30.0) as renderer:
+        configured = renderer.configure_gpu(
+            _g1_track(),
+            _g1_style(),
+            width=640,
+            height=360,
+            fps=60,
+            worker_count=2,
+        )
+        assert configured["worker_count"] == 2
+        for frame_index, t_ms in enumerate((500, 1000)):
+            renderer.begin_render_gpu_frame(
+                t_ms,
+                generation=7,
+                frame_index=frame_index,
+                request_serial=100 + frame_index,
+                shm_key=shm_key,
+                slot_count=2,
+                include_checksum=False,
+            )
+        events = [
+            renderer.finish_render_gpu_frame(),
+            renderer.finish_render_gpu_frame(),
+        ]
+        diagnostics = renderer.gpu_diagnostics()
+        pooled_frames: dict[int, bytes] = {}
+        for event in events:
+            with SharedFrameRingReader.from_event(event) as reader:
+                pooled_frames[int(event["t_ms"])] = bytes(reader.read_frame(event).payload)
+
+        renderer.configure_gpu(
+            _g1_track(),
+            _g1_style(),
+            width=640,
+            height=360,
+            fps=60,
+            worker_count=1,
+        )
+        serial_frames: dict[int, bytes] = {}
+        for frame_index, t_ms in enumerate((500, 1000)):
+            event = renderer.render_gpu_frame(
+                t_ms,
+                generation=8,
+                frame_index=frame_index,
+                shm_key=f"{shm_key}-serial",
+                include_checksum=False,
+            )
+            with SharedFrameRingReader.from_event(event) as reader:
+                serial_frames[t_ms] = bytes(reader.read_frame(event).payload)
+
+    assert {event["request_serial"] for event in events} == {100, 101}
+    assert {event["frame_index"] for event in events} == {0, 1}
+    assert all(event["generation"] == 7 for event in events)
+    assert all(event["worker_index"] in {0, 1} for event in events)
+    assert diagnostics["worker_count"] == 2
+    assert diagnostics["in_flight"] == 0
+    assert diagnostics["max_in_flight"] <= 2
+    assert pooled_frames == serial_frames
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_diagnostics_report_cache_and_dxgi_memory_without_rendering(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
@@ -4704,13 +4770,15 @@ def test_gpu_g4_rtl_ruby_reverses_visual_units_and_keeps_empty_timing_pause(
         ]
 
     for gpu_frame, painter_frame in zip(gpu, painter):
+        gpu_bounds = _payload_alpha_bounds(gpu_frame)
+        painter_bounds = _payload_alpha_bounds(painter_frame)
         assert all(
             abs(actual - expected) <= 5
             for actual, expected in zip(
-                _payload_alpha_bounds(gpu_frame),
-                _payload_alpha_bounds(painter_frame),
+                gpu_bounds,
+                painter_bounds,
             )
-        )
+        ), (gpu_bounds, painter_bounds)
     gpu_full = len(blue_positions(gpu[-1]))
     painter_full = len(blue_positions(painter[-1]))
     assert gpu_full > 0 and painter_full > 0

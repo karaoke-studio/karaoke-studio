@@ -34,6 +34,8 @@
 #include <condition_variable>
 #include <cstdint>
 #include <cmath>
+#include <deque>
+#include <functional>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -510,6 +512,131 @@ struct SharedFrameRing {
     QString pixelFormat = QStringLiteral("rgba8888");
 };
 
+class GpuPreviewWorkerPool {
+public:
+    using Work = std::function<void(krok::subtitle::native::RenderBackend &, int)>;
+
+    GpuPreviewWorkerPool(bool forceWarp, int workerCount)
+        : forceWarp_(forceWarp), workerCount_(std::clamp(workerCount, 1, 8)) {
+        backends_.reserve(static_cast<std::size_t>(workerCount_));
+        workers_.reserve(static_cast<std::size_t>(workerCount_));
+        for (int index = 0; index < workerCount_; ++index) {
+            backends_.push_back(
+                std::make_unique<krok::subtitle::native::Direct2DGpuBackend>(forceWarp_)
+            );
+        }
+        for (int index = 0; index < workerCount_; ++index) {
+            workers_.emplace_back([this, index]() { workerLoop(index); });
+        }
+    }
+
+    ~GpuPreviewWorkerPool() {
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            stopping_ = true;
+            queue_.clear();
+        }
+        ready_.notify_all();
+        for (auto &worker : workers_) {
+            if (worker.joinable()) {
+                worker.join();
+            }
+        }
+    }
+
+    GpuPreviewWorkerPool(const GpuPreviewWorkerPool &) = delete;
+    GpuPreviewWorkerPool &operator=(const GpuPreviewWorkerPool &) = delete;
+
+    void configure(const krok::subtitle::native::RenderScene &scene) {
+        {
+            std::unique_lock<std::mutex> lock(mutex_);
+            accepting_ = false;
+            outstanding_ -= static_cast<int>(queue_.size());
+            queue_.clear();
+            if (outstanding_ == 0) {
+                drained_.notify_all();
+            }
+            drained_.wait(lock, [this]() { return outstanding_ == 0; });
+        }
+        for (auto &backend : backends_) {
+            backend->configure(scene);
+            backend->renderFrame(scene.prewarmTimeMs, true);
+        }
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            accepting_ = true;
+        }
+    }
+
+    bool submit(Work work) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (stopping_ || !accepting_ || outstanding_ >= workerCount_) {
+            return false;
+        }
+        queue_.push_back(std::move(work));
+        ++outstanding_;
+        maxOutstanding_ = std::max(maxOutstanding_, outstanding_);
+        ready_.notify_one();
+        return true;
+    }
+
+    int workerCount() const noexcept { return workerCount_; }
+    int maxOutstanding() const noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return maxOutstanding_;
+    }
+    int outstanding() const noexcept {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return outstanding_;
+    }
+    krok::subtitle::native::BackendCaps capabilities() const {
+        return backends_.front()->capabilities();
+    }
+    krok::subtitle::native::BackendDiagnostics diagnostics() const {
+        std::unique_lock<std::mutex> lock(mutex_);
+        drained_.wait(lock, [this]() { return outstanding_ == 0; });
+        lock.unlock();
+        return backends_.front()->diagnostics();
+    }
+
+private:
+    void workerLoop(int workerIndex) {
+        while (true) {
+            Work work;
+            {
+                std::unique_lock<std::mutex> lock(mutex_);
+                ready_.wait(lock, [this]() { return stopping_ || !queue_.empty(); });
+                if (stopping_ && queue_.empty()) {
+                    return;
+                }
+                work = std::move(queue_.front());
+                queue_.pop_front();
+            }
+            work(*backends_[static_cast<std::size_t>(workerIndex)], workerIndex);
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                --outstanding_;
+                if (outstanding_ == 0) {
+                    drained_.notify_all();
+                }
+            }
+        }
+    }
+
+    bool forceWarp_ = false;
+    int workerCount_ = 1;
+    mutable std::mutex mutex_;
+    std::condition_variable ready_;
+    mutable std::condition_variable drained_;
+    std::deque<Work> queue_;
+    std::vector<std::unique_ptr<krok::subtitle::native::RenderBackend>> backends_;
+    std::vector<std::thread> workers_;
+    bool stopping_ = false;
+    bool accepting_ = false;
+    int outstanding_ = 0;
+    int maxOutstanding_ = 0;
+};
+
 struct RenderRuntime {
     std::mutex cancelMutex;
     QSet<int> cancelledGenerations;
@@ -524,6 +651,8 @@ struct RenderRuntime {
     std::unique_ptr<krok::subtitle::native::RenderBackend> warpGpuBackend;
     bool hardwareGpuConfigured = false;
     bool warpGpuConfigured = false;
+    std::unique_ptr<GpuPreviewWorkerPool> hardwareGpuPreviewPool;
+    std::unique_ptr<GpuPreviewWorkerPool> warpGpuPreviewPool;
 };
 
 QString fontCacheKey(const QFont &font);
@@ -1605,6 +1734,15 @@ krok::subtitle::native::RenderBackend *ensureGpuBackend(
         }
     }
     return backend.get();
+}
+
+GpuPreviewWorkerPool *gpuPreviewPool(RenderRuntime *runtime, bool forceWarp) {
+    if (runtime == nullptr) {
+        return nullptr;
+    }
+    return forceWarp
+        ? runtime->warpGpuPreviewPool.get()
+        : runtime->hardwareGpuPreviewPool.get();
 }
 
 void appendSharedRingMetadata(QJsonObject &out, const SharedFrameRing &ring, int slotIndex) {
@@ -6960,7 +7098,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             }
             for (const auto &unit : rubyUtopiaReadingUnitsAndIntervals(ruby)) {
                 sceneRuby.units.push_back(krok::subtitle::native::RubyUnit{
-                    unit.first.toStdWString(),
+                    unit.first.normalized(QString::NormalizationForm_C).toStdWString(),
                     unit.second.first + sourceTimingOffset,
                     unit.second.second + sourceTimingOffset,
                 });
@@ -7285,6 +7423,52 @@ QJsonObject handleConfigureGpu(
         return out;
     }
     const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
+    const int requestedWorkers = std::clamp(
+        intValue(request, QStringLiteral("worker_count"), 1), 1, 8
+    );
+    const int workerCount = forceWarp ? 1 : requestedWorkers;
+    if (workerCount > 1) {
+        QElapsedTimer timer;
+        timer.start();
+        try {
+            auto scene = gpuSceneFromConfig(*config);
+            scene.prewarmTimeMs = std::max(
+                intValue(request, QStringLiteral("prewarm_t_ms"), 0), 0
+            );
+            auto &pool = runtime->hardwareGpuPreviewPool;
+            if (pool == nullptr || pool->workerCount() != workerCount) {
+                pool = std::make_unique<GpuPreviewWorkerPool>(false, workerCount);
+            }
+            pool->configure(scene);
+            runtime->hardwareGpuConfigured = true;
+            QJsonObject out = response(true, QStringLiteral("gpu_configured"));
+            out.insert(QStringLiteral("width"), scene.width);
+            out.insert(QStringLiteral("height"), scene.height);
+            out.insert(QStringLiteral("line_count"), static_cast<int>(scene.lines.size()));
+            out.insert(QStringLiteral("worker_count"), workerCount);
+            out.insert(QStringLiteral("worker_count_requested"), requestedWorkers);
+            out.insert(
+                QStringLiteral("configure_ms"),
+                static_cast<double>(timer.nsecsElapsed()) / 1000000.0
+            );
+            const QJsonObject caps = backendCapsJson(pool->capabilities());
+            for (auto it = caps.begin(); it != caps.end(); ++it) {
+                out.insert(it.key(), it.value());
+            }
+            appendGpuDiagnostics(&out, pool->diagnostics());
+            return out;
+        } catch (const std::exception &exception) {
+            runtime->hardwareGpuPreviewPool.reset();
+            QJsonObject out = response(false, QStringLiteral("gpu_configure"));
+            out.insert(QStringLiteral("error"), QString::fromUtf8(exception.what()));
+            return out;
+        }
+    }
+    if (forceWarp) {
+        runtime->warpGpuPreviewPool.reset();
+    } else {
+        runtime->hardwareGpuPreviewPool.reset();
+    }
     QString error;
     auto *backend = ensureGpuBackend(runtime, forceWarp, &error);
     if (backend == nullptr) {
@@ -7309,6 +7493,8 @@ QJsonObject handleConfigureGpu(
         out.insert(QStringLiteral("width"), scene.width);
         out.insert(QStringLiteral("height"), scene.height);
         out.insert(QStringLiteral("line_count"), static_cast<int>(scene.lines.size()));
+        out.insert(QStringLiteral("worker_count"), 1);
+        out.insert(QStringLiteral("worker_count_requested"), requestedWorkers);
         out.insert(QStringLiteral("configure_ms"), static_cast<double>(timer.nsecsElapsed()) / 1000000.0);
         const QJsonObject caps = backendCapsJson(backend->capabilities());
         for (auto it = caps.begin(); it != caps.end(); ++it) {
@@ -7336,40 +7522,37 @@ QJsonObject handleGpuDiagnostics(
         out.insert(QStringLiteral("error"), QStringLiteral("GPU backend is not configured"));
         return out;
     }
-    QString error;
-    auto *backend = ensureGpuBackend(runtime, forceWarp, &error);
-    if (backend == nullptr) {
-        QJsonObject out = response(false, QStringLiteral("gpu_diagnostics"));
-        out.insert(QStringLiteral("error"), error);
-        return out;
-    }
     QJsonObject out = response(true, QStringLiteral("gpu_diagnostics"));
-    appendGpuDiagnostics(&out, backend->diagnostics());
+    if (auto *pool = gpuPreviewPool(runtime, forceWarp)) {
+        appendGpuDiagnostics(&out, pool->diagnostics());
+        out.insert(QStringLiteral("worker_count"), pool->workerCount());
+        out.insert(QStringLiteral("in_flight"), pool->outstanding());
+        out.insert(QStringLiteral("max_in_flight"), pool->maxOutstanding());
+    } else {
+        QString error;
+        auto *backend = ensureGpuBackend(runtime, forceWarp, &error);
+        if (backend == nullptr) {
+            out.insert(QStringLiteral("ok"), false);
+            out.insert(QStringLiteral("error"), error);
+            return out;
+        }
+        appendGpuDiagnostics(&out, backend->diagnostics());
+        out.insert(QStringLiteral("worker_count"), 1);
+        out.insert(QStringLiteral("in_flight"), 0);
+        out.insert(QStringLiteral("max_in_flight"), 1);
+    }
     return out;
 }
 
-QJsonObject handleRenderGpuFrame(
+QJsonObject renderGpuFrameWithBackend(
     const QJsonObject &request,
-    const std::optional<RenderConfig> &config,
-    RenderRuntime *runtime
+    const RenderConfig &config,
+    RenderRuntime *runtime,
+    krok::subtitle::native::RenderBackend *backend
 ) {
-    if (!config.has_value()) {
-        QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
-        out.insert(QStringLiteral("error"), QStringLiteral("renderer is not configured"));
-        return out;
-    }
-    const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
-    const bool configured = forceWarp ? runtime->warpGpuConfigured : runtime->hardwareGpuConfigured;
-    if (!configured) {
-        QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
-        out.insert(QStringLiteral("error"), QStringLiteral("GPU backend is not configured"));
-        return out;
-    }
-    QString error;
-    auto *backend = ensureGpuBackend(runtime, forceWarp, &error);
     if (backend == nullptr) {
         QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
-        out.insert(QStringLiteral("error"), error);
+        out.insert(QStringLiteral("error"), QStringLiteral("GPU backend is unavailable"));
         return out;
     }
     const int generation = intValue(request, QStringLiteral("generation"), 0);
@@ -7391,8 +7574,8 @@ QJsonObject handleRenderGpuFrame(
             runtime,
             shmKey,
             slotCount,
-            config->physicalWidth(),
-            config->physicalHeight(),
+            config.physicalWidth(),
+            config.physicalHeight(),
             &shmError
         )) {
         QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
@@ -7449,6 +7632,14 @@ QJsonObject handleRenderGpuFrame(
         QJsonObject out = response(true, QStringLiteral("gpu_frame_ready"));
         out.insert(QStringLiteral("generation"), generation);
         out.insert(QStringLiteral("frame_index"), frameIndex);
+        out.insert(
+            QStringLiteral("request_serial"),
+            intValue(request, QStringLiteral("request_serial"), frameIndex)
+        );
+        out.insert(
+            QStringLiteral("worker_index"),
+            intValue(request, QStringLiteral("worker_index"), 0)
+        );
         out.insert(QStringLiteral("t_ms"), tMs);
         out.insert(QStringLiteral("render_ms"), result.renderMs);
         out.insert(QStringLiteral("readback_ms"), result.readbackMs);
@@ -7481,9 +7672,9 @@ QJsonObject handleRenderGpuFrame(
             out.insert(QStringLiteral("packed_height"), packedHeight);
             out.insert(
                 QStringLiteral("readback_ratio"),
-                config->physicalHeight() > 0
+                config.physicalHeight() > 0
                     ? static_cast<double>(packedHeight)
-                        / static_cast<double>(config->physicalHeight())
+                        / static_cast<double>(config.physicalHeight())
                     : 0.0
             );
         }
@@ -7493,6 +7684,84 @@ QJsonObject handleRenderGpuFrame(
         out.insert(QStringLiteral("error"), QString::fromUtf8(exception.what()));
         return out;
     }
+}
+
+std::optional<QJsonObject> handleRenderGpuFrame(
+    const QJsonObject &request,
+    const std::optional<RenderConfig> &config,
+    RenderRuntime *runtime
+) {
+    if (!config.has_value()) {
+        QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
+        out.insert(QStringLiteral("error"), QStringLiteral("renderer is not configured"));
+        return out;
+    }
+    const bool forceWarp = request.value(QStringLiteral("force_warp")).toBool(false);
+    const bool configured = forceWarp
+        ? runtime->warpGpuConfigured
+        : runtime->hardwareGpuConfigured;
+    if (!configured) {
+        QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
+        out.insert(QStringLiteral("error"), QStringLiteral("GPU backend is not configured"));
+        return out;
+    }
+
+    auto *pool = gpuPreviewPool(runtime, forceWarp);
+    if (pool == nullptr) {
+        QString error;
+        auto *backend = ensureGpuBackend(runtime, forceWarp, &error);
+        if (backend == nullptr) {
+            QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
+            out.insert(QStringLiteral("error"), error);
+            return out;
+        }
+        return renderGpuFrameWithBackend(request, *config, runtime, backend);
+    }
+
+    const int generation = intValue(request, QStringLiteral("generation"), 0);
+    const int frameIndex = intValue(request, QStringLiteral("frame_index"), 0);
+    const int requestSerial = intValue(
+        request, QStringLiteral("request_serial"), frameIndex
+    );
+    const RenderConfig snapshot = *config;
+    const QJsonObject requestSnapshot = request;
+    const bool accepted = pool->submit(
+        [runtime, snapshot, requestSnapshot, generation, requestSerial](
+            krok::subtitle::native::RenderBackend &backend,
+            int workerIndex
+        ) {
+            if (generationCancelled(runtime, generation)) {
+                QJsonObject dropped = response(true, QStringLiteral("gpu_frame_dropped"));
+                dropped.insert(QStringLiteral("generation"), generation);
+                dropped.insert(QStringLiteral("request_serial"), requestSerial);
+                dropped.insert(QStringLiteral("reason"), QStringLiteral("generation_cancelled"));
+                writeJson(dropped);
+                return;
+            }
+            QJsonObject workerRequest = requestSnapshot;
+            workerRequest.insert(QStringLiteral("worker_index"), workerIndex);
+            QJsonObject out = renderGpuFrameWithBackend(
+                workerRequest, snapshot, runtime, &backend
+            );
+            if (generationCancelled(runtime, generation)) {
+                out = response(true, QStringLiteral("gpu_frame_dropped"));
+                out.insert(QStringLiteral("generation"), generation);
+                out.insert(QStringLiteral("request_serial"), requestSerial);
+                out.insert(QStringLiteral("reason"), QStringLiteral("generation_cancelled"));
+            }
+            writeJson(out);
+        }
+    );
+    if (!accepted) {
+        QJsonObject out = response(false, QStringLiteral("gpu_queue_full"));
+        out.insert(QStringLiteral("error"), QStringLiteral("GPU preview in-flight limit reached"));
+        out.insert(QStringLiteral("generation"), generation);
+        out.insert(QStringLiteral("request_serial"), requestSerial);
+        out.insert(QStringLiteral("in_flight"), pool->outstanding());
+        out.insert(QStringLiteral("worker_count"), pool->workerCount());
+        return out;
+    }
+    return std::nullopt;
 }
 
 QJsonObject handlePresentGpuFrame(
@@ -7635,7 +7904,9 @@ int main(int argc, char **argv) {
         } else if (command == QStringLiteral("gpu_configure")) {
             writeJson(handleConfigureGpu(request, config, &runtime));
         } else if (command == QStringLiteral("gpu_render_frame")) {
-            writeJson(handleRenderGpuFrame(request, config, &runtime));
+            if (auto out = handleRenderGpuFrame(request, config, &runtime)) {
+                writeJson(*out);
+            }
         } else if (command == QStringLiteral("gpu_present_frame")) {
             writeJson(handlePresentGpuFrame(request, config, &runtime));
         } else if (command == QStringLiteral("gpu_preview_close")) {

@@ -624,7 +624,7 @@ class NativeRendererProcess:
             if process.poll() is None:
                 self._send({"cmd": "shutdown"})
                 try:
-                    self._read_response()
+                    self._read_until_event("shutdown")
                 except NativeRendererError:
                     pass
         finally:
@@ -668,12 +668,12 @@ class NativeRendererProcess:
             extra_tracks=extra_tracks,
         )
         self._send({"cmd": "configure", "ir": ir})
-        return self._expect_ok(self._read_response())
+        return self._expect_ok(self._read_until_event("configured"))
 
     def backend_info(self, *, force_warp: bool = False) -> dict[str, Any]:
         """Return Direct2D/D3D11 adapter capabilities without touching product UI."""
         self._send({"cmd": "backend_info", "force_warp": bool(force_warp)})
-        return self._expect_ok(self._read_response())
+        return self._expect_ok(self._read_until_event("backend_info"))
 
     def configure_gpu(
         self,
@@ -687,6 +687,7 @@ class NativeRendererProcess:
         force_warp: bool = False,
         extra_tracks: list[TimingTrack] | None = None,
         prewarm_t_ms: int = 0,
+        worker_count: int = 1,
     ) -> dict[str, Any]:
         """Configure the G1 DirectWrite scene without enabling the product path."""
         self.configure(
@@ -703,9 +704,10 @@ class NativeRendererProcess:
                 "cmd": "gpu_configure",
                 "force_warp": bool(force_warp),
                 "prewarm_t_ms": max(int(prewarm_t_ms), 0),
+                "worker_count": max(1, min(int(worker_count), 8)),
             }
         )
-        return self._expect_ok(self._read_response())
+        return self._expect_ok(self._read_until_event("gpu_configured"))
 
     def begin_render_gpu_frame(
         self,
@@ -718,6 +720,7 @@ class NativeRendererProcess:
         include_checksum: bool = True,
         readback_bands: bool = False,
         slot_count: int = 1,
+        request_serial: int | None = None,
     ) -> None:
         """Send a gpu_render_frame request without waiting for its response.
 
@@ -736,13 +739,23 @@ class NativeRendererProcess:
             "readback_bands": bool(readback_bands),
             "slot_count": max(1, int(slot_count)),
         }
+        if request_serial is not None:
+            payload["request_serial"] = int(request_serial)
         if shm_key:
             payload["shm_key"] = str(shm_key)
         self._send(payload)
 
     def finish_render_gpu_frame(self) -> dict[str, Any]:
         """Collect the response for a pending begin_render_gpu_frame call."""
-        return self._expect_ok(self._read_response())
+        while True:
+            response = self._read_response()
+            if response.get("event") in {
+                "gpu_frame_ready",
+                "gpu_frame_dropped",
+                "gpu_queue_full",
+            }:
+                return self._expect_ok(response)
+            self._event_backlog.append(response)
 
     def render_gpu_frame(
         self,
@@ -755,6 +768,7 @@ class NativeRendererProcess:
         include_checksum: bool = True,
         readback_bands: bool = False,
         slot_count: int = 1,
+        request_serial: int | None = None,
     ) -> dict[str, Any]:
         """Render one configured G1 frame into a shared-memory RGBA slot."""
         self.begin_render_gpu_frame(
@@ -766,6 +780,7 @@ class NativeRendererProcess:
             include_checksum=include_checksum,
             readback_bands=readback_bands,
             slot_count=slot_count,
+            request_serial=request_serial,
         )
         return self.finish_render_gpu_frame()
 
@@ -807,7 +822,7 @@ class NativeRendererProcess:
     def gpu_diagnostics(self, *, force_warp: bool = False) -> dict[str, Any]:
         """Read cache and DXGI memory counters without entering the frame hot path."""
         self._send({"cmd": "gpu_diagnostics", "force_warp": bool(force_warp)})
-        return self._expect_ok(self._read_response())
+        return self._expect_ok(self._read_until_event("gpu_diagnostics"))
 
     def render_probe(
         self,
@@ -945,14 +960,14 @@ class NativeRendererProcess:
         kept: deque[dict[str, Any]] = deque()
         while self._event_backlog:
             payload = self._event_backlog.popleft()
-            if payload.get("event") == event:
+            if payload.get("event") == event or not payload.get("ok", False):
                 self._event_backlog.extendleft(reversed(kept))
                 return payload
             kept.append(payload)
         self._event_backlog = kept
         while True:
             payload = self._read_response()
-            if payload.get("event") == event:
+            if payload.get("event") == event or not payload.get("ok", False):
                 return payload
             self._event_backlog.append(payload)
 

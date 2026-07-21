@@ -170,10 +170,11 @@ VolumeSignalGeometry volumeSignalGeometry(const TextStyle &style) {
     geometry.columnWidth = std::max(style.volumeColumnWidth, 1.0f);
     geometry.columnSpacing = std::max(style.volumeColumnSpacing, 0.0f);
     geometry.strokeExtent = std::max(style.litStrokeWidth, 0.0f);
-    geometry.pitch = geometry.columnWidth + geometry.columnSpacing
-        + geometry.strokeExtent * 2.0f;
+    // Painter's column spacing is measured between the stroked module cells;
+    // the outline expands only the two outer group edges, not every pitch.
+    geometry.pitch = geometry.columnWidth + geometry.columnSpacing;
     geometry.groupWidth = geometry.count * geometry.pitch
-        - geometry.columnSpacing;
+        - geometry.columnSpacing + geometry.strokeExtent * 2.0f;
     const float ratio = std::max(style.volumeRatio, 0.01f);
     float baseFactor = ratio;
     float depthFactor = 1.0f;
@@ -4132,10 +4133,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         if (n3Layout && !style.vertical) {
             lyricLeft = line->fillBounds.left;
             lyricRight = line->fillBounds.right;
-            if (style.alignment != "center" || line->centerOverride) {
-                for (const Impl::CachedRuby &ruby : line->rubies) {
-                    lyricLeft = std::min(lyricLeft, ruby.fillBounds.left);
-                    lyricRight = std::max(lyricRight, ruby.fillBounds.right);
+            // N3 anchors the complete line box, including a reading that
+            // overhangs its base-text target.  Painter folds the same ruby
+            // layout boxes into _line_total_width even for centered rows.
+            for (const Impl::CachedRuby &ruby : line->rubies) {
+                for (const Impl::CachedChar &unit : ruby.chars) {
+                    lyricLeft = std::min(lyricLeft, unit.layoutLeft);
+                    lyricRight = std::max(lyricRight, unit.layoutRight);
                 }
             }
         }
@@ -4198,8 +4202,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 float left = candidate.fillBounds.left;
                 float right = candidate.fillBounds.right;
                 for (const Impl::CachedRuby &ruby : candidate.rubies) {
-                    left = std::min(left, ruby.fillBounds.left);
-                    right = std::max(right, ruby.fillBounds.right);
+                    for (const Impl::CachedChar &unit : ruby.chars) {
+                        left = std::min(left, unit.layoutLeft);
+                        right = std::max(right, unit.layoutRight);
+                    }
                 }
                 return std::max(right - left, 1.0f);
             };

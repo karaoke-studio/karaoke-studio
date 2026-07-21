@@ -399,6 +399,7 @@ class GpuAsyncSubtitleRenderer(QObject):
     fallback_occurred = Signal(str)
 
     _STALE_TOLERANCE_MS = 120
+    _SEEK_DISCONTINUITY_MS = 250
 
     def __init__(self, width: int, height: int, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
@@ -420,6 +421,13 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._retry_after = 0.0
         self._force_warp = _env_enabled("KROK_SUBTITLE_GPU_FORCE_WARP", "0")
         self._native_preview = gpu_native_preview_enabled()
+        self._worker_count_requested = _env_int(
+            "KROK_SUBTITLE_GPU_WORKERS", 2, minimum=1
+        )
+        self._worker_count_requested = min(self._worker_count_requested, 8)
+        if self._force_warp or self._native_preview:
+            self._worker_count_requested = 1
+        self._active_worker_count = 1
         self._native_target: Optional[tuple[int, int, int, int, int]] = None
         self._lookahead_frames = _env_int(
             "KROK_SUBTITLE_GPU_LOOKAHEAD_FRAMES", 1, minimum=0
@@ -445,6 +453,9 @@ class GpuAsyncSubtitleRenderer(QObject):
             "fallback_frames": 0,
             "capability_fallbacks": 0,
             "max_pending": 0,
+            "max_in_flight": 0,
+            "worker_count": self._worker_count_requested,
+            "generations_cancelled": 0,
         }
         self._timings: dict[str, deque[float]] = {
             "render_ms": deque(maxlen=4096),
@@ -469,6 +480,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         with self._condition:
             if self._stopped:
                 return
+            previous_generation = self._generation
             self._track = track
             self._style = style
             self._extra_tracks = list(extra_tracks or ())
@@ -476,6 +488,7 @@ class GpuAsyncSubtitleRenderer(QObject):
             self._needs_configure = True
             self._pending = None
             self._frame_cache.clear()
+            self._cancel_native_generation_locked(previous_generation)
             self._condition.notify_all()
 
     def set_size(self, width: int, height: int) -> None:
@@ -496,6 +509,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                 max(float(device_pixel_ratio or 1.0), 0.01),
             )
             if target != (self._logical_w, self._logical_h, self._device_pixel_ratio):
+                previous_generation = self._generation
                 self._logical_w, self._logical_h, self._device_pixel_ratio = target
                 self._generation += 1
                 self._needs_configure = True
@@ -505,6 +519,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                 # each render-target generation its own key while preserving
                 # the sidecar/GPU device across ordinary frame requests.
                 self._shm_key = f"krok-gpu-preview-{os.getpid()}-{uuid.uuid4().hex}"
+                self._cancel_native_generation_locked(previous_generation)
             self._condition.notify_all()
 
     @property
@@ -549,6 +564,15 @@ class GpuAsyncSubtitleRenderer(QObject):
                 return
             self._request_serial += 1
             serial = self._request_serial
+            if (
+                self._latest_t is not None
+                and abs(requested_t - self._latest_t) > self._SEEK_DISCONTINUITY_MS
+            ):
+                previous_generation = self._generation
+                self._generation += 1
+                self._pending = None
+                self._frame_cache.clear()
+                self._cancel_native_generation_locked(previous_generation)
             self._latest_t = requested_t
             self._note("requests")
             if cached is not None:
@@ -575,8 +599,20 @@ class GpuAsyncSubtitleRenderer(QObject):
                 return
             self._stopped = True
             self._pending = None
+            self._cancel_native_generation_locked(self._generation)
             self._condition.notify_all()
         self._thread.join(timeout=3.0)
+
+    def _cancel_native_generation_locked(self, generation: int) -> None:
+        renderer = self._renderer
+        if renderer is None:
+            return
+        try:
+            renderer.send_cancel_generation(int(generation))
+            self._note("generations_cancelled")
+        except (AttributeError, NativeRendererError, RuntimeError):
+            # The worker owns restart/fallback. State changes must stay non-blocking.
+            pass
 
     def _replace_pending_locked(self, t_ms: int, serial: int, speculative: bool) -> None:
         if self._pending is not None:
@@ -670,7 +706,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                 try:
                     renderer = self._ensure_renderer()
                     if needs_configure:
-                        renderer.configure_gpu(
+                        configured = renderer.configure_gpu(
                             track,
                             style,
                             width=width,
@@ -680,8 +716,56 @@ class GpuAsyncSubtitleRenderer(QObject):
                             force_warp=self._force_warp,
                             extra_tracks=extra_tracks,
                             prewarm_t_ms=t_ms,
+                            worker_count=self._worker_count_requested,
                         )
+                        self._active_worker_count = max(
+                            1, min(int(configured.get("worker_count", 1)), 8)
+                        )
+                        dedicated_vram = max(
+                            int(configured.get("dedicated_video_memory", 0)), 0
+                        )
+                        min_multiworker_vram = _env_int(
+                            "KROK_SUBTITLE_GPU_MIN_MULTIWORKER_VRAM_MB",
+                            2048,
+                            minimum=0,
+                        ) * 1024 * 1024
+                        if (
+                            self._active_worker_count > 1
+                            and dedicated_vram > 0
+                            and dedicated_vram < min_multiworker_vram
+                        ):
+                            configured = renderer.configure_gpu(
+                                track,
+                                style,
+                                width=width,
+                                height=height,
+                                fps=60,
+                                dpr=dpr,
+                                force_warp=self._force_warp,
+                                extra_tracks=extra_tracks,
+                                prewarm_t_ms=t_ms,
+                                worker_count=1,
+                            )
+                            self._active_worker_count = 1
+                        with self._stats_lock:
+                            self._stats["worker_count"] = self._active_worker_count
                         self._note("configure_count")
+                    if (
+                        self._active_worker_count > 1
+                        and not self._native_preview
+                        and native_target is None
+                    ):
+                        self._render_pooled_batch(
+                            renderer,
+                            t_ms=t_ms,
+                            serial=serial,
+                            speculative=speculative,
+                            generation=generation,
+                            shm_key=shm_key,
+                            dpr=dpr,
+                            submitted_at=submitted_at,
+                        )
+                        continue
                     if self._native_preview and native_target is not None:
                         parent_hwnd, target_x, target_y, target_width, target_height = native_target
                         event = renderer.present_gpu_frame(
@@ -756,6 +840,93 @@ class GpuAsyncSubtitleRenderer(QObject):
         finally:
             self._close_renderer()
 
+    def _render_pooled_batch(
+        self,
+        renderer: NativeRendererProcess,
+        *,
+        t_ms: int,
+        serial: int,
+        speculative: bool,
+        generation: int,
+        shm_key: str,
+        dpr: float,
+        submitted_at: float,
+    ) -> None:
+        """Submit one current frame plus bounded playback lookahead to the pool."""
+        with self._condition:
+            playing = self._playing
+        requests = [(int(t_ms), int(serial), bool(speculative), float(submitted_at))]
+        if playing and not speculative:
+            future_t = int(t_ms)
+            for _ in range(1, self._active_worker_count):
+                future_t = self._next_frame_timestamp(future_t)
+                requests.append((future_t, int(serial), True, time.monotonic()))
+
+        metadata: dict[int, tuple[int, int, bool, float]] = {}
+        batch_started = time.monotonic()
+        for request_t, request_serial, is_speculative, request_submitted in requests:
+            frame_index = self._frame_index
+            self._frame_index += 1
+            wire_serial = frame_index
+            metadata[wire_serial] = (
+                request_t,
+                request_serial,
+                is_speculative,
+                request_submitted,
+            )
+            renderer.begin_render_gpu_frame(
+                request_t,
+                force_warp=self._force_warp,
+                generation=generation,
+                frame_index=frame_index,
+                request_serial=wire_serial,
+                shm_key=shm_key,
+                include_checksum=False,
+                readback_bands=True,
+                slot_count=self._active_worker_count,
+            )
+        with self._stats_lock:
+            self._stats["max_in_flight"] = max(
+                self._stats["max_in_flight"], len(metadata)
+            )
+
+        completed = [renderer.finish_render_gpu_frame() for _ in metadata]
+        completed_at = time.monotonic()
+        self._record_timing(
+            "roundtrip_ms", (completed_at - batch_started) * 1000.0
+        )
+        completed.sort(key=lambda event: int(event.get("t_ms", -1)))
+        for event in completed:
+            if event.get("event") == "gpu_frame_dropped":
+                self._note("stale_frames_dropped")
+                continue
+            wire_serial = int(event.get("request_serial", -1))
+            item = metadata.get(wire_serial)
+            if item is None:
+                self._note("stale_frames_dropped")
+                continue
+            request_t, request_serial, is_speculative, request_submitted = item
+            self._record_event_timing("render_ms", event.get("render_ms"))
+            self._record_event_timing("readback_ms", event.get("readback_ms"))
+            if not is_speculative:
+                self._record_timing(
+                    "ready_latency_ms", (completed_at - request_submitted) * 1000.0
+                )
+            event_key = str(event.get("shm_key") or "")
+            if self._reader is None or self._reader.shm_key != event_key:
+                if self._reader is not None:
+                    self._reader.close()
+                self._reader = SharedFrameRingReader.from_event(event)
+            image = self._reader.read_qimage(event)
+            image.setDevicePixelRatio(dpr)
+            if is_speculative:
+                self._cache_speculative(image, request_t, generation)
+            elif self._may_emit(request_t, generation):
+                self._note("frames_emitted")
+                self.frame_ready.emit(image, request_t)
+            else:
+                self._note("stale_frames_dropped")
+
     def _report_fallback(self, message: str) -> None:
         if self._fallback_reported:
             return
@@ -783,8 +954,10 @@ class GpuAsyncSubtitleRenderer(QObject):
         with self._condition:
             if self._stopped or generation != self._generation or self._latest_t is None:
                 return False
-            tolerance = self._STALE_TOLERANCE_MS if self._playing else 0
-            return abs(int(t_ms) - int(self._latest_t)) <= tolerance
+            if not self._playing:
+                return int(t_ms) == int(self._latest_t)
+            delta = int(t_ms) - int(self._latest_t)
+            return 0 <= delta <= self._STALE_TOLERANCE_MS
 
     def _cache_speculative(self, image: QImage, t_ms: int, generation: int) -> None:
         with self._condition:

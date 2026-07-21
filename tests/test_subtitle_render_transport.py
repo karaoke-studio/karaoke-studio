@@ -1037,6 +1037,155 @@ def test_gpu_async_renderer_restarts_after_bounded_fallback(qapp, monkeypatch):
         renderer.stop()
 
 
+def test_gpu_async_renderer_pooled_batch_accepts_out_of_order_completion(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.models import Style, TimingTrack
+
+    pending: list[dict] = []
+    emitted: list[int] = []
+
+    class FakeGpuProcess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return {"ok": True, "event": "ready"}
+
+        def configure_gpu(self, *args, **kwargs):
+            return {
+                "ok": True,
+                "event": "gpu_configured",
+                "worker_count": 2,
+                "dedicated_video_memory": 8 * 1024**3,
+            }
+
+        def begin_render_gpu_frame(self, t_ms, **kwargs):
+            pending.append(
+                {
+                    "ok": True,
+                    "event": "gpu_frame_ready",
+                    "shm_key": "gpu-pool-ring",
+                    "t_ms": int(t_ms),
+                    "request_serial": int(kwargs["request_serial"]),
+                    "render_ms": 1.0,
+                    "readback_ms": 1.0,
+                }
+            )
+
+        def finish_render_gpu_frame(self):
+            return pending.pop()
+
+        def send_cancel_generation(self, _generation):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeGpuReader:
+        def __init__(self, shm_key):
+            self.shm_key = shm_key
+
+        @classmethod
+        def from_event(cls, event):
+            return cls(event["shm_key"])
+
+        def read_qimage(self, _event):
+            image = QImage(8, 8, QImage.Format.Format_RGBA8888)
+            image.fill(QColor("#112233"))
+            return image
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(pa, "NativeRendererProcess", FakeGpuProcess)
+    monkeypatch.setattr(pa, "SharedFrameRingReader", FakeGpuReader)
+    renderer = pa.GpuAsyncSubtitleRenderer(320, 180)
+    renderer.frame_ready.connect(lambda _image, t_ms: emitted.append(int(t_ms)))
+    try:
+        renderer.set_state(TimingTrack(), Style())
+        renderer.set_playing(True)
+        renderer.request(1_000)
+        deadline = time.monotonic() + 2.0
+        while not emitted and time.monotonic() < deadline:
+            qapp.processEvents()
+            time.sleep(0.01)
+        assert emitted == [1_000]
+        stats = renderer.stats_snapshot()
+        assert stats["worker_count"] == 2
+        assert stats["max_in_flight"] == 2
+        assert stats["future_frames_cached"] == 1
+    finally:
+        renderer.stop()
+
+
+def test_gpu_async_renderer_weak_gpu_shrinks_pool_to_one(qapp, monkeypatch):
+    from krok_helper.subtitle_render.frontend import preview_async as pa
+    from krok_helper.subtitle_render.models import Style, TimingTrack
+
+    configured_workers: list[int] = []
+    delivered = threading.Event()
+
+    class FakeGpuProcess:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            return {"ok": True, "event": "ready"}
+
+        def configure_gpu(self, *args, **kwargs):
+            workers = int(kwargs["worker_count"])
+            configured_workers.append(workers)
+            return {
+                "ok": True,
+                "event": "gpu_configured",
+                "worker_count": workers,
+                "dedicated_video_memory": 1024**3,
+            }
+
+        def render_gpu_frame(self, t_ms, **kwargs):
+            return {
+                "ok": True,
+                "event": "gpu_frame_ready",
+                "shm_key": "gpu-weak-ring",
+                "t_ms": int(t_ms),
+            }
+
+        def send_cancel_generation(self, _generation):
+            pass
+
+        def close(self):
+            pass
+
+    class FakeGpuReader:
+        def __init__(self, shm_key):
+            self.shm_key = shm_key
+
+        @classmethod
+        def from_event(cls, event):
+            return cls(event["shm_key"])
+
+        def read_qimage(self, _event):
+            image = QImage(8, 8, QImage.Format.Format_RGBA8888)
+            image.fill(0)
+            delivered.set()
+            return image
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(pa, "NativeRendererProcess", FakeGpuProcess)
+    monkeypatch.setattr(pa, "SharedFrameRingReader", FakeGpuReader)
+    renderer = pa.GpuAsyncSubtitleRenderer(320, 180)
+    try:
+        renderer.set_state(TimingTrack(), Style())
+        renderer.request(1_000)
+        assert delivered.wait(timeout=2.0)
+        assert configured_workers == [2, 1]
+        assert renderer.stats_snapshot()["worker_count"] == 1
+    finally:
+        renderer.stop()
+
+
 def test_preview_graphics_passes_playing_state_to_async_renderer(qapp, monkeypatch):
     from krok_helper.subtitle_render.frontend import preview_graphics as pg
     from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView

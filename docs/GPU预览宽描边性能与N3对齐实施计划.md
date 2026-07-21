@@ -1,6 +1,6 @@
 # GPU 预览宽描边性能与 N3 对齐实施计划
 
-> 状态：待实施(2026-07-21 已二次逆向核实 N3 走字缓存机制,§3.4/§3.5 为新增结论;配套执行文档见 `docs/GPU预览宽描边性能优化执行计划书.md`)
+> 状态：已完成(2026-07-21；P0～P4 验收通过，P5 质量档位按既定边界独立排期；完整数据见配套执行文档)
 >
 > 建立日期：2026-07-21
 >
@@ -190,78 +190,80 @@ min(Environment.ProcessorCount / 2, 8)
 
 ### P0：固定基准与诊断
 
-- [ ] 给 Direct2D 后端补齐每帧计数：画刷创建、transformed geometry 创建、
+- [x] 给 Direct2D 后端补齐每帧计数：画刷创建、transformed geometry 创建、
   realization hit/miss、稳定/动态字符数、stroke/stroke2 draw 次数、glow source 面积；
-- [ ] 在 benchmark 输出中分离 animation/layout、geometry、stroke、glow、GPU wait、readback、
+- [x] 在 benchmark 输出中分离 animation/layout、geometry、stroke、glow、GPU wait、readback、
   shared-memory/QImage 和端到端延迟；
-- [ ] 固定真实工程的四组描边宽度和至少四个动画时间点；
-- [ ] 保存改动前基线，避免只用总 FPS 判断效果；
-- [ ] 检查 10 分钟连续播放的 sidecar RSS、显存增长和 stale/drop 计数。
+- [x] 固定真实工程的四组描边宽度和至少四个动画时间点；
+- [x] 保存改动前基线，避免只用总 FPS 判断效果；
+- [x] 检查 10 分钟连续播放的 sidecar RSS、显存增长和 stale/drop 计数。
 
 ### P1：对齐 N3 的资源缓存层次
 
-- [ ] 新增 `BrushCache`，按 DeviceContext/target、填充类型、颜色/渐变/图片参数建立 key；
+- [x] 新增 `BrushCache`，按 DeviceContext/target、填充类型、颜色/渐变/图片参数建立 key；
   缓存实例严格 per-DeviceContext(N3 的渐变端点就地改写模式决定了画刷不可跨
   context 共享,这是 P4 多 worker 的前置约束);渐变按 N3 模式采用
   "每 target 一个实例 + 每行改写端点",端点(行 Y)不进入 key；
-- [ ] solid、linear gradient、MilleFeuille、bitmap brush 都必须复用，角色样式修改或
+- [x] solid、linear gradient、MilleFeuille、bitmap brush 都必须复用，角色样式修改或
   render target 重建时精确失效；
-- [ ] 审计字符 base、positioned、body-protection、stroke、stroke2 geometry 的所有创建点；
-- [ ] 稳定字符只消费 configure 阶段缓存，逐帧路径不得重新创建等价 geometry；
-- [ ] 把 Utopia/旋转翻转的“本帧动态字符集合”计算一次，正文、描边、stroke2、shadow、glow 共用；
-- [ ] 为缓存加入容量、命中/未命中和失效原因诊断，不允许无界增长。
+- [x] 审计字符 base、positioned、body-protection、stroke、stroke2 geometry 的所有创建点；
+- [x] 稳定字符只消费 configure 阶段缓存，逐帧路径不得重新创建等价 geometry；
+- [x] 把 Utopia/旋转翻转的“本帧动态字符集合”计算一次，正文、描边、stroke2、shadow、glow 共用；
+- [x] 为缓存加入容量、命中/未命中和失效原因诊断，不允许无界增长。
 
 ### P2：宽描边 realization 与绘制路径
 
-- [ ] 为稳定正文建立 filled/stroked/stroked2 realization 原型，容差先以 N3 的 0.25 为
+- [x] 为稳定正文建立 filled/stroked/stroked2 realization 原型，容差先以 N3 的 0.25 为
   A/B 基准；
-- [ ] 分别测试普通走字、Utopia、旋转翻转、逐字淡出和行内角色样式；
-- [ ] 稳定/动态的判定标准为"本帧是否有逐帧变换矩阵"(Utopia 进场/退场/走字脉冲、
+- [x] 分别测试普通走字、Utopia、旋转翻转、逐字淡出和行内角色样式；
+- [x] 稳定/动态的判定标准为"本帧是否有逐帧变换矩阵"(Utopia 进场/退场/走字脉冲、
   旋转翻转),而不是"是否正在走字":正在走字但无变换的字符照常使用 realization
   (clip 内 DrawGeometryRealization 正常工作,已在 N3 导出路径核实);
   仅本帧带变换矩阵的动态字符回退 `DrawGeometry`；
-- [ ] realization 只允许在 configure/预热阶段创建,逐帧渲染路径禁止创建 realization,
+- [x] realization 只允许在 configure/预热阶段创建,逐帧渲染路径禁止创建 realization,
   以免样式修改或 seek 后出现新的预热卡顿；预热需有每次样式变更的时间预算与
   异步分摊策略；
-- [ ] 任何缓存 key 不得包含 wipe 进度或播放时间戳；
-- [ ] 主描边和二重描边分别建 key，key 必须包含有效字号、DPR、字体、glyph、描边宽度、
+- [x] 任何缓存 key 不得包含 wipe 进度或播放时间戳；
+- [x] 主描边和二重描边分别建 key，key 必须包含有效字号、DPR、字体、glyph、描边宽度、
   join/miter 等所有影响像素的参数；
-- [ ] 验证大字号、斜杠、日英数字体、注音和标题，避免重现字号/字体路由问题；
-- [ ] 如果预览 realization 在细描边或动画缩放时产生可见差异，只在达到阈值的稳定宽描边启用，
+- [x] 验证大字号、斜杠、日英数字体、注音和标题，避免重现字号/字体路由问题；
+- [x] 如果预览 realization 在细描边或动画缩放时产生可见差异，只在达到阈值的稳定宽描边启用，
   不为统一代码路径牺牲画质；
-- [ ] glow 保持从正确的描边后源生成，不能因为 realization 改变 N3/Painter 层顺序。
+- [x] glow 保持从正确的描边后源生成，不能因为 realization 改变 N3/Painter 层顺序。
 
 ### P3：glow 与脏区继续收紧
 
-- [ ] 每个未来 worker 独立持有并复用 glow scratch bitmap、effect 和目标纹理；
-- [ ] glow source 的边界使用实际字符/行包围盒加主描边、stroke2、blur padding，不使用整画布；
-- [ ] 稳定字符合并到行级 glow source，只有正在变换的字符使用动态层；
-- [ ] before/after、ruby、正文、标题和角色样式的 glow cache key 必须互不串色；
-- [ ] 特别验证 Utopia 开场最左侧不会产生不应出现的 before 蓝光，注音开头不丢发光。
+- [x] 每个未来 worker 独立持有并复用 glow scratch bitmap、effect 和目标纹理；
+- [x] glow source 的边界使用实际字符/行包围盒加主描边、stroke2、blur padding，不使用整画布；
+- [x] 稳定字符合并到行级 glow source，只有正在变换的字符使用动态层；
+- [x] before/after、ruby、正文、标题和角色样式的 glow cache key 必须互不串色；
+- [x] 特别验证 Utopia 开场最左侧不会产生不应出现的 before 蓝光，注音开头不丢发光。
 
 ### P4：正式 GPU 预览多 worker 流水线
 
-- [ ] sidecar 新建常驻 `GpuPreviewWorkerPool`，共享 D3D11/D2D device；
-- [ ] 画刷缓存与 realization 缓存按 worker(per-DeviceContext)隔离,禁止跨 worker
+- [x] sidecar 新建常驻 `GpuPreviewWorkerPool`；共享 D3D11/D2D device 试作未通过
+  配置期稳定性门禁，最终采用默认 2 worker、每 worker 独立 device/context；
+- [x] 画刷缓存与 realization 缓存按 worker(per-DeviceContext)隔离,禁止跨 worker
   共享可变 D2D 资源;worker 启动后先渲染 warmup 帧填充各自缓存,避免首帧抖动；
-- [ ] 每个 worker 独立持有 DeviceContext、frame target、staging/readback texture、glow scratch、
+- [x] 每个 worker 独立持有 DeviceContext、frame target、staging/readback texture、glow scratch、
   effect 和共享内存 ring slot；
-- [ ] 配置生成不可变 scene snapshot；样式或尺寸变化通过 generation 切换，旧 generation
+- [x] 配置生成不可变 scene snapshot；样式或尺寸变化通过 generation 切换，旧 generation
   结果不得呈现；
-- [ ] 调度器维护有界 in-flight 集合，不允许普通队列无限累积；
-- [ ] 请求携带时间戳、serial、generation 和 frame index，GUI 只接收当前 generation 且没有
+- [x] 调度器维护有界 in-flight 集合，不允许普通队列无限累积；
+- [x] 请求携带时间戳、serial、generation 和 frame index，GUI 只接收当前 generation 且没有
   落后最新播放时钟的帧；
-- [ ] seek、暂停、尺寸变化、样式修改和关闭窗口时，允许丢弃旧结果并安全回收 worker；
-- [ ] 从 2 worker 开始，依次实测 1/2/3/4/8；以吞吐、ready latency、stale/drop、显存和
+- [x] seek、暂停、尺寸变化、样式修改和关闭窗口时，允许丢弃旧结果并安全回收 worker；
+- [x] 从 2 worker 开始，依次实测 1/2/3/4/8；以吞吐、ready latency、stale/drop、显存和
   sidecar RSS 决定默认值，不预设“8 一定最快”；
-- [ ] G5 仍需回读，默认 worker 上限应由带宽和显存实测决定；弱 GPU/WARP 自动收缩到 1；
-- [ ] 保留 sidecar 异常后的 Painter fallback、冷却和自动重启；
-- [ ] 不复用旧 `NativeAsyncSubtitleRenderer` 的整批 range 调度，避免再次出现缓存窗口追不上
+- [x] G5 仍需回读，默认 worker 上限应由带宽和显存实测决定；弱 GPU/WARP 自动收缩到 1；
+- [x] 保留 sidecar 异常后的 Painter fallback、冷却和自动重启；
+- [x] 不复用旧 `NativeAsyncSubtitleRenderer` 的整批 range 调度，避免再次出现缓存窗口追不上
   播放时钟的 2～3fps 失控。
 
 ### P5：可选的 N3 预览质量档位
 
-- [ ] 评估 0.25 / 0.5 / 1.0 三档渲染倍率，默认仍以画质需求决定；
+- [x] 评估 0.25 / 0.5 / 1.0 三档渲染倍率，结论为保持 1.0，三档 UI/协议因需
+  同步视频与字幕坐标、DPR 和跨屏恢复而独立排期；
 - [ ] 字幕与视频缩放必须使用同一显示坐标，DPR、最小化恢复和跨屏移动不得改变布局；
 - [ ] 该项只用于弱 GPU 降载，不能替代 P1～P4 的根因优化；
 - [ ] 不因该项重新开放 G6 DirectComposition。
@@ -329,11 +331,21 @@ worker，可能只是让同一 GPU command queue、staging readback 和内存带
 
 只有以下条件全部满足，本专项才算完成：
 
-1. 固定工程的宽描边热点可由诊断计数和分段计时解释；
-2. 画刷、稳定几何、保护层和 glow 工作资源按设计复用且能够精确失效；
-3. 14px + 7px 真实工程达到 1080p60 单帧预算或有明确、可复现的剩余硬件瓶颈；
-4. 多 worker 池经过 1/2/3/4/8 对照，默认值由实际数据决定；
-5. latest-wins、generation、ring slot、seek/resize/teardown 和故障回退均有自动测试；
-6. 普通/分色、正文/ruby/title、日英数字体、宽描边、glow 和 Utopia 组合通过 Painter/N3
+- [x] 固定工程的宽描边热点可由诊断计数和分段计时解释；
+- [x] 画刷、稳定几何、保护层和 glow 工作资源按设计复用且能够精确失效；
+- [x] 14px + 7px 真实工程达到 1080p60 单帧预算或有明确、可复现的剩余硬件瓶颈；
+- [x] 多 worker 池经过 1/2/3/4/8 对照，默认值由实际数据决定；
+- [x] latest-wins、generation、ring slot、seek/resize/teardown 和故障回退均有自动测试；
+- [x] 普通/分色、正文/ruby/title、日英数字体、宽描边、glow 和 Utopia 组合通过 Painter/N3
    视觉门禁；
-7. 文档回填最终性能数据、采用的 worker 默认值、缓存容量和未采用方案的原因。
+- [x] 文档回填最终性能数据、采用的 worker 默认值、缓存容量和未采用方案的原因。
+
+最终结论摘要：固定工程 14px+7px 单 worker render mean 从 22.299ms 降至
+16.885ms（-24.3%），p95 27.400ms，剩余尾延迟可由 GPU wait/glow 与真实动态字符
+解释；默认 2 worker，1/2/3/4/8 的 1080p 调度对照确认 2 的 batch roundtrip mean
+最低（6.766ms），3/4 开始负收益，8 出现超时回退。双 worker 10 分钟真实 GUI 长跑
+failure/restart/fallback=0、`max_in_flight=2`、`max_pending=1`，sidecar RSS 预热后
+横盘，结束本地显存 30.75MiB。最终 GPU backend `163 passed, 1 skipped`，协议、传输与
+GPU 合并回归 `280 passed, 28 skipped`；真实 Dark Spiral Painter corpus 通过，
+24,900ms 包围盒最大边差为 3px。所有阈值、缓存容量、CSV/JSON 路径和未采用方案详见
+`docs/GPU预览宽描边性能优化执行计划书.md`。
