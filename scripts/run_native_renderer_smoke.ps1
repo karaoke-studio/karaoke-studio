@@ -11,7 +11,7 @@ Set-Location $repoRoot
 
 # Native and PyQt must use the same Qt minor version or glyph metrics and
 # antialiasing can silently diverge.
-$qtVersion = (python -c "from PyQt6.QtCore import QT_VERSION_STR; print(QT_VERSION_STR)").Trim()
+$qtVersion = (python -c "from PyQt6.QtCore import qVersion; print(qVersion())").Trim()
 if (-not $qtVersion) {
     throw "Could not read the PyQt6 Qt version."
 }
@@ -22,8 +22,14 @@ if (-not (Test-Path $QtRoot)) {
     if (-not $InstallQtIfMissing) {
         throw "Qt not found at '$QtRoot'. Re-run with -InstallQtIfMissing."
     }
-    python -m pip install --user cmake ninja aqtinstall
-    python -m aqt install-qt windows desktop $qtVersion win64_msvc2022_64 --outputdir "$env:LOCALAPPDATA\krok-helper\qt"
+    # aqtinstall 3.3.0 from PyPI cannot read the Qt 6.11 repository layout.
+    # Pin the exact upstream commit that is verified with Qt 6.11.0 instead of
+    # following a mutable development branch.
+    $aqtCommit = "bbfb1f7c0590b9eb3fa91356e75bb64fb15d3643"
+    $aqtRequirement = "aqtinstall @ git+https://github.com/miurahr/aqtinstall.git@$aqtCommit"
+    python -m pip install --user cmake ninja $aqtRequirement
+    python -m aqt install-qt windows desktop $qtVersion win64_msvc2022_64 `
+        --archives qtbase --outputdir "$env:LOCALAPPDATA\krok-helper\qt"
 }
 
 $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
@@ -47,7 +53,11 @@ if (-not (Test-Path $cmake)) {
 
 $configureAndBuild = "`"$vs\Common7\Tools\VsDevCmd.bat`" -arch=amd64 && " +
     "`"$cmake`" -S native\subtitle_renderer -B build\native-renderer -G Ninja " +
-    "-DCMAKE_PREFIX_PATH=`"$QtRoot`" -DCMAKE_BUILD_TYPE=Release " +
+    "-DCMAKE_PREFIX_PATH=`"$QtRoot`" -DQt6_DIR=`"$QtRoot\lib\cmake\Qt6`" " +
+    "-DQt6Core_DIR=`"$QtRoot\lib\cmake\Qt6Core`" " +
+    "-DQt6Gui_DIR=`"$QtRoot\lib\cmake\Qt6Gui`" " +
+    "-DQt6Widgets_DIR=`"$QtRoot\lib\cmake\Qt6Widgets`" " +
+    "-DCMAKE_BUILD_TYPE=Release " +
     "-DKROK_EXPECTED_QT_VERSION=`"$qtVersion`" && " +
     "`"$cmake`" --build build\native-renderer --config Release"
 cmd /c $configureAndBuild
@@ -55,7 +65,6 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-$env:PATH = "$QtRoot\bin;$env:PATH"
 $env:QT_QPA_PLATFORM = "offscreen"
 $env:KROK_SUBTITLE_NATIVE_RENDERER = (Resolve-Path ".\build\native-renderer\krok_subtitle_renderer.exe").Path
 $env:KROK_NATIVE_SMOKE_OUTPUT = $OutputPath
@@ -64,6 +73,8 @@ $env:KROK_GPU_REQUIRE_HARDWARE = if ($RequireHardware) { "1" } else { "0" }
 @'
 import os
 from pathlib import Path
+
+from PyQt6.QtWidgets import QApplication
 
 from krok_helper.subtitle_render.models import Style, TimingChar, TimingLine, TimingTrack
 from krok_helper.subtitle_render.native_backend import NativeRendererProcess, SharedFrameRingReader
@@ -79,6 +90,7 @@ track = TimingTrack(
 )
 style = Style(font_size_px=48, line_lead_in_ms=0)
 output = Path(os.environ["KROK_NATIVE_SMOKE_OUTPUT"])
+app = QApplication.instance() or QApplication([])
 
 with NativeRendererProcess(response_timeout_s=15.0) as renderer:
     configured = renderer.configure(track, style, width=640, height=360, fps=60)

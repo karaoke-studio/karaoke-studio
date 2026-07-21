@@ -639,6 +639,29 @@ def test_sidecar_environment_uses_frozen_pyqt_runtime(tmp_path, monkeypatch):
     assert env["QT_PLUGIN_PATH"] == str(plugin_root)
 
 
+@pytest.mark.skipif(os.name != "nt", reason="Windows native build layout")
+def test_sidecar_environment_uses_loaded_qt_runtime_version(tmp_path, monkeypatch):
+    from PyQt6 import QtCore
+
+    sidecar_exe = tmp_path / "renderer.exe"
+    sidecar_exe.write_bytes(b"")
+    qt_bin = (
+        tmp_path
+        / "krok-helper"
+        / "qt"
+        / "6.11.1"
+        / "msvc2022_64"
+        / "bin"
+    )
+    qt_bin.mkdir(parents=True)
+    (qt_bin / "Qt6Core.dll").write_bytes(b"")
+    monkeypatch.delenv("KROK_SUBTITLE_NATIVE_RENDERER", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr(QtCore, "qVersion", lambda: "6.11.1")
+
+    assert _sidecar_qt_bin_dir(sidecar_exe) == qt_bin
+
+
 def _write_fake_sidecar(tmp_path: Path, *, mode: str = "normal") -> Path:
     script = tmp_path / "fake_sidecar.py"
     script.write_text(

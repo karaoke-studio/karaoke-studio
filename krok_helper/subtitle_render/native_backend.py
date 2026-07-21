@@ -525,13 +525,20 @@ def _sidecar_qt_bin_dir(executable_path: Path) -> Path | None:
             if (candidate / "Qt6Core.dll").is_file():
                 return candidate
     try:
-        from PyQt6.QtCore import QT_VERSION_STR
+        from PyQt6.QtCore import qVersion
     except ImportError:
         return None
     local_app_data = os.environ.get("LOCALAPPDATA")
     if not local_app_data:
         return None
-    qt_bin = Path(local_app_data) / "krok-helper" / "qt" / QT_VERSION_STR / "msvc2022_64" / "bin"
+    qt_bin = (
+        Path(local_app_data)
+        / "krok-helper"
+        / "qt"
+        / qVersion()
+        / "msvc2022_64"
+        / "bin"
+    )
     if (qt_bin / "Qt6Core.dll").is_file():
         return qt_bin
     return None

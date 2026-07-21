@@ -157,8 +157,12 @@ git submodule status
    路径（如 TSM「准备变速缓存」的 MP3 编码）会在旧 MSVCP140.dll 内 0xc0000005 访问冲突。
    首发于 v4.1.0：`build_windows.bat` 曾把 `PYQT6_QT_VERSION` pin 成 6.10.2，而该 wheel 恰好
    带 14.26 旧运行时（v4.0.x 未 pin，装到的 6.11.0 wheel 自带 14.44 所以正常）。**根因已修**：
-   pin 值改回 6.11.0，与 [requirements.txt](krok_helper/lyrics_timing/requirements.txt) 及 native
-   渲染器的 `KROK_EXPECTED_QT_VERSION` 指纹对齐（6.11 编的 sidecar exe 也不能加载 6.10 的 Qt DLL）。
+   PyQt6 binding、打包用的 `PyQt6-Qt6` runtime 与 native SDK 全部固定为 6.11.0；
+   不要把 6.11.0 binding 与 6.11.1 runtime 混用，该组合虽符合 wheel 依赖范围，但实测 `PyQt6.QtSvg`
+   会因程序入口不匹配而加载失败。`KROK_EXPECTED_QT_VERSION` 会按实际 runtime 指纹严格校验
+   （6.11 编的 sidecar exe 也不能加载 6.10 的 Qt DLL）。
+   PyPI 上的 `aqtinstall` 3.3.0 无法读取 Qt 6.11 仓库结构，因此 native smoke 脚本固定安装已验证的
+   upstream commit `bbfb1f7c0590b9eb3fa91356e75bb64fb15d3643`，不可改回无版本约束的 `aqtinstall`。
    `scripts/build_windows.bat` 的「Refreshing bundled MSVC runtime DLLs」步骤保留作为防御纵深：
    用构建机 System32 的新运行时覆盖 Qt6\bin 里低于 14.38 下限的副本，防止将来 PyQt6 升级再次带入
    旧文件；改收集规则时同步 bump `scripts/build_parts.py` 的 `RUNTIME_PROFILE`，否则 CI 会复用含旧运行时的 runtime zip。

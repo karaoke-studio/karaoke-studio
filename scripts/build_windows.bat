@@ -14,6 +14,7 @@ set "APP_DIST=%DIST_PATH%\%APP_NAME%"
 set "BUILD_DIST=%DIST_PATH%\%BUILD_NAME%"
 set "SUG_SRC=%CD%\krok_helper\lyrics_timing\src"
 set "SUG_PACKAGE=%SUG_SRC%\strange_uta_game"
+set "PYQT6_BINDING_VERSION=6.11.0"
 set "PYQT6_QT_VERSION=6.11.0"
 set "IS_CI="
 if defined CI set "IS_CI=1"
@@ -359,13 +360,13 @@ if not defined IS_CI pause
 exit /b 0
 
 :ensure_pyqt6
-echo Checking PyQt6 Qt %PYQT6_QT_VERSION%...
-%PYTHON_BIN% -c "from PyQt6.QtCore import QT_VERSION_STR; raise SystemExit(0 if QT_VERSION_STR == '%PYQT6_QT_VERSION%' else 1)" >nul 2>&1
+echo Checking PyQt6 %PYQT6_BINDING_VERSION% with Qt %PYQT6_QT_VERSION%...
+%PYTHON_BIN% -c "from PyQt6.QtCore import PYQT_VERSION_STR, qVersion; raise SystemExit(0 if PYQT_VERSION_STR == '%PYQT6_BINDING_VERSION%' and qVersion() == '%PYQT6_QT_VERSION%' else 1)" >nul 2>&1
 if errorlevel 1 (
-    echo Installing PyQt6 with Qt %PYQT6_QT_VERSION%...
-    %PYTHON_BIN% -m pip install --upgrade "PyQt6==%PYQT6_QT_VERSION%" "PyQt6-Qt6==%PYQT6_QT_VERSION%"
+    echo Installing PyQt6 %PYQT6_BINDING_VERSION% with Qt %PYQT6_QT_VERSION%...
+    %PYTHON_BIN% -m pip install --upgrade "PyQt6==%PYQT6_BINDING_VERSION%" "PyQt6-Qt6==%PYQT6_QT_VERSION%"
     if errorlevel 1 (
-        echo Failed to install PyQt6 Qt %PYQT6_QT_VERSION%.
+        echo Failed to install PyQt6 %PYQT6_BINDING_VERSION% with Qt %PYQT6_QT_VERSION%.
         if not defined IS_CI pause
         exit /b 1
     )
