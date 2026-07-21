@@ -48,6 +48,7 @@ target_compile_definitions(krok_subtitle_renderer
     PRIVATE
         NOMINMAX
         WIN32_LEAN_AND_MEAN
+        KROK_GPU_DIAGNOSTICS=1
 )
 
 if(WIN32)

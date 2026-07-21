@@ -71,6 +71,24 @@ struct ProbeResult {
     RenderSurface surface;
     double renderMs = 0.0;
     double readbackMs = 0.0;
+    struct FrameDiagnostics {
+        bool countersEnabled = true;
+        std::uint64_t brushCreated = 0;
+        std::uint64_t geometryCreatedStable = 0;
+        std::uint64_t geometryCreatedDynamic = 0;
+        std::uint64_t realizationHit = 0;
+        std::uint64_t realizationMiss = 0;
+        std::uint64_t strokeDraw = 0;
+        std::uint64_t stroke2Draw = 0;
+        std::uint64_t glowSourceAreaPx = 0;
+        std::uint64_t layerPush = 0;
+        double animationLayoutMs = 0.0;
+        double geometryMs = 0.0;
+        double strokeMs = 0.0;
+        double glowMs = 0.0;
+        double gpuWaitMs = 0.0;
+        double readbackCopyMs = 0.0;
+    } frameDiagnostics;
 };
 
 struct RgbaColor {
@@ -331,6 +349,23 @@ struct BackendDiagnostics {
     std::uint64_t localVideoMemoryBudgetBytes = 0;
     std::uint64_t nonLocalVideoMemoryUsageBytes = 0;
     std::uint64_t nonLocalVideoMemoryBudgetBytes = 0;
+    bool countersEnabled = true;
+    std::uint64_t framesRendered = 0;
+    std::uint64_t brushCreated = 0;
+    std::uint64_t geometryCreatedStable = 0;
+    std::uint64_t geometryCreatedDynamic = 0;
+    std::uint64_t realizationHit = 0;
+    std::uint64_t realizationMiss = 0;
+    std::uint64_t strokeDraw = 0;
+    std::uint64_t stroke2Draw = 0;
+    std::uint64_t glowSourceAreaPx = 0;
+    std::uint64_t layerPush = 0;
+    double animationLayoutMs = 0.0;
+    double geometryMs = 0.0;
+    double strokeMs = 0.0;
+    double glowMs = 0.0;
+    double gpuWaitMs = 0.0;
+    double readbackCopyMs = 0.0;
 };
 
 class BackendError : public std::runtime_error {

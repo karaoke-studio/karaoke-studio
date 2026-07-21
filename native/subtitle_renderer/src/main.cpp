@@ -7143,6 +7143,75 @@ void appendGpuDiagnostics(
         QStringLiteral("non_local_video_memory_budget_bytes"),
         static_cast<qint64>(diagnostics.nonLocalVideoMemoryBudgetBytes)
     );
+    out->insert(QStringLiteral("counters_enabled"), diagnostics.countersEnabled);
+    out->insert(
+        QStringLiteral("frames_rendered"),
+        static_cast<qint64>(diagnostics.framesRendered)
+    );
+    out->insert(
+        QStringLiteral("brush_created"),
+        static_cast<qint64>(diagnostics.brushCreated)
+    );
+    out->insert(
+        QStringLiteral("geometry_created_stable"),
+        static_cast<qint64>(diagnostics.geometryCreatedStable)
+    );
+    out->insert(
+        QStringLiteral("geometry_created_dynamic"),
+        static_cast<qint64>(diagnostics.geometryCreatedDynamic)
+    );
+    out->insert(
+        QStringLiteral("realization_hit"),
+        static_cast<qint64>(diagnostics.realizationHit)
+    );
+    out->insert(
+        QStringLiteral("realization_miss"),
+        static_cast<qint64>(diagnostics.realizationMiss)
+    );
+    out->insert(
+        QStringLiteral("stroke_draw"),
+        static_cast<qint64>(diagnostics.strokeDraw)
+    );
+    out->insert(
+        QStringLiteral("stroke2_draw"),
+        static_cast<qint64>(diagnostics.stroke2Draw)
+    );
+    out->insert(
+        QStringLiteral("glow_source_area_px"),
+        static_cast<qint64>(diagnostics.glowSourceAreaPx)
+    );
+    out->insert(
+        QStringLiteral("layer_push"),
+        static_cast<qint64>(diagnostics.layerPush)
+    );
+    out->insert(QStringLiteral("animation_layout_ms"), diagnostics.animationLayoutMs);
+    out->insert(QStringLiteral("geometry_ms"), diagnostics.geometryMs);
+    out->insert(QStringLiteral("stroke_ms"), diagnostics.strokeMs);
+    out->insert(QStringLiteral("glow_ms"), diagnostics.glowMs);
+    out->insert(QStringLiteral("gpu_wait_ms"), diagnostics.gpuWaitMs);
+    out->insert(QStringLiteral("readback_copy_ms"), diagnostics.readbackCopyMs);
+}
+
+void appendGpuFrameDiagnostics(
+    QJsonObject *out,
+    const krok::subtitle::native::ProbeResult::FrameDiagnostics &diagnostics
+) {
+    out->insert(QStringLiteral("counters_enabled"), diagnostics.countersEnabled);
+    out->insert(QStringLiteral("brush_created"), static_cast<qint64>(diagnostics.brushCreated));
+    out->insert(QStringLiteral("geometry_created_stable"), static_cast<qint64>(diagnostics.geometryCreatedStable));
+    out->insert(QStringLiteral("geometry_created_dynamic"), static_cast<qint64>(diagnostics.geometryCreatedDynamic));
+    out->insert(QStringLiteral("realization_hit"), static_cast<qint64>(diagnostics.realizationHit));
+    out->insert(QStringLiteral("realization_miss"), static_cast<qint64>(diagnostics.realizationMiss));
+    out->insert(QStringLiteral("stroke_draw"), static_cast<qint64>(diagnostics.strokeDraw));
+    out->insert(QStringLiteral("stroke2_draw"), static_cast<qint64>(diagnostics.stroke2Draw));
+    out->insert(QStringLiteral("glow_source_area_px"), static_cast<qint64>(diagnostics.glowSourceAreaPx));
+    out->insert(QStringLiteral("layer_push"), static_cast<qint64>(diagnostics.layerPush));
+    out->insert(QStringLiteral("animation_layout_ms"), diagnostics.animationLayoutMs);
+    out->insert(QStringLiteral("geometry_ms"), diagnostics.geometryMs);
+    out->insert(QStringLiteral("stroke_ms"), diagnostics.strokeMs);
+    out->insert(QStringLiteral("glow_ms"), diagnostics.glowMs);
+    out->insert(QStringLiteral("gpu_wait_ms"), diagnostics.gpuWaitMs);
+    out->insert(QStringLiteral("readback_copy_ms"), diagnostics.readbackCopyMs);
 }
 
 QJsonObject handleConfigureGpu(
@@ -7273,6 +7342,8 @@ QJsonObject handleRenderGpuFrame(
         ).toBool(false);
         const auto result = backend->renderFrame(tMs, readbackBands);
         SharedFrameRing ring;
+        QElapsedTimer sharedMemoryTimer;
+        sharedMemoryTimer.start();
         const bool wrote = readbackBands
             ? writeSharedBandSlot(
                 runtime,
@@ -7305,6 +7376,8 @@ QJsonObject handleRenderGpuFrame(
                     ? QStringLiteral("bgra8888_premultiplied")
                     : QStringLiteral("rgba8888")
             );
+        const double sharedMemoryCopyMs =
+            static_cast<double>(sharedMemoryTimer.nsecsElapsed()) / 1000000.0;
         if (!wrote) {
             QJsonObject out = response(false, QStringLiteral("gpu_render_frame"));
             out.insert(QStringLiteral("error"), QStringLiteral("failed to write GPU frame shared-memory slot"));
@@ -7316,6 +7389,11 @@ QJsonObject handleRenderGpuFrame(
         out.insert(QStringLiteral("t_ms"), tMs);
         out.insert(QStringLiteral("render_ms"), result.renderMs);
         out.insert(QStringLiteral("readback_ms"), result.readbackMs);
+        out.insert(
+            QStringLiteral("shm_copy_ms"),
+            sharedMemoryCopyMs
+        );
+        appendGpuFrameDiagnostics(&out, result.frameDiagnostics);
         if (request.value(QStringLiteral("include_checksum")).toBool(true)) {
             out.insert(
                 QStringLiteral("checksum"),

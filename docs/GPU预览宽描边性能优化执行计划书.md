@@ -1,6 +1,6 @@
 # GPU 预览宽描边性能优化执行计划书
 
-> 状态:待执行
+> 状态:执行中(阶段 0 已完成,阶段 1 待执行)
 >
 > 建立日期:2026-07-21
 >
@@ -52,17 +52,17 @@ render p95 < 16.67ms,争取 12~14ms。
 
 **任务**:
 
-- [ ] 在 Direct2D 后端加每帧计数器结构体(编译期宏 + 运行期开关,默认开,
+- [x] 在 Direct2D 后端加每帧计数器结构体(编译期宏 + 运行期开关,默认开,
   计数本身不得引入可测开销):brush_created、geometry_created_stable、
   geometry_created_dynamic、realization_hit/miss、stroke_draw/stroke2_draw 次数、
   glow_source_area_px、layer_push 次数;
-- [ ] 分段计时:animation/layout、geometry、stroke、glow、GPU wait、readback、
+- [x] 分段计时:animation/layout、geometry、stroke、glow、GPU wait、readback、
   shm/QImage、端到端;
-- [ ] `gpu_diagnostics` 返回累计计数;`benchmark_gpu_renderer.py` 增加
+- [x] `gpu_diagnostics` 返回累计计数;`benchmark_gpu_renderer.py` 增加
   `--stroke-sweep 0,5,14,30,50` 与 `--time-points T1,T2,T3,T4`(毫秒列表)参数,
   输出逐帧 CSV 到 `build/gpu-widestroke-baseline-<hw>-<date>.csv`;
-- [ ] 采集并归档基线:硬件 D2D 与 WARP 各一份,记录 GPU 型号、驱动版本、commit;
-- [ ] 10 分钟连续播放采样 sidecar RSS、显存、stale/drop 计数
+- [x] 采集并归档基线:硬件 D2D 与 WARP 各一份,记录 GPU 型号、驱动版本、commit;
+- [x] 10 分钟连续播放采样 sidecar RSS、显存、stale/drop 计数
   (用 `scripts/stress_gpu_preview_gui.py`)。
 
 **验收门禁**:四组描边 × 四个时间点的计数能解释 §2.1 表中"14px 比 5px 慢一倍"
@@ -71,6 +71,40 @@ render p95 < 16.67ms,争取 12~14ms。
 **回退开关**:计数器运行期开关 `KROK_GPU_COUNTERS=0`。
 
 **新风险与防护**:计数器开销 → 基线前先对比开/关计数的 render mean,差异须 < 1%。
+
+### 阶段 0 实测回填(2026-07-21)
+
+固定参数为 1920×1080@60、107px 正文、7px 二重描边、5px 发光；测试点为
+`T1=167050`、`T2=167180`、`T3=175000`、`T4=182395`。硬件为
+NVIDIA GeForce RTX 3070 Ti Laptop GPU，驱动 `32.0.15.8097`，基线源码
+commit 为 `649af875ba06d1e8f1fc5884ef15c191b176fb9e`。
+
+| 主描边 | 硬件 render mean / p95 | WARP render mean / p95 | 每帧画刷均值 | 动态几何均值 | glow source 面积均值 |
+|---:|---:|---:|---:|---:|---:|
+| 0px | 6.893 / 8.516ms | 7.110 / 8.893ms | 37.2 | 1.5 | 728,464px |
+| 5px | 10.409 / 15.560ms | 8.266 / 10.507ms | 37.2 | 2.2 | 802,527px |
+| 14px | 22.299 / 30.988ms | 9.344 / 11.676ms | 37.2 | 2.2 | 954,638px |
+| 30px | 43.292 / 67.235ms | 10.182 / 13.026ms | 37.2 | 2.2 | 1,250,646px |
+| 50px | 65.974 / 110.026ms | 10.468 / 14.914ms | 37.2 | 2.2 | 1,677,345px |
+
+归档文件：
+
+- `build/gpu-widestroke-baseline-hardware-20260721.csv`；
+- `build/gpu-widestroke-baseline-warp-20260721.csv`；
+- `build/gpu-widestroke-baseline-no-decoration-hardware-20260721.csv`；
+- `build/gpu-widestroke-baseline-stress-hardware-20260721.json`。
+
+计数器开/关同场景 render mean 为 19.79/20.22ms，未观察到正向开销，满足
+`<1%` 门禁。10 分钟长稳交付 13,809 帧，renderer failure/fallback/restart 均为
+0，`max_pending=1`；sidecar RSS 90.09→88.38MiB，峰值 92.02MiB，本地显存结束
+约 23.7MiB。宽度增加时 Draw 次数与动态几何次数基本不变，而 glow source 面积及
+硬件 render 时间同步增长；关闭装饰后 14px 仍为 20.29ms，证明首要瓶颈是硬件
+Direct2D 宽轮廓逐帧栅格化，glow 是放大项而非唯一根因。
+
+阶段 0 定向测试新增项为 `3 passed`。全量 transport + GPU backend 当前为
+`214 passed, 1 skipped, 3 failed`；三个失败均为既有 Painter/GPU 边界容差用例，
+在 `KROK_GPU_COUNTERS=0` 和旧 sidecar 上可复现，因此不是计数插桩造成，但在最终
+完成定义前仍须修复，不能作为放宽视觉门禁的理由。
 
 ## 2. 阶段 1:画刷与稳定几何复用(对应 P1)
 

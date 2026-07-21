@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import argparse
 import csv
+from dataclasses import replace
+from datetime import datetime
 import json
 import os
 from pathlib import Path
+import platform
 import statistics
+import subprocess
 import sys
 import time
 import uuid
@@ -29,9 +33,199 @@ from krok_helper.subtitle_render.native_backend import (  # noqa: E402
 )
 
 
+DEFAULT_PROJECT = Path(r"C:\Users\18007\Downloads\芽吹の唄 - 大原ゆい子.yurika")
+DEFAULT_STROKE_SWEEP = (0.0, 5.0, 14.0, 30.0, 50.0)
+FRAME_DIAGNOSTIC_FIELDS = (
+    "brush_created",
+    "geometry_created_stable",
+    "geometry_created_dynamic",
+    "realization_hit",
+    "realization_miss",
+    "stroke_draw",
+    "stroke2_draw",
+    "glow_source_area_px",
+    "layer_push",
+    "animation_layout_ms",
+    "geometry_ms",
+    "stroke_ms",
+    "glow_ms",
+    "gpu_wait_ms",
+    "readback_copy_ms",
+    "shm_copy_ms",
+)
+
+
 def _percentile(values: list[float], fraction: float) -> float:
     ordered = sorted(values)
     return ordered[min(len(ordered) - 1, int(len(ordered) * fraction))]
+
+
+def _load_project(project_path: Path) -> tuple[TimingTrack, Style, int, int, int]:
+    from krok_helper.subtitle_render.models import style_from_dict
+    from krok_helper.subtitle_render.project_store import load_render_project
+    from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
+
+    data = load_render_project(project_path)
+    subtitle_path = Path(str(data["subtitle_path"]))
+    track = load_nicokara_lrc(subtitle_path)
+    style = style_from_dict(data.get("style"))
+    screen = data.get("screen", {})
+    return (
+        track,
+        style,
+        int(screen.get("width", 1920)),
+        int(screen.get("height", 1080)),
+        int(screen.get("fps", 60)),
+    )
+
+
+def _git_commit() -> str:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=_REPO_ROOT,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+def _gpu_driver_version(adapter_name: str) -> str:
+    if platform.system() != "Windows":
+        return "unknown"
+    command = (
+        "Get-CimInstance Win32_VideoController | "
+        "Select-Object Name,DriverVersion | ConvertTo-Json -Compress"
+    )
+    try:
+        output = subprocess.check_output(
+            ["powershell", "-NoProfile", "-Command", command],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stderr=subprocess.DEVNULL,
+        ).strip()
+        payload = json.loads(output)
+        items = payload if isinstance(payload, list) else [payload]
+        adapter_lower = adapter_name.lower()
+        for item in items:
+            name = str(item.get("Name", ""))
+            if name and (name.lower() in adapter_lower or adapter_lower in name.lower()):
+                return str(item.get("DriverVersion", "unknown"))
+    except (OSError, subprocess.CalledProcessError, json.JSONDecodeError):
+        pass
+    return "unknown"
+
+
+def _parse_csv_numbers(value: str) -> list[float]:
+    return [float(item.strip()) for item in value.split(",") if item.strip()]
+
+
+def _parse_time_points(value: str, duration_ms: int) -> list[tuple[str, int]]:
+    defaults = {
+        "T1": max(0, duration_ms // 20),
+        "T2": max(0, duration_ms // 8),
+        "T3": max(0, duration_ms // 2),
+        "T4": max(0, duration_ms * 7 // 8),
+    }
+    points: list[tuple[str, int]] = []
+    for index, raw in enumerate(item.strip() for item in value.split(",")):
+        if not raw:
+            continue
+        if ":" in raw or "=" in raw:
+            separator = ":" if ":" in raw else "="
+            label, milliseconds = raw.split(separator, 1)
+            points.append((label.strip() or f"T{index + 1}", int(milliseconds)))
+        elif raw.upper() in defaults:
+            label = raw.upper()
+            points.append((label, defaults[label]))
+        else:
+            points.append((f"T{index + 1}", int(raw)))
+    if not points:
+        raise ValueError("--time-points 至少需要一个时间点")
+    return points
+
+
+def _with_main_stroke_width(style: Style, stroke_width: float) -> Style:
+    """Apply a benchmark sweep width to global and inline-role main text."""
+    width = max(int(round(stroke_width)), 0)
+
+    def update_scheme(scheme):
+        return replace(
+            scheme,
+            stroke_width_px=width,
+            latin_stroke_width_px=width,
+        )
+
+    return replace(
+        style,
+        stroke_width_px=width,
+        latin_stroke_width_px=width,
+        singer_style_overrides={
+            key: update_scheme(scheme)
+            for key, scheme in style.singer_style_overrides.items()
+        },
+        custom_style_schemes={
+            key: update_scheme(scheme)
+            for key, scheme in style.custom_style_schemes.items()
+        },
+    )
+
+
+def _with_fixed_style_metrics(
+    style: Style,
+    *,
+    font_size: int | None,
+    stroke2_width: int | None,
+    glow_radius: int | None,
+) -> Style:
+    updates: dict[str, object] = {}
+    scheme_updates: dict[str, object] = {}
+    if font_size is not None:
+        value = max(int(font_size), 1)
+        updates.update(font_size_px=value, latin_font_size_px=value)
+        scheme_updates.update(font_size_px=value, latin_font_size_px=value)
+    if stroke2_width is not None:
+        value = max(int(stroke2_width), 0)
+        updates.update(
+            stroke2_enabled=value > 0,
+            stroke2_width_px=value,
+            latin_stroke2_enabled=value > 0,
+            latin_stroke2_width_px=value,
+        )
+        scheme_updates.update(
+            stroke2_enabled=value > 0,
+            stroke2_width_px=value,
+            latin_stroke2_enabled=value > 0,
+            latin_stroke2_width_px=value,
+        )
+    if glow_radius is not None:
+        value = max(int(glow_radius), 0)
+        updates.update(
+            glow_radius_px=value,
+            glow_before_radius_px=value,
+            glow_after_radius_px=value,
+        )
+        scheme_updates.update(
+            glow_radius_px=value,
+            glow_before_radius_px=value,
+            glow_after_radius_px=value,
+        )
+    if not updates:
+        return style
+    return replace(
+        style,
+        **updates,
+        singer_style_overrides={
+            key: replace(scheme, **scheme_updates)
+            for key, scheme in style.singer_style_overrides.items()
+        },
+        custom_style_schemes={
+            key: replace(scheme, **scheme_updates)
+            for key, scheme in style.custom_style_schemes.items()
+        },
+    )
 
 
 def _scene(
@@ -169,26 +363,65 @@ def run_benchmark(
     rtl: bool = False,
     viewport: bool = False,
     per_row: bool = False,
+    project_path: Path | None = None,
+    stroke_width: float | None = None,
+    time_points: list[tuple[str, int]] | None = None,
+    warmup_frames: int = 30,
+    decoration_mode: str = "project",
+    fixed_font_size: int | None = None,
+    fixed_stroke2_width: int | None = None,
+    fixed_glow_radius: int | None = None,
 ) -> tuple[dict, list[dict]]:
     import psutil
     from PyQt6.QtWidgets import QApplication
 
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     app = QApplication.instance() or QApplication([])
-    frames = max(1, int(round(seconds * fps)))
     duration_ms = max(1, int(round(seconds * 1000.0)))
-    track, style = _scene(
-        duration_ms,
-        glow=glow,
-        animation=animation,
-        ruby=ruby,
-        signals=signals,
-        signal_style=signal_style,
-        vertical=vertical,
-        rtl=rtl,
-        viewport=viewport,
-        per_row=per_row,
+    if project_path is not None:
+        track, style, project_width, project_height, project_fps = _load_project(
+            project_path
+        )
+        width = project_width if width <= 0 else width
+        height = project_height if height <= 0 else height
+        fps = project_fps if fps <= 0 else fps
+        if animation != "project":
+            style = replace(style, entry_anim=animation, exit_anim=animation)
+        if glow:
+            style = replace(style, decoration_kind="glow")
+    else:
+        synthetic_animation = "none" if animation == "project" else animation
+        track, style = _scene(
+            duration_ms,
+            glow=glow,
+            animation=synthetic_animation,
+            ruby=ruby,
+            signals=signals,
+            signal_style=signal_style,
+            vertical=vertical,
+            rtl=rtl,
+            viewport=viewport,
+            per_row=per_row,
+        )
+    if stroke_width is not None:
+        style = _with_main_stroke_width(style, stroke_width)
+    style = _with_fixed_style_metrics(
+        style,
+        font_size=fixed_font_size,
+        stroke2_width=fixed_stroke2_width,
+        glow_radius=fixed_glow_radius,
     )
+    if decoration_mode != "project":
+        style = replace(
+            style,
+            decoration_kind=decoration_mode,
+            ruby_decoration_kind=decoration_mode,
+        )
+    samples = time_points or [
+        ("continuous", frame_index * 1000 // fps)
+        for frame_index in range(max(1, int(round(seconds * fps))))
+    ]
+    frames = len(samples)
     shm_key = f"krok_gpu_g1_benchmark_{os.getpid()}_{uuid.uuid4().hex}"
     rows: list[dict] = []
     reader: SharedFrameRingReader | None = None
@@ -217,10 +450,29 @@ def run_benchmark(
                 force_warp=force_warp,
             )
         cache_hits_after_reconfigure = int(configured["cache_hits"])
+        try:
+            for warmup_index in range(max(int(warmup_frames), 0)):
+                warm_event = renderer.render_gpu_frame(
+                    samples[warmup_index % len(samples)][1],
+                    force_warp=force_warp,
+                    generation=0,
+                    frame_index=warmup_index,
+                    shm_key=shm_key,
+                    readback_bands=bands,
+                )
+                if reader is None:
+                    reader = SharedFrameRingReader.from_event(warm_event)
+                    reader.attach()
+                reader.read_qimage(warm_event)
+            warm_diagnostics = renderer.gpu_diagnostics(force_warp=force_warp)
+            warm_rss_bytes = sidecar_process.memory_info().rss
+        except Exception:
+            if reader is not None:
+                reader.close()
+            raise
         start = time.perf_counter()
         try:
-            for frame_index in range(frames):
-                t_ms = frame_index * 1000 // fps
+            for frame_index, (time_point, t_ms) in enumerate(samples):
                 request_start = time.perf_counter()
                 event = renderer.render_gpu_frame(
                     t_ms,
@@ -233,7 +485,9 @@ def run_benchmark(
                 if reader is None:
                     reader = SharedFrameRingReader.from_event(event)
                     reader.attach()
+                qimage_start = time.perf_counter()
                 image = reader.read_qimage(event)
+                qimage_ms = (time.perf_counter() - qimage_start) * 1000.0
                 if image.width() != width or image.height() != height:
                     raise AssertionError(
                         f"frame dimensions mismatch: {image.width()}x{image.height()} != "
@@ -244,17 +498,21 @@ def run_benchmark(
                         "backend": "warp" if force_warp else "hardware",
                         "frame_index": frame_index,
                         "t_ms": t_ms,
+                        "time_point": time_point,
+                        "stroke_width_px": float(style.stroke_width_px),
                         "render_ms": float(event["render_ms"]),
                         "readback_ms": float(event["readback_ms"]),
+                        "qimage_ms": qimage_ms,
                         "roundtrip_ms": (time.perf_counter() - request_start) * 1000.0,
                         "checksum": str(event["checksum"]),
                         "payload_bytes": int(event["payload_bytes"]),
                         "readback_ratio": float(event.get("readback_ratio", 1.0)),
+                        **{
+                            field: event.get(field, 0)
+                            for field in FRAME_DIAGNOSTIC_FIELDS
+                        },
                     }
                 )
-                if warm_diagnostics is None and frame_index >= min(fps, frames - 1):
-                    warm_diagnostics = renderer.gpu_diagnostics(force_warp=force_warp)
-                    warm_rss_bytes = sidecar_process.memory_info().rss
         finally:
             if reader is not None:
                 reader.close()
@@ -271,6 +529,9 @@ def run_benchmark(
     roundtrip_times = [row["roundtrip_ms"] for row in rows]
     summary = {
         "adapter": configured["adapter"],
+        "driver_version": _gpu_driver_version(str(configured["adapter"])),
+        "commit": _git_commit(),
+        "captured_at": datetime.now().astimezone().isoformat(),
         "backend": "warp" if force_warp else "hardware",
         "cached_chars": configured["cached_chars"],
         "cached_geometries": configured["cached_geometries"],
@@ -279,7 +540,13 @@ def run_benchmark(
         "feature_level": configured["feature_level"],
         "fps": round(frames / elapsed, 3),
         "frames": frames,
+        "project": str(project_path) if project_path is not None else "synthetic",
+        "stroke_width_px": float(style.stroke_width_px),
+        "font_size_px": int(style.font_size_px),
+        "stroke2_width_px": int(style.stroke2_width_px),
+        "glow_radius_px": int(style.glow_before_radius_px),
         "glow": glow,
+        "decoration_mode": decoration_mode,
         "animation": animation,
         "ruby": ruby,
         "signals": signals,
@@ -298,6 +565,9 @@ def run_benchmark(
         "render_p95_ms": round(_percentile(render_times, 0.95), 4),
         "roundtrip_mean_ms": round(statistics.fmean(roundtrip_times), 4),
         "roundtrip_p95_ms": round(_percentile(roundtrip_times, 0.95), 4),
+        "qimage_mean_ms": round(
+            statistics.fmean(float(row["qimage_ms"]) for row in rows), 4
+        ),
         "width": width,
         "cache_hits_reconfigure_delta": (
             cache_hits_after_reconfigure - cache_hits_before_reconfigure
@@ -343,6 +613,12 @@ def main() -> int:
     parser.add_argument("--warp", action="store_true", help="force Microsoft WARP")
     parser.add_argument("--both", action="store_true", help="run hardware then WARP")
     parser.add_argument("--glow", action="store_true", help="enable N3 medium glow")
+    parser.add_argument(
+        "--decoration",
+        choices=("project", "none", "shadow", "glow"),
+        default="project",
+        help="覆盖工程正文与注音装饰；none 用于非目标场景门禁",
+    )
     parser.add_argument("--ruby", action="store_true", help="include timed ruby units")
     parser.add_argument(
         "--signals", action="store_true", help="include Sayatoo signal indicators"
@@ -367,8 +643,8 @@ def main() -> int:
     )
     parser.add_argument(
         "--animation",
-        choices=("none", "fade", "char_fade", "spin_flip", "utopia"),
-        default="none",
+        choices=("project", "none", "fade", "char_fade", "spin_flip", "utopia"),
+        default="project",
         help="exercise a supported entry/exit animation",
     )
     parser.add_argument(
@@ -382,38 +658,98 @@ def main() -> int:
         default=0,
         help="repeat identical configure calls to verify bounded cache hits",
     )
+    parser.add_argument(
+        "--project",
+        type=Path,
+        default=DEFAULT_PROJECT if DEFAULT_PROJECT.is_file() else None,
+        help=".yurika 工程；本机存在固定宽描边工程时默认使用该工程",
+    )
+    parser.add_argument(
+        "--stroke-sweep",
+        default=",".join(str(value) for value in DEFAULT_STROKE_SWEEP),
+        help="逗号分隔的主描边宽度，例如 0,5,14,30,50",
+    )
+    parser.add_argument("--font-size", type=int, help="固定正文有效字号")
+    parser.add_argument("--stroke2-width", type=int, help="固定正文二重描边宽度")
+    parser.add_argument("--glow-radius", type=int, help="固定正文 before/after 发光半径")
+    parser.add_argument(
+        "--time-points",
+        default="T1,T2,T3,T4",
+        help="逗号分隔的 T1..T4、毫秒值或 T1=毫秒",
+    )
+    parser.add_argument(
+        "--samples-per-point",
+        type=int,
+        default=30,
+        help="每个固定时间点重复采样帧数",
+    )
+    parser.add_argument(
+        "--warmup-frames",
+        type=int,
+        default=30,
+        help="记录前用于填充稳定资源的帧数",
+    )
     parser.add_argument("--output-csv", type=Path)
     args = parser.parse_args()
 
     all_rows: list[dict] = []
+    duration_ms = max(1, int(round(max(args.seconds, 0.001) * 1000.0)))
+    points = _parse_time_points(args.time_points, duration_ms)
+    sampled_points = [
+        (label, milliseconds)
+        for label, milliseconds in points
+        for _ in range(max(args.samples_per_point, 1))
+    ]
+    stroke_sweep = _parse_csv_numbers(args.stroke_sweep)
+    if not stroke_sweep:
+        raise SystemExit("--stroke-sweep 至少需要一个描边宽度")
     for force_warp in ([False, True] if args.both else [bool(args.warp)]):
-        summary, rows = run_benchmark(
-            width=max(args.width, 1),
-            height=max(args.height, 1),
-            fps=max(args.fps, 1),
-            seconds=max(args.seconds, 0.001),
-            force_warp=force_warp,
-            glow=bool(args.glow),
-            bands=bool(args.bands),
-            reconfigure_cycles=max(args.reconfigure_cycles, 0),
-            animation=args.animation,
-            ruby=bool(args.ruby),
-            signals=bool(args.signals),
-            signal_style=args.signal_style,
-            vertical=bool(args.vertical),
-            rtl=bool(args.rtl),
-            viewport=bool(args.viewport),
-            per_row=bool(args.per_row),
-        )
-        all_rows.extend(rows)
-        print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
+        for stroke_width in stroke_sweep:
+            summary, rows = run_benchmark(
+                width=max(args.width, 1),
+                height=max(args.height, 1),
+                fps=max(args.fps, 1),
+                seconds=max(args.seconds, 0.001),
+                force_warp=force_warp,
+                glow=bool(args.glow),
+                bands=bool(args.bands),
+                reconfigure_cycles=max(args.reconfigure_cycles, 0),
+                animation=args.animation,
+                ruby=bool(args.ruby),
+                signals=bool(args.signals),
+                signal_style=args.signal_style,
+                vertical=bool(args.vertical),
+                rtl=bool(args.rtl),
+                viewport=bool(args.viewport),
+                per_row=bool(args.per_row),
+                project_path=args.project,
+                stroke_width=stroke_width,
+                time_points=sampled_points,
+                warmup_frames=max(args.warmup_frames, 0),
+                decoration_mode=args.decoration,
+                fixed_font_size=args.font_size,
+                fixed_stroke2_width=args.stroke2_width,
+                fixed_glow_radius=args.glow_radius,
+            )
+            all_rows.extend(rows)
+            print(json.dumps(summary, ensure_ascii=False, sort_keys=True))
 
-    if args.output_csv is not None:
-        args.output_csv.parent.mkdir(parents=True, exist_ok=True)
-        with args.output_csv.open("w", encoding="utf-8-sig", newline="") as handle:
+    output_csv = args.output_csv
+    if output_csv is None:
+        backend_label = "hardware-warp" if args.both else (
+            "warp" if args.warp else "hardware"
+        )
+        output_csv = _REPO_ROOT / "build" / (
+            f"gpu-widestroke-baseline-{backend_label}-"
+            f"{datetime.now():%Y%m%d-%H%M%S}.csv"
+        )
+    if all_rows:
+        output_csv.parent.mkdir(parents=True, exist_ok=True)
+        with output_csv.open("w", encoding="utf-8-sig", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=list(all_rows[0]))
             writer.writeheader()
             writer.writerows(all_rows)
+        print(json.dumps({"output_csv": str(output_csv)}, ensure_ascii=False))
     return 0
 
 

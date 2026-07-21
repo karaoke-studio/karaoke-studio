@@ -1492,6 +1492,76 @@ def test_gpu_diagnostics_report_cache_and_dxgi_memory_without_rendering(monkeypa
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_frame_diagnostics_expose_resource_timing_and_glow_counters(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _g1_style(
+        decoration_kind="glow",
+        glow_radius_px=10,
+        glow_before_radius_px=10,
+        glow_after_radius_px=10,
+        glow_concentration_level=1,
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured = renderer.configure_gpu(
+            _g1_track(), style, width=640, height=360, fps=60, force_warp=True
+        )
+        event = renderer.render_gpu_frame(750, force_warp=True)
+        diagnostics = renderer.gpu_diagnostics(force_warp=True)
+
+    assert configured["counters_enabled"] is True
+    assert configured["geometry_created_stable"] > 0
+    assert event["counters_enabled"] is True
+    assert event["brush_created"] > 0
+    assert event["geometry_created_stable"] == 0
+    assert event["geometry_created_dynamic"] == 0
+    assert event["stroke_draw"] > 0
+    assert event["stroke2_draw"] > 0
+    assert event["glow_source_area_px"] > 0
+    assert event["layer_push"] > 0
+    for field in (
+        "animation_layout_ms",
+        "geometry_ms",
+        "stroke_ms",
+        "glow_ms",
+        "gpu_wait_ms",
+        "readback_copy_ms",
+        "shm_copy_ms",
+    ):
+        assert event[field] >= 0.0
+    assert diagnostics["frames_rendered"] == 1
+    assert diagnostics["brush_created"] == event["brush_created"]
+    assert diagnostics["glow_source_area_px"] == event["glow_source_area_px"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_frame_counters_can_be_disabled_without_disabling_timing(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("KROK_GPU_COUNTERS", "0")
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured = renderer.configure_gpu(
+            _g1_track(), _g1_style(), width=640, height=360, fps=60, force_warp=True
+        )
+        event = renderer.render_gpu_frame(750, force_warp=True)
+        diagnostics = renderer.gpu_diagnostics(force_warp=True)
+
+    assert configured["counters_enabled"] is False
+    assert event["counters_enabled"] is False
+    assert diagnostics["counters_enabled"] is False
+    for field in (
+        "brush_created",
+        "geometry_created_stable",
+        "geometry_created_dynamic",
+        "stroke_draw",
+        "stroke2_draw",
+        "glow_source_area_px",
+        "layer_push",
+    ):
+        assert event[field] == 0
+        assert diagnostics[field] == 0
+    assert event["render_ms"] >= 0.0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g1_n3_glow_concentration_adds_blur_passes(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     low = _g1_style(

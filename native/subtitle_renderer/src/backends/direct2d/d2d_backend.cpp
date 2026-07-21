@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <cwctype>
 #include <iomanip>
@@ -22,6 +23,27 @@ using Clock = std::chrono::steady_clock;
 
 double elapsedMs(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
+}
+
+bool environmentFlagEnabled(const char *name, bool defaultValue) {
+    const char *value = std::getenv(name);
+    if (value == nullptr || *value == '\0') {
+        return defaultValue;
+    }
+    return std::strcmp(value, "0") != 0
+        && std::strcmp(value, "false") != 0
+        && std::strcmp(value, "False") != 0
+        && std::strcmp(value, "FALSE") != 0;
+}
+
+std::uint64_t rectAreaPx(const D2D1_RECT_F &rect) {
+    const double width = std::max(
+        static_cast<double>(rect.right - rect.left), 0.0
+    );
+    const double height = std::max(
+        static_cast<double>(rect.bottom - rect.top), 0.0
+    );
+    return static_cast<std::uint64_t>(std::ceil(width * height));
 }
 
 std::string hresultText(const char *operation, HRESULT value, const std::string &deviceReason = {}) {
@@ -647,7 +669,8 @@ Microsoft::WRL::ComPtr<ID2D1Brush> createPaintBrush(
     const D2DDevice &device,
     ID2D1Bitmap1 *image = nullptr,
     float canvasDx = 0.0f,
-    float canvasDy = 0.0f
+    float canvasDy = 0.0f,
+    std::uint64_t *brushCreated = nullptr
 ) {
     if (paint.mode == "image" && image != nullptr) {
         Microsoft::WRL::ComPtr<ID2D1BitmapBrush1> bitmapBrush;
@@ -675,6 +698,9 @@ Microsoft::WRL::ComPtr<ID2D1Brush> createPaintBrush(
         );
         Microsoft::WRL::ComPtr<ID2D1Brush> brush;
         checkHr(bitmapBrush.As(&brush), "Query image fill bitmap brush", device);
+        if (brushCreated != nullptr) {
+            ++*brushCreated;
+        }
         return brush;
     }
     const bool gradient = paint.mode == "gradient_horizontal"
@@ -692,6 +718,9 @@ Microsoft::WRL::ComPtr<ID2D1Brush> createPaintBrush(
         );
         Microsoft::WRL::ComPtr<ID2D1Brush> brush;
         checkHr(solid.As(&brush), "Query paint solid brush", device);
+        if (brushCreated != nullptr) {
+            ++*brushCreated;
+        }
         return brush;
     }
 
@@ -760,6 +789,9 @@ Microsoft::WRL::ComPtr<ID2D1Brush> createPaintBrush(
     );
     Microsoft::WRL::ComPtr<ID2D1Brush> brush;
     checkHr(linear.As(&brush), "Query paint gradient brush", device);
+    if (brushCreated != nullptr) {
+        ++*brushCreated;
+    }
     return brush;
 }
 
@@ -938,10 +970,17 @@ struct Direct2DGpuBackend::Impl {
     std::vector<Microsoft::WRL::ComPtr<ID2D1Effect>> glowEffectPool;
     std::size_t glowScratchInUse = 0;
     std::size_t glowEffectInUse = 0;
+#if KROK_GPU_DIAGNOSTICS
+    bool countersEnabled = environmentFlagEnabled("KROK_GPU_COUNTERS", true);
+#else
+    bool countersEnabled = false;
+#endif
 };
 
 Direct2DGpuBackend::Direct2DGpuBackend(bool forceWarp)
-    : device_(forceWarp), impl_(std::make_unique<Impl>()) {}
+    : device_(forceWarp), impl_(std::make_unique<Impl>()) {
+    impl_->diagnostics.countersEnabled = impl_->countersEnabled;
+}
 
 Direct2DGpuBackend::~Direct2DGpuBackend() = default;
 
@@ -2469,6 +2508,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
     // Direct2D does not expose path allocation bytes. Keep a conservative
     // diagnostic estimate so cache growth/churn remains observable.
     impl_->diagnostics.estimatedCacheBytes += impl_->diagnostics.geometryCount * 256;
+    if (impl_->countersEnabled) {
+        impl_->diagnostics.geometryCreatedStable += impl_->diagnostics.geometryCount;
+    }
     impl_->configured = true;
 }
 
@@ -2486,6 +2528,36 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
     }
     const RenderScene &scene = impl_->scene;
     const TextStyle &baseStyle = scene.style;
+    ProbeResult::FrameDiagnostics frameDiagnostics;
+    frameDiagnostics.countersEnabled = impl_->countersEnabled;
+    const auto count = [&](std::uint64_t &counter, std::uint64_t amount = 1) {
+        if (impl_->countersEnabled) {
+            counter += amount;
+        }
+    };
+    const auto finalizeDiagnostics = [&](ProbeResult &result) {
+        result.frameDiagnostics = frameDiagnostics;
+        if (!impl_->countersEnabled) {
+            return;
+        }
+        BackendDiagnostics &total = impl_->diagnostics;
+        ++total.framesRendered;
+        total.brushCreated += frameDiagnostics.brushCreated;
+        total.geometryCreatedStable += frameDiagnostics.geometryCreatedStable;
+        total.geometryCreatedDynamic += frameDiagnostics.geometryCreatedDynamic;
+        total.realizationHit += frameDiagnostics.realizationHit;
+        total.realizationMiss += frameDiagnostics.realizationMiss;
+        total.strokeDraw += frameDiagnostics.strokeDraw;
+        total.stroke2Draw += frameDiagnostics.stroke2Draw;
+        total.glowSourceAreaPx += frameDiagnostics.glowSourceAreaPx;
+        total.layerPush += frameDiagnostics.layerPush;
+        total.animationLayoutMs += frameDiagnostics.animationLayoutMs;
+        total.geometryMs += frameDiagnostics.geometryMs;
+        total.strokeMs += frameDiagnostics.strokeMs;
+        total.glowMs += frameDiagnostics.glowMs;
+        total.gpuWaitMs += frameDiagnostics.gpuWaitMs;
+        total.readbackCopyMs += frameDiagnostics.readbackCopyMs;
+    };
 
     D3D11_TEXTURE2D_DESC targetDesc{};
     targetDesc.Width = static_cast<UINT>(scene.width);
@@ -2748,8 +2820,45 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             return left->compositeOrder < right->compositeOrder;
         }
     );
+    frameDiagnostics.animationLayoutMs += elapsedMs(renderStart);
     bool renderedAnyLine = false;
     std::vector<std::pair<int, int>> readbackIntervals;
+    const auto pushAxisAlignedClip = [&] (
+        const D2D1_RECT_F &rect,
+        D2D1_ANTIALIAS_MODE antialiasMode
+    ) {
+        count(frameDiagnostics.layerPush);
+        context->PushAxisAlignedClip(rect, antialiasMode);
+    };
+    const auto drawCountedStroke = [&] (
+        ID2D1Geometry *geometry,
+        ID2D1Brush *brush,
+        float width,
+        bool secondStroke
+    ) {
+        const auto start = Clock::now();
+        context->DrawGeometry(geometry, brush, width);
+        frameDiagnostics.strokeMs += elapsedMs(start);
+        count(
+            secondStroke
+                ? frameDiagnostics.stroke2Draw
+                : frameDiagnostics.strokeDraw
+        );
+    };
+    const auto fillCountedStroke = [&] (
+        ID2D1Geometry *geometry,
+        ID2D1Brush *brush,
+        bool secondStroke
+    ) {
+        const auto start = Clock::now();
+        context->FillGeometry(geometry, brush);
+        frameDiagnostics.strokeMs += elapsedMs(start);
+        count(
+            secondStroke
+                ? frameDiagnostics.stroke2Draw
+                : frameDiagnostics.strokeDraw
+        );
+    };
     for (const Impl::CachedLine *line : activeLines) {
       if (line != nullptr && !line->geometries.empty()) {
         const LineAnimationState animation = lineAnimationAt(*line);
@@ -3113,6 +3222,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 continue;
             }
         }
+        const auto geometryStart = Clock::now();
         std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> frameCharGeometries(
             line->chars.size()
         );
@@ -3149,6 +3259,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 "ID2D1Factory::CreateTransformedGeometry(spin character)",
                 device_
             );
+            count(frameDiagnostics.geometryCreatedDynamic);
             frameCharGeometries[index] = transformed;
             if (ch.protectedStrokeGeometry) {
                 Microsoft::WRL::ComPtr<ID2D1TransformedGeometry>
@@ -3161,6 +3272,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     "ID2D1Factory::CreateTransformedGeometry(spin protected stroke)",
                     device_
                 );
+                count(frameDiagnostics.geometryCreatedDynamic);
                 frameProtectedGeometries[index] = transformedProtected;
             }
             auto transformStroke = [&](ID2D1Geometry *source,
@@ -3178,6 +3290,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     operation,
                     device_
                 );
+                count(frameDiagnostics.geometryCreatedDynamic);
                 target = transformedStroke;
             };
             transformStroke(
@@ -3254,6 +3367,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         "ID2D1Factory::CreateTransformedGeometry(spin ruby)",
                         device_
                     );
+                    count(frameDiagnostics.geometryCreatedDynamic);
                     frameRubyGeometries[rubyIndex][index] = transformed;
                     if (index < ruby.protectedStrokeGeometries.size()
                         && ruby.protectedStrokeGeometries[index]) {
@@ -3267,6 +3381,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             "ID2D1Factory::CreateTransformedGeometry(spin ruby protected stroke)",
                             device_
                         );
+                        count(frameDiagnostics.geometryCreatedDynamic);
                         frameRubyProtectedGeometries[rubyIndex][index]
                             = transformedProtected;
                     }
@@ -3287,6 +3402,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             operation,
                             device_
                         );
+                        count(frameDiagnostics.geometryCreatedDynamic);
                         target = transformedStroke;
                     };
                     if (index < ruby.strokeGeometries.size()) {
@@ -3306,6 +3422,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
             }
         }
+        frameDiagnostics.geometryMs += elapsedMs(geometryStart);
         auto charGeometryAt = [&](std::size_t index) -> ID2D1Geometry * {
             return index < frameCharGeometries.size()
                 ? frameCharGeometries[index].Get()
@@ -3817,7 +3934,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 float offsetX, float offsetY) {
             auto brush = createPaintBrush(
                 context, paint, rect, fallback, device_,
-                imageForPaint(paint), dx + offsetX, dy + offsetY
+                imageForPaint(paint), dx + offsetX, dy + offsetY,
+                impl_->countersEnabled ? &frameDiagnostics.brushCreated : nullptr
             );
             if (brush) {
                 brush->SetOpacity(globalOpacity);
@@ -4214,6 +4332,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 : style;
         };
 
+        const auto glowStart = Clock::now();
         ID2D1Bitmap1 *glowSource = nullptr;
         ID2D1Effect *blur = nullptr;
         std::vector<int> glowSigmas;
@@ -4238,13 +4357,17 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 line->bounds, line->fillBounds
             );
             glowSourceRect = expandedRect(glowContent, glowExpand);
+            count(
+                frameDiagnostics.glowSourceAreaPx,
+                rectAreaPx(glowSourceRect)
+            );
             const D2D1_RECT_F glowClearRect = expandedRect(
                 glowSourceRect, 3.0f * radius + 16.0f
             );
             context->SetTarget(glowSource);
             context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
             context->BeginDraw();
-            context->PushAxisAlignedClip(
+            pushAxisAlignedClip(
                 glowClearRect, D2D1_ANTIALIAS_MODE_ALIASED
             );
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
@@ -4308,7 +4431,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             bounds.right + pad, bounds.bottom + pad
                         );
                 }
-                context->PushAxisAlignedClip(
+                pushAxisAlignedClip(
                     clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                 );
             };
@@ -4464,13 +4587,17 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             layer.sourceRect = expandedRect(
                 content, sourceWidth + 3.0f * radius + 16.0f
             );
+            count(
+                frameDiagnostics.glowSourceAreaPx,
+                rectAreaPx(layer.sourceRect)
+            );
             const D2D1_RECT_F clearRect = expandedRect(
                 layer.sourceRect, 3.0f * radius + 16.0f
             );
             context->SetTarget(layer.source);
             context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
             context->BeginDraw();
-            context->PushAxisAlignedClip(
+            pushAxisAlignedClip(
                 clearRect, D2D1_ANTIALIAS_MODE_ALIASED
             );
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
@@ -4535,7 +4662,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 phaseBounds.right + pad, phaseBounds.bottom + pad
                             )));
                 if (phase == N3WipePhase::Wiping) {
-                    context->PushAxisAlignedClip(
+                    pushAxisAlignedClip(
                         clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
                 }
@@ -4735,13 +4862,17 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             layer.sourceRect = expandedRect(
                 content, sourceWidth + 3.0f * radius + 16.0f
             );
+            count(
+                frameDiagnostics.glowSourceAreaPx,
+                rectAreaPx(layer.sourceRect)
+            );
             const D2D1_RECT_F clearRect = expandedRect(
                 layer.sourceRect, 3.0f * radius + 16.0f
             );
             context->SetTarget(layer.source);
             context->SetTransform(D2D1::Matrix3x2F::Translation(dx, dy));
             context->BeginDraw();
-            context->PushAxisAlignedClip(
+            pushAxisAlignedClip(
                 clearRect, D2D1_ANTIALIAS_MODE_ALIASED
             );
             context->Clear(D2D1::ColorF(0.0f, 0.0f));
@@ -4816,7 +4947,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         needClip = true;
                     }
                     if (needClip) {
-                        context->PushAxisAlignedClip(
+                        pushAxisAlignedClip(
                             clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                         );
                     }
@@ -4893,7 +5024,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                     ch.right + pad, line->bounds.bottom + pad
                                 ));
                     }
-                    context->PushAxisAlignedClip(
+                    pushAxisAlignedClip(
                         clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
                 }
@@ -4938,6 +5069,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 appendInlineGlowLayer(styleIndex, true, static_cast<int>(charIndex));
             }
         }
+        frameDiagnostics.glowMs += elapsedMs(glowStart);
 
         context->SetTarget(targetBitmap);
         context->SetTransform(D2D1::Matrix3x2F::Identity());
@@ -5095,7 +5227,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 charStyle.strokeWidth + charStyle.stroke2Width,
                                 2.0f
                             ) + 4.0f;
-                            context->PushAxisAlignedClip(
+                            pushAxisAlignedClip(
                                 D2D1::RectF(
                                     animatedBounds.left - pad - shadowX,
                                     animatedBounds.top - pad,
@@ -5106,7 +5238,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             );
                             pushedAfterClip = true;
                         } else {
-                            context->PushAxisAlignedClip(
+                            pushAxisAlignedClip(
                                 style.vertical
                                     ? D2D1::RectF(
                                         afterClip.left,
@@ -5153,7 +5285,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 ));
                 const bool pushedAfterClip = after && !mainWipeComplete;
                 if (pushedAfterClip) {
-                    context->PushAxisAlignedClip(
+                    pushAxisAlignedClip(
                         style.vertical
                             ? D2D1::RectF(
                                 afterClip.left,
@@ -5213,7 +5345,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         rubyStyle.rubyStrokeWidth + rubyStyle.rubyStroke2Width,
                         2.0f
                     ) + 4.0f;
-                    context->PushAxisAlignedClip(
+                    pushAxisAlignedClip(
                         style.vertical
                             ? D2D1::RectF(
                                 ruby.bounds.left - pad,
@@ -5289,7 +5421,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                 + rubyStyle.rubyStroke2Width,
                             2.0f
                         ) + 4.0f;
-                        context->PushAxisAlignedClip(
+                        pushAxisAlignedClip(
                             D2D1::RectF(
                                 animatedBounds.left - pad - shadowX,
                                 animatedBounds.top - pad,
@@ -5339,10 +5471,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                              ID2D1Brush *stroke2) {
                 if (style.stroke2Width > 0.0f) {
                     for (const auto &geometry : line->geometries) {
-                        context->DrawGeometry(
+                        drawCountedStroke(
                             geometry.Get(), stroke2,
                             std::max(0.0f, style.strokeWidth)
-                                + style.stroke2Width
+                                + style.stroke2Width,
+                            true
                         );
                     }
                 }
@@ -5355,12 +5488,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             continue;
                         }
                         if (protect && ch.protectedStrokeGeometry) {
-                            context->FillGeometry(
-                                ch.protectedStrokeGeometry.Get(), stroke
+                            fillCountedStroke(
+                                ch.protectedStrokeGeometry.Get(), stroke, false
                             );
                         } else {
-                            context->DrawGeometry(
-                                ch.geometry.Get(), stroke, style.strokeWidth
+                            drawCountedStroke(
+                                ch.geometry.Get(), stroke, style.strokeWidth,
+                                false
                             );
                         }
                     }
@@ -5374,7 +5508,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             );
             if (hasAfterWipe) {
                 if (!mainWipeComplete) {
-                    context->PushAxisAlignedClip(
+                    pushAxisAlignedClip(
                         afterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
                 }
@@ -5435,7 +5569,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         bounds.right + pad, bounds.bottom + pad
                     );
             }
-            context->PushAxisAlignedClip(
+            pushAxisAlignedClip(
                 clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
             );
         };
@@ -5491,12 +5625,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
                 ID2D1Geometry *animatedStroke2 = stroke2GeometryAt(charIndex);
                 if (animated && animatedStroke2 != nullptr) {
-                    context->FillGeometry(animatedStroke2, brush);
+                    fillCountedStroke(animatedStroke2, brush, true);
                 } else {
-                    context->DrawGeometry(
+                    drawCountedStroke(
                         geometry, brush,
                         std::max(0.0f, charStyle.strokeWidth)
-                            + charStyle.stroke2Width
+                            + charStyle.stroke2Width,
+                        true
                     );
                 }
                 return;
@@ -5511,12 +5646,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 ID2D1Geometry *protectedGeometry = protectedGeometryAt(charIndex);
                 ID2D1Geometry *animatedStroke = strokeGeometryAt(charIndex);
                 if (animated && !protect && animatedStroke != nullptr) {
-                    context->FillGeometry(animatedStroke, brush);
+                    fillCountedStroke(animatedStroke, brush, false);
                 } else if (protect && protectedGeometry != nullptr) {
-                    context->FillGeometry(protectedGeometry, brush);
+                    fillCountedStroke(protectedGeometry, brush, false);
                 } else {
-                    context->DrawGeometry(
-                        geometry, brush, charStyle.strokeWidth
+                    drawCountedStroke(
+                        geometry, brush, charStyle.strokeWidth,
+                        false
                     );
                 }
                 return;
@@ -5604,7 +5740,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         rubyStyle.rubyStrokeWidth + rubyStyle.rubyStroke2Width,
                         2.0f
                     ) + 4.0f;
-                    context->PushAxisAlignedClip(
+                    pushAxisAlignedClip(
                         D2D1::RectF(
                             animatedBounds.left - pad,
                             animatedBounds.top - pad,
@@ -5621,12 +5757,15 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 if (rubyStyle.rubyStroke2Width > 0.0f) {
                     if (rubyUnitTransformed(ruby, index)
                         && animatedStroke2 != nullptr) {
-                        context->FillGeometry(animatedStroke2, stroke2.Get());
+                        fillCountedStroke(
+                            animatedStroke2, stroke2.Get(), true
+                        );
                     } else {
-                        context->DrawGeometry(
+                        drawCountedStroke(
                             geometry, stroke2.Get(),
                             std::max(0.0f, rubyStyle.rubyStrokeWidth)
-                                + rubyStyle.rubyStroke2Width
+                                + rubyStyle.rubyStroke2Width,
+                            true
                         );
                     }
                 }
@@ -5644,12 +5783,17 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     );
                     if (rubyUnitTransformed(ruby, index)
                         && !protect && animatedStroke != nullptr) {
-                        context->FillGeometry(animatedStroke, stroke.Get());
+                        fillCountedStroke(
+                            animatedStroke, stroke.Get(), false
+                        );
                     } else if (protect && protectedGeometry != nullptr) {
-                        context->FillGeometry(protectedGeometry, stroke.Get());
+                        fillCountedStroke(
+                            protectedGeometry, stroke.Get(), false
+                        );
                     } else {
-                        context->DrawGeometry(
-                            geometry, stroke.Get(), rubyStyle.rubyStrokeWidth
+                        drawCountedStroke(
+                            geometry, stroke.Get(), rubyStyle.rubyStrokeWidth,
+                            false
                         );
                     }
                 }
@@ -5690,7 +5834,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             drawRubyStack(rubyIndex, ruby, false);
             if (rubyPhaseVisible(ruby, rubyWipeEdge, true)) {
                 if (!useUtopiaTransition && !rubyComplete) {
-                    context->PushAxisAlignedClip(
+                    pushAxisAlignedClip(
                         rubyAfterClip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
                 }
@@ -5713,6 +5857,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     "Create volume signal brush",
                     device_
                 );
+                count(frameDiagnostics.brushCreated);
                 brush->SetOpacity(
                     std::clamp(style.litOpacity * signalState.opacity, 0.0f, 1.0f)
                 );
@@ -5784,6 +5929,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     "Create shape signal brush",
                     device_
                 );
+                count(frameDiagnostics.brushCreated);
                 brush->SetOpacity(std::clamp(opacity, 0.0f, 1.0f));
                 return brush;
             };
@@ -5944,6 +6090,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         result.surface.height = scene.height;
         result.surface.stride = scene.width * 4;
         result.surface.pixelFormat = PixelFormat::Bgra8888Premultiplied;
+        finalizeDiagnostics(result);
         return result;
     }
 
@@ -5971,6 +6118,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         result.surface.height = scene.height;
         result.surface.stride = scene.width * 4;
         result.surface.pixelFormat = PixelFormat::Bgra8888Premultiplied;
+        finalizeDiagnostics(result);
         return result;
     }
     if (compactBands) {
@@ -5999,11 +6147,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         device_.d3dContext()->CopyResource(stagingTexture, targetTexture);
     }
     D3D11_MAPPED_SUBRESOURCE mapped{};
+    const auto gpuWaitStart = Clock::now();
     checkHr(
         device_.d3dContext()->Map(stagingTexture, 0, D3D11_MAP_READ, 0, &mapped),
         "ID3D11DeviceContext::Map(frame)",
         device_
     );
+    frameDiagnostics.gpuWaitMs = elapsedMs(gpuWaitStart);
 
     ProbeResult result;
     result.renderMs = renderMs;
@@ -6026,6 +6176,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
     result.surface.bytes.resize(
         static_cast<std::size_t>(result.surface.stride) * packedHeight
     );
+    const auto readbackCopyStart = Clock::now();
     for (int y = 0; y < packedHeight; ++y) {
         const auto *source = static_cast<const std::uint8_t *>(mapped.pData)
             + static_cast<std::size_t>(mapped.RowPitch) * y;
@@ -6033,8 +6184,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             + static_cast<std::size_t>(result.surface.stride) * y;
         std::memcpy(destination, source, static_cast<std::size_t>(result.surface.stride));
     }
+    frameDiagnostics.readbackCopyMs = elapsedMs(readbackCopyStart);
     device_.d3dContext()->Unmap(stagingTexture, 0);
     result.readbackMs = elapsedMs(readbackStart);
+    finalizeDiagnostics(result);
     return result;
 }
 

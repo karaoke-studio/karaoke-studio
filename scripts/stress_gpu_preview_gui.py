@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import sys
 import time
+from types import SimpleNamespace
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -62,10 +63,15 @@ def main() -> int:
     from krok_helper.subtitle_render.frontend.preview_graphics import PreviewGraphicsView
     from krok_helper.subtitle_render.models import style_from_dict
     from krok_helper.subtitle_render.n3proj_import import load_n3proj
+    from krok_helper.subtitle_render.project_store import load_render_project
     from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 
     project = args.project.resolve()
-    imported = load_n3proj(project)
+    imported = (
+        load_n3proj(project)
+        if project.suffix.lower() == ".n3proj"
+        else SimpleNamespace(project_data=load_render_project(project), warnings=[])
+    )
     data = imported.project_data
     subtitle_path = Path(str(data["subtitle_path"]))
     video_path = Path(str(data["video_path"]))
@@ -100,6 +106,9 @@ def main() -> int:
 
     process = psutil.Process()
     rss_start = process.memory_info().rss
+    sidecar_rss_start = 0
+    sidecar_rss_max = 0
+    sidecar_pid = 0
     ready_count = 0
     latest_ready_ms = -1
     tick_gaps_ms: deque[float] = deque(maxlen=4096)
@@ -149,10 +158,22 @@ def main() -> int:
         last_loop_index = loop_index
 
     def progress() -> None:
+        nonlocal sidecar_rss_start, sidecar_rss_max, sidecar_pid
         elapsed = time.monotonic() - started_at if started_at else 0.0
         stats = renderer.stats_snapshot()
         timings = renderer.timing_snapshot()
         rss_mib = process.memory_info().rss / (1024 * 1024)
+        native_process = renderer._renderer  # noqa: SLF001
+        current_sidecar_rss = 0
+        if native_process is not None and native_process.process_id is not None:
+            try:
+                sidecar_pid = int(native_process.process_id)
+                current_sidecar_rss = psutil.Process(sidecar_pid).memory_info().rss
+                if sidecar_rss_start == 0:
+                    sidecar_rss_start = current_sidecar_rss
+                sidecar_rss_max = max(sidecar_rss_max, current_sidecar_rss)
+            except (psutil.Error, OSError):
+                current_sidecar_rss = 0
         print(
             json.dumps(
                 {
@@ -166,6 +187,9 @@ def main() -> int:
                     "max_pending": stats["max_pending"],
                     "roundtrip_p95_ms": round(float(timings["roundtrip_ms"]["p95"]), 3),
                     "rss_mib": round(rss_mib, 1),
+                    "sidecar_rss_mib": round(
+                        current_sidecar_rss / (1024 * 1024), 1
+                    ),
                 },
                 ensure_ascii=False,
             ),
@@ -178,10 +202,31 @@ def main() -> int:
         progress_timer.stop()
         view.set_playing(False)
         app.processEvents()
+        # The drive timer is stopped, so one in-flight render is the most that
+        # can remain. Let it finish before reading the sidecar diagnostics on
+        # the same JSON-lines channel.
+        time.sleep(0.1)
         player = view._video_player  # noqa: SLF001
         stats = renderer.stats_snapshot()
         timings = renderer.timing_snapshot()
         rss_end = process.memory_info().rss
+        sidecar_rss_end = 0
+        gpu_diagnostics: dict[str, object] = {}
+        native_process = renderer._renderer  # noqa: SLF001
+        if native_process is not None:
+            if native_process.process_id is not None:
+                try:
+                    sidecar_rss_end = psutil.Process(
+                        int(native_process.process_id)
+                    ).memory_info().rss
+                except (psutil.Error, OSError):
+                    sidecar_rss_end = 0
+            try:
+                gpu_diagnostics = native_process.gpu_diagnostics(
+                    force_warp=bool(args.force_warp)
+                )
+            except Exception as exc:  # diagnostic failure must not mask stability
+                gpu_diagnostics = {"error": str(exc)}
         media_status = player.mediaStatus().name if player is not None else "NoPlayer"
         media_error = player.error().name if player is not None else "NoPlayer"
         final_summary = {
@@ -206,6 +251,20 @@ def main() -> int:
             "rss_start_mib": round(rss_start / (1024 * 1024), 3),
             "rss_end_mib": round(rss_end / (1024 * 1024), 3),
             "rss_growth_mib": round((rss_end - rss_start) / (1024 * 1024), 3),
+            "sidecar_pid": sidecar_pid,
+            "sidecar_rss_start_mib": round(
+                sidecar_rss_start / (1024 * 1024), 3
+            ),
+            "sidecar_rss_end_mib": round(
+                sidecar_rss_end / (1024 * 1024), 3
+            ),
+            "sidecar_rss_max_mib": round(
+                sidecar_rss_max / (1024 * 1024), 3
+            ),
+            "sidecar_rss_growth_mib": round(
+                (sidecar_rss_end - sidecar_rss_start) / (1024 * 1024), 3
+            ) if sidecar_rss_start else 0.0,
+            "gpu_diagnostics": gpu_diagnostics,
             "warnings": imported.warnings,
         }
         passed = bool(
