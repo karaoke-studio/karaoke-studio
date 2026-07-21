@@ -19,6 +19,7 @@
 - Windows GPU 字幕导出改用有界多 worker 环与严格按帧序交付，硬件默认 2 个 Direct2D worker、最多 4 个，WARP 保持单 worker；复杂 4K 工程可重叠渲染、回读与 ffmpeg 管道等待，且不会无限缓存全帧。
 
 ### 修复项目
+- 修复带注音正文已有独立逐字时间点时，历史 `checkpoint_segments` 模式仍错误按 ruby 时间段重分正文的问题；CPU Painter 与 GPU Direct2D 现在都会优先保留正文自身时间轴。
 - 修复连续 60fps 播放时 geometry realization 预热因始终等不到 100ms 空闲窗口而永久停滞的问题；样式连续修改时后端选择保持单向稳定，不再反复重建设备缓存。
 
 ---

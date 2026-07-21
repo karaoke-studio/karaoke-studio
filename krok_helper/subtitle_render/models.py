@@ -1046,9 +1046,9 @@ class Style:
     ruby_main_progress_mode: RubyMainProgressMode = "checkpoint_segments"
     """带注音正文的走字切分方式。
 
-    ``checkpoint_segments`` 按注音内部时间点形成的时间段数均分正文（历史行为）；
-    ``reading_units`` 使用 N3 自动分支：正文组内有显式时间边界时保留正文逐字时钟，
-    仅在内部边界缺失时按注音可视字符数映射正文字符。
+    正文组内有显式时间边界时，两种模式都保留正文逐字时钟；仅在内部边界缺失时，
+    ``checkpoint_segments`` 按注音内部时间点形成的时间段数均分正文，
+    ``reading_units`` 按注音可视字符数映射正文字符。
     """
 
     line_lane_gap_ms: int = 300

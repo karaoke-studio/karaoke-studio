@@ -937,34 +937,40 @@ def test_gpu_main_ruby_progress_modes_follow_painter_and_preserve_empty_pause(
             )
         ],
     )
-    explicit_style = replace(base_style, ruby_main_progress_mode="reading_units")
     timestamps = (6_740, 6_920, 7_610)
     with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
-        _, explicit_gpu_frames = _render_g1_frames(
-            renderer,
-            explicit_style,
-            timestamps,
-            force_warp=True,
-            track=explicit_track,
-        )
-    explicit_painter_frames = [
-        _render_painter_oracle(explicit_style, t_ms=t_ms, track=explicit_track)
-        for t_ms in timestamps
-    ]
-    explicit_gpu_ratios = [
-        after_ratio(frame, explicit_gpu_frames[-1]) for frame in explicit_gpu_frames[:-1]
-    ]
-    explicit_painter_ratios = [
-        after_ratio(frame, explicit_painter_frames[-1])
-        for frame in explicit_painter_frames[:-1]
-    ]
+        for mode in ("checkpoint_segments", "reading_units"):
+            explicit_style = replace(base_style, ruby_main_progress_mode=mode)
+            _, explicit_gpu_frames = _render_g1_frames(
+                renderer,
+                explicit_style,
+                timestamps,
+                force_warp=True,
+                track=explicit_track,
+            )
+            explicit_painter_frames = [
+                _render_painter_oracle(
+                    explicit_style, t_ms=t_ms, track=explicit_track
+                )
+                for t_ms in timestamps
+            ]
+            explicit_gpu_ratios = [
+                after_ratio(frame, explicit_gpu_frames[-1])
+                for frame in explicit_gpu_frames[:-1]
+            ]
+            explicit_painter_ratios = [
+                after_ratio(frame, explicit_painter_frames[-1])
+                for frame in explicit_painter_frames[:-1]
+            ]
 
-    assert all(
-        abs(gpu - painter) <= 0.08
-        for gpu, painter in zip(explicit_gpu_ratios, explicit_painter_ratios)
-    ), (explicit_gpu_ratios, explicit_painter_ratios)
-    assert 0.30 <= explicit_gpu_ratios[0] <= 0.50  # d starts with the third base char
-    assert 0.50 <= explicit_gpu_ratios[1] <= 0.70  # y starts with the fourth base char
+            assert all(
+                abs(gpu - painter) <= 0.08
+                for gpu, painter in zip(
+                    explicit_gpu_ratios, explicit_painter_ratios
+                )
+            ), (mode, explicit_gpu_ratios, explicit_painter_ratios)
+            assert 0.30 <= explicit_gpu_ratios[0] <= 0.50
+            assert 0.50 <= explicit_gpu_ratios[1] <= 0.70
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

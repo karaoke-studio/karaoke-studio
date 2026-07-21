@@ -9657,10 +9657,7 @@ def _karaoke_fill_segments(
         if (
             ruby is None
             or _is_utopia_group_marker(ruby)
-            or (
-                ruby_main_progress_mode == "reading_units"
-                and _n3_ruby_main_uses_base_timing(line, ruby_indices)
-            )
+            or _ruby_main_uses_base_timing(line, ruby_indices)
         ):
             left, right = ink_x_ranges[index]
             release_left, release_right = release_x_ranges[index]
@@ -9845,11 +9842,11 @@ def _resolve_char_ruby_groups(
     return groups
 
 
-def _n3_ruby_main_uses_base_timing(
+def _ruby_main_uses_base_timing(
     line: TimingLine,
     indices: list[int],
 ) -> bool:
-    """N3 是否保留 ruby 目标正文已有的逐字时间边界。
+    """是否保留 ruby 目标正文已有的逐字时间边界。
 
     ``DrawDataGenerator.SetOneLineWipe`` 只在 ruby 组内部没有显式正文边界时调用
     ``RubyTimesToKanjiTimes``。组首的 begin 和组尾的 end 不算内部边界；任一后续正文
@@ -10233,10 +10230,7 @@ def _character_fill_ratio(
             for candidate in raw_indices
             if 0 <= candidate < len(char_x_ranges)
         ]
-        if indices and not (
-            ruby_main_progress_mode == "reading_units"
-            and _n3_ruby_main_uses_base_timing(line, indices)
-        ):
+        if indices and not _ruby_main_uses_base_timing(line, indices):
             effective_ruby = _effective_ruby_for_target(ruby, indices, intervals)
             if (
                 ruby_main_progress_mode == "reading_units"

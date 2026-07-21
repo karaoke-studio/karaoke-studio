@@ -3775,8 +3775,9 @@ def test_reading_unit_mode_maps_ruby_units_across_multiple_base_chars(qapp):
     assert _fill_extent_end(reading_units, 3_000) == 150
 
 
-def test_n3_reading_unit_mode_keeps_explicit_main_text_timing(qapp):
-    """Regression for メロディー/melody: explicit base checkpoints win in N3."""
+@pytest.mark.parametrize("mode", ["checkpoint_segments", "reading_units"])
+def test_ruby_main_progress_modes_keep_explicit_main_text_timing(qapp, mode):
+    """Regression for メロディー/melody: explicit base checkpoints always win."""
     from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
 
     track = parse_nicokara_lrc(
@@ -3795,7 +3796,7 @@ def test_n3_reading_unit_mode_keeps_explicit_main_text_timing(qapp):
         ranges,
         track.rubies,
         line,
-        ruby_main_progress_mode="reading_units",
+        ruby_main_progress_mode=mode,
     )
 
     assert len(segments) == 5
@@ -3813,7 +3814,7 @@ def test_n3_reading_unit_mode_keeps_explicit_main_text_timing(qapp):
         track.rubies,
         2,
         6_740,
-        ruby_main_progress_mode="reading_units",
+        ruby_main_progress_mode=mode,
     ) == 0.0  # d starts with デ
     assert _character_fill_ratio(
         line,
@@ -3822,7 +3823,7 @@ def test_n3_reading_unit_mode_keeps_explicit_main_text_timing(qapp):
         track.rubies,
         3,
         6_920,
-        ruby_main_progress_mode="reading_units",
+        ruby_main_progress_mode=mode,
     ) == 0.0  # y starts with ィ
     assert _character_fill_ratio(
         line,
@@ -3831,7 +3832,7 @@ def test_n3_reading_unit_mode_keeps_explicit_main_text_timing(qapp):
         track.rubies,
         2,
         6_830,
-        ruby_main_progress_mode="reading_units",
+        ruby_main_progress_mode=mode,
     ) == pytest.approx(0.5)
 
 

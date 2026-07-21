@@ -3862,7 +3862,7 @@ std::vector<std::pair<int, int>> rubyMainWipeIntervals(
     return out;
 }
 
-bool n3RubyMainUsesBaseTiming(
+bool rubyMainUsesBaseTiming(
     const TimingLine &line,
     const std::vector<int> &indices
 ) {
@@ -7103,8 +7103,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             );
             if (!mainWipeAlreadyAssigned && !isUtopiaGroupMarker(ruby)) {
                 const bool preserveBaseTiming =
-                    scene.lineStyles.back().rubyMainProgressMode == "reading_units"
-                    && n3RubyMainUsesBaseTiming(sourceLine, targetIndices);
+                    rubyMainUsesBaseTiming(sourceLine, targetIndices);
                 if (!preserveBaseTiming) {
                     applyRubyMainWipePoints(
                         line, *minimum, *maximum,

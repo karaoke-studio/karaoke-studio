@@ -1730,7 +1730,8 @@ G6 首批架构与本机性能门槛已落地，仍不得默认开启。下一�
   `DrawDataGenerator.SetOneLineWipe()`：ruby 组内只要存在正文显式 begin/end 边界，N3 就保留正文
   自己的逐字时钟；仅组内无边界时才调用 `RubyTimesToKanjiTimes()` 按注音可视字符位置映射正文。
 - `TimingChar` / Render IR 新增 `explicit_start`、`explicit_end`，LRC 与 SUG 直读保留时间戳来源；
-  Painter 与 Direct2D `reading_units` 路径使用同一自动分支。历史 `checkpoint_segments` 保持不变。
+  Painter 与 Direct2D 的两种 ruby 正文模式使用同一显式边界优先规则。仅在正文组内没有独立边界时，
+  `checkpoint_segments` 才按 ruby 时间段数均分，`reading_units` 才按 ruby 可视字符数映射。
 - 回归钉住 `d` 起点对应正文 `デ` 起点（2/5）和 `y` 起点对应 `ィ` 起点（3/5），并保留“正文
   无内部边界时按注音字符映射”的既有覆盖；真实 WARP GPU 帧与 Painter 比例差门禁通过。
 
