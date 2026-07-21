@@ -3853,7 +3853,7 @@ class PropertyPanel(QWidget):
     """字体 / 布局 / 特效 / 标题属性面板。"""
 
     _PAGE_SPECS = (
-        ("font", "字体"),
+        ("font", "角色"),
         ("layout", "布局"),
         ("timing", "时间"),
         ("effects", "特效"),
