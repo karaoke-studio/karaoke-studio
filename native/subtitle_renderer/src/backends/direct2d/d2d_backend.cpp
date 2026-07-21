@@ -806,6 +806,14 @@ Microsoft::WRL::ComPtr<ID2D1Brush> createPaintBrush(
     return brush;
 }
 
+D2D1_RECT_F rubyPaintBounds(
+    const PaintStyle &paint,
+    const D2D1_RECT_F &localBounds,
+    const D2D1_RECT_F &horizontalBounds
+) {
+    return paint.mode == "gradient_horizontal" ? horizontalBounds : localBounds;
+}
+
 void updatePaintBrush(
     ID2D1Brush *brush,
     const PaintStyle &paint,
@@ -968,6 +976,7 @@ struct Direct2DGpuBackend::Impl {
         float pivotY = 0.0f;
         D2D1_RECT_F bounds{};
         D2D1_RECT_F fillBounds{};
+        D2D1_RECT_F horizontalFillBounds{};
         std::vector<CachedChar> chars;
         std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> geometries;
         std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>> protectedStrokeGeometries;
@@ -2661,6 +2670,34 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 if (!ruby.chars.empty()) {
                     previousRubyChar = &ruby.chars.back();
                 }
+            }
+        }
+        if (!cached.rubies.empty()) {
+            D2D1_RECT_F sharedHorizontalBounds = cached.fillBounds;
+            for (const Impl::CachedRuby &ruby : cached.rubies) {
+                sharedHorizontalBounds.top = std::min(
+                    sharedHorizontalBounds.top, ruby.fillBounds.top
+                );
+                sharedHorizontalBounds.bottom = std::max(
+                    sharedHorizontalBounds.bottom, ruby.fillBounds.bottom
+                );
+            }
+            sharedHorizontalBounds.right = std::max(
+                sharedHorizontalBounds.right,
+                sharedHorizontalBounds.left + 1.0f
+            );
+            sharedHorizontalBounds.bottom = std::max(
+                sharedHorizontalBounds.bottom,
+                sharedHorizontalBounds.top + 1.0f
+            );
+            for (Impl::CachedRuby &ruby : cached.rubies) {
+                const TextStyle &rubyStyle = ruby.styleIndex >= 0
+                    && ruby.styleIndex < static_cast<int>(scene.charStyles.size())
+                    ? scene.charStyles[static_cast<std::size_t>(ruby.styleIndex)]
+                    : style;
+                ruby.horizontalFillBounds = rubyStyle.rubyHorizontalGradientWithMain
+                    ? sharedHorizontalBounds
+                    : ruby.fillBounds;
             }
         }
         if (!lineHasBounds) {
@@ -5380,7 +5417,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     after
                         ? rubyStyle.rubyAfterDecorPaint
                         : rubyStyle.rubyBeforeDecorPaint,
-                    ruby.fillBounds,
+                    rubyPaintBounds(
+                        after
+                            ? rubyStyle.rubyAfterDecorPaint
+                            : rubyStyle.rubyBeforeDecorPaint,
+                        ruby.fillBounds,
+                        ruby.horizontalFillBounds
+                    ),
                     after ? rubyStyle.rubyAfterDecor : rubyStyle.rubyBeforeDecor
                 );
                 brush->SetOpacity(globalOpacity);
@@ -6173,7 +6216,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     after
                         ? rubyStyle.rubyAfterDecorPaint
                         : rubyStyle.rubyBeforeDecorPaint,
-                    ruby.fillBounds,
+                    rubyPaintBounds(
+                        after
+                            ? rubyStyle.rubyAfterDecorPaint
+                            : rubyStyle.rubyBeforeDecorPaint,
+                        ruby.fillBounds,
+                        ruby.horizontalFillBounds
+                    ),
                     after ? rubyStyle.rubyAfterDecor : rubyStyle.rubyBeforeDecor,
                     rubyStyle.rubyShadowOffsetX,
                     rubyStyle.rubyShadowOffsetY
@@ -6570,19 +6619,33 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const TextStyle &rubyStyle = rubyStyleFor(ruby.styleIndex);
             Microsoft::WRL::ComPtr<ID2D1Brush> fill = paintBrush(
                 after ? rubyStyle.rubyAfterFillPaint : rubyStyle.rubyBeforeFillPaint,
-                ruby.fillBounds,
+                rubyPaintBounds(
+                    after ? rubyStyle.rubyAfterFillPaint : rubyStyle.rubyBeforeFillPaint,
+                    ruby.fillBounds,
+                    ruby.horizontalFillBounds
+                ),
                 after ? rubyStyle.rubyAfterFill : rubyStyle.rubyBeforeFill
             );
             Microsoft::WRL::ComPtr<ID2D1Brush> stroke = paintBrush(
                 after ? rubyStyle.rubyAfterStrokePaint : rubyStyle.rubyBeforeStrokePaint,
-                ruby.fillBounds,
+                rubyPaintBounds(
+                    after ? rubyStyle.rubyAfterStrokePaint : rubyStyle.rubyBeforeStrokePaint,
+                    ruby.fillBounds,
+                    ruby.horizontalFillBounds
+                ),
                 after ? rubyStyle.rubyAfterStroke : rubyStyle.rubyBeforeStroke
             );
             Microsoft::WRL::ComPtr<ID2D1Brush> stroke2 = paintBrush(
                 after
                     ? rubyStyle.rubyAfterStroke2Paint
                     : rubyStyle.rubyBeforeStroke2Paint,
-                ruby.fillBounds,
+                rubyPaintBounds(
+                    after
+                        ? rubyStyle.rubyAfterStroke2Paint
+                        : rubyStyle.rubyBeforeStroke2Paint,
+                    ruby.fillBounds,
+                    ruby.horizontalFillBounds
+                ),
                 after ? rubyStyle.rubyAfterStroke2 : rubyStyle.rubyBeforeStroke2
             );
             for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {

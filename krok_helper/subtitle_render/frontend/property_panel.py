@@ -191,6 +191,7 @@ _SCHEME_FIELDS = {
     "ruby_shadow_offset_x",
     "ruby_shadow_offset_y",
     "ruby_colors_follow_main",
+    "ruby_horizontal_gradient_with_main",
     "karaoke_colors",
     "ruby_karaoke_colors",
 }
@@ -5116,6 +5117,18 @@ class PropertyPanel(QWidget):
             self._gradient_stop_delete_btn, 0, Qt.AlignmentFlag.AlignBottom
         )
         self._gradient_position_field = _field("关键点位置", position_row)
+        self._ruby_horizontal_gradient_with_main_check = CheckBox(
+            "注音与主文字共享横向渐变", page
+        )
+        self._ruby_horizontal_gradient_with_main_check.setChecked(True)
+        self._ruby_horizontal_gradient_with_main_check.setToolTip(
+            "开启后，注音与下方主文字使用同一个整行横向渐变范围，颜色进度保持一致。"
+        )
+        self._ruby_horizontal_gradient_with_main_check.toggled.connect(
+            lambda checked: self._update_style(
+                ruby_horizontal_gradient_with_main=checked
+            )
+        )
         self._gradient_editor_layout = layout
         self._arrange_stop_editor(
             layout,
@@ -5123,6 +5136,7 @@ class PropertyPanel(QWidget):
             self._gradient_color_field,
             self._gradient_position_field,
             vertical=False,
+            footer=self._ruby_horizontal_gradient_with_main_check,
         )
         return page
 
@@ -5190,6 +5204,7 @@ class PropertyPanel(QWidget):
         position_field: QWidget,
         *,
         vertical: bool,
+        footer: QWidget | None = None,
     ) -> None:
         """Place vertical bars left with two stacked editors on the right."""
         while layout.count():
@@ -5215,6 +5230,8 @@ class PropertyPanel(QWidget):
             layout.addWidget(position_field, 1, 1)
             layout.setColumnStretch(0, 1)
             layout.setColumnStretch(1, 1)
+        if footer is not None:
+            layout.addWidget(footer, 2, 0, 1, 2)
 
     def _make_image_fill_page(self) -> QWidget:
         page = QWidget()
@@ -6893,6 +6910,13 @@ class PropertyPanel(QWidget):
                 self._gradient_color_field,
                 self._gradient_position_field,
                 vertical=fill.mode == "gradient_vertical",
+                footer=self._ruby_horizontal_gradient_with_main_check,
+            )
+            self._ruby_horizontal_gradient_with_main_check.setChecked(
+                bool(self._scheme_value("ruby_horizontal_gradient_with_main"))
+            )
+            self._ruby_horizontal_gradient_with_main_check.setVisible(
+                fill.mode == "gradient_horizontal"
             )
             self._gradient_editor.set_stops(_gradient_stops(fill))
             self._sync_gradient_stop_controls()
@@ -8039,6 +8063,9 @@ def _scheme_from_current(panel: PropertyPanel) -> SubtitleStyleScheme:
         ruby_shadow_offset_y=panel._scheme_value("ruby_shadow_offset_y"),
         ruby_colors_follow_main=bool(
             panel._scheme_value("ruby_colors_follow_main")
+        ),
+        ruby_horizontal_gradient_with_main=bool(
+            panel._scheme_value("ruby_horizontal_gradient_with_main")
         ),
         karaoke_colors=panel._current_karaoke_colors(),
         ruby_karaoke_colors=panel._scheme_value("ruby_karaoke_colors"),

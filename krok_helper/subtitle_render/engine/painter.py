@@ -317,6 +317,7 @@ class _RubyLayout:
     target_width: int
     reading_width: float
     gradient_rect: QRectF
+    horizontal_gradient_rect: QRectF | None = None
     wipe_segments: tuple[_RubyWipeSegment, ...] = ()
     wipe_left: float = 0.0
     wipe_right: float = 0.0
@@ -4994,6 +4995,7 @@ _SUBTITLE_SCHEME_STYLE_FIELDS: tuple[str, ...] = (
     "ruby_shadow_offset_x",
     "ruby_shadow_offset_y",
     "ruby_colors_follow_main",
+    "ruby_horizontal_gradient_with_main",
     "karaoke_colors",
     "ruby_karaoke_colors",
 )
@@ -9167,6 +9169,17 @@ def _paint_fill_path(
     painter.fillPath(path, _brush_for_fill(fill, rect))
 
 
+def _fill_brush_rect(
+    fill: PaintFill,
+    rect: QRectF,
+    horizontal_rect: QRectF | None,
+) -> QRectF:
+    """Use the shared ruby/main box only for horizontal gradients."""
+    if fill.mode == "gradient_horizontal" and horizontal_rect is not None:
+        return horizontal_rect
+    return rect
+
+
 def _paint_stroke_path(
     painter: QPainter,
     path: QPainterPath,
@@ -9301,6 +9314,7 @@ def _paint_split_glow_path(
     after_source_clip: QRectF,
     concentration_level: int = 0,
     target_clip: QRectF | None = None,
+    horizontal_fill_rect: QRectF | None = None,
 ) -> None:
     """Paint both WipeLeft source colours into one bitmap, then blur once."""
     if normalize_glow_concentration_level(concentration_level) < 0:
@@ -9335,6 +9349,11 @@ def _paint_split_glow_path(
     local_path = QPainterPath(path)
     local_path.translate(-layer_rect.left(), -layer_rect.top())
     local_rect = rect.translated(-layer_rect.left(), -layer_rect.top())
+    local_horizontal_rect = (
+        horizontal_fill_rect.translated(-layer_rect.left(), -layer_rect.top())
+        if horizontal_fill_rect is not None
+        else None
+    )
     source_painter = QPainter(source)
     try:
         source_painter.setRenderHints(
@@ -9352,7 +9371,11 @@ def _paint_split_glow_path(
                     clip.translated(-layer_rect.left(), -layer_rect.top())
                 )
                 _paint_stroke_path(
-                    source_painter, local_path, fill, local_rect, width
+                    source_painter,
+                    local_path,
+                    fill,
+                    _fill_brush_rect(fill, local_rect, local_horizontal_rect),
+                    width,
                 )
             finally:
                 source_painter.restore()
@@ -11365,6 +11388,7 @@ def _paint_rubies(
                         rtl,
                         target_width=target_width,
                         gradient_rect=layout.gradient_rect,
+                        horizontal_gradient_rect=layout.horizontal_gradient_rect,
                     )
                 else:
                     painter.setOpacity(painter.opacity() * opacity)
@@ -11395,6 +11419,7 @@ def _paint_rubies(
                         rtl,
                         target_width=target_width,
                         gradient_rect=layout.gradient_rect,
+                        horizontal_gradient_rect=layout.horizontal_gradient_rect,
                         wipe_layout=layout,
                     )
             finally:
@@ -11524,6 +11549,33 @@ def _layout_rubies(
                 metrics=target_ruby_metrics,
             )
         )
+    if text_layout is not None and layouts:
+        main_rect = _n3_main_fill_rect(text_layout, main_baseline_y)
+        top = min(
+            float(main_rect.top()),
+            *(float(layout.gradient_rect.top()) for layout in layouts),
+        )
+        bottom = max(
+            float(main_rect.bottom()),
+            *(float(layout.gradient_rect.bottom()) for layout in layouts),
+        )
+        shared_rect = QRectF(
+            float(main_rect.left()),
+            top,
+            float(max(main_rect.width(), 1.0)),
+            float(max(bottom - top, 1.0)),
+        )
+        layouts = [
+            replace(
+                layout,
+                horizontal_gradient_rect=(
+                    shared_rect
+                    if layout.style.ruby_horizontal_gradient_with_main
+                    else None
+                ),
+            )
+            for layout in layouts
+        ]
     return layouts
 
 
@@ -11983,6 +12035,7 @@ class _RubySplitGlowLayer:
             after_source_clip=after_source_clip,
             concentration_level=_ruby_glow_concentration_level(self.style),
             target_clip=strip_clip,
+            horizontal_fill_rect=self.ruby_layout.horizontal_gradient_rect,
         )
         for after, clip in (
             (False, before_baked_clip),
@@ -12131,7 +12184,11 @@ class _RubyGlowLayer:
             painter,
             path,
             state.shadow,
-            self.ruby_layout.gradient_rect,
+            _fill_brush_rect(
+                state.shadow,
+                self.ruby_layout.gradient_rect,
+                self.ruby_layout.horizontal_gradient_rect,
+            ),
             radius,
             _ruby_stroke_width(self.style),
             _ruby_stroke2_width(self.style),
@@ -12251,6 +12308,7 @@ def _ruby_text_layer_key(
             round(layout.gradient_rect.width(), 3),
             round(layout.gradient_rect.height(), 3),
         ),
+        _ruby_horizontal_gradient_rect_signature(layout),
         rtl,
         ruby_font.family(),
         ruby_font.pixelSize(),
@@ -12291,6 +12349,7 @@ def _ruby_glow_layer_key(
             round(layout.gradient_rect.width(), 3),
             round(layout.gradient_rect.height(), 3),
         ),
+        _ruby_horizontal_gradient_rect_signature(layout),
         rtl,
         ruby_font.family(),
         ruby_font.pixelSize(),
@@ -12302,6 +12361,20 @@ def _ruby_glow_layer_key(
         _ruby_glow_radius(style, after=after),
         _ruby_glow_concentration_level(style),
         after,
+    )
+
+
+def _ruby_horizontal_gradient_rect_signature(
+    layout: _RubyLayout,
+) -> tuple[float, float, float, float] | None:
+    rect = layout.horizontal_gradient_rect
+    if rect is None:
+        return None
+    return (
+        round(rect.left() - layout.x, 3),
+        round(rect.top() - layout.baseline_y, 3),
+        round(rect.width(), 3),
+        round(rect.height(), 3),
     )
 
 
@@ -12437,6 +12510,14 @@ def _build_ruby_text_layer(
         -float(layout.x) + float(pad_left),
         -float(layout.baseline_y) + float(local_baseline),
     )
+    horizontal_fill_rect = (
+        layout.horizontal_gradient_rect.translated(
+            -float(layout.x) + float(pad_left),
+            -float(layout.baseline_y) + float(local_baseline),
+        )
+        if layout.horizontal_gradient_rect is not None
+        else None
+    )
 
     p = QPainter(image)
     try:
@@ -12458,6 +12539,7 @@ def _build_ruby_text_layer(
             glow_radius=glow_radius,
             draw_glow=draw_glow,
             fill_rect=fill_rect,
+            horizontal_fill_rect=horizontal_fill_rect,
         )
     finally:
         p.end()
@@ -12519,6 +12601,14 @@ def _build_ruby_glow_layer(
         -float(layout.x) + float(pad_left),
         -float(layout.baseline_y) + float(local_baseline),
     )
+    horizontal_fill_rect = (
+        layout.horizontal_gradient_rect.translated(
+            -float(layout.x) + float(pad_left),
+            -float(layout.baseline_y) + float(local_baseline),
+        )
+        if layout.horizontal_gradient_rect is not None
+        else None
+    )
 
     p = QPainter(image)
     try:
@@ -12531,7 +12621,7 @@ def _build_ruby_glow_layer(
             p,
             path,
             state.shadow,
-            fill_rect,
+            _fill_brush_rect(state.shadow, fill_rect, horizontal_fill_rect),
             glow_radius,
             stroke_width,
             stroke2_width,
@@ -12837,6 +12927,7 @@ def _paint_ruby_text_units_with_transition(
     rtl: bool = False,
     target_width: int | float | None = None,
     gradient_rect: QRectF | None = None,
+    horizontal_gradient_rect: QRectF | None = None,
 ) -> None:
     visual_units = _ruby_visual_units_and_intervals(ruby)
     # RTL：按音节反转排布顺序，使首音节落在最右；各音节计时不变。
@@ -12857,6 +12948,7 @@ def _paint_ruby_text_units_with_transition(
             rtl,
             target_width=target_width,
             gradient_rect=gradient_rect,
+            horizontal_gradient_rect=horizontal_gradient_rect,
         )
         return
 
@@ -12903,6 +12995,7 @@ def _paint_ruby_text_units_with_transition(
                     rtl,
                     transform=transform,
                     gradient_rect=gradient_rect,
+                    horizontal_gradient_rect=horizontal_gradient_rect,
                 )
             finally:
                 painter.restore()
@@ -12920,6 +13013,7 @@ def _paint_ruby_text(
     rtl: bool = False,
     target_width: int | float | None = None,
     gradient_rect: QRectF | None = None,
+    horizontal_gradient_rect: QRectF | None = None,
     wipe_layout: _RubyLayout | None = None,
 ) -> None:
     # RTL：按可见字形反转读音——小书き假名(ゃゅょ等)是独立字形，也要反过来；
@@ -12948,6 +13042,7 @@ def _paint_ruby_text(
         rtl,
         ruby_metrics,
         gradient_rect=gradient_rect,
+        horizontal_gradient_rect=horizontal_gradient_rect,
         wipe_layout=wipe_layout,
     )
 
@@ -13279,6 +13374,7 @@ def _paint_ruby_text_fragment(
     rtl: bool = False,
     transform: QTransform | None = None,
     gradient_rect: QRectF | None = None,
+    horizontal_gradient_rect: QRectF | None = None,
 ) -> None:
     path = QPainterPath()
     path.addText(float(x), float(baseline_y), ruby_font, text)
@@ -13299,6 +13395,7 @@ def _paint_ruby_text_fragment(
         style,
         rtl,
         fill_rect=gradient_rect,
+        horizontal_fill_rect=horizontal_gradient_rect,
     )
 
 
@@ -13312,6 +13409,7 @@ def _paint_ruby_karaoke_path(
     rtl: bool = False,
     ruby_metrics: QFontMetrics | None = None,
     gradient_rect: QRectF | None = None,
+    horizontal_gradient_rect: QRectF | None = None,
     wipe_layout: _RubyLayout | None = None,
 ) -> None:
     after_clip_rect = None
@@ -13345,6 +13443,7 @@ def _paint_ruby_karaoke_path(
         style,
         rtl,
         fill_rect=gradient_rect,
+        horizontal_fill_rect=horizontal_gradient_rect,
         after_clip_rect=after_clip_rect,
         before_glow_clip_rect=before_glow_clip_rect,
     )
@@ -13358,6 +13457,7 @@ def _paint_ruby_karaoke_fragment(
     style: Style,
     rtl: bool = False,
     fill_rect: QRectF | None = None,
+    horizontal_fill_rect: QRectF | None = None,
     after_clip_rect: QRectF | None = None,
     before_glow_clip_rect: QRectF | None = None,
 ) -> None:
@@ -13408,7 +13508,11 @@ def _paint_ruby_karaoke_fragment(
             painter,
             path,
             colors.before.shadow,
-            fill_rect if fill_rect is not None else rect,
+            _fill_brush_rect(
+                colors.before.shadow,
+                fill_rect if fill_rect is not None else rect,
+                horizontal_fill_rect,
+            ),
             before_glow_radius,
             stroke_width,
             stroke2_width,
@@ -13437,7 +13541,11 @@ def _paint_ruby_karaoke_fragment(
             painter,
             path,
             colors.after.shadow,
-            fill_rect if fill_rect is not None else rect,
+            _fill_brush_rect(
+                colors.after.shadow,
+                fill_rect if fill_rect is not None else rect,
+                horizontal_fill_rect,
+            ),
             after_glow_radius,
             stroke_width,
             stroke2_width,
@@ -13459,6 +13567,7 @@ def _paint_ruby_karaoke_fragment(
             glow_radius=before_glow_radius,
             draw_glow=not clip_before_glow,
             fill_rect=fill_rect,
+            horizontal_fill_rect=horizontal_fill_rect,
         )
 
     if ratio <= 0.0:
@@ -13513,6 +13622,7 @@ def _paint_ruby_karaoke_fragment(
             # ratio>=1 时未唱层未画，已唱发光必须自己画。
             draw_glow=ratio >= 1.0,
             fill_rect=fill_rect,
+            horizontal_fill_rect=horizontal_fill_rect,
         )
     finally:
         painter.restore()
@@ -13532,6 +13642,7 @@ def _paint_text_layer_stack(
     glow_radius: int,
     draw_glow: bool = True,
     fill_rect: QRectF | None = None,
+    horizontal_fill_rect: QRectF | None = None,
     draw_shadow: bool = True,
 ) -> None:
     brush_rect = fill_rect if fill_rect is not None else rect
@@ -13543,7 +13654,7 @@ def _paint_text_layer_stack(
                 painter,
                 path,
                 colors.shadow,
-                brush_rect,
+                _fill_brush_rect(colors.shadow, brush_rect, horizontal_fill_rect),
                 glow_radius,
                 stroke_width,
                 stroke2_width,
@@ -13558,7 +13669,7 @@ def _paint_text_layer_stack(
             painter,
             path,
             colors.shadow,
-            brush_rect,
+            _fill_brush_rect(colors.shadow, brush_rect, horizontal_fill_rect),
             shadow_dx,
             shadow_dy,
             stroke_width,
@@ -13570,7 +13681,7 @@ def _paint_text_layer_stack(
             painter,
             path,
             colors.stroke2,
-            brush_rect,
+            _fill_brush_rect(colors.stroke2, brush_rect, horizontal_fill_rect),
             _stroke2_pen_width(stroke_width, stroke2_width),
         )
     if stroke_width > 0:
@@ -13578,11 +13689,16 @@ def _paint_text_layer_stack(
             painter,
             path,
             colors.stroke,
-            brush_rect,
+            _fill_brush_rect(colors.stroke, brush_rect, horizontal_fill_rect),
             _stroke_pen_width(stroke_width),
             protect_body=_fill_is_alpha(colors.text),
         )
-    _paint_fill_path(painter, path, colors.text, brush_rect)
+    _paint_fill_path(
+        painter,
+        path,
+        colors.text,
+        _fill_brush_rect(colors.text, brush_rect, horizontal_fill_rect),
+    )
 
 
 def _effective_ruby_karaoke_colors(style: Style) -> KaraokeColors:

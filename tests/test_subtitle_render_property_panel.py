@@ -95,6 +95,7 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
         panel._italic_check,
         panel._ruby_anchor_check,
         panel._ruby_colors_follow_main_check,
+        panel._ruby_horizontal_gradient_with_main_check,
         panel._allow_biting_check,
         panel._lit_shadow_check,
         panel._vertical_check,
@@ -2025,6 +2026,28 @@ def test_property_panel_gradient_controls_emit_style(qapp):
     assert fill.end_color == "#FFCC00"
     assert panel._paint_gradient_start_btn.color == "#00AAEE"
     assert panel._paint_gradient_end_btn.color == "#FFCC00"
+
+
+def test_horizontal_gradient_shared_ruby_progress_switch_defaults_on(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._fill_mode_combo.setCurrentIndex(
+        panel._fill_mode_combo.findData("gradient_horizontal")
+    )
+    assert not panel._ruby_horizontal_gradient_with_main_check.isHidden()
+    assert panel._ruby_horizontal_gradient_with_main_check.isChecked()
+
+    panel._ruby_horizontal_gradient_with_main_check.setChecked(False)
+    assert emitted[-1].ruby_horizontal_gradient_with_main is False
+    restored = style_from_dict(style_to_dict(emitted[-1]))
+    assert restored.ruby_horizontal_gradient_with_main is False
+
+    panel._fill_mode_combo.setCurrentIndex(
+        panel._fill_mode_combo.findData("gradient_vertical")
+    )
+    assert panel._ruby_horizontal_gradient_with_main_check.isHidden()
 
 
 def test_property_panel_gradient_stop_editor_emits_style(qapp):

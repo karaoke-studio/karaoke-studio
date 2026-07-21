@@ -4521,6 +4521,134 @@ def test_ruby_gradient_reference_uses_n3_ruby_line_box(qapp):
     assert ruby_layout.gradient_rect.height() < layout.line_rect.height()
 
 
+def test_ruby_horizontal_gradient_shares_main_line_progress_box_by_default(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="A", start_ms=1000),
+            TimingChar(text="B", start_ms=1500),
+        ],
+        end_ms=2000,
+    )
+    rubies = [
+        RubyAnnotation(
+            kanji="A",
+            reading="a",
+            pos_start_ms=1000,
+            pos_end_ms=1500,
+        ),
+        RubyAnnotation(
+            kanji="B",
+            reading="b",
+            pos_start_ms=1500,
+            pos_end_ms=2000,
+        ),
+    ]
+    track = TimingTrack(lines=[line], rubies=rubies)
+    style = Style(font_size_px=64, ruby_font_size_px=28)
+    layout = _layout_line(track, line, style, 420, 240, baseline_y=140)
+    assert layout is not None and layout.ruby_metrics is not None
+
+    ruby_layouts = _layout_rubies(
+        layout.ruby_metrics,
+        line,
+        layout.intervals,
+        layout.char_x_ranges,
+        layout.baseline_y,
+        rubies,
+        style,
+        text_layout=layout.text_layout,
+    )
+
+    assert len(ruby_layouts) == 2
+    shared = ruby_layouts[0].horizontal_gradient_rect
+    assert shared is not None
+    assert all(item.horizontal_gradient_rect == shared for item in ruby_layouts)
+    main_rect = subtitle_painter._n3_main_fill_rect(
+        layout.text_layout, layout.baseline_y
+    )
+    assert shared.left() == pytest.approx(main_rect.left())
+    assert shared.width() == pytest.approx(main_rect.width())
+    assert shared.top() <= min(item.gradient_rect.top() for item in ruby_layouts)
+    assert shared.bottom() >= main_rect.bottom()
+
+    disabled = replace(style, ruby_horizontal_gradient_with_main=False)
+    disabled_layouts = _layout_rubies(
+        layout.ruby_metrics,
+        line,
+        layout.intervals,
+        layout.char_x_ranges,
+        layout.baseline_y,
+        rubies,
+        disabled,
+        text_layout=layout.text_layout,
+    )
+    assert all(item.horizontal_gradient_rect is None for item in disabled_layouts)
+
+
+def test_shared_ruby_gradient_box_is_only_used_for_horizontal_fills():
+    local = QRectF(100.0, 20.0, 40.0, 30.0)
+    shared = QRectF(10.0, 5.0, 240.0, 80.0)
+
+    horizontal = PaintFill(mode="gradient_horizontal")
+    vertical = PaintFill(mode="gradient_vertical")
+
+    assert subtitle_painter._fill_brush_rect(horizontal, local, shared) == shared
+    assert subtitle_painter._fill_brush_rect(vertical, local, shared) == local
+
+
+def test_ruby_shared_horizontal_gradient_changes_rendered_progress(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="A", start_ms=1000),
+            TimingChar(text="B", start_ms=1500),
+        ],
+        end_ms=2000,
+    )
+    track = TimingTrack(
+        lines=[line],
+        rubies=[
+            RubyAnnotation(
+                kanji="A", reading="a", pos_start_ms=1000, pos_end_ms=1500
+            ),
+            RubyAnnotation(
+                kanji="B", reading="b", pos_start_ms=1500, pos_end_ms=2000
+            ),
+        ],
+    )
+    gradient = PaintFill(
+        mode="gradient_horizontal",
+        gradient_stops=((0, "#FF0000"), (100, "#0000FF")),
+    )
+    colors = KaraokeColors(
+        before=KaraokeColorState(text=gradient),
+        after=KaraokeColorState(text=gradient),
+    )
+    style = Style(
+        font_size_px=72,
+        ruby_font_size_px=32,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        ruby_stroke_width_px=0,
+        ruby_stroke2_enabled=False,
+        decoration_kind="none",
+        karaoke_colors=colors,
+        line_y_position="center",
+        dual_line_layout=False,
+    )
+    shared = _blank()
+    grouped = _blank()
+
+    paint_frame(shared, track, 2000, style)
+    paint_frame(
+        grouped,
+        track,
+        2000,
+        replace(style, ruby_horizontal_gradient_with_main=False),
+    )
+
+    assert _pixel_hash(shared) != _pixel_hash(grouped)
+
+
 def test_role_ruby_defaults_to_role_main_colors_not_global_ruby(qapp):
     global_ruby = KaraokeColors(after=KaraokeColorState(text=_solid_fill("#FF0000")))
     role_main = KaraokeColors(after=KaraokeColorState(text=_solid_fill("#0088FF")))

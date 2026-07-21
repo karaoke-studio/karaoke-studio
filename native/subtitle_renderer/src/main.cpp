@@ -207,6 +207,7 @@ struct ResolvedStyle {
     int rubyIntervalPx = 0;
     QString rubyAlignment = QStringLiteral("auto");
     QString rubyMainProgressMode = QStringLiteral("checkpoint_segments");
+    bool rubyHorizontalGradientWithMain = true;
     int rubyStrokeWidthPx = 0;
     int rubyStroke2WidthPx = 0;
     QString rubyDecorationKind;
@@ -1162,6 +1163,11 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
             cfg.rubyMainProgressMode = QStringLiteral("checkpoint_segments");
         }
     }
+    if (hasNonNull(style, QStringLiteral("ruby_horizontal_gradient_with_main"))) {
+        cfg.rubyHorizontalGradientWithMain = style.value(
+            QStringLiteral("ruby_horizontal_gradient_with_main")
+        ).toBool(cfg.rubyHorizontalGradientWithMain);
+    }
     if (hasNonNull(style, QStringLiteral("ruby_stroke_width_px"))) {
         cfg.rubyStrokeWidthPx = std::max(
             0, intValue(style, QStringLiteral("ruby_stroke_width_px"), cfg.rubyStrokeWidthPx)
@@ -1992,6 +1998,9 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     if (base.rubyMainProgressMode != QStringLiteral("reading_units")) {
         base.rubyMainProgressMode = QStringLiteral("checkpoint_segments");
     }
+    base.rubyHorizontalGradientWithMain = style.value(
+        QStringLiteral("ruby_horizontal_gradient_with_main")
+    ).toBool(base.rubyHorizontalGradientWithMain);
     const double rubyScale = static_cast<double>(base.rubyFontSizePx)
         / static_cast<double>(std::max(base.fontSizePx, 1));
     base.rubyStrokeWidthPx = style.value(QStringLiteral("ruby_stroke_width_px")).isDouble()
@@ -6698,6 +6707,7 @@ void applyGpuResolvedStyle(
     target.rubyInterval = static_cast<float>(source.rubyIntervalPx * scale);
     target.rubyAlignment = source.rubyAlignment.toStdString();
     target.rubyMainProgressMode = source.rubyMainProgressMode.toStdString();
+    target.rubyHorizontalGradientWithMain = source.rubyHorizontalGradientWithMain;
     target.rubyBeforeFill = gpuColor(source.rubyBaseFill.color, source.rubyBaseColor);
     target.rubyAfterFill = gpuColor(source.rubyAfterFill.color, source.rubyFillColor);
     target.rubyBeforeStroke = gpuColor(

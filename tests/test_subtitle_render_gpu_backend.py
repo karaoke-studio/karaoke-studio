@@ -518,6 +518,139 @@ def _render_painter_oracle(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_horizontal_ruby_gradient_uses_main_line_bounds_by_default(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    transparent = PaintFill(color="#00000000")
+    ruby_gradient = PaintFill(
+        mode="gradient_horizontal",
+        color="#FF0000",
+        start_color="#FF0000",
+        end_color="#0000FF",
+        gradient_stops=[(0, "#FF0000"), (100, "#0000FF")],
+    )
+    invisible_state = KaraokeColorState(
+        text=transparent,
+        stroke=transparent,
+        stroke2=transparent,
+        shadow=transparent,
+    )
+    ruby_state = KaraokeColorState(
+        text=ruby_gradient,
+        stroke=transparent,
+        stroke2=transparent,
+        shadow=transparent,
+    )
+    line = TimingLine(
+        chars=[
+            TimingChar("A", 0),
+            TimingChar("B", 500),
+            TimingChar("C", 1000),
+            TimingChar("D", 1500),
+        ],
+        end_ms=2000,
+    )
+    track = TimingTrack(
+        lines=[line],
+        rubies=[
+            RubyAnnotation(
+                kanji="A",
+                reading="M",
+                reading_part_ms=[0],
+                pos_start_ms=0,
+                pos_end_ms=500,
+            ),
+            RubyAnnotation(
+                kanji="D",
+                reading="M",
+                reading_part_ms=[1500],
+                pos_start_ms=1500,
+                pos_end_ms=2000,
+            ),
+        ],
+    )
+    base_style = Style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=72,
+        ruby_font_family="Meiryo",
+        ruby_font_family_latin="Meiryo",
+        ruby_font_follow_main=False,
+        ruby_font_size_px=40,
+        ruby_gap_px=10,
+        line_lead_in_ms=0,
+        line_y_position="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        decoration_kind="none",
+        ruby_stroke_width_px=0,
+        ruby_stroke2_width_px=0,
+        ruby_decoration_kind="none",
+        karaoke_colors=KaraokeColors(
+            before=invisible_state,
+            after=invisible_state,
+        ),
+        ruby_karaoke_colors=KaraokeColors(
+            before=ruby_state,
+            after=ruby_state,
+        ),
+    )
+
+    def ruby_group_color_bias(frame: bytes) -> tuple[float, float]:
+        pixels = memoryview(frame)
+        width, height = 640, 360
+        visible_columns: list[int] = []
+        for x in range(width):
+            if any(pixels[(y * width + x) * 4 + 3] for y in range(height)):
+                visible_columns.append(x)
+        assert visible_columns
+        gaps = [
+            (visible_columns[index - 1], visible_columns[index])
+            for index in range(1, len(visible_columns))
+            if visible_columns[index] - visible_columns[index - 1] > 1
+        ]
+        assert gaps
+        split_x = max(gaps, key=lambda gap: gap[1] - gap[0])
+        split = (split_x[0] + split_x[1]) // 2
+
+        def bias(left: int, right: int) -> float:
+            red = blue = alpha = 0
+            for y in range(height):
+                for x in range(left, right):
+                    offset = (y * width + x) * 4
+                    a = pixels[offset + 3]
+                    red += pixels[offset] * a
+                    blue += pixels[offset + 2] * a
+                    alpha += a
+            assert alpha > 0
+            return (red - blue) / alpha
+
+        return bias(0, split), bias(split, width)
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=10.0) as renderer:
+        _configured, shared_frames = _render_g1_frames(
+            renderer,
+            base_style,
+            (2000,),
+            force_warp=True,
+            track=track,
+        )
+        _configured, local_frames = _render_g1_frames(
+            renderer,
+            replace(base_style, ruby_horizontal_gradient_with_main=False),
+            (2000,),
+            force_warp=True,
+            track=track,
+        )
+
+    shared_left, shared_right = ruby_group_color_bias(shared_frames[0])
+    local_left, local_right = ruby_group_color_bias(local_frames[0])
+    assert shared_left > 40
+    assert shared_right < -40
+    assert abs(local_left - local_right) < 20
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_backend_reports_hardware_and_warp_adapters(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     with NativeRendererProcess(_renderer_path(), response_timeout_s=10.0) as renderer:

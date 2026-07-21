@@ -79,6 +79,26 @@ def test_save_render_project_round_trip(tmp_path):
     assert loaded["style"]["font_size_px"] == 80
 
 
+def test_ruby_horizontal_gradient_alignment_setting_round_trips():
+    style = Style(
+        ruby_horizontal_gradient_with_main=False,
+        custom_style_schemes={
+            "主唱": SubtitleStyleScheme(
+                ruby_horizontal_gradient_with_main=False
+            )
+        },
+    )
+
+    restored = style_from_dict(style_to_dict(style))
+
+    assert restored.ruby_horizontal_gradient_with_main is False
+    assert (
+        restored.custom_style_schemes["主唱"].ruby_horizontal_gradient_with_main
+        is False
+    )
+    assert style_from_dict({}).ruby_horizontal_gradient_with_main is True
+
+
 def test_background_payload_round_trip(tmp_path):
     image = tmp_path / "background.png"
     payload = background_payload(

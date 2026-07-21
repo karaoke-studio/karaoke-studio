@@ -170,6 +170,7 @@ def test_build_render_ir_contains_screen_style_track_and_ruby():
     assert ir["screen"] == {"width": 640, "height": 360, "fps": 30, "dpr": 1.0}
     assert ir["style"]["font_size_px"] == 64
     assert ir["style"]["fill_color"] == "#123456"
+    assert ir["style"]["ruby_horizontal_gradient_with_main"] is True
     assert ir["track"]["lines"][0]["singer_id"] == 2
     assert ir["track"]["lines"][0]["chars"][0]["text"] == "君"
     assert ir["track"]["lines"][0]["chars"][0]["role_label"] == "A"

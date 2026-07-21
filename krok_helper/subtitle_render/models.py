@@ -635,6 +635,8 @@ class SubtitleStyleScheme:
     karaoke_colors: Optional[KaraokeColors] = None
     ruby_colors_follow_main: Optional[bool] = None
     """注音配色是否实时跟随本角色方案的主文字配色。"""
+    ruby_horizontal_gradient_with_main: Optional[bool] = None
+    """注音横向渐变是否与主文字共享整行渐变范围。"""
     ruby_karaoke_colors: Optional[KaraokeColors] = None
     n3_font_inheritance: bool = False
     """N3 子字体槽的 ``None`` 属于方案内 fallback，不继承外部全局方案。"""
@@ -935,6 +937,8 @@ class Style:
     ruby_shadow_offset_y: Optional[int] = None
     ruby_colors_follow_main: bool = True
     """注音整套配色默认实时跟随主文字；角色方案可独立覆盖。"""
+    ruby_horizontal_gradient_with_main: bool = True
+    """注音横向渐变默认与主文字共享整行渐变范围。"""
     ruby_karaoke_colors: Optional[KaraokeColors] = None
     """注音独立配色矩阵；为空时退回 ``ruby_color`` / 主文字配色。可由「应用主文字
     配色」一键从主文字矩阵复制（颜色照搬，描边宽度/阴影偏移在渲染时按注音字号比例缩放）。"""
@@ -1472,6 +1476,7 @@ def style_from_dict(payload: object) -> Style:
             "stroke2_enabled",
             "ruby_font_follow_main",
             "ruby_colors_follow_main",
+            "ruby_horizontal_gradient_with_main",
             "dual_line_layout",
             "right_to_left",
             "vertical",
@@ -1964,7 +1969,10 @@ def subtitle_style_scheme_from_dict(payload: object) -> SubtitleStyleScheme:
         }:
             parsed = _int_value(value, 0)
             changes[key] = parsed if parsed > 0 else None
-        elif key == "ruby_colors_follow_main":
+        elif key in {
+            "ruby_colors_follow_main",
+            "ruby_horizontal_gradient_with_main",
+        }:
             changes[key] = bool(value) if value is not None else None
         else:
             changes[key] = value
