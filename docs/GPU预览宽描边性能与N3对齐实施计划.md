@@ -1,6 +1,6 @@
 # GPU 预览宽描边性能与 N3 对齐实施计划
 
-> 状态：待实施
+> 状态：待实施(2026-07-21 已二次逆向核实 N3 走字缓存机制,§3.4/§3.5 为新增结论;配套执行文档见 `docs/GPU预览宽描边性能优化执行计划书.md`)
 >
 > 建立日期：2026-07-21
 >
@@ -116,6 +116,61 @@ min(Environment.ProcessorCount / 2, 8)
 多 worker 的主要价值是让解码、CPU 命令准备、GPU 提交和呈现形成流水线，并非让一个 30ms 的
 字幕帧自动变成 `30 / 8` ms。
 
+### 3.4 走字(wipe)的缓存与绘制机制(2026-07-21 二次核实)
+
+这是本次专项最关键的新结论:**走字进度完全不参与任何缓存失效**。
+
+1. 走字时间表在 generate 阶段一次算好:每个字符持有毫秒时间数组与 0~1 归一化
+   位置数组两个并行序列,含 ruby→亲字时间折算和相邻字符咬合时的 wipe 终点修正
+   (终点位置被夹到下一字符左缘),此后播放期只读;
+2. 每帧对正在走字的字符只做三件事:线性查表求当前 wipe X;
+   axis-aligned clip(wipeX→画布右缘)画 before 色;
+   axis-aligned clip(画布左缘→wipeX)画 after 色。
+   两次绘制消费的是**同一份长期持有的几何/realization**,画刷来自同一缓存;
+3. 走字前/走字后的字符每帧各画一次(before 或 after 刷),无 clip;
+   同一行内绘制顺序为:before 字符从右到左、after 字符从左到右、走字字符最后;
+   层顺序为二重描边→描边→本体,ruby 整行先于亲文字;
+4. **正在走字的字符在导出路径照常使用 DrawGeometryRealization**——
+   realization 在 axis-aligned clip 内正常工作。只有本帧带变换矩阵的字符
+   (Utopia 进场/退场/走字缩放脉冲)才回退 DrawGeometry;
+5. wipe X 每帧通过 GetBounds() 从几何取包围盒再插值(边界含主描边一半的横向外扩),
+   N3 未缓存包围盒,这是可安全缓存的小优化点。
+
+对我们的直接含义:
+
+- 任何缓存 key(几何、realization、画刷、glow source)都**不得包含 wipe 进度或
+  播放时间戳**,否则缓存必然退化为逐帧重建,制造新的性能问题;
+- "稳定/动态"字符的判定标准是"本帧是否有逐帧变换矩阵",而不是"是否正在走字"。
+  播放中任意时刻几乎总有字符在走字,若把走字字符降级为 DrawGeometry,
+  宽描边优化在连续播放中将持续失效,收益被显著蚕食。
+
+### 3.5 其他已核实细节
+
+1. Utopia 的走字缩放脉冲(约 1.15 倍、限时)意味着 Utopia 行中正在走字的字符
+   每帧要创建临时变换几何;由于本体/描边/二重描边三层 × before/after 两个 clip
+   半边各自独立创建,单字符每帧最多 6 次临时几何创建加销毁,发光时更多。
+   N3 在此处也是暴力实现,没有"本帧算一次、三层共用"——这是可以优于 N3 的点,
+   与 P1 中"动态字符集合计算一次共用"的条目一致;
+2. 渐变画刷采用"每 render target 一个实例 + 每行绘制前改写起止端点"的模式:
+   N3 在每行每绘制阶段(一行一帧最多 8 次)遍历所有字体的所有画刷并改写线性
+   渐变端点。含义:(a) 渐变画刷缓存的 key 不含行 Y 坐标,画刷数量与行数无关;
+   (b) 这种就地改写模式要求画刷缓存严格 per-DeviceContext,多 worker 共享同一
+   画刷实例会产生跨线程改写竞争;
+3. N3 预览的降载缩放是在 freeze 阶段直接把 previewScale 乘进
+   transformed geometry(并同步缩小 target bitmap),不是逐帧 transform;
+   DrawGeometry 的描边宽度绘制时也乘 Scale。预览里 14px 描边在 0.5 倍率下
+   实际是 7px 描边画在四分之一面积画布上——这是 N3 预览流畅的第一杠杆(对应 P5);
+4. 导出前的 realization 预热是一次性同步过程,在专用 device context 上创建,
+   约占其导出进度条的 10%;每字符 filled + stroked(启用二重描边时再加 stroked2)。
+   创建失败或未创建的字符通过 null 检查自动回退 DrawGeometry,
+   即 realization 是纯加速层,不承担正确性;
+5. 发光(blur)为 BlurLevel+1 次"全画布 work bitmap 重绘 + 全画布高斯模糊"叠加,
+   半径逐次递减;blur 路径永远走 DrawGeometry(宽度加 DecorSize),
+   从不使用 realization。发光成本正比于 (BlurLevel+1) × 全画布面积,
+   N3 没有做脏矩形——P3 的脏矩形收紧同样是超越 N3 的点;
+6. 样式修改时 N3 的做法等价于 generation swap 的原始形态:等全部 worker 空转、
+   全量重建绘制数据、释放旧数据;渲染期间新旧两代数据不混用。
+
 ## 4. 差异矩阵
 
 | 项目 | 当前 Karaoke Studio | N3 | 本专项动作 |
@@ -125,6 +180,7 @@ min(Environment.ProcessorCount / 2, 8)
 | 画刷 | 部分逐字符/逐层/逐帧创建 | 按 render target 缓存 | 建立每 context/target 的画刷缓存 |
 | GeometryRealization | 未使用 | 导出使用，预览不用 | 对宽描边预览和导出分别 A/B |
 | Utopia | 动态层存在重复几何工作 | 仅动画字符临时变换 | 统一稳定/动态掩码并复用稳定层 |
+| 走字(wipe) | 需审计是否有按 wipe 进度重建的资源 | clip 分割复用同一几何,零缓存失效 | 审计并禁止 wipe 进度/时间戳进入任何缓存 key |
 | glow work bitmap/effect | 已有池，但宽描边仍扩大成本 | 每 worker 常驻 | 改为每 worker 常驻并收紧脏矩形 |
 | GPU 预览 worker | 1 in-flight + 1 pending | 1～8 个 context | 新建有界多 context 流水线 |
 | 帧交付 | staging + shm + QImage | GPU swap chain | G5 内优化流水；G6 不重新开放 |
@@ -145,6 +201,9 @@ min(Environment.ProcessorCount / 2, 8)
 ### P1：对齐 N3 的资源缓存层次
 
 - [ ] 新增 `BrushCache`，按 DeviceContext/target、填充类型、颜色/渐变/图片参数建立 key；
+  缓存实例严格 per-DeviceContext(N3 的渐变端点就地改写模式决定了画刷不可跨
+  context 共享,这是 P4 多 worker 的前置约束);渐变按 N3 模式采用
+  "每 target 一个实例 + 每行改写端点",端点(行 Y)不进入 key；
 - [ ] solid、linear gradient、MilleFeuille、bitmap brush 都必须复用，角色样式修改或
   render target 重建时精确失效；
 - [ ] 审计字符 base、positioned、body-protection、stroke、stroke2 geometry 的所有创建点；
@@ -157,7 +216,14 @@ min(Environment.ProcessorCount / 2, 8)
 - [ ] 为稳定正文建立 filled/stroked/stroked2 realization 原型，容差先以 N3 的 0.25 为
   A/B 基准；
 - [ ] 分别测试普通走字、Utopia、旋转翻转、逐字淡出和行内角色样式；
-- [ ] 动态字符可继续使用 `DrawGeometry`，稳定字符优先使用 realization；
+- [ ] 稳定/动态的判定标准为"本帧是否有逐帧变换矩阵"(Utopia 进场/退场/走字脉冲、
+  旋转翻转),而不是"是否正在走字":正在走字但无变换的字符照常使用 realization
+  (clip 内 DrawGeometryRealization 正常工作,已在 N3 导出路径核实);
+  仅本帧带变换矩阵的动态字符回退 `DrawGeometry`；
+- [ ] realization 只允许在 configure/预热阶段创建,逐帧渲染路径禁止创建 realization,
+  以免样式修改或 seek 后出现新的预热卡顿；预热需有每次样式变更的时间预算与
+  异步分摊策略；
+- [ ] 任何缓存 key 不得包含 wipe 进度或播放时间戳；
 - [ ] 主描边和二重描边分别建 key，key 必须包含有效字号、DPR、字体、glyph、描边宽度、
   join/miter 等所有影响像素的参数；
 - [ ] 验证大字号、斜杠、日英数字体、注音和标题，避免重现字号/字体路由问题；
@@ -176,6 +242,8 @@ min(Environment.ProcessorCount / 2, 8)
 ### P4：正式 GPU 预览多 worker 流水线
 
 - [ ] sidecar 新建常驻 `GpuPreviewWorkerPool`，共享 D3D11/D2D device；
+- [ ] 画刷缓存与 realization 缓存按 worker(per-DeviceContext)隔离,禁止跨 worker
+  共享可变 D2D 资源;worker 启动后先渲染 warmup 帧填充各自缓存,避免首帧抖动；
 - [ ] 每个 worker 独立持有 DeviceContext、frame target、staging/readback texture、glow scratch、
   effect 和共享内存 ring slot；
 - [ ] 配置生成不可变 scene snapshot；样式或尺寸变化通过 generation 切换，旧 generation
