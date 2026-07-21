@@ -114,17 +114,17 @@ Direct2D 宽轮廓逐帧栅格化，glow 是放大项而非唯一根因。
 
 **任务**:
 
-- [ ] 新建 BrushCache,严格 per-DeviceContext 持有:solid 按 RGBA、
+- [x] 新建 BrushCache,严格 per-DeviceContext 持有:solid 按 RGBA、
   bitmap 按图片源+缩放、渐变按 stops 序列(端点/行 Y 不进 key,
   采用 N3 的"每 target 一个实例 + 每行改写起止端点"模式);
-- [ ] 角色样式(【N配色】)的行内画刷全部走同一缓存,不再逐字符/逐层/逐帧创建;
-- [ ] 审计全部 CreateTransformedGeometry 调用点(position/RTL/vertical/ruby/
+- [x] 角色样式(【N配色】)的行内画刷全部走同一缓存,不再逐字符/逐层/逐帧创建;
+- [x] 审计全部 CreateTransformedGeometry 调用点(position/RTL/vertical/ruby/
   interference/spin 各族):稳定字符只消费 configure 阶段缓存;
-- [ ] 动态字符(本帧有变换矩阵)的临时几何**本帧只算一次**,body/protection/
+- [x] 动态字符(本帧有变换矩阵)的临时几何**本帧只算一次**,body/protection/
   stroke/stroke2/glow 五处共用(N3 是每层每 clip 半边各建一次,此处做得比 N3 好);
-- [ ] wipe 分割所需的字符包围盒缓存到字符资源上(N3 每帧 GetBounds,可安全缓存;
+- [x] wipe 分割所需的字符包围盒缓存到字符资源上(N3 每帧 GetBounds,可安全缓存;
   key 不含 wipe 进度);
-- [ ] 缓存容量上限、命中/未命中/失效原因计数接入阶段 0 诊断;样式修改、
+- [x] 缓存容量上限、命中/未命中/失效原因计数接入阶段 0 诊断;样式修改、
   DPR 变化、render target 重建时精确失效。
 
 **验收门禁**:
@@ -144,6 +144,37 @@ Direct2D 宽轮廓逐帧栅格化，glow 是放大项而非唯一根因。
 
 - 失效遗漏 → 串色/旧样式残留:靠上面的失效测试矩阵门禁;
 - 缓存无界增长 → 容量上限 + 诊断计数 + 10 分钟 RSS 门禁。
+
+### 阶段 1 实测结果(2026-07-21)
+
+已实现严格绑定单个 `Direct2DGpuBackend`/DeviceContext 的 512 项 LRU 画刷缓存，
+solid、gradient、bitmap 与角色样式统一进入缓存；渐变端点和 bitmap transform 在每次
+绘制前改写，不进入 key。场景签名变化会清空资源，target/backend 重建则随 DeviceContext
+一起销毁；`KROK_GPU_RESOURCE_CACHE=0` 可恢复逐次创建路径。稳定帧
+`brush_created=0`、`geometry_created_stable=0`，容量压力测试确认上限为 512 且产生
+可观测 eviction。
+
+固定工程硬件 A/B（缓存关→开，render mean）：
+
+| 主描边 | glow 场景 | 变化 | 无装饰场景 | 变化 |
+|---:|---:|---:|---:|---:|
+| 0px | 6.466→4.736ms | -26.75% | 4.970→3.264ms | -34.32% |
+| 5px | 9.345→7.552ms | -19.19% | 7.872→5.980ms | -24.04% |
+| 14px | 21.252→22.152ms | +4.23% | 20.597→19.098ms | -7.28% |
+| 30px | 40.613→42.422ms | +4.46% | — | — |
+| 50px | 58.967→56.841ms | -3.60% | — | — |
+
+14/30px 的单轮硬件波动仍低于 5% 非目标回退门限；两个 A/B 集合共 640 帧 checksum
+零差异。`compare_gpu_painter_corpus.py` 全部通过既有容差（含本机真实 Dark Spiral
+`.n3proj` 切片）；独立 N3 成品/源视频不在仓库内，故视频减法门禁留待取得外部资产后
+补跑。缓存定向测试 13 项通过，覆盖关闭开关、稳定帧、容量淘汰及字号/字体/描边/颜色/
+渐变/图片/角色方案失效。
+
+归档文件：
+
+- `build/gpu-widestroke-stage1-cache-{off,on}-hardware-20260721.csv`；
+- `build/gpu-widestroke-stage1-cache-{off,on}-no-decoration-hardware-20260721.csv`；
+- `build/gpu-stage1-painter-corpus/result.json`。
 
 ## 3. 阶段 2:宽描边 realization(对应 P2,预期最大收益)
 

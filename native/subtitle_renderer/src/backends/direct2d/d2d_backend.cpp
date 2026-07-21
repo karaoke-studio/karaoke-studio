@@ -795,6 +795,48 @@ Microsoft::WRL::ComPtr<ID2D1Brush> createPaintBrush(
     return brush;
 }
 
+void updatePaintBrush(
+    ID2D1Brush *brush,
+    const PaintStyle &paint,
+    const D2D1_RECT_F &rect,
+    float canvasDx,
+    float canvasDy
+) {
+    if (brush == nullptr) {
+        return;
+    }
+    if (paint.mode == "image") {
+        Microsoft::WRL::ComPtr<ID2D1BitmapBrush1> bitmapBrush;
+        if (SUCCEEDED(brush->QueryInterface(IID_PPV_ARGS(
+                bitmapBrush.ReleaseAndGetAddressOf())))) {
+            const float scale = std::clamp(paint.imageScale, 0.01f, 10.0f);
+            bitmapBrush->SetTransform(
+                D2D1::Matrix3x2F::Scale(scale, scale)
+                    * D2D1::Matrix3x2F::Translation(-canvasDx, -canvasDy)
+            );
+        }
+        return;
+    }
+    const bool gradient = paint.mode == "gradient_horizontal"
+        || paint.mode == "gradient_vertical"
+        || paint.mode == "split_vertical";
+    if (!gradient || paint.stops.empty()) {
+        return;
+    }
+    Microsoft::WRL::ComPtr<ID2D1LinearGradientBrush> linear;
+    if (FAILED(brush->QueryInterface(IID_PPV_ARGS(
+            linear.ReleaseAndGetAddressOf())))) {
+        return;
+    }
+    const bool horizontal = paint.mode == "gradient_horizontal";
+    linear->SetStartPoint(horizontal
+        ? D2D1::Point2F(rect.left, (rect.top + rect.bottom) * 0.5f)
+        : D2D1::Point2F((rect.left + rect.right) * 0.5f, rect.top));
+    linear->SetEndPoint(horizontal
+        ? D2D1::Point2F(rect.right, (rect.top + rect.bottom) * 0.5f)
+        : D2D1::Point2F((rect.left + rect.right) * 0.5f, rect.bottom));
+}
+
 Microsoft::WRL::ComPtr<ID2D1Bitmap1> loadWicBitmap(
     ID2D1DeviceContext *context,
     const std::wstring &path
@@ -953,9 +995,20 @@ struct Direct2DGpuBackend::Impl {
         std::vector<CachedRuby> rubies;
     };
 
+    struct CachedBrush {
+        PaintStyle paint;
+        RgbaColor fallback;
+        ID2D1Bitmap1 *imageIdentity = nullptr;
+        Microsoft::WRL::ComPtr<ID2D1Brush> brush;
+        std::uint64_t lastUse = 0;
+    };
+
     RenderScene scene;
     std::vector<CachedLine> lines;
     std::vector<CachedImage> images;
+    std::vector<CachedBrush> brushes;
+    std::uint64_t brushUseSerial = 0;
+    static constexpr std::size_t brushCapacity = 512;
     BackendDiagnostics diagnostics;
     bool configured = false;
     int frameSurfaceWidth = 0;
@@ -975,11 +1028,16 @@ struct Direct2DGpuBackend::Impl {
 #else
     bool countersEnabled = false;
 #endif
+    bool resourceCacheEnabled = environmentFlagEnabled(
+        "KROK_GPU_RESOURCE_CACHE", true
+    );
 };
 
 Direct2DGpuBackend::Direct2DGpuBackend(bool forceWarp)
     : device_(forceWarp), impl_(std::make_unique<Impl>()) {
     impl_->diagnostics.countersEnabled = impl_->countersEnabled;
+    impl_->diagnostics.resourceCacheEnabled = impl_->resourceCacheEnabled;
+    impl_->diagnostics.brushCacheCapacity = Impl::brushCapacity;
 }
 
 Direct2DGpuBackend::~Direct2DGpuBackend() = default;
@@ -990,6 +1048,9 @@ BackendCaps Direct2DGpuBackend::capabilities() const {
 
 BackendDiagnostics Direct2DGpuBackend::diagnostics() const {
     BackendDiagnostics result = impl_->diagnostics;
+    result.brushCacheSize = impl_->brushes.size();
+    result.estimatedCacheBytes += impl_->brushes.size()
+        * sizeof(Impl::CachedBrush);
     device_.appendVideoMemoryDiagnostics(&result);
     return result;
 }
@@ -1143,6 +1204,13 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         return;
     }
     ++impl_->diagnostics.cacheMisses;
+    if (!impl_->brushes.empty()) {
+        impl_->brushes.clear();
+        impl_->brushUseSerial = 0;
+        if (impl_->countersEnabled) {
+            ++impl_->diagnostics.brushCacheInvalidations;
+        }
+    }
     if (impl_->frameSurfaceWidth != scene.width || impl_->frameSurfaceHeight != scene.height) {
         impl_->frameTargetBitmap.Reset();
         impl_->frameTargetTexture.Reset();
@@ -1531,6 +1599,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 positionedHasBounds ? positionedCharBounds.right + wipePad : cursor + layoutWidth,
                 cursor,
                 cursor + layoutWidth,
+                positionedHasBounds ? positionedCharBounds.top : -charAscent,
+                positionedHasBounds ? positionedCharBounds.bottom : charDescent,
             });
             cached.chars.back().styleIndex = sourceChar.styleIndex;
             cached.chars.back().wipePoints = sourceChar.wipePoints;
@@ -2150,6 +2220,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         : origin + glyph.layoutWidth,
                     origin,
                     origin + glyph.layoutWidth,
+                    positionedHasBounds ? positionedBounds.top : ruby.bounds.top,
+                    positionedHasBounds ? positionedBounds.bottom : ruby.bounds.bottom,
                 });
                 ruby.chars.back().pivotX = origin + glyph.layoutWidth * 0.5f;
                 ruby.chars.back().pivotY = ruby.pivotY;
@@ -3932,12 +4004,68 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         auto paintBrushAt = [&](const PaintStyle &paint, const D2D1_RECT_F &rect,
                                 const RgbaColor &fallback,
                                 float offsetX, float offsetY) {
-            auto brush = createPaintBrush(
-                context, paint, rect, fallback, device_,
-                imageForPaint(paint), dx + offsetX, dy + offsetY,
-                impl_->countersEnabled ? &frameDiagnostics.brushCreated : nullptr
-            );
+            ID2D1Bitmap1 *image = imageForPaint(paint);
+            Microsoft::WRL::ComPtr<ID2D1Brush> brush;
+            if (impl_->resourceCacheEnabled) {
+                const auto found = std::find_if(
+                    impl_->brushes.begin(), impl_->brushes.end(),
+                    [&](const Impl::CachedBrush &entry) {
+                        return entry.paint == paint
+                            && entry.fallback == fallback
+                            && entry.imageIdentity == image;
+                    }
+                );
+                if (found != impl_->brushes.end()) {
+                    found->lastUse = ++impl_->brushUseSerial;
+                    brush = found->brush;
+                    if (impl_->countersEnabled) {
+                        ++impl_->diagnostics.brushCacheHits;
+                    }
+                } else {
+                    if (impl_->countersEnabled) {
+                        ++impl_->diagnostics.brushCacheMisses;
+                    }
+                    brush = createPaintBrush(
+                        context, paint, rect, fallback, device_, image,
+                        dx + offsetX, dy + offsetY,
+                        impl_->countersEnabled
+                            ? &frameDiagnostics.brushCreated
+                            : nullptr
+                    );
+                    if (impl_->brushes.size() >= Impl::brushCapacity) {
+                        const auto oldest = std::min_element(
+                            impl_->brushes.begin(), impl_->brushes.end(),
+                            [](const Impl::CachedBrush &left,
+                               const Impl::CachedBrush &right) {
+                                return left.lastUse < right.lastUse;
+                            }
+                        );
+                        impl_->brushes.erase(oldest);
+                        if (impl_->countersEnabled) {
+                            ++impl_->diagnostics.brushCacheEvictions;
+                        }
+                    }
+                    impl_->brushes.push_back(Impl::CachedBrush{
+                        paint,
+                        fallback,
+                        image,
+                        brush,
+                        ++impl_->brushUseSerial,
+                    });
+                }
+            } else {
+                brush = createPaintBrush(
+                    context, paint, rect, fallback, device_, image,
+                    dx + offsetX, dy + offsetY,
+                    impl_->countersEnabled
+                        ? &frameDiagnostics.brushCreated
+                        : nullptr
+                );
+            }
             if (brush) {
+                updatePaintBrush(
+                    brush.Get(), paint, rect, dx + offsetX, dy + offsetY
+                );
                 brush->SetOpacity(globalOpacity);
             }
             return brush;
@@ -4852,10 +4980,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     static_cast<std::size_t>(charOnly)
                 ];
                 if (only.geometry != nullptr) {
-                    checkHr(
-                        only.geometry->GetBounds(nullptr, &content),
-                        "ID2D1Geometry::GetBounds(inline glow content)",
-                        device_
+                    content = D2D1::RectF(
+                        only.left, only.top, only.right, only.bottom
                     );
                 }
             }
@@ -5849,15 +5975,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             && signalState.opacity > 0.0f) {
             context->SetTransform(withViewport(D2D1::Matrix3x2F::Translation(signalDx, dy)));
             auto signalBrush = [&](const RgbaColor &color) {
-                Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
-                checkHr(
-                    context->CreateSolidColorBrush(
-                        d2dColor(color), brush.ReleaseAndGetAddressOf()
-                    ),
-                    "Create volume signal brush",
-                    device_
+                PaintStyle paint;
+                paint.mode = "solid";
+                paint.color = color;
+                Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrush(
+                    paint, line->fillBounds, color
                 );
-                count(frameDiagnostics.brushCreated);
                 brush->SetOpacity(
                     std::clamp(style.litOpacity * signalState.opacity, 0.0f, 1.0f)
                 );
@@ -5921,15 +6044,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             && style.litOpacity > 0.0f) {
             context->SetTransform(withViewport(D2D1::Matrix3x2F::Translation(signalDx, dy)));
             auto shapeBrush = [&](const RgbaColor &color, float opacity) {
-                Microsoft::WRL::ComPtr<ID2D1SolidColorBrush> brush;
-                checkHr(
-                    context->CreateSolidColorBrush(
-                        d2dColor(color), brush.ReleaseAndGetAddressOf()
-                    ),
-                    "Create shape signal brush",
-                    device_
+                PaintStyle paint;
+                paint.mode = "solid";
+                paint.color = color;
+                Microsoft::WRL::ComPtr<ID2D1Brush> brush = paintBrush(
+                    paint, line->fillBounds, color
                 );
-                count(frameDiagnostics.brushCreated);
                 brush->SetOpacity(std::clamp(opacity, 0.0f, 1.0f));
                 return brush;
             };

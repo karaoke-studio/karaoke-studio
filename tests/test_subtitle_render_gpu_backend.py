@@ -1562,6 +1562,223 @@ def test_gpu_frame_counters_can_be_disabled_without_disabling_timing(monkeypatch
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_brush_cache_eliminates_steady_frame_resource_creation(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.delenv("KROK_GPU_RESOURCE_CACHE", raising=False)
+    style = _g1_style(
+        decoration_kind="glow",
+        glow_before_radius_px=8,
+        glow_after_radius_px=8,
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        renderer.configure_gpu(
+            _g1_track(), style, width=640, height=360, fps=60, force_warp=True
+        )
+        warmup = renderer.render_gpu_frame(750, force_warp=True)
+        steady = renderer.render_gpu_frame(750, force_warp=True, frame_index=1)
+        diagnostics = renderer.gpu_diagnostics(force_warp=True)
+
+    assert diagnostics["resource_cache_enabled"] is True
+    assert warmup["brush_created"] > 0
+    assert steady["brush_created"] == 0
+    assert steady["geometry_created_stable"] == 0
+    assert diagnostics["brush_cache_hits"] > 0
+    assert diagnostics["brush_cache_misses"] == warmup["brush_created"]
+    assert 0 < diagnostics["brush_cache_size"] <= diagnostics["brush_cache_capacity"]
+    assert diagnostics["brush_cache_evictions"] == 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_brush_cache_can_be_disabled_for_ab_comparison(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("KROK_GPU_RESOURCE_CACHE", "0")
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        renderer.configure_gpu(
+            _g1_track(), _g1_style(), width=640, height=360, fps=60, force_warp=True
+        )
+        first = renderer.render_gpu_frame(750, force_warp=True)
+        second = renderer.render_gpu_frame(750, force_warp=True, frame_index=1)
+        diagnostics = renderer.gpu_diagnostics(force_warp=True)
+
+    assert diagnostics["resource_cache_enabled"] is False
+    assert first["brush_created"] > 0
+    assert second["brush_created"] == first["brush_created"]
+    assert diagnostics["brush_cache_size"] == 0
+    assert diagnostics["brush_cache_hits"] == 0
+    assert diagnostics["brush_cache_misses"] == 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize(
+    "changed_style",
+    [
+        _g1_style(font_size_px=108),
+        _g1_style(font_family="Meiryo"),
+        _g1_style(stroke_width_px=14),
+        _g1_style(fill_color="#12AB34"),
+    ],
+    ids=("size", "font", "stroke", "color"),
+)
+def test_gpu_brush_cache_invalidates_on_style_changes(monkeypatch, changed_style) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        renderer.configure_gpu(
+            _g1_track(), _g1_style(), width=640, height=360, fps=60, force_warp=True
+        )
+        renderer.render_gpu_frame(750, force_warp=True)
+        before = renderer.gpu_diagnostics(force_warp=True)
+        renderer.configure_gpu(
+            _g1_track(), changed_style, width=640, height=360, fps=60,
+            force_warp=True,
+        )
+        after_configure = renderer.gpu_diagnostics(force_warp=True)
+        changed = renderer.render_gpu_frame(750, force_warp=True, frame_index=1)
+
+    assert before["brush_cache_size"] > 0
+    assert after_configure["brush_cache_size"] == 0
+    assert after_configure["brush_cache_invalidations"] == (
+        before["brush_cache_invalidations"] + 1
+    )
+    assert changed["brush_created"] > 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("resource_kind", ("gradient", "image", "role"))
+def test_gpu_brush_cache_invalidates_paint_and_role_resources(
+    monkeypatch, tmp_path, resource_kind
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    def state(fill: PaintFill) -> KaraokeColorState:
+        return KaraokeColorState(
+            text=fill,
+            stroke=PaintFill(mode="solid", color="#202020"),
+            stroke2=PaintFill(mode="solid", color="#000000"),
+            shadow=PaintFill(mode="solid", color="#000000"),
+        )
+
+    track = _g1_track()
+    if resource_kind == "gradient":
+        first_fill = PaintFill(
+            mode="gradient_horizontal",
+            gradient_stops=[(0, "#FF0000"), (100, "#0000FF")],
+        )
+        second_fill = replace(
+            first_fill,
+            gradient_stops=[(0, "#00FF00"), (100, "#FF00FF")],
+        )
+        first = _g1_style(
+            karaoke_colors=KaraokeColors(
+                before=state(first_fill), after=state(first_fill)
+            )
+        )
+        second = replace(
+            first,
+            karaoke_colors=KaraokeColors(
+                before=state(second_fill), after=state(second_fill)
+            ),
+        )
+    elif resource_kind == "image":
+        paths = [tmp_path / "red.png", tmp_path / "blue.png"]
+        for path, color in zip(paths, ("#FFFF0000", "#FF0000FF")):
+            image = QImage(8, 8, QImage.Format.Format_ARGB32)
+            image.fill(QColor(color))
+            assert image.save(str(path))
+        fills = [PaintFill(mode="image", image_path=str(path)) for path in paths]
+        first = _g1_style(
+            karaoke_colors=KaraokeColors(
+                before=state(fills[0]), after=state(fills[0])
+            )
+        )
+        second = replace(
+            first,
+            karaoke_colors=KaraokeColors(
+                before=state(fills[1]), after=state(fills[1])
+            ),
+        )
+    else:
+        track = TimingTrack(
+            lines=[
+                TimingLine(
+                    chars=[
+                        TimingChar("角", 0, role_label="角色"),
+                        TimingChar("色", 750, role_label="角色"),
+                    ],
+                    end_ms=1500,
+                )
+            ]
+        )
+        first_scheme = SubtitleStyleScheme(fill_color="#FF0000")
+        second_scheme = replace(first_scheme, fill_color="#00FF00")
+        first = _g1_style(custom_style_schemes={"角色": first_scheme})
+        second = replace(first, custom_style_schemes={"角色": second_scheme})
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        renderer.configure_gpu(
+            track, first, width=640, height=360, fps=60, force_warp=True
+        )
+        first_frame = renderer.render_gpu_frame(750, force_warp=True)
+        before = renderer.gpu_diagnostics(force_warp=True)
+        renderer.configure_gpu(
+            track, second, width=640, height=360, fps=60, force_warp=True
+        )
+        after_configure = renderer.gpu_diagnostics(force_warp=True)
+        second_frame = renderer.render_gpu_frame(
+            750, force_warp=True, frame_index=1
+        )
+
+    assert before["brush_cache_size"] > 0
+    assert after_configure["brush_cache_size"] == 0
+    assert after_configure["brush_cache_invalidations"] == (
+        before["brush_cache_invalidations"] + 1
+    )
+    assert second_frame["brush_created"] > 0
+    assert second_frame["checksum"] != first_frame["checksum"]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_brush_cache_is_bounded_and_reports_evictions(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    role_count = 520
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("A", index * 2, role_label=f"role-{index}")
+                    for index in range(role_count)
+                ],
+                end_ms=role_count * 2 + 1_000,
+            )
+        ]
+    )
+    schemes = {
+        f"role-{index}": SubtitleStyleScheme(fill_color=f"#{index + 1:06X}")
+        for index in range(role_count)
+    }
+    style = _g1_style(
+        font_size_px=8,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        custom_style_schemes=schemes,
+    )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=30.0) as renderer:
+        renderer.configure_gpu(
+            track, style, width=640, height=360, fps=60, force_warp=True
+        )
+        for frame_index, t_ms in enumerate(range(0, role_count * 2 + 1, 40)):
+            renderer.render_gpu_frame(
+                t_ms, force_warp=True, frame_index=frame_index
+            )
+        diagnostics = renderer.gpu_diagnostics(force_warp=True)
+
+    assert diagnostics["brush_cache_size"] == diagnostics["brush_cache_capacity"]
+    assert diagnostics["brush_cache_capacity"] == 512
+    assert diagnostics["brush_cache_evictions"] > 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g1_n3_glow_concentration_adds_blur_passes(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     low = _g1_style(

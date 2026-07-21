@@ -7190,6 +7190,34 @@ void appendGpuDiagnostics(
     out->insert(QStringLiteral("glow_ms"), diagnostics.glowMs);
     out->insert(QStringLiteral("gpu_wait_ms"), diagnostics.gpuWaitMs);
     out->insert(QStringLiteral("readback_copy_ms"), diagnostics.readbackCopyMs);
+    out->insert(
+        QStringLiteral("resource_cache_enabled"),
+        diagnostics.resourceCacheEnabled
+    );
+    out->insert(
+        QStringLiteral("brush_cache_hits"),
+        static_cast<qint64>(diagnostics.brushCacheHits)
+    );
+    out->insert(
+        QStringLiteral("brush_cache_misses"),
+        static_cast<qint64>(diagnostics.brushCacheMisses)
+    );
+    out->insert(
+        QStringLiteral("brush_cache_evictions"),
+        static_cast<qint64>(diagnostics.brushCacheEvictions)
+    );
+    out->insert(
+        QStringLiteral("brush_cache_invalidations"),
+        static_cast<qint64>(diagnostics.brushCacheInvalidations)
+    );
+    out->insert(
+        QStringLiteral("brush_cache_size"),
+        static_cast<qint64>(diagnostics.brushCacheSize)
+    );
+    out->insert(
+        QStringLiteral("brush_cache_capacity"),
+        static_cast<qint64>(diagnostics.brushCacheCapacity)
+    );
 }
 
 void appendGpuFrameDiagnostics(

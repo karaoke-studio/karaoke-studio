@@ -366,6 +366,13 @@ struct BackendDiagnostics {
     double glowMs = 0.0;
     double gpuWaitMs = 0.0;
     double readbackCopyMs = 0.0;
+    bool resourceCacheEnabled = true;
+    std::uint64_t brushCacheHits = 0;
+    std::uint64_t brushCacheMisses = 0;
+    std::uint64_t brushCacheEvictions = 0;
+    std::uint64_t brushCacheInvalidations = 0;
+    std::uint64_t brushCacheSize = 0;
+    std::uint64_t brushCacheCapacity = 0;
 };
 
 class BackendError : public std::runtime_error {
