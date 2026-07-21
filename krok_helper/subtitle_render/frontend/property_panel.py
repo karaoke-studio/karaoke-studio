@@ -2221,6 +2221,8 @@ class _WheelFocusedFontComboBox(_WheelFocusedComboBox):
 class _GrowingPlainTextEdit(FluentPlainTextEdit):
     """多行文本框：随内容行数自动增高，背景卡片随之变高（回车即变高）。"""
 
+    editingFinished = Signal()
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
@@ -2246,6 +2248,10 @@ class _GrowingPlainTextEdit(FluentPlainTextEdit):
             event.ignore()
             return
         super().wheelEvent(event)
+
+    def focusOutEvent(self, event) -> None:  # noqa: N802 - Qt API
+        super().focusOutEvent(event)
+        self.editingFinished.emit()
 
 
 class _DynamicStackedWidget(QStackedWidget):
@@ -3876,6 +3882,11 @@ class PropertyPanel(QWidget):
         super().__init__(parent)
         self._style = Style()
         self._syncing = False
+        self._title_text_change_pending = False
+        self._title_text_change_timer = QTimer(self)
+        self._title_text_change_timer.setSingleShot(True)
+        self._title_text_change_timer.setInterval(150)
+        self._title_text_change_timer.timeout.connect(self._commit_title_text_edit)
         self._role_names: list[str] = []
         self._preset_schemes: dict[str, StylePreset] = {}
         self._pages: list[QWidget] = []
@@ -4093,6 +4104,8 @@ class PropertyPanel(QWidget):
         self._n3_template_lyrics_dir = Path(path) if path is not None else None
 
     def set_style(self, style: Style, *, emit: bool = False) -> None:
+        self._title_text_change_timer.stop()
+        self._title_text_change_pending = False
         self._style = replace(style)
         current_key = self._current_scheme_key()
         self._syncing = True
@@ -5372,9 +5385,8 @@ class PropertyPanel(QWidget):
         self._title_text_edit.setToolTip(
             "支持换行；{title} / {artist} 会从字幕元数据中读取。"
         )
-        self._title_text_edit.textChanged.connect(
-            lambda: self._update_title(text_template=self._title_text_edit.toPlainText())
-        )
+        self._title_text_edit.textChanged.connect(self._on_title_text_changed)
+        self._title_text_edit.editingFinished.connect(self._commit_title_text_edit)
         layout.addWidget(_field("标题文字", self._title_text_edit))
         return section
 
@@ -5485,9 +5497,38 @@ class PropertyPanel(QWidget):
     def _on_title_enabled_toggled(self, checked: bool) -> None:
         self._update_title(enabled=checked)
 
+    def _on_title_text_changed(self) -> None:
+        if self._syncing:
+            return
+        title = self._current_title()
+        new_text = self._title_text_edit.toPlainText()
+        new_title = replace(
+            title,
+            text_template=new_text,
+            char_role_labels=migrate_title_char_role_labels(
+                title.text_template,
+                title.char_role_labels,
+                new_text,
+            ),
+        )
+        # Keep typing responsive by coalescing the expensive host-side preview,
+        # source-table, undo snapshot and settings updates.
+        self._style = replace(self._style, title_overlay=new_title)
+        self._title_text_change_pending = True
+        self._title_text_change_timer.start()
+
+    def _commit_title_text_edit(self) -> None:
+        if self._syncing or not self._title_text_change_pending:
+            return
+        self._title_text_change_timer.stop()
+        self._title_text_change_pending = False
+        self.styleChanged.emit(self._style)
+
     def _update_title(self, **changes) -> None:
         if self._syncing:
             return
+        self._title_text_change_timer.stop()
+        self._title_text_change_pending = False
         title = self._current_title()
         if "text_template" in changes:
             new_text = str(changes["text_template"])
