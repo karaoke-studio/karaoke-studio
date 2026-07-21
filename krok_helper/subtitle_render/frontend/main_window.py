@@ -1813,7 +1813,7 @@ class SubtitleRenderWindow(QWidget):
         self._file_menu_btn.setMenu(menu)
         left_layout.addWidget(self._file_menu_btn)
 
-        self._background_menu_btn = DropDownPushButton("背景与音频")
+        self._background_menu_btn = DropDownPushButton("添加背景素材")
         self._background_menu_btn.setFixedHeight(30)
         background_menu = RoundMenu(parent=self._background_menu_btn)
         background_menu.addAction(Action("背景视频…", triggered=self._browse_video))
