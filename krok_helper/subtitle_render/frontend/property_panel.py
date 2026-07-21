@@ -6683,9 +6683,9 @@ class PropertyPanel(QWidget):
             "正文按注音字符切分（N3 式）", section
         )
         self._ruby_main_reading_units_check.setToolTip(
-            "开启后按 N3 规则自动切分：正文内部已有时间点时保留正文逐字时钟，"
-            "只有内部时间点缺失时才按注音可视字符数映射；"
-            "关闭时按注音内部时间点形成的时间段数均分正文。"
+            "正文内部已有时间点时，两种模式都会保留正文逐字时钟；"
+            "缺失时，开启按注音可视字符数映射，"
+            "关闭按注音内部时间点形成的时间段数均分正文。"
         )
         self._ruby_main_reading_units_check.toggled.connect(
             lambda checked: self._update_style(
