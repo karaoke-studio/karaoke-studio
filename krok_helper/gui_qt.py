@@ -2749,22 +2749,62 @@ class KrokHelperQtApp(QMainWindow):
 
     def _export_lyrics_timing_to_next(self) -> None:
         """把 SUG 当前内存项目完整送入字幕渲染模块并切换到第 5 步。"""
+        from krok_helper.subtitle_render.frontend.fluent_dialogs import (
+            fluent_choice,
+            fluent_error,
+            fluent_warning,
+        )
+
         timing_page = getattr(self, "lyrics_timing_page", None)
         render_page = getattr(self, "subtitle_render_page", None)
         if timing_page is None or render_page is None:
-            QMessageBox.warning(self, APP_TITLE, "下一步模块尚未准备好，请稍后重试。")
+            fluent_warning(
+                self,
+                "无法导出到下一步",
+                "下一步模块尚未准备好，请稍后重试。",
+            )
             return
+
+        dirty_checker = getattr(timing_page, "has_unsaved_changes", None)
+        try:
+            has_unsaved_changes = bool(
+                callable(dirty_checker) and dirty_checker()
+            )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "检查歌词打轴项目保存状态失败", exc_info=True
+            )
+            has_unsaved_changes = False
+        if has_unsaved_changes:
+            choice = fluent_choice(
+                self,
+                "项目尚未保存",
+                "当前打轴项目包含未保存的修改。是否先保存再导出到下一步？",
+                ("保存并继续", "不保存，直接继续", "取消"),
+                default=0,
+            )
+            if choice == 0:
+                self._save_lyrics_timing_then_export(timing_page)
+                return
+            if choice != 1:
+                return
 
         try:
             payload = timing_page.export_to_next_payload()
         except Exception as exc:
             logging.getLogger(__name__).exception("读取歌词打轴项目失败")
-            QMessageBox.critical(
-                self, APP_TITLE, f"无法读取当前打轴项目：\n{exc}"
+            fluent_error(
+                self,
+                "导出到下一步失败",
+                f"无法读取当前打轴项目：\n{exc}",
             )
             return
         if not isinstance(payload, dict) or payload.get("project") is None:
-            QMessageBox.warning(self, APP_TITLE, "当前没有可导出的打轴项目。")
+            fluent_warning(
+                self,
+                "无法导出到下一步",
+                "当前没有可导出的打轴项目。",
+            )
             return
 
         source_value = payload.get("source_path")
@@ -2794,6 +2834,61 @@ class KrokHelperQtApp(QMainWindow):
                 render_page.load_audio(audio_path)
 
         self._show_module(WORKFLOW_SUBTITLE_RENDER)
+
+    def _save_lyrics_timing_then_export(self, timing_page: object) -> None:
+        """等待 SUG 异步保存成功后重新执行下一步导出。"""
+        from krok_helper.subtitle_render.frontend.fluent_dialogs import fluent_error
+
+        if getattr(self, "_lyrics_timing_export_waiting_for_save", False):
+            return
+        finished_signal = getattr(timing_page, "project_save_finished", None)
+        failed_signal = getattr(timing_page, "project_save_failed", None)
+        trigger_save = getattr(timing_page, "trigger_save", None)
+        if (
+            finished_signal is None
+            or failed_signal is None
+            or not callable(trigger_save)
+        ):
+            fluent_error(
+                self,
+                "无法保存项目",
+                "歌词打轴模块不支持保存完成通知，请重启应用后重试。",
+            )
+            return
+
+        self._lyrics_timing_export_waiting_for_save = True
+
+        def disconnect_callbacks() -> None:
+            self._lyrics_timing_export_waiting_for_save = False
+            for signal, callback in (
+                (finished_signal, on_saved),
+                (failed_signal, on_failed),
+            ):
+                try:
+                    signal.disconnect(callback)
+                except (TypeError, RuntimeError):
+                    pass
+
+        def on_saved(_path: str) -> None:
+            disconnect_callbacks()
+            QTimer.singleShot(0, self._export_lyrics_timing_to_next)
+
+        def on_failed(message: str) -> None:
+            disconnect_callbacks()
+            fluent_error(self, "保存项目失败", str(message))
+
+        finished_signal.connect(on_saved)
+        failed_signal.connect(on_failed)
+        try:
+            started = bool(trigger_save())
+        except Exception as exc:
+            disconnect_callbacks()
+            logging.getLogger(__name__).exception("发起歌词打轴项目保存失败")
+            fluent_error(self, "保存项目失败", str(exc))
+            return
+        if not started:
+            # 未命名项目关闭了“另存为”对话框，或保存任务未能启动。
+            disconnect_callbacks()
 
     def _on_lyrics_timing_title_changed(self, title: str) -> None:
         """把 SUG 窗口标题里的项目状态镜像到「歌词打轴」步骤描述行。

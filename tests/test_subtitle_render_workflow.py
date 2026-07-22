@@ -344,6 +344,184 @@ def test_lyrics_timing_export_falls_back_to_audio(tmp_path: Path) -> None:
     ]
 
 
+def test_lyrics_timing_export_without_project_uses_fluent_warning(
+    monkeypatch,
+) -> None:
+    dialogs: list[tuple[object, str, str]] = []
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_warning",
+        lambda parent, title, content: dialogs.append((parent, title, content)),
+    )
+    app = SimpleNamespace(
+        lyrics_timing_page=SimpleNamespace(export_to_next_payload=lambda: None),
+        subtitle_render_page=object(),
+    )
+
+    KrokHelperQtApp._export_lyrics_timing_to_next(app)
+
+    assert dialogs == [
+        (app, "无法导出到下一步", "当前没有可导出的打轴项目。")
+    ]
+
+
+def test_lyrics_timing_export_read_failure_uses_fluent_error(monkeypatch) -> None:
+    dialogs: list[tuple[object, str, str]] = []
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_error",
+        lambda parent, title, content: dialogs.append((parent, title, content)),
+    )
+
+    def fail():
+        raise RuntimeError("读取异常")
+
+    app = SimpleNamespace(
+        lyrics_timing_page=SimpleNamespace(export_to_next_payload=fail),
+        subtitle_render_page=object(),
+    )
+
+    KrokHelperQtApp._export_lyrics_timing_to_next(app)
+
+    assert dialogs == [
+        (app, "导出到下一步失败", "无法读取当前打轴项目：\n读取异常")
+    ]
+
+
+def test_dirty_saved_sug_prompts_before_export(monkeypatch, tmp_path: Path) -> None:
+    choices: list[tuple[str, str, tuple[str, ...], int]] = []
+    calls: list[object] = []
+    source = tmp_path / "saved-project.sug"
+    source.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        lambda _parent, title, content, buttons, default=0: (
+            choices.append((title, content, tuple(buttons), default)) or 1
+        ),
+    )
+    project = object()
+    timing_page = SimpleNamespace(
+        has_unsaved_changes=lambda: True,
+        export_to_next_payload=lambda: {
+            "project": project,
+            "nicokara_tags": {},
+            "source_path": str(source),
+            "media_path": None,
+            "media_kind": None,
+            "audio_path": None,
+        },
+    )
+    app = SimpleNamespace(
+        lyrics_timing_page=timing_page,
+        subtitle_render_page=SimpleNamespace(
+            load_from_sug_project=lambda *args, **kwargs: calls.append(
+                ("track", args, kwargs)
+            )
+            or object()
+        ),
+        _show_module=lambda module: calls.append(("show", module)),
+    )
+
+    KrokHelperQtApp._export_lyrics_timing_to_next(app)
+
+    assert choices == [
+        (
+            "项目尚未保存",
+            "当前打轴项目包含未保存的修改。是否先保存再导出到下一步？",
+            ("保存并继续", "不保存，直接继续", "取消"),
+            0,
+        )
+    ]
+    assert calls == [
+        ("track", (project, source), {"nicokara_tags": {}}),
+        ("show", WORKFLOW_SUBTITLE_RENDER),
+    ]
+
+
+def test_dirty_sug_cancel_stops_export(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        lambda *_args, **_kwargs: 2,
+    )
+    timing_page = SimpleNamespace(
+        has_unsaved_changes=lambda: True,
+        export_to_next_payload=lambda: pytest.fail("取消后不应读取项目"),
+    )
+    app = SimpleNamespace(
+        lyrics_timing_page=timing_page,
+        subtitle_render_page=object(),
+    )
+
+    KrokHelperQtApp._export_lyrics_timing_to_next(app)
+
+
+def test_dirty_sug_save_waits_for_success_before_export(
+    qapp, monkeypatch
+) -> None:
+    class FakeSignal:
+        def __init__(self):
+            self.callbacks = []
+
+        def connect(self, callback):
+            self.callbacks.append(callback)
+
+        def disconnect(self, callback):
+            self.callbacks.remove(callback)
+
+        def emit(self, value):
+            for callback in list(self.callbacks):
+                callback(value)
+
+    finished = FakeSignal()
+    failed = FakeSignal()
+    state = {"dirty": True}
+    calls: list[object] = []
+
+    def trigger_save() -> bool:
+        calls.append("save")
+        state["dirty"] = False
+        finished.emit("saved.sug")
+        return True
+
+    timing_page = SimpleNamespace(
+        has_unsaved_changes=lambda: state["dirty"],
+        trigger_save=trigger_save,
+        project_save_finished=finished,
+        project_save_failed=failed,
+        export_to_next_payload=lambda: {
+            "project": object(),
+            "nicokara_tags": {},
+            "source_path": "saved.sug",
+            "media_path": None,
+            "media_kind": None,
+            "audio_path": None,
+        },
+    )
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        lambda *_args, **_kwargs: 0,
+    )
+    app = SimpleNamespace(
+        lyrics_timing_page=timing_page,
+        subtitle_render_page=SimpleNamespace(
+            load_from_sug_project=lambda *_args, **_kwargs: calls.append("load")
+            or object()
+        ),
+        _show_module=lambda module: calls.append(("show", module)),
+        _save_lyrics_timing_then_export=lambda page: (
+            KrokHelperQtApp._save_lyrics_timing_then_export(app, page)
+        ),
+    )
+    app._export_lyrics_timing_to_next = lambda: (
+        KrokHelperQtApp._export_lyrics_timing_to_next(app)
+    )
+
+    KrokHelperQtApp._export_lyrics_timing_to_next(app)
+    qapp.processEvents()
+
+    assert calls == ["save", "load", ("show", WORKFLOW_SUBTITLE_RENDER)]
+    assert finished.callbacks == []
+    assert failed.callbacks == []
+
+
 # ---------------------------------------------------------------------------
 # 字幕轨道显示/隐藏时间编辑的撤销 / 重做（Ctrl+Z / Ctrl+Y）
 # ---------------------------------------------------------------------------
