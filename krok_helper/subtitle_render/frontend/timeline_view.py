@@ -66,6 +66,7 @@ _ENTRY_ANIMATION_LABELS = {
     "slide_in": "滑入",
     "rise": "上升",
     "char_fade": "逐字淡入",
+    "char_drip": "文字垂下",
     "spin_flip": "翻转",
     "utopia": "Utopia",
 }
@@ -75,6 +76,7 @@ _EXIT_ANIMATION_LABELS = {
     "slide_out": "滑出",
     "rise": "上升",
     "char_fade": "逐字淡出",
+    "char_drip": "文字垂出",
     "spin_flip": "翻转",
     "utopia": "Utopia",
 }

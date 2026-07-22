@@ -5309,6 +5309,41 @@ def test_char_transition_layer_stack_spin_flip_carries_scale_skew_transform(qapp
     assert layer.transform == expected
 
 
+def test_char_drip_uses_opaque_right_edge_shear_like_nkm3(qapp):
+    track = _track()
+    line = track.lines[0]
+    style = Style(line_y_position="center", entry_anim="char_drip")
+    layout = _layout_line(track, line, style, 800, 450)
+    count = len(line.chars)
+    transition = _LineCharTransition(
+        phase="entry", effect="char_drip", progress=1.0, start_ms=1000, end_ms=1600,
+    )
+    t_ms = 1125  # first character transform progress = 0.5
+
+    layers = _char_transition_layer_stack(layout, t_ms, transition, count)
+    before_by_index = {
+        layer.glyphs[0].index: layer
+        for layer in layers
+        if isinstance(layer, _GlyphRunLayer) and not layer.after
+    }
+
+    glyph = layout.text_layout.glyphs[0]
+    progress = _char_fade_opacity(transition, 0, count, t_ms=t_ms)
+    layer = before_by_index[0]
+    assert progress == pytest.approx(0.5)
+    # N3 CharDrip does not push an opacity layer: opacity is only transform progress.
+    assert layer.fade_opacity == pytest.approx(1.0)
+    expected = _character_transform(
+        center_x=glyph.left + glyph.width,
+        center_y=layout.baseline_y,
+        skew_y=_spin_flip_skew(progress),
+    )
+    assert layer.transform == expected
+    # The right-edge pivot remains fixed under the vertical shear.
+    pivot = QPointF(glyph.left + glyph.width, layout.baseline_y)
+    assert layer.transform.map(pivot) == pivot
+
+
 def test_utopia_glow_uses_cached_run_glow(qapp):
     # A3（§9.7）：utopia transition + glow → glow 走上正烘焙缓存（before/after 各一条），
     # 逐帧不再重算高斯；同帧重画纯命中、缓存不增长。

@@ -3089,6 +3089,22 @@ def test_property_panel_animation_controls_emit_style(qapp):
     assert emitted[-1].exit_fade_ms == 900
 
 
+def test_property_panel_exposes_n3_char_drip_animation(qapp):
+    panel = PropertyPanel()
+    emitted: list[Style] = []
+    panel.styleChanged.connect(emitted.append)
+
+    panel._entry_anim_combo.setCurrentIndex(
+        panel._entry_anim_combo.findData("char_drip")
+    )
+    panel._exit_anim_combo.setCurrentIndex(
+        panel._exit_anim_combo.findData("char_drip")
+    )
+
+    assert emitted[-1].entry_anim == "char_drip"
+    assert emitted[-1].exit_anim == "char_drip"
+
+
 def test_property_panel_lit_controls_emit_style(qapp):
     panel = PropertyPanel()
     emitted: list[Style] = []

@@ -106,6 +106,7 @@ _ENTRY_EFFECTS = (
     ("slide_in", "滑入"),
     ("rise", "上升"),
     ("char_fade", "逐字淡入"),
+    ("char_drip", "文字垂下"),
     ("spin_flip", "翻转"),
     ("utopia", "Utopia"),
 )
@@ -115,6 +116,7 @@ _EXIT_EFFECTS = (
     ("slide_out", "滑出"),
     ("rise", "上升"),
     ("char_fade", "逐字淡出"),
+    ("char_drip", "文字垂出"),
     ("spin_flip", "翻转"),
     ("utopia", "Utopia"),
 )
@@ -158,6 +160,7 @@ class _LineAnimationDialog(QDialog):
             ("fade", "淡入淡出"),
             ("slide", "滑入滑出"),
             ("char_fade", "逐字淡入淡出"),
+            ("char_drip", "逐字垂落"),
             ("utopia", "Utopia"),
         ):
             self._preset_combo.addItem(label, userData=value)
@@ -225,6 +228,7 @@ class _LineAnimationDialog(QDialog):
             "fade": ("fade", "fade"),
             "slide": ("slide_in", "slide_out"),
             "char_fade": ("char_fade", "char_fade"),
+            "char_drip": ("char_drip", "char_drip"),
             "utopia": ("utopia", "utopia"),
         }
         pair = mapping.get(preset)

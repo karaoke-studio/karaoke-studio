@@ -370,6 +370,7 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
     ) == ()
     assert gpu_unsupported_features(track, Style(entry_anim="fade")) == ()
     assert gpu_unsupported_features(track, Style(entry_anim="char_fade")) == ()
+    assert gpu_unsupported_features(track, Style(entry_anim="char_drip")) == ()
     assert gpu_unsupported_features(track, Style(entry_anim="spin_flip")) == ()
     assert gpu_unsupported_features(track, Style(entry_anim="utopia")) == ()
     assert gpu_unsupported_features(track, Style(lit_enabled=True)) == ()

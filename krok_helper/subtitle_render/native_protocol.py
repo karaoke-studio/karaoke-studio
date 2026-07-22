@@ -65,10 +65,10 @@ def gpu_unsupported_features(
     reasons: list[str] = []
     sources = [track, *(extra_tracks or ())]
     if style.entry_anim not in {
-        "none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"
+        "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia"
     } or (
         style.exit_anim not in {
-            "none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"
+            "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia"
         }
     ):
         reasons.append("line_animation")
@@ -81,6 +81,7 @@ def gpu_unsupported_features(
                     "slide_in",
                     "rise",
                     "char_fade",
+                    "char_drip",
                     "spin_flip",
                     "utopia",
                 } or line.animation_override.exit_anim not in {
@@ -89,6 +90,7 @@ def gpu_unsupported_features(
                     "slide_out",
                     "rise",
                     "char_fade",
+                    "char_drip",
                     "spin_flip",
                     "utopia",
                 }:

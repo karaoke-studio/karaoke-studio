@@ -76,8 +76,20 @@ _SMART_HORIZON_MAP = {0: "none", 1: "center_position", 2: "equal_margins"}
 _HORIZONTAL_ALIGN_MAP = {0: "left", 1: "center", 2: "right"}
 _RUBY_ALIGN_MAP = {0: "auto", 1: "center", 2: "equal_space"}
 
-_LINE_FADE_ACTION_ID = "SHINTA.LineFadeInFadeOut"
 _NO_ACTION_ID = "SHINTA.NoAction"
+_LINE_ACTIONS: dict[str, tuple[str, str]] = {
+    "SHINTA.LineFadeIn": ("fade", "none"),
+    "SHINTA.LineFadeOut": ("none", "fade"),
+    "SHINTA.LineFadeInFadeOut": ("fade", "fade"),
+}
+_CHAR_ACTIONS: dict[str, str] = {
+    "SHINTA.CharFadeInFadeOut": "char_fade",
+    "SHINTA.CharDrip": "char_drip",
+    "SHINTA.SpinFlip": "spin_flip",
+}
+_UTOPIA_ACTION_ID = "SHINTA.Utopia"
+_UTOPIA_ENTRY_MS = 700
+_UTOPIA_EXIT_MS = 750
 
 _BRACKET_LABEL_RE = re.compile(r"【[^】]*】")
 _BRACKETED_SCHEME_NAME_RE = re.compile(r"^【([^】]+)】(.*)$")
@@ -742,15 +754,27 @@ def _line_animation_signature(line: dict) -> Optional[tuple[str, int, str, int]]
     action_id = str(line.get("SubtitleActionId") or "")
     if not action_id or action_id == _NO_ACTION_ID:
         return ("none", 0, "none", 0)
-    if action_id != _LINE_FADE_ACTION_ID:
-        return None
     settings = _dict(line.get("SubtitleActionSettings"))
-    return (
-        "fade",
-        max(0, _int(settings.get("FadeInTime"), 250)),
-        "fade",
-        max(0, _int(settings.get("FadeOutTime"), 250)),
-    )
+    if action_id in _LINE_ACTIONS:
+        entry, exit_ = _LINE_ACTIONS[action_id]
+        return (
+            entry,
+            max(0, _int(settings.get("FadeInTime"), 250)) if entry != "none" else 0,
+            exit_,
+            max(0, _int(settings.get("FadeOutTime"), 250)) if exit_ != "none" else 0,
+        )
+    if action_id in _CHAR_ACTIONS:
+        effect = _CHAR_ACTIONS[action_id]
+        intro_delay = max(0, _int(settings.get("IntroDelay"), 350))
+        return (
+            effect,
+            intro_delay + max(0, _int(settings.get("FadeInTime"), 250)),
+            effect,
+            intro_delay + max(0, _int(settings.get("FadeOutTime"), 250)),
+        )
+    if action_id == _UTOPIA_ACTION_ID:
+        return ("utopia", _UTOPIA_ENTRY_MS, "utopia", _UTOPIA_EXIT_MS)
+    return None
 
 
 def _signature_changes(signature: tuple[str, int, str, int]) -> dict[str, Any]:

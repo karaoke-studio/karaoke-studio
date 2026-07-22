@@ -4666,10 +4666,11 @@ def _paint_line_static(
         )
 
     if transition is not None:
-        if transition.effect in ("char_fade", "spin_flip"):
+        if transition.effect in ("char_fade", "char_drip", "spin_flip"):
             # A1/A2（§9.7）：逐字入退场 → 走 LayerCompositor 烘焙缓存，不再每帧
             # _paint_char_karaoke_stack 重栅（含 glow 复用）。普通行/分色行同路。
-            # char_fade 仅 opacity（无损）；spin_flip 加 scale+skew 残差（D2 软化可接受）。
+            # char_fade 仅 opacity（无损）；char_drip / spin_flip 加 N3 对应的
+            # skew（spin_flip 还带 scale）残差（D2 软化可接受）。
             _TEXT_RUN_COMPOSITOR.paint_ordered(
                 painter,
                 LayerContext(t_ms=t_ms, logical_w=0, logical_h=0),
@@ -6554,17 +6555,47 @@ def _spin_flip_char_transform(
     return None if transform.isIdentity() else transform
 
 
+def _char_drip_char_transform(
+    glyph: _GlyphLayout,
+    baseline_y: int,
+    transition: _LineCharTransition,
+    progress: float,
+) -> QTransform | None:
+    """N3 ``CharDrip``: shear around the glyph's right-bottom/right-top corner.
+
+    N3 uses ``(drawWidth, 0)`` for intro and ``(drawWidth, -height)`` for
+    outro in glyph-local coordinates.  Unlike ``CharFadeInFadeOut`` it uses
+    the inherited opacity value only as transform progress; visible geometry
+    itself remains opaque once progress is non-zero.
+    """
+    direction = 1.0 if transition.phase == "entry" else -1.0
+    skew_y = direction * _spin_flip_skew(progress)
+    pivot_x = glyph.left + glyph.width
+    pivot_y = (
+        baseline_y
+        if transition.phase == "entry"
+        else baseline_y - glyph.metrics.height()
+    )
+    transform = _character_transform(
+        center_x=pivot_x,
+        center_y=pivot_y,
+        skew_y=skew_y,
+    )
+    return None if transform.isIdentity() else transform
+
+
 def _char_transition_layer_stack(
     layout: _LineLayout,
     t_ms: int,
     transition: _LineCharTransition,
     char_count: int,
 ) -> list:
-    """A1/A2（§9.7）：逐字入退场（char_fade / spin_flip）走 LayerCompositor。
+    """A1/A2（§9.7）：逐字入退场走 LayerCompositor。
 
     每个 glyph 复用静态路径的 ``_GlyphRunLayer`` / ``_GlyphRunAfterGlowLayer``
     烘焙缓存（直立烘焙一次、跨帧复用），逐帧只补该字的残差：
     - **char_fade**：仅淡入/淡出 opacity（无损）；
+    - **char_drip**：按 N3 从字的右下/右上枢轴纵向剪切，几何保持不透明；
     - **spin_flip**：opacity + scale(opacity)+skew 残差变换（绕字心枢轴，
       bitmap-transform 软化可接受，§9.7 D2）。
     glow 也因此并入烘焙缓存、不再每帧重算高斯。与旧逐帧
@@ -6577,17 +6608,22 @@ def _char_transition_layer_stack(
     rtl = layout.rtl
     fill_rect = _n3_main_fill_rect(layout.text_layout, y)
     is_spin = transition.effect == "spin_flip"
+    is_drip = transition.effect == "char_drip"
     before_glow_layers: list = []
     after_glow_layers: list = []
     body_layers: list = []
     z = 0
     for glyph in layout.text_layout.glyphs:
-        opacity = _char_fade_opacity(transition, glyph.index, char_count, t_ms=t_ms)
-        if opacity <= 0.0:
+        progress = _char_fade_opacity(transition, glyph.index, char_count, t_ms=t_ms)
+        if progress <= 0.0:
             continue
-        transform = (
-            _spin_flip_char_transform(glyph, y, transition, opacity) if is_spin else None
-        )
+        opacity = 1.0 if is_drip else progress
+        if is_spin:
+            transform = _spin_flip_char_transform(glyph, y, transition, progress)
+        elif is_drip:
+            transform = _char_drip_char_transform(glyph, y, transition, progress)
+        else:
+            transform = None
         run = [glyph]
         if _glyph_run_needs_before_glow_split(run):
             before_glow_layers.append(
@@ -8322,7 +8358,7 @@ def _line_char_transition_context(
     start = display_start_ms if display_start_ms is not None else _line_start_ms(line)
     end = display_end_ms if display_end_ms is not None else _line_end_ms(line)
 
-    if style.exit_anim in {"char_fade", "spin_flip"} and style.exit_fade_ms > 0:
+    if style.exit_anim in {"char_fade", "char_drip", "spin_flip"} and style.exit_fade_ms > 0:
         exit_start = max(_line_end_ms(line), end - _CHAR_FADE_INTRO_DELAY_MS - _CHAR_FADE_OUT_TIME_MS)
         if t_ms >= exit_start:
             return _LineCharTransition(
@@ -8333,7 +8369,7 @@ def _line_char_transition_context(
                 end_ms=end,
             )
 
-    if style.entry_anim in {"char_fade", "spin_flip"} and style.entry_lead_ms > 0:
+    if style.entry_anim in {"char_fade", "char_drip", "spin_flip"} and style.entry_lead_ms > 0:
         entry_end = start + _CHAR_FADE_INTRO_DELAY_MS + _CHAR_FADE_IN_TIME_MS
         if t_ms <= entry_end:
             return _LineCharTransition(
@@ -8713,8 +8749,8 @@ def _transition_char_state(
         scale = _utopia_wipe_scale(t_ms, char_start_ms, char_end_ms)
         return 1.0, 0.0, 0.0, 0.0, scale, scale, 0.0
 
-    if transition.effect in {"char_fade", "spin_flip"}:
-        opacity = _char_fade_opacity(
+    if transition.effect in {"char_fade", "char_drip", "spin_flip"}:
+        progress = _char_fade_opacity(
             transition,
             index,
             count,
@@ -8722,9 +8758,13 @@ def _transition_char_state(
         )
         if transition.effect == "spin_flip":
             direction = 1.0 if transition.phase == "exit" else -1.0
-            skew_y = direction * _spin_flip_skew(opacity)
-            return opacity, 0.0, 0.0, 0.0, opacity, opacity, skew_y
-        return opacity, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
+            skew_y = direction * _spin_flip_skew(progress)
+            return progress, 0.0, 0.0, 0.0, progress, progress, skew_y
+        if transition.effect == "char_drip":
+            direction = 1.0 if transition.phase == "entry" else -1.0
+            skew_y = direction * _spin_flip_skew(progress)
+            return float(progress > 0.0), 0.0, 0.0, 0.0, 1.0, 1.0, skew_y
+        return progress, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0
 
     local = _staggered_char_progress(transition.progress, index, count)
     eased = 1.0 - (1.0 - local) * (1.0 - local)
@@ -11386,14 +11426,25 @@ def _paint_rubies(
                     )
                 else:
                     painter.setOpacity(painter.opacity() * opacity)
-                    _apply_character_transform(
-                        painter,
-                        center_x=x + reading_w / 2,
-                        center_y=(
+                    is_char_drip = transition.effect == "char_drip"
+                    if is_char_drip:
+                        center_x = x + reading_w
+                        center_y = (
+                            ruby_baseline_y
+                            if transition.phase == "entry"
+                            else ruby_baseline_y - target_ruby_metrics.height()
+                        )
+                    else:
+                        center_x = x + reading_w / 2
+                        center_y = (
                             ruby_baseline_y
                             - target_ruby_metrics.ascent()
                             + target_ruby_metrics.height() / 2
-                        ),
+                        )
+                    _apply_character_transform(
+                        painter,
+                        center_x=center_x,
+                        center_y=center_y,
                         dx=dx,
                         dy=dy,
                         rotation=rotation,

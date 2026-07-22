@@ -3691,6 +3691,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         };
         const bool hasCharacterTransition = line->entryAnimation == "char_fade"
             || line->exitAnimation == "char_fade"
+            || line->entryAnimation == "char_drip"
+            || line->exitAnimation == "char_drip"
             || line->entryAnimation == "spin_flip"
             || line->exitAnimation == "spin_flip"
             || line->entryAnimation == "utopia"
@@ -3702,12 +3704,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         if (!line->displayWindows.empty()) {
             const DisplayWindow &window = line->displayWindows.front();
             if ((line->exitAnimation == "char_fade"
+                    || line->exitAnimation == "char_drip"
                     || line->exitAnimation == "spin_flip")
                 && line->exitDurationMs > 0
                 && tMs >= std::max(line->endMs, window.endMs - 600)) {
                 activeCharacterTransition = line->exitAnimation;
                 activeCharacterDirection = 1;
             } else if ((line->entryAnimation == "char_fade"
+                    || line->entryAnimation == "char_drip"
                     || line->entryAnimation == "spin_flip")
                 && line->entryDurationMs > 0
                 && tMs <= window.startMs + 600) {
@@ -3731,6 +3735,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const int delayStep = count <= 1 ? 0 : 350 / (count - 1);
             const DisplayWindow &window = line->displayWindows.front();
             if ((line->exitAnimation == "char_fade"
+                    || line->exitAnimation == "char_drip"
                     || line->exitAnimation == "spin_flip")
                 && line->exitDurationMs > 0) {
                 const int exitStart = std::max(line->endMs, window.endMs - 600);
@@ -3745,6 +3750,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
             }
             if ((line->entryAnimation == "char_fade"
+                    || line->entryAnimation == "char_drip"
                     || line->entryAnimation == "spin_flip")
                 && line->entryDurationMs > 0
                 && tMs <= window.startMs + 600) {
@@ -3759,6 +3765,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         };
         const int spinDirection = activeCharacterTransition == "spin_flip"
             ? activeCharacterDirection
+            : 0;
+        const int dripDirection = activeCharacterTransition == "char_drip"
+            ? -activeCharacterDirection
             : 0;
         auto spinMatrix = [&](float opacity, float centerX, float centerY) {
             const float clamped = std::clamp(opacity, 0.0f, 1.0f);
@@ -3781,6 +3790,24 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 clamped,
                 centerX * (1.0f - clamped),
                 centerY * (1.0f - clamped) - clamped * skew * centerX
+            );
+        };
+        auto dripMatrix = [&](float progress, float pivotX) {
+            const float clamped = std::clamp(progress, 0.0f, 1.0f);
+            if (dripDirection == 0 || clamped >= 1.0f) {
+                return D2D1::Matrix3x2F::Identity();
+            }
+            constexpr float pi = 3.14159265358979323846f;
+            const float angle = std::min(
+                (pi * 0.5f) * (1.0f - clamped),
+                pi * 89.0f / 180.0f
+            );
+            const float skew = static_cast<float>(dripDirection) * std::tan(angle);
+            // N3 pivots CharDrip at (drawWidth, 0) for intro and
+            // (drawWidth, -height) for outro.  A vertical shear depends only
+            // on pivot X, so both reduce to the glyph's right edge here.
+            return D2D1::Matrix3x2F(
+                1.0f, skew, 0.0f, 1.0f, 0.0f, -skew * pivotX
             );
         };
         struct CharacterAnimationState {
@@ -3837,9 +3864,19 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
             const Impl::CachedChar &ch = line->chars[charIndex];
             if (!useUtopiaTransition) {
-                state.opacity = charFadeOpacityAt(charIndex);
-                state.matrix = spinMatrix(state.opacity, ch.pivotX, ch.pivotY);
-                state.transformed = spinDirection != 0 && state.opacity < 1.0f;
+                const float progress = charFadeOpacityAt(charIndex);
+                state.opacity = dripDirection != 0
+                    ? (progress > 0.0f ? 1.0f : 0.0f)
+                    : progress;
+                if (dripDirection != 0) {
+                    state.matrix = dripMatrix(
+                        progress, ch.layoutRight
+                    );
+                    state.transformed = progress > 0.0f && progress < 1.0f;
+                } else {
+                    state.matrix = spinMatrix(progress, ch.pivotX, ch.pivotY);
+                    state.transformed = spinDirection != 0 && progress < 1.0f;
+                }
                 return state;
             }
             if (line->displayWindows.empty()) {
@@ -4145,14 +4182,30 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             frameRubyStrokeGeometries[rubyIndex].resize(ruby.strokeGeometries.size());
             frameRubyStroke2Geometries[rubyIndex].resize(ruby.stroke2Geometries.size());
             for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {
-                const CharacterAnimationState rubyAnimation = useUtopiaTransition
-                    ? rubyUnitAnimationAt(ruby, index)
-                    : CharacterAnimationState{
-                        rubyFadeOpacityAt(ruby),
-                        spinMatrix(rubyFadeOpacityAt(ruby), ruby.pivotX, ruby.pivotY),
-                        spinDirection != 0 && rubyFadeOpacityAt(ruby) < 1.0f,
-                        false,
-                    };
+                CharacterAnimationState rubyAnimation;
+                if (useUtopiaTransition) {
+                    rubyAnimation = rubyUnitAnimationAt(ruby, index);
+                } else {
+                    const std::size_t transitionIndex = static_cast<std::size_t>(
+                        std::max(ruby.transitionCharIndex, 0)
+                    );
+                    const float progress = charFadeOpacityAt(transitionIndex);
+                    rubyAnimation.opacity = dripDirection != 0
+                        ? (progress > 0.0f ? 1.0f : 0.0f)
+                        : progress;
+                    if (dripDirection != 0) {
+                        const float pivotX = index < ruby.chars.size()
+                            ? ruby.chars[index].layoutRight
+                            : ruby.bounds.right;
+                        rubyAnimation.matrix = dripMatrix(progress, pivotX);
+                        rubyAnimation.transformed = progress > 0.0f && progress < 1.0f;
+                    } else {
+                        rubyAnimation.matrix = spinMatrix(
+                            progress, ruby.pivotX, ruby.pivotY
+                        );
+                        rubyAnimation.transformed = spinDirection != 0 && progress < 1.0f;
+                    }
+                }
                 if (rubyAnimation.opacity <= 0.0f) {
                     continue;
                 }

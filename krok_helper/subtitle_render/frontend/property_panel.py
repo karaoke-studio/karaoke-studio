@@ -5860,6 +5860,7 @@ class PropertyPanel(QWidget):
             ("滑入", "slide_in"),
             ("上移", "rise"),
             ("逐文字渐显", "char_fade"),
+            ("文字垂下", "char_drip"),
             ("旋转翻转", "spin_flip"),
             ("ユートピア", "utopia"),
         ]:
@@ -5890,6 +5891,7 @@ class PropertyPanel(QWidget):
             ("滑出", "slide_out"),
             ("上移", "rise"),
             ("逐文字渐隐", "char_fade"),
+            ("文字垂出", "char_drip"),
             ("旋转翻转", "spin_flip"),
             ("ユートピア", "utopia"),
         ]:
@@ -7783,13 +7785,13 @@ def _scaled_panel_signed_px(value: int, scale: float) -> int:
 
 
 def _normalize_entry_animation(value: object) -> EntryAnimation:
-    if value in {"none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"}:
+    if value in {"none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia"}:
         return value  # type: ignore[return-value]
     return "none"
 
 
 def _normalize_exit_animation(value: object) -> ExitAnimation:
-    if value in {"none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"}:
+    if value in {"none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia"}:
         return value  # type: ignore[return-value]
     return "none"
 

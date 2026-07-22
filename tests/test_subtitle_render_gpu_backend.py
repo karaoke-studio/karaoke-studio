@@ -4825,6 +4825,66 @@ def test_gpu_g4_spin_flip_transforms_all_character_layers_like_painter(monkeypat
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g4_char_drip_matches_painter_right_edge_shear(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("A", 1_000),
+                    TimingChar("B", 1_300),
+                    TimingChar("C", 1_600),
+                ],
+                end_ms=1_900,
+                display_start_override_ms=0,
+                display_end_override_ms=3_000,
+            )
+        ]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=72,
+        dual_line_layout=False,
+        line_horizontal_layout="center",
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        entry_anim="char_drip",
+        entry_lead_ms=1_000,
+        exit_anim="char_drip",
+        exit_fade_ms=1_000,
+    )
+    timestamps = (125, 600, 2_875)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+        _, fade_only = _render_g1_frames(
+            renderer,
+            replace(style, entry_anim="char_fade", exit_anim="char_fade"),
+            timestamps,
+            force_warp=True,
+            track=track,
+        )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+
+    assert gpu[0] != fade_only[0]
+    assert gpu[2] != fade_only[2]
+    for index in (0, 1, 2):
+        assert all(
+            abs(actual - expected) <= 18
+            for actual, expected in zip(
+                _payload_alpha_bounds(gpu[index]),
+                _payload_alpha_bounds(painter[index]),
+            )
+        ), (index, _payload_alpha_bounds(gpu[index]), _payload_alpha_bounds(painter[index]))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize("effect", ["char_fade", "spin_flip"])
 @pytest.mark.parametrize("utopia_phase", ["entry", "exit"])
 def test_gpu_g4_utopia_does_not_override_opposite_character_transition(

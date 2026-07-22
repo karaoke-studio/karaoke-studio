@@ -7122,6 +7122,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         const auto verticalCharacterAnimation = [&](const QString &animation) {
             return config.vertical && (
                 animation == QStringLiteral("char_fade")
+                || animation == QStringLiteral("char_drip")
                 || animation == QStringLiteral("spin_flip")
                 || animation == QStringLiteral("utopia")
             );

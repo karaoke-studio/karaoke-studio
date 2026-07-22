@@ -26,8 +26,12 @@ import re
 from typing import Literal, Optional
 
 LineBreakKind = Literal["none", "page", "paragraph"]
-EntryAnimation = Literal["none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"]
-ExitAnimation = Literal["none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"]
+EntryAnimation = Literal[
+    "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia"
+]
+ExitAnimation = Literal[
+    "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia"
+]
 RubyMainProgressMode = Literal["checkpoint_segments", "reading_units"]
 LayoutSemantics = Literal["legacy", "n3_1074"]
 
@@ -1079,13 +1083,13 @@ class Style:
     字幕不拖进间奏。"""
 
     entry_anim: EntryAnimation = "none"
-    """入场动画：none / fade / slide_in / rise / char_fade / spin_flip / utopia。"""
+    """入场动画：none / fade / slide_in / rise / char_fade / char_drip / spin_flip / utopia。"""
 
     entry_lead_ms: int = 300
     """入场动画时长；不改变歌词填色时间，只影响显示窗口起点后的过渡。"""
 
     exit_anim: ExitAnimation = "none"
-    """退场动画：none / fade / slide_out / rise / char_fade / spin_flip / utopia。"""
+    """退场动画：none / fade / slide_out / rise / char_fade / char_drip / spin_flip / utopia。"""
 
     exit_fade_ms: int = 300
     """退场动画时长；在显示窗口结束前开始。"""
@@ -1255,8 +1259,12 @@ def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOv
         return None
     entry = value.get("entry_anim")
     exit_ = value.get("exit_anim")
-    valid_entry = {"none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"}
-    valid_exit = {"none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"}
+    valid_entry = {
+        "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia"
+    }
+    valid_exit = {
+        "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia"
+    }
     if entry not in valid_entry or exit_ not in valid_exit:
         return None
 
@@ -1522,13 +1530,17 @@ def style_from_dict(payload: object) -> Style:
         elif key == "entry_anim":
             changes[key] = (
                 value
-                if value in {"none", "fade", "slide_in", "rise", "char_fade", "spin_flip", "utopia"}
+                if value in {
+                    "none", "fade", "slide_in", "rise", "char_fade", "char_drip", "spin_flip", "utopia"
+                }
                 else defaults.entry_anim
             )
         elif key == "exit_anim":
             changes[key] = (
                 value
-                if value in {"none", "fade", "slide_out", "rise", "char_fade", "spin_flip", "utopia"}
+                if value in {
+                    "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia"
+                }
                 else defaults.exit_anim
             )
         elif key in {

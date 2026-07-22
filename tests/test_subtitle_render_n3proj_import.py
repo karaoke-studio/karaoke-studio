@@ -114,12 +114,17 @@ LRC_TEXT = (
 
 def _line_info(chars: list[dict], layout_index: int = 0,
                action_id: str = "SHINTA.LineFadeInFadeOut", *,
+               action_settings: dict | None = None,
                show_begin: int | None = None, show_end: int | None = None) -> dict:
     result = {
         "Kind": 1,
         "LyricsCharInfos": chars,
         "SubtitleActionId": action_id,
-        "SubtitleActionSettings": {"FadeInTime": 250, "FadeOutTime": 300},
+        "SubtitleActionSettings": (
+            {"FadeInTime": 250, "FadeOutTime": 300}
+            if action_settings is None
+            else action_settings
+        ),
         "LayoutIndex": layout_index,
         "Raw": "",
     }
@@ -747,6 +752,65 @@ def test_import_line_fade_animation(imported):
     assert style.entry_lead_ms == 250
     assert style.exit_anim == "fade"
     assert style.exit_fade_ms == 300
+
+
+@pytest.mark.parametrize(
+    ("action_id", "settings", "expected"),
+    [
+        ("SHINTA.NoAction", {}, ("none", 0, "none", 0)),
+        ("SHINTA.LineFadeIn", {"FadeInTime": 180}, ("fade", 180, "none", 0)),
+        ("SHINTA.LineFadeOut", {"FadeOutTime": 420}, ("none", 0, "fade", 420)),
+        (
+            "SHINTA.LineFadeInFadeOut",
+            {"FadeInTime": 180, "FadeOutTime": 420},
+            ("fade", 180, "fade", 420),
+        ),
+        (
+            "SHINTA.CharFadeInFadeOut",
+            {"FadeInTime": 250, "FadeOutTime": 300, "IntroDelay": 350},
+            ("char_fade", 600, "char_fade", 650),
+        ),
+        (
+            "SHINTA.CharDrip",
+            {"FadeInTime": 250, "FadeOutTime": 300, "IntroDelay": 350},
+            ("char_drip", 600, "char_drip", 650),
+        ),
+        (
+            "SHINTA.SpinFlip",
+            {"FadeInTime": 250, "FadeOutTime": 300, "IntroDelay": 350},
+            ("spin_flip", 600, "spin_flip", 650),
+        ),
+        ("SHINTA.Utopia", {"TailDelay": 250}, ("utopia", 700, "utopia", 750)),
+    ],
+)
+def test_import_maps_supported_n3_actions(tmp_path, action_id, settings, expected):
+    payload = _project_payload(tmp_path)
+    for line in payload["SourceLyricsInfos"][0]["LineInfos"]:
+        if line.get("Kind") == 1:
+            line["SubtitleActionId"] = action_id
+            line["SubtitleActionSettings"] = settings
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    style = style_from_dict(result.project_data["style"])
+
+    assert (
+        style.entry_anim,
+        style.entry_lead_ms,
+        style.exit_anim,
+        style.exit_fade_ms,
+    ) == expected
+    assert not any("字幕动作" in warning for warning in result.warnings)
+
+
+def test_import_keeps_slide_up_down_unsupported(tmp_path):
+    payload = _project_payload(tmp_path)
+    for line in payload["SourceLyricsInfos"][0]["LineInfos"]:
+        if line.get("Kind") == 1:
+            line["SubtitleActionId"] = "SHINTA.SlideUpDown"
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+
+    assert any("SHINTA.SlideUpDown" in warning for warning in result.warnings)
 
 
 def test_import_mixed_line_actions_as_per_line_overrides(tmp_path):
