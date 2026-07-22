@@ -7240,7 +7240,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             }
             const bool globalPosition = sourceRuby.posStartMs == 0 && sourceRuby.posEndMs == 0;
             if (!globalPosition && (
-                sourceRuby.posEndMs < sourceLineStart || sourceRuby.posStartMs > sourceLineEnd
+                sourceRuby.posEndMs <= sourceLineStart || sourceRuby.posStartMs >= sourceLineEnd
             )) {
                 continue;
             }

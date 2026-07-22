@@ -2772,6 +2772,48 @@ def test_gpu_g3_ruby_has_independent_geometry_and_wipe(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_next_line_ruby_is_not_cached_at_previous_line_end(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("笑", 1_000), TimingChar(" ", 1_900)],
+                end_ms=2_000,
+            ),
+            TimingLine(chars=[TimingChar("笑", 2_000)], end_ms=2_500),
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="笑",
+                reading="わら",
+                pos_start_ms=1_000,
+                pos_end_ms=1_500,
+            ),
+            RubyAnnotation(
+                kanji="笑",
+                reading="わら",
+                pos_start_ms=2_000,
+                pos_end_ms=2_100,
+            ),
+        ],
+    )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured = renderer.configure_gpu(
+            track,
+            _g1_style(dual_line_layout=False),
+            width=640,
+            height=360,
+            fps=60,
+            force_warp=True,
+        )
+
+    # Each source ruby belongs to exactly one line.  The second ruby starts at
+    # the first line's exclusive end and must not be cached against both lines.
+    assert configured["cached_rubies"] == 2
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize(
     "direction_changes",
     [{}, {"right_to_left": True}, {"vertical": True}],
