@@ -7066,6 +7066,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
     RenderScene scene;
     scene.width = config.physicalWidth();
     scene.height = config.physicalHeight();
+    scene.layoutReferenceScale = static_cast<float>(scale);
     scene.viewportScale = static_cast<float>(config.viewportScalePct) / 100.0f;
     scene.viewportRotation = static_cast<float>(config.viewportRotationDeg);
     scene.viewportOffsetX = static_cast<float>(config.viewportOffsetX * scale);

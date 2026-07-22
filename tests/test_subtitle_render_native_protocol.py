@@ -924,6 +924,101 @@ def test_native_render_range_respects_preview_dpr_when_exe_exists(monkeypatch):
         assert renderer.read_event()["event"] == "range_done"
 
 
+def test_native_gpu_preview_layout_is_scale_invariant_when_exe_exists(
+    qapp,
+    monkeypatch,
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    body_text = "こういって繋いでいられたなら"
+    body_track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar(char, index * 100) for index, char in enumerate(body_text)],
+                end_ms=3_000,
+            )
+        ]
+    )
+    ruby_track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("存", 0), TimingChar("在", 1_000)],
+                end_ms=2_000,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="存在",
+                reading="そんざい",
+                reading_part_ms=[500, 1_000, 1_500],
+                pos_start_ms=0,
+                pos_end_ms=2_000,
+            )
+        ],
+    )
+    style = Style(
+        font_family="Yu Gothic",
+        font_size_px=100,
+        letter_spacing_px=7,
+        ruby_font_size_px=80,
+        ruby_stroke_width_px=8,
+        ruby_gap_px=4,
+        line_lead_in_ms=0,
+        stroke_width_px=15,
+        stroke2_enabled=False,
+        decoration_kind="none",
+    )
+
+    def alpha_bounds(renderer, track: TimingTrack, dpr: float, generation: int):
+        renderer.configure_gpu(
+            track,
+            style,
+            width=1_920,
+            height=1_080,
+            fps=60,
+            dpr=dpr,
+            force_warp=True,
+            realization_enabled=False,
+        )
+        event = renderer.render_gpu_frame(
+            1_200,
+            force_warp=True,
+            generation=generation,
+            shm_key=f"krok-layout-dpr-{os.getpid()}-{uuid.uuid4().hex}",
+            include_checksum=False,
+            readback_bands=False,
+        )
+        with SharedFrameRingReader.from_event(event) as reader:
+            slot = reader.read_frame(event)
+        rows = np.frombuffer(slot.payload, dtype=np.uint8).reshape(
+            slot.height, slot.stride
+        )
+        alpha = rows[:, 3 : slot.width * 4 : 4]
+        y, x = np.where(alpha > 0)
+        assert x.size > 0 and y.size > 0
+        return float(x.min()), float(x.max() + 1)
+
+    with NativeRendererProcess(
+        renderer_path, response_timeout_s=5.0, close_timeout_s=1.0
+    ) as renderer:
+        generation = 0
+        for track in (body_track, ruby_track):
+            generation += 1
+            export_left, export_right = alpha_bounds(renderer, track, 1.0, generation)
+            for dpr in (0.25, 0.5):
+                generation += 1
+                preview_left, preview_right = alpha_bounds(
+                    renderer, track, dpr, generation
+                )
+                # Antialias coverage may add or remove one target pixel, but
+                # layout must no longer accumulate one rounding error per glyph.
+                assert preview_left == pytest.approx(export_left * dpr, abs=1.0)
+                assert preview_right == pytest.approx(export_right * dpr, abs=1.0)
+
+
 def test_native_gpu_title_uses_title_latin_size_and_reconfigures_when_exe_exists(
     monkeypatch,
 ):

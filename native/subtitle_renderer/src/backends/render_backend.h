@@ -337,6 +337,10 @@ struct TextStyle {
 struct RenderScene {
     int width = 1920;
     int height = 1080;
+    // Raster scale used by preview targets.  Layout keeps the output-resolution
+    // integer semantics and scales the finished metrics by this factor; export
+    // remains on the existing 1.0 path.
+    float layoutReferenceScale = 1.0f;
     int exportCropTop = 0;
     int exportCropHeight = 0;
     std::vector<std::pair<int, int>> exportBands;

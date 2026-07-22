@@ -1460,6 +1460,54 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         impl_->frameSurfaceHeight = scene.height;
     }
     impl_->scene = scene;
+    const float layoutScale = std::max(scene.layoutReferenceScale, 0.01f);
+    const bool scaledPreviewLayout = std::abs(layoutScale - 1.0f) > 0.000001f;
+    const auto referenceInt = [&](float scaledValue, int minimum) {
+        const int value = scaledPreviewLayout
+            ? static_cast<int>(std::lround(scaledValue / layoutScale))
+            : static_cast<int>(scaledValue);
+        return std::max(value, minimum);
+    };
+    const auto scaleReferenceGeometry = [&](Microsoft::WRL::ComPtr<ID2D1PathGeometry> &path,
+                                            const char *operation) {
+        if (!scaledPreviewLayout || !path) {
+            return;
+        }
+        const D2D1_MATRIX_3X2_F matrix = D2D1::Matrix3x2F::Scale(
+            layoutScale, layoutScale
+        );
+        Microsoft::WRL::ComPtr<ID2D1TransformedGeometry> transformed;
+        checkHr(
+            device_.d2dFactory()->CreateTransformedGeometry(
+                path.Get(), &matrix, transformed.ReleaseAndGetAddressOf()
+            ),
+            operation,
+            device_
+        );
+        Microsoft::WRL::ComPtr<ID2D1PathGeometry> scaledPath;
+        checkHr(
+            device_.d2dFactory()->CreatePathGeometry(scaledPath.ReleaseAndGetAddressOf()),
+            "ID2D1Factory::CreatePathGeometry(scale preview outline)",
+            device_
+        );
+        Microsoft::WRL::ComPtr<ID2D1GeometrySink> sink;
+        checkHr(
+            scaledPath->Open(sink.ReleaseAndGetAddressOf()),
+            "ID2D1PathGeometry::Open(scale preview outline)",
+            device_
+        );
+        sink->SetFillMode(D2D1_FILL_MODE_WINDING);
+        sink->SetSegmentFlags(D2D1_PATH_SEGMENT_FORCE_ROUND_LINE_JOIN);
+        const HRESULT simplifyResult = transformed->Simplify(
+            D2D1_GEOMETRY_SIMPLIFICATION_OPTION_CUBICS_AND_LINES,
+            nullptr,
+            sink.Get()
+        );
+        const HRESULT closeResult = sink->Close();
+        checkHr(simplifyResult, operation, device_);
+        checkHr(closeResult, "ID2D1GeometrySink::Close(scale preview outline)", device_);
+        path = scaledPath;
+    };
     impl_->realizationActive = impl_->realizationEnabled
         && scene.realizationEnabled
         && impl_->realizationContext;
@@ -1591,16 +1639,16 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         if (style.layoutSemantics == "n3_1074") {
             DWRITE_FONT_METRICS n3Metrics{};
             mainFace->GetMetrics(&n3Metrics);
-            const int fontSize = std::max(static_cast<int>(style.fontSize), 1);
-            const int edgeSize = std::max(static_cast<int>(style.strokeWidth), 0);
+            const int fontSize = referenceInt(style.fontSize, 1);
+            const int edgeSize = referenceInt(style.strokeWidth, 0);
             const int metricTotal = std::max(
                 static_cast<int>(n3Metrics.ascent) + static_cast<int>(n3Metrics.descent), 1
             );
-            cached.n3DrawHeight = static_cast<float>(fontSize + edgeSize);
+            cached.n3DrawHeight = static_cast<float>(fontSize + edgeSize) * layoutScale;
             cached.n3Descent = static_cast<float>(
                 fontSize * static_cast<int>(n3Metrics.descent) / metricTotal
                 + edgeSize / 2
-            );
+            ) * layoutScale;
         }
         if (style.vertical && !sourceLine.rubies.empty()) {
             DWRITE_FONT_METRICS rubyMetrics{};
@@ -1626,10 +1674,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         cached.chars.reserve(sourceLine.chars.size());
         bool lineHasBounds = false;
         float cursor = 0.0f;
-        int firstSlotDescent = 0;
-        int firstSlotEdge = 0;
-        int firstSlotEdge2 = 0;
-        int maxDrawHeight = 1;
+        float firstSlotDescent = 0.0f;
+        float firstSlotEdge = 0.0f;
+        float firstSlotEdge2 = 0.0f;
+        float maxDrawHeight = layoutScale;
         bool hasFirstSlot = false;
 
         for (std::size_t charIndex = 0; charIndex < sourceLine.chars.size(); ++charIndex) {
@@ -1659,14 +1707,15 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             const float fontSize = latin
                 ? charStyle.latinFontSize.value_or(charStyle.fontSize)
                 : charStyle.fontSize;
-            const int unit = std::max(static_cast<int>(fontSize), 1);
-            const int edgeSize = std::max(static_cast<int>(charStyle.strokeWidth), 0);
+            const int unit = referenceInt(fontSize, 1);
+            const int edgeSize = referenceInt(charStyle.strokeWidth, 0);
+            const int edge2Size = referenceInt(charStyle.stroke2Width, 0);
             cached.maxVisualPad = std::max(
                 cached.maxVisualPad,
                 std::ceil((
-                    std::max(charStyle.strokeWidth, 0.0f)
-                    + std::max(charStyle.stroke2Width, 0.0f)
-                ) * 0.5f)
+                    std::max(charStyle.strokeWidth / layoutScale, 0.0f)
+                    + std::max(charStyle.stroke2Width / layoutScale, 0.0f)
+                ) * 0.5f) * layoutScale
             );
 
             DWRITE_FONT_METRICS fontMetrics{};
@@ -1677,15 +1726,16 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         + static_cast<int>(fontMetrics.descent),
                     1
                 );
-                firstSlotDescent = unit * static_cast<int>(fontMetrics.descent)
-                    / metricTotal;
-                firstSlotEdge = edgeSize;
-                firstSlotEdge2 = std::max(
-                    static_cast<int>(charStyle.stroke2Width), 0
-                );
+                firstSlotDescent = static_cast<float>(
+                    unit * static_cast<int>(fontMetrics.descent) / metricTotal
+                ) * layoutScale;
+                firstSlotEdge = static_cast<float>(edgeSize) * layoutScale;
+                firstSlotEdge2 = static_cast<float>(edge2Size) * layoutScale;
                 hasFirstSlot = true;
             }
-            maxDrawHeight = std::max(maxDrawHeight, unit + edgeSize);
+            maxDrawHeight = std::max(
+                maxDrawHeight, static_cast<float>(unit + edgeSize) * layoutScale
+            );
             // The product's lane boxes remain Painter-compatible. N3's exact
             // glyph bearings/outline are used inside those boxes, while the
             // face's em scale keeps mixed-font baselines close to QFontMetrics.
@@ -1693,9 +1743,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 fontMetrics.designUnitsPerEm,
                 1
             ));
-            const float charAscent = static_cast<float>(unit)
+            const float charAscent = static_cast<float>(unit) * layoutScale
                 * static_cast<float>(fontMetrics.ascent) / verticalUnits;
-            const float charDescent = static_cast<float>(unit)
+            const float charDescent = static_cast<float>(unit) * layoutScale
                 * static_cast<float>(fontMetrics.descent) / verticalUnits;
             cached.ascent = std::max(cached.ascent, charAscent);
             cached.descent = std::max(cached.descent, charDescent);
@@ -1704,8 +1754,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 1
             ));
             const float charBoxAscent =
-                static_cast<float>(unit) * static_cast<float>(fontMetrics.ascent) / boxMetricTotal
-                + static_cast<float>(edgeSize) * 0.5f;
+                static_cast<float>(unit) * layoutScale
+                    * static_cast<float>(fontMetrics.ascent) / boxMetricTotal
+                + static_cast<float>(edgeSize) * layoutScale * 0.5f;
             if (!isWhitespaceText(sourceChar.text) && charStyle.affectsRubyAnchor) {
                 cached.boxAscent = std::max(cached.boxAscent, charBoxAscent);
                 cached.hasRubyAnchor = true;
@@ -1753,24 +1804,24 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 checkHr(closeResult, "ID2D1GeometrySink::Close(character)", device_);
             }
 
-            D2D1_RECT_F charBounds{};
+            D2D1_RECT_F referenceCharBounds{};
             bool charHasBounds = path != nullptr;
             if (path) {
-                checkHr(path->GetBounds(nullptr, &charBounds), "ID2D1Geometry::GetBounds(character)", device_);
-                charHasBounds = std::isfinite(charBounds.left)
-                    && std::isfinite(charBounds.top)
-                    && std::isfinite(charBounds.right)
-                    && std::isfinite(charBounds.bottom)
-                    && charBounds.right > charBounds.left;
+                checkHr(path->GetBounds(nullptr, &referenceCharBounds), "ID2D1Geometry::GetBounds(character)", device_);
+                charHasBounds = std::isfinite(referenceCharBounds.left)
+                    && std::isfinite(referenceCharBounds.top)
+                    && std::isfinite(referenceCharBounds.right)
+                    && std::isfinite(referenceCharBounds.bottom)
+                    && referenceCharBounds.right > referenceCharBounds.left;
             }
 
             float layoutWidth = 0.0f;
             float pathOffset = 0.0f;
             if (vectorGlyph) {
-                layoutWidth = static_cast<float>(unit)
+                layoutWidth = (static_cast<float>(unit)
                     * std::max(sourceChar.vectorGlyph->advanceWidth, 0.0f)
-                    / std::max(sourceChar.vectorGlyph->unitsPerEm, 1.0f);
-                layoutWidth = std::max(layoutWidth, 1.0f);
+                    / std::max(sourceChar.vectorGlyph->unitsPerEm, 1.0f));
+                layoutWidth = std::max(layoutWidth, 1.0f) * layoutScale;
             } else if (charHasBounds) {
                 std::vector<DWRITE_GLYPH_METRICS> metrics(glyphs.size());
                 // N3 deliberately asks the originally requested face for
@@ -1785,7 +1836,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     "IDWriteFontFace::GetDesignGlyphMetrics(character)",
                     device_
                 );
-                const int inkWidth = std::max(static_cast<int>(charBounds.right - charBounds.left), 0);
+                const int inkWidth = std::max(static_cast<int>(
+                    referenceCharBounds.right - referenceCharBounds.left
+                ), 0);
                 int leftBearing = metrics.front().leftSideBearing;
                 int rightBearing = metrics.front().rightSideBearing;
                 if (!charStyle.allowBiting) {
@@ -1794,19 +1847,33 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 }
                 const int advance = std::max(static_cast<int>(metrics.front().advanceWidth), 1);
                 const int bodyWidth = inkWidth * (leftBearing + advance + rightBearing) / advance;
-                layoutWidth = static_cast<float>(std::max(bodyWidth, 0) + edgeSize);
+                layoutWidth = static_cast<float>(
+                    std::max(bodyWidth, 0) + edgeSize
+                ) * layoutScale;
                 const int geometryLeft = inkWidth * leftBearing / advance;
-                pathOffset = -charBounds.left
+                pathOffset = (-referenceCharBounds.left
                     + static_cast<float>(geometryLeft)
-                    + static_cast<float>(edgeSize / 2);
+                    + static_cast<float>(edgeSize / 2)) * layoutScale;
             } else if (sourceChar.text == L" ") {
                 layoutWidth = static_cast<float>(
                     unit * std::clamp(charStyle.spaceWidthPercent, 10, 100) / 100 + edgeSize
-                );
+                ) * layoutScale;
             } else {
                 layoutWidth = static_cast<float>(
                     unit * std::clamp(charStyle.spaceWidthPercent, 10, 100) * 25 / 100 / 10
                     + edgeSize
+                ) * layoutScale;
+            }
+
+            scaleReferenceGeometry(
+                path, "ID2D1Factory::CreateTransformedGeometry(scale preview character)"
+            );
+            D2D1_RECT_F charBounds{};
+            if (path && charHasBounds) {
+                checkHr(
+                    path->GetBounds(nullptr, &charBounds),
+                    "ID2D1Geometry::GetBounds(scaled preview character)",
+                    device_
                 );
             }
 
@@ -1833,7 +1900,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 extendBounds(cached.bounds, lineHasBounds, bounds);
                 cached.geometries.push_back(positioned);
             }
-            const float wipePad = static_cast<float>(edgeSize / 2);
+            const float wipePad = static_cast<float>(edgeSize / 2) * layoutScale;
             cached.chars.push_back(Impl::CachedChar{
                 sourceChar.startMs,
                 sourceChar.endMs,
@@ -2075,17 +2142,17 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 cellHeight * static_cast<float>(cached.chars.size())
             );
         } else if (hasFirstSlot) {
-            const float drawBottom = static_cast<float>(
-                firstSlotDescent + firstSlotEdge / 2
-            );
-            const float inset = static_cast<float>(
-                (firstSlotEdge + firstSlotEdge2) / 2
-            );
+            const float drawBottom = firstSlotDescent + std::floor(
+                firstSlotEdge / layoutScale / 2.0f
+            ) * layoutScale;
+            const float inset = std::floor(
+                (firstSlotEdge + firstSlotEdge2) / layoutScale / 2.0f
+            ) * layoutScale;
             cached.fillBounds = D2D1::RectF(
                 0.0f,
-                drawBottom - static_cast<float>(maxDrawHeight) + inset,
+                drawBottom - maxDrawHeight + inset,
                 std::max(cursor, 1.0f),
-                std::max(drawBottom - inset, drawBottom - static_cast<float>(maxDrawHeight) + inset + 1.0f)
+                std::max(drawBottom - inset, drawBottom - maxDrawHeight + inset + layoutScale)
             );
         }
 
@@ -2153,12 +2220,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             rubyGlyphs.reserve(sourceRuby.units.size());
             float naturalWidth = 0.0f;
             float rubyBoxDescent = 0.0f;
-            const int rubyEdgeSize = std::max(
-                static_cast<int>(rubyStyle.rubyStrokeWidth), 0
-            );
-            const int rubyAnchorEdgeSize = std::max(
-                static_cast<int>(rubyStyle.rubyStrokeWidth), 0
-            );
+            const int rubyEdgeSize = referenceInt(rubyStyle.rubyStrokeWidth, 0);
+            const int rubyAnchorEdgeSize = rubyEdgeSize;
 
             for (const RubyUnit &sourceUnit : sourceRuby.units) {
                 const bool latin = isLatinText(sourceUnit.text);
@@ -2170,8 +2233,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     ? rubyStyle.rubyLatinFontSize.value_or(rubyStyle.rubyFontSize)
                     : rubyStyle.rubyFontSize;
                 const float drawingFontSize = measureFontSize;
-                const int measureUnit = std::max(static_cast<int>(measureFontSize), 1);
-                const int drawingUnit = std::max(static_cast<int>(drawingFontSize), 1);
+                const int measureUnit = referenceInt(measureFontSize, 1);
+                const int drawingUnit = referenceInt(drawingFontSize, 1);
                 DWRITE_FONT_METRICS fontMetrics{};
                 drawingFace->GetMetrics(&fontMetrics);
                 const float boxMetricTotal = static_cast<float>(std::max(
@@ -2180,9 +2243,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 ));
                 rubyBoxDescent = std::max(
                     rubyBoxDescent,
-                    static_cast<float>(drawingUnit)
+                    (static_cast<float>(drawingUnit)
                         * static_cast<float>(fontMetrics.descent) / boxMetricTotal
-                        + static_cast<float>(rubyAnchorEdgeSize) * 0.5f
+                        + static_cast<float>(rubyAnchorEdgeSize) * 0.5f)
+                        * layoutScale
                 );
 
                 std::vector<UINT16> glyphs = glyphIndices(drawingFace.Get(), sourceUnit.text);
@@ -2222,20 +2286,20 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     checkHr(closeResult, "ID2D1GeometrySink::Close(ruby character)", device_);
                 }
 
-                RubyGlyph glyph;
-                glyph.source = &sourceUnit;
-                glyph.geometry = path;
+                D2D1_RECT_F referenceRubyBounds{};
                 bool hasBounds = path != nullptr;
                 if (path) {
                     checkHr(
-                        path->GetBounds(nullptr, &glyph.bounds),
+                        path->GetBounds(nullptr, &referenceRubyBounds),
                         "ID2D1Geometry::GetBounds(ruby character)",
                         device_
                     );
-                    hasBounds = std::isfinite(glyph.bounds.left)
-                        && std::isfinite(glyph.bounds.right)
-                        && glyph.bounds.right > glyph.bounds.left;
+                    hasBounds = std::isfinite(referenceRubyBounds.left)
+                        && std::isfinite(referenceRubyBounds.right)
+                        && referenceRubyBounds.right > referenceRubyBounds.left;
                 }
+                RubyGlyph glyph;
+                glyph.source = &sourceUnit;
                 if (hasBounds) {
                     std::vector<UINT16> measureGlyphs = glyphIndices(
                         measureFace.Get(), sourceUnit.text
@@ -2258,7 +2322,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         device_
                     );
                     const int drawingInkWidth = std::max(
-                        static_cast<int>(glyph.bounds.right - glyph.bounds.left), 0
+                        static_cast<int>(
+                            referenceRubyBounds.right - referenceRubyBounds.left
+                        ), 0
                     );
                     const int inkWidth = drawingUnit > 0
                         ? drawingInkWidth * measureUnit / drawingUnit
@@ -2273,20 +2339,31 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     const int bodyWidth = inkWidth * (leftBearing + advance + rightBearing) / advance;
                     glyph.layoutWidth = static_cast<float>(
                         std::max(bodyWidth, 0) + rubyEdgeSize
-                    );
+                    ) * layoutScale;
                     const int geometryLeft = inkWidth * leftBearing / advance;
-                    glyph.pathOffset = -glyph.bounds.left
+                    glyph.pathOffset = (-referenceRubyBounds.left
                         + static_cast<float>(geometryLeft)
-                        + static_cast<float>(rubyEdgeSize / 2);
+                        + static_cast<float>(rubyEdgeSize / 2)) * layoutScale;
                 } else if (sourceUnit.text == L" ") {
                     glyph.layoutWidth = static_cast<float>(
                         measureUnit * std::clamp(rubyStyle.spaceWidthPercent, 10, 100) / 100
                             + rubyEdgeSize
-                    );
+                    ) * layoutScale;
                 } else {
                     glyph.layoutWidth = static_cast<float>(
                         measureUnit * std::clamp(rubyStyle.spaceWidthPercent, 10, 100) * 25 / 100 / 10
                             + rubyEdgeSize
+                    ) * layoutScale;
+                }
+                scaleReferenceGeometry(
+                    path, "ID2D1Factory::CreateTransformedGeometry(scale preview ruby)"
+                );
+                glyph.geometry = path;
+                if (path && hasBounds) {
+                    checkHr(
+                        path->GetBounds(nullptr, &glyph.bounds),
+                        "ID2D1Geometry::GetBounds(scaled preview ruby)",
+                        device_
                     );
                 }
                 naturalWidth += glyph.layoutWidth;
@@ -2304,7 +2381,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 cached.chars[static_cast<std::size_t>(sourceRuby.firstCharIndex)].layoutRight,
                 cached.chars[static_cast<std::size_t>(sourceRuby.lastCharIndex)].layoutRight
             );
-            const float targetWidth = std::max(targetRight - targetLeft, 1.0f);
+            const float targetWidth = std::max(
+                targetRight - targetLeft, layoutScale
+            );
             const bool centered = rubyStyle.rubyAlignment == "center"
                 || (rubyStyle.rubyAlignment != "equal_space" && (
                     isAsciiAlnumText(sourceRuby.baseText)
@@ -2325,7 +2404,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             float rubyCursor = targetLeft + (targetWidth - contentWidth) * 0.5f;
             if (centered || rubyGlyphs.size() == 1) {
                 rubyCursor = targetLeft
-                    + static_cast<float>(static_cast<int>(targetWidth - contentWidth) / 2);
+                    + static_cast<float>(static_cast<int>(
+                        (targetWidth - contentWidth) / layoutScale
+                    ) / 2) * layoutScale;
             }
             std::vector<float> rubyOrigins(rubyGlyphs.size(), rubyCursor);
             float layoutCursor = rubyCursor;
@@ -2336,7 +2417,9 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     : visualIndex;
                 rubyOrigins[logicalIndex] = (centered || rubyGlyphs.size() == 1)
                     ? layoutCursor
-                    : static_cast<float>(static_cast<int>(layoutCursor));
+                    : static_cast<float>(static_cast<int>(
+                        layoutCursor / layoutScale
+                    )) * layoutScale;
                 layoutCursor += rubyGlyphs[logicalIndex].layoutWidth;
                 if (visualIndex + 1 < rubyGlyphs.size()) {
                     layoutCursor += gap;
@@ -2361,31 +2444,28 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     + static_cast<int>(rubyFillMetrics.descent),
                 1
             );
-            const int rubyFillSize = std::max(static_cast<int>(
+            const int rubyFillSize = referenceInt(
                 rubyIsLatin
                     ? rubyStyle.rubyLatinFontSize.value_or(rubyStyle.rubyFontSize)
-                    : rubyStyle.rubyFontSize
-            ), 1);
+                    : rubyStyle.rubyFontSize,
+                1
+            );
             const int rubyFillDescent = rubyFillSize
                 * static_cast<int>(rubyFillMetrics.descent) / rubyMetricTotal;
             ruby.pivotX = rubyCursor + contentWidth * 0.5f;
             ruby.pivotY = ruby.baselineOffset
-                + static_cast<float>(rubyFillDescent)
-                - static_cast<float>(rubyFillSize) * 0.5f;
-            const int rubyDrawEdge = std::max(
-                static_cast<int>(rubyStyle.rubyStrokeWidth), 0
-            );
-            const int rubyDrawEdge2 = std::max(
-                static_cast<int>(rubyStyle.rubyStroke2Width), 0
-            );
+                + static_cast<float>(rubyFillDescent) * layoutScale
+                - static_cast<float>(rubyFillSize) * layoutScale * 0.5f;
+            const int rubyDrawEdge = referenceInt(rubyStyle.rubyStrokeWidth, 0);
+            const int rubyDrawEdge2 = referenceInt(rubyStyle.rubyStroke2Width, 0);
             const float rubyDrawBottom = ruby.baselineOffset
-                + static_cast<float>(rubyFillDescent + rubyDrawEdge / 2);
+                + static_cast<float>(rubyFillDescent + rubyDrawEdge / 2) * layoutScale;
             const float rubyInset = static_cast<float>(
                 (rubyDrawEdge + rubyDrawEdge2) / 2
-            );
+            ) * layoutScale;
             ruby.fillBounds = D2D1::RectF(
                 targetLeft,
-                rubyDrawBottom - static_cast<float>(rubyFillSize + rubyDrawEdge)
+                rubyDrawBottom - static_cast<float>(rubyFillSize + rubyDrawEdge) * layoutScale
                     + rubyInset,
                 targetRight,
                 std::max(
