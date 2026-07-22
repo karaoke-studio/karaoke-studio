@@ -11321,8 +11321,8 @@ def _active_rubies_for_line(
         if ruby.reading
         and (
             _ruby_has_global_position(ruby)
-            or ruby.pos_end_ms >= line_start
-            and ruby.pos_start_ms <= line_end
+            or ruby.pos_end_ms > line_start
+            and ruby.pos_start_ms < line_end
         )
     ]
 

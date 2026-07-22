@@ -3969,6 +3969,25 @@ def test_global_ruby_uses_text_match_on_current_line(qapp):
     assert segments[1].ruby is None
 
 
+def test_next_line_ruby_is_not_active_at_trailing_space_boundary(qapp):
+    text = (
+        "[01:59:36]距[01:59:53]離[01:59:71]とっ[02:00:19]て[02:00:54] "
+        "[02:00:66]笑[02:01:00]え[02:01:22]る[02:01:56]け[02:01:84]ど[02:03:11] \n"
+        "[02:03:59]笑[02:04:08]え[02:04:31]て[02:04:48]る[02:04:84]け[02:05:01]ど[02:06:29]\n"
+        "\n"
+        "@Ruby1=笑,わ[00:00:16]ら,[02:00:66],[02:01:00]\n"
+        "@Ruby2=笑,わ[00:00:30]ら,[02:03:59],[02:04:08]\n"
+    )
+    track = parse_nicokara_lrc(text)
+    previous_line = track.lines[0]
+
+    # The final space borrows the next line leader as its end.  A ruby that
+    # starts exactly on that boundary belongs only to the next line.
+    assert previous_line.chars[-1].text == " "
+    assert previous_line.end_ms == 123_590
+    assert _active_rubies_for_line(track.rubies, previous_line) == [track.rubies[0]]
+
+
 def test_open_start_ruby_rebases_to_single_target_without_scaling_mora(qapp):
     line = TimingLine(
         chars=[
