@@ -131,6 +131,7 @@ from krok_helper.lyrics import (
     build_lyrics_preview,
     extract_lyrics_query_from_file,
 )
+from krok_helper.logging_config import get_active_log_dir
 from krok_helper.notifications import play_completion_sound
 from krok_helper.pipeline import (
     DEFAULT_OFF_NAME_TEMPLATE,
@@ -1857,13 +1858,23 @@ class BackgroundTask(QThread):
     def __init__(self, runner: Callable[[Callable[[str], None]], object]) -> None:
         super().__init__()
         self._runner = runner
+        self._task_name = getattr(runner, "__qualname__", getattr(runner, "__name__", "unknown"))
 
     def run(self) -> None:  # noqa: D401
+        task_log = logging.getLogger("krok_helper.background_task")
+        task_log.info("后台任务开始: %s", self._task_name)
+
+        def emit_log(message: str) -> None:
+            task_log.info("%s: %s", self._task_name, message)
+            self.log_message.emit(message)
+
         try:
-            result = self._runner(self.log_message.emit)
+            result = self._runner(emit_log)
         except Exception as exc:  # noqa: BLE001
+            task_log.exception("后台任务失败: %s", self._task_name)
             self.task_failed.emit(str(exc))
             return
+        task_log.info("后台任务完成: %s", self._task_name)
         self.task_succeeded.emit(result)
 
 
@@ -6700,6 +6711,42 @@ class KrokHelperQtApp(QMainWindow):
         github_layout.addLayout(github_text_layout, 1)
         github_layout.addWidget(open_github_button, 0, Qt.AlignmentFlag.AlignVCenter)
         about_panel_layout.addWidget(github_card)
+
+        log_card = QFrame()
+        log_card.setObjectName("WhitePanel")
+        log_layout = QHBoxLayout(log_card)
+        log_layout.setContentsMargins(14, 12, 14, 12)
+        log_layout.setSpacing(12)
+        log_icon = QLabel()
+        log_icon.setFixedSize(24, 24)
+        log_icon.setPixmap(FIF.DOCUMENT.icon(color=QColor("#111827")).pixmap(QSize(20, 20)))
+        log_text_layout = QVBoxLayout()
+        log_text_layout.setContentsMargins(0, 0, 0, 0)
+        log_text_layout.setSpacing(2)
+        log_name = QLabel("诊断日志")
+        _wb_th(log_name, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 11pt; color: {_wb_pal().text_primary};')
+        log_hint = QLabel("遇到崩溃或任务失败时，请将此目录中的日志文件发给开发者。")
+        log_hint.setWordWrap(True)
+        _wb_th(log_hint, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
+        log_text_layout.addWidget(log_name)
+        log_text_layout.addWidget(log_hint)
+        open_log_button = QPushButton("打开日志目录")
+
+        def open_log_directory() -> None:
+            try:
+                directory = get_active_log_dir()
+                directory.mkdir(parents=True, exist_ok=True)
+                if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory))):
+                    raise OSError("系统未能打开该目录")
+            except Exception as exc:  # noqa: BLE001
+                logging.getLogger(__name__).exception("打开日志目录失败")
+                QMessageBox.warning(dialog, APP_TITLE, f"无法打开日志目录：{exc}")
+
+        open_log_button.clicked.connect(open_log_directory)
+        log_layout.addWidget(log_icon, 0, Qt.AlignmentFlag.AlignVCenter)
+        log_layout.addLayout(log_text_layout, 1)
+        log_layout.addWidget(open_log_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        about_panel_layout.addWidget(log_card)
         about_layout.addWidget(about_panel)
         about_layout.addStretch(1)
 
@@ -8346,13 +8393,24 @@ class KrokHelperQtApp(QMainWindow):
                 pass
 
 
+_GLOBAL_EXCEPTHOOK_INSTALLED = False
+
+
 def _install_global_excepthook() -> None:
     """把 GUI 线程上未捕获的异常转成可见的错误弹窗，而不是让 PySide6 直接
     abort 进程（表现为闪退）。Qt 槽函数里抛出的 Python 异常无法穿过 C++ 事件
     循环，默认会终止程序；这里兜底成对话框 + 标准 excepthook 打印。"""
+    global _GLOBAL_EXCEPTHOOK_INSTALLED
+    if _GLOBAL_EXCEPTHOOK_INSTALLED:
+        return
     previous_hook = sys.excepthook
 
     def hook(exc_type, exc_value, exc_tb):
+        if not getattr(previous_hook, "_karaoke_studio_logging_hook", False):
+            logging.getLogger(__name__).critical(
+                "GUI 事件处理发生未捕获异常",
+                exc_info=(exc_type, exc_value, exc_tb),
+            )
         try:
             previous_hook(exc_type, exc_value, exc_tb)
         except Exception:
@@ -8381,6 +8439,7 @@ def _install_global_excepthook() -> None:
             pass
 
     sys.excepthook = hook
+    _GLOBAL_EXCEPTHOOK_INSTALLED = True
 
 
 def launch_qt_app() -> int:

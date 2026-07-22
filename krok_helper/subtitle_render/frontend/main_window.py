@@ -1379,11 +1379,24 @@ class _RenderWorker(QObject):
         self._cancel_requested = False
 
     def run(self) -> None:
+        worker_log = logging.getLogger("krok_helper.subtitle_render.export")
+        worker_log.info(
+            "字幕视频导出开始 output=%s size=%sx%s fps=%s",
+            self._job.output_path,
+            self._job.width,
+            self._job.height,
+            self._job.fps,
+        )
+
+        def emit_log(message: str) -> None:
+            worker_log.info("字幕视频导出: %s", message)
+            self.logMessage.emit(message)
+
         try:
             output = render_subtitle_video(
                 self._job,
                 ffmpeg_dir=self._ffmpeg_dir,
-                logger=self.logMessage.emit,
+                logger=emit_log,
                 should_cancel=self.should_cancel,
                 on_progress=self.progressChanged.emit,
                 on_process_started=self._set_process,
@@ -1391,11 +1404,14 @@ class _RenderWorker(QObject):
                 preview_width=self._preview_width,
             )
         except ExportCancelled as exc:
+            worker_log.info("字幕视频导出取消: %s", exc)
             self.cancelled.emit(str(exc))
             return
         except Exception as exc:  # noqa: BLE001
+            worker_log.exception("字幕视频导出失败")
             self.failed.emit(str(exc))
             return
+        worker_log.info("字幕视频导出完成 output=%s", output)
         self.finished.emit(output)
 
     def cancel(self) -> None:

@@ -13,6 +13,11 @@ from krok_helper.stdio import configure_utf8_stdio
 configure_source_debug_settings_profile()
 configure_utf8_stdio()
 
+from krok_helper.logging_config import configure_application_logging
+
+
+configure_application_logging()
+
 from krok_helper.cli import main
 
 

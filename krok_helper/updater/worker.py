@@ -294,11 +294,19 @@ class _CheckRunnable(QObject):
         self._manual = manual
 
     def run(self) -> None:
+        log.info("开始检查应用更新 manual=%s", self._manual)
         try:
             result = self._do_check()
         except Exception as exc:  # noqa: BLE001
             log.exception("更新检查异常")
             result = CheckResult(ok=False, error=f"检查异常: {exc}")
+        log.info(
+            "应用更新检查结束 ok=%s has_update=%s skipped=%s error=%s",
+            result.ok,
+            result.has_update,
+            result.skipped_due_to_cooldown,
+            result.error or "none",
+        )
         self.finished.emit(result)
 
     def _do_check(self) -> CheckResult:
@@ -393,6 +401,7 @@ class LaunchUpdaterWorker(QThread):
     def run(self) -> None:
         from krok_helper.updater import installer
 
+        log.info("开始预热并启动 Updater")
         try:
             result = installer.launch_updater(
                 self._plan,
@@ -400,10 +409,12 @@ class LaunchUpdaterWorker(QThread):
                 cancel_check=lambda: self._cancelled,
             )
         except installer.UpdateCancelledError:
+            log.info("用户取消启动 Updater")
             result = installer.LaunchResult(launched=False, reason="用户取消更新")
         except Exception as exc:  # noqa: BLE001
             log.exception("启动 Updater 异常")
             result = installer.LaunchResult(launched=False, reason=str(exc))
+        log.info("Updater 启动流程结束 launched=%s reason=%s", result.launched, result.reason)
         self.done.emit(result)
 
 

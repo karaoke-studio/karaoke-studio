@@ -8,6 +8,7 @@ import html
 from html.parser import HTMLParser
 import hashlib
 import json
+import logging
 import random
 import re
 import time
@@ -21,6 +22,9 @@ from urllib.parse import urlencode, urljoin
 from urllib.request import Request, urlopen
 
 from krok_helper.config import APP_NAME, APP_VERSION
+
+
+log = logging.getLogger(__name__)
 
 
 LYRICS_PREVIEW_LINE = "line"
@@ -834,6 +838,13 @@ class LyricsSearchService:
         if not allowed_providers:
             raise LyricsSearchError("没有可用的歌词来源。")
 
+        log.info(
+            "开始检索歌词 providers=%s page_state=%s limit=%s",
+            ",".join(provider.provider_id for provider in allowed_providers),
+            provider_pages or {},
+            limit,
+        )
+
         ranked: dict[str, LyricsSearchCandidate] = {}
         errors: list[str] = []
         next_provider_pages: dict[str, int] = {}
@@ -850,9 +861,11 @@ class LyricsSearchService:
                 try:
                     provider_id, page, results = future.result()
                 except LyricsSearchError as exc:
+                    log.warning("歌词来源检索失败 provider=%s error=%s", provider.provider_id, exc)
                     errors.append(str(exc))
                     continue
                 except Exception as exc:  # noqa: BLE001
+                    log.exception("歌词来源发生异常 provider=%s", provider.provider_id)
                     errors.append(f"{provider.provider_name} 搜索失败: {exc}")
                     continue
 
@@ -871,18 +884,29 @@ class LyricsSearchService:
         ordered = sorted(ranked.values(), key=_sort_key, reverse=True)
         visible_results = ordered[:limit]
         overflow_results = ordered[limit:]
-        return LyricsSearchBatch(
+        batch = LyricsSearchBatch(
             results=visible_results,
             overflow_results=overflow_results,
             next_provider_pages=next_provider_pages,
             has_more=bool(next_provider_pages or overflow_results),
         )
+        log.info(
+            "歌词检索完成 results=%s overflow=%s failed_providers=%s has_more=%s",
+            len(batch.results),
+            len(batch.overflow_results),
+            len(errors),
+            batch.has_more,
+        )
+        return batch
 
     def fetch_lyrics(self, candidate: LyricsSearchCandidate) -> LyricsSearchCandidate:
         provider = self.provider_map.get(candidate.provider_id)
         if provider is None:
             raise LyricsSearchError(f"未找到歌词来源适配器: {candidate.provider_name}")
-        return provider.fetch_lyrics(candidate)
+        log.info("开始获取歌词 provider=%s track_id=%s", candidate.provider_id, candidate.track_id)
+        result = provider.fetch_lyrics(candidate)
+        log.info("歌词获取完成 provider=%s track_id=%s", candidate.provider_id, candidate.track_id)
+        return result
 
 
 def _strip_html_tags(text: str) -> str:

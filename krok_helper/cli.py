@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -23,6 +24,9 @@ from krok_helper.windows import enable_high_dpi_awareness, set_explicit_app_user
 
 from PyQt6.QtCore import QTimer
 from PyQt6.QtWidgets import QApplication
+
+
+log = logging.getLogger(__name__)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -70,6 +74,7 @@ def run_cli(args: argparse.Namespace) -> int:
         ffmpeg_dir = Path(saved_settings.ffmpeg_dir).expanduser()
 
     def logger(message: str) -> None:
+        log.info("CLI 处理: %s", message)
         print(message)
 
     outputs = run_pipeline(
@@ -90,6 +95,7 @@ def run_cli(args: argparse.Namespace) -> int:
 
 
 def run_gui(args: argparse.Namespace) -> int:
+    log.info("开始初始化 GUI")
     enable_high_dpi_awareness()
     set_explicit_app_user_model_id("KaraokeStudio.Desktop")
     qt_app = QApplication.instance() or QApplication(sys.argv)
@@ -110,7 +116,13 @@ def run_gui(args: argparse.Namespace) -> int:
 
         # gui_qt is intentionally imported only after the splash is visible;
         # importing it initializes most UI dependencies and can take noticeable time.
-        from krok_helper.gui_qt import KrokHelperQtApp, load_taskbar_icon
+        from krok_helper.gui_qt import (
+            KrokHelperQtApp,
+            _install_global_excepthook,
+            load_taskbar_icon,
+        )
+
+        _install_global_excepthook()
 
         app_icon = load_taskbar_icon()
         if app_icon is not None:
@@ -132,6 +144,7 @@ def run_gui(args: argparse.Namespace) -> int:
                 args.off_name_template or DEFAULT_OFF_NAME_TEMPLATE,
             )
         window.show()
+        log.info("主窗口已显示，进入 Qt 事件循环")
         splash.finish()
         if args.project:
             startup_project = args.project.expanduser()
@@ -139,8 +152,11 @@ def run_gui(args: argparse.Namespace) -> int:
                 0,
                 lambda path=startup_project: window.open_project_file(path),
             )
-        return qt_app.exec()
+        exit_code = qt_app.exec()
+        log.info("Qt 事件循环结束 exit_code=%s", exit_code)
+        return exit_code
     except Exception:
+        log.exception("GUI 初始化或运行失败")
         splash.close()
         raise
 

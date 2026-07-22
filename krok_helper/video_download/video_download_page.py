@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import logging
 import subprocess
 import time
 import uuid
@@ -44,6 +45,9 @@ from qfluentwidgets import (
 )
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 from qfluentwidgets.components.widgets.menu import MenuAnimationType
+
+
+log = logging.getLogger(__name__)
 
 from .bilibili_auth import BilibiliQrLoginService
 from .cookie_manager import BilibiliAccountProfile, CookieManager
@@ -560,19 +564,23 @@ class ParseLinksWorker(QThread):
         self._service = YtDlpService(app_settings=app_settings)
 
     def run(self) -> None:  # noqa: D401
+        log.info("开始解析视频链接 count=%s", len(self._urls))
         infos: list[VideoInfo] = []
         groups: list[ParsedVideoGroup] = []
         errors: list[str] = []
         for url in self._urls:
+            source = "unknown"
             try:
                 source = self._service.detect_source(url)
                 cookie_file = self._cookie_files_by_source.get(source, "")
                 parsed_infos = self._service.extract_infos(url, cookie_file)
             except Exception as exc:  # noqa: BLE001
+                log.exception("视频链接解析失败 source=%s", source)
                 errors.append(f"{url}：{exc}")
                 continue
             infos.extend(parsed_infos)
             groups.append(ParsedVideoGroup(source_url=url, infos=parsed_infos))
+        log.info("视频链接解析结束 videos=%s errors=%s", len(infos), len(errors))
         self.batchFinished.emit(ParsedBatch(infos=infos, errors=errors, groups=groups))
 
 
@@ -590,8 +598,16 @@ class DownloadWorker(QThread):
 
     def run(self) -> None:  # noqa: D401
         if self._task.cancel_requested:
+            log.info("下载任务开始前已取消 task_id=%s", self._task.task_id)
             self.taskCancelled.emit(self._task.task_id)
             return
+        log.info(
+            "下载任务开始 task_id=%s source=%s title=%r save_dir=%s",
+            self._task.task_id,
+            self._task.source,
+            self._task.title,
+            self._options.save_dir,
+        )
         try:
             self._service.download(
                 self._task,
@@ -599,11 +615,14 @@ class DownloadWorker(QThread):
                 lambda payload: self.progressChanged.emit(self._task.task_id, payload),
             )
         except DownloadCancelledError:
+            log.info("下载任务已取消 task_id=%s", self._task.task_id)
             self.taskCancelled.emit(self._task.task_id)
             return
         except Exception as exc:  # noqa: BLE001
+            log.exception("下载任务失败 task_id=%s", self._task.task_id)
             self.taskFailed.emit(self._task.task_id, str(exc))
             return
+        log.info("下载任务完成 task_id=%s output=%s", self._task.task_id, self._task.local_file)
         self.taskSucceeded.emit(self._task.task_id)
 
 
@@ -618,11 +637,14 @@ class CookieImportWorker(QThread):
         self._browser = browser
 
     def run(self) -> None:  # noqa: D401
+        log.info("开始从浏览器导入 Cookie platform=%s browser=%s", self._platform, self._browser)
         try:
             path = self._cookie_manager.import_from_browser(self._platform, self._browser)
         except Exception as exc:  # noqa: BLE001
+            log.exception("从浏览器导入 Cookie 失败 platform=%s browser=%s", self._platform, self._browser)
             self.importFailed.emit(str(exc))
             return
+        log.info("从浏览器导入 Cookie 完成 platform=%s path=%s", self._platform, path)
         self.importSucceeded.emit(str(path))
 
 
@@ -636,15 +658,22 @@ class YtDlpUpdateWorker(QThread):
 
     def run(self) -> None:  # noqa: D401
         service = YtDlpService(app_settings=self._app_settings)
+        log.info("开始检查并更新 yt-dlp")
         try:
             before_version = service.get_ytdlp_version()
             update_output = service.update_ytdlp()
             after_version = service.get_ytdlp_version()
             latest_version = service.get_latest_ytdlp_version()
         except Exception as exc:  # noqa: BLE001
+            log.exception("yt-dlp 更新失败")
             self.updateFailed.emit(str(exc))
             return
         if service.normalize_version(after_version) != service.normalize_version(latest_version):
+            log.warning(
+                "yt-dlp 更新后版本仍不匹配 current=%s latest=%s",
+                after_version,
+                latest_version,
+            )
             self.updateFailed.emit(
                 "yt-dlp 更新命令已执行，但当前实际使用的版本仍不是最新版："
                 f"{after_version}，最新版 {latest_version}。\n"
@@ -652,6 +681,7 @@ class YtDlpUpdateWorker(QThread):
             )
             return
         version_text = after_version if before_version == after_version else f"{before_version} → {after_version}"
+        log.info("yt-dlp 更新完成 version=%s", version_text)
         self.updateSucceeded.emit(version_text, update_output)
 
 
@@ -671,9 +701,11 @@ class BilibiliQrLoginWorker(QThread):
 
     def run(self) -> None:  # noqa: D401
         service = BilibiliQrLoginService(self._cookie_manager)
+        log.info("开始哔哩哔哩扫码登录")
         try:
             ticket = service.request_qr_ticket()
         except Exception as exc:  # noqa: BLE001
+            log.exception("获取哔哩哔哩登录二维码失败")
             self.loginFailed.emit(str(exc))
             return
 
@@ -684,16 +716,20 @@ class BilibiliQrLoginWorker(QThread):
             try:
                 status = service.poll_login(ticket.qrcode_key)
             except Exception as exc:  # noqa: BLE001
+                log.exception("轮询哔哩哔哩扫码登录状态失败")
                 self.loginFailed.emit(str(exc))
                 return
 
             self.loginStatusChanged.emit({"code": status.code, "message": status.message, "success": status.success})
             if status.success:
+                log.info("哔哩哔哩扫码登录成功")
                 self.loginSucceeded.emit(self._cookie_manager.get_cookie_path() or "")
                 return
             if status.code == 86038:
+                log.info("哔哩哔哩扫码登录二维码已过期")
                 return
             self.msleep(1800)
+        log.info("哔哩哔哩扫码登录已停止")
 
 
 class VideoDownloadPage(QWidget):
