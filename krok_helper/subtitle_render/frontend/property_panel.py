@@ -1995,6 +1995,35 @@ class _GradientStopsPasteDialog(QDialog):
 class _UnitProtectedSpinBoxMixin:
     """Keep spin-box prefixes and suffixes outside the editable selection."""
 
+    def _install_debounced_keyboard_commit(self) -> None:
+        """Coalesce direct numeric typing before emitting ``valueChanged``.
+
+        Property changes rebuild the subtitle preview and update undo/settings
+        state.  With Qt's default keyboard tracking that work runs after every
+        digit, which makes the editor itself visibly pause.  Keep wheel/step
+        changes immediate, but commit direct text entry after the same short
+        idle window used by the title editor (or immediately on focus loss).
+        """
+        self.setKeyboardTracking(False)
+        self._keyboard_commit_pending = False
+        self._keyboard_commit_timer = QTimer(self)
+        self._keyboard_commit_timer.setSingleShot(True)
+        self._keyboard_commit_timer.setInterval(150)
+        self._keyboard_commit_timer.timeout.connect(self._commit_keyboard_edit)
+        self.lineEdit().textEdited.connect(self._queue_keyboard_commit)
+        self.editingFinished.connect(self._commit_keyboard_edit)
+
+    def _queue_keyboard_commit(self, _text: str) -> None:
+        self._keyboard_commit_pending = True
+        self._keyboard_commit_timer.start()
+
+    def _commit_keyboard_edit(self) -> None:
+        if not self._keyboard_commit_pending:
+            return
+        self._keyboard_commit_timer.stop()
+        self._keyboard_commit_pending = False
+        self.interpretText()
+
     def _install_unit_selection_guard(self) -> None:
         self._protecting_unit_selection = False
         editor = self.lineEdit()
@@ -2081,6 +2110,7 @@ class _WheelFocusedSpinBox(_UnitProtectedSpinBoxMixin, FluentSpinBox):
         self.valueChanged.connect(
             lambda _value: QTimer.singleShot(0, self._sync_text_minimum)
         )
+        self._install_debounced_keyboard_commit()
         self._install_unit_selection_guard()
 
     def showEvent(self, event) -> None:  # noqa: N802 - Qt API
@@ -2127,6 +2157,7 @@ class _WheelFocusedDoubleSpinBox(_UnitProtectedSpinBoxMixin, FluentDoubleSpinBox
         self.valueChanged.connect(
             lambda _value: QTimer.singleShot(0, self._sync_text_minimum)
         )
+        self._install_debounced_keyboard_commit()
         self._install_unit_selection_guard()
 
     def showEvent(self, event) -> None:  # noqa: N802

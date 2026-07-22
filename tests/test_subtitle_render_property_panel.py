@@ -139,6 +139,34 @@ def test_property_panel_uses_fluent_form_controls(qapp):
     assert isinstance(panel._save_layout_btn, TransparentToolButton)
 
 
+@pytest.mark.parametrize(
+    ("factory", "typed", "expected"),
+    [
+        (lambda: pp._spin(0, 10_000), "1234", 1234),
+        (lambda: pp._double_spin(0.0, 100.0), "12.5", 12.5),
+    ],
+)
+def test_numeric_property_typing_is_debounced(qapp, factory, typed, expected):
+    spin = factory()
+    spin.show()
+    spin.lineEdit().setFocus()
+    spin.lineEdit().selectAll()
+    emitted = []
+    spin.valueChanged.connect(emitted.append)
+
+    QTest.keyClicks(spin.lineEdit(), typed)
+    qapp.processEvents()
+
+    assert emitted == []
+
+    QTest.qWait(180)
+    qapp.processEvents()
+
+    assert spin.value() == expected
+    assert emitted == [expected]
+    spin.close()
+
+
 def test_font_weight_menu_only_shows_selected_font_weights(
     monkeypatch, qapp
 ):
