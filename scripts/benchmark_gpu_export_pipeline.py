@@ -268,7 +268,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--encoder", choices=("cpu", "nvenc", "qsv", "amf"), default="cpu")
     parser.add_argument(
         "--animation",
-        choices=("project", "none", "fade", "char_fade", "spin_flip", "utopia"),
+        choices=(
+            "project", "none", "fade", "char_fade", "char_drip",
+            "spin_flip", "utopia",
+        ),
         default="project",
     )
     parser.add_argument(

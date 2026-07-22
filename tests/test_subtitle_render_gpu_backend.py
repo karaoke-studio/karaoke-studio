@@ -4777,8 +4777,11 @@ def test_gpu_g4_spin_flip_transforms_all_character_layers_like_painter(monkeypat
         assert abs(gpu_ratio - painter_ratio) <= 0.12
         gpu_bounds = _payload_alpha_bounds(gpu[index])
         painter_bounds = _payload_alpha_bounds(painter[index])
+        # The N3-compatible dynamic path strokes the already-transformed base
+        # geometry.  Its edge therefore keeps a stable device-space width
+        # while Painter's baked outline narrows with the spin matrix.
         assert all(
-            abs(actual - expected) <= 18
+            abs(actual - expected) <= 52
             for actual, expected in zip(gpu_bounds, painter_bounds)
         ), (index, gpu_bounds, painter_bounds)
 
@@ -4816,12 +4819,12 @@ def test_gpu_g4_spin_flip_transforms_all_character_layers_like_painter(monkeypat
     ]
     for gpu_frame, painter_frame in zip(shadow_gpu, shadow_painter):
         assert all(
-            abs(actual - expected) <= 8
+            abs(actual - expected) <= 52
             for actual, expected in zip(
                 _payload_alpha_bounds(gpu_frame),
                 _payload_alpha_bounds(painter_frame),
             )
-        )
+        ), (_payload_alpha_bounds(gpu_frame), _payload_alpha_bounds(painter_frame))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
@@ -4849,7 +4852,10 @@ def test_gpu_g4_char_drip_matches_painter_right_edge_shear(monkeypatch) -> None:
         line_horizontal_layout="center",
         stroke_width_px=0,
         stroke2_enabled=False,
-        decoration_kind="none",
+        decoration_kind="glow",
+        glow_before_radius_px=8,
+        glow_after_radius_px=8,
+        glow_concentration_level=1,
         entry_anim="char_drip",
         entry_lead_ms=1_000,
         exit_anim="char_drip",
@@ -4882,6 +4888,121 @@ def test_gpu_g4_char_drip_matches_painter_right_edge_shear(monkeypatch) -> None:
                 _payload_alpha_bounds(painter[index]),
             )
         ), (index, _payload_alpha_bounds(gpu[index]), _payload_alpha_bounds(painter[index]))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("animation", ["utopia", "spin_flip", "char_drip"])
+def test_gpu_dynamic_actions_use_direct_stroke_without_expanded_frame_geometry(
+    animation: str, monkeypatch
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track, base_style = _g4_spin_scene()
+    style = replace(
+        base_style,
+        stroke_width_px=15,
+        stroke2_enabled=True,
+        stroke2_width_px=3,
+        ruby_stroke_width_px=4,
+        ruby_stroke2_enabled=True,
+        ruby_stroke2_width_px=2,
+        entry_anim=animation,
+        exit_anim=animation,
+    )
+
+    def render(direct_stroke: bool) -> tuple[dict, bytes]:
+        monkeypatch.setenv(
+            "KROK_GPU_DYNAMIC_DIRECT_STROKE", "1" if direct_stroke else "0"
+        )
+        with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+            renderer.configure_gpu(
+                track, style, width=640, height=360, fps=60, force_warp=True
+            )
+            event = renderer.render_gpu_frame(350, force_warp=True)
+            with SharedFrameRingReader.from_event(event) as reader:
+                payload = bytes(reader.read_frame(event).payload)
+        return event, payload
+
+    direct_event, direct_frame = render(True)
+    legacy_event, legacy_frame = render(False)
+
+    assert _alpha_count(direct_frame) > 0
+    assert direct_event["stroke_draw"] > 0
+    assert direct_event["stroke2_draw"] > 0
+    assert direct_event["geometry_created_dynamic"] < legacy_event[
+        "geometry_created_dynamic"
+    ]
+    # Constant-width N3 edges intentionally differ during a non-identity
+    # transform, but the visible silhouette must remain in the same region.
+    assert all(
+        abs(actual - expected) <= 52
+        for actual, expected in zip(
+            _payload_alpha_bounds(direct_frame),
+            _payload_alpha_bounds(legacy_frame),
+        )
+    ), (
+        animation,
+        _payload_alpha_bounds(direct_frame),
+        _payload_alpha_bounds(legacy_frame),
+        direct_event["geometry_created_dynamic"],
+        legacy_event["geometry_created_dynamic"],
+    )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("animation", ["utopia", "spin_flip", "char_drip"])
+def test_gpu_dynamic_direct_stroke_preserves_alpha_fill_body_protection(
+    animation: str, monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    image_path = tmp_path / "dynamic-alpha-fill.png"
+    source = QImage(1, 1, QImage.Format.Format_RGBA8888)
+    source.fill(QColor(255, 255, 255, 128))
+    assert source.save(str(image_path))
+    image_fill = PaintFill(
+        mode="image", image_path=str(image_path), image_scale_pct=100
+    )
+    state = KaraokeColorState(
+        text=image_fill,
+        stroke=PaintFill(mode="solid", color="#FF0000"),
+    )
+    track, base_style = _g4_spin_scene()
+    style = replace(
+        base_style,
+        stroke_width_px=15,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        karaoke_colors=KaraokeColors(before=state, after=state),
+        entry_anim=animation,
+        exit_anim=animation,
+    )
+
+    def render(direct_stroke: bool) -> bytes:
+        monkeypatch.setenv(
+            "KROK_GPU_DYNAMIC_DIRECT_STROKE", "1" if direct_stroke else "0"
+        )
+        with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+            _, frames = _render_g1_frames(
+                renderer, style, (350,), force_warp=True, track=track
+            )
+        return frames[0]
+
+    # The optimized path deliberately keeps the transformed outside-only
+    # outline for translucent/image glyph bodies. Independent D2D processes
+    # can differ by a few antialiasing values, so gate the visible result and
+    # silhouette instead of requiring byte identity.
+    direct = np.frombuffer(render(True), dtype=np.uint8).reshape(-1, 4)
+    legacy = np.frombuffer(render(False), dtype=np.uint8).reshape(-1, 4)
+    visible = (direct[:, 3] > 2) | (legacy[:, 3] > 2)
+    delta = np.abs(
+        direct[visible].astype(np.int16) - legacy[visible].astype(np.int16)
+    )
+    direct_ink = direct[:, 3] > 2
+    legacy_ink = legacy[:, 3] > 2
+    union = np.count_nonzero(direct_ink | legacy_ink)
+    intersection = np.count_nonzero(direct_ink & legacy_ink)
+    assert float(np.mean(delta)) <= 1.0
+    assert float(np.percentile(delta, 99)) <= 16
+    assert intersection / max(union, 1) >= 0.995
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

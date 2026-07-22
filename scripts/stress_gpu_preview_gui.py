@@ -47,7 +47,10 @@ def main() -> int:
     parser.add_argument("--offscreen", action="store_true")
     parser.add_argument(
         "--animation",
-        choices=("project", "none", "fade", "slide", "char_fade", "spin_flip", "utopia"),
+        choices=(
+            "project", "none", "fade", "slide", "char_fade", "char_drip",
+            "spin_flip", "utopia",
+        ),
         default="project",
         help="override the imported global entry/exit animation for diagnostics",
     )

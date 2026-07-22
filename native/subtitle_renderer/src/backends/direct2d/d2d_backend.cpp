@@ -1110,6 +1110,13 @@ struct Direct2DGpuBackend::Impl {
     bool glowDirtyRectEnabled = environmentFlagEnabled(
         "KROK_GPU_GLOW_DIRTY_RECT", true
     );
+    // N3 transforms one base glyph geometry and applies dynamic edge widths
+    // with DrawGeometry.  Keep an environment rollback while this path is
+    // measured against the previous transform(pre-expanded stroke)+FillGeometry
+    // implementation.
+    bool dynamicDirectStrokeEnabled = environmentFlagEnabled(
+        "KROK_GPU_DYNAMIC_DIRECT_STROKE", true
+    );
 };
 
 Direct2DGpuBackend::Direct2DGpuBackend(bool forceWarp)
@@ -3964,11 +3971,33 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         auto rubyUnitAnimationAt = [&](const Impl::CachedRuby &ruby,
                                        std::size_t unitIndex) {
             CharacterAnimationState state;
-            if (!useUtopiaTransition || unitIndex >= ruby.chars.size()
-                || line->displayWindows.empty()) {
-                state.opacity = characterOpacityAt(static_cast<std::size_t>(std::max(
-                    ruby.transitionCharIndex, 0
-                )));
+            if (!useUtopiaTransition) {
+                const std::size_t transitionIndex = static_cast<std::size_t>(
+                    std::max(ruby.transitionCharIndex, 0)
+                );
+                const float progress = charFadeOpacityAt(transitionIndex);
+                state.opacity = dripDirection != 0
+                    ? (progress > 0.0f ? 1.0f : 0.0f)
+                    : progress;
+                if (dripDirection != 0) {
+                    const float pivotX = unitIndex < ruby.chars.size()
+                        ? ruby.chars[unitIndex].layoutRight
+                        : ruby.bounds.right;
+                    state.matrix = dripMatrix(progress, pivotX);
+                    state.transformed = progress > 0.0f && progress < 1.0f;
+                } else {
+                    // N3 spins a ruby run as one visual unit. Keep that
+                    // established pivot while sharing the same animation
+                    // classification as the main glyphs.
+                    state.matrix = spinMatrix(progress, ruby.pivotX, ruby.pivotY);
+                    state.transformed = spinDirection != 0 && progress < 1.0f;
+                }
+                return state;
+            }
+            if (unitIndex >= ruby.chars.size() || line->displayWindows.empty()) {
+                state.opacity = characterOpacityAt(static_cast<std::size_t>(
+                    std::max(ruby.transitionCharIndex, 0)
+                ));
                 return state;
             }
             constexpr float pi = 3.14159265358979323846f;
@@ -4060,9 +4089,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         };
         auto rubyUnitOpacityAt = [&](const Impl::CachedRuby &ruby,
                                      std::size_t unitIndex) {
-            return useUtopiaTransition
-                ? rubyUnitAnimationAt(ruby, unitIndex).opacity
-                : rubyFadeOpacityAt(ruby);
+            return rubyUnitAnimationAt(ruby, unitIndex).opacity;
         };
         if (hasCharacterTransition) {
             float maxOpacity = 0.0f;
@@ -4144,14 +4171,16 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 count(frameDiagnostics.geometryCreatedDynamic);
                 target = transformedStroke;
             };
-            transformStroke(
-                ch.strokeGeometry.Get(), frameStrokeGeometries[index],
-                "ID2D1Factory::CreateTransformedGeometry(spin stroke)"
-            );
-            transformStroke(
-                ch.stroke2Geometry.Get(), frameStroke2Geometries[index],
-                "ID2D1Factory::CreateTransformedGeometry(spin stroke2)"
-            );
+            if (!impl_->dynamicDirectStrokeEnabled) {
+                transformStroke(
+                    ch.strokeGeometry.Get(), frameStrokeGeometries[index],
+                    "ID2D1Factory::CreateTransformedGeometry(dynamic stroke)"
+                );
+                transformStroke(
+                    ch.stroke2Geometry.Get(), frameStroke2Geometries[index],
+                    "ID2D1Factory::CreateTransformedGeometry(dynamic stroke2)"
+                );
+            }
         }
         std::vector<std::vector<Microsoft::WRL::ComPtr<ID2D1Geometry>>>
             frameRubyGeometries(line->rubies.size());
@@ -4167,9 +4196,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {
                 maxRubyOpacity = std::max(
                     maxRubyOpacity,
-                    useUtopiaTransition
-                        ? rubyUnitAnimationAt(ruby, index).opacity
-                        : rubyFadeOpacityAt(ruby)
+                    rubyUnitAnimationAt(ruby, index).opacity
                 );
             }
             if (maxRubyOpacity <= 0.0f) {
@@ -4182,30 +4209,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             frameRubyStrokeGeometries[rubyIndex].resize(ruby.strokeGeometries.size());
             frameRubyStroke2Geometries[rubyIndex].resize(ruby.stroke2Geometries.size());
             for (std::size_t index = 0; index < ruby.geometries.size(); ++index) {
-                CharacterAnimationState rubyAnimation;
-                if (useUtopiaTransition) {
-                    rubyAnimation = rubyUnitAnimationAt(ruby, index);
-                } else {
-                    const std::size_t transitionIndex = static_cast<std::size_t>(
-                        std::max(ruby.transitionCharIndex, 0)
-                    );
-                    const float progress = charFadeOpacityAt(transitionIndex);
-                    rubyAnimation.opacity = dripDirection != 0
-                        ? (progress > 0.0f ? 1.0f : 0.0f)
-                        : progress;
-                    if (dripDirection != 0) {
-                        const float pivotX = index < ruby.chars.size()
-                            ? ruby.chars[index].layoutRight
-                            : ruby.bounds.right;
-                        rubyAnimation.matrix = dripMatrix(progress, pivotX);
-                        rubyAnimation.transformed = progress > 0.0f && progress < 1.0f;
-                    } else {
-                        rubyAnimation.matrix = spinMatrix(
-                            progress, ruby.pivotX, ruby.pivotY
-                        );
-                        rubyAnimation.transformed = spinDirection != 0 && progress < 1.0f;
-                    }
-                }
+                const CharacterAnimationState rubyAnimation =
+                    rubyUnitAnimationAt(ruby, index);
                 if (rubyAnimation.opacity <= 0.0f) {
                     continue;
                 }
@@ -4272,14 +4277,16 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         count(frameDiagnostics.geometryCreatedDynamic);
                         target = transformedStroke;
                     };
-                    if (index < ruby.strokeGeometries.size()) {
+                    if (!impl_->dynamicDirectStrokeEnabled
+                        && index < ruby.strokeGeometries.size()) {
                         transformRubyStroke(
                             ruby.strokeGeometries[index].Get(),
                             frameRubyStrokeGeometries[rubyIndex][index],
                             "ID2D1Factory::CreateTransformedGeometry(spin ruby stroke)"
                         );
                     }
-                    if (index < ruby.stroke2Geometries.size()) {
+                    if (!impl_->dynamicDirectStrokeEnabled
+                        && index < ruby.stroke2Geometries.size()) {
                         transformRubyStroke(
                             ruby.stroke2Geometries[index].Get(),
                             frameRubyStroke2Geometries[rubyIndex][index],
@@ -4347,15 +4354,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         // the Painter per-glyph blur-then-transform semantics; every other
         // glyph shares the line-level glow sources.
         auto charTransformedAt = [&](std::size_t index) {
-            return (spinDirection != 0 || useUtopiaTransition)
-                && characterAnimationAt(index).transformed;
+            return characterAnimationAt(index).transformed;
         };
         auto rubyUnitTransformed = [&](const Impl::CachedRuby &ruby,
                                        std::size_t unitIndex) {
-            if (useUtopiaTransition) {
-                return rubyUnitAnimationAt(ruby, unitIndex).transformed;
-            }
-            return spinDirection != 0 && rubyFadeOpacityAt(ruby) < 1.0f;
+            return rubyUnitAnimationAt(ruby, unitIndex).transformed;
         };
         const auto expandedRect = [](const D2D1_RECT_F &rect, float amount) {
             return D2D1::RectF(
@@ -5574,22 +5577,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 return;
             }
             RubyGlowLayer layer;
-            if ((spinDirection != 0 || useUtopiaTransition)
+            if ((spinDirection != 0 || dripDirection != 0 || useUtopiaTransition)
                 && rubyOnly >= 0) {
                 const Impl::CachedRuby &ruby = line->rubies[
                     static_cast<std::size_t>(rubyOnly)
                 ];
-                const CharacterAnimationState animationState =
-                    useUtopiaTransition && unitOnly >= 0
+                const CharacterAnimationState animationState = unitOnly >= 0
                     ? rubyUnitAnimationAt(ruby, static_cast<std::size_t>(unitOnly))
-                    : CharacterAnimationState{
-                        rubyFadeOpacityAt(ruby),
-                        spinMatrix(
-                            rubyFadeOpacityAt(ruby), ruby.pivotX, ruby.pivotY
-                        ),
-                        spinDirection != 0 && rubyFadeOpacityAt(ruby) < 1.0f,
-                        false,
-                    };
+                    : rubyUnitAnimationAt(ruby, 0);
                 layer.transform = D2D1::Matrix3x2F::Translation(-dx, -dy)
                     * animationState.matrix
                     * D2D1::Matrix3x2F::Translation(dx, dy);
@@ -5779,7 +5774,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             appendRubyGlowLayer(styleIndex, false, -1, -1);
             appendRubyGlowLayer(styleIndex, true, -1, -1);
         }
-        if (useUtopiaTransition) {
+        if (useUtopiaTransition || dripDirection != 0) {
             for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
                 const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
                 for (std::size_t unitIndex = 0;
@@ -5890,7 +5885,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 return;
             }
             InlineGlowLayer layer;
-            if ((spinDirection != 0 || useUtopiaTransition) && charOnly >= 0) {
+            if ((spinDirection != 0 || dripDirection != 0 || useUtopiaTransition)
+                && charOnly >= 0) {
                 const CharacterAnimationState animationState = characterAnimationAt(
                     static_cast<std::size_t>(charOnly)
                 );
@@ -6194,7 +6190,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 appendInlineGlowLayer(styleIndex, true, -1);
             }
         }
-        if (spinDirection != 0 || useUtopiaTransition) {
+        if (spinDirection != 0 || dripDirection != 0 || useUtopiaTransition) {
             for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
                 if (!charTransformedAt(charIndex)) {
                     continue;
@@ -6300,7 +6296,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             const float outerWidth = stroke2Width > 0.0f
                 ? std::max(strokeWidth, 0.0f) + stroke2Width
                 : std::max(strokeWidth, 0.0f);
-            if (transformed && animatedOuterGeometry != nullptr) {
+            if (transformed && impl_->dynamicDirectStrokeEnabled) {
+                if (outerWidth > 0.0f) {
+                    context->DrawGeometry(geometry, brush, outerWidth);
+                }
+            } else if (transformed && animatedOuterGeometry != nullptr) {
                 context->FillGeometry(animatedOuterGeometry, brush);
             } else if (outerWidth > 0.0f) {
                 context->DrawGeometry(geometry, brush, outerWidth);
@@ -6521,16 +6521,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         continue;
                     }
                     const CharacterAnimationState animationState =
-                        useUtopiaTransition
-                        ? rubyUnitAnimationAt(ruby, geometryIndex)
-                        : CharacterAnimationState{
-                            rubyFadeOpacityAt(ruby),
-                            spinMatrix(
-                                rubyFadeOpacityAt(ruby), ruby.pivotX, ruby.pivotY
-                            ),
-                            spinDirection != 0 && rubyFadeOpacityAt(ruby) < 1.0f,
-                            false,
-                        };
+                        rubyUnitAnimationAt(ruby, geometryIndex);
                     brush->SetOpacity(globalOpacity * animationState.opacity);
                     const float shadowX = animationState.transformed
                         ? rubyStyle.rubyShadowOffsetX * animationState.matrix._11
@@ -6782,7 +6773,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     return;
                 }
                 ID2D1Geometry *animatedStroke2 = stroke2GeometryAt(charIndex);
-                if (animated && animatedStroke2 != nullptr) {
+                if (animated && impl_->dynamicDirectStrokeEnabled) {
+                    drawCountedStroke(
+                        geometry, brush,
+                        std::max(0.0f, charStyle.strokeWidth)
+                            + charStyle.stroke2Width,
+                        true
+                    );
+                } else if (animated && animatedStroke2 != nullptr) {
                     fillCountedStroke(animatedStroke2, brush, true);
                 } else {
                     strokeWithRealization(
@@ -6804,7 +6802,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 );
                 ID2D1Geometry *protectedGeometry = protectedGeometryAt(charIndex);
                 ID2D1Geometry *animatedStroke = strokeGeometryAt(charIndex);
-                if (animated && !protect && animatedStroke != nullptr) {
+                if (animated && !protect
+                    && impl_->dynamicDirectStrokeEnabled) {
+                    drawCountedStroke(
+                        geometry, brush, charStyle.strokeWidth, false
+                    );
+                } else if (animated && !protect && animatedStroke != nullptr) {
                     fillCountedStroke(animatedStroke, brush, false);
                 } else if (protect && protectedGeometry != nullptr) {
                     if (animated) {
@@ -6945,7 +6948,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     && std::max(rubyStyle.rubyStrokeWidth, 0.0f)
                         >= Impl::realizationStrokeThreshold;
                 if (rubyStyle.rubyStroke2Width > 0.0f) {
-                    if (rubyTransformed && animatedStroke2 != nullptr) {
+                    if (rubyTransformed && impl_->dynamicDirectStrokeEnabled) {
+                        drawCountedStroke(
+                            geometry, stroke2.Get(),
+                            std::max(0.0f, rubyStyle.rubyStrokeWidth)
+                                + rubyStyle.rubyStroke2Width,
+                            true
+                        );
+                    } else if (rubyTransformed && animatedStroke2 != nullptr) {
                         fillCountedStroke(
                             animatedStroke2, stroke2.Get(), true
                         );
@@ -6974,7 +6984,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     ID2D1Geometry *animatedStroke = rubyStrokeGeometryAt(
                         rubyIndex, index
                     );
-                    if (rubyTransformed && !protect && animatedStroke != nullptr) {
+                    if (rubyTransformed && !protect
+                        && impl_->dynamicDirectStrokeEnabled) {
+                        drawCountedStroke(
+                            geometry, stroke.Get(),
+                            rubyStyle.rubyStrokeWidth, false
+                        );
+                    } else if (rubyTransformed && !protect
+                        && animatedStroke != nullptr) {
                         fillCountedStroke(
                             animatedStroke, stroke.Get(), false
                         );

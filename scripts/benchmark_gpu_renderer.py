@@ -671,7 +671,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--animation",
-        choices=("project", "none", "fade", "char_fade", "spin_flip", "utopia"),
+        choices=(
+            "project", "none", "fade", "char_fade", "char_drip",
+            "spin_flip", "utopia",
+        ),
         default="project",
         help="exercise a supported entry/exit animation",
     )
