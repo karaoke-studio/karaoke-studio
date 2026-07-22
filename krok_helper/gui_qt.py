@@ -30,7 +30,7 @@ def _schedule_hard_process_exit(delay_seconds: float = 0.25) -> None:
     timer.start()
 
 from PyQt6.QtCore import QEvent, QEventLoop, QSize, QThread, QTimer, Qt, QUrl, pyqtSignal as Signal
-from PyQt6.QtGui import QColor, QBrush, QDesktopServices, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPalette, QPen, QShortcut
+from PyQt6.QtGui import QColor, QBrush, QDesktopServices, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPalette, QPen, QShortcut, QTextDocument
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -67,17 +67,28 @@ from qfluentwidgets import (
     CheckBox as QCheckBox,
     ComboBox as QComboBox,
     FluentIcon as FIF,
+    HyperlinkCard,
     LineEdit as QLineEdit,
+    ListWidget as FluentListWidget,
+    MessageBox,
+    MessageBoxBase,
     PlainTextEdit as QPlainTextEdit,
     Pivot,
     PrimaryPushButton,
     ProgressBar as QProgressBar,
     PushButton as QPushButton,
+    PushSettingCard,
     RadioButton as QRadioButton,
+    ScrollArea as FluentScrollArea,
+    SettingCard,
+    SettingCardGroup,
     setThemeColor,
     Slider as QSlider,
     StrongBodyLabel,
+    SubtitleLabel,
+    SwitchButton,
     TableWidget as QTableWidget,
+    TitleLabel,
     ToolButton,
     qconfig,
 )
@@ -567,6 +578,194 @@ class StyledComboBox(QComboBox):
 
     def _createComboMenu(self):
         return WhiteComboBoxMenu(self)
+
+
+def relax_setting_card_height(
+    card: SettingCard,
+    *,
+    available_width: int = 0,
+    min_content_lines: int = 0,
+) -> None:
+    """让 ``SettingCard`` 的说明文字换行，并把卡片撑到能放下的真实高度。
+
+    ``SettingCardGroup`` 内部的 ExpandLayout 只按卡片**当前**高度垂直堆叠，
+    不做宽度→高度协商；而且卡片构造时给 hBoxLayout 设的整体 AlignVCenter
+    会把文字列高度锁死在 sizeHint（单行说明）。因此这里显式完成三件事：
+    清掉构造时的 addStretch(1) 让文字列独占剩余宽度、按换行结果给
+    contentLabel 写 minimumHeight、再按内容总高把卡片高度写死。
+    对话框显示后可用真实卡宽再调一次以修正估算误差。
+    """
+    card.contentLabel.setWordWrap(True)
+    layout = card.hBoxLayout
+    for index in range(layout.count()):
+        item = layout.itemAt(index)
+        spacer = item.spacerItem() if item is not None else None
+        if spacer is not None and spacer.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Expanding:
+            layout.setStretch(index, 0)
+    layout.setStretchFactor(card.vBoxLayout, 1)
+    # vBox 里 title/content 构造时带 AlignLeft：label 不拉伸、宽度被锁在
+    # sizeHint（约 30 字符），实际换行宽度远窄于文字列宽。清成 0 让 label
+    # 填满文字列，换行位置才与测量一致。
+    for index in range(card.vBoxLayout.count()):
+        item = card.vBoxLayout.itemAt(index)
+        if item is not None:
+            item.setAlignment(Qt.AlignmentFlag(0))
+    width = available_width or card.width()
+    if width > 0:
+        card.resize(width, card.height())
+        layout.activate()
+    text_width = max(card.vBoxLayout.geometry().width(), 40)
+    # QLabel.heightForWidth 对 CJK 换行会低估；QLabel 渲染 wordWrap 文本走
+    # 的就是 QTextDocument（含默认 4px documentMargin），直接用它量才精确。
+    document = QTextDocument()
+    document.setDocumentMargin(4)
+    document.setDefaultFont(card.contentLabel.font())
+    document.setPlainText(card.contentLabel.text())
+    document.setTextWidth(text_width)
+    content_height = math.ceil(document.size().height())
+    if min_content_lines > 0:
+        content_height = max(
+            content_height,
+            card.contentLabel.fontMetrics().height() * min_content_lines,
+        )
+    card.contentLabel.setMinimumHeight(content_height)
+    block_height = card.titleLabel.sizeHint().height() + content_height
+    card.setFixedHeight(max(70 if card.contentLabel.text() else 50, block_height + 24))
+
+
+def add_setting_card_actions(card: SettingCard, *widgets: QWidget, spacing: int = 8) -> None:
+    """把一组控件依次挂到 ``SettingCard`` 右侧（右对齐，末尾补 16px 内边距）。"""
+    for widget in widgets:
+        card.hBoxLayout.addWidget(widget, 0, Qt.AlignmentFlag.AlignRight)
+        card.hBoxLayout.addSpacing(spacing)
+    if widgets:
+        card.hBoxLayout.addSpacing(max(0, 16 - spacing))
+
+
+def build_settings_tab_page(parent: QWidget, groups: list[SettingCardGroup]) -> FluentScrollArea:
+    """把若干 ``SettingCardGroup`` 装进一个透明背景的纵向 Fluent 滚动页。"""
+    page = FluentScrollArea(parent)
+    page.setWidgetResizable(True)
+    page.setFrameShape(QFrame.Shape.NoFrame)
+    page.enableTransparentBackground()
+    content = QWidget(page)
+    layout = QVBoxLayout(content)
+    layout.setContentsMargins(2, 8, 10, 4)
+    layout.setSpacing(18)
+    for group in groups:
+        layout.addWidget(group)
+    layout.addStretch(1)
+    page.setWidget(content)
+    return page
+
+
+class UpdateSourceOrderDialog(MessageBoxBase):
+    """更新源优先级编辑弹窗（拖拽重排 + 上移 / 下移 / 恢复默认）。
+
+    确定后从 :attr:`order` 读出最终顺序（已 ``normalize_order``）。
+    """
+
+    def __init__(self, current_order: list[str], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.order: list[str] = normalize_order(current_order)
+
+        title = TitleLabel("更新源优先级", self.widget)
+        self.viewLayout.addWidget(title)
+
+        hint = BodyLabel(
+            "按顺序尝试，前一项失败时自动降级到下一项。\n"
+            "可以直接拖动条目，或选中后用右侧按钮微调。",
+            self.widget,
+        )
+        hint.setWordWrap(True)
+        self.viewLayout.addWidget(hint)
+
+        body = QWidget(self.widget)
+        body_layout = QHBoxLayout(body)
+        body_layout.setContentsMargins(0, 4, 0, 4)
+        body_layout.setSpacing(12)
+
+        self.order_list = FluentListWidget(body)
+        self.order_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.order_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.order_list.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.order_list.setMinimumWidth(340)
+        self.order_list.setMinimumHeight(170)
+        for source in self.order:
+            item = QListWidgetItem(SOURCE_LABELS.get(source, source))
+            item.setData(Qt.ItemDataRole.UserRole, source)
+            self.order_list.addItem(item)
+        body_layout.addWidget(self.order_list, 1)
+
+        button_column = QWidget(body)
+        column_layout = QVBoxLayout(button_column)
+        column_layout.setContentsMargins(0, 0, 0, 0)
+        column_layout.setSpacing(8)
+        self.move_up_button = QPushButton(FIF.UP, "上移", button_column)
+        self.move_down_button = QPushButton(FIF.DOWN, "下移", button_column)
+        self.reset_button = QPushButton("恢复默认", button_column)
+        self.move_up_button.clicked.connect(lambda: self._move_selected(-1))
+        self.move_down_button.clicked.connect(lambda: self._move_selected(1))
+        self.reset_button.clicked.connect(self._reset_order)
+        column_layout.addWidget(self.move_up_button)
+        column_layout.addWidget(self.move_down_button)
+        column_layout.addWidget(self.reset_button)
+        column_layout.addStretch(1)
+        body_layout.addWidget(button_column, 0)
+
+        self.viewLayout.addWidget(body, 1)
+
+        self.yesButton.setText("确定")
+        self.cancelButton.setText("取消")
+        self.widget.setMinimumWidth(540)
+
+    def _selected_row(self) -> int:
+        items = self.order_list.selectedItems()
+        return self.order_list.row(items[0]) if items else -1
+
+    def _move_selected(self, delta: int) -> None:
+        row = self._selected_row()
+        target = row + delta
+        if row < 0 or target < 0 or target >= self.order_list.count():
+            return
+        item = self.order_list.takeItem(row)
+        if item is None:
+            return
+        self.order_list.insertItem(target, item)
+        self.order_list.setCurrentRow(target)
+
+    def _reset_order(self) -> None:
+        self.order_list.clear()
+        for source in SOURCE_IDS:
+            item = QListWidgetItem(SOURCE_LABELS.get(source, source))
+            item.setData(Qt.ItemDataRole.UserRole, source)
+            self.order_list.addItem(item)
+        self.order_list.setCurrentRow(0)
+
+    def accept(self) -> None:  # noqa: N802
+        raw: list[str] = []
+        for row in range(self.order_list.count()):
+            item = self.order_list.item(row)
+            if item is not None:
+                raw.append(str(item.data(Qt.ItemDataRole.UserRole)))
+        self.order = normalize_order(raw)
+        super().accept()
+
+
+def show_fluent_info(parent: QWidget, text: str, *, yes_text: str = "确定") -> None:
+    """以 Fluent 风格弹一个只有确认按钮的提示框。"""
+    box = MessageBox(APP_TITLE, text, parent)
+    box.yesButton.setText(yes_text)
+    box.cancelButton.hide()
+    box.exec()
+
+
+def ask_fluent_confirm(parent: QWidget, text: str, *, yes_text: str, cancel_text: str = "取消") -> bool:
+    """以 Fluent 风格弹确认框，用户点 ``yes_text`` 返回 True。"""
+    box = MessageBox(APP_TITLE, text, parent)
+    box.yesButton.setText(yes_text)
+    box.cancelButton.setText(cancel_text)
+    return bool(box.exec())
 
 
 class ElidedLabel(QLabel):
@@ -6303,28 +6502,23 @@ class KrokHelperQtApp(QMainWindow):
             return
         src = Path(path)
         # 二次确认（主 config 是覆盖，词典/演唱者是合并）
-        confirm = QMessageBox(parent)
-        confirm.setIcon(QMessageBox.Icon.Question)
-        confirm.setWindowTitle(APP_TITLE)
-        confirm.setText(
+        if not ask_fluent_confirm(
+            parent,
             "将从该目录导入旧版 SUG 数据到工作台：\n\n"
             f"  {src}\n\n"
             "• 主配置：未知项会被忽略，缺失项使用默认值，整体覆盖现有配置\n"
             "• 词典 / 演唱者：按名称合并，工作台已有的同名条目优先保留\n"
             "• 网络词典缓存：整体覆盖\n\n"
-            "是否继续？"
-        )
-        confirm.addButton("导入", QMessageBox.ButtonRole.AcceptRole)
-        cancel_btn = confirm.addButton("取消", QMessageBox.ButtonRole.RejectRole)
-        confirm.exec()
-        if confirm.clickedButton() is cancel_btn:
+            "是否继续？",
+            yes_text="导入",
+        ):
             return
 
         try:
             report = import_legacy_sug_settings(src, self.settings)
             save_app_settings(self.settings)
         except Exception as exc:
-            QMessageBox.critical(parent, APP_TITLE, f"导入失败：\n{exc}")
+            show_fluent_info(parent, f"导入失败：\n{exc}")
             return
 
         lines: list[str] = []
@@ -6348,27 +6542,27 @@ class KrokHelperQtApp(QMainWindow):
             lines.append("")
             lines.append("请重启工作台让打轴模块重新加载新设置。")
 
-        QMessageBox.information(parent, APP_TITLE, "\n".join(lines))
+        show_fluent_info(parent, "\n".join(lines))
 
     def _open_global_settings_window(self) -> None:
         updater_settings = ensure_updater_settings(self.settings)
         dialog = QDialog(self)
         dialog.setWindowTitle(f"{APP_TITLE} - 全局设置")
-        dialog.resize(780, 520)
+        dialog.resize(880, 640)
+        dialog.setMinimumSize(820, 560)
 
         outer = QVBoxLayout(dialog)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
+        outer.setContentsMargins(26, 20, 26, 18)
+        outer.setSpacing(8)
 
         header = QWidget(dialog)
         header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(20, 20, 20, 0)
+        header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(10)
 
-        heading = QLabel("全局设置")
-        heading.setStyleSheet('font-family: "Microsoft YaHei UI"; font-size: 18pt; font-weight: 700;')
-        save_button = QPushButton("保存设置")
-        close_button = QPushButton("关闭")
+        heading = SubtitleLabel("全局设置", dialog)
+        save_button = PrimaryPushButton(FIF.SAVE, "保存设置", dialog)
+        close_button = QPushButton("关闭", dialog)
         close_button.clicked.connect(dialog.close)
 
         header_layout.addWidget(heading, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -6377,48 +6571,11 @@ class KrokHelperQtApp(QMainWindow):
         header_layout.addWidget(close_button, 0, Qt.AlignmentFlag.AlignVCenter)
         outer.addWidget(header)
 
-        scroll = QScrollArea(dialog)
-        scroll.setWidgetResizable(True)
-        content = QWidget()
-        scroll.setWidget(content)
-        outer.addWidget(scroll)
-
-        shell = QVBoxLayout(content)
-        shell.setContentsMargins(20, 18, 20, 20)
-        shell.setSpacing(18)
-
         pivot = Pivot(dialog)
-        pivot.setFixedHeight(40)
-        shell.addWidget(pivot)
+        outer.addWidget(pivot)
 
         settings_stack = QStackedWidget(dialog)
-        tools_tab = QWidget(settings_stack)
-        tools_layout = QVBoxLayout(tools_tab)
-        tools_layout.setContentsMargins(0, 12, 0, 0)
-        tools_layout.setSpacing(14)
-        ui_tab = QWidget(settings_stack)
-        ui_layout = QVBoxLayout(ui_tab)
-        ui_layout.setContentsMargins(0, 12, 0, 0)
-        ui_layout.setSpacing(14)
-        network_tab = QWidget(settings_stack)
-        network_layout = QVBoxLayout(network_tab)
-        network_layout.setContentsMargins(0, 12, 0, 0)
-        network_layout.setSpacing(14)
-        about_tab = QWidget(settings_stack)
-        about_layout = QVBoxLayout(about_tab)
-        about_layout.setContentsMargins(0, 12, 0, 0)
-        about_layout.setSpacing(14)
-        settings_stack.addWidget(tools_tab)
-        settings_stack.addWidget(ui_tab)
-        settings_stack.addWidget(network_tab)
-        settings_stack.addWidget(about_tab)
-        pivot.addItem(routeKey="tools", text="工具", onClick=lambda _checked: settings_stack.setCurrentIndex(0))
-        pivot.addItem(routeKey="ui", text="界面", onClick=lambda _checked: settings_stack.setCurrentIndex(1))
-        pivot.addItem(routeKey="network", text="网络与更新", onClick=lambda _checked: settings_stack.setCurrentIndex(2))
-        pivot.addItem(routeKey="about", text="关于", onClick=lambda _checked: settings_stack.setCurrentIndex(3))
-        pivot.setCurrentItem("tools")
-        settings_stack.setCurrentIndex(0)
-        shell.addWidget(settings_stack, 1)
+        outer.addWidget(settings_stack, 1)
 
         # ── 界面 → 主题 ────────────────────────────────────────────────
         # 实时预览：变更 ComboBox 后延迟推 ``theme.mode``。不能在
@@ -6432,15 +6589,14 @@ class KrokHelperQtApp(QMainWindow):
             UI_THEME_DARK as _T_DARK,
         )
 
-        theme_panel = QFrame()
-        theme_panel.setObjectName("WhitePanel")
-        theme_layout = QGridLayout(theme_panel)
-        theme_layout.setContentsMargins(14, 14, 14, 14)
-        theme_layout.setHorizontalSpacing(12)
-        theme_layout.setVerticalSpacing(10)
-        theme_title = QLabel("界面主题")
-        theme_title.setObjectName("PanelTitle")
-        theme_combo = StyledComboBox(dialog)
+        theme_group = SettingCardGroup("外观", dialog)
+        theme_card = SettingCard(
+            FIF.PALETTE,
+            "界面主题",
+            "自动跟随系统在 Win10/Win11 上均生效；强制浅色 / 深色会覆盖系统 Mica 材质。",
+            theme_group,
+        )
+        theme_combo = StyledComboBox(theme_card)
         _theme_options = [("跟随系统", _T_AUTO), ("浅色", _T_LIGHT), ("深色", _T_DARK)]
         theme_combo.addItems([label for label, _v in _theme_options])
         _initial_theme = getattr(self.settings, "ui_theme", _T_AUTO)
@@ -6448,19 +6604,10 @@ class KrokHelperQtApp(QMainWindow):
             if _val == _initial_theme:
                 theme_combo.setCurrentIndex(_i)
                 break
+        theme_combo.setMinimumWidth(150)
         self._install_single_click_combo_behavior(theme_combo)
-        theme_hint = QLabel(
-            "自动跟随系统在 Win10/Win11 上均生效；强制浅色 / 深色会覆盖系统 Mica 材质。"
-        )
-        theme_hint.setWordWrap(True)
-        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
-        _wb_th(theme_hint, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
-        theme_layout.addWidget(theme_title, 0, 0)
-        theme_layout.addWidget(theme_combo, 0, 1)
-        theme_layout.addWidget(theme_hint, 1, 1)
-        theme_layout.setColumnStretch(1, 1)
-        ui_layout.addWidget(theme_panel)
-        ui_layout.addStretch(1)
+        add_setting_card_actions(theme_card, theme_combo)
+        theme_group.addSettingCard(theme_card)
 
         def _selected_theme_value() -> str:
             idx = theme_combo.currentIndex()
@@ -6500,87 +6647,82 @@ class KrokHelperQtApp(QMainWindow):
         theme_combo.currentIndexChanged.connect(_on_theme_combo_changed)
         # 关闭时若未保存则回退。回退同样延迟到 dialog 关闭事件之后。
 
-        ffmpeg_panel = QFrame()
-        ffmpeg_panel.setObjectName("WhitePanel")
-        ffmpeg_layout = QGridLayout(ffmpeg_panel)
-        ffmpeg_layout.setContentsMargins(14, 14, 14, 14)
-        ffmpeg_title = QLabel("FFmpeg 目录")
-        ffmpeg_title.setObjectName("PanelTitle")
-        ffmpeg_display = QLineEdit(dialog)
+        tools_group = SettingCardGroup("外部工具", dialog)
+        ffmpeg_card = SettingCard(
+            FIF.FOLDER,
+            "FFmpeg 目录",
+            "推荐选择 ffmpeg 的 bin 目录，例如 D:\\tools\\ffmpeg\\bin。"
+            "波形对齐、Hi-Res 混流和嵌入式打轴模块都会使用这里的设置。",
+            tools_group,
+        )
+        ffmpeg_display = QLineEdit(ffmpeg_card)
         ffmpeg_display.setText(self.ffmpeg_dir_text)
         ffmpeg_display.setPlaceholderText(FFMPEG_DIR_PLACEHOLDER)
-        choose_button = QPushButton("选择目录")
+        ffmpeg_display.setMinimumWidth(260)
+        choose_button = QPushButton("选择目录", ffmpeg_card)
         choose_button.clicked.connect(lambda: self._choose_ffmpeg_for_dialog(dialog, ffmpeg_display))
-        system_button = QPushButton("使用系统 PATH")
+        system_button = QPushButton("使用系统 PATH", ffmpeg_card)
         system_button.clicked.connect(lambda: ffmpeg_display.setText(""))
-        ffmpeg_hint_1 = QLabel("推荐选择 ffmpeg 的 bin 目录，例如 D:\\tools\\ffmpeg\\bin。")
-        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
-        _wb_th(ffmpeg_hint_1, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
-        ffmpeg_hint_2 = QLabel("波形对齐、Hi-Res 混流和嵌入式打轴模块都会使用这里的设置。")
-        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
-        _wb_th(ffmpeg_hint_2, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
-        ffmpeg_layout.addWidget(ffmpeg_title, 0, 0)
-        ffmpeg_layout.addWidget(ffmpeg_display, 0, 1)
-        ffmpeg_layout.addWidget(choose_button, 0, 2)
-        ffmpeg_layout.addWidget(system_button, 0, 3)
-        ffmpeg_layout.addWidget(ffmpeg_hint_1, 1, 1, 1, 3)
-        ffmpeg_layout.addWidget(ffmpeg_hint_2, 2, 1, 1, 3)
-        ffmpeg_layout.setColumnStretch(1, 1)
-        tools_layout.addWidget(ffmpeg_panel)
+        add_setting_card_actions(ffmpeg_card, ffmpeg_display, choose_button, system_button)
+        tools_group.addSettingCard(ffmpeg_card)
 
-        import_panel = QFrame()
-        import_panel.setObjectName("WhitePanel")
-        import_layout = QGridLayout(import_panel)
-        import_layout.setContentsMargins(14, 14, 14, 14)
-        import_title = QLabel("打轴模块数据导入")
-        import_title.setObjectName("PanelTitle")
-        import_button = QPushButton("选择旧版 SUG 数据目录…")
-        import_button.clicked.connect(lambda: self._import_legacy_sug_for_dialog(dialog))
-        import_hint_1 = QLabel(
+        migrate_group = SettingCardGroup("数据迁移", dialog)
+        import_card = PushSettingCard(
+            "选择旧版 SUG 数据目录…",
+            FIF.DOWNLOAD,
+            "打轴模块数据导入",
             "导入旧版 StrangeUtaGame standalone 的设置、词典、演唱者和网络词典缓存。"
-        )
-        import_hint_1.setWordWrap(True)
-        _wb_th(import_hint_1, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
-        import_hint_2 = QLabel(
             "主配置未知项会被忽略，缺失项使用默认值；词典 / 演唱者按名称去重合并，"
-            "工作台已有的同名条目优先保留。导入后请重启工作台让设置生效。"
+            "工作台已有的同名条目优先保留。导入后请重启工作台让设置生效。",
+            migrate_group,
         )
-        import_hint_2.setWordWrap(True)
-        _wb_th(import_hint_2, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
-        import_layout.addWidget(import_title, 0, 0)
-        import_layout.addWidget(import_button, 0, 1)
-        import_layout.addWidget(import_hint_1, 1, 0, 1, 2)
-        import_layout.addWidget(import_hint_2, 2, 0, 1, 2)
-        import_layout.setColumnStretch(1, 1)
-        tools_layout.addWidget(import_panel)
+        import_card.clicked.connect(lambda: self._import_legacy_sug_for_dialog(dialog))
+        migrate_group.addSettingCard(import_card)
 
-        tools_layout.addStretch(1)
+        proxy_group = SettingCardGroup("网络与代理", dialog)
 
-        proxy_panel = QFrame()
-        proxy_panel.setObjectName("WhitePanel")
-        proxy_layout = QGridLayout(proxy_panel)
-        proxy_layout.setContentsMargins(14, 14, 14, 14)
-        proxy_layout.setHorizontalSpacing(12)
-        proxy_layout.setVerticalSpacing(10)
-        proxy_title = QLabel("网络与代理")
-        proxy_title.setObjectName("PanelTitle")
-        proxy_combo = StyledComboBox(dialog)
+        proxy_mode_card = SettingCard(
+            FIF.GLOBE,
+            "代理模式",
+            "选择访问 GitHub 更新源与下载文件时使用的代理方式。",
+            proxy_group,
+        )
+        proxy_combo = StyledComboBox(proxy_mode_card)
         proxy_options = [("使用系统代理", "system"), ("自动检测代理", "auto"), ("不使用代理", "off"), ("手动指定代理", "manual")]
         proxy_combo.addItems([label for label, _value in proxy_options])
         for index, (_label, value) in enumerate(proxy_options):
             if value == updater_settings.proxy_mode:
                 proxy_combo.setCurrentIndex(index)
                 break
+        proxy_combo.setMinimumWidth(170)
         self._install_single_click_combo_behavior(proxy_combo)
-        proxy_manual_edit = QLineEdit(dialog)
+        add_setting_card_actions(proxy_mode_card, proxy_combo)
+        proxy_group.addSettingCard(proxy_mode_card)
+
+        proxy_manual_card = SettingCard(
+            FIF.LINK,
+            "手动代理地址",
+            "仅「手动指定代理」模式生效，例如 http://127.0.0.1:7890。",
+            proxy_group,
+        )
+        proxy_manual_edit = QLineEdit(proxy_manual_card)
         proxy_manual_edit.setText(updater_settings.proxy_manual_url)
         proxy_manual_edit.setPlaceholderText("http://127.0.0.1:7890")
-        proxy_status_label = QLabel("")
-        proxy_status_label.setWordWrap(True)
-        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
-        _wb_th(proxy_status_label, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
-        auto_detect_button = QPushButton("自动检测")
-        test_proxy_button = QPushButton("测试连通性")
+        proxy_manual_edit.setMinimumWidth(240)
+        add_setting_card_actions(proxy_manual_card, proxy_manual_edit)
+        proxy_group.addSettingCard(proxy_manual_card)
+
+        proxy_status_card = SettingCard(
+            FIF.WIFI,
+            "当前生效代理",
+            "正在解析代理…",
+            proxy_group,
+        )
+        proxy_status_label = proxy_status_card.contentLabel
+        auto_detect_button = QPushButton("自动检测", proxy_status_card)
+        test_proxy_button = QPushButton("测试连通性", proxy_status_card)
+        add_setting_card_actions(proxy_status_card, auto_detect_button, test_proxy_button)
+        proxy_group.addSettingCard(proxy_status_card)
 
         def current_proxy_mode() -> str:
             return proxy_options[proxy_combo.currentIndex()][1]
@@ -6602,6 +6744,7 @@ class KrokHelperQtApp(QMainWindow):
         def refresh_proxy_status() -> None:
             text, _proxies = resolve_proxy_status()
             proxy_status_label.setText(text)
+            relax_setting_card_height(proxy_status_card, min_content_lines=2)
 
         def auto_detect_proxy() -> None:
             previous_index = proxy_combo.currentIndex()
@@ -6611,11 +6754,13 @@ class KrokHelperQtApp(QMainWindow):
                     break
             text, _proxies = resolve_proxy_status()
             proxy_status_label.setText(text)
+            relax_setting_card_height(proxy_status_card, min_content_lines=2)
             if "未检测到" in text:
                 proxy_combo.setCurrentIndex(previous_index)
 
         def test_proxy_connectivity() -> None:
             proxy_status_label.setText("正在测试 GitHub 连通性…")
+            relax_setting_card_height(proxy_status_card, min_content_lines=2)
             QApplication.processEvents()
             try:
                 from krok_helper.updater.worker import probe_github_connectivity
@@ -6627,124 +6772,84 @@ class KrokHelperQtApp(QMainWindow):
                 proxy_status_label.setText(message)
             except Exception as exc:  # noqa: BLE001
                 proxy_status_label.setText(f"连通性测试失败: {exc}")
+            relax_setting_card_height(proxy_status_card, min_content_lines=2)
 
         auto_detect_button.clicked.connect(auto_detect_proxy)
         test_proxy_button.clicked.connect(test_proxy_connectivity)
 
-        proxy_layout.addWidget(proxy_title, 0, 0)
-        proxy_layout.addWidget(QLabel("代理模式"), 1, 0)
-        proxy_layout.addWidget(proxy_combo, 1, 1, 1, 2)
-        proxy_layout.addWidget(QLabel("手动代理地址"), 2, 0)
-        proxy_layout.addWidget(proxy_manual_edit, 2, 1, 1, 2)
-        proxy_layout.addWidget(QLabel("当前生效代理"), 3, 0)
-        proxy_layout.addWidget(proxy_status_label, 3, 1)
-        proxy_layout.addWidget(auto_detect_button, 3, 2)
-        proxy_layout.addWidget(test_proxy_button, 3, 3)
-        proxy_layout.setColumnStretch(1, 1)
-        network_layout.addWidget(proxy_panel)
+        update_group = SettingCardGroup("应用更新", dialog)
 
-        update_panel = QFrame()
-        update_panel.setObjectName("WhitePanel")
-        update_layout = QGridLayout(update_panel)
-        update_layout.setContentsMargins(14, 14, 14, 14)
-        update_layout.setHorizontalSpacing(12)
-        update_layout.setVerticalSpacing(10)
-        update_title = QLabel("应用更新")
-        update_title.setObjectName("PanelTitle")
-        updater_enabled_check = QCheckBox("启用工作台自动更新")
+        auto_update_card = SettingCard(
+            FIF.UPDATE,
+            "启用工作台自动更新",
+            "关闭后工作台不再自动检查和提示新版本。",
+            update_group,
+        )
+        updater_enabled_check = SwitchButton(auto_update_card)
+        updater_enabled_check.setOnText("开")
+        updater_enabled_check.setOffText("关")
         updater_enabled_check.setChecked(updater_settings.enabled)
-        startup_check = QCheckBox("启动时静默检查更新")
+        add_setting_card_actions(auto_update_card, updater_enabled_check)
+        update_group.addSettingCard(auto_update_card)
+
+        startup_check_card = SettingCard(
+            FIF.SYNC,
+            "启动时静默检查更新",
+            "每次启动工作台时在后台检查一次新版本。",
+            update_group,
+        )
+        startup_check = SwitchButton(startup_check_card)
+        startup_check.setOnText("开")
+        startup_check.setOffText("关")
         startup_check.setChecked(updater_settings.check_on_startup)
-        interval_edit = QLineEdit(dialog)
+        add_setting_card_actions(startup_check_card, startup_check)
+        update_group.addSettingCard(startup_check_card)
+
+        interval_card = SettingCard(
+            FIF.HISTORY,
+            "启动检查间隔",
+            "两次启动时检查更新之间的最小时间间隔。",
+            update_group,
+        )
+        interval_edit = QLineEdit(interval_card)
         interval_edit.setText(str(updater_settings.min_check_interval_hours))
         interval_edit.setFixedWidth(72)
+        add_setting_card_actions(interval_card, interval_edit, BodyLabel("小时", interval_card))
+        update_group.addSettingCard(interval_card)
+
         source_order = list(updater_settings.source_order)
-        source_order_label = QLabel("")
-        source_order_label.setWordWrap(True)
-        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
-        _wb_th(source_order_label, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
-        update_status_label = QLabel(f"当前版本 v{APP_VERSION}")
-        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
-        _wb_th(update_status_label, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
-        edit_order_button = QPushButton("编辑顺序")
-        check_now_button = QPushButton("检查更新")
+        order_card = SettingCard(
+            FIF.MOVE,
+            "更新源优先级",
+            " → ".join(SOURCE_LABELS.get(source, source) for source in source_order),
+            update_group,
+        )
+        source_order_label = order_card.contentLabel
+        edit_order_button = QPushButton("编辑顺序", order_card)
+        add_setting_card_actions(order_card, edit_order_button)
+        update_group.addSettingCard(order_card)
+
+        check_now_card = SettingCard(
+            FIF.SEARCH,
+            "立即检查更新",
+            f"当前版本 v{APP_VERSION}",
+            update_group,
+        )
+        update_status_label = check_now_card.contentLabel
+        check_now_button = QPushButton("检查更新", check_now_card)
+        add_setting_card_actions(check_now_card, check_now_button)
+        update_group.addSettingCard(check_now_card)
 
         def refresh_source_order_label() -> None:
             source_order_label.setText(" → ".join(SOURCE_LABELS.get(source, source) for source in source_order))
+            relax_setting_card_height(order_card)
 
         def edit_source_order() -> None:
             nonlocal source_order
-            order_dialog = QDialog(dialog)
-            order_dialog.setWindowTitle("更新源优先级")
-            order_dialog.resize(520, 360)
-            order_shell = QVBoxLayout(order_dialog)
-            order_shell.setContentsMargins(16, 16, 16, 16)
-            order_shell.setSpacing(10)
-            hint = QLabel("按顺序尝试，前一项失败时自动降级到下一项。")
-            hint.setWordWrap(True)
-            order_shell.addWidget(hint)
-            order_list = QListWidget(order_dialog)
-            order_list.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-            order_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
-            for source in normalize_order(source_order):
-                item = QListWidgetItem(SOURCE_LABELS.get(source, source))
-                item.setData(Qt.ItemDataRole.UserRole, source)
-                order_list.addItem(item)
-            order_shell.addWidget(order_list, 1)
-            order_buttons = QHBoxLayout()
-            move_up_button = QPushButton("上移")
-            move_down_button = QPushButton("下移")
-            reset_order_button = QPushButton("恢复默认")
-            ok_button = QPushButton("确定")
-            cancel_button = QPushButton("取消")
-
-            def selected_row() -> int:
-                items = order_list.selectedItems()
-                return order_list.row(items[0]) if items else -1
-
-            def move_selected(delta: int) -> None:
-                row = selected_row()
-                target = row + delta
-                if row < 0 or target < 0 or target >= order_list.count():
-                    return
-                item = order_list.takeItem(row)
-                if item is None:
-                    return
-                order_list.insertItem(target, item)
-                order_list.setCurrentRow(target)
-
-            def reset_order() -> None:
-                order_list.clear()
-                for source in SOURCE_IDS:
-                    item = QListWidgetItem(SOURCE_LABELS.get(source, source))
-                    item.setData(Qt.ItemDataRole.UserRole, source)
-                    order_list.addItem(item)
-                order_list.setCurrentRow(0)
-
-            def accept_order() -> None:
-                nonlocal source_order
-                raw: list[str] = []
-                for row in range(order_list.count()):
-                    item = order_list.item(row)
-                    if item is not None:
-                        raw.append(str(item.data(Qt.ItemDataRole.UserRole)))
-                source_order = normalize_order(raw)
+            order_dialog = UpdateSourceOrderDialog(source_order, dialog)
+            if order_dialog.exec():
+                source_order = order_dialog.order
                 refresh_source_order_label()
-                order_dialog.accept()
-
-            move_up_button.clicked.connect(lambda: move_selected(-1))
-            move_down_button.clicked.connect(lambda: move_selected(1))
-            reset_order_button.clicked.connect(reset_order)
-            ok_button.clicked.connect(accept_order)
-            cancel_button.clicked.connect(order_dialog.reject)
-            order_buttons.addWidget(move_up_button)
-            order_buttons.addWidget(move_down_button)
-            order_buttons.addWidget(reset_order_button)
-            order_buttons.addStretch(1)
-            order_buttons.addWidget(ok_button)
-            order_buttons.addWidget(cancel_button)
-            order_shell.addLayout(order_buttons)
-            order_dialog.exec()
 
         edit_order_button.clicked.connect(edit_source_order)
         refresh_source_order_label()
@@ -6788,100 +6893,36 @@ class KrokHelperQtApp(QMainWindow):
         proxy_manual_edit.textChanged.connect(lambda _text: refresh_proxy_status())
         sync_proxy_manual_enabled()
 
-        update_layout.addWidget(update_title, 0, 0)
-        update_layout.addWidget(updater_enabled_check, 1, 1)
-        update_layout.addWidget(startup_check, 1, 2, 1, 2)
-        update_layout.addWidget(QLabel("启动检查间隔"), 2, 0)
-        update_layout.addWidget(interval_edit, 2, 1)
-        update_layout.addWidget(QLabel("小时"), 2, 2)
-        update_layout.addWidget(QLabel("更新源优先级"), 3, 0)
-        update_layout.addWidget(source_order_label, 3, 1, 1, 2)
-        update_layout.addWidget(edit_order_button, 3, 3)
-        update_layout.addWidget(QLabel("立即检查更新"), 4, 0)
-        update_layout.addWidget(update_status_label, 4, 1, 1, 2)
-        update_layout.addWidget(check_now_button, 4, 3)
-        update_layout.setColumnStretch(2, 1)
-        network_layout.addWidget(update_panel)
-        network_layout.addStretch(1)
-
         github_url = "https://github.com/karaoke-studio/karaoke-studio"
-        about_panel = QFrame()
-        about_panel.setObjectName("WhitePanel")
-        about_panel_layout = QVBoxLayout(about_panel)
-        about_panel_layout.setContentsMargins(14, 14, 14, 14)
-        about_panel_layout.setSpacing(8)
-        about_title = QLabel("关于")
-        about_title.setObjectName("PanelTitle")
-        about_panel_layout.addWidget(about_title)
+        about_group = SettingCardGroup("关于", dialog)
 
-        product_card = QFrame()
-        product_card.setObjectName("WhitePanel")
-        product_layout = QHBoxLayout(product_card)
-        product_layout.setContentsMargins(14, 12, 14, 12)
-        product_layout.setSpacing(12)
-        product_icon = QLabel()
-        product_icon.setFixedSize(24, 24)
-        product_icon.setPixmap(FIF.INFO.icon(color=QColor("#111827")).pixmap(QSize(20, 20)))
-        product_text_layout = QVBoxLayout()
-        product_text_layout.setContentsMargins(0, 0, 0, 0)
-        product_text_layout.setSpacing(2)
-        product_name = QLabel("Karaoke-Studio 卡拉OK工作台")
-        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
-        _wb_th(product_name, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 11pt; color: {_wb_pal().text_primary};')
-        product_meta = QLabel(f"版本 v{APP_VERSION}  |  B站 @凛夜delin")
-        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
-        _wb_th(product_meta, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
-        product_text_layout.addWidget(product_name)
-        product_text_layout.addWidget(product_meta)
-        product_layout.addWidget(product_icon, 0, Qt.AlignmentFlag.AlignVCenter)
-        product_layout.addLayout(product_text_layout, 1)
-        about_panel_layout.addWidget(product_card)
+        product_icon: QIcon | FIF = QIcon(str(APP_LOGO_PATH)) if APP_LOGO_PATH.exists() else FIF.INFO
+        product_card = SettingCard(
+            product_icon,
+            "Karaoke-Studio 卡拉OK工作台",
+            f"版本 v{APP_VERSION}  |  B站 @凛夜delin",
+            about_group,
+        )
+        about_group.addSettingCard(product_card)
 
-        github_card = QFrame()
-        github_card.setObjectName("WhitePanel")
-        github_layout = QHBoxLayout(github_card)
-        github_layout.setContentsMargins(14, 12, 14, 12)
-        github_layout.setSpacing(12)
-        github_icon = QLabel()
-        github_icon.setFixedSize(24, 24)
-        github_icon.setPixmap(FIF.GITHUB.icon(color=QColor("#111827")).pixmap(QSize(20, 20)))
-        github_text_layout = QVBoxLayout()
-        github_text_layout.setContentsMargins(0, 0, 0, 0)
-        github_text_layout.setSpacing(2)
-        github_name = QLabel("GitHub")
-        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
-        _wb_th(github_name, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 11pt; color: {_wb_pal().text_primary};')
-        github_link = QLabel(github_url)
-        from krok_helper.theme_workbench import palette as _wb_pal, themed as _wb_th
-        _wb_th(github_link, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
-        github_text_layout.addWidget(github_name)
-        github_text_layout.addWidget(github_link)
-        open_github_button = QPushButton("打开")
-        open_github_button.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(github_url)))
-        github_layout.addWidget(github_icon, 0, Qt.AlignmentFlag.AlignVCenter)
-        github_layout.addLayout(github_text_layout, 1)
-        github_layout.addWidget(open_github_button, 0, Qt.AlignmentFlag.AlignVCenter)
-        about_panel_layout.addWidget(github_card)
+        github_card = HyperlinkCard(
+            github_url,
+            "打开",
+            FIF.GITHUB,
+            "GitHub",
+            github_url,
+            about_group,
+        )
+        about_group.addSettingCard(github_card)
 
-        log_card = QFrame()
-        log_card.setObjectName("WhitePanel")
-        log_layout = QHBoxLayout(log_card)
-        log_layout.setContentsMargins(14, 12, 14, 12)
-        log_layout.setSpacing(12)
-        log_icon = QLabel()
-        log_icon.setFixedSize(24, 24)
-        log_icon.setPixmap(FIF.DOCUMENT.icon(color=QColor("#111827")).pixmap(QSize(20, 20)))
-        log_text_layout = QVBoxLayout()
-        log_text_layout.setContentsMargins(0, 0, 0, 0)
-        log_text_layout.setSpacing(2)
-        log_name = QLabel("诊断日志")
-        _wb_th(log_name, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 11pt; color: {_wb_pal().text_primary};')
-        log_hint = QLabel("遇到崩溃或任务失败时，请将此目录中的日志文件发给开发者。")
-        log_hint.setWordWrap(True)
-        _wb_th(log_hint, lambda: f'font-family: "Microsoft YaHei UI"; font-size: 9pt; color: {_wb_pal().text_hint};')
-        log_text_layout.addWidget(log_name)
-        log_text_layout.addWidget(log_hint)
-        open_log_button = QPushButton("打开日志目录")
+        log_card = PushSettingCard(
+            "打开日志目录",
+            FIF.DOCUMENT,
+            "诊断日志",
+            "遇到崩溃或任务失败时，请将此目录中的日志文件发给开发者。",
+            about_group,
+        )
+        about_group.addSettingCard(log_card)
 
         def open_log_directory() -> None:
             try:
@@ -6891,15 +6932,46 @@ class KrokHelperQtApp(QMainWindow):
                     raise OSError("系统未能打开该目录")
             except Exception as exc:  # noqa: BLE001
                 logging.getLogger(__name__).exception("打开日志目录失败")
-                QMessageBox.warning(dialog, APP_TITLE, f"无法打开日志目录：{exc}")
+                show_fluent_info(dialog, f"无法打开日志目录：{exc}")
 
-        open_log_button.clicked.connect(open_log_directory)
-        log_layout.addWidget(log_icon, 0, Qt.AlignmentFlag.AlignVCenter)
-        log_layout.addLayout(log_text_layout, 1)
-        log_layout.addWidget(open_log_button, 0, Qt.AlignmentFlag.AlignVCenter)
-        about_panel_layout.addWidget(log_card)
-        about_layout.addWidget(about_panel)
-        about_layout.addStretch(1)
+        log_card.clicked.connect(open_log_directory)
+
+        # 统一在卡片全部装配完后计算换行高度（右侧控件宽度需参与文字列宽）。
+        # 先用估算卡宽算一次，对话框显示后再用真实卡宽精调。两张状态卡的文本
+        # 会动态变长（连通性 / 检查结果），按两行预留。
+        _card_min_lines = {proxy_status_card: 2, check_now_card: 2}
+
+        def _relax_all_setting_cards(available_width: int = 740) -> None:
+            for _card in (
+                theme_card, ffmpeg_card, import_card,
+                proxy_mode_card, proxy_manual_card, proxy_status_card,
+                auto_update_card, startup_check_card, interval_card, order_card, check_now_card,
+                product_card, github_card, log_card,
+            ):
+                relax_setting_card_height(
+                    _card,
+                    available_width=available_width,
+                    min_content_lines=_card_min_lines.get(_card, 0),
+                )
+
+        _relax_all_setting_cards()
+
+        def _refit_setting_cards() -> None:
+            # 各页卡宽一致；隐藏页的卡尚未布局，统一用首页（可见页）组宽精调。
+            _relax_all_setting_cards(available_width=tools_group.width())
+
+        QTimer.singleShot(0, _refit_setting_cards)
+
+        settings_stack.addWidget(build_settings_tab_page(settings_stack, [tools_group, migrate_group]))
+        settings_stack.addWidget(build_settings_tab_page(settings_stack, [theme_group]))
+        settings_stack.addWidget(build_settings_tab_page(settings_stack, [proxy_group, update_group]))
+        settings_stack.addWidget(build_settings_tab_page(settings_stack, [about_group]))
+        pivot.addItem(routeKey="tools", text="工具", onClick=lambda _checked: settings_stack.setCurrentIndex(0))
+        pivot.addItem(routeKey="ui", text="界面", onClick=lambda _checked: settings_stack.setCurrentIndex(1))
+        pivot.addItem(routeKey="network", text="网络与更新", onClick=lambda _checked: settings_stack.setCurrentIndex(2))
+        pivot.addItem(routeKey="about", text="关于", onClick=lambda _checked: settings_stack.setCurrentIndex(3))
+        pivot.setCurrentItem("tools")
+        settings_stack.setCurrentIndex(0)
 
         def save_global_settings() -> None:
             try:
@@ -6911,10 +6983,10 @@ class KrokHelperQtApp(QMainWindow):
                 if interval < 0:
                     raise ValueError
             except ValueError:
-                QMessageBox.critical(dialog, APP_TITLE, "启动检查间隔必须是 0 或正整数。")
+                show_fluent_info(dialog, "启动检查间隔必须是 0 或正整数。")
                 return
             except ProcessingError as exc:
-                QMessageBox.critical(dialog, APP_TITLE, str(exc))
+                show_fluent_info(dialog, str(exc))
                 return
 
             self.set_ffmpeg_dir(ffmpeg_dir)

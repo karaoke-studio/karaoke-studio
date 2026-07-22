@@ -52,19 +52,23 @@ def _open_global_settings_dialog(monkeypatch):
 
 def test_global_settings_actions_stay_outside_scroll_area(monkeypatch) -> None:
     _app, dialog, host = _open_global_settings_dialog(monkeypatch)
-    scroll = dialog.findChild(QScrollArea)
+    scroll_areas = dialog.findChildren(QScrollArea)
     buttons = {button.text(): button for button in dialog.findChildren(gui_qt.QPushButton)}
 
-    assert scroll is not None
+    assert scroll_areas
     save_button = buttons["保存设置"]
     close_button = buttons["关闭"]
 
-    assert not scroll.isAncestorOf(save_button)
-    assert not scroll.isAncestorOf(close_button)
+    for scroll in scroll_areas:
+        assert not scroll.isAncestorOf(save_button)
+        assert not scroll.isAncestorOf(close_button)
 
+    settings_stack = dialog.findChild(gui_qt.QStackedWidget)
+    assert settings_stack is not None
+    stack_top = settings_stack.mapTo(dialog, settings_stack.rect().topLeft()).y()
     save_center = save_button.mapTo(dialog, save_button.rect().center())
     close_center = close_button.mapTo(dialog, close_button.rect().center())
-    assert save_center.y() < scroll.geometry().top()
+    assert save_center.y() < stack_top
     assert save_center.x() > dialog.width() / 2
     assert save_center.x() < close_center.x()
 
@@ -72,37 +76,40 @@ def test_global_settings_actions_stay_outside_scroll_area(monkeypatch) -> None:
     host.close()
 
 
-def test_application_update_controls_use_compact_rows(monkeypatch) -> None:
+def test_application_update_controls_use_setting_cards(monkeypatch) -> None:
     app, dialog, host = _open_global_settings_dialog(monkeypatch)
     settings_stack = dialog.findChild(gui_qt.QStackedWidget)
     assert settings_stack is not None
     settings_stack.setCurrentIndex(2)
     app.processEvents()
 
-    update_title = next(
-        label for label in dialog.findChildren(gui_qt.QLabel) if label.text() == "应用更新"
+    update_group = next(
+        group
+        for group in dialog.findChildren(gui_qt.SettingCardGroup)
+        if group.titleLabel.text() == "应用更新"
     )
-    update_panel = update_title.parentWidget()
-    update_layout = update_panel.layout()
-    checkboxes = {
-        checkbox.text(): checkbox
-        for checkbox in update_panel.findChildren(gui_qt.QCheckBox)
-    }
-    labels = {
-        label.text(): label
-        for label in update_panel.findChildren(gui_qt.QLabel)
-    }
+    # ExpandLayout.count() 不报告 widget 数量，改为按创建顺序遍历子 SettingCard。
+    cards = update_group.findChildren(gui_qt.SettingCard)
+    assert [card.titleLabel.text() for card in cards] == [
+        "启用工作台自动更新",
+        "启动时静默检查更新",
+        "启动检查间隔",
+        "更新源优先级",
+        "立即检查更新",
+    ]
 
-    def grid_row(widget: QWidget) -> int:
-        index = update_layout.indexOf(widget)
-        row, _column, _row_span, _column_span = update_layout.getItemPosition(index)
-        return row
+    # 两个开关卡使用 SwitchButton；间隔 / 顺序 / 立即检查卡保留原有控件。
+    assert len(update_group.findChildren(gui_qt.SwitchButton)) == 2
 
-    assert grid_row(checkboxes["启用工作台自动更新"]) == 1
-    assert grid_row(checkboxes["启动时静默检查更新"]) == 1
-    assert grid_row(labels["启动检查间隔"]) == 2
-    assert grid_row(labels["更新源优先级"]) == 3
-    assert grid_row(labels["立即检查更新"]) == 4
+    buttons = {button.text() for button in update_group.findChildren(gui_qt.QPushButton)}
+    assert {"编辑顺序", "检查更新"} <= buttons
+
+    interval_edits = [
+        edit
+        for edit in update_group.findChildren(gui_qt.QLineEdit)
+        if edit.text() == str(UpdaterSettings().min_check_interval_hours)
+    ]
+    assert interval_edits
 
     dialog.close()
     host.close()
