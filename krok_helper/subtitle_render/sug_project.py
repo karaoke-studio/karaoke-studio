@@ -8,6 +8,7 @@ export step in the host workflow.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -32,11 +33,18 @@ _DEFAULT_PLACEHOLDER_SINGER_NAMES = {"未命名", "Untitled"}
 def load_sug_timing_track(path: str | Path) -> TimingTrack:
     """Load a ``.sug`` file and convert it to :class:`TimingTrack`."""
 
-    project = SugProjectParser.load(str(Path(path)))
-    return timing_track_from_sug_project(project)
+    source_path = Path(path)
+    project = SugProjectParser.load(str(source_path))
+    extras = SugProjectParser.load_extras(str(source_path))
+    tags = extras.get("nicokara_tags") if isinstance(extras, dict) else None
+    return timing_track_from_sug_project(project, nicokara_tags=tags)
 
 
-def timing_track_from_sug_project(project: Any) -> TimingTrack:
+def timing_track_from_sug_project(
+    project: Any,
+    *,
+    nicokara_tags: Mapping[str, Any] | None = None,
+) -> TimingTrack:
     """Convert a StrangeUtaGame ``Project`` object to ``TimingTrack``.
 
     The conversion is intentionally semantic rather than text-based:
@@ -111,16 +119,47 @@ def timing_track_from_sug_project(project: Any) -> TimingTrack:
         )
 
     metadata = getattr(project, "metadata", None)
+    tags = nicokara_tags if isinstance(nicokara_tags, Mapping) else {}
     return TimingTrack(
         meta=TimingTrackMeta(
-            title=_optional_text(getattr(metadata, "title", None)),
-            artist=_optional_text(getattr(metadata, "artist", None)),
-            album=_optional_text(getattr(metadata, "album", None)),
+            # Nicokara 标签是导出时的显式元数据；有值时优先于项目属性。
+            # 这也覆盖“从 LRC 导入后标签已解析、但 ProjectMetadata 仍为空”
+            # 的常见路径。标签为空时则保留 SUG 项目自己的元数据。
+            title=_tag_text(tags, "title")
+            or _optional_text(getattr(metadata, "title", None)),
+            artist=_tag_text(tags, "artist")
+            or _optional_text(getattr(metadata, "artist", None)),
+            album=_tag_text(tags, "album")
+            or _optional_text(getattr(metadata, "album", None)),
+            tagging_by=_tag_text(tags, "tagging_by"),
+            silence_ms=_tag_int(tags, "silence_ms"),
             offset_ms=offset_ms,
+            custom=_custom_tag_lines(tags.get("custom")),
         ),
         lines=lines,
         rubies=rubies,
     )
+
+
+def _tag_text(tags: Mapping[str, Any], key: str) -> str | None:
+    return _optional_text(tags.get(key))
+
+
+def _tag_int(tags: Mapping[str, Any], key: str) -> int:
+    try:
+        return int(tags.get(key) or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _custom_tag_lines(value: object) -> list[str]:
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, (list, tuple)):
+        values = value
+    else:
+        return []
+    return [text for item in values if (text := str(item).strip())]
 
 
 def _timing_chars_for_sentence(

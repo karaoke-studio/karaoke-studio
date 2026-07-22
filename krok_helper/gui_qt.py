@@ -2654,6 +2654,14 @@ class KrokHelperQtApp(QMainWindow):
             parent=self.page_stack,
             settings_provider=lyrics_timing_settings,
         )
+        try:
+            self.lyrics_timing_page.export_to_next_requested.connect(
+                self._export_lyrics_timing_to_next
+            )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "连接歌词打轴模块的下一步导出入口失败", exc_info=True
+            )
         # Re-enable timeline zoom that SUG disables in embedded mode;
         # the host does not provide a replacement zoom control.
         try:
@@ -2738,6 +2746,54 @@ class KrokHelperQtApp(QMainWindow):
     def accept_subtitle_video(self, path: Path) -> None:
         self.set_video_path(path)
         self._show_module(WORKFLOW_HIRES_MIX)
+
+    def _export_lyrics_timing_to_next(self) -> None:
+        """把 SUG 当前内存项目完整送入字幕渲染模块并切换到第 5 步。"""
+        timing_page = getattr(self, "lyrics_timing_page", None)
+        render_page = getattr(self, "subtitle_render_page", None)
+        if timing_page is None or render_page is None:
+            QMessageBox.warning(self, APP_TITLE, "下一步模块尚未准备好，请稍后重试。")
+            return
+
+        try:
+            payload = timing_page.export_to_next_payload()
+        except Exception as exc:
+            logging.getLogger(__name__).exception("读取歌词打轴项目失败")
+            QMessageBox.critical(
+                self, APP_TITLE, f"无法读取当前打轴项目：\n{exc}"
+            )
+            return
+        if not isinstance(payload, dict) or payload.get("project") is None:
+            QMessageBox.warning(self, APP_TITLE, "当前没有可导出的打轴项目。")
+            return
+
+        source_value = payload.get("source_path")
+        source_path = Path(str(source_value)) if source_value else None
+        track = render_page.load_from_sug_project(
+            payload["project"],
+            source_path,
+            nicokara_tags=payload.get("nicokara_tags"),
+        )
+        if track is None:
+            return
+
+        # SUG 保存的是用户最初选择的媒体；视频直接作为第 5 步背景，纯音频
+        # 则作为独立音轨。原始媒体不可用时再回退到当前播放音频。
+        media_value = payload.get("media_path")
+        media_path = Path(str(media_value)) if media_value else None
+        media_kind = payload.get("media_kind")
+        if media_path is not None and media_path.is_file():
+            if media_kind == "video":
+                render_page.load_video(media_path)
+            else:
+                render_page.load_audio(media_path)
+        else:
+            audio_value = payload.get("audio_path")
+            audio_path = Path(str(audio_value)) if audio_value else None
+            if audio_path is not None and audio_path.is_file():
+                render_page.load_audio(audio_path)
+
+        self._show_module(WORKFLOW_SUBTITLE_RENDER)
 
     def _on_lyrics_timing_title_changed(self, title: str) -> None:
         """把 SUG 窗口标题里的项目状态镜像到「歌词打轴」步骤描述行。

@@ -118,6 +118,50 @@ def test_load_sug_timing_track_reads_sug_file(tmp_path: Path) -> None:
     assert [line.chars[0].text for line in track.lines] == ["愛", "空"]
 
 
+def test_sug_adapter_merges_nicokara_metadata_and_custom_tags() -> None:
+    track = timing_track_from_sug_project(
+        _sample_sug_project(),
+        nicokara_tags={
+            "title": "标签曲名",
+            "artist": "标签作者",
+            "album": "标签专辑",
+            "tagging_by": "打轴者",
+            "silence_ms": "1250",
+            "custom": ["@Emoji=主唱", "@Custom=保留"],
+        },
+    )
+
+    assert track.meta.title == "标签曲名"
+    assert track.meta.artist == "标签作者"
+    assert track.meta.album == "标签专辑"
+    assert track.meta.tagging_by == "打轴者"
+    assert track.meta.silence_ms == 1250
+    assert track.meta.custom == ["@Emoji=主唱", "@Custom=保留"]
+    assert track.meta.offset_ms == 50
+
+
+def test_load_sug_timing_track_reads_nicokara_extras(tmp_path: Path) -> None:
+    sug_path = tmp_path / "song-with-tags.sug"
+    SugProjectParser.save(
+        _sample_sug_project(),
+        str(sug_path),
+        nicokara_tags={
+            "title": "文件标签曲名",
+            "artist": "文件标签作者",
+            "tagging_by": "标签作者",
+            "custom": ["@Emoji=和声"],
+        },
+    )
+
+    track = load_sug_timing_track(sug_path)
+
+    assert track.meta.title == "文件标签曲名"
+    assert track.meta.artist == "文件标签作者"
+    assert track.meta.album == "专辑"
+    assert track.meta.tagging_by == "标签作者"
+    assert track.meta.custom == ["@Emoji=和声"]
+
+
 def test_sug_adapter_preserves_n3_main_text_boundary_provenance() -> None:
     """Keep the self-contained メロディー/melody N3 regression after fixtures move."""
     singer = Singer(id="main", name="主唱", color="#ff0000", is_default=True)

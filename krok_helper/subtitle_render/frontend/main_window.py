@@ -3832,11 +3832,17 @@ class SubtitleRenderWindow(QWidget):
         return track
 
     def load_from_sug_project(
-        self, project: object, source_path: Optional[Path] = None
+        self,
+        project: object,
+        source_path: Optional[Path] = None,
+        *,
+        nicokara_tags: Optional[dict] = None,
     ) -> Optional[TimingTrack]:
         """加载嵌入式 SUG 当前项目对象，供主工作流第 4 步 → 第 5 步接线使用。"""
         try:
-            track = timing_track_from_sug_project(project)
+            track = timing_track_from_sug_project(
+                project, nicokara_tags=nicokara_tags
+            )
         except Exception as exc:  # noqa: BLE001
             fluent_error(
                 self, "加载字幕失败", f"无法读取打轴项目：\n{exc}"

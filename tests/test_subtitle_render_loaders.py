@@ -219,7 +219,21 @@ def test_in_memory_sug_handoff_does_not_enable_file_watching(
     SugProjectParser.save(project, str(source_path))
     win = _make_window(qapp, monkeypatch)
 
-    assert win.load_from_sug_project(project, source_path) is not None
+    track = win.load_from_sug_project(
+        project,
+        source_path,
+        nicokara_tags={
+            "title": "联动曲名",
+            "artist": "联动歌手",
+            "tagging_by": "打轴者",
+            "custom": ["@Emoji=主唱"],
+        },
+    )
+    assert track is not None
+    assert track.meta.title == "联动曲名"
+    assert track.meta.artist == "联动歌手"
+    assert track.meta.tagging_by == "打轴者"
+    assert track.meta.custom == ["@Emoji=主唱"]
 
     assert win._watch_primary_subtitle_source is False
     assert win._subtitle_source_key(source_path) not in win._source_watch_states

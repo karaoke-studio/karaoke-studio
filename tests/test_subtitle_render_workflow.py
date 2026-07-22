@@ -260,6 +260,90 @@ def test_accept_subtitle_video_fills_hires_video_and_switches_page(tmp_path: Pat
     assert calls == [("video", output), ("show", WORKFLOW_HIRES_MIX)]
 
 
+def test_lyrics_timing_export_hands_complete_payload_to_subtitle_render(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "song.sug"
+    source.write_text("{}", encoding="utf-8")
+    video = tmp_path / "song.mp4"
+    video.write_bytes(b"video")
+    project = object()
+    tags = {
+        "title": "曲名",
+        "artist": "歌手",
+        "custom": ["@Emoji=主唱"],
+    }
+    calls: list[object] = []
+
+    class RenderPage:
+        def load_from_sug_project(self, *args, **kwargs):
+            calls.append(("track", args, kwargs))
+            return object()
+
+        def load_video(self, path):
+            calls.append(("video", path))
+
+        def load_audio(self, path):
+            calls.append(("audio", path))
+
+    app = SimpleNamespace(
+        lyrics_timing_page=SimpleNamespace(
+            export_to_next_payload=lambda: {
+                "project": project,
+                "nicokara_tags": tags,
+                "source_path": str(source),
+                "media_path": str(video),
+                "media_kind": "video",
+                "audio_path": None,
+            }
+        ),
+        subtitle_render_page=RenderPage(),
+        _show_module=lambda module: calls.append(("show", module)),
+    )
+
+    KrokHelperQtApp._export_lyrics_timing_to_next(app)
+
+    assert calls == [
+        (
+            "track",
+            (project, source),
+            {"nicokara_tags": tags},
+        ),
+        ("video", video),
+        ("show", WORKFLOW_SUBTITLE_RENDER),
+    ]
+
+
+def test_lyrics_timing_export_falls_back_to_audio(tmp_path: Path) -> None:
+    audio = tmp_path / "song.flac"
+    audio.write_bytes(b"audio")
+    calls: list[object] = []
+    app = SimpleNamespace(
+        lyrics_timing_page=SimpleNamespace(
+            export_to_next_payload=lambda: {
+                "project": object(),
+                "nicokara_tags": {},
+                "source_path": None,
+                "media_path": None,
+                "media_kind": None,
+                "audio_path": str(audio),
+            }
+        ),
+        subtitle_render_page=SimpleNamespace(
+            load_from_sug_project=lambda *args, **kwargs: object(),
+            load_audio=lambda path: calls.append(("audio", path)),
+        ),
+        _show_module=lambda module: calls.append(("show", module)),
+    )
+
+    KrokHelperQtApp._export_lyrics_timing_to_next(app)
+
+    assert calls == [
+        ("audio", audio),
+        ("show", WORKFLOW_SUBTITLE_RENDER),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # 字幕轨道显示/隐藏时间编辑的撤销 / 重做（Ctrl+Z / Ctrl+Y）
 # ---------------------------------------------------------------------------
