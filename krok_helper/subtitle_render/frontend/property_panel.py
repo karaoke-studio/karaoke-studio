@@ -108,6 +108,7 @@ from krok_helper.subtitle_render.models import (
     ExitAnimation,
     HORIZONTAL_ALIGNS,
     HorizontalAlign,
+    KaraokeAnimation,
     KaraokeColors,
     KaraokeColorState,
     LineHorizontalLayout,
@@ -122,6 +123,7 @@ from krok_helper.subtitle_render.models import (
     TITLE_SCHEME_NAME,
     TITLE_SHOW_MODES,
     TitleOverlay,
+    effective_karaoke_animation,
     migrate_title_char_role_labels,
     VIEWPORT_ALIGNS,
     ViewportAlign,
@@ -4145,6 +4147,14 @@ class PropertyPanel(QWidget):
                 max(0, self._exit_anim_combo.findData(self._style.exit_anim))
             )
             self._exit_fade_spin.setValue(self._style.exit_fade_ms)
+            self._karaoke_anim_combo.setCurrentIndex(
+                max(
+                    0,
+                    self._karaoke_anim_combo.findData(
+                        effective_karaoke_animation(self._style)
+                    ),
+                )
+            )
             self._sync_lit_controls()
             self._sync_subtitle_scheme_controls()
             self._sync_title_controls()
@@ -5862,7 +5872,7 @@ class PropertyPanel(QWidget):
             ("逐文字渐显", "char_fade"),
             ("文字垂下", "char_drip"),
             ("旋转翻转", "spin_flip"),
-            ("ユートピア", "utopia"),
+            ("utopia", "utopia"),
         ]:
             self._entry_anim_combo.addItem(label, value)
         self._entry_anim_combo.currentIndexChanged.connect(
@@ -5893,7 +5903,7 @@ class PropertyPanel(QWidget):
             ("逐文字渐隐", "char_fade"),
             ("文字垂出", "char_drip"),
             ("旋转翻转", "spin_flip"),
-            ("ユートピア", "utopia"),
+            ("utopia", "utopia"),
         ]:
             self._exit_anim_combo.addItem(label, value)
         self._exit_anim_combo.currentIndexChanged.connect(
@@ -5913,6 +5923,23 @@ class PropertyPanel(QWidget):
         self._exit_fade_spin.setToolTip("退场动画时长")
         exit_row_layout.addWidget(self._exit_fade_spin, 1)
         self._animation_grid.add_field("退场动画 / 时长", self._exit_animation_row)
+
+        self._karaoke_anim_combo = _WheelFocusedComboBox(section)
+        _compact_control(self._karaoke_anim_combo)
+        for label, value in [
+            ("无", "none"),
+            ("utopia", "utopia"),
+        ]:
+            self._karaoke_anim_combo.addItem(label, value)
+        self._karaoke_anim_combo.setToolTip(
+            "控制歌词正在着色时的逐字动画；旧项目的 Utopia 入退场会自动兼容"
+        )
+        self._karaoke_anim_combo.currentIndexChanged.connect(
+            lambda _index: self._update_style(
+                karaoke_anim=self._karaoke_anim_combo.currentData()
+            )
+        )
+        self._animation_grid.add_field("唱字特效", self._karaoke_anim_combo)
 
         layout.addWidget(self._animation_grid)
         return section
@@ -7719,6 +7746,10 @@ class PropertyPanel(QWidget):
             changes["entry_anim"] = _normalize_entry_animation(changes["entry_anim"])
         if "exit_anim" in changes:
             changes["exit_anim"] = _normalize_exit_animation(changes["exit_anim"])
+        if "karaoke_anim" in changes:
+            changes["karaoke_anim"] = _normalize_karaoke_animation(
+                changes["karaoke_anim"]
+            )
         if "lit_style" in changes:
             changes["lit_style"] = _normalize_lit_style(changes["lit_style"])
         if "lit_transition_mode" in changes:
@@ -7728,6 +7759,18 @@ class PropertyPanel(QWidget):
         self._style = replace(self._style, **changes)
         self._syncing = True
         try:
+            if (
+                self._style.karaoke_anim == "inherit"
+                and {"entry_anim", "exit_anim"}.intersection(changes)
+            ):
+                self._karaoke_anim_combo.setCurrentIndex(
+                    max(
+                        0,
+                        self._karaoke_anim_combo.findData(
+                            effective_karaoke_animation(self._style)
+                        ),
+                    )
+                )
             if set(changes).intersection(
                 _SCHEME_FIELDS | {"singer_style_overrides", "custom_style_schemes"}
             ):
@@ -7794,6 +7837,12 @@ def _normalize_exit_animation(value: object) -> ExitAnimation:
     if value in {"none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia"}:
         return value  # type: ignore[return-value]
     return "none"
+
+
+def _normalize_karaoke_animation(value: object) -> KaraokeAnimation:
+    if value in {"inherit", "none", "utopia"}:
+        return value  # type: ignore[return-value]
+    return "inherit"
 
 
 def _normalize_lit_style(value: object):

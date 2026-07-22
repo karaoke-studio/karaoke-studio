@@ -32,6 +32,7 @@ EntryAnimation = Literal[
 ExitAnimation = Literal[
     "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia"
 ]
+KaraokeAnimation = Literal["inherit", "none", "utopia"]
 RubyMainProgressMode = Literal["checkpoint_segments", "reading_units"]
 LayoutSemantics = Literal["legacy", "n3_1074"]
 
@@ -1094,6 +1095,9 @@ class Style:
     exit_fade_ms: int = 300
     """退场动画时长；在显示窗口结束前开始。"""
 
+    karaoke_anim: KaraokeAnimation = "inherit"
+    """唱字动画：inherit（兼容旧 Utopia）/ none / utopia。"""
+
     # 指示灯（Sayatoo SignalsLits.sx：lit.* / signals.duration）
     lit_enabled: bool = False
     lit_style: LitStyle = "volume"
@@ -1151,6 +1155,15 @@ def style_with_line_animation(style: Style, line: TimingLine) -> Style:
         exit_anim=override.exit_anim,
         exit_fade_ms=max(int(override.exit_duration_ms), 0),
     )
+
+
+def effective_karaoke_animation(style: Style) -> Literal["none", "utopia"]:
+    """Resolve the singing animation while preserving legacy Utopia projects."""
+    if style.karaoke_anim == "utopia":
+        return "utopia"
+    if style.karaoke_anim == "none":
+        return "none"
+    return "utopia" if "utopia" in {style.entry_anim, style.exit_anim} else "none"
 
 
 @dataclass
@@ -1542,6 +1555,10 @@ def style_from_dict(payload: object) -> Style:
                     "none", "fade", "slide_out", "rise", "char_fade", "char_drip", "spin_flip", "utopia"
                 }
                 else defaults.exit_anim
+            )
+        elif key == "karaoke_anim":
+            changes[key] = (
+                value if value in {"inherit", "none", "utopia"} else defaults.karaoke_anim
             )
         elif key in {
             "font_family_latin",

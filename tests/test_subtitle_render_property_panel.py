@@ -66,6 +66,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     TimingLine,
     TimingTrack,
     TitleOverlay,
+    effective_karaoke_animation,
     paint_fill_from_dict,
     style_from_dict,
     style_to_dict,
@@ -824,6 +825,7 @@ def test_property_panel_set_style_populates_controls(qapp):
         entry_lead_ms=450,
         exit_anim="char_fade",
         exit_fade_ms=650,
+        karaoke_anim="utopia",
         lit_enabled=True,
         lit_style="rounded",
         lit_number=2,
@@ -918,6 +920,7 @@ def test_property_panel_set_style_populates_controls(qapp):
     assert panel._entry_lead_spin.value() == 450
     assert panel._exit_anim_combo.currentData() == "char_fade"
     assert panel._exit_fade_spin.value() == 650
+    assert panel._karaoke_anim_combo.currentData() == "utopia"
     assert panel._lit_enabled_switch.isChecked()
     assert panel._lit_style_combo.currentData() == "rounded"
     assert panel._lit_number_spin.value() == 2
@@ -3071,10 +3074,24 @@ def test_ruby_main_progress_mode_round_trips_and_rejects_unknown_values():
     )
 
 
+def test_karaoke_animation_round_trips_and_rejects_unknown_values():
+    assert (
+        style_from_dict(style_to_dict(Style(karaoke_anim="utopia"))).karaoke_anim
+        == "utopia"
+    )
+    assert style_from_dict({}).karaoke_anim == "inherit"
+    assert style_from_dict({"karaoke_anim": "unknown"}).karaoke_anim == "inherit"
+
+
 def test_property_panel_animation_controls_emit_style(qapp):
     panel = PropertyPanel()
     emitted: list[Style] = []
     panel.styleChanged.connect(emitted.append)
+
+    assert [
+        panel._karaoke_anim_combo.itemText(index)
+        for index in range(panel._karaoke_anim_combo.count())
+    ] == ["无", "utopia"]
 
     panel._entry_anim_combo.setCurrentIndex(
         panel._entry_anim_combo.findData("char_fade")
@@ -3082,11 +3099,34 @@ def test_property_panel_animation_controls_emit_style(qapp):
     panel._entry_lead_spin.setValue(700)
     panel._exit_anim_combo.setCurrentIndex(panel._exit_anim_combo.findData("utopia"))
     panel._exit_fade_spin.setValue(900)
+    panel._karaoke_anim_combo.setCurrentIndex(
+        panel._karaoke_anim_combo.findData("utopia")
+    )
 
     assert emitted[-1].entry_anim == "char_fade"
     assert emitted[-1].entry_lead_ms == 700
     assert emitted[-1].exit_anim == "utopia"
     assert emitted[-1].exit_fade_ms == 900
+    assert effective_karaoke_animation(emitted[-1]) == "utopia"
+
+
+def test_property_panel_shows_legacy_utopia_as_utopia_karaoke_effect(qapp):
+    panel = PropertyPanel()
+
+    panel._entry_anim_combo.setCurrentIndex(
+        panel._entry_anim_combo.findData("utopia")
+    )
+    assert panel.subtitle_style.karaoke_anim == "inherit"
+    assert panel._karaoke_anim_combo.currentData() == "utopia"
+
+    panel.set_style(Style(entry_anim="utopia"), emit=False)
+    assert panel.subtitle_style.karaoke_anim == "inherit"
+    assert panel._karaoke_anim_combo.currentData() == "utopia"
+
+    panel._karaoke_anim_combo.setCurrentIndex(
+        panel._karaoke_anim_combo.findData("none")
+    )
+    assert panel.subtitle_style.karaoke_anim == "none"
 
 
 def test_property_panel_exposes_n3_char_drip_animation(qapp):

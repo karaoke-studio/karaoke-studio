@@ -112,6 +112,7 @@ struct TimingLine {
     int entryDurationMs = 0;
     QString exitAnimation = QStringLiteral("none");
     int exitDurationMs = 0;
+    QString karaokeAnimation = QStringLiteral("none");
     ResolvedLineLayout layout;
 };
 
@@ -297,6 +298,7 @@ struct RenderConfig {
     int entryLeadMs = 300;
     QString exitAnim = QStringLiteral("none");
     int exitFadeMs = 300;
+    QString karaokeAnim = QStringLiteral("inherit");
     int timingOffsetMs = 0;
     int primaryTrackOffsetMs = 0;
     QJsonObject singerStyleOverrides;
@@ -2269,6 +2271,9 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     cfg.entryLeadMs = std::max(0, intValue(style, QStringLiteral("entry_lead_ms"), cfg.entryLeadMs));
     cfg.exitAnim = stringValue(style, QStringLiteral("exit_anim"), cfg.exitAnim);
     cfg.exitFadeMs = std::max(0, intValue(style, QStringLiteral("exit_fade_ms"), cfg.exitFadeMs));
+    cfg.karaokeAnim = stringValue(
+        style, QStringLiteral("karaoke_anim"), cfg.karaokeAnim
+    );
     cfg.timingOffsetMs = intValue(style, QStringLiteral("timing_offset_ms"), cfg.timingOffsetMs);
     const bool hasMainKaraokeColors = style.value(QStringLiteral("karaoke_colors")).isObject();
     const bool hasRubyKaraokeColors = style.value(QStringLiteral("ruby_karaoke_colors")).isObject();
@@ -2344,6 +2349,16 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
             );
             line.exitDurationMs = std::max(
                 0, intValue(lineObject, QStringLiteral("exit_duration_ms"), 0)
+            );
+            QString karaokeFallback = cfg.karaokeAnim;
+            if (karaokeFallback == QStringLiteral("inherit")) {
+                karaokeFallback = (
+                    line.entryAnimation == QStringLiteral("utopia")
+                    || line.exitAnimation == QStringLiteral("utopia")
+                ) ? QStringLiteral("utopia") : QStringLiteral("none");
+            }
+            line.karaokeAnimation = stringValue(
+                lineObject, QStringLiteral("karaoke_anim"), karaokeFallback
             );
             const QJsonObject layoutObject = lineObject.value(
                 QStringLiteral("layout")
@@ -2987,6 +3002,17 @@ double utopiaWipeScale(int tMs, int charStartMs, int charEndMs) {
     return 1.0 + (kUtopiaWipeOverRatio - 1.0) * std::clamp(progress, 0.0, 1.0);
 }
 
+bool utopiaKaraokeEnabled(const RenderConfig &cfg) {
+    if (cfg.karaokeAnim == QStringLiteral("utopia")) {
+        return true;
+    }
+    if (cfg.karaokeAnim == QStringLiteral("none")) {
+        return false;
+    }
+    return cfg.entryAnim == QStringLiteral("utopia")
+        || cfg.exitAnim == QStringLiteral("utopia");
+}
+
 std::optional<LineCharTransition> lineCharTransitionContext(
     const RenderConfig &cfg,
     const TimingLine &line,
@@ -2996,7 +3022,9 @@ std::optional<LineCharTransition> lineCharTransitionContext(
     if (line.chars.empty()) {
         return std::nullopt;
     }
-    if (cfg.entryAnim != QStringLiteral("utopia") && cfg.exitAnim != QStringLiteral("utopia")) {
+    if (cfg.entryAnim != QStringLiteral("utopia")
+        && cfg.exitAnim != QStringLiteral("utopia")
+        && !utopiaKaraokeEnabled(cfg)) {
         return std::nullopt;
     }
 
@@ -3008,10 +3036,12 @@ std::optional<LineCharTransition> lineCharTransitionContext(
         && utopiaFollowingDoneTime(line, intervals, 0, cfg) <= tMs
         && tMs <= end;
     bool inWipe = false;
-    for (const auto &interval : intervals) {
-        if (isUtopiaWiping(tMs, interval.first, interval.second)) {
-            inWipe = true;
-            break;
+    if (utopiaKaraokeEnabled(cfg)) {
+        for (const auto &interval : intervals) {
+            if (isUtopiaWiping(tMs, interval.first, interval.second)) {
+                inWipe = true;
+                break;
+            }
         }
     }
     if (!inIntro && !inExit && !inWipe) {
@@ -3122,7 +3152,9 @@ AnimationState transitionCharState(
             };
         }
 
-        if (overrideInterval.has_value() || (index >= 0 && index < static_cast<int>(intervals.size()))) {
+        if (utopiaKaraokeEnabled(cfg)
+            && (overrideInterval.has_value()
+                || (index >= 0 && index < static_cast<int>(intervals.size())))) {
             const auto interval = overrideInterval.has_value()
                 ? overrideInterval.value()
                 : intervals[static_cast<std::size_t>(index)];
@@ -7139,6 +7171,9 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         line.exitDurationMs = verticalCharacterAnimation(sourceLine.exitAnimation)
             ? 0
             : sourceLine.exitDurationMs;
+        line.karaokeAnimation = config.vertical
+            ? "none"
+            : sourceLine.karaokeAnimation.toStdString();
         if (sourceLine.displayStartMs.has_value()
             && sourceLine.displayEndMs.has_value()) {
             line.displayWindows.push_back(krok::subtitle::native::DisplayWindow{

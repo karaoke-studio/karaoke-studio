@@ -9,6 +9,7 @@ from krok_helper.subtitle_render.models import (
     LineAnimationOverride,
     Style,
     TimingLine,
+    effective_karaoke_animation,
     style_with_line_animation,
 )
 
@@ -37,6 +38,18 @@ def test_line_animation_override_replaces_only_animation_fields():
     assert effective.exit_anim == "none"
     assert effective.exit_fade_ms == 0
     assert effective.font_size_px == 100
+
+
+def test_karaoke_animation_keeps_legacy_utopia_and_allows_explicit_override():
+    assert effective_karaoke_animation(Style(entry_anim="utopia")) == "utopia"
+    assert effective_karaoke_animation(Style(exit_anim="utopia")) == "utopia"
+    assert (
+        effective_karaoke_animation(
+            Style(entry_anim="utopia", karaoke_anim="none")
+        )
+        == "none"
+    )
+    assert effective_karaoke_animation(Style(karaoke_anim="utopia")) == "utopia"
 
 
 def test_slide_in_fades_from_transparent_to_opaque():

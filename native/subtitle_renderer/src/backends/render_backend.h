@@ -202,6 +202,7 @@ struct TextLine {
     int entryDurationMs = 0;
     std::string exitAnimation = "none";
     int exitDurationMs = 0;
+    std::string karaokeAnimation = "none";
     std::vector<DisplayWindow> displayWindows;
     bool operator==(const TextLine &) const = default;
 };

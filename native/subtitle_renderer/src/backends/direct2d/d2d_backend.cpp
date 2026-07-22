@@ -998,6 +998,7 @@ struct Direct2DGpuBackend::Impl {
         int entryDurationMs = 0;
         std::string exitAnimation = "none";
         int exitDurationMs = 0;
+        std::string karaokeAnimation = "none";
         std::vector<DisplayWindow> displayWindows;
         TextStyle style;
         float ascent = 0.0f;
@@ -1585,6 +1586,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         cached.entryDurationMs = sourceLine.entryDurationMs;
         cached.exitAnimation = sourceLine.exitAnimation;
         cached.exitDurationMs = sourceLine.exitDurationMs;
+        cached.karaokeAnimation = sourceLine.karaokeAnimation;
         cached.displayWindows = sourceLine.displayWindows;
         if (style.layoutSemantics == "n3_1074") {
             DWRITE_FONT_METRICS n3Metrics{};
@@ -3703,9 +3705,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             || line->entryAnimation == "spin_flip"
             || line->exitAnimation == "spin_flip"
             || line->entryAnimation == "utopia"
-            || line->exitAnimation == "utopia";
+            || line->exitAnimation == "utopia"
+            || line->karaokeAnimation == "utopia";
         const bool hasUtopiaTransition = line->entryAnimation == "utopia"
-            || line->exitAnimation == "utopia";
+            || line->exitAnimation == "utopia"
+            || line->karaokeAnimation == "utopia";
         std::string activeCharacterTransition;
         int activeCharacterDirection = 0;
         if (!line->displayWindows.empty()) {
@@ -3938,7 +3942,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 rotation = -180.0f * local;
                 scaleX = shrink * std::cos(pi * local);
                 scaleY = shrink;
-            } else if (tMs > ch.startMs && tMs < ch.endMs
+            } else if (line->karaokeAnimation == "utopia"
+                && tMs > ch.startMs && tMs < ch.endMs
                 && ch.startMs != ch.endMs) {
                 const int overMs = std::min(
                     static_cast<int>((ch.endMs - ch.startMs) * 0.25f), 100
@@ -4054,7 +4059,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 rotation = -180.0f * local;
                 scaleX = shrink * std::cos(pi * local);
                 scaleY = shrink;
-            } else if (tMs > unit.startMs && tMs < unit.endMs
+            } else if (line->karaokeAnimation == "utopia"
+                && tMs > unit.startMs && tMs < unit.endMs
                 && unit.startMs != unit.endMs) {
                 const int overMs = std::min(
                     static_cast<int>((unit.endMs - unit.startMs) * 0.25f), 100
@@ -4657,31 +4663,34 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             }
             return std::pair<float, float>{top, bottom};
         };
+        auto visualTransformPadding = [](const TextStyle &item, bool ruby) {
+            const float stroke = ruby
+                ? std::max(item.rubyStrokeWidth, 0.0f)
+                    + std::max(item.rubyStroke2Width, 0.0f)
+                : std::max(item.strokeWidth, 0.0f)
+                    + std::max(item.stroke2Width, 0.0f);
+            const std::string &decoration = ruby
+                ? item.rubyDecorationKind
+                : item.decorationKind;
+            float padding = stroke * 0.5f + 3.0f;
+            if (decoration == "glow") {
+                const float glow = ruby
+                    ? std::max(item.rubyGlowBeforeRadius, item.rubyGlowAfterRadius)
+                    : std::max(item.glowBeforeRadius, item.glowAfterRadius);
+                padding += std::max(glow, 0.0f) * 3.0f;
+            } else if (decoration == "shadow") {
+                const float shadowX = ruby
+                    ? item.rubyShadowOffsetX
+                    : item.shadowOffsetX;
+                const float shadowY = ruby
+                    ? item.rubyShadowOffsetY
+                    : item.shadowOffsetY;
+                padding += std::max(std::abs(shadowX), std::abs(shadowY));
+            }
+            return padding;
+        };
         float contentTop = line->bounds.top;
         float contentBottom = line->bounds.bottom;
-        if (spinDirection != 0) {
-            auto extendAnimatedVerticalBounds = [&](ID2D1Geometry *geometry) {
-                if (geometry == nullptr) {
-                    return;
-                }
-                D2D1_RECT_F bounds{};
-                checkHr(
-                    geometry->GetBounds(nullptr, &bounds),
-                    "ID2D1Geometry::GetBounds(animated band)",
-                    device_
-                );
-                contentTop = std::min(contentTop, bounds.top);
-                contentBottom = std::max(contentBottom, bounds.bottom);
-            };
-            for (const auto &geometry : frameCharGeometries) {
-                extendAnimatedVerticalBounds(geometry.Get());
-            }
-            for (const auto &rubyGeometries : frameRubyGeometries) {
-                for (const auto &geometry : rubyGeometries) {
-                    extendAnimatedVerticalBounds(geometry.Get());
-                }
-            }
-        }
         auto [topPad, bottomPad] = visualVerticalPadding(style, false);
         for (const Impl::CachedChar &ch : line->chars) {
             if (ch.styleIndex < 0
@@ -4693,6 +4702,73 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             );
             topPad = std::max(topPad, padding.first);
             bottomPad = std::max(bottomPad, padding.second);
+        }
+        // Compact readback bands must follow the complete transformed visual,
+        // not the stable line box. N3 avoids this class of clipping by always
+        // reading its full-frame target. Preserve our band optimization by
+        // transforming a conservatively padded glyph rectangle instead. The
+        // horizontal padding is important for CharDrip/SpinFlip: their shear
+        // maps glow and shadow pixels from X into a much larger Y extent.
+        auto extendAnimatedVisualBounds = [&] (
+            ID2D1Geometry *baseGeometry,
+            const CharacterAnimationState &animationState,
+            float padding
+        ) {
+            if (baseGeometry == nullptr || !animationState.transformed) {
+                return;
+            }
+            D2D1_RECT_F bounds{};
+            checkHr(
+                baseGeometry->GetBounds(nullptr, &bounds),
+                "ID2D1Geometry::GetBounds(animated readback band)",
+                device_
+            );
+            bounds.left -= padding;
+            bounds.top -= padding;
+            bounds.right += padding;
+            bounds.bottom += padding;
+            const D2D1_MATRIX_3X2_F &matrix = animationState.matrix;
+            const auto transformedY = [&](float x, float y) {
+                return x * matrix._12 + y * matrix._22 + matrix._32;
+            };
+            const float visualTop = std::min({
+                transformedY(bounds.left, bounds.top),
+                transformedY(bounds.right, bounds.top),
+                transformedY(bounds.left, bounds.bottom),
+                transformedY(bounds.right, bounds.bottom),
+            });
+            const float visualBottom = std::max({
+                transformedY(bounds.left, bounds.top),
+                transformedY(bounds.right, bounds.top),
+                transformedY(bounds.left, bounds.bottom),
+                transformedY(bounds.right, bounds.bottom),
+            });
+            contentTop = std::min(contentTop, visualTop);
+            contentBottom = std::max(contentBottom, visualBottom);
+        };
+        for (std::size_t index = 0; index < line->chars.size(); ++index) {
+            const Impl::CachedChar &ch = line->chars[index];
+            const TextStyle &charStyle = ch.styleIndex >= 0
+                && ch.styleIndex < static_cast<int>(scene.charStyles.size())
+                ? scene.charStyles[static_cast<std::size_t>(ch.styleIndex)]
+                : style;
+            extendAnimatedVisualBounds(
+                ch.geometry.Get(), characterAnimationAt(index),
+                visualTransformPadding(charStyle, false)
+            );
+        }
+        for (const Impl::CachedRuby &ruby : line->rubies) {
+            const TextStyle &rubyStyle = ruby.styleIndex >= 0
+                && ruby.styleIndex < static_cast<int>(scene.charStyles.size())
+                ? scene.charStyles[static_cast<std::size_t>(ruby.styleIndex)]
+                : style;
+            const float padding = visualTransformPadding(rubyStyle, true);
+            for (std::size_t index = 0; index < ruby.chars.size(); ++index) {
+                extendAnimatedVisualBounds(
+                    ruby.chars[index].geometry.Get(),
+                    rubyUnitAnimationAt(ruby, index), padding
+                );
+            }
         }
         for (std::size_t rubyIndex = 0; rubyIndex < line->rubies.size(); ++rubyIndex) {
             const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
@@ -5191,6 +5267,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         };
 
         const float geometryPad = std::max(style.strokeWidth + style.stroke2Width, 2.0f) + 4.0f;
+        // N3 splits before/after colours with a full-frame vertical clip
+        // (0..MovieInfo.Height). A line-local vertical clip creates a hard
+        // horizontal seam when Utopia/CharDrip moves a glyph outside the
+        // stable row. Keep a deliberately oversized local range so the target
+        // surface, not the row box, is the only vertical boundary.
+        const float fullWipeClipTop = -static_cast<float>(scene.height) * 2.0f;
+        const float fullWipeClipBottom = static_cast<float>(scene.height) * 2.0f;
         const D2D1_RECT_F afterClip = style.vertical
             ? D2D1::RectF(
                 line->bounds.left - geometryPad,
@@ -5201,15 +5284,15 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             : (rtl
                 ? D2D1::RectF(
                     wipeEdge,
-                    line->bounds.top - geometryPad,
+                    fullWipeClipTop,
                     line->bounds.right + geometryPad,
-                    line->bounds.bottom + geometryPad
+                    fullWipeClipBottom
                 )
                 : D2D1::RectF(
                     line->bounds.left - geometryPad,
-                    line->bounds.top - geometryPad,
+                    fullWipeClipTop,
                     wipeEdge,
-                    line->bounds.bottom + geometryPad
+                    fullWipeClipBottom
                 ));
         const bool hasAfterWipe = style.vertical
             ? wipeEdge > line->fillBounds.top
@@ -6043,15 +6126,15 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             clip = after
                                 ? D2D1::RectF(
                                     animatedBounds.left - pad,
-                                    animatedBounds.top - pad,
+                                    fullWipeClipTop,
                                     animatedEdge,
-                                    animatedBounds.bottom + pad
+                                    fullWipeClipBottom
                                 )
                                 : D2D1::RectF(
                                     animatedEdge,
-                                    animatedBounds.top - pad,
+                                    fullWipeClipTop,
                                     animatedBounds.right + pad,
-                                    animatedBounds.bottom + pad
+                                    fullWipeClipBottom
                                 );
                             needClip = true;
                         }
@@ -6059,21 +6142,21 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         clip = rtl
                             ? (after
                                 ? D2D1::RectF(
-                                    wipeEdge, line->bounds.top - pad,
-                                    ch.right + pad, line->bounds.bottom + pad
+                                    wipeEdge, fullWipeClipTop,
+                                    ch.right + pad, fullWipeClipBottom
                                 )
                                 : D2D1::RectF(
-                                    ch.left - pad, line->bounds.top - pad,
-                                    wipeEdge, line->bounds.bottom + pad
+                                    ch.left - pad, fullWipeClipTop,
+                                    wipeEdge, fullWipeClipBottom
                                 ))
                             : (after
                                 ? D2D1::RectF(
-                                    ch.left - pad, line->bounds.top - pad,
-                                    wipeEdge, line->bounds.bottom + pad
+                                    ch.left - pad, fullWipeClipTop,
+                                    wipeEdge, fullWipeClipBottom
                                 )
                                 : D2D1::RectF(
-                                    wipeEdge, line->bounds.top - pad,
-                                    ch.right + pad, line->bounds.bottom + pad
+                                    wipeEdge, fullWipeClipTop,
+                                    ch.right + pad, fullWipeClipBottom
                                 ));
                         needClip = true;
                     }
@@ -6124,35 +6207,35 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         clip = after
                             ? D2D1::RectF(
                                 animatedBounds.left - pad,
-                                animatedBounds.top - pad,
+                                fullWipeClipTop,
                                 animatedEdge,
-                                animatedBounds.bottom + pad
+                                fullWipeClipBottom
                             )
                             : D2D1::RectF(
                                 animatedEdge,
-                                animatedBounds.top - pad,
+                                fullWipeClipTop,
                                 animatedBounds.right + pad,
-                                animatedBounds.bottom + pad
+                                fullWipeClipBottom
                             );
                     } else {
                         clip = rtl
                             ? (after
                                 ? D2D1::RectF(
-                                    wipeEdge, line->bounds.top - pad,
-                                    ch.right + pad, line->bounds.bottom + pad
+                                    wipeEdge, fullWipeClipTop,
+                                    ch.right + pad, fullWipeClipBottom
                                 )
                                 : D2D1::RectF(
-                                    ch.left - pad, line->bounds.top - pad,
-                                    wipeEdge, line->bounds.bottom + pad
+                                    ch.left - pad, fullWipeClipTop,
+                                    wipeEdge, fullWipeClipBottom
                                 ))
                             : (after
                                 ? D2D1::RectF(
-                                    ch.left - pad, line->bounds.top - pad,
-                                    wipeEdge, line->bounds.bottom + pad
+                                    ch.left - pad, fullWipeClipTop,
+                                    wipeEdge, fullWipeClipBottom
                                 )
                                 : D2D1::RectF(
-                                    wipeEdge, line->bounds.top - pad,
-                                    ch.right + pad, line->bounds.bottom + pad
+                                    wipeEdge, fullWipeClipTop,
+                                    ch.right + pad, fullWipeClipBottom
                                 ));
                     }
                     pushAxisAlignedClip(
@@ -6365,9 +6448,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             pushAxisAlignedClip(
                                 D2D1::RectF(
                                     animatedBounds.left - pad - shadowX,
-                                    animatedBounds.top - pad,
+                                    fullWipeClipTop,
                                     animatedEdge - shadowX,
-                                    animatedBounds.bottom + pad
+                                    fullWipeClipBottom
                                 ),
                                 D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                             );
@@ -6497,17 +6580,17 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             : (rtl
                                 ? D2D1::RectF(
                                     edge - rubyStyle.rubyShadowOffsetX,
-                                    ruby.bounds.top - pad,
+                                    fullWipeClipTop,
                                     ruby.bounds.right + pad
                                         - rubyStyle.rubyShadowOffsetX,
-                                    ruby.bounds.bottom + pad
+                                    fullWipeClipBottom
                                 )
                                 : D2D1::RectF(
                                     ruby.bounds.left - pad
                                         - rubyStyle.rubyShadowOffsetX,
-                                    ruby.bounds.top - pad,
+                                    fullWipeClipTop,
                                     edge - rubyStyle.rubyShadowOffsetX,
-                                    ruby.bounds.bottom + pad
+                                    fullWipeClipBottom
                                 )),
                         D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
@@ -6556,9 +6639,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         pushAxisAlignedClip(
                             D2D1::RectF(
                                 animatedBounds.left - pad - shadowX,
-                                animatedBounds.top - pad,
+                                fullWipeClipTop,
                                 animatedEdge - shadowX,
-                                animatedBounds.bottom + pad
+                                fullWipeClipBottom
                             ),
                             D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                         );
@@ -6675,7 +6758,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 : style;
             float edge = delegatedWipeCoordinateAt(line->chars, charIndex);
             D2D1_RECT_F bounds = line->bounds;
-            if (useUtopiaTransition) {
+            if (useUtopiaTransition || charTransformedAt(charIndex)) {
                 const auto animated = utopiaCharWipe(charIndex);
                 bounds = animated.first;
                 edge = animated.second;
@@ -6697,22 +6780,22 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             } else if (rtl) {
                 clip = after
                     ? D2D1::RectF(
-                        edge, bounds.top - pad,
-                        bounds.right + pad, bounds.bottom + pad
+                        edge, fullWipeClipTop,
+                        bounds.right + pad, fullWipeClipBottom
                     )
                     : D2D1::RectF(
-                        bounds.left - pad, bounds.top - pad,
-                        edge, bounds.bottom + pad
+                        bounds.left - pad, fullWipeClipTop,
+                        edge, fullWipeClipBottom
                     );
             } else {
                 clip = after
                     ? D2D1::RectF(
-                        bounds.left - pad, bounds.top - pad,
-                        edge, bounds.bottom + pad
+                        bounds.left - pad, fullWipeClipTop,
+                        edge, fullWipeClipBottom
                     )
                     : D2D1::RectF(
-                        edge, bounds.top - pad,
-                        bounds.right + pad, bounds.bottom + pad
+                        edge, fullWipeClipTop,
+                        bounds.right + pad, fullWipeClipBottom
                     );
             }
             pushAxisAlignedClip(
@@ -6929,9 +7012,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     pushAxisAlignedClip(
                         D2D1::RectF(
                             animatedBounds.left - pad,
-                            animatedBounds.top - pad,
+                            fullWipeClipTop,
                             animatedEdge,
-                            animatedBounds.bottom + pad
+                            fullWipeClipBottom
                         ),
                         D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
                     );
@@ -7047,15 +7130,15 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 : (rtl
                     ? D2D1::RectF(
                         rubyWipeEdge,
-                        ruby.bounds.top - rubyPad,
+                        fullWipeClipTop,
                         ruby.bounds.right + rubyPad,
-                        ruby.bounds.bottom + rubyPad
+                        fullWipeClipBottom
                     )
                     : D2D1::RectF(
                         ruby.bounds.left - rubyPad,
-                        ruby.bounds.top - rubyPad,
+                        fullWipeClipTop,
                         rubyWipeEdge,
-                        ruby.bounds.bottom + rubyPad
+                        fullWipeClipBottom
                     ));
             drawRubyStack(rubyIndex, ruby, false);
             if (rubyPhaseVisible(ruby, rubyWipeEdge, true)) {

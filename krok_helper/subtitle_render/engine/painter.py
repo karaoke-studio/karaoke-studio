@@ -529,6 +529,7 @@ from krok_helper.subtitle_render.models import (
     TimingLine,
     TimingTrack,
     TitleOverlay,
+    effective_karaoke_animation,
     normalize_title_char_role_labels,
     normalize_glow_concentration_level,
     guide_symbol_replacement_count,
@@ -8380,7 +8381,11 @@ def _line_char_transition_context(
                 end_ms=entry_end,
             )
 
-    if style.entry_anim == "utopia" or style.exit_anim == "utopia":
+    if (
+        style.entry_anim == "utopia"
+        or style.exit_anim == "utopia"
+        or effective_karaoke_animation(style) == "utopia"
+    ):
         intervals = intervals if intervals is not None else compute_char_intervals(line)
         # Utopia 的入场、唱中弹跳和退场原本只在各自的活动窗口切进逐字符
         # 矢量路径，其余时刻回到整行静态路径。两条路径在发光叠加与边缘
@@ -8682,7 +8687,8 @@ def _transition_char_state(
                 following_done_ms=following_done_ms,
             )
         if (
-            t_ms is not None
+            effective_karaoke_animation(style) == "utopia"
+            and t_ms is not None
             and char_start_ms is not None
             and char_end_ms is not None
             and _is_utopia_wiping(t_ms, char_start_ms, char_end_ms)

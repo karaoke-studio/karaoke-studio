@@ -373,6 +373,10 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
     assert gpu_unsupported_features(track, Style(entry_anim="char_drip")) == ()
     assert gpu_unsupported_features(track, Style(entry_anim="spin_flip")) == ()
     assert gpu_unsupported_features(track, Style(entry_anim="utopia")) == ()
+    assert gpu_unsupported_features(track, Style(karaoke_anim="utopia")) == ()
+    assert gpu_unsupported_features(
+        track, Style(karaoke_anim="future_effect")
+    ) == ("karaoke_animation",)
     assert gpu_unsupported_features(track, Style(lit_enabled=True)) == ()
     assert gpu_unsupported_features(track, Style(right_to_left=True)) == ()
     assert gpu_unsupported_features(
@@ -578,6 +582,30 @@ def test_build_render_ir_resolves_global_and_per_line_basic_animations():
     assert lines[1]["exit_anim"] == "rise"
     assert lines[1]["exit_duration_ms"] == 600
     assert gpu_unsupported_features(track, style) == ()
+
+
+def test_build_render_ir_resolves_independent_karaoke_animation():
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("A", 1_000)], end_ms=2_000)]
+    )
+
+    inherited = build_render_ir(
+        track, Style(entry_anim="utopia"), width=640, height=360, fps=60
+    )["track"]["lines"][0]
+    disabled = build_render_ir(
+        track,
+        Style(entry_anim="utopia", karaoke_anim="none"),
+        width=640,
+        height=360,
+        fps=60,
+    )["track"]["lines"][0]
+    standalone = build_render_ir(
+        track, Style(karaoke_anim="utopia"), width=640, height=360, fps=60
+    )["track"]["lines"][0]
+
+    assert inherited["karaoke_anim"] == "utopia"
+    assert disabled["karaoke_anim"] == "none"
+    assert standalone["karaoke_anim"] == "utopia"
 
 
 def test_build_render_ir_clamps_screen_values():

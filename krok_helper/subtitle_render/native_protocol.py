@@ -20,6 +20,7 @@ from krok_helper.subtitle_render.models import (
     TimingLine,
     TimingTrack,
     TitleOverlay,
+    effective_karaoke_animation,
     guide_symbol_to_dict,
     style_to_dict,
     title_overlay_to_dict,
@@ -72,6 +73,8 @@ def gpu_unsupported_features(
         }
     ):
         reasons.append("line_animation")
+    if style.karaoke_anim not in {"inherit", "none", "utopia"}:
+        reasons.append("karaoke_animation")
     for source in sources:
         for line in source.lines:
             if line.animation_override is not None:
@@ -167,6 +170,7 @@ def timing_line_to_ir(
     entry_duration_ms: int = 0,
     exit_anim: str = "none",
     exit_duration_ms: int = 0,
+    karaoke_anim: str = "none",
 ) -> dict[str, Any]:
     render_line = render_line or line
     return {
@@ -186,6 +190,7 @@ def timing_line_to_ir(
         "entry_duration_ms": max(int(entry_duration_ms), 0),
         "exit_anim": str(exit_anim),
         "exit_duration_ms": max(int(exit_duration_ms), 0),
+        "karaoke_anim": str(karaoke_anim),
         "layout": (
             {
                 "line_y_position": layout_style.line_y_position,
@@ -336,6 +341,11 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
                     animation_styles[index].exit_fade_ms
                     if style is not None
                     else 0
+                ),
+                karaoke_anim=(
+                    effective_karaoke_animation(animation_styles[index])
+                    if style is not None
+                    else "none"
                 ),
             )
             for index, line in enumerate(track.lines)

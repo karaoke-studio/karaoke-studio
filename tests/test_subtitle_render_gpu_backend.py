@@ -4891,6 +4891,55 @@ def test_gpu_g4_char_drip_matches_painter_right_edge_shear(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize(
+    ("animation", "t_ms"),
+    [("utopia", 350), ("spin_flip", 125), ("char_drip", 350)],
+)
+def test_gpu_dynamic_overflow_band_readback_matches_full_frame(
+    animation: str, t_ms: int, monkeypatch
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track, base_style = _g4_spin_scene()
+    style = replace(
+        base_style,
+        stroke_width_px=15,
+        stroke2_enabled=True,
+        stroke2_width_px=3,
+        ruby_stroke_width_px=4,
+        ruby_stroke2_enabled=True,
+        ruby_stroke2_width_px=2,
+        entry_anim=animation,
+        exit_anim=animation,
+    )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        renderer.configure_gpu(
+            track, style, width=640, height=360, fps=60, force_warp=True
+        )
+        full_event = renderer.render_gpu_frame(
+            t_ms,
+            force_warp=True,
+            shm_key=f"krok-gpu-dynamic-full-{uuid.uuid4().hex}",
+        )
+        with SharedFrameRingReader.from_event(full_event) as reader:
+            full_frame = bytes(reader.read_frame(full_event).payload)
+        band_event = renderer.render_gpu_frame(
+            t_ms,
+            force_warp=True,
+            shm_key=f"krok-gpu-dynamic-band-{uuid.uuid4().hex}",
+            readback_bands=True,
+        )
+        with SharedFrameRingReader.from_event(band_event) as reader:
+            band_frame = bytes(reader.read_frame(band_event).payload)
+
+    assert _alpha_count(full_frame) > 0
+    assert band_event["pixel_format"] == "bgra8888_premultiplied_bands"
+    if animation != "char_drip":
+        assert band_event["readback_ratio"] < 1.0
+    assert band_frame == full_frame
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize("animation", ["utopia", "spin_flip", "char_drip"])
 def test_gpu_dynamic_actions_use_direct_stroke_without_expanded_frame_geometry(
     animation: str, monkeypatch
@@ -5114,6 +5163,86 @@ def test_gpu_g4_utopia_main_intro_wipe_and_outro_follow_painter(monkeypatch) -> 
                 _payload_alpha_bounds(painter_frame),
             )
         ), (_payload_alpha_bounds(gpu_frame), _payload_alpha_bounds(painter_frame))
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_utopia_karaoke_bounce_is_independent_and_legacy_compatible(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track, legacy_style = _g4_utopia_main_scene()
+    explicit_style = replace(legacy_style, karaoke_anim="utopia")
+    disabled_style = replace(legacy_style, karaoke_anim="none")
+    standalone_style = replace(
+        legacy_style,
+        entry_anim="none",
+        exit_anim="none",
+        karaoke_anim="utopia",
+    )
+    timestamps = (350, 1_350, 3_600)
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, legacy_gpu = _render_g1_frames(
+            renderer, legacy_style, timestamps, force_warp=True, track=track
+        )
+        _, explicit_gpu = _render_g1_frames(
+            renderer, explicit_style, timestamps, force_warp=True, track=track
+        )
+        _, disabled_gpu = _render_g1_frames(
+            renderer, disabled_style, (1_350,), force_warp=True, track=track
+        )
+        _, standalone_gpu = _render_g1_frames(
+            renderer, standalone_style, (1_350,), force_warp=True, track=track
+        )
+
+    legacy_painter = [
+        _render_painter_oracle(legacy_style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+    explicit_painter = [
+        _render_painter_oracle(explicit_style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+    disabled_painter = _render_painter_oracle(
+        disabled_style, t_ms=1_350, track=track
+    )
+    standalone_painter = _render_painter_oracle(
+        standalone_style, t_ms=1_350, track=track
+    )
+
+    assert legacy_gpu == explicit_gpu
+    assert legacy_painter == explicit_painter
+    assert legacy_gpu[1] == standalone_gpu[0]
+    assert legacy_painter[1] == standalone_painter
+    assert legacy_gpu[1] != disabled_gpu[0]
+    assert legacy_painter[1] != disabled_painter
+
+    ruby_track, ruby_legacy_style = _g4_utopia_ruby_scene()
+    ruby_standalone_style = replace(
+        ruby_legacy_style,
+        entry_anim="none",
+        exit_anim="none",
+        karaoke_anim="utopia",
+    )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, ruby_legacy_gpu = _render_g1_frames(
+            renderer,
+            ruby_legacy_style,
+            (1_800,),
+            force_warp=True,
+            track=ruby_track,
+        )
+        _, ruby_standalone_gpu = _render_g1_frames(
+            renderer,
+            ruby_standalone_style,
+            (1_800,),
+            force_warp=True,
+            track=ruby_track,
+        )
+    assert ruby_legacy_gpu == ruby_standalone_gpu
+    assert _render_painter_oracle(
+        ruby_legacy_style, t_ms=1_800, track=ruby_track
+    ) == _render_painter_oracle(
+        ruby_standalone_style, t_ms=1_800, track=ruby_track
+    )
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
