@@ -788,6 +788,8 @@ class NativeRendererProcess:
         prewarm_t_ms: int = 0,
         worker_count: int = 1,
         realization_enabled: bool = True,
+        shared_resources: bool = False,
+        wait_realizations: bool = False,
         realization_capacity: int | None = None,
         export_crop_top: int = 0,
         export_crop_height: int = 0,
@@ -809,6 +811,8 @@ class NativeRendererProcess:
             "prewarm_t_ms": max(int(prewarm_t_ms), 0),
             "worker_count": max(1, min(int(worker_count), 8)),
             "realization_enabled": bool(realization_enabled),
+            "shared_resources": bool(shared_resources),
+            "wait_realizations": bool(wait_realizations),
             "export_crop_top": max(int(export_crop_top), 0),
             "export_crop_height": max(int(export_crop_height), 0),
             "export_bands": [

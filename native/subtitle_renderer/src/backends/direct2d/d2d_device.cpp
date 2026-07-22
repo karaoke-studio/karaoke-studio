@@ -54,10 +54,25 @@ std::string featureLevelName(D3D_FEATURE_LEVEL level) {
 
 }  // namespace
 
-D2DDevice::D2DDevice(bool forceWarp) {
+D2DDevice::D2DDevice(bool forceWarp)
+    : resources_(std::make_shared<D2DDeviceResources>()) {
     createD3DDevice(forceWarp);
     populateAdapterCaps(forceWarp);
     createD2DDevice();
+}
+
+D2DDevice::D2DDevice(std::shared_ptr<D2DDeviceResources> sharedResources)
+    : resources_(std::move(sharedResources)) {
+    if (!resources_ || !resources_->d2dDevice || !resources_->d3dDevice) {
+        throw BackendError("shared Direct2D device resources are not initialized");
+    }
+    checkHr(
+        resources_->d2dDevice->CreateDeviceContext(
+            D2D1_DEVICE_CONTEXT_OPTIONS_ENABLE_MULTITHREADED_OPTIMIZATIONS,
+            d2dContext_.ReleaseAndGetAddressOf()
+        ),
+        "ID2D1Device::CreateDeviceContext(shared worker)"
+    );
 }
 
 void D2DDevice::createD3DDevice(bool forceWarp) {
@@ -77,13 +92,13 @@ void D2DDevice::createD3DDevice(bool forceWarp) {
             levels.data(),
             static_cast<UINT>(levels.size()),
             D3D11_SDK_VERSION,
-            d3dDevice_.ReleaseAndGetAddressOf(),
-            &featureLevel_,
-            d3dContext_.ReleaseAndGetAddressOf()
+            resources_->d3dDevice.ReleaseAndGetAddressOf(),
+            &resources_->featureLevel,
+            resources_->d3dContext.ReleaseAndGetAddressOf()
         );
         checkHr(result, "D3D11CreateDevice(WARP)");
         Microsoft::WRL::ComPtr<ID3D11Multithread> multithread;
-        if (SUCCEEDED(d3dContext_.As(&multithread))) {
+        if (SUCCEEDED(resources_->d3dContext.As(&multithread))) {
             multithread->SetMultithreadProtected(TRUE);
         }
         return;
@@ -115,47 +130,47 @@ void D2DDevice::createD3DDevice(bool forceWarp) {
             levels.data(),
             static_cast<UINT>(levels.size()),
             D3D11_SDK_VERSION,
-            d3dDevice_.ReleaseAndGetAddressOf(),
-            &featureLevel_,
-            d3dContext_.ReleaseAndGetAddressOf()
+            resources_->d3dDevice.ReleaseAndGetAddressOf(),
+            &resources_->featureLevel,
+            resources_->d3dContext.ReleaseAndGetAddressOf()
         );
         if (SUCCEEDED(result)) {
-            adapter_ = candidate;
+            resources_->adapter = candidate;
             break;
         }
     }
-    if (d3dDevice_ == nullptr) {
+    if (resources_->d3dDevice == nullptr) {
         throw BackendError(hresultText("D3D11CreateDevice(hardware)", result));
     }
 
     Microsoft::WRL::ComPtr<ID3D11Multithread> multithread;
-    if (SUCCEEDED(d3dContext_.As(&multithread))) {
+    if (SUCCEEDED(resources_->d3dContext.As(&multithread))) {
         multithread->SetMultithreadProtected(TRUE);
     }
 }
 
 void D2DDevice::populateAdapterCaps(bool forceWarp) {
-    if (adapter_ == nullptr) {
+    if (resources_->adapter == nullptr) {
         Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
-        checkHr(d3dDevice_.As(&dxgiDevice), "Query IDXGIDevice");
+        checkHr(resources_->d3dDevice.As(&dxgiDevice), "Query IDXGIDevice");
         Microsoft::WRL::ComPtr<IDXGIAdapter> baseAdapter;
         checkHr(dxgiDevice->GetAdapter(baseAdapter.ReleaseAndGetAddressOf()), "IDXGIDevice::GetAdapter");
-        checkHr(baseAdapter.As(&adapter_), "Query IDXGIAdapter1");
+        checkHr(baseAdapter.As(&resources_->adapter), "Query IDXGIAdapter1");
     }
     DXGI_ADAPTER_DESC1 desc{};
-    checkHr(adapter_->GetDesc1(&desc), "IDXGIAdapter1::GetDesc1");
-    caps_.backend = "direct2d";
-    caps_.adapterName = utf8FromWide(desc.Description);
-    caps_.featureLevel = featureLevelName(featureLevel_);
-    caps_.adapterVendorId = desc.VendorId;
-    caps_.adapterDeviceId = desc.DeviceId;
-    caps_.dedicatedVideoMemory = static_cast<std::uint64_t>(desc.DedicatedVideoMemory);
-    caps_.warp = forceWarp || (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0;
-    caps_.hardware = !caps_.warp;
-    caps_.supportsTransparentSurface = true;
-    caps_.supportsStagingReadback = true;
-    caps_.supportsGlyphs = true;
-    caps_.supportsNativePreview = true;
+    checkHr(resources_->adapter->GetDesc1(&desc), "IDXGIAdapter1::GetDesc1");
+    resources_->caps.backend = "direct2d";
+    resources_->caps.adapterName = utf8FromWide(desc.Description);
+    resources_->caps.featureLevel = featureLevelName(resources_->featureLevel);
+    resources_->caps.adapterVendorId = desc.VendorId;
+    resources_->caps.adapterDeviceId = desc.DeviceId;
+    resources_->caps.dedicatedVideoMemory = static_cast<std::uint64_t>(desc.DedicatedVideoMemory);
+    resources_->caps.warp = forceWarp || (desc.Flags & DXGI_ADAPTER_FLAG_SOFTWARE) != 0;
+    resources_->caps.hardware = !resources_->caps.warp;
+    resources_->caps.supportsTransparentSurface = true;
+    resources_->caps.supportsStagingReadback = true;
+    resources_->caps.supportsGlyphs = true;
+    resources_->caps.supportsNativePreview = true;
 }
 
 void D2DDevice::createD2DDevice() {
@@ -165,15 +180,17 @@ void D2DDevice::createD2DDevice() {
             D2D1_FACTORY_TYPE_MULTI_THREADED,
             __uuidof(ID2D1Factory1),
             &options,
-            reinterpret_cast<void **>(d2dFactory_.ReleaseAndGetAddressOf())
+            reinterpret_cast<void **>(resources_->d2dFactory.ReleaseAndGetAddressOf())
         ),
         "D2D1CreateFactory"
     );
     Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
-    checkHr(d3dDevice_.As(&dxgiDevice), "Query IDXGIDevice for Direct2D");
-    checkHr(d2dFactory_->CreateDevice(dxgiDevice.Get(), d2dDevice_.ReleaseAndGetAddressOf()), "ID2D1Factory1::CreateDevice");
+    checkHr(resources_->d3dDevice.As(&dxgiDevice), "Query IDXGIDevice for Direct2D");
+    checkHr(resources_->d2dFactory->CreateDevice(
+        dxgiDevice.Get(), resources_->d2dDevice.ReleaseAndGetAddressOf()
+    ), "ID2D1Factory1::CreateDevice");
     checkHr(
-        d2dDevice_->CreateDeviceContext(
+        resources_->d2dDevice->CreateDeviceContext(
             D2D1_DEVICE_CONTEXT_OPTIONS_ENABLE_MULTITHREADED_OPTIMIZATIONS,
             d2dContext_.ReleaseAndGetAddressOf()
         ),
@@ -183,7 +200,7 @@ void D2DDevice::createD2DDevice() {
         DWriteCreateFactory(
             DWRITE_FACTORY_TYPE_SHARED,
             __uuidof(IDWriteFactory),
-            reinterpret_cast<IUnknown **>(dwriteFactory_.ReleaseAndGetAddressOf())
+            reinterpret_cast<IUnknown **>(resources_->dwriteFactory.ReleaseAndGetAddressOf())
         ),
         "DWriteCreateFactory"
     );
@@ -192,11 +209,11 @@ void D2DDevice::createD2DDevice() {
 void D2DDevice::appendVideoMemoryDiagnostics(
     BackendDiagnostics *diagnostics
 ) const noexcept {
-    if (diagnostics == nullptr || adapter_ == nullptr) {
+    if (diagnostics == nullptr || resources_->adapter == nullptr) {
         return;
     }
     Microsoft::WRL::ComPtr<IDXGIAdapter3> adapter3;
-    if (FAILED(adapter_.As(&adapter3))) {
+    if (FAILED(resources_->adapter.As(&adapter3))) {
         return;
     }
     DXGI_QUERY_VIDEO_MEMORY_INFO local{};
@@ -217,7 +234,7 @@ void D2DDevice::appendVideoMemoryDiagnostics(
 }
 
 std::string D2DDevice::deviceRemovedReason() const {
-    const HRESULT reason = d3dDevice_->GetDeviceRemovedReason();
+    const HRESULT reason = resources_->d3dDevice->GetDeviceRemovedReason();
     if (reason == S_OK) {
         return {};
     }

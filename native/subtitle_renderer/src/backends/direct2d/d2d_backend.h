@@ -11,6 +11,10 @@ namespace krok::subtitle::native {
 class Direct2DGpuBackend final : public RenderBackend {
 public:
     explicit Direct2DGpuBackend(bool forceWarp);
+    Direct2DGpuBackend(
+        bool forceWarp,
+        std::shared_ptr<D2DDeviceResources> sharedDeviceResources
+    );
     ~Direct2DGpuBackend() override;
 
     BackendCaps capabilities() const override;
@@ -23,6 +27,10 @@ public:
         const NativePreviewTarget &target
     ) override;
     void closeNativePreview() override;
+
+    std::shared_ptr<D2DDeviceResources> sharedDeviceResources() const noexcept;
+    void waitForRealizationPrewarm();
+    void adoptSharedGlyphResources(const Direct2DGpuBackend &source);
 
 private:
     ProbeResult renderFrameInternal(int tMs, bool compactBands, bool readback);

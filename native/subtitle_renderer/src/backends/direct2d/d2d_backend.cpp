@@ -1133,6 +1133,30 @@ Direct2DGpuBackend::Direct2DGpuBackend(bool forceWarp)
         impl_->realizationContext != nullptr;
 }
 
+Direct2DGpuBackend::Direct2DGpuBackend(
+    bool forceWarp,
+    std::shared_ptr<D2DDeviceResources> sharedDeviceResources
+)
+    : device_(std::move(sharedDeviceResources)), impl_(std::make_unique<Impl>()) {
+    if (forceWarp && !environmentFlagEnabled("KROK_GPU_REALIZATION_WARP", false)) {
+        impl_->realizationEnabled = false;
+    }
+    impl_->realizationActive = impl_->realizationEnabled;
+    impl_->diagnostics.countersEnabled = impl_->countersEnabled;
+    impl_->diagnostics.resourceCacheEnabled = impl_->resourceCacheEnabled;
+    impl_->diagnostics.brushCacheCapacity = Impl::brushCapacity;
+    impl_->diagnostics.realizationEnabled = impl_->realizationActive;
+    impl_->diagnostics.realizationCapacity = Impl::defaultRealizationCapacity;
+    impl_->diagnostics.glowDirtyRectEnabled = impl_->glowDirtyRectEnabled;
+    if (impl_->realizationEnabled) {
+        device_.d2dContext()->QueryInterface(IID_PPV_ARGS(
+            impl_->realizationContext.ReleaseAndGetAddressOf()
+        ));
+    }
+    impl_->diagnostics.realizationSupported =
+        impl_->realizationContext != nullptr;
+}
+
 Direct2DGpuBackend::~Direct2DGpuBackend() {
     if (impl_->realizationControl) {
         impl_->realizationControl->stop.store(true, std::memory_order_release);
@@ -1150,6 +1174,59 @@ Direct2DGpuBackend::~Direct2DGpuBackend() {
             worker.thread.join();
         }
     }
+}
+
+std::shared_ptr<D2DDeviceResources>
+Direct2DGpuBackend::sharedDeviceResources() const noexcept {
+    return device_.sharedResources();
+}
+
+void Direct2DGpuBackend::waitForRealizationPrewarm() {
+    if (impl_->realizationThread.joinable()) {
+        impl_->realizationThread.join();
+    }
+}
+
+void Direct2DGpuBackend::adoptSharedGlyphResources(
+    const Direct2DGpuBackend &source
+) {
+    if (device_.d2dDevice() != source.device_.d2dDevice()) {
+        throw BackendError("shared glyph resources require one Direct2D device");
+    }
+    std::scoped_lock lock(impl_->realizationMutex, source.impl_->realizationMutex);
+    RenderScene comparableScene = impl_->scene;
+    comparableScene.realizationEnabled = source.impl_->scene.realizationEnabled;
+    if (!impl_->configured || !source.impl_->configured
+        || !(comparableScene == source.impl_->scene)) {
+        throw BackendError("shared glyph resources require identical configured scenes");
+    }
+    impl_->scene.realizationEnabled = source.impl_->scene.realizationEnabled;
+    if (!source.impl_->realizationPrewarmComplete.load(std::memory_order_acquire)) {
+        throw BackendError("shared glyph resources are not fully prewarmed");
+    }
+    impl_->lines = source.impl_->lines;
+    impl_->realizationActive = source.impl_->realizationActive
+        && impl_->realizationContext != nullptr;
+    impl_->diagnostics.realizationEnabled = impl_->realizationActive;
+    // COM geometry and realization objects are shared by AddRef through the
+    // copied cache. Only the source worker owns/prepared the resource set, so
+    // follower diagnostics must not multiply its count or preparation cost.
+    impl_->realizationCount = 0;
+    impl_->diagnostics.realizationCapacity = 0;
+    impl_->diagnostics.realizationPrewarmTasks = 0;
+    impl_->diagnostics.realizationPrewarmSkipped = 0;
+    impl_->diagnostics.realizationPrewarmMs = 0.0;
+    impl_->diagnostics.realizationPrewarmFillTasks = 0;
+    impl_->diagnostics.realizationPrewarmStrokeTasks = 0;
+    impl_->diagnostics.realizationPrewarmContextMs = 0.0;
+    impl_->diagnostics.realizationPrewarmWaitMs = 0.0;
+    impl_->diagnostics.realizationPrewarmFillCreateMs = 0.0;
+    impl_->diagnostics.realizationPrewarmStrokeCreateMs = 0.0;
+    impl_->diagnostics.realizationPrewarmPublishMs = 0.0;
+    impl_->diagnostics.realizationPrewarmCreateP50Ms = 0.0;
+    impl_->diagnostics.realizationPrewarmCreateP95Ms = 0.0;
+    impl_->diagnostics.realizationPrewarmCreateMaxMs = 0.0;
+    impl_->realizationPrewarmComplete.store(true, std::memory_order_release);
 }
 
 BackendCaps Direct2DGpuBackend::capabilities() const {
@@ -2740,6 +2817,16 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
     impl_->diagnostics.realizationPrewarmSkipped = 0;
     impl_->diagnostics.realizationPrewarmTasks = 0;
     impl_->diagnostics.realizationPrewarmMs = 0.0;
+    impl_->diagnostics.realizationPrewarmFillTasks = 0;
+    impl_->diagnostics.realizationPrewarmStrokeTasks = 0;
+    impl_->diagnostics.realizationPrewarmContextMs = 0.0;
+    impl_->diagnostics.realizationPrewarmWaitMs = 0.0;
+    impl_->diagnostics.realizationPrewarmFillCreateMs = 0.0;
+    impl_->diagnostics.realizationPrewarmStrokeCreateMs = 0.0;
+    impl_->diagnostics.realizationPrewarmPublishMs = 0.0;
+    impl_->diagnostics.realizationPrewarmCreateP50Ms = 0.0;
+    impl_->diagnostics.realizationPrewarmCreateP95Ms = 0.0;
+    impl_->diagnostics.realizationPrewarmCreateMaxMs = 0.0;
     impl_->lastRenderCompletedMs.store(steadyNowMs(), std::memory_order_release);
     if (impl_->realizationActive) {
         std::vector<std::size_t> lineOrder(impl_->lines.size());
@@ -2797,7 +2884,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         ) {
             const bool isStroke = kind == Impl::RealizationKind::Stroke
                 || kind == Impl::RealizationKind::Stroke2;
-            if (geometry == nullptr || (isStroke && strokeWidth <= 0.0f)) {
+            if (geometry == nullptr
+                || (isStroke && strokeWidth <= 0.0f)) {
                 return;
             }
             if (tasks.size() >= realizationCapacity) {
@@ -2895,6 +2983,15 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             const auto prewarmStart = Clock::now();
             auto sliceStart = prewarmStart;
             std::uint64_t failed = 0;
+            std::uint64_t fillTasks = 0;
+            std::uint64_t strokeTasks = 0;
+            double contextMs = 0.0;
+            double waitMs = 0.0;
+            double fillCreateMs = 0.0;
+            double strokeCreateMs = 0.0;
+            double publishMs = 0.0;
+            std::vector<double> createDurations;
+            createDurations.reserve(tasks.size());
             const auto isCurrent = [&]() {
                 return control->generation == impl_->realizationGeneration;
             };
@@ -2903,6 +3000,30 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 if (isCurrent()) {
                     impl_->diagnostics.realizationPrewarmSkipped += failed;
                     impl_->diagnostics.realizationPrewarmMs = elapsedMs(prewarmStart);
+                    impl_->diagnostics.realizationPrewarmFillTasks = fillTasks;
+                    impl_->diagnostics.realizationPrewarmStrokeTasks = strokeTasks;
+                    impl_->diagnostics.realizationPrewarmContextMs = contextMs;
+                    impl_->diagnostics.realizationPrewarmWaitMs = waitMs;
+                    impl_->diagnostics.realizationPrewarmFillCreateMs = fillCreateMs;
+                    impl_->diagnostics.realizationPrewarmStrokeCreateMs = strokeCreateMs;
+                    impl_->diagnostics.realizationPrewarmPublishMs = publishMs;
+                    if (!createDurations.empty()) {
+                        std::sort(createDurations.begin(), createDurations.end());
+                        const auto percentile = [&](double value) {
+                            const std::size_t index = static_cast<std::size_t>(
+                                std::ceil(value * static_cast<double>(
+                                    createDurations.size() - 1
+                                ))
+                            );
+                            return createDurations[index];
+                        };
+                        impl_->diagnostics.realizationPrewarmCreateP50Ms =
+                            percentile(0.50);
+                        impl_->diagnostics.realizationPrewarmCreateP95Ms =
+                            percentile(0.95);
+                        impl_->diagnostics.realizationPrewarmCreateMaxMs =
+                            createDurations.back();
+                    }
                     impl_->realizationPrewarmComplete.store(
                         true, std::memory_order_release
                     );
@@ -2911,6 +3032,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             };
             Microsoft::WRL::ComPtr<ID2D1DeviceContext> workerBaseContext;
             Microsoft::WRL::ComPtr<ID2D1DeviceContext1> workerContext;
+            const auto contextStart = Clock::now();
             HRESULT contextResult = device_.d2dDevice()->CreateDeviceContext(
                 D2D1_DEVICE_CONTEXT_OPTIONS_ENABLE_MULTITHREADED_OPTIMIZATIONS,
                 workerBaseContext.ReleaseAndGetAddressOf()
@@ -2918,6 +3040,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             if (SUCCEEDED(contextResult)) {
                 contextResult = workerBaseContext.As(&workerContext);
             }
+            contextMs = elapsedMs(contextStart);
             if (FAILED(contextResult) || !workerContext) {
                 ++failed;
                 finish();
@@ -2999,13 +3122,17 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 }
             };
             for (const Impl::RealizationTask &task : tasks) {
+                const auto waitStart = Clock::now();
                 if (!waitForFrameGap()) {
                     break;
                 }
+                waitMs += elapsedMs(waitStart);
                 Microsoft::WRL::ComPtr<ID2D1GeometryRealization> created;
                 HRESULT result = E_FAIL;
-                if (task.kind == Impl::RealizationKind::Stroke
-                    || task.kind == Impl::RealizationKind::Stroke2) {
+                const bool stroked = task.kind == Impl::RealizationKind::Stroke
+                    || task.kind == Impl::RealizationKind::Stroke2;
+                const auto createStart = Clock::now();
+                if (stroked) {
                     result = workerContext->CreateStrokedGeometryRealization(
                         task.geometry.Get(),
                         flatteningTolerance,
@@ -3020,8 +3147,19 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                         created.ReleaseAndGetAddressOf()
                     );
                 }
+                const double createMs = elapsedMs(createStart);
+                createDurations.push_back(createMs);
+                if (stroked) {
+                    ++strokeTasks;
+                    strokeCreateMs += createMs;
+                } else {
+                    ++fillTasks;
+                    fillCreateMs += createMs;
+                }
                 if (SUCCEEDED(result)) {
+                    const auto publishStart = Clock::now();
                     publish(task, std::move(created));
+                    publishMs += elapsedMs(publishStart);
                 } else {
                     ++failed;
                 }

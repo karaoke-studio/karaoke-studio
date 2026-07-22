@@ -400,6 +400,16 @@ struct BackendDiagnostics {
     std::uint64_t realizationPrewarmTasks = 0;
     std::uint64_t realizationPrewarmSkipped = 0;
     double realizationPrewarmMs = 0.0;
+    std::uint64_t realizationPrewarmFillTasks = 0;
+    std::uint64_t realizationPrewarmStrokeTasks = 0;
+    double realizationPrewarmContextMs = 0.0;
+    double realizationPrewarmWaitMs = 0.0;
+    double realizationPrewarmFillCreateMs = 0.0;
+    double realizationPrewarmStrokeCreateMs = 0.0;
+    double realizationPrewarmPublishMs = 0.0;
+    double realizationPrewarmCreateP50Ms = 0.0;
+    double realizationPrewarmCreateP95Ms = 0.0;
+    double realizationPrewarmCreateMaxMs = 0.0;
     bool glowDirtyRectEnabled = true;
 };
 

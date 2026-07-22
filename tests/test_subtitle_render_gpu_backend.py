@@ -8,6 +8,7 @@ import threading
 import time
 import uuid
 
+import numpy as np
 import pytest
 from PyQt6.QtWidgets import QApplication, QWidget
 from PyQt6.QtGui import QColor, QImage
@@ -41,6 +42,8 @@ from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 DARK_SPIRAL_N3PROJ = (
     Path.cwd().parent / "songs" / "Dark spiral journey" / "1.n3proj"
 )
+MEFISTO_N3PROJ = Path.cwd().parent / "songs" / "メフィスト" / "1.n3proj"
+RUN_REAL_GPU_AB = os.environ.get("KROK_RUN_REAL_GPU_AB", "0") == "1"
 
 
 def test_shared_frame_reader_close_tolerates_deleted_qt_wrapper():
@@ -453,6 +456,9 @@ def _render_g1_frames(
     width: int = 640,
     height: int = 360,
     extra_tracks: list[TimingTrack] | None = None,
+    worker_count: int = 1,
+    realization_enabled: bool = True,
+    shared_resources: bool = False,
 ) -> tuple[dict, list[bytes]]:
     configured = renderer.configure_gpu(
         track or _g1_track(),
@@ -462,6 +468,9 @@ def _render_g1_frames(
         fps=60,
         force_warp=force_warp,
         extra_tracks=extra_tracks,
+        worker_count=worker_count,
+        realization_enabled=realization_enabled,
+        shared_resources=shared_resources,
     )
     reader: SharedFrameRingReader | None = None
     frames: list[bytes] = []
@@ -483,6 +492,149 @@ def _render_g1_frames(
         if reader is not None:
             reader.close()
     return configured, frames
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("animation", ["none", "utopia"])
+def test_gpu_shared_realizations_preserve_pixels(animation, monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    style = _g1_style(
+        stroke_width_px=15,
+        latin_stroke_width_px=15,
+        stroke2_enabled=False,
+        decoration_kind="glow",
+        glow_radius_px=9,
+        glow_before_radius_px=9,
+        glow_after_radius_px=9,
+        entry_anim=animation,
+        exit_anim=animation,
+        entry_lead_ms=500,
+        exit_fade_ms=500,
+    )
+    timestamps = (0, 250, 750, 1_250, 1_500)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=60.0) as renderer:
+        _, baseline = _render_g1_frames(
+            renderer,
+            style,
+            timestamps,
+            force_warp=False,
+            worker_count=3,
+            realization_enabled=False,
+            shared_resources=False,
+        )
+        configured, shared = _render_g1_frames(
+            renderer,
+            style,
+            timestamps,
+            force_warp=False,
+            worker_count=3,
+            realization_enabled=True,
+            shared_resources=True,
+        )
+
+    assert configured["shared_resources"] is True
+    assert configured["realization_enabled"] is True
+    assert configured["realization_count"] > 0
+    metrics = []
+    for expected, actual in zip(baseline, shared):
+        expected_rgba = np.frombuffer(expected, dtype=np.uint8).reshape(-1, 4)
+        actual_rgba = np.frombuffer(actual, dtype=np.uint8).reshape(-1, 4)
+        visible = (expected_rgba[:, 3] > 2) | (actual_rgba[:, 3] > 2)
+        if not np.any(visible):
+            metrics.append((0.0, 0.0, 1.0))
+            continue
+        delta = np.abs(
+            expected_rgba[visible].astype(np.int16)
+            - actual_rgba[visible].astype(np.int16)
+        )
+        expected_ink = expected_rgba[:, 3] > 2
+        actual_ink = actual_rgba[:, 3] > 2
+        union = np.count_nonzero(expected_ink | actual_ink)
+        intersection = np.count_nonzero(expected_ink & actual_ink)
+        metrics.append(
+            (
+                float(np.mean(delta)),
+                float(np.percentile(delta, 99)),
+                intersection / max(union, 1),
+            )
+        )
+    assert max(mean for mean, _p99, _iou in metrics) <= 3.0
+    assert min(iou for _mean, _p99, iou in metrics) >= 0.98
+
+
+@pytest.mark.skipif(
+    os.name != "nt" or not RUN_REAL_GPU_AB or not MEFISTO_N3PROJ.is_file(),
+    reason="real Mephisto GPU A/B is opt-in",
+)
+@pytest.mark.parametrize("animation", ["none", "utopia"])
+def test_gpu_shared_realizations_preserve_mefisto_pixels(animation, monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    imported = load_n3proj(MEFISTO_N3PROJ).project_data
+    track = load_nicokara_lrc(Path(imported["subtitle_path"]))
+    style = style_from_dict(imported["style"])
+
+    def wide_scheme(scheme):
+        return replace(scheme, stroke_width_px=15, latin_stroke_width_px=15)
+
+    style = replace(
+        style,
+        stroke_width_px=15,
+        latin_stroke_width_px=15,
+        entry_anim=animation,
+        exit_anim=animation,
+        decoration_kind="glow",
+        ruby_decoration_kind="glow",
+        singer_style_overrides={
+            key: wide_scheme(scheme)
+            for key, scheme in style.singer_style_overrides.items()
+        },
+        custom_style_schemes={
+            key: wide_scheme(scheme)
+            for key, scheme in style.custom_style_schemes.items()
+        },
+    )
+    timestamps = (29_000, 29_500, 30_000, 31_000, 32_000, 33_000)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=300.0) as renderer:
+        _, baseline = _render_g1_frames(
+            renderer,
+            style,
+            timestamps,
+            force_warp=False,
+            width=1920,
+            height=1080,
+            track=track,
+            worker_count=3,
+            realization_enabled=False,
+            shared_resources=False,
+        )
+        configured, shared = _render_g1_frames(
+            renderer,
+            style,
+            timestamps,
+            force_warp=False,
+            width=1920,
+            height=1080,
+            track=track,
+            worker_count=3,
+            realization_enabled=True,
+            shared_resources=True,
+        )
+
+    assert configured["realization_count"] > 0
+    for expected, actual in zip(baseline, shared):
+        expected_rgba = np.frombuffer(expected, dtype=np.uint8).reshape(-1, 4)
+        actual_rgba = np.frombuffer(actual, dtype=np.uint8).reshape(-1, 4)
+        visible = (expected_rgba[:, 3] > 2) | (actual_rgba[:, 3] > 2)
+        delta = np.abs(
+            expected_rgba[visible].astype(np.int16)
+            - actual_rgba[visible].astype(np.int16)
+        )
+        expected_ink = expected_rgba[:, 3] > 2
+        actual_ink = actual_rgba[:, 3] > 2
+        union = np.count_nonzero(expected_ink | actual_ink)
+        intersection = np.count_nonzero(expected_ink & actual_ink)
+        assert float(np.mean(delta)) <= 3.0
+        assert intersection / max(union, 1) >= 0.98
 
 
 def _render_painter_oracle(

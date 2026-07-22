@@ -103,6 +103,18 @@ def gpu_export_packed_enabled() -> bool:
     }
 
 
+def gpu_export_shared_resources_enabled() -> bool:
+    return os.environ.get(
+        "KROK_SUBTITLE_GPU_EXPORT_SHARED_RESOURCES", "0"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def gpu_export_realization_enabled() -> bool:
+    return os.environ.get(
+        "KROK_SUBTITLE_GPU_EXPORT_REALIZATION", "0"
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _wait_for_gpu_export_realizations(
     renderer: NativeRendererProcess,
     configured: dict[str, object],
@@ -275,10 +287,13 @@ def iter_gpu_rgba_frames(
     height: int,
     fps: int,
     total_frames: int,
+    start_t_ms: int = 0,
     renderer_path: str | os.PathLike[str] | None = None,
     extra_tracks: list[TimingTrack] | None = None,
     force_warp: bool = False,
     worker_count: int = 1,
+    shared_resources: bool | None = None,
+    realization_enabled: bool | None = None,
     packed_rgba: bool | None = None,
     crop: tuple[int, int] | None = None,
     bands: list[tuple[int, int]] | None = None,
@@ -309,6 +324,16 @@ def iter_gpu_rgba_frames(
     shm_key = f"krok-gpu-export-{os.getpid()}-{uuid.uuid4().hex}"
     slot_count = 2
     packed = gpu_export_packed_enabled() if packed_rgba is None else bool(packed_rgba)
+    shared = (
+        gpu_export_shared_resources_enabled()
+        if shared_resources is None
+        else bool(shared_resources)
+    )
+    realizations = (
+        gpu_export_realization_enabled()
+        if realization_enabled is None
+        else bool(realization_enabled)
+    )
     packed_bands: list[tuple[int, int]] = []
     if packed:
         for raw_top, raw_height in bands or []:
@@ -327,7 +352,7 @@ def iter_gpu_rgba_frames(
     try:
         with NativeRendererProcess(
             renderer_path,
-            response_timeout_s=15.0,
+            response_timeout_s=300.0 if realizations else 15.0,
             close_timeout_s=1.0,
         ) as renderer:
             configure_started = time.perf_counter()
@@ -340,7 +365,10 @@ def iter_gpu_rgba_frames(
                 force_warp=force_warp,
                 extra_tracks=extra_tracks,
                 worker_count=max(1, min(int(worker_count), 4)),
-                realization_enabled=False,
+                realization_enabled=realizations,
+                shared_resources=shared,
+                wait_realizations=realizations,
+                realization_capacity=gpu_export_realization_capacity(),
                 export_crop_top=crop_top if packed else 0,
                 export_crop_height=crop_height if packed and not packed_bands else 0,
                 export_bands=packed_bands,
@@ -360,7 +388,9 @@ def iter_gpu_rgba_frames(
             request_started: dict[int, float] = {}
 
             def begin_frame(frame_index: int) -> None:
-                t_ms = int(round(frame_index * 1000 / max(int(fps), 1)))
+                t_ms = max(int(start_t_ms), 0) + int(
+                    round(frame_index * 1000 / max(int(fps), 1))
+                )
                 request_started[frame_index] = time.perf_counter()
                 renderer.begin_render_gpu_frame(
                     t_ms,

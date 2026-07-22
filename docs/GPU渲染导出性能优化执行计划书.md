@@ -1,6 +1,6 @@
 # GPU 渲染导出性能优化执行计划书
 
-> 状态：执行中；阶段 1 的 R2 收益门槛未通过，已按停止规则暂停阶段 2/3
+> 状态：执行中；阶段 1 的 R2 收益门槛未通过；按用户要求补做的阶段 3 共享 Device/realization 探针也未通过端到端收益门槛，产品默认保持关闭
 > 创建日期：2026-07-21
 > 目标平台：Windows GPU 字幕导出后端
 > 参考计划：[`GPU预览宽描边性能优化执行计划书.md`](GPU预览宽描边性能优化执行计划书.md)
@@ -296,6 +296,16 @@ R1、R2 各选择至少 8 个固定时间点：
 | 《メフィスト》2 秒 pipe / 原 QImage 路径 | 2 worker 69.08 fps，3 worker 75.36 fps，提升约 9.1%；1/2/3/4 worker 连续 60 帧逐字节一致 | 硬件 GPU 导出默认改为 3 worker；WARP 保持单 worker，可用环境变量回退 |
 | 《メフィスト》5 秒视频背景 + x264 `veryfast` | 2 worker 57.40 fps，3 worker 62.20 fps，短端到端提升约 8.4% | 收益低于阶段 1 的 15% 晋级门槛，但属于低风险默认调优；阶段 2/3 仍暂停 |
 | 发光 scratch 复用 | 旧路径在画面右侧最多 21 px 会受同一 worker 上一帧内容影响 | 改为安装局部 clip 前清空整个 scratch target，消除边缘残影和 worker 历史依赖 |
+| 《メフィスト》描边 15、发光保留、无 Utopia，5 秒 pipe | 共享 Device + 一套共享 realization：`EndDraw` 14.75 → 11.54 ms/帧（-21.7%），但 `native_render` 15.24 → 25.18 ms/帧（+65.2%），稳定吞吐 100.71 → 77.73 fps（-22.8%），另需 30.92 秒 realization 预热 | 共享 Device 的跨 worker 提交争用大于 realization 收益；默认关闭 |
+| 《メフィスト》描边 15、发光保留、Utopia 入场/出场，5 秒 pipe | 共享 Device + 一套共享 realization：`EndDraw` 67.53 → 48.13 ms/帧（-28.7%），但 `native_render` 68.39 → 130.06 ms/帧（+90.2%），稳定吞吐 35.62 → 20.44 fps（-42.6%），另需 30.73 秒预热 | Utopia 动态 geometry 仍正确回退，但共享队列争用更严重；默认关闭 |
+| 《メフィスト》29～34 秒真实视频背景 + x264 `veryfast` MP4 | 无 Utopia：4.74 → 34.32 秒（63.31 → 8.74 fps）；Utopia：9.32 → 44.97 秒（32.20 → 6.67 fps）；四个成品均为 1920×1080、60fps、300 帧、5.000 秒 | 包含约 31 秒预热后的真实用户等待时间大幅退化，最终性能门槛失败 |
+| 同项目独立 Device + 每 worker realization 隔离对照 | 无 Utopia：`EndDraw` -28.6%、稳定吞吐 +14.7%；Utopia：`EndDraw` -9.4%、稳定吞吐 +6.9%；但三套 realization 预热分别需 35.92/36.66 秒 | 证明 realization 本身有效、失败点主要是共享 Device；预热无法在本项目时长内稳定回本，不进入默认路径 |
+| 共享 realization 画质门禁 | 合成用例可见区域平均通道差 0.05～0.53/255、P99 ≤ 19、轮廓 IoU=1.0；《メフィスト》1920×1080 无/有 Utopia 实帧均通过 MAE ≤ 3、轮廓 IoU ≥ 0.98 | 未减少描边、发光或 `0.25f` 精度；画质门禁通过，但性能门禁失败 |
+| realization 预热分阶段计时 | 描边 15 的共享单套预热 29.69 秒，其中 `CreateStrokedGeometryRealization` 29.62 秒（99.8%）；context 0.012 ms、等待 14.54 ms、fill 54.84 ms、发布 1.38 ms | 慢点已经精确落在 D2D 宽描边 realization 创建，不是 Python 轮询、线程调度、锁或设备冷启动 |
+| 《メフィスト》原项目描边与强制 15px 对照 | N3 项目 598 个主字符实际均为 10px 描边；同一实现预热由强制 15px 的 29.69 秒降至 10px 的 11.86 秒（-60.0%） | 先前“N3 预热很短”并非与强制 15px 压测完全同负载；宽度对创建成本呈明显非线性，但不能为性能改小用户描边 |
+| realization 替代准备策略 | 同步准备 30.23 秒；先热设备再准备 29.90 秒；预扩边后做 filled realization 28.43 秒 | 三项均未达到收益门槛，相关实验实现已移除，不进入默认路径 |
+| realization 后台摊薄，3 worker、描边 15、5 秒纯 native | realization 关闭时无/Utopia 均约 221 fps；后台准备后分别为 43.6/50.5 fps（-80.3%/-77.2%），仅完成 586/4629、583/4629 个任务 | 创建过程争抢同一 GPU/Direct2D 提交域，不能用后台化隐藏；实验实现已移除 |
+| 共享 Device readback 事务互斥 | 5 秒稳定吞吐 65.09 → 64.40 fps（-1.1%），锁等待仅 0.00068 ms/帧 | readback 排队不是共享 Device 退化主因；保留原有并发策略，实验互斥已移除 |
 
 N3 10.74.80.0 的逆向结果确认其采用共享 Device、长期 worker、一次性场景准备和严格有序输出，但最终帧仍经过 WIC BMP、CPU 行翻转和 ffmpeg stdin，不是零拷贝路径。当前阶段只吸收其会话生命周期与调度思想，不复制 WIC 传输链。
 
@@ -456,10 +466,10 @@ N3 使用进程级共享 Device；本阶段有意先把共享边界限定在一�
 
 先写独立 native probe，只验证：
 
-1. 一个 D2D Device 创建两个 DeviceContext；
-2. context A 创建的 geometry/realization 能否由 context B 正确绘制；
-3. 两个 context 并行画到各自 target；
-4. D3D11 immediate context 下 Copy/Map 的串行、互斥和集中 readback queue 三种策略；
+1. ✅ 一个 D2D Device 创建两个 DeviceContext；
+2. ✅ context A 创建的 geometry/realization 能否由 context B 正确绘制；
+3. ✅ 两个 context 并行画到各自 target；
+4. ✅ D3D11 immediate context 下 Copy/Map 的串行、互斥和集中 readback queue 策略对照；
 5. device removed、resize、销毁顺序；
 6. 10000 帧无 `WRONG_RESOURCE_DOMAIN`、access violation、花帧或死锁。
 
@@ -468,17 +478,17 @@ N3 使用进程级共享 Device；本阶段有意先把共享边界限定在一�
 ### 8.4 可执行步骤
 
 1. 把 scene snapshot、排版和静态 geometry 从 backend 实例提升到 `GpuExportSession`；
-2. 建立单一 hardware Device；WARP 作为另一种会话模式，不能在同一会话混用；
-3. 从该 Device 为每个 worker 创建独立 DeviceContext；
-4. 只为每个 worker 创建 target/work/staging/scratch；
-5. 在开始输出前同步执行一次 geometry 和 realization 准备；
-6. realization 使用 `0.25f`，不得因准备慢而临时放宽；
-7. 静态字符共享 realization；
-8. Utopia/缩放/旋转/位移中的动态字符走实时 geometry，回到稳定状态后继续使用共享 realization；
+2. ✅ 建立单一 hardware Device；WARP 作为另一种会话模式，不能在同一会话混用；
+3. ✅ 从该 Device 为每个 worker 创建独立 DeviceContext；
+4. ✅ 只为每个 worker 创建 target/work/staging/scratch；
+5. ✅ 在开始输出前同步执行一次 geometry 和 realization 准备；
+6. ✅ realization 使用 `0.25f`，不得因准备慢而临时放宽；
+7. ✅ 静态字符共享 realization；
+8. ✅ Utopia/缩放/旋转/位移中的动态字符走实时 geometry，回到稳定状态后继续使用共享 realization；
 9. 图片和渐变填充按资源域分别验证，不能假定 bitmap/effect 可任意跨 context；
-10. 为 readback 选择探针证明最优且稳定的策略；
+10. ✅ 为 readback 选择探针证明最优且稳定的策略；
 11. configure 只构建一套 scene/cache，不再对 N 个完整 backend 重复配置；
-12. 保留“阶段 2 多独立 backend”开关做 A/B；
+12. ✅ 保留“阶段 2 多独立 backend”开关做 A/B；
 13. 导出结束按 worker -> shared cache -> contexts -> device 的明确顺序释放。
 
 ### 8.5 realization 资格规则
@@ -507,6 +517,16 @@ N3 使用进程级共享 Device；本阶段有意先把共享边界限定在一�
 ### 8.7 回退
 
 保留 session 级 `shared_resources=false`，恢复阶段 2 的独立 backend；保留 `realization_enabled=false` 作为正确性回退。
+
+### 8.8 共享资源探针执行结论（2026-07-22）
+
+已实现并验证导出池内单一 D3D11/D2D Device、worker 独立 DeviceContext/target/scratch/staging，以及由 master worker 以 `0.25f` 预热后供 follower worker 复用的 geometry realization。探针没有出现 `WRONG_RESOURCE_DOMAIN`、device removed、花帧或崩溃，真实《メフィスト》无/有 Utopia 像素门禁均通过。
+
+但性能门槛明确失败：共享 Device 把三个原本独立的提交/读回队列收敛到同一资源域后，`EndDraw` 内部时间虽然下降，等待转移到了其他 Direct2D/D3D 提交点，导致 `native_render` 与稳定吞吐显著退化。该路径只保留为显式 A/B 探针，`KROK_SUBTITLE_GPU_EXPORT_SHARED_RESOURCES` 和 `KROK_SUBTITLE_GPU_EXPORT_REALIZATION` 默认均为 `0`，不进入产品默认导出。
+
+独立 Device + 每 worker realization 的隔离对照证明 realization 能降低静态宽描边的真实绘制成本，但约 36 秒的一次性预热无法在《メフィスト》当前导出时长内可靠回本，Utopia 场景收益更低。细分计时进一步证明，描边 15 时 99.8% 的共享预热时间直接耗在 `CreateStrokedGeometryRealization`；同步执行、设备预热、预扩边转 filled realization 和导出中后台摊薄均未改善端到端性能。N3 原项目实际使用 10px 描边，而本轮压力基准强制为 15px；10px 对照把预热降到 11.86 秒，但这不构成改小用户描边的理由。
+
+共享 Device 的 readback 事务互斥也已完成对照，锁等待近乎为零且吞吐下降 1.1%，所以维持原有策略。因此本阶段到此停止，不继续用更多 worker 或降低画质掩盖架构负收益；仅 10,000 帧长压力门禁按用户允许的放宽条件保持未勾选。
 
 ## 9. 阶段 4：最终帧 native 合成（条件阶段）
 
@@ -729,13 +749,13 @@ C:\Python314\python.exe -m pytest `
 ## 15. 最终交付清单
 
 - [ ] 阶段 0 原始 CSV/JSON 与环境元数据完整；
-- [ ] N3 同条件或差异明确的对照数据；
+- [x] N3 同条件或差异明确的对照数据；
 - [ ] 性能账本解释至少 90% 墙钟时间；
 - [ ] 导出快路径无逐帧 `QImage`、`bytes()` 和 JSON render 命令；
 - [ ] native 输出 ring 严格有序、可背压、可取消；
-- [ ] 单 Device、多 DeviceContext 探针通过；
-- [ ] 一套 scene/geometry/realization 被所有 worker 共享；
-- [ ] realization 容差保持 `0.25f`，动态 Utopia 正确回退 geometry；
+- [x] 单 Device、多 DeviceContext 探针通过；
+- [x] 一套 scene/geometry/realization 被所有 worker 共享；
+- [x] realization 容差保持 `0.25f`，动态 Utopia 正确回退 geometry；
 - [ ] 1/2/3/4/8 worker 已实测并选定默认值；
 - [ ] ffmpeg/native 背景合成由数据决定，没有越过条件门槛；
 - [ ] R1/R2 阶段 0 Direct2D / 新 Direct2D 固定画质帧通过同引擎 A/B；

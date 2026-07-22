@@ -22,12 +22,42 @@ if str(ROOT) not in sys.path:
 DEFAULT_PROJECT = Path(r"C:\Users\18007\Downloads\芽吹の唄 - 大原ゆい子.yurika")
 
 
+def _with_main_stroke_width(style, stroke_width: float):
+    width = max(int(round(stroke_width)), 0)
+
+    def update_scheme(scheme):
+        return replace(
+            scheme,
+            stroke_width_px=width,
+            latin_stroke_width_px=width,
+        )
+
+    return replace(
+        style,
+        stroke_width_px=width,
+        latin_stroke_width_px=width,
+        singer_style_overrides={
+            key: update_scheme(scheme)
+            for key, scheme in style.singer_style_overrides.items()
+        },
+        custom_style_schemes={
+            key: update_scheme(scheme)
+            for key, scheme in style.custom_style_schemes.items()
+        },
+    )
+
+
 def _load_project(path: Path):
     from krok_helper.subtitle_render.models import BackgroundSource, style_from_dict
+    from krok_helper.subtitle_render.n3proj_import import load_n3proj
     from krok_helper.subtitle_render.project_store import load_render_project
     from krok_helper.subtitle_render.subtitle_sources import load_nicokara_lrc
 
-    data = load_render_project(path)
+    data = (
+        load_n3proj(path).project_data
+        if path.suffix.lower() == ".n3proj"
+        else load_render_project(path)
+    )
     subtitle_path = Path(str(data["subtitle_path"]))
     track = load_nicokara_lrc(subtitle_path)
     style = style_from_dict(data.get("style"))
@@ -106,7 +136,10 @@ def _run_transport(
     height: int,
     fps: int,
     frames: int,
+    start_t_ms: int,
     workers: int,
+    shared_resources: bool,
+    realization_enabled: bool,
     ffmpeg_path: str,
 ) -> tuple[list[dict[str, object]], dict[str, object], float]:
     from krok_helper.subtitle_render.engine.native_export import iter_gpu_rgba_frames
@@ -154,7 +187,10 @@ def _run_transport(
                 height=height,
                 fps=fps,
                 total_frames=frames,
+                start_t_ms=start_t_ms,
                 worker_count=workers,
+                shared_resources=shared_resources,
+                realization_enabled=realization_enabled,
                 on_diagnostics=diagnostics.update,
                 on_frame_diagnostics=record_frame,
             )
@@ -223,7 +259,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--height", type=int, default=0)
     parser.add_argument("--fps", type=int, default=0)
     parser.add_argument("--seconds", type=float, default=3.0)
+    parser.add_argument("--start-seconds", type=float, default=0.0)
     parser.add_argument("--workers", type=int, default=1)
+    parser.add_argument("--stroke-width", type=float)
+    parser.add_argument("--shared-resources", choices=("on", "off"), default="off")
+    parser.add_argument("--realization", choices=("on", "off"), default="off")
     parser.add_argument("--runs", type=int, default=1)
     parser.add_argument("--encoder", choices=("cpu", "nvenc", "qsv", "amf"), default="cpu")
     parser.add_argument(
@@ -248,6 +288,8 @@ def main(argv: list[str] | None = None) -> int:
     data, track, style, screen, background = _load_project(args.project)
     if args.animation != "project":
         style = replace(style, entry_anim=args.animation, exit_anim=args.animation)
+    if args.stroke_width is not None:
+        style = _with_main_stroke_width(style, args.stroke_width)
     if args.decoration != "project":
         style = replace(
             style,
@@ -260,6 +302,7 @@ def main(argv: list[str] | None = None) -> int:
     height = args.height if args.height > 0 else int(screen.get("height", 1080))
     fps = args.fps if args.fps > 0 else int(screen.get("fps", 60))
     duration_ms = max(1, int(round(args.seconds * 1000.0)))
+    start_t_ms = max(0, int(round(args.start_seconds * 1000.0)))
     frames = max(1, int((duration_ms * fps + 999) // 1000))
     if args.solid_background:
         background = BackgroundSource(kind="solid", color="#000000")
@@ -280,8 +323,12 @@ def main(argv: list[str] | None = None) -> int:
             "height": height,
             "fps": fps,
             "duration_ms": duration_ms,
+            "start_t_ms": start_t_ms,
             "frames": frames,
             "workers": args.workers,
+            "stroke_width_px": style.stroke_width_px,
+            "shared_resources": args.shared_resources,
+            "realization": args.realization,
             "encoder": args.encoder,
             "animation": args.animation,
             "decoration": args.decoration,
@@ -294,10 +341,24 @@ def main(argv: list[str] | None = None) -> int:
             os.environ["KROK_SUBTITLE_GPU_EXPORT_DIAGNOSTICS_DIR"] = str(
                 args.output_dir
             )
-            summary["total_wall_ms"] = _run_full(
+            os.environ["KROK_SUBTITLE_GPU_EXPORT_SHARED_RESOURCES"] = (
+                "1" if args.shared_resources == "on" else "0"
+            )
+            os.environ["KROK_SUBTITLE_GPU_EXPORT_REALIZATION"] = (
+                "1" if args.realization == "on" else "0"
+            )
+            full_style = replace(
+                style,
+                timing_offset_ms=style.timing_offset_ms - start_t_ms,
+            )
+            full_background = replace(
+                background,
+                video_offset_ms=background.video_offset_ms + start_t_ms,
+            )
+            full_wall_ms = _run_full(
                 track=track,
-                style=style,
-                background=background,
+                style=full_style,
+                background=full_background,
                 output_path=args.output_dir / f"{run_id}.mp4",
                 width=width,
                 height=height,
@@ -305,6 +366,8 @@ def main(argv: list[str] | None = None) -> int:
                 duration_ms=duration_ms,
                 encoder=args.encoder,
             )
+            summary["total_wall_ms"] = full_wall_ms
+            summary["export_fps"] = frames / max(full_wall_ms / 1000.0, 1e-9)
         else:
             rows, diagnostics, wall_ms = _run_transport(
                 mode=args.mode,
@@ -314,14 +377,22 @@ def main(argv: list[str] | None = None) -> int:
                 height=height,
                 fps=fps,
                 frames=frames,
+                start_t_ms=start_t_ms,
                 workers=args.workers,
+                shared_resources=args.shared_resources == "on",
+                realization_enabled=args.realization == "on",
                 ffmpeg_path=ffmpeg_path,
             )
             rows_path = args.output_dir / f"{run_id}-frames.csv"
             _write_rows(rows_path, rows)
+            prepare_ms = float(diagnostics.get("prepare_layout_ms", 0.0) or 0.0)
+            steady_wall_ms = max(wall_ms - prepare_ms, 0.0)
             summary.update(
                 total_wall_ms=wall_ms,
                 export_fps=frames / max(wall_ms / 1000.0, 1e-9),
+                prepare_layout_ms=prepare_ms,
+                steady_wall_ms=steady_wall_ms,
+                steady_export_fps=frames / max(steady_wall_ms / 1000.0, 1e-9),
                 gpu=diagnostics,
                 aggregates=_aggregates(rows),
                 frame_csv=str(rows_path),

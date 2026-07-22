@@ -486,6 +486,37 @@ def test_iter_gpu_rgba_frames_reorders_bounded_multiworker_results(monkeypatch) 
     assert diagnostics[-1]["local_video_memory_usage_bytes"] == 123
 
 
+def test_iter_gpu_rgba_frames_forwards_shared_realization_and_start_time(
+    monkeypatch,
+) -> None:
+    _FakeGpuRendererProcess.instances.clear()
+    _FakeGpuRingReader.instances.clear()
+    monkeypatch.setattr(ne, "NativeRendererProcess", _FakeGpuRendererProcess)
+    monkeypatch.setattr(ne, "SharedFrameRingReader", _FakeGpuRingReader)
+
+    list(
+        ne.iter_gpu_rgba_frames(
+            _track(),
+            Style(),
+            width=1,
+            height=1,
+            fps=4,
+            total_frames=2,
+            start_t_ms=29_000,
+            worker_count=3,
+            shared_resources=True,
+            realization_enabled=True,
+        )
+    )
+
+    process = _FakeGpuRendererProcess.instances[-1]
+    configure = process.configures[0][1]
+    assert configure["shared_resources"] is True
+    assert configure["realization_enabled"] is True
+    assert configure["wait_realizations"] is True
+    assert [item[0] for item in process.frames] == [29_000, 29_250]
+
+
 def test_iter_gpu_rgba_frames_packed_path_borrows_rgba_without_qimage(
     monkeypatch,
 ) -> None:
