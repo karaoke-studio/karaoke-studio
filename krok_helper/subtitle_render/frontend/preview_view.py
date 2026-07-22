@@ -38,6 +38,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtMultimedia import QAudioOutput, QMediaPlayer, QVideoSink
 from PyQt6.QtWidgets import (
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QSlider,
@@ -47,6 +48,11 @@ from PyQt6.QtWidgets import (
 
 from krok_helper.subtitle_render.engine.painter import paint_frame_to_painter
 from krok_helper.subtitle_render.frontend.drop_panel import DropPanel
+from krok_helper.subtitle_render.frontend.preview_async import (
+    DEFAULT_PREVIEW_QUALITY,
+    PREVIEW_QUALITY_OPTIONS,
+    normalize_preview_quality,
+)
 from krok_helper.subtitle_render.frontend.preview_media import qt_playback_source
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
 from krok_helper.subtitle_render.models import (
@@ -159,6 +165,7 @@ class PreviewCanvas(QWidget):
         self._video_audio_out: Optional[QAudioOutput] = None
         self._output_width: int = 1920
         self._output_height: int = 1080
+        self._preview_quality = DEFAULT_PREVIEW_QUALITY
 
         themed(
             self,
@@ -187,6 +194,10 @@ class PreviewCanvas(QWidget):
         self._output_width = max(int(width), 1)
         self._output_height = max(int(height), 1)
         self.update()
+
+    def set_preview_quality(self, quality: object) -> None:
+        """Keep the raster fallback API-compatible with the graphics preview."""
+        self._preview_quality = normalize_preview_quality(quality)
 
     def set_time(self, t_ms: int) -> None:
         if t_ms == self._t_ms:
@@ -498,6 +509,11 @@ class PreviewPanel(DropPanel):
         setter(bool(enabled))
         return True
 
+    def set_preview_quality(self, quality: object) -> None:
+        setter = getattr(self._canvas, "set_preview_quality", None)
+        if setter is not None:
+            setter(normalize_preview_quality(quality))
+
     def set_output_size(self, width: int, height: int) -> None:
         self._canvas.set_output_size(width, height)
 
@@ -614,6 +630,9 @@ class TransportBar(QWidget):
     playbackStateChanged = Signal(bool)
     """播放 / 暂停状态变化时 emit，供视频预览层同步静音视频播放器。"""
 
+    previewQualityChanged = Signal(str)
+    """用户切换预览质量时 emit 稳定的 low / medium / high 键。"""
+
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("TransportBar")
@@ -686,6 +705,24 @@ class TransportBar(QWidget):
         self._fps_label.setFixedWidth(58)
         self._fps_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
+        self._preview_quality_label = QLabel("预览质量", self)
+        self._preview_quality_label.setFixedWidth(56)
+        self._preview_quality_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self._preview_quality_label.setStyleSheet(
+            f"color: {palette().text_secondary}; font-size: 9pt;"
+        )
+
+        self._preview_quality_combo = QComboBox(self)
+        self._preview_quality_combo.setAccessibleName("预览质量")
+        self._preview_quality_combo.setFixedWidth(108)
+        self._preview_quality_combo.setMinimumHeight(28)
+        for key, label, _scale in PREVIEW_QUALITY_OPTIONS:
+            self._preview_quality_combo.addItem(label, userData=key)
+        self.set_preview_quality(DEFAULT_PREVIEW_QUALITY)
+        self._preview_quality_combo.currentIndexChanged.connect(
+            self._on_preview_quality_changed
+        )
+
         self._volume_label = QLabel("音量", self)
         self._volume_label.setToolTip("预览音量")
         themed(
@@ -714,6 +751,8 @@ class TransportBar(QWidget):
         layout.addWidget(self._slider, 1)
         layout.addWidget(self._timecode)
         layout.addWidget(self._fps_label)
+        layout.addWidget(self._preview_quality_label)
+        layout.addWidget(self._preview_quality_combo)
         layout.addWidget(self._volume_label)
         layout.addWidget(self._volume_slider)
 
@@ -770,6 +809,20 @@ class TransportBar(QWidget):
         interval = max(1, int(1000 / normalized))
         self._tick_timer.setInterval(interval)
         self._position_poll_timer.setInterval(interval)
+
+    def set_preview_quality(self, quality: object) -> None:
+        """Select a preview-quality tier without emitting a user-change signal."""
+        normalized = normalize_preview_quality(quality)
+        index = self._preview_quality_combo.findData(normalized)
+        blocked = self._preview_quality_combo.blockSignals(True)
+        try:
+            self._preview_quality_combo.setCurrentIndex(index if index >= 0 else 0)
+        finally:
+            self._preview_quality_combo.blockSignals(blocked)
+        self._update_preview_quality_tooltip()
+
+    def preview_quality(self) -> str:
+        return normalize_preview_quality(self._preview_quality_combo.currentData())
 
     def set_time(self, ms: int) -> None:
         """程序设置当前时间，会触发 :pyattr:`timeChanged`。"""
@@ -964,6 +1017,23 @@ class TransportBar(QWidget):
             self._controller.set_volume(volume)
         if self._audio_out is not None:
             self._audio_out.setVolume(volume)
+
+    def _on_preview_quality_changed(self, _index: int) -> None:
+        self._update_preview_quality_tooltip()
+        self.previewQualityChanged.emit(self.preview_quality())
+
+    def _update_preview_quality_tooltip(self) -> None:
+        quality = self.preview_quality()
+        scale = next(
+            (scale for key, _label, scale in PREVIEW_QUALITY_OPTIONS if key == quality),
+            1.0,
+        )
+        tooltip = (
+            f"预览质量：字幕最多按工程分辨率的 {scale:g} 倍渲染；"
+            "只影响交互预览，不影响视频导出。"
+        )
+        self._preview_quality_label.setToolTip(tooltip)
+        self._preview_quality_combo.setToolTip(tooltip)
 
     def _on_audio_clock_tick(self) -> None:
         if self._use_controller():

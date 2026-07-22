@@ -1,8 +1,8 @@
 # 字幕渲染 GPU 后端：NicoKaraMaker3 逆向结论与实施计划
 
 > 状态：G0～G5 已完成，Windows 交互会话默认使用 G5；G6 DirectComposition 已停止且产品入口硬关闭；G7 render-core 性能专项
-> 第 1～3 项（发光行级化、scratch 常驻化、导出流水线化）已完成并达标，第 4 项预览质量档位待产品排期
-> 最后更新：2026-07-20  
+> 第 1～4 项（发光行级化、scratch 常驻化、导出流水线化、预览质量档位）均已完成
+> 最后更新：2026-07-22
 > 逆向基准：NicoKaraMaker3 10.74.80.0 x64  
 > 产品基线：Windows 默认启用 G5 shared-memory/QImage 预览与 GPU 字幕导出，Python QPainter 永久作为 oracle 与 fallback
 
@@ -34,12 +34,12 @@
   不再继续，`gpu_native_preview_enabled()` 硬返回 `False`，旧环境变量也不能进入 G6。
   `KROK_SUBTITLE_GPU_PREVIEW=0` 可关闭 G5，能力检查或运行失败时自动回退 Painter。
 
-### 0.2 当前仍未完成的事情
+### 0.2 当前状态与仍未完成的事情
 
 - G6 原生预览已停止且硬关闭；后续预览优化只在 G5/Painter 路径进行；
 - 尚未完成 AMD/Intel、多显示器/DPR 切换、真实 device-removed 与 30 分钟视频播放矩阵；
-- G7 第 4 项预览质量档位（0.25/0.5/1.0 预览缩放）尚未实施，待产品侧确认交互后排期；
-  第 1～3 项已完成：4K utopia+发光+ruby render mean 23.87ms→2.74ms（60.3fps），4K GPU
+- G7 第 4 项预览质量档位（0.25/0.5/1.0 预览缩放）已完成；第 1～3 项也已完成：
+  4K utopia+发光+ruby render mean 23.87ms→2.74ms（60.3fps），4K GPU
   导出吞吐 1.54x（见 §5 G7 与进度日志第四十三批）；
 - 尚未承诺 GPU 与 CPU 逐像素完全一致；
 - 尚未改变“QPainter 离屏 + ffmpeg rawvideo pipe”为当前唯一正式路径的产品事实；
@@ -653,8 +653,9 @@ render→readback→展开→ffmpeg）仍受其约束。
    `iter_gpu_rgba_frames` 在双槽 ring 上一帧深度流水——sidecar 渲染/回读第 N+1 帧与 Python 侧
    band 展开/RGBA 转换第 N 帧重叠，并有真实 sidecar 逐字节一致性测试钉住语义。验收达成：4K
    utopia+发光+ruby 导出 34.5→53.0fps（1.54x ≥ 1.5x 门槛）。
-4. **预览质量档位**（产品功能，可独立排期）：对齐 N3 的 0.25/0.5/1.0 预览缩放，4K 工程低档只渲 540p；
-   与渲染优化正交，是弱 GPU 用户成本最低的收益。待产品侧确认交互后排期。
+4. **预览质量档位**（已完成，2026-07-22）：接入流畅（0.25）/均衡（0.5）/清晰（1.0）三档；
+   低档按 N3 工程倍率限制字幕物理栅格目标，同时以实际显示倍率封顶，清晰档保持原有显示分辨率行为。
+   视频仍走 Qt 原生硬件层，字幕与视频共享工程逻辑坐标；设置仅本机持久化，不影响工程或导出。
 
 ---
 
@@ -1683,7 +1684,7 @@ G6 首批架构与本机性能门槛已落地，仍不得默认开启。下一�
 - 顺带发现（与 G7 无关、未修）：gpu_backend 与 native_protocol 两个测试文件在同一 pytest 进程中
   先后运行时，protocol 的 utopia 像素对照测试（CPU sidecar vs Painter）会因进程内 QApplication
   平台插件被先创建的 GPU 测试固定而超差；两文件各自单独运行全绿，已登记为独立修复任务。
-- G7 第 4 项预览质量档位仍待产品侧确认交互后排期；GPU 产品开关与 G6 原生预览默认状态不变。
+- G7 第 4 项预览质量档位于 2026-07-22 落地；GPU 产品开关与 G6 原生预览默认状态不变。
 
 ### 2026-07-20（第四十四批）：真实 N3 工程 Utopia 恒等描边快路径
 

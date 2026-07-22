@@ -4781,6 +4781,20 @@ def test_preview_player_window_keeps_full_16_9_canvas_below_title_bar(qapp):
     assert preview._preview_frame.geometry() == QRect(0, 42, 800, 450)
     assert preview.windowFlags() & Qt.WindowType.FramelessWindowHint
     assert preview.findChild(mw.TransportBar) is win._transport_bar
+    assert preview._transport_bar._preview_quality_label.parentWidget() is preview._top_controls
+    assert preview._transport_bar._preview_quality_combo.parentWidget() is preview._top_controls
+    assert preview._transport_bar.layout().indexOf(
+        preview._transport_bar._preview_quality_combo
+    ) == -1
+    assert (
+        preview._transport_bar._preview_quality_combo.geometry().right()
+        < preview._minimize_button.geometry().left()
+    )
+    assert preview._transport_bar._preview_quality_combo.objectName() == (
+        "PreviewQualityCombo"
+    )
+    combo = preview._transport_bar._preview_quality_combo
+    assert combo.fontMetrics().horizontalAdvance("清晰（1/1）") + 26 <= combo.width()
 
 
 def test_preview_player_maximize_button_restores_from_fullscreen_state(qapp):
@@ -4836,6 +4850,8 @@ def test_preview_player_collapses_to_labeled_bar_inside_workspace(qapp):
     assert preview._title_label.text() == "预览窗口"
     assert preview._top_controls.isVisible() is True
     assert preview._bottom_controls.isVisible() is False
+    assert preview._transport_bar._preview_quality_label.isVisible() is False
+    assert preview._transport_bar._preview_quality_combo.isVisible() is False
 
     preview.hide_controls(force=True)
     assert preview._title_label.text() == "预览窗口"
@@ -4846,6 +4862,8 @@ def test_preview_player_collapses_to_labeled_bar_inside_workspace(qapp):
     assert preview.is_collapsed() is False
     assert preview.geometry().size() == QSize(800, 492)
     assert preview._title_label.text() == "demo.mp4"
+    assert preview._transport_bar._preview_quality_label.isVisible() is True
+    assert preview._transport_bar._preview_quality_combo.isVisible() is True
 
 
 def test_preview_player_controls_auto_hide_and_restore(qapp):
@@ -5190,6 +5208,50 @@ def test_main_window_gpu_preferences_are_local_and_persisted(qapp, monkeypatch):
     assert provider.data["output"]["gpu_export_enabled"] is True
     assert provider.data["output"]["gpu_export_default_version"] == 1
     assert win._project_dirty is False
+
+
+def test_main_window_preview_quality_is_local_and_persisted(qapp, monkeypatch):
+    monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)
+    monkeypatch.setattr(mw, "fluent_warning", lambda *a, **k: None)
+
+    class FakeSettingsProvider:
+        def __init__(self):
+            self.data = {"output": {"preview_quality": "medium"}}
+
+        def load(self):
+            return dict(self.data)
+
+        def save(self, data):
+            self.data = dict(data)
+
+    provider = FakeSettingsProvider()
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    calls: list[str] = []
+    monkeypatch.setattr(
+        win._preview_panel,
+        "set_preview_quality",
+        lambda quality: calls.append(str(quality)),
+    )
+
+    assert win._transport_bar._preview_quality_label.text() == "预览质量"
+    assert win._transport_bar.preview_quality() == "medium"
+
+    win._transport_bar._preview_quality_combo.setCurrentIndex(
+        win._transport_bar._preview_quality_combo.findData("low")
+    )
+
+    assert calls == ["low"]
+    assert provider.data["output"]["preview_quality"] == "low"
+    assert win._project_dirty is False
+
+    win._loading_project = True
+    try:
+        win._apply_output_settings({"preview_quality": "high"})
+    finally:
+        win._loading_project = False
+
+    assert win._transport_bar.preview_quality() == "low"
+    assert calls == ["low"]
 
 
 def test_main_window_migrates_to_g5_default_once(qapp, monkeypatch):

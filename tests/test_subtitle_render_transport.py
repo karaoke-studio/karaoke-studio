@@ -135,6 +135,35 @@ def test_async_preview_target_size_uses_device_pixel_ratio():
     assert preview_render_target_size(1, 1, -1.0) == (1, 1, 0.01)
 
 
+def test_preview_quality_caps_lower_tiers_and_preserves_full_quality():
+    from krok_helper.subtitle_render.frontend.preview_async import (
+        normalize_preview_quality,
+        preview_quality_render_scale,
+    )
+
+    assert preview_quality_render_scale(0.8, "low") == 0.25
+    assert preview_quality_render_scale(0.4, "medium") == 0.4
+    assert preview_quality_render_scale(1.5, "high") == 1.5
+    assert normalize_preview_quality("unknown") == "high"
+
+
+def test_transport_preview_quality_defaults_and_emits(qapp):
+    bar = _bar(qapp)
+    seen: list[str] = []
+    bar.previewQualityChanged.connect(seen.append)
+
+    assert bar._preview_quality_label.text() == "预览质量"
+    assert bar.preview_quality() == "high"
+
+    bar._preview_quality_combo.setCurrentIndex(
+        bar._preview_quality_combo.findData("low")
+    )
+
+    assert bar.preview_quality() == "low"
+    assert seen == ["low"]
+    assert "不影响视频导出" in bar._preview_quality_combo.toolTip()
+
+
 def test_native_preview_lookahead_timestamps_only_expand_while_playing():
     from krok_helper.subtitle_render.frontend.preview_async import native_preview_timestamps
 
@@ -413,6 +442,12 @@ def test_preview_graphics_updates_async_render_target(qapp, monkeypatch):
         width, height, dpr = renderer.targets[-1]
         assert (width, height) == (1280, 720)
         assert math.isclose(dpr, graphics._scene_device_pixel_ratio())
+        assert renderer.requests[-1] == graphics.current_time_ms
+
+        display_scale = graphics._scene_device_pixel_ratio()
+        graphics.set_preview_quality("low")
+        assert renderer.targets[-1][:2] == (1280, 720)
+        assert math.isclose(renderer.targets[-1][2], min(display_scale, 0.25))
         assert renderer.requests[-1] == graphics.current_time_ms
     finally:
         graphics.close()

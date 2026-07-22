@@ -154,7 +154,11 @@ from krok_helper.subtitle_render.frontend.playback import (
     unified_player_enabled,
 )
 from krok_helper.subtitle_render.frontend.preview_view import PreviewPanel, TransportBar
-from krok_helper.subtitle_render.frontend.preview_async import gpu_preview_enabled
+from krok_helper.subtitle_render.frontend.preview_async import (
+    DEFAULT_PREVIEW_QUALITY,
+    gpu_preview_enabled,
+    normalize_preview_quality,
+)
 from krok_helper.subtitle_render.frontend.property_panel import (
     PropertyPanel,
     ScreenSettings,
@@ -811,6 +815,22 @@ class PreviewPlayerWindow(QWidget):
         self._title_label.setObjectName("PreviewTitleLabel")
         top_layout.addWidget(self._title_label, 1)
 
+        self._transport_bar = TransportBar(self)
+        self._transport_bar.setObjectName("PreviewTransportBar")
+        self._bottom_controls = self._transport_bar
+        transport_layout = self._transport_bar.layout()
+        transport_layout.removeWidget(self._transport_bar._preview_quality_label)
+        transport_layout.removeWidget(self._transport_bar._preview_quality_combo)
+        self._transport_bar._preview_quality_label.setParent(self._top_controls)
+        self._transport_bar._preview_quality_combo.setParent(self._top_controls)
+        self._transport_bar._preview_quality_label.setFixedWidth(48)
+        self._transport_bar._preview_quality_combo.setFixedSize(120, 28)
+        self._transport_bar._preview_quality_combo.setObjectName(
+            "PreviewQualityCombo"
+        )
+        top_layout.addWidget(self._transport_bar._preview_quality_label)
+        top_layout.addWidget(self._transport_bar._preview_quality_combo)
+
         self._minimize_button = QPushButton("－", self._top_controls)
         self._maximize_button = QPushButton("□", self._top_controls)
         self._close_button = QPushButton("×", self._top_controls)
@@ -823,9 +843,6 @@ class PreviewPlayerWindow(QWidget):
         self._maximize_button.clicked.connect(self._toggle_maximized)
         self._close_button.clicked.connect(self.close)
 
-        self._transport_bar = TransportBar(self)
-        self._transport_bar.setObjectName("PreviewTransportBar")
-        self._bottom_controls = self._transport_bar
         self._init_playback_shortcuts()
 
         self._hide_controls_timer = QTimer(self)
@@ -881,6 +898,37 @@ class PreviewPlayerWindow(QWidget):
                 }
                 #PreviewTopControls QPushButton:pressed {
                     background: rgba(255, 255, 255, 72);
+                }
+                #PreviewTopControls QComboBox#PreviewQualityCombo {
+                    background: transparent;
+                    color: rgba(255, 255, 255, 210);
+                    border: 1px solid rgba(255, 255, 255, 36);
+                    border-radius: 4px;
+                    padding: 0 20px 0 6px;
+                    text-align: left;
+                    font-size: 9pt;
+                    font-family: "Microsoft YaHei UI";
+                }
+                #PreviewTopControls QComboBox#PreviewQualityCombo:hover {
+                    background: rgba(255, 255, 255, 18);
+                    border-color: rgba(255, 255, 255, 64);
+                }
+                #PreviewTopControls QComboBox#PreviewQualityCombo:on {
+                    background: rgba(255, 255, 255, 28);
+                    border-color: rgba(255, 255, 255, 80);
+                }
+                #PreviewTopControls QComboBox#PreviewQualityCombo::drop-down {
+                    width: 22px;
+                    border: none;
+                    background: transparent;
+                }
+                #PreviewTopControls QComboBox#PreviewQualityCombo QAbstractItemView {
+                    color: rgba(255, 255, 255, 225);
+                    background: #202225;
+                    border: 1px solid rgba(255, 255, 255, 42);
+                    outline: none;
+                    selection-color: #FFFFFF;
+                    selection-background-color: #34373B;
                 }
                 #PreviewTransportBar {
                     background: rgba(0, 0, 0, 0);
@@ -1154,6 +1202,8 @@ class PreviewPlayerWindow(QWidget):
         self.setMinimumSize(self._COLLAPSED_SIZE)
         self._preview_frame.hide()
         self._bottom_controls.hide()
+        self._transport_bar._preview_quality_label.hide()
+        self._transport_bar._preview_quality_combo.hide()
         self._minimize_button.hide()
         self._maximize_button.setToolTip("恢复预览窗口")
         self._title_label.setText("预览窗口")
@@ -1175,6 +1225,8 @@ class PreviewPlayerWindow(QWidget):
                 self._MIN_VIDEO_SIZE.height() + self._TITLE_BAR_HEIGHT,
             )
         )
+        self._transport_bar._preview_quality_label.show()
+        self._transport_bar._preview_quality_combo.show()
         self._minimize_button.show()
         self._maximize_button.setToolTip("")
         self._title_label.setText(self._media_title)
@@ -1248,6 +1300,16 @@ class PreviewPlayerWindow(QWidget):
                 }
                 """
             )
+        self._transport_bar._preview_quality_label.setStyleSheet(
+            """
+            QLabel {
+                color: rgba(255, 255, 255, 160);
+                background: transparent;
+                font-family: "Microsoft YaHei UI";
+                font-size: 9pt;
+            }
+            """
+        )
 
 
 _EXPORT_PREVIEW_DEFAULT_WIDTH = 640
@@ -2519,6 +2581,11 @@ class SubtitleRenderWindow(QWidget):
         # GPU preferences are local application settings and are intentionally
         # absent from project files. Loading a project must not reset them.
         if not self._loading_project:
+            preview_quality = normalize_preview_quality(
+                output.get("preview_quality", DEFAULT_PREVIEW_QUALITY)
+            )
+            self._transport_bar.set_preview_quality(preview_quality)
+            self._preview_panel.set_preview_quality(preview_quality)
             self._gpu_preview_check.setChecked(gpu_preview_on)
             self._preview_panel.set_gpu_preview_enabled(gpu_preview_on)
             self._gpu_export_check.setChecked(gpu_export_enabled)
@@ -3110,6 +3177,9 @@ class SubtitleRenderWindow(QWidget):
         self._transport_bar.set_preview_fps(self._screen_settings.fps)
         self._transport_bar.timeChanged.connect(self._preview_panel.set_time)
         self._transport_bar.playbackStateChanged.connect(self._preview_panel.set_playing)
+        self._transport_bar.previewQualityChanged.connect(
+            self._on_preview_quality_changed
+        )
         self._preview_panel.canvas.framePainted.connect(self._transport_bar.note_preview_frame_painted)
         self._preview_panel.gpuFallback.connect(self._on_gpu_preview_fallback)
         # 单播放器统一（步骤2，§10.9，flag KROK_SUBTITLE_UNIFIED_PLAYER 默认关）：
@@ -5496,6 +5566,13 @@ class SubtitleRenderWindow(QWidget):
             )
         self._save_persisted_state()
 
+    def _on_preview_quality_changed(self, quality: str) -> None:
+        """Apply and persist a local preview-only raster quality preference."""
+        normalized = normalize_preview_quality(quality)
+        self._preview_panel.set_preview_quality(normalized)
+        self._local_output_preferences["preview_quality"] = normalized
+        self._save_persisted_state()
+
     def _on_gpu_export_changed(self, _enabled: bool) -> None:
         """Persist GPU subtitle export independently from encoder selection."""
         self._save_persisted_state()
@@ -6531,6 +6608,7 @@ class SubtitleRenderWindow(QWidget):
                 self._gpu_preview_check.isChecked()
             )
             output["gpu_preview_default_version"] = GPU_PREVIEW_DEFAULT_VERSION
+            output["preview_quality"] = self._transport_bar.preview_quality()
             output["gpu_export_enabled"] = bool(
                 self._gpu_export_check.isChecked()
             )

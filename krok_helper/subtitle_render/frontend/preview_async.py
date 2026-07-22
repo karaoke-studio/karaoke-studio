@@ -34,6 +34,38 @@ from krok_helper.subtitle_render.native_backend import (
 from krok_helper.subtitle_render.native_protocol import gpu_unsupported_features
 
 
+PREVIEW_QUALITY_OPTIONS: tuple[tuple[str, str, float], ...] = (
+    ("low", "流畅（1/4）", 0.25),
+    ("medium", "均衡（1/2）", 0.5),
+    ("high", "清晰（1/1）", 1.0),
+)
+DEFAULT_PREVIEW_QUALITY = "high"
+_PREVIEW_QUALITY_SCALES = {
+    key: scale for key, _label, scale in PREVIEW_QUALITY_OPTIONS
+}
+
+
+def normalize_preview_quality(value: object) -> str:
+    """Return a stable preview-quality key, falling back to full quality."""
+    key = str(value or "").strip().lower()
+    return key if key in _PREVIEW_QUALITY_SCALES else DEFAULT_PREVIEW_QUALITY
+
+
+def preview_quality_render_scale(display_scale: float, quality: object) -> float:
+    """Cap subtitle raster scale for a quality tier without invisible oversampling.
+
+    Full quality deliberately preserves the existing display-native behaviour,
+    including DPR > 1 for a small project shown in a large window. Lower tiers
+    follow N3's 1/4 and 1/2 project-space render targets, capped by the actual
+    display scale so a small preview never renders pixels it cannot show.
+    """
+    safe_display_scale = max(float(display_scale or 1.0), 0.01)
+    key = normalize_preview_quality(quality)
+    if key == DEFAULT_PREVIEW_QUALITY:
+        return safe_display_scale
+    return max(min(safe_display_scale, _PREVIEW_QUALITY_SCALES[key]), 0.01)
+
+
 def _env_enabled(name: str, default: str) -> bool:
     return os.environ.get(name, default).strip().lower() not in (
         "0",

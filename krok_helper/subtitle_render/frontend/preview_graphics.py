@@ -27,11 +27,14 @@ from PyQt6.QtWidgets import (
 from krok_helper.subtitle_render.engine.painter import frame_vertical_bounds, paint_frame_to_painter
 from krok_helper.subtitle_render.frontend.preview_async import (
     AsyncSubtitleRenderer,
+    DEFAULT_PREVIEW_QUALITY,
     GpuAsyncSubtitleRenderer,
     NativeAsyncSubtitleRenderer,
     async_preview_enabled,
     gpu_preview_enabled,
     native_preview_enabled,
+    normalize_preview_quality,
+    preview_quality_render_scale,
     preview_render_target_size,
 )
 from krok_helper.subtitle_render.frontend.preview_media import qt_playback_source
@@ -245,6 +248,7 @@ class PreviewGraphicsView(QGraphicsView):
         self._background_pixmap_cache: dict[Path, QPixmap] = {}
         self._video_playing: bool = False
         self._t_ms: int = 0
+        self._preview_quality = DEFAULT_PREVIEW_QUALITY
         self._video_player: Optional[QMediaPlayer] = None
         self._video_audio_out: Optional[QAudioOutput] = None
         # 单播放器统一（步骤2，§10.9）：use_external_player 后视频由共享 controller 驱动，
@@ -334,6 +338,14 @@ class PreviewGraphicsView(QGraphicsView):
         self._refresh_async_target()
         self._refresh_async_state()
 
+    def set_preview_quality(self, quality: object) -> None:
+        """Update the preview-only subtitle raster target without restarting video."""
+        normalized = normalize_preview_quality(quality)
+        if normalized == self._preview_quality:
+            return
+        self._preview_quality = normalized
+        self._refresh_async_target()
+
     def _connect_gpu_fallback_signal(self) -> None:
         signal = getattr(self._async_renderer, "fallback_occurred", None)
         if signal is not None:
@@ -420,14 +432,20 @@ class PreviewGraphicsView(QGraphicsView):
             "no",
             "off",
         ):
-            return 1.0
-        viewport = self.viewport()
-        dpr = viewport.devicePixelRatioF() if viewport is not None else self.devicePixelRatioF()
-        scene_scale = abs(self.transform().m11()) or 1.0
-        # 按显示物理分辨率栅格化即可：文字直接在目标尺寸光栅化比
-        # 高分辨率渲染再缩小更锐（实测边缘梯度更高）。预览清晰度的上限
-        # 是窗口像素数——想看 1:1 细节请把预览窗口拉大 / 最大化。
-        return max(float(dpr or 1.0) * float(scene_scale), 0.01)
+            display_scale = 1.0
+        else:
+            viewport = self.viewport()
+            dpr = (
+                viewport.devicePixelRatioF()
+                if viewport is not None
+                else self.devicePixelRatioF()
+            )
+            scene_scale = abs(self.transform().m11()) or 1.0
+            # 按显示物理分辨率栅格化即可：文字直接在目标尺寸光栅化比
+            # 高分辨率渲染再缩小更锐（实测边缘梯度更高）。预览清晰度的上限
+            # 是窗口像素数——想看 1:1 细节请把预览窗口拉大 / 最大化。
+            display_scale = max(float(dpr or 1.0) * float(scene_scale), 0.01)
+        return preview_quality_render_scale(display_scale, self._preview_quality)
 
     def _refresh_async_target(self) -> None:
         if self._async_renderer is None:
