@@ -37,7 +37,7 @@ def test_startup_splash_uses_compact_frameless_window() -> None:
 
     assert window.size() == QSize(400, 400)
     assert window.windowFlags() & Qt.WindowType.FramelessWindowHint
-    assert window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert not window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
 
 
 def test_startup_splash_displays_workbench_branding_and_start_image() -> None:
