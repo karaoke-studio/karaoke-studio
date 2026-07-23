@@ -260,7 +260,7 @@ def test_accept_subtitle_video_fills_hires_video_and_switches_page(tmp_path: Pat
     assert calls == [("video", output), ("show", WORKFLOW_HIRES_MIX)]
 
 
-def test_lyrics_timing_export_hands_complete_payload_to_subtitle_render(
+def test_lyrics_timing_export_loads_saved_sug_into_subtitle_render(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "song.sug"
@@ -276,8 +276,8 @@ def test_lyrics_timing_export_hands_complete_payload_to_subtitle_render(
     calls: list[object] = []
 
     class RenderPage:
-        def load_from_sug_project(self, *args, **kwargs):
-            calls.append(("track", args, kwargs))
+        def load_from_sug(self, path):
+            calls.append(("track", path))
             return object()
 
         def load_video(self, path):
@@ -304,17 +304,15 @@ def test_lyrics_timing_export_hands_complete_payload_to_subtitle_render(
     KrokHelperQtApp._export_lyrics_timing_to_next(app)
 
     assert calls == [
-        (
-            "track",
-            (project, source),
-            {"nicokara_tags": tags},
-        ),
+        ("track", source),
         ("video", video),
         ("show", WORKFLOW_SUBTITLE_RENDER),
     ]
 
 
 def test_lyrics_timing_export_falls_back_to_audio(tmp_path: Path) -> None:
+    source = tmp_path / "song.sug"
+    source.write_text("{}", encoding="utf-8")
     audio = tmp_path / "song.flac"
     audio.write_bytes(b"audio")
     calls: list[object] = []
@@ -323,14 +321,14 @@ def test_lyrics_timing_export_falls_back_to_audio(tmp_path: Path) -> None:
             export_to_next_payload=lambda: {
                 "project": object(),
                 "nicokara_tags": {},
-                "source_path": None,
+                "source_path": str(source),
                 "media_path": None,
                 "media_kind": None,
                 "audio_path": str(audio),
             }
         ),
         subtitle_render_page=SimpleNamespace(
-            load_from_sug_project=lambda *args, **kwargs: object(),
+            load_from_sug=lambda path: calls.append(("track", path)) or object(),
             load_audio=lambda path: calls.append(("audio", path)),
         ),
         _show_module=lambda module: calls.append(("show", module)),
@@ -339,6 +337,7 @@ def test_lyrics_timing_export_falls_back_to_audio(tmp_path: Path) -> None:
     KrokHelperQtApp._export_lyrics_timing_to_next(app)
 
     assert calls == [
+        ("track", source),
         ("audio", audio),
         ("show", WORKFLOW_SUBTITLE_RENDER),
     ]
@@ -386,22 +385,32 @@ def test_lyrics_timing_export_read_failure_uses_fluent_error(monkeypatch) -> Non
     ]
 
 
-def test_dirty_saved_sug_prompts_before_export(monkeypatch, tmp_path: Path) -> None:
-    choices: list[tuple[str, str, tuple[str, ...], int]] = []
+class _WorkflowSignal:
+    def __init__(self):
+        self.callbacks = []
+
+    def connect(self, callback):
+        self.callbacks.append(callback)
+
+    def disconnect(self, callback):
+        self.callbacks.remove(callback)
+
+    def emit(self, value):
+        for callback in list(self.callbacks):
+            callback(value)
+
+
+def test_dirty_saved_sug_confirms_before_saving_for_export(
+    monkeypatch, tmp_path: Path
+) -> None:
     calls: list[object] = []
+    choices: list[tuple[object, ...]] = []
     source = tmp_path / "saved-project.sug"
     source.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
-        lambda _parent, title, content, buttons, default=0: (
-            choices.append((title, content, tuple(buttons), default)) or 1
-        ),
-    )
-    project = object()
     timing_page = SimpleNamespace(
         has_unsaved_changes=lambda: True,
         export_to_next_payload=lambda: {
-            "project": project,
+            "project": object(),
             "nicokara_tags": {},
             "source_path": str(source),
             "media_path": None,
@@ -411,74 +420,100 @@ def test_dirty_saved_sug_prompts_before_export(monkeypatch, tmp_path: Path) -> N
     )
     app = SimpleNamespace(
         lyrics_timing_page=timing_page,
-        subtitle_render_page=SimpleNamespace(
-            load_from_sug_project=lambda *args, **kwargs: calls.append(
-                ("track", args, kwargs)
-            )
-            or object()
+        subtitle_render_page=object(),
+        _save_lyrics_timing_then_export=lambda page, **kwargs: calls.append(
+            ("save", page, kwargs)
         ),
-        _show_module=lambda module: calls.append(("show", module)),
+    )
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        lambda parent, title, content, buttons, default=0: (
+            choices.append((parent, title, content, tuple(buttons), default)) or 0
+        ),
     )
 
     KrokHelperQtApp._export_lyrics_timing_to_next(app)
 
     assert choices == [
         (
-            "项目尚未保存",
-            "当前打轴项目包含未保存的修改。是否先保存再导出到下一步？",
-            ("保存并继续", "不保存，直接继续", "取消"),
+            app,
+            "保存打轴项目",
+            "当前项目包含未保存的修改。保存到 .sug 文件后再进入下一步吗？",
+            ("保存并进入下一步", "取消"),
             0,
         )
     ]
-    assert calls == [
-        ("track", (project, source), {"nicokara_tags": {}}),
-        ("show", WORKFLOW_SUBTITLE_RENDER),
-    ]
+    assert calls == [("save", timing_page, {"force_save_as": False})]
 
 
-def test_dirty_sug_cancel_stops_export(monkeypatch) -> None:
-    monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
-        lambda *_args, **_kwargs: 2,
-    )
+def test_dirty_saved_sug_cancel_does_not_save_or_export(
+    monkeypatch, tmp_path: Path
+) -> None:
+    source = tmp_path / "saved-project.sug"
+    source.write_text("{}", encoding="utf-8")
+    calls: list[object] = []
     timing_page = SimpleNamespace(
         has_unsaved_changes=lambda: True,
-        export_to_next_payload=lambda: pytest.fail("取消后不应读取项目"),
+        export_to_next_payload=lambda: {
+            "project": object(),
+            "source_path": str(source),
+        },
     )
     app = SimpleNamespace(
         lyrics_timing_page=timing_page,
         subtitle_render_page=object(),
+        _save_lyrics_timing_then_export=lambda *args, **kwargs: calls.append(
+            (args, kwargs)
+        ),
+    )
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
+        lambda *_args, **_kwargs: 1,
     )
 
     KrokHelperQtApp._export_lyrics_timing_to_next(app)
 
+    assert calls == []
 
-def test_dirty_sug_save_waits_for_success_before_export(
-    qapp, monkeypatch
+
+def test_missing_saved_sug_forces_save_as_before_export(tmp_path: Path) -> None:
+    missing = tmp_path / "moved.sug"
+    calls: list[object] = []
+    timing_page = SimpleNamespace(
+        has_unsaved_changes=lambda: False,
+        export_to_next_payload=lambda: {
+            "project": object(),
+            "source_path": str(missing),
+        },
+    )
+    app = SimpleNamespace(
+        lyrics_timing_page=timing_page,
+        subtitle_render_page=object(),
+        _save_lyrics_timing_then_export=lambda page, **kwargs: calls.append(
+            (page, kwargs)
+        ),
+    )
+
+    KrokHelperQtApp._export_lyrics_timing_to_next(app)
+
+    assert calls == [(timing_page, {"force_save_as": True})]
+
+
+def test_dirty_sug_save_waits_for_success_before_loading_file(
+    qapp, monkeypatch, tmp_path: Path
 ) -> None:
-    class FakeSignal:
-        def __init__(self):
-            self.callbacks = []
-
-        def connect(self, callback):
-            self.callbacks.append(callback)
-
-        def disconnect(self, callback):
-            self.callbacks.remove(callback)
-
-        def emit(self, value):
-            for callback in list(self.callbacks):
-                callback(value)
-
-    finished = FakeSignal()
-    failed = FakeSignal()
+    finished = _WorkflowSignal()
+    failed = _WorkflowSignal()
     state = {"dirty": True}
     calls: list[object] = []
+    source = tmp_path / "saved.sug"
+    source.write_text("old", encoding="utf-8")
 
     def trigger_save() -> bool:
         calls.append("save")
+        source.write_text("{}", encoding="utf-8")
         state["dirty"] = False
-        finished.emit("saved.sug")
+        finished.emit(str(source))
         return True
 
     timing_page = SimpleNamespace(
@@ -489,26 +524,84 @@ def test_dirty_sug_save_waits_for_success_before_export(
         export_to_next_payload=lambda: {
             "project": object(),
             "nicokara_tags": {},
-            "source_path": "saved.sug",
+            "source_path": str(source),
             "media_path": None,
             "media_kind": None,
             "audio_path": None,
         },
     )
+    app = SimpleNamespace(
+        lyrics_timing_page=timing_page,
+        subtitle_render_page=SimpleNamespace(
+            load_from_sug=lambda path: calls.append(("load", path)) or object()
+        ),
+        _show_module=lambda module: calls.append(("show", module)),
+        _save_lyrics_timing_then_export=lambda page, **kwargs: (
+            KrokHelperQtApp._save_lyrics_timing_then_export(app, page, **kwargs)
+        ),
+    )
+    app._export_lyrics_timing_to_next = lambda: (
+        KrokHelperQtApp._export_lyrics_timing_to_next(app)
+    )
     monkeypatch.setattr(
         "krok_helper.subtitle_render.frontend.fluent_dialogs.fluent_choice",
         lambda *_args, **_kwargs: 0,
     )
+
+    KrokHelperQtApp._export_lyrics_timing_to_next(app)
+    qapp.processEvents()
+
+    assert calls == [
+        "save",
+        ("load", source),
+        ("show", WORKFLOW_SUBTITLE_RENDER),
+    ]
+    assert finished.callbacks == []
+    assert failed.callbacks == []
+
+
+def test_missing_sug_save_as_waits_for_new_file_before_loading(
+    qapp, tmp_path: Path
+) -> None:
+    finished = _WorkflowSignal()
+    failed = _WorkflowSignal()
+    missing = tmp_path / "old-location.sug"
+    saved = tmp_path / "new-location.sug"
+    state = {"source_path": str(missing)}
+    calls: list[object] = []
+
+    def trigger_save_as() -> bool:
+        calls.append("save_as")
+        saved.write_text("{}", encoding="utf-8")
+        state["source_path"] = str(saved)
+        finished.emit(str(saved))
+        return True
+
+    timing_page = SimpleNamespace(
+        has_unsaved_changes=lambda: False,
+        trigger_save_as=trigger_save_as,
+        project_save_finished=finished,
+        project_save_failed=failed,
+        export_to_next_payload=lambda: {
+            "project": object(),
+            "source_path": state["source_path"],
+            "media_path": None,
+            "media_kind": None,
+            "audio_path": None,
+        },
+    )
     app = SimpleNamespace(
         lyrics_timing_page=timing_page,
         subtitle_render_page=SimpleNamespace(
-            load_from_sug_project=lambda *_args, **_kwargs: calls.append("load")
-            or object()
+            load_from_sug=lambda path: calls.append(("load", path)) or object()
         ),
         _show_module=lambda module: calls.append(("show", module)),
-        _save_lyrics_timing_then_export=lambda page: (
-            KrokHelperQtApp._save_lyrics_timing_then_export(app, page)
-        ),
+    )
+    app._trigger_lyrics_timing_save_as = lambda page: (
+        KrokHelperQtApp._trigger_lyrics_timing_save_as(page)
+    )
+    app._save_lyrics_timing_then_export = lambda page, **kwargs: (
+        KrokHelperQtApp._save_lyrics_timing_then_export(app, page, **kwargs)
     )
     app._export_lyrics_timing_to_next = lambda: (
         KrokHelperQtApp._export_lyrics_timing_to_next(app)
@@ -517,9 +610,53 @@ def test_dirty_sug_save_waits_for_success_before_export(
     KrokHelperQtApp._export_lyrics_timing_to_next(app)
     qapp.processEvents()
 
-    assert calls == ["save", "load", ("show", WORKFLOW_SUBTITLE_RENDER)]
+    assert calls == [
+        "save_as",
+        ("load", saved),
+        ("show", WORKFLOW_SUBTITLE_RENDER),
+    ]
     assert finished.callbacks == []
     assert failed.callbacks == []
+
+
+def test_cancelled_required_save_as_stops_export_and_disconnects_callbacks() -> None:
+    finished = _WorkflowSignal()
+    failed = _WorkflowSignal()
+    timing_page = SimpleNamespace(
+        trigger_save_as=lambda: False,
+        project_save_finished=finished,
+        project_save_failed=failed,
+    )
+    app = SimpleNamespace()
+    app._trigger_lyrics_timing_save_as = lambda page: (
+        KrokHelperQtApp._trigger_lyrics_timing_save_as(page)
+    )
+    app._export_lyrics_timing_to_next = lambda: pytest.fail(
+        "取消另存为后不应继续导出"
+    )
+
+    KrokHelperQtApp._save_lyrics_timing_then_export(
+        app,
+        timing_page,
+        force_save_as=True,
+    )
+
+    assert app._lyrics_timing_export_waiting_for_save is False
+    assert finished.callbacks == []
+    assert failed.callbacks == []
+
+
+def test_save_as_compat_adapter_detects_current_sug_private_save_start() -> None:
+    save_started = _WorkflowSignal()
+    timing_page = SimpleNamespace(
+        _store=SimpleNamespace(save_started=save_started),
+        editorInterface=SimpleNamespace(
+            _on_save_as=lambda: save_started.emit("saved.sug")
+        ),
+    )
+
+    assert KrokHelperQtApp._trigger_lyrics_timing_save_as(timing_page) is True
+    assert save_started.callbacks == []
 
 
 # ---------------------------------------------------------------------------

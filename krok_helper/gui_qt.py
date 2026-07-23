@@ -2947,7 +2947,7 @@ class KrokHelperQtApp(QMainWindow):
         self._show_module(WORKFLOW_HIRES_MIX)
 
     def _export_lyrics_timing_to_next(self) -> None:
-        """把 SUG 当前内存项目完整送入字幕渲染模块并切换到第 5 步。"""
+        """确保 SUG 项目落盘后，从该文件加载字幕并切换到第 5 步。"""
         from krok_helper.subtitle_render.frontend.fluent_dialogs import (
             fluent_choice,
             fluent_error,
@@ -2963,30 +2963,6 @@ class KrokHelperQtApp(QMainWindow):
                 "下一步模块尚未准备好，请稍后重试。",
             )
             return
-
-        dirty_checker = getattr(timing_page, "has_unsaved_changes", None)
-        try:
-            has_unsaved_changes = bool(
-                callable(dirty_checker) and dirty_checker()
-            )
-        except Exception:
-            logging.getLogger(__name__).warning(
-                "检查歌词打轴项目保存状态失败", exc_info=True
-            )
-            has_unsaved_changes = False
-        if has_unsaved_changes:
-            choice = fluent_choice(
-                self,
-                "项目尚未保存",
-                "当前打轴项目包含未保存的修改。是否先保存再导出到下一步？",
-                ("保存并继续", "不保存，直接继续", "取消"),
-                default=0,
-            )
-            if choice == 0:
-                self._save_lyrics_timing_then_export(timing_page)
-                return
-            if choice != 1:
-                return
 
         try:
             payload = timing_page.export_to_next_payload()
@@ -3008,11 +2984,39 @@ class KrokHelperQtApp(QMainWindow):
 
         source_value = payload.get("source_path")
         source_path = Path(str(source_value)) if source_value else None
-        track = render_page.load_from_sug_project(
-            payload["project"],
-            source_path,
-            nicokara_tags=payload.get("nicokara_tags"),
+        source_is_saved_sug = bool(
+            source_path is not None
+            and source_path.suffix.lower() == ".sug"
+            and source_path.is_file()
         )
+        dirty_checker = getattr(timing_page, "has_unsaved_changes", None)
+        try:
+            has_unsaved_changes = bool(
+                callable(dirty_checker) and dirty_checker()
+            )
+        except Exception:
+            logging.getLogger(__name__).warning(
+                "检查歌词打轴项目保存状态失败", exc_info=True
+            )
+            has_unsaved_changes = True
+        if has_unsaved_changes:
+            choice = fluent_choice(
+                self,
+                "保存打轴项目",
+                "当前项目包含未保存的修改。保存到 .sug 文件后再进入下一步吗？",
+                ("保存并进入下一步", "取消"),
+                default=0,
+            )
+            if choice != 0:
+                return
+        if has_unsaved_changes or not source_is_saved_sug:
+            self._save_lyrics_timing_then_export(
+                timing_page,
+                force_save_as=not source_is_saved_sug,
+            )
+            return
+
+        track = render_page.load_from_sug(source_path)
         if track is None:
             return
 
@@ -3034,7 +3038,12 @@ class KrokHelperQtApp(QMainWindow):
 
         self._show_module(WORKFLOW_SUBTITLE_RENDER)
 
-    def _save_lyrics_timing_then_export(self, timing_page: object) -> None:
+    def _save_lyrics_timing_then_export(
+        self,
+        timing_page: object,
+        *,
+        force_save_as: bool = False,
+    ) -> None:
         """等待 SUG 异步保存成功后重新执行下一步导出。"""
         from krok_helper.subtitle_render.frontend.fluent_dialogs import fluent_error
 
@@ -3042,16 +3051,24 @@ class KrokHelperQtApp(QMainWindow):
             return
         finished_signal = getattr(timing_page, "project_save_finished", None)
         failed_signal = getattr(timing_page, "project_save_failed", None)
-        trigger_save = getattr(timing_page, "trigger_save", None)
+        if force_save_as:
+            trigger_save = lambda: self._trigger_lyrics_timing_save_as(timing_page)
+        else:
+            trigger_save = getattr(timing_page, "trigger_save", None)
         if (
             finished_signal is None
             or failed_signal is None
             or not callable(trigger_save)
         ):
+            detail = (
+                "歌词打轴模块不支持另存为当前项目，请重启应用后重试。"
+                if force_save_as
+                else "歌词打轴模块不支持保存完成通知，请重启应用后重试。"
+            )
             fluent_error(
                 self,
                 "无法保存项目",
-                "歌词打轴模块不支持保存完成通知，请重启应用后重试。",
+                detail,
             )
             return
 
@@ -3088,6 +3105,36 @@ class KrokHelperQtApp(QMainWindow):
         if not started:
             # 未命名项目关闭了“另存为”对话框，或保存任务未能启动。
             disconnect_callbacks()
+
+    @staticmethod
+    def _trigger_lyrics_timing_save_as(timing_page: object) -> bool:
+        """请求 SUG 另存为；兼容当前尚未公开 trigger_save_as 的嵌入接口。"""
+        public_trigger = getattr(timing_page, "trigger_save_as", None)
+        if callable(public_trigger):
+            return bool(public_trigger())
+
+        editor = getattr(timing_page, "editorInterface", None)
+        private_trigger = getattr(editor, "_on_save_as", None)
+        store = getattr(timing_page, "_store", None)
+        started_signal = getattr(store, "save_started", None)
+        if not callable(private_trigger) or started_signal is None:
+            return False
+
+        started = False
+
+        def on_started(_path: str) -> None:
+            nonlocal started
+            started = True
+
+        started_signal.connect(on_started)
+        try:
+            private_trigger()
+        finally:
+            try:
+                started_signal.disconnect(on_started)
+            except (TypeError, RuntimeError):
+                pass
+        return started
 
     def _on_lyrics_timing_title_changed(self, title: str) -> None:
         """把 SUG 窗口标题里的项目状态镜像到「歌词打轴」步骤描述行。
