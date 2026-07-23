@@ -601,6 +601,10 @@ class _ColorHexEdit(FluentLineEdit):
     cancelRequested = Signal()
     finishRequested = Signal()
 
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._context_menu_active = False
+
     def keyPressEvent(self, event) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape:
             self.cancelRequested.emit()
@@ -610,7 +614,8 @@ class _ColorHexEdit(FluentLineEdit):
 
     def focusOutEvent(self, event) -> None:  # noqa: N802
         super().focusOutEvent(event)
-        self.finishRequested.emit()
+        if not self._context_menu_active:
+            self.finishRequested.emit()
 
 
 class ColorButton(QWidget):
@@ -638,6 +643,10 @@ class ColorButton(QWidget):
 
         self._swatch = _ColorSwatchButton(color, self._swatch_stack)
         self._swatch.clicked.connect(self._begin_color_entry)
+        self._swatch.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._swatch.customContextMenuRequested.connect(
+            lambda pos: self._show_color_context_menu(self._swatch.mapToGlobal(pos))
+        )
         self._color_edit = _ColorHexEdit(self._swatch_stack)
         self._color_edit.setFixedHeight(30)
         self._color_edit.setMaxLength(9)
@@ -647,6 +656,12 @@ class ColorButton(QWidget):
         self._color_edit.returnPressed.connect(self._commit_color_entry)
         self._color_edit.cancelRequested.connect(self._cancel_color_entry)
         self._color_edit.finishRequested.connect(self._finish_color_entry)
+        self._color_edit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._color_edit.customContextMenuRequested.connect(
+            lambda pos: self._show_color_context_menu(
+                self._color_edit.mapToGlobal(pos)
+            )
+        )
         self._swatch_stack.addWidget(self._swatch)
         self._swatch_stack.addWidget(self._color_edit)
         self._live_apply_timer = QTimer(self)
@@ -687,6 +702,41 @@ class ColorButton(QWidget):
 
     def click(self) -> None:
         self._swatch.click()
+
+    def _show_color_context_menu(self, global_pos: QPoint) -> None:
+        menu = RoundMenu(parent=self)
+        copy_action = Action("复制色号", menu)
+        copy_action.triggered.connect(self._copy_color_to_clipboard)
+        menu.addAction(copy_action)
+
+        paste_action = Action("粘贴色号", menu)
+        paste_action.setEnabled(
+            _parse_hex_color(QApplication.clipboard().text()) is not None
+        )
+        paste_action.triggered.connect(self._paste_color_from_clipboard)
+        menu.addAction(paste_action)
+
+        editing = self._swatch_stack.currentWidget() is self._color_edit
+        self._color_edit._context_menu_active = editing
+        try:
+            menu.exec(global_pos)
+        finally:
+            self._color_edit._context_menu_active = False
+        if self._swatch_stack.currentWidget() is self._color_edit:
+            self._color_edit.setFocus(Qt.FocusReason.PopupFocusReason)
+
+    def _copy_color_to_clipboard(self) -> None:
+        QApplication.clipboard().setText(self.color)
+
+    def _paste_color_from_clipboard(self) -> bool:
+        color = _parse_hex_color(QApplication.clipboard().text())
+        if color is None:
+            return False
+        if self._swatch_stack.currentWidget() is not self._color_edit:
+            self._begin_color_entry()
+        self._color_edit.setText(color)
+        self._commit_color_entry()
+        return True
 
     def _begin_color_entry(self) -> None:
         self._live_apply_timer.stop()

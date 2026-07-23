@@ -12,7 +12,15 @@ import pytest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PyQt6.QtCore import QEvent, QPoint, QPointF, QRect, QSize, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QFont, QImage, QMouseEvent, QWheelEvent  # noqa: E402
+from PyQt6.QtGui import (  # noqa: E402
+    QColor,
+    QContextMenuEvent,
+    QFont,
+    QFocusEvent,
+    QImage,
+    QMouseEvent,
+    QWheelEvent,
+)
 from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import (  # noqa: E402
     QApplication,
@@ -4496,6 +4504,95 @@ def test_color_button_click_edits_hex_without_opening_dialog(qapp):
     assert button.color == "#ABCDEF"
     assert entered == ["#123456", "#ABCDEF"]
     assert dialog_requests == []
+
+
+def _send_context_menu_event(widget: QWidget) -> None:
+    pos = QPoint(5, 5)
+    QApplication.sendEvent(
+        widget,
+        QContextMenuEvent(
+            QContextMenuEvent.Reason.Mouse,
+            pos,
+            widget.mapToGlobal(pos),
+        ),
+    )
+
+
+def test_color_button_right_click_pastes_without_entering_edit_mode(
+    qapp, monkeypatch
+):
+    button = ColorButton("#4093E9")
+    button.show()
+    qapp.processEvents()
+    entered: list[str] = []
+    menu_labels: list[str] = []
+    button.colorEntered.connect(entered.append)
+    QApplication.clipboard().setText("ABCDEF")
+
+    def trigger_paste(menu, _pos):
+        actions = menu.actions()
+        menu_labels.extend(action.text() for action in actions)
+        next(action for action in actions if action.text() == "粘贴色号").trigger()
+
+    monkeypatch.setattr(pp.RoundMenu, "exec", trigger_paste)
+
+    _send_context_menu_event(button._swatch)
+
+    assert menu_labels == ["复制色号", "粘贴色号"]
+    assert button.color == "#ABCDEF"
+    assert entered == ["#ABCDEF"]
+    assert button._swatch_stack.currentWidget() is button._swatch
+
+
+def test_color_button_custom_menu_copies_color_and_has_no_edit_actions(
+    qapp, monkeypatch
+):
+    button = ColorButton("#39C5BB")
+    button.show()
+    qapp.processEvents()
+    QApplication.clipboard().clear()
+
+    def trigger_copy(menu, _pos):
+        actions = menu.actions()
+        assert [action.text() for action in actions] == ["复制色号", "粘贴色号"]
+        next(action for action in actions if action.text() == "复制色号").trigger()
+
+    monkeypatch.setattr(pp.RoundMenu, "exec", trigger_copy)
+
+    _send_context_menu_event(button._swatch)
+
+    assert QApplication.clipboard().text() == "#39C5BB"
+
+
+def test_color_button_right_click_paste_works_while_hex_editor_is_active(
+    qapp, monkeypatch
+):
+    button = ColorButton("#4093E9")
+    button.show()
+    qapp.processEvents()
+    QApplication.clipboard().setText("#123456")
+    button.click()
+
+    def trigger_paste(menu, _pos):
+        assert button._color_edit._context_menu_active
+        QApplication.sendEvent(
+            button._color_edit,
+            QFocusEvent(
+                QEvent.Type.FocusOut,
+                Qt.FocusReason.PopupFocusReason,
+            ),
+        )
+        assert button._swatch_stack.currentWidget() is button._color_edit
+        next(
+            action for action in menu.actions() if action.text() == "粘贴色号"
+        ).trigger()
+
+    monkeypatch.setattr(pp.RoundMenu, "exec", trigger_paste)
+
+    _send_context_menu_event(button._color_edit)
+
+    assert button.color == "#123456"
+    assert button._swatch_stack.currentWidget() is button._swatch
 
 
 @pytest.mark.parametrize(
