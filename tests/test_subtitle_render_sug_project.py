@@ -16,6 +16,9 @@ from strange_uta_game.backend.domain import (
 from strange_uta_game.backend.infrastructure.persistence.sug_io import SugProjectParser
 
 from krok_helper.subtitle_render import sug_project as sug_project_module
+from krok_helper.subtitle_render.engine.painter import _effective_track_time_ms
+from krok_helper.subtitle_render.models import Style
+from krok_helper.subtitle_render.native_protocol import track_to_ir
 from krok_helper.subtitle_render.sug_project import (
     load_sug_timing_track,
     timing_track_from_sug_project,
@@ -76,7 +79,7 @@ def test_timing_track_from_sug_project_preserves_timing_ruby_and_singers() -> No
     assert track.meta.title == "曲名"
     assert track.meta.artist == "作者"
     assert track.meta.album == "专辑"
-    assert track.meta.offset_ms == 50
+    assert track.meta.offset_ms == 0
     assert len(track.lines) == 2
 
     first = track.lines[0]
@@ -137,7 +140,31 @@ def test_sug_adapter_merges_nicokara_metadata_and_custom_tags() -> None:
     assert track.meta.tagging_by == "打轴者"
     assert track.meta.silence_ms == 1250
     assert track.meta.custom == ["@Emoji=主唱", "@Custom=保留"]
-    assert track.meta.offset_ms == 50
+    assert track.meta.offset_ms == 0
+
+
+@pytest.mark.parametrize(
+    ("offset_ms", "expected_start_ms"),
+    [(200, 1200), (-200, 800)],
+)
+def test_sug_adapter_bakes_global_offset_exactly_once_for_cpu_and_gpu(
+    offset_ms: int,
+    expected_start_ms: int,
+) -> None:
+    project = _sample_sug_project()
+    project.global_offset_ms = offset_ms
+
+    track = timing_track_from_sug_project(project)
+
+    assert track.lines[0].chars[0].start_ms == expected_start_ms
+    assert track.meta.offset_ms == 0
+    assert _effective_track_time_ms(track, expected_start_ms, Style()) == (
+        expected_start_ms
+    )
+
+    native_track = track_to_ir(track, Style())
+    assert native_track["meta"]["offset_ms"] == 0
+    assert native_track["lines"][0]["chars"][0]["start_ms"] == expected_start_ms
 
 
 def test_load_sug_timing_track_reads_nicokara_extras(tmp_path: Path) -> None:

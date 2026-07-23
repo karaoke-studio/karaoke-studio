@@ -133,7 +133,9 @@ def timing_track_from_sug_project(
             or _optional_text(getattr(metadata, "album", None)),
             tagging_by=_tag_text(tags, "tagging_by"),
             silence_ms=_tag_int(tags, "silence_ms"),
-            offset_ms=offset_ms,
+            # All SUG checkpoints, line ends and ruby positions were already
+            # normalized with ``global_offset_ms`` while building this track.
+            offset_ms=0,
             custom=_custom_tag_lines(tags.get("custom")),
         ),
         lines=lines,
