@@ -11,7 +11,11 @@ from krok_helper.subtitle_render.engine import painter as subtitle_painter
 from krok_helper.subtitle_render.frontend import guide_replacement as guide_replacement_module
 from krok_helper.subtitle_render.frontend import lyrics_list as lyrics_list_module
 from krok_helper.subtitle_render.frontend import main_window as main_window_module
-from krok_helper.subtitle_render.engine.painter import _layout_line_uncached, paint_frame
+from krok_helper.subtitle_render.engine.painter import (
+    _layout_line_uncached,
+    _resolve_display_baselines,
+    paint_frame,
+)
 from krok_helper.subtitle_render.engine.timeline import compute_display_lines, find_active_line
 from krok_helper.subtitle_render.frontend.guide_replacement import (
     GuidePrefixReplaceDialog,
@@ -32,6 +36,7 @@ from krok_helper.subtitle_render.guide_symbols import (
 from krok_helper.subtitle_render.models import (
     GuideSymbol,
     Style,
+    SubtitleStyleScheme,
     TimingChar,
     TimingLine,
     TimingTrack,
@@ -137,6 +142,63 @@ def test_multiple_guides_are_independent_evenly_timed_inline_glyphs(tmp_path):
     assert layout.intervals[:3] == [(2000, 3000), (3000, 4000), (4000, 5000)]
     assert all(char.vector_glyph == symbol for char in layout.render_line.chars[:3])
     assert find_active_line(track, 2500) is line
+
+
+def test_large_guide_role_keeps_shared_lane_baselines(tmp_path):
+    symbol = replace(_symbol(tmp_path), role_label="导唱符")
+    upper = TimingLine(
+        chars=[TimingChar("歌", 1200)],
+        end_ms=1600,
+        guide_symbol=symbol,
+    )
+    lower = TimingLine(chars=[TimingChar("詞", 1200)], end_ms=1600)
+    track = TimingTrack(lines=[upper, lower])
+    style = Style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=48,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=True,
+        line_y_position="center",
+        line_gap_px=24,
+        custom_style_schemes={
+            "导唱符": SubtitleStyleScheme(
+                font_family="Arial",
+                font_size_px=260,
+                affects_ruby_anchor=False,
+            )
+        },
+    )
+    for layout_semantics in ("legacy", "n3_1074"):
+        scenario_style = replace(style, layout_semantics=layout_semantics)
+        baselines = _resolve_display_baselines(360, track, [], scenario_style)
+        upper_layout = _layout_line_uncached(
+            track,
+            upper,
+            scenario_style,
+            640,
+            360,
+            baseline_y=baselines[0],
+            lane=0,
+        )
+        lower_layout = _layout_line_uncached(
+            track,
+            lower,
+            scenario_style,
+            640,
+            360,
+            baseline_y=baselines[1],
+            lane=1,
+        )
+
+        assert upper_layout is not None and lower_layout is not None
+        assert upper_layout.baseline_y == baselines[0]
+        assert lower_layout.baseline_y == baselines[1]
+        assert lower_layout.baseline_y - upper_layout.baseline_y == (
+            baselines[1] - baselines[0]
+        )
 
 
 def test_detects_one_or_more_consecutive_timed_prefix_markers():

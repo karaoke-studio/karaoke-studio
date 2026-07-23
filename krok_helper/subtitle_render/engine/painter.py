@@ -5530,6 +5530,7 @@ def _layout_role_line(
     source_line: TimingLine | None = None,
 ) -> _LineLayout | None:
     """layout 段：算分色行的纯几何（逐段多字体）+ 基线 + fill_segments（不依赖 t_ms）。"""
+    has_shared_baseline = baseline_y is not None
     source_line = source_line or line
     active_rubies = _active_rubies_for_line(track.rubies, source_line)
     ruby_font = _build_ruby_font(style)
@@ -5582,7 +5583,12 @@ def _layout_role_line(
         if baseline_y is not None
         else _resolve_role_baseline_y(measure_layout, img_h, style, ruby_extra)
     )
-    y = _clamp_role_baseline_y(y, measure_layout, img_h, style, ruby_extra)
+    # A display lane owns its baseline.  Clamping that shared value against a
+    # large inline role/guide glyph would move only this line and mutate the
+    # configured inter-line gap.  Self-positioned diagnostic callers still get
+    # the historical canvas clamp.
+    if not has_shared_baseline:
+        y = _clamp_role_baseline_y(y, measure_layout, img_h, style, ruby_extra)
     text_layout = _build_role_text_layout(
         line,
         style,

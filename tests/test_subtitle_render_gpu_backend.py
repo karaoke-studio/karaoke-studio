@@ -4593,6 +4593,99 @@ def test_gpu_export_packed_rgba_matches_qimage_unpremultiply(monkeypatch) -> Non
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("layout_semantics", ["legacy", "n3_1074"])
+def test_gpu_large_guide_role_keeps_painter_lane_baselines(
+    monkeypatch, layout_semantics: str
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    symbol = GuideSymbol(
+        path_commands=(
+            ("M", 100.0, 0.0),
+            ("L", 500.0, -820.0),
+            ("L", 900.0, 0.0),
+            ("Z",),
+        ),
+        duration_ms=400,
+        role_label="lead",
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("A", 1_000)],
+                end_ms=2_000,
+                guide_symbol=symbol,
+                display_start_override_ms=0,
+                display_end_override_ms=2_000,
+            ),
+            TimingLine(
+                chars=[TimingChar("B", 1_000)],
+                end_ms=2_000,
+                display_start_override_ms=0,
+                display_end_override_ms=2_000,
+            ),
+        ]
+    )
+    white = KaraokeColors(
+        before=KaraokeColorState(text=PaintFill(color="#FFFFFF")),
+        after=KaraokeColorState(text=PaintFill(color="#FFFFFF")),
+    )
+    red = KaraokeColors(
+        before=KaraokeColorState(text=PaintFill(color="#FF2020")),
+        after=KaraokeColorState(text=PaintFill(color="#FF2020")),
+    )
+    style = _g1_style(
+        layout_semantics=layout_semantics,
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=48,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=True,
+        line_y_position="center",
+        line_gap_px=24,
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        karaoke_colors=white,
+        custom_style_schemes={
+            "lead": SubtitleStyleScheme(
+                font_family="Meiryo",
+                font_size_px=260,
+                affects_ruby_anchor=False,
+                stroke_width_px=0,
+                decoration_kind="none",
+                karaoke_colors=red,
+            )
+        },
+    )
+
+    painter = _render_painter_oracle(style, t_ms=1_500, track=track)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, (1_500,), force_warp=True, track=track
+        )
+
+    def white_vertical_bounds(payload: bytes) -> tuple[int, int]:
+        ys = [
+            index // (640 * 4)
+            for index in range(0, len(payload), 4)
+            if payload[index] > 180
+            and payload[index + 1] > 180
+            and payload[index + 2] > 180
+            and payload[index + 3] > 0
+        ]
+        assert ys
+        return min(ys), max(ys)
+
+    gpu_bounds = white_vertical_bounds(gpu[0])
+    painter_bounds = white_vertical_bounds(painter)
+    assert all(
+        abs(actual - expected) <= 8
+        for actual, expected in zip(gpu_bounds, painter_bounds)
+    ), (gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g3_uses_painter_resolved_display_overrides(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     track = TimingTrack(

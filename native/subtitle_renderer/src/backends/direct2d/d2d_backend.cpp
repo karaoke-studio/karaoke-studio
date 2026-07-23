@@ -1007,9 +1007,12 @@ struct Direct2DGpuBackend::Impl {
         bool hasRubyAnchor = false;
         float verticalRubyAllowance = 0.0f;
         float maxVisualPad = 0.0f;
+        float legacyLaneHeight = 1.0f;
+        float legacyLaneDescent = 0.0f;
         float n3DrawHeight = 1.0f;
         float n3Descent = 0.0f;
         bool hasInlineStyles = false;
+        bool hasInlineLaneGeometryOverride = false;
         std::optional<float> guideAnchorLeft;
         std::optional<float> guideAnchorRight;
         bool centerOverride = false;
@@ -1636,17 +1639,34 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         cached.exitDurationMs = sourceLine.exitDurationMs;
         cached.karaokeAnimation = sourceLine.karaokeAnimation;
         cached.displayWindows = sourceLine.displayWindows;
+        DWRITE_FONT_METRICS laneMetrics{};
+        mainFace->GetMetrics(&laneMetrics);
+        const int laneFontSize = referenceInt(style.fontSize, 1);
+        const float laneMetricUnits = static_cast<float>(std::max<UINT16>(
+            laneMetrics.designUnitsPerEm, 1
+        ));
+        const float laneAscent = static_cast<float>(laneFontSize) * layoutScale
+            * static_cast<float>(laneMetrics.ascent) / laneMetricUnits;
+        const float laneDescent = static_cast<float>(laneFontSize) * layoutScale
+            * static_cast<float>(laneMetrics.descent) / laneMetricUnits;
+        const float laneVisualPad = std::ceil((
+            std::max(style.strokeWidth / layoutScale, 0.0f)
+            + std::max(style.stroke2Width / layoutScale, 0.0f)
+        ) * 0.5f) * layoutScale;
+        // Shared horizontal lanes use the line style's main font box. Inline
+        // role/guide geometry may overflow visually, but must not change the
+        // baseline step for only that line.
+        cached.legacyLaneHeight = laneAscent + laneDescent + laneVisualPad * 2.0f;
+        cached.legacyLaneDescent = laneDescent + laneVisualPad;
         if (style.layoutSemantics == "n3_1074") {
-            DWRITE_FONT_METRICS n3Metrics{};
-            mainFace->GetMetrics(&n3Metrics);
             const int fontSize = referenceInt(style.fontSize, 1);
             const int edgeSize = referenceInt(style.strokeWidth, 0);
             const int metricTotal = std::max(
-                static_cast<int>(n3Metrics.ascent) + static_cast<int>(n3Metrics.descent), 1
+                static_cast<int>(laneMetrics.ascent) + static_cast<int>(laneMetrics.descent), 1
             );
             cached.n3DrawHeight = static_cast<float>(fontSize + edgeSize) * layoutScale;
             cached.n3Descent = static_cast<float>(
-                fontSize * static_cast<int>(n3Metrics.descent) / metricTotal
+                fontSize * static_cast<int>(laneMetrics.descent) / metricTotal
                 + edgeSize / 2
             ) * layoutScale;
         }
@@ -1688,6 +1708,19 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 ? scene.charStyles[static_cast<std::size_t>(sourceChar.styleIndex)]
                 : style;
             cached.hasInlineStyles = cached.hasInlineStyles || hasCharStyle;
+            cached.hasInlineLaneGeometryOverride =
+                cached.hasInlineLaneGeometryOverride
+                || (hasCharStyle && (
+                    charStyle.fontFamily != style.fontFamily
+                    || charStyle.latinFontFamily != style.latinFontFamily
+                    || charStyle.fontSize != style.fontSize
+                    || charStyle.latinFontSize != style.latinFontSize
+                    || charStyle.fontWeight != style.fontWeight
+                    || charStyle.latinFontWeight != style.latinFontWeight
+                    || charStyle.italic != style.italic
+                    || charStyle.strokeWidth != style.strokeWidth
+                    || charStyle.stroke2Width != style.stroke2Width
+                ));
             const bool vectorGlyph = sourceChar.vectorGlyph.has_value();
             const bool latin = !vectorGlyph && isLatinText(sourceChar.text);
             Microsoft::WRL::ComPtr<IDWriteFontFace> requestedFace = latin
@@ -4648,12 +4681,17 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             ));
         const float mainHeight = n3Layout
             ? line->n3DrawHeight
-            : (line->ascent > 0.0f ? line->ascent : -line->bounds.top)
-                + (line->descent > 0.0f ? line->descent : line->bounds.bottom)
-                + visualPad * 2.0f;
+            : line->hasInlineLaneGeometryOverride
+                ? line->legacyLaneHeight
+                : (line->ascent > 0.0f ? line->ascent : -line->bounds.top)
+                    + (line->descent > 0.0f ? line->descent : line->bounds.bottom)
+                    + visualPad * 2.0f;
         const float descent = n3Layout
             ? line->n3Descent
-            : (line->descent > 0.0f ? line->descent : line->bounds.bottom) + visualPad;
+            : line->hasInlineLaneGeometryOverride
+                ? line->legacyLaneDescent
+                : (line->descent > 0.0f ? line->descent : line->bounds.bottom)
+                    + visualPad;
         const float ascent = mainHeight - descent;
         const int lanes = style.dualLineLayout ? std::max(style.laneCount, 1) : 1;
         const float rubyExtra = n3Layout || line->rubies.empty()
@@ -4673,7 +4711,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 + style.lineGap * static_cast<float>(lanes - 1);
             firstBaseline = (static_cast<float>(scene.height) - totalHeight) * 0.5f
                 + ascent;
-            if (lanes == 1 && !n3Layout) {
+            if (lanes == 1 && !n3Layout && !line->hasInlineLaneGeometryOverride) {
                 if (line->rubies.empty()) {
                     firstBaseline = (static_cast<float>(scene.height)
                         - (line->bounds.bottom - line->bounds.top)) * 0.5f
