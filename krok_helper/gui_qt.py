@@ -29,7 +29,17 @@ def _schedule_hard_process_exit(delay_seconds: float = 0.25) -> None:
     timer.daemon = True
     timer.start()
 
-from PyQt6.QtCore import QEvent, QEventLoop, QSize, QThread, QTimer, Qt, QUrl, pyqtSignal as Signal
+from PyQt6.QtCore import (
+    QEvent,
+    QEventLoop,
+    QSize,
+    QThread,
+    QTimer,
+    Qt,
+    QUrl,
+    pyqtSignal as Signal,
+    pyqtSlot as Slot,
+)
 from PyQt6.QtGui import QColor, QBrush, QDesktopServices, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPalette, QPen, QShortcut, QTextDocument
 from PyQt6.QtWidgets import (
     QAbstractItemView,
@@ -750,6 +760,72 @@ class UpdateSourceOrderDialog(MessageBoxBase):
                 raw.append(str(item.data(Qt.ItemDataRole.UserRole)))
         self.order = normalize_order(raw)
         super().accept()
+
+
+class AlignmentHandoffDialog(QDialog):
+    """Choose which completed alignment assets to prefill into later modules."""
+
+    def __init__(
+        self,
+        *,
+        is_video_target: bool,
+        output_path: Path,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setModal(False)
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.setWindowFlag(Qt.WindowType.WindowContextHelpButtonHint, False)
+        output_label = "对齐视频" if is_video_target else "对齐音频"
+        self.setWindowTitle(f"{output_label}导出完成")
+        if parent is not None:
+            self.setWindowIcon(parent.windowIcon())
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setSpacing(12)
+        title = TitleLabel(f"{output_label}导出完成", self)
+        layout.addWidget(title)
+
+        summary = BodyLabel(
+            f"文件已保存到：\n{output_path}\n\n请选择要自动填入的后续模块素材：",
+            self,
+        )
+        summary.setWordWrap(True)
+        summary.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(summary)
+
+        subtitle_text = (
+            "将导出的对齐视频作为字幕渲染背景素材"
+            if is_video_target
+            else "将用于对齐的视频作为字幕渲染背景素材"
+        )
+        hires_text = (
+            "将用于对齐的原唱音源作为 Hi-Res 混流原唱音源"
+            if is_video_target
+            else "将导出的对齐音频作为 Hi-Res 混流原唱音源"
+        )
+        self.subtitle_check = QCheckBox(subtitle_text, self)
+        self.hires_check = QCheckBox(hires_text, self)
+        self.subtitle_check.setChecked(True)
+        self.hires_check.setChecked(True)
+        layout.addWidget(self.subtitle_check)
+        layout.addWidget(self.hires_check)
+
+        layout.addSpacing(8)
+        button_layout = QHBoxLayout()
+        button_layout.setSpacing(12)
+        self.yesButton = PrimaryPushButton("确认", self)
+        self.cancelButton = QPushButton("取消", self)
+        self.yesButton.clicked.connect(self.accept)
+        self.cancelButton.clicked.connect(self.reject)
+        button_layout.addWidget(self.yesButton, 1)
+        button_layout.addWidget(self.cancelButton, 1)
+        layout.addLayout(button_layout)
+        self.setMinimumWidth(620)
+
+    def selections(self) -> tuple[bool, bool]:
+        return self.subtitle_check.isChecked(), self.hires_check.isChecked()
 
 
 def show_fluent_info(parent: QWidget, text: str, *, yes_text: str = "确定") -> None:
@@ -2572,6 +2648,9 @@ class KrokHelperQtApp(QMainWindow):
         self._align_export_process: subprocess.Popen | None = None
         self._align_export_expected_outputs: list[Path] = []
         self._align_export_completed_outputs: list[Path] = []
+        self._align_export_handoff_context: tuple[bool, Path, Path, str] | None = None
+        self._alignment_handoff_dialog: AlignmentHandoffDialog | None = None
+        self._alignment_handoff_payload: tuple[bool, Path, Path | None, Path | None] | None = None
         self.active_module = WORKFLOW_VIDEO_DOWNLOAD
         self._loading_settings_into_ui = True
 
@@ -8016,6 +8095,7 @@ class KrokHelperQtApp(QMainWindow):
         self._align_export_process = None
         self._align_export_expected_outputs = []
         self._align_export_completed_outputs = []
+        self._align_export_handoff_context = None
 
     def _stop_alignment_export(self) -> None:
         if not self._is_align_export_running():
@@ -8227,6 +8307,12 @@ class KrokHelperQtApp(QMainWindow):
         self._align_export_process = None
         self._align_export_expected_outputs = [output_path]
         self._align_export_completed_outputs = []
+        self._align_export_handoff_context = (
+            is_video_target,
+            video_path,
+            audio_path,
+            output_kind,
+        )
 
         self._stop_alignment_preview(log_message=False)
         self.align_analyze_button.setEnabled(False)
@@ -8274,10 +8360,36 @@ class KrokHelperQtApp(QMainWindow):
 
         task = self._track_background_task("align_export_task", BackgroundTask(runner))
         task.log_message.connect(self._append_align_log)
-        task.task_succeeded.connect(lambda outputs: self._finish_aligned_export(True, "", outputs, output_kind))
-        task.task_failed.connect(lambda message: self._finish_aligned_export(False, message, None, output_kind))
+        # Connect to bound QObject methods so Qt queues completion back to this
+        # window's GUI thread. A lambda runs in BackgroundTask's worker thread
+        # and would make the modal handoff dialog visible but unresponsive.
+        task.task_succeeded.connect(self._finish_aligned_export_success)
+        task.task_failed.connect(self._finish_aligned_export_failure)
         task.start()
         self._refresh_alignment_preview_controls()
+
+    @Slot(object)
+    def _finish_aligned_export_success(self, output_paths: object) -> None:
+        context = self._align_export_handoff_context
+        if context is None:
+            self._finish_aligned_export(True, "", output_paths, "对齐文件")
+            return
+        is_video_target, video_path, audio_path, output_kind = context
+        self._finish_aligned_export(
+            True,
+            "",
+            output_paths,
+            output_kind,
+            is_video_target=is_video_target,
+            source_video_path=video_path,
+            source_audio_path=audio_path,
+        )
+
+    @Slot(str)
+    def _finish_aligned_export_failure(self, message: str) -> None:
+        context = self._align_export_handoff_context
+        output_kind = context[3] if context is not None else "对齐文件"
+        self._finish_aligned_export(False, message, None, output_kind)
 
     def _finish_aligned_export(
         self,
@@ -8285,6 +8397,10 @@ class KrokHelperQtApp(QMainWindow):
         message: str,
         output_paths: object,
         output_kind: str,
+        *,
+        is_video_target: bool | None = None,
+        source_video_path: Path | None = None,
+        source_audio_path: Path | None = None,
     ) -> None:
         was_cancelled = self._align_export_cancel_requested
         self._align_export_process = None
@@ -8302,10 +8418,86 @@ class KrokHelperQtApp(QMainWindow):
         self._refresh_alignment_preview_controls()
         self._reset_align_export_state()
         if success and isinstance(output_paths, list):
-            QMessageBox.information(self, APP_TITLE, f"{output_kind}已导出:\n" + "\n".join(str(path) for path in output_paths))
+            exported_paths = [Path(path) for path in output_paths]
+            if not exported_paths:
+                return
+            resolved_target = (
+                self._is_align_video_target()
+                if is_video_target is None
+                else is_video_target
+            )
+            self._offer_alignment_handoff(
+                is_video_target=resolved_target,
+                output_path=exported_paths[-1],
+                source_video_path=(
+                    source_video_path
+                    if source_video_path is not None
+                    else getattr(getattr(self, "align_video_zone", None), "path", None)
+                ),
+                source_audio_path=(
+                    source_audio_path
+                    if source_audio_path is not None
+                    else getattr(getattr(self, "align_audio_zone", None), "path", None)
+                ),
+            )
             return
         self._append_align_log(f"导出失败: {message}")
         QMessageBox.critical(self, APP_TITLE, message)
+
+    def _offer_alignment_handoff(
+        self,
+        *,
+        is_video_target: bool,
+        output_path: Path,
+        source_video_path: Path | None,
+        source_audio_path: Path | None,
+    ) -> None:
+        dialog = AlignmentHandoffDialog(
+            is_video_target=is_video_target,
+            output_path=output_path,
+            parent=self,
+        )
+        self._alignment_handoff_dialog = dialog
+        self._alignment_handoff_payload = (
+            is_video_target,
+            output_path,
+            source_video_path,
+            source_audio_path,
+        )
+        dialog.accepted.connect(self._apply_alignment_handoff)
+        dialog.finished.connect(self._clear_alignment_handoff_dialog)
+        # Keep this confirmation modeless. The previous full-window Fluent
+        # mask disabled the workbench (including its title-bar close button)
+        # and could then fail to receive input itself on Windows.
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    @Slot()
+    def _apply_alignment_handoff(self) -> None:
+        dialog = self._alignment_handoff_dialog
+        payload = self._alignment_handoff_payload
+        if dialog is None or payload is None:
+            return
+        is_video_target, output_path, source_video_path, source_audio_path = payload
+        send_to_subtitle, send_to_hires = dialog.selections()
+
+        if send_to_subtitle:
+            background_path = output_path if is_video_target else source_video_path
+            render_page = getattr(self, "subtitle_render_page", None)
+            load_video = getattr(render_page, "load_video", None)
+            if background_path is not None and callable(load_video):
+                load_video(Path(background_path))
+
+        if send_to_hires:
+            vocal_path = source_audio_path if is_video_target else output_path
+            if vocal_path is not None:
+                self.set_on_vocal_path(Path(vocal_path))
+
+    @Slot(int)
+    def _clear_alignment_handoff_dialog(self, _result: int) -> None:
+        self._alignment_handoff_dialog = None
+        self._alignment_handoff_payload = None
 
     def _clear_alignment_inputs(self) -> None:
         if (

@@ -8,9 +8,19 @@ import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtCore import QEventLoop, QObject, QThread, QTimer, Qt  # noqa: E402
+from PyQt6.QtTest import QTest  # noqa: E402
+from PyQt6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QDialog,
+    QStyle,
+    QStyleOptionButton,
+    QWidget,
+)
 
 from krok_helper.gui_qt import (  # noqa: E402
+    AlignmentHandoffDialog,
+    BackgroundTask,
     KrokHelperQtApp,
     WORKFLOW_HIRES_MIX,
     WORKFLOW_SUBTITLE_RENDER,
@@ -258,6 +268,374 @@ def test_accept_subtitle_video_fills_hires_video_and_switches_page(tmp_path: Pat
     KrokHelperQtApp.accept_subtitle_video(app, output)
 
     assert calls == [("video", output), ("show", WORKFLOW_HIRES_MIX)]
+
+
+@pytest.mark.parametrize(
+    ("is_video_target", "subtitle_text", "hires_text"),
+    [
+        (
+            True,
+            "将导出的对齐视频作为字幕渲染背景素材",
+            "将用于对齐的原唱音源作为 Hi-Res 混流原唱音源",
+        ),
+        (
+            False,
+            "将用于对齐的视频作为字幕渲染背景素材",
+            "将导出的对齐音频作为 Hi-Res 混流原唱音源",
+        ),
+    ],
+)
+def test_alignment_handoff_dialog_defaults_both_options_to_checked(
+    qapp,
+    tmp_path: Path,
+    is_video_target: bool,
+    subtitle_text: str,
+    hires_text: str,
+) -> None:
+    parent = QWidget()
+    parent.resize(900, 700)
+    dialog = AlignmentHandoffDialog(
+        is_video_target=is_video_target,
+        output_path=tmp_path / ("aligned.mp4" if is_video_target else "aligned.wav"),
+        parent=parent,
+    )
+
+    assert dialog.subtitle_check.text() == subtitle_text
+    assert dialog.hires_check.text() == hires_text
+    assert dialog.selections() == (True, True)
+    assert dialog.yesButton.text() == "确认"
+    assert dialog.cancelButton.text() == "取消"
+    dialog.close()
+    parent.close()
+
+
+def test_alignment_handoff_dialog_keeps_gui_responsive(
+    qapp, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, Path]] = []
+
+    class HandoffHost(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.resize(900, 700)
+            self.subtitle_render_page = SimpleNamespace(
+                load_video=lambda path: calls.append(("subtitle", path))
+            )
+
+        def set_on_vocal_path(self, path):
+            calls.append(("hires", path))
+
+        def _apply_alignment_handoff(self):
+            KrokHelperQtApp._apply_alignment_handoff(self)
+
+        def _clear_alignment_handoff_dialog(self, result):
+            KrokHelperQtApp._clear_alignment_handoff_dialog(self, result)
+
+    host = HandoffHost()
+    host.show()
+    output = tmp_path / "aligned.wav"
+    source_video = tmp_path / "source.mp4"
+    source_audio = tmp_path / "source.flac"
+    KrokHelperQtApp._offer_alignment_handoff(
+        host,
+        is_video_target=False,
+        output_path=output,
+        source_video_path=source_video,
+        source_audio_path=source_audio,
+    )
+    dialog = host._alignment_handoff_dialog
+    assert dialog is not None
+    assert dialog.isVisible()
+    assert host.isEnabled()
+    assert not dialog.isModal()
+    assert QApplication.activeModalWidget() is None
+
+    heartbeat_count = 0
+    heartbeat = QTimer(host)
+    heartbeat.setInterval(5)
+
+    def tick():
+        nonlocal heartbeat_count
+        heartbeat_count += 1
+
+    heartbeat.timeout.connect(tick)
+    heartbeat.start()
+    heartbeat_window = QEventLoop()
+    QTimer.singleShot(50, heartbeat_window.quit)
+    heartbeat_window.exec()
+    heartbeat.stop()
+    assert heartbeat_count > 0
+
+    option = QStyleOptionButton()
+    option.initFrom(dialog.subtitle_check)
+    indicator = dialog.subtitle_check.style().subElementRect(
+        QStyle.SubElement.SE_CheckBoxIndicator,
+        option,
+        dialog.subtitle_check,
+    )
+    QTest.mouseClick(
+        dialog.subtitle_check,
+        Qt.MouseButton.LeftButton,
+        pos=indicator.center(),
+    )
+    assert not dialog.subtitle_check.isChecked()
+
+    finished = QEventLoop()
+    dialog.finished.connect(lambda _result: finished.quit())
+    QTest.mouseClick(
+        dialog.yesButton,
+        Qt.MouseButton.LeftButton,
+        pos=dialog.yesButton.rect().center(),
+    )
+    if dialog.isVisible():
+        QTimer.singleShot(500, finished.quit)
+        finished.exec()
+
+    assert host._alignment_handoff_dialog is None
+    assert not dialog.isVisible()
+    assert calls == [("hires", output)]
+    host.close()
+
+
+@pytest.mark.parametrize(
+    ("is_video_target", "expected_background", "expected_vocal"),
+    [
+        (True, "output", "audio"),
+        (False, "video", "output"),
+    ],
+)
+def test_alignment_handoff_maps_assets_without_switching_modules(
+    monkeypatch,
+    tmp_path: Path,
+    is_video_target: bool,
+    expected_background: str,
+    expected_vocal: str,
+) -> None:
+    video = tmp_path / "source.mp4"
+    audio = tmp_path / "source.flac"
+    output = tmp_path / ("aligned.mp4" if is_video_target else "aligned.wav")
+    paths = {"video": video, "audio": audio, "output": output}
+    calls: list[tuple[str, Path]] = []
+
+    class FakeSignal:
+        def __init__(self):
+            self.slots = []
+
+        def connect(self, slot):
+            self.slots.append(slot)
+
+        def emit(self, *args):
+            for slot in self.slots:
+                slot(*args)
+
+    class AcceptedDialog:
+        def __init__(self, **_kwargs):
+            self.accepted = FakeSignal()
+            self.finished = FakeSignal()
+
+        def show(self):
+            self.accepted.emit()
+            self.finished.emit(QDialog.DialogCode.Accepted)
+
+        def raise_(self):
+            pass
+
+        def activateWindow(self):
+            pass
+
+        def selections(self):
+            return True, True
+
+    monkeypatch.setattr("krok_helper.gui_qt.AlignmentHandoffDialog", AcceptedDialog)
+    app = SimpleNamespace(
+        subtitle_render_page=SimpleNamespace(
+            load_video=lambda path: calls.append(("subtitle", path))
+        ),
+        set_on_vocal_path=lambda path: calls.append(("hires", path)),
+    )
+    app._apply_alignment_handoff = lambda: KrokHelperQtApp._apply_alignment_handoff(app)
+    app._clear_alignment_handoff_dialog = (
+        lambda result: KrokHelperQtApp._clear_alignment_handoff_dialog(app, result)
+    )
+
+    KrokHelperQtApp._offer_alignment_handoff(
+        app,
+        is_video_target=is_video_target,
+        output_path=output,
+        source_video_path=video,
+        source_audio_path=audio,
+    )
+
+    assert calls == [
+        ("subtitle", paths[expected_background]),
+        ("hires", paths[expected_vocal]),
+    ]
+
+
+def test_alignment_handoff_respects_unchecked_options_and_cancel(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls: list[tuple[str, Path]] = []
+    dialog_results = iter(
+        (
+            (QDialog.DialogCode.Accepted, (False, True)),
+            (QDialog.DialogCode.Rejected, (True, True)),
+        )
+    )
+
+    class FakeSignal:
+        def __init__(self):
+            self.slots = []
+
+        def connect(self, slot):
+            self.slots.append(slot)
+
+        def emit(self, *args):
+            for slot in self.slots:
+                slot(*args)
+
+    class ControlledDialog:
+        def __init__(self, **_kwargs):
+            self.result, self.selected = next(dialog_results)
+            self.accepted = FakeSignal()
+            self.finished = FakeSignal()
+
+        def show(self):
+            if self.result == QDialog.DialogCode.Accepted:
+                self.accepted.emit()
+            self.finished.emit(self.result)
+
+        def raise_(self):
+            pass
+
+        def activateWindow(self):
+            pass
+
+        def selections(self):
+            return self.selected
+
+    monkeypatch.setattr("krok_helper.gui_qt.AlignmentHandoffDialog", ControlledDialog)
+    app = SimpleNamespace(
+        subtitle_render_page=SimpleNamespace(
+            load_video=lambda path: calls.append(("subtitle", path))
+        ),
+        set_on_vocal_path=lambda path: calls.append(("hires", path)),
+    )
+    app._apply_alignment_handoff = lambda: KrokHelperQtApp._apply_alignment_handoff(app)
+    app._clear_alignment_handoff_dialog = (
+        lambda result: KrokHelperQtApp._clear_alignment_handoff_dialog(app, result)
+    )
+    kwargs = {
+        "is_video_target": True,
+        "output_path": tmp_path / "aligned.mp4",
+        "source_video_path": tmp_path / "source.mp4",
+        "source_audio_path": tmp_path / "source.flac",
+    }
+
+    KrokHelperQtApp._offer_alignment_handoff(app, **kwargs)
+    KrokHelperQtApp._offer_alignment_handoff(app, **kwargs)
+
+    assert calls == [("hires", tmp_path / "source.flac")]
+
+
+def test_alignment_export_success_opens_handoff_with_frozen_source_paths(
+    tmp_path: Path,
+) -> None:
+    calls: list[object] = []
+
+    class ValueWidget:
+        def setRange(self, minimum, maximum):
+            calls.append(("range", minimum, maximum))
+
+        def setValue(self, value):
+            calls.append(("value", value))
+
+        def setEnabled(self, enabled):
+            calls.append(("enabled", enabled))
+
+        def setText(self, text):
+            calls.append(("text", text))
+
+    video = tmp_path / "source.mp4"
+    audio = tmp_path / "source.flac"
+    output = tmp_path / "aligned.mp4"
+    handoffs: list[dict] = []
+    app = SimpleNamespace(
+        _align_export_cancel_requested=False,
+        _align_export_process=object(),
+        align_progress=ValueWidget(),
+        align_analyze_button=ValueWidget(),
+        align_status_label=ValueWidget(),
+        _refresh_alignment_preview_controls=lambda: calls.append(("refresh",)),
+        _reset_align_export_state=lambda: calls.append(("reset",)),
+        _offer_alignment_handoff=lambda **kwargs: handoffs.append(kwargs),
+    )
+
+    KrokHelperQtApp._finish_aligned_export(
+        app,
+        True,
+        "",
+        [output],
+        "对齐视频",
+        is_video_target=True,
+        source_video_path=video,
+        source_audio_path=audio,
+    )
+
+    assert handoffs == [
+        {
+            "is_video_target": True,
+            "output_path": output,
+            "source_video_path": video,
+            "source_audio_path": audio,
+        }
+    ]
+
+
+def test_alignment_export_completion_is_queued_to_gui_thread(
+    qapp, tmp_path: Path
+) -> None:
+    output = tmp_path / "aligned.wav"
+    source_video = tmp_path / "source.mp4"
+    source_audio = tmp_path / "source.flac"
+    event_loop = QEventLoop()
+    observed: list[tuple[QThread, tuple[object, ...], dict[str, object]]] = []
+
+    class CompletionProbe(QObject):
+        _finish_aligned_export_success = KrokHelperQtApp._finish_aligned_export_success
+
+        def __init__(self) -> None:
+            super().__init__()
+            self._align_export_handoff_context = (
+                False,
+                source_video,
+                source_audio,
+                "对齐音频",
+            )
+
+        def _finish_aligned_export(self, *args, **kwargs) -> None:
+            observed.append((QThread.currentThread(), args, kwargs))
+            event_loop.quit()
+
+    probe = CompletionProbe()
+    task = BackgroundTask(lambda _logger: [output])
+    task.task_succeeded.connect(probe._finish_aligned_export_success)
+    task.start()
+    QTimer.singleShot(3000, event_loop.quit)
+    event_loop.exec()
+    task.wait()
+
+    assert observed == [
+        (
+            qapp.thread(),
+            (True, "", [output], "对齐音频"),
+            {
+                "is_video_target": False,
+                "source_video_path": source_video,
+                "source_audio_path": source_audio,
+            },
+        )
+    ]
 
 
 def test_lyrics_timing_export_loads_saved_sug_into_subtitle_render(
