@@ -618,6 +618,57 @@ def test_lyrics_preview_shows_embedded_guide_icon(tmp_path):
     panel.close()
 
 
+def test_direct_guide_import_refreshes_lyrics_and_preview_immediately(
+    tmp_path, monkeypatch
+):
+    svg_path = tmp_path / "lead.svg"
+    _symbol(tmp_path)
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("歌", 1000)], end_ms=2000)]
+    )
+
+    class AcceptedSettingsDialog:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def settings(self):
+            return 1, 1000
+
+    monkeypatch.setattr(
+        main_window_module.QFileDialog,
+        "getOpenFileName",
+        lambda *_args, **_kwargs: (str(svg_path), "SVG 文件 (*.svg)"),
+    )
+    monkeypatch.setattr(
+        main_window_module, "_GuideSymbolSettingsDialog", AcceptedSettingsDialog
+    )
+    monkeypatch.setattr(
+        main_window_module.SubtitleRenderWindow,
+        "_resolve_ffprobe_path",
+        lambda self: "ffprobe",
+    )
+    monkeypatch.setenv(
+        "KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings")
+    )
+    window = main_window_module.SubtitleRenderWindow(embedded=False)
+    window._timing_track = track
+    window._lyrics_panel.set_track(track)
+    preview_tracks = []
+    monkeypatch.setattr(window._preview_panel, "set_track", preview_tracks.append)
+
+    window._on_guide_symbol_import_requested([0])
+
+    item = window._lyrics_panel.table_widget.item(0, COL_CONTENT)
+    assert track.lines[0].guide_symbol is not None
+    assert item is not None
+    assert not item.icon().isNull()
+    assert preview_tracks == [track]
+    window.close()
+
+
 def test_lyrics_preview_hides_replaced_prefix_and_preserves_source_chars(tmp_path):
     symbol = replace(
         _symbol(tmp_path), count=1, replacement_prefix=("h",), role_labels=(None,)

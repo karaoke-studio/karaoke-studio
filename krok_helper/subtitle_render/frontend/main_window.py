@@ -5874,6 +5874,7 @@ class SubtitleRenderWindow(QWidget):
         )
         del self._undo_stack[:-_UNDO_STACK_LIMIT]
         self._redo_stack.clear()
+        self._refresh_after_guide_symbols_changed(valid_rows)
 
     @staticmethod
     def _style_change_paths_mergeable(
@@ -5887,7 +5888,6 @@ class SubtitleRenderWindow(QWidget):
         old_path = next(iter(previous))
         new_path = next(iter(current))
         return old_path.startswith(new_path + ".") or new_path.startswith(old_path + ".")
-        self._refresh_after_guide_symbols_changed(valid_rows)
 
     def _on_guide_prefix_replace_requested(self) -> None:
         track = self._active_track()
