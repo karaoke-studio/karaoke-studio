@@ -675,6 +675,24 @@ def test_import_title_overlay(imported):
     assert title.fade_in_ms == 0 and title.fade_out_ms == 0
 
 
+def test_import_n3_continuous_head_and_tail_does_not_map_to_two_segments(tmp_path):
+    payload = _project_payload(tmp_path)
+    payload["TitleInfos"][0]["ShowTime"] = {
+        "Kind": 2,
+        "HeadOffset": 2500,
+        "HeadEnd": 5999990,
+        "Interval": 10000,
+        "TailOffset": 3500,
+    }
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+    title = style_from_dict(result.project_data["style"]).title_overlay
+
+    assert title is not None
+    assert title.show_mode == "whole"
+    assert any("開始～終了" in warning for warning in result.warnings)
+
+
 def test_import_title_preserves_per_character_font_roles(tmp_path):
     payload = _project_payload(tmp_path)
     chars = payload["TitleInfos"][0]["LineInfos"][0]["LyricsCharInfos"]

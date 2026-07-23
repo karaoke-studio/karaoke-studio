@@ -220,7 +220,42 @@ def test_build_render_ir_resolves_title_metadata_and_windows():
     ir = build_render_ir(track, style, width=640, height=360, fps=60)
 
     assert ir["title"]["text"] == "曲名 / 歌手"
-    assert ir["title"]["windows"] == [[100, 1_600]]
+    assert ir["title"]["windows"] == [[100, 1_600, 300, 300]]
+
+
+def test_build_render_ir_anchors_two_segment_title_tail_to_project_duration():
+    track = TimingTrack(
+        meta=TimingTrackMeta(title="曲名"),
+        lines=[TimingLine(chars=[TimingChar("終", 3_000)], end_ms=4_000)],
+    )
+    style = Style(
+        title_overlay=TitleOverlay(
+            enabled=True,
+            show_mode="head_tail",
+            head_offset_ms=2_000,
+            duration_ms=6_000,
+            fade_in_ms=500,
+            fade_out_ms=700,
+            tail_offset_ms=3_000,
+            tail_duration_ms=9_000,
+            tail_fade_in_ms=1_100,
+            tail_fade_out_ms=1_300,
+        )
+    )
+
+    ir = build_render_ir(
+        track,
+        style,
+        width=640,
+        height=360,
+        fps=60,
+        duration_ms=60_000,
+    )
+
+    assert ir["title"]["windows"] == [
+        [2_000, 8_000, 500, 700],
+        [48_000, 57_000, 1_100, 1_300],
+    ]
 
 
 def test_build_render_ir_keeps_title_latin_metrics_out_of_global_lyrics_style():
@@ -1102,6 +1137,88 @@ def test_native_gpu_title_uses_title_latin_size_and_reconfigures_when_exe_exists
     small_height, large_height = heights
     assert small_height < 40
     assert large_height > small_height * 1.5
+
+
+def test_native_gpu_title_uses_project_timeline_and_independent_segment_fades(
+    monkeypatch,
+):
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        meta=TimingTrackMeta(title="TITLE", offset_ms=2_000),
+        lines=[TimingLine(chars=[TimingChar("終", 4_000)], end_ms=5_000)],
+    )
+    scheme = replace(
+        default_title_scheme(),
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=52,
+        latin_font_size_px=52,
+        font_weight=400,
+        latin_font_weight=400,
+        stroke_width_px=0,
+        latin_stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+    )
+    style = Style(
+        timing_offset_ms=3_000,
+        custom_style_schemes={"标题": scheme},
+        title_overlay=TitleOverlay(
+            enabled=True,
+            text_template="{title}",
+            layout_index=None,
+            show_mode="head_tail",
+            duration_ms=2_000,
+            fade_in_ms=1_000,
+            fade_out_ms=0,
+            tail_offset_ms=1_000,
+            tail_duration_ms=2_000,
+            tail_fade_in_ms=2_000,
+            tail_fade_out_ms=0,
+        ),
+    )
+
+    def max_alpha(renderer: NativeRendererProcess, t_ms: int, generation: int) -> int:
+        event = renderer.render_gpu_frame(
+            t_ms,
+            force_warp=True,
+            generation=generation,
+            shm_key=f"krok-title-fades-{os.getpid()}-{uuid.uuid4().hex}",
+            readback_bands=False,
+        )
+        with SharedFrameRingReader.from_event(event) as reader:
+            slot = reader.read_frame(event)
+        rows = np.frombuffer(slot.payload, dtype=np.uint8).reshape(
+            slot.height, slot.stride
+        )
+        return int(rows[:, 3 : slot.width * 4 : 4].max())
+
+    with NativeRendererProcess(
+        renderer_path, response_timeout_s=5.0, close_timeout_s=1.0
+    ) as renderer:
+        renderer.configure_gpu(
+            track,
+            style,
+            width=320,
+            height=180,
+            fps=60,
+            force_warp=True,
+            duration_ms=10_000,
+        )
+        head_half = max_alpha(renderer, 500, 1)
+        tail_quarter = max_alpha(renderer, 7_500, 2)
+        outside = max_alpha(renderer, 5_500, 3)
+
+    # The title is not shifted by the 3s global + 2s track lyric offsets.
+    assert head_half > 0
+    # Tail fade-in is 2s, so at +0.5s it is visibly dimmer than the opening
+    # segment at +0.5s of its 1s fade-in.
+    assert 0 < tail_quarter < head_half * 0.7
+    assert outside == 0
 
 
 def test_native_renderer_process_times_out_when_sidecar_stalls(tmp_path):

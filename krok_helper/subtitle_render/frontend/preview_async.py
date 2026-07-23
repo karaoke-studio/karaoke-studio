@@ -275,21 +275,24 @@ class _AsyncSubtitleWorker(QObject):
         self._device_pixel_ratio = 1.0
         self._track: Optional[TimingTrack] = None
         self._style: Optional[Style] = None
+        self._duration_ms: int = 0
         self._extra_tracks: list[TimingTrack] = []
         self._pending_t: Optional[int] = None
         self._rendering = False
         self._stopping = False
 
-    @Slot(object, object, object)
+    @Slot(object, object, object, object)
     def set_state(
         self,
         track: Optional[TimingTrack],
         style: Optional[Style],
         extra_tracks: object = None,
+        duration_ms: object = None,
     ) -> None:
         self._track = track
         self._style = style
         self._extra_tracks = list(extra_tracks) if isinstance(extra_tracks, (list, tuple)) else []
+        self._duration_ms = max(int(duration_ms or 0), 0)
 
     @Slot(int, int, float)
     def set_render_target(self, width: int, height: int, device_pixel_ratio: float = 1.0) -> None:
@@ -320,6 +323,7 @@ class _AsyncSubtitleWorker(QObject):
         track = self._track
         style = self._style
         extra_tracks = self._extra_tracks
+        duration_ms = self._duration_ms
         logical_w = self._logical_w
         logical_h = self._logical_h
         dpr = self._device_pixel_ratio
@@ -335,7 +339,14 @@ class _AsyncSubtitleWorker(QObject):
             painter = QPainter(image)
             try:
                 paint_frame_to_painter(
-                    painter, logical_w, logical_h, track, int(t_ms), style, extra_tracks
+                    painter,
+                    logical_w,
+                    logical_h,
+                    track,
+                    int(t_ms),
+                    style,
+                    extra_tracks,
+                    duration_ms=duration_ms,
                 )
             finally:
                 painter.end()
@@ -360,7 +371,7 @@ class AsyncSubtitleRenderer(QObject):
     """
 
     frame_ready = Signal(QImage, int)
-    _state_changed = Signal(object, object, object)
+    _state_changed = Signal(object, object, object, object)
     _target_changed = Signal(int, int, float)
     _frame_requested = Signal(int)
 
@@ -397,12 +408,19 @@ class AsyncSubtitleRenderer(QObject):
         track: Optional[TimingTrack],
         style: Optional[Style],
         extra_tracks: Optional[list[TimingTrack]] = None,
+        *,
+        duration_ms: int | None = None,
     ) -> None:
         if self._stopped:
             return
         self._track = track
         self._style = style
-        self._state_changed.emit(track, style, list(extra_tracks or ()))
+        self._state_changed.emit(
+            track,
+            style,
+            list(extra_tracks or ()),
+            max(int(duration_ms or 0), 0),
+        )
 
     def set_size(self, width: int, height: int) -> None:
         self.set_render_target(width, height, self._device_pixel_ratio)
@@ -463,6 +481,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         self._track: Optional[TimingTrack] = None
         self._style: Optional[Style] = None
         self._extra_tracks: list[TimingTrack] = []
+        self._duration_ms: int = 0
         self._generation = 0
         self._request_serial = 0
         self._latest_t: Optional[int] = None
@@ -554,6 +573,8 @@ class GpuAsyncSubtitleRenderer(QObject):
         track: Optional[TimingTrack],
         style: Optional[Style],
         extra_tracks: Optional[list[TimingTrack]] = None,
+        *,
+        duration_ms: int | None = None,
     ) -> None:
         with self._condition:
             if self._stopped:
@@ -562,6 +583,7 @@ class GpuAsyncSubtitleRenderer(QObject):
             self._track = track
             self._style = style
             self._extra_tracks = list(extra_tracks or ())
+            self._duration_ms = max(int(duration_ms or 0), 0)
             # Backend selection is monotonic for the renderer lifetime.  A
             # wide-to-fine style edit must not bounce between two device
             # pools (and synchronously rebuild both caches) on every slider
@@ -729,6 +751,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                 self._track,
                 self._style,
                 list(self._extra_tracks),
+                self._duration_ms,
                 self._logical_w,
                 self._logical_h,
                 self._device_pixel_ratio,
@@ -753,6 +776,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                     track,
                     style,
                     extra_tracks,
+                    duration_ms,
                     width,
                     height,
                     dpr,
@@ -787,13 +811,22 @@ class GpuAsyncSubtitleRenderer(QObject):
                             dpr,
                             t_ms,
                             generation,
+                            duration_ms,
                         )
                     continue
                 if self._renderer_failed:
                     if time.monotonic() < self._retry_after:
                         if not speculative:
                             self._emit_python_fallback(
-                                track, style, extra_tracks, width, height, dpr, t_ms, generation
+                                track,
+                                style,
+                                extra_tracks,
+                                width,
+                                height,
+                                dpr,
+                                t_ms,
+                                generation,
+                                duration_ms,
                             )
                         continue
                     self._renderer_failed = False
@@ -812,6 +845,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                             dpr=dpr,
                             force_warp=force_warp,
                             extra_tracks=extra_tracks,
+                            duration_ms=duration_ms,
                             prewarm_t_ms=t_ms,
                             worker_count=self._worker_count_requested,
                         )
@@ -840,6 +874,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                                 dpr=dpr,
                                 force_warp=force_warp,
                                 extra_tracks=extra_tracks,
+                                duration_ms=duration_ms,
                                 prewarm_t_ms=t_ms,
                                 worker_count=1,
                             )
@@ -934,7 +969,15 @@ class GpuAsyncSubtitleRenderer(QObject):
                     self._close_renderer()
                     if not speculative:
                         self._emit_python_fallback(
-                            track, style, extra_tracks, width, height, dpr, t_ms, generation
+                            track,
+                            style,
+                            extra_tracks,
+                            width,
+                            height,
+                            dpr,
+                            t_ms,
+                            generation,
+                            duration_ms,
                         )
         finally:
             self._close_renderer()
@@ -1136,6 +1179,7 @@ class GpuAsyncSubtitleRenderer(QObject):
         dpr: float,
         t_ms: int,
         generation: int,
+        duration_ms: int,
     ) -> None:
         if not self._may_emit(t_ms, generation):
             self._note("stale_frames_dropped")
@@ -1147,7 +1191,14 @@ class GpuAsyncSubtitleRenderer(QObject):
         painter = QPainter(image)
         try:
             paint_frame_to_painter(
-                painter, width, height, track, int(t_ms), style, extra_tracks
+                painter,
+                width,
+                height,
+                track,
+                int(t_ms),
+                style,
+                extra_tracks,
+                duration_ms=duration_ms,
             )
         finally:
             painter.end()
@@ -1212,6 +1263,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         self._device_pixel_ratio = 1.0
         self._track: Optional[TimingTrack] = None
         self._style: Optional[Style] = None
+        self._duration_ms: int = 0
         self._generation = 0
         self._active_generation: Optional[int] = None
         self._pending_t: Optional[int] = None
@@ -1264,12 +1316,15 @@ class NativeAsyncSubtitleRenderer(QObject):
         track: Optional[TimingTrack],
         style: Optional[Style],
         extra_tracks: Optional[list[TimingTrack]] = None,  # noqa: ARG002 — native 预览暂不支持副轨
+        *,
+        duration_ms: int | None = None,
     ) -> None:
         with self._condition:
             if self._stopped:
                 return
             self._track = track
             self._style = style
+            self._duration_ms = max(int(duration_ms or 0), 0)
             self._advance_generation_locked()
             self._needs_configure = True
             self._frame_cache.clear()
@@ -1371,16 +1426,20 @@ class NativeAsyncSubtitleRenderer(QObject):
                 restart_renderer,
                 playing,
                 skip_current,
+                duration_ms,
             ) = snapshot
             if track is None or style is None:
                 continue
             if self._renderer_failed:
-                self._emit_python_fallback(track, style, width, height, dpr, t_ms, generation)
+                self._emit_python_fallback(
+                    track, style, width, height, dpr, t_ms, generation, duration_ms
+                )
                 continue
             try:
                 self._render_native(
                     track,
                     style,
+                    duration_ms=duration_ms,
                     width=width,
                     height=height,
                     dpr=dpr,
@@ -1397,11 +1456,26 @@ class NativeAsyncSubtitleRenderer(QObject):
                     print(f"native preview failed: {exc}")
                 self._renderer_failed = True
                 self._close_renderer()
-                self._emit_python_fallback(track, style, width, height, dpr, t_ms, generation)
+                self._emit_python_fallback(
+                    track, style, width, height, dpr, t_ms, generation, duration_ms
+                )
 
     def _take_next_request(
         self,
-    ) -> tuple[TimingTrack | None, Style | None, int, int, float, int, int, bool, bool, bool, bool] | None:
+    ) -> tuple[
+        TimingTrack | None,
+        Style | None,
+        int,
+        int,
+        float,
+        int,
+        int,
+        bool,
+        bool,
+        bool,
+        bool,
+        int,
+    ] | None:
         with self._condition:
             while not self._stopped and self._pending_t is None:
                 self._condition.wait()
@@ -1427,6 +1501,7 @@ class NativeAsyncSubtitleRenderer(QObject):
                 restart_renderer,
                 self._playing,
                 skip_current,
+                self._duration_ms,
             )
 
     def _render_native(
@@ -1443,6 +1518,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         restart_renderer: bool,
         playing: bool,
         skip_current: bool,
+        duration_ms: int = 0,
     ) -> None:
         timestamps = native_preview_timestamps(
             t_ms,
@@ -1468,7 +1544,15 @@ class NativeAsyncSubtitleRenderer(QObject):
             if renderer_was_missing or needs_configure:
                 # dpr 让 native 按显示分辨率光栅化（布局仍在逻辑坐标系），
                 # 与 Python 预览路径一致；4K 工程预览不再渲染全分辨率帧。
-                renderer.configure(track, style, width=width, height=height, fps=60, dpr=dpr)
+                renderer.configure(
+                    track,
+                    style,
+                    width=width,
+                    height=height,
+                    fps=60,
+                    dpr=dpr,
+                    duration_ms=duration_ms,
+                )
             # 资源常驻（G2 硬性要求 4）：shm_key 与 renderer 同生命周期，
             # sidecar 端据此跨 range 复用同一块 ring，不再逐 range 重建。
             shm_key = self._shm_key
@@ -1554,6 +1638,7 @@ class NativeAsyncSubtitleRenderer(QObject):
         dpr: float,
         t_ms: int,
         generation: int,
+        duration_ms: int,
     ) -> None:
         if not self._is_current_generation(generation):
             return
@@ -1563,7 +1648,15 @@ class NativeAsyncSubtitleRenderer(QObject):
         image.fill(0)
         painter = QPainter(image)
         try:
-            paint_frame_to_painter(painter, width, height, track, int(t_ms), style)
+            paint_frame_to_painter(
+                painter,
+                width,
+                height,
+                track,
+                int(t_ms),
+                style,
+                duration_ms=duration_ms,
+            )
         finally:
             painter.end()
         if self._is_current_generation(generation):

@@ -180,6 +180,7 @@ def iter_native_rgba_frames(
     height: int,
     fps: int,
     total_frames: int,
+    duration_ms: int | None = None,
     renderer_path: str | os.PathLike[str] | None = None,
     threads: int | None = None,
     chunk_frames: int | None = None,
@@ -197,6 +198,7 @@ def iter_native_rgba_frames(
         width=width,
         height=height,
         fps=fps,
+        duration_ms=duration_ms,
         renderer_path=renderer_path,
         threads=threads,
         chunk_frames=chunk_frames,
@@ -213,6 +215,7 @@ def iter_native_rgba_frames_at_times(
     width: int,
     height: int,
     fps: int,
+    duration_ms: int | None = None,
     renderer_path: str | os.PathLike[str] | None = None,
     threads: int | None = None,
     chunk_frames: int | None = None,
@@ -231,7 +234,10 @@ def iter_native_rgba_frames_at_times(
     )
     generation = 1
     with NativeRendererProcess(renderer_path, response_timeout_s=5.0, close_timeout_s=1.0) as renderer:
-        renderer.configure(track, style, width=width, height=height, fps=fps)
+        configure_kwargs = {"width": width, "height": height, "fps": fps}
+        if duration_ms is not None:
+            configure_kwargs["duration_ms"] = max(int(duration_ms), 0)
+        renderer.configure(track, style, **configure_kwargs)
         start_frame = 0
         while start_frame < frame_total:
             if should_cancel is not None and should_cancel():
@@ -287,6 +293,7 @@ def iter_gpu_rgba_frames(
     height: int,
     fps: int,
     total_frames: int,
+    duration_ms: int | None = None,
     start_t_ms: int = 0,
     renderer_path: str | os.PathLike[str] | None = None,
     extra_tracks: list[TimingTrack] | None = None,
@@ -356,22 +363,27 @@ def iter_gpu_rgba_frames(
             close_timeout_s=1.0,
         ) as renderer:
             configure_started = time.perf_counter()
+            configure_kwargs = {
+                "width": width,
+                "height": height,
+                "fps": fps,
+                "force_warp": force_warp,
+                "extra_tracks": extra_tracks,
+                "worker_count": max(1, min(int(worker_count), 4)),
+                "realization_enabled": realizations,
+                "shared_resources": shared,
+                "wait_realizations": realizations,
+                "realization_capacity": gpu_export_realization_capacity(),
+                "export_crop_top": crop_top if packed else 0,
+                "export_crop_height": crop_height if packed and not packed_bands else 0,
+                "export_bands": packed_bands,
+            }
+            if duration_ms is not None:
+                configure_kwargs["duration_ms"] = max(int(duration_ms), 0)
             configured = renderer.configure_gpu(
                 track,
                 style,
-                width=width,
-                height=height,
-                fps=fps,
-                force_warp=force_warp,
-                extra_tracks=extra_tracks,
-                worker_count=max(1, min(int(worker_count), 4)),
-                realization_enabled=realizations,
-                shared_resources=shared,
-                wait_realizations=realizations,
-                realization_capacity=gpu_export_realization_capacity(),
-                export_crop_top=crop_top if packed else 0,
-                export_crop_height=crop_height if packed and not packed_bands else 0,
-                export_bands=packed_bands,
+                **configure_kwargs,
             )
             configured = dict(configured)
             configured["prepare_layout_ms"] = (

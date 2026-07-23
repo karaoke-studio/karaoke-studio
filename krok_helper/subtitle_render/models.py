@@ -388,7 +388,7 @@ TITLE_ANCHORS: tuple[TitleAnchor, ...] = (
     "bottom_right",
 )
 # whole=整段显示（ニコカラ Head 默认，0→曲尾）；head=仅开头一段；
-# tail=仅片尾一段；head_tail=开头 + 片尾各一段。
+# tail=仅片尾一段；head_tail=开始和片尾各显示一段。
 TitleShowMode = Literal["whole", "head", "tail", "head_tail"]
 TITLE_SHOW_MODES: tuple[TitleShowMode, ...] = ("whole", "head", "tail", "head_tail")
 
@@ -528,6 +528,11 @@ class TitleOverlay:
     tail_offset_ms: int = 0
     fade_in_ms: int = 300
     fade_out_ms: int = 300
+    # None keeps old projects byte-semantically compatible: the ending
+    # segment inherits the corresponding opening value until edited.
+    tail_duration_ms: Optional[int] = None
+    tail_fade_in_ms: Optional[int] = None
+    tail_fade_out_ms: Optional[int] = None
 
 
 @dataclass
@@ -2048,6 +2053,9 @@ def title_overlay_to_dict(title: TitleOverlay) -> dict:
         "tail_offset_ms": title.tail_offset_ms,
         "fade_in_ms": title.fade_in_ms,
         "fade_out_ms": title.fade_out_ms,
+        "tail_duration_ms": title.tail_duration_ms,
+        "tail_fade_in_ms": title.tail_fade_in_ms,
+        "tail_fade_out_ms": title.tail_fade_out_ms,
     }
 
 
@@ -2116,6 +2124,21 @@ def title_overlay_from_dict(payload: object) -> Optional[TitleOverlay]:
         tail_offset_ms=_int_value(payload.get("tail_offset_ms"), defaults.tail_offset_ms),
         fade_in_ms=_int_value(payload.get("fade_in_ms"), defaults.fade_in_ms),
         fade_out_ms=_int_value(payload.get("fade_out_ms"), defaults.fade_out_ms),
+        tail_duration_ms=(
+            _int_value(payload.get("tail_duration_ms"), defaults.duration_ms)
+            if payload.get("tail_duration_ms") is not None
+            else None
+        ),
+        tail_fade_in_ms=(
+            _int_value(payload.get("tail_fade_in_ms"), defaults.fade_in_ms)
+            if payload.get("tail_fade_in_ms") is not None
+            else None
+        ),
+        tail_fade_out_ms=(
+            _int_value(payload.get("tail_fade_out_ms"), defaults.fade_out_ms)
+            if payload.get("tail_fade_out_ms") is not None
+            else None
+        ),
     )
 
 

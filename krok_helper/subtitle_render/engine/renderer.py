@@ -130,6 +130,9 @@ def render_subtitle_video(
     ffmpeg_path = find_tool("ffmpeg.exe", ffmpeg_dir)
 
     duration_ms = _resolve_duration_ms(job)
+    # Freeze the resolved project/media duration into the job so every CPU,
+    # multiprocessing and GPU path anchors title tail timing to the same clock.
+    job = replace(job, duration_ms=duration_ms)
     total_frames = _frame_count(duration_ms, job.fps)
     native_export_requested = _native_export_requested(job)
     native_renderer_path = resolve_native_renderer_path() if native_export_requested else None
@@ -608,6 +611,7 @@ def _paint_overlay_strip(
     strip_top: int,
     transparent: QColor,
     extra_tracks: tuple[TimingTrack, ...] = (),
+    duration_ms: int | None = None,
 ) -> None:
     """把整帧字幕布局画进只有条带高的 ``buffer``。
 
@@ -621,7 +625,14 @@ def _paint_overlay_strip(
         if strip_top:
             painter.translate(0, -strip_top)
         paint_frame_to_painter(
-            painter, logical_w, logical_h, track, t_ms, style, list(extra_tracks or ())
+            painter,
+            logical_w,
+            logical_h,
+            track,
+            t_ms,
+            style,
+            list(extra_tracks or ()),
+            duration_ms=duration_ms,
         )
     finally:
         painter.end()
@@ -688,14 +699,35 @@ def _compute_subtitle_strip(
     for t_ms in times:
         if should_cancel is not None and should_cancel():
             return None
-        if not frame_has_content(job.track, t_ms, job.style, extras):
+        if not frame_has_content(
+            job.track,
+            t_ms,
+            job.style,
+            extras,
+            duration_ms=job.duration_ms,
+        ):
             continue
-        bounds = frame_vertical_bounds(width, height, job.track, t_ms, job.style, extras)
+        bounds = frame_vertical_bounds(
+            width,
+            height,
+            job.track,
+            t_ms,
+            job.style,
+            extras,
+            duration_ms=job.duration_ms,
+        )
         if bounds is None:
             if scratch is None:
                 scratch = QImage(width, height, QImage.Format.Format_RGBA8888)
             scratch.fill(transparent)
-            paint_frame(scratch, job.track, t_ms, job.style, extras)
+            paint_frame(
+                scratch,
+                job.track,
+                t_ms,
+                job.style,
+                extras,
+                duration_ms=job.duration_ms,
+            )
             bounds = _content_row_bounds(scratch)
         if bounds is None:
             continue
@@ -781,9 +813,23 @@ def _compute_content_bands(
     for t_ms in times:
         if should_cancel is not None and should_cancel():
             return None
-        if not frame_has_content(job.track, t_ms, job.style, extras):
+        if not frame_has_content(
+            job.track,
+            t_ms,
+            job.style,
+            extras,
+            duration_ms=job.duration_ms,
+        ):
             continue
-        intervals = frame_content_intervals(width, height, job.track, t_ms, job.style, extras)
+        intervals = frame_content_intervals(
+            width,
+            height,
+            job.track,
+            t_ms,
+            job.style,
+            extras,
+            duration_ms=job.duration_ms,
+        )
         if intervals is None:
             return None  # 未迁移路径，方案 B 无法保证不漏像素
         collected.extend(intervals)
@@ -824,6 +870,7 @@ def _paint_overlay_bands(
     bands: list[tuple[int, int]],
     transparent: QColor,
     extra_tracks: tuple[TimingTrack, ...] = (),
+    duration_ms: int | None = None,
 ) -> None:
     """把整帧字幕布局画进竖向打包的 ``buffer``（高 = 各 band 高之和）。
 
@@ -840,7 +887,14 @@ def _paint_overlay_bands(
                 painter.setClipRect(0, packed_off, logical_w, band_h)
                 painter.translate(0, packed_off - band_top)
                 paint_frame_to_painter(
-                    painter, logical_w, logical_h, track, t_ms, style, list(extra_tracks)
+                    painter,
+                    logical_w,
+                    logical_h,
+                    track,
+                    t_ms,
+                    style,
+                    list(extra_tracks),
+                    duration_ms=duration_ms,
                 )
             finally:
                 painter.restore()
@@ -857,12 +911,19 @@ def _frame_bytes_bands(
     empty_frame: bytes,
 ) -> bytes:
     """渲染一帧为打包 RGBA 字节：有内容画进复用 ``buffer``，否则返回预存全透明帧。"""
-    if frame_has_content(job.track, t_ms, job.style, list(job.extra_tracks)):
+    if frame_has_content(
+        job.track,
+        t_ms,
+        job.style,
+        list(job.extra_tracks),
+        duration_ms=job.duration_ms,
+    ):
         _paint_overlay_bands(
             buffer, job.track, job.style, t_ms,
             logical_w=job.width, logical_h=job.height,
             bands=bands, transparent=transparent,
             extra_tracks=job.extra_tracks,
+            duration_ms=job.duration_ms,
         )
         return _image_bytes(buffer)
     return empty_frame
@@ -882,12 +943,19 @@ def _frame_bytes(
     empty_frame: bytes,
 ) -> bytes:
     """渲染一帧为 RGBA 字节：有内容则画进（复用的）``buffer``，否则返回预存全透明帧。"""
-    if frame_has_content(job.track, t_ms, job.style, list(job.extra_tracks)):
+    if frame_has_content(
+        job.track,
+        t_ms,
+        job.style,
+        list(job.extra_tracks),
+        duration_ms=job.duration_ms,
+    ):
         _paint_overlay_strip(
             buffer, job.track, job.style, t_ms,
             logical_w=job.width, logical_h=job.height,
             strip_top=strip_top, transparent=transparent,
             extra_tracks=job.extra_tracks,
+            duration_ms=job.duration_ms,
         )
         return _image_bytes(buffer)
     return empty_frame
@@ -910,6 +978,7 @@ def _write_frames_native(
         height=job.height,
         fps=job.fps,
         total_frames=total_frames,
+        duration_ms=job.duration_ms,
         renderer_path=renderer_path,
         should_cancel=should_cancel,
     ):
@@ -973,6 +1042,7 @@ def _write_frames_gpu(
         height=job.height,
         fps=job.fps,
         total_frames=total_frames,
+        duration_ms=job.duration_ms,
         renderer_path=renderer_path,
         extra_tracks=list(job.extra_tracks),
         force_warp=force_warp,

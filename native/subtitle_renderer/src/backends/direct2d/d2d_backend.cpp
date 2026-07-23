@@ -3589,18 +3589,24 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 continue;
             }
             float opacity = 1.0f;
-            if (line.fadeInMs > 0 && tMs < window.startMs + line.fadeInMs) {
+            const int fadeInMs = window.fadeInMs >= 0
+                ? window.fadeInMs
+                : line.fadeInMs;
+            const int fadeOutMs = window.fadeOutMs >= 0
+                ? window.fadeOutMs
+                : line.fadeOutMs;
+            if (fadeInMs > 0 && tMs < window.startMs + fadeInMs) {
                 opacity = std::min(
                     opacity,
                     static_cast<float>(tMs - window.startMs)
-                        / static_cast<float>(line.fadeInMs)
+                        / static_cast<float>(fadeInMs)
                 );
             }
-            if (line.fadeOutMs > 0 && tMs > window.endMs - line.fadeOutMs) {
+            if (fadeOutMs > 0 && tMs > window.endMs - fadeOutMs) {
                 opacity = std::min(
                     opacity,
                     static_cast<float>(window.endMs - tMs)
-                        / static_cast<float>(line.fadeOutMs)
+                        / static_cast<float>(fadeOutMs)
                 );
             }
             best = std::max(best, std::clamp(opacity, 0.0f, 1.0f));

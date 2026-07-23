@@ -756,16 +756,18 @@ class NativeRendererProcess:
         fps: int,
         dpr: float = 1.0,
         extra_tracks: list[TimingTrack] | None = None,
+        duration_ms: int | None = None,
     ) -> dict[str, Any]:
-        ir = build_render_ir(
-            track,
-            style,
-            width=width,
-            height=height,
-            fps=fps,
-            dpr=dpr,
-            extra_tracks=extra_tracks,
-        )
+        ir_kwargs: dict[str, Any] = {
+            "width": width,
+            "height": height,
+            "fps": fps,
+            "dpr": dpr,
+            "extra_tracks": extra_tracks,
+        }
+        if duration_ms is not None:
+            ir_kwargs["duration_ms"] = duration_ms
+        ir = build_render_ir(track, style, **ir_kwargs)
         self._send({"cmd": "configure", "ir": ir})
         return self._expect_ok(self._read_until_event("configured"))
 
@@ -785,6 +787,7 @@ class NativeRendererProcess:
         dpr: float = 1.0,
         force_warp: bool = False,
         extra_tracks: list[TimingTrack] | None = None,
+        duration_ms: int | None = None,
         prewarm_t_ms: int = 0,
         worker_count: int = 1,
         realization_enabled: bool = True,
@@ -804,6 +807,7 @@ class NativeRendererProcess:
             fps=fps,
             dpr=dpr,
             extra_tracks=extra_tracks,
+            duration_ms=duration_ms,
         )
         payload: dict[str, Any] = {
             "cmd": "gpu_configure",

@@ -73,6 +73,7 @@ class SubtitleGraphicsItem(QGraphicsItem):
         self._extra_tracks: list[TimingTrack] = []
         self._style: Style = Style()
         self._t_ms: int = 0
+        self._duration_ms: int = 0
         self._on_painted = on_painted
         # 异步预览（§9 A4 解耦）：开启后 paint() 只 blit worker 渲染好的位图。
         self._async_mode: bool = False
@@ -130,6 +131,10 @@ class SubtitleGraphicsItem(QGraphicsItem):
         self._style = style
         self.update()
 
+    def set_duration(self, duration_ms: int) -> None:
+        self._duration_ms = max(int(duration_ms), 0)
+        self.update()
+
     def set_time(self, t_ms: int) -> None:
         if t_ms == self._t_ms:
             return
@@ -161,7 +166,13 @@ class SubtitleGraphicsItem(QGraphicsItem):
 
     def _dirty_rect_for_time(self, t_ms: int) -> QRectF | None:
         bounds = frame_vertical_bounds(
-            self._width, self._height, self._track, t_ms, self._style, self._extra_tracks
+            self._width,
+            self._height,
+            self._track,
+            t_ms,
+            self._style,
+            self._extra_tracks,
+            duration_ms=self._duration_ms,
         )
         if bounds is None:
             return None
@@ -179,6 +190,7 @@ class SubtitleGraphicsItem(QGraphicsItem):
             self._t_ms,
             self._style,
             self._extra_tracks,
+            duration_ms=self._duration_ms,
         )
 
 
@@ -248,6 +260,7 @@ class PreviewGraphicsView(QGraphicsView):
         self._background_pixmap_cache: dict[Path, QPixmap] = {}
         self._video_playing: bool = False
         self._t_ms: int = 0
+        self._duration_ms: int = 0
         self._preview_quality = DEFAULT_PREVIEW_QUALITY
         self._video_player: Optional[QMediaPlayer] = None
         self._video_audio_out: Optional[QAudioOutput] = None
@@ -316,6 +329,15 @@ class PreviewGraphicsView(QGraphicsView):
         self._subtitle_item.clear_async_image()
         self._refresh_async_state()
 
+    def set_duration(self, duration_ms: int) -> None:
+        normalized = max(int(duration_ms), 0)
+        if normalized == self._duration_ms:
+            return
+        self._duration_ms = normalized
+        self._subtitle_item.set_duration(normalized)
+        self._subtitle_item.clear_async_image()
+        self._refresh_async_state()
+
     def set_gpu_preview_enabled(self, enabled: bool) -> None:
         """Switch the subtitle worker between GPU and Painter at runtime."""
         target_cls = GpuAsyncSubtitleRenderer if enabled else AsyncSubtitleRenderer
@@ -372,9 +394,17 @@ class PreviewGraphicsView(QGraphicsView):
     def _refresh_async_state(self) -> None:
         if self._async_renderer is None:
             return
-        self._async_renderer.set_state(
-            self._track, self._style, self._subtitle_item._extra_tracks  # noqa: SLF001
-        )
+        try:
+            self._async_renderer.set_state(
+                self._track,
+                self._style,
+                self._subtitle_item._extra_tracks,  # noqa: SLF001
+                duration_ms=self._duration_ms,
+            )
+        except TypeError:
+            # Compatibility with third-party/older preview workers that only
+            # implement the original two-argument embedding contract.
+            self._async_renderer.set_state(self._track, self._style)
         self._async_renderer.request(self._t_ms)
 
     def _on_async_frame(self, image: QImage, t_ms: int) -> None:

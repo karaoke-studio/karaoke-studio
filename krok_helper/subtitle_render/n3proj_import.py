@@ -705,7 +705,8 @@ def _build_title_overlay(
         kwargs["head_offset_ms"] = head_offset
         kwargs["duration_ms"] = interval
     elif kind == 2:
-        # N3 HeadAndTail = 从开头偏移到片尾偏移的连续一段；最接近整段显示。
+        # N3 HeadAndTail 是从开始偏移连续显示到片尾偏移；本模块的
+        # head_tail 是“开始和片尾各一段”，不能直接映射。
         kwargs["show_mode"] = "whole"
         if head_offset or tail_offset:
             warnings.append("标题显示时段「開始～終了」带首尾偏移，本模块按整段显示导入")

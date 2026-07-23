@@ -1237,7 +1237,9 @@ def test_title_page_uses_compact_responsive_appearance_and_timing(qapp):
     qapp.processEvents()
 
     assert panel._title_appearance_grid._columns == 2
-    assert panel._title_time_grid._columns == 6
+    assert panel._title_time_grid._columns == 1
+    assert panel._title_head_grid._columns == 4
+    assert panel._title_tail_row.isHidden()
 
     subgroup_titles = [
         label.text()
@@ -1248,9 +1250,49 @@ def test_title_page_uses_compact_responsive_appearance_and_timing(qapp):
     panel.resize(360, 820)
     qapp.processEvents()
     assert panel._title_appearance_grid._columns == 1
-    assert panel._title_time_grid._columns == 2
+    assert panel._title_time_grid._columns == 1
+    assert panel._title_head_grid._columns == 2
     title_page = panel.widget(4)
     assert title_page.horizontalScrollBar().maximum() == 0
+
+
+def test_title_head_tail_mode_has_independent_timing_rows(qapp):
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            title_overlay=TitleOverlay(
+                enabled=True,
+                show_mode="head_tail",
+                head_offset_ms=100,
+                duration_ms=2_000,
+                fade_in_ms=300,
+                fade_out_ms=400,
+                tail_offset_ms=500,
+                tail_duration_ms=3_000,
+                tail_fade_in_ms=600,
+                tail_fade_out_ms=700,
+            )
+        )
+    )
+
+    assert not panel._title_head_row.isHidden()
+    assert not panel._title_tail_row.isHidden()
+    assert panel._title_head_row_label.text() == "开头"
+    assert panel._title_tail_duration_spin.value() == 3_000
+    assert panel._title_tail_fade_in_spin.value() == 600
+    assert panel._title_tail_fade_out_spin.value() == 700
+
+    panel._title_tail_duration_spin.setValue(4_000)
+    panel._title_tail_fade_in_spin.setValue(800)
+    panel._title_tail_fade_out_spin.setValue(900)
+    title = panel._style.title_overlay
+    assert title is not None
+    assert title.duration_ms == 2_000
+    assert title.fade_in_ms == 300
+    assert title.fade_out_ms == 400
+    assert title.tail_duration_ms == 4_000
+    assert title.tail_fade_in_ms == 800
+    assert title.tail_fade_out_ms == 900
 
 
 def test_property_panel_font_and_color_sections_are_side_by_side(qapp):

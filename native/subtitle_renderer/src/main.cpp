@@ -7322,7 +7322,12 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         const QString text = stringValue(config.title, QStringLiteral("text"));
         const QStringList rows = text.split(u'\n', Qt::KeepEmptyParts);
         std::vector<krok::subtitle::native::DisplayWindow> windows;
-        const int titleTimingOffset = config.timingOffsetMs + config.primaryTrackOffsetMs;
+        const int defaultFadeInMs = std::max(
+            0, intValue(config.title, QStringLiteral("fade_in_ms"), 0)
+        );
+        const int defaultFadeOutMs = std::max(
+            0, intValue(config.title, QStringLiteral("fade_out_ms"), 0)
+        );
         for (const auto &windowValue : config.title.value(
                  QStringLiteral("windows")
              ).toArray()) {
@@ -7330,10 +7335,19 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             if (window.size() < 2) {
                 continue;
             }
-            const int start = window.at(0).toInt() + titleTimingOffset;
-            const int end = window.at(1).toInt() + titleTimingOffset;
+            // Title windows are already resolved on the project/media
+            // timeline. Lyrics timing and primary-track offsets must not move
+            // the opening or ending title.
+            const int start = window.at(0).toInt();
+            const int end = window.at(1).toInt();
+            const int fadeInMs = window.size() > 2
+                ? std::max(0, window.at(2).toInt())
+                : defaultFadeInMs;
+            const int fadeOutMs = window.size() > 3
+                ? std::max(0, window.at(3).toInt())
+                : defaultFadeOutMs;
             if (end > start) {
-                windows.push_back({start, end});
+                windows.push_back({start, end, fadeInMs, fadeOutMs});
             }
         }
         if (!windows.empty() && std::any_of(
@@ -7419,12 +7433,8 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 titleLine.lane = rowIndex;
                 titleLine.compositeOrder = 1;
                 titleLine.staticOverlay = true;
-                titleLine.fadeInMs = std::max(
-                    0, intValue(config.title, QStringLiteral("fade_in_ms"), 0)
-                );
-                titleLine.fadeOutMs = std::max(
-                    0, intValue(config.title, QStringLiteral("fade_out_ms"), 0)
-                );
+                titleLine.fadeInMs = defaultFadeInMs;
+                titleLine.fadeOutMs = defaultFadeOutMs;
                 titleLine.displayWindows = windows;
                 titleLine.chars.reserve(static_cast<std::size_t>(row.size()));
                 const QJsonArray roleLabels = rowIndex < titleRoleRows.size()

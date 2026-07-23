@@ -105,6 +105,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _visible_lines_for_style,
     _resolve_title_text,
     _title_overlay_opacity,
+    _title_show_window,
     frame_has_content,
     paint_frame,
     frame_vertical_bounds,
@@ -6384,6 +6385,74 @@ def test_title_overlay_show_modes_and_fade(qapp):
     tail = TitleOverlay(enabled=True, show_mode="tail", duration_ms=6000, fade_in_ms=0, fade_out_ms=0)
     assert _title_overlay_opacity(tail, track, 1000) == 0.0
     assert _title_overlay_opacity(tail, track, 27000) == pytest.approx(1.0)
+
+
+def test_title_tail_windows_use_project_duration_and_two_segment_head_tail(qapp):
+    track = _title_track()  # 歌词仅到 30000ms，媒体持续到 60000ms
+
+    tail = TitleOverlay(
+        enabled=True,
+        show_mode="tail",
+        duration_ms=6000,
+        tail_offset_ms=2000,
+        fade_in_ms=0,
+        fade_out_ms=0,
+    )
+    assert _title_show_window(tail, track, duration_ms=60000) == [(52000, 58000)]
+    assert _title_overlay_opacity(tail, track, 54000, duration_ms=60000) == 1.0
+    assert _title_overlay_opacity(tail, track, 29000, duration_ms=60000) == 0.0
+
+    head_tail = replace(
+        tail,
+        show_mode="head_tail",
+        head_offset_ms=3000,
+        fade_in_ms=500,
+        fade_out_ms=700,
+        tail_duration_ms=9000,
+        tail_fade_in_ms=2000,
+        tail_fade_out_ms=1500,
+    )
+    assert _title_show_window(head_tail, track, duration_ms=60000) == [
+        (3000, 9000),
+        (49000, 58000),
+    ]
+    assert _title_overlay_opacity(
+        head_tail, track, 3250, duration_ms=60000
+    ) == pytest.approx(0.5)
+    assert _title_overlay_opacity(
+        head_tail, track, 49500, duration_ms=60000
+    ) == pytest.approx(0.25)
+
+    zero_tail_offset = replace(tail, tail_offset_ms=0)
+    assert _title_show_window(zero_tail_offset, track, duration_ms=60000) == [
+        (54000, 60010)
+    ]
+
+
+def test_title_timing_does_not_follow_lyrics_track_offset(qapp):
+    track = replace(
+        _title_track(),
+        meta=replace(_title_track().meta, offset_ms=5000),
+    )
+    style = Style(
+        title_overlay=TitleOverlay(
+            enabled=True,
+            show_mode="head",
+            duration_ms=1000,
+            fade_in_ms=0,
+            fade_out_ms=0,
+        )
+    )
+
+    _track_t, _style, _lines, _signals, title_opacity = (
+        subtitle_painter._resolve_visible_content(
+            track,
+            500,
+            style,
+            duration_ms=60000,
+        )
+    )
+    assert title_opacity == 1.0
 
 
 def test_title_overlay_anchor_moves_block(qapp):

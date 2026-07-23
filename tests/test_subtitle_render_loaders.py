@@ -96,6 +96,7 @@ def test_load_subtitle_wires_preview_and_transport(qapp, monkeypatch, tmp_path):
 
     # transport 滑块上限按 track 时长收敛（行末 2500ms）
     assert win._transport_bar._slider.maximum() == 2500
+    assert win._preview_panel.canvas._duration_ms == 2500
 
     # 滑块拖动 → preview canvas 同步时间
     win._transport_bar.set_time(1700)
@@ -331,6 +332,7 @@ def test_load_video_populates_preview_panel(qapp, monkeypatch, tmp_path):
     assert win._video_path == tmp_path / "bg.mp4"
     assert win._preview_panel.is_populated()
     assert win._preview_panel.canvas.has_video_source
+    assert win._preview_panel.canvas._duration_ms == 120_500
 
 
 def test_load_video_with_missing_test_file_does_not_start_video_player(qapp, monkeypatch, tmp_path):

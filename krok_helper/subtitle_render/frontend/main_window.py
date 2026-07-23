@@ -4380,6 +4380,7 @@ class SubtitleRenderWindow(QWidget):
             candidates.append(int(self._audio_info.duration * 1000))
         duration = max(candidates, default=0)
         self._tracks_view.set_duration(duration)
+        self._preview_panel.set_duration(duration)
         if duration > 0:
             self._transport_bar.set_duration(duration)
 

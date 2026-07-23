@@ -153,6 +153,7 @@ class PreviewCanvas(QWidget):
         self._extra_tracks: list[TimingTrack] = []
         self._style: Style = Style()
         self._t_ms: int = 0
+        self._duration_ms: int = 0
         self._video_path: Optional[Path] = None
         self._background_source = BackgroundSource()
         self._background_image_cache: dict[Path, QImage] = {}
@@ -204,6 +205,10 @@ class PreviewCanvas(QWidget):
             return
         self._t_ms = t_ms
         self._sync_video_position(force=not self._video_playing)
+        self.update()
+
+    def set_duration(self, duration_ms: int) -> None:
+        self._duration_ms = max(int(duration_ms), 0)
         self.update()
 
     @property
@@ -314,6 +319,7 @@ class PreviewCanvas(QWidget):
             self._t_ms,
             self._style,
             self._extra_tracks,
+            duration_ms=self._duration_ms,
         )
 
     # ------------------------------------------------------------------ video
@@ -498,6 +504,11 @@ class PreviewPanel(DropPanel):
 
     def set_time(self, t_ms: int) -> None:
         self._canvas.set_time(t_ms)
+
+    def set_duration(self, duration_ms: int) -> None:
+        setter = getattr(self._canvas, "set_duration", None)
+        if setter is not None:
+            setter(duration_ms)
 
     def set_style(self, style: Style) -> None:
         self._canvas.set_style(style)

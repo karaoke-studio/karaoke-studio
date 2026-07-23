@@ -179,6 +179,8 @@ struct TextRuby {
 struct DisplayWindow {
     int startMs = 0;
     int endMs = 0;
+    int fadeInMs = -1;
+    int fadeOutMs = -1;
     bool operator==(const DisplayWindow &) const = default;
 };
 

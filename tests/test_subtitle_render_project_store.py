@@ -1190,10 +1190,16 @@ def test_title_char_roles_round_trip_and_follow_text_edits():
     title = TitleOverlay(
         text_template="AB\nCD",
         char_role_labels=[["red", None], ["blue", "blue"]],
+        tail_duration_ms=8_000,
+        tail_fade_in_ms=900,
+        tail_fade_out_ms=1_100,
     )
     restored = style_from_dict(style_to_dict(Style(title_overlay=title))).title_overlay
     assert restored is not None
     assert restored.char_role_labels == [["red", None], ["blue", "blue"]]
+    assert restored.tail_duration_ms == 8_000
+    assert restored.tail_fade_in_ms == 900
+    assert restored.tail_fade_out_ms == 1_100
 
     migrated = subtitle_models.migrate_title_char_role_labels(
         "AB\nCD",

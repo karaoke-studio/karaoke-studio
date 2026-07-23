@@ -5536,7 +5536,7 @@ class PropertyPanel(QWidget):
     def _make_title_time_section(self) -> QFrame:
         section, layout = _section("显示时段")
         self._title_time_grid = _ResponsiveFieldGrid(
-            section, min_column_width=150, max_columns=6
+            section, min_column_width=150, max_columns=1
         )
 
         self._title_mode_combo = _WheelFocusedComboBox(section)
@@ -5545,41 +5545,87 @@ class PropertyPanel(QWidget):
             ("全程显示", "whole"),
             ("仅开头", "head"),
             ("仅片尾", "tail"),
-            ("开头+片尾", "head_tail"),
+            ("开始和片尾", "head_tail"),
         ]:
             self._title_mode_combo.addItem(label, value)
         self._title_mode_combo.currentIndexChanged.connect(
             lambda _i: self._update_title(show_mode=self._title_mode_combo.currentData())
         )
         self._title_time_grid.add_field("显示模式", self._title_mode_combo)
+        layout.addWidget(self._title_time_grid)
 
-        self._title_head_spin = _spin(0, 600_000, suffix=" ms")
-        self._title_head_spin.valueChanged.connect(
-            lambda value: self._update_title(head_offset_ms=value)
+        self._title_head_row = QWidget(section)
+        head_row_layout = QHBoxLayout(self._title_head_row)
+        head_row_layout.setContentsMargins(0, 0, 0, 0)
+        head_row_layout.setSpacing(8)
+        self._title_head_row_label = _subgroup_label("开头")
+        self._title_head_row_label.setFixedWidth(42)
+        head_row_layout.addWidget(
+            self._title_head_row_label, 0, Qt.AlignmentFlag.AlignTop
         )
-        self._title_time_grid.add_field("开始偏移", self._title_head_spin)
-        self._title_duration_spin = _spin(0, 600_000, suffix=" ms")
-        self._title_duration_spin.valueChanged.connect(
-            lambda value: self._update_title(duration_ms=value)
+        self._title_head_grid = _ResponsiveFieldGrid(
+            self._title_head_row, min_column_width=120, max_columns=4
         )
-        self._title_time_grid.add_field("显示时长", self._title_duration_spin)
-        self._title_tail_spin = _spin(0, 600_000, suffix=" ms")
-        self._title_tail_spin.valueChanged.connect(
-            lambda value: self._update_title(tail_offset_ms=value)
-        )
-        self._title_time_grid.add_field("片尾偏移", self._title_tail_spin)
+        head_row_layout.addWidget(self._title_head_grid, 1)
+
         self._title_fade_in_spin = _spin(0, 10_000, suffix=" ms")
         self._title_fade_in_spin.valueChanged.connect(
             lambda value: self._update_title(fade_in_ms=value)
         )
+        self._title_head_grid.add_field("淡入", self._title_fade_in_spin)
+        self._title_head_spin = _spin(0, 600_000, suffix=" ms")
+        self._title_head_spin.valueChanged.connect(
+            lambda value: self._update_title(head_offset_ms=value)
+        )
+        self._title_head_grid.add_field("偏移", self._title_head_spin)
+        self._title_duration_spin = _spin(0, 600_000, suffix=" ms")
+        self._title_duration_spin.valueChanged.connect(
+            lambda value: self._update_title(duration_ms=value)
+        )
+        self._title_head_grid.add_field("显示时长", self._title_duration_spin)
         self._title_fade_out_spin = _spin(0, 10_000, suffix=" ms")
         self._title_fade_out_spin.valueChanged.connect(
             lambda value: self._update_title(fade_out_ms=value)
         )
-        self._title_time_grid.add_field("淡入", self._title_fade_in_spin)
-        self._title_time_grid.add_field("淡出", self._title_fade_out_spin)
+        self._title_head_grid.add_field("淡出", self._title_fade_out_spin)
 
-        layout.addWidget(self._title_time_grid)
+        self._title_tail_row = QWidget(section)
+        tail_row_layout = QHBoxLayout(self._title_tail_row)
+        tail_row_layout.setContentsMargins(0, 0, 0, 0)
+        tail_row_layout.setSpacing(8)
+        self._title_tail_row_label = _subgroup_label("片尾")
+        self._title_tail_row_label.setFixedWidth(42)
+        tail_row_layout.addWidget(
+            self._title_tail_row_label, 0, Qt.AlignmentFlag.AlignTop
+        )
+        self._title_tail_grid = _ResponsiveFieldGrid(
+            self._title_tail_row, min_column_width=120, max_columns=4
+        )
+        tail_row_layout.addWidget(self._title_tail_grid, 1)
+
+        self._title_tail_fade_in_spin = _spin(0, 10_000, suffix=" ms")
+        self._title_tail_fade_in_spin.valueChanged.connect(
+            lambda value: self._update_title(tail_fade_in_ms=value)
+        )
+        self._title_tail_grid.add_field("淡入", self._title_tail_fade_in_spin)
+        self._title_tail_spin = _spin(0, 600_000, suffix=" ms")
+        self._title_tail_spin.valueChanged.connect(
+            lambda value: self._update_title(tail_offset_ms=value)
+        )
+        self._title_tail_grid.add_field("偏移", self._title_tail_spin)
+        self._title_tail_duration_spin = _spin(0, 600_000, suffix=" ms")
+        self._title_tail_duration_spin.valueChanged.connect(
+            lambda value: self._update_title(tail_duration_ms=value)
+        )
+        self._title_tail_grid.add_field("显示时长", self._title_tail_duration_spin)
+        self._title_tail_fade_out_spin = _spin(0, 10_000, suffix=" ms")
+        self._title_tail_fade_out_spin.valueChanged.connect(
+            lambda value: self._update_title(tail_fade_out_ms=value)
+        )
+        self._title_tail_grid.add_field("淡出", self._title_tail_fade_out_spin)
+
+        layout.addWidget(self._title_head_row)
+        layout.addWidget(self._title_tail_row)
         return section
 
     def _current_title(self) -> TitleOverlay:
@@ -5656,6 +5702,28 @@ class PropertyPanel(QWidget):
         self._title_tail_spin.setValue(title.tail_offset_ms)
         self._title_fade_in_spin.setValue(title.fade_in_ms)
         self._title_fade_out_spin.setValue(title.fade_out_ms)
+        self._title_tail_duration_spin.setValue(
+            title.duration_ms
+            if title.tail_duration_ms is None
+            else title.tail_duration_ms
+        )
+        self._title_tail_fade_in_spin.setValue(
+            title.fade_in_ms
+            if title.tail_fade_in_ms is None
+            else title.tail_fade_in_ms
+        )
+        self._title_tail_fade_out_spin.setValue(
+            title.fade_out_ms
+            if title.tail_fade_out_ms is None
+            else title.tail_fade_out_ms
+        )
+        self._sync_title_time_visibility()
+
+    def _sync_title_time_visibility(self) -> None:
+        mode = self._current_title().show_mode
+        self._title_head_row.setVisible(mode in {"whole", "head", "head_tail"})
+        self._title_tail_row.setVisible(mode in {"tail", "head_tail"})
+        self._title_head_row_label.setText("全程" if mode == "whole" else "开头")
 
     def _make_lit_section(self) -> QFrame:
         section, layout = _section("指示灯", switch=True)

@@ -540,7 +540,13 @@ from krok_helper.subtitle_render.models import (
 )
 
 
-def _resolve_visible_content(track: TimingTrack, t_ms: int, style: Style):
+def _resolve_visible_content(
+    track: TimingTrack,
+    t_ms: int,
+    style: Style,
+    *,
+    duration_ms: Optional[int] = None,
+):
     """计算某帧的可见内容元组：``(track_t_ms, display_style, display_lines,
     signal_lines, title_opacity)``。
 
@@ -551,7 +557,14 @@ def _resolve_visible_content(track: TimingTrack, t_ms: int, style: Style):
     display_style = _display_style_for_signal_window(style)
     display_lines = _visible_lines_for_style(track, track_t_ms, display_style)
     signal_lines = _signal_display_lines_for_style(track, track_t_ms, display_style)
-    title_opacity = _title_overlay_opacity(style.title_overlay, track, track_t_ms)
+    # Lyrics follow the track/global offset; the project title does not. N3
+    # anchors title show times to the background movie timeline.
+    title_opacity = _title_overlay_opacity(
+        style.title_overlay,
+        track,
+        t_ms,
+        duration_ms=duration_ms,
+    )
     return track_t_ms, display_style, display_lines, signal_lines, title_opacity
 
 
@@ -560,6 +573,8 @@ def frame_has_content(
     t_ms: int,
     style: Style,
     extra_tracks: Optional[list[TimingTrack]] = None,
+    *,
+    duration_ms: Optional[int] = None,
 ) -> bool:
     """该帧是否会画出任何字幕内容（行 / 信号 / 标题）。
 
@@ -570,7 +585,9 @@ def frame_has_content(
     标题只随主轨。
     """
     if track is not None:
-        _, _, display_lines, signal_lines, title_opacity = _resolve_visible_content(track, t_ms, style)
+        _, _, display_lines, signal_lines, title_opacity = _resolve_visible_content(
+            track, t_ms, style, duration_ms=duration_ms
+        )
         if display_lines or signal_lines or title_opacity > 0.0:
             return True
     for extra in extra_tracks or ():
@@ -587,6 +604,8 @@ def frame_content_intervals(
     t_ms: int,
     style: Style,
     extra_tracks: Optional[list[TimingTrack]] = None,
+    *,
+    duration_ms: Optional[int] = None,
 ) -> list[tuple[int, int]] | None:
     """Return per-source (lyric / title) vertical content intervals, **unmerged**.
 
@@ -607,7 +626,12 @@ def frame_content_intervals(
     any_content = False
     for entry_track, with_title in track_entries:
         track_t_ms, display_style, display_lines, signal_lines, title_opacity = (
-            _resolve_visible_content(entry_track, t_ms, style)
+            _resolve_visible_content(
+                entry_track,
+                t_ms,
+                style,
+                duration_ms=duration_ms if with_title else None,
+            )
         )
         if not with_title:
             title_opacity = 0.0
@@ -659,6 +683,8 @@ def frame_vertical_bounds(
     t_ms: int,
     style: Style,
     extra_tracks: Optional[list[TimingTrack]] = None,
+    *,
+    duration_ms: Optional[int] = None,
 ) -> tuple[int, int] | None:
     """Return conservative vertical content bounds (union) for the current frame.
 
@@ -667,7 +693,15 @@ def frame_vertical_bounds(
     that have not migrated to layer bounds yet; callers should then fall back to
     the existing pixel scan / full repaint path.
     """
-    intervals = frame_content_intervals(logical_w, logical_h, track, t_ms, style, extra_tracks)
+    intervals = frame_content_intervals(
+        logical_w,
+        logical_h,
+        track,
+        t_ms,
+        style,
+        extra_tracks,
+        duration_ms=duration_ms,
+    )
     if not intervals:
         return None
     top = min(item[0] for item in intervals)
@@ -683,6 +717,8 @@ def paint_frame(
     t_ms: int,
     style: Style,
     extra_tracks: Optional[list[TimingTrack]] = None,
+    *,
+    duration_ms: Optional[int] = None,
 ) -> QImage:
     """把 ``track`` 在 ``t_ms`` 时刻的活跃行渲染到 ``image``（原地修改）。
 
@@ -699,7 +735,14 @@ def paint_frame(
         logical_w = max(int(round(image.width() / dpr)), 1)
         logical_h = max(int(round(image.height() / dpr)), 1)
         paint_frame_to_painter(
-            painter, logical_w, logical_h, track, t_ms, style, extra_tracks
+            painter,
+            logical_w,
+            logical_h,
+            track,
+            t_ms,
+            style,
+            extra_tracks,
+            duration_ms=duration_ms,
         )
     finally:
         painter.end()
@@ -714,6 +757,8 @@ def paint_frame_to_painter(
     t_ms: int,
     style: Style,
     extra_tracks: Optional[list[TimingTrack]] = None,
+    *,
+    duration_ms: Optional[int] = None,
 ) -> None:
     """把当前字幕帧直接绘制到已打开的 ``QPainter``。
 
@@ -725,7 +770,14 @@ def paint_frame_to_painter(
     """
     if track is not None:
         _paint_track_to_painter(
-            painter, logical_w, logical_h, track, t_ms, style, draw_title=True
+            painter,
+            logical_w,
+            logical_h,
+            track,
+            t_ms,
+            style,
+            draw_title=True,
+            duration_ms=duration_ms,
         )
     for extra in extra_tracks or ():
         _paint_track_to_painter(
@@ -742,9 +794,15 @@ def _paint_track_to_painter(
     style: Style,
     *,
     draw_title: bool,
+    duration_ms: Optional[int] = None,
 ) -> None:
     track_t_ms, display_style, display_lines, signal_lines, title_opacity = (
-        _resolve_visible_content(track, t_ms, style)
+        _resolve_visible_content(
+            track,
+            t_ms,
+            style,
+            duration_ms=duration_ms if draw_title else None,
+        )
     )
     if not draw_title:
         title_opacity = 0.0
@@ -969,37 +1027,103 @@ def _resolve_title_text(title: TitleOverlay, track: TimingTrack) -> str:
     return "\n".join(lines).strip("\n")
 
 
-def _title_show_window(title: TitleOverlay, track: TimingTrack) -> list[tuple[int, int]]:
-    """返回标题可见的时间区间列表（毫秒，字幕时间轴）。"""
-    total = max(track_duration_ms(track), 0)
+def _title_show_window(
+    title: TitleOverlay,
+    track: TimingTrack,
+    *,
+    duration_ms: Optional[int] = None,
+) -> list[tuple[int, int]]:
+    """返回标题可见区间（毫秒，项目播放时间轴）。
+
+    ``duration_ms`` 是背景/音频/字幕共同决定的实际预览或导出时长。仅在旧调用方
+    没有提供时才回退字幕轨时长，避免片尾标题错误地锚到最后一句歌词。
+    """
+    total = max(
+        (
+            int(duration_ms)
+            if duration_ms is not None and int(duration_ms) > 0
+            else track_duration_ms(track)
+        ),
+        0,
+    )
     head_start = max(int(title.head_offset_ms), 0)
     duration = max(int(title.duration_ms), 0)
+    tail_duration = max(
+        int(title.tail_duration_ms)
+        if title.tail_duration_ms is not None
+        else duration,
+        0,
+    )
     tail_off = max(int(title.tail_offset_ms), 0)
+    # N3 TitleShowTime.EndTime keeps a zero-offset tail visible through the
+    # movie's inclusive endpoint by adding one 10 ms time-tag unit.
+    tail_base_end = max(total - tail_off, 0)
+    tail_end = tail_base_end + (10 if total > 0 and tail_off == 0 else 0)
     if title.show_mode == "whole":
-        return [(head_start, max(total, head_start))]
+        return [(0, tail_end)]
     if title.show_mode == "head":
         return [(head_start, head_start + duration)]
     if title.show_mode == "tail":
-        end = max(total - tail_off, 0)
-        return [(max(end - duration, 0), end)]
-    # head_tail：开头 + 片尾各一段
-    tail_end = max(total - tail_off, 0)
+        return [(max(tail_base_end - tail_duration, 0), tail_end)]
+    # 开始和片尾：两个独立片段，各自使用自己的显示时长。
     return [
         (head_start, head_start + duration),
-        (max(tail_end - duration, 0), tail_end),
+        (max(tail_base_end - tail_duration, 0), tail_end),
+    ]
+
+
+def _title_show_specs(
+    title: TitleOverlay,
+    track: TimingTrack,
+    *,
+    duration_ms: Optional[int] = None,
+) -> list[tuple[int, int, int, int]]:
+    """返回 ``(开始, 结束, 淡入, 淡出)``，允许首尾片段使用独立过渡。"""
+    windows = _title_show_window(title, track, duration_ms=duration_ms)
+    head_fade_in = max(int(title.fade_in_ms), 0)
+    head_fade_out = max(int(title.fade_out_ms), 0)
+    tail_fade_in = max(
+        int(title.tail_fade_in_ms)
+        if title.tail_fade_in_ms is not None
+        else head_fade_in,
+        0,
+    )
+    tail_fade_out = max(
+        int(title.tail_fade_out_ms)
+        if title.tail_fade_out_ms is not None
+        else head_fade_out,
+        0,
+    )
+    if title.show_mode == "tail":
+        return [
+            (begin, end, tail_fade_in, tail_fade_out)
+            for begin, end in windows
+        ]
+    if title.show_mode == "head_tail" and len(windows) > 1:
+        return [
+            (*windows[0], head_fade_in, head_fade_out),
+            (*windows[1], tail_fade_in, tail_fade_out),
+        ]
+    return [
+        (begin, end, head_fade_in, head_fade_out)
+        for begin, end in windows
     ]
 
 
 def _title_overlay_opacity(
-    title: Optional[TitleOverlay], track: TimingTrack, t_ms: int
+    title: Optional[TitleOverlay],
+    track: TimingTrack,
+    t_ms: int,
+    *,
+    duration_ms: Optional[int] = None,
 ) -> float:
     """标题在 ``t_ms`` 的不透明度（含淡入淡出）；不可见返回 0。"""
     if title is None or not title.enabled:
         return 0.0
-    fade_in = max(int(title.fade_in_ms), 0)
-    fade_out = max(int(title.fade_out_ms), 0)
     best = 0.0
-    for begin, end in _title_show_window(title, track):
+    for begin, end, fade_in, fade_out in _title_show_specs(
+        title, track, duration_ms=duration_ms
+    ):
         if end <= begin or t_ms < begin or t_ms > end:
             continue
         alpha = 1.0

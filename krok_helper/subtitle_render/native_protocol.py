@@ -101,7 +101,12 @@ def gpu_unsupported_features(
     return tuple(dict.fromkeys(reasons))
 
 
-def title_to_ir(track: TimingTrack, style: Style) -> dict[str, Any] | None:
+def title_to_ir(
+    track: TimingTrack,
+    style: Style,
+    *,
+    duration_ms: int | None = None,
+) -> dict[str, Any] | None:
     """Resolve the Painter title contract into a renderer-ready snapshot."""
     # Keep the resolution logic shared with the CPU oracle.  In particular,
     # title schemes/layout references and metadata template cleanup must not be
@@ -109,7 +114,7 @@ def title_to_ir(track: TimingTrack, style: Style) -> dict[str, Any] | None:
     from krok_helper.subtitle_render.engine.painter import (
         _resolve_title_role_overlay,
         _resolve_title_text,
-        _title_show_window,
+        _title_show_specs,
         resolve_title_overlay,
     )
     from krok_helper.subtitle_render.models import normalize_title_char_role_labels
@@ -125,7 +130,10 @@ def title_to_ir(track: TimingTrack, style: Style) -> dict[str, Any] | None:
         style.custom_style_schemes.get(TITLE_SCHEME_NAME),
     )
     payload["text"] = text
-    payload["windows"] = [list(window) for window in _title_show_window(title, track)]
+    payload["windows"] = [
+        list(window)
+        for window in _title_show_specs(title, track, duration_ms=duration_ms)
+    ]
     labels = normalize_title_char_role_labels(text, title.char_role_labels)
     payload["resolved_role_labels"] = labels
     payload["role_styles"] = {
@@ -363,6 +371,7 @@ def build_render_ir(
     fps: int,
     dpr: float = 1.0,
     extra_tracks: list[TimingTrack] | None = None,
+    duration_ms: int | None = None,
 ) -> dict[str, Any]:
     """Build a JSON-friendly Render IR v1 snapshot for the native sidecar.
 
@@ -383,5 +392,5 @@ def build_render_ir(
         # Keep each source separate.  Painter schedules lanes/display windows
         # independently per source and then composites primary -> extras.
         "extra_tracks": [track_to_ir(item, style) for item in extra_tracks or ()],
-        "title": title_to_ir(track, style),
+        "title": title_to_ir(track, style, duration_ms=duration_ms),
     }
