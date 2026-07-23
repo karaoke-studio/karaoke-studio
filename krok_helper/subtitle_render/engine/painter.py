@@ -9098,7 +9098,20 @@ def _paint_char_karaoke_stack(
     # 时退回原逐帧 glow 路径（保留旧行为，可回退）。
     def _use_cached_glow(after: bool) -> bool:
         del after
-        return glow_run is not None and style.decoration_kind == "glow"
+        # N3 transforms the glyph geometry before drawing the shared
+        # decoration source and applying Gaussian blur.  Reusing an already
+        # blurred upright bitmap would also scale/rotate the blur kernel,
+        # producing a visibly different Utopia outline during entry, wipe and
+        # outro.  Keep the cache for identity frames; transformed frames must
+        # blur the transformed source.
+        return (
+            glow_run is not None
+            and style.decoration_kind == "glow"
+            and (
+                geometry_transform is None
+                or geometry_transform.isIdentity()
+            )
+        )
     stroke2_width = _main_stroke2_width(style)
 
     def _blit_glow(after: bool) -> None:

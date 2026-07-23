@@ -5402,6 +5402,47 @@ def test_utopia_glow_uses_cached_run_glow(qapp):
     assert len(_RUN_GLOW_CACHE) == populated
 
 
+def test_utopia_transformed_glow_keeps_n3_kernel_with_cache_enabled(
+    qapp, monkeypatch
+):
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar(text="A", start_ms=1000)],
+                end_ms=2000,
+            )
+        ]
+    )
+    style = Style(
+        font_family="Arial",
+        font_size_px=72,
+        line_lead_in_ms=700,
+        line_tail_ms=1200,
+        line_y_position="center",
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        decoration_kind="glow",
+        glow_before_radius_px=12,
+        glow_after_radius_px=12,
+        entry_anim="utopia",
+        exit_anim="utopia",
+    )
+
+    def render(t_ms: int, cache_enabled: bool) -> str:
+        monkeypatch.setenv(
+            "KROK_SUBTITLE_GLOW_CACHE", "1" if cache_enabled else "0"
+        )
+        clear_before_layer_cache()
+        image = _blank()
+        paint_frame(image, track, t_ms, style)
+        return _pixel_hash(image)
+
+    # N3 transforms geometry before blur, so enabling the upright-glow cache
+    # must not scale the blur kernel during either intro or outro.
+    for t_ms in (400, 2700):
+        assert render(t_ms, True) == render(t_ms, False)
+
+
 def test_utopia_gradient_glow_caches_alpha_mask_not_coloured_bitmap(
     qapp, monkeypatch
 ):

@@ -4475,15 +4475,26 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 : nullptr;
         };
         // A character/ruby unit counts as "transformed" only on frames where
-        // its animation matrix is non-identity. Glow for those glyphs keeps
-        // the Painter per-glyph blur-then-transform semantics; every other
-        // glyph shares the line-level glow sources.
+        // its animation matrix is non-identity.
         auto charTransformedAt = [&](std::size_t index) {
             return characterAnimationAt(index).transformed;
+        };
+        // N3's Utopia override substitutes the transformed geometry while
+        // DrawOneLineDecorBlur is building the shared work bitmap, then blurs
+        // that combined line once. Keep the dedicated blur-then-transform
+        // layers for the other character animations, but never split Utopia
+        // between two glow representations.
+        auto charUsesGroupedGlowAt = [&](std::size_t index) {
+            return useUtopiaTransition || !charTransformedAt(index);
         };
         auto rubyUnitTransformed = [&](const Impl::CachedRuby &ruby,
                                        std::size_t unitIndex) {
             return rubyUnitAnimationAt(ruby, unitIndex).transformed;
+        };
+        auto rubyUnitUsesGroupedGlowAt = [&](const Impl::CachedRuby &ruby,
+                                             std::size_t unitIndex) {
+            return useUtopiaTransition
+                || !rubyUnitTransformed(ruby, unitIndex);
         };
         const auto expandedRect = [](const D2D1_RECT_F &rect, float amount) {
             return D2D1::RectF(
@@ -5609,10 +5620,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 glowClearRect, D2D1_ANTIALIAS_MODE_ALIASED
             );
             const auto drawGlowPart = [&](std::size_t index, bool after) {
-                // Characters animating this frame keep the Painter semantics
-                // of blurring the upright glyph and transforming the blurred
-                // result; they render through dedicated per-character layers.
-                if (charTransformedAt(index)) {
+                if (!charUsesGroupedGlowAt(index)) {
                     return;
                 }
                 ID2D1Geometry *geometry = charGeometryAt(index);
@@ -5620,11 +5628,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     return;
                 }
                 ID2D1Brush *brush = after ? afterDecor.Get() : beforeDecor.Get();
-                if (hasCharacterTransition) {
-                    brush->SetOpacity(
-                        globalOpacity * characterOpacityAt(index)
-                    );
-                }
+                brush->SetOpacity(
+                    globalOpacity * characterOpacityAt(index)
+                );
                 context->DrawGeometry(geometry, brush, sourceWidth);
             };
             const auto pushGlowClip = [&](std::size_t index, bool after) {
@@ -5745,37 +5751,28 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 [&](const Impl::CachedRuby &ruby) {
                     const int rubyIndex = static_cast<int>(&ruby - line->rubies.data());
                     const bool selected = (rubyOnly < 0 || rubyIndex == rubyOnly);
-                    bool unitVisible = false;
-                    if (unitOnly >= 0) {
-                        unitVisible = unitOnly < static_cast<int>(ruby.geometries.size())
-                            && rubyUnitOpacityAt(
-                                ruby, static_cast<std::size_t>(unitOnly)
-                            ) > 0.0f;
-                    } else {
-                        for (std::size_t unitIndex = 0;
-                             unitIndex < ruby.geometries.size(); ++unitIndex) {
-                            if (rubyOnly < 0
-                                && rubyUnitTransformed(ruby, unitIndex)) {
-                                continue;
-                            }
-                            if (rubyUnitOpacityAt(ruby, unitIndex) > 0.0f) {
-                                unitVisible = true;
-                                break;
-                            }
+                    if (!selected || ruby.styleIndex != styleIndex) {
+                        return false;
+                    }
+                    for (std::size_t unitIndex = 0;
+                         unitIndex < ruby.geometries.size(); ++unitIndex) {
+                        if ((unitOnly >= 0
+                                && static_cast<int>(unitIndex) != unitOnly)
+                            || (rubyOnly < 0
+                                && !rubyUnitUsesGroupedGlowAt(ruby, unitIndex))
+                            || rubyUnitOpacityAt(ruby, unitIndex) <= 0.0f) {
+                            continue;
+                        }
+                        const N3WipePhase phase = useUtopiaTransition
+                            ? rubyUnitWipePhaseAt(ruby, unitIndex)
+                            : rubyWipePhaseAt(ruby);
+                        if (after
+                                ? phase != N3WipePhase::Before
+                                : phase != N3WipePhase::After) {
+                            return true;
                         }
                     }
-                    N3WipePhase phase = rubyWipePhaseAt(ruby);
-                    if (useUtopiaTransition && unitOnly >= 0
-                        && unitOnly < static_cast<int>(ruby.chars.size())) {
-                        phase = rubyUnitWipePhaseAt(
-                            ruby, static_cast<std::size_t>(unitOnly)
-                        );
-                    }
-                    return selected && unitVisible
-                        && ruby.styleIndex == styleIndex
-                        && (after
-                            ? phase != N3WipePhase::Before
-                            : phase != N3WipePhase::After);
+                    return false;
                 }
             );
             if (rubyStyle.rubyDecorationKind != "glow"
@@ -5879,67 +5876,77 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     ),
                     after ? rubyStyle.rubyAfterDecor : rubyStyle.rubyBeforeDecor
                 );
-                brush->SetOpacity(globalOpacity);
-                D2D1_RECT_F phaseBounds = ruby.bounds;
-                float edge = rubyWipeEdgeAt(ruby);
-                N3WipePhase phase = rubyWipePhaseAt(ruby);
-                if (useUtopiaTransition && unitOnly >= 0
-                    && unitOnly < static_cast<int>(ruby.chars.size())) {
-                    const std::size_t unitIndex = static_cast<std::size_t>(unitOnly);
-                    phase = rubyUnitWipePhaseAt(ruby, unitIndex);
-                    const auto animated = utopiaRubyUnitWipe(
-                        ruby, rubyIndex, unitIndex, rubyStyle
-                    );
-                    phaseBounds = animated.first;
-                    edge = animated.second;
-                }
-                if ((phase == N3WipePhase::Before && after)
-                    || (phase == N3WipePhase::After && !after)) {
-                    continue;
-                }
-                const D2D1_RECT_F clip = style.vertical
-                    ? (after
-                        ? D2D1::RectF(
-                            phaseBounds.left - pad, phaseBounds.top - pad,
-                            phaseBounds.right + pad, edge
-                        )
-                        : D2D1::RectF(
-                            phaseBounds.left - pad, edge,
-                            phaseBounds.right + pad, phaseBounds.bottom + pad
-                        ))
-                    : (rtl
-                        ? (after
-                            ? D2D1::RectF(
-                                edge, phaseBounds.top - pad,
-                                phaseBounds.right + pad, phaseBounds.bottom + pad
-                            )
-                            : D2D1::RectF(
-                                phaseBounds.left - pad, phaseBounds.top - pad,
-                                edge, phaseBounds.bottom + pad
-                            ))
-                        : (after
-                            ? D2D1::RectF(
-                                phaseBounds.left - pad, phaseBounds.top - pad,
-                                edge, phaseBounds.bottom + pad
-                            )
-                            : D2D1::RectF(
-                                edge, phaseBounds.top - pad,
-                                phaseBounds.right + pad, phaseBounds.bottom + pad
-                            )));
-                if (phase == N3WipePhase::Wiping) {
-                    pushAxisAlignedClip(
-                        clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
-                    );
-                }
                 for (std::size_t geometryIndex = 0;
                      geometryIndex < ruby.geometries.size(); ++geometryIndex) {
-                    const auto &geometry = ruby.geometries[geometryIndex];
                     if ((unitOnly >= 0
                             && static_cast<int>(geometryIndex) != unitOnly)
-                        || geometry == nullptr
                         || (rubyOnly < 0
-                            && rubyUnitTransformed(ruby, geometryIndex))) {
+                            && !rubyUnitUsesGroupedGlowAt(
+                                ruby, geometryIndex
+                            ))) {
                         continue;
+                    }
+                    ID2D1Geometry *geometry = rubyOnly < 0
+                        ? rubyGeometryAt(rubyIndex, geometryIndex)
+                        : ruby.geometries[geometryIndex].Get();
+                    if (geometry == nullptr) {
+                        continue;
+                    }
+                    D2D1_RECT_F phaseBounds = ruby.bounds;
+                    float edge = rubyWipeEdgeAt(ruby);
+                    const N3WipePhase phase = useUtopiaTransition
+                        ? rubyUnitWipePhaseAt(ruby, geometryIndex)
+                        : rubyWipePhaseAt(ruby);
+                    if ((phase == N3WipePhase::Before && after)
+                        || (phase == N3WipePhase::After && !after)) {
+                        continue;
+                    }
+                    if (useUtopiaTransition) {
+                        const auto animated = utopiaRubyUnitWipe(
+                            ruby, rubyIndex, geometryIndex, rubyStyle
+                        );
+                        phaseBounds = animated.first;
+                        edge = animated.second;
+                    }
+                    const D2D1_RECT_F clip = style.vertical
+                        ? (after
+                            ? D2D1::RectF(
+                                phaseBounds.left - pad,
+                                phaseBounds.top - pad,
+                                phaseBounds.right + pad, edge
+                            )
+                            : D2D1::RectF(
+                                phaseBounds.left - pad, edge,
+                                phaseBounds.right + pad,
+                                phaseBounds.bottom + pad
+                            ))
+                        : (rtl
+                            ? (after
+                                ? D2D1::RectF(
+                                    edge, phaseBounds.top - pad,
+                                    phaseBounds.right + pad,
+                                    phaseBounds.bottom + pad
+                                )
+                                : D2D1::RectF(
+                                    phaseBounds.left - pad,
+                                    phaseBounds.top - pad, edge,
+                                    phaseBounds.bottom + pad
+                                ))
+                            : (after
+                                ? D2D1::RectF(
+                                    phaseBounds.left - pad,
+                                    phaseBounds.top - pad, edge,
+                                    phaseBounds.bottom + pad
+                                )
+                                : D2D1::RectF(
+                                    edge, phaseBounds.top - pad,
+                                    phaseBounds.right + pad,
+                                    phaseBounds.bottom + pad
+                                )));
+                    if (phase == N3WipePhase::Wiping) {
+                        pushAxisAlignedClip(
+                            clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE
+                        );
                     }
                     brush->SetOpacity(
                         globalOpacity * rubyUnitOpacityAt(
@@ -5947,11 +5954,11 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         )
                     );
                     context->DrawGeometry(
-                        geometry.Get(), brush.Get(), sourceWidth
+                        geometry, brush.Get(), sourceWidth
                     );
-                }
-                if (phase == N3WipePhase::Wiping) {
-                    context->PopAxisAlignedClip();
+                    if (phase == N3WipePhase::Wiping) {
+                        context->PopAxisAlignedClip();
+                    }
                 }
             }
             context->PopAxisAlignedClip();
@@ -5986,7 +5993,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 const Impl::CachedRuby &ruby = line->rubies[rubyIndex];
                 for (std::size_t unitIndex = 0;
                      unitIndex < ruby.geometries.size(); ++unitIndex) {
-                    if (!rubyUnitTransformed(ruby, unitIndex)) {
+                    if (!rubyUnitTransformed(ruby, unitIndex)
+                        || rubyUnitUsesGroupedGlowAt(ruby, unitIndex)) {
                         continue;
                     }
                     appendRubyGlowLayer(
@@ -6069,7 +6077,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                             : ((after && wipeEdge <= ch.left)
                                 || (!after && wipeEdge >= ch.right)));
                     }
-                    if (charTransformedAt(charIndex)
+                    if (!charUsesGroupedGlowAt(charIndex)
                         || charGeometryAt(charIndex) == nullptr) {
                         return false;
                     }
@@ -6141,7 +6149,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                                         || (!after && wipeEdge >= ch.right)));
                             }
                         }
-                    } else if (!charTransformedAt(charIndex)
+                    } else if (charUsesGroupedGlowAt(charIndex)
                                && charGeometryAt(charIndex) != nullptr) {
                         if (useUtopiaTransition) {
                             const N3WipePhase phase = wipePhaseAt(
@@ -6297,7 +6305,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     }
                     continue;
                 }
-                if (charTransformedAt(charIndex)) {
+                if (!charUsesGroupedGlowAt(charIndex)) {
                     continue;
                 }
                 ID2D1Geometry *geometry = charGeometryAt(charIndex);
@@ -6322,7 +6330,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     }
                     needClip = !mainWipeComplete;
                 }
-                brush->SetOpacity(globalOpacity * characterOpacityAt(charIndex));
+                brush->SetOpacity(
+                    globalOpacity * characterOpacityAt(charIndex)
+                );
                 if (needClip) {
                     D2D1_RECT_F clip{};
                     if (useUtopiaTransition) {
@@ -6399,7 +6409,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         }
         if (spinDirection != 0 || dripDirection != 0 || useUtopiaTransition) {
             for (std::size_t charIndex = 0; charIndex < line->chars.size(); ++charIndex) {
-                if (!charTransformedAt(charIndex)) {
+                if (!charTransformedAt(charIndex)
+                    || charUsesGroupedGlowAt(charIndex)) {
                     continue;
                 }
                 const int styleIndex = line->chars[charIndex].styleIndex;

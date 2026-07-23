@@ -1414,6 +1414,103 @@ def test_gpu_utopia_keeps_finished_char_body_while_next_char_wipes(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_utopia_glow_is_continuous_when_character_settles(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    transparent = PaintFill(mode="solid", color="#00000000")
+    before = KaraokeColorState(
+        text=transparent,
+        stroke=transparent,
+        stroke2=transparent,
+        shadow=PaintFill(mode="solid", color="#FF822D3C"),
+    )
+    after = KaraokeColorState(
+        text=transparent,
+        stroke=transparent,
+        stroke2=transparent,
+        shadow=PaintFill(mode="solid", color="#FFB7EADF"),
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("\u306e", 0),
+                    TimingChar("\u6d99", 1_000),
+                    TimingChar("\u3067", 2_000),
+                ],
+                end_ms=3_000,
+                display_start_override_ms=0,
+                display_end_override_ms=4_000,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="\u6d99",
+                reading="\u306a\u307f\u3060",
+                reading_part_ms=[500, 900],
+                pos_start_ms=1_000,
+                pos_end_ms=2_000,
+                reading_parts=["\u306a", "\u307f", "\u3060"],
+            )
+        ],
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=100,
+        base_color="#00000000",
+        fill_color="#00000000",
+        stroke_color="#00000000",
+        stroke_width_px=8,
+        stroke2_enabled=True,
+        stroke2_width_px=5,
+        decoration_kind="glow",
+        glow_before_radius_px=10,
+        glow_after_radius_px=10,
+        glow_concentration_level=0,
+        karaoke_colors=KaraokeColors(before=before, after=after),
+        karaoke_anim="utopia",
+        entry_anim="char_fade",
+        exit_anim="fade",
+        line_tail_ms=1_000,
+    )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        renderer.configure_gpu(
+            track,
+            style,
+            width=640,
+            height=360,
+            fps=60,
+            force_warp=True,
+        )
+        active_event = renderer.render_gpu_frame(
+            1_950,
+            force_warp=True,
+            frame_index=0,
+        )
+        # N3 draws transformed Utopia geometry into the shared line
+        # decoration source. A dedicated inline glow layer here would
+        # reintroduce the visible representation handoff near completion.
+        assert active_event["end_draw_inline_glow_source_count"] == 0
+        _, frames = _render_g1_frames(
+            renderer,
+            style,
+            (1_975, 1_990, 1_995, 1_999, 2_000),
+            force_warp=True,
+            track=track,
+        )
+
+    alpha_frames = [
+        np.frombuffer(frame, dtype=np.uint8).reshape(-1, 4)[:, 3].astype(np.int16)
+        for frame in frames
+    ]
+    for before_alpha, after_alpha in zip(alpha_frames, alpha_frames[1:]):
+        positive_delta = np.clip(after_alpha - before_alpha, 0, None)
+        assert int(positive_delta.max()) <= 2
+        assert int((positive_delta > 2).sum()) == 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize("decoration_kind", ["none", "shadow", "glow"])
 def test_gpu_utopia_releases_each_completed_character_wipe(
     monkeypatch, decoration_kind: str
@@ -2675,9 +2772,14 @@ def test_gpu_glow_dirty_scratch_matches_full_surface_for_wide_utopia_ruby(
     dirty_events, dirty_frames = render(True)
     full_events, full_frames = render(False)
 
-    assert sum(event["glow_source_area_px"] for event in dirty_events) < (
-        sum(event["glow_source_area_px"] for event in full_events) * 0.75
-    )
+    dirty_area = sum(event["glow_source_area_px"] for event in dirty_events)
+    full_area = sum(event["glow_source_area_px"] for event in full_events)
+    # Utopia now follows N3 and contributes transformed glyphs to one shared
+    # line/ruby blur source. That removes the old per-glyph full-surface
+    # sources, so the former percentage comparison no longer has the same
+    # denominator. Dirty cropping must still save a material absolute area.
+    assert dirty_area < full_area
+    assert full_area - dirty_area > 25_000
     for t_ms, dirty, full in zip(timestamps, dirty_frames, full_frames):
         dirty_bounds = _payload_alpha_bounds(dirty)
         full_bounds = _payload_alpha_bounds(full)
