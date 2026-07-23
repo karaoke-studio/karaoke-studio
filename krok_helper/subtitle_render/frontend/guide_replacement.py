@@ -6,9 +6,9 @@ from collections import Counter
 from dataclasses import dataclass, replace
 from pathlib import Path
 import unicodedata
-from typing import Optional
+from typing import Callable, Optional
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal as Signal
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QDialog,
@@ -152,7 +152,6 @@ def replacement_symbol_for_match(
     prefix_count = len(match.prefix)
     if (
         match.start_index != 0
-        or line.guide_symbol is not None
         or prefix_count <= 0
         or len(line.chars) <= prefix_count
         or tuple(char.text for char in line.chars[:prefix_count]) != match.prefix
@@ -230,19 +229,107 @@ def _format_time(ms: int) -> str:
     return f"{minutes:02d}:{seconds:02d}.{cs:02d}"
 
 
+class GuideRoleSchemeDialog(QDialog):
+    """Choose an existing project role scheme for selected guide candidates."""
+
+    def __init__(
+        self,
+        role_names: list[str],
+        *,
+        prompt: str,
+        cancel_text: str = "取消",
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent.window() if parent is not None else None)
+        self.setWindowTitle("批量应用角色方案")
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setMinimumWidth(460)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+        layout.addWidget(StrongBodyLabel("批量应用角色方案", self))
+        message = BodyLabel(prompt, self)
+        message.setWordWrap(True)
+        layout.addWidget(message)
+
+        role_row = QHBoxLayout()
+        role_row.addWidget(BodyLabel("角色方案：", self))
+        self.role_combo = ComboBox(self)
+        self.role_combo.setMinimumWidth(260)
+        for name in role_names:
+            self.role_combo.addItem(name, userData=name)
+        role_row.addWidget(self.role_combo, 1)
+        layout.addLayout(role_row)
+        if not role_names:
+            empty_hint = CaptionLabel(
+                "当前项目没有可用的角色方案，请先在字体页新建角色方案。",
+                self,
+            )
+            empty_hint.setWordWrap(True)
+            layout.addWidget(empty_hint)
+
+        button_row, self.ok_button, self.cancel_button = fluent_button_row(
+            self,
+            ok_text="应用角色方案",
+            cancel_text=cancel_text,
+        )
+        layout.addLayout(button_row)
+        self.ok_button.setEnabled(self.role_combo.count() > 0)
+        self.ok_button.setAutoDefault(False)
+        self.cancel_button.setAutoDefault(False)
+
+    def role_name(self) -> Optional[str]:
+        value = self.role_combo.currentData()
+        return str(value).strip() if value else None
+
+
+def choose_guide_role_scheme(
+    role_names: list[str],
+    *,
+    prompt: str,
+    cancel_text: str = "取消",
+    parent: Optional[QWidget] = None,
+) -> Optional[str]:
+    """Return a selected existing role scheme, or ``None`` when skipped."""
+    unique_names: list[str] = []
+    seen: set[str] = set()
+    for value in role_names:
+        name = str(value or "").strip()
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        unique_names.append(name)
+    dialog = GuideRoleSchemeDialog(
+        unique_names,
+        prompt=prompt,
+        cancel_text=cancel_text,
+        parent=parent,
+    )
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return None
+    return dialog.role_name()
+
+
 class GuidePrefixReplaceDialog(QDialog):
-    """Fluent batch-review dialog; no track mutation happens before acceptance."""
+    """Fluent batch-review dialog for SVG replacement and marker role batching."""
+
+    roleSchemeApplyRequested = Signal(object, str)
 
     def __init__(
         self,
         track: TimingTrack,
         *,
         start_dir: str = "",
+        role_options: Optional[list[str]] = None,
+        role_options_provider: Optional[Callable[[], list[str]]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent.window() if parent is not None else None)
         self._track = track
         self._start_dir = start_dir
+        self._role_options = list(role_options or ())
+        self._role_options_provider = role_options_provider
         self._matches: list[GuidePrefixMatch] = []
         self._row_checks: list[QTableWidgetItem] = []
         self.setWindowTitle("批量识别导唱标记")
@@ -315,6 +402,8 @@ class GuidePrefixReplaceDialog(QDialog):
         button_row, self.ok_button, _cancel_button = fluent_button_row(
             self, ok_text="应用替换"
         )
+        self.batch_role_button = PushButton("批量应用角色方案", self)
+        button_row.insertWidget(1, self.batch_role_button)
         layout.addLayout(button_row)
 
         # QDialog treats an auto-default push button as the target of Enter.
@@ -325,6 +414,7 @@ class GuidePrefixReplaceDialog(QDialog):
             self.detect_button,
             self.select_all_button,
             self.select_none_button,
+            self.batch_role_button,
             self.ok_button,
             _cancel_button,
         ):
@@ -340,6 +430,7 @@ class GuidePrefixReplaceDialog(QDialog):
         self.table.itemChanged.connect(self._sync_ok_button)
         self.select_all_button.clicked.connect(lambda: self._set_all_checked(True))
         self.select_none_button.clicked.connect(lambda: self._set_all_checked(False))
+        self.batch_role_button.clicked.connect(self._request_role_scheme)
         self._load_candidate_options()
         self._sync_ok_button()
 
@@ -386,24 +477,20 @@ class GuidePrefixReplaceDialog(QDialog):
         )
         self._row_checks = []
         self.table.setRowCount(len(self._matches))
-        replaceable = 0
         for table_row, match in enumerate(self._matches):
             check_item = QTableWidgetItem()
-            flags = Qt.ItemFlag.ItemIsEnabled
-            if not match.has_guide_symbol:
-                flags |= Qt.ItemFlag.ItemIsUserCheckable
-            check_item.setFlags(flags)
+            check_item.setFlags(
+                Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsUserCheckable
+            )
             check_item.setCheckState(
                 Qt.CheckState.Unchecked
                 if match.has_guide_symbol
                 else Qt.CheckState.Checked
             )
             check_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            check_item.setData(Qt.ItemDataRole.UserRole, not match.has_guide_symbol)
+            check_item.setData(Qt.ItemDataRole.UserRole, True)
             self.table.setItem(table_row, 0, check_item)
             self._row_checks.append(check_item)
-            if not match.has_guide_symbol:
-                replaceable += 1
             interval_text = " / ".join(str(value) for value in match.intervals_ms)
             values = (
                 _format_time(match.start_ms),
@@ -411,14 +498,14 @@ class GuidePrefixReplaceDialog(QDialog):
                 match.source_text,
                 match.replacement_text,
                 f"{interval_text} ms",
-                "已有导唱符，已跳过" if match.has_guide_symbol else "可替换",
+                "已有导唱符，可重新替换" if match.has_guide_symbol else "可替换",
             )
             for column, value in enumerate(values, start=1):
                 self.table.setItem(table_row, column, QTableWidgetItem(value))
         marker = self.marker_edit.text().strip()
         matched_rows = len({match.row for match in self._matches})
         self.summary_label.setText(
-            f"检测到导唱候选：{len(self._matches)} 处（{matched_rows} 行）；可替换 {replaceable} 处"
+            f"检测到导唱候选：{len(self._matches)} 处（{matched_rows} 行）；可替换 {len(self._matches)} 处"
             if marker
             else "请输入要检测的标记字符。"
         )
@@ -443,6 +530,26 @@ class GuidePrefixReplaceDialog(QDialog):
     def _sync_ok_button(self, *_args) -> None:
         if not hasattr(self, "ok_button"):
             return
-        self.ok_button.setEnabled(
-            self.svg_path() is not None and bool(self.selected_matches())
+        has_selection = bool(self.selected_matches())
+        self.ok_button.setEnabled(self.svg_path() is not None and has_selection)
+        self.batch_role_button.setEnabled(has_selection)
+
+    def _available_role_options(self) -> list[str]:
+        if self._role_options_provider is not None:
+            return list(self._role_options_provider())
+        return list(self._role_options)
+
+    def _request_role_scheme(self) -> None:
+        selected = self.selected_matches()
+        if not selected:
+            return
+        role_name = choose_guide_role_scheme(
+            self._available_role_options(),
+            prompt=(
+                "将当前勾选候选位置批量应用为以下角色方案。"
+                "无论该位置是否已经替换为导唱符，都只修改对应标记字符。"
+            ),
+            parent=self,
         )
+        if role_name:
+            self.roleSchemeApplyRequested.emit(selected, role_name)

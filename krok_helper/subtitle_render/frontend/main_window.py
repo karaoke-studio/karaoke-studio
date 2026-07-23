@@ -145,7 +145,9 @@ from krok_helper.subtitle_render.frontend.fluent_dialogs import (
     fluent_warning,
 )
 from krok_helper.subtitle_render.frontend.guide_replacement import (
+    GuidePrefixMatch,
     GuidePrefixReplaceDialog,
+    choose_guide_role_scheme,
     replacement_symbol_for_match,
 )
 from krok_helper.subtitle_render.frontend.lyrics_list import LyricsPanel
@@ -5896,8 +5898,14 @@ class SubtitleRenderWindow(QWidget):
             return
         start_dir = str(self._subtitle_path.parent) if self._subtitle_path else ""
         dialog = GuidePrefixReplaceDialog(
-            track, start_dir=start_dir, parent=self
+            track,
+            start_dir=start_dir,
+            role_options_provider=self._guide_role_scheme_options,
+            parent=self,
         )
+        role_signal = getattr(dialog, "roleSchemeApplyRequested", None)
+        if role_signal is not None:
+            role_signal.connect(self._on_guide_matches_role_scheme_requested)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return
         svg_path = dialog.svg_path()
@@ -5921,6 +5929,7 @@ class SubtitleRenderWindow(QWidget):
             for row in candidate_rows
         }
         applied_rows: set[int] = set()
+        applied_matches: list[GuidePrefixMatch] = []
         for match in selected:
             if not 0 <= match.row < len(track.lines):
                 continue
@@ -5939,18 +5948,17 @@ class SubtitleRenderWindow(QWidget):
                     continue
                 line.guide_symbol = symbol
             else:
-                if any(index in line.inline_guide_symbols for index in range(start, end)):
-                    continue
                 line.inline_guide_symbols = dict(line.inline_guide_symbols)
                 for index in range(start, end):
                     line.inline_guide_symbols[index] = base_symbol
             applied_rows.add(match.row)
+            applied_matches.append(match)
 
         if not applied_rows:
             fluent_warning(
                 self,
                 "没有可替换项",
-                "候选歌词在窗口打开后已发生变化，或对应位置已经设置了导唱符。",
+                "候选歌词在窗口打开后已发生变化，无法确认原标记位置。请重新检测后再试。",
             )
             return
         row_tuple = tuple(sorted(applied_rows))
@@ -5974,6 +5982,118 @@ class SubtitleRenderWindow(QWidget):
         del self._undo_stack[:-_UNDO_STACK_LIMIT]
         self._redo_stack.clear()
         self._refresh_after_guide_symbols_changed(row_tuple)
+        role_name = choose_guide_role_scheme(
+            self._guide_role_scheme_options(),
+            prompt="是否将刚刚批量替换的导唱符统一应用为以下角色方案？",
+            cancel_text="暂不应用",
+            parent=self,
+        )
+        if role_name:
+            self._apply_guide_match_role_scheme(applied_matches, role_name)
+
+    def _guide_role_scheme_options(self) -> list[str]:
+        """Return project role schemes in navigation order, excluding title."""
+        options = self._merged_role_options()
+        seen = set(options)
+        for name in self._style.custom_style_schemes:
+            if name == TITLE_SCHEME_NAME or name in seen:
+                continue
+            seen.add(name)
+            options.append(name)
+        return options
+
+    def _on_guide_matches_role_scheme_requested(
+        self, matches: object, role_name: str
+    ) -> None:
+        if isinstance(matches, (list, tuple)):
+            self._apply_guide_match_role_scheme(list(matches), role_name)
+
+    def _apply_guide_match_role_scheme(
+        self, matches: list[object], role_name: str
+    ) -> bool:
+        """Apply one role only to selected marker spans and attached guides."""
+        track = self._active_track()
+        label = str(role_name or "").strip()
+        if track is None or self._title_source_active or not label:
+            return False
+
+        matches_by_row: dict[int, list[GuidePrefixMatch]] = {}
+        for value in matches:
+            if not isinstance(value, GuidePrefixMatch):
+                continue
+            row = int(value.row)
+            start = int(value.start_index)
+            end = start + int(value.count)
+            if (
+                not 0 <= row < len(track.lines)
+                or start < 0
+                or end > len(track.lines[row].chars)
+                or tuple(
+                    char.text for char in track.lines[row].chars[start:end]
+                )
+                != value.prefix
+            ):
+                continue
+            matches_by_row.setdefault(row, []).append(value)
+        if not matches_by_row:
+            return False
+
+        rows = tuple(sorted(matches_by_row))
+        old_by_row = {
+            row: (
+                track.lines[row].guide_symbol,
+                tuple(char.role_label for char in track.lines[row].chars),
+            )
+            for row in rows
+        }
+        for row in rows:
+            line = track.lines[row]
+            prefix_selected = False
+            for match in matches_by_row[row]:
+                start = int(match.start_index)
+                end = start + int(match.count)
+                for char in line.chars[start:end]:
+                    char.role_label = label
+                prefix_selected |= match.is_prefix
+            if prefix_selected and line.guide_symbol is not None:
+                line.guide_symbol = guide_symbol_with_role_labels(
+                    line.guide_symbol,
+                    [label] * max(int(line.guide_symbol.count), 1),
+                )
+
+        changed_rows = tuple(
+            row
+            for row in rows
+            if old_by_row[row]
+            != (
+                track.lines[row].guide_symbol,
+                tuple(char.role_label for char in track.lines[row].chars),
+            )
+        )
+        if not changed_rows:
+            return False
+        old_values = tuple(old_by_row[row] for row in changed_rows)
+        new_values = tuple(
+            (
+                track.lines[row].guide_symbol,
+                tuple(char.role_label for char in track.lines[row].chars),
+            )
+            for row in changed_rows
+        )
+        self._materialize_role_schemes({label})
+        self._undo_stack.append(
+            (
+                "inline_roles_batch",
+                self._active_source_index,
+                changed_rows,
+                old_values,
+                new_values,
+            )
+        )
+        del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+        self._refresh_after_guide_symbols_changed(changed_rows)
+        return True
 
     def _on_guide_symbol_remove_requested(self, rows: list[int]) -> None:
         track = self._active_track()

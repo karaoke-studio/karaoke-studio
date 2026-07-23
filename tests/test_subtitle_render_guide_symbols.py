@@ -19,6 +19,7 @@ from krok_helper.subtitle_render.engine.painter import (
 from krok_helper.subtitle_render.engine.timeline import compute_display_lines, find_active_line
 from krok_helper.subtitle_render.frontend.guide_replacement import (
     GuidePrefixReplaceDialog,
+    GuideRoleSchemeDialog,
     detect_guide_prefix_matches,
     guide_marker_options,
     replacement_symbol_for_match,
@@ -302,6 +303,35 @@ def test_prefix_replacement_reuses_original_timing_and_hides_marker(tmp_path):
     assert all(char.vector_glyph == symbol for char in layout.render_line.chars[:2])
 
 
+def test_existing_prefix_guide_can_be_replaced_again(tmp_path):
+    line = TimingLine(
+        chars=[
+            TimingChar("h", 1000, role_label="导唱"),
+            TimingChar("歌", 2000),
+        ],
+        end_ms=2500,
+    )
+    old_symbol = replace(
+        _symbol(tmp_path),
+        name="old",
+        replacement_prefix=("h",),
+        role_labels=("导唱",),
+    )
+    line.guide_symbol = old_symbol
+    match = detect_guide_prefix_matches(TimingTrack(lines=[line]), "h")[0]
+
+    replacement = replacement_symbol_for_match(
+        replace(_symbol(tmp_path), name="new"),
+        line,
+        match,
+    )
+
+    assert match.has_guide_symbol
+    assert replacement is not None
+    assert replacement.name == "new"
+    assert guide_symbol_role_labels(replacement) == ("导唱",)
+
+
 def test_multiple_guide_line_hits_layout_and_layer_caches(tmp_path):
     symbol = _symbol(tmp_path, duration_ms=1000, count=3)
     track = TimingTrack(
@@ -537,6 +567,146 @@ def test_prefix_replace_dialog_lists_candidates_and_keeps_ambiguous_rows_selecta
     dialog.close()
 
 
+def test_existing_guide_candidate_checkbox_and_batch_role_button_are_available(
+    tmp_path,
+):
+    symbol = replace(
+        _symbol(tmp_path),
+        replacement_prefix=("h",),
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("h", 1000), TimingChar("歌", 2000)],
+                guide_symbol=symbol,
+            )
+        ]
+    )
+    dialog = GuidePrefixReplaceDialog(track, role_options=["角色A", "角色B"])
+
+    check_item = dialog._row_checks[0]
+    assert check_item.flags() & Qt.ItemFlag.ItemIsUserCheckable
+    assert check_item.checkState() == Qt.CheckState.Unchecked
+    assert "可重新替换" in dialog.table.item(0, 6).text()
+    assert "可替换 1 处" in dialog.summary_label.text()
+    assert not dialog.batch_role_button.isEnabled()
+
+    check_item.setCheckState(Qt.CheckState.Checked)
+    QApplication.processEvents()
+
+    assert dialog.selected_matches() == [dialog._matches[0]]
+    assert dialog.batch_role_button.isEnabled()
+    assert not dialog.ok_button.isEnabled()
+    dialog.set_svg_path(tmp_path / "lead.svg")
+    assert dialog.ok_button.isEnabled()
+    dialog.close()
+
+
+def test_batch_role_button_does_not_require_svg_or_cached_role_options():
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("h", 1000), TimingChar("歌", 2000)])]
+    )
+    dialog = GuidePrefixReplaceDialog(track)
+
+    assert dialog.selected_matches()
+    assert dialog.svg_path() is None
+    assert dialog.batch_role_button.isEnabled()
+    assert not dialog.ok_button.isEnabled()
+    dialog.close()
+
+
+def test_batch_role_button_reads_project_roles_when_clicked(monkeypatch):
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("h", 1000), TimingChar("歌", 2000)])]
+    )
+    roles: list[str] = []
+    dialog = GuidePrefixReplaceDialog(
+        track,
+        role_options_provider=lambda: list(roles),
+    )
+    received: list[tuple[list, str]] = []
+    observed_options: list[list[str]] = []
+    dialog.roleSchemeApplyRequested.connect(
+        lambda matches, role: received.append((matches, role))
+    )
+    monkeypatch.setattr(
+        guide_replacement_module,
+        "choose_guide_role_scheme",
+        lambda options, **_kwargs: observed_options.append(options)
+        or (options[0] if options else None),
+    )
+
+    roles.append("稍后创建的角色")
+    dialog.batch_role_button.click()
+
+    assert observed_options == [["稍后创建的角色"]]
+    assert received == [(dialog.selected_matches(), "稍后创建的角色")]
+    dialog.close()
+
+
+def test_empty_role_scheme_choice_still_opens_dialog(monkeypatch):
+    opened: list[list[str]] = []
+
+    class RejectedDialog:
+        def __init__(self, role_names, **_kwargs):
+            opened.append(role_names)
+
+        def exec(self):
+            return QDialog.DialogCode.Rejected
+
+    monkeypatch.setattr(
+        guide_replacement_module, "GuideRoleSchemeDialog", RejectedDialog
+    )
+
+    assert (
+        guide_replacement_module.choose_guide_role_scheme(
+            [],
+            prompt="请选择角色方案。",
+        )
+        is None
+    )
+    assert opened == [[]]
+
+
+def test_guide_role_scheme_dialog_uses_existing_project_roles():
+    dialog = GuideRoleSchemeDialog(
+        ["角色A", "角色B"],
+        prompt="请选择角色方案。",
+    )
+
+    assert dialog.windowTitle() == "批量应用角色方案"
+    assert dialog.role_combo.count() == 2
+    assert dialog.role_name() == "角色A"
+    dialog.role_combo.setCurrentIndex(1)
+    assert dialog.role_name() == "角色B"
+    dialog.close()
+
+
+def test_batch_role_button_emits_checked_matches_from_shared_role_dialog(
+    monkeypatch,
+):
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("h", 1000), TimingChar("歌", 2000)])]
+    )
+    dialog = GuidePrefixReplaceDialog(track, role_options=["角色A", "角色B"])
+    received: list[tuple[list, str]] = []
+    dialog.roleSchemeApplyRequested.connect(
+        lambda matches, role: received.append((matches, role))
+    )
+    monkeypatch.setattr(
+        guide_replacement_module,
+        "choose_guide_role_scheme",
+        lambda roles, **_kwargs: "角色B" if roles == ["角色A", "角色B"] else None,
+    )
+
+    dialog.batch_role_button.click()
+
+    assert len(received) == 1
+    assert received[0][0] == dialog.selected_matches()
+    assert received[0][1] == "角色B"
+    dialog.close()
+
+
 def test_marker_enter_only_refreshes_results_and_table_has_no_row_selection(
     monkeypatch,
 ):
@@ -754,6 +924,11 @@ def test_batch_prefix_replacement_is_one_undoable_command(tmp_path, monkeypatch)
         main_window_module, "GuidePrefixReplaceDialog", AcceptedDialog
     )
     monkeypatch.setattr(
+        main_window_module,
+        "choose_guide_role_scheme",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
         main_window_module.SubtitleRenderWindow,
         "_resolve_ffprobe_path",
         lambda self: "ffprobe",
@@ -814,6 +989,11 @@ def test_batch_non_prefix_replacement_uses_inline_svg_and_is_undoable(
         main_window_module, "GuidePrefixReplaceDialog", AcceptedDialog
     )
     monkeypatch.setattr(
+        main_window_module,
+        "choose_guide_role_scheme",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
         main_window_module.SubtitleRenderWindow,
         "_resolve_ffprobe_path",
         lambda self: "ffprobe",
@@ -832,6 +1012,205 @@ def test_batch_non_prefix_replacement_uses_inline_svg_and_is_undoable(
     assert track.lines[0].inline_guide_symbols == {}
     window._redo_edit()
     assert set(track.lines[0].inline_guide_symbols) == {1, 2}
+    window.close()
+
+
+def test_batch_replacement_overwrites_existing_prefix_and_inline_guides(
+    tmp_path, monkeypatch
+):
+    base = _symbol(tmp_path)
+    old = replace(base, name="old")
+    prefix_old = replace(old, replacement_prefix=("h",))
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("h", 1000), TimingChar("歌", 2000)],
+                guide_symbol=prefix_old,
+            ),
+            TimingLine(
+                chars=[
+                    TimingChar("詞", 3000),
+                    TimingChar("h", 3500),
+                    TimingChar("終", 4000),
+                ],
+                inline_guide_symbols={1: old},
+            ),
+        ]
+    )
+    matches = detect_guide_prefix_matches(track, "h", include_non_prefix=True)
+
+    class AcceptedDialog:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def svg_path(self):
+            return tmp_path / "lead.svg"
+
+        def selected_matches(self):
+            return matches
+
+    monkeypatch.setattr(
+        main_window_module, "GuidePrefixReplaceDialog", AcceptedDialog
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "choose_guide_role_scheme",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        main_window_module.SubtitleRenderWindow,
+        "_resolve_ffprobe_path",
+        lambda self: "ffprobe",
+    )
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    window = main_window_module.SubtitleRenderWindow(embedded=False)
+    window._timing_track = track
+    window._lyrics_panel.set_track(track)
+
+    window._on_guide_prefix_replace_requested()
+
+    assert track.lines[0].guide_symbol is not None
+    assert track.lines[0].guide_symbol.name == "lead"
+    assert track.lines[1].inline_guide_symbols[1].name == "lead"
+    window._undo_edit()
+    assert track.lines[0].guide_symbol == prefix_old
+    assert track.lines[1].inline_guide_symbols == {1: old}
+    window.close()
+
+
+def test_batch_role_scheme_only_changes_selected_marker_spans_and_is_undoable(
+    tmp_path, monkeypatch
+):
+    prefix_symbol = replace(
+        _symbol(tmp_path),
+        replacement_prefix=("h",),
+        role_labels=("旧角色",),
+    )
+    inline_symbol = replace(_symbol(tmp_path), name="inline")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("h", 1000, role_label="旧角色"),
+                    TimingChar("歌", 2000, role_label="正文"),
+                ],
+                guide_symbol=prefix_symbol,
+            ),
+            TimingLine(
+                chars=[
+                    TimingChar("h", 3000),
+                    TimingChar("詞", 4000, role_label="正文"),
+                ]
+            ),
+            TimingLine(
+                chars=[
+                    TimingChar("句", 5000, role_label="正文"),
+                    TimingChar("h", 5500),
+                    TimingChar("末", 6000, role_label="正文"),
+                ],
+                inline_guide_symbols={1: inline_symbol},
+            ),
+        ]
+    )
+    matches = detect_guide_prefix_matches(track, "h", include_non_prefix=True)
+    monkeypatch.setattr(
+        main_window_module.SubtitleRenderWindow,
+        "_resolve_ffprobe_path",
+        lambda self: "ffprobe",
+    )
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    window = main_window_module.SubtitleRenderWindow(embedded=False)
+    window._timing_track = track
+    window._lyrics_panel.set_track(track)
+
+    assert window._apply_guide_match_role_scheme(matches, "角色A")
+
+    assert track.lines[0].chars[0].role_label == "角色A"
+    assert guide_symbol_role_labels(track.lines[0].guide_symbol) == ("角色A",)
+    assert track.lines[1].chars[0].role_label == "角色A"
+    assert track.lines[2].chars[1].role_label == "角色A"
+    assert track.lines[0].chars[1].role_label == "正文"
+    assert track.lines[1].chars[1].role_label == "正文"
+    assert track.lines[2].chars[0].role_label == "正文"
+    assert track.lines[2].chars[2].role_label == "正文"
+    assert window._undo_stack[-1][0] == "inline_roles_batch"
+
+    window._undo_edit()
+    assert track.lines[0].chars[0].role_label == "旧角色"
+    assert guide_symbol_role_labels(track.lines[0].guide_symbol) == ("旧角色",)
+    assert track.lines[1].chars[0].role_label is None
+    assert track.lines[2].chars[1].role_label is None
+    window._redo_edit()
+    assert track.lines[0].chars[0].role_label == "角色A"
+    assert track.lines[1].chars[0].role_label == "角色A"
+    assert track.lines[2].chars[1].role_label == "角色A"
+    window.close()
+
+
+def test_batch_replacement_prompts_to_apply_existing_role_scheme(
+    tmp_path, monkeypatch
+):
+    _symbol(tmp_path)
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("h", 1000), TimingChar("歌", 2000)])
+        ]
+    )
+    matches = detect_guide_prefix_matches(track, "h")
+
+    class AcceptedDialog:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def exec(self):
+            return QDialog.DialogCode.Accepted
+
+        def svg_path(self):
+            return tmp_path / "lead.svg"
+
+        def selected_matches(self):
+            return matches
+
+    prompts: list[str] = []
+    monkeypatch.setattr(
+        main_window_module, "GuidePrefixReplaceDialog", AcceptedDialog
+    )
+    monkeypatch.setattr(
+        main_window_module,
+        "choose_guide_role_scheme",
+        lambda _roles, **kwargs: prompts.append(kwargs["prompt"]) or "角色A",
+    )
+    monkeypatch.setattr(
+        main_window_module.SubtitleRenderWindow,
+        "_resolve_ffprobe_path",
+        lambda self: "ffprobe",
+    )
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    window = main_window_module.SubtitleRenderWindow(embedded=False)
+    window._style = replace(
+        window._style,
+        custom_style_schemes={
+            **window._style.custom_style_schemes,
+            "角色A": SubtitleStyleScheme(),
+        },
+    )
+    window._property_panel.set_style(window._style)
+    window._timing_track = track
+    window._lyrics_panel.set_track(track)
+
+    window._on_guide_prefix_replace_requested()
+
+    assert prompts and "刚刚批量替换" in prompts[0]
+    assert track.lines[0].guide_symbol is not None
+    assert guide_symbol_role_labels(track.lines[0].guide_symbol) == ("角色A",)
+    assert track.lines[0].chars[0].role_label == "角色A"
+    assert [command[0] for command in window._undo_stack[-2:]] == [
+        "guide_replacements",
+        "inline_roles_batch",
+    ]
     window.close()
 
 
