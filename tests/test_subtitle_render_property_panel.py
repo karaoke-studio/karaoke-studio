@@ -1639,7 +1639,7 @@ def test_property_panel_uses_horizontal_text_tabs_in_expected_order(qapp):
 
     assert isinstance(panel._navigation, SegmentedWidget)
     assert panel.count() == 5
-    assert [spec[1] for spec in panel._PAGE_SPECS] == ["字体", "布局", "时间", "特效", "标题"]
+    assert [spec[1] for spec in panel._PAGE_SPECS] == ["角色", "布局", "时间", "特效", "标题"]
     for route_key, label in panel._PAGE_SPECS:
         item = panel._navigation.widget(route_key)
         assert item.text() == label
