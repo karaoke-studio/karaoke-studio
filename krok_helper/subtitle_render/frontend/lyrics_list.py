@@ -26,6 +26,7 @@ from PyQt6.QtCore import (
     QEvent,
     QItemSelectionModel,
     QPoint,
+    QPointF,
     QRectF,
     Qt,
     QSize,
@@ -679,7 +680,7 @@ class _CharChipsView(QWidget):
 
     def event(self, event) -> bool:  # noqa: A003 - Qt API
         if event.type() == QEvent.Type.ToolTip:
-            index = self._index_at(event.pos())
+            index = self._index_at(QPointF(event.pos()))
             text = self.role_tooltip_text(index) if index is not None else ""
             if text:
                 QToolTip.showText(event.globalPos(), text, self)
