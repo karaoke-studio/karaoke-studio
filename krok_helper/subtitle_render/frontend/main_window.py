@@ -142,7 +142,10 @@ from krok_helper.subtitle_render.engine.page_plan import (
     resolve_page_plan,
 )
 from krok_helper.subtitle_render.engine.renderer import RenderJob, render_subtitle_video
-from krok_helper.subtitle_render.engine.timeline import track_duration_ms
+from krok_helper.subtitle_render.engine.timeline import (
+    apply_n3_seq_line_breaks,
+    track_duration_ms,
+)
 from krok_helper.subtitle_render.guide_symbols import (
     GuideSymbolImportError,
     import_svg_guide_symbol,
@@ -4844,6 +4847,18 @@ class SubtitleRenderWindow(QWidget):
         data = payload if isinstance(payload, dict) else {}
         restored = track_page_plan_from_dict(data.get("page_plan"))
         if restored is None:
+            saved_breaks = data.get("line_breaks_before")
+            has_complete_legacy_breaks = (
+                isinstance(saved_breaks, list)
+                and len(saved_breaks) >= len(track.lines)
+            )
+            if not has_complete_legacy_breaks:
+                # Early schema-v1 projects did not persist break_before.  At
+                # that time the LRC parser always reconstructed N3's default
+                # SeqLinesBreaker boundaries (two lines per page).  The modern
+                # parser intentionally stays structure-free, so replay that
+                # historical rule only for in-memory legacy migration.
+                apply_n3_seq_line_breaks(track)
             track.page_plan = build_legacy_page_plan(
                 track,
                 self._style,

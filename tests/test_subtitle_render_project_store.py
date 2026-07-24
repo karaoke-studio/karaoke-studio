@@ -1568,6 +1568,56 @@ def test_project_role_payload_applies_before_missing_schemes_are_materialized(
     assert "Aqua" not in win._style.custom_style_schemes
 
 
+def test_schema_v1_project_is_migrated_to_movable_page_plan_in_memory(
+    qapp, monkeypatch, tmp_path
+):
+    win = _make_window(qapp, monkeypatch)
+    lrc = tmp_path / "legacy.lrc"
+    lrc.write_text(
+        "".join(
+            f"[00:0{index}:00]{index}[00:0{index}:50]\n"
+            for index in range(1, 5)
+        ),
+        encoding="utf-8-sig",
+    )
+    legacy = {
+        "schema_version": 1,
+        "subtitle_path": str(lrc),
+        "style": style_to_dict(Style()),
+        # Early schema-v1 snapshots had no line_breaks_before and relied on
+        # the parser's historical two-line SeqLinesBreaker.  A larger layout
+        # must not collapse those two old pages into one four-line page.
+        "line_layout_indices": [4, 4, 4, 4],
+    }
+
+    win._apply_project_data(legacy)
+
+    assert "page_plan" not in legacy
+    assert win._timing_track.page_plan is not None
+    assert [
+        page.line_count
+        for section in win._timing_track.page_plan.sections
+        for page in section.pages
+    ] == [2, 2]
+    assert [
+        page.layout_id
+        for section in win._timing_track.page_plan.sections
+        for page in section.pages
+    ] == ["builtin-4", "builtin-4"]
+    assert any(
+        row.kind == "page_marker"
+        for row in win._lyrics_panel._presentation_rows
+    )
+
+    win._on_page_move_requested(0, 0, 1)
+
+    assert [
+        page.line_count
+        for section in win._timing_track.page_plan.sections
+        for page in section.pages
+    ] == [3, 1]
+
+
 def test_loading_lyrics_applies_each_selected_ambiguous_role_preset(
     qapp, monkeypatch
 ):
