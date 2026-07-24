@@ -209,12 +209,18 @@ struct ResolvedStyle {
     QString rubyAlignment = QStringLiteral("auto");
     QString rubyMainProgressMode = QStringLiteral("checkpoint_segments");
     bool rubyHorizontalGradientWithMain = true;
-    int rubyStrokeWidthPx = 0;
-    int rubyStroke2WidthPx = 0;
+    // These ruby fallbacks are "unset" until a scheme sets them explicitly.
+    // Empty/nullopt means "follow the effective (role) main text", resolved in
+    // applyGpuResolvedStyle against the role-resolved style — mirroring the CPU
+    // painter's lazy _ruby_* helpers and the existing rubyShadowOffset pattern.
+    // Baking them from the *global* main during base parsing made a role that
+    // overrode its main decoration/glow keep the global default for ruby.
+    std::optional<int> rubyStrokeWidthPx;
+    std::optional<int> rubyStroke2WidthPx;
     QString rubyDecorationKind;
-    int rubyGlowBeforeRadiusPx = 0;
-    int rubyGlowAfterRadiusPx = 0;
-    int rubyGlowConcentrationLevel = 0;
+    std::optional<int> rubyGlowBeforeRadiusPx;
+    std::optional<int> rubyGlowAfterRadiusPx;
+    std::optional<int> rubyGlowConcentrationLevel;
     bool litEnabled = false;
     QString litStyle = QStringLiteral("volume");
     int litNumber = 4;
@@ -1261,7 +1267,7 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     }
     if (hasNonNull(style, QStringLiteral("ruby_stroke_width_px"))) {
         cfg.rubyStrokeWidthPx = std::max(
-            0, intValue(style, QStringLiteral("ruby_stroke_width_px"), cfg.rubyStrokeWidthPx)
+            0, intValue(style, QStringLiteral("ruby_stroke_width_px"), 0)
         );
     }
     if (hasNonNull(style, QStringLiteral("ruby_stroke2_enabled"))
@@ -1269,7 +1275,7 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
         cfg.rubyStroke2WidthPx = 0;
     } else if (hasNonNull(style, QStringLiteral("ruby_stroke2_width_px"))) {
         cfg.rubyStroke2WidthPx = std::max(
-            0, intValue(style, QStringLiteral("ruby_stroke2_width_px"), cfg.rubyStroke2WidthPx)
+            0, intValue(style, QStringLiteral("ruby_stroke2_width_px"), 0)
         );
     }
     if (hasNonNull(style, QStringLiteral("ruby_decoration_kind"))) {
@@ -1290,7 +1296,7 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
             intValue(
                 style,
                 QStringLiteral("ruby_glow_before_radius_px"),
-                cfg.rubyGlowBeforeRadiusPx
+                0
             )
         );
     }
@@ -1300,7 +1306,7 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
             intValue(
                 style,
                 QStringLiteral("ruby_glow_after_radius_px"),
-                cfg.rubyGlowAfterRadiusPx
+                0
             )
         );
     }
@@ -1309,7 +1315,7 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
             intValue(
                 style,
                 QStringLiteral("ruby_glow_concentration_level"),
-                cfg.rubyGlowConcentrationLevel
+                0
             ),
             0,
             2
@@ -2164,49 +2170,50 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     base.rubyHorizontalGradientWithMain = style.value(
         QStringLiteral("ruby_horizontal_gradient_with_main")
     ).toBool(base.rubyHorizontalGradientWithMain);
-    const double rubyScale = static_cast<double>(base.rubyFontSizePx)
-        / static_cast<double>(std::max(base.fontSizePx, 1));
-    base.rubyStrokeWidthPx = style.value(QStringLiteral("ruby_stroke_width_px")).isDouble()
-        ? std::max(0, intValue(style, QStringLiteral("ruby_stroke_width_px"), 0))
-        : std::max(0, static_cast<int>(std::lround(base.strokeWidthPx * rubyScale)));
-    const bool rubyStroke2Enabled = style.value(QStringLiteral("ruby_stroke2_enabled")).isBool()
-        ? style.value(QStringLiteral("ruby_stroke2_enabled")).toBool()
-        : base.stroke2WidthPx > 0;
-    base.rubyStroke2WidthPx = rubyStroke2Enabled
-        ? (
-            style.value(QStringLiteral("ruby_stroke2_width_px")).isDouble()
-                ? std::max(0, intValue(style, QStringLiteral("ruby_stroke2_width_px"), 0))
-                : std::max(0, static_cast<int>(std::lround(base.stroke2WidthPx * rubyScale)))
-        )
-        : 0;
-    base.rubyDecorationKind = stringValue(
-        style, QStringLiteral("ruby_decoration_kind"), base.decorationKind
-    );
-    auto rubyGlowRadius = [&](const QString &field, int mainValue) {
-        return style.value(field).isDouble()
-            ? std::max(0, intValue(style, field, 0))
-            : std::max(0, static_cast<int>(std::lround(mainValue * rubyScale)));
-    };
+    // Ruby stroke/decoration/glow stay unset unless the *global* style sets them
+    // explicitly. The fallback to the effective main is applied per role in
+    // applyGpuResolvedStyle, so a role that overrides its own main no longer
+    // inherits the global main's baked ruby decoration/glow/stroke.
+    if (style.value(QStringLiteral("ruby_stroke_width_px")).isDouble()) {
+        base.rubyStrokeWidthPx = std::max(
+            0, intValue(style, QStringLiteral("ruby_stroke_width_px"), 0)
+        );
+    }
+    if (style.value(QStringLiteral("ruby_stroke2_enabled")).isBool()
+        && !style.value(QStringLiteral("ruby_stroke2_enabled")).toBool()) {
+        base.rubyStroke2WidthPx = 0;
+    } else if (style.value(QStringLiteral("ruby_stroke2_width_px")).isDouble()) {
+        base.rubyStroke2WidthPx = std::max(
+            0, intValue(style, QStringLiteral("ruby_stroke2_width_px"), 0)
+        );
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_decoration_kind"))) {
+        base.rubyDecorationKind = stringValue(
+            style, QStringLiteral("ruby_decoration_kind"), QString()
+        );
+    }
     const int rubyGlowCommon = style.value(QStringLiteral("ruby_glow_radius_px")).isDouble()
         ? std::max(0, intValue(style, QStringLiteral("ruby_glow_radius_px"), 0))
         : -1;
-    base.rubyGlowBeforeRadiusPx = style.value(QStringLiteral("ruby_glow_before_radius_px")).isDouble()
-        ? std::max(0, intValue(style, QStringLiteral("ruby_glow_before_radius_px"), 0))
-        : (rubyGlowCommon >= 0 ? rubyGlowCommon : rubyGlowRadius(
-            QStringLiteral("ruby_glow_before_radius_px"), base.glowBeforeRadiusPx
-        ));
-    base.rubyGlowAfterRadiusPx = style.value(QStringLiteral("ruby_glow_after_radius_px")).isDouble()
-        ? std::max(0, intValue(style, QStringLiteral("ruby_glow_after_radius_px"), 0))
-        : (rubyGlowCommon >= 0 ? rubyGlowCommon : rubyGlowRadius(
-            QStringLiteral("ruby_glow_after_radius_px"), base.glowAfterRadiusPx
-        ));
-    base.rubyGlowConcentrationLevel = style.value(
-        QStringLiteral("ruby_glow_concentration_level")
-    ).isDouble()
-        ? std::clamp(
+    if (style.value(QStringLiteral("ruby_glow_before_radius_px")).isDouble()) {
+        base.rubyGlowBeforeRadiusPx = std::max(
+            0, intValue(style, QStringLiteral("ruby_glow_before_radius_px"), 0)
+        );
+    } else if (rubyGlowCommon >= 0) {
+        base.rubyGlowBeforeRadiusPx = rubyGlowCommon;
+    }
+    if (style.value(QStringLiteral("ruby_glow_after_radius_px")).isDouble()) {
+        base.rubyGlowAfterRadiusPx = std::max(
+            0, intValue(style, QStringLiteral("ruby_glow_after_radius_px"), 0)
+        );
+    } else if (rubyGlowCommon >= 0) {
+        base.rubyGlowAfterRadiusPx = rubyGlowCommon;
+    }
+    if (style.value(QStringLiteral("ruby_glow_concentration_level")).isDouble()) {
+        base.rubyGlowConcentrationLevel = std::clamp(
             intValue(style, QStringLiteral("ruby_glow_concentration_level"), 0), 0, 2
-        )
-        : base.glowConcentrationLevel;
+        );
+    }
     cfg.lineYMarginPx = std::max(0, intValue(style, QStringLiteral("line_y_margin_px"), cfg.lineYMarginPx));
     cfg.layoutSemantics = stringValue(
         style, QStringLiteral("layout_semantics"), cfg.layoutSemantics
@@ -6941,16 +6948,39 @@ void applyGpuResolvedStyle(
     target.rubyAfterDecorPaint = gpuPaint(
         source.rubyAfterShadowFill, source.rubyAfterShadowColor
     );
-    target.rubyStrokeWidth = static_cast<float>(source.rubyStrokeWidthPx * scale);
-    target.rubyStroke2Width = static_cast<float>(source.rubyStroke2WidthPx * scale);
+    // Ruby stroke/decoration/glow that a scheme left unset follow this scheme's
+    // effective main text (same derivation the base parser used to bake from the
+    // global main). Resolving here — against the role-resolved ``source`` — is
+    // what keeps each role's ruby tied to its own main instead of the global.
+    const double rubyScale = static_cast<double>(source.rubyFontSizePx)
+        / static_cast<double>(std::max(source.fontSizePx, 1));
+    auto scaledFromMain = [&](int mainPx) {
+        return std::max(0, static_cast<int>(std::lround(mainPx * rubyScale)));
+    };
+    const int rubyStrokePx = source.rubyStrokeWidthPx.value_or(
+        scaledFromMain(source.strokeWidthPx)
+    );
+    const int rubyStroke2Px = source.rubyStroke2WidthPx.value_or(
+        source.stroke2WidthPx > 0 ? scaledFromMain(source.stroke2WidthPx) : 0
+    );
+    target.rubyStrokeWidth = static_cast<float>(rubyStrokePx * scale);
+    target.rubyStroke2Width = static_cast<float>(rubyStroke2Px * scale);
     target.rubyDecorationKind = (
         source.rubyDecorationKind.isEmpty()
             ? source.decorationKind
             : source.rubyDecorationKind
     ).toStdString();
-    target.rubyGlowBeforeRadius = static_cast<float>(source.rubyGlowBeforeRadiusPx * scale);
-    target.rubyGlowAfterRadius = static_cast<float>(source.rubyGlowAfterRadiusPx * scale);
-    target.rubyGlowConcentrationLevel = source.rubyGlowConcentrationLevel;
+    target.rubyGlowBeforeRadius = static_cast<float>(
+        source.rubyGlowBeforeRadiusPx.value_or(scaledFromMain(source.glowBeforeRadiusPx))
+        * scale
+    );
+    target.rubyGlowAfterRadius = static_cast<float>(
+        source.rubyGlowAfterRadiusPx.value_or(scaledFromMain(source.glowAfterRadiusPx))
+        * scale
+    );
+    target.rubyGlowConcentrationLevel = source.rubyGlowConcentrationLevel.value_or(
+        source.glowConcentrationLevel
+    );
     target.rubyShadowOffsetX = static_cast<float>(
         source.rubyShadowOffsetX.value_or(source.shadowOffsetX) * scale
     );

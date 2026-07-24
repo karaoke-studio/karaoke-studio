@@ -3350,6 +3350,151 @@ def test_native_utopia_ruby_group_with_glow_pixels_stay_within_bounded_diff(
     assert int((diff > 10).sum()) < 80_000
 
 
+def test_native_gpu_role_ruby_decoration_follows_role_main_not_global():
+    """GPU: a role's ruby with no explicit decoration follows the ROLE's main.
+
+    The global main decoration is ``shadow`` while role ``A``'s main is
+    ``glow``. Rendering role ``A`` three ways on the GPU sidecar pins the
+    resolution order the painter oracle already uses:
+
+    * ``ruby_decoration_kind`` unset      -> must equal the role's own main (glow)
+    * ``ruby_decoration_kind="shadow"``   -> the global main, must differ
+
+    The sidecar used to bake the ruby decoration from the *global* main while
+    parsing the base style, so a role that overrode only its main left the ruby
+    on the global decoration: the unset frame came out byte-identical to the
+    global-shadow frame instead of the role-glow one.
+    """
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    def fill(color: str) -> PaintFill:
+        return PaintFill(color=color)
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("A", 0, role_label="A"),
+                    TimingChar("B", 800, role_label="A"),
+                    TimingChar("C", 1600, role_label="A"),
+                ],
+                end_ms=2400,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="AB",
+                reading="xy",
+                reading_part_ms=[800],
+                pos_start_ms=0,
+                pos_end_ms=1600,
+            )
+        ],
+    )
+    main_colors = KaraokeColors(
+        before=KaraokeColorState(
+            text=fill("#FFFFFF"), stroke=fill("#111111"),
+            stroke2=fill("#00000000"), shadow=fill("#3CE0FF"),
+        ),
+        after=KaraokeColorState(
+            text=fill("#FF5A6F"), stroke=fill("#111111"),
+            stroke2=fill("#00000000"), shadow=fill("#FFD54A"),
+        ),
+    )
+    ruby_colors = KaraokeColors(
+        before=KaraokeColorState(
+            text=fill("#00FF88"), stroke=fill("#111111"),
+            stroke2=fill("#00000000"), shadow=fill("#3CE0FF"),
+        ),
+        after=KaraokeColorState(
+            text=fill("#FFCC00"), stroke=fill("#111111"),
+            stroke2=fill("#00000000"), shadow=fill("#FFD54A"),
+        ),
+    )
+
+    def style_with_ruby_decoration(ruby_decoration):
+        scheme = SubtitleStyleScheme(
+            decoration_kind="glow",
+            glow_before_radius_px=6,
+            glow_after_radius_px=6,
+            ruby_glow_before_radius_px=18,
+            ruby_glow_after_radius_px=18,
+            karaoke_colors=main_colors,
+            ruby_karaoke_colors=ruby_colors,
+            ruby_decoration_kind=ruby_decoration,
+        )
+        return Style(
+            font_family="Arial",
+            font_size_px=64,
+            ruby_font_size_px=56,
+            ruby_gap_px=8,
+            line_lead_in_ms=700,
+            line_tail_ms=1200,
+            line_y_position="center",
+            line_horizontal_layout="center",
+            stroke_width_px=2,
+            stroke2_width_px=0,
+            # Global main deliberately differs from the role's main.
+            decoration_kind="shadow",
+            shadow_offset_x=22,
+            shadow_offset_y=22,
+            entry_anim="none",
+            exit_anim="none",
+            karaoke_colors=main_colors,
+            custom_style_schemes={"A": scheme},
+        )
+
+    frames: dict[str, np.ndarray] = {}
+    with NativeRendererProcess(
+        renderer_path, response_timeout_s=20.0, close_timeout_s=1.0
+    ) as renderer:
+        for generation, (label, decoration) in enumerate(
+            (("unset", None), ("role_glow", "glow"), ("global_shadow", "shadow")),
+            start=1,
+        ):
+            renderer.configure_gpu(
+                track,
+                style_with_ruby_decoration(decoration),
+                width=640,
+                height=360,
+                fps=60,
+                dpr=1.0,
+                force_warp=True,
+                realization_enabled=False,
+            )
+            event = renderer.render_gpu_frame(
+                900,
+                force_warp=True,
+                generation=generation,
+                shm_key=f"krok-ruby-deco-{os.getpid()}-{uuid.uuid4().hex}",
+                include_checksum=False,
+                readback_bands=False,
+            )
+            with SharedFrameRingReader.from_event(event) as reader:
+                slot = reader.read_frame(event)
+            rows = np.frombuffer(slot.payload, dtype=np.uint8).reshape(
+                slot.height, slot.stride
+            )
+            frames[label] = (
+                rows[:, : slot.width * 4]
+                .reshape(slot.height, slot.width, 4)
+                .astype(int)
+                .copy()
+            )
+
+    assert frames["unset"][..., 3].max() > 0  # the ruby really rendered
+    # An unset ruby decoration resolves to the role's own main decoration...
+    assert np.array_equal(frames["unset"], frames["role_glow"])
+    # ...and must not fall back to the global main decoration.
+    assert not np.array_equal(frames["unset"], frames["global_shadow"])
+
 @_NATIVE_PARITY_DIVERGED
 def test_native_two_line_horizontal_pixels_stay_within_bounded_diff(
     tmp_path, monkeypatch
