@@ -34,6 +34,9 @@ class DisplayLine:
     lane: int
     display_start_ms: int
     display_end_ms: int
+    section_index: int = 0
+    page_index: int = 0
+    page_line_count: int = 1
 
 
 def assign_lanes(
@@ -141,6 +144,7 @@ def visible_display_lines(
     lane_count: int = 2,
     row_count_of: Optional[Callable[[TimingLine], int]] = None,
     bottom_align_of: Optional[Callable[[TimingLine], bool]] = None,
+    vertical_position_of: Optional[Callable[[TimingLine], str]] = None,
 ) -> list[DisplayLine]:
     """Return lines whose display window contains ``t_ms``.
 
@@ -170,6 +174,7 @@ def visible_display_lines(
         lane_count=lane_count,
         row_count_of=row_count_of,
         bottom_align_of=bottom_align_of,
+        vertical_position_of=vertical_position_of,
     )
     return [item for item in layouts if item.display_start_ms <= t_ms <= item.display_end_ms]
 
@@ -191,6 +196,7 @@ def compute_display_lines(
     lane_count: int = 2,
     row_count_of: Optional[Callable[[TimingLine], int]] = None,
     bottom_align_of: Optional[Callable[[TimingLine], bool]] = None,
+    vertical_position_of: Optional[Callable[[TimingLine], str]] = None,
 ) -> list[DisplayLine]:
     """Compute NicoKara-style display windows for all renderable lines.
 
@@ -215,16 +221,21 @@ def compute_display_lines(
     snap = max(continuity_snap_ms, 0)
     pair_second_delay = max(pair_second_delay_ms, 0)
     section_gap = max(section_gap_ms, 0)
-    section_ids = _compute_section_ids(render_lines, section_gap)
+    explicit_structure = _assign_lanes_from_page_plan(track, render_lines)
+    if explicit_structure is None:
+        section_ids = _compute_section_ids(render_lines, section_gap)
+        lanes, page_starts, page_rows = assign_lanes(
+            render_lines,
+            max(int(lane_count), 1),
+            row_count_of,
+            section_gap_ms=section_gap,
+        )
+        page_ids = _page_ids_from_starts(page_starts)
+    else:
+        lanes, page_starts, page_rows, section_ids, page_ids = explicit_structure
     section_end = _compute_section_ends(render_lines, section_ids, tail)
 
     lanes_total = max(int(lane_count), 1)
-    lanes, page_starts, page_rows = assign_lanes(
-        render_lines,
-        lanes_total,
-        row_count_of,
-        section_gap_ms=section_gap,
-    )
     if bottom_align_of is not None:
         _apply_n3_bottom_page_lanes(
             render_lines,
@@ -236,6 +247,15 @@ def compute_display_lines(
             bottom_align_of,
             lead=lead,
             tail=tail,
+        )
+    if vertical_position_of is not None:
+        _apply_center_page_lanes(
+            render_lines,
+            lanes,
+            page_rows,
+            lanes_total,
+            row_count_of,
+            vertical_position_of,
         )
 
     starts: list[int] = []
@@ -323,9 +343,106 @@ def compute_display_lines(
                 lane=lanes[index],
                 display_start_ms=display_start,
                 display_end_ms=display_end,
+                section_index=section_ids[index],
+                page_index=page_ids[index],
+                page_line_count=page_rows[index],
             )
         )
     return result
+
+
+def _apply_center_page_lanes(
+    render_lines: list[TimingLine],
+    lanes: list[int],
+    page_rows: list[int],
+    default_rows: int,
+    row_count_of: Optional[Callable[[TimingLine], int]],
+    vertical_position_of: Callable[[TimingLine], str],
+) -> None:
+    """Place a short center-aligned page in a contiguous centered lane block."""
+
+    index = 0
+    total = len(render_lines)
+    while index < total:
+        page_size = max(int(page_rows[index]), 1)
+        page_end = min(index + page_size, total)
+        first = render_lines[index]
+        configured_rows = max(
+            int(row_count_of(first)) if row_count_of is not None else int(default_rows),
+            1,
+        )
+        if (
+            str(vertical_position_of(first)) == "center"
+            and page_size < configured_rows
+        ):
+            shift = max((configured_rows - page_size + 1) // 2, 0)
+            for item_index in range(index, page_end):
+                lanes[item_index] += shift
+        index = page_end
+
+
+def _page_ids_from_starts(page_starts: list[int]) -> list[int]:
+    page_ids: list[int] = []
+    previous: Optional[int] = None
+    page_id = -1
+    for start in page_starts:
+        if previous is None or start != previous:
+            page_id += 1
+            previous = start
+        page_ids.append(page_id)
+    return page_ids
+
+
+def _assign_lanes_from_page_plan(
+    track: TimingTrack,
+    render_lines: list[TimingLine],
+) -> Optional[tuple[list[int], list[int], list[int], list[int], list[int]]]:
+    """Resolve the authoritative page counts without re-running legacy breaks."""
+
+    plan = getattr(track, "page_plan", None)
+    if plan is None:
+        return None
+    total = len(render_lines)
+    if total == 0:
+        return ([], [], [], [], [])
+    lanes: list[int] = []
+    page_starts: list[int] = []
+    page_rows: list[int] = []
+    section_ids: list[int] = []
+    page_ids: list[int] = []
+    cursor = 0
+    global_page = 0
+    for section_index, section in enumerate(plan.sections):
+        for page in section.pages:
+            if cursor >= total:
+                break
+            count = max(0, min(int(page.line_count), 8, total - cursor))
+            if count <= 0:
+                continue
+            for offset in range(count):
+                lanes.append(offset)
+                page_starts.append(cursor)
+                page_rows.append(count)
+                section_ids.append(section_index)
+                page_ids.append(global_page)
+            cursor += count
+            global_page += 1
+        if cursor >= total:
+            break
+    # Corrupt/truncated plans must not drop lyrics.  Keep the recovery local to
+    # this read path; project normalization will persist the repaired shape.
+    while cursor < total:
+        count = min(max(1, total - cursor), 8)
+        section_index = section_ids[-1] if section_ids else 0
+        for offset in range(count):
+            lanes.append(offset)
+            page_starts.append(cursor)
+            page_rows.append(count)
+            section_ids.append(section_index)
+            page_ids.append(global_page)
+        cursor += count
+        global_page += 1
+    return lanes, page_starts, page_rows, section_ids, page_ids
 
 
 def _apply_n3_bottom_page_lanes(

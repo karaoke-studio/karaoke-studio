@@ -4145,9 +4145,9 @@ class PropertyPanel(QWidget):
     defaultSchemeSaveRequested = Signal(str)
     defaultLayoutSaveRequested = Signal(int)
     layoutAssignAllRequested = Signal(int)
-    """「应用到全部行」：参数为布局 index（0 = 默认布局）。"""
+    """「应用到全部页」：参数为布局 index（0 = 默认布局）。"""
     layoutAutoAssignRequested = Signal()
-    """「按行数自动分配」：按页内行数匹配布局行数。"""
+    """「各页使用默认布局」：不重新分页，只恢复同行数默认布局。"""
     layoutDeleted = Signal(int)
     """布局被删除：参数为被删布局 index（>= 1），宿主需修正歌词行引用。"""
 
@@ -6438,19 +6438,21 @@ class PropertyPanel(QWidget):
         assign_btn_layout = QHBoxLayout(assign_btn_row)
         assign_btn_layout.setContentsMargins(0, 0, 0, 0)
         assign_btn_layout.setSpacing(6)
-        self._assign_all_btn = FluentPushButton("应用到全部行", assign_btn_row)
-        self._assign_all_btn.setToolTip("所有歌词行统一使用当前布局（N3 全部统一）。")
+        self._assign_all_btn = FluentPushButton("应用到全部页", assign_btn_row)
+        self._assign_all_btn.setToolTip(
+            "让当前字幕源的所有页面统一使用当前布局；若该布局无法容纳某一页，"
+            "则不会修改。"
+        )
         self._assign_all_btn.clicked.connect(
             lambda _checked=False: self.layoutAssignAllRequested.emit(
                 self._current_layout_index()
             )
         )
         self._auto_assign_btn = FluentPushButton(
-            "按行数自动分配", assign_btn_row
+            "各页使用默认布局", assign_btn_row
         )
         self._auto_assign_btn.setToolTip(
-            "每一页按页内行数匹配行数相同的布局（找不到按行数递减匹配，"
-            "仍找不到用默认布局）——对齐 N3 自动布局选择器。"
+            "不改变段落和分页；每一页仅按实际行数恢复项目的 1～8 行默认布局。"
         )
         self._auto_assign_btn.clicked.connect(
             lambda _checked=False: self.layoutAutoAssignRequested.emit()
@@ -6993,7 +6995,8 @@ class PropertyPanel(QWidget):
         self._section_gap_spin.valueChanged.connect(
             lambda value: self._update_style(section_gap_ms=value)
         )
-        grid.add_field("分段间隔", self._section_gap_spin)
+        # 分段间隔属于字幕源加载规则，已移至歌词列表工具栏的齿轮面板。
+        self._section_gap_spin.setVisible(False)
 
         self._section_ending_combo = _WheelFocusedComboBox(section)
         _compact_control(self._section_ending_combo)

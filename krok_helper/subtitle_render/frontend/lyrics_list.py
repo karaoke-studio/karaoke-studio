@@ -3,7 +3,7 @@
 UI 设计：
 
 - **空态**：居中显示"拖入字幕文件 / 点击此处选择"，受 :class:`DropPanel` 接管
-- **载入后**：``TableWidget``（qfluentwidgets），四列——轨 / 角色 / 特效 / 内容。
+- **载入后**：``TableWidget``（qfluentwidgets），五列——轨 / 角色 / 特效 / 内容 / 布局。
 
   - **轨**：多行布局下按实际渲染 lane（非空行序号 % 行数）标 T1 / T2 / …，
     同一组行共享一个浅色底，直观呈现"按页贴在一起"的显示分组
@@ -20,15 +20,25 @@ from collections import Counter
 from pathlib import Path
 from typing import Optional
 
-from dataclasses import replace as _dataclass_replace
+from dataclasses import dataclass, replace as _dataclass_replace
 
-from PyQt6.QtCore import QEvent, QPoint, QRectF, Qt, QSize, pyqtSignal as Signal
+from PyQt6.QtCore import (
+    QEvent,
+    QItemSelectionModel,
+    QPoint,
+    QRectF,
+    Qt,
+    QSize,
+    pyqtSignal as Signal,
+)
 from PyQt6.QtGui import QBrush, QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractItemView,
+    QApplication,
     QDialog,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -61,6 +71,10 @@ from qfluentwidgets.components.widgets.menu import MenuAnimationType
 from krok_helper.subtitle_render.engine.timeline import (
     assign_lanes,
 )
+from krok_helper.subtitle_render.engine.page_plan import (
+    ResolvedPagePlan,
+    resolve_page_plan,
+)
 from krok_helper.subtitle_render.guide_symbols import (
     GuideSymbolImportError,
     import_svg_guide_symbol,
@@ -86,6 +100,8 @@ from krok_helper.subtitle_render.models import (
     guide_symbol_role_labels,
     line_visible_chars,
     normalize_title_char_role_labels,
+    layout_capacity,
+    layout_index_for_id,
 )
 from krok_helper.subtitle_render.frontend.theme import palette, themed
 
@@ -93,12 +109,25 @@ COL_LANE = 0
 COL_ROLE = 1
 COL_EFFECT = 2
 COL_CONTENT = 3
+COL_LAYOUT = 4
 
-_COLUMN_HEADERS = ["轨", "角色", "特效", "内容"]
+_COLUMN_HEADERS = ["轨", "角色", "特效", "内容", "布局"]
 
 _ROW_HEIGHT = 34
 _BLANK_ROW_HEIGHT = 18
 _DEFAULT_ROLE_TEXT = "（默认）"
+
+
+@dataclass(frozen=True)
+class LyricsPresentationRow:
+    kind: str
+    track_line_index: Optional[int] = None
+    render_line_index: Optional[int] = None
+    section_index: Optional[int] = None
+    page_index: Optional[int] = None
+    global_page_index: Optional[int] = None
+    lane: Optional[int] = None
+    layout_id: Optional[str] = None
 
 _ENTRY_EFFECTS = (
     ("none", "无"),
@@ -906,6 +935,12 @@ class LyricsPanel(DropPanel):
     """「＋」按钮：请求添加副字幕源（N3 多歌词文件，如コーラス轨）。"""
     sourceRemoveRequested = Signal(int)
     """「－」按钮：请求移除当前选中的副字幕源（主字幕不可移除）。"""
+    sourceRefreshRequested = Signal()
+    sourceSettingsRequested = Signal(object)
+    pageBoundaryRequested = Signal(str, int)
+    """insert_page/delete_page/insert_section/delete_section, track line index."""
+    pageMoveRequested = Signal(int, int, int)
+    """section index, page index, direction; lyric order is never changed."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(
@@ -925,15 +960,20 @@ class LyricsPanel(DropPanel):
         # 每行元数据：(是否空行, 可渲染序号)；空行序号取 -1。
         # lane / 组号由序号 + 当前 Style 的行数动态推出（行数可随布局变化）。
         self._row_meta: list[tuple[bool, int]] = []
+        self._presentation_rows: list[LyricsPresentationRow] = []
+        self._resolved_page_plan: Optional[ResolvedPagePlan] = None
         # 段落最后一行标记（与渲染端 NKM3 式段落划分一致），随 style 阈值重算
         # 每个可渲染行的 lane / 页序号缓存（页首行布局定行数，与渲染端一致）
         self._render_lanes: list[int] = []
         self._render_groups: list[int] = []
+        self._page_drag_row: Optional[int] = None
+        self._page_drag_start = QPoint()
+        self._page_drag_active = False
 
         # ---- qfluentwidgets TableWidget ----
         self._table = FluentTableWidget(self)
         self._table.setObjectName("LyricsTable")
-        self._table.setColumnCount(4)
+        self._table.setColumnCount(5)
         self._table.setHorizontalHeaderLabels(_COLUMN_HEADERS)
 
         self._table.setFrameShape(FluentTableWidget.Shape.NoFrame)
@@ -951,6 +991,14 @@ class LyricsPanel(DropPanel):
         # 都不会把内容列滚出可视区。
         self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._table.setIconSize(QSize(14, 14))
+        self._page_drag_indicator = QFrame(self._table.viewport())
+        self._page_drag_indicator.setAttribute(
+            Qt.WidgetAttribute.WA_TransparentForMouseEvents
+        )
+        self._page_drag_indicator.setStyleSheet(
+            f"background: {palette().accent_primary}; border: none;"
+        )
+        self._page_drag_indicator.hide()
 
         self._table.verticalHeader().setVisible(False)
         self._table.verticalHeader().setDefaultSectionSize(_ROW_HEIGHT)
@@ -963,6 +1011,7 @@ class LyricsPanel(DropPanel):
         hh.setSectionResizeMode(COL_ROLE, QHeaderView.ResizeMode.Interactive)
         hh.setSectionResizeMode(COL_EFFECT, QHeaderView.ResizeMode.Interactive)
         hh.setSectionResizeMode(COL_CONTENT, QHeaderView.ResizeMode.Stretch)
+        hh.setSectionResizeMode(COL_LAYOUT, QHeaderView.ResizeMode.Interactive)
         # QHeaderView 只提供全局 minimumSectionSize。这里仅设置由当前 style
         # header margin 推导出的 DPI 感知技术下限；各列语义下限由下方字体与
         # 实际单元格 sizeHint 测量分别控制，不共享固定像素值。
@@ -985,6 +1034,7 @@ class LyricsPanel(DropPanel):
         self._table.setItemDelegateForColumn(COL_ROLE, self._role_delegate)
         self._table.setItemDelegateForColumn(COL_EFFECT, self._readonly_delegate)
         self._table.setItemDelegateForColumn(COL_CONTENT, self._readonly_delegate)
+        self._table.setItemDelegateForColumn(COL_LAYOUT, self._readonly_delegate)
 
         # ---- 字幕源工具条（对标 N3 多歌词文件：メイン / コーラス1 / …）----
         self._syncing_sources = False
@@ -1002,12 +1052,36 @@ class LyricsPanel(DropPanel):
         self._remove_source_btn = TransparentToolButton(FIF.REMOVE, self._source_bar)
         self._remove_source_btn.setToolTip("移除当前副字幕源")
         self._remove_source_btn.clicked.connect(self._on_remove_source_clicked)
-        for button in (self._add_source_btn, self._remove_source_btn):
+        self._refresh_source_btn = TransparentToolButton(FIF.SYNC, self._source_bar)
+        self._refresh_source_btn.setToolTip(
+            "使用已保存的加载设置重新读取当前字幕源，并重新生成段落、页面和默认布局。"
+            "歌词角色、逐行特效、导唱符及手动显示时间会在能够可靠匹配时保留；"
+            "手工调整的分页将被覆盖。"
+        )
+        self._refresh_source_btn.clicked.connect(
+            lambda: self.sourceRefreshRequested.emit()
+        )
+        self._settings_source_btn = TransparentToolButton(FIF.SETTING, self._source_bar)
+        self._settings_source_btn.setToolTip(
+            "设置字幕源的分段和分页方式。加载设置独立于字体、颜色、位置等渲染样式；"
+            "保存后会自动重新加载受影响的字幕源。"
+        )
+        self._settings_source_btn.clicked.connect(
+            lambda: self.sourceSettingsRequested.emit(self._settings_source_btn)
+        )
+        for button in (
+            self._add_source_btn,
+            self._remove_source_btn,
+            self._refresh_source_btn,
+            self._settings_source_btn,
+        ):
             button.setFixedSize(26, 26)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
         source_layout.addWidget(self._source_combo, 1)
         source_layout.addWidget(self._add_source_btn)
         source_layout.addWidget(self._remove_source_btn)
+        source_layout.addWidget(self._refresh_source_btn)
+        source_layout.addWidget(self._settings_source_btn)
         self._source_bar.setVisible(False)
 
         container = QWidget(self)
@@ -1080,6 +1154,89 @@ class LyricsPanel(DropPanel):
         if self._populated:
             self._refresh_presentation()
 
+    def _layout_name_for_id(self, layout_id: Optional[str]) -> str:
+        index = layout_index_for_id(self._style, str(layout_id or "default"))
+        if index <= 0:
+            return "默认布局"
+        return self._style.layouts[index - 1].name
+
+    def _build_presentation_rows(
+        self, track: TimingTrack
+    ) -> list[LyricsPresentationRow]:
+        if track.page_plan is None:
+            rows: list[LyricsPresentationRow] = []
+            render_index = 0
+            for track_index, line in enumerate(track.lines):
+                if line.is_blank or not line.chars:
+                    rows.append(
+                        LyricsPresentationRow(
+                            "source_blank", track_line_index=track_index
+                        )
+                    )
+                else:
+                    rows.append(
+                        LyricsPresentationRow(
+                            "lyric",
+                            track_line_index=track_index,
+                            render_line_index=render_index,
+                        )
+                    )
+                    render_index += 1
+            self._resolved_page_plan = None
+            return rows
+
+        resolved = resolve_page_plan(track, self._style)
+        self._resolved_page_plan = resolved
+        by_track = {item.track_line_index: item for item in resolved.lines}
+        rows = []
+        seen_sections: set[int] = set()
+        seen_pages: set[int] = set()
+        hide_source_blanks = bool(
+            track.loading_settings_snapshot.blank_line_section_enabled
+        )
+        for track_index, line in enumerate(track.lines):
+            item = by_track.get(track_index)
+            if item is None:
+                if not hide_source_blanks:
+                    rows.append(
+                        LyricsPresentationRow(
+                            "source_blank", track_line_index=track_index
+                        )
+                    )
+                continue
+            if item.section_index not in seen_sections:
+                seen_sections.add(item.section_index)
+                rows.append(
+                    LyricsPresentationRow(
+                        "section_marker",
+                        section_index=item.section_index,
+                    )
+                )
+            if item.global_page_index not in seen_pages:
+                seen_pages.add(item.global_page_index)
+                rows.append(
+                    LyricsPresentationRow(
+                        "page_marker",
+                        section_index=item.section_index,
+                        page_index=item.page_index_in_section,
+                        global_page_index=item.global_page_index,
+                        layout_id=item.layout_id,
+                    )
+                )
+            rows.append(
+                LyricsPresentationRow(
+                    "lyric",
+                    track_line_index=track_index,
+                    render_line_index=item.render_line_index,
+                    section_index=item.section_index,
+                    page_index=item.page_index_in_section,
+                    global_page_index=item.global_page_index,
+                    lane=item.lane,
+                    layout_id=item.layout_id,
+                )
+            )
+        return rows
+
     def set_track(self, track: Optional[TimingTrack]) -> None:
         """加载 / 清空字幕。``None`` / 无行时回到空态。"""
         self._title_mode = False
@@ -1091,32 +1248,46 @@ class LyricsPanel(DropPanel):
             self._table.clearSpans()
             self._table.setRowCount(0)
             self._row_meta = []
+            self._presentation_rows = []
+            self._resolved_page_plan = None
             if track is None or not track.lines:
                 self.set_populated(False)
                 return
 
-            num_rows = len(track.lines)
+            self._presentation_rows = self._build_presentation_rows(track)
+            num_rows = len(self._presentation_rows)
             self._table.setRowCount(num_rows)
-            render_index = 0
-            for row, line in enumerate(track.lines):
-                blank = bool(line.is_blank or not line.chars)
-                if blank:
-                    self._row_meta.append((True, -1))
-                else:
-                    self._row_meta.append((False, render_index))
-                    render_index += 1
+            for row, presentation in enumerate(self._presentation_rows):
+                line = (
+                    track.lines[presentation.track_line_index]
+                    if presentation.track_line_index is not None
+                    else None
+                )
+                lyric = presentation.kind == "lyric" and line is not None
+                blank = not lyric
+                self._row_meta.append(
+                    (
+                        blank,
+                        (
+                            int(presentation.render_line_index)
+                            if presentation.render_line_index is not None
+                            else -1
+                        ),
+                    )
+                )
 
                 lane_item = QTableWidgetItem("")
                 lane_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 lane_item.setFlags(
                     Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
-                    if not blank
+                    if presentation.kind
+                    in {"lyric", "page_marker", "section_marker"}
                     else Qt.ItemFlag.NoItemFlags
                 )
                 self._table.setItem(row, COL_LANE, lane_item)
 
-                role = _dominant_role(line)
-                mixed = not blank and _line_role_mixed(line)
+                role = _dominant_role(line) if line is not None else ""
+                mixed = lyric and line is not None and _line_role_mixed(line)
                 role_item = QTableWidgetItem(
                     "混合" if mixed else (role if role else _DEFAULT_ROLE_TEXT)
                 )
@@ -1129,16 +1300,20 @@ class LyricsPanel(DropPanel):
                     role_item.setFlags(Qt.ItemFlag.NoItemFlags)
                 self._table.setItem(row, COL_ROLE, role_item)
 
-                effect_item = QTableWidgetItem(_animation_summary(self._style, line.animation_override))
+                effect_item = QTableWidgetItem(
+                    _animation_summary(self._style, line.animation_override)
+                    if line is not None
+                    else ""
+                )
                 effect_item.setFlags(effect_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 if blank:
                     effect_item.setFlags(Qt.ItemFlag.NoItemFlags)
                 self._table.setItem(row, COL_EFFECT, effect_item)
 
                 content_item = QTableWidgetItem(
-                    _line_content_text(line) if not blank else ""
+                    _line_content_text(line) if lyric and line is not None else ""
                 )
-                icon_symbol = _line_guide_icon_symbol(line) if not blank else None
+                icon_symbol = _line_guide_icon_symbol(line) if lyric else None
                 if icon_symbol is not None:
                     content_item.setIcon(_guide_symbol_icon(icon_symbol))
                 if not blank:
@@ -1149,12 +1324,34 @@ class LyricsPanel(DropPanel):
                 if blank:
                     content_item.setFlags(Qt.ItemFlag.NoItemFlags)
                 self._table.setItem(row, COL_CONTENT, content_item)
+                layout_item = QTableWidgetItem(
+                    self._layout_name_for_id(presentation.layout_id) if lyric else ""
+                )
+                layout_item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+                )
+                layout_item.setFlags(
+                    layout_item.flags() & ~Qt.ItemFlag.ItemIsEditable
+                    if lyric
+                    else Qt.ItemFlag.NoItemFlags
+                )
+                self._table.setItem(row, COL_LAYOUT, layout_item)
 
-                if blank:
-                    # 间奏 / 段落分隔：矮行 + 跨四列的居中提示
-                    self._table.setSpan(row, 0, 1, 4)
+                if presentation.kind != "lyric":
+                    self._table.setSpan(row, 0, 1, 5)
                     self._table.setRowHeight(row, _BLANK_ROW_HEIGHT)
-                    lane_item.setText("♪")
+                    if presentation.kind == "section_marker":
+                        lane_item.setText(
+                            f"♪♪♪ S{int(presentation.section_index or 0) + 1} ♪♪♪"
+                        )
+                    elif presentation.kind == "page_marker":
+                        lane_item.setText(
+                            "♪ "
+                            f"S{int(presentation.section_index or 0) + 1} · "
+                            f"P{int(presentation.page_index or 0) + 1} ♪"
+                        )
+                    else:
+                        lane_item.setText("♪")
                 else:
                     self._table.setRowHeight(row, _ROW_HEIGHT)
         finally:
@@ -1186,17 +1383,21 @@ class LyricsPanel(DropPanel):
         ]
         self.set_track(TimingTrack(lines=lines))
         self._title_mode = True
-        self._table.setHorizontalHeaderLabels(["行", "角色", "", "内容"])
+        self._table.setHorizontalHeaderLabels(["行", "角色", "", "内容", "布局"])
         self._refresh_presentation()
         self._apply_measured_column_widths()
 
     def refresh_row_role(self, row: int) -> None:
         """宿主改完 role_label 后刷新该行的色点（角色文本已由委托更新）。"""
-        self._refresh_presentation(rows=[row])
+        display_row = self._display_row_for_track_line(row)
+        if display_row is not None:
+            self._refresh_presentation(rows=[display_row])
 
     def refresh_row_effect(self, row: int) -> None:
         """逐行动画覆盖变化后刷新该行摘要。"""
-        self._refresh_presentation(rows=[row])
+        display_row = self._display_row_for_track_line(row)
+        if display_row is not None:
+            self._refresh_presentation(rows=[display_row])
 
     @property
     def list_widget(self):
@@ -1209,9 +1410,10 @@ class LyricsPanel(DropPanel):
 
     def select_row(self, row: int) -> bool:
         """Select and reveal one lyrics row without emitting a click action."""
-        if not 0 <= int(row) < self._table.rowCount():
+        display_row = self._display_row_for_track_line(int(row))
+        if display_row is None:
             return False
-        row = int(row)
+        row = display_row
         item = self._table.item(row, COL_CONTENT) or self._table.item(row, COL_LANE)
         if item is None:
             return False
@@ -1223,6 +1425,40 @@ class LyricsPanel(DropPanel):
             QAbstractItemView.ScrollHint.PositionAtCenter,
         )
         return True
+
+    def _display_row_for_track_line(self, track_line_index: int) -> Optional[int]:
+        return next(
+            (
+                row
+                for row, item in enumerate(self._presentation_rows)
+                if item.kind == "lyric"
+                and item.track_line_index == int(track_line_index)
+            ),
+            None,
+        )
+
+    def _track_rows_for_presentation_row(self, row: int) -> list[int]:
+        if not 0 <= row < len(self._presentation_rows):
+            return []
+        item = self._presentation_rows[row]
+        if item.kind == "lyric" and item.track_line_index is not None:
+            return [item.track_line_index]
+        resolved = self._resolved_page_plan
+        if resolved is None:
+            return []
+        if item.kind == "page_marker" and item.global_page_index is not None:
+            if 0 <= item.global_page_index < len(resolved.pages):
+                return list(
+                    resolved.pages[item.global_page_index].track_line_indices
+                )
+        if item.kind == "section_marker" and item.section_index is not None:
+            if 0 <= item.section_index < len(resolved.sections):
+                return [
+                    track_index
+                    for page in resolved.sections[item.section_index].pages
+                    for track_index in page.track_line_indices
+                ]
+        return []
 
     # ------------------------------------------------------------------ private
 
@@ -1303,6 +1539,11 @@ class LyricsPanel(DropPanel):
             return self._effect_minimum_width()
         if column == COL_LANE:
             return self._visible_column_width_hint(COL_LANE)
+        if column == COL_LAYOUT:
+            return max(
+                self._header_width_hint(COL_LAYOUT),
+                self._table.fontMetrics().horizontalAdvance("默认 8 行") + 20,
+            )
         return self._content_minimum_width()
 
     def _column_maximum_width(self, column: int) -> int:
@@ -1312,9 +1553,22 @@ class LyricsPanel(DropPanel):
             return 16_777_215  # 布局未落位时不设限（QWIDGETSIZE_MAX）
         header = self._table.horizontalHeader()
         lane = 0 if header.isSectionHidden(COL_LANE) else header.sectionSize(COL_LANE)
+        if column == COL_LAYOUT:
+            maximum = (
+                available
+                - lane
+                - header.sectionSize(COL_ROLE)
+                - header.sectionSize(COL_EFFECT)
+                - self._content_minimum_width()
+            )
+            return max(maximum, self._column_minimum_width(column))
         other = COL_EFFECT if column == COL_ROLE else COL_ROLE
         maximum = (
-            available - lane - header.sectionSize(other) - self._content_minimum_width()
+            available
+            - lane
+            - header.sectionSize(COL_LAYOUT)
+            - header.sectionSize(other)
+            - self._content_minimum_width()
         )
         return max(maximum, self._column_minimum_width(column))
 
@@ -1330,6 +1584,7 @@ class LyricsPanel(DropPanel):
             lane
             + self._role_minimum_width()
             + self._effect_minimum_width()
+            + self._column_minimum_width(COL_LAYOUT)
             + self._content_minimum_width()
             + self._table.verticalScrollBar().sizeHint().width()
             + 2 * self._table.frameWidth()
@@ -1358,8 +1613,12 @@ class LyricsPanel(DropPanel):
         role_ideal = max(role_min, self._visible_column_width_hint(COL_ROLE))
         effect_ideal = max(effect_min, self._visible_column_width_hint(COL_EFFECT))
         lane_width = 0 if header.isSectionHidden(COL_LANE) else header.sectionSize(COL_LANE)
+        layout_width = max(
+            self._column_minimum_width(COL_LAYOUT),
+            self._visible_column_width_hint(COL_LAYOUT),
+        )
         content_min = self._column_minimum_width(COL_CONTENT)
-        budget = max(available - lane_width - content_min, 0)
+        budget = max(available - lane_width - layout_width - content_min, 0)
 
         role_width, effect_width = role_ideal, effect_ideal
         minimum_total = role_min + effect_min
@@ -1380,6 +1639,8 @@ class LyricsPanel(DropPanel):
                 header.resizeSection(COL_ROLE, role_width)
             if COL_EFFECT not in self._user_sized_columns:
                 header.resizeSection(COL_EFFECT, effect_width)
+            if COL_LAYOUT not in self._user_sized_columns:
+                header.resizeSection(COL_LAYOUT, layout_width)
         finally:
             self._setting_column_widths = False
 
@@ -1389,7 +1650,11 @@ class LyricsPanel(DropPanel):
         上限保证拖宽角色 / 特效时内容列最多缩到自己的语义下限就顶住，
         表格总宽从不超过 viewport——内容列不可能被推到右侧属性面板后面。
         """
-        if self._setting_column_widths or column not in (COL_ROLE, COL_EFFECT):
+        if self._setting_column_widths or column not in (
+            COL_ROLE,
+            COL_EFFECT,
+            COL_LAYOUT,
+        ):
             return
         self._user_sized_columns.add(column)
         clamped = min(
@@ -1413,7 +1678,8 @@ class LyricsPanel(DropPanel):
             return
         header = self._table.horizontalHeader()
         lane = 0 if header.isSectionHidden(COL_LANE) else header.sectionSize(COL_LANE)
-        budget = available - lane - self._content_minimum_width()
+        layout = header.sectionSize(COL_LAYOUT)
+        budget = available - lane - layout - self._content_minimum_width()
         overflow = (
             header.sectionSize(COL_ROLE) + header.sectionSize(COL_EFFECT) - budget
         )
@@ -1437,7 +1703,144 @@ class LyricsPanel(DropPanel):
             # 变宽时把多出的空间自然还给 Stretch 的内容列。
             self._apply_measured_column_widths()
             self._clamp_columns_to_viewport()
+        elif obj is self._table.viewport():
+            if (
+                event.type() == QEvent.Type.MouseButtonPress
+                and event.button() == Qt.MouseButton.LeftButton
+            ):
+                point = event.position().toPoint()
+                row = self._table.rowAt(point.y())
+                self._page_drag_row = (
+                    row
+                    if 0 <= row < len(self._presentation_rows)
+                    and self._presentation_rows[row].kind == "lyric"
+                    and self._resolved_page_plan is not None
+                    and not self._title_mode
+                    else None
+                )
+                self._page_drag_start = point
+                self._page_drag_active = False
+            elif (
+                event.type() == QEvent.Type.MouseMove
+                and self._page_drag_row is not None
+                and event.buttons() & Qt.MouseButton.LeftButton
+            ):
+                if (
+                    event.position().toPoint() - self._page_drag_start
+                ).manhattanLength() >= QApplication.startDragDistance():
+                    self._page_drag_active = True
+                    self._table.viewport().setCursor(
+                        Qt.CursorShape.ClosedHandCursor
+                    )
+                if self._page_drag_active:
+                    self._update_page_drag_preview(
+                        self._table.rowAt(event.position().toPoint().y()),
+                        event.globalPosition().toPoint(),
+                    )
+                    return True
+            elif (
+                event.type() == QEvent.Type.MouseButtonRelease
+                and event.button() == Qt.MouseButton.LeftButton
+            ):
+                source_row = self._page_drag_row
+                was_dragging = self._page_drag_active
+                self._page_drag_row = None
+                self._page_drag_active = False
+                self._table.viewport().unsetCursor()
+                self._page_drag_indicator.hide()
+                if was_dragging and source_row is not None:
+                    target_row = self._table.rowAt(event.position().toPoint().y())
+                    move = self._page_boundary_move_for_drag(
+                        source_row, target_row
+                    )
+                    if move is not None:
+                        self.pageMoveRequested.emit(*move)
+                    else:
+                        QToolTip.showText(
+                            event.globalPosition().toPoint(),
+                            "拖动只调整分页：请将一页的首行拖入上一页，"
+                            "或将一页的末行拖入下一页。",
+                            self._table,
+                        )
+                    return True
         return super().eventFilter(obj, event)
+
+    def _update_page_drag_preview(self, target_row: int, global_pos: QPoint) -> None:
+        source_row = self._page_drag_row
+        move = (
+            self._page_boundary_move_for_drag(source_row, target_row)
+            if source_row is not None
+            else None
+        )
+        if move is None or self._resolved_page_plan is None:
+            self._page_drag_indicator.hide()
+            QToolTip.showText(
+                global_pos,
+                "此处不能调整分页",
+                self._table,
+            )
+            return
+        section_index, page_index, direction = move
+        page = self._resolved_page_plan.sections[section_index].pages[page_index]
+        item = self._table.item(target_row, COL_CONTENT)
+        if item is None:
+            self._page_drag_indicator.hide()
+            return
+        rect = self._table.visualItemRect(item)
+        y = rect.bottom() - 1 if direction > 0 else rect.top() - 1
+        self._page_drag_indicator.setGeometry(
+            0,
+            max(y, 0),
+            self._table.viewport().width(),
+            3,
+        )
+        self._page_drag_indicator.show()
+        self._page_drag_indicator.raise_()
+        QToolTip.showText(
+            global_pos,
+            f"目标页将变为 {page.line_count + direction} 行",
+            self._table,
+        )
+
+    def _page_boundary_move_for_drag(
+        self, source_row: int, target_row: int
+    ) -> Optional[tuple[int, int, int]]:
+        """Translate a boundary-line drag into one deterministic page move."""
+
+        resolved = self._resolved_page_plan
+        if (
+            resolved is None
+            or not 0 <= source_row < len(self._presentation_rows)
+            or not 0 <= target_row < len(self._presentation_rows)
+        ):
+            return None
+        source_item = self._presentation_rows[source_row]
+        if source_item.track_line_index is None:
+            return None
+        source = resolved.line_for_track_index(source_item.track_line_index)
+        target_rows = self._track_rows_for_presentation_row(target_row)
+        target = (
+            resolved.line_for_track_index(target_rows[0])
+            if target_rows
+            else None
+        )
+        if source is None or target is None or source.section_index != target.section_index:
+            return None
+        page = resolved.pages[source.global_page_index]
+        if (
+            page.track_line_indices
+            and source.track_line_index == page.track_line_indices[0]
+            and source.page_index_in_section > 0
+            and target.page_index_in_section == source.page_index_in_section - 1
+        ):
+            return source.section_index, target.page_index_in_section, 1
+        if (
+            page.track_line_indices
+            and source.track_line_index == page.track_line_indices[-1]
+            and target.page_index_in_section == source.page_index_in_section + 1
+        ):
+            return source.section_index, source.page_index_in_section, -1
+        return None
 
     def changeEvent(self, event: QEvent) -> None:  # noqa: N802 - Qt API
         super().changeEvent(event)
@@ -1453,7 +1856,7 @@ class LyricsPanel(DropPanel):
             self._update_minimum_width()
             self._apply_measured_column_widths()
             header = self._table.horizontalHeader()
-            for column in (COL_ROLE, COL_EFFECT):
+            for column in (COL_ROLE, COL_EFFECT, COL_LAYOUT):
                 minimum = self._column_minimum_width(column)
                 if header.sectionSize(column) < minimum:
                     self._setting_column_widths = True
@@ -1474,6 +1877,15 @@ class LyricsPanel(DropPanel):
         self._render_lanes = []
         self._render_groups = []
         if self._track is None:
+            return
+        if self._track.page_plan is not None:
+            resolved = resolve_page_plan(self._track, self._style)
+            self._resolved_page_plan = resolved
+            self._render_lanes = [0] * len(resolved.lines)
+            self._render_groups = [0] * len(resolved.lines)
+            for item in resolved.lines:
+                self._render_lanes[item.render_line_index] = item.lane
+                self._render_groups[item.render_line_index] = item.global_page_index
             return
         render_lines = [
             line for line in self._track.lines if not line.is_blank and line.chars
@@ -1505,13 +1917,13 @@ class LyricsPanel(DropPanel):
             return None
         if row < 0 or row >= len(self._row_meta):
             return None
-        blank, render_index = self._row_meta[row]
+        presentation = self._presentation_rows[row]
         group = (
-            self._render_groups[render_index]
-            if 0 <= render_index < len(self._render_groups)
+            int(presentation.global_page_index)
+            if presentation.global_page_index is not None
             else -1
         )
-        if blank or group % 2 != 1:
+        if presentation.kind != "lyric" or group % 2 != 1:
             return None
         color = QColor(palette().accent_primary)
         color.setAlpha(38 if getattr(palette(), "is_dark", False) else 24)
@@ -1544,29 +1956,45 @@ class LyricsPanel(DropPanel):
                 role_item = self._table.item(row, COL_ROLE)
                 content_item = self._table.item(row, COL_CONTENT)
                 effect_item = self._table.item(row, COL_EFFECT)
-                if lane_item is None or role_item is None or effect_item is None or content_item is None:
+                layout_item = self._table.item(row, COL_LAYOUT)
+                if (
+                    lane_item is None
+                    or role_item is None
+                    or effect_item is None
+                    or content_item is None
+                    or layout_item is None
+                ):
                     continue
                 if blank:
                     continue
 
+                presentation = self._presentation_rows[row]
+                track_index = presentation.track_line_index
                 line = (
-                    self._track.lines[row]
-                    if self._track is not None and row < len(self._track.lines)
+                    self._track.lines[track_index]
+                    if self._track is not None
+                    and track_index is not None
+                    and 0 <= track_index < len(self._track.lines)
                     else None
                 )
                 line_style = (
                     _effective_layout_style(style, line) if line is not None else style
                 )
                 lane_item.setText(
-                    str(row + 1)
+                    str((track_index or 0) + 1)
                     if self._title_mode
                     else (f"T{lane + 1}" if dual else "")
                 )
                 layout_ref = int(getattr(line, "layout_index", 0) or 0) if line else 0
                 if 1 <= layout_ref <= len(style.layouts):
                     lane_item.setToolTip(f"布局：{style.layouts[layout_ref - 1].name}")
+                    layout_item.setText(style.layouts[layout_ref - 1].name)
                 else:
                     lane_item.setToolTip("布局：默认布局")
+                    layout_item.setText("默认布局")
+                layout_item.setToolTip(
+                    f"当前页面使用“{layout_item.text()}”。单击可选择同容量或更大容量的布局。"
+                )
                 lane_item.setForeground(QBrush(lane_color))
                 lane_font = lane_item.font()
                 lane_font.setPointSizeF(8.0)
@@ -1700,15 +2128,17 @@ class LyricsPanel(DropPanel):
         """右键菜单：把布局应用到选中行（宿主按页联动扩散到同页行）。"""
         if self._track is None:
             return
-        rows = sorted({item.row() for item in self._table.selectedItems()})
+        display_rows = sorted({item.row() for item in self._table.selectedItems()})
         clicked = self._table.rowAt(pos.y())
-        if clicked >= 0 and clicked not in rows:
-            rows = [clicked]
-        rows = [
-            row
-            for row in rows
-            if 0 <= row < len(self._row_meta) and not self._row_meta[row][0]
-        ]
+        if clicked >= 0 and clicked not in display_rows:
+            display_rows = [clicked]
+        rows = list(
+            dict.fromkeys(
+                track_row
+                for display_row in display_rows
+                for track_row in self._track_rows_for_presentation_row(display_row)
+            )
+        )
         if not rows:
             return
         menu = _StableRoundMenu(parent=self._table)
@@ -1736,6 +2166,41 @@ class LyricsPanel(DropPanel):
                     lambda _checked=False, rs=list(rows): self.guideSymbolRemoveRequested.emit(rs)
                 )
                 menu.addAction(remove_guide_action)
+            menu.addSeparator()
+            anchor_row = rows[0]
+            insert_page = Action("在此行前插入分页", menu)
+            insert_page.triggered.connect(
+                lambda _checked=False, r=anchor_row: self.pageBoundaryRequested.emit(
+                    "insert_page", r
+                )
+            )
+            menu.addAction(insert_page)
+            insert_section = Action("在此行前插入分段", menu)
+            insert_section.triggered.connect(
+                lambda _checked=False, r=anchor_row: self.pageBoundaryRequested.emit(
+                    "insert_section", r
+                )
+            )
+            menu.addAction(insert_section)
+            if self._resolved_page_plan is not None:
+                resolved_line = self._resolved_page_plan.line_for_track_index(anchor_row)
+                if resolved_line is not None and resolved_line.render_line_index > 0:
+                    if resolved_line.page_index_in_section > 0:
+                        delete_page = Action("删除此分页", menu)
+                        delete_page.triggered.connect(
+                            lambda _checked=False, r=anchor_row: (
+                                self.pageBoundaryRequested.emit("delete_page", r)
+                            )
+                        )
+                        menu.addAction(delete_page)
+                    elif resolved_line.section_index > 0:
+                        delete_section = Action("删除此分段", menu)
+                        delete_section.triggered.connect(
+                            lambda _checked=False, r=anchor_row: (
+                                self.pageBoundaryRequested.emit("delete_section", r)
+                            )
+                        )
+                        menu.addAction(delete_section)
             menu.addSeparator()
         role_menu = _StableRoundMenu("应用角色方案", menu)
         current_roles = {
@@ -1777,12 +2242,55 @@ class LyricsPanel(DropPanel):
             if row < len(self._track.lines)
         }
         names = ["默认布局"] + [layout.name for layout in self._style.layouts]
+        selected_page_counts: list[int] = []
+        selected_page_indices: set[int] = set()
+        if self._resolved_page_plan is not None:
+            selected_page_indices = {
+                line.global_page_index
+                for row in rows
+                for line in [self._resolved_page_plan.line_for_track_index(row)]
+                if line is not None
+            }
+            selected_page_counts = [
+                self._resolved_page_plan.pages[index].line_count
+                for index in selected_page_indices
+            ]
+        selected_layouts = (
+            {
+                self._resolved_page_plan.pages[index].layout_id
+                for index in selected_page_indices
+            }
+            if self._resolved_page_plan is not None
+            else set()
+        )
+        if len(selected_layouts) > 1:
+            mixed = Action("当前：多个布局", layout_menu)
+            mixed.setEnabled(False)
+            layout_menu.addAction(mixed)
+            layout_menu.addSeparator()
+        max_page_rows = max(selected_page_counts, default=1)
+        affected_lines = sum(selected_page_counts)
         for index, name in enumerate(names):
             action = (
                 Action(_swatch_icon(QColor("#FF5A6F")), name, layout_menu)
                 if index in current_indices
                 else Action(name, layout_menu)
             )
+            layout_id = (
+                "default"
+                if index == 0
+                else self._style.layouts[index - 1].layout_id
+            )
+            if layout_capacity(self._style, layout_id) < max_page_rows:
+                action.setEnabled(False)
+                action.setToolTip(
+                    f"所选页面最多有 {max_page_rows} 行，此布局无法容纳。"
+                )
+            else:
+                action.setToolTip(
+                    f"应用到 {max(len(selected_page_indices), 1)} 页，"
+                    f"共 {max(affected_lines, len(rows))} 行。"
+                )
             action.triggered.connect(
                 lambda _checked=False, idx=index, rs=list(rows): (
                     self.layoutChangeRequested.emit(rs, idx)
@@ -1823,9 +2331,38 @@ class LyricsPanel(DropPanel):
 
     def _on_cell_clicked(self, row: int, column: int) -> None:
         """跳转到歌词行；角色列单击直接弹出 Fluent 角色菜单。"""
-        self.rowClicked.emit(row)
+        track_rows = self._track_rows_for_presentation_row(row)
+        if not track_rows:
+            return
+        if (
+            0 <= row < len(self._presentation_rows)
+            and self._presentation_rows[row].kind
+            in {"page_marker", "section_marker"}
+        ):
+            selection = self._table.selectionModel()
+            selection.clearSelection()
+            flags = (
+                QItemSelectionModel.SelectionFlag.Select
+                | QItemSelectionModel.SelectionFlag.Rows
+            )
+            display_rows = {
+                display_row
+                for track_row in track_rows
+                for display_row in [self._display_row_for_track_line(track_row)]
+                if display_row is not None
+            }
+            display_rows.add(row)
+            for display_row in sorted(display_rows):
+                selection.select(
+                    self._table.model().index(display_row, COL_LANE),
+                    flags,
+                )
+        track_row = track_rows[0]
+        self.rowClicked.emit(track_row)
         if column == COL_ROLE:
-            self._show_role_picker(row)
+            self._show_role_picker(track_row)
+        elif column == COL_LAYOUT and not self._title_mode:
+            self._show_layout_picker(track_row, row)
 
     def _show_role_picker(self, row: int) -> None:
         if self._track is None or not 0 <= row < len(self._track.lines):
@@ -1855,7 +2392,10 @@ class LyricsPanel(DropPanel):
                 )
             )
             menu.addAction(action)
-        item = self._table.item(row, COL_ROLE)
+        display_row = self._display_row_for_track_line(row)
+        if display_row is None:
+            return
+        item = self._table.item(display_row, COL_ROLE)
         if item is None:
             return
         rect = self._table.visualItemRect(item)
@@ -1864,18 +2404,64 @@ class LyricsPanel(DropPanel):
         )
         menu.exec(popup_pos)
 
+    def _show_layout_picker(self, track_row: int, display_row: int) -> None:
+        if self._track is None:
+            return
+        resolved = (
+            self._resolved_page_plan.line_for_track_index(track_row)
+            if self._resolved_page_plan is not None
+            else None
+        )
+        page_rows = (
+            self._resolved_page_plan.pages[resolved.global_page_index].line_count
+            if resolved is not None and self._resolved_page_plan is not None
+            else 1
+        )
+        current = int(getattr(self._track.lines[track_row], "layout_index", 0) or 0)
+        menu = _StableRoundMenu(parent=self._table)
+        names = ["默认布局"] + [layout.name for layout in self._style.layouts]
+        for index, name in enumerate(names):
+            action = Action(name, menu)
+            action.setCheckable(True)
+            action.setChecked(index == current)
+            layout_id = (
+                "default"
+                if index == 0
+                else self._style.layouts[index - 1].layout_id
+            )
+            if layout_capacity(self._style, layout_id) < page_rows:
+                action.setEnabled(False)
+                action.setToolTip(f"当前页面有 {page_rows} 行，此布局无法容纳。")
+            action.triggered.connect(
+                lambda _checked=False, idx=index, r=track_row: (
+                    self.layoutChangeRequested.emit([r], idx)
+                )
+            )
+            menu.addAction(action)
+        item = self._table.item(display_row, COL_LAYOUT)
+        if item is None:
+            return
+        rect = self._table.visualItemRect(item)
+        menu.exec(
+            self._table.viewport().mapToGlobal(
+                QPoint(rect.left(), rect.bottom() + 1)
+            )
+        )
+
     def _on_cell_double_clicked(self, row: int, column: int) -> None:
         if column not in (COL_EFFECT, COL_CONTENT) or self._track is None:
             return
-        if not 0 <= row < len(self._track.lines):
+        track_rows = self._track_rows_for_presentation_row(row)
+        if not track_rows:
             return
-        line = self._track.lines[row]
+        track_row = track_rows[0]
+        line = self._track.lines[track_row]
         if line.is_blank or not line.chars:
             return
         if column == COL_EFFECT and not self._title_mode:
-            self._edit_animation_rows([row])
+            self._edit_animation_rows([track_row])
         elif column == COL_CONTENT:
-            self._edit_char_roles(row)
+            self._edit_char_roles(track_row)
 
     def _edit_animation_rows(self, rows: list[int]) -> None:
         if self._track is None or not rows:
@@ -1950,7 +2536,11 @@ class LyricsPanel(DropPanel):
         if item.column() != COL_ROLE:
             return
         role_name = str(item.data(Qt.ItemDataRole.UserRole) or "")
-        row = item.row()
+        display_row = item.row()
+        rows = self._track_rows_for_presentation_row(display_row)
+        if not rows:
+            return
+        row = rows[0]
         # 混合行整行覆盖前确认，避免误抹掉行内逐字符分配。
         if (
             self._track is not None
@@ -1970,7 +2560,7 @@ class LyricsPanel(DropPanel):
             )
             if not confirmed:
                 # 还原显示为混合态（数据未写回，行内标签保持原样）
-                self._refresh_presentation(rows=[row])
+                self._refresh_presentation(rows=[display_row])
                 return
         self.roleChanged.emit(row, role_name)
 

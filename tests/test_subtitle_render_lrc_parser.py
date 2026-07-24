@@ -330,6 +330,16 @@ def test_only_metadata_no_body():
     assert track.meta.artist == "Bar"
 
 
+def test_parser_does_not_precompute_page_or_section_breaks():
+    track = parse_nicokara_lrc(
+        "[00:00:00]a[00:00:50]\n"
+        "[00:01:00]b[00:01:50]\n"
+        "[00:10:00]c[00:10:50]\n"
+    )
+
+    assert [line.break_before for line in track.lines] == ["none", "none", "none"]
+
+
 def test_malformed_ruby_entry_silently_skipped():
     # 字段数 < 4 → 跳过，不抛
     text = "[00:00:00]a[00:00:50]\n\n@Ruby1=incomplete\n"

@@ -24,6 +24,7 @@ import math
 from pathlib import Path
 import re
 from typing import Literal, Optional
+from uuid import uuid4
 
 LineBreakKind = Literal["none", "page", "paragraph"]
 EntryAnimation = Literal[
@@ -36,7 +37,7 @@ KaraokeAnimation = Literal["inherit", "none", "utopia"]
 RubyMainProgressMode = Literal["checkpoint_segments", "reading_units"]
 LayoutSemantics = Literal["legacy", "n3_1074"]
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 PROJECT_FILE_SUFFIX = ".yurika"
 STYLE_PRESET_FILE_SUFFIX = ".krstyle.json"
 SUBTITLE_SOURCE_SUFFIX = ".sug"
@@ -167,8 +168,8 @@ class TimingLine:
     """本行前的 N3 分隔类型。
 
     ``page`` / ``paragraph`` 都会开启新页；区别用于 N3 的跨页衔接与段落语义。
-    直接载入 LRC 时由 SeqLinesBreaker 等价算法生成，导入 N3 项目时由其
-    ``LineInfos`` 精确恢复。
+    裸 LRC 不包含该信息；导入 N3 项目时由其 ``LineInfos`` 精确恢复，
+    schema v2 项目则把它作为 ``page_plan`` 的兼容投影。
     """
     display_start_override_ms: Optional[int] = None
     """本行「上屏时刻」手动覆盖（毫秒）。None = 按全局提前入场自动计算。
@@ -181,6 +182,38 @@ class TimingLine:
     """可选导唱符；可插在正文前或替代行首标记，但不改变源 ``chars`` 索引。"""
     inline_guide_symbols: dict[int, GuideSymbol] = field(default_factory=dict)
     """按源 ``chars`` 索引保存的行内 SVG 字形替换；原字符与打轴时间保持不变。"""
+
+
+@dataclass(frozen=True)
+class SubtitleLoadingSettings:
+    """Rules used to turn one subtitle source into explicit sections and pages."""
+
+    time_gap_section_enabled: bool = True
+    section_gap_ms: int = 3100
+    blank_line_section_enabled: bool = True
+    rows_per_page: int = 2
+
+
+@dataclass
+class TrackPage:
+    """One persisted subtitle page.
+
+    ``line_count`` counts renderable lyric lines, not source blank lines and not
+    the capacity of the selected layout.
+    """
+
+    line_count: int
+    layout_id: str = "default"
+
+
+@dataclass
+class TrackSection:
+    pages: list[TrackPage] = field(default_factory=list)
+
+
+@dataclass
+class TrackPagePlan:
+    sections: list[TrackSection] = field(default_factory=list)
 
 
 def guide_symbol_replacement_count(
@@ -249,6 +282,18 @@ class TimingTrack:
     meta: TimingTrackMeta = field(default_factory=TimingTrackMeta)
     lines: list[TimingLine] = field(default_factory=list)
     rubies: list[RubyAnnotation] = field(default_factory=list)
+    page_plan: Optional[TrackPagePlan] = None
+    """Authoritative section/page structure used by preview and export.
+
+    ``None`` keeps the legacy path available for bare parser callers and old
+    unit tests.  A render project normalizes this field before presentation.
+    """
+    loading_settings_mode: Literal["global", "custom"] = "global"
+    loading_settings: Optional[SubtitleLoadingSettings] = None
+    loading_settings_snapshot: SubtitleLoadingSettings = field(
+        default_factory=SubtitleLoadingSettings
+    )
+    """Settings that most recently produced the persisted page plan."""
 
     @property
     def char_count(self) -> int:
@@ -544,6 +589,8 @@ class LyricsLayout:
     """
 
     name: str = "布局"
+    layout_id: str = ""
+    """Stable project-local identifier.  Legacy numeric indices remain a projection."""
     line_y_position: LineYPosition = "bottom"
     line_y_margin_px: int = 80
     line_gap_px: int = 90
@@ -696,6 +743,7 @@ def default_title_layout() -> LyricsLayout:
     """内置标题布局（N3 出厂预设「タイトル左上」：Top、行間 15、余白 50/50、Left）。"""
     return LyricsLayout(
         name=TITLE_LAYOUT_NAME,
+        layout_id="title-default",
         line_y_position="top",
         line_y_margin_px=50,
         line_gap_px=15,
@@ -703,6 +751,52 @@ def default_title_layout() -> LyricsLayout:
         horizontal_margin_px=50,
         line_alignments=["left"],
     )
+
+
+DEFAULT_LAYOUT_BY_ROW_COUNT: dict[int, str] = {
+    1: "builtin-1",
+    2: "default",
+    3: "builtin-3",
+    4: "builtin-4",
+    5: "builtin-5",
+    6: "builtin-6",
+    7: "builtin-7",
+    8: "builtin-8",
+}
+
+_DEFAULT_PAGE_LAYOUT_SPECS: dict[int, tuple[list[HorizontalAlign], int]] = {
+    1: (["center"], 90),
+    2: (["left", "right"], 90),
+    3: (["left", "center", "right"], 60),
+    4: (["left", "right", "left", "right"], 40),
+    5: (["left", "right", "left", "right", "left"], 25),
+    6: (["left", "right", "left", "right", "left", "right"], 15),
+    7: (["left", "right", "left", "right", "left", "right", "left"], 8),
+    8: (["left", "right", "left", "right", "left", "right", "left", "right"], 0),
+}
+
+
+def default_page_layouts() -> list[LyricsLayout]:
+    """Return title plus the built-in 1/3..8-line project layouts.
+
+    The two-line project default is represented by ``Style`` itself (stable ID
+    ``default``), so no extra two-line object is inserted and legacy indices do
+    not gain a duplicate default.
+    """
+
+    layouts = [default_title_layout()]
+    for rows, (alignments, gap) in _DEFAULT_PAGE_LAYOUT_SPECS.items():
+        if rows == 2:
+            continue
+        layouts.append(
+            LyricsLayout(
+                name=f"默认 {rows} 行",
+                layout_id=f"builtin-{rows}",
+                line_gap_px=gap,
+                line_alignments=list(alignments),
+            )
+        )
+    return layouts
 
 
 def _title_karaoke_colors(
@@ -1010,13 +1104,16 @@ class Style:
     中心位置对齐（逐行判断，N3 Single）；``equal_margins`` = 左右余白对齐
     （整页判断，N3 Multi，N3 默认）。"""
 
-    layouts: list["LyricsLayout"] = field(
-        default_factory=lambda: [default_title_layout()]
-    )
+    layouts: list["LyricsLayout"] = field(default_factory=default_page_layouts)
     """额外的命名布局定义（N3 ``LyricsLayouts``）。``Style`` 自身的布局字段是
     「默认布局」（index 0），本列表从 index 1 起被 ``TimingLine.layout_index``
     引用。布局定义是可复用预设，随全局设置与项目文件一起持久化。
     默认内置「タイトル左上」（对齐 N3 出厂预设），供标题引用。"""
+
+    default_layout_by_row_count: dict[int, str] = field(
+        default_factory=lambda: dict(DEFAULT_LAYOUT_BY_ROW_COUNT)
+    )
+    """Page row count to stable layout ID mapping.  Keys are always 1..8."""
 
     layout_reference_height: int = 1080
     """布局像素字段（上下余白 / 行间距 / 左右余白）当前对应的输出高度
@@ -1251,6 +1348,196 @@ class RenderProject:
 # ---------------------------------------------------------------------------
 
 
+def _builtin_page_layout(style: Style, rows: int) -> LyricsLayout:
+    alignments, gap = _DEFAULT_PAGE_LAYOUT_SPECS[rows]
+    return LyricsLayout(
+        name=f"默认 {rows} 行",
+        layout_id=f"builtin-{rows}",
+        line_y_position=style.line_y_position,
+        line_y_margin_px=style.line_y_margin_px,
+        line_gap_px=gap,
+        smart_horizontal=style.smart_horizontal,
+        horizontal_margin_px=style.horizontal_margin_px,
+        line_alignments=list(alignments),
+        letter_spacing_px=style.letter_spacing_px,
+        allow_biting=style.allow_biting,
+        ruby_interval_px=style.ruby_interval_px,
+        ruby_alignment=style.ruby_alignment,
+        ruby_gap_px=style.ruby_gap_px,
+    )
+
+
+def ensure_page_layout_defaults(style: Style) -> Style:
+    """Return a style with stable unique IDs and complete 1..8 defaults.
+
+    Missing built-ins are appended, never inserted, so numeric layout indices
+    from schema-v1 projects and N3 imports retain their meaning.
+    """
+
+    layouts = deepcopy(style.layouts)
+    used: set[str] = {"default"}
+    for index, layout in enumerate(layouts):
+        candidate = str(layout.layout_id or "").strip()
+        if not candidate or candidate in used:
+            if index == 0 and layout.name == TITLE_LAYOUT_NAME and "title-default" not in used:
+                candidate = "title-default"
+            else:
+                candidate = f"legacy-{index + 1}"
+                while candidate in used:
+                    candidate = f"layout-{uuid4().hex}"
+        layout.layout_id = candidate
+        used.add(candidate)
+
+    required_rows = [1, 3, 4, 5, 6, 7, 8]
+    if max(1, min(len(style.line_alignments), 8)) != 2:
+        required_rows.append(2)
+    for rows in required_rows:
+        layout_id = f"builtin-{rows}"
+        if layout_id in used:
+            continue
+        layouts.append(_builtin_page_layout(style, rows))
+        used.add(layout_id)
+
+    raw_mapping = style.default_layout_by_row_count
+    mapping: dict[int, str] = {}
+    capacity_by_id = {
+        layout.layout_id: max(1, min(len(layout.line_alignments), 8))
+        for layout in layouts
+    }
+    for rows in range(1, 9):
+        layout_id = str(raw_mapping.get(rows, "") or "")
+        if rows == 2:
+            default_capacity = max(1, min(len(style.line_alignments), 8))
+            fallback = "default" if default_capacity == 2 else "builtin-2"
+            mapping[rows] = (
+                layout_id
+                if (
+                    (layout_id == "default" and default_capacity == rows)
+                    or capacity_by_id.get(layout_id) == rows
+                )
+                else fallback
+            )
+            continue
+        fallback = f"builtin-{rows}"
+        mapping[rows] = (
+            layout_id if capacity_by_id.get(layout_id) == rows else fallback
+        )
+    if layouts == style.layouts and mapping == style.default_layout_by_row_count:
+        return style
+    return replace(style, layouts=layouts, default_layout_by_row_count=mapping)
+
+
+def layout_index_for_id(style: Style, layout_id: str) -> int:
+    if layout_id == "default":
+        return 0
+    for index, layout in enumerate(style.layouts, start=1):
+        if layout.layout_id == layout_id:
+            return index
+    return 0
+
+
+def layout_id_for_index(style: Style, layout_index: int) -> str:
+    index = int(layout_index)
+    if index <= 0 or index > len(style.layouts):
+        return "default"
+    return style.layouts[index - 1].layout_id or f"legacy-{index}"
+
+
+def layout_capacity(style: Style, layout_id: str) -> int:
+    if layout_id == "default":
+        return max(1, min(len(style.line_alignments), 8))
+    index = layout_index_for_id(style, layout_id)
+    if index <= 0:
+        return max(1, min(len(style.line_alignments), 8))
+    return max(1, min(len(style.layouts[index - 1].line_alignments), 8))
+
+
+def subtitle_loading_settings_to_dict(
+    settings: SubtitleLoadingSettings,
+) -> dict[str, object]:
+    return {
+        "time_gap_section_enabled": bool(settings.time_gap_section_enabled),
+        "section_gap_ms": max(int(settings.section_gap_ms), 0),
+        "blank_line_section_enabled": bool(settings.blank_line_section_enabled),
+        "rows_per_page": max(1, min(int(settings.rows_per_page), 4)),
+    }
+
+
+def subtitle_loading_settings_from_dict(value: object) -> SubtitleLoadingSettings:
+    defaults = SubtitleLoadingSettings()
+    if not isinstance(value, dict):
+        return defaults
+    try:
+        gap = max(int(value.get("section_gap_ms", defaults.section_gap_ms)), 0)
+    except (TypeError, ValueError):
+        gap = defaults.section_gap_ms
+    try:
+        rows = max(1, min(int(value.get("rows_per_page", defaults.rows_per_page)), 4))
+    except (TypeError, ValueError):
+        rows = defaults.rows_per_page
+    return SubtitleLoadingSettings(
+        time_gap_section_enabled=bool(
+            value.get("time_gap_section_enabled", defaults.time_gap_section_enabled)
+        ),
+        section_gap_ms=gap,
+        blank_line_section_enabled=bool(
+            value.get("blank_line_section_enabled", defaults.blank_line_section_enabled)
+        ),
+        rows_per_page=rows,
+    )
+
+
+def track_page_plan_to_dict(plan: Optional[TrackPagePlan]) -> Optional[dict[str, object]]:
+    if plan is None:
+        return None
+    return {
+        "sections": [
+            {
+                "pages": [
+                    {
+                        "line_count": max(1, min(int(page.line_count), 8)),
+                        "layout_id": str(page.layout_id or "default"),
+                    }
+                    for page in section.pages
+                    if int(page.line_count) > 0
+                ]
+            }
+            for section in plan.sections
+            if any(int(page.line_count) > 0 for page in section.pages)
+        ]
+    }
+
+
+def track_page_plan_from_dict(value: object) -> Optional[TrackPagePlan]:
+    if not isinstance(value, dict) or not isinstance(value.get("sections"), list):
+        return None
+    sections: list[TrackSection] = []
+    for raw_section in value["sections"]:
+        if not isinstance(raw_section, dict) or not isinstance(
+            raw_section.get("pages"), list
+        ):
+            continue
+        pages: list[TrackPage] = []
+        for raw_page in raw_section["pages"]:
+            if not isinstance(raw_page, dict):
+                continue
+            try:
+                count = int(raw_page.get("line_count", 0))
+            except (TypeError, ValueError):
+                continue
+            if count <= 0:
+                continue
+            pages.append(
+                TrackPage(
+                    line_count=max(1, min(count, 8)),
+                    layout_id=str(raw_page.get("layout_id") or "default"),
+                )
+            )
+        if pages:
+            sections.append(TrackSection(pages=pages))
+    return TrackPagePlan(sections=sections)
+
+
 def normalize_glow_concentration_level(value: object, fallback: int = 0) -> int:
     """Normalize -1 (disabled) plus the three NicoKaraMaker3 blur levels."""
     try:
@@ -1375,6 +1662,8 @@ def style_to_dict(style: Style) -> dict:
             data[item.name] = karaoke_colors_to_dict(value) if value is not None else None
         elif item.name == "layouts":
             data[item.name] = [lyrics_layout_to_dict(layout) for layout in value]
+        elif item.name == "default_layout_by_row_count":
+            data[item.name] = {str(key): str(item) for key, item in value.items()}
         elif item.name == "title_overlay":
             data[item.name] = title_overlay_to_dict(value) if value is not None else None
         elif item.name == "singer_style_overrides":
@@ -1406,6 +1695,17 @@ def style_from_dict(payload: object) -> Style:
             changes[key] = karaoke_colors_from_dict(value)
         elif key == "layouts":
             changes[key] = _layouts_from_payload(value)
+        elif key == "default_layout_by_row_count":
+            if isinstance(value, dict):
+                parsed_mapping: dict[int, str] = {}
+                for raw_rows, raw_id in value.items():
+                    try:
+                        rows = int(raw_rows)
+                    except (TypeError, ValueError):
+                        continue
+                    if 1 <= rows <= 8 and str(raw_id).strip():
+                        parsed_mapping[rows] = str(raw_id).strip()
+                changes[key] = parsed_mapping
         elif key == "title_overlay":
             changes[key] = title_overlay_from_dict(value)
         elif key == "singer_style_overrides":
@@ -1613,7 +1913,7 @@ def style_from_dict(payload: object) -> Style:
             changes.get("ruby_karaoke_colors") is None
         )
     _migrate_title_references(changes)
-    return Style(**changes)
+    return ensure_page_layout_defaults(Style(**changes))
 
 
 def _migrate_title_references(changes: dict) -> None:
@@ -1880,6 +2180,7 @@ def rescale_font_sizes(style: Style, new_height: int) -> Style:
 def lyrics_layout_to_dict(layout: LyricsLayout) -> dict:
     return {
         "name": layout.name,
+        "layout_id": layout.layout_id,
         "line_y_position": layout.line_y_position,
         "line_y_margin_px": layout.line_y_margin_px,
         "line_gap_px": layout.line_gap_px,
@@ -1906,6 +2207,7 @@ def lyrics_layout_from_dict(payload: object) -> LyricsLayout:
         smart = defaults.smart_horizontal
     return LyricsLayout(
         name=str(payload.get("name") or defaults.name),
+        layout_id=str(payload.get("layout_id") or ""),
         line_y_position=position,  # type: ignore[arg-type]
         line_y_margin_px=_int_value(payload.get("line_y_margin_px"), defaults.line_y_margin_px),
         line_gap_px=_int_value(payload.get("line_gap_px"), defaults.line_gap_px),

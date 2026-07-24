@@ -458,6 +458,9 @@ def _track_layout_signature(track: TimingTrack) -> tuple:
             )
             for ruby in track.rubies
         ),
+        page_plan_signature(track),
+        _value_signature(track.loading_settings_snapshot),
+        track.loading_settings_mode,
         (track.meta.silence_ms, track.meta.offset_ms),
     )
 
@@ -511,6 +514,12 @@ from krok_helper.subtitle_render.engine.timeline import (
     track_duration_ms,
     visible_display_lines,
 )
+from krok_helper.subtitle_render.engine.page_plan import (
+    page_plan_signature,
+    resolve_page_plan,
+    set_pages_layout,
+    use_default_layouts,
+)
 from krok_helper.subtitle_render.engine.animator import line_animation_state
 from krok_helper.subtitle_render.models import (
     DecorationKind,
@@ -534,6 +543,8 @@ from krok_helper.subtitle_render.models import (
     normalize_glow_concentration_level,
     guide_symbol_replacement_count,
     guide_symbol_role_labels,
+    layout_capacity,
+    layout_id_for_index,
     line_visible_chars,
     style_with_line_animation,
     timing_line_start_ms,
@@ -2968,6 +2979,7 @@ def _visible_lines_for_style(
             lane_count=_lane_count(style),
             row_count_of=_row_count_resolver(style),
             bottom_align_of=_bottom_align_resolver(style),
+            vertical_position_of=_vertical_position_resolver(style),
         )
     display_line = _single_visible_display_line(track, t_ms, style)
     if display_line is None:
@@ -3001,6 +3013,7 @@ def display_windows_for_style(
             lane_count=_lane_count(style),
             row_count_of=_row_count_resolver(style),
             bottom_align_of=_bottom_align_resolver(style),
+            vertical_position_of=_vertical_position_resolver(style),
         )
         index_of = {id(line): i for i, line in enumerate(track.lines)}
         for item in items:
@@ -3048,6 +3061,7 @@ def display_schedule_for_style(
         lane_count=_lane_count(style),
         row_count_of=_row_count_resolver(style),
         bottom_align_of=_bottom_align_resolver(style),
+        vertical_position_of=_vertical_position_resolver(style),
     )
     index_of = {id(line): index for index, line in enumerate(track.lines)}
     return {
@@ -11138,6 +11152,20 @@ def apply_layout_to_page(
     ``track_line_index`` 是 ``track.lines`` 索引；返回被改写的 ``track.lines``
     索引列表（空 = 该行不可渲染或未变化）。页按应用前的布局分配计算。
     """
+    if track.page_plan is not None:
+        resolved = resolve_page_plan(track, style)
+        resolved_line = resolved.line_for_track_index(track_line_index)
+        if resolved_line is None:
+            return []
+        page = resolved.pages[resolved_line.global_page_index]
+        layout_id = layout_id_for_index(style, int(layout_index))
+        if layout_capacity(style, layout_id) < page.line_count:
+            return []
+        changed = set_pages_layout(
+            track, style, [resolved_line.global_page_index], layout_id
+        )
+        return list(page.track_line_indices) if changed else []
+
     render_positions = [
         i for i, line in enumerate(track.lines) if not line.is_blank and line.chars
     ]
@@ -11163,8 +11191,26 @@ def apply_layout_to_page(
     return affected
 
 
-def assign_layout_to_all(track: TimingTrack, layout_index: int) -> bool:
+def assign_layout_to_all(
+    track: TimingTrack, layout_index: int, style: Optional[Style] = None
+) -> bool:
     """所有可渲染行统一应用同一布局（N3 UnificationLayoutSelector）。"""
+    if track.page_plan is not None:
+        if style is None:
+            return False
+        resolved = resolve_page_plan(track, style)
+        layout_id = layout_id_for_index(style, int(layout_index))
+        if any(
+            layout_capacity(style, layout_id) < page.line_count
+            for page in resolved.pages
+        ):
+            return False
+        return set_pages_layout(
+            track,
+            style,
+            [page.global_page_index for page in resolved.pages],
+            layout_id,
+        )
     changed = False
     for line in track.lines:
         if line.is_blank or not line.chars:
@@ -11182,6 +11228,9 @@ def auto_assign_layouts_by_page(track: TimingTrack, style: Style) -> bool:
     在「默认布局 + 额外布局」中找第一个行数 == N 的；找不到按 N-1, N-2…
     递减再找；仍找不到用默认布局。返回是否有行被改写。
     """
+    if track.page_plan is not None:
+        return use_default_layouts(track, style)
+
     row_counts = [max(len(style.line_alignments), 1)] + [
         max(len(layout.line_alignments), 1) for layout in style.layouts
     ]
@@ -11267,6 +11316,7 @@ def check_layout_margins(
             lane_count=_lane_count(style),
             row_count_of=_row_count_resolver(style),
             bottom_align_of=_bottom_align_resolver(style),
+            vertical_position_of=_vertical_position_resolver(style),
         )
     else:
         display_lines = [
@@ -11346,9 +11396,15 @@ def _row_count_resolver(style: Style):
 
 
 def _bottom_align_resolver(style: Style):
-    if style.layout_semantics != "n3_1074":
+    if style.vertical:
         return None
     return lambda line: _layout_style_for_line(style, line).line_y_position == "bottom"
+
+
+def _vertical_position_resolver(style: Style):
+    if style.vertical:
+        return None
+    return lambda line: _layout_style_for_line(style, line).line_y_position
 
 
 def _style_for_line(style: Style, line: TimingLine) -> Style:

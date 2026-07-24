@@ -27,7 +27,7 @@ from uuid import uuid4
 
 from krok_helper.subtitle_render.models import PROJECT_FILE_SUFFIX
 
-PROJECT_SCHEMA_VERSION = 1
+PROJECT_SCHEMA_VERSION = 2
 _RECOVERY_WRITE_LOCK = threading.Lock()
 _RECOVERY_SNAPSHOT_FLOORS: dict[Path, int] = {}
 
@@ -308,6 +308,10 @@ def project_payload(
     line_inline_guide_symbols: Optional[list] = None,
     line_display_overrides: Optional[list] = None,
     line_animation_overrides: Optional[list] = None,
+    page_plan: Optional[dict] = None,
+    loading_settings_mode: Optional[str] = None,
+    loading_settings: Optional[dict] = None,
+    loading_settings_snapshot: Optional[dict] = None,
     extra_subtitle_sources: Optional[list] = None,
     project_role_names: Optional[list[str]] = None,
 ) -> dict:
@@ -394,6 +398,14 @@ def project_payload(
             dict(row) if isinstance(row, dict) else None
             for row in line_animation_overrides
         ]
+    if page_plan is not None:
+        payload["page_plan"] = dict(page_plan)
+    if loading_settings_mode in {"global", "custom"}:
+        payload["loading_settings_mode"] = str(loading_settings_mode)
+    if loading_settings is not None:
+        payload["loading_settings"] = dict(loading_settings)
+    if loading_settings_snapshot is not None:
+        payload["loading_settings_snapshot"] = dict(loading_settings_snapshot)
     if extra_subtitle_sources is not None:
         payload["extra_subtitle_sources"] = [
             dict(item) for item in extra_subtitle_sources if isinstance(item, dict)

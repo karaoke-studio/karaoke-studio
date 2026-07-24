@@ -65,6 +65,8 @@ def merge_reloaded_track(
     current: TimingTrack,
     baseline: TimingTrack,
     candidate: TimingTrack,
+    *,
+    preserve_page_structure: bool = True,
 ) -> TrackReloadMerge:
     """Apply local renderer edits from ``current`` onto a fresh source parse.
 
@@ -82,6 +84,10 @@ def merge_reloaded_track(
         and baseline != candidate
     )
     merged = deepcopy(candidate)
+    merged.page_plan = deepcopy(current.page_plan) if preserve_page_structure else None
+    merged.loading_settings_mode = current.loading_settings_mode
+    merged.loading_settings = deepcopy(current.loading_settings)
+    merged.loading_settings_snapshot = deepcopy(current.loading_settings_snapshot)
     conflicts: list[str] = []
 
     line_matches = _match_lines(baseline, candidate)
@@ -89,7 +95,9 @@ def merge_reloaded_track(
         if old_index >= len(current.lines):
             continue
         if not reliable and _line_has_local_state(
-            current.lines[old_index], baseline.lines[old_index]
+            current.lines[old_index],
+            baseline.lines[old_index],
+            include_page_projection=preserve_page_structure,
         ):
             conflicts.append(f"第 {old_index + 1} 行歌词重复，原有字幕设置无法唯一定位")
             continue
@@ -100,13 +108,18 @@ def merge_reloaded_track(
             old_index=old_index,
             exact_text=exact_text,
             conflicts=conflicts,
+            preserve_page_projection=preserve_page_structure,
         )
 
     matched_old = {old for old, _new, _exact, _reliable in line_matches}
     for old_index, old_source in enumerate(baseline.lines):
         if old_index in matched_old or old_index >= len(current.lines):
             continue
-        if _line_has_local_state(current.lines[old_index], old_source):
+        if _line_has_local_state(
+            current.lines[old_index],
+            old_source,
+            include_page_projection=preserve_page_structure,
+        ):
             conflicts.append(f"第 {old_index + 1} 行已被删除，原有字幕设置无法定位")
 
     return TrackReloadMerge(
@@ -160,9 +173,11 @@ def _merge_line_overlays(
     old_index: int,
     exact_text: bool,
     conflicts: list[str],
+    preserve_page_projection: bool = True,
 ) -> None:
-    target.layout_index = current.layout_index
-    target.break_before = current.break_before
+    if preserve_page_projection:
+        target.layout_index = current.layout_index
+        target.break_before = current.break_before
     target.display_start_override_ms = current.display_start_override_ms
     target.display_end_override_ms = current.display_end_override_ms
     target.animation_override = deepcopy(current.animation_override)
@@ -207,10 +222,17 @@ def _merge_line_overlays(
         target.chars[new_index].role_label = old_char.role_label
 
 
-def _line_has_local_state(current: TimingLine, baseline: TimingLine) -> bool:
+def _line_has_local_state(
+    current: TimingLine,
+    baseline: TimingLine,
+    *,
+    include_page_projection: bool = True,
+) -> bool:
     if (
-        current.layout_index
-        or current.break_before != "none"
+        (
+            include_page_projection
+            and (current.layout_index or current.break_before != "none")
+        )
         or current.display_start_override_ms is not None
         or current.display_end_override_ms is not None
         or current.animation_override is not None

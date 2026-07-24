@@ -76,13 +76,9 @@ def parse_nicokara_lrc(text: str) -> TimingTrack:
 
     timing_lines = _parse_body_lines(body_lines)
     meta, rubies = _parse_tail(tail_lines)
-    track = TimingTrack(meta=meta, lines=timing_lines, rubies=rubies)
-    # NicoKaraMaker3 默认使用 SeqLinesBreaker：每 2 行分页，并在足够长的
-    # 演唱间隔处改为段落分隔。LRC 本身不保存 break，解析后在此重建。
-    from krok_helper.subtitle_render.engine.timeline import apply_n3_seq_line_breaks
-
-    apply_n3_seq_line_breaks(track)
-    return track
+    # LRC 本身不保存分页和段落边界。这里只恢复歌词、空行和计时语义，
+    # 进入字幕项目后再由该字幕源的加载设置统一生成 page_plan。
+    return TimingTrack(meta=meta, lines=timing_lines, rubies=rubies)
 
 
 # ---------------------------------------------------------------------------

@@ -463,7 +463,16 @@ def test_import_layouts(imported):
     assert style.font_reference_height == 1080
     assert style.layout_reference_height == 1080
     # LyricsLayouts[1:] → Style.layouts
-    assert [layout.name for layout in style.layouts] == ["タイトル左上"]
+    assert style.layouts[0].name == "タイトル左上"
+    assert [layout.name for layout in style.layouts[1:]] == [
+        "默认 1 行",
+        "默认 3 行",
+        "默认 4 行",
+        "默认 5 行",
+        "默认 6 行",
+        "默认 7 行",
+        "默认 8 行",
+    ]
     assert style.layouts[0].line_y_position == "top"
     assert style.layouts[0].line_alignments == ["left"]
     assert style.layouts[0].letter_spacing_px == 0
@@ -932,7 +941,7 @@ def test_import_real_project_smoke():
     style = style_from_dict(result.project_data["style"])
     assert style.font_family == "UD デジタル 教科書体 N-B"
     assert style.karaoke_colors.after.text.color == "#1C6FB5"
-    assert [layout.name for layout in style.layouts] == [
+    assert [layout.name for layout in style.layouts[:5]] == [
         "下寄せ3行", "上寄せ2行", "コーラス", "タイトル左上", "タイトル中央",
     ]
     assert set(style.custom_style_schemes) == {
@@ -942,9 +951,10 @@ def test_import_real_project_smoke():
     assert style.title_overlay.show_mode == "whole"
     assert len(result.project_data["line_layout_indices"]) == 34
     direct_track = load_nicokara_lrc(Path(result.project_data["subtitle_path"]))
-    assert [line.break_before for line in direct_track.lines] == result.project_data[
-        "line_breaks_before"
-    ]
+    assert all(line.break_before == "none" for line in direct_track.lines)
+    assert any(
+        value != "none" for value in result.project_data["line_breaks_before"]
+    )
 
 
 @pytest.mark.skipif(not TACTIC_N3PROJ.is_file(), reason="TACTIC 样例工程不存在")

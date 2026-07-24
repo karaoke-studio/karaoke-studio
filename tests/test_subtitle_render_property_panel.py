@@ -534,7 +534,10 @@ def test_title_enabled_and_layout_are_remembered_without_leaking_project_text(qa
     assert reloaded._style.title_overlay.enabled is True
     assert reloaded._style.title_overlay.text_template == "{title} / {artist}"
     assert reloaded._style.title_overlay.layout_index == 1
-    assert [layout.name for layout in reloaded._style.layouts] == ["用户标题布局"]
+    assert reloaded._style.layouts[0].name == "用户标题布局"
+    assert {
+        layout.layout_id for layout in reloaded._style.layouts[1:]
+    } >= {f"builtin-{rows}" for rows in (1, 3, 4, 5, 6, 7, 8)}
     project_style = style_from_dict(win._current_project_data()["style"])
     assert project_style.title_overlay is not None
     assert project_style.title_overlay.enabled is True
@@ -601,9 +604,13 @@ def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
     # Layout preferences are remembered automatically; the explicit font/color
     # save action still updates only its requested scheme target.
     assert saved.line_gap_px == 99
-    assert [(layout.name, layout.line_gap_px) for layout in saved.layouts] == [
-        ("项目布局", 98)
-    ]
+    assert (saved.layouts[0].name, saved.layouts[0].line_gap_px) == (
+        "项目布局",
+        98,
+    )
+    assert {
+        layout.layout_id for layout in saved.layouts[1:]
+    } >= {f"builtin-{rows}" for rows in (1, 3, 4, 5, 6, 7, 8)}
     assert saved.custom_style_schemes[TITLE_SCHEME_NAME].fill_color == "#222222"
     assert "初音" not in saved.custom_style_schemes
 
@@ -629,7 +636,7 @@ def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
     assert win._style.custom_style_schemes[TITLE_SCHEME_NAME].fill_color == "#444444"
     assert "镜音" not in win._style.custom_style_schemes
     assert win._style.line_gap_px == 99
-    assert [layout.name for layout in win._style.layouts] == ["项目布局"]
+    assert win._style.layouts[0].name == "项目布局"
 
 
 def test_builtin_font_defaults_are_normalized_to_app_reference_height(qapp, monkeypatch):
@@ -741,14 +748,14 @@ def test_layout_defaults_follow_live_user_edits_at_app_reference_height(
     saved = style_from_dict(provider.data["style"])
     assert saved.line_gap_px == 105
     assert saved.horizontal_margin_px == 120
-    assert [layout.name for layout in saved.layouts] == ["副歌布局", "项目新增"]
+    assert [layout.name for layout in saved.layouts[:2]] == ["副歌布局", "项目新增"]
     assert saved.layouts[0].line_y_margin_px == 108
     assert saved.layouts[1].line_y_margin_px == 90
 
     win._project_dirty = False
     win._new_project()
     assert win._style.line_gap_px == 105
-    assert [layout.name for layout in win._style.layouts] == [
+    assert [layout.name for layout in win._style.layouts[:2]] == [
         "副歌布局",
         "项目新增",
     ]

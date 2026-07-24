@@ -9,6 +9,21 @@
 设计文档：``C:/Users/18007/.claude/plans/ok-ok-main-bug-merge-merge-main-nicokar-toasty-blum.md``。
 """
 
-from krok_helper.subtitle_render.frontend.main_window import SubtitleRenderWindow
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from krok_helper.subtitle_render.frontend.main_window import SubtitleRenderWindow
 
 __all__ = ["SubtitleRenderWindow"]
+
+
+def __getattr__(name: str) -> Any:
+    """Keep pure model/engine imports independent from the Qt frontend."""
+
+    if name == "SubtitleRenderWindow":
+        from krok_helper.subtitle_render.frontend.main_window import (
+            SubtitleRenderWindow,
+        )
+
+        return SubtitleRenderWindow
+    raise AttributeError(name)

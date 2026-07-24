@@ -6702,8 +6702,8 @@ def test_old_project_title_fields_migrate_to_scheme_and_layout():
     assert scheme.font_size_px == 77
     assert scheme.karaoke_colors.before.text.color == "#EBEBEB"
     # 位置折算成新布局并被标题引用
-    assert restored.title_overlay.layout_index == len(restored.layouts)
-    layout = restored.layouts[-1]
+    assert restored.title_overlay.layout_index == 1
+    layout = restored.layouts[0]
     assert layout.line_y_position == "bottom"
     assert layout.line_alignments == ["right"]
     assert layout.horizontal_margin_px == 30
@@ -7608,11 +7608,14 @@ def test_style_dict_roundtrip_keeps_layout_definitions():
     style = Style(layouts=[_three_row_layout("下寄せ3行")])
     restored = style_from_dict(style_to_dict(style))
 
-    assert len(restored.layouts) == 1
+    assert len(restored.layouts) == 8
     layout = restored.layouts[0]
     assert layout.name == "下寄せ3行"
     assert layout.line_y_position == "top"
     assert layout.line_alignments == ["left", "center", "right"]
+    assert {
+        item.layout_id for item in restored.layouts[1:]
+    } >= {f"builtin-{rows}" for rows in (1, 3, 4, 5, 6, 7, 8)}
     assert layout.horizontal_margin_px == 60
     assert layout.letter_spacing_px == -6
     assert layout.allow_biting is True
@@ -7626,7 +7629,10 @@ def test_style_dict_roundtrip_keeps_layout_definitions():
     legacy_line = TimingLine(chars=[TimingChar("旧", 0)], end_ms=1000, layout_index=1)
     assert _layout_style_for_line(legacy, legacy_line).letter_spacing_px == 9
     # 非法 payload 防御
-    assert style_from_dict({"layouts": "bogus"}).layouts == []
+    invalid = style_from_dict({"layouts": "bogus"})
+    assert {
+        item.layout_id for item in invalid.layouts
+    } >= {f"builtin-{rows}" for rows in (1, 3, 4, 5, 6, 7, 8)}
 
 
 def test_rescale_layout_sizes_matches_n3_size_and_ratio():

@@ -145,3 +145,26 @@ def test_structural_change_does_not_guess_between_duplicate_lyric_lines() -> Non
     assert result.structure_changed is True
     assert any("无法唯一定位" in conflict for conflict in result.conflicts)
     assert all(line.layout_index == 0 for line in result.track.lines)
+
+
+def test_explicit_refresh_drops_only_the_legacy_page_projection() -> None:
+    baseline = _track()
+    current = deepcopy(baseline)
+    current.lines[0].layout_index = 3
+    current.lines[0].break_before = "page"
+    current.lines[0].display_start_override_ms = 700
+    current.lines[0].chars[0].role_label = "手工角色"
+
+    result = merge_reloaded_track(
+        current,
+        baseline,
+        _track(first_ms=2200),
+        preserve_page_structure=False,
+    )
+
+    assert result.conflicts == ()
+    assert result.track.page_plan is None
+    assert result.track.lines[0].layout_index == 0
+    assert result.track.lines[0].break_before == "none"
+    assert result.track.lines[0].display_start_override_ms == 700
+    assert result.track.lines[0].chars[0].role_label == "手工角色"

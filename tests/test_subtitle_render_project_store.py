@@ -1657,7 +1657,9 @@ def test_extra_subtitle_sources_round_trip(qapp, monkeypatch, tmp_path):
     restored = win2._extra_sources[0]
     assert restored.name == "コーラス1"
     assert restored.track.lines[0].layout_index == 1
-    assert restored.track.lines[0].break_before == "paragraph"
+    # A boundary before the first renderable line is normalized away; it has
+    # no visible section/page effect and the v2 page plan remains authoritative.
+    assert restored.track.lines[0].break_before == "none"
     assert [c.role_label for c in restored.track.lines[0].chars] == ["コーラス配色", "コーラス配色"]
     combo = win2._lyrics_panel._source_combo
     expected_sources = ["主字幕", "コーラス1"]
@@ -1738,7 +1740,7 @@ def test_lyrics_table_shows_global_and_overridden_line_effects(qapp):
 
     panel.set_track(track)
 
-    assert panel.table_widget.columnCount() == 4
+    assert panel.table_widget.columnCount() == 5
     assert panel.table_widget.horizontalHeaderItem(lyrics_list.COL_EFFECT).text() == "特效"
     assert panel.table_widget.item(0, lyrics_list.COL_EFFECT).text() == "全局：淡入 / 淡出"
     assert panel.table_widget.item(1, lyrics_list.COL_EFFECT).text() == "滑入 / 无"

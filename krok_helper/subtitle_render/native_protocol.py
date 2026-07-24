@@ -170,6 +170,7 @@ def timing_line_to_ir(
     resolved_intervals: list[tuple[int, int]] | None = None,
     guide_anchor_bounds: tuple[int, int] | None = None,
     page_index: int = -1,
+    section_index: int = -1,
     lane: int = 0,
     display_start_ms: int | None = None,
     display_end_ms: int | None = None,
@@ -188,6 +189,7 @@ def timing_line_to_ir(
         "singer_id": line.singer_id,
         "is_blank": bool(line.is_blank),
         "page_index": int(page_index),
+        "section_index": int(section_index),
         "lane": int(lane),
         "display_start_ms": (
             int(display_start_ms) if display_start_ms is not None else None
@@ -262,7 +264,7 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
             resolved_char_intervals_for_line,
             resolved_guide_anchor_bounds_for_line,
         )
-        from krok_helper.subtitle_render.engine.timeline import assign_lanes
+        from krok_helper.subtitle_render.engine.page_plan import resolve_page_plan
         from krok_helper.subtitle_render.models import style_with_line_animation
 
         display_style = _display_style_for_signal_window(style)
@@ -281,21 +283,35 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
             for index, line in enumerate(track.lines)
         }
         animation_styles = [style_with_line_animation(style, line) for line in track.lines]
-        renderable = [
-            (index, line)
-            for index, line in enumerate(track.lines)
-            if not line.is_blank and line.chars
-        ]
-        _, page_starts, _ = assign_lanes(
-            [line for _, line in renderable],
-            _lane_count(style),
-            _row_count_resolver(style),
-            section_gap_ms=style.section_gap_ms,
-        )
-        page_indices = {
-            track_index: page_starts[render_index]
-            for render_index, (track_index, _) in enumerate(renderable)
-        }
+        if track.page_plan is not None:
+            resolved_plan = resolve_page_plan(track, style)
+            page_indices = {
+                item.track_line_index: item.global_page_index
+                for item in resolved_plan.lines
+            }
+            section_indices = {
+                item.track_line_index: item.section_index
+                for item in resolved_plan.lines
+            }
+        else:
+            from krok_helper.subtitle_render.engine.timeline import assign_lanes
+
+            renderable = [
+                (index, line)
+                for index, line in enumerate(track.lines)
+                if not line.is_blank and line.chars
+            ]
+            _, page_starts, _ = assign_lanes(
+                [line for _, line in renderable],
+                _lane_count(style),
+                _row_count_resolver(style),
+                section_gap_ms=style.section_gap_ms,
+            )
+            page_indices = {
+                track_index: page_starts[render_index]
+                for render_index, (track_index, _) in enumerate(renderable)
+            }
+            section_indices = {}
     else:
         center_overrides = {}
         animation_styles = []
@@ -304,6 +320,7 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
         resolved_intervals = []
         guide_anchor_bounds = []
         page_indices = {}
+        section_indices = {}
     return {
         "meta": {
             "title": track.meta.title,
@@ -326,6 +343,7 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
                     guide_anchor_bounds[index] if style is not None else None
                 ),
                 page_index=page_indices.get(index, -1),
+                section_index=section_indices.get(index, -1),
                 lane=schedule.get(index, (0, 0, 0))[0],
                 display_start_ms=(schedule[index][1] if index in schedule else None),
                 display_end_ms=(schedule[index][2] if index in schedule else None),

@@ -69,6 +69,7 @@ from PyQt6.QtWidgets import (
     QFileDialog,
     QColorDialog,
     QDialog,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QListWidgetItem,
@@ -128,6 +129,18 @@ from krok_helper.subtitle_render.engine.painter import (
     check_layout_margins,
     display_windows_for_style,
 )
+from krok_helper.subtitle_render.engine.page_plan import (
+    build_legacy_page_plan,
+    build_page_plan,
+    delete_boundary,
+    insert_boundary,
+    move_page_boundary,
+    normalize_page_plan,
+    page_plan_has_manual_changes,
+    project_page_plan_to_legacy_fields,
+    reflow_pages_for_layout_capacity,
+    resolve_page_plan,
+)
 from krok_helper.subtitle_render.engine.renderer import RenderJob, render_subtitle_video
 from krok_helper.subtitle_render.engine.timeline import track_duration_ms
 from krok_helper.subtitle_render.guide_symbols import (
@@ -179,6 +192,7 @@ from krok_helper.subtitle_render.models import (
     LYRICS_LAYOUT_FIELDS,
     PROJECT_FILE_SUFFIX,
     StylePreset,
+    SubtitleLoadingSettings,
     SubtitleStyleScheme,
     Style,
     TITLE_SCHEME_NAME,
@@ -190,6 +204,9 @@ from krok_helper.subtitle_render.models import (
     guide_symbol_role_labels,
     guide_symbol_with_role_labels,
     guide_symbol_to_dict,
+    ensure_page_layout_defaults,
+    layout_capacity,
+    layout_id_for_index,
     line_animation_override_from_dict,
     line_animation_override_to_dict,
     migrate_legacy_app_title_default,
@@ -200,6 +217,10 @@ from krok_helper.subtitle_render.models import (
     subtitle_style_scheme_to_dict,
     style_from_dict,
     style_to_dict,
+    subtitle_loading_settings_from_dict,
+    subtitle_loading_settings_to_dict,
+    track_page_plan_from_dict,
+    track_page_plan_to_dict,
     timing_line_start_ms,
     infer_image_sequence_pattern,
 )
@@ -706,6 +727,126 @@ class _AspectRatioBox(QWidget):
         x = (w - target_w) // 2
         y = (h - target_h) // 2
         self._child.setGeometry(QRect(x, y, max(target_w, 1), max(target_h, 1)))
+
+
+class _SubtitleLoadingSettingsDialog(QDialog):
+    """Source-loading settings card, positioned to the right of its gear button."""
+
+    def __init__(
+        self,
+        *,
+        mode: str,
+        effective: SubtitleLoadingSettings,
+        global_defaults: SubtitleLoadingSettings,
+        anchor: Optional[QWidget],
+        parent: QWidget,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("加载字幕设置")
+        self.setModal(True)
+        self.setMinimumWidth(390)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 18)
+        root.setSpacing(14)
+        title = StrongBodyLabel("加载字幕设置", self)
+        root.addWidget(title)
+        hint = CaptionLabel("这些设置只控制字幕如何分段、分页，与渲染样式隔离。", self)
+        hint.setWordWrap(True)
+        root.addWidget(hint)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+        self._mode_combo = FluentComboBox(self)
+        self._mode_combo.addItem("使用全局加载设置", userData="global")
+        self._mode_combo.addItem("为此字幕源单独设置", userData="custom")
+        self._mode_combo.setToolTip(
+            "“使用全局加载设置”会修改应用级默认值，并自动刷新所有跟随全局设置的"
+            "字幕源；“为此字幕源单独设置”只保存和刷新当前主字幕或副字幕源。"
+            "两种模式都只影响分段、分页，不改变字体、颜色和画面布局参数。"
+        )
+        self._mode_combo.setCurrentIndex(0 if mode == "global" else 1)
+        form.addRow("设置范围", self._mode_combo)
+
+        self._gap_enabled = CheckBox("按演唱空隙分段", self)
+        self._gap_enabled.setToolTip(
+            "比较相邻两句的真实演唱时间。当“下一句开始时间 − 上一句结束时间”"
+            "大于设定值时，从下一句开始新段落。提前显示、结束延时和动画时长"
+            "不参与计算。保存加载设置或点击刷新后重新计算，并覆盖现有手工分页。"
+        )
+        form.addRow("", self._gap_enabled)
+        self._gap_spin = FluentSpinBox(self)
+        self._gap_spin.setRange(0, 120_000)
+        self._gap_spin.setSingleStep(100)
+        self._gap_spin.setSuffix(" ms")
+        self._gap_spin.setToolTip(
+            "自动分段使用的演唱空隙阈值，单位为毫秒。例如上一句在 10.000 秒结束、"
+            "下一句在 14.500 秒开始，空隙为 4500 毫秒；阈值为 4000 毫秒时会"
+            "开始新段落。仅在“按演唱空隙分段”启用时生效。"
+        )
+        form.addRow("分段间隔", self._gap_spin)
+        self._blank_enabled = CheckBox("空行开始新段落", self)
+        self._blank_enabled.setToolTip(
+            "启用后，字幕源中的一个或多个连续空行会在下一条有效歌词前开始新段落。"
+            "空行不占用字幕轨道，也不计入每页行数。关闭后，空行只保留为视觉间奏"
+            "标记，不影响段落和分页。"
+        )
+        form.addRow("", self._blank_enabled)
+        self._rows_spin = FluentSpinBox(self)
+        self._rows_spin.setRange(1, 4)
+        self._rows_spin.setToolTip(
+            "在每个段落内按照指定行数依次建立页面，范围为 1～4。源文件中的显式"
+            "分页仍会提前结束当前页；段落最后一页或显式分页前的页面允许不足指定"
+            "行数，并自动使用对应行数的项目默认布局。"
+        )
+        form.addRow("每页基础行数", self._rows_spin)
+        root.addLayout(form)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        cancel = FluentPushButton("取消", self)
+        save = FluentPrimaryPushButton("保存并刷新", self)
+        cancel.clicked.connect(self.reject)
+        save.clicked.connect(self.accept)
+        buttons.addWidget(cancel)
+        buttons.addWidget(save)
+        root.addLayout(buttons)
+
+        self._global_defaults = global_defaults
+        self._custom_draft = effective
+        self._mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        self._set_values(global_defaults if mode == "global" else effective)
+        self.adjustSize()
+        if anchor is not None:
+            point = anchor.mapToGlobal(QPoint(anchor.width() + 8, 0))
+            self.move(point)
+
+    def _set_values(self, settings: SubtitleLoadingSettings) -> None:
+        self._gap_enabled.setChecked(settings.time_gap_section_enabled)
+        self._gap_spin.setValue(settings.section_gap_ms)
+        self._blank_enabled.setChecked(settings.blank_line_section_enabled)
+        self._rows_spin.setValue(settings.rows_per_page)
+
+    def _current_values(self) -> SubtitleLoadingSettings:
+        return SubtitleLoadingSettings(
+            time_gap_section_enabled=self._gap_enabled.isChecked(),
+            section_gap_ms=self._gap_spin.value(),
+            blank_line_section_enabled=self._blank_enabled.isChecked(),
+            rows_per_page=self._rows_spin.value(),
+        )
+
+    def _on_mode_changed(self, _index: int) -> None:
+        mode = str(self._mode_combo.currentData() or "global")
+        if mode == "custom":
+            self._set_values(self._custom_draft)
+        else:
+            self._custom_draft = self._current_values()
+            self._set_values(self._global_defaults)
+
+    def result_value(self) -> tuple[str, SubtitleLoadingSettings]:
+        return (
+            str(self._mode_combo.currentData() or "global"),
+            self._current_values(),
+        )
 
 
 @dataclass
@@ -1640,6 +1781,7 @@ class SubtitleRenderWindow(QWidget):
         self._audio_info: Optional[MediaInfo] = None
         self._style: Style = Style()
         self._app_default_style: Style = Style()
+        self._subtitle_loading_defaults = SubtitleLoadingSettings()
         self._style_presets: dict[str, StylePreset] = {}
         self._screen_settings: ScreenSettings = ScreenSettings()
         self._selected_scheme_key = "global"
@@ -2367,6 +2509,16 @@ class SubtitleRenderWindow(QWidget):
                 "line_inline_guide_symbols": self._inline_guide_symbol_rows(source.track),
                 "line_display_overrides": self._display_override_rows(source.track),
                 "line_animation_overrides": self._animation_override_rows(source.track),
+                "page_plan": track_page_plan_to_dict(source.track.page_plan),
+                "loading_settings_mode": source.track.loading_settings_mode,
+                "loading_settings": (
+                    subtitle_loading_settings_to_dict(source.track.loading_settings)
+                    if source.track.loading_settings is not None
+                    else None
+                ),
+                "loading_settings_snapshot": subtitle_loading_settings_to_dict(
+                    source.track.loading_settings_snapshot
+                ),
             }
             for source in self._extra_sources
         ] or None
@@ -2392,6 +2544,29 @@ class SubtitleRenderWindow(QWidget):
             line_inline_guide_symbols=line_inline_guide_symbols,
             line_display_overrides=line_display_overrides,
             line_animation_overrides=line_animation_overrides,
+            page_plan=(
+                track_page_plan_to_dict(self._timing_track.page_plan)
+                if self._timing_track is not None
+                else None
+            ),
+            loading_settings_mode=(
+                self._timing_track.loading_settings_mode
+                if self._timing_track is not None
+                else None
+            ),
+            loading_settings=(
+                subtitle_loading_settings_to_dict(self._timing_track.loading_settings)
+                if self._timing_track is not None
+                and self._timing_track.loading_settings is not None
+                else None
+            ),
+            loading_settings_snapshot=(
+                subtitle_loading_settings_to_dict(
+                    self._timing_track.loading_settings_snapshot
+                )
+                if self._timing_track is not None
+                else None
+            ),
             extra_subtitle_sources=extra_subtitle_sources,
             project_role_names=self._property_panel.role_names,
             output=project_output_payload(
@@ -2500,6 +2675,8 @@ class SubtitleRenderWindow(QWidget):
             self.load_subtitle_source(paths["subtitle_path"])
             self._apply_line_breaks_before(data.get("line_breaks_before"))
             self._apply_line_layout_indices(data.get("line_layout_indices"))
+            if self._timing_track is not None:
+                self._restore_track_page_state(self._timing_track, data)
             self._apply_char_role_labels(data.get("char_role_labels"))
             guide_mismatches = self._apply_guide_symbol_rows(
                 self._timing_track, data.get("line_guide_symbols")
@@ -3210,6 +3387,18 @@ class SubtitleRenderWindow(QWidget):
         self._lyrics_panel.sourceSelected.connect(self._on_source_selected)
         self._lyrics_panel.sourceAddRequested.connect(self._on_source_add_requested)
         self._lyrics_panel.sourceRemoveRequested.connect(self._on_source_remove_requested)
+        self._lyrics_panel.sourceRefreshRequested.connect(
+            self._on_source_refresh_requested
+        )
+        self._lyrics_panel.sourceSettingsRequested.connect(
+            self._on_source_settings_requested
+        )
+        self._lyrics_panel.pageBoundaryRequested.connect(
+            self._on_page_boundary_requested
+        )
+        self._lyrics_panel.pageMoveRequested.connect(
+            self._on_page_move_requested
+        )
         top.addWidget(self._lyrics_panel)
 
         self._transport_bar.set_preview_fps(self._screen_settings.fps)
@@ -3904,6 +4093,13 @@ class SubtitleRenderWindow(QWidget):
         self._timing_track = track
         self._subtitle_path = source_path
         if not self._loading_project:
+            track.loading_settings_mode = "global"
+            track.loading_settings = None
+            track.loading_settings_snapshot = self._subtitle_loading_defaults
+            track.page_plan = build_page_plan(
+                track, self._subtitle_loading_defaults, self._style
+            )
+            project_page_plan_to_legacy_fields(track, self._style)
             self._apply_remembered_layout_assignment(track)
             self._resolve_unresolved_resource_labels({"主字幕"})
         self._property_panel.set_n3_template_lyrics_directory(
@@ -4130,8 +4326,14 @@ class SubtitleRenderWindow(QWidget):
 
         if primary_merge is not None:
             self._timing_track = primary_merge.track
+            self._timing_track.page_plan = normalize_page_plan(
+                self._timing_track, self._style
+            )
+            project_page_plan_to_legacy_fields(self._timing_track, self._style)
         for index, merge in extra_merges.items():
             self._extra_sources[index].track = merge.track
+            merge.track.page_plan = normalize_page_plan(merge.track, self._style)
+            project_page_plan_to_legacy_fields(merge.track, self._style)
 
         structure_changed = any(merge.structure_changed for merge in merges)
         timing_only = bool(merges) and all(merge.timing_only for merge in merges)
@@ -4424,7 +4626,38 @@ class SubtitleRenderWindow(QWidget):
 
     def _apply_style(self, style: Style) -> None:
         previous = self._style
+        track_indices = tuple(range(len(self._all_tracks())))
+        tracks_before = tuple(deepcopy(track) for track in self._all_tracks())
+        style = ensure_page_layout_defaults(style)
+        old_capacities = {
+            "default": max(len(previous.line_alignments), 1),
+            **{
+                layout.layout_id: max(len(layout.line_alignments), 1)
+                for layout in previous.layouts
+                if layout.layout_id
+            },
+        }
+        new_ids = {
+            "default",
+            *(layout.layout_id for layout in style.layouts if layout.layout_id),
+        }
+        shrunk = [
+            layout_id
+            for layout_id, old_capacity in old_capacities.items()
+            if layout_id in new_ids
+            and layout_capacity(style, layout_id) < old_capacity
+        ]
         self._style = style
+        affected_pages = 0
+        added_pages = 0
+        for layout_id in shrunk:
+            for track in self._all_tracks():
+                affected, added = reflow_pages_for_layout_capacity(
+                    track, style, layout_id
+                )
+                affected_pages += affected
+                added_pages += added
+        self._property_panel.set_style(style)
         self._remember_style_preferences(previous, style)
         self._preview_panel.set_style(style)
         self._lyrics_panel.set_style(style)
@@ -4448,7 +4681,36 @@ class SubtitleRenderWindow(QWidget):
         self._mark_project_dirty()
         # 调用方预先改写过 self._style 的路径（如导出高度重算）不入撤销栈。
         if previous is not style:
-            self._record_style_undo(previous, style)
+            if affected_pages:
+                tracks_after = tuple(
+                    deepcopy(track) for track in self._all_tracks()
+                )
+                self._undo_stack.append(
+                    (
+                        "style_tracks",
+                        style_to_dict(previous),
+                        style_to_dict(style),
+                        track_indices,
+                        tracks_before,
+                        tracks_after,
+                    )
+                )
+                del self._undo_stack[:-_UNDO_STACK_LIMIT]
+                self._redo_stack.clear()
+            else:
+                self._record_style_undo(previous, style)
+        if affected_pages:
+            InfoBar.warning(
+                title="布局行数已缩小",
+                content=(
+                    f"{affected_pages} 个引用页面已按新容量自动重排"
+                    + (f"，新增 {added_pages} 页" if added_pages else "")
+                    + "。"
+                ),
+                parent=self,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=5000,
+            )
 
     _STYLE_UNDO_MERGE_WINDOW_S = 1.2
     """同一批字段的连续样式微调（spin 连点 / 文本逐字输入）合并为一条撤销记录。"""
@@ -4521,6 +4783,29 @@ class SubtitleRenderWindow(QWidget):
         self._mark_project_dirty()
         return True
 
+    def _restore_style_and_tracks(
+        self, style_payload: object, indices: object, tracks: object
+    ) -> bool:
+        if (
+            not isinstance(style_payload, dict)
+            or not isinstance(indices, tuple)
+            or not isinstance(tracks, tuple)
+            or len(indices) != len(tracks)
+            or any(
+                not isinstance(index, int) or not isinstance(track, TimingTrack)
+                for index, track in zip(indices, tracks)
+            )
+        ):
+            return False
+        if any(self._track_by_index(index) is None for index in indices):
+            return False
+        if not self._restore_style(style_payload):
+            return False
+        for index, track in zip(indices, tracks):
+            self._set_track_by_index(index, deepcopy(track))
+        self._refresh_after_track_structure_changed()
+        return True
+
     def _apply_line_layout_indices(self, payload: object) -> None:
         """把项目文件里的每行布局引用套回刚加载的 track。"""
         track = self._timing_track
@@ -4552,6 +4837,41 @@ class SubtitleRenderWindow(QWidget):
             line.break_before = kind if kind in {"page", "paragraph"} else "none"
         self._lyrics_panel.set_track(track)
         self._preview_panel.set_track(track)
+
+    def _restore_track_page_state(self, track: TimingTrack, payload: object) -> None:
+        """Restore schema-v2 page data or migrate schema-v1 line projections."""
+
+        data = payload if isinstance(payload, dict) else {}
+        restored = track_page_plan_from_dict(data.get("page_plan"))
+        if restored is None:
+            track.page_plan = build_legacy_page_plan(
+                track,
+                self._style,
+                section_gap_ms=max(int(self._style.section_gap_ms), 0),
+            )
+            track.loading_settings_mode = "custom"
+            track.loading_settings = SubtitleLoadingSettings(
+                time_gap_section_enabled=True,
+                section_gap_ms=max(int(self._style.section_gap_ms), 0),
+                blank_line_section_enabled=False,
+                rows_per_page=2,
+            )
+            track.loading_settings_snapshot = track.loading_settings
+        else:
+            track.page_plan = normalize_page_plan(track, self._style, restored)
+            mode = str(data.get("loading_settings_mode") or "global")
+            track.loading_settings_mode = (
+                mode if mode in {"global", "custom"} else "global"
+            )
+            track.loading_settings = (
+                subtitle_loading_settings_from_dict(data.get("loading_settings"))
+                if track.loading_settings_mode == "custom"
+                else None
+            )
+            track.loading_settings_snapshot = subtitle_loading_settings_from_dict(
+                data.get("loading_settings_snapshot")
+            )
+        project_page_plan_to_legacy_fields(track, self._style)
 
     @staticmethod
     def _display_override_rows(track: Optional[TimingTrack]) -> Optional[list]:
@@ -4757,6 +5077,7 @@ class SubtitleRenderWindow(QWidget):
                 self._apply_animation_override_rows(
                     track, item.get("line_animation_overrides")
                 )
+                self._restore_track_page_state(track, item)
                 name = str(item.get("name") or "").strip() or path.stem
                 self._extra_sources.append(
                     ExtraSubtitleSource(name=name, path=path, track=track)
@@ -5095,6 +5416,24 @@ class SubtitleRenderWindow(QWidget):
         """Ctrl+Z：撤销最近一次样式（字体/布局等）、轨道时间或逐行特效编辑。"""
         while self._undo_stack:
             command = self._undo_stack.pop()
+            if command[0] == "track_snapshot":
+                _kind, track_index, old_track, _new_track = command
+                if self._restore_track_snapshot(track_index, old_track):
+                    self._redo_stack.append(command)
+                    return
+                continue
+            if command[0] == "tracks_snapshot":
+                _kind, indices, old_tracks, _new_tracks = command
+                if self._restore_tracks_snapshot(indices, old_tracks):
+                    self._redo_stack.append(command)
+                    return
+                continue
+            if command[0] == "style_tracks":
+                _kind, old_style, _new_style, indices, old_tracks, _new_tracks = command
+                if self._restore_style_and_tracks(old_style, indices, old_tracks):
+                    self._redo_stack.append(command)
+                    return
+                continue
             if command[0] == "style":
                 if self._restore_style(command[1]):
                     self._redo_stack.append(command)
@@ -5162,6 +5501,24 @@ class SubtitleRenderWindow(QWidget):
         """Ctrl+Y / Ctrl+Shift+Z：重做被撤销的样式或字幕轨道编辑。"""
         while self._redo_stack:
             command = self._redo_stack.pop()
+            if command[0] == "track_snapshot":
+                _kind, track_index, _old_track, new_track = command
+                if self._restore_track_snapshot(track_index, new_track):
+                    self._undo_stack.append(command)
+                    return
+                continue
+            if command[0] == "tracks_snapshot":
+                _kind, indices, _old_tracks, new_tracks = command
+                if self._restore_tracks_snapshot(indices, new_tracks):
+                    self._undo_stack.append(command)
+                    return
+                continue
+            if command[0] == "style_tracks":
+                _kind, _old_style, new_style, indices, _old_tracks, new_tracks = command
+                if self._restore_style_and_tracks(new_style, indices, new_tracks):
+                    self._undo_stack.append(command)
+                    return
+                continue
             if command[0] == "style":
                 if self._restore_style(command[2]):
                     self._undo_stack.append(command)
@@ -5228,6 +5585,299 @@ class SubtitleRenderWindow(QWidget):
         self._undo_stack.clear()
         self._redo_stack.clear()
 
+    def _effective_loading_settings(self, track: TimingTrack) -> SubtitleLoadingSettings:
+        if track.loading_settings_mode == "custom" and track.loading_settings is not None:
+            return track.loading_settings
+        return self._subtitle_loading_defaults
+
+    def _source_path_for_track_index(self, track_index: int) -> Optional[Path]:
+        if track_index == 0:
+            return self._subtitle_path
+        if 1 <= track_index <= len(self._extra_sources):
+            return self._extra_sources[track_index - 1].path
+        return None
+
+    def _set_track_by_index(self, track_index: int, track: TimingTrack) -> bool:
+        if track_index == 0:
+            self._timing_track = track
+            return True
+        if 1 <= track_index <= len(self._extra_sources):
+            self._extra_sources[track_index - 1].track = track
+            return True
+        return False
+
+    def _refresh_after_track_structure_changed(self) -> None:
+        self._refresh_source_ui()
+        self._refresh_lyrics_panel_source()
+        if self._timing_track is not None:
+            self._preview_panel.set_track(self._timing_track)
+        self._sync_extra_tracks_to_preview()
+        self._refresh_tracks_view_windows()
+        self._refresh_transport_duration()
+        self._margin_check_timer.start()
+        self._mark_project_dirty()
+
+    def _restore_track_snapshot(self, track_index: int, value: object) -> bool:
+        if not isinstance(value, TimingTrack):
+            return False
+        if not self._set_track_by_index(track_index, deepcopy(value)):
+            return False
+        self._refresh_after_track_structure_changed()
+        return True
+
+    def _restore_tracks_snapshot(self, indices: object, values: object) -> bool:
+        if not isinstance(indices, tuple) or not isinstance(values, tuple):
+            return False
+        if len(indices) != len(values):
+            return False
+        if any(
+            not isinstance(index, int) or not isinstance(value, TimingTrack)
+            for index, value in zip(indices, values)
+        ):
+            return False
+        for index, value in zip(indices, values):
+            if not self._set_track_by_index(index, deepcopy(value)):
+                return False
+        self._refresh_after_track_structure_changed()
+        return True
+
+    def _record_track_snapshot(
+        self, track_index: int, before: TimingTrack, after: TimingTrack
+    ) -> None:
+        self._undo_stack.append(
+            ("track_snapshot", int(track_index), deepcopy(before), deepcopy(after))
+        )
+        del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+
+    def _on_page_boundary_requested(self, action: str, track_line_index: int) -> None:
+        track = self._active_track()
+        if track is None or self._title_source_active:
+            return
+        before = deepcopy(track)
+        operation = {
+            "insert_page": ("page", True),
+            "delete_page": ("page", False),
+            "insert_section": ("paragraph", True),
+            "delete_section": ("paragraph", False),
+        }.get(str(action))
+        if operation is None:
+            return
+        kind, inserting = operation
+        changed = (
+            insert_boundary(
+                track, self._style, int(track_line_index), kind=kind
+            )
+            if inserting
+            else delete_boundary(
+                track, self._style, int(track_line_index), kind=kind
+            )
+        )
+        if not changed:
+            fluent_info(
+                self,
+                "无法修改边界",
+                "当前位置没有可修改的边界，或合并后的页面超过 8 行。",
+            )
+            return
+        self._record_track_snapshot(
+            self._active_source_index, before, deepcopy(track)
+        )
+        self._refresh_after_track_structure_changed()
+
+    def _on_page_move_requested(
+        self, section_index: int, page_index: int, direction: int
+    ) -> None:
+        track = self._active_track()
+        if track is None or self._title_source_active:
+            return
+        before = deepcopy(track)
+        if not move_page_boundary(
+            track,
+            self._style,
+            int(section_index),
+            int(page_index),
+            direction=int(direction),
+        ):
+            fluent_info(
+                self,
+                "无法移动歌词行",
+                "目标页面已经达到 8 行、相邻页面不存在，或当前行不是可移动的分页边界行。",
+            )
+            return
+        self._record_track_snapshot(
+            self._active_source_index, before, deepcopy(track)
+        )
+        self._refresh_after_track_structure_changed()
+
+    def _build_refreshed_track(
+        self,
+        track_index: int,
+        settings: SubtitleLoadingSettings,
+        *,
+        mode: str,
+    ) -> tuple[TimingTrack, Optional[TimingTrack], tuple[str, ...]]:
+        current = self._track_by_index(track_index)
+        if current is None:
+            raise ValueError("字幕源不存在")
+        path = self._source_path_for_track_index(track_index)
+        parsed_source: Optional[TimingTrack] = None
+        if path is not None and path.is_file():
+            parsed_source = self._load_timing_track_file(path)
+            state = self._source_watch_states.get(self._subtitle_source_key(path))
+            baseline = state.baseline if state is not None else current
+            merge = merge_reloaded_track(
+                current,
+                baseline,
+                parsed_source,
+                preserve_page_structure=False,
+            )
+            refreshed = merge.track
+            conflicts = merge.conflicts
+        else:
+            refreshed = deepcopy(current)
+            for line in refreshed.lines:
+                line.layout_index = 0
+                line.break_before = "none"
+            conflicts = ()
+        refreshed.loading_settings_mode = (
+            mode if mode in {"global", "custom"} else current.loading_settings_mode
+        )
+        refreshed.loading_settings = settings if refreshed.loading_settings_mode == "custom" else None
+        refreshed.loading_settings_snapshot = settings
+        refreshed.page_plan = build_page_plan(refreshed, settings, self._style)
+        project_page_plan_to_legacy_fields(refreshed, self._style)
+        return refreshed, parsed_source, conflicts
+
+    def _refresh_track_indices(
+        self,
+        indices: list[int],
+        settings_by_index: dict[int, tuple[str, SubtitleLoadingSettings]],
+    ) -> bool:
+        indices = list(dict.fromkeys(int(index) for index in indices))
+        tracks = [
+            self._track_by_index(index)
+            for index in indices
+        ]
+        if not indices or any(track is None for track in tracks):
+            return False
+        manual_count = sum(
+            1
+            for track in tracks
+            if track is not None
+            and page_plan_has_manual_changes(track, self._style)
+        )
+        if manual_count and not fluent_question(
+            self,
+            "重新生成段落和页面",
+            f"{manual_count} 个字幕源包含手工分页、分段或逐页布局。刷新会按加载设置"
+            "重新生成这些结构，但会尽量保留角色、特效、导唱符和显示时间。是否继续？",
+            yes_text="刷新",
+            no_text="取消",
+            default_cancel=True,
+        ):
+            return False
+        prepared: list[tuple[int, TimingTrack, Optional[TimingTrack]]] = []
+        conflicts: list[str] = []
+        try:
+            for index in indices:
+                mode, settings = settings_by_index[index]
+                refreshed, parsed, merge_conflicts = self._build_refreshed_track(
+                    index, settings, mode=mode
+                )
+                prepared.append((index, refreshed, parsed))
+                conflicts.extend(merge_conflicts)
+        except Exception as exc:  # noqa: BLE001 - transactional refresh
+            fluent_error(
+                self,
+                "刷新字幕失败",
+                f"无法重新读取字幕，当前项目未作任何更改。\n\n错误：{exc}",
+            )
+            return False
+        if conflicts:
+            details = "\n".join(f"• {item}" for item in dict.fromkeys(conflicts))
+            if not fluent_question(
+                self,
+                "部分设置无法匹配",
+                f"{details}\n\n是否继续使用能够可靠匹配的设置？",
+                yes_text="继续刷新",
+                no_text="取消",
+                default_cancel=True,
+            ):
+                return False
+
+        before = tuple(deepcopy(track) for track in tracks if track is not None)
+        for index, refreshed, parsed in prepared:
+            self._set_track_by_index(index, refreshed)
+            path = self._source_path_for_track_index(index)
+            if path is not None and parsed is not None:
+                self._set_subtitle_source_baseline(path, parsed)
+        after = tuple(
+            deepcopy(self._track_by_index(index)) for index in indices
+        )
+        self._undo_stack.append(("tracks_snapshot", tuple(indices), before, after))
+        del self._undo_stack[:-_UNDO_STACK_LIMIT]
+        self._redo_stack.clear()
+        self._refresh_after_track_structure_changed()
+        return True
+
+    def _on_source_refresh_requested(self) -> None:
+        track = self._active_track()
+        if track is None or self._title_source_active:
+            return
+        settings = self._effective_loading_settings(track)
+        if self._refresh_track_indices(
+            [self._active_source_index],
+            {
+                self._active_source_index: (
+                    track.loading_settings_mode,
+                    settings,
+                )
+            },
+        ):
+            InfoBar.success(
+                title="字幕已刷新",
+                content="已按保存的加载设置重新生成段落、页面和默认布局。",
+                parent=self,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=3000,
+            )
+
+    def _on_source_settings_requested(self, anchor: object) -> None:
+        track = self._active_track()
+        if track is None or self._title_source_active:
+            return
+        dialog = _SubtitleLoadingSettingsDialog(
+            mode=track.loading_settings_mode,
+            effective=self._effective_loading_settings(track),
+            global_defaults=self._subtitle_loading_defaults,
+            anchor=anchor if isinstance(anchor, QWidget) else None,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        mode, settings = dialog.result_value()
+        if mode == "global":
+            affected = [
+                index
+                for index, item in enumerate(self._all_tracks())
+                if item.loading_settings_mode == "global"
+                or index == self._active_source_index
+            ]
+            settings_map = {
+                index: ("global", settings) for index in affected
+            }
+            if not self._refresh_track_indices(affected, settings_map):
+                return
+            self._subtitle_loading_defaults = settings
+        else:
+            if not self._refresh_track_indices(
+                [self._active_source_index],
+                {self._active_source_index: ("custom", settings)},
+            ):
+                return
+        self._save_persisted_state()
+
     def _on_source_selected(self, index: int) -> None:
         index = max(int(index), 0)
         title_index = self._title_source_index()
@@ -5254,6 +5904,12 @@ class SubtitleRenderWindow(QWidget):
                 self, "加载字幕失败", f"无法解析字幕文件：\n{path}\n\n错误：{exc}"
             )
             return
+        track.loading_settings_mode = "global"
+        track.loading_settings_snapshot = self._subtitle_loading_defaults
+        track.page_plan = build_page_plan(
+            track, self._subtitle_loading_defaults, self._style
+        )
+        project_page_plan_to_legacy_fields(track, self._style)
         self._apply_remembered_layout_assignment(track)
         self._apply_imported_role_preset_choices(track.role_options)
         self._set_subtitle_source_baseline(path, track)
@@ -5334,6 +5990,7 @@ class SubtitleRenderWindow(QWidget):
         track = self._active_track()
         if track is None:
             return
+        before = deepcopy(track)
         changed: set[int] = set()
         for row in rows:
             if isinstance(row, int) and 0 <= row < len(track.lines):
@@ -5341,28 +5998,63 @@ class SubtitleRenderWindow(QWidget):
                     apply_layout_to_page(track, self._style, row, int(layout_index))
                 )
         if changed:
+            self._record_track_snapshot(
+                self._active_source_index, before, deepcopy(track)
+            )
             self._refresh_after_layout_assignment()
 
     def _on_layout_assign_all(self, layout_index: int) -> None:
         track = self._active_track()
         if track is None:
             return
+        if track.page_plan is not None:
+            resolved = resolve_page_plan(track, self._style)
+            layout_id = layout_id_for_index(self._style, int(layout_index))
+            capacity = layout_capacity(self._style, layout_id)
+            max_rows = max(
+                (page.line_count for page in resolved.pages),
+                default=0,
+            )
+            if capacity < max_rows:
+                fluent_warning(
+                    self,
+                    "布局无法应用到全部页",
+                    f"当前布局只能容纳 {capacity} 行，但字幕中存在 {max_rows} 行页面。"
+                    "请改用更大布局，或先调整分页。",
+                )
+                return
+        before = deepcopy(track)
         self._remember_layout_assignment("all", int(layout_index))
-        if assign_layout_to_all(track, int(layout_index)):
+        if assign_layout_to_all(track, int(layout_index), self._style):
+            self._record_track_snapshot(
+                self._active_source_index, before, deepcopy(track)
+            )
             self._refresh_after_layout_assignment()
 
     def _on_layout_auto_assign(self) -> None:
         track = self._active_track()
         if track is None:
             return
+        before = deepcopy(track)
         self._remember_layout_assignment("auto")
         if auto_assign_layouts_by_page(track, self._style):
+            self._record_track_snapshot(
+                self._active_source_index, before, deepcopy(track)
+            )
             self._refresh_after_layout_assignment()
 
     def _on_layout_deleted(self, deleted_index: int) -> None:
         """布局被删除后修正歌词行引用（全部字幕源）：被删的回默认，其后的序号前移。"""
+        track_indices = tuple(range(len(self._all_tracks())))
+        tracks_before = tuple(deepcopy(track) for track in self._all_tracks())
         changed = False
         for track in self._all_tracks():
+            if track.page_plan is not None:
+                previous_plan = deepcopy(track.page_plan)
+                track.page_plan = normalize_page_plan(track, self._style)
+                project_page_plan_to_legacy_fields(track, self._style)
+                changed |= track.page_plan != previous_plan
+                continue
             for line in track.lines:
                 index = int(getattr(line, "layout_index", 0) or 0)
                 if index == deleted_index:
@@ -5372,6 +6064,23 @@ class SubtitleRenderWindow(QWidget):
                     line.layout_index = index - 1
                     changed = True
         if changed:
+            top = self._undo_stack[-1] if self._undo_stack else None
+            if top is not None and top[0] == "style":
+                self._undo_stack[-1] = (
+                    "style_tracks",
+                    top[1],
+                    top[2],
+                    track_indices,
+                    tracks_before,
+                    tuple(deepcopy(track) for track in self._all_tracks()),
+                )
+            InfoBar.warning(
+                title="已替换被删除的布局",
+                content="引用该布局的页面已改用能够容纳当前行数的项目默认布局。",
+                parent=self,
+                position=InfoBarPosition.BOTTOM_RIGHT,
+                duration=5000,
+            )
             self._refresh_after_layout_assignment()
 
     def _refresh_after_layout_assignment(self) -> None:
@@ -6579,10 +7288,13 @@ class SubtitleRenderWindow(QWidget):
             index = self._layout_index_for_name(
                 self._style, preference.get("layout_name")
             )
-            assign_layout_to_all(track, index)
+            assign_layout_to_all(track, index, self._style)
 
     def _load_persisted_state(self) -> None:
         data = self._load_subtitle_settings()
+        self._subtitle_loading_defaults = subtitle_loading_settings_from_dict(
+            data.get("subtitle_loading_defaults")
+        )
         self._local_output_preferences = (
             dict(data.get("output"))
             if isinstance(data.get("output"), dict)
@@ -6747,6 +7459,9 @@ class SubtitleRenderWindow(QWidget):
                 self._layout_assignment_preference
             )
         data["new_project_defaults"] = new_project_defaults
+        data["subtitle_loading_defaults"] = subtitle_loading_settings_to_dict(
+            self._subtitle_loading_defaults
+        )
         data["style_presets"] = _style_presets_to_dict(self._style_presets)
         data["screen"] = screen_settings_to_dict(self._screen_settings)
         data["selected_scheme_key"] = (
