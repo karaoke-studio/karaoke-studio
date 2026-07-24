@@ -175,6 +175,98 @@ def test_numeric_property_typing_is_debounced(qapp, factory, typed, expected):
     spin.close()
 
 
+def test_cleared_numeric_field_is_not_refilled_by_debounce(qapp):
+    """清空输入框后停顿一下，旧值不能自己长回来。"""
+    spin = pp._spin(0, 10_000, suffix="px")
+    spin.setValue(120)
+    spin.show()
+    spin.lineEdit().setFocus()
+    spin.lineEdit().selectAll()
+
+    QTest.keyClick(spin.lineEdit(), Qt.Key.Key_Delete)
+    QTest.qWait(220)
+    qapp.processEvents()
+
+    assert spin.lineEdit().text() == "px"
+
+    QTest.keyClicks(spin.lineEdit(), "8")
+    QTest.qWait(220)
+    qapp.processEvents()
+
+    assert spin.lineEdit().text() == "8px"
+    assert spin.value() == 8
+    spin.close()
+
+
+def test_below_minimum_typing_is_not_rewritten_mid_edit(qapp):
+    """两位数删成一位数（暂时低于下限）时不能把文本改写成下限。"""
+    spin = pp._spin(8, 200)
+    spin.setValue(24)
+    spin.show()
+    spin.lineEdit().setFocus()
+    spin.lineEdit().selectAll()
+
+    QTest.keyClicks(spin.lineEdit(), "1")
+    QTest.qWait(220)
+    qapp.processEvents()
+
+    assert spin.lineEdit().text() == "1"
+    assert spin.value() == 24  # 越界文本不提交，旧值仍在但不回写输入框
+
+    QTest.keyClicks(spin.lineEdit(), "2")
+    QTest.qWait(220)
+    qapp.processEvents()
+
+    assert spin.lineEdit().text() == "12"
+    assert spin.value() == 12
+    spin.close()
+
+
+@pytest.mark.parametrize(
+    ("factory", "typed", "expected"),
+    [
+        (lambda: pp._spin(0, 10_000), "007", 7),
+        (lambda: pp._double_spin(0.0, 100.0), "12.5", 12.5),
+    ],
+)
+def test_debounced_commit_keeps_typed_text_and_caret(qapp, factory, typed, expected):
+    """提交数值不能顺手规范化文本，否则光标会在输入途中跳走。"""
+    spin = factory()
+    spin.show()
+    spin.lineEdit().setFocus()
+    spin.lineEdit().selectAll()
+
+    QTest.keyClicks(spin.lineEdit(), typed)
+    QTest.qWait(220)
+    qapp.processEvents()
+
+    assert spin.value() == expected
+    assert spin.lineEdit().text() == typed
+    assert spin.lineEdit().cursorPosition() == len(typed)
+    spin.close()
+
+
+def test_numeric_field_normalises_text_once_editing_finishes(qapp):
+    """失焦后照常收敛：半成品文本按 Qt 惯例回到上一个有效值。"""
+    spin = pp._spin(8, 200)
+    spin.setValue(24)
+    spin.show()
+    spin.lineEdit().setFocus()
+    spin.lineEdit().selectAll()
+
+    QTest.keyClicks(spin.lineEdit(), "3")
+    QTest.qWait(220)
+    qapp.processEvents()
+    assert spin.lineEdit().text() == "3"
+
+    spin.clearFocus()
+    qapp.processEvents()
+
+    assert spin.value() == 24
+    assert spin.lineEdit().text() == "24"
+    spin.close()
+
+
 def test_font_weight_menu_only_shows_selected_font_weights(
     monkeypatch, qapp
 ):

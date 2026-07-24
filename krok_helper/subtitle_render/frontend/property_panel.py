@@ -40,6 +40,7 @@ from PyQt6.QtGui import (
     QPen,
     QPixmap,
     QPolygonF,
+    QValidator,
 )
 from PyQt6.QtWidgets import (
     QAbstractButton,
@@ -2053,6 +2054,10 @@ class _UnitProtectedSpinBoxMixin:
         digit, which makes the editor itself visibly pause.  Keep wheel/step
         changes immediate, but commit direct text entry after the same short
         idle window used by the title editor (or immediately on focus loss).
+
+        Only complete, in-range text is committed, and the typed string is
+        never rewritten while the caret is still in the field — see
+        ``_commit_keyboard_edit``.
         """
         self.setKeyboardTracking(False)
         self._keyboard_commit_pending = False
@@ -2061,7 +2066,7 @@ class _UnitProtectedSpinBoxMixin:
         self._keyboard_commit_timer.setInterval(150)
         self._keyboard_commit_timer.timeout.connect(self._commit_keyboard_edit)
         self.lineEdit().textEdited.connect(self._queue_keyboard_commit)
-        self.editingFinished.connect(self._commit_keyboard_edit)
+        self.editingFinished.connect(self._flush_keyboard_edit)
 
     def _queue_keyboard_commit(self, _text: str) -> None:
         self._keyboard_commit_pending = True
@@ -2070,9 +2075,54 @@ class _UnitProtectedSpinBoxMixin:
     def _commit_keyboard_edit(self) -> None:
         if not self._keyboard_commit_pending:
             return
+        editor = self.lineEdit()
+        text = editor.text()
+        state, _fixed, _pos = self.validate(text, editor.cursorPosition())
+        if state != QValidator.State.Acceptable:
+            # 半成品文本（清空、只剩单位、暂时越界的 "2" → "20"）不能提交：
+            # interpretText 对不可接受的文本会把上一个值写回输入框，正在输入
+            # 的用户会被打断——删一位数字后旧值自己长回来正是这么来的。
+            # 留给下一次按键或失焦时（由 Qt 自己按常规规则收敛）处理。
+            return
+        self._keyboard_commit_timer.stop()
+        self._keyboard_commit_pending = False
+        cursor = editor.cursorPosition()
+        selection_start = editor.selectionStart()
+        selection_length = len(editor.selectedText())
+        self.interpretText()
+        if editor.text() != text:
+            # 值已提交，但 interpretText 顺手把文本规范化了（"007" → "7"、
+            # "12.5" → "12.50"）。编辑途中不能改用户正在敲的字符串，原样还原。
+            self._restore_editor_text(text, cursor, selection_start, selection_length)
+
+    def _flush_keyboard_edit(self) -> None:
+        """Editing ended: let Qt's own interpretation stand and drop the debounce.
+
+        Focus loss and Enter already run ``interpret()`` inside Qt, including
+        the out-of-range clamping and text normalisation that must not happen
+        while the field still has the caret.
+        """
         self._keyboard_commit_timer.stop()
         self._keyboard_commit_pending = False
         self.interpretText()
+
+    def _restore_editor_text(
+        self,
+        text: str,
+        cursor: int,
+        selection_start: int,
+        selection_length: int,
+    ) -> None:
+        editor = self.lineEdit()
+        self._protecting_unit_selection = True
+        try:
+            editor.setText(text)
+            if selection_start >= 0 and selection_length > 0:
+                editor.setSelection(selection_start, selection_length)
+            else:
+                editor.setCursorPosition(min(cursor, len(text)))
+        finally:
+            self._protecting_unit_selection = False
 
     def _install_unit_selection_guard(self) -> None:
         self._protecting_unit_selection = False
