@@ -1209,6 +1209,24 @@ def test_title_char_roles_round_trip_and_follow_text_edits():
     assert migrated == [["red", None, None], ["blue"]]
 
 
+def test_title_row_role_is_independent_of_character_count():
+    """整行角色与字符数无关：模板展开、改字后仍覆盖整行。"""
+    template_labels = [["A"] * len("{title} / {artist}")]
+    assert subtitle_models.normalize_title_char_role_labels(
+        "曲名 / 歌手", template_labels
+    ) == [["A"] * len("曲名 / 歌手")]
+
+    # 逐字符混排的行仍与文字严格对位
+    assert subtitle_models.normalize_title_char_role_labels(
+        "甲乙丙", [["A", "B"]]
+    ) == [["A", "B", None]]
+
+    # 改标题文字时整行角色跟着整行走，新增字符不掉回标题默认
+    assert subtitle_models.migrate_title_char_role_labels(
+        "甲乙", [["A", "A"]], "甲乙丙"
+    ) == [["A", "A", "A"]]
+
+
 def test_lyrics_panel_title_mode_reuses_character_role_picker(qapp, monkeypatch):
     panel = lyrics_list.LyricsPanel()
     title = TitleOverlay(
@@ -1442,6 +1460,70 @@ def test_title_roles_join_current_options_and_template_freezes_on_edit(qapp, mon
     )
     win._freeze_title_template_for_character_edit()
     assert win._style.title_overlay.text_template == "曲名 / 歌手"
+
+
+def test_title_role_keeps_metadata_template_dynamic(qapp, monkeypatch, tmp_path):
+    """给标题整行套角色不再把 {title} / {artist} 固定成纯文字。"""
+    monkeypatch.setenv("KARAOKE_STUDIO_SETTINGS_DIR", str(tmp_path / "settings"))
+    win = _make_window(qapp, monkeypatch)
+    win._timing_track = TimingTrack(
+        meta=TimingTrackMeta(title="曲名", artist="歌手"),
+        lines=_mixed_track().lines,
+    )
+    win._property_panel.set_roles(["A"])
+    win._style = Style(
+        title_overlay=TitleOverlay(
+            enabled=True,
+            text_template="{title} / {artist}",
+            char_role_labels=[],
+        )
+    )
+    win._property_panel.set_style(win._style)
+    win._title_source_active = True
+    win._refresh_source_ui()
+    win._refresh_lyrics_panel_source()
+
+    win._on_lyrics_roles_changed([0], "A")
+
+    title = win._style.title_overlay
+    assert title.text_template == "{title} / {artist}"
+    assert subtitle_models.normalize_title_char_role_labels(
+        "曲名 / 歌手", title.char_role_labels
+    ) == [["A"] * len("曲名 / 歌手")]
+    assert win._lyrics_panel.table_widget.item(0, lyrics_list.COL_ROLE).text() == "A"
+
+    # 元数据换歌后角色仍覆盖整行新文字
+    win._timing_track = replace(
+        win._timing_track,
+        meta=TimingTrackMeta(title="另一首", artist="另一个歌手"),
+    )
+    win._refresh_lyrics_panel_source()
+    assert subtitle_models.normalize_title_char_role_labels(
+        "另一首 / 另一个歌手", title.char_role_labels
+    ) == [["A"] * len("另一首 / 另一个歌手")]
+
+
+def test_title_row_role_change_does_not_request_template_freeze(qapp):
+    """整行角色不触发模板固定，逐字符编辑仍然触发。"""
+    panel = lyrics_list.LyricsPanel()
+    panel.set_role_options(["A"])
+    panel.set_title(
+        TitleOverlay(enabled=True, text_template="曲名 / 歌手", char_role_labels=[])
+    )
+    freezes: list[int] = []
+    requests: list[tuple[list[int], str]] = []
+    panel.titleEditRequested.connect(lambda: freezes.append(1))
+    panel.roleChangeRequested.connect(
+        lambda rows, name: requests.append((list(rows), name))
+    )
+
+    panel._request_role_change([0], "A")
+
+    assert requests == [([0], "A")]
+    assert freezes == []
+
+    panel._edit_char_roles(-1)  # 逐字符编辑器仍要求先固定模板
+    assert freezes == [1]
 
 
 def test_new_project_clears_loaded_media(qapp, monkeypatch, tmp_path):

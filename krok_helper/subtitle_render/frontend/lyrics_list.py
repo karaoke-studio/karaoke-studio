@@ -1817,8 +1817,8 @@ class LyricsPanel(DropPanel):
             )
             if not confirmed:
                 return
-        if self._title_mode:
-            self.titleEditRequested.emit()
+        # 整行角色与字符数无关，标题不必先把 {title} / {artist} 固定成纯文字；
+        # 只有逐字符编辑（_edit_char_roles）才需要展开模板。
         self.roleChangeRequested.emit(list(rows), role_name)
 
     def _on_cell_clicked(self, row: int, column: int) -> None:

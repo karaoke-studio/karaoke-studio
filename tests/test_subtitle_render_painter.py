@@ -6403,6 +6403,54 @@ def test_title_overlay_applies_role_scheme_per_character(qapp):
     assert not np.any(uniform_rgba[:, :, 2] > uniform_rgba[:, :, 0] + 30)
 
 
+def test_title_row_role_covers_expanded_template(qapp):
+    """整行角色跟着展开后的元数据文字走，长出来的字符不退回标题默认配色。"""
+    track = TimingTrack(
+        meta=TimingTrackMeta(title="とても長いタイトル", artist="歌手"),
+        lines=_title_track().lines,
+    )
+    base = Style()
+    schemes = dict(base.custom_style_schemes)
+    schemes["标题"] = replace(
+        schemes["标题"],
+        font_size_px=48,
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=_solid_fill("#FF0000"))
+        ),
+    )
+    schemes["蓝色标题"] = SubtitleStyleScheme(
+        font_size_px=48,
+        stroke_width_px=0,
+        stroke2_width_px=0,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=_solid_fill("#0000FF"))
+        ),
+    )
+    template = "{title}"
+    style = replace(
+        base,
+        custom_style_schemes=schemes,
+        title_overlay=TitleOverlay(
+            enabled=True,
+            text_template=template,
+            char_role_labels=[["蓝色标题"] * len(template)],
+            fade_in_ms=0,
+            fade_out_ms=0,
+        ),
+    )
+
+    image = _blank()
+    paint_frame(image, track, 500, style)
+
+    rgba = _img_rows_rgba(image).reshape(
+        image.height(), image.width(), 4
+    ).astype(np.int16)
+    assert np.any(rgba[:, :, 2] > rgba[:, :, 0] + 30)  # 角色蓝
+    assert not np.any(rgba[:, :, 0] > rgba[:, :, 2] + 30)  # 没有标题默认红
+
+
 def test_title_overlay_text_template_substitutes_metadata(qapp):
     track = _title_track()
     title = TitleOverlay(text_template="{title} / {artist}")

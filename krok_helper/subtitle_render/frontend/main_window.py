@@ -5697,7 +5697,7 @@ class SubtitleRenderWindow(QWidget):
     def _on_lyrics_roles_changed(self, rows: list[int], role_name: str) -> None:
         """把一个角色方案批量覆盖到所选歌词行，并作为一条命令撤销/重做。"""
         if self._title_source_active:
-            self._freeze_title_template_for_character_edit()
+            # 整行覆盖不展开 {title} / {artist}：整行角色本来就与字符数无关。
             title = self._style.title_overlay
             if title is None:
                 return

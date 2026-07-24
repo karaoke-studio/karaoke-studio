@@ -2142,15 +2142,36 @@ def title_overlay_from_dict(payload: object) -> Optional[TitleOverlay]:
     )
 
 
+def title_row_role(values: object) -> Optional[str]:
+    """整行同一个角色时返回该角色名，否则 ``None``（默认或逐字符混排）。"""
+    if not isinstance(values, (list, tuple)) or not values:
+        return None
+    labels = {
+        (str(value).strip() or None) if value else None for value in values
+    }
+    if len(labels) != 1:
+        return None
+    return next(iter(labels))
+
+
 def normalize_title_char_role_labels(
     text: str, payload: object
 ) -> list[list[Optional[str]]]:
-    """把持久化标题标签规范成与当前逐行文字严格等长的矩阵。"""
+    """把持久化标题标签规范成与当前逐行文字严格等长的矩阵。
+
+    整行同一个角色的行按「整行角色」处理：这种行与字符数无关，因此
+    ``{title}`` / ``{artist}`` 展开成元数据、或标题文字改长改短之后，角色
+    依然覆盖整行；只有逐字符混排的行才需要标签与文字严格对位。
+    """
     raw_rows = payload if isinstance(payload, list) else []
     normalized: list[list[Optional[str]]] = []
     for row_index, line in enumerate(str(text).split("\n")):
         raw = raw_rows[row_index] if row_index < len(raw_rows) else []
         values = raw if isinstance(raw, (list, tuple)) else []
+        row_role = title_row_role(values)
+        if row_role is not None:
+            normalized.append([row_role] * len(line))
+            continue
         normalized.append(
             [
                 (str(values[index]).strip() or None)
@@ -2190,6 +2211,14 @@ def migrate_title_char_role_labels(
             rows.append([])
         else:
             rows[-1].append(migrated_flat[index])
+    # 整行角色跟着整行走：改字后新增的字符也留在同一个角色里，而不是逐字符
+    # 对位后把没匹配上的部分退回标题默认。
+    new_lines = new_text.split("\n")
+    if len(new_lines) == len(normalized):
+        for row_index, values in enumerate(normalized):
+            row_role = title_row_role(values)
+            if row_role is not None:
+                rows[row_index] = [row_role] * len(new_lines[row_index])
     return rows
 
 
