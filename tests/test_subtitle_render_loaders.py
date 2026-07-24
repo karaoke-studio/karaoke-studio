@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+import sys
 import time
 
 import pytest
@@ -746,7 +747,8 @@ def test_export_tab_builds_render_job_from_loaded_media(qapp, monkeypatch, tmp_p
     assert job.crf == 23
     assert job.render_workers == 16
     assert job.native_export_enabled is False
-    assert job.gpu_export_enabled is False
+    # fe4eb4b 起 Windows 默认走 GPU 字幕导出（AGENTS.md §9），其余平台仍关闭。
+    assert job.gpu_export_enabled is (sys.platform == "win32")
 
 
 def test_export_output_prefills_dir_and_yurika_name(qapp, monkeypatch, tmp_path):
@@ -967,7 +969,7 @@ def test_window_shell_components_present(qapp, monkeypatch):
     # 属性面板 5 个分类页（顶部 segmented 导航，页面用 accessibleName 标注）
     assert win._property_panel.count() == 5
     assert [win._property_panel.widget(i).accessibleName() for i in range(5)] == [
-        "字体",
+        "角色",
         "布局",
         "时间",
         "特效",

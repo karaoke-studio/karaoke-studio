@@ -31,3 +31,30 @@ def _pinned_qapp():
 
     _PINNED_QAPP = QApplication.instance() or QApplication([])
     yield _PINNED_QAPP
+
+
+# 这些模块专门测设置文件的路径解析 / 原子写，会自行用 APPDATA 等做隔离；
+# 强制 KARAOKE_STUDIO_SETTINGS_DIR 会盖掉它们要验证的解析逻辑。
+_SETTINGS_PATH_AWARE_MODULES = frozenset({"test_settings_atomic_io"})
+
+
+@pytest.fixture(autouse=True)
+def _isolated_app_settings(request, tmp_path_factory, monkeypatch):
+    """给每个测试一份独立的设置目录。
+
+    ``SubtitleRenderWindow`` 等窗口在构造和交互时会读写真实的
+    ``%APPDATA%\\Karaoke Studio\\settings.json``：跑一次测试就把用例里的导出
+    参数（CRF / 编码器 / 画布尺寸 / 输出目录…）写进用户的真实配置；反过来用户
+    的配置又会让断言默认值的用例失败。测试永远不该碰真实配置。
+
+    自己 ``monkeypatch.setenv`` 设置目录的测试照旧覆盖这里的值。
+    """
+    if request.module.__name__ in _SETTINGS_PATH_AWARE_MODULES:
+        yield
+        return
+    from krok_helper.settings import SETTINGS_DIR_ENV
+
+    monkeypatch.setenv(
+        SETTINGS_DIR_ENV, str(tmp_path_factory.mktemp("app-settings"))
+    )
+    yield
