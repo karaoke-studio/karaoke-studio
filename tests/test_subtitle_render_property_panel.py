@@ -1343,7 +1343,8 @@ def test_title_page_uses_compact_responsive_appearance_and_timing(qapp):
     qapp.processEvents()
     assert panel._title_appearance_grid._columns == 1
     assert panel._title_time_grid._columns == 1
-    assert panel._title_head_grid._columns == 2
+    # 秒 + 毫秒复合框放不下两列，窄面板下退成单列而不是把 "999 ms" 截断。
+    assert panel._title_head_grid._columns == 1
     title_page = panel.widget(4)
     assert title_page.horizontalScrollBar().maximum() == 0
 
@@ -1385,6 +1386,127 @@ def test_title_head_tail_mode_has_independent_timing_rows(qapp):
     assert title.tail_duration_ms == 4_000
     assert title.tail_fade_in_ms == 800
     assert title.tail_fade_out_ms == 900
+
+
+def test_title_timing_fields_split_seconds_and_millis(qapp):
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(
+            title_overlay=TitleOverlay(
+                enabled=True,
+                # N3 的时间标签是 10ms 粒度，导入值本来就不是整秒。
+                head_offset_ms=1_230,
+                duration_ms=10_000,
+                fade_in_ms=300,
+            )
+        )
+    )
+
+    assert panel._title_head_spin.seconds_spin.value() == 1
+    assert panel._title_head_spin.millis_spin.value() == 230
+    assert panel._title_head_spin.value() == 1_230
+    assert panel._title_duration_spin.seconds_spin.value() == 10
+    assert panel._title_duration_spin.millis_spin.value() == 0
+    assert panel._title_fade_in_spin.seconds_spin.value() == 0
+    assert panel._title_fade_in_spin.millis_spin.value() == 300
+
+    # 两个分量分别编辑，写回模型的仍是整数毫秒。
+    panel._title_duration_spin.seconds_spin.setValue(12)
+    panel._title_duration_spin.millis_spin.setValue(45)
+    title = panel._style.title_overlay
+    assert title is not None
+    assert title.duration_ms == 12_045
+
+
+def test_title_timing_millis_step_carries_into_seconds(qapp):
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(title_overlay=TitleOverlay(enabled=True, duration_ms=1_999))
+    )
+
+    spin = panel._title_duration_spin
+    spin.millis_spin.stepBy(1)  # 999 → 进位
+    assert spin.value() == 2_000
+    assert (spin.seconds_spin.value(), spin.millis_spin.value()) == (2, 0)
+
+    spin.millis_spin.stepBy(-1)  # 0 → 借位
+    assert spin.value() == 1_999
+    assert (spin.seconds_spin.value(), spin.millis_spin.value()) == (1, 999)
+
+    title = panel._style.title_overlay
+    assert title is not None
+    assert title.duration_ms == 1_999
+
+
+def test_title_timing_millis_range_follows_seconds_limit(qapp):
+    panel = PropertyPanel()
+    panel.set_style(Style(title_overlay=TitleOverlay(enabled=True)))
+
+    spin = panel._title_fade_in_spin  # 上限 10 000ms
+    assert spin.millis_spin.maximum() == 999
+    spin.seconds_spin.setValue(10)
+    # 秒位顶到上限后毫秒位只能是 0，越界组合根本敲不出来。
+    assert spin.millis_spin.maximum() == 0
+    assert spin.value() == 10_000
+
+    spin.seconds_spin.setValue(9)
+    assert spin.millis_spin.maximum() == 999
+
+    spin.setValue(99_999)
+    assert spin.value() == 10_000
+    assert (spin.seconds_spin.value(), spin.millis_spin.value()) == (10, 0)
+
+    # 借位不能突破下限。
+    spin.setValue(0)
+    spin.millis_spin.stepBy(-1)
+    assert spin.value() == 0
+
+
+def test_title_timing_millis_typing_survives_panel_round_trip(qapp):
+    """毫秒位打字提交后，样式回流不能把用户正在敲的文本改写掉。"""
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(title_overlay=TitleOverlay(enabled=True, duration_ms=2_500))
+    )
+    panel.show()
+    panel.setCurrentIndex(4)
+    qapp.processEvents()
+
+    editor = panel._title_duration_spin.millis_spin.lineEdit()
+    editor.setFocus()
+    editor.selectAll()
+    QTest.keyClicks(editor, "045")
+    QTest.qWait(220)
+    qapp.processEvents()
+
+    assert panel._title_duration_spin.value() == 2_045
+    title = panel._style.title_overlay
+    assert title is not None
+    assert title.duration_ms == 2_045
+    # 提交走的是 _update_title → _sync_title_controls → setValue 这条回路，
+    # 途中不能把 "045" 规范化成 "45"。
+    assert editor.text() == "045 ms"
+    panel.close()
+
+
+def test_title_timing_unit_split_does_not_touch_undo_or_dirty_state(qapp, tmp_path):
+    """拆成两个框只是显示方式：同一个毫秒值不该产生多余的样式变更。"""
+    panel = PropertyPanel()
+    panel.set_style(
+        Style(title_overlay=TitleOverlay(enabled=True, duration_ms=2_500))
+    )
+
+    emitted: list[int] = []
+    panel.styleChanged.connect(lambda style: emitted.append(
+        style.title_overlay.duration_ms if style.title_overlay else -1
+    ))
+
+    spin = panel._title_duration_spin
+    spin.setValue(2_500)  # 值没变
+    assert emitted == []
+
+    spin.seconds_spin.setValue(3)
+    assert emitted == [3_500]
 
 
 def test_property_panel_font_and_color_sections_are_side_by_side(qapp):

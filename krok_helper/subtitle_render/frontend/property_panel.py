@@ -12,7 +12,7 @@ from dataclasses import dataclass, replace
 import json
 import math
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 from uuid import uuid4
 
 from PyQt6.QtCore import (
@@ -2288,6 +2288,146 @@ class _WheelFocusedDoubleSpinBox(_UnitProtectedSpinBoxMixin, FluentDoubleSpinBox
             event.accept()
             return
         super().wheelEvent(event)
+
+
+class _MillisPartSpinBox(_WheelFocusedSpinBox):
+    """秒/毫秒复合框里的毫秒位：0–999，步进越界时向秒位进位 / 借位。
+
+    没有进位的话滚轮会死在 999 或 0 上，用户得手工切到秒位再切回来。
+    """
+
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._carry_handler: Optional[Callable[[int, int], bool]] = None
+
+    def set_carry_handler(self, handler: Callable[[int, int], bool]) -> None:
+        self._carry_handler = handler
+
+    def stepBy(self, steps: int) -> None:  # noqa: N802 - Qt API
+        target = self.value() + steps
+        if self._carry_handler is not None and not 0 <= target <= 999:
+            carry = math.floor(target / 1000)
+            # 秒位越界时 handler 返回 False，退回默认的原地钳值。
+            if self._carry_handler(carry, target - carry * 1000):
+                return
+        super().stepBy(steps)
+
+
+class _DurationSpin(QWidget):
+    """秒 + 毫秒并排的时长输入；对外仍然是一个「毫秒整数」控件。
+
+    ``value()`` / ``setValue()`` / ``valueChanged`` 全部以毫秒为单位，与被它
+    替换掉的单个 ms spin 完全同构，所以模型层（``TitleOverlay`` 等）继续存
+    整数毫秒，工程文件与 N3 导入的 10ms 粒度都不会被这层 UI 改写。
+
+    毫秒位恒为 0–999，取值上下限由秒位动态收窄，因此任何可输入的组合都落在
+    ``[minimum, maximum]`` 内——不需要事后钳值，也就不会在用户还在打字时把
+    输入框里的文本改掉（见 ``_UnitProtectedSpinBoxMixin._commit_keyboard_edit``）。
+    """
+
+    valueChanged = Signal(int)
+
+    def __init__(
+        self,
+        minimum: int,
+        maximum: int,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        if minimum < 0:
+            # 负值的符号该归秒位还是毫秒位没有直观答案（-0.3s = 0s + -300ms？），
+            # 需要负偏移的字段请继续用单个 ms spin。
+            raise ValueError("_DurationSpin 只支持非负范围")
+        if maximum < minimum:
+            raise ValueError("_DurationSpin 的 maximum 不能小于 minimum")
+        self._minimum = int(minimum)
+        self._maximum = int(maximum)
+        self._value = self._minimum
+        self._syncing = False
+
+        # 焦点直接落到两个子框上；容器自身不参与 Tab 链。
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        self.setFixedHeight(_COMPACT_CONTROL_HEIGHT)
+
+        row = QHBoxLayout(self)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        self.seconds_spin = _spin(self._minimum // 1000, self._maximum // 1000, suffix=" s")
+        self.millis_spin = _spin(0, 999, suffix=" ms", cls=_MillisPartSpinBox)
+        self.millis_spin.set_carry_handler(self._carry_millis)
+        hint = "两格相加即为总时长（1 s + 230 ms = 1230 毫秒）；毫秒位满 1000 自动进位到秒。"
+        self.seconds_spin.setToolTip(hint)
+        self.millis_spin.setToolTip(hint)
+        # 毫秒位固定三位数（"999 ms"），比秒位宽，按比例分配剩余空间。
+        row.addWidget(self.seconds_spin, 3)
+        row.addWidget(self.millis_spin, 4)
+
+        self.seconds_spin.valueChanged.connect(self._on_part_changed)
+        self.millis_spin.valueChanged.connect(self._on_part_changed)
+        self._apply_split(self._value)
+
+    # -------------------------------------------------------------- 对外接口
+
+    def value(self) -> int:
+        return self._value
+
+    def setValue(self, value: int) -> None:  # noqa: N802 - QSpinBox API
+        clamped = self._clamp(value)
+        changed = clamped != self._value
+        self._value = clamped
+        self._apply_split(clamped)
+        if changed:
+            # 与 QSpinBox.setValue 一致：值真的变了才发信号。
+            self.valueChanged.emit(clamped)
+
+    def minimum(self) -> int:
+        return self._minimum
+
+    def maximum(self) -> int:
+        return self._maximum
+
+    # ---------------------------------------------------------------- 内部实现
+
+    def _clamp(self, value: Any) -> int:
+        return int(max(self._minimum, min(self._maximum, int(value))))
+
+    def _apply_split(self, value: int) -> None:
+        seconds, millis = divmod(value, 1000)
+        self._syncing = True
+        try:
+            self.seconds_spin.setValue(seconds)
+            self._sync_millis_range()
+            self.millis_spin.setValue(millis)
+        finally:
+            self._syncing = False
+
+    def _sync_millis_range(self) -> None:
+        """按当前秒位收窄毫秒位的取值范围，让越界组合根本敲不出来。"""
+        base = self.seconds_spin.value() * 1000
+        self.millis_spin.setMaximum(max(0, min(999, self._maximum - base)))
+        self.millis_spin.setMinimum(max(0, min(999, self._minimum - base)))
+
+    def _carry_millis(self, carry: int, millis: int) -> bool:
+        seconds = self.seconds_spin.value() + carry
+        if not self.seconds_spin.minimum() <= seconds <= self.seconds_spin.maximum():
+            return False
+        if not self._minimum <= seconds * 1000 + millis <= self._maximum:
+            return False
+        self.setValue(seconds * 1000 + millis)
+        return True
+
+    def _on_part_changed(self, _value: int) -> None:
+        if self._syncing:
+            return
+        # 秒位变了 → 毫秒位的可用区间跟着变；这一步可能反过来钳住毫秒位并
+        # 递归回到本函数，递归里已经发过信号，外层因为值相等不会重复发。
+        self._sync_millis_range()
+        value = self._clamp(self.seconds_spin.value() * 1000 + self.millis_spin.value())
+        if value == self._value:
+            return
+        self._value = value
+        self.valueChanged.emit(value)
 
 
 class _WheelFocusedComboBox(FluentComboBox):
@@ -5613,27 +5753,29 @@ class PropertyPanel(QWidget):
         head_row_layout.addWidget(
             self._title_head_row_label, 0, Qt.AlignmentFlag.AlignTop
         )
+        # 秒 + 毫秒两个输入框比原来的单个 ms 框宽，列宽下限跟着抬高，
+        # 否则窄面板下两列会把 "999 ms" 挤到显示不全。
         self._title_head_grid = _ResponsiveFieldGrid(
-            self._title_head_row, min_column_width=120, max_columns=4
+            self._title_head_row, min_column_width=160, max_columns=4
         )
         head_row_layout.addWidget(self._title_head_grid, 1)
 
-        self._title_fade_in_spin = _spin(0, 10_000, suffix=" ms")
+        self._title_fade_in_spin = _DurationSpin(0, 10_000)
         self._title_fade_in_spin.valueChanged.connect(
             lambda value: self._update_title(fade_in_ms=value)
         )
         self._title_head_grid.add_field("淡入", self._title_fade_in_spin)
-        self._title_head_spin = _spin(0, 600_000, suffix=" ms")
+        self._title_head_spin = _DurationSpin(0, 600_000)
         self._title_head_spin.valueChanged.connect(
             lambda value: self._update_title(head_offset_ms=value)
         )
         self._title_head_grid.add_field("偏移", self._title_head_spin)
-        self._title_duration_spin = _spin(0, 600_000, suffix=" ms")
+        self._title_duration_spin = _DurationSpin(0, 600_000)
         self._title_duration_spin.valueChanged.connect(
             lambda value: self._update_title(duration_ms=value)
         )
         self._title_head_grid.add_field("显示时长", self._title_duration_spin)
-        self._title_fade_out_spin = _spin(0, 10_000, suffix=" ms")
+        self._title_fade_out_spin = _DurationSpin(0, 10_000)
         self._title_fade_out_spin.valueChanged.connect(
             lambda value: self._update_title(fade_out_ms=value)
         )
@@ -5649,26 +5791,26 @@ class PropertyPanel(QWidget):
             self._title_tail_row_label, 0, Qt.AlignmentFlag.AlignTop
         )
         self._title_tail_grid = _ResponsiveFieldGrid(
-            self._title_tail_row, min_column_width=120, max_columns=4
+            self._title_tail_row, min_column_width=160, max_columns=4
         )
         tail_row_layout.addWidget(self._title_tail_grid, 1)
 
-        self._title_tail_fade_in_spin = _spin(0, 10_000, suffix=" ms")
+        self._title_tail_fade_in_spin = _DurationSpin(0, 10_000)
         self._title_tail_fade_in_spin.valueChanged.connect(
             lambda value: self._update_title(tail_fade_in_ms=value)
         )
         self._title_tail_grid.add_field("淡入", self._title_tail_fade_in_spin)
-        self._title_tail_spin = _spin(0, 600_000, suffix=" ms")
+        self._title_tail_spin = _DurationSpin(0, 600_000)
         self._title_tail_spin.valueChanged.connect(
             lambda value: self._update_title(tail_offset_ms=value)
         )
         self._title_tail_grid.add_field("偏移", self._title_tail_spin)
-        self._title_tail_duration_spin = _spin(0, 600_000, suffix=" ms")
+        self._title_tail_duration_spin = _DurationSpin(0, 600_000)
         self._title_tail_duration_spin.valueChanged.connect(
             lambda value: self._update_title(tail_duration_ms=value)
         )
         self._title_tail_grid.add_field("显示时长", self._title_tail_duration_spin)
-        self._title_tail_fade_out_spin = _spin(0, 10_000, suffix=" ms")
+        self._title_tail_fade_out_spin = _DurationSpin(0, 10_000)
         self._title_tail_fade_out_spin.valueChanged.connect(
             lambda value: self._update_title(tail_fade_out_ms=value)
         )
@@ -8419,9 +8561,13 @@ def _scheme_icon(scheme: SubtitleStyleScheme) -> QIcon:
 
 
 def _spin(
-    minimum: int, maximum: int, *, suffix: str = ""
-) -> _WheelFocusedSpinBox:
-    spin = _WheelFocusedSpinBox()
+    minimum: int,
+    maximum: int,
+    *,
+    suffix: str = "",
+    cls: type[_WheelFocusedSpinBox] = _WheelFocusedSpinBox,
+) -> Any:
+    spin = cls()
     spin.setRange(minimum, maximum)
     spin.setSuffix(suffix)
     spin.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
