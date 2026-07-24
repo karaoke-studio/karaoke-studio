@@ -6,7 +6,7 @@ standalone and embedded modes both keep correct focus, modality, and theme.
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from typing import Callable, Mapping, Optional, Sequence
 
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QColor, QPainter
@@ -136,25 +136,47 @@ def fluent_choice(
     buttons: Sequence[str],
     *,
     default: int = 0,
+    sticky: Optional[Mapping[int, Callable[[], None]]] = None,
 ) -> int:
-    """Return the clicked button index, or ``-1`` when closed externally."""
+    """Return the clicked button index, or ``-1`` when closed externally.
+
+    ``sticky`` maps a button index to a handler that runs in place and leaves
+    the dialog open, so the user can act on it and still pick another button
+    afterwards. Sticky buttons never become the return value.
+    """
     if len(buttons) < 2:
         raise ValueError("fluent_choice requires at least two buttons")
     dialog = FluentMessageDialog(title, content, parent)
+    handlers = dict(sticky or {})
     selected = {"index": -1}
 
     def choose(index: int) -> None:
         selected["index"] = index
 
+    def make_sticky(button, handler: Callable[[], None]) -> None:
+        # yes/cancel 默认被 qfluentwidgets 接到 accept/reject，先摘掉才能不关闭。
+        try:
+            button.clicked.disconnect()
+        except TypeError:
+            pass
+        button.clicked.connect(lambda _checked=False, run=handler: run())
+
     ordered = [dialog.yesButton]
     dialog.yesButton.setText(buttons[0])
-    dialog.yesButton.clicked.connect(lambda: choose(0))
+    if 0 in handlers:
+        make_sticky(dialog.yesButton, handlers[0])
+    else:
+        dialog.yesButton.clicked.connect(lambda: choose(0))
     for index in range(1, len(buttons) - 1):
         button = PushButton(buttons[index], dialog.buttonGroup)
         button.setAttribute(Qt.WidgetAttribute.WA_LayoutUsesWidgetRect)
-        button.clicked.connect(
-            lambda _checked=False, value=index: (choose(value), dialog.accept())
-        )
+        handler = handlers.get(index)
+        if handler is None:
+            button.clicked.connect(
+                lambda _checked=False, value=index: (choose(value), dialog.accept())
+            )
+        else:
+            button.clicked.connect(lambda _checked=False, run=handler: run())
         dialog.buttonLayout.insertWidget(
             dialog.buttonLayout.count() - 1,
             button,
@@ -164,7 +186,10 @@ def fluent_choice(
         ordered.append(button)
     last = len(buttons) - 1
     dialog.cancelButton.setText(buttons[last])
-    dialog.cancelButton.clicked.connect(lambda: choose(last))
+    if last in handlers:
+        make_sticky(dialog.cancelButton, handlers[last])
+    else:
+        dialog.cancelButton.clicked.connect(lambda: choose(last))
     ordered.append(dialog.cancelButton)
     if 0 <= default < len(ordered):
         ordered[default].setFocus()

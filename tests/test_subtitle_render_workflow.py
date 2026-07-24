@@ -158,7 +158,8 @@ def test_subtitle_render_success_prompts_for_post_export_action(
     opened: list[Path] = []
     prompts: list[tuple] = []
     sounds: list[bool] = []
-    choices = iter((0, 1, 2))
+    # 「打开文件夹」是不关闭弹窗的 sticky 按钮，只会通过 handler 生效。
+    choices = iter((2, 1, 2))
 
     class Context:
         def accept_subtitle_video(self, path: Path) -> None:
@@ -170,6 +171,8 @@ def test_subtitle_render_success_prompts_for_post_export_action(
 
     def choose(*args, **kwargs):
         prompts.append((args, kwargs))
+        if len(prompts) == 1:  # 首次弹窗模拟先点「打开文件夹」再点「取消」
+            kwargs["sticky"][0]()
         return next(choices)
 
     monkeypatch.setattr(
@@ -200,7 +203,40 @@ def test_subtitle_render_success_prompts_for_post_export_action(
     assert str(output) in args[2]
     assert "本次导出耗时：2 分 5 秒" in args[2]
     assert args[3] == ("打开文件夹", "进入下一步", "取消")
-    assert kwargs == {"default": 1}
+    assert kwargs["default"] == 1
+    assert set(kwargs["sticky"]) == {0}
+    assert set(kwargs) == {"default", "sticky"}
+
+
+def test_fluent_choice_sticky_button_keeps_dialog_open(qapp, monkeypatch) -> None:
+    from krok_helper.subtitle_render.frontend import fluent_dialogs
+
+    ran: list[str] = []
+    finished: list[int] = []
+    finished_after_sticky: list[int] = []
+
+    def fake_exec(self) -> int:
+        self.finished.connect(finished.append)
+        self.yesButton.click()
+        finished_after_sticky.extend(finished)
+        self.cancelButton.click()
+        return 0
+
+    monkeypatch.setattr(fluent_dialogs.FluentMessageDialog, "exec", fake_exec)
+
+    choice = fluent_dialogs.fluent_choice(
+        None,
+        "视频导出完成",
+        "内容",
+        ("打开文件夹", "进入下一步", "取消"),
+        default=1,
+        sticky={0: lambda: ran.append("open")},
+    )
+
+    assert ran == ["open"]
+    assert finished_after_sticky == []  # sticky 按钮点完弹窗仍在
+    assert finished  # 取消照常关闭
+    assert choice == 2
 
 
 def test_hires_success_plays_sound_and_uses_fluent_dialog(

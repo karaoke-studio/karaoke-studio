@@ -7231,10 +7231,10 @@ class SubtitleRenderWindow(QWidget):
             ),
             ("打开文件夹", "进入下一步", "取消"),
             default=1,
+            # 「打开文件夹」保持弹窗不关，方便检查完成片后再决定下一步。
+            sticky={0: lambda: self._open_export_folder(output_path)},
         )
-        if choice == 0:
-            self._open_export_folder(output_path)
-        elif choice == 1:
+        if choice == 1:
             context = self._workflow_context
             if context is not None and hasattr(context, "accept_subtitle_video"):
                 context.accept_subtitle_video(output_path)
