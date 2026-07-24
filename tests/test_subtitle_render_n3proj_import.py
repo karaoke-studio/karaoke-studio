@@ -465,13 +465,13 @@ def test_import_layouts(imported):
     # LyricsLayouts[1:] → Style.layouts
     assert style.layouts[0].name == "タイトル左上"
     assert [layout.name for layout in style.layouts[1:]] == [
-        "默认 1 行",
-        "默认 3 行",
-        "默认 4 行",
-        "默认 5 行",
-        "默认 6 行",
-        "默认 7 行",
-        "默认 8 行",
+        "1 行布局",
+        "3 行布局",
+        "4 行布局",
+        "5 行布局",
+        "6 行布局",
+        "7 行布局",
+        "8 行布局",
     ]
     assert style.layouts[0].line_y_position == "top"
     assert style.layouts[0].line_alignments == ["left"]

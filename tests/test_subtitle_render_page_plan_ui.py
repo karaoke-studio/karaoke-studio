@@ -68,7 +68,7 @@ def test_page_markers_layout_column_and_boundary_drag_mapping(qapp):
         "T1",
         "T2",
     ]
-    assert table.item(2, COL_LAYOUT).text() == "默认布局"
+    assert table.item(2, COL_LAYOUT).text() == "2 行布局（默认）"
     assert panel._page_boundary_move_for_drag(5, 3) == (0, 0, 1)
 
     panel._on_cell_clicked(1, COL_LANE)

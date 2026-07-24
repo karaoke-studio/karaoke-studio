@@ -889,7 +889,8 @@ def test_delete_layout_uses_fluent_confirmation(qapp, monkeypatch):
     assert [layout.name for layout in panel.subtitle_style.layouts] == ["副歌布局"]
     assert captured["args"][1:3] == (
         "删除布局",
-        "确定要删除布局“副歌布局”吗？\n使用它的歌词行（和标题）会回到默认布局。",
+        "确定要删除布局“副歌布局”吗？\n"
+        "使用它的页面（和标题）会回到“2 行布局（默认）”。",
     )
     assert captured["kwargs"] == {
         "yes_text": "删除",
@@ -5876,10 +5877,13 @@ def test_layout_save_button_is_after_delete_and_confirms_selected_layout(
         button_layout.indexOf(panel._delete_layout_btn) + 1
     )
     assert requested == [1]
+    assert "软件级新建项目默认值" in panel._save_layout_btn.toolTip()
+    assert "不会应用到当前页面" in panel._save_layout_btn.toolTip()
     assert captured["args"][1:3] == (
-        "保存布局",
-        "是否将当前改动保存到布局“副歌布局”？\n"
-        "保存后，新建项目将使用此布局参数。",
+        "保存为软件默认布局",
+        "是否将布局“副歌布局”的当前参数保存到软件级新建项目默认值？\n"
+        "这只影响以后新建的项目，不会应用到当前页面，也不会更改各行数的"
+        "自动布局选择。",
     )
     assert captured["kwargs"] == {
         "yes_text": "保存",

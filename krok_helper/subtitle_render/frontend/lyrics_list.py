@@ -11,7 +11,7 @@ UI 设计：
   - **特效**：双击编辑逐行入场/退场动画；右键可批量设置选中行
   - **内容**：只读；水平对齐跟随布局设置（asymmetric 按每行对齐列表 / center
     居中 / per_row 按行独立对齐），布局改动即时反映到列表
-  - 空行渲染成矮分隔行（间奏 ♪），不再占一整行空白
+  - 有页计划时只显示段落/分页提示行；无页计划的兼容输入才把空行显示为间奏 ♪
 """
 
 from __future__ import annotations
@@ -102,7 +102,7 @@ from krok_helper.subtitle_render.models import (
     line_visible_chars,
     normalize_title_char_role_labels,
     layout_capacity,
-    layout_index_for_id,
+    layout_display_name,
 )
 from krok_helper.subtitle_render.frontend.theme import palette, themed
 
@@ -1055,7 +1055,7 @@ class LyricsPanel(DropPanel):
         self._remove_source_btn.clicked.connect(self._on_remove_source_clicked)
         self._refresh_source_btn = TransparentToolButton(FIF.SYNC, self._source_bar)
         self._refresh_source_btn.setToolTip(
-            "使用已保存的加载设置重新读取当前字幕源，并重新生成段落、页面和默认布局。"
+            "使用已保存的加载设置重新读取当前字幕源，并重新生成段落、页面和按行数布局。"
             "歌词角色、逐行特效、导唱符及手动显示时间会在能够可靠匹配时保留；"
             "手工调整的分页将被覆盖。"
         )
@@ -1156,10 +1156,7 @@ class LyricsPanel(DropPanel):
             self._refresh_presentation()
 
     def _layout_name_for_id(self, layout_id: Optional[str]) -> str:
-        index = layout_index_for_id(self._style, str(layout_id or "default"))
-        if index <= 0:
-            return "默认布局"
-        return self._style.layouts[index - 1].name
+        return layout_display_name(self._style, str(layout_id or "default"))
 
     def _build_presentation_rows(
         self, track: TimingTrack
@@ -1192,18 +1189,13 @@ class LyricsPanel(DropPanel):
         rows = []
         seen_sections: set[int] = set()
         seen_pages: set[int] = set()
-        hide_source_blanks = bool(
-            track.loading_settings_snapshot.blank_line_section_enabled
-        )
-        for track_index, line in enumerate(track.lines):
+        for track_index, _line in enumerate(track.lines):
             item = by_track.get(track_index)
             if item is None:
-                if not hide_source_blanks:
-                    rows.append(
-                        LyricsPresentationRow(
-                            "source_blank", track_line_index=track_index
-                        )
-                    )
+                # Once a page plan exists, section/page marker rows are the
+                # sole structural presentation.  Source blanks remain in the
+                # track for round-tripping but must not become operable table
+                # rows or interfere with selection and page dragging.
                 continue
             if item.section_index not in seen_sections:
                 seen_sections.add(item.section_index)
@@ -1543,7 +1535,7 @@ class LyricsPanel(DropPanel):
         if column == COL_LAYOUT:
             return max(
                 self._header_width_hint(COL_LAYOUT),
-                self._table.fontMetrics().horizontalAdvance("默认 8 行") + 20,
+                self._table.fontMetrics().horizontalAdvance("2 行布局（默认）") + 20,
             )
         return self._content_minimum_width()
 
@@ -1987,12 +1979,13 @@ class LyricsPanel(DropPanel):
                     else (f"T{lane + 1}" if dual else "")
                 )
                 layout_ref = int(getattr(line, "layout_index", 0) or 0) if line else 0
-                if 1 <= layout_ref <= len(style.layouts):
-                    lane_item.setToolTip(f"布局：{style.layouts[layout_ref - 1].name}")
-                    layout_item.setText(style.layouts[layout_ref - 1].name)
-                else:
-                    lane_item.setToolTip("布局：默认布局")
-                    layout_item.setText("默认布局")
+                layout_name = (
+                    style.layouts[layout_ref - 1].name
+                    if 1 <= layout_ref <= len(style.layouts)
+                    else layout_display_name(style, "default")
+                )
+                lane_item.setToolTip(f"布局：{layout_name}")
+                layout_item.setText(layout_name)
                 layout_item.setToolTip(
                     f"当前页面使用“{layout_item.text()}”。单击可选择同容量或更大容量的布局。"
                 )
@@ -2242,7 +2235,9 @@ class LyricsPanel(DropPanel):
             for row in rows
             if row < len(self._track.lines)
         }
-        names = ["默认布局"] + [layout.name for layout in self._style.layouts]
+        names = [layout_display_name(self._style, "default")] + [
+            layout.name for layout in self._style.layouts
+        ]
         selected_page_counts: list[int] = []
         selected_page_indices: set[int] = set()
         if self._resolved_page_plan is not None:
@@ -2420,7 +2415,9 @@ class LyricsPanel(DropPanel):
         )
         current = int(getattr(self._track.lines[track_row], "layout_index", 0) or 0)
         menu = _StableRoundMenu(parent=self._table)
-        names = ["默认布局"] + [layout.name for layout in self._style.layouts]
+        names = [layout_display_name(self._style, "default")] + [
+            layout.name for layout in self._style.layouts
+        ]
         for index, name in enumerate(names):
             action = Action(name, menu)
             action.setCheckable(True)

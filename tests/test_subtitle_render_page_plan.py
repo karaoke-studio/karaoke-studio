@@ -27,6 +27,7 @@ from krok_helper.subtitle_render.models import (
     TrackSection,
     ensure_page_layout_defaults,
     layout_capacity,
+    layout_display_name,
     track_page_plan_from_dict,
     track_page_plan_to_dict,
 )
@@ -57,6 +58,43 @@ def test_default_style_has_stable_one_to_eight_row_layouts():
     assert layout_capacity(
         edited, edited.default_layout_by_row_count[2]
     ) == 2
+    assert layout_display_name(style, "default") == "2 行布局（默认）"
+    assert {
+        layout.layout_id: layout.name
+        for layout in style.layouts
+        if layout.layout_id.startswith("builtin-")
+    } == {
+        "builtin-1": "1 行布局",
+        "builtin-3": "3 行布局",
+        "builtin-4": "4 行布局",
+        "builtin-5": "5 行布局",
+        "builtin-6": "6 行布局",
+        "builtin-7": "7 行布局",
+        "builtin-8": "8 行布局",
+    }
+
+
+def test_legacy_builtin_layout_names_are_normalized_without_renaming_custom_layouts():
+    style = ensure_page_layout_defaults(
+        Style(
+            layouts=[
+                LyricsLayout(
+                    name="默认 4 行",
+                    layout_id="builtin-4",
+                    line_alignments=["left"] * 4,
+                ),
+                LyricsLayout(
+                    name="默认 6 行",
+                    layout_id="custom-six",
+                    line_alignments=["left"] * 6,
+                ),
+            ]
+        )
+    )
+
+    names = {layout.layout_id: layout.name for layout in style.layouts}
+    assert names["builtin-4"] == "4 行布局"
+    assert names["custom-six"] == "默认 6 行"
 
 
 def test_time_gap_is_strictly_greater_than_threshold():

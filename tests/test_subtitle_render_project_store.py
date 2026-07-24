@@ -1574,10 +1574,11 @@ def test_schema_v1_project_is_migrated_to_movable_page_plan_in_memory(
     win = _make_window(qapp, monkeypatch)
     lrc = tmp_path / "legacy.lrc"
     lrc.write_text(
-        "".join(
-            f"[00:0{index}:00]{index}[00:0{index}:50]\n"
-            for index in range(1, 5)
-        ),
+        "[00:01:00]1[00:01:50]\n"
+        "[00:02:00]2[00:02:50]\n"
+        "\n"
+        "[00:03:00]3[00:03:50]\n"
+        "[00:04:00]4[00:04:50]\n",
         encoding="utf-8-sig",
     )
     legacy = {
@@ -1587,7 +1588,7 @@ def test_schema_v1_project_is_migrated_to_movable_page_plan_in_memory(
         # Early schema-v1 snapshots had no line_breaks_before and relied on
         # the parser's historical two-line SeqLinesBreaker.  A larger layout
         # must not collapse those two old pages into one four-line page.
-        "line_layout_indices": [4, 4, 4, 4],
+        "line_layout_indices": [4, 4, 0, 4, 4],
     }
 
     win._apply_project_data(legacy)
@@ -1606,6 +1607,10 @@ def test_schema_v1_project_is_migrated_to_movable_page_plan_in_memory(
     ] == ["builtin-4", "builtin-4"]
     assert any(
         row.kind == "page_marker"
+        for row in win._lyrics_panel._presentation_rows
+    )
+    assert not any(
+        row.kind == "source_blank"
         for row in win._lyrics_panel._presentation_rows
     )
 
@@ -2123,7 +2128,7 @@ def test_selected_rows_context_menu_marks_applied_layouts(qapp, monkeypatch):
         submenu for submenu in menu._subMenus if submenu.title() == "应用布局"
     )
     actions = {action.text(): action for action in layout_menu.actions()}
-    assert actions["默认布局"].icon().isNull()
+    assert actions["2 行布局（默认）"].icon().isNull()
     assert not actions["下寄せ3行"].icon().isNull()
     assert not actions["上寄せ2行"].icon().isNull()
 
@@ -2142,7 +2147,7 @@ def test_selected_rows_context_menu_marks_applied_layouts(qapp, monkeypatch):
         if submenu.title() == "应用布局"
     )
     actions = {action.text(): action for action in layout_menu.actions()}
-    assert actions["默认布局"].icon().isNull()
+    assert actions["2 行布局（默认）"].icon().isNull()
     assert actions["下寄せ3行"].icon().isNull()
     assert not actions["上寄せ2行"].icon().isNull()
 

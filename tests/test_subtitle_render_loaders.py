@@ -218,7 +218,18 @@ def test_in_memory_sug_handoff_does_not_enable_file_watching(
         ],
     )
     source_path = tmp_path / "workflow.sug"
-    SugProjectParser.save(project, str(source_path))
+    # SUG keeps portable settings beside argv[0].  Point that probe at this
+    # test's writable sandbox instead of the installed Python directory.
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [str(tmp_path / "pytest.exe"), *sys.argv[1:]],
+    )
+    monkeypatch.setattr(
+        mw.SubtitleRenderWindow,
+        "_resolve_unresolved_resource_labels",
+        lambda self, *_args, **_kwargs: None,
+    )
     win = _make_window(qapp, monkeypatch)
 
     track = win.load_from_sug_project(
@@ -236,6 +247,12 @@ def test_in_memory_sug_handoff_does_not_enable_file_watching(
     assert track.meta.artist == "联动歌手"
     assert track.meta.tagging_by == "打轴者"
     assert track.meta.custom == ["@Emoji=主唱"]
+    assert track.page_plan is not None
+    assert track.loading_settings_mode == "global"
+    assert any(
+        row.kind == "page_marker"
+        for row in win._lyrics_panel._presentation_rows
+    )
 
     assert win._watch_primary_subtitle_source is False
     assert win._subtitle_source_key(source_path) not in win._source_watch_states

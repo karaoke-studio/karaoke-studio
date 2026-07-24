@@ -790,7 +790,7 @@ def default_page_layouts() -> list[LyricsLayout]:
             continue
         layouts.append(
             LyricsLayout(
-                name=f"默认 {rows} 行",
+                name=f"{rows} 行布局",
                 layout_id=f"builtin-{rows}",
                 line_gap_px=gap,
                 line_alignments=list(alignments),
@@ -1351,7 +1351,7 @@ class RenderProject:
 def _builtin_page_layout(style: Style, rows: int) -> LyricsLayout:
     alignments, gap = _DEFAULT_PAGE_LAYOUT_SPECS[rows]
     return LyricsLayout(
-        name=f"默认 {rows} 行",
+        name=f"{rows} 行布局",
         layout_id=f"builtin-{rows}",
         line_y_position=style.line_y_position,
         line_y_margin_px=style.line_y_margin_px,
@@ -1386,6 +1386,13 @@ def ensure_page_layout_defaults(style: Style) -> Style:
                 while candidate in used:
                     candidate = f"layout-{uuid4().hex}"
         layout.layout_id = candidate
+        if candidate.startswith("builtin-"):
+            try:
+                builtin_rows = int(candidate.removeprefix("builtin-"))
+            except ValueError:
+                builtin_rows = 0
+            if layout.name == f"默认 {builtin_rows} 行":
+                layout.name = f"{builtin_rows} 行布局"
         used.add(candidate)
 
     required_rows = [1, 3, 4, 5, 6, 7, 8]
@@ -1450,6 +1457,17 @@ def layout_capacity(style: Style, layout_id: str) -> int:
     if index <= 0:
         return max(1, min(len(style.line_alignments), 8))
     return max(1, min(len(style.layouts[index - 1].line_alignments), 8))
+
+
+def layout_display_name(style: Style, layout_id: str) -> str:
+    """Return the user-facing name for a stable page-layout ID."""
+
+    if layout_id == "default":
+        return f"{layout_capacity(style, layout_id)} 行布局（默认）"
+    index = layout_index_for_id(style, layout_id)
+    if index <= 0:
+        return f"{layout_capacity(style, 'default')} 行布局（默认）"
+    return style.layouts[index - 1].name
 
 
 def subtitle_loading_settings_to_dict(

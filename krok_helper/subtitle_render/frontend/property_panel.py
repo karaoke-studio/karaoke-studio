@@ -125,6 +125,7 @@ from krok_helper.subtitle_render.models import (
     TITLE_SHOW_MODES,
     TitleOverlay,
     effective_karaoke_animation,
+    layout_display_name,
     migrate_title_char_role_labels,
     VIEWPORT_ALIGNS,
     ViewportAlign,
@@ -4147,7 +4148,7 @@ class PropertyPanel(QWidget):
     layoutAssignAllRequested = Signal(int)
     """「应用到全部页」：参数为布局 index（0 = 默认布局）。"""
     layoutAutoAssignRequested = Signal()
-    """「各页使用默认布局」：不重新分页，只恢复同行数默认布局。"""
+    """「各页按行数自动布局」：不重新分页，只恢复同行数映射布局。"""
     layoutDeleted = Signal(int)
     """布局被删除：参数为被删布局 index（>= 1），宿主需修正歌词行引用。"""
 
@@ -5714,7 +5715,7 @@ class PropertyPanel(QWidget):
         blocked = combo.blockSignals(True)
         try:
             combo.clear()
-            combo.addItem("默认布局", 0)
+            combo.addItem(layout_display_name(self._style, "default"), 0)
             for index, layout_def in enumerate(self._style.layouts, start=1):
                 combo.addItem(layout_def.name, index)
             title = self._current_title()
@@ -6362,7 +6363,7 @@ class PropertyPanel(QWidget):
         combo_row = QWidget(nav)
         combo_row_layout = QHBoxLayout(combo_row)
         combo_row_layout.setContentsMargins(0, 0, 0, 0)
-        combo_row_layout.setSpacing(6)
+        combo_row_layout.setSpacing(3)
         combo_row_layout.addWidget(self._layout_combo, 1)
 
         self._add_layout_btn = FluentTransparentToolButton(FIF.ADD, nav)
@@ -6379,7 +6380,10 @@ class PropertyPanel(QWidget):
             lambda _checked=False: self._on_delete_layout()
         )
         self._save_layout_btn = FluentTransparentToolButton(FIF.SAVE, nav)
-        self._save_layout_btn.setToolTip("保存当前布局为软件默认值")
+        self._save_layout_btn.setToolTip(
+            "将当前布局参数保存为软件级新建项目默认值；不会应用到当前页面，"
+            "也不会改变各行数的自动布局映射。"
+        )
         self._save_layout_btn.clicked.connect(
             lambda _checked=False: self._save_current_layout_default()
         )
@@ -6389,7 +6393,7 @@ class PropertyPanel(QWidget):
             self._delete_layout_btn,
             self._save_layout_btn,
         ):
-            btn.setFixedSize(30, 30)
+            btn.setFixedSize(24, 24)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             # 图标按钮无文字，可访问名沿用中文提示
             btn.setAccessibleName(btn.toolTip())
@@ -6449,10 +6453,10 @@ class PropertyPanel(QWidget):
             )
         )
         self._auto_assign_btn = FluentPushButton(
-            "各页使用默认布局", assign_btn_row
+            "各页按行数自动布局", assign_btn_row
         )
         self._auto_assign_btn.setToolTip(
-            "不改变段落和分页；每一页仅按实际行数恢复项目的 1～8 行默认布局。"
+            "不改变段落和分页；每一页按实际行数使用项目中对应的 1～8 行布局映射。"
         )
         self._auto_assign_btn.clicked.connect(
             lambda _checked=False: self.layoutAutoAssignRequested.emit()
@@ -6686,7 +6690,7 @@ class PropertyPanel(QWidget):
         blocked = combo.blockSignals(True)
         try:
             combo.clear()
-            combo.addItem("默认布局", 0)
+            combo.addItem(layout_display_name(self._style, "default"), 0)
             for index, layout_def in enumerate(self._style.layouts, start=1):
                 combo.addItem(layout_def.name, index)
             combo.setCurrentIndex(max(0, combo.findData(selected)))
@@ -6781,10 +6785,12 @@ class PropertyPanel(QWidget):
         if index <= 0:
             return
         name = self._style.layouts[index - 1].name
+        fallback_name = layout_display_name(self._style, "default")
         confirmed = fluent_question(
             self,
             "删除布局",
-            f"确定要删除布局“{name}”吗？\n使用它的歌词行（和标题）会回到默认布局。",
+            f"确定要删除布局“{name}”吗？\n"
+            f"使用它的页面（和标题）会回到“{fallback_name}”。",
             yes_text="删除",
             no_text="取消",
             default_cancel=True,
@@ -6811,12 +6817,17 @@ class PropertyPanel(QWidget):
         """Ask before persisting the selected project layout as an app default."""
 
         index = self._current_layout_index()
-        name = "默认布局" if index == 0 else self._style.layouts[index - 1].name
+        name = (
+            layout_display_name(self._style, "default")
+            if index == 0
+            else self._style.layouts[index - 1].name
+        )
         if not fluent_question(
             self,
-            "保存布局",
-            f"是否将当前改动保存到布局“{name}”？\n"
-            "保存后，新建项目将使用此布局参数。",
+            "保存为软件默认布局",
+            f"是否将布局“{name}”的当前参数保存到软件级新建项目默认值？\n"
+            "这只影响以后新建的项目，不会应用到当前页面，也不会更改各行数的"
+            "自动布局选择。",
             yes_text="保存",
             no_text="取消",
             default_cancel=True,

@@ -209,6 +209,7 @@ from krok_helper.subtitle_render.models import (
     guide_symbol_to_dict,
     ensure_page_layout_defaults,
     layout_capacity,
+    layout_display_name,
     layout_id_for_index,
     line_animation_override_from_dict,
     line_animation_override_to_dict,
@@ -790,8 +791,8 @@ class _SubtitleLoadingSettingsDialog(QDialog):
         self._blank_enabled = CheckBox("空行开始新段落", self)
         self._blank_enabled.setToolTip(
             "启用后，字幕源中的一个或多个连续空行会在下一条有效歌词前开始新段落。"
-            "空行不占用字幕轨道，也不计入每页行数。关闭后，空行只保留为视觉间奏"
-            "标记，不影响段落和分页。"
+            "空行不占用字幕轨道，也不计入每页行数。关闭后，空行不影响段落和分页，"
+            "也不会在歌词表中单独占一行。"
         )
         form.addRow("", self._blank_enabled)
         self._rows_spin = FluentSpinBox(self)
@@ -799,7 +800,7 @@ class _SubtitleLoadingSettingsDialog(QDialog):
         self._rows_spin.setToolTip(
             "在每个段落内按照指定行数依次建立页面，范围为 1～4。源文件中的显式"
             "分页仍会提前结束当前页；段落最后一页或显式分页前的页面允许不足指定"
-            "行数，并自动使用对应行数的项目默认布局。"
+            "行数，并自动使用项目中对应行数的布局。"
         )
         form.addRow("每页基础行数", self._rows_spin)
         root.addLayout(form)
@@ -5852,7 +5853,7 @@ class SubtitleRenderWindow(QWidget):
         ):
             InfoBar.success(
                 title="字幕已刷新",
-                content="已按保存的加载设置重新生成段落、页面和默认布局。",
+                content="已按保存的加载设置重新生成段落、页面和按行数布局。",
                 parent=self,
                 position=InfoBarPosition.BOTTOM_RIGHT,
                 duration=3000,
@@ -6091,7 +6092,7 @@ class SubtitleRenderWindow(QWidget):
                 )
             InfoBar.warning(
                 title="已替换被删除的布局",
-                content="引用该布局的页面已改用能够容纳当前行数的项目默认布局。",
+                content="引用该布局的页面已改用能够容纳当前行数的项目布局。",
                 parent=self,
                 position=InfoBarPosition.BOTTOM_RIGHT,
                 duration=5000,
@@ -7583,7 +7584,7 @@ class SubtitleRenderWindow(QWidget):
                 for field_name in _LAYOUT_DEFAULT_VALUE_FIELDS
             }
             self._app_default_style = replace(self._app_default_style, **changes)
-            target = "默认布局"
+            target = layout_display_name(self._style, "default")
         else:
             saved_layout = deepcopy(source_style.layouts[index - 1])
             layouts = deepcopy(self._app_default_style.layouts)
@@ -7607,7 +7608,10 @@ class SubtitleRenderWindow(QWidget):
         self._save_persisted_state()
         InfoBar.success(
             title="已保存软件默认布局",
-            content=f"新建项目时将使用布局“{target}”的当前参数。",
+            content=(
+                f"以后新建项目将携带布局“{target}”的当前参数；"
+                "当前页面及现有项目不受影响。"
+            ),
             parent=self,
             position=InfoBarPosition.BOTTOM_RIGHT,
             duration=2500,
