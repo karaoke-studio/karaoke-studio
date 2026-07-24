@@ -645,6 +645,16 @@ _PROJECT_ONLY_STYLE_FIELDS = frozenset(
 )
 
 
+def fit_size_to_aspect(box: QSize, aspect_ratio: float) -> QSize:
+    """把 ``box`` 缩到给定宽高比的最大内接尺寸（用于跟随画布形状的下限/建议值）。"""
+    ratio = max(float(aspect_ratio), 0.1)
+    width = max(box.width(), 1)
+    height = max(box.height(), 1)
+    if width / height >= ratio:
+        return QSize(max(int(round(height * ratio)), 1), height)
+    return QSize(width, max(int(round(width / ratio)), 1))
+
+
 class _AspectRatioBox(QWidget):
     """Keep one child centered at a fixed aspect ratio."""
 
@@ -663,16 +673,21 @@ class _AspectRatioBox(QWidget):
         self.setMinimumSize(self.minimumSizeHint())
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(960, 540)
+        return fit_size_to_aspect(QSize(960, 540), self._aspect_ratio)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        return QSize(426, 240)
+        return fit_size_to_aspect(QSize(426, 240), self._aspect_ratio)
 
     def set_aspect_ratio(self, width: int, height: int) -> None:
         """Update the child aspect ratio from an output size."""
         if width <= 0 or height <= 0:
             return
-        self._aspect_ratio = max(float(width) / float(height), 0.1)
+        ratio = max(float(width) / float(height), 0.1)
+        if ratio == self._aspect_ratio:
+            return
+        self._aspect_ratio = ratio
+        # 竖屏 / 4:3 画布的最小尺寸也要跟着换形，否则窗口被 16:9 的下限撑宽。
+        self.setMinimumSize(self.minimumSizeHint())
         self._update_child_geometry()
         self.updateGeometry()
 
@@ -779,11 +794,11 @@ class _WindowEdgeGrip(QWidget):
 
 
 class PreviewPlayerWindow(QWidget):
-    """独立预览窗口：只承载 16:9 的视频预览画面。"""
+    """独立预览窗口：只承载视频预览画面，形状跟随当前输出画布。"""
 
     userClosed = Signal()
     _TITLE_BAR_HEIGHT = 42
-    _MIN_VIDEO_SIZE = QSize(426, 240)
+    _MIN_VIDEO_BOX = QSize(426, 240)
     _COLLAPSED_SIZE = QSize(220, 44)
     _COLLAPSED_CENTER_Y_RATIO = 0.70
 
@@ -796,6 +811,7 @@ class PreviewPlayerWindow(QWidget):
         self._drag_origin: Optional[QPoint] = None
         self._suppress_control_show = False
         self._collapsed = False
+        self._output_aspect = 16 / 9
         self._media_title = "字幕视频预览"
         self.setWindowTitle("字幕视频预览")
         self.setObjectName("SubtitlePreviewPlayerWindow")
@@ -853,12 +869,7 @@ class PreviewPlayerWindow(QWidget):
         self._hide_controls_timer.timeout.connect(self._on_controls_idle_timeout)
         self._apply_player_transport_style()
 
-        self.setMinimumSize(
-            QSize(
-                self._MIN_VIDEO_SIZE.width(),
-                self._MIN_VIDEO_SIZE.height() + self._TITLE_BAR_HEIGHT,
-            )
-        )
+        self._apply_minimum_window_size()
 
         # 无边框窗口的八向拖拽调整手柄（边 + 角），叠在最上层。
         edge = Qt.Edge
@@ -954,27 +965,57 @@ class PreviewPlayerWindow(QWidget):
     def transport_bar(self) -> TransportBar:
         return self._transport_bar
 
+    def min_video_size(self) -> QSize:
+        """当前画布形状下的最小画面尺寸（16:9 时仍是原来的 426×240）。"""
+        return fit_size_to_aspect(self._MIN_VIDEO_BOX, self._output_aspect)
+
+    def _apply_minimum_window_size(self) -> None:
+        min_video = self.min_video_size()
+        self.setMinimumSize(
+            QSize(
+                min_video.width(),
+                min_video.height() + self._TITLE_BAR_HEIGHT,
+            )
+        )
+
+    def set_output_size(self, width: int, height: int) -> None:
+        """跟随输出画布换形：非 16:9 的视频不再被补成 16:9 的预览画面。"""
+        if width <= 0 or height <= 0:
+            return
+        aspect = max(float(width) / float(height), 0.1)
+        if aspect == self._output_aspect:
+            return
+        self._output_aspect = aspect
+        self._preview_frame.set_aspect_ratio(width, height)
+        if self._collapsed:
+            return
+        self._apply_minimum_window_size()
+        if self.isVisible() and not self._is_expanded():
+            self.apply_workspace_geometry()
+        self._layout_edge_grips()
+
     def apply_workspace_geometry(self) -> None:
         if self._collapsed:
             self._apply_collapsed_geometry()
             return
         workspace_size = self._owner.size()
-        width = max(self._MIN_VIDEO_SIZE.width(), workspace_size.width() // 2)
+        min_video = self.min_video_size()
+        width = max(min_video.width(), workspace_size.width() // 2)
         video_height = max(
-            self._MIN_VIDEO_SIZE.height(), int(round(width * 9 / 16))
+            min_video.height(), int(round(width / self._output_aspect))
         )
         height = video_height + self._TITLE_BAR_HEIGHT
         max_height = max(
-            self._MIN_VIDEO_SIZE.height() + self._TITLE_BAR_HEIGHT,
+            min_video.height() + self._TITLE_BAR_HEIGHT,
             workspace_size.height() // 2 + self._TITLE_BAR_HEIGHT,
         )
         if height > max_height:
             height = max_height
             video_height = max(
-                self._MIN_VIDEO_SIZE.height(), height - self._TITLE_BAR_HEIGHT
+                min_video.height(), height - self._TITLE_BAR_HEIGHT
             )
             width = max(
-                self._MIN_VIDEO_SIZE.width(), int(round(video_height * 16 / 9))
+                min_video.width(), int(round(video_height * self._output_aspect))
             )
         top_left = self._owner.mapToGlobal(QPoint(0, 0))
         self.setGeometry(QRect(top_left, QSize(width, height)))
@@ -1221,12 +1262,7 @@ class PreviewPlayerWindow(QWidget):
         if not self._collapsed:
             return
         self._collapsed = False
-        self.setMinimumSize(
-            QSize(
-                self._MIN_VIDEO_SIZE.width(),
-                self._MIN_VIDEO_SIZE.height() + self._TITLE_BAR_HEIGHT,
-            )
-        )
+        self._apply_minimum_window_size()
         self._transport_bar._preview_quality_label.show()
         self._transport_bar._preview_quality_combo.show()
         self._minimize_button.show()
@@ -6861,6 +6897,8 @@ class SubtitleRenderWindow(QWidget):
         width = self._export_width_spin.value()
         height = self._export_height_spin.value()
         self._preview_panel.set_output_size(width, height)
+        if hasattr(self, "_preview_window"):
+            self._preview_window.set_output_size(width, height)
         if hasattr(self, "_export_monitor_frame"):
             self._export_monitor_frame.set_aspect_ratio(width, height)
             self._sync_export_monitor_card_size(width, height)

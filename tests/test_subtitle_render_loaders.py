@@ -335,6 +335,58 @@ def test_load_video_populates_preview_panel(qapp, monkeypatch, tmp_path):
     assert win._preview_panel.canvas._duration_ms == 120_500
 
 
+@pytest.mark.parametrize(
+    ("width", "height"),
+    [(1920, 1080), (1440, 1080), (1080, 1920), (2560, 1080)],
+)
+def test_preview_window_follows_non_16_9_video_without_padding(
+    qapp, monkeypatch, tmp_path, width, height
+):
+    """导入非 16:9 视频后，预览窗口按视频比例换形，画面不再被补成 16:9。"""
+    win = _make_window(qapp, monkeypatch)
+    win.resize(1600, 900)
+    win.show()
+    fake_info = MediaInfo(
+        path=tmp_path / "bg.mp4",
+        duration=10.0,
+        video_streams=1,
+        audio_streams=0,
+        subtitle_streams=0,
+        video_width=width,
+        video_height=height,
+        video_fps=60.0,
+    )
+    monkeypatch.setattr(mw, "probe_media", lambda probe, path: fake_info)
+    win._show_preview_window()
+    qapp.processEvents()
+
+    win.load_video(tmp_path / "bg.mp4")
+    qapp.processEvents()
+
+    # 导出画布 = 视频原始分辨率
+    assert (win._export_width_spin.value(), win._export_height_spin.value()) == (
+        width,
+        height,
+    )
+    assert (
+        win._preview_panel.canvas._output_width,
+        win._preview_panel.canvas._output_height,
+    ) == (width, height)
+
+    # 预览画面填满预览框（没有黑边），且窗口本身就是视频比例
+    frame = win._preview_window._preview_frame
+    panel = win._preview_panel
+    assert frame.size() == panel.size()
+    assert panel.width() / panel.height() == pytest.approx(width / height, rel=0.02)
+    video_area_height = win._preview_window.height() - (
+        win._preview_window._TITLE_BAR_HEIGHT
+    )
+    assert win._preview_window.width() / video_area_height == pytest.approx(
+        width / height, rel=0.02
+    )
+    win.close()
+
+
 def test_load_video_with_missing_test_file_does_not_start_video_player(qapp, monkeypatch, tmp_path):
     """A7 稳定性：probe 已 mock 时，假路径不应启动 Qt Multimedia 后台线程。"""
     win = _make_window(qapp, monkeypatch)
