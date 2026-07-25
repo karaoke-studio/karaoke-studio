@@ -284,6 +284,65 @@ def test_ruby_latin_strokes_resolve_independently():
     assert subtitle_painter._ruby_stroke2_width(latin) == 0
 
 
+def test_ruby_stroke2_flag_and_width_inherit_along_separate_chains():
+    """描边 2 的开关与宽度各自继承，开关只在最后裁剪一次。
+
+    N3 的 ``FontFaceInfoModel`` 就是分别回退 ``UseEdge2`` 与 ``EdgeSize2`` 的
+    （见 ``n3_font_fallback``），属性面板显示的继承宽度也没有被开关裁剪过。
+    宽度回退一旦顺带套用上一级的开关，显式打开描边 2 的注音就只能拿到 0。
+    """
+    def style(**changes) -> Style:
+        return Style(
+            font_size_px=64, ruby_font_size_px=45, stroke2_width_px=5, **changes
+        )
+
+    # 未设定 = 跟随主文字：主文字关掉时，保存的注音宽度不能自己把描边 2 打开。
+    assert subtitle_painter._ruby_stroke2_width(
+        style(stroke2_enabled=False, ruby_stroke2_enabled=None, ruby_stroke2_width_px=3)
+    ) == 0
+    assert subtitle_painter._ruby_stroke2_width(
+        style(stroke2_enabled=True, ruby_stroke2_enabled=None, ruby_stroke2_width_px=3)
+    ) == 3
+    # 注音显式打开、自身没有宽度 -> 继承主文字宽度按注音比例缩放，
+    # 与主文字开关无关（round(5 * 45/64) == 4）。
+    assert subtitle_painter._ruby_stroke2_width(
+        style(stroke2_enabled=True, ruby_stroke2_enabled=True, ruby_stroke2_width_px=None)
+    ) == 4
+    assert subtitle_painter._ruby_stroke2_width(
+        style(stroke2_enabled=False, ruby_stroke2_enabled=True, ruby_stroke2_width_px=None)
+    ) == 4
+    # 显式关闭恒为 0，保存的宽度不参与。
+    assert subtitle_painter._ruby_stroke2_width(
+        style(stroke2_enabled=True, ruby_stroke2_enabled=False, ruby_stroke2_width_px=3)
+    ) == 0
+
+    # 英数槽同理：显式打开而自身无宽度时，继承的宽度不能被注音/主文字那一级的
+    # 开关归零，否则英数注音永远画不出描边 2。
+    latin = subtitle_painter._ruby_script_stroke_style(
+        style(
+            stroke2_enabled=False,
+            ruby_stroke2_enabled=None,
+            ruby_stroke2_width_px=3,
+            ruby_latin_stroke2_enabled=True,
+            ruby_latin_stroke2_width_px=None,
+        ),
+        "ABC",
+    )
+    assert latin.ruby_stroke2_width_px == 3
+    # 与主文字英数槽的既有行为保持一致（对照组，本来就是对的）。
+    main_latin = subtitle_painter._main_script_stroke_style(
+        Style(
+            font_size_px=64,
+            stroke2_enabled=False,
+            stroke2_width_px=5,
+            latin_stroke2_enabled=True,
+            latin_stroke2_width_px=None,
+        ),
+        "ABC",
+    )
+    assert main_latin.stroke2_width_px == 5
+
+
 def _two_line_track() -> TimingTrack:
     line1 = TimingLine(
         chars=[

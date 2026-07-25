@@ -194,6 +194,11 @@ struct ResolvedStyle {
     // deliberate 0 px. Defaults to true so an absent key keeps the old
     // "no key means do not zero" behaviour (and matches Style.stroke2_enabled).
     bool stroke2Enabled = true;
+    // The width before the flag zeroes it. Ruby inherits the flag and the width
+    // along separate chains (N3 resolves UseEdge2 and EdgeSize2 independently),
+    // so switching the main text's stroke2 off must not erase the width an
+    // explicitly enabled ruby still inherits.
+    int stroke2RawWidthPx = 0;
     QString decorationKind = QStringLiteral("shadow");
     int glowRadiusPx = 10;
     int glowBeforeRadiusPx = 10;
@@ -1175,12 +1180,16 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
         && !style.value(QStringLiteral("stroke2_enabled")).toBool()) {
         cfg.stroke2Enabled = false;
         cfg.stroke2WidthPx = 0;
+        if (hasNonNull(style, QStringLiteral("stroke2_width_px"))) {
+            cfg.stroke2RawWidthPx = std::max(0, intValue(style, QStringLiteral("stroke2_width_px"), cfg.stroke2RawWidthPx));
+        }
     } else {
         if (hasNonNull(style, QStringLiteral("stroke2_enabled"))) {
             cfg.stroke2Enabled = true;
         }
         if (hasNonNull(style, QStringLiteral("stroke2_width_px"))) {
             cfg.stroke2WidthPx = std::max(0, intValue(style, QStringLiteral("stroke2_width_px"), cfg.stroke2WidthPx));
+            cfg.stroke2RawWidthPx = cfg.stroke2WidthPx;
         }
     }
     if (hasNonNull(style, QStringLiteral("decoration_kind"))) {
@@ -2121,6 +2130,7 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     refreshLegacyRubyFills(base);
     base.strokeWidthPx = std::max(0, intValue(style, QStringLiteral("stroke_width_px"), base.strokeWidthPx));
     base.stroke2WidthPx = std::max(0, intValue(style, QStringLiteral("stroke2_width_px"), base.stroke2WidthPx));
+    base.stroke2RawWidthPx = base.stroke2WidthPx;
     if (style.value(QStringLiteral("stroke2_enabled")).isBool()) {
         base.stroke2Enabled = style.value(QStringLiteral("stroke2_enabled")).toBool();
         if (!base.stroke2Enabled) {
@@ -6979,15 +6989,15 @@ void applyGpuResolvedStyle(
     const int rubyStrokePx = source.rubyStrokeWidthPx.value_or(
         scaledFromMain(source.strokeWidthPx)
     );
-    // Same order as the CPU painter's _ruby_stroke2_width: settle the flag
-    // first (unset = follow this scheme's main text), and only then reach for a
-    // width.  Consulting the width first let a saved ruby width draw stroke2
-    // even though the main text had it switched off.
+    // Same split as the CPU painter's _ruby_stroke2_enabled/_ruby_stroke2_width_value:
+    // the flag and the width inherit along separate chains, and the flag gates
+    // the width exactly once at the end.  Letting the width answer first made a
+    // saved ruby width draw stroke2 even though the main text had it switched
+    // off; gating the inherited width a second time made an explicitly enabled
+    // ruby with no width of its own collapse to 0.
     const bool rubyStroke2On = source.rubyStroke2Enabled.value_or(source.stroke2Enabled);
     const int rubyStroke2Px = rubyStroke2On
-        ? source.rubyStroke2WidthPx.value_or(
-              source.stroke2Enabled ? scaledFromMain(source.stroke2WidthPx) : 0
-          )
+        ? source.rubyStroke2WidthPx.value_or(scaledFromMain(source.stroke2RawWidthPx))
         : 0;
     target.rubyStrokeWidth = static_cast<float>(rubyStrokePx * scale);
     target.rubyStroke2Width = static_cast<float>(rubyStroke2Px * scale);

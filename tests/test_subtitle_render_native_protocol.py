@@ -3578,6 +3578,9 @@ def test_native_gpu_unset_ruby_stroke2_follows_main_flag_not_saved_width():
         "main_off_explicit_off": dict(main_enabled=False, ruby_enabled=False),
         "main_on_unset": dict(main_enabled=True, ruby_enabled=None),
         "main_on_explicit_on": dict(main_enabled=True, ruby_enabled=True),
+        # The opposite direction: an explicitly enabled ruby must keep drawing
+        # even when the main text has stroke2 switched off.
+        "main_off_explicit_on": dict(main_enabled=False, ruby_enabled=True),
     }
     frames: dict[str, np.ndarray] = {}
     with NativeRendererProcess(
@@ -3632,6 +3635,9 @@ def test_native_gpu_unset_ruby_stroke2_follows_main_flag_not_saved_width():
     # ...and main text on -> the same unset ruby follows it back on.
     assert stroke2_pixels(frames["main_on_unset"]) > 0
     assert np.array_equal(frames["main_on_unset"], frames["main_on_explicit_on"])
+    # The flag gates the width, never the other way round: explicitly enabling
+    # the ruby draws its own width even while the main text stays off.
+    assert stroke2_pixels(frames["main_off_explicit_on"]) > 0
 
 
 @_NATIVE_PARITY_DIVERGED

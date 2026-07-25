@@ -3384,18 +3384,30 @@ def _ruby_stroke_width(style: Style) -> int:
     return _scaled_px(style.stroke_width_px, _ruby_scale(style))
 
 
-def _ruby_stroke2_width(style: Style) -> int:
-    enabled = (
+def _ruby_stroke2_enabled(style: Style) -> bool:
+    """注音描边 2 的开关；未设定表示跟随主文字。"""
+    return (
         style.stroke2_enabled
         if style.ruby_stroke2_enabled is None
         else bool(style.ruby_stroke2_enabled)
     )
-    if not enabled:
-        return 0
+
+
+def _ruby_stroke2_width_value(style: Style) -> int:
+    """注音描边 2 的宽度本身，不含开关判定。
+
+    宽度与开关沿各自的链条独立继承（N3 ``FontFaceInfoModel`` 里 ``UseEdge2``
+    与 ``EdgeSize2`` 就是分别回退的，见 ``n3_font_fallback``）。因此主文字关掉
+    描边 2 不会抹掉注音继承的宽度值——属性面板显示的也正是这个未经开关裁剪的
+    宽度。调用方负责在最后按开关裁剪一次。
+    """
     if style.ruby_stroke2_width_px is not None:
         return max(int(style.ruby_stroke2_width_px), 0)
-    main_width = style.stroke2_width_px if style.stroke2_enabled else 0
-    return _scaled_px(main_width, _ruby_scale(style))
+    return _scaled_px(style.stroke2_width_px, _ruby_scale(style))
+
+
+def _ruby_stroke2_width(style: Style) -> int:
+    return _ruby_stroke2_width_value(style) if _ruby_stroke2_enabled(style) else 0
 
 
 def _ruby_script_stroke_style(style: Style, reading: str) -> Style:
@@ -3409,16 +3421,14 @@ def _ruby_script_stroke_style(style: Style, reading: str) -> Style:
         else max(int(style.ruby_latin_stroke_width_px), 0)
     )
     enabled = (
-        (
-            style.stroke2_enabled
-            if style.ruby_stroke2_enabled is None
-            else bool(style.ruby_stroke2_enabled)
-        )
+        _ruby_stroke2_enabled(style)
         if style.ruby_latin_stroke2_enabled is None
         else bool(style.ruby_latin_stroke2_enabled)
     )
+    # 继承的宽度必须取未经开关裁剪的值：``_ruby_stroke2_width`` 会先按注音/主文字
+    # 那一级的开关归零，于是英数槽自己显式打开描边 2 时也只能拿到 0。
     width2 = (
-        _ruby_stroke2_width(style)
+        _ruby_stroke2_width_value(style)
         if style.ruby_latin_stroke2_width_px is None
         or int(style.ruby_latin_stroke2_width_px) <= 0
         else max(int(style.ruby_latin_stroke2_width_px), 0)
