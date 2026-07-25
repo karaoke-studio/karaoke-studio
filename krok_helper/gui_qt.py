@@ -30,8 +30,13 @@ def _schedule_hard_process_exit(delay_seconds: float = 0.25) -> None:
     timer.start()
 
 from PyQt6.QtCore import (
+    QAbstractAnimation,
+    QEasingCurve,
     QEvent,
     QEventLoop,
+    QPoint,
+    QPropertyAnimation,
+    QRect,
     QSize,
     QThread,
     QTimer,
@@ -1447,6 +1452,9 @@ class WorkflowStepButton(QWidget):
         self._active = False
         self._hovered = False
         self._compact = False
+        # 宿主 WorkflowStepper 置 True 后，活跃下划线由 stepper 的共享滑块绘制，
+        # 本按钮内的静态 bottom_line 不再显示（避免双线）。
+        self._shared_underline = False
         # 由宿主写入的瞬时状态文本（如打轴步骤的「当前 .sug 文件名 + 未保存」），
         # None 时回退到步骤的默认描述。
         self._status_text: str | None = None
@@ -1507,6 +1515,13 @@ class WorkflowStepButton(QWidget):
         if self._active == active:
             return
         self._active = active
+        self._refresh_style()
+
+    def setSharedUnderline(self, shared: bool) -> None:
+        """开关共享滑动下划线模式（由 WorkflowStepper 注入）。"""
+        if self._shared_underline == shared:
+            return
+        self._shared_underline = shared
         self._refresh_style()
 
     def set_status_text(self, text: str | None) -> None:
@@ -1661,8 +1676,9 @@ class WorkflowStepButton(QWidget):
             }}
             """
         )
-        # 紧凑模式下不显示底部下划线，避免活跃步的下划线把窄行撑出 2px 错位
-        self.bottom_line.setVisible(self._active and not self._compact)
+        # 紧凑模式下不显示底部下划线，避免活跃步的下划线把窄行撑出 2px 错位；
+        # 共享滑块模式下静态线让位给 stepper 的滑动下划线
+        self.bottom_line.setVisible(self._active and not self._compact and not self._shared_underline)
 
 
 class WorkflowStepper(QWidget):
@@ -1700,6 +1716,22 @@ class WorkflowStepper(QWidget):
                 self._layout.addWidget(separator, 0, Qt.AlignmentFlag.AlignVCenter)
                 self._separators.append(separator)
 
+        # 共享滑动下划线：替代各按钮内部的静态下划线，切换步骤时在按钮间平滑滑动。
+        # 浮在 stepper 上绘制，不拦截鼠标；几何位置与按钮 bottom_line 完全一致。
+        self._underline_anim: QPropertyAnimation | None = None
+        self._underline = QFrame(self)
+        self._underline.setObjectName("WorkflowStepUnderlineSlider")
+        self._underline.setFixedHeight(2)
+        self._underline.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        from krok_helper.theme_workbench import palette as _wb_palette, themed as _wb_themed
+        _wb_themed(
+            self._underline,
+            lambda: f"background: {_wb_palette().accent_search}; border: 0; border-radius: 1px;",
+        )
+        self._underline.hide()
+        for item in self._items:
+            item.setSharedUnderline(True)
+
         self.updateStepStyles()
 
     def createStepItem(self, index: int) -> WorkflowStepButton:
@@ -1716,9 +1748,86 @@ class WorkflowStepper(QWidget):
         if self._current_index == index:
             self.updateStepStyles()
             return
+        previous_index = self._current_index
         self._current_index = index
         self.updateStepStyles()
+        self._slide_underline(previous_index, index)
         self.currentChanged.emit(index)
+
+    def _underline_rect(self, index: int) -> QRect:
+        """第 ``index`` 个按钮对应的下划线矩形（stepper 自身坐标系）。"""
+        geo = self._items[index].geometry()
+        return QRect(geo.x(), geo.y() + geo.height() - 2, geo.width(), 2)
+
+    def _stop_underline_anim(self) -> None:
+        anim, self._underline_anim = self._underline_anim, None
+        if anim is not None:
+            try:
+                anim.stop()
+            except RuntimeError:
+                pass
+
+    def _snap_underline(self) -> None:
+        """无动画地把滑动下划线贴到当前步骤（布局未就绪时先隐藏）。"""
+        try:
+            if self._compact:
+                self._underline.hide()
+                return
+            target = self._underline_rect(self._current_index)
+            if target.width() <= 0:
+                return
+            self._underline.setGeometry(target)
+            self._underline.show()
+        except RuntimeError:
+            pass
+
+    def _slide_underline(self, from_index: int, to_index: int) -> None:
+        """切换步骤时让下划线从旧按钮平滑滑到新按钮。"""
+        try:
+            if self._compact:
+                self._underline.hide()
+                return
+            target = self._underline_rect(to_index)
+            if target.width() <= 0:
+                # 布局尚未排布（如构造期），等 showEvent/resizeEvent 再 snap
+                self._underline.hide()
+                return
+            start = (
+                self._underline.geometry()
+                if self._underline.isVisible() and self._underline.geometry().width() > 0
+                else self._underline_rect(from_index)
+            )
+            if start.width() <= 0:
+                start = target
+            self._stop_underline_anim()
+            if start == target or not self.isVisible():
+                self._underline.setGeometry(target)
+                self._underline.show()
+                return
+            self._underline.setGeometry(start)
+            self._underline.show()
+            anim = QPropertyAnimation(self._underline, b"geometry", self)
+            anim.setDuration(260)
+            anim.setStartValue(start)
+            anim.setEndValue(target)
+            anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+            # 动画期间若按钮几何因 stylesheet polish 等原因微调，收尾时贴准最终位置
+            anim.finished.connect(self._snap_underline)
+            anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+            self._underline_anim = anim
+        except RuntimeError:
+            pass
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        # 等布局排完后把下划线贴到当前步骤（构造期按钮几何还是 0 宽）
+        QTimer.singleShot(0, self._snap_underline)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        # 窗口拉伸改变按钮几何：停掉进行中的滑动，直接贴到新位置
+        self._stop_underline_anim()
+        self._snap_underline()
 
     def setCurrentModule(self, module_id: str) -> None:
         for index, step in enumerate(self._steps):
@@ -1761,6 +1870,12 @@ class WorkflowStepper(QWidget):
                 f"color: {_wb_palette().text_disabled}; "
                 f"font-size: {12 if compact else 18}px; font-weight: 500;"
             )
+        # 滑动下划线遵循原按钮下划线语义：紧凑模式隐藏；展开时等布局排完后贴回
+        self._stop_underline_anim()
+        if compact:
+            self._underline.hide()
+        else:
+            QTimer.singleShot(0, self._snap_underline)
 
     def _handleStepClicked(self, index: int) -> None:
         self.stepClicked.emit(index)
@@ -3018,8 +3133,63 @@ class KrokHelperQtApp(QMainWindow):
         self.active_module = module_id
         self._sync_page_stack_margins(module_id)
         self.page_stack.setCurrentWidget(self.module_pages[module_id])
+        # getattr 容忍测试里的 SimpleNamespace 假 app（与上方 align_preview_process 同款写法）
+        animate_page = getattr(self, "_animate_page_switch", None)
+        if animate_page is not None:
+            animate_page(self.module_pages[module_id], previous_module)
         self.workflow_stepper.setCurrentModule(module_id)
         self._sync_workflow_shortcut_scope()
+
+    def _animate_page_switch(self, page: QWidget, previous_module: str | None) -> None:
+        """新页面沿工作流方向滑入的过渡动画（纯视觉，不影响布局与功能）。
+
+        只动 ``pos`` 不用透明度过渡：部分页面（打轴/字幕预览）内部有 native
+        子 widget，QGraphicsOpacityEffect 无法正确合成 native 子窗口。布局
+        仍由 QStackedLayout 管理，动画只把页面从侧向偏移滑回 (0,0)。
+        """
+        # getattr 容忍测试里的 SimpleNamespace 假 app（与上方 align_preview_process 同款写法）
+        if not getattr(self, "isVisible", lambda: False)():
+            return
+        previous_page = self.module_pages.get(previous_module) if previous_module else None
+        old_index = self.page_stack.indexOf(previous_page) if previous_page is not None else -1
+        new_index = self.page_stack.indexOf(page)
+        if new_index < 0 or old_index == new_index:
+            return
+        offset = 48 if new_index > old_index else -48
+        final_pos = self.page_stack.contentsRect().topLeft()
+        old_anim = getattr(self, "_page_switch_anim", None)
+        self._page_switch_anim = None
+        if old_anim is not None:
+            try:
+                old_anim.stop()
+            except RuntimeError:
+                pass
+        # 动画期间冻结 stack 布局：换页后页面子树延迟的 LayoutRequest 会重新
+        # activate QStackedLayout，把当前页几何无条件重置回全幅 (0,0)，动画前
+        # 几帧被压制 —— 视觉上就是"先到位闪一下、再跳回侧面滑入"的颤抖。冻结
+        # 期间布局视为不存在（activate 直接返回），几何完全由动画控制；动画
+        # 结束（或被新动画 stop）后解冻并结算，页面此时已在全幅终点。
+        layout = self.page_stack.layout()
+        if layout is not None:
+            layout.setEnabled(False)
+        anim = QPropertyAnimation(page, b"pos", self)
+        anim.setDuration(240)
+        anim.setStartValue(QPoint(final_pos.x() + offset, final_pos.y()))
+        anim.setEndValue(final_pos)
+        anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+        def _unfreeze_layout() -> None:
+            try:
+                if layout is not None:
+                    layout.setEnabled(True)
+                    layout.activate()
+                page.move(final_pos)
+            except RuntimeError:
+                pass
+
+        anim.finished.connect(_unfreeze_layout)
+        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._page_switch_anim = anim
 
     def accept_subtitle_video(self, path: Path) -> None:
         self.set_video_path(path)
