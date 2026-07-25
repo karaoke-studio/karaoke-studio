@@ -196,7 +196,7 @@ def test_find_upcoming_line_returns_next():
 # ---------------------------------------------------------------------------
 
 
-def test_compute_display_lines_matches_two_lane_timing_model():
+def test_compute_display_lines_matches_n3_top_long_two_lane_model():
     line1 = _make_line([("a", 55_490)], end_ms=59_090)
     line2 = _make_line([("b", 59_340)], end_ms=62_470)
     line3 = _make_line([("c", 62_540)], end_ms=66_280)
@@ -210,13 +210,14 @@ def test_compute_display_lines_matches_two_lane_timing_model():
         lead_in_ms=1800,
         tail_ms=1000,
         lane_gap_ms=300,
-        max_hold_ms=12_000,
-        continuity_snap_ms=800,
     )
 
+    # N3 TopLongAdjuster：上行挂到下一页上屏前 300ms；下行 = 自身演唱结束 + 1000。
+    # 段首页两行同时入场（BottomLineShowBeginTime → 上行的 ShowBeginTime），
+    # 之后每页下行 = 上一页下行消失 + IntervalTime。
     assert [(item.lane, item.display_start_ms, item.display_end_ms) for item in layouts] == [
         (0, 53_690, 60_440),
-        (1, 56_690, 63_470),
+        (1, 53_690, 63_470),
         (0, 60_740, 69_880),
         (1, 63_770, 72_740),
         (0, 70_180, 80_240),
@@ -235,8 +236,6 @@ def test_visible_display_lines_returns_both_lanes_when_windows_overlap():
         lead_in_ms=1800,
         tail_ms=1000,
         lane_gap_ms=300,
-        max_hold_ms=12_000,
-        continuity_snap_ms=800,
     )
 
     assert [item.line for item in visible] == [line1, line2]
@@ -253,12 +252,14 @@ def test_compute_display_lines_never_cuts_before_own_sing_end():
         lead_in_ms=1800,
         tail_ms=1000,
         lane_gap_ms=300,
-        max_hold_ms=12_000,
-        continuity_snap_ms=800,
     )
 
+    assert [(item.display_start_ms, item.display_end_ms) for item in layouts] == [
+        (38_730, 44_840),  # 上行：下一页上屏 44_915 − IntervalTime 300 之前被挤压过
+        (38_730, 46_700),  # 下行：无 end_ms → 末字 +1000 当演唱结束，再 + PostTime
+        (44_915, 49_040),
+    ]
     assert layouts[0].display_end_ms >= line1.end_ms
-    assert layouts[2].display_start_ms >= line1.end_ms + 300
 
 
 def test_compute_display_lines_preserves_protected_exit_tail():
@@ -272,8 +273,6 @@ def test_compute_display_lines_preserves_protected_exit_tail():
         lead_in_ms=1800,
         tail_ms=1000,
         lane_gap_ms=300,
-        max_hold_ms=12_000,
-        continuity_snap_ms=800,
         protect_ms=500,
     )
 
@@ -292,16 +291,22 @@ def test_compute_display_lines_keeps_next_line_protected_lead_in():
         lead_in_ms=1800,
         tail_ms=1000,
         lane_gap_ms=300,
-        max_hold_ms=12_000,
-        continuity_snap_ms=800,
         protect_ms=500,
     )
 
-    assert layouts[3].display_start_ms <= line4.chars[0].start_ms - 500
-    assert layouts[3].display_start_ms < line2.end_ms + 300
+    assert [(item.display_start_ms, item.display_end_ms) for item in layouts] == [
+        (0, 8_700),
+        (0, 10_700),
+        (9_000, 13_000),
+        (10_700, 13_000),
+    ]
+    # 第 2 页下行紧跟上一页下行消失（IntervalTime 已被挤压吃掉），但仍早于开唱。
+    assert layouts[3].display_start_ms <= line4.chars[0].start_ms
 
 
-def test_compute_display_lines_max_hold_does_not_cut_long_singing_line():
+def test_compute_display_lines_has_no_max_hold_cap():
+    # N3 没有"最长挂屏"的概念：TopLong 的整页都挂到本段最后一页的演唱结束
+    # + PostTime，哪怕窗口远超过旧实现那个 12s 上限。
     line1 = _make_line([("a", 24_060), ("b", 25_060)], end_ms=30_300)
     line2 = _make_line([("c", 30_750)], end_ms=35_770)
     track = _track(line1, line2)
@@ -311,11 +316,13 @@ def test_compute_display_lines_max_hold_does_not_cut_long_singing_line():
         lead_in_ms=1800,
         tail_ms=1000,
         lane_gap_ms=300,
-        max_hold_ms=5000,
-        continuity_snap_ms=800,
     )
 
-    assert layouts[0].display_end_ms >= 30_300
+    assert [(item.display_start_ms, item.display_end_ms) for item in layouts] == [
+        (22_260, 36_770),
+        (22_260, 36_770),
+    ]
+    assert layouts[0].display_end_ms - layouts[0].display_start_ms > 12_000
 
 
 # ---------------------------------------------------------------------------
@@ -422,8 +429,7 @@ def _sectioned_track():
 
 def _compute(track, **kw):
     base = dict(
-        lead_in_ms=0, tail_ms=0, lane_gap_ms=0, max_hold_ms=0,
-        continuity_snap_ms=0, section_gap_ms=4000,
+        lead_in_ms=0, tail_ms=0, lane_gap_ms=0, section_gap_ms=4000,
     )
     base.update(kw)
     return compute_display_lines(track, **base)
@@ -447,12 +453,14 @@ def test_sync_ending_extends_earlier_lane_to_section_end():
     assert sync[1].display_end_ms == 3000
 
 
-def test_sync_entry_aligns_first_line_of_each_lane_in_section():
+def test_sync_entry_is_noop_when_n3_already_enters_the_head_page_together():
+    # N3 的段首页下行本来就跟上行同时上屏（BottomLineShowBeginTime → 上行时刻），
+    # 所以"同步入场"在这种结构上无事可做。
     track = _sectioned_track()
     nosync = _compute(track, sync_entry=False)
     sync = _compute(track, sync_entry=True)
 
-    assert [item.display_start_ms for item in nosync] == [0, 1000, 2000, 9000]
+    assert [item.display_start_ms for item in nosync] == [0, 0, 2000, 9000]
     assert [item.display_start_ms for item in sync] == [0, 0, 2000, 9000]
 
 
@@ -466,22 +474,24 @@ def test_sync_entry_keeps_manual_start_override_authoritative():
     assert sync[1].display_start_ms == 750
 
 
-def test_second_lane_pair_delay_does_not_cross_auto_section():
+def test_auto_section_boundary_keeps_next_section_from_entering_early():
+    # 跨段不联动：section1 的首行按自己的 PreTime 入场，不会被 section0 拉早。
     track = _sectioned_track()
     layouts = _compute(track, section_ending_mode="hold")
 
     assert layouts[3].display_start_ms == 9000
 
 
-def test_auto_section_boundary_prevents_cross_section_pair_hold():
+def test_auto_section_boundary_prevents_cross_section_hold():
     track = _sectioned_track()
-    legacy = compute_display_lines(
-        track, lead_in_ms=0, tail_ms=0, lane_gap_ms=0, max_hold_ms=0,
-        continuity_snap_ms=0,
+    # 单段时 L2/L3 同页，上行挂到页尾（TopLong 的 tail page 分支）。
+    single = compute_display_lines(
+        track, lead_in_ms=0, tail_ms=0, lane_gap_ms=0,
     )
     sectioned = _compute(track, sync_ending=False, section_ending_mode="hold")
 
-    assert legacy[2].display_end_ms == 10000
+    assert [item.lane for item in single] == [0, 1, 0, 1]
+    assert single[2].display_end_ms == 10000
     assert sectioned[2].display_end_ms == 3000
     assert [item.lane for item in sectioned] == [0, 1, 0, 0]
 
@@ -497,9 +507,6 @@ def test_red_fraction_odd_section_last_line_uses_own_page_end():
         lead_in_ms=1800,
         tail_ms=1000,
         lane_gap_ms=300,
-        max_hold_ms=12000,
-        continuity_snap_ms=800,
-        pair_second_delay_ms=3000,
         section_gap_ms=4000,
         section_ending_mode="hold",
     )
@@ -508,9 +515,9 @@ def test_red_fraction_odd_section_last_line_uses_own_page_end():
     sync = compute_display_lines(track, sync_ending=True, **settings)
 
     assert [item.lane for item in nosync] == [0, 1, 0, 0]
-    assert nosync[2].display_end_ms == 73_065
-    assert sync[1].display_end_ms == 73_065
-    assert sync[2].display_end_ms == 73_065
+    assert [item.display_end_ms for item in nosync] == [66_865, 69_315, 73_065, 87_915]
+    # 同步退场把 section0 内每个 lane 的末行都延到段末 73_065。
+    assert [item.display_end_ms for item in sync] == [66_865, 73_065, 73_065, 87_915]
 
 
 # ---------------------------------------------------------------------------
@@ -604,14 +611,13 @@ def test_compute_display_lines_respects_per_line_overrides():
         lead_in_ms=500,
         tail_ms=500,
         lane_gap_ms=0,
-        max_hold_ms=0,
-        continuity_snap_ms=0,
     )
 
     assert items[0].display_start_ms == 3000
     assert items[0].display_end_ms == 8000
-    # 未覆盖的行仍走自动布局（lane 1 受 pair_second_delay 联动 = 4500 + 3000）
-    assert items[1].display_start_ms == 7500
+    # 手动时刻参与本趟计算：段首页下行跟着上行（已被覆盖的）时刻一起入场。
+    assert items[1].display_start_ms == 3000
+    assert items[1].display_end_ms == 10_000
 
 
 def test_display_overrides_clamped_to_singing_interval():
@@ -626,8 +632,6 @@ def test_display_overrides_clamped_to_singing_interval():
         lead_in_ms=500,
         tail_ms=500,
         lane_gap_ms=0,
-        max_hold_ms=0,
-        continuity_snap_ms=0,
     )
 
     assert items[0].display_start_ms == 5000
@@ -652,16 +656,15 @@ def test_n3_bottom_single_pages_alternate_only_against_immediate_page():
         lead_in_ms=500,
         tail_ms=500,
         lane_gap_ms=0,
-        max_hold_ms=0,
-        continuity_snap_ms=0,
         lane_count=2,
         row_count_of=lambda _line: 2,
     )
 
-    legacy = compute_display_lines(_track(*lines), **settings)
+    top_aligned = compute_display_lines(_track(*lines), **settings)
     n3 = compute_display_lines(
         _track(*lines), bottom_align_of=lambda _line: True, **settings
     )
 
-    assert [item.lane for item in legacy] == [0, 0, 0]
+    assert [item.lane for item in top_aligned] == [0, 0, 0]
+    # 手动时刻让三页窗口互相重叠：第 2 页被顶上一行，第 3 页又能用回最下行。
     assert [item.lane for item in n3] == [1, 0, 1]

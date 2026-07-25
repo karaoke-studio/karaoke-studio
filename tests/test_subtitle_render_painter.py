@@ -5243,10 +5243,12 @@ def test_paint_frame_entry_and_exit_animation_change_rendered_frame(qapp):
     at_exit_static = _blank()
     at_exit_animated = _blank()
 
+    # 该行演唱 1000–2500，line_tail_ms=0 → N3 窗口 = 0..2500。入 / 退场动画整段
+    # 落在窗口内部（不撑窗口），所以退场斜坡是 [2500-600, 2500]。
     paint_frame(at_entry_static, track, 500, static)
     paint_frame(at_entry_animated, track, 500, animated)
-    paint_frame(at_exit_static, track, 2900, static)
-    paint_frame(at_exit_animated, track, 2900, animated)
+    paint_frame(at_exit_static, track, 2300, static)
+    paint_frame(at_exit_animated, track, 2300, animated)
 
     assert _pixel_hash(at_entry_static) != _pixel_hash(at_entry_animated)
     assert _pixel_hash(at_exit_static) != _pixel_hash(at_exit_animated)
@@ -7421,8 +7423,6 @@ def test_timeline_rotates_three_lanes(qapp):
         lead_in_ms=0,
         tail_ms=0,
         lane_gap_ms=0,
-        max_hold_ms=0,
-        continuity_snap_ms=0,
         lane_count=3,
     )
     assert [item.lane for item in display] == [0, 1, 2, 0, 1, 2]

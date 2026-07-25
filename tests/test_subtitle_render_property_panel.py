@@ -956,7 +956,6 @@ def test_property_panel_set_style_populates_controls(qapp):
         sync_ending=True,
         section_ending_mode="clear",
         line_lane_gap_ms=250,
-        line_max_hold_ms=9000,
         entry_anim="utopia",
         entry_lead_ms=450,
         exit_anim="char_fade",
@@ -1192,9 +1191,6 @@ def test_style_defaults_match_nicokara_layout_baseline():
     assert style.sync_ending is False
     assert style.section_ending_mode == "hold"
     assert style.line_lane_gap_ms == 300
-    assert style.line_continuity_snap_ms == 800
-    assert style.line_pair_second_delay_ms == 3000
-    assert style.line_max_hold_ms == 12_000
     assert style.entry_anim == "none"
     assert style.entry_lead_ms == 300
     assert style.exit_anim == "none"

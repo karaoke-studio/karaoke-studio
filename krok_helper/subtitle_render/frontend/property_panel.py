@@ -4404,8 +4404,6 @@ class PropertyPanel(QWidget):
             )
             self._section_gap_spin.setValue(self._style.section_gap_ms)
             self._lane_gap_spin.setValue(self._style.line_lane_gap_ms)
-            self._pair_delay_spin.setValue(self._style.line_pair_second_delay_ms)
-            self._max_hold_spin.setValue(self._style.line_max_hold_ms)
             self._section_ending_combo.setCurrentIndex(
                 max(0, self._section_ending_combo.findData(self._style.section_ending_mode))
             )
@@ -7026,24 +7024,6 @@ class PropertyPanel(QWidget):
             lambda value: self._update_style(line_lane_gap_ms=value)
         )
         grid.add_field("同轨间隔", self._lane_gap_spin)
-
-        self._pair_delay_spin = _spin(0, 20_000, suffix=" ms")
-        self._pair_delay_spin.setToolTip(
-            "同页中非首行相对上一行表示开始的默认延迟（N3 页内行延迟）。"
-        )
-        self._pair_delay_spin.valueChanged.connect(
-            lambda value: self._update_style(line_pair_second_delay_ms=value)
-        )
-        grid.add_field("页内行延迟", self._pair_delay_spin)
-
-        self._max_hold_spin = _spin(0, 60_000, suffix=" ms")
-        self._max_hold_spin.setToolTip(
-            "单句显示窗口最长保留时间，避免长间奏时字幕过久挂屏；0 = 不限制。"
-        )
-        self._max_hold_spin.valueChanged.connect(
-            lambda value: self._update_style(line_max_hold_ms=value)
-        )
-        grid.add_field("最长挂屏", self._max_hold_spin)
 
         layout.addWidget(grid)
 

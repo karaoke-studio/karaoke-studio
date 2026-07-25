@@ -18,6 +18,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Optional, Sequence
 
+from krok_helper.subtitle_render.engine.show_time import (
+    ShowTimePage,
+    compute_show_times,
+    protect_time_ms,
+)
 from krok_helper.subtitle_render.models import (
     TimingChar,
     TimingLine,
@@ -133,9 +138,6 @@ def visible_display_lines(
     lead_in_ms: int,
     tail_ms: int,
     lane_gap_ms: int,
-    max_hold_ms: int,
-    continuity_snap_ms: int,
-    pair_second_delay_ms: int = 3000,
     section_gap_ms: int = 0,
     sync_entry: bool = False,
     sync_ending: bool = False,
@@ -148,15 +150,8 @@ def visible_display_lines(
 ) -> list[DisplayLine]:
     """Return lines whose display window contains ``t_ms``.
 
-    The display window intentionally differs from singing time:
-
-    - Lines rotate through lanes ``0..lane_count-1`` (lane 0 = top row).
-    - Preferred display start is ``sing_start - lead_in_ms``.
-    - When the same lane becomes available shortly before the preferred start,
-      the next line snaps earlier to keep the lane visually continuous.
-    - Display end is the page (``lane_count`` consecutive lines) singing end
-      plus ``tail_ms``, capped by the next same-lane display start minus
-      ``lane_gap_ms``.
+    See :func:`compute_display_lines` for the window semantics (N3
+    ``TopLongAdjuster``).
     """
     layouts = compute_display_lines(
         track,
@@ -164,9 +159,6 @@ def visible_display_lines(
         tail_ms=tail_ms,
         protect_ms=protect_ms,
         lane_gap_ms=lane_gap_ms,
-        max_hold_ms=max_hold_ms,
-        continuity_snap_ms=continuity_snap_ms,
-        pair_second_delay_ms=pair_second_delay_ms,
         section_gap_ms=section_gap_ms,
         sync_entry=sync_entry,
         sync_ending=sync_ending,
@@ -185,9 +177,6 @@ def compute_display_lines(
     lead_in_ms: int,
     tail_ms: int,
     lane_gap_ms: int,
-    max_hold_ms: int,
-    continuity_snap_ms: int,
-    pair_second_delay_ms: int = 3000,
     section_gap_ms: int = 0,
     sync_entry: bool = False,
     sync_ending: bool = False,
@@ -198,28 +187,26 @@ def compute_display_lines(
     bottom_align_of: Optional[Callable[[TimingLine], bool]] = None,
     vertical_position_of: Optional[Callable[[TimingLine], str]] = None,
 ) -> list[DisplayLine]:
-    """Compute NicoKara-style display windows for all renderable lines.
+    """Compute NicoKara display windows for all renderable lines.
 
-    段落（section）按间奏间隔自动划分：相邻两句演唱空隙 > ``section_gap_ms`` 即开
-    新段落。``sync_entry`` 时同段落内每个 lane 的首行按最早上屏时间一起入场；
-    ``sync_ending`` 时同段落内每个 lane 的末行延到段末一起退场；
-    ``section_ending_mode == "clear"`` 时把每行结束钳到段末（不拖进间奏）。
-    相关选项默认关闭时输出与原行为一致。
+    窗口由 :mod:`krok_helper.subtitle_render.engine.show_time` 里的 N3
+    ``TopLongAdjuster`` 移植算出：``lead_in_ms`` = ``PreTime``、``tail_ms`` =
+    ``PostTime``、``lane_gap_ms`` = ``IntervalTime``、``protect_ms`` =
+    ``ProtectTime``。页由页计划（或按 ``lane_count`` / ``row_count_of`` 自动
+    分页）决定，段（section）等价于 N3 的 ParagraphBreak 分组：页只与同段内相邻
+    的页产生联动。
 
-    ``row_count_of``（可选）按行返回其布局的行数：页从页首行的行数决定
-    （N3 页级布局联动），未提供时全部页使用 ``lane_count``。
+    ``protect_ms`` 传 0 表示按 N3 规则自动推导（``min(PreTime, PostTime) / 2``）。
+
+    ``sync_entry`` / ``sync_ending`` / ``section_ending_mode`` 是本项目在 N3 之外
+    补的段落同步选项，默认关闭；开启时叠加在 N3 窗口之上。逐行手动覆盖（字幕
+    轨道拖动）优先于全部自动结果。
     """
     render_lines = [line for line in track.lines if not line.is_blank and line.chars]
     if not render_lines:
         return []
 
-    lead = max(lead_in_ms, 0)
     tail = max(tail_ms, 0)
-    protect = max(protect_ms, 0)
-    lane_gap = max(lane_gap_ms, 0)
-    max_hold = max(max_hold_ms, 0)
-    snap = max(continuity_snap_ms, 0)
-    pair_second_delay = max(pair_second_delay_ms, 0)
     section_gap = max(section_gap_ms, 0)
     explicit_structure = _assign_lanes_from_page_plan(track, render_lines)
     if explicit_structure is None:
@@ -235,102 +222,44 @@ def compute_display_lines(
         lanes, page_starts, page_rows, section_ids, page_ids = explicit_structure
     section_end = _compute_section_ends(render_lines, section_ids, tail)
 
-    lanes_total = max(int(lane_count), 1)
-    if bottom_align_of is not None:
-        _apply_n3_bottom_page_lanes(
-            render_lines,
-            lanes,
-            page_starts,
-            page_rows,
-            lanes_total,
-            row_count_of,
-            bottom_align_of,
-            lead=lead,
-            tail=tail,
-        )
-    if vertical_position_of is not None:
-        _apply_center_page_lanes(
-            render_lines,
-            lanes,
-            page_rows,
-            lanes_total,
-            row_count_of,
-            vertical_position_of,
-        )
+    pages = _show_time_pages(
+        render_lines,
+        page_rows,
+        section_ids,
+        max(int(lane_count), 1),
+        row_count_of,
+        bottom_align_of,
+        vertical_position_of,
+    )
+    show_times = compute_show_times(
+        [timing_line_start_ms(line) for line in render_lines],
+        [_line_end_ms(line) for line in render_lines],
+        pages,
+        pre_time_ms=max(lead_in_ms, 0),
+        post_time_ms=tail,
+        interval_ms=max(lane_gap_ms, 0),
+        # ``protect_ms`` 0 = 按 N3 规则自动推导（min(pre, post) / 2）。
+        protect_ms=protect_time_ms(lead_in_ms, tail, protect_ms),
+        # 手动时刻要参与本趟计算：N3 的 ForceBottom / 下行入场都读模型里的
+        # ShowBegin / ShowEnd，用户改过就该被下游页看见。
+        overrides=[_effective_override(line) for line in render_lines],
+    )
+    starts = show_times.starts
+    display_ends = show_times.ends
 
-    starts: list[int] = []
-    natural_ends: list[int] = []
-    prev_lane_natural_end: dict[int, int] = {}
-
-    for index, line in enumerate(render_lines):
-        lane = lanes[index]
-        preferred_start = max(timing_line_start_ms(line) - lead, 0)
-        if (
-            lane != 0
-            and starts
-            and section_ids[index] == section_ids[index - 1]
-        ):
-            preferred_start = min(
-                preferred_start,
-                starts[index - 1] + pair_second_delay,
-            )
-        page_start = page_starts[index]
-        pair_end = max(
-            _line_end_ms(item)
-            for item in render_lines[page_start : page_start + page_rows[index]]
-        )
-        natural_end = pair_end + tail
-        if max_hold > 0:
-            natural_end = min(natural_end, preferred_start + max_hold)
-        natural_ends.append(natural_end)
-
-        previous_end = prev_lane_natural_end.get(lane)
-        if previous_end is None:
-            display_start = preferred_start
-        else:
-            available_start = previous_end + lane_gap
-            if abs(preferred_start - available_start) <= snap:
-                display_start = available_start
-            else:
-                display_start = preferred_start
-        starts.append(display_start)
-        prev_lane_natural_end[lane] = natural_end
-
+    _apply_page_lane_offsets(pages, lanes, show_times.force_bottom)
     if sync_entry:
         _synchronize_section_entry_starts(starts, lanes, section_ids)
 
-    display_ends: list[int] = []
-    for index, line in enumerate(render_lines):
-        own_sing_end = _line_end_ms(line)
-        floor_end = own_sing_end + protect
-        display_end = max(natural_ends[index], floor_end)
-        if max_hold > 0:
-            display_end = max(floor_end, min(display_end, starts[index] + max_hold))
-        display_ends.append(display_end)
-
-    _adjust_same_lane_display_windows(
-        render_lines,
-        starts,
-        display_ends,
-        lanes,
-        lead=lead,
-        protect=protect,
-        lane_gap=lane_gap,
-    )
-
     result: list[DisplayLine] = []
     for index, line in enumerate(render_lines):
-        own_sing_end = _line_end_ms(line)
-        floor_end = own_sing_end + protect
-        display_end = max(display_ends[index], floor_end)
-        if max_hold > 0:
-            display_end = max(floor_end, min(display_end, starts[index] + max_hold))
-        # 段落 / 同步退场
+        display_end = display_ends[index]
+        # 段落 / 同步退场（本项目在 N3 之外的扩展，默认关闭）
         sid = section_ids[index]
         if sync_ending and _is_last_in_lane_in_section(lanes, section_ids, index):
-            display_end = max(floor_end, section_end[sid])
+            display_end = max(display_end, section_end[sid])
         if section_ending_mode == "clear":
-            display_end = max(floor_end, min(display_end, section_end[sid]))
+            display_end = min(display_end, section_end[sid])
         # 逐行手动覆盖（字幕轨道拖动写入）优先于所有自动布局调整
         display_start, display_end = apply_display_overrides(
             line, starts[index], display_end
@@ -351,18 +280,24 @@ def compute_display_lines(
     return result
 
 
-def _apply_center_page_lanes(
+def _show_time_pages(
     render_lines: list[TimingLine],
-    lanes: list[int],
     page_rows: list[int],
+    section_ids: list[int],
     default_rows: int,
     row_count_of: Optional[Callable[[TimingLine], int]],
-    vertical_position_of: Callable[[TimingLine], str],
-) -> None:
-    """Place a short center-aligned page in a contiguous centered lane block."""
+    bottom_align_of: Optional[Callable[[TimingLine], bool]],
+    vertical_position_of: Optional[Callable[[TimingLine], str]],
+) -> list[ShowTimePage]:
+    """把 lane 结构折叠成 :class:`ShowTimePage` 序列（渲染行索引空间）。
 
-    index = 0
+    页的垂直配置取页首行的布局；两个解析回调都缺席时（竖排 / 纯时间学单测）
+    按顶部对齐处理，此时 N3 的下行 / ForceBottom 分支不参与。
+    """
+
+    pages: list[ShowTimePage] = []
     total = len(render_lines)
+    index = 0
     while index < total:
         page_size = max(int(page_rows[index]), 1)
         page_end = min(index + page_size, total)
@@ -371,14 +306,57 @@ def _apply_center_page_lanes(
             int(row_count_of(first)) if row_count_of is not None else int(default_rows),
             1,
         )
-        if (
-            str(vertical_position_of(first)) == "center"
-            and page_size < configured_rows
-        ):
-            shift = max((configured_rows - page_size + 1) // 2, 0)
-            for item_index in range(index, page_end):
-                lanes[item_index] += shift
+        if vertical_position_of is not None:
+            position = str(vertical_position_of(first))
+        elif bottom_align_of is not None:
+            position = "bottom" if bottom_align_of(first) else "top"
+        else:
+            position = "top"
+        pages.append(
+            ShowTimePage(
+                lines=tuple(range(index, page_end)),
+                section=section_ids[index],
+                configured_rows=configured_rows,
+                vertical_position=position,
+            )
+        )
         index = page_end
+    return pages
+
+
+def _apply_page_lane_offsets(
+    pages: Sequence[ShowTimePage],
+    lanes: list[int],
+    force_bottom: Sequence[bool],
+) -> None:
+    """把不满页映射到布局的底部 / 居中位置，并复现 N3 ForceBottom 的上移。
+
+    单行底部页正常占最下行；若上一页在同一行还没消失（N3 pass 判定
+    ``force_bottom`` 为 False），N3 把它上移一行，后面再重叠的单行页又能用回
+    最下行。
+    """
+
+    for page in pages:
+        page_size = len(page.lines)
+        if page_size <= 0 or page_size >= max(int(page.configured_rows), 1):
+            continue
+        configured_rows = max(int(page.configured_rows), 1)
+        if page.vertical_position == "bottom":
+            shift = configured_rows - page_size
+        elif page.vertical_position == "center":
+            shift = max((configured_rows - page_size + 1) // 2, 0)
+        else:
+            continue
+        for line in page.lines:
+            lanes[line] += shift
+        if (
+            page.vertical_position == "bottom"
+            and page_size == 1
+            and configured_rows > 1
+            and not force_bottom[page.lines[0]]
+        ):
+            first = page.lines[0]
+            lanes[first] = max(lanes[first] - 1, 0)
 
 
 def _page_ids_from_starts(page_starts: list[int]) -> list[int]:
@@ -445,74 +423,6 @@ def _assign_lanes_from_page_plan(
     return lanes, page_starts, page_rows, section_ids, page_ids
 
 
-def _apply_n3_bottom_page_lanes(
-    render_lines: list[TimingLine],
-    lanes: list[int],
-    page_starts: list[int],
-    page_rows: list[int],
-    default_rows: int,
-    row_count_of: Optional[Callable[[TimingLine], int]],
-    bottom_align_of: Callable[[TimingLine], bool],
-    *,
-    lead: int,
-    tail: int,
-) -> None:
-    """Map short bottom pages from the bottom and reproduce N3 ForceBottom.
-
-    A one-line page normally occupies the bottom row.  If the immediately
-    preceding page still displays in that same row, N3 moves it up by one row;
-    the following overlapping single page can use the bottom row again.
-    """
-
-    previous_page: list[tuple[int, int, int]] = []  # lane, show begin, show end
-    index = 0
-    total = len(render_lines)
-    while index < total:
-        page_size = max(int(page_rows[index]), 1)
-        page_end = min(index + page_size, total)
-        first = render_lines[index]
-        configured_rows = max(
-            int(row_count_of(first)) if row_count_of is not None else int(default_rows),
-            1,
-        )
-        is_bottom = bool(bottom_align_of(first))
-        if is_bottom and page_size < configured_rows:
-            shift = configured_rows - page_size
-            for item_index in range(index, page_end):
-                lanes[item_index] += shift
-
-        page_entries: list[tuple[int, int, int]] = []
-        for item_index in range(index, page_end):
-            line = render_lines[item_index]
-            begin_override = getattr(line, "display_start_override_ms", None)
-            end_override = getattr(line, "display_end_override_ms", None)
-            show_begin = (
-                max(0, int(begin_override))
-                if begin_override is not None
-                else max(timing_line_start_ms(line) - lead, 0)
-            )
-            show_end = (
-                int(end_override)
-                if end_override is not None
-                else _line_end_ms(line) + tail
-            )
-            page_entries.append((lanes[item_index], show_begin, show_end))
-
-        if is_bottom and page_size == 1 and configured_rows > 1:
-            lane, show_begin, show_end = page_entries[0]
-            overlaps_bottom = any(
-                previous_lane == lane and previous_end >= show_begin
-                for previous_lane, _previous_begin, previous_end in previous_page
-            )
-            if overlaps_bottom:
-                lane = max(lane - 1, 0)
-                lanes[index] = lane
-                page_entries[0] = (lane, show_begin, show_end)
-
-        previous_page = page_entries
-        index = page_end
-
-
 def apply_display_overrides(
     line: TimingLine, display_start: int, display_end: int
 ) -> tuple[int, int]:
@@ -530,57 +440,20 @@ def apply_display_overrides(
     return display_start, display_end
 
 
-def _adjust_same_lane_display_windows(
-    render_lines: list[TimingLine],
-    starts: list[int],
-    display_ends: list[int],
-    lanes: list[int],
-    *,
-    lead: int,
-    protect: int,
-    lane_gap: int,
-) -> None:
-    """Compress adjacent same-lane display windows while preserving protect floors."""
-    previous_by_lane: dict[int, int] = {}
-    for index, line in enumerate(render_lines):
-        lane = lanes[index]
-        previous = previous_by_lane.get(lane)
-        if previous is None:
-            previous_by_lane[lane] = index
-            continue
+def _effective_override(line: TimingLine) -> tuple[Optional[int], Optional[int]]:
+    """该行手动覆盖后的 ``(上屏, 消失)``；未覆盖的一侧为 ``None``。
 
-        if display_ends[previous] + lane_gap <= starts[index]:
-            previous_by_lane[lane] = index
-            continue
-
-        previous_floor = _line_end_ms(render_lines[previous]) + protect
-        current_protect_start = max(_line_start_ms(line) - protect, 0)
-
-        # First give up the previous line's tail, but never below its protect floor.
-        display_ends[previous] = max(previous_floor, starts[index] - lane_gap)
-        if display_ends[previous] + lane_gap <= starts[index]:
-            previous_by_lane[lane] = index
-            continue
-
-        # Then shorten the new line's lead-in, stopping at its protect point.
-        target_start = display_ends[previous] + lane_gap
-        latest_start = max(current_protect_start, starts[index])
-        starts[index] = min(max(starts[index], target_start), latest_start)
-        if display_ends[previous] + lane_gap <= starts[index]:
-            previous_by_lane[lane] = index
-            continue
-
-        # If only the gap is missing, accept the shorter gap. When the protected
-        # windows themselves overlap, keep both protected windows rather than
-        # cutting the previous line's post-singing exit buffer.
-        if display_ends[previous] <= starts[index]:
-            previous_by_lane[lane] = index
-            continue
-
-        if display_ends[previous] <= current_protect_start:
-            starts[index] = display_ends[previous]
-
-        previous_by_lane[lane] = index
+    钳制规则必须与 :func:`apply_display_overrides` 完全一致——N3 pass 用这个值
+    参与计算，最终结果又由 ``apply_display_overrides`` 再盖一次。
+    """
+    start_override = getattr(line, "display_start_override_ms", None)
+    end_override = getattr(line, "display_end_override_ms", None)
+    return (
+        None
+        if start_override is None
+        else max(0, min(int(start_override), _line_start_ms(line))),
+        None if end_override is None else max(int(end_override), _line_end_ms(line)),
+    )
 
 
 def _compute_section_ids(render_lines: list[TimingLine], section_gap: int) -> list[int]:
@@ -902,11 +775,3 @@ def _line_end_ms(line: TimingLine) -> int:
 
 def _line_start_ms(line: TimingLine) -> int:
     return timing_line_start_ms(line)
-
-
-def _pair_sing_end_ms(lines: list[TimingLine], index: int, lane_count: int = 2) -> int:
-    """同页（连续 ``lane_count`` 行为一页）所有行的最晚演唱结束。"""
-    lanes = max(int(lane_count), 1)
-    page_start = (index // lanes) * lanes
-    page = lines[page_start : page_start + lanes]
-    return max(_line_end_ms(line) for line in page)

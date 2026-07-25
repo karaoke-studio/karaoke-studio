@@ -276,8 +276,6 @@ def test_timeline_consumes_page_plan_instead_of_legacy_breaks_and_gap():
         lead_in_ms=0,
         tail_ms=0,
         lane_gap_ms=0,
-        max_hold_ms=0,
-        continuity_snap_ms=0,
         section_gap_ms=1,
         lane_count=2,
     )
@@ -316,8 +314,6 @@ def test_timeline_offsets_short_bottom_and_center_pages():
         lead_in_ms=0,
         tail_ms=0,
         lane_gap_ms=0,
-        max_hold_ms=0,
-        continuity_snap_ms=0,
         lane_count=4,
         row_count_of=lambda _line: 4,
     )

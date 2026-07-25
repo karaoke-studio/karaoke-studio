@@ -521,6 +521,7 @@ from krok_helper.subtitle_render.engine.page_plan import (
     use_default_layouts,
 )
 from krok_helper.subtitle_render.engine.animator import line_animation_state
+from krok_helper.subtitle_render.engine.show_time import protect_time_ms
 from krok_helper.subtitle_render.models import (
     DecorationKind,
     GuideSymbol,
@@ -2968,9 +2969,6 @@ def _visible_lines_for_style(
             lead_in_ms=style.line_lead_in_ms,
             tail_ms=style.line_tail_ms,
             lane_gap_ms=style.line_lane_gap_ms,
-            max_hold_ms=style.line_max_hold_ms,
-            continuity_snap_ms=style.line_continuity_snap_ms,
-            pair_second_delay_ms=style.line_pair_second_delay_ms,
             section_gap_ms=style.section_gap_ms,
             sync_entry=style.sync_entry,
             sync_ending=style.sync_ending,
@@ -3002,9 +3000,6 @@ def display_windows_for_style(
             lead_in_ms=style.line_lead_in_ms,
             tail_ms=style.line_tail_ms,
             lane_gap_ms=style.line_lane_gap_ms,
-            max_hold_ms=style.line_max_hold_ms,
-            continuity_snap_ms=style.line_continuity_snap_ms,
-            pair_second_delay_ms=style.line_pair_second_delay_ms,
             section_gap_ms=style.section_gap_ms,
             sync_entry=style.sync_entry,
             sync_ending=style.sync_ending,
@@ -3050,9 +3045,6 @@ def display_schedule_for_style(
         lead_in_ms=style.line_lead_in_ms,
         tail_ms=style.line_tail_ms,
         lane_gap_ms=style.line_lane_gap_ms,
-        max_hold_ms=style.line_max_hold_ms,
-        continuity_snap_ms=style.line_continuity_snap_ms,
-        pair_second_delay_ms=style.line_pair_second_delay_ms,
         section_gap_ms=style.section_gap_ms,
         sync_entry=style.sync_entry,
         sync_ending=style.sync_ending,
@@ -3110,14 +3102,14 @@ def _single_visible_display_line(
 
 
 def _effective_line_protect_ms(style: Style) -> int:
-    manual = max(int(style.line_protect_ms), 0)
-    if manual > 0:
-        base = manual
-    else:
-        lead = max(int(style.line_lead_in_ms), 0)
-        tail = max(int(style.line_tail_ms), 0)
-        base = min(lead, tail) // 2
-    return max(base, max(int(style.exit_fade_ms), 0))
+    """N3 ``WipeTimingSettingsModel.ProtectTime``。
+
+    N3 不把入 / 退场动画时长算进保护时间——淡入淡出整段落在显示窗口内部，
+    是从 PreTime / PostTime 里"吃"掉的，不额外撑窗口。
+    """
+    return protect_time_ms(
+        style.line_lead_in_ms, style.line_tail_ms, style.line_protect_ms
+    )
 
 
 def _display_style_for_signal_window(style: Style) -> Style:
@@ -11315,9 +11307,6 @@ def check_layout_margins(
             lead_in_ms=style.line_lead_in_ms,
             tail_ms=style.line_tail_ms,
             lane_gap_ms=style.line_lane_gap_ms,
-            max_hold_ms=style.line_max_hold_ms,
-            continuity_snap_ms=style.line_continuity_snap_ms,
-            pair_second_delay_ms=style.line_pair_second_delay_ms,
             section_gap_ms=style.section_gap_ms,
             sync_entry=style.sync_entry,
             sync_ending=style.sync_ending,

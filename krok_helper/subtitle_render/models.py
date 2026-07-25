@@ -1161,15 +1161,6 @@ class Style:
     line_lane_gap_ms: int = 300
     """同一显示 lane 上相邻两句之间保留的时间间隔。"""
 
-    line_continuity_snap_ms: int = 800
-    """同 lane 间隔较短时，下一句可提前到上一句结束后立即显示的阈值。"""
-
-    line_pair_second_delay_ms: int = 3000
-    """双行组中下行相对上行表示开始的默认延迟。"""
-
-    line_max_hold_ms: int = 12_000
-    """单句显示窗口最长保留时间，避免长间奏时字幕过久挂屏。"""
-
     # 段落 / 同步入退场（对标 Sayatoo sync_ending / section_ending_mode）。
     # Sayatoo 用手动信号划段落；LRC 无信号，这里改为按间奏间隔自动分段。
     section_gap_ms: int = 4000
@@ -1182,8 +1173,8 @@ class Style:
     """同步退场：开启后同段落内一组两行在段末同时退场，而非逐行先后消失。"""
 
     section_ending_mode: SectionEndingMode = "hold"
-    """段落结束行为：``hold`` 维持现状（可挂屏到 max_hold）；``clear`` 段末即清屏，
-    字幕不拖进间奏。"""
+    """段落结束行为：``hold`` 维持现状（按 N3 TopLong 挂到段末）；``clear`` 段末即
+    清屏，字幕不拖进间奏。"""
 
     entry_anim: EntryAnimation = "none"
     """入场动画：none / fade / slide_in / rise / char_fade / char_drip / spin_flip / utopia。"""
@@ -1776,9 +1767,6 @@ def style_from_dict(payload: object) -> Style:
             "line_protect_ms",
             "timing_offset_ms",
             "line_lane_gap_ms",
-            "line_continuity_snap_ms",
-            "line_pair_second_delay_ms",
-            "line_max_hold_ms",
             "section_gap_ms",
             "entry_lead_ms",
             "exit_fade_ms",

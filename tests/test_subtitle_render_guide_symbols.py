@@ -112,8 +112,6 @@ def test_guide_symbol_is_first_timed_inline_glyph(tmp_path):
         lead_in_ms=0,
         tail_ms=0,
         lane_gap_ms=0,
-        max_hold_ms=0,
-        continuity_snap_ms=0,
     )
     assert display[0].display_start_ms == 1000
 
