@@ -573,6 +573,19 @@ def test_title_enabled_and_layout_are_remembered_without_leaking_project_text(qa
     assert disabled_reload._style.title_overlay.enabled is False
 
 
+def test_fresh_install_selects_builtin_title_top_left_layout(qapp):
+    provider = _FontMigrationSettingsProvider({})
+
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+
+    assert win._app_default_style.layouts[0].name == "タイトル左上"
+    assert win._app_default_style.layouts[0].layout_id == "title-default"
+    assert win._style.title_overlay is not None
+    assert win._style.title_overlay.layout_index == 1
+    assert win._property_panel._title_layout_combo.currentData() == 1
+    assert win._property_panel._title_layout_combo.currentText() == "タイトル左上"
+
+
 def test_builtin_scheme_defaults_are_saved_only_for_requested_target(qapp):
     initial_style = Style(
         fill_color="#111111",
