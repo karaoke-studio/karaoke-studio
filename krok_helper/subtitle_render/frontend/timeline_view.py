@@ -884,19 +884,24 @@ class TrackTimelineView(QWidget):
     ) -> str:
         line = self._track_refs[lane_index].lines[block.line_index]
         effective = style_with_line_animation(self._style, line)
+        show_ms, hide_ms = self._selected_window(lane_index, block)
         if entry:
             animation = effective.entry_anim
             label = _ENTRY_ANIMATION_LABELS.get(animation, animation)
             duration_ms = max(int(effective.entry_lead_ms), 0)
+            # 余量 = 把手框本身的宽度（上屏 → 开始走字），与特效时长各算各的
+            margin_ms = max(block.start_ms - show_ms, 0)
             phase = "入场"
         else:
             animation = effective.exit_anim
             label = _EXIT_ANIMATION_LABELS.get(animation, animation)
             duration_ms = max(int(effective.exit_fade_ms), 0)
+            margin_ms = max(hide_ms - block.end_ms, 0)
             phase = "退场"
+        head = f"{phase}（{margin_ms} ms）"
         if animation == "none":
-            return f"{phase}：{label}"
-        return f"{phase}：{label}（{duration_ms} ms）"
+            return f"{head}：{label}"
+        return f"{head}：{label}（{duration_ms} ms）"
 
     def _line_override_values(
         self, lane_index: int, line_index: int
