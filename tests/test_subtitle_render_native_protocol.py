@@ -1064,9 +1064,13 @@ def test_native_gpu_title_uses_project_timeline_and_independent_segment_fades(
         pytest.skip("native subtitle renderer executable is not built")
 
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    # ``max_alpha`` 扫的是整帧，所以歌词行在采样时刻必须不在屏上，否则它的不透明
+    # 像素会盖掉标题的淡入值。这一句实际演唱时刻 = 5000 + meta 2000 + style 3000
+    # = 10_000，显示窗口 [10_000 − PreTime, 11_000 + PostTime] = [8200, 12_000]，
+    # 与下面三个采样点（500 / 5500 / 7500）都不重叠。
     track = TimingTrack(
         meta=TimingTrackMeta(title="TITLE", offset_ms=2_000),
-        lines=[TimingLine(chars=[TimingChar("終", 4_000)], end_ms=5_000)],
+        lines=[TimingLine(chars=[TimingChar("終", 5_000)], end_ms=6_000)],
     )
     scheme = replace(
         default_title_scheme(),
