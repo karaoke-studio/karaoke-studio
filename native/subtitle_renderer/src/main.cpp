@@ -188,6 +188,12 @@ struct ResolvedStyle {
     PaintFillSpec rubyAfterShadowFill;
     int strokeWidthPx = 9;
     int stroke2WidthPx = 0;
+    // Tracked separately from the width because ``stroke2WidthPx`` is zeroed as
+    // soon as the flag turns off: an unset ruby stroke2 has to inherit the main
+    // text's *flag*, which a zeroed width can no longer distinguish from a
+    // deliberate 0 px. Defaults to true so an absent key keeps the old
+    // "no key means do not zero" behaviour (and matches Style.stroke2_enabled).
+    bool stroke2Enabled = true;
     QString decorationKind = QStringLiteral("shadow");
     int glowRadiusPx = 10;
     int glowBeforeRadiusPx = 10;
@@ -216,6 +222,7 @@ struct ResolvedStyle {
     // Baking them from the *global* main during base parsing made a role that
     // overrode its main decoration/glow keep the global default for ruby.
     std::optional<int> rubyStrokeWidthPx;
+    std::optional<bool> rubyStroke2Enabled;
     std::optional<int> rubyStroke2WidthPx;
     QString rubyDecorationKind;
     std::optional<int> rubyGlowBeforeRadiusPx;
@@ -1166,9 +1173,15 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
     }
     if (hasNonNull(style, QStringLiteral("stroke2_enabled"))
         && !style.value(QStringLiteral("stroke2_enabled")).toBool()) {
+        cfg.stroke2Enabled = false;
         cfg.stroke2WidthPx = 0;
-    } else if (hasNonNull(style, QStringLiteral("stroke2_width_px"))) {
-        cfg.stroke2WidthPx = std::max(0, intValue(style, QStringLiteral("stroke2_width_px"), cfg.stroke2WidthPx));
+    } else {
+        if (hasNonNull(style, QStringLiteral("stroke2_enabled"))) {
+            cfg.stroke2Enabled = true;
+        }
+        if (hasNonNull(style, QStringLiteral("stroke2_width_px"))) {
+            cfg.stroke2WidthPx = std::max(0, intValue(style, QStringLiteral("stroke2_width_px"), cfg.stroke2WidthPx));
+        }
     }
     if (hasNonNull(style, QStringLiteral("decoration_kind"))) {
         cfg.decorationKind = stringValue(style, QStringLiteral("decoration_kind"), cfg.decorationKind);
@@ -1270,10 +1283,10 @@ void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
             0, intValue(style, QStringLiteral("ruby_stroke_width_px"), 0)
         );
     }
-    if (hasNonNull(style, QStringLiteral("ruby_stroke2_enabled"))
-        && !style.value(QStringLiteral("ruby_stroke2_enabled")).toBool()) {
-        cfg.rubyStroke2WidthPx = 0;
-    } else if (hasNonNull(style, QStringLiteral("ruby_stroke2_width_px"))) {
+    if (hasNonNull(style, QStringLiteral("ruby_stroke2_enabled"))) {
+        cfg.rubyStroke2Enabled = style.value(QStringLiteral("ruby_stroke2_enabled")).toBool();
+    }
+    if (hasNonNull(style, QStringLiteral("ruby_stroke2_width_px"))) {
         cfg.rubyStroke2WidthPx = std::max(
             0, intValue(style, QStringLiteral("ruby_stroke2_width_px"), 0)
         );
@@ -2108,9 +2121,11 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
     refreshLegacyRubyFills(base);
     base.strokeWidthPx = std::max(0, intValue(style, QStringLiteral("stroke_width_px"), base.strokeWidthPx));
     base.stroke2WidthPx = std::max(0, intValue(style, QStringLiteral("stroke2_width_px"), base.stroke2WidthPx));
-    if (style.value(QStringLiteral("stroke2_enabled")).isBool()
-        && !style.value(QStringLiteral("stroke2_enabled")).toBool()) {
-        base.stroke2WidthPx = 0;
+    if (style.value(QStringLiteral("stroke2_enabled")).isBool()) {
+        base.stroke2Enabled = style.value(QStringLiteral("stroke2_enabled")).toBool();
+        if (!base.stroke2Enabled) {
+            base.stroke2WidthPx = 0;
+        }
     }
     base.decorationKind = stringValue(style, QStringLiteral("decoration_kind"), base.decorationKind);
     base.glowRadiusPx = std::max(1, intValue(style, QStringLiteral("glow_radius_px"), base.glowRadiusPx));
@@ -2179,10 +2194,14 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
             0, intValue(style, QStringLiteral("ruby_stroke_width_px"), 0)
         );
     }
-    if (style.value(QStringLiteral("ruby_stroke2_enabled")).isBool()
-        && !style.value(QStringLiteral("ruby_stroke2_enabled")).toBool()) {
-        base.rubyStroke2WidthPx = 0;
-    } else if (style.value(QStringLiteral("ruby_stroke2_width_px")).isDouble()) {
+    // The flag and the width are independent: ``ruby_stroke2_enabled: null``
+    // means "follow the main text", and a saved width must not switch stroke2
+    // back on by itself.  N3 projects that omit ``UseEdge2`` but keep
+    // ``EdgeSize2`` hit exactly that combination.
+    if (style.value(QStringLiteral("ruby_stroke2_enabled")).isBool()) {
+        base.rubyStroke2Enabled = style.value(QStringLiteral("ruby_stroke2_enabled")).toBool();
+    }
+    if (style.value(QStringLiteral("ruby_stroke2_width_px")).isDouble()) {
         base.rubyStroke2WidthPx = std::max(
             0, intValue(style, QStringLiteral("ruby_stroke2_width_px"), 0)
         );
@@ -6960,9 +6979,16 @@ void applyGpuResolvedStyle(
     const int rubyStrokePx = source.rubyStrokeWidthPx.value_or(
         scaledFromMain(source.strokeWidthPx)
     );
-    const int rubyStroke2Px = source.rubyStroke2WidthPx.value_or(
-        source.stroke2WidthPx > 0 ? scaledFromMain(source.stroke2WidthPx) : 0
-    );
+    // Same order as the CPU painter's _ruby_stroke2_width: settle the flag
+    // first (unset = follow this scheme's main text), and only then reach for a
+    // width.  Consulting the width first let a saved ruby width draw stroke2
+    // even though the main text had it switched off.
+    const bool rubyStroke2On = source.rubyStroke2Enabled.value_or(source.stroke2Enabled);
+    const int rubyStroke2Px = rubyStroke2On
+        ? source.rubyStroke2WidthPx.value_or(
+              source.stroke2Enabled ? scaledFromMain(source.stroke2WidthPx) : 0
+          )
+        : 0;
     target.rubyStrokeWidth = static_cast<float>(rubyStrokePx * scale);
     target.rubyStroke2Width = static_cast<float>(rubyStroke2Px * scale);
     target.rubyDecorationKind = (

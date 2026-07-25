@@ -3495,6 +3495,145 @@ def test_native_gpu_role_ruby_decoration_follows_role_main_not_global():
     # ...and must not fall back to the global main decoration.
     assert not np.array_equal(frames["unset"], frames["global_shadow"])
 
+
+def test_native_gpu_unset_ruby_stroke2_follows_main_flag_not_saved_width():
+    """GPU: ``ruby_stroke2_enabled=None`` follows the main text's flag.
+
+    ``.n3proj`` files that omit ``UseEdge2`` but still store ``EdgeSize2``
+    import as ``ruby_stroke2_enabled=None`` + ``ruby_stroke2_width_px=3`` on
+    top of a main text with ``stroke2_enabled=False``.  The sidecar collapsed
+    the flag and the width into one optional width, so a saved ruby width
+    switched stroke2 back on by itself and the ruby gained a second outline the
+    main text did not have.  The CPU painter settles the flag first, so only
+    the GPU backend was affected.
+
+    Both directions are pinned: unset must be byte-identical to the main text's
+    own state, and clearly different from the opposite one.
+    """
+    renderer_path = resolve_native_renderer_path(root=Path.cwd())
+    if renderer_path is None:
+        pytest.skip("native subtitle renderer executable is not built")
+
+    from PyQt6.QtWidgets import QApplication
+
+    app = QApplication.instance() or QApplication([])
+    assert app is not None
+
+    def fill(color: str) -> PaintFill:
+        return PaintFill(color=color)
+
+    def colors() -> KaraokeColors:
+        # A saturated stroke2 makes any second outline unmistakable.
+        state = KaraokeColorState(
+            text=fill("#FFFFFF"),
+            stroke=fill("#111111"),
+            stroke2=fill("#FF0000"),
+            shadow=fill("#00000000"),
+        )
+        return KaraokeColors(before=state, after=state)
+
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("桜", 0), TimingChar("花", 800)], end_ms=1600
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="桜花",
+                reading="おうか",
+                reading_part_ms=[400, 800],
+                pos_start_ms=0,
+                pos_end_ms=1600,
+            )
+        ],
+    )
+
+    def style(*, main_enabled: bool, ruby_enabled: bool | None) -> Style:
+        return Style(
+            font_family="Arial",
+            font_size_px=64,
+            ruby_font_size_px=45,
+            ruby_gap_px=8,
+            line_lead_in_ms=0,
+            line_tail_ms=0,
+            line_y_position="center",
+            line_horizontal_layout="center",
+            stroke_width_px=5,
+            stroke2_enabled=main_enabled,
+            stroke2_width_px=5,
+            ruby_stroke_width_px=4,
+            ruby_stroke2_enabled=ruby_enabled,
+            # The width N3 saved as EdgeSize2 must not enable stroke2 on its own.
+            ruby_stroke2_width_px=3,
+            decoration_kind="none",
+            entry_anim="none",
+            exit_anim="none",
+            karaoke_colors=colors(),
+            ruby_karaoke_colors=colors(),
+        )
+
+    cases = {
+        "main_off_unset": dict(main_enabled=False, ruby_enabled=None),
+        "main_off_explicit_off": dict(main_enabled=False, ruby_enabled=False),
+        "main_on_unset": dict(main_enabled=True, ruby_enabled=None),
+        "main_on_explicit_on": dict(main_enabled=True, ruby_enabled=True),
+    }
+    frames: dict[str, np.ndarray] = {}
+    with NativeRendererProcess(
+        renderer_path, response_timeout_s=25.0, close_timeout_s=1.0
+    ) as renderer:
+        for generation, (label, kwargs) in enumerate(cases.items(), start=1):
+            renderer.configure_gpu(
+                track,
+                style(**kwargs),
+                width=640,
+                height=360,
+                fps=60,
+                dpr=1.0,
+                force_warp=True,
+                realization_enabled=False,
+            )
+            event = renderer.render_gpu_frame(
+                800,
+                force_warp=True,
+                generation=generation,
+                shm_key=f"krok-ruby-stroke2-{os.getpid()}-{uuid.uuid4().hex}",
+                include_checksum=False,
+                readback_bands=False,
+            )
+            with SharedFrameRingReader.from_event(event) as reader:
+                slot = reader.read_frame(event)
+            rows = np.frombuffer(slot.payload, dtype=np.uint8).reshape(
+                slot.height, slot.stride
+            )
+            frames[label] = (
+                rows[:, : slot.width * 4]
+                .reshape(slot.height, slot.width, 4)
+                .astype(int)
+                .copy()
+            )
+
+    def stroke2_pixels(frame: np.ndarray) -> int:
+        # BGRA: the red stroke2 is the only saturated-red source in the frame.
+        return int(
+            (
+                (frame[..., 2] > 180)
+                & (frame[..., 1] < 80)
+                & (frame[..., 0] < 80)
+                & (frame[..., 3] > 128)
+            ).sum()
+        )
+
+    assert frames["main_off_unset"][..., 3].max() > 0  # the ruby really rendered
+    # Main text off -> an unset ruby draws no stroke2 at all...
+    assert stroke2_pixels(frames["main_off_unset"]) == 0
+    assert np.array_equal(frames["main_off_unset"], frames["main_off_explicit_off"])
+    # ...and main text on -> the same unset ruby follows it back on.
+    assert stroke2_pixels(frames["main_on_unset"]) > 0
+    assert np.array_equal(frames["main_on_unset"], frames["main_on_explicit_on"])
+
+
 @_NATIVE_PARITY_DIVERGED
 def test_native_two_line_horizontal_pixels_stay_within_bounded_diff(
     tmp_path, monkeypatch
