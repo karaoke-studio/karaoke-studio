@@ -34,7 +34,6 @@ from PyQt6.QtCore import (
     QEasingCurve,
     QEvent,
     QEventLoop,
-    QPoint,
     QPropertyAnimation,
     QRect,
     QSize,
@@ -42,10 +41,11 @@ from PyQt6.QtCore import (
     QTimer,
     Qt,
     QUrl,
+    pyqtProperty,
     pyqtSignal as Signal,
     pyqtSlot as Slot,
 )
-from PyQt6.QtGui import QColor, QBrush, QDesktopServices, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPalette, QPen, QShortcut, QTextDocument
+from PyQt6.QtGui import QColor, QBrush, QDesktopServices, QFont, QFontMetrics, QIcon, QKeySequence, QPainter, QPalette, QPen, QPixmap, QShortcut, QTextDocument
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -2717,6 +2717,58 @@ class LyricsKeywordLineEdit(QLineEdit):
         event.acceptProposedAction()
 
 
+class PageTransitionOverlay(QWidget):
+    """工作流换页动画的快照覆盖层。
+
+    动画期间只把两张已光栅化的位图按偏移贴出来，完全不碰真实页面 —— 真实
+    的 ``setCurrentWidget`` 在动画开始前就做完了，页面已排好版并被本覆盖层
+    遮住。这样每帧的代价固定为两次 blit，与页面复杂度无关。
+
+    对比直接动 ``page.pos``：那种做法每帧都要把入场页整棵子树重绘一遍（页面
+    是 native HWND，拿不到 backingstore 的 blit 快路径），帧间隔实测等于该页
+    一次全量重绘的耗时，重页会掉到 30fps 上下。
+    """
+
+    def __init__(self, parent: QWidget) -> None:
+        super().__init__(parent)
+        self._old_pixmap = QPixmap()
+        self._new_pixmap = QPixmap()
+        self._distance = 0
+        self._offset = 0.0
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        # page_stack 下的各页都是 native HWND（SUG 侧的 winId() 把整条祖先链连同
+        # 重叠的兄弟页一起提升了），native 窗口恒在非 native 兄弟之上合成。覆盖层
+        # 自己也必须是 native，raise_() 才真的能压住页面。
+        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+        self.hide()
+
+    def start(self, old_pixmap: QPixmap, new_pixmap: QPixmap, distance: int) -> None:
+        self._old_pixmap = old_pixmap
+        self._new_pixmap = new_pixmap
+        self._distance = distance
+        self._offset = float(distance)
+
+    def _get_offset(self) -> float:
+        return self._offset
+
+    def _set_offset(self, value: float) -> None:
+        self._offset = float(value)
+        self.update()
+
+    offset = pyqtProperty(float, fget=_get_offset, fset=_set_offset)
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        from krok_helper.theme_workbench import palette as _wb_palette
+
+        painter = QPainter(self)
+        # 换页同时改边距时（打轴/字幕预览走贴边边距），新旧两张快照宽度会差 48px，
+        # 先铺一层底避免露出未定义像素 —— WA_OpaquePaintEvent 承诺画满每个像素。
+        painter.fillRect(self.rect(), QColor(_wb_palette().shell_bg))
+        painter.drawPixmap(int(self._offset) - self._distance, 0, self._old_pixmap)
+        painter.drawPixmap(int(self._offset), 0, self._new_pixmap)
+
+
 class KrokHelperQtApp(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -2787,6 +2839,8 @@ class KrokHelperQtApp(QMainWindow):
         self._suppress_preview_seek_restart = False
         self._restoring_from_maximized = False
         self._startup_geometry_applied = False
+        self._page_transition_overlay: PageTransitionOverlay | None = None
+        self._page_switch_anim: QPropertyAnimation | None = None
         self.align_control_panel: QFrame | None = None
         self.align_open_output_button: QPushButton | None = None
         self.align_clear_button: QPushButton | None = None
@@ -3026,6 +3080,8 @@ class KrokHelperQtApp(QMainWindow):
 
         self.page_stack = QStackedWidget()
         self.page_stack.setObjectName("PageStack")
+        # 换页动画期间窗口被拉伸的话，覆盖层上的快照就过期了，直接中断动画
+        self.page_stack.installEventFilter(self)
         page_stack_container = QWidget()
         self._page_stack_container_layout = QVBoxLayout(page_stack_container)
         self._page_stack_normal_margins = (24, 0, 24, 16)
@@ -3131,65 +3187,107 @@ class KrokHelperQtApp(QMainWindow):
         ):
             self._stop_alignment_preview()
         self.active_module = module_id
+        # 旧页快照必须抢在 setCurrentWidget 之前拍 —— 之后它就被 stack 隐藏了。
+        # getattr 容忍测试里的 SimpleNamespace 假 app（与上方 align_preview_process 同款写法）
+        capture_outgoing = getattr(self, "_capture_outgoing_page", None)
+        outgoing = capture_outgoing(previous_module, module_id) if capture_outgoing is not None else None
         self._sync_page_stack_margins(module_id)
         self.page_stack.setCurrentWidget(self.module_pages[module_id])
-        # getattr 容忍测试里的 SimpleNamespace 假 app（与上方 align_preview_process 同款写法）
         animate_page = getattr(self, "_animate_page_switch", None)
-        if animate_page is not None:
-            animate_page(self.module_pages[module_id], previous_module)
+        if animate_page is not None and outgoing is not None:
+            animate_page(self.module_pages[module_id], outgoing)
         self.workflow_stepper.setCurrentModule(module_id)
         self._sync_workflow_shortcut_scope()
 
-    def _animate_page_switch(self, page: QWidget, previous_module: str | None) -> None:
-        """新页面沿工作流方向滑入的过渡动画（纯视觉，不影响布局与功能）。
+    def _capture_outgoing_page(
+        self, previous_module: str | None, module_id: str
+    ) -> tuple[QPixmap, int] | None:
+        """拍下即将离场页面的快照，并算出滑动方向。
 
-        只动 ``pos`` 不用透明度过渡：部分页面（打轴/字幕预览）内部有 native
-        子 widget，QGraphicsOpacityEffect 无法正确合成 native 子窗口。布局
-        仍由 QStackedLayout 管理，动画只把页面从侧向偏移滑回 (0,0)。
+        必须在 ``setCurrentWidget`` 之前调用。返回 ``None`` 表示这次切换不做
+        动画（窗口没显示、没有上一页、或前后是同一页）。
         """
         # getattr 容忍测试里的 SimpleNamespace 假 app（与上方 align_preview_process 同款写法）
         if not getattr(self, "isVisible", lambda: False)():
-            return
+            return None
         previous_page = self.module_pages.get(previous_module) if previous_module else None
-        old_index = self.page_stack.indexOf(previous_page) if previous_page is not None else -1
-        new_index = self.page_stack.indexOf(page)
-        if new_index < 0 or old_index == new_index:
+        if previous_page is None:
+            return None
+        old_index = self.page_stack.indexOf(previous_page)
+        new_index = self.page_stack.indexOf(self.module_pages[module_id])
+        if old_index < 0 or new_index < 0 or old_index == new_index:
+            return None
+        try:
+            snapshot = previous_page.grab()
+        except RuntimeError:
+            return None
+        if snapshot.isNull():
+            return None
+        return snapshot, (48 if new_index > old_index else -48)
+
+    def _animate_page_switch(self, page: QWidget, outgoing: tuple[QPixmap, int]) -> None:
+        """新页面沿工作流方向滑入的过渡动画（纯视觉，不影响布局与功能）。
+
+        走快照过渡：真实换页在动画开始前已经完成（布局照常跑完），动画期间
+        只有覆盖层在动，每帧固定两次位图 blit。直接动 ``page.pos`` 的老做法
+        每帧要重绘入场页整棵子树，重页会掉到 30fps 上下；而且那种做法为了压住
+        延迟的 LayoutRequest 得冻结 stack 布局，反过来又让首访页面在整段动画里
+        停在未排版的默认几何（左上角 100x30），动画结束才炸开到全幅。
+        """
+        old_pixmap, distance = outgoing
+        self._end_page_transition()
+
+        # 换页后布局本来要等一次延迟的 LayoutRequest 才结算，这里先手动跑完，
+        # 保证拍新页快照时它已经是全幅几何。
+        container = self.page_stack.parentWidget()
+        if container is not None and container.layout() is not None:
+            container.layout().activate()
+        stack_layout = self.page_stack.layout()
+        if stack_layout is not None:
+            stack_layout.activate()
+
+        rect = self.page_stack.contentsRect()
+        if rect.width() <= 0 or rect.height() <= 0:
             return
-        offset = 48 if new_index > old_index else -48
-        final_pos = self.page_stack.contentsRect().topLeft()
-        old_anim = getattr(self, "_page_switch_anim", None)
-        self._page_switch_anim = None
-        if old_anim is not None:
-            try:
-                old_anim.stop()
-            except RuntimeError:
-                pass
-        # 动画期间冻结 stack 布局：换页后页面子树延迟的 LayoutRequest 会重新
-        # activate QStackedLayout，把当前页几何无条件重置回全幅 (0,0)，动画前
-        # 几帧被压制 —— 视觉上就是"先到位闪一下、再跳回侧面滑入"的颤抖。冻结
-        # 期间布局视为不存在（activate 直接返回），几何完全由动画控制；动画
-        # 结束（或被新动画 stop）后解冻并结算，页面此时已在全幅终点。
-        layout = self.page_stack.layout()
-        if layout is not None:
-            layout.setEnabled(False)
-        anim = QPropertyAnimation(page, b"pos", self)
+        try:
+            new_pixmap = page.grab()
+        except RuntimeError:
+            return
+        if new_pixmap.isNull():
+            return
+
+        overlay = self._page_transition_overlay
+        if overlay is None:
+            overlay = PageTransitionOverlay(self.page_stack)
+            self._page_transition_overlay = overlay
+        overlay.setGeometry(rect)
+        overlay.start(old_pixmap, new_pixmap, distance)
+        overlay.show()
+        overlay.raise_()
+
+        anim = QPropertyAnimation(overlay, b"offset", self)
         anim.setDuration(240)
-        anim.setStartValue(QPoint(final_pos.x() + offset, final_pos.y()))
-        anim.setEndValue(final_pos)
+        anim.setStartValue(float(distance))
+        anim.setEndValue(0.0)
         anim.setEasingCurve(QEasingCurve.Type.OutCubic)
-
-        def _unfreeze_layout() -> None:
-            try:
-                if layout is not None:
-                    layout.setEnabled(True)
-                    layout.activate()
-                page.move(final_pos)
-            except RuntimeError:
-                pass
-
-        anim.finished.connect(_unfreeze_layout)
+        anim.finished.connect(self._end_page_transition)
         anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
         self._page_switch_anim = anim
+
+    def _end_page_transition(self) -> None:
+        """收尾／中断换页动画：停掉动画并撤下覆盖层，露出底下的真实页面。"""
+        anim, self._page_switch_anim = getattr(self, "_page_switch_anim", None), None
+        if anim is not None:
+            try:
+                anim.stop()
+            except RuntimeError:
+                pass
+        overlay = self._page_transition_overlay
+        if overlay is not None:
+            try:
+                overlay.hide()
+            except RuntimeError:
+                self._page_transition_overlay = None
 
     def accept_subtitle_video(self, path: Path) -> None:
         self.set_video_path(path)
@@ -3924,6 +4022,13 @@ class KrokHelperQtApp(QMainWindow):
         QMessageBox.critical(self, APP_TITLE, message or "歌词搜索失败。")
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if (
+            watched is getattr(self, "page_stack", None)
+            and event.type() == QEvent.Type.Resize
+            and getattr(self, "_page_switch_anim", None) is not None
+        ):
+            # 快照是按旧尺寸拍的，拉伸后继续播只会拉花，直接收尾露出真实页面
+            self._end_page_transition()
         if event.type() == QEvent.Type.Wheel and self._should_route_alignment_wheel(watched, event):
             self.waveform_view.wheelEvent(event)
             if event.isAccepted():
