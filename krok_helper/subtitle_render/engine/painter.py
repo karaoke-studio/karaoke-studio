@@ -11077,7 +11077,7 @@ def _smart_horizontal_dx(
     # equal_margins：按页内 Left / Center / Right 各自最大宽度计算空隙。
     if page is None:
         return 0
-    if style.layout_semantics == "n3_1074" and page:
+    if page:
         page_head, _page_head_lane = page[0]
         font = _n3_smart_font_size(
             page_head, _style_for_line(style, page_head)
@@ -11115,9 +11115,8 @@ def _n3_smart_font_size(line: TimingLine, style: Style) -> int:
 
     N3 reads the Japanese font slot belonging to the first rendered character,
     even when that character is assigned a non-default color/font scheme.
+    N3 has only one layout semantics, so this holds for ``legacy`` styles too.
     """
-    if style.layout_semantics != "n3_1074":
-        return max(int(style.font_size_px), 1)
     render_line = _line_with_guide_symbol(line)
     if not render_line.chars:
         return max(int(style.font_size_px), 1)

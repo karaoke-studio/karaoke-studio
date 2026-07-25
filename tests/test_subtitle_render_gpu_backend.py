@@ -3766,6 +3766,75 @@ def test_gpu_n3_smart_horizontal_uses_painter_page_geometry(monkeypatch) -> None
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+@pytest.mark.parametrize("smart", ["equal_margins", "center_position"])
+def test_gpu_smart_horizontal_applies_without_n3_semantics(monkeypatch, smart) -> None:
+    """SmartHorizon 对默认（legacy）工程同样生效。
+
+    布局页的智能水平配置对所有工程开放，而 ``layout_semantics`` 只有导入
+    ``.n3proj`` 才会变成 ``n3_1074``——GPU 曾经把整段修正门在 N3 语义里，
+    结果默认工程切档位毫无变化。字体取 Meiryo：offscreen 的 Painter 只加载
+    Meiryo/Times，请求 Arial 会回退，量出来的行宽与 DirectWrite 对不上。
+    """
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("左", 1_000), TimingChar("行", 1_050)],
+                end_ms=2_000,
+                display_start_override_ms=0,
+                display_end_override_ms=2_000,
+            ),
+            TimingLine(
+                chars=[TimingChar("右", 1_500)],
+                end_ms=2_500,
+                display_start_override_ms=0,
+                display_end_override_ms=2_000,
+            ),
+        ]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=52,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=True,
+        line_horizontal_layout="asymmetric",
+        line_alignments=["left", "right"],
+        smart_horizontal=smart,
+        horizontal_margin_px=24,
+        line_lead_in_ms=1_000,
+        line_tail_ms=500,
+    )
+    assert style.layout_semantics == "legacy"
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, (1_600,), force_warp=True, track=track
+        )
+        _, gpu_off = _render_g1_frames(
+            renderer,
+            replace(style, smart_horizontal="none"),
+            (1_600,),
+            force_warp=True,
+            track=track,
+        )
+    painter = _render_painter_oracle(style, t_ms=1_600, track=track)
+
+    gpu_bounds = _payload_alpha_bounds(gpu[0])
+    off_bounds = _payload_alpha_bounds(gpu_off[0])
+    painter_bounds = _payload_alpha_bounds(painter)
+    # 短行向中央收拢：包围盒必须比「不调整」窄，否则等于没生效。
+    assert gpu_bounds[2] - gpu_bounds[0] < (off_bounds[2] - off_bounds[0]) // 2
+    assert all(
+        abs(actual - expected) <= 12
+        for actual, expected in zip(gpu_bounds, painter_bounds)
+    ), (gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_n3_smart_horizontal_measures_inline_role_fonts(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     track = TimingTrack(

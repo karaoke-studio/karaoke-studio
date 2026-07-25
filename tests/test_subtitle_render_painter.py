@@ -8235,6 +8235,54 @@ def test_n3_smart_horizontal_uses_page_head_role_font_size(qapp):
     assert x == style.horizontal_margin_px + expected_slack // 2
 
 
+def test_smart_horizontal_uses_page_head_role_font_size_without_n3_semantics(qapp):
+    """SmartHorizon 不属于 N3 专属语义：布局页对所有工程都给这个开关，
+    字号项同样取页首行首字符所属字体槽（N3 只有这一种算法）。"""
+
+    upper = TimingLine(
+        chars=[TimingChar("I", 0, role_label="head")],
+        end_ms=500,
+    )
+    lower = TimingLine(chars=[TimingChar("R", 500)], end_ms=1000)
+    track = TimingTrack(lines=[upper, lower])
+    style = Style(
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=32,
+        stroke_width_px=0,
+        dual_line_layout=True,
+        line_horizontal_layout="asymmetric",
+        line_alignments=["left", "right"],
+        smart_horizontal="equal_margins",
+        horizontal_margin_px=24,
+        custom_style_schemes={
+            "head": SubtitleStyleScheme(
+                font_family="Arial",
+                font_family_latin="Arial",
+                font_size_px=128,
+                stroke_width_px=0,
+            )
+        },
+    )
+    assert style.layout_semantics == "legacy"
+    upper_width = _line_total_width(upper, style)
+    lower_width = _line_total_width(lower, style)
+    expected_slack = (
+        640
+        - style.horizontal_margin_px * 2
+        - upper_width
+        - lower_width
+        + 128
+    )
+
+    x = _resolve_line_x_smart(
+        640, upper_width, track, upper, style, 0, center_override=False
+    )
+
+    assert expected_slack > 0
+    assert x == style.horizontal_margin_px + expected_slack // 2
+
+
 def test_n3_lane_box_uses_font_size_and_primary_edge_only(qapp):
     legacy = Style(font_size_px=100, stroke_width_px=12, stroke2_width_px=40)
     n3 = replace(legacy, layout_semantics="n3_1074")

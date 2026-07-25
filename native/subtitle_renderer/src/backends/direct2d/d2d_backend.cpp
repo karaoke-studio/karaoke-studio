@@ -4597,8 +4597,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         // N3 applies SmartHorizon after ordinary lane alignment.  Page ids
         // come from the same assign_lanes result used by the Painter oracle,
         // so invisible siblings still contribute to page-wide width maxima.
-        if (n3Layout
-            && !style.vertical
+        // SmartHorizon is not part of the N3-only layout semantics: the layout
+        // tab offers it for every project, so legacy styles take it as well.
+        if (!style.vertical
             && style.dualLineLayout
             && style.smartHorizontal != "none"
             && style.alignment != "center"
