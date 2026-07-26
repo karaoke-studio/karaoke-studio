@@ -49,33 +49,42 @@ def test_bottom_page_moves_up_as_one_rigid_block():
 def test_solver_checks_all_still_visible_previous_pages():
     pages = [
         PageVisualBands(
-            "p1", (_band("a", "p1", 0, 5000, 20, 40),), anchor="start"
+            "p1",
+            (_band("a", "p1", 0, 5000, 20, 40),),
+            gap_px=2,
+            anchor="start",
         ),
         PageVisualBands(
-            "p2", (_band("b", "p2", 1000, 4000, 45, 65),), anchor="start"
+            "p2",
+            (_band("b", "p2", 1000, 4000, 45, 65),),
+            gap_px=7,
+            anchor="start",
         ),
         PageVisualBands(
             "p3",
             (_band("c", "p3", 2000, 3000, 20, 65),),
-            gap_px=5,
+            gap_px=99,
             anchor="start",
         ),
     ]
 
     offsets = solve_page_axis_offsets(pages, viewport_min=0, viewport_max=160)
 
-    assert offsets["p3"] == 50
+    assert offsets["p3"] == 52
 
 
-def test_center_page_chooses_nearest_valid_direction():
+def test_solver_uses_overlapped_page_gap_not_incoming_page_gap():
     pages = [
         PageVisualBands(
-            "p1", (_band("a", "p1", 0, 3000, 40, 60),), anchor="center"
+            "p1",
+            (_band("a", "p1", 0, 3000, 40, 60),),
+            gap_px=5,
+            anchor="center",
         ),
         PageVisualBands(
             "p2",
             (_band("b", "p2", 1000, 2000, 50, 70),),
-            gap_px=5,
+            gap_px=99,
             anchor="center",
         ),
     ]
@@ -105,12 +114,15 @@ def test_page_larger_than_viewport_falls_back_to_authored_position():
 def test_bottom_page_searches_down_when_upward_position_exceeds_canvas():
     pages = [
         PageVisualBands(
-            "p1", (_band("old", "p1", 0, 100, 0, 30),), anchor="center"
+            "p1",
+            (_band("old", "p1", 0, 100, 0, 30),),
+            gap_px=10,
+            anchor="center",
         ),
         PageVisualBands(
             "p2",
             (_band("new", "p2", 0, 100, 10, 40),),
-            gap_px=10,
+            gap_px=99,
             anchor="end",
         ),
     ]
@@ -125,12 +137,15 @@ def test_bottom_page_searches_down_when_upward_position_exceeds_canvas():
 def test_top_page_searches_up_when_downward_position_exceeds_canvas():
     pages = [
         PageVisualBands(
-            "p1", (_band("old", "p1", 0, 100, 70, 100),), anchor="center"
+            "p1",
+            (_band("old", "p1", 0, 100, 70, 100),),
+            gap_px=10,
+            anchor="center",
         ),
         PageVisualBands(
             "p2",
             (_band("new", "p2", 0, 100, 60, 90),),
-            gap_px=10,
+            gap_px=99,
             anchor="start",
         ),
     ]
@@ -162,18 +177,21 @@ def test_solver_falls_back_to_authored_position_when_neither_side_fits():
 
 def test_shifted_final_position_does_not_reapply_bottom_margin():
     previous = PageVisualBands(
-        "p1", (_band("old", "p1", 0, 100, 200, 290),), anchor="center"
+        "p1",
+        (_band("old", "p1", 0, 100, 200, 290),),
+        gap_px=10,
+        anchor="center",
     )
     near_bottom = PageVisualBands(
         "p2",
         (_band("new", "p2", 0, 100, 240, 260),),
-        gap_px=10,
+        gap_px=99,
         anchor="end",
     )
     at_bottom = PageVisualBands(
         "p3",
         (_band("new", "p3", 0, 100, 280, 300),),
-        gap_px=10,
+        gap_px=99,
         anchor="end",
     )
 
@@ -220,6 +238,7 @@ def test_bottom_and_top_anchors_never_fallback_in_the_wrong_direction():
     previous = PageVisualBands(
         "previous",
         (_band("old", "previous", 0, 100, 0, 100),),
+        gap_px=20,
         anchor="center",
     )
     bottom = PageVisualBands(
@@ -249,12 +268,15 @@ def test_bottom_and_top_anchors_never_fallback_in_the_wrong_direction():
 def test_solver_prefers_zero_painted_overlap_when_requested_gap_cannot_fit():
     pages = [
         PageVisualBands(
-            "p1", (_band("old", "p1", 0, 100, 40, 60),), anchor="center"
+            "p1",
+            (_band("old", "p1", 0, 100, 40, 60),),
+            gap_px=20,
+            anchor="center",
         ),
         PageVisualBands(
             "p2",
             (_band("new", "p2", 0, 100, 50, 70),),
-            gap_px=20,
+            gap_px=99,
             anchor="center",
         ),
     ]

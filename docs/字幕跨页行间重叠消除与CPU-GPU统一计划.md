@@ -152,7 +152,8 @@ allow_inter_page_line_overlap: bool = False
 
 ### 4.5 跨页间距
 
-避让时使用后进入页面当前布局的 `line_gap_px` 作为两个页面之间的目标空隙。
+避让时使用被重叠页面当前布局的 `line_gap_px` 作为两个页面之间的目标空隙。
+新页同时碰到多个旧页时，每一组碰撞分别使用对应旧页布局的行间距。
 
 此间距只用于跨页空间求解，不改变页面内部的原始排版。
 
@@ -268,7 +269,7 @@ class ResolvedPagePlacement:
 - 目标画布尺寸、DPR 和视图变换；
 - 每行在未避让状态下的像素区间；
 - 页面锚定方向；
-- 后进入页面的 `line_gap_px`。
+- 每个已占用页面所属布局的 `line_gap_px`。
 
 ### 6.2 处理顺序
 
@@ -304,13 +305,13 @@ class ResolvedPagePlacement:
 后页向上移动、与前页保持目标间距的候选位移为：
 
 ```text
-delta_y = previous_min_y - incoming_gap - incoming_max_y
+delta_y = previous_min_y - previous_gap - incoming_max_y
 ```
 
 后页向下移动的候选位移为：
 
 ```text
-delta_y = previous_max_y + incoming_gap - incoming_min_y
+delta_y = previous_max_y + previous_gap - incoming_min_y
 ```
 
 竖排时使用对应的 X 区间和 `delta_x`。
@@ -319,21 +320,22 @@ delta_y = previous_max_y + incoming_gap - incoming_min_y
 
 ### 6.4 方向偏好
 
-- 下对齐页面：只允许向上移动；
-- 上对齐页面：只允许向下移动；
+- 下对齐页面：优先向上移动，画布内无解时搜索向下；
+- 上对齐页面：优先向下移动，画布内无解时搜索向上；
 - 居中页面：选择绝对位移较小的可行方向；
 - 竖排页面：在 X 轴上使用与布局列方向一致的对应规则；
 - 相同代价必须使用固定的确定性顺序，不能随帧或容器遍历顺序改变。
 
 ### 6.5 画面空间不足时的代价
 
-若保持目标跨页间距和保持在画面内不能同时成立，按以下字典序选择：
+候选始终必须完整位于画布内，并按以下顺序选择：
 
-1. 静态碰撞箱不相交；
-2. 尽量满足后页布局的 `line_gap_px`；
-3. 超出画面的轴向像素最少；
-4. 离原布局位置最近；
-5. 固定页序和固定方向作为最终稳定决胜项。
+1. 满足各被重叠页面布局的 `line_gap_px`；
+2. 首选锚定方向；
+3. 反方向；
+4. 无法满足间距时退化为静态碰撞箱不相交，并重复方向顺序；
+5. 双向都无解时回退原位；
+6. 同组候选选择离原布局位置最近者，并以固定页序稳定决胜。
 
 ### 6.6 稳定性
 
@@ -652,7 +654,7 @@ Direct2D 需要：
 
 ### 14.4 避让
 
-- 使用后页 `line_gap_px`；
+- 使用被重叠页 `line_gap_px`；同时碰撞多个旧页时分别取各自布局值；
 - 后页整页刚性移动；
 - 同页内部负行间距保持不变；
 - 多个前页占用时不只检查相邻页；
@@ -811,3 +813,11 @@ Direct2D 需要：
   得到同一避让绝对位置，不依赖外部字幕文件。
 - 本轮完整 painter/timeline/show-time/native-protocol/solver/Direct2D GPU 回归为
   `623 passed, 4 skipped`。
+
+#### 被重叠布局行间距复核
+
+- 跨页目标空隙改为使用被重叠页面布局的 `line_gap_px`，不再读取后进入页面的值。
+- 新页同时碰撞多个旧页时，每个碰撞对携带各自旧页布局的行间距，并统一验证候选。
+- UI 悬停说明同步标明间距归属；CPU 和 Native/GPU 继续消费同一组求解窗口。
+- 本轮 solver/painter/show-time/timeline/native-protocol/Direct2D 定向回归为
+  `433 passed`。

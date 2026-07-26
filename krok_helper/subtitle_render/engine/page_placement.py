@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from typing import Hashable, Iterable, Literal, Sequence
 
 PageAnchor = Literal["start", "center", "end"]
+CollisionPair = tuple["LineVisualBand", "LineVisualBand", float]
 
 
 @dataclass(frozen=True)
@@ -38,7 +39,11 @@ class LineVisualBand:
 
 @dataclass(frozen=True)
 class PageVisualBands:
-    """All line bands of one page before inter-page placement."""
+    """All line bands of one page before inter-page placement.
+
+    ``gap_px`` belongs to this page's layout.  A later page that overlaps this
+    page must preserve this value around the already occupied bands.
+    """
 
     page_id: Hashable
     bands: tuple[LineVisualBand, ...]
@@ -80,29 +85,31 @@ def solve_page_axis_offsets(
         viewport_min, viewport_max = viewport_max, viewport_min
 
     offsets: dict[Hashable, float] = {}
-    occupied: list[LineVisualBand] = []
+    occupied: list[tuple[LineVisualBand, float]] = []
     for page in pages:
         bands = tuple(_normalized_band(item) for item in page.bands)
         if not bands:
             offsets[page.page_id] = 0.0
             continue
         relevant_pairs = [
-            (incoming, previous)
+            (incoming, previous, max(float(previous_gap), 0.0))
             for incoming in bands
-            for previous in occupied
+            for previous, previous_gap in occupied
             if previous.page_id != page.page_id
             and time_windows_overlap(incoming, previous)
         ]
         offset = _choose_offset(
             bands,
             relevant_pairs,
-            gap=max(float(page.gap_px), 0.0),
             anchor=page.anchor,
             viewport_min=float(viewport_min),
             viewport_max=float(viewport_max),
         )
         offsets[page.page_id] = offset
-        occupied.extend(item.shifted(offset) for item in bands)
+        occupied.extend(
+            (item.shifted(offset), max(float(page.gap_px), 0.0))
+            for item in bands
+        )
     return offsets
 
 
@@ -161,9 +168,8 @@ def _normalized_band(item: LineVisualBand) -> LineVisualBand:
 
 def _choose_offset(
     bands: Sequence[LineVisualBand],
-    pairs: Sequence[tuple[LineVisualBand, LineVisualBand]],
+    pairs: Sequence[CollisionPair],
     *,
-    gap: float,
     anchor: PageAnchor,
     viewport_min: float,
     viewport_max: float,
@@ -177,9 +183,9 @@ def _choose_offset(
     upper = viewport_max - page_max
 
     candidates = {0.0, lower, upper}
-    for incoming, previous in pairs:
-        candidates.add(previous.axis_min - gap - incoming.axis_max)
-        candidates.add(previous.axis_max + gap - incoming.axis_min)
+    for incoming, previous, previous_gap in pairs:
+        candidates.add(previous.axis_min - previous_gap - incoming.axis_max)
+        candidates.add(previous.axis_max + previous_gap - incoming.axis_min)
         candidates.add(previous.axis_min - incoming.axis_max)
         candidates.add(previous.axis_max - incoming.axis_min)
 
@@ -210,8 +216,11 @@ def _choose_offset(
                     value
                     for value in directional
                     if all(
-                        _separation_deficit(incoming, previous, value, gap) <= 0.0
-                        for incoming, previous in pairs
+                        _separation_deficit(
+                            incoming, previous, value, previous_gap
+                        )
+                        <= 0.0
+                        for incoming, previous, previous_gap in pairs
                     )
                 ]
             else:
@@ -220,7 +229,7 @@ def _choose_offset(
                     for value in directional
                     if all(
                         _pixel_overlap(incoming, previous, value) <= 0.0
-                        for incoming, previous in pairs
+                        for incoming, previous, _previous_gap in pairs
                     )
                 ]
             if valid:
@@ -230,7 +239,6 @@ def _choose_offset(
                         value,
                         pairs,
                         bands=bands,
-                        gap=gap,
                         anchor=anchor,
                         viewport_min=viewport_min,
                         viewport_max=viewport_max,
@@ -246,22 +254,21 @@ def _choose_offset(
 
 def _offset_score(
     offset: float,
-    pairs: Sequence[tuple[LineVisualBand, LineVisualBand]],
+    pairs: Sequence[CollisionPair],
     *,
     bands: Sequence[LineVisualBand],
-    gap: float,
     anchor: PageAnchor,
     viewport_min: float,
     viewport_max: float,
     placement_level: Literal["gap", "pixel", "overlap"],
 ) -> tuple[float, ...]:
     deficits = [
-        _separation_deficit(incoming, previous, offset, gap)
-        for incoming, previous in pairs
+        _separation_deficit(incoming, previous, offset, previous_gap)
+        for incoming, previous, previous_gap in pairs
     ]
     pixel_overlaps = [
         _pixel_overlap(incoming, previous, offset)
-        for incoming, previous in pairs
+        for incoming, previous, _previous_gap in pairs
     ]
     gap_total = sum(value for value in deficits if value > 0.0)
     gap_count = sum(value > 0.0 for value in deficits)
