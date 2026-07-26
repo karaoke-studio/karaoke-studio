@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import shutil
 import sys
 
 from krok_helper import ensure_sug_root_path
@@ -22,6 +23,7 @@ class _WorkbenchProductFilter(logging.Filter):
 
 
 _original_setup_logger = updater_main.setup_logger
+_original_cleanup_temp_workdir = updater_main._cleanup_temp_workdir
 
 
 def _setup_workbench_logger(log_path):
@@ -31,10 +33,40 @@ def _setup_workbench_logger(log_path):
     return logger
 
 
+def _cleanup_workbench_temp_workdir(work_dir) -> None:
+    """Preserve parts handed off by the main app while cleaning other stale files."""
+
+    parts_dir = work_dir / "parts"
+    handoff_dir = work_dir / "parts.handoff"
+    preserved = False
+
+    if parts_dir.is_dir():
+        if handoff_dir.exists():
+            shutil.rmtree(str(handoff_dir), ignore_errors=True)
+        try:
+            parts_dir.rename(handoff_dir)
+            preserved = True
+        except OSError:
+            # Keeping an unverified cache is safe: _download_part validates its
+            # content hash before reuse and deletes mismatches.
+            return
+
+    try:
+        _original_cleanup_temp_workdir(work_dir)
+    finally:
+        if preserved and handoff_dir.exists():
+            try:
+                handoff_dir.rename(parts_dir)
+            except OSError:
+                # Do not turn cleanup into a fatal updater startup failure.
+                pass
+
+
 def _configure_product() -> None:
     updater_main.TMP_DIR_NAME = "KaraokeStudioUpdater"
     updater_main.DEFAULT_USER_AGENT = "KaraokeStudio-Updater/standalone"
     updater_main.setup_logger = _setup_workbench_logger
+    updater_main._cleanup_temp_workdir = _cleanup_workbench_temp_workdir
 
 
 def _enable_gui() -> None:

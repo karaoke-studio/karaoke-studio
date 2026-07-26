@@ -32,6 +32,23 @@ def _write_release_zip(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def test_workbench_cleanup_preserves_handed_off_app_part(tmp_path) -> None:
+    work_dir = tmp_path / "KaraokeStudioUpdater"
+    parts_dir = work_dir / "parts"
+    stale_dir = work_dir / "download"
+    parts_dir.mkdir(parents=True)
+    stale_dir.mkdir()
+    app_part = parts_dir / "KaraokeStudio-windows-app.zip"
+    app_part.write_bytes(b"cached app part")
+    (stale_dir / "partial.zip").write_bytes(b"stale")
+
+    workbench_updater._configure_product()
+    workbench_updater.updater_main._cleanup_temp_workdir(work_dir)
+
+    assert app_part.read_bytes() == b"cached app part"
+    assert not stale_dir.exists()
+
+
 def test_workbench_updater_applies_full_zip_from_local_http(tmp_path, monkeypatch) -> None:
     app_dir = tmp_path / "installed" / "Karaoke Studio"
     internal_dir = app_dir / "_internal"
