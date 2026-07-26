@@ -25,6 +25,8 @@ class LineVisualBand:
     display_end_ms: int
     axis_min: float
     axis_max: float
+    entry_start_ms: int | None = None
+    """Full display start including entry animation, when known."""
 
     def shifted(self, delta: float) -> "LineVisualBand":
         return LineVisualBand(
@@ -34,6 +36,7 @@ class LineVisualBand:
             display_end_ms=self.display_end_ms,
             axis_min=self.axis_min + delta,
             axis_max=self.axis_max + delta,
+            entry_start_ms=self.entry_start_ms,
         )
 
 
@@ -43,12 +46,16 @@ class PageVisualBands:
 
     ``gap_px`` belongs to this page's layout.  A later page that overlaps this
     page must preserve this value around the already occupied bands.
+    ``layout_key`` identifies the effective page arrangement: matching layouts
+    may overlap during entry animation, while a changed layout protects the
+    incoming entry against the previous page's stable text.
     """
 
     page_id: Hashable
     bands: tuple[LineVisualBand, ...]
     gap_px: float = 0.0
     anchor: PageAnchor = "end"
+    layout_key: Hashable | None = None
 
 
 @dataclass(frozen=True)
@@ -60,10 +67,25 @@ class AxisOffsetWindow:
     offset: float
 
 
-def time_windows_overlap(left: LineVisualBand, right: LineVisualBand) -> bool:
-    """Return whether two half-open display windows intersect."""
+def time_windows_overlap(
+    left: LineVisualBand,
+    right: LineVisualBand,
+    *,
+    include_left_entry: bool = False,
+) -> bool:
+    """Return whether two half-open collision windows intersect.
 
-    return max(left.display_start_ms, right.display_start_ms) < min(
+    ``left`` is the incoming page.  When its layout differs from the occupied
+    page, its entry animation must remain clear of the previous page's stable
+    text.  The previous page's exit animation is intentionally still excluded.
+    """
+
+    left_start = (
+        int(left.entry_start_ms)
+        if include_left_entry and left.entry_start_ms is not None
+        else int(left.display_start_ms)
+    )
+    return max(left_start, right.display_start_ms) < min(
         left.display_end_ms, right.display_end_ms
     )
 
@@ -85,7 +107,7 @@ def solve_page_axis_offsets(
         viewport_min, viewport_max = viewport_max, viewport_min
 
     offsets: dict[Hashable, float] = {}
-    occupied: list[tuple[LineVisualBand, float]] = []
+    occupied: list[tuple[LineVisualBand, float, Hashable | None]] = []
     for page in pages:
         bands = tuple(_normalized_band(item) for item in page.bands)
         if not bands:
@@ -94,9 +116,13 @@ def solve_page_axis_offsets(
         relevant_pairs = [
             (incoming, previous, max(float(previous_gap), 0.0))
             for incoming in bands
-            for previous, previous_gap in occupied
+            for previous, previous_gap, previous_layout_key in occupied
             if previous.page_id != page.page_id
-            and time_windows_overlap(incoming, previous)
+            and time_windows_overlap(
+                incoming,
+                previous,
+                include_left_entry=page.layout_key != previous_layout_key,
+            )
         ]
         offset = _choose_offset(
             bands,
@@ -107,7 +133,11 @@ def solve_page_axis_offsets(
         )
         offsets[page.page_id] = offset
         occupied.extend(
-            (item.shifted(offset), max(float(page.gap_px), 0.0))
+            (
+                item.shifted(offset),
+                max(float(page.gap_px), 0.0),
+                page.layout_key,
+            )
             for item in bands
         )
     return offsets
@@ -138,14 +168,24 @@ def solve_page_axis_offset_windows(
         valid_bands = tuple(
             band
             for band in page.bands
-            if int(band.display_end_ms) > int(band.display_start_ms)
+            if int(band.display_end_ms)
+            > (
+                int(band.entry_start_ms)
+                if band.entry_start_ms is not None
+                else int(band.display_start_ms)
+            )
         )
         if not valid_bands:
             resolved[page.page_id] = ()
             continue
         resolved[page.page_id] = (
             AxisOffsetWindow(
-                start_ms=min(int(band.display_start_ms) for band in valid_bands),
+                start_ms=min(
+                    int(band.entry_start_ms)
+                    if band.entry_start_ms is not None
+                    else int(band.display_start_ms)
+                    for band in valid_bands
+                ),
                 end_ms=max(int(band.display_end_ms) for band in valid_bands),
                 offset=float(offsets.get(page.page_id, 0.0)),
             ),
@@ -163,6 +203,7 @@ def _normalized_band(item: LineVisualBand) -> LineVisualBand:
         display_end_ms=item.display_end_ms,
         axis_min=item.axis_max,
         axis_max=item.axis_min,
+        entry_start_ms=item.entry_start_ms,
     )
 
 

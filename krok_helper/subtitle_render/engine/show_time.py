@@ -102,6 +102,7 @@ def compute_show_times(
 
     ``entry_animation_ms`` / ``exit_animation_ms`` 用于区分稳定绘制与纯动画时段：
     自动压缩优先消除稳定绘制的跨页重叠，入场和退场动画彼此重叠是允许的。
+    自动压缩不得反转同一页中压缩前已经确定的句子上屏先后关系。
     """
 
     total = len(sing_begins)
@@ -442,8 +443,102 @@ class _Solver:
         starts[line] += protect
         ends[other] = starts[line]
 
+    def _preserve_page_entry_order(self, reference: Sequence[int]) -> None:
+        """Preserve each page's pre-compression entry ordering."""
+
+        def delay(line: int, target: int) -> bool:
+            if self.start_override[line] is not None:
+                return False
+            latest_start = max(
+                self.begins[line] - self.auto_entry_reserve_ms[line],
+                0,
+            )
+            if target > latest_start:
+                return False
+            self.out.starts[line] = max(self.out.starts[line], target)
+            return True
+
+        def can_delay(line: int, target: int) -> bool:
+            if self.out.starts[line] >= target:
+                return True
+            if self.start_override[line] is not None:
+                return False
+            latest_start = max(
+                self.begins[line] - self.auto_entry_reserve_ms[line],
+                0,
+            )
+            return target <= latest_start
+
+        def advance(line: int, target: int) -> bool:
+            if self.start_override[line] is not None:
+                return False
+            self.out.starts[line] = min(self.out.starts[line], target)
+            return True
+
+        starts = self.out.starts
+        for page in self.pages:
+            lines = page.lines
+            # A small fixed-point pass is enough for the at-most-eight-line page
+            # while allowing a correction to propagate through equal-time groups.
+            for _pass in range(len(lines)):
+                changed = False
+                for left, right in zip(lines, lines[1:]):
+                    reference_left = int(reference[left])
+                    reference_right = int(reference[right])
+                    if (
+                        reference_left < reference_right
+                        and starts[left] > starts[right]
+                    ):
+                        pair_changed = delay(right, starts[left]) or advance(
+                            left, starts[right]
+                        )
+                        changed = pair_changed or changed
+                        continue
+                    if (
+                        reference_left > reference_right
+                        and starts[left] < starts[right]
+                    ):
+                        pair_changed = delay(left, starts[right]) or advance(
+                            right, starts[left]
+                        )
+                        changed = pair_changed or changed
+                        continue
+                    if (
+                        reference_left == reference_right
+                        and starts[left] != starts[right]
+                    ):
+                        target = max(starts[left], starts[right])
+                        if can_delay(left, target) and can_delay(right, target):
+                            before = (starts[left], starts[right])
+                            delay(left, target)
+                            delay(right, target)
+                            pair_changed = before != (starts[left], starts[right])
+                        else:
+                            target = min(starts[left], starts[right])
+                            before = (starts[left], starts[right])
+                            advance(left, target)
+                            advance(right, target)
+                            pair_changed = before != (starts[left], starts[right])
+                        changed = pair_changed or changed
+                if not changed:
+                    break
+
     # -- 主循环 ------------------------------------------------------------
     def run(self) -> ShowTimes:
+        entry_order_reference: Sequence[int] | None = None
+        if self.adjust_same_position and self.animation_windows_active:
+            entry_order_reference = compute_show_times(
+                self.begins,
+                self.ends,
+                self.pages,
+                pre_time_ms=self.pre,
+                post_time_ms=self.post,
+                interval_ms=self.interval,
+                protect_ms=self.protect,
+                overrides=list(zip(self.start_override, self.end_override)),
+                auto_entry_reserve_ms=self.auto_entry_reserve_ms,
+                adjust_same_position=False,
+            ).starts
         starts, ends, force_bottom = (
             self.out.starts,
             self.out.ends,
@@ -505,6 +600,8 @@ class _Solver:
                         self._enforce_auto_wipe_bounds(other)
                         self._enforce_auto_wipe_bounds(line)
                 previous_page = page
+        if entry_order_reference is not None:
+            self._preserve_page_entry_order(entry_order_reference)
         # Automatic squeezing may consume PreTime/PostTime completely, but it
         # must never consume the wipe interval itself.  Non-zero automatic
         # entry animation also retains its requested visual reaction reserve;

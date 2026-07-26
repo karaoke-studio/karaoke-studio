@@ -246,6 +246,28 @@ def test_animation_aware_squeeze_links_adjacent_pages_across_sections():
     assert out.starts[2] == 13_200
 
 
+def test_animation_aware_squeeze_preserves_entry_order_inside_page():
+    begins = [11_642, 11_873, 14_082, 14_508]
+    ends = [14_153, 12_479, 16_982, 16_247]
+    pages = _pages((0, 2, 0, 1), (0, 2, 2, 3))
+
+    out = _run(
+        begins,
+        ends,
+        pages,
+        auto_entry_reserve_ms=[250] * 4,
+        entry_animation_ms=[300] * 4,
+        exit_animation_ms=[300] * 4,
+    )
+
+    assert out.starts[2] == out.starts[3] == 13_832
+    assert all(
+        out.starts[left] <= out.starts[right]
+        for page in pages
+        for left, right in zip(page.lines, page.lines[1:])
+    )
+
+
 def test_manual_override_wins_and_is_visible_to_later_pages():
     begins, ends = [10_000, 14_000, 30_000, 34_000], [13_000, 17_000, 33_000, 37_000]
     pages = _pages((0, 2, 0, 1), (0, 2, 2, 3))

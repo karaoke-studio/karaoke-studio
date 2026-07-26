@@ -18,6 +18,56 @@ def test_half_open_time_windows_do_not_overlap_at_shared_boundary():
     assert not time_windows_overlap(first, second)
 
 
+def test_changed_layout_protects_incoming_entry_but_not_previous_exit():
+    previous = PageVisualBands(
+        "p1",
+        (_band("old", "p1", 0, 100, 40, 60),),
+        gap_px=5,
+        anchor="center",
+        layout_key="same",
+    )
+    incoming_band = LineVisualBand(
+        "new",
+        "p2",
+        100,
+        200,
+        50,
+        70,
+        entry_start_ms=80,
+    )
+    same_layout = PageVisualBands(
+        "p2",
+        (incoming_band,),
+        gap_px=5,
+        anchor="center",
+        layout_key="same",
+    )
+    changed_layout = PageVisualBands(
+        "p2",
+        (incoming_band,),
+        gap_px=5,
+        anchor="center",
+        layout_key="changed",
+    )
+
+    same_offsets = solve_page_axis_offsets(
+        [previous, same_layout], viewport_min=0, viewport_max=200
+    )
+    changed_offsets = solve_page_axis_offsets(
+        [previous, changed_layout], viewport_min=0, viewport_max=200
+    )
+    changed_windows = solve_page_axis_offset_windows(
+        [previous, changed_layout], viewport_min=0, viewport_max=200
+    )
+
+    # 相同排版只比较稳定文字窗口，[0, 100) 与 [100, 200) 不相交。
+    assert same_offsets["p2"] == 0
+    # 排版变化后，新页入场从 80 ms 开始参与判断，因此必须避让。
+    assert changed_offsets["p2"] != 0
+    assert changed_windows["p2"][0].start_ms == 80
+    # 上一页的退场动画没有扩展其 100 ms 稳定结束点，仍允许交叠。
+
+
 def test_bottom_page_moves_up_as_one_rigid_block():
     pages = [
         PageVisualBands(

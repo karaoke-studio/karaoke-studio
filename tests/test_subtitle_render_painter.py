@@ -8820,3 +8820,58 @@ def test_animation_only_cross_page_overlap_does_not_move_incoming_page(qapp):
     # 与下一页入场动画组成，稳定文字碰撞箱没有时间交集，因此不应抬页。
     assert windows[1][1] - windows[2][0] == 600
     assert offsets == {index: (0.0, 0.0) for index in range(4)}
+
+
+def test_changed_page_layout_keeps_incoming_entry_clear(qapp):
+    from krok_helper.subtitle_render.engine.page_plan import (
+        project_page_plan_to_legacy_fields,
+    )
+    from krok_helper.subtitle_render.models import ensure_page_layout_defaults
+
+    style = ensure_page_layout_defaults(
+        replace(
+            Style(),
+            line_lead_in_ms=1_800,
+            line_tail_ms=1_000,
+            line_lane_gap_ms=300,
+            entry_anim="fade",
+            entry_lead_ms=300,
+            exit_anim="fade",
+            exit_fade_ms=300,
+        )
+    )
+
+    def make_track(second_layout_id: str) -> TimingTrack:
+        lines = [
+            TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+            for text, start, end in (
+                ("A", 10_000, 12_000),
+                ("B", 12_500, 13_500),
+                ("C", 14_000, 15_000),
+                ("D", 16_000, 17_000),
+            )
+        ]
+        track = TimingTrack(
+            lines=lines,
+            page_plan=TrackPagePlan(
+                [
+                    TrackSection([TrackPage(2, "default")]),
+                    TrackSection([TrackPage(2, second_layout_id)]),
+                ]
+            ),
+        )
+        project_page_plan_to_legacy_fields(track, style)
+        return track
+
+    same = make_track("default")
+    changed = make_track("builtin-3")
+    same_offsets = subtitle_painter.resolved_page_offsets_for_style(
+        1280, 1080, same, style
+    )
+    changed_offsets = subtitle_painter.resolved_page_offsets_for_style(
+        1280, 1080, changed, style
+    )
+
+    assert same_offsets == {index: (0.0, 0.0) for index in range(4)}
+    assert changed_offsets[2] == changed_offsets[3]
+    assert changed_offsets[2] != (0.0, 0.0)

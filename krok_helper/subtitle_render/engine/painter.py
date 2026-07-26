@@ -1974,7 +1974,8 @@ def resolved_page_offset_windows_for_style(
             display_line,
             style,
         )
-        if collision_end <= collision_start:
+        entry_start = int(display_line.display_start_ms)
+        if collision_end <= entry_start:
             continue
         page_bands[page_id].append(
             LineVisualBand(
@@ -1984,6 +1985,7 @@ def resolved_page_offset_windows_for_style(
                 display_end_ms=collision_end,
                 axis_min=float(axis_bounds[0]),
                 axis_max=float(axis_bounds[1]),
+                entry_start_ms=entry_start,
             )
         )
 
@@ -2008,6 +2010,11 @@ def resolved_page_offset_windows_for_style(
                 bands=tuple(page_bands[page_id]),
                 gap_px=max(int(page_style.line_gap_px), 0),
                 anchor=anchor,
+                layout_key=_page_collision_layout_key(
+                    page_style,
+                    line_count=len(page_lifetimes.get(page_id, ())),
+                    vertical=style.vertical,
+                ),
             )
         )
     axis_offsets = solve_page_axis_offsets(
@@ -12500,6 +12507,24 @@ def _entry_animation_resolver(style: Style):
 
 def _exit_animation_resolver(style: Style):
     return lambda line: _exit_animation_ms(style, line)
+
+
+def _page_collision_layout_key(
+    page_style: Style,
+    *,
+    line_count: int,
+    vertical: bool,
+) -> tuple:
+    """Return the rendered page-layout identity used by animation collisions."""
+
+    return (
+        bool(vertical),
+        max(int(line_count), 0),
+        tuple(
+            (name, _value_signature(getattr(page_style, name)))
+            for name in LYRICS_LAYOUT_FIELDS
+        ),
+    )
 
 
 def _display_line_static_collision_window(

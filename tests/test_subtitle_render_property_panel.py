@@ -130,6 +130,8 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
     assert "采用被重叠页面布局的行间距" in overlap_tip
     assert "放不下时改向反方向寻找" in overlap_tip
     assert "两边都放不下则保持原布局位置" in overlap_tip
+    assert "排版变化时，新页面的入场动画也参与避让" in overlap_tip
+    assert "上一页退场动画仍允许重叠" in overlap_tip
     assert "开启后不执行空间避让" in overlap_tip
 
 
