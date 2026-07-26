@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QImage
+from PyQt6.QtGui import QColor, QImage
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QAbstractItemView, QApplication, QDialog
 
@@ -64,6 +64,31 @@ def _symbol(tmp_path, *, duration_ms: int = 1000, count: int = 1) -> GuideSymbol
     return import_svg_guide_symbol(path, duration_ms=duration_ms, count=count)
 
 
+def _bitmap_symbol(tmp_path, *, color: str = "#FF0000") -> GuideSymbol:
+    image_path = tmp_path / "avatar.png"
+    image = QImage(12, 8, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(QColor(color))
+    assert image.save(str(image_path))
+    return GuideSymbol(
+        name="avatar",
+        kind="bitmap",
+        bitmap_before_path=str(image_path),
+        bitmap_zoom_percent=100,
+        bitmap_no_decor=True,
+        prefix_timing="anchored",
+    )
+
+
+def _count_red_pixels(image: QImage) -> int:
+    count = 0
+    for y in range(image.height()):
+        for x in range(image.width()):
+            color = image.pixelColor(x, y)
+            if color.red() > 220 and color.green() < 40 and color.blue() < 40:
+                count += 1
+    return count
+
+
 def test_svg_import_becomes_embedded_glyph_outline(tmp_path):
     symbol = _symbol(tmp_path)
     bounds = guide_symbol_path(symbol).boundingRect()
@@ -78,12 +103,96 @@ def test_svg_import_becomes_embedded_glyph_outline(tmp_path):
     assert restored == symbol
 
 
+def test_bitmap_guide_symbol_round_trips_optional_fields(tmp_path):
+    symbol = replace(
+        _bitmap_symbol(tmp_path),
+        bitmap_after_path=str(tmp_path / "after.png"),
+        bitmap_zoom_percent=75,
+        bitmap_fix_size=True,
+        bitmap_force_wipe_decor=True,
+        bitmap_margin_left_px=3,
+        bitmap_margin_right_px=-12,
+        bitmap_margin_bottom_px=4,
+    )
+
+    restored = guide_symbol_from_dict(guide_symbol_to_dict(symbol))
+
+    assert restored == symbol
+
+
 def test_guide_symbol_cache_signature_reuses_frozen_outline_model(tmp_path):
     symbol = _symbol(tmp_path)
 
     signature = subtitle_painter._value_signature(symbol)
 
     assert signature is symbol
+
+
+def test_bitmap_prefix_guide_is_anchored_to_first_lyric_timestamp(tmp_path):
+    symbol = _bitmap_symbol(tmp_path)
+    line = TimingLine(
+        chars=[TimingChar("a", 2000), TimingChar("b", 2500)],
+        end_ms=3000,
+        guide_symbol=symbol,
+    )
+    track = TimingTrack(lines=[line])
+    style = Style(font_family="Arial", font_size_px=72)
+
+    layout = _layout_line_uncached(track, line, style, 800, 450)
+
+    assert layout is not None
+    assert layout.render_line is not None
+    assert layout.render_line.chars[0].vector_glyph == symbol
+    assert layout.intervals[0][0] == 2000
+    display = compute_display_lines(
+        track,
+        lead_in_ms=0,
+        tail_ms=0,
+        lane_gap_ms=0,
+    )
+    assert display[0].display_start_ms == 2000
+
+
+def test_bitmap_prefix_guide_paints_image_pixels(tmp_path):
+    symbol = _bitmap_symbol(tmp_path)
+    line = TimingLine(
+        chars=[TimingChar("a", 1000), TimingChar("b", 1800)],
+        end_ms=2600,
+        guide_symbol=symbol,
+    )
+    track = TimingTrack(lines=[line])
+    style = Style(
+        font_family="Arial",
+        font_size_px=48,
+        line_y_position="center",
+        line_lead_in_ms=0,
+    )
+    image = QImage(640, 360, QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(QColor("#101010"))
+
+    paint_frame(image, track, 1200, style)
+
+    assert _count_red_pixels(image) > 20
+
+
+def test_bitmap_prefix_guide_does_not_consume_text_wipe_segment(tmp_path):
+    symbol = _bitmap_symbol(tmp_path)
+    line = TimingLine(
+        chars=[TimingChar("a", 1000), TimingChar("b", 1800)],
+        end_ms=2600,
+        guide_symbol=symbol,
+    )
+    track = TimingTrack(lines=[line])
+    style = Style(font_family="Arial", font_size_px=48)
+
+    layout = _layout_line_uncached(track, line, style, 640, 360)
+
+    assert layout is not None
+    assert layout.render_line is not None
+    assert layout.render_line.chars[0].vector_glyph == symbol
+    assert all(0 not in segment.indices for segment in layout.fill_segments)
+    assert layout.fill_segments[0].indices == (1,)
+    assert layout.fill_segments[0].start_ms == 1000
 
 
 def test_guide_symbol_is_first_timed_inline_glyph(tmp_path):
@@ -1290,3 +1399,13 @@ def test_project_payload_and_reload_keep_inline_guide_symbols(tmp_path):
 
     assert track.lines[0].inline_guide_symbols == {1: symbol}
     assert track.lines[1].inline_guide_symbols == {}
+
+
+def test_project_reload_keeps_bitmap_inline_guide_symbols(tmp_path):
+    symbol = _bitmap_symbol(tmp_path)
+    payload = [{"0": guide_symbol_to_dict(symbol)}]
+    track = TimingTrack(lines=[TimingLine(chars=[TimingChar("x", 1000)])])
+
+    SubtitleRenderWindow._apply_inline_guide_symbol_rows(track, payload)
+
+    assert track.lines[0].inline_guide_symbols == {0: symbol}

@@ -31,7 +31,10 @@ from krok_helper.subtitle_render.native_backend import (
     NativeRendererProcess,
     SharedFrameRingReader,
 )
-from krok_helper.subtitle_render.native_protocol import gpu_unsupported_features
+from krok_helper.subtitle_render.native_protocol import (
+    gpu_unsupported_feature_labels,
+    gpu_unsupported_features,
+)
 
 
 PREVIEW_QUALITY_OPTIONS: tuple[tuple[str, str, float], ...] = (
@@ -800,7 +803,7 @@ class GpuAsyncSubtitleRenderer(QObject):
                         self._note("capability_fallbacks")
                         self._report_fallback(
                             "当前工程包含 GPU 尚不支持的功能，字幕预览已回退 Painter："
-                            + ", ".join(unsupported)
+                            + ", ".join(gpu_unsupported_feature_labels(unsupported))
                         )
                         self._emit_python_fallback(
                             track,

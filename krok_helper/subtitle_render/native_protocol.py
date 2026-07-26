@@ -9,6 +9,7 @@ work can migrate painter features without changing the process protocol shape.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from krok_helper.subtitle_render.models import (
@@ -27,7 +28,16 @@ from krok_helper.subtitle_render.models import (
 )
 
 RENDER_IR_SCHEMA = 1
+GPU_UNSUPPORTED_FEATURE_LABELS = {
+    "line_animation": "\u672a\u77e5\u6574\u884c\u52a8\u753b",
+    "karaoke_animation": "\u672a\u77e5\u8d70\u5b57\u7279\u6548",
+    "line_animation_override": "\u672a\u77e5\u9010\u884c\u7279\u6548",
+    "bitmap_guide_symbol": "\u56fe\u7247\u5bfc\u5531\u7b26 / N3 Emoji \u5934\u50cf",
+}
 
+
+def gpu_unsupported_feature_labels(reasons: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(GPU_UNSUPPORTED_FEATURE_LABELS.get(reason, reason) for reason in reasons)
 
 def _title_overlay_to_ir(
     title: TitleOverlay,
@@ -148,6 +158,40 @@ def title_to_ir(
     return payload
 
 
+def _image_file_signature(path_text: str | None) -> tuple[int, int]:
+    if not path_text:
+        return (0, 0)
+    try:
+        stat = Path(path_text).stat()
+    except OSError:
+        return (0, 0)
+    return (max(int(stat.st_mtime_ns // 1_000_000), 0), max(int(stat.st_size), 0))
+
+
+def bitmap_guide_to_ir(symbol: object | None) -> dict[str, Any] | None:
+    if symbol is None or getattr(symbol, "kind", "vector") != "bitmap":
+        return None
+    before_path = str(getattr(symbol, "bitmap_before_path", "") or "")
+    after_path = str(getattr(symbol, "bitmap_after_path", "") or "")
+    before_modified, before_size = _image_file_signature(before_path)
+    after_modified, after_size = _image_file_signature(after_path)
+    return {
+        "before_path": before_path,
+        "after_path": after_path,
+        "zoom_percent": max(int(getattr(symbol, "bitmap_zoom_percent", 100)), 1),
+        "fix_size": bool(getattr(symbol, "bitmap_fix_size", False)),
+        "no_decor": bool(getattr(symbol, "bitmap_no_decor", False)),
+        "force_wipe_decor": bool(getattr(symbol, "bitmap_force_wipe_decor", False)),
+        "margin_left_px": int(getattr(symbol, "bitmap_margin_left_px", 0)),
+        "margin_right_px": int(getattr(symbol, "bitmap_margin_right_px", 0)),
+        "margin_bottom_px": int(getattr(symbol, "bitmap_margin_bottom_px", 0)),
+        "before_modified_ms": before_modified,
+        "before_size": before_size,
+        "after_modified_ms": after_modified,
+        "after_size": after_size,
+    }
+
+
 def timing_char_to_ir(ch: TimingChar) -> dict[str, Any]:
     return {
         "text": ch.text,
@@ -159,6 +203,7 @@ def timing_char_to_ir(ch: TimingChar) -> dict[str, Any]:
         ),
         "role_label": ch.role_label,
         "vector_glyph": guide_symbol_to_dict(ch.vector_glyph),
+        "bitmap_guide": bitmap_guide_to_ir(ch.vector_glyph),
     }
 
 

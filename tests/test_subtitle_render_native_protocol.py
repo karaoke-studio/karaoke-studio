@@ -42,6 +42,7 @@ from krok_helper.subtitle_render.native_backend import (
 from krok_helper.subtitle_render.native_protocol import (
     RENDER_IR_SCHEMA,
     build_render_ir,
+    gpu_unsupported_feature_labels,
     gpu_unsupported_features,
 )
 
@@ -295,6 +296,44 @@ def test_build_render_ir_resolves_guide_symbols_with_painter_semantics():
     assert gpu_unsupported_features(track, Style()) == ()
 
 
+def test_build_render_ir_serializes_bitmap_guide_symbol(tmp_path: Path):
+    image_path = tmp_path / "lead.png"
+    image_path.write_bytes(b"png")
+    symbol = GuideSymbol(
+        kind="bitmap",
+        bitmap_before_path=str(image_path),
+        bitmap_zoom_percent=120,
+        bitmap_no_decor=True,
+        bitmap_margin_right_px=7,
+        bitmap_margin_bottom_px=20,
+        duration_ms=400,
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("A", 1_000)],
+                end_ms=1_500,
+                guide_symbol=symbol,
+            )
+        ]
+    )
+
+    line = build_render_ir(track, Style(), width=640, height=360, fps=60)[
+        "track"
+    ]["lines"][0]
+    bitmap = line["chars"][0]["bitmap_guide"]
+
+    assert line["chars"][0]["text"] == "\uFFFC"
+    assert bitmap["before_path"] == str(image_path)
+    assert bitmap["zoom_percent"] == 120
+    assert bitmap["no_decor"] is True
+    assert bitmap["margin_right_px"] == 7
+    assert bitmap["margin_bottom_px"] == 20
+    assert bitmap["before_size"] == 3
+    assert line["guide_anchor_bounds"] is None
+    assert gpu_unsupported_features(track, Style()) == ()
+
+
 def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
     track = TimingTrack(lines=[TimingLine(chars=[TimingChar("A", 0)], end_ms=500)])
 
@@ -331,6 +370,9 @@ def test_gpu_capability_gate_rejects_only_unimplemented_whole_scene_features():
     assert gpu_unsupported_features(
         track, Style(karaoke_anim="future_effect")
     ) == ("karaoke_animation",)
+    assert gpu_unsupported_feature_labels(
+        ("bitmap_guide_symbol", "karaoke_animation")
+    ) == ("图片导唱符 / N3 Emoji 头像", "未知走字特效")
     assert gpu_unsupported_features(track, Style(lit_enabled=True)) == ()
     assert gpu_unsupported_features(track, Style(right_to_left=True)) == ()
     assert gpu_unsupported_features(
@@ -1565,5 +1607,3 @@ def test_native_gpu_unset_ruby_stroke2_follows_main_flag_not_saved_width():
     # The flag gates the width, never the other way round: explicitly enabling
     # the ruby draws its own width even while the main text stays off.
     assert stroke2_pixels(frames["main_off_explicit_on"]) > 0
-
-

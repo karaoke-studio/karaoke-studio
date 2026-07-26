@@ -141,6 +141,23 @@ struct VectorGlyph {
     bool operator==(const VectorGlyph &) const = default;
 };
 
+struct BitmapGuide {
+    std::wstring beforePath;
+    std::wstring afterPath;
+    float zoomPercent = 100.0f;
+    bool fixSize = false;
+    bool noDecor = false;
+    bool forceWipeDecor = false;
+    float marginLeft = 0.0f;
+    float marginRight = 0.0f;
+    float marginBottom = 0.0f;
+    std::uint64_t beforeModifiedMs = 0;
+    std::uint64_t beforeSize = 0;
+    std::uint64_t afterModifiedMs = 0;
+    std::uint64_t afterSize = 0;
+    bool operator==(const BitmapGuide &) const = default;
+};
+
 struct WipePoint {
     int timeMs = 0;
     float position = 0.0f;
@@ -153,6 +170,7 @@ struct TextChar {
     int endMs = 0;
     int styleIndex = -1;
     std::optional<VectorGlyph> vectorGlyph;
+    std::optional<BitmapGuide> bitmapGuide;
     std::vector<WipePoint> wipePoints;
     bool operator==(const TextChar &) const = default;
 };

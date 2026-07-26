@@ -961,6 +961,8 @@ struct Direct2DGpuBackend::Impl {
         Microsoft::WRL::ComPtr<ID2D1GeometryRealization> protectedStrokeRealization;
         Microsoft::WRL::ComPtr<ID2D1GeometryRealization> strokeRealization;
         Microsoft::WRL::ComPtr<ID2D1GeometryRealization> stroke2Realization;
+        std::optional<BitmapGuide> bitmapGuide;
+        D2D1_RECT_F bitmapRect{};
         std::vector<WipePoint> wipePoints;
     };
 
@@ -1551,12 +1553,52 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             }
         }
     };
+    auto cacheBitmapImage = [&](const std::wstring &path,
+                                std::uint64_t modifiedMs,
+                                std::uint64_t size) {
+        if (path.empty()) {
+            return;
+        }
+        const bool cached = std::any_of(
+            impl_->images.begin(), impl_->images.end(),
+            [&](const Impl::CachedImage &image) {
+                return image.path == path
+                    && image.modifiedMs == modifiedMs
+                    && image.size == size;
+            }
+        );
+        if (!cached) {
+            impl_->images.push_back(Impl::CachedImage{
+                path,
+                modifiedMs,
+                size,
+                loadWicBitmap(device_.d2dContext(), path),
+            });
+        }
+    };
     cacheStyleImages(scene.style);
     for (const TextStyle &style : scene.lineStyles) {
         cacheStyleImages(style);
     }
     for (const TextStyle &style : scene.charStyles) {
         cacheStyleImages(style);
+    }
+    for (const TextLine &line : scene.lines) {
+        for (const TextChar &ch : line.chars) {
+            if (!ch.bitmapGuide.has_value()) {
+                continue;
+            }
+            cacheBitmapImage(
+                ch.bitmapGuide->beforePath,
+                ch.bitmapGuide->beforeModifiedMs,
+                ch.bitmapGuide->beforeSize
+            );
+            cacheBitmapImage(
+                ch.bitmapGuide->afterPath,
+                ch.bitmapGuide->afterModifiedMs,
+                ch.bitmapGuide->afterSize
+            );
+        }
     }
 
     Microsoft::WRL::ComPtr<IDWriteFontCollection> fontCollection;
@@ -1580,6 +1622,19 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         target.top = std::min(target.top, value.top);
         target.right = std::max(target.right, value.right);
         target.bottom = std::max(target.bottom, value.bottom);
+    };
+    auto imageForBitmapGuide = [&](const std::wstring &path,
+                                   std::uint64_t modifiedMs,
+                                   std::uint64_t size) -> ID2D1Bitmap1 * {
+        const auto found = std::find_if(
+            impl_->images.begin(), impl_->images.end(),
+            [&](const Impl::CachedImage &image) {
+                return image.path == path
+                    && image.modifiedMs == modifiedMs
+                    && image.size == size;
+            }
+        );
+        return found == impl_->images.end() ? nullptr : found->bitmap.Get();
     };
 
     for (std::size_t lineIndex = 0; lineIndex < scene.lines.size(); ++lineIndex) {
@@ -1722,7 +1777,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     || charStyle.stroke2Width != style.stroke2Width
                 ));
             const bool vectorGlyph = sourceChar.vectorGlyph.has_value();
-            const bool latin = !vectorGlyph && isLatinText(sourceChar.text);
+            const bool bitmapGuide = sourceChar.bitmapGuide.has_value();
+            const bool latin = !vectorGlyph && !bitmapGuide && isLatinText(sourceChar.text);
             Microsoft::WRL::ComPtr<IDWriteFontFace> requestedFace = latin
                 ? latinFace
                 : mainFace;
@@ -1803,7 +1859,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     device_.d2dFactory(), *sourceChar.vectorGlyph,
                     static_cast<float>(unit), device_
                 );
-            } else {
+            } else if (!bitmapGuide) {
                 glyphs = glyphIndices(requestedFace.Get(), sourceChar.text);
                 outlineFace = requestedFace;
                 if (!validGlyphIndices(glyphs)) {
@@ -1812,7 +1868,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     );
                 }
             }
-            if (!vectorGlyph && outlineFace && !glyphs.empty()) {
+            if (!vectorGlyph && !bitmapGuide && outlineFace && !glyphs.empty()) {
                 checkHr(
                     device_.d2dFactory()->CreatePathGeometry(path.ReleaseAndGetAddressOf()),
                     "ID2D1Factory::CreatePathGeometry(character)",
@@ -1850,7 +1906,74 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
 
             float layoutWidth = 0.0f;
             float pathOffset = 0.0f;
-            if (vectorGlyph) {
+            D2D1_RECT_F bitmapRect{};
+            bool bitmapHasBounds = false;
+            if (bitmapGuide) {
+                const BitmapGuide &guide = *sourceChar.bitmapGuide;
+                ID2D1Bitmap1 *bitmap = imageForBitmapGuide(
+                    guide.beforePath, guide.beforeModifiedMs, guide.beforeSize
+                );
+                if (bitmap == nullptr && !guide.afterPath.empty()) {
+                    bitmap = imageForBitmapGuide(
+                        guide.afterPath, guide.afterModifiedMs, guide.afterSize
+                    );
+                }
+                float contentWidth = 1.0f * layoutScale;
+                float contentHeight = std::max(static_cast<float>(unit), 1.0f) * layoutScale;
+                if (bitmap != nullptr) {
+                    const D2D1_SIZE_U pixelSize = bitmap->GetPixelSize();
+                    const float imageWidth = std::max(static_cast<float>(pixelSize.width), 1.0f);
+                    const float imageHeight = std::max(static_cast<float>(pixelSize.height), 1.0f);
+                    if (guide.fixSize) {
+                        contentWidth = imageWidth * layoutScale;
+                        contentHeight = imageHeight * layoutScale;
+                    } else {
+                        contentHeight = std::max(
+                            static_cast<float>(
+                                std::max(
+                                    static_cast<int>(unit * guide.zoomPercent) / 100,
+                                    1
+                                )
+                            ),
+                            1.0f
+                        ) * layoutScale;
+                        contentWidth = std::max(
+                            contentHeight * imageWidth / imageHeight,
+                            1.0f * layoutScale
+                        );
+                    }
+                }
+                const float marginLeft = guide.marginLeft * layoutScale;
+                const float marginRight = guide.marginRight * layoutScale;
+                const float marginBottom = guide.marginBottom * layoutScale;
+                const int metricTotal = std::max(
+                    static_cast<int>(fontMetrics.ascent)
+                        + static_cast<int>(fontMetrics.descent),
+                    1
+                );
+                const float anchorDescent = (
+                    static_cast<float>(
+                        unit * static_cast<int>(fontMetrics.descent) / metricTotal
+                            + edgeSize / 2
+                    ) * layoutScale
+                );
+                const float bitmapBottom = anchorDescent - marginBottom;
+                layoutWidth = std::max(
+                    contentWidth + marginLeft + marginRight,
+                    1.0f * layoutScale
+                );
+                bitmapRect = D2D1::RectF(
+                    cursor + marginLeft,
+                    bitmapBottom - contentHeight,
+                    cursor + marginLeft + contentWidth,
+                    bitmapBottom
+                );
+                bitmapHasBounds = bitmapRect.right > bitmapRect.left
+                    && bitmapRect.bottom > bitmapRect.top;
+                if (bitmapHasBounds) {
+                    extendBounds(cached.bounds, lineHasBounds, bitmapRect);
+                }
+            } else if (vectorGlyph) {
                 layoutWidth = (static_cast<float>(unit)
                     * std::max(sourceChar.vectorGlyph->advanceWidth, 0.0f)
                     / std::max(sourceChar.vectorGlyph->unitsPerEm, 1.0f));
@@ -1912,7 +2035,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
 
             D2D1_RECT_F positionedCharBounds{};
             bool positionedHasBounds = false;
-            if (path && charHasBounds) {
+            if (bitmapHasBounds) {
+                positionedCharBounds = bitmapRect;
+                positionedHasBounds = true;
+            } else if (path && charHasBounds) {
                 const D2D1_MATRIX_3X2_F position = D2D1::Matrix3x2F::Translation(
                     cursor + pathOffset,
                     0.0f
@@ -1945,6 +2071,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 positionedHasBounds ? positionedCharBounds.bottom : charDescent,
             });
             cached.chars.back().styleIndex = sourceChar.styleIndex;
+            cached.chars.back().bitmapGuide = sourceChar.bitmapGuide;
+            cached.chars.back().bitmapRect = bitmapRect;
             cached.chars.back().wipePoints = sourceChar.wipePoints;
             if (cached.chars.back().wipePoints.empty()) {
                 cached.chars.back().wipePoints = {
@@ -1955,7 +2083,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             cached.chars.back().boxAscent = charBoxAscent;
             cached.chars.back().pivotX = cursor + layoutWidth * 0.5f;
             cached.chars.back().pivotY = (charDescent - charAscent) * 0.5f;
-            if (positionedHasBounds) {
+            if (positionedHasBounds && path) {
                 cached.chars.back().geometry = cached.geometries.back();
                 cached.chars.back().strokeGeometry = widenedStrokeGeometry(
                     device_.d2dFactory(),
@@ -2026,6 +2154,10 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 ch.layoutLeft = newLayoutLeft;
                 ch.layoutRight = cursor - oldLayoutLeft;
                 ch.pivotX += offsetX;
+                if (ch.bitmapGuide.has_value()) {
+                    ch.bitmapRect.left += offsetX;
+                    ch.bitmapRect.right += offsetX;
+                }
                 translateGeometry(
                     ch.geometry.Get(), offsetX, ch.geometry,
                     "ID2D1Factory::CreateTransformedGeometry(RTL character)"
@@ -2052,6 +2184,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     );
                     extendBounds(cached.bounds, lineHasBounds, bounds);
                     cached.geometries.push_back(ch.geometry);
+                } else if (ch.bitmapGuide.has_value()) {
+                    extendBounds(cached.bounds, lineHasBounds, ch.bitmapRect);
                 }
             }
         }
@@ -2099,6 +2233,24 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 // including spaces and other glyphs with no outline geometry.
                 ch.top = cellTop;
                 ch.bottom = cellTop + cellHeight;
+                if (ch.bitmapGuide.has_value()) {
+                    const float bitmapWidth = std::max(
+                        ch.bitmapRect.right - ch.bitmapRect.left, 1.0f
+                    );
+                    const float bitmapHeight = std::max(
+                        ch.bitmapRect.bottom - ch.bitmapRect.top, 1.0f
+                    );
+                    ch.bitmapRect = D2D1::RectF(
+                        -bitmapWidth * 0.5f,
+                        cellTop + (cellHeight - bitmapHeight) * 0.5f,
+                        bitmapWidth * 0.5f,
+                        cellTop + (cellHeight + bitmapHeight) * 0.5f
+                    );
+                    ch.left = ch.bitmapRect.left;
+                    ch.right = ch.bitmapRect.right;
+                    ch.top = ch.bitmapRect.top;
+                    ch.bottom = ch.bitmapRect.bottom;
+                }
                 const auto [offsetX, offsetY] = verticalGlyphOffset(
                     sourceLine.chars[index].text, cellWidth, cellHeight
                 );
@@ -2162,6 +2314,8 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     ch.right = bounds.right + wipePad;
                     extendBounds(cached.bounds, lineHasBounds, bounds);
                     cached.geometries.push_back(ch.geometry);
+                } else if (ch.bitmapGuide.has_value()) {
+                    extendBounds(cached.bounds, lineHasBounds, ch.bitmapRect);
                 }
                 ch.layoutLeft = -cellWidth * 0.5f;
                 ch.layoutRight = cellWidth * 0.5f;
@@ -2827,17 +2981,18 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
             cached.bounds = {};
             lineHasBounds = false;
             for (const Impl::CachedChar &ch : cached.chars) {
-                if (!ch.geometry) {
-                    continue;
+                if (ch.geometry) {
+                    D2D1_RECT_F bounds{};
+                    checkHr(
+                        ch.geometry->GetBounds(nullptr, &bounds),
+                        "ID2D1Geometry::GetBounds(ruby interference character)",
+                        device_
+                    );
+                    extendBounds(cached.bounds, lineHasBounds, bounds);
+                    cached.geometries.push_back(ch.geometry);
+                } else if (ch.bitmapGuide.has_value()) {
+                    extendBounds(cached.bounds, lineHasBounds, ch.bitmapRect);
                 }
-                D2D1_RECT_F bounds{};
-                checkHr(
-                    ch.geometry->GetBounds(nullptr, &bounds),
-                    "ID2D1Geometry::GetBounds(ruby interference character)",
-                    device_
-                );
-                extendBounds(cached.bounds, lineHasBounds, bounds);
-                cached.geometries.push_back(ch.geometry);
             }
             cached.fillBounds.right = std::max(cursor, 1.0f);
         }
@@ -3802,7 +3957,13 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         );
     };
     for (const Impl::CachedLine *line : activeLines) {
-      if (line != nullptr && !line->geometries.empty()) {
+      if (line != nullptr && (
+        !line->geometries.empty()
+        || std::any_of(
+            line->chars.begin(), line->chars.end(),
+            [](const Impl::CachedChar &ch) { return ch.bitmapGuide.has_value(); }
+        )
+      )) {
         const LineAnimationState animation = lineAnimationAt(*line);
         if (animation.opacity <= 0.0f) {
             continue;
@@ -3962,7 +4123,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 const Impl::CachedChar &candidate = line->chars[
                     static_cast<std::size_t>(next)
                 ];
-                if (candidate.geometry != nullptr) {
+                if (candidate.geometry != nullptr || candidate.bitmapGuide.has_value()) {
                     return currentEnd <= candidate.endMs
                         ? candidate.endMs
                         : currentEnd;
@@ -4548,9 +4709,14 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 }
             }
         }
+        const bool hasBitmapGuide = std::any_of(
+            line->chars.begin(), line->chars.end(),
+            [](const Impl::CachedChar &ch) { return ch.bitmapGuide.has_value(); }
+        );
         if (line->guideAnchorLeft.has_value()
             && line->guideAnchorRight.has_value()
-            && !style.vertical) {
+            && !style.vertical
+            && !hasBitmapGuide) {
             lyricLeft = *line->guideAnchorLeft;
             lyricRight = *line->guideAnchorRight;
         }
@@ -5010,6 +5176,26 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             );
             return found == impl_->images.end() ? nullptr : found->bitmap.Get();
         };
+        auto bitmapImageForGuide = [&](const BitmapGuide &guide, bool after) -> ID2D1Bitmap1 * {
+            const std::wstring &path = after && !guide.afterPath.empty()
+                ? guide.afterPath
+                : guide.beforePath;
+            const std::uint64_t modifiedMs = after && !guide.afterPath.empty()
+                ? guide.afterModifiedMs
+                : guide.beforeModifiedMs;
+            const std::uint64_t size = after && !guide.afterPath.empty()
+                ? guide.afterSize
+                : guide.beforeSize;
+            const auto found = std::find_if(
+                impl_->images.begin(), impl_->images.end(),
+                [&](const Impl::CachedImage &image) {
+                    return image.path == path
+                        && image.modifiedMs == modifiedMs
+                        && image.size == size;
+                }
+            );
+            return found == impl_->images.end() ? nullptr : found->bitmap.Get();
+        };
         auto paintBrushAt = [&](const PaintStyle &paint, const D2D1_RECT_F &rect,
                                 const RgbaColor &fallback,
                                 float offsetX, float offsetY) {
@@ -5427,6 +5613,36 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         const bool hasAfterWipe = style.vertical
             ? wipeEdge > line->fillBounds.top
             : (rtl ? wipeEdge < line->bounds.right : wipeEdge > line->bounds.left);
+        auto bitmapGuideNoWipe = [&](const Impl::CachedChar &ch) {
+            return ch.bitmapGuide.has_value() && ch.bitmapGuide->afterPath.empty();
+        };
+        auto drawBitmapGuidePart = [&](std::size_t charIndex, bool after) {
+            if (charIndex >= line->chars.size()) {
+                return;
+            }
+            const Impl::CachedChar &ch = line->chars[charIndex];
+            if (!ch.bitmapGuide.has_value()) {
+                return;
+            }
+            if (after && ch.bitmapGuide->afterPath.empty()) {
+                return;
+            }
+            ID2D1Bitmap1 *bitmap = bitmapImageForGuide(*ch.bitmapGuide, after);
+            if (bitmap == nullptr) {
+                return;
+            }
+            const float opacity = globalOpacity * characterOpacityAt(charIndex);
+            if (opacity <= 0.0f) {
+                return;
+            }
+            context->DrawBitmap(
+                bitmap,
+                ch.bitmapRect,
+                opacity,
+                D2D1_INTERPOLATION_MODE_LINEAR,
+                nullptr
+            );
+        };
         auto rubyWipeEdgeAt = [&](const Impl::CachedRuby &ruby) {
             float edge = style.vertical
                 ? ruby.bounds.top
@@ -6861,6 +7077,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                         );
                     }
                 }
+                for (std::size_t index = 0; index < line->chars.size(); ++index) {
+                    drawBitmapGuidePart(index, after);
+                }
             };
             drawLegacyStack(
                 false, beforeFill.Get(), beforeStroke.Get(), beforeStroke2.Get()
@@ -6888,7 +7107,9 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 : style;
             float edge = delegatedWipeCoordinateAt(line->chars, charIndex);
             D2D1_RECT_F bounds = line->bounds;
-            if (useUtopiaTransition || charTransformedAt(charIndex)) {
+            if (ch.bitmapGuide.has_value()) {
+                bounds = ch.bitmapRect;
+            } else if (useUtopiaTransition || charTransformedAt(charIndex)) {
                 const auto animated = utopiaCharWipe(charIndex);
                 bounds = animated.first;
                 edge = animated.second;
@@ -6935,6 +7156,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         const auto drawMainLayerPart = [&](std::size_t charIndex,
                                            bool after, int layer) {
             const Impl::CachedChar &ch = line->chars[charIndex];
+            if (ch.bitmapGuide.has_value()) {
+                if (layer == 2) {
+                    drawBitmapGuidePart(charIndex, after);
+                }
+                return;
+            }
             ID2D1Geometry *geometry = charGeometryAt(charIndex);
             if (geometry == nullptr) {
                 return;
@@ -7047,6 +7274,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         const auto drawMainLayer = [&](int layer) {
             const auto drawPhasePart = [&](std::size_t charIndex,
                                            N3WipePhase phase) {
+                if (layer == 2 && bitmapGuideNoWipe(line->chars[charIndex])) {
+                    drawMainLayerPart(charIndex, false, layer);
+                    return;
+                }
                 if (phase != N3WipePhase::Wiping) {
                     drawMainLayerPart(
                         charIndex, phase == N3WipePhase::After, layer

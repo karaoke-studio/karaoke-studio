@@ -643,12 +643,12 @@ def test_render_job_native_export_flag_and_environment_are_ignored(monkeypatch, 
     assert renderer._native_export_requested(replace(_job(tmp_path), native_export_enabled=None)) is False
 
 
-def test_gpu_export_request_is_explicit_and_defaults_off(monkeypatch, tmp_path):
+def test_gpu_export_request_defaults_to_gpu_on_windows(monkeypatch, tmp_path):
     monkeypatch.delenv("KROK_SUBTITLE_GPU_EXPORT", raising=False)
 
     assert renderer._gpu_export_requested(
         replace(_job(tmp_path), gpu_export_enabled=None)
-    ) is False
+    ) is (os.name == "nt")
     assert renderer._gpu_export_requested(
         replace(_job(tmp_path), gpu_export_enabled=True)
     ) is True
@@ -660,6 +660,10 @@ def test_gpu_export_request_is_explicit_and_defaults_off(monkeypatch, tmp_path):
     assert renderer._gpu_export_requested(
         replace(_job(tmp_path), gpu_export_enabled=None)
     ) is True
+    monkeypatch.setenv("KROK_SUBTITLE_GPU_EXPORT", "0")
+    assert renderer._gpu_export_requested(
+        replace(_job(tmp_path), gpu_export_enabled=None)
+    ) is False
 
 
 def test_gpu_export_worker_count_is_bounded_and_warp_stays_serial(monkeypatch):

@@ -5031,7 +5031,13 @@ class SubtitleRenderWindow(QWidget):
                     if (
                         0 <= index < len(line.chars)
                         and symbol is not None
-                        and symbol.path_commands
+                        and (
+                            symbol.path_commands
+                            or (
+                                symbol.kind == "bitmap"
+                                and bool(symbol.bitmap_before_path)
+                            )
+                        )
                     ):
                         symbols[index] = symbol
             line.inline_guide_symbols = symbols

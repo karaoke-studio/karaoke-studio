@@ -536,3 +536,46 @@ def test_emoji_tag_not_parsed_as_body_and_kept_in_custom():
     assert body_text == ["あ"]
     assert any("@Emoji=" in c for c in track.meta.custom)
     assert len(track.rubies) == 1
+
+
+def test_load_lrc_applies_emoji_role_tag_to_explicit_singer_line(tmp_path):
+    lrc = tmp_path / "demo.lrc"
+    (tmp_path / "lead.png").write_bytes(b"fake")
+    lrc.write_text(
+        "【A】[00:01:00]●[00:01:50]a[00:02:00]\n"
+        "[00:03:00]b[00:04:00]\n"
+        "\n"
+        "@Emoji=【A】,lead.png,,Zoom=120,NoDecor,MarginRight=7,MarginBottom=20\n",
+        encoding="utf-8",
+    )
+
+    track = load_nicokara_lrc(lrc)
+
+    first = track.lines[0].guide_symbol
+    assert first is not None
+    assert first.kind == "bitmap"
+    assert first.prefix_timing == "anchored"
+    assert first.bitmap_before_path == str(tmp_path / "lead.png")
+    assert first.bitmap_zoom_percent == 120
+    assert first.bitmap_no_decor is True
+    assert first.bitmap_margin_right_px == 7
+    assert first.bitmap_margin_bottom_px == 20
+    assert track.lines[1].singer_label == "A"
+    assert track.lines[1].guide_symbol is None
+
+
+def test_load_lrc_applies_single_visible_emoji_token_inline(tmp_path):
+    lrc = tmp_path / "demo.lrc"
+    (tmp_path / "note.png").write_bytes(b"fake")
+    lrc.write_text(
+        "[00:01:00]♪[00:01:50]a[00:02:00]\n"
+        "\n"
+        "@Emoji=♪,note.png,,NoDecor\n",
+        encoding="utf-8",
+    )
+
+    track = load_nicokara_lrc(lrc)
+
+    symbol = track.lines[0].inline_guide_symbols[0]
+    assert symbol.kind == "bitmap"
+    assert symbol.bitmap_before_path == str(tmp_path / "note.png")

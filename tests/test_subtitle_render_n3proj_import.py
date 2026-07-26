@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from krok_helper.subtitle_render.models import style_from_dict
+from krok_helper.subtitle_render.models import guide_symbol_from_dict, style_from_dict
 from krok_helper.subtitle_render.n3proj_import import (
     N3ImportResult,
     is_n3proj_file,
@@ -239,6 +239,43 @@ def test_load_n3proj_rejects_bad_json(tmp_path):
         archive.writestr("0", b"{ not json")
     with pytest.raises(ValueError):
         load_n3proj(path)
+
+
+def test_imports_n3_emoji_role_tag_as_anchored_bitmap_guide(tmp_path):
+    payload = _project_payload(tmp_path)
+    lrc = Path(payload["SourceLyricsInfos"][0]["SourceLyricsPath"])
+    lrc.write_text(
+        "[00:01:00]●[00:02:00]a[00:03:00]\n"
+        "\n"
+        "@Emoji=【A】,avatar.png,,Zoom=80,NoDecor,MarginRight=20\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "avatar.png").write_bytes(b"fake")
+    payload["SourceLyricsInfos"][0]["AtTagsForSave"] = [
+        "@Emoji=【A】,avatar.png,,Zoom=80,NoDecor,MarginRight=20"
+    ]
+    payload["SourceLyricsInfos"][0]["LineInfos"] = [
+        _line_info(
+            [
+                _char("【A】", 1000, 1000, font_index=1),
+                _char("●", 1000, 2000),
+                _char("a", 2000, 3000),
+            ],
+            layout_index=0,
+        )
+    ]
+
+    result = load_n3proj(_write_n3proj(tmp_path, payload))
+
+    row = result.project_data["line_guide_symbols"][0]
+    symbol = guide_symbol_from_dict(row)
+    assert symbol is not None
+    assert symbol.kind == "bitmap"
+    assert symbol.prefix_timing == "anchored"
+    assert symbol.bitmap_before_path == str(tmp_path / "avatar.png")
+    assert symbol.bitmap_zoom_percent == 80
+    assert symbol.bitmap_no_decor is True
+    assert symbol.bitmap_margin_right_px == 20
 
 
 def test_import_media_and_screen(imported, tmp_path):

@@ -69,6 +69,8 @@ from krok_helper.subtitle_render.n3_font_catalog import resolve_qt_font_family
 _IMAGE_FILL_CACHE_MAX = 16
 _IMAGE_FILL_CACHE: "OrderedDict[tuple, QImage]" = OrderedDict()
 _IMAGE_BRUSH_CACHE: "OrderedDict[tuple, QBrush]" = OrderedDict()
+_BITMAP_GUIDE_CACHE_MAX = 64
+_BITMAP_GUIDE_CACHE: "OrderedDict[tuple[str, int, int], QImage]" = OrderedDict()
 _HARD_BAND_BRUSH_CACHE_MAX = 128
 _HARD_BAND_BRUSH_CACHE: "OrderedDict[tuple, QBrush]" = OrderedDict()
 _IMAGE_FILL_LOCK = Lock()
@@ -1827,6 +1829,7 @@ def _resolve_sayatoo_line_layouts(
         if line.is_blank or not line.chars:
             continue
         line_style = _style_for_line(style, line)
+        render_line = _line_with_guide_symbol(line)
         font = _build_font(line_style)
         metrics = QFontMetrics(font)
         latin_font = _build_latin_font(line_style)
@@ -1834,22 +1837,29 @@ def _resolve_sayatoo_line_layouts(
         latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
         active_rubies = _active_rubies_for_line(track.rubies, line)
         ruby_metrics = QFontMetrics(_build_ruby_font(line_style)) if active_rubies else None
-        if _line_has_role_labels(line):
+        if _line_has_role_labels(render_line):
             measure_layout = _build_role_text_layout(
-                line, line_style, x0=0, baseline_y=0
+                render_line, line_style, x0=0, baseline_y=0
             )
             char_widths, _measure_ranges = _role_char_geometry_by_index(
-                line, measure_layout
+                render_line, measure_layout
             )
         else:
             char_widths = [
-                _char_layout_width(
-                    c.text, font, metrics, latin_metrics, font_for, line_style
+                (
+                    _vector_glyph_width(
+                        c.vector_glyph,
+                        _style_for_role_in_layout(line_style, c.role_label),
+                    )
+                    if c.vector_glyph is not None
+                    else _char_layout_width(
+                        c.text, font, metrics, latin_metrics, font_for, line_style
+                    )
                 )
-                for c in line.chars
+                for c in render_line.chars
             ]
         char_gaps, ruby_left, ruby_right = _ruby_char_gaps(
-            line, char_widths, active_rubies, line_style
+            render_line, char_widths, active_rubies, line_style
         )
         text_w = _line_text_width(char_widths, line_style) + sum(char_gaps)
         # 行盒左右不给描边留位（见 _line_total_width），只让 ruby 溢出撑开。
@@ -2327,9 +2337,19 @@ def _signal_lit_groups(
             latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
             active_rubies = _active_rubies_for_line(track.rubies, line)
             ruby_metrics = QFontMetrics(_build_ruby_font(line_style)) if active_rubies else None
+            render_line = _line_with_guide_symbol(line)
             char_widths = [
-                _char_layout_width(c.text, font, metrics, latin_metrics, font_for, line_style)
-                for c in line.chars
+                (
+                    _vector_glyph_width(
+                        c.vector_glyph,
+                        _style_for_role_in_layout(line_style, c.role_label),
+                    )
+                    if c.vector_glyph is not None
+                    else _char_layout_width(
+                        c.text, font, metrics, latin_metrics, font_for, line_style
+                    )
+                )
+                for c in render_line.chars
             ]
             total_w = _line_text_width(char_widths, line_style)
             baseline_y = baselines.get(display_line.lane)
@@ -3697,6 +3717,8 @@ def _vertical_glyph_path(
 ) -> QPainterPath:
     """单个竖排字形的 path：旋转类绕字格中心转 90°，其余直立（标点/小假名偏移）。"""
     if vector_glyph is not None:
+        if _guide_symbol_is_bitmap(vector_glyph):
+            return QPainterPath()
         path = scaled_guide_symbol_path(
             vector_glyph,
             pixel_size=max(int(font.pixelSize()), 1),
@@ -4823,6 +4845,7 @@ def _paint_line_static(
                 painter, render_line, layout.text_layout, layout.char_x_ranges, layout.intervals,
                 layout.active_rubies, layout.baseline_y, t_ms, transition, style,
                 rtl=layout.rtl, ink_x_ranges=layout.ink_x_ranges,
+                fill_segments=layout.fill_segments,
             )
         else:
             _paint_line_with_character_transition(
@@ -4834,6 +4857,7 @@ def _paint_line_static(
                 fill_rect=_n3_main_fill_rect(
                     layout.text_layout, layout.baseline_y
                 ),
+                fill_segments=layout.fill_segments,
             )
         paint_rubies_on_top()
         return
@@ -5198,7 +5222,7 @@ def _line_has_role_labels(line: TimingLine) -> bool:
 
 
 def _line_with_guide_symbol(line: TimingLine) -> TimingLine:
-    """Return a painter-only line with prefix and inline SVG replacements applied."""
+    """Return a painter-only line with prefix and inline guide replacements applied."""
     if not line.chars:
         return line
     symbol = line.guide_symbol
@@ -5210,7 +5234,7 @@ def _line_with_guide_symbol(line: TimingLine) -> TimingLine:
             isinstance(index, int)
             and 0 <= index < len(chars)
             and isinstance(inline_symbol, GuideSymbol)
-            and inline_symbol.path_commands
+            and _guide_symbol_has_visual(inline_symbol)
         ):
             chars[index] = replace(
                 chars[index], text="\uFFFC", vector_glyph=inline_symbol
@@ -5222,7 +5246,7 @@ def _line_with_guide_symbol(line: TimingLine) -> TimingLine:
         else line
     )
     symbol = render_line.guide_symbol
-    if symbol is None or not symbol.path_commands:
+    if symbol is None or not _guide_symbol_has_visual(symbol):
         return render_line
     if symbol.replacement_prefix:
         if replacement_count == 0:
@@ -5254,7 +5278,11 @@ def _line_with_guide_symbol(line: TimingLine) -> TimingLine:
     guides = [
         TimingChar(
             text="\uFFFC",
-            start_ms=first_start - interval * (len(labels) - index),
+            start_ms=(
+                first_start
+                if symbol.prefix_timing == "anchored"
+                else first_start - interval * (len(labels) - index)
+            ),
             role_label=label,
             vector_glyph=symbol,
         )
@@ -5268,7 +5296,81 @@ def _line_with_guide_symbol(line: TimingLine) -> TimingLine:
     )
 
 
+def _guide_symbol_has_visual(symbol: GuideSymbol) -> bool:
+    return bool(symbol.path_commands) or (
+        symbol.kind == "bitmap" and bool(symbol.bitmap_before_path)
+    )
+
+
+def _guide_symbol_is_bitmap(symbol: object | None) -> bool:
+    return isinstance(symbol, GuideSymbol) and symbol.kind == "bitmap" and bool(
+        symbol.bitmap_before_path
+    )
+
+
+def _bitmap_guide_is_no_wipe(symbol: object | None) -> bool:
+    return _guide_symbol_is_bitmap(symbol) and not bool(
+        getattr(symbol, "bitmap_after_path", None)
+    )
+
+
+def _bitmap_guide_image(path: str | None) -> QImage | None:
+    if not path:
+        return None
+    signature = _image_file_signature(path)
+    if signature is None:
+        return None
+    with _IMAGE_FILL_LOCK:
+        cached = _BITMAP_GUIDE_CACHE.get(signature)
+        if cached is not None:
+            _BITMAP_GUIDE_CACHE.move_to_end(signature)
+            return cached
+    image = QImage(signature[0])
+    if image.isNull():
+        return None
+    image = image.convertToFormat(QImage.Format.Format_ARGB32_Premultiplied)
+    with _IMAGE_FILL_LOCK:
+        existing = _BITMAP_GUIDE_CACHE.get(signature)
+        if existing is not None:
+            _BITMAP_GUIDE_CACHE.move_to_end(signature)
+            return existing
+        _BITMAP_GUIDE_CACHE[signature] = image
+        while len(_BITMAP_GUIDE_CACHE) > _BITMAP_GUIDE_CACHE_MAX:
+            _BITMAP_GUIDE_CACHE.popitem(last=False)
+    return image
+
+
+def _bitmap_guide_content_size(symbol: GuideSymbol, style: Style) -> tuple[int, int]:
+    image = _bitmap_guide_image(symbol.bitmap_before_path)
+    if image is None:
+        image = _bitmap_guide_image(symbol.bitmap_after_path)
+    if image is None or image.isNull():
+        return 1, max(int(style.font_size_px), 1)
+    if symbol.bitmap_fix_size:
+        return max(int(image.width()), 1), max(int(image.height()), 1)
+    target_h = max(
+        max(int(style.font_size_px), 1) * max(int(symbol.bitmap_zoom_percent), 1) // 100,
+        1,
+    )
+    target_w = max(int(round(image.width() * target_h / max(image.height(), 1))), 1)
+    return target_w, target_h
+
+
+def _bitmap_guide_anchor_descent(glyph: _GlyphLayout) -> int:
+    style = glyph.style
+    if style.layout_semantics == "n3_1074":
+        return _fixed_line_geometry(style)[2]
+    return max(int(glyph.metrics.descent()), 0)
+
+
 def _vector_glyph_width(symbol, style: Style) -> int:
+    if _guide_symbol_is_bitmap(symbol):
+        content_w, _ = _bitmap_guide_content_size(symbol, style)
+        return (
+            content_w
+            + int(symbol.bitmap_margin_left_px)
+            + int(symbol.bitmap_margin_right_px)
+        )
     return max(
         int(
             round(
@@ -5283,6 +5385,8 @@ def _vector_glyph_width(symbol, style: Style) -> int:
 
 def _glyph_path(glyph: _GlyphLayout, baseline_y: int) -> QPainterPath:
     if glyph.vector_glyph is not None:
+        if _guide_symbol_is_bitmap(glyph.vector_glyph):
+            return QPainterPath()
         return scaled_guide_symbol_path(
             glyph.vector_glyph,
             pixel_size=max(int(glyph.font.pixelSize()), 1),
@@ -5367,17 +5471,17 @@ def _build_text_layout(
             latin_metrics = plain_latin_metrics
             if font is None or metrics is None or latin_metrics is None:
                 continue
-        is_vector = ch.vector_glyph is not None
-        glyph_style = role_style if is_vector else _main_script_stroke_style(role_style, ch.text)
-        glyph_font = font if is_vector else (font_for(ch.text) if font_for is not None else font)
+        is_guide = ch.vector_glyph is not None
+        glyph_style = role_style if is_guide else _main_script_stroke_style(role_style, ch.text)
+        glyph_font = font if is_guide else (font_for(ch.text) if font_for is not None else font)
         glyph_metrics = (
             latin_metrics
-            if not is_vector and font_for is not None and _is_n3_latin_text(ch.text)
+            if not is_guide and font_for is not None and _is_n3_latin_text(ch.text)
             else metrics
         )
         width = (
             _vector_glyph_width(ch.vector_glyph, role_style)
-            if is_vector
+            if is_guide
             else _char_layout_width(
                 ch.text, font, metrics, latin_metrics, font_for, glyph_style,
             )
@@ -5395,7 +5499,7 @@ def _build_text_layout(
                 width,
                 spacing_after,
                 0.0
-                if is_vector
+                if is_guide
                 else _char_path_left_offset(
                     ch.text, font, metrics, latin_metrics, font_for, glyph_style,
                 ),
@@ -5591,6 +5695,26 @@ def _glyph_runs(layout: _TextLayout) -> list[list[_GlyphLayout]]:
     if current:
         runs.append(current)
     return runs
+
+
+def _glyph_is_bitmap_guide(glyph: _GlyphLayout) -> bool:
+    return _guide_symbol_is_bitmap(glyph.vector_glyph)
+
+
+def _text_glyph_runs(
+    layout: _TextLayout, has_inline_styles: bool
+) -> list[list[_GlyphLayout]]:
+    runs = [layout.glyphs] if not has_inline_styles else _glyph_runs(layout)
+    result: list[list[_GlyphLayout]] = []
+    for run in runs:
+        text_run = [glyph for glyph in run if not _glyph_is_bitmap_guide(glyph)]
+        if text_run:
+            result.append(text_run)
+    return result
+
+
+def _bitmap_guide_glyphs(layout: _TextLayout) -> list[_GlyphLayout]:
+    return [glyph for glyph in layout.glyphs if _glyph_is_bitmap_guide(glyph)]
 
 
 def _glyph_run_path(glyphs: list[_GlyphLayout], baseline_y: int) -> QPainterPath:
@@ -5795,7 +5919,7 @@ def _paint_line_direct(
     t_ms: int,
 ) -> None:
     """Vector oracle for horizontal static lines, sharing the baked path layout."""
-    runs = [layout.text_layout.glyphs] if not layout.has_inline_styles else _glyph_runs(layout.text_layout)
+    runs = _text_glyph_runs(layout.text_layout, layout.has_inline_styles)
     y = layout.baseline_y
     fill_rect = _n3_main_fill_rect(layout.text_layout, y)
     combined_glow_runs = [
@@ -5907,6 +6031,8 @@ def _paint_line_direct(
         finally:
             painter.restore()
 
+    _paint_bitmap_guide_glyphs(painter, layout, t_ms, after=False)
+
     for run in runs:
         for glyph in run:
             glyph_run = [glyph]
@@ -5938,9 +6064,11 @@ def _paint_line_direct(
             finally:
                 painter.restore()
 
+    _paint_bitmap_guide_glyphs(painter, layout, t_ms, after=True)
+
 
 def _line_layer_stack(layout: _LineLayout, t_ms: int) -> list:
-    runs = [layout.text_layout.glyphs] if not layout.has_inline_styles else _glyph_runs(layout.text_layout)
+    runs = _text_glyph_runs(layout.text_layout, layout.has_inline_styles)
     y = layout.baseline_y
     fill_rect = _n3_main_fill_rect(layout.text_layout, y)
     combined_glow_runs = [
@@ -5983,9 +6111,22 @@ def _line_layer_stack(layout: _LineLayout, t_ms: int) -> list:
         )
         for run in runs
     ]
+    bitmap_before_layers = [
+        _BitmapGuideLayer(
+            glyph,
+            y,
+            layout.fill_segments,
+            t_ms,
+            layout.rtl,
+            after=False,
+            z_index=len(runs) * 2,
+        )
+        for glyph in _bitmap_guide_glyphs(layout.text_layout)
+    ]
     after_glow_layers = []
     after_body_layers = []
-    z_index = len(runs) * 2
+    bitmap_after_layers = []
+    z_index = len(runs) * 2 + len(bitmap_before_layers)
     for run in runs:
         combined_glow = id(run) in combined_run_ids
         for glyph in run:
@@ -6023,13 +6164,28 @@ def _line_layer_stack(layout: _LineLayout, t_ms: int) -> list:
                 )
             )
             z_index += 1
+    for glyph in _bitmap_guide_glyphs(layout.text_layout):
+        bitmap_after_layers.append(
+            _BitmapGuideLayer(
+                glyph,
+                y,
+                layout.fill_segments,
+                t_ms,
+                layout.rtl,
+                after=True,
+                z_index=z_index,
+            )
+        )
+        z_index += 1
     # N3 composites the blurred decoration below every body/edge layer.
     return (
         combined_glow_layers
         + before_glow_layers
         + after_glow_layers
         + before_layers
+        + bitmap_before_layers
         + after_body_layers
+        + bitmap_after_layers
     )
 
 
@@ -6056,6 +6212,201 @@ def _horizontal_before_clip_rect(band: tuple[int, int], rtl: bool) -> QRectF:
         1_000_000.0,
         2_000_000.0,
     )
+
+
+def _bitmap_guide_target_rect(glyph: _GlyphLayout, baseline_y: int) -> QRectF | None:
+    symbol = glyph.vector_glyph
+    if not _guide_symbol_is_bitmap(symbol):
+        return None
+    width, height = _bitmap_guide_content_size(symbol, glyph.style)
+    left = float(glyph.left + int(symbol.bitmap_margin_left_px))
+    bottom = (
+        baseline_y
+        + _bitmap_guide_anchor_descent(glyph)
+        - int(symbol.bitmap_margin_bottom_px)
+    )
+    top = float(bottom - height)
+    return QRectF(left, top, float(max(width, 1)), float(max(height, 1)))
+
+
+def _paint_bitmap_guide_glyph(
+    painter: QPainter,
+    glyph: _GlyphLayout,
+    baseline_y: int,
+    *,
+    after: bool,
+    band: tuple[int, int] | None,
+    rtl: bool,
+) -> None:
+    symbol = glyph.vector_glyph
+    if not _guide_symbol_is_bitmap(symbol):
+        return
+    image_path = (
+        symbol.bitmap_after_path
+        if after and symbol.bitmap_after_path
+        else symbol.bitmap_before_path
+    )
+    image = _bitmap_guide_image(image_path)
+    rect = _bitmap_guide_target_rect(glyph, baseline_y)
+    if image is None or rect is None or image.isNull():
+        return
+    painter.save()
+    try:
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        if after and band is not None:
+            painter.setClipRect(_horizontal_after_clip_rect(band, rtl))
+        painter.drawImage(rect, image)
+    finally:
+        painter.restore()
+
+
+def _bitmap_guide_band_for_segments(
+    fill_segments: list[_FillSegment],
+    glyph: _GlyphLayout,
+    t_ms: int,
+    rtl: bool,
+) -> tuple[int, int] | None:
+    band = _fill_clip_band_for_glyphs(
+        fill_segments, [glyph], t_ms, rtl
+    )
+    if band is None:
+        band = _fill_clip_band(fill_segments, t_ms, rtl)
+    following_band = _n3_following_wipe_band(
+        fill_segments, {glyph.index}, t_ms, rtl
+    )
+    if following_band is not None:
+        return following_band
+    return band
+
+
+def _bitmap_guide_band_for_glyph(
+    layout: _LineLayout,
+    glyph: _GlyphLayout,
+    t_ms: int,
+) -> tuple[int, int] | None:
+    return _bitmap_guide_band_for_segments(
+        layout.fill_segments, glyph, t_ms, layout.rtl
+    )
+
+
+def _paint_bitmap_guide_glyphs(
+    painter: QPainter,
+    layout: _LineLayout,
+    t_ms: int,
+    *,
+    after: bool,
+) -> None:
+    for glyph in _bitmap_guide_glyphs(layout.text_layout):
+        band = _bitmap_guide_band_for_glyph(layout, glyph, t_ms)
+        if after and band is None:
+            continue
+        _paint_bitmap_guide_glyph(
+            painter,
+            glyph,
+            layout.baseline_y,
+            after=after,
+            band=band,
+            rtl=layout.rtl,
+        )
+
+
+def _paint_bitmap_guide_transition_glyph(
+    painter: QPainter,
+    glyph: _GlyphLayout,
+    fill_segments: list[_FillSegment],
+    baseline_y: int,
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+    index: int,
+    t_ms: int,
+    transition: _LineCharTransition,
+    style: Style,
+    *,
+    rtl: bool,
+) -> None:
+    if not _glyph_is_bitmap_guide(glyph):
+        return
+    following_done_ms = (
+        _utopia_following_done_time(line, intervals, index, style)
+        if transition.effect == "utopia"
+        else None
+    )
+    char_start_ms = intervals[index][0] if index < len(intervals) else glyph.index
+    char_end_ms = intervals[index][1] if index < len(intervals) else char_start_ms
+    opacity = _transition_char_state(
+        style,
+        transition,
+        index,
+        max(len(line.chars), 1),
+        char_start_ms=char_start_ms,
+        char_end_ms=char_end_ms,
+        t_ms=t_ms,
+        frame_height=painter.device().height(),
+        following_done_ms=following_done_ms,
+    )[0]
+    if opacity <= 0.0:
+        return
+    band = _bitmap_guide_band_for_segments(fill_segments, glyph, t_ms, rtl)
+    painter.save()
+    try:
+        painter.setOpacity(painter.opacity() * opacity)
+        _paint_bitmap_guide_glyph(
+            painter, glyph, baseline_y, after=False, band=band, rtl=rtl
+        )
+        if band is not None:
+            _paint_bitmap_guide_glyph(
+                painter, glyph, baseline_y, after=True, band=band, rtl=rtl
+            )
+    finally:
+        painter.restore()
+
+
+@dataclass(frozen=True)
+class _BitmapGuideLayer:
+    glyph: _GlyphLayout
+    baseline_y: int
+    fill_segments: list
+    t_ms: int
+    rtl: bool
+    after: bool
+    z_index: int = 0
+    scope: str = SCOPE_LINE
+
+    def active_window(self, ctx: LayerContext) -> list[tuple[int, int]]:
+        return []
+
+    def layout(self, ctx: LayerContext) -> "_BitmapGuideLayer":
+        return self
+
+    def static_key(self, ctx: LayerContext, layout: object) -> None:
+        return None
+
+    def bake(self, ctx: LayerContext, layout: object, key: Hashable) -> BakedLayer:
+        return BakedLayer(image=QImage(), offset=QPointF())
+
+    def animate(self, ctx: LayerContext, layout: object) -> LayerAnimation:
+        return LayerAnimation()
+
+    def paint_dynamic(self, painter: QPainter, ctx: LayerContext, layout: object) -> None:
+        band = _bitmap_guide_band_for_segments(
+            self.fill_segments, self.glyph, self.t_ms, self.rtl
+        )
+        if self.after and band is None:
+            return
+        _paint_bitmap_guide_glyph(
+            painter,
+            self.glyph,
+            self.baseline_y,
+            after=self.after,
+            band=band,
+            rtl=self.rtl,
+        )
+
+    def vertical_bounds(self, ctx: LayerContext, layout: object) -> tuple[int, int] | None:
+        rect = _bitmap_guide_target_rect(self.glyph, self.baseline_y)
+        if rect is None:
+            return None
+        return int(math.floor(rect.top())), int(math.ceil(rect.bottom()))
 
 
 def _paint_glyph_run_direct(
@@ -8184,6 +8535,7 @@ def _paint_role_line_with_character_transition(
     *,
     rtl: bool = False,
     ink_x_ranges: list[tuple[int, int]] | None = None,
+    fill_segments: list[_FillSegment] | None = None,
 ) -> None:
     # 走字 ratio 按墨水边界算（与静态路径一致）；缺省回退 advance 框。
     fill_ranges = ink_x_ranges if ink_x_ranges is not None else char_x_ranges
@@ -8194,7 +8546,23 @@ def _paint_role_line_with_character_transition(
     for index in range(len(line.chars)):
         if index >= len(intervals) or index >= len(char_x_ranges):
             continue
-        if glyphs_by_index[index] is None:
+        layout_glyph = glyphs_by_index[index]
+        if layout_glyph is None:
+            continue
+        if _glyph_is_bitmap_guide(layout_glyph):
+            _paint_bitmap_guide_transition_glyph(
+                painter,
+                layout_glyph,
+                fill_segments or [],
+                baseline_y,
+                line,
+                intervals,
+                index,
+                t_ms,
+                transition,
+                style,
+                rtl=rtl,
+            )
             continue
 
         group = _utopia_main_group_for_index(active_rubies, line, intervals, index, groups=ruby_groups) if transition.effect == "utopia" else None
@@ -8563,6 +8931,7 @@ def _paint_line_with_character_transition(
     ink_x_ranges: list[tuple[int, int]] | None = None,
     glyphs_by_index: list[_GlyphLayout | None] | None = None,
     fill_rect: QRectF | None = None,
+    fill_segments: list[_FillSegment] | None = None,
 ) -> None:
     # 走字 ratio 按墨水边界算（与静态路径一致）；缺省回退 advance 框。
     fill_ranges = ink_x_ranges if ink_x_ranges is not None else char_x_ranges
@@ -8572,6 +8941,24 @@ def _paint_line_with_character_transition(
         glyphs_by_index = [None for _ in line.chars]
     for index, (ch, width) in enumerate(zip(line.chars, char_widths)):
         if index >= len(intervals) or index >= len(char_x_ranges):
+            continue
+        layout_glyph = (
+            glyphs_by_index[index] if index < len(glyphs_by_index) else None
+        )
+        if layout_glyph is not None and _glyph_is_bitmap_guide(layout_glyph):
+            _paint_bitmap_guide_transition_glyph(
+                painter,
+                layout_glyph,
+                fill_segments or [],
+                baseline_y,
+                line,
+                intervals,
+                index,
+                t_ms,
+                transition,
+                style,
+                rtl=rtl,
+            )
             continue
         group = _utopia_main_group_for_index(active_rubies, line, intervals, index, groups=ruby_groups) if transition.effect == "utopia" else None
         group_done_ms: int | None = None
@@ -9844,6 +10231,11 @@ def _karaoke_fill_segments(
     layout_x_ranges = layout_x_ranges or release_x_ranges
     index = 0
     while index < len(char_widths):
+        if index < len(line.chars) and _bitmap_guide_is_no_wipe(
+            line.chars[index].vector_glyph
+        ):
+            index += 1
+            continue
         ruby = _ruby_for_char_index(active_rubies, line, intervals, index)
         ruby_indices = (
             _ruby_target_indices(ruby, line, intervals) if ruby is not None else []
@@ -11546,10 +11938,12 @@ def resolved_guide_anchor_bounds_for_line(
     rendered geometry path and do not use this pre-resolved anchor.
     """
     line_style = _style_for_line(style, line)
+    guide_symbols = [line.guide_symbol, *line.inline_guide_symbols.values()]
     if (
         line_style.vertical
         or _line_has_role_labels(line)
         or (line.guide_symbol is None and not line.inline_guide_symbols)
+        or any(_guide_symbol_is_bitmap(symbol) for symbol in guide_symbols)
     ):
         return None
     font = _build_font(line_style)

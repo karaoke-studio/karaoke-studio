@@ -45,6 +45,7 @@ from krok_helper.subtitle_render.n3_font_scheme import (
 )
 from krok_helper.subtitle_render.models import (
     DEFAULT_OUTPUT_NAME_SUFFIX,
+    GuideSymbol,
     LineAnimationOverride,
     LyricsLayout,
     Style,
@@ -53,6 +54,7 @@ from krok_helper.subtitle_render.models import (
     TimingTrack,
     TitleOverlay,
     default_title_scheme,
+    guide_symbol_to_dict,
     line_animation_override_to_dict,
     style_to_dict,
     infer_image_sequence_pattern,
@@ -93,6 +95,7 @@ _UTOPIA_EXIT_MS = 750
 
 _BRACKET_LABEL_RE = re.compile(r"【[^】]*】")
 _BRACKETED_SCHEME_NAME_RE = re.compile(r"^【([^】]+)】(.*)$")
+_EMOJI_TAG_RE = re.compile(r"^@Emoji\d*=(.*)$", re.IGNORECASE)
 
 
 @dataclass
@@ -101,6 +104,20 @@ class N3ImportResult:
 
     project_data: dict
     warnings: list[str]
+
+
+@dataclass(frozen=True)
+class _N3EmojiSpec:
+    trigger: str
+    before_path: str
+    after_path: Optional[str] = None
+    zoom_percent: int = 100
+    fix_size: bool = False
+    no_decor: bool = False
+    force_wipe_decor: bool = False
+    margin_left_px: int = 0
+    margin_right_px: int = 0
+    margin_bottom_px: int = 0
 
 
 def is_n3proj_file(path: object) -> bool:
@@ -280,6 +297,8 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
     char_role_labels: Optional[list[Optional[list[Optional[str]]]]] = None
     line_animation_overrides: Optional[list[Optional[dict[str, object]]]] = None
     line_display_overrides: Optional[list[Optional[list[Optional[int]]]]] = None
+    line_guide_symbols: Optional[list[Optional[dict[str, object]]]] = None
+    line_inline_guide_symbols: Optional[list[Optional[dict[str, object]]]] = None
     extra_sources: list[dict[str, Any]] = []
     if lyrics_with_source:
         layout_limit = len(changes.get("layouts") or [])
@@ -297,12 +316,19 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
         changes.update(animation_changes)
         track = _load_track(subtitle_path, warnings)
         if track is not None:
+            emoji_specs = _parse_emoji_tags(
+                _emoji_tag_lines(lyrics_with_source[0], track),
+                subtitle_path.parent if subtitle_path is not None else base_dir,
+                warnings,
+            )
             (
                 line_layout_indices,
                 line_breaks_before,
                 char_role_labels,
                 line_animation_overrides,
                 line_display_overrides,
+                line_guide_symbols,
+                line_inline_guide_symbols,
             ) = _per_line_payloads(
                 line_infos,
                 track,
@@ -311,6 +337,7 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
                 font_names,
                 default_animation,
                 warnings,
+                emoji_specs,
             )
 
         # 副字幕源（コーラス等）：与主字幕同时渲染，逐源导入路径 / 每行布局 / 逐字配色。
@@ -329,12 +356,19 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
             extra_track = _load_track(extra_path, warnings)
             if extra_track is not None:
                 extra_line_infos = [_dict(item) for item in _list(info.get("LineInfos"))]
+                extra_emoji_specs = _parse_emoji_tags(
+                    _emoji_tag_lines(info, extra_track),
+                    extra_path.parent,
+                    warnings,
+                )
                 (
                     extra_layouts,
                     extra_breaks,
                     extra_roles,
                     extra_animations,
                     extra_display,
+                    extra_guides,
+                    extra_inline_guides,
                 ) = _per_line_payloads(
                     extra_line_infos,
                     extra_track,
@@ -343,6 +377,7 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
                     font_names,
                     default_animation,
                     warnings,
+                    extra_emoji_specs,
                 )
                 if extra_layouts is not None:
                     extra_payload["line_layout_indices"] = extra_layouts
@@ -354,6 +389,10 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
                     extra_payload["line_animation_overrides"] = extra_animations
                 if extra_display is not None:
                     extra_payload["line_display_overrides"] = extra_display
+                if extra_guides is not None:
+                    extra_payload["line_guide_symbols"] = extra_guides
+                if extra_inline_guides is not None:
+                    extra_payload["line_inline_guide_symbols"] = extra_inline_guides
             extra_sources.append(extra_payload)
 
     style = replace(Style(), **changes)
@@ -397,6 +436,10 @@ def load_n3proj(path: str | Path) -> N3ImportResult:
         project_data["line_animation_overrides"] = line_animation_overrides
     if line_display_overrides is not None:
         project_data["line_display_overrides"] = line_display_overrides
+    if line_guide_symbols is not None:
+        project_data["line_guide_symbols"] = line_guide_symbols
+    if line_inline_guide_symbols is not None:
+        project_data["line_inline_guide_symbols"] = line_inline_guide_symbols
     if extra_sources:
         project_data["extra_subtitle_sources"] = extra_sources
     return N3ImportResult(project_data=project_data, warnings=warnings)
@@ -510,6 +553,118 @@ def _resolve_media(
     missing = absolute_text or relative_text
     warnings.append(f"{label}文件不存在：{missing}")
     return Path(absolute_text) if absolute_text else base_dir / relative_text
+
+
+def _emoji_tag_lines(info: dict, track: Optional[TimingTrack]) -> list[str]:
+    lines: list[str] = []
+    for item in _list(info.get("AtTagsForSave")):
+        text = str(item).strip()
+        if text:
+            lines.append(text)
+    if track is not None:
+        lines.extend(
+            str(item).strip() for item in track.meta.custom if str(item).strip()
+        )
+    return lines
+
+
+def _resolve_emoji_image_path(path_text: str, base_dir: Path) -> Path:
+    path = Path(path_text)
+    return path if path.is_absolute() else base_dir / path
+
+
+def _parse_emoji_tags(
+    lines: list[str],
+    base_dir: Path,
+    warnings: list[str],
+) -> list[_N3EmojiSpec]:
+    specs: list[_N3EmojiSpec] = []
+    seen: set[str] = set()
+    for line in lines:
+        match = _EMOJI_TAG_RE.match(line.strip())
+        if match is None:
+            continue
+        parts = [
+            part.strip()
+            for part in match.group(1).replace("，", ",").split(",")
+        ]
+        if len(parts) < 2 or not parts[0] or not parts[1]:
+            warnings.append(f"N3 Emoji 标签格式无法识别：{line}")
+            continue
+        trigger = parts[0]
+        if trigger in seen:
+            continue
+        seen.add(trigger)
+        before = _resolve_emoji_image_path(parts[1], base_dir)
+        after = (
+            _resolve_emoji_image_path(parts[2], base_dir)
+            if len(parts) >= 3 and parts[2]
+            else None
+        )
+        if not before.is_file():
+            warnings.append(f"N3 Emoji 图片不存在：{before}")
+        if after is not None and not after.is_file():
+            warnings.append(f"N3 Emoji 后图片不存在：{after}")
+        zoom_percent = 100
+        fix_size = False
+        no_decor = False
+        force_wipe_decor = False
+        margin_left = 0
+        margin_right = 0
+        margin_bottom = 0
+        for raw_option in parts[3:]:
+            option = raw_option.strip()
+            if not option:
+                continue
+            key, sep, raw_value = option.partition("=")
+            key_lower = key.strip().lower()
+            value = raw_value.strip().rstrip("%")
+            if sep and key_lower == "zoom":
+                zoom_percent = max(_int(value, zoom_percent), 1)
+            elif key_lower == "fix":
+                fix_size = True
+            elif key_lower == "nodecor":
+                no_decor = True
+            elif key_lower == "forcewipedecor":
+                force_wipe_decor = True
+            elif sep and key_lower == "marginleft":
+                margin_left = _int(value, margin_left)
+            elif sep and key_lower == "marginright":
+                margin_right = _int(value, margin_right)
+            elif sep and key_lower == "marginbottom":
+                margin_bottom = _int(value, margin_bottom)
+        specs.append(
+            _N3EmojiSpec(
+                trigger=trigger,
+                before_path=str(before),
+                after_path=str(after) if after is not None else None,
+                zoom_percent=zoom_percent,
+                fix_size=fix_size,
+                no_decor=no_decor,
+                force_wipe_decor=force_wipe_decor,
+                margin_left_px=margin_left,
+                margin_right_px=margin_right,
+                margin_bottom_px=margin_bottom,
+            )
+        )
+    return specs
+
+
+def _emoji_guide_symbol(spec: _N3EmojiSpec, *, anchored: bool) -> GuideSymbol:
+    return GuideSymbol(
+        name=f"N3 Emoji {spec.trigger}",
+        kind="bitmap",
+        bitmap_before_path=spec.before_path,
+        bitmap_after_path=spec.after_path,
+        bitmap_zoom_percent=spec.zoom_percent,
+        bitmap_fix_size=spec.fix_size,
+        bitmap_no_decor=spec.no_decor,
+        bitmap_force_wipe_decor=spec.force_wipe_decor,
+        bitmap_margin_left_px=spec.margin_left_px,
+        bitmap_margin_right_px=spec.margin_right_px,
+        bitmap_margin_bottom_px=spec.margin_bottom_px,
+        prefix_timing="anchored" if anchored else "pre_roll",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -778,6 +933,69 @@ def _line_animation_signature(line: dict) -> Optional[tuple[str, int, str, int]]
     return None
 
 
+def _raw_n3_non_ruby_text(line: dict) -> str:
+    chars = [
+        _dict(char)
+        for char in _list(line.get("LyricsCharInfos"))
+        if not _dict(char).get("IsRuby")
+    ]
+    return "".join(str(char.get("Char") or "") for char in chars)
+
+
+def _source_text_offsets(line: TimingLine) -> dict[int, int]:
+    offsets: dict[int, int] = {}
+    position = 0
+    for index, char in enumerate(line.chars):
+        offsets[position] = index
+        position += len(char.text)
+    return offsets
+
+
+def _emoji_payload_for_line(
+    n3_line: dict,
+    n3_text: str,
+    our_line: TimingLine,
+    emoji_specs: list[_N3EmojiSpec],
+) -> tuple[Optional[dict[str, object]], Optional[dict[str, object]]]:
+    if not emoji_specs:
+        return None, None
+    raw_text = _raw_n3_non_ruby_text(n3_line)
+    text_offsets = _source_text_offsets(our_line)
+    guide_row: Optional[dict[str, object]] = None
+    inline_row: dict[str, object] = {}
+    for spec in emoji_specs:
+        if not spec.trigger:
+            continue
+        visible_at = n3_text.find(spec.trigger)
+        if visible_at >= 0:
+            char_index = text_offsets.get(visible_at)
+            key = str(char_index) if char_index is not None else ""
+            if (
+                char_index is not None
+                and key not in inline_row
+                and char_index < len(our_line.chars)
+                and our_line.chars[char_index].text == spec.trigger
+            ):
+                inline_row[key] = guide_symbol_to_dict(
+                    _emoji_guide_symbol(spec, anchored=False)
+                )
+            continue
+        if guide_row is None and raw_text.find(spec.trigger) >= 0:
+            role_label = our_line.singer_label or next(
+                (char.role_label for char in our_line.chars if char.role_label),
+                None,
+            )
+            symbol = _emoji_guide_symbol(spec, anchored=True)
+            if role_label:
+                symbol = replace(
+                    symbol,
+                    role_label=role_label,
+                    role_labels=(role_label,),
+                )
+            guide_row = guide_symbol_to_dict(symbol)
+    return guide_row, (inline_row or None)
+
+
 def _signature_changes(signature: tuple[str, int, str, int]) -> dict[str, Any]:
     entry, entry_ms, exit_, exit_ms = signature
     return {
@@ -818,12 +1036,15 @@ def _per_line_payloads(
     font_names: list[str],
     default_animation: tuple[str, int, str, int],
     warnings: list[str],
+    emoji_specs: list[_N3EmojiSpec] | None = None,
 ) -> tuple[
     Optional[list[int]],
     Optional[list[str]],
     Optional[list[Optional[list[Optional[str]]]]],
     Optional[list[Optional[dict[str, object]]]],
     Optional[list[Optional[list[Optional[int]]]]],
+    Optional[list[Optional[dict[str, object]]]],
+    Optional[list[Optional[dict[str, object]]]],
 ]:
     """对齐 N3 歌词行与本模块解析行，导出布局、分页与逐字配色。
 
@@ -844,13 +1065,13 @@ def _per_line_payloads(
             pending_break = "none"
     our_indexed = [(index, line) for index, line in enumerate(track.lines) if not line.is_blank]
     if not n3_lines:
-        return None, None, None, None, None
+        return None, None, None, None, None, None, None
     if len(n3_lines) != len(our_indexed):
         warnings.append(
             "歌词行数与 N3 项目记录不一致（歌词文件可能已改动），"
             "已跳过每行布局、分页与逐字配色导入"
         )
-        return None, None, None, None, None
+        return None, None, None, None, None, None, None
 
     raw_layout_indices = [
         index if 0 <= index <= layout_limit else 0
@@ -885,6 +1106,9 @@ def _per_line_payloads(
     role_payload: list[Optional[list[Optional[str]]]] = [None] * len(track.lines)
     animation_payload: list[Optional[dict[str, object]]] = [None] * len(track.lines)
     display_payload: list[Optional[list[Optional[int]]]] = [None] * len(track.lines)
+    guide_payload: list[Optional[dict[str, object]]] = [None] * len(track.lines)
+    inline_guide_payload: list[Optional[dict[str, object]]] = [None] * len(track.lines)
+    emoji_specs = emoji_specs or []
     mismatched = 0
     for (line_index, our_line), n3_line, break_before, page_layout_index in zip(
         our_indexed, n3_lines, n3_breaks_before, page_layout_indices
@@ -936,6 +1160,13 @@ def _per_line_payloads(
             labels.append(label)
             position += len(our_char.text)
         role_payload[line_index] = labels
+        guide_row, inline_row = _emoji_payload_for_line(
+            n3_line, n3_text, our_line, emoji_specs
+        )
+        if guide_row is not None:
+            guide_payload[line_index] = guide_row
+        if inline_row is not None:
+            inline_guide_payload[line_index] = inline_row
     if mismatched:
         warnings.append(f"{mismatched} 行歌词文本与 N3 项目记录不一致，这些行的布局与逐字配色未导入")
     return (
@@ -944,4 +1175,6 @@ def _per_line_payloads(
         role_payload,
         animation_payload if any(item is not None for item in animation_payload) else None,
         display_payload if any(item is not None for item in display_payload) else None,
+        guide_payload if any(item is not None for item in guide_payload) else None,
+        inline_guide_payload if any(item is not None for item in inline_guide_payload) else None,
     )

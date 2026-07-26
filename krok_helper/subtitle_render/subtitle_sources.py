@@ -22,12 +22,14 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import re
 import unicodedata
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
 from krok_helper.subtitle_render.models import (
+    GuideSymbol,
     RubyAnnotation,
     TimingChar,
     TimingLine,
@@ -41,6 +43,7 @@ from krok_helper.subtitle_render.models import (
 # 格式文件整篇匹配不到时间戳、正文被整体丢弃（漏字主因）。
 _TS_RE = re.compile(r"\[(\d+):(\d+)[:.](\d{2,3})\]")
 _SINGER_LABEL_RE = re.compile(r"【([^】]+)】")
+_EMOJI_TAG_RE = re.compile(r"^@Emoji\d*=(.*)$", re.IGNORECASE)
 # 尾部元数据边界：任意 ``@<key>=`` 行（@Title/@Artist/@Album/@TaggingBy/@SilencemSec/
 # @Offset/@RubyN/@Emoji/未知）都视为元数据起点。旧实现只认固定几个标签，导致 @Emoji
 # 等行被当成正文（幻影空行 + 丢失歌手定义）。正文行总以 ``【…】`` 或 ``[ts]`` 开头，
@@ -58,7 +61,10 @@ def load_nicokara_lrc(path: str | Path) -> TimingTrack:
     p = Path(path)
     raw = p.read_bytes()
     text = _decode_with_bom(raw)
-    return parse_nicokara_lrc(text)
+    track = parse_nicokara_lrc(text)
+    body_lines, _tail_lines = _split_body_tail(_normalized_lines(text))
+    _apply_emoji_guides(track, p.parent, body_lines)
+    return track
 
 
 def parse_nicokara_lrc(text: str) -> TimingTrack:
@@ -66,13 +72,7 @@ def parse_nicokara_lrc(text: str) -> TimingTrack:
 
     本函数假定输入已经是 ``str``（已去 BOM）。``load_nicokara_lrc`` 会负责 IO + 解码。
     """
-    text = _strip_bom(text)
-    raw_lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
-    # 末尾空行（来自 trailing newline）丢掉，避免误判尾部
-    if raw_lines and raw_lines[-1] == "":
-        raw_lines.pop()
-
-    body_lines, tail_lines = _split_body_tail(raw_lines)
+    body_lines, tail_lines = _split_body_tail(_normalized_lines(text))
 
     timing_lines = _parse_body_lines(body_lines)
     meta, rubies = _parse_tail(tail_lines)
@@ -99,6 +99,15 @@ def _strip_bom(text: str) -> str:
     return text
 
 
+def _normalized_lines(text: str) -> list[str]:
+    text = _strip_bom(text)
+    lines = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    # 末尾空行（来自 trailing newline）丢掉，避免误判尾部
+    if lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # 内部：body / tail 切分
 # ---------------------------------------------------------------------------
@@ -120,6 +129,132 @@ def _split_body_tail(lines: list[str]) -> Tuple[list[str], list[str]]:
     while boundary > 0 and lines[boundary - 1].strip() == "":
         boundary -= 1
     return lines[:boundary], lines[boundary:]
+
+
+def _apply_emoji_guides(
+    track: TimingTrack,
+    base_dir: Path,
+    body_lines: list[str],
+) -> None:
+    specs = _parse_emoji_specs(track.meta.custom, base_dir)
+    if not specs:
+        return
+    for line, raw_line in zip(track.lines, body_lines):
+        if line.is_blank or not line.chars:
+            continue
+        raw_text = str(raw_line)
+        for spec in specs:
+            trigger = spec["trigger"]
+            if not trigger or trigger not in raw_text:
+                continue
+            inline_index = _line_text_index(line, trigger)
+            if inline_index is not None:
+                line.inline_guide_symbols[inline_index] = _emoji_guide_symbol(
+                    spec, anchored=False
+                )
+                continue
+            if _trigger_matches_line_singer(trigger, line):
+                line.guide_symbol = replace(
+                    _emoji_guide_symbol(spec, anchored=True),
+                    role_label=line.singer_label,
+                    role_labels=(line.singer_label,),
+                )
+                break
+
+
+def _parse_emoji_specs(lines: Iterable[str], base_dir: Path) -> list[dict[str, object]]:
+    specs: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for line in lines:
+        match = _EMOJI_TAG_RE.match(str(line).strip())
+        if match is None:
+            continue
+        parts = [part.strip() for part in match.group(1).replace("，", ",").split(",")]
+        if len(parts) < 2 or not parts[0] or not parts[1]:
+            continue
+        trigger = parts[0]
+        if trigger in seen:
+            continue
+        seen.add(trigger)
+        before = _resolve_emoji_image(parts[1], base_dir)
+        after = _resolve_emoji_image(parts[2], base_dir) if len(parts) >= 3 and parts[2] else None
+        spec: dict[str, object] = {
+            "trigger": trigger,
+            "before": str(before),
+            "after": str(after) if after is not None else None,
+            "zoom": 100,
+            "fix": False,
+            "no_decor": False,
+            "force_wipe_decor": False,
+            "margin_left": 0,
+            "margin_right": 0,
+            "margin_bottom": 0,
+        }
+        for raw_option in parts[3:]:
+            option = raw_option.strip()
+            if not option:
+                continue
+            key, sep, raw_value = option.partition("=")
+            key_lower = key.strip().lower()
+            value = raw_value.strip().rstrip("%")
+            if sep and key_lower == "zoom":
+                spec["zoom"] = max(_parse_int(value, int(spec["zoom"])), 1)
+            elif key_lower == "fix":
+                spec["fix"] = True
+            elif key_lower == "nodecor":
+                spec["no_decor"] = True
+            elif key_lower == "forcewipedecor":
+                spec["force_wipe_decor"] = True
+            elif sep and key_lower == "marginleft":
+                spec["margin_left"] = _parse_int(value, int(spec["margin_left"]))
+            elif sep and key_lower == "marginright":
+                spec["margin_right"] = _parse_int(value, int(spec["margin_right"]))
+            elif sep and key_lower == "marginbottom":
+                spec["margin_bottom"] = _parse_int(value, int(spec["margin_bottom"]))
+        specs.append(spec)
+    return specs
+
+
+def _resolve_emoji_image(path_text: str, base_dir: Path) -> Path:
+    path = Path(path_text)
+    return path if path.is_absolute() else base_dir / path
+
+
+def _emoji_guide_symbol(spec: dict[str, object], *, anchored: bool) -> GuideSymbol:
+    trigger = str(spec.get("trigger") or "")
+    return GuideSymbol(
+        name=f"N3 Emoji {trigger}",
+        kind="bitmap",
+        bitmap_before_path=str(spec.get("before") or ""),
+        bitmap_after_path=str(spec.get("after") or "") or None,
+        bitmap_zoom_percent=max(int(spec.get("zoom") or 100), 1),
+        bitmap_fix_size=bool(spec.get("fix")),
+        bitmap_no_decor=bool(spec.get("no_decor")),
+        bitmap_force_wipe_decor=bool(spec.get("force_wipe_decor")),
+        bitmap_margin_left_px=int(spec.get("margin_left") or 0),
+        bitmap_margin_right_px=int(spec.get("margin_right") or 0),
+        bitmap_margin_bottom_px=int(spec.get("margin_bottom") or 0),
+        prefix_timing="anchored" if anchored else "pre_roll",
+    )
+
+
+def _trigger_matches_line_singer(trigger: str, line: TimingLine) -> bool:
+    return bool(line.singer_label) and trigger == f"【{line.singer_label}】"
+
+
+def _line_text_index(line: TimingLine, trigger: str) -> Optional[int]:
+    if not trigger:
+        return None
+    position = 0
+    text = "".join(char.text for char in line.chars)
+    found = text.find(trigger)
+    if found < 0:
+        return None
+    for index, char in enumerate(line.chars):
+        if position == found and char.text == trigger:
+            return index
+        position += len(char.text)
+    return None
 
 
 # ---------------------------------------------------------------------------

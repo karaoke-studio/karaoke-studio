@@ -68,6 +68,7 @@ struct TimingChar {
     bool explicitEnd = false;
     QString roleLabel;
     std::optional<krok::subtitle::native::VectorGlyph> vectorGlyph;
+    std::optional<krok::subtitle::native::BitmapGuide> bitmapGuide;
 };
 
 struct ResolvedLineLayout {
@@ -1117,6 +1118,52 @@ std::optional<krok::subtitle::native::VectorGlyph> parseVectorGlyph(
     return glyph.commands.empty()
         ? std::nullopt
         : std::optional<krok::subtitle::native::VectorGlyph>(std::move(glyph));
+}
+
+std::optional<krok::subtitle::native::BitmapGuide> parseBitmapGuide(
+    const QJsonValue &value
+) {
+    if (!value.isObject()) {
+        return std::nullopt;
+    }
+    const QJsonObject object = value.toObject();
+    const QString beforePath = stringValue(object, QStringLiteral("before_path"));
+    if (beforePath.isEmpty()) {
+        return std::nullopt;
+    }
+    krok::subtitle::native::BitmapGuide guide;
+    guide.beforePath = beforePath.toStdWString();
+    guide.afterPath = stringValue(object, QStringLiteral("after_path")).toStdWString();
+    guide.zoomPercent = static_cast<float>(std::clamp(
+        object.value(QStringLiteral("zoom_percent")).toDouble(100.0),
+        1.0,
+        500.0
+    ));
+    guide.fixSize = object.value(QStringLiteral("fix_size")).toBool(false);
+    guide.noDecor = object.value(QStringLiteral("no_decor")).toBool(false);
+    guide.forceWipeDecor = object.value(QStringLiteral("force_wipe_decor")).toBool(false);
+    guide.marginLeft = static_cast<float>(
+        object.value(QStringLiteral("margin_left_px")).toDouble(0.0)
+    );
+    guide.marginRight = static_cast<float>(
+        object.value(QStringLiteral("margin_right_px")).toDouble(0.0)
+    );
+    guide.marginBottom = static_cast<float>(
+        object.value(QStringLiteral("margin_bottom_px")).toDouble(0.0)
+    );
+    guide.beforeModifiedMs = static_cast<std::uint64_t>(
+        std::max(object.value(QStringLiteral("before_modified_ms")).toDouble(0.0), 0.0)
+    );
+    guide.beforeSize = static_cast<std::uint64_t>(
+        std::max(object.value(QStringLiteral("before_size")).toDouble(0.0), 0.0)
+    );
+    guide.afterModifiedMs = static_cast<std::uint64_t>(
+        std::max(object.value(QStringLiteral("after_modified_ms")).toDouble(0.0), 0.0)
+    );
+    guide.afterSize = static_cast<std::uint64_t>(
+        std::max(object.value(QStringLiteral("after_size")).toDouble(0.0), 0.0)
+    );
+    return guide;
 }
 
 void applyScalarStyleOverrides(ResolvedStyle &cfg, const QJsonObject &style) {
@@ -2511,6 +2558,9 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
                 ch.roleLabel = stringValue(charObject, QStringLiteral("role_label"));
                 ch.vectorGlyph = parseVectorGlyph(
                     charObject.value(QStringLiteral("vector_glyph"))
+                );
+                ch.bitmapGuide = parseBitmapGuide(
+                    charObject.value(QStringLiteral("bitmap_guide"))
                 );
                 line.chars.push_back(ch);
             }
@@ -7322,6 +7372,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 charEndMs(sourceLine, index) + sourceTimingOffset,
                 styleIndex,
                 sourceLine.chars[index].vectorGlyph,
+                sourceLine.chars[index].bitmapGuide,
             });
             line.chars.back().wipePoints = {
                 krok::subtitle::native::WipePoint{line.chars.back().startMs, 0.0f},
@@ -7547,6 +7598,8 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                         1000000000,
                         1000000001,
                         styleIndex,
+                        std::nullopt,
+                        std::nullopt,
                     });
                 }
                 scene.lineStyles.push_back(titleStyle);

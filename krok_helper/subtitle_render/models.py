@@ -70,6 +70,17 @@ class GuideSymbol:
     role_labels: tuple[Optional[str], ...] = ()
     replacement_prefix: tuple[str, ...] = ()
     """被导唱符替代的原始行首打轴单元；空元组表示在正文前额外插入。"""
+    kind: Literal["vector", "bitmap"] = "vector"
+    bitmap_before_path: Optional[str] = None
+    bitmap_after_path: Optional[str] = None
+    bitmap_zoom_percent: int = 100
+    bitmap_fix_size: bool = False
+    bitmap_no_decor: bool = False
+    bitmap_force_wipe_decor: bool = False
+    bitmap_margin_left_px: int = 0
+    bitmap_margin_right_px: int = 0
+    bitmap_margin_bottom_px: int = 0
+    prefix_timing: Literal["pre_roll", "anchored"] = "pre_roll"
 
 
 def guide_symbol_role_labels(symbol: GuideSymbol) -> tuple[Optional[str], ...]:
@@ -341,7 +352,10 @@ def timing_line_start_ms(line: TimingLine) -> int:
         return 0
     start = int(line.chars[0].start_ms)
     if line.guide_symbol is not None:
-        if line.guide_symbol.replacement_prefix:
+        if (
+            line.guide_symbol.replacement_prefix
+            or line.guide_symbol.prefix_timing == "anchored"
+        ):
             return start
         start -= (
             max(int(line.guide_symbol.duration_ms), 0)
@@ -1599,7 +1613,7 @@ def line_animation_override_from_dict(value: object) -> Optional[LineAnimationOv
 def guide_symbol_to_dict(symbol: Optional[GuideSymbol]) -> Optional[dict[str, object]]:
     if symbol is None:
         return None
-    return {
+    data: dict[str, object] = {
         "name": symbol.name,
         "path_commands": [list(command) for command in symbol.path_commands],
         "units_per_em": max(int(symbol.units_per_em), 1),
@@ -1610,13 +1624,41 @@ def guide_symbol_to_dict(symbol: Optional[GuideSymbol]) -> Optional[dict[str, ob
         "role_labels": [label or None for label in symbol.role_labels],
         "replacement_prefix": list(symbol.replacement_prefix),
     }
+    if symbol.kind != "vector" or symbol.bitmap_before_path:
+        data.update(
+            {
+                "kind": symbol.kind,
+                "bitmap_before_path": symbol.bitmap_before_path,
+                "bitmap_after_path": symbol.bitmap_after_path,
+                "bitmap_zoom_percent": max(int(symbol.bitmap_zoom_percent), 1),
+                "bitmap_fix_size": bool(symbol.bitmap_fix_size),
+                "bitmap_no_decor": bool(symbol.bitmap_no_decor),
+                "bitmap_force_wipe_decor": bool(symbol.bitmap_force_wipe_decor),
+                "bitmap_margin_left_px": int(symbol.bitmap_margin_left_px),
+                "bitmap_margin_right_px": int(symbol.bitmap_margin_right_px),
+                "bitmap_margin_bottom_px": int(symbol.bitmap_margin_bottom_px),
+                "prefix_timing": symbol.prefix_timing,
+            }
+        )
+    elif symbol.prefix_timing != "pre_roll":
+        data["prefix_timing"] = symbol.prefix_timing
+    return data
 
 
 def guide_symbol_from_dict(value: object) -> Optional[GuideSymbol]:
     if not isinstance(value, dict):
         return None
+    kind = str(value.get("kind") or "vector")
+    if kind not in {"vector", "bitmap"}:
+        kind = "vector"
     raw_commands = value.get("path_commands")
     if not isinstance(raw_commands, list):
+        if kind != "bitmap":
+            return None
+        raw_commands = []
+    before_path = str(value.get("bitmap_before_path") or "").strip() or None
+    after_path = str(value.get("bitmap_after_path") or "").strip() or None
+    if kind == "bitmap" and before_path is None:
         return None
     commands: list[tuple[object, ...]] = []
     expected_lengths = {"M": 3, "L": 3, "C": 7, "Q": 5, "Z": 1}
@@ -1624,18 +1666,25 @@ def guide_symbol_from_dict(value: object) -> Optional[GuideSymbol]:
         for raw in raw_commands:
             if not isinstance(raw, (list, tuple)) or not raw:
                 return None
-            kind = str(raw[0]).upper()
-            if len(raw) != expected_lengths.get(kind, -1):
+            command_kind = str(raw[0]).upper()
+            if len(raw) != expected_lengths.get(command_kind, -1):
                 return None
-            commands.append((kind, *(float(item) for item in raw[1:])))
+            commands.append((command_kind, *(float(item) for item in raw[1:])))
         units_per_em = max(int(value.get("units_per_em", 1000)), 1)
         advance_width = max(float(value.get("advance_width", units_per_em)), 0.0)
         duration_ms = max(int(value.get("duration_ms", 1000)), 0)
         count = max(int(value.get("count", 1)), 1)
+        zoom_percent = max(int(value.get("bitmap_zoom_percent", 100)), 1)
+        margin_left = int(value.get("bitmap_margin_left_px", 0))
+        margin_right = int(value.get("bitmap_margin_right_px", 0))
+        margin_bottom = int(value.get("bitmap_margin_bottom_px", 0))
     except (TypeError, ValueError):
         return None
-    if not commands:
+    if kind == "vector" and not commands:
         return None
+    prefix_timing = str(value.get("prefix_timing") or "pre_roll")
+    if prefix_timing not in {"pre_roll", "anchored"}:
+        prefix_timing = "pre_roll"
     role = value.get("role_label")
     raw_role_labels = value.get("role_labels")
     role_labels = (
@@ -1659,6 +1708,17 @@ def guide_symbol_from_dict(value: object) -> Optional[GuideSymbol]:
         role_label=str(role).strip() or None if role else None,
         role_labels=role_labels,
         replacement_prefix=replacement_prefix,
+        kind=kind,  # type: ignore[arg-type]
+        bitmap_before_path=before_path,
+        bitmap_after_path=after_path,
+        bitmap_zoom_percent=zoom_percent,
+        bitmap_fix_size=bool(value.get("bitmap_fix_size", False)),
+        bitmap_no_decor=bool(value.get("bitmap_no_decor", False)),
+        bitmap_force_wipe_decor=bool(value.get("bitmap_force_wipe_decor", False)),
+        bitmap_margin_left_px=margin_left,
+        bitmap_margin_right_px=margin_right,
+        bitmap_margin_bottom_px=margin_bottom,
+        prefix_timing=prefix_timing,  # type: ignore[arg-type]
     )
 
 

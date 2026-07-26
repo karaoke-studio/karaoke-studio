@@ -3157,6 +3157,112 @@ def test_gpu_g4_guide_symbols_follow_painter_vector_glyphs(
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_bitmap_guide_symbol_renders_during_utopia_exit(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from krok_helper.subtitle_render.engine import painter as subtitle_painter
+
+    monkeypatch.setattr(
+        subtitle_painter,
+        "resolved_guide_anchor_bounds_for_line",
+        lambda *_args, **_kwargs: (320, 321),
+    )
+    image_path = tmp_path / "avatar.png"
+    avatar = QImage(24, 18, QImage.Format.Format_RGBA8888)
+    avatar.fill(QColor(255, 0, 0, 255))
+    assert avatar.save(str(image_path))
+    symbol = GuideSymbol(
+        kind="bitmap",
+        bitmap_before_path=str(image_path),
+        bitmap_zoom_percent=120,
+        bitmap_no_decor=True,
+        bitmap_margin_right_px=6,
+        duration_ms=0,
+    )
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("\uFFFC", 1_000, vector_glyph=symbol),
+                    TimingChar("何", 1_000),
+                    TimingChar("度", 1_600),
+                ],
+                end_ms=2_400,
+            )
+        ],
+        rubies=[
+            RubyAnnotation("何度", "なんど", pos_start_ms=1_000, pos_end_ms=2_400)
+        ],
+    )
+    transparent = PaintFill(mode="solid", color="#00000000")
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=48,
+        dual_line_layout=False,
+        line_horizontal_layout="center",
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        exit_anim="utopia",
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(
+                text=PaintFill(mode="solid", color="#FFFFFFFF"),
+                stroke=transparent,
+                shadow=transparent,
+            ),
+            after=KaraokeColorState(text=PaintFill(mode="solid", color="#FF2040FF")),
+        ),
+    )
+    timestamps = (1_200, 1_900)
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, timestamps, force_warp=True, track=track
+        )
+
+    def red_pixels(payload: bytes) -> int:
+        return sum(
+            payload[index] > 200
+            and payload[index + 1] < 80
+            and payload[index + 2] < 80
+            and payload[index + 3] > 80
+            for index in range(0, len(payload), 4)
+        )
+
+    def red_bounds(payload: bytes) -> tuple[int, int, int, int]:
+        xs: list[int] = []
+        ys: list[int] = []
+        width = 640
+        for offset in range(0, len(payload), 4):
+            if (
+                payload[offset] > 200
+                and payload[offset + 1] < 80
+                and payload[offset + 2] < 80
+                and payload[offset + 3] > 80
+            ):
+                pixel = offset // 4
+                xs.append(pixel % width)
+                ys.append(pixel // width)
+        assert xs and ys
+        return min(xs), min(ys), max(xs), max(ys)
+
+    assert red_pixels(painter[0]) > 200
+    assert red_pixels(gpu[0]) > 200
+    gpu_red_bounds = red_bounds(gpu[0])
+    painter_red_bounds = red_bounds(painter[0])
+    assert abs(gpu_red_bounds[0] - painter_red_bounds[0]) <= 16
+    assert abs(gpu_red_bounds[3] - painter_red_bounds[3]) <= 8
+    assert red_pixels(painter[1]) > 0
+    assert red_pixels(gpu[1]) > 0
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g4_vertical_title_remains_in_screen_coordinates(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     track = TimingTrack(

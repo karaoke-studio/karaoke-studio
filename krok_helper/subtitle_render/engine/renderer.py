@@ -53,7 +53,10 @@ from krok_helper.subtitle_render.models import (
     timing_line_start_ms,
 )
 from krok_helper.subtitle_render.native_backend import NativeRendererError, resolve_native_renderer_path
-from krok_helper.subtitle_render.native_protocol import gpu_unsupported_features
+from krok_helper.subtitle_render.native_protocol import (
+    gpu_unsupported_feature_labels,
+    gpu_unsupported_features,
+)
 
 # A2 条带渲染：只把字幕所在窄条喂给 ffmpeg pipe，省每帧 8MB 拷贝 / pipe 带宽。
 # 条带 = 整段渲染里所有可见内容纵向范围的并集（单条覆盖，方案 A）。可用环境变量
@@ -157,7 +160,7 @@ def render_subtitle_video(
     elif gpu_fallback_reasons:
         logger(
             "当前工程包含 GPU 尚不识别的功能，已回退到 Painter 导出："
-            + ", ".join(gpu_fallback_reasons)
+            + ", ".join(gpu_unsupported_feature_labels(gpu_fallback_reasons))
         )
 
     # A2：预扫字幕纵向范围只渲染窄条（取消 / 关闭 / 无收益时退回整帧）。
@@ -556,7 +559,8 @@ def _native_export_requested(job: RenderJob) -> bool:
 
 
 def _gpu_export_enabled() -> bool:
-    return os.environ.get("KROK_SUBTITLE_GPU_EXPORT", "0").strip().lower() in (
+    default = "1" if os.name == "nt" else "0"
+    return os.environ.get("KROK_SUBTITLE_GPU_EXPORT", default).strip().lower() in (
         "1",
         "true",
         "yes",
