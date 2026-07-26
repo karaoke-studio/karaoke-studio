@@ -139,6 +139,66 @@ def test_blank_lines_collapse_to_one_section_boundary():
     ]
 
 
+def test_partial_pages_keep_the_base_row_default_layout():
+    base = Style()
+    custom_three = LyricsLayout(
+        name="三行加载布局",
+        layout_id="custom-three",
+        line_alignments=["left", "center", "right"],
+    )
+    style = ensure_page_layout_defaults(
+        replace(
+            base,
+            layouts=base.layouts + [custom_three],
+            default_layout_by_row_count={
+                **base.default_layout_by_row_count,
+                3: "custom-three",
+            },
+        )
+    )
+    track = _track(5)
+    plan = build_page_plan(
+        track,
+        SubtitleLoadingSettings(
+            time_gap_section_enabled=False,
+            blank_line_section_enabled=False,
+            rows_per_page=3,
+        ),
+        style,
+    )
+
+    assert [
+        (page.line_count, page.layout_id)
+        for section in plan.sections
+        for page in section.pages
+    ] == [(3, "custom-three"), (2, "custom-three")]
+
+
+def test_partial_pages_before_explicit_boundaries_keep_base_row_layout():
+    track = _track(4)
+    track.lines[1].break_before = "page"
+    track.lines[3].break_before = "paragraph"
+    style = ensure_page_layout_defaults(Style())
+
+    plan = build_page_plan(
+        track,
+        SubtitleLoadingSettings(
+            time_gap_section_enabled=False,
+            blank_line_section_enabled=False,
+            rows_per_page=3,
+        ),
+        style,
+    )
+
+    assert [
+        [(page.line_count, page.layout_id) for page in section.pages]
+        for section in plan.sections
+    ] == [
+        [(1, "builtin-3"), (2, "builtin-3")],
+        [(1, "builtin-3")],
+    ]
+
+
 def test_page_plan_round_trip_has_no_layout_source_state():
     plan = TrackPagePlan(
         [TrackSection([TrackPage(2, "default"), TrackPage(1, "builtin-1")])]

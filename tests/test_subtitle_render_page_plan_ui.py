@@ -95,7 +95,7 @@ def test_loading_settings_card_is_isolated_and_fully_described(qapp):
     assert dialog._gap_enabled.toolTip()
     assert dialog._gap_spin.toolTip()
     assert dialog._blank_enabled.toolTip()
-    assert dialog._rows_spin.toolTip()
+    assert "也使用 3 行默认布局" in dialog._rows_spin.toolTip()
     assert dialog._mode_combo.toolTip()
     assert dialog.result_value() == ("global", defaults)
     dialog.deleteLater()

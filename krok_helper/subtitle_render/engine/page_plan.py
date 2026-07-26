@@ -153,10 +153,11 @@ def build_page_plan(
         previous_line = line
     start_page()
 
+    base_layout_id = _default_layout_id(style, rows_per_page)
     sections: list[TrackSection] = []
     for counts in sections_counts:
         pages = [
-            TrackPage(count, _default_layout_id(style, count))
+            TrackPage(count, base_layout_id)
             for count in counts
             if count > 0
         ]

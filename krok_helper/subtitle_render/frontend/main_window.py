@@ -800,7 +800,8 @@ class _SubtitleLoadingSettingsDialog(QDialog):
         self._rows_spin.setToolTip(
             "在每个段落内按照指定行数依次建立页面，范围为 1～4。源文件中的显式"
             "分页仍会提前结束当前页；段落最后一页或显式分页前的页面允许不足指定"
-            "行数，并自动使用项目中对应行数的布局。"
+            "行数，但仍使用基础行数对应的项目默认布局。例如基础行数为 3 时，只有"
+            "1 行或 2 行的尾页也使用 3 行默认布局。"
         )
         form.addRow("每页基础行数", self._rows_spin)
         root.addLayout(form)
