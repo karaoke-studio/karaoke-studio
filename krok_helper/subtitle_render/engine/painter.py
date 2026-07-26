@@ -91,7 +91,7 @@ _RUN_GLOW_CACHE = LayerCache(max_items=128)
 # 值相同的两行也可能落在不同页。
 _LINE_LAYOUT_CACHE = LayerCache(max_items=48)
 _PAGE_PLACEMENT_CACHE_MAX = 24
-_PAGE_PLACEMENT_CACHE: "OrderedDict[tuple, dict[int, tuple[float, float]]]" = (
+_PAGE_PLACEMENT_CACHE: "OrderedDict[tuple, dict[int, tuple[tuple[int, int, float, float], ...]]]" = (
     OrderedDict()
 )
 
@@ -530,7 +530,7 @@ from krok_helper.subtitle_render.engine.page_plan import (
 from krok_helper.subtitle_render.engine.page_placement import (
     LineVisualBand,
     PageVisualBands,
-    solve_page_axis_offsets,
+    solve_page_axis_offset_windows,
 )
 from krok_helper.subtitle_render.engine.animator import line_animation_state
 from krok_helper.subtitle_render.engine.show_time import protect_time_ms
@@ -875,7 +875,7 @@ def _paint_track_to_painter(
             _layout_cache_sig(track, display_style) if display_lines else None
         )
         track_offsets = resolved_page_offsets_for_style(
-            logical_w, logical_h, track, display_style
+            logical_w, logical_h, track, display_style, t_ms=track_t_ms
         )
         line_offsets = {
             id(line): track_offsets.get(index, (0.0, 0.0))
@@ -1705,7 +1705,7 @@ def _subtitle_lines_vertical_bounds(
     )
     layout_cache_sig = _layout_cache_sig(track, style) if display_lines else None
     track_offsets = resolved_page_offsets_for_style(
-        logical_w, logical_h, track, style
+        logical_w, logical_h, track, style, t_ms=track_t_ms
     )
     line_offsets = {
         id(line): track_offsets.get(index, (0.0, 0.0))
@@ -1843,19 +1843,18 @@ def _display_line_vertical_bounds(
     return line_bounds[0] + dy, line_bounds[1] + dy
 
 
-def resolved_page_offsets_for_style(
+def resolved_page_offset_windows_for_style(
     logical_w: int,
     logical_h: int,
     track: TimingTrack,
     style: Style,
-) -> dict[int, tuple[float, float]]:
-    """Return stable per-track-line page translations for cross-page avoidance.
+) -> dict[int, tuple[tuple[int, int, float, float], ...]]:
+    """Return time-varying per-line page translations.
 
-    The result is derived from the complete display schedule, rather than the
-    current frame's visible subset, so a page does not jump when another row on
-    that page enters or exits.  Values stay in the pre-viewport logical canvas;
-    CPU and native/GPU consumers apply the same translation before the shared
-    viewport transform.
+    Each tuple is ``(start_ms, end_ms, offset_x, offset_y)`` in the pre-viewport
+    logical canvas.  Placement is recomputed whenever the visible line set
+    changes, so a page is not kept displaced by an older page after that older
+    page has fully disappeared.
     """
 
     if style.allow_inter_page_line_overlap or not style.dual_line_layout:
@@ -1869,7 +1868,7 @@ def resolved_page_offsets_for_style(
     cached = _PAGE_PLACEMENT_CACHE.get(cache_key)
     if cached is not None:
         _PAGE_PLACEMENT_CACHE.move_to_end(cache_key)
-        return dict(cached)
+        return {key: tuple(value) for key, value in cached.items()}
 
     display_lines = compute_display_lines(
         track,
@@ -1983,15 +1982,20 @@ def resolved_page_offsets_for_style(
                 anchor=anchor,
             )
         )
-    axis_offsets = solve_page_axis_offsets(
+    axis_windows = solve_page_axis_offset_windows(
         pages,
         viewport_min=0.0,
         viewport_max=float(logical_w if style.vertical else logical_h),
     )
     resolved = {
-        track_index: (
-            float(axis_offsets.get(page_id, 0.0)) if style.vertical else 0.0,
-            0.0 if style.vertical else float(axis_offsets.get(page_id, 0.0)),
+        track_index: tuple(
+            (
+                int(window.start_ms),
+                int(window.end_ms),
+                float(window.offset) if style.vertical else 0.0,
+                0.0 if style.vertical else float(window.offset),
+            )
+            for window in axis_windows.get(page_id, ())
         )
         for track_index, page_id in line_to_page.items()
     }
@@ -1999,7 +2003,44 @@ def resolved_page_offsets_for_style(
     _PAGE_PLACEMENT_CACHE.move_to_end(cache_key)
     while len(_PAGE_PLACEMENT_CACHE) > _PAGE_PLACEMENT_CACHE_MAX:
         _PAGE_PLACEMENT_CACHE.popitem(last=False)
-    return dict(resolved)
+    return {key: tuple(value) for key, value in resolved.items()}
+
+
+def resolved_page_offsets_for_style(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    style: Style,
+    *,
+    t_ms: int | None = None,
+) -> dict[int, tuple[float, float]]:
+    """Resolve the page translation active at ``t_ms`` for each track line.
+
+    ``t_ms=None`` keeps the older inspection API useful by returning the first
+    placement interval for each line.  Rendering consumers always pass the
+    current display time.
+    """
+
+    windows = resolved_page_offset_windows_for_style(
+        logical_w, logical_h, track, style
+    )
+    resolved: dict[int, tuple[float, float]] = {}
+    for track_index, items in windows.items():
+        selected: tuple[int, int, float, float] | None = None
+        if t_ms is None:
+            selected = items[0] if items else None
+        else:
+            selected = next(
+                (
+                    item
+                    for item in items
+                    if item[0] <= int(t_ms) < item[1]
+                ),
+                None,
+            )
+        if selected is not None:
+            resolved[track_index] = (selected[2], selected[3])
+    return resolved
 
 
 def _display_line_vertical_envelope(
@@ -2013,59 +2054,48 @@ def _display_line_vertical_envelope(
     *,
     layout_cache_sig: tuple | None,
 ) -> tuple[int, int] | None:
-    bounds: list[tuple[int, int]] = []
-    for sample_ms in _line_envelope_sample_times(display_line, style):
-        item = _display_line_vertical_bounds(
-            logical_w,
-            logical_h,
-            track,
-            sample_ms,
-            style,
-            display_line,
-            baselines,
-            line_layouts,
-            layout_cache_sig=layout_cache_sig,
-        )
-        if item is not None:
-            bounds.append(item)
-        if style.lit_enabled:
-            signal_bounds = _TEXT_RUN_COMPOSITOR.vertical_bounds(
-                LayerContext(
-                    t_ms=sample_ms,
-                    logical_w=logical_w,
-                    logical_h=logical_h,
-                ),
-                _signal_layer_stack(
-                    track,
-                    [display_line],
-                    baselines,
-                    logical_w,
-                    logical_h,
-                    sample_ms,
-                    style,
-                    line_layouts=line_layouts,
-                ),
-            )
-            if signal_bounds is not None:
-                bounds.append(signal_bounds)
-    if bounds:
-        return (
-            min(item[0] for item in bounds),
-            max(item[1] for item in bounds),
-        )
+    """Return the final static ink box used for placement collision checks.
 
+    Entry/exit and per-character animation trajectories intentionally do not
+    enlarge this box.  Main glyphs, Ruby and their visual decorations do.
+    """
+
+    line = display_line.line
     line_style = _style_for_line(style, display_line.line)
-    layout = line_layouts.get(id(display_line.line))
+    line_layout = line_layouts.get(id(line))
+    has_role_labels = _line_has_role_labels(line)
+    line_x = (
+        line_layout.text_x
+        if line_layout is not None and not has_role_labels
+        else None
+    )
+    layout = _layout_line(
+        track,
+        line,
+        line_style,
+        logical_w,
+        logical_h,
+        baseline_y=(
+            line_layout.baseline_y
+            if line_layout is not None
+            else baselines.get(display_line.lane, logical_h // 2)
+        ),
+        line_x=line_x,
+        lane=display_line.lane if line_style.dual_line_layout else None,
+        cache_sig=layout_cache_sig,
+    )
     if layout is None:
         return None
-    _main_h, main_ascent, main_descent, ruby_extra = _fixed_line_geometry(
-        line_style
+    sample_ms = _line_start_ms(line)
+    ctx = LayerContext(
+        t_ms=sample_ms,
+        logical_w=logical_w,
+        logical_h=logical_h,
     )
-    extent = _line_effect_extent(line_style, vertical_axis=True)
-    return (
-        int(math.floor(layout.baseline_y - main_ascent - ruby_extra - extent)),
-        int(math.ceil(layout.baseline_y + main_descent + extent)),
-    )
+    layers = _line_layer_stack(layout, sample_ms)
+    if layout.active_rubies and layout.ruby_metrics is not None:
+        layers.extend(_ruby_layer_stack(layout, line, sample_ms, line_style))
+    return _TEXT_RUN_COMPOSITOR.vertical_bounds(ctx, layers)
 
 
 def _display_line_horizontal_envelope(
@@ -2108,19 +2138,6 @@ def _display_line_horizontal_envelope(
     extent = _line_effect_extent(line_style, vertical_axis=False)
     left -= extent
     right += extent
-    animation_dx = [
-        line_animation_state(
-            line_style,
-            t_ms=sample_ms,
-            display_start_ms=display_line.display_start_ms,
-            display_end_ms=display_line.display_end_ms,
-            lane=display_line.lane,
-        ).dx
-        for sample_ms in _line_envelope_sample_times(display_line, line_style)
-    ]
-    if animation_dx:
-        left += min(animation_dx)
-        right += max(animation_dx)
     return int(math.floor(left)), int(math.ceil(right))
 
 

@@ -107,6 +107,7 @@ struct TimingLine {
     int lane = 0;
     double layoutOffsetX = 0.0;
     double layoutOffsetY = 0.0;
+    std::vector<krok::subtitle::native::PlacementWindow> placementWindows;
     std::optional<int> displayStartMs;
     std::optional<int> displayEndMs;
     std::optional<double> guideAnchorLeft;
@@ -2420,6 +2421,36 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
             line.layoutOffsetY = lineObject.value(
                 QStringLiteral("layout_offset_y")
             ).toDouble(0.0);
+            const QJsonArray placementWindows = lineObject.value(
+                QStringLiteral("layout_offset_windows")
+            ).toArray();
+            line.placementWindows.reserve(
+                static_cast<std::size_t>(placementWindows.size())
+            );
+            for (const QJsonValue &placementValue : placementWindows) {
+                const QJsonObject placement = placementValue.toObject();
+                const int startMs = intValue(
+                    placement, QStringLiteral("start_ms"), 0
+                );
+                const int endMs = intValue(
+                    placement, QStringLiteral("end_ms"), 0
+                );
+                if (endMs <= startMs) {
+                    continue;
+                }
+                line.placementWindows.push_back(
+                    krok::subtitle::native::PlacementWindow{
+                        startMs,
+                        endMs,
+                        static_cast<float>(placement.value(
+                            QStringLiteral("offset_x")
+                        ).toDouble(0.0)),
+                        static_cast<float>(placement.value(
+                            QStringLiteral("offset_y")
+                        ).toDouble(0.0)),
+                    }
+                );
+            }
             if (lineObject.value(QStringLiteral("display_start_ms")).isDouble()) {
                 line.displayStartMs = lineObject.value(
                     QStringLiteral("display_start_ms")
@@ -7342,6 +7373,17 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 *sourceLine.displayStartMs + sourceTimingOffset,
                 *sourceLine.displayEndMs + sourceTimingOffset,
             });
+        }
+        line.placementWindows.reserve(sourceLine.placementWindows.size());
+        for (const auto &window : sourceLine.placementWindows) {
+            line.placementWindows.push_back(
+                krok::subtitle::native::PlacementWindow{
+                    window.startMs + sourceTimingOffset,
+                    window.endMs + sourceTimingOffset,
+                    window.offsetX * static_cast<float>(scale),
+                    window.offsetY * static_cast<float>(scale),
+                }
+            );
         }
         line.chars.reserve(sourceLine.chars.size());
         for (std::size_t index = 0; index < sourceLine.chars.size(); ++index) {

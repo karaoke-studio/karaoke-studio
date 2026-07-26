@@ -33,6 +33,9 @@ from krok_helper.subtitle_render.models import (
     TimingTrack,
     TimingTrackMeta,
     TitleOverlay,
+    TrackPage,
+    TrackPagePlan,
+    TrackSection,
     style_from_dict,
 )
 from krok_helper.subtitle_render.n3proj_import import load_n3proj
@@ -3653,6 +3656,91 @@ def test_gpu_g4_directional_character_animations_follow_painter(
             abs(actual - expected) <= 20
             for actual, expected in zip(gpu_bounds, painter_bounds)
         ), (direction_changes, animation, t_ms, gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_cross_page_placement_window_follows_painter(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("OLD-A", 0)],
+                end_ms=500,
+                display_start_override_ms=0,
+                display_end_override_ms=1_000,
+            ),
+            TimingLine(
+                chars=[TimingChar("OLD-B", 0)],
+                end_ms=500,
+                display_start_override_ms=0,
+                display_end_override_ms=1_000,
+            ),
+            TimingLine(
+                chars=[TimingChar("NEW-A", 800)],
+                end_ms=1_300,
+                display_start_override_ms=800,
+                display_end_override_ms=2_000,
+            ),
+            TimingLine(
+                chars=[TimingChar("NEW-B", 800)],
+                end_ms=1_300,
+                display_start_override_ms=800,
+                display_end_override_ms=2_000,
+            ),
+        ],
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(2, "default"), TrackPage(2, "default")])]
+        ),
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=48,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=True,
+        line_y_position="bottom",
+        line_y_margin_px=40,
+        line_gap_px=20,
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        entry_anim="none",
+        exit_anim="none",
+    )
+    timestamps = (900, 1_200)
+    painter = [
+        _render_painter_oracle(
+            style, t_ms=t_ms, track=track, width=1280, height=720
+        )
+        for t_ms in timestamps
+    ]
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer,
+            style,
+            timestamps,
+            force_warp=True,
+            track=track,
+            width=1280,
+            height=720,
+        )
+
+    painter_bounds = [
+        _payload_alpha_bounds(frame, width=1280, height=720)
+        for frame in painter
+    ]
+    gpu_bounds = [
+        _payload_alpha_bounds(frame, width=1280, height=720)
+        for frame in gpu
+    ]
+    for actual, expected in zip(gpu_bounds, painter_bounds):
+        assert all(
+            abs(gpu_value - painter_value) <= 24
+            for gpu_value, painter_value in zip(actual, expected)
+        ), (actual, expected)
+    assert painter_bounds[1][1] > painter_bounds[0][1] + 40
+    assert gpu_bounds[1][1] > gpu_bounds[0][1] + 40
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

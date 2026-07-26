@@ -261,7 +261,7 @@ def test_build_render_ir_carries_painter_page_groups_for_native_smart_horizon():
     assert [line["page_line_count"] for line in lines] == [2, 2, 1]
 
 
-def test_build_render_ir_carries_shared_cross_page_layout_offsets():
+def test_build_render_ir_carries_shared_cross_page_layout_offset_windows():
     lines = [
         TimingLine(
             chars=[TimingChar(text, start)],
@@ -279,22 +279,31 @@ def test_build_render_ir_carries_shared_cross_page_layout_offsets():
     )
 
     ir_lines = build_render_ir(
-        track, Style(), width=640, height=360, fps=60
+        track, Style(), width=1280, height=720, fps=60
     )["track"]["lines"]
 
     assert ir_lines[0]["layout_offset_y"] == ir_lines[1]["layout_offset_y"] == 0
-    assert ir_lines[2]["layout_offset_y"] != 0
+    assert ir_lines[2]["layout_offset_y"] == 0
     assert all(line["layout_offset_x"] == 0 for line in ir_lines)
+    assert ir_lines[0]["layout_offset_windows"][0]["offset_y"] == 0
+    assert ir_lines[1]["layout_offset_windows"][0]["offset_y"] == 0
+    assert ir_lines[2]["layout_offset_windows"][0]["offset_y"] != 0
+    assert all(
+        window["start_ms"] == 0 and window["end_ms"] == 5_000
+        for line in ir_lines
+        for window in line["layout_offset_windows"]
+    )
 
     legacy_lines = build_render_ir(
         track,
         Style(allow_inter_page_line_overlap=True),
-        width=640,
-        height=360,
+        width=1280,
+        height=720,
         fps=60,
     )["track"]["lines"]
     assert all(line["layout_offset_x"] == 0 for line in legacy_lines)
     assert all(line["layout_offset_y"] == 0 for line in legacy_lines)
+    assert all(not line["layout_offset_windows"] for line in legacy_lines)
 
 
 def test_build_render_ir_resolves_guide_symbols_with_painter_semantics():

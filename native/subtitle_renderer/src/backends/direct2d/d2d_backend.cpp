@@ -1003,6 +1003,7 @@ struct Direct2DGpuBackend::Impl {
         int exitDurationMs = 0;
         std::string karaokeAnimation = "none";
         std::vector<DisplayWindow> displayWindows;
+        std::vector<PlacementWindow> placementWindows;
         TextStyle style;
         float ascent = 0.0f;
         float descent = 0.0f;
@@ -1696,6 +1697,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         cached.exitDurationMs = sourceLine.exitDurationMs;
         cached.karaokeAnimation = sourceLine.karaokeAnimation;
         cached.displayWindows = sourceLine.displayWindows;
+        cached.placementWindows = sourceLine.placementWindows;
         DWRITE_FONT_METRICS laneMetrics{};
         mainFace->GetMetrics(&laneMetrics);
         const int laneFontSize = referenceInt(style.fontSize, 1);
@@ -3967,6 +3969,15 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         )
       )) {
         const LineAnimationState animation = lineAnimationAt(*line);
+        float placementOffsetX = 0.0f;
+        float placementOffsetY = 0.0f;
+        for (const PlacementWindow &window : line->placementWindows) {
+            if (tMs >= window.startMs && tMs < window.endMs) {
+                placementOffsetX = window.offsetX;
+                placementOffsetY = window.offsetY;
+                break;
+            }
+        }
         if (animation.opacity <= 0.0f) {
             continue;
         }
@@ -4754,8 +4765,8 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         float dx = alignedDx(
             line->hasInlineStyles ? lyricLeft : unionLeft,
             line->hasInlineStyles ? lyricRight : unionRight
-        );
-        float signalDx = alignedDx(unionLeft, unionRight);
+        ) + placementOffsetX;
+        float signalDx = alignedDx(unionLeft, unionRight) + placementOffsetX;
         // N3 applies SmartHorizon after ordinary lane alignment.  Page ids
         // come from the same assign_lanes result used by the Painter oracle,
         // so invisible siblings still contribute to page-wide width maxima.
@@ -4935,7 +4946,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             dy += animation.dy;
         }
         if (!style.vertical) {
-            dy += style.layoutOffsetY;
+            dy += style.layoutOffsetY + placementOffsetY;
         }
         auto visualVerticalPadding = [](const TextStyle &item, bool ruby) {
             const float stroke = ruby

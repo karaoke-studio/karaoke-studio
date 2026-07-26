@@ -46,6 +46,15 @@ class PageVisualBands:
     anchor: PageAnchor = "end"
 
 
+@dataclass(frozen=True)
+class AxisOffsetWindow:
+    """One half-open display interval with a resolved page translation."""
+
+    start_ms: int
+    end_ms: int
+    offset: float
+
+
 def time_windows_overlap(left: LineVisualBand, right: LineVisualBand) -> bool:
     """Return whether two half-open display windows intersect."""
 
@@ -97,6 +106,97 @@ def solve_page_axis_offsets(
     return offsets
 
 
+def solve_page_axis_offset_windows(
+    pages: Sequence[PageVisualBands],
+    *,
+    viewport_min: float,
+    viewport_max: float,
+) -> dict[Hashable, tuple[AxisOffsetWindow, ...]]:
+    """Resolve page translations independently for each visible time interval.
+
+    A page that was displaced by an older page can return towards its authored
+    position as soon as that older page is no longer displayed.  Within every
+    interval the complete currently visible bands are solved together, so an
+    already displaced page remains part of collision detection for later pages.
+    """
+
+    event_times = sorted(
+        {
+            int(time_ms)
+            for page in pages
+            for band in page.bands
+            for time_ms in (band.display_start_ms, band.display_end_ms)
+            if int(band.display_end_ms) > int(band.display_start_ms)
+        }
+    )
+    resolved: dict[Hashable, list[AxisOffsetWindow]] = {
+        page.page_id: [] for page in pages
+    }
+    for start_ms, end_ms in zip(event_times, event_times[1:]):
+        if end_ms <= start_ms:
+            continue
+        active_pages: list[PageVisualBands] = []
+        for page in pages:
+            active_bands = tuple(
+                band
+                for band in page.bands
+                if int(band.display_start_ms) < end_ms
+                and int(band.display_end_ms) > start_ms
+            )
+            if active_bands:
+                active_pages.append(
+                    PageVisualBands(
+                        page_id=page.page_id,
+                        bands=active_bands,
+                        gap_px=page.gap_px,
+                        anchor=page.anchor,
+                    )
+                )
+        if not active_pages:
+            continue
+        offsets = solve_page_axis_offsets(
+            active_pages,
+            viewport_min=viewport_min,
+            viewport_max=viewport_max,
+        )
+        for page in active_pages:
+            _append_offset_window(
+                resolved[page.page_id],
+                start_ms,
+                end_ms,
+                offsets.get(page.page_id, 0.0),
+            )
+    return {key: tuple(value) for key, value in resolved.items()}
+
+
+def _append_offset_window(
+    windows: list[AxisOffsetWindow],
+    start_ms: int,
+    end_ms: int,
+    offset: float,
+) -> None:
+    value = float(offset)
+    if (
+        windows
+        and windows[-1].end_ms == int(start_ms)
+        and abs(windows[-1].offset - value) <= 1e-6
+    ):
+        previous = windows[-1]
+        windows[-1] = AxisOffsetWindow(
+            start_ms=previous.start_ms,
+            end_ms=int(end_ms),
+            offset=previous.offset,
+        )
+        return
+    windows.append(
+        AxisOffsetWindow(
+            start_ms=int(start_ms),
+            end_ms=int(end_ms),
+            offset=value,
+        )
+    )
+
+
 def _normalized_band(item: LineVisualBand) -> LineVisualBand:
     if item.axis_min <= item.axis_max:
         return item
@@ -126,33 +226,51 @@ def _choose_offset(
     page_max = max(item.axis_max for item in bands)
     lower = viewport_min - page_min
     upper = viewport_max - page_max
-    if lower > upper:
-        # A page taller/wider than the viewport cannot fit.  Keep its authored
-        # centre in the viewport and let the minimum-overlap scorer handle it.
-        midpoint = ((viewport_min + viewport_max) - (page_min + page_max)) / 2.0
-        lower = upper = midpoint
 
     candidates = {0.0, lower, upper}
     for incoming, previous in pairs:
         candidates.add(previous.axis_min - gap - incoming.axis_max)
         candidates.add(previous.axis_max + gap - incoming.axis_min)
+        candidates.add(previous.axis_min - incoming.axis_max)
+        candidates.add(previous.axis_max - incoming.axis_min)
 
-    clamped = {_clamp(value, lower, upper) for value in candidates}
-    valid = [
+    directional = {
+        float(value)
+        for value in candidates
+        if _direction_penalty(float(value), anchor) == 0
+    }
+    if not directional:
+        directional = {0.0}
+    gap_valid = [
         value
-        for value in clamped
+        for value in directional
         if all(_separation_deficit(incoming, previous, value, gap) <= 0.0
                for incoming, previous in pairs)
     ]
-    pool = valid if valid else list(clamped)
+    pixel_valid = [
+        value
+        for value in directional
+        if all(_pixel_overlap(incoming, previous, value) <= 0.0
+               for incoming, previous in pairs)
+    ]
+    pool = gap_valid if gap_valid else pixel_valid if pixel_valid else list(directional)
     return min(
         pool,
         key=lambda value: _offset_score(
             value,
             pairs,
+            bands=bands,
             gap=gap,
             anchor=anchor,
-            require_overlap_score=not valid,
+            viewport_min=viewport_min,
+            viewport_max=viewport_max,
+            placement_level=(
+                "gap"
+                if gap_valid
+                else "pixel"
+                if pixel_valid
+                else "overlap"
+            ),
         ),
     )
 
@@ -161,24 +279,53 @@ def _offset_score(
     offset: float,
     pairs: Sequence[tuple[LineVisualBand, LineVisualBand]],
     *,
+    bands: Sequence[LineVisualBand],
     gap: float,
     anchor: PageAnchor,
-    require_overlap_score: bool,
-) -> tuple[float, int, float, float, float]:
+    viewport_min: float,
+    viewport_max: float,
+    placement_level: Literal["gap", "pixel", "overlap"],
+) -> tuple[float, ...]:
     deficits = [
         _separation_deficit(incoming, previous, offset, gap)
         for incoming, previous in pairs
     ]
-    total = sum(value for value in deficits if value > 0.0)
-    count = sum(value > 0.0 for value in deficits)
+    pixel_overlaps = [
+        _pixel_overlap(incoming, previous, offset)
+        for incoming, previous in pairs
+    ]
+    gap_total = sum(value for value in deficits if value > 0.0)
+    gap_count = sum(value > 0.0 for value in deficits)
+    pixel_total = sum(value for value in pixel_overlaps if value > 0.0)
+    pixel_count = sum(value > 0.0 for value in pixel_overlaps)
     direction_penalty = _direction_penalty(offset, anchor)
-    if require_overlap_score:
-        # When no perfect placement exists, preserve the product order:
-        # overlap amount, conflicting pair count, distance, direction.
-        return total, count, abs(offset), direction_penalty, offset
-    # For valid placements the page anchor decides the preferred direction,
-    # then the nearest placement wins.  The raw offset is a stable final tie.
-    return 0.0, 0, direction_penalty, abs(offset), offset
+    overflow = _viewport_overflow(
+        bands, offset, viewport_min=viewport_min, viewport_max=viewport_max
+    )
+    if placement_level == "overlap":
+        # If the viewport cannot contain all active ink, minimize actual painted
+        # intersection first.  Missing the requested gap is less severe than
+        # drawing two glyph/effect envelopes over each other.
+        return (
+            pixel_total,
+            pixel_count,
+            gap_total,
+            gap_count,
+            overflow,
+            abs(offset),
+            direction_penalty,
+            offset,
+        )
+    if placement_level == "pixel":
+        return (
+            gap_total,
+            gap_count,
+            direction_penalty,
+            overflow,
+            abs(offset),
+            offset,
+        )
+    return direction_penalty, overflow, abs(offset), offset
 
 
 def _direction_penalty(offset: float, anchor: PageAnchor) -> int:
@@ -207,8 +354,28 @@ def _separation_deficit(
     )
 
 
-def _clamp(value: float, lower: float, upper: float) -> float:
-    return min(max(float(value), lower), upper)
+def _pixel_overlap(
+    incoming: LineVisualBand,
+    previous: LineVisualBand,
+    offset: float,
+) -> float:
+    return max(
+        min(incoming.axis_max + offset, previous.axis_max)
+        - max(incoming.axis_min + offset, previous.axis_min),
+        0.0,
+    )
+
+
+def _viewport_overflow(
+    bands: Sequence[LineVisualBand],
+    offset: float,
+    *,
+    viewport_min: float,
+    viewport_max: float,
+) -> float:
+    page_min = min(item.axis_min for item in bands) + offset
+    page_max = max(item.axis_max for item in bands) + offset
+    return max(viewport_min - page_min, 0.0) + max(page_max - viewport_max, 0.0)
 
 
 def shifted_bands(

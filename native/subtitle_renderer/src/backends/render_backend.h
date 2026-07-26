@@ -202,6 +202,14 @@ struct DisplayWindow {
     bool operator==(const DisplayWindow &) const = default;
 };
 
+struct PlacementWindow {
+    int startMs = 0;
+    int endMs = 0;
+    float offsetX = 0.0f;
+    float offsetY = 0.0f;
+    bool operator==(const PlacementWindow &) const = default;
+};
+
 struct TextLine {
     std::vector<TextChar> chars;
     std::vector<TextRuby> rubies;
@@ -224,6 +232,7 @@ struct TextLine {
     int exitDurationMs = 0;
     std::string karaokeAnimation = "none";
     std::vector<DisplayWindow> displayWindows;
+    std::vector<PlacementWindow> placementWindows;
     bool operator==(const TextLine &) const = default;
 };
 

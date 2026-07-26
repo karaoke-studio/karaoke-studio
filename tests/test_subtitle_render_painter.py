@@ -8544,11 +8544,18 @@ def test_cross_page_placement_is_rigid_and_does_not_rewrite_time(qapp):
     )
     normal = Style()
     legacy = replace(normal, allow_inter_page_line_overlap=True)
+    animated = replace(
+        normal,
+        entry_anim="utopia",
+        entry_lead_ms=800,
+        exit_anim="spin_flip",
+        exit_fade_ms=800,
+    )
 
     normal_windows = subtitle_painter.display_windows_for_style(track, normal)
     legacy_windows = subtitle_painter.display_windows_for_style(track, legacy)
     offsets = subtitle_painter.resolved_page_offsets_for_style(
-        640, 360, track, normal
+        1280, 720, track, normal
     )
 
     assert normal_windows == {index: (0, 5_000) for index in range(4)}
@@ -8556,6 +8563,11 @@ def test_cross_page_placement_is_rigid_and_does_not_rewrite_time(qapp):
     assert offsets[0] == offsets[1] == (0.0, 0.0)
     assert offsets[2] == offsets[3]
     assert offsets[2] != (0.0, 0.0)
+    assert subtitle_painter.resolved_page_offset_windows_for_style(
+        1280, 720, track, animated
+    ) == subtitle_painter.resolved_page_offset_windows_for_style(
+        1280, 720, track, normal
+    )
     assert subtitle_painter.resolved_page_offsets_for_style(
-        640, 360, track, legacy
+        1280, 720, track, legacy
     ) == {}
