@@ -74,7 +74,7 @@ C:\Python314\python.exe scripts\release.py prepare X.Y.Z
 脚本会同步 [`krok_helper/config.py`](../krok_helper/config.py) 的 `APP_VERSION`、
 [`README.md`](../README.md) 顶部「当前版本」，并在 CHANGELOG 插入当天的中文占位段。
 
-### 4.4 补全 CHANGELOG 并生成 release notes
+### 4.4 补全 CHANGELOG 并校验 release notes
 
 按 §6 补全新版本段，删除没有内容的分类及所有「待补充」文本，然后运行：
 
@@ -82,8 +82,10 @@ C:\Python314\python.exe scripts\release.py prepare X.Y.Z
 C:\Python314\python.exe scripts\release.py notes X.Y.Z
 ```
 
-生成 `dist/release-notes-vX.Y.Z.md`，并打印 CI 完成后要执行的
-`gh release edit` 命令。该文件是本地发版产物，不入库。
+生成 `dist/release-notes-vX.Y.Z.md`，用于在打 tag 前校验最终的中文 Release
+正文。该文件是本地发版产物，不入库。CI 的 Publish Release job 会从 tag
+checkout 的 `CHANGELOG.md` 自动提取同一版本段，并在创建 Release 时直接写入
+中文正文。
 
 ### 4.5 Commit
 
@@ -133,7 +135,7 @@ $env:QT_QPA_PLATFORM='offscreen'
 C:\Python314\python.exe scripts\release.py prepare X.Y.Z.N
 ```
 
-### 5.4 补全 CHANGELOG 并生成 release notes
+### 5.4 补全 CHANGELOG 并校验 release notes
 
 补全新版本段。**必须**额外有一行：`更新 StrangeUtaGame 子模块到 SUGvX.Y.Z`
 （或短 SHA），第一段标注「仅 submodule 同步，主程序代码无改动」。然后运行：
@@ -206,14 +208,16 @@ gh run list --workflow=release.yml --limit 3
 
 ---
 
-## 8. 覆盖 release body 为中文
+## 8. Release body 中文校验
 
-> Workflow 配的是 `generate_release_notes: true`，默认 body 是英文 `compare/...` 链接。**主程序更新弹窗会直接展示 body**，必须在 CI 完成后立刻覆盖。
+> Publish Release job 会调用 `scripts/release.py notes`，按 tag 版本从
+> `CHANGELOG.md` 提取正文，并通过 `body_path` 直接创建中文 Release。
+> **主程序更新弹窗会直接展示 body**，所以打 tag 前必须确认对应版本段完整且为中文。
 
 ```powershell
-# §4.4 / §5.4 的 notes 命令会打印含实际版本和路径的可执行命令
-gh release edit vX.Y.Z[.N] --notes-file dist/release-notes-vX.Y.Z[.N].md
-gh release view vX.Y.Z[.N] --json body --jq .body   # 验证一下
+python scripts/release.py notes X.Y.Z[.N]
+# CI 发布完成后验证
+gh release view vX.Y.Z[.N] --json body --jq .body
 ```
 
 `dist/release-notes-*.md` 不入库。

@@ -167,8 +167,8 @@ def cmd_notes(version: str, output: Path | None = None) -> int:
     except ValueError:
         display_path = path
     print(f"已写入中文 release notes：{display_path}")
-    print(f"CI 创建 Release 后立即执行：gh release edit v{version} --notes-file \"{display_path}\"")
-    print(f"验证：gh release view v{version} --json body --jq .body")
+    print("CI 会从 CHANGELOG.md 自动提取同一版本段并写入 GitHub Release。")
+    print(f"发布后验证：gh release view v{version} --json body --jq .body")
     return 0
 
 

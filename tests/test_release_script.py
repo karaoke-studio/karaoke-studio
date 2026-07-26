@@ -78,7 +78,9 @@ def test_notes_extracts_only_requested_chinese_section(release_mod, tmp_path, ca
     notes = output.read_text(encoding="utf-8")
     assert "补齐工作台" in notes
     assert "[3.1.7.4]" not in notes
-    assert "gh release edit v3.2.0 --notes-file" in capsys.readouterr().out
+    output_text = capsys.readouterr().out
+    assert "CI 会从 CHANGELOG.md 自动提取同一版本段" in output_text
+    assert "gh release view v3.2.0" in output_text
 
 
 def test_notes_missing_section_raises(release_mod):

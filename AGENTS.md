@@ -127,7 +127,7 @@ git submodule status
   - **流程 A · 工作台更新**：SemVer 3 段 bump（`3.0.2 → 3.0.3` 等）。
   - **流程 B · Submodule 更新**：第 4 段递增（`3.0.2 → 3.0.2.1`）。
 - Tag 格式 `vX.Y.Z[.N]`，push tag 触发 [`.github/workflows/release.yml`](.github/workflows/release.yml) 自动打包+发 release。
-- CI 默认 release body 是英文，**必须用 `gh release edit --notes-file` 覆盖成中文**，否则更新弹窗会给用户看英文 compare 链接。
+- CI 会从 `CHANGELOG.md` 自动提取当前 tag 对应的中文 release body；打 tag 前必须运行 notes 命令校验，避免更新弹窗展示错误内容。
 - 改 `APP_VERSION` 时同时改 [`README.md`](README.md) 顶部「当前版本」（容易漏）。
 - 发版准备统一运行 `python scripts/release.py prepare X.Y.Z[.N]`；补全 CHANGELOG 后运行 `python scripts/release.py notes X.Y.Z[.N]` 生成中文 release body。详见 [`docs/release-process.md`](docs/release-process.md)。
 
@@ -148,7 +148,7 @@ git submodule status
 2. **构建脚本和 workflow 资产名要对齐**：`scripts\build_windows.bat` 产出 `KaraokeStudio-windows.zip` + `.sha256`，workflow 直接 upload；不要在 workflow 里再加一层 `Compress-Archive`，会覆盖出错误的 zip。
 3. **macOS 构建**：build script 只输出 `.app`，workflow 用 `ditto -c -k --sequesterRsrc --keepParent` 打 zip。
 4. **macOS 构建过程会临时改 `strange_uta_game/__version__.py` 的 `VARIANT` 为 `"mac"`**，脚本有 `trap` 恢复（[`scripts/build_macos.command`](scripts/build_macos.command) 第 162-170 行）。如果中断了，手工还原 SUG。
-5. **`generate_release_notes: true` 会在 release 创建时立刻生成英文 body**，所以 `gh release edit` 必须在 CI 跑完后**立刻**做，免得用户先看到英文。
+5. **Release body 直接来自当前 tag 的 `CHANGELOG.md` 版本段**；不得恢复 `generate_release_notes: true`，否则更新弹窗会展示英文 compare 链接。
 6. **不要 `--force` push 已经发布过 release 的 tag**——已经下载过的用户的客户端不会重拉。
 7. **README 版本号容易漏改**——`APP_VERSION` 与 README 顶部「当前版本」必须同步。
 8. **Qt6\bin 自带的旧 MSVC 运行时会让打包应用无声闪退**——某些 PyQt6-Qt6 wheel 在

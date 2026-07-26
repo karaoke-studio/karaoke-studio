@@ -112,6 +112,15 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
 
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate Chinese release notes
+        shell: bash
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          python3 scripts/release.py notes "$version" --output release-notes.md
+
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
@@ -127,7 +136,7 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body_path: release-notes.md
           files: |
             release-assets/windows/KaraokeStudio-windows.zip
             release-assets/windows/KaraokeStudio-windows.zip.sha256

@@ -167,8 +167,9 @@ runtime 内容哈希、迫使所有用户重下运行库。
    `dist/release-notes-vX.Y.Z[.N].md` 为完整中文内容。
 7. 完成 release commit，推送 `main`，再创建并推送 `vX.Y.Z[.N]` tag。
 8. 监控 release workflow 三个 job 全绿，并核对 Windows 7 个资产及 macOS 全量 zip。
-9. CI 创建 Release 后，立即执行脚本打印的 `gh release edit ... --notes-file ...`，
-   再用 `gh release view ... --json body --jq .body` 验证中文 body。
+9. CI 的 Publish Release job 会从当前 tag 的 `CHANGELOG.md` 自动提取中文正文，
+   并在创建 Release 时通过 `body_path` 直接写入；再用
+   `gh release view ... --json body --jq .body` 验证中文 body。
 10. 从旧版客户端验收更新。增量 + 自更新首发必须额外验证「无本地清单的首次增量」：
     下载 app + runtime、写入清单、重启成功，并检查 updater.log。
 
