@@ -33,7 +33,6 @@ from PyQt6.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
     QEvent,
-    QEventLoop,
     QPropertyAnimation,
     QRect,
     QSize,
@@ -8995,20 +8994,15 @@ class KrokHelperQtApp(QMainWindow):
         )
 
         state = {"started": False, "finished": False, "error": None, "timeout": False}
-        loop = QEventLoop(self) if supports_async_wait else None
 
         def on_started(_path: str) -> None:
             state["started"] = True
 
         def on_finished(_path: str) -> None:
             state["finished"] = True
-            if loop is not None and loop.isRunning():
-                loop.quit()
 
         def on_error(error: str) -> None:
             state["error"] = error
-            if loop is not None and loop.isRunning():
-                loop.quit()
 
         if supports_async_wait:
             started_signal.connect(on_started)
@@ -9023,18 +9017,13 @@ class KrokHelperQtApp(QMainWindow):
             if supports_async_wait and state["started"] and not (
                 state["finished"] or state["error"]
             ):
-                timeout = QTimer(self)
-                timeout.setSingleShot(True)
-
-                def on_timeout() -> None:
-                    state["timeout"] = True
-                    if loop is not None and loop.isRunning():
-                        loop.quit()
-
-                timeout.timeout.connect(on_timeout)
-                timeout.start(120_000)
-                loop.exec()
-                timeout.stop()
+                deadline = time.monotonic() + 120.0
+                while not (state["finished"] or state["error"]):
+                    if time.monotonic() >= deadline:
+                        state["timeout"] = True
+                        break
+                    QApplication.processEvents()
+                    time.sleep(0.01)
 
             if state["timeout"]:
                 QMessageBox.critical(

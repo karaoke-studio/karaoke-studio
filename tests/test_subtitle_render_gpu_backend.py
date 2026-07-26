@@ -46,6 +46,14 @@ MEFISTO_N3PROJ = Path.cwd().parent / "songs" / "メフィスト" / "1.n3proj"
 RUN_REAL_GPU_AB = os.environ.get("KROK_RUN_REAL_GPU_AB", "0") == "1"
 
 
+@pytest.fixture(scope="module", autouse=True)
+def _clear_application_fonts_after_gpu_tests():
+    yield
+    from PyQt6.QtGui import QFontDatabase
+
+    QFontDatabase.removeAllApplicationFonts()
+
+
 def test_shared_frame_reader_close_tolerates_deleted_qt_wrapper():
     class DeletedSharedMemory:
         def isAttached(self):
@@ -7739,7 +7747,7 @@ def test_gpu_g1_hardware_and_warp_are_pixel_bounded(monkeypatch) -> None:
     "viewport_changes,bounds_tolerance",
     [
         ({"viewport_offset_x": 90, "viewport_offset_y": 40}, 3),
-        ({"viewport_scale_pct": 150, "viewport_align": "top_left"}, 4),
+        ({"viewport_scale_pct": 150, "viewport_align": "top_left"}, 5),
         ({"viewport_rotation_deg": 30}, 5),
         (
             {

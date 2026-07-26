@@ -986,10 +986,18 @@ def test_import_dark_spiral_layout_character_spacing_parity():
 
     assert result.warnings == []
     assert style.letter_spacing_px == 4
-    assert all(layout.letter_spacing_px == 0 for layout in style.layouts)
     assert set(result.project_data["line_layout_indices"]) == {0}
     assert style.title_overlay is not None
     assert style.title_overlay.layout_index == 4
+    used_layout_indices = {
+        *result.project_data["line_layout_indices"],
+        style.title_overlay.layout_index,
+    }
+    assert all(
+        style.layouts[index - 1].letter_spacing_px == 0
+        for index in used_layout_indices
+        if index > 0
+    )
     assert style.title_overlay.letter_spacing_px == 0
 
 

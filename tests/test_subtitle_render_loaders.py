@@ -311,15 +311,25 @@ def test_load_subtitle_populates_lyrics_panel(qapp, monkeypatch, tmp_path):
 
     track = win.load_from_lrc(lrc)
     assert track is not None
+    assert ["".join(char.text for char in line.chars) for line in track.lines] == [
+        "あ",
+        "いう",
+        "",
+        "え",
+    ]
     assert win._lyrics_panel.is_populated()
 
     table = win._lyrics_panel.table_widget
-    # body 4 行（含中间空行）
-    assert table.rowCount() == 4
-    assert table.item(0, COL_CONTENT).text() == "あ"
-    assert table.item(1, COL_CONTENT).text() == "いう"
-    assert table.item(2, COL_CONTENT).text() == ""  # 空行
-    assert table.item(3, COL_CONTENT).text() == "え"
+    lyric_rows = [
+        row
+        for row, presentation in enumerate(win._lyrics_panel._presentation_rows)
+        if presentation.kind == "lyric"
+    ]
+    # body 保留 4 行（含中间空行）；显示表把空行折成段落 / 分页标记。
+    assert len(lyric_rows) == 3
+    assert table.item(lyric_rows[0], COL_CONTENT).text() == "あ"
+    assert table.item(lyric_rows[1], COL_CONTENT).text() == "いう"
+    assert table.item(lyric_rows[2], COL_CONTENT).text() == "え"
 
 
 # ---------------------------------------------------------------------------
@@ -1107,7 +1117,10 @@ def test_layout_issue_button_lists_and_jumps_to_problem_line(qapp, monkeypatch):
 
     dialog._list_widget.itemClicked.emit(item)
     qapp.processEvents()
-    assert win._lyrics_panel.table_widget.currentRow() == 1
+    assert (
+        win._lyrics_panel.table_widget.currentRow()
+        == win._lyrics_panel._display_row_for_track_line(1)
+    )
     assert win._transport_bar.current_time_ms == 4_200
     assert preview_calls == [True]
 

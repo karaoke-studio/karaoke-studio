@@ -422,11 +422,17 @@ def themed(widget, qss_factory: Callable[[], str]) -> None:
     timer.setSingleShot(True)
     disconnected = False
 
-    def _disconnect() -> None:
+    def _disconnect(*, disconnect_signal: bool = True) -> None:
         nonlocal disconnected
         if disconnected:
             return
         disconnected = True
+        try:
+            timer.stop()
+        except RuntimeError:
+            pass
+        if not disconnect_signal:
+            return
         try:
             theme.changed.disconnect(_on_theme_changed)
         except (RuntimeError, TypeError):
@@ -456,7 +462,11 @@ def themed(widget, qss_factory: Callable[[], str]) -> None:
 
     _apply()
     try:
-        widget.destroyed.connect(lambda _obj=None: _disconnect())
+        # During QObject destruction Qt is already walking signal connections;
+        # disconnecting another signal from inside this callback can deadlock.
+        widget.destroyed.connect(
+            lambda _obj=None: _disconnect(disconnect_signal=False)
+        )
     except RuntimeError:
         _disconnect()
         return

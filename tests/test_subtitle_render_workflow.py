@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -396,9 +397,9 @@ def test_alignment_handoff_dialog_keeps_gui_responsive(
 
     heartbeat.timeout.connect(tick)
     heartbeat.start()
-    heartbeat_window = QEventLoop()
-    QTimer.singleShot(50, heartbeat_window.quit)
-    heartbeat_window.exec()
+    for _ in range(10):
+        time.sleep(0.005)
+        qapp.processEvents()
     heartbeat.stop()
     assert heartbeat_count > 0
 
@@ -634,7 +635,6 @@ def test_alignment_export_completion_is_queued_to_gui_thread(
     output = tmp_path / "aligned.wav"
     source_video = tmp_path / "source.mp4"
     source_audio = tmp_path / "source.flac"
-    event_loop = QEventLoop()
     observed: list[tuple[QThread, tuple[object, ...], dict[str, object]]] = []
 
     class CompletionProbe(QObject):
@@ -651,14 +651,15 @@ def test_alignment_export_completion_is_queued_to_gui_thread(
 
         def _finish_aligned_export(self, *args, **kwargs) -> None:
             observed.append((QThread.currentThread(), args, kwargs))
-            event_loop.quit()
 
     probe = CompletionProbe()
     task = BackgroundTask(lambda _logger: [output])
     task.task_succeeded.connect(probe._finish_aligned_export_success)
     task.start()
-    QTimer.singleShot(3000, event_loop.quit)
-    event_loop.exec()
+    deadline = time.monotonic() + 3.0
+    while not observed and time.monotonic() < deadline:
+        time.sleep(0.005)
+        qapp.processEvents()
     task.wait()
 
     assert observed == [

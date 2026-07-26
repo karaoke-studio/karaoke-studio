@@ -4330,13 +4330,13 @@ class SubtitleRenderWindow(QWidget):
 
         if primary_merge is not None:
             self._timing_track = primary_merge.track
-            self._timing_track.page_plan = normalize_page_plan(
+            self._timing_track.page_plan = build_legacy_page_plan(
                 self._timing_track, self._style
             )
             project_page_plan_to_legacy_fields(self._timing_track, self._style)
         for index, merge in extra_merges.items():
             self._extra_sources[index].track = merge.track
-            merge.track.page_plan = normalize_page_plan(merge.track, self._style)
+            merge.track.page_plan = build_legacy_page_plan(merge.track, self._style)
             project_page_plan_to_legacy_fields(merge.track, self._style)
 
         structure_changed = any(merge.structure_changed for merge in merges)
