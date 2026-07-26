@@ -2097,16 +2097,111 @@ def _display_line_vertical_envelope(
     )
     if layout is None:
         return None
-    sample_ms = _line_start_ms(line)
-    ctx = LayerContext(
-        t_ms=sample_ms,
-        logical_w=logical_w,
-        logical_h=logical_h,
+    return _line_static_vertical_ink_bounds(layout)
+
+
+def _line_static_vertical_ink_bounds(
+    layout: _LineLayout,
+) -> tuple[int, int] | None:
+    """Return the static painted Y envelope without layout line spacing.
+
+    Placement collisions use actual main-text/Ruby glyph geometry plus stroke,
+    shadow and glow extents.  Font metric cells, ``line_gap_px`` and every
+    entry/exit or per-character animation trajectory are deliberately absent.
+    The solver adds the overlapped layout's line gap exactly once, after these
+    per-line ink bounds have been measured.
+    """
+
+    bounds: list[tuple[float, float]] = []
+    for run in _text_glyph_runs(layout.text_layout, layout.has_inline_styles):
+        path = _glyph_run_path(run, layout.baseline_y)
+        visual = _painted_path_vertical_bounds(path, run[0].style, ruby=False)
+        if visual is not None:
+            bounds.append(visual)
+    for glyph in _bitmap_guide_glyphs(layout.text_layout):
+        rect = _bitmap_guide_target_rect(glyph, layout.baseline_y)
+        if rect is not None and not rect.isEmpty():
+            bounds.append((float(rect.top()), float(rect.bottom())))
+
+    for ruby_layout in layout.ruby_layouts:
+        ruby_style = ruby_layout.style
+        ruby_font = ruby_layout.font or layout.ruby_font
+        ruby_metrics = ruby_layout.metrics or layout.ruby_metrics
+        if ruby_metrics is None:
+            continue
+        reading = (
+            "".join(reversed(_ruby_utopia_visual_units(ruby_layout.ruby.reading)))
+            if layout.rtl
+            else ruby_layout.ruby.reading
+        )
+        path, _rect = _ruby_text_path_and_rect(
+            reading,
+            ruby_font,
+            ruby_metrics,
+            ruby_layout.x,
+            ruby_layout.baseline_y,
+            ruby_layout.target_width,
+            ruby_style,
+            base_text=ruby_layout.ruby.kanji,
+        )
+        visual = _painted_path_vertical_bounds(path, ruby_style, ruby=True)
+        if visual is not None:
+            bounds.append(visual)
+
+    if not bounds:
+        return None
+    return (
+        int(math.floor(min(top for top, _bottom in bounds))),
+        int(math.ceil(max(bottom for _top, bottom in bounds))),
     )
-    layers = _line_layer_stack(layout, sample_ms)
-    if layout.active_rubies and layout.ruby_metrics is not None:
-        layers.extend(_ruby_layer_stack(layout, line, sample_ms, line_style))
-    return _TEXT_RUN_COMPOSITOR.vertical_bounds(ctx, layers)
+
+
+def _painted_path_vertical_bounds(
+    path: QPainterPath,
+    style: Style,
+    *,
+    ruby: bool,
+) -> tuple[float, float] | None:
+    """Return one path's painted static Y bounds for both karaoke colour states."""
+
+    rect = path.boundingRect()
+    if rect.isEmpty():
+        return None
+    if ruby:
+        stroke_width = _ruby_stroke_width(style)
+        stroke2_width = _ruby_stroke2_width(style)
+        decoration = _ruby_decoration_kind(style)
+        shadow_dy = _ruby_shadow_dy(style)
+        glow_extent = max(
+            _glow_extent(
+                stroke_width,
+                stroke2_width,
+                _ruby_glow_radius(style, after=after),
+            )
+            for after in (False, True)
+        )
+    else:
+        stroke_width = max(int(style.stroke_width_px), 0)
+        stroke2_width = _main_stroke2_width(style)
+        decoration = style.decoration_kind
+        shadow_dy = int(style.shadow_offset_y)
+        glow_extent = max(
+            _glow_extent(
+                stroke_width,
+                stroke2_width,
+                _glow_radius(style, after=after),
+            )
+            for after in (False, True)
+        )
+
+    stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
+    extent = max(stroke_extent, glow_extent if decoration == "glow" else 0)
+    top = float(rect.top()) - extent
+    bottom = float(rect.bottom()) + extent
+    if decoration == "shadow" and shadow_dy:
+        top += min(shadow_dy, 0)
+        bottom += max(shadow_dy, 0)
+    return top, bottom
 
 
 def _display_line_horizontal_envelope(

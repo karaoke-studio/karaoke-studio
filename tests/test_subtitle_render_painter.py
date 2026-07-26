@@ -8623,6 +8623,8 @@ def test_cross_page_placement_is_rigid_and_does_not_rewrite_time(qapp):
     assert constrained_offsets == {
         index: (0.0, 0.0) for index in range(4)
     }
+    # Entry/exit and per-character animation overlap is intentional: animation
+    # trajectories must not enlarge the static collision bands or move a page.
     assert subtitle_painter.resolved_page_offset_windows_for_style(
         1280, 1080, track, animated
     ) == subtitle_painter.resolved_page_offset_windows_for_style(
@@ -8631,6 +8633,110 @@ def test_cross_page_placement_is_rigid_and_does_not_rewrite_time(qapp):
     assert subtitle_painter.resolved_page_offsets_for_style(
         1280, 720, track, legacy
     ) == {}
+
+
+def test_cross_page_line_ink_height_excludes_layout_line_gap(qapp):
+    line = TimingLine(chars=[TimingChar("Ag", 1_000)], end_ms=2_000)
+    track = TimingTrack(lines=[line])
+    display = DisplayLine(
+        line=line,
+        lane=0,
+        display_start_ms=0,
+        display_end_ms=3_000,
+    )
+    base = Style(
+        dual_line_layout=False,
+        font_family="Arial",
+        font_family_latin="Arial",
+        font_size_px=80,
+        stroke_width_px=4,
+        decoration_kind="shadow",
+        shadow_offset_y=12,
+    )
+
+    heights = []
+    for gap in (0, 40, 90):
+        style = replace(base, line_gap_px=gap)
+        layout = subtitle_painter._layout_line(
+            track,
+            line,
+            style,
+            640,
+            360,
+            baseline_y=220,
+            line_x=100,
+            lane=None,
+        )
+        assert layout is not None
+        bounds = subtitle_painter._line_static_vertical_ink_bounds(layout)
+        assert bounds is not None
+        heights.append(bounds[1] - bounds[0])
+
+    assert heights[0] == heights[1] == heights[2]
+
+
+def test_cross_page_line_ink_height_includes_ruby_and_static_effects(qapp):
+    line = TimingLine(chars=[TimingChar("歌", 1_000)], end_ms=2_000)
+    ruby = RubyAnnotation(
+        kanji="歌",
+        reading="うた",
+        pos_start_ms=1_000,
+        pos_end_ms=2_000,
+    )
+    plain = Style(
+        dual_line_layout=False,
+        font_size_px=80,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        ruby_font_size_px=36,
+        ruby_stroke_width_px=0,
+        ruby_stroke2_enabled=False,
+        ruby_decoration_kind="none",
+    )
+
+    def bounds(track, style):
+        layout = subtitle_painter._layout_line(
+            track,
+            line,
+            style,
+            640,
+            360,
+            baseline_y=220,
+            line_x=100,
+            lane=None,
+        )
+        assert layout is not None
+        result = subtitle_painter._line_static_vertical_ink_bounds(layout)
+        assert result is not None
+        return result
+
+    plain_bounds = bounds(TimingTrack(lines=[line]), plain)
+    ruby_bounds = bounds(TimingTrack(lines=[line], rubies=[ruby]), plain)
+    shadow_bounds = bounds(
+        TimingTrack(lines=[line]),
+        replace(
+            plain,
+            stroke_width_px=8,
+            decoration_kind="shadow",
+            shadow_offset_y=18,
+        ),
+    )
+    glow_bounds = bounds(
+        TimingTrack(lines=[line]),
+        replace(
+            plain,
+            stroke_width_px=8,
+            decoration_kind="glow",
+            glow_before_radius_px=12,
+            glow_after_radius_px=20,
+        ),
+    )
+
+    assert ruby_bounds[0] < plain_bounds[0]
+    assert shadow_bounds[1] > plain_bounds[1]
+    assert glow_bounds[0] < plain_bounds[0]
+    assert glow_bounds[1] > plain_bounds[1]
 
 
 def test_cross_page_spatial_mode_keeps_same_position_time_squeeze(qapp):

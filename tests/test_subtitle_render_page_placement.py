@@ -94,6 +94,32 @@ def test_solver_uses_overlapped_page_gap_not_incoming_page_gap():
     assert offsets["p2"] == 15
 
 
+def test_solver_adds_the_overlapped_layout_gap_exactly_once():
+    def incoming_offset(gap):
+        pages = [
+            PageVisualBands(
+                "p1",
+                (_band("old", "p1", 0, 100, 40, 60),),
+                gap_px=gap,
+                anchor="center",
+            ),
+            PageVisualBands(
+                "p2",
+                (_band("new", "p2", 0, 100, 50, 70),),
+                gap_px=999,
+                anchor="center",
+            ),
+        ]
+        return solve_page_axis_offsets(
+            pages, viewport_min=0, viewport_max=200
+        )["p2"]
+
+    without_gap = incoming_offset(0)
+    with_gap = incoming_offset(30)
+
+    assert with_gap - without_gap == 30
+
+
 def test_page_larger_than_viewport_falls_back_to_authored_position():
     pages = [
         PageVisualBands(
