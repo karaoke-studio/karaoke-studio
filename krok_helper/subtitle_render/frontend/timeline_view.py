@@ -888,15 +888,15 @@ class TrackTimelineView(QWidget):
         if entry:
             animation = effective.entry_anim
             label = _ENTRY_ANIMATION_LABELS.get(animation, animation)
-            duration_ms = max(int(effective.entry_lead_ms), 0)
             # 余量 = 把手框本身的宽度（上屏 → 开始走字），与特效时长各算各的
             margin_ms = max(block.start_ms - show_ms, 0)
+            duration_ms = min(max(int(effective.entry_lead_ms), 0), margin_ms)
             phase = "入场"
         else:
             animation = effective.exit_anim
             label = _EXIT_ANIMATION_LABELS.get(animation, animation)
-            duration_ms = max(int(effective.exit_fade_ms), 0)
             margin_ms = max(hide_ms - block.end_ms, 0)
+            duration_ms = min(max(int(effective.exit_fade_ms), 0), margin_ms)
             phase = "退场"
         head = f"{phase}（{margin_ms} ms）"
         if animation == "none":

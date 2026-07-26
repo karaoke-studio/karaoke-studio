@@ -342,7 +342,7 @@ def test_handle_hover_shows_effective_animation_name_and_duration(
     _move(widget, right_rect.center().x(), right_rect.center().y())
 
     # 括号里的第一个时长是虚线框本身（上屏 500 → 走字 1000、2600 → 消失 3200）
-    assert shown == ["入场（500 ms）：滑入（650 ms）", "退场（600 ms）：逐字淡出（900 ms）"]
+    assert shown == ["入场（500 ms）：滑入（500 ms）", "退场（600 ms）：逐字淡出（600 ms）"]
     assert all("本句" not in text and "全局" not in text for text in shown)
 
 

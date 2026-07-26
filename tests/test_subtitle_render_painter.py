@@ -5290,7 +5290,7 @@ def test_image_fill_cached_layer_matches_canvas_anchored_direct_path(
     assert diff.max() <= 1
 
 
-def test_paint_frame_entry_and_exit_animation_change_rendered_frame(qapp):
+def test_paint_frame_compression_keeps_entry_and_can_remove_exit_animation(qapp):
     track = _track()
     static = Style(line_y_position="center", line_tail_ms=0)
     animated = Style(
@@ -5305,16 +5305,25 @@ def test_paint_frame_entry_and_exit_animation_change_rendered_frame(qapp):
     at_entry_animated = _blank()
     at_exit_static = _blank()
     at_exit_animated = _blank()
+    at_exit_with_tail = _blank()
+    after_line_blank = _blank()
 
-    # 该行演唱 1000–2500，line_tail_ms=0 → N3 窗口 = 0..2500。入 / 退场动画整段
-    # 落在窗口内部（不撑窗口），所以退场斜坡是 [2500-600, 2500]。
+    # 该行走字 1000–2500，line_tail_ms=0 → 退场余量为 0，有效退场动画被压到
+    # 0 ms；入场仍使用走字开始前的显示区间。
     paint_frame(at_entry_static, track, 500, static)
     paint_frame(at_entry_animated, track, 500, animated)
     paint_frame(at_exit_static, track, 2300, static)
     paint_frame(at_exit_animated, track, 2300, animated)
+    paint_frame(
+        at_exit_with_tail,
+        track,
+        2900,
+        replace(animated, line_tail_ms=600),
+    )
 
     assert _pixel_hash(at_entry_static) != _pixel_hash(at_entry_animated)
-    assert _pixel_hash(at_exit_static) != _pixel_hash(at_exit_animated)
+    assert _pixel_hash(at_exit_static) == _pixel_hash(at_exit_animated)
+    assert _pixel_hash(at_exit_with_tail) != _pixel_hash(after_line_blank)
 
 
 def test_paint_frame_char_fade_entry_reveals_sentence_characters(qapp):
@@ -7709,6 +7718,51 @@ def test_style_for_line_applies_animation_override_after_other_line_styles(qapp)
     assert effective.entry_lead_ms == 450
     assert effective.exit_anim == "none"
     assert effective.exit_fade_ms == 0
+
+
+def test_display_window_compression_clamps_effective_animation_durations(qapp):
+    style = Style(
+        entry_anim="fade",
+        entry_lead_ms=900,
+        exit_anim="slide_out",
+        exit_fade_ms=800,
+    )
+    line = TimingLine(chars=[TimingChar("歌", 1_000)], end_ms=2_000)
+
+    effective = subtitle_painter._style_for_line_display_window(
+        style,
+        line,
+        display_start_ms=750,
+        display_end_ms=2_000,
+    )
+    manual = subtitle_painter._style_for_line_display_window(
+        style,
+        line,
+        display_start_ms=950,
+        display_end_ms=2_100,
+    )
+
+    assert effective.entry_lead_ms == 250
+    assert effective.exit_fade_ms == 0
+    assert manual.entry_lead_ms == 50
+    assert manual.exit_fade_ms == 100
+
+
+def test_auto_entry_reserve_preserves_user_configured_short_duration(qapp):
+    line = TimingLine(chars=[TimingChar("歌", 1_000)], end_ms=2_000)
+
+    assert subtitle_painter._auto_entry_reserve_ms(
+        Style(entry_anim="fade", entry_lead_ms=900),
+        line,
+    ) == 250
+    assert subtitle_painter._auto_entry_reserve_ms(
+        Style(entry_anim="fade", entry_lead_ms=100),
+        line,
+    ) == 100
+    assert subtitle_painter._auto_entry_reserve_ms(
+        Style(entry_anim="none", entry_lead_ms=900),
+        line,
+    ) == 0
 
 
 def test_layout_character_spacing_overrides_singer_scheme(qapp):

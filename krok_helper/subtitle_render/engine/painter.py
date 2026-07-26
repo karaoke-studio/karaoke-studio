@@ -533,7 +533,10 @@ from krok_helper.subtitle_render.engine.page_placement import (
     solve_page_axis_offset_windows,
 )
 from krok_helper.subtitle_render.engine.animator import line_animation_state
-from krok_helper.subtitle_render.engine.show_time import protect_time_ms
+from krok_helper.subtitle_render.engine.show_time import (
+    MIN_AUTO_ENTRY_ANIMATION_MS,
+    protect_time_ms,
+)
 from krok_helper.subtitle_render.models import (
     DecorationKind,
     GuideSymbol,
@@ -1772,7 +1775,12 @@ def _display_line_vertical_bounds(
     layout_cache_sig: tuple | None = None,
 ) -> tuple[int, int] | None:
     line = display_line.line
-    line_style = _style_for_line(style, line)
+    line_style = _style_for_line_display_window(
+        style,
+        line,
+        display_line.display_start_ms,
+        display_line.display_end_ms,
+    )
     animation = line_animation_state(
         line_style,
         t_ms=track_t_ms,
@@ -1886,6 +1894,7 @@ def resolved_page_offset_windows_for_style(
         row_count_of=_row_count_resolver(style),
         bottom_align_of=_bottom_align_resolver(style),
         vertical_position_of=_vertical_position_resolver(style),
+        auto_entry_reserve_ms_of=_auto_entry_reserve_resolver(style),
         adjust_same_position=True,
     )
     if not display_lines:
@@ -3416,6 +3425,7 @@ def _visible_lines_for_style(
             row_count_of=_row_count_resolver(style),
             bottom_align_of=_bottom_align_resolver(style),
             vertical_position_of=_vertical_position_resolver(style),
+            auto_entry_reserve_ms_of=_auto_entry_reserve_resolver(style),
             adjust_same_position=True,
         )
     display_line = _single_visible_display_line(track, t_ms, style)
@@ -3448,6 +3458,7 @@ def display_windows_for_style(
             row_count_of=_row_count_resolver(style),
             bottom_align_of=_bottom_align_resolver(style),
             vertical_position_of=_vertical_position_resolver(style),
+            auto_entry_reserve_ms_of=_auto_entry_reserve_resolver(style),
             adjust_same_position=True,
         )
         index_of = {id(line): i for i, line in enumerate(track.lines)}
@@ -3494,6 +3505,7 @@ def display_schedule_for_style(
         row_count_of=_row_count_resolver(style),
         bottom_align_of=_bottom_align_resolver(style),
         vertical_position_of=_vertical_position_resolver(style),
+        auto_entry_reserve_ms_of=_auto_entry_reserve_resolver(style),
         adjust_same_position=True,
     )
     index_of = {id(line): index for index, line in enumerate(track.lines)}
@@ -5138,7 +5150,12 @@ def _paint_line(
     display_end_ms: int | None = None,
     layout_cache_sig: tuple | None = None,
 ) -> None:
-    style = _style_for_line(style, line)
+    style = _style_for_line_display_window(
+        style,
+        line,
+        display_start_ms,
+        display_end_ms,
+    )
     animation = line_animation_state(
         style,
         t_ms=t_ms,
@@ -12199,6 +12216,7 @@ def check_layout_margins(
             row_count_of=_row_count_resolver(style),
             bottom_align_of=_bottom_align_resolver(style),
             vertical_position_of=_vertical_position_resolver(style),
+            auto_entry_reserve_ms_of=_auto_entry_reserve_resolver(style),
             adjust_same_position=True,
         )
     else:
@@ -12303,6 +12321,56 @@ def _style_for_line(style: Style, line: TimingLine) -> Style:
         **{name: getattr(layout_style, name) for name in LYRICS_LAYOUT_FIELDS},
     )
     return style_with_line_animation(style, line)
+
+
+def _auto_entry_reserve_ms(style: Style, line: TimingLine) -> int:
+    """Return the automatic pre-wipe reserve for this line's entry animation.
+
+    A user-configured animation shorter than the automatic 250 ms floor is
+    already an explicit choice, so the resolver preserves that shorter value
+    instead of lengthening it.
+    """
+
+    line_style = _style_for_line(style, line)
+    duration = max(int(line_style.entry_lead_ms), 0)
+    if line_style.entry_anim == "none" or duration <= 0:
+        return 0
+    return min(duration, MIN_AUTO_ENTRY_ANIMATION_MS)
+
+
+def _auto_entry_reserve_resolver(style: Style):
+    return lambda line: _auto_entry_reserve_ms(style, line)
+
+
+def _style_for_line_display_window(
+    style: Style,
+    line: TimingLine,
+    display_start_ms: int | None,
+    display_end_ms: int | None,
+) -> Style:
+    """Clamp rendered animation durations to the resolved outside-wipe margins.
+
+    Automatic show-time compression may consume configured entry/exit animation
+    time.  Unless the configured animation or display override is already
+    shorter, the entry window retains the 250 ms automatic minimum; exit may
+    collapse to zero.  Manual display overrides are already reflected in the
+    resolved window and therefore remain authoritative.
+    """
+
+    line_style = _style_for_line(style, line)
+    start = (
+        _line_start_ms(line)
+        if display_start_ms is None
+        else int(display_start_ms)
+    )
+    end = _line_end_ms(line) if display_end_ms is None else int(display_end_ms)
+    entry_available = max(_line_start_ms(line) - start, 0)
+    exit_available = max(end - _line_end_ms(line), 0)
+    return replace(
+        line_style,
+        entry_lead_ms=min(max(int(line_style.entry_lead_ms), 0), entry_available),
+        exit_fade_ms=min(max(int(line_style.exit_fade_ms), 0), exit_available),
+    )
 
 
 def resolved_char_intervals_for_line(

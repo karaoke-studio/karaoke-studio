@@ -177,7 +177,7 @@ def test_same_position_squeeze_only_requires_a_quarter_interval_gap():
     assert begins[2] - out.starts[2] == 1425 >= protect
 
 
-def test_same_position_squeeze_never_cuts_into_either_singing_interval():
+def test_same_position_squeeze_never_cuts_into_either_wipe_interval():
     # The two same-position lines sing over each other, so no amount of
     # PreTime/PostTime squeezing can create a temporal gap.  Automatic
     # adjustment must stop at the singing boundaries and leave the remaining
@@ -189,6 +189,37 @@ def test_same_position_squeeze_never_cuts_into_either_singing_interval():
     assert out.starts[2] <= begins[2]
     assert out.ends[0] >= ends[0]
     assert out.ends[0] > out.starts[2]
+
+
+def test_auto_squeeze_keeps_250ms_entry_but_allows_zero_exit():
+    begins = [10_000, 10_500, 12_100, 12_500]
+    ends = [12_000, 12_400, 13_500, 14_000]
+    out = _run(
+        begins,
+        ends,
+        _pages((0, 2, 0, 1), (0, 2, 2, 3)),
+        auto_entry_reserve_ms=[250, 250, 250, 250],
+    )
+
+    assert out.starts[2] == begins[2] - 250
+    assert out.ends[0] == ends[0]
+    assert out.ends[0] > out.starts[2]
+
+
+def test_manual_show_start_can_reduce_entry_reserve_below_250ms():
+    begins = [10_000, 10_500, 12_100, 12_500]
+    ends = [12_000, 12_400, 13_500, 14_000]
+    overrides = [(None, None), (None, None), (12_050, None), (None, None)]
+    out = _run(
+        begins,
+        ends,
+        _pages((0, 2, 0, 1), (0, 2, 2, 3)),
+        overrides=overrides,
+        auto_entry_reserve_ms=[250, 250, 250, 250],
+    )
+
+    assert out.starts[2] == 12_050
+    assert begins[2] - out.starts[2] == 50
 
 
 def test_manual_override_wins_and_is_visible_to_later_pages():

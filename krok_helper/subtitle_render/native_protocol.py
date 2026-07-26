@@ -332,14 +332,13 @@ def track_to_ir(
             _line_center_override,
             _row_count_resolver,
             _style_for_line,
+            _style_for_line_display_window,
             display_schedule_for_style,
             resolved_char_intervals_for_line,
             resolved_guide_anchor_bounds_for_line,
             resolved_page_offset_windows_for_style,
         )
         from krok_helper.subtitle_render.engine.page_plan import resolve_page_plan
-        from krok_helper.subtitle_render.models import style_with_line_animation
-
         display_style = _display_style_for_signal_window(style)
         schedule = display_schedule_for_style(track, display_style)
         page_offset_windows = (
@@ -365,7 +364,15 @@ def track_to_ir(
             index: _line_center_override(track, line, layout_styles[index])
             for index, line in enumerate(track.lines)
         }
-        animation_styles = [style_with_line_animation(style, line) for line in track.lines]
+        animation_styles = [
+            _style_for_line_display_window(
+                style,
+                line,
+                schedule[index][1] if index in schedule else None,
+                schedule[index][2] if index in schedule else None,
+            )
+            for index, line in enumerate(track.lines)
+        ]
         from krok_helper.subtitle_render.engine.timeline import assign_lanes
 
         # 页内行数按 Painter 的口径算（``_renderable_page_lines`` 同样只走

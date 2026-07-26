@@ -628,6 +628,36 @@ def test_build_render_ir_resolves_global_and_per_line_basic_animations():
     assert gpu_unsupported_features(track, style) == ()
 
 
+def test_build_render_ir_uses_compressed_entry_and_exit_animation_windows():
+    begins = [10_000, 10_500, 12_100, 12_500]
+    ends = [12_000, 12_400, 13_500, 14_000]
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar(chr(65 + index), begin)], end_ms=ends[index])
+            for index, begin in enumerate(begins)
+        ],
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(2, "default"), TrackPage(2, "default")])]
+        ),
+    )
+    style = Style(
+        dual_line_layout=True,
+        entry_anim="fade",
+        entry_lead_ms=900,
+        exit_anim="slide_out",
+        exit_fade_ms=800,
+    )
+
+    lines = build_render_ir(track, style, width=640, height=360, fps=60)["track"][
+        "lines"
+    ]
+
+    assert lines[0]["display_end_ms"] == ends[0]
+    assert lines[0]["exit_duration_ms"] == 0
+    assert lines[2]["display_start_ms"] == begins[2] - 250
+    assert lines[2]["entry_duration_ms"] == 250
+
+
 def test_build_render_ir_resolves_independent_karaoke_animation():
     track = TimingTrack(
         lines=[TimingLine(chars=[TimingChar("A", 1_000)], end_ms=2_000)]

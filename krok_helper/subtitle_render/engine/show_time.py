@@ -32,6 +32,9 @@ from typing import Optional, Sequence
 MAX_SHOW_TIME_MS = 5_999_990
 """N3 的时刻上限哨兵（``Nkm3Constants``：5999990 ms）。"""
 
+MIN_AUTO_ENTRY_ANIMATION_MS = 250
+"""自动压缩非零入场动画时采用的人类视觉反应时间下限。"""
+
 
 @dataclass(frozen=True)
 class ShowTimePage:
@@ -78,6 +81,7 @@ def compute_show_times(
     interval_ms: int,
     protect_ms: int,
     overrides: Optional[Sequence[tuple[Optional[int], Optional[int]]]] = None,
+    auto_entry_reserve_ms: Optional[Sequence[int]] = None,
     adjust_same_position: bool = True,
 ) -> ShowTimes:
     """按 N3 ``TopLongAdjuster`` 算出每个渲染行的 ``(上屏, 消失)``。
@@ -90,6 +94,9 @@ def compute_show_times(
     ``ShowBeginTime`` / ``ShowEndTime`` 就是模型本体，用户改过之后下游页读到的是
     改后的值——所以覆盖必须参与本趟计算（ForceBottom 判定、下行入场、同位挤压），
     而不是等算完再往结果上盖。被覆盖的那一侧不再参与挤压。
+
+    ``auto_entry_reserve_ms`` 是自动压缩后必须保留在走字开始之前的入场动画时间；
+    手工上屏覆盖不受该下限约束。退场不保留自动下限，可以压缩到走字结束即消失。
     """
 
     total = len(sing_begins)
@@ -107,6 +114,7 @@ def compute_show_times(
         interval=max(int(interval_ms), 0),
         protect=max(int(protect_ms), 0),
         overrides=overrides,
+        auto_entry_reserve_ms=auto_entry_reserve_ms,
         adjust_same_position=bool(adjust_same_position),
         result=result,
     ).run()
@@ -126,6 +134,7 @@ class _Solver:
         interval: int,
         protect: int,
         overrides: Optional[Sequence[tuple[Optional[int], Optional[int]]]],
+        auto_entry_reserve_ms: Optional[Sequence[int]],
         adjust_same_position: bool,
         result: ShowTimes,
     ) -> None:
@@ -142,6 +151,7 @@ class _Solver:
         total = len(sing_begins)
         self.start_override: list[Optional[int]] = [None] * total
         self.end_override: list[Optional[int]] = [None] * total
+        self.auto_entry_reserve_ms = [0] * total
         if overrides is not None:
             for index, item in enumerate(overrides):
                 if index >= total:
@@ -149,6 +159,11 @@ class _Solver:
                 begin, end = item
                 self.start_override[index] = None if begin is None else int(begin)
                 self.end_override[index] = None if end is None else int(end)
+        if auto_entry_reserve_ms is not None:
+            for index, duration in enumerate(auto_entry_reserve_ms):
+                if index >= total:
+                    break
+                self.auto_entry_reserve_ms[index] = max(int(duration), 0)
         # 渲染行 → 页号 / 页内位次；页 → 段内前后页（跨段即视为无）。
         self.page_of = [0] * total
         self.slot_of = [0] * total
@@ -279,11 +294,15 @@ class _Solver:
         if end is not None:
             self.out.ends[line] = end
 
-    def _enforce_auto_singing_bounds(self, line: int) -> None:
-        """Keep automatically resolved display time outside the singing span."""
+    def _enforce_auto_wipe_bounds(self, line: int) -> None:
+        """Protect the wipe span and the minimum automatic entry animation."""
 
         if self.start_override[line] is None:
-            self.out.starts[line] = min(self.out.starts[line], self.begins[line])
+            latest_start = max(
+                self.begins[line] - self.auto_entry_reserve_ms[line],
+                0,
+            )
+            self.out.starts[line] = min(self.out.starts[line], latest_start)
         if self.end_override[line] is None:
             self.out.ends[line] = max(self.out.ends[line], self.ends[line])
 
@@ -379,12 +398,14 @@ class _Solver:
                     )
                     self._adjust_same_position(line, is_bottom_align)
                 self._apply_override(line)
-                self._enforce_auto_singing_bounds(line)
+                self._enforce_auto_wipe_bounds(line)
                 if adjusted_other is not None:
-                    self._enforce_auto_singing_bounds(adjusted_other)
+                    self._enforce_auto_wipe_bounds(adjusted_other)
         # Automatic squeezing may consume PreTime/PostTime completely, but it
-        # must never consume the singing interval itself.  Manual overrides
-        # remain authoritative on the side explicitly edited by the user.
+        # must never consume the wipe interval itself.  Non-zero automatic
+        # entry animation also retains its requested visual reaction reserve;
+        # exit animation may shrink to zero.  Manual overrides remain
+        # authoritative on the side explicitly edited by the user.
         for line in range(len(starts)):
-            self._enforce_auto_singing_bounds(line)
+            self._enforce_auto_wipe_bounds(line)
         return self.out
