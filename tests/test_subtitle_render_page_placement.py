@@ -85,7 +85,7 @@ def test_center_page_chooses_nearest_valid_direction():
     assert offsets["p2"] == 15
 
 
-def test_page_larger_than_viewport_avoids_ink_before_preserving_viewport():
+def test_page_larger_than_viewport_falls_back_to_authored_position():
     pages = [
         PageVisualBands(
             "p1", (_band("a", "p1", 0, 3000, 0, 80),), anchor="end"
@@ -99,8 +99,93 @@ def test_page_larger_than_viewport_avoids_ink_before_preserving_viewport():
     second = solve_page_axis_offsets(pages, viewport_min=0, viewport_max=100)
 
     assert first == second
-    assert first["p2"] == -140
-    assert 140 + first["p2"] <= 0
+    assert first["p2"] == 0
+
+
+def test_bottom_page_searches_down_when_upward_position_exceeds_canvas():
+    pages = [
+        PageVisualBands(
+            "p1", (_band("old", "p1", 0, 100, 0, 30),), anchor="center"
+        ),
+        PageVisualBands(
+            "p2",
+            (_band("new", "p2", 0, 100, 10, 40),),
+            gap_px=10,
+            anchor="end",
+        ),
+    ]
+
+    offsets = solve_page_axis_offsets(pages, viewport_min=0, viewport_max=100)
+
+    assert offsets["p2"] == 30
+    assert 10 + offsets["p2"] == 40
+    assert 40 + offsets["p2"] == 70
+
+
+def test_top_page_searches_up_when_downward_position_exceeds_canvas():
+    pages = [
+        PageVisualBands(
+            "p1", (_band("old", "p1", 0, 100, 70, 100),), anchor="center"
+        ),
+        PageVisualBands(
+            "p2",
+            (_band("new", "p2", 0, 100, 60, 90),),
+            gap_px=10,
+            anchor="start",
+        ),
+    ]
+
+    offsets = solve_page_axis_offsets(pages, viewport_min=0, viewport_max=100)
+
+    assert offsets["p2"] == -30
+    assert 60 + offsets["p2"] == 30
+    assert 90 + offsets["p2"] == 60
+
+
+def test_solver_falls_back_to_authored_position_when_neither_side_fits():
+    pages = [
+        PageVisualBands(
+            "p1", (_band("old", "p1", 0, 100, 30, 70),), anchor="center"
+        ),
+        PageVisualBands(
+            "p2",
+            (_band("new", "p2", 0, 100, 30, 70),),
+            gap_px=10,
+            anchor="end",
+        ),
+    ]
+
+    offsets = solve_page_axis_offsets(pages, viewport_min=0, viewport_max=100)
+
+    assert offsets["p2"] == 0
+
+
+def test_shifted_final_position_does_not_reapply_bottom_margin():
+    previous = PageVisualBands(
+        "p1", (_band("old", "p1", 0, 100, 200, 290),), anchor="center"
+    )
+    near_bottom = PageVisualBands(
+        "p2",
+        (_band("new", "p2", 0, 100, 240, 260),),
+        gap_px=10,
+        anchor="end",
+    )
+    at_bottom = PageVisualBands(
+        "p3",
+        (_band("new", "p3", 0, 100, 280, 300),),
+        gap_px=10,
+        anchor="end",
+    )
+
+    near_offset = solve_page_axis_offsets(
+        [previous, near_bottom], viewport_min=0, viewport_max=300
+    )["p2"]
+    bottom_offset = solve_page_axis_offsets(
+        [previous, at_bottom], viewport_min=0, viewport_max=300
+    )["p3"]
+
+    assert (240 + near_offset, 260 + near_offset) == (170, 190)
+    assert (280 + bottom_offset, 300 + bottom_offset) == (170, 190)
 
 
 def test_offset_window_keeps_displacement_until_shifted_page_finishes():

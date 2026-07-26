@@ -124,6 +124,8 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
     overlap_tip = panel._allow_inter_page_line_overlap_check.toolTip()
     assert "不会截断任何演唱区间" in overlap_tip
     assert "保持位置直到本页播放完毕" in overlap_tip
+    assert "放不下时改向反方向寻找" in overlap_tip
+    assert "两边都放不下则保持原布局位置" in overlap_tip
     assert "开启后不执行空间避让" in overlap_tip
 
 

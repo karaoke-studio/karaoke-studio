@@ -183,45 +183,65 @@ def _choose_offset(
         candidates.add(previous.axis_min - incoming.axis_max)
         candidates.add(previous.axis_max - incoming.axis_min)
 
-    directional = {
+    in_viewport = {
         float(value)
         for value in candidates
-        if _direction_penalty(float(value), anchor) == 0
-    }
-    if not directional:
-        directional = {0.0}
-    gap_valid = [
-        value
-        for value in directional
-        if all(_separation_deficit(incoming, previous, value, gap) <= 0.0
-               for incoming, previous in pairs)
-    ]
-    pixel_valid = [
-        value
-        for value in directional
-        if all(_pixel_overlap(incoming, previous, value) <= 0.0
-               for incoming, previous in pairs)
-    ]
-    pool = gap_valid if gap_valid else pixel_valid if pixel_valid else list(directional)
-    return min(
-        pool,
-        key=lambda value: _offset_score(
-            value,
-            pairs,
-            bands=bands,
-            gap=gap,
-            anchor=anchor,
+        if _viewport_overflow(
+            bands,
+            float(value),
             viewport_min=viewport_min,
             viewport_max=viewport_max,
-            placement_level=(
-                "gap"
-                if gap_valid
-                else "pixel"
-                if pixel_valid
-                else "overlap"
-            ),
-        ),
-    )
+        )
+        <= 0.0
+    }
+    preferred = {
+        value for value in in_viewport if _direction_penalty(value, anchor) == 0
+    }
+    opposite = in_viewport - preferred
+
+    # Preserve the authored top/bottom direction when it has enough room, then
+    # search the opposite side.  Requested line gap has priority over merely
+    # non-overlapping pixels.  Every accepted candidate must keep the complete
+    # static ink envelope inside the logical canvas.
+    for placement_level in ("gap", "pixel"):
+        for directional in (preferred, opposite):
+            if placement_level == "gap":
+                valid = [
+                    value
+                    for value in directional
+                    if all(
+                        _separation_deficit(incoming, previous, value, gap) <= 0.0
+                        for incoming, previous in pairs
+                    )
+                ]
+            else:
+                valid = [
+                    value
+                    for value in directional
+                    if all(
+                        _pixel_overlap(incoming, previous, value) <= 0.0
+                        for incoming, previous in pairs
+                    )
+                ]
+            if valid:
+                return min(
+                    valid,
+                    key=lambda value: _offset_score(
+                        value,
+                        pairs,
+                        bands=bands,
+                        gap=gap,
+                        anchor=anchor,
+                        viewport_min=viewport_min,
+                        viewport_max=viewport_max,
+                        placement_level=placement_level,
+                    ),
+                )
+
+    # There is no complete collision-free position on either side.  Keeping
+    # the authored position preserves the existing page/draw priority and is
+    # safer than moving part of the subtitle outside the canvas.
+    return 0.0
 
 
 def _offset_score(

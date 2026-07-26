@@ -1849,12 +1849,14 @@ def resolved_page_offset_windows_for_style(
     track: TimingTrack,
     style: Style,
 ) -> dict[int, tuple[tuple[int, int, float, float], ...]]:
-    """Return time-varying per-line page translations.
+    """Return one persistent per-line page translation window.
 
     Each tuple is ``(start_ms, end_ms, offset_x, offset_y)`` in the pre-viewport
-    logical canvas.  Placement is recomputed whenever the visible line set
-    changes, so a page is not kept displaced by an older page after that older
-    page has fully disappeared.
+    logical canvas.  Once a page is displaced, the same translation remains
+    active until that page finishes.  The solver accepts only positions whose
+    complete static ink envelope remains inside the canvas; it searches the
+    authored anchor direction first, then the opposite direction, and falls
+    back to the authored position when neither side can contain the page.
     """
 
     if style.allow_inter_page_line_overlap or not style.dual_line_layout:

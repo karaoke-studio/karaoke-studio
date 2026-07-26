@@ -8554,8 +8554,11 @@ def test_cross_page_placement_is_rigid_and_does_not_rewrite_time(qapp):
 
     normal_windows = subtitle_painter.display_windows_for_style(track, normal)
     legacy_windows = subtitle_painter.display_windows_for_style(track, legacy)
-    offsets = subtitle_painter.resolved_page_offsets_for_style(
+    constrained_offsets = subtitle_painter.resolved_page_offsets_for_style(
         1280, 720, track, normal
+    )
+    offsets = subtitle_painter.resolved_page_offsets_for_style(
+        1280, 1080, track, normal
     )
 
     assert normal_windows == {index: (0, 5_000) for index in range(4)}
@@ -8563,10 +8566,13 @@ def test_cross_page_placement_is_rigid_and_does_not_rewrite_time(qapp):
     assert offsets[0] == offsets[1] == (0.0, 0.0)
     assert offsets[2] == offsets[3]
     assert offsets[2] != (0.0, 0.0)
+    assert constrained_offsets == {
+        index: (0.0, 0.0) for index in range(4)
+    }
     assert subtitle_painter.resolved_page_offset_windows_for_style(
-        1280, 720, track, animated
+        1280, 1080, track, animated
     ) == subtitle_painter.resolved_page_offset_windows_for_style(
-        1280, 720, track, normal
+        1280, 1080, track, normal
     )
     assert subtitle_painter.resolved_page_offsets_for_style(
         1280, 720, track, legacy
