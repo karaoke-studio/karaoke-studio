@@ -101,6 +101,7 @@ struct TimingLine {
     int sourceIndex = 0;
     int sourceLineIndex = 0;
     int pageIndex = -1;
+    int pageLineCount = 0;
     int sourceOffsetMs = 0;
     int lane = 0;
     std::optional<int> displayStartMs;
@@ -2359,6 +2360,9 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
             line.sourceIndex = static_cast<int>(sourceIndex);
             line.sourceLineIndex = sourceLineIndex;
             line.pageIndex = intValue(lineObject, QStringLiteral("page_index"), -1);
+            line.pageLineCount = std::max(
+                0, intValue(lineObject, QStringLiteral("page_line_count"), 0)
+            );
             line.sourceOffsetMs = sourceOffsetMs;
             line.lane = std::max(0, intValue(lineObject, QStringLiteral("lane"), 0));
             if (lineObject.value(QStringLiteral("display_start_ms")).isDouble()) {
@@ -7061,11 +7065,34 @@ void applyGpuResolvedStyle(
     target.volumeTransitionRatioPct = source.volumeTransitionRatioPct;
 }
 
+// N3 CalcHorizontalAlignment: Top/Middle count forward from the page's first
+// line, Bottom counts backward from its last one.  The two agree on a full
+// page and diverge on a short one, where Bottom takes the tail of the list --
+// a 2-line page under [left, center, right] is "center + right".
+int alignmentIndexForLane(
+    int lane,
+    int alignmentCount,
+    int pageLineCount,
+    const QString &verticalPosition
+) {
+    if (alignmentCount <= 0) {
+        return 0;
+    }
+    int index = std::max(lane, 0);
+    if (verticalPosition == QStringLiteral("bottom")
+        && pageLineCount > 0
+        && pageLineCount < alignmentCount) {
+        index = std::max(alignmentCount - pageLineCount + index, 0);
+    }
+    return std::clamp(index, 0, alignmentCount - 1);
+}
+
 void applyGpuLineLayout(
     krok::subtitle::native::TextStyle &target,
     const ResolvedLineLayout &layout,
     int lane,
     bool centerOverride,
+    int pageLineCount,
     double scale
 ) {
     if (!layout.present) {
@@ -7101,8 +7128,11 @@ void applyGpuLineLayout(
             (secondRow ? layout.row2OffsetX : layout.row1OffsetX) * scale
         );
     } else if (!layout.lineAlignments.empty()) {
-        const int alignmentIndex = std::clamp(
-            lane, 0, static_cast<int>(layout.lineAlignments.size()) - 1
+        const int alignmentIndex = alignmentIndexForLane(
+            lane,
+            static_cast<int>(layout.lineAlignments.size()),
+            pageLineCount,
+            layout.lineYPosition
         );
         target.alignment = layout.lineAlignments[
             static_cast<std::size_t>(alignmentIndex)
@@ -7176,7 +7206,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
         if (sourceLine.layout.present) {
             applyGpuLineLayout(
                 lineStyle, sourceLine.layout, sourceLine.lane,
-                sourceLine.centerOverride, scale
+                sourceLine.centerOverride, sourceLine.pageLineCount, scale
             );
         } else {
             lineStyle.horizontalMargin = static_cast<float>(
@@ -7186,10 +7216,11 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 || config.lineHorizontalLayout == QStringLiteral("center")) {
                 lineStyle.alignment = "center";
             } else if (!config.lineAlignments.empty()) {
-                const int alignmentIndex = std::clamp(
+                const int alignmentIndex = alignmentIndexForLane(
                     sourceLine.lane,
-                    0,
-                    static_cast<int>(config.lineAlignments.size()) - 1
+                    static_cast<int>(config.lineAlignments.size()),
+                    sourceLine.pageLineCount,
+                    config.lineYPosition
                 );
                 lineStyle.alignment = config.lineAlignments[
                     static_cast<std::size_t>(alignmentIndex)
@@ -7278,7 +7309,7 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                     );
                     applyGpuLineLayout(
                         charStyle, sourceLine.layout, sourceLine.lane,
-                        sourceLine.centerOverride, scale
+                        sourceLine.centerOverride, sourceLine.pageLineCount, scale
                     );
                     styleIndex = static_cast<int>(scene.charStyles.size());
                     scene.charStyles.push_back(std::move(charStyle));

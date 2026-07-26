@@ -170,6 +170,7 @@ def timing_line_to_ir(
     resolved_intervals: list[tuple[int, int]] | None = None,
     guide_anchor_bounds: tuple[int, int] | None = None,
     page_index: int = -1,
+    page_line_count: int = 0,
     section_index: int = -1,
     lane: int = 0,
     display_start_ms: int | None = None,
@@ -189,6 +190,9 @@ def timing_line_to_ir(
         "singer_id": line.singer_id,
         "is_blank": bool(line.is_blank),
         "page_index": int(page_index),
+        # 页内可渲染行数：Bottom 锚定的短页要从对齐列表末尾往回取（N3
+        # ``CalcHorizontalAlignment``），native 侧靠这个值复现同一档对齐。
+        "page_line_count": max(int(page_line_count), 0),
         "section_index": int(section_index),
         "lane": int(lane),
         "display_start_ms": (
@@ -283,6 +287,25 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
             for index, line in enumerate(track.lines)
         }
         animation_styles = [style_with_line_animation(style, line) for line in track.lines]
+        from krok_helper.subtitle_render.engine.timeline import assign_lanes
+
+        # 页内行数按 Painter 的口径算（``_renderable_page_lines`` 同样只走
+        # assign_lanes），保证 native 解出的对齐档与 Painter 一致。
+        renderable_lines = [
+            (index, line)
+            for index, line in enumerate(track.lines)
+            if not line.is_blank and line.chars
+        ]
+        _lanes, lane_page_starts, lane_page_rows = assign_lanes(
+            [line for _, line in renderable_lines],
+            _lane_count(style),
+            _row_count_resolver(style),
+            section_gap_ms=style.section_gap_ms,
+        )
+        page_line_counts = {
+            track_index: lane_page_rows[render_index]
+            for render_index, (track_index, _) in enumerate(renderable_lines)
+        }
         if track.page_plan is not None:
             resolved_plan = resolve_page_plan(track, style)
             page_indices = {
@@ -294,25 +317,13 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
                 for item in resolved_plan.lines
             }
         else:
-            from krok_helper.subtitle_render.engine.timeline import assign_lanes
-
-            renderable = [
-                (index, line)
-                for index, line in enumerate(track.lines)
-                if not line.is_blank and line.chars
-            ]
-            _, page_starts, _ = assign_lanes(
-                [line for _, line in renderable],
-                _lane_count(style),
-                _row_count_resolver(style),
-                section_gap_ms=style.section_gap_ms,
-            )
             page_indices = {
-                track_index: page_starts[render_index]
-                for render_index, (track_index, _) in enumerate(renderable)
+                track_index: lane_page_starts[render_index]
+                for render_index, (track_index, _) in enumerate(renderable_lines)
             }
             section_indices = {}
     else:
+        page_line_counts = {}
         center_overrides = {}
         animation_styles = []
         layout_styles = []
@@ -343,6 +354,7 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
                     guide_anchor_bounds[index] if style is not None else None
                 ),
                 page_index=page_indices.get(index, -1),
+                page_line_count=page_line_counts.get(index, 0),
                 section_index=section_indices.get(index, -1),
                 lane=schedule.get(index, (0, 0, 0))[0],
                 display_start_ms=(schedule[index][1] if index in schedule else None),

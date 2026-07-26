@@ -7238,6 +7238,67 @@ def test_smart_equal_margins_skips_pair_without_slack(qapp):
     assert x0_smart == _resolve_line_x(img_w, w0, style, 0, center_override=False)
 
 
+def test_bottom_short_page_takes_alignments_from_the_tail(qapp):
+    """N3 ``CalcHorizontalAlignment``：Bottom 锚定从对齐列表末尾往回数。
+
+    3 行布局 ``[左, 中, 右]`` 只排下两行时，N3 给的是「中 + 右」——不是「左 + 中」。
+    满页仍旧正序，Top 锚定也仍旧正序。
+    """
+
+    track = _continuous_track(["あい", "うえ"])
+    style = Style(
+        line_alignments=["left", "center", "right"],
+        smart_horizontal="none",
+        line_y_position="bottom",
+    )
+    img_w = 1920
+    line0, line1 = track.lines
+    w0 = _line_total_width(line0, style)
+    w1 = _line_total_width(line1, style)
+
+    # 页内两行 → 取列表末两项：中、右
+    assert _resolve_line_x_smart(img_w, w0, track, line0, style, 0) == (img_w - w0) // 2
+    assert _resolve_line_x_smart(img_w, w1, track, line1, style, 1) == (
+        img_w - 50 - w1
+    )
+
+    # Top 锚定不反向：仍是 左、中
+    top_style = replace(style, line_y_position="top")
+    assert _resolve_line_x_smart(img_w, w0, track, line0, top_style, 0) == 50
+    assert _resolve_line_x_smart(img_w, w1, track, line1, top_style, 1) == (
+        img_w - w1
+    ) // 2
+
+    # 满页（3 行）回到正序：左、中、右
+    full = _continuous_track(["あい", "うえ", "おか"])
+    lines = full.lines
+    widths = [_line_total_width(item, style) for item in lines]
+    assert _resolve_line_x_smart(img_w, widths[0], full, lines[0], style, 0) == 50
+    assert _resolve_line_x_smart(img_w, widths[1], full, lines[1], style, 1) == (
+        img_w - widths[1]
+    ) // 2
+    assert _resolve_line_x_smart(img_w, widths[2], full, lines[2], style, 2) == (
+        img_w - 50 - widths[2]
+    )
+
+
+def test_bottom_single_line_page_uses_the_last_alignment(qapp):
+    """单行页在 Bottom 锚定下占最下行，对齐取列表末项（N3 的 while 一次都不走）。
+
+    SmartHorizon 开着时单行页本来就整行居中，所以这条只在「不调整」时可见。
+    """
+
+    track = _continuous_track(["あい"])
+    style = Style(smart_horizontal="none")  # 默认 ["left", "right"] + bottom
+    img_w = 1920
+    line = track.lines[0]
+    width = _line_total_width(line, style)
+
+    assert _resolve_line_x_smart(img_w, width, track, line, style, 0) == (
+        img_w - 50 - width
+    )
+
+
 def test_smart_none_keeps_margin_anchor_and_single_page_centering_off(qapp):
     track = _continuous_track(["あい", "うえ", "おか", "きく"])
     style = Style(smart_horizontal="none")
@@ -7368,6 +7429,9 @@ def test_n3_inline_role_left_anchor_ignores_secondary_visual_padding(qapp):
         layout_semantics="n3_1074",
         smart_horizontal="none",
         horizontal_margin_px=73,
+        # 单行布局：本例只关心左锚点是否被次级描边撑开，别让 Bottom 短页规则
+        # （N3 从对齐列表末尾往回取）把这一行变成右对齐。
+        line_alignments=["left"],
         custom_style_schemes={
             "lead": SubtitleStyleScheme(
                 font_family="Arial",

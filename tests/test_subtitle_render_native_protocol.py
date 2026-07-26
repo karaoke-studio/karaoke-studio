@@ -253,6 +253,8 @@ def test_build_render_ir_carries_painter_page_groups_for_native_smart_horizon():
         (2, 0),
     ]
     assert lines[0]["layout"]["smart_horizontal"] == "equal_margins"
+    # 末页只有一行：native 靠 page_line_count 才能选到 Bottom 短页那一档对齐。
+    assert [line["page_line_count"] for line in lines] == [2, 2, 1]
 
 
 def test_build_render_ir_resolves_guide_symbols_with_painter_semantics():

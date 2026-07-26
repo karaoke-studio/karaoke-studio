@@ -3835,6 +3835,64 @@ def test_gpu_smart_horizontal_applies_without_n3_semantics(monkeypatch, smart) -
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_bottom_short_page_takes_alignments_from_the_tail(monkeypatch) -> None:
+    """Bottom 锚定的短页取对齐列表末尾几项（N3 ``CalcHorizontalAlignment``）。
+
+    3 行布局 ``[左, 中, 右]`` 只排两行时应是「中 + 右」。native 曾经恒从 0 正序
+    取，排出来是「左 + 中」——上行会贴到左余白上。
+    """
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[TimingChar("上", 1_000), TimingChar("行", 1_050)],
+                end_ms=2_000,
+                display_start_override_ms=0,
+                display_end_override_ms=2_000,
+            ),
+            TimingLine(
+                chars=[TimingChar("下", 1_500), TimingChar("行", 1_550)],
+                end_ms=2_500,
+                display_start_override_ms=0,
+                display_end_override_ms=2_000,
+            ),
+        ]
+    )
+    style = _g1_style(
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=52,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=True,
+        line_horizontal_layout="asymmetric",
+        line_alignments=["left", "center", "right"],
+        line_y_position="bottom",
+        smart_horizontal="none",
+        horizontal_margin_px=24,
+        line_lead_in_ms=1_000,
+        line_tail_ms=500,
+    )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, (1_600,), force_warp=True, track=track
+        )
+    painter = _render_painter_oracle(style, t_ms=1_600, track=track)
+
+    gpu_bounds = _payload_alpha_bounds(gpu[0])
+    painter_bounds = _payload_alpha_bounds(painter)
+    # 上行居中、下行贴右余白 → 整体包围盒不会碰到左余白。
+    assert gpu_bounds[0] > 24 + 40
+    assert all(
+        abs(actual - expected) <= 12
+        for actual, expected in zip(gpu_bounds, painter_bounds)
+    ), (gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_n3_smart_horizontal_measures_inline_role_fonts(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     track = TimingTrack(

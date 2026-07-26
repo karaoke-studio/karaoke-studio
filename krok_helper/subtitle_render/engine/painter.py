@@ -4969,7 +4969,7 @@ def _layout_plain_line(
         style.layout_semantics == "n3_1074"
         and not center_override
         and style.line_horizontal_layout == "asymmetric"
-        and _lane_alignment(style, lane) == "center"
+        and _line_lane_alignment(track, source_line, style, lane) == "center"
     )
     x0 = (
         line_x
@@ -5697,7 +5697,7 @@ def _layout_role_line(
         style.layout_semantics == "n3_1074"
         and not center_override
         and style.line_horizontal_layout == "asymmetric"
-        and _lane_alignment(style, lane) == "center"
+        and _line_lane_alignment(track, source_line, style, lane) == "center"
     )
     x0 = (
         line_x
@@ -10778,15 +10778,62 @@ def _lane_count(style: Style) -> int:
     return max(len(style.line_alignments), 1)
 
 
-def _lane_alignment(style: Style, lane: int | None) -> str:
-    """lane（0 = 最上行）对应的水平对齐。
+def _lane_alignment(
+    style: Style, lane: int | None, page_line_count: int | None = None
+) -> str:
+    """lane（0 = 页内最上行）对应的水平对齐（N3 ``CalcHorizontalAlignment``）。
 
-    显示行数恒等于 ``line_alignments`` 长度，因此 N3 的 Bottom「从下往上取列表
-    末尾」与正序索引等价；越界时沿用端项（对应 N3 溢出行为）。
+    取值方向跟着上下配置走：Top / Middle 从对齐列表**开头**往下数，Bottom 从
+    **末尾**往回数。满页时两者等价，段末短页（页内行数 < 列表长度）不等价——
+    Bottom 锚定的短页取列表末尾那几项，例如 3 行布局 ``[左, 中, 右]`` 里的两行页
+    是「中 + 右」而不是「左 + 中」。``page_line_count`` 为 ``None`` 时按满页处理。
+    越界钳到端项（对应 N3 两个分支各自的 while 上下限）。
     """
     alignments = style.line_alignments or ["left"]
+    count = len(alignments)
     index = 0 if lane is None else max(int(lane), 0)
-    return alignments[min(index, len(alignments) - 1)]
+    if (
+        page_line_count is not None
+        and style.line_y_position == "bottom"
+        and 0 < int(page_line_count) < count
+    ):
+        index = max(count - int(page_line_count) + index, 0)
+    return alignments[min(index, count - 1)]
+
+
+def _line_lane_alignment(
+    track: TimingTrack, line: TimingLine, style: Style, lane: int | None
+) -> str:
+    """某一行的水平对齐；Bottom 短页会改取对齐列表末尾（见 ``_lane_alignment``）。"""
+    if not _bottom_short_page_alignment(style):
+        return _lane_alignment(style, lane)
+    page = _renderable_page_lines(track, line, style)
+    return _lane_alignment(style, lane, len(page) if page else None)
+
+
+def _bottom_short_page_alignment(style: Style) -> bool:
+    """Bottom 锚定 + 多行对齐列表：短页会改取对齐列表的末尾项。"""
+    return (
+        style.dual_line_layout
+        and style.line_horizontal_layout == "asymmetric"
+        and style.line_y_position == "bottom"
+        and len(style.line_alignments or []) > 1
+    )
+
+
+def _layout_page_lines(
+    track: TimingTrack, line: TimingLine, style: Style
+) -> list[tuple[TimingLine, int]] | None:
+    """水平布局要用到的页成员；SmartHorizon 与 Bottom 短页对齐都不需要时返回 None。
+
+    两个特性共用同一趟页定位，避免多算一次 ``assign_lanes``。
+    """
+    if not style.dual_line_layout or style.line_horizontal_layout != "asymmetric":
+        return None
+    needs_smart = style.smart_horizontal != "none" and not style.vertical
+    if not needs_smart and not _bottom_short_page_alignment(style):
+        return None
+    return _renderable_page_lines(track, line, style)
 
 
 def _resolve_line_x(
@@ -10796,6 +10843,7 @@ def _resolve_line_x(
     lane: int | None,
     *,
     center_override: bool = False,
+    page_line_count: int | None = None,
 ) -> int:
     if center_override:
         return (img_w - total_w) // 2
@@ -10805,7 +10853,7 @@ def _resolve_line_x(
     if style.line_horizontal_layout == "center":
         return (img_w - total_w) // 2
     if style.dual_line_layout and lane is not None:
-        align = _lane_alignment(style, lane)
+        align = _lane_alignment(style, lane, page_line_count)
         margin = max(style.horizontal_margin_px, 0)
         if align == "left":
             return margin
@@ -11042,6 +11090,7 @@ def _smart_horizontal_dx(
     lane: int | None,
     *,
     center_override: bool,
+    page: list[tuple[TimingLine, int]] | None = None,
 ) -> int:
     """SmartHorizon 二次水平修正（逆向 N3 ``SetOneLineX``）。
 
@@ -11049,19 +11098,25 @@ def _smart_horizontal_dx(
     从画面中心附近开始/结束；``equal_margins`` 以页为单位，页内同时存在
     Left 与 Right 行且有空隙时，把空隙对半分给 Left/Right 行。Center 行
     （含被居中覆盖的行）不修正。
+
+    ``page`` 是调用方已经定好的页成员（``_layout_page_lines``），省一趟页定位。
     """
     mode = style.smart_horizontal
     if mode == "none" or style.vertical or center_override:
         return 0
     if not style.dual_line_layout or style.line_horizontal_layout != "asymmetric":
         return 0
-    own_align = _lane_alignment(style, lane)
+    if page is None:
+        page = _renderable_page_lines(track, line, style)
+    page_rows = len(page) if page else None
+    own_align = _lane_alignment(style, lane, page_rows)
     if own_align == "center":
         return 0
     margin = max(style.horizontal_margin_px, 0)
     font = _n3_smart_font_size(line, style)
-    base_x = _resolve_line_x(img_w, total_w, style, lane, center_override=False)
-    page = _renderable_page_lines(track, line, style)
+    base_x = _resolve_line_x(
+        img_w, total_w, style, lane, center_override=False, page_line_count=page_rows
+    )
     if page is not None and len(page) <= 1:
         # 单行页：SmartHorizon != None 时整行居中。
         return (img_w - total_w) // 2 - base_x
@@ -11088,7 +11143,7 @@ def _smart_horizontal_dx(
         if _line_center_override(track, page_line, page_style):
             align = "center"
         else:
-            align = _lane_alignment(page_style, page_lane)
+            align = _lane_alignment(page_style, page_lane, page_rows)
         width = (
             total_w
             if page_line is line
@@ -11136,9 +11191,24 @@ def _resolve_line_x_smart(
     *,
     center_override: bool = False,
 ) -> int:
-    x = _resolve_line_x(img_w, total_w, style, lane, center_override=center_override)
+    page = _layout_page_lines(track, line, style)
+    x = _resolve_line_x(
+        img_w,
+        total_w,
+        style,
+        lane,
+        center_override=center_override,
+        page_line_count=len(page) if page else None,
+    )
     return x + _smart_horizontal_dx(
-        img_w, total_w, track, line, style, lane, center_override=center_override
+        img_w,
+        total_w,
+        track,
+        line,
+        style,
+        lane,
+        center_override=center_override,
+        page=page,
     )
 
 
