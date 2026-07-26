@@ -105,6 +105,8 @@ struct TimingLine {
     int pageLineCount = 0;
     int sourceOffsetMs = 0;
     int lane = 0;
+    double layoutOffsetX = 0.0;
+    double layoutOffsetY = 0.0;
     std::optional<int> displayStartMs;
     std::optional<int> displayEndMs;
     std::optional<double> guideAnchorLeft;
@@ -2412,6 +2414,12 @@ std::optional<RenderConfig> parseConfig(const QJsonObject &ir, QString *error) {
             );
             line.sourceOffsetMs = sourceOffsetMs;
             line.lane = std::max(0, intValue(lineObject, QStringLiteral("lane"), 0));
+            line.layoutOffsetX = lineObject.value(
+                QStringLiteral("layout_offset_x")
+            ).toDouble(0.0);
+            line.layoutOffsetY = lineObject.value(
+                QStringLiteral("layout_offset_y")
+            ).toDouble(0.0);
             if (lineObject.value(QStringLiteral("display_start_ms")).isDouble()) {
                 line.displayStartMs = lineObject.value(
                     QStringLiteral("display_start_ms")
@@ -2990,7 +2998,7 @@ std::vector<DisplayLineRef> visibleDisplayLines(const RenderConfig &cfg, int tMs
     std::vector<DisplayLineRef> visible;
     visible.reserve(all.size());
     for (const auto &item : all) {
-        if (item.line != nullptr && item.displayStartMs <= tMs && tMs <= item.displayEndMs) {
+        if (item.line != nullptr && item.displayStartMs <= tMs && tMs < item.displayEndMs) {
             visible.push_back(item);
         }
     }
@@ -7277,6 +7285,12 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 ].toStdString();
             }
         }
+        lineStyle.layoutOffsetX += static_cast<float>(
+            sourceLine.layoutOffsetX * scale
+        );
+        lineStyle.layoutOffsetY += static_cast<float>(
+            sourceLine.layoutOffsetY * scale
+        );
         scene.lineStyles.push_back(std::move(lineStyle));
         TextLine line;
         const int sourceTimingOffset = config.timingOffsetMs + sourceLine.sourceOffsetMs;
@@ -7360,6 +7374,12 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                     applyGpuLineLayout(
                         charStyle, sourceLine.layout, sourceLine.lane,
                         sourceLine.centerOverride, sourceLine.pageLineCount, scale
+                    );
+                    charStyle.layoutOffsetX += static_cast<float>(
+                        sourceLine.layoutOffsetX * scale
+                    );
+                    charStyle.layoutOffsetY += static_cast<float>(
+                        sourceLine.layoutOffsetY * scale
                     );
                     styleIndex = static_cast<int>(scene.charStyles.size());
                     scene.charStyles.push_back(std::move(charStyle));

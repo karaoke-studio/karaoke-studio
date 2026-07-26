@@ -78,6 +78,7 @@ def compute_show_times(
     interval_ms: int,
     protect_ms: int,
     overrides: Optional[Sequence[tuple[Optional[int], Optional[int]]]] = None,
+    adjust_same_position: bool = True,
 ) -> ShowTimes:
     """按 N3 ``TopLongAdjuster`` 算出每个渲染行的 ``(上屏, 消失)``。
 
@@ -106,6 +107,7 @@ def compute_show_times(
         interval=max(int(interval_ms), 0),
         protect=max(int(protect_ms), 0),
         overrides=overrides,
+        adjust_same_position=bool(adjust_same_position),
         result=result,
     ).run()
 
@@ -124,6 +126,7 @@ class _Solver:
         interval: int,
         protect: int,
         overrides: Optional[Sequence[tuple[Optional[int], Optional[int]]]],
+        adjust_same_position: bool,
         result: ShowTimes,
     ) -> None:
         self.begins = sing_begins
@@ -133,6 +136,7 @@ class _Solver:
         self.post = post
         self.interval = interval
         self.protect = protect
+        self.adjust_same_position = adjust_same_position
         self.out = result
 
         total = len(sing_begins)
@@ -360,6 +364,7 @@ class _Solver:
                     starts[line] = starts[top]
                     ends[line] = ends[top]
                 self._apply_override(line)
-                self._adjust_same_position(line, is_bottom_align)
+                if self.adjust_same_position:
+                    self._adjust_same_position(line, is_bottom_align)
                 self._apply_override(line)
         return self.out

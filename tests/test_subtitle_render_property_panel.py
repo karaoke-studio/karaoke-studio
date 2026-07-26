@@ -112,6 +112,7 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
         panel._lit_shadow_check,
         panel._vertical_check,
         panel._rtl_check,
+        panel._allow_inter_page_line_overlap_check,
         panel._sync_entry_check,
         panel._sync_ending_check,
         panel._ruby_main_reading_units_check,
@@ -119,6 +120,7 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
 
     assert all(isinstance(checkbox, CheckBox) for checkbox in checkboxes)
     assert not panel._ruby_main_reading_units_check.isChecked()
+    assert not panel._allow_inter_page_line_overlap_check.isChecked()
 
 
 def test_property_panel_uses_fluent_form_controls(qapp):

@@ -90,6 +90,10 @@ _RUN_GLOW_CACHE = LayerCache(max_items=128)
 # 行索引而非行内容进 key：SmartHorizon 的页定位用 `item is line` 身份判断，
 # 值相同的两行也可能落在不同页。
 _LINE_LAYOUT_CACHE = LayerCache(max_items=48)
+_PAGE_PLACEMENT_CACHE_MAX = 24
+_PAGE_PLACEMENT_CACHE: "OrderedDict[tuple, dict[int, tuple[float, float]]]" = (
+    OrderedDict()
+)
 
 
 def _layout_cache_enabled() -> bool:
@@ -386,6 +390,7 @@ def clear_before_layer_cache() -> None:
     _RUBY_MEASURE_CACHE.clear()
     _RUBY_UNIT_LAYOUT_CACHE.clear()
     _LINE_LAYOUT_CACHE.clear()
+    _PAGE_PLACEMENT_CACHE.clear()
 
 
 _SIG_FIELD_NAMES_BY_TYPE: dict[type, tuple[str, ...]] = {}
@@ -521,6 +526,11 @@ from krok_helper.subtitle_render.engine.page_plan import (
     resolve_page_plan,
     set_pages_layout,
     use_default_layouts,
+)
+from krok_helper.subtitle_render.engine.page_placement import (
+    LineVisualBand,
+    PageVisualBands,
+    solve_page_axis_offsets,
 )
 from krok_helper.subtitle_render.engine.animator import line_animation_state
 from krok_helper.subtitle_render.engine.show_time import protect_time_ms
@@ -836,6 +846,15 @@ def _paint_track_to_painter(
         if display_style.vertical:
             baselines = _resolve_vertical_columns(logical_w, track, display_lines, display_style)
             line_layouts = {}
+            per_line_axes = {
+                id(display_line.line): _resolve_vertical_columns(
+                    logical_w,
+                    track,
+                    [display_line],
+                    _style_for_line(display_style, display_line.line),
+                ).get(display_line.lane)
+                for display_line in display_lines
+            }
         else:
             baselines = (
                 _resolve_display_baselines(logical_h, track, display_lines, display_style)
@@ -851,37 +870,56 @@ def _paint_track_to_painter(
                 track_t_ms,
                 display_style,
             )
+            per_line_axes = {}
         layout_cache_sig = (
             _layout_cache_sig(track, display_style) if display_lines else None
         )
+        track_offsets = resolved_page_offsets_for_style(
+            logical_w, logical_h, track, display_style
+        )
+        line_offsets = {
+            id(line): track_offsets.get(index, (0.0, 0.0))
+            for index, line in enumerate(track.lines)
+        }
         for display_line in display_lines:
-            line_layout = line_layouts.get(display_line.lane)
+            line_layout = line_layouts.get(id(display_line.line))
             has_role_labels = _line_has_role_labels(display_line.line)
             line_x = None
             if line_layout is not None and not has_role_labels:
                 line_x = line_layout.text_x
-            _paint_line(
-                painter,
-                logical_w,
-                logical_h,
-                track,
-                display_line.line,
-                track_t_ms,
-                display_style,
-                baseline_y=(
-                    line_layout.baseline_y
-                    if line_layout is not None
-                    else baselines.get(
-                        display_line.lane,
-                        next(iter(baselines.values()), logical_h // 2),
-                    )
-                ),
-                line_x=line_x,
-                lane=display_line.lane if display_style.dual_line_layout else None,
-                display_start_ms=display_line.display_start_ms,
-                display_end_ms=display_line.display_end_ms,
-                layout_cache_sig=layout_cache_sig,
+            offset_x, offset_y = line_offsets.get(
+                id(display_line.line), (0.0, 0.0)
             )
+            painter.save()
+            try:
+                if offset_x or offset_y:
+                    painter.translate(offset_x, offset_y)
+                _paint_line(
+                    painter,
+                    logical_w,
+                    logical_h,
+                    track,
+                    display_line.line,
+                    track_t_ms,
+                    display_style,
+                    baseline_y=(
+                        per_line_axes.get(id(display_line.line))
+                        if display_style.vertical
+                        else line_layout.baseline_y
+                        if line_layout is not None
+                        else baselines.get(
+                            display_line.lane,
+                            next(iter(baselines.values()), logical_h // 2),
+                        )
+                    ),
+                    line_x=line_x,
+                    lane=display_line.lane if display_style.dual_line_layout else None,
+                    display_start_ms=display_line.display_start_ms,
+                    display_end_ms=display_line.display_end_ms,
+                    layout_cache_sig=layout_cache_sig,
+                )
+            finally:
+                painter.restore()
         if not display_style.vertical and signal_lines:
             _paint_signal_lits(
                 painter,
@@ -893,6 +931,7 @@ def _paint_track_to_painter(
                 track_t_ms,
                 display_style,
                 line_layouts=line_layouts,
+                line_offsets=line_offsets,
             )
     finally:
         painter.restore()
@@ -1665,6 +1704,13 @@ def _subtitle_lines_vertical_bounds(
         else {}
     )
     layout_cache_sig = _layout_cache_sig(track, style) if display_lines else None
+    track_offsets = resolved_page_offsets_for_style(
+        logical_w, logical_h, track, style
+    )
+    line_offsets = {
+        id(line): track_offsets.get(index, (0.0, 0.0))
+        for index, line in enumerate(track.lines)
+    }
     bounds: list[tuple[int, int]] = []
     for display_line in display_lines:
         line_bounds = _display_line_vertical_bounds(
@@ -1680,7 +1726,15 @@ def _subtitle_lines_vertical_bounds(
         )
         if line_bounds is None:
             return None
-        bounds.append(line_bounds)
+        _offset_x, offset_y = line_offsets.get(
+            id(display_line.line), (0.0, 0.0)
+        )
+        bounds.append(
+            (
+                int(math.floor(line_bounds[0] + offset_y)),
+                int(math.ceil(line_bounds[1] + offset_y)),
+            )
+        )
     if signal_lines:
         signal_bounds = _TEXT_RUN_COMPOSITOR.vertical_bounds(
             LayerContext(t_ms=track_t_ms, logical_w=logical_w, logical_h=logical_h),
@@ -1693,6 +1747,7 @@ def _subtitle_lines_vertical_bounds(
                 track_t_ms,
                 style,
                 line_layouts=line_layouts,
+                line_offsets=line_offsets,
             ),
         )
         if signal_bounds is not None:
@@ -1732,7 +1787,7 @@ def _display_line_vertical_bounds(
     if animation.opacity <= 0.0:
         return None
 
-    line_layout = line_layouts.get(display_line.lane)
+    line_layout = line_layouts.get(id(display_line.line))
     has_role_labels = _line_has_role_labels(line)
     line_x = line_layout.text_x if line_layout is not None and not has_role_labels else None
     layout = _layout_line(
@@ -1786,6 +1841,330 @@ def _display_line_vertical_bounds(
         return None
     dy = int(math.floor(animation.dy)) if animation.dy < 0 else int(math.ceil(animation.dy))
     return line_bounds[0] + dy, line_bounds[1] + dy
+
+
+def resolved_page_offsets_for_style(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    style: Style,
+) -> dict[int, tuple[float, float]]:
+    """Return stable per-track-line page translations for cross-page avoidance.
+
+    The result is derived from the complete display schedule, rather than the
+    current frame's visible subset, so a page does not jump when another row on
+    that page enters or exits.  Values stay in the pre-viewport logical canvas;
+    CPU and native/GPU consumers apply the same translation before the shared
+    viewport transform.
+    """
+
+    if style.allow_inter_page_line_overlap or not style.dual_line_layout:
+        return {}
+    cache_key = (
+        max(int(logical_w), 1),
+        max(int(logical_h), 1),
+        _value_signature(track),
+        _value_signature(style),
+    )
+    cached = _PAGE_PLACEMENT_CACHE.get(cache_key)
+    if cached is not None:
+        _PAGE_PLACEMENT_CACHE.move_to_end(cache_key)
+        return dict(cached)
+
+    display_lines = compute_display_lines(
+        track,
+        lead_in_ms=style.line_lead_in_ms,
+        tail_ms=style.line_tail_ms,
+        lane_gap_ms=style.line_lane_gap_ms,
+        section_gap_ms=style.section_gap_ms,
+        sync_entry=style.sync_entry,
+        sync_ending=style.sync_ending,
+        section_ending_mode=style.section_ending_mode,
+        protect_ms=_effective_line_protect_ms(style),
+        lane_count=_lane_count(style),
+        row_count_of=_row_count_resolver(style),
+        bottom_align_of=_bottom_align_resolver(style),
+        vertical_position_of=_vertical_position_resolver(style),
+        adjust_same_position=False,
+    )
+    if not display_lines:
+        return {}
+
+    index_of = {id(line): index for index, line in enumerate(track.lines)}
+    page_order: list[tuple[int, int]] = []
+    page_bands: dict[tuple[int, int], list[LineVisualBand]] = {}
+    page_styles: dict[tuple[int, int], Style] = {}
+    line_to_page: dict[int, tuple[int, int]] = {}
+
+    if style.vertical:
+        baselines: dict[int, int] = {}
+        line_layouts: dict[int, _SayatooLineLayout] = {}
+        layout_cache_sig = None
+    else:
+        baselines = _resolve_display_baselines(
+            logical_h, track, display_lines, style
+        )
+        # The map is keyed by TimingLine identity, not lane.  Several pages can
+        # be visible at once and may legitimately reuse the same lane number.
+        line_layouts = _resolve_sayatoo_line_layouts(
+            logical_w,
+            logical_h,
+            track,
+            display_lines,
+            baselines,
+            0,
+            style,
+        )
+        layout_cache_sig = _layout_cache_sig(track, style)
+
+    for display_line in display_lines:
+        track_index = index_of.get(id(display_line.line))
+        if track_index is None:
+            continue
+        page_id = (int(display_line.section_index), int(display_line.page_index))
+        if page_id not in page_bands:
+            page_order.append(page_id)
+            page_bands[page_id] = []
+        line_style = _style_for_line(style, display_line.line)
+        page_styles.setdefault(page_id, line_style)
+        line_to_page[track_index] = page_id
+        if style.vertical:
+            axis_bounds = _display_line_horizontal_envelope(
+                logical_w,
+                logical_h,
+                track,
+                display_line,
+                line_style,
+            )
+        else:
+            axis_bounds = _display_line_vertical_envelope(
+                logical_w,
+                logical_h,
+                track,
+                display_line,
+                style,
+                baselines,
+                line_layouts,
+                layout_cache_sig=layout_cache_sig,
+            )
+        if axis_bounds is None:
+            continue
+        page_bands[page_id].append(
+            LineVisualBand(
+                line_id=track_index,
+                page_id=page_id,
+                display_start_ms=int(display_line.display_start_ms),
+                display_end_ms=int(display_line.display_end_ms),
+                axis_min=float(axis_bounds[0]),
+                axis_max=float(axis_bounds[1]),
+            )
+        )
+
+    pages: list[PageVisualBands] = []
+    for page_id in page_order:
+        page_style = page_styles[page_id]
+        position = page_style.line_y_position
+        anchor = (
+            "start"
+            if position == "top"
+            else "center"
+            if position == "center"
+            else "end"
+        )
+        if style.vertical:
+            # Vertical columns originate on the right and naturally avoid
+            # towards the left, independent of the within-column Y anchor.
+            anchor = "end"
+        pages.append(
+            PageVisualBands(
+                page_id=page_id,
+                bands=tuple(page_bands[page_id]),
+                gap_px=max(int(page_style.line_gap_px), 0),
+                anchor=anchor,
+            )
+        )
+    axis_offsets = solve_page_axis_offsets(
+        pages,
+        viewport_min=0.0,
+        viewport_max=float(logical_w if style.vertical else logical_h),
+    )
+    resolved = {
+        track_index: (
+            float(axis_offsets.get(page_id, 0.0)) if style.vertical else 0.0,
+            0.0 if style.vertical else float(axis_offsets.get(page_id, 0.0)),
+        )
+        for track_index, page_id in line_to_page.items()
+    }
+    _PAGE_PLACEMENT_CACHE[cache_key] = resolved
+    _PAGE_PLACEMENT_CACHE.move_to_end(cache_key)
+    while len(_PAGE_PLACEMENT_CACHE) > _PAGE_PLACEMENT_CACHE_MAX:
+        _PAGE_PLACEMENT_CACHE.popitem(last=False)
+    return dict(resolved)
+
+
+def _display_line_vertical_envelope(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    display_line: DisplayLine,
+    style: Style,
+    baselines: dict[int, int],
+    line_layouts: dict[int, _SayatooLineLayout],
+    *,
+    layout_cache_sig: tuple | None,
+) -> tuple[int, int] | None:
+    bounds: list[tuple[int, int]] = []
+    for sample_ms in _line_envelope_sample_times(display_line, style):
+        item = _display_line_vertical_bounds(
+            logical_w,
+            logical_h,
+            track,
+            sample_ms,
+            style,
+            display_line,
+            baselines,
+            line_layouts,
+            layout_cache_sig=layout_cache_sig,
+        )
+        if item is not None:
+            bounds.append(item)
+        if style.lit_enabled:
+            signal_bounds = _TEXT_RUN_COMPOSITOR.vertical_bounds(
+                LayerContext(
+                    t_ms=sample_ms,
+                    logical_w=logical_w,
+                    logical_h=logical_h,
+                ),
+                _signal_layer_stack(
+                    track,
+                    [display_line],
+                    baselines,
+                    logical_w,
+                    logical_h,
+                    sample_ms,
+                    style,
+                    line_layouts=line_layouts,
+                ),
+            )
+            if signal_bounds is not None:
+                bounds.append(signal_bounds)
+    if bounds:
+        return (
+            min(item[0] for item in bounds),
+            max(item[1] for item in bounds),
+        )
+
+    line_style = _style_for_line(style, display_line.line)
+    layout = line_layouts.get(id(display_line.line))
+    if layout is None:
+        return None
+    _main_h, main_ascent, main_descent, ruby_extra = _fixed_line_geometry(
+        line_style
+    )
+    extent = _line_effect_extent(line_style, vertical_axis=True)
+    return (
+        int(math.floor(layout.baseline_y - main_ascent - ruby_extra - extent)),
+        int(math.ceil(layout.baseline_y + main_descent + extent)),
+    )
+
+
+def _display_line_horizontal_envelope(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    display_line: DisplayLine,
+    line_style: Style,
+) -> tuple[int, int] | None:
+    column = _resolve_vertical_columns(
+        logical_w, track, [display_line], line_style
+    ).get(display_line.lane)
+    render_line = _line_with_guide_symbol(display_line.line)
+    layout = _layout_vertical_line(
+        track,
+        render_line,
+        line_style,
+        logical_w,
+        logical_h,
+        column_x=column,
+        source_line=display_line.line,
+    )
+    if layout is None:
+        return None
+    path_bounds = layout.text_path.boundingRect()
+    left = min(float(layout.line_rect.left()), float(path_bounds.left()))
+    right = max(float(layout.line_rect.right()), float(path_bounds.right()))
+    if layout.active_rubies:
+        ruby_metrics = QFontMetrics(_build_ruby_font(line_style))
+        ruby_cell_w = _vertical_cell_width(ruby_metrics)
+        right = max(
+            right,
+            float(
+                layout.column_x
+                + layout.cell_w / 2
+                + int(line_style.ruby_gap_px)
+                + ruby_cell_w
+            ),
+        )
+    extent = _line_effect_extent(line_style, vertical_axis=False)
+    left -= extent
+    right += extent
+    animation_dx = [
+        line_animation_state(
+            line_style,
+            t_ms=sample_ms,
+            display_start_ms=display_line.display_start_ms,
+            display_end_ms=display_line.display_end_ms,
+            lane=display_line.lane,
+        ).dx
+        for sample_ms in _line_envelope_sample_times(display_line, line_style)
+    ]
+    if animation_dx:
+        left += min(animation_dx)
+        right += max(animation_dx)
+    return int(math.floor(left)), int(math.ceil(right))
+
+
+def _line_effect_extent(style: Style, *, vertical_axis: bool) -> int:
+    stroke2 = _main_stroke2_width(style)
+    extent = _visual_stroke_extent(style.stroke_width_px, stroke2)
+    if style.decoration_kind == "glow":
+        extent = max(
+            extent,
+            _glow_extent(
+                style.stroke_width_px,
+                stroke2,
+                max(
+                    _glow_radius(style, after=False),
+                    _glow_radius(style, after=True),
+                ),
+            ),
+        )
+    elif style.decoration_kind == "shadow":
+        shadow = style.shadow_offset_y if vertical_axis else style.shadow_offset_x
+        extent += abs(int(shadow))
+    return max(int(extent), 0)
+
+
+def _line_envelope_sample_times(
+    display_line: DisplayLine, style: Style
+) -> tuple[int, ...]:
+    start = int(display_line.display_start_ms)
+    end = max(int(display_line.display_end_ms), start + 1)
+    sing_start = _line_start_ms(display_line.line)
+    sing_end = _line_end_ms(display_line.line)
+    candidates = {
+        start,
+        start + 1,
+        start + max(int(style.entry_lead_ms), 0) // 2,
+        start + max(int(style.entry_lead_ms), 0),
+        sing_start,
+        (sing_start + sing_end) // 2,
+        max(sing_end - 1, start),
+        end - max(int(style.exit_fade_ms), 0),
+        end - max(int(style.exit_fade_ms), 0) // 2,
+        end - 1,
+    }
+    return tuple(sorted(min(max(value, start), end - 1) for value in candidates))
 
 
 def _transform_vertical_bounds(
@@ -1912,7 +2291,7 @@ def _resolve_sayatoo_line_layouts(
             baseline_y = baselines.get(display_line.lane)
         if baseline_y is None:
             baseline_y = _resolve_baseline_y(metrics, img_h, line_style, ruby_metrics)
-        layouts[display_line.lane] = _SayatooLineLayout(
+        resolved = _SayatooLineLayout(
             baseline_y=baseline_y,
             text_x=int(round(text_x)),
             line_style=line_style,
@@ -1931,6 +2310,11 @@ def _resolve_sayatoo_line_layouts(
                 else None
             ),
         )
+        # Identity is authoritative for rendering because overlapping pages can
+        # reuse a lane.  Keep the lane alias for older helpers/tests that inspect
+        # one page at a time; the renderer itself never consumes that alias.
+        layouts[id(display_line.line)] = resolved
+        layouts[display_line.lane] = resolved
     return layouts
 
 
@@ -2065,6 +2449,7 @@ def _paint_signal_lits(
     style: Style,
     *,
     line_layouts: dict[int, _SayatooLineLayout] | None = None,
+    line_offsets: dict[int, tuple[float, float]] | None = None,
 ) -> None:
     """Paint Sayatoo-style ``SignalsLits`` guide cues.
 
@@ -2082,6 +2467,7 @@ def _paint_signal_lits(
         t_ms,
         style,
         line_layouts=line_layouts,
+        line_offsets=line_offsets,
     )
     if not layers:
         return
@@ -2102,6 +2488,7 @@ def _signal_layer_stack(
     style: Style,
     *,
     line_layouts: dict[int, _SayatooLineLayout] | None = None,
+    line_offsets: dict[int, tuple[float, float]] | None = None,
 ) -> list:
     if not style.lit_enabled:
         return []
@@ -2129,6 +2516,7 @@ def _signal_layer_stack(
         tracking,
         stroke_extent,
         line_layouts=line_layouts,
+        line_offsets=line_offsets,
     )
     if not groups:
         return []
@@ -2305,6 +2693,7 @@ def _signal_lit_groups(
     stroke_extent: float = 0.0,
     *,
     line_layouts: dict[int, _SayatooLineLayout] | None = None,
+    line_offsets: dict[int, tuple[float, float]] | None = None,
 ) -> list[_SignalLitGroup]:
     duration = max(int(style.signals_duration_ms), 0)
     if duration <= 0:
@@ -2322,7 +2711,11 @@ def _signal_lit_groups(
         line = display_line.line
         if line.is_blank or not line.chars:
             continue
-        line_layout = line_layouts.get(display_line.lane) if line_layouts is not None else None
+        line_layout = (
+            line_layouts.get(id(display_line.line))
+            if line_layouts is not None
+            else None
+        )
         if line_layout is not None:
             line_style = line_layout.line_style
             metrics = line_layout.metrics
@@ -2389,6 +2782,13 @@ def _signal_lit_groups(
             if line_layout is not None and line_layout.signal_y is not None
             else _signal_lit_y(baseline_y, metrics, size, line_style, stroke_extent)
         )
+        offset_x, offset_y = (
+            line_offsets.get(id(line), (0.0, 0.0))
+            if line_offsets is not None
+            else (0.0, 0.0)
+        )
+        x += offset_x
+        y += offset_y
         groups.append(
             _SignalLitGroup(
                 x=x,
@@ -2997,6 +3397,7 @@ def _visible_lines_for_style(
             row_count_of=_row_count_resolver(style),
             bottom_align_of=_bottom_align_resolver(style),
             vertical_position_of=_vertical_position_resolver(style),
+            adjust_same_position=bool(style.allow_inter_page_line_overlap),
         )
     display_line = _single_visible_display_line(track, t_ms, style)
     if display_line is None:
@@ -3028,6 +3429,7 @@ def display_windows_for_style(
             row_count_of=_row_count_resolver(style),
             bottom_align_of=_bottom_align_resolver(style),
             vertical_position_of=_vertical_position_resolver(style),
+            adjust_same_position=bool(style.allow_inter_page_line_overlap),
         )
         index_of = {id(line): i for i, line in enumerate(track.lines)}
         for item in items:
@@ -3073,6 +3475,7 @@ def display_schedule_for_style(
         row_count_of=_row_count_resolver(style),
         bottom_align_of=_bottom_align_resolver(style),
         vertical_position_of=_vertical_position_resolver(style),
+        adjust_same_position=bool(style.allow_inter_page_line_overlap),
     )
     index_of = {id(line): index for index, line in enumerate(track.lines)}
     return {
@@ -3111,10 +3514,10 @@ def _single_visible_display_line(
             display_start_ms=display_start,
             display_end_ms=display_end,
         )
-        if sing_start <= t_ms <= sing_end:
+        if sing_start <= t_ms < sing_end:
             if best_live is None or sing_start >= _line_start_ms(best_live.line):
                 best_live = display_line
-        elif display_start <= t_ms <= display_end:
+        elif display_start <= t_ms < display_end:
             if best_lead_or_tail is None or sing_start >= _line_start_ms(best_lead_or_tail.line):
                 best_lead_or_tail = display_line
     return best_live or best_lead_or_tail
@@ -11777,6 +12180,7 @@ def check_layout_margins(
             row_count_of=_row_count_resolver(style),
             bottom_align_of=_bottom_align_resolver(style),
             vertical_position_of=_vertical_position_resolver(style),
+            adjust_same_position=bool(style.allow_inter_page_line_overlap),
         )
     else:
         display_lines = [

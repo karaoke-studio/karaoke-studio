@@ -4394,6 +4394,9 @@ class PropertyPanel(QWidget):
             self._viewport_rotation_spin.setValue(self._style.viewport_rotation_deg)
             self._rtl_check.setChecked(self._style.right_to_left)
             self._vertical_check.setChecked(self._style.vertical)
+            self._allow_inter_page_line_overlap_check.setChecked(
+                self._style.allow_inter_page_line_overlap
+            )
             self._refresh_layout_combo()
             self._sync_layout_editor_controls()
             self._line_lead_spin.setValue(self._style.line_lead_in_ms)
@@ -6613,6 +6616,26 @@ class PropertyPanel(QWidget):
             lambda checked: self._update_style(right_to_left=checked)
         )
         compact_layout.addWidget(self._rtl_check, 0, Qt.AlignmentFlag.AlignBottom)
+        self._allow_inter_page_line_overlap_check = CheckBox(
+            "启用行间重叠", compact_row
+        )
+        self._allow_inter_page_line_overlap_check.setToolTip(
+            "关闭时，系统会根据字幕正文、注音、描边、阴影、发光和动画的实际"
+            "绘制范围，自动移动后进入的整页字幕，避免不同页面互相遮挡；不会"
+            "改变演唱时间。开启后保留旧的行位判断和过渡时间处理，允许跨页字幕"
+            "重叠，适合需要刻意叠放的特殊效果。同一页内部的负行间距或手工重叠"
+            "不受此开关影响。"
+        )
+        self._allow_inter_page_line_overlap_check.toggled.connect(
+            lambda checked: self._update_style(
+                allow_inter_page_line_overlap=checked
+            )
+        )
+        compact_layout.addWidget(
+            self._allow_inter_page_line_overlap_check,
+            0,
+            Qt.AlignmentFlag.AlignBottom,
+        )
         compact_layout.addStretch(1)
         layout.addWidget(compact_row)
         return section

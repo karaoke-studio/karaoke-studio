@@ -1,6 +1,6 @@
 # 字幕跨页行间重叠消除与 CPU/GPU 统一计划
 
-> 状态：需求已对齐，待按阶段实施  
+> 状态：P0～P3 已实施，P4 自动化回归已完成
 > 对齐日期：2026-07-27  
 > 适用范围：字幕视频生成模块的主字幕及附加字幕源  
 > 核心原则：保留演唱时间，通过移动后进入页面的绘制位置消除跨页遮挡
@@ -735,5 +735,20 @@ Direct2D 需要：
 
 - 完成需求、兼容策略、空间算法和 CPU/GPU 统一方向对齐。
 - 新增本实施计划。
-- 尚未开始代码实现。
-
+- P0：新增后端无关的一维页面刚性位移求解器，使用半开时间窗口，覆盖多页、
+  锚定方向、画面无解降级和确定性结果。
+- P1：新增项目级 `allow_inter_page_line_overlap` 字段；旧项目缺字段读取为
+  `False`；在“垂直与方向”加入“启用行间重叠”复选框和完整悬停说明。
+- P2：QPainter 改为按 `TimingLine` 身份保存跨页布局，不再由相同 `lane` 相互
+  覆盖；横排和竖排均按每页实际布局解析几何；默认模式保留显示时间并计算稳定
+  页位移；正文、Ruby、描边、阴影、发光、引导信号、packed bounds 共用位移。
+- P3：Native IR 为主字幕和附加字幕源携带 `layout_offset_x/y`；Direct2D 使用
+  半开区间，并由 `(sourceIndex, sourceLineIndex)` 去除同一源行的缓存重复项，
+  不再错误抑制不同页面的相同 lane；CPU/GPU 使用同一 Python 位移结果。
+- 自动化结果：核心 painter/timeline/show-time/native-protocol/solver 共
+  `422 passed`；Direct2D GPU 分批共 `190 passed, 4 skipped`；属性面板与项目
+  存储共显示 `312 passed`，但 Windows Qt 在测试进程清理阶段未退出，被外层
+  300 秒超时终止，新增字段和控件另行定向验证为 `2 passed`。
+- Native smoke 已在 NVIDIA 硬件 Direct2D 与 Microsoft WARP 两种设备上通过。
+- 本机为测试安装了项目锁定的 Qt 6.11.0 native SDK，未修改 SUG submodule。
+- 尚待产品侧使用实际复杂项目做主观视觉验收；当前没有已知自动化断言失败。

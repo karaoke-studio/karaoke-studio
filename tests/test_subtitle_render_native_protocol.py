@@ -26,6 +26,9 @@ from krok_helper.subtitle_render.models import (
     TimingLine,
     TimingTrack,
     TimingTrackMeta,
+    TrackPage,
+    TrackPagePlan,
+    TrackSection,
     TitleOverlay,
     default_title_scheme,
 )
@@ -256,6 +259,42 @@ def test_build_render_ir_carries_painter_page_groups_for_native_smart_horizon():
     assert lines[0]["layout"]["smart_horizontal"] == "equal_margins"
     # 末页只有一行：native 靠 page_line_count 才能选到 Bottom 短页那一档对齐。
     assert [line["page_line_count"] for line in lines] == [2, 2, 1]
+
+
+def test_build_render_ir_carries_shared_cross_page_layout_offsets():
+    lines = [
+        TimingLine(
+            chars=[TimingChar(text, start)],
+            end_ms=start + 500,
+            display_start_override_ms=0,
+            display_end_override_ms=5_000,
+        )
+        for text, start in (("A", 1_000), ("B", 2_000), ("C", 3_000))
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(2, "default"), TrackPage(1, "builtin-1")])]
+        ),
+    )
+
+    ir_lines = build_render_ir(
+        track, Style(), width=640, height=360, fps=60
+    )["track"]["lines"]
+
+    assert ir_lines[0]["layout_offset_y"] == ir_lines[1]["layout_offset_y"] == 0
+    assert ir_lines[2]["layout_offset_y"] != 0
+    assert all(line["layout_offset_x"] == 0 for line in ir_lines)
+
+    legacy_lines = build_render_ir(
+        track,
+        Style(allow_inter_page_line_overlap=True),
+        width=640,
+        height=360,
+        fps=60,
+    )["track"]["lines"]
+    assert all(line["layout_offset_x"] == 0 for line in legacy_lines)
+    assert all(line["layout_offset_y"] == 0 for line in legacy_lines)
 
 
 def test_build_render_ir_resolves_guide_symbols_with_painter_semantics():

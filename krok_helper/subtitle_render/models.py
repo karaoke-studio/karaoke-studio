@@ -972,6 +972,13 @@ class Style:
     allow_biting: bool = False
     """允许负 side bearing 令相邻字形咬合。"""
 
+    allow_inter_page_line_overlap: bool = False
+    """允许不同页面的字幕行保持旧式重叠行为。
+
+    关闭时，渲染器按最终像素范围移动后进入的整页字幕；该字段是项目级设置，
+    不属于 ``LyricsLayout``，也不随分页布局预设切换。
+    """
+
     font_weight: int = 400  # Qt 习惯 100-900
     italic: bool = False
     affects_ruby_anchor: bool = True
@@ -1865,6 +1872,7 @@ def style_from_dict(payload: object) -> Style:
             "italic",
             "affects_ruby_anchor",
             "allow_biting",
+            "allow_inter_page_line_overlap",
             "stroke2_enabled",
             "ruby_font_follow_main",
             "ruby_colors_follow_main",

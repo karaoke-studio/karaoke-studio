@@ -241,6 +241,32 @@ def test_visible_display_lines_returns_both_lanes_when_windows_overlap():
     assert [item.line for item in visible] == [line1, line2]
 
 
+def test_visible_display_lines_uses_half_open_end_boundary():
+    line = _make_line([("a", 1_000)], end_ms=1_500)
+    track = _track(line)
+    layout = compute_display_lines(
+        track,
+        lead_in_ms=0,
+        tail_ms=0,
+        lane_gap_ms=0,
+    )[0]
+
+    assert visible_display_lines(
+        track,
+        layout.display_end_ms - 1,
+        lead_in_ms=0,
+        tail_ms=0,
+        lane_gap_ms=0,
+    )
+    assert not visible_display_lines(
+        track,
+        layout.display_end_ms,
+        lead_in_ms=0,
+        tail_ms=0,
+        lane_gap_ms=0,
+    )
+
+
 def test_compute_display_lines_never_cuts_before_own_sing_end():
     line1 = _make_line([("a", 40_530)], end_ms=44_340)
     line2 = _make_line([("b", 44_700)], end_ms=None)

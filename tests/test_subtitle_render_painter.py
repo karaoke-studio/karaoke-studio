@@ -132,6 +132,9 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     TimingLine,
     TimingTrack,
     TimingTrackMeta,
+    TrackPage,
+    TrackPagePlan,
+    TrackSection,
     TitleOverlay,
 )
 from krok_helper.subtitle_render.subtitle_sources import parse_nicokara_lrc  # noqa: E402
@@ -6029,8 +6032,8 @@ def test_paint_frame_utopia_exit_does_not_reappear_after_flying_out(qapp):
     utopia = _blank()
     base = Style(line_y_position="center", line_tail_ms=1100, exit_fade_ms=1000)
 
-    paint_frame(plain, track, 3600, base)
-    paint_frame(utopia, track, 3600, replace(base, exit_anim="utopia"))
+    paint_frame(plain, track, 3599, base)
+    paint_frame(utopia, track, 3599, replace(base, exit_anim="utopia"))
 
     assert _pixel_hash(plain) != _pixel_hash(blank)
     assert _pixel_hash(utopia) == _pixel_hash(blank)
@@ -8521,3 +8524,38 @@ def test_display_windows_for_style_maps_line_indices_and_overrides():
     assert set(windows_single.keys()) == {0, 2}
     assert windows_single[0] == (4000, 6500)
     assert windows_single[2][1] == 30000
+
+
+def test_cross_page_placement_is_rigid_and_does_not_rewrite_time(qapp):
+    lines = [
+        TimingLine(
+            chars=[TimingChar(text, start)],
+            end_ms=start + 500,
+            display_start_override_ms=0,
+            display_end_override_ms=5_000,
+        )
+        for text, start in (("A", 1_000), ("B", 2_000), ("C", 3_000), ("D", 4_000))
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(2, "default"), TrackPage(2, "default")])]
+        ),
+    )
+    normal = Style()
+    legacy = replace(normal, allow_inter_page_line_overlap=True)
+
+    normal_windows = subtitle_painter.display_windows_for_style(track, normal)
+    legacy_windows = subtitle_painter.display_windows_for_style(track, legacy)
+    offsets = subtitle_painter.resolved_page_offsets_for_style(
+        640, 360, track, normal
+    )
+
+    assert normal_windows == {index: (0, 5_000) for index in range(4)}
+    assert legacy_windows == normal_windows
+    assert offsets[0] == offsets[1] == (0.0, 0.0)
+    assert offsets[2] == offsets[3]
+    assert offsets[2] != (0.0, 0.0)
+    assert subtitle_painter.resolved_page_offsets_for_style(
+        640, 360, track, legacy
+    ) == {}

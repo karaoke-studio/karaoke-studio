@@ -79,6 +79,15 @@ def test_save_render_project_round_trip(tmp_path):
     assert loaded["style"]["font_size_px"] == 80
 
 
+def test_inter_page_overlap_setting_defaults_off_and_round_trips():
+    assert style_from_dict({}).allow_inter_page_line_overlap is False
+
+    payload = style_to_dict(Style(allow_inter_page_line_overlap=True))
+
+    assert payload["allow_inter_page_line_overlap"] is True
+    assert style_from_dict(payload).allow_inter_page_line_overlap is True
+
+
 def test_ruby_horizontal_gradient_alignment_setting_round_trips():
     style = Style(
         ruby_horizontal_gradient_with_main=False,

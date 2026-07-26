@@ -147,6 +147,7 @@ def visible_display_lines(
     row_count_of: Optional[Callable[[TimingLine], int]] = None,
     bottom_align_of: Optional[Callable[[TimingLine], bool]] = None,
     vertical_position_of: Optional[Callable[[TimingLine], str]] = None,
+    adjust_same_position: bool = True,
 ) -> list[DisplayLine]:
     """Return lines whose display window contains ``t_ms``.
 
@@ -167,8 +168,13 @@ def visible_display_lines(
         row_count_of=row_count_of,
         bottom_align_of=bottom_align_of,
         vertical_position_of=vertical_position_of,
+        adjust_same_position=adjust_same_position,
     )
-    return [item for item in layouts if item.display_start_ms <= t_ms <= item.display_end_ms]
+    return [
+        item
+        for item in layouts
+        if item.display_start_ms <= t_ms < item.display_end_ms
+    ]
 
 
 def compute_display_lines(
@@ -186,6 +192,7 @@ def compute_display_lines(
     row_count_of: Optional[Callable[[TimingLine], int]] = None,
     bottom_align_of: Optional[Callable[[TimingLine], bool]] = None,
     vertical_position_of: Optional[Callable[[TimingLine], str]] = None,
+    adjust_same_position: bool = True,
 ) -> list[DisplayLine]:
     """Compute NicoKara display windows for all renderable lines.
 
@@ -243,6 +250,7 @@ def compute_display_lines(
         # 手动时刻要参与本趟计算：N3 的 ForceBottom / 下行入场都读模型里的
         # ShowBegin / ShowEnd，用户改过就该被下游页看见。
         overrides=[_effective_override(line) for line in render_lines],
+        adjust_same_position=adjust_same_position,
     )
     starts = show_times.starts
     display_ends = show_times.ends

@@ -226,6 +226,8 @@ def timing_line_to_ir(
     exit_anim: str = "none",
     exit_duration_ms: int = 0,
     karaoke_anim: str = "none",
+    layout_offset_x: float = 0.0,
+    layout_offset_y: float = 0.0,
 ) -> dict[str, Any]:
     render_line = render_line or line
     return {
@@ -250,6 +252,8 @@ def timing_line_to_ir(
         "exit_anim": str(exit_anim),
         "exit_duration_ms": max(int(exit_duration_ms), 0),
         "karaoke_anim": str(karaoke_anim),
+        "layout_offset_x": float(layout_offset_x),
+        "layout_offset_y": float(layout_offset_y),
         "layout": (
             {
                 "line_y_position": layout_style.line_y_position,
@@ -299,7 +303,13 @@ def ruby_to_ir(ruby: RubyAnnotation) -> dict[str, Any]:
     }
 
 
-def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any]:
+def track_to_ir(
+    track: TimingTrack,
+    style: Style | None = None,
+    *,
+    width: int | None = None,
+    height: int | None = None,
+) -> dict[str, Any]:
     schedule: dict[int, tuple[int, int, int]] = {}
     if style is not None:
         from krok_helper.subtitle_render.engine.painter import (
@@ -312,12 +322,23 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
             display_schedule_for_style,
             resolved_char_intervals_for_line,
             resolved_guide_anchor_bounds_for_line,
+            resolved_page_offsets_for_style,
         )
         from krok_helper.subtitle_render.engine.page_plan import resolve_page_plan
         from krok_helper.subtitle_render.models import style_with_line_animation
 
         display_style = _display_style_for_signal_window(style)
         schedule = display_schedule_for_style(track, display_style)
+        page_offsets = (
+            resolved_page_offsets_for_style(
+                max(int(width), 1),
+                max(int(height), 1),
+                track,
+                display_style,
+            )
+            if width is not None and height is not None
+            else {}
+        )
         render_lines = [_line_with_guide_symbol(line) for line in track.lines]
         layout_styles = [_style_for_line(style, line) for line in track.lines]
         resolved_intervals = [
@@ -377,6 +398,7 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
         guide_anchor_bounds = []
         page_indices = {}
         section_indices = {}
+        page_offsets = {}
     return {
         "meta": {
             "title": track.meta.title,
@@ -430,6 +452,8 @@ def track_to_ir(track: TimingTrack, style: Style | None = None) -> dict[str, Any
                     if style is not None
                     else "none"
                 ),
+                layout_offset_x=page_offsets.get(index, (0.0, 0.0))[0],
+                layout_offset_y=page_offsets.get(index, (0.0, 0.0))[1],
             )
             for index, line in enumerate(track.lines)
         ],
@@ -463,9 +487,12 @@ def build_render_ir(
             "dpr": max(float(dpr or 1.0), 0.01),
         },
         "style": style_to_dict(style),
-        "track": track_to_ir(track, style),
+        "track": track_to_ir(track, style, width=width, height=height),
         # Keep each source separate.  Painter schedules lanes/display windows
         # independently per source and then composites primary -> extras.
-        "extra_tracks": [track_to_ir(item, style) for item in extra_tracks or ()],
+        "extra_tracks": [
+            track_to_ir(item, style, width=width, height=height)
+            for item in extra_tracks or ()
+        ],
         "title": title_to_ir(track, style, duration_ms=duration_ms),
     }

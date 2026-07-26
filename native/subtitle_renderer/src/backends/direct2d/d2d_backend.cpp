@@ -283,7 +283,7 @@ ShapeSignalState shapeSignalState(
     }
     const int signalEnd = lineStartMs + style.litTimeOffsetMs;
     const int activeStart = signalEnd - activeDuration;
-    if (tMs < activeStart || tMs > displayEndMs) {
+    if (tMs < activeStart || tMs >= displayEndMs) {
         return state;
     }
     state.visible = true;
@@ -346,7 +346,7 @@ VolumeSignalState volumeSignalState(
     }
     const int signalEnd = lineStartMs + style.litTimeOffsetMs;
     const int activeStart = signalEnd - activeDuration;
-    if (tMs < activeStart || tMs > displayEndMs) {
+    if (tMs < activeStart || tMs >= displayEndMs) {
         return state;
     }
     const int elapsed = std::min(
@@ -990,6 +990,7 @@ struct Direct2DGpuBackend::Impl {
         int startMs = 0;
         int endMs = 0;
         int sourceIndex = 0;
+        int sourceLineIndex = 0;
         int pageIndex = -1;
         int compositeOrder = 0;
         int lane = 0;
@@ -1680,6 +1681,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
         cached.startMs = sourceLine.startMs;
         cached.endMs = sourceLine.endMs;
         cached.sourceIndex = sourceLine.sourceIndex;
+        cached.sourceLineIndex = sourceLine.sourceLineIndex;
         cached.pageIndex = sourceLine.pageIndex;
         cached.compositeOrder = sourceLine.compositeOrder;
         cached.guideAnchorLeft = sourceLine.guideAnchorLeft;
@@ -3832,24 +3834,24 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 [&](const DisplayWindow &window) {
                     return window.endMs > window.startMs
                         && tMs >= window.startMs
-                        && tMs <= window.endMs;
+                        && tMs < window.endMs;
                 }
             );
         const bool visible = candidate.staticOverlay
             ? overlayOpacityAt(candidate) > 0.0f
             : (!candidate.displayWindows.empty() ? resolvedWindowVisible : (
                 tMs >= candidate.startMs - std::max(baseStyle.leadInMs, 0)
-                && tMs <= candidate.endMs + std::max(baseStyle.tailMs, 0)
+                && tMs < candidate.endMs + std::max(baseStyle.tailMs, 0)
             ));
         if (visible) {
-            const bool laneAlreadyActive = std::any_of(
+            const bool sourceLineAlreadyActive = std::any_of(
                 activeLines.begin(), activeLines.end(),
                 [&](const Impl::CachedLine *line) {
                     return line->sourceIndex == candidate.sourceIndex
-                        && line->lane == candidate.lane;
+                        && line->sourceLineIndex == candidate.sourceLineIndex;
                 }
             );
-            if (!laneAlreadyActive) {
+            if (!sourceLineAlreadyActive) {
                 activeLines.push_back(&candidate);
             }
         }
@@ -4671,7 +4673,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         };
         int displayEndMs = line->endMs + std::max(style.tailMs, 0);
         for (const DisplayWindow &window : line->displayWindows) {
-            if (tMs >= window.startMs && tMs <= window.endMs) {
+            if (tMs >= window.startMs && tMs < window.endMs) {
                 displayEndMs = window.endMs;
                 break;
             }
@@ -4692,7 +4694,7 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             && !style.vertical
             && signalActiveDuration > 0
             && tMs >= signalEndMs - signalActiveDuration
-            && tMs <= displayEndMs;
+            && tMs < displayEndMs;
         float lyricLeft = line->bounds.left;
         float lyricRight = line->bounds.right;
         const bool n3Layout = style.layoutSemantics == "n3_1074";
