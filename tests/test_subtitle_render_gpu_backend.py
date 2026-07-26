@@ -3739,8 +3739,10 @@ def test_gpu_cross_page_placement_window_follows_painter(monkeypatch) -> None:
             abs(gpu_value - painter_value) <= 24
             for gpu_value, painter_value in zip(actual, expected)
         ), (actual, expected)
-    assert painter_bounds[1][1] > painter_bounds[0][1] + 40
-    assert gpu_bounds[1][1] > gpu_bounds[0][1] + 40
+    # The older page is gone at 1200 ms, but the shifted new page must keep the
+    # same vertical position until its own display window ends.
+    assert abs(painter_bounds[1][1] - painter_bounds[0][1]) <= 2
+    assert abs(gpu_bounds[1][1] - gpu_bounds[0][1]) <= 2
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")

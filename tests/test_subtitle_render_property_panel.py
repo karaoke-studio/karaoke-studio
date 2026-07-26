@@ -121,6 +121,10 @@ def test_property_panel_uses_fluent_checkboxes(qapp):
     assert all(isinstance(checkbox, CheckBox) for checkbox in checkboxes)
     assert not panel._ruby_main_reading_units_check.isChecked()
     assert not panel._allow_inter_page_line_overlap_check.isChecked()
+    overlap_tip = panel._allow_inter_page_line_overlap_check.toolTip()
+    assert "不会截断任何演唱区间" in overlap_tip
+    assert "保持位置直到本页播放完毕" in overlap_tip
+    assert "开启后不执行空间避让" in overlap_tip
 
 
 def test_property_panel_uses_fluent_form_controls(qapp):

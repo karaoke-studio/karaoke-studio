@@ -279,6 +279,14 @@ class _Solver:
         if end is not None:
             self.out.ends[line] = end
 
+    def _enforce_auto_singing_bounds(self, line: int) -> None:
+        """Keep automatically resolved display time outside the singing span."""
+
+        if self.start_override[line] is None:
+            self.out.starts[line] = min(self.out.starts[line], self.begins[line])
+        if self.end_override[line] is None:
+            self.out.ends[line] = max(self.out.ends[line], self.ends[line])
+
     def _adjust_same_position(self, line: int, is_bottom_align: bool) -> None:
         other = self._prev_page_same_position_line(line, is_bottom_align)
         if other is None:
@@ -364,7 +372,19 @@ class _Solver:
                     starts[line] = starts[top]
                     ends[line] = ends[top]
                 self._apply_override(line)
+                adjusted_other = None
                 if self.adjust_same_position:
+                    adjusted_other = self._prev_page_same_position_line(
+                        line, is_bottom_align
+                    )
                     self._adjust_same_position(line, is_bottom_align)
                 self._apply_override(line)
+                self._enforce_auto_singing_bounds(line)
+                if adjusted_other is not None:
+                    self._enforce_auto_singing_bounds(adjusted_other)
+        # Automatic squeezing may consume PreTime/PostTime completely, but it
+        # must never consume the singing interval itself.  Manual overrides
+        # remain authoritative on the side explicitly edited by the user.
+        for line in range(len(starts)):
+            self._enforce_auto_singing_bounds(line)
         return self.out

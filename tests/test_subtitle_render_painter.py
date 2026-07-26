@@ -8571,3 +8571,45 @@ def test_cross_page_placement_is_rigid_and_does_not_rewrite_time(qapp):
     assert subtitle_painter.resolved_page_offsets_for_style(
         1280, 720, track, legacy
     ) == {}
+
+
+def test_cross_page_spatial_mode_keeps_same_position_time_squeeze(qapp):
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A", 10_000, 12_000),
+            ("B", 12_500, 13_500),
+            ("C", 14_000, 15_000),
+            ("D", 16_000, 17_000),
+        )
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(2, "default"), TrackPage(2, "default")])]
+        ),
+    )
+    style = replace(
+        Style(),
+        line_lead_in_ms=1_800,
+        line_tail_ms=1_000,
+        line_lane_gap_ms=300,
+    )
+
+    normal = subtitle_painter.display_windows_for_style(track, style)
+    legacy = subtitle_painter.display_windows_for_style(
+        track, replace(style, allow_inter_page_line_overlap=True)
+    )
+
+    assert normal == legacy
+    assert normal == {
+        0: (8_200, 12_500),
+        1: (8_200, 14_125),
+        2: (12_575, 18_000),
+        3: (14_200, 18_000),
+    }
+    assert all(
+        start <= lines[index].chars[0].start_ms
+        and end >= int(lines[index].end_ms)
+        for index, (start, end) in normal.items()
+    )

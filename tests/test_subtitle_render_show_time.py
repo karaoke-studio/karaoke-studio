@@ -177,6 +177,20 @@ def test_same_position_squeeze_only_requires_a_quarter_interval_gap():
     assert begins[2] - out.starts[2] == 1425 >= protect
 
 
+def test_same_position_squeeze_never_cuts_into_either_singing_interval():
+    # The two same-position lines sing over each other, so no amount of
+    # PreTime/PostTime squeezing can create a temporal gap.  Automatic
+    # adjustment must stop at the singing boundaries and leave the remaining
+    # conflict to spatial placement.
+    begins = [10_000, 10_500, 11_000, 11_500]
+    ends = [12_500, 13_000, 13_500, 14_000]
+    out = _run(begins, ends, _pages((0, 2, 0, 1), (0, 2, 2, 3)))
+
+    assert out.starts[2] <= begins[2]
+    assert out.ends[0] >= ends[0]
+    assert out.ends[0] > out.starts[2]
+
+
 def test_manual_override_wins_and_is_visible_to_later_pages():
     begins, ends = [10_000, 14_000, 30_000, 34_000], [13_000, 17_000, 33_000, 37_000]
     pages = _pages((0, 2, 0, 1), (0, 2, 2, 3))

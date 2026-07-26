@@ -1884,7 +1884,7 @@ def resolved_page_offset_windows_for_style(
         row_count_of=_row_count_resolver(style),
         bottom_align_of=_bottom_align_resolver(style),
         vertical_position_of=_vertical_position_resolver(style),
-        adjust_same_position=False,
+        adjust_same_position=True,
     )
     if not display_lines:
         return {}
@@ -3414,7 +3414,7 @@ def _visible_lines_for_style(
             row_count_of=_row_count_resolver(style),
             bottom_align_of=_bottom_align_resolver(style),
             vertical_position_of=_vertical_position_resolver(style),
-            adjust_same_position=bool(style.allow_inter_page_line_overlap),
+            adjust_same_position=True,
         )
     display_line = _single_visible_display_line(track, t_ms, style)
     if display_line is None:
@@ -3446,7 +3446,7 @@ def display_windows_for_style(
             row_count_of=_row_count_resolver(style),
             bottom_align_of=_bottom_align_resolver(style),
             vertical_position_of=_vertical_position_resolver(style),
-            adjust_same_position=bool(style.allow_inter_page_line_overlap),
+            adjust_same_position=True,
         )
         index_of = {id(line): i for i, line in enumerate(track.lines)}
         for item in items:
@@ -3492,7 +3492,7 @@ def display_schedule_for_style(
         row_count_of=_row_count_resolver(style),
         bottom_align_of=_bottom_align_resolver(style),
         vertical_position_of=_vertical_position_resolver(style),
-        adjust_same_position=bool(style.allow_inter_page_line_overlap),
+        adjust_same_position=True,
     )
     index_of = {id(line): index for index, line in enumerate(track.lines)}
     return {
@@ -12197,7 +12197,7 @@ def check_layout_margins(
             row_count_of=_row_count_resolver(style),
             bottom_align_of=_bottom_align_resolver(style),
             vertical_position_of=_vertical_position_resolver(style),
-            adjust_same_position=bool(style.allow_inter_page_line_overlap),
+            adjust_same_position=True,
         )
     else:
         display_lines = [

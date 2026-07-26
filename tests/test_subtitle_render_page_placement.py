@@ -103,7 +103,7 @@ def test_page_larger_than_viewport_avoids_ink_before_preserving_viewport():
     assert 140 + first["p2"] <= 0
 
 
-def test_offset_windows_release_displacement_after_previous_page_disappears():
+def test_offset_window_keeps_displacement_until_shifted_page_finishes():
     pages = [
         PageVisualBands(
             "p1",
@@ -127,12 +127,8 @@ def test_offset_windows_release_displacement_after_previous_page_disappears():
         pages, viewport_min=0, viewport_max=320
     )
 
-    assert [(item.start_ms, item.end_ms) for item in windows["p2"]] == [
-        (80, 100),
-        (100, 200),
-    ]
+    assert [(item.start_ms, item.end_ms) for item in windows["p2"]] == [(80, 200)]
     assert windows["p2"][0].offset < 0
-    assert windows["p2"][1].offset == 0
 
 
 def test_bottom_and_top_anchors_never_fallback_in_the_wrong_direction():

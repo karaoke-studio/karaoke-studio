@@ -112,89 +112,38 @@ def solve_page_axis_offset_windows(
     viewport_min: float,
     viewport_max: float,
 ) -> dict[Hashable, tuple[AxisOffsetWindow, ...]]:
-    """Resolve page translations independently for each visible time interval.
+    """Resolve one persistent translation for each page's full display life.
 
-    A page that was displaced by an older page can return towards its authored
-    position as soon as that older page is no longer displayed.  Within every
-    interval the complete currently visible bands are solved together, so an
-    already displaced page remains part of collision detection for later pages.
+    Once a page moves, changing overlap later in its lifetime must not pull it
+    back to the authored position and force the viewer's gaze to jump.  The
+    scalar solver still checks every temporally overlapping line pair and all
+    previously shifted pages; this wrapper only attaches that stable result to
+    the page's half-open lifetime for CPU/native consumers.
     """
 
-    event_times = sorted(
-        {
-            int(time_ms)
-            for page in pages
+    offsets = solve_page_axis_offsets(
+        pages,
+        viewport_min=viewport_min,
+        viewport_max=viewport_max,
+    )
+    resolved: dict[Hashable, tuple[AxisOffsetWindow, ...]] = {}
+    for page in pages:
+        valid_bands = tuple(
+            band
             for band in page.bands
-            for time_ms in (band.display_start_ms, band.display_end_ms)
             if int(band.display_end_ms) > int(band.display_start_ms)
-        }
-    )
-    resolved: dict[Hashable, list[AxisOffsetWindow]] = {
-        page.page_id: [] for page in pages
-    }
-    for start_ms, end_ms in zip(event_times, event_times[1:]):
-        if end_ms <= start_ms:
+        )
+        if not valid_bands:
+            resolved[page.page_id] = ()
             continue
-        active_pages: list[PageVisualBands] = []
-        for page in pages:
-            active_bands = tuple(
-                band
-                for band in page.bands
-                if int(band.display_start_ms) < end_ms
-                and int(band.display_end_ms) > start_ms
-            )
-            if active_bands:
-                active_pages.append(
-                    PageVisualBands(
-                        page_id=page.page_id,
-                        bands=active_bands,
-                        gap_px=page.gap_px,
-                        anchor=page.anchor,
-                    )
-                )
-        if not active_pages:
-            continue
-        offsets = solve_page_axis_offsets(
-            active_pages,
-            viewport_min=viewport_min,
-            viewport_max=viewport_max,
+        resolved[page.page_id] = (
+            AxisOffsetWindow(
+                start_ms=min(int(band.display_start_ms) for band in valid_bands),
+                end_ms=max(int(band.display_end_ms) for band in valid_bands),
+                offset=float(offsets.get(page.page_id, 0.0)),
+            ),
         )
-        for page in active_pages:
-            _append_offset_window(
-                resolved[page.page_id],
-                start_ms,
-                end_ms,
-                offsets.get(page.page_id, 0.0),
-            )
-    return {key: tuple(value) for key, value in resolved.items()}
-
-
-def _append_offset_window(
-    windows: list[AxisOffsetWindow],
-    start_ms: int,
-    end_ms: int,
-    offset: float,
-) -> None:
-    value = float(offset)
-    if (
-        windows
-        and windows[-1].end_ms == int(start_ms)
-        and abs(windows[-1].offset - value) <= 1e-6
-    ):
-        previous = windows[-1]
-        windows[-1] = AxisOffsetWindow(
-            start_ms=previous.start_ms,
-            end_ms=int(end_ms),
-            offset=previous.offset,
-        )
-        return
-    windows.append(
-        AxisOffsetWindow(
-            start_ms=int(start_ms),
-            end_ms=int(end_ms),
-            offset=value,
-        )
-    )
+    return resolved
 
 
 def _normalized_band(item: LineVisualBand) -> LineVisualBand:
