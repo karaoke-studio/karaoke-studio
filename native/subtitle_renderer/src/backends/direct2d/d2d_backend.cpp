@@ -4553,16 +4553,10 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             && !style.vertical) {
             lyricLeft = *line->guideAnchorLeft;
             lyricRight = *line->guideAnchorRight;
-        } else if (line->hasInlineStyles && !n3Layout) {
-            // Painter anchors mixed-role lines by their layout box plus the
-            // largest role visual pad, not by the asymmetric glyph ink box.
-            lyricLeft = std::min(
-                lyricLeft, line->fillBounds.left - line->maxVisualPad
-            );
-            lyricRight = std::max(
-                lyricRight, line->fillBounds.right + line->maxVisualPad
-            );
         }
+        // The Painter no longer pads the horizontal line box with the stroke
+        // extent under legacy semantics either -- both now anchor N3's logical
+        // DrawLineLeft/Right, so mixed-role lines keep the glyph box as well.
         float unionLeft = lyricLeft;
         float unionRight = lyricRight;
         if (signalLayoutActive && style.litStyle == "volume") {

@@ -1841,7 +1841,6 @@ def _resolve_sayatoo_line_layouts(
             char_widths, _measure_ranges = _role_char_geometry_by_index(
                 line, measure_layout
             )
-            visual_pad = _role_visual_text_padding(measure_layout)
         else:
             char_widths = [
                 _char_layout_width(
@@ -1849,13 +1848,13 @@ def _resolve_sayatoo_line_layouts(
                 )
                 for c in line.chars
             ]
-            visual_pad = _visual_text_padding(line_style)
         char_gaps, ruby_left, ruby_right = _ruby_char_gaps(
             line, char_widths, active_rubies, line_style
         )
         text_w = _line_text_width(char_widths, line_style) + sum(char_gaps)
-        left_ext = max(visual_pad, ruby_left)
-        right_ext = max(visual_pad, ruby_right)
+        # 行盒左右不给描边留位（见 _line_total_width），只让 ruby 溢出撑开。
+        left_ext = ruby_left
+        right_ext = ruby_right
         text_line_w = max(int(round(text_w)) + left_ext + right_ext, 1)
         center_line = _line_center_override(track, line, line_style)
         signal_x: float | None = None
@@ -4957,13 +4956,10 @@ def _layout_plain_line(
         line, char_widths, active_rubies, style, intervals
     )
     total_w = _line_text_width(char_widths, style) + sum(char_gaps)
-    visual_pad = _visual_text_padding(style)
-    if style.layout_semantics == "n3_1074":
-        # N3 anchors the logical DrawLineLeft/Right.  Secondary stroke, glow
-        # and shadow may extend outside the requested horizontal margin.
-        visual_pad = 0
-    left_ext = max(visual_pad, ruby_left_ext)
-    right_ext = max(visual_pad, ruby_right_ext)
+    # N3 anchors the logical DrawLineLeft/Right.  Secondary stroke, glow and
+    # shadow may extend outside the requested horizontal margin.
+    left_ext = ruby_left_ext
+    right_ext = ruby_right_ext
     center_override = _line_center_override(track, source_line, style)
     n3_main_center = (
         style.layout_semantics == "n3_1074"
@@ -5686,11 +5682,9 @@ def _layout_role_line(
     char_gaps, ruby_left_ext, ruby_right_ext = _ruby_char_gaps(
         line, char_widths, active_rubies, style, intervals
     )
-    visual_pad = _role_visual_text_padding(measure_layout)
-    if style.layout_semantics == "n3_1074":
-        visual_pad = 0
-    left_ext = max(visual_pad, ruby_left_ext)
-    right_ext = max(visual_pad, ruby_right_ext)
+    # 行盒左右不给描边留位（见 _line_total_width），只让 ruby 溢出撑开。
+    left_ext = ruby_left_ext
+    right_ext = ruby_right_ext
     total_w = measure_layout.total_width + sum(char_gaps)
     center_override = _line_center_override(track, source_line, style)
     n3_main_center = (
@@ -10997,9 +10991,18 @@ def _line_total_width(
     style: Style,
     rubies: list[RubyAnnotation] | None = None,
 ) -> int:
-    """行盒宽度（含描边 padding；给了 rubies 时含 ruby 推移间隙与行缘溢出）。
+    """行盒宽度（给了 rubies 时含 ruby 推移间隙与行缘溢出）。
 
     与绘制路径同一套测量，供 SmartHorizon 页宽与余白警告使用。
+
+    对齐 N3 ``DrawLineInfo.DrawLineLeft/DrawLineRight``：行盒就是字形几何的左右
+    边界，左边不留任何描边余量，右边那一次描边已经含在末字 ``DrawWidth`` 里
+    （我们的字步进同样已经含首层描边）。次级描边、发光、阴影允许溢出到左右余白
+    之外——N3 就是这么画的，只有余白警告会提示。
+
+    这里以前在 ``legacy`` 语义下额外左右各加 ``ceil((描边 + 次级描边) / 2)``，
+    于是行宽比 N3 宽一整个描边宽，落点与 SmartHorizon 的阈值 / slack 判定都跟着
+    偏；现在两种语义同口径。
     """
     source_line = line
     line = _line_with_guide_symbol(line)
@@ -11007,7 +11010,6 @@ def _line_total_width(
         role_layout = _build_role_text_layout(line, style, x0=0, baseline_y=0)
         char_widths, _ranges = _role_char_geometry_by_index(line, role_layout)
         text_width = role_layout.total_width
-        pad = _role_visual_text_padding(role_layout)
     else:
         font = _build_font(style)
         metrics = QFontMetrics(font)
@@ -11028,10 +11030,7 @@ def _line_total_width(
             for char in line.chars
         ]
         text_width = _line_text_width(char_widths, style)
-        pad = _visual_text_padding(style)
-    if style.layout_semantics == "n3_1074":
-        pad = 0
-    left_ext = right_ext = pad
+    left_ext = right_ext = 0
     gap_total = 0
     if rubies:
         active = _active_rubies_for_line(rubies, source_line)
@@ -11040,8 +11039,8 @@ def _line_total_width(
                 line, char_widths, active, style
             )
             gap_total = sum(gaps)
-            left_ext = max(pad, ruby_left)
-            right_ext = max(pad, ruby_right)
+            left_ext = ruby_left
+            right_ext = ruby_right
     return max(
         int(
             round(
@@ -11365,8 +11364,9 @@ def check_layout_margins(
 ) -> list[LayoutMarginWarning]:
     """检查每行主文字的左右边界，返回溢出/侵入余白的行。
 
-    只做主文字外框（含描边 padding）的静态估算，不含 ruby 左右溢出与指示灯
-    加宽；足以提示用户调小字号或余白。竖排模式左右边界语义不同，不检查。
+    只做主文字外框（N3 ``DrawLineLeft/Right`` 口径，不含描边溢出）的静态估算，
+    不含 ruby 左右溢出与指示灯加宽；足以提示用户调小字号或余白。竖排模式左右
+    边界语义不同，不检查。
     """
     if style.vertical or not track.lines:
         return []
@@ -11567,9 +11567,9 @@ def resolved_guide_anchor_bounds_for_line(
     char_gaps, ruby_left, ruby_right = _ruby_char_gaps(
         line, char_widths, active_rubies, line_style
     )
-    visual_pad = _visual_text_padding(line_style)
-    left_ext = max(visual_pad, ruby_left)
-    right_ext = max(visual_pad, ruby_right)
+    # 行盒左右不给描边留位（见 _line_total_width），只让 ruby 溢出撑开。
+    left_ext = ruby_left
+    right_ext = ruby_right
     text_width = _line_text_width(char_widths, line_style) + sum(char_gaps)
     return -left_ext, int(round(text_width)) + right_ext
 

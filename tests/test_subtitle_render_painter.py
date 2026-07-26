@@ -754,8 +754,8 @@ def test_signal_volume_widens_line_and_shifts_text(qapp):
     )
 
     # The union (bars' left edge .. text's right edge) stays centred on the frame.
-    visual_pad = _visual_text_padding(style)
-    union_mid = (layout.signal_x + (layout.text_x + layout.total_w + visual_pad)) / 2
+    # 行盒不再为描边留位（对齐 N3 DrawLineLeft/Right），右缘就是 text_x + total_w。
+    union_mid = (layout.signal_x + (layout.text_x + layout.total_w)) / 2
     assert union_mid == pytest.approx(160 / 2, abs=1.0)
 
 
@@ -7122,8 +7122,9 @@ def _measured_line_width(style: Style, track: TimingTrack) -> int:
         _char_layout_width(c.text, font, metrics, latin_metrics, font_for, style)
         for c in line.chars
     ]
+    # 行盒不含描边余量（对齐 N3 DrawLineLeft/Right），与 _line_total_width 同口径。
     return max(
-        int(round(_line_text_width(widths, style) + _visual_text_padding(style) * 2)), 1
+        int(round(_line_text_width(widths, style))), 1
     )
 
 
