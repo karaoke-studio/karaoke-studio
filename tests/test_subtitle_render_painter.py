@@ -8779,3 +8779,44 @@ def test_cross_page_spatial_mode_keeps_same_position_time_squeeze(qapp):
         and end >= int(lines[index].end_ms)
         for index, (start, end) in normal.items()
     )
+
+
+def test_animation_only_cross_page_overlap_does_not_move_incoming_page(qapp):
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A", 10_000, 12_000),
+            ("B", 12_500, 13_500),
+            ("C", 14_000, 15_000),
+            ("D", 16_000, 17_000),
+        )
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [
+                TrackSection([TrackPage(2, "default")]),
+                TrackSection([TrackPage(2, "default")]),
+            ]
+        ),
+    )
+    style = replace(
+        Style(),
+        line_lead_in_ms=1_800,
+        line_tail_ms=1_000,
+        line_lane_gap_ms=300,
+        entry_anim="fade",
+        entry_lead_ms=300,
+        exit_anim="fade",
+        exit_fade_ms=300,
+    )
+
+    windows = subtitle_painter.display_windows_for_style(track, style)
+    offsets = subtitle_painter.resolved_page_offsets_for_style(
+        1280, 1080, track, style
+    )
+
+    # 两页的完整显示窗口仍有 600 ms 交叠；这 600 ms 正好由上一页退场
+    # 与下一页入场动画组成，稳定文字碰撞箱没有时间交集，因此不应抬页。
+    assert windows[1][1] - windows[2][0] == 600
+    assert offsets == {index: (0.0, 0.0) for index in range(4)}

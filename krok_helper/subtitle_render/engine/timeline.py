@@ -148,6 +148,8 @@ def visible_display_lines(
     bottom_align_of: Optional[Callable[[TimingLine], bool]] = None,
     vertical_position_of: Optional[Callable[[TimingLine], str]] = None,
     auto_entry_reserve_ms_of: Optional[Callable[[TimingLine], int]] = None,
+    entry_animation_ms_of: Optional[Callable[[TimingLine], int]] = None,
+    exit_animation_ms_of: Optional[Callable[[TimingLine], int]] = None,
     adjust_same_position: bool = True,
 ) -> list[DisplayLine]:
     """Return lines whose display window contains ``t_ms``.
@@ -170,6 +172,8 @@ def visible_display_lines(
         bottom_align_of=bottom_align_of,
         vertical_position_of=vertical_position_of,
         auto_entry_reserve_ms_of=auto_entry_reserve_ms_of,
+        entry_animation_ms_of=entry_animation_ms_of,
+        exit_animation_ms_of=exit_animation_ms_of,
         adjust_same_position=adjust_same_position,
     )
     return [
@@ -195,6 +199,8 @@ def compute_display_lines(
     bottom_align_of: Optional[Callable[[TimingLine], bool]] = None,
     vertical_position_of: Optional[Callable[[TimingLine], str]] = None,
     auto_entry_reserve_ms_of: Optional[Callable[[TimingLine], int]] = None,
+    entry_animation_ms_of: Optional[Callable[[TimingLine], int]] = None,
+    exit_animation_ms_of: Optional[Callable[[TimingLine], int]] = None,
     adjust_same_position: bool = True,
 ) -> list[DisplayLine]:
     """Compute NicoKara display windows for all renderable lines.
@@ -259,6 +265,22 @@ def compute_display_lines(
             else 0
             for line in render_lines
         ],
+        entry_animation_ms=(
+            [
+                max(int(entry_animation_ms_of(line)), 0)
+                for line in render_lines
+            ]
+            if entry_animation_ms_of is not None
+            else None
+        ),
+        exit_animation_ms=(
+            [
+                max(int(exit_animation_ms_of(line)), 0)
+                for line in render_lines
+            ]
+            if exit_animation_ms_of is not None
+            else None
+        ),
         adjust_same_position=adjust_same_position,
     )
     starts = show_times.starts

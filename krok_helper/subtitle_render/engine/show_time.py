@@ -82,6 +82,8 @@ def compute_show_times(
     protect_ms: int,
     overrides: Optional[Sequence[tuple[Optional[int], Optional[int]]]] = None,
     auto_entry_reserve_ms: Optional[Sequence[int]] = None,
+    entry_animation_ms: Optional[Sequence[int]] = None,
+    exit_animation_ms: Optional[Sequence[int]] = None,
     adjust_same_position: bool = True,
 ) -> ShowTimes:
     """按 N3 ``TopLongAdjuster`` 算出每个渲染行的 ``(上屏, 消失)``。
@@ -97,6 +99,9 @@ def compute_show_times(
 
     ``auto_entry_reserve_ms`` 是自动压缩后必须保留在走字开始之前的入场动画时间；
     手工上屏覆盖不受该下限约束。退场不保留自动下限，可以压缩到走字结束即消失。
+
+    ``entry_animation_ms`` / ``exit_animation_ms`` 用于区分稳定绘制与纯动画时段：
+    自动压缩优先消除稳定绘制的跨页重叠，入场和退场动画彼此重叠是允许的。
     """
 
     total = len(sing_begins)
@@ -115,6 +120,8 @@ def compute_show_times(
         protect=max(int(protect_ms), 0),
         overrides=overrides,
         auto_entry_reserve_ms=auto_entry_reserve_ms,
+        entry_animation_ms=entry_animation_ms,
+        exit_animation_ms=exit_animation_ms,
         adjust_same_position=bool(adjust_same_position),
         result=result,
     ).run()
@@ -135,6 +142,8 @@ class _Solver:
         protect: int,
         overrides: Optional[Sequence[tuple[Optional[int], Optional[int]]]],
         auto_entry_reserve_ms: Optional[Sequence[int]],
+        entry_animation_ms: Optional[Sequence[int]],
+        exit_animation_ms: Optional[Sequence[int]],
         adjust_same_position: bool,
         result: ShowTimes,
     ) -> None:
@@ -146,12 +155,17 @@ class _Solver:
         self.interval = interval
         self.protect = protect
         self.adjust_same_position = adjust_same_position
+        animation_windows_supplied = (
+            entry_animation_ms is not None or exit_animation_ms is not None
+        )
         self.out = result
 
         total = len(sing_begins)
         self.start_override: list[Optional[int]] = [None] * total
         self.end_override: list[Optional[int]] = [None] * total
         self.auto_entry_reserve_ms = [0] * total
+        self.entry_animation_ms = [0] * total
+        self.exit_animation_ms = [0] * total
         if overrides is not None:
             for index, item in enumerate(overrides):
                 if index >= total:
@@ -164,6 +178,19 @@ class _Solver:
                 if index >= total:
                     break
                 self.auto_entry_reserve_ms[index] = max(int(duration), 0)
+        for target, source in (
+            (self.entry_animation_ms, entry_animation_ms),
+            (self.exit_animation_ms, exit_animation_ms),
+        ):
+            if source is None:
+                continue
+            for index, duration in enumerate(source):
+                if index >= total:
+                    break
+                target[index] = max(int(duration), 0)
+        self.animation_windows_active = animation_windows_supplied and (
+            any(self.entry_animation_ms) or any(self.exit_animation_ms)
+        )
         # 渲染行 → 页号 / 页内位次；页 → 段内前后页（跨段即视为无）。
         self.page_of = [0] * total
         self.slot_of = [0] * total
@@ -306,15 +333,77 @@ class _Solver:
         if self.end_override[line] is None:
             self.out.ends[line] = max(self.out.ends[line], self.ends[line])
 
+    def _stable_start(self, line: int) -> int:
+        margin = max(self.begins[line] - self.out.starts[line], 0)
+        animation = min(self.entry_animation_ms[line], margin)
+        return self.out.starts[line] + animation
+
+    def _stable_end(self, line: int) -> int:
+        margin = max(self.out.ends[line] - self.ends[line], 0)
+        animation = min(self.exit_animation_ms[line], margin)
+        return self.out.ends[line] - animation
+
+    def _squeeze_pair(self, other: int, line: int) -> None:
+        """Compress automatic margins until only animation phases may overlap."""
+
+        starts, ends = self.out.starts, self.out.ends
+        overlap = self._stable_end(other) - self._stable_start(line)
+        if overlap <= 0:
+            return
+
+        if self.end_override[other] is None:
+            # 先压缩上一行的稳定退场余量；纯退场动画允许与下一行入场重叠。
+            capacity = max(self._stable_end(other) - self.ends[other], 0)
+            delta = min(overlap, capacity)
+            ends[other] -= delta
+            overlap = self._stable_end(other) - self._stable_start(line)
+        if overlap <= 0:
+            return
+
+        if self.start_override[line] is None:
+            # 缩短提前入场，但保留该行自动入场动画的视觉反应下限。
+            latest_start = max(
+                self.begins[line] - self.auto_entry_reserve_ms[line],
+                0,
+            )
+            target_stable_start = min(
+                self._stable_start(line) + overlap,
+                self.begins[line],
+            )
+            animation = self.entry_animation_ms[line]
+            proposed_start = (
+                latest_start
+                if target_stable_start >= self.begins[line]
+                else target_stable_start - animation
+            )
+            starts[line] = min(
+                max(starts[line], proposed_start),
+                latest_start,
+            )
+
     def _adjust_same_position(self, line: int, is_bottom_align: bool) -> None:
         other = self._prev_page_same_position_line(line, is_bottom_align)
         if other is None:
             return
-        if self.start_override[line] is not None or self.end_override[other] is not None:
+        if self.animation_windows_active:
+            self._squeeze_pair(other, line)
+            return
+        if (
+            self.start_override[line] is not None
+            or self.end_override[other] is not None
+        ):
             # 手动时刻是权威的，不参与自动挤压。
             return
+
+        # 未提供动画窗口的调用继续保持 N3 原始六级降级算法，避免改变
+        # timeline 公共 API 的既有语义。正式渲染路径总会提供动画窗口。
         starts, ends = self.out.starts, self.out.ends
-        pre, post, interval, protect = self.pre, self.post, self.interval, self.protect
+        pre, post, interval, protect = (
+            self.pre,
+            self.post,
+            self.interval,
+            self.protect,
+        )
         quarter = interval // 4
         if (
             ends[other] - self.ends[other] >= post
@@ -324,7 +413,6 @@ class _Solver:
             and starts[line] >= ends[other]
         ):
             return
-        # 先把两边都拉回理想窗口，再按固定级序让出时间。
         ends[other] = self.ends[other] + post
         starts[line] = self.begins[line] - pre
         over = ends[other] + quarter - starts[line]
@@ -401,6 +489,22 @@ class _Solver:
                 self._enforce_auto_wipe_bounds(line)
                 if adjusted_other is not None:
                     self._enforce_auto_wipe_bounds(adjusted_other)
+        # 不同布局或段落边界两侧，N3 的 same-position 规则可能看不到仍会
+        # 发生像素冲突的行。补做“相同页内序号”以及“上一页末行 / 下一页首行”
+        # 两组保守压缩；真正无法消除的静态冲突再交给空间避让。
+        if self.adjust_same_position and self.animation_windows_active:
+            previous_page: ShowTimePage | None = None
+            for page in self.pages:
+                if previous_page is not None and previous_page.lines and page.lines:
+                    pairs = list(zip(previous_page.lines, page.lines))
+                    boundary_pair = (previous_page.lines[-1], page.lines[0])
+                    if boundary_pair not in pairs:
+                        pairs.append(boundary_pair)
+                    for other, line in pairs:
+                        self._squeeze_pair(other, line)
+                        self._enforce_auto_wipe_bounds(other)
+                        self._enforce_auto_wipe_bounds(line)
+                previous_page = page
         # Automatic squeezing may consume PreTime/PostTime completely, but it
         # must never consume the wipe interval itself.  Non-zero automatic
         # entry animation also retains its requested visual reaction reserve;

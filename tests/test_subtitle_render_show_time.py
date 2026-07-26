@@ -222,6 +222,30 @@ def test_manual_show_start_can_reduce_entry_reserve_below_250ms():
     assert begins[2] - out.starts[2] == 50
 
 
+def test_animation_aware_squeeze_links_adjacent_pages_across_sections():
+    begins = [10_000, 12_500, 14_000, 16_000]
+    ends = [12_000, 13_500, 15_000, 17_000]
+    pages = _pages((0, 2, 0, 1), (1, 2, 2, 3))
+
+    out = _run(
+        begins,
+        ends,
+        pages,
+        auto_entry_reserve_ms=[250] * 4,
+        entry_animation_ms=[300] * 4,
+        exit_animation_ms=[300] * 4,
+    )
+
+    # 相邻段落仍可能在画面上相撞。时间压缩先让上一页的稳定文字阶段
+    # 与下一页稳定文字阶段恰好相接，但保留允许互相穿越的退/入场动画。
+    previous_stable_end = out.ends[1] - 300
+    incoming_stable_start = out.starts[2] + 300
+    assert previous_stable_end == incoming_stable_start == 13_500
+    assert out.ends[1] > out.starts[2]
+    assert out.ends[1] == 13_800
+    assert out.starts[2] == 13_200
+
+
 def test_manual_override_wins_and_is_visible_to_later_pages():
     begins, ends = [10_000, 14_000, 30_000, 34_000], [13_000, 17_000, 33_000, 37_000]
     pages = _pages((0, 2, 0, 1), (0, 2, 2, 3))

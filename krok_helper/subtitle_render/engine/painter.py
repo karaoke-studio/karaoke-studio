@@ -528,9 +528,10 @@ from krok_helper.subtitle_render.engine.page_plan import (
     use_default_layouts,
 )
 from krok_helper.subtitle_render.engine.page_placement import (
+    AxisOffsetWindow,
     LineVisualBand,
     PageVisualBands,
-    solve_page_axis_offset_windows,
+    solve_page_axis_offsets,
 )
 from krok_helper.subtitle_render.engine.animator import line_animation_state
 from krok_helper.subtitle_render.engine.show_time import (
@@ -1895,6 +1896,8 @@ def resolved_page_offset_windows_for_style(
         bottom_align_of=_bottom_align_resolver(style),
         vertical_position_of=_vertical_position_resolver(style),
         auto_entry_reserve_ms_of=_auto_entry_reserve_resolver(style),
+        entry_animation_ms_of=_entry_animation_resolver(style),
+        exit_animation_ms_of=_exit_animation_resolver(style),
         adjust_same_position=True,
     )
     if not display_lines:
@@ -1903,6 +1906,7 @@ def resolved_page_offset_windows_for_style(
     index_of = {id(line): index for index, line in enumerate(track.lines)}
     page_order: list[tuple[int, int]] = []
     page_bands: dict[tuple[int, int], list[LineVisualBand]] = {}
+    page_lifetimes: dict[tuple[int, int], list[tuple[int, int]]] = {}
     page_styles: dict[tuple[int, int], Style] = {}
     line_to_page: dict[int, tuple[int, int]] = {}
 
@@ -1935,9 +1939,16 @@ def resolved_page_offset_windows_for_style(
         if page_id not in page_bands:
             page_order.append(page_id)
             page_bands[page_id] = []
+            page_lifetimes[page_id] = []
         line_style = _style_for_line(style, display_line.line)
         page_styles.setdefault(page_id, line_style)
         line_to_page[track_index] = page_id
+        page_lifetimes[page_id].append(
+            (
+                int(display_line.display_start_ms),
+                int(display_line.display_end_ms),
+            )
+        )
         if style.vertical:
             axis_bounds = _display_line_horizontal_envelope(
                 logical_w,
@@ -1959,12 +1970,18 @@ def resolved_page_offset_windows_for_style(
             )
         if axis_bounds is None:
             continue
+        collision_start, collision_end = _display_line_static_collision_window(
+            display_line,
+            style,
+        )
+        if collision_end <= collision_start:
+            continue
         page_bands[page_id].append(
             LineVisualBand(
                 line_id=track_index,
                 page_id=page_id,
-                display_start_ms=int(display_line.display_start_ms),
-                display_end_ms=int(display_line.display_end_ms),
+                display_start_ms=collision_start,
+                display_end_ms=collision_end,
                 axis_min=float(axis_bounds[0]),
                 axis_max=float(axis_bounds[1]),
             )
@@ -1993,11 +2010,29 @@ def resolved_page_offset_windows_for_style(
                 anchor=anchor,
             )
         )
-    axis_windows = solve_page_axis_offset_windows(
+    axis_offsets = solve_page_axis_offsets(
         pages,
         viewport_min=0.0,
         viewport_max=float(logical_w if style.vertical else logical_h),
     )
+    axis_windows: dict[tuple[int, int], tuple[AxisOffsetWindow, ...]] = {}
+    for page_id in page_order:
+        lifetimes = [
+            (start, end)
+            for start, end in page_lifetimes.get(page_id, ())
+            if end > start
+        ]
+        axis_windows[page_id] = (
+            (
+                AxisOffsetWindow(
+                    start_ms=min(start for start, _end in lifetimes),
+                    end_ms=max(end for _start, end in lifetimes),
+                    offset=float(axis_offsets.get(page_id, 0.0)),
+                ),
+            )
+            if lifetimes
+            else ()
+        )
     resolved = {
         track_index: tuple(
             (
@@ -3521,6 +3556,8 @@ def _visible_lines_for_style(
             bottom_align_of=_bottom_align_resolver(style),
             vertical_position_of=_vertical_position_resolver(style),
             auto_entry_reserve_ms_of=_auto_entry_reserve_resolver(style),
+            entry_animation_ms_of=_entry_animation_resolver(style),
+            exit_animation_ms_of=_exit_animation_resolver(style),
             adjust_same_position=True,
         )
     display_line = _single_visible_display_line(track, t_ms, style)
@@ -3554,6 +3591,8 @@ def display_windows_for_style(
             bottom_align_of=_bottom_align_resolver(style),
             vertical_position_of=_vertical_position_resolver(style),
             auto_entry_reserve_ms_of=_auto_entry_reserve_resolver(style),
+            entry_animation_ms_of=_entry_animation_resolver(style),
+            exit_animation_ms_of=_exit_animation_resolver(style),
             adjust_same_position=True,
         )
         index_of = {id(line): i for i, line in enumerate(track.lines)}
@@ -3601,6 +3640,8 @@ def display_schedule_for_style(
         bottom_align_of=_bottom_align_resolver(style),
         vertical_position_of=_vertical_position_resolver(style),
         auto_entry_reserve_ms_of=_auto_entry_reserve_resolver(style),
+        entry_animation_ms_of=_entry_animation_resolver(style),
+        exit_animation_ms_of=_exit_animation_resolver(style),
         adjust_same_position=True,
     )
     index_of = {id(line): index for index, line in enumerate(track.lines)}
@@ -12312,6 +12353,8 @@ def check_layout_margins(
             bottom_align_of=_bottom_align_resolver(style),
             vertical_position_of=_vertical_position_resolver(style),
             auto_entry_reserve_ms_of=_auto_entry_reserve_resolver(style),
+            entry_animation_ms_of=_entry_animation_resolver(style),
+            exit_animation_ms_of=_exit_animation_resolver(style),
             adjust_same_position=True,
         )
     else:
@@ -12435,6 +12478,49 @@ def _auto_entry_reserve_ms(style: Style, line: TimingLine) -> int:
 
 def _auto_entry_reserve_resolver(style: Style):
     return lambda line: _auto_entry_reserve_ms(style, line)
+
+
+def _entry_animation_ms(style: Style, line: TimingLine) -> int:
+    line_style = _style_for_line(style, line)
+    if line_style.entry_anim == "none":
+        return 0
+    return max(int(line_style.entry_lead_ms), 0)
+
+
+def _exit_animation_ms(style: Style, line: TimingLine) -> int:
+    line_style = _style_for_line(style, line)
+    if line_style.exit_anim == "none":
+        return 0
+    return max(int(line_style.exit_fade_ms), 0)
+
+
+def _entry_animation_resolver(style: Style):
+    return lambda line: _entry_animation_ms(style, line)
+
+
+def _exit_animation_resolver(style: Style):
+    return lambda line: _exit_animation_ms(style, line)
+
+
+def _display_line_static_collision_window(
+    display_line: DisplayLine,
+    style: Style,
+) -> tuple[int, int]:
+    """Return the non-animation interval used for page placement collisions."""
+
+    line_style = _style_for_line_display_window(
+        style,
+        display_line.line,
+        display_line.display_start_ms,
+        display_line.display_end_ms,
+    )
+    start = int(display_line.display_start_ms)
+    end = int(display_line.display_end_ms)
+    if line_style.entry_anim != "none":
+        start += max(int(line_style.entry_lead_ms), 0)
+    if line_style.exit_anim != "none":
+        end -= max(int(line_style.exit_fade_ms), 0)
+    return start, max(start, end)
 
 
 def _style_for_line_display_window(
