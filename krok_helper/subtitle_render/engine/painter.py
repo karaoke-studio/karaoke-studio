@@ -3756,7 +3756,7 @@ def _display_lines_for_style(
         track,
         **kwargs,
         adjust_same_position=False,
-        dynamic_single_page_reflow=False,
+        dynamic_single_page_reflow=True,
         independent_line_entry=True,
     )
     squeeze_pairs = _pixel_collision_squeeze_pairs(
@@ -3768,7 +3768,7 @@ def _display_lines_for_style(
             **kwargs,
             adjust_same_position=False,
             squeeze_pairs=squeeze_pairs,
-            dynamic_single_page_reflow=False,
+            dynamic_single_page_reflow=True,
             independent_line_entry=True,
         )
         if squeeze_pairs

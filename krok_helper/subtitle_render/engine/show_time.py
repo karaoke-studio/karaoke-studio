@@ -451,6 +451,66 @@ class _Solver:
                     ),
                 )
 
+    def _squeeze_measured_pair(
+        self,
+        other: int,
+        line: int,
+        *,
+        entry_order_reference: Sequence[int] | None = None,
+    ) -> None:
+        """Compress a pair already verified as a pixel-and-time conflict.
+
+        This is the squeeze path for the dual-line overlap prevention pipeline
+        (source 3).  Unlike :meth:`_squeeze_pair`, which operates on purely
+        time-based N3 same-position pairs, every call here arrives after the
+        renderer has measured actual per-line glyph bounds and confirmed that
+        the two lines *both* overlap in time *and* violate separation on the
+        layout axis.
+        """
+
+        starts, ends = self.out.starts, self.out.ends
+        overlap = self._stable_end(other) - self._stable_start(line)
+        if overlap <= 0:
+            return
+
+        if self.end_override[other] is None:
+            # 先压缩上一行的稳定退场余量；纯退场动画允许与下一行入场重叠。
+            capacity = max(self._stable_end(other) - self.ends[other], 0)
+            delta = min(overlap, capacity)
+            ends[other] -= delta
+            overlap = self._stable_end(other) - self._stable_start(line)
+        if overlap <= 0:
+            return
+
+        if self.start_override[line] is None:
+            # 缩短提前入场，但保留该行自动入场动画的视觉反应下限。
+            latest_start = max(
+                self.begins[line] - self.auto_entry_reserve_ms[line],
+                0,
+            )
+            target_stable_start = min(
+                self._stable_start(line) + overlap,
+                self.begins[line],
+            )
+            animation = self.entry_animation_ms[line]
+            proposed_start = (
+                latest_start
+                if target_stable_start >= self.begins[line]
+                else target_stable_start - animation
+            )
+            starts[line] = min(
+                max(starts[line], proposed_start),
+                latest_start,
+            )
+            if entry_order_reference is not None:
+                starts[line] = min(
+                    starts[line],
+                    self._page_order_start_ceiling(
+                        line,
+                        entry_order_reference,
+                    ),
+                )
+
     def _adjust_same_position(self, line: int, is_bottom_align: bool) -> None:
         other = self._prev_page_same_position_line(line, is_bottom_align)
         if other is None:
@@ -664,24 +724,10 @@ class _Solver:
                     starts[line] = max(self.begins[line] - self.pre, 0)
                 self._apply_override(line)
                 self._enforce_auto_wipe_bounds(line)
-        # 不同布局或段落边界两侧，N3 的 same-position 规则可能看不到仍会
-        # 发生像素冲突的行。补做“相同页内序号”以及“上一页末行 / 下一页首行”
-        # 两组保守压缩；真正无法消除的静态冲突再交给空间避让。
-        if self.adjust_same_position and self.animation_windows_active:
-            previous_page: ShowTimePage | None = None
-            for page in self.pages:
-                if previous_page is not None and previous_page.lines and page.lines:
-                    pairs = list(zip(previous_page.lines, page.lines))
-                    boundary_pair = (previous_page.lines[-1], page.lines[0])
-                    if boundary_pair not in pairs:
-                        pairs.append(boundary_pair)
-                    for other, line in pairs:
-                        self._squeeze_pair(other, line)
-                        self._enforce_auto_wipe_bounds(other)
-                        self._enforce_auto_wipe_bounds(line)
-                previous_page = page
+        # Spatial avoidance (page_placement.py) handles any remaining static
+        # conflicts that could not be resolved by time-domain compression.
         for other, line in self.squeeze_pairs:
-            self._squeeze_pair(
+            self._squeeze_measured_pair(
                 other,
                 line,
                 entry_order_reference=entry_order_reference,
