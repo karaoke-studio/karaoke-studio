@@ -308,6 +308,45 @@ def test_explicit_pixel_pair_squeezes_only_its_two_lines_and_caps_at_page_order(
     assert squeezed.starts[2] <= squeezed.starts[3]
 
 
+def test_non_adjacent_pixel_pair_never_uses_or_rewrites_page_neighbours():
+    begins = [10_000, 10_200, 10_400, 12_000, 12_100, 12_200]
+    ends = [11_900, 11_000, 11_100, 13_000, 13_100, 13_200]
+    pages = _pages((0, 3, 0, 1, 2), (0, 3, 3, 4, 5))
+    kwargs = dict(
+        pre_time_ms=PRE,
+        post_time_ms=POST,
+        interval_ms=INTERVAL,
+        protect_ms=protect_time_ms(PRE, POST),
+        adjust_same_position=False,
+        dynamic_single_page_reflow=False,
+        independent_line_entry=True,
+    )
+    baseline = compute_show_times(begins, ends, pages, **kwargs)
+    squeezed = compute_show_times(
+        begins,
+        ends,
+        pages,
+        squeeze_pairs=[(2, 4)],
+        **kwargs,
+    )
+
+    changed = {
+        index
+        for index in range(len(begins))
+        if (
+            squeezed.starts[index] != baseline.starts[index]
+            or squeezed.ends[index] != baseline.ends[index]
+        )
+    }
+    assert changed == {2, 4}
+    assert squeezed.ends[2] < baseline.ends[2]
+    assert squeezed.starts[4] >= baseline.starts[4]
+    # 第 4 行只能被压到原第 5 行的顺序边界，不能回写第 3/5 行。
+    assert squeezed.starts[4] <= baseline.starts[5]
+    assert squeezed.starts[3] == baseline.starts[3]
+    assert squeezed.starts[5] == baseline.starts[5]
+
+
 def test_manual_override_wins_and_is_visible_to_later_pages():
     begins, ends = [10_000, 14_000, 30_000, 34_000], [13_000, 17_000, 33_000, 37_000]
     pages = _pages((0, 2, 0, 1), (0, 2, 2, 3))

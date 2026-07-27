@@ -655,10 +655,11 @@ def test_build_render_ir_uses_compressed_entry_and_exit_animation_windows():
 
     assert lines[0]["display_end_ms"] == ends[0]
     assert lines[0]["exit_duration_ms"] == 0
-    # Pixel-gated compression changes only real same-row conflicts.  C keeps
-    # its complete configured 900 ms entry animation and is delayed only until
-    # its stable ink begins exactly when A's stable ink ends.
-    assert lines[2]["display_start_ms"] == begins[2] - 1_000
+    # Pixel-gated compression changes only the A/C conflict pair.  C keeps its
+    # complete configured 900 ms entry animation, but may only move as far as
+    # D's original page-order boundary; the unresolved overlap is spatially
+    # avoided instead of rewriting D.
+    assert lines[2]["display_start_ms"] == begins[3] - 1_800
     assert lines[2]["entry_duration_ms"] == 900
 
 

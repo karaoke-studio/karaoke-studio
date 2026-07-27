@@ -369,8 +369,44 @@ class _Solver:
         animation = min(self.exit_animation_ms[line], margin)
         return self.out.ends[line] - animation
 
-    def _squeeze_pair(self, other: int, line: int) -> None:
-        """Compress automatic margins until only animation phases may overlap."""
+    def _page_order_start_ceiling(
+        self,
+        line: int,
+        reference: Sequence[int],
+    ) -> int:
+        """Latest start for ``line`` without changing its page entry order.
+
+        This is only a bound on the conflicting incoming line.  It never
+        rewrites neighbouring lines and therefore stays separate from the
+        two-line compression calculation.
+        """
+
+        reference_start = int(reference[line])
+        ceiling = MAX_SHOW_TIME_MS
+        for sibling in self.pages[self.page_of[line]].lines:
+            if sibling == line:
+                continue
+            sibling_start = int(reference[sibling])
+            if sibling_start == reference_start:
+                # An originally synchronized group must remain synchronized.
+                return reference_start
+            if sibling_start > reference_start:
+                ceiling = min(ceiling, sibling_start)
+        return ceiling
+
+    def _squeeze_pair(
+        self,
+        other: int,
+        line: int,
+        *,
+        entry_order_reference: Sequence[int] | None = None,
+    ) -> None:
+        """Compress only the two supplied conflicting lines.
+
+        ``other`` supplies the old line's stable end and ``line`` supplies the
+        incoming line's stable start.  Page neighbours never participate in
+        the overlap amount or receive rewritten times.
+        """
 
         starts, ends = self.out.starts, self.out.ends
         overlap = self._stable_end(other) - self._stable_start(line)
@@ -406,6 +442,14 @@ class _Solver:
                 max(starts[line], proposed_start),
                 latest_start,
             )
+            if entry_order_reference is not None:
+                starts[line] = min(
+                    starts[line],
+                    self._page_order_start_ceiling(
+                        line,
+                        entry_order_reference,
+                    ),
+                )
 
     def _adjust_same_position(self, line: int, is_bottom_align: bool) -> None:
         other = self._prev_page_same_position_line(line, is_bottom_align)
@@ -637,13 +681,15 @@ class _Solver:
                         self._enforce_auto_wipe_bounds(line)
                 previous_page = page
         for other, line in self.squeeze_pairs:
-            self._squeeze_pair(other, line)
+            self._squeeze_pair(
+                other,
+                line,
+                entry_order_reference=entry_order_reference,
+            )
             self._enforce_auto_wipe_bounds(other)
             self._enforce_auto_wipe_bounds(line)
         if entry_order_reference is not None:
-            if self.squeeze_pairs and not self.adjust_same_position:
-                self._cap_squeezed_entries_to_page_order(entry_order_reference)
-            else:
+            if not (self.squeeze_pairs and not self.adjust_same_position):
                 self._preserve_page_entry_order(entry_order_reference)
         # Automatic squeezing may consume PreTime/PostTime completely, but it
         # must never consume the wipe interval itself.  Non-zero automatic
@@ -653,61 +699,3 @@ class _Solver:
         for line in range(len(starts)):
             self._enforce_auto_wipe_bounds(line)
         return self.out
-
-    def _cap_squeezed_entries_to_page_order(
-        self, reference: Sequence[int]
-    ) -> None:
-        """Keep page order by backing off only the explicitly squeezed lines."""
-
-        squeezed = {line for _other, line in self.squeeze_pairs}
-        if not squeezed:
-            return
-        for page in self.pages:
-            lines = page.lines
-            for _pass in range(max(len(lines), 1)):
-                changed = False
-                for left, right in zip(lines, lines[1:]):
-                    reference_left = int(reference[left])
-                    reference_right = int(reference[right])
-                    if reference_left < reference_right:
-                        if (
-                            left in squeezed
-                            and self.out.starts[left] > self.out.starts[right]
-                        ):
-                            self.out.starts[left] = self.out.starts[right]
-                            changed = True
-                        elif (
-                            right in squeezed
-                            and self.out.starts[right] < self.out.starts[left]
-                        ):
-                            self.out.starts[right] = self.out.starts[left]
-                            changed = True
-                    elif reference_left > reference_right:
-                        if (
-                            left in squeezed
-                            and self.out.starts[left] < self.out.starts[right]
-                        ):
-                            self.out.starts[left] = self.out.starts[right]
-                            changed = True
-                        elif (
-                            right in squeezed
-                            and self.out.starts[right] > self.out.starts[left]
-                        ):
-                            self.out.starts[right] = self.out.starts[left]
-                            changed = True
-                    elif self.out.starts[left] != self.out.starts[right]:
-                        if left in squeezed and right not in squeezed:
-                            self.out.starts[left] = self.out.starts[right]
-                            changed = True
-                        elif right in squeezed and left not in squeezed:
-                            self.out.starts[right] = self.out.starts[left]
-                            changed = True
-                        elif left in squeezed and right in squeezed:
-                            target = min(
-                                self.out.starts[left], self.out.starts[right]
-                            )
-                            self.out.starts[left] = target
-                            self.out.starts[right] = target
-                            changed = True
-                if not changed:
-                    break
