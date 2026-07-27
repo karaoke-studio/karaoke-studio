@@ -16,6 +16,7 @@ from krok_helper.subtitle_render.frontend.timeline_view import (  # noqa: E402
 )
 from krok_helper.subtitle_render.models import (  # noqa: E402
     LineAnimationOverride,
+    RubyAnnotation,
     Style,
     TimingChar,
     TimingLine,
@@ -81,6 +82,47 @@ def test_build_lanes_multiple_sources() -> None:
     track = _make_track()
     lanes = build_lanes([("主字幕", track), ("コーラス", track)])
     assert [lane.name for lane in lanes] == ["主字幕", "コーラス"]
+
+
+def test_build_lanes_utopia_shared_ruby_uses_visual_cell_window(qapp) -> None:
+    line = TimingLine(
+        chars=[
+            TimingChar(
+                "\u4e8c",
+                1000,
+                source_span_start_ms=1000,
+                source_span_end_ms=3000,
+                source_span_index=0,
+                source_span_count=2,
+            ),
+            TimingChar(
+                "\u4eba",
+                2000,
+                source_span_start_ms=1000,
+                source_span_end_ms=3000,
+                source_span_index=1,
+                source_span_count=2,
+            ),
+        ],
+        end_ms=3000,
+    )
+    ruby = RubyAnnotation(
+        kanji="\u4e8c\u4eba",
+        reading="\u3075\u305f\u308a",
+        pos_start_ms=1000,
+        pos_end_ms=3000,
+        reading_part_ms=[1200, 1600],
+    )
+    track = TimingTrack(lines=[line], rubies=[ruby])
+
+    raw_cells = build_lanes([("主字幕", track)])[0].blocks[0].cells
+    visual_cells = build_lanes(
+        [("主字幕", track)],
+        Style(font_size_px=48, entry_anim="utopia"),
+    )[0].blocks[0].cells
+
+    assert raw_cells[1].start_ms == 2000
+    assert visual_cells[1].start_ms > raw_cells[1].start_ms
 
 
 def _mouse_event(widget, kind, x: float, y: float) -> QMouseEvent:

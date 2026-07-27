@@ -94,6 +94,7 @@ from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _ruby_target_x_range,
     _ruby_utopia_reading_units_and_intervals,
     _transition_char_state,
+    _utopia_wipe_window_for_index,
     _utopia_main_group_for_index,
     _utopia_transition_scope_layers,
     _visual_text_padding,
@@ -4318,6 +4319,70 @@ def test_utopia_groups_main_characters_that_share_one_ruby(qapp):
     assert group[0] == [0, 1]
     assert _utopia_main_group_for_index([ruby], line, intervals, 1) == group
     assert _utopia_main_group_for_index([ruby], line, intervals, 2) is None
+
+
+def test_utopia_karaoke_wipe_uses_ruby_visual_window_for_shared_ruby(qapp):
+    line = TimingLine(
+        chars=[
+            TimingChar(text="二", start_ms=13_712, explicit_start=True),
+            TimingChar(text="人", start_ms=14_804, explicit_start=False),
+        ],
+        end_ms=15_897,
+    )
+    intervals = [(13_712, 14_804), (14_804, 15_897)]
+    ranges = [(0, 100), (100, 200)]
+    ruby = RubyAnnotation(
+        kanji="二人",
+        reading="ふたり",
+        reading_part_ms=[1_391, 1_824],
+        pos_start_ms=13_712,
+        pos_end_ms=15_897,
+    )
+    groups = {0: ([0, 1], ruby), 1: ([0, 1], ruby)}
+    style = Style(karaoke_anim="utopia")
+    transition = _LineCharTransition(
+        phase="utopia",
+        effect="utopia",
+        progress=1.0,
+        start_ms=13_712,
+        end_ms=15_897,
+    )
+
+    start, end = _utopia_wipe_window_for_index(
+        line,
+        intervals,
+        ranges,
+        groups,
+        1,
+        style,
+        fallback_start=intervals[1][0],
+        fallback_end=intervals[1][1],
+    )
+
+    assert start > intervals[1][0]
+    assert start == 15_320
+    before_visual_wipe = _transition_char_state(
+        style,
+        transition,
+        1,
+        2,
+        char_start_ms=start,
+        char_end_ms=end,
+        t_ms=15_100,
+    )
+    during_visual_wipe = _transition_char_state(
+        style,
+        transition,
+        1,
+        2,
+        char_start_ms=start,
+        char_end_ms=end,
+        t_ms=15_400,
+    )
+
+    assert before_visual_wipe == (1.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0)
+    assert during_visual_wipe[4] > 1.0
+    assert during_visual_wipe[5] > 1.0
 
 
 @pytest.mark.parametrize("marker_text", ["^", " "])

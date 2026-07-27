@@ -22,11 +22,14 @@ from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPixmap
 from PyQt6.QtWidgets import QStyle, QStyleOption, QWidget
 
 from krok_helper.qfluent_compat import hide_fluent_tooltip, show_fluent_tooltip
+from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
 from krok_helper.subtitle_render.frontend.theme import palette, themed
 from krok_helper.subtitle_render.models import (
+    RubyAnnotation,
     Style,
     TimingLine,
     TimingTrack,
+    effective_karaoke_animation,
     style_with_line_animation,
 )
 
@@ -113,7 +116,90 @@ class Lane:
     blocks: tuple[LineBlock, ...]
 
 
-def _line_block(line: TimingLine, line_index: int) -> Optional[LineBlock]:
+def _raw_char_cells(line: TimingLine, end_ms: int) -> list[CharCell]:
+    cells: list[CharCell] = []
+    for i, ch in enumerate(line.chars):
+        next_ms = line.chars[i + 1].start_ms if i + 1 < len(line.chars) else end_ms
+        if ch.pause_release_ms is not None:
+            next_ms = min(next_ms, ch.pause_release_ms)
+        cells.append(CharCell(ch.text, ch.start_ms, max(next_ms, ch.start_ms)))
+    return cells
+
+
+def _visual_utopia_char_cells(
+    line: TimingLine,
+    end_ms: int,
+    style: Style,
+    rubies: Sequence[RubyAnnotation],
+) -> list[CharCell] | None:
+    if effective_karaoke_animation(style) != "utopia" or not rubies:
+        return None
+
+    from krok_helper.subtitle_render.engine.painter import (
+        _active_rubies_for_line,
+        _build_font,
+        _build_latin_font,
+        _char_layout_width,
+        _char_left_positions,
+        _letter_spacing,
+        _resolve_char_ruby_groups,
+        _style_for_line,
+        _utopia_wipe_window_for_index,
+    )
+
+    line_style = _style_for_line(style, line)
+    active_rubies = _active_rubies_for_line(list(rubies), line)
+    if not active_rubies:
+        return None
+    font = _build_font(line_style)
+    metrics = QFontMetrics(font)
+    latin_font = _build_latin_font(line_style)
+    latin_metrics = QFontMetrics(latin_font)
+    char_widths = [
+        _char_layout_width(ch.text, font, metrics, latin_metrics, None, line_style)
+        for ch in line.chars
+    ]
+    intervals = compute_char_intervals(line, char_widths)
+    char_lefts = _char_left_positions(
+        char_widths,
+        0,
+        line_style.right_to_left,
+        _letter_spacing(line_style),
+        n3_no_backtracking=line_style.layout_semantics == "n3_1074",
+    )
+    char_x_ranges = [
+        (left, left + width) for left, width in zip(char_lefts, char_widths)
+    ]
+    groups = _resolve_char_ruby_groups(active_rubies, line, intervals)
+    if not groups:
+        return None
+
+    cells: list[CharCell] = []
+    changed = False
+    raw_cells = _raw_char_cells(line, end_ms)
+    for index, (ch, raw_cell) in enumerate(zip(line.chars, raw_cells)):
+        start_ms, cell_end_ms = _utopia_wipe_window_for_index(
+            line,
+            intervals,
+            char_x_ranges,
+            groups,
+            index,
+            line_style,
+            fallback_start=raw_cell.start_ms,
+            fallback_end=raw_cell.end_ms,
+        )
+        if (start_ms, cell_end_ms) != (raw_cell.start_ms, raw_cell.end_ms):
+            changed = True
+        cells.append(CharCell(ch.text, start_ms, max(start_ms, cell_end_ms)))
+    return cells if changed else None
+
+
+def _line_block(
+    line: TimingLine,
+    line_index: int,
+    style: Style | None = None,
+    rubies: Sequence[RubyAnnotation] = (),
+) -> Optional[LineBlock]:
     if line.is_blank or not line.chars:
         return None
     end_ms = (
@@ -121,12 +207,11 @@ def _line_block(line: TimingLine, line_index: int) -> Optional[LineBlock]:
         if line.end_ms is not None
         else line.chars[-1].start_ms + _FALLBACK_CHAR_MS
     )
-    cells: list[CharCell] = []
-    for i, ch in enumerate(line.chars):
-        next_ms = line.chars[i + 1].start_ms if i + 1 < len(line.chars) else end_ms
-        if ch.pause_release_ms is not None:
-            next_ms = min(next_ms, ch.pause_release_ms)
-        cells.append(CharCell(ch.text, ch.start_ms, max(next_ms, ch.start_ms)))
+    cells = (
+        _visual_utopia_char_cells(line, end_ms, style, rubies)
+        if style is not None
+        else None
+    ) or _raw_char_cells(line, end_ms)
     return LineBlock(
         line_index=line_index,
         start_ms=cells[0].start_ms,
@@ -138,13 +223,16 @@ def _line_block(line: TimingLine, line_index: int) -> Optional[LineBlock]:
     )
 
 
-def build_lanes(tracks: Sequence[tuple[str, TimingTrack]]) -> tuple[Lane, ...]:
+def build_lanes(
+    tracks: Sequence[tuple[str, TimingTrack]],
+    style: Style | None = None,
+) -> tuple[Lane, ...]:
     """把（源名，track）列表转成轨道块结构。"""
     lanes: list[Lane] = []
     for name, track in tracks:
         blocks = []
         for index, line in enumerate(track.lines):
-            block = _line_block(line, index)
+            block = _line_block(line, index, style, track.rubies)
             if block is not None:
                 blocks.append(block)
         lanes.append(Lane(name=name, blocks=tuple(blocks)))
@@ -182,6 +270,7 @@ class TrackTimelineView(QWidget):
         self.setMinimumHeight(120)
         self.setMouseTracking(True)
         self._lanes: tuple[Lane, ...] = ()
+        self._track_names: list[str] = []
         self._track_refs: list[TimingTrack] = []
         """与 ``_lanes`` 对齐的 TimingTrack 引用，把手拖动直接写覆盖字段。"""
         self._windows: list[dict[int, tuple[int, int]]] = []
@@ -219,7 +308,8 @@ class TrackTimelineView(QWidget):
 
         重置视口到开头、比例尺回默认 15 秒，并清除句子选中态。
         """
-        self._lanes = build_lanes(tracks)
+        self._lanes = build_lanes(tracks, self._style)
+        self._track_names = [name for name, _track in tracks]
         self._track_refs = [track for _name, track in tracks]
         self._windows = []
         self._selected = None
@@ -238,7 +328,16 @@ class TrackTimelineView(QWidget):
 
     def set_style(self, style: Style) -> None:
         """设置用于解析逐行有效入退场特效的当前样式。"""
+        if style == self._style:
+            return
         self._style = style
+        if self._track_refs:
+            self._lanes = build_lanes(
+                list(zip(self._track_names, self._track_refs)),
+                self._style,
+            )
+            self._lanes_pixmap = None
+        self.update()
 
     def set_duration(self, ms: int) -> None:
         self._duration_ms = max(int(ms), 0)

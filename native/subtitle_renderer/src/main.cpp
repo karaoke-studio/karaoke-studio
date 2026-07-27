@@ -4158,6 +4158,59 @@ std::vector<std::pair<int, int>> rubyMainWipeIntervals(
     return out;
 }
 
+int rubyMainProgressTimeAtRatio(
+    const RubyAnnotation &ruby,
+    double target,
+    const QString &mode,
+    bool rightSide
+) {
+    const auto intervals = rubyMainWipeIntervals(ruby, mode.toStdString());
+    if (intervals.empty()) {
+        return ruby.posEndMs;
+    }
+    target = std::clamp(target, 0.0, 1.0);
+    std::vector<std::pair<int, double>> points;
+    points.reserve(intervals.size() * 2);
+    const int count = static_cast<int>(intervals.size());
+    for (int index = 0; index < count; ++index) {
+        points.push_back({
+            intervals[static_cast<std::size_t>(index)].first,
+            static_cast<double>(index) / count,
+        });
+        points.push_back({
+            intervals[static_cast<std::size_t>(index)].second,
+            static_cast<double>(index + 1) / count,
+        });
+    }
+    std::optional<int> exact;
+    for (const auto &point : points) {
+        if (std::abs(point.second - target) < 0.000001) {
+            exact = exact.has_value()
+                ? (rightSide ? std::max(*exact, point.first)
+                             : std::min(*exact, point.first))
+                : point.first;
+        }
+    }
+    if (exact.has_value()) {
+        return *exact;
+    }
+    for (std::size_t index = 1; index < points.size(); ++index) {
+        const auto &previous = points[index - 1];
+        const auto &following = points[index];
+        if (previous.second <= target && target <= following.second) {
+            if (following.second <= previous.second || following.first <= previous.first) {
+                return rightSide ? following.first : previous.first;
+            }
+            const double local = (target - previous.second)
+                / (following.second - previous.second);
+            return previous.first + static_cast<int>(std::round(
+                (following.first - previous.first) * local
+            ));
+        }
+    }
+    return target <= 0.0 ? points.front().first : points.back().first;
+}
+
 bool rubyMainUsesBaseTiming(
     const TimingLine &line,
     const std::vector<int> &indices
@@ -4182,6 +4235,55 @@ bool rubyMainUsesBaseTiming(
         }
     }
     return false;
+}
+
+std::pair<int, int> utopiaWipeWindowForIndex(
+    const TimingLine &line,
+    const LineLayout &layout,
+    int index,
+    const ResolvedStyle &style,
+    const std::optional<RubyGroupInfo> &group,
+    std::pair<int, int> fallback
+) {
+    if (!group.has_value()
+        || isUtopiaGroupMarker(group->ruby)
+        || rubyMainUsesBaseTiming(line, group->indices)
+        || std::find(group->indices.begin(), group->indices.end(), index) == group->indices.end()) {
+        return fallback;
+    }
+    double groupLeft = 0.0;
+    double groupRight = 0.0;
+    bool seen = false;
+    for (int candidate : group->indices) {
+        if (candidate < 0
+            || static_cast<std::size_t>(candidate) >= layout.charLefts.size()
+            || static_cast<std::size_t>(candidate) >= layout.charWidths.size()) {
+            continue;
+        }
+        const double left = layout.charLefts[static_cast<std::size_t>(candidate)];
+        const double right = left + layout.charWidths[static_cast<std::size_t>(candidate)];
+        groupLeft = seen ? std::min(groupLeft, left) : left;
+        groupRight = seen ? std::max(groupRight, right) : right;
+        seen = true;
+    }
+    if (!seen || groupRight <= groupLeft
+        || index < 0
+        || static_cast<std::size_t>(index) >= layout.charLefts.size()
+        || static_cast<std::size_t>(index) >= layout.charWidths.size()) {
+        return fallback;
+    }
+    const double charLeft = layout.charLefts[static_cast<std::size_t>(index)];
+    const double charRight = charLeft + layout.charWidths[static_cast<std::size_t>(index)];
+    const double width = groupRight - groupLeft;
+    const double startRatio = (charLeft - groupLeft) / width;
+    const double endRatio = (charRight - groupLeft) / width;
+    const int start = rubyMainProgressTimeAtRatio(
+        group->ruby, startRatio, style.rubyMainProgressMode, true
+    );
+    const int end = rubyMainProgressTimeAtRatio(
+        group->ruby, endRatio, style.rubyMainProgressMode, false
+    );
+    return {start, std::max(start, end)};
 }
 
 void applyRubyMainWipePoints(
@@ -6236,6 +6338,14 @@ void paintUtopiaMainText(
         const int firstIndex = indices.front();
         const int lastIndex = indices.back();
         const int followingDoneMs = utopiaFollowingDoneTime(line, intervals, lastIndex, cfg);
+        const auto wipeWindow = utopiaWipeWindowForIndex(
+            line,
+            layout,
+            firstIndex,
+            style,
+            group,
+            intervals[static_cast<std::size_t>(firstIndex)]
+        );
         const AnimationState state = transitionCharState(
             cfg,
             transition,
@@ -6244,7 +6354,8 @@ void paintUtopiaMainText(
             count,
             tMs,
             cfg.height,
-            followingDoneMs
+            followingDoneMs,
+            wipeWindow
         );
         if (state.opacity <= 0.0) {
             continue;

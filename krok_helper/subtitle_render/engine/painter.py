@@ -8496,13 +8496,23 @@ def _utopia_main_scope_layers(
             if group_done_ms is not None
             else _utopia_following_done_time(line, layout.intervals, last_index, style)
         )
+        char_start, char_end = _utopia_wipe_window_for_index(
+            line,
+            layout.intervals,
+            layout.char_x_ranges,
+            ruby_groups,
+            first_index,
+            style,
+            fallback_start=layout.intervals[first_index][0],
+            fallback_end=layout.intervals[last_index][1],
+        )
         opacity, dx, dy, rotation, scale_x, scale_y, skew_y = _transition_char_state(
             style,
             transition,
             first_index,
             count,
-            char_start_ms=layout.intervals[first_index][0],
-            char_end_ms=layout.intervals[last_index][1],
+            char_start_ms=char_start,
+            char_end_ms=char_end,
             t_ms=t_ms,
             frame_height=frame_height,
             following_done_ms=following_done_ms,
@@ -8607,13 +8617,25 @@ def _utopia_ruby_scope_rect(
     if first_index >= len(intervals) or last_index >= len(intervals):
         return None
     following_done_ms = _utopia_following_done_time(line, intervals, last_index, style)
+    ruby_groups = _resolve_char_ruby_groups([layout.ruby], line, intervals)
+    char_x_ranges = [(layout.x, layout.x + layout.target_width) for _index in line.chars]
+    char_start, char_end = _utopia_wipe_window_for_index(
+        line,
+        intervals,
+        char_x_ranges,
+        ruby_groups,
+        first_index,
+        style,
+        fallback_start=intervals[first_index][0],
+        fallback_end=intervals[last_index][1],
+    )
     opacity, dx, dy, rotation, scale_x, scale_y, skew_y = _transition_char_state(
         style,
         transition,
         first_index,
         max(len(line.chars), 1),
-        char_start_ms=intervals[first_index][0],
-        char_end_ms=intervals[last_index][1],
+        char_start_ms=char_start,
+        char_end_ms=char_end,
         t_ms=t_ms,
         frame_height=frame_height,
         following_done_ms=following_done_ms,
@@ -9395,8 +9417,16 @@ def _paint_role_line_with_character_transition(
         width = max(right - left, 1)
         first_index = indices[0]
         last_index = indices[-1]
-        char_start = intervals[first_index][0]
-        char_end = intervals[last_index][1]
+        char_start, char_end = _utopia_wipe_window_for_index(
+            line,
+            intervals,
+            fill_ranges,
+            ruby_groups,
+            index,
+            style,
+            fallback_start=intervals[first_index][0],
+            fallback_end=intervals[last_index][1],
+        )
         following_done_ms = (
             group_done_ms
             if group_done_ms is not None
@@ -9788,8 +9818,16 @@ def _paint_line_with_character_transition(
         width = max(right - left, 1)
         first_index = indices[0]
         last_index = indices[-1]
-        char_start = intervals[first_index][0]
-        char_end = intervals[last_index][1]
+        char_start, char_end = _utopia_wipe_window_for_index(
+            line,
+            intervals,
+            fill_ranges,
+            ruby_groups,
+            index,
+            style,
+            fallback_start=intervals[first_index][0],
+            fallback_end=intervals[last_index][1],
+        )
         following_done_ms = (
             group_done_ms
             if group_done_ms is not None
@@ -9971,6 +10009,60 @@ def _utopia_main_group_for_index(
     if len(indices) <= 1:
         return None
     return indices, ruby
+
+
+def _utopia_wipe_window_for_index(
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+    char_x_ranges: list[tuple[int, int]],
+    groups: dict[int, tuple[list[int], RubyAnnotation]],
+    index: int,
+    style: Style,
+    *,
+    fallback_start: int,
+    fallback_end: int,
+) -> tuple[int, int]:
+    if effective_karaoke_animation(style) != "utopia":
+        return fallback_start, fallback_end
+    entry = groups.get(index)
+    if entry is None:
+        return fallback_start, fallback_end
+    raw_indices, ruby = entry
+    if _is_utopia_group_marker(ruby):
+        return fallback_start, fallback_end
+    indices = [candidate for candidate in raw_indices if 0 <= candidate < len(char_x_ranges)]
+    if index not in indices or _ruby_main_uses_base_timing(line, indices):
+        return fallback_start, fallback_end
+
+    effective_ruby = _effective_ruby_for_target(ruby, indices, intervals)
+    if (
+        style.ruby_main_progress_mode == "reading_units"
+        and _ruby_visual_units_and_intervals(effective_ruby)
+    ):
+        base_index = indices.index(index)
+        return _ruby_main_text_slot_times(effective_ruby, base_index, len(indices))
+
+    group_left = min(char_x_ranges[candidate][0] for candidate in indices)
+    group_right = max(char_x_ranges[candidate][1] for candidate in indices)
+    if group_right <= group_left:
+        return fallback_start, fallback_end
+    char_left, char_right = char_x_ranges[index]
+    group_width = group_right - group_left
+    start_ratio = (char_left - group_left) / group_width
+    end_ratio = (char_right - group_left) / group_width
+    start = _main_text_ruby_progress_time_at_ratio(
+        effective_ruby,
+        start_ratio,
+        mode=style.ruby_main_progress_mode,
+        plateau_side="right",
+    )
+    end = _main_text_ruby_progress_time_at_ratio(
+        effective_ruby,
+        end_ratio,
+        mode=style.ruby_main_progress_mode,
+        plateau_side="left",
+    )
+    return start, max(start, end)
 
 
 def _transition_char_state(
@@ -15592,6 +15684,56 @@ def _main_text_ruby_progress_ratio(
             local = max(0.0, min(1.0, local))
             return (index + local) / segment_count
     return 1.0
+
+
+def _main_text_ruby_progress_time_at_ratio(
+    ruby: RubyAnnotation,
+    target: float,
+    *,
+    mode: str = "checkpoint_segments",
+    plateau_side: str,
+) -> int:
+    if mode == "reading_units" and _ruby_visual_units_and_intervals(ruby):
+        return _ruby_progress_time_at_ratio(
+            ruby,
+            target,
+            plateau_side=plateau_side,
+        )
+
+    start = int(ruby.pos_start_ms)
+    end = max(start, int(ruby.pos_end_ms))
+    target = max(0.0, min(1.0, float(target)))
+    if not ruby.reading_part_ms:
+        return int(round(start + (end - start) * target))
+
+    anchors = [start]
+    for relative_ms in ruby.reading_part_ms:
+        timestamp = start + int(relative_ms)
+        anchors.append(max(anchors[-1], min(end, timestamp)))
+    anchors.append(max(anchors[-1], end))
+
+    segment_count = len(anchors) - 1
+    if segment_count <= 0:
+        return end
+    if target <= 0.0:
+        return anchors[0]
+    if target >= 1.0:
+        return anchors[-1]
+
+    points = [
+        (timestamp, index / segment_count)
+        for index, timestamp in enumerate(anchors)
+    ]
+    exact_times = [timestamp for timestamp, progress in points if progress == target]
+    if exact_times:
+        return min(exact_times) if plateau_side == "left" else max(exact_times)
+    for (start_ms, start_progress), (end_ms, end_progress) in zip(points, points[1:]):
+        if start_progress <= target <= end_progress:
+            if end_progress <= start_progress or end_ms <= start_ms:
+                return start_ms if plateau_side == "left" else end_ms
+            local = (target - start_progress) / (end_progress - start_progress)
+            return int(round(start_ms + (end_ms - start_ms) * local))
+    return anchors[-1]
 
 
 def _ruby_reading_intervals(ruby: RubyAnnotation) -> list[tuple[int, int]]:

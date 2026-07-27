@@ -5828,6 +5828,72 @@ def test_utopia_karaoke_bounce_is_independent_and_legacy_compatible(monkeypatch)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_utopia_karaoke_bounce_uses_ruby_main_wipe_points(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("二", 13_712, explicit_start=True),
+                    TimingChar("人", 14_804, explicit_start=False),
+                ],
+                end_ms=15_897,
+            )
+        ],
+        rubies=[
+            RubyAnnotation(
+                kanji="二人",
+                reading="ふたり",
+                reading_parts=["ふ", "た", "り"],
+                reading_part_ms=[1_391, 1_824],
+                pos_start_ms=13_712,
+                pos_end_ms=15_897,
+            )
+        ],
+    )
+    style = Style(
+        font_size_px=86,
+        line_y_position="center",
+        entry_anim="none",
+        exit_anim="none",
+        karaoke_anim="utopia",
+        decoration_kind="shadow",
+        stroke_width_px=2,
+        stroke2_enabled=False,
+        karaoke_colors=KaraokeColors(
+            before=KaraokeColorState(text=PaintFill(color="#FFFFFF")),
+            after=KaraokeColorState(text=PaintFill(color="#FF5A6F")),
+        ),
+    )
+    timestamps = (15_100, 15_400)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer,
+            style,
+            timestamps,
+            force_warp=True,
+            track=track,
+        )
+    painter = [
+        _render_painter_oracle(style, t_ms=t_ms, track=track)
+        for t_ms in timestamps
+    ]
+
+    for t_ms, gpu_frame, painter_frame in zip(timestamps, gpu, painter):
+        assert all(
+            abs(actual - expected) <= 20
+            for actual, expected in zip(
+                _payload_alpha_bounds(gpu_frame),
+                _payload_alpha_bounds(painter_frame),
+            )
+        ), (
+            t_ms,
+            _payload_alpha_bounds(gpu_frame),
+            _payload_alpha_bounds(painter_frame),
+        )
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g4_utopia_ruby_units_and_group_outro_follow_painter(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     track, style = _g4_utopia_ruby_scene()

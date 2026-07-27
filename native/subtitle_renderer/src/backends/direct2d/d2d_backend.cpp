@@ -4160,6 +4160,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                     left + dxValue, baseline + dyValue
                 );
         };
+        const auto wipeStartMs = [](const Impl::CachedChar &ch) {
+            return ch.wipePoints.empty() ? ch.startMs : ch.wipePoints.front().timeMs;
+        };
+        const auto wipeEndMs = [](const Impl::CachedChar &ch) {
+            return ch.wipePoints.empty() ? ch.endMs : ch.wipePoints.back().timeMs;
+        };
         auto characterAnimationAt = [&](std::size_t charIndex) {
             CharacterAnimationState state;
             if (charIndex >= line->chars.size()) {
@@ -4236,18 +4242,18 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 scaleX = shrink * std::cos(pi * local);
                 scaleY = shrink;
             } else if (line->karaokeAnimation == "utopia"
-                && tMs > ch.startMs && tMs < ch.endMs
-                && ch.startMs != ch.endMs) {
+                && tMs > wipeStartMs(ch) && tMs < wipeEndMs(ch)
+                && wipeStartMs(ch) != wipeEndMs(ch)) {
                 const int overMs = std::min(
-                    static_cast<int>((ch.endMs - ch.startMs) * 0.25f), 100
+                    static_cast<int>((wipeEndMs(ch) - wipeStartMs(ch)) * 0.25f), 100
                 );
                 if (overMs > 0) {
-                    const int peakMs = ch.startMs + overMs;
+                    const int peakMs = wipeStartMs(ch) + overMs;
                     const float progress = tMs <= peakMs
-                        ? static_cast<float>(tMs - ch.startMs)
+                        ? static_cast<float>(tMs - wipeStartMs(ch))
                             / static_cast<float>(overMs)
-                        : static_cast<float>(ch.endMs - tMs)
-                            / static_cast<float>(std::max(ch.endMs - peakMs, 1));
+                        : static_cast<float>(wipeEndMs(ch) - tMs)
+                            / static_cast<float>(std::max(wipeEndMs(ch) - peakMs, 1));
                     scaleX = scaleY = 1.0f
                         + 0.15f * std::clamp(progress, 0.0f, 1.0f);
                 }
@@ -5330,12 +5336,6 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
         );
 
         const bool rtl = style.rightToLeft && !style.vertical;
-        const auto wipeStartMs = [](const Impl::CachedChar &ch) {
-            return ch.wipePoints.empty() ? ch.startMs : ch.wipePoints.front().timeMs;
-        };
-        const auto wipeEndMs = [](const Impl::CachedChar &ch) {
-            return ch.wipePoints.empty() ? ch.endMs : ch.wipePoints.back().timeMs;
-        };
         const auto wipePositionAt = [&](const Impl::CachedChar &ch) {
             if (ch.wipePoints.empty()) {
                 const int duration = std::max(ch.endMs - ch.startMs, 1);
