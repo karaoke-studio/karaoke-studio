@@ -190,61 +190,94 @@ def _timing_chars_for_sentence(
             if timed_index_position + 1 < len(timed_indices)
             else len(chars)
         )
-        group_items = [
-            (index, ch, text)
-            for index, ch in enumerate(chars[group_start:group_end], start=group_start)
-            if (text := str(getattr(ch, "char", "")))
-        ]
-        if not group_items:
-            continue
-
         anchor_start_ms = _first_timestamp(chars[timed_index], offset_ms)
         if anchor_start_ms is None:
             continue
-        span_end_ms = _group_end_ms(chars, group_end, offset_ms, project, sentence_index)
-        starts = _spread_text_starts(anchor_start_ms, span_end_ms, len(group_items))
-        shared_span = (
-            len(group_items) > 1
-            and span_end_ms is not None
-            and span_end_ms > anchor_start_ms
-        )
         has_following_anchor = timed_index_position + 1 < len(timed_indices)
 
-        for local_index, (_index, ch, text) in enumerate(group_items):
-            sentence_end_ms = _offset_optional(
-                getattr(ch, "sentence_end_ts", None), offset_ms
+        cursor = group_start
+        span_start_ms = anchor_start_ms
+        while cursor < group_end:
+            span_end_index = group_end
+            span_end_ms = _group_end_ms(
+                chars, group_end, offset_ms, project, sentence_index
             )
-            ch_singer_id = _effective_singer_id(
-                getattr(ch, "singer_id", "") or sentence_singer_id,
-                default_singer_id,
-            )
-            ch_singer = singer_by_id.get(ch_singer_id or "")
-            result.append(
-                TimingChar(
-                    text=text,
-                    start_ms=starts[local_index],
-                    explicit_start=bool(
-                        _offset_timestamps(
-                            getattr(ch, "timestamps", []) or [], offset_ms
-                        )
-                    ),
-                    explicit_end=(
-                        bool(getattr(ch, "is_sentence_end", False))
-                        and sentence_end_ms is not None
-                    )
-                    or (local_index == len(group_items) - 1 and has_following_anchor),
-                    pause_release_ms=(
-                        sentence_end_ms
-                        if bool(getattr(ch, "is_sentence_end", False))
-                        else None
-                    ),
-                    role_label=_singer_name(ch_singer),
-                    source_span_start_ms=anchor_start_ms if shared_span else None,
-                    source_span_end_ms=span_end_ms if shared_span else None,
-                    source_span_index=local_index if shared_span else 0,
-                    source_span_count=len(group_items) if shared_span else 1,
+            ended_by_sentence = False
+            for boundary_index in range(cursor, group_end):
+                boundary_ch = chars[boundary_index]
+                boundary_end_ms = _offset_optional(
+                    getattr(boundary_ch, "sentence_end_ts", None), offset_ms
                 )
+                if (
+                    bool(getattr(boundary_ch, "is_sentence_end", False))
+                    and boundary_end_ms is not None
+                ):
+                    span_end_index = boundary_index + 1
+                    span_end_ms = boundary_end_ms
+                    ended_by_sentence = True
+                    break
+
+            group_items = [
+                (index, ch, text)
+                for index, ch in enumerate(chars[cursor:span_end_index], start=cursor)
+                if (text := str(getattr(ch, "char", "")))
+            ]
+            if not group_items:
+                cursor = span_end_index
+                if ended_by_sentence and span_end_ms is not None:
+                    span_start_ms = span_end_ms
+                    continue
+                break
+
+            starts = _spread_text_starts(span_start_ms, span_end_ms, len(group_items))
+            shared_span = (
+                len(group_items) > 1
+                and span_end_ms is not None
+                and span_end_ms > span_start_ms
             )
+
+            for local_index, (_index, ch, text) in enumerate(group_items):
+                sentence_end_ms = _offset_optional(
+                    getattr(ch, "sentence_end_ts", None), offset_ms
+                )
+                ch_singer_id = _effective_singer_id(
+                    getattr(ch, "singer_id", "") or sentence_singer_id,
+                    default_singer_id,
+                )
+                ch_singer = singer_by_id.get(ch_singer_id or "")
+                result.append(
+                    TimingChar(
+                        text=text,
+                        start_ms=starts[local_index],
+                        explicit_start=bool(
+                            _offset_timestamps(
+                                getattr(ch, "timestamps", []) or [], offset_ms
+                            )
+                        )
+                        or (local_index == 0 and cursor > group_start),
+                        explicit_end=(
+                            bool(getattr(ch, "is_sentence_end", False))
+                            and sentence_end_ms is not None
+                        )
+                        or (local_index == len(group_items) - 1 and has_following_anchor),
+                        pause_release_ms=(
+                            sentence_end_ms
+                            if bool(getattr(ch, "is_sentence_end", False))
+                            else None
+                        ),
+                        role_label=_singer_name(ch_singer),
+                        source_span_start_ms=span_start_ms if shared_span else None,
+                        source_span_end_ms=span_end_ms if shared_span else None,
+                        source_span_index=local_index if shared_span else 0,
+                        source_span_count=len(group_items) if shared_span else 1,
+                    )
+                )
+
+            cursor = span_end_index
+            if ended_by_sentence and span_end_ms is not None:
+                span_start_ms = span_end_ms
+                continue
+            break
     return result
 
 
@@ -264,7 +297,9 @@ def _ruby_annotations_for_sentence(
             continue
         start = index
         index += 1
-        while index < len(chars) and bool(getattr(chars[index - 1], "linked_to_next", False)):
+        while index < len(chars) and bool(
+            getattr(chars[index - 1], "linked_to_next", False)
+        ):
             index += 1
         end = index
         ruby = _ruby_annotation_for_group(
@@ -301,23 +336,12 @@ def _ruby_annotation_for_group(
     if end_ms is None:
         end_ms = start_ms
 
-    reading_parts: list[str] = []
-    part_offsets: list[int] = []
-    for ch in group_chars:
-        ruby = getattr(ch, "ruby", None)
-        if ruby is None:
-            continue
-        timestamps = _offset_timestamps(getattr(ch, "timestamps", []) or [], offset_ms)
-        for part_index, part in enumerate(list(getattr(ruby, "parts", []) or [])):
-            part_text = str(getattr(part, "text", ""))
-            for pause_text in ruby_pause_texts:
-                part_text = part_text.replace(pause_text, "")
-            reading_parts.append(part_text)
-            if len(reading_parts) <= 1:
-                continue
-            if part_index < len(timestamps):
-                part_offsets.append(max(0, timestamps[part_index] - start_ms))
-
+    reading_parts, part_offsets = _ruby_reading_parts_for_group(
+        group_chars,
+        start_ms,
+        offset_ms,
+        ruby_pause_texts,
+    )
     reading = "".join(reading_parts)
     if not reading and reading_parts:
         reading_parts = [" " for _part in reading_parts]
@@ -332,6 +356,38 @@ def _ruby_annotation_for_group(
         pos_end_ms=end_ms,
         reading_parts=reading_parts,
     )
+
+
+def _ruby_reading_parts_for_group(
+    group_chars: list[Any],
+    start_ms: int,
+    offset_ms: int,
+    ruby_pause_texts: tuple[str, ...],
+) -> tuple[list[str], list[int]]:
+    reading_parts: list[str] = []
+    current_part: list[str] = []
+    part_offsets: list[int] = []
+    has_part = False
+    for ch in group_chars:
+        ruby = getattr(ch, "ruby", None)
+        if ruby is None:
+            continue
+        timestamps = _offset_timestamps(getattr(ch, "timestamps", []) or [], offset_ms)
+        for part_index, part in enumerate(list(getattr(ruby, "parts", []) or [])):
+            part_text = str(getattr(part, "text", ""))
+            for pause_text in ruby_pause_texts:
+                part_text = part_text.replace(pause_text, "")
+            if part_index < len(timestamps):
+                timestamp = max(0, timestamps[part_index] - start_ms)
+                if has_part:
+                    reading_parts.append("".join(current_part))
+                    current_part = []
+                    part_offsets.append(timestamp)
+            current_part.append(part_text)
+            has_part = True
+    if has_part:
+        reading_parts.append("".join(current_part))
+    return reading_parts, part_offsets
 
 
 def _ruby_pause_texts() -> tuple[str, ...]:
