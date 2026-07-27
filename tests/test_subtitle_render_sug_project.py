@@ -270,6 +270,112 @@ def test_sug_adapter_preserves_n3_main_text_boundary_provenance() -> None:
     assert ruby.reading_part_ms == [250, 520, 700]
 
 
+def test_sug_linked_ruby_merges_untimed_parts_like_lrc_export() -> None:
+    singer = Singer(id="main", name="主唱", color="#ff0000", is_default=True)
+    chars = [
+        Character(
+            char="メ",
+            ruby=Ruby(parts=[RubyPart("me")]),
+            check_count=1,
+            timestamps=[2_776],
+            linked_to_next=True,
+            singer_id=singer.id,
+        ),
+        Character(
+            char="リ",
+            ruby=Ruby(parts=[RubyPart("rry")]),
+            check_count=1,
+            timestamps=[2_951],
+            linked_to_next=True,
+            singer_id=singer.id,
+        ),
+        Character(
+            char="ー",
+            ruby=Ruby(parts=[RubyPart("-")]),
+            check_count=0,
+            linked_to_next=True,
+            singer_id=singer.id,
+        ),
+        Character(
+            char="ゴ",
+            ruby=Ruby(parts=[RubyPart("go")]),
+            check_count=1,
+            timestamps=[3_192],
+            linked_to_next=True,
+            singer_id=singer.id,
+        ),
+        Character(
+            char="ー",
+            ruby=Ruby(parts=[RubyPart("-")]),
+            check_count=0,
+            linked_to_next=True,
+            singer_id=singer.id,
+        ),
+        Character(
+            char="ラ",
+            ruby=Ruby(parts=[RubyPart("rou")]),
+            check_count=1,
+            timestamps=[3_447],
+            linked_to_next=True,
+            singer_id=singer.id,
+        ),
+        Character(
+            char="ン",
+            ruby=Ruby(parts=[RubyPart("n")]),
+            check_count=0,
+            linked_to_next=True,
+            singer_id=singer.id,
+        ),
+        Character(
+            char="ド",
+            ruby=Ruby(parts=[RubyPart("d")]),
+            check_count=0,
+            sentence_end_ts=3_960,
+            is_sentence_end=True,
+            singer_id=singer.id,
+        ),
+        Character(char=" ", check_count=0, singer_id=singer.id),
+        Character(
+            char="回",
+            ruby=Ruby(parts=[RubyPart("まわ")]),
+            check_count=1,
+            timestamps=[4_058],
+            sentence_end_ts=4_634,
+            is_sentence_end=True,
+            is_line_end=True,
+            singer_id=singer.id,
+        ),
+    ]
+    track = timing_track_from_sug_project(
+        Project(
+            singers=[singer],
+            sentences=[Sentence(singer_id=singer.id, characters=chars)],
+        )
+    )
+
+    line = track.lines[0]
+    assert [char.text for char in line.chars[:9]] == list("メリーゴーランド ")
+    assert [char.start_ms for char in line.chars[:9]] == [
+        2_776,
+        2_951,
+        3_071,
+        3_192,
+        3_319,
+        3_447,
+        3_618,
+        3_789,
+        3_960,
+    ]
+    assert line.chars[7].pause_release_ms == 3_960
+    assert line.chars[8].explicit_start is True
+    assert line.chars[8].explicit_end is True
+
+    ruby = track.rubies[0]
+    assert (ruby.kanji, ruby.reading) == ("メリーゴーランド", "merry-go-round")
+    assert ruby.reading_parts == ["me", "rry-", "go-", "round"]
+    assert ruby.reading_part_ms == [175, 416, 671]
+
+
 @pytest.mark.parametrize("placeholder_name", ["未命名", "Untitled"])
 def test_default_sug_placeholder_singer_uses_global_style(
     placeholder_name: str,
