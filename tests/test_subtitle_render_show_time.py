@@ -383,3 +383,90 @@ def test_single_bottom_page_is_pushed_up_when_the_previous_page_still_shows():
 def test_empty_input_returns_empty_result():
     out = _run([], [], [])
     assert out.starts == [] and out.ends == [] and out.force_bottom == []
+
+
+# ---------------------------------------------------------------------------
+# Pixel collision path — _squeeze_measured_pair + N3 ForceBottom priority
+# ---------------------------------------------------------------------------
+
+
+def test_n3_force_bottom_runs_before_pixel_collision_squeeze():
+    # Two single-line pages at the same slot: N3 should push the second page
+    # up (force_bottom=False) before pixel collision detection supplements.
+    begins, ends = [10_000, 13_500], [13_000, 17_000]
+    pages = _pages((0, 2, 0), (0, 2, 1))
+
+    out = _run(
+        begins,
+        ends,
+        pages,
+        adjust_same_position=False,
+        squeeze_pairs=None,
+        dynamic_single_page_reflow=True,
+        independent_line_entry=True,
+    )
+
+    assert out.force_bottom[0] is True
+    assert out.force_bottom[1] is False
+
+
+def test_measured_squeeze_compresses_only_explicit_conflict_pairs():
+    begins = [10_000, 10_200, 12_000, 12_100]
+    ends = [11_900, 11_000, 13_100, 13_200]
+    pages = _pages((0, 2, 0, 1), (0, 2, 2, 3))
+    kwargs = dict(
+        pre_time_ms=PRE,
+        post_time_ms=POST,
+        interval_ms=INTERVAL,
+        protect_ms=protect_time_ms(PRE, POST),
+        adjust_same_position=False,
+        dynamic_single_page_reflow=True,
+        independent_line_entry=True,
+        auto_entry_reserve_ms=[250] * 4,
+        entry_animation_ms=[300] * 4,
+        exit_animation_ms=[300] * 4,
+    )
+    baseline = compute_show_times(begins, ends, pages, **kwargs)
+    squeezed = compute_show_times(
+        begins, ends, pages, squeeze_pairs=[(1, 2)], **kwargs
+    )
+
+    assert baseline.force_bottom == squeezed.force_bottom
+    assert squeezed.starts[0] == baseline.starts[0]
+    assert squeezed.starts[3] == baseline.starts[3]
+    assert squeezed.ends[1] <= baseline.ends[1]
+    assert squeezed.starts[2] >= baseline.starts[2]
+
+
+def test_cross_slot_pairs_are_not_blindly_squeezed():
+    # A dual-line page (slots 0,1) followed by a single-line page (slot 0 by
+    # N3 ForceBottom) must not have the single-line page squeezed against
+    # the previous page's bottom row (slot 1) unless pixel collision
+    # detection explicitly confirms a conflict at the same lane.
+    begins = [10_000, 12_000, 12_500]
+    ends = [11_500, 12_400, 14_000]
+    pages = _pages((0, 2, 0, 1), (0, 2, 2))
+    kwargs = dict(
+        pre_time_ms=PRE,
+        post_time_ms=POST,
+        interval_ms=INTERVAL,
+        protect_ms=protect_time_ms(PRE, POST),
+        adjust_same_position=False,
+        dynamic_single_page_reflow=True,
+        independent_line_entry=True,
+        auto_entry_reserve_ms=[250] * 3,
+        entry_animation_ms=[300] * 3,
+        exit_animation_ms=[300] * 3,
+    )
+    out = compute_show_times(begins, ends, pages, **kwargs)
+
+    # No squeeze_pairs provided → no measured squeezing.  N3 ForceBottom
+    # moves the single-line page up to slot 0; the bottom row (slot 1)
+    # exits normally.  A cross-slot boundary pair must not have been
+    # compressed.
+    assert out.force_bottom[0] is False
+    assert out.force_bottom[1] is False
+    assert out.force_bottom[2] is False
+    assert out.starts[2] == begins[2] - PRE
+    assert out.ends[1] == ends[1] + POST
+    assert out.ends[1] < out.starts[2]
