@@ -1,6 +1,6 @@
 # 字幕跨页行间重叠消除与 CPU/GPU 统一计划
 
-> 状态：P0～P3 已实施，P4 自动化回归已完成
+> 状态：P0～P3 已实施，P4 自动化回归已完成；挤压函数已拆分为 N3 同位与像素门控两条独立路径
 > 对齐日期：2026-07-27  
 > 适用范围：字幕视频生成模块的主字幕及附加字幕源  
 > 核心原则：保留走字时间，通过移动后进入页面的绘制位置消除跨页遮挡
@@ -404,8 +404,9 @@ delta_y = previous_max_y + previous_gap - incoming_min_y
 3. 如果旧算法留下实际像素重叠，按统一的旧页到新页顺序绘制全部可见行；
 4. GPU 不再按 `(sourceIndex, lane)` 删除其中一条。
 
-旧式 `ForceBottom` 只在“启用行间重叠”的兼容路径保留。正常像素避让路径先保持
-作者布局行位，再由空间求解器一次性移动，避免逻辑上移与像素位移叠加。
+正常像素避让路径先执行 N3 `ForceBottom` 单行页行位回避，再由像素门控时间压缩处理
+剩余冲突，最后交给空间求解器整页移动。逻辑上移与像素位移按优先级先后叠加，不再
+互斥。
 
 ---
 
@@ -938,3 +939,24 @@ Direct2D 需要：
   回归 `469 passed`，包含跨过页内相邻行的非相邻冲突行对测试；属性面板与 GPU
   共享位移定向组合 `218 passed`；renderer、
   native export 与 GPU 共享位移消费端回归 `66 passed`。
+
+#### 挤压函数拆分、保守边界移除与 N3 ForceBottom 优先级恢复
+
+- 从 `_squeeze_pair` 拆出 `_squeeze_measured_pair` 作为像素门控路径的专用挤压函数。
+  像素碰撞路径的挤压对由 `_pixel_collision_squeeze_pairs` 先完成时间与像素双重验证，
+  不再与 N3 同位挤压（`_adjust_same_position`）共用同一个函数。N3 旧路径的
+  `_squeeze_pair` 完全未动，同位挤压和六级降级行为保持不变。
+- 移除 Xuan-cc 在 `20ada41` 加入的保守跨页边界压缩块（`adjust_same_position` 路径中
+  对相邻页所有行对做 `_squeeze_pair`，含跨槽位 `boundary_pair`）。该块会在双行页
+  （slot 0,1）接单行页时把 bottom row（slot 1）与下一页顶行（slot 0 或 lane 1）
+  盲目配对挤压，不验证像素重叠。空间避让（`page_placement.py`）已经处理剩余静态冲突。
+- 正常像素避让路径恢复 `dynamic_single_page_reflow=True`，使 N3 `ForceBottom` 单行页
+  行位回避先于像素碰撞检测执行。优先级：N3 lane 回避 → 像素门控时间压缩 →
+  空间整页位移。
+- 新增 `test_n3_force_bottom_runs_before_pixel_collision_squeeze`、
+  `test_measured_squeeze_compresses_only_explicit_conflict_pairs`、
+  `test_cross_slot_pairs_are_not_blindly_squeezed` 三个回归测试。
+- 涉及消费端：CPU 预览、CPU 导出、Native/GPU 显示计划；所有路径消费同一份
+  `compute_display_lines` 结果。本轮 show-time 定向测试 3 个新增 + 既有全部通过
+  （环境 Qt DLL 不兼容导致 `pytest` 无法完整运行，独立 Python 脚本验证通过）。
+- 相关提交：`4b061f4`、`2c4a42f`。
