@@ -709,6 +709,8 @@ def _compute_subtitle_strip(
             job.style,
             extras,
             duration_ms=job.duration_ms,
+            logical_w=width,
+            logical_h=height,
         ):
             continue
         bounds = frame_vertical_bounds(
@@ -823,6 +825,8 @@ def _compute_content_bands(
             job.style,
             extras,
             duration_ms=job.duration_ms,
+            logical_w=width,
+            logical_h=height,
         ):
             continue
         intervals = frame_content_intervals(
@@ -921,6 +925,8 @@ def _frame_bytes_bands(
         job.style,
         list(job.extra_tracks),
         duration_ms=job.duration_ms,
+        logical_w=job.width,
+        logical_h=job.height,
     ):
         _paint_overlay_bands(
             buffer, job.track, job.style, t_ms,
@@ -953,6 +959,8 @@ def _frame_bytes(
         job.style,
         list(job.extra_tracks),
         duration_ms=job.duration_ms,
+        logical_w=job.width,
+        logical_h=job.height,
     ):
         _paint_overlay_strip(
             buffer, job.track, job.style, t_ms,

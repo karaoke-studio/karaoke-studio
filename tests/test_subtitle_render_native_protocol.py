@@ -254,10 +254,11 @@ def test_build_render_ir_carries_painter_page_groups_for_native_smart_horizon():
     assert [(line["page_index"], line["lane"]) for line in lines] == [
         (0, 0),
         (0, 1),
-        (2, 0),
+        (2, 1),
     ]
     assert lines[0]["layout"]["smart_horizontal"] == "equal_margins"
-    # 末页只有一行：native 靠 page_line_count 才能选到 Bottom 短页那一档对齐。
+    # 末页先保留作者布局中的 Bottom 行位；若与前页真实像素冲突，由共享
+    # layout_offset_windows 整页避让，不再提前套用 N3 ForceBottom 上移一次。
     assert [line["page_line_count"] for line in lines] == [2, 2, 1]
 
 
@@ -654,8 +655,11 @@ def test_build_render_ir_uses_compressed_entry_and_exit_animation_windows():
 
     assert lines[0]["display_end_ms"] == ends[0]
     assert lines[0]["exit_duration_ms"] == 0
-    assert lines[2]["display_start_ms"] == begins[2] - 250
-    assert lines[2]["entry_duration_ms"] == 250
+    # Pixel-gated compression changes only real same-row conflicts.  C keeps
+    # its complete configured 900 ms entry animation and is delayed only until
+    # its stable ink begins exactly when A's stable ink ends.
+    assert lines[2]["display_start_ms"] == begins[2] - 1_000
+    assert lines[2]["entry_duration_ms"] == 900
 
 
 def test_build_render_ir_resolves_independent_karaoke_animation():

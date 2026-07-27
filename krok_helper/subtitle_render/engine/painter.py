@@ -90,6 +90,10 @@ _RUN_GLOW_CACHE = LayerCache(max_items=128)
 # 行索引而非行内容进 key：SmartHorizon 的页定位用 `item is line` 身份判断，
 # 值相同的两行也可能落在不同页。
 _LINE_LAYOUT_CACHE = LayerCache(max_items=48)
+_DISPLAY_LINES_CACHE_MAX = 24
+_DISPLAY_LINES_CACHE: (
+    "OrderedDict[tuple, tuple[TimingTrack, tuple[DisplayLine, ...]]]"
+) = OrderedDict()
 _PAGE_PLACEMENT_CACHE_MAX = 24
 _PAGE_PLACEMENT_CACHE: "OrderedDict[tuple, dict[int, tuple[tuple[int, int, float, float], ...]]]" = (
     OrderedDict()
@@ -390,6 +394,7 @@ def clear_before_layer_cache() -> None:
     _RUBY_MEASURE_CACHE.clear()
     _RUBY_UNIT_LAYOUT_CACHE.clear()
     _LINE_LAYOUT_CACHE.clear()
+    _DISPLAY_LINES_CACHE.clear()
     _PAGE_PLACEMENT_CACHE.clear()
 
 
@@ -519,7 +524,6 @@ from krok_helper.subtitle_render.engine.timeline import (
     compute_char_intervals,
     compute_display_lines,
     track_duration_ms,
-    visible_display_lines,
 )
 from krok_helper.subtitle_render.engine.page_plan import (
     page_plan_signature,
@@ -531,7 +535,9 @@ from krok_helper.subtitle_render.engine.page_placement import (
     AxisOffsetWindow,
     LineVisualBand,
     PageVisualBands,
+    bands_require_separation,
     solve_page_axis_offsets,
+    time_windows_overlap,
 )
 from krok_helper.subtitle_render.engine.animator import line_animation_state
 from krok_helper.subtitle_render.engine.show_time import (
@@ -574,6 +580,8 @@ def _resolve_visible_content(
     style: Style,
     *,
     duration_ms: Optional[int] = None,
+    logical_w: int | None = None,
+    logical_h: int | None = None,
 ):
     """计算某帧的可见内容元组：``(track_t_ms, display_style, display_lines,
     signal_lines, title_opacity)``。
@@ -583,8 +591,20 @@ def _resolve_visible_content(
     """
     track_t_ms = _effective_track_time_ms(track, t_ms, style)
     display_style = _display_style_for_signal_window(style)
-    display_lines = _visible_lines_for_style(track, track_t_ms, display_style)
-    signal_lines = _signal_display_lines_for_style(track, track_t_ms, display_style)
+    display_lines = _visible_lines_for_style(
+        track,
+        track_t_ms,
+        display_style,
+        logical_w=logical_w,
+        logical_h=logical_h,
+    )
+    signal_lines = _signal_display_lines_for_style(
+        track,
+        track_t_ms,
+        display_style,
+        logical_w=logical_w,
+        logical_h=logical_h,
+    )
     # Lyrics follow the track/global offset; the project title does not. N3
     # anchors title show times to the background movie timeline.
     title_opacity = _title_overlay_opacity(
@@ -603,6 +623,8 @@ def frame_has_content(
     extra_tracks: Optional[list[TimingTrack]] = None,
     *,
     duration_ms: Optional[int] = None,
+    logical_w: int | None = None,
+    logical_h: int | None = None,
 ) -> bool:
     """该帧是否会画出任何字幕内容（行 / 信号 / 标题）。
 
@@ -614,12 +636,23 @@ def frame_has_content(
     """
     if track is not None:
         _, _, display_lines, signal_lines, title_opacity = _resolve_visible_content(
-            track, t_ms, style, duration_ms=duration_ms
+            track,
+            t_ms,
+            style,
+            duration_ms=duration_ms,
+            logical_w=logical_w,
+            logical_h=logical_h,
         )
         if display_lines or signal_lines or title_opacity > 0.0:
             return True
     for extra in extra_tracks or ():
-        _, _, display_lines, signal_lines, _unused = _resolve_visible_content(extra, t_ms, style)
+        _, _, display_lines, signal_lines, _unused = _resolve_visible_content(
+            extra,
+            t_ms,
+            style,
+            logical_w=logical_w,
+            logical_h=logical_h,
+        )
         if display_lines or signal_lines:
             return True
     return False
@@ -659,6 +692,8 @@ def frame_content_intervals(
                 t_ms,
                 style,
                 duration_ms=duration_ms if with_title else None,
+                logical_w=logical_w,
+                logical_h=logical_h,
             )
         )
         if not with_title:
@@ -830,6 +865,8 @@ def _paint_track_to_painter(
             t_ms,
             style,
             duration_ms=duration_ms if draw_title else None,
+            logical_w=logical_w,
+            logical_h=logical_h,
         )
     )
     if not draw_title:
@@ -1881,24 +1918,11 @@ def resolved_page_offset_windows_for_style(
         _PAGE_PLACEMENT_CACHE.move_to_end(cache_key)
         return {key: tuple(value) for key, value in cached.items()}
 
-    display_lines = compute_display_lines(
+    display_lines = _display_lines_for_style(
         track,
-        lead_in_ms=style.line_lead_in_ms,
-        tail_ms=style.line_tail_ms,
-        lane_gap_ms=style.line_lane_gap_ms,
-        section_gap_ms=style.section_gap_ms,
-        sync_entry=style.sync_entry,
-        sync_ending=style.sync_ending,
-        section_ending_mode=style.section_ending_mode,
-        protect_ms=_effective_line_protect_ms(style),
-        lane_count=_lane_count(style),
-        row_count_of=_row_count_resolver(style),
-        bottom_align_of=_bottom_align_resolver(style),
-        vertical_position_of=_vertical_position_resolver(style),
-        auto_entry_reserve_ms_of=_auto_entry_reserve_resolver(style),
-        entry_animation_ms_of=_entry_animation_resolver(style),
-        exit_animation_ms_of=_exit_animation_resolver(style),
-        adjust_same_position=True,
+        style,
+        logical_w=logical_w,
+        logical_h=logical_h,
     )
     if not display_lines:
         return {}
@@ -1957,6 +1981,9 @@ def resolved_page_offset_windows_for_style(
                 display_line,
                 line_style,
             )
+            axis_anchor = _resolve_vertical_columns(
+                logical_w, track, [display_line], line_style
+            ).get(display_line.lane)
         else:
             axis_bounds = _display_line_vertical_envelope(
                 logical_w,
@@ -1967,6 +1994,12 @@ def resolved_page_offset_windows_for_style(
                 baselines,
                 line_layouts,
                 layout_cache_sig=layout_cache_sig,
+            )
+            line_layout = line_layouts.get(id(display_line.line))
+            axis_anchor = (
+                line_layout.baseline_y
+                if line_layout is not None
+                else baselines.get(display_line.lane)
             )
         if axis_bounds is None:
             continue
@@ -1986,6 +2019,9 @@ def resolved_page_offset_windows_for_style(
                 axis_min=float(axis_bounds[0]),
                 axis_max=float(axis_bounds[1]),
                 entry_start_ms=entry_start,
+                axis_anchor=(
+                    None if axis_anchor is None else float(axis_anchor)
+                ),
             )
         )
 
@@ -3541,32 +3577,233 @@ def _line_text_width(char_widths: list[int], style: Style) -> int:
     return max(0, sum(char_widths) + spacing * (len(char_widths) - 1))
 
 
+def _display_line_compute_kwargs(style: Style) -> dict[str, object]:
+    return {
+        "lead_in_ms": style.line_lead_in_ms,
+        "tail_ms": style.line_tail_ms,
+        "lane_gap_ms": style.line_lane_gap_ms,
+        "section_gap_ms": style.section_gap_ms,
+        "sync_entry": style.sync_entry,
+        "sync_ending": style.sync_ending,
+        "section_ending_mode": style.section_ending_mode,
+        "protect_ms": _effective_line_protect_ms(style),
+        "lane_count": _lane_count(style),
+        "row_count_of": _row_count_resolver(style),
+        "bottom_align_of": _bottom_align_resolver(style),
+        "vertical_position_of": _vertical_position_resolver(style),
+        "auto_entry_reserve_ms_of": _auto_entry_reserve_resolver(style),
+        "entry_animation_ms_of": _entry_animation_resolver(style),
+        "exit_animation_ms_of": _exit_animation_resolver(style),
+    }
+
+
+def _default_collision_canvas(style: Style) -> tuple[int, int]:
+    height = max(int(style.layout_reference_height), 1)
+    return max(int(round(height * 16 / 9)), 1), height
+
+
+def _pixel_collision_squeeze_pairs(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    style: Style,
+    display_lines: list[DisplayLine],
+) -> tuple[tuple[int, int], ...]:
+    """Return only line pairs with both stable-time and pixel-axis conflict."""
+
+    if not display_lines:
+        return ()
+    if style.vertical:
+        baselines: dict[int, int] = {}
+        line_layouts: dict[int, _SayatooLineLayout] = {}
+        layout_cache_sig = None
+    else:
+        baselines = _resolve_display_baselines(
+            logical_h, track, display_lines, style
+        )
+        line_layouts = _resolve_sayatoo_line_layouts(
+            logical_w,
+            logical_h,
+            track,
+            display_lines,
+            baselines,
+            0,
+            style,
+        )
+        layout_cache_sig = _layout_cache_sig(track, style)
+
+    measured: list[tuple[int, tuple[int, int], LineVisualBand, float]] = []
+    for render_index, display_line in enumerate(display_lines):
+        line_style = _style_for_line(style, display_line.line)
+        if style.vertical:
+            axis_bounds = _display_line_horizontal_envelope(
+                logical_w,
+                logical_h,
+                track,
+                display_line,
+                line_style,
+            )
+            axis_anchor = _resolve_vertical_columns(
+                logical_w, track, [display_line], line_style
+            ).get(display_line.lane)
+        else:
+            axis_bounds = _display_line_vertical_envelope(
+                logical_w,
+                logical_h,
+                track,
+                display_line,
+                style,
+                baselines,
+                line_layouts,
+                layout_cache_sig=layout_cache_sig,
+            )
+            line_layout = line_layouts.get(id(display_line.line))
+            axis_anchor = (
+                line_layout.baseline_y
+                if line_layout is not None
+                else baselines.get(display_line.lane)
+            )
+        if axis_bounds is None:
+            continue
+        collision_start, collision_end = _display_line_static_collision_window(
+            display_line, style
+        )
+        if collision_end <= collision_start:
+            continue
+        page_id = (
+            int(display_line.section_index),
+            int(display_line.page_index),
+        )
+        measured.append(
+            (
+                render_index,
+                page_id,
+                LineVisualBand(
+                    line_id=render_index,
+                    page_id=page_id,
+                    display_start_ms=collision_start,
+                    display_end_ms=collision_end,
+                    axis_min=float(axis_bounds[0]),
+                    axis_max=float(axis_bounds[1]),
+                    entry_start_ms=int(display_line.display_start_ms),
+                    axis_anchor=(
+                        None if axis_anchor is None else float(axis_anchor)
+                    ),
+                ),
+                max(float(line_style.line_gap_px), 0.0),
+            )
+        )
+
+    conflicts: list[tuple[int, int]] = []
+    for incoming_pos, (
+        incoming_index,
+        incoming_page,
+        incoming_band,
+        _incoming_gap,
+    ) in enumerate(measured):
+        for previous_index, previous_page, previous_band, _previous_gap in measured[
+            :incoming_pos
+        ]:
+            if previous_page == incoming_page:
+                continue
+            if not time_windows_overlap(incoming_band, previous_band):
+                continue
+            if not bands_require_separation(
+                incoming_band, previous_band, 0.0
+            ):
+                continue
+            pair = (previous_index, incoming_index)
+            if pair not in conflicts:
+                conflicts.append(pair)
+    return tuple(conflicts)
+
+
+def _display_lines_for_style(
+    track: TimingTrack,
+    style: Style,
+    *,
+    logical_w: int | None = None,
+    logical_h: int | None = None,
+) -> list[DisplayLine]:
+    """Resolve display windows, squeezing only measured per-line collisions."""
+
+    kwargs = _display_line_compute_kwargs(style)
+    if style.allow_inter_page_line_overlap:
+        return compute_display_lines(
+            track,
+            **kwargs,
+            adjust_same_position=True,
+            dynamic_single_page_reflow=True,
+        )
+    if logical_w is None or logical_h is None:
+        default_w, default_h = _default_collision_canvas(style)
+        logical_w = default_w if logical_w is None else logical_w
+        logical_h = default_h if logical_h is None else logical_h
+    logical_w = max(int(logical_w), 1)
+    logical_h = max(int(logical_h), 1)
+    cache_key = (
+        logical_w,
+        logical_h,
+        id(track),
+        _value_signature(track),
+        _value_signature(style),
+    )
+    cached = _DISPLAY_LINES_CACHE.get(cache_key)
+    if cached is not None:
+        _DISPLAY_LINES_CACHE.move_to_end(cache_key)
+        return list(cached[1])
+    ideal = compute_display_lines(
+        track,
+        **kwargs,
+        adjust_same_position=False,
+        dynamic_single_page_reflow=False,
+        independent_line_entry=True,
+    )
+    squeeze_pairs = _pixel_collision_squeeze_pairs(
+        logical_w, logical_h, track, style, ideal
+    )
+    resolved = (
+        compute_display_lines(
+            track,
+            **kwargs,
+            adjust_same_position=False,
+            squeeze_pairs=squeeze_pairs,
+            dynamic_single_page_reflow=False,
+            independent_line_entry=True,
+        )
+        if squeeze_pairs
+        else ideal
+    )
+    # Keep the track object alive with the cached display lines.  The key uses
+    # ``id(track)`` to prevent equal-but-distinct tracks from sharing mutable
+    # TimingLine references; retaining the owner also prevents CPython from
+    # recycling that id while the cache entry exists.
+    _DISPLAY_LINES_CACHE[cache_key] = (track, tuple(resolved))
+    _DISPLAY_LINES_CACHE.move_to_end(cache_key)
+    while len(_DISPLAY_LINES_CACHE) > _DISPLAY_LINES_CACHE_MAX:
+        _DISPLAY_LINES_CACHE.popitem(last=False)
+    return resolved
+
+
 def _visible_lines_for_style(
     track: TimingTrack,
     t_ms: int,
     style: Style,
+    *,
+    logical_w: int | None = None,
+    logical_h: int | None = None,
 ) -> list[DisplayLine]:
     if style.dual_line_layout:
-        return visible_display_lines(
-            track,
-            t_ms,
-            lead_in_ms=style.line_lead_in_ms,
-            tail_ms=style.line_tail_ms,
-            lane_gap_ms=style.line_lane_gap_ms,
-            section_gap_ms=style.section_gap_ms,
-            sync_entry=style.sync_entry,
-            sync_ending=style.sync_ending,
-            section_ending_mode=style.section_ending_mode,
-            protect_ms=_effective_line_protect_ms(style),
-            lane_count=_lane_count(style),
-            row_count_of=_row_count_resolver(style),
-            bottom_align_of=_bottom_align_resolver(style),
-            vertical_position_of=_vertical_position_resolver(style),
-            auto_entry_reserve_ms_of=_auto_entry_reserve_resolver(style),
-            entry_animation_ms_of=_entry_animation_resolver(style),
-            exit_animation_ms_of=_exit_animation_resolver(style),
-            adjust_same_position=True,
-        )
+        return [
+            item
+            for item in _display_lines_for_style(
+                track,
+                style,
+                logical_w=logical_w,
+                logical_h=logical_h,
+            )
+            if item.display_start_ms <= t_ms < item.display_end_ms
+        ]
     display_line = _single_visible_display_line(track, t_ms, style)
     if display_line is None:
         return []
@@ -3574,7 +3811,11 @@ def _visible_lines_for_style(
 
 
 def display_windows_for_style(
-    track: TimingTrack, style: Style
+    track: TimingTrack,
+    style: Style,
+    *,
+    logical_w: int | None = None,
+    logical_h: int | None = None,
 ) -> dict[int, tuple[int, int]]:
     """全部可渲染行的显示窗口：``track.lines`` 索引 → (上屏, 消失) 毫秒。
 
@@ -3583,24 +3824,11 @@ def display_windows_for_style(
     """
     windows: dict[int, tuple[int, int]] = {}
     if style.dual_line_layout:
-        items = compute_display_lines(
+        items = _display_lines_for_style(
             track,
-            lead_in_ms=style.line_lead_in_ms,
-            tail_ms=style.line_tail_ms,
-            lane_gap_ms=style.line_lane_gap_ms,
-            section_gap_ms=style.section_gap_ms,
-            sync_entry=style.sync_entry,
-            sync_ending=style.sync_ending,
-            section_ending_mode=style.section_ending_mode,
-            protect_ms=_effective_line_protect_ms(style),
-            lane_count=_lane_count(style),
-            row_count_of=_row_count_resolver(style),
-            bottom_align_of=_bottom_align_resolver(style),
-            vertical_position_of=_vertical_position_resolver(style),
-            auto_entry_reserve_ms_of=_auto_entry_reserve_resolver(style),
-            entry_animation_ms_of=_entry_animation_resolver(style),
-            exit_animation_ms_of=_exit_animation_resolver(style),
-            adjust_same_position=True,
+            style,
+            logical_w=logical_w,
+            logical_h=logical_h,
         )
         index_of = {id(line): i for i, line in enumerate(track.lines)}
         for item in items:
@@ -3620,7 +3848,11 @@ def display_windows_for_style(
 
 
 def display_schedule_for_style(
-    track: TimingTrack, style: Style
+    track: TimingTrack,
+    style: Style,
+    *,
+    logical_w: int | None = None,
+    logical_h: int | None = None,
 ) -> dict[int, tuple[int, int, int]]:
     """Return ``line index -> (lane, display start, display end)``.
 
@@ -3630,26 +3862,18 @@ def display_schedule_for_style(
     if not style.dual_line_layout:
         return {
             index: (0, start, end)
-            for index, (start, end) in display_windows_for_style(track, style).items()
+            for index, (start, end) in display_windows_for_style(
+                track,
+                style,
+                logical_w=logical_w,
+                logical_h=logical_h,
+            ).items()
         }
-    items = compute_display_lines(
+    items = _display_lines_for_style(
         track,
-        lead_in_ms=style.line_lead_in_ms,
-        tail_ms=style.line_tail_ms,
-        lane_gap_ms=style.line_lane_gap_ms,
-        section_gap_ms=style.section_gap_ms,
-        sync_entry=style.sync_entry,
-        sync_ending=style.sync_ending,
-        section_ending_mode=style.section_ending_mode,
-        protect_ms=_effective_line_protect_ms(style),
-        lane_count=_lane_count(style),
-        row_count_of=_row_count_resolver(style),
-        bottom_align_of=_bottom_align_resolver(style),
-        vertical_position_of=_vertical_position_resolver(style),
-        auto_entry_reserve_ms_of=_auto_entry_reserve_resolver(style),
-        entry_animation_ms_of=_entry_animation_resolver(style),
-        exit_animation_ms_of=_exit_animation_resolver(style),
-        adjust_same_position=True,
+        style,
+        logical_w=logical_w,
+        logical_h=logical_h,
     )
     index_of = {id(line): index for index, line in enumerate(track.lines)}
     return {
@@ -3731,6 +3955,9 @@ def _signal_display_lines_for_style(
     track: TimingTrack,
     t_ms: int,
     style: Style,
+    *,
+    logical_w: int | None = None,
+    logical_h: int | None = None,
 ) -> list[DisplayLine]:
     if not style.lit_enabled or style.vertical:
         return []
@@ -3738,7 +3965,13 @@ def _signal_display_lines_for_style(
     if signal_lead <= 0:
         return []
     signal_style = replace(style, line_lead_in_ms=max(style.line_lead_in_ms, signal_lead))
-    return _visible_lines_for_style(track, t_ms, signal_style)
+    return _visible_lines_for_style(
+        track,
+        t_ms,
+        signal_style,
+        logical_w=logical_w,
+        logical_h=logical_h,
+    )
 
 
 def _build_ruby_font(style: Style) -> QFont:
@@ -12345,24 +12578,10 @@ def check_layout_margins(
     if style.vertical or not track.lines:
         return []
     if style.dual_line_layout:
-        display_lines = compute_display_lines(
+        display_lines = _display_lines_for_style(
             track,
-            lead_in_ms=style.line_lead_in_ms,
-            tail_ms=style.line_tail_ms,
-            lane_gap_ms=style.line_lane_gap_ms,
-            section_gap_ms=style.section_gap_ms,
-            sync_entry=style.sync_entry,
-            sync_ending=style.sync_ending,
-            section_ending_mode=style.section_ending_mode,
-            protect_ms=_effective_line_protect_ms(style),
-            lane_count=_lane_count(style),
-            row_count_of=_row_count_resolver(style),
-            bottom_align_of=_bottom_align_resolver(style),
-            vertical_position_of=_vertical_position_resolver(style),
-            auto_entry_reserve_ms_of=_auto_entry_reserve_resolver(style),
-            entry_animation_ms_of=_entry_animation_resolver(style),
-            exit_animation_ms_of=_exit_animation_resolver(style),
-            adjust_same_position=True,
+            style,
+            logical_w=img_w,
         )
     else:
         display_lines = [

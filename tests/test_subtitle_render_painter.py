@@ -123,6 +123,7 @@ from krok_helper.subtitle_render.engine.timeline import DisplayLine  # noqa: E40
 from krok_helper.subtitle_render.models import (  # noqa: E402
     KaraokeColors,
     KaraokeColorState,
+    LyricsLayout,
     LineAnimationOverride,
     PaintFill,
     RubyAnnotation,
@@ -8739,7 +8740,7 @@ def test_cross_page_line_ink_height_includes_ruby_and_static_effects(qapp):
     assert glow_bounds[1] > plain_bounds[1]
 
 
-def test_cross_page_spatial_mode_keeps_same_position_time_squeeze(qapp):
+def test_cross_page_spatial_mode_squeezes_only_pixel_conflicting_lines(qapp):
     lines = [
         TimingLine(chars=[TimingChar(text, start)], end_ms=end)
         for text, start, end in (
@@ -8767,13 +8768,19 @@ def test_cross_page_spatial_mode_keeps_same_position_time_squeeze(qapp):
         track, replace(style, allow_inter_page_line_overlap=True)
     )
 
-    assert normal == legacy
+    assert normal != legacy
     assert normal == {
-        0: (8_200, 12_500),
-        1: (8_200, 14_125),
-        2: (12_575, 18_000),
+        0: (8_200, 12_000),
+        1: (10_700, 14_200),
+        2: (12_200, 18_000),
         3: (14_200, 18_000),
     }
+    # Only the actual B/D stable-pixel conflict consumes B's exit margin.
+    # A and C retain their complete independently authored display windows.
+    assert normal[0] == (8_200, 12_000)
+    assert normal[2] == (12_200, 18_000)
+    assert normal[1][0] == lines[1].chars[0].start_ms - 1_800
+    assert normal[3][0] == lines[3].chars[0].start_ms - 1_800
     assert all(
         start <= lines[index].chars[0].start_ms
         and end >= int(lines[index].end_ms)
@@ -8816,13 +8823,22 @@ def test_animation_only_cross_page_overlap_does_not_move_incoming_page(qapp):
         1280, 1080, track, style
     )
 
-    # 两页的完整显示窗口仍有 600 ms 交叠；这 600 ms 正好由上一页退场
-    # 与下一页入场动画组成，稳定文字碰撞箱没有时间交集，因此不应抬页。
-    assert windows[1][1] - windows[2][0] == 600
+    # 页面级显示窗口虽然大幅交叠，但碰撞必须逐行判断：P1T1/P2T1 与
+    # P1T2/P2T2 的稳定文字窗口分别不相交，因此不能把整页抬高。
+    assert windows[1][1] > windows[2][0]
+    display = subtitle_painter._display_lines_for_style(
+        track, style, logical_w=1280, logical_h=1080
+    )
+    stable = [
+        subtitle_painter._display_line_static_collision_window(item, style)
+        for item in display
+    ]
+    assert stable[0][1] <= stable[2][0]
+    assert stable[1][1] <= stable[3][0]
     assert offsets == {index: (0.0, 0.0) for index in range(4)}
 
 
-def test_changed_page_layout_keeps_incoming_entry_clear(qapp):
+def test_changed_page_layout_does_not_make_entry_animation_collidable(qapp):
     from krok_helper.subtitle_render.engine.page_plan import (
         project_page_plan_to_legacy_fields,
     )
@@ -8874,4 +8890,86 @@ def test_changed_page_layout_keeps_incoming_entry_clear(qapp):
 
     assert same_offsets == {index: (0.0, 0.0) for index in range(4)}
     assert changed_offsets[2] == changed_offsets[3]
-    assert changed_offsets[2] != (0.0, 0.0)
+    assert changed_offsets[2] == (0.0, 0.0)
+
+
+def test_non_overlapping_layouts_keep_full_entry_and_exit_windows(qapp):
+    from krok_helper.subtitle_render.engine.page_plan import (
+        project_page_plan_to_legacy_fields,
+    )
+
+    top = LyricsLayout(
+        name="顶部单行",
+        layout_id="top-one",
+        line_y_position="top",
+        line_y_margin_px=80,
+        line_gap_px=90,
+        line_alignments=["left"],
+    )
+    style = replace(
+        Style(),
+        layouts=[*Style().layouts, top],
+        line_lead_in_ms=1_800,
+        line_tail_ms=1_000,
+        entry_anim="fade",
+        entry_lead_ms=300,
+        exit_anim="fade",
+        exit_fade_ms=300,
+    )
+    lines = [
+        TimingLine(chars=[TimingChar("下", 10_000)], end_ms=12_000),
+        TimingLine(chars=[TimingChar("上", 11_000)], end_ms=13_000),
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [
+                TrackSection([TrackPage(1, "default")]),
+                TrackSection([TrackPage(1, "top-one")]),
+            ]
+        ),
+    )
+    project_page_plan_to_legacy_fields(track, style)
+
+    windows = subtitle_painter.display_windows_for_style(
+        track, style, logical_w=1920, logical_h=1080
+    )
+
+    assert windows == {
+        0: (8_200, 13_000),
+        1: (9_200, 14_000),
+    }
+
+
+def test_sync_entry_is_controlled_only_by_its_switch(qapp):
+    lines = [
+        TimingLine(chars=[TimingChar("A", 10_000)], end_ms=11_000),
+        TimingLine(chars=[TimingChar("B", 12_000)], end_ms=13_000),
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(2, "default")])]
+        ),
+    )
+    base = replace(
+        Style(),
+        line_lead_in_ms=1_800,
+        line_tail_ms=1_000,
+    )
+
+    independent = subtitle_painter.display_windows_for_style(
+        track,
+        replace(base, sync_entry=False),
+        logical_w=1920,
+        logical_h=1080,
+    )
+    synchronized = subtitle_painter.display_windows_for_style(
+        track,
+        replace(base, sync_entry=True),
+        logical_w=1920,
+        logical_h=1080,
+    )
+
+    assert [independent[index][0] for index in range(2)] == [8_200, 10_200]
+    assert [synchronized[index][0] for index in range(2)] == [8_200, 8_200]

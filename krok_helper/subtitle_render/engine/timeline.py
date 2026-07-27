@@ -202,6 +202,9 @@ def compute_display_lines(
     entry_animation_ms_of: Optional[Callable[[TimingLine], int]] = None,
     exit_animation_ms_of: Optional[Callable[[TimingLine], int]] = None,
     adjust_same_position: bool = True,
+    squeeze_pairs: Optional[Sequence[tuple[int, int]]] = None,
+    dynamic_single_page_reflow: bool = True,
+    independent_line_entry: bool = False,
 ) -> list[DisplayLine]:
     """Compute NicoKara display windows for all renderable lines.
 
@@ -282,6 +285,9 @@ def compute_display_lines(
             else None
         ),
         adjust_same_position=adjust_same_position,
+        squeeze_pairs=squeeze_pairs,
+        dynamic_single_page_reflow=dynamic_single_page_reflow,
+        independent_line_entry=independent_line_entry,
     )
     starts = show_times.starts
     display_ends = show_times.ends

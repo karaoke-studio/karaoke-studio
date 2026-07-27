@@ -27,6 +27,8 @@ class LineVisualBand:
     axis_max: float
     entry_start_ms: int | None = None
     """Full display start including entry animation, when known."""
+    axis_anchor: float | None = None
+    """Authored baseline/column centre used to snap an avoided page to a row."""
 
     def shifted(self, delta: float) -> "LineVisualBand":
         return LineVisualBand(
@@ -37,6 +39,9 @@ class LineVisualBand:
             axis_min=self.axis_min + delta,
             axis_max=self.axis_max + delta,
             entry_start_ms=self.entry_start_ms,
+            axis_anchor=(
+                None if self.axis_anchor is None else self.axis_anchor + delta
+            ),
         )
 
 
@@ -46,9 +51,8 @@ class PageVisualBands:
 
     ``gap_px`` belongs to this page's layout.  A later page that overlaps this
     page must preserve this value around the already occupied bands.
-    ``layout_key`` identifies the effective page arrangement: matching layouts
-    may overlap during entry animation, while a changed layout protects the
-    incoming entry against the previous page's stable text.
+    ``layout_key`` is retained in the transport model for compatibility and
+    diagnostics; animation intervals never expand placement collision windows.
     """
 
     page_id: Hashable
@@ -70,24 +74,32 @@ class AxisOffsetWindow:
 def time_windows_overlap(
     left: LineVisualBand,
     right: LineVisualBand,
-    *,
-    include_left_entry: bool = False,
 ) -> bool:
-    """Return whether two half-open collision windows intersect.
+    """Return whether two half-open *stable ink* windows intersect.
 
-    ``left`` is the incoming page.  When its layout differs from the occupied
-    page, its entry animation must remain clear of the previous page's stable
-    text.  The previous page's exit animation is intentionally still excluded.
+    Entry and exit animation intervals are deliberately excluded for every
+    layout.  ``entry_start_ms`` only controls how long an already selected page
+    translation remains visible; it never expands the collision lifetime.
     """
 
-    left_start = (
-        int(left.entry_start_ms)
-        if include_left_entry and left.entry_start_ms is not None
-        else int(left.display_start_ms)
-    )
-    return max(left_start, right.display_start_ms) < min(
+    return max(left.display_start_ms, right.display_start_ms) < min(
         left.display_end_ms, right.display_end_ms
     )
+
+
+def bands_require_separation(
+    incoming: LineVisualBand,
+    previous: LineVisualBand,
+    gap: float = 0.0,
+) -> bool:
+    """Whether two authored-position bands violate pixel/gap separation."""
+
+    return _separation_deficit(
+        _normalized_band(incoming),
+        _normalized_band(previous),
+        0.0,
+        max(float(gap), 0.0),
+    ) > 0.0
 
 
 def solve_page_axis_offsets(
@@ -113,23 +125,53 @@ def solve_page_axis_offsets(
         if not bands:
             offsets[page.page_id] = 0.0
             continue
-        relevant_pairs = [
+        time_pairs = [
             (incoming, previous, max(float(previous_gap), 0.0))
             for incoming in bands
-            for previous, previous_gap, previous_layout_key in occupied
+            for previous, previous_gap, _previous_layout_key in occupied
             if previous.page_id != page.page_id
-            and time_windows_overlap(
+            and time_windows_overlap(incoming, previous)
+        ]
+        overlapping_pairs = {
+            (incoming, previous)
+            for incoming, previous, _previous_gap in time_pairs
+            if _pixel_overlap(incoming, previous, 0.0) > 0.0
+        }
+        # A requested line gap is a placement target after a real painted
+        # collision, not a collision trigger by itself.  Other temporally
+        # active bands remain zero-gap constraints so moving the rigid page
+        # cannot create a new painted overlap elsewhere.
+        relevant_pairs = [
+            (
                 incoming,
                 previous,
-                include_left_entry=page.layout_key != previous_layout_key,
+                (
+                    previous_gap
+                    if (incoming, previous) in overlapping_pairs
+                    else 0.0
+                ),
             )
+            for incoming, previous, previous_gap in time_pairs
         ]
-        offset = _choose_offset(
-            bands,
-            relevant_pairs,
-            anchor=page.anchor,
-            viewport_min=float(viewport_min),
-            viewport_max=float(viewport_max),
+        snap_offsets = {
+            float(previous.axis_anchor) - float(incoming.axis_anchor)
+            for incoming in bands
+            for previous, _previous_gap, _previous_layout_key in occupied
+            if previous.page_id != page.page_id
+            and incoming.axis_anchor is not None
+            and previous.axis_anchor is not None
+        }
+        offset = (
+            _choose_offset(
+                bands,
+                relevant_pairs,
+                snap_offsets=snap_offsets,
+                anchor=page.anchor,
+                viewport_min=float(viewport_min),
+                viewport_max=float(viewport_max),
+            )
+            if overlapping_pairs
+            else 0.0
         )
         offsets[page.page_id] = offset
         occupied.extend(
@@ -204,6 +246,7 @@ def _normalized_band(item: LineVisualBand) -> LineVisualBand:
         axis_min=item.axis_max,
         axis_max=item.axis_min,
         entry_start_ms=item.entry_start_ms,
+        axis_anchor=item.axis_anchor,
     )
 
 
@@ -211,6 +254,7 @@ def _choose_offset(
     bands: Sequence[LineVisualBand],
     pairs: Sequence[CollisionPair],
     *,
+    snap_offsets: Iterable[float] = (),
     anchor: PageAnchor,
     viewport_min: float,
     viewport_max: float,
@@ -223,7 +267,8 @@ def _choose_offset(
     lower = viewport_min - page_min
     upper = viewport_max - page_max
 
-    candidates = {0.0, lower, upper}
+    snap_candidates = {float(value) for value in snap_offsets}
+    candidates = {0.0, lower, upper, *snap_candidates}
     for incoming, previous, previous_gap in pairs:
         candidates.add(previous.axis_min - previous_gap - incoming.axis_max)
         candidates.add(previous.axis_max + previous_gap - incoming.axis_min)
@@ -245,6 +290,7 @@ def _choose_offset(
         value for value in in_viewport if _direction_penalty(value, anchor) == 0
     }
     opposite = in_viewport - preferred
+    snap_in_viewport = in_viewport.intersection(snap_candidates)
 
     # Preserve the authored top/bottom direction when it has enough room, then
     # search the opposite side.  Requested line gap has priority over merely
@@ -252,40 +298,47 @@ def _choose_offset(
     # static ink envelope inside the logical canvas.
     for placement_level in ("gap", "pixel"):
         for directional in (preferred, opposite):
-            if placement_level == "gap":
-                valid = [
-                    value
-                    for value in directional
-                    if all(
-                        _separation_deficit(
-                            incoming, previous, value, previous_gap
+            directional_groups = (
+                directional.intersection(snap_in_viewport),
+                directional,
+            )
+            for candidate_group in directional_groups:
+                if not candidate_group:
+                    continue
+                if placement_level == "gap":
+                    valid = [
+                        value
+                        for value in candidate_group
+                        if all(
+                            _separation_deficit(
+                                incoming, previous, value, previous_gap
+                            )
+                            <= 0.0
+                            for incoming, previous, previous_gap in pairs
                         )
-                        <= 0.0
-                        for incoming, previous, previous_gap in pairs
+                    ]
+                else:
+                    valid = [
+                        value
+                        for value in candidate_group
+                        if all(
+                            _pixel_overlap(incoming, previous, value) <= 0.0
+                            for incoming, previous, _previous_gap in pairs
+                        )
+                    ]
+                if valid:
+                    return min(
+                        valid,
+                        key=lambda value: _offset_score(
+                            value,
+                            pairs,
+                            bands=bands,
+                            anchor=anchor,
+                            viewport_min=viewport_min,
+                            viewport_max=viewport_max,
+                            placement_level=placement_level,
+                        ),
                     )
-                ]
-            else:
-                valid = [
-                    value
-                    for value in directional
-                    if all(
-                        _pixel_overlap(incoming, previous, value) <= 0.0
-                        for incoming, previous, _previous_gap in pairs
-                    )
-                ]
-            if valid:
-                return min(
-                    valid,
-                    key=lambda value: _offset_score(
-                        value,
-                        pairs,
-                        bands=bands,
-                        anchor=anchor,
-                        viewport_min=viewport_min,
-                        viewport_max=viewport_max,
-                        placement_level=placement_level,
-                    ),
-                )
 
     # There is no complete collision-free position on either side.  Keeping
     # the authored position preserves the existing page/draw priority and is

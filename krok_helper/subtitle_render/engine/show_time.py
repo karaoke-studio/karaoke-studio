@@ -85,6 +85,9 @@ def compute_show_times(
     entry_animation_ms: Optional[Sequence[int]] = None,
     exit_animation_ms: Optional[Sequence[int]] = None,
     adjust_same_position: bool = True,
+    squeeze_pairs: Optional[Sequence[tuple[int, int]]] = None,
+    dynamic_single_page_reflow: bool = True,
+    independent_line_entry: bool = False,
 ) -> ShowTimes:
     """按 N3 ``TopLongAdjuster`` 算出每个渲染行的 ``(上屏, 消失)``。
 
@@ -103,6 +106,13 @@ def compute_show_times(
     ``entry_animation_ms`` / ``exit_animation_ms`` 用于区分稳定绘制与纯动画时段：
     自动压缩优先消除稳定绘制的跨页重叠，入场和退场动画彼此重叠是允许的。
     自动压缩不得反转同一页中压缩前已经确定的句子上屏先后关系。
+
+    ``squeeze_pairs`` 由渲染器在完成逐行像素测量后提供。存在该参数时，只压缩
+    明确发生时间与空间双重冲突的 ``(旧行, 新行)``，不再用逻辑行位猜测冲突。
+    ``dynamic_single_page_reflow`` 仅供旧式 N3 ForceBottom 路径使用；新的像素
+    避让路径关闭它，避免单行页先按逻辑行位上移、随后又被空间求解器移动一次。
+    ``independent_line_entry`` 关闭 TopLong 隐式的页内同步入场：每行先按自己的
+    走字开始减 ``pre_time_ms`` 建立理想窗口，显式同步由上层开关单独处理。
     """
 
     total = len(sing_begins)
@@ -124,6 +134,9 @@ def compute_show_times(
         entry_animation_ms=entry_animation_ms,
         exit_animation_ms=exit_animation_ms,
         adjust_same_position=bool(adjust_same_position),
+        squeeze_pairs=squeeze_pairs,
+        dynamic_single_page_reflow=bool(dynamic_single_page_reflow),
+        independent_line_entry=bool(independent_line_entry),
         result=result,
     ).run()
 
@@ -146,6 +159,9 @@ class _Solver:
         entry_animation_ms: Optional[Sequence[int]],
         exit_animation_ms: Optional[Sequence[int]],
         adjust_same_position: bool,
+        squeeze_pairs: Optional[Sequence[tuple[int, int]]],
+        dynamic_single_page_reflow: bool,
+        independent_line_entry: bool,
         result: ShowTimes,
     ) -> None:
         self.begins = sing_begins
@@ -156,6 +172,15 @@ class _Solver:
         self.interval = interval
         self.protect = protect
         self.adjust_same_position = adjust_same_position
+        self.squeeze_pairs = tuple(
+            (int(other), int(line))
+            for other, line in (squeeze_pairs or ())
+            if 0 <= int(other) < len(sing_begins)
+            and 0 <= int(line) < len(sing_begins)
+            and int(other) != int(line)
+        )
+        self.dynamic_single_page_reflow = dynamic_single_page_reflow
+        self.independent_line_entry = independent_line_entry
         animation_windows_supplied = (
             entry_animation_ms is not None or exit_animation_ms is not None
         )
@@ -526,7 +551,9 @@ class _Solver:
     # -- 主循环 ------------------------------------------------------------
     def run(self) -> ShowTimes:
         entry_order_reference: Sequence[int] | None = None
-        if self.adjust_same_position and self.animation_windows_active:
+        if self.squeeze_pairs or (
+            self.animation_windows_active and self.adjust_same_position
+        ):
             entry_order_reference = compute_show_times(
                 self.begins,
                 self.ends,
@@ -538,6 +565,8 @@ class _Solver:
                 overrides=list(zip(self.start_override, self.end_override)),
                 auto_entry_reserve_ms=self.auto_entry_reserve_ms,
                 adjust_same_position=False,
+                dynamic_single_page_reflow=self.dynamic_single_page_reflow,
+                independent_line_entry=self.independent_line_entry,
             ).starts
         starts, ends, force_bottom = (
             self.out.starts,
@@ -558,9 +587,10 @@ class _Solver:
                     # N3 先假定占最下行再探测重叠，顺序不能颠倒：
                     # PrevPageSamePositionLineIndex 的取行位置依赖这个值。
                     force_bottom[line] = True
-                    force_bottom[line] = (
-                        self._prev_page_overlap_line(line, True) is None
-                    )
+                    if self.dynamic_single_page_reflow:
+                        force_bottom[line] = (
+                            self._prev_page_overlap_line(line, True) is None
+                        )
                 if line == top and force_bottom[line] is False:
                     starts[line] = self._top_show_begin(page_index)
                     ends[line] = self._top_show_end(page_index)
@@ -584,6 +614,12 @@ class _Solver:
                 self._enforce_auto_wipe_bounds(line)
                 if adjusted_other is not None:
                     self._enforce_auto_wipe_bounds(adjusted_other)
+        if self.independent_line_entry:
+            for line in range(len(starts)):
+                if self.start_override[line] is None:
+                    starts[line] = max(self.begins[line] - self.pre, 0)
+                self._apply_override(line)
+                self._enforce_auto_wipe_bounds(line)
         # 不同布局或段落边界两侧，N3 的 same-position 规则可能看不到仍会
         # 发生像素冲突的行。补做“相同页内序号”以及“上一页末行 / 下一页首行”
         # 两组保守压缩；真正无法消除的静态冲突再交给空间避让。
@@ -600,8 +636,15 @@ class _Solver:
                         self._enforce_auto_wipe_bounds(other)
                         self._enforce_auto_wipe_bounds(line)
                 previous_page = page
+        for other, line in self.squeeze_pairs:
+            self._squeeze_pair(other, line)
+            self._enforce_auto_wipe_bounds(other)
+            self._enforce_auto_wipe_bounds(line)
         if entry_order_reference is not None:
-            self._preserve_page_entry_order(entry_order_reference)
+            if self.squeeze_pairs and not self.adjust_same_position:
+                self._cap_squeezed_entries_to_page_order(entry_order_reference)
+            else:
+                self._preserve_page_entry_order(entry_order_reference)
         # Automatic squeezing may consume PreTime/PostTime completely, but it
         # must never consume the wipe interval itself.  Non-zero automatic
         # entry animation also retains its requested visual reaction reserve;
@@ -610,3 +653,61 @@ class _Solver:
         for line in range(len(starts)):
             self._enforce_auto_wipe_bounds(line)
         return self.out
+
+    def _cap_squeezed_entries_to_page_order(
+        self, reference: Sequence[int]
+    ) -> None:
+        """Keep page order by backing off only the explicitly squeezed lines."""
+
+        squeezed = {line for _other, line in self.squeeze_pairs}
+        if not squeezed:
+            return
+        for page in self.pages:
+            lines = page.lines
+            for _pass in range(max(len(lines), 1)):
+                changed = False
+                for left, right in zip(lines, lines[1:]):
+                    reference_left = int(reference[left])
+                    reference_right = int(reference[right])
+                    if reference_left < reference_right:
+                        if (
+                            left in squeezed
+                            and self.out.starts[left] > self.out.starts[right]
+                        ):
+                            self.out.starts[left] = self.out.starts[right]
+                            changed = True
+                        elif (
+                            right in squeezed
+                            and self.out.starts[right] < self.out.starts[left]
+                        ):
+                            self.out.starts[right] = self.out.starts[left]
+                            changed = True
+                    elif reference_left > reference_right:
+                        if (
+                            left in squeezed
+                            and self.out.starts[left] < self.out.starts[right]
+                        ):
+                            self.out.starts[left] = self.out.starts[right]
+                            changed = True
+                        elif (
+                            right in squeezed
+                            and self.out.starts[right] > self.out.starts[left]
+                        ):
+                            self.out.starts[right] = self.out.starts[left]
+                            changed = True
+                    elif self.out.starts[left] != self.out.starts[right]:
+                        if left in squeezed and right not in squeezed:
+                            self.out.starts[left] = self.out.starts[right]
+                            changed = True
+                        elif right in squeezed and left not in squeezed:
+                            self.out.starts[right] = self.out.starts[left]
+                            changed = True
+                        elif left in squeezed and right in squeezed:
+                            target = min(
+                                self.out.starts[left], self.out.starts[right]
+                            )
+                            self.out.starts[left] = target
+                            self.out.starts[right] = target
+                            changed = True
+                if not changed:
+                    break

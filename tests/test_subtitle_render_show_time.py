@@ -268,6 +268,46 @@ def test_animation_aware_squeeze_preserves_entry_order_inside_page():
     )
 
 
+def test_explicit_pixel_pair_squeezes_only_its_two_lines_and_caps_at_page_order():
+    begins = [10_000, 12_000, 12_100, 12_200]
+    ends = [11_000, 12_050, 13_000, 13_200]
+    pages = _pages((0, 2, 0, 1), (0, 2, 2, 3))
+    baseline = compute_show_times(
+        begins,
+        ends,
+        pages,
+        pre_time_ms=PRE,
+        post_time_ms=POST,
+        interval_ms=INTERVAL,
+        protect_ms=protect_time_ms(PRE, POST),
+        adjust_same_position=False,
+        dynamic_single_page_reflow=False,
+        independent_line_entry=True,
+    )
+    squeezed = compute_show_times(
+        begins,
+        ends,
+        pages,
+        pre_time_ms=PRE,
+        post_time_ms=POST,
+        interval_ms=INTERVAL,
+        protect_ms=protect_time_ms(PRE, POST),
+        adjust_same_position=False,
+        squeeze_pairs=[(1, 2)],
+        dynamic_single_page_reflow=False,
+        independent_line_entry=True,
+    )
+
+    assert squeezed.starts[0] == baseline.starts[0]
+    assert squeezed.ends[0] == baseline.ends[0]
+    assert squeezed.starts[1] == baseline.starts[1]
+    assert squeezed.starts[3] == baseline.starts[3]
+    assert squeezed.ends[3] == baseline.ends[3]
+    assert squeezed.ends[1] <= baseline.ends[1]
+    assert squeezed.starts[2] >= baseline.starts[2]
+    assert squeezed.starts[2] <= squeezed.starts[3]
+
+
 def test_manual_override_wins_and_is_visible_to_later_pages():
     begins, ends = [10_000, 14_000, 30_000, 34_000], [13_000, 17_000, 33_000, 37_000]
     pages = _pages((0, 2, 0, 1), (0, 2, 2, 3))

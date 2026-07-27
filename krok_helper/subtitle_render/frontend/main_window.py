@@ -5190,7 +5190,15 @@ class SubtitleRenderWindow(QWidget):
             return
         self._tracks_view.set_style(self._style)
         self._tracks_view.set_display_windows(
-            [display_windows_for_style(track, self._style) for track in self._all_tracks()]
+            [
+                display_windows_for_style(
+                    track,
+                    self._style,
+                    logical_w=self._screen_settings.width,
+                    logical_h=self._screen_settings.height,
+                )
+                for track in self._all_tracks()
+            ]
         )
 
     def _on_display_window_edited(
@@ -5228,7 +5236,12 @@ class SubtitleRenderWindow(QWidget):
         for row in valid_rows:
             self._lyrics_panel.refresh_row_effect(row)
         if hasattr(self, "_style") and hasattr(self, "_transport_bar"):
-            first_window = display_windows_for_style(track, self._style).get(valid_rows[0])
+            first_window = display_windows_for_style(
+                track,
+                self._style,
+                logical_w=self._screen_settings.width,
+                logical_h=self._screen_settings.height,
+            ).get(valid_rows[0])
             if first_window is not None:
                 self._transport_bar.set_time(max(first_window[0], 0))
 

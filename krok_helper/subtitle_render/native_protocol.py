@@ -340,7 +340,12 @@ def track_to_ir(
         )
         from krok_helper.subtitle_render.engine.page_plan import resolve_page_plan
         display_style = _display_style_for_signal_window(style)
-        schedule = display_schedule_for_style(track, display_style)
+        schedule = display_schedule_for_style(
+            track,
+            display_style,
+            logical_w=width,
+            logical_h=height,
+        )
         page_offset_windows = (
             resolved_page_offset_windows_for_style(
                 max(int(width), 1),

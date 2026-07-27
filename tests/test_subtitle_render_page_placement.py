@@ -18,7 +18,7 @@ def test_half_open_time_windows_do_not_overlap_at_shared_boundary():
     assert not time_windows_overlap(first, second)
 
 
-def test_changed_layout_protects_incoming_entry_but_not_previous_exit():
+def test_entry_and_exit_animation_windows_never_trigger_placement():
     previous = PageVisualBands(
         "p1",
         (_band("old", "p1", 0, 100, 40, 60),),
@@ -60,12 +60,104 @@ def test_changed_layout_protects_incoming_entry_but_not_previous_exit():
         [previous, changed_layout], viewport_min=0, viewport_max=200
     )
 
-    # 相同排版只比较稳定文字窗口，[0, 100) 与 [100, 200) 不相交。
+    # 碰撞箱只在稳定文字窗口生效：[0, 100) 与 [100, 200) 不相交。
     assert same_offsets["p2"] == 0
-    # 排版变化后，新页入场从 80 ms 开始参与判断，因此必须避让。
-    assert changed_offsets["p2"] != 0
+    # 排版变化也不能把新页的 [80, 100) 入场动画纳入碰撞。
+    assert changed_offsets["p2"] == 0
     assert changed_windows["p2"][0].start_ms == 80
-    # 上一页的退场动画没有扩展其 100 ms 稳定结束点，仍允许交叠。
+    # 位移窗口仍覆盖完整入场到退场生命周期，避免中途发生位置跳变。
+
+
+def test_solver_snaps_single_page_to_previous_authored_row_anchor():
+    previous = PageVisualBands(
+        "p1",
+        (
+            LineVisualBand(
+                "p1t1", "p1", 0, 50, 100, 150, axis_anchor=140
+            ),
+            LineVisualBand(
+                "p1t2", "p1", 0, 200, 200, 250, axis_anchor=240
+            ),
+        ),
+        gap_px=10,
+        anchor="end",
+    )
+    incoming = PageVisualBands(
+        "p2",
+        (
+            LineVisualBand(
+                "p2t1", "p2", 100, 300, 205, 255, axis_anchor=240
+            ),
+        ),
+        gap_px=10,
+        anchor="end",
+    )
+
+    offsets = solve_page_axis_offsets(
+        [previous, incoming], viewport_min=0, viewport_max=360
+    )
+
+    # P2T1 与 P1T2 冲突时优先落到 P1T1 的既有基线，而不是按字形边缘
+    # 多移动/少移动几像素，导致后续页面逐级“起飞”。
+    assert offsets["p2"] == -100
+
+
+def test_expired_shifted_line_does_not_make_later_page_take_off():
+    pages = [
+        PageVisualBands(
+            "p1",
+            (
+                LineVisualBand(
+                    "p1t1", "p1", 0, 50, 100, 150, axis_anchor=140
+                ),
+                LineVisualBand(
+                    "p1t2", "p1", 0, 100, 200, 250, axis_anchor=240
+                ),
+            ),
+            gap_px=10,
+            anchor="end",
+        ),
+        PageVisualBands(
+            "p2",
+            (
+                LineVisualBand(
+                    "p2t1",
+                    "p2",
+                    80,
+                    150,
+                    205,
+                    255,
+                    entry_start_ms=70,
+                    axis_anchor=240,
+                ),
+            ),
+            gap_px=10,
+            anchor="end",
+        ),
+        PageVisualBands(
+            "p3",
+            (
+                LineVisualBand(
+                    "p3t1", "p3", 150, 250, 100, 150, axis_anchor=140
+                ),
+                LineVisualBand(
+                    "p3t2", "p3", 150, 250, 200, 250, axis_anchor=240
+                ),
+            ),
+            gap_px=10,
+            anchor="end",
+        ),
+    ]
+
+    windows = solve_page_axis_offset_windows(
+        pages, viewport_min=0, viewport_max=360
+    )
+
+    assert windows["p2"][0].offset == -100
+    assert windows["p2"][0].start_ms == 70
+    # P2 的位置保持到显示结束，但碰撞箱只在稳定窗口 [80, 150) 生效；
+    # P3 从 150 ms 开始，不能继续继承 P2 的偏移并逐页向上“起飞”。
+    assert windows["p3"][0].offset == 0
 
 
 def test_bottom_page_moves_up_as_one_rigid_block():
@@ -93,7 +185,7 @@ def test_bottom_page_moves_up_as_one_rigid_block():
     offsets = solve_page_axis_offsets(pages, viewport_min=0, viewport_max=240)
 
     assert offsets["p1"] == 0
-    assert offsets["p2"] == -95
+    assert offsets["p2"] == -85
 
 
 def test_solver_checks_all_still_visible_previous_pages():
@@ -142,6 +234,31 @@ def test_solver_uses_overlapped_page_gap_not_incoming_page_gap():
     offsets = solve_page_axis_offsets(pages, viewport_min=0, viewport_max=120)
 
     assert offsets["p2"] == 15
+
+
+def test_solver_does_not_move_when_only_requested_gap_is_missing():
+    pages = [
+        PageVisualBands(
+            "p1",
+            (_band("old", "p1", 0, 100, 40, 60),),
+            gap_px=30,
+            anchor="center",
+        ),
+        PageVisualBands(
+            "p2",
+            (_band("new", "p2", 0, 100, 65, 85),),
+            gap_px=99,
+            anchor="center",
+        ),
+    ]
+
+    offsets = solve_page_axis_offsets(
+        pages, viewport_min=0, viewport_max=120
+    )
+
+    # 两行像素之间已有 5 px 空隙；不足旧页要求的 30 px 行间距不能单独
+    # 成为碰撞触发条件。
+    assert offsets["p2"] == 0
 
 
 def test_solver_adds_the_overlapped_layout_gap_exactly_once():
