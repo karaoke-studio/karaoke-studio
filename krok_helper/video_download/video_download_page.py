@@ -39,12 +39,11 @@ from qfluentwidgets import (
     PushButton,
     TableWidget,
     ToolButton,
-    ToolTip,
-    ToolTipFilter,
     ToolTipPosition,
 )
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 from qfluentwidgets.components.widgets.menu import MenuAnimationType
+from krok_helper.qfluent_compat import install_fluent_tooltip
 
 
 log = logging.getLogger(__name__)
@@ -78,15 +77,6 @@ from .video_logic import (
 from .ytdlp_service import DownloadCancelledError, VideoDownloadError, YtDlpService
 
 
-class _LightToolTipFilter(ToolTipFilter):
-    # Use qfluent's themed ToolTip instead of Qt's native QTipLabel (renders dark
-    # for buttons inside qfluent's TableWidget). Parentless on purpose: qfluent
-    # parents the tip to the main window, whose `QWidget { background: #F4F7FB }`
-    # then cascades onto the tip's outer frame as a gray border.
-    def _createToolTip(self):
-        return ToolTip(self.parent().toolTip())
-
-
 DELETE_BUTTON_QSS = (
     "QPushButton { background: transparent; border: 1px solid #e5e7eb; border-radius: 8px; padding: 0; }"
     "QPushButton:hover { background: #fff1f2; border-color: #fda4af; }"
@@ -97,7 +87,7 @@ def _create_delete_button(tooltip: str) -> PushButton:
     button = PushButton(FIF.DELETE, "")
     button.setFixedSize(30, 30)
     button.setToolTip(tooltip)
-    button.installEventFilter(_LightToolTipFilter(button, 300, ToolTipPosition.TOP))
+    install_fluent_tooltip(button, 300, ToolTipPosition.TOP)
     button.setStyleSheet(DELETE_BUTTON_QSS)
     return button
 

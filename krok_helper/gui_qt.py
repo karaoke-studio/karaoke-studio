@@ -71,7 +71,6 @@ from PyQt6.QtWidgets import (
     QStyleOptionViewItem,
     QStyledItemDelegate,
     QTableWidgetItem,
-    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -110,7 +109,11 @@ from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 from qfluentwidgets.components.widgets.menu import MenuAnimationType
 from qfluentwidgets.components.widgets.table_view import TableItemDelegate
 
-from krok_helper.qfluent_compat import apply_qfluent_menu_lifetime_patch
+from krok_helper.qfluent_compat import (
+    apply_qfluent_menu_lifetime_patch,
+    apply_qfluent_tooltip_parent_patch,
+    show_fluent_tooltip,
+)
 from krok_helper.audio_alignment import (
     DEFAULT_ALIGNED_AUDIO_NAME_TEMPLATE,
     DEFAULT_ALIGNED_VIDEO_NAME_TEMPLATE,
@@ -188,6 +191,7 @@ from krok_helper.video_download import VideoDownloadPage
 from krok_helper.windows import set_explicit_app_user_model_id
 
 apply_qfluent_menu_lifetime_patch()
+apply_qfluent_tooltip_parent_patch()
 
 
 ALIGN_TARGET_VIDEO = "video"
@@ -4339,12 +4343,11 @@ class KrokHelperQtApp(QMainWindow):
         if clipboard is None:
             return
         clipboard.setText(self.lyrics_preview_edit.toPlainText())
-        QToolTip.showText(
-            self.copy_lyrics_button.mapToGlobal(self.copy_lyrics_button.rect().center()),
+        show_fluent_tooltip(
             "歌词已复制到剪切板",
-            self.copy_lyrics_button,
-            self.copy_lyrics_button.rect(),
-            1600,
+            parent=self.copy_lyrics_button,
+            global_pos=self.copy_lyrics_button.mapToGlobal(self.copy_lyrics_button.rect().center()),
+            duration=1600,
         )
 
     def _import_current_lyrics_to_timing(self) -> None:

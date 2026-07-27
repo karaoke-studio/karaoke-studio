@@ -48,7 +48,6 @@ from PyQt6.QtWidgets import (
     QStyledItemDelegate,
     QStyleOptionViewItem,
     QTableWidgetItem,
-    QToolTip,
     QVBoxLayout,
     QWidget,
 )
@@ -69,6 +68,7 @@ from qfluentwidgets import (
 from qfluentwidgets.components.widgets.combo_box import ComboBoxMenu
 from qfluentwidgets.components.widgets.menu import MenuAnimationType
 
+from krok_helper.qfluent_compat import hide_fluent_tooltip, show_fluent_tooltip
 from krok_helper.subtitle_render.engine.timeline import (
     assign_lanes,
 )
@@ -683,9 +683,9 @@ class _CharChipsView(QWidget):
             index = self._index_at(QPointF(event.pos()))
             text = self.role_tooltip_text(index) if index is not None else ""
             if text:
-                QToolTip.showText(event.globalPos(), text, self)
+                show_fluent_tooltip(text, parent=self, global_pos=event.globalPos())
             else:
-                QToolTip.hideText()
+                hide_fluent_tooltip(parent=self)
             return True
         return super().event(event)
 
@@ -1749,11 +1749,11 @@ class LyricsPanel(DropPanel):
                     if move is not None:
                         self.pageMoveRequested.emit(*move)
                     else:
-                        QToolTip.showText(
-                            event.globalPosition().toPoint(),
+                        show_fluent_tooltip(
                             "拖动只调整分页：请将一页的首行拖入上一页，"
                             "或将一页的末行拖入下一页。",
-                            self._table,
+                            parent=self._table,
+                            global_pos=event.globalPosition().toPoint(),
                         )
                     return True
         return super().eventFilter(obj, event)
@@ -1767,10 +1767,10 @@ class LyricsPanel(DropPanel):
         )
         if move is None or self._resolved_page_plan is None:
             self._page_drag_indicator.hide()
-            QToolTip.showText(
-                global_pos,
+            show_fluent_tooltip(
                 "此处不能调整分页",
-                self._table,
+                parent=self._table,
+                global_pos=global_pos,
             )
             return
         section_index, page_index, direction = move
@@ -1789,10 +1789,10 @@ class LyricsPanel(DropPanel):
         )
         self._page_drag_indicator.show()
         self._page_drag_indicator.raise_()
-        QToolTip.showText(
-            global_pos,
+        show_fluent_tooltip(
             f"目标页将变为 {page.line_count + direction} 行",
-            self._table,
+            parent=self._table,
+            global_pos=global_pos,
         )
 
     def _page_boundary_move_for_drag(

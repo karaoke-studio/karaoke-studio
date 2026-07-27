@@ -530,7 +530,7 @@ def build_app_qss() -> str:
     """
     p = palette()
     return f"""
-        QMainWindow, QWidget {{
+        QMainWindow, QWidget#AppRoot {{
             background: {p.shell_bg};
             color: {p.text_primary};
             font-family: "Microsoft YaHei UI";

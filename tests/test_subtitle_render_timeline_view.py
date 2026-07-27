@@ -330,8 +330,8 @@ def test_handle_hover_shows_effective_animation_name_and_duration(
     widget.set_display_windows([{0: (500, 3200)}])
     shown: list[str] = []
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.timeline_view.QToolTip.showText",
-        lambda _pos, text, *_args: shown.append(text),
+        "krok_helper.subtitle_render.frontend.timeline_view.show_fluent_tooltip",
+        lambda text, **_kwargs: shown.append(text),
     )
 
     _lane, lane_rect = widget._lane_geometry()[0]
@@ -364,8 +364,8 @@ def test_handle_hover_uses_global_animation_when_line_has_no_override(
     widget.set_display_windows([{0: (500, 3200)}])
     shown: list[str] = []
     monkeypatch.setattr(
-        "krok_helper.subtitle_render.frontend.timeline_view.QToolTip.showText",
-        lambda _pos, text, *_args: shown.append(text),
+        "krok_helper.subtitle_render.frontend.timeline_view.show_fluent_tooltip",
+        lambda text, **_kwargs: shown.append(text),
     )
 
     _lane, lane_rect = widget._lane_geometry()[0]

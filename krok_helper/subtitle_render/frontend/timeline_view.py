@@ -19,8 +19,9 @@ from typing import Optional, Sequence
 
 from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal as Signal
 from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPixmap
-from PyQt6.QtWidgets import QStyle, QStyleOption, QToolTip, QWidget
+from PyQt6.QtWidgets import QStyle, QStyleOption, QWidget
 
+from krok_helper.qfluent_compat import hide_fluent_tooltip, show_fluent_tooltip
 from krok_helper.subtitle_render.frontend.theme import palette, themed
 from krok_helper.subtitle_render.models import (
     Style,
@@ -852,10 +853,10 @@ class TrackTimelineView(QWidget):
                     block,
                     entry=left_hovered,
                 )
-                QToolTip.showText(
-                    event.globalPosition().toPoint(),
+                show_fluent_tooltip(
                     tooltip,
-                    self,
+                    parent=self,
+                    global_pos=event.globalPosition().toPoint(),
                 )
                 return
         if self._zoombar_rect().contains(pos):
@@ -864,20 +865,20 @@ class TrackTimelineView(QWidget):
                 self.setCursor(Qt.CursorShape.SizeHorCursor)
             else:
                 self.setCursor(Qt.CursorShape.OpenHandCursor)
-            QToolTip.hideText()
+            hide_fluent_tooltip(parent=self)
             return
         _lane, block, _cell = self._hit_test(pos.x(), pos.y())
         if block is not None:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
             singer = f"｜{block.singer_label}" if block.singer_label else ""
-            QToolTip.showText(
-                event.globalPosition().toPoint(),
+            show_fluent_tooltip(
                 f"{_format_ms(block.start_ms)}{singer}\n{block.text}",
-                self,
+                parent=self,
+                global_pos=event.globalPosition().toPoint(),
             )
         else:
             self.unsetCursor()
-            QToolTip.hideText()
+            hide_fluent_tooltip(parent=self)
 
     def _animation_tooltip(
         self, lane_index: int, block: LineBlock, *, entry: bool
@@ -939,7 +940,7 @@ class TrackTimelineView(QWidget):
 
     def leaveEvent(self, event) -> None:  # noqa: N802 — Qt override
         self.unsetCursor()
-        QToolTip.hideText()
+        hide_fluent_tooltip(parent=self)
         super().leaveEvent(event)
 
 
