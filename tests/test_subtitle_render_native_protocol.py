@@ -251,7 +251,7 @@ def test_build_render_ir_carries_painter_page_groups_for_native_smart_horizon():
         "lines"
     ]
 
-    assert [(line["page_index"], line["lane"]) for line in lines] == [
+    assert [(line["page_index"], line["layout_lane"]) for line in lines] == [
         (0, 0),
         (0, 1),
         (2, 1),

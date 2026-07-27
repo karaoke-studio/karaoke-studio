@@ -724,6 +724,19 @@ class _Solver:
                     starts[line] = max(self.begins[line] - self.pre, 0)
                 self._apply_override(line)
                 self._enforce_auto_wipe_bounds(line)
+        if self.adjust_same_position and self.animation_windows_active:
+            previous_page: ShowTimePage | None = None
+            for page in self.pages:
+                if previous_page is not None and previous_page.lines and page.lines:
+                    pairs = list(zip(previous_page.lines, page.lines))
+                    boundary_pair = (previous_page.lines[-1], page.lines[0])
+                    if boundary_pair not in pairs:
+                        pairs.append(boundary_pair)
+                    for other, line in pairs:
+                        self._squeeze_pair(other, line)
+                        self._enforce_auto_wipe_bounds(other)
+                        self._enforce_auto_wipe_bounds(line)
+                previous_page = page
         # Spatial avoidance (page_placement.py) handles any remaining static
         # conflicts that could not be resolved by time-domain compression.
         for other, line in self.squeeze_pairs:

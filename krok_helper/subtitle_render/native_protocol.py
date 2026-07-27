@@ -218,6 +218,7 @@ def timing_line_to_ir(
     page_line_count: int = 0,
     section_index: int = -1,
     lane: int = 0,
+    layout_lane: int | None = None,
     display_start_ms: int | None = None,
     display_end_ms: int | None = None,
     center_override: bool = False,
@@ -243,6 +244,7 @@ def timing_line_to_ir(
         "page_line_count": max(int(page_line_count), 0),
         "section_index": int(section_index),
         "lane": int(lane),
+        "layout_lane": int(lane if layout_lane is None else layout_lane),
         "display_start_ms": (
             int(display_start_ms) if display_start_ms is not None else None
         ),
@@ -397,6 +399,10 @@ def track_to_ir(
             track_index: lane_page_rows[render_index]
             for render_index, (track_index, _) in enumerate(renderable_lines)
         }
+        authored_lanes = {
+            track_index: _lanes[render_index]
+            for render_index, (track_index, _) in enumerate(renderable_lines)
+        }
         if track.page_plan is not None:
             resolved_plan = resolve_page_plan(track, style)
             page_indices = {
@@ -407,14 +413,39 @@ def track_to_ir(
                 item.track_line_index: item.section_index
                 for item in resolved_plan.lines
             }
+            page_line_counts = {
+                item.track_line_index: item.page_line_count
+                for item in resolved_plan.lines
+            }
+            authored_lanes = {
+                item.track_line_index: item.lane
+                for item in resolved_plan.lines
+            }
         else:
             page_indices = {
                 track_index: lane_page_starts[render_index]
                 for render_index, (track_index, _) in enumerate(renderable_lines)
             }
             section_indices = {}
+            renderable_only = [line for _, line in renderable_lines]
+            for render_index, (track_index, _line) in enumerate(renderable_lines):
+                page_start = lane_page_starts[render_index]
+                page_rows = lane_page_rows[render_index]
+                page_head = renderable_only[page_start]
+                page_style = _style_for_line(style, page_head)
+                configured_rows = _lane_count(page_style)
+                if page_rows >= configured_rows:
+                    continue
+                if page_style.line_y_position == "bottom":
+                    authored_lanes[track_index] += configured_rows - page_rows
+                elif page_style.line_y_position == "center":
+                    authored_lanes[track_index] += max(
+                        (configured_rows - page_rows + 1) // 2,
+                        0,
+                    )
     else:
         page_line_counts = {}
+        authored_lanes = {}
         center_overrides = {}
         animation_styles = []
         layout_styles = []
@@ -449,6 +480,7 @@ def track_to_ir(
                 page_line_count=page_line_counts.get(index, 0),
                 section_index=section_indices.get(index, -1),
                 lane=schedule.get(index, (0, 0, 0))[0],
+                layout_lane=authored_lanes.get(index),
                 display_start_ms=(schedule[index][1] if index in schedule else None),
                 display_end_ms=(schedule[index][2] if index in schedule else None),
                 center_override=center_overrides.get(index, False),

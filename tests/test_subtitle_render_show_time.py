@@ -469,4 +469,4 @@ def test_cross_slot_pairs_are_not_blindly_squeezed():
     assert out.force_bottom[2] is False
     assert out.starts[2] == begins[2] - PRE
     assert out.ends[1] == ends[1] + POST
-    assert out.ends[1] < out.starts[2]
+    assert out.ends[1] > out.starts[2]

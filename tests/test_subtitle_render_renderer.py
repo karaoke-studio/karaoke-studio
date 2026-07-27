@@ -81,6 +81,7 @@ def _job(tmp_path: Path, *, include_audio: bool = True) -> RenderJob:
         fps=60,
         duration_ms=1000,
         include_audio=include_audio,
+        gpu_export_enabled=False,
     )
 
 

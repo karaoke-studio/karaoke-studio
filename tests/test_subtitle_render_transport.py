@@ -945,7 +945,7 @@ def test_gpu_async_renderer_capability_fallback_skips_sidecar(qapp, monkeypatch)
         assert stats["fallback_frames"] == 1
         assert stats["renderer_failures"] == 0
         assert len(fallbacks) == 1
-        assert "line_animation" in fallbacks[0]
+        assert "未知整行动画" in fallbacks[0]
         assert "Painter" in fallbacks[0]
     finally:
         renderer.stop()
