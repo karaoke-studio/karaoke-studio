@@ -108,7 +108,10 @@ from krok_helper.errors import ExportCancelled, ProcessingError
 from krok_helper.ffmpeg import find_tool, probe_media, terminate_process
 from krok_helper.models import MediaInfo
 from krok_helper.notifications import play_completion_sound
-from krok_helper.qfluent_compat import apply_qfluent_menu_lifetime_patch
+from krok_helper.qfluent_compat import (
+    apply_qfluent_menu_lifetime_patch,
+    apply_qfluent_tooltip_parent_patch,
+)
 from krok_helper.settings import get_settings_path, load_app_settings, save_app_settings
 from krok_helper.subtitle_render.engine.encoder_select import (
     CODEC_H264,
@@ -266,6 +269,7 @@ from krok_helper.subtitle_render.source_reload import (
 from krok_helper.subtitle_render.frontend.theme import palette, stage_bg, themed
 
 apply_qfluent_menu_lifetime_patch()
+apply_qfluent_tooltip_parent_patch()
 
 SUBTITLE_FILTER = "SUG 项目 / Nicokara LRC (*.sug *.lrc);;SUG 项目 (*.sug);;Nicokara 逐字 LRC (*.lrc);;所有文件 (*.*)"
 
