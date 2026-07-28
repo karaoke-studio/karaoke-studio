@@ -30,6 +30,9 @@ from PyQt6.QtGui import (  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 import krok_helper.subtitle_render.engine.painter as subtitle_painter  # noqa: E402
+from krok_helper.subtitle_render.engine.page_placement import (  # noqa: E402
+    LineVisualBand,
+)
 from krok_helper.subtitle_render.engine.painter import (  # noqa: E402
     _HARD_BAND_BRUSH_CACHE,
     _IMAGE_BRUSH_CACHE,
@@ -8851,6 +8854,57 @@ def test_cross_page_spatial_mode_squeezes_only_pixel_conflicting_lines(qapp):
         and end >= int(lines[index].end_ms)
         for index, (start, end) in normal.items()
     )
+
+
+def test_secondary_displacement_pairs_only_report_new_cascade(monkeypatch):
+    lines = [
+        TimingLine(chars=[TimingChar(text, 1_000)], end_ms=2_000)
+        for text in ("A", "B")
+    ]
+    display = [
+        DisplayLine(lines[0], 0, 0, 3_000, page_index=0),
+        DisplayLine(lines[1], 0, 0, 3_000, page_index=1),
+    ]
+    measured = [
+        (
+            0,
+            (0, 0),
+            LineVisualBand(0, (0, 0), 0, 3_000, 100.0, 140.0),
+            0.0,
+        ),
+        (
+            1,
+            (0, 1),
+            LineVisualBand(1, (0, 1), 0, 3_000, 40.0, 80.0),
+            0.0,
+        ),
+    ]
+    monkeypatch.setattr(
+        subtitle_painter,
+        "_measure_collision_bands",
+        lambda *_args: measured,
+    )
+    monkeypatch.setattr(
+        subtitle_painter,
+        "solve_page_axis_offsets",
+        lambda *_args, **_kwargs: {(0, 0): -40.0, (0, 1): -80.0},
+    )
+
+    assert subtitle_painter._secondary_displacement_squeeze_pairs(
+        1920, 1080, TimingTrack(lines=lines), Style(), display
+    ) == ((0, 1),)
+
+    # If the bands already collided at their authored positions, the primary
+    # squeeze pass owns the pair and this discovery pass must not duplicate it.
+    measured[1] = (
+        1,
+        (0, 1),
+        LineVisualBand(1, (0, 1), 0, 3_000, 120.0, 160.0),
+        0.0,
+    )
+    assert subtitle_painter._secondary_displacement_squeeze_pairs(
+        1920, 1080, TimingTrack(lines=lines), Style(), display
+    ) == ()
 
 
 def test_animation_only_cross_page_overlap_does_not_move_incoming_page(qapp):

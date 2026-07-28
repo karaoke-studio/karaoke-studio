@@ -3602,17 +3602,17 @@ def _default_collision_canvas(style: Style) -> tuple[int, int]:
     return max(int(round(height * 16 / 9)), 1), height
 
 
-def _pixel_collision_squeeze_pairs(
+def _measure_collision_bands(
     logical_w: int,
     logical_h: int,
     track: TimingTrack,
     style: Style,
     display_lines: list[DisplayLine],
-) -> tuple[tuple[int, int], ...]:
-    """Return only line pairs with both stable-time and pixel-axis conflict."""
+) -> list[tuple[int, tuple[int, int], LineVisualBand, float]]:
+    """Measure stable-ink bands without changing display-time behaviour."""
 
     if not display_lines:
-        return ()
+        return []
     if style.vertical:
         baselines: dict[int, int] = {}
         line_layouts: dict[int, _SayatooLineLayout] = {}
@@ -3693,7 +3693,21 @@ def _pixel_collision_squeeze_pairs(
                 max(float(line_style.line_gap_px), 0.0),
             )
         )
+    return measured
 
+
+def _pixel_collision_squeeze_pairs(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    style: Style,
+    display_lines: list[DisplayLine],
+) -> tuple[tuple[int, int], ...]:
+    """Return only line pairs with both stable-time and pixel-axis conflict."""
+
+    measured = _measure_collision_bands(
+        logical_w, logical_h, track, style, display_lines
+    )
     conflicts: list[tuple[int, int]] = []
     for incoming_pos, (
         incoming_index,
@@ -3711,6 +3725,112 @@ def _pixel_collision_squeeze_pairs(
             if not bands_require_separation(
                 incoming_band, previous_band, 0.0
             ):
+                continue
+            pair = (previous_index, incoming_index)
+            if pair not in conflicts:
+                conflicts.append(pair)
+    return tuple(conflicts)
+
+
+def _secondary_displacement_squeeze_pairs(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    style: Style,
+    display_lines: list[DisplayLine],
+) -> tuple[tuple[int, int], ...]:
+    """Return cascade dependencies created by rigid inter-page displacement.
+
+    This is deliberately a discovery-only pass.  It never edits display
+    windows or offsets; callers may feed the returned pairs through the
+    existing measured-pair squeeze path, which preserves wipe bounds, manual
+    overrides, animation reserves and page entry order.
+    """
+
+    measured = _measure_collision_bands(
+        logical_w, logical_h, track, style, display_lines
+    )
+    if not measured:
+        return ()
+
+    page_order: list[tuple[int, int]] = []
+    page_entries: dict[
+        tuple[int, int], list[tuple[int, LineVisualBand, float]]
+    ] = {}
+    page_styles: dict[tuple[int, int], Style] = {}
+    for render_index, page_id, band, gap in measured:
+        if page_id not in page_entries:
+            page_order.append(page_id)
+            page_entries[page_id] = []
+        page_entries[page_id].append((render_index, band, gap))
+        page_styles.setdefault(
+            page_id, _style_for_line(style, display_lines[render_index].line)
+        )
+
+    pages: list[PageVisualBands] = []
+    for page_id in page_order:
+        page_style = page_styles[page_id]
+        position = page_style.line_y_position
+        anchor = (
+            "start"
+            if position == "top"
+            else "center"
+            if position == "center"
+            else "end"
+        )
+        if style.vertical:
+            anchor = "end"
+        pages.append(
+            PageVisualBands(
+                page_id=page_id,
+                bands=tuple(
+                    band for _render_index, band, _gap in page_entries[page_id]
+                ),
+                gap_px=max(float(page_style.line_gap_px), 0.0),
+                anchor=anchor,
+            )
+        )
+
+    offsets = solve_page_axis_offsets(
+        pages,
+        viewport_min=0.0,
+        viewport_max=float(logical_w if style.vertical else logical_h),
+    )
+    if not any(float(offset) != 0.0 for offset in offsets.values()):
+        return ()
+
+    conflicts: list[tuple[int, int]] = []
+    for incoming_pos, (
+        incoming_index,
+        incoming_page,
+        incoming_band,
+        _incoming_gap,
+    ) in enumerate(measured):
+        incoming_offset = float(offsets.get(incoming_page, 0.0))
+        if incoming_offset == 0.0:
+            continue
+        for (
+            previous_index,
+            previous_page,
+            previous_band,
+            _previous_gap,
+        ) in measured[:incoming_pos]:
+            if previous_page == incoming_page:
+                continue
+            if not time_windows_overlap(incoming_band, previous_band):
+                continue
+            previous_offset = float(offsets.get(previous_page, 0.0))
+            if previous_offset == 0.0:
+                continue
+            # Authored-position conflicts already went through the primary
+            # squeeze pass.  This pass only covers an incoming page that would
+            # have been clear before an earlier page moved into its position.
+            if bands_require_separation(incoming_band, previous_band, 0.0):
+                continue
+            shifted_previous = previous_band.shifted(
+                previous_offset
+            )
+            if not bands_require_separation(incoming_band, shifted_previous, 0.0):
                 continue
             pair = (previous_index, incoming_index)
             if pair not in conflicts:
@@ -3774,6 +3894,19 @@ def _display_lines_for_style(
         if squeeze_pairs
         else ideal
     )
+    secondary_pairs = _secondary_displacement_squeeze_pairs(
+        logical_w, logical_h, track, style, resolved
+    )
+    if secondary_pairs:
+        combined_pairs = tuple(dict.fromkeys((*squeeze_pairs, *secondary_pairs)))
+        resolved = compute_display_lines(
+            track,
+            **kwargs,
+            adjust_same_position=False,
+            squeeze_pairs=combined_pairs,
+            dynamic_single_page_reflow=True,
+            independent_line_entry=True,
+        )
     # Keep the track object alive with the cached display lines.  The key uses
     # ``id(track)`` to prevent equal-but-distinct tracks from sharing mutable
     # TimingLine references; retaining the owner also prevents CPython from
