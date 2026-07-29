@@ -9092,3 +9092,210 @@ def test_sync_entry_is_controlled_only_by_its_switch(qapp):
 
     assert [independent[index][0] for index in range(2)] == [8_200, 10_200]
     assert [synchronized[index][0] for index in range(2)] == [8_200, 8_200]
+
+
+def test_page_ts_sync_entry_uses_colliding_previous_line_as_read_only_bound(qapp):
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A", 10_000, 11_000),
+            ("B", 12_000, 13_500),
+            ("C", 14_000, 15_000),
+            ("D", 16_000, 17_000),
+        )
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(2, "default"), TrackPage(2, "default")])]
+        ),
+    )
+    base_style = replace(
+        Style(),
+        line_lead_in_ms=1_800,
+        line_tail_ms=1_000,
+        line_lane_gap_ms=300,
+    )
+    baseline = subtitle_painter.display_windows_for_style(
+        track,
+        base_style,
+        logical_w=1920,
+        logical_h=1080,
+    )
+    synchronized = subtitle_painter.display_windows_for_style(
+        track,
+        replace(base_style, sync_entry=True),
+        logical_w=1920,
+        logical_h=1080,
+    )
+
+    # 第一页先完成自己的页内同步；第二页随后只能收回自己的入场边，
+    # 不能为了获得更早的共同入场而改写第一页。
+    assert synchronized[0][0] == synchronized[1][0] == baseline[0][0]
+    assert synchronized[0][1] == baseline[0][1]
+    assert synchronized[1][1] == baseline[1][1]
+    assert synchronized[2][0] == synchronized[3][0]
+    # B 的退场动画从 14_000ms 开始，稳定碰撞箱在这里失效；同步入场
+    # 可以贴着该边界开始，但不能反过来压缩 B。
+    assert synchronized[2][0] == 14_000
+
+
+def test_page_ts_sync_ending_uses_colliding_next_line_as_read_only_bound(qapp):
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A", 10_000, 11_000),
+            ("B", 10_500, 11_500),
+            ("C", 14_000, 15_000),
+            ("D", 16_000, 17_000),
+        )
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(2, "default"), TrackPage(2, "default")])]
+        ),
+    )
+    base_style = replace(
+        Style(),
+        line_lead_in_ms=1_800,
+        line_tail_ms=1_000,
+        line_lane_gap_ms=300,
+    )
+    baseline = subtitle_painter.display_windows_for_style(
+        track,
+        base_style,
+        logical_w=1920,
+        logical_h=1080,
+    )
+    synchronized = subtitle_painter.display_windows_for_style(
+        track,
+        replace(base_style, sync_ending=True),
+        logical_w=1920,
+        logical_h=1080,
+    )
+
+    assert synchronized[2] == baseline[2]
+    assert synchronized[3] == baseline[3]
+    assert synchronized[0][1] == synchronized[1][1]
+    assert synchronized[0][1] <= baseline[2][0]
+
+
+def test_page_sync_boundary_scans_past_non_colliding_intermediate_page():
+    measured = [
+        (
+            0,
+            (0, 0),
+            LineVisualBand(
+                0,
+                (0, 0),
+                0,
+                100,
+                0.0,
+                10.0,
+                cross_min=0.0,
+                cross_max=10.0,
+            ),
+            0.0,
+        ),
+        (
+            1,
+            (0, 1),
+            LineVisualBand(
+                1,
+                (0, 1),
+                0,
+                40,
+                20.0,
+                30.0,
+                cross_min=0.0,
+                cross_max=10.0,
+            ),
+            0.0,
+        ),
+        (
+            2,
+            (0, 2),
+            LineVisualBand(
+                2,
+                (0, 2),
+                50,
+                150,
+                0.0,
+                10.0,
+                cross_min=0.0,
+                cross_max=10.0,
+            ),
+            0.0,
+        ),
+    ]
+
+    entry = subtitle_painter._sync_page_boundary_conflicts(
+        measured,
+        page_id=(0, 2),
+        page_line_indices=(2,),
+        boundary="entry",
+        baseline_conflicts={},
+    )
+    ending = subtitle_painter._sync_page_boundary_conflicts(
+        measured,
+        page_id=(0, 0),
+        page_line_indices=(0,),
+        boundary="ending",
+        baseline_conflicts={},
+    )
+
+    assert [(previous.line_id, incoming.line_id) for previous, incoming in entry] == [
+        (0, 2)
+    ]
+    assert [(previous.line_id, incoming.line_id) for previous, incoming in ending] == [
+        (0, 2)
+    ]
+
+    cross_axis_clear = list(measured)
+    render_index, page_id, band, gap = cross_axis_clear[2]
+    cross_axis_clear[2] = (
+        render_index,
+        page_id,
+        replace(band, cross_min=20.0, cross_max=30.0),
+        gap,
+    )
+    assert (
+        subtitle_painter._sync_page_boundary_conflicts(
+            cross_axis_clear,
+            page_id=(0, 2),
+            page_line_indices=(2,),
+            boundary="entry",
+            baseline_conflicts={},
+        )
+        == []
+    )
+
+    baseline_overlap = {(0, 2): (50, 100)}
+    assert (
+        subtitle_painter._sync_page_boundary_conflicts(
+            measured,
+            page_id=(0, 2),
+            page_line_indices=(2,),
+            boundary="entry",
+            baseline_conflicts=baseline_overlap,
+        )
+        == []
+    )
+    expanded = list(measured)
+    render_index, page_id, band, gap = expanded[2]
+    expanded[2] = (
+        render_index,
+        page_id,
+        replace(band, display_start_ms=25),
+        gap,
+    )
+    assert len(
+        subtitle_painter._sync_page_boundary_conflicts(
+            expanded,
+            page_id=(0, 2),
+            page_line_indices=(2,),
+            boundary="entry",
+            baseline_conflicts=baseline_overlap,
+        )
+    ) == 1

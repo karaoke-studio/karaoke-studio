@@ -1974,18 +1974,24 @@ def resolved_page_offset_windows_for_style(
             )
         )
         if style.vertical:
-            axis_bounds = _display_line_horizontal_envelope(
+            ink_rect = _display_line_vertical_ink_rect(
                 logical_w,
                 logical_h,
                 track,
                 display_line,
                 line_style,
             )
+            axis_bounds = (
+                None if ink_rect is None else (ink_rect[0], ink_rect[2])
+            )
+            cross_bounds = (
+                None if ink_rect is None else (ink_rect[1], ink_rect[3])
+            )
             axis_anchor = _resolve_vertical_columns(
                 logical_w, track, [display_line], line_style
             ).get(display_line.lane)
         else:
-            axis_bounds = _display_line_vertical_envelope(
+            ink_rect = _display_line_horizontal_ink_rect(
                 logical_w,
                 logical_h,
                 track,
@@ -1995,6 +2001,12 @@ def resolved_page_offset_windows_for_style(
                 line_layouts,
                 layout_cache_sig=layout_cache_sig,
             )
+            axis_bounds = (
+                None if ink_rect is None else (ink_rect[1], ink_rect[3])
+            )
+            cross_bounds = (
+                None if ink_rect is None else (ink_rect[0], ink_rect[2])
+            )
             line_layout = line_layouts.get(id(display_line.line))
             axis_anchor = (
                 line_layout.baseline_y
@@ -2003,6 +2015,7 @@ def resolved_page_offset_windows_for_style(
             )
         if axis_bounds is None:
             continue
+        assert cross_bounds is not None
         collision_start, collision_end = _display_line_static_collision_window(
             display_line,
             style,
@@ -2022,6 +2035,8 @@ def resolved_page_offset_windows_for_style(
                 axis_anchor=(
                     None if axis_anchor is None else float(axis_anchor)
                 ),
+                cross_min=float(cross_bounds[0]),
+                cross_max=float(cross_bounds[1]),
             )
         )
 
@@ -2143,7 +2158,35 @@ def _display_line_vertical_envelope(
     *,
     layout_cache_sig: tuple | None,
 ) -> tuple[int, int] | None:
-    """Return the final static ink box used for placement collision checks.
+    """Return the final static Y ink interval used for placement checks."""
+
+    bounds = _display_line_horizontal_ink_rect(
+        logical_w,
+        logical_h,
+        track,
+        display_line,
+        style,
+        baselines,
+        line_layouts,
+        layout_cache_sig=layout_cache_sig,
+    )
+    if bounds is None:
+        return None
+    return bounds[1], bounds[3]
+
+
+def _display_line_horizontal_ink_rect(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    display_line: DisplayLine,
+    style: Style,
+    baselines: dict[int, int],
+    line_layouts: dict[int, _SayatooLineLayout],
+    *,
+    layout_cache_sig: tuple | None,
+) -> tuple[int, int, int, int] | None:
+    """Return the final static horizontal-line ink rectangle.
 
     Entry/exit and per-character animation trajectories intentionally do not
     enlarge this box.  Main glyphs, Ruby and their visual decorations do.
@@ -2175,31 +2218,31 @@ def _display_line_vertical_envelope(
     )
     if layout is None:
         return None
-    return _line_static_vertical_ink_bounds(layout)
+    return _line_static_ink_rect(layout)
 
 
-def _line_static_vertical_ink_bounds(
+def _line_static_ink_rect(
     layout: _LineLayout,
-) -> tuple[int, int] | None:
-    """Return the static painted Y envelope without layout line spacing.
+) -> tuple[int, int, int, int] | None:
+    """Return the painted main/Ruby rectangle without layout line spacing."""
 
-    Placement collisions use actual main-text/Ruby glyph geometry plus stroke,
-    shadow and glow extents.  Font metric cells, ``line_gap_px`` and every
-    entry/exit or per-character animation trajectory are deliberately absent.
-    The solver adds the overlapped layout's line gap exactly once, after these
-    per-line ink bounds have been measured.
-    """
-
-    bounds: list[tuple[float, float]] = []
+    bounds: list[tuple[float, float, float, float]] = []
     for run in _text_glyph_runs(layout.text_layout, layout.has_inline_styles):
         path = _glyph_run_path(run, layout.baseline_y)
-        visual = _painted_path_vertical_bounds(path, run[0].style, ruby=False)
+        visual = _painted_path_ink_rect(path, run[0].style, ruby=False)
         if visual is not None:
             bounds.append(visual)
     for glyph in _bitmap_guide_glyphs(layout.text_layout):
         rect = _bitmap_guide_target_rect(glyph, layout.baseline_y)
         if rect is not None and not rect.isEmpty():
-            bounds.append((float(rect.top()), float(rect.bottom())))
+            bounds.append(
+                (
+                    float(rect.left()),
+                    float(rect.top()),
+                    float(rect.right()),
+                    float(rect.bottom()),
+                )
+            )
 
     for ruby_layout in layout.ruby_layouts:
         ruby_style = ruby_layout.style
@@ -2222,16 +2265,90 @@ def _line_static_vertical_ink_bounds(
             ruby_style,
             base_text=ruby_layout.ruby.kanji,
         )
-        visual = _painted_path_vertical_bounds(path, ruby_style, ruby=True)
+        visual = _painted_path_ink_rect(path, ruby_style, ruby=True)
         if visual is not None:
             bounds.append(visual)
 
     if not bounds:
         return None
     return (
-        int(math.floor(min(top for top, _bottom in bounds))),
-        int(math.ceil(max(bottom for _top, bottom in bounds))),
+        int(math.floor(min(left for left, _top, _right, _bottom in bounds))),
+        int(math.floor(min(top for _left, top, _right, _bottom in bounds))),
+        int(math.ceil(max(right for _left, _top, right, _bottom in bounds))),
+        int(math.ceil(max(bottom for _left, _top, _right, bottom in bounds))),
     )
+
+
+def _line_static_vertical_ink_bounds(
+    layout: _LineLayout,
+) -> tuple[int, int] | None:
+    """Return the static painted Y envelope without layout line spacing.
+
+    Placement collisions use actual main-text/Ruby glyph geometry plus stroke,
+    shadow and glow extents.  Font metric cells, ``line_gap_px`` and every
+    entry/exit or per-character animation trajectory are deliberately absent.
+    The solver adds the overlapped layout's line gap exactly once, after these
+    per-line ink bounds have been measured.
+    """
+
+    bounds = _line_static_ink_rect(layout)
+    if bounds is None:
+        return None
+    return bounds[1], bounds[3]
+
+
+def _painted_path_ink_rect(
+    path: QPainterPath,
+    style: Style,
+    *,
+    ruby: bool,
+) -> tuple[float, float, float, float] | None:
+    """Return one path's static painted rectangle for both colour states."""
+
+    rect = path.boundingRect()
+    if rect.isEmpty():
+        return None
+    if ruby:
+        stroke_width = _ruby_stroke_width(style)
+        stroke2_width = _ruby_stroke2_width(style)
+        decoration = _ruby_decoration_kind(style)
+        shadow_dx = _ruby_shadow_dx(style)
+        shadow_dy = _ruby_shadow_dy(style)
+        glow_extent = max(
+            _glow_extent(
+                stroke_width,
+                stroke2_width,
+                _ruby_glow_radius(style, after=after),
+            )
+            for after in (False, True)
+        )
+    else:
+        stroke_width = max(int(style.stroke_width_px), 0)
+        stroke2_width = _main_stroke2_width(style)
+        decoration = style.decoration_kind
+        shadow_dx = int(style.shadow_offset_x)
+        shadow_dy = int(style.shadow_offset_y)
+        glow_extent = max(
+            _glow_extent(
+                stroke_width,
+                stroke2_width,
+                _glow_radius(style, after=after),
+            )
+            for after in (False, True)
+        )
+
+    stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
+    extent = max(stroke_extent, glow_extent if decoration == "glow" else 0)
+    left = float(rect.left()) - extent
+    top = float(rect.top()) - extent
+    right = float(rect.right()) + extent
+    bottom = float(rect.bottom()) + extent
+    if decoration == "shadow":
+        left += min(shadow_dx, 0)
+        right += max(shadow_dx, 0)
+        top += min(shadow_dy, 0)
+        bottom += max(shadow_dy, 0)
+    return left, top, right, bottom
 
 
 def _painted_path_vertical_bounds(
@@ -2289,6 +2406,29 @@ def _display_line_horizontal_envelope(
     display_line: DisplayLine,
     line_style: Style,
 ) -> tuple[int, int] | None:
+    """Return the final static X ink interval for a vertical lyric line."""
+
+    bounds = _display_line_vertical_ink_rect(
+        logical_w,
+        logical_h,
+        track,
+        display_line,
+        line_style,
+    )
+    if bounds is None:
+        return None
+    return bounds[0], bounds[2]
+
+
+def _display_line_vertical_ink_rect(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    display_line: DisplayLine,
+    line_style: Style,
+) -> tuple[int, int, int, int] | None:
+    """Return the final static vertical-line ink rectangle."""
+
     column = _resolve_vertical_columns(
         logical_w, track, [display_line], line_style
     ).get(display_line.lane)
@@ -2306,7 +2446,9 @@ def _display_line_horizontal_envelope(
         return None
     path_bounds = layout.text_path.boundingRect()
     left = min(float(layout.line_rect.left()), float(path_bounds.left()))
+    top = min(float(layout.line_rect.top()), float(path_bounds.top()))
     right = max(float(layout.line_rect.right()), float(path_bounds.right()))
+    bottom = max(float(layout.line_rect.bottom()), float(path_bounds.bottom()))
     if layout.active_rubies:
         ruby_metrics = QFontMetrics(_build_ruby_font(line_style))
         ruby_cell_w = _vertical_cell_width(ruby_metrics)
@@ -2319,10 +2461,18 @@ def _display_line_horizontal_envelope(
                 + ruby_cell_w
             ),
         )
-    extent = _line_effect_extent(line_style, vertical_axis=False)
-    left -= extent
-    right += extent
-    return int(math.floor(left)), int(math.ceil(right))
+    extent_x = _line_effect_extent(line_style, vertical_axis=False)
+    extent_y = _line_effect_extent(line_style, vertical_axis=True)
+    left -= extent_x
+    right += extent_x
+    top -= extent_y
+    bottom += extent_y
+    return (
+        int(math.floor(left)),
+        int(math.floor(top)),
+        int(math.ceil(right)),
+        int(math.ceil(bottom)),
+    )
 
 
 def _line_effect_extent(style: Style, *, vertical_axis: bool) -> int:
@@ -3636,18 +3786,24 @@ def _measure_collision_bands(
     for render_index, display_line in enumerate(display_lines):
         line_style = _style_for_line(style, display_line.line)
         if style.vertical:
-            axis_bounds = _display_line_horizontal_envelope(
+            ink_rect = _display_line_vertical_ink_rect(
                 logical_w,
                 logical_h,
                 track,
                 display_line,
                 line_style,
             )
+            axis_bounds = (
+                None if ink_rect is None else (ink_rect[0], ink_rect[2])
+            )
+            cross_bounds = (
+                None if ink_rect is None else (ink_rect[1], ink_rect[3])
+            )
             axis_anchor = _resolve_vertical_columns(
                 logical_w, track, [display_line], line_style
             ).get(display_line.lane)
         else:
-            axis_bounds = _display_line_vertical_envelope(
+            ink_rect = _display_line_horizontal_ink_rect(
                 logical_w,
                 logical_h,
                 track,
@@ -3657,6 +3813,12 @@ def _measure_collision_bands(
                 line_layouts,
                 layout_cache_sig=layout_cache_sig,
             )
+            axis_bounds = (
+                None if ink_rect is None else (ink_rect[1], ink_rect[3])
+            )
+            cross_bounds = (
+                None if ink_rect is None else (ink_rect[0], ink_rect[2])
+            )
             line_layout = line_layouts.get(id(display_line.line))
             axis_anchor = (
                 line_layout.baseline_y
@@ -3665,6 +3827,7 @@ def _measure_collision_bands(
             )
         if axis_bounds is None:
             continue
+        assert cross_bounds is not None
         collision_start, collision_end = _display_line_static_collision_window(
             display_line, style
         )
@@ -3689,6 +3852,8 @@ def _measure_collision_bands(
                     axis_anchor=(
                         None if axis_anchor is None else float(axis_anchor)
                     ),
+                    cross_min=float(cross_bounds[0]),
+                    cross_max=float(cross_bounds[1]),
                 ),
                 max(float(line_style.line_gap_px), 0.0),
             )
@@ -3838,6 +4003,369 @@ def _secondary_displacement_squeeze_pairs(
     return tuple(conflicts)
 
 
+def _measured_conflict_windows(
+    measured: list[tuple[int, tuple[int, int], LineVisualBand, float]],
+) -> dict[tuple[int, int], tuple[int, int]]:
+    """Return existing spatial-avoidance intervals for each colliding pair."""
+
+    conflicts: dict[tuple[int, int], tuple[int, int]] = {}
+    for incoming_pos, (
+        incoming_index,
+        incoming_page,
+        incoming_band,
+        _incoming_gap,
+    ) in enumerate(measured):
+        for (
+            previous_index,
+            previous_page,
+            previous_band,
+            _previous_gap,
+        ) in measured[:incoming_pos]:
+            if previous_page == incoming_page:
+                continue
+            if not time_windows_overlap(incoming_band, previous_band):
+                continue
+            if not bands_require_separation(
+                incoming_band, previous_band, 0.0
+            ):
+                continue
+            conflicts[(previous_index, incoming_index)] = (
+                max(
+                    int(previous_band.display_start_ms),
+                    int(incoming_band.display_start_ms),
+                ),
+                min(
+                    int(previous_band.display_end_ms),
+                    int(incoming_band.display_end_ms),
+                ),
+            )
+    return conflicts
+
+
+def _retime_measured_collision_bands(
+    measured: list[tuple[int, tuple[int, int], LineVisualBand, float]],
+    display_lines: list[DisplayLine],
+    style: Style,
+    changed_indices: tuple[int, ...],
+) -> list[tuple[int, tuple[int, int], LineVisualBand, float]] | None:
+    """Reuse measured X/Y rectangles when only display boundaries changed.
+
+    ``None`` requests a full remeasurement when a changed line had no stable
+    band before.  That rare case can gain one after synchronization; skipping
+    it would miss a collision.
+    """
+
+    changed = set(changed_indices)
+    measured_indices = {render_index for render_index, _page, _band, _gap in measured}
+    if not changed.issubset(measured_indices):
+        return None
+    retimed: list[tuple[int, tuple[int, int], LineVisualBand, float]] = []
+    for render_index, page_id, band, gap in measured:
+        if render_index not in changed:
+            retimed.append((render_index, page_id, band, gap))
+            continue
+        collision_start, collision_end = _display_line_static_collision_window(
+            display_lines[render_index],
+            style,
+        )
+        if collision_end <= collision_start:
+            continue
+        retimed.append(
+            (
+                render_index,
+                page_id,
+                replace(
+                    band,
+                    display_start_ms=int(collision_start),
+                    display_end_ms=int(collision_end),
+                    entry_start_ms=int(
+                        display_lines[render_index].display_start_ms
+                    ),
+                ),
+                gap,
+            )
+        )
+    return retimed
+
+
+def _sync_page_boundary_conflicts(
+    measured: list[tuple[int, tuple[int, int], LineVisualBand, float]],
+    *,
+    page_id: tuple[int, int],
+    page_line_indices: tuple[int, ...],
+    boundary: str,
+    baseline_conflicts: dict[tuple[int, int], tuple[int, int]],
+) -> list[tuple[LineVisualBand, LineVisualBand]]:
+    """Return sync collisions against every line in the relevant time direction.
+
+    A page boundary synchronizes only that page's T lines.  For entry, every
+    earlier timeline line is a read-only reference; for ending, every later
+    timeline line is a read-only reference.  The reference need not belong to
+    the immediately adjacent page.
+    """
+
+    conflicts: list[tuple[LineVisualBand, LineVisualBand]] = []
+    page_indices = set(page_line_indices)
+    first_page_index = min(page_line_indices)
+    last_page_index = max(page_line_indices)
+    current_bands = [
+        (render_index, band)
+        for render_index, measured_page, band, _gap in measured
+        if measured_page == page_id and render_index in page_indices
+    ]
+    reference_bands = sorted(
+        [
+            (render_index, band)
+            for render_index, measured_page, band, _gap in measured
+            if measured_page != page_id
+            and (
+                (boundary == "entry" and render_index < first_page_index)
+                or (boundary == "ending" and render_index > last_page_index)
+            )
+        ],
+        key=lambda item: item[0],
+    )
+    if boundary == "entry":
+        prefix_latest_end: list[int] = []
+        latest_end = -1
+        for _reference_index, reference_band in reference_bands:
+            latest_end = max(latest_end, int(reference_band.display_end_ms))
+            prefix_latest_end.append(latest_end)
+    else:
+        suffix_earliest_start = [0] * len(reference_bands)
+        earliest_start = 2**63 - 1
+        for pos in range(len(reference_bands) - 1, -1, -1):
+            earliest_start = min(
+                earliest_start,
+                int(reference_bands[pos][1].display_start_ms),
+            )
+            suffix_earliest_start[pos] = earliest_start
+
+    for current_index, current_band in current_bands:
+        positions = (
+            range(len(reference_bands) - 1, -1, -1)
+            if boundary == "entry"
+            else range(len(reference_bands))
+        )
+        for pos in positions:
+            if boundary == "entry":
+                if prefix_latest_end[pos] <= current_band.display_start_ms:
+                    break
+            elif suffix_earliest_start[pos] >= current_band.display_end_ms:
+                break
+            reference_index, reference_band = reference_bands[pos]
+            pair = (
+                min(reference_index, current_index),
+                max(reference_index, current_index),
+            )
+            if boundary == "entry":
+                previous_band, incoming_band = reference_band, current_band
+            else:
+                previous_band, incoming_band = current_band, reference_band
+            if not time_windows_overlap(previous_band, incoming_band):
+                continue
+            if not bands_require_separation(
+                incoming_band, previous_band, 0.0
+            ):
+                continue
+            overlap = (
+                max(
+                    int(previous_band.display_start_ms),
+                    int(incoming_band.display_start_ms),
+                ),
+                min(
+                    int(previous_band.display_end_ms),
+                    int(incoming_band.display_end_ms),
+                ),
+            )
+            baseline_overlap = baseline_conflicts.get(pair)
+            if (
+                baseline_overlap is not None
+                and overlap[0] >= baseline_overlap[0]
+                and overlap[1] <= baseline_overlap[1]
+            ):
+                # The ordinary schedule already needs spatial avoidance for
+                # exactly this interval.  Synchronization may keep that
+                # unavoidable interval, but must not start it earlier or keep
+                # it alive longer.
+                continue
+            conflicts.append((previous_band, incoming_band))
+    return conflicts
+
+
+def _replace_page_display_boundary(
+    display_lines: list[DisplayLine],
+    indices: tuple[int, ...],
+    *,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+) -> list[DisplayLine]:
+    changed = list(display_lines)
+    for index in indices:
+        item = changed[index]
+        changed[index] = replace(
+            item,
+            display_start_ms=(
+                item.display_start_ms if start_ms is None else int(start_ms)
+            ),
+            display_end_ms=(
+                item.display_end_ms if end_ms is None else int(end_ms)
+            ),
+        )
+    return changed
+
+
+def _apply_constrained_page_sync(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    style: Style,
+    display_lines: list[DisplayLine],
+) -> list[DisplayLine]:
+    """Extend page sync boundaries without rewriting another page's schedule.
+
+    Ordinary per-line collision compression is already complete when this
+    function runs.  The automatic T lines *within one page* then share the
+    page's earliest entry / latest ending candidate.  A colliding earlier line
+    bounds that page's common entry; a colliding later line bounds its common
+    ending.  Only the synchronized page boundary is retracted.  The collision
+    reference line is read-only, and unresolved conflicts fall through to
+    rigid placement.
+    """
+
+    if not display_lines or not (style.sync_entry or style.sync_ending):
+        return display_lines
+    baseline = list(display_lines)
+    measured = _measure_collision_bands(
+        logical_w, logical_h, track, style, baseline
+    )
+    page_order: list[tuple[int, int]] = []
+    page_indices: dict[tuple[int, int], list[int]] = {}
+    for index, item in enumerate(baseline):
+        page_id = (int(item.section_index), int(item.page_index))
+        if page_id not in page_indices:
+            page_order.append(page_id)
+            page_indices[page_id] = []
+        page_indices[page_id].append(index)
+
+    resolved = list(baseline)
+    for page_id in page_order:
+        indices = tuple(page_indices[page_id])
+        if style.sync_entry:
+            automatic = tuple(
+                index
+                for index in indices
+                if resolved[index].line.display_start_override_ms is None
+            )
+            if automatic:
+                entry_baseline_conflicts = _measured_conflict_windows(
+                    measured
+                )
+                target = min(
+                    int(resolved[index].display_start_ms) for index in indices
+                )
+                latest = min(
+                    max(
+                        _line_start_ms(resolved[index].line)
+                        - _auto_entry_reserve_ms(
+                            style, resolved[index].line
+                        ),
+                        0,
+                    )
+                    for index in automatic
+                )
+                target = min(target, latest)
+                for _pass in range(len(display_lines) + 1):
+                    candidate = _replace_page_display_boundary(
+                        resolved, automatic, start_ms=target
+                    )
+                    candidate_measured = _retime_measured_collision_bands(
+                        measured,
+                        candidate,
+                        style,
+                        automatic,
+                    )
+                    if candidate_measured is None:
+                        candidate_measured = _measure_collision_bands(
+                            logical_w, logical_h, track, style, candidate
+                        )
+                    conflicts = _sync_page_boundary_conflicts(
+                        candidate_measured,
+                        page_id=page_id,
+                        page_line_indices=indices,
+                        boundary="entry",
+                        baseline_conflicts=entry_baseline_conflicts,
+                    )
+                    if not conflicts or target >= latest:
+                        resolved = candidate
+                        measured = candidate_measured
+                        break
+                    delay = max(
+                        previous.display_end_ms - incoming.display_start_ms
+                        for previous, incoming in conflicts
+                    )
+                    next_target = min(target + max(int(delay), 1), latest)
+                    if next_target == target:
+                        resolved = candidate
+                        measured = candidate_measured
+                        break
+                    target = next_target
+
+        if style.sync_ending:
+            automatic = tuple(
+                index
+                for index in indices
+                if resolved[index].line.display_end_override_ms is None
+            )
+            if automatic:
+                ending_baseline_conflicts = _measured_conflict_windows(
+                    measured
+                )
+                target = max(
+                    int(resolved[index].display_end_ms) for index in indices
+                )
+                earliest = max(
+                    _line_end_ms(resolved[index].line) for index in automatic
+                )
+                target = max(target, earliest)
+                for _pass in range(len(display_lines) + 1):
+                    candidate = _replace_page_display_boundary(
+                        resolved, automatic, end_ms=target
+                    )
+                    candidate_measured = _retime_measured_collision_bands(
+                        measured,
+                        candidate,
+                        style,
+                        automatic,
+                    )
+                    if candidate_measured is None:
+                        candidate_measured = _measure_collision_bands(
+                            logical_w, logical_h, track, style, candidate
+                        )
+                    conflicts = _sync_page_boundary_conflicts(
+                        candidate_measured,
+                        page_id=page_id,
+                        page_line_indices=indices,
+                        boundary="ending",
+                        baseline_conflicts=ending_baseline_conflicts,
+                    )
+                    if not conflicts or target <= earliest:
+                        resolved = candidate
+                        measured = candidate_measured
+                        break
+                    retreat = max(
+                        previous.display_end_ms - incoming.display_start_ms
+                        for previous, incoming in conflicts
+                    )
+                    next_target = max(target - max(int(retreat), 1), earliest)
+                    if next_target == target:
+                        resolved = candidate
+                        measured = candidate_measured
+                        break
+                    target = next_target
+    return resolved
+
+
 def _display_lines_for_style(
     track: TimingTrack,
     style: Style,
@@ -3855,6 +4383,11 @@ def _display_lines_for_style(
             adjust_same_position=True,
             dynamic_single_page_reflow=True,
         )
+    base_kwargs = {
+        **kwargs,
+        "sync_entry": False,
+        "sync_ending": False,
+    }
     if logical_w is None or logical_h is None:
         default_w, default_h = _default_collision_canvas(style)
         logical_w = default_w if logical_w is None else logical_w
@@ -3874,7 +4407,7 @@ def _display_lines_for_style(
         return list(cached[1])
     ideal = compute_display_lines(
         track,
-        **kwargs,
+        **base_kwargs,
         adjust_same_position=False,
         dynamic_single_page_reflow=True,
         independent_line_entry=True,
@@ -3885,7 +4418,7 @@ def _display_lines_for_style(
     resolved = (
         compute_display_lines(
             track,
-            **kwargs,
+            **base_kwargs,
             adjust_same_position=False,
             squeeze_pairs=squeeze_pairs,
             dynamic_single_page_reflow=True,
@@ -3901,12 +4434,19 @@ def _display_lines_for_style(
         combined_pairs = tuple(dict.fromkeys((*squeeze_pairs, *secondary_pairs)))
         resolved = compute_display_lines(
             track,
-            **kwargs,
+            **base_kwargs,
             adjust_same_position=False,
             squeeze_pairs=combined_pairs,
             dynamic_single_page_reflow=True,
             independent_line_entry=True,
         )
+    resolved = _apply_constrained_page_sync(
+        logical_w,
+        logical_h,
+        track,
+        style,
+        resolved,
+    )
     # Keep the track object alive with the cached display lines.  The key uses
     # ``id(track)`` to prevent equal-but-distinct tracks from sharing mutable
     # TimingLine references; retaining the owner also prevents CPython from

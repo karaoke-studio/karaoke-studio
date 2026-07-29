@@ -11,6 +11,45 @@ def _band(line, page, start, end, top, bottom):
     return LineVisualBand(line, page, start, end, top, bottom)
 
 
+def test_cross_axis_separation_prevents_false_page_collision():
+    previous = PageVisualBands(
+        page_id="previous",
+        bands=(
+            LineVisualBand(
+                "a",
+                "previous",
+                0,
+                2_000,
+                100,
+                160,
+                cross_min=0,
+                cross_max=100,
+            ),
+        ),
+    )
+    incoming = PageVisualBands(
+        page_id="incoming",
+        bands=(
+            LineVisualBand(
+                "b",
+                "incoming",
+                500,
+                1_500,
+                120,
+                180,
+                cross_min=200,
+                cross_max=300,
+            ),
+        ),
+    )
+
+    assert solve_page_axis_offsets(
+        [previous, incoming],
+        viewport_min=0,
+        viewport_max=1080,
+    ) == {"previous": 0.0, "incoming": 0.0}
+
+
 def test_half_open_time_windows_do_not_overlap_at_shared_boundary():
     first = _band("a", "p1", 0, 1000, 0, 20)
     second = _band("b", "p2", 1000, 2000, 0, 20)

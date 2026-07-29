@@ -1182,16 +1182,18 @@ class Style:
     line_lane_gap_ms: int = 300
     """同一显示 lane 上相邻两句之间保留的时间间隔。"""
 
-    # 段落 / 同步入退场（对标 Sayatoo sync_ending / section_ending_mode）。
+    # 分段与页级同步入退场。
     # Sayatoo 用手动信号划段落；LRC 无信号，这里改为按间奏间隔自动分段。
     section_gap_ms: int = 4000
     """自动分段阈值：相邻两句演唱空隙（间奏）超过此值即开新段落。"""
 
     sync_entry: bool = False
-    """同步入场：开启后同段落内各 lane 的首行按最早上屏时间同时入场。"""
+    """同步入场：同页各条自动 T 尽量采用最长的共同提前入场时间；向前延伸时，
+    以实际撞到的前方行作为边界，只向后收回本页共同入场边。"""
 
     sync_ending: bool = False
-    """同步退场：开启后同段落内一组两行在段末同时退场，而非逐行先后消失。"""
+    """同步退场：同页各条自动 T 尽量采用最长的共同延迟退场时间；向后延伸时，
+    以实际撞到的后方行作为边界，只向前收回本页共同退场边。"""
 
     section_ending_mode: SectionEndingMode = "hold"
     """段落结束行为：``hold`` 维持现状（按 N3 TopLong 挂到段末）；``clear`` 段末即

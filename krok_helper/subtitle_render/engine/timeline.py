@@ -217,9 +217,10 @@ def compute_display_lines(
 
     ``protect_ms`` 传 0 表示按 N3 规则自动推导（``min(PreTime, PostTime) / 2``）。
 
-    ``sync_entry`` / ``sync_ending`` / ``section_ending_mode`` 是本项目在 N3 之外
-    补的段落同步选项，默认关闭；开启时叠加在 N3 窗口之上。逐行手动覆盖（字幕
-    轨道拖动）优先于全部自动结果。
+    ``sync_entry`` / ``sync_ending`` 是页内各个自动 T 的共同时间候选；带实际
+    画布的渲染路径会以向前/向后实际撞到的行作为边界，收紧本页共同入场/
+    退场时间，碰撞参照行只读。``section_ending_mode`` 仍是段落级清屏选项。
+    逐行手动覆盖（字幕轨道拖动）优先于全部自动结果。
     """
     render_lines = [line for line in track.lines if not line.is_blank and line.chars]
     if not render_lines:
@@ -291,18 +292,22 @@ def compute_display_lines(
     )
     starts = show_times.starts
     display_ends = show_times.ends
+    _synchronize_page_boundaries(
+        starts,
+        display_ends,
+        pages,
+        render_lines,
+        sync_entry=sync_entry,
+        sync_ending=sync_ending,
+    )
 
     _apply_page_lane_offsets(pages, lanes, show_times.force_bottom)
-    if sync_entry:
-        _synchronize_section_entry_starts(starts, lanes, section_ids)
 
     result: list[DisplayLine] = []
     for index, line in enumerate(render_lines):
         display_end = display_ends[index]
-        # 段落 / 同步退场（本项目在 N3 之外的扩展，默认关闭）
+        # 段末清屏仍是 section 级；同步入退场已在 show-time 页级求解中完成。
         sid = section_ids[index]
-        if sync_ending and _is_last_in_lane_in_section(lanes, section_ids, index):
-            display_end = max(display_end, section_end[sid])
         if section_ending_mode == "clear":
             display_end = min(display_end, section_end[sid])
         # 逐行手动覆盖（字幕轨道拖动写入）优先于所有自动布局调整
@@ -528,42 +533,35 @@ def _compute_section_ends(
     return ends
 
 
-def _is_last_in_lane_in_section(
-    lanes: list[int],
-    section_ids: list[int],
-    index: int,
-) -> bool:
-    """该行是否是其所在段落、所在 lane 的最后一行。"""
-    lane = lanes[index]
-    sid = section_ids[index]
-    for candidate in range(index + 1, len(lanes)):
-        if section_ids[candidate] != sid:
-            break  # section_ids 单调不减，离开本段即可停
-        if lanes[candidate] == lane:
-            return False
-    return True
-
-
-def _synchronize_section_entry_starts(
+def _synchronize_page_boundaries(
     starts: list[int],
-    lanes: list[int],
-    section_ids: list[int],
+    ends: list[int],
+    pages: Sequence[ShowTimePage],
+    render_lines: Sequence[TimingLine],
+    *,
+    sync_entry: bool,
+    sync_ending: bool,
 ) -> None:
-    """Set each section's first line per lane to its earliest automatic start."""
-    first_by_section_lane: dict[tuple[int, int], int] = {}
-    common_start_by_section: dict[int, int] = {}
-    for index, (lane, sid) in enumerate(zip(lanes, section_ids)):
-        key = (sid, lane)
-        if key in first_by_section_lane:
-            continue
-        first_by_section_lane[key] = index
-        common_start_by_section[sid] = min(
-            common_start_by_section.get(sid, starts[index]),
-            starts[index],
-        )
+    """Apply raw page-level sync candidates without crossing manual overrides.
 
-    for (sid, _lane), index in first_by_section_lane.items():
-        starts[index] = common_start_by_section[sid]
+    Pixel-aware callers intentionally compute their ordinary schedule with
+    both flags disabled, then constrain these candidates against other pages'
+    already resolved bands.
+    """
+
+    for page in pages:
+        if not page.lines:
+            continue
+        if sync_entry:
+            common_start = min(starts[line] for line in page.lines)
+            for line in page.lines:
+                if render_lines[line].display_start_override_ms is None:
+                    starts[line] = common_start
+        if sync_ending:
+            common_end = max(ends[line] for line in page.lines)
+            for line in page.lines:
+                if render_lines[line].display_end_override_ms is None:
+                    ends[line] = common_end
 
 
 def paragraph_last_line_flags(

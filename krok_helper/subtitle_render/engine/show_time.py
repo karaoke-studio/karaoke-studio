@@ -112,7 +112,7 @@ def compute_show_times(
     ``dynamic_single_page_reflow`` 仅供旧式 N3 ForceBottom 路径使用；新的像素
     避让路径关闭它，避免单行页先按逻辑行位上移、随后又被空间求解器移动一次。
     ``independent_line_entry`` 关闭 TopLong 隐式的页内同步入场：每行先按自己的
-    走字开始减 ``pre_time_ms`` 建立理想窗口，显式同步由上层开关单独处理。
+    走字开始减 ``pre_time_ms`` 建立理想窗口，显式同步由上层按页处理。
     """
 
     total = len(sing_begins)

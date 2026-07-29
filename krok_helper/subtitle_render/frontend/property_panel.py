@@ -7062,12 +7062,24 @@ class PropertyPanel(QWidget):
         sync_row = QHBoxLayout()
         sync_row.setContentsMargins(0, 0, 0, 0)
         self._sync_entry_check = CheckBox("同步入场", section)
+        self._sync_entry_check.setToolTip(
+            "让同一页内未手工调整上屏时间的各个 T 尽量共用一个入场时间，"
+            "共同入场边会尽可能向前延长。\n"
+            "延伸到前方仍在显示且像素相撞的行时，以该碰撞行作为边界，"
+            "只向后收回本页各个 T 的共同入场时间；前方行的时间不会被改动。"
+        )
         self._sync_entry_check.toggled.connect(
             lambda checked: self._update_style(sync_entry=checked)
         )
         sync_row.addWidget(self._sync_entry_check)
 
         self._sync_ending_check = CheckBox("同步退场", section)
+        self._sync_ending_check.setToolTip(
+            "让同一页内未手工调整消失时间的各个 T 尽量共用一个退场时间，"
+            "共同退场边会尽可能向后延长。\n"
+            "延伸到后方已经入场且像素相撞的行时，以该碰撞行作为边界，"
+            "只向前收回本页各个 T 的共同退场时间；后方行的时间不会被改动。"
+        )
         self._sync_ending_check.toggled.connect(
             lambda checked: self._update_style(sync_ending=checked)
         )

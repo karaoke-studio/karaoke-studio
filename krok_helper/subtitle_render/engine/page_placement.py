@@ -17,7 +17,12 @@ CollisionPair = tuple["LineVisualBand", "LineVisualBand", float]
 
 @dataclass(frozen=True)
 class LineVisualBand:
-    """One rendered line's time window and final one-axis pixel bounds."""
+    """One rendered line's stable window and final two-axis ink bounds.
+
+    ``axis_*`` is the only direction the placement solver may translate:
+    horizontal lyrics use Y, vertical lyrics use X.  ``cross_*`` is the
+    orthogonal read-only interval used to reject false rectangle collisions.
+    """
 
     line_id: Hashable
     page_id: Hashable
@@ -29,6 +34,13 @@ class LineVisualBand:
     """Full display start including entry animation, when known."""
     axis_anchor: float | None = None
     """Authored baseline/column centre used to snap an avoided page to a row."""
+    cross_min: float = float("-inf")
+    cross_max: float = float("inf")
+    """Static ink bounds on the non-displacement axis.
+
+    Legacy/unit-test bands omit these fields and therefore conservatively
+    overlap on the cross axis.  Measured renderer bands always provide them.
+    """
 
     def shifted(self, delta: float) -> "LineVisualBand":
         return LineVisualBand(
@@ -42,6 +54,8 @@ class LineVisualBand:
             axis_anchor=(
                 None if self.axis_anchor is None else self.axis_anchor + delta
             ),
+            cross_min=self.cross_min,
+            cross_max=self.cross_max,
         )
 
 
@@ -92,11 +106,19 @@ def bands_require_separation(
     previous: LineVisualBand,
     gap: float = 0.0,
 ) -> bool:
-    """Whether two authored-position bands violate pixel/gap separation."""
+    """Whether two static ink rectangles violate axis/gap separation."""
+
+    incoming = _normalized_band(incoming)
+    previous = _normalized_band(previous)
+    if (
+        incoming.cross_max <= previous.cross_min
+        or incoming.cross_min >= previous.cross_max
+    ):
+        return False
 
     return _separation_deficit(
-        _normalized_band(incoming),
-        _normalized_band(previous),
+        incoming,
+        previous,
         0.0,
         max(float(gap), 0.0),
     ) > 0.0
@@ -236,17 +258,19 @@ def solve_page_axis_offset_windows(
 
 
 def _normalized_band(item: LineVisualBand) -> LineVisualBand:
-    if item.axis_min <= item.axis_max:
+    if item.axis_min <= item.axis_max and item.cross_min <= item.cross_max:
         return item
     return LineVisualBand(
         line_id=item.line_id,
         page_id=item.page_id,
         display_start_ms=item.display_start_ms,
         display_end_ms=item.display_end_ms,
-        axis_min=item.axis_max,
-        axis_max=item.axis_min,
+        axis_min=min(item.axis_min, item.axis_max),
+        axis_max=max(item.axis_min, item.axis_max),
         entry_start_ms=item.entry_start_ms,
         axis_anchor=item.axis_anchor,
+        cross_min=min(item.cross_min, item.cross_max),
+        cross_max=max(item.cross_min, item.cross_max),
     )
 
 
@@ -412,6 +436,11 @@ def _separation_deficit(
     offset: float,
     gap: float,
 ) -> float:
+    if (
+        incoming.cross_max <= previous.cross_min
+        or incoming.cross_min >= previous.cross_max
+    ):
+        return 0.0
     incoming_min = incoming.axis_min + offset
     incoming_max = incoming.axis_max + offset
     if incoming_max + gap <= previous.axis_min:
@@ -429,6 +458,11 @@ def _pixel_overlap(
     previous: LineVisualBand,
     offset: float,
 ) -> float:
+    if (
+        incoming.cross_max <= previous.cross_min
+        or incoming.cross_min >= previous.cross_max
+    ):
+        return 0.0
     return max(
         min(incoming.axis_max + offset, previous.axis_max)
         - max(incoming.axis_min + offset, previous.axis_min),

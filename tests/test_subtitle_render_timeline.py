@@ -15,6 +15,9 @@ from krok_helper.subtitle_render.engine.timeline import (
     visible_display_lines,
 )
 from krok_helper.subtitle_render.models import (
+    TrackPage,
+    TrackPagePlan,
+    TrackSection,
     TimingChar,
     TimingLine,
     TimingTrack,
@@ -470,18 +473,20 @@ def test_section_ending_clear_caps_cross_section_linger():
     assert clear[2].display_end_ms == 3000
 
 
-def test_sync_ending_extends_earlier_lane_to_section_end():
+def test_sync_ending_does_not_cross_page_boundary_to_section_end():
     track = _sectioned_track()
     nosync = _compute(track, sync_ending=False)
     sync = _compute(track, sync_ending=True)
-    # L1(lane1) 是 section0 内 lane1 的末行；同步退场把它延到段末 3000
-    assert nosync[1].display_end_ms == 2000
-    assert sync[1].display_end_ms == 3000
+    # section0 含一个双行页和一个单行页；同步退场只作用于各自页面，
+    # 不能再把第一页延长到整个 section 的末尾。
+    assert [item.display_end_ms for item in sync] == [
+        item.display_end_ms for item in nosync
+    ]
 
 
-def test_sync_entry_is_noop_when_n3_already_enters_the_head_page_together():
+def test_sync_entry_is_noop_when_page_already_enters_together():
     # N3 的段首页下行本来就跟上行同时上屏（BottomLineShowBeginTime → 上行时刻），
-    # 所以"同步入场"在这种结构上无事可做。
+    # 所以 page 级“同步入场”在这种结构上无事可做。
     track = _sectioned_track()
     nosync = _compute(track, sync_entry=False)
     sync = _compute(track, sync_entry=True)
@@ -498,6 +503,34 @@ def test_sync_entry_keeps_manual_start_override_authoritative():
 
     assert sync[0].display_start_ms == 0
     assert sync[1].display_start_ms == 750
+
+
+def test_sync_entry_groups_each_page_instead_of_the_whole_section():
+    track = _track(
+        _make_line([("a", 10_000)], end_ms=11_000),
+        _make_line([("b", 12_000)], end_ms=13_000),
+        _make_line([("c", 20_000)], end_ms=21_000),
+        _make_line([("d", 23_000)], end_ms=24_000),
+    )
+    track.page_plan = TrackPagePlan(
+        [TrackSection([TrackPage(2, "default"), TrackPage(2, "default")])]
+    )
+
+    sync = compute_display_lines(
+        track,
+        lead_in_ms=1_800,
+        tail_ms=1_000,
+        lane_gap_ms=300,
+        sync_entry=True,
+        independent_line_entry=True,
+    )
+
+    assert [item.display_start_ms for item in sync] == [
+        8_200,
+        8_200,
+        18_200,
+        18_200,
+    ]
 
 
 def test_auto_section_boundary_keeps_next_section_from_entering_early():
@@ -522,7 +555,7 @@ def test_auto_section_boundary_prevents_cross_section_hold():
     assert [item.lane for item in sectioned] == [0, 1, 0, 0]
 
 
-def test_red_fraction_odd_section_last_line_uses_own_page_end():
+def test_red_fraction_page_sync_does_not_extend_to_section_end():
     track = _track(
         _make_line([("Do what you think", 65_085)], end_ms=66_365),
         _make_line([("Give it with dedication", 66_585)], end_ms=68_315),
@@ -542,8 +575,14 @@ def test_red_fraction_odd_section_last_line_uses_own_page_end():
 
     assert [item.lane for item in nosync] == [0, 1, 0, 0]
     assert [item.display_end_ms for item in nosync] == [66_865, 69_315, 73_065, 87_915]
-    # 同步退场把 section0 内每个 lane 的末行都延到段末 73_065。
-    assert [item.display_end_ms for item in sync] == [66_865, 73_065, 73_065, 87_915]
+    # 前两行属于第一页，第三行是同 section 的下一页；页级同步不能跨页
+    # 把第二行延长到第三行结束。
+    assert [item.display_end_ms for item in sync] == [
+        69_315,
+        69_315,
+        73_065,
+        87_915,
+    ]
 
 
 # ---------------------------------------------------------------------------
