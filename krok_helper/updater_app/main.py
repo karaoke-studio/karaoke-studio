@@ -72,7 +72,27 @@ def _configure_product() -> None:
 def _enable_gui() -> None:
     """Expose SUG's package-local GUI under its legacy top-level import name."""
 
+    from PyQt6.QtCore import QTimer
     from updater_app import gui as updater_gui
+
+    window_class = updater_gui._UpdaterWindow
+    if not getattr(window_class, "_workbench_foreground_patch", False):
+        original_show_event = window_class.showEvent
+
+        def _show_event(self, event):
+            original_show_event(self, event)
+
+            def _bring_to_front():
+                try:
+                    self.raise_()
+                    self.activateWindow()
+                except RuntimeError:
+                    pass
+
+            QTimer.singleShot(0, _bring_to_front)
+
+        window_class.showEvent = _show_event
+        window_class._workbench_foreground_patch = True
 
     # SUG's standalone entry point lives beside gui.py and therefore imports it
     # as ``from gui import run_gui``.  The workbench entry point lives in a

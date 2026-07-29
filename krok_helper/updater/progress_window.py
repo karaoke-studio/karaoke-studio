@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from PyQt6.QtCore import Qt, QRectF, pyqtSignal
+from PyQt6.QtCore import QTimer, Qt, QRectF, pyqtSignal
 from PyQt6.QtGui import QColor, QCursor, QPainter, QPainterPath
 from PyQt6.QtWidgets import QApplication, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 from qfluentwidgets import ProgressRing, PushButton, themeColor
@@ -26,7 +26,7 @@ class UpdateProgressWindow(QWidget):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
+        self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setFixedSize(self._WIDTH, self._HEIGHT)
 
@@ -69,6 +69,14 @@ class UpdateProgressWindow(QWidget):
 
         self._apply_theme()
         self._center_on_screen()
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        QTimer.singleShot(0, self._bring_to_front)
+
+    def _bring_to_front(self) -> None:
+        self.raise_()
+        self.activateWindow()
 
     # ----------------------------------------------------------------
 

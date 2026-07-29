@@ -51,10 +51,13 @@ def test_workbench_rebrands_sug_updater_log_messages() -> None:
 
 
 def test_workbench_update_progress_window_is_not_always_on_top(qapp) -> None:
-    window = UpdateProgressWindow()
+    parent = UpdateProgressWindow()
+    window = UpdateProgressWindow(parent)
 
     assert window.windowFlags() & Qt.WindowType.FramelessWindowHint
+    assert window.windowFlags() & Qt.WindowType.Window
     assert not window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert window.parentWidget() is parent
 
 
 def test_reused_sug_updater_window_is_not_always_on_top(qapp) -> None:
@@ -65,3 +68,4 @@ def test_reused_sug_updater_window_is_not_always_on_top(qapp) -> None:
 
     assert window.windowFlags() & Qt.WindowType.FramelessWindowHint
     assert not window.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert getattr(type(window), "_workbench_foreground_patch", False)

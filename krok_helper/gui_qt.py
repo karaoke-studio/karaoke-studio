@@ -311,6 +311,14 @@ class WorkbenchUpdateDialog(QDialog):
         self.setMinimumSize(720, 560)
         self._build_ui(release, local_version, source_label, all_releases or [])
 
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        QTimer.singleShot(0, self._bring_to_front)
+
+    def _bring_to_front(self) -> None:
+        self.raise_()
+        self.activateWindow()
+
     @staticmethod
     def _compose_changelog(release, all_releases: list) -> tuple[str, int]:
         """聚合跨版本更新日志。
@@ -7569,7 +7577,7 @@ class KrokHelperQtApp(QMainWindow):
 
         # launch_updater 内部的 Updater.exe 自更新会发起网络下载（数秒到数十秒），
         # 放到后台线程执行，主线程用进度窗给用户反馈并支持取消。
-        progress_win = UpdateProgressWindow()
+        progress_win = UpdateProgressWindow(self)
         progress_win.show()
         worker = LaunchUpdaterWorker(plan, parent=self)
         self._update_launch_worker = worker  # 防 GC
