@@ -74,15 +74,32 @@ _UI_THEME_TO_MODE = {
 }
 
 
+def _sync_fluent_theme(is_dark: bool) -> None:
+    """把解析后的明暗状态无条件推送给 qfluentwidgets。"""
+    from qfluentwidgets import Theme as QFluentTheme, setTheme
+
+    setTheme(
+        QFluentTheme.DARK if is_dark else QFluentTheme.LIGHT,
+        lazy=True,
+    )
+
+
 def apply_settings_theme(settings: AppSettings) -> None:
     """根据 ``settings.ui_theme`` 推送主题。
 
     在 ``MainWindow`` 构造之前调，让 SUG ``theme`` 单例先把 QApplication
     palette / qfluentwidgets Theme 全部 settle 到目标模式 —— 这样窗口
     首次绘制就是正确颜色，避免"浅色闪一帧"。
+
+    ``Theme.mode`` 对相同值赋值时会直接返回。特别是工作台与 SUG 都使用
+    ``auto``、而系统当前为深色时，仅写 ``theme.mode = AUTO`` 不会触发
+    qfluentwidgets 的首次同步，最终会形成"SUG 自绘控件为深色、Fluent
+    控件仍为浅色"的半亮半暗界面。因此这里始终根据 ``theme.is_dark``
+    显式推送一次 Fluent Theme。
     """
     mode = _UI_THEME_TO_MODE.get(settings.ui_theme, ThemeMode.AUTO)
     theme.mode = mode
+    _sync_fluent_theme(theme.is_dark)
 
 
 # ════════════════════════════════════════════════════════════════════════
