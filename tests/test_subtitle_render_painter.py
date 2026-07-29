@@ -9094,6 +9094,33 @@ def test_sync_entry_is_controlled_only_by_its_switch(qapp):
     assert [synchronized[index][0] for index in range(2)] == [8_200, 8_200]
 
 
+def test_page_sync_boundary_extension_never_shortens_existing_windows():
+    lines = [
+        TimingLine(chars=[TimingChar(text, 1_000)], end_ms=2_000)
+        for text in ("A", "B", "C")
+    ]
+    display_lines = [
+        DisplayLine(line, index, start, end)
+        for index, (line, start, end) in enumerate(
+            zip(lines, (100, 200, 300), (700, 600, 500))
+        )
+    ]
+
+    entry = subtitle_painter._extend_page_display_boundary(
+        display_lines,
+        (0, 1, 2),
+        start_ms=250,
+    )
+    ending = subtitle_painter._extend_page_display_boundary(
+        display_lines,
+        (0, 1, 2),
+        end_ms=650,
+    )
+
+    assert [item.display_start_ms for item in entry] == [100, 200, 250]
+    assert [item.display_end_ms for item in ending] == [700, 650, 650]
+
+
 def test_page_ts_sync_entry_uses_colliding_previous_line_as_read_only_bound(qapp):
     lines = [
         TimingLine(chars=[TimingChar(text, start)], end_ms=end)
@@ -9129,15 +9156,22 @@ def test_page_ts_sync_entry_uses_colliding_previous_line_as_read_only_bound(qapp
         logical_h=1080,
     )
 
-    # 第一页先完成自己的页内同步；第二页随后只能收回自己的入场边，
-    # 不能为了获得更早的共同入场而改写第一页。
+    # 第一页可以完整同步；第二页只能把较晚的 T 向前延长到碰撞边界，
+    # 已经更早上屏的 T 不得反向压缩来强求共同边界。
     assert synchronized[0][0] == synchronized[1][0] == baseline[0][0]
     assert synchronized[0][1] == baseline[0][1]
     assert synchronized[1][1] == baseline[1][1]
-    assert synchronized[2][0] == synchronized[3][0]
-    # B 的退场动画从 14_000ms 开始，稳定碰撞箱在这里失效；同步入场
-    # 可以贴着该边界开始，但不能反过来压缩 B。
-    assert synchronized[2][0] == 14_000
+    assert synchronized[2][0] == baseline[2][0]
+    # B 的稳定碰撞箱在 14_200ms 失效；同步入场可以把较晚的 D
+    # 延长到该边界，但允许 C/D 最终不同步。
+    assert synchronized[3][0] == baseline[1][1] == 14_200
+    offsets = subtitle_painter.resolved_page_offsets_for_style(
+        1920,
+        1080,
+        track,
+        replace(base_style, sync_entry=True),
+    )
+    assert offsets == {index: (0.0, 0.0) for index in range(4)}
 
 
 def test_page_ts_sync_ending_uses_colliding_next_line_as_read_only_bound(qapp):
@@ -9177,7 +9211,9 @@ def test_page_ts_sync_ending_uses_colliding_next_line_as_read_only_bound(qapp):
 
     assert synchronized[2] == baseline[2]
     assert synchronized[3] == baseline[3]
-    assert synchronized[0][1] == synchronized[1][1]
+    # A 向后延长到下一页边界；原本消失更晚的 B 绝不能向前压缩。
+    assert synchronized[0][1] > baseline[0][1]
+    assert synchronized[1][1] == baseline[1][1]
     assert synchronized[0][1] <= baseline[2][0]
 
 

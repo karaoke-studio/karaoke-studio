@@ -4093,6 +4093,7 @@ def _sync_page_boundary_conflicts(
     *,
     page_id: tuple[int, int],
     page_line_indices: tuple[int, ...],
+    sync_line_indices: tuple[int, ...] | None = None,
     boundary: str,
     baseline_conflicts: dict[tuple[int, int], tuple[int, int]],
 ) -> list[tuple[LineVisualBand, LineVisualBand]]:
@@ -4106,12 +4107,15 @@ def _sync_page_boundary_conflicts(
 
     conflicts: list[tuple[LineVisualBand, LineVisualBand]] = []
     page_indices = set(page_line_indices)
+    active_indices = set(sync_line_indices or page_line_indices)
     first_page_index = min(page_line_indices)
     last_page_index = max(page_line_indices)
     current_bands = [
         (render_index, band)
         for render_index, measured_page, band, _gap in measured
-        if measured_page == page_id and render_index in page_indices
+        if measured_page == page_id
+        and render_index in page_indices
+        and render_index in active_indices
     ]
     reference_bands = sorted(
         [
@@ -4193,7 +4197,7 @@ def _sync_page_boundary_conflicts(
     return conflicts
 
 
-def _replace_page_display_boundary(
+def _extend_page_display_boundary(
     display_lines: list[DisplayLine],
     indices: tuple[int, ...],
     *,
@@ -4206,10 +4210,14 @@ def _replace_page_display_boundary(
         changed[index] = replace(
             item,
             display_start_ms=(
-                item.display_start_ms if start_ms is None else int(start_ms)
+                item.display_start_ms
+                if start_ms is None
+                else min(int(item.display_start_ms), int(start_ms))
             ),
             display_end_ms=(
-                item.display_end_ms if end_ms is None else int(end_ms)
+                item.display_end_ms
+                if end_ms is None
+                else max(int(item.display_end_ms), int(end_ms))
             ),
         )
     return changed
@@ -4225,12 +4233,12 @@ def _apply_constrained_page_sync(
     """Extend page sync boundaries without rewriting another page's schedule.
 
     Ordinary per-line collision compression is already complete when this
-    function runs.  The automatic T lines *within one page* then share the
-    page's earliest entry / latest ending candidate.  A colliding earlier line
-    bounds that page's common entry; a colliding later line bounds its common
-    ending.  Only the synchronized page boundary is retracted.  The collision
-    reference line is read-only, and unresolved conflicts fall through to
-    rigid placement.
+    function runs.  The automatic T lines *within one page* then extend toward
+    the page's earliest entry / latest ending candidate.  Existing windows are
+    never shortened: a colliding earlier line may stop a later T from reaching
+    the earliest entry, and a colliding later line may stop an earlier T from
+    reaching the latest ending.  Partial synchronization is valid.  Collision
+    reference lines remain read-only.
     """
 
     if not display_lines or not (style.sync_entry or style.sync_ending):
@@ -4252,64 +4260,76 @@ def _apply_constrained_page_sync(
     for page_id in page_order:
         indices = tuple(page_indices[page_id])
         if style.sync_entry:
-            automatic = tuple(
+            automatic = {
                 index
                 for index in indices
                 if resolved[index].line.display_start_override_ms is None
-            )
+            }
             if automatic:
-                entry_baseline_conflicts = _measured_conflict_windows(
-                    measured
-                )
-                target = min(
+                page_target = min(
                     int(resolved[index].display_start_ms) for index in indices
                 )
-                latest = min(
-                    max(
-                        _line_start_ms(resolved[index].line)
-                        - _auto_entry_reserve_ms(
-                            style, resolved[index].line
-                        ),
-                        0,
-                    )
-                    for index in automatic
-                )
-                target = min(target, latest)
-                for _pass in range(len(display_lines) + 1):
-                    candidate = _replace_page_display_boundary(
-                        resolved, automatic, start_ms=target
-                    )
-                    candidate_measured = _retime_measured_collision_bands(
-                        measured,
-                        candidate,
-                        style,
-                        automatic,
-                    )
-                    if candidate_measured is None:
-                        candidate_measured = _measure_collision_bands(
-                            logical_w, logical_h, track, style, candidate
+                for page_pos, index in enumerate(indices):
+                    if index not in automatic:
+                        continue
+                    latest = int(resolved[index].display_start_ms)
+                    order_floor = (
+                        max(
+                            int(resolved[prior].display_start_ms)
+                            for prior in indices[:page_pos]
                         )
-                    conflicts = _sync_page_boundary_conflicts(
-                        candidate_measured,
-                        page_id=page_id,
-                        page_line_indices=indices,
-                        boundary="entry",
-                        baseline_conflicts=entry_baseline_conflicts,
+                        if page_pos
+                        else page_target
                     )
-                    if not conflicts or target >= latest:
-                        resolved = candidate
-                        measured = candidate_measured
-                        break
-                    delay = max(
-                        previous.display_end_ms - incoming.display_start_ms
-                        for previous, incoming in conflicts
+                    target = min(
+                        max(int(page_target), int(order_floor)),
+                        latest,
                     )
-                    next_target = min(target + max(int(delay), 1), latest)
-                    if next_target == target:
-                        resolved = candidate
-                        measured = candidate_measured
-                        break
-                    target = next_target
+                    if target >= latest:
+                        continue
+                    entry_baseline_conflicts = _measured_conflict_windows(
+                        measured
+                    )
+                    for _pass in range(len(display_lines) + 1):
+                        candidate = _extend_page_display_boundary(
+                            resolved, (index,), start_ms=target
+                        )
+                        candidate_measured = _retime_measured_collision_bands(
+                            measured,
+                            candidate,
+                            style,
+                            (index,),
+                        )
+                        if candidate_measured is None:
+                            candidate_measured = _measure_collision_bands(
+                                logical_w, logical_h, track, style, candidate
+                            )
+                        conflicts = _sync_page_boundary_conflicts(
+                            candidate_measured,
+                            page_id=page_id,
+                            page_line_indices=indices,
+                            sync_line_indices=(index,),
+                            boundary="entry",
+                            baseline_conflicts=entry_baseline_conflicts,
+                        )
+                        if not conflicts or target >= latest:
+                            resolved = candidate
+                            measured = candidate_measured
+                            break
+                        delay = max(
+                            previous.display_end_ms
+                            - incoming.display_start_ms
+                            for previous, incoming in conflicts
+                        )
+                        next_target = min(
+                            target + max(int(delay), 1),
+                            latest,
+                        )
+                        if next_target == target:
+                            resolved = candidate
+                            measured = candidate_measured
+                            break
+                        target = next_target
 
         if style.sync_ending:
             automatic = tuple(
@@ -4318,51 +4338,57 @@ def _apply_constrained_page_sync(
                 if resolved[index].line.display_end_override_ms is None
             )
             if automatic:
-                ending_baseline_conflicts = _measured_conflict_windows(
-                    measured
-                )
-                target = max(
+                page_target = max(
                     int(resolved[index].display_end_ms) for index in indices
                 )
-                earliest = max(
-                    _line_end_ms(resolved[index].line) for index in automatic
-                )
-                target = max(target, earliest)
-                for _pass in range(len(display_lines) + 1):
-                    candidate = _replace_page_display_boundary(
-                        resolved, automatic, end_ms=target
+                for index in automatic:
+                    earliest = int(resolved[index].display_end_ms)
+                    target = max(int(page_target), earliest)
+                    if target <= earliest:
+                        continue
+                    ending_baseline_conflicts = _measured_conflict_windows(
+                        measured
                     )
-                    candidate_measured = _retime_measured_collision_bands(
-                        measured,
-                        candidate,
-                        style,
-                        automatic,
-                    )
-                    if candidate_measured is None:
-                        candidate_measured = _measure_collision_bands(
-                            logical_w, logical_h, track, style, candidate
+                    for _pass in range(len(display_lines) + 1):
+                        candidate = _extend_page_display_boundary(
+                            resolved, (index,), end_ms=target
                         )
-                    conflicts = _sync_page_boundary_conflicts(
-                        candidate_measured,
-                        page_id=page_id,
-                        page_line_indices=indices,
-                        boundary="ending",
-                        baseline_conflicts=ending_baseline_conflicts,
-                    )
-                    if not conflicts or target <= earliest:
-                        resolved = candidate
-                        measured = candidate_measured
-                        break
-                    retreat = max(
-                        previous.display_end_ms - incoming.display_start_ms
-                        for previous, incoming in conflicts
-                    )
-                    next_target = max(target - max(int(retreat), 1), earliest)
-                    if next_target == target:
-                        resolved = candidate
-                        measured = candidate_measured
-                        break
-                    target = next_target
+                        candidate_measured = _retime_measured_collision_bands(
+                            measured,
+                            candidate,
+                            style,
+                            (index,),
+                        )
+                        if candidate_measured is None:
+                            candidate_measured = _measure_collision_bands(
+                                logical_w, logical_h, track, style, candidate
+                            )
+                        conflicts = _sync_page_boundary_conflicts(
+                            candidate_measured,
+                            page_id=page_id,
+                            page_line_indices=indices,
+                            sync_line_indices=(index,),
+                            boundary="ending",
+                            baseline_conflicts=ending_baseline_conflicts,
+                        )
+                        if not conflicts or target <= earliest:
+                            resolved = candidate
+                            measured = candidate_measured
+                            break
+                        retreat = max(
+                            previous.display_end_ms
+                            - incoming.display_start_ms
+                            for previous, incoming in conflicts
+                        )
+                        next_target = max(
+                            target - max(int(retreat), 1),
+                            earliest,
+                        )
+                        if next_target == target:
+                            resolved = candidate
+                            measured = candidate_measured
+                            break
+                        target = next_target
     return resolved
 
 

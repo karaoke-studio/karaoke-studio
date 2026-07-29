@@ -217,9 +217,9 @@ def compute_display_lines(
 
     ``protect_ms`` 传 0 表示按 N3 规则自动推导（``min(PreTime, PostTime) / 2``）。
 
-    ``sync_entry`` / ``sync_ending`` 是页内各个自动 T 的共同时间候选；带实际
-    画布的渲染路径会以向前/向后实际撞到的行作为边界，收紧本页共同入场/
-    退场时间，碰撞参照行只读。``section_ending_mode`` 仍是段落级清屏选项。
+    ``sync_entry`` / ``sync_ending`` 是页内各个自动 T 的单向延长候选；带实际
+    画布的渲染路径会以向前/向后实际撞到的行作为边界，允许部分同步，但绝不
+    缩短任何行原有的显示窗口。``section_ending_mode`` 仍是段落级清屏选项。
     逐行手动覆盖（字幕轨道拖动）优先于全部自动结果。
     """
     render_lines = [line for line in track.lines if not line.is_blank and line.chars]

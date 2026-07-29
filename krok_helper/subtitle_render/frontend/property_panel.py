@@ -7063,10 +7063,10 @@ class PropertyPanel(QWidget):
         sync_row.setContentsMargins(0, 0, 0, 0)
         self._sync_entry_check = CheckBox("同步入场", section)
         self._sync_entry_check.setToolTip(
-            "让同一页内未手工调整上屏时间的各个 T 尽量共用一个入场时间，"
-            "共同入场边会尽可能向前延长。\n"
-            "延伸到前方仍在显示且像素相撞的行时，以该碰撞行作为边界，"
-            "只向后收回本页各个 T 的共同入场时间；前方行的时间不会被改动。"
+            "只把同一页内较晚上屏、且未手工调整上屏时间的 T 尽量向前延长，"
+            "目标是接近本页最早的上屏时间。\n"
+            "延伸到前方仍在显示且像素相撞的行时便停在碰撞边界；"
+            "允许各个 T 最终不同步。已经更早上屏的 T 绝不会被向后压缩。"
         )
         self._sync_entry_check.toggled.connect(
             lambda checked: self._update_style(sync_entry=checked)
@@ -7075,10 +7075,10 @@ class PropertyPanel(QWidget):
 
         self._sync_ending_check = CheckBox("同步退场", section)
         self._sync_ending_check.setToolTip(
-            "让同一页内未手工调整消失时间的各个 T 尽量共用一个退场时间，"
-            "共同退场边会尽可能向后延长。\n"
-            "延伸到后方已经入场且像素相撞的行时，以该碰撞行作为边界，"
-            "只向前收回本页各个 T 的共同退场时间；后方行的时间不会被改动。"
+            "只把同一页内较早消失、且未手工调整消失时间的 T 尽量向后延长，"
+            "目标是接近本页最晚的消失时间。\n"
+            "延伸到后方已经入场且像素相撞的行时便停在碰撞边界；"
+            "允许各个 T 最终不同步。已经更晚消失的 T 绝不会被向前压缩。"
         )
         self._sync_ending_check.toggled.connect(
             lambda checked: self._update_style(sync_ending=checked)
