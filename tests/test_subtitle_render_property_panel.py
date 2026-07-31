@@ -5364,6 +5364,82 @@ def test_preview_player_keyboard_shortcuts_control_transport(qapp, monkeypatch):
     assert preview._space_shortcut.context() == Qt.ShortcutContext.WindowShortcut
 
 
+def _preview_video_click_target(preview):
+    canvas = preview._preview_panel.canvas
+    return getattr(canvas, "viewport", lambda: None)() or canvas
+
+
+def _preview_video_mouse_event(widget, kind):
+    pos = QPointF(widget.rect().center())
+    return QMouseEvent(
+        kind,
+        pos,
+        widget.mapToGlobal(widget.rect().center()).toPointF(),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+
+
+def test_preview_player_video_click_toggles_playback(qapp, monkeypatch):
+    monkeypatch.setenv("KROK_SUBTITLE_PREVIEW", "raster")
+    owner = QWidget()
+    owner.resize(1600, 900)
+    preview = mw.PreviewPlayerWindow(owner)
+    toggled: list[bool] = []
+    monkeypatch.setattr(
+        preview.transport_bar,
+        "toggle_play",
+        lambda: toggled.append(True),
+    )
+    preview._preview_panel.set_populated(True)
+    preview.resize(800, 492)
+    preview.show()
+    qapp.processEvents()
+
+    target = _preview_video_click_target(preview)
+    event = _preview_video_mouse_event(target, QEvent.Type.MouseButtonRelease)
+    assert preview.eventFilter(target, event) is True
+
+    assert toggled == [True]
+    preview.close()
+    owner.close()
+
+
+def test_preview_player_video_double_click_toggles_window_and_release_toggles_playback(
+    qapp, monkeypatch
+):
+    monkeypatch.setenv("KROK_SUBTITLE_PREVIEW", "raster")
+    owner = QWidget()
+    owner.resize(1600, 900)
+    preview = mw.PreviewPlayerWindow(owner)
+    toggled: list[bool] = []
+    expanded: list[bool] = []
+    monkeypatch.setattr(
+        preview.transport_bar,
+        "toggle_play",
+        lambda: toggled.append(True),
+    )
+    monkeypatch.setattr(preview, "_toggle_maximized", lambda: expanded.append(True))
+    preview._preview_panel.set_populated(True)
+    preview.resize(800, 492)
+    preview.show()
+    qapp.processEvents()
+
+    target = _preview_video_click_target(preview)
+    double_click = _preview_video_mouse_event(target, QEvent.Type.MouseButtonDblClick)
+    assert preview.eventFilter(target, double_click) is True
+    release_after_double_click = _preview_video_mouse_event(
+        target, QEvent.Type.MouseButtonRelease
+    )
+    assert preview.eventFilter(target, release_after_double_click) is True
+
+    assert expanded == [True]
+    assert toggled == [True]
+    preview.close()
+    owner.close()
+
+
 def test_video_drop_region_becomes_property_panel_after_video_load(qapp, monkeypatch, tmp_path):
     monkeypatch.setattr(mw, "unified_player_enabled", lambda: False)
     monkeypatch.setattr(mw, "fluent_error", lambda *a, **k: None)

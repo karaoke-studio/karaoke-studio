@@ -41,6 +41,7 @@ from typing import Any, Optional
 from uuid import uuid4
 
 from PyQt6.QtCore import (
+    QEvent,
     QFileSystemWatcher,
     QObject,
     QPoint,
@@ -972,6 +973,7 @@ class PreviewPlayerWindow(QWidget):
         self._preview_frame = _AspectRatioBox(self._preview_panel, parent=self)
         self._preview_frame.setMouseTracking(True)
         self._preview_panel.setMouseTracking(True)
+        self._install_video_interaction_filters()
 
         self._top_controls = QWidget(self)
         self._top_controls.setObjectName("PreviewTopControls")
@@ -1114,6 +1116,60 @@ class PreviewPlayerWindow(QWidget):
     @property
     def transport_bar(self) -> TransportBar:
         return self._transport_bar
+
+    def _install_video_interaction_filters(self) -> None:
+        targets = [self._preview_frame, self._preview_panel]
+        canvas = self._preview_panel.canvas
+        targets.append(canvas)
+        viewport = getattr(canvas, "viewport", lambda: None)()
+        if viewport is not None:
+            targets.append(viewport)
+        for target in targets:
+            target.installEventFilter(self)
+            target.setMouseTracking(True)
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:  # noqa: N802
+        if self._video_interaction_target(watched):
+            if event.type() == QEvent.Type.MouseButtonRelease:
+                if (
+                    event.button() == Qt.MouseButton.LeftButton
+                    and self._video_area_contains(watched, event.position().toPoint())
+                ):
+                    self._toggle_playback()
+                    event.accept()
+                    return True
+            elif event.type() == QEvent.Type.MouseButtonDblClick:
+                if (
+                    event.button() == Qt.MouseButton.LeftButton
+                    and self._video_area_contains(watched, event.position().toPoint())
+                ):
+                    self._toggle_maximized()
+                    self.show_controls()
+                    event.accept()
+                    return True
+        return super().eventFilter(watched, event)
+
+    def _video_interaction_target(self, watched: QObject) -> bool:
+        if watched in {self._preview_frame, self._preview_panel}:
+            return True
+        canvas = self._preview_panel.canvas
+        if watched is canvas:
+            return True
+        viewport = getattr(canvas, "viewport", lambda: None)()
+        return watched is viewport
+
+    def _video_area_contains(self, watched: QObject, pos: QPoint) -> bool:
+        if self._collapsed or not self._preview_panel.is_populated():
+            return False
+        widget = watched if isinstance(watched, QWidget) else None
+        if widget is None:
+            return False
+        window_pos = widget.mapTo(self, pos)
+        frame_rect = QRect(
+            self._preview_frame.mapTo(self, QPoint(0, 0)),
+            self._preview_frame.size(),
+        )
+        return frame_rect.contains(window_pos)
 
     def min_video_size(self) -> QSize:
         """当前画布形状下的最小画面尺寸（16:9 时仍是原来的 426×240）。"""
