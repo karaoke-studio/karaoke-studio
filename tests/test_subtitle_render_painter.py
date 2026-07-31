@@ -9018,6 +9018,48 @@ def test_animation_only_cross_page_overlap_does_not_move_incoming_page(qapp):
     assert offsets == {index: (0.0, 0.0) for index in range(4)}
 
 
+def test_sync_collision_time_window_keeps_fade_duration(qapp):
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("歌", 2_000)], end_ms=3_000)]
+    )
+    display = [
+        DisplayLine(
+            track.lines[0],
+            lane=0,
+            display_start_ms=1_000,
+            display_end_ms=4_000,
+        )
+    ]
+    style = replace(
+        Style(),
+        entry_anim="fade",
+        entry_lead_ms=250,
+        exit_anim="fade",
+        exit_fade_ms=400,
+    )
+
+    stable = subtitle_painter._measure_collision_bands(
+        1280, 720, track, style, display
+    )
+    synced = subtitle_painter._measure_collision_bands(
+        1280,
+        720,
+        track,
+        style,
+        display,
+        time_window="display",
+    )
+
+    assert (stable[0][2].display_start_ms, stable[0][2].display_end_ms) == (
+        1_250,
+        3_600,
+    )
+    assert (synced[0][2].display_start_ms, synced[0][2].display_end_ms) == (
+        1_000,
+        4_000,
+    )
+
+
 def test_changed_page_layout_does_not_make_entry_animation_collidable(qapp):
     from krok_helper.subtitle_render.engine.page_plan import (
         project_page_plan_to_legacy_fields,
@@ -9223,8 +9265,8 @@ def test_page_ts_sync_entry_uses_colliding_previous_line_as_read_only_bound(qapp
     assert synchronized[0][1] == baseline[0][1]
     assert synchronized[1][1] == baseline[1][1]
     assert synchronized[2][0] == baseline[2][0]
-    # B 的稳定碰撞箱在 14_200ms 失效；同步入场可以把较晚的 D
-    # 延长到该边界，但允许 C/D 最终不同步。
+    # B 的完整显示窗口在 14_200ms 失效；同步入场不能把 D 拉到
+    # 早于这个边界的位置，也不能为了强求共同边界去缩短 B。
     assert synchronized[3][0] == baseline[1][1] == 14_200
     offsets = subtitle_painter.resolved_page_offsets_for_style(
         1920,
@@ -9272,10 +9314,11 @@ def test_page_ts_sync_ending_uses_colliding_next_line_as_read_only_bound(qapp):
 
     assert synchronized[2] == baseline[2]
     assert synchronized[3] == baseline[3]
-    # A 向后延长到下一页边界；原本消失更晚的 B 绝不能向前压缩。
-    assert synchronized[0][1] > baseline[0][1]
+    # A 已经被普通排期压到 C 入场前一个 IntervalTime 的边界；
+    # 同步出场不能为了追上 B 再侵入这段间隔。
+    assert synchronized[0][1] == baseline[0][1]
     assert synchronized[1][1] == baseline[1][1]
-    assert synchronized[0][1] <= baseline[2][0]
+    assert synchronized[0][1] + base_style.line_lane_gap_ms <= baseline[2][0]
 
 
 def test_page_sync_boundary_scans_past_non_colliding_intermediate_page():
@@ -9396,3 +9439,33 @@ def test_page_sync_boundary_scans_past_non_colliding_intermediate_page():
             baseline_conflicts=baseline_overlap,
         )
     ) == 1
+
+    near_gap = list(measured)
+    render_index, page_id, band, gap = near_gap[2]
+    near_gap[2] = (
+        render_index,
+        page_id,
+        replace(band, display_start_ms=110, display_end_ms=200),
+        gap,
+    )
+    assert len(
+        subtitle_painter._sync_page_boundary_conflicts(
+            near_gap,
+            page_id=(0, 2),
+            page_line_indices=(2,),
+            boundary="entry",
+            baseline_conflicts={},
+            time_gap_ms=20,
+        )
+    ) == 1
+    assert (
+        subtitle_painter._sync_page_boundary_conflicts(
+            near_gap,
+            page_id=(0, 2),
+            page_line_indices=(2,),
+            boundary="entry",
+            baseline_conflicts={},
+            time_gap_ms=10,
+        )
+        == []
+    )

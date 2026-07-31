@@ -3802,8 +3802,10 @@ def _measure_collision_bands(
     track: TimingTrack,
     style: Style,
     display_lines: list[DisplayLine],
+    *,
+    time_window: str = "stable",
 ) -> list[tuple[int, tuple[int, int], LineVisualBand, float]]:
-    """Measure stable-ink bands without changing display-time behaviour."""
+    """Measure ink bands without changing display-time behaviour."""
 
     if not display_lines:
         return []
@@ -3878,8 +3880,8 @@ def _measure_collision_bands(
         if axis_bounds is None:
             continue
         assert cross_bounds is not None
-        collision_start, collision_end = _display_line_static_collision_window(
-            display_line, style
+        collision_start, collision_end = _display_line_collision_time_window(
+            display_line, style, time_window=time_window
         )
         if collision_end <= collision_start:
             continue
@@ -4097,6 +4099,8 @@ def _retime_measured_collision_bands(
     display_lines: list[DisplayLine],
     style: Style,
     changed_indices: tuple[int, ...],
+    *,
+    time_window: str = "stable",
 ) -> list[tuple[int, tuple[int, int], LineVisualBand, float]] | None:
     """Reuse measured X/Y rectangles when only display boundaries changed.
 
@@ -4114,9 +4118,10 @@ def _retime_measured_collision_bands(
         if render_index not in changed:
             retimed.append((render_index, page_id, band, gap))
             continue
-        collision_start, collision_end = _display_line_static_collision_window(
+        collision_start, collision_end = _display_line_collision_time_window(
             display_lines[render_index],
             style,
+            time_window=time_window,
         )
         if collision_end <= collision_start:
             continue
@@ -4146,6 +4151,7 @@ def _sync_page_boundary_conflicts(
     sync_line_indices: tuple[int, ...] | None = None,
     boundary: str,
     baseline_conflicts: dict[tuple[int, int], tuple[int, int]],
+    time_gap_ms: int = 0,
 ) -> list[tuple[LineVisualBand, LineVisualBand]]:
     """Return sync collisions against every line in the relevant time direction.
 
@@ -4156,6 +4162,7 @@ def _sync_page_boundary_conflicts(
     """
 
     conflicts: list[tuple[LineVisualBand, LineVisualBand]] = []
+    required_time_gap = max(int(time_gap_ms), 0)
     page_indices = set(page_line_indices)
     active_indices = set(sync_line_indices or page_line_indices)
     first_page_index = min(page_line_indices)
@@ -4203,9 +4210,14 @@ def _sync_page_boundary_conflicts(
         )
         for pos in positions:
             if boundary == "entry":
-                if prefix_latest_end[pos] <= current_band.display_start_ms:
+                if (
+                    prefix_latest_end[pos] + required_time_gap
+                    <= current_band.display_start_ms
+                ):
                     break
-            elif suffix_earliest_start[pos] >= current_band.display_end_ms:
+            elif suffix_earliest_start[pos] >= (
+                current_band.display_end_ms + required_time_gap
+            ):
                 break
             reference_index, reference_band = reference_bands[pos]
             pair = (
@@ -4216,7 +4228,11 @@ def _sync_page_boundary_conflicts(
                 previous_band, incoming_band = reference_band, current_band
             else:
                 previous_band, incoming_band = current_band, reference_band
-            if not time_windows_overlap(previous_band, incoming_band):
+            if (
+                int(incoming_band.display_start_ms)
+                - int(previous_band.display_end_ms)
+                >= required_time_gap
+            ):
                 continue
             if not bands_require_separation(
                 incoming_band, previous_band, 0.0
@@ -4234,6 +4250,8 @@ def _sync_page_boundary_conflicts(
             )
             baseline_overlap = baseline_conflicts.get(pair)
             if (
+                overlap[0] < overlap[1]
+                and
                 baseline_overlap is not None
                 and overlap[0] >= baseline_overlap[0]
                 and overlap[1] <= baseline_overlap[1]
@@ -4294,8 +4312,14 @@ def _apply_constrained_page_sync(
     if not display_lines or not (style.sync_entry or style.sync_ending):
         return display_lines
     baseline = list(display_lines)
+    sync_gap_ms = max(int(style.line_lane_gap_ms), 0)
     measured = _measure_collision_bands(
-        logical_w, logical_h, track, style, baseline
+        logical_w,
+        logical_h,
+        track,
+        style,
+        baseline,
+        time_window="display",
     )
     page_order: list[tuple[int, int]] = []
     page_indices: dict[tuple[int, int], list[int]] = {}
@@ -4349,10 +4373,16 @@ def _apply_constrained_page_sync(
                             candidate,
                             style,
                             (index,),
+                            time_window="display",
                         )
                         if candidate_measured is None:
                             candidate_measured = _measure_collision_bands(
-                                logical_w, logical_h, track, style, candidate
+                                logical_w,
+                                logical_h,
+                                track,
+                                style,
+                                candidate,
+                                time_window="display",
                             )
                         conflicts = _sync_page_boundary_conflicts(
                             candidate_measured,
@@ -4361,6 +4391,7 @@ def _apply_constrained_page_sync(
                             sync_line_indices=(index,),
                             boundary="entry",
                             baseline_conflicts=entry_baseline_conflicts,
+                            time_gap_ms=sync_gap_ms,
                         )
                         if not conflicts or target >= latest:
                             resolved = candidate
@@ -4368,6 +4399,7 @@ def _apply_constrained_page_sync(
                             break
                         delay = max(
                             previous.display_end_ms
+                            + sync_gap_ms
                             - incoming.display_start_ms
                             for previous, incoming in conflicts
                         )
@@ -4408,10 +4440,16 @@ def _apply_constrained_page_sync(
                             candidate,
                             style,
                             (index,),
+                            time_window="display",
                         )
                         if candidate_measured is None:
                             candidate_measured = _measure_collision_bands(
-                                logical_w, logical_h, track, style, candidate
+                                logical_w,
+                                logical_h,
+                                track,
+                                style,
+                                candidate,
+                                time_window="display",
                             )
                         conflicts = _sync_page_boundary_conflicts(
                             candidate_measured,
@@ -4420,6 +4458,7 @@ def _apply_constrained_page_sync(
                             sync_line_indices=(index,),
                             boundary="ending",
                             baseline_conflicts=ending_baseline_conflicts,
+                            time_gap_ms=sync_gap_ms,
                         )
                         if not conflicts or target <= earliest:
                             resolved = candidate
@@ -4427,6 +4466,7 @@ def _apply_constrained_page_sync(
                             break
                         retreat = max(
                             previous.display_end_ms
+                            + sync_gap_ms
                             - incoming.display_start_ms
                             for previous, incoming in conflicts
                         )
@@ -13606,6 +13646,21 @@ def _display_line_static_collision_window(
     if line_style.exit_anim != "none":
         end -= max(int(line_style.exit_fade_ms), 0)
     return start, max(start, end)
+
+
+def _display_line_collision_time_window(
+    display_line: DisplayLine,
+    style: Style,
+    *,
+    time_window: str,
+) -> tuple[int, int]:
+    if time_window == "display":
+        start = int(display_line.display_start_ms)
+        end = int(display_line.display_end_ms)
+        return start, max(start, end)
+    if time_window != "stable":
+        raise ValueError(f"Unsupported collision time window: {time_window}")
+    return _display_line_static_collision_window(display_line, style)
 
 
 def _style_for_line_display_window(
