@@ -17,9 +17,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Sequence
 
-from PyQt6.QtCore import QPointF, QRectF, Qt, pyqtSignal as Signal
-from PyQt6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPixmap
-from PyQt6.QtWidgets import QStyle, QStyleOption, QWidget
+from PyQt6.QtCore import QPointF, QRect, QRectF, Qt, pyqtSignal as Signal
+from PyQt6.QtGui import QColor, QFont, QFontMetrics, QIntValidator, QPainter, QPixmap
+from PyQt6.QtWidgets import (
+    QHBoxLayout,
+    QStyle,
+    QStyleOption,
+    QWidget,
+)
+from qfluentwidgets import BodyLabel, CardWidget, LineEdit, PrimaryPushButton
 
 from krok_helper.qfluent_compat import hide_fluent_tooltip, show_fluent_tooltip
 from krok_helper.subtitle_render.engine.timeline import compute_char_intervals
@@ -287,8 +293,12 @@ class TrackTimelineView(QWidget):
         self._drag: Optional[tuple] = None
         """进行中的拖动：("scrub",) / ("pan", 抓取点相对视口起点的毫秒差) /
         ("zoom_left",) / ("zoom_right",)。拖动期间暂停播放头自动翻页。"""
+        self._margin_editor: Optional[CardWidget] = None
+        self._margin_edit: Optional[LineEdit] = None
+        self._margin_editor_context: Optional[tuple[int, LineBlock, bool, tuple]] = None
         self._lanes_pixmap: Optional[QPixmap] = None
         self._pixmap_key: Optional[tuple] = None
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         # 裸 QWidget 不设此属性时 QSS 背景/边框不会绘制
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         # themed 回调在主题切换时重设 QSS → 顺带触发重绘；缓存 key 含主题色所以会失效重画
@@ -313,6 +323,7 @@ class TrackTimelineView(QWidget):
         self._track_refs = [track for _name, track in tracks]
         self._windows = []
         self._selected = None
+        self._hide_margin_editor()
         self._view_start_ms = 0.0
         self._desired_span_ms = float(_DEFAULT_VIEW_SPAN_MS)
         self._clamp_view()
@@ -548,6 +559,12 @@ class TrackTimelineView(QWidget):
     def _apply_lead_drag(self, lane_index: int, block: LineBlock, x: float) -> None:
         """拖左把手：改「上屏时刻」覆盖，不晚于开始走字。"""
         ms = min(self._ms_for_x(x), block.start_ms)
+        self._set_display_start_override(lane_index, block, ms)
+        self.update()
+
+    def _set_display_start_override(
+        self, lane_index: int, block: LineBlock, ms: int
+    ) -> None:
         track = self._track_refs[lane_index]
         track.lines[block.line_index].display_start_override_ms = ms
         if lane_index < len(self._windows):
@@ -555,11 +572,16 @@ class TrackTimelineView(QWidget):
                 block.line_index, (block.start_ms, block.end_ms)
             )
             self._windows[lane_index][block.line_index] = (ms, hide)
-        self.update()
 
     def _apply_tail_drag(self, lane_index: int, block: LineBlock, x: float) -> None:
         """拖右把手：改「消失时刻」覆盖，不早于走字结束。"""
         ms = max(self._ms_for_x(x), block.end_ms)
+        self._set_display_end_override(lane_index, block, ms)
+        self.update()
+
+    def _set_display_end_override(
+        self, lane_index: int, block: LineBlock, ms: int
+    ) -> None:
         track = self._track_refs[lane_index]
         track.lines[block.line_index].display_end_override_ms = ms
         if lane_index < len(self._windows):
@@ -567,7 +589,112 @@ class TrackTimelineView(QWidget):
                 block.line_index, (block.start_ms, block.end_ms)
             )
             self._windows[lane_index][block.line_index] = (show, ms)
+
+    def _apply_margin_value(
+        self, lane_index: int, block: LineBlock, *, entry: bool, value_ms: int
+    ) -> None:
+        margin = max(int(value_ms), 0)
+        if entry:
+            self._set_display_start_override(
+                lane_index,
+                block,
+                max(block.start_ms - margin, 0),
+            )
+        else:
+            self._set_display_end_override(
+                lane_index,
+                block,
+                block.end_ms + margin,
+            )
         self.update()
+
+    def _show_margin_editor(
+        self,
+        lane_index: int,
+        block: LineBlock,
+        *,
+        entry: bool,
+        handle_rect: QRectF,
+    ) -> None:
+        show_ms, hide_ms = self._selected_window(lane_index, block)
+        value = (
+            max(block.start_ms - show_ms, 0)
+            if entry
+            else max(hide_ms - block.end_ms, 0)
+        )
+        old_values = self._line_override_values(lane_index, block.line_index)
+
+        if self._margin_editor is None:
+            frame = CardWidget(self)
+            frame.setObjectName("TimelineMarginEditor")
+            frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+            layout = QHBoxLayout(frame)
+            layout.setContentsMargins(8, 4, 8, 4)
+            layout.setSpacing(6)
+            label = BodyLabel("ms", frame)
+            label.setObjectName("TimelineMarginEditorLabel")
+            edit = LineEdit(frame)
+            edit.setValidator(QIntValidator(0, 5_999_990, edit))
+            edit.setClearButtonEnabled(False)
+            edit.setPlaceholderText("0")
+            edit.setFixedWidth(96)
+            ok = PrimaryPushButton("确定", frame)
+            ok.setDefault(True)
+            ok.setAutoDefault(True)
+            layout.addWidget(edit, 1)
+            layout.addWidget(label)
+            layout.addWidget(ok)
+            edit.returnPressed.connect(self._commit_margin_editor)
+            ok.clicked.connect(self._commit_margin_editor)
+            self._margin_editor = frame
+            self._margin_edit = edit
+
+        assert self._margin_editor is not None
+        assert self._margin_edit is not None
+        self._margin_editor_context = (lane_index, block, bool(entry), old_values)
+        self._margin_edit.blockSignals(True)
+        self._margin_edit.setText(str(int(value)))
+        self._margin_edit.blockSignals(False)
+
+        lane_rect = self._lane_geometry()[lane_index][1]
+        width = 156
+        height = max(32, min(44, int(lane_rect.height())))
+        x = int(handle_rect.center().x() - width / 2)
+        x = max(self._plot_left(), min(x, self.width() - width - 6))
+        y = int(lane_rect.center().y() - height / 2)
+        y = max(int(lane_rect.top()), min(y, int(lane_rect.bottom()) - height))
+        self._margin_editor.setGeometry(QRect(x, y, width, height))
+        self._margin_editor.raise_()
+        self._margin_editor.show()
+        self._margin_edit.setFocus(Qt.FocusReason.PopupFocusReason)
+        self._margin_edit.selectAll()
+
+    def _commit_margin_editor(self) -> None:
+        if (
+            self._margin_editor_context is None
+            or self._margin_edit is None
+            or self._margin_editor is None
+        ):
+            return
+        lane_index, block, entry, old_values = self._margin_editor_context
+        text = self._margin_edit.text().strip()
+        self._apply_margin_value(
+            lane_index,
+            block,
+            entry=entry,
+            value_ms=int(text) if text else 0,
+        )
+        new_values = self._line_override_values(lane_index, block.line_index)
+        self._hide_margin_editor()
+        if new_values != old_values:
+            self.displayWindowEdited.emit(
+                lane_index, block.line_index, old_values, new_values
+            )
+
+    def _hide_margin_editor(self) -> None:
+        if self._margin_editor is not None:
+            self._margin_editor.hide()
+        self._margin_editor_context = None
 
     # ------------------------------------------------------------- painting
 
@@ -850,7 +977,14 @@ class TrackTimelineView(QWidget):
         if event.button() != Qt.MouseButton.LeftButton or not self._lanes:
             super().mousePressEvent(event)
             return
+        self.setFocus(Qt.FocusReason.MouseFocusReason)
         pos = event.position()
+        if (
+            self._margin_editor is not None
+            and self._margin_editor.isVisible()
+            and not self._margin_editor.geometry().contains(pos.toPoint())
+        ):
+            self._hide_margin_editor()
         if pos.x() < self._plot_left():
             super().mousePressEvent(event)
             return
@@ -888,6 +1022,40 @@ class TrackTimelineView(QWidget):
             self.seekRequested.emit(self._ms_for_x(pos.x()))
         self.update()
         event.accept()
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 — Qt override
+        if event.button() != Qt.MouseButton.LeftButton or not self._lanes:
+            super().mouseDoubleClickEvent(event)
+            return
+        handles = self._handle_rects()
+        if handles is None:
+            super().mouseDoubleClickEvent(event)
+            return
+        pos = event.position()
+        left_rect, right_rect, lane_index, block = handles
+        if left_rect.adjusted(-3, -3, 3, 3).contains(pos):
+            self._drag = None
+            hide_fluent_tooltip(parent=self)
+            self._show_margin_editor(
+                lane_index,
+                block,
+                entry=True,
+                handle_rect=left_rect,
+            )
+            event.accept()
+            return
+        if right_rect.adjusted(-3, -3, 3, 3).contains(pos):
+            self._drag = None
+            hide_fluent_tooltip(parent=self)
+            self._show_margin_editor(
+                lane_index,
+                block,
+                entry=False,
+                handle_rect=right_rect,
+            )
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def _press_zoombar(self, pos) -> None:
         x0, x1 = self._zoombar_thumb_span()

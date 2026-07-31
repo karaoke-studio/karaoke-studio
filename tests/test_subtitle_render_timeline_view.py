@@ -84,6 +84,11 @@ def test_build_lanes_multiple_sources() -> None:
     assert [lane.name for lane in lanes] == ["主字幕", "コーラス"]
 
 
+def test_timeline_accepts_focus_for_host_shortcuts(qapp) -> None:
+    widget = TrackTimelineView()
+    assert widget.focusPolicy() == Qt.FocusPolicy.StrongFocus
+
+
 def test_build_lanes_utopia_shared_ruby_uses_visual_cell_window(qapp) -> None:
     line = TimingLine(
         chars=[
@@ -138,6 +143,12 @@ def _mouse_event(widget, kind, x: float, y: float) -> QMouseEvent:
 
 def _click(widget: TrackTimelineView, x: float, y: float) -> None:
     widget.mousePressEvent(_mouse_event(widget, QMouseEvent.Type.MouseButtonPress, x, y))
+
+
+def _double_click(widget: TrackTimelineView, x: float, y: float) -> None:
+    widget.mouseDoubleClickEvent(
+        _mouse_event(widget, QMouseEvent.Type.MouseButtonDblClick, x, y)
+    )
 
 
 def _move(widget: TrackTimelineView, x: float, y: float) -> None:
@@ -510,6 +521,64 @@ def test_drag_right_handle_clamps_to_sing_end(qapp) -> None:
     _move(widget, widget._x_for_ms(1200), right_rect.center().y())
     assert track.lines[0].display_end_override_ms == 2600
     _release(widget, widget._x_for_ms(1200), right_rect.center().y())
+
+
+def test_double_click_left_handle_edits_entry_margin(qapp) -> None:
+    track = _make_track()
+    widget = TrackTimelineView()
+    widget.resize(800, 180)
+    widget.set_tracks([("主字幕", track)])
+    widget.set_duration(10_000)
+    widget.set_display_windows([{0: (800, 3000)}])
+
+    edits: list[tuple] = []
+    widget.displayWindowEdited.connect(lambda *args: edits.append(args))
+
+    _lane, lane_rect = widget._lane_geometry()[0]
+    _click(widget, widget._x_for_ms(1650), lane_rect.center().y())
+    left_rect, _right, _lane_idx, _block = widget._handle_rects()
+
+    _double_click(widget, left_rect.center().x(), left_rect.center().y())
+    assert widget._margin_editor is not None
+    assert not widget._margin_editor.isHidden()
+    editor_y = widget._margin_editor.geometry().center().y()
+    assert lane_rect.top() <= editor_y <= lane_rect.bottom()
+    assert widget._margin_edit is not None
+    assert widget._margin_edit.text() == "200"
+
+    widget._margin_edit.setText("600")
+    widget._commit_margin_editor()
+
+    assert track.lines[0].display_start_override_ms == 400
+    assert widget._windows[0][0] == (400, 3000)
+    assert edits == [(0, 0, (None, None), (400, None))]
+
+
+def test_double_click_right_handle_edits_exit_margin(qapp) -> None:
+    track = _make_track()
+    widget = TrackTimelineView()
+    widget.resize(800, 180)
+    widget.set_tracks([("主字幕", track)])
+    widget.set_duration(10_000)
+    widget.set_display_windows([{0: (800, 3000)}])
+
+    edits: list[tuple] = []
+    widget.displayWindowEdited.connect(lambda *args: edits.append(args))
+
+    _lane, lane_rect = widget._lane_geometry()[0]
+    _click(widget, widget._x_for_ms(1650), lane_rect.center().y())
+    _left, right_rect, _lane_idx, _block = widget._handle_rects()
+
+    _double_click(widget, right_rect.center().x(), right_rect.center().y())
+    assert widget._margin_edit is not None
+    assert widget._margin_edit.text() == "400"
+
+    widget._margin_edit.setText("900")
+    widget._commit_margin_editor()
+
+    assert track.lines[0].display_end_override_ms == 3500
+    assert widget._windows[0][0] == (800, 3500)
+    assert edits == [(0, 0, (None, None), (None, 3500))]
 
 
 def test_selection_paint_smoke(qapp) -> None:
