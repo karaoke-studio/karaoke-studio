@@ -388,6 +388,23 @@ def test_handle_hover_shows_effective_animation_name_and_duration(
     assert all("本句" not in text and "全局" not in text for text in shown)
 
 
+def test_block_hover_shows_start_and_end_with_milliseconds(qapp, monkeypatch) -> None:
+    widget = TrackTimelineView()
+    widget.resize(800, 180)
+    widget.set_tracks([("主字幕", _make_track())])
+    widget.set_duration(10_000)
+    shown: list[str] = []
+    monkeypatch.setattr(
+        "krok_helper.subtitle_render.frontend.timeline_view.show_fluent_tooltip",
+        lambda text, **_kwargs: shown.append(text),
+    )
+
+    _lane, lane_rect = widget._lane_geometry()[0]
+    _move(widget, widget._x_for_ms(1650), lane_rect.center().y())
+
+    assert shown == ["开始：00:01.000\n结束：00:02.600\n主唱：あいう"]
+
+
 def test_handle_hover_uses_global_animation_when_line_has_no_override(
     qapp, monkeypatch
 ) -> None:

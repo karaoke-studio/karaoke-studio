@@ -969,9 +969,8 @@ class TrackTimelineView(QWidget):
         _lane, block, _cell = self._hit_test(pos.x(), pos.y())
         if block is not None:
             self.setCursor(Qt.CursorShape.PointingHandCursor)
-            singer = f"｜{block.singer_label}" if block.singer_label else ""
             show_fluent_tooltip(
-                f"{_format_ms(block.start_ms)}{singer}\n{block.text}",
+                _line_block_tooltip(block),
                 parent=self,
                 global_pos=event.globalPosition().toPoint(),
             )
@@ -1046,3 +1045,18 @@ class TrackTimelineView(QWidget):
 def _format_ms(ms: int) -> str:
     total_seconds = max(int(ms), 0) // 1000
     return f"{total_seconds // 60:02d}:{total_seconds % 60:02d}"
+
+
+def _format_precise_ms(ms: int) -> str:
+    value = max(int(ms), 0)
+    total_seconds, millis = divmod(value, 1000)
+    return f"{total_seconds // 60:02d}:{total_seconds % 60:02d}.{millis:03d}"
+
+
+def _line_block_tooltip(block: LineBlock) -> str:
+    singer = f"{block.singer_label}：" if block.singer_label else ""
+    return (
+        f"开始：{_format_precise_ms(block.start_ms)}\n"
+        f"结束：{_format_precise_ms(block.end_ms)}\n"
+        f"{singer}{block.text}"
+    )
