@@ -3673,7 +3673,10 @@ def _char_layout_metrics(
     # Treat ASCII space explicitly.  Some headless Qt font backends expose a
     # tofu outline for it, while NicokaraMaker3 always applies SpaceWidth.
     if ch_text == " ":
-        return font_size * space_percent // 100 + edge_size, 0.0
+        # A space has no path to outline.  Adding EdgeSize here made the visual
+        # gap depend on the main-text stroke (20 px became 35 px in GO GHOST),
+        # even though SpaceWidth is already an explicit percentage of FontSize.
+        return font_size * space_percent // 100, 0.0
 
     advance = _char_advance(ch_text, metrics, latin_metrics, font_for)
     key = _char_metric_key(ch_text, glyph_font, advance, style)
@@ -13962,20 +13965,45 @@ def _active_rubies_for_line(
         return []
     line_start = line.chars[0].start_ms
     line_end = line.end_ms if line.end_ms is not None else line.chars[-1].start_ms
+    intervals = compute_char_intervals(line)
     return [
         ruby
         for ruby in rubies
         if ruby.reading
         and (
             _ruby_has_global_position(ruby)
-            or ruby.pos_end_ms > line_start
-            and ruby.pos_start_ms < line_end
+            or (
+                ruby.pos_end_ms > line_start
+                and ruby.pos_start_ms < line_end
+                and _timed_ruby_matches_line(ruby, line, intervals)
+            )
         )
     ]
 
 
 def _ruby_has_global_position(ruby: RubyAnnotation) -> bool:
     return ruby.pos_start_ms == 0 and ruby.pos_end_ms == 0
+
+
+def _timed_ruby_matches_line(
+    ruby: RubyAnnotation,
+    line: TimingLine,
+    intervals: list[tuple[int, int]],
+) -> bool:
+    time_indices = _ruby_time_indices(ruby, intervals)
+    if not time_indices:
+        return False
+    if not ruby.kanji:
+        return True
+    preferred = set(time_indices)
+    text = "".join(ch.text for ch in line.chars)
+    pos = text.find(ruby.kanji)
+    while pos >= 0:
+        indices = _text_span_indices((pos, pos + len(ruby.kanji)), line)
+        if preferred.intersection(indices):
+            return True
+        pos = text.find(ruby.kanji, pos + 1)
+    return False
 
 
 def _paint_rubies(

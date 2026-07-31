@@ -2338,7 +2338,7 @@ def test_glyph_path_offset_drives_render_path_and_ink_ranges(qapp, monkeypatch):
     )
 
 
-def test_nicokara_space_width_uses_font_percentage_and_edge(qapp):
+def test_space_width_uses_font_percentage_without_outline(qapp):
     line = TimingLine(
         chars=[TimingChar(text=" ", start_ms=1000)],
         end_ms=2000,
@@ -2356,7 +2356,7 @@ def test_nicokara_space_width_uses_font_percentage_and_edge(qapp):
     layout = _layout_line(track, line, style, 400, 200)
 
     assert layout is not None
-    assert layout.char_widths == [29]
+    assert layout.char_widths == [20]
 
 
 def test_lrc_text_span_keeps_n3_count_timing_in_painter(qapp, monkeypatch):
@@ -4114,6 +4114,68 @@ def test_next_line_ruby_is_not_active_at_trailing_space_boundary(qapp):
     assert previous_line.chars[-1].text == " "
     assert previous_line.end_ms == 123_590
     assert _active_rubies_for_line(track.rubies, previous_line) == [track.rubies[0]]
+
+
+def test_overlapping_next_line_ruby_is_not_active_on_previous_line(qapp):
+    previous_line = TimingLine(
+        chars=[
+            TimingChar(text="私", start_ms=16_000),
+            TimingChar(text="を", start_ms=16_600),
+            TimingChar(text=" ", start_ms=16_900),
+            TimingChar(text="私", start_ms=17_200),
+            TimingChar(text="た", start_ms=17_800),
+            TimingChar(text="ら", start_ms=18_200),
+            TimingChar(text="し", start_ms=18_500),
+            TimingChar(text="め", start_ms=18_600),
+            TimingChar(text="て", start_ms=19_000),
+            TimingChar(text="よ", start_ms=19_200),
+        ],
+        end_ms=20_300,
+    )
+    next_line = TimingLine(
+        chars=[
+            TimingChar(text="ど", start_ms=18_550),
+            TimingChar(text="の", start_ms=18_700),
+            TimingChar(text="私", start_ms=18_870),
+            TimingChar(text="も", start_ms=19_460),
+            TimingChar(text="私", start_ms=20_020),
+            TimingChar(text="よ", start_ms=21_030),
+        ],
+        end_ms=21_440,
+    )
+    rubies = [
+        RubyAnnotation(
+            kanji="私",
+            reading="わたし",
+            reading_part_ms=[210, 400],
+            pos_start_ms=16_000,
+            pos_end_ms=16_600,
+        ),
+        RubyAnnotation(
+            kanji="私",
+            reading="わたし",
+            reading_part_ms=[180, 450],
+            pos_start_ms=17_200,
+            pos_end_ms=17_800,
+        ),
+        RubyAnnotation(
+            kanji="私",
+            reading="わたし",
+            reading_part_ms=[210, 380],
+            pos_start_ms=18_870,
+            pos_end_ms=19_460,
+        ),
+        RubyAnnotation(
+            kanji="私",
+            reading="わたし",
+            reading_part_ms=[220, 820],
+            pos_start_ms=20_020,
+            pos_end_ms=21_030,
+        ),
+    ]
+
+    assert _active_rubies_for_line(rubies, previous_line) == rubies[:2]
+    assert _active_rubies_for_line(rubies, next_line) == rubies[2:]
 
 
 def test_open_start_ruby_rebases_to_single_target_without_scaling_mora(qapp):

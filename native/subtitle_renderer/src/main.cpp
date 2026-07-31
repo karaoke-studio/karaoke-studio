@@ -3839,7 +3839,21 @@ std::vector<int> rubyTargetIndices(
         if (!span.has_value()) {
             return {};
         }
-        return textSpanIndices(span.value(), line);
+        const auto indices = textSpanIndices(span.value(), line);
+        const bool globalPosition = ruby.posStartMs == 0 && ruby.posEndMs == 0;
+        if (!globalPosition) {
+            const bool overlapsTimedTarget = std::any_of(
+                indices.begin(), indices.end(), [&](int index) {
+                    return std::find(
+                        timeIndices.begin(), timeIndices.end(), index
+                    ) != timeIndices.end();
+                }
+            );
+            if (!overlapsTimedTarget) {
+                return {};
+            }
+        }
+        return indices;
     }
     return timeIndices;
 }

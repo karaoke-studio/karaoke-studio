@@ -2016,7 +2016,7 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                     + static_cast<float>(edgeSize / 2)) * layoutScale;
             } else if (sourceChar.text == L" ") {
                 layoutWidth = static_cast<float>(
-                    unit * std::clamp(charStyle.spaceWidthPercent, 10, 100) / 100 + edgeSize
+                    unit * std::clamp(charStyle.spaceWidthPercent, 10, 100) / 100
                 ) * layoutScale;
             } else {
                 layoutWidth = static_cast<float>(

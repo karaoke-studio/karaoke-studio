@@ -2919,6 +2919,103 @@ def test_gpu_next_line_ruby_is_not_cached_at_previous_line_end(monkeypatch) -> N
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_overlapping_next_line_rubies_are_not_cached_on_previous_line(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("私", 16_000),
+                    TimingChar("を", 16_600),
+                    TimingChar(" ", 16_900),
+                    TimingChar("私", 17_200),
+                    TimingChar("た", 17_800),
+                    TimingChar("ら", 18_200),
+                    TimingChar("し", 18_500),
+                    TimingChar("め", 18_600),
+                    TimingChar("て", 19_000),
+                    TimingChar("よ", 19_200),
+                ],
+                end_ms=20_300,
+            ),
+            TimingLine(
+                chars=[
+                    TimingChar("ど", 18_550),
+                    TimingChar("の", 18_700),
+                    TimingChar("私", 18_870),
+                    TimingChar("も", 19_460),
+                    TimingChar("私", 20_020),
+                    TimingChar("よ", 21_030),
+                ],
+                end_ms=21_440,
+            ),
+        ],
+        rubies=[
+            RubyAnnotation("私", "わたし", pos_start_ms=16_000, pos_end_ms=16_600),
+            RubyAnnotation("私", "わたし", pos_start_ms=17_200, pos_end_ms=17_800),
+            RubyAnnotation("私", "わたし", pos_start_ms=18_870, pos_end_ms=19_460),
+            RubyAnnotation("私", "わたし", pos_start_ms=20_020, pos_end_ms=21_030),
+        ],
+    )
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        configured = renderer.configure_gpu(
+            track,
+            _g1_style(),
+            width=640,
+            height=360,
+            fps=60,
+            force_warp=True,
+        )
+
+    assert configured["cached_rubies"] == 4
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_space_width_does_not_include_outline(monkeypatch) -> None:
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    track = TimingTrack(
+        lines=[
+            TimingLine(
+                chars=[
+                    TimingChar("A", 0),
+                    TimingChar(" ", 500),
+                    TimingChar("A", 1_000),
+                ],
+                end_ms=1_500,
+            )
+        ]
+    )
+    style = _g1_style(
+        font_family="Times New Roman",
+        font_family_latin="Times New Roman",
+        font_size_px=100,
+        space_width_percent=20,
+        stroke_width_px=15,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        base_color="#FFFFFFFF",
+        fill_color="#FFFFFFFF",
+        stroke_color="#FFFFFFFF",
+        dual_line_layout=False,
+    )
+    painter = _render_painter_oracle(style, track=track)
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, gpu = _render_g1_frames(
+            renderer, style, (750,), force_warp=True, track=track
+        )
+
+    painter_bounds = _payload_alpha_bounds(painter)
+    gpu_bounds = _payload_alpha_bounds(gpu[0])
+    painter_width = painter_bounds[2] - painter_bounds[0] + 1
+    gpu_width = gpu_bounds[2] - gpu_bounds[0] + 1
+    assert abs(gpu_width - painter_width) <= 6, (gpu_bounds, painter_bounds)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 @pytest.mark.parametrize(
     "direction_changes",
     [{}, {"right_to_left": True}, {"vertical": True}],
