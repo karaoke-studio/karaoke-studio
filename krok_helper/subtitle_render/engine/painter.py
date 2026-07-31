@@ -4482,6 +4482,137 @@ def _apply_constrained_page_sync(
     return resolved
 
 
+def _apply_animation_time_guard(
+    logical_w: int,
+    logical_h: int,
+    track: TimingTrack,
+    style: Style,
+    display_lines: list[DisplayLine],
+    *,
+    enforce_inter_page_gap: bool,
+) -> list[DisplayLine]:
+    """Keep automatic line-action windows visible without eating wipe timing."""
+
+    if not display_lines:
+        return display_lines
+
+    guarded = list(display_lines)
+    changed = False
+    entry_durations: list[int] = []
+    exit_durations: list[int] = []
+    line_starts: list[int] = []
+    line_ends: list[int] = []
+    for index, item in enumerate(guarded):
+        entry_duration = _entry_animation_ms(style, item.line)
+        exit_duration = _exit_animation_ms(style, item.line)
+        entry_durations.append(entry_duration)
+        exit_durations.append(exit_duration)
+        line_start = _line_start_ms(item.line)
+        line_end = _line_end_ms(item.line)
+        line_starts.append(line_start)
+        line_ends.append(line_end)
+
+        start = int(item.display_start_ms)
+        end = int(item.display_end_ms)
+        if item.line.display_start_override_ms is None and entry_duration > 0:
+            start = min(start, max(line_start - entry_duration, 0))
+        if item.line.display_end_override_ms is None and exit_duration > 0:
+            end = max(end, line_end + exit_duration)
+        if start != item.display_start_ms or end != item.display_end_ms:
+            guarded[index] = replace(
+                item,
+                display_start_ms=start,
+                display_end_ms=max(start, end),
+            )
+            changed = True
+
+    if not changed:
+        return display_lines
+    if not enforce_inter_page_gap or style.allow_inter_page_line_overlap:
+        return guarded if changed else display_lines
+
+    required_gap = max(int(style.line_lane_gap_ms), 0)
+    for _pass in range(max(len(guarded) * 2, 1)):
+        measured = _measure_collision_bands(
+            logical_w,
+            logical_h,
+            track,
+            style,
+            guarded,
+            time_window="display",
+        )
+        adjusted = False
+        for incoming_pos, (
+            incoming_index,
+            incoming_page,
+            incoming_band,
+            _incoming_gap,
+        ) in enumerate(measured):
+            incoming = guarded[incoming_index]
+            for previous_index, previous_page, previous_band, _previous_gap in measured[
+                :incoming_pos
+            ]:
+                if previous_page == incoming_page:
+                    continue
+                if not bands_require_separation(
+                    incoming_band, previous_band, 0.0
+                ):
+                    continue
+                required_start = (
+                    int(previous_band.display_end_ms) + required_gap
+                )
+                if int(incoming_band.display_start_ms) >= required_start:
+                    continue
+
+                latest_entry_start = max(
+                    line_starts[incoming_index] - entry_durations[incoming_index],
+                    0,
+                )
+                if (
+                    incoming.line.display_start_override_ms is None
+                    and required_start <= latest_entry_start
+                ):
+                    new_start = max(
+                        int(incoming.display_start_ms),
+                        required_start,
+                    )
+                    if new_start != incoming.display_start_ms:
+                        guarded[incoming_index] = replace(
+                            incoming,
+                            display_start_ms=new_start,
+                        )
+                        adjusted = True
+                        changed = True
+                        break
+
+                previous = guarded[previous_index]
+                if previous.line.display_end_override_ms is not None:
+                    continue
+                latest_previous_end = (
+                    int(incoming_band.display_start_ms) - required_gap
+                )
+                new_end = max(
+                    line_ends[previous_index],
+                    min(int(previous.display_end_ms), latest_previous_end),
+                )
+                if new_end != previous.display_end_ms:
+                    guarded[previous_index] = replace(
+                        previous,
+                        display_end_ms=max(
+                            int(previous.display_start_ms),
+                            new_end,
+                        ),
+                    )
+                    adjusted = True
+                    changed = True
+                    break
+            if adjusted:
+                break
+        if not adjusted:
+            break
+    return guarded if changed else display_lines
+
+
 def _display_lines_for_style(
     track: TimingTrack,
     style: Style,
@@ -4493,11 +4624,23 @@ def _display_lines_for_style(
 
     kwargs = _display_line_compute_kwargs(style)
     if style.allow_inter_page_line_overlap:
-        return compute_display_lines(
+        display_lines = compute_display_lines(
             track,
             **kwargs,
             adjust_same_position=True,
             dynamic_single_page_reflow=True,
+        )
+        if logical_w is None or logical_h is None:
+            default_w, default_h = _default_collision_canvas(style)
+            logical_w = default_w if logical_w is None else logical_w
+            logical_h = default_h if logical_h is None else logical_h
+        return _apply_animation_time_guard(
+            max(int(logical_w), 1),
+            max(int(logical_h), 1),
+            track,
+            style,
+            display_lines,
+            enforce_inter_page_gap=False,
         )
     base_kwargs = {
         **kwargs,
@@ -4562,6 +4705,14 @@ def _display_lines_for_style(
         track,
         style,
         resolved,
+    )
+    resolved = _apply_animation_time_guard(
+        logical_w,
+        logical_h,
+        track,
+        style,
+        resolved,
+        enforce_inter_page_gap=True,
     )
     # Keep the track object alive with the cached display lines.  The key uses
     # ``id(track)`` to prevent equal-but-distinct tracks from sharing mutable

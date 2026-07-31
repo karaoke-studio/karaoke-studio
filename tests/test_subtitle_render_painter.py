@@ -8917,6 +8917,51 @@ def test_cross_page_spatial_mode_squeezes_only_pixel_conflicting_lines(qapp):
     )
 
 
+def test_animation_guard_extends_zero_tail_exit_and_delays_next_entry(qapp):
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A", 114_201, 115_544),
+            ("B", 115_815, 117_240),
+            ("C", 117_560, 120_563),
+            ("D", 120_563, 123_908),
+        )
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(2, "default"), TrackPage(2, "default")])]
+        ),
+    )
+    plain = replace(
+        Style(),
+        line_lead_in_ms=1_800,
+        line_tail_ms=1_000,
+        line_lane_gap_ms=300,
+    )
+    animated = replace(
+        plain,
+        entry_anim="fade",
+        entry_lead_ms=250,
+        exit_anim="fade",
+        exit_fade_ms=250,
+    )
+
+    plain_windows = subtitle_painter.display_windows_for_style(
+        track, plain, logical_w=1920, logical_h=1080
+    )
+    animated_windows = subtitle_painter.display_windows_for_style(
+        track, animated, logical_w=1920, logical_h=1080
+    )
+
+    assert plain_windows[0][1] == lines[0].end_ms
+    assert animated_windows[0][1] == lines[0].end_ms + 250
+    assert animated_windows[2][0] == (
+        animated_windows[0][1] + animated.line_lane_gap_ms
+    )
+    assert lines[2].chars[0].start_ms - animated_windows[2][0] >= 250
+
+
 def test_secondary_displacement_pairs_only_report_new_cascade(monkeypatch):
     lines = [
         TimingLine(chars=[TimingChar(text, 1_000)], end_ms=2_000)
