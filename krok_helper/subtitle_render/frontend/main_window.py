@@ -1889,6 +1889,12 @@ class SubtitleRenderWindow(QWidget):
         self._source_change_timer.setSingleShot(True)
         self._source_change_timer.setInterval(450)
         self._source_change_timer.timeout.connect(self._process_subtitle_source_changes)
+        self._tracks_window_refresh_timer = QTimer(self)
+        self._tracks_window_refresh_timer.setSingleShot(True)
+        self._tracks_window_refresh_timer.setInterval(120)
+        self._tracks_window_refresh_timer.timeout.connect(
+            self._refresh_tracks_view_windows
+        )
         self._preview_window_requested = False
         self._preview_reposition_on_next_show = True
         self._closing_window = False
@@ -2693,10 +2699,15 @@ class SubtitleRenderWindow(QWidget):
 
     def _apply_project_data(self, data: dict) -> None:
         self._loading_project = True
+        self._tracks_window_refresh_timer.stop()
+        applied = False
         try:
             self._apply_project_data_inner(data)
+            applied = True
         finally:
             self._loading_project = False
+        if applied and self._timing_track is not None:
+            self._refresh_tracks_view_windows()
 
     def _apply_project_data_inner(self, data: dict) -> None:
         # 项目内容整体替换，旧的样式/轨道撤销记录全部失效
@@ -5246,7 +5257,7 @@ class SubtitleRenderWindow(QWidget):
 
     def _refresh_tracks_view_windows(self) -> None:
         """按当前样式重算各轨行显示窗口，推给字幕轨道（把手条数据源）。"""
-        if self._timing_track is None:
+        if self._timing_track is None or self._loading_project:
             return
         self._tracks_view.set_style(self._style)
         self._tracks_view.set_display_windows(
@@ -5260,6 +5271,11 @@ class SubtitleRenderWindow(QWidget):
                 for track in self._all_tracks()
             ]
         )
+
+    def _schedule_tracks_view_window_refresh(self) -> None:
+        if self._timing_track is None or self._loading_project:
+            return
+        self._tracks_window_refresh_timer.start()
 
     def _on_display_window_edited(
         self, track_index: int, line_index: int, old_values: object, new_values: object
@@ -5313,7 +5329,7 @@ class SubtitleRenderWindow(QWidget):
         elif track_index > 0:
             # 不走 _sync_extra_tracks_to_preview：它会重建轨道视图、丢掉选中态
             self._preview_panel.set_extra_tracks(self._extra_track_list())
-        self._refresh_tracks_view_windows()
+        self._schedule_tracks_view_window_refresh()
         self._mark_project_dirty()
 
     def _track_by_index(self, track_index: int) -> Optional[TimingTrack]:

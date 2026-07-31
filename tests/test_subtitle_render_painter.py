@@ -9105,6 +9105,56 @@ def test_sync_collision_time_window_keeps_fade_duration(qapp):
     )
 
 
+def test_animation_guard_reuses_display_collision_measurement(qapp, monkeypatch):
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A", 10_000, 11_000),
+            ("B", 11_100, 12_000),
+            ("C", 12_100, 13_000),
+        )
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [
+                TrackSection([TrackPage(1, "default")]),
+                TrackSection([TrackPage(1, "default")]),
+                TrackSection([TrackPage(1, "default")]),
+            ]
+        ),
+    )
+    style = replace(
+        Style(),
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        line_lane_gap_ms=300,
+        entry_anim="fade",
+        entry_lead_ms=300,
+        exit_anim="fade",
+        exit_fade_ms=300,
+    )
+
+    calls: list[str] = []
+    original = subtitle_painter._measure_collision_bands
+
+    def wrapped_measure(*args, **kwargs):
+        calls.append(kwargs.get("time_window", "stable"))
+        return original(*args, **kwargs)
+
+    subtitle_painter._DISPLAY_LINES_CACHE.clear()
+    monkeypatch.setattr(subtitle_painter, "_measure_collision_bands", wrapped_measure)
+
+    windows = subtitle_painter.display_windows_for_style(
+        track, style, logical_w=1280, logical_h=1080
+    )
+
+    assert windows[0] == (9_700, 11_000)
+    assert windows[1] == (10_800, 12_000)
+    assert windows[2] == (11_800, 13_300)
+    assert calls.count("display") == 1
+
+
 def test_changed_page_layout_does_not_make_entry_animation_collidable(qapp):
     from krok_helper.subtitle_render.engine.page_plan import (
         project_page_plan_to_legacy_fields,

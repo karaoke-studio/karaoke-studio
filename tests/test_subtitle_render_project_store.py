@@ -2341,6 +2341,38 @@ def test_lyrics_table_uses_measured_fixed_columns_and_elastic_content(qapp):
     qapp.processEvents()
 
 
+def test_display_window_edit_defers_track_window_refresh(qapp, monkeypatch):
+    win = _make_window(qapp, monkeypatch)
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("A", 1000)], end_ms=2000)]
+    )
+    win._timing_track = track
+
+    preview_updates: list[TimingTrack] = []
+    scheduled: list[bool] = []
+    immediate_refreshes: list[bool] = []
+    monkeypatch.setattr(win._preview_panel, "set_track", preview_updates.append)
+    monkeypatch.setattr(
+        win,
+        "_schedule_tracks_view_window_refresh",
+        lambda: scheduled.append(True),
+    )
+    monkeypatch.setattr(
+        win,
+        "_refresh_tracks_view_windows",
+        lambda: immediate_refreshes.append(True),
+    )
+
+    win._refresh_after_display_edit(0)
+
+    assert preview_updates == [track]
+    assert scheduled == [True]
+    assert immediate_refreshes == []
+    win.close()
+    win.deleteLater()
+    qapp.processEvents()
+
+
 def test_lyrics_table_effect_column_uses_measured_semantic_minimum(qapp):
     panel = lyrics_list.LyricsPanel()
     panel.resize(900, 480)

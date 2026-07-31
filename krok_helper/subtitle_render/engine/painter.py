@@ -4532,16 +4532,17 @@ def _apply_animation_time_guard(
         return guarded if changed else display_lines
 
     required_gap = max(int(style.line_lane_gap_ms), 0)
+    measured = _measure_collision_bands(
+        logical_w,
+        logical_h,
+        track,
+        style,
+        guarded,
+        time_window="display",
+    )
     for _pass in range(max(len(guarded) * 2, 1)):
-        measured = _measure_collision_bands(
-            logical_w,
-            logical_h,
-            track,
-            style,
-            guarded,
-            time_window="display",
-        )
         adjusted = False
+        changed_index: int | None = None
         for incoming_pos, (
             incoming_index,
             incoming_page,
@@ -4582,6 +4583,7 @@ def _apply_animation_time_guard(
                             display_start_ms=new_start,
                         )
                         adjusted = True
+                        changed_index = incoming_index
                         changed = True
                         break
 
@@ -4604,12 +4606,33 @@ def _apply_animation_time_guard(
                         ),
                     )
                     adjusted = True
+                    changed_index = previous_index
                     changed = True
                     break
             if adjusted:
                 break
         if not adjusted:
             break
+        if changed_index is not None:
+            retimed = _retime_measured_collision_bands(
+                measured,
+                guarded,
+                style,
+                (changed_index,),
+                time_window="display",
+            )
+            measured = (
+                retimed
+                if retimed is not None
+                else _measure_collision_bands(
+                    logical_w,
+                    logical_h,
+                    track,
+                    style,
+                    guarded,
+                    time_window="display",
+                )
+            )
     return guarded if changed else display_lines
 
 
