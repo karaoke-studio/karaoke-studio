@@ -1734,6 +1734,70 @@ def test_extra_subtitle_sources_round_trip(qapp, monkeypatch, tmp_path):
     assert win2._subtitle_source_key(chorus_lrc) in win2._source_watch_states
 
 
+def test_open_project_defers_saved_media_and_extra_sources(qapp, monkeypatch, tmp_path):
+    win = _make_window(qapp, monkeypatch)
+    main_lrc = _write_demo_lrc(tmp_path / "main.lrc")
+    chorus_lrc = _write_demo_lrc(
+        tmp_path / "chorus.lrc",
+        "[00:10:00]B[00:11:00]B[00:12:00]\r\n",
+    )
+    video = tmp_path / "video.mp4"
+    video.write_bytes(b"fake")
+    project = tmp_path / "demo.yurika"
+    save_render_project(
+        project,
+        {
+            "subtitle_path": str(main_lrc),
+            "background": {
+                "kind": "video",
+                "path": str(video),
+                "color": "#000000",
+                "source_fps": None,
+                "sequence_start_number": 0,
+                "video_offset_ms": 0,
+            },
+            "extra_subtitle_sources": [
+                {"name": "chorus", "path": str(chorus_lrc)}
+            ],
+            "screen": {"width": 1920, "height": 1080, "fps": 60, "par": "1:1"},
+            "style": style_to_dict(Style()),
+        },
+    )
+    monkeypatch.setattr(
+        win,
+        "_probe",
+        lambda path, label: mw.MediaInfo(
+            path=path,
+            duration=12.0,
+            video_streams=1,
+            audio_streams=1,
+            subtitle_streams=0,
+            video_width=1280,
+            video_height=720,
+            video_fps=60.0,
+        ),
+    )
+
+    assert win._open_project_path(project, confirm_discard=False)
+    assert win._timing_track is not None
+    assert win._extra_sources == []
+    assert win._video_path is None
+    assert len(win._project_deferred_loads) == 2
+    assert not win._project_dirty
+
+    win._project_deferred_load_timer.stop()
+    win._tracks_window_refresh_timer.stop()
+    win._process_project_deferred_load()
+    win._process_project_deferred_load()
+
+    assert len(win._extra_sources) == 1
+    assert win._video_path == video
+    assert not win._project_dirty
+    win.close()
+    win.deleteLater()
+    qapp.processEvents()
+
+
 def test_line_animation_overrides_round_trip(qapp, monkeypatch, tmp_path):
     win = _make_window(qapp, monkeypatch)
     lrc = _write_demo_lrc(

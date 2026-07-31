@@ -1895,6 +1895,14 @@ class SubtitleRenderWindow(QWidget):
         self._tracks_window_refresh_timer.timeout.connect(
             self._refresh_tracks_view_windows
         )
+        self._project_deferred_loads: list[tuple[str, object]] = []
+        self._project_deferred_load_generation = 0
+        self._defer_project_assets = False
+        self._project_deferred_load_timer = QTimer(self)
+        self._project_deferred_load_timer.setSingleShot(True)
+        self._project_deferred_load_timer.timeout.connect(
+            self._process_project_deferred_load
+        )
         self._preview_window_requested = False
         self._preview_reposition_on_next_show = True
         self._closing_window = False
@@ -2367,6 +2375,9 @@ class SubtitleRenderWindow(QWidget):
         self._missing_resources = ()
         self._unresolved_resource_labels = set()
         self._missing_resource_source_data = None
+        self._project_deferred_loads = []
+        if hasattr(self, "_project_deferred_load_timer"):
+            self._project_deferred_load_timer.stop()
         self._auto_save_pending = False
         if hasattr(self, "_auto_save_timer"):
             self._auto_save_timer.stop()
@@ -2697,17 +2708,24 @@ class SubtitleRenderWindow(QWidget):
                 merged["extra_subtitle_sources"] = current_extras
         return merged
 
-    def _apply_project_data(self, data: dict) -> None:
+    def _apply_project_data(self, data: dict, *, defer_assets: bool = False) -> None:
         self._loading_project = True
         self._tracks_window_refresh_timer.stop()
+        self._project_deferred_load_timer.stop()
+        self._project_deferred_loads = []
+        self._defer_project_assets = bool(defer_assets)
         applied = False
         try:
             self._apply_project_data_inner(data)
             applied = True
         finally:
             self._loading_project = False
+            self._defer_project_assets = False
         if applied and self._timing_track is not None:
-            self._refresh_tracks_view_windows()
+            if defer_assets:
+                self._tracks_window_refresh_timer.start(250)
+            else:
+                self._refresh_tracks_view_windows()
 
     def _apply_project_data_inner(self, data: dict) -> None:
         # 项目内容整体替换，旧的样式/轨道撤销记录全部失效
@@ -2777,22 +2795,33 @@ class SubtitleRenderWindow(QWidget):
                 self._apply_animation_override_rows(
                     self._timing_track, data.get("line_animation_overrides")
                 )
-            self._apply_extra_subtitle_sources(data.get("extra_subtitle_sources"))
             self._refresh_tracks_view_windows()
         background = data.get("background") if isinstance(data.get("background"), dict) else None
-        if background is not None:
-            self._load_background_payload(background)
-        elif paths["video_path"] is not None and paths["video_path"].is_file():
-            self.load_video(paths["video_path"])
-        audio = paths["audio_path"]
-        if audio is not None and audio.is_file() and audio != self._video_path:
-            self.load_audio(audio)
+        if self._defer_project_assets:
+            self._queue_project_deferred_loads(
+                background=background,
+                fallback_video_path=paths["video_path"],
+                audio_path=paths["audio_path"],
+                extra_subtitle_sources=data.get("extra_subtitle_sources"),
+                project_role_names=data.get("project_role_names"),
+            )
+        else:
+            self._apply_extra_subtitle_sources(data.get("extra_subtitle_sources"))
+            if background is not None:
+                self._load_background_payload(background)
+            elif paths["video_path"] is not None and paths["video_path"].is_file():
+                self.load_video(paths["video_path"])
+            audio = paths["audio_path"]
+            if audio is not None and audio.is_file() and audio != self._video_path:
+                self.load_audio(audio)
         # Project/N3 role payloads are authoritative.  Populate missing role
         # schemes only after those payloads have replaced source-LRC markers;
         # otherwise a transient ``【アクア】`` marker can auto-create an unrelated
         # palette before FontIndex=0 clears it back to the global N3 scheme.
+        self._apply_project_role_options(data.get("project_role_names"))
+
+    def _apply_project_role_options(self, project_roles: object) -> None:
         content_roles = self._content_role_options()
-        project_roles = data.get("project_role_names")
         if isinstance(project_roles, list):
             seen = set(content_roles)
             for value in project_roles:
@@ -2807,6 +2836,68 @@ class SubtitleRenderWindow(QWidget):
                     content_roles.append(name)
         self._property_panel.set_roles(content_roles)
         self._lyrics_panel.set_role_options(self._merged_role_options())
+
+    def _queue_project_deferred_loads(
+        self,
+        *,
+        background: Optional[dict],
+        fallback_video_path: Optional[Path],
+        audio_path: Optional[Path],
+        extra_subtitle_sources: object,
+        project_role_names: object,
+    ) -> None:
+        loads: list[tuple[str, object]] = []
+        if background is not None:
+            loads.append(("background", deepcopy(background)))
+        elif fallback_video_path is not None and fallback_video_path.is_file():
+            loads.append(("video", fallback_video_path))
+        if audio_path is not None:
+            loads.append(("audio", audio_path))
+        if isinstance(extra_subtitle_sources, list) and extra_subtitle_sources:
+            loads.append(
+                (
+                    "extra_subtitle_sources",
+                    (deepcopy(extra_subtitle_sources), deepcopy(project_role_names)),
+                )
+            )
+        self._project_deferred_loads = loads
+        self._project_deferred_load_generation = self._project_generation
+        if loads:
+            self._project_deferred_load_timer.start(500)
+
+    def _process_project_deferred_load(self) -> None:
+        if (
+            not self._project_deferred_loads
+            or self._project_deferred_load_generation != self._project_generation
+        ):
+            self._project_deferred_loads = []
+            return
+        kind, payload = self._project_deferred_loads.pop(0)
+        was_loading = self._loading_project
+        self._loading_project = True
+        refresh_tracks = False
+        try:
+            if kind == "background" and isinstance(payload, dict):
+                self._load_background_payload(payload)
+            elif kind == "video" and isinstance(payload, Path) and payload.is_file():
+                self.load_video(payload)
+            elif kind == "audio" and isinstance(payload, Path):
+                if payload.is_file() and payload != self._video_path:
+                    self.load_audio(payload)
+            elif kind == "extra_subtitle_sources" and isinstance(payload, tuple):
+                sources, project_roles = payload
+                self._apply_extra_subtitle_sources(sources)
+                self._apply_project_role_options(project_roles)
+                refresh_tracks = True
+        finally:
+            self._loading_project = was_loading
+        if refresh_tracks and self._timing_track is not None:
+            self._refresh_tracks_view_windows()
+        if (
+            self._project_deferred_loads
+            and self._project_deferred_load_generation == self._project_generation
+        ):
+            self._project_deferred_load_timer.start(120)
 
     def _apply_output_settings(self, output: dict) -> None:
         directory_mode = output.get("directory_mode")
@@ -3065,7 +3156,7 @@ class SubtitleRenderWindow(QWidget):
         missing_resources = self._missing_project_resources(data)
         self._begin_project_generation()
         self._clear_loaded_media()
-        self._apply_project_data(data)
+        self._apply_project_data(data, defer_assets=True)
         self._project_path = path
         self._project_disk_revision = revision_after
         self._missing_resources = tuple(missing_resources)
