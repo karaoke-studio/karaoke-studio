@@ -552,6 +552,13 @@ class _CharChipsView(QWidget):
             if 0 <= index < len(self._labels)
         }
 
+    def selected_has_vector_symbol(self, *, minimum_index: int = 0) -> bool:
+        return any(
+            minimum_index <= index < len(self._vector_symbols)
+            and self._vector_symbols[index] is not None
+            for index in self._selected
+        )
+
     def role_tooltip_text(self, index: int) -> str:
         if not 0 <= index < len(self._labels):
             return ""
@@ -573,6 +580,19 @@ class _CharChipsView(QWidget):
                 self._vector_symbols[index] = symbol
         self.assignmentChanged.emit()
         self.update()
+
+    def clear_selected_vector_symbols(self, *, minimum_index: int = 0) -> None:
+        changed = False
+        for index in self._selected:
+            if (
+                minimum_index <= index < len(self._vector_symbols)
+                and self._vector_symbols[index] is not None
+            ):
+                self._vector_symbols[index] = None
+                changed = True
+        if changed:
+            self.assignmentChanged.emit()
+            self.update()
 
     def select_all(self) -> None:
         self._selected = set(range(len(self._texts)))
@@ -822,6 +842,11 @@ class _CharRoleDialog(QDialog):
         self._replace_svg_button.clicked.connect(self._replace_selected_with_svg)
         self._replace_svg_button.setVisible(bool(allow_svg_replacement))
         buttons.addWidget(self._replace_svg_button)
+        self._restore_svg_button = FluentPushButton("还原 SVG 为原字符", self)
+        self._restore_svg_button.setAutoDefault(False)
+        self._restore_svg_button.clicked.connect(self._restore_selected_svg)
+        self._restore_svg_button.setVisible(bool(allow_svg_replacement))
+        buttons.addWidget(self._restore_svg_button)
         cancel = FluentPushButton("取消", self)
         cancel.clicked.connect(self.reject)
         buttons.addWidget(cancel)
@@ -871,6 +896,11 @@ class _CharRoleDialog(QDialog):
                 for index in self._chips.selected_indices()
             )
         )
+        self._restore_svg_button.setEnabled(
+            self._chips.selected_has_vector_symbol(
+                minimum_index=self._protected_prefix_count
+            )
+        )
 
     def _replace_selected_with_svg(self) -> None:
         path_text, _ = QFileDialog.getOpenFileName(
@@ -885,6 +915,11 @@ class _CharRoleDialog(QDialog):
             return
         self._chips.replace_selected_vector_symbol(
             symbol, minimum_index=self._protected_prefix_count
+        )
+
+    def _restore_selected_svg(self) -> None:
+        self._chips.clear_selected_vector_symbols(
+            minimum_index=self._protected_prefix_count
         )
 
     def _create_role(self) -> None:

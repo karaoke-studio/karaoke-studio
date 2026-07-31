@@ -591,6 +591,40 @@ def test_char_role_dialog_replaces_only_selected_source_chars_with_svg(
     dialog.close()
 
 
+def test_char_role_dialog_restores_selected_svg_replacements_only(tmp_path):
+    prefix_symbol = _symbol(tmp_path)
+    first_symbol = replace(_symbol(tmp_path), name="first")
+    second_symbol = replace(_symbol(tmp_path), name="second")
+    dialog = _CharRoleDialog(
+        0,
+        ["导", "歌", "詞", "音"],
+        [None, None, None, None],
+        [],
+        Style(),
+        vector_symbols=[prefix_symbol, first_symbol, second_symbol, None],
+        protected_prefix_count=1,
+    )
+
+    assert not dialog._restore_svg_button.isEnabled()
+
+    dialog._chips._selected = {0}
+    dialog._chips.selectionChanged.emit()
+    assert not dialog._restore_svg_button.isEnabled()
+
+    dialog._chips._selected = {1, 3}
+    dialog._chips.selectionChanged.emit()
+    assert dialog._restore_svg_button.isEnabled()
+    dialog._restore_selected_svg()
+
+    symbols = dialog.char_vector_symbols()
+    assert symbols[0] == prefix_symbol
+    assert symbols[1] is None
+    assert symbols[2] == second_symbol
+    assert symbols[3] is None
+    assert not dialog._restore_svg_button.isEnabled()
+    dialog.close()
+
+
 def test_inline_svg_replacement_keeps_middle_character_timing_and_layout(tmp_path):
     symbol = _symbol(tmp_path)
     line = TimingLine(
