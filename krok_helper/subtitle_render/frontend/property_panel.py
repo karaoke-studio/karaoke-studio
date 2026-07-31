@@ -203,6 +203,17 @@ _SCHEME_FIELDS = {
 _GLOBAL_SCHEME_KEY = "global"
 _CUSTOM_SCHEME_PREFIX = "custom:"
 _PRESET_NO_GROUP = "\x00ungrouped"
+EDIT_COMMIT_DEBOUNCE_MS = 400
+"""数值框 / 标题文字「还在连打」的判定窗口。
+
+停手这么久才把编辑提交给宿主（重建预览、写撤销栈、标脏）。窗口太窄的话，
+一个正常速度的打字者每敲一个字符就要吃一次完整提交——原来的 150ms 就在
+这个边上，抬到 400ms 才真的覆盖住逐字符输入的间隔。上限受
+``SubtitleRenderWindow._STYLE_UNDO_MERGE_WINDOW_S``（1.2s）约束：超过它，
+连续微调就不再合并成一条撤销记录了。
+"""
+COLOR_COMMIT_DEBOUNCE_MS = 450
+"""色号输入的同类窗口——6/8 位十六进制要连打更久，留得比数值框宽一点。"""
 _COMPACT_CONTROL_HEIGHT = 32
 _FONT_SIZE_MAX_PX = 4096
 _LAYOUT_SIZE_MAX_PX = 16_384
@@ -623,7 +634,7 @@ class _ColorHexEdit(FluentLineEdit):
 class ColorButton(QWidget):
     """Compact color bar with dialog and direct screen-picker actions."""
 
-    _LIVE_APPLY_DELAY_MS = 180
+    _LIVE_APPLY_DELAY_MS = COLOR_COMMIT_DEBOUNCE_MS
 
     clicked = Signal()
     screenPickRequested = Signal()
@@ -2064,7 +2075,7 @@ class _UnitProtectedSpinBoxMixin:
         self._keyboard_commit_pending = False
         self._keyboard_commit_timer = QTimer(self)
         self._keyboard_commit_timer.setSingleShot(True)
-        self._keyboard_commit_timer.setInterval(150)
+        self._keyboard_commit_timer.setInterval(EDIT_COMMIT_DEBOUNCE_MS)
         self._keyboard_commit_timer.timeout.connect(self._commit_keyboard_edit)
         self.lineEdit().textEdited.connect(self._queue_keyboard_commit)
         self.editingFinished.connect(self._flush_keyboard_edit)
@@ -4156,10 +4167,12 @@ class PropertyPanel(QWidget):
         super().__init__(parent)
         self._style = Style()
         self._syncing = False
+        # 控件是否已按 _style 完整同步过一次；未同步前不能走 set_style 的等值快路径。
+        self._style_synced = False
         self._title_text_change_pending = False
         self._title_text_change_timer = QTimer(self)
         self._title_text_change_timer.setSingleShot(True)
-        self._title_text_change_timer.setInterval(150)
+        self._title_text_change_timer.setInterval(EDIT_COMMIT_DEBOUNCE_MS)
         self._title_text_change_timer.timeout.connect(self._commit_title_text_edit)
         self._role_names: list[str] = []
         self._preset_schemes: dict[str, StylePreset] = {}
@@ -4380,6 +4393,13 @@ class PropertyPanel(QWidget):
     def set_style(self, style: Style, *, emit: bool = False) -> None:
         self._title_text_change_timer.stop()
         self._title_text_change_pending = False
+        if self._style_synced and not emit and style == self._style:
+            # 宿主把面板自己发出的样式原样回流是常态（`styleChanged` →
+            # `_apply_style` → `set_style`）。重新灌一遍全部控件要跑几百次
+            # setValue/setCurrentIndex 和四个 _sync_* 分支，值没变时纯属白烧，
+            # 还会把用户正在输入的那个框改写掉。
+            self._style = replace(style)
+            return
         self._style = replace(style)
         current_key = self._current_scheme_key()
         self._syncing = True
@@ -4433,6 +4453,7 @@ class PropertyPanel(QWidget):
             self._sync_title_controls()
         finally:
             self._syncing = False
+        self._style_synced = True
         if emit:
             self.styleChanged.emit(self._style)
 

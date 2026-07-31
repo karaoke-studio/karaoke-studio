@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import os
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -74,6 +75,35 @@ def test_page_markers_layout_column_and_boundary_drag_mapping(qapp):
     panel._on_cell_clicked(1, COL_LANE)
     selected = {item.row() for item in table.selectedItems()}
     assert {1, 2, 3} <= selected
+    panel.deleteLater()
+    qapp.processEvents()
+
+
+def test_render_only_style_change_skips_full_table_refresh(qapp):
+    """字号这类只作用于画面的字段不能触发整表刷新。
+
+    整表刷新要为每行重建单元格、算对齐并画角色色点图标；属性面板里绝大多数
+    控件都跟本表无关，跟着刷新只是白烧 GUI 线程。
+    """
+    panel = LyricsPanel()
+    style = Style()
+    panel.set_style(style)
+    panel.set_track(_track())
+
+    calls: list[int] = []
+    original = panel._refresh_presentation
+    panel._refresh_presentation = lambda *a, **k: (  # type: ignore[method-assign]
+        calls.append(1),
+        original(*a, **k),
+    )[1]
+
+    panel.set_style(replace(style, font_size_px=style.font_size_px + 10))
+    assert calls == []
+
+    # 真正影响呈现的字段照旧刷新。
+    panel.set_style(replace(style, font_size_px=style.font_size_px + 10, fill_color="#123456"))
+    assert calls == [1]
+
     panel.deleteLater()
     qapp.processEvents()
 

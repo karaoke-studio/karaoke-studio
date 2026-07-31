@@ -66,6 +66,7 @@ from PyQt6.QtGui import (
     QShortcut,
 )
 from PyQt6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QFileDialog,
     QColorDialog,
@@ -288,6 +289,8 @@ PROJECT_FILTER = f"字幕渲染项目 (*{PROJECT_FILE_SUFFIX});;所有文件 (*.
 EXPORT_DIR_SOURCE_VIDEO = "source_video"
 EXPORT_DIR_CUSTOM = "custom"
 AUTO_SAVE_DEBOUNCE_MS = 2_000
+_PERSISTED_STATE_SAVE_DEBOUNCE_MS = 1_500
+"""应用级偏好落盘的空闲窗口：编辑停手后才写 settings.json。"""
 DEFAULT_AUTO_SAVE_INTERVAL_MINUTES = 5
 AUTO_SAVE_THREAD_WAIT_MS = 3_000
 GPU_PREVIEW_DEFAULT_VERSION = 2
@@ -1923,6 +1926,20 @@ class SubtitleRenderWindow(QWidget):
         self._splitter_save_timer.setSingleShot(True)
         self._splitter_save_timer.setInterval(400)
         self._splitter_save_timer.timeout.connect(self._save_persisted_state)
+        # 应用级偏好落盘：一次 _save_persisted_state 要读一遍 settings.json、把整份
+        # AppSettings 重新序列化再原子写回。属性面板每提交一次样式都同步走一趟磁盘，
+        # 编辑手感直接被拖垮。改成脏标记 + 空闲定时器，真正的写在停手后 / 隐藏 /
+        # 关闭 / 退出时发生。
+        self._persisted_state_dirty = False
+        self._persisted_state_save_timer = QTimer(self)
+        self._persisted_state_save_timer.setSingleShot(True)
+        self._persisted_state_save_timer.setInterval(_PERSISTED_STATE_SAVE_DEBOUNCE_MS)
+        self._persisted_state_save_timer.timeout.connect(
+            self._flush_persisted_state_save
+        )
+        app = QApplication.instance()
+        if app is not None:
+            app.aboutToQuit.connect(self._flush_persisted_state_save)
         self._load_persisted_state()
         self._auto_save_timer = QTimer(self)
         self._auto_save_timer.setSingleShot(True)
@@ -1956,10 +1973,13 @@ class SubtitleRenderWindow(QWidget):
 
     def hideEvent(self, event):  # noqa: N802
         self._hide_preview_window_for_context()
+        # 切走工作区 = 一次自然的空闲点，把欠着的偏好写掉。
+        self._flush_persisted_state_save()
         super().hideEvent(event)
 
     def closeEvent(self, event):  # noqa: N802
         self._closing_window = True
+        self._flush_persisted_state_save()
         self._stop_auto_save_runtime(wait=True)
         if self._layout_issues_dialog is not None:
             self._layout_issues_dialog.close()
@@ -4793,8 +4813,6 @@ class SubtitleRenderWindow(QWidget):
 
     def _apply_style(self, style: Style) -> None:
         previous = self._style
-        track_indices = tuple(range(len(self._all_tracks())))
-        tracks_before = tuple(deepcopy(track) for track in self._all_tracks())
         style = ensure_page_layout_defaults(style)
         old_capacities = {
             "default": max(len(previous.line_alignments), 1),
@@ -4817,13 +4835,21 @@ class SubtitleRenderWindow(QWidget):
         self._style = style
         affected_pages = 0
         added_pages = 0
-        for layout_id in shrunk:
-            for track in self._all_tracks():
-                affected, added = reflow_pages_for_layout_capacity(
-                    track, style, layout_id
-                )
-                affected_pages += affected
-                added_pages += added
+        track_indices: tuple[int, ...] = ()
+        tracks_before: tuple[TimingTrack, ...] = ()
+        if shrunk:
+            # 只有缩容重排会改轨道，也只有那条路径需要轨道撤销快照。全轨深拷贝
+            # 是 O(全部行×全部字符)，绝不能挂在每次样式微调的必经路径上。
+            tracks = self._all_tracks()
+            track_indices = tuple(range(len(tracks)))
+            tracks_before = tuple(deepcopy(track) for track in tracks)
+            for layout_id in shrunk:
+                for track in tracks:
+                    affected, added = reflow_pages_for_layout_capacity(
+                        track, style, layout_id
+                    )
+                    affected_pages += affected
+                    added_pages += added
         self._property_panel.set_style(style)
         self._remember_style_preferences(previous, style)
         self._preview_panel.set_style(style)
@@ -4841,10 +4867,11 @@ class SubtitleRenderWindow(QWidget):
             self._refresh_source_ui()
         if self._title_source_active:
             self._refresh_lyrics_panel_source()
-        # 提前入场/延迟退场等布局参数会改行显示窗口 → 同步轨道把手数据
-        self._refresh_tracks_view_windows()
+        # 提前入场/延迟退场等布局参数会改行显示窗口 → 同步轨道把手数据。
+        # 显示窗口要按当前布局逐行量文字，走 120ms 单发定时器移出按键的同步路径。
+        self._schedule_tracks_view_window_refresh()
         self._margin_check_timer.start()
-        self._save_persisted_state()
+        self._schedule_persisted_state_save()
         self._mark_project_dirty()
         # 调用方预先改写过 self._style 的路径（如导出高度重算）不入撤销栈。
         if previous is not style:
@@ -4946,7 +4973,7 @@ class SubtitleRenderWindow(QWidget):
             self._refresh_lyrics_panel_source()
         self._refresh_tracks_view_windows()
         self._margin_check_timer.start()
-        self._save_persisted_state()
+        self._schedule_persisted_state_save()
         self._mark_project_dirty()
         return True
 
@@ -6457,7 +6484,7 @@ class SubtitleRenderWindow(QWidget):
             self._screen_settings.height,
         )
         self._margin_check_timer.start()
-        self._save_persisted_state()
+        self._schedule_persisted_state_save()
         self._mark_project_dirty()
 
     def _set_export_screen_controls(self, settings: ScreenSettings) -> None:
@@ -6483,13 +6510,13 @@ class SubtitleRenderWindow(QWidget):
         if self._loading_project:
             return
         self._remember_local_export_defaults()
-        self._save_persisted_state()
+        self._schedule_persisted_state_save()
         self._mark_project_dirty()
 
     def _on_render_workers_changed(self) -> None:
         """Persist this hardware-specific preference without dirtying the project."""
         self._remember_local_export_defaults()
-        self._save_persisted_state()
+        self._schedule_persisted_state_save()
 
     def _remember_local_export_defaults(self) -> None:
         self._local_output_preferences.update(
@@ -6545,7 +6572,7 @@ class SubtitleRenderWindow(QWidget):
 
     def _on_scheme_selection_changed(self, key: str) -> None:
         self._selected_scheme_key = key
-        self._save_persisted_state()
+        self._schedule_persisted_state_save()
         self._mark_project_dirty()
 
     def _merged_role_options(self) -> list[str]:
@@ -7294,7 +7321,7 @@ class SubtitleRenderWindow(QWidget):
             self._property_panel.set_style(self._style)
             self._preview_panel.set_style(self._style)
             self._lyrics_panel.set_style(self._style)
-            self._save_persisted_state()
+            self._schedule_persisted_state_save()
         if any(label not in from_presets for label in missing):
             track = self._active_track()
             if track is not None:
@@ -7478,7 +7505,7 @@ class SubtitleRenderWindow(QWidget):
                     self._style, layout_index
                 ),
             }
-        self._save_persisted_state()
+        self._schedule_persisted_state_save()
 
     def _apply_remembered_layout_assignment(self, track: TimingTrack) -> None:
         preference = self._layout_assignment_preference
@@ -7619,7 +7646,25 @@ class SubtitleRenderWindow(QWidget):
         self._preview_splitter_ratio = sizes[0] / total
         self._splitter_save_timer.start()
 
+    def _schedule_persisted_state_save(self) -> None:
+        """标脏并推迟落盘，供属性面板等高频编辑路径调用。
+
+        真正的写发生在停手 ``_PERSISTED_STATE_SAVE_DEBOUNCE_MS`` 之后，或在
+        隐藏 / 关闭 / 退出时由 :meth:`_flush_persisted_state_save` 补齐。
+        """
+        self._persisted_state_dirty = True
+        self._persisted_state_save_timer.start()
+
+    def _flush_persisted_state_save(self) -> None:
+        """有待落盘的偏好就立刻写一次，否则什么都不做。"""
+        self._persisted_state_save_timer.stop()
+        if not self._persisted_state_dirty:
+            return
+        self._save_persisted_state()
+
     def _save_persisted_state(self) -> None:
+        self._persisted_state_save_timer.stop()
+        self._persisted_state_dirty = False
         protected_fields = (
             _BUILTIN_SCHEME_STYLE_FIELDS
             | _LAYOUT_DEFAULT_STYLE_FIELDS

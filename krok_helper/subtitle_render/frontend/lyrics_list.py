@@ -483,6 +483,31 @@ class _ReadOnlyDelegate(_GroupBackgroundDelegate):
         return None
 
 
+_PRESENTATION_STYLE_FIELDS: tuple[str, ...] = (
+    # lane / 分页
+    "dual_line_layout",
+    "line_alignments",
+    "section_gap_ms",
+    # 内容列对齐
+    "line_horizontal_layout",
+    "row1_align",
+    "row2_align",
+    "smart_horizontal",
+    # 布局列名称 + 逐行布局套用（_effective_layout_style）
+    "layouts",
+    # 角色色点
+    "fill_color",
+    "karaoke_colors",
+    "custom_style_schemes",
+)
+"""``Style`` 中真正会改变歌词表呈现的字段；其余字段只作用于画面。"""
+
+
+def _presentation_signature(style: Style) -> tuple:
+    """歌词表呈现相关字段的取值签名，用于跳过无关的整表刷新。"""
+    return tuple(getattr(style, name) for name in _PRESENTATION_STYLE_FIELDS)
+
+
 def _effective_layout_style(style: Style, line: TimingLine) -> Style:
     """行引用的布局套用到 style 上（与渲染端 ``_layout_style_for_line`` 同语义）。"""
     index = int(getattr(line, "layout_index", 0) or 0)
@@ -1186,9 +1211,16 @@ class LyricsPanel(DropPanel):
 
     def set_style(self, style: Style) -> None:
         """样式（布局 / 配色方案）变化时刷新色点、对齐与双行分组。"""
+        previous = self._style
         self._style = style
-        if self._populated:
-            self._refresh_presentation()
+        if not self._populated:
+            return
+        if _presentation_signature(previous) == _presentation_signature(style):
+            # 字号、描边、发光这类只影响画面的字段占了属性面板绝大多数控件，
+            # 但对本表毫无影响。整表刷新要为每行重建单元格、算对齐、画角色色点
+            # 图标，不能被这些改动带着跑。
+            return
+        self._refresh_presentation()
 
     def _layout_name_for_id(self, layout_id: Optional[str]) -> str:
         return layout_display_name(self._style, str(layout_id or "default"))

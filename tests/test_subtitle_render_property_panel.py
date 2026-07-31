@@ -181,7 +181,7 @@ def test_numeric_property_typing_is_debounced(qapp, factory, typed, expected):
 
     assert emitted == []
 
-    QTest.qWait(180)
+    QTest.qWait(pp.EDIT_COMMIT_DEBOUNCE_MS + 60)
     qapp.processEvents()
 
     assert spin.value() == expected
@@ -198,13 +198,13 @@ def test_cleared_numeric_field_is_not_refilled_by_debounce(qapp):
     spin.lineEdit().selectAll()
 
     QTest.keyClick(spin.lineEdit(), Qt.Key.Key_Delete)
-    QTest.qWait(220)
+    QTest.qWait(pp.EDIT_COMMIT_DEBOUNCE_MS + 60)
     qapp.processEvents()
 
     assert spin.lineEdit().text() == "px"
 
     QTest.keyClicks(spin.lineEdit(), "8")
-    QTest.qWait(220)
+    QTest.qWait(pp.EDIT_COMMIT_DEBOUNCE_MS + 60)
     qapp.processEvents()
 
     assert spin.lineEdit().text() == "8px"
@@ -221,14 +221,14 @@ def test_below_minimum_typing_is_not_rewritten_mid_edit(qapp):
     spin.lineEdit().selectAll()
 
     QTest.keyClicks(spin.lineEdit(), "1")
-    QTest.qWait(220)
+    QTest.qWait(pp.EDIT_COMMIT_DEBOUNCE_MS + 60)
     qapp.processEvents()
 
     assert spin.lineEdit().text() == "1"
     assert spin.value() == 24  # 越界文本不提交，旧值仍在但不回写输入框
 
     QTest.keyClicks(spin.lineEdit(), "2")
-    QTest.qWait(220)
+    QTest.qWait(pp.EDIT_COMMIT_DEBOUNCE_MS + 60)
     qapp.processEvents()
 
     assert spin.lineEdit().text() == "12"
@@ -251,12 +251,34 @@ def test_debounced_commit_keeps_typed_text_and_caret(qapp, factory, typed, expec
     spin.lineEdit().selectAll()
 
     QTest.keyClicks(spin.lineEdit(), typed)
-    QTest.qWait(220)
+    QTest.qWait(pp.EDIT_COMMIT_DEBOUNCE_MS + 60)
     qapp.processEvents()
 
     assert spin.value() == expected
     assert spin.lineEdit().text() == typed
     assert spin.lineEdit().cursorPosition() == len(typed)
+    spin.close()
+
+
+def test_slow_typing_still_coalesces_into_one_commit(qapp):
+    """连打判定要宽到覆盖正常打字的间隔，否则每个字符都要吃一次完整提交。"""
+    spin = pp._spin(0, 10_000)
+    spin.show()
+    spin.lineEdit().setFocus()
+    spin.lineEdit().selectAll()
+    emitted: list[int] = []
+    spin.valueChanged.connect(emitted.append)
+
+    for char in "1234":
+        QTest.keyClicks(spin.lineEdit(), char)
+        QTest.qWait(int(pp.EDIT_COMMIT_DEBOUNCE_MS * 0.6))
+        qapp.processEvents()
+        assert emitted == []
+
+    QTest.qWait(pp.EDIT_COMMIT_DEBOUNCE_MS + 60)
+    qapp.processEvents()
+
+    assert emitted == [1234]
     spin.close()
 
 
@@ -269,7 +291,7 @@ def test_numeric_field_normalises_text_once_editing_finishes(qapp):
     spin.lineEdit().selectAll()
 
     QTest.keyClicks(spin.lineEdit(), "3")
-    QTest.qWait(220)
+    QTest.qWait(pp.EDIT_COMMIT_DEBOUNCE_MS + 60)
     qapp.processEvents()
     assert spin.lineEdit().text() == "3"
 
@@ -491,6 +513,96 @@ class _FontMigrationSettingsProvider:
         self.data = dict(data)
 
 
+class _CountingSettingsProvider(_FontMigrationSettingsProvider):
+    def __init__(self, data: dict):
+        super().__init__(data)
+        self.saves = 0
+
+    def save(self, data):
+        self.saves += 1
+        super().save(data)
+
+
+def test_app_preference_save_is_deferred_off_the_edit_path(qapp):
+    """样式提交不能同步落盘。
+
+    一次 _save_persisted_state 要读一遍 settings.json、把整份 AppSettings 重新
+    序列化再原子写回；挂在属性面板每次提交上，编辑手感直接被磁盘拖住。
+    """
+    provider = _CountingSettingsProvider({"style": style_to_dict(Style())})
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    baseline = provider.saves
+
+    win._apply_style(
+        replace(win._style, line_lead_in_ms=win._style.line_lead_in_ms + 40)
+    )
+
+    assert provider.saves == baseline
+    assert win._persisted_state_dirty is True
+
+    win._flush_persisted_state_save()
+
+    assert provider.saves == baseline + 1
+    assert win._persisted_state_dirty is False
+    assert (
+        style_from_dict(provider.data["style"]).line_lead_in_ms
+        == win._style.line_lead_in_ms
+    )
+
+    # 已经写过就不再重复写。
+    win._flush_persisted_state_save()
+    assert provider.saves == baseline + 1
+
+
+def test_pending_app_preferences_are_flushed_on_close(qapp):
+    """欠着的偏好必须在关闭时补上，否则改完直接退出就丢了。"""
+    provider = _CountingSettingsProvider({"style": style_to_dict(Style())})
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    win._apply_style(replace(win._style, line_gap_px=win._style.line_gap_px + 7))
+    baseline = provider.saves
+
+    win.close()
+
+    assert provider.saves == baseline + 1
+    assert (
+        style_from_dict(provider.data["style"]).line_gap_px == win._style.line_gap_px
+    )
+
+
+def test_style_edit_without_capacity_shrink_skips_track_snapshot(qapp):
+    """不缩容的样式微调不该深拷贝全部轨道。
+
+    深拷贝是 O(全部行 × 全部字符)，只有布局缩容重排才需要那份轨道撤销快照。
+    """
+    provider = _FontMigrationSettingsProvider({"style": style_to_dict(Style())})
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    win._timing_track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("一", 0)], end_ms=500),
+            TimingLine(chars=[TimingChar("二", 500)], end_ms=1000),
+        ]
+    )
+
+    real_deepcopy = mw.deepcopy
+    calls: list[int] = []
+
+    def counting_deepcopy(value):
+        calls.append(1)
+        return real_deepcopy(value)
+
+    win._apply_style(replace(win._style, font_size_px=win._style.font_size_px + 4))
+    mw.deepcopy = counting_deepcopy
+    try:
+        win._apply_style(
+            replace(win._style, stroke_width_px=win._style.stroke_width_px + 1)
+        )
+    finally:
+        mw.deepcopy = real_deepcopy
+
+    assert calls == []
+    assert win._undo_stack and win._undo_stack[-1][0] == "style"
+
+
 def test_live_scheme_edits_do_not_auto_save_as_app_defaults(qapp):
     initial_style = Style(
         fill_color="#111111",
@@ -537,6 +649,7 @@ def test_title_enabled_and_layout_are_remembered_without_leaking_project_text(qa
         ),
     )
     win._apply_style(current)
+    win._flush_persisted_state_save()
 
     assert "title_overlay" not in provider.data["style"]
     assert provider.data["new_project_defaults"] == {
@@ -580,6 +693,7 @@ def test_title_enabled_and_layout_are_remembered_without_leaking_project_text(qa
             title_overlay=replace(reloaded._style.title_overlay, enabled=False),
         )
     )
+    reloaded._flush_persisted_state_save()
     disabled_reload = mw.SubtitleRenderWindow(
         embedded=True, settings_provider=provider
     )
@@ -772,6 +886,7 @@ def test_layout_defaults_follow_live_user_edits_at_app_reference_height(
     # User layout edits automatically become the next new project's defaults,
     # normalized from the current 720p project to the app's 1080p reference.
     win._apply_style(project_style)
+    win._flush_persisted_state_save()
     saved = style_from_dict(provider.data["style"])
     assert saved.line_gap_px == 105
     assert saved.horizontal_margin_px == 120
@@ -806,6 +921,7 @@ def test_batch_layout_assignment_is_remembered_for_new_subtitle_sources(qapp):
     win._timing_track = first_track
 
     win._on_layout_assign_all(1)
+    win._flush_persisted_state_save()
 
     assert [line.layout_index for line in first_track.lines] == [1, 1]
     assert provider.data["new_project_defaults"]["layout_assignment"] == {
@@ -1507,7 +1623,7 @@ def test_title_timing_millis_typing_survives_panel_round_trip(qapp):
     editor.setFocus()
     editor.selectAll()
     QTest.keyClicks(editor, "045")
-    QTest.qWait(220)
+    QTest.qWait(pp.EDIT_COMMIT_DEBOUNCE_MS + 60)
     qapp.processEvents()
 
     assert panel._title_duration_spin.value() == 2_045
@@ -5540,6 +5656,7 @@ def test_video_import_syncs_output_size_and_rescales_style(qapp, monkeypatch, tm
     assert win._style.line_gap_px == 60
     assert win._property_panel._layout_schematic._virtual_width == 1280
     assert win._property_panel._layout_schematic._virtual_height == 720
+    win._flush_persisted_state_save()
     assert provider.data["screen"]["width"] == 1280
     assert provider.data["screen"]["height"] == 720
 
@@ -5605,6 +5722,7 @@ def test_main_window_export_screen_controls_update_and_persist(qapp, monkeypatch
 
     win._export_width_spin.setValue(3840)
     win._export_height_spin.setValue(2160)
+    win._flush_persisted_state_save()
 
     assert win._export_width_spin.value() == 3840
     assert win._export_height_spin.value() == 2160
@@ -5622,10 +5740,12 @@ def test_main_window_export_screen_controls_update_and_persist(qapp, monkeypatch
     }
 
     win._export_width_spin.setValue(4000)
+    win._flush_persisted_state_save()
     assert provider.data["screen"]["preset_key"] == "custom"
     assert provider.data["screen"]["width"] == 4000
 
     win._export_fps_combo.setCurrentIndex(win._export_fps_combo.findData(120))
+    win._flush_persisted_state_save()
     assert win._transport_bar._tick_timer.interval() == 8
     assert win._transport_bar._position_poll_timer.interval() == 8
     assert provider.data["screen"]["fps"] == 120
@@ -5813,6 +5933,7 @@ def test_render_worker_choice_is_local_and_not_saved_in_project(qapp, monkeypatc
     win._export_render_workers_combo.setCurrentIndex(
         win._export_render_workers_combo.findData(12)
     )
+    win._flush_persisted_state_save()
 
     assert provider.data["output"]["render_workers"] == 12
     assert win._project_dirty is False
@@ -5850,6 +5971,7 @@ def test_export_encoding_choices_persist_as_local_new_project_defaults(
     win._export_render_workers_combo.setCurrentIndex(
         win._export_render_workers_combo.findData(12)
     )
+    win._flush_persisted_state_save()
 
     assert provider.data["output"]["encoder_mode"] == mw.ENCODER_NVENC
     assert provider.data["output"]["codec"] == mw.CODEC_HEVC
