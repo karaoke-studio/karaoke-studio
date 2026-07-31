@@ -1980,6 +1980,9 @@ def resolved_page_offset_windows_for_style(
                 track,
                 display_line,
                 line_style,
+                # Glow may overlap between pages; collision avoidance only
+                # protects solid glyph/ruby ink plus stroke/shadow.
+                include_glow=False,
             )
             axis_bounds = (
                 None if ink_rect is None else (ink_rect[0], ink_rect[2])
@@ -2000,6 +2003,9 @@ def resolved_page_offset_windows_for_style(
                 baselines,
                 line_layouts,
                 layout_cache_sig=layout_cache_sig,
+                # Glow may overlap between pages; collision avoidance only
+                # protects solid glyph/ruby ink plus stroke/shadow.
+                include_glow=False,
             )
             axis_bounds = (
                 None if ink_rect is None else (ink_rect[1], ink_rect[3])
@@ -2185,6 +2191,7 @@ def _display_line_horizontal_ink_rect(
     line_layouts: dict[int, _SayatooLineLayout],
     *,
     layout_cache_sig: tuple | None,
+    include_glow: bool = True,
 ) -> tuple[int, int, int, int] | None:
     """Return the final static horizontal-line ink rectangle.
 
@@ -2218,18 +2225,25 @@ def _display_line_horizontal_ink_rect(
     )
     if layout is None:
         return None
-    return _line_static_ink_rect(layout)
+    return _line_static_ink_rect(layout, include_glow=include_glow)
 
 
 def _line_static_ink_rect(
     layout: _LineLayout,
+    *,
+    include_glow: bool = True,
 ) -> tuple[int, int, int, int] | None:
     """Return the painted main/Ruby rectangle without layout line spacing."""
 
     bounds: list[tuple[float, float, float, float]] = []
     for run in _text_glyph_runs(layout.text_layout, layout.has_inline_styles):
         path = _glyph_run_path(run, layout.baseline_y)
-        visual = _painted_path_ink_rect(path, run[0].style, ruby=False)
+        visual = _painted_path_ink_rect(
+            path,
+            run[0].style,
+            ruby=False,
+            include_glow=include_glow,
+        )
         if visual is not None:
             bounds.append(visual)
     for glyph in _bitmap_guide_glyphs(layout.text_layout):
@@ -2265,7 +2279,12 @@ def _line_static_ink_rect(
             ruby_style,
             base_text=ruby_layout.ruby.kanji,
         )
-        visual = _painted_path_ink_rect(path, ruby_style, ruby=True)
+        visual = _painted_path_ink_rect(
+            path,
+            ruby_style,
+            ruby=True,
+            include_glow=include_glow,
+        )
         if visual is not None:
             bounds.append(visual)
 
@@ -2281,6 +2300,8 @@ def _line_static_ink_rect(
 
 def _line_static_vertical_ink_bounds(
     layout: _LineLayout,
+    *,
+    include_glow: bool = True,
 ) -> tuple[int, int] | None:
     """Return the static painted Y envelope without layout line spacing.
 
@@ -2291,7 +2312,7 @@ def _line_static_vertical_ink_bounds(
     per-line ink bounds have been measured.
     """
 
-    bounds = _line_static_ink_rect(layout)
+    bounds = _line_static_ink_rect(layout, include_glow=include_glow)
     if bounds is None:
         return None
     return bounds[1], bounds[3]
@@ -2302,6 +2323,7 @@ def _painted_path_ink_rect(
     style: Style,
     *,
     ruby: bool,
+    include_glow: bool = True,
 ) -> tuple[float, float, float, float] | None:
     """Return one path's static painted rectangle for both colour states."""
 
@@ -2338,7 +2360,10 @@ def _painted_path_ink_rect(
         )
 
     stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
-    extent = max(stroke_extent, glow_extent if decoration == "glow" else 0)
+    extent = max(
+        stroke_extent,
+        glow_extent if include_glow and decoration == "glow" else 0,
+    )
     left = float(rect.left()) - extent
     top = float(rect.top()) - extent
     right = float(rect.right()) + extent
@@ -2356,6 +2381,7 @@ def _painted_path_vertical_bounds(
     style: Style,
     *,
     ruby: bool,
+    include_glow: bool = True,
 ) -> tuple[float, float] | None:
     """Return one path's painted static Y bounds for both karaoke colour states."""
 
@@ -2390,7 +2416,10 @@ def _painted_path_vertical_bounds(
         )
 
     stroke_extent = _visual_stroke_extent(stroke_width, stroke2_width)
-    extent = max(stroke_extent, glow_extent if decoration == "glow" else 0)
+    extent = max(
+        stroke_extent,
+        glow_extent if include_glow and decoration == "glow" else 0,
+    )
     top = float(rect.top()) - extent
     bottom = float(rect.bottom()) + extent
     if decoration == "shadow" and shadow_dy:
@@ -2426,6 +2455,8 @@ def _display_line_vertical_ink_rect(
     track: TimingTrack,
     display_line: DisplayLine,
     line_style: Style,
+    *,
+    include_glow: bool = True,
 ) -> tuple[int, int, int, int] | None:
     """Return the final static vertical-line ink rectangle."""
 
@@ -2461,8 +2492,16 @@ def _display_line_vertical_ink_rect(
                 + ruby_cell_w
             ),
         )
-    extent_x = _line_effect_extent(line_style, vertical_axis=False)
-    extent_y = _line_effect_extent(line_style, vertical_axis=True)
+    extent_x = _line_effect_extent(
+        line_style,
+        vertical_axis=False,
+        include_glow=include_glow,
+    )
+    extent_y = _line_effect_extent(
+        line_style,
+        vertical_axis=True,
+        include_glow=include_glow,
+    )
     left -= extent_x
     right += extent_x
     top -= extent_y
@@ -2475,10 +2514,15 @@ def _display_line_vertical_ink_rect(
     )
 
 
-def _line_effect_extent(style: Style, *, vertical_axis: bool) -> int:
+def _line_effect_extent(
+    style: Style,
+    *,
+    vertical_axis: bool,
+    include_glow: bool = True,
+) -> int:
     stroke2 = _main_stroke2_width(style)
     extent = _visual_stroke_extent(style.stroke_width_px, stroke2)
-    if style.decoration_kind == "glow":
+    if include_glow and style.decoration_kind == "glow":
         extent = max(
             extent,
             _glow_extent(
@@ -3792,6 +3836,9 @@ def _measure_collision_bands(
                 track,
                 display_line,
                 line_style,
+                # Glow may overlap between pages; collision avoidance only
+                # protects solid glyph/ruby ink plus stroke/shadow.
+                include_glow=False,
             )
             axis_bounds = (
                 None if ink_rect is None else (ink_rect[0], ink_rect[2])
@@ -3812,6 +3859,9 @@ def _measure_collision_bands(
                 baselines,
                 line_layouts,
                 layout_cache_sig=layout_cache_sig,
+                # Glow may overlap between pages; collision avoidance only
+                # protects solid glyph/ruby ink plus stroke/shadow.
+                include_glow=False,
             )
             axis_bounds = (
                 None if ink_rect is None else (ink_rect[1], ink_rect[3])
