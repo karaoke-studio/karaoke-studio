@@ -581,6 +581,35 @@ def test_double_click_right_handle_edits_exit_margin(qapp) -> None:
     assert edits == [(0, 0, (None, None), (None, 3500))]
 
 
+def test_overlapped_blocks_select_topmost_line_and_edit_its_margin(qapp) -> None:
+    track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("前", 1000)], end_ms=3000),
+            TimingLine(chars=[TimingChar("後", 2500)], end_ms=4200),
+        ]
+    )
+    widget = TrackTimelineView()
+    widget.resize(800, 180)
+    widget.set_tracks([("主字幕", track)])
+    widget.set_duration(8_000)
+    widget.set_display_windows([{0: (800, 3200), 1: (2300, 4500)}])
+
+    _lane, lane_rect = widget._lane_geometry()[0]
+    _click(widget, widget._x_for_ms(2600), lane_rect.center().y())
+
+    assert widget._selected == (0, 1)
+    _left, right_rect, _lane_idx, block = widget._handle_rects()
+    assert block.line_index == 1
+
+    _double_click(widget, right_rect.center().x(), right_rect.center().y())
+    assert widget._margin_edit is not None
+    widget._margin_edit.setText("900")
+    widget._commit_margin_editor()
+
+    assert track.lines[0].display_end_override_ms is None
+    assert track.lines[1].display_end_override_ms == 5100
+
+
 def test_selection_paint_smoke(qapp) -> None:
     widget = TrackTimelineView()
     widget.resize(800, 180)

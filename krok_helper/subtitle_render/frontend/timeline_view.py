@@ -491,7 +491,7 @@ class TrackTimelineView(QWidget):
             if x < rect.left():
                 return lane_index, None, None
             ms = self._ms_for_x(x)
-            for block in lane.blocks:
+            for block in reversed(lane.blocks):
                 if block.start_ms <= ms < block.end_ms:
                     for cell in block.cells:
                         if cell.start_ms <= ms < cell.end_ms:
@@ -838,53 +838,62 @@ class TrackTimelineView(QWidget):
     ) -> None:
         view_start = self._view_start_ms
         view_end = view_start + self._view_span_ms
+
+        for block in lane.blocks:
+            if block.end_ms < view_start or block.start_ms > view_end:
+                continue
+            self._paint_lane_block(painter, block, rect, dark)
+
+    def _paint_lane_block(
+        self,
+        painter: QPainter,
+        block: LineBlock,
+        rect: QRectF,
+        dark: bool,
+    ) -> None:
         top = rect.top() + 2
         height = rect.height() - 4
-
         char_font = QFont("Microsoft YaHei UI")
         char_font.setPointSizeF(max(6.5, min(10.5, height * 0.42)))
         char_metrics = QFontMetrics(char_font)
         text_color = QColor("#1F2937")  # 淡色块上固定深色文字（对标 Sayatoo）
 
-        for block in lane.blocks:
-            if block.end_ms < view_start or block.start_ms > view_end:
+        hue = _singer_hue(block.singer_id)
+        if hue is None:
+            accent = QColor(palette().accent_primary)
+            hue = max(accent.hueF(), 0.0)
+        # Sayatoo 式外观：淡色底 + 饱和描边 + 字符分隔线
+        fill = QColor.fromHsvF(hue, 0.20, 0.97)
+        border = QColor.fromHsvF(hue, 0.55, 0.72 if not dark else 0.80)
+        separator = QColor.fromHsvF(hue, 0.40, 0.82)
+
+        x0 = self._x_for_ms(block.start_ms)
+        x1 = max(self._x_for_ms(block.end_ms), x0 + 2)
+        block_rect = QRectF(x0, top, x1 - x0, height)
+        painter.setPen(border)
+        painter.setBrush(fill)
+        painter.drawRoundedRect(block_rect, 2.0, 2.0)
+
+        painter.setFont(char_font)
+        for cell in block.cells:
+            cx0 = self._x_for_ms(cell.start_ms)
+            cx1 = self._x_for_ms(cell.end_ms)
+            if cx1 < rect.left() or cx0 > rect.right():
                 continue
-            hue = _singer_hue(block.singer_id)
-            if hue is None:
-                accent = QColor(palette().accent_primary)
-                hue = max(accent.hueF(), 0.0)
-            # Sayatoo 式外观：淡色底 + 饱和描边 + 字符分隔线
-            fill = QColor.fromHsvF(hue, 0.20, 0.97)
-            border = QColor.fromHsvF(hue, 0.55, 0.72 if not dark else 0.80)
-            separator = QColor.fromHsvF(hue, 0.40, 0.82)
-
-            x0 = self._x_for_ms(block.start_ms)
-            x1 = max(self._x_for_ms(block.end_ms), x0 + 2)
-            block_rect = QRectF(x0, top, x1 - x0, height)
-            painter.setPen(border)
-            painter.setBrush(fill)
-            painter.drawRoundedRect(block_rect, 2.0, 2.0)
-
-            painter.setFont(char_font)
-            for cell in block.cells:
-                cx0 = self._x_for_ms(cell.start_ms)
-                cx1 = self._x_for_ms(cell.end_ms)
-                if cx1 < rect.left() or cx0 > rect.right():
-                    continue
-                cell_w = cx1 - cx0
-                if cx0 > x0 + 1:
-                    painter.setPen(separator)
-                    painter.drawLine(
-                        QPointF(cx0, top + 1), QPointF(cx0, top + height - 1)
-                    )
-                # 单元够宽才画字符，避免缩小后糊成一团
-                if cell_w >= char_metrics.horizontalAdvance(cell.text) + 2:
-                    painter.setPen(text_color)
-                    painter.drawText(
-                        QRectF(cx0, top, cell_w, height),
-                        Qt.AlignmentFlag.AlignCenter,
-                        cell.text,
-                    )
+            cell_w = cx1 - cx0
+            if cx0 > x0 + 1:
+                painter.setPen(separator)
+                painter.drawLine(
+                    QPointF(cx0, top + 1), QPointF(cx0, top + height - 1)
+                )
+            # 单元够宽才画字符，避免缩小后糊成一团
+            if cell_w >= char_metrics.horizontalAdvance(cell.text) + 2:
+                painter.setPen(text_color)
+                painter.drawText(
+                    QRectF(cx0, top, cell_w, height),
+                    Qt.AlignmentFlag.AlignCenter,
+                    cell.text,
+                )
 
     def _paint_zoombar(self, painter: QPainter) -> None:
         p = palette()
@@ -923,6 +932,12 @@ class TrackTimelineView(QWidget):
             x1 = max(self._x_for_ms(block.end_ms), x0 + 2)
             painter.save()
             painter.setClipRect(lane_rect.adjusted(-1, -2, 1, 2))
+            self._paint_lane_block(
+                painter,
+                block,
+                lane_rect,
+                bool(getattr(palette(), "is_dark", False)),
+            )
             pen = painter.pen()
             pen.setColor(accent)
             pen.setWidthF(2.0)
