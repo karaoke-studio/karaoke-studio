@@ -203,16 +203,17 @@ _SCHEME_FIELDS = {
 _GLOBAL_SCHEME_KEY = "global"
 _CUSTOM_SCHEME_PREFIX = "custom:"
 _PRESET_NO_GROUP = "\x00ungrouped"
-EDIT_COMMIT_DEBOUNCE_MS = 400
+EDIT_COMMIT_DEBOUNCE_MS = 200
 """数值框 / 标题文字「还在连打」的判定窗口。
 
-停手这么久才把编辑提交给宿主（重建预览、写撤销栈、标脏）。窗口太窄的话，
-一个正常速度的打字者每敲一个字符就要吃一次完整提交——原来的 150ms 就在
-这个边上，抬到 400ms 才真的覆盖住逐字符输入的间隔。上限受
-``SubtitleRenderWindow._STYLE_UNDO_MERGE_WINDOW_S``（1.2s）约束：超过它，
-连续微调就不再合并成一条撤销记录了。
+停手这么久才把编辑提交给宿主（重建预览、写撤销栈、标脏）。
+
+这个值曾经被抬到 400ms，理由是「每次提交都很贵，少触发几次」。那个前提已经
+不成立——提交路径本身快了一个数量级——而它的代价是：用户改完一个值，要先干
+等这么久预览才开始动。等待期间界面本来就不好用，再往前加一段纯粹的空等只会
+更难受。降回 200ms：仍然覆盖得住正常打字的字符间隔，又不显眼。
 """
-COLOR_COMMIT_DEBOUNCE_MS = 450
+COLOR_COMMIT_DEBOUNCE_MS = 250
 """色号输入的同类窗口——6/8 位十六进制要连打更久，留得比数值框宽一点。"""
 _COMPACT_CONTROL_HEIGHT = 32
 _FONT_SIZE_MAX_PX = 4096
