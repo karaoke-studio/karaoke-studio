@@ -90,7 +90,9 @@ _RUN_GLOW_CACHE = LayerCache(max_items=128)
 # dataclass、前端不调失效接口），track/style 就地改动下一帧自然 miss，不会取脏值。
 # 行索引而非行内容进 key：SmartHorizon 的页定位用 `item is line` 身份判断，
 # 值相同的两行也可能落在不同页。
-_LINE_LAYOUT_CACHE = LayerCache(max_items=48)
+# 一次排版会把每行的布局问上三遍，但三遍是分批扫全轨的：48 项装不下一条曲目，
+# 等第二遍回到第一行时它早被挤掉了，长曲目命中率直接归零。按整轨都能留住来定容量。
+_LINE_LAYOUT_CACHE = LayerCache(max_items=2048)
 _DISPLAY_LINES_CACHE_MAX = 24
 _DISPLAY_LINES_CACHE: (
     "OrderedDict[tuple, tuple[TimingTrack, tuple[DisplayLine, ...]]]"
@@ -396,6 +398,7 @@ def layout_pass():
     if depth == 0:
         _LAYOUT_PASS.page_maps = {}
         _LAYOUT_PASS.line_styles = {}
+        _LAYOUT_PASS.line_indices = {}
         _LAYOUT_PASS.tracks = []
         _LAYOUT_PASS.styles = []
     _LAYOUT_PASS.depth = depth + 1
@@ -406,6 +409,7 @@ def layout_pass():
         if depth == 0:
             _LAYOUT_PASS.page_maps = None
             _LAYOUT_PASS.line_styles = None
+            _LAYOUT_PASS.line_indices = None
             _LAYOUT_PASS.tracks = []
             _LAYOUT_PASS.styles = []
 
@@ -6728,6 +6732,27 @@ def _paint_line_static(
     paint_rubies_on_top()
 
 
+def _track_line_index(track: TimingTrack, line: TimingLine) -> int:
+    """行在轨道中的下标；找不到返回 ``-1``。
+
+    每次行布局查缓存都要它，而线性扫描是 O(行数)——在长曲目上又是一处
+    O(行数²)。排版区间内行表不会变，整轨建一次索引即可。
+    """
+    cache = getattr(_LAYOUT_PASS, "line_indices", None)
+    if cache is None:
+        for index, item in enumerate(track.lines):
+            if item is line:
+                return index
+        return -1
+    index_map = cache.get(id(track))
+    if index_map is None:
+        index_map = {id(item): index for index, item in enumerate(track.lines)}
+        cache[id(track)] = index_map
+        # 键里有 id()：存住 track，避免回收后地址被复用。
+        _LAYOUT_PASS.tracks.append(track)
+    return index_map.get(id(line), -1)
+
+
 def _layout_line(
     track: TimingTrack,
     line: TimingLine,
@@ -6745,11 +6770,7 @@ def _layout_line(
             track, line, style, img_w, img_h,
             baseline_y=baseline_y, line_x=line_x, lane=lane,
         )
-    line_index = -1
-    for index, item in enumerate(track.lines):
-        if item is line:
-            line_index = index
-            break
+    line_index = _track_line_index(track, line)
     if line_index < 0:
         return _layout_line_uncached(
             track, line, style, img_w, img_h,
