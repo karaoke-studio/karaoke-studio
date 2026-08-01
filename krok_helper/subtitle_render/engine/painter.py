@@ -32,8 +32,9 @@ from __future__ import annotations
 import math
 import os
 from collections import OrderedDict
+from contextlib import contextmanager
 from dataclasses import dataclass, field, fields as dataclass_fields, is_dataclass, replace
-from threading import Lock
+from threading import Lock, local as thread_local
 from typing import Hashable, Optional
 
 import numpy as np
@@ -94,6 +95,7 @@ _DISPLAY_LINES_CACHE_MAX = 24
 _DISPLAY_LINES_CACHE: (
     "OrderedDict[tuple, tuple[TimingTrack, tuple[DisplayLine, ...]]]"
 ) = OrderedDict()
+_LAYOUT_PASS = thread_local()
 _PAGE_PLACEMENT_CACHE_MAX = 24
 _PAGE_PLACEMENT_CACHE: "OrderedDict[tuple, dict[int, tuple[tuple[int, int, float, float], ...]]]" = (
     OrderedDict()
@@ -380,6 +382,28 @@ _UTOPIA_FADE_OUT_TIME_MS = 750
 _CHAR_FADE_INTRO_DELAY_MS = 350
 _CHAR_FADE_IN_TIME_MS = 250
 _CHAR_FADE_OUT_TIME_MS = 250
+
+
+@contextmanager
+def layout_pass():
+    """标记一次排版过程：其间轨道与样式不会被改动。
+
+    排版是逐行问「这一行同页还有谁」的，而答案对整条轨道只有一份。把这段区间圈
+    出来，就能用对象身份做 O(1) 键把它算一次；区间结束即丢弃，所以外部改了轨道
+    也不会读到旧分页。可重入，按线程隔离（预览与导出各跑各的）。
+    """
+    depth = getattr(_LAYOUT_PASS, "depth", 0)
+    if depth == 0:
+        _LAYOUT_PASS.page_maps = {}
+        _LAYOUT_PASS.tracks = []
+    _LAYOUT_PASS.depth = depth + 1
+    try:
+        yield
+    finally:
+        _LAYOUT_PASS.depth = depth
+        if depth == 0:
+            _LAYOUT_PASS.page_maps = None
+            _LAYOUT_PASS.tracks = []
 
 
 def clear_before_layer_cache() -> None:
@@ -831,21 +855,22 @@ def paint_frame_to_painter(
     如コーラス轨）。每轨独立分页 / 分 lane / 计算显示窗口，依次叠绘到同一帧；
     标题 overlay 只随主轨绘制一次。
     """
-    if track is not None:
-        _paint_track_to_painter(
-            painter,
-            logical_w,
-            logical_h,
-            track,
-            t_ms,
-            style,
-            draw_title=True,
-            duration_ms=duration_ms,
-        )
-    for extra in extra_tracks or ():
-        _paint_track_to_painter(
-            painter, logical_w, logical_h, extra, t_ms, style, draw_title=False
-        )
+    with layout_pass():
+        if track is not None:
+            _paint_track_to_painter(
+                painter,
+                logical_w,
+                logical_h,
+                track,
+                t_ms,
+                style,
+                draw_title=True,
+                duration_ms=duration_ms,
+            )
+        for extra in extra_tracks or ():
+            _paint_track_to_painter(
+                painter, logical_w, logical_h, extra, t_ms, style, draw_title=False
+            )
 
 
 def _paint_track_to_painter(
@@ -13366,6 +13391,60 @@ def _line_total_width(
     )
 
 
+def _page_lines_style_key(style: Style) -> tuple:
+    """样式里唯一能移动分页的那几项。
+
+    字号、颜色、描边这些改了也不会换页，所以不进键——否则改个颜色就全线失效。
+    逐行布局会派生出一堆 ``replace()`` 出来的 Style 实例，按值取键才能让它们共享
+    同一份分页结果。
+    """
+    return (
+        bool(style.dual_line_layout),
+        len(style.line_alignments or ()),
+        int(style.section_gap_ms),
+        tuple(len(layout.line_alignments or ()) for layout in style.layouts),
+    )
+
+
+def _renderable_page_map(
+    track: TimingTrack, style: Style
+) -> dict[int, tuple[tuple[TimingLine, int], ...]]:
+    """``id(行) -> 同页 (行, lane) 元组``，整轨算一次。
+
+    以前每问一行就把全轨重跑一遍 ``assign_lanes``，而排版是逐行问的——一次
+    IR 构建能跑上千次，是编辑卡顿里最大的一块。
+
+    只在 :func:`layout_pass` 内缓存：一次排版过程中轨道不会被改，用 ``id(track)``
+    做键就够，且是 O(1)。按内容算签名反而更慢——签名本身是 O(行数)，乘上每行十几
+    次调用比重算还贵（实测 400 行从 5.2s 涨到 10.1s）。
+    """
+    cache = getattr(_LAYOUT_PASS, "page_maps", None)
+    cache_key = (id(track), _page_lines_style_key(style)) if cache is not None else None
+    if cache is not None:
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return hit
+    render_lines = [item for item in track.lines if not item.is_blank and item.chars]
+    lanes, page_starts, page_rows = assign_lanes(
+        render_lines,
+        _lane_count(style),
+        _row_count_resolver(style),
+        section_gap_ms=style.section_gap_ms,
+    )
+    page_map: dict[int, tuple[tuple[TimingLine, int], ...]] = {}
+    for index, item in enumerate(render_lines):
+        page_start = page_starts[index]
+        page_end = min(page_start + page_rows[index], len(render_lines))
+        page_map[id(item)] = tuple(
+            (render_lines[i], lanes[i]) for i in range(page_start, page_end)
+        )
+    if cache is not None:
+        # track 一并存住：键里有 id()，对象被回收后地址会被复用。
+        cache[cache_key] = page_map
+        _LAYOUT_PASS.tracks.append(track)
+    return page_map
+
+
 def _renderable_page_lines(
     track: TimingTrack,
     line: TimingLine,
@@ -13375,21 +13454,8 @@ def _renderable_page_lines(
 
     返回同页 ``(行, lane)`` 列表（含自身）；行不在 track 中时返回 ``None``。
     """
-    render_lines = [item for item in track.lines if not item.is_blank and item.chars]
-    lanes, page_starts, page_rows = assign_lanes(
-        render_lines,
-        _lane_count(style),
-        _row_count_resolver(style),
-        section_gap_ms=style.section_gap_ms,
-    )
-    for index, item in enumerate(render_lines):
-        if item is line:
-            page_start = page_starts[index]
-            page_end = min(page_start + page_rows[index], len(render_lines))
-            return [
-                (render_lines[i], lanes[i]) for i in range(page_start, page_end)
-            ]
-    return None
+    page = _renderable_page_map(track, style).get(id(line))
+    return None if page is None else list(page)
 
 
 def _smart_horizontal_dx(

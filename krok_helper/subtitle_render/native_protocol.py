@@ -534,6 +534,33 @@ def build_render_ir(
     native 光栅化画布为 ``round(width*dpr) x round(height*dpr)``,
     与 Python 预览 ``preview_render_target_size`` + ``setDevicePixelRatio`` 语义一致。
     """
+    from krok_helper.subtitle_render.engine.painter import layout_pass
+
+    # 整份 IR 是一次排版过程：其间 track / style 不变，分页结果整轨算一次即可。
+    with layout_pass():
+        return _build_render_ir_locked(
+            track,
+            style,
+            width=width,
+            height=height,
+            fps=fps,
+            dpr=dpr,
+            extra_tracks=extra_tracks,
+            duration_ms=duration_ms,
+        )
+
+
+def _build_render_ir_locked(
+    track: TimingTrack,
+    style: Style,
+    *,
+    width: int,
+    height: int,
+    fps: int,
+    dpr: float = 1.0,
+    extra_tracks: list[TimingTrack] | None = None,
+    duration_ms: int | None = None,
+) -> dict[str, Any]:
     return {
         "schema": RENDER_IR_SCHEMA,
         "screen": {
