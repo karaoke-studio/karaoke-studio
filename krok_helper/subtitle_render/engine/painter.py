@@ -399,8 +399,12 @@ def layout_pass():
         _LAYOUT_PASS.page_maps = {}
         _LAYOUT_PASS.line_styles = {}
         _LAYOUT_PASS.line_indices = {}
+        _LAYOUT_PASS.active_rubies = {}
+        _LAYOUT_PASS.ruby_gaps = {}
         _LAYOUT_PASS.tracks = []
         _LAYOUT_PASS.styles = []
+        _LAYOUT_PASS.lines = []
+        _LAYOUT_PASS.ruby_lists = []
     _LAYOUT_PASS.depth = depth + 1
     try:
         yield
@@ -410,8 +414,12 @@ def layout_pass():
             _LAYOUT_PASS.page_maps = None
             _LAYOUT_PASS.line_styles = None
             _LAYOUT_PASS.line_indices = None
+            _LAYOUT_PASS.active_rubies = None
+            _LAYOUT_PASS.ruby_gaps = None
             _LAYOUT_PASS.tracks = []
             _LAYOUT_PASS.styles = []
+            _LAYOUT_PASS.lines = []
+            _LAYOUT_PASS.ruby_lists = []
 
 
 def clear_before_layer_cache() -> None:
@@ -13242,6 +13250,44 @@ def _ruby_char_gaps(
     style: Style,
     intervals: list[tuple[int, int]] | None = None,
 ) -> tuple[list[int], int, int]:
+    """相邻 ruby 避让及行缘溢出。排版过程中每行会被问十来次，缓存到区间内。
+
+    带注音的曲目里这是最后一块明显的重复计算：六个调用点各自从头量一遍这行的
+    注音间隔。合成轨道没有注音，之前几轮的基准照不出来。
+    """
+    cache = getattr(_LAYOUT_PASS, "ruby_gaps", None)
+    if cache is None:
+        return _ruby_char_gaps_uncached(line, char_widths, rubies, style, intervals)
+    # 按每条注音的身份取键，不是列表的身份：调用方拿到的 rubies 多半是
+    # _active_rubies_for_line 现做的一份新列表，用 id(rubies) 会每次都落空。
+    cache_key = (
+        id(line),
+        tuple(char_widths),
+        tuple(id(ruby) for ruby in rubies),
+        id(style),
+        None if intervals is None else tuple(intervals),
+    )
+    hit = cache.get(cache_key)
+    if hit is None:
+        gaps, left, right = _ruby_char_gaps_uncached(
+            line, char_widths, rubies, style, intervals
+        )
+        hit = (tuple(gaps), left, right)
+        cache[cache_key] = hit
+        _LAYOUT_PASS.lines.append(line)
+        _LAYOUT_PASS.ruby_lists.append(list(rubies))
+        _LAYOUT_PASS.styles.append(style)
+    # 调用方会就地改这个列表，每次给一份新的。
+    return list(hit[0]), hit[1], hit[2]
+
+
+def _ruby_char_gaps_uncached(
+    line: TimingLine,
+    char_widths: list[int],
+    rubies: list[RubyAnnotation],
+    style: Style,
+    intervals: list[tuple[int, int]] | None = None,
+) -> tuple[list[int], int, int]:
     """相邻 ruby 避让（N3 无条件规则）及行缘溢出。
 
     返回 ``(每字符前插入的间隙列表, 行首左溢出, 行末右溢出)``：
@@ -14130,6 +14176,26 @@ def resolved_guide_anchor_bounds_for_line(
 
 
 def _active_rubies_for_line(
+    rubies: list[RubyAnnotation],
+    line: TimingLine,
+) -> list[RubyAnnotation]:
+    """这一行生效的注音。排版过程中每行会被问十来次，缓存到区间内。"""
+    cache = getattr(_LAYOUT_PASS, "active_rubies", None)
+    if cache is None:
+        return _active_rubies_for_line_uncached(rubies, line)
+    cache_key = (id(rubies), id(line))
+    hit = cache.get(cache_key)
+    if hit is None:
+        hit = tuple(_active_rubies_for_line_uncached(rubies, line))
+        cache[cache_key] = hit
+        # 键里有 id()：存住这两个对象，避免回收后地址被复用。
+        _LAYOUT_PASS.lines.append(line)
+        _LAYOUT_PASS.ruby_lists.append(rubies)
+    # 调用方会就地改返回的列表，每次给一份新的。
+    return list(hit)
+
+
+def _active_rubies_for_line_uncached(
     rubies: list[RubyAnnotation],
     line: TimingLine,
 ) -> list[RubyAnnotation]:
