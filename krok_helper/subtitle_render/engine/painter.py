@@ -401,10 +401,12 @@ def layout_pass():
         _LAYOUT_PASS.line_indices = {}
         _LAYOUT_PASS.active_rubies = {}
         _LAYOUT_PASS.ruby_gaps = {}
+        _LAYOUT_PASS.char_advances = {}
         _LAYOUT_PASS.tracks = []
         _LAYOUT_PASS.styles = []
         _LAYOUT_PASS.lines = []
         _LAYOUT_PASS.ruby_lists = []
+        _LAYOUT_PASS.metrics = []
     _LAYOUT_PASS.depth = depth + 1
     try:
         yield
@@ -416,10 +418,12 @@ def layout_pass():
             _LAYOUT_PASS.line_indices = None
             _LAYOUT_PASS.active_rubies = None
             _LAYOUT_PASS.ruby_gaps = None
+            _LAYOUT_PASS.char_advances = None
             _LAYOUT_PASS.tracks = []
             _LAYOUT_PASS.styles = []
             _LAYOUT_PASS.lines = []
             _LAYOUT_PASS.ruby_lists = []
+            _LAYOUT_PASS.metrics = []
 
 
 def clear_before_layer_cache() -> None:
@@ -3656,10 +3660,28 @@ def _char_advance(
     latin_metrics: QFontMetrics,
     font_for,
 ) -> int:
-    """单字符步进；英数字符用英数字体度量，其余用日文字体度量。"""
-    if font_for is not None and _is_n3_latin_text(ch_text):
-        return latin_metrics.horizontalAdvance(ch_text)
-    return metrics.horizontalAdvance(ch_text)
+    """单字符步进；英数字符用英数字体度量，其余用日文字体度量。
+
+    ``QFontMetrics.horizontalAdvance`` 是 PyQt 绑定调用，**不释放 GIL 且会阻断
+    GIL 轮换**——预览 worker 每次编辑要调它数千次，GUI 线程因此被饿住上百毫秒
+    （实测:同样时长的纯 Python 负载只让另一个线程等 7ms，换成 PyQt 文字调用后
+    涨到 184ms）。一次排版里同一个字符 + 同一套度量的结果是常量，缓存掉。
+    """
+    cache = getattr(_LAYOUT_PASS, "char_advances", None)
+    if cache is None:
+        if font_for is not None and _is_n3_latin_text(ch_text):
+            return latin_metrics.horizontalAdvance(ch_text)
+        return metrics.horizontalAdvance(ch_text)
+    use_latin = font_for is not None and _is_n3_latin_text(ch_text)
+    source = latin_metrics if use_latin else metrics
+    cache_key = (ch_text, id(source))
+    hit = cache.get(cache_key)
+    if hit is None:
+        hit = source.horizontalAdvance(ch_text)
+        cache[cache_key] = hit
+        # 键里有 id()：存住度量对象，避免回收后地址被复用。
+        _LAYOUT_PASS.metrics.append(source)
+    return hit
 
 
 # 逐字 N3 度量（layout width / path left offset）是 (字符, 字体, 少数 style 标量) 的纯函数，
