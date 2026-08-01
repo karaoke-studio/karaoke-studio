@@ -133,6 +133,7 @@ from krok_helper.subtitle_render.engine.painter import (
     auto_assign_layouts_by_page,
     check_layout_margins,
     display_windows_for_style,
+    layout_pass,
 )
 from krok_helper.subtitle_render.engine.page_plan import (
     build_legacy_page_plan,
@@ -5374,12 +5375,17 @@ class SubtitleRenderWindow(QWidget):
         self._refresh_tracks_view_windows()
 
     def _refresh_tracks_view_windows(self) -> None:
-        """按当前样式重算各轨行显示窗口，推给字幕轨道（把手条数据源）。"""
+        """按当前样式重算各轨行显示窗口，推给字幕轨道（把手条数据源）。
+
+        这条和余白检查一样跑在 GUI 线程上，且要对每条轨道整轨排版。放进
+        ``layout_pass`` 让它享受与 IR 构建同一套整轨缓存，否则同样的分页和逐行
+        样式会在这里重算一遍。
+        """
         if self._timing_track is None or self._loading_project:
             return
         self._tracks_view.set_style(self._style)
-        self._tracks_view.set_display_windows(
-            [
+        with layout_pass():
+            windows = [
                 display_windows_for_style(
                     track,
                     self._style,
@@ -5388,7 +5394,7 @@ class SubtitleRenderWindow(QWidget):
                 )
                 for track in self._all_tracks()
             ]
-        )
+        self._tracks_view.set_display_windows(windows)
 
     def _schedule_tracks_view_window_refresh(self) -> None:
         if self._timing_track is None or self._loading_project:
@@ -6411,7 +6417,9 @@ class SubtitleRenderWindow(QWidget):
             self._last_margin_warning_key = ""
             return
         try:
-            issues = self._collect_layout_issues()
+            # 余白检查同样要整轨排版，且在 GUI 线程上；共用整轨缓存。
+            with layout_pass():
+                issues = self._collect_layout_issues()
         except Exception:  # noqa: BLE001 — 检查失败不影响正常编辑
             return
         self._set_layout_issues(issues)
