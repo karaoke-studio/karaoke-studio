@@ -1015,6 +1015,13 @@ struct Direct2DGpuBackend::Impl {
         float legacyLaneDescent = 0.0f;
         float n3DrawHeight = 1.0f;
         float n3Descent = 0.0f;
+        // N3 char boxes accumulated over the line's own glyphs, independent of
+        // the line style.  Static overlays (the title) size their box from
+        // these so an inline role style fully governs the block; lyrics keep
+        // the line-style box to hold the shared lane grid steady.
+        float n3CharAscent = 0.0f;
+        float n3CharDescent = 0.0f;
+        bool hasN3CharBox = false;
         bool hasInlineStyles = false;
         bool hasInlineLaneGeometryOverride = false;
         std::optional<float> guideAnchorLeft;
@@ -1850,6 +1857,13 @@ void Direct2DGpuBackend::configure(const RenderScene &scene) {
                 static_cast<float>(unit) * layoutScale
                     * static_cast<float>(fontMetrics.ascent) / boxMetricTotal
                 + static_cast<float>(edgeSize) * layoutScale * 0.5f;
+            const float charBoxDescent =
+                static_cast<float>(unit) * layoutScale
+                    * static_cast<float>(fontMetrics.descent) / boxMetricTotal
+                + static_cast<float>(edgeSize) * layoutScale * 0.5f;
+            cached.n3CharAscent = std::max(cached.n3CharAscent, charBoxAscent);
+            cached.n3CharDescent = std::max(cached.n3CharDescent, charBoxDescent);
+            cached.hasN3CharBox = true;
             if (!isWhitespaceText(sourceChar.text) && charStyle.affectsRubyAnchor) {
                 cached.boxAscent = std::max(cached.boxAscent, charBoxAscent);
                 cached.hasRubyAnchor = true;
@@ -4876,15 +4890,23 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 (std::max(style.strokeWidth, 0.0f)
                     + std::max(style.stroke2Width, 0.0f)) * 0.5f
             ));
+        // The title is a standalone block with no lane grid to hold steady, so
+        // its box comes from the glyphs it actually draws.  Sizing it from the
+        // line style would let the base title scheme's font size move a title
+        // that is entirely rendered with some other role scheme.  Mirrors
+        // Painter's _layout_title_overlay.
+        const bool ownCharBox = line->staticOverlay && line->hasN3CharBox;
         const float mainHeight = n3Layout
-            ? line->n3DrawHeight
+            ? (ownCharBox
+                ? line->n3CharAscent + line->n3CharDescent
+                : line->n3DrawHeight)
             : line->hasInlineLaneGeometryOverride
                 ? line->legacyLaneHeight
                 : (line->ascent > 0.0f ? line->ascent : -line->bounds.top)
                     + (line->descent > 0.0f ? line->descent : line->bounds.bottom)
                     + visualPad * 2.0f;
         const float descent = n3Layout
-            ? line->n3Descent
+            ? (ownCharBox ? line->n3CharDescent : line->n3Descent)
             : line->hasInlineLaneGeometryOverride
                 ? line->legacyLaneDescent
                 : (line->descent > 0.0f ? line->descent : line->bounds.bottom)

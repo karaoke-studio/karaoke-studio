@@ -1327,7 +1327,16 @@ def _layout_title_overlay(
     widths: list[float] = []
     line_heights: list[float] = []
     line_ascents: list[float] = []
-    max_edge = float(max(title.stroke_width_px, 0))
+    max_edge = 0.0
+    # 每一行的盒只由这一行实际用到的字形决定。基础标题方案只在整行没有字形
+    # （空行）时兜底：否则给标题分配了角色方案后，基础方案的字号仍会顶着行盒
+    # 走，改「标题」方案的字号会把已经用别的方案渲染的标题整体上下推。
+    fallback_ascent = _n3_char_box_ascent(
+        metrics, title.font_size_px, title.stroke_width_px
+    )
+    fallback_descent = _n3_char_box_descent(
+        metrics, title.font_size_px, title.stroke_width_px
+    )
     for row_index, text_line in enumerate(lines):
         glyphs: list[_TitleGlyphLayout] = []
         cursor = 0.0
@@ -1335,12 +1344,8 @@ def _layout_title_overlay(
         # _n3_char_box_ascent）。用它替代 Qt 原始 ascent/descent，标题的上余白才
         # 量到和左右余白同一条盒边——Qt metric 的 ascent 含 em 内部行距，大写字母
         # 上方那一段空白会让同样的 40px 看起来明显更高。
-        max_ascent = _n3_char_box_ascent(
-            metrics, title.font_size_px, title.stroke_width_px
-        )
-        max_descent = _n3_char_box_descent(
-            metrics, title.font_size_px, title.stroke_width_px
-        )
+        max_ascent = 0.0
+        max_descent = 0.0
         for char_index, char in enumerate(text_line):
             glyph_title = (
                 _resolve_title_role_overlay(style, title, labels[row_index][char_index])
@@ -1387,6 +1392,9 @@ def _layout_title_overlay(
                 ),
             )
             max_edge = max(max_edge, float(max(glyph_title.stroke_width_px, 0)))
+        if not glyphs:
+            max_ascent = fallback_ascent
+            max_descent = fallback_descent
         glyph_rows.append(glyphs)
         widths.append(cursor)
         line_ascents.append(max_ascent)

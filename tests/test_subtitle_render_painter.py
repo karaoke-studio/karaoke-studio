@@ -133,6 +133,7 @@ from krok_helper.subtitle_render.models import (  # noqa: E402
     RubyAnnotation,
     SubtitleStyleScheme,
     Style,
+    TITLE_SCHEME_NAME,
     TimingChar,
     TimingLine,
     TimingTrack,
@@ -6961,6 +6962,54 @@ def test_title_line_box_uses_n3_char_box_not_font_metrics(qapp):
     assert layout.line_ascents[0] + _n3_char_box_descent(metrics, 48, 6) == (
         pytest.approx(48 + 6, abs=0.001)
     )
+
+
+def test_title_line_box_follows_the_scheme_each_glyph_actually_uses(qapp):
+    """行盒只由这一行画出来的字形决定，不受基础「标题」方案字号影响。
+
+    标题整块套上别的角色方案后，改「标题」方案的字号仍会推动上边距——盒是用
+    基础方案的字号定的，和实际渲染用的方案没解耦。
+    """
+    from krok_helper.subtitle_render.engine.painter import (
+        _layout_title_overlay,
+        resolve_title_overlay,
+    )
+
+    def _layout(title_scheme_size: int):
+        schemes = dict(Style().custom_style_schemes)
+        schemes[TITLE_SCHEME_NAME] = replace(
+            schemes[TITLE_SCHEME_NAME], font_size_px=title_scheme_size
+        )
+        schemes["角色A"] = SubtitleStyleScheme(font_size_px=60, stroke_width_px=4)
+        style = Style(
+            custom_style_schemes=schemes,
+            title_overlay=TitleOverlay(
+                enabled=True,
+                text_template="AB",
+                char_role_labels=[["角色A", "角色A"]],
+                anchor="top_left",
+                align="left",
+                offset_x=40,
+                offset_y=40,
+                layout_index=None,
+            ),
+        )
+        resolved = resolve_title_overlay(style)
+        assert resolved is not None
+        result = _layout_title_overlay(1920, 1080, _title_track(), resolved, style=style)
+        assert result is not None
+        return result
+
+    small = _layout(48)
+    large = _layout(140)
+
+    # 字形全部来自「角色A」，盒就该恒等于 60 + 4。
+    assert [g.title.font_size_px for g in small.glyph_rows[0]] == [60, 60]
+    assert [g.title.font_size_px for g in large.glyph_rows[0]] == [60, 60]
+    assert small.line_heights[0] == pytest.approx(60 + 4, abs=0.001)
+    assert large.line_heights[0] == pytest.approx(60 + 4, abs=0.001)
+    assert small.line_ascents[0] == pytest.approx(large.line_ascents[0], abs=0.001)
+    assert small.y_top == pytest.approx(large.y_top, abs=0.001)
 
 
 def test_title_edge_anchor_keeps_stroke_inside_the_margin(qapp):

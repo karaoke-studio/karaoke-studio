@@ -4927,6 +4927,82 @@ def test_gpu_g3_multiline_title_role_styles_match_painter(monkeypatch) -> None:
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_g3_role_styled_title_ignores_base_scheme_font_size(monkeypatch) -> None:
+    """整块都套了角色方案的标题，不能再被「标题」方案的字号推着走。
+
+    标题是独立的一块，没有需要对齐的行栅格，所以它的盒必须由自己实际画出来的
+    字形决定。用行样式（= 基础标题方案）定盒，会让改「标题」方案字号把一个完全
+    由别的方案渲染的标题整体上下移动。
+    """
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    track = TimingTrack(
+        lines=[TimingLine(chars=[TimingChar("尾", 3_000)], end_ms=4_000)]
+    )
+
+    def _style_for(base_size: int) -> Style:
+        role = SubtitleStyleScheme(
+            font_family="Meiryo",
+            font_family_latin="Meiryo",
+            font_size_px=48,
+            latin_font_size_px=48,
+            stroke_width_px=0,
+            decoration_kind="none",
+        )
+        title = TitleOverlay(
+            enabled=True,
+            text_template="AB",
+            char_role_labels=[["role", "role"]],
+            font_family="Meiryo",
+            font_family_latin="Meiryo",
+            font_size_px=base_size,
+            fill=PaintFill(mode="solid", color="#E8E8E8"),
+            stroke_width_px=0,
+            stroke2_width_px=0,
+            decoration_kind="shadow",
+            shadow=PaintFill(mode="solid", color="#00000000"),
+            shadow_offset_x=0,
+            shadow_offset_y=0,
+            anchor="top_left",
+            align="left",
+            offset_x=32,
+            offset_y=24,
+            layout_index=None,
+            show_mode="whole",
+            fade_in_ms=0,
+            fade_out_ms=0,
+        )
+        return _g1_style(
+            line_lead_in_ms=0,
+            line_tail_ms=0,
+            custom_style_schemes={"role": role},
+            title_overlay=title,
+        )
+
+    small = _style_for(40)
+    large = _style_for(140)
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, small_frames = _render_g1_frames(
+            renderer, small, (1_000,), force_warp=True, track=track
+        )
+        _, large_frames = _render_g1_frames(
+            renderer, large, (1_000,), force_warp=True, track=track
+        )
+
+    small_gpu = _payload_alpha_bounds(small_frames[0])
+    large_gpu = _payload_alpha_bounds(large_frames[0])
+    assert small_gpu == large_gpu, (small_gpu, large_gpu)
+
+    small_cpu = _payload_alpha_bounds(
+        _render_painter_oracle(small, t_ms=1_000, track=track)
+    )
+    large_cpu = _payload_alpha_bounds(
+        _render_painter_oracle(large, t_ms=1_000, track=track)
+    )
+    assert small_cpu == large_cpu, (small_cpu, large_cpu)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g3_applies_each_source_track_offset_like_painter(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     style = _g1_style(
