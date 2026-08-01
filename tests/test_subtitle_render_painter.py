@@ -6917,6 +6917,97 @@ def test_title_layout_letter_spacing_overrides_title_and_character_schemes(qapp)
     assert inherited_title.letter_spacing_px == 12
 
 
+def test_title_line_box_uses_n3_char_box_not_font_metrics(qapp):
+    """标题行盒 = 字号 + 描边（N3 DrawCharInfo.Height），不含 em 内部行距。
+
+    Qt/DWrite 的 ascent 里带着大写字母上方那段内部行距；用它当行盒顶，同样的
+    「上余白 40」看起来就比「左右余白 40」高一截。N3 把字体度量归一化到字号
+    （``CreateTransformedCharGeometryChar``），上下左右才量到同一个盒。
+    """
+    from krok_helper.subtitle_render.engine.painter import (
+        _layout_title_overlay,
+        _n3_char_box_ascent,
+        _n3_char_box_descent,
+        resolve_title_overlay,
+    )
+
+    # 清空配色方案：resolve_title_overlay 会用「标题」方案覆盖字号/描边，
+    # 这里要测的是布局几何，让 TitleOverlay 自己的字段生效。
+    style = Style(
+        custom_style_schemes={},
+        title_overlay=TitleOverlay(
+            enabled=True,
+            text_template="AB",
+            font_size_px=48,
+            stroke_width_px=6,
+            stroke2_width_px=4,
+            layout_index=None,
+        ),
+    )
+    resolved = resolve_title_overlay(style)
+    assert resolved is not None
+
+    layout = _layout_title_overlay(1920, 1080, _title_track(), resolved, style=style)
+    assert layout is not None
+
+    # 盒高恒等于 字号 + 描边，与字体 ascent/descent 无关；二重描边不占位。
+    assert layout.line_heights[0] == pytest.approx(48 + 6, abs=0.001)
+    assert layout.block_h == pytest.approx(48 + 6, abs=0.001)
+
+    metrics = layout.glyph_rows[0][0].metrics
+    assert layout.line_ascents[0] == pytest.approx(
+        _n3_char_box_ascent(metrics, 48, 6), abs=0.001
+    )
+    assert layout.line_ascents[0] + _n3_char_box_descent(metrics, 48, 6) == (
+        pytest.approx(48 + 6, abs=0.001)
+    )
+
+
+def test_title_edge_anchor_keeps_stroke_inside_the_margin(qapp):
+    """贴边锚点补半个描边：N3 的字符盒四边各含 Edge/2，描边不溢出余白。"""
+    from krok_helper.subtitle_render.engine.painter import (
+        _layout_title_overlay,
+        resolve_title_overlay,
+    )
+
+    def _layout(anchor: str, stroke: int):
+        style = Style(
+            custom_style_schemes={},
+            title_overlay=TitleOverlay(
+                enabled=True,
+                text_template="AB",
+                font_size_px=48,
+                stroke_width_px=stroke,
+                anchor=anchor,
+                align="left" if anchor.endswith("left") else "right",
+                offset_x=40,
+                offset_y=40,
+                layout_index=None,
+            ),
+        )
+        resolved = resolve_title_overlay(style)
+        assert resolved is not None
+        result = _layout_title_overlay(1920, 1080, _title_track(), resolved, style=style)
+        assert result is not None
+        return result
+
+    plain_left = _layout("top_left", 0)
+    stroked_left = _layout("top_left", 10)
+    assert plain_left.x0 == pytest.approx(40.0, abs=0.001)
+    assert stroked_left.x0 == pytest.approx(45.0, abs=0.001)
+
+    # 右锚点向内缩同样的半描边，左右保持对称。
+    plain_right = _layout("top_right", 0)
+    stroked_right = _layout("top_right", 10)
+    assert plain_right.x0 - stroked_right.x0 == pytest.approx(
+        stroked_left.x0 - plain_left.x0, abs=0.001
+    )
+
+    # 竖向不重复补：那一半已经含在 N3 盒高里。
+    assert plain_left.y_top == pytest.approx(40.0, abs=0.001)
+    assert stroked_left.y_top == pytest.approx(40.0, abs=0.001)
+
+
 def test_default_title_latin_font_does_not_inherit_global_lyrics_font(qapp):
     from krok_helper.subtitle_render.engine.painter import resolve_title_overlay
 

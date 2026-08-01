@@ -7696,6 +7696,13 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
                 resolvedStyleFromTitle(sourceStyle, config.title),
                 scale
             );
+            // The title always uses N3 char-box geometry, independent of the
+            // project's layout semantics: box height = font size + edge with the
+            // baseline split by the face's A:D ratio.  Qt/DWrite ascent carries
+            // the em's internal leading, which would leave the top margin
+            // visibly larger than the side margins for the same number.  Mirrors
+            // Painter's _layout_title_overlay.
+            titleStyle.layoutSemantics = "n3_1074";
             titleStyle.lineGap = static_cast<float>(std::max(
                 0, intValue(config.title, QStringLiteral("line_gap_px"), 0)
             ) * scale);
@@ -7712,12 +7719,18 @@ krok::subtitle::native::RenderScene gpuSceneFromConfig(const RenderConfig &confi
             const float offsetY = static_cast<float>(
                 intValue(config.title, QStringLiteral("offset_y"), 0) * scale
             );
+            // N3 counts half the edge inside the char box on every side, so an
+            // edge-anchored title keeps its stroke inside the margin.  The
+            // vertical half is already part of the N3 box height; the horizontal
+            // one has to be folded into the margin here, exactly as Painter does
+            // in _title_block_origin.
+            const float titleHalfEdge = std::max(titleStyle.strokeWidth, 0.0f) * 0.5f;
             if (anchor.endsWith(QStringLiteral("left"))) {
                 titleStyle.alignment = "left";
-                titleStyle.horizontalMargin = offsetX;
+                titleStyle.horizontalMargin = offsetX + titleHalfEdge;
             } else if (anchor.endsWith(QStringLiteral("right"))) {
                 titleStyle.alignment = "right";
-                titleStyle.horizontalMargin = offsetX;
+                titleStyle.horizontalMargin = offsetX + titleHalfEdge;
             } else {
                 titleStyle.alignment = "center";
                 titleStyle.centerOffsetX = offsetX;

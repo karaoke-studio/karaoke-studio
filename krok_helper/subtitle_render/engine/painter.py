@@ -344,7 +344,7 @@ class _TitleOverlayLayout:
     widths: list[float]
     block_w: float
     block_h: float
-    line_h: int
+    line_h: float
     gap: int
     x0: float
     y_top: float
@@ -354,8 +354,8 @@ class _TitleOverlayLayout:
     latin_metrics: QFontMetrics
     font_for: object
     glyph_rows: list[list["_TitleGlyphLayout"]]
-    line_heights: list[int]
-    line_ascents: list[int]
+    line_heights: list[float]
+    line_ascents: list[float]
 
 
 @dataclass(frozen=True)
@@ -1249,17 +1249,30 @@ def _build_title_latin_font(title: TitleOverlay) -> QFont:
 
 
 def _title_block_origin(
-    img_w: int, img_h: int, block_w: float, block_h: float, title: TitleOverlay
+    img_w: int,
+    img_h: int,
+    block_w: float,
+    block_h: float,
+    title: TitleOverlay,
+    *,
+    edge_px: float = 0.0,
 ) -> tuple[float, float]:
     """按锚点 9 宫格放置文字块，返回左上角 ``(x0, y_top)``。
 
     ``offset_x`` / ``offset_y`` 对贴边锚点是内边距，对居中锚点是附加位移。
+
+    ``x0`` 是首字的笔尖原点，``block_w`` 是步进宽之和——两者都不含描边。N3 的
+    字符盒把描边的一半算在盒内（``DrawCharInfo`` 宽 = 墨迹宽 + Edge、高 = 字号 +
+    Edge），贴边锚点对齐的是盒边而不是墨迹，描边不会溢出余白。这里对贴边锚点补上
+    ``edge_px / 2``，让左右余白与上下余白量到同一条边；竖向的那一半已经含在
+    ``block_h`` 里（见 :func:`_n3_char_box_ascent`），无需另加。
     """
     anchor = title.anchor
+    half_edge = max(float(edge_px), 0.0) / 2.0
     if anchor.endswith("left"):
-        x0 = float(title.offset_x)
+        x0 = title.offset_x + half_edge
     elif anchor.endswith("right"):
-        x0 = img_w - block_w - title.offset_x
+        x0 = img_w - block_w - title.offset_x - half_edge
     else:  # center 列
         x0 = (img_w - block_w) / 2.0 + title.offset_x
     if anchor.startswith("top"):
@@ -1312,13 +1325,22 @@ def _layout_title_overlay(
     labels = normalize_title_char_role_labels(text, title.char_role_labels)
     glyph_rows: list[list[_TitleGlyphLayout]] = []
     widths: list[float] = []
-    line_heights: list[int] = []
-    line_ascents: list[int] = []
+    line_heights: list[float] = []
+    line_ascents: list[float] = []
+    max_edge = float(max(title.stroke_width_px, 0))
     for row_index, text_line in enumerate(lines):
         glyphs: list[_TitleGlyphLayout] = []
         cursor = 0.0
-        max_ascent = metrics.ascent()
-        max_descent = metrics.descent()
+        # N3 行盒：高 = 字号 + 描边，基线按字体 A:D 比例切分（见
+        # _n3_char_box_ascent）。用它替代 Qt 原始 ascent/descent，标题的上余白才
+        # 量到和左右余白同一条盒边——Qt metric 的 ascent 含 em 内部行距，大写字母
+        # 上方那一段空白会让同样的 40px 看起来明显更高。
+        max_ascent = _n3_char_box_ascent(
+            metrics, title.font_size_px, title.stroke_width_px
+        )
+        max_descent = _n3_char_box_descent(
+            metrics, title.font_size_px, title.stroke_width_px
+        )
         for char_index, char in enumerate(text_line):
             glyph_title = (
                 _resolve_title_role_overlay(style, title, labels[row_index][char_index])
@@ -1348,8 +1370,23 @@ def _layout_title_overlay(
             cursor += advance
             if char_index + 1 < len(text_line):
                 cursor += int(glyph_title.letter_spacing_px)
-            max_ascent = max(max_ascent, glyph_metrics.ascent())
-            max_descent = max(max_descent, glyph_metrics.descent())
+            max_ascent = max(
+                max_ascent,
+                _n3_char_box_ascent(
+                    glyph_metrics,
+                    glyph_title.font_size_px,
+                    glyph_title.stroke_width_px,
+                ),
+            )
+            max_descent = max(
+                max_descent,
+                _n3_char_box_descent(
+                    glyph_metrics,
+                    glyph_title.font_size_px,
+                    glyph_title.stroke_width_px,
+                ),
+            )
+            max_edge = max(max_edge, float(max(glyph_title.stroke_width_px, 0)))
         glyph_rows.append(glyphs)
         widths.append(cursor)
         line_ascents.append(max_ascent)
@@ -1361,7 +1398,9 @@ def _layout_title_overlay(
     if block_w <= 0 or block_h <= 0:
         return None
 
-    x0, y_top = _title_block_origin(img_w, img_h, block_w, block_h, title)
+    x0, y_top = _title_block_origin(
+        img_w, img_h, block_w, block_h, title, edge_px=max_edge
+    )
     return _TitleOverlayLayout(
         lines=lines,
         widths=widths,
@@ -1441,7 +1480,7 @@ def _title_overlay_layer_key(
         tuple(round(width, 3) for width in layout.widths),
         round(layout.block_w, 3),
         round(layout.block_h, 3),
-        layout.line_h,
+        round(layout.line_h, 3),
         layout.gap,
         title.align,
         layout.font.family(),
