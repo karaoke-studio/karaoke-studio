@@ -1865,6 +1865,7 @@ class SubtitleRenderWindow(QWidget):
     """字幕视频渲染模块主 widget。"""
 
     projectStateChanged = Signal(object)
+    _tracksViewWindowsReady = Signal(int, object)
     _embedded: bool = False
 
     def __init__(
@@ -1945,7 +1946,15 @@ class SubtitleRenderWindow(QWidget):
         self._tracks_window_refresh_timer.setSingleShot(True)
         self._tracks_window_refresh_timer.setInterval(120)
         self._tracks_window_refresh_timer.timeout.connect(
-            self._refresh_tracks_view_windows
+            self._refresh_tracks_view_windows_async
+        )
+        # 整轨显示窗口重算（真实工程实测约 600ms）挪到后台线程，结果经队列信号回
+        # GUI 线程。代号用于丢弃过期结果：连续调参时只有最后一次算得的窗口才作数。
+        self._tracks_window_generation = 0
+        self._tracks_window_worker_busy = False
+        self._tracks_window_rerun_pending = False
+        self._tracksViewWindowsReady.connect(
+            self._on_tracks_view_windows_ready, Qt.ConnectionType.QueuedConnection
         )
         self._project_deferred_loads: list[tuple[str, object]] = []
         self._project_deferred_load_generation = 0
@@ -5447,6 +5456,66 @@ class SubtitleRenderWindow(QWidget):
                 )
                 for track in self._all_tracks()
             ]
+        self._tracks_view.set_display_windows(windows)
+
+    def _refresh_tracks_view_windows_async(self) -> None:
+        """与 ``_refresh_tracks_view_windows`` 同样的结果，只是不在 GUI 线程上算。
+
+        排版本身要跑整轨，真实工程一次约 600ms；放在 GUI 线程上就意味着用户每改
+        一次样式，界面都要僵这么久。轨道把手上的窗口本来就是 debounce 之后才更新
+        的，晚几百毫秒到达不影响任何东西——但期间界面可以照常用。
+
+        与渲染 IR 的后台构建一样直接读取实时的 track/style 对象；同一时刻只跑一
+        个，跑的过程中又来了新请求就在结束后补跑一次，过期结果按代号丢弃。
+        """
+        if self._timing_track is None or self._loading_project:
+            return
+        if self._tracks_window_worker_busy:
+            self._tracks_window_rerun_pending = True
+            return
+        self._tracks_window_generation += 1
+        generation = self._tracks_window_generation
+        tracks = list(self._all_tracks())
+        style = self._style
+        logical_w = self._screen_settings.width
+        logical_h = self._screen_settings.height
+
+        def compute() -> None:
+            try:
+                with layout_pass():
+                    windows = [
+                        display_windows_for_style(
+                            track,
+                            style,
+                            logical_w=logical_w,
+                            logical_h=logical_h,
+                        )
+                        for track in tracks
+                    ]
+            except Exception:
+                # 后台重算失败不该拖垮窗口：把手保持上一版数据即可。
+                logging.getLogger(__name__).exception(
+                    "字幕轨道显示窗口后台重算失败"
+                )
+                windows = None
+            self._tracksViewWindowsReady.emit(generation, windows)
+
+        self._tracks_window_worker_busy = True
+        self._tracks_view.set_style(style)
+        threading.Thread(
+            target=compute, name="tracks-window-refresh", daemon=True
+        ).start()
+
+    def _on_tracks_view_windows_ready(self, generation: int, windows: object) -> None:
+        self._tracks_window_worker_busy = False
+        if self._tracks_window_rerun_pending:
+            self._tracks_window_rerun_pending = False
+            self._refresh_tracks_view_windows_async()
+            return
+        if generation != self._tracks_window_generation or windows is None:
+            return
+        if self._timing_track is None or self._loading_project:
+            return
         self._tracks_view.set_display_windows(windows)
 
     def _schedule_tracks_view_window_refresh(self) -> None:
