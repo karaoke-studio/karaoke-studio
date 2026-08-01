@@ -402,6 +402,8 @@ def layout_pass():
         _LAYOUT_PASS.active_rubies = {}
         _LAYOUT_PASS.ruby_gaps = {}
         _LAYOUT_PASS.char_advances = {}
+        _LAYOUT_PASS.ink_rects = {}
+        _LAYOUT_PASS.sayatoo_layouts = {}
         _LAYOUT_PASS.tracks = []
         _LAYOUT_PASS.styles = []
         _LAYOUT_PASS.lines = []
@@ -419,6 +421,8 @@ def layout_pass():
             _LAYOUT_PASS.active_rubies = None
             _LAYOUT_PASS.ruby_gaps = None
             _LAYOUT_PASS.char_advances = None
+            _LAYOUT_PASS.ink_rects = None
+            _LAYOUT_PASS.sayatoo_layouts = None
             _LAYOUT_PASS.tracks = []
             _LAYOUT_PASS.styles = []
             _LAYOUT_PASS.lines = []
@@ -2300,24 +2304,52 @@ def _display_line_horizontal_ink_rect(
         if line_layout is not None and not has_role_labels
         else None
     )
+    baseline_y = (
+        line_layout.baseline_y
+        if line_layout is not None
+        else baselines.get(display_line.lane, logical_h // 2)
+    )
+    lane = display_line.lane if line_style.dual_line_layout else None
+    # 碰撞避让要反复收缩、反复重量，同一行的墨迹在一轮里会被问上十来遍（真实工程
+    # 56 行问出 627 次）。结果只取决于下面这几项，排版区间内它们不变，缓存住。
+    cache = getattr(_LAYOUT_PASS, "ink_rects", None)
+    cache_key = None
+    if cache is not None:
+        cache_key = (
+            logical_w,
+            logical_h,
+            id(track),
+            id(line),
+            id(line_style),
+            baseline_y,
+            line_x,
+            lane,
+            layout_cache_sig,
+            include_glow,
+        )
+        if cache_key in cache:
+            return cache[cache_key]
     layout = _layout_line(
         track,
         line,
         line_style,
         logical_w,
         logical_h,
-        baseline_y=(
-            line_layout.baseline_y
-            if line_layout is not None
-            else baselines.get(display_line.lane, logical_h // 2)
-        ),
+        baseline_y=baseline_y,
         line_x=line_x,
-        lane=display_line.lane if line_style.dual_line_layout else None,
+        lane=lane,
         cache_sig=layout_cache_sig,
     )
-    if layout is None:
-        return None
-    return _line_static_ink_rect(layout, include_glow=include_glow)
+    rect = None if layout is None else _line_static_ink_rect(
+        layout, include_glow=include_glow
+    )
+    if cache_key is not None:
+        cache[cache_key] = rect
+        # 键里有 id()：对象被回收后地址会被复用，这里把它们按住。
+        _LAYOUT_PASS.tracks.append(track)
+        _LAYOUT_PASS.lines.append(line)
+        _LAYOUT_PASS.styles.append(line_style)
+    return rect
 
 
 def _line_static_ink_rect(
@@ -2688,6 +2720,25 @@ def _resolve_sayatoo_line_layouts(
     therefore contribute to the line width before ``row1/row2`` alignment is
     applied, instead of being painted later in screen coordinates.
     """
+    # 每次要量整轨墨迹都会先解一遍行布局（真实工程一次 28ms），而碰撞避让一轮里
+    # 要量好几遍。同样的入参在排版区间内答案不变，缓存住。
+    cache = getattr(_LAYOUT_PASS, "sayatoo_layouts", None)
+    cache_key = None
+    if cache is not None:
+        cache_key = (
+            img_w,
+            img_h,
+            id(track),
+            id(style),
+            int(t_ms),
+            tuple(
+                (id(dl.line), dl.lane) for dl in display_lines
+            ),
+            tuple(sorted(baselines.items())),
+        )
+        hit = cache.get(cache_key)
+        if hit is not None:
+            return hit
     layouts: dict[int, _SayatooLineLayout] = {}
     signal_metrics = _signal_layout_metrics(style) if style.lit_enabled else None
     for display_line in display_lines:
@@ -2802,6 +2853,12 @@ def _resolve_sayatoo_line_layouts(
         # one page at a time; the renderer itself never consumes that alias.
         layouts[id(display_line.line)] = resolved
         layouts[display_line.lane] = resolved
+    if cache_key is not None:
+        cache[cache_key] = layouts
+        # 键里有 id()：对象被回收后地址会被复用，这里把它们按住。
+        _LAYOUT_PASS.tracks.append(track)
+        _LAYOUT_PASS.styles.append(style)
+        _LAYOUT_PASS.lines.extend(dl.line for dl in display_lines)
     return layouts
 
 
