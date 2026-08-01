@@ -679,6 +679,54 @@ _PROJECT_ONLY_STYLE_FIELDS = frozenset(
 )
 
 
+# 纯上色字段：只决定用什么颜色画，不影响字形几何、行宽或演唱时间。
+# 只列这些，其余一律当几何字段——将来 Style 加了新字段而忘了归类，判定会保守地
+# 认为「不是纯上色」，从而照常重算，不会漏掉该更新的东西。
+_PAINT_ONLY_STYLE_FIELDS: frozenset[str] = frozenset({
+    "base_color", "fill_color", "fill_gradient_enabled", "fill_gradient_start_color",
+    "fill_gradient_end_color", "fill_gradient_angle_deg", "stroke_color", "shadow_color",
+    "karaoke_colors", "ruby_color", "ruby_colors_follow_main", "ruby_karaoke_colors",
+    "lit_fill_color", "lit1_fill_color", "lit2_fill_color", "lit3_fill_color",
+    "lit_stroke_color", "volume_fill_color", "volume_stroke_color",
+    "volume_overlay_fill_color", "volume_overlay_stroke_color",
+})
+_PAINT_ONLY_SCHEME_FIELDS: frozenset[str] = frozenset({
+    "base_color", "fill_color", "fill_gradient_enabled", "fill_gradient_start_color",
+    "fill_gradient_end_color", "fill_gradient_angle_deg", "stroke_color", "shadow_color",
+    "ruby_color", "karaoke_colors", "ruby_colors_follow_main", "ruby_karaoke_colors",
+})
+
+
+def _paint_only_style_delta(previous: Style, current: Style) -> bool:
+    """``current`` 与 ``previous`` 只差在纯上色字段上时为真。
+
+    实现方式是把 ``previous`` 的上色字段折到 ``current`` 的副本上再整体比较：
+    任何没被列进上色集合的字段仍然要逐字段相等，所以漏列一个字段只会让判定
+    更保守，不会放过真正的几何变化。
+    """
+
+    def _strip(style: Style) -> Style:
+        schemes = {
+            name: replace(
+                scheme,
+                **{
+                    field: getattr(previous_scheme, field)
+                    for field in _PAINT_ONLY_SCHEME_FIELDS
+                },
+            )
+            if (previous_scheme := previous.custom_style_schemes.get(name)) is not None
+            else scheme
+            for name, scheme in style.custom_style_schemes.items()
+        }
+        return replace(
+            style,
+            **{name: getattr(previous, name) for name in _PAINT_ONLY_STYLE_FIELDS},
+            custom_style_schemes=schemes,
+        )
+
+    return _strip(current) == _strip(previous)
+
+
 def fit_size_to_aspect(box: QSize, aspect_ratio: float) -> QSize:
     """把 ``box`` 缩到给定宽高比的最大内接尺寸（用于跟随画布形状的下限/建议值）。"""
     ratio = max(float(aspect_ratio), 0.1)
@@ -4815,6 +4863,7 @@ class SubtitleRenderWindow(QWidget):
     def _apply_style(self, style: Style) -> None:
         previous = self._style
         style = ensure_page_layout_defaults(style)
+        paint_only = previous is not style and _paint_only_style_delta(previous, style)
         old_capacities = {
             "default": max(len(previous.line_alignments), 1),
             **{
@@ -4869,9 +4918,13 @@ class SubtitleRenderWindow(QWidget):
         if self._title_source_active:
             self._refresh_lyrics_panel_source()
         # 提前入场/延迟退场等布局参数会改行显示窗口 → 同步轨道把手数据。
-        # 显示窗口要按当前布局逐行量文字，走 120ms 单发定时器移出按键的同步路径。
-        self._schedule_tracks_view_window_refresh()
-        self._margin_check_timer.start()
+        # 但纯改配色既不会移动显示窗口，也不会改变余白告警（两者只依赖时间轴、
+        # 布局和字体）。这两项在真实工程上要各花几百毫秒的界面线程时间——实测
+        # 一条 41 行 + 一条 15 行、共 172 条注音的曲目，轨道窗口重算 599ms、
+        # 余白检查 118ms——是改色时窗口卡住的主因，纯上色时直接跳过。
+        if not paint_only:
+            self._schedule_tracks_view_window_refresh()
+            self._margin_check_timer.start()
         self._schedule_persisted_state_save()
         self._mark_project_dirty()
         # 调用方预先改写过 self._style 的路径（如导出高度重算）不入撤销栈。

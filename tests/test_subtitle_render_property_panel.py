@@ -603,6 +603,43 @@ def test_style_edit_without_capacity_shrink_skips_track_snapshot(qapp):
     assert win._undo_stack and win._undo_stack[-1][0] == "style"
 
 
+def test_colour_only_edit_skips_window_and_margin_recompute(qapp):
+    """纯改配色不该重算显示窗口和余白告警。
+
+    两者只依赖时间轴、布局和字体；在真实工程上各要几百毫秒的界面线程时间
+    （41+15 行、172 条注音：轨道窗口 599ms、余白检查 118ms），是改色时窗口
+    卡住的主因。
+    """
+    provider = _FontMigrationSettingsProvider({"style": style_to_dict(Style())})
+    win = mw.SubtitleRenderWindow(embedded=True, settings_provider=provider)
+    win._timing_track = TimingTrack(
+        lines=[
+            TimingLine(chars=[TimingChar("一", 0)], end_ms=500),
+            TimingLine(chars=[TimingChar("二", 500)], end_ms=1000),
+        ]
+    )
+    win._margin_check_timer.stop()
+    win._tracks_window_refresh_timer.stop()
+
+    # 纯上色：两个定时器都不该被启动。
+    win._apply_style(replace(win._style, fill_color="#123456"))
+    assert not win._margin_check_timer.isActive()
+    assert not win._tracks_window_refresh_timer.isActive()
+
+    # 方案内部换个颜色同样算纯上色。
+    schemes = dict(win._style.custom_style_schemes)
+    schemes[TITLE_SCHEME_NAME] = replace(
+        schemes[TITLE_SCHEME_NAME], fill_color="#0F0F0F"
+    )
+    win._apply_style(replace(win._style, custom_style_schemes=schemes))
+    assert not win._margin_check_timer.isActive()
+
+    # 影响几何的改动照旧重算。
+    win._apply_style(replace(win._style, horizontal_margin_px=900))
+    assert win._margin_check_timer.isActive()
+    assert win._tracks_window_refresh_timer.isActive()
+
+
 def test_live_scheme_edits_do_not_auto_save_as_app_defaults(qapp):
     initial_style = Style(
         fill_color="#111111",
