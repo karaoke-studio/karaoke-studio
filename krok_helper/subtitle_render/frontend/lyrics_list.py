@@ -30,6 +30,7 @@ from PyQt6.QtCore import (
     QRectF,
     Qt,
     QSize,
+    QTimer,
     pyqtSignal as Signal,
 )
 from PyQt6.QtGui import QBrush, QColor, QFont, QIcon, QKeySequence, QPainter, QPen, QPixmap
@@ -307,6 +308,7 @@ class _StableRoundMenu(RoundMenu):
 # 一次改色只需要重建真正变了色的那一两个。
 _SWATCH_ICON_CACHE: "OrderedDict[tuple, QIcon]" = OrderedDict()
 _SWATCH_ICON_CACHE_MAX = 256
+_SWATCH_REFRESH_DEBOUNCE_MS = 250
 
 
 def _swatch_cache_key(color: Optional[QColor]) -> tuple:
@@ -1060,6 +1062,13 @@ class LyricsPanel(DropPanel):
             empty_icon="📝",
             parent=parent,
         )
+        # 色点只是配色的一个指示，不必跟住拖动配色时的每一个中间值。整表换色要
+        # 重写 68 个单元格并让 Qt 重绘整个视口（平时 9ms，改色后 37ms），全在界面
+        # 线程上。攒到停手后刷一次：连续调色期间界面不再被打断，视觉结果一致。
+        self._swatch_refresh_timer = QTimer(self)
+        self._swatch_refresh_timer.setSingleShot(True)
+        self._swatch_refresh_timer.setInterval(_SWATCH_REFRESH_DEBOUNCE_MS)
+        self._swatch_refresh_timer.timeout.connect(self._flush_swatch_refresh)
         self.setObjectName("LyricsPanel")
         themed(self, self._panel_qss)
 
@@ -1274,10 +1283,23 @@ class LyricsPanel(DropPanel):
         ) != _swatch_presentation_signature(style)
         if not layout_changed and not swatch_changed:
             return
-        # 换个颜色不会改变任何一列的宽度，而重量列宽要对每个可见单元格调用
-        # sizeHintForIndex——那会把整轨字幕在 GUI 线程上重排一遍，实测占一次
-        # 编辑里 191ms 的阻塞。只有真正改了行内容或列语义时才重量。
-        self._refresh_presentation(update_widths=layout_changed)
+        if layout_changed:
+            # 行内容/列语义变了：立刻刷新，并把待处理的色点刷新一并做掉。
+            self._swatch_refresh_timer.stop()
+            self._swatch_refresh_pending = False
+            self._refresh_presentation(update_widths=True)
+            return
+        # 只有色点变了：攒起来，停手后再刷一次。
+        self._swatch_refresh_pending = True
+        self._swatch_refresh_timer.start()
+
+    def _flush_swatch_refresh(self) -> None:
+        """停手后把攒下的色点刷新做掉。"""
+        if not getattr(self, "_swatch_refresh_pending", False):
+            return
+        self._swatch_refresh_pending = False
+        if self._populated:
+            self._refresh_presentation(update_widths=False)
 
     def _layout_name_for_id(self, layout_id: Optional[str]) -> str:
         return layout_display_name(self._style, str(layout_id or "default"))

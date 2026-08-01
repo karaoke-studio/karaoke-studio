@@ -100,9 +100,21 @@ def test_render_only_style_change_skips_full_table_refresh(qapp):
     panel.set_style(replace(style, font_size_px=style.font_size_px + 10))
     assert calls == []
 
-    # 真正影响呈现的字段照旧刷新。
-    panel.set_style(replace(style, font_size_px=style.font_size_px + 10, fill_color="#123456"))
+    # 只改色点颜色：不在编辑当下刷新，攒到停手后刷一次，避免整表重绘打断输入。
+    panel.set_style(
+        replace(style, font_size_px=style.font_size_px + 10, fill_color="#123456")
+    )
+    assert calls == []
+    assert panel._swatch_refresh_timer.isActive()
+    panel._flush_swatch_refresh()
     assert calls == [1]
+
+    # 影响行内容/列语义的字段仍然立即刷新，并且不留下待处理的色点刷新。
+    panel.set_style(
+        replace(style, fill_color="#123456", line_alignments=["left", "center", "right"])
+    )
+    assert calls == [1, 1]
+    assert not panel._swatch_refresh_timer.isActive()
 
     panel.deleteLater()
     qapp.processEvents()
