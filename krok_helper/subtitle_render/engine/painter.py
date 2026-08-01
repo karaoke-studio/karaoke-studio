@@ -395,7 +395,9 @@ def layout_pass():
     depth = getattr(_LAYOUT_PASS, "depth", 0)
     if depth == 0:
         _LAYOUT_PASS.page_maps = {}
+        _LAYOUT_PASS.line_styles = {}
         _LAYOUT_PASS.tracks = []
+        _LAYOUT_PASS.styles = []
     _LAYOUT_PASS.depth = depth + 1
     try:
         yield
@@ -403,7 +405,9 @@ def layout_pass():
         _LAYOUT_PASS.depth = depth
         if depth == 0:
             _LAYOUT_PASS.page_maps = None
+            _LAYOUT_PASS.line_styles = None
             _LAYOUT_PASS.tracks = []
+            _LAYOUT_PASS.styles = []
 
 
 def clear_before_layer_cache() -> None:
@@ -13844,6 +13848,40 @@ def _vertical_position_resolver(style: Style):
 
 
 def _style_for_line(style: Style, line: TimingLine) -> Style:
+    """行的有效样式（布局引用 + 歌手覆盖 + 逐行动画）。
+
+    ``dataclasses.replace`` 要把 ``Style`` 的两百多个字段整份重建一遍，而这个函数
+    每行会被问上好几次、每次至少两趟 replace。结果只取决于下面这几项，同一条轨道
+    里绝大多数行都落在同一个键上，所以在排版区间内缓存住。
+    """
+    cache = getattr(_LAYOUT_PASS, "line_styles", None)
+    if cache is None:
+        return _style_for_line_uncached(style, line)
+    override = line.animation_override
+    cache_key = (
+        id(style),
+        int(getattr(line, "layout_index", 0) or 0),
+        line.singer_id,
+        None
+        if override is None
+        else (
+            override.entry_anim,
+            int(override.entry_duration_ms),
+            override.exit_anim,
+            int(override.exit_duration_ms),
+        ),
+    )
+    hit = cache.get(cache_key)
+    if hit is not None:
+        return hit
+    resolved = _style_for_line_uncached(style, line)
+    cache[cache_key] = resolved
+    # style 存住：键里有 id()，对象被回收后地址会被复用。
+    _LAYOUT_PASS.styles.append(style)
+    return resolved
+
+
+def _style_for_line_uncached(style: Style, line: TimingLine) -> Style:
     layout_style = _layout_style_for_line(style, line)
     if line.singer_id is not None:
         scheme = style.singer_style_overrides.get(line.singer_id)
