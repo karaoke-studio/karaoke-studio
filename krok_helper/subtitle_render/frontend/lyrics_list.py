@@ -16,7 +16,7 @@ UI 设计：
 
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, OrderedDict
 from pathlib import Path
 from typing import Optional
 
@@ -301,8 +301,36 @@ class _StableRoundMenu(RoundMenu):
         return super().exec(pos, ani, MenuAnimationType.NONE)
 
 
+# 色点只由颜色决定。整表刷新会逐行重建它们（68 行 = 68 个新 QPixmap），
+# 而全新的图标 Qt 一个都缓存不上，之后那次视口重绘就变得很贵：实测表格平时
+# 重绘 9ms，紧接一次编辑之后要 44ms 起，是编辑卡顿的直接来源。按颜色缓存后，
+# 一次改色只需要重建真正变了色的那一两个。
+_SWATCH_ICON_CACHE: "OrderedDict[tuple, QIcon]" = OrderedDict()
+_SWATCH_ICON_CACHE_MAX = 256
+
+
+def _swatch_cache_key(color: Optional[QColor]) -> tuple:
+    return (None,) if color is None else (color.rgba(),)
+
+
+def _cached_icon(key: tuple, build) -> QIcon:
+    icon = _SWATCH_ICON_CACHE.get(key)
+    if icon is None:
+        icon = build()
+        _SWATCH_ICON_CACHE[key] = icon
+        while len(_SWATCH_ICON_CACHE) > _SWATCH_ICON_CACHE_MAX:
+            _SWATCH_ICON_CACHE.popitem(last=False)
+    else:
+        _SWATCH_ICON_CACHE.move_to_end(key)
+    return icon
+
+
 def _swatch_icon(color: Optional[QColor]) -> QIcon:
     """圆形配色色点；``None``（未定义方案）画空心灰圈。"""
+    return _cached_icon(("solid", *_swatch_cache_key(color)), lambda: _swatch_icon_uncached(color))
+
+
+def _swatch_icon_uncached(color: Optional[QColor]) -> QIcon:
     pixmap = QPixmap(24, 24)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
@@ -338,6 +366,13 @@ def _scheme_swatch_color(style: Style, role: str) -> Optional[QColor]:
 
 def _mixed_swatch_icon(colors: list[Optional[QColor]]) -> QIcon:
     """混合角色行的双色点（左右各半圆，取行内前两种代表色）。"""
+    key = ("mixed",) + tuple(
+        _swatch_cache_key(color)[0] for color in (colors + [None, None])[:2]
+    )
+    return _cached_icon(key, lambda: _mixed_swatch_icon_uncached(colors))
+
+
+def _mixed_swatch_icon_uncached(colors: list[Optional[QColor]]) -> QIcon:
     pixmap = QPixmap(24, 24)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
