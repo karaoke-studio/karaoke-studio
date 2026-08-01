@@ -7360,43 +7360,71 @@ class PropertyPanel(QWidget):
         return deepcopy(getattr(state, self._current_color_layer_key()))
 
     def _sync_color_fill_controls(self) -> None:
+        """把当前填充回灌到颜色编辑区的控件。
+
+        每改一次配色字段都会走到这里，而改一个纯色只需要动一个按钮：填充模式没
+        变就不必重排栅格布局、不必重设渐变方向和可见性，渐变/分段色标没变也不必
+        重建。这些结构性动作在真实工程上要几十毫秒，而且全在 GUI 线程上，是一次
+        编辑里最大的一块阻塞。按各自的输入分别判重。
+        """
         if not hasattr(self, "_fill_mode_combo"):
             return
         fill = self._current_paint_fill()
+        # 判重必须带上「当前编辑的是哪一格颜色」（方案 / before-after / 图层）：
+        # 换格子时新旧填充可能恰好相等，但可见性等仍要按新格子重算。
+        slot = (
+            self._current_scheme_key(),
+            self._current_color_state_key(),
+            self._current_color_layer_key(),
+        )
+        last = getattr(self, "_last_synced_fill", None)
+        previous = last[1] if last is not None and last[0] == slot else None
+        if previous is not None and previous == fill:
+            return
+        mode_changed = previous is None or previous.mode != fill.mode
+        gradient_stops = _gradient_stops(fill)
+        split_stops = _split_stops(fill)
         was_syncing = self._syncing
         self._syncing = True
         try:
-            mode_index = max(0, self._fill_mode_combo.findData(fill.mode))
-            self._fill_mode_combo.setCurrentIndex(mode_index)
-            self._fill_editor_stack.setCurrentIndex(_fill_stack_index(fill.mode))
-            self._fill_editor_stack.updateGeometry()
+            if mode_changed:
+                mode_index = max(0, self._fill_mode_combo.findData(fill.mode))
+                self._fill_mode_combo.setCurrentIndex(mode_index)
+                self._fill_editor_stack.setCurrentIndex(_fill_stack_index(fill.mode))
+                self._fill_editor_stack.updateGeometry()
+                self._gradient_editor.set_orientation(fill.mode)
+                self._arrange_stop_editor(
+                    self._gradient_editor_layout,
+                    self._gradient_bar_field,
+                    self._gradient_color_field,
+                    self._gradient_position_field,
+                    vertical=fill.mode == "gradient_vertical",
+                    footer=self._ruby_horizontal_gradient_with_main_check,
+                )
+                self._ruby_horizontal_gradient_with_main_check.setVisible(
+                    fill.mode == "gradient_horizontal"
+                )
             self._paint_solid_btn.set_color(fill.color)
             self._paint_gradient_start_btn.set_color(fill.start_color)
             self._paint_gradient_end_btn.set_color(fill.end_color)
-            self._gradient_editor.set_orientation(fill.mode)
-            self._arrange_stop_editor(
-                self._gradient_editor_layout,
-                self._gradient_bar_field,
-                self._gradient_color_field,
-                self._gradient_position_field,
-                vertical=fill.mode == "gradient_vertical",
-                footer=self._ruby_horizontal_gradient_with_main_check,
-            )
             self._ruby_horizontal_gradient_with_main_check.setChecked(
                 bool(self._scheme_value("ruby_horizontal_gradient_with_main"))
             )
-            self._ruby_horizontal_gradient_with_main_check.setVisible(
-                fill.mode == "gradient_horizontal"
-            )
-            self._gradient_editor.set_stops(_gradient_stops(fill))
-            self._sync_gradient_stop_controls()
-            self._split_editor.set_stops(_split_stops(fill))
-            self._sync_split_stop_controls()
-            self._paint_image_path_edit.setText(fill.image_path)
-            self._paint_image_scale_spin.setValue(fill.image_scale_pct)
-            self._sync_decoration_visibility()
+            if mode_changed or previous is None or _gradient_stops(previous) != gradient_stops:
+                self._gradient_editor.set_stops(gradient_stops)
+                self._sync_gradient_stop_controls()
+            if mode_changed or previous is None or _split_stops(previous) != split_stops:
+                self._split_editor.set_stops(split_stops)
+                self._sync_split_stop_controls()
+            if previous is None or previous.image_path != fill.image_path:
+                self._paint_image_path_edit.setText(fill.image_path)
+            if previous is None or previous.image_scale_pct != fill.image_scale_pct:
+                self._paint_image_scale_spin.setValue(fill.image_scale_pct)
+            if mode_changed:
+                self._sync_decoration_visibility()
         finally:
             self._syncing = was_syncing
+        self._last_synced_fill = (slot, fill)
 
     def _sync_decoration_visibility(self) -> None:
         if not hasattr(self, "_decoration_type_field"):

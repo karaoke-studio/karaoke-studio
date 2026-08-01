@@ -483,7 +483,7 @@ class _ReadOnlyDelegate(_GroupBackgroundDelegate):
         return None
 
 
-_PRESENTATION_STYLE_FIELDS: tuple[str, ...] = (
+_LAYOUT_PRESENTATION_FIELDS: tuple[str, ...] = (
     # lane / 分页
     "dual_line_layout",
     "line_alignments",
@@ -495,17 +495,31 @@ _PRESENTATION_STYLE_FIELDS: tuple[str, ...] = (
     "smart_horizontal",
     # 布局列名称 + 逐行布局套用（_effective_layout_style）
     "layouts",
-    # 角色色点
+)
+"""会改变行内容或列宽的字段——只有它们需要重新量列宽。"""
+
+_SWATCH_PRESENTATION_FIELDS: tuple[str, ...] = (
     "fill_color",
     "karaoke_colors",
     "custom_style_schemes",
 )
-"""``Style`` 中真正会改变歌词表呈现的字段；其余字段只作用于画面。"""
+"""只改角色色点颜色的字段。"""
 
 
-def _presentation_signature(style: Style) -> tuple:
-    """歌词表呈现相关字段的取值签名，用于跳过无关的整表刷新。"""
-    return tuple(getattr(style, name) for name in _PRESENTATION_STYLE_FIELDS)
+def _layout_presentation_signature(style: Style) -> tuple:
+    """影响行内容 / 列宽的取值签名。
+
+    角色名的集合也算在内：新增或改名会改变角色列里的文字，进而改变列宽；但同一
+    个方案里换个颜色不会。
+    """
+    return tuple(getattr(style, name) for name in _LAYOUT_PRESENTATION_FIELDS) + (
+        tuple(sorted(style.custom_style_schemes)),
+    )
+
+
+def _swatch_presentation_signature(style: Style) -> tuple:
+    """只影响角色色点颜色的取值签名。"""
+    return tuple(getattr(style, name) for name in _SWATCH_PRESENTATION_FIELDS)
 
 
 def _effective_layout_style(style: Style, line: TimingLine) -> Style:
@@ -1215,12 +1229,20 @@ class LyricsPanel(DropPanel):
         self._style = style
         if not self._populated:
             return
-        if _presentation_signature(previous) == _presentation_signature(style):
-            # 字号、描边、发光这类只影响画面的字段占了属性面板绝大多数控件，
-            # 但对本表毫无影响。整表刷新要为每行重建单元格、算对齐、画角色色点
-            # 图标，不能被这些改动带着跑。
+        # 字号、描边、发光这类只影响画面的字段占了属性面板绝大多数控件，
+        # 但对本表毫无影响，整表刷新不能被它们带着跑。
+        layout_changed = _layout_presentation_signature(
+            previous
+        ) != _layout_presentation_signature(style)
+        swatch_changed = _swatch_presentation_signature(
+            previous
+        ) != _swatch_presentation_signature(style)
+        if not layout_changed and not swatch_changed:
             return
-        self._refresh_presentation()
+        # 换个颜色不会改变任何一列的宽度，而重量列宽要对每个可见单元格调用
+        # sizeHintForIndex——那会把整轨字幕在 GUI 线程上重排一遍，实测占一次
+        # 编辑里 191ms 的阻塞。只有真正改了行内容或列语义时才重量。
+        self._refresh_presentation(update_widths=layout_changed)
 
     def _layout_name_for_id(self, layout_id: Optional[str]) -> str:
         return layout_display_name(self._style, str(layout_id or "default"))
@@ -1989,7 +2011,9 @@ class LyricsPanel(DropPanel):
         color.setAlpha(38 if getattr(palette(), "is_dark", False) else 24)
         return color
 
-    def _refresh_presentation(self, rows: Optional[list[int]] = None) -> None:
+    def _refresh_presentation(
+        self, rows: Optional[list[int]] = None, *, update_widths: bool = True
+    ) -> None:
         """按当前 Style 刷新：轨标 / 内容对齐 / 角色色点 / 单行页居中。"""
         style = self._style
         dual = bool(style.dual_line_layout)
@@ -2149,8 +2173,10 @@ class LyricsPanel(DropPanel):
                     )
         finally:
             self._table.blockSignals(False)
-        # 轨列显隐 / 特效摘要变化都会改变各列语义下限 → 重算表格最小宽
-        self._update_minimum_width()
+        # 轨列显隐 / 特效摘要变化都会改变各列语义下限 → 重算表格最小宽。
+        # 纯改色不会动任何列宽，跳过这一步（它会逐单元格量尺寸，很贵）。
+        if update_widths:
+            self._update_minimum_width()
         # 组底色由委托绘制，Style 变化后要触发一次重绘
         self._table.viewport().update()
 
