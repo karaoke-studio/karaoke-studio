@@ -5305,6 +5305,126 @@ def test_gpu_large_guide_role_keeps_painter_lane_baselines(
     ), (gpu_bounds, painter_bounds)
 
 
+def _white_row_bands(
+    payload: bytes, *, width: int = 640, height: int = 360
+) -> tuple[tuple[int, int], tuple[int, int]]:
+    """Split a two-row frame into each row's white ink band.
+
+    The two rows are separated by the widest run of empty scanlines, so the
+    split point never depends on the very lane geometry under test.
+    """
+
+    rows = [
+        y
+        for y in range(height)
+        if any(
+            payload[(y * width + x) * 4] > 180
+            and payload[(y * width + x) * 4 + 1] > 180
+            and payload[(y * width + x) * 4 + 2] > 180
+            and payload[(y * width + x) * 4 + 3] > 0
+            for x in range(width)
+        )
+    ]
+    assert len(rows) >= 2, rows
+    gaps = [
+        (rows[index + 1] - rows[index], index)
+        for index in range(len(rows) - 1)
+    ]
+    widest, split = max(gaps)
+    assert widest > 1, (rows, widest)
+    return (rows[0], rows[split]), (rows[split + 1], rows[-1])
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
+def test_gpu_legacy_lane_grid_ignores_mixed_font_line_content(monkeypatch) -> None:
+    """A half-width space is Latin text, so it resolves to the Latin font.
+
+    ``MS Gothic`` (49 px box at 48 px) and ``Comic Sans MS`` (67 px) disagree by
+    18 px of face metrics.  The shared lane grid is a page-level constant in
+    Painter, so adding that space must not move either row: deriving the grid
+    from the line's own characters shifts the upper row by the two faces'
+    ascent difference and the lower row by the descent difference.
+    """
+
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    from PyQt6.QtGui import QFontDatabase
+
+    for font_file in ("msgothic.ttc", "comic.ttf"):
+        assert QFontDatabase.addApplicationFont(rf"C:\Windows\Fonts\{font_file}") >= 0
+
+    white = KaraokeColors(
+        before=KaraokeColorState(text=PaintFill(color="#FFFFFF")),
+        after=KaraokeColorState(text=PaintFill(color="#FFFFFF")),
+    )
+    style = _g1_style(
+        font_family="MS Gothic",
+        font_family_latin="Comic Sans MS",
+        font_size_px=48,
+        stroke_width_px=0,
+        stroke2_enabled=False,
+        decoration_kind="none",
+        dual_line_layout=True,
+        line_y_position="bottom",
+        line_y_margin_px=24,
+        line_gap_px=24,
+        line_lead_in_ms=0,
+        line_tail_ms=0,
+        karaoke_colors=white,
+    )
+
+    def two_row_track(upper: str) -> TimingTrack:
+        return TimingTrack(
+            lines=[
+                TimingLine(
+                    chars=[TimingChar(char, 1_000) for char in upper],
+                    end_ms=2_000,
+                    display_start_override_ms=0,
+                    display_end_override_ms=2_000,
+                ),
+                TimingLine(
+                    chars=[TimingChar(char, 1_000) for char in "下行"],
+                    end_ms=2_000,
+                    display_start_override_ms=0,
+                    display_end_override_ms=2_000,
+                ),
+            ]
+        )
+
+    plain = two_row_track("上行")
+    spaced = two_row_track("上 行")
+
+    painter_plain = _white_row_bands(
+        _render_painter_oracle(style, t_ms=1_500, track=plain)
+    )
+    painter_spaced = _white_row_bands(
+        _render_painter_oracle(style, t_ms=1_500, track=spaced)
+    )
+    # Painter is the content-independent reference: the space changes nothing.
+    assert painter_plain == painter_spaced, (painter_plain, painter_spaced)
+
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames_plain = _render_g1_frames(
+            renderer, style, (1_500,), force_warp=True, track=plain
+        )
+    with NativeRendererProcess(_renderer_path(), response_timeout_s=15.0) as renderer:
+        _, frames_spaced = _render_g1_frames(
+            renderer, style, (1_500,), force_warp=True, track=spaced
+        )
+    gpu_plain = _white_row_bands(frames_plain[0])
+    gpu_spaced = _white_row_bands(frames_spaced[0])
+
+    assert all(
+        abs(actual - expected) <= 1
+        for actual_row, expected_row in zip(gpu_spaced, gpu_plain)
+        for actual, expected in zip(actual_row, expected_row)
+    ), (gpu_spaced, gpu_plain)
+    assert all(
+        abs(actual - expected) <= 2
+        for actual_row, expected_row in zip(gpu_spaced, painter_spaced)
+        for actual, expected in zip(actual_row, expected_row)
+    ), (gpu_spaced, painter_spaced)
+
+
 @pytest.mark.skipif(os.name != "nt", reason="Direct2D GPU backend is Windows-only")
 def test_gpu_g3_uses_painter_resolved_display_overrides(monkeypatch) -> None:
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")

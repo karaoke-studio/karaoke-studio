@@ -4882,6 +4882,12 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
             dx += smartDx;
             signalDx += smartDx;
         }
+        // The title is a standalone block with no lane grid to hold steady, so
+        // its box comes from the glyphs it actually draws.  Sizing it from the
+        // line style would let the base title scheme's font size move a title
+        // that is entirely rendered with some other role scheme.  Mirrors
+        // Painter's _layout_title_overlay.
+        const bool ownCharBox = line->staticOverlay && line->hasN3CharBox;
         const float visualPad = n3Layout
             ? 0.0f
             : (line->hasInlineStyles
@@ -4890,27 +4896,29 @@ ProbeResult Direct2DGpuBackend::renderFrameInternal(
                 (std::max(style.strokeWidth, 0.0f)
                     + std::max(style.stroke2Width, 0.0f)) * 0.5f
             ));
-        // The title is a standalone block with no lane grid to hold steady, so
-        // its box comes from the glyphs it actually draws.  Sizing it from the
-        // line style would let the base title scheme's font size move a title
-        // that is entirely rendered with some other role scheme.  Mirrors
-        // Painter's _layout_title_overlay.
-        const bool ownCharBox = line->staticOverlay && line->hasN3CharBox;
+        // Lyric lanes are a page-level grid: Painter derives them from the style
+        // alone (_fixed_line_geometry), never from what a line happens to
+        // contain.  legacyLaneHeight/Descent carry exactly that style-level box,
+        // so use it for every legacy lyric line, not only the ones carrying an
+        // inline role scheme.  Deriving the grid from the line's own glyph
+        // metrics let a single half-width space -- Latin text, therefore
+        // measured with the Latin face -- move the whole upper row by the two
+        // faces' ascent gap.  The title keeps its glyph-derived box per above.
         const float mainHeight = n3Layout
             ? (ownCharBox
                 ? line->n3CharAscent + line->n3CharDescent
                 : line->n3DrawHeight)
-            : line->hasInlineLaneGeometryOverride
-                ? line->legacyLaneHeight
-                : (line->ascent > 0.0f ? line->ascent : -line->bounds.top)
+            : line->staticOverlay
+                ? (line->ascent > 0.0f ? line->ascent : -line->bounds.top)
                     + (line->descent > 0.0f ? line->descent : line->bounds.bottom)
-                    + visualPad * 2.0f;
+                    + visualPad * 2.0f
+                : line->legacyLaneHeight;
         const float descent = n3Layout
             ? (ownCharBox ? line->n3CharDescent : line->n3Descent)
-            : line->hasInlineLaneGeometryOverride
-                ? line->legacyLaneDescent
-                : (line->descent > 0.0f ? line->descent : line->bounds.bottom)
-                    + visualPad;
+            : line->staticOverlay
+                ? (line->descent > 0.0f ? line->descent : line->bounds.bottom)
+                    + visualPad
+                : line->legacyLaneDescent;
         const float ascent = mainHeight - descent;
         const int lanes = style.dualLineLayout ? std::max(style.laneCount, 1) : 1;
         const float rubyExtra = n3Layout || line->rubies.empty()
