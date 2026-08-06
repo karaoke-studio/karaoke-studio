@@ -10010,3 +10010,46 @@ def test_per_char_exit_opacity_composes_before_fading(qapp):
     red, green, blue = _mean_rgb(faded, core)
     assert green == blue, (red, green, blue)
     assert red - green <= 6, (red, green, blue)
+
+
+def test_title_overlay_space_uses_n3_space_width(qapp):
+    """N3 sizes a blank glyph from SpaceWidth, and its title is a lyrics line.
+
+    ``LyricsLineKind.Title`` goes through the same DrawCharInfo pipeline as
+    ``Kind == Lyrics``, so ``DirectXCommon``'s rule -- an empty glyph outline
+    becomes ``FontSize * SpaceWidth / 100`` -- applies to the title too.  Using
+    Qt's raw advance instead made the title wider than the GPU drew it: at Meiryo
+    48 the space measured 18 px against N3's 9 px.
+    """
+
+    title = TitleOverlay(
+        enabled=True,
+        text_template="{title} {artist}",
+        font_family="Meiryo",
+        font_family_latin="Meiryo",
+        font_size_px=48,
+        stroke_width_px=0,
+    )
+    style = replace(Style(), space_width_percent=20, title_overlay=title)
+    track = TimingTrack(
+        meta=TimingTrackMeta(title="星空", artist="歌手"),
+        lines=[TimingLine(chars=[TimingChar("尾", 0)], end_ms=1_000)],
+    )
+
+    layout = subtitle_painter._layout_title_overlay(
+        1280, 720, track, title, style=style
+    )
+    assert layout is not None
+    glyphs = layout.glyph_rows[0]
+    spaces = [glyph for glyph in glyphs if glyph.text == " "]
+    assert len(spaces) == 1, [glyph.text for glyph in glyphs]
+    assert spaces[0].advance == 48 * 20 // 100
+
+    # Every other glyph keeps its own advance, so the row width follows.
+    expected = sum(
+        float(48 * 20 // 100)
+        if glyph.text == " "
+        else float(glyph.metrics.horizontalAdvance(glyph.text))
+        for glyph in glyphs
+    )
+    assert layout.widths[0] == expected

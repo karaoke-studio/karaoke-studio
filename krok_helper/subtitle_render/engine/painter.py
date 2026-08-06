@@ -1374,6 +1374,19 @@ def _layout_title_overlay(
     font_for = _make_title_font_for(title, font, latin_font)
     latin_metrics = QFontMetrics(latin_font) if font_for is not None else metrics
     labels = normalize_title_char_role_labels(text, title.char_role_labels)
+    # N3's SpaceWidth is an application setting shared by every drawn line, so
+    # the title reads it from the project style like the lyrics do.
+    title_space_percent = max(
+        10,
+        min(
+            int(
+                style.space_width_percent
+                if style is not None
+                else Style.space_width_percent
+            ),
+            100,
+        ),
+    )
     glyph_rows: list[list[_TitleGlyphLayout]] = []
     widths: list[float] = []
     line_heights: list[float] = []
@@ -1412,7 +1425,18 @@ def _layout_title_overlay(
                 glyph_font_for(char) if glyph_font_for is not None else glyph_jp_font
             )
             glyph_metrics = QFontMetrics(glyph_font)
-            advance = float(glyph_metrics.horizontalAdvance(char))
+            if char == " ":
+                # N3 sizes a glyph with an empty outline from SpaceWidth rather
+                # than the font's own advance (DirectXCommon), and its title is
+                # a LyricsLineInfo with Kind == Title that runs through the same
+                # DrawCharInfo pipeline as the lyrics.  Qt's raw advance made the
+                # title wider here than the GPU backend drew it.
+                space_unit = glyph_font.pixelSize()
+                if space_unit <= 0:
+                    space_unit = max(int(glyph_title.font_size_px), 1)
+                advance = float(space_unit * title_space_percent // 100)
+            else:
+                advance = float(glyph_metrics.horizontalAdvance(char))
             glyphs.append(
                 _TitleGlyphLayout(
                     text=char,
