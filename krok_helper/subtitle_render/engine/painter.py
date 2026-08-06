@@ -4477,6 +4477,10 @@ def _apply_constrained_page_sync(
     the earliest entry, and a colliding later line may stop an earlier T from
     reaching the latest ending.  Partial synchronization is valid.  Collision
     reference lines remain read-only.
+
+    "Do not disturb the line that already entered / already exits" is part of
+    what page sync means here, not part of avoidance, so this runs unchanged
+    whether or not ``allow_inter_page_line_overlap`` is set.
     """
 
     if not display_lines or not (style.sync_entry or style.sync_ending):
@@ -4813,28 +4817,17 @@ def _display_lines_for_style(
     logical_w: int | None = None,
     logical_h: int | None = None,
 ) -> list[DisplayLine]:
-    """Resolve display windows, squeezing only measured per-line collisions."""
+    """Resolve display windows, squeezing only measured per-line collisions.
+
+    Both modes run one timing pipeline.  ``allow_inter_page_line_overlap``
+    decides only whether cross-page *avoidance* runs -- the measured squeeze and
+    the inter-page animation gap.  Lead-in, tail, lane gap and page sync are user
+    settings computed by the identical passes either way, so the two modes can
+    only differ on windows that avoidance would actually have consumed.
+    """
 
     kwargs = _display_line_compute_kwargs(style)
-    if style.allow_inter_page_line_overlap:
-        display_lines = compute_display_lines(
-            track,
-            **kwargs,
-            adjust_same_position=True,
-            dynamic_single_page_reflow=True,
-        )
-        if logical_w is None or logical_h is None:
-            default_w, default_h = _default_collision_canvas(style)
-            logical_w = default_w if logical_w is None else logical_w
-            logical_h = default_h if logical_h is None else logical_h
-        return _apply_animation_time_guard(
-            max(int(logical_w), 1),
-            max(int(logical_h), 1),
-            track,
-            style,
-            display_lines,
-            enforce_inter_page_gap=False,
-        )
+    avoid_collisions = not style.allow_inter_page_line_overlap
     base_kwargs = {
         **kwargs,
         "sync_entry": False,
@@ -4864,34 +4857,35 @@ def _display_lines_for_style(
         dynamic_single_page_reflow=True,
         independent_line_entry=True,
     )
-    squeeze_pairs = _pixel_collision_squeeze_pairs(
-        logical_w, logical_h, track, style, ideal
-    )
-    resolved = (
-        compute_display_lines(
-            track,
-            **base_kwargs,
-            adjust_same_position=False,
-            squeeze_pairs=squeeze_pairs,
-            dynamic_single_page_reflow=True,
-            independent_line_entry=True,
+    resolved = ideal
+    if avoid_collisions:
+        squeeze_pairs = _pixel_collision_squeeze_pairs(
+            logical_w, logical_h, track, style, ideal
         )
-        if squeeze_pairs
-        else ideal
-    )
-    secondary_pairs = _secondary_displacement_squeeze_pairs(
-        logical_w, logical_h, track, style, resolved
-    )
-    if secondary_pairs:
-        combined_pairs = tuple(dict.fromkeys((*squeeze_pairs, *secondary_pairs)))
-        resolved = compute_display_lines(
-            track,
-            **base_kwargs,
-            adjust_same_position=False,
-            squeeze_pairs=combined_pairs,
-            dynamic_single_page_reflow=True,
-            independent_line_entry=True,
+        if squeeze_pairs:
+            resolved = compute_display_lines(
+                track,
+                **base_kwargs,
+                adjust_same_position=False,
+                squeeze_pairs=squeeze_pairs,
+                dynamic_single_page_reflow=True,
+                independent_line_entry=True,
+            )
+        secondary_pairs = _secondary_displacement_squeeze_pairs(
+            logical_w, logical_h, track, style, resolved
         )
+        if secondary_pairs:
+            combined_pairs = tuple(
+                dict.fromkeys((*squeeze_pairs, *secondary_pairs))
+            )
+            resolved = compute_display_lines(
+                track,
+                **base_kwargs,
+                adjust_same_position=False,
+                squeeze_pairs=combined_pairs,
+                dynamic_single_page_reflow=True,
+                independent_line_entry=True,
+            )
     resolved = _apply_constrained_page_sync(
         logical_w,
         logical_h,
@@ -4905,7 +4899,7 @@ def _display_lines_for_style(
         track,
         style,
         resolved,
-        enforce_inter_page_gap=True,
+        enforce_inter_page_gap=avoid_collisions,
     )
     # Keep the track object alive with the cached display lines.  The key uses
     # ``id(track)`` to prevent equal-but-distinct tracks from sharing mutable

@@ -9119,6 +9119,109 @@ def test_cross_page_spatial_mode_squeezes_only_pixel_conflicting_lines(qapp):
     )
 
 
+def test_overlap_mode_only_drops_avoidance_and_keeps_the_timing_pipeline(qapp):
+    """``allow_inter_page_line_overlap`` must not switch timing algorithms.
+
+    Both modes run the same lead-in / tail / page-boundary derivation.  Turning
+    the option on only stops cross-page avoidance from consuming windows, so no
+    line may be scheduled later or shorter than it is with avoidance enabled.
+    """
+
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A", 10_000, 12_000),
+            ("B", 12_500, 13_500),
+            ("C", 14_000, 15_000),
+            ("D", 16_000, 17_000),
+        )
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(2, "default"), TrackPage(2, "default")])]
+        ),
+    )
+    style = replace(
+        Style(),
+        line_lead_in_ms=1_800,
+        line_tail_ms=1_000,
+        line_lane_gap_ms=300,
+    )
+
+    normal = subtitle_painter.display_windows_for_style(track, style)
+    overlap = subtitle_painter.display_windows_for_style(
+        track, replace(style, allow_inter_page_line_overlap=True)
+    )
+
+    # Avoidance can only delay an entry or clip an exit, never the reverse.
+    assert all(overlap[index][0] <= normal[index][0] for index in normal)
+    assert all(overlap[index][1] >= normal[index][1] for index in normal)
+    # Only B, whose exit margin the measured B/D pixel conflict consumed,
+    # differs -- and it recovers exactly its authored tail.
+    assert {index for index in normal if normal[index] != overlap[index]} == {1}
+    assert normal[1] == (10_700, 14_200)
+    assert overlap[1] == (10_700, int(lines[1].end_ms) + 1_000)
+
+
+@pytest.mark.parametrize(
+    ("sync_entry", "sync_ending"),
+    [(False, False), (True, False), (True, True)],
+)
+def test_overlap_mode_computes_page_sync_identically(
+    qapp, sync_entry: bool, sync_ending: bool
+):
+    """Page sync is computed by the same pass in both modes.
+
+    "Synchronize as far as possible without disturbing the line that already
+    entered or already exits" is what page sync means here, so its constraint
+    is not avoidance and must not be lifted when overlap is allowed -- partial
+    synchronization has to come out the same either way.
+    """
+
+    lines = [
+        TimingLine(chars=[TimingChar(text, start)], end_ms=end)
+        for text, start, end in (
+            ("A", 10_000, 12_000),
+            ("B", 12_500, 13_500),
+            ("C", 14_000, 15_000),
+            ("D", 16_000, 17_000),
+        )
+    ]
+    track = TimingTrack(
+        lines=lines,
+        page_plan=TrackPagePlan(
+            [TrackSection([TrackPage(2, "default"), TrackPage(2, "default")])]
+        ),
+    )
+    style = replace(
+        Style(),
+        line_lead_in_ms=1_800,
+        line_tail_ms=1_000,
+        line_lane_gap_ms=300,
+        sync_entry=sync_entry,
+        sync_ending=sync_ending,
+    )
+
+    normal = subtitle_painter.display_windows_for_style(track, style)
+    overlap = subtitle_painter.display_windows_for_style(
+        track, replace(style, allow_inter_page_line_overlap=True)
+    )
+
+    # Whatever the sync flags, the only line that may differ is the one whose
+    # exit margin the measured B/D pixel conflict consumed.
+    assert {index for index in normal if normal[index] != overlap[index]} == {1}
+    assert overlap[1] == (normal[1][0], int(lines[1].end_ms) + 1_000)
+    # Entries -- the side page sync drives here -- are byte-identical.
+    assert all(normal[index][0] == overlap[index][0] for index in normal)
+    if sync_entry:
+        # Page 1 reaches full sync; page 2's lower line is held back by the
+        # previous page in both modes, and is held back by the same amount.
+        assert normal[0][0] == normal[1][0]
+        assert normal[2][0] != normal[3][0]
+        assert overlap[2][0] != overlap[3][0]
+
+
 def test_animation_guard_extends_zero_tail_exit_and_delays_next_entry(qapp):
     lines = [
         TimingLine(chars=[TimingChar(text, start)], end_ms=end)
